@@ -109,6 +109,21 @@ are (512.00, 406.93), (716.80, 512.00), (512.00, 645.18), (307.20, 512.00).
            Sinking cannot flatten a slope — which is precisely why the result
            carries a levelling SUGGESTION (drop 0.20 m > 0.10 m) instead of
            quietly reshaping the terrain.
+       D — ONE DATUM (§ B1 addendum): the sampler stands on the placement's
+           own floor, so a yard prop at bottom_y 0.09 over a 0.08 floor plate
+           has a 0.01 gap (in contact) instead of a 0.09 one (floating).
+       E — A DIALLED SINK IS NOT A DEFECT (§ B2 addendum 2026-08-20). The
+           prop declares ``ground_offset_m``, which the payload has already
+           put into ``bottom_y``, so it belongs to the EXPECTED base:
+             floor 0.08, offset −0.20 → sampler −0.12, bottom_y
+             0.08 + 0.01 − 0.20 = −0.11, gap 0.01                → 9/9 PASS
+           RED PROBE, both directions: against the offset-BLIND sampler (0.08)
+           the same prop reads 0/9 and fails the 0.60 gate — nothing is
+           "corrected", because a bottom below its own ground is left to the
+           author, so the damage is a wrong VERDICT on a correct placement.
+           The mirror case does move: a prop dialled +0.20 (bottom_y 0.29)
+           is in contact with its own base 0.28, while the blind sampler
+           reads a 0.21 gap and sinks it by −0.21 — undoing the author's lift.
 
 8. RETRY BUDGET. retries 2 = up to three attempts; an attempt that raises is a
    failed attempt, not a failed run. A fake chain that succeeds on the SECOND
@@ -451,6 +466,54 @@ def part_contact():
           0.0, 1e-9)
     check("...and would be sunk by the floor's own height",
           sa.sink_offset_y(0.09, blind, 0.0, tolerance_m=0.05), -0.09, 1e-9)
+
+    # ── E — A DELIBERATE SINK IS NOT A DEFECT (§ B2 addendum 2026-08-20) ──
+    # The prop itself may declare how deep it stands (`ground_offset_m`, e.g.
+    # a trunk without a root ball at −0.20). The payload puts that into
+    # `bottom_y`, so the yard prop above now composes 0.08 + 0.01 − 0.20 =
+    # −0.11. It is EXPECTED to be there, so the sampler carries the same term:
+    # expected base = floor 0.08 + sink (−0.20) = −0.12, and the remaining
+    # 0.01 is the clearance the tolerance was always meant to swallow.
+    print("  E — a prop dialled into the ground stands where it should")
+    sunk_sampler = sa.ground_sampler(flat_loc, 0.08, -0.20)
+    check("floor + the prop's own sink", sunk_sampler(3.0, -2.0), -0.12, 1e-9)
+    sunk_ground = [sunk_sampler(p[0], p[1]) for p in pts]
+    check("the sunk prop is IN CONTACT at its sunk base (9/9)",
+          sa.contact_check(-0.11, sunk_ground,
+                           tolerance_m=0.05)["contact_ratio"], 1.0, 1e-9)
+    check_true("...and is therefore not 'corrected'",
+               sa.sink_offset_y(-0.11, sunk_ground, 0.0,
+                                tolerance_m=0.05) is None)
+    # THE RED PROBE: the offset-blind sampler of the day before. It answers
+    # the bare floor 0.08 while the payload states −0.11, so the bottom is
+    # 0.19 BELOW every sample. `sink_offset_y` does not touch it (a bottom
+    # under its own ground is left to the author, by design), so the damage is
+    # not a wrong number but a VERDICT: 0/9 in contact is below the required
+    # 0.60 ratio, and the run rejects a placement that stands exactly where it
+    # was told to. The offset must therefore be part of the expected base.
+    blind_sunk = [yard(p[0], p[1]) for p in pts]
+    check("offset-blind, the same prop reads 0/9 in contact",
+          sa.contact_check(-0.11, blind_sunk,
+                           tolerance_m=0.05)["contact_ratio"], 0.0, 1e-9)
+    check_true("...which fails the 0.60 contact gate the run demands",
+               sa.contact_check(-0.11, blind_sunk,
+                                tolerance_m=0.05)["contact_ratio"] < 0.60)
+    check_true("(nothing is 'corrected' either — a bottom below its ground "
+               "is the author's business)",
+               sa.sink_offset_y(-0.11, blind_sunk, 0.0,
+                                tolerance_m=0.05) is None)
+    # The mirror case, where the blind sampler DOES move the prop: a prop
+    # dialled 0.20 m UP (a lamp on a hidden base). Seen against the informed
+    # sampler it is in contact; seen against the blind one it floats 0.20 m
+    # and is sunk by exactly the author's lift.
+    lift_sampler = sa.ground_sampler(flat_loc, 0.08, 0.20)
+    lifted_ground = [lift_sampler(p[0], p[1]) for p in pts]
+    check("a prop dialled 0.20 m UP is in contact with its own base",
+          sa.contact_check(0.29, lifted_ground,
+                           tolerance_m=0.05)["contact_ratio"], 1.0, 1e-9)
+    check("...while the blind sampler sinks it by the author's 0.20 m",
+          sa.sink_offset_y(0.29, blind_sunk, 0.0, tolerance_m=0.05),
+          -0.21, 1e-9)
 
 
 # ── [8] Retry budget ────────────────────────────────────────────────────

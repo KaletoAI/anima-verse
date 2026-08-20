@@ -132,6 +132,32 @@ export const SCATTER_SWAY_FACTOR_DEFAULT = 1;
  * value is `> 0`. Rounding here is what keeps those two tests agreeing — a
  * product of 0.004 would otherwise buy a material clone that never moves.
  */
+/** How far a scatter entry may be sunk into (or lifted off) the ground, in
+ *  metres — the client's copy of `props.GROUND_OFFSET_MIN/MAX`. A hand-edited
+ *  payload cannot bury a wood a kilometre deep. */
+export const SCATTER_GROUND_OFFSET_LIMIT_M = 5;
+
+/**
+ * How deep ONE scattered prop stands in the ground, in metres (§ A9).
+ *
+ * A property of the OBJECT, not of the painting: a fir whose mesh has no root
+ * ball has to sink the same few centimetres in a room, in a yard and in every
+ * painted wood, so the server derives it from the library record and ships it
+ * on the entry (`ground_offset_m`). Every instance is then seated at
+ * `heightAt(x, z) + this`, and nothing else about the scatter changes.
+ *
+ * The same "a finite NUMBER, or nothing" test as `scatterSway`, and for the
+ * same reason: `Number(null)` is 0, and here 0 happens to BE the default, so a
+ * junk value and a stated zero end at the same answer either way — but the
+ * type test keeps the rule readable and NaN out of an instance matrix, which
+ * would make a whole wood disappear. Clamped exactly as the server clamps it.
+ */
+export function scatterGroundOffset(offsetM?: number): number {
+  if (typeof offsetM !== 'number' || !Number.isFinite(offsetM)) return 0;
+  return Math.min(Math.max(offsetM, -SCATTER_GROUND_OFFSET_LIMIT_M),
+    SCATTER_GROUND_OFFSET_LIMIT_M);
+}
+
 export function scatterSway(swayM: number, factor?: number): number {
   const base = Number(swayM);
   if (!(base > 0)) return 0;

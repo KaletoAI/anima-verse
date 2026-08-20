@@ -22,6 +22,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from '../characters/Model3DViewer'
+import { GroundOffsetGauge } from './GroundOffsetGauge'
 import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
 import { orientedDims } from './dims'
@@ -183,6 +184,21 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   useEffect(() => {
     setSwayDraft(String(prop.sway_factor ?? 1))
   }, [prop.id, prop.sway_factor])
+  // The ground offset is a SLIDER, so the value moves per drag step while the
+  // server may only be written now and then — the local number drives the
+  // gauge, a timer writes it, and the incoming poll is ignored as long as a
+  // write of our own is still on its way (otherwise the echo of an older
+  // value snaps the slider back under the cursor).
+  const [sinkM, setSinkM] = useState(prop.ground_offset_m ?? 0)
+  const sinkTimer = useRef<number | null>(null)
+  const sinkPending = useRef(false)
+  useEffect(() => {
+    if (sinkPending.current) return
+    setSinkM(prop.ground_offset_m ?? 0)
+  }, [prop.id, prop.ground_offset_m])
+  useEffect(() => () => {
+    if (sinkTimer.current !== null) window.clearTimeout(sinkTimer.current)
+  }, [])
   // Drafts re-arm on PROP CHANGE only — the background poll reloads the
   // list every few seconds while a generation runs, and resetting on every
   // fresh object identity overwrote whatever the admin was typing (user
@@ -233,6 +249,14 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     setLiveBbox(null)
   }, [prop.id])
   useEffect(() => { setSrcOk(true) }, [prop.id, variant, reloadKey])
+
+  // How far the ground-offset SLIDER may travel: the prop's own height, at
+  // least half a metre and at most the stored limit (props.GROUND_OFFSET_MAX).
+  // A dial that sweeps ±5 m for a footstool cannot hit its 3 cm, and one that
+  // sweeps ±0.3 m for a fir cannot bury its trunk — the range is the first
+  // half of the reference the value is read against.
+  const sinkRange = Math.min(5, Math.max(0.5, Math.ceil(
+    (parseFloat(dims.height_m) || prop.height_m || 1) * 10) / 10))
 
   // Per render, so turning the orientation fix updates the suggestions live —
   // the viewer's measured box wins over the stored one.
@@ -323,6 +347,20 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     }
     void patch({ sway_factor: next })
   }, [swayDraft, prop.sway_factor, patch])
+
+  // Clamped and rounded to centimetres exactly as the server stores it, so
+  // the gauge shows what will really be written; 0 clears the key.
+  const commitSink = useCallback((v: number) => {
+    const next = Math.round(Math.min(Math.max(v, -5), 5) * 100) / 100
+    setSinkM(next)
+    sinkPending.current = true
+    if (sinkTimer.current !== null) window.clearTimeout(sinkTimer.current)
+    sinkTimer.current = window.setTimeout(() => {
+      sinkTimer.current = null
+      void patch({ ground_offset_m: next })
+        .finally(() => { sinkPending.current = false })
+    }, 350)
+  }, [patch])
 
   const rotate = useCallback(async (axis: 'x' | 'y' | 'z') => {
     const cur = prop.rotation || {}
@@ -561,6 +599,39 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               {t('Estimated — refined automatically when the model arrives.')}
             </span>
           ) : null}
+
+          {/* HOW DEEP THE OBJECT STANDS IN THE GROUND — a property of the
+              PROP, so it applies wherever the prop stands: every manual
+              placement, every scattered copy in a room or yard, every
+              instance of a painted terrain scatter and every world prop. The
+              per-placement `offset_y` in the room editor stays the trim of
+              ONE instance on top of it. */}
+          <Field label={t('Ground offset (m)')}
+            hint={t('Negative sinks the prop into the ground, positive lifts it off — the same amount everywhere it stands: rooms, yard, painted scatter, world props. Use it for a mesh that carries no root ball or base plate. 0 = the prop stands on the ground; a single placement can still be trimmed with its own offset in the room editor.')}>
+            <SliderInput
+              ariaLabel={t('Ground offset (m)')}
+              unit="m"
+              min={-sinkRange}
+              max={sinkRange}
+              step={0.01}
+              value={sinkM}
+              onChange={commitSink}
+              sliderWidth={150}
+              readback={<span className="ga-hint">
+                {sinkM === 0
+                  ? t('on the ground')
+                  : `${Math.round(Math.abs(sinkM) * 100)} cm ${sinkM < 0 ? t('into the ground') : t('above the ground')}`}
+              </span>}
+            />
+            {/* The visible reference (Maße brauchen Bezug): the value is only
+                judgeable against the prop's own box and a person. The
+                SLIDER's range follows the prop too — a footstool is dialled
+                in its own centimetres, a tree in its own metres — while the
+                stored limit stays ±5 m. */}
+            <GroundOffsetGauge offsetM={sinkM}
+              widthM={parseFloat(dims.width_m) || prop.width_m}
+              heightM={parseFloat(dims.height_m) || prop.height_m} />
+          </Field>
           {/* Measured in the mesh itself — the cost of placing this prop
               many times, which the box above does not say anything about. */}
           {prop.measured?.tris ? (

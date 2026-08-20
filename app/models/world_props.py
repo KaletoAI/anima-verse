@@ -273,6 +273,10 @@ def _prop_facts(prop_id: str) -> Dict[str, Any]:
         "max_m": round(max(dims) or 1.0, 3),
         "fix_euler": {a: _finite(rot.get(a)) or 0.0 for a in ("x", "y", "z")},
         "variant_maps": maps,
+        # How deep the OBJECT stands in the ground, wherever it stands — the
+        # client seats a world prop itself (`heightAt(x, z) + offset_y`), so
+        # this is the third term of that sum and travels with the row.
+        "ground_offset_m": prop_store.ground_offset_of(meta),
     }
 
 
@@ -328,6 +332,11 @@ def payload_rows() -> List[Dict[str, Any]]:
         if len(maps) > 1:
             spec["model_variants"] = maps
             spec["variant"] = idx
+        # The prop's own sink, and only when it is not the default 0.0 (the
+        # payload law of the scatter entries next door): absent = stands on the
+        # ground. `offset_y` above stays the per-placement trim.
+        if facts["ground_offset_m"]:
+            spec["ground_offset_m"] = facts["ground_offset_m"]
         out.append(spec)
     return out
 

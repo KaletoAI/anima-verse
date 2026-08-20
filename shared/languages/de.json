@@ -1698,7 +1698,6 @@
     "Wiping…": "Lösche…",
     "Without animation": "Ohne Animation",
     "world": "Welt",
-    "Locations": "Orte",
     "World atmosphere": "Welt-Atmosphäre",
     "World Dev": "World-Dev",
     "World is sleeping — all NPCs are asleep, no NPC LLM chat calls. Ticks, memory consolidation and the game clock keep running. Click to wake.": "Welt schläft — alle NPCs schlafen, keine NPC-LLM-Chat-Calls. Ticks, Memory-Konsolidierung und die Spieluhr laufen weiter. Klicken zum Aufwecken.",
@@ -2002,6 +2001,11 @@
     "rooms": "Räume",
     "The plot itself — the ground this location covers. Editable here with the 🟩 tool and on the map tab; solid once the location is placed, dashed while it is not.": "Das Grundstück selbst — der Grund, den dieser Ort bedeckt. Hier mit dem 🟩-Werkzeug und im Karten-Tab bearbeitbar; durchgezogen, sobald der Ort platziert ist, gestrichelt solange nicht.",
     "The building standing on the plot — the 🏗 tool draws it. It is NOT a room: a contour with no room inside holds nothing anybody can enter.": "Das Gebäude auf dem Grundstück — das 🏗-Werkzeug zeichnet es. Es ist KEIN Raum: eine Kontur ohne Raum darin enthält nichts, was jemand betreten kann.",
-    "The rooms — what can actually be entered. Drawn with the ⬠ tool; every location needs at least one.": "Die Räume — was tatsächlich betreten werden kann. Mit dem ⬠-Werkzeug gezeichnet; jeder Ort braucht mindestens einen."
+    "The rooms — what can actually be entered. Drawn with the ⬠ tool; every location needs at least one.": "Die Räume — was tatsächlich betreten werden kann. Mit dem ⬠-Werkzeug gezeichnet; jeder Ort braucht mindestens einen.",
+    "Ground offset (m)": "Boden-Versatz (m)",
+    "Negative sinks the prop into the ground, positive lifts it off — the same amount everywhere it stands: rooms, yard, painted scatter, world props. Use it for a mesh that carries no root ball or base plate. 0 = the prop stands on the ground; a single placement can still be trimmed with its own offset in the room editor.": "Negativ senkt das Prop in den Boden, positiv hebt es an — überall gleich, wo es steht: Räume, Außenbereich, gemalter Bewuchs, Welt-Props. Gedacht für Meshes ohne Wurzelballen oder Sockel. 0 = das Prop steht auf dem Boden; eine einzelne Platzierung lässt sich weiter mit ihrem eigenen Versatz im Raum-Editor trimmen.",
+    "above the ground": "über dem Boden",
+    "into the ground": "im Boden",
+    "on the ground": "auf dem Boden"
   }
 }

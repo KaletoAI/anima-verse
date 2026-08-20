@@ -1625,6 +1625,12 @@ def _prop_models(recipe: Dict[str, Any], storey: float, slab: float,
     room and the ground have no plate, so the clearance sits on the storey
     level directly.
 
+    GROUND OFFSET (§ B2 addendum 2026-08-20): the PROP may declare how deep it
+    stands in the ground (``props.ground_offset_m``, ± 5 m, carried onto the
+    recipe placement by ``room_recipe._carry_ground_offset``). It is added to
+    the automatic base HERE and nowhere else on this path, and the placement's
+    own ``offset_y`` stays what it always was — the per-instance trim on top.
+
     ``lift`` samples the terrain relief (v5.2 Nr. 14) under each placement —
     the height of a prop on a slope is NEVER set by hand (user rule): manual
     anchor and scattered copy alike get the ground under their own anchor
@@ -1671,7 +1677,13 @@ def _prop_models(recipe: Dict[str, Any], storey: float, slab: float,
             "max_m": _r(max(dims)),
             "measure": "xyz",
             "anchor": [_r(anchor_u), _r(anchor_v)],
-            "bottom_y": _r(floor_y + _num(placement.get("offset_y"))
+            # THE EFFECTIVE BASE (§ B2 addendum 2026-08-20): the automatic
+            # floor, the PROP's own ground offset (a sunk trunk sinks in every
+            # room alike) and the PLACEMENT's trim, in that order. Both are
+            # added in exactly one place per path — the offset never rides on
+            # `floor_y`, which is shared by every placement of the room.
+            "bottom_y": _r(floor_y + _num(placement.get("ground_offset_m"))
+                           + _num(placement.get("offset_y"))
                            + (lift(anchor_u, anchor_v) if lift else 0.0)),
         }
         # Only a prop that really HAS more than one variant says so: a
@@ -1829,7 +1841,14 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             "room_id": room_id,
             "at_world": [_r(_num(at[0]) + _num(offset[0])),
                          _r(_num(at[1]) + _num(offset[1]))],
+            # THE MARKER RIDES THE MESH (§ B2 addendum 2026-08-20): a sunk
+            # trunk sinks its seat with it, so the placement's ground offset is
+            # added here as well — the same term the prop spec adds to its
+            # `bottom_y`, which keeps `y_world - bottom_y` the marker's own
+            # composed height. (The placement's `offset_y` is already inside
+            # `height_m`, composed by `room_recipe.compose_prop_marker`.)
             "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m"))
+                          + _num(placement.get("ground_offset_m"))
                           + (lift(_num(at[0]), _num(at[1]))
                              if lift else 0.0)),
             "animation": marker.get("animation") or "",

@@ -1515,10 +1515,12 @@ def prop_detail(prop_id: str) -> Dict[str, Any]:
 @router.post("/props/{prop_id}")
 async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
     """Update the editable sidecar fields (body: {name?, description?,
-    category?, width_m?, depth_m?, height_m?, tags?, sway_factor?}). Patching a
+    category?, width_m?, depth_m?, height_m?, tags?, sway_factor?,
+    ground_offset_m?}). Patching a
     dim marks the prop's dims as admin-set — they are never redistributed from
     the mesh again. `sway_factor` at its default 1.0 (and any junk) clears the
-    key rather than storing it."""
+    key rather than storing it, and `ground_offset_m` does the same at its
+    default 0.0 — the prop then simply stands on the ground."""
     from app.core.props import update_prop
     data = await request.json()
     if not isinstance(data, dict):

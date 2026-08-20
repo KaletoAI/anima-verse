@@ -456,6 +456,27 @@ def _square(cx: float, cy: float, half: float) -> List[List[float]]:
             [cx + half, cy + half], [cx - half, cy + half]]
 
 
+def _carry_ground_offset(entry: Dict[str, Any], prop: Dict[str, Any]) -> None:
+    """Put the PROP's own ground offset on one placement entry — and only when
+    it is not zero (``props.GROUND_OFFSET_DEFAULT``).
+
+    A fact about the OBJECT, carried on the placement because that is where
+    every consumer of the recipe already stands: the scene spec adds it to the
+    ``bottom_y`` it composes (``scene_recipe._prop_models``) and the prop
+    markers of the same placement ride it down with the mesh.
+
+    ABSENT = 0.0, exactly as the sidecar stores it: sending a 0.0 would make
+    "stands on the ground" two payload shapes for one behaviour, and it would
+    put a key on every placement in every world for nothing. The placement's
+    own ``offset_y`` stays untouched — it is the per-instance trim, and folding
+    the two into one number would make the editor's dial read back a value
+    nobody typed there.
+    """
+    off = float(prop.get("ground_offset_m") or 0.0)
+    if off:
+        entry["ground_offset_m"] = _r(off, 2)
+
+
 def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                      default_u: float, default_v: float,
                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -510,6 +531,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         entry["dims"] = {"width_m": prop["width_m"],
                          "depth_m": prop["depth_m"],
                          "height_m": prop["height_m"]}
+        _carry_ground_offset(entry, prop)
         entry["has_model"] = bool(prop.get("has_model"))
         if prop.get("has_model"):
             # Which resolution tiers the prop has, plus the change key of its
@@ -600,6 +622,10 @@ def _scatter_into(placements: List[Dict[str, Any]],
                 entry["dims"] = {"width_m": prop["width_m"],
                                  "depth_m": prop["depth_m"],
                                  "height_m": prop["height_m"]}
+                # A scattered copy is the SAME object, so it sinks by the same
+                # amount as the anchor it was thrown from — the offset belongs
+                # to the prop, not to the placement.
+                _carry_ground_offset(entry, prop)
                 entry["has_model"] = bool(prop.get("has_model"))
                 if prop.get("has_model"):
                     entry["model_tiers"] = prop.get("model_tiers") or []

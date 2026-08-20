@@ -915,6 +915,18 @@ function ignoreSwayFactor(source) {
     '  return Math.round(base * 100) / 100;\n');
 }
 
+/** Section (H8)'s mutant: the ground offset is dropped and the sampled height
+ *  is handed back as it came — the state of the code before the field existed,
+ *  where a sunk fir stands on the grass in a painted wood while the same fir
+ *  is buried correctly in every room. */
+function ignoreGroundOffset(source) {
+  return source.replace(
+    '  if (typeof offsetM !== \'number\' || !Number.isFinite(offsetM)) return 0;\n'
+    + '  return Math.min(Math.max(offsetM, -SCATTER_GROUND_OFFSET_LIMIT_M),\n'
+    + '    SCATTER_GROUND_OFFSET_LIMIT_M);\n',
+    '  return 0;\n');
+}
+
 /** Section (I5)'s third mutant: the textbook `fract(sin(i*12.9898)*43758.5453)`
  *  in place of the murmur3 finaliser — the mix that WAS tried first, and the
  *  one the 0.25 row of (I4) rejected. */
@@ -1790,6 +1802,46 @@ async function main() {
     noFactor.scatterSway(0.06, 0), 0.06);
   checkNot('H7 …which is NOT what the real product answers',
     scatterSway(0.06, 0), 0.06);
+
+  console.log('\n(H8) the ground offset — how deep a scattered prop stands');
+  // The second fact the payload puts on a scatter entry from the PROP's
+  // record (§ A9, 2026-08-20). The instances of a painted scatter are seated
+  // client-side, so the seat is `heightAt(x, z) + this` — a fir at −0.2 sinks
+  // 20 cm into the ground in a wood exactly as it does in a room.
+  const { SCATTER_GROUND_OFFSET_LIMIT_M, scatterGroundOffset }
+    = await loadTs(LOD_SRC);
+  check('H8 the limit is the server\'s own ±5 m', SCATTER_GROUND_OFFSET_LIMIT_M, 5);
+  check('H8 a stated sink is passed through', scatterGroundOffset(-0.2), -0.2);
+  check('H8 …and a stated lift as well', scatterGroundOffset(0.35), 0.35);
+  // An absent key is the NORMAL case here (the server ships it only when it
+  // differs), so it has to read as "on the ground" and not as anything else.
+  for (const [bad, name] of [[undefined, 'undefined'], [null, 'null'],
+    [NaN, 'NaN'], ['x', 'a string']]) {
+    check(`H8 ${name} means "on the ground"`, scatterGroundOffset(bad), 0);
+  }
+  check('H8 a hand-edited -99 cannot bury a wood', scatterGroundOffset(-99), -5);
+  check('H8 …and a 99 cannot launch it', scatterGroundOffset(99), 5);
+  // The seat itself, hand-derived: ground 12.5 m under the instance, entry at
+  // −0.2 → 12.3; the same instance on an entry without the key stays at 12.5.
+  check('H8 an instance at ground 12.5 with −0.2 is seated at 12.3',
+    12.5 + scatterGroundOffset(-0.2), 12.3);
+  check('H8 …and without the key at 12.5 exactly',
+    12.5 + scatterGroundOffset(undefined), 12.5);
+  // (H8a) THE one place — asserted on ground.ts, like (E)/(H6).
+  const sinkCalls = groundSrc.match(
+    /scatterGroundOffset\(entry\.ground_offset_m\)/g);
+  check('H8a ground.ts reads the offset in exactly ONE place',
+    sinkCalls ? sinkCalls.length : 0, 1);
+  check('H8a …and every instance is seated with it',
+    groundSrc.includes('const y = heightAt(p.x, p.z) + entrySink;'), true);
+  check('H8a no seat uses the bare sample any more',
+    groundSrc.includes('const y = heightAt(p.x, p.z);'), false);
+  // (H8b) the red counter-check
+  const noSink = await loadTs(LOD_SRC, ignoreGroundOffset);
+  check('H8b the "ignore the offset" mutant seats the fir at 12.5',
+    12.5 + noSink.scatterGroundOffset(-0.2), 12.5);
+  checkNot('H8b …which is NOT where the real rule seats it',
+    12.5 + scatterGroundOffset(-0.2), 12.5);
 
   console.log('\n(I) the LOD per instance — band, cull edge, stable thinning');
   const {

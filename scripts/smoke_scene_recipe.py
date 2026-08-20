@@ -1308,9 +1308,15 @@ BUILDING_META = {"rotation": {"x": 0, "y": 90, "z": 0}, "offset_x": 1.0,
 GROUND_META = {**BUILDING_META, "walk_y": 4.0}
 
 
-def stub_props() -> None:
+def stub_props(ground_offset_m: float = 0.0) -> None:
+    """Stub the library. ``ground_offset_m`` is the PROP's own sink (§ B2
+    addendum 2026-08-20) — the library record carries it, the recipe copies it
+    onto every placement of the prop, and the scene spec adds it to the base."""
     from app.core import props as prop_store
-    prop_store.get_prop = lambda pid: dict(EXAMPLE_PROP) if pid == "table" else None
+    rec = dict(EXAMPLE_PROP)
+    if ground_offset_m:
+        rec["ground_offset_m"] = ground_offset_m
+    prop_store.get_prop = lambda pid: dict(rec) if pid == "table" else None
 
 
 def model_fixture(*, room_width_m: float = 4.0, map_yaw=None,
@@ -1807,6 +1813,82 @@ def test_markers_figures() -> None:
     anchorless = scene_recipe.compose_scene(fixture())
     check("...and it is the same 1.70 m without a scale anchor",
           anchorless["figures"] == sc["figures"], str(anchorless["figures"]))
+
+
+def test_prop_ground_offset() -> None:
+    """[9a] THE PROP'S OWN GROUND OFFSET (§ B2 addendum 2026-08-20).
+
+    A property of the OBJECT: a trunk without a root ball sinks by the same
+    amount wherever it stands, so the number lives on the library record and
+    reaches every placement of the prop instead of being typed per instance.
+    The per-placement ``offset_y`` stays the trim on top of it.
+
+    HAND-DERIVED, from the numbers [8]/[9] already pin for the example prop in
+    room "a" (plate top 0.10, prop clearance 0.01, composed marker height 0.30):
+
+        base                    = 0.10 + 0.01                  = 0.11
+        with ground_offset −0.20  → bottom_y = 0.11 − 0.20      = −0.09
+        prop marker             = bottom_y + 0.30              =  0.21
+        i.e. the marker keeps its 0.30 over the mesh — the seat of a sunk
+        trunk sinks WITH the trunk, which is the whole point.
+
+    And with a placement ``offset_y`` of +0.05 on top of the same prop:
+
+        bottom_y = 0.11 − 0.20 + 0.05                          = −0.04
+        marker   = bottom_y + 0.30                             =  0.26
+
+    THE COUNTER-PROBE, executed: an offset added TWICE (once to the shared
+    room floor and once per placement, the classic double-count of this
+    change) would answer −0.29 for the mesh — 0.20 too deep.
+    """
+    print("\n[9a] the prop's own ground offset")
+    stub_props(-0.2)
+    sc = model_scene()
+    prop = spec_of(sc, "prop", "table")
+    check("bottom_y = plate 0.10 + clearance 0.01 + offset −0.20 = −0.09",
+          near(prop["bottom_y"], -0.09), str(prop.get("bottom_y")))
+    pm = [m for m in sc["markers"] if m["source"] == "prop"][0]
+    check("the marker rides the mesh down: −0.09 + 0.30 = 0.21",
+          near(pm["y_world"], 0.21), str(pm["y_world"]))
+    check("...so the seat keeps its 0.30 over the mesh",
+          near(pm["y_world"] - prop["bottom_y"], 0.30),
+          f'{pm["y_world"]} vs {prop["bottom_y"]}')
+    # The counter-probe, on the same numbers: doubled, the mesh is 0.20 deeper.
+    check("a doubled offset would be −0.29, and it is not",
+          not near(prop["bottom_y"], -0.29), str(prop.get("bottom_y")))
+
+    # The per-instance trim is ADDITIVE, not replaced.
+    trimmed_loc = model_fixture()
+    for room in trimmed_loc["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["props"][0]["offset_y"] = 0.05
+    trimmed = scene_recipe.compose_scene(
+        trimmed_loc, plan_width_m=PLAN_W, building_meta=BUILDING_META,
+        room_metas=room_metas())
+    tp = spec_of(trimmed, "prop", "table")
+    check("placement offset_y stays additive: 0.11 − 0.20 + 0.05 = −0.04",
+          near(tp["bottom_y"], -0.04), str(tp.get("bottom_y")))
+    tm = [m for m in trimmed["markers"] if m["source"] == "prop"][0]
+    check("...and the marker follows both: −0.04 + 0.30 = 0.26",
+          near(tm["y_world"], 0.26), str(tm["y_world"]))
+
+    # SCATTERED COPIES are the same object and sink by the same amount; the
+    # recipe carries the key on every copy, absent only when it is 0.
+    from app.core import room_recipe
+    lay = {"props": [{"prop_id": "table", "at": [1.0, 1.0]}]}
+    placements, _ = room_recipe._join_placements(
+        lay, lambda u, v: (u, v), 0.0, 0.0, 0.0)
+    check("the recipe placement carries the prop's offset",
+          near(placements[0].get("ground_offset_m", 0), -0.2),
+          str(placements[0].get("ground_offset_m")))
+    stub_props()
+    placements, _ = room_recipe._join_placements(
+        lay, lambda u, v: (u, v), 0.0, 0.0, 0.0)
+    check("a prop on the ground puts NO key on the placement",
+          "ground_offset_m" not in placements[0], str(sorted(placements[0])))
+    flat = spec_of(model_scene(), "prop", "table")
+    check("...and its bottom_y is the plain 0.11 again",
+          near(flat["bottom_y"], 0.11), str(flat.get("bottom_y")))
 
 
 def plate_of(sc: dict, room_id: str) -> dict:
@@ -2870,6 +2952,7 @@ def main() -> int:
     test_floor_relation()
     test_room_and_prop_specs()
     test_markers_figures()
+    test_prop_ground_offset()
     test_clip_outline()
     test_signature()
     test_curved_outline()

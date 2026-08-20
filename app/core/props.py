@@ -191,6 +191,19 @@ DIM_KEYS = ("width_m", "depth_m", "height_m")
 SWAY_FACTOR_DEFAULT = 1.0
 SWAY_FACTOR_MIN, SWAY_FACTOR_MAX = 0.0, 1.0
 
+#: How deep THIS prop stands in the ground, in metres, WHEREVER it stands —
+#: negative sinks it, positive lifts it. A property of the OBJECT, not of one
+#: placement: a tree whose mesh carries no root ball has to sink by the same
+#: few centimetres in every room, every yard, every painted wood and at every
+#: hand-set spot on the world plane, and dialling that per instance is the
+#: same number typed a hundred times.
+#:
+#: The per-PLACEMENT ``offset_y`` stays what it is — the additive trim of ONE
+#: instance ("this one stone a bit deeper"). Effective base of an instance =
+#: automatic base + ``ground_offset_m`` + ``offset_y``.
+GROUND_OFFSET_DEFAULT = 0.0
+GROUND_OFFSET_MIN, GROUND_OFFSET_MAX = -5.0, 5.0
+
 # Marker fractions may leave the raw bounding box by half a box per axis —
 # the HEIGHT axis reaches a full box below (deep seats in tall machines);
 # see ``sanitize_markers``.
@@ -484,6 +497,46 @@ def sway_factor_of(meta: Dict[str, Any]) -> float:
     return SWAY_FACTOR_DEFAULT if v is None else v
 
 
+def _coerce_ground_offset_m(value: Any) -> Optional[float]:
+    """The prop's vertical ground offset as it is STORED: ±5 m in CENTIMETRE
+    steps, or ``None`` for "write no key at all".
+
+    The same one-representation rule as :func:`_coerce_sway_factor`, with the
+    default at the other end of the range: here the value that says nothing IS
+    0.0, so a stored 0.0 and an absent key would mean the same thing to every
+    reader and only one of them may exist — ABSENCE is the statement.
+
+    Junk (non-numbers, NaN, inf, an empty string) is no authoring statement
+    either and loses the key. Numbers outside the range are CLAMPED rather
+    than refused: a typing slip should cost the limit, never the record — and
+    5 m is already far more than "sink the trunk into the soil" needs.
+
+    Rounded to centimetres, because that is the precision the dial offers and
+    the precision a base is worth: a millimetre under a tree is noise that
+    would still move every scene signature that hashes it.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    v = round(min(max(v, GROUND_OFFSET_MIN), GROUND_OFFSET_MAX), 2)
+    return None if v == GROUND_OFFSET_DEFAULT else v
+
+
+def ground_offset_of(meta: Dict[str, Any]) -> float:
+    """The EFFECTIVE ground offset of one sidecar — ``GROUND_OFFSET_DEFAULT``
+    whenever the key is absent or unusable.
+
+    Reading is as forgiving as writing is strict: a hand-edited sidecar puts
+    its prop on the ground instead of at NaN, which would take a whole scene
+    payload down with it.
+    """
+    v = _coerce_ground_offset_m(meta.get("ground_offset_m"))
+    return GROUND_OFFSET_DEFAULT if v is None else v
+
+
 def oriented_dims(bbox: Any, rotation: Any = None) -> List[float]:
     """``[width, height, depth]`` = the AABB extents of the raw mesh box AFTER
     the orientation fix: the 8 corners are rotated by Rx·Ry·Rz (degrees,
@@ -706,7 +759,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
 
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update the editable sidecar fields (name / category / width_m / depth_m
-    / height_m / tags / sway_factor). Patching any dim clears
+    / height_m / tags / sway_factor / ground_offset_m). Patching any dim clears
     ``dims_estimated`` — a value the admin set is never redistributed again.
     None when the prop does not exist."""
     pid = safe_prop_id(prop_id)
@@ -741,6 +794,14 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
             meta.pop("sway_factor", None)
         else:
             meta["sway_factor"] = factor
+    if "ground_offset_m" in patch:
+        # Same law once more, and here the cleared field is the NORMAL case:
+        # a prop that stands on the ground stores no key at all.
+        offset = _coerce_ground_offset_m(patch.get("ground_offset_m"))
+        if offset is None:
+            meta.pop("ground_offset_m", None)
+        else:
+            meta["ground_offset_m"] = offset
     _write_sidecar(pid, meta)
     return {"id": pid, **meta}
 
@@ -985,7 +1046,7 @@ def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
     """What a SCATTERED prop contributes to the terrain payload (§ A9), out of
     ONE sidecar read — ``{}`` for an id this world has no record for.
 
-    Two facts, one read, because a scatter entry needs both at once and a
+    Three facts, one read, because a scatter entry needs them all at once and a
     second walk of the prop directory per entry would undo exactly what
     ``with_scatter_props``' cache is there for:
 
@@ -994,6 +1055,10 @@ def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
       the scale, so it is the library record or nothing.
     * ``sway_factor`` — how much of its ground's wind this prop takes part in
       (see :data:`SWAY_FACTOR_DEFAULT`).
+    * ``ground_offset_m`` — how deep this prop stands in the ground, wherever
+      it stands (see :data:`GROUND_OFFSET_DEFAULT`). A scattered copy is
+      seated by the CLIENT on its own height sampler, so the number has to
+      travel with the entry the same way the wind factor does.
 
     The lean read: the master sidecar and the same ``_effective_dims`` every
     listing goes through, without the gallery, bbox-backfill and per-run detail
@@ -1007,7 +1072,8 @@ def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
     if not meta:
         return {}
     return {"height_m": _effective_dims(meta)["height_m"],
-            "sway_factor": sway_factor_of(meta)}
+            "sway_factor": sway_factor_of(meta),
+            "ground_offset_m": ground_offset_of(meta)}
 
 
 def prop_id_from_model_url(url: Any) -> str:
@@ -1754,6 +1820,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # Always the EFFECTIVE factor, never the raw key: the admin field
             # shows what applies, and "absent" is not a state a form can edit.
             "sway_factor": sway_factor_of(meta),
+            # …and the same for the ground offset: 0.0 is what a prop that
+            # stands ON the ground reads back, whether the key exists or not.
+            "ground_offset_m": ground_offset_of(meta),
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]

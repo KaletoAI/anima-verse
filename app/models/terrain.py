@@ -248,8 +248,8 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
 
 def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Add what the PROP knows to every scatter entry naming one — ``variants``,
-    ``model_variants``, ``prop_height_m`` and ``sway_factor``, PAYLOAD ONLY,
-    never stored (§ A9).
+    ``model_variants``, ``prop_height_m``, ``sway_factor`` and
+    ``ground_offset_m``, PAYLOAD ONLY, never stored (§ A9).
 
     The stored entry keeps its exactly three authored fields; every addition is
     a fact about the PROP, not about the painting, so they are derived when the
@@ -285,6 +285,13 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     none. A tree is a tree because the library says it is 8 m tall; the flat
     default only ever meant "nobody asked", and it made every wood
     avatar-high.
+
+    ``ground_offset_m`` is how deep the prop stands in the ground — the SAME
+    number its hand-set copies use in a room or on the world plane, because it
+    belongs to the object. The instances of a painted scatter are seated by the
+    client on its own height sampler (§ A9), so the value has to travel with
+    the entry: the client adds it to ``heightAt(x, z)``. Like the wind factor
+    it rides along ONLY when it is not the default 0.0.
 
     ``sway_factor`` is how much of its ground's wind this prop takes part in —
     the multiplier on the terrain kind's ``meta.sway_m``. It rides along ONLY
@@ -334,6 +341,8 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "height": facts.get("height_m", 0.0),
                     "sway_factor": facts.get(
                         "sway_factor", _props.SWAY_FACTOR_DEFAULT),
+                    "ground_offset_m": facts.get(
+                        "ground_offset_m", _props.GROUND_OFFSET_DEFAULT),
                 }
             known = cache[prop_id]
             if known["variants"]:
@@ -352,6 +361,10 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # shapes for one and the same behaviour.
             if known["sway_factor"] != _props.SWAY_FACTOR_DEFAULT:
                 entry["sway_factor"] = known["sway_factor"]
+            # …and the very same law for the ground offset, whose default is
+            # 0.0: a prop that stands ON the ground ships no key at all.
+            if known["ground_offset_m"] != _props.GROUND_OFFSET_DEFAULT:
+                entry["ground_offset_m"] = known["ground_offset_m"]
     return areas
 
 

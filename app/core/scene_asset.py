@@ -498,8 +498,9 @@ def sink_offset_y(bottom_y: float, ground: Sequence[float], offset_y: float, *,
 
 # ── Ground truth in the scene frame ─────────────────────────────────────
 
-def ground_sampler(loc: Dict[str, Any],
-                   floor_y: float = 0.0) -> Callable[[float, float], float]:
+def ground_sampler(loc: Dict[str, Any], floor_y: float = 0.0,
+                   ground_offset_m: float = 0.0,
+                   ) -> Callable[[float, float], float]:
     """``(lx, lz) → ground height`` in the location's SCENE frame.
 
     Both halves of the ground, exactly as ``relief`` splits them: the world
@@ -518,6 +519,15 @@ def ground_sampler(loc: Dict[str, Any],
     payload height against a bare terrain height and reads the floor itself as
     a gap (0.09 at a 0.05 tolerance = nothing in contact, and the run sinks a
     correctly standing prop into its own floor).
+
+    ``ground_offset_m`` is the PROP's own sink (§ B2 addendum 2026-08-20) and
+    rides on the same side of the comparison for exactly the same reason: a
+    tree dialled 0.20 m into the soil is not a defect, it is where that object
+    is SUPPOSED to stand. The expected base of the placement is therefore
+    ``floor_y + ground_offset_m + terrain``, and only what is left over —
+    the per-placement ``offset_y`` and the relief the payload could not know —
+    is measured as a gap. Blind to it, the check would read the full sink as a
+    prop piercing the ground and undo it as a "correction".
     """
     from app.core.relief import scene_ground_lift
     from app.core.world_geometry import ground_y, local_to_world
@@ -537,8 +547,11 @@ def ground_sampler(loc: Dict[str, Any],
         except Exception:                    # pragma: no cover
             world = 0.0
         # floor first, terrain ON it — the same order the payload composes a
-        # `bottom_y` in (plate top + clearance + the relief lift).
-        return float(floor_y) + world + float(scene_ground_lift(loc, wx, wz))
+        # `bottom_y` in (plate top + clearance + the relief lift) — and the
+        # prop's own sink with the floor, because it is part of the datum, not
+        # part of the gap.
+        return (float(floor_y) + float(ground_offset_m) + world
+                + float(scene_ground_lift(loc, wx, wz)))
 
     return sample
 
@@ -884,8 +897,11 @@ def place(sidecar: Dict[str, Any], loc: Dict[str, Any], mesh: Dict[str, Any],
 
     # ONE datum for both sides of the comparison (§ B1 addendum 2026-08-20):
     # `ground_y` is the payload's own `bottom_y`, so the sampler is lifted
-    # onto the same floor the payload composed it from.
-    sample = ground_sampler(loc, float(target.get("floor_y") or 0.0))
+    # onto the same floor the payload composed it from — and by the prop's own
+    # ground offset (§ B2 addendum 2026-08-20), which the payload put into
+    # `bottom_y` as well and which is a deliberate base, not a defect.
+    sample = ground_sampler(loc, float(target.get("floor_y") or 0.0),
+                            float(target.get("ground_offset_m") or 0.0))
     points = footprint_samples(anchor, width, depth, yaw)
     ground = [sample(p[0], p[1]) for p in points]
     bottom = ground_y + float(offset_y)

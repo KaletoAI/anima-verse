@@ -811,6 +811,12 @@ def resolve_target(scene: Dict[str, Any], target: Dict[str, Any], *,
         # level 0. A relief room's plate carries its FLAT base here — the
         # sampler adds the very lift the payload added to ``bottom_y``.
         "floor_y": _floor_datum(scene, room_id),
+        # THE PROP'S OWN SINK (§ B2 addendum 2026-08-20), read off the recipe
+        # placement the dims come from. It is already inside ``ground_y``
+        # (the payload's `bottom_y`), so the contact check has to know it or a
+        # deliberately sunk tree reads as a prop piercing the ground — the
+        # sampler is lifted by it, the same way it is lifted by ``floor_y``.
+        "ground_offset_m": float((placement or {}).get("ground_offset_m") or 0.0),
         "footprint": rect_footprint(anchor, width_m, depth_m, yaw),
         "dims_m": [width_m, depth_m, height_m],
         "height_m": height_m,
@@ -946,6 +952,8 @@ def build_context_scene(location_id: str, target: Dict[str, Any], *,
             "anchor": [round(c, 4) for c in res["anchor"]],
             "ground_y": round(res["ground_y"], 4),
             "floor_y": round(float(res.get("floor_y") or 0.0), 4),
+            "ground_offset_m": round(
+                float(res.get("ground_offset_m") or 0.0), 4),
             "footprint": [[round(p[0], 4), round(p[1], 4)]
                           for p in res["footprint"]],
             "dims_m": res.get("dims_m"),

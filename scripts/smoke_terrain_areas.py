@@ -167,6 +167,35 @@ Throwaway storage. Hand-derived expectations:
       a stored 0.0 — and a missing key means the default, so that mutant's
       stone waves along with the meadow. Pinned from both sides.
 
+ [15] `ground_offset_m` — how deep ONE prop stands in the ground (2026-08-20).
+      The same sidecar/payload pair as [13], with the default at the other end
+      of the range: 0.0 is what says nothing, so 0.0 is the value that must NOT
+      be stored, and ABSENCE is the statement.
+      (15a) The sanitizer, driven through `props.update_prop` and read back out
+      of the sidecar FILE:
+        fresh prop -> no key
+        -0.2       -> stored -0.2
+        -0.207     -> stored -0.21   (centimetres, the dial's own step)
+         0.354     -> stored  0.35
+        -99 / 99   -> clamped to -5.0 / 5.0 (a typing slip costs the limit,
+                      never the record)
+         0         -> NO key;  -0.004 -> rounds to 0 -> no key either
+        "junk", "" -> no key (junk is no statement; the emptied field clears)
+        a patch without the key -> the stored -0.2 survives untouched
+      Reading is forgiving where writing is strict: `ground_offset_of({NaN})`
+      is 0.0 and `get_prop` always reports the EFFECTIVE offset.
+      (15b) The payload, same enrichment as [12]/[13] and equally PAYLOAD ONLY.
+      With the fir at −0.2 and the tree untouched:
+        fir entry     -> ground_offset_m −0.2  (the client seats every instance
+                         of it at heightAt(x, z) − 0.2)
+        tree entry    -> NO key (the default travels as absence)
+        tuft entry, foreign URL -> no key either
+      the stored area keeps exactly its authored fields, and moving the fir to
+      −0.35 reaches the NEXT payload without the area being rewritten.
+      RED COUNTER-PROBE, EXECUTED: the wind factor's own rule copied one field
+      over (default 1.0) answers "no key" for a real one-metre lift and keeps a
+      0.0 the payload law forbids — wrong at both ends at once.
+
  [14] meta.stroke whitelist — the RECIPE of an area drawn with the line
       tool (`mapMath.decorateStroke` -> `strokeToPolygon`). The polygon next
       to it stays the truth, but the editor REGENERATES that polygon from
@@ -956,6 +985,114 @@ check("the recipe survives the save/read round trip",
       next(a["meta"] for a in terrain.list_areas() if a["id"] == _str["id"]),
       {"stroke": {"points": [[0.0, 0.0], [10.0, 0.0]], "width_m": 3.0,
                   "style": "wavy", "spacing_m": 8.0, "amplitude_m": 2.0}})
+
+for _a in terrain.list_areas():
+    terrain.delete_area(_a["id"])
+
+print("[15] ground_offset_m — the prop's own sink, stored and shipped")
+# (15a) The sanitizer, again through the real update path and read back out of
+# the sidecar FILE. Same one-representation law as [13], with the default at
+# the OTHER end of the range: here 0.0 is what says nothing, so 0.0 is the
+# value that must NOT be stored.
+SINKER = make_prop("smoke fir", ["full"], height_m=8.0)
+
+
+def stored_sink(pid):
+    meta = props.read_sidecar(pid)
+    return meta["ground_offset_m"] if "ground_offset_m" in meta else "absent"
+
+
+check("a fresh prop stores no offset at all", stored_sink(SINKER), "absent")
+props.update_prop(SINKER, {"ground_offset_m": -0.2})
+check("a real sink is stored as it was typed", stored_sink(SINKER), -0.2)
+props.update_prop(SINKER, {"ground_offset_m": -0.207})
+check("three decimals round to centimetres", stored_sink(SINKER), -0.21)
+props.update_prop(SINKER, {"ground_offset_m": 0.354})
+check("…and a lift the same way", stored_sink(SINKER), 0.35)
+props.update_prop(SINKER, {"ground_offset_m": -99})
+check("below the range clamps to the limit, never refuses the record",
+      stored_sink(SINKER), -5.0)
+props.update_prop(SINKER, {"ground_offset_m": 99})
+check("above the range clamps too", stored_sink(SINKER), 5.0)
+props.update_prop(SINKER, {"ground_offset_m": 0})
+check("an exact 0.0 is never stored — absence IS the statement",
+      stored_sink(SINKER), "absent")
+props.update_prop(SINKER, {"ground_offset_m": -0.004})
+check("a value that rounds to zero is zero, and zero is absence",
+      stored_sink(SINKER), "absent")
+props.update_prop(SINKER, {"ground_offset_m": -0.2})
+props.update_prop(SINKER, {"ground_offset_m": "junk"})
+check("junk clears the key instead of storing NaN", stored_sink(SINKER), "absent")
+props.update_prop(SINKER, {"ground_offset_m": -0.2})
+props.update_prop(SINKER, {"ground_offset_m": ""})
+check("the emptied admin field clears the key too", stored_sink(SINKER), "absent")
+props.update_prop(SINKER, {"ground_offset_m": -0.2})
+props.update_prop(SINKER, {"name": "smoke fir"})
+check("a patch that does not name the field leaves it alone",
+      stored_sink(SINKER), -0.2)
+check("a hand-edited NaN stands ON the ground, not at NaN",
+      props.ground_offset_of({"ground_offset_m": float("nan")}),
+      props.GROUND_OFFSET_DEFAULT)
+check("the effective read answers the stored value",
+      props.prop_scatter_facts(SINKER).get("ground_offset_m"), -0.2)
+check("a prop without the key reads the default",
+      props.prop_scatter_facts(TREE).get("ground_offset_m"),
+      props.GROUND_OFFSET_DEFAULT)
+check("the admin record always reports the EFFECTIVE offset",
+      props.get_prop(TREE).get("ground_offset_m"), props.GROUND_OFFSET_DEFAULT)
+
+# (15b) The payload. The same absence law as the wind factor: with the fir at
+# −0.2 and the tree untouched, only the fir's entry carries a key, and the
+# client seats every instance of it at heightAt(x, z) − 0.2.
+_gs = terrain.save_area(
+    {"kind": "grass", "polygon": SQUARE,
+     "meta": {"scatter": [{"density_per_100m2": 3,
+                           "model": f"/assets/props/{SINKER}/model"},
+                          {"density_per_100m2": 3,
+                           "model": f"/assets/props/{TREE}/model"},
+                          {"density_per_100m2": 3},
+                          {"density_per_100m2": 3, "model": FOREIGN}]}})
+_sink_entries = next(
+    a["meta"]["scatter"] for a in terrain.with_scatter_props(terrain.list_areas())
+    if a["id"] == _gs["id"])
+check("the fir's −0.2 rides along", _sink_entries[0].get("ground_offset_m"), -0.2)
+check("a prop that stands on the ground sends no key",
+      "ground_offset_m" in _sink_entries[1], False)
+check("a plain tuft entry sends no key",
+      "ground_offset_m" in _sink_entries[2], False)
+check("a foreign URL sends no key",
+      "ground_offset_m" in _sink_entries[3], False)
+_stored_sink = next(a["meta"]["scatter"] for a in terrain.list_areas()
+                    if a["id"] == _gs["id"])
+check("nothing of it is stored on the area",
+      [sorted(e) for e in _stored_sink],
+      [["density_per_100m2", "model"], ["density_per_100m2", "model"],
+       ["density_per_100m2"], ["density_per_100m2", "model"]])
+props.update_prop(SINKER, {"ground_offset_m": -0.35})
+_sink_again = next(
+    a["meta"]["scatter"] for a in terrain.with_scatter_props(terrain.list_areas())
+    if a["id"] == _gs["id"])
+check("a changed offset reaches the next payload without touching the area",
+      _sink_again[0].get("ground_offset_m"), -0.35)
+
+
+# RED COUNTER-PROBE: the wind factor's rule, copied one field over. There the
+# DEFAULT is 1.0 and 0.0 is a real answer; here it is the other way round, so
+# the copy stores a 0.0 and drops a 1.0 — a prop dialled a metre up would lose
+# its offset, and one dialled to 0 would carry a key that means nothing.
+def mutant_sway_rule(value):
+    """Mutant: `_coerce_sway_factor`'s default applied to this field."""
+    v = round(min(max(float(value), -5.0), 5.0), 2)
+    return "absent" if v == 1.0 else v
+
+
+props.update_prop(SINKER, {"ground_offset_m": 1.0})
+differs("mutant 'the default is 1.0' throws away a real one-metre lift",
+        mutant_sway_rule(1.0), stored_sink(SINKER))
+check("the mutant would really leave no key", mutant_sway_rule(1.0), "absent")
+check("the truth stores the metre", stored_sink(SINKER), 1.0)
+differs("…and it keeps a 0.0 the payload law forbids",
+        mutant_sway_rule(0), "absent")
 
 for _a in terrain.list_areas():
     terrain.delete_area(_a["id"])

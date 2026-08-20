@@ -80,8 +80,8 @@ import { isWaterClass, ngRefineEdgeBand } from './naturalGroundMath';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
-  instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterSway,
-  scatterTargetH } from './scatterLod';
+  instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterGroundOffset,
+  scatterSway, scatterTargetH } from './scatterLod';
 import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createUndergrowthField } from './undergrowth';
 import type { UndergrowthArea } from './undergrowth';
@@ -1480,6 +1480,11 @@ export function createGround(): Ground {
       // one number off `prop.sway`, so a stone with factor 0 arrives at 0 and
       // takes the existing "no sway, no clone" path without a second rule.
       const entrySway = scatterSway(sway, entry.sway_factor);
+      // HOW DEEP THIS PROP STANDS IN THE GROUND (§ A9, ground offset): a fact
+      // about the object, shipped on the entry, added to every instance's own
+      // ground sample below. Read once per entry — it cannot vary per
+      // instance, and asking per instance would only cost.
+      const entrySink = scatterGroundOffset(entry.ground_offset_m);
       kinds.forEach((kind, variantPos) => {
         const points = buckets[variantPos];
         // A variant no candidate of this window picked gets no mesh at all —
@@ -1528,7 +1533,10 @@ export function createGround(): Ground {
           // shared height would float half a wood over the slope it grows on.
           // The props stay UPRIGHT on a slope — a tree grows towards the sky,
           // and tilting one into the surface normal is a look, not a fix.
-          const y = heightAt(p.x, p.z);
+          // …plus the prop's own sink: the ground under THIS instance is the
+          // sampler's answer, the prop's base is that answer plus the offset
+          // the library dialled for the object (a trunk without a root ball).
+          const y = heightAt(p.x, p.z) + entrySink;
           m.compose(at.set(p.x, y, p.z), q, s);
           m.toArray(srcMatrix, i * 16);
           pos[i * 3] = p.x;

@@ -63,6 +63,12 @@ HAND-DERIVED EXPECTATIONS
         - `max_m` = 3.0 (largest real edge) and `measure` = "xyz"
         - `fix_euler` of "Fence" = {x: 0, y: 90, z: 0}
         - a placement of "Ghost" (no mesh) is DROPPED from the block
+        - `ground_offset_m` (the PROP's own sink, 2026-08-20) rides the row
+          ONLY when it is not 0.0 — the client seats a world prop itself, so
+          the bottom is `heightAt(x, z) + offset_y + ground_offset_m`. It is
+          derived per poll like `max_m`: setting the prop to −0.2 changes the
+          rows and the signature without a single placement being rewritten,
+          and the placement's own `offset_y` stays what it was.
         - nothing is fogged away: the block is identical for the avatar view
           and for the admin view of `build_worldmap_payload`
 
@@ -259,6 +265,24 @@ check("variants == model_variants[0]", r2["variants"], r2["model_variants"][0])
 check("resolved variant", r2["variant"], 1)
 check("fix_euler", r2["fix_euler"], {"x": 0.0, "y": 90.0, "z": 0.0})
 check("point and yaw", (r1["x"], r1["z"], r1["yaw_deg"]), (1.0, 2.0, 45.0))
+
+# THE PROP'S OWN SINK rides the row, and only when it is not 0.0 — the client
+# seats a world prop itself, so the value has to travel or a sunk boulder
+# stands on the grass out here while it is buried in every room.
+check("a prop on the ground sends no key", "ground_offset_m" in r1, False)
+sig_before = wp.world_props_sig()
+prop_store.update_prop(BOULDER, {"ground_offset_m": -0.2})
+sunk = {r["id"]: r for r in wp.payload_rows()}[one["id"]]
+check("the sink reaches the row", sunk["ground_offset_m"], -0.2)
+check("…without touching the placement's own trim", sunk["offset_y"], 0.0)
+check("it is derived per poll, not stored on the placement row",
+      "ground_offset_m" in next(r for r in wp.list_world_props()
+                                if r["id"] == one["id"]), False)
+check("the signature moves with it", wp.world_props_sig() == sig_before, False)
+prop_store.update_prop(BOULDER, {"ground_offset_m": 0})
+check("cleared again, the key is gone once more",
+      "ground_offset_m" in {r["id"]: r for r in wp.payload_rows()}[one["id"]],
+      False)
 
 fogged = build_worldmap_payload("nobody", show_all=False)
 admin = build_worldmap_payload(None, show_all=True)

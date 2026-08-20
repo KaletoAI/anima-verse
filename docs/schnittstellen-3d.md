@@ -1685,6 +1685,13 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   areas: [ …, {"meta": {"scatter": [{…, "model": "/assets/props/rock/model",
                                      "sway_factor": 0.0}]}} ]
   ```
+
+  **Wie tief ein Prop im Boden steht, sagt ebenfalls das Prop** (2026-08-20):
+  `ground_offset_m` (± Meter, Zentimeter-Schritte, Grenze ±5) hängt genau wie
+  `sway_factor` am Bibliotheks-Eintrag und reist nur mit, wenn er nicht 0 ist.
+  Jede Instanz wird bei `heightAt(x, z) + ground_offset_m` gesetzt — dieselbe
+  Zahl, mit der dasselbe Prop in jedem Raum und an jedem Welt-Punkt steht.
+  Ausführlich im Nachtrag 2026-08-20 (§ B2/§ A9/§ A9a) am Ende dieses Dokuments.
 - **`undergrowth` — wie viel auf einem Boden VON SELBST wächst** (2026-08-15,
   Erzeugung umgebaut 2026-08-16). Ein whitelisteter `meta`-Schlüssel, eine
   Zahl 0…1 (zwei Dezimalen, 0/leer/Junk = Schlüssel weg) = Anteil der vollen
@@ -4095,3 +4102,96 @@ Flächen-Location, Wasser-Raum innen 0,09, Zone außen Anker 0,08 / Fläche 0,09
 Prop im Outdoor-Raum 0,10, HOF-Prop 0,09, Hof-Prop-Marker 0,39,
 Hof-Raum-Marker 0,00) und [18] (§ A13a mit Relief: 0,09 + bilineare Probe) —
 die Konstellation ist die des Mondscheinsees.
+
+## Nachtrag 2026-08-20 (§ B2/§ A9/§ A9a): Ein Prop steht überall gleich tief — `ground_offset_m`
+
+Ein Prop trägt seit heute eine eigene **Höhe über dem Boden**: `ground_offset_m`
+auf dem Prop-Sidecar, in Metern, negativ versenkt, positiv hebt an. Es ist eine
+Eigenschaft des GEGENSTANDS, keine der Platzierung: ein Stamm ohne Wurzelteller,
+eine Truhe ohne Bodenplatte, ein Findling, der zur Hälfte in der Erde steckt —
+das gilt in jedem Raum, in jedem Hof, in jedem gemalten Wald und an jedem
+einzeln gesetzten Punkt der Weltebene gleichermaßen. Vorher gab es dafür nur
+`offset_y` je Platzierung, also dieselbe Zahl hundertmal getippt.
+
+**Speicherung (Sidecar).** Ein Feld, eine Darstellung — dieselbe Regel wie bei
+`sway_factor` (`app/core/props.py`), nur mit der Vorgabe am anderen Ende:
+
+| Eingabe | gespeichert |
+|---|---|
+| `-0.2` | `-0.2` |
+| `-0.207` | `-0.21` (auf Zentimeter gerundet — die Schrittweite des Reglers) |
+| `-99` / `99` | `-5.0` / `5.0` (geklemmt, nie abgelehnt: ein Tippfehler kostet das Limit, nie den Datensatz) |
+| `0`, `-0.004` | **kein Schlüssel** |
+| `"junk"`, `""` | **kein Schlüssel** |
+
+**ABWESENHEIT IST DIE AUSSAGE.** Ein gespeicherter `0.0` und ein fehlender
+Schlüssel wären für jeden Leser dasselbe, also darf nur eines von beiden
+existieren. Lesen ist so nachsichtig wie Schreiben streng: `ground_offset_of({NaN})`
+ist 0,0, und der Admin-Datensatz (`get_prop`) meldet immer den WIRKSAMEN Wert.
+
+**Die Rechnung, überall dieselbe.** Für JEDE Instanz eines Props:
+
+```
+Unterkante = automatische Basis  +  ground_offset_m  [ +  offset_y ]
+```
+
+Die automatische Basis bleibt, was sie war (Platte/Datum bzw. Gelände nach dem
+Nachtrag 47abc26b), und `offset_y` bleibt, was es war: der additive **Trimm
+EINER Instanz**. Beide werden je Pfad an GENAU EINER Stelle addiert:
+
+| Pfad | Basis | wo addiert |
+|---|---|---|
+| Platzierung im Raum/Hof (auch Streu-Kopien) | Plattenoberkante + `PROP_CLEARANCE` (+ Relief-Probe) | `scene_recipe._prop_models` → `bottom_y`; das Rezept trägt den Wert je Platzierung (`room_recipe._carry_ground_offset`) |
+| Prop-Marker derselben Platzierung | dieselbe | `scene_recipe`-Markerpfad (`y_world`) |
+| Gemalte Terrain-Streu (§ A9) | `heightAt(x, z)` des Clients | `client3d/src/scene/ground.ts`, `scatterGroundOffset(entry.ground_offset_m)` |
+| Welt-Props (§ A9a) | `heightAt(x, z)` des Clients | `client3d/src/scene/worldProps.ts`, `worldPropBottom()` |
+
+**Payload-Gesetz (§ A9/§ A9a): fehlt = 0.** Genau wie `sway_factor` reist der
+Wert nur mit, wenn er nicht die Vorgabe ist — auf der Streu-Zeile
+(`GET /play/terrain`), auf der Welt-Prop-Zeile (`world_props` im
+Worldmap-Payload) und auf der Rezept-Platzierung. Beides sind abgeleitete
+Fakten über das PROP, nie gespeicherte Felder der Bemalung oder der Platzierung:
+ein korrigierter Wert erreicht jeden Client beim nächsten Poll, ohne dass eine
+Fläche oder eine Platzierung angefasst wird (die Signaturen bewegen sich mit).
+
+**Marker reiten das Mesh.** Ein versenkter Stamm versenkt seinen Sitzplatz mit —
+`y_world − bottom_y` bleibt die komponierte Markerhöhe. Das ist gewollt und
+hier festgeschrieben: die Sitzfläche gehört zum Gegenstand, nicht zum Boden.
+
+**Die Kontaktprüfung zählt es zur SOLL-Basis** (`app/core/scene_asset.py`). Ein
+absichtlich versenkter Baum ist kein Schwebe- oder Durchdringungsfehler:
+`ground_sampler(loc, floor_y, ground_offset_m)` hebt das Gelände um denselben
+Betrag, den das Payload schon in `bottom_y` gesteckt hat, und das Sidecar trägt
+ihn als `target.ground_offset_m`. Nur der Rest — der Trimm der Platzierung und
+das Relief, das das Payload nicht kennen konnte — wird als Lücke gemessen.
+
+**Handrechnung (§ B5a).** Raum „a" des Rezept-Smokes, Plattenoberkante 0,10,
+Prop-Abstand 0,01, komponierte Markerhöhe 0,30, Prop mit `ground_offset_m −0.20`:
+
+```
+bottom_y   = 0.10 + 0.01 − 0.20            = −0.09
+Marker     = −0.09 + 0.30                  =  0.21     (Abstand bleibt 0,30)
+mit offset_y +0.05:  bottom_y = −0.04,  Marker = 0.26
+doppelt gezählt (die klassische Fehlerform) wäre bottom_y = −0.29
+```
+
+Kontaktprüfung, Hof-Prop über einer 0,08-Etagenplatte, Gelände flach 0:
+
+```
+Sampler = 0.08 + (−0.20) = −0.12      bottom_y = 0.08 + 0.01 − 0.20 = −0.11
+Lücke = 0.01 ≤ Toleranz 0.05          → 9/9 in Kontakt
+offset-blind (Sampler 0.08): 0/9 → fällt durch das 0,60-Tor,
+    obwohl das Prop exakt dort steht, wo es stehen soll
+```
+
+Belegt in `scripts/smoke_scene_recipe.py` [9a], `scripts/smoke_scene_asset.py`
+[7] E, `scripts/smoke_terrain_areas.py` [15], `scripts/smoke_world_props.py`
+[3], `client3d/scripts/smoke_scatter_math.mjs` (H8) und
+`client3d/scripts/smoke_world_props.mjs` [2a] — jeweils mit rotem Gegenversuch.
+
+**Bedienung.** Props-Tab → Prop → „Ground offset (m)". Der Regler bekommt seinen
+Bezug mit (Nutzer-Vorgabe „Maße brauchen Bezug"): eine Seitenansicht mit
+Bodenlinie, Metermaß, der 1,70-m-Figur (nie mitskaliert) und der Kiste des Props
+in seinen echten Maßen; der Reglerweg folgt der Prop-Höhe (mindestens ±0,5 m,
+höchstens das gespeicherte ±5 m), damit ein Schemel in seinen Zentimetern und
+eine Tanne in ihren Metern eingestellt wird.

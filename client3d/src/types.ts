@@ -360,8 +360,8 @@ export interface WorldMap {
  * poll, so a size corrected in the Props tab arrives without a rewrite.
  *
  * `bottom_y` is deliberately NOT in here — the client samples the ground under
- * `(x, z)` with its own height sampler and adds `offset_y`, so a prop sticks
- * to the relief that is really drawn.
+ * `(x, z)` with its own height sampler and adds `offset_y` plus the prop's own
+ * `ground_offset_m`, so a prop sticks to the relief that is really drawn.
  */
 export interface WorldPropSpec {
   /** Placement id — stable, and the SEED of the variant formula (§ A9a). */
@@ -374,8 +374,13 @@ export interface WorldPropSpec {
   z: number;
   /** Degrees, this contract's turning sense (§ A1.1). */
   yaw_deg: number;
-  /** Metres ABOVE the sampled ground — a knob for a half-buried rock. */
+  /** Metres ABOVE the sampled ground — the trim of THIS placement. */
   offset_y: number;
+  /** How deep the PROP stands in the ground, in metres (±5) — a fact about
+   *  the object, the same in every room and on every painted ground, derived
+   *  by the server from the library record. The bottom of a row is
+   *  `heightAt(x, z) + offset_y + ground_offset_m`. Absent = 0. */
+  ground_offset_m?: number;
   /** Largest REAL edge of the object in metres; scaled with `measure: 'xyz'`,
    *  the one scale law of `place()` (§ B2). */
   max_m: number;
@@ -533,6 +538,14 @@ export interface TerrainScatterEntry {
    *  stands still in a meadow whose ferns bend fully. Absent = 1, the full
    *  amount: the server ships the key only when it differs. */
   sway_factor?: number;
+  /** How deep the prop behind `model` stands in the ground, in metres (±5) —
+   *  added by `GET /play/terrain` from the library record, never stored on the
+   *  entry and never authored here. Every instance is seated at
+   *  `heightAt(x, z) + ground_offset_m`, so a tree whose mesh carries no root
+   *  ball sinks by the same amount here as it does in a room. Absent = 0, the
+   *  prop stands ON the ground: the server ships the key only when it
+   *  differs. */
+  ground_offset_m?: number;
   /** The resolution tiers this prop REALLY has, per tier token
    *  (`{full: "/assets/props/<id>/model?tier=full", …}`) — added by
    *  `GET /play/terrain`, never stored and never authored. Resolved with the

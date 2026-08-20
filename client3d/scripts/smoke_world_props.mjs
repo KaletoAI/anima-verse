@@ -33,7 +33,16 @@
  * ── 2. The placement spec ─────────────────────────────────────────────────
  * `worldPropSceneSpec` turns ONE payload row plus a ground height into the
  * § B2 spec `place()` reads. The row states `x`/`z`/`offset_y`; the BOTTOM is
- * the caller's (`heightAt(x, z) + offset_y`) — the server never sends one.
+ * the caller's — the server never sends one. `worldPropBottom` is that sum,
+ * and it has three summands with three owners (§ A9a, ground offset
+ * 2026-08-20): the relief, THIS placement's `offset_y`, and the PROP's own
+ * `ground_offset_m`. On a ground of 2.5 m with `offset_y` 0.5:
+ *
+ *     no ground_offset_m        -> 3.00
+ *     ground_offset_m = -0.20   -> 2.80   (a trunk without a root ball)
+ *     +0.35 and no placement trim -> 2.85
+ *
+ * An absent key is 0 — the server ships it only when it differs.
  *
  * ── 3. The mount itself, measured ─────────────────────────────────────────
  * `placeModelSpec` is the shared routine; here it is fed a hand-built box so
@@ -92,8 +101,8 @@ async function main() {
     await import('../../packages/scene-render/src/index.ts')
   const { instanceTier, SCATTER_LOD_DEFAULTS } =
     await import('../src/scene/scatterLod.ts')
-  const { WORLD_PROP_LOD_SCALE, worldPropLodCfg, worldPropSceneSpec } =
-    await import('../src/scene/worldProps.ts')
+  const { WORLD_PROP_LOD_SCALE, worldPropLodCfg, worldPropSceneSpec,
+    worldPropBottom } = await import('../src/scene/worldProps.ts')
 
   const FAILED = []
   const r3 = (v) => Math.round(v * 1000) / 1000
@@ -150,6 +159,35 @@ async function main() {
   // never into another variant's low mesh (that would draw a different object).
   check('low falls back inside the variant', pickModelVariant(spec2, 'low'),
     `${P}?variant=1&tier=full`)
+
+  console.log('\n[2a] the bottom — three summands, three owners')
+  // `worldPropBottom(row, groundY)` is what BOTH seat sites call (mount and
+  // the relief re-drape), so the arithmetic is checked once and cannot drift
+  // between them. Hand-derived on the ground height 2.5 m:
+  //   offset_y 0.5, no ground_offset_m         -> 3.0
+  //   the same row with ground_offset_m -0.2   -> 2.8
+  //   a lift of +0.35 and no placement trim    -> 2.85
+  check('ground + the placement trim', worldPropBottom(row, 2.5), 3.0)
+  check('…plus the prop\'s own sink of -0.2',
+    r3(worldPropBottom({ ...row, ground_offset_m: -0.2 }, 2.5)), 2.8)
+  check('a lift with no trim', r3(worldPropBottom(
+    { ...row, offset_y: 0, ground_offset_m: 0.35 }, 2.5)), 2.85)
+  check('an absent key is 0, not NaN',
+    worldPropBottom({ ...row, ground_offset_m: undefined }, 2.5), 3.0)
+  check('and so is junk on the wire',
+    worldPropBottom({ ...row, ground_offset_m: 'x' }, 2.5), 3.0)
+  // The RED probe: the sum before the field existed. A fir dialled 20 cm into
+  // the soil would stand on the grass out here while it is correctly buried
+  // in every room — the very split the field exists to close.
+  const blindBottom = (wp, groundY) => groundY + (wp.offset_y || 0)
+  check('the offset-blind sum answers 3.0 for the sunk row',
+    blindBottom({ ...row, ground_offset_m: -0.2 }, 2.5), 3.0)
+  check('…which is NOT what the real sum answers',
+    r3(worldPropBottom({ ...row, ground_offset_m: -0.2 }, 2.5)) !== 3.0, true)
+  // …and it reaches `place()`: the spec's bottom_y IS this sum.
+  check('the spec carries it', worldPropSceneSpec(
+    { ...row, ground_offset_m: -0.2 },
+    worldPropBottom({ ...row, ground_offset_m: -0.2 }, 2.5)).bottom_y, 2.8)
 
   console.log('\n[3] the mount, measured')
   const boxOf = (w, h, d) => new THREE.Mesh(

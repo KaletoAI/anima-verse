@@ -19,8 +19,9 @@
  *    `bottom_y`. Damit ist eine Bank draußen so groß wie dieselbe Bank drinnen.
  *
  * Der BODEN kommt von hier, nicht vom Server: `bottom_y = heightAt(x, z) +
- * offset_y` mit demselben Sampler, auf dem die Streu steht (§ A9a). Bewegt
- * sich das Relief, wird nur die Höhe nachgezogen — kein Neuaufbau.
+ * offset_y + ground_offset_m` mit demselben Sampler, auf dem die Streu steht
+ * (§ A9a; `worldPropBottom`). Bewegt sich das Relief, wird nur die Höhe
+ * nachgezogen — kein Neuaufbau.
  *
  * Reine Deko: kein Nav, keine Kollision, kein Fog (der Block kommt ungefiltert).
  */
@@ -44,6 +45,26 @@ import type { WorldPropSpec } from '../types';
  * Sichtweiten-Einstellung des Spielers weiter durchschlägt.
  */
 export const WORLD_PROP_LOD_SCALE = 3;
+
+/**
+ * Die Unterkante EINER Zeile über der bereits gesampelten Bodenhöhe (§ A9a).
+ *
+ * Drei Summanden, und jeder gehört jemand anderem: der Boden dem Relief, die
+ * `offset_y` DIESER Platzierung und `ground_offset_m` dem PROP — ein Stamm
+ * ohne Wurzelteller steckt überall gleich tief in der Erde, im Raum wie hier
+ * draußen. Der Server schickt den Schlüssel nur, wenn er nicht 0 ist.
+ *
+ * Eigene Funktion, weil sie an ZWEI Stellen gebraucht wird (beim Einhängen und
+ * beim Nachziehen des Reliefs) und der Smoke sie gegen Handzahlen prüft —
+ * zwei Abschriften derselben Summe wären genau die Stelle, an der eine von
+ * beiden den dritten Summanden verpasst.
+ */
+export function worldPropBottom(wp: WorldPropSpec, groundY: number): number {
+  const off = Number(wp.offset_y);
+  const sink = Number(wp.ground_offset_m);
+  return groundY + (Number.isFinite(off) ? off : 0)
+    + (Number.isFinite(sink) ? sink : 0);
+}
 
 /** Die Streu-Distanzen, auf Landmarken-Maß gebracht. Exportiert, weil der
  *  Smoke sie gegen handgerechnete Zahlen prüft (§ B5a). */
@@ -152,7 +173,7 @@ export function createWorldProps(
       if (disposed || !obj) return;
       // Steht die Zeile noch, und ist DIESE URL noch die gewünschte?
       if (records.get(rec.spec.id) !== rec || rec.wantedUrl !== url) return;
-      const bottom = heightAt(rec.spec.x, rec.spec.z) + (rec.spec.offset_y || 0);
+      const bottom = worldPropBottom(rec.spec, heightAt(rec.spec.x, rec.spec.z));
       // `clone: true`, weil `loadGlb` seine Szene über den URL-Cache teilt;
       // `clip: false`, weil ein Welt-Prop in keiner Raumhülle steht.
       const node = placeModelSpec(THREE, obj, worldPropSceneSpec(rec.spec, bottom),
@@ -212,7 +233,7 @@ export function createWorldProps(
 
   function redrapeOne(rec: PropRecord): void {
     if (!rec.node) return;
-    const bottom = heightAt(rec.spec.x, rec.spec.z) + (rec.spec.offset_y || 0);
+    const bottom = worldPropBottom(rec.spec, heightAt(rec.spec.x, rec.spec.z));
     // `placeModelSpec` hat die Unterkante auf `placedBottom` gesetzt und dabei
     // die eigene Bounding-Box eingerechnet; die DIFFERENZ trägt das mit, ohne
     // erneut messen zu müssen.

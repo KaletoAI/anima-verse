@@ -30,6 +30,13 @@ export interface PropFull {
    *  painted area. Always the EFFECTIVE value on a full record (1 = the full
    *  amount); the server stores it only when it differs. */
   sway_factor?: number
+  /** How deep this prop stands in the ground, in metres (−5…+5) — negative
+   *  sinks it, positive lifts it, and it applies WHEREVER the prop stands:
+   *  manual placements, room/yard scatter, painted terrain scatter, world
+   *  props. Always the EFFECTIVE value on a full record (0 = on the ground);
+   *  the server stores it only when it differs. The per-placement `offset_y`
+   *  stays the trim of one instance on top of it. */
+  ground_offset_m?: number
   /** Generation subject — feeds the render prompt; the name stays free
    *  display text (empty = the name is used). */
   description?: string
