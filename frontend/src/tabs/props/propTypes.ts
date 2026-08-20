@@ -100,7 +100,22 @@ export interface PropSourceImage {
   negative: string
   /** UTC ISO stamp of the render or upload ('' = no record). */
   generated_at: string
+  /** WHERE the picture was taken: `SCENE_CONTEXT_ORIGIN` for a cutout out of a
+   *  rendered spot, EMPTY for an ordinary product shot. Absence is the
+   *  contract, not a gap — every image is a product shot until a scene run
+   *  says otherwise, so no existing prop needed migrating. */
+  origin: string
+  /** Display name of the location the scene run rendered ('' without origin). */
+  origin_location: string
+  origin_location_id: string
+  /** UTC ISO start stamp of that run ('' without origin). */
+  origin_ts: string
 }
+
+/** The one value `PropSourceImage.origin` ever carries (props.py
+ *  `ORIGIN_SCENE_CONTEXT`). Anything else — above all the empty string — is a
+ *  product shot. */
+export const SCENE_CONTEXT_ORIGIN = 'scene_context'
 
 export interface PropVariant {
   index: number

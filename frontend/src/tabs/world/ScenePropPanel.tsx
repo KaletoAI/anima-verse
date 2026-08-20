@@ -1,6 +1,6 @@
 /**
  * ScenePropPanel — "Generate in scene" for ONE selected prop placement, plus
- * the triple preview of its newest run and the placement's variant picker.
+ * the picture strip of its newest run and the placement's variant picker.
  *
  * The UI half of the scene-asset pipeline (plan-assets-im-szenenkontext.md
  * Etappe 4 Punkt 6, backend `app/core/scene_asset.py` /
@@ -36,6 +36,10 @@ export interface SceneAssetRun {
   attempts: number
   variant: number | null
   stored_variant: number | null
+  /** STORE index of the variant this spot showed BEFORE the run — the
+   *  "before" half of the comparison. null = the prop had no meshed variant
+   *  yet (a first generation). */
+  previous_variant: number | null
   failures: string[]
   checks: {
     px_ratio?: number | null
@@ -239,7 +243,7 @@ export function ScenePropPanel({
           type="button"
           className="ga-btn ga-btn-sm"
           onClick={() => setOpen((v) => !v)}
-          title={t('Show the newest scene-asset run: context render, edit result, cutout and every check.')}
+          title={t('Show the newest scene-asset run: what this spot showed before, the context render, the edit result, the cutout it was meshed from, and every check.')}
         >
           {open ? '▾' : '▸'} {run
             ? (run.ok ? `✓ ${t('Scene run')}` : `⚠ ${t('Scene run')}`)
@@ -262,16 +266,32 @@ export function ScenePropPanel({
   )
 }
 
-/** The triple preview + the readouts of ONE run. */
+/** The picture strip + the readouts of ONE run.
+ *
+ * Four frames, and the outer two are a PAIR: `before` is the source image of
+ * the variant this spot showed until the run — copied into the run directory
+ * at trigger time, because a run that refines that very variant overwrites the
+ * original a moment later — and `after` is the cutout the new mesh was built
+ * from. Same kind of picture on both ends, so the comparison is a comparison.
+ */
 function RunStrip({ run }: { run: SceneAssetRun }) {
   const { t } = useI18n()
   const band = run.checks.px_ratio_band || []
-  const shots: Array<{ url?: string; label: string; note: string }> = [
+  const prev = run.previous_variant
+  const shots: Array<{ url?: string; label: string; note: string; empty?: string }> = [
+    { url: run.files.before, label: t('Before'),
+      note: typeof prev === 'number'
+        ? t('variant {n}, what this spot showed').replace('{n}', String(prev + 1))
+        : t('what this spot showed'),
+      // Not "not reached": this frame was never part of the run. The spot
+      // simply had no picture to show — a first generation, or a variant whose
+      // mesh was uploaded.
+      empty: t('no earlier picture') },
     { url: run.files.context, label: t('Context render'),
       note: t('the spot as Blender sees it') },
     { url: run.files.edit, label: t('Edit result'),
       note: `${run.path || '—'} · ${run.backend || '—'}` },
-    { url: run.files.cutout, label: t('Cutout + mesh'),
+    { url: run.files.cutout, label: t('After (cutout + mesh)'),
       note: run.checks.mesh_ok
         ? `✓ ${num(run.checks.mesh_height_m)} m · ${run.checks.mesh_backend || '—'}`
         : `⚠ ${run.checks.mesh_error || t('no mesh')}` },
@@ -296,7 +316,7 @@ function RunStrip({ run }: { run: SceneAssetRun }) {
                             display: 'flex', alignItems: 'center',
                             justifyContent: 'center', fontSize: '0.8em',
                             opacity: 0.7 }}>
-                {t('not reached')}
+                {s.empty || t('not reached')}
               </div>
             )}
             <div style={{ fontSize: '0.78em', fontWeight: 600 }}>{s.label}</div>

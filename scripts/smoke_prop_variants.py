@@ -67,6 +67,28 @@ says which. HAND CASE, three active variants:
 A switched-off variant renders nowhere, so it cannot be missing anything
 either: switching variant 2 off leaves 2 / 0 / 1.
 
+WHERE THE PICTURE WAS TAKEN (2026-08-20). A source image is either a product
+shot (the object alone on neutral ground) or a scene-context cutout (drawn into
+a rendered spot and cut back out of it). The second carries that spot's light
+and ground, so the two are not interchangeable and the admin has to see which
+is which. The contract is deliberately the CHEAP one, and section 16 derives it
+by hand from that choice:
+
+    origin ABSENT  → product shot     (every image ever written; no migration)
+    origin "scene_context" + origin_location / origin_location_id / origin_ts
+
+From "absence is the product shot" three things follow and are checked:
+
+  - the ordinary generation chain writes NO origin key at all — not an empty
+    one, because an empty key and an absent key would mean the same thing and
+    only one of them may exist;
+  - the origin survives `list_variants`, i.e. the variant-list SANITIZER: it
+    rebuilds every entry from a whitelist, so a key it does not know is
+    silently dropped on the next write to ANY variant of the same prop;
+  - a re-render as a product shot CLEARS it, on the variant entry and on the
+    master record alike — a stale location would keep pointing at a spot the
+    new picture was never taken at.
+
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
 import ast
@@ -228,7 +250,10 @@ def spec_of(prop_id: str, **extra) -> dict:
     """The finished placement spec the payload carries for one placement."""
     recipe = {"room_id": "r1", "level": 0, "always_visible": True,
               "placements": [placement(prop_id, **extra)]}
-    return _prop_models(recipe, 0.0)[0]
+    # storey 0, slab 0: this smoke asserts the variant bookkeeping of the spec
+    # (`variants` / `model_variants` / `variant`), never its `bottom_y` — and
+    # the slab feeds nothing but that.
+    return _prop_models(recipe, 0.0, 0.0)[0]
 
 
 def main() -> int:
@@ -523,6 +548,84 @@ def main() -> int:
           not any(k in lean for k in ("variants_total", "variants_missing_mesh",
                                       "variants_missing_image")),
           str(sorted(lean.keys())))
+
+    print("\n[16] the ORIGIN of a picture — product shot vs. scene context")
+    # The run stamp is the SCENE run's own start (scene_asset writes
+    # `record["started_at"]` here, never a fresh clock read) — a fixed string,
+    # so the check has nothing to do with when this smoke runs.
+    RUN_TS = "2026-08-20T09:15:00+00:00"
+    torch = store.create_prop(name="Torch")["id"]
+    store._generate(torch, "a torch", "", "fake", "fake-mesh", variant=0)
+    img0 = store.list_variants(torch)[0]["image"]
+    check("an ordinary product shot records NO origin",
+          img0["origin"] == "" and img0["origin_location"] == "",
+          str(img0))
+    check("...and writes no origin key onto the sidecar either — absence IS "
+          "the product shot",
+          not any(k.startswith("source_origin")
+                  for k in store.read_sidecar(torch)),
+          str(sorted(k for k in store.read_sidecar(torch)
+                     if k.startswith("source"))))
+
+    target = store.target_variant(torch)
+    check("the scene run targets a fresh variant 1", target == 1, str(target))
+    store.save_source_image(torch, png_bytes((240, 180, 40), alpha=True), target,
+                            backend="fake-image", prompt="a torch in the mill",
+                            origin=store.ORIGIN_SCENE_CONTEXT,
+                            origin_location="Old Mill",
+                            origin_location_id="old-mill", origin_ts=RUN_TS)
+    img1 = store.list_variants(torch)[1]["image"]
+    check("a scene cutout is stamped scene_context with its spot and its run",
+          (img1["origin"], img1["origin_location"], img1["origin_location_id"],
+           img1["origin_ts"])
+          == ("scene_context", "Old Mill", "old-mill", RUN_TS), str(img1))
+    check("...and variant 0 is untouched by it",
+          store.list_variants(torch)[0]["image"]["origin"] == "")
+
+    # The list sanitizer rebuilds EVERY entry from its whitelist on every
+    # write, so a third variant's arrival is what would silently drop an
+    # unknown key from the second one.
+    store.add_variant(torch)
+    img1 = store.list_variants(torch)[1]["image"]
+    check("the origin survives a rewrite of the variant list",
+          (img1["origin"], img1["origin_location"]) == ("scene_context",
+                                                        "Old Mill"),
+          str(img1))
+
+    store._generate(torch, "a plain torch", "", "fake", "fake-mesh",
+                    image_only=True, variant=1)
+    img1 = store.list_variants(torch)[1]["image"]
+    check("re-rendering it as a product shot CLEARS the origin, spot included",
+          (img1["origin"], img1["origin_location"], img1["origin_ts"])
+          == ("", "", ""), str(img1))
+    check("...and the picture's own provenance moved on with it",
+          img1["prompt"] == "a plain torch", str(img1["prompt"]))
+
+    # The base stem keeps its provenance on the MASTER record, and the scene
+    # pipeline may well target variant 0 (a prop whose first slot is empty).
+    store.save_source_image(torch, png_bytes((240, 180, 40), alpha=True), 0,
+                            backend="fake-image", prompt="a torch in the yard",
+                            origin=store.ORIGIN_SCENE_CONTEXT,
+                            origin_location="Old Mill",
+                            origin_location_id="old-mill", origin_ts=RUN_TS)
+    meta = store.read_sidecar(torch)
+    check("variant 0's origin lands on the master record",
+          (meta.get("source_origin"), meta.get("source_origin_location"),
+           meta.get("source_origin_location_id"), meta.get("source_origin_ts"))
+          == ("scene_context", "Old Mill", "old-mill", RUN_TS),
+          str({k: v for k, v in meta.items() if k.startswith("source_origin")}))
+    check("...and reads back through the strip like any other variant's",
+          store.list_variants(torch)[0]["image"]["origin"] == "scene_context")
+    store._generate(torch, "a torch again", "", "fake", "fake-mesh",
+                    image_only=True, variant=0)
+    check("a product shot over it REMOVES the master keys, not empties them",
+          not any(k.startswith("source_origin")
+                  for k in store.read_sidecar(torch)),
+          str(sorted(k for k in store.read_sidecar(torch)
+                     if k.startswith("source"))))
+    check("the lean library record still carries no origin at all",
+          not any(k.startswith("source_origin") or k == "origin"
+                  for k in {p["id"]: p for p in store.list_props()}[torch]))
 
     print()
     if FAILURES:

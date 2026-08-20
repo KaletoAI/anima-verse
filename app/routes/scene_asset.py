@@ -12,8 +12,9 @@ Four things live here:
 * ``GET /status`` answers the poll the floor-plan editor runs while a job is
   out: is it still going, and what did the newest run for THIS placement say.
 * ``GET /runs/{prop_id}`` is the same summary for every run a prop ever had.
-* ``GET /runs/{prop_id}/{stamp}/{file}`` serves the four PNGs of one run —
-  the triple preview reads its images from here.
+* ``GET /runs/{prop_id}/{stamp}/{file}`` serves the PNGs of one run — the
+  preview strip reads its images from here, ``before.png`` (what the spot
+  showed until the run) included.
 
 The summary shape is the whole contract of the UI wave and is built in ONE
 place (:func:`_summary`): the run's own ``result.json`` is a full record with
@@ -135,6 +136,9 @@ def _summary(prop_id: str, stamp: str, rec: Dict[str, Any]) -> Dict[str, Any]:
         "attempts": len(attempts),
         "variant": rec.get("variant"),
         "stored_variant": stored.get("variant"),
+        # WHICH variant this spot showed before the run — the "before" half of
+        # the comparison, whose picture rides along in ``files.before``.
+        "previous_variant": rec.get("previous_variant"),
         "failures": list(rec.get("failures") or []),
         "checks": {
             "px_ratio": last.get("px_ratio"),
