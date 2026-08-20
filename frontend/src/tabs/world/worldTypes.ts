@@ -341,12 +341,12 @@ export const GROUND_ROOM_ID = '__ground__'
  * default in every surface: the room tree, the plan's "On the plan:" target
  * list, the plan side panel and the furnish dialog all name one and the same
  * room. The floor plan used to call it "Yard" while the tree called it
- * "Outside" (German "Draußen"), which read as two rooms (user finding
+ * "Outside", which read as two rooms (user finding
  * 2026-08-20). An author who gives it a name of its own overrides both.
  */
 export function groundRoomLabel(room: { name?: string } | null | undefined,
                                 t: (s: string) => string): string {
-  return room?.name?.trim() || t('Outside')
+  return room?.name?.trim() || t('Yard')
 }
 
 /** A layout whose ROOM SHAPE is resolved: the rectangle is there, so every
