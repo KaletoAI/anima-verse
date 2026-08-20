@@ -94,6 +94,50 @@ export function viewportFor(points: Pt[], margin: number,
            size: edge }
 }
 
+/**
+ * THE PLAN WINDOW, SAID IN THE MAP CANVAS' WORDS.
+ *
+ * The floor plan and the world map are two canvases over the same kind of
+ * metre frame, and they state a viewport differently: the plan carries the min
+ * corner plus an edge (`PlanView`), the map carries the centre plus a zoom
+ * (`mapMath.View`). The ONE gesture that is mounted on both — `PolygonHandles`
+ * on the location boundary — reads the map's form, so this is the translation,
+ * and it is the only place the two vocabularies meet.
+ *
+ * The canvas is SQUARE (`aspectRatio: 1 / 1`), so one measured edge is both
+ * width and height, and the result is exact rather than approximate:
+ *
+ *   worldToScreen(x) = w/2 + (x − cx)·pxPerM
+ *                    = px/2 + (x − x0 − size/2)·(px/size)
+ *                    = px·(x − x0)/size
+ *                    = viewFx(v, x)·px
+ *
+ * i.e. a handle lands on the very pixel the plan's own `fx`/`fz` conversion
+ * puts a metre on — which is what stops the boundary handles from sitting
+ * anywhere but on the boundary. `scripts/smoke_plan_boundary_edit.mjs` runs
+ * that identity on hand-derived numbers.
+ *
+ * A zero or negative edge would divide every conversion by nothing; both
+ * inputs fall back to 1, which draws a useless but finite frame instead of
+ * NaN handles.
+ */
+export interface PlanMapView {
+  view: { cx: number; cz: number; pxPerM: number }
+  /** Measured canvas size in CSS pixels — square, so w === h. */
+  w: number
+  h: number
+}
+
+export function planMapView(v: PlanView, canvasPx: number): PlanMapView {
+  const size = v.size > 0 ? v.size : 1
+  const px = canvasPx > 0 ? canvasPx : 1
+  return {
+    view: { cx: v.x0 + size / 2, cz: v.z0 + size / 2, pxPerM: px / size },
+    w: px,
+    h: px,
+  }
+}
+
 /** Snap a length to the drawing raster (0 = off). Used for every drawn point
  *  and every dragged rectangle, so a plan comes out on whole half-metres
  *  unless the author says otherwise (Shift). */

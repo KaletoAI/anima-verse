@@ -22,6 +22,22 @@
  * may be drawn ANYWHERE in it. The window is the only place a metre becomes a
  * fraction of the canvas; nothing about it is stored.
  *
+ * THREE SHAPES LIE ON THIS PLAN, and the legend under the canvas names all
+ * three because nothing else did: the LOCATION BOUNDARY (green — the plot, the
+ * outermost shape, `map3d.boundary`), the BUILDING CONTOUR (blue — the house
+ * standing on it, `map3d.outline`) and the ROOMS (grey — what can actually be
+ * entered). Drawing the contour in the belief that it was a room is what earns
+ * the server's correct-but-late `rooms_without_layout` finding, so the contour
+ * tool says what it draws while it is armed.
+ *
+ * The boundary is EDITABLE HERE, with the very `PolygonHandles` gesture the
+ * map tab uses, and through the same write path (`boundaryApi`) — the map tab
+ * drags its vertices in world metres and converts them back through the § A1.1
+ * pin transform, this canvas already draws in the local metres the field is
+ * stored in and converts nothing. A location that is NOT placed keeps its
+ * boundary (it is the location's own shape, not a piece of the map), and the
+ * plan says so instead of showing one polygon for two different states.
+ *
  * The pane is three columns:
  * [PlanToolbar 44px] [canvas 420px] [PlanSidePanel]. Rooms are drawn as
  * polygon hulls on the building footprint: drag to move, corner handle to
@@ -42,11 +58,16 @@ import {
   CLOSE_TOL_PX, MIN_ROOM_M, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
   PLAN_MAX_M, SNAP_TOL_PX, absOutline, buildSnapTargets, clamp,
   edgePointOnEdge, edgeSegment, exteriorEdges, fmtM, nearestPolygonEdge,
-  normalizeOpeningEdge, outlineOf, r4, rM, rotateOpeningCW, sharedEdges,
-  snapDrawPoint, snapMoveOffset, snapToGrid, viewFx, viewFz, viewMx, viewMz,
-  viewportFor,
+  normalizeOpeningEdge, outlineOf, planMapView, r4, rM, rotateOpeningCW,
+  sharedEdges, snapDrawPoint, snapMoveOffset, snapToGrid, viewFx, viewFz,
+  viewMx, viewMz, viewportFor,
 } from './planGeometry'
 import type { EdgeLetter, PlanView, PolyRoom, Pt, SnapResult } from './planGeometry'
+import {
+  BOUNDARY_SEED_M, boundaryComplaint, putLocationBoundary, seedSquare,
+} from './boundaryApi'
+import { MapViewCtx } from '../map/MapCanvas'
+import { PolygonHandles } from '../map/PolygonHandles'
 import { FurnishDialog, useFurnishJob } from './FurnishDialog'
 import { PlanFigure, PlanMetreGrid, PlanScaleBar } from './PlanMeasure'
 import { PlanSidePanel } from './PlanSidePanel'
@@ -130,6 +151,15 @@ interface RoomLayoutEditorProps {
    *  the elevator position (AV3D-12) in it. */
   map3d?: Map3D
   onMap3d?: <K extends keyof Map3D>(key: K, value: Map3D[K] | undefined) => void
+  /** Does the location stand on the world map (`pos_x`/`pos_z` set)?
+   *
+   *  The BOUNDARY exists either way — it is drawn in the location's own local
+   *  metres and survives unplacing by design — but what it MEANS depends on
+   *  this: placed, it is ground the location covers right now; unplaced, it is
+   *  the shape that will be laid down the moment somebody places it. The plan
+   *  says which of the two it is looking at, instead of showing one polygon
+   *  for both states (user finding 2026-08-20). */
+  placedOnMap?: boolean
   /** Server verdict (Location.has_entrance): does this location carry any
    *  boundary pass-through at all? Since the free-boundary rule (E4 task 5)
    *  that is a HINT, not a verdict on reachability: a location without any
@@ -224,7 +254,7 @@ function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
 const atOrigin = (lay: PlacedLayout, ground: boolean): Pt =>
   (ground ? [lay.x, lay.y] : [0, 0])
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, onServerEdit, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, onServerEdit, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -462,6 +492,58 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     return { x, y, w, d, level: 0,
              outline: boundaryM.map(([px, pz]) => [px - x, pz - y] as Pt) }
   }, [map3d?.boundary, boundaryM])
+  /** Is there a DRAWN boundary at all, or is `boundaryM` the pin square
+   *  standing in for one? Every statement about the plot hangs off this. */
+  const hasBoundary = !!(map3d?.boundary && map3d.boundary.length >= 3)
+
+  /**
+   * WRITE THE LOCATION BOUNDARY — the same polygon the map tab reshapes, in
+   * the same one write path (`boundaryApi`).
+   *
+   * NO PIN TRANSFORM HERE, and that is the whole reason the gesture fits: the
+   * map canvas draws in WORLD metres and has to send every vertex back through
+   * § A1.1, while THIS canvas already draws in the location's LOCAL metres —
+   * the very frame `map3d.boundary` is stored in. What `PolygonHandles` hands
+   * over is therefore the stored value verbatim.
+   *
+   * The write goes to the server immediately, like it does on the map tab,
+   * and the STORED answer is read back into the draft (centimetre rounding,
+   * one winding, derived `plan_width_m`) — the handles have to sit on the
+   * points that really exist. The location's own Save button is untouched by
+   * this: it writes the same `map3d` again, which is idempotent. It must NOT
+   * call `onServerEdit` though — that reloads the parent and would throw away
+   * every unsaved room edit in the draft.
+   */
+  const writeBoundary = useCallback(async (points: Pt[]) => {
+    if (!locationId || !onMap3d) return
+    const bad = boundaryComplaint(points)
+    if (bad) {
+      toast(t(bad.message).replace('{n}', String(bad.n)), 'error')
+      return
+    }
+    // Optimistic: the polygon must follow the hand, not the round trip.
+    onMap3d('boundary', points)
+    try {
+      const stored = await putLocationBoundary(locationId, map3d, points)
+      if (stored) {
+        onMap3d('boundary', stored.boundary)
+        onMap3d('plan_width_m', stored.plan_width_m)
+      }
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [locationId, map3d, onMap3d, t, toast])
+
+  /** The first shape: a centred square the author then drags into the outline
+   *  they mean — the same seed the map tab writes, so a location gets the same
+   *  starting polygon whichever surface it was drawn from. Its edge is the
+   *  location's own derived width when it still has one, otherwise the shared
+   *  placeholder. */
+  const seedBoundary = useCallback(() => {
+    if (hasBoundary) return
+    void writeBoundary(seedSquare(planW > 0 ? planW : BOUNDARY_SEED_M))
+  }, [hasBoundary, planW, writeBoundary])
+
   /** The ground room itself — the server ships one with every location. */
   const groundRoom = rooms.find((r) => r.id === GROUND_ROOM_ID)
   /** Its label: the author's name for it, else the ONE shared default —
@@ -504,6 +586,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // The yard is not a room to be drawn: it can never be "not on the plan",
   // it simply is the location's surface (§ A13a).
   const unplaced = rooms.filter((r) => !r.layout && r.id !== GROUND_ROOM_ID)
+  /** Does ANY room of this location have a floor plan — on any level? That is
+   *  the question the server's `rooms_without_layout` finding asks, so the
+   *  editor's nudge has to ask it the same way and not per level. */
+  const anyRoomPlaced = rooms.some((r) => r.id !== GROUND_ROOM_ID
+    && hasRect(r.layout))
 
   /** One server finding in the editor's language. The SERVER owns the wording
    *  — its message is English source text, so it goes straight through `t()`
@@ -1292,6 +1379,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // Nr. 2). The raster applies unless Shift asks for free hand.
   const onRoomClick = useCallback((e: React.MouseEvent, shape: PlanShape) => {
     const { room, lay, ground } = shape
+    // BOUNDARY EDITING IS NOT A ROOM GESTURE: its handles are a canvas-level
+    // overlay, and a click that misses one is a click on nothing. Without this
+    // the fall-through at the bottom would disarm the tool the moment the hand
+    // slipped off a vertex onto a room.
+    if (clickMode === 'boundary') return
     if ((!clickMode && !armedProp && !calibrationRoomId) || !room.id) return
     e.stopPropagation()
     const [mxRaw, myRaw] = pointerM(e.clientX, e.clientY)
@@ -1916,11 +2008,32 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           map tab. It is not a lock on these tools either — rooms carry their
           own metres and can be drawn right away; the plan window falls back to
           a {FALLBACK_VIEW_M} m square around the pin until the plot exists. */}
-      {!map3d?.boundary?.length ? (
+      {!hasBoundary ? (
         <div className="ga-anchor-banner">
           <span style={{ flex: 1, minWidth: 200 }}>
-            ⚠ {t('No boundary drawn — this location has a pin but no area anywhere. Draw its footprint on the map tab (or use “Seed missing boundaries” there); until then the plan works on a {n} m square around the pin.')
+            ⚠ {t('No boundary drawn — this location has no area anywhere. Draw one here or on the map tab; until then the plan works on a {n} m square around the pin.')
               .replace('{n}', String(FALLBACK_VIEW_M))}
+          </span>
+          {onMap3d && locationId ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-primary"
+              onClick={seedBoundary}
+              title={t('Write a centred square as the boundary — the same seed the map tab lays down. Then reshape it with the 🟩 tool: drag a vertex, click an edge to insert one, double-click a vertex to remove it.')}
+            >
+              ✎ {t('Draw boundary')}
+            </button>
+          ) : null}
+        </div>
+      ) : !placedOnMap ? (
+        // DRAWN, BUT ON NO MAP. The boundary survives unplacing by design —
+        // it is the location's own shape, in its own local metres — so it
+        // stays fully editable here, and the plan says out loud what it is
+        // looking at instead of showing a polygon that could mean either
+        // state (user finding 2026-08-20).
+        <div className="ga-anchor-banner">
+          <span style={{ flex: 1, minWidth: 200 }}>
+            ℹ {t('Not placed on the map — this boundary is used when you place it.')}
           </span>
         </div>
       ) : null}
@@ -1978,12 +2091,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         </div>
       ) : null}
 
+      {/* THE NUDGE AT THE MOMENT OF THE MISTAKE. Drawing the building contour
+          while not one room has a floor plan is the exact gesture that earns
+          the server's `rooms_without_layout` finding — correct, and useless
+          after the fact, because the author drew that polygon believing it was
+          a room (user finding 2026-08-20). One line, while the pen is armed;
+          not a modal, and nothing is refused. */}
+      {clickMode === 'outline' && !anyRoomPlaced ? (
+        <div className="ga-hint" style={{ fontSize: '0.8em' }}>
+          ℹ {t('The contour outlines the building — rooms are drawn with the room tool (⬠), and a location needs at least one of them to be enterable.')}
+        </div>
+      ) : null}
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
       <PlanToolbar
         mode={clickMode}
         hasSelection={!!selectedRoom}
         selectionRotation={selectedRoom?.layout?.rotation || 0}
         hasOutline={!!map3d?.outline?.length}
+        hasBoundary={hasBoundary}
         outlineDraftLen={outlineDraft.length}
         hasElevator={!!map3d?.elevator}
         building={!!onMap3d}
@@ -2116,17 +2242,24 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             plot is the state this wave exists to end. */}
         <svg viewBox="0 0 100 100" preserveAspectRatio="none"
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-            {/* The location boundary (v6 Nr. 1) — the polygon whose EDGES the
-                pass-throughs sit on, and the plot every room belongs inside.
-                It is drawn on the map tab; here it is the frame of reference,
-                so it is ALWAYS visible (the window is built around it) and,
-                where it is only the pin square standing in for a boundary
-                nobody drew, it says so through its fainter stroke. */}
+            {/* THE LOCATION BOUNDARY (v6 Nr. 1) — the outermost of the three
+                shapes on this plan: the plot itself, the polygon whose EDGES
+                the pass-throughs sit on and that every room belongs inside.
+                Green, like the yard surface it encloses, so the legend under
+                the plan names a colour the eye can find.
+
+                THREE STATES, THREE STROKES, and they are the sentence the
+                editor used to leave unsaid:
+                  * drawn AND placed — solid: ground the location covers now;
+                  * drawn but NOT placed — dashed: the shape a placement will
+                    lay down (the chip next to the plan says so in words);
+                  * not drawn at all — faint and dashed: this is the pin square
+                    standing in, not a boundary anybody drew. */}
             <polygon
               points={boundaryM.map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
-              fill="none" stroke="#8b949e" strokeWidth={0.45}
-              strokeDasharray="2 1.6"
-              opacity={map3d?.boundary?.length ? 0.8 : 0.35}
+              fill="none" stroke="#3fb950" strokeWidth={0.45}
+              strokeDasharray={hasBoundary && placedOnMap ? undefined : '2 1.6'}
+              opacity={hasBoundary ? 0.9 : 0.35}
             />
             {/* Boundary pass-throughs: gold bars ALONG their boundary edge —
                 the only overlay children that take pointer events (select).
@@ -2751,9 +2884,84 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           <PlanFigure view={view} pos={figureAt} onPos={setFigurePos}
             canvasRef={canvasRef} interactive={!clickMode && !armedProp} />
         ) : null}
+        {/* THE BOUNDARY HANDLES — the ONE point-editing gesture of this
+            codebase, the very component the map tab, the painted ground and
+            the world relief are reshaped with.
+
+            It speaks the MAP CANVAS' vocabulary (a centre + a zoom, read from
+            `MapViewCtx`), so the plan window is translated once, by
+            `planMapView`, and nothing else here converts anything: this canvas
+            already draws in the location's LOCAL metres, which is the frame
+            `map3d.boundary` is stored in. No § A1.1 pin transform is involved,
+            unlike on the map — that is what makes the same gesture fit here.
+
+            The SVG carries no viewBox on purpose: one user unit must BE one
+            CSS pixel, because that is what `worldToScreen` returns. It is last
+            in the canvas, so a handle sits above every room, and it is mounted
+            ONLY while the tool is armed — an inline SVG hit-tests its whole
+            box, so a permanently mounted overlay would eat every click meant
+            for the plan. While the tool IS armed that is the wanted behaviour:
+            no other gesture of this canvas is live then (rooms refuse to drag,
+            the plan refuses to deselect), so a click that misses a vertex is a
+            click on nothing. */}
+        {clickMode === 'boundary' && hasBoundary && onMap3d ? (
+          <svg style={{ position: 'absolute', inset: 0, width: '100%',
+            height: '100%', overflow: 'visible' }}>
+            <MapViewCtx.Provider value={planMapView(view, canvasPx)}>
+              <PolygonHandles
+                points={boundaryM.map(([x, z]) => [x, z] as [number, number])}
+                closed
+                color="#3fb950"
+                minPoints={3}
+                onMove={(i, x, z) => { void writeBoundary(
+                  boundaryM.map((pt, k) => (k === i ? [x, z] as Pt : pt))) }}
+                onDelete={(i) => { void writeBoundary(
+                  boundaryM.filter((_, k) => k !== i)) }}
+                onInsert={(i, x, z) => {
+                  const pts = [...boundaryM]
+                  pts.splice(i, 0, [x, z])
+                  void writeBoundary(pts)
+                }}
+              />
+            </MapViewCtx.Provider>
+          </svg>
+        ) : null}
       </div>
       </div>
       <PlanScaleBar view={view} canvasPx={canvasPx} />
+      {/* THE THREE SHAPES, NAMED. The plan draws a plot, a house and rooms on
+          top of each other, and until this line existed nothing said which was
+          which — an author who drew the building contour expecting a room got
+          a correct but unhelpful "no room has a floor plan" and no way to tell
+          the shapes apart (user finding 2026-08-20). One line, always visible,
+          in the colours and strokes the canvas really uses. */}
+      <div className="ga-hint" style={{ display: 'flex', gap: 10,
+        flexWrap: 'wrap', alignItems: 'center', marginTop: 4,
+        fontSize: '0.76em' }}>
+        <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}
+          title={t('The plot itself — the ground this location covers. Editable here with the 🟩 tool and on the map tab; solid once the location is placed, dashed while it is not.')}>
+          <svg width={20} height={8} aria-hidden>
+            <line x1={1} y1={4} x2={19} y2={4} stroke="#3fb950" strokeWidth={2}
+              strokeDasharray={hasBoundary && placedOnMap ? undefined : '4 3'} />
+          </svg>
+          {t('location boundary')}
+        </span>
+        <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}
+          title={t('The building standing on the plot — the 🏗 tool draws it. It is NOT a room: a contour with no room inside holds nothing anybody can enter.')}>
+          <svg width={20} height={8} aria-hidden>
+            <line x1={1} y1={4} x2={19} y2={4} stroke="#58a6ff" strokeWidth={2} />
+          </svg>
+          {t('building contour')}
+        </span>
+        <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}
+          title={t('The rooms — what can actually be entered. Drawn with the ⬠ tool; every location needs at least one.')}>
+          <svg width={20} height={8} aria-hidden>
+            <rect x={1} y={1} width={18} height={6} fill="rgba(139,148,158,0.12)"
+              stroke="#8b949e" strokeWidth={1.5} />
+          </svg>
+          {t('rooms')}
+        </span>
+      </div>
       {/* The editor's OWN finding, not the server's: rooms left over from the
           fraction era. Gentle — it is a "here is why", not an error, and it
           names the rooms so the author can go and fix the right ones. */}

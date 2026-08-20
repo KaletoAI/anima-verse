@@ -1,9 +1,10 @@
 /**
  * PlanToolbar — the vertical 44 px icon strip left of the floor plan. Purely
  * presentational: every handler and all state live in RoomLayoutEditor, the
- * toolbar only decides which icon is armed, disabled or contextual. Three
- * groups top-down: building tools (only when the editor may write map3d),
- * room tools and the underlay view toggles; the marker tool lives in the
+ * toolbar only decides which icon is armed, disabled or contextual. The groups
+ * run top-down from the outermost shape inwards: the LOCATION BOUNDARY (the
+ * plot), the BUILDING tools (the house on it) — both only when the editor may
+ * write map3d — and the ROOM tools; the marker tool lives in the
  * side panel next to the marker list. Tooltips carry the explanations that
  * used to sit as hint texts and checkbox labels next to the plan.
  *
@@ -16,6 +17,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 /** Click-to-place modes of the floor-plan editor ('' = plain selection). */
 export type PlanMode = '' | 'marker' | 'marker-move' | 'outline'
   | 'elevator' | 'door' | 'window' | 'draw-room' | 'curve' | 'boundary-door'
+  | 'boundary'
 
 function Tool({ icon, title, onClick, active = false, danger = false,
   disabled = false, small = false }: {
@@ -50,6 +52,11 @@ interface PlanToolbarProps {
   selectionRotation: number
   /** The building outline exists in the map3d draft. */
   hasOutline: boolean
+  /** The LOCATION BOUNDARY exists (`map3d.boundary`, ≥ 3 points). Without one
+   *  there are no vertices to drag — the seed button in the banner above the
+   *  plan is the way in, and the tool says so instead of arming a gesture on
+   *  the pin square that stands in for a boundary nobody drew. */
+  hasBoundary: boolean
   /** Points collected in the running draft (room hull or building outline). */
   outlineDraftLen: number
   hasElevator: boolean
@@ -87,7 +94,7 @@ interface PlanToolbarProps {
 }
 
 export function PlanToolbar({
-  mode, hasSelection, selectionRotation, hasOutline,
+  mode, hasSelection, selectionRotation, hasOutline, hasBoundary,
   outlineDraftLen, hasElevator, building, canSuggest,
   canFitToModel, canCurve, ground, groundHint, noSelectionHint, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace,
@@ -115,6 +122,20 @@ export function PlanToolbar({
     <div className="ga-plan-toolbar">
       {building ? (
         <>
+          <span className="ga-plan-toolbar-group">{t('Plot')}</span>
+          {/* The LOCATION BOUNDARY — the plot itself, not the house on it.
+              It is edited with the very gesture the map tab uses, and it is
+              first in the strip because it is the outermost of the three
+              shapes on this plan. */}
+          <Tool
+            icon="🟩"
+            active={mode === 'boundary'}
+            disabled={!hasBoundary}
+            onClick={() => onMode('boundary')}
+            title={hasBoundary
+              ? t('Edit the location boundary — the green outline of the plot itself. Drag a vertex to move it, click an edge to insert one, double-click a vertex to remove it. Saved immediately, like on the map tab.')
+              : t('No boundary drawn yet — use “Draw boundary” in the banner above the plan to lay down a first square, then reshape it here.')}
+          />
           <span className="ga-plan-toolbar-group">{t('Build')}</span>
           {outlining ? (
             <>

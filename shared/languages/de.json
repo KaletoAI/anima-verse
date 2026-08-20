@@ -1971,6 +1971,23 @@
     "attempt(s)": "Versuch(e)",
     "The mesh landed in this model variant of the prop and the placement now points at it.": "Das Mesh ist in dieser Modell-Variante des Props gelandet, und die Platzierung zeigt jetzt darauf.",
     "uses variant {n}": "nutzt Variante {n}",
-    "The ground under this spot drops {a} m across the footprint (threshold {b} m) — sinking cannot flatten a slope; level the terrain here or move the placement.": "Der Boden unter dieser Stelle fällt über den Fußabdruck um {a} m ab (Schwelle {b} m) — Einsenken kann eine Schräge nicht ausgleichen; hier das Gelände planieren oder die Platzierung verschieben."
+    "The ground under this spot drops {a} m across the footprint (threshold {b} m) — sinking cannot flatten a slope; level the terrain here or move the placement.": "Der Boden unter dieser Stelle fällt über den Fußabdruck um {a} m ab (Schwelle {b} m) — Einsenken kann eine Schräge nicht ausgleichen; hier das Gelände planieren oder die Platzierung verschieben.",
+    "Plot": "Grundstück",
+    "Edit the location boundary — the green outline of the plot itself. Drag a vertex to move it, click an edge to insert one, double-click a vertex to remove it. Saved immediately, like on the map tab.": "Ortsgrenze bearbeiten — die grüne Umrisslinie des Grundstücks selbst. Einen Punkt ziehen verschiebt ihn, ein Klick auf eine Kante fügt einen ein, Doppelklick auf einen Punkt entfernt ihn. Wird sofort gespeichert, wie im Karten-Tab.",
+    "No boundary drawn yet — use “Draw boundary” in the banner above the plan to lay down a first square, then reshape it here.": "Noch keine Grenze gezeichnet — mit „Grenze zeichnen“ im Hinweis über dem Plan ein erstes Quadrat anlegen und es dann hier umformen.",
+    "No boundary drawn — this location has no area anywhere. Draw one here or on the map tab; until then the plan works on a {n} m square around the pin.": "Keine Grenze gezeichnet — dieser Ort hat nirgends eine Fläche. Zeichne eine hier oder im Karten-Tab; bis dahin arbeitet der Plan auf einem {n} m großen Quadrat um den Pin.",
+    "Write a centred square as the boundary — the same seed the map tab lays down. Then reshape it with the 🟩 tool: drag a vertex, click an edge to insert one, double-click a vertex to remove it.": "Schreibt ein zentriertes Quadrat als Grenze — dieselbe Saat wie im Karten-Tab. Danach mit dem 🟩-Werkzeug umformen: Punkt ziehen, Kante anklicken fügt einen Punkt ein, Doppelklick entfernt einen.",
+    "Draw boundary": "Grenze zeichnen",
+    "Not placed on the map — this boundary is used when you place it.": "Nicht auf der Karte platziert — diese Grenze wird verwendet, sobald Du den Ort platzierst.",
+    "The contour outlines the building — rooms are drawn with the room tool (⬠), and a location needs at least one of them to be enterable.": "Die Kontur umreißt das Gebäude — Räume werden mit dem Raum-Werkzeug (⬠) gezeichnet, und ein Ort braucht mindestens einen davon, um betretbar zu sein.",
+    "A boundary needs at least {n} points": "Eine Grenze braucht mindestens {n} Punkte",
+    "A boundary holds at most {n} points": "Eine Grenze fasst höchstens {n} Punkte",
+    "A boundary point may not lie further than {n} m from the pin": "Ein Grenzpunkt darf nicht weiter als {n} m vom Pin entfernt liegen",
+    "location boundary": "Ortsgrenze",
+    "building contour": "Gebäudekontur",
+    "rooms": "Räume",
+    "The plot itself — the ground this location covers. Editable here with the 🟩 tool and on the map tab; solid once the location is placed, dashed while it is not.": "Das Grundstück selbst — der Grund, den dieser Ort bedeckt. Hier mit dem 🟩-Werkzeug und im Karten-Tab bearbeitbar; durchgezogen, sobald der Ort platziert ist, gestrichelt solange nicht.",
+    "The building standing on the plot — the 🏗 tool draws it. It is NOT a room: a contour with no room inside holds nothing anybody can enter.": "Das Gebäude auf dem Grundstück — das 🏗-Werkzeug zeichnet es. Es ist KEIN Raum: eine Kontur ohne Raum darin enthält nichts, was jemand betreten kann.",
+    "The rooms — what can actually be entered. Drawn with the ⬠ tool; every location needs at least one.": "Die Räume — was tatsächlich betreten werden kann. Mit dem ⬠-Werkzeug gezeichnet; jeder Ort braucht mindestens einen."
   }
 }

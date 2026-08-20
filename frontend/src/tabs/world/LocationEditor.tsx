@@ -590,6 +590,14 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           locationId={location.id}
           map3d={draft.map3d}
           onMap3d={updMap3d}
+          // The STORED position, not the draft's: placing happens on the map
+          // tab, and the boundary editor states which of the two things the
+          // green polygon currently is (covered ground vs. the shape a
+          // placement will lay down).
+          placedOnMap={typeof location.pos_x === 'number'
+            && Number.isFinite(location.pos_x)
+            && typeof location.pos_z === 'number'
+            && Number.isFinite(location.pos_z)}
           hasEntrance={location.has_entrance}
           onSelectRoom={setFloorRoomSel}
           scene={scene}

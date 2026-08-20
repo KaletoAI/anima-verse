@@ -19,8 +19,12 @@
  * ring says the outline is missing; "Seed missing boundaries" in the toolbar
  * is what turns the legacy width into a real one.
  *
- * The square survives for the ARMED GHOST alone — the preview of where the
- * next click drops a pin. Its edge is `GhostSpec.widthM` centred on the cursor
+ * The square survives for ONE case: an armed ghost whose source has no
+ * boundary yet, where the square is exactly the shape `seedBoundary` will
+ * write on the click. A ghost whose source already carries an outline is
+ * previewed as THAT outline (dashed, through the same `boundaryWorld`
+ * transform the placed ones use), so the preview and the result are the same
+ * shape. Its edge is `GhostSpec.widthM` centred on the cursor
  * position and turned by `yaw_deg` (contract § A1.1). The turn happens in SVG,
  * around exactly the point `worldToScreen` returns for the centre — but with
  * the OPPOSITE sign: `rotate(−yaw)`. SVG's `rotate(+deg)` turns clockwise on a
@@ -328,7 +332,7 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
  * A fixed pixel length, because it says which way the place is TURNED, not how
  * big it is.
  */
-function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
+function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, dashed, iconHref,
   iconRot, roofHref, picOffset }: {
   /** The boundary in WORLD metres (already transformed). */
   world: Array<[number, number]>
@@ -338,6 +342,10 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
   size: number
   stroke: string
   strokeWidth: number
+  /** The shape is a PREVIEW, not a placement: no fill, a dashed outline. The
+   *  armed ghost draws itself this way — it says where a click would put this
+   *  outline, which is not the same statement as "this ground is covered". */
+  dashed?: boolean
   iconHref?: string
   iconRot?: number
   roofHref?: string
@@ -360,7 +368,9 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
           <path d={d} />
         </clipPath>
       </defs>
-      <path d={d} fill="rgba(139,148,158,0.14)" fillRule="evenodd" stroke="none" />
+      {dashed ? null : (
+        <path d={d} fill="rgba(139,148,158,0.14)" fillRule="evenodd" stroke="none" />
+      )}
       <g clipPath={`url(#${clipId})`}>
         <g transform={`rotate(${-yaw} ${pin.x} ${pin.y})`}>
           <FootImage p={pin} size={size} iconHref={iconHref} iconRot={iconRot}
@@ -368,7 +378,8 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, iconHref,
         </g>
       </g>
       <path d={d} fill="none" fillRule="evenodd" stroke={stroke}
-        strokeWidth={strokeWidth} strokeLinejoin="round" />
+        strokeWidth={strokeWidth} strokeLinejoin="round"
+        strokeDasharray={dashed ? '6 4' : undefined} />
       <line x1={pin.x} y1={pin.y} x2={ax} y2={ay} stroke={stroke}
         strokeWidth={strokeWidth + 1} opacity={0.9} />
       <circle cx={pin.x} cy={pin.y} r={PIN_R} fill="#0d1117" stroke={stroke}
@@ -421,6 +432,15 @@ export interface GhostSpec {
   /** Edge in metres — the placeholder when the source has no anchor. */
   widthM: number
   anchored: boolean
+  /** The source's DRAWN boundary in LOCAL metres, when it already has one.
+   *  Then the ghost is that very polygon and the click places exactly it;
+   *  without one the square stands in, because the square is what the seed
+   *  would write (`seedBoundary`). */
+  boundary?: Array<[number, number]>
+  /** The § A1.1 rotation the placed location will keep — placing writes the
+   *  position and nothing else, so the preview has to be turned the same way
+   *  the result will be. */
+  yawDeg?: number
 }
 
 export interface PlacementLayerProps {
@@ -646,15 +666,31 @@ export function PlacementLayer({
         />
       ) : null}
 
-      {ghost && ghostPt ? (
-        <g pointerEvents="none">
-          <FootSquare
-            p={worldToScreen(ghostPt.x, ghostPt.z, view, w, h)}
-            size={Math.max(MIN_DRAWN_PX, ghost.widthM * view.pxPerM)}
-            yaw={0} stroke={ghost.anchored ? COL_GHOST : COL_WARN}
-            strokeWidth={2} dashed={!ghost.anchored} />
-        </g>
-      ) : null}
+      {/* THE ARMED GHOST IS THE SHAPE THE CLICK WILL PLACE. A source that
+          already carries an outline is previewed as THAT outline, turned by
+          the yaw the placement keeps — the square survives only for a source
+          that has none, where the square is exactly what `seedBoundary` will
+          write. Dashed either way: it is a preview of a placement, never a
+          claim about ground already covered. */}
+      {ghost && ghostPt ? (() => {
+        const gp = worldToScreen(ghostPt.x, ghostPt.z, view, w, h)
+        const gYaw = ghost.yawDeg || 0
+        const stroke = ghost.anchored ? COL_GHOST : COL_WARN
+        const size = Math.max(MIN_DRAWN_PX, ghost.widthM * view.pxPerM)
+        return (
+          <g pointerEvents="none">
+            {ghost.boundary && ghost.boundary.length >= 3 ? (
+              <FootPoly
+                world={boundaryWorld(ghost.boundary, ghostPt.x, ghostPt.z, gYaw)}
+                pin={gp} yaw={gYaw} size={size} stroke={stroke}
+                strokeWidth={2} dashed />
+            ) : (
+              <FootSquare p={gp} size={size} yaw={gYaw} stroke={stroke}
+                strokeWidth={2} dashed={!ghost.anchored} />
+            )}
+          </g>
+        )
+      })() : null}
     </g>
   )
 }

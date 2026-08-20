@@ -4,6 +4,9 @@ import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { CLOSE_TOL_PX, fmtM } from '../world/planGeometry'
+import {
+  BOUNDARY_SEED_M, boundaryComplaint, putLocationBoundary, seedSquare,
+} from '../world/boundaryApi'
 import { renderTopDownSnapshot } from '../world/topDownSnapshot'
 import type { Map3D, ScenePayload, SceneProblem } from '../world/worldTypes'
 import { MapCanvas } from './MapCanvas'
@@ -185,36 +188,12 @@ const YAW_QUARTER = 90
 /** Snap step of the placement grid when the toggle is on (§ E2 brief). */
 const SNAP_M = 10
 
-/** How many points a location boundary may hold (`world_ops._sanitize_map3d`
- *  caps at 64) and the fewest that still enclose an area. Mirrored so the
- *  editor says why instead of losing a click to a silent truncation. */
-const BOUNDARY_MAX_POINTS = 64
-const BOUNDARY_MIN_POINTS = 3
-
-/** Edge of the square a boundary is SEEDED as when a location has no scale
- *  anchor to derive one from. The same placeholder the anchor-less square is
- *  drawn with — a first shape to drag vertices out of, not a statement. */
-const BOUNDARY_SEED_M = NO_ANCHOR_WIDTH_M
-
 /** The two findings the server reports about a DRAWN boundary (contract v6
  *  Nr. 1 + Nr. 9). Everything else in `problems[]` belongs to the floor plan
  *  and is shown where floor plans are edited, not here. */
 const BOUNDARY_PROBLEM_KINDS = new Set([
   'boundary_self_intersection', 'room_outside_boundary',
 ])
-
-/**
- * A centred square as a boundary, in LOCAL metres: the seed every location
- * starts from (contract v6 — a square is only the special case of the
- * polygon). Clockwise in map view, which with x east and z south is the
- * positive shoelace direction the server stores: (−h,−h) → (h,−h) → (h,h) →
- * (−h,h) has the sum +4h² > 0, so the sanitizer keeps the order and the
- * vertices stay where the user grabbed them.
- */
-const seedSquare = (widthM: number): Array<[number, number]> => {
-  const h = Math.round((widthM / 2) * 100) / 100
-  return [[-h, -h], [h, -h], [h, h], [-h, h]]
-}
 
 /** Zoom floor for the roof views: under one pixel per metre even a big house
  *  is a smudge, and each picture costs a request plus a GL context. */
@@ -1105,46 +1084,28 @@ export function MapTab() {
 
   /**
    * The DRAWN footprint (contract v6 Nr. 1): the boundary in LOCAL metres
-   * around the pin, written through the ONE route that persists `map3d`.
-   *
-   * `map3d` is REPLACED by the write (`world_ops._sanitize_map3d`), never
-   * merged, so the whole object goes along — dropping it would take the
-   * building's rotation, its storey height and its pass-throughs with it.
-   * `plan_width_m` is deliberately NOT sent: since v6 Nr. 2 it is a computed
-   * quantity (the wider side of the boundary's bounding box) and the server
-   * overwrites whatever a client submits.
+   * around the pin, written through `boundaryApi` — the ONE write path this
+   * canvas shares with the floor-plan editor, which reshapes the very same
+   * polygon in the plan's own local metres. The caps, the distance bound and
+   * the read-back live there; what stays here is how this canvas talks about
+   * them and what it has to drop afterwards.
    *
    * The answer is taken back into the list, because the server has the last
-   * word on the stored shape: it rounds to the centimetre, drops a repeated
-   * closing point, turns the ring into ONE winding (clockwise in map view) and
-   * derives the width. Reading that back is what keeps the handles sitting on
-   * the points that are actually stored.
+   * word on the stored shape (centimetre rounding, one winding, derived
+   * width). Reading that back is what keeps the handles sitting on the points
+   * that are actually stored.
    */
   const putBoundary = useCallback(async (loc: EditorLocation,
     points: Array<[number, number]>) => {
-    if (points.length < BOUNDARY_MIN_POINTS) {
-      toast(t('A boundary needs at least {n} points')
-        .replace('{n}', String(BOUNDARY_MIN_POINTS)), 'error')
-      return
-    }
-    if (points.length > BOUNDARY_MAX_POINTS) {
-      toast(t('A boundary holds at most {n} points')
-        .replace('{n}', String(BOUNDARY_MAX_POINTS)), 'error')
-      return
-    }
-    // The points are LOCAL metres around the pin, so this is a sanity bound on
-    // the distance from it — the same range the world itself is measured in.
-    if (!points.every(([x, z]) => inRange(x, z))) {
-      toast(t('A boundary point may not lie further than {n} m from the pin')
-        .replace('{n}', String(MAX_COORD)), 'error')
+    const bad = boundaryComplaint(points)
+    if (bad) {
+      toast(t(bad.message).replace('{n}', String(bad.n)), 'error')
       return
     }
     const map3d: Map3D = { ...(loc.map3d || {}), boundary: points }
     patchLocal(loc.id, { map3d })
     try {
-      const r = await apiPut<{ location?: EditorLocation }>(
-        `/world/locations/${encodeURIComponent(loc.id)}`, { map3d })
-      const stored = r?.location?.map3d
+      const stored = await putLocationBoundary(loc.id, loc.map3d, points)
       if (stored) patchLocal(loc.id, { map3d: stored })
       // The outline IS the picture's frame — a cached roof from the old one
       // would be stretched over the new square.
@@ -2060,6 +2021,14 @@ export function MapTab() {
     setGhost({
       kind, id: loc.id, name: loc.name,
       widthM: anchor ?? NO_ANCHOR_WIDTH_M, anchored: anchor != null,
+      // A location that ALREADY carries an outline is previewed as that
+      // outline — the click places exactly this shape, and a square ghost
+      // over a long polygon promises ground the place does not cover. Only a
+      // boundary-less entry (a template, a clone of one) keeps the square:
+      // there the square IS what the seed will write.
+      boundary: boundaryLocal(loc) || undefined,
+      yawDeg: typeof loc.yaw_deg === 'number' && Number.isFinite(loc.yaw_deg)
+        ? loc.yaw_deg : 0,
     })
     setGhostPt(null)
   }, [switchMode])
