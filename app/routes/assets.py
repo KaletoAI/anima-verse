@@ -23,15 +23,23 @@ converted take for preview, and ``/assets/clip-catalog/{take}/import`` turns
 one into a real clip of the free library. Those three are ADMIN-only and none
 of them touches the listing above — a trial clip is review material, not game
 content.
+
+The second import source is the INBOX (``fbx_import``): foreign FBX files an
+admin drops into ``shared/models/clips-inbox`` or uploads through
+``/assets/clips-inbox/upload``. ``GET /assets/clips-inbox`` lists them with the
+skeleton probe, ``POST /assets/clips-inbox/import`` retargets one (or a pair)
+onto the library rig. Same rule as the trial archive: the inbox is no library,
+and it is admin-only.
 """
 import mimetypes
+import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
-from app.core import clip_catalog
+from app.core import clip_catalog, fbx_import
 from app.core.animation_clips import (CLIP_EXTS, clip_entries, clip_meta,
                                       pair_kinds)
 from app.core.auth_dependency import require_admin
@@ -228,6 +236,153 @@ async def post_clip_catalog_import(take_id: str, request: Request,
             in_place=bool(body.get("in_place", True)),
             overwrite=bool(body.get("overwrite")))
     except clip_catalog.ClipKindExists as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ClipImportError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+# ── The import inbox for foreign FBX files (plan-clip-import.md steps 1+3) ──
+#
+# Same separation as the trial archive: the inbox is NOT a library. Nothing in
+# it is listed by /assets/animation-clips and no character can play it; a file
+# becomes a clip only through the import below, which retargets it onto the
+# library rig. Admin-only, and every route talks in BARE FILE NAMES — the path
+# gate is fbx_import.safe_inbox_name.
+
+#: One uploaded file may be this large. A mocap FBX is a few MB; 200 MB is
+#: generous enough for a long, finger-carrying take and small enough that a
+#: mis-drop (a whole model pack) is refused instead of filling the disk.
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+
+#: Everything an upload's file name may consist of — the name is rebuilt from
+#: this class, so nothing a browser sends can leave the inbox.
+_UPLOAD_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+@router.get("/clips-inbox")
+def get_clips_inbox(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """What is waiting to be imported.
+
+    Per file: name/size/mtime, the ``probe`` (skeleton family, bone count,
+    fingers, reference-pose candidate — read from the bytes, no Blender) and
+    the ``pair`` partner suggested by the file names. ``rest_suggestion`` is
+    the reference-pose file the whole inbox agrees on. An empty inbox (or none
+    at all) is the normal state, not an error.
+    """
+    entries = fbx_import.inbox_entries()
+    for entry in entries:
+        entry["pair"] = fbx_import.pair_suggestion(entry["name"])
+    return {"dir": str(fbx_import.get_clips_inbox_dir()),
+            "entries": entries,
+            "rest_suggestion": fbx_import.rest_suggestion(),
+            "families": sorted(fbx_import.SIGNATURES)}
+
+
+@router.post("/clips-inbox/upload")
+async def post_clips_inbox_upload(files: List[UploadFile] = File(...),
+                                  _: Dict[str, Any] = Depends(require_admin)
+                                  ) -> Dict[str, Any]:
+    """Uploads one or more FBX files into the inbox.
+
+    The stored name is REBUILT from the upload's base name (directory parts
+    dropped, everything outside ``[A-Za-z0-9._-]`` replaced), so the browser
+    never decides where a byte lands. A file above ``MAX_UPLOAD_BYTES`` is
+    refused with 413 and its partial write removed.
+    """
+    root = fbx_import.get_clips_inbox_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    stored: List[Dict[str, Any]] = []
+    for upload in files:
+        base = Path(str(upload.filename or "")).name
+        name = _UPLOAD_NAME_RE.sub("_", base).lstrip(".")
+        if Path(name).suffix.lower() not in fbx_import.INBOX_EXTS:
+            raise HTTPException(status_code=400,
+                                detail=f"{base or 'file'}: only "
+                                       f"{', '.join(fbx_import.INBOX_EXTS)} files")
+        dest = root / fbx_import.safe_inbox_name(name)
+        size = 0
+        try:
+            with dest.open("wb") as fh:
+                while True:
+                    chunk = await upload.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"{name} is larger than "
+                                   f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+                    fh.write(chunk)
+        except HTTPException:
+            dest.unlink(missing_ok=True)
+            raise
+        finally:
+            await upload.close()
+        stored.append({"name": dest.name, "size": size})
+    logger.info("clip inbox upload: %s", ", ".join(s["name"] for s in stored))
+    return {"stored": stored, **get_clips_inbox(None)}
+
+
+@router.delete("/clips-inbox/{name}")
+def delete_clips_inbox(name: str,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Removes one inbox file. Deleting a file that is already gone is fine."""
+    try:
+        removed = fbx_import.delete_inbox(name)
+    except ClipImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"name": name, "removed": removed}
+
+
+@router.post("/clips-inbox/import")
+async def post_clips_inbox_import(request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)
+                                  ) -> Dict[str, Any]:
+    """Imports one inbox file — or a pair — into a clip library, synchronously.
+
+    Body: ``{kind, files: [name] | [a, b], rest_file?, set?, start_s?, end_s?,
+    loop_s?, in_place?, overwrite?, target?, redistributable?}``. The Blender
+    run takes a second or two, so the answer carries the finished clip.
+
+    ``target`` defaults to ``licensed``: a foreign file is licensed material
+    until its owner says otherwise. ``free`` (the tracked, redistributable
+    library) needs ``redistributable: true`` — 400 without it.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object expected")
+
+    def _num(key: str) -> Optional[float]:
+        raw = body.get(key)
+        if raw is None or raw == "":
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{key} must be a number")
+
+    files = body.get("files")
+    if not isinstance(files, list):
+        raise HTTPException(status_code=400, detail="files must be a list of names")
+    target = str(body.get("target") or "licensed").strip().lower()
+    redistributable = bool(body.get("redistributable"))
+    if target == "free" and not redistributable:
+        raise HTTPException(
+            status_code=400,
+            detail="the free library is redistributable — confirm the licence "
+                   "allows it, or import into the licensed library")
+    try:
+        return fbx_import.import_fbx(
+            body.get("kind"), files,
+            rest_file=str(body.get("rest_file") or "") or None,
+            clip_set=str(body.get("set") or ""),
+            start_s=_num("start_s") or 0.0, end_s=_num("end_s"),
+            loop_s=_num("loop_s"),
+            in_place=bool(body.get("in_place")),
+            overwrite=bool(body.get("overwrite")),
+            target=target, redistributable=redistributable)
+    except fbx_import.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ClipImportError as e:
         raise HTTPException(status_code=422, detail=str(e))

@@ -105,6 +105,24 @@ def get_trial_clips_dir() -> Path:
     return get_shared_dir() / "models" / "clips-trial"
 
 
+def get_clips_inbox_dir() -> Path:
+    """The INBOX for foreign animation files waiting to be imported.
+
+    Whatever lies here (``*.fbx`` today) is offered in the Poses tab as "to be
+    imported": probed for its skeleton family, cut to a window and retargeted
+    onto the library rig (``app/core/fbx_import.py``). It is NOT a clip
+    library — nothing scans it, nothing plays from it — and it is gitignored:
+    the files a user drops in are almost always licensed material.
+
+    ``ANIMATION_CLIPS_INBOX_DIR`` overrides the location — tests must set it,
+    same rule as ANIMATION_CLIPS_DIR.
+    """
+    override = os.environ.get("ANIMATION_CLIPS_INBOX_DIR", "").strip()
+    if override:
+        return Path(override)
+    return get_shared_dir() / "models" / "clips-inbox"
+
+
 def get_mocap_source_dir() -> Path:
     """The downloaded ORIGINAL mocap recordings (``cmu/<subject>/*.asf|amc``).
 

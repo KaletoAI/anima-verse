@@ -208,6 +208,10 @@ shared/models/mocap-src/**
 !shared/models/mocap-src/README.md
 shared/models/clips-trial/**
 !shared/models/clips-trial/README.md
+# Import inbox: foreign animation files dropped in (or uploaded) for import —
+# licensed material by default, so only its README travels.
+shared/models/clips-inbox/**
+!shared/models/clips-inbox/README.md
 # Shared test figure (Mixamo standard character), provided per installation
 shared/models/figure/*.fbx
 shared/models/figure/*.glb

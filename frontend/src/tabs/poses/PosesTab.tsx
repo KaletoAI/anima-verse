@@ -20,6 +20,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ClipCatalog } from './ClipCatalog'
+import { ClipInbox } from './ClipInbox'
 import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
@@ -29,9 +30,10 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 
 type Axis = 'pose' | 'expression'
-/** The tab has two surfaces: the catalog entries, and the CMU clip pool the
- *  animation kinds themselves come from. */
-type View = 'entries' | 'catalog'
+/** The tab has three surfaces: the catalog entries, the CMU clip pool the
+ *  animation kinds themselves come from, and the inbox of foreign files
+ *  waiting to be imported. */
+type View = 'entries' | 'catalog' | 'inbox'
 
 interface Entry {
   key: string
@@ -281,33 +283,35 @@ export function PosesTab() {
 
   const viewSwitch = (
     <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-      {(['entries', 'catalog'] as View[]).map((v) => (
+      {(['entries', 'catalog', 'inbox'] as View[]).map((v) => (
         <button
           key={v}
           type="button"
           className={`ga-btn ga-btn-sm${view === v ? ' ga-btn-primary' : ''}`}
           onClick={() => {
-            // The catalog only ever produces POSE animations — pinning the axis
-            // here keeps "create pose entry" from landing on the expression
-            // catalog (and from being wiped by the axis-change reset).
-            if (v === 'catalog') setAxis('pose')
+            // Both import surfaces only ever produce POSE animations — pinning
+            // the axis here keeps "create pose entry" from landing on the
+            // expression catalog (and from being wiped by the axis-change reset).
+            if (v !== 'entries') setAxis('pose')
             setView(v)
           }}
         >
-          {v === 'entries' ? t('Entries') : t('CMU clip catalog')}
+          {v === 'entries' ? t('Entries') : v === 'catalog' ? t('CMU clip catalog') : t('Import files')}
         </button>
       ))}
     </div>
   )
 
-  if (view === 'catalog') {
-    // Full-height column: the catalog's three panes scroll on their own
-    // inside it (facets, list, preview+import), the page itself does not —
-    // otherwise the import button sat below the browser's bottom edge.
+  if (view === 'catalog' || view === 'inbox') {
+    // Full-height column: the browser's panes scroll on their own inside it
+    // (facets, list, preview+import), the page itself does not — otherwise
+    // the import button sat below the browser's bottom edge.
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
-        <ClipCatalog onCreatePose={startFromClip} />
+        {view === 'catalog'
+          ? <ClipCatalog onCreatePose={startFromClip} />
+          : <ClipInbox onCreatePose={startFromClip} />}
       </div>
     )
   }
