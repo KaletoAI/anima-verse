@@ -20,9 +20,10 @@
  *   2. the mip pyramid has to be the SAME height function on a coarser
  *      lattice, not a filtered picture of it — otherwise the server's exact
  *      `err[k]` bound stops bounding anything;
- *   3. the node selection has to be crack-free, i.e. a node must have morphed
- *      fully onto its parent's lattice before the parent can be chosen next
- *      to it.
+ *   3. the drawn surface has to be crack-free, which since 2026-08-21 means
+ *      something stronger than "a node reaches morph 1 in time": the surface
+ *      is a function of the WORLD POSITION alone, so two patches cannot
+ *      disagree about a point they share whatever their levels are ([8]).
  *
  * ============================================================================
  * [1] THE CONSTANTS ARE DERIVED, not tasted
@@ -190,6 +191,71 @@
  * 200 for both of them.
  *
  * ============================================================================
+ * [8] THE MORPH BELONGS TO THE VERTEX — the seam fix of 2026-08-21
+ * ============================================================================
+ * [6] proves that a node AT MORPH 1 is its parent. It does not prove that a
+ * node ever REACHES morph 1 while its neighbour still needs it to, and until
+ * this round it did not: the morph was one number per patch, taken from the
+ * patch's bounding-box distance. Two neighbours whose boxes straddle the morph
+ * ramp then draw two different polylines along the edge they share — the
+ * hairline of sky behind it was measured at 0.61 m, i.e. 6.2 px at 127 m.
+ *
+ * (w) λ, THE CONTINUOUS LOD COORDINATE (`lodLambda`), on the geometric ranges
+ *     [128, 256, 512, 1024, 2048, 4096]. Each term is
+ *     `clamp((d − range/2) / (range/2), 0, 1)`:
+ *       d =   0 -> 0                                        = 0
+ *       d =  64 -> (64−64)/64 = 0                            = 0
+ *       d =  96 -> (96−64)/64 = 0.5, the rest 0               = 0.5
+ *       d = 128 -> 1 + (128−128)/128 = 1                      = 1
+ *       d = 192 -> 1 + (192−128)/128 = 0.5                    = 1.5
+ *       d = 256 -> 1 + 1 + (256−256)/256                      = 2
+ *       d = 400 -> 1 + 1 + (400−256)/256 = 0.5625             = 2.5625
+ *     so λ(range[i]) = i + 1 and λ is the ring structure written as one
+ *     monotone, continuous number.
+ *
+ * (x) TWO NEIGHBOURS, ONE POLYLINE. Camera on the world corner as in [5], so
+ *     the level-0 node at (64, 0) and the level-1 node at (128, 0) share the
+ *     edge x = 128, z ∈ [0, 64]. The fine node meets it with 33 vertices every
+ *     2 m, the coarse one with every 4 m; the 17 points they have in common
+ *     must agree to the last bit, in x, z AND y.
+ *
+ *     THE FIELD is a 6 m step every other 4 m of z: `h = 6` where
+ *     `floor(z/4)` is odd, 0 where it is even. On the 2 m lattice that reads
+ *     0, 0, 6, 6, 0, 0, … at z = 0, 2, 4, 6, 8, 10; the 4 m mip keeps 0, 6, 0,
+ *     6 at z = 0, 4, 8, 12; and the 8 m mip is FLAT 0, since 8k/4 = 2k is even
+ *     for every k. So the three levels really disagree, at the very points the
+ *     two nodes have to meet on.
+ *
+ *     Worked at the vertex (128, 4), where the field is 6:
+ *     d = √(128² + 6² + 4²) = 128.2029…, λ = 1 + (128.2029 − 128)/128 =
+ *     1.001585… The fine node subtracts its level 0 -> t = 1.001585, k = 1,
+ *     f = 0.001585: it snaps to every 2nd index — a 4 m lattice — and blends
+ *     the 4 m mip towards the 8 m one. The coarse node subtracts its level 1
+ *     -> t = 0.001585, k = 0, f = 0.001585: it snaps to every 1st index of its
+ *     own 4 m grid — the SAME 4 m lattice — and blends the same two mips by
+ *     the same f. The node's own level has cancelled out of every term, which
+ *     is the whole argument.
+ *
+ *     THE 17 SHARED VERTICES therefore agree to the last bit — that is what
+ *     closes the seam. The fine node's OTHER 16, the ones that collapse onto
+ *     the coarse lattice, read their λ at the point they start from rather than
+ *     at the one they end on and so miss it by a hair: they land within 4 cm on
+ *     this fixture, i.e. under 0.7 % of the 6 m the two mips are apart, and
+ *     0.036 m at 128 m is 0.37 pixels (fov 45°, 1 080 px). It is a
+ *     second-order term of the same λ and not a hole: a second λ evaluation
+ *     after the snap would remove it and cost a fetch per vertex for a third
+ *     of a pixel.
+ *
+ * (y) RED COUNTER-PROBE: the same two nodes drawn as the renderer drew them
+ *     before, with ONE morph per node. Both morphs are 0 here (the fine node's
+ *     box is 64 m away, λ(64) = 0; the coarse one's is 128 m away,
+ *     λ(128) − 1 = 0), so the fine node draws the 2 m mip and the coarse one
+ *     the 4 m mip. At the fine node's vertex z = 2 the 2 m mip reads 0, while
+ *     the coarse node's polyline runs straight from 0 at z = 0 to 6 at z = 4
+ *     and is therefore at 3 — a THREE-METRE hole, in the ground, between two
+ *     patches that touch.
+ *
+ * ============================================================================
  * [7] THE ANALYTIC CLICK — `rayGroundHit`
  * ============================================================================
  * The ground under the pointer is solved against the FIELD, not raycast
@@ -292,6 +358,26 @@ function check(label, actual, expected, eps = 1e-9) {
     console.log(`  FAIL ${label}\n       expected ${expected}\n       actual   ${actual}`);
   }
 }
+function checkBelow(label, actual, ceiling) {
+  const ok = typeof actual === 'number' && actual >= 0 && actual < ceiling;
+  if (ok) {
+    passed += 1;
+    console.log(`  ok   ${label} = ${actual} (< ${ceiling})`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       expected < ${ceiling}\n       actual   ${actual}`);
+  }
+}
+function checkAbove(label, actual, floor) {
+  const ok = typeof actual === 'number' && actual > floor;
+  if (ok) {
+    passed += 1;
+    console.log(`  ok   ${label} = ${actual} (> ${floor})`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       expected > ${floor}\n       actual   ${actual}`);
+  }
+}
 function checkEq(label, actual, expected) {
   const a = JSON.stringify(actual);
   const b = JSON.stringify(expected);
@@ -307,7 +393,7 @@ function checkEq(label, actual, expected) {
 const { lod, height } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MORPH_START, MAX_PIXEL_ERROR,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
-  morphedVertex, terrainLodGlsl } = lod;
+  morphedVertex, lodLambda, lodVertex, terrainLodGlsl } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
 
 // ── [1] the constants ───────────────────────────────────────────────────────
@@ -590,6 +676,78 @@ check('no vertex is drawn outside the world frame', outside, 0);
 check('…and the clamp opens no crack against the parent', frameWorst, 0);
 check('the last vertex of a 256 m node sits on the 200 m frame',
   morphedVertex(childFull, PATCH_N, 0, null, RECT, CRACK, EXTENT).x, 200);
+
+// ── [8] the morph belongs to the vertex ─────────────────────────────────────
+console.log('\n[8] two neighbours describe ONE polyline — the morph is per vertex');
+const RANGES = lodRanges(128, 6);
+check('(w) λ(0)', lodLambda(0, RANGES), 0);
+check('(w) λ(64)', lodLambda(64, RANGES), 0);
+check('(w) λ(96)', lodLambda(96, RANGES), 0.5);
+check('(w) λ(128) = one whole level', lodLambda(128, RANGES), 1);
+check('(w) λ(192)', lodLambda(192, RANGES), 1.5);
+check('(w) λ(256)', lodLambda(256, RANGES), 2);
+check('(w) λ(400)', lodLambda(400, RANGES), 2.5625);
+// A 6 m step every other 4 m of z — see the docstring: the 2 m, 4 m and 8 m
+// mips all read it differently, at the very points the two nodes meet on.
+const SEAM = buildPyramid((x, z) => ((Math.floor(z / 4) % 2 === 1) ? 6 : 0),
+                          0, 0, 2, 129, 129, MAX_LOD_LEVELS);
+check('the 2 m mip reads the step at z = 4', pyramidHeight(SEAM, 128, 4, 0), 6);
+check('…the 4 m mip too', pyramidHeight(SEAM, 128, 4, 1), 6);
+check('…and the 8 m mip is flat there', pyramidHeight(SEAM, 128, 4, 2), 0);
+const SEAM_CAM = { x: 0, y: 0, z: 0 };
+const seamNodes = selectLodNodes({
+  x0: 0, z0: 0, x1: 2048, z1: 2048,
+  leafM: 64, levels: 6, minLodDistance: 128,
+  camX: SEAM_CAM.x, camY: SEAM_CAM.y, camZ: SEAM_CAM.z,
+  // An HONEST box: the field really reaches 6 m, and the guarantee "a vertex is
+  // never nearer than its node's box" is what puts λ ≥ level on every vertex.
+  boundsOf: () => ({ min: 0, max: 6 }),
+});
+const fine = seamNodes.find((n) => n.level === 0 && n.x === 64 && n.z === 0);
+const coarse = seamNodes.find((n) => n.level === 1 && n.x === 128 && n.z === 0);
+check('the fine node is a leaf at (64, 0)', fine ? fine.size : -1, 64);
+check('…its neighbour at (128, 0) is one level up', coarse ? coarse.size : -1, 128);
+check('both stand at morph 0 under the old per-node rule', fine.morph + coarse.morph, 0);
+/** The height of a node's WEST edge polyline at world z — the line a neighbour
+ *  really has to meet, not merely its vertices. */
+function edgeYAt(node, vertexFn, z) {
+  let prev = vertexFn(node, 0, 0);
+  for (let j = 1; j <= PATCH_N; j += 1) {
+    const cur = vertexFn(node, 0, j);
+    if (cur.z > prev.z && z >= prev.z - 1e-9 && z <= cur.z + 1e-9) {
+      const f = (z - prev.z) / (cur.z - prev.z);
+      return prev.y * (1 - f) + cur.y * f;
+    }
+    prev = cur;
+  }
+  return null;
+}
+const newFine = (n, gx, gz) => lodVertex(n, gx, gz, SEAM, null, SEAM, null,
+                                         SEAM_CAM, RANGES);
+const oldFine = (n, gx, gz) => morphedVertex(n, gx, gz, SEAM, null, SEAM);
+let sharedWorst = 0;
+let seamWorst = 0;
+let seamRed = 0;
+for (let g = 0; g <= PATCH_N; g += 1) {
+  const a = newFine(fine, PATCH_N, g);
+  const onB = edgeYAt(coarse, (n, gx, gz) => newFine(n, gx, gz), a.z);
+  if (onB !== null) seamWorst = Math.max(seamWorst, Math.abs(a.y - onB));
+  if (g % 2 === 0) {
+    // The vertices the two really SHARE: the fine node's every second one is
+    // the coarse node's own. Same raw point, same finest height, same λ.
+    const b = newFine(coarse, 0, g / 2);
+    sharedWorst = Math.max(sharedWorst, Math.abs(a.x - b.x), Math.abs(a.z - b.z),
+                           Math.abs(a.y - b.y));
+  }
+  const ra = oldFine(fine, PATCH_N, g);
+  const onRb = edgeYAt(coarse, (n, gx, gz) => oldFine(n, gx, gz), ra.z);
+  if (onRb !== null) seamRed = Math.max(seamRed, Math.abs(ra.y - onRb));
+}
+check('(x) every vertex the two SHARE agrees exactly', sharedWorst, 0, 1e-12);
+checkBelow('…and the whole fine edge stays within 4 cm of the coarse one',
+  seamWorst, 0.04);
+check('(y) RED: with one morph per node the same edge stood off by',
+  seamRed, 3, 1e-12);
 
 // ── [7] the analytic click ──────────────────────────────────────────────────
 console.log('\n[7] the click is solved against the field, not raycast');

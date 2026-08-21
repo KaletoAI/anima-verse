@@ -83,6 +83,18 @@
  * tile draws.
  *
  * ===========================================================================
+ * [4b] TWO BOUNDARIES IN ONE NEIGHBOURHOOD — where the sign stops meaning
+ * ===========================================================================
+ * The sign of an sd texel says "on A's side of MY pair", so two texels signed
+ * against two different pairs are two numbers on two scales. A hardware LINEAR
+ * fetch reaches half a texel past the id texel and mixes exactly those — which
+ * drew a strip of the kitchen's rubber a metre and a half inside the living
+ * room of "Haus von Kai", along the whole medial axis of the west wall and the
+ * kitchen line. The fixture below is that neighbourhood, decoded out of the
+ * running world and moved to the origin: the filtered fetch answers +0.47 where
+ * the reading of the fragment's OWN id texel answers −1.26.
+ *
+ * ===========================================================================
  * [4] A UNIFORM TILE, AND A MISSING ONE
  * ===========================================================================
  * A tile the bake answered `{"uniform": 2}` for fills its whole square with the
@@ -103,8 +115,10 @@
  *    EXPLICIT gradient (`textureGrad`): every layer scales the world position
  *    by its own metres-per-tile, so the uv JUMPS at a boundary and an implicit
  *    derivative would ask for the coarsest mip — a blurred line along every
- *    edge in the world. The mask is read with `textureLod(…, 0)`, having no mip
- *    chain at all;
+ *    edge in the world. The two masks are read with `texelFetch`, which asks
+ *    for no derivative and no filter at all: the id because an integer texture
+ *    cannot be filtered, the distance because the four texels the bake signed
+ *    together are the only ones that may be mixed ([4b]);
  *  - `fwidth` OUTSIDE any branch that differs across a quad (a derivative taken
  *    in non-uniform control flow is undefined in GLSL ES);
  *  - the per-layer array sized by a compile-time constant.
@@ -175,8 +189,8 @@ function checkEq(label, actual, expected) {
 }
 
 const L = await loadPure('packages/scene-render/src/layerCut.ts');
-const { decodeSd, layerPairAt, layerSdAt, layerWeight, lcPushedSd,
-  packLayerWindow, terrainLayerGlsl, topLayerAt } = L;
+const { decodeSd, layerPairAt, layerSdAt, layerSdBlockAt, layerWeight,
+  lcPushedSd, packLayerWindow, terrainLayerGlsl, topLayerAt } = L;
 
 // --- [1] the cut ------------------------------------------------------------
 console.log('[1] layerWeight — the soft blend and the anti-aliased hard cut');
@@ -293,6 +307,87 @@ checkEq('the surplus of the square window is bare ground',
 checkEq('an empty batch has no window at all',
   packLayerWindow(new Map(), FMT), null);
 
+// --- [4b] TWO BOUNDARIES IN ONE NEIGHBOURHOOD -------------------------------
+// The RED probe of the second finding round (2026-08-21). The numbers are the
+// ones decoded out of the running world, living room of "Haus von Kai", around
+// world (−1553.0, −759.9) — only moved to the origin:
+//
+//   id (x 1..2, z 1..2) = (2, 1)  the kitchen line: rubber over the floor
+//   id (x 0..1, z 1..2) = (1, 0)  the west wall:    floor over the meadow
+//   id (      z 0..1  ) = (1, 1)  collapsed — a metre deep inside the floor
+//
+//   sd, x centres      0.25    0.75    1.25    1.75
+//     z 1.75 / 1.25   +1.26   +1.26   −1.26   −1.26   (signed vs the kitchen
+//     z 0.75 / 0.25   +1.26   +1.26   +1.76   −1.76    line / vs own sites)
+//
+// A HARDWARE LINEAR FETCH at (1.05, 1.05) mixes the four texels around it —
+// two of which belong to the id texels next door and carry the sign of ANOTHER
+// boundary — and lands at +0.47: positive, i.e. "on the rubber's side", one and
+// a half metres inside the living room. That was the patch under the chairs.
+// Reconstructed from the four texels of the fragment's OWN id texel, all signed
+// against (2, 1), the answer is −1.26 and the floor stays wood.
+console.log('\n[4b] two boundaries in one neighbourhood — the sign is per PAIR');
+function cornerTile() {
+  const idN = 4;
+  const sdN = 8;
+  const id = new Uint8Array(idN * idN * 2);
+  for (let j = 0; j < idN; j += 1) {
+    for (let i = 0; i < idN; i += 1) {
+      const k = (j * idN + i) * 2;
+      const deep = j < 1;                    // z 0..1 — collapsed
+      id[k] = deep ? 1 : (i === 0 ? 1 : i === 1 ? 2 : 1);
+      id[k + 1] = deep ? 1 : (i === 0 ? 0 : i === 1 ? 1 : 1);
+    }
+  }
+  const sd = new Uint8Array(sdN * sdN);
+  sd.fill(156);                                // +1.76 m, far inside
+  const row = (j, codes) => codes.forEach((c, i) => { sd[j * sdN + i] = c; });
+  row(0, [148, 148, 156, 100]);                // +1.26 +1.26 +1.76 −1.76
+  row(1, [148, 148, 156, 100]);
+  row(2, [148, 148, 108, 108]);                // +1.26 +1.26 −1.26 −1.26
+  row(3, [148, 148, 108, 108]);
+  const b64 = (bytes) => Buffer.from(bytes).toString('base64');
+  return { origin_x: 0, origin_z: 0, id_size: idN, sd_size: sdN,
+           id: b64(id), sd: b64(sd) };
+}
+const corner = packLayerWindow(new Map([['0,0', cornerTile()]]), FMT);
+const q = (code) => decodeSd(code, 128, 127 / 8);
+checkEq('the fragment stands in the kitchen line\'s id texel',
+  layerPairAt(corner, 1.05, 1.05), [2, 1]);
+/** What a hardware LINEAR fetch would have answered: the four texels around the
+ *  point, across the id texel's rim, which is exactly the reading this replaces. */
+function filteredSd(win, x, z) {
+  const cx = (x - win.originX) / win.sdStep - 0.5;
+  const cz = (z - win.originZ) / win.sdStep - 0.5;
+  const i0 = Math.floor(cx);
+  const j0 = Math.floor(cz);
+  const fx = cx - i0;
+  const fz = cz - j0;
+  const at = (i, j) => decodeSd(win.sd[j * win.sdSize + i], win.sdZero, win.sdCodesPerM);
+  return (at(i0, j0) * (1 - fx) + at(i0 + 1, j0) * fx) * (1 - fz)
+       + (at(i0, j0 + 1) * (1 - fx) + at(i0 + 1, j0 + 1) * fx) * fz;
+}
+check('red: the filtered fetch crosses zero where no boundary is',
+  filteredSd(corner, 1.05, 1.05),
+  (q(148) * 0.4 + q(156) * 0.6) * 0.4 + (q(148) * 0.4 + q(108) * 0.6) * 0.6, 1e-12);
+check('…which is POSITIVE, i.e. the wrong side of the pair',
+  filteredSd(corner, 1.05, 1.05) > 0 ? 1 : 0, 1);
+check('the block reading takes only the four signed against (2, 1)',
+  layerSdBlockAt(corner, 1.05, 1.05), q(108), 1e-12);
+check('…so the gate keeps the floor it stands on', topLayerAt(corner, 1.05, 1.05), 1);
+console.log('  — and the block EXTRAPOLATES, so a straight edge stays sub-texel sharp');
+// One boundary, one pair: the four texels of an id texel sample the same plane,
+// so the reconstruction is that plane — at the texel centres, between them, and
+// a quarter metre past them out to the id texel's rim.
+check('at the first texel centre it IS the texel', layerSdBlockAt(win, 1.25, 2),
+  q(116), 1e-12);
+check('…halfway between the two, exactly halfway', layerSdBlockAt(win, 1.5, 2),
+  (q(116) + q(124)) / 2, 1e-12);
+check('…and extrapolated to the rim of the metre, still on the plane',
+  layerSdBlockAt(win, 1.0, 2), q(116) - (q(124) - q(116)) / 2, 1e-12);
+checkEq('the cut of the hand tile still lands on x = 2',
+  [1.99, 2.01].map((x) => (layerSdBlockAt(win, x, 2) >= 0 ? 1 : 0)), [0, 1]);
+
 // --- [5] the GLSL -----------------------------------------------------------
 console.log('\n[5] the GLSL says what a compiler and a driver need');
 const glsl = terrainLayerGlsl(64);
@@ -303,8 +398,13 @@ check('…and read with texelFetch, never with a filtered lookup',
   has('texelFetch( uLcNearId'), 1);
 check('the coarse world mask is the same kind of sampler',
   has('uniform highp usampler2D uLcFarId'), 1);
-check('the distance is a normal sampler, so the hardware INTERPOLATES it',
-  has('uniform sampler2D uLcNearSd') * has('textureLod( uLcNearSd'), 1);
+check('the distance is fetched by TEXEL — the shader interpolates, not the sampler',
+  has('uniform sampler2D uLcNearSd') * has('texelFetch( uLcNearSd'), 1);
+check('red: no filtered lookup of the distance anywhere',
+  /texture(Lod)?\( uLcNearSd/.test(glsl) ? 1 : 0, 0);
+check('…and the four it interpolates are the OWN id texel\'s',
+  /vec2 t0 = idIdx \* ratio;[\s\S]*vec2 t1 = t0 \+ \( ratio - 1\.0 \);/.test(glsl)
+    ? 1 : 0, 1);
 check('the surfaces are one array, one slice per layer',
   has('uniform sampler2DArray uLcSurf'), 1);
 check('the per-layer numbers are an array sized by the caller\'s constant',
@@ -349,7 +449,7 @@ check('…and the two derivatives are taken before the branch',
   /vec2 dpdx = dFdx\( p \);\n\s*vec2 dpdy = dFdy\( p \);\n\s*uvec2 pair;/.test(glsl)
     ? 1 : 0, 1);
 check('the mask itself is read at level 0 — it has no mip chain to ask for',
-  has('textureLod( uLcNearSd, sdUv, 0.0 )'), 1);
+  has('texelFetch( uLcNearSd, clamp( t, ivec2( 0 ), ivec2( last ) ), 0 )'), 1);
 
 // --- [6] the RED counter-probes: the ladders are GONE ------------------------
 console.log('\n[6] the RED counter-probes — the three ladders are gone');

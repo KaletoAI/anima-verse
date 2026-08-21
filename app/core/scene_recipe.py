@@ -134,6 +134,37 @@ CUTOUT_MAX_POLYS = 16
 CUTOUT_MAX_POINTS = CLIP_OUTLINE_MAX_POINTS
 # Walls: height max(0.6, storey − 0.15), thickness 0.07; glass panes thinner.
 WALL_THICKNESS = 0.07
+# THE SKIRT OF A STOREY-0 WALL (§ A16.9, finding round 2026-08-21).
+#
+# A wall foot is a straight HORIZONTAL line at the storey floor; the ground
+# under it is not straight. Until E5a that never showed, because storey 0 had
+# a plate and the foot was EMBEDDED in its body: a room wall based at
+# ``ROOM_PLATE_TOP`` 0.10 and a contour wall at ``LEVEL_PLATE_TOP`` 0.08, both
+# over a level plate whose body reached down to 0.08 − 0.14 = −0.06. The plate
+# is gone, the foot now meets the bare terrain, and every millimetre the ground
+# drops away under the wall opens a lit gap.
+#
+# So the wall keeps the skirt the plate used to give it: it starts
+# ``WALL_SINK_M`` BELOW the floor line and its top stays put (the height grows
+# by the same amount), which makes this change invisible from above and a
+# no-op for every consumer that reads ``base_y + height``.
+#
+# THE NUMBER, derived from the contract rather than picked:
+#   * it must beat the plateau ramp. A built plot is stamped flat (§ A16.4),
+#     but a wall's OUTER FACE lies WALL_THICKNESS/2 = 0.035 m outside the hull
+#     the stamp follows, and just outside the plot the ground may fall at the
+#     full ``max_slope_deg`` = 40°: 0.035 · tan 40° = 0.029 m. That is the
+#     floor of the requirement.
+#   * it must not be visible from the storey BELOW a declared one. There the
+#     wall still stands on a plate, and the deepest foot is the contour wall's
+#     ``LEVEL_PLATE_TOP`` 0.08 over a plate body that ends at −0.06 — 0.14 m
+#     of solid material under it. That is the ceiling of the requirement.
+# 0.14 is that ceiling exactly: the skirt is the LEVEL PLATE'S BODY, i.e. the
+# precise depth of material a wall foot stood in before E5a. A declared storey
+# therefore does not move by a millimetre in appearance (the skirt hides in the
+# plate it was always inside), and storey 0 gets the same solidity from the
+# terrain. Against the 0.029 m ramp case it carries a 4.8× margin.
+WALL_SINK_M = LEVEL_PLATE_THICKNESS
 WALL_MIN_HEIGHT = 0.6
 WALL_HEAD_ROOM = 0.15
 GLASS_THICKNESS_FACTOR = 0.6
@@ -736,6 +767,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                         lvl_holes.append(span)
             segs = _subtract([(0.0, length)], sorted(lvl_holes),
                              MIN_WALL_PIECE_M)
+            sink = WALL_SINK_M if level == 0 else 0.0
             for s0, s1 in segs:
                 start, end = _segment_points(a, ux, uz, s0, s1)
                 entry: Dict[str, Any] = {
@@ -744,9 +776,13 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                     "to": end,
                     # The foot of the shell is the floor of its storey
                     # (:func:`storey_floor_y`) — the terrain on storey 0 since
-                    # E5a, the level plate's top on every declared one.
-                    "base_y": _r(storey_floor_y(level, storey)),
-                    "height": _r(height),
+                    # E5a, the level plate's top on every declared one. On
+                    # storey 0 it goes ``WALL_SINK_M`` further down, into the
+                    # ground, and the height grows by the same amount: the TOP
+                    # edge is untouched and no relief under the wall can open a
+                    # gap between it and the terrain (§ A16.9).
+                    "base_y": _r(storey_floor_y(level, storey) - sink),
+                    "height": _r(height + sink),
                     "thickness": WALL_THICKNESS,
                     "opacity_role": _opacity_role(level, min(levels)),
                     "outward_normal": [_r(nx), _r(nz)],
@@ -833,13 +869,19 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
                   thickness: float, glass: bool = False) -> None:
             if s1 - s0 < MIN_SEGMENT_M or h < MIN_SEGMENT_M:
                 return
+            # Only a piece that STANDS ON THE FLOOR gets the skirt (§ A16.9):
+            # the full-height segments and a window's sill, never its head and
+            # never its glass band — those start further up the wall. On a
+            # declared storey the plate under the foot is still there and the
+            # skirt is 0.
+            sink = WALL_SINK_M if (level == 0 and y <= 0.0) else 0.0
             start, end = _segment_points(a, ux, uz, s0, s1)
             entry: Dict[str, Any] = {
                 "level": level,
                 "from": start,
                 "to": end,
-                "base_y": _r(base + y),
-                "height": _r(h),
+                "base_y": _r(base + y - sink),
+                "height": _r(h + sink),
                 "thickness": _r(thickness, 3),
                 "opacity_role": role,
                 "room_id": room_id,

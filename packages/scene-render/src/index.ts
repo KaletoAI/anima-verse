@@ -20,6 +20,9 @@
 export { placeModelSpec } from './place'
 export type { PlaceOptions } from './place'
 
+export { flatGround, storeyGroundLift } from './storeyGround'
+export type { GroundSampler } from './storeyGround'
+
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
 export { applyCutouts, CUTOUT_MAX_POLYS,
@@ -35,8 +38,9 @@ export { hillshadeImage, MAP_RELIEF_Z_FACTOR } from './hillshade'
 export type { HillshadeOpts, HillshadeImage } from './hillshade'
 
 export {
-  decodeSd, layerPairAt, layerSdAt, layerWeight, lcNoise, lcPushedSd,
-  packLayerWindow, terrainLayerGlsl, terrainLayerVertexGlsl, topLayerAt,
+  decodeSd, layerPairAt, layerSdAt, layerSdBlockAt, layerWeight, lcNoise,
+  lcPushedSd, packLayerWindow, terrainLayerGlsl, terrainLayerVertexGlsl,
+  topLayerAt,
 } from './layerCut'
 export type {
   LayerMaskWindow, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,

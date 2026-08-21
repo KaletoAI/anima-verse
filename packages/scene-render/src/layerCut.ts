@@ -19,14 +19,37 @@
  *    one under it. Read with NEAREST.
  *  - the **sd mask**, half a metre per texel, one byte: the SIGNED distance in
  *    metres to that boundary, + on A's side, clamped to the band and quantised.
- *    Read LINEARLY.
+ *    Read as the FOUR TEXELS OF THE OWN ID TEXEL (:func:`layerSdBlockAt`),
+ *    never as one filtered lookup over the whole window — see below.
  *
  * THE PAIR IS CANONICAL — both sides of a boundary carry the SAME (A, B), and
  * only the sign of the distance says which side a point is on. That is what
- * makes a NEAREST id and a LINEAR distance compose: the id may snap to either
- * side of the line without ever changing WHICH two materials are mixed, and
- * where exactly the cut runs comes out of the interpolated distance alone —
+ * makes a NEAREST id and an interpolated distance compose: the id may snap to
+ * either side of the line without ever changing WHICH two materials are mixed,
+ * and where exactly the cut runs comes out of the interpolated distance alone —
  * sub-texel sharp, at any zoom, with no geometry.
+ *
+ * …AND THE PAIR IS CANONICAL ONLY PER BOUNDARY, which is why the interpolation
+ * MUST NOT LEAVE THE ID TEXEL (finding round 2026-08-21, second pass). The sign
+ * of an sd texel means "on A's side of THIS pair", so two texels signed against
+ * two DIFFERENT pairs are two numbers on two different scales, and interpolating
+ * between them is arithmetic on unrelated units. The server signs the four sd
+ * texels under one id texel against one pair and guarantees nothing beyond it
+ * (`terrain_layers.bake_masks`, rule 3) — but a hardware LINEAR fetch reaches
+ * half a texel PAST the id texel, into texels that belong to the neighbour and
+ * are signed against the neighbour's boundary. Measured in the running world
+ * (living room of "Haus von Kai", world −1553.0 / −759.8): the texel at
+ * −1553.25 carries +1.26 m against the pair `wood | grass` of the west wall,
+ * its neighbour at −1552.75 carries −1.26 m against `rubber | wood` of the
+ * kitchen line — adjacent, opposite signs, both correct for their own pair. The
+ * filtered fetch crossed zero between them and drew a strip of KITCHEN RUBBER
+ * a metre and a half deep inside the living room, along the whole medial axis
+ * of the two boundaries. So the distance is reconstructed from the four texels
+ * the bake signed together, bilinear and EXTRAPOLATED past their centres rather
+ * than clamped: a distance field is locally a plane, so extrapolating the
+ * quarter metre to the texel rim is exact, and where two id texels name the
+ * same boundary both sides reconstruct the same plane — the cut stays
+ * continuous and sub-texel sharp across the seam.
  *
  * WHY AN INTEGER TEXTURE FOR THE ID. `RG8UI` read through a `usampler2D` is a
  * layer index and not a number that was once one: integer textures cannot be
@@ -388,16 +411,61 @@ export function layerPairAt(win: LayerMaskWindow | null,
   return [win.id[k] ?? 0, win.id[k + 1] ?? 0]
 }
 
-/** The signed distance at a world point, in metres — NEAREST, the twin of the
- *  shader's LINEAR fetch at a texel centre. The smoke reads it here and the
- *  shader interpolates between two of them; a reader that needs the
- *  interpolated value asks the shader, not this. */
+/** The signed distance at a world point, in metres — the RAW texel a point
+ *  falls in, with no reconstruction at all. What the picture reads is
+ *  :func:`layerSdBlockAt`; this is the byte, for a check that wants to see one
+ *  texel and not a field. */
 export function layerSdAt(win: LayerMaskWindow | null,
                           x: number, z: number): number {
   if (!win) return 0
   const i = texelOf(x, win.originX, win.sdStep, win.sdSize)
   const j = texelOf(z, win.originZ, win.sdStep, win.sdSize)
   return decodeSd(win.sd[j * win.sdSize + i] ?? 255, win.sdZero, win.sdCodesPerM)
+}
+
+/**
+ * THE DISTANCE THE PICTURE READS, in metres — the CPU twin of the shader's
+ * `lcSdAt`, and the one reading of "how far is the cut from here".
+ *
+ * Bilinear over the sd texels of the fragment's OWN id texel — the only ones
+ * the bake signed against one pair — and EXTRAPOLATED past their centres
+ * instead of clamped: a distance field is locally a plane, so the quarter metre
+ * out to the texel rim is exact, and two id texels that name the same boundary
+ * reconstruct the same plane and join without a seam. It deliberately never
+ * reads a texel of the neighbouring id texel, because that one is signed
+ * against the neighbour's pair and its sign means something else (see the file
+ * header).
+ *
+ * The block is the FIRST and LAST sd texel of the id texel per axis, so the
+ * contract's `id_step = 2 · sd_step` gives the 2 × 2 the bake writes, and a
+ * payload that ever coarsened the ratio would still reconstruct from two
+ * coherent samples rather than from a neighbour's.
+ */
+export function layerSdBlockAt(win: LayerMaskWindow | null,
+                               x: number, z: number): number {
+  if (!win) return 0
+  const ratio = Math.max(Math.round(win.idStep / win.sdStep), 1)
+  const ix = texelOf(x, win.originX, win.idStep, win.idSize)
+  const iz = texelOf(z, win.originZ, win.idStep, win.idSize)
+  const t0x = ix * ratio
+  const t0z = iz * ratio
+  const t1x = t0x + ratio - 1
+  const t1z = t0z + ratio - 1
+  const c0x = win.originX + (t0x + 0.5) * win.sdStep
+  const c0z = win.originZ + (t0z + 0.5) * win.sdStep
+  const spanM = (ratio - 1) * win.sdStep
+  const fx = spanM > 0 ? (x - c0x) / spanM : 0
+  const fz = spanM > 0 ? (z - c0z) / spanM : 0
+  const at = (i: number, j: number): number => {
+    const ci = i < 0 ? 0 : i >= win.sdSize ? win.sdSize - 1 : i
+    const cj = j < 0 ? 0 : j >= win.sdSize ? win.sdSize - 1 : j
+    return decodeSd(win.sd[cj * win.sdSize + ci] ?? 255, win.sdZero, win.sdCodesPerM)
+  }
+  const s00 = at(t0x, t0z)
+  const s10 = at(t1x, t0z)
+  const s01 = at(t0x, t1z)
+  const s11 = at(t1x, t1z)
+  return (s00 + (s10 - s00) * fx) * (1 - fz) + (s01 + (s11 - s01) * fx) * fz
 }
 
 /**
@@ -420,7 +488,7 @@ export function topLayerAt(win: LayerMaskWindow | null,
   if (!win) return 0
   const [a, b] = layerPairAt(win, x, z)
   if (a === b) return a
-  return layerSdAt(win, x, z) >= 0 ? a : b
+  return layerSdBlockAt(win, x, z) >= 0 ? a : b
 }
 
 // ── The GLSL ────────────────────────────────────────────────────────────────
@@ -509,6 +577,37 @@ float lcNoise( vec2 p ) {
  *  width is read unconditionally and the branch picks a finished number.
  *  The \`max\` inside the smoothstep only keeps its two edges apart when the
  *  width is 0; that result is discarded. */
+/** ONE sd texel of the near window, in metres — a TEXEL FETCH, so what arrives
+ *  is the byte the server wrote and not a blend of it with a neighbour that is
+ *  signed against another boundary. */
+float lcSdTexel( ivec2 t ) {
+  int last = int( uLcNearSdGeom.w ) - 1;
+  return ( texelFetch( uLcNearSd, clamp( t, ivec2( 0 ), ivec2( last ) ), 0 ).r * 255.0
+           - uLcSdCode.x ) / uLcSdCode.y;
+}
+
+/** THE DISTANCE, reconstructed from the sd texels of the fragment's OWN id
+ *  texel — the four the bake signed against ONE pair — bilinear and
+ *  EXTRAPOLATED past their centres rather than clamped. See \`layerSdBlockAt\`:
+ *  a hardware LINEAR fetch reaches half a texel past the id texel, into texels
+ *  that carry the sign of the NEIGHBOUR's boundary, and interpolating across
+ *  that sign change draws a strip of the wrong ground down the medial axis of
+ *  any two boundaries in one neighbourhood. Extrapolating instead is exact
+ *  wherever the field is a plane, which is everywhere one boundary rules. */
+float lcSdAt( vec2 p, vec2 idIdx ) {
+  float ratio = max( floor( uLcNear.z / uLcNearSdGeom.z + 0.5 ), 1.0 );
+  vec2 t0 = idIdx * ratio;
+  vec2 t1 = t0 + ( ratio - 1.0 );
+  vec2 c0 = uLcNearSdGeom.xy + ( t0 + 0.5 ) * uLcNearSdGeom.z;
+  float spanM = ( ratio - 1.0 ) * uLcNearSdGeom.z;
+  vec2 f = spanM > 0.0 ? ( p - c0 ) / spanM : vec2( 0.0 );
+  float s00 = lcSdTexel( ivec2( t0 ) );
+  float s10 = lcSdTexel( ivec2( t1.x, t0.y ) );
+  float s01 = lcSdTexel( ivec2( t0.x, t1.y ) );
+  float s11 = lcSdTexel( ivec2( t1 ) );
+  return mix( mix( s00, s10, f.x ), mix( s01, s11, f.x ), f.y );
+}
+
 float lcWeight( float sd, float blendM, float pixelM ) {
   float b = max( blendM, 1e-4 );
   float soft = smoothstep( -0.5 * b, 0.5 * b, sd );
@@ -550,11 +649,13 @@ void lcCompose( inout vec4 albedo ) {
   vec2 nearIdx = ( p - uLcNear.xy ) / uLcNear.z;
   if ( nearN > 0.5 && nearIdx.x >= 0.0 && nearIdx.y >= 0.0
        && nearIdx.x < nearN && nearIdx.y < nearN ) {
-    pair = texelFetch( uLcNearId, ivec2( nearIdx ), 0 ).rg;
-    vec2 sdUv = ( ( p - uLcNearSdGeom.xy ) / uLcNearSdGeom.z ) / uLcNearSdGeom.w;
-    // textureLod( …, 0 ) rather than texture(): the mask has no mip chain, and
-    // an implicit lookup would ask for a derivative inside this very branch.
-    sd = ( textureLod( uLcNearSd, sdUv, 0.0 ).r * 255.0 - uLcSdCode.x ) / uLcSdCode.y;
+    vec2 idIdx = floor( nearIdx );
+    pair = texelFetch( uLcNearId, ivec2( idIdx ), 0 ).rg;
+    // The distance comes out of THIS id texel's own sd texels and no others —
+    // a filtered lookup would mix in the neighbour's, which is signed against
+    // the neighbour's pair (see \`lcSdAt\`). texelFetch also asks for no
+    // derivative, which matters inside this branch.
+    sd = lcSdAt( p, idIdx );
   } else if ( uLcFarSize.x > 1.5 ) {
     vec2 farIdx = floor( ( p - uLcFar.xy ) / uLcFar.z );
     farIdx = clamp( farIdx, vec2( 0.0 ), uLcFarSize - 1.0 );

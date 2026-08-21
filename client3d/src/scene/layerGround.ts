@@ -18,9 +18,13 @@
  *    nearest boundary: A the layer painted on top there, B the one under it.
  *    THE PAIR IS THE SAME ON BOTH SIDES of the line; only the sign of the
  *    distance says which side a fragment is on. That is what lets a NEAREST
- *    integer fetch and a LINEAR distance compose into a sub-texel-sharp edge.
- *  - `sd` (R8, LINEAR) — per half metre the signed distance in metres to that
- *    boundary, quantised as the payload states.
+ *    integer fetch and an interpolated distance compose into a sub-texel-sharp
+ *    edge.
+ *  - `sd` (R8, NEAREST) — per half metre the signed distance in metres to that
+ *    boundary, quantised as the payload states. The four texels under ONE id
+ *    texel are the ones the bake signed against ONE pair, so the compositor
+ *    interpolates exactly those four itself (`lcSdAt`) instead of letting the
+ *    sampler blend across the id texel's rim into a neighbour's sign.
  *  - `uLcSurf` (`sampler2DArray`) — one slice per layer, every surface texture
  *    resized onto ONE square. A kind without a library texture gets a slice of
  *    its flat catalog colour, so the fallback is a texel and not a branch.
@@ -90,8 +94,12 @@ function makeNeutralId(): THREE.DataTexture {
 function makeNeutralSd(): THREE.DataTexture {
   const tex = new THREE.DataTexture(new Uint8Array([255]), 1, 1,
                                     THREE.RedFormat, THREE.UnsignedByteType);
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
+  // NEAREST: the compositor fetches the sd by TEXEL and interpolates the four
+  // of its own id texel itself (`lcSdAt`), because a hardware filter reaches
+  // into the neighbouring id texel — whose texels are signed against another
+  // boundary. A linear sampler here would be a filter nobody asks for.
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.generateMipmaps = false;
@@ -326,8 +334,10 @@ export function setLayerTiles(tiles: Map<string, TerrainLayerTile>,
   idTex.needsUpdate = true;
   const sdTex = new THREE.DataTexture(win.sd, win.sdSize, win.sdSize,
                                       THREE.RedFormat, THREE.UnsignedByteType);
-  sdTex.minFilter = THREE.LinearFilter;
-  sdTex.magFilter = THREE.LinearFilter;
+  // NEAREST — the compositor reconstructs the field from the four texels of the
+  // fragment's own id texel (`lcSdAt`); see `makeNeutralSd`.
+  sdTex.minFilter = THREE.NearestFilter;
+  sdTex.magFilter = THREE.NearestFilter;
   sdTex.wrapS = THREE.ClampToEdgeWrapping;
   sdTex.wrapT = THREE.ClampToEdgeWrapping;
   sdTex.generateMipmaps = false;

@@ -795,6 +795,27 @@ async function loadGameModules() {
   }
 }
 
+/**
+ * ONE shared-package module, transpiled the same way. `storeyGround.ts`
+ * (@anima/scene-render) is import-free arithmetic — the storey-0 ground lift
+ * of § A16.9 — so the plain esbuild transpile above works for it too. It lives
+ * outside `client3d/src/game`, hence its own tiny loader rather than a second
+ * entry in MODULES (which would drag the whole package into that path rule).
+ */
+async function loadSharedModule(relPath) {
+  const esbuild = await import('esbuild');
+  const dir = await mkdtemp(join(tmpdir(), 'shared-'));
+  try {
+    const source = await readFile(join(ROOT, relPath), 'utf8');
+    const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
+    const file = join(dir, 'mod.mjs');
+    await writeFile(file, out.code, 'utf8');
+    return await import(`file://${file}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 let failed = 0;
 let passed = 0;
 function check(label, actual, expected, eps = 1e-9) {
@@ -3704,6 +3725,77 @@ async function main() {
   check('a two-point "hull" declares nothing',
     declaredFloorAt([{ roomId: 'x', top: 5, outline: [[0, 0], [1, 1]] }], 0.5, 0.5),
     null);
+
+  // ── § S  THE STOREY-0 GROUND LIFT (§ A16.9, finding round 2026-08-21) ────
+  //
+  // THE DEFECT, in the numbers that were measured on the live world. Since
+  // E5a the storey-0 floor is the TERRAIN, but the payload states every
+  // placement against ONE datum: the ground under the location's anchor pin.
+  // "Mondscheinsee" is pinned in its own lake bed —
+  //
+  //     h_final(pin  -1490, -770)                    = -2.000 m
+  //     diorama "Nixenstrand"  anchor (19.71, -28.82), bottom_y -0.28
+  //       drawn at   -2.000 + (-0.28)                = -2.280 m
+  //       terrain at  h_final(-1470.29, -798.82)     = +0.277 m
+  //       => buried   -2.280 - 0.277                 = -2.557 m
+  //     diorama d5535ee7       anchor (-21.28, 13.12), bottom_y -0.28
+  //       terrain at  h_final(-1511.28, -756.88)     = +0.335 m
+  //       => buried   -2.280 - 0.335                 = -2.615 m
+  //
+  // The lift is `groundAt(x, z) - datum`, so it is +2.277 and +2.335 and the
+  // two huts land on +0.277 - 0.28 and +0.335 - 0.28 — their own shore, with
+  // `bottom_y` still meaning exactly what it meant.
+  console.log('\nstorey-0 ground lift — a placement stands on ITS OWN ground');
+  const { storeyGroundLift, flatGround } =
+    await loadSharedModule('packages/scene-render/src/storeyGround.ts');
+  const LAKE_DATUM = -2.0;
+  const lake = (x, z) => (x === -1470.29 && z === -798.82 ? 0.277
+    : x === -1511.28 && z === -756.88 ? 0.335 : LAKE_DATUM);
+  check('Nixenstrand is lifted by +2.277',
+    storeyGroundLift(0, -1470.29, -798.82, LAKE_DATUM, lake), 2.277, 1e-9);
+  // WORLD y = datum + bottom_y + lift, the frame the terrain is measured in:
+  //   -2.000 + (-0.28) + 2.277 = -0.003
+  const worldYOf = (bottomY, x, z) =>
+    LAKE_DATUM + bottomY + storeyGroundLift(0, x, z, LAKE_DATUM, lake);
+  check('...which puts its bottom_y -0.28 on world -0.003, not on -2.280',
+    worldYOf(-0.28, -1470.29, -798.82), -0.003, 1e-9);
+  check('the second hut is lifted by +2.335',
+    storeyGroundLift(0, -1511.28, -756.88, LAKE_DATUM, lake), 2.335, 1e-9);
+  // RED: the flat-datum burial is what the rule must NOT reproduce. What is
+  // LEFT under the terrain is the author's own dial and nothing else —
+  //   bottom_y -0.28 = DIORAMA_CLEARANCE 0.02 + model_offset_y -0.30,
+  // so the hut sits 0.28 m into its shore because someone asked it to, not
+  // 2.557 m into the lake bed because the datum was the wrong one.
+  check('RED: 2.557 m of burial becomes the dialled 0.28 m',
+    Number((0.277 - worldYOf(-0.28, -1470.29, -798.82)).toFixed(3)), 0.28);
+  check('RED: ...and the second hut the same 0.28, not 2.615',
+    Number((0.335 - worldYOf(-0.28, -1511.28, -756.88)).toFixed(3)), 0.28);
+  // At the pin itself the ground IS the datum, so the lift is 0 — which is
+  // why a BUILT location (plateau stamped flat to that very height, § A16.4)
+  // never moves by this rule at all.
+  check('on the plateau of a built plot the lift is 0',
+    storeyGroundLift(0, -1550, -760, 0.0, () => 0.0), 0, 1e-12);
+  // THE THREE NON-LIFTERS.
+  check('a DECLARED storey is not lifted', storeyGroundLift(1, 0, 0, 0, lake), 0);
+  check('...nor a basement', storeyGroundLift(-1, 0, 0, 0, lake), 0);
+  check('no sampler = no lift', storeyGroundLift(0, -1470.29, -798.82, LAKE_DATUM, null),
+    0);
+  check('...and an undefined sampler either',
+    storeyGroundLift(0, -1470.29, -798.82, LAKE_DATUM, undefined), 0);
+  // A height field that has not arrived must never drop a scene to zero.
+  check('a NaN answer is "nothing to say", not a lift of -datum',
+    storeyGroundLift(0, 0, 0, LAKE_DATUM, () => NaN), 0);
+  check('...and so is a non-finite datum',
+    storeyGroundLift(0, 0, 0, NaN, () => 5), 0);
+  // A missing `level` reads as storey 0 — the payload omits it on a prop.
+  check('an absent level means storey 0 and IS lifted',
+    storeyGroundLift(undefined, -1470.29, -798.82, LAKE_DATUM, lake), 2.277, 1e-9);
+  // THE ADMIN PREVIEW runs the very same formula on a FLAT stage, and that is
+  // the whole reason its lift is 0: not an exemption, an answer.
+  check('the flat admin stage answers 0 through the same formula',
+    storeyGroundLift(0, 123.4, -56.7, 0, flatGround(0)), 0, 1e-12);
+  check('...and a flat stage on a non-zero datum too',
+    storeyGroundLift(0, 123.4, -56.7, -2, flatGround(-2)), 0, 1e-12);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

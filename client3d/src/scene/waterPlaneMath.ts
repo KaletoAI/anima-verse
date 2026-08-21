@@ -249,13 +249,78 @@ float wsSmooth( float t ) {
 `;
 }
 
-/** The fragment body, inserted right before `#include <opaque_fragment>`: it
- *  is the last place `diffuseColor.a` and `outgoingLight` are both still
- *  writable, so the whole shore is ONE insertion instead of three. */
+/**
+ * How wide the last hand's width of water is, in metres of DEPTH — the band the
+ * alpha is faded to nothing over so the rim is not a hard edge.
+ *
+ * IT IS DERIVED FROM THE FOAM, not tasted. `waterAlpha` answers 0.15 at depth 0
+ * (the foam adds it back, deliberately: see `WATER_FOAM_ALPHA`) and the shader
+ * discards at depth 0 — so the drawn rim used to STEP from 15 % opaque to
+ * nothing across the boundary of a per-fragment `discard`. A step is a step
+ * however small, and this one lies on a line whose sub-pixel position moves
+ * with the camera: it crawls, and what crawls there is the brightest part of
+ * the lake (foam whitens the outgoing light by 0.6 at that very depth). Fading
+ * the alpha to 0 over the last 5 cm of depth makes the visible edge an alpha
+ * ramp instead, and the ramp is anti-aliased by the blend itself.
+ *
+ * 5 cm of DEPTH is about 7.5 cm of ground on the default shore
+ * (`water_depth_m` 2.0 over `shore_ramp_m` 3.0 is a slope of 2/3 at the rim),
+ * i.e. a twentieth of the 1.5 m the shore ramp already spends — it moves the
+ * waterline by less than the foam lace is wide.
+ */
+export const WATER_EDGE_FADE_M = 0.05;
+
+/**
+ * The rim fade a water fragment carries: `clamp(depth / edge, 0, 1)`, where
+ * `edge` is one pixel measured in metres of DEPTH (`fwidth(wsDepth)` in the
+ * shader), floored at `WATER_EDGE_FADE_M`.
+ *
+ * It is the ONE factor that reaches exactly 0 where the discard begins, which
+ * is the whole job — `waterAlpha(0)` is 0.15 and would otherwise be a step.
+ *
+ *     depth 0        -> 0                (the discard, approached smoothly)
+ *     depth ½·edge   -> 0.5
+ *     depth ≥ edge   -> 1                (the shore ramp alone from here on)
+ */
+export function waterEdgeFade(depthM: number, edgeM: number): number {
+  const e = Math.max(edgeM, WATER_EDGE_FADE_M);
+  if (!Number.isFinite(depthM) || depthM <= 0) return 0;
+  const t = depthM / e;
+  return t >= 1 ? 1 : t;
+}
+
+/**
+ * The fragment body, inserted right before `#include <opaque_fragment>`: it
+ * is the last place `diffuseColor.a` and `outgoingLight` are both still
+ * writable, so the whole shore is ONE insertion instead of three.
+ *
+ * THE RIM IS FADED, NOT MERELY DISCARDED (finding round 2026-08-21). The
+ * discard has to stay — at depth ≤ 0 the mirror and the terrain are the same
+ * surface and a fragment that took part in the depth test there would fight the
+ * ground for it. But `waterAlpha(0)` is 0.15, not 0, so the drawn rim used to
+ * STEP from a 15 %-opaque, 60 %-whitened foam lace to nothing across the
+ * boundary of a per-fragment test. That boundary has no width: its sub-pixel
+ * position moves as the camera moves, so the brightest line of the lake
+ * crawled. Multiplying by `clamp(depth / edge, 0, 1)` puts a ramp there that
+ * reaches 0 exactly where the discard begins, so nothing steps.
+ *
+ * `edge` IS ONE PIXEL, IN METRES OF DEPTH — `fwidth(wsDepth)`, floored at
+ * `WATER_EDGE_FADE_M`. The `fwidth` warning of `@anima/scene-render`
+ * `layerCut.ts` does not transfer: what explodes there is the derivative of a
+ * QUANTISED mask whose neighbouring texels can name a different boundary
+ * altogether, while `wsDepth` is a plane minus a bilinear interpolation — C0
+ * everywhere, with a gradient that jumps between lattice cells but stays
+ * bounded by the steepest cell of the bed. And the floor caps the damage
+ * anyway: the worst a wrong `fwidth` can do here is make the last hand's width
+ * of water a little softer, on a band the shore ramp is already fading over.
+ */
 export function waterShoreBody(): string {
   return `
   {
     float wsDepth = vWaterPlane.y - tlodHeight( vWaterPlane.xz, 0.0 );
+    // Taken BEFORE the discard, at uniform control flow: a derivative asked for
+    // inside a branch that differs across a quad is undefined in GLSL ES.
+    float wsEdge = max( fwidth( wsDepth ), ${WATER_EDGE_FADE_M} );
     // The rim, where mirror and terrain are the same surface: not water, and
     // the one band in which a fragment of this plane would fight the ground
     // for the depth test.
@@ -263,7 +328,8 @@ export function waterShoreBody(): string {
     float wsFoam = 1.0 - wsSmooth( wsDepth / uFoamBandM );
     outgoingLight = mix( outgoingLight, vec3( 1.0 ), wsFoam * uFoamStrength );
     diffuseColor.a *= clamp( wsSmooth( wsDepth / uShoreBandM )
-                             + wsFoam * uFoamAlpha, 0.0, 1.0 );
+                             + wsFoam * uFoamAlpha, 0.0, 1.0 )
+                    * clamp( wsDepth / wsEdge, 0.0, 1.0 );
   }
 `;
 }

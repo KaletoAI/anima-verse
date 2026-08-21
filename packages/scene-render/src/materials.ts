@@ -165,6 +165,12 @@ function makeWaveNormal(T: THREE): Texture {
   ctx.putImageData(img, 0, 0)
   const tex = new T.CanvasTexture(canvas)
   tex.wrapS = tex.wrapT = T.RepeatWrapping
+  // Anisotropic filtering, because a lake is nearly always seen at a grazing
+  // angle: an isotropic mip has to pick the WIDER of the two footprints, so it
+  // either blurs the ripple away across the view direction or aliases it along
+  // it. three clamps this to what the device offers, so 4 is a wish, not a
+  // requirement.
+  tex.anisotropy = 4
   tex.needsUpdate = true
   return tex
 }
@@ -259,6 +265,23 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
   #ifdef USE_NORMALMAP_TANGENTSPACE
   {
     float wMask = texture2D( uMask, vWaterUv ).r;
+    // HOW MUCH OF THE RIPPLE THIS PIXEL CAN STILL RESOLVE (finding round
+    // 2026-08-21). One pixel covers wPx metres of water; once that reaches a
+    // whole wavelength the normal map carries no signal a pixel could show, and
+    // what is left is sampling noise — which at roughness 0.08 lands in a
+    // specular lobe narrow enough to turn every noisy texel into a spark. The
+    // mip chain does not save it: averaging normals SHORTENS them instead of
+    // widening the lobe, so the highlights stay as tight as they were. Fading
+    // the perturbation back to flat over that same footprint is the cheap,
+    // standard answer, and it is also the truthful picture — a lake a
+    // kilometre off is a mirror, not a texture.
+    //
+    // MEASURED ON THE WORLD POSITION, never on the sampled normal: vWaterWorld
+    // is continuous by construction (the mirror is a plane), while a derivative
+    // of what comes back from a texture jumps wherever the texture does — the
+    // very lesson scene-render layerCut.ts spells out.
+    float wPx = max( length( dFdx( vWaterWorld ) ), length( dFdy( vWaterWorld ) ) );
+    float wDetail = clamp( 1.0 - wPx / uWaveM, 0.0, 1.0 );
     // The offset is divided by the wavelength of the RESPECTIVE layer —
     // which makes uSpeed real METRES PER SECOND, and both layers drift at the
     // same speed although their wavelengths differ. Without the division
@@ -270,7 +293,7 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
     vec2 wUvB = vWaterWorld / ( uWaveM * 0.63 ) - vec2( wDriftB * 0.8, wDriftB * 1.3 );
     vec3 wN = normalize( ( texture2D( normalMap, wUvA ).xyz * 2.0 - 1.0 )
                        + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 ) );
-    wN = mix( vec3( 0.0, 0.0, 1.0 ), wN, wMask );
+    wN = mix( vec3( 0.0, 0.0, 1.0 ), wN, wMask * wDetail );
     wN.xy *= normalScale;
     normal = normalize( tbn * wN );
   }

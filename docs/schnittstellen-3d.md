@@ -3170,7 +3170,7 @@ geschärft werden.
 | Maske | Auflösung | Format | Filter | Inhalt |
 |---|---|---|---|---|
 | `id` | **1 m/Texel** (256²) | RG8UI, 2 Byte | **NEAREST** | das PAAR (A, B) der Layer-Indizes an der nächsten Grenze |
-| `sd` | **0,5 m/Texel** (512²) | R8 | **LINEAR** | die SIGNIERTE Distanz zu genau dieser Grenze, in Metern |
+| `sd` | **0,5 m/Texel** (512²) | R8 | **NEAREST (texelFetch)** | die SIGNIERTE Distanz zu genau dieser Grenze, in Metern — interpoliert wird im Shader, aus den VIER Texeln des eigenen id-Texels |
 
 > **DAS PAAR IST KANONISCH — und das ist der ganze Trick.** Beide Seiten einer
 > Grenze tragen dasselbe (A, B): **A ist immer der SPÄTER gemalte Layer**,
@@ -3210,8 +3210,33 @@ geschärft werden.
 >    Reserve), **kollabiert das Paar auf (own, own)**: ein Texel tief in einem
 >    Boden braucht keinen Zweitplatzierten, und keinen zu nennen ist genau das,
 >    was aus einer Mittelachse keinen Haarstrich der falschen Art mehr macht.
->    Die Distanz bleibt dabei unverändert — der Nachbar, der noch blendet, liest
->    sie durch den LINEAR-Filter mit und darf dort keine Kante finden.
+>    Die Distanz bleibt dabei unverändert.
+
+> **…UND DESHALB DARF DIE INTERPOLATION DAS id-TEXEL NIE VERLASSEN**
+> (Befundrunde 2026-08-21, zweiter Durchgang). Regel 3 hält die vier sd-Texel
+> EINES id-Texels zusammen und verspricht jenseits davon nichts — ein
+> LINEAR-Filter der Hardware aber greift einen halben Texel ÜBER den Rand des
+> id-Texels hinaus, in Texel, die zum Nachbarn gehören und gegen dessen Grenze
+> signiert sind. Das Vorzeichen heißt „auf A's Seite MEINES Paares", also sind
+> zwei Texel mit zwei Paaren zwei Zahlen auf zwei Skalen, und zwischen ihnen zu
+> mischen ist Arithmetik über verschiedene Einheiten. Gemessen an den Masken der
+> laufenden Welt (Wohnzimmer „Haus von Kai", Welt −1553,0 / −759,9): das Texel
+> bei −1553,25 trägt **+1,26 m** gegen das Paar `wood | grass` der Westwand, sein
+> Nachbar bei −1552,75 trägt **−1,26 m** gegen `rubber | wood` der Küchenlinie —
+> benachbart, entgegengesetzt, beide für ihr eigenes Paar richtig. Der gefilterte
+> Griff kam bei (−1552,95 / −759,95) auf **+0,47** und malte damit einen Streifen
+> **Küchen-Gummiboden anderthalb Meter tief im Wohnzimmer**, entlang der ganzen
+> Mittelachse der beiden Grenzen. Deshalb liest der Shader die Distanz per
+> `texelFetch` und interpoliert die VIER Texel seines eigenen id-Texels selbst
+> (`@anima/scene-render` `lcSdAt` / `layerSdBlockAt`) — **bilinear und über die
+> Texelmitten hinaus EXTRAPOLIERT statt geklemmt**: ein Distanzfeld ist lokal
+> eine Ebene, also ist der Viertelmeter bis zum Texelrand exakt, und wo zwei
+> id-Texel dieselbe Grenze nennen, rekonstruieren beide dieselbe Ebene — die
+> Kante bleibt über die Naht hinweg stetig und subtexel-scharf. Zahlen der
+> Abnahme: 10 032 Sonden auf 0,05 m durch beide geschlossenen Räume und die
+> Pool-Zone, 26 Texel tiefer als 0,5 m im Raum falsch → **0**; dieselbe
+> Rekonstruktion über 100 × 100 m offenes Gelände: 9 Abweichungen → 6, alle
+> innerhalb des Rausch-Ausschlags einer weichen Kante.
 
 **Warum eine Integer-Textur für die id:** `usampler2D` + `texelFetch`. Eine
 Integer-Textur kann *gar nicht* gefiltert werden — NEAREST erzwingt das FORMAT
@@ -3360,7 +3385,9 @@ Antworten, die auseinanderlaufen werden.
 262 144), ganze Welt **24,0 MB** roh / 32,0 MB base64 (61 Kacheln), ein Fenster
 von 9 Kacheln auf der GPU 3,54 MB, Übersichtsmaske (8 m) **127 kB**. Bake einer
 Kachel MIT Grenzen ~0,32 s (kalt, danach LRU), ohne Grenze ~0,04 s bei 40 Byte
-Antwort. Fragment-Kosten: 1 id-Fetch + 1 sd-Fetch + 4 Array-Fetches (vier statt
+Antwort. Fragment-Kosten: 1 id-Fetch + **4 sd-Fetches** (die vier Texel des
+eigenen id-Texels, die der Shader selbst interpoliert — ein gefilterter Griff
+läse den Nachbarn mit) + 4 Array-Fetches (vier statt
 zwei, weil die Anti-Kachelung PRO LAYER schmal und breit probt). Dafür ist das
 Terrain **1 Draw-Call** statt einem Mesh je gemalter Fläche plus Platten.
 
@@ -3504,7 +3531,7 @@ alt → neu:
 | Etagenplatte Oberkante | 0,08 | — | — |
 | Raumplatte / Zonenfläche | 0,10 / 0,09 | 0,01 | — |
 | Boden, auf dem gestanden wird | 0,10 | 0,01 | **0,00** (`h_final`) |
-| Wandfuß (Raum / Kontur) | 0,10 / 0,08 | — | **0,00** |
+| Wandfuß (Raum / Kontur) | 0,10 / 0,08 | — | **0,00**, gesäumt auf −0,14 (s. u.) |
 | Prop `bottom_y` | 0,11 | 0,02 | **0,01** |
 | Diorama `bottom_y` (ohne Regler) | 0,12 | 0,03 | **0,02** |
 | Türschwelle ohne Deklaration | 0,10 | — | **0,00** |
@@ -3519,9 +3546,89 @@ Millimeter bewegt: die Kontur-Platte der Etage 1 liegt weiter auf
 `1·2,8 + 0,08 = 2,88`, die Raumplatte darauf auf `1·2,8 + 0,10 = 2,90`, ein
 Keller-Raum auf `−2,8 + 0,10 = −2,70`.
 
+**Der Wandfuß bekommt einen SAUM** (Befundrunde 2026-08-21). Ein Wandfuß ist
+eine gerade waagerechte Linie, der Boden darunter ist es nicht. Bis E5a fiel das
+nie auf, weil der Fuß in einem PLATTENKÖRPER steckte: eine Konturwand auf
+`LEVEL_PLATE_TOP` 0,08 über einer Etagenplatte, die bis 0,08 − 0,14 = −0,06
+reichte — **0,14 m Material unter dem Fuß**. Die Platte ist weg, der Fuß trifft
+das nackte Gelände, und jeder Millimeter, den der Boden unter der Wand wegläuft,
+reißt eine beleuchtete Lücke auf.
+
+Also behält die Wand genau diesen Körper als Saum: **auf Etage 0 beginnt ein
+Wandstück `WALL_SINK_M` = `LEVEL_PLATE_THICKNESS` = 0,14 m UNTER der Bodenlinie
+und ist um denselben Betrag höher** (`scene_recipe`, Kontur- wie Raumwand).
+
+| | ALT (E5a) | NEU |
+|---|---|---|
+| Etage 0, Kontur | `base_y` 0,00 · `height` 2,85 | **−0,14 · 2,99** |
+| Etage 0, Raum | `base_y` 0,00 · `height` 2,85 | **−0,14 · 2,99** |
+| Etage 1, Kontur | 3,08 · 2,85 | 3,08 · 2,85 |
+| Etage 1, Raum | 3,10 · 2,85 | 3,10 · 2,85 |
+
+Drei Eigenschaften, und alle drei sind der Grund für genau diese Zahl:
+
+* **Die OBERKANTE bewegt sich nicht.** `base_y + height` ist unverändert, also
+  ändert sich über dem Boden nichts — kein Fenster, kein Sturz, kein Konsument,
+  der `base_y + height` liest.
+* **Nur der FUSS bekommt ihn.** Ein Fensterbrüstungsstück beginnt auf dem Boden
+  und wird gesäumt; Sturz und Glasband hängen höher und bleiben unberührt. Eine
+  **Türschwelle ist keine Wand** — `doorways[].base_y` ist die STANDHÖHE der
+  angrenzenden Räume und bleibt 0,00.
+* **Eine DEKLARIERTE Etage wird gar nicht gesäumt.** Dort steht die Platte noch,
+  und 0,14 ist exakt die Tiefe, in der ein Konturfuß die UNTERSEITE der
+  Etagenplatte erreichte (3,08 − 0,14 = 2,94) und aus der Decke darunter zu
+  hängen begänne. Das ist die OBERGRENZE des Saums; die UNTERGRENZE ist der
+  Plateau-Rampenfall: die Außenfläche einer Wand liegt `WALL_THICKNESS/2` =
+  0,035 m außerhalb des Rumpfes, dem der Stempel folgt, und gleich außerhalb des
+  Grundstücks darf der Boden mit vollen `max_slope_deg` = 40° fallen —
+  0,035 · tan 40° = **0,029 m**. 0,14 trifft die Obergrenze und schlägt die
+  Untergrenze um das 4,8-fache. Beide Enden hergeleitet in
+  `scripts/smoke_scene_recipe.py` [4a].
+
+**Eine Platzierung auf Etage 0 steht auf dem Gelände AN IHREM EIGENEN (x, z)**
+(Befundrunde 2026-08-21). Das Payload nennt jede Zahl gegen das Datum des
+Szenen-Rahmens — `y = 0` ist der Boden unter dem ANKER-PIN, EINE Höhe für den
+ganzen Ort. Auf einem gebauten Grundstück stimmt das exakt (§ A16.4 stempelt
+eben auf genau diese Höhe); auf einem NATÜRLICHEN Ort stimmt es an einem Punkt
+und sonst nirgends. Gemessen an „Mondscheinsee" (Pin-Boden −2,00 m, das Seebett):
+seine beiden Ufer-Dioramen sind auf `bottom_y` −0,28 komponiert, werden also auf
+−2,28 gezeichnet, während das Gelände unter ihren eigenen Ankern auf +0,277 bzw.
++0,335 steht — **2,56 m und 2,62 m tief begraben**, bei 5,08 m Relief über dem
+Ort.
+
+Die Regel ist die der WELT-PROPS (§ A9a), auf die Szene angewandt — der Renderer
+hebt um
+
+```
+lift = groundAt(x, z) − datum          # datum = Boden unter dem Anker-Pin
+```
+
+und sie steht **einmal**, in `packages/scene-render/src/storeyGround.ts`
+(`storeyGroundLift`), mit dem Höhen-Sampler als PARAMETER. Der 3D-Client reicht
+`heightAt` hinein, die Admin-Vorschau `flatGround(0)` — deren Bühne ist eben,
+also antwortet dieselbe Formel dort 0. Keine zweite Regel, keine Ausnahme.
+
+* **`level != 0` wird NICHT gehoben.** Eine deklarierte Etage steht auf einer
+  PLATTE; das Gelände reicht nicht an sie heran und darf sie nicht bewegen —
+  derselbe Schnitt, den dieses Kapitel schon für `plates[]`, `storey_floor_y`
+  und die Figuren-Leiter zieht.
+* **Das GEBÄUDE-/FLÄCHEN-Modell auch nicht.** `role: "building"` steht nicht auf
+  dem Grundstück, es IST das Grundstück, und es hat sein eigenes Ankergesetz
+  (`walk_y_world`, `offset_y`), das die Figuren-Leiter zurückliest.
+* **Das `walk_y_world` eines Dioramas fährt MIT.** Sonst stünden die Figuren des
+  Raums weiter auf der komponierten Höhe, während die Hütte am Hang sitzt.
+* **Raum-Mitte, Stellplätze und Raum-Marker brauchen nichts davon**: die holen
+  ihre Höhe ohnehin schon punktweise aus dem Höhen-Sampler (`roomFloorWorldY`,
+  oben) — dort wird der Term nur überschrieben, nie doppelt gezählt.
+* **Ein `fixed`-Marker (Prop-Marker) bekommt ihn aber sehr wohl.** Er ist aus
+  der Bounding-Box SEINES Props komponiert und bleibt sonst unberührt; stiege
+  das Prop ans Ufer und die Sitzmarke nicht, säße die Figur in der Luft, wo der
+  Stuhl einmal stand. Er wird an seinem EIGENEN Punkt gehoben.
+
 `offset_y` je Platzierung, `ground_offset_m` je Prop und `model_offset_y` je
 Diorama wirken **unverändert** weiter (Entscheidung 4 des Plans) — nur messen
-sie jetzt überall von derselben Null. `layout.floor_offset_y` überlebt als
+sie jetzt überall von derselben Null, und diese Null ist seit der Befundrunde
+die unter dem Objekt statt die unter dem Pin. `layout.floor_offset_y` überlebt als
 **reiner Feinjustage-Regler** eines einzelnen Raums (hebt, was IM Raum steht);
 seine zwei alten Nebenjobs sind weg: es gleicht keinen zweiten Boden mehr aus,
 und es ist **keine Wasserlinie** mehr — dafür gibt es `layout.water_level`
@@ -3689,7 +3796,7 @@ sie produziert.
 |---|---|
 | `scripts/smoke_terrain_layers.py` | [1] Raster == `rank_at` == `kind_at` an 500 Gitterproben, die sd-Quantisierung, der Endpunkt in beiden Modi, `uniform`, `waters` |
 | `scripts/smoke_terrain_types.py` [9] | die Sanitizer der Katalog-Felder (`edge_blend_m` mit 0 als WERT, Relief-Amplitude/Welle) |
-| `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor` |
+| `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor`; **[4a]** der Wandsaum — beide Grenzen des 0,14-Maßes von Hand, die feste Oberkante, der ungesäumte Sturz, die ungesäumte Türschwelle und die unbewegte deklarierte Etage |
 | `scripts/smoke_scene_asset.py` / `scripts/smoke_scene_context.py` | die Kontaktprüfung einer Platzierung gegen `ground_sampler` |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
@@ -3703,7 +3810,7 @@ sie produziert.
 | `client3d/scripts/smoke_relief_math.mjs` | das Feld-Lesen und die zwei Reiselinien-Ableitungen (auf Weltfeld + Reiselinie zurückgeschnitten) |
 | `client3d/scripts/smoke_layer_cut.mjs` | die Schnitt-Arithmetik (sd-Interpolation, `b = 0`-Kante, `fwidth`-AA), EIN Spiegel-Bauer von beiden Quellen gespeist, und die **Löschungs-Prüfung**: die gestrichenen Drape-/Platten-Namen kommen in den Quellen nicht mehr vor, `rebuildAreas` setzt **gar keine** `position.y` |
 | `client3d/scripts/smoke_water_plane.mjs` | [3] die E1-Invariante unabhängig nachgerechnet samt Gegenprobe, die Ufer-Alpha-Stützstellen, [5] die Zonen-Wasser unter einem Punkt (Vorrang vor gemalten Flächen, Letzter-gewinnt, `null` wird nie 0, der Schwimmer am Zonen-Spiegel) |
-| `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren |
+| `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren; **§ S** `storeyGroundLift` — die Mondscheinsee-Zahlen von Hand, die ebene Bühne der Admin-Vorschau, und die drei Nicht-Heber (deklarierte Etage, Gebäudemodell, fehlender Sampler) |
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter, Flachheits-Tor, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
 | `client3d/scripts/smoke_natural_ground.mjs` | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |

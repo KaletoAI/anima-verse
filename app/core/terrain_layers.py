@@ -17,12 +17,16 @@ its tiles by (`heightfield.TILE_M`, `heightfield.tile_key`):
   under it. Two bytes per texel, read with NEAREST.
 * an **sd mask** at :data:`SD_STEP_M` (0.5 m) — per texel the SIGNED distance in
   metres to that boundary, positive on A's side, clamped to ±:data:`SD_BAND_M`
-  and quantised to one byte. Read with LINEAR filtering.
+  and quantised to one byte. Read by TEXEL: a renderer interpolates the four
+  texels under ONE id texel itself (`@anima/scene-render` `layerSdBlockAt`),
+  because those are the four this bake signed against one pair — a hardware
+  filter reaches past the id texel into a neighbour signed against another
+  boundary, and mixing the two is arithmetic on two different scales.
 
 THE PAIR IS CANONICAL, AND THAT IS THE WHOLE TRICK. Both sides of a boundary
 carry the SAME (A, B) — A is always the higher-painted of the two, never "the
 one I am standing on". Only the SIGN of `sd` says which side a texel is on. So a
-NEAREST fetch of the pair and a LINEAR fetch of the distance compose into a
+NEAREST fetch of the pair and an interpolated distance compose into a
 continuous edge: the id may snap to either side of the boundary without ever
 changing which two materials are being mixed, and the sub-texel position of the
 cut comes entirely out of the interpolated distance. Ordering the pair by "the
@@ -52,7 +56,9 @@ same distance, i.e. on their medial axis. So:
    pair. Beyond the width where the transition is still being drawn
    (:func:`collapse_band_m`) the pair collapses to (own, own) — a texel that is
    far inside one ground needs no runner-up, and not naming one is what keeps a
-   medial axis from becoming a hairline of the wrong material.
+   medial axis from becoming a hairline of the wrong material. The promise stops
+   at the id texel's own four, which is why a renderer may not let a hardware
+   filter interpolate past them (§ A16.7, second finding round).
 
 THE PRIORITY IS THE DATA LAW AND NOTHING NEW: the LAST containing area wins,
 in `models.terrain.list_areas` order (z_order, then paint order) — the very rule

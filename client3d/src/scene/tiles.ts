@@ -53,6 +53,15 @@ export function setWorldGround(sampler: (x: number, z: number) => number): void 
   worldGroundAt = sampler;
 }
 
+/** The same sampler for consumers OUTSIDE this module — `sceneRecipe.ts` needs
+ *  it to lift storey-0 placements onto the terrain under their own anchor
+ *  (`storeyGroundLift`, § A16.9). Handed out rather than re-fetched: a second
+ *  height source is the twin rule that drifts. `null` while none has arrived,
+ *  which the lift reads as "no lift". */
+export function worldGroundSampler(): ((x: number, z: number) => number) | null {
+  return worldGroundAt;
+}
+
 /**
  * THE footprint outline of a location, in TILE-LOCAL metres — the drawn
  * polygon of contract v6, or `null` when the location has no area at all.

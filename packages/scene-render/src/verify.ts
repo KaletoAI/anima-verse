@@ -125,7 +125,7 @@ export class SpecVerifier {
    *  box. The sign therefore has to be pinned somewhere else — that is what
    *  section 6 of `client3d/scripts/smoke_place_rotation.mjs` is for. */
   placement(obj: Object3D, spec: SceneModelSpec, origin: Vector3,
-            frameYaw = 0): void {
+            frameYaw = 0, groundLift = 0): void {
     if (!this.active) return
     obj.updateWorldMatrix(true, true)
     const world = new this.THREE.Box3().setFromObject(obj)
@@ -133,7 +133,13 @@ export class SpecVerifier {
     const box = this.inFrame(world, origin, frameYaw)
     const centre = box.getCenter(new this.THREE.Vector3())
     const name = `${spec.role}:${spec.id}`
-    this.check(name, 'bottom_y', box.min.y, spec.bottom_y)
+    // `groundLift` is the storey-0 terrain lift of § A16.9
+    // (`storeyGroundLift`) — the ONLY sanctioned difference between the
+    // composed `bottom_y` and the drawn one. It is added to the TARGET rather
+    // than subtracted from the measurement on purpose: the row a verify report
+    // prints then names the height the object is meant to have at ITS point,
+    // which is the number a reader can check against the height field.
+    this.check(name, 'bottom_y', box.min.y, spec.bottom_y + groundLift)
     const axisParallel = (v?: number) =>
       Math.abs((((v || 0) % 90) + 90) % 90) <= 0.01
     if (axisParallel(spec.yaw_deg) && axisParallel((frameYaw * 180) / Math.PI)) {

@@ -54,7 +54,7 @@ higher rank) and B the earlier one, and BOTH neighbours carry that same pair:
 
 Only the SIGN of the distance differs across the line. That is the whole
 mechanism: a NEAREST id fetch may snap to either side without changing which
-two materials are mixed, and where the cut runs comes out of the LINEAR
+two materials are mixed, and where the cut runs comes out of the interpolated
 distance alone.
 
 ===========================================================================
@@ -85,9 +85,9 @@ the true one.
 The distance is carried ±8 m and no further, and the PAIR is carried only as
 far as the transition is still being drawn (`collapse_band_m`): half the blend
 width on each side, plus the noise push (itself capped at half the width), plus
-`COLLAPSE_SLACK_M` = 1 m for the LINEAR fetch's reach and for the pixel-wide
-anti-aliasing of a hard cut. The lake's water is the default 1.5 m wide, so its
-band is 0.75 + 0.5 + 1 = 2.25 m.
+`COLLAPSE_SLACK_M` = 1 m for the reach of the renderer's own interpolation and
+for the pixel-wide anti-aliasing of a hard cut. The lake's water is the default
+1.5 m wide, so its band is 0.75 + 0.5 + 1 = 2.25 m.
 
 The pair is decided PER ID TEXEL, from the nearest of the four sd texels under
 it, so the id texel [61, 62) is judged by its sub-texel at 61.75 — 2.25 m out,
@@ -99,9 +99,12 @@ exactly the band, so it is the LAST one that still names a runner-up:
     x = 55.75   8.25 m out, past the band as well   -> (1, 1), +8.0 m
 
 The distance keeps its true value and its sign through the collapse — a
-neighbouring texel that is still blending reads it through the hardware's LINEAR
-filter and must not find a cliff there. What the collapse changes is that the
-texel no longer NAMES a runner-up, so `a == b` and the shader ignores the
+neighbouring texel that is still blending may read it and must not find a cliff
+there. (Since the second finding round the renderer interpolates ONLY the four
+texels of its own id texel, `@anima/scene-render` `layerSdBlockAt`: the sign of
+a texel means "on A's side of MY pair", so a filter that reached past the id
+texel mixed two numbers on two scales — § A16.7.) What the collapse changes is
+that the texel no longer NAMES a runner-up, so `a == b` and the shader ignores the
 distance altogether. THAT IS THE POINT: two id texels deep inside one ground
 used to name two different boundaries — the one to the west and the one to the
 north — and the interpolated distance between them crossed zero, which drew a
@@ -569,6 +572,14 @@ def test_three_regions():
     #      a boundary — where the raster legitimately cannot say more (see [5]).
     #      "Interior" is decided by the law alone: the same answer at the point
     #      and 0.6 m to each of the eight sides.
+    #
+    # THIS SWEEP IS AT TEXEL CENTRES, and that is its limit: it measures what the
+    # BAKE wrote, not how a renderer reconstructs the field BETWEEN two texels.
+    # The second finding round of 2026-08-21 lived exactly in that gap — every
+    # texel here was right while a filtered fetch across an id texel's rim drew
+    # the kitchen's floor inside the living room. The reconstruction is the
+    # renderers' one shared reading and is checked where it lives:
+    # `client3d/scripts/smoke_layer_cut.mjs` [4b].
     stranger = 0
     defects = 0
     interior = 0

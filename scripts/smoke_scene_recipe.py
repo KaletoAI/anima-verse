@@ -48,6 +48,14 @@ EXTENT = PLAN_W   # payload extent_m = plan_width_m since E4 (k = 1)
 STOREY_REAL = 3.0
 STOREY = 3.0      # = storey_height_m, no factor left
 WALL_H = STOREY - 0.15
+# THE SKIRT OF A STOREY-0 WALL (§ A16.9, finding round 2026-08-21), derived by
+# hand from the contract and NOT imported: before E5a a contour wall's foot sat
+# at LEVEL_PLATE_TOP 0.08 over a level plate whose body reached down to
+# 0.08 − LEVEL_PLATE_THICKNESS 0.14 = −0.06 — 0.14 m of solid material under
+# the foot. Storey 0 lost that plate and now gets the same 0.14 m as a skirt
+# INTO the terrain, so relief under a wall cannot open a lit gap. A DECLARED
+# storey still has its plate and is not skirted at all.
+SINK = 0.14
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -305,21 +313,32 @@ def test_room_walls() -> None:
     sc = scene()
     a = walls_of(sc, "a")
     check("outdoor rooms have no shell", not walls_of(sc, "garden"))
-    check("wall height max(0.6, storey − 0.15)",
-          all(near(w["height"], WALL_H) or w.get("glass")
-              or w["height"] < WALL_H for w in a))
+    # THE TOP EDGE is what "wall height" means since the skirt (§ A16.9): a
+    # storey-0 piece starts SINK below the floor and is SINK taller for it, so
+    # `base_y + height` is the number that did not move.
+    check("wall top = max(0.6, storey − 0.15) over the storey floor",
+          all(near(w["base_y"] + w["height"], WALL_H) or w.get("glass")
+              or w["base_y"] + w["height"] < WALL_H for w in a))
     check("thickness 0.07 on solid walls",
           all(near(w["thickness"], 0.07) for w in a if not w.get("glass")))
     check("the wall texture kind rides along",
           all(w.get("texture_kind") == "plaster" for w in a if not w.get("glass")))
-    # THE FOOT OF A STOREY-0 WALL IS THE TERRAIN (Ein Boden E5a): the room
-    # plate it used to stand on (0.10) is gone with every other L0 plate, so
-    # the shell starts at the floor datum itself, 0.
-    check("base_y = the storey-0 floor, i.e. 0 — not the old 0.10",
-          all(near(w["base_y"], 0.0) for w in a
-              if near(w["height"], WALL_H) and not w.get("glass"))
-          and not any(near(w["base_y"], 0.10) for w in a
-                      if near(w["height"], WALL_H)),
+    # THE FOOT OF A STOREY-0 WALL IS THE TERRAIN (Ein Boden E5a) — and since
+    # the finding round of 2026-08-21 it reaches SINK metres INTO it (§ A16.9).
+    # The old room plate (0.10) it used to stand on is gone with every other
+    # L0 plate; the skirt is what replaces the plate BODY the foot was
+    # embedded in. Derived by hand: the deepest pre-E5a foot was the contour
+    # wall's LEVEL_PLATE_TOP 0.08 over a level plate whose body ended at
+    # 0.08 − 0.14 = −0.06, i.e. 0.14 m of material under it.
+    # A FULL-HEIGHT piece is now WALL_H + SINK tall — that is what identifies
+    # it, and its top still lands on WALL_H.
+    check("the storey-0 foot sinks LEVEL_PLATE_THICKNESS into the ground",
+          all(near(w["base_y"], -SINK) and near(w["base_y"] + w["height"], WALL_H)
+              for w in a if near(w["height"], WALL_H + SINK)),
+          str(sorted({w["base_y"] for w in a})))
+    check("RED: no storey-0 foot on the old 0.10 room plate — nor on a bare 0",
+          not any(near(w["base_y"], 0.10) or near(w["base_y"], 0.0)
+                  for w in a if near(w["height"], WALL_H + SINK)),
           str(sorted({w["base_y"] for w in a})))
 
     # Room a in world metres: x −4…0 (4 wide), z −4…−1 (3 deep).
@@ -328,25 +347,31 @@ def test_room_walls() -> None:
           len(north) == 5, str(len(north)))
     # Window: width_m 2.0 IS 2 world metres (k = 1), centred at t = 2.0 on the
     # 4 m edge → span [1.0, 3.0].
-    solid_n = sorted([w for w in north if near(w["height"], WALL_H)],
-                     key=lambda w: w["from"][0])
+    full = [w for w in north if not w.get("glass")
+            and near(w["height"], WALL_H + SINK)]
+    solid_n = sorted(full, key=lambda w: w["from"][0])
     check("the opening is the declared 2 metres wide",
           len(solid_n) == 2 and near(solid_n[0]["to"][0], -4.0 + 1.0)
           and near(solid_n[1]["from"][0], -4.0 + 3.0),
           str([[w["from"], w["to"]] for w in solid_n]))
     glass = [w for w in north if w.get("glass")]
     check("exactly one glass pane", len(glass) == 1)
-    check("glass sits at sill_m 0.9 and is height_m 1.2 tall",
+    # THE SKIRT IS FOR FEET ONLY. Glass and head start further UP the wall and
+    # are untouched — 0.9 and 2.1 are the same numbers as before the skirt.
+    check("glass sits at sill_m 0.9 and is height_m 1.2 tall — NO skirt",
           len(glass) == 1 and near(glass[0]["base_y"], 0.0 + 0.9)
           and near(glass[0]["height"], 1.2), str(glass))
     check("glass is thinner than the wall and carries no texture kind",
           glass and near(glass[0]["thickness"], 0.042)
           and "texture_kind" not in glass[0], str(glass))
     band = sorted([w for w in north if not w.get("glass")
-                   and not near(w["height"], WALL_H)],
+                   and not near(w["height"], WALL_H + SINK)],
                   key=lambda w: w["base_y"])
-    check("sill segment 0 → 0.9 and head segment 2.1 → 2.85",
-          len(band) == 2 and near(band[0]["height"], 0.9)
+    # The SILL stands on the floor, so it gets the skirt: −0.14 → 0.9, i.e.
+    # 1.04 tall. The HEAD hangs at 2.1 and keeps its 0.75.
+    check("sill −SINK → 0.9 (skirted) and head 2.1 → 2.85 (not)",
+          len(band) == 2 and near(band[0]["base_y"], -SINK)
+          and near(band[0]["height"], 0.9 + SINK)
           and near(band[1]["base_y"], 0.0 + 2.1)
           and near(band[1]["height"], WALL_H - 2.1), str(band))
 
@@ -696,6 +721,81 @@ def test_openings_without_walls() -> None:
     check("an OUTDOOR room with a drawn door reports the same way",
           [(p["kind"], p.get("room_count")) for p in outdoor["problems"]]
           == [("openings_without_walls", 1)], str(outdoor["problems"]))
+
+
+def test_wall_skirt() -> None:
+    """THE SKIRT OF A STOREY-0 WALL (§ A16.9, finding round 2026-08-21).
+
+    A wall foot is a straight horizontal line; the ground under it is not. Until
+    E5a that never showed, because the foot was EMBEDDED in a plate body — a
+    contour wall at LEVEL_PLATE_TOP 0.08 over a level plate reaching down to
+    0.08 − 0.14 = −0.06, i.e. 0.14 m of material under it. E5a deleted the
+    plate, the foot met the bare terrain, and every millimetre the ground drops
+    away opened a lit gap.
+
+    The wall keeps that 0.14 m as a skirt INTO the terrain. Derived by hand,
+    both ways:
+
+        storey 0, contour   base −0.14, height 2.85 + 0.14 = 2.99, top 2.85
+        storey 0, room      base −0.14, height           = 2.99, top 2.85
+        storey 1, contour   base  3.08, height           = 2.85, top 5.93
+        storey 1, room      base  3.10, height           = 2.85, top 5.95
+
+    THE TWO PROPERTIES THAT MAKE IT SAFE. The TOP never moves (the height grows
+    by exactly the skirt), so nothing above the floor is touched; and a DECLARED
+    storey is not skirted at all, because its plate is still there — 0.14 would
+    be precisely the depth at which a contour wall's foot reached the level
+    plate's UNDERSIDE and started hanging out of the ceiling below.
+    """
+    print("\n[4a] the storey-0 wall skirt — 0.14 m into the ground, top fixed")
+    sc = scene([UPPER])
+    g_contour = [w for w in sc["walls"]
+                 if not w.get("room_id") and w["level"] == 0]
+    u_contour = [w for w in sc["walls"]
+                 if not w.get("room_id") and w["level"] == 1]
+    check("storey-0 contour pieces sink to −0.14 and top out on 2.85",
+          g_contour and all(near(w["base_y"], -SINK)
+                            and near(w["base_y"] + w["height"], WALL_H)
+                            for w in g_contour),
+          str(sorted({(w["base_y"], w["height"]) for w in g_contour})))
+    check("RED: no storey-0 contour foot on the old LEVEL_PLATE_TOP 0.08",
+          not any(near(w["base_y"], 0.08) for w in g_contour),
+          str(sorted({w["base_y"] for w in g_contour})))
+    # A DECLARED STOREY DID NOT MOVE BY A MILLIMETRE (§ A16.9).
+    check("storey-1 contour keeps 3.08 / 2.85 — no skirt on a plate",
+          u_contour and all(near(w["base_y"], 1 * STOREY + 0.08)
+                            and near(w["height"], WALL_H)
+                            for w in u_contour),
+          str(sorted({(w["base_y"], w["height"]) for w in u_contour})))
+    up_room = walls_of(sc, "up")
+    check("storey-1 room walls keep 3.10 / 2.85 either",
+          up_room and all(near(w["base_y"], 1 * STOREY + 0.10)
+                          and near(w["height"], WALL_H)
+                          for w in up_room if not w.get("glass")),
+          str(sorted({(w["base_y"], w["height"]) for w in up_room})))
+    # THE CEILING OF THE MARGIN, hand-checked: sunk by the skirt, a storey-1
+    # contour foot would land exactly on the level plate's underside (3.08 −
+    # 0.14 = 2.94 = 3.08 − LEVEL_PLATE_THICKNESS) and be visible from below.
+    # That is why the skirt is storey-0 only, and why 0.14 is its largest
+    # defensible value rather than an arbitrary one.
+    check("the margin is exactly the level plate's body (its own ceiling)",
+          near(SINK, scene_recipe.LEVEL_PLATE_THICKNESS)
+          and near(scene_recipe.WALL_SINK_M, SINK),
+          f"{scene_recipe.WALL_SINK_M} vs {SINK}")
+    # THE FLOOR OF THE MARGIN: a wall's outer face lies WALL_THICKNESS/2
+    # outside the hull the plateau stamp follows, and just outside the plot the
+    # ground may fall at the full max_slope_deg 40°.
+    ramp = (scene_recipe.WALL_THICKNESS / 2) * math.tan(math.radians(40.0))
+    check("...and it clears the plateau-ramp case 0.029 m by 4.8x",
+          SINK > ramp * 4 and near(ramp, 0.0294, eps=1e-3), f"{ramp:.4f} m")
+    # A DOORWAY IS NOT A WALL: its base_y is the STANDING height of the rooms
+    # it joins, and the skirt must not have touched it.
+    door_sc = scene_recipe.compose_scene(contour_room_fixture(),
+                                         plan_width_m=PLAN_W)
+    check("a doorway threshold keeps the floor, not the skirt",
+          door_sc["doorways"] and all(near(d["base_y"], 0.0)
+                                      for d in door_sc["doorways"]),
+          str([d["base_y"] for d in door_sc["doorways"]]))
 
 
 def test_contour_wall_texture() -> None:
@@ -1648,9 +1748,16 @@ def test_floor_relation() -> None:
           near(prop["bottom_y"], floor_y + scene_recipe.PROP_CLEARANCE)
           and near(prop["bottom_y"], 0.01), str(prop["bottom_y"]))
     walls = [w for w in sc["walls"] if w.get("room_id") == "a"]
-    check("...and the walls of that room start at the very same 0.00",
-          walls and all(near(w["base_y"], floor_y) for w in walls
-                        if near(w["height"], WALL_H) and not w.get("glass")),
+    full = [w for w in walls if near(w["height"], WALL_H + SINK)]
+    # THE WALL MEETS THAT SAME 0.00 — and goes on past it. Since the finding
+    # round of 2026-08-21 the foot carries the skirt of § A16.9, so the number
+    # that says "the wall stands on this floor" is its TOP minus its height:
+    # −0.14 + 2.99 − 2.85 = 0.00. The skirt is below the floor, in the ground,
+    # where the level plate's body used to be.
+    check("...and the walls of that room meet the very same 0.00",
+          full and all(near(w["base_y"] + w["height"] - WALL_H, floor_y)
+                       for w in full)
+          and all(near(w["base_y"], floor_y - SINK) for w in full),
           str(sorted({w["base_y"] for w in walls})))
     check("red: the three datums of the plate era are gone (0.08/0.10/0.11)",
           not any(near(prop["bottom_y"], t) for t in (0.08, 0.10, 0.11)),
@@ -3038,6 +3145,7 @@ def main() -> int:
     test_no_building_entrance()
     test_rooms_without_layout()
     test_openings_without_walls()
+    test_wall_skirt()
     test_contour_wall_texture()
     test_area_locations()
     test_boundary_only_datum()

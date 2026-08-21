@@ -188,9 +188,9 @@ function checkEq(label, actual, expected) {
 
 const [W, walk] = await loadPure('client3d/src/scene/waterPlaneMath.ts',
                                  'client3d/src/game/walk.ts');
-const { WATER_FOAM_ALPHA, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
-  WATER_SHORE_BAND_M, waterAlpha, waterFoam, waterLevelOf, waterShoreAlpha,
-  waterShoreBody, waterShoreGlsl } = W;
+const { WATER_EDGE_FADE_M, WATER_FOAM_ALPHA, WATER_FOAM_BAND_M,
+  WATER_FOAM_STRENGTH, WATER_SHORE_BAND_M, waterAlpha, waterEdgeFade, waterFoam,
+  waterLevelOf, waterShoreAlpha, waterShoreBody, waterShoreGlsl } = W;
 const { floatRootY, groundWaterLevel } = walk;
 
 // ── [1] the level comes from the payload ───────────────────────────────────
@@ -261,6 +261,27 @@ check('the easing is the same smoothstep the arithmetic above uses',
   /return c \* c \* \( 3\.0 - 2\.0 \* c \);/.test(glsl) ? 1 : 0, 1);
 check('no screen-space depth texture is sampled anywhere',
   /depthTexture|tDepth|viewZ/.test(glsl + body) ? 1 : 0, 0);
+
+// ── [2d] the rim is faded, not merely discarded ────────────────────────────
+// `waterAlpha(0)` is 0.15 BY DESIGN — the foam gives it back so the last hand's
+// width of water can be seen. The discard then cut that 0.15 off at a boundary
+// with no width, and a step with no width crawls sub-pixel as the camera moves.
+// The fade is the one factor that reaches 0 exactly where the discard begins.
+console.log('\n[2d] the rim fades to the discard instead of stepping to it');
+check('the fade floor is 5 cm of depth', WATER_EDGE_FADE_M, 0.05);
+check('RED: without it the rim was drawn at', waterAlpha(0), 0.15);
+check('…with it the rim is drawn at', waterAlpha(0) * waterEdgeFade(0, 0.05), 0);
+check('half a pixel in, half the fade', waterEdgeFade(0.025, 0.05), 0.5);
+check('one pixel in, the fade is done', waterEdgeFade(0.05, 0.05), 1);
+check('a pixel narrower than the floor still spends the floor',
+  waterEdgeFade(0.025, 0.001), 0.5);
+check('a metre-wide pixel far away spends the metre',
+  waterEdgeFade(0.5, 1), 0.5);
+check('the shader multiplies the fade in',
+  /\* clamp\( wsDepth \/ wsEdge, 0\.0, 1\.0 \)/.test(body) ? 1 : 0, 1);
+check('…and takes its derivative BEFORE the discard',
+  body.indexOf('fwidth( wsDepth )')
+    < body.indexOf('if ( wsDepth <= 0.0 ) discard;') ? 1 : 0, 1);
 
 // ── [3] the E1 invariant, and the red counter-probe ────────────────────────
 console.log('\n[3] the E1 carve invariant, re-derived on the client side');

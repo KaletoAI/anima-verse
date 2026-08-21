@@ -26,7 +26,7 @@ import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   anchorFigureBind, figureRootY,
   applyClipOutline, disposeClipMaterials, pickModelVariant, placeModelSpec, plateTargets,
-  SpecVerifier,
+  SpecVerifier, flatGround, storeyGroundLift,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
@@ -435,11 +435,23 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // geometry, so the rendered BBox stays the unclipped one (§ B1). The
     // report names where clipping is active instead of pretending to measure it.
     const verifyNotes: string[] = []
+    // THE STOREY-0 GROUND of this preview (§ A16.9). The stage is a flat plane
+    // on y = 0, so the shared rule is fed a flat sampler and answers 0 for
+    // every placement — the preview follows the same law as the 3D client
+    // rather than being exempt from it, which is exactly what stops the two
+    // renderers from drifting apart again. Give this stage relief one day and
+    // the placements follow without a second rule being written.
+    const STAGE_DATUM_Y = 0
+    const stageGround = flatGround(STAGE_DATUM_Y)
+    const groundLiftOf = (spec: SceneModelSpec): number =>
+      (spec.role === 'building' ? 0
+        : storeyGroundLift(spec.level, spec.anchor[0], spec.anchor[1],
+                           STAGE_DATUM_Y, stageGround))
     const verifyPlacement = (obj: Object3D, spec: SceneModelSpec) => {
       if (spec.clip_outline?.length) {
         verifyNotes.push(`${spec.role}:${spec.id} clip: ${spec.clip_outline.length} points`)
       }
-      verifier.placement(obj, spec, VERIFY_ORIGIN)
+      verifier.placement(obj, spec, VERIFY_ORIGIN, 0, groundLiftOf(spec))
     }
     // The building entry is fetched regardless of the overlay toggle — the
     // model panel's fields read it.
@@ -494,6 +506,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // result and seat its BBox on bottom_y / anchor.
     const placeSpec = (source: Object3D, spec: SceneModelSpec): Object3D => {
       const outer = placeModelSpec(THREE, source, spec)
+      // The same lift the 3D client applies (§ A16.9); on this flat stage it
+      // is 0 — the call is what matters, not the number it returns today.
+      outer.position.y += groundLiftOf(spec)
       outer.userData.__noDispose = true
       boxes.add(outer)
       // Room clip (§ B1): the client discards diorama fragments outside the
