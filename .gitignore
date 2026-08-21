@@ -194,8 +194,12 @@ worlds/*/suitability_cases.json
 worlds/*/model_capabilities.json
 exports/
 
-# Shared 3D animation clips are TRACKED (shared/models/clips/**) — the code
-# relies on them (kind = file name, set = subdirectory).
+# Shared 3D animation clips: shared/models/clips/** is the FREE library
+# (CMU-derived, redistributable) and TRACKED. shared/models/clips-licensed/**
+# holds Mixamo downloads and bought packs — usable, not redistributable —
+# and stays per installation (only its README travels).
+shared/models/clips-licensed/**
+!shared/models/clips-licensed/README.md
 # Shared test figure (Mixamo standard character), provided per installation
 shared/models/figure/*.fbx
 shared/models/figure/*.glb

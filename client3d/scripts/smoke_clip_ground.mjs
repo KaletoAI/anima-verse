@@ -162,7 +162,11 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-const CLIP_DIR = join(ROOT, 'shared/models/clips');
+// The numbers below were measured on the MIXAMO library, which lives in the
+// LICENSED clip directory since 2026-08-21 (the free one holds the CMU
+// conversions, authored on the floor — a different yardstick). Per
+// installation, not in git: without it this check has nothing to measure.
+const CLIP_DIR = join(ROOT, 'shared/models/clips-licensed');
 const MODELS = join(ROOT, 'client3d/public/models');
 /** The rigs the chain is walked on. `Test3_mia` comes out of the server's own
  *  mesh pipeline (normalised, the everyday case), `Soldier` is the Mixamo
@@ -258,7 +262,15 @@ async function main() {
   console.log('\n[2] the whole chain on real rigs + the neutral clip library');
   const fbx = new FBXLoader();
   const wanted = ['idle', 'walk', 'swim', 'laying', 'sleep', 'sit'];
-  const files = (await readdir(CLIP_DIR)).filter((n) => n.endsWith('.fbx')).sort();
+  let files = [];
+  try {
+    files = (await readdir(CLIP_DIR)).filter((n) => n.endsWith('.fbx')).sort();
+  } catch { files = []; }
+  if (!files.length) {
+    console.log(`  skip — no licensed clip library at ${CLIP_DIR} (Mixamo clips are per installation)`);
+    console.log(`\n${passed} ok, ${failed} failed`);
+    process.exit(failed ? 1 : 0);
+  }
   const library = [];
   for (const name of files) {
     // The standing reference of `adaptExternalClips` is derived ACROSS the

@@ -188,7 +188,7 @@ def test_listing() -> None:
           set(data) == {"clips", "kinds", "pair_kinds", "pairs", "clip_sets", "sets"},
           str(sorted(data)))
     check("per-clip fields",
-          set(data["clips"][0]) == {"kind", "role", "set", "name", "filename", "url", "size"},
+          set(data["clips"][0]) == {"kind", "role", "set", "source", "name", "filename", "url", "size"},
           str(sorted(data["clips"][0])))
     check("pairs carries the sidecar of every complete pair",
           data["pair_kinds"] == ["hug"] and data["pairs"]["hug"]["duration_s"] == 2.0
@@ -231,6 +231,49 @@ def test_serving() -> None:
           missing is not None and not missing.is_file())
 
 
+def test_licensed() -> None:
+    """The second library: `<ANIMATION_CLIPS_DIR>-licensed` (no second env var
+    set here). Hand-derived: a licensed `walk.fbx` is a NEW kind in the union;
+    a licensed `sit.fbx` SHADES the free root sit (same rel) — the entry's
+    source flips to licensed, its url gets the `licensed/` prefix, and the
+    free file keeps serving nothing; `male/sit.fbx` (free only) stays free.
+    Serving: `licensed/walk.fbx` and `licensed/male/x.fbx` resolve inside the
+    licensed dir, `licensed/../sit.fbx` and a third segment are refused."""
+    print("\n[7] the licensed library")
+    lic = Path(str(CLIPS) + "-licensed")
+    check("licensed dir derives from ANIMATION_CLIPS_DIR",
+          paths.get_licensed_clips_dir() == lic, str(paths.get_licensed_clips_dir()))
+    lic.mkdir()
+    (lic / "walk.fbx").write_bytes(b"lic-walk")
+    (lic / "sit.fbx").write_bytes(b"lic-sit")
+    (lic / "male").mkdir()
+    (lic / "male" / "x.fbx").write_bytes(b"lic-male-x")
+    entries = {e["rel"]: e for e in ac.clip_entries()}
+    check("walk comes from the licensed library", entries["walk.fbx"]["source"] == "licensed")
+    check("the licensed sit shades the free sit (one entry, licensed)",
+          entries["sit.fbx"]["source"] == "licensed"
+          and entries["sit.fbx"]["path"].read_bytes() == b"lic-sit")
+    check("male/sit stays free", entries["male/sit.fbx"]["source"] == "free")
+    check("kinds are the union", "x" in ac.clip_kinds() and "walk" in ac.clip_kinds())
+    data = assets.list_animation_clips()
+    urls = {c["rel"] if "rel" in c else c["url"]: c for c in data["clips"]}
+    by_url = {c["url"]: c for c in data["clips"]}
+    check("licensed url carries the prefix",
+          "/assets/animation-clips/licensed/sit.fbx" in by_url
+          and "/assets/animation-clips/sit.fbx" not in by_url, str(sorted(by_url)))
+    check("licensed set clip url", "/assets/animation-clips/licensed/male/x.fbx" in by_url)
+    del urls
+    ok = assets.resolve_clip_path("licensed/walk.fbx")
+    check("licensed/walk.fbx resolves into the licensed dir",
+          ok is not None and ok.read_bytes() == b"lic-walk")
+    ok2 = assets.resolve_clip_path("licensed/male/x.fbx")
+    check("licensed/male/x.fbx resolves", ok2 is not None and ok2.is_file())
+    check("licensed/../sit.fbx is refused", assets.resolve_clip_path("licensed/../sit.fbx") is None)
+    check("a third segment is refused", assets.resolve_clip_path("licensed/male/deep/x.fbx") is None)
+    check("plain sit.fbx still resolves into the FREE dir (the file exists there)",
+          assets.resolve_clip_path("sit.fbx") == (CLIPS / "sit.fbx").resolve())
+
+
 def main() -> int:
     build_tree()
     check("ANIMATION_CLIPS_DIR is honoured",
@@ -240,6 +283,7 @@ def main() -> int:
     test_discovery()
     test_listing()
     test_serving()
+    test_licensed()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 
@@ -249,4 +293,5 @@ if __name__ == "__main__":
         sys.exit(main())
     finally:
         shutil.rmtree(CLIPS, ignore_errors=True)
+        shutil.rmtree(str(CLIPS) + "-licensed", ignore_errors=True)
         shutil.rmtree(WORLD, ignore_errors=True)

@@ -1,11 +1,22 @@
-# Shared animation clips
+# Shared animation clips — the FREE library
 
 Skeletal animation clips for the 3D character models, shared across ALL worlds
 (they belong to the rig, not to a character or a world). Served read-only by
 `GET /assets/animation-clips`; the files themselves at
-`GET /assets/animation-clips/[{set}/]{filename}`.
+`GET /assets/animation-clips/[licensed/][{set}/]{filename}`.
 
-Drop the `.fbx` files straight in — no registration, no config.
+Two libraries, one layout:
+
+* **this one** — clips that may be REDISTRIBUTED with the repository (tracked
+  in git). Today: CMU Graphics Lab mocap converted by
+  `scripts/clip_import_cmu.py`, each with a `<kind>.json` sidecar naming its
+  source and the CMU credit.
+* **`../clips-licensed/`** — Mixamo downloads and bought packs: usable in the
+  game, not redistributable, gitignored, per installation. The same
+  `[<set>/]<file>` in both libraries resolves to the licensed one.
+
+Only put a file HERE if its licence allows redistribution. Drop the `.fbx`
+files straight in — no registration, no config.
 
 ## Layout → `kind` + `set`
 

@@ -25,7 +25,16 @@ Both vocabularies are OPEN — a new kind is just a new file, a new set just a
 new directory, nothing is hardcoded. Which set a character uses (and the
 fallback chain when its set lacks a kind) is ``app/core/animation_sets.py``.
 
-This module is the ONE place that scans the clips directory; the assets
+TWO libraries, same layout (``app.core.paths``): ``shared/models/clips`` is
+the FREE one — redistributable clips (CMU-derived), tracked in git — and
+``shared/models/clips-licensed`` the LICENSED one — Mixamo downloads and
+bought packs, usable in the game but not redistributable, gitignored, per
+installation. Every entry carries ``source`` (``free``/``licensed``) and the
+same ``[<set>/]<file>`` in both libraries resolves to the LICENSED file: whoever
+installs a premium pack wants it played. A licensed clip's ``url`` carries a
+``licensed/`` prefix, which is how the route tells the two apart.
+
+This module is the ONE place that scans the clip directories; the assets
 route, the animation sets and the pose presets all read from here.
 """
 import json
@@ -33,7 +42,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.core.paths import get_animation_clips_dir
+from app.core.paths import get_animation_clips_dir, get_animation_clips_dirs
 
 CLIP_EXTS = (".fbx", ".glb", ".gltf")
 PAIR_ROLES = ("a", "b")
@@ -75,17 +84,15 @@ def parse_clip_role(filename: str) -> Tuple[str, str]:
 
 
 def clip_entries() -> List[Dict[str, Any]]:
-    """Every clip in the shared directory as ``{kind, set, path}``, sorted.
+    """Every clip of both libraries as ``{kind, role, set, source, rel, path}``.
 
-    Scans the root (set "") plus exactly ONE level of subdirectories (the
-    directory name, lowercased, is the set). Hidden files and directories
-    (``.`` prefix) are skipped, as is anything without a clip extension.
+    Per library: the root (set "") plus exactly ONE level of subdirectories
+    (the directory name, lowercased, is the set). Hidden files and
+    directories (``.`` prefix) are skipped, as is anything without a clip
+    extension. ``rel`` is ``[<set>/]<file>``; the same ``rel`` in both
+    libraries yields ONE entry, the licensed one.
     """
-    root = get_animation_clips_dir()
-    if not root.exists():
-        return []
-
-    def _files_of(directory: Path, cset: str) -> List[Dict[str, Any]]:
+    def _files_of(directory: Path, cset: str, source: str) -> List[Dict[str, Any]]:
         out = []
         for p in sorted(directory.iterdir()):
             if p.name.startswith(".") or not p.is_file():
@@ -93,15 +100,24 @@ def clip_entries() -> List[Dict[str, Any]]:
             if p.suffix.lower() not in CLIP_EXTS:
                 continue
             kind, role = parse_clip_role(p.name)
-            out.append({"kind": kind, "role": role, "set": cset, "path": p})
+            rel = f"{cset}/{p.name}" if cset else p.name
+            out.append({"kind": kind, "role": role, "set": cset,
+                        "source": source, "rel": rel, "path": p})
         return out
 
-    entries = _files_of(root, "")
-    for d in sorted(root.iterdir()):
-        if d.name.startswith(".") or not d.is_dir():
+    by_rel: Dict[str, Dict[str, Any]] = {}
+    for root, source in get_animation_clips_dirs():
+        if not root.exists():
             continue
-        entries.extend(_files_of(d, d.name.strip().lower()))
-    return entries
+        found = _files_of(root, "", source)
+        for d in sorted(root.iterdir()):
+            if d.name.startswith(".") or not d.is_dir():
+                continue
+            found.extend(_files_of(d, d.name.strip().lower(), source))
+        for e in found:
+            # free is scanned first; a licensed twin replaces it
+            by_rel[e["rel"]] = e
+    return sorted(by_rel.values(), key=lambda e: (e["set"], e["rel"]))
 
 
 def clip_files() -> List[Path]:
@@ -126,9 +142,12 @@ def pair_kinds() -> List[str]:
 def clip_meta(kind: str, cset: str = "") -> Optional[Dict[str, Any]]:
     """The ``<kind>.json`` sidecar of a clip (duration, fps, pair geometry),
     None when there is none. Looked up in the set directory, then the root."""
-    root = get_animation_clips_dir()
-    candidates = [root / cset / f"{kind}.json"] if cset else []
-    candidates.append(root / f"{kind}.json")
+    candidates = []
+    # licensed first — the sidecar belongs to the file that wins
+    for root, _source in reversed(get_animation_clips_dirs()):
+        if cset:
+            candidates.append(root / cset / f"{kind}.json")
+        candidates.append(root / f"{kind}.json")
     for path in candidates:
         if path.is_file():
             try:

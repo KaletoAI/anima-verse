@@ -33,10 +33,11 @@ Options:
     --fps <n>         output frame rate (default 30)
     --cache <dir>     where the downloaded ASF/AMC files are kept
                       (default: storage-independent ~/.cache/anima-verse/cmu)
-    --rig <fbx>       Mixamo skeleton to drive (default: the library's own
-                      idle.fbx, so the new clip shares the skeleton — and the
-                      standing hip height the client normalises on — with
-                      every other clip; x-bot.fbx when no idle clip exists)
+    --rig <fbx>       Mixamo skeleton to drive (default: the first idle.fbx of
+                      the free, then the licensed library, so the new clip
+                      shares the skeleton — and the standing hip height the
+                      client normalises on — with every other clip; x-bot.fbx
+                      when no idle clip exists)
 
 A pair is written as ``<kind>__a.fbx`` + ``<kind>__b.fbx`` (A = first take);
 the sidecar records the anchor geometry both clips share.
@@ -115,9 +116,9 @@ def main() -> int:
         # standing hip height against the library median (figures.ts
         # adaptExternalClips), so a clip on a shorter rig (x-bot, hips 104 cm
         # vs 113 cm) would be read as "crouching" and sink into the ground.
-        rig = paths.get_animation_clips_dir() / "idle.fbx"
-        if not rig.is_file():
-            rig = paths.get_test_figure_dir() / "x-bot.fbx"
+        rig = next((d / "idle.fbx" for d, _src in paths.get_animation_clips_dirs()
+                    if (d / "idle.fbx").is_file()),
+                   paths.get_test_figure_dir() / "x-bot.fbx")
     if not rig.is_file():
         raise SystemExit(f"rig not found: {rig}")
     out = Path(a.out) if a.out else paths.get_animation_clips_dir()

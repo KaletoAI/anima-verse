@@ -67,6 +67,32 @@ def get_animation_clips_dir() -> Path:
     return get_shared_dir() / "models" / "clips"
 
 
+def get_licensed_clips_dir() -> Path:
+    """The LICENSED clip library — Mixamo downloads, bought mocap packs:
+    usable in the game, but not redistributable, so it is gitignored and
+    lives per installation. ``shared/models/clips`` is the redistributable
+    one (CMU-derived, tracked). Both are scanned (``animation_clips``); the
+    same file name in both → the licensed one wins.
+
+    ``ANIMATION_CLIPS_LICENSED_DIR`` overrides the location (tests). With only
+    ``ANIMATION_CLIPS_DIR`` set, the licensed directory is ``<that>-licensed``
+    — a test that sets the one never reads the real other.
+    """
+    override = os.environ.get("ANIMATION_CLIPS_LICENSED_DIR", "").strip()
+    if override:
+        return Path(override)
+    free = os.environ.get("ANIMATION_CLIPS_DIR", "").strip()
+    if free:
+        return Path(free + "-licensed")
+    return get_shared_dir() / "models" / "clips-licensed"
+
+
+def get_animation_clips_dirs() -> list:
+    """Both clip libraries, free first: ``[(dir, source)]`` with source
+    ``"free"`` / ``"licensed"``."""
+    return [(get_animation_clips_dir(), "free"), (get_licensed_clips_dir(), "licensed")]
+
+
 def get_game_audio_dir() -> Path:
     """Music and ambience for the 3D client — world-independent user data in
     ``<repo>/audio/`` (``music/day|night/*``, ``ambient/<terrain>/*``).

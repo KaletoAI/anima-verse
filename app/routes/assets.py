@@ -27,7 +27,7 @@ from app.core.animation_clips import (CLIP_EXTS, clip_entries, clip_meta,
                                       pair_kinds)
 from app.core.http_files import etag_file_response
 from app.core.log import get_logger
-from app.core.paths import get_animation_clips_dir
+from app.core.paths import get_animation_clips_dir, get_licensed_clips_dir
 
 logger = get_logger(__name__)
 
@@ -57,10 +57,12 @@ def list_animation_clips() -> Dict[str, Any]:
             "kind": entry["kind"],
             "role": entry["role"],
             "set": cset,
+            "source": entry["source"],
             "name": p.stem,
             "filename": p.name,
             "url": "/assets/animation-clips/"
-                   + (f"{cset}/{p.name}" if cset else p.name),
+                   + ("licensed/" if entry["source"] == "licensed" else "")
+                   + entry["rel"],
             "size": p.stat().st_size,
         })
     from app.core.animation_sets import available_sets
@@ -86,21 +88,26 @@ def list_animation_clips() -> Dict[str, Any]:
 
 
 def resolve_clip_path(rel: str) -> Optional[Path]:
-    """``<file>`` or ``<set>/<file>`` → the clip file, or None when the request
+    """``[licensed/][<set>/]<file>`` → the clip file, or None when the request
     is not a legal clip reference.
 
-    Deliberately strict, because this is the one route taking a path from the
-    client: at most the two segments the layout allows, no empty/relative
-    segment, no backslash, a clip extension, and the resolved path must still
-    sit inside the clips directory (a symlinked set directory pointing out of
-    it is rejected too)."""
+    The leading ``licensed/`` segment selects the licensed library; without
+    it the free one is meant. At most one set segment. Every segment must be
+    a plain name — no empty segment, no ``.``/``..``, no backslash — and the
+    resolved path must stay inside its library (a symlink pointing out is
+    refused too, hence ``resolve()`` on both sides). Only clip extensions.
+    """
     segments = rel.split("/")
+    base = get_animation_clips_dir()
+    if segments and segments[0] == "licensed":
+        base = get_licensed_clips_dir()
+        segments = segments[1:]
     if not 1 <= len(segments) <= 2:
         return None
     for seg in segments:
         if not seg or seg in (".", "..") or "\\" in seg:
             return None
-    base = get_animation_clips_dir().resolve()
+    base = base.resolve()
     path = base.joinpath(*segments).resolve()
     if not path.is_relative_to(base):
         return None
@@ -112,7 +119,7 @@ def resolve_clip_path(rel: str) -> Optional[Path]:
 @router.get("/animation-clips/{rel:path}")
 def get_animation_clip(rel: str, request: Request):
     """Serves a clip file — ``<file>`` for a neutral clip, ``<set>/<file>`` for
-    a set clip. ETag + If-None-Match; clips are immutable in practice, so they
+    a set clip, ``licensed/…`` for one out of the licensed library. ETag + If-None-Match; clips are immutable in practice, so they
     may be cached hard."""
     path = resolve_clip_path(rel)
     if path is None:
