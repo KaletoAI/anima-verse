@@ -165,18 +165,18 @@ export function plateCeiling(info: GroundModelInfo | null | undefined): number {
  * WHERE A FIGURE STANDS when the tile and the world disagree — THE HIGHER ONE
  * WINS (user decision 2026-08-13, acceptance finding 4).
  *
- * A tile's walking height is a TILE answer: the plate it carries, the model
- * skin it rays, the scene relief on top — all measured from the location's own
- * centre. The WORLD relief (§ A16) runs on underneath a footprint that does not
- * level its ground (`level_ground` is opt-in), and until this rule the client
+ * A tile's walking height is a TILE answer: the declared floor of a room, or a
+ * DECLARED storey's plate — measured from the location's own centre. The WORLD
+ * ground (§ A16) runs on underneath a NATURAL footprint (one that
+ * `draws_built_floor` says nothing about), and until this rule the client
  * never asked it inside a footprint: the figure walked at plate height while
  * the landscape rose through the plate around it, and crossing the footprint
  * border it JUMPED, because a traveller outside was already sampled off the
  * world field.
  *
- * Under a levelling footprint this is inert by construction: the server
- * flattens the field there to exactly the plateau the tile stands on, so both
- * answers are the same number and the maximum is that number.
+ * Under a BUILT footprint this is inert by construction: the bake stamps the
+ * field there to exactly the plateau the tile stands on, so both answers are
+ * the same number and the maximum is that number.
  *
  * The price is named in the spec (§ A16): a model that dips BELOW the world
  * ground — the lake bed of an area model, a sunken courtyard — is undercut by

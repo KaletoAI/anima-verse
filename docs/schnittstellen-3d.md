@@ -70,8 +70,9 @@
 >    >   Meter, ebenfalls relativ zur Minimal-Ecke des Raums. Fehlendes
 >    >   `model_at` heißt weiterhin „zentriert", also `[w/2, d/2]`.
 >    > * **`layout.level`, `rotation`, `floor_offset_y`, `model_offset_y`,
->    >   `offset_y`, `always_visible`, `no_walls`, `relief_flat`,
->    >   `clip_model`, `surfaces`** — unverändert.
+>    >   `offset_y`, `always_visible`, `no_walls`, `clip_model`,
+>    >   `surfaces`** — unverändert. (`relief_flat` ist seit Nr. 12 gelöscht;
+>    >   `floor_offset_y` ist seither reine Feinjustage, keine Wasserlinie.)
 >    > * **Öffnungen an Raumkanten** (`layout.openings[]`): `at` bleibt eine
 >    >   **Fraktion der Kante** — ein kantenrelatives Verhältnis ist keine
 >    >   Weltgröße —, `width_m`/`height_m`/`sill_m` bleiben Meter. Genauso
@@ -92,22 +93,13 @@
 >    >   `(f − 0,5) · extent_m` auf dem Weg dorthin. `scene.extent_m` bleibt
 >    >   als Feld erhalten (Verbraucher-Verträge: Laderadius, Viewport,
 >    >   Backdrop) und trägt weiterhin die Bounding-Box-Breite.
->    > * **EINE Ausnahme, und die ist neu:** das Relief-Stützgitter (Nr. 14)
->    >   spannt nicht mehr über ein Quadrat um den PIN, sondern über die
->    >   **Bounding-Box der Boundary** — ein Quadrat der Kante `extent_m`,
->    >   zentriert auf diese Box (`scene_recipe.terrain_frame`). 17 × 17
->    >   Stützpunkte und die Rand-0-Regel bleiben, ebenso die Polygon-
->    >   Klemmung aus v6 Nr. 4. Für eine um ihren Pin gezeichnete Boundary ist
->    >   das exakt der alte Rahmen; für eine außermittige verschiebt sich das
->    >   Feld. Deshalb trägt der Payload jetzt
->    >   **`scene.terrain.origin = [x0, z0]`** (Minimal-Ecke des Gitters in
->    >   lokalen Metern) — ein Client MUSS künftig
->    >   `u = (x − origin[0]) / (step · n)` rechnen statt
->    >   `u = x / extent_m + 0,5`. Bis die Client-Welle das nachzieht, bleibt
->    >   die alte Formel für pin-zentrierte Boundaries richtig.
->    > * **Nicht Teil dieser Welle:** der Grundriss-Editor
->    >   (`frontend/`) und der 3D-Client (`client3d/`) — der Szenen-Payload
->    >   ist bis auf `terrain.origin` unverändert, sie laufen weiter.
+>    > * **~~Die Ausnahme des Relief-Stützgitters~~ — GEGENSTANDSLOS seit
+>    >   Nr. 12** (2026-08-21). Sie beschrieb, wie das szenen-eigene
+>    >   17 × 17-Gitter über die Bounding-Box der Boundary spannt und dafür
+>    >   `scene.terrain.origin` mitbekommt. Das ganze Gitter ist gelöscht
+>    >   (Nr. 12 / § A16, v5-Präambel Nr. 14): es gibt kein `scene.terrain`
+>    >   mehr, keinen `terrain_frame` und keine zweite Höhenquelle neben
+>    >   `h_final`.
 >
 > 3. **EIN Skalengesetz, jetzt wirklich überall: real_size.** `tile_fit`
 >    („größte Seite füllt die Kante") ist gelöscht; auch Gebäude- und
@@ -155,7 +147,7 @@
 > 6. **Punkt-in-Location: die kleinste FLÄCHE gewinnt** (E1.2, Nachfolger
 >    der Kleinste-Breite-Regel in § A1.1). Überlappung bleibt legal; der
 >    Karten-Apply warnt, verbietet nicht.
-> 7. **Die Planierung (§ A16.1) wird ein Polygon-Distanzfeld**: innen = im
+> 7. **Die Planierung (§ A16.4) wird ein Polygon-Distanzfeld**: innen = im
 >    Polygon, Rampenring = Kanten-Distanz ≤ Rampenbreite; die Plateau-Höhe
 >    wird an einem **garantiert inneren, deterministischen Punkt** gelesen
 >    (nicht am Zentroid — der liegt bei konkaven Formen ggf. außerhalb).
@@ -170,8 +162,9 @@
 >    Der Grundriss-Editor zeichnet im Viewport der Boundary-Bounding-Box
 >    (Meter-Raster, Snap an Boundary-Kanten und Nachbar-Wände,
 >    1,70-m-Referenzfigur); offene/geschlossene **Unterbereiche** sind die
->    Bedien-Sprache für die bisherige Flag-Trias (`always_visible` +
->    `no_walls` [+ `relief_flat`]) — die Felder selbst bleiben.
+>    Bedien-Sprache für das Flag-Paar (`always_visible` + `no_walls`) — die
+>    Felder selbst bleiben. (`relief_flat` ist mit dem Szenen-Relief gelöscht,
+>    Nr. 12.)
 >
 > 10. **~~`map3d.rotation`~~ ("Rotation on tile") — ERSATZLOS GESTRICHEN**
 >     (2026-08-20). Sie drehte das Gebäude-Mesh um genau die Achse, die der
@@ -244,6 +237,55 @@
 >       Korrektur, keine Regression. Ebenso entfällt der Rotations-Tausch in
 >       der modellabgeleiteten Rechteckgröße des Editors (er war die
 >       Kompensation genau dieser Lücke).
+>
+> 12. **EIN Boden — die Höhe ist eine Funktion, das Material ein Schnitt, das
+>     Wasser eine Zahl** (2026-08-21, `development_instructions/plan-ein-boden.md`,
+>     Etappen E1–E6). Die Welt hatte zwei unabhängige Böden — das Weltgelände
+>     und die flachen Platten der Location-Szene —, und der erste war in sich
+>     uneins: dieselbe Stelle trug auf Übersicht und Kachel bis zu **1,104 m**
+>     Unterschied. Ab jetzt gilt wörtlich, ausgeschrieben in **§ A16**:
+>
+>     * **Eine Höhen-Wahrheit.** `h_final(x, z)` ist eine reine Funktion,
+>       serverseitig aus fünf Stufen gebacken (Höhenflächen → Mikro-Relief →
+>       Wasser-Carve → Location-Plateaus → Zonen-Wasser-Carve). Jede Rasterung
+>       — Übersicht, Kachel, Mip-Ebene — ist nichts als diese Funktion auf einem
+>       Gitter abgetastet, und zwei Gitter tragen an jedem gemeinsamen Punkt
+>       dieselbe Zahl. Keine Stufe misst mehr „eine Rasterzelle"; alle Breiten
+>       sind Meter.
+>     * **Kein Renderer misst Dreiecke, um den Boden zu finden.** Die
+>       Mesh-Raycast-Stufen der Figuren-, Spot- und Klick-Ketten sind gelöscht;
+>       Render-LOD (CDLOD) ist reine Sampling-Dichte, und die Spiel-Logik
+>       sampelt immer die feinste Ebene — ein Höhensprung beim Zoomen ist ein
+>       Rendering-Übergang, nie ein Datenwechsel.
+>     * **Ein Layer-Schnitt für alles Boden-Material.** Karten-Flächen,
+>       Natur-Zonen und **Etage-0-Raumböden** sind Layer EINER Fläche; pro
+>       Stelle gewinnt genau einer (der letzte enthaltende Eintrag), und die
+>       Übergangsbreite ist `edge_blend_m` — je Terrain-Art (Default 1,5 m), je
+>       Raumboden (Default 0, der harte Schnitt). Drape-Stapel,
+>       renderOrder-/polygonOffset-Leitern und Alpha-Fransen sind ersatzlos weg.
+>     * **Auf Etage 0 gibt es keine Bodenplatte.** `plates[]` trägt nur noch
+>       DEKLARIERTE Etagen (`level != 0`); die Etage-0-Räume reisen als
+>       `floor_plan`-Polygone mit. `LEVEL_PLATE_TOP` / `ROOM_PLATE_TOP` /
+>       `OVERLAY_SURFACE_LIFT` sind ausschließlich die Datums einer deklarierten
+>       Etage. Die Kachel-Fußabdruckplatte, ihr Sockel und der Backstop sind
+>       gelöscht, ebenso das Payload-Flag `natural_floor`.
+>     * **`level_ground` gibt es nicht mehr.** Wer sein Grundstück planiert,
+>       entscheidet `models.heightfield.draws_built_floor` — eine gezeichnete
+>       Gebäude-Kontur ODER mindestens ein geschlossener Raum. Die Natur stanzt
+>       nichts; ihr Boden IST das Relief.
+>     * **Wasser ist die einzige ebene Sonderfläche.** Eine gemalte Fläche wie
+>       ein Wasser-Raumboden trägt `water_level` / `water_depth_m` /
+>       `shore_ramp_m`, die Bake carvt ihr Bett (`h ≤ Spiegel − ε`, in jedem
+>       Mip), und der Renderer legt eine ebene Platte auf
+>       `water_level_effective`. `layout.floor_offset_y` ist **keine Wasserlinie
+>       mehr**, sondern nur noch der Feinjustage-Regler eines einzelnen Raums.
+>     * **Das szenen-eigene 17 × 17-Relief ist gelöscht** (`scene.terrain`,
+>       `map3d.relief`, `layout.relief_flat`). Lokales Relief autoriert man über
+>       Höhenflächen der Karte.
+>
+>     Wo unten eine Etage-0-Platte, ein Kachel-Sockel, ein `level_ground`-Flag,
+>     ein `natural_floor`-Payload-Feld, ein Szenen-Relief oder eine gedrapte
+>     Bodenfläche steht, gilt § A16.
 >
 > Wo der Rest des Dokuments „Quadrat", „Kante `plan_width_m`", eine
 > `[0,1]`-Fraktion, `tile_fit`, `map3d.size` oder Kanten-Buchstaben
@@ -329,6 +371,8 @@
 >    dort seine eigene Kachel-/Bühnenplatte darunter. Der 3D-Client zeichnete
 >    eine undurchsichtige 10 × 10-Platte bei y 0,04 in ein Modell hinein, das
 >    von −0,80 bis +2,69 reicht — Seebecken und Strand lagen dahinter.
+>    *(Seit v6 Nr. 12 gilt das für JEDE Location: die Kachelplatte samt Sockel
+>    und Backstop ist ersatzlos gelöscht, der Boden IST das Gelände.)*
 > 6. **Marker tragen zwei Neigungsachsen.** `markers[].tilt` (Kopf hoch/tief)
 >    und `markers[].roll` (seitlich kippen), Grad ±90, Default 0, angewandt
 >    NACH dem Facing im Figuren-System ('YXZ'). Vorher konnte eine Figur nur
@@ -336,11 +380,11 @@
 > 8. **Ein Raum hat einen eigenen Höhen-Offset.** `layout.floor_offset_y`
 >    (Meter, ±, Default 0) hebt den ganzen Raum gegenüber seiner
 >    Etage: Platte, Wände, Props, Marker, Ausgang und das Diorama. Innerhalb
->    eines Gebäudes bleibt er 0 — er ist für Räume, die ein Loch in ein
->    Location-Modell schneiden: dort liegt das Gelände nicht auf Etagenhöhe,
->    und ohne den Offset schwebt der Raum über seinem eigenen Loch. NICHT
->    mitbewegt werden Etagenplatte, Konturwände und Fahrstuhl — die gehören
->    dem Gebäude. `model_offset_y` bleibt daneben, was es ist: die Lage des
+>    eines Gebäudes bleibt er 0. *(Seit v6 Nr. 12 ist das seine EINZIGE Rolle:
+>    reine Feinjustage eines einzelnen Raums. Er gleicht keinen zweiten Boden
+>    mehr aus — es gibt keinen — und er ist KEINE Wasserlinie mehr, dafür gibt
+>    es `layout.water_level`, § A16.3.)* NICHT mitbewegt werden Konturwände
+>    und Fahrstuhl — die gehören dem Gebäude. `model_offset_y` bleibt daneben, was es ist: die Lage des
 >    MODELLS relativ zum Raumboden.
 > 9. **Eine Overlay-Zone mit erklärter Boden-Art bekommt ihre Fläche**
 >    (2026-07-29). Outdoor-Räume außerhalb des Grundrisses liegen auf dem
@@ -348,15 +392,19 @@
 >    ETAGENHÖHE schnitte durch das Gelände. Setzt der Raum aber
 >    `surfaces.floor`, wird die Fläche auf der Höhe der ZONE ausgegeben
 >    (`overlay.y` + 0,01 gegen Z-Fighting), `thickness` 0, mit der Art als
->    `texture_kind`. Damit wird ein gezeichneter Bereich zum See: Raum über
->    das Wasser legen, Boden-Art `water`, `floor_offset_y` auf die
->    Wasserlinie — den Rest macht die Materialklasse. Ohne erklärte Art
+>    `texture_kind`. *(Seit v6 Nr. 12 gilt das nur noch für DEKLARIERTE Etagen
+>    — auf Etage 0 ist eine Zone ein LAYER im Bake, keine Fläche im Payload,
+>    § A16.7/§ A16.9. Und ein gezeichneter Bereich wird zum See, indem sein
+>    Boden eine Wasser-Art trägt und der Bake sein Bett carvt; der Spiegel ist
+>    `layout.water_level`, NICHT mehr `floor_offset_y`.)* Ohne erklärte Art
 >    ändert sich nichts, das Modell zeigt weiter seine eingebackene Textur.
 > 7a. **Der Diorama-Bodenabstand ist 0,02 über dem Boden, auf dem der Raum
->    steht** — der Raumplatte drinnen (0,10 + 0,02 = die vertraute 0,12),
->    dem blanken Etagenboden draußen. Ein Outdoor-Raum hat keine Platte
->    (§ A5); die 0,12 dort zu zitieren hob das Diorama 10 cm über den Boden,
->    während die PROPS desselben Raums schon richtig darauf standen.
+>    steht** — der Raumplatte einer DEKLARIERTEN Etage (0,10 + 0,02 = die
+>    vertraute 0,12), sonst dem Boden selbst. Ein Outdoor-Raum hat keine
+>    Platte (§ A5); die 0,12 dort zu zitieren hob das Diorama 10 cm über den
+>    Boden, während die PROPS desselben Raums schon richtig darauf standen.
+>    *(Seit v6 Nr. 12 ist der Boden auf Etage 0 `h_final`, das Diorama liegt
+>    dort also auf 0,02 — § A16.9.)*
 > 7. **Der Boden einer `ground`-Location liegt auf ihrer Etage 0** — das ist
 >    keine Einstellung. `offset_y` gilt dort nicht; die einzige Angabe ist
 >    `walk_y` (wo im Mesh der Boden sitzt), daraus folgt, wie tief das Modell
@@ -376,8 +424,8 @@
 >     `width_m` bzw. der Boundary-Breite). Die Rezept-Innenwelt
 >     komponiert wie ein Gebäude-Interieur: keine `cutouts`, keine
 >     Overlay-Zonen; Outdoor-Räume behalten ihre Textur-Platten (§ A5).
->     Der Kachelboden des Renderers folgt dort dem Fade (fern unsichtbar
->     wegen Nr. 5, nah als Backstop unter der Detailszene).
+>     *(Der Kachelboden des Renderers, der dort dem Fade folgte und nah als
+>     Backstop diente, ist mit v6 Nr. 12 gelöscht — es gibt nur das Gelände.)*
 > 11. **Kurven sind Editor-Daten, der Payload bleibt Polygon.**
 >     `layout.outline_curves` = `[{edge, c:[u,v]}]` — pro Kante höchstens ein
 >     quadratischer Bezier-Kontrollpunkt (bbox-lokal wie die Outline-Punkte,
@@ -476,63 +524,17 @@
 >     ist die Obergrenze, und eine gespeicherte Öffnung, die stillschweigend
 >     verschwindet, kostet den Autor seine Arbeit. Der Journey-Durchlauf ist
 >     weiterhin eine spätere Etappe.
-> 14. **`scene.terrain` — deterministisches Geländerelief.** Ohne Diorama ist
->     eine Detailszene bretteben; `map3d.relief = {amplitude_m, seed, wave_m?}`
->     (nur zusammen mit `area_model` + `area_detail`, `amplitude_m` 0,05..5
->     REALE Meter, `seed` Pflicht) legt ein Höhenfeld über das Bezugsquadrat.
->     **Gitter:** n × n Zellen → **(n+1) × (n+1) Stützpunkte**, `grid[j][i]`,
->     Stützpunkt (i, j) auf Plan-Fraktion (i/n, j/n) — i West→Ost, j
->     Nord→Süd; `step` = `extent_m / n` Welt-Meter. (Seit v6 Nr. 2 ist (i/n,
->     j/n) eine Koordinate des TERRAIN-RAHMENS, nicht mehr eine Plan-Fraktion
->     der Location — siehe `origin` unten.) **n ist keine Konstante:**
->     `wave_m` ist die Breite EINER Bodenwelle in REALEN Metern (1..200),
->     daraus `n = int(plan_width_m / wave_m + 0,5)` (halb-auf, wie
->     `Math.round`), geklemmt auf [2, 22] — die Obergrenze ist das, was
->     `drapeGeometry` mit `MAX_SPLITS = 5` noch auflöst (e·√2 / 2⁵ = e/22,63);
->     ohne `wave_m` gilt der Default n = 16. Clients lesen n aus dem
->     gelieferten Gitter (`grid.length − 1`) bzw. rechnen mit `step`, nie mit
->     einer eigenen 16. **Rand = 0** (i oder j ∈ {0, n}), damit Nachbarkacheln
->     nahtlos aneinanderstoßen. **Flach = 0**
->     für jeden Stützpunkt, der in der TESSELLIERTEN Hülle eines flachen Raums
->     liegt (Point-in-Poly wie beim Scatter, Nr. 12): flach ist jeder
->     Innenraum (nicht `always_visible` — Wände brauchen ebenen Boden) plus
->     jeder Außenraum mit `layout.relief_flat` (Straße, Platz, Lichtung).
->     Nichts wird geglättet; die Nachbarzelle interpoliert den Übergang.
->     Sonst genau EIN xorshift32-Zug (Nr. 12, Seed 0 → 1) auf dem
->     Raum-Hash der Position:
->     `h(i,j) = (XorShift32((seed_eff + i·73856093 + j·19349663) & 0xFFFFFFFF)
->     .next01() · 2 − 1) · amplitude_m · k` — Welt-Meter, auf 4 Stellen
->     gerundet. Die beiden Konstanten sind Teil des Vertrags. `seed_eff` ist
->     der wirksame Seed nach Nr. 12: `variant_mix(relief.seed, variant_seed)`
->     bei einem Klon, sonst `relief.seed` unverändert.
->     **Zwischen den Stützpunkten bilinear:** mit n = `grid.length − 1` ist
->     `fx = clamp01(u) · n`, Zelle `i = min(int(fx), n − 1)` und `tx = fx − i`
->     (analog v/j/fy) — kein festes Raster, sondern immer das GELIEFERTE.
->     Ein Sample genau auf der Ostkante (u = 1) fällt damit in die letzte
->     Zelle mit tx = 1 und liest den Randstützpunkt. Dieselbe Formel in
->     `scatter_curves.terrain_height` und in `@anima/scene-render`
->     (`sampleTerrain`), § B5a-prüfbar von Hand.
->     **Payload:** `scene.terrain = {step, grid, origin, amplitude_m}`, nur
->     wenn `relief` gesetzt ist; `amplitude_m` steht dort in Welt-Metern.
->     `origin` ist seit v6 Nr. 2 die Minimal-Ecke des Gitters in lokalen
->     Metern (`scene_recipe.terrain_frame`: Quadrat der Kante `extent_m` über
->     der Bounding-Box der Boundary) — die Lattice-Koordinate eines Punktes
->     ist `u = (x − origin[0]) / (step · n)`, `v = (z − origin[1]) / (step ·
->     n)`. Für eine um ihren Pin gezeichnete Boundary ist das identisch mit
->     dem früheren `u = x / extent_m + 0,5`.
->     **Arbeitsteilung:** *der Server hebt alles, was in nicht-flachen Räumen
->     steht* — Prop-`bottom_y` (manuell wie gestreut), Dioramen-`bottom_y`,
->     Marker-`y_world`, jeweils um `terrain_height` am EIGENEN Plan-Anker der
->     Platzierung (Prop-Marker am Anker ihrer Platzierung, damit Möbel und
->     Sitzpunkt gemeinsam steigen). *Die Renderer drapieren nur Boden +
->     `relief`-Platten und sampeln Figuren-Höhen* — Raumplatten
->     nicht-flacher Außenräume tragen dafür `"relief": true` (unterteilen +
->     Vertices über `sampleTerrain` heben); Etagenplatten, Wände und alle
->     übrigen Platten bleiben unverändert. Objekthöhen werden NIE zusätzlich
->     im Renderer gesampelt, sonst zählt die Hebung doppelt.
->     **Flache Räume ändern sich numerisch nicht:** in einem Innenraum oder
->     einem Raum mit `relief_flat` ist jede Zahl bitgleich zu einer Szene ohne
->     Relief. `relief` liegt im gehashten `map3d`, `relief_flat` im
+> 14. **~~`scene.terrain` — deterministisches Geländerelief~~ — ERSATZLOS
+>     GESTRICHEN** (2026-08-21, v6 Nr. 12 / § A16). Das szenen-eigene
+>     17 × 17-Stützgitter ist weg, ohne Ersatzschiene: `scene.terrain` im
+>     Payload, `map3d.relief` samt Sanitizer, `layout.relief_flat`,
+>     `scene_recipe.compose_terrain` / `terrain_frame` / `_clip_grid_to_boundary`,
+>     `relief.scene_ground_lift` / `has_relief` / `ground_lift_at`, die
+>     Relief-Zweige von `scatter_curves` und `sampleTerrain` / `drapeGeometry` /
+>     `TERRAIN_CELLS` in `@anima/scene-render`. Es gibt EIN Höhenfeld
+>     (`world_geometry.ground_y` → § A16), und lokales Relief autoriert man als
+>     **Höhenfläche der Karte**. Kein Alias, kein Fallback-Leser, keine
+>     Migration. Die frühere Formel steht in der Git-Historie.
 >     Raum-Rezept — Regler, Würfel und Checkbox bewegen also die Signatur.
 > 15. **~~`map3d.tile_rotation`~~ — MIT v6 (Nr. 4) ERSATZLOS GESTRICHEN.**
 >     Gedreht wird ausschließlich über den Anker-Pin (§ A1.1); es gibt keine
@@ -728,10 +730,13 @@ Bodenhöhe ist eine **Funktion**, kein Feld.
 > Umbau KEIN einziges Payload-Feld gekostet: die Höhe ist weiterhin
 > **ableitbar** und steht in keiner Position. Wer sie ableitet, sieht Hügel;
 > wer sie irgendwo gespeichert hat, hängt jetzt tatsächlich in der Luft.
-> Die Szenenhöhe einer Location ist ein ZWEITES Feld **auf** diesem
-> (`relief.ground_lift_at` addiert beide) — der Rand eines Szenen-Reliefs ist
-> auf 0 gepinnt, ein Ort auf einem Hügel fährt also mit dem Hügel hoch,
-> statt ein flaches Regal hineinzuschneiden.
+>
+> **Seit „Ein Boden" (v6 Nr. 12, § A16) ist es EIN Feld.** Das zweite —
+> das szenen-eigene Relief, das `relief.ground_lift_at` obendrauf addierte —
+> ist gelöscht. `ground_y(x, z)` IST `h_final(x, z)`: eine Funktion, fünf
+> Backstufen, dieselbe Antwort für Serverregeln, Client-Regeln und das Bild.
+> Ein Ort auf einem Hügel fährt mit dem Hügel hoch, ein gebauter Ort steht auf
+> dem Plateau, das der Bake unter ihm gestanzt hat.
 
 ### A1.3 `GET /play/worldmap` — Payload v2
 
@@ -761,7 +766,7 @@ Fernkulisse eingeschaltet ist, § A17).
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
-| `height_sig` | `str` (10) | Signatur über die autorierten **Höhenflächen** UND die **Platzierungen der planierenden Orte** (E8 Task 2/4 — ein verschobener Ort verschiebt sein Plateau, § A16.1; seit 2026-08-13 zählen nur Orte mit `level_ground`, und das Setzen/Löschen des Flags ändert die Signatur für sich allein) UND über das **Mikro-Relief der gemalten Terrain-Arten** (§ A16.2: relief-tragende Flächen samt der flachen Flächen darüber und den beiden Katalog-Zahlen; relief-freies Malen zählt nicht mit). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.3) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
+| `height_sig` | `str` (10) | Signatur über **alles, was die fünf Backstufen von `h_final` lesen** (§ A16.1): die autorierten Höhenflächen, das Mikro-Relief der gemalten Arten (`relief_inputs` — relief-freies Malen zählt nicht mit), die Wasser-Polygone samt ihren drei Zahlen (`water_basis`), die Zonen-Wasser (`zone_water_basis`) und die **Platzierungen der GEBAUTEN Orte** (ein verschobener Ort verschiebt sein Plateau; ein Ort, der einen Raum schließt oder öffnet, tritt in `placed_footprints()` ein oder aus — `level_ground` ist aus der Signatur verschwunden, § A16.4). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.5) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `game_time` | `{…}` | Die **Spieluhr** zu genau diesem Payload — derselbe Zeitpunkt, auf den alle Reisen unten gerechnet wurden. Fertig aufgeschlüsselt: `canonical` (`"Y0002-D109T14:00:00"`), `total_seconds`, `year`, `day_of_year`, `season`, `season_name`, `day_of_season`, `hour`, `minute`, `second`, `hour_fraction` (Sonnenstand), `weekday`/`weekday_name` (`null`/`""`, wenn die Welt keine Wochen kennt), `label`, `date_label`, `time` (HH:MM), `is_night`, `day_bucket`, `atmosphere` (`{season, temperature, weather, note, label}` — Temperatur/Wetter gehören der **Season**, nicht der Welt; `label` z. B. `"freezing, snow — often fog in the morning"`). **Nie gefoggt** — die Tageszeit sieht jeder. Der Client RENDERT daraus, er rechnet nichts: es gibt keine Weltzeitzone und kein reales Datum mehr, aus dem sich eine Spielstunde ableiten ließe |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
@@ -1063,7 +1068,7 @@ Routers.
 | `POST /world/terrain-areas` | Neue Fläche, **die Id vergibt der Server** → `{status, area}` |
 | `PUT /world/terrain-areas/{id}` | Ersetzt `kind`/`polygon`/`z_order`/`meta` einer **bestehenden** Fläche → `{status, area}`; **404**, wenn es die Id nicht gibt |
 | `DELETE /world/terrain-areas/{id}` | Löscht eine Fläche; **404**, wenn es sie nicht gab |
-| `GET /world/height-areas` | `{areas, sig, step_m, default_step_m, tile_step_m, max_slope_deg, max_step_height_m}` — die autorierten **Höhenflächen** (§ A16) in stabiler Anlege-Reihenfolge, dazu der aktuelle Übersichts-Schritt und der feinste (Befund 14: die Vergröberung ist sonst unsichtbar) sowie der **Kachel-Schritt**, aus dem der Editor die Plateau-Rampe `tan(max_slope_deg) · tile_step_m` rechnet (§ A16.1). Die beiden **Lauf-Grenzen** fahren seit 2026-08-16 mit (dieselben Werte wie in der Weltkarte, aus denselben `core.relief`-Gettern): jeder Editor, der eine Relief-Zahl zeigt, muss auch sagen können, ab wann sie unbegehbar wird — dafür soll niemand die ganze Weltkarte ziehen |
+| `GET /world/height-areas` | `{areas, sig, step_m, default_step_m, tile_step_m, max_slope_deg, max_step_height_m}` — die autorierten **Höhenflächen** (§ A16) in stabiler Anlege-Reihenfolge, dazu der aktuelle Übersichts-Schritt und der feinste (Befund 14: die Vergröberung ist sonst unsichtbar) sowie der **Kachel-Schritt**, aus dem der Editor die Plateau-Rampe `tan(max_slope_deg) · tile_step_m` rechnet (§ A16.4). Die beiden **Lauf-Grenzen** fahren seit 2026-08-16 mit (dieselben Werte wie in der Weltkarte, aus denselben `core.relief`-Gettern): jeder Editor, der eine Relief-Zahl zeigt, muss auch sagen können, ab wann sie unbegehbar wird — dafür soll niemand die ganze Weltkarte ziehen |
 | `POST /world/height-areas` | Neue Höhenfläche, **die Id vergibt der Server** → `{status, area, step_m}`; `step_m` ist der Schritt DANACH (der Schreibvorgang rastert synchron neu), also eine Tatsache und keine Prognose |
 | `PUT /world/height-areas/{id}` | Ersetzt `polygon`/`height_m`/`falloff_m`/`meta` einer **bestehenden** Fläche → `{status, area, step_m}`; **404**, wenn es die Id nicht gibt |
 | `DELETE /world/height-areas/{id}` | Löscht eine Höhenfläche (der Boden dort fällt auf die flache Welt zurück); **404**, wenn es sie nicht gab |
@@ -1254,10 +1259,11 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
   Grounding-Zeile) — die §2e-Formulierung „0,12 × k" der Rezept-Note war
   falsch und ist hiermit zurückgezogen. Euer Client rechnet bereits
   richtig.
-- Figuren stehen indoor auf der ABGETASTETEN Bodenfläche (Diorama-Boden
-  bzw. Rezept-Platte); die Konstante verankert nur Modelle/Platten.
-  Outdoor-Räume haben keine Platte — Figuren stehen auf Level-/
-  Terrain-Höhe.
+- Figuren stehen auf dem Boden, den die DATEN nennen — die Deklaration eines
+  Dioramas, sonst eine DEKLARIERTE Etagen-Platte, sonst `h_final`; die
+  Konstante verankert nur Modelle. **Auf Etage 0 gibt es keine Platte mehr**
+  (v6 Nr. 12, § A16.9), drinnen so wenig wie draußen: dort ist der Boden das
+  Gelände, und der Diorama-Abstand misst von ihm.
 - **Figuren-Basishöhe: 1,70 m** — überall, in **Welt-Metern**, Karte wie
   Innenszene. **Seit E4 ohne jede Umrechnung**: `figures.base_height_m_world`
   ist konstant 1,70 (kein `× k`, kein Legacy `1,7 × storey/3` mehr). Der
@@ -1417,10 +1423,12 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   `no_building_entrance` fragt weiterhin nach Etage 0: eine Tür im ersten
   Stock öffnet die Hülle dort und lässt von außen trotzdem niemanden
   hinein.
-- **Raum-Ebene (Klarstellung v4):** Raum-Bodenplatte Oberkante
+- **Raum-Ebene (Klarstellung v4; seit v6 Nr. 12 nur noch für DEKLARIERTE
+  Etagen, `level != 0` — § A16.9):** Raum-Bodenplatte Oberkante
   `level × storey + 0,10` (liegt damit AUF der Etagen-Platte; Dicke
   0,02), Raumhüllen-Wände Basis 0,10; Props auf Platte + 0,01 (§ A2);
-  Diorama-Unterkante bleibt bei + 0,12 (§ A3). Der Legacy-Fahrstuhl (ohne
+  Diorama-Unterkante bleibt bei + 0,12 (§ A3). **Auf Etage 0 sind alle vier
+  Zahlen 0,00 / 0,00 / 0,01 / 0,02** — gemessen von `h_final`. Der Legacy-Fahrstuhl (ohne
   Anker: reale Meter × `storey / 3`) ist mit **E4** ersatzlos weg — der
   Schacht misst seine Vertragsmaße, immer.
 - `map3d.level_floors?: {"<level>": "<kind>"}`: Etagenplatte mit der
@@ -1775,7 +1783,7 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
   **Vertrag für die Renderer — KAMERA-LOKAL, nicht pro Fläche.** Der Unterwuchs
   wird NICHT mehr über die ganze gemalte Form vorgebaut, sondern pro ZELLE
   eines ursprungsverankerten 64-m-Rasters im Umkreis von 128 m um denselben
-  Anker, den die feinen Höhen-Kacheln nutzen (§ A16.3: der Avatar, solange der
+  Anker, den die feinen Höhen-Kacheln nutzen (§ A16.5: der Avatar, solange der
   Spieler ihn steuert, sonst das Kamera-Bodenziel). Basis-Dichte **0,80
   Instanzen/m² × Wert** (0,40 bis zur Sicht-Abnahme 2026-08-16, 0,15 vor dem
   Umbau), Deckel **8000 je Zelle** — ein Schutz gegen handgeschriebenen Unsinn,
@@ -1897,7 +1905,7 @@ Eine Zeile:
   Größe oder ein nachgezogener Fix wirkt beim nächsten Poll.
 - **Der Boden kommt vom Client.** Der Server schickt `offset_y`, der
   Renderer setzt `bottom_y = Bodenhöhe(x, z) + offset_y` mit **seinem**
-  Höhen-Sampler (`heightAt`, § A16.3) — derselbe, mit dem die Streu steht.
+  Höhen-Sampler (`heightAt`, § A16.5) — derselbe, mit dem die Streu steht.
   Nur so bleibt ein Prop auf dem Relief kleben, das der Client wirklich
   zeichnet, statt auf einem, das der Server einmal gerastert hat.
 - **Zeilen ohne Mesh fallen weg.** Ein Prop, das gelöscht wurde oder keine
@@ -2340,10 +2348,11 @@ der Autor legt ihn nie an und kann ihn nicht löschen, nur benennen.
   Rezept (`compose_recipe` liefert ohne Layout `None`). Sie taucht in
   **keiner** Platte, keiner Wand und keinem `rooms[]`-Block des Szenen-
   Rezepts (§ B1) auf und wird nie als Fläche gezeichnet. Sichtbar ist sie
-  als das, was ohnehin unter den Räumen liegt: die Etagenplatte der Etage 0
-  mit dem aus `terrain` aufgelösten Kind (§ A9, Reihenfolge in § A6).
-  **Achtung:** diese Platte entsteht nur, wenn die Location einen Grundriss
-  hat (`map3d.outline`) — ohne ihn gibt es in der Detailszene keine
+  als das, was ohnehin unter den Räumen liegt: **das Weltgelände selbst**,
+  mit der Bodenart, die der Layer-Bake dort schneidet (§ A16.7). Bis v6
+  Nr. 12 war das eine Etagenplatte, die nur mit einem Grundriss
+  (`map3d.outline`) entstand; heute ist der Boden immer da — ohne Grundriss
+  gibt es in der Detailszene keine
   Etagenplatte, und das Boden-Kind wird dort nirgends sichtbar.
 - **Adressiert wird sie wie jeder Raum, über ihre Id.** `GET /play/scene`
   führt sie in `rooms[]` mit `is_ground: true`; **von dort holen Clients die
@@ -2384,8 +2393,7 @@ wörtlich gültig.
   derselbe Rahmen, in dem `map3d.boundary` liegt (§ A1.1, Präambel v6 Nr. 2).
   Kein `x/y/w/d`, kein `outline`/`outline_curves`, keine `openings`, keine
   `surfaces`, kein `level`, kein `model_at`/`rotation`/`floor_offset_y` und
-  keine Raum-Flags (`always_visible`, `no_walls`, `relief_flat`,
-  `clip_model`).
+  keine Raum-Flags (`always_visible`, `no_walls`, `clip_model`).
 - **Der Sanitizer wirft den Rest weg, nicht das Ganze**
   (`world_ops._sanitize_ground_layout`): ein für die Grundfläche gesendetes
   Geometriefeld wird verworfen und **protokolliert** (eine Zeile, die die
@@ -2524,17 +2532,17 @@ Schritt tun kann und jede Meldung eine Absage bekommt (Abnahme-Befund B1);
 das Tor eines Ortes sind seine Öffnungen und Regeln (Nr. 7), nie der Fels
 darunter. Das ist zugleich die **Voraussetzung für das E8-Plateau**: dort
 wird die Heightmap unter dem Fußabdruck planiert (sofern der Ort es
-verlangt, § A16.1), und der Fels unter dieser Planierung darf die geebnete
+verlangt, § A16.4), und der Fels unter dieser Planierung darf die geebnete
 Fläche nicht weiter sperren. Diese Passierbarkeits-Regel hängt NICHT am
-`level_ground`-Flag — sie gilt für jeden Fußabdruck.
+`draws_built_floor` — sie gilt für jeden Fußabdruck.
 
 Dieselbe Regel gilt im **NPC-Routing** (`nav_grid`): eine Zelle stirbt am
 fremden Fußabdruck (SAT) oder am Gelände in ihrer Mitte — Letzteres nur
 außerhalb jedes Fußabdrucks. Ohne das wäre ein Ort auf Fels für die Reise
 unerreichbar, während sein Avatar darin frei umherläuft. Am GELÄNDE stirbt
 sie drinnen also nie; an der STEILHEIT dagegen schon, wenn der Ort nicht
-planiert (§ A16.1) — die beiden Ausnahmen sind zwei Regeln, und nur die
-zweite fragt `level_ground`.
+planiert (§ A16.4) — die beiden Ausnahmen sind zwei Regeln, und nur die
+zweite fragt `draws_built_floor`.
 
 **TEMPO UND ANIMATION GEHÖREN DAGEGEN DEM OBERSTEN GELÄNDE, SO WEIT WIE DER
 HIMMEL REICHT** (Befund 3 der E8-Sichtabnahme, 2026-08-13; Reichweite in
@@ -2615,33 +2623,28 @@ lauter legale „Stufen". Ein Grenzwert, den man durch Geduld umgeht, ist keiner
 wie ihn hinaufzuklettern, sonst könnte man einen Läufer irgendwo aussetzen, wo
 er nicht mehr hochkommt.
 
-**Woher die Höhe kommt: ZWEI Quellen, EINE Antwort**
-(`app/core/relief.ground_lift_at`).
+**Woher die Höhe kommt: EINE Quelle, EINE Antwort**
+(`app/core/relief.ground_at` → `world_geometry.ground_y` →
+`heightfield.world_height`). Das ist `h_final` (§ A16.1), bilinear aus der
+2-m-Kachel gelesen; es gilt drinnen wie draußen. Unter einem GEBAUTEN Ort
+(`draws_built_floor`, § A16.4) ist das Feld durch den Plateau-Stempel eben,
+unter jedem anderen läuft die Landschaft einfach durch. In einer Welt, in der
+niemand etwas modelliert hat, ist es 0 und das Gate vollständig inert.
 
-1. Das WELTRELIEF unter allem — `world_geometry.ground_y`, das gerasterte
-   Höhenfeld (§ A16), bilinear gelesen. Es gilt drinnen wie draußen; unter
-   einem Fußabdruck MIT `level_ground` ist es durch die Planierung eben
-   (§ A16.1), unter jedem anderen läuft die Landschaft einfach durch.
-2. Das SZENEN-Relief obendrauf: für eine `area_detail`-Location mit
-   `map3d.relief` wird genau das Feld gesampelt, das
-   `GET /play/locations/{id}/scene` als `terrain.grid` ausliefert (§ B1 Nr. 14)
-   — dieselbe eine Gitter-Konstruktion (`scene_recipe.compose_terrain`),
-   inklusive der Klemmung am Boundary-Polygon (v6 Nr. 4). Sein Rand ist auf 0
-   gepinnt, es ist also ein
-   Aufschlag, kein Ersatz: ein Ort auf einem Hügel fährt mit dem Hügel hoch.
+> **Die ZWEITE Quelle ist gelöscht** (v6 Nr. 12): das szenen-eigene
+> 17 × 17-Relief samt `relief.ground_lift_at` / `scene_ground_lift`, dem
+> `terrain`-Block im Szenen-Payload und der Auflösungsregel „die innerste
+> ENTHALTENDE Location MIT Relief gewinnt". Es gibt EIN Feld; lokales Relief
+> autoriert man als Höhenfläche der Karte.
 
-In einer Welt, in der niemand etwas modelliert hat, sind beide 0 und das Gate
-ist vollständig inert.
-
-Der Client spiegelt beides mit denselben Quellen (`main.ts reliefLiftAt` →
-`game/ground.groundLift`): das Weltfeld über `sampleWorldHeight` — die
-BILINEARE Lesung, nicht die gezeichnete Dreiecksfläche `sampleGroundHeight`,
-denn dieser Spiegel sagt die Server-Antwort voraus und der Server liest das
-Feld — und das Szenen-Relief über `scene/tiles.terrainLiftAt`, **nicht** über
-den Modell-Raycast `tileGroundY`: der kennt eine Modell-Oberfläche, die der
-Server nicht kennt, und die beiden Sichten müssen sich einig bleiben. (Bis E8
-Task 4 fehlte dem Spiegel der Welt-Term — das war das Gummiband auf jedem
-Welt-Hügel: der Client lief die Figur hoch, der Server holte sie 3×/s zurück.)
+Der Client spiegelt dieselbe Zahl (`main.ts reliefLiftAt` →
+`terrainGround.heightAt`): die BILINEARE Lesung des Feldes, denn dieser
+Spiegel sagt die Server-Antwort voraus und der Server liest das Feld. Ein
+Modell-Raycast kommt dabei nirgends mehr vor — er kannte eine
+Mesh-Oberfläche, die der Server nicht kennt, und die beiden Sichten müssen
+sich einig bleiben. (Bis E8 Task 4 fehlte dem Spiegel der Welt-Term — das war
+das Gummiband auf jedem Welt-Hügel: der Client lief die Figur hoch, der Server
+holte sie 3×/s zurück.)
 
 **Dieselbe Regel im NPC-Routing** (`nav_grid`, E8 Task 4). Eine Zelle ist
 blockiert, wenn der Boden AN IHRER MITTE steiler steht als `max_slope_deg` —
@@ -2649,14 +2652,14 @@ gemessen als ZENTRALE Differenz über die je zwei Gegennachbarn
 (`rise = hypot(h(x+c,z)−h(x−c,z), h(x,z+c)−h(x,z−c))`, `run = 2 · NAV_CELL_M`).
 Zentral und nicht einseitig: der flache Boden am FUSS einer Klippe erbte sonst
 deren Steilheit, und das Ufer jedes Sees wäre unbegehbar. Ausgenommen sind
-Zellen INNERHALB eines Fußabdrucks **mit `level_ground`** (Footprint gewinnt;
-nur DORT ist das Feld planiert — seit 2026-08-13 ist die Planierung opt-in,
-§ A16.1, und unter einem ungeflaggten Ort läuft die autorierte Landschaft
-durch, die dann genauso beurteilt wird wie der Boden draußen) und Zellen an
-einer Öffnung (`OPENING_EXEMPT_M` = 1,5 m Toleranz + eine Zelle) — dieselbe
+Zellen INNERHALB eines **GEBAUTEN** Fußabdrucks (Footprint gewinnt; nur DORT
+ist das Feld planiert — `draws_built_floor`, § A16.4, und unter einem
+natürlichen Ort läuft die autorierte Landschaft durch, die dann genauso
+beurteilt wird wie der Boden draußen) und Zellen an einer Öffnung
+(`OPENING_EXEMPT_M` = 1,5 m Toleranz + eine Zelle) — dieselbe
 Rampenenden-Ausnahme wie unten. Die PASSIERBARKEITS-Ausnahme („Footprint
-gewinnt" bei gemaltem Untergrund) fragt das Flag NICHT: sie gilt für jeden
-Fußabdruck, geflaggt oder nicht. Dazu kostet
+gewinnt" bei gemaltem Untergrund) fragt gar nichts: sie gilt für jeden
+Fußabdruck, gebaut oder nicht. Dazu kostet
 jeder Höhenmeter `SLOPE_COST_S_PER_M` = 4 Spielsekunden extra, als STRAFE und
 nie als Bonus (die A*-Heuristik kennt kein Relief; ein Bonus machte sie
 unzulässig). Die Strafe steckt auch in `segment_costs` — die Reisezeit erbt den
@@ -2668,15 +2671,13 @@ Grenzwerte, also stehen sie in seinem Schlüssel: eine neu autorierte Öffnung
 ändert gar nichts an der Welt — beides muss den Router trotzdem neu bauen,
 sonst urteilt er nach der Tür und der Grenze von gestern.
 
-**Verschachtelung: der INNERSTE UMSCHLIESSENDE Ort MIT Relief gewinnt.** Nicht
-„der Ort, in den der Punkt fällt": ein Ort ohne eigenes Relief planiert den
-Boden nicht, auf dem er steht — er steht DARAUF. Sonst säße eine Hütte auf
-einem Dorfplatz, dessen Relief 2 m ansteigt, in einer selbstgemachten Grube:
-der Platz antwortet 2 m, die Hütte 0, und dazwischen stünde eine 63°-Klippe,
-die eine öffnungslose Hütte von allen Seiten versiegelt. Die Auflösung ist
-dieselbe Kleinster-gewinnt-Regel wie bei `location_at_point`, nur beschränkt
-auf Orte, die ein Feld HABEN; wer keines hat, ist für die Frage durchsichtig.
-Der Client spiegelt das in `reliefLiftAt`.
+**~~Verschachtelung: der INNERSTE UMSCHLIESSENDE Ort MIT Relief gewinnt~~ —
+GEGENSTANDSLOS seit v6 Nr. 12.** Die Regel löste auf, welches von mehreren
+szenen-eigenen Reliefs an einem Punkt gilt. Es gibt kein szenen-eigenes Relief
+mehr und damit keine Auflösung: EIN Feld, und wer es formt, entscheidet der
+Bake einmal (`draws_built_floor`, § A16.4). Verschachtelte Orte staffeln sich
+über ihre Plateaus — die kleinste Fläche schreibt zuletzt und gewinnt, dieselbe
+Ordnung wie bei `location_at_point`.
 
 **Nr. 8 steht NACH dem Übergang (Nr. 7)**, weil die Höhe eines Punktes davon
 abhängt, welche Location ihn besitzt — und weil ein Eintritt, den die Geometrie
@@ -2692,15 +2693,15 @@ zwar an BEIDEN Enden des Schritts (eine Überquerung hat einen Fuß auf jeder
 Seite). Ohne die Ausnahme wäre ein Ort auf eigenem Plateau hinter seiner
 eigenen Tür verschlossen.
 
-An einem PLANIERENDEN Ort (§ A16.1) ist am Weltrelief ohnehin nichts zu
+An einem PLANIERENDEN Ort (§ A16.4) ist am Weltrelief ohnehin nichts zu
 überqueren: der gepinnte Ring reicht eine Zelle ÜBER den Fußabdruck hinaus,
-die Öffnung liegt also auf ebenem Grund. Die Ausnahme trägt weiterhin den
-Fall, den sie immer trug — eine Klippe im SZENEN-Relief an der Öffnung — und
-seit die Planierung opt-in ist auch den Weltrelief-Fall wieder: an einem Ort
-OHNE `level_ground` steigt der autorierte Hang durch die Türschwelle, und
-genau dafür ist die Rampenenden-Ausnahme da. Bis zur Plateau-Rampe eine Zelle
+die Öffnung liegt also auf ebenem Grund. Die Ausnahme trägt den Fall, für den sie
+da ist: an einem NATÜRLICHEN Ort steigt der autorierte Hang durch die
+Türschwelle, weil dort nichts gestanzt wird. Dazu den Rest-Rand eines
+gebauten Ortes an einer sehr steilen Flanke — die Rampe erreicht dort bis zu
+46,4° (die 1,5-fache Spitze des `smoothstep`, § A16.4). Bis zur Plateau-Rampe eine Zelle
 weiter draußen reicht sie bewusst nicht: das ist die Autorierungs-Grenze aus
-§ A16.1, kein Loch in der Regel.
+§ A16.4, kein Loch in der Regel.
 
 **Die Meldung nennt das Hindernis** (Lektion aus Befund B1): eine Stufe und
 eine Steigung bekommen zwei verschiedene Sätze, und die Absage wird geloggt wie
@@ -2753,117 +2754,300 @@ gelöscht ist, als `impassable` abgelehnt. Die Routing-Hälfte steht in
 
 ---
 
-## A16. Das Weltrelief — `GET /play/heightfield` — neu 2026-08-13 (E8 Task 2)
+## A16. Ein Boden — Höhe, Material und Wasser der offenen Welt
 
-**Der Boden der offenen Welt ist ab hier eine Landschaft.** Bis E8 war jede
-Höhe eine Sache der Innenszene; draußen war die Welt die flache v1-Platte.
-Autoriert wird sie im Karten-Editor als **Höhenflächen**, ausgeliefert wird
-sie als **Gitter**, und `ground_y(x, z)` (§ A1.2) ist die eine Funktion, die
-beides verbindet.
+*Neu geschrieben 2026-08-21 (Etappe E6 aus `development_instructions/`
+`plan-ein-boden.md`). Dieses Kapitel ERSETZT das alte § A16 („Das Weltrelief"
+samt § A16.1 Planierung, § A16.2 Mikro-Relief, § A16.3 Kachel-Höhenfeld), die
+drei § B1-Nachträge vom 2026-08-20 („EIN Boden" / „EIN Datum" / „die Natur
+zeichnet KEINE Platte") und die fünf Etappen-Nachträge E1/E3/E4/E5a/E5b. Wo
+irgendwo sonst im Dokument eine Etage-0-Platte, ein Kachel-Sockel, ein
+`level_ground`-Flag, ein Szenen-Relief oder eine gedrapte Bodenfläche steht,
+gilt dieses Kapitel.*
 
-**Seit 2026-08-13 hat das Feld eine zweite Quelle:** das **Mikro-Relief der
-Terrain-Arten** (§ A16.2) — gemalter Boden bringt seine eigenen kleinen Hügel
-mit. Alles Folgende gilt unverändert; das Relief kommt als ADDITIVER Durchgang
-zwischen Flächen und Planierung hinzu, und `height_sig` deckt es mit ab.
+**DAS GESETZ, in drei Sätzen.** Es gibt genau EINEN Boden: die Höhenfunktion
+`h_final(x, z)`, serverseitig gebacken, von jedem Verbraucher aus denselben
+Daten gelesen. Sein MATERIAL ist genau EIN Schnitt: pro Stelle gewinnt ein
+Layer, und die Übergangsbreite ist eine Eigenschaft dieses Layers. Die einzige
+ebene Sonderfläche ist WASSER, und ihre Höhe ist eine Zahl in den Daten
+(`water_level_effective`), keine Schätzung eines Renderers.
 
-**Zwei Formen, nur eine wird bearbeitet.** Eine **Höhenfläche** ist ein
-Polygon in Weltmetern plus `height_m` (wie hoch der Boden darin steht) und
-`falloff_m` (über wie viele Meter er dorthin ansteigt). Das **Gitter** ist
-daraus gerechnet — ein Cache, keine Autorierungsfläche. Niemand bearbeitet
-Zellen.
+Daraus folgt alles Übrige: **kein Renderer misst Dreiecke, um zu erfahren, wie
+hoch der Boden ist**, es gibt auf Etage 0 keine Bodenplatte im Szenen-Payload
+mehr, und Render-LOD ist reine Sampling-Dichte — nie ein Datenwechsel.
+
+---
+
+### A16.1 `h_final(x, z)` — eine reine Funktion, fünf Backstufen
+
+`app/core/heightfield.HeightModel` hält die ganze autorierte Welt und
+beantwortet `final(x, z)` für jeden reellen Punkt. **Jede Rasterung in diesem
+Modul — die Übersicht, eine Kachel, jede Mip-Ebene — ist nichts als diese
+Funktion auf einem Gitter abgetastet.** Reihenfolge, jede Stufe wegen der
+vorigen:
+
+```
+1. Höhenflächen          (stärkste Auslenkung gewinnt)
+2. Mikro-Relief          (ADDITIV)
+3. Wasser-Carve (Karte)  (min, senkt nur)
+4. Location-Plateaus     (smoothstep-Rampe, kleinste Fläche zuletzt)
+5. Zonen-Wasser-Carve    (min, NACH den Plateaus)
+```
+
+Stufe 5 steht ausdrücklich hinter Stufe 4: ein Teich im Innenhof liegt auf
+einem Grundstück, das der Plateau-Stempel eben hobelt — vor dem Stempel
+gecarvt wäre er wieder weggehobelt.
+
+> **INVARIANTE 1 — Reinheit über alle Gitter.** Zwei Gitter über demselben
+> Modell tragen an jedem gemeinsamen Punkt dieselbe Zahl — **by construction,
+> nicht by agreement.** Kein Schritt der Pipeline misst „eine Rasterzelle";
+> alle Breiten sind METER. (Vorher taten es zwei: die Kantenregel des
+> Mikro-Reliefs fragte die vier GITTER-Nachbarn, und die Plateau-Rampe war EINE
+> Zelle breit — dieselbe Welt war auf der 2-m-Kachel eine andere Landschaft als
+> auf der vergröberten Übersicht, gemessen Median 0,058 m, p95 0,675 m, **max
+> 1,104 m** am selben Weltpunkt.) Die Kantenregel des Reliefs sondiert seither
+> bei festen `RELIEF_EDGE_PROBE_M` = 2,0 m — dem Kachel-Schritt, damit die
+> Kacheln exakt die Höhen behalten, die sie hatten.
+
+**Wer die Funktion liest:** Serverregeln (`world_geometry.ground_y` →
+`heightfield.world_height`, `nav_grid`, das Steilheits-Gate von
+`POST /play/pos`, `scene_asset.ground_sampler`, `scene_context`),
+Client-Regeln (Figur, Props, Scatter, Unterwuchs, Klick) und **das Bild** (der
+Terrain-Vertex-Shader). Serverseitig ist der Vorrang `Kachel, sonst 0` — die
+Übersicht liest der Server überhaupt nicht.
+
+**`height_sig`** hasht alles, was die fünf Stufen lesen: die Höhenflächen, das
+Mikro-Relief (`relief_inputs`), die Wasser-Polygone samt ihren drei Zahlen
+(`water_basis`), die Zonen-Wasser (`zone_water_basis`) und die Platzierungen
+der **gebauten** Orte — dafür braucht es kein eigenes Feld: ein Ort, der einen
+Raum schließt, tritt in `placed_footprints()` ein, ein Ort, der ihn öffnet,
+verlässt sie. Ändert sich die Signatur, holt der Client `GET /play/heightfield`
+neu und **verwirft Kachel-Index samt aller geladenen Kacheln** — sonst nie. Wie
+`terrain_sig` wird sie **nie gefoggt**: ein Bergrücken ist von weit außerhalb
+sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen.
+
+---
+
+### A16.2 Stufe 1 + 2 — die Autorierung
+
+**Höhenflächen.** Eine Höhenfläche ist ein Polygon in Weltmetern plus
+`height_m` (wie hoch der Boden darin steht) und `falloff_m` (über wie viele
+Meter er dorthin ansteigt):
 
 ```
 h_flaeche(p) = height_m · min(1, Abstand(p, Kontur) / falloff_m)
                für p INNERHALB der Kontur, sonst sagt die Fläche nichts
 ```
 
-Die Fläche trifft die Welt also **auf ihrer eigenen Kontur** bei 0 und
-braucht keinen passenden Nachbarn, um stetig auszusehen. `falloff_m` 0 heißt
-„kein Übergang“ — eine Wand an der Kante.
+Die Fläche trifft die Welt also **auf ihrer eigenen Kontur** bei 0 und braucht
+keinen passenden Nachbarn, um stetig auszusehen. `falloff_m` 0 heißt „kein
+Übergang" — eine Wand an der Kante. **Überlappung: die STÄRKSTE Auslenkung
+gewinnt** (größter `|Wert|`, bei Gleichstand der höhere) — als Auslenkung
+formuliert, damit eine **Senke** (negatives `height_m`) nicht von der 0 der
+flachen Welt drumherum geschlagen wird.
 
-**Überlappung: die STÄRKSTE Auslenkung gewinnt** (größter `|Wert|`, bei
-Gleichstand der höhere). Für zwei Hügel ist das wörtlich „der höhere
-gewinnt“; als Auslenkung formuliert, damit eine **Senke** (negatives
-`height_m`) nicht von der 0 der flachen Welt drumherum geschlagen wird.
-Deterministisch: dieselben Flächen ergeben dasselbe Gitter, auf jeder
-Maschine.
+> **Bekannte Autorierungsgrenze** (Entscheid 2026-08-13, bewusst so): eine
+> schwächere Fläche kann sich nicht RELATIV in eine stärkere einschneiden — ein
+> 2-m-Graben quer über ein 9-m-Plateau bleibt Plateau. Wer eine Mulde im
+> Hochland will, autoriert sie als eigene Fläche mit der ABSOLUTEN Höhe (7 m),
+> nicht als Differenz.
 
-**Bekannte Autorierungsgrenze dieser Regel** (Entscheid 2026-08-13, bewusst
-so): eine schwächere Fläche kann sich nicht RELATIV in eine stärkere
-einschneiden — ein 2-m-Graben quer über ein 9-m-Plateau bleibt Plateau, weil
-9 stärker auslenkt als 2. Wer eine Mulde im Hochland will, autoriert sie als
-eigene Fläche mit der ABSOLUTEN Höhe (7 m), nicht als Differenz. Die
-Planierung unter Fußabdrücken (T4) braucht das nicht: sie ist ein eigener
-Durchgang NACH der Rasterung und gewinnt ohnehin.
+`height_m` ist auf **±50 m** geklemmt (§ A1.7).
 
-**Das Gitter hängt am WELT-URSPRUNG, nie an `world_bounds`.** Jeder
-Stützpunkt sitzt auf einem Vielfachen von `step_m`, gezählt ab (0, 0):
+**Mikro-Relief der Terrain-Arten.** Zwei whitelistete Katalog-Felder je Art
+(`meta.relief_amplitude_m`, `meta.relief_wave_m`) erzeugen zufällige kleine
+Hügel überall dort, wo diese Art gemalt ist — **eingebacken, nicht gerendert**,
+also im EINEN Feld, das Server-Gate, Client-Spiegel und beide Renderer lesen.
+Es gibt bewusst **keinen TS-Zwilling**.
+
+```
+seed(art)  = FNV-1a 32 über den ART-NAMEN (es gibt KEIN Seed-Feld):
+             h = 2166136261; je UTF-8-Byte b:  h = ((h XOR b)·16777619) mod 2^32
+rnd(u, v)  = XorShift32((seed + u·73856093 + v·19349663) mod 2^32).next01()·2 − 1
+u, v       = floor(x/wave), floor(z/wave);   tx, tz = die Nachkommateile
+h_relief   = bilinear(rnd über die vier Ecken) · relief_amplitude_m
+```
+
+Der Seed ist ein Hash des NAMENS, weil ein gespeicherter Seed durch jede
+Katalog-Änderung, jeden Export und jeden Klon mitgeschleppt werden müsste, nur
+um den Boden stillzuhalten. Negative Ecken sind sauber definiert
+(`& 0xFFFFFFFF`), zwei Flächen derselben Art setzen sich also nahtlos fort.
+
+**Klemmen.** `relief_amplitude_m` 0,05…2,0 m (fehlend oder 0 = kein Relief).
+Die Obergrenze ist eine **Begehbarkeits**-Grenze: zwei Nachbar-Stützpunkte
+können sich um höchstens 2·Amplitude über einen Gitterschritt unterscheiden,
+auf dem 2-m-Kachelraster also `atan(2·2,0/2,0)` = **63°** im Maximum. Der
+Editor **warnt** ab `tile_step_m · tan(max_slope_deg) / 2` (0,84 m bei den
+Vorgaben) — beide Zahlen kommen vom Server (`heightMath.reliefWarnAmpM`),
+geklemmt wird nichts. `relief_wave_m` **4**…200 m, fehlend = **32 m**; die
+Untergrenze ist 2 × `TILE_STEP_M` (**Nyquist**).
+
+**Welche Art an einem Punkt gilt**, ist die Regel von `terrain_query.kind_at` —
+die OBERSTE gemalte Fläche, die ihn enthält (letzter Treffer gewinnt). Eine
+flache Art über einer hügeligen nimmt das Relief also wieder weg. Ein Punkt,
+den KEINE Fläche bedeckt, bekommt kein Relief: die unbemalte Welt bleibt eben,
+und nur deshalb ist das Gitter überhaupt begrenzbar.
+
+**Die Randregel: am Rand hebt das Relief nur noch.** Sondiert man von einem
+Punkt aus `RELIEF_EDGE_PROBE_M` = 2,0 m in die vier Richtungen und trägt eine
+Probe KEIN Relief (flache oberste Art oder unbemalter Grund), wird der
+Rausch-Beitrag auf `max(0, Rauschen)` geklemmt — Positives läuft sanft in den
+Nachbarboden aus (das Ufer hebt sich), Negatives endet auf dem autorierten
+Niveau. Sonst zöge eine Senke im Gras die Naht des Sees mit sich nach unten.
+**Die Probe ist ein METER-Abstand, kein Gitter-Nachbar** — genau das ist
+Invariante 1 an dieser Stelle.
+
+---
+
+### A16.3 Stufe 3 + 5 — Wasser senkt sein Bett
+
+Ob eine Bodenart **Wasser** ist, sagt der Katalog: `meta.water` am Terrain-Typ
+(`terrain_types.is_water_kind`) bzw. die Material-KLASSE der
+Surface-Bibliothek (`water`/`ice`). **Nie über den Namen** — Arten sind ein
+offenes Vokabular, eine Welt darf ihre Seen „lagoon" nennen.
+
+Die drei Zahlen liegen an der **Fläche** (`terrain_areas.meta`) bzw. am
+**Raum-Layout** (`layout.*`, Zonen-Wasser), weil zwei Seen in einer Welt auf
+zwei Höhen stehen:
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `water_level` | `float` (Welt-y, m) | Der Spiegel. **Optional**: fehlt er, nimmt die Bake den **Median der Höhe entlang des Umrisses** (alle 2 m abgetastet, gelesen NACH den Plateaus). `models.terrain.save_area` schreibt diesen Wert bei einer gemalten Fläche beim Speichern fest, damit der See nicht mitwandert, wenn jemand einen Hügel daneben malt |
+| `water_depth_m` | `float` 0,2…20 (Default **2,0**) | Wie tief das Bett unter dem Spiegel liegt, sobald die Ufer-Rampe durch ist |
+| `shore_ramp_m` | `float` 0…20 (Default **3,0**) | Wie weit INNERHALB des Umrisses die volle Tiefe erreicht ist; 0 = Stufe (Becken) |
+| `water_level_effective` | `float` (nur Ausgabe) | Der Spiegel, mit dem die Bake wirklich gecarvt hat. Fährt additiv in `GET /world/terrain-areas`, `GET /play/terrain` und `GET /play/terrain-layers` mit und wird **nie** in das Autorenfeld zurückgeschrieben |
+
+Der Median-Default deckt **beide** Fälle mit einer Regel ab: auf einer GEBAUTEN
+Location hat der Plateau-Stempel das Grundstück eben gehobelt, also trägt jede
+Randprobe die Plateauhöhe und der Median IST sie; auf einer natürlichen ist es
+die Landschaft ringsum.
+
+Carve pro Punkt innerhalb des Polygons:
+
+```
+h = min(h, water_level − water_depth_m · smoothstep(min(d_innen / shore_ramp_m, 1)))
+```
+
+`d_innen` = Abstand zum **Umriss**. `min`, nie Zuweisung: der Carve darf den
+Boden nur senken — ein Ufer, das ohnehin unter dem Spiegel liegt, bleibt liegen.
+Am Rand (`d_innen = 0`) ist der Carve `min(h, Spiegel)` — die Platte trifft das
+Gelände, und genau das ist die Uferlinie.
+
+> **INVARIANTE 2 — kein Texel über dem Spiegel.** Für jede Probe, die tiefer
+> als `shore_ramp_m` im Polygon liegt, gilt `h_final ≤ water_level − ε` mit
+> `ε = min(water_depth_m, 0,25)`. Damit ist „grünes Terrain sticht fern durchs
+> Wasser" **datenseitig** unmöglich, in jedem LOD.
+>
+> **Das ist ein BEWEIS, keine Stichprobe.** Jenseits der Rampe ist
+> `smoothstep(1) = 1` exakt, das zweite Argument des `min` also die KONSTANTE
+> `Spiegel − water_depth_m` — was auch immer die Naturhöhe dort tut. Eine
+> +40-m-Kuppe mitten im See kommt genauso auf `Spiegel − water_depth_m` heraus:
+> ein Gelände-Texel über dem Spiegel in der Tiefzone ist nicht
+> unwahrscheinlich, es ist arithmetisch unmöglich.
+
+Die Polygone des Zonen-Wassers kommen aus **derselben** Funktion, aus der auch
+das Material kommt (`terrain_layers.world_floors` →
+`models.heightfield.placed_zone_waters`): eine Ableitung für die Form des Betts
+und für die Farbe darüber.
+
+---
+
+### A16.4 Stufe 4 — Gebäude stanzen ihr Grundstück
+
+**`level_ground` gibt es nicht mehr.** Es war ein manuelles Opt-in-Flag; wer
+stempelt, ist jetzt eine Eigenschaft der Location selbst und entscheidet
+`models.heightfield.draws_built_floor(loc)` — **der eine Name dieses Gesetzes**:
+
+* es gibt ein **`map3d.outline`** (eine gezeichnete Gebäudekontur, ≥ 3 Punkte),
+  ODER
+* es gibt mindestens einen **geschlossenen Raum** (nicht `always_visible`; die
+  Grundfläche `__ground__` zählt nie mit).
+
+Ein natürlicher Ort (See, Lichtung, Wald) stempelt nichts — sein Boden IST das
+Relief, seine Zonen sind Layer (§ A16.6). Die gezeichnete `boundary` zählt
+nicht mit: sie ist das Grundstück, und wo ein See aufhört zu sein ist kein
+Boden. Ein übrig gebliebenes `level_ground` in gespeicherten Daten wird
+ignoriert; es gibt **keinen Fallback-Leser**.
+
+**Zielhöhe** = **Median** der Höhen unter dem Grundriss, abgetastet auf dem
+2-m-Weltgitter (vorher: eine einzige Probe am garantierten Innenpunkt — ein
+Buckel entschied, wo das Haus steht).
+
+**Rampe**, AUSSERHALB des Umrisses, `smoothstep` über
+
+```
+w = clamp(PLATEAU_RAMP_FACTOR · sqrt(Fläche/π), 2, 8)   Meter    (Faktor 0,5)
+```
+
+und, wenn die Randstufe `Δ = max |h0 − h_bisher|` entlang des Umrisses steiler
+wäre als `tan(35°) · w`, verbreitert auf `w = Δ / tan(35°)`.
+
+```
+h = h0 + (h_bisher − h0) · smoothstep(d / w)      d = Polygonabstand, 0 innen
+```
+
+`h_bisher` ist ausdrücklich der Stand der Pipeline, **nicht** die unberührte
+Landschaft: eine Hütte auf dem Dorfplatz läuft auf das Plateau des Platzes
+hinunter, nicht auf den Hang darunter. Überlappung: **größte Fläche zuerst,
+kleinste schreibt zuletzt** (das Verschachtelungsgesetz von
+`location_at_point`).
+
+> **EHRLICHE GRENZE — die 1,5-fache Spitze.** Die 35° sind die MITTLERE
+> Steigung, und ein `smoothstep` erreicht das `SMOOTHSTEP_PEAK` = **1,5**-fache
+> seines Mittels. Eine bis zur Kappung verbreiterte Rampe hat also einen
+> steilsten Meter von `atan(1,5 · tan 35°)` = **46,4°** — immer noch über der
+> Laufgrenze von 40°. Ein Ort an einer sehr steilen Flanke behält damit einen
+> Rand, den seine Öffnungs-Ausnahme tragen muss (§ A15 Nr. 8). Was der Stempel
+> bringt: der Rand ist eine mehrere Meter breite Rampe statt einer
+> Ein-Zellen-Klippe von bis zu 68°.
+
+`nav_grid` fragt dieselbe Funktion: die Steilheits-Ausnahme innerhalb eines
+Ortes gilt für **gebaute** Orte statt für geflaggte (`Region.level_ground` ist
+seither nur noch der interne Feldname dieses Ergebnisses). Die
+PASSIERBARKEITS-Ausnahme („Fußabdruck gewinnt" bei gemaltem Untergrund) fragt
+gar nichts: sie gilt für jeden Fußabdruck.
+
+---
+
+### A16.5 Die Lieferung — Übersicht, Kacheln, Mip-Pyramide
+
+**Ein Gitter kann nicht beides sein.** Es gibt zwei Rasterungen derselben
+Funktion, und **vermischt werden sie nie**:
+
+- die **Übersicht** — ein Gitter über alles, vergröberbar. Ein BILD für die
+  Ferne, sonst nichts; **keine Regel liest sie.**
+- die **Kacheln** — 256-m-Quadrate im immer feinen **2-m-Schritt**, auf Anfrage
+  gerechnet. Alles, was der Boden ENTSCHEIDET, liest diese.
+
+**Das Gitter hängt am WELT-URSPRUNG, nie an `world_bounds`:**
 
 ```
 origin = floor(min / step) · step − step          # ein Ring AUSSERHALB der Daten
 punkte = ceil((max + step − origin) / step) + 1   # und einer dahinter
 ```
 
-Damit verschiebt eine neu gemalte Fläche am Weltrand **keinen einzigen
-bestehenden Stützpunkt** — ein aus der aktuellen Ausdehnung abgeleitetes
-Gitter würde bei jedem Anbau alle Höhen der Welt verrücken (Inventar-Befund
-5). Und weil der komplette Rand außerhalb aller Flächen liegt, ist er 0:
-**außerhalb des Gitters gilt der Randwert**, und das bedeutet exakt „die
-flache Welt“.
+Damit verschiebt eine neu gemalte Fläche am Weltrand **keinen einzigen**
+bestehenden Stützpunkt, und weil der komplette Rand außerhalb aller Flächen
+liegt, ist er 0: **außerhalb des Gitters gilt der Randwert**, und das bedeutet
+exakt „die flache Welt". `step_m` der Übersicht ist standardmäßig **4 m** und
+reist MIT dem Datensatz; reicht die Ausdehnung über das Punktbudget (120 000
+Stützpunkte), wird der Schritt **verdoppelt**, bis es passt. Diese Vergröberung
+ist im Karten-Editor SICHTBAR (die Schreib- und Lese-Antworten von
+`/world/height-areas` liefern `step_m`, `default_step_m` und `tile_step_m`) —
+eine zweite Verdopplungs-Logik im Client wäre die Zwillings-Regel, die
+auseinanderläuft.
 
-`step_m` ist standardmäßig **4 m** und reist MIT dem Datensatz. Reicht die
-bemalte Ausdehnung über das Punktbudget (120 000 Stützpunkte), wird der
-Schritt **verdoppelt**, bis es passt — ein doppelt so weites Land bekommt ein
-gröberes Relief, kein abgeschnittenes. Verdoppeln hält das Gitter am
-Ursprung verankert. `height_m` ist auf **±50 m** geklemmt (§ A1.7), auch weil
-der 3D-Client seine Kacheln aus fester Höhe anrayct.
-
-**Diese Vergröberung ist SICHTBAR zu machen** (Befund 14, 2026-08-13). Sie
-hängt an der Vereinigungs-Box von allem, was den Boden formt: eine einzige
-Fläche weit draußen vergröbert das Relief der GANZEN Welt — live gemessen hob
-eine 16 160 × 5 876 m große Box den Schritt von 4 m auf 32 m, und das
-Mikro-Relief einer 22-m-Fläche (Welle 8…12 m) hatte danach keinen Stützpunkt
-mehr und verschwand, ohne dass irgendetwas den Zusammenhang gezeigt hätte.
-Darum liefern `GET /world/height-areas` und die Schreib-Antworten von
-`POST`/`PUT /world/height-areas` den aktuellen `step_m` (die GET zusätzlich
-`default_step_m` und `tile_step_m`), und der Editor zeigt ihn dauerhaft an,
-sobald er über dem feinsten liegt, samt Konsequenz: **unter 2 × Schritt trägt
-das Raster nichts mehr** (Nyquist, dieselbe Grenze, die `relief_wave_m` klemmt
-— dort am KACHEL-Schritt, siehe § A16.2). Der Server rechnet, der Editor zeigt
-— eine zweite Verdopplungs-Logik im Client wäre genau die Zwillings-Regel, die
-auseinanderläuft. Aus demselben Grund reist `tile_step_m` mit: die
-Rampen-Zahl der Planierung hängt daran und hat sich am 2026-08-14 halbiert.
-
-**Payload** (Auth wie `/play/terrain`: eingeloggter User, **kein** Admin-Gate,
-**nie gefoggt**). Eigener Endpoint aus demselben Grund wie das Gelände — und
-doppelt so triftig, weil ein Gitter größer ist als eine Flächenliste:
-**gemessen 0,94 MB unkomprimiert bei vollem Punktbudget** (346 × 346 Punkte,
-1 370 m Kante) und 190 KB für eine Welt aus 40 autorierten Hügeln. Das ist
-nichts für einen 3-Sekunden-Poll und alles für einen Abruf bei
-Signaturwechsel. Geholt wird er einmal und neu, wenn `height_sig` in der
-Weltkarte wechselt.
-
-```
-{ origin_x, origin_z,   # Weltmeter des Stützpunkts heights[0][0]
-  step_m,               # Abstand zweier Stützpunkte in Metern
-  rows, cols,           # Gitterform; 0/0 + heights [] = flache Welt
-  heights: [[float, …], …],   # heights[j][i] = Höhe bei
-                              # (origin_x + i·step_m, origin_z + j·step_m)
-  sig,                  # identisch mit worldmap.height_sig
-  tile_m,               # Kantenlänge einer Kachel in Metern (256,0; § A16.3)
-  tile_step_m,          # Schritt der Kacheln — IMMER 2,0, nie vergröbert
-  tiles: ["tx,tz", …] } # der KACHEL-INDEX: jede Kachel, in der die Welt
-                        # einen Boden hat, sortiert nach tx, dann tz
-```
-
-**Dieses Gitter ist seit v2 die FERN-Übersicht** (§ A16.3): es ist das eine
-Raster, das vergröbert werden darf, und keine Regel liest es mehr. Die
-mitgelieferten drei Felder sind die Brücke zur feinen Auflösung —
-`tiles` sagt, wo überhaupt Boden ist, und `GET /play/heightfield/tiles` liefert
-ihn in 2 m. **Vermischt werden die beiden nie**, siehe § A16.3.
+**Kachelmaß 256 m, Anker ist der Welt-Ursprung.** Kachel `(tx, tz)` deckt
+`[tx·256, (tx+1)·256] × [tz·256, (tz+1)·256]` ab; ihre Stützpunkte SIND globale
+Gitterpunkte (`tile_key(x, z) = (floor(x/256), floor(z/256))`). **129 × 129
+Punkte — die Ränder gehören dazu, in BEIDEN Nachbarn** (1,57 % Mehrdaten):
+bilineares Sampling INNERHALB einer Kachel braucht damit nie einen Punkt der
+Nachbarkachel, und weil beide Seiten denselben Punkt tragen, ist der Boden über
+die Naht **stetig** statt nur beinahe.
 
 **Zwischen den Stützpunkten ist das Feld BILINEAR**, und zwar in beiden
-Sprachen gleich:
+Sprachen gleich (`heightfield.sample_height` ↔ `@anima/scene-render`
+`sampleWorldHeight`):
 
 ```
 fx = clamp((x − origin_x)/step, 0, cols−1);  i = min(floor(fx), cols−2);  tx = fx − i
@@ -2875,293 +3059,555 @@ h    = nord·(1−tz) + sued·tz
 
 Ein Feld mit weniger als 2 × 2 Punkten trägt kein Relief und antwortet 0.
 
-**Zwillings-Disziplin (verbindlich).** `app/core/heightfield.sample_height`
-und `packages/scene-render/src/worldHeight.ts` (`sampleWorldHeight`) sind
-dieselbe Formel zweimal, und sie müssen es bleiben: der Server lehnt eine
-Laufmeldung nach SEINER Lesung des Feldes ab (§ A15 Nr. 8), der Renderer
-drapiert den Boden nach seiner. Beide werden gegen **eine** von Hand
-hergeleitete Tabelle geprüft — `scripts/smoke_heightfield.py` Abschnitt [8]
-und `client3d/scripts/smoke_world_height.mjs`, dasselbe Feld, dieselben
-Erwartungen (§ B5a: Zahlen, keine Screenshots).
+**Die Mip-Pyramide ist Arithmetik auf der Kachel, keine zweite Auswertung.**
+Weil die Mip-Gitter **Teilmengen** des 2-m-Basisgitters sind (4/8/16/32/64 m
+sind Vielfache von 2 und teilen die 256 m Kantenlänge), entsteht sie durch
+Downsampling.
 
-**Was der RENDERER damit macht** (E8 Task 3, gilt für beide Renderer): der
-Boden wird auf DEM Gitter geschnitten, das das Feld mitbringt — die Basisplatte
-als Zellgitter (`gridPlate`), jede gemalte Fläche entlang derselben Linien
-zerteilt (`subdivideOnGrid`, `@anima/scene-render/gridMesh`). Jede Zelle wird
-dabei von der Minimum- zur Maximum-Ecke geteilt, auf beiden Seiten.
+```jsonc
+// GET /play/heightfield  (Auth wie /play/terrain, nie gefoggt)
+{ "origin_x": …, "origin_z": …,   // Weltmeter von heights[0][0]
+  "step_m": 4.0, "rows": …, "cols": …,
+  "heights": [[float, …], …],     // heights[j][i] bei (origin+i·step, origin+j·step)
+  "sig": "…",                     // identisch mit worldmap.height_sig
+  "tile_m": 256.0, "tile_step_m": 2.0,
+  "tiles": ["tx,tz", …],          // der KACHEL-INDEX, sortiert nach tx, dann tz
+  "mip_levels_m": [4.0, 8.0, 16.0, 32.0, 64.0],
+  "tile_stats": { "1,0": { "min": -9.0, "max": 10.445,
+                           "err": [0.5862, 0.85, 1.0, 1.1636, 3.3132] } },
+  "tile_stats_complete": true }   // false: der Rest kommt mit den Kacheln
 
-**Gehoben wird mit `sampleGroundHeight`, nicht mit `sampleWorldHeight`.** Ein
-Netz ist nicht bilinear, es ist dreieckig: über einer Zelle ist die gezeichnete
-Fläche eine von zwei EBENEN
-
-```
-tz <= tx:  h00 + tx·(h10−h00) + tz·(h11−h10)
-tz >  tx:  h00 + tz·(h01−h00) + tx·(h11−h01)
-```
-
-und sie weicht im Zellinneren um bis zu ein Viertel der Zell-Verwindung
-`|h00+h11−h01−h10|` vom Feld ab. Gemessen an einer 5-m-Fläche mit 10 m Falloff
-auf 8-m-Gitter: **ein voller Meter** — genau so weit sackt ein Flächen-Vertex
-unter die Platte, wenn er bilinear gehoben wird, und genau so weit sticht die
-Platte durch die Wiese. Der Fehler hängt an der Verwindung, NICHT am Verhältnis
-`falloff_m` zur Zellweite; eine Autorierungs-Grenze gibt es dafür nicht. Also
-liest ALLES, was den Boden berührt, denselben Sampler: Platte, Flächen, Streu,
-Figuren, Marker. `sampleWorldHeight` bleibt, was es war — der Zwilling der
-Server-Lesung des Feldes.
-
-**Und wo die FIGUR steht:** auf `max(Weltboden, Kachel-Laufhöhe)` — der
-Fußabdruck bringt seine eigene Laufhöhe mit (Platte, Modellhaut, Szenen-Relief,
-alles um das Kachelzentrum gerechnet), das Weltrelief läuft unter einem nicht
-planierenden Ort einfach weiter, und das Höhere gewinnt; die Fußabdruck-Platte
-wird mit demselben Sampler drapiert, damit das Gelände nicht durch sie
-hindurchschneidet. Unter einer Planierung (§ A16.1) sind beide Zahlen dieselbe,
-die Regel ist dort ein No-op. Der Preis ist Autorierungs-Sache: ein
-`display: ground`/`shell_area`-Modell, das unter den Weltboden taucht (Seegrund,
-versenkter Hof), wird von der Landschaft unterlaufen.
-
-**Zellweite:** `gridStepFor` verdoppelt den Feld-Schritt, bis das Netz unter
-40 000 Zellen bleibt, und misst das über die **Feld-Box**, nie über die ganze
-Platte — außerhalb des Feldes ist der Boden eben und wird von vier Quads
-getragen. Ein 100-m-Hügel in einer 1500-m-Welt bleibt damit auf 4 m (29² = 841
-Zellen), statt auf 8 m vergröbert zu werden, um 35 000 leere Zellen zu bezahlen.
-Platte und Flächen teilen sich die eine Zahl (eine gröbere Fläche würde in den
-Hügel einsinken).
-
-Zwei Folgen, die keine Geometrie sind: **Nebel-Quads** werden auf ~64 m
-gekachelt (`FOG_TILE_M`) und hängen je Kachel auf `max(Höhe darin) + 5 cm` —
-ohne Kachelung hebt EIN Hügel ein weltbreites Band fünfzig Meter in die Luft;
-verraten wird dadurch nichts, weil das Gelände ohnehin nie gefoggt ist und die
-Topographie schon zeigt. **Gekachelt wird nur, wo das Gelände sich bewegt**
-(E8 Task 5): ein Schleier-Rechteck, unter dem die Spannweite des Bodens unter
-`FOG_FLAT_EPS_M` = 0,25 m bleibt, bleibt EIN Quad. Eine Welt ohne Relief kostet
-damit exakt so viele Draw Calls wie vor E8 (gemessen: 744 bei 100 bekannten
-Orten; alles kacheln wären 3 659, mit drei Hügeln sind es 1 899). Und
-**Boden-Raycasts** starten bei
-`max(Feldhöhe) + 5 m` statt bei fixen 20 m — die ±50-m-Klemme oben ist genau
-deshalb notiert.
-
-### A16.1 Die Planierung unter Fußabdrücken (Plateau) — E8 Task 4, **opt-in seit 2026-08-13**
-
-**Die Planierung ist eine Option pro Ort, Default AUS.** Das Feld
-`level_ground` (Top-Level am Ort, fehlend = `false`, im Karten-Editor die
-Checkbox „Flatten terrain") entscheidet, ob ein Ort den Boden unter sich
-ebnet. Ohne das Flag ändert ein Ort das Höhenfeld überhaupt nicht: die
-autorierte Landschaft läuft durch ihn hindurch, Figuren folgen ihr auch IM
-Ort. Der Entscheid des Users im Wortlaut: „Orte werden bewusst gebaut. Die
-Landschaft sollte den Ort nicht beachten. Vielleicht will man sogar einen
-Anstieg im Ort."
-
-**Die AUTORIERUNGS-FOLGE, offen benannt und akzeptiert:** ein Ort OHNE Flag
-auf starkem Hang steckt sichtbar teils im Berg und schwebt teils, und er kann
-am Steilheits-Gate (§ A15 Nr. 8) unbetretbar werden — für den Router genauso
-wie für einen Avatar, denn beide beurteilen jetzt denselben durchlaufenden
-Boden. Das ist keine Panne, sondern die Kehrseite der Wahl: wer die ebene
-Baufläche will, setzt das Flag. Es gibt **keine Migration** — bestehende Welten
-verlieren beim nächsten Rastern ihre automatischen Plateaus.
-
-**Das Flag gehört der PLATZIERUNG, nie dem Template.** Ein Klon erbt es
-deshalb nicht (`_resolve_clones` setzt es aus dem Klon selbst): dieselbe
-Vorlage kann einmal auf ebener Wiese und einmal am Hang stehen.
-
-**Wo geflaggt ist, gilt unverändert alles Folgende.** Ein Ort wird AUF die
-Welt gesetzt, und der Boden darunter wird dafür geebnet: nach der reinen
-Flächen-Rasterung läuft ein zweiter Durchgang, in dem jeder GEFLAGGTE
-platzierte Fußabdruck auf die autorierte Höhe an seinem EIGENEN
-MITTELPUNKT gepinnt wird — `ground_y(pos_x, pos_z)`, gelesen VOR jeder Planierung,
-damit zwei benachbarte Orte nicht davon abhängen, wen die DB zuerst
-zurückgab. Ohne das schneidet der Boden eines Ortes am Hang auf der einen
-Seite durch den Hügel und schwebt auf der anderen, und die Geh-Regel (§ A15
-Nr. 8) lehnt jeden Schritt über diese Naht ab.
-
-**Gepinnt wird der Fußabdruck DILATIERT UM EINE ZELLE** — dasselbe Muster,
-mit dem das Szenen-Relief seine flachen Räume pinnt
-(`scatter_curves.terrain_grid`, `flat_hulls`), und aus demselben Grund: ohne
-den Ring interpolieren die Randzellen die Außenhöhen wieder HINEIN, und der
-Boden steigt am eigenen Rand durch den Ort. Mit dem Ring hat jede Zelle, die
-den Fußabdruck berührt, vier gepinnte Ecken — das Plateau ist über den ganzen
-Ort exakt eben —, und **die Rampe ist die eine Zelle** zwischen Ring und
-unangetasteter Landschaft.
-
-**Überlappung: der KLEINSTE Fußabdruck gewinnt**, dieselbe Auflösung, die
-`location_at_point` und `relief.ground_lift_at` für Verschachtelung
-benutzen (die Hütte auf dem Dorfplatz ist die speziellere Antwort). Umgesetzt
-als „der breiteste zuerst", damit der schmalste zuletzt schreibt.
-
-**Das Gitter WÄCHST dafür.** Ein GEFLAGGTER Fußabdruck, der über die bemalte
-Box hinausragt, zieht seine Box plus einen Schritt in die Gitter-Grenzen — sonst
-würde das Plateau am Rand abgeschnitten und träfe draußen (wo der Randwert
-gilt) als Klippe auf die flache Welt. Fußabdrücke, die keine autorierte Höhe
-berühren können, bleiben draußen: dort ist alles 0, und eine ferne Hütte darf
-das Gitter nicht über die halbe Welt spannen. Eine Welt ohne eine einzige
-Höhenfläche behält deshalb ihr leeres Gitter, egal wie viele Orte darauf
-stehen. Ein ungeflaggter Ort braucht keine Gitter-Deckung, weil er nichts
-hineinschreibt.
-
-**`height_sig` deckt seit Task 4 auch die PLATZIERUNGEN** — seit 2026-08-13
-genau die der planierenden Orte. Verschieben,
-Drehen, Größe ändern, Setzen und Löschen einer solchen Location bewegen ihr
-Plateau und damit das Relief — ohne dass eine Höhenfläche angefasst wurde, und
-das SETZEN oder LÖSCHEN des Flags tut es ebenfalls, ohne dass sich der Ort
-einen Zentimeter bewegt (er tritt in die gehashte Liste ein oder aus). Clients
-holen das Feld also auch dann neu, wenn nur ein Ort umgezogen ist; der
-Schreibpfad (`world._save_world_data`) vergleicht die Signatur und rastert
-neu, wenn sie sich geändert hat.
-
-**Die AUTORIERUNGS-GRENZE, klar benannt** (sie betrifft nur geflaggte Orte —
-ohne Planierung gibt es keine Rampe, sondern nur den durchlaufenden Hang):
-die Rampe ist EINE Zelle breit — und eine Zelle ist der Schritt des Rasters,
-auf dem planiert wird, auf einer Kachel also `TILE_STEP_M` = 2 m —,
-also trägt sie `tan(max_slope_deg) · tile_step_m` = **1,68 m** bei den
-Vorgaben (bis 2026-08-14, als die Kacheln noch bei 4 m standen: 3,36 m).
-Steht ein Ort mehr als das über oder unter dem Boden an seinem Rand, bleibt
-ein Rand, den niemand überschreitet — eine Zelle AUSSERHALB des Fußabdrucks
-und damit außer Reichweite der 1,5-m-Öffnungs-Ausnahme. Am Ort selbst ist das
-kein Problem: der gepinnte Ring reicht eine Zelle über den Fußabdruck hinaus,
-die Öffnung liegt also auf ebenem Grund und das Betreten ist frei. Wer den
-Ort auf einem echten Steilhang platziert, baut sich eine Mauer — der
-Höhen-Editor nennt dieselbe Zahl, und zwar **gerechnet aus `tile_step_m`**
-(`GET /world/height-areas` trägt es mit): eine im Client hartkodierte 3,36
-hätte nach der Halbierung weiter den doppelten Anstieg versprochen.
-
-**Der Client hängt seine ganze Kachel daran** (`scene/tiles.footprintCentre`):
-die Kachel steht auf `y = ground_y(pos_x, pos_z)` — unverändert und ohne
-Client-Änderung auch bei ungeflaggten Orten, nur ist der Boden dort eben nicht
-mehr eben, die Kachel steckt also sichtbar im Hang. Und weil die
-Kachel-Gruppe Position UND Drehung trägt, klettert alles darin — Platte,
-Hülle, Räume, das kachel-lokale Szenen-Payload — gemeinsam den Hügel hinauf.
-Kein Payload-Feld ändert sich dafür (§ A1.2 gilt: kein y im Payload). Zwei
-Folgen im Client, beide Pflicht: die Dach-Grenze `walk_y_world` misst
-RELATIV zur Kachel (sie ist ein Szenen-Meter, der Strahl-Treffer ein
-Welt-Meter), und eine Kachel wird neu gebaut, wenn sich ihre Plateauhöhe
-ändert — die Szene verankert Türschwellen und Raummitten als Weltpunkte.
-
-**Das NPC-Routing zieht mit** (`nav_grid`, siehe § A15): eine Zelle, deren
-Boden steiler steht als `max_slope_deg`, ist blockiert — ausgenommen Zellen
-in einem PLANIERENDEN Fußabdruck (dort ist das Feld eben) und an einer
-Öffnung; in einem ungeflaggten Ort misst der Router den durchlaufenden Hang
-wie draußen. Jeder Höhenmeter
-kostet zusätzlich `SLOPE_COST_S_PER_M` = 4 Spielsekunden — eine STRAFE, nie
-ein Bonus, sonst überschätzt die A*-Heuristik und die Route ist nicht mehr
-optimal. Die Strafe steckt auch in `segment_costs`, also erbt die Reisezeit
-den Berg, und die Linien-Glättung kann den Umweg um einen Hang nicht mehr
-wegziehen.
-
-### A16.2 Das Mikro-Relief der Terrain-Arten — neu 2026-08-13
-
-**Eine Terrain-ART kann Hügel tragen.** Zwei whitelistete Katalog-Felder je
-Art (`meta.relief_amplitude_m`, `meta.relief_wave_m`, Editor: „Relief
-amplitude/wavelength") erzeugen zufällige kleine Hügel überall dort, wo diese
-Art gemalt ist — der Wunsch des Users im Wortlaut: „nur um zufällige kleine
-Hügel zu erzeugen, damit die Welt nicht flach wirkt".
-
-**Eingebacken, nicht gerendert.** Das Relief landet im Welt-Höhenfeld (§ A16)
-und damit im EINEN `heights`-Array, das Server-Gate, Client-Spiegel und beide
-Renderer lesen. Es gibt bewusst **keinen TS-Zwilling**: der Client bleibt
-Sampler, sonst hätten Laufregel und Bild zwei verschiedene Böden.
-
-**Die Formel** — Wert-Rauschen auf einem Gitter der Kantenlänge `wave_m`, das
-wie das Höhengitter selbst am **Welt-Ursprung** verankert ist:
-
-```
-seed(art)  = FNV-1a 32 über den ART-NAMEN (es gibt KEIN Seed-Feld):
-             h = 2166136261; je UTF-8-Byte b:  h = ((h XOR b)·16777619) mod 2^32
-rnd(u, v)  = XorShift32((seed + u·73856093 + v·19349663) mod 2^32).next01()·2 − 1
-u, v       = floor(x/wave), floor(z/wave);   tx, tz = die Nachkommateile
-h_relief   = bilinear(rnd über die vier Ecken) · relief_amplitude_m
+// GET /play/heightfield/tiles?keys=tx:tz,tx:tz   (BATCH_MAX 64 Schlüssel)
+{ "sig": "…", "tile_m": 256.0, "step_m": 2.0,
+  "mip_levels_m": [4.0, 8.0, 16.0, 32.0, 64.0],
+  "tiles": { "1,0": { "origin_x": 256.0, "origin_z": 0.0,
+                      "rows": 129, "cols": 129, "heights": [[…], …],
+                      "stats": { "min": …, "max": …, "err": […] } } } }
 ```
 
-Es sind exakt die Konstanten des alten Szenen-Reliefs
-(`scatter_curves.terrain_grid`) — **eine Formelfamilie im Repo**. Der Seed ist
-ein Hash des NAMENS, weil ein gespeicherter Seed durch jede Katalog-Änderung,
-jeden Export und jeden Klon mitgeschleppt werden müsste, nur um den Boden
-stillzuhalten. Negative Ecken sind sauber definiert (`& 0xFFFFFFFF` = die
-vorzeichenlose 32-Bit-Lesung), zwei Flächen derselben Art setzen sich also
-nahtlos fort.
+`err[k]` ist der **größte senkrechte Fehler in Metern**, den ein Renderer
+macht, wenn er die Kachel auf Ebene `mip_levels_m[k]` zeichnet statt auf der
+2-m-Basis: `max |h_mip − h_basis|` über die Kachel, wobei `h_mip` das grobe
+Gitter bilinear zurückinterpoliert.
 
-**Klemmen.** `relief_amplitude_m` 0,05..2,0 m (2 Dezimalen; fehlend oder 0 =
-kein Relief, der Schlüssel verschwindet). Die Obergrenze ist eine
-**Begehbarkeits**-Grenze: zwei Nachbar-Stützpunkte können sich um höchstens
-2·Amplitude über einen Gitterschritt unterscheiden, auf dem Kachel-Raster, das
-die Regeln lesen, also `atan(2·2,0/2,0)` = **63°** im Maximum (45°, solange
-dieser Schritt 4 m war) — die Zahl, die der Editor-Hinweis nennt. Es ist ein
-theoretischer Worst Case: er verlangt zwei benachbarte Rausch-Ecken auf ±1.
-Die Obergrenze bleibt bei 2,0 m (Entscheid 2026-08-14), aber der Editor
-**warnt** ab `tile_step_m · tan(max_slope_deg) / 2` (0,84 m bei den Vorgaben),
-also sobald dieser Worst Case die Laufsperre überschreitet — beide Zahlen
-kommen vom Server (`heightMath.reliefWarnAmpM`), geklemmt wird nichts.
-`relief_wave_m` **4**..200 m, fehlend = **32 m**; die Untergrenze ist
-2 × `TILE_STEP_M` (**Nyquist**: eine kürzere Welle kann das Gitter nicht
-tragen, sie würde nur je nach Schrittweite anders aliasen) — sie halbierte
-sich am 2026-08-14 mit dem Kachel-Schritt, und **genau dafür** wurde er
-halbiert: eine 4-m-Welle ist seither autorierbar, vorher machte der Server
-stillschweigend 8 m daraus. Es gibt **keinen Kontur-Fade**: den Übergang trägt
-die bilineare Interpolation des Feldes selbst.
+> **INVARIANTE 3 — `err[k]` ist eine EXAKTE Schranke, keine Stichprobe.**
+> Innerhalb einer Basiszelle sind beide Felder bilinear (das grobe auch, weil
+> eine bilineare Funktion auf einem Teilrechteck bilinear bleibt), ihre
+> Differenz also ebenfalls — und eine bilineare Funktion nimmt ihre Extrema **in
+> den Ecken** an. Das Maximum über die Basis-Stützpunkte IST damit das Maximum
+> über das Kontinuum.
 
-**Die Randregel (Abnahme 2026-08-13): am Rand hebt das Relief nur noch.** An
-einem Stützpunkt, von dessen vier Gitter-Nachbarn einer KEIN Relief trägt
-(flache oberste Art oder unbemalter Grund), wird der Rausch-Beitrag auf
-`max(0, Rauschen)` geklemmt — Positives läuft über die Interpolation sanft in
-den Nachbarboden aus (das Ufer hebt sich), Negatives endet auf dem autorierten
-Niveau. Sonst zog eine Senke im Gras die Naht des Sees mit sich nach unten;
-innere Stützpunkte (alle vier Nachbarn relief-tragend) bleiben unverändert
-voll.
+`min`/`max` sind die Höhen-Spanne der Kachel — die andere Hälfte dessen, was
+ein Quadtree-Knoten für Frustum und Occlusion braucht.
 
-**Welche Art an einem Punkt gilt**, ist die Regel von `terrain_query.kind_at`
-— die OBERSTE gemalte Fläche, die ihn enthält (letzter Treffer gewinnt). Eine
-flache Art über einer hügeligen nimmt das Relief also wieder weg. Ein Punkt,
-den KEINE Fläche bedeckt, bekommt kein Relief: die unbemalte Welt bleibt eben,
-und nur deshalb ist das Gitter überhaupt begrenzbar.
+**Zwei Schreibweisen desselben Schlüssels, absichtlich verschieden:** in der
+QUERY trennt `:` innerhalb eines Schlüssels und `,` zwischen ihnen
+(`keys=0:0,1:0,-1:2`); im PAYLOAD heißt die Kachel `"tx,tz"`. Duplikate fallen
+auf ihre ERSTE Position zusammen, **die Kappung greift NACH dem Entdoppeln**,
+unlesbare Tokens werden übersprungen und **je einmal** geloggt. **Nicht
+indizierte Kacheln fehlen einfach in der Antwort** — kein Fehler, kein
+Null-Gitter: der Index hat dem Client schon gesagt, dass dort die flache Welt
+ist.
 
-**Durchgangs-Reihenfolge der Rasterung** (jeder Schritt wegen des vorigen):
+**Kosten** (gemessen 2026-08-21, 2×2-km-Welt mit Relief, drei Seen, zwanzig
+Grundstücken): Modellbau 20–30 ms, eine Kachel ~80 ms, ihre Statistik ~20 ms,
+die 253²-Übersicht ~370 ms. `GET /play/heightfield` liefert die Statistik für
+höchstens `TILE_STATS_MAX` = 64 indizierte Kacheln — diese Arbeit ist keine
+zusätzliche, sondern nur vorgezogene: die Kacheln landen im Prozess-LRU
+(`TILE_CACHE_MAX` = 128, Schlüssel `(Generation, tx, tz)`). Persistiert wird
+weiterhin nur die Übersicht.
+
+---
+
+### A16.6 CDLOD — Render-LOD ist Sampling-Dichte, nie ein Datenwechsel
+
+`client3d/src/scene/terrainLod.ts` zeichnet das ganze Gelände als EIN
+instanziertes Patch-Mesh über einen Quadtree:
+
+| Größe | Wert | Bedeutung |
+|---|---|---|
+| `PATCH_N` | 32 | Zellen je Achse und Knoten — ein Geometrie-Puffer für alles |
+| `MAX_LOD_LEVELS` | 6 | Tiefe des Quadtrees |
+| `MIN_LOD_DISTANCE_M` | 128 | Reichweite der feinsten Stufe; jede weitere verdoppelt |
+| `MORPH_START` | 0,5 | ab 50 % der Stufen-Range morpht ein Vertex auf seinen groben Zwilling |
+| `MAX_PIXEL_ERROR` | 2 | die Schranke, gegen die `err[k]` (§ A16.5) beurteilt wird |
+| `MAX_NODES` | 4096 | Sicherung gegen entartete Kameras |
+
+**Die drei Gesetze, die daraus folgen:**
+
+1. **Die Höhe kommt IMMER aus derselben Pyramide.** Der Vertex-Shader zieht sie
+   mit vier `texelFetch` + manuell bilinear aus `R32F` — bitgleich zur
+   CPU-Formel (`|h_gpu − h_cpu| < 1e-4`, als Smoke assertiert). Der GLSL-Baustein
+   dafür ist einmal da (`terrainLodSampleGlsl`, aus `terrainLodGlsl`
+   herausgelöst, weil ein Fragment-Shader kein `attribute` deklarieren darf) und
+   wird auch vom Wasser-Shader benutzt.
+2. **Die SPIEL-Logik sampelt immer die feinste Ebene** (`nodeStep = 0`). Ein
+   Höhensprung durch Kachel-Ladezustand ist damit ein Rendering-Übergang
+   (Geomorph), nie ein Datenwechsel. Die alte Entweder-oder-Leiter
+   („Kachel ODER Übersicht, nie gemischt") ist damit kein Vorrang mehr, sondern
+   eine Ladefrage: der Client hält die indizierten Kacheln im Radius
+   `HEIGHT_TILE_RADIUS_M` = **560 m** um seinen Anker, der Szenennebel endet bei
+   **520 m**, die Naht liegt also konstruktionsbedingt hinter dem Nebelband.
+3. **Es gibt kein zweites Boden-Mesh.** Keine Fußabdruckplatte, kein Sockel,
+   keine gedrapte Fläche je gemalter Art, keine renderOrder-/polygonOffset-Leiter
+   und keine y-Haarlinien. `smoke_layer_cut.mjs` liest die Quellen darauf ab —
+   eine Löschung ist das Einzige, was eine positive Prüfung nicht messen kann.
+
+---
+
+### A16.7 Der Layer-Schnitt — `GET /play/terrain-layers`
+
+**Bindende User-Vorgabe (2026-08-21):** Texturen werden nicht mehr
+übereinandergelegt, sondern **geschnitten** — pro Stelle gewinnt genau ein
+Layer, alles liegt auf EINER Fläche, die Übergangsbreite ist pro Bodenart
+einstellbar.
+
+`app/core/terrain_layers.py` bäckt zwei Masken je 256-m-Kachel, auf **denselben
+Kachel-Schlüsseln** wie das Höhenfeld (`heightfield.tile_key`) — ein Anker, ein
+Fenster, damit Form und Material des Bodens nie über verschiedenen Quadraten
+geschärft werden.
+
+| Maske | Auflösung | Format | Filter | Inhalt |
+|---|---|---|---|---|
+| `id` | **1 m/Texel** (256²) | RG8UI, 2 Byte | **NEAREST** | das PAAR (A, B) der Layer-Indizes an der nächsten Grenze |
+| `sd` | **0,5 m/Texel** (512²) | R8 | **LINEAR** | die SIGNIERTE Distanz zu genau dieser Grenze, in Metern |
+
+> **DAS PAAR IST KANONISCH — und das ist der ganze Trick.** Beide Seiten einer
+> Grenze tragen dasselbe (A, B): **A ist immer der SPÄTER gemalte Layer**,
+> niemals „der, auf dem ich stehe". Nur das VORZEICHEN von `sd` sagt, auf
+> welcher Seite ein Texel liegt. Damit setzen ein NEAREST-Integer-Zugriff und
+> eine LINEAR interpolierte Distanz eine durchgehende Kante zusammen: die id
+> darf an jeder Texel-Naht auf die andere Seite springen, ohne je zu ändern,
+> WELCHE zwei Materialien gemischt werden, und wo der Schnitt genau läuft, kommt
+> allein aus der interpolierten Distanz — subtexel-scharf, in jedem Zoom, ohne
+> ein einziges zusätzliches Dreieck. Wäre das Paar nach „der Layer hier"
+> geordnet, kippten A und B über der Linie, das Vorzeichen mit ihnen, und die
+> Kante risse an jeder Naht auf.
+
+**Warum eine Integer-Textur für die id:** `usampler2D` + `texelFetch`. Eine
+Integer-Textur kann *gar nicht* gefiltert werden — NEAREST erzwingt das FORMAT
+und nicht eine Sampler-Einstellung, die ein Treiber anders auslegen könnte.
+
+**Quantisierung, ausgeschrieben:** `code = clamp(round(sd · 127/8) + 128, 1,
+255)`, zurück `sd = (code − 128) / (127/8)`. 127 Codes je Seite einer EXAKT
+darstellbaren Null (128), Schritt 8/127 = 0,063 m, Band ±8 m. Code 0 wird nie
+geschrieben. Server: `terrain_layers.encode_sd/decode_sd`; Client:
+`@anima/scene-render` `decodeSd`, das seine zwei Zahlen aus dem PAYLOAD liest
+und nicht aus einer Konstante.
+
+**DIE PRIORITÄTSREGEL — der letzte enthaltende Eintrag gewinnt**, in dieser
+Reihenfolge:
+
+1. gemalte Terrain-Flächen (z_order, dann Malreihenfolge — genau die Regel, mit
+   der `terrain_query.kind_at` Punktabfragen beantwortet);
+2. je Location, **größte Fläche zuerst** — die KLEINSTE schreibt zuletzt und
+   gewinnt (das Verschachtelungsgesetz von `location_at_point`);
+3. innerhalb einer Location: offene Zonen, dann geschlossene Räume, je in
+   Raum-Reihenfolge.
+
+Die Bake füllt dafür ein Raster aus **Malrängen** (0 = ungemalte Welt, r = die
+r-te Fläche der Liste), sodass „wer liegt oben" ein Integer-Vergleich ist.
+**Bild und Regeln lesen damit erstmals dieselbe Antwort auf „welche Bodenart ist
+hier?".**
+
+**Übergangsbreite `edge_blend_m` — die Franse wird ein Regler.** Am Terrain-Typ
+(`meta.edge_blend_m`, 0…8 m, Default **1,5**) und am Etage-0-Raumboden
+(`layout.edge_blend_m`, 0…8 m, Default **0**). Der Unterschied ist Absicht: ein
+gemalter Boden wächst, **ein Raumboden wird gezeichnet.**
+
+> **DAS EINZIGE Katalogfeld, in dem 0 ein WERT ist** und nicht „nicht gesetzt":
+> 0 ist der HARTE SCHNITT — Raumboden, Bordstein, gepflasterter Weg — und
+> überlebt deshalb einen Save. Es geht bewusst nicht durch
+> `_clamped_meta_number`, sondern durch `terrain_layers.sanitize_edge_blend`.
+
+Der Shader schneidet:
+
+```glsl
+float g = fwidth( sd );                       // IMMER, vor jedem Zweig
+float soft = smoothstep( -0.5*b, 0.5*b, sd ); // b > 0
+float hard = clamp( sd / max(g, 1e-6) + 0.5, 0.0, 1.0 );   // b == 0
+w = b > 0.0 ? soft : hard;
+```
+
+`b` kommt aus der Layer-Tabelle, **nach Art A**. Die halbe Breite liegt auf
+jeder Seite, also sind „1,5 m Übergang" wirklich 1,5 m Boden und nicht drei.
+Bei `b = 0` ist der Schnitt ein **ein Pixel breiter** Schritt, wo die Kamera
+auch steht: nah ist ein Pixel zentimeterklein und die Kante rasiermesserscharf,
+fern ist er metergroß und derselbe Ausdruck MITTELT die beiden Böden, statt zu
+flimmern. `fwidth` steht außerhalb jedes Zweigs — eine Ableitung in
+Kontrollfluss, der über ein Quad hinweg auseinanderläuft, ist in GLSL ES
+undefiniert, und genau dieser Zweig läuft an jeder Grenze auseinander.
+
+Weil `b` nach Art A gelesen wird, ist **eine Art bei zwei Breiten zwei Layer**;
+die Tabelle führt Einträge je `(kind, edge_blend_m)` und wächst über die
+Terrain-Arten hinaus auf die Boden-Arten (eine Boden-Art trägt sich selbst als
+`surface`, weil `surfaces.floor` direkt eine Bibliotheks-Id ist).
+
+**Die Franse ist nicht weg, nur ihr Mechanismus.** Das Rauschen, das die Grenze
+organisch aussehen ließ, überlebt unverändert (0,5 m Ausschlag über 2 m
+Wellenlänge, `LC_EDGE_NOISE_M`/`LC_EDGE_WAVE_M`) — es schiebt jetzt die LINIE
+statt der Alpha, und sein Ausschlag ist auf die halbe Breite gedeckelt: bei
+`b = 0` also auf **null**, damit der harte Schnitt auf dem Meter endet, auf dem
+er gemalt wurde.
+
+**Der Endpunkt — einer, zwei Modi**, weil es zwei Hälften desselben Fensters
+sind:
+
+```jsonc
+// OHNE keys — der INDEX
+{ "sig": "…", "tile_m": 256.0,
+  "id_step_m": 1.0, "sd_step_m": 0.5, "sd_band_m": 8.0,
+  "sd_zero": 128, "sd_codes_per_m": 15.875,
+  "layers": [ { "index": 0, "kind": "grass", "surface": "grass",
+                "edge_blend_m": 1.5, "water": false }, … ],
+  "overview": { "origin_x": …, "origin_z": …, "step_m": 8.0,
+                "cols": 250, "rows": 250, "id": "<base64 cols·rows·2>" },
+  "tile_keys": ["0,0", "1,0", …],
+  "waters": [ { "location_id": "…", "room_id": "pond", "kind": "water",
+                "polygon": [[295.0,-5.0], …],       // WELT-Meter
+                "water_level_effective": 0.0 } ] }
+
+// MIT keys=tx:tz,tx:tz — die BATCH, höchstens BATCH_MAX = 16 Kacheln
+{ "sig": "…", …, "layers": […],
+  "tiles": {
+    "1,0": { "origin_x": 256.0, "origin_z": 0.0,
+             "id_size": 256, "sd_size": 512,
+             "id": "<base64 256·256·2>", "sd": "<base64 512·512>" },
+    "2,0": { "origin_x": 512.0, "origin_z": 0.0, "uniform": 3 } } }
+```
+
+`layers[0]` IST der blanke Boden (die `game.default_terrain_kind` der Welt);
+eine Fläche, die in der Default-Art gemalt ist, bildet auf 0 zurück statt einen
+Zwilling zu bekommen. Byte-Reihenfolge zeilenweise vom Kachel-Ursprung, Texel
+`(i, j)` deckt `[i·step, (i+1)·step)`. Eine Kachel ohne jede Grenze antwortet
+`uniform` und schickt **kein** Array — der Normalfall draußen, und der
+Unterschied zwischen 40 Byte und 384 kB. `waters` führt die Wasser-RAUMBÖDEN in
+derselben Form, in der eine gemalte Fläche ihren Spiegel führt — damit ein
+Client den Teich eines Raums mit der Maschinerie zeichnet, mit der er einen See
+zeichnet. Ein Raum, den der Bake nie gesehen hat (unplatzierte Location), bleibt
+**WEG** statt eine geratene Höhe zu bekommen.
+
+**Der Vertrag zum Refetch:** die Masken hängen an `terrain_sig` (die gemalten
+Flächen + der Art-Katalog) bzw. an `layers_sig` (`floors_basis`, die
+Grundrisse). Ein eigener Poll existiert nicht.
+
+**Der Kompositor im Client** (`client3d/src/scene/layerGround.ts`) hängt sich
+als LETZTES Patch in die Material-Kette der CDLOD-Fläche (`patchHole` →
+`applyNaturalGround` → **dies**) — und läuft damit als ERSTES im Shader, weil
+jedes Boden-Patch seinen Rumpf direkt hinter `#include <map_fragment>` einsetzt.
+Genau das ist verlangt: der Kompositor schreibt die Albedo, die Naturstufen
+(Farbflecken, Höhen-AO) arbeiten auf dem KOMPONIERTEN Ergebnis. Das
+Terrain-Material trägt **keine `map`** — mit einer wäre `USE_MAP` gesetzt und
+die Anti-Kachel-Stufe blendete die Breitprobe der DEFAULT-Art über jeden Wald;
+die Anti-Kachelung liegt statt dessen im Kompositor, **pro Layer** (`lcSurface`).
+Die Oberflächen liegen in EINER `DataArrayTexture`, eine Schicht je
+Layer-Index, jede auf 512² gebracht. Zwei Fenster wie beim Höhenfeld: die
+geladenen Kacheln werden zu EINEM Rechteck gepackt (`packLayerWindow`) und
+folgen dem Höhen-Anker über dieselbe Wunschmenge; darüber hinaus antwortet die
+weltweite GROBE `overview`-Maske — sie trägt keine Distanz, denn bei 8 m/Texel
+ist jeder Übergang schmaler als ein Texel, also ist ein harter Schnitt die
+einzige ehrliche Antwort.
+
+**Der Unterwuchs liest dieselbe Maske** (User-Entscheidung 5.2): ein Büschel
+wächst nur, wo die OBERSTE Bodenart an seinem eigenen Punkt wirklich die Art
+ist, der es gehört (`@anima/scene-render` `topLayerAt`, im Client
+`layerGround.topLayerIndexAt`). Die Polygon-Occluder bleiben als billiger
+erster Durchgang davor — zwei Implementierungen von „oberste Art" sind zwei
+Antworten, die auseinanderlaufen werden.
+
+**Kostenbudget** (2 × 2-km-Welt): eine Kachel roh 393 216 Byte (id 131 072 + sd
+262 144), ganze Welt **24,0 MB** roh / 32,0 MB base64 (61 Kacheln), ein Fenster
+von 9 Kacheln auf der GPU 3,54 MB, Übersichtsmaske (8 m) **127 kB**. Bake einer
+Kachel MIT Grenzen ~0,32 s (kalt, danach LRU), ohne Grenze ~0,04 s bei 40 Byte
+Antwort. Fragment-Kosten: 1 id-Fetch + 1 sd-Fetch + 4 Array-Fetches (vier statt
+zwei, weil die Anti-Kachelung PRO LAYER schmal und breit probt). Dafür ist das
+Terrain **1 Draw-Call** statt einem Mesh je gemalter Fläche plus Platten.
+
+---
+
+### A16.8 Der Wasserspiegel — eine Platte, ein Ufer, ein Schwimmer
+
+**Die Fläche ist eben, und ihre Höhe IST die Geometrie.** Pro Wasserfläche —
+gemalte Karten-Fläche wie Zonen-Wasser, **derselbe Bauer** (`scene/ground.ts`
+`addMirror`) — eine **flache Earcut-Platte** auf `y = water_level_effective`,
+ohne jede Unterteilung: eine Ebene braucht in der Mitte keine Stützpunkte. Ein
+Kilometer See sind ein paar Dreiecke.
+
+`transparent: true`, `depthTest: true`, `depthWrite: false`, gezeichnet nach
+dem opaken Gelände. **Kein `renderOrder`, kein `polygonOffset`, kein Lift** —
+die Platte ist mit dem Bett konstruktionsbedingt nicht koplanar (Invariante 2,
+in jedem Mip).
+
+**Der Spiegel steckt in der Platten-y, nicht in einem Uniform.** Der Fragment
+liest seine eigene Weltlage (`vWaterPlane.y`), und die ist bei einer ebenen
+Platte genau der Spiegel. Deshalb teilen sich **alle Seen einer Bodenart EIN
+Material**, egal auf wie vielen Höhen sie stehen: zwei Seen auf zwei Höhen sind
+zwei Meshes, nicht zwei Shader.
+
+**Zwei Bedingungen entscheiden über eine Platte, und beide sind Daten:** die
+KLASSE sagt, wie die Oberfläche aussieht (`isWaterClass` — nie die Farbe, nie
+der Name der Art), `water_level_effective` sagt, ob die Bake ein Bett gecarvt
+hat und auf welcher Höhe. Fehlt der Spiegel, gibt es **keine Platte** — eine
+auf Geländehöhe geratene Ebene wäre die alte Drape von vorn. `null` ist die
+Form von „der Bake hat das nie gesehen" und darf **nicht** zu 0 werden
+(`Number(null)` IST 0, und eine Ebene auf Welt-Null über einem Innenhof-Teich
+wäre genau die geratene Höhe). Das AUTORIERTE `water_level` wird bewusst nicht
+gelesen: es darf leer sein.
+
+**Das Ufer kommt aus der TIEFE, nicht aus einem Depth-Pass:**
+
+```glsl
+float wsDepth = vWaterPlane.y - tlodHeight( vWaterPlane.xz, 0.0 );
+if ( wsDepth <= 0.0 ) discard;
+```
+
+`tlodHeight` ist **derselbe Lookup, mit dem der Terrain-Vertex-Shader seine
+Höhen zieht** (§ A16.6). Kein Screen-Space-Depth, kein Depth-Prepass, kein
+zweites Render-Target: der Boden ist bereits eine Funktion, die man fragen kann.
+Der **Discard bei `wsDepth ≤ 0`** ist das einzige Band, in dem Platte und
+Gelände dieselbe Fläche sind — das ist die Uferlinie, und ein Fragment, das dort
+am Tiefentest teilnimmt, flimmert, wie klein sein Alpha auch ist.
+
+**Die Zahlen** (`client3d/src/scene/waterPlaneMath.ts`):
+
+| Größe | Wert | Woher |
+|---|---|---|
+| `WATER_SHORE_BAND_M` | **1,5 m TIEFE** | Alpha = `smoothstep(0, 1.5, Tiefe)`. Beim Default-See (`water_depth_m` 2,0 über `shore_ramp_m` 3,0) ist das `smoothstep = 0,75`, also `t ≈ 0,6736` → volle Deckung **2,02 m** innerhalb des Umrisses. Ein 0,6-m-Tümpel erreicht nie 1 (Alpha 0,352) — genau so sieht ein Tümpel aus |
+| `WATER_FOAM_BAND_M` | 0,6 m | `1 − smoothstep(0, 0,6, Tiefe)`; endet ungefähr dort, wo das Waten ins Schwimmen kippt |
+| `WATER_FOAM_STRENGTH` | 0,6 | wie weit die Gischt das Licht Richtung Weiß zieht |
+| `WATER_FOAM_ALPHA` | 0,15 | wie viel Alpha sie am Rand zurückgibt, damit die Uferlinie eine Spitze behält |
+
+Alpha-Stützstellen (Rampe + Gischt): Tiefe 0 → 0,15 · 0,3 → 0,179 · 0,6 →
+0,352 · 0,75 → 0,5 · 1,125 → 0,84375 · 1,5 → 1.
+
+**Schwimmen liest den Spiegel** — eine exportierte Funktion für Avatar, NPCs und
+Reisende (`walk.floatRootY`):
 
 ```
-Flächen (stärkste Auslenkung) → Mikro-Relief (ADDITIV) → Planierung (gewinnt)
+root = waterLevel === null ? groundY : max( groundY + sink, waterLevel )
+body = root − sink                      (unverändert, figures.Figure.play)
+     = waterLevel === null ? groundY − sink : max( groundY, waterLevel − sink )
 ```
 
-Additiv und NACH den Flächen, weil das Relief eine Variation der autorierten
-Landschaft ist und kein Konkurrent — vor dem `|max|`-Vergleich würde es von
-jeder Höhenfläche überschrieben. Vor der Planierung, weil ein planierter Ort
-auf ebenem Grund steht und nicht auf ebenem Grund plus Rauschen. Der **Null-Ring**
-am Gitterrand bleibt unangetastet, ohne Sonderfall: das Gitter reicht immer
-einen vollen Schritt über jede bemalte Box hinaus.
+> **Der Übergang fällt aus dem `max`, er ist keine zweite Regel.** Die beiden
+> Zweige sind gleich, wo `groundY + sink = waterLevel` — bei einer Wassertiefe
+> von **exakt `sink`**. Flacher wird GEWATET (Füße auf dem Bett), tiefer
+> GESCHWOMMEN (Körper `sink` unter der Wasserlinie, egal wie tief das Bett
+> fällt). Das Maximum zweier stetiger Funktionen ist stetig: ins Wasser laufen
+> ist ein glatter Abstieg, ohne Stufe an der Wasserlinie und ohne Stufe am
+> Übergang.
 
-**Gitter-Grenzen und Signatur wachsen mit.** Die Basisbox ist ab jetzt
-„Höhenflächen ∪ Flächen, deren ART Amplitude > 0 hat" — eine Welt ohne eine
-einzige Höhenfläche, aber mit Relief-Gras, bekommt damit ihr erstes Gitter
-(Punktbudget und Verdopplung unverändert). `height_sig` hasht zusätzlich genau
-das, was der Raster-Pass liest (`heightfield.relief_inputs`): die Polygone der
-relief-tragenden Flächen, die flachen Flächen DARÜBER und die beiden
-Katalog-Zahlen. **Terrain-Malen ohne relief-tragende Art ändert die Signatur
-nicht** — sonst kostete jeder Pinselstrich eine Neu-Rasterung. Die Schreibpfade
-`terrain.save_area/delete_area` und `terrain_types.save_world_type/delete_world_type`
-rufen dafür `note_world_write()`, das erst vergleicht und nur bei echter
-Änderung neu rastert.
+Mit dem Wasser-Seed der Welt (`move_sink_m` 0,35, `idle_sink_m` 1,3) und
+Spiegel `L`:
 
-**Kosten** (gemessen 2026-08-13, ganze Welt mit einer Relief-Art bemalt, also
-der Worst Case): volles Punktbudget 346 × 346 = 119 716 Stützpunkte — 393 ms
-ohne, **534 ms mit** Relief-Pass; eine 800-m-Welt (203²) 129 ms → 185 ms. Der
-Aufschlag von rund einem Drittel entsteht je zur Hälfte aus „welche Art liegt
-oben" und der Rausch-Auswertung; er fällt auf dem SCHREIB-Pfad an, nie beim
-Laufen.
+| Tiefe | root (Schwimmer) | root (Treter) | body (Schwimmer) | body (Treter) |
+|---|---|---|---|---|
+| 0,00 | L+0,35 | L+1,30 | L | L |
+| 0,35 | L | L+0,95 | L−0,35 | L−0,35 |
+| 1,30 | L | L | L−0,35 | L−1,30 |
+| 2,00 | L | L | L−0,35 | L−1,30 |
 
-**Die 2D-Karten schattieren das Relief** (seit 2026-08-15). Spielerkarte
-(`frontend/src/player/MapPanel.tsx`) und Minimap des 3D-Clients
+**Woher der Spiegel unter einem Punkt kommt: `typeAt` — und ZONEN gewinnen.**
+Ein Raumboden aus Wasser rangiert **über** einer gemalten Fläche, exakt wie
+sein Boden im Layer-Bake (§ A16.7 Priorität 2/3); unter mehreren Zonen gewinnt
+die LETZTE (`waterPlaneMath.zoneWaterAt`, dieselbe Letzter-gewinnt-Lesung wie
+die Maske). Ohne diese Sprosse watete eine Figur mitten im See auf dem gecarvten
+Bett zwei Meter unter der Ebene, die sie sah. Kennt der Terrain-Katalog die
+Bodenart einer Zone nicht (eine Boden-Art ist eine Surface-Bibliotheks-Id, kein
+Terrain-Kind), leiht sie sich die Sink-/Animations-/Tempo-Zahlen der ersten
+katalogisierten Art mit `meta.water` — deterministisch nach Schlüssel sortiert;
+trockenen Fußes AUF einem See zu stehen ist der sichtbare Fehler, gegen den das
+existiert.
+
+**Reichweite wie beim Sink.** `walk.groundWaterLevel(level, scope)` ist der
+exakte Zwilling von `groundSink`: eine geflieste Halle im See ist ein BODEN, in
+ihr schwimmt niemand (`scope === 'built'` → `null`). Die Passierbarkeit
+entscheidet weiter der Server, art-basiert. **KEIN Zusatzabstand über dem
+Bett** — ein positiver Clearance höbe einen Watenden von dem Grund ab, auf dem
+er steht, und kaufte nichts: die Stetigkeit ist Sache des `max`.
+
+---
+
+### A16.9 Die Szene über dem Boden — was nach E5 im Rezept steht
+
+**Auf Etage 0 gibt es keine Bodenplatte mehr.** Ersatzlos aus `plates[]`
+verschwunden sind: die Etagenplatte der Kontur (Oberkante 0,08, Körper 0,14),
+die Raum-Bodenplatte je geschlossenem Raum (0,10), die Zonen-Fläche je
+`always_visible`-Raum (0,09) und die Overlay-Fläche einer Zone auf einem
+Flächenmodell (Modell-Oberfläche + 0,01). Ihr Ersatz ist das gestanzte Plateau
+(§ A16.4) für die HÖHE und der Layer-Bake (§ A16.7) für das MATERIAL.
+
+**`plates[]` trägt nur noch DEKLARIERTE Etagen** — `level != 0`. Nicht „oben":
+ein Keller auf −1 liegt eine Etage unter dem Gelände und behielte sonst gar
+keinen Boden.
+
+**Die Höhenleiter, in einer Funktion:**
+
+```python
+storey_floor_y(level, storey) = level*storey + (0.0 if level == 0 else LEVEL_PLATE_TOP)
+```
+
+Alles, was auf einem Boden steht, misst von hier plus dem, was der RAUM
+darüberlegt (`scene_recipe._plate_top`): **0 auf Etage 0**, sonst
+`ROOM_PLATE_TOP` 0,10 (geschlossener Raum), 0,09 (Zone, `slab +
+OVERLAY_SURFACE_LIFT`) bzw. 0,08 (Hof). **Die drei Konstanten `LEVEL_PLATE_TOP`
+/ `ROOM_PLATE_TOP` / `OVERLAY_SURFACE_LIFT` sind seither ausschließlich die
+Datums einer deklarierten Etage** und kommen auf Etage 0 in keinem `top_y`,
+`base_y` oder `bottom_y` mehr vor.
+
+Die Laufketten von „Haus von Kai" (gebaut) und „Mondscheinsee" (natürlich),
+alt → neu:
+
+| Größe | gebaut, ALT | natürlich, ALT | BEIDE, NEU |
+|---|---|---|---|
+| Etagenplatte Oberkante | 0,08 | — | — |
+| Raumplatte / Zonenfläche | 0,10 / 0,09 | 0,01 | — |
+| Boden, auf dem gestanden wird | 0,10 | 0,01 | **0,00** (`h_final`) |
+| Wandfuß (Raum / Kontur) | 0,10 / 0,08 | — | **0,00** |
+| Prop `bottom_y` | 0,11 | 0,02 | **0,01** |
+| Diorama `bottom_y` (ohne Regler) | 0,12 | 0,03 | **0,02** |
+| Türschwelle ohne Deklaration | 0,10 | — | **0,00** |
+| Gebäudemodell `walk_y_world` | 0,08 + `offset_y` | 0,00 + `offset_y` | **`offset_y`** |
+| Aufzugs-Pad (Mitte) | +0,055 | — | **−0,025** |
+
+**Die beiden NEU-Spalten sind identisch — das ist der Punkt.** Die drei alten
+BODEN-Zahlen 0,10 / 0,09 / 0,01 sind die roten Gegenproben dieser Etappe. Die
+0,01, die bleibt, ist die Anti-Z-Fight-Haarlinie des PROPS über dem Gelände
+(`PROP_CLEARANCE`), nie ein Boden. Eine DEKLARIERTE Etage hat sich um keinen
+Millimeter bewegt: die Kontur-Platte der Etage 1 liegt weiter auf
+`1·2,8 + 0,08 = 2,88`, die Raumplatte darauf auf `1·2,8 + 0,10 = 2,90`, ein
+Keller-Raum auf `−2,8 + 0,10 = −2,70`.
+
+`offset_y` je Platzierung, `ground_offset_m` je Prop und `model_offset_y` je
+Diorama wirken **unverändert** weiter (Entscheidung 4 des Plans) — nur messen
+sie jetzt überall von derselben Null. `layout.floor_offset_y` überlebt als
+**reiner Feinjustage-Regler** eines einzelnen Raums (hebt, was IM Raum steht);
+seine zwei alten Nebenjobs sind weg: es gleicht keinen zweiten Boden mehr aus,
+und es ist **keine Wasserlinie** mehr — dafür gibt es `layout.water_level`
+(§ A16.3).
+
+**`floor_plan` — die Etage-0-Räume als Daten.** Additiv im Szenen-Payload, eine
+Zeile je Raum auf Etage 0, in Rezept-Reihenfolge:
+
+```jsonc
+"floor_plan": [
+  { "room_id": "hall",
+    "polygon_world": [[-4,-4],[0,-4],[0,-1],[-4,-1]],   // SZENEN-Frame (m)
+    "floor_kind": "wood",
+    "closed": true },
+  { "room_id": "pond", "polygon_world": [...], "floor_kind": "water",
+    "closed": false, "water_level_effective": 8.0 }     // ABSOLUTES Welt-y
+]
+```
+
+* `polygon_world` ist der Raumrumpf im **Szenen-Frame** (lokale Meter um den
+  Anker-Pin) — tesselliert und gedreht, also Punkt für Punkt der Rumpf, den auch
+  der Bake benutzt.
+* `floor_kind` ist die Bodenart: `surfaces.floor`, sonst `"floor"` für einen
+  GESCHLOSSENEN Raum und der **leere String** für eine Zone, die keine nennt
+  (dort scheint das Gelände durch, und der Bake malt dort ebenfalls nichts).
+* `closed` unterscheidet Raum von offener Zone (§ A5).
+* `water_level_effective` steht nur auf einem Wasserboden und ist **die einzige
+  absolute Welt-y-Zahl in diesem Payload**.
+* **Keine Höhen sonst.** Raum-Spots, NPC-Plätze und Labels holen ihre Höhe aus
+  dem Höhen-Sampler an genau dem Punkt, um den es geht.
+
+Der Hof (`__ground__`, § A13a) steht nicht drin: er hat keinen Rumpf, er IST das
+Grundstück. Etagen ≠ 0 stehen nicht drin: die haben Platten.
+
+**Die Figuren-Leiter im Client — drei Sprossen, alle aus Daten:**
+
+```
+tileWalkY(tile, at) =
+  1. declaredFloorAt(tile.declaredFloors, …)   ein Raum sagt seinen Boden an
+  2. recipeFloorAt(tile.walkPlates, …)         eine DEKLARIERTE Etage (≠ 0)
+  3. tile.center.y                             das Gelände
+tileGroundY = standY(tileWalkY, heightAt(x, z))
+```
+
+Die MESH-Sprosse ist gelöscht, und mit ihr der ganze Strahlenapparat. Die
+begehbare Fläche eines Flächenmodells IST die Zahl, die seine Spec deklariert
+(`walk_y_world`); wo es keine deklariert, antwortet das Gelände, über das es
+gezeichnet wurde. Der Strahl war nur ein Weg herauszufinden, welcher von ZWEI
+Böden vorn liegt — es gibt einen. `plateCeiling` **bleibt** und gilt jetzt für
+jedes `display` gleich: das ist die Etagen-Frage, und ein ungedeckelter
+Plattengriff hübe eine Figur im Erdgeschoss auf die Platte darüber.
+
+**Auf Etage 0 bekommt die LAUFENDE FIGUR keinen `WALK_CLEARANCE_M`** (Sprosse 3
+antwortet blank): draußen läuft sie auf genau `heightAt`, und drinnen jetzt auf
+ebendiesem Boden. Die Zugabe wird nur auf den beiden DEKLARIERTEN Sprossen
+addiert, wo der Boden eine gezeichnete Fläche ist — und auf den Raum-SPOTS
+(Mitte, Stellplätze, Sitz-/Liegepunkte), die eine Standmarke sind und keine
+Bodenhöhe.
+
+**Raum-Spots kommen aus dem Grundriss** (`scene/tiles.deriveRoomSpots`,
+gefüttert aus `floor_plan`; die reinen Regeln in `client3d/src/game/ground.ts`):
+
+* **Raum-Mitte** = Flächen-**Schwerpunkt** des gezeichneten Rumpfes
+  (`polygonCentroid`, Shoelace — nicht der Eckenmittelwert, den eine mit zehn
+  Punkten gezeichnete Wand gegen die gegenüberliegende zöge). Liegt der
+  Schwerpunkt AUSSERHALB des Raums — bei einem L-Grundriss der Normalfall —,
+  gewinnt der nächstgelegene Rasterpunkt.
+* **Stellplätze** = ein 6 × 6-Raster über 0,78 der Raum-Umschließenden
+  (`roomSpotGrid`) mit POLYGON-Test. Jeder Platz bekommt seine EIGENE Datenhöhe;
+  `SPOT_FLAT_M` = 12 cm bleibt als Toleranz, gemessen gegen die Höhen-DATEN.
+  Unter einem gebauten Raum ist sie konstruktionsbedingt wirkungslos (§ A16.4
+  hobelt das Grundstück eben), bei einer offenen Zone hält sie die Traube vom
+  Hang, den die Zone hinaufläuft.
+* **Bodenhöhe je Raum** (`roomFloorWorldY`): die Deklaration des Payloads, wo es
+  eine gibt — ein Dioramen-`walk_y_world`, eine Etagen-Platte, oder die
+  `overlay.y` einer Zone auf einem Flächenmodell —, sonst der HÖHEN-SAMPLER an
+  genau diesem Punkt.
+* **Sitz-/Liegeflächen werden weiter GEMESSEN**, und das ist kein Widerspruch:
+  eine Sitzhöhe ist eine Eigenschaft eines OBJEKTS und wird an der eigenen
+  Bounding-Box des platzierten Props abgelesen. Nicht mehr gemessen wird der
+  BODEN, gegen den sie beurteilt wird. Die Fenster sind für eine 1,70-m-Figur
+  hergeleitet (`furnitureUse`): Sitzfläche 0,25…0,70 m über dem Boden, Liegefläche
+  zusätzlich mindestens 1,6 × 0,7 m.
+* **Tür-Referenz**: kein Strahl. `tile.roomDoors` kommt direkt aus `doorways[]`
+  (Position **und** `base_y`).
+* **Marker** werden nur noch um die Differenz zwischen dem Boden des RAUMS und
+  dem Etagen-Datum verschoben, gegen das der Server sie komponiert hat. Auf einem
+  gebauten Erdgeschoss ist diese Differenz 0 und die Schleife ändert nichts —
+  genau der Punkt. `fixed`-Marker (Prop-Marker) bleiben unberührt.
+
+**Das szenen-eigene 17 × 17-Relief ist gelöscht** (Entscheidung 1 des Plans,
+ohne Ersatzschiene): `scene_recipe.compose_terrain`/`terrain_frame`, der
+`terrain`-Block im Payload, `map3d.relief`, `layout.relief_flat`,
+`relief.scene_ground_lift`/`has_relief`/`ground_lift_at` und die
+Relief-Zweige von `scatter_curves`. **Lokales Relief autoriert man über
+Höhenflächen der Karte.** Was an ihre Stelle tritt, ist überall dieselbe Zeile:
+`world_geometry.ground_y`. Die Auflösungsregel „die innerste ENTHALTENDE
+Location mit einem Feld gewinnt" ist damit weg — es gibt EIN Feld, und wer es
+formt, entscheidet der Bake einmal (`draws_built_floor`).
+`shared/world_dev_schemas` darf `flat` weiter nennen; es erzeugt kein Feld mehr.
+
+**Admin.** `FloorPlanPreview` zeichnet die Etage-0-Böden als flache texturierte
+Polygone auf `y = 0` aus `floor_plan`; eine LEERE Art zeichnet **nichts**.
+Etagen ≠ 0 behalten ihre Platten. Die Bühnenplatte liegt auf 0, schreibt keine
+Tiefe und wird zuerst gezeichnet — sie ist eine Messhilfe, kein Boden.
+`PlanSidePanel` trägt für Etage-0-Räume „Edge transition (m)"
+(`layout.edge_blend_m`, 0…8, Default 0 — **0 ist ein Wert**) und für einen
+Wasser-Boden „Water level (m)" (optional, leer = der Bake entscheidet),
+„Depth (m)" (0,2…20, Default 2,0) und „Shore ramp (m)" (0…20, Default 3,0). Ob
+ein Boden Wasser ist, entscheidet die **Material-KLASSE** der Surface-Bibliothek
+(`water`/`ice`) — nie der Name, nie die Farbe.
+
+---
+
+### A16.10 Die 2D-Karten schattieren das Relief
+
+Spielerkarte (`frontend/src/player/MapPanel.tsx`) und Minimap des 3D-Clients
 (`client3d/src/hud/Minimap.tsx`) legen dieselbe Schattierung über ihre
 Terrain-Farben: `hillshadeImage()` aus `@anima/scene-render` — Normale aus dem
 Höhen-Gradienten, Licht aus Nordwest (Azimut 315°, Höhe 45°), neutrales Grau
 moduliert, Alpha proportional zur Hangneigung (maximal 0,35; **ebener Grund
-schreibt Alpha 0**, eine flache Welt sieht also exakt aus wie zuvor). Beide
-rufen mit `MAP_RELIEF_Z_FACTOR` = 3, der kartografischen Überhöhung: die Quelle
-ist die **Übersicht** (`GET /play/heightfield`, § A16.3 — ein Leser fragt
-entweder Kacheln oder Übersicht, und eine Karte ist die Fernsicht), die bis auf
-32 m pro Zelle vergröbert; ohne Überhöhung bleibt ein 5-m-Hügel dort rund eine
-von 255 Stufen und damit unsichtbar. Nachgeladen wird **nur bei Wechsel von
-`height_sig`**, über den jeweils schon vorhandenen Worldmap-Poll — kein
-eigener Poll, kein Regler, kein Server-Code. Die Mathe liegt einmal im
-geteilten Paket, die Verbraucher entscheiden nur, wo das fertige Rechteck
-landet (ihre eigene Karten-Projektion, `drawImage`/`<image>` mit Glättung);
-Zeile 0 des Bildes ist die nördlichste Gitterlinie und landet in beiden
-Projektionen oben, ohne Achsen-Spiegelung.
+schreibt Alpha 0**). Beide rufen mit `MAP_RELIEF_Z_FACTOR` = 3, der
+kartografischen Überhöhung: die Quelle ist die **Übersicht** (eine Karte ist die
+Fernsicht), und ohne Überhöhung bliebe ein 5-m-Hügel dort rund eine von 255
+Stufen. Nachgeladen wird **nur bei Wechsel von `height_sig`**, über den ohnehin
+laufenden Worldmap-Poll. Zeile 0 des Bildes ist die nördlichste Gitterlinie und
+landet in beiden Projektionen oben, ohne Achsen-Spiegelung.
 
 **Was hier NICHT passiert:** der Karten-EDITOR bleibt bewusst ohne Hillshade —
 er zeigt Höhenflächen als eigene Ebene mit Zahl-Label
@@ -3169,184 +3615,59 @@ er zeigt Höhenflächen als eigene Ebene mit Zahl-Label
 zweite, hübschere Antwort auf „wie hoch ist es hier" wäre, die niemand mit der
 Zahl vergleichen kann, die die Regeln benutzen.
 
-**Verifikation:** `scripts/smoke_heightfield.py` (Rasterung, Rampe,
-Überlappung inkl. Senke, Sanitizer-Klemmen, Signatur/Store/`ground_y`, die
-Ursprungs-Verankerung, das Vergröbern, die Routen und Abschnitt [11] die
-Planierung: das Opt-in-Flag in BEIDEN Zuständen samt roter Gegenprobe mit dem
-ungefilterten `placed_footprints`, Plateauhöhe, Dilatationsring,
-Rampen-Handrechnung, wanderndes Plateau samt Signaturwechsel; Abschnitt [13]
-das Mikro-Relief: Seed und ein Stützpunkt von Hand — xorshift32 Schritt für
-Schritt —, negative Lattice-Indizes samt Wrap, Determinismus, Null-Ring,
-oberste Art gegen `kind_at`, Signatur-Verhalten in allen vier Fällen,
-Reader-Klemmen und die rote Gegenprobe mit vertauschten Durchgängen), der
-Sanitizer der beiden Katalog-Felder in `scripts/smoke_terrain_types.py` [9],
-plus die `.mjs`-Tabelle des geteilten Samplers
-(`client3d/scripts/smoke_world_height.mjs`, Abschnitt [4] die kombinierte
-Höhenquelle des Client-Spiegels), die handgerechnete Schattierungs-Tabelle
-(`client3d/scripts/smoke_hillshade.mjs` — Lampe, Rampen, Gipfel, Überhöhung
-[dreifach überhöht gezeichnet: aus dieser Ebene liest NIEMAND eine Neigung ab]
-und die roten Gegenproben gegen vertauschte Achse und gespiegelten
-Gradienten) und das Feld-Lesen in
-`client3d/scripts/smoke_relief_math.mjs` (Kontur-Zelle als Gegenprobe der
-gelöschten Zweitlesung, Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung — die
-Gitter-/Drape-Mathe darin ist mit `gridMesh.ts` gelöscht, § A20). Regel und Routing:
-`scripts/smoke_slope_gate.py` [6] und `scripts/smoke_nav_grid.py` [13]/[14].
+**Nebel und Raycasts.** Nebel-Quads werden auf ~64 m gekachelt (`FOG_TILE_M`)
+und hängen je Kachel auf `max(Höhe darin) + 5 cm`; **gekachelt wird nur, wo das
+Gelände sich bewegt** — ein Schleier-Rechteck, unter dem die Spannweite des
+Bodens unter `FOG_FLAT_EPS_M` = 0,25 m bleibt, bleibt EIN Quad. Eine Welt ohne
+Relief kostet damit exakt so viele Draw Calls wie vor dem Relief.
 
-### A16.3 Das Kachel-Höhenfeld — `GET /play/heightfield/tiles` — neu 2026-08-14
+---
 
-**Ein Gitter kann nicht beides sein.** Die Übersicht (§ A16) deckt die ganze
-Welt ab und wird deshalb vergröbert, sobald jemand weit draußen malt — live
-gemessen 4 m → 32 m. Auf 32 m ist der Boden, gegen den ein Läufer beurteilt
-wird, nicht mehr der Boden, den jemand autoriert hat. Also gibt es ab v2 **zwei
-Raster derselben Landschaft**:
+### A16.11 Die Beweise — welcher Smoke zeigt was (§ B5a)
 
-- die **Übersicht** — ein Gitter über alles, vergröberbar. Ein BILD für die
-  Ferne, sonst nichts.
-- die **Kacheln** — 256-m-Quadrate im immer feinen **2-m-Schritt** (bis
-  2026-08-14: 4 m), auf Anfrage gerechnet. Alles, was der Boden ENTSCHEIDET
-  (Laufregel, Routing, jede Serverregel) liest diese, und der Nahbereich der
-  Renderer auch.
+Numerische Verifikation, nie Screenshots. Jede Zahl wird im Docstring des
+Skripts **von Hand aus der Spec hergeleitet**; das Skript misst nur, ob der Code
+sie produziert.
 
-**Warum 2 m und nicht 4** (User-Entscheidung 2026-08-14): die autorierbare
-Wellenlänge des Mikro-Reliefs ist auf 2 × den Kachel-Schritt geklemmt
-(§ A16.2, Nyquist), bei 4 m also auf 8 m. Wer 4 m tippte, bekam 8 m — ohne
-dass es irgendwo stand. Der halbierte Schritt macht 4-m-Wellen autorierbar;
-er kostet die vierfache Punktzahl je Kachel und halbiert die Rampe eines
-planierenden Ortes (§ A16.1, 3,36 m → 1,68 m). Die **Übersicht bleibt bei
-4 m**: sie ist ein Fernbild, und niemand liest sie als Regel.
+**Server — die Höhenfunktion und ihre Stempel**
 
-**Kachelmaß 256 m, Anker ist der Welt-Ursprung.** Kachel `(tx, tz)` deckt
-`[tx·256, (tx+1)·256] × [tz·256, (tz+1)·256]` ab, ihre Stützpunkte SIND globale
-Gitterpunkte (`tile_key(x, z) = (floor(x/256), floor(z/256))`; ein Punkt auf
-einer Naht gehört zur Kachel im Osten/Süden — beide tragen ihn mit demselben
-Wert). 256 ist ein Vielfaches von 2, das ist die ganze Anforderung: eine Kachel
-ist ein FENSTER des einen Weltgitters, kein eigenes Gitter. Auch die Übersicht
-bleibt gitter-kongruent, weil 4 ein Vielfaches von 2 ist: jeder
-Übersichts-Stützpunkt IST ein Kachel-Stützpunkt.
+| Skript | was es herleitet |
+|---|---|
+| `scripts/smoke_height_bake.py` | die Pipeline: [1b] Wasser-Invariante über die ganze Fläche, [4] Reinheit über 2/4/8/16/32/64-m-Gitter (EXAKTE Gleichheit an allen gemeinsamen Punkten), [6] die `err[k]`-Schranke auf 513², [8] der Zonen-Wasser-Carve nach den Plateaus |
+| `scripts/smoke_heightfield.py` | Rasterung, Rampe, Überlappung inkl. Senke, Sanitizer-Klemmen, Signatur/Store/`ground_y`, Ursprungs-Verankerung, Vergröbern, [8] die bilineare Handtabelle, [13] das Mikro-Relief (xorshift Schritt für Schritt, negative Lattice-Indizes, Null-Ring, oberste Art gegen `kind_at`), [14] Übersicht == Kacheln auf dem Kachel-Schritt, [14b] die 4-m-Übersicht gegen die Kacheln, [14d] die Kosten |
+| `scripts/smoke_plateau_polygon.py` | der Auto-Plateau auf konkavem Umriss — samt roter Gegenprobe, dass ein gespeichertes `level_ground` nichts mehr stempelt |
+| `scripts/smoke_slope_gate.py` | das Steilheits-Gate und die Ausnahme für **gebaute** Orte (`draws_built_floor`), plus die rote Gegenprobe „`natural_floor` steht in keinem Payload" |
+| `scripts/smoke_nav_grid.py` | Routing: Steilheits-Tod je Zelle, Fußabdruck-/Öffnungs-Ausnahmen, Höhenstrafe |
+| `scripts/smoke_world_geometry.py` | `ground_y` als die eine Lesung |
+| `scripts/smoke_water_meta.mjs` | der Leser der drei Wasser-Zahlen aus dem freien `meta` |
+| `scripts/smoke_height_math.mjs` | die Autorierungs-Arithmetik des Karten-Editors (`heightMath.ts`) |
 
-**129 × 129 Punkte — die Ränder gehören dazu, in BEIDEN Nachbarn.** Die
-Duplizierung der Randpunkte ist Absicht und kostet 1,57 % Daten (129²/128²
-Punkte; die 0,78 % je Achse fallen auf beiden an): bilineares Sampling
-INNERHALB einer Kachel braucht damit nie einen Punkt der Nachbarkachel (ein
-Client darf jede beliebige Teilmenge halten), und weil beide Seiten denselben
-Punkt tragen, ist der Boden über die Naht **stetig** statt nur beinahe.
+**Server — Material und Szene**
 
-**Payload von `GET /play/heightfield`** — der Index reist mit der Übersicht
-(Felder `tile_m`, `tile_step_m`, `tiles`, siehe § A16). Ein Client hat damit
-ohne Zusatz-Runde die Aussage „hier KANN Boden sein, überall sonst ist die Welt
-flach".
+| Skript | was es herleitet |
+|---|---|
+| `scripts/smoke_terrain_layers.py` | [1] Raster == `rank_at` == `kind_at` an 500 Gitterproben, die sd-Quantisierung, der Endpunkt in beiden Modi, `uniform`, `waters` |
+| `scripts/smoke_terrain_types.py` [9] | die Sanitizer der Katalog-Felder (`edge_blend_m` mit 0 als WERT, Relief-Amplitude/Welle) |
+| `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor` |
+| `scripts/smoke_scene_asset.py` / `scripts/smoke_scene_context.py` | die Kontaktprüfung einer Platzierung gegen `ground_sampler` |
+| `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
-**Payload von `GET /play/heightfield/tiles?keys=tx:tz,tx:tz`** (Auth wie
-`/play/terrain`: eingeloggter User, **nie gefoggt**):
+**Client — Höhe, Schnitt, Wasser, Szene**
 
-```jsonc
-{ "sig": "4400406961",      // DIE eine height_sig, global
-  "tile_m": 256.0,
-  "step_m": 2.0,
-  "tiles": {
-    "1,0": { "origin_x": 256.0, "origin_z": 0.0,
-             "rows": 129, "cols": 129, "heights": [[…], …] }
-  } }
-```
+| Skript | was es herleitet |
+|---|---|
+| `client3d/scripts/smoke_terrain_lod.mjs` | CDLOD: Stufen-Ranges, Morph-Fenster, `err`-Auswahl gegen `MAX_PIXEL_ERROR`, `h_gpu == h_cpu`, der analytische Klick-Marsch |
+| `client3d/scripts/smoke_world_height.mjs` | EINE Lesung statt zweier — die Zahlen, die der zweite Term nicht mehr erzeugt |
+| `client3d/scripts/smoke_height_tiles.mjs` | die Ladepolitik: Wunschmenge im 560-m-Radius, Batching, Cache-Kappe |
+| `client3d/scripts/smoke_relief_math.mjs` | das Feld-Lesen und die zwei Reiselinien-Ableitungen (auf Weltfeld + Reiselinie zurückgeschnitten) |
+| `client3d/scripts/smoke_layer_cut.mjs` | die Schnitt-Arithmetik (sd-Interpolation, `b = 0`-Kante, `fwidth`-AA), EIN Spiegel-Bauer von beiden Quellen gespeist, und die **Löschungs-Prüfung**: die gestrichenen Drape-/Platten-Namen kommen in den Quellen nicht mehr vor, `rebuildAreas` setzt **gar keine** `position.y` |
+| `client3d/scripts/smoke_water_plane.mjs` | [3] die E1-Invariante unabhängig nachgerechnet samt Gegenprobe, die Ufer-Alpha-Stützstellen, [5] die Zonen-Wasser unter einem Punkt (Vorrang vor gemalten Flächen, Letzter-gewinnt, `null` wird nie 0, der Schwimmer am Zonen-Spiegel) |
+| `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren |
+| `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter, Flachheits-Tor, Möbel-Fenster, Zonen-Wasser-Auswahl |
+| `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
+| `client3d/scripts/smoke_natural_ground.mjs` | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |
+| `client3d/scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
 
-| Feld | Typ | Bedeutung |
-|---|---|---|
-| `sig` | `str` (10) | Identisch mit `worldmap.height_sig` und mit dem `sig` der Übersicht — es gibt **eine** Signatur. Ändert sie sich, verwirft der Client Index UND alle geladenen Kacheln |
-| `tile_m` | `float` | Kantenlänge einer Kachel in Metern (256,0). Der Client **hartkodiert sie nicht**, er rechnet seine Schlüssel damit |
-| `step_m` | `float` | Abstand zweier Stützpunkte, **immer** 2,0 — Kacheln werden nie vergröbert |
-| `tiles` | `{ "tx,tz": Kachel }` | Nur die Kacheln, die es gibt (siehe unten). Ein leeres Objekt ist eine gültige Antwort |
-| `tiles[k].origin_x/_z` | `float` | Weltmeter von `heights[0][0]` — exakt `tx·256` / `tz·256` |
-| `tiles[k].rows/cols` | `int` | 129 × 129, Ränder inklusive |
-| `tiles[k].heights` | `[[float, …], …]` | `heights[j][i]` = Höhe bei `(origin_x + i·2, origin_z + j·2)`, dieselbe bilineare Leseregel wie die Übersicht (§ A16). Eine Kachel trägt **kein eigenes** `step_m`: alle im Batch haben dasselbe, und es steht oben |
-
-**Zwei Schreibweisen desselben Schlüssels, absichtlich verschieden.** In der
-QUERY trennt `:` innerhalb eines Schlüssels und `,` zwischen den Schlüsseln
-(`keys=0:0,1:0,-1:2`); im PAYLOAD heißt die Kachel `"tx,tz"` (`"1,0"`), weil
-dort kein Trennzeichen zweiter Ordnung gebraucht wird. Negative Indizes sind
-gewöhnliche Kacheln.
-
-**Der Batch ist auf 64 Schlüssel gekappt** (`TILE_BATCH_MAX`) — 4 km² feiner
-Boden, mehr als der Laderadius je auf einmal will (der Client fragt sein
-Want-Set, rund 28 Kacheln). Bei 129² Punkten sind das rund 100 KB je Kachel
-und damit 6…8 MB für einen vollen 64er-Batch; das Kap bleibt trotzdem, weil
-der Client ohnehin nie so viel auf einmal will. Duplikate fallen auf ihre
-ERSTE Position zusammen, und **die Kappung greift NACH dem Entdoppeln**, ein
-wiederholter Schlüssel verdrängt also keinen anderen. Unlesbare Tokens
-(fehlender Doppelpunkt, keine ganze Zahl) werden **übersprungen**, nicht als
-Fehler beantwortet — die genannten Kacheln sind ja trotzdem der fehlende Boden.
-Beides, Junk-Tokens UND die über dem Kap abgeschnittenen Schlüssel, wird
-**je einmal** im Log gesagt (Muster `backdrop.py`, ein Kanal pro Fall): eine
-verworfene Kachel sieht auf der Client-Seite aus wie flacher Boden, das Log ist
-also die einzige Stelle, an der sie noch auffallen kann.
-
-**Nicht indizierte Kacheln fehlen einfach in der Antwort** — kein Fehler, kein
-Null-Gitter. Der Index hat dem Client schon gesagt, dass dort die flache Welt
-ist, und eine fehlende Kachel ist genau diese Aussage; sie kostet damit weder
-Rasterung noch Kilobytes. Deshalb ist der Endpunkt auch mit veraltetem Index
-gefahrlos: die Antwort ist kleiner als die Frage.
-
-**Der Sampler-Vorrang (bindend, für JEDEN Leser): fein > Übersicht > 0.**
-
-```
-h(x, z) = Kachel, die (x,z) enthält, sofern geladen   → bilinear aus ihr
-          sonst die Übersicht, sofern sie den Punkt trägt → bilinear aus ihr
-          sonst 0                                       (die flache Welt)
-```
-
-Serverseitig ist das `heightfield.world_height` (Kachel oder 0 — der Server
-liest die Übersicht überhaupt nicht mehr), clientseitig
-`@anima/scene-render` (`sampleCompositeHeight`), damit beide Renderer dieselbe
-Reihenfolge anwenden.
-
-**Die Gleichheitsgarantie.** Kachel und Übersicht kommen aus DEMSELBEN
-Auswertungskern über DASSELBE ursprungsverankerte Gitter. Rastert man die
-Übersicht **auf dem Kachel-Schritt**, trägt sie an jedem gemeinsamen
-Stützpunkt exakt die Zahl der Kachel — Punkt für Punkt gemessen in
-`scripts/smoke_heightfield.py`, Abschnitt [14], der den Schritt dafür auf 2 m
-zwingt („alle Stützpunkte der Übersicht tragen die Zahl der Kacheln", dazu die
-Naht-Prüfungen und Zwischenpunkte auf beiden Nähten).
-
-**Bei ihrem eigenen Schritt laufen die beiden auseinander — aus ZWEI
-Gründen**, und der zweite ist der unauffällige. Seit dem 2026-08-14 gilt das
-schon bei der UNVERGRÖBERTEN Übersicht (4 m gegen 2 m), vorher erst ab der
-ersten Verdopplung:
-
-1. **Die Auflösung selbst.** Schon bei 4 m fehlt jeder zweite Stützpunkt je
-   Achse — eine 4-m-Welle hat dort nur noch einen je Wellenzelle —, und bei
-   32 m fehlen 15 von 16; ein 22-m-Hügel hat gar keinen mehr (Nyquist,
-   § A16.2) und existiert in der Übersicht nicht.
-2. **Die Planierung planiert mit IHREM Schritt.** Der Rampenring um einen
-   Fußabdruck (§ A16.1) ist „eine Zelle breit" — in der Übersicht bei 32 m also
-   **32 m breit**, bei 4 m eben 4 m, in der Kachel immer 2 m. Ein planierter Ort
-   hat in den beiden Rastern damit unterschiedlich weit ausgreifende Plateaus
-   UND unterschiedliche Plateauhöhen (die Höhe wird auf dem eigenen Gitter am
-   Mittelpunkt gelesen), auch dort, wo die Auflösung allein noch nichts
-   erklären würde. Das ist der Preis der Entscheidung und kein Fehler: die
-   Naht zwischen beiden liegt konstruktionsbedingt hinter dem Nebelband
-   (siehe unten), und keine REGEL liest die Übersicht.
-
-**Regel daraus: die beiden nie mischen.** Ein Leser fragt ENTWEDER die Kacheln
-ODER die Übersicht — nie den einen Wert hier und den anderen einen Meter
-weiter. Wer aus Kachel-Boden auf Übersichts-Boden umschaltet, tut das an einer
-Kante, nicht in einer Mischzone.
-
-**Und wo diese Kante liegt: im Nebel.** Der Client hält die indizierten Kacheln
-im Radius **560 m** um seinen Anker (Avatar-Position, unverkörpert das
-Kamera-Bodenziel), der Szenennebel endet bei **520 m** (`THREE.Fog(220, 520)`,
-`engine.ts`). Die Naht zwischen feinem und grobem Boden liegt damit
-konstruktionsbedingt hinter dem Nebelband. Sie wird **nicht extra kaschiert** —
-das ist eine dokumentierte Annahme, keine Auslassung: ein Übergangs-Blend wäre
-genau die Mischzone, die die Regel oben verbietet.
-
-**Kosten und Caches.** Eine Kachel rastert in **Millisekunden** (gemessen
-**78 ms** für den Worst Case: 8-km-Fläche mit Relief, 129² Punkte,
-`smoke_heightfield.py` [14d] — knapp das Vierfache der 20 ms bei 65², also
-genau die vierfache Punktzahl) und wird **nicht in der DB gespeichert** — es
-gibt einen Prozess-LRU über 512 Kacheln, Schlüssel `(Generation, tx, tz)`, und
-der Index ist je Generation gecacht. ACHTUNG bei der Obergrenze: 512 volle
-Kacheln sind bei 129² Punkten mehrere hundert MB Python-Floats (bei 65² waren
-es rund 70). Persistiert wird weiterhin nur die Übersicht, weil nur sie eine
-Drittelsekunde kostet.
 
 ## A17. Die Fernkulisse — `backdrop` im Worldmap-Payload — neu 2026-08-14
 
@@ -4058,259 +4379,23 @@ Der Server setzt das Flag aus dem Sidecar des Modells
 (`location_model3d` → `get_client_meta` → `scene_recipe._building_model`); es
 entsteht ausschließlich beim Dach-Bau, nie beim Meshen eines Bildes.
 
-## Nachtrag 2026-08-20 (§ B1/B2): EIN Boden — der Anker des Gebäudemodells und die Steh-Höhe
+## ~~Nachtrag 2026-08-20 (§ B1/B2): EIN Boden — Teile 1–3~~ — ERSETZT durch § A16
 
-**Befund (Haus von Kai, gemessen — § B5a, keine Screenshots).** In einem Haus
-mit Grundriss lagen VIER Höhen, die eine sein müssten (Kachel-Meter):
+Die drei Teile („der Anker des Gebäudemodells und die Steh-Höhe", „EIN Datum —
+der gezeichnete Boden der Etage", „die Natur zeichnet KEINE Platte") haben eine
+Welt beschrieben, in der es auf Etage 0 eine Etagenplatte (0,08 / 0,14 dick),
+Raumplatten (0,10), Zonenflächen (0,09 / 0,01), einen Kachel-Sockel
+(`SOCLE_Y_M` 0,045), einen Backstop (`tiles.tilePlateY`, −0,05 / −0,13 / 0,04)
+und ein Payload-Flag `natural_floor` gab. **Nichts davon existiert mehr** — die
+Etage-0-Höhe ist `h_final`, das Etage-0-Material ist der Layer-Bake.
 
-| Fläche | y |
-|---|---|
-| Gras-Sockelplatte der Kachel (`SOCLE_Y_M`) | 0,045 |
-| eigener Boden des Gebäude-Meshes (gemessen: 0,240 m Geländesockel über der Mesh-Unterkante) | 0,000 |
-| Etagenplatte / Raumplatte des Rezepts | 0,080 / 0,100 |
-| Props des Raums (`bottom_y` = Plattenoberkante + `PROP_CLEARANCE`) | 0,110 |
-| Figur (Strahl auf das Mesh + 0,01) | 0,010 |
-
-Die Figur lief also 9 cm UNTER dem Boden, auf dem ihre eigenen Möbel standen,
-und das Gras der Kachel deckte den Modellboden zu. Zwei Wurzeln, beide hier
-geschlossen — die Zahlen dieser Welt stehen als Fixture in
-`scripts/smoke_scene_recipe.py` und `client3d/scripts/smoke_walk_math.mjs`.
-
-**(A) Der Anker des Gebäudemodells ist seine BEGEHBARE FLÄCHE, nicht seine
-Unterkante.** `display: "shell"` folgt jetzt demselben Gesetz wie
-`display: "ground"`, nur auf den Boden gepinnt, den das Rezept für Etage 0
-wirklich zeichnet:
-
-```
-walk_y_world = LEVEL_PLATE_TOP + offset_y      (= 0,08 + Trimm)
-bottom_y     = walk_y_world − walk_y
-```
-
-Der frühere feste Sockelabstand (`BUILDING_BOTTOM_Y` = 0,06 über dem
-Kachelboden) pinnte die Mesh-UNTERKANTE. Das ist der Boden des Modells nur
-dann, wenn das Mesh keinen Geländesockel unter dem Haus trägt — trägt es
-einen, sinkt der Modellboden um genau dessen Dicke, und keine Zahl im Payload
-sagt es. Die Konstante ist ersatzlos weg.
-
-* **Was sich bewegt:** ein Gebäude mit `walk_y = 0` (nicht deklariert, die
-  Unterkante IST sein Boden) steigt um **0,02 m** — von 0,06 auf 0,08. Sonst
-  nichts. Das parametrische Dach (`roof_only`) rechnet seinen `offset_y` aus
-  demselben Anker und wandert mit (`app/core/roof_model.py`).
-* **Der `walk_y`-Regler bleibt die DEKLARATION des Admins.** Es wird nach wie
-  vor nichts gemessen, um ihn zu füllen — das Bernstein-Gesetz von § A2
-  (keine „dominante horizontale Lage", keine Auto-Ausrichtung) steht
-  unangetastet. Neu ist nur, dass der erklärte Wert das Modell PLATZIERT,
-  statt nur berichtet zu werden.
-
-**(B) Die Steh-Höhe im Gebäude ist die RAUMPLATTE, nicht die Modellhaut.**
-Der Client (`scene/tiles.tileWalkY`) nimmt für ein `shell`-Modell die höchste
-Platte, deren Umriss den Punkt enthält und deren Oberkante noch unter der
-Dachgrenze liegt (`walkCeiling`, dieselbe Regel wie für Strahl-Treffer), plus
-`WALK_CLEARANCE_M` = 0,01 — also exakt das `bottom_y` der Props desselben
-Raums. Damit gilt die Kette
-
-```
-Sockel < Etagenplatte ≤ Raumplatte = Prop-bottom_y − 0,01 = Steh-Höhe − 0,01
-```
-
-**Wo weiterhin das MESH antwortet** (unverändert): bei `display: "ground"` und
-`shell_area` (dort IST das Modell der Boden — Ufer, Hang, Seegrund), und auf
-jedem Punkt einer Gebäude-Kachel, den KEINE Platte deckt (Hof, Umriss-Rand,
-eine Location ohne Platten im Payload). Darunter liegt unverändert die
-Weltebene: `standY` nimmt weiter das Höhere von Kachel- und Weltantwort, und
-das Relief der Szene (`terrainLiftAt`) wird auf beide Antworten addiert.
-
-Dieselbe Fläche ist auch das Boden-SOLL der Begehbarkeits-Abtastung
-(`sampleRoomWalkables`), wenn der Raum KEIN Diorama hat: ein Diorama
-deklariert seine Standhöhe weiterhin selbst (`walk_y_world` am Raum-Spec) und
-schlägt die Platte, wie bisher.
-
-**(C) Die Ansage eines Raums gilt auch für die LAUFENDE Figur** (Nachtrag
-2026-08-20, User-Befund „Mondhütte"). Teil (B) hat die Deklaration nur an die
-Abtastung gehängt: `tileWalkY` kannte die gezeichneten Platten und den
-Mesh-Strahl und sonst nichts. Der Regler bewegte damit die NPC-Spots und die
-Raummitte, während die Figur weiter auf der Platte stand — zwei Böden in einem
-Raum, genau was Teil (B) ausschließen sollte. Zwei Löcher, beide geschlossen:
-
-1. **Die Deklaration wird ZUERST gefragt**, in jedem `display`-Modus
-   (`game/ground.declaredFloorAt`): ein Raum, dessen Diorama-Spec ein
-   `walk_y_world` trägt, bestimmt die Steh-Höhe innerhalb seiner Raum-Hülle —
-   vor Platte und vor Mesh, ohne Relief-Aufschlag (das `bottom_y` ist am
-   Modell-Anker bereits gehoben). Decken sich mehrere Ansagen, gewinnt die
-   KLEINERE Hülle (v6 Nr. 6, `polygonArea`) — eine Hütte in einer
-   Ufer-Zone ist die spezifischere Antwort.
-2. **Die Platten antworten auch ohne Mesh**, ebenfalls in jedem Modus: eine
-   Flächen-Location, deren Modell nie erzeugt wurde (Mondscheinsee), zeichnet
-   nur ihre Zonen-Platten, und die SIND ihr Boden. Wo ein Mesh existiert,
-   bleibt die Flächen-Regel unberührt (Befund B8: Ufer, Hang, Seegrund
-   antworten weiter per Strahl). Der Plattengriff wird dabei an
-   `plateCeiling` gemessen und nicht an `walkCeiling`: die `Infinity` der
-   Flächen gilt für Mesh-TREFFER, nicht für Etagen.
-
-Gemessen an Mondhütte in Mondscheinsee: Raumplatte 0,09, Diorama-`bottom_y`
-−0,19, also `walk_y` 0,35 → `walk_y_world` 0,16 → Steh-Höhe 0,17. Vorher:
-0,00 (der blanke Kachelboden). Hand-Zahlen in
-`client3d/scripts/smoke_walk_math.mjs` und `scripts/smoke_scene_recipe.py`
-[4i].
-
-### Nachtrag-Teil 2 (§ B1): EIN Datum — der gezeichnete Boden der Etage
-
-Der Nachtrag oben zieht die Modelle auf den Boden, den das Rezept zeichnet.
-Dieselbe Frage stellt sich UNTER freiem Himmel, und dort war die Antwort seit
-der Meter-Welle (`8672c756`) auseinandergelaufen: die Etagenplatte entsteht
-seither auch aus der GEZEICHNETEN GRENZE (`_outline_world(map3d) or
-_drawn_boundary(map3d)`), also hat jede Location mit Grundstücksgrenze eine —
-opak, Oberkante 0,08, Körper 0,14 dick. Alles andere rechnete weiter gegen das
-abstrakte Etagen-Datum `level × storey`:
-
-| Fläche | vorher | jetzt |
-|---|---|---|
-| Etagenplatte (Etage 0) | 0,08 | 0,08 |
-| Outdoor-Raumplatte (§ A5, Textur ohne Körper) | 0,00 → **0,08 tief in der Platte** | 0,09 |
-| Overlay-Zone auf einer Fläche OHNE Modell (NPC-/Marker-Anker) | 0,00 → **0,08 tief drin** | 0,08 |
-| Overlay-Fläche mit erklärter Boden-Art (`_overlay_plates`) | 0,01 → **0,07 tief drin** | 0,09 |
-| `display: "ground"` — begehbare Fläche des Flächenmodells | 0,00 | 0,08 |
-| Props/Marker/Diorama eines Outdoor-Raums | 0,00 + Zuschlag | 0,09 + Zuschlag |
-| Props/Marker des HOFES (§ A13a, zeichnet keine eigene Fläche) | 0,00 + Zuschlag | **0,08** + Zuschlag |
-
-**Die Regel, einmal:** was das Rezept als BODEN einer Etage zeichnet, ist deren
-Etagenplatte — `level × storey + LEVEL_PLATE_TOP`. Jede Fläche, die selbst ein
-Boden ist, liegt darauf; eine körperlose Texturfläche zusätzlich um
-`OVERLAY_SURFACE_LIFT` = 0,01 höher, weil zwei koplanare Flächen sonst
-z-fighten. `_plate_top(recipe, slab)` ist die EINE Stelle, die das je Träger
-beantwortet — gebauter Raum 0,10 · Outdoor-Raum `slab + 0,01` · HOF `slab`
-(§ A13a: er zeichnet keine eigene Fläche, er IST der Hof, also steht er direkt
-auf der Etagenplatte; es gibt keine zweite Fläche, gegen die er z-fighten
-könnte) —, und Platte, Props, Marker und Diorama desselben Raums lesen alle
-diese eine Zahl. `slab` ist `LEVEL_PLATE_TOP`, wo die Location einen Umriss
-ODER eine gezeichnete Grenze hat, sonst 0: eine Location ohne jeden
-gezeichneten Boden behält das nackte Etagen-Datum.
-
-**Das Relief bleibt additiv.** Der Hof folgt weiter seinem Höhenfeld —
-`bottom_y = slab + Zuschlag + lift(x, z)`; nur das Datum darunter ist gewandert.
-
-**Marker: nur PROP-Marker wandern mit.** Ein Prop-Marker ist fertig komponiert
-(§ A4) und reist mit seinem Prop; ein RAUM-Marker bleibt eine Höhe über dem
-ETAGENBODEN, die der Renderer gegen seine abgetastete Fläche zurückrechnet —
-gäbe man ihm das Datum mit, zählte der Client die Platte zweimal.
-
-**Die Kontaktprüfung spricht dasselbe Datum.** `scene_asset.place` vergleicht
-`target.ground_y` (das `bottom_y` des Payloads) mit `ground_sampler`, und der
-kannte nur das GELÄNDE (Welt-Relief + Szenen-Relief, pin-relativ). Mit dem
-gewanderten Datum wäre der Boden selbst als Lücke gemessen worden: 0,09 gegen
-eine Toleranz von 0,05 heißt „nichts in Kontakt", und der Lauf hätte ein
-korrekt stehendes Prop um 0,09 in seine eigene Platte versenkt. Deshalb trägt
-das Sidecar jetzt `target.floor_y` — die Fläche, auf der die Platzierung steht
-(Raumplatte, sonst die Etagenplatte der Etage 0), abgelesen am Payload, nie
-neu gerechnet — und `ground_sampler(loc, floor_y)` hebt das Gelände darauf.
-Handgerechnet in `scripts/smoke_scene_asset.py` [7] D und
-`scripts/smoke_scene_context.py` [5].
-
-Dazu gehört die Klassifizierung: welche Räume auf einem Flächenmodell LIEGEN
-(Zonen) und welche gebaut werden, entscheidet jetzt derselbe Umriss wie die
-Platte (`_outline_world(...) or _drawn_boundary(...)`). Vorher hatte eine
-Location ohne gezeichneten Gebäude-Umriss GAR KEINEN Umriss, und weil eine
-BBox in nichts nicht drinliegen kann, wurde jeder Raum zur Zone auf einem
-Modell, das es womöglich nicht gibt.
-
-> **Achtung, Alt-Welten:** wer die versunkenen Flächen bisher mit
-> `layout.floor_offset_y` (typisch 0,10) hochgezogen hat, zählt nach diesem
-> Fix DOPPELT — der Offset ist die Neigung/Stufe eines Raums gegen seine
-> Etage, nicht der Plattenaufschlag. Das Datum ist jetzt der gezeichnete
-> Boden; solche Werkzeug-Offsets gehören auf 0 zurück.
-
-Handgerechnet in `scripts/smoke_scene_recipe.py` [4e] und [18] — die
-Konstellation ist die des Mondscheinsees. **Für eine NATÜRLICHE Location
-gelten seit Teil 3 andere Zahlen; die Tabelle oben beschreibt den GEBAUTEN
-Fall.**
-
-### Nachtrag-Teil 3 (§ B1): die Natur zeichnet KEINE Platte
-
-**Befund (Mondscheinsee, User-Bilder 2026-08-20).** Teil 2 hat jede Fläche auf
-die Etagenplatte gezogen — richtig für ein Haus auf seinem Grundstück, falsch
-für einen See. Sand und Wasser lagen als hartkantiges **14-cm-Podest** über der
-Landschaft: die Etagenplatte (Oberkante 0,08, Körper 0,14, Textur = die
-Boden-Art der Location, hier Gras) ist ein extrudierter Körper, ihre
-Schnittkanten sind grasbezogene Wände, und die drapierte Kachelplatte darunter
-schnitt graue Zacken in ihren Rand. Zwei Wellen, eine Wurzel: `8672c756` gab
-JEDER Location mit gezeichneter Grenze eine Platte, `47abc26b` richtete alles
-darauf aus.
-
-**Die Entscheidung (bindend, 2026-08-20): eine NATÜRLICHE Location zeichnet
-keine Platte — ihr Boden IST das Weltgelände.**
-
-**Was „natürlich" heißt** (`scene_recipe.is_natural_location`, Server-Sache,
-kein Renderer leitet es ab): eine Location, die KEINEN gebauten Boden zeichnet
-— (1) kein `map3d.outline`, also hat niemand eine Gebäude-Kontur gezogen, und
-(2) keinen GESCHLOSSENEN Raum, also ist jeder Raum `always_visible` (§ A5). Der
-HOF (§ A13a) zählt nie mit: er ist von Natur aus offen. Die gezeichnete
-`boundary` zählt ebenfalls nicht — sie ist das Grundstück, und wo ein See endet
-zu zeichnen ist kein Boden. `area_model` ist ABSICHTLICH nicht Teil der Regel:
-der Mondscheinsee hat gar kein Modell und ist genau der Fall, für den sie da
-ist. **Ein einziger geschlossener Raum kippt die Location zurück auf das
-Platten-Datum von Teil 2.**
-
-| Fläche | gebaut (Teil 2) | NATÜRLICH (Teil 3) |
-|---|---|---|
-| Etagenplatte (Etage 0) | 0,08 / 0,14 dick | **entfällt** — kein Primitiv, keine Kante |
-| `slab` (der gezeichnete Etagenboden) | 0,08 | 0,00 |
-| Outdoor-Raumplatte / Overlay-Fläche | 0,09 | 0,01 |
-| Overlay-Zone (NPC-/Marker-Anker) | 0,08 | 0,00 |
-| Props/Marker/Diorama eines Outdoor-Raums | 0,09 + Zuschlag | 0,01 + Zuschlag |
-| Props/Marker des HOFES (§ A13a) | 0,08 + Zuschlag | 0,00 + Zuschlag |
-| `display: "ground"` — begehbare Fläche des Flächenmodells | 0,08 | `slab` |
-
-`_plate_top(recipe, slab)` bleibt die EINE Stelle, die das je Träger
-beantwortet; nur `slab` ist jetzt 0. Der 1-cm-Aufschlag der Texturflächen ist
-dabei BEDINGUNGSLOS geworden (vorher fiel er ohne Platte weg): eine
-Zonen-Fläche liegt auf dem GELÄNDE, und das ist eine Fläche wie jede andere —
-Sand auf 0,00 über Gelände auf 0,00 ist genau das Z-Fighting, gegen das die
-Konstante erfunden wurde.
-
-**Auch das Flächenmodell folgt `slab`** (`display: "ground"`). Das ist kein
-Beiwerk, sondern die Bedingung dafür, dass es EIN Datum bleibt: die Zonen auf
-so einem Mesh lesen ihre Höhe am `walk_y_world` des Modells ab, die Props IN
-denselben Zonen aber an `_plate_top(recipe, slab)`. Ein hart auf 0,08 gepinntes
-Mesh bei `slab = 0` stellte jedes Hof-Prop 7 cm INS Mesh.
-
-**Payload-Feld** (additiv, nur wenn wahr): `natural_floor: true`. Der Server
-klassifiziert, die Renderer platzieren.
-
-**Was die Renderer damit tun.** Die kachel-eigene Platte (`scene/tiles.ts`,
-kein Payload-Primitiv) ist unter einer montierten Szene der BACKSTOP unter den
-Etage-0-Flächen. Wie tief, sagt jetzt der Payload — `tiles.tilePlateY`:
-
-```
-Detailszene auf einer Platte   Flächen 0,09  ->  0,09 − 0,14 = −0,05
-NATÜRLICH                      Flächen 0,01  ->  0,01 − 0,14 = −0,13
-sonst                          die Platte IST der Boden      =  0,04
-```
-
-Die 0,14 m sind der Abstand, den der Z-Fighting-Befund vom 2026-08-03 gekauft
-hat. Ohne die natürliche Sprosse säße die Platte auf 0,04 — drei Zentimeter
-ÜBER dem Sand, den sie stützen soll, und ihre eigene Tiefen-Vorspannung
-gewänne auch gleichauf. Die Admin-Vorschau senkt ihre Bühnenplatte um dieselbe
-Zahl (`FloorPlanPreview`).
-
-**Was das NICHT löst, und warum es hier steht.** Die Kachelplatte ist
-DRAPIERT, die Zonen-Flächen des Payloads sind eben. Der Abstand ist also nur
-dort ein Abstand, wo die Landschaft mit dem Pin auf einer Höhe liegt; wo die
-Welt mehr als 0,14 m über den Pin steigt, kommt die Platte durch die Zone —
-am Mondscheinsee auf 21,5 % des Ufer-Polygons, bis +0,41 m (gemessen am
-Weltgelände von `worlds/Anima Divide`). Das ist die AUTORENSEITIGE
-Nichtübereinstimmung — eine flach gezeichnete Zone über einer welligen
-Landschaft —, kein Datum-Problem: `level_ground` an der Location legt das Feld
-unter ihrem Grundriss flach und räumt es aus. Der Abstand vor und nach dieser
-Welle ist derselbe, die Regel führt also keine Regression ein.
-
-Handgerechnet in `scripts/smoke_scene_recipe.py` [4e] (natürlich: keine
-Etagenplatte, Wasser/Sand 0,01, Zonen-Anker 0,00, Prop im Outdoor-Raum 0,02,
-HOF-Prop 0,01, Hof-Prop-Marker 0,31 — plus der Klassifizierung selbst: ein
-geschlossener Raum kippt zurück auf 0,08/0,09), [4i] (Mondhütte: Fläche 0,01,
-Diorama −0,27, `walk_y` 0,35 → `walk_y_world` 0,08 → Steh-Höhe 0,09), [18]
-(§ A13a, natürlich UND gebaut nebeneinander) sowie
-`client3d/scripts/smoke_plate_drape.mjs` [7] und
-`client3d/scripts/smoke_walk_math.mjs`.
+Was aus diesen Nachträgen WEITERGILT, steht in **§ A16.9**: der Anker eines
+Gebäudemodells ist seine BEGEHBARE Fläche und nicht seine Unterkante
+(`walk_y_world`, auf Etage 0 also schlicht `offset_y`); die Deklaration eines
+Raums (`walk_y_world` eines Dioramas) wird ZUERST gefragt und schlägt jede
+andere Sprosse; bei zwei Ansagen gewinnt die KLEINERE Hülle (v6 Nr. 6). Die
+übrigen Zahlen und Tabellen von damals stehen in der Git-Historie (`8672c756`,
+`47abc26b`, `8a44c891`).
 
 ## Nachtrag 2026-08-20 (§ B2/§ A9/§ A9a): Ein Prop steht überall gleich tief — `ground_offset_m`
 
@@ -4405,982 +4490,16 @@ in seinen echten Maßen; der Reglerweg folgt der Prop-Höhe (mindestens ±0,5 m,
 höchstens das gespeicherte ±5 m), damit ein Schemel in seinen Zentimetern und
 eine Tanne in ihren Metern eingestellt wird.
 
-## Nachtrag 2026-08-21 (§ A16): Ein Boden — E1, die reine Höhenfunktion
-
-Etappe E1 aus `development_instructions/plan-ein-boden.md`. **Reine
-Datenbasis, sichtbar ändert sich nichts** — aber die Zahlen unter § A16
-ändern sich, und zwar überall dort, wo die alte Bake in *Rasterzellen* statt in
-*Metern* gemessen hat. Dieser Nachtrag beschreibt den neuen Stand; § A16 wird
-in E6 komplett neu geschrieben.
-
-### 1. `h_final` ist eine reine Funktion von (x, z)
-
-`app/core/heightfield.HeightModel` hält die ganze autorierte Welt und
-beantwortet `final(x, z)` für jeden reellen Punkt. Jede Rasterung in diesem
-Modul — die Übersicht, eine Kachel, jede Mip-Ebene — ist **nichts als diese
-Funktion auf einem Gitter abgetastet**. Reihenfolge:
-
-```
-Höhenflächen (stärkster Ausschlag gewinnt)
-  → Mikro-Relief (ADDITIV)
-  → Stempel: Wasser-Carve
-  → Stempel: Location-Plateaus
-```
-
-Der Punkt ist die **Metrik**: kein Schritt misst mehr „eine Rasterzelle".
-Vorher taten das zwei — die Kantenregel des Mikro-Reliefs fragte die vier
-GITTER-Nachbarn, und die Plateau-Rampe war EINE Zelle breit —, also war
-dieselbe Welt auf der 2-m-Kachel eine andere Landschaft als auf der
-vergröberten Übersicht (gemessen: Median 0,058 m, p95 0,675 m, **max 1,104 m**
-am selben Weltpunkt). Jetzt gilt:
-
-> **Zwei Gitter über demselben Modell tragen an jedem gemeinsamen Punkt
-> dieselbe Zahl — by construction, nicht by agreement.**
-
-Die Kantenregel des Reliefs sondiert seither bei festen
-`RELIEF_EDGE_PROBE_M = 2,0 m` (dem Kachel-Schritt, damit die Kacheln exakt die
-Höhen behalten, die sie hatten). Nachgewiesen in
-`scripts/smoke_height_bake.py` [4] (2/4/8/16/32/64-m-Gitter über dasselbe
-256-m-Fenster, **exakte** Gleichheit an allen gemeinsamen Punkten) und in
-`scripts/smoke_heightfield.py` [14b] (die 4-m-Übersicht gegen die Kacheln,
-Punkt für Punkt).
-
-### 2. Wasser senkt sein Bett — `meta` auf der gemalten Fläche (§ G4)
-
-Ob eine Bodenart **Wasser** ist, sagt der Katalog: `meta.water` am
-Terrain-Typ (`terrain_types.is_water_kind`). **Nie über den Namen** — Arten
-sind ein offenes Vokabular, eine Welt darf ihre Seen „lagoon" nennen.
-
-Die drei Zahlen liegen an der **Fläche** (`terrain_areas.meta`), weil zwei Seen
-in einer Welt auf zwei Höhen stehen:
-
-| Feld | Typ | Bedeutung |
-|---|---|---|
-| `water_level` | `float` (Welt-y, m) | Der Spiegel. **Optional**: fehlt er, nimmt die Bake den **Median der Naturhöhen entlang des Umrisses** (alle 2 m abgetastet) — und `models.terrain.save_area` schreibt genau diesen Wert beim Speichern fest, damit der See nicht mitwandert, wenn jemand einen Hügel daneben malt |
-| `water_depth_m` | `float` 0,2 … 20 (Default **2,0**) | Wie tief das Bett unter dem Spiegel liegt, sobald die Ufer-Rampe durch ist |
-| `shore_ramp_m` | `float` 0 … 20 (Default **3,0**) | Wie weit INNERHALB des Umrisses die volle Tiefe erreicht ist; 0 = Stufe (Becken) |
-| `water_level_effective` | `float` (nur Ausgabe) | Der Spiegel, mit dem die Bake wirklich gecarvt hat — gleich `water_level`, wenn der Autor einen gesetzt hat, sonst der abgeleitete Rand-Median. Fährt additiv in `GET /world/terrain-areas` und `GET /play/terrain` mit und wird **nie** in das Autorenfeld zurückgeschrieben |
-
-Carve pro Punkt innerhalb des Polygons:
-
-```
-h = min(h, water_level − water_depth_m · smoothstep(min(d_innen / shore_ramp_m, 1)))
-```
-
-`d_innen` = Abstand zum **Umriss**. `min`, nie Zuweisung: der Carve darf den
-Boden nur senken — ein Ufer, das ohnehin unter dem Spiegel liegt, bleibt liegen.
-
-> **INVARIANTE (weltweit als Smoke prüfbar):** für jede Probe, die tiefer als
-> `shore_ramp_m` im Polygon liegt, gilt `h_final ≤ water_level − ε` mit
-> `ε = min(water_depth_m, 0,25)`. Damit ist „grünes Terrain sticht fern durchs
-> Wasser" **datenseitig** unmöglich, in jedem LOD.
-
-Gemessen in `smoke_height_bake.py` [1b] über die ganze Fläche (0,5-m-Gitter,
-4489 tiefe Proben, höchste 1,0 m gegen die Schranke 2,75 m).
-
-### 3. Gebäude stanzen ihr Grundstück — kein Flag mehr (§ G5)
-
-`level_ground` **gibt es nicht mehr**. Wer stempelt, entscheidet
-`models.heightfield.draws_built_floor(loc)` — die Umkehrung von
-`scene_recipe.is_natural_location`:
-
-* es gibt ein **`map3d.outline`** (eine gezeichnete Gebäudekontur), ODER
-* es gibt mindestens einen **geschlossenen Raum** (nicht `always_visible`;
-  die Grundfläche `__ground__` zählt nie mit).
-
-Ein natürlicher Ort (See, Lichtung, Wald) stempelt nichts — sein Boden IST das
-Relief. Ein übrig gebliebenes `level_ground` in gespeicherten Daten wird
-ignoriert; es gibt keinen Fallback-Leser.
-
-**Zielhöhe** = **Median** der Naturhöhen unter dem Grundriss, abgetastet auf dem
-2-m-Weltgitter (vorher: eine einzige Probe am garantierten Innenpunkt — ein
-Buckel entschied, wo das Haus steht).
-
-**Rampe**, AUSSERHALB des Umrisses, `smoothstep` über
-
-```
-w = clamp(0.5 · sqrt(Fläche/π), 2, 8)  Meter
-```
-
-und, wenn die Randstufe `Δ = max |h0 − h_natur|` entlang des Umrisses steiler
-wäre als `tan(35°) · w`, verbreitert auf `w = Δ / tan(35°)`.
-
-```
-h = h0 + (h_bisher − h0) · smoothstep(d / w)      d = Polygonabstand, 0 innen
-```
-
-`h_bisher` ist ausdrücklich der Stand der Pipeline, **nicht** die unberührte
-Landschaft: eine Hütte auf dem Dorfplatz läuft auf das Plateau des Platzes
-hinunter, nicht auf den Hang darunter. Überlappung wie gehabt: größte Fläche
-zuerst, kleinste schreibt zuletzt.
-
-> **EHRLICHE GRENZE:** die 35° sind die MITTLERE Steigung, und ein
-> `smoothstep` erreicht das 1,5-fache seines Mittels. Eine bis zur Kappung
-> verbreiterte Rampe hat also einen steilsten Meter von
-> `atan(1,5 · tan 35°) = 46,4°` — immer noch über der Laufgrenze von 40°. Ein
-> Ort an einer sehr steilen Flanke behält damit einen Rand, den seine
-> Öffnungs-Ausnahme tragen muss (§ A15 Nr. 8). Was der Stempel bringt: der Rand
-> ist eine mehrere Meter breite Rampe statt einer Ein-Zellen-Klippe von bis zu
-> 68° (gemessen in `scripts/smoke_slope_gate.py`).
-
-`nav_grid` fragt dieselbe Funktion: die Steilheits-Ausnahme innerhalb eines
-Ortes gilt jetzt für **gebaute** Orte statt für geflaggte.
-
-### 4. Die Pyramide — additive Felder an zwei Endpunkten (§ G2)
-
-Weil die Mip-Gitter **Teilmengen** des 2-m-Basisgitters sind (4/8/16/32/64 m
-sind Vielfache von 2 und teilen die 256 m Kantenlänge), braucht die Pyramide
-**keine zweite Auswertung** der Höhenfunktion — sie ist Arithmetik auf der
-Kachel, die es ohnehin gibt.
-
-```jsonc
-// GET /play/heightfield  — ZUSÄTZLICH zu allem aus § A16.3
-{
-  "mip_levels_m": [4.0, 8.0, 16.0, 32.0, 64.0],
-  "tile_stats": {
-    "1,0": { "min": -9.0, "max": 10.445, "err": [0.5862, 0.85, 1.0, 1.1636, 3.3132] }
-  },
-  "tile_stats_complete": true      // false: der Rest kommt mit den Kacheln
-}
-
-// GET /play/heightfield/tiles  — ZUSÄTZLICH
-{
-  "mip_levels_m": [4.0, 8.0, 16.0, 32.0, 64.0],
-  "tiles": { "1,0": { "origin_x": …, "heights": […], "stats": { "min": …, "max": …, "err": […] } } }
-}
-```
-
-`err[k]` ist der **größte senkrechte Fehler in Metern**, den ein Renderer
-macht, wenn er die Kachel auf Ebene `mip_levels_m[k]` zeichnet statt auf der
-2-m-Basis: `max |h_mip − h_basis|` über die Kachel, wobei `h_mip` das grobe
-Gitter bilinear zurückinterpoliert.
-
-> **Das ist eine EXAKTE Schranke, keine Stichprobe.** Innerhalb einer
-> Basiszelle sind beide Felder bilinear (das grobe auch, weil eine bilineare
-> Funktion auf einem Teilrechteck bilinear bleibt), ihre Differenz also
-> ebenfalls — und eine bilineare Funktion nimmt ihre Extrema **in den Ecken**
-> an. Das Maximum über die Basis-Stützpunkte IST damit das Maximum über das
-> Kontinuum. Nachgemessen in `smoke_height_bake.py` [6] auf einem 0,5-m-Raster
-> (513², die Schranke wird auf den Millimeter erreicht und nie überschritten).
-
-`min`/`max` sind die Höhen-Spanne der Kachel — die andere Hälfte dessen, was
-ein Quadtree-Knoten für Frustum und Occlusion braucht.
-
-**Kostenbudget** (gemessen 2026-08-21, 2×2-km-Welt mit Relief, drei Seen und
-zwanzig Grundstücken): Modellbau 20–30 ms, eine Kachel ~80 ms, ihre Statistik
-~20 ms, die 253²-Übersicht ~370 ms. `GET /play/heightfield` liefert die
-Statistik für höchstens `TILE_STATS_MAX = 64` indizierte Kacheln (≈ 6 s aus dem
-kalten Cache) — diese Arbeit ist keine zusätzliche, sondern nur vorgezogene:
-die Kacheln landen im Prozess-LRU, jede folgende Kachel-Batch ist ein Treffer.
-Über der Kappe sagt `tile_stats_complete: false`, und der Rest reist mit den
-Kacheln.
-
-### 5. Was sich an `height_sig` ändert
-
-Zusätzlich zu den Höhenflächen, den Platzierungen und dem Mikro-Relief hashen
-jetzt mit:
-
-* **die Wasser-Polygone** mit ihren drei Zahlen (`water_basis()`);
-* **ob ein Ort gebaut ist** — dafür braucht es kein neues Feld: ein Ort, der
-  einen Raum schließt, tritt in die Liste von `placed_footprints()` ein, und
-  ein Ort, der ihn öffnet, verlässt sie.
-
-`level_ground` ist aus der Signatur verschwunden.
-
-## Nachtrag 2026-08-21 (§ A17): Ein Boden — E3, der Layer-Schnitt
-
-Etappe E3 aus `development_instructions/plan-ein-boden.md` (§ G3). **Bindende
-User-Vorgabe:** Texturen werden nicht mehr übereinandergelegt, sondern
-**geschnitten** — pro Stelle gewinnt genau ein Layer, alles liegt auf EINER
-Fläche, die Übergangsbreite ist pro Bodenart einstellbar.
-
-### 1. Was ersatzlos weg ist
-
-Der Boden der offenen Welt war bis E2 ein STAPEL: pro gemalter Fläche ein
-transparentes Drape-Mesh, das auf dem Gelände lag, von seinen Nachbarn durch
-**drei** Tiefen-Krücken gleichzeitig getrennt (`renderOrder`-Leiter bei
-−10000 + i, `polygonOffset`-Leiter bis −32, y-Haarlinie 0,4 mm je Stufe) und
-mit ihnen über eine feste 1,5-m-**Alpha-Franse** verblendet, für die eigens
-Kantenband-Dreiecke nachverfeinert wurden (`ngRefineEdgeBand`, bis 20 000
-Dreiecke pro Fläche). Dazu die Fußabdruckplatte und der Sockel jeder Location
-— ein zweiter Boden über dem ersten.
-
-Alles davon ist gelöscht, ohne Ersatzschiene:
-`AREA_RENDER_ORDER_BASE`, `AREA_POLYGON_OFFSET`, `AREA_OFFSET_MAX`,
-`AREA_Y_STEP_M`, `AREA_Y_MAX_M`, `NG_EDGE_*` samt `ngEdgeAlpha` /
-`ngEdgeDistance` / `ngRefineEdgeBand` / `aEdgeDist`, `gridPlate`,
-`tile.groundPlate` samt Sockel, `PLATE_Y_M` / `SOCLE_Y_M` / `BACKSTOP_Y_M` /
-`NATURAL_BACKSTOP_Y_M` / `tilePlateY` / `tilePlateIsBackstop` /
-`PLATE_POLYGON_OFFSET` / `applyPlateDepthBias` / `plateGeometry` /
-`plateGroundSamples` / `plateGroundMoved` / `relevelTiles` / `plateLift`.
-`smoke_layer_cut.mjs` § 6 liest die Quellen darauf ab — eine Löschung ist das
-Einzige, was eine positive Prüfung nicht messen kann.
-
-Die EINZIGE verbliebene Drape-Fläche ist **Wasser**, bis E4 ihm einen ebenen
-Spiegel gibt; sie trägt eine einzelne Konstante `WATER_DRAPE_LIFT_M = 0,02 m`
-statt einer Leiter, weil über einem Quadratmeter immer nur eine Wasserfläche
-liegt.
-
-### 2. Zwei gebackene Masken je 256-m-Kachel
-
-`app/core/terrain_layers.py`, auf **denselben Kachel-Schlüsseln** wie das
-Höhenfeld (`heightfield.tile_key`) — ein Anker, ein Fenster, damit Form und
-Material des Bodens nie über verschiedenen Quadraten geschärft werden.
-
-| Maske | Auflösung | Format | Filter | Inhalt |
-|---|---|---|---|---|
-| `id` | **1 m/Texel** (256²) | RG8UI, 2 Byte | **NEAREST** | das PAAR (A, B) der Layer-Indizes an der nächsten Grenze |
-| `sd` | **0,5 m/Texel** (512²) | R8 | **LINEAR** | die SIGNIERTE Distanz zu genau dieser Grenze, in Metern |
-
-> **DAS PAAR IST KANONISCH — und das ist der ganze Trick.** Beide Seiten einer
-> Grenze tragen dasselbe (A, B): **A ist immer der SPÄTER gemalte Layer**,
-> niemals „der, auf dem ich stehe". Nur das VORZEICHEN von `sd` sagt, auf
-> welcher Seite ein Texel liegt. Damit setzen ein NEAREST-Integer-Zugriff und
-> eine LINEAR interpolierte Distanz eine durchgehende Kante zusammen: die id
-> darf an jeder Texel-Naht auf die andere Seite springen, ohne je zu ändern,
-> WELCHE zwei Materialien gemischt werden, und wo der Schnitt genau läuft,
-> kommt allein aus der interpolierten Distanz — subtexel-scharf, in jedem Zoom,
-> ohne ein einziges zusätzliches Dreieck. Wäre das Paar nach „der Layer hier"
-> geordnet, kippten A und B über der Linie, das Vorzeichen mit ihnen, und die
-> Kante risse an jeder Naht auf.
-
-**Warum eine Integer-Textur für die id:** `usampler2D` + `texelFetch`. Eine
-Integer-Textur kann *gar nicht* gefiltert werden — NEAREST erzwingt das FORMAT
-und nicht eine Sampler-Einstellung, die ein Treiber anders auslegen könnte, und
-der Wert kommt als genau das Byte an, das der Server geschrieben hat. Zwei
-R8-Unorm-Texturen hießen zwei Sampler, zwei `round(v·255)`-Dekodierungen und
-eine weitere Gelegenheit, dass ein gefiltertes Texel einen Layer erfindet.
-
-**Quantisierung, ausgeschrieben:** `code = clamp(round(sd · 127/8) + 128,
-1, 255)`, zurück `sd = (code − 128) / (127/8)`. 127 Codes je Seite einer
-EXAKT darstellbaren Null (128), Schritt 8/127 = 0,063 m, Band ±8 m. Code 0 wird
-nie geschrieben. Server: `terrain_layers.encode_sd/decode_sd`; Client:
-`@anima/scene-render` `decodeSd`, das seine zwei Zahlen aus dem PAYLOAD liest
-und nicht aus einer Konstante.
-
-**Priorität = das bestehende Datengesetz**, nichts Neues: der LETZTE
-enthaltende Eintrag gewinnt, in `list_areas`-Reihenfolge (z_order, dann
-Malreihenfolge) — genau die Regel, mit der `terrain_query.kind_at`
-Punktabfragen beantwortet. Die Bake füllt dafür ein Raster aus **Malrängen**
-(0 = ungemalte Welt, r = die r-te Fläche der Liste), sodass „wer liegt oben"
-ein Integer-Vergleich ist. `smoke_terrain_layers.py` [1] misst Raster ==
-`rank_at` == `kind_at` an 500 Gitterproben.
-
-**Wasser ist hier ein Layer.** Eine als `meta.water` geflaggte Art bekommt einen
-eigenen Index, weil die Maske die Wahrheit über „welcher Boden ist hier" für
-den Unterwuchs-Filter und für die Priorität ist. Wie die Wasser-OBERFLÄCHE
-aussieht, ist nicht Sache dieses Moduls — bis E4 malt der Kompositor unter der
-Kräusel-Drape das **Bett** (Index 0, blanker Boden).
-
-### 3. Der Endpunkt
-
-`GET /play/terrain-layers` — **ein** Endpunkt, zwei Modi, weil es zwei Hälften
-desselben Fensters sind:
-
-```jsonc
-// OHNE keys — der INDEX
-{
-  "sig": "…", "tile_m": 256.0,
-  "id_step_m": 1.0, "sd_step_m": 0.5, "sd_band_m": 8.0,
-  "sd_zero": 128, "sd_codes_per_m": 15.875,
-  "layers": [ { "index": 0, "kind": "grass", "surface": "grass",
-                "edge_blend_m": 1.5, "water": false }, … ],
-  "overview": { "origin_x": …, "origin_z": …, "step_m": 8.0,
-                "cols": 250, "rows": 250, "id": "<base64 cols·rows·2>" },
-  "tile_keys": ["0,0", "1,0", …]
-}
-
-// MIT keys=tx:tz,tx:tz — die BATCH, höchstens BATCH_MAX = 16 Kacheln
-{ "sig": "…", …, "layers": […],
-  "tiles": {
-    "1,0": { "origin_x": 256.0, "origin_z": 0.0,
-             "id_size": 256, "sd_size": 512,
-             "id": "<base64 256·256·2>", "sd": "<base64 512·512>" },
-    "2,0": { "origin_x": 512.0, "origin_z": 0.0, "uniform": 3 }
-  } }
-```
-
-`layers[0]` IST der blanke Boden (die `game.default_terrain_kind` der Welt);
-eine Fläche, die in der Default-Art gemalt ist, bildet auf 0 zurück statt einen
-Zwilling zu bekommen. Die Byte-Reihenfolge ist zeilenweise vom Kachel-Ursprung,
-Texel `(i, j)` deckt `[i·step, (i+1)·step)`. Eine Kachel ohne jede Grenze
-antwortet `uniform` und schickt **kein** Array — der Normalfall draußen in der
-offenen Welt, und der Unterschied zwischen 40 Byte und 384 kB.
-
-Kacheln, die der Index nicht kennt, bleiben WEG statt leer zu antworten: der
-Client weiß von dort schon, dass es blanker Boden ist. Der `keys`-Parser ist
-der des Höhenfelds (`heightfield.parse_tile_keys`), Fehler werden einmalig
-geloggt.
-
-**Der Vertrag zum Refetch:** die Masken hängen an `terrain_sig` — sie sind eine
-Funktion der gemalten Flächen plus des Art-Katalogs, und genau das deckt diese
-Signatur ab. Ein eigener Poll existiert nicht.
-
-### 4. Übergangsbreite je Art — `edge_blend_m`
-
-Neu am Terrain-Typ (`terrain_types`, `meta.edge_blend_m`, 0…8 m, Default
-**1,5**): wie breit der Übergang von diesem Boden zu dem darunter ist. Das
-ersetzt die feste 1,5-m-Franse des Renderers — der Look war eine Eigenschaft
-des CLIENTS und für jeden Boden der Welt gleich; jetzt ist er eine Eigenschaft
-des MATERIALS und der Autor stellt ihn pro Art ein (Terrain-Tab, Feld
-„Transition (m)").
-
-> **DAS EINZIGE Katalogfeld, in dem 0 ein WERT ist** und nicht „nicht gesetzt":
-> 0 ist der HARTE SCHNITT — Raumboden, Bordstein, gepflasterter Weg — und
-> überlebt deshalb einen Save. Es geht bewusst nicht durch
-> `_clamped_meta_number`, sondern durch `terrain_layers.sanitize_edge_blend`.
-
-Der Shader schneidet:
-
-```glsl
-float g = fwidth( sd );                       // IMMER, vor jedem Zweig
-float soft = smoothstep( -0.5*b, 0.5*b, sd ); // b > 0
-float hard = clamp( sd / max(g, 1e-6) + 0.5, 0.0, 1.0 );   // b == 0
-w = b > 0.0 ? soft : hard;
-```
-
-`b` kommt aus der Layer-Tabelle, **nach Art A**. Die halbe Breite liegt auf
-jeder Seite, also sind „1,5 m Übergang" wirklich 1,5 m Boden und nicht drei.
-Bei `b = 0` ist der Schnitt ein **ein Pixel breiter** Schritt, wo die Kamera
-auch steht: nah ist ein Pixel zentimeterklein und die Kante rasiermesserscharf,
-fern ist er metergroß und derselbe Ausdruck MITTELT die beiden Böden, statt zu
-flimmern. `fwidth` steht außerhalb jedes Zweigs — eine Ableitung in
-Kontrollfluss, der über ein Quad hinweg auseinanderläuft, ist in GLSL ES
-undefiniert, und genau dieser Zweig läuft an jeder Grenze auseinander.
-
-**Die Franse ist nicht weg, nur ihr Mechanismus.** Das Rauschen, das die Grenze
-organisch statt gezeichnet aussehen ließ, überlebt unverändert (0,5 m Ausschlag
-über 2 m Wellenlänge, `LC_EDGE_NOISE_M`/`LC_EDGE_WAVE_M`) — es schiebt jetzt
-die LINIE statt der Alpha, und sein Ausschlag ist auf die halbe Breite
-gedeckelt: bei `b = 0` also auf **null**, damit der harte Schnitt auf dem
-Meter endet, auf dem er gemalt wurde.
-
-### 5. Der Kompositor im Client
-
-`client3d/src/scene/layerGround.ts` hängt sich als LETZTES Patch in die
-Material-Kette der CDLOD-Fläche (`patchHole` → `applyNaturalGround` → **dies**)
-— und läuft damit als ERSTES im Shader, weil jedes Boden-Patch seinen Rumpf
-direkt hinter `#include <map_fragment>` einsetzt. Genau das verlangt § G3: der
-Kompositor schreibt die Albedo, die Naturstufen (Farbflecken, Höhen-AO)
-arbeiten auf dem KOMPONIERTEN Ergebnis.
-
-Das Terrain-Material trägt **keine `map`** — mit einer wäre `USE_MAP` gesetzt,
-und die Anti-Kachel-Stufe von `applyNaturalGround` würde die Breitprobe der
-DEFAULT-Art über jeden Wald blenden. Die Anti-Kachelung liegt statt dessen im
-Kompositor, **pro Layer** (`lcSurface`).
-
-Die Oberflächen der Arten liegen in EINER `DataArrayTexture`, eine Schicht je
-Layer-Index, jede auf 512² gebracht; eine Art ohne Bibliothekseintrag bekommt
-eine Schicht ihrer Katalogfarbe (ein Texel ist billiger als ein Shader-Zweig),
-ein Wasser-Layer bekommt die Schicht des blanken Bodens.
-
-**Zwei Fenster, wie beim Höhenfeld:** die geladenen Kacheln werden zu EINEM
-Rechteck gepackt (`packLayerWindow`) und folgen dem Höhen-Anker über dieselbe
-Wunschmenge (`wantedTiles`, Radius 560 m); darüber hinaus antwortet die
-weltweite GROBE `overview`-Maske. Sie trägt keine Distanz — bei 8 m/Texel ist
-jeder Übergang schmaler als ein Texel, also ist ein harter Schnitt die einzige
-ehrliche Antwort, und eine konstante sd-Textur baut sich der Client selbst.
-
-### 6. Der Unterwuchs liest die Maske (User-Entscheidung 5.2)
-
-Ein Büschel wächst nur, wo die OBERSTE Bodenart an seinem eigenen Punkt
-wirklich die Art ist, der es gehört. Gelesen wird das aus derselben Maske, aus
-der das Bild komponiert wird (`@anima/scene-render` `topLayerAt`, im Client
-`layerGround.topLayerIndexAt`). Die Polygon-Occluder bleiben als billiger
-erster Durchgang davor — die Maske ist die Wahrheit dahinter, und zwei
-Implementierungen von „oberste Art" sind zwei Antworten, die auseinanderlaufen
-werden. Gemessen in `smoke_undergrowth.mjs` § J, inklusive der Gegenprobe: ein
-Filter, der nie zutrifft, lässt nichts wachsen, während dieselbe Vorlage mit
-passendem Filter 21 Zellen füllt.
-
-### 7. Kostenbudget (gerechnet für eine 2 × 2-km-Welt)
-
-| Posten | Wert |
-|---|---|
-| eine Kachel roh | 393 216 Byte (id 131 072 + sd 262 144) |
-| ganze Welt roh / base64 | **24,0 MB** / 32,0 MB (61 Kacheln) |
-| eine Batch (16 Kacheln) | 6,3 MB roh / 8,4 MB auf der Leitung |
-| Fenster von 9 Kacheln auf der GPU | 3,54 MB |
-| Übersichtsmaske (8 m) | 63 504 Texel = **127 kB** |
-| Bake einer Kachel MIT Grenzen | ~0,32 s (kalt, danach LRU) |
-| Bake einer Kachel ohne Grenze | ~0,04 s, Antwort 40 Byte |
-| Fragment-Kosten | 1 id-Fetch + 1 sd-Fetch + 4 Array-Fetches |
-
-Die vier Array-Zugriffe statt der zwei aus der Recherche-Schätzung sind der
-Preis der Anti-Kachelung PRO LAYER (schmale und breite Probe, für A und für B).
-Dafür ist das Terrain jetzt **1 Draw-Call** statt einem Mesh je gemalter Fläche
-plus Platten.
-
-### 8. Zwischenzustand bis E4/E5
-
-* Wasserflächen zeichnen weiter ihre Kräusel-Drape (2 cm über dem Bett).
-* Szenen-Zonenplatten (0,01) rendern weiter — E5 macht Layer daraus. Ohne den
-  grauen Kachel-Backstop, den E3 gelöscht hat, können am **Mondscheinsee**
-  jetzt Gelände-Lücken zwischen Zonenplatte und Terrain sichtbar werden. Das
-  ist der erwartete Zwischenzustand, kein Regressionsbefund.
-* § A16 nennt weiterhin `SOCLE_Y_M`, `tiles.tilePlateY` und die gelöschte
-  `smoke_plate_drape.mjs`; das Vertragskapitel wird laut Plan in E5/E6 neu
-  geschrieben.
-
-## Nachtrag 2026-08-21 (§ A18): Ein Boden — E4, der Wasserspiegel
-
-Etappe E4 aus `development_instructions/plan-ein-boden.md` (§ G4). E1 hat dem
-Wasser eine ZAHL gegeben (`meta.water_level_effective`, § A16-Nachtrag Nr. 2)
-und sein Bett darunter gecarvt; E3 hat alle Drapes bis auf eine gelöscht. E4
-löst die letzte ein. **Keine Server-Änderung** — der Payload trug schon alles.
-
-### 1. Die Fläche ist eben, und ihre Höhe IST die Geometrie
-
-Pro gemalter Wasserfläche eine **flache Earcut-Platte** auf
-`y = water_level_effective`, ohne jede Unterteilung: eine Ebene braucht in der
-Mitte keine Stützpunkte. Ein Kilometer See sind ein paar Dreiecke.
-
-`transparent: true`, `depthTest: true`, `depthWrite: false`, gezeichnet nach dem
-opaken Gelände. Kein `renderOrder`, kein `polygonOffset`, **kein Lift** — die
-2 cm `WATER_DRAPE_LIFT_M` sind ersatzlos weg, weil die Platte mit dem Bett
-konstruktionsbedingt nicht koplanar ist (`h ≤ Spiegel − ε`, in jedem Mip).
-
-**Der Spiegel steckt in der Platten-y, nicht in einem Uniform.** Der Fragment
-liest seine eigene Weltlage (`vWaterPlane.y`), und die ist bei einer ebenen
-Platte genau der Spiegel. Deshalb teilen sich **alle Seen einer Bodenart EIN
-Material**, egal auf wie vielen Höhen sie stehen: zwei Seen auf zwei Höhen sind
-zwei Meshes, nicht zwei Shader. Das Kräusel-Material der Klassen `water`/`ice`
-(`@anima/scene-render` `materials.ts`) läuft unverändert weiter.
-
-**Zwei Bedingungen entscheiden über eine Platte, und beide sind Daten:** die
-KLASSE sagt, wie die Oberfläche aussieht (`isWaterClass` — nie die Farbe, nie
-der Name der Art), `meta.water_level_effective` sagt, ob die Bake ein Bett
-gecarvt hat und auf welcher Höhe. Fehlt der Spiegel, gibt es **keine Platte** —
-eine auf Geländehöhe geratene Ebene wäre die Drape von vorn. Das AUTORIERTE
-`meta.water_level` wird bewusst nicht gelesen: es darf leer sein.
-
-### 2. Das Ufer kommt aus der TIEFE, nicht aus einem Depth-Pass
-
-Im Fragment-Shader:
-
-```glsl
-float wsDepth = vWaterPlane.y - tlodHeight( vWaterPlane.xz, 0.0 );
-if ( wsDepth <= 0.0 ) discard;
-```
-
-`tlodHeight` ist **derselbe Lookup, mit dem der Terrain-Vertex-Shader seine
-Höhen zieht** — vier `texelFetch` auf dieselben R32F-Pyramiden, aus EINEM
-GLSL-Baustein (`terrainLod.terrainLodSampleGlsl`, aus `terrainLodGlsl`
-herausgelöst, weil ein Fragment-Shader kein `attribute` deklarieren darf). Kein
-Screen-Space-Depth, kein Depth-Prepass, kein zweites Render-Target: der Boden
-ist bereits eine Funktion, die man fragen kann. `nodeStep = 0` wählt die
-FEINSTE Ebene; dass ein ferner See sein Bett gröber gezeichnet bekommt, ist
-egal, weil die E1-Invariante in jedem Mip gilt.
-
-Der **Discard bei `wsDepth ≤ 0`** ist das einzige Band, in dem Platte und
-Gelände dieselbe Fläche sind — das ist die Uferlinie. Ein Fragment, das dort am
-Tiefentest teilnimmt, flimmert, wie klein sein Alpha auch ist.
-
-**Die Zahlen** (`client3d/src/scene/waterPlaneMath.ts`, jede von Hand in
-`client3d/scripts/smoke_water_plane.mjs` hergeleitet):
-
-| Größe | Wert | Woher |
-|---|---|---|
-| `WATER_SHORE_BAND_M` | **1,5 m TIEFE** | Alpha = `smoothstep(0, 1.5, Tiefe)`. Beim Default-See (`water_depth_m 2,0` über `shore_ramp_m 3,0`) ist das `smoothstep = 0,75`, also `t ≈ 0,6736` → volle Deckung **2,02 m** innerhalb des Umrisses: das Wasser blendet über die ersten zwei Drittel der gemalten Ufer-Rampe ein. Ein 0,6-m-Tümpel erreicht nie 1 (Alpha 0,352) — genau so sieht ein Tümpel aus |
-| `WATER_FOAM_BAND_M` | 0,6 m | `1 − smoothstep(0, 0,6, Tiefe)`; endet ungefähr dort, wo das Waten ins Schwimmen kippt |
-| `WATER_FOAM_STRENGTH` | 0,6 | wie weit die Gischt das Licht Richtung Weiß zieht |
-| `WATER_FOAM_ALPHA` | 0,15 | wie viel Alpha sie am Rand zurückgibt, damit die Uferlinie eine Spitze behält statt ins Nichts zu verschwinden |
-
-Alpha-Stützstellen (Rampe + Gischt): Tiefe 0 → 0,15 · 0,3 → 0,179 · 0,6 →
-0,352 · 0,75 → 0,5 · 1,125 → 0,84375 · 1,5 → 1.
-
-### 3. Die E1-Invariante, im Client nachgemessen — mit Gegenprobe
-
-`smoke_water_plane.mjs` [3] schreibt den Carve **unabhängig** aus (nicht
-importiert, sonst prüfte er einen geteilten Helfer gegen sich selbst) und misst
-`Spiegel − h ≥ ε`, `ε = min(water_depth_m, 0,25)`.
-
-> **Die Gegenprobe ist ein BEWEIS, keine Stichprobe.** Jenseits der Rampe ist
-> `smoothstep(1) = 1` exakt, das zweite Argument des `min` also die KONSTANTE
-> `Spiegel − water_depth_m` — was auch immer die Naturhöhe dort tut. Eine
-> +40-m-Kuppe mitten im See kommt genauso auf `Spiegel − water_depth_m` heraus:
-> ein Gelände-Texel über dem Spiegel in der Tiefzone ist nicht unwahrscheinlich,
-> es ist arithmetisch unmöglich. Sampling hätte nur „in diesen 4 489 Proben
-> nicht" sagen können.
-
-Am Rand (`d_innen = 0`) ist der Carve `min(h, Spiegel)` — die Platte trifft das
-Gelände, und genau das ist die Uferlinie.
-
-### 4. Schwimmen liest den Spiegel (`walk.floatRootY`)
-
-Bis E4 wurde die Sink-Tiefe vom GELÄNDE aus gemessen. Über einem gecarvten Bett
-war das falsch: ein Schwimmer über 2 m Wasser hing 2,35 m unter der Wasserlinie
-und kam halb in der Grasplatte des Ufers heraus. Neu, **eine exportierte
-Funktion für Avatar, NPCs und Reisende**:
-
-```
-root = waterLevel === null ? groundY : max( groundY + sink, waterLevel )
-body = root − sink                      (unverändert, figures.Figure.play)
-     = waterLevel === null ? groundY − sink : max( groundY, waterLevel − sink )
-```
-
-Außerhalb des Wassers ändert sich **nichts**. Im Wasser hängt der Körper `sink`
-unter dem SPIEGEL und nie unter dem Bett, auf dem er sonst stünde.
-
-> **Der Übergang fällt aus dem `max`, er ist keine zweite Regel.** Die beiden
-> Zweige sind gleich, wo `groundY + sink = waterLevel` — bei einer Wassertiefe
-> von **exakt `sink`**. Flacher wird GEWATET (Füße auf dem Bett), tiefer
-> GESCHWOMMEN (Körper `sink` unter der Wasserlinie, egal wie tief das Bett
-> fällt). Das Maximum zweier stetiger Funktionen ist stetig: ins Wasser laufen
-> ist ein glatter Abstieg, ohne Stufe an der Wasserlinie und ohne Stufe am
-> Übergang.
-
-Mit dem Wasser-Seed der Welt (`move_sink_m 0,35`, `idle_sink_m 1,3`) und
-Spiegel `L`:
-
-| Tiefe | root (Schwimmer) | root (Treter) | body (Schwimmer) | body (Treter) |
-|---|---|---|---|---|
-| 0,00 | L+0,35 | L+1,30 | L | L |
-| 0,35 | L | L+0,95 | L−0,35 | L−0,35 |
-| 1,30 | L | L | L−0,35 | L−1,30 |
-| 2,00 | L | L | L−0,35 | L−1,30 |
-
-Der Schwimmer kippt bei 0,35 m Wasser, der Treter erst bei 1,30 m — genau der
-Sinn zweier Tiefen: eine aufrechte Figur braucht eine Körperlänge Wasser, bevor
-ihre Füße den Grund verlassen.
-
-**Reichweite wie beim Sink.** `walk.groundWaterLevel(level, scope)` ist der
-exakte Zwilling von `groundSink`: eine geflieste Halle im See ist ein BODEN, in
-ihr schwimmt niemand (`scope === 'built'` → `null`). Die Passierbarkeit
-entscheidet weiter der Server, art-basiert — unverändert.
-
-**KEIN Zusatzabstand über dem Bett.** Ein positiver Clearance würde einen
-Watenden von dem Grund abheben, auf dem er steht, und kaufte nichts: die
-Stetigkeit ist Sache des `max`, nicht des Abstands.
-
-### 5. Was gelöscht ist
-
-`WATER_DRAPE_LIFT_M`, `drapeArea`, `areaCellM`, `liftToField` und `reliefBox`
-in `client3d/src/scene/ground.ts` — die ganze Drape-Kette der letzten Fläche.
-`smoke_layer_cut.mjs` [6] liest die Quellen darauf ab und verlangt, dass
-`rebuildAreas` **gar keine** `position.y` mehr setzt (E3 erlaubte noch genau
-eine). Die Earcut-Geometrie einer Fläche ohne Spiegel wird jetzt freigegeben
-statt liegengelassen.
-
-`@anima/scene-render` `subdivideOnGrid`/`gridStepFor` haben damit **keinen
-Verbraucher mehr**; sie stehen noch, weil ihr Löschen den halben
-`smoke_relief_math.mjs` mitnimmt — Aufgabe des Konstanten-Friedhofs in E5/E6.
-
-### 6. Zwischenzustand bis E5
-
-* Szenen-Zonenplatten (0,01) rendern weiter, Zonen-Wasser (Raumboden `water`,
-  `layout.floor_offset_y` als Wasserlinie) ist **unberührt** — das ist E5.
-  Ein See der KARTE und ein Wasser-Raumboden derselben Szene stehen bis dahin
-  auf zwei verschiedenen Höhen-Ideen.
-* § A16 nennt weiterhin gelöschte Namen; das Vertragskapitel wird laut Plan in
-  E5/E6 neu geschrieben.
-
-## Nachtrag 2026-08-21 (§ A19): Ein Boden — E5a, das Ende der Etage-0-Platten
-
-Etappe E5 aus `development_instructions/plan-ein-boden.md`, **Server-Hälfte**
-(§ G3 für das Material, § G5 für die Geometrie, Entscheidungen 1 und 4 aus § 5).
-E1 hat dem Gelände EINE Höhenfunktion gegeben, E3 dem Boden EINEN Schnitt, E4
-dem Wasser EINEN Spiegel. E5a nimmt der Szene ihren eigenen Boden weg: auf
-Etage 0 gibt es keine Platte mehr — die Höhe ist `h_final`, das Material ist der
-Layer-Bake, und was von den Raumböden übrig bleibt, sind ihre Polygone als
-Daten. Die Client-Hälfte (E5b) folgt und liest, was hier entsteht.
-
-### 1. Was aus `plates[]` ersatzlos verschwindet
-
-| Bisher auf Etage 0 | Datum | Ersatz |
-|---|---|---|
-| Etagenplatte (Kontur, 0,14 m dick) | Oberkante 0,08 | das gestanzte Plateau des Geländes (§ G5) |
-| Raum-Bodenplatte je geschlossenem Raum | Oberkante 0,10 | Layer im Bake + `floor_plan` |
-| Zonen-Fläche je `always_visible`-Raum (dick 0) | Oberkante 0,09 | dito |
-| Overlay-Fläche einer Zone auf einem Flächenmodell | Modell-Oberfläche + 0,01 | dito |
-
-Damit sind die Konstanten `LEVEL_PLATE_TOP` / `ROOM_PLATE_TOP` /
-`OVERLAY_SURFACE_LIFT` **ausschließlich** die Datums einer DEKLARIERTEN Etage
-(Obergeschoss oder Keller). Auf Etage 0 kommt keine der drei Zahlen mehr vor;
-`scripts/smoke_scene_recipe.py` führt dafür rote Gegenproben (0,08 / 0,09 / 0,10
-dürfen dort in keinem `top_y`, `base_y` oder `bottom_y` auftauchen).
-
-Ebenfalls weg, weil ohne Verbraucher: der Parameter `slab` des Komponisten
-(0,08 wenn eine Location einen Boden zeichnete, sonst 0,0) und das Payload-Flag
-`natural_floor`. Letzteres sagte einem Renderer, dass DIESE Location auf dem
-Gelände steht statt auf einer Platte — eine Unterscheidung, die nur solange
-etwas bedeutete, wie es zwei Böden gab. `scene_recipe.is_natural_location`
-BLEIBT, aber ohne Payload-Rolle: es ist der Name des Gesetzes, nach dem der
-Bake stanzt (`models.heightfield.draws_built_floor` ist sein Zwilling auf der
-gespeicherten Location).
-
-**Der Keller bleibt Geometrie.** § G5 spricht von Obergeschossen; die
-Eigenschaft, die entscheidet, ist aber „deklarierte Etage" und nicht „oben":
-`level != 0`. Ein Keller auf −1 liegt eine Etage unter dem Gelände und behielte
-sonst gar keinen Boden.
-
-### 2. Die neue Höhenleiter, in einer Funktion
-
-```python
-storey_floor_y(level, storey) = level*storey + (0.0 if level == 0 else 0.08)
-```
-
-Alles, was auf einem Boden steht, misst von hier plus dem, was der RAUM
-darüberlegt (`_plate_top`): 0 auf Etage 0, sonst 0,10 (geschlossener Raum),
-0,09 (Zone) bzw. 0,08 (Hof). Die Laufketten von „Haus von Kai" und
-„Mondscheinsee", alt → neu:
-
-| Größe | gebaut (Haus), alt | gebaut, NEU | natürlich (See), alt | natürlich, NEU |
-|---|---|---|---|---|
-| Etagenplatte Oberkante | 0,08 | — | — | — |
-| Raumplatte / Zonenfläche | 0,10 / 0,09 | — | 0,01 | — |
-| Boden, auf dem gestanden wird | 0,10 | **0,00** (`h_final`) | 0,01 | **0,00** (`h_final`) |
-| Wandfuß (Raum) | 0,10 | **0,00** | — | — |
-| Wandfuß (Kontur) | 0,08 | **0,00** | — | — |
-| Prop im Raum | 0,11 | **0,01** | 0,02 | **0,01** |
-| Prop im Hof (§ A13a) | 0,09 | **0,01** | 0,01 | **0,01** |
-| Diorama (ohne `model_offset_y`) | 0,12 | **0,02** | 0,03 | **0,02** |
-| Türschwelle ohne Deklaration | 0,10 | **0,00** | — | — |
-| Gebäudemodell `walk_y_world` | 0,08 + `offset_y` | **`offset_y`** | 0,00 + `offset_y` | **`offset_y`** |
-| Aufzugs-Pad (Mitte) | +0,055 | **−0,025** | — | — |
-
-Die beiden Spalten „NEU" sind identisch — das ist der Punkt. `offset_y` je
-Platzierung, `ground_offset_m` je Prop und `model_offset_y` je Diorama wirken
-unverändert weiter (Entscheidung 4), nur messen sie jetzt überall von derselben
-Null.
-
-`layout.floor_offset_y` **überlebt als reiner Feinjustage-Regler** eines
-einzelnen Raums (hebt, was IM Raum steht). Seine zwei alten Nebenjobs sind weg:
-es gleicht keinen zweiten Boden mehr aus, und es ist **keine Wasserlinie** mehr
-— dafür gibt es `layout.water_level` (Nr. 4).
-
-### 3. `floor_plan` — die Etage-0-Räume als Daten
-
-Additiv im Szenen-Payload, eine Zeile je Raum auf Etage 0, in Rezept-Reihenfolge:
-
-```jsonc
-"floor_plan": [
-  { "room_id": "hall",
-    "polygon_world": [[-4,-4],[0,-4],[0,-1],[-4,-1]],   // SZENEN-Frame (m)
-    "floor_kind": "wood",
-    "closed": true },
-  { "room_id": "pond", "polygon_world": [...], "floor_kind": "water",
-    "closed": false, "water_level_effective": 8.0 }     // ABSOLUTES Welt-y
-]
-```
-
-* `polygon_world` ist der Raumrumpf im **Szenen-Frame** (lokale Meter um den
-  Anker-Pin), wie jede andere Koordinate dieses Payloads — tesselliert und
-  gedreht, also Punkt für Punkt der Rumpf, den auch der Bake benutzt.
-* `floor_kind` ist die Bodenart: `surfaces.floor`, sonst `"floor"` für einen
-  GESCHLOSSENEN Raum und der **leere String** für eine Zone, die keine nennt
-  (dort scheint das Gelände durch, und der Bake malt dort ebenfalls nichts).
-* `closed` unterscheidet Raum von offener Zone (§ A5).
-* `water_level_effective` steht nur auf einem Wasserboden und ist **die einzige
-  absolute Welt-y-Zahl in diesem Payload** — dieselbe, die
-  `GET /play/terrain-layers` für denselben Raum führt; sie reist mit, damit ein
-  Verbraucher des Grundrisses keine zweite Anfrage braucht.
-* **Keine Höhen sonst.** Raum-Spots, NPC-Plätze und Labels holen ihre Höhe aus
-  dem Höhen-Sampler an genau dem Punkt, um den es geht — nicht aus einer Platte
-  und nicht aus 6×6 Strahlen gegen ein Mesh.
-
-Der Hof (`__ground__`, § A13a) steht nicht drin: er hat keinen Rumpf, er IST
-das Grundstück. Etagen ≠ 0 stehen nicht drin: die haben Platten.
-
-### 4. Raumböden sind Layer — und Wasser-Raumböden sind Seen
-
-**Der Bake** (`app/core/terrain_layers.py`) nimmt die Etage-0-Rumpfpolygone jeder
-platzierten Location als OBERSTE Layer über die gemalten Flächen. Die Priorität
-ist wieder nur „der letzte enthaltende Eintrag gewinnt", in dieser Reihenfolge:
-
-1. gemalte Terrain-Flächen (z_order, Malreihenfolge);
-2. je Location, **größte Fläche zuerst** — die KLEINSTE schreibt zuletzt und
-   gewinnt (das Verschachtelungsgesetz von `location_at_point`);
-3. innerhalb einer Location: offene Zonen, dann geschlossene Räume, je in
-   Raum-Reihenfolge.
-
-Die **Übergangsbreite eines Bodens** ist `layout.edge_blend_m` (0…8 m,
-derselbe Sanitizer wie am Katalog-Feld, 0 ist ein WERT) — und der **Default ist
-0**, der harte Schnitt, gegen die 1,5 m einer gemalten Art. Ein Boden wird
-gezeichnet, nicht gewachsen. Da der Shader `b` aus der Layer-Tabelle nach Art A
-liest, ist eine Art bei zwei Breiten **zwei Layer**; die Tabelle führt darum
-Einträge je `(kind, edge_blend_m)` und wächst über die Terrain-Arten hinaus auf
-die Boden-Arten (eine Boden-Art trägt sich selbst als `surface`, weil
-`surfaces.floor` direkt eine Bibliotheks-Id ist).
-
-**Zonen-Wasser** (`app/core/heightfield.py`): ein Raum, dessen Bodenart eine
-Wasser-Oberfläche ist — entschieden aus dem Terrain-Katalog (`meta.water`) ODER
-der Material-KLASSE der Bibliothek (`water`/`ice`), nie aus dem Namen — carvt
-sein Bett wie eine gemalte Fläche, mit denselben drei Zahlen und demselben
-Reader (`heightfield.water_meta`, gefüttert mit dem `layout`):
-
-| Feld am `layout` | Bedeutung |
-|---|---|
-| `water_level` | der Spiegel in Welt-y. **Optional** |
-| `water_depth_m` | 0,2…20, Default 2,0 |
-| `shore_ramp_m` | 0…20, Default 3,0 |
-
-**Fehlt `water_level`, ist der Default der Median der Höhe ENTLANG DES EIGENEN
-UMRISSES, gelesen NACH den Plateaus** — und diese eine Regel deckt beide Fälle
-aus § G4 ab: auf einer GEBAUTEN Location hat der Plateau-Stempel das Grundstück
-eben gehobelt, also trägt jede Randprobe die Plateauhöhe und der Median IST sie;
-auf einer natürlichen ist es die Landschaft ringsum.
-
-Deshalb ist der Zonen-Carve eine **fünfte Stufe** der Pipeline und keine weiteren
-Einträge in der zweiten:
-
-```
-Höhenflächen → Mikro-Relief → Wasser-Carve (Karte) → Location-Plateaus
-   → ZONEN-Wasser-Carve
-```
-
-Ein Teich im Innenhof liegt auf einem Grundstück, das der Plateau-Stempel eben
-macht; vor dem Stempel gecarvt wäre er wieder weggehobelt. Nach ihm gilt dieselbe
-`min`-Regel und dieselbe E1-Invariante (`h ≤ Spiegel − ε`, `ε = min(Tiefe, 0,25)`)
-— nachgemessen in `scripts/smoke_height_bake.py` [8].
-
-Die Polygone kommen aus **derselben** Funktion, aus der auch das Material kommt
-(`terrain_layers.world_floors` → `models.heightfield.placed_zone_waters`): eine
-Ableitung für die Form des Betts und für die Farbe darüber. `height_sig` hasht
-sie (`zone_water_basis`), `layers_sig` hasht die Grundrisse (`floors_basis`) —
-ein verschobener Raum bäckt beides neu.
-
-### 5. Der Endpunkt-Nachtrag
-
-`GET /play/terrain-layers` (Index-Modus) trägt **zusätzlich**:
-
-```jsonc
-"waters": [
-  { "location_id": "…", "room_id": "pond", "kind": "water",
-    "polygon": [[295.0,-5.0], …],        // WELT-Meter
-    "water_level_effective": 0.0 }
-]
-```
-
-Dieselbe Form, in der eine gemalte Wasserfläche ihren Spiegel führt (§ A18), in
-WELT-Metern — damit ein Client den Teich eines Raums mit der Maschinerie
-zeichnet, mit der er einen See zeichnet, statt eine zweite zu erfinden. Ein Raum,
-den der Bake nie gesehen hat (unplatzierte Location), bleibt WEG statt eine
-geratene Höhe zu bekommen.
-
-### 6. Das szenen-eigene 17×17-Relief ist gelöscht
-
-Entscheidung 1 aus § 5 des Plans, ohne Ersatzschiene:
-`scene_recipe.compose_terrain` / `terrain_frame` / `_clip_grid_to_boundary`, der
-`terrain`-Block im Payload, `map3d.relief` samt Sanitizer, `layout.relief_flat`,
-`relief.scene_ground_lift` / `has_relief` / `ground_lift_at` und
-`scatter_curves.relief_cells` / `terrain_grid` / `terrain_height` samt
-`TERRAIN_CELLS` / `RELIEF_CELLS_MIN` / `RELIEF_CELLS_MAX`. Lokales Relief
-autoriert man über **Höhenflächen der Karte**.
-
-Was an ihre Stelle tritt, ist überall dieselbe Zeile: `world_geometry.ground_y`.
-`relief.ground_at(x, z)` ist ihr Name auf der Regel-Seite; `POST /play/pos`,
-`nav_grid`, `scene_asset.ground_sampler` und `scene_context` lesen sie. Die
-Auflösungsregel „die innerste ENTHALTENDE Location mit einem Feld gewinnt" ist
-damit weg — es gibt ein Feld, und wer es formt, entscheidet der Bake einmal
-(`draws_built_floor`).
-
-`shared/world_dev_schemas` darf `flat` weiter nennen; es erzeugt kein Feld mehr.
-
-### 7. Was der Client-Hälfte (E5b) noch fehlt
-
-* **Admin-Regler.** `layout.edge_blend_m` und `layout.water_level` /
-  `water_depth_m` / `shore_ramp_m` werden serverseitig sanitisiert, gespeichert,
-  gehasht und gebacken — im Raum-Layout-Editor gibt es dafür noch kein Feld.
-  Ebenso hat der jetzt tote Relief-Block (`map3d.relief`, „Keep flat") noch
-  Bedienelemente ohne Wirkung.
-* Der Renderer zieht seine Raum-Spots noch aus Platten; `floor_plan` und
-  `waters` sind additiv und warten auf ihn. Ein Payload ohne Etage-0-Platten
-  ist für den heutigen Client verlustfrei lesbar (er iteriert über `plates`),
-  nur zeichnet er dort nichts mehr — der erwartete Zwischenzustand.
-
-## Nachtrag 2026-08-21 (§ A20): Ein Boden — E5b, die Renderer holen ihre Höhe aus Daten
-
-Etappe E5 aus `development_instructions/plan-ein-boden.md`, **Client-Hälfte**.
-E5a hat der Szene ihren Etage-0-Boden weggenommen und die Räume als Polygone
-weiterreisen lassen (§ A19). E5b ist die Gegenseite: der 3D-Client und die
-Admin-Vorschau lesen, was dort entsteht, und geben dafür jede Messung an einem
-Mesh auf. Am Ende dieser Etappe fragt kein Renderer mehr Dreiecke, wenn er
-wissen will, wie hoch der Boden ist.
-
-### 1. Die Figuren-Leiter — drei Sprossen, alle aus Daten
-
-```
-tileWalkY(tile, at) =
-  1. declaredFloorAt(tile.declaredFloors, …)   ein Raum sagt seinen Boden an
-  2. recipeFloorAt(tile.walkPlates, …)         eine DEKLARIERTE Etage (≠ 0)
-  3. tile.center.y                             das Gelände
-tileGroundY = standY(tileWalkY, heightAt(x, z))
-```
-
-**Die Mesh-Sprosse ist gelöscht**, und mit ihr `walkCeiling`,
-`acceptsWalkHit`, der Dachschutz von Befund B8 (1,2 m bzw. `Infinity` für ein
-Flächenmodell) und der ganze Strahlenapparat in `scene/tiles.ts`
-(`setWorldRayStart`, `RAY_START_*`, der `Raycaster`). Die begehbare Fläche
-eines Flächenmodells IST die Zahl, die seine Spec deklariert
-(`walk_y_world`); wo es keine deklariert, antwortet das Gelände, über das es
-gezeichnet wurde. Der Strahl war nur je ein Weg herauszufinden, welcher von
-ZWEI Böden vorn liegt — es gibt einen.
-
-`plateCeiling` **bleibt** und gilt jetzt für jedes `display` gleich: es ist
-die Etagen-Frage, und ein ungedeckelter Plattengriff hübe eine Figur im
-Erdgeschoss auf die Platte darüber.
-
-**Die Laufkette, neu hergeleitet** (`client3d/scripts/smoke_walk_math.mjs`,
-Etagenhöhe 2,8 m, keine Regler):
-
-| Größe | gebaut (Haus), ALT | natürlich (See), ALT | BEIDE, NEU |
-|---|---|---|---|
-| Boden, auf dem gestanden wird | 0,10 | 0,01 | **0,00** |
-| Wandfuß (Raum / Kontur) | 0,10 / 0,08 | — | **0,00** |
-| Prop `bottom_y` | 0,11 | 0,02 | **0,01** |
-| Diorama `bottom_y` (ohne Regler) | 0,12 | 0,03 | **0,02** |
-| Türschwelle ohne Deklaration | 0,10 | — | **0,00** |
-| Gebäudemodell `walk_y_world` | 0,08 + `offset_y` | 0,00 + `offset_y` | **`offset_y`** |
-
-Die drei alten BODEN-Zahlen — 0,10, 0,09, 0,01 — sind die roten Gegenproben
-dieser Etappe: auf Etage 0 darf keine von ihnen mehr aus der Leiter fallen.
-Die 0,01, die bleibt, ist die Anti-Z-Fight-Haarlinie des PROPS über dem
-Gelände, nie ein Boden.
-
-**Auf Etage 0 bekommt die Figur keinen `WALK_CLEARANCE_M`**, und das ist
-dieselbe Aussage von der anderen Seite: draußen läuft eine Figur auf genau
-`heightAt`, und drinnen läuft sie jetzt auf ebendiesem Boden. Die Sohle steht
-auf dem Gelände, die Unterkante des Stuhls 1 cm darüber — dafür ist
-`PROP_CLEARANCE` da. Die Zugabe wird nur auf den beiden DEKLARIERTEN Sprossen
-addiert, wo der Boden eine gezeichnete Fläche ist.
-
-Eine DEKLARIERTE Etage hat sich um keinen Millimeter bewegt: die Kontur-Platte
-der Etage 1 liegt weiter auf `1·2,8 + 0,08 = 2,88`, die Raumplatte darauf auf
-`1·2,8 + 0,10 = 2,90`, ein Keller-Raum auf `−2,8 + 0,10 = −2,70`.
-
-### 2. Raum-Spots kommen aus dem Grundriss
-
-`sampleRoomWalkables` ist gelöscht — 36 Strahlen von oben auf das Platten-Mesh,
-dominante 7-cm-Höhenlage als Boden, ein Referenzstrahl an der Tür als
-Reparatur, alles innerhalb von 12 cm ein Stellplatz. An seiner Stelle steht
-`scene/tiles.deriveRoomSpots`, gefüttert aus `floor_plan` (§ A19 Nr. 3), und
-die reinen Regeln liegen in `client3d/src/game/ground.ts`
-(`smoke_room_spots.mjs` leitet jede Zahl von Hand her):
-
-* **Raum-Mitte** = Flächen-**Schwerpunkt** des gezeichneten Rumpfes
-  (`polygonCentroid`, Shoelace — nicht der Eckenmittelwert, den eine mit zehn
-  Punkten gezeichnete Wand gegen die gegenüberliegende zöge). Liegt der
-  Schwerpunkt AUSSERHALB des Raums — bei einem L-Grundriss der Normalfall —,
-  gewinnt der nächstgelegene Rasterpunkt: der liegt konstruktionsbedingt
-  drinnen und ist ohnehin schon berechnet. Ein vollständiger
-  Pole-of-Inaccessibility verfeinerte das um Zentimeter und kostete eine
-  Gittersuche je Raum; die Verbraucher sind eine Menschentraube, ein Label und
-  ein Laufziel.
-* **Stellplätze** = dasselbe 6 × 6-Raster über 0,78 der Raum-Umschließenden,
-  auf dem die Strahlen saßen (`roomSpotGrid`) — mit dem POLYGON-Test dort, wo
-  vorher der Strahltreffer war. Jeder Platz bekommt seine EIGENE Datenhöhe;
-  die 12 cm bleiben als Toleranz (`SPOT_FLAT_M`), gemessen gegen die
-  Höhen-DATEN statt gegen Dreiecke. Unter einem gebauten Raum ist sie
-  konstruktionsbedingt wirkungslos (§ G5 hobelt das Grundstück eben), bei einer
-  offenen Zone hält sie die Traube vom Hang, den die Zone hinaufläuft.
-* **Bodenhöhe je Raum** (`roomFloorWorldY`): die Deklaration des Payloads, wo
-  es eine gibt — ein Dioramen-`walk_y_world`, eine Etagen-Platte, oder die
-  `overlay.y` einer Zone auf einem Flächenmodell —, sonst der HÖHEN-SAMPLER an
-  genau diesem Punkt. Unter einem gebauten Grundstück ist das der gestanzte
-  Plateau, weshalb ein gebautes Interieur eben herauskommt, ohne dass es
-  jemand ebnet.
-* **Sitz-/Liegeflächen** werden weiter GEMESSEN, und das ist kein Widerspruch:
-  eine Sitzhöhe ist eine Eigenschaft eines OBJEKTS und wird an der eigenen
-  Bounding-Box des platzierten Props abgelesen. Nicht mehr gemessen wird der
-  BODEN, gegen den sie beurteilt wird. Die Fenster sind für eine 1,70-m-Figur
-  neu hergeleitet (`furnitureUse`): Sitzfläche 0,25 … 0,70 m über dem Boden
-  (ein Tisch ab 0,72 m ist keine), Liegefläche zusätzlich mindestens
-  1,6 × 0,7 m. Das alte Fenster 0,08 … 0,32 m stammte aus der Zeit, als eine
-  Raum-Figur 0,60 m groß war (`k` war ein Maßstab; seit § B E4 ist es 1) und
-  hat seither nichts mehr gefangen.
-* **Tür-Referenz**: kein Strahl mehr. `tile.roomDoors` kommt wie bisher direkt
-  aus `doorways[]` (Position **und** `base_y`), und der Reparatur-Strahl an der
-  Tür entfällt ersatzlos — er glich ein Loch im Mesh aus, und es wird kein
-  Mesh mehr abgetastet.
-* **Marker** werden nur noch um die Differenz zwischen dem Boden des RAUMS und
-  dem Etagen-Datum verschoben, gegen das der Server sie komponiert hat. Auf
-  einem gebauten Erdgeschoss ist diese Differenz 0 und die Schleife ändert
-  nichts — genau der Punkt. `fixed`-Marker (Prop-Marker) bleiben unberührt.
-
-`roomSlots` (Halter-Gruppe + Maße) ist durch `tile.roomFloors: Map<string,
-RoomFloor>` ersetzt; `roomFloorY` (Avatar-Innenhöhe, `main.ts`) liest
-`roomCenters[…].y` und damit dieselbe Quelle wie die Spots.
-
-### 3. Zonen-Wasser wird gezeichnet wie ein See
-
-`GET /play/terrain-layers` (Index-Modus) trägt `waters` (§ A19 Nr. 5). Der
-Client führt die Liste in **denselben** Spiegel-Bauer wie die gemalten Flächen
-(`scene/ground.ts`, `addMirror` — ein Material je Wasser-ART für die ganze
-Welt, dieselbe Ufer-Shader-Kette aus § A18, dieselbe flache Earcut-Platte auf
-`water_level_effective`). Es gibt **keine zweite Implementierung**: der
-Teich eines Raums ist ein Mesh mehr, kein Shader mehr.
-
-Zu entscheiden bleibt nur, ob eine Zeile GEZEICHNET werden kann, und das sind
-dieselben zwei Bedingungen wie bei einem gemalten See — ein Ring, der etwas
-umschließt (drei Punkte), und ein ENDLICHER Spiegel
-(`waterPlaneMath.zoneWaterMirrors`). `null` ist die Form von „der Bake hat
-diesen Raum nie gesehen" und darf **nicht** zu 0 werden — `Number(null)` IST 0,
-und eine Ebene auf Welt-Null über einem Innenhof-Teich wäre genau die geratene
-Höhe, die § A19 Nr. 5 nicht zeichnet.
-
-Die ART eines Raumbodens ist eine Surface-Bibliotheks-Id, kein Terrain-Kind.
-`surfaceOf` beantwortet das jetzt wie der Server (§ A19 Nr. 4): erst die
-`surface` des Terrain-Typs, und wo der Katalog die Art gar nicht kennt, TRÄGT
-DIE ART SICH SELBST. Ohne das käme der Teich als matte Ebene statt als Wasser
-heraus.
-
-**Nicht in dieser Etappe:** die Schwimm-Logik (`walk.floatRootY`) liest
-weiterhin nur den Spiegel einer GEMALTEN Fläche (`typeAt` → `water_level`). Über
-einem Zonen-Wasser wird gewatet, nicht geschwommen; das Bett ist gecarvt, also
-läuft die Figur hinein — sichtbar richtig, mechanisch noch die alte Sprosse.
-
-### 4. Was ersatzlos gelöscht ist
-
-| Symbol | Wo | Warum |
-|---|---|---|
-| `sampleRoomWalkables` | `scene/tiles.ts` | Spots kommen aus `floor_plan` |
-| `setWorldRayStart`, `RAY_START_FALLBACK_M`, `RAY_START_MARGIN_M`, `walkRay` | `scene/tiles.ts` | kein Strahl mehr |
-| `terrainLiftAt`, `tile.terrain`, `tile.terrainExtent` | `scene/tiles.ts` | kein Szenen-Relief mehr |
-| `walkCeiling`, `acceptsWalkHit` | `game/ground.ts` | beurteilten Strahltreffer |
-| `groundLift`, `ScenePatch` | `game/ground.ts` | zweite Höhenquelle |
-| `sampleTerrain`, `drapeGeometry`, `TERRAIN_CELLS` (`terrain.ts`) | `@anima/scene-render` | nichts wird drapiert |
-| `subdivideOnGrid`, `gridStepFor`, `GRID_MAX_CELLS` (`gridMesh.ts`) | `@anima/scene-render` | nichts wird auf dem Gitter geschnitten |
-| `ScenePlate.relief`, `SceneTerrain`, `ScenePayload.terrain`, `ScenePayload.natural_floor` | `@anima/scene-render` `types.ts` | Felder aus dem Payload gestrichen (§ A19 Nr. 1/6) |
-| `map3d.relief` (Amplitude/Seed/Welle), `layout.relief_flat` | Admin-UI + `worldTypes.ts` | Bedienelemente ohne Wirkung |
-| `smoke_terrain_origin.mjs` | `client3d/scripts/` | maß ausschließlich `sampleTerrain` |
-
-Neu im Payload-Typ: `SceneFloor` + `ScenePayload.floor_plan`, und
-`TerrainLayerWater` + `TerrainLayerIndex.waters`.
-
-### 5. Admin: Vorschau und Raum-Panel
-
-* **`FloorPlanPreview`** zeichnet die Etage-0-Böden als flache texturierte
-  Polygone auf `y = 0` aus `floor_plan`, mit der Oberflächen-Textur ihrer Art;
-  eine LEERE Art zeichnet **nichts** (dort scheint das Gelände durch, und der
-  Bake malt dort ebenfalls nichts). Etagen ≠ 0 behalten ihre Platten. Der
-  `natural_floor`-Sonderfall der Bühnenplatte (−0,13) ist tot; die Bühne liegt
-  auf 0, schreibt keine Tiefe mehr und wird zuerst gezeichnet — sie ist eine
-  Messhilfe, kein Boden, und alles Echte malt ohne Offset-Konstante darüber.
-* **Die Abbildung Szenen-Frame ↔ Welt-y**, ausdrücklich: `polygon_world` ist
-  Szenen-Frame (lokale Meter um den Anker-Pin), `water_level_effective` ist die
-  einzige ABSOLUTE Welt-y-Zahl des Payloads. Die Vorschau kennt für das
-  Grundstück kein Welt-Datum und hat daher nichts abzuziehen; sie zeichnet den
-  Spiegel auf Szenen-Frame `y = 0` — und dort steht er auch wirklich, wann immer
-  der Bake den Pegel ABGELEITET hat (Plateauhöhe auf einer gebauten Location,
-  Randmedian auf einer natürlichen, § A19 Nr. 4). Stellt ein Autor
-  `layout.water_level` davon weg, liest das Raum-Panel die absolute Zahl; die
-  Vorschau erfindet dafür kein zweites Datum.
-* **`PlanSidePanel`** verliert die Relief-Opt-out-Checkbox und bekommt für
-  Etage-0-Räume „Edge transition (m)" (`layout.edge_blend_m`, 0…8, Default 0 —
-  **0 ist ein Wert** und muss als 0 gespeichert werden) sowie, für einen
-  Wasser-Boden, „Water level (m)" (optional, leer = der Bake entscheidet),
-  „Depth (m)" (0,2…20, Default 2,0) und „Shore ramp (m)" (0…20, Default 3,0).
-  Ob ein Boden Wasser ist, entscheidet die **Material-KLASSE** der
-  Surface-Bibliothek (`water`/`ice`) — nie der Name, nie die Farbe.
-
-### 6. Beweise (§ B5a)
-
-| Datei | was sie herleitet |
-|---|---|
-| `client3d/scripts/smoke_walk_math.mjs` | die neue Leiter, die identische Kette gebaut == natürlich, rote Gegenproben auf 0,10 / 0,09 / 0,01, `walkCeiling`/`acceptsWalkHit`/`groundLift` existieren nicht mehr |
-| `client3d/scripts/smoke_room_spots.mjs` (neu) | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter, Flachheits-Tor, Möbel-Fenster, Zonen-Wasser-Auswahl an einem Fixture-Index |
-| `client3d/scripts/smoke_layer_cut.mjs` | ein einziger Spiegel-Bauer, von beiden Quellen gespeist; die gelöschten Drape-Namen tauchen im Code nicht mehr auf |
-| `client3d/scripts/smoke_world_height.mjs` | eine Lesung statt zweier; die Zahlen, die der zweite Term nicht mehr erzeugt |
-| `client3d/scripts/smoke_relief_math.mjs` | auf Weltfeld + Reiselinie zurückgeschnitten |
-| `scripts/smoke_scene_recipe.py` | die Client-Quellen-Pins neu hergeleitet (Welt-Höhe-Umrechnung, kein `Raycaster`, kein `shell`-Vorbehalt am Plattenzweig) |
+## ~~Nachträge 2026-08-21 (§ A16–§ A20): Ein Boden — E1 / E3 / E4 / E5a / E5b~~ — ZUSAMMENGEZOGEN in § A16
+
+Die fünf Etappen-Nachträge — E1 die reine Höhenfunktion, E3 der Layer-Schnitt,
+E4 der Wasserspiegel, E5a das Ende der Etage-0-Platten, E5b die Renderer aus
+Daten — sind in Etappe E6 zu EINEM Kapitel zusammengezogen: **§ A16 „Ein
+Boden"**. Dort steht der Stand als Gesetz statt als Etappen-Diff, samt der
+Beweiskarte (§ A16.11), die sagt, welcher Smoke welche Zahl herleitet.
+
+Die Etappen-Texte mit ihren Vorher/Nachher-Tabellen, ihren Zwischenzuständen
+(„bis E4 zeichnet Wasser noch seine Drape", „bis E5 rendern Zonenplatten
+weiter") und ihren Löschlisten stehen in der Git-Historie: `81a9bb3c` (E1),
+`2f501d0e` (E2), `9062dbf9` (E3), `9e85bb18` (E4), `c9874527` (E5a),
+`9b7a424d` (E5b), `67f776d0` (Zonen-Wasser im Schwimmen).

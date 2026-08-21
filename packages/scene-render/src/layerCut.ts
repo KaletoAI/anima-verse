@@ -444,22 +444,17 @@ export function topLayerAt(win: LayerMaskWindow | null,
 /** The anti-tile numbers as GLSL literals — the very ones the drapes spent
  *  (`naturalGroundMath.NG_DETAIL_SCALE` / `NG_DETAIL_OFFSET` / `NG_MIX_M` /
  *  `NG_MIX_MAX`) and the edge noise above. They are strings because this module
- *  has no dependency on the client; the numbers next to them are what the CPU
- *  twin and the smoke read, and `smoke_layer_cut.mjs` pins the two lists
- *  against each other so a shader can never spend a different number than the
- *  hand check. */
+ *  has no dependency on the client, and they are the ONLY spelling of these
+ *  four numbers: the numeric twins that used to sit beside them
+ *  (`LC_DETAIL_SCALE` / `LC_DETAIL_OFFSET` / `LC_MIX_M` / `LC_MIX_MAX`) never
+ *  had a reader and were deleted in E6 — a second spelling nobody reads is a
+ *  drift waiting to happen. */
 const LC_DETAIL_SCALE_GLSL = '0.23'
 const LC_DETAIL_OFFSET_GLSL = '0.50'
 const LC_MIX_M_GLSL = '7.00'
 const LC_MIX_MAX_GLSL = '0.50'
 const LC_EDGE_NOISE_GLSL = '0.50'
 const LC_EDGE_WAVE_GLSL = '2.00'
-
-/** …and as numbers, for the CPU twin and the smoke. */
-export const LC_DETAIL_SCALE = 0.23
-export const LC_DETAIL_OFFSET = 0.5
-export const LC_MIX_M = 7
-export const LC_MIX_MAX = 0.5
 
 export function terrainLayerGlsl(maxLayers: number): string {
   const n = Math.max(1, Math.floor(maxLayers))

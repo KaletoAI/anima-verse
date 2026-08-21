@@ -450,43 +450,6 @@ def level_plate_kind(level: int, level_floors: Any, ground_kind: str) -> str:
     return DEFAULT_FLOOR_KIND
 
 
-def is_natural_location(map3d: Dict[str, Any],
-                        recipes: List[Dict[str, Any]]) -> bool:
-    """Does this location draw NO BUILT FLOOR — i.e. does it stamp no plateau?
-
-    THE RULE, and it asks exactly two things:
-
-    1. no ``map3d.outline`` — nobody drew a BUILDING contour here. The drawn
-       ``boundary`` does not count: it is the plot, the edge of the place, and
-       drawing where a lake ends is not the same as drawing a floor.
-    2. no CLOSED room — every room is ``always_visible`` (§ A5, an open zone).
-       The yard (``is_ground``, § A13a) is inherently open and never counts as
-       one.
-
-    ``area_model`` is deliberately NOT part of it. A natural location may carry
-    a terrain mesh (forest, village square) and may equally carry none at all —
-    the Mondscheinsee has no model whatsoever, and its shore, water and huts
-    are the very case this rule exists for. Asking for a model would answer
-    "does a mesh exist" instead of "did anybody draw a floor".
-
-    WHAT IT DECIDES SINCE E5a: nothing in this payload. It has no ``slab`` to
-    zero and no level plate to suppress — storey 0 has neither for anybody now.
-    It survives as the NAME OF THE LAW the height bake stamps by
-    (``models.heightfield.draws_built_floor`` is this function's inverse, asked
-    of the stored location instead of the composed recipes, § G5): a BUILT place
-    planes its plot to one height, a natural one lets the landscape run through
-    it. The two spellings are kept in step by ``scripts/smoke_scene_recipe.py``.
-    """
-    if _outline_world(map3d):
-        return False
-    for recipe in recipes:
-        if recipe.get("is_ground"):
-            continue
-        if not recipe.get("always_visible"):
-            return False
-    return True
-
-
 def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
             levels: List[int], storey: float,
             ground_kind: str = "") -> List[Dict[str, Any]]:
@@ -2212,8 +2175,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # this composer measured from it. On storey 0 the floor is the terrain, so
     # the datum is 0 for every location alike (:func:`storey_floor_y`) and the
     # question "does this place draw a floor" only survives where it decides
-    # whether the BAKE stamps a plateau (``models.heightfield.draws_built_floor``,
-    # the inverse of :func:`is_natural_location`).
+    # whether the BAKE stamps a plateau — ONE spelling of it, and it lives on
+    # the stored location: ``models.heightfield.draws_built_floor``.
     models: List[Dict[str, Any]] = []
     markers: List[Dict[str, Any]] = []
     building = _building_model(location, map3d, building_meta, extent)
@@ -2394,7 +2357,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # floor was the terrain rather than a storey slab — a distinction that
     # existed only while there were two grounds. On storey 0 EVERY location's
     # floor is the terrain now, so the flag would be true everywhere and say
-    # nothing. :func:`is_natural_location` survives as the classifier the
-    # PLATEAU STAMP reads (``models.heightfield.draws_built_floor``), never as
-    # a payload field.
+    # nothing. The classification survives ONCE, on the stored location, where
+    # the PLATEAU STAMP reads it (``models.heightfield.draws_built_floor``) —
+    # never as a payload field, and never as a second spelling here (E6).
     return out

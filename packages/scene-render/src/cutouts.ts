@@ -166,15 +166,3 @@ export function applyCutouts(THREE: typeof import('three'),
     },
   }
 }
-
-/** The material clones of `applyCutouts`, freed by traversal — for callers
- *  that lost the handle (a re-mount disposing whatever a subtree carries).
- *  Their textures are shared with the cache and stay untouched. */
-export function disposeCutoutMaterials(obj: Object3D): void {
-  obj.traverse((o: Object3D) => {
-    const mesh = o as Mesh
-    if (!mesh.isMesh) return
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-    for (const m of mats) if (m?.userData?.__cutoutClone) m.dispose?.()
-  })
-}

@@ -260,7 +260,7 @@ export function PlanSidePanel({
           strip and was therefore invisible until a room HAD a model, which is
           exactly backwards for an outdoor zone laid onto a location model. */}
       <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-        title={t('Height offset of the ROOM in real metres, relative to its storey. Everything in the room moves with it: floor, walls, props, markers, exit and any model. Inside a building leave it at 0 — it is for rooms lying on a location model, where the terrain is not at storey level.')}>
+        title={t('Fine trim of the ROOM in real metres, relative to its storey. Everything in the room moves with it: walls, props, markers, exit and any model. Leave it at 0 unless a room really needs to sit above or below the ground — it does not set a water level, that is the water field below.')}>
         <span style={{ flex: 1 }}>{t('Room height (m)')}</span>
         <input
           className="ga-input"

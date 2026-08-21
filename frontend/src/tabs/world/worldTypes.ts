@@ -68,11 +68,11 @@ export interface RoomLayout {
    *  and openings stay; the building outline is unaffected. Absent =
    *  walls, so the editor shows the inverse ("Render walls"). */
   no_walls?: boolean
-  /** Height offset of the ROOM in REAL metres, relative to its storey (± ,
-   *  × k at render time). Everything in the room rides along: plate, walls,
-   *  props, markers and the diorama. 0 inside a building; it is for
-   *  rooms that cut a hole into a location model, where the terrain is not
-   *  at storey level. */
+  /** Height offset of the ROOM in REAL metres, relative to its storey.
+   *  Everything in the room rides along: walls, props, markers and the
+   *  diorama. A pure FINE TRIM since "Ein Boden" (§ A16.9) — it compensates
+   *  no second ground (storey 0 is the terrain itself) and it is not a
+   *  waterline (`water_level` is). */
   floor_offset_y?: number
   /** Animation markers: spots a figure with a matching active animation
    *  snaps to. at = METRES from the room's min corner; animation = a clip kind

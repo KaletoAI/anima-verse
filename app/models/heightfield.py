@@ -206,12 +206,12 @@ def _invalidate() -> None:
 def draws_built_floor(loc: Dict[str, Any]) -> bool:
     """Does this location draw a BUILT floor — i.e. does it stamp its plot?
 
-    THE INVERSE OF ``scene_recipe.is_natural_location``, deliberately
-    replicated rather than imported: that function asks the same two questions
-    of the COMPOSED room recipes, this one asks them of the STORED location,
-    and importing the scene recipe here would drag the whole scene builder into
-    the walking gate's import path. The two questions are the contract, and
-    they are:
+    THE ONE SPELLING OF THE LAW (§ A16.4). The scene builder used to carry a
+    twin of it (``scene_recipe.is_natural_location``, asked of the COMPOSED
+    room recipes); since E5a that twin decided nothing in the payload, so E6
+    deleted it. This one asks the STORED location, which keeps the whole scene
+    builder out of the walking gate's import path. The two questions are the
+    contract, and they are:
 
     1. is there a ``map3d.outline`` — a drawn BUILDING contour? The drawn
        ``boundary`` does NOT count: it is the plot, the edge of the place, and

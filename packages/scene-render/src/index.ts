@@ -22,7 +22,7 @@ export type { PlaceOptions } from './place'
 
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
-export { applyCutouts, disposeCutoutMaterials, CUTOUT_MAX_POLYS,
+export { applyCutouts, CUTOUT_MAX_POLYS,
   CUTOUT_MAX_POINTS } from './cutouts'
 export type { CutoutHandle } from './cutouts'
 
@@ -37,8 +37,6 @@ export type { HillshadeOpts, HillshadeImage } from './hillshade'
 export {
   decodeSd, layerPairAt, layerSdAt, layerWeight, lcNoise, lcPushedSd,
   packLayerWindow, terrainLayerGlsl, terrainLayerVertexGlsl, topLayerAt,
-  LC_DETAIL_OFFSET, LC_DETAIL_SCALE, LC_EDGE_NOISE_M, LC_EDGE_WAVE_M,
-  LC_MIX_M, LC_MIX_MAX,
 } from './layerCut'
 export type {
   LayerMaskWindow, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
@@ -71,7 +69,7 @@ export type { PrimitiveTarget, VerifyRow } from './verify'
 
 export {
   buildPlate, buildWall, buildExtra, buildPlaceholder, wallLength,
-  applyWorldScaleWallUVs, plateTargets, wallTargets,
+  plateTargets, wallTargets,
 } from './primitives'
 
 export {
@@ -79,7 +77,7 @@ export {
 } from './types'
 
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
-  disposeSurfaceMaterials, surfaceTimeUniform } from './materials'
+  surfaceTimeUniform } from './materials'
 export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 
 export type {

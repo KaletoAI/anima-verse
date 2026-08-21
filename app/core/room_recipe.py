@@ -888,8 +888,10 @@ def compose_recipe(room: Dict[str, Any],
     if lay.get("model_offset_y") is not None:
         payload["model_offset_y"] = lay["model_offset_y"]
     # Where the room's FLOOR sits, in real metres relative to its storey —
-    # same signature reasoning. Only meaningful where the room cuts a hole
-    # into a location model: the terrain there is not at storey level.
+    # same signature reasoning. Since "Ein Boden" (§ A16.9) this is a pure
+    # FINE-TRIM dial of one room: it lifts what stands IN the room, it no
+    # longer compensates a second ground, and it is not a waterline
+    # (``layout.water_level`` is).
     if lay.get("floor_offset_y") is not None:
         payload["floor_offset_y"] = lay["floor_offset_y"]
     if lay.get("rotation") is not None:

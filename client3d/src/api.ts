@@ -196,10 +196,10 @@ export async function fetchHeightfield(): Promise<HeightfieldPayload> {
  * The overview payload plus the TILE INDEX it carries since v2 (§ A16.3).
  *
  * The index is the loader's business and not the sampler's, which is why it
- * lives here and not in `WorldHeightField`: for `sampleCompositeHeight` a tile
- * that does not exist and one that has not arrived yet read exactly the same
- * (through the overview), so carrying the index into the shared package would
- * only add a second state that can go stale.
+ * lives here and not in `WorldHeightField`: a tile that does not exist and one
+ * that has not arrived yet read exactly the same to the sampler, so carrying
+ * the index into the shared package would only add a second state that can go
+ * stale.
  */
 export interface HeightfieldPayload extends WorldHeightField {
   /** Edge length of a tile in metres — 256 today, and never a constant in the

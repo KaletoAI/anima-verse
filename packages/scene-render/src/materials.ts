@@ -364,11 +364,3 @@ export function surfaceMaterial(T: THREE, opts: SurfaceMaterialOptions): Materia
   }
   return mat
 }
-
-/** Release the shared helper textures (app teardown). */
-export function disposeSurfaceMaterials(): void {
-  waveNormal?.dispose()
-  waveNormal = null
-  fullMask?.dispose()
-  fullMask = null
-}

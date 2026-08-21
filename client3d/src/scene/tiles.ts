@@ -36,10 +36,10 @@ let worldGroundAt: ((x: number, z: number) => number) | null = null;
  * Take over the world's ground sampler — THE GROUND HOOK (§ A16, E8 task 4).
  *
  * A location does not float over its landscape: its tile stands on the world
- * ground under its own centre. Under a footprint that levels its ground
- * (`level_ground`, § A16.1, opt-in) that one height IS the whole place,
- * because the server flattens the field there; under an unflagged place the
- * landscape runs on underneath and the centre is simply where the tile sits.
+ * ground under its own centre. Under a BUILT footprint (`draws_built_floor`,
+ * § A16.4) that one height IS the whole place, because the bake stamps a flat
+ * plateau there; under a natural place the landscape runs on underneath and
+ * the centre is simply where the tile sits.
  * `footprintCentre` reads it here and the tile group carries it, which is what
  * lifts a location onto its hill in one
  * move — the scene inside stays tile-local metres and rides along, exactly as
@@ -97,9 +97,9 @@ export function footprintWidth(loc: WorldLocation): number {
  * as missing data.
  *
  * THE y IS THE WORLD GROUND (E8 task 4). Not 0 any more: it is the field at
- * the location's own centre (`setWorldGround`) — under a footprint that levels
- * its ground (`level_ground`, § A16.1, opt-in) that is the flat plateau the
- * server made, under any other place it is the landscape at that point.
+ * the location's own centre (`setWorldGround`) — under a BUILT footprint
+ * (`draws_built_floor`, § A16.4) that is the flat plateau the bake stamped,
+ * under any natural place it is the landscape at that point.
  * Because the whole tile group hangs off this one point, everything the place
  * is made of — the shell, the rooms, the scene payload's tile-local metres —
  * climbs the hill together, and nothing inside the location has to know about

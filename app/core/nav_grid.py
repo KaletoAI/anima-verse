@@ -89,7 +89,7 @@ class Region(NamedTuple):
     ``area_m2`` is the nesting rule of contract v6 (E1.2, smallest AREA wins),
     ``is_area`` whether the place is OPEN GROUND
     (``world_geometry.is_area_location`` — it decides how far the terrain pace
-    reaches into it) and ``level_ground`` whether it STAMPS A PLATEAU
+    reaches into it) and ``built_floor`` whether it STAMPS A PLATEAU (draws_built_floor — the one name of the one law since "Ein Boden" E6)
     under itself — since E1 (§ G5) that is ``draws_built_floor``, i.e. "does
     this location draw a built floor", never a flag — which decides whether
     the steepness rule is measured inside it at all.
@@ -100,7 +100,7 @@ class Region(NamedTuple):
     bounds: Tuple[float, float, float, float]
     area_m2: float
     is_area: bool
-    level_ground: bool
+    built_floor: bool
 
 
 # Raster resolution in metres. 2 m is a body width: fine enough to squeeze
@@ -307,7 +307,7 @@ def _placement_sig(regions: Sequence[Region],
     halves already have for a MOVE: either would catch it, neither alone would
     catch everything.
     """
-    places = sorted((r.lid, list(r.points), r.is_area, r.level_ground)
+    places = sorted((r.lid, list(r.points), r.is_area, r.built_floor)
                     for r in regions)
     basis = json.dumps({"places": places,
                         "openings": sorted(openings),
@@ -378,7 +378,7 @@ def build_nav_context() -> NavContext:
                               # cannot step back for a place the ground was
                               # never levelled under (or fail to for one it
                               # was).
-                              level_ground=draws_built_floor(loc)))
+                              built_floor=draws_built_floor(loc)))
     max_step_m = get_max_step_height_m()
     max_slope_deg = get_max_slope_deg()
 
@@ -523,7 +523,7 @@ class _Search:
         # ones the STEEPNESS rule steps back for (:meth:`in_level_region`).
         # The passability exemption above is a different rule and keeps the
         # whole list.
-        self.level_regions = [r for r in self.exempt_regions if r.level_ground]
+        self.level_regions = [r for r in self.exempt_regions if r.built_floor]
         min_x, min_z, max_x, max_z = _route_bounds(ctx, start, goal)
         self.min_i, self.min_j = cell_of(min_x, min_z)
         self.max_i, self.max_j = cell_of(max_x, max_z)
@@ -748,7 +748,7 @@ class _Search:
         resolution the raster itself works at — and, like
         :meth:`blocked`, it only judges samples OUT IN THE WILDERNESS
         (the place wins, for ALL exempt boundaries — the passability
-        exemption does not ask ``level_ground``). Without that the
+        exemption does not ask ``built_floor``). Without that the
         straightening would still break on the ground inside the start/goal
         location and leave the polyline zig-zagging over cell centres A* had
         already accepted.

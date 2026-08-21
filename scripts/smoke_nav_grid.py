@@ -221,7 +221,7 @@ Hand-derived expectations:
       untested: a mutant `openings=()` and a mutant `if False` on the
       footprint branch passed every case above. SINCE 2026-08-13 the footprint
       half asks whether the place is BUILT (E1, § G5 — a drawn building
-      outline or a closed room; the old `level_ground` flag is gone), and the
+      outline or a closed room; the old `built_floor` flag is gone), and the
       only justification the exemption ever had — "the field is levelled flat
       under a place anyway" — holds for the flagged places alone.
 
@@ -1101,10 +1101,10 @@ CLIFF_FIELD = {"origin_x": 0.0, "origin_z": 0.0, "step_m": 4.0,
 CLIFF_SQ = ((3.0, 3.0), (11.0, 3.0), (11.0, 11.0), (3.0, 11.0))
 
 
-def cliff_ctx(level_ground):
+def cliff_ctx(built_floor):
     """The hand-built cliff with ONE placed boundary over it, BUILT or not.
 
-    ``level_ground`` is the ``Region`` field that says "this place stamps a
+    ``built_floor`` is the ``Region`` field that says "this place stamps a
     plateau" — since E1 (§ G5) it is filled from ``draws_built_floor``, not
     from a flag."""
     return nav_grid.NavContext(
@@ -1112,7 +1112,7 @@ def cliff_ctx(level_ground):
         regions=[nav_grid.Region(lid="fp", points=CLIFF_SQ,
                                  bounds=(3.0, 3.0, 11.0, 11.0),
                                  area_m2=64.0, is_area=False,
-                                 level_ground=level_ground)],
+                                 built_floor=built_floor)],
         data_bounds=(0.0, 0.0, 16.0, 16.0), sig=("hand", "hand"),
         height_field=CLIFF_FIELD, openings=(), max_step_m=0.4,
         max_slope_deg=40.0)
@@ -1140,11 +1140,11 @@ ROCK_AREAS = [{"kind": "rock", "z_order": 0,
 ROCK_CATALOG = {"rock": {"passable": False, "speed_factor": 1.0}}
 
 
-def rock_search(level_ground, with_relief):
+def rock_search(built_floor, with_relief):
     """A route starting INSIDE the footprint on painted rock — the cell centre
     fails the terrain test, so ``blocked`` reaches its impassable-ground
     branch, which is the one both rules meet in."""
-    ctx = _replace(cliff_ctx(level_ground), areas=ROCK_AREAS,
+    ctx = _replace(cliff_ctx(built_floor), areas=ROCK_AREAS,
                    catalog=ROCK_CATALOG,
                    height_field=CLIFF_FIELD if with_relief else None)
     return nav_grid._Search(ctx, (7.0, 7.0), (7.0, 7.0))

@@ -113,7 +113,7 @@
  *      3.0 over a world ground of 2.5 answers 3.0. Nothing about the rule
  *      prefers one source; it prefers the HIGHER one, in both directions.
  * (17) EQUAL SOURCES ANSWER THAT ONE NUMBER: standY(5, 5) = 5. This is the
- *      LEVELLED FOOTPRINT (`level_ground`, § A16.1): the server flattens the
+ *      BUILT FOOTPRINT (`draws_built_floor`, § A16.4): the bake stamps the
  *      field to exactly the plateau the tile stands on, so the rule is inert
  *      there by construction — a no-op, not an exception.
  * (18) A SUNKEN PLACE IS UNDERCUT, and knowingly so: a lake bed at −0.8 under a

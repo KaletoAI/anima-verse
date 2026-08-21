@@ -1148,13 +1148,13 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             out["model_offset_y"] = round(max(-25.0, min(25.0, float(moy))), 3)
         except (TypeError, ValueError):
             pass
-    # Where the room's FLOOR sits, in REAL metres relative to its storey
-    # (± , × k at render time). Inside a building every room shares the
-    # storey and this stays 0; it earns its keep where a room cuts a hole
-    # into a LOCATION model — terrain is not flat, so the hut halfway up the
-    # slope needs its floor at the height the ground has THERE (user finding
-    # 2026-07-28, Willowbrook). Everything in the room rides along: plate,
-    # walls, props, markers and the diorama.
+    # Where the room's FLOOR sits, in REAL metres relative to its storey.
+    # Since "Ein Boden" (§ A16.9) this is its ONLY job: a FINE TRIM of one
+    # room, lifting what stands in it. Its two old side jobs are gone — there
+    # is no second ground left to compensate (storey 0 IS the terrain), and
+    # the waterline of a water floor is ``water_level`` above, which actually
+    # moves the bake. Everything in the room still rides along: walls, props,
+    # markers and the diorama.
     fo = raw.get("floor_offset_y")
     if fo is not None and f"{fo}".strip() != "":
         try:

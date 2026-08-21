@@ -1297,22 +1297,23 @@ def test_threshold_base_y() -> None:
           "m.baseY + DOOR_MARK_LIFT" in src)
     check("...and hangs in the TILE frame, like the walls",
           "tile.group.add(root)" in src)
-    # Same error class, same pin (review 2026-08-16): the walkability sampler
-    # let a DECLARED `walk_y_world` — a tile metre — stand in for `floor`, which
-    # is a world ray hit and is written back as one (`center.setY`). On a tile
+    # Same error class, same pin (review 2026-08-16, re-derived for E5b): a
+    # DECLARED `walk_y_world` is a TILE metre and the spots it places are world
+    # points, so the tile's own height has to be added on the way in. On a tile
     # whose plateau is 0.05 m the pool's declared 0.12 sank the room centre to
-    # 0.13 instead of 0.17; on a high plateau the spot filter (|y − floor| <
-    # 0.12) matched nothing at all and the declaration was silently dropped.
-    # The sampler raycasts a THREE scene, so there is nothing pure to compute
-    # here — the conversion is pinned instead.
+    # 0.13 instead of 0.17; on a high plateau the old spot filter matched
+    # nothing at all and the declaration was silently dropped. The 6 x 6 ray
+    # raster is gone ("Ein Boden" E5b) and the conversion is the same one, now
+    # in `roomFloorWorldY` — pinned here because the lookup around it needs a
+    # THREE scene and cannot be computed purely.
     tiles_ts = (Path(__file__).resolve().parents[1]
                 / "client3d" / "src" / "scene" / "tiles.ts")
     tsrc = tiles_ts.read_text(encoding="utf-8") if tiles_ts.exists() else ""
     check("client3d/src/scene/tiles.ts is where it is", bool(tsrc), str(tiles_ts))
-    check("the declared walk height enters the sampler as a WORLD height",
-          "floor = tile.center.y + declaredFloor" in tsrc)
-    check("...and never raw, in the payload's own frame",
-          "floor = declaredFloor" not in tsrc)
+    check("the declared floor enters the derivation as a WORLD height",
+          "return tile.center.y + floor.declared;" in tsrc)
+    check("...and the 6 x 6 ray raster that used to guess it is gone",
+          "sampleRoomWalkables" not in tsrc and "Raycaster" not in tsrc)
 
 
 def test_elevator() -> None:
@@ -1800,38 +1801,33 @@ def test_boundary_only_datum() -> None:
     check("red: the closed room has no plate of its own any more (was 0.10)",
           not [p for p in built["plates"] if p.get("room_id") == "hut"],
           str([p.get("room_id") for p in built["plates"]]))
-    # THE RULE ITSELF still exists, and it is the one the BAKE stamps by.
+    # THE RULE ITSELF still exists, and since E6 it has exactly ONE spelling:
+    # ``models.heightfield.draws_built_floor``, asked of the STORED location.
+    # (The scene builder's twin ``is_natural_location`` decided nothing in the
+    # payload after E5a and is deleted — a second reading of the same law is a
+    # second answer waiting to drift.)
+    from app.models.heightfield import draws_built_floor
     check("the classifier says the two fixtures differ",
-          [scene_recipe.is_natural_location(loc["map3d"],
-                                            [{"room_id": "lake",
-                                              "always_visible": True}]),
-           scene_recipe.is_natural_location(loc["map3d"],
-                                            [{"room_id": "hut"}])],
-          [True, False])
+          [draws_built_floor(loc),
+           draws_built_floor({**loc, "rooms": [lake, far, yard, hut]})],
+          [False, True])
     # THE YARD IS NOT A CLOSED ROOM (§ A13a). It carries no `always_visible`
     # flag at all — it is the open ground of the place by definition — so a
     # location whose only non-outdoor "room" is the yard stays natural.
     check("the yard alone never makes a location built (§ A13a)",
-          scene_recipe.is_natural_location(loc["map3d"], [
-              {"room_id": GROUND_ID, "is_ground": True},
-              {"room_id": "lake", "always_visible": True}]))
+          not draws_built_floor({**loc, "rooms": [
+              {"id": GROUND_ID, "name": "Yard", "layout": {}}, lake]}))
     check("a DRAWN BUILDING CONTOUR makes it built, whatever its rooms",
-          not scene_recipe.is_natural_location(
-              {**loc["map3d"], "outline": [[-1, -1], [1, -1], [1, 1]]},
-              [{"room_id": "lake", "always_visible": True}]))
+          draws_built_floor({**loc, "rooms": [lake],
+                             "map3d": {**loc["map3d"],
+                                       "outline": [[-1, -1], [1, -1], [1, 1]]}}))
     # `area_model` is deliberately NOT part of the rule: the Mondscheinsee has
     # none and is the very case it exists for.
     check("a model is not what makes a place natural — the See has none",
-          scene_recipe.is_natural_location(
-              {"boundary": loc["map3d"]["boundary"]},
-              [{"room_id": "lake", "always_visible": True}]))
-    # AND THE BAKE READS THE TWIN OF IT, on the STORED location rather than on
-    # the composed recipes — the two spellings have to stay in step.
-    from app.models.heightfield import draws_built_floor
-    check("``draws_built_floor`` is its exact inverse, on the same two worlds",
-          [draws_built_floor(loc),
-           draws_built_floor({**loc, "rooms": [lake, far, yard, hut]})],
-          [False, True])
+          not draws_built_floor({"map3d": {"boundary": loc["map3d"]["boundary"]},
+                                 "rooms": [lake]}))
+    check("red: the composed-recipe twin is gone, one law has one name",
+          not hasattr(scene_recipe, "is_natural_location"))
 
 
 def test_area_room_walk_height() -> None:
@@ -1943,9 +1939,10 @@ def test_area_room_walk_height() -> None:
     check("client3d/src/scene/tiles.ts is where it is", bool(tsrc), str(tiles_ts))
     check("the walking figure asks the DECLARED floors first",
           "declaredFloorAt(tile.declaredFloors" in tsrc)
-    check("...and the plate branch no longer belongs to `shell` alone",
-          "info.display === 'shell' || !target" in tsrc)
-    check("...judged by the PLATE ceiling, not the mesh ceiling",
+    check("...then the plates, whatever the display (E5b: the mesh rung that "
+          "the `shell` guard existed for is deleted)",
+          "info.display === 'shell' || !target" not in tsrc)
+    check("...judged by the PLATE ceiling, the storey question",
           "plateCeiling(info)" in tsrc and "recipeFloorAt(tile.walkPlates" in tsrc)
     recipe_ts = (Path(__file__).resolve().parents[1]
                  / "client3d" / "src" / "scene" / "sceneRecipe.ts")
