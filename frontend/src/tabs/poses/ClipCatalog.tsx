@@ -460,9 +460,10 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(320px, 1.1fr) minmax(340px, 1.2fr)', gap: 14, alignItems: 'start' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(320px, 1.1fr) minmax(340px, 1.2fr)', gap: 14,
+                  alignItems: 'stretch', flex: 1, minHeight: 0 }}>
       {/* ── facets ── */}
-      <aside style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <aside style={{ display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0, overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <strong>{t('Filters')}</strong>
           <button
@@ -512,7 +513,7 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
       </aside>
 
       {/* ── hit list ── */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <input
             className="ga-input"
@@ -602,7 +603,7 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
       </section>
 
       {/* ── detail + import ── */}
-      <section style={{ minWidth: 0 }}>
+      <section style={{ minWidth: 0, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
         {!selected ? (
           <div className="ga-placeholder">{t('Pick a take to see its metrics and import it.')}</div>
         ) : (

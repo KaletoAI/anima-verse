@@ -301,8 +301,11 @@ export function PosesTab() {
   )
 
   if (view === 'catalog') {
+    // Full-height column: the catalog's three panes scroll on their own
+    // inside it (facets, list, preview+import), the page itself does not —
+    // otherwise the import button sat below the browser's bottom edge.
     return (
-      <div>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
         <ClipCatalog onCreatePose={startFromClip} />
       </div>
