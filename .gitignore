@@ -200,6 +200,14 @@ exports/
 # and stays per installation (only its README travels).
 shared/models/clips-licensed/**
 !shared/models/clips-licensed/README.md
+# Bulk CMU import: the downloaded ASF/AMC originals and the converted "trial"
+# clip archive are a local working set (gigabytes, re-creatable from
+# shared/models/cmu_catalog.json via scripts/cmu_fetch_all.py +
+# scripts/cmu_convert_all.py) — only their READMEs travel.
+shared/models/mocap-src/**
+!shared/models/mocap-src/README.md
+shared/models/clips-trial/**
+!shared/models/clips-trial/README.md
 # Shared test figure (Mixamo standard character), provided per installation
 shared/models/figure/*.fbx
 shared/models/figure/*.glb
