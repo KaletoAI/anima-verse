@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
-import { MOVE_EPS_M, groundSink, idleClip, moveClip, sinkForState,
+import { MOVE_EPS_M, floatRootY, groundSink, groundWaterLevel, idleClip,
+  moveClip, sinkForState,
   type GroundScope, type GroundSink } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
@@ -30,6 +31,12 @@ export interface GroundMove {
    *  `meta.idle_sink_m`, 0 = nothing sinks) — how deep the figure stands IN it
    *  while it moves and while it waits. Which one counts is `sinkForState`. */
   sink: GroundSink;
+  /** The MIRROR height over the point in world metres, or `null` where the
+   *  point is not water (E4, § G4: `meta.water_level_effective` of the topmost
+   *  area). A figure hangs its sink under THIS, not under the carved bed —
+   *  `walk.floatRootY` is the one place that says so, for travellers, NPCs and
+   *  the player's avatar alike. */
+  water: number | null;
 }
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
 const SELECT_COLOR = 0xf2d98c;
@@ -251,7 +258,7 @@ export class NpcManager {
    */
   private groundMoveAt: (x: number, z: number) => GroundMove =
     () => ({ anim: '', idle: '', scope: 'wilderness',
-      sink: { move: 0, idle: 0 } });
+      sink: { move: 0, idle: 0 }, water: null });
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -919,6 +926,19 @@ export class NpcManager {
         const delta = goalPos.clone().sub(npc.root.position);
         delta.y = 0;
         const d = delta.length();
+        // WHAT THE GROUND SAYS AT THE POINT THE WALK HAS REACHED — read here,
+        // because since E4 the ROOT depends on it too and not only the clip
+        // (`walk.floatRootY`): over water the figure hangs its sink under the
+        // MIRROR instead of under the carved bed. `d` is a horizontal distance
+        // (`delta.y = 0` above), so deciding the pose before the height is not
+        // a circle.
+        const travelling = d > 0.02 || (r.rateMS ?? 0) > 0;
+        const gm = this.groundMoveAt(at[0], at[1]);
+        const groundIdle = idleClip(gm.idle, gm.scope);
+        const sinkM = groundSink(sinkForState(travelling, groundIdle, gm.sink),
+                                 gm.scope);
+        goalPos.y = floatRootY(goalPos.y,
+          groundWaterLevel(gm.water, gm.scope), sinkM);
         if (d > 0.05) {
           // Catch-up speed: WALK_SPEED, or the JOURNEY's own pace when that is
           // faster. A fixed WALK_SPEED was a brake, not a smoother — the game
@@ -938,9 +958,7 @@ export class NpcManager {
           // the ground's to say (`moveClip`, finding 3): a traveller crossing
           // painted water swims through it — and a FROZEN journey in that
           // water treads it (`idleClip`), instead of standing on the lake.
-          const travelling = d > 0.02 || (r.rateMS ?? 0) > 0;
-          const gm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
-          const groundIdle = idleClip(gm.idle, gm.scope);
+          //
           // The second argument is the GATE of the clip ground offset
           // (`figures.Figure.play`): whenever the GROUND names the clip, the
           // ground is the body's reference, so a clip authored on a water line
@@ -948,11 +966,11 @@ export class NpcManager {
           // The third is how deep the ground swallows the body on top of that
           // — the MOVE depth while the journey runs, the IDLE one while it is
           // frozen in the water (`sinkForState`), and 0 outside the ground
-          // rule's reach (`groundSink`).
+          // rule's reach (`groundSink`). It is the VERY number the root was
+          // placed with above, which is what makes the pair meet: root − sink
+          // is the surface the body rests on.
           npc.figure.play(travelling ? moveClip(gm.anim, false, gm.scope)
-            : (groundIdle || 'idle'), travelling || !!groundIdle,
-            groundSink(sinkForState(travelling, groundIdle, gm.sink),
-              gm.scope));
+            : (groundIdle || 'idle'), travelling || !!groundIdle, sinkM);
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -985,9 +1003,18 @@ export class NpcManager {
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
       }
-      // Höhe dem AKTUELLEN Wegpunkt angleichen — so entsteht am Fahrstuhl
-      // die vertikale Fahrt zwischen den Haltepunkten (AV3D-12)
-      const goalY = npc.waypoints[0]?.y ?? npc.target.y;
+      // WHAT THE GROUND SAYS UNDER THE FIGURE, once — the clips below and the
+      // ROOT height need the same answer, and asking twice is how the two
+      // start to disagree. Since E4 the height is part of it: over water the
+      // root rides the MIRROR and not the carved bed (`walk.floatRootY`).
+      const standGm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
+      const standIdle = idleClip(standGm.idle, standGm.scope);
+      const standSink = groundSink(
+        sinkForState(moving, standIdle, standGm.sink), standGm.scope);
+      // Match the height to the CURRENT waypoint — that is what makes the
+      // vertical ride between two lift stops (AV3D-12).
+      const goalY = floatRootY(npc.waypoints[0]?.y ?? npc.target.y,
+        groundWaterLevel(standGm.water, standGm.scope), standSink);
       npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
       if (!moving && npc.figure) {
         // Stehend: Marker-Richtung > Nachbarn ansehen > Kamera-Grundrichtung
@@ -1010,18 +1037,18 @@ export class NpcManager {
         // guessing (AV3D-6). This is the ONE clip decision of every figure,
         // the player's avatar included: it is steered through this same loop.
         const standingClip = npc.animation || activityToClipKind(npc.activity);
-        const gm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
-        const groundIdle = idleClip(gm.idle, gm.scope);
         // The second argument is the gate of the clip ground offset (see the
         // traveller branch above): a clip the GROUND named — moving or
         // standing — has the ground as its reference, an activity clip does
         // not (`sleep` carries the bed it was animated on). The third is the
         // ground's own sink depth — one per pose since finding 13, picked by
         // the same state that picks the clip (`sinkForState`) and cut off
-        // inside a built place like the clips are (`groundSink`).
-        npc.figure.play(moving ? moveClip(gm.anim, dist > RUN_DISTANCE, gm.scope)
-          : (groundIdle || standingClip), moving || !!groundIdle,
-          groundSink(sinkForState(moving, groundIdle, gm.sink), gm.scope));
+        // inside a built place like the clips are (`groundSink`). It is the
+        // very number the root was raised with above, which is what makes the
+        // pair meet: root − sink is the surface the body rests on.
+        npc.figure.play(
+          moving ? moveClip(standGm.anim, dist > RUN_DISTANCE, standGm.scope)
+            : (standIdle || standingClip), moving || !!standIdle, standSink);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));

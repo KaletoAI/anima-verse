@@ -12,17 +12,17 @@ uniform vec3 uTint;
 uniform float uMapStrength;
 uniform sampler2D uMask;
 `+e.fragmentShader,e.fragmentShader.includes(v)?e.fragmentShader=e.fragmentShader.replace(v,`
-  // tbn stammt aus normal_fragment_begin und existiert nur mit diesem
-  // Define — ohne die Klammer waere es ein Compile-Fehler statt eines
-  // matten Materials.
+  // tbn comes from normal_fragment_begin and exists only with this define
+  // — without the guard this would be a compile error instead of a matte
+  // material.
   #ifdef USE_NORMALMAP_TANGENTSPACE
   {
     float wMask = texture2D( uMask, vWaterUv ).r;
-    // Der Versatz wird durch die Wellenlänge der JEWEILIGEN Lage geteilt —
-    // dadurch ist uSpeed echte METER PRO SEKUNDE, und beide Lagen driften
-    // gleich schnell, obwohl ihre Wellenlängen verschieden sind. Ohne die
-    // Division war uSpeed "Wellenlängen pro Sekunde": 0,05 hieß ein Wellenberg
-    // alle 20 Sekunden, auf der Karte 1,7 cm/s — vorhanden, aber unsichtbar.
+    // The offset is divided by the wavelength of the RESPECTIVE layer —
+    // which makes uSpeed real METRES PER SECOND, and both layers drift at the
+    // same speed although their wavelengths differ. Without the division
+    // uSpeed was "wavelengths per second": 0.05 meant one crest every 20
+    // seconds, 1.7 cm/s on the map — present, but invisible.
     float wDriftA = uTime * uSpeed / uWaveM;
     float wDriftB = uTime * uSpeed / ( uWaveM * 0.63 );
     vec2 wUvA = vWaterWorld / uWaveM + vec2( wDriftA, wDriftA * 0.6 );
@@ -40,5 +40,5 @@ uniform sampler2D uMask;
                          clamp( wFres * uSkyMix, 0.0, 1.0 )
                          * texture2D( uMask, vWaterUv ).r );
   }
-  ${x}`):C(x)},e.customProgramCacheKey=()=>`anima-water`}function D(e,t){let n=t.material||null,r=n?.class||`matte`,i=r===`water`||r===`ice`,a={roughness:n?.roughness??(i?.08:r===`gloss`?.25:.85),metalness:n?.metalness??(i?.15:.02)};t.map?a.map=t.map:a.color=w(e,t.color??(i?n?.tint:16777215)),t.transparent&&(a.transparent=!0),t.opacity!==void 0&&(a.opacity=t.opacity),t.side!==void 0&&(a.side=t.side);let o=new e.MeshStandardMaterial(a);return r===`glow`&&(o.emissive=w(e,n?.tint??16777215),o.emissiveIntensity=n?.glow??1,t.map&&(o.emissiveMap=t.map)),i&&(p||=g(e),o.normalMap=p,o.normalScale=new e.Vector2(1,1),m||=h(e),E(o,n,t.mask||m)),o}var O=e({AREA_EPS_M2:()=>AREA_EPS_M2,CLIP_MAX_POINTS:()=>64,CUTOUT_MAX_POINTS:()=>64,CUTOUT_MAX_POLYS:()=>16,GRID_MAX_CELLS:()=>GRID_MAX_CELLS,LC_DETAIL_OFFSET:()=>LC_DETAIL_OFFSET,LC_DETAIL_SCALE:()=>LC_DETAIL_SCALE,LC_EDGE_NOISE_M:()=>LC_EDGE_NOISE_M,LC_EDGE_WAVE_M:()=>2,LC_MIX_M:()=>7,LC_MIX_MAX:()=>LC_MIX_MAX,MAP_RELIEF_Z_FACTOR:()=>3,SCATTER_CELLS_MAX:()=>SCATTER_CELLS_MAX,SCATTER_CELL_M:()=>64,SCATTER_CLEAR_HEIGHT_RATIO:()=>SCATTER_CLEAR_HEIGHT_RATIO,SCATTER_MAX_PER_CELL:()=>SCATTER_MAX_PER_CELL,SCATTER_MAX_PER_ENTRY:()=>SCATTER_MAX_PER_ENTRY,SCATTER_TRIES_PER_POINT:()=>12,TERRAIN_CELLS:()=>16,VERIFY_EPS:()=>VERIFY_EPS,surfaceMaterial:()=>D,updateSurfaceMaterials:()=>f});export{l as i,D as n,f as r,O as t};
-//# sourceMappingURL=src-HzqPdUD2.js.map
+  ${x}`):C(x)},e.customProgramCacheKey=()=>`anima-water`}function D(e,t){let n=t.material||null,r=n?.class||`matte`,i=r===`water`||r===`ice`,a={roughness:n?.roughness??(i?.08:r===`gloss`?.25:.85),metalness:n?.metalness??(i?.15:.02)};t.map?a.map=t.map:a.color=w(e,t.color??(i?n?.tint:16777215)),t.transparent&&(a.transparent=!0),t.opacity!==void 0&&(a.opacity=t.opacity),t.side!==void 0&&(a.side=t.side),t.depthWrite!==void 0&&(a.depthWrite=t.depthWrite);let o=new e.MeshStandardMaterial(a);return r===`glow`&&(o.emissive=w(e,n?.tint??16777215),o.emissiveIntensity=n?.glow??1,t.map&&(o.emissiveMap=t.map)),i&&(p||=g(e),o.normalMap=p,o.normalScale=new e.Vector2(1,1),m||=h(e),E(o,n,t.mask||m)),o}var O=e({AREA_EPS_M2:()=>AREA_EPS_M2,CLIP_MAX_POINTS:()=>64,CUTOUT_MAX_POINTS:()=>64,CUTOUT_MAX_POLYS:()=>16,GRID_MAX_CELLS:()=>GRID_MAX_CELLS,LC_DETAIL_OFFSET:()=>LC_DETAIL_OFFSET,LC_DETAIL_SCALE:()=>LC_DETAIL_SCALE,LC_EDGE_NOISE_M:()=>LC_EDGE_NOISE_M,LC_EDGE_WAVE_M:()=>2,LC_MIX_M:()=>7,LC_MIX_MAX:()=>LC_MIX_MAX,MAP_RELIEF_Z_FACTOR:()=>3,SCATTER_CELLS_MAX:()=>SCATTER_CELLS_MAX,SCATTER_CELL_M:()=>64,SCATTER_CLEAR_HEIGHT_RATIO:()=>SCATTER_CLEAR_HEIGHT_RATIO,SCATTER_MAX_PER_CELL:()=>SCATTER_MAX_PER_CELL,SCATTER_MAX_PER_ENTRY:()=>SCATTER_MAX_PER_ENTRY,SCATTER_TRIES_PER_POINT:()=>12,TERRAIN_CELLS:()=>16,VERIFY_EPS:()=>VERIFY_EPS,surfaceMaterial:()=>D,updateSurfaceMaterials:()=>f});export{l as i,D as n,f as r,O as t};
+//# sourceMappingURL=src-gAzDaspr.js.map

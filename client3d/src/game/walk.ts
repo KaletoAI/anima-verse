@@ -279,6 +279,90 @@ export function sinkForState(moving: boolean, groundIdle: string,
   return groundIdle ? sink.idle : 0;
 }
 
+/**
+ * HOW FAR THE MIRROR'S WORD REACHES — the exact twin of `groundSink` above,
+ * and for the same reason (E4).
+ *
+ * A tiled hall standing in a painted lake is a FLOOR: one does not stand
+ * knee-deep in it (`groundSink`), and one does not float on the lake's water
+ * line inside it either. The painted areas do not know about rooms — `typeAt`
+ * reads the topmost polygon and nothing else — so the reach rule has to be
+ * applied by whoever knows the scope, exactly as it already is for the sink and
+ * the two ground clips. Without it a room built over a lake would lift every
+ * figure in it up to the water surface.
+ */
+export function groundWaterLevel(level: number | null,
+                                 scope: GroundScope): number | null {
+  if (level === null || !Number.isFinite(level)) return null;
+  return scope === 'built' ? null : level;
+}
+
+/**
+ * WHERE A FIGURE'S ROOT STANDS over water — "Ein Boden" E4 (§ G4), and the end
+ * of the swimmer who hung in the lake bed.
+ *
+ * THE BUG IT ENDS. Until E4 the sink was measured from the TERRAIN: the root
+ * sat on `h(x, z)` and `figures.Figure.play` dropped the body by
+ * `sinkForState(...)` under it. That is right for a bog and wrong for a lake,
+ * because since E1 a lake's bed is CARVED — `water_depth_m` defaults to two
+ * metres — so a swimmer on a two-metre bed hung 2.35 m below the water line
+ * (2.0 of bed plus its own 0.35) and came out half inside the grass plate of
+ * the bank (the user's screenshot, 2026-08-21). The deeper the lake, the deeper
+ * the swimmer.
+ *
+ * THE NEW RULE, in the one place both the avatar and the NPCs read it. The
+ * mirror is a number in the payload now (`meta.water_level_effective`, handed
+ * in as `waterLevel`), so:
+ *
+ *     root = waterLevel === null ? groundY : max( groundY + sink, waterLevel )
+ *
+ * and since the body reference is always `root − sink`, that is
+ *
+ *     body = waterLevel === null ? groundY − sink : max( groundY, waterLevel − sink )
+ *
+ * — read it as: OUT of the water nothing changes at all; IN the water the body
+ * hangs `sink` under the MIRROR, and never below the bed it would otherwise
+ * stand on.
+ *
+ * THE CROSSOVER FALLS OUT OF THE `max`, it is not a second rule: the two
+ * branches are equal where `groundY + sink = waterLevel`, i.e. at a water
+ * DEPTH of exactly `sink`. Shallower than that the figure WADES (feet on the
+ * bed, `root = groundY + sink`, body on `groundY`), deeper it SWIMS (`root =
+ * waterLevel`, body `sink` under the water line, whatever the bed does). The
+ * maximum of two continuous functions is continuous, so walking into a lake is
+ * one smooth descent and out again one smooth rise — no step at the waterline,
+ * and none at the crossover either.
+ *
+ * Worked through with the world's own swim depth `sink = 0.35` and a mirror at
+ * `L` (`smoke_walk_math.mjs` pins this table, `smoke_water_plane.mjs` § 4 the
+ * same shape with a 0.6 seed):
+ *
+ *     depth 0.00 -> root L+0.35  body L         wading, at the very rim
+ *     depth 0.20 -> root L+0.15  body L−0.20    wading, feet on the bed
+ *     depth 0.35 -> root L       body L−0.35    THE CROSSOVER (both agree)
+ *     depth 1.20 -> root L       body L−0.35    swimming
+ *     depth 2.00 -> root L       body L−0.35    swimming (was L−2.35 before E4)
+ *
+ * The treader's own depth (`idle_sink_m`, 1.3 — a whole body length) puts its
+ * crossover at 1.3 m of water, which is the point of having two: an upright
+ * figure needs a body length before its feet leave the bottom.
+ *
+ * NO EXTRA CLEARANCE over the bed. The brief asked for "terrain + a small
+ * clearance"; a positive one would lift a wader off the ground it is standing
+ * on and buy nothing — continuity is already the `max`'s doing, not the
+ * clearance's, and the bed is drawn by the same height function this reads.
+ *
+ * `sink` is what `groundSink(sinkForState(...), scope)` already answered, so
+ * everything that rule says still holds: a built place has no sink and no
+ * mirror either, and junk is no depth.
+ */
+export function floatRootY(groundY: number, waterLevel: number | null,
+                           sink: number): number {
+  const s = Number.isFinite(sink) && sink > 0 ? sink : 0;
+  if (waterLevel === null || !Number.isFinite(waterLevel)) return groundY;
+  return Math.max(groundY + s, waterLevel);
+}
+
 /** The reach rule BOTH ground clips share, in one place: outside a built
  *  place the ground may name a clip, inside it never does, and a blank name
  *  is no name. Two copies of this is how one of them starts reaching further

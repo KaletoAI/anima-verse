@@ -4821,3 +4821,156 @@ plus Platten.
 * § A16 nennt weiterhin `SOCLE_Y_M`, `tiles.tilePlateY` und die gelöschte
   `smoke_plate_drape.mjs`; das Vertragskapitel wird laut Plan in E5/E6 neu
   geschrieben.
+
+## Nachtrag 2026-08-21 (§ A18): Ein Boden — E4, der Wasserspiegel
+
+Etappe E4 aus `development_instructions/plan-ein-boden.md` (§ G4). E1 hat dem
+Wasser eine ZAHL gegeben (`meta.water_level_effective`, § A16-Nachtrag Nr. 2)
+und sein Bett darunter gecarvt; E3 hat alle Drapes bis auf eine gelöscht. E4
+löst die letzte ein. **Keine Server-Änderung** — der Payload trug schon alles.
+
+### 1. Die Fläche ist eben, und ihre Höhe IST die Geometrie
+
+Pro gemalter Wasserfläche eine **flache Earcut-Platte** auf
+`y = water_level_effective`, ohne jede Unterteilung: eine Ebene braucht in der
+Mitte keine Stützpunkte. Ein Kilometer See sind ein paar Dreiecke.
+
+`transparent: true`, `depthTest: true`, `depthWrite: false`, gezeichnet nach dem
+opaken Gelände. Kein `renderOrder`, kein `polygonOffset`, **kein Lift** — die
+2 cm `WATER_DRAPE_LIFT_M` sind ersatzlos weg, weil die Platte mit dem Bett
+konstruktionsbedingt nicht koplanar ist (`h ≤ Spiegel − ε`, in jedem Mip).
+
+**Der Spiegel steckt in der Platten-y, nicht in einem Uniform.** Der Fragment
+liest seine eigene Weltlage (`vWaterPlane.y`), und die ist bei einer ebenen
+Platte genau der Spiegel. Deshalb teilen sich **alle Seen einer Bodenart EIN
+Material**, egal auf wie vielen Höhen sie stehen: zwei Seen auf zwei Höhen sind
+zwei Meshes, nicht zwei Shader. Das Kräusel-Material der Klassen `water`/`ice`
+(`@anima/scene-render` `materials.ts`) läuft unverändert weiter.
+
+**Zwei Bedingungen entscheiden über eine Platte, und beide sind Daten:** die
+KLASSE sagt, wie die Oberfläche aussieht (`isWaterClass` — nie die Farbe, nie
+der Name der Art), `meta.water_level_effective` sagt, ob die Bake ein Bett
+gecarvt hat und auf welcher Höhe. Fehlt der Spiegel, gibt es **keine Platte** —
+eine auf Geländehöhe geratene Ebene wäre die Drape von vorn. Das AUTORIERTE
+`meta.water_level` wird bewusst nicht gelesen: es darf leer sein.
+
+### 2. Das Ufer kommt aus der TIEFE, nicht aus einem Depth-Pass
+
+Im Fragment-Shader:
+
+```glsl
+float wsDepth = vWaterPlane.y - tlodHeight( vWaterPlane.xz, 0.0 );
+if ( wsDepth <= 0.0 ) discard;
+```
+
+`tlodHeight` ist **derselbe Lookup, mit dem der Terrain-Vertex-Shader seine
+Höhen zieht** — vier `texelFetch` auf dieselben R32F-Pyramiden, aus EINEM
+GLSL-Baustein (`terrainLod.terrainLodSampleGlsl`, aus `terrainLodGlsl`
+herausgelöst, weil ein Fragment-Shader kein `attribute` deklarieren darf). Kein
+Screen-Space-Depth, kein Depth-Prepass, kein zweites Render-Target: der Boden
+ist bereits eine Funktion, die man fragen kann. `nodeStep = 0` wählt die
+FEINSTE Ebene; dass ein ferner See sein Bett gröber gezeichnet bekommt, ist
+egal, weil die E1-Invariante in jedem Mip gilt.
+
+Der **Discard bei `wsDepth ≤ 0`** ist das einzige Band, in dem Platte und
+Gelände dieselbe Fläche sind — das ist die Uferlinie. Ein Fragment, das dort am
+Tiefentest teilnimmt, flimmert, wie klein sein Alpha auch ist.
+
+**Die Zahlen** (`client3d/src/scene/waterPlaneMath.ts`, jede von Hand in
+`client3d/scripts/smoke_water_plane.mjs` hergeleitet):
+
+| Größe | Wert | Woher |
+|---|---|---|
+| `WATER_SHORE_BAND_M` | **1,5 m TIEFE** | Alpha = `smoothstep(0, 1.5, Tiefe)`. Beim Default-See (`water_depth_m 2,0` über `shore_ramp_m 3,0`) ist das `smoothstep = 0,75`, also `t ≈ 0,6736` → volle Deckung **2,02 m** innerhalb des Umrisses: das Wasser blendet über die ersten zwei Drittel der gemalten Ufer-Rampe ein. Ein 0,6-m-Tümpel erreicht nie 1 (Alpha 0,352) — genau so sieht ein Tümpel aus |
+| `WATER_FOAM_BAND_M` | 0,6 m | `1 − smoothstep(0, 0,6, Tiefe)`; endet ungefähr dort, wo das Waten ins Schwimmen kippt |
+| `WATER_FOAM_STRENGTH` | 0,6 | wie weit die Gischt das Licht Richtung Weiß zieht |
+| `WATER_FOAM_ALPHA` | 0,15 | wie viel Alpha sie am Rand zurückgibt, damit die Uferlinie eine Spitze behält statt ins Nichts zu verschwinden |
+
+Alpha-Stützstellen (Rampe + Gischt): Tiefe 0 → 0,15 · 0,3 → 0,179 · 0,6 →
+0,352 · 0,75 → 0,5 · 1,125 → 0,84375 · 1,5 → 1.
+
+### 3. Die E1-Invariante, im Client nachgemessen — mit Gegenprobe
+
+`smoke_water_plane.mjs` [3] schreibt den Carve **unabhängig** aus (nicht
+importiert, sonst prüfte er einen geteilten Helfer gegen sich selbst) und misst
+`Spiegel − h ≥ ε`, `ε = min(water_depth_m, 0,25)`.
+
+> **Die Gegenprobe ist ein BEWEIS, keine Stichprobe.** Jenseits der Rampe ist
+> `smoothstep(1) = 1` exakt, das zweite Argument des `min` also die KONSTANTE
+> `Spiegel − water_depth_m` — was auch immer die Naturhöhe dort tut. Eine
+> +40-m-Kuppe mitten im See kommt genauso auf `Spiegel − water_depth_m` heraus:
+> ein Gelände-Texel über dem Spiegel in der Tiefzone ist nicht unwahrscheinlich,
+> es ist arithmetisch unmöglich. Sampling hätte nur „in diesen 4 489 Proben
+> nicht" sagen können.
+
+Am Rand (`d_innen = 0`) ist der Carve `min(h, Spiegel)` — die Platte trifft das
+Gelände, und genau das ist die Uferlinie.
+
+### 4. Schwimmen liest den Spiegel (`walk.floatRootY`)
+
+Bis E4 wurde die Sink-Tiefe vom GELÄNDE aus gemessen. Über einem gecarvten Bett
+war das falsch: ein Schwimmer über 2 m Wasser hing 2,35 m unter der Wasserlinie
+und kam halb in der Grasplatte des Ufers heraus. Neu, **eine exportierte
+Funktion für Avatar, NPCs und Reisende**:
+
+```
+root = waterLevel === null ? groundY : max( groundY + sink, waterLevel )
+body = root − sink                      (unverändert, figures.Figure.play)
+     = waterLevel === null ? groundY − sink : max( groundY, waterLevel − sink )
+```
+
+Außerhalb des Wassers ändert sich **nichts**. Im Wasser hängt der Körper `sink`
+unter dem SPIEGEL und nie unter dem Bett, auf dem er sonst stünde.
+
+> **Der Übergang fällt aus dem `max`, er ist keine zweite Regel.** Die beiden
+> Zweige sind gleich, wo `groundY + sink = waterLevel` — bei einer Wassertiefe
+> von **exakt `sink`**. Flacher wird GEWATET (Füße auf dem Bett), tiefer
+> GESCHWOMMEN (Körper `sink` unter der Wasserlinie, egal wie tief das Bett
+> fällt). Das Maximum zweier stetiger Funktionen ist stetig: ins Wasser laufen
+> ist ein glatter Abstieg, ohne Stufe an der Wasserlinie und ohne Stufe am
+> Übergang.
+
+Mit dem Wasser-Seed der Welt (`move_sink_m 0,35`, `idle_sink_m 1,3`) und
+Spiegel `L`:
+
+| Tiefe | root (Schwimmer) | root (Treter) | body (Schwimmer) | body (Treter) |
+|---|---|---|---|---|
+| 0,00 | L+0,35 | L+1,30 | L | L |
+| 0,35 | L | L+0,95 | L−0,35 | L−0,35 |
+| 1,30 | L | L | L−0,35 | L−1,30 |
+| 2,00 | L | L | L−0,35 | L−1,30 |
+
+Der Schwimmer kippt bei 0,35 m Wasser, der Treter erst bei 1,30 m — genau der
+Sinn zweier Tiefen: eine aufrechte Figur braucht eine Körperlänge Wasser, bevor
+ihre Füße den Grund verlassen.
+
+**Reichweite wie beim Sink.** `walk.groundWaterLevel(level, scope)` ist der
+exakte Zwilling von `groundSink`: eine geflieste Halle im See ist ein BODEN, in
+ihr schwimmt niemand (`scope === 'built'` → `null`). Die Passierbarkeit
+entscheidet weiter der Server, art-basiert — unverändert.
+
+**KEIN Zusatzabstand über dem Bett.** Ein positiver Clearance würde einen
+Watenden von dem Grund abheben, auf dem er steht, und kaufte nichts: die
+Stetigkeit ist Sache des `max`, nicht des Abstands.
+
+### 5. Was gelöscht ist
+
+`WATER_DRAPE_LIFT_M`, `drapeArea`, `areaCellM`, `liftToField` und `reliefBox`
+in `client3d/src/scene/ground.ts` — die ganze Drape-Kette der letzten Fläche.
+`smoke_layer_cut.mjs` [6] liest die Quellen darauf ab und verlangt, dass
+`rebuildAreas` **gar keine** `position.y` mehr setzt (E3 erlaubte noch genau
+eine). Die Earcut-Geometrie einer Fläche ohne Spiegel wird jetzt freigegeben
+statt liegengelassen.
+
+`@anima/scene-render` `subdivideOnGrid`/`gridStepFor` haben damit **keinen
+Verbraucher mehr**; sie stehen noch, weil ihr Löschen den halben
+`smoke_relief_math.mjs` mitnimmt — Aufgabe des Konstanten-Friedhofs in E5/E6.
+
+### 6. Zwischenzustand bis E5
+
+* Szenen-Zonenplatten (0,01) rendern weiter, Zonen-Wasser (Raumboden `water`,
+  `layout.floor_offset_y` als Wasserlinie) ist **unberührt** — das ist E5.
+  Ein See der KARTE und ein Wasser-Raumboden derselben Szene stehen bis dahin
+  auf zwei verschiedenen Höhen-Ideen.
+* § A16 nennt weiterhin gelöschte Namen; das Vertragskapitel wird laut Plan in
+  E5/E6 neu geschrieben.

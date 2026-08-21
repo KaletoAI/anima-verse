@@ -64,13 +64,13 @@
  */
 import * as THREE from 'three';
 import { buildAreaGeometry,
-  gridStepFor, heightAt as worldHeightAt, pickVariant, pointInRing,
+  heightAt as worldHeightAt, pickVariant, pointInRing,
   propGroundFit, rayGroundHit,
   scatterCellInstances, scatterCellSeed, scatterClearM,
-  SCATTER_CELL_M, subdivideOnGrid,
+  SCATTER_CELL_M,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
   worldHeightRange } from '@anima/scene-render';
-import type { GridBox, Point2, ScatterFootprint, ScatterInstance,
+import type { Point2, ScatterFootprint, ScatterInstance,
   SurfaceMaterialSpec, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
   TerrainLayerIndex, TerrainLayerTile, WorldHeightField, WorldHeightTileStats,
   WorldHeightTiles } from '@anima/scene-render';
@@ -101,6 +101,8 @@ import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
 import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
+import { buildWaterPlane, patchWaterShore } from './waterPlane';
+import { waterLevelOf } from './waterPlaneMath';
 import type { UndergrowthArea } from './undergrowth';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
@@ -120,24 +122,19 @@ export const GROUND_Y = 0;
 export const BASE_MARGIN_M = 60;
 /** Edge length of the base plane when nothing is placed at all (metres). */
 const BASE_FALLBACK_M = 200;
-/**
- * THE ONE LIFT LEFT, in metres — and it belongs to WATER alone.
+/*
+ * THE LIFTS ARE ALL GONE (E4).
  *
- * The three ladders that used to stand here are gone with E3: a `renderOrder`
- * ladder at −10000 + i, a `polygonOffset` ladder down to −32 and a hairline y
- * ladder of 0.4 mm per level, all three keeping N coplanar drape meshes apart.
- * There are no drape meshes any more — the painted grounds are a CUT in the one
- * terrain surface (`scene/layerGround.ts`), so there is nothing coplanar left
- * to separate.
- *
- * Except water, this stage. A lake is still drawn by its own ripple drape until
- * E4 gives it a level mirror at `water_level`, and that drape follows the very
- * heights the terrain mesh is built from — i.e. it IS coplanar with the terrain.
- * Two centimetres is what keeps the depth test from tearing them apart at
- * range, and it is ONE number rather than a ladder because there is only ever
- * one water surface over a given square metre. It dies with E4.
+ * E3 deleted three ladders at once — a `renderOrder` ladder at −10000 + i, a
+ * `polygonOffset` ladder down to −32 and a hairline y ladder of 0.4 mm per
+ * level — because the painted grounds became a CUT in the one terrain surface
+ * (`scene/layerGround.ts`) and nothing coplanar was left to separate. It left
+ * `WATER_DRAPE_LIFT_M = 0.02` standing for the one drape it could not yet
+ * replace. E4 replaced it: a lake is a FLAT MIRROR at its own
+ * `water_level_effective` (`scene/waterPlane.ts`), which is not coplanar with
+ * the bed under it by construction — the bed is carved to `h ≤ level − ε`.
+ * There is no lift left in this file, and no drape.
  */
-export const WATER_DRAPE_LIFT_M = 0.02;
 
 /** Mask tiles asked for in ONE request — the server's own
  *  `terrain_layers.BATCH_MAX`. Far below the height batch's 64 because one mask
@@ -461,11 +458,12 @@ function spreadOf(urls: readonly string[]): number | null {
 
 /** One built area: what stands in the scene, plus what the scatter LOD needs. */
 interface AreaMesh {
-  /** the WATER drape of this area, and `null` for every other ground: since E3
-   *  a painted ground is a CUT in the terrain surface and has no mesh at all
-   *  (`scene/layerGround.ts`). Water keeps a drape until E4 replaces it with a
-   *  level mirror. An area is still an entry here whatever it is made of — the
-   *  scatter and the undergrowth hang on it. */
+  /** the WATER MIRROR of this area, and `null` for every other ground: since
+   *  E3 a painted ground is a CUT in the terrain surface and has no mesh at all
+   *  (`scene/layerGround.ts`), and since E4 the one exception is a FLAT plane
+   *  at the area's `water_level_effective` (`scene/waterPlane.ts`). An area is
+   *  still an entry here whatever it is made of — the scatter and the
+   *  undergrowth hang on it. */
   mesh: THREE.Mesh | null;
   /** one scatter entry per authored row AND model variant — empty when nothing
    *  grows here (finding B17: the list hangs on the AREA, not on the terrain
@@ -662,6 +660,17 @@ export interface TerrainPoint {
   /** catalog `meta.idle_sink_m`, or 0 — the same while it WAITS on it. Two
    *  numbers, because the two poses hang differently in the water (§ A9). */
   idle_sink_m: number;
+  /**
+   * The MIRROR HEIGHT of the topmost area over this point in world metres, or
+   * `null` where the point is not water (E4, § G4).
+   *
+   * It is the AREA's number (`meta.water_level_effective`), not the kind's:
+   * two lakes in one world stand at two heights, and the same `water` kind
+   * paints both. It rides here because it is decided by the very same loop as
+   * the kind — the last containing area wins, and if that one is a sandbank
+   * painted over the lake, the point is not water any more.
+   */
+  water_level: number | null;
 }
 
 export interface Ground {
@@ -1074,39 +1083,6 @@ export function createGround(): Ground {
     heightAt, applySway, topLayerAt: topLayerIndexAt });
   group.add(undergrowth.group);
 
-  /** Lift a flat vertex list onto the ground, in place. `pos` is `[x, y, z, …]`
-   *  in WORLD metres (the subdivided area drapes are), so the sample point is
-   *  the vertex itself — and the sampler is the ONE sampler, the same the
-   *  terrain's own vertices are placed by. */
-  function liftToField(pos: number[]): void {
-    if (!hasRelief()) return;
-    for (let i = 0; i < pos.length; i += 3) {
-      pos[i + 1] += heightAt(pos[i], pos[i + 2]);
-    }
-  }
-
-  /** The box the FIELD describes (§ A16): `origin + (cols−1) · step`. Outside
-   *  it the ground is the field's border value, which the server pins to 0 —
-   *  flat, and the plate covers it with plain quads. `null` = no relief.
-   *
-   *  THE OVERVIEW ANSWERS IT, not the tiles, and that is exact rather than an
-   *  approximation: the overview is rastered over everything authored anywhere
-   *  (§ A16), and a tile is only ever indexed where it meets one of those very
-   *  boxes. There is no ground outside this box for a tile to hold. */
-  function reliefBox(): GridBox | null {
-    const ov = relief.overview;
-    const rows = ov?.heights?.length ?? 0;
-    const cols = ov?.heights?.[0]?.length ?? 0;
-    const step = ov?.step_m ?? 0;
-    if (!ov || rows < 2 || cols < 2 || !(step > 0)) return null;
-    return {
-      x0: ov.origin_x,
-      z0: ov.origin_z,
-      x1: ov.origin_x + (cols - 1) * step,
-      z1: ov.origin_z + (rows - 1) * step,
-    };
-  }
-
   /** The footprints the scatter keeps clear (finding B18) — drawn outlines in
    *  WORLD metres (`worldFootprints`) — and the signature the areas standing
    *  in the scene were sampled against. `null` means "never built", which is
@@ -1234,13 +1210,20 @@ export function createGround(): Ground {
    * ARE the world coordinates (1 unit = 1 m), the base plane's run 0..1 over
    * its whole edge.
    *
-   * SINCE E3 IT BUILDS TWO KINDS OF THING, and only one of them still carries a
-   * texture: the WATER drape (its own shader, its own image, until E4) and the
-   * TERRAIN (`rebuildBase`), which gets NO map at all — its albedo comes out of
-   * the layer compositor's texture array. See `applyTerrainLayers`.
+   * IT BUILDS TWO KINDS OF THING, and only one of them still carries a
+   * texture: the WATER MIRROR (its own shader, its own image, `waterPlane.ts`)
+   * and the TERRAIN (`rebuildBase`), which gets NO map at all — its albedo
+   * comes out of the layer compositor's texture array. See `applyTerrainLayers`.
+   *
+   * `draw` is how the surface takes part in the depth buffer, and only the
+   * mirror sets it: a lake is TRANSPARENT (the bed shows through its shore
+   * ramp) and writes NO depth (it is a sheet over a world that has to stay
+   * visible through it). The terrain leaves both alone and stays opaque.
    */
   function materialFor(kind: string, uvScaleM: number,
-                       sink: { dispose(): void }[]): THREE.Material {
+                       sink: { dispose(): void }[],
+                       draw?: { transparent?: boolean; depthWrite?: boolean }
+  ): THREE.Material {
     const surface = surfaceOf(kind);
     const lib = surfaceFor(surface, 'wall');
     const spec: SurfaceMaterialSpec | null = surfaceMaterialSpec(surface);
@@ -1255,7 +1238,8 @@ export function createGround(): Ground {
       map.repeat.set(uvScaleM / lib.sizeM, uvScaleM / lib.sizeM);
       sink.push(map);
     }
-    const mat = surfaceMaterial(THREE, { material: spec, map, color: kindColor(kind) });
+    const mat = surfaceMaterial(THREE, { material: spec, map, color: kindColor(kind),
+      transparent: draw?.transparent, depthWrite: draw?.depthWrite });
     // EVERY ground material carries the basement hole — base plane and painted
     // areas alike. Patching only the plane would leave a painted meadow lying
     // over the open cellar.
@@ -1289,62 +1273,6 @@ export function createGround(): Ground {
     }
     return [bounds.min_x - BASE_MARGIN_M, bounds.min_z - BASE_MARGIN_M,
             bounds.max_x + BASE_MARGIN_M, bounds.max_z + BASE_MARGIN_M];
-  }
-
-  /**
-   * The cell size ONE painted-area DRAPE is cut at, in metres — 0 where the
-   * ground under it does not move, and nothing is subdivided at all.
-   *
-   * IT IS PER AREA, and since E2 it has to be. Until then this was ONE number
-   * for the base plate and every drape on it: they had to be cut on the same
-   * lines, so the number was the plate's — `gridStepFor` doubling the
-   * OVERVIEW's step until a mesh over the whole world frame stayed under
-   * `GRID_MAX_CELLS`, measured 64 m in the live world. Both surfaces were then
-   * the same chord of the field and lay flush.
-   *
-   * The plate is gone: the terrain draws the field itself, down to the 2 m
-   * lattice under the camera. A drape still cut at 64 m would be a chord of
-   * that surface — up to 1.584 m (p95) below it on the measured world — and a
-   * meadow a metre and a half inside the hill it is painted on is a meadow
-   * nobody sees. So each drape gets its OWN budget over its OWN polygon: a
-   * 200 m meadow is cut at the fine step and lies on the terrain to the
-   * centimetre, and only a wood spanning kilometres is coarsened at all.
-   *
-   * Different areas may therefore be cut on different lines, which used to be
-   * forbidden and now costs nothing: they are separate meshes, every vertex of
-   * each lands on the ONE field, and nothing has to meet anything.
-   *
-   * THE DRAPES ARE A TRANSITIONAL STATE — E3 replaces the whole stack of
-   * transparent area meshes with one layer cut in the terrain material, and
-   * this number goes with them.
-   *
-   * A field of nothing but zeroes is FLAT and says so: giving it forty thousand
-   * cells for a surface that is level would be paid every rebuild for nothing.
-   */
-  function areaCellM(pos: readonly number[]): number {
-    const step = tileStepM > 0 ? tileStepM : (relief.overview?.step_m ?? 0);
-    const box = reliefBox();
-    if (!(step > 0) || !box) return 0;
-    if (fieldRange.min === 0 && fieldRange.max === 0) return 0;
-    let ax0 = Infinity;
-    let az0 = Infinity;
-    let ax1 = -Infinity;
-    let az1 = -Infinity;
-    for (let i = 0; i + 2 < pos.length; i += 3) {
-      if (pos[i] < ax0) ax0 = pos[i];
-      if (pos[i] > ax1) ax1 = pos[i];
-      if (pos[i + 2] < az0) az0 = pos[i + 2];
-      if (pos[i + 2] > az1) az1 = pos[i + 2];
-    }
-    // The budget is spent where there IS relief: the polygon's own box, clipped
-    // to the field's. A meadow painted out on the flat rim of the world needs
-    // no subdivision at all.
-    const x0 = Math.max(ax0, box.x0);
-    const z0 = Math.max(az0, box.z0);
-    const x1 = Math.min(ax1, box.x1);
-    const z1 = Math.min(az1, box.z1);
-    if (!(x1 > x0) || !(z1 > z0)) return 0;   // the area is off the relief
-    return gridStepFor(x0, z0, x1, z1, step);
   }
 
   /**
@@ -2276,55 +2204,6 @@ export function createGround(): Ground {
    * and a material built into that same bag before the drain would be disposed
    * the moment it was hung into the scene.
    */
-  /**
-   * A WATER area, cut on the ground grid and laid on the relief.
-   *
-   * The flat geometry of `buildAreaGeometry` is a handful of big triangles from
-   * earcut; over a hill those four corners would drape and the metres in
-   * between would cut straight through it. So the triangles are clipped along
-   * the height lattice's own lines (`subdivideOnGrid`) and every vertex is
-   * lifted by the field. The UVs survive because they are world metres and the
-   * cut interpolates them linearly.
-   *
-   * IT IS THE LAST DRAPE IN THE WORLD. Every other painted ground is a CUT in
-   * the terrain surface since E3 (`scene/layerGround.ts`) and has no mesh at
-   * all; water keeps one until E4 replaces it with a level mirror at
-   * `water_level`. With the drapes went the fringe geometry this function used
-   * to build — the per-vertex distance to the area's ring and the refinement
-   * pass that made it interpolable (`ngRefineEdgeBand`, up to 20 000
-   * triangles): water never had a fringe, and nothing else has a drape.
-   *
-   * The input geometry is consumed: it is read out and disposed here, because
-   * from that moment on nothing else knows about it.
-   */
-  function drapeArea(flat: THREE.BufferGeometry): THREE.BufferGeometry {
-    const ov = relief.overview;
-    const src = flat.index ? flat.toNonIndexed() : flat;
-    const pos = Array.from(src.getAttribute('position').array as ArrayLike<number>);
-    const uvAttr = src.getAttribute('uv');
-    const uv = uvAttr ? Array.from(uvAttr.array as ArrayLike<number>) : null;
-    if (src !== flat) src.dispose();
-    flat.dispose();
-    // The relief cut, when there is a relief: without one the earcut triangles
-    // are used as they are — they lie flat, and flat is the one thing a
-    // subdivision would not change about them.
-    let cutPos = pos;
-    let cutUv = uv;
-    const cell = areaCellM(pos);
-    if (cell > 0 && ov) {
-      const cut = subdivideOnGrid(pos, uv, cell, ov.origin_x, ov.origin_z);
-      cutPos = cut.pos;
-      cutUv = uv ? cut.uv : null;
-      liftToField(cutPos);
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(cutPos, 3));
-    if (cutUv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(cutUv, 2));
-    geo.computeVertexNormals();
-    geo.computeBoundingSphere();
-    return geo;
-  }
-
   async function rebuildAreas(): Promise<void> {
     const areas = payload?.areas ?? [];
     // The scatter window, before anything is sampled in it. Normally the
@@ -2353,6 +2232,11 @@ export function createGround(): Ground {
     // `null` = a ring that encloses nothing: it draws nothing and covers
     // nothing. Each area is still built exactly once.
     const builtAreas = areas.map((area) => buildAreaGeometry(THREE, area.polygon));
+    /** ONE mirror material per water KIND, for the whole world (E4). The level
+     *  is carried by each plane's own y, never by a uniform, so two lakes at
+     *  two heights share one shader and cost two draw calls instead of two
+     *  programs. Filled lazily: a world without water builds none. */
+    const waterMats = new Map<string, THREE.Material>();
     areas.forEach((area, index) => {
       const built = builtAreas[index];
       if (!built) return;   // a ring that encloses nothing has nothing to draw
@@ -2360,23 +2244,41 @@ export function createGround(): Ground {
       // ground is a CUT in the terrain surface since E3 — the compositor reads
       // the server's baked masks and paints it into the one material
       // (`scene/layerGround.ts`), which is why the whole ladder of renderOrder,
-      // depth bias and hairline lifts that used to stand here is gone. The
-      // CLASS decides, never the colour or the kind's name (`isWaterClass`),
-      // exactly as it decided who got a fringe before.
+      // depth bias and hairline lifts that used to stand here is gone.
+      //
+      // TWO CONDITIONS SINCE E4, and both are data. The CLASS says what the
+      // surface LOOKS like (ripple or matte — never the colour or the kind's
+      // name, `isWaterClass`), and `meta.water_level_effective` says whether
+      // the bake carved a bed under it and at what height (§ A16 addendum § 2).
+      // Without a level there is no mirror to place: a plane guessed at the
+      // terrain's own height would be the drape all over again.
       const water = isWaterClass(surfaceMaterialSpec(surfaceOf(area.kind))?.class);
+      const level = water ? waterLevelOf(area.meta) : null;
       let mesh: THREE.Mesh | null = null;
-      if (water) {
-        // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
-        // so the texture runs seamlessly across area borders.
-        mesh = new THREE.Mesh(drapeArea(built.geometry),
-                              materialFor(area.kind, 1, nextOwned));
-        mesh.receiveShadow = true;
-        // The one lift left in the world — see `WATER_DRAPE_LIFT_M`. Two
-        // centimetres over a surface the drape is otherwise coplanar with, and
-        // it dies with E4.
-        mesh.position.y = WATER_DRAPE_LIFT_M;
+      if (level !== null) {
+        let mat = waterMats.get(area.kind);
+        if (!mat) {
+          // 1 m per UV unit: the shape geometry's UVs are the world
+          // coordinates, so the texture runs seamlessly across area borders.
+          // Transparent and depth-write-free — the shore ramp is an alpha, and
+          // a sheet of water must not hide the world behind it.
+          mat = materialFor(area.kind, 1, nextOwned,
+                            { transparent: true, depthWrite: false });
+          // …and LAST in the chain, after the ripple and the basement hole:
+          // the shore reads the height pyramids and writes the alpha
+          // (`waterPlane.ts`).
+          patchWaterShore(mat);
+          waterMats.set(area.kind, mat);
+        }
+        mesh = buildWaterPlane(built.geometry, level, mat);
         mesh.userData.terrainKind = area.kind;
         mesh.userData.terrainAreaId = area.id;
+        mesh.userData.waterLevel = level;
+      } else {
+        // Not a mirror, so the earcut is not drawn — and a geometry nobody
+        // holds is a buffer nobody frees. Only the RING lives on (below); the
+        // triangles were only ever needed by the drape this stage deleted.
+        built.geometry.dispose();
       }
 
       // The CLEANED ring, the one the mesh was built from — see `ringBounds`.
@@ -2800,14 +2702,21 @@ export function createGround(): Ground {
    */
   function typeAt(x: number, z: number): TerrainPoint {
     let hit = '';
+    // The MIRROR of the same area (E4). Written in the same breath as the kind
+    // and by the same rule — the last containing area decides both — so a
+    // sandbank painted over a lake takes the water away with the kind instead
+    // of leaving a level behind that nothing draws.
+    let level: number | null = null;
     for (const a of payload?.areas ?? []) {
-      if (pointInRing(x, z, a.polygon)) hit = a.kind || '';
+      if (!pointInRing(x, z, a.polygon)) continue;
+      hit = a.kind || '';
+      level = waterLevelOf(a.meta);
     }
     const kind = hit || payload?.default_kind || '';
     const entry = catalog.get(kind.toLowerCase());
     if (!entry) {
       return { kind, passable: true, speed_factor: 1, move_anim: '',
-        idle_anim: '', move_sink_m: 0, idle_sink_m: 0 };
+        idle_anim: '', move_sink_m: 0, idle_sink_m: 0, water_level: level };
     }
     // A ground that says nothing sinks nobody — and junk is nothing, never
     // NaN: one NaN in the drop and the figure is at no height for good.
@@ -2823,6 +2732,7 @@ export function createGround(): Ground {
       idle_anim: String(entry.meta?.idle_anim ?? '').trim(),
       move_sink_m: depth(entry.meta?.move_sink_m),
       idle_sink_m: depth(entry.meta?.idle_sink_m),
+      water_level: level,
     };
   }
 

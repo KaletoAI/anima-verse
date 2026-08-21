@@ -211,6 +211,41 @@
  * hands the treader the swimmer's 0.35 where the rule in force gives 1.3 —
  * the treader standing on the lake, which is what was reported.
  *
+ * --- floatRootY: the sink is measured from the MIRROR, not the bed (E4) ----
+ * "Ein Boden" E4 (§ G4). Both depths above are still exactly what they were;
+ * what changed is the surface they hang under. Until E4 that was the TERRAIN,
+ * and since E1 a lake's bed is CARVED — `water_depth_m` defaults to 2 m — so a
+ * swimmer over a 2 m bed hung 2.6 m under the water line and came out half
+ * inside the grass plate of the bank (the user's screenshot, 2026-08-21).
+ *
+ *   floatRootY(groundY, waterLevel, sink) =
+ *     waterLevel === null ? groundY : max(groundY + sink, waterLevel)
+ *
+ * and because the body reference is always `root − sink`, that reads
+ * `body = max(groundY, waterLevel − sink)`: out of the water NOTHING changes,
+ * in it the body hangs `sink` under the mirror and never below the bed it
+ * would otherwise stand on. The crossover falls out of the `max` and is not a
+ * second rule — the branches are equal where `groundY + sink = waterLevel`,
+ * i.e. at a water DEPTH of exactly `sink`.
+ *
+ * With the world's own water seed and a mirror at L = 3.0, the MOVE depth
+ * 0.35 (a swimmer's knee) and the IDLE depth 1.3 (a treader's foot):
+ *
+ *   depth  groundY  root(move)          root(idle)         body(move) body(idle)
+ *   0.00   3.00     max(3.35, 3) = 3.35 max(4.3, 3) = 4.3  3.00       3.00
+ *   0.35   2.65     max(3.00, 3) = 3.00 max(3.95,3) = 3.95 2.65       2.65
+ *   1.30   1.70     max(2.05, 3) = 3.00 max(3.00,3) = 3.00 2.65       1.70
+ *   2.00   1.00     max(1.35, 3) = 3.00 max(2.30,3) = 3.00 2.65       1.70
+ *
+ * — the swimmer crosses over at 0.35 m of water, the treader only at 1.30 m,
+ * which is the whole point of two depths: a figure that is upright needs a
+ * body length of water before it stops touching the bottom.
+ *
+ * `groundWaterLevel(level, scope)` is the exact twin of `groundSink`'s reach:
+ * a tiled hall standing in a painted lake is a floor, so `'built'` answers
+ * `null` and nobody floats inside it. The full shore/plane arithmetic is
+ * `client3d/scripts/smoke_water_plane.mjs`.
+ *
  * --- slopeBlocks: THE HEIGHT GATE (E8 task 1) -----------------------------
  * The client's half of the server rule of `POST /play/pos` § A15 Nr. 8, the
  * exact mirror of `relief.slope_blocks`. The SLOPE limit holds at every
@@ -819,7 +854,8 @@ async function main() {
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, minimap, locks, placement, ground } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
-    moveClip, idleClip, groundSink, sinkForState, groundScope, MIN_PACE,
+    moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
+    groundScope, MIN_PACE,
     MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
@@ -1147,6 +1183,56 @@ async function main() {
     check('...and the moving case is the one place the two agree',
       single(true, 'treading-water', W.move),
       sinkForState(true, 'treading-water', W));
+  }
+
+  console.log('floatRootY — the sink hangs under the MIRROR since E4');
+  {
+    const L = 3.0;
+    const W = { move: 0.35, idle: 1.3 };
+    // groundY at a given water depth, and what the two ends of the chain are:
+    // the ROOT (what npcs.ts places) and the BODY reference (root − sink,
+    // what `figures.Figure.play` drops the figure to).
+    const root = (depth, sink) => floatRootY(L - depth, L, sink);
+    const body = (depth, sink) => root(depth, sink) - sink;
+    for (const [depth, rMove, rIdle, bMove, bIdle] of [
+      [0.00, 3.35, 4.30, 3.00, 3.00],
+      [0.35, 3.00, 3.95, 2.65, 2.65],
+      [1.30, 3.00, 3.00, 2.65, 1.70],
+      [2.00, 3.00, 3.00, 2.65, 1.70],
+    ]) {
+      check(`depth ${depth} m: the swimmer's root`, root(depth, W.move), rMove);
+      check(`depth ${depth} m: the treader's root`, root(depth, W.idle), rIdle);
+      check(`depth ${depth} m: the swimmer's body`, body(depth, W.move), bMove);
+      check(`depth ${depth} m: the treader's body`, body(depth, W.idle), bIdle);
+    }
+    check('the swimmer crosses over at 0.35 m of water', root(W.move, W.move), L);
+    check('...the treader only at 1.3 m — a body length before it floats',
+      root(W.idle, W.idle), L);
+    check('OUT of the water nothing changed at all',
+      floatRootY(7.25, null, W.move), 7.25);
+    check('...the bog still swallows ankles from the terrain',
+      floatRootY(7.25, null, 0.2) - 0.2, 7.05);
+    // RED COUNTER-PROBE, EXECUTED: the pre-E4 rule, written out — the sink
+    // measured from the BED. It is the user's screenshot.
+    const fromBed = (depth, sink) => (L - depth) - sink;
+    check('RED: measured from the bed, a 2 m lake puts the swimmer at',
+      fromBed(2.0, W.move), 0.65);
+    check('...i.e. 2.35 m under the water line', L - fromBed(2.0, W.move), 2.35);
+    check('...where the rule in force keeps it 0.35 m under it',
+      L - body(2.0, W.move), W.move);
+    check('...and in water shallower than the sink the body IS the bed: '
+      + 'one wades, feet on the ground', body(0.2, W.move), L - 0.2);
+  }
+
+  console.log('groundWaterLevel — the mirror reaches as far as the sink does');
+  {
+    check('wilderness: the lake counts', groundWaterLevel(3, 'wilderness'), 3);
+    check('...an open place is the same water', groundWaterLevel(3, 'open'), 3);
+    check('THE REACH: a tiled hall over the lake is a floor',
+      groundWaterLevel(3, 'built'), null);
+    check('a sea at world zero is still a level', groundWaterLevel(0, 'open'), 0);
+    check('no lake, no level', groundWaterLevel(null, 'open'), null);
+    check('a NaN is no level', groundWaterLevel(NaN, 'wilderness'), null);
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

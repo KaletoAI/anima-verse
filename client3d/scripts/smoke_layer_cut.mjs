@@ -119,9 +119,11 @@
  * None of them may appear as CODE anywhere in the client or the shared package.
  *
  * And the scene-graph builder must not stack: `rebuildAreas` may set no
- * `renderOrder`, no `polygonOffset` and exactly ONE `position.y`, the water
- * drape's single `WATER_DRAPE_LIFT_M` — which is itself checked to be one
- * constant and not a function of an index.
+ * `renderOrder`, no `polygonOffset` and — since E4 — no `position.y` at all.
+ * The last one it had was `WATER_DRAPE_LIFT_M`, the two centimetres that kept
+ * the water drape off its own bed; the drape is a FLAT MIRROR now
+ * (`scene/waterPlane.ts`), it stands at its area's `water_level_effective`, and
+ * the constant is checked to be gone from the code like the ladders are.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -371,7 +373,11 @@ function liveMentions(name) {
 }
 for (const dead of ['AREA_RENDER_ORDER_BASE', 'AREA_POLYGON_OFFSET',
   'AREA_OFFSET_MAX', 'AREA_Y_STEP_M', 'AREA_Y_MAX_M', 'ngRefineEdgeBand',
-  'NG_EDGE_BAND_M', 'NG_EDGE_ATTRIBUTE', 'aEdgeDist', 'gridPlate']) {
+  'NG_EDGE_BAND_M', 'NG_EDGE_ATTRIBUTE', 'aEdgeDist', 'gridPlate',
+  // …and with E4 the last lift of them all, plus the drape machinery that
+  // only ever served it: the cut on the height lattice and the per-area cell
+  // budget that sized it.
+  'WATER_DRAPE_LIFT_M', 'drapeArea', 'areaCellM']) {
   checkEq(`\`${dead}\` is gone from the code`, liveMentions(dead), []);
 }
 
@@ -387,10 +393,8 @@ check('the area builder sets no renderOrder at all',
 check('…and no polygonOffset',
   build.includes('polygonOffset') ? 1 : 0, 0);
 const lifts = build.match(/\.position\.y = [^\n;]+;/g) ?? [];
-checkEq('…and exactly ONE height, the water drape\'s single constant',
-  lifts, ['.position.y = WATER_DRAPE_LIFT_M;']);
-check('…which is a constant and not a function of the stacking index',
-  /export const WATER_DRAPE_LIFT_M = 0\.02;/.test(groundSrc) ? 1 : 0, 1);
+checkEq('…and no height at all any more: the mirror stands at its own level',
+  lifts, []);
 check('only WATER still gets a mesh at all',
   /const water = isWaterClass\(surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\?\.class\);/
     .test(build) ? 1 : 0, 1);

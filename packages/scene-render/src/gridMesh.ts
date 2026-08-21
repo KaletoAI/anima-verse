@@ -28,9 +28,12 @@
  * and a full interior cell comes out as the very same two triangles (see
  * `fanTriangles`: the split runs from the cell's minimum corner to its maximum
  * one). The cells an outline CROSSES are cut differently and can differ inside
- * the cell by a fraction of the cell's own curvature — which is why the water
- * drape carries the one explicit lift left in this file's world
- * (`ground.WATER_DRAPE_LIFT_M`) instead of a ladder of depth crutches.
+ * the cell by a fraction of the cell's own curvature — which is why a draped
+ * surface used to need an explicit lift over the one below it. There is no
+ * drape left to lift: E3 cut the painted grounds into the terrain material and
+ * E4 made the last one, water, a FLAT mirror at its own level
+ * (`client3d/src/scene/waterPlane.ts`). The only user of this subdivision now
+ * is the scene recipe's own plates.
  *
  * PURE ARITHMETIC, no imports at all — not even a type-only one. That is what
  * lets `client3d/scripts/smoke_relief_math.mjs` transpile this file and check

@@ -518,6 +518,11 @@ async function startApp(username: string, role: string) {
     const type = terrainGround.typeAt(x, z);
     return { anim: type.move_anim, idle: type.idle_anim,
       sink: { move: type.move_sink_m, idle: type.idle_sink_m },
+      // …and the MIRROR over the point (E4, § G4): where a lake stands here,
+      // a figure hangs under its water line instead of under the carved bed
+      // (`walk.floatRootY`). It travels with the clips and the sinks because
+      // it is the same lookup — `typeAt` reads the topmost area once.
+      water: type.water_level,
       scope: groundScopeAt(x, z) };
   });
   engine.scene.add(npcs.group);

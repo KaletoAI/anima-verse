@@ -425,7 +425,8 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
 // ── The GLSL twin ──────────────────────────────────────────────────────────
 
 /**
- * The vertex-side height fetch, as GLSL.
+ * The height fetch itself, as GLSL — uniforms and lookup, NOTHING that only a
+ * vertex shader may say.
  *
  * WHAT MAKES IT THE SAME NUMBER AS `heightAt`: `tlodGrid` is `latticeSample`
  * written out — the same clamp, the same `min(floor(f), n−2)`, the same
@@ -435,11 +436,20 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
  * weights in its own way, which is exactly the "nearly the same" this whole
  * stage exists to end.
  *
+ * IT IS SPLIT OFF FROM `terrainLodGlsl` FOR THE WATER (E4). The mirror plane
+ * of `scene/waterPlane.ts` needs the very same height, but in its FRAGMENT
+ * shader — the depth of the lake under a pixel is `plane y − h(x, z)` — and a
+ * fragment shader may not declare `attribute vec4 iNode`. So the sampler is
+ * one chunk that both stages include and the vertex-only half (`iNode`,
+ * `tlodCompute`) hangs off it. Copying the four `texelFetch` into the water
+ * shader would have been the second implementation of the one height, which is
+ * the thing this whole stage exists to prevent.
+ *
  * The smoke does not read this string. It reimplements the arithmetic
  * independently and checks it against `heightAt` on hand-derived fixtures — a
  * check that read the string could only prove the string equals itself.
  */
-export function terrainLodGlsl(): string {
+export function terrainLodSampleGlsl(): string {
   return `
 uniform sampler2D uTlodNear;
 uniform sampler2D uTlodFar;
@@ -449,7 +459,6 @@ uniform vec4 uTlodNearLevel[ ${MAX_LOD_LEVELS} ];
 uniform vec4 uTlodFarLevel[ ${MAX_LOD_LEVELS} ];
 uniform vec4 uTlodNearRect;
 uniform vec4 uTlodExtent;
-attribute vec4 iNode;
 
 float tlodGrid( sampler2D tex, vec2 origin, vec4 lv, vec2 p ) {
   float cols = lv.x;
@@ -489,6 +498,21 @@ float tlodHeight( vec2 p, float nodeStep ) {
   int k = tlodLevel( uTlodFarGeom.z, uTlodFarGeom.w, nodeStep );
   return tlodGrid( uTlodFar, uTlodFarGeom.xy, uTlodFarLevel[ k ], p );
 }
+`;
+}
+
+/**
+ * The VERTEX side: the patch attribute and the whole of `tlodCompute`, on top
+ * of the sampler chunk above.
+ *
+ * `nodeStep` is what picks the mip level, and it is the node's own — a leaf
+ * reads the 2 m lattice, a distant node the level whose error the server
+ * declared for it. `tlodCompute` blends its own level with its parent's, which
+ * is the morph.
+ */
+export function terrainLodGlsl(): string {
+  return `${terrainLodSampleGlsl()}
+attribute vec4 iNode;
 
 vec3 tlodWorld;
 vec3 tlodNormal;
@@ -611,6 +635,26 @@ const uNearRect = { value: new THREE.Vector4(0, 0, -1, -1) };
 const uExtent = { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) };
 
 /**
+ * Hang the eight shared height uniforms into a shader that includes
+ * `terrainLodSampleGlsl()`.
+ *
+ * Exported for the water mirror (E4, `scene/waterPlane.ts`): it reads the same
+ * pyramids from its FRAGMENT shader and must read them through the same
+ * objects, or a pyramid swap would reach the terrain and leave the lake
+ * measuring its depth against yesterday's ground.
+ */
+export function bindTerrainLodUniforms(uniforms: Record<string, unknown>): void {
+  uniforms.uTlodNear = uNear;
+  uniforms.uTlodFar = uFar;
+  uniforms.uTlodNearGeom = uNearGeom;
+  uniforms.uTlodFarGeom = uFarGeom;
+  uniforms.uTlodNearLevel = uNearLevel;
+  uniforms.uTlodFarLevel = uFarLevel;
+  uniforms.uTlodNearRect = uNearRect;
+  uniforms.uTlodExtent = uExtent;
+}
+
+/**
  * Give a ground material the CDLOD vertex displacement.
  *
  * THREE ANCHORS, and each one is deliberate:
@@ -636,14 +680,7 @@ export function patchTerrainLod(mat: THREE.Material): void {
     : '';
   mat.onBeforeCompile = (shader, renderer) => {
     prev.call(mat, shader, renderer);
-    shader.uniforms.uTlodNear = uNear;
-    shader.uniforms.uTlodFar = uFar;
-    shader.uniforms.uTlodNearGeom = uNearGeom;
-    shader.uniforms.uTlodFarGeom = uFarGeom;
-    shader.uniforms.uTlodNearLevel = uNearLevel;
-    shader.uniforms.uTlodFarLevel = uFarLevel;
-    shader.uniforms.uTlodNearRect = uNearRect;
-    shader.uniforms.uTlodExtent = uExtent;
+    bindTerrainLodUniforms(shader.uniforms as unknown as Record<string, unknown>);
     if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
     shader.vertexShader = terrainLodGlsl() + shader.vertexShader
       .replace('#include <uv_vertex>', `\ttlodCompute();
