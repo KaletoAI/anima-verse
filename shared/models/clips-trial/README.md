@@ -23,6 +23,41 @@ Collection files at the top level:
   `_catalog.json` takes the clip path from it.
 * `_errors.json` — takes whose conversion failed, with the reason
   (`_catalog_errors.json` for takes the measurement could not read).
+* `_status.json` — the REVIEW state, written by the admin UI (see below).
+
+## Browsing and importing (Game-Admin → Poses → CMU clip catalog)
+
+`app/core/clip_catalog.py` + three admin-only routes in `app/routes/assets.py`:
+
+    GET  /assets/clip-catalog                  catalog + review state, merged
+    PUT  /assets/clip-catalog/{take}/status    {favorite?, rejected?}
+    POST /assets/clip-catalog/{take}/import    {kind, set, start_s, end_s,
+                                                loop_s, in_place, overwrite}
+    GET  /assets/animation-clips/trial/{rel}   one trial clip, for the preview
+
+`_status.json` is this UI's own file — `{"takes": {"<id>": {"favorite",
+"rejected", "imported": [{kind, set, source, at}]}}}`. `favorite` and
+`rejected` are independent booleans, not one tri-state; `imported` is the trace
+of what was already lifted out of that take (one entry per kind+set).
+
+An import runs `app/core/cmu_import.py` synchronously — the same functions the
+`scripts/clip_import_cmu.py` CLI uses — on the ORIGINAL ASF/AMC under
+`shared/models/mocap-src`, not on the trial FBX: the clip is re-cut and
+retargeted from scratch, so window/loop/in-place are real conversion
+parameters. A pair take always imports BOTH halves as one kind. The target is
+always the FREE library (`shared/models/clips`); CMU data is redistributable,
+which is the whole reason it may live there.
+
+PARTIAL STATE IS NORMAL. Measuring and converting run in the background, so a
+take may have no clip yet (the browser shows "not converted yet" instead of a
+preview — importing still works, it goes to the original) and takes may be
+missing from the catalog entirely.
+
+Trial clips are in NO library: `animation_clips` never scans this directory,
+they never appear in `/assets/animation-clips`, and no character can play one.
+
+Checked by `scripts/smoke_clip_catalog.py` (`--real <take>` adds one true
+Blender conversion when Blender and the originals are present).
 
 `speed_factor` in an index record is always `1.0` today: the converter hands
 the capture rate to Blender, so the takes recorded at 60 Hz keep their real

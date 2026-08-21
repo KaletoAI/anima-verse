@@ -47,8 +47,9 @@ GET /play/locations/{id}/scene     models[] spec with `roof_only: true`
 client                             recipe shell STAYS, roof sits on top
 ```
 
-**The server thinks, Blender builds** — the same division of labour as the
-context render (`app/core/scene_context.py` ↔ `app/blender/scripts/scene_context.py`).
+**The server thinks, Blender builds** — the same division of labour every
+Blender job here follows (`app/core/*.py` decides, `app/blender/scripts/*.py`
+executes).
 The script receives finished vertex lists; it computes no geometry, so every
 number in the GLB traces back to a function in `app/core/roof_model.py` and the
 smoke can check the mesh **without a Blender binary**.
@@ -169,8 +170,7 @@ it was built from. For the 10 × 8 m example at 30°/0.40 m:
 
 ### The frame, converted once
 
-`(x, y, z)_scene → (x, −z, y)_blender` in `build_job` — exactly as
-`scene_context` does it. The glTF exporter's own conversion
+`(x, y, z)_scene → (x, −z, y)_blender` in `build_job`. The glTF exporter's own conversion
 (`Blender (x, y, z) → glTF (x, z, −y)`) brings it back, so the stored GLB speaks
 the **scene frame** like every other building model. The smoke checks this on
 the exported accessor's min/max, not on a screenshot.

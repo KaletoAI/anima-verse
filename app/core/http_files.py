@@ -23,7 +23,7 @@ def etag_file_response(path: Path, request: Request, media_type: str,
     asset a client CONSUMES — a texture in a material, a mesh in a scene, a
     PNG in an ``<img>``, a clip in a mixer. Starlette's own default is
     ``attachment``, which turned every such link into a download: clicking a
-    picture in the scene-run strip saved a file instead of showing it (user
+    picture in an admin strip saved a file instead of showing it (user
     finding 2026-08-21). ``filename`` still rides along, so a save the USER
     asks for (an ``<a download>``, "save image as") keeps the proper name.
     Pass ``"attachment"`` for a route whose whole purpose IS a download.

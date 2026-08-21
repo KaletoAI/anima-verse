@@ -48,9 +48,9 @@ meshes. From that one law the rest is derivable and checked below:
     mesher, never variant 0's picture (that was the defect: one image, so an
     older variant's re-mesh produced a mesh of the wrong object);
   - deleting variant 1 removes `source-v2.png` and nothing else;
-  - the scene-asset pipeline hands its cutout to the SAME writer with the
-    run's target variant, so a later re-mesh reproduces that very picture —
-    with its alpha, because the cutout is transparent outside the object.
+  - an uploaded cut-out goes through the SAME writer with its target variant,
+    so a later re-mesh reproduces that very picture — with its alpha, because
+    a cut-out is transparent outside the object.
 
 THE LIBRARY LIST FLAGS INCOMPLETE VARIANTS (2026-08-20). The admin record
 carries three counts over the ACTIVE variants — `variants_total`,
@@ -67,33 +67,11 @@ says which. HAND CASE, three active variants:
 A switched-off variant renders nowhere, so it cannot be missing anything
 either: switching variant 2 off leaves 2 / 0 / 1.
 
-WHERE THE PICTURE WAS TAKEN (2026-08-20). A source image is either a product
-shot (the object alone on neutral ground) or a scene-context cutout (drawn into
-a rendered spot and cut back out of it). The second carries that spot's light
-and ground, so the two are not interchangeable and the admin has to see which
-is which. The contract is deliberately the CHEAP one, and section 16 derives it
-by hand from that choice:
-
-    origin ABSENT  → product shot     (every image ever written; no migration)
-    origin "scene_context" + origin_location / origin_location_id / origin_ts
-
-From "absence is the product shot" three things follow and are checked:
-
-  - the ordinary generation chain writes NO origin key at all — not an empty
-    one, because an empty key and an absent key would mean the same thing and
-    only one of them may exist;
-  - the origin survives `list_variants`, i.e. the variant-list SANITIZER: it
-    rebuilds every entry from a whitelist, so a key it does not know is
-    silently dropped on the next write to ANY variant of the same prop;
-  - a re-render as a product shot CLEARS it, on the variant entry and on the
-    master record alike — a stale location would keep pointing at a spot the
-    new picture was never taken at.
-
 THE IN-FLIGHT GUARD IS PER (PROP, VARIANT) (2026-08-20). A variant is a whole
 version of the object, so a run belongs to ONE of them — the guard key is
 ``prop | store variant index | backend``, and what it protects against is the
 DOUBLE START of the same job, nothing else. From that one law follows what is
-checked in section 17, and the user finding it comes from:
+checked in section 16, and the user finding it comes from:
 
   - two variants of the same prop generate side by side (the GPU channel
     serializes the backend work; the guard is not a second queue);
@@ -112,7 +90,7 @@ checked in section 17, and the user finding it comes from:
 SEASON-TAGGED VARIANTS (E2c, 2026-08-20). A variant may name the seasons it
 depicts; EFFECTIVELY active = manually active AND (no tag OR the world's
 current season among them), matched case-insensitively against the season's
-key and names. Section 18 derives its cases by hand from the shipped calendar
+key and names. Section 17 derives its cases by hand from the shipped calendar
 (4 seasons × 30 days, spring/summer/autumn/winter → season starts 0/30/60/90,
 so day-of-year 5/35/65/95 is day 5 of spring/summer/autumn/winter):
 
@@ -133,7 +111,6 @@ so day-of-year 5/35/65/95 is day 5 of spring/summer/autumn/winter):
 
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
-import ast
 import io
 import json
 import os
@@ -245,33 +222,6 @@ def install_fakes() -> None:
                                               "backends": []}
 
 
-def scene_asset_writes_cutout_with_variant() -> bool:
-    """Does ``scene_asset._attempt`` hand its cutout to the prop store WITH
-    the run's variant?
-
-    The pipeline step itself needs an image backend and a GPU, so the wiring
-    is read out of the source instead: the call must be
-    ``save_source_image(prop_id, <cutout bytes>, variant, …)``. A call that
-    dropped the third argument would write into the PRIMARY variant — the very
-    defect this law exists against, and one no pure check downstream could
-    see."""
-    src = Path(__file__).resolve().parents[1] / "app" / "core" / "scene_asset.py"
-    tree = ast.parse(src.read_text())
-    for fn in ast.walk(tree):
-        if not (isinstance(fn, ast.FunctionDef) and fn.name == "_attempt"):
-            continue
-        for node in ast.walk(fn):
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "save_source_image"):
-                continue
-            args = node.args
-            return (len(args) >= 3
-                    and isinstance(args[2], ast.Name)
-                    and args[2].id == "variant")
-    return False
-
-
 def placement(prop_id: str, **extra) -> dict:
     """A room-recipe placement of one prop, as `_prop_models` receives it."""
     prop = store.get_prop(prop_id) or {}
@@ -339,7 +289,7 @@ def set_no_seasons() -> None:
 def season_section() -> None:
     from app.core import game_time as gt
 
-    print("\n[18] SEASON-tagged variants (E2c)")
+    print("\n[17] SEASON-tagged variants (E2c)")
     set_season("winter")
     cal = gt.Calendar.default()
     parts = gt._SMOKE_NOW.parts(cal)
@@ -700,17 +650,17 @@ def main() -> int:
     check("...and the freed slot starts without an image",
           store.add_variant(lamp) == 1 and store.source_path(lamp, 1) is None)
 
-    print("\n[14] the scene-asset cutout becomes the target variant's image")
-    # The pipeline picks its variant ONCE per run (`props.target_variant`) and
-    # hands the cutout to the same writer — checked here on the writer, and on
-    # the call site's wiring, because the pipeline itself needs a GPU.
+    print("\n[14] an uploaded cut-out becomes the target variant's image")
+    # A caller picks its variant ONCE (`props.target_variant`) and hands the
+    # picture to the same writer every render uses — so an upload and a render
+    # land under the same name and behave the same on a later re-mesh.
     stone = store.create_prop(name="Stone")["id"]
     put_mesh(stone, 0)                                  # variant 0 is taken
     target = store.target_variant(stone)
     check("a prop with one meshed variant targets a fresh variant 1",
           target == 1, str(target))
     cutout = png_bytes((200, 30, 30), alpha=True)
-    check("the cutout is stored as that variant's source image",
+    check("the cut-out is stored as that variant's source image",
           store.save_source_image(stone, cutout, target, backend="fake-image",
                                   prompt="a stone"))
     sp = store.source_path(stone, target)
@@ -720,7 +670,7 @@ def main() -> int:
           store.source_path(stone, 0) is None)
     from PIL import Image
     saved = Image.open(sp)
-    check("...and the transparency survived — a cutout is transparent "
+    check("...and the transparency survived — a cut-out is transparent "
           "outside the object",
           saved.mode == "RGBA" and saved.getpixel((0, 0))[3] == 0
           and saved.getpixel((16, 16))[3] == 255,
@@ -730,8 +680,6 @@ def main() -> int:
                     variant=target)
     check("...so a later re-mesh of that variant reproduces that picture",
           MESH_INPUTS == ["source-v2.png"], str(MESH_INPUTS))
-    check("the pipeline hands the cutout to the writer WITH the run's variant",
-          scene_asset_writes_cutout_with_variant())
 
     print("\n[15] the record counts INCOMPLETE variants — the library badges")
     # Hand case (docstring): three active variants, one without a mesh, one
@@ -774,85 +722,7 @@ def main() -> int:
                                       "variants_missing_image")),
           str(sorted(lean.keys())))
 
-    print("\n[16] the ORIGIN of a picture — product shot vs. scene context")
-    # The run stamp is the SCENE run's own start (scene_asset writes
-    # `record["started_at"]` here, never a fresh clock read) — a fixed string,
-    # so the check has nothing to do with when this smoke runs.
-    RUN_TS = "2026-08-20T09:15:00+00:00"
-    torch = store.create_prop(name="Torch")["id"]
-    store._generate(torch, "a torch", "", "fake", "fake-mesh", variant=0)
-    img0 = store.list_variants(torch)[0]["image"]
-    check("an ordinary product shot records NO origin",
-          img0["origin"] == "" and img0["origin_location"] == "",
-          str(img0))
-    check("...and writes no origin key onto the sidecar either — absence IS "
-          "the product shot",
-          not any(k.startswith("source_origin")
-                  for k in store.read_sidecar(torch)),
-          str(sorted(k for k in store.read_sidecar(torch)
-                     if k.startswith("source"))))
-
-    target = store.target_variant(torch)
-    check("the scene run targets a fresh variant 1", target == 1, str(target))
-    store.save_source_image(torch, png_bytes((240, 180, 40), alpha=True), target,
-                            backend="fake-image", prompt="a torch in the mill",
-                            origin=store.ORIGIN_SCENE_CONTEXT,
-                            origin_location="Old Mill",
-                            origin_location_id="old-mill", origin_ts=RUN_TS)
-    img1 = store.list_variants(torch)[1]["image"]
-    check("a scene cutout is stamped scene_context with its spot and its run",
-          (img1["origin"], img1["origin_location"], img1["origin_location_id"],
-           img1["origin_ts"])
-          == ("scene_context", "Old Mill", "old-mill", RUN_TS), str(img1))
-    check("...and variant 0 is untouched by it",
-          store.list_variants(torch)[0]["image"]["origin"] == "")
-
-    # The list sanitizer rebuilds EVERY entry from its whitelist on every
-    # write, so a third variant's arrival is what would silently drop an
-    # unknown key from the second one.
-    store.add_variant(torch)
-    img1 = store.list_variants(torch)[1]["image"]
-    check("the origin survives a rewrite of the variant list",
-          (img1["origin"], img1["origin_location"]) == ("scene_context",
-                                                        "Old Mill"),
-          str(img1))
-
-    store._generate(torch, "a plain torch", "", "fake", "fake-mesh",
-                    image_only=True, variant=1)
-    img1 = store.list_variants(torch)[1]["image"]
-    check("re-rendering it as a product shot CLEARS the origin, spot included",
-          (img1["origin"], img1["origin_location"], img1["origin_ts"])
-          == ("", "", ""), str(img1))
-    check("...and the picture's own provenance moved on with it",
-          img1["prompt"] == "a plain torch", str(img1["prompt"]))
-
-    # The base stem keeps its provenance on the MASTER record, and the scene
-    # pipeline may well target variant 0 (a prop whose first slot is empty).
-    store.save_source_image(torch, png_bytes((240, 180, 40), alpha=True), 0,
-                            backend="fake-image", prompt="a torch in the yard",
-                            origin=store.ORIGIN_SCENE_CONTEXT,
-                            origin_location="Old Mill",
-                            origin_location_id="old-mill", origin_ts=RUN_TS)
-    meta = store.read_sidecar(torch)
-    check("variant 0's origin lands on the master record",
-          (meta.get("source_origin"), meta.get("source_origin_location"),
-           meta.get("source_origin_location_id"), meta.get("source_origin_ts"))
-          == ("scene_context", "Old Mill", "old-mill", RUN_TS),
-          str({k: v for k, v in meta.items() if k.startswith("source_origin")}))
-    check("...and reads back through the strip like any other variant's",
-          store.list_variants(torch)[0]["image"]["origin"] == "scene_context")
-    store._generate(torch, "a torch again", "", "fake", "fake-mesh",
-                    image_only=True, variant=0)
-    check("a product shot over it REMOVES the master keys, not empties them",
-          not any(k.startswith("source_origin")
-                  for k in store.read_sidecar(torch)),
-          str(sorted(k for k in store.read_sidecar(torch)
-                     if k.startswith("source"))))
-    check("the lean library record still carries no origin at all",
-          not any(k.startswith("source_origin") or k == "origin"
-                  for k in {p["id"]: p for p in store.list_props()}[torch]))
-
-    print("\n[17] the in-flight guard is per (prop, VARIANT), not per prop")
+    print("\n[16] the in-flight guard is per (prop, VARIANT), not per prop")
     # The chain itself is two GPU steps and has no business here — what is
     # under test is the BOOKKEEPING around it. So `_generate` is replaced by a
     # stub that blocks until this smoke lets it go: that is what makes several

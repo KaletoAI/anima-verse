@@ -7,7 +7,7 @@ roof, because the far view already shows a location's walls
 the outline and the eaves height are known, so the only thing left to decide
 is the roof's FORM, and that is a taste question an LLM may answer.
 
-THE DIVISION OF LABOUR is the one ``scene_context.py`` uses: this module
+THE DIVISION OF LABOUR: this module
 decides, ``app/blender/scripts/roof_build.py`` executes. The script receives
 finished vertex lists and a material, builds, exports — it computes no
 geometry, so every number in the GLB can be traced back to a function in here
@@ -25,7 +25,7 @@ clamped fields — junk becomes a default, never an exception and never an
 
 THE FRAME is the location's own SCENE frame (``scene_recipe``): origin at the
 anchor pin, x east, y up, z south, metres. Blender is Z-up, so the job
-converts ONCE, here, exactly like ``scene_context``::
+converts ONCE, here::
 
     (x, y, z)_scene  ->  (x, -z, y)_blender
 

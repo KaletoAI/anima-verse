@@ -2811,7 +2811,7 @@ gecarvt wäre er wieder weggehobelt.
 
 **Wer die Funktion liest:** Serverregeln (`world_geometry.ground_y` →
 `heightfield.world_height`, `nav_grid`, das Steilheits-Gate von
-`POST /play/pos`, `scene_asset.ground_sampler`, `scene_context`),
+`POST /play/pos`),
 Client-Regeln (Figur, Props, Scatter, Unterwuchs, Klick) und **das Bild** (der
 Terrain-Vertex-Shader). Serverseitig ist der Vorrang `Kachel, sonst 0` — die
 Übersicht liest der Server überhaupt nicht.
@@ -3815,7 +3815,6 @@ sie produziert.
 | `scripts/smoke_terrain_layers.py` | [1] Raster == `rank_at` == `kind_at` an 500 Gitterproben, die sd-Quantisierung, der Endpunkt in beiden Modi, `uniform`, `waters` |
 | `scripts/smoke_terrain_types.py` [9] | die Sanitizer der Katalog-Felder (`edge_blend_m` mit 0 als WERT, Relief-Amplitude/Welle) |
 | `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor`; **[4a]** der Wandsaum — beide Grenzen des 0,14-Maßes von Hand, die feste Oberkante, der ungesäumte Sturz, die ungesäumte Türschwelle und die unbewegte deklarierte Etage |
-| `scripts/smoke_scene_asset.py` / `scripts/smoke_scene_context.py` | die Kontaktprüfung einer Platzierung gegen `ground_sampler` |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
 **Client — Höhe, Schnitt, Wasser, Szene**
@@ -4456,62 +4455,20 @@ für den das Prop keine Variante hat, ist 404.
 **Hochladen.** `POST /world/props/{id}/variants/{i}/source` (Multipart,
 `file`); unqualifiziert `POST /world/props/{id}/source` für die primäre
 Variante. Das Bild wird als PNG mit höchstens 1024 px abgelegt, **Alpha
-bleibt erhalten** — der Ausschnitt der Szenen-Pipeline ist außerhalb des
+bleibt erhalten** — ein freigestelltes Bild ist außerhalb des
 Objekts transparent, und ein plattgerechnetes Bild gäbe dem Mesher einen
 Hintergrund zurück, den er gerade loswerden sollte.
-
-**Szenen-Pipeline.** `app/core/scene_asset.py` schreibt seinen Cutout als
-Quellbild der Ziel-Variante (`props.save_source_image` mit dem einmal
-gewählten `target_variant`), bevor daraus gemesht wird. Ein späteres
-Neu-Meshen derselben Variante reproduziert damit genau dieses Bild.
 
 Nachprüfbar in `scripts/smoke_prop_variants.py` (§ B5a, Abschnitte 10–14):
 Handrechnung der Namen aus den Stämmen, ein Lauf in Variante 1 lässt
 `source.png` byte-identisch, das Neu-Meshen bekommt `source-v2.png` gereicht.
 
-### Ergänzung 2026-08-20: Woher das Bild stammt (`origin`)
+### ~~Ergänzung 2026-08-20: Woher das Bild stammt (`origin`)~~ — ENTFALLEN 2026-08-21
 
-Ein Quellbild entsteht auf genau zwei Wegen, und der Unterschied ist sichtbar
-zu machen: als **Produktfoto** (Use Case `prop` — der Gegenstand allein vor
-neutralem Grund) oder als **Szenen-Ausschnitt** (`scene_asset.py` — in eine
-gerenderte Stelle hineingezeichnet und wieder herausgeschnitten). Der zweite
-trägt Licht, Boden und Umgebung EINER Location, ist also mit einem Produktfoto
-nicht austauschbar. Deshalb steht neben den vier Herkunftsfeldern:
-
-| Feld | Bedeutung |
-|---|---|
-| `origin` | `"scene_context"` — oder **gar nicht da**, und das ist das Produktfoto |
-| `origin_location` | Anzeigename der Location zum Zeitpunkt des Laufs |
-| `origin_location_id` | deren Id |
-| `origin_ts` | `started_at` DES LAUFS, nie eine frische Uhrzeit |
-
-**Abwesenheit ist der billigere Vertrag und deshalb der gewählte:** jedes je
-geschriebene Bild ist ein Produktfoto, bis ein Szenen-Lauf etwas anderes sagt —
-kein Prop im Feld muss migriert werden. Die drei Begleitfelder stehen nur MIT
-einem `origin` und werden mit ihm gelöscht; ein erneutes Produktfoto über
-dieselbe Variante entfernt sie, statt eine Location stehen zu lassen, an der
-dieses Bild nie aufgenommen wurde. Ablage wie bei den vier anderen: Basis-Stamm
-auf dem Master-Record (`source_origin*`), jede weitere Variante unter `image`
-an ihrem Eintrag. `GET /world/props/{id}/variants` liefert alle acht Felder je
-Variante; der **Library-Listeneintrag bleibt schlank** und trägt keines davon.
-
-**Vorher/Nachher.** Der Lauf hält fest, was er ersetzt: `result.json` bekommt
-`previous_variant` (die **Ablage-Nummer** der Variante, auf die die Platzierung
-vor dem Lauf zeigte) und das Bild dieser Variante als `before.png` **im
-Lauf-Verzeichnis**. Kopiert wird beim Start, nicht danach: verfeinert der Lauf
-genau diese Variante, überschreibt er ihr Quellbild wenige Zeilen später — eine
-Live-URL zeigte dann zweimal das Nachher. Umgerechnet wird mit MODULO wie in
-beiden Renderern (`variant` ist eine Position, `?variant=<i>` eine
-Ablage-Nummer). Der Streifen im Grundriss-Editor zeigt daraufhin vier Bilder:
-**Vorher → Kontext-Render → Edit-Ergebnis → Nachher (Freistellung + Mesh)**;
-die äußeren beiden sind dieselbe Art Bild und damit vergleichbar.
-
-Nachprüfbar in `scripts/smoke_prop_variants.py` Abschnitt 16 (Produktfoto
-schreibt keinen Schlüssel, der Ausschnitt schreibt alle vier, der Sanitizer der
-Variantenliste lässt sie stehen, ein Produktfoto darüber löscht sie) und
-`scripts/smoke_scene_asset.py` Abschnitt 10 (Handrechnung Position → Ablage-
-Nummer bei abgeschalteter Variante 1: 0→0, 1→2, 3→2; plus die drei
-Verdrahtungen, die keine reine Funktion sieht).
+Die Szenenkontext-Pipeline, die als einzige ein `origin` schrieb, ist ersatzlos
+entfernt. `GET /world/props/{id}/variants` liefert je Variante nur noch die vier
+Herkunftsfelder des Bildes (`backend`, `prompt`, `negative`, `generated_at`);
+`origin` / `origin_location` / `origin_location_id` / `origin_ts` gibt es nicht mehr.
 
 ## Nachtrag 2026-08-20 (§ B1/B2): Dach-Modelle (`roof_only`)
 
@@ -4618,13 +4575,6 @@ Fläche oder eine Platzierung angefasst wird (die Signaturen bewegen sich mit).
 `y_world − bottom_y` bleibt die komponierte Markerhöhe. Das ist gewollt und
 hier festgeschrieben: die Sitzfläche gehört zum Gegenstand, nicht zum Boden.
 
-**Die Kontaktprüfung zählt es zur SOLL-Basis** (`app/core/scene_asset.py`). Ein
-absichtlich versenkter Baum ist kein Schwebe- oder Durchdringungsfehler:
-`ground_sampler(loc, floor_y, ground_offset_m)` hebt das Gelände um denselben
-Betrag, den das Payload schon in `bottom_y` gesteckt hat, und das Sidecar trägt
-ihn als `target.ground_offset_m`. Nur der Rest — der Trimm der Platzierung und
-das Relief, das das Payload nicht kennen konnte — wird als Lücke gemessen.
-
 **Handrechnung (§ B5a).** Raum „a" des Rezept-Smokes, Plattenoberkante 0,10,
 Prop-Abstand 0,01, komponierte Markerhöhe 0,30, Prop mit `ground_offset_m −0.20`:
 
@@ -4635,17 +4585,8 @@ mit offset_y +0.05:  bottom_y = −0.04,  Marker = 0.26
 doppelt gezählt (die klassische Fehlerform) wäre bottom_y = −0.29
 ```
 
-Kontaktprüfung, Hof-Prop über einer 0,08-Etagenplatte, Gelände flach 0:
-
-```
-Sampler = 0.08 + (−0.20) = −0.12      bottom_y = 0.08 + 0.01 − 0.20 = −0.11
-Lücke = 0.01 ≤ Toleranz 0.05          → 9/9 in Kontakt
-offset-blind (Sampler 0.08): 0/9 → fällt durch das 0,60-Tor,
-    obwohl das Prop exakt dort steht, wo es stehen soll
-```
-
-Belegt in `scripts/smoke_scene_recipe.py` [9a], `scripts/smoke_scene_asset.py`
-[7] E, `scripts/smoke_terrain_areas.py` [15], `scripts/smoke_world_props.py`
+Belegt in `scripts/smoke_scene_recipe.py` [9a],
+`scripts/smoke_terrain_areas.py` [15], `scripts/smoke_world_props.py`
 [3], `client3d/scripts/smoke_scatter_math.mjs` (H8) und
 `client3d/scripts/smoke_world_props.mjs` [2a] — jeweils mit rotem Gegenversuch.
 

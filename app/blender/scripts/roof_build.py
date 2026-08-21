@@ -5,8 +5,7 @@ receives a job JSON with the mesh's vertices (already in Blender's Z-up
 frame), its faces, one material index per face and the materials themselves.
 It builds the mesh, paints it, exports ONE unrigged GLB — it computes no
 geometry, so every number in the result can be traced back to a function on
-the server side and the smoke can check the same numbers WITHOUT Blender
-(the pattern of ``scene_context.py``).
+the server side and the smoke can check the same numbers WITHOUT Blender.
 
 Job (``inputs["job"]``)::
 

@@ -28,7 +28,6 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { SCENE_CONTEXT_ORIGIN } from './propTypes'
 import type { PropVariant } from './propTypes'
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
@@ -178,18 +177,6 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                     {t('no image')}
                   </span>
                 )}
-                {/* A variant made in the scene is a different KIND of version:
-                    its picture was cut out of a rendered spot, so it carries
-                    that spot's light and ground. A product shot writes no
-                    origin at all, so it wears no badge. */}
-                {v.image?.origin === SCENE_CONTEXT_ORIGIN ? (
-                  <span className="ga-tag"
-                    title={t('Generated in scene at {loc}, {ts}')
-                      .replace('{loc}', v.image.origin_location || '—')
-                      .replace('{ts}', v.image.origin_ts.slice(0, 10) || '—')}>
-                    🎬
-                  </span>
-                ) : null}
               </div>
               {/* Season chips (E2c). A set, not a single choice: a variant may
                   depict two seasons. No chip lit = every season, which is why

@@ -26,6 +26,10 @@ const FIGURE_H = 1.7
 
 interface ApiClip { kind: string; role?: string; set?: string; url: string }
 
+/** Explicit clip URLs instead of a kind lookup — how the CMU catalog browser
+ *  previews a TRIAL clip, which is in no library and has no kind yet. */
+export interface ClipUrls { a?: string; b?: string; solo?: string }
+
 /** Root path of a half: hips XZ per key, clip centimetres → metres. */
 function rootPath(clip: AnimationClip): { times: ArrayLike<number>; xz: Float32Array } {
   const track = clip.tracks.find((tr) => tr.name.endsWith('.position') && /hips/i.test(tr.name))
@@ -51,15 +55,22 @@ function rootAt(path: { times: ArrayLike<number>; xz: Float32Array }, t: number)
   return { x: xz[lo * 2] + (xz[hi * 2] - xz[lo * 2]) * f, z: xz[lo * 2 + 1] + (xz[hi * 2 + 1] - xz[lo * 2 + 1]) * f }
 }
 
-export function ClipPreview({ kind, height = 300 }: { kind: string; height?: number }) {
+export function ClipPreview({ kind = '', height = 300, urls }:
+  { kind?: string; height?: number; urls?: ClipUrls }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<string>('')
   const [info, setInfo] = useState<{ dist: number; time: number; duration: number } | null>(null)
+  // The effect must not re-run on every render just because the caller passed a
+  // fresh object literal — the three URLs go in as ONE string and come apart
+  // again inside.
+  const urlKey = [urls?.a || '', urls?.b || '', urls?.solo || ''].join('|')
 
   useEffect(() => {
     const host = hostRef.current
-    if (!host || !kind) return
+    const [urlA, urlB, urlSolo] = urlKey.split('|')
+    const direct = !!(urlA || urlB || urlSolo)
+    if (!host || (!kind && !direct)) return
     let disposed = false
     let raf = 0
     const disposers: Array<() => void> = []
@@ -71,16 +82,23 @@ export function ClipPreview({ kind, height = 300 }: { kind: string; height?: num
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js')
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
         const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
-        const listing = await apiGet<{ clips?: ApiClip[] }>('/assets/animation-clips')
-        const clips = listing.clips || []
-        // neutral set first, then any set of the kind (same pick as the viewers)
-        const pick = (role: string) =>
-          clips.find((c) => c.kind === kind && (c.role || '') === role && !c.set)
-          || clips.find((c) => c.kind === kind && (c.role || '') === role)
-        const isPair = !!(pick('a') && pick('b'))
-        const parts: Array<{ role: 'a' | 'b' | ''; clip: ApiClip }> = isPair
-          ? [{ role: 'a', clip: pick('a')! }, { role: 'b', clip: pick('b')! }]
-          : pick('') ? [{ role: '', clip: pick('')! }] : []
+        let parts: Array<{ role: 'a' | 'b' | ''; url: string }> = []
+        if (direct) {
+          parts = urlA && urlB
+            ? [{ role: 'a', url: urlA }, { role: 'b', url: urlB }]
+            : [{ role: '', url: urlSolo || urlA || urlB }]
+        } else {
+          const listing = await apiGet<{ clips?: ApiClip[] }>('/assets/animation-clips')
+          const clips = listing.clips || []
+          // neutral set first, then any set of the kind (same pick as the viewers)
+          const pick = (role: string) =>
+            clips.find((c) => c.kind === kind && (c.role || '') === role && !c.set)
+            || clips.find((c) => c.kind === kind && (c.role || '') === role)
+          const isPair = !!(pick('a') && pick('b'))
+          parts = isPair
+            ? [{ role: 'a', url: pick('a')!.url }, { role: 'b', url: pick('b')!.url }]
+            : pick('') ? [{ role: '', url: pick('')!.url }] : []
+        }
         if (!parts.length) { setStatus(t('No clip file for this kind in shared/models/clips.')); return }
         const src = await loadTestFigure()
         if (!src) { setStatus(t('No test figure available (shared/models/figure).')); return }
@@ -117,8 +135,8 @@ export function ClipPreview({ kind, height = 300 }: { kind: string; height?: num
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
           return found
         }
-        for (const { role, clip: half } of parts) {
-          const obj = await fbx.loadAsync(half.url)
+        for (const { role, url } of parts) {
+          const obj = await fbx.loadAsync(url)
           const clip = obj.animations?.[0]
           if (!clip || disposed) return
           const path = rootPath(clip)
@@ -200,7 +218,7 @@ export function ClipPreview({ kind, height = 300 }: { kind: string; height?: num
       cancelAnimationFrame(raf)
       disposers.forEach((d) => d())
     }
-  }, [kind, height, t])
+  }, [kind, height, urlKey, t])
 
   return (
     <div style={{ marginTop: 8 }}>

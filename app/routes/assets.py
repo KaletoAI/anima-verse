@@ -15,16 +15,27 @@ name, ``set`` from the subdirectory the clip lies in; both vocabularies are
 OPEN — no list exists in the code, a new kind is just a new file and a new set
 just a new directory. Clips practically never change → served with an ETag and
 a long max-age.
+
+On top of the two libraries sits the CMU TRIAL archive (``clip_catalog``):
+``/assets/clip-catalog`` hands out the measured catalog of the whole database
+plus the reviewer's own state, ``/assets/animation-clips/trial/{rel}`` serves a
+converted take for preview, and ``/assets/clip-catalog/{take}/import`` turns
+one into a real clip of the free library. Those three are ADMIN-only and none
+of them touches the listing above — a trial clip is review material, not game
+content.
 """
 import mimetypes
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
+from app.core import clip_catalog
 from app.core.animation_clips import (CLIP_EXTS, clip_entries, clip_meta,
                                       pair_kinds)
+from app.core.auth_dependency import require_admin
+from app.core.cmu_import import ClipImportError
 from app.core.http_files import etag_file_response
 from app.core.log import get_logger
 from app.core.paths import get_animation_clips_dir, get_licensed_clips_dir
@@ -85,6 +96,122 @@ def list_animation_clips() -> Dict[str, Any]:
             # (female/male/animal, which follow from gender + the humanoid
             # feature) plus any further set found in the files.
             "sets": available_sets()}
+
+
+# ── The CMU trial archive (plan-clip-import.md step 1) ───────────────────
+#
+# The trial pool is NOT a clip library: nothing here is scanned by
+# animation_clips, nothing shows up in the listing above, and no character ever
+# plays one. It exists so an admin can WATCH a take before deciding to import
+# it. Hence its own route — and it has to be registered BEFORE the
+# ``{rel:path}`` catch-all below, which would otherwise swallow every
+# ``trial/…`` request and answer 404 from inside the free library.
+
+@router.get("/animation-clips/trial/{rel:path}")
+def get_trial_clip(rel: str, request: Request,
+                   _: Dict[str, Any] = Depends(require_admin)):
+    """Serves ONE converted trial clip, ``<main>/<sub>/<file>.fbx``.
+
+    Admin-only, like the whole catalog browser: this is review material, not
+    game content. Path validation is ``clip_catalog.resolve_trial_path``.
+    """
+    path = clip_catalog.resolve_trial_path(rel)
+    if path is None:
+        raise HTTPException(status_code=400, detail="Invalid trial clip path")
+    if not path.is_file():
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media_type, _mt = mimetypes.guess_type(str(path))
+    return etag_file_response(path, request,
+                              media_type or "application/octet-stream",
+                              cache_control="public, max-age=3600")
+
+
+@router.get("/clip-catalog")
+def get_clip_catalog(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The whole CMU catalog with the review state merged in.
+
+    One request, everything the browser needs: ``takes`` (each with its
+    metrics, sparkline, tags, group, its ``status`` and the ``clip_urls`` its
+    preview plays) plus the ``tags``/``facets``/``groups`` vocabularies.
+
+    PARTIAL is the normal state. The enrich run and the bulk conversion both
+    fill this file in the background: a take may have no ``clip`` yet (not
+    converted), and takes may be missing entirely (not measured yet). Neither
+    is an error — only a completely absent catalog is a 404.
+    """
+    data = clip_catalog.catalog_with_status()
+    if data is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no trial catalog at {clip_catalog.catalog_path()} — build it "
+                   "with scripts/cmu_fetch_all.py + scripts/cmu_enrich_index.py")
+    for take in data["takes"]:
+        take["clip_urls"] = clip_catalog.trial_clip_urls(take)
+    return data
+
+
+@router.put("/clip-catalog/{take_id}/status")
+async def put_clip_catalog_status(take_id: str, request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)
+                                  ) -> Dict[str, Any]:
+    """Sets ``favorite`` / ``rejected`` on one take. Only the fields present in
+    the body are touched, so a favorite click never clears a rejection."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object expected")
+    fav = body.get("favorite")
+    rej = body.get("rejected")
+    status = clip_catalog.set_status(
+        take_id.strip(),
+        favorite=None if fav is None else bool(fav),
+        rejected=None if rej is None else bool(rej))
+    return {"take_id": take_id, "status": status}
+
+
+@router.post("/clip-catalog/{take_id}/import")
+async def post_clip_catalog_import(take_id: str, request: Request,
+                                   _: Dict[str, Any] = Depends(require_admin)
+                                   ) -> Dict[str, Any]:
+    """Imports one take into the FREE clip library — synchronously.
+
+    Body: ``{kind, set?, start_s?, end_s?, loop_s?, in_place?, overwrite?,
+    target?}``. The conversion is a Blender run of a few seconds, so it answers
+    directly instead of going through the queue; the caller sees either the new
+    clip or the converter's own message.
+
+    ``target`` accepts only ``free``: CMU data is redistributable and that is
+    the whole reason its clips may live in the tracked library. Anything else
+    belongs to the (later) generic importer, not here.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object expected")
+    target = str(body.get("target") or "free").strip().lower()
+    if target != "free":
+        raise HTTPException(status_code=400,
+                            detail="CMU clips are redistributable — target must be 'free'")
+
+    def _num(key: str) -> Optional[float]:
+        raw = body.get(key)
+        if raw is None or raw == "":
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{key} must be a number")
+
+    try:
+        return clip_catalog.import_take(
+            take_id.strip(), body.get("kind"),
+            clip_set=str(body.get("set") or ""),
+            start_s=_num("start_s") or 0.0, end_s=_num("end_s"),
+            loop_s=_num("loop_s"),
+            in_place=bool(body.get("in_place", True)),
+            overwrite=bool(body.get("overwrite")))
+    except clip_catalog.ClipKindExists as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ClipImportError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def resolve_clip_path(rel: str) -> Optional[Path]:

@@ -19,6 +19,7 @@
  * under it — that is what the clear button next to the editor is for.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ClipCatalog } from './ClipCatalog'
 import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
@@ -28,6 +29,9 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 
 type Axis = 'pose' | 'expression'
+/** The tab has two surfaces: the catalog entries, and the CMU clip pool the
+ *  animation kinds themselves come from. */
+type View = 'entries' | 'catalog'
 
 interface Entry {
   key: string
@@ -62,6 +66,7 @@ export function PosesTab() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [axis, setAxis] = useState<Axis>('pose')
+  const [view, setView] = useState<View>('entries')
   const [data, setData] = useState<CatalogData>({ entries: [], kinds: [], problems: [] })
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [selected, setSelected] = useState<string>('')
@@ -140,6 +145,22 @@ export function PosesTab() {
     setApproveOf('')
     setDraft({ ...EMPTY })
   }, [])
+
+  /** "Create pose entry" out of the catalog browser: back to the entry editor
+   *  with a fresh pose draft whose animation is the kind just imported. The
+   *  axis is already 'pose' — switching INTO the catalog forces it, so the
+   *  axis-change effect below cannot wipe the draft right after it was set. */
+  const startFromClip = useCallback(
+    async (animation: string) => {
+      setView('entries')
+      setSelected('')
+      setIsNew(true)
+      setApproveOf('')
+      setDraft({ ...EMPTY, key: animation, animation })
+      await load()
+    },
+    [load],
+  )
 
   const startApprove = useCallback((c: Candidate) => {
     setSelected('')
@@ -258,9 +279,40 @@ export function PosesTab() {
     setDraft((prev) => (prev ? { ...prev, [k]: v } : prev))
   }, [])
 
+  const viewSwitch = (
+    <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+      {(['entries', 'catalog'] as View[]).map((v) => (
+        <button
+          key={v}
+          type="button"
+          className={`ga-btn ga-btn-sm${view === v ? ' ga-btn-primary' : ''}`}
+          onClick={() => {
+            // The catalog only ever produces POSE animations — pinning the axis
+            // here keeps "create pose entry" from landing on the expression
+            // catalog (and from being wiped by the axis-change reset).
+            if (v === 'catalog') setAxis('pose')
+            setView(v)
+          }}
+        >
+          {v === 'entries' ? t('Entries') : t('CMU clip catalog')}
+        </button>
+      ))}
+    </div>
+  )
+
+  if (view === 'catalog') {
+    return (
+      <div>
+        {viewSwitch}
+        <ClipCatalog onCreatePose={startFromClip} />
+      </div>
+    )
+  }
+
   return (
     <div className="ga-twocol">
       <aside className="ga-twocol-left">
+        {viewSwitch}
         <ListHeader
           title={t('Catalog')}
           onNew={addNew}

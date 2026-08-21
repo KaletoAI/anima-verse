@@ -76,26 +76,6 @@ is stored by the same law: the base stem keeps the master-record keys
 (``backend_image`` / ``prompt`` / ``negative`` / ``source_generated_at``),
 every further variant carries its own under ``image`` on its variant entry.
 
-WHERE THE PICTURE WAS TAKEN (2026-08-20). A source image is made one of two
-ways, and the difference is worth seeing: a **product shot** (the ``prop`` use
-case — the object alone on neutral ground) or a **scene-context cutout**
-(``scene_asset.py`` — the object drawn INTO a rendered spot and cut back out of
-it). The second kind carries the light, the ground and the surroundings of ONE
-location, so a variant generated that way is not interchangeable with a product
-shot, and the admin has to be able to tell them apart. Hence ``origin`` beside
-the four provenance keys:
-
-    origin              "scene_context", or ABSENT for a product shot
-    origin_location     the location's display NAME at run time
-    origin_location_id  its id
-    origin_ts           the run's own start stamp (never a fresh clock read)
-
-Absence is the product shot — the cheaper of the two contracts, and the one
-that needs no migration: every image ever written is a product shot until a
-scene run says otherwise. The three companion keys are written only WITH an
-origin and cleared with it, so re-rendering a scene variant as a product shot
-leaves no stale location behind.
-
 How many ACTIVE variants a prop may have is ``image_generation.prop_variant_max``
 (default 4). The FIRST ACTIVE variant is the **primary** one: it is what
 ``/assets/props/<id>/model`` serves without a ``variant`` parameter, what the
@@ -182,19 +162,6 @@ IMAGE_META_KEYS = ("backend", "prompt", "negative", "generated_at")
 _IMAGE_META_MASTER = {"backend": "backend_image", "prompt": "prompt",
                       "negative": "negative",
                       "generated_at": "source_generated_at"}
-#: WHERE the picture was taken (see the module docstring). Stored only when
-#: there IS an origin — an absent ``origin`` IS the product shot, which is why
-#: no prop in the field needs migrating.
-IMAGE_ORIGIN_KEYS = ("origin", "origin_location", "origin_location_id",
-                     "origin_ts")
-#: Master-record name of each origin key, for the base stem — the scene
-#: pipeline may well target variant 0 (a prop whose first slot is still empty).
-_IMAGE_ORIGIN_MASTER = {"origin": "source_origin",
-                        "origin_location": "source_origin_location",
-                        "origin_location_id": "source_origin_location_id",
-                        "origin_ts": "source_origin_ts"}
-#: The one origin value that is ever written. The other kind is ABSENCE.
-ORIGIN_SCENE_CONTEXT = "scene_context"
 #: SEASON TAGS of a variant (E2c, 2026-08-20). Optional list of season names
 #: from the world's ``game_seasons``; stored only when non-empty, because
 #: absence IS the default "no dependency" and an empty list beside a missing
@@ -294,9 +261,9 @@ def _prop_dir(prop_id: str, *, create: bool = False) -> Optional[Path]:
 
 
 def prop_dir(prop_id: str, *, create: bool = False) -> Optional[Path]:
-    """The prop's directory, for the pipelines that store their own artefacts
-    beside its model (the scene-context runs under ``scene_asset/<ts>/``).
-    Same rule as the internal reader: nothing is created unless asked for."""
+    """The prop's directory, for callers that store their own artefacts beside
+    its model. Same rule as the internal reader: nothing is created unless
+    asked for."""
     return _prop_dir(prop_id, create=create)
 
 
@@ -374,9 +341,6 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     A non-primary variant's SOURCE-IMAGE provenance rides along under
     ``image`` (the base stem keeps its four master-record keys instead) —
     every writer stores the sanitized list back, so it has to survive here.
-    The origin keys survive the same way but are kept only when they carry
-    something: an absent ``origin`` means product shot, and writing four empty
-    strings onto every variant would turn that absence into noise.
 
     ``seasons`` (E2c) survives by the same law: kept when it names seasons,
     dropped when it is empty — no dependency is stored as ABSENCE."""
@@ -396,10 +360,6 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             img = entry.get("image")
             if isinstance(img, dict):
                 rec["image"] = {k: str(img.get(k) or "") for k in IMAGE_META_KEYS}
-                for k in IMAGE_ORIGIN_KEYS:
-                    val = str(img.get(k) or "")
-                    if val:
-                        rec["image"][k] = val
             seasons = sanitize_season_tags(entry.get(SEASONS_KEY))
             if seasons:
                 rec[SEASONS_KEY] = seasons
@@ -990,8 +950,7 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     ``variant`` parameter (the primary one keeps the bare URL, which is the
     very string stored on scatter entries). ``image`` is what THIS variant's
     source image was rendered with — the panel shows the provenance of the
-    picture it is displaying, not of some other variant's — including its
-    ``origin``, which is what the strip's 🎬 badge is drawn from."""
+    picture it is displaying, not of some other variant's."""
     meta = read_sidecar(prop_id)
     entries = _variant_list(meta)
     primary = _effective_indices(entries)[0]
@@ -1341,12 +1300,10 @@ def source_path(prop_id: str, variant: Any = None) -> Optional[Path]:
 
 def _image_meta(meta: Dict[str, Any], stem: str) -> Dict[str, str]:
     """What is recorded about ONE variant's source image: backend, prompt,
-    negative, generated_at, plus the four origin keys (empty strings when
-    nothing is recorded — and an empty ``origin`` IS "product shot")."""
-    keys = IMAGE_META_KEYS + IMAGE_ORIGIN_KEYS
+    negative, generated_at (empty strings when nothing is recorded)."""
+    keys = IMAGE_META_KEYS
     if stem == MODEL_STEM:
-        master = {**_IMAGE_META_MASTER, **_IMAGE_ORIGIN_MASTER}
-        return {k: str(meta.get(master[k]) or "") for k in keys}
+        return {k: str(meta.get(_IMAGE_META_MASTER[k]) or "") for k in keys}
     for entry in _variant_list(meta):
         if entry["stem"] == stem:
             img = entry.get("image") or {}
@@ -1355,31 +1312,14 @@ def _image_meta(meta: Dict[str, Any], stem: str) -> Dict[str, str]:
 
 
 def _set_image_meta(meta: Dict[str, Any], stem: str, *, backend: str = "",
-                    prompt: str = "", negative: str = "", origin: str = "",
-                    origin_location: str = "", origin_location_id: str = "",
-                    origin_ts: str = "") -> None:
+                    prompt: str = "", negative: str = "") -> None:
     """Record what a freshly written source image was made with, IN PLACE.
-    The caller writes the sidecar.
-
-    The origin travels with the picture, so it is REPLACED on every write and
-    not merged: re-rendering a scene-context variant as an ordinary product
-    shot must drop the location it used to come from, or the badge would keep
-    pointing at a spot this image was never taken at."""
+    The caller writes the sidecar."""
     rec = {"backend": backend, "prompt": prompt, "negative": negative,
            "generated_at": utc_now_iso()}
-    if (origin or "").strip():
-        rec.update({"origin": origin.strip(),
-                    "origin_location": origin_location,
-                    "origin_location_id": origin_location_id,
-                    "origin_ts": origin_ts})
     if stem == MODEL_STEM:
         for k, m in _IMAGE_META_MASTER.items():
             meta[m] = rec[k]
-        for k, m in _IMAGE_ORIGIN_MASTER.items():
-            if k in rec:
-                meta[m] = rec[k]
-            else:
-                meta.pop(m, None)
         return
     entries = _variant_list(meta)
     for entry in entries:
@@ -1390,21 +1330,13 @@ def _set_image_meta(meta: Dict[str, Any], stem: str, *, backend: str = "",
 
 def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
                       backend: str = "", prompt: str = "",
-                      negative: str = "", origin: str = "",
-                      origin_location: str = "", origin_location_id: str = "",
-                      origin_ts: str = "") -> bool:
-    """Store image bytes as ONE variant's source image (upload, or the scene
-    asset pipeline's cutout). False when the prop/variant is unknown or the
-    bytes are not a readable image.
-
-    ``origin`` says WHERE the picture was taken — :data:`ORIGIN_SCENE_CONTEXT`
-    for a cutout out of a rendered spot, nothing at all for a product shot (the
-    module docstring's contract). Its three companions describe that spot and
-    the run: they are stored only alongside an origin, and cleared with it.
+                      negative: str = "") -> bool:
+    """Store image bytes as ONE variant's source image. False when the
+    prop/variant is unknown or the bytes are not a readable image.
 
     The picture is normalised exactly like a rendered one — at most 1024 px on
-    the long edge, PNG — but an ALPHA channel survives: the scene-asset cutout
-    is transparent outside the object, and flattening it would hand the next
+    the long edge, PNG — but an ALPHA channel survives: a cut-out upload is
+    transparent outside the object, and flattening it would hand the next
     re-mesh a background the mesher has to guess away again."""
     import io
 
@@ -1428,10 +1360,7 @@ def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
     img.save(target, "PNG")
     meta = _materialize_dims(prop_id, read_sidecar(prop_id))
     _set_image_meta(meta, _stem_of(prop_id, variant), backend=backend,
-                    prompt=prompt, negative=negative, origin=origin,
-                    origin_location=origin_location,
-                    origin_location_id=origin_location_id,
-                    origin_ts=origin_ts)
+                    prompt=prompt, negative=negative)
     _write_sidecar(prop_id, meta)
     logger.info("Prop %s: source image stored for variant %s (%s, %d bytes)",
                 safe_prop_id(prop_id), variant, target.name, len(contents))

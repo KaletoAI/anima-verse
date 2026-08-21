@@ -604,7 +604,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           calibrationRoomId={calibration?.roomId || ''}
           onCalibrationAt={(at) => setCalibration((cur) => (cur ? { ...cur, at } : cur))}
           unsaved={dirty}
-          onServerEdit={onChanged}
         >
           {floorSelRoom?.id ? (
             <RoomModelAdjust

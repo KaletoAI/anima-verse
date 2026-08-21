@@ -72,7 +72,6 @@ from app.routes import play as play_route
 from app.routes import api_images as api_images_route
 from app.routes import assist as assist_route
 from app.routes import prop_variants as prop_variants_route
-from app.routes import scene_asset as scene_asset_route
 from app.scheduler.scheduler_manager import SchedulerManager
 from app.core.dependencies import initialize_channels, get_skill_manager
 from app.core.provider_manager import initialize_provider_manager
@@ -597,9 +596,6 @@ app.include_router(world.router, tags=["world"])
 # (…/props/{id}/variants/…), so this is order-independent, but the variant
 # routes are an extension of the prop library and belong beside it.
 app.include_router(prop_variants_route.router)
-# The scene-asset pipeline (Etappe 4): its own prefix /world/scene-asset, so
-# nothing here can shadow a prop or location path.
-app.include_router(scene_asset_route.router)
 app.include_router(telegram.router, tags=["telegram"])
 app.include_router(templates.router)
 app.include_router(story.router)

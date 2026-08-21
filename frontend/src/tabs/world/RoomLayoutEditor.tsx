@@ -75,7 +75,7 @@ import { PlanFigure, PlanMetreGrid, PlanScaleBar } from './PlanMeasure'
 import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
-import { ScenePropPanel } from './ScenePropPanel'
+import { PropVariantPicker } from './PropVariantPicker'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
@@ -184,14 +184,10 @@ interface RoomLayoutEditorProps {
    *  it moves the figure (fraction of the room rectangle, UI state only). */
   calibrationRoomId?: string
   onCalibrationAt?: (at: [number, number]) => void
-  /** The location draft carries unsaved changes. The scene-asset pipeline
-   *  reads the STORED world, so its button has to know: a placement that only
-   *  exists in this draft does not exist for it. */
+  /** The location draft carries unsaved changes. Actions that work on the
+   *  STORED world have to know: a room that only exists in this draft does
+   *  not exist for them. */
   unsaved?: boolean
-  /** Something wrote into the STORED location behind the editor's back (a
-   *  finished scene-asset run sets variant/yaw/offset on the placement) —
-   *  the parent reloads so the draft stops being stale. */
-  onServerEdit?: () => void
   /** Rendered at the bottom INSIDE the editor's frame — the Floor-plan tab
    *  slots the model adjustment strip of the selected room here. */
   children?: ReactNode
@@ -272,7 +268,7 @@ const atOrigin = (lay: PlacedLayout, ground: boolean): Pt =>
 const storedAt = (lay: PlacedLayout, ground: boolean, p: Pt): Pt =>
   (ground ? p : localToRoom(lay, p))
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, onServerEdit, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -547,8 +543,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
    * one winding, derived `plan_width_m`) — the handles have to sit on the
    * points that really exist. The location's own Save button is untouched by
    * this: it writes the same `map3d` again, which is idempotent. It must NOT
-   * call `onServerEdit` though — that reloads the parent and would throw away
-   * every unsaved room edit in the draft.
+   * reload the parent though — that would throw away every unsaved room edit
+   * in the draft.
    */
   const writeBoundary = useCallback(async (points: Pt[]) => {
     if (!locationId || !onMap3d) return
@@ -3284,18 +3280,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             >
               × {t('Remove')}
             </button>
-            {/* The scene-asset pipeline works on THIS placement — the button,
-                the variant picker and the triple preview of the newest run
-                belong beside the dials that describe it. */}
-            <ScenePropPanel
-              locationId={locationId}
-              roomId={selectedRoom.id || ''}
-              index={propSel}
+            {/* Which model variant THIS placement shows — a dial like the
+                others beside it, so it belongs in the same strip. */}
+            <PropVariantPicker
               propId={placement.prop_id}
-              unsaved={unsaved}
               variant={placement.variant}
               onVariant={(v) => patchProp({ variant: v })}
-              onApplied={onServerEdit || (() => {})}
             />
           </div>
         )

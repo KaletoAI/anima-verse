@@ -87,6 +87,36 @@ def get_licensed_clips_dir() -> Path:
     return get_shared_dir() / "models" / "clips-licensed"
 
 
+def get_trial_clips_dir() -> Path:
+    """The TRIAL clip archive — the whole CMU database converted to browsable
+    FBX clips plus ``_catalog.json`` / ``_index.json``.
+
+    It is NOT a clip library: nothing here is served to the game, and
+    ``animation_clips`` never scans it. It is the pool the catalog browser
+    picks from; a take becomes a real clip only by being imported (re-cut,
+    named) into ``shared/models/clips``. Gitignored, per installation.
+
+    ``ANIMATION_CLIPS_TRIAL_DIR`` overrides the location — tests must set it,
+    same rule as ANIMATION_CLIPS_DIR.
+    """
+    override = os.environ.get("ANIMATION_CLIPS_TRIAL_DIR", "").strip()
+    if override:
+        return Path(override)
+    return get_shared_dir() / "models" / "clips-trial"
+
+
+def get_mocap_source_dir() -> Path:
+    """The downloaded ORIGINAL mocap recordings (``cmu/<subject>/*.asf|amc``).
+
+    ``MOCAP_SOURCE_DIR`` overrides it; without the originals an import falls
+    back to fetching the take from mocap.cs.cmu.edu.
+    """
+    override = os.environ.get("MOCAP_SOURCE_DIR", "").strip()
+    if override:
+        return Path(override)
+    return get_shared_dir() / "models" / "mocap-src"
+
+
 def get_animation_clips_dirs() -> list:
     """Both clip libraries, free first: ``[(dir, source)]`` with source
     ``"free"`` / ``"licensed"``."""

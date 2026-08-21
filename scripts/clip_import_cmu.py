@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Imports CMU Graphics Lab mocap takes as shared animation clips.
 
-Fetches the ASF/AMC files of one take (solo) or of two takes recorded together
+Locates the ASF/AMC files of one take (solo) or of two takes recorded together
 (pair), retargets them onto the Mixamo rig with Blender (headless,
 ``app/blender/scripts/cmu_clip.py``) and drops the resulting FBX files plus
 the ``<kind>.json`` sidecar into the shared clips directory — or any ``--out``.
+
+This is the CLI face of ``app/core/cmu_import.py``; the Poses admin tab's CMU
+catalog browser does the same import through the same functions. Originals
+already downloaded to ``shared/models/mocap-src/cmu`` are used as they are;
+only a take missing there is fetched from CMU into ``--cache``.
 
 The CMU database is free to copy, modify and redistribute (also commercially;
 only reselling the data itself is excluded) and asks for the credit the
@@ -50,65 +55,15 @@ the sidecar records the anchor geometry both clips share.
 """
 import argparse
 import json
-import ssl
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.blender import runner  # noqa: E402
 from app.core import paths  # noqa: E402
-
-CMU_BASE = "https://mocap.cs.cmu.edu/subjects"
-
-
-def fetch(url: str, dest: Path) -> Path:
-    """Downloads once; the CMU server ships an incomplete certificate chain,
-    so a failed verification falls back to an unverified fetch — the data is
-    public and its integrity is checked by the parser, not by TLS."""
-    if dest.is_file() and dest.stat().st_size > 0:
-        return dest
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with urllib.request.urlopen(url, timeout=60) as r:
-            dest.write_bytes(r.read())
-    except (urllib.error.URLError, ssl.SSLError) as e:
-        print(f"  verified fetch failed ({e}); retrying without verification")
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(url, timeout=60, context=ctx) as r:
-            dest.write_bytes(r.read())
-    if dest.stat().st_size < 100:
-        raise SystemExit(f"download of {url} looks empty — wrong take id?")
-    return dest
-
-
-def take_files(take: str, cache: Path) -> tuple:
-    subject, _, trial = take.partition("_")
-    if not (subject.isdigit() and trial.isdigit()):
-        raise SystemExit(f"take must look like 18_01, got {take!r}")
-    asf = fetch(f"{CMU_BASE}/{subject}/{subject}.asf", cache / f"{subject}.asf")
-    amc = fetch(f"{CMU_BASE}/{subject}/{take}.amc", cache / f"{take}.amc")
-    return asf, amc
-
-
-def catalog_framerate(take: str) -> float:
-    """The take's capture rate from the scraped catalog (60 or 120 Hz); 120
-    when the catalog is missing or does not know the take."""
-    cat = paths.get_shared_dir() / "models" / "cmu_catalog.json"
-    try:
-        data = json.loads(cat.read_text(encoding="utf-8"))
-        subject, _, trial = take.partition("_")
-        key = f"{int(subject):02d}_{int(trial):02d}"
-        for t in data.get("takes", []):
-            if t.get("id") == key:
-                return float(t.get("framerate") or 120)
-    except (OSError, ValueError):
-        pass
-    return 120.0
+from app.core.cmu_import import (ClipImportError, convert_take,  # noqa: E402
+                                 default_cache_dir, default_rig)
 
 
 def main() -> int:
@@ -126,62 +81,31 @@ def main() -> int:
     ap.add_argument("--source-fps", type=float, default=None,
                     help="capture rate; default: from shared/models/cmu_catalog.json, else 120")
     ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--cache", default=str(Path.home() / ".cache" / "anima-verse" / "cmu"))
+    ap.add_argument("--cache", default=str(default_cache_dir()))
     ap.add_argument("--rig", default="")
     a = ap.parse_args()
 
-    kind = a.kind.strip().lower()
-    if "__" in kind or not kind:
-        raise SystemExit("kind must not be empty or contain '__' (the role separator)")
-    cache = Path(a.cache)
-    if a.rig:
-        rig = Path(a.rig)
-    else:
-        # The library's own skeleton first: the client measures every clip's
-        # standing hip height against the library median (figures.ts
-        # adaptExternalClips), so a clip on a shorter rig (x-bot, hips 104 cm
-        # vs 113 cm) would be read as "crouching" and sink into the ground.
-        rig = next((d / "idle.fbx" for d, _src in paths.get_animation_clips_dirs()
-                    if (d / "idle.fbx").is_file()),
-                   paths.get_test_figure_dir() / "x-bot.fbx")
-    if not rig.is_file():
-        raise SystemExit(f"rig not found: {rig}")
-    out = Path(a.out) if a.out else paths.get_animation_clips_dir()
-    if a.set:
-        out = out / a.set.strip().lower()
-
-    print(f"fetching take(s) into {cache}")
-    inputs = {"rig": rig}
-    takes = [a.take_a]
-    if a.take_b:
-        takes.append(a.take_b)
-        for role, take in zip("ab", takes):
-            asf, amc = take_files(take, cache)
-            inputs[f"asf_{role}"] = asf
-            inputs[f"amc_{role}"] = amc
-    else:
-        inputs["asf"], inputs["amc"] = take_files(a.take_a, cache)
-
-    source_fps = a.source_fps or catalog_framerate(a.take_a)
-    params = {"kind": kind, "fps": a.fps, "start_s": a.start, "end_s": a.end,
-              "source_fps": source_fps,
-              "anchor_s": a.anchor, "in_place": bool(a.in_place), "loop_s": a.loop,
-              "source_takes": takes}
+    out_dir = Path(a.out) if a.out else paths.get_animation_clips_dir()
+    rig = Path(a.rig) if a.rig else default_rig()
     st = runner.status()
-    if not st["executable"]:
-        raise SystemExit("no Blender executable found (image_generation.blender_executable)")
-    print(f"retargeting with Blender {st['version']} → {out}")
-    out.mkdir(parents=True, exist_ok=True)
-    res = runner.run("cmu_clip", inputs=inputs, params=params, out_dir=out,
-                     timeout_s=900)
-    if not res["ok"]:
-        print(f"FAILED: {res['error']}")
+    print(f"fetching take(s) into {a.cache} (originals under "
+          f"{paths.get_mocap_source_dir()} are used when present)")
+    print(f"retargeting with Blender {st['version']} on rig {rig} -> {out_dir}")
+    try:
+        res = convert_take(a.kind, a.take_a, a.take_b or "", out_dir=out_dir,
+                           clip_set=a.set, start_s=a.start, end_s=a.end,
+                           anchor_s=a.anchor, in_place=a.in_place, loop_s=a.loop,
+                           source_fps=a.source_fps, fps=a.fps, rig=rig,
+                           cache=Path(a.cache))
+    except ClipImportError as e:
+        print(f"FAILED: {e}")
         return 1
-    side = res["data"]
+    side = res["sidecar"]
     print(json.dumps(side, indent=1, ensure_ascii=False))
     for slot, path in res["outputs"].items():
         print(f"  wrote {slot}: {path}")
-    print(f"done in {res['seconds']:.1f}s — {side['frames']} frames, {side['duration_s']} s")
+    print(f"done in {res['seconds']:.1f}s — {side['frames']} frames, "
+          f"{side['duration_s']} s")
     return 0
 
 

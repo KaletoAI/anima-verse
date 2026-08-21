@@ -27,7 +27,6 @@ import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
 import { orientedDims } from './dims'
 import { CATEGORY_DATALIST_ID } from './propTypes'
-import { SCENE_CONTEXT_ORIGIN } from './propTypes'
 import type { PropFull, PropMarker, PropSourceImage, PropVariant } from './propTypes'
 
 type DimKey = 'width_m' | 'depth_m' | 'height_m'
@@ -163,11 +162,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     ? (shownVariant.has_source ? shownVariant.image : null)
     : (variants.length === 0 && variant === 0 && prop.has_source
       ? { backend: prop.backend_image || '', prompt: prop.prompt || '',
-        negative: prop.negative || '', generated_at: prop.source_generated_at || '',
-        // The lean fallback carries no origin: the record deliberately does
-        // not publish one (the library list stays lean), and the variant list
-        // — which does — arrives a moment later and takes over.
-        origin: '', origin_location: '', origin_location_id: '', origin_ts: '' }
+        negative: prop.negative || '', generated_at: prop.source_generated_at || '' }
       : null)
   // The bbox/dims belong to the PROP, and the stored one was measured on the
   // primary variant — so only that one may re-measure them live. Otherwise
@@ -841,18 +836,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   ? `🖼 ${shownImage.backend}${shownImage.generated_at
                     ? ` · ${shownImage.generated_at.slice(0, 10)}` : ''}`
                   : t('No generation record for this image.')}
-              </span>
-            ) : null}
-            {/* WHERE the picture was taken. A scene-context cutout carries the
-                light, the ground and the surroundings of ONE spot — it is not
-                interchangeable with a product shot, so it says so. A product
-                shot writes no origin at all and this line stays away. */}
-            {shownImage && srcOk && shownImage.origin === SCENE_CONTEXT_ORIGIN ? (
-              <span className="ga-hint" style={{ fontSize: 10, lineHeight: '13px' }}
-                title={t('Cut out of a rendered scene instead of shot against a neutral background — this picture carries the light and the ground of that spot.')}>
-                {'🎬 ' + t('Generated in scene at {loc}, {ts}')
-                  .replace('{loc}', shownImage.origin_location || '—')
-                  .replace('{ts}', shownImage.origin_ts.slice(0, 10) || '—')}
               </span>
             ) : null}
             <div style={{ display: 'flex', gap: 4 }}>
