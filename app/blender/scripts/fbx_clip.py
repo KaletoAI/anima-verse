@@ -6,6 +6,11 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
     inputs   rig            the Mixamo skeleton to drive (library idle.fbx)
              src            the animation FBX (solo), or
              src_a, src_b   the two halves of a pair (same world space)
+             rest           OPTIONAL: an FBX of the SAME rig in a reference
+                            pose (T/A-pose export). With it the bones take
+                            their real node rotations relative to that pose
+                            — twist included — instead of the positional
+                            reconstruction below
     params   kind, fps, start_s, end_s, anchor_s, in_place, loop_s — as in
              cmu_clip; plus
              bone_map       name of the skeleton family ("unity-humanoid";
@@ -42,6 +47,14 @@ when the source has them.
 Limits: a bone's roll about its own axis is whatever the secondary axis
 says — the thigh's twist follows the pelvis, the forearm's the hand. Real
 for a hand on a shoulder, approximate for a thigh rolled in isolation.
+
+With a REST file (same rig, any well-defined pose — a T- or A-pose export)
+the roll comes from the data: for every bone ``R = R_node(t) · R_node_restᵀ ·
+A_rest`` with ``A_rest = F_source_rest · F_mixamo_restᵀ`` — the node's own
+world rotation away from the reference pose, carried onto the Mixamo rest
+through the positional frames built on both REST poses (where the anatomical
+secondary axes are exact). Positions still come from the animation, so
+lengths, anchor and floor are unchanged.
 
 Units/axes: Blender imports the FBX into a Z-up world in metres (the root
 node's 0.01 scale applied); positions are converted back to the clip space
@@ -199,6 +212,16 @@ def _blender_to_clip(v: Vector) -> Vector:
     return Vector((v.x * 100.0, v.z * 100.0, -v.y * 100.0))
 
 
+_C = Matrix(((1, 0, 0), (0, 0, 1), (0, -1, 0)))      # Blender Z-up → clip Y-up
+
+
+def _rot_to_clip(m: Matrix) -> Matrix:
+    """A Blender world rotation expressed in clip space — the SCALE of the
+    world matrix (the root node's 0.01) is stripped: a scaled 'rotation'
+    shrank every bone offset to nothing."""
+    return _C @ m.to_3x3().normalized() @ _C.transposed()
+
+
 def _load_source(path: str, family: str):
     """Imports the FBX and returns ``(fps, frame_range, positions_by_frame)``
     with positions as ``{intermediate name: Vector(cm, Y up)}`` per frame,
@@ -223,6 +246,7 @@ def _load_source(path: str, family: str):
             frames.update((int(r[0]), int(r[1])))
     f0, f1 = (min(frames), max(frames)) if frames else (1, 1)
     by_frame = []
+    rot_frame = []
     for fr in range(f0, f1 + 1):
         scene.frame_set(fr)
         bpy.context.view_layer.update()
@@ -232,7 +256,8 @@ def _load_source(path: str, family: str):
         if "upperneck" in P and "lowerneck" in P:
             P["head_end"] = P["upperneck"] + (P["upperneck"] - P["lowerneck"])
         by_frame.append(P)
-    return fps, (f0, f1), by_frame, family
+        rot_frame.append({inter: _rot_to_clip(o.matrix_world) for inter, o in nodes.items()})
+    return fps, (f0, f1), by_frame, family, rot_frame
 
 
 class _FakeBone:
@@ -281,7 +306,20 @@ def _mixamo_rest(rig_path: str):
     return P, _frames_of(P)
 
 
-def _build_take(role, fps, src_fps, by_frame, mix_pos, mix_frames, args):
+def _rest_reference(path: str, family: str, mix_frames: dict):
+    """From a rest-pose FBX of the source rig: per bone the rotation that
+    carries the Mixamo rest onto the source's reference pose
+    (``A_rest = F_src_rest · F_mix_restᵀ``) and the node's world rotation in
+    that pose — what the delta mode needs."""
+    _fps, _rng, by_frame, _fam, rot_frame = _load_source(path, family)
+    P, R = by_frame[0], rot_frame[0]
+    fr = _frames_of(P)
+    return {name: (fr[name] @ mix_frames[name].transposed(), R[name])
+            for name in fr if name in mix_frames and name in R}
+
+
+def _build_take(role, fps, src_fps, by_frame, mix_pos, mix_frames, args,
+                rot_frame=None, rest=None):
     start_s = float(args.get("start_s", 0) or 0)
     end_s = args.get("end_s")
     idx = _cmu.resample_indices(len(by_frame), src_fps, fps, start_s,
@@ -303,7 +341,11 @@ def _build_take(role, fps, src_fps, by_frame, mix_pos, mix_frames, args):
         pose = _cmu.Pose()
         for name in sk.bones:
             if name in fr and name in mix_frames:
-                R = fr[name] @ mix_frames[name].transposed()
+                if rest and name in rest and rot_frame is not None:
+                    a_rest, r_rest = rest[name]
+                    R = rot_frame[i][name] @ r_rest.transposed() @ a_rest
+                else:
+                    R = fr[name] @ mix_frames[name].transposed()
                 pose.rot[name] = [[R[r][c] for c in range(3)] for r in range(3)]
                 pose.pos[name] = tuple(P[name])
         if "root" not in pose.rot:
@@ -325,17 +367,21 @@ def run(job):
     entries = ([("", inputs["src"])] if "src" in inputs
                else [("a", inputs["src_a"]), ("b", inputs["src_b"])])
     mix_pos, mix_frames = _mixamo_rest(args["rig"])
+    rest = _rest_reference(inputs["rest"], family, mix_frames) if inputs.get("rest") else None
     takes = []
     src_fps = None
     used = family
     for role, path in entries:
-        sfps, (f0, f1), by_frame, used = _load_source(path, family)
+        sfps, (f0, f1), by_frame, used, rot_frame = _load_source(path, family)
         src_fps = src_fps or sfps
-        takes.append(_build_take(role, fps, sfps, by_frame, mix_pos, mix_frames, args))
+        takes.append(_build_take(role, fps, sfps, by_frame, mix_pos, mix_frames, args,
+                                 rot_frame, rest))
     args["source_fps"] = src_fps
     source = {"format": "fbx", "bone_map": used,
               "files": list(args.get("source_name") or [Path(p).name for _r, p in entries]),
-              "fingers": any("LeftHandIndex1" in t.sk.bones for t in takes)}
+              "fingers": any("LeftHandIndex1" in t.sk.bones for t in takes),
+              "rotation_mode": "rest-delta" if rest else "positional",
+              "rest_file": Path(inputs["rest"]).name if inputs.get("rest") else ""}
     return cmu_clip.run_takes(takes, args, fps, source)
 
 
