@@ -30,6 +30,8 @@ Options:
     --anchor <s>      pair: second that defines the anchor frame
                       (default: when the two roots are closest)
     --in-place        solo: strip the horizontal root travel
+    --source-fps <n>  capture rate of the take (default: the catalog's value,
+                      120 without one; 326 takes were captured at 60 Hz)
     --loop <s>        solo: cut to the best-closing window of at least <s>
                       seconds (end pose closest to start pose) and ease the
                       last frames into the first — a seamless cycle for
@@ -93,6 +95,22 @@ def take_files(take: str, cache: Path) -> tuple:
     return asf, amc
 
 
+def catalog_framerate(take: str) -> float:
+    """The take's capture rate from the scraped catalog (60 or 120 Hz); 120
+    when the catalog is missing or does not know the take."""
+    cat = paths.get_shared_dir() / "models" / "cmu_catalog.json"
+    try:
+        data = json.loads(cat.read_text(encoding="utf-8"))
+        subject, _, trial = take.partition("_")
+        key = f"{int(subject):02d}_{int(trial):02d}"
+        for t in data.get("takes", []):
+            if t.get("id") == key:
+                return float(t.get("framerate") or 120)
+    except (OSError, ValueError):
+        pass
+    return 120.0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("kind")
@@ -105,6 +123,8 @@ def main() -> int:
     ap.add_argument("--anchor", type=float, default=None)
     ap.add_argument("--in-place", action="store_true")
     ap.add_argument("--loop", type=float, default=None)
+    ap.add_argument("--source-fps", type=float, default=None,
+                    help="capture rate; default: from shared/models/cmu_catalog.json, else 120")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--cache", default=str(Path.home() / ".cache" / "anima-verse" / "cmu"))
     ap.add_argument("--rig", default="")
@@ -142,7 +162,9 @@ def main() -> int:
     else:
         inputs["asf"], inputs["amc"] = take_files(a.take_a, cache)
 
+    source_fps = a.source_fps or catalog_framerate(a.take_a)
     params = {"kind": kind, "fps": a.fps, "start_s": a.start, "end_s": a.end,
+              "source_fps": source_fps,
               "anchor_s": a.anchor, "in_place": bool(a.in_place), "loop_s": a.loop,
               "source_takes": takes}
     st = runner.status()

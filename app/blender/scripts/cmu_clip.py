@@ -20,6 +20,8 @@ Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
                             window of at least this many seconds and ease
                             the tail into the head (a seamless cycle)
              source_takes   names of the source takes, for the sidecar credit
+             source_fps     capture rate of the take (120 default; 60 for the
+                            takes the subject page lists as 60)
 
 The FBX files and the ``<kind>.json`` sidecar land in the runner's out dir.
 
@@ -136,13 +138,18 @@ def _load_rig(path: str):
 class _Take:
     """One ASF/AMC pair solved to world poses, already resampled."""
 
-    def __init__(self, entry, fps, start_s, end_s):
+    def __init__(self, entry, fps, start_s, end_s, source_fps=None):
         self.role = entry.get("role", "")
         self.sk, frames = _cmu.load_clip(Path(entry["asf"]), Path(entry["amc"]))
+        # Most of the database is 120 Hz, but 326 takes (the salsa subjects
+        # 60/61 among them) were captured at 60 Hz — the subject page states
+        # it, the AMC does not. Reading those as 120 Hz plays them twice as
+        # fast (2026-08-21 finding, "hectic salsa").
+        src = float(source_fps or _cmu.CMU_FPS)
         n = len(frames)
-        first = int(round(start_s * _cmu.CMU_FPS))
-        last = n if end_s is None else min(n, int(round(end_s * _cmu.CMU_FPS)))
-        step = _cmu.CMU_FPS / fps
+        first = int(round(start_s * src))
+        last = n if end_s is None else min(n, int(round(end_s * src)))
+        step = src / fps
         idx = []
         t = float(first)
         while t < last - 1e-6:
@@ -516,7 +523,8 @@ def run(job):
     fps = int(args.get("fps", 30))
     start_s = float(args.get("start_s", 0) or 0)
     end_s = args.get("end_s")
-    takes = [_Take(e, fps, start_s, None if end_s is None else float(end_s))
+    takes = [_Take(e, fps, start_s, None if end_s is None else float(end_s),
+                   args.get("source_fps"))
              for e in args["clips"]]
     loop_min = args.get("loop_s")
     loop = loop_min is not None and len(takes) == 1
@@ -621,6 +629,7 @@ def run(job):
         "pair": len(takes) == 2,
         "roles": ["a", "b"] if len(takes) == 2 else [],
         "fps": fps,
+        "source_fps": float(args.get("source_fps") or _cmu.CMU_FPS),
         "frames": nframes,
         "duration_s": round(nframes / fps, 3),
         "geometry": geometry,

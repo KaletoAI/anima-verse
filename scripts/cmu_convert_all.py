@@ -170,11 +170,10 @@ def index_record(job: dict, sidecar: dict, args, seconds: float) -> dict:
         "subject": take["subject"],
         "trial": take["trial"],
         "source_framerate": take.get("framerate", 0),
-        # The Blender converter reads every AMC as the database's usual 120 Hz.
-        # A take captured at 60 Hz therefore comes out running this many times
-        # too fast; the clip is fine, its timing is not — a later cut pass
-        # stretches it by this factor.
-        "speed_factor": round(120.0 / (take.get("framerate") or 120), 3),
+        # The capture rate is handed to the converter (``source_fps``), so a
+        # 60 Hz take plays at its real speed; the factor stays in the index
+        # only to tell a clip converted BEFORE that fix (2026-08-21) apart.
+        "speed_factor": 1.0,
         "seconds": round(seconds, 1),
     }
 
@@ -189,6 +188,7 @@ def convert(job: dict, rig: Path, args) -> dict:
     inputs.update({k: Path(v) for k, v in job["inputs"].items()})
     params = {"kind": take["id"], "fps": args.fps, "start_s": 0.0, "end_s": None,
               "anchor_s": None, "in_place": not job["partner"], "loop_s": None,
+              "source_fps": float(take.get("framerate") or 120),
               "source_takes": [take["id"]] + ([job["partner"]["id"]] if job["partner"] else [])}
     job["dir"].mkdir(parents=True, exist_ok=True)
     res = runner.run("cmu_clip", inputs=inputs, params=params, out_dir=job["dir"],

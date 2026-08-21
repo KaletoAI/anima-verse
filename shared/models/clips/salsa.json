@@ -6,18 +6,19 @@
   "b"
  ],
  "fps": 30,
- "frames": 501,
- "duration_s": 16.7,
+ "source_fps": 60.0,
+ "frames": 1061,
+ "duration_s": 35.367,
  "geometry": {
-  "anchor_frame": 405,
-  "anchor_s": 13.5,
+  "anchor_frame": 870,
+  "anchor_s": 29.0,
   "root_distance_m": 0.39,
   "floor_shift_cm": 6.28,
   "roles": {
    "a": {
     "start_xz_m": [
-     0.315,
-     -0.318
+     0.608,
+     -1.086
     ],
     "anchor_xz_m": [
      -0.195,
@@ -26,8 +27,8 @@
    },
    "b": {
     "start_xz_m": [
-     -0.037,
-     0.817
+     -0.068,
+     0.884
     ],
     "anchor_xz_m": [
      0.195,
@@ -48,8 +49,8 @@
    "rig_distance_m": 0.14,
    "shift_m": 0.039
   },
-  "rig_floor_shift_cm": -9.66,
-  "rig_floor_min_cm": -14.72
+  "rig_floor_shift_cm": -9.69,
+  "rig_floor_min_cm": -14.75
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
