@@ -30,11 +30,14 @@ So for every mapped bone the pose matrix in armature space is
     P_i = R_cmu_i(t) · A_i · R_i
 
 with ``R_i`` the Mixamo rest matrix, and ``A_i`` the fixed rotation that turns
-the Mixamo rest direction of the bone onto the CMU rest direction (the two
-T-poses differ slightly: CMU's legs are splayed, its clavicles rise). Rotation
-deltas carry the twist with them — unlike an aim-only retarget, the forearm
-and hips keep their roll. Unmapped bones (fingers, eyes, twist helpers) stay
-in rest relative to their parent. The hips take the CMU root POSITION as well.
+the Mixamo rest direction of the bone onto the CMU rest direction — applied to
+the limbs only (``ALIGN_BONES``: CMU's T-pose splays the legs ~20°), identity
+everywhere else, because clavicles and feet are DIFFERENT segments on the two
+skeletons and aligning them shrugged the shoulders and kinked the feet.
+Rotation deltas carry the twist with them — unlike an aim-only retarget, the
+forearm and hips keep their roll. Unmapped bones (fingers, eyes, end bones)
+get NO track at all, like in Mixamo clips, so a model keeps its own finger
+pose. The hips take the CMU root POSITION as well.
 
 Frames of reference the clips are written in
 --------------------------------------------
@@ -82,6 +85,20 @@ BONE_MAP = {
     "RightFoot": "rfoot", "RightToeBase": "rtoes",
 }
 PREFIX = "mixamorig:"
+# Bones whose CMU and Mixamo rest DIRECTIONS describe the same segment, so the
+# fixed rest alignment A_i (Mixamo rest dir → CMU rest dir) is meaningful:
+# CMU's T-pose splays the legs ~20° and the arms match. NOT aligned:
+#  * clavicles — CMU's runs chest centre → shoulder, Mixamo's neck base →
+#    arm; a 20° difference that is anatomy, not pose (aligning it shrugged
+#    every shoulder up, 2026-08-21 finding);
+#  * feet/toes — CMU's foot is ankle → ball at 15°, Mixamo's at ~33°; aligning
+#    lifted the ball and kinked the toes up (same finding);
+#  * spine/neck/head — the differences are ~1° and the torso twist is better
+#    kept exactly as the actor's.
+# Those bones take the actor's rotation DELTA on the Mixamo rest unchanged.
+ALIGN_BONES = {"LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg",
+               "LeftArm", "RightArm", "LeftForeArm", "RightForeArm",
+               "LeftHand", "RightHand"}
 
 
 def _m3(m):
@@ -228,7 +245,7 @@ def _solve(arm, take: _Take):
         cmu_name = BONE_MAP.get(short)
         if not cmu_name or cmu_name not in take.sk.bones:
             continue
-        if cmu_name == "root":
+        if cmu_name == "root" or short not in ALIGN_BONES:
             align[b.name] = (cmu_name, Matrix.Identity(3))
             continue
         mix_dir = (b.tail_local - b.head_local)
@@ -354,9 +371,16 @@ def _patch_fbx_track_shape():
         group = self.fbx_group[0]
         key = str(self.elem_keys[0])
         is_bone = PREFIX in key or PREFIX.rstrip(":") in key
-        if is_bone and group == "Lcl Rotation":
+        # Only the bones the actor data drives get a track. An unmapped bone
+        # (fingers, eyes, toe/head ends) must NOT be written at rest: a
+        # consumer would then overwrite its own model's finger pose with the
+        # clip skeleton's — Mixamo clips carry no finger tracks either.
+        mapped = is_bone and any(
+            key.endswith(PREFIX + m) or key.endswith(PREFIX.rstrip(":") + m)
+            or (PREFIX + m + "|") in key for m in BONE_MAP)
+        if mapped and group == "Lcl Rotation":
             mask[:] = True
-        elif is_bone and group == "Lcl Translation" and "Hips" in key:
+        elif mapped and group == "Lcl Translation" and key.endswith("Hips"):
             mask[:] = True
         else:
             mask[:] = False
