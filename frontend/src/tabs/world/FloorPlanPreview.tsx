@@ -24,6 +24,7 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
+  anchorFigureBind, figureRootY,
   applyClipOutline, disposeClipMaterials, pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
@@ -615,22 +616,17 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           }
           pivot.rotation.x = bestRx
         }
-        // BODY size comes from the REST pose (standing T-pose) — the posed
-        // bbox would blow lying/sitting figures up (a lying box is ~half as
-        // tall, so the figure came out ~twice as large).
-        pivot.updateMatrixWorld(true)
-        const fs = new THREE.Box3().setFromObject(pivot).getSize(new THREE.Vector3())
+        // SIZE AND ANCHOR COME FROM THE BIND POSE, through the shared routine
+        // (@anima/scene-render `figure.ts`) — soles on 0, XZ centred, scaled
+        // to the payload's figure height. The clip is played AFTERWARDS and
+        // never re-grounds the body: how far the root sits below the marked
+        // surface is what `root_offset` says (see the marker loop below), and
+        // measuring the pose here would count that drop a second time.
+        anchorFigureBind(THREE, pivot, figBase)
         const mixer = new THREE.AnimationMixer(inst)
         mixer.clipAction(anim.clip).play()
         mixer.update(0)
         mixersRef.current.push(mixer)
-        pivot.scale.setScalar(figBase / (fs.y || 1))
-        // Grounding DOES use the posed bounds — a lying figure rests on the
-        // floor, not on where its feet would be standing.
-        pivot.updateMatrixWorld(true)
-        const fb2 = new THREE.Box3().setFromObject(pivot)
-        const fc2 = fb2.getCenter(new THREE.Vector3())
-        pivot.position.set(-fc2.x, -fb2.min.y, -fc2.z)
         pivot.userData.__noDispose = true
         fig.add(pivot)
       } else {
@@ -908,9 +904,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       placeFigure({
         x: marker.at_world[0],
         // y_world is the SURFACE; the figure's root sits root_offset below it
-        // (a seated body touches at the buttocks). Same subtraction as the
-        // 3D client — the number comes from the payload, not from here.
-        y: marker.y_world - (marker.root_offset || 0), z: marker.at_world[1],
+        // (a seated body touches at the buttocks). ONE routine for the 3D
+        // client, this preview and the prop viewer — the number comes from the
+        // payload, never from a measurement taken here.
+        y: figureRootY(marker.y_world, figBase, marker.animation,
+                       marker.root_offset),
+        z: marker.at_world[1],
         animation: marker.animation, facing: marker.facing,
         tilt: marker.tilt, roll: marker.roll,
         label: `${n} · ${marker.animation}`,

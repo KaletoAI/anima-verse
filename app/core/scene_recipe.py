@@ -107,11 +107,18 @@ PROP_CLEARANCE = 0.01
 #   laying    0.081   -0.004         the back, at ground level
 #
 # (measured on x-bot.fbx + the clips). ONE rule for all of them: the contact
-# is the hips bone minus 0.03 x H — the same rule the prop viewer applies
-# live, where it reads the hips off the POSED skeleton instead of a table.
-# The viewer is the authority when a clip changes; these numbers are for
-# everyone who has no clip loaded. A kind that is absent touches at its root
-# and drops by nothing (standing, walking, working poses).
+# is the hips bone minus 0.03 x H, and THIS TABLE IS THE ANSWER — for the
+# payload's ``root_offset`` and for every renderer alike. No viewer measures a
+# pose to decide the height any more (finding 2026-08-21): the admin prop
+# viewer used to read the hips off its "posed" skeleton, but a clip is played
+# IN PLACE there — the Mixamo hips POSITION track is dropped — so the joint
+# never moves and the reading was one constant for every clip, 0.9288 m at
+# H = 1.70 m. That sank a sitter by 0.395 m against the very numbers the
+# server composes with. The renderers' shared rule lives in
+# ``packages/scene-render/src/figure.ts``; the chain is derived by hand in
+# ``scripts/smoke_prop_marker_surface.py`` part 5.
+# A kind that is absent touches at its root and drops by nothing (standing,
+# walking, working poses).
 FIGURE_ROOT_DROP = {"sit": 0.314, "sleep": 0.631, "laying": 0.051,
                     "lie": 0.051}
 # Diorama clipping (§ B1): the shell polygon a room model may be cut against

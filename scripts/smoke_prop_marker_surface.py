@@ -55,6 +55,41 @@ placement yaw 30.
 That last invariant is the whole point of the § B2 revision: the object hangs
 on its own centre, so turning it turns the seat around the same point instead
 of sliding the mesh out from under it.
+
+Part 5 pins the WHOLE VERTICAL CHAIN after E5 ("Ein Boden", § A16.9), from the
+storey datum to the y a figure's root lands on — the finding of 2026-08-21,
+"the figure sits somewhere else on the prop than the marker says". Hand case:
+the bench above, sit marker at fraction 1.135, in a CLOSED room on storey 0,
+no ground offset and no placement trim.
+
+    s        = max(dims) / max(bbox) = 1.73 / 1.00000       = 1.73
+    height_m = 1.135 x 0.29406 x 1.73                       = 0.577402 -> 0.577
+    bottom_y = storey_floor_y(0) 0.00
+             + _plate_top(level 0) 0.00                     (E5a: no plate)
+             + PROP_CLEARANCE 0.01                          = 0.01
+    y_world  = 0.00 + 0.00 + 0.01 + 0.577                   = 0.587
+    root_off = FIGURE_ROOT_DROP["sit"] 0.314 x 1.70 m       = 0.5338
+    root y   = 0.587 - 0.5338                               = 0.0532
+
+    The invariant that survives every datum change: y_world - bottom_y is the
+    marker's own composed height, 0.577 — the seat belongs to the OBJECT.
+
+Red probes, all three of them numbers that must NOT come out:
+
+    0.11 / 0.687 / 0.1532   the same chain on the PRE-E5 datum (room plate top
+                            0.10), which is what a leftover plate term would
+                            produce;
+    -0.3418                 the root the admin prop viewer produced until this
+                            round. It anchored the HIPS BONE of the "posed"
+                            skeleton minus 0.03 x H — but every clip is played
+                            in place (the Mixamo hips POSITION track is
+                            dropped), so the hips never move and that reading
+                            is ONE constant for every clip alike: 0.9288 m at
+                            H = 1.70 m, measured on x-bot.fbx. Against the
+                            table it puts a sitter 0.395 m too low, a sleeper
+                            0.144 m too high and a lying figure 0.842 m too
+                            low. The renderer half is pinned in
+                            `scripts/smoke_prop_marker_place.mjs` part E.
 """
 import math
 import shutil
@@ -170,6 +205,55 @@ def main() -> int:
     # must not change the size: snap(90) == 90.
     quarter = compose([0.5, 0.45, 0.5], 0, {"x": 0, "y": 90, "z": 0})
     check("a 90° fix keeps the scale", quarter["height_m"], 0.225)
+
+    print("\n5. the vertical chain from the storey datum to the figure root")
+    from app.core.scene_recipe import (PROP_CLEARANCE, ROOM_PLATE_TOP,
+                                       _markers, _prop_models, _plate_top,
+                                       storey_floor_y)
+
+    STOREY = 2.8
+    composed = compose_prop_marker(
+        bbox=BBOX, rotation=ROT, dims=DIMS, frac=[0.42, 1.135, 0.68],
+        facing=None, placement_yaw=0, placement_offset_y=0)
+    composed["animation"] = "sit"
+    composed["placement"] = 0
+    recipe = {
+        "room_id": "a", "level": 0, "floor_offset_y": 0.0,
+        "markers": [], "prop_markers": [composed],
+        "placements": [{
+            "prop_id": pid, "at": [1.0, 2.0], "yaw": 0, "has_model": False,
+            "dims": {"width_m": DIMS[0], "depth_m": DIMS[1],
+                     "height_m": DIMS[2]},
+        }],
+    }
+    room = {"layout": {"x": 0.0, "y": 0.0, "w": 4.0, "d": 4.0, "level": 0}}
+
+    check("the composed seat height", composed["height_m"], 0.577)
+    check("storey 0 has no floor plate", _plate_top(recipe), 0.0)
+    check("storey 0 IS the datum", storey_floor_y(0, STOREY), 0.0)
+
+    spec = _prop_models(recipe, STOREY)[0]
+    marker = _markers(recipe, room, STOREY)[0]
+    check("prop bottom_y = the clearance alone", spec["bottom_y"], 0.01)
+    check("the marker names the SURFACE", marker["y_world"], 0.587)
+    check("root drop rides with the marker", marker["root_offset"], 0.5338)
+    # THE INVARIANT: whatever the datum does, the seat stays the object's own
+    # height over its own underside.
+    check("y_world - bottom_y is the composed height",
+          marker["y_world"] - spec["bottom_y"], 0.577)
+    root_y = marker["y_world"] - marker["root_offset"]
+    check("the figure's root lands here", root_y, 0.0532)
+
+    # Red probes — the numbers of the abandoned laws.
+    check("the pre-E5 room plate is not in bottom_y",
+          abs(spec["bottom_y"] - (ROOM_PLATE_TOP + PROP_CLEARANCE)) > 1e-6,
+          True)
+    check("the pre-E5 room plate is not in y_world",
+          abs(marker["y_world"] - 0.687) > 1e-6, True)
+    # 0.9288 m is what the prop viewer's deleted hips rule answered for EVERY
+    # clip; against the table it sank a sitter by 0.395 m.
+    check("the deleted hips-anchor root is 0.395 m lower",
+          root_y - (marker["y_world"] - 0.9288), 0.395, 1e-3)
 
     shutil.rmtree(tmp, ignore_errors=True)
     print()

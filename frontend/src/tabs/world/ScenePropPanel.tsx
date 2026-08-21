@@ -22,6 +22,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
+import { LightboxProvider, openLightbox } from '../../player/Lightbox'
 import { useToast } from '../../lib/Toast'
 
 /** One run as `routes/scene_asset._summary` builds it. */
@@ -36,6 +37,20 @@ export interface SceneAssetRun {
   attempts: number
   variant: number | null
   stored_variant: number | null
+  /** Stage the run stands at (or last stood at) — the core's own vocabulary,
+   *  see `STAGE_ORDER`. Empty on a record written before this existed. */
+  stage?: string
+  /** The stage that STOPPED the run, empty when nothing did. */
+  failed_stage?: string
+  /** The core's own sentence for that stop — written to be read, not
+   *  re-worded here. */
+  failure_reason?: string
+  /** The record has no `finished_at`: the run never got to write one, so its
+   *  process died somewhere in `stage`. */
+  unfinished?: boolean
+  /** A configuration remark the run wants to make (e.g. it had to edit the
+   *  whole plate for want of an inpaint backend) — not a failure. */
+  backend_note?: string
   /** STORE index of the variant this spot showed BEFORE the run — the
    *  "before" half of the comparison. null = the prop had no meshed variant
    *  yet (a first generation). */
@@ -259,12 +274,29 @@ export function ScenePropPanel({
               {t('Rendering the spot, drawing the object, meshing it — a few minutes. The picture strip below is the previous run until this one lands.')}
             </span>
           ) : null}
-          {run ? <RunStrip run={run} /> : null}
+          {/* The lightbox host lives HERE, with the only pictures in this
+              panel: it is a module singleton that portals to document.body,
+              so it escapes the editor's transformed panels — the reason a
+              picture must never be a plain link out of the admin. */}
+          {run ? (
+            <LightboxProvider>
+              <RunStrip run={run} />
+            </LightboxProvider>
+          ) : null}
         </div>
       ) : null}
     </>
   )
 }
+
+/** The stages a run walks, in order — the core's own vocabulary
+ *  (`app/core/scene_asset.py`). The strip needs the ORDER to tell "this stage
+ *  failed" from "this stage was never reached". */
+const STAGE_ORDER = ['plate', 'mask', 'backend', 'insert', 'cutout', 'mesh',
+                     'place', 'done']
+
+const stageAt = (stage?: string) =>
+  STAGE_ORDER.indexOf((stage || '').trim().toLowerCase())
 
 /** The picture strip + the readouts of ONE run.
  *
@@ -273,50 +305,131 @@ export function ScenePropPanel({
  * at trigger time, because a run that refines that very variant overwrites the
  * original a moment later — and `after` is the cutout the new mesh was built
  * from. Same kind of picture on both ends, so the comparison is a comparison.
+ *
+ * AN EMPTY FRAME EXPLAINS ITSELF (user finding 2026-08-21: "nicht erreicht"
+ * and "kein mesh" with nothing to go on). Each frame belongs to a STAGE of the
+ * chain, and the run record says which stage it stopped at and why — so a
+ * missing picture reads as "the run stopped here, because …" or "never
+ * reached, the run stopped at …" instead of two bare words. Nothing is guessed
+ * from the pictures: the state comes from `stage` / `failed_stage` /
+ * `failure_reason` / `unfinished` in the payload.
  */
 function RunStrip({ run }: { run: SceneAssetRun }) {
   const { t } = useI18n()
   const band = run.checks.px_ratio_band || []
   const prev = run.previous_variant
-  const shots: Array<{ url?: string; label: string; note: string; empty?: string }> = [
-    { url: run.files.before, label: t('Before'),
+  // Readable names for the core's stage keys — the strip must never print a
+  // raw identifier at the user.
+  const stageName = (stage?: string): string => {
+    const key = (stage || '').trim().toLowerCase()
+    if (key === 'plate') return t('context render')
+    if (key === 'mask') return t('mask')
+    if (key === 'backend') return t('backend choice')
+    if (key === 'insert') return t('drawing the object in')
+    if (key === 'cutout') return t('cutout')
+    if (key === 'mesh') return t('meshing')
+    if (key === 'place') return t('placement')
+    if (key === 'done') return t('done')
+    return key || t('unknown')
+  }
+  /** Why a frame of stage `stage` has no picture — one sentence, always. */
+  const emptyWhy = (stage: string): string => {
+    const reason = (run.failure_reason || '').trim()
+    if (run.failed_stage) {
+      const mine = stageAt(stage)
+      const stop = stageAt(run.failed_stage)
+      if (mine === stop) {
+        return reason
+          ? t('Failed here — {why}').replace('{why}', reason)
+          : t('Failed here.')
+      }
+      if (mine > stop) {
+        const line = t('Not reached — the run stopped at “{stage}”.')
+          .replace('{stage}', stageName(run.failed_stage))
+        return reason ? `${line} ${reason}` : line
+      }
+      return t('Missing — the run passed this stage but wrote no picture.')
+    }
+    if (run.unfinished) {
+      return t('Interrupted — the run was at “{stage}” and never finished.')
+        .replace('{stage}', stageName(run.stage))
+    }
+    return t('Not produced — this run wrote no picture for this stage.')
+  }
+  /** The mesh line under the last frame: reached and good, reached and bad, or
+   *  never reached at all — three different states, three different lines. */
+  const meshNote = (): string => {
+    if (run.checks.mesh_ok) {
+      return `✓ ${num(run.checks.mesh_height_m)} m · ${run.checks.mesh_backend || '—'}`
+    }
+    if (run.checks.mesh_error) return `⚠ ${run.checks.mesh_error}`
+    if (run.failed_stage && stageAt(run.failed_stage) < stageAt('mesh')) {
+      return `⚠ ${t('No mesh — the run stopped at “{stage}” before meshing.')
+        .replace('{stage}', stageName(run.failed_stage))}`
+    }
+    if (run.unfinished) {
+      return `⚠ ${t('No mesh — the run was interrupted before it finished.')}`
+    }
+    return `⚠ ${t('No mesh — meshing produced none and reported no error.')}`
+  }
+  const shots: Array<{ url?: string; label: string; note: string
+                       stage: string; empty?: string }> = [
+    { url: run.files.before, label: t('Before'), stage: 'plate',
       note: typeof prev === 'number'
         ? t('variant {n}, what this spot showed').replace('{n}', String(prev + 1))
         : t('what this spot showed'),
-      // Not "not reached": this frame was never part of the run. The spot
+      // Not a stage state: this frame was never part of the run. The spot
       // simply had no picture to show — a first generation, or a variant whose
       // mesh was uploaded.
-      empty: t('no earlier picture') },
-    { url: run.files.context, label: t('Context render'),
+      empty: t('No earlier picture — this spot had none to show (a first generation, or an uploaded mesh).') },
+    { url: run.files.context, label: t('Context render'), stage: 'plate',
       note: t('the spot as Blender sees it') },
-    { url: run.files.edit, label: t('Edit result'),
+    { url: run.files.edit, label: t('Edit result'), stage: 'insert',
       note: `${run.path || '—'} · ${run.backend || '—'}` },
-    { url: run.files.cutout, label: t('After (cutout + mesh)'),
-      note: run.checks.mesh_ok
-        ? `✓ ${num(run.checks.mesh_height_m)} m · ${run.checks.mesh_backend || '—'}`
-        : `⚠ ${run.checks.mesh_error || t('no mesh')}` },
+    { url: run.files.cutout, label: t('After (cutout + mesh)'), stage: 'cutout',
+      note: meshNote() },
   ]
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {/* What the strip IS — the feature explains its own purpose instead of
+          leaving four unlabelled pictures to do it. */}
+      <span className="ga-hint" style={{ fontSize: '0.76em' }}>
+        {t('The record of ONE “generate in scene” run, left to right: what this spot showed before, the context render Blender made of it, the edit an image model drew into that render, and the cutout the new mesh variant was built from. Click a picture to enlarge it.')}
+      </span>
+      {run.backend_note ? (
+        <span className="ga-hint" style={{ fontSize: '0.76em' }}>
+          ℹ {run.backend_note}
+        </span>
+      ) : null}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {shots.map((s) => (
           <div key={s.label} style={{ width: 150 }}>
             {s.url ? (
-              <a href={s.url} target="_blank" rel="noreferrer">
+              // The in-app viewer, never a link: the artefact route serves the
+              // PNG inline, and a plain <a> would still leave the admin for a
+              // browser tab. `openLightbox` portals to document.body.
+              <button
+                type="button"
+                onClick={() => openLightbox({ src: s.url, alt: s.label })}
+                title={t('Enlarge')}
+                style={{ padding: 0, border: 0, background: 'none',
+                         cursor: 'zoom-in', display: 'block' }}
+              >
                 <img
                   src={s.url}
                   alt={s.label}
                   style={{ width: 150, height: 150, objectFit: 'contain',
                            background: 'rgba(127,127,127,0.14)', borderRadius: 4 }}
                 />
-              </a>
+              </button>
             ) : (
               <div style={{ width: 150, height: 150, borderRadius: 4,
                             background: 'rgba(127,127,127,0.14)',
                             display: 'flex', alignItems: 'center',
-                            justifyContent: 'center', fontSize: '0.8em',
-                            opacity: 0.7 }}>
-                {s.empty || t('not reached')}
+                            justifyContent: 'center', textAlign: 'center',
+                            padding: 8, fontSize: '0.74em', lineHeight: 1.35,
+                            opacity: 0.8 }}>
+                {s.empty || emptyWhy(s.stage)}
               </div>
             )}
             <div style={{ fontSize: '0.78em', fontWeight: 600 }}>{s.label}</div>
@@ -351,6 +464,21 @@ function RunStrip({ run }: { run: SceneAssetRun }) {
           </span>
         ) : null}
       </div>
+
+      {/* WHERE the run ended, in one line — the frames say it per picture,
+          this says it for the run. A finished, successful run says nothing:
+          the ✓ above is the statement. */}
+      {run.failed_stage ? (
+        <span style={{ fontSize: '0.78em' }}>
+          ⚠ {t('The run stopped at “{stage}”.').replace('{stage}', stageName(run.failed_stage))}
+          {run.failure_reason ? ` ${run.failure_reason}` : ''}
+        </span>
+      ) : run.unfinished ? (
+        <span style={{ fontSize: '0.78em' }}>
+          ⚠ {t('The run never finished — its process ended while it was at “{stage}”. Start it again.')
+            .replace('{stage}', stageName(run.stage))}
+        </span>
+      ) : null}
 
       {run.failures.length ? (
         <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.78em' }}>

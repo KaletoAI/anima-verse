@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
-import { rootDropFor } from '@anima/scene-render'
+import { anchorFigureBind, figureRootY } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -774,54 +774,32 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
                     fpivot.rotation.x = bestRx
                   }
                 }
-                // Body size from the REST pose (a posed sitting box is far
-                // shorter and would blow the figure up).
-                fpivot.updateMatrixWorld(true)
-                const fb = new THREE.Box3().setFromObject(fpivot)
-                const fs = fb.getSize(new THREE.Vector3())
-                const k = figH / (fs.y || 1)
+                // SIZE AND ANCHOR FROM THE BIND POSE, through the shared
+                // routine — soles on 0, XZ centred, scaled to `figH` (1.70 m
+                // in this mesh's units). The clip is played afterwards and
+                // never re-grounds the body.
+                anchorFigureBind(THREE, fpivot, figH)
                 if (anim) {
                   const mixer = new THREE.AnimationMixer(inst)
                   mixer.clipAction(anim.clip).play()
                   mixer.update(0)  // static frame-0 pose — no per-frame cost
                 }
-                fpivot.scale.setScalar(k)
-                // Grounding uses the POSED bounds; anchor bottom-centre at
-                // the marker's WORLD point so the figure stands upright even
-                // when the orientation fix tilts the mesh axes.
-                fpivot.updateMatrixWorld(true)
-                const fb2 = new THREE.Box3().setFromObject(fpivot)
-                const fc2 = fb2.getCenter(new THREE.Vector3())
                 place.updateMatrixWorld(true)
-                // WHICH part of the body the marker point carries. A standing
-                // or lying figure touches at its lowest edge; a SEATED one
-                // touches at the buttocks, and putting its feet on the seat
-                // is what made every sitter hover (user finding 2026-07-28).
-                //
-                // The amount is read off the POSED SKELETON, not off a
-                // constant: after the clip is applied the hips bone sits where
-                // it sits, and the buttocks a little below the joint. That
-                // cannot be off by half a metre the way a constant that fails
-                // to reach the code can — and it is right for every clip,
-                // including ones nobody has measured.
-                let anchorY = fb2.min.y
-                if (rootDropFor(m.animation) > 0) {
-                  let hips: Object3D | null = null
-                  inst.traverse((o: Object3D) => {
-                    if (!hips && /hips/i.test(o.name)) hips = o
-                  })
-                  if (hips) {
-                    const hy = (hips as Object3D)
-                      .getWorldPosition(new THREE.Vector3()).y
-                    // ~3 % of the figure height from the joint to the seat.
-                    anchorY = hy - 0.03 * figH
-                  }
-                }
+                // WHICH part of the body the marker point carries: a seated
+                // body touches at the buttocks, so the root goes the clip's
+                // share of the figure height BELOW the marked surface. Same
+                // routine and same table as the floor-plan preview and the 3D
+                // client, which is the whole point — this viewer used to read
+                // the hips bone off the "posed" skeleton instead, and because
+                // every clip is played in place (the Mixamo hips POSITION
+                // track is dropped above) that reading was one constant for
+                // every clip: 0.9288 m at H = 1.70 m, which put a sitter
+                // 0.395 m below where the scene renders it.
                 const world = pivot.localToWorld(local.clone())
                 const fig = new THREE.Group()
                 fig.position.copy(world)
+                fig.position.y = figureRootY(world.y, figH, m.animation)
                 fig.rotation.y = _deg(m.facing)
-                fpivot.position.set(-fc2.x, -anchorY, -fc2.z)
                 fig.add(fpivot)
                 fig.userData.__shared = true
                 figGroup.add(fig)

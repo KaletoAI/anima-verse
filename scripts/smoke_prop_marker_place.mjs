@@ -74,6 +74,31 @@
  *     prop in the field with such a fix). Checked as a BOUND, not a number.
  *
  * The world target in every case: anchor + [dx, dz], bottom_y + height_m.
+ *
+ * ============================================================================
+ * E  THE FIGURE ON THE MARKER (finding 2026-08-21)
+ * ============================================================================
+ * "The figure sits somewhere else on the prop than the position I set on the
+ * prop itself." Three renderers, three laws for the same height:
+ *
+ *   client3d           anchor the figure in its BIND pose (soles on 0), put
+ *                      that root on `y_world − root_offset`.
+ *   floor-plan preview the same — but by accident: it grounded on the box of
+ *                      the POSED figure, and `Box3.setFromObject` ignores
+ *                      skinning, so it silently returned the bind box.
+ *   prop viewer        its own: anchor the HIPS BONE of the posed skeleton
+ *                      minus 0.03 × H. Every clip is played IN PLACE (the
+ *                      Mixamo hips POSITION track is dropped — centimetres),
+ *                      so the hips joint never moves and that reading is ONE
+ *                      constant for every clip alike: 0.9288 m at H = 1.70 m,
+ *                      measured on x-bot.fbx + the clips.
+ *
+ * Against the table (`FIGURE_ROOT_DROP`) that constant puts the seated figure
+ * 0.9288 − 0.314 × 1.70 = 0.3950 m too low, the sleeper 0.9288 − 0.631 × 1.70
+ * = 0.1439 m too high and a lying figure 0.9288 − 0.051 × 1.70 = 0.8421 m too
+ * low. The rule lives in `packages/scene-render/src/figure.ts` now and is
+ * checked here; the server half of the same chain is
+ * `scripts/smoke_prop_marker_surface.py` part 5.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -115,6 +140,9 @@ function near(label, actual, expected, eps = 1e-3) {
 
 const THREE = await import('three');
 const { placeModelSpec } = await loadBundled(SRC, 'smoke-place-');
+const { anchorFigureBind, figureRootY, FIGURE_HEIGHT_M } =
+  await loadBundled(join(ROOT, 'packages/scene-render/src/figure.ts'),
+                    'smoke-figure-');
 
 /** The L above, plus an empty Object3D at the marker's raw point. A bare
  *  Object3D carries no geometry, so it does not enter any Box3 measurement. */
@@ -230,6 +258,53 @@ console.log('\nD  turning the prop must not move it');
       }
     }
   }
+}
+
+console.log('\nE  the figure meets the marker — ONE law for all three renderers');
+{
+  near('the contract figure is 1.70 m', FIGURE_HEIGHT_M, 1.7, 1e-9);
+
+  // (E1) The bind anchor: soles on 0, XZ centred, scaled to the target height.
+  // A deliberately off-origin body, so a forgotten term cannot hide in a zero.
+  const body = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2, 0.4));
+  box.position.set(3, 7, -2);          // min.y 6, centre (3, ·, −2)
+  body.add(box);
+  const k = anchorFigureBind(THREE, body, FIGURE_HEIGHT_M);
+  near('scale = 1.70 / 2', k, 0.85, 1e-9);
+  const b = new THREE.Box3().setFromObject(body);
+  near('soles on 0', b.min.y, 0, 1e-9);
+  near('height is the figure height', b.max.y - b.min.y, FIGURE_HEIGHT_M, 1e-9);
+  near('XZ centred on the origin', b.getCenter(new THREE.Vector3()).x, 0, 1e-9);
+  near('… on z as well', b.getCenter(new THREE.Vector3()).z, 0, 1e-9);
+
+  // (E2) The bench chain of `smoke_prop_marker_surface.py` part 5: the seat
+  // surface sits at 0.587 on storey 0, so the sitter's root goes 0.314 × 1.70
+  // below it.
+  const SURFACE = 0.587;
+  near('sit root', figureRootY(SURFACE, FIGURE_HEIGHT_M, 'sit'), 0.0532);
+  near('sleep root', figureRootY(SURFACE, FIGURE_HEIGHT_M, 'sleep'), -0.4857);
+  near('laying root', figureRootY(SURFACE, FIGURE_HEIGHT_M, 'laying'), 0.5003);
+  // A pose with no entry touches at its own root — a walker stands ON the mark.
+  near('idle keeps the surface', figureRootY(SURFACE, FIGURE_HEIGHT_M, 'idle'),
+       SURFACE, 1e-9);
+
+  // (E3) The payload wins where there is one: the server has already turned
+  // the clip's share into metres, and a consumer must not derive it twice.
+  near('root_offset from the payload is used verbatim',
+       figureRootY(SURFACE, FIGURE_HEIGHT_M, 'sit', 0.25), 0.337, 1e-9);
+  near('… and a missing one falls back to the table',
+       figureRootY(SURFACE, FIGURE_HEIGHT_M, 'sit', null), 0.0532);
+
+  // (E4) RED PROBE — the prop viewer's deleted hips law, which answered this
+  // one number for every clip because the hips track is dropped.
+  const DEAD = 0.9288;
+  near('the deleted law sank a sitter by',
+       figureRootY(SURFACE, FIGURE_HEIGHT_M, 'sit') - (SURFACE - DEAD), 0.3950);
+  near('… and lifted a sleeper by',
+       (SURFACE - DEAD) - figureRootY(SURFACE, FIGURE_HEIGHT_M, 'sleep'), 0.1439);
+  near('… and sank a lying figure by',
+       figureRootY(SURFACE, FIGURE_HEIGHT_M, 'laying') - (SURFACE - DEAD), 0.8421);
 }
 
 console.log(`\n${failed ? `FAILED (${failed})` : 'all checks passed'}`

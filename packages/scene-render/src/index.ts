@@ -76,6 +76,10 @@ export {
   FIGURE_ROOT_DROP, rootDropFor, pickVariant, pickModelVariant, MODEL_TIERS,
 } from './types'
 
+export {
+  FIGURE_HEIGHT_M, anchorFigureBind, figureRootDrop, figureRootY,
+} from './figure'
+
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
   surfaceTimeUniform } from './materials'
 export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
