@@ -34,6 +34,14 @@ by hand from the route docstrings — never recorded from output.
        and files carrying the LAST ATTEMPT's edit/cutout (edit-2.png) over the
        run's own context/mask. Every file is a URL under this very route.
 
+  3b. WHERE a run stopped, and why — the two fields the strip reads:
+       failed_stage + failure_reason come straight off the record; a run whose
+       PROCESS died carries only its stage and no finished_at, and the route
+       joins that with is_running to fill in the reason it could not write
+       itself. A run STILL OUT under the same record keeps its silence, and a
+       successful run carries neither field. backend_note rides along when the
+       run had to edit the whole plate for want of an inpaint backend.
+
   4. GET /runs/{prop_id}: three runs, newest first; ?limit=1 gives one; an
        unknown prop is a 404 (not an empty list — the id is wrong, not the
        history).
@@ -323,9 +331,93 @@ equals("a failed run keeps its edit picture", failed["files"]["edit"],
 equals("and says why in words", failed["failures"], ["mesh: height off"])
 
 
+# ── 3b. WHERE a run stopped, and why ────────────────────────────────────
+# The two fields the strip reads. A run that stopped names its stage; a run
+# whose PROCESS died names the stage it was in and gets the reason it could
+# not write itself — the reader joins the record with ``is_running``.
+
+print("\n3b. failed_stage / failure_reason")
+
+
+def write_bare(stamp, rec):
+    d = RUNS / stamp
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "result.json").write_text(json.dumps(rec), encoding="utf-8")
+
+
+write_bare("20260105-000000", {
+    "version": 1, "location_id": "loc1", "room_id": "hall", "index": 3,
+    "prop_id": PROP_ID, "started_at": "2026-01-05T00:00:00Z",
+    "finished_at": "2026-01-05T00:01:40Z", "seconds": 100.0,
+    "backend": "Flux1-Dev Inpaint", "path": "inpaint", "ok": False,
+    "stage": "insert", "failed_stage": "insert",
+    "failure_reason": "the insert returned no image — backend 'Flux1-Dev'",
+    "failures": ["the insert returned no image — backend 'Flux1-Dev'"],
+    "attempts": [{"attempt": 0, "seed": 5, "stage": "insert"}],
+    "params": {}, "files": {},
+})
+write_bare("20260106-000000", {
+    "version": 1, "location_id": "loc1", "room_id": "hall", "index": 3,
+    "prop_id": PROP_ID, "started_at": "2026-01-06T00:00:00Z",
+    "backend": "", "path": "", "ok": False, "stage": "mask",
+    "failed_stage": "", "failure_reason": "",
+    "attempts": [], "params": {}, "files": {},
+})
+write_bare("20260107-000000", {
+    "version": 1, "location_id": "loc1", "room_id": "hall", "index": 3,
+    "prop_id": PROP_ID, "started_at": "2026-01-07T00:00:00Z",
+    "finished_at": "2026-01-07T00:03:00Z", "seconds": 180.0,
+    "backend": "Together", "path": "img2img", "ok": False,
+    "stage": "insert", "failed_stage": "insert",
+    "failure_reason": "the insert returned no image",
+    "backend_note": core.NO_INPAINT_NOTE,
+    "failures": ["the insert returned no image"],
+    "attempts": [], "params": {}, "files": {},
+})
+
+runs = client.get(f"/world/scene-asset/runs/{PROP_ID}").json()["runs"]
+by_stamp = {x["stamp"]: x for x in runs}
+stopped = by_stamp["20260105-000000"]
+equals("a stopped run names its stage", stopped["failed_stage"], "insert")
+check("...and its reason", "Flux1-Dev" in stopped["failure_reason"],
+      stopped["failure_reason"])
+equals("...and is finished", stopped["unfinished"], False)
+
+killed = by_stamp["20260106-000000"]
+equals("a killed run reports the stage it reached", killed["failed_stage"],
+       "mask")
+equals("...with the reason it could not write itself",
+       killed["failure_reason"], core.INTERRUPTED_REASON)
+equals("...and reads as unfinished", killed["unfinished"], True)
+equals("...and never as ok", killed["ok"], False)
+
+noted = by_stamp["20260107-000000"]
+equals("the config remark rides along", noted["backend_note"],
+       core.NO_INPAINT_NOTE)
+equals("a successful run carries neither field",
+       [by_stamp["20260103-000000"]["failed_stage"],
+        by_stamp["20260103-000000"]["failure_reason"]], ["", ""])
+
+# A run STILL OUT is not a killed one: same record, live key, no reason.
+_was_running = core.is_running
+core.is_running = lambda location_id="": ["loc1|hall|3"]
+try:
+    live = {x["stamp"]: x
+            for x in client.get(f"/world/scene-asset/runs/{PROP_ID}"
+                                ).json()["runs"]}["20260106-000000"]
+    equals("a run still out keeps its silence", live["failure_reason"], "")
+    equals("...and still reports its stage", live["stage"], "mask")
+finally:
+    core.is_running = _was_running
+
+for stamp in ("20260105-000000", "20260106-000000", "20260107-000000"):
+    shutil.rmtree(RUNS / stamp)
+
+
 # ── 4. GET /runs/{prop_id} ──────────────────────────────────────────────
 
 print("\n4. GET /runs/{prop_id}")
+runs = client.get(f"/world/scene-asset/runs/{PROP_ID}").json()["runs"]
 equals("three readable runs (the writing one is invisible)", len(runs), 3)
 equals("newest first", [x["stamp"] for x in runs],
        ["20260103-000000", "20260102-000000", "20260101-000000"])

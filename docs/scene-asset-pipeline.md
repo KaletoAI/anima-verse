@@ -38,25 +38,37 @@ Two paths, and the result record says which one ran (`path`):
 
 * **`inpaint`** — plate and mask go to a backend that can take a mask. The
   surroundings stay pixel-identical and the position is guaranteed by
-  construction. "Can take a mask" means `category == "inpaint"` **or**
-  `api_type == "openai_diffusion"`: that class routes a request to
-  `POST /v1/images/edits` as soon as an `input_mask` reference slot is present,
-  whatever its category (`_is_inpaint`), and its `mask_format` setting decides
-  whether the L-PNG travels as-is or is inverted to the OpenAI RGBA form. **No
-  other backend class in the tree consumes a mask at all** — LocalAI/Together
-  fold every reference image into `ref_images`, A1111 and CivitAI take none —
-  so handing one a mask would look like a successful edit while the whole
-  plate was repainted.
+  construction. "Can take a mask" means **both** `api_type ==
+  "openai_diffusion"` **and** `category == "inpaint"`:
+  * the class is the transport — it routes a request to
+    `POST /v1/images/edits` as soon as an `input_mask` reference slot is
+    present (`_is_inpaint`), and its `mask_format` setting decides whether the
+    L-PNG travels as-is or is inverted to the OpenAI RGBA form. **No other
+    backend class in the tree consumes a mask at all** — LocalAI/Together fold
+    every reference image into `ref_images`, A1111 and CivitAI take none — so
+    handing one a mask would look like a successful edit while the whole plate
+    was repainted.
+  * the category is the MODEL. Being able to carry a mask says nothing about
+    what is on the other end: an edits request against a plain txt2img/img2img
+    alias reaches the gateway and dies there. Measured 2026-08-20/21 on
+    `Flux1-Dev` (category `img2img`): `HTTP 502 (Generierung fehlgeschlagen)`
+    after ~100 s, and once the alias had no warm worker, `HTTP 503 — No healthy
+    backend for generation model 'Flux1-Dev'`. The world had `Flux1-Dev
+    Inpaint` configured the whole time; only the category tells them apart.
 * **`img2img`** — the fallback for backends without a mask: the plate goes in
   as reference slot 1 and the model redraws the frame. The position is then
   only as good as the model felt like being, and the cutout stage is what
-  notices (it intersects with the mask region regardless).
+  notices (it intersects with the mask region regardless). A run that lands
+  here for want of an inpaint backend says so on the record (`backend_note`) —
+  the cure is a config one and the pipeline never applies it itself.
 
 Selection: an explicit backend glob wins. Without one the pool's normal
 matching would never offer an inpaint backend — they are excluded from render
 matching by design (`selection._is_inpaint_backend`) — so the preference is
 applied over the pool's list here: cheapest available mask-capable backend
-first, the normal image default second.
+first, the normal image default second. The cheapest-first sort is **stable**,
+so equal-cost backends keep their configured order; membership is what decides,
+which is why the category belongs in `backend_takes_mask` and not beside it.
 
 The prompt is the use case **`scene_asset`** (`config._DEFAULT_IMAGE_USE_CASES`,
 both families, `llm_compose` off by default) with the prop's description as the
@@ -245,6 +257,23 @@ cutout.png      the object, transparent background (per attempt)
 result.json     paths, prompt, backend, path taken, every check, timings
 ```
 
+`result.json` is written **before any work happens** and rewritten after every
+stage — it is the run's state, not its epitaph. Three fields carry that:
+
+| field | says |
+|---|---|
+| `stage` | where the run stands, or last stood: `plate` → `mask` → `backend` → `insert` → `cutout` → `mesh` → `place` → `done`. Each attempt carries its own `stage` too. |
+| `failed_stage` | the stage it stopped in, empty on success |
+| `failure_reason` | why, in one sentence, empty on success |
+
+A stage that RAISES (a dying Blender render, a plate without a region, an empty
+backend pool) persists both fields on its way out and then re-raises, so the
+queue header still fails. A stage that merely fails (no image, ratio off the
+band, mesh height, contact) is an ordinary result with `ok: false`. A run whose
+PROCESS died writes nothing at all — its record keeps the stage it reached and
+never gets a `finished_at`, and the READER joins that with `is_running`
+(`settle_interrupted`) to tell a killed run from a live one.
+
 which is also the picture strip the UI shows: **before → plate → edit →
 after**. `before.png` is copied at trigger time, not afterwards — a run that
 refines the very variant the placement pointed at overwrites that variant's
@@ -273,7 +302,9 @@ The **summary** the three read-routes return is built in one place
 (`_summary`) and is the UI's whole contract: the run's `files` with the LAST
 attempt's `edit`/`cutout` folded over them (a failed run never promotes them,
 and they are exactly what explains the failure), the checks with the band they
-are judged against beside them, and the core's own failure sentences verbatim.
+are judged against beside them, and the core's own failure sentences verbatim
+— plus `stage`, `failed_stage`, `failure_reason`, `unfinished` and
+`backend_note`, so a reader never has to open a log to learn where a run died.
 
 The UI is `frontend/src/tabs/world/ScenePropPanel.tsx`, inside the floor plan's
 selected-placement strip next to the yaw/height dials: **"🎬 Generate in

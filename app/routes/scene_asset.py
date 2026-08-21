@@ -140,6 +140,19 @@ def _summary(prop_id: str, stamp: str, rec: Dict[str, Any]) -> Dict[str, Any]:
         # the comparison, whose picture rides along in ``files.before``.
         "previous_variant": rec.get("previous_variant"),
         "failures": list(rec.get("failures") or []),
+        # WHERE it stopped and WHY, in the two fields a reader shows. Both are
+        # empty on a successful run; ``stage`` is where the run stands (or last
+        # stood) whether or not it stopped, so a run still out reports its
+        # progress through the same field.
+        "stage": rec.get("stage", ""),
+        "failed_stage": rec.get("failed_stage", ""),
+        "failure_reason": rec.get("failure_reason", ""),
+        # A run still writing has no ``finished_at``; one that never gets it is
+        # a run whose process died. Either way the reader sees the stage.
+        "unfinished": not rec.get("finished_at"),
+        # Set only when the run had to edit the whole plate for want of an
+        # inpaint backend — a config remark, not a failure.
+        "backend_note": rec.get("backend_note", ""),
         "checks": {
             "px_ratio": last.get("px_ratio"),
             "px_ratio_band": [par.get("px_ratio_min"), par.get("px_ratio_max")],
@@ -163,12 +176,18 @@ def _runs(prop_id: str, *, limit: int = 0) -> List[Dict[str, Any]]:
     (``%Y%m%d-%H%M%S``), so their reverse sort IS the chronology.
 
     A directory without a readable ``result.json`` is skipped rather than
-    reported: it is a run that is still writing, or one whose process died,
-    and neither has anything to show yet.
+    reported: the pipeline writes that file before it does any work and
+    rewrites it after every stage, so a directory still missing it holds
+    nothing that could be shown. A run that STOPPED does have one — with its
+    ``failed_stage`` and ``failure_reason`` — and so does one whose process
+    died, which reports the stage it was in and no ``finished_at``.
     """
+    from app.core.scene_asset import is_running, settle_interrupted
+
     root = _run_root(prop_id)
     if not root or not root.is_dir():
         return []
+    live = set(is_running())
     out: List[Dict[str, Any]] = []
     for entry in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
         if not entry.is_dir():
@@ -179,7 +198,10 @@ def _runs(prop_id: str, *, limit: int = 0) -> List[Dict[str, Any]]:
             continue
         if not isinstance(rec, dict):
             continue
-        out.append(_summary(prop_id, entry.name, rec))
+        key = (f"{rec.get('location_id', '')}|{rec.get('room_id', '')}"
+               f"|{rec.get('index', -1)}")
+        out.append(_summary(prop_id, entry.name,
+                            settle_interrupted(rec, key in live)))
         if limit and len(out) >= limit:
             break
     return out

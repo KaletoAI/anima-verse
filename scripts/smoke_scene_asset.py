@@ -166,6 +166,30 @@ are (512.00, 406.93), (716.80, 512.00), (512.00, 645.18), (307.20, 512.00).
        ``run_attempts`` runs. A run that refines the very variant the placement
        pointed at overwrites the original a moment later, so a live URL — or a
        copy taken afterwards — would show the after in both frames.
+
+11. THE FAILURE PATH — a run that stops has to say WHERE and WHY, because a
+    strip that only knows "nicht erreicht" sends the user into the logs. The
+    record is written before any work happens and rewritten after every stage,
+    so the four ways a run can end each land as a persisted pair:
+        the plate render dies      → failed_stage "plate",   the exception text
+        the plate has no region    → failed_stage "mask",    "mask polygon"
+        the pool offers nothing    → failed_stage "backend", the admin page
+        the insert returns nothing → failed_stage "insert",  backend + alias
+    The first three RAISE (the queue header must still fail) and persist on
+    the way out; the fourth is an ordinary result with ok=false. A raising
+    insert — the gateway's 503 — is the insert stage too, not an anonymous
+    exception from the retry loop, and the whole retry budget is still spent.
+    A run whose PROCESS died writes nothing at all, so its record is the last
+    stage it reached with no ``finished_at``; joined with ``is_running`` at
+    the reader (``settle_interrupted``), that is a killed run and says so.
+
+12. THE E5a SYMBOLS. The "Ein Boden" rework (c9874527) deleted
+    ``scene_ground_lift``, ``ground_lift_at``, ``compose_terrain``,
+    ``natural_floor`` and the scene relief. A leftover CALL to one of them
+    would not fail at import — every one of them sits inside a stage, reached
+    only under the world data that triggers it — so the probe reads the source
+    instead of trusting the import, and checks the stage functions the chain
+    names still exist under those names.
 ──────────────────────────────────────────────────────────────────────────
 """
 import ast
@@ -554,18 +578,58 @@ def part_retries():
 # ── [9] Backend contract ────────────────────────────────────────────────
 
 class _Stub:
-    def __init__(self, category="", api_type=""):
+    def __init__(self, category="", api_type="", name="", cost=0.0,
+                 available=True, enabled=True, media="image"):
         self.category = category
         self.api_type = api_type
+        self.name = name or f"{api_type or 'stub'}/{category or 'none'}"
+        self.effective_cost = cost
+        self.available = available
+        self.instance_enabled = enabled
+        self.MEDIA_TYPE = media
+
+
+class _PoolStub:
+    """The two halves of ``select_backend``'s world: a backend list and the
+    resolver an explicit glob goes through."""
+
+    def __init__(self, backends, resolved=None):
+        self.backends = backends
+        self._resolved = resolved
+
+    def resolve_imagegen_target(self, glob):
+        return self._resolved
+
+    def _select_backend(self):
+        return self.backends[0] if self.backends else None
+
+
+def _with_pool(pool, fn):
+    """Run ``fn`` with ``get_image_service`` answering ``pool``."""
+    import app.imagegen.service as svc
+
+    original = svc.get_image_service
+    try:
+        svc.get_image_service = lambda: pool
+        return fn()
+    finally:
+        svc.get_image_service = original
 
 
 def part_backend():
     print("\n[9] Backend contract — who can take a mask, and the cache sentinel")
-    check_true("category 'inpaint' takes a mask",
-               sa.backend_takes_mask(_Stub(category="inpaint")))
-    check_true("openai_diffusion takes a mask whatever its category",
-               sa.backend_takes_mask(_Stub(category="txt2img",
+    check_true("inpaint category on openai_diffusion takes a mask",
+               sa.backend_takes_mask(_Stub(category="inpaint",
                                            api_type="openai_diffusion")))
+    check_true("openai_diffusion WITHOUT the inpaint category does NOT",
+               not sa.backend_takes_mask(_Stub(category="img2img",
+                                               api_type="openai_diffusion")))
+    check_true("a txt2img alias on openai_diffusion does NOT",
+               not sa.backend_takes_mask(_Stub(category="txt2img",
+                                               api_type="openai_diffusion")))
+    check_true("the inpaint category alone does NOT (the class drops the slot)",
+               not sa.backend_takes_mask(_Stub(category="inpaint",
+                                               api_type="localai")))
     check_true("a Together backend does NOT",
                not sa.backend_takes_mask(_Stub(category="img2img",
                                                api_type="together")))
@@ -579,6 +643,65 @@ def part_backend():
     check_true("an empty list is not an image", sa._first_image([]) is None)
     check_true("None is not an image", sa._first_image(None) is None)
     check("real bytes come through", sa._first_image([b"PNG"]), b"PNG")
+
+    # ── The 2026-08-20/21 misselection, in the shape it had ──────────────
+    # The world had `Flux1-Dev` (img2img, cost 0) standing BEFORE
+    # `Flux1-Dev Inpaint` (inpaint, cost 0) in the backend list. Both are
+    # openai_diffusion and both cost 0, so the cheapest-first sort — stable —
+    # returned the first, and the mask went to a plain img2img alias. The
+    # gateway answered 502 and later 503, three seeds in a row, and the run
+    # stopped in the insert with a reason nobody could act on.
+    live = [_Stub(category="txt2img", api_type="openai_diffusion",
+                  name="Z-Image", cost=0.0),
+            _Stub(category="img2img", api_type="openai_diffusion",
+                  name="Flux1-Dev", cost=0.0),
+            _Stub(category="inpaint", api_type="openai_diffusion",
+                  name="Flux1-Dev Inpaint", cost=0.0),
+            _Stub(category="inpaint", api_type="openai_diffusion",
+                  name="Flux2-9B Inpaint", cost=5.0)]
+    backend, path = _with_pool(_PoolStub(live), sa.select_backend)
+    check("the mask goes to the INPAINT alias, not the cheaper img2img one",
+          backend.name, "Flux1-Dev Inpaint")
+    check("...on the inpaint path", path, "inpaint")
+
+    # Cost still decides BETWEEN inpaint backends.
+    cheaper_second = [_Stub(category="inpaint", api_type="openai_diffusion",
+                            name="Expensive Inpaint", cost=7.0),
+                      _Stub(category="inpaint", api_type="openai_diffusion",
+                            name="Cheap Inpaint", cost=1.0)]
+    backend, _ = _with_pool(_PoolStub(cheaper_second), sa.select_backend)
+    check("among inpaint backends the cheapest wins", backend.name,
+          "Cheap Inpaint")
+
+    # A disabled or unreachable inpaint backend is not an inpaint backend.
+    shut = [_Stub(category="inpaint", api_type="openai_diffusion",
+                  name="Off Inpaint", cost=0.0, enabled=False),
+            _Stub(category="img2img", api_type="openai_diffusion",
+                  name="Krea2", cost=0.0)]
+    backend, path = _with_pool(_PoolStub(shut), sa.select_backend)
+    check("a switched-off inpaint backend does not count", backend.name,
+          "Krea2")
+    check("...and the run says so by taking the img2img path", path, "img2img")
+
+    # No inpaint anywhere: the full-plate edit, and the note that names the
+    # config change — the pipeline never edits config itself.
+    none_masking = [_Stub(category="img2img", api_type="together",
+                          name="Together", cost=2.0)]
+    backend, path = _with_pool(_PoolStub(none_masking), sa.select_backend)
+    check("without any inpaint backend the path is the full edit", path,
+          "img2img")
+    check_true("...and the user-facing note names the category to configure",
+               "inpaint" in sa.NO_INPAINT_NOTE
+               and "openai_diffusion" in sa.NO_INPAINT_NOTE)
+
+    # An explicit glob is taken at its word — including its path.
+    picked = _Stub(category="inpaint", api_type="openai_diffusion",
+                   name="Qwen Inpaint", cost=0.0)
+    backend, path = _with_pool(_PoolStub(live, resolved=picked),
+                               lambda: sa.select_backend("Qwen Inpaint"))
+    check("an explicit glob wins over the preference", backend.name,
+          "Qwen Inpaint")
+    check("...and keeps the inpaint path", path, "inpaint")
 
 
 # ── [10] Before / after ─────────────────────────────────────────────────
@@ -612,7 +735,7 @@ def _origin_kwarg_passed():
 
 def _origin_ts_from_record():
     """(b) the origin's ``origin_ts`` is ``record["started_at"]``."""
-    fn = _fn_ast("generate")
+    fn = _fn_ast("_run_chain")
     for node in ast.walk(fn) if fn else ():
         if not isinstance(node, ast.Dict):
             continue
@@ -629,7 +752,7 @@ def _origin_ts_from_record():
 
 def _before_copied_before_attempts():
     """(c) the before picture is written before the attempt loop starts."""
-    fn = _fn_ast("generate")
+    fn = _fn_ast("_run_chain")
     if fn is None:
         return False
     copy_line = 0
@@ -704,6 +827,277 @@ def part_before_after():
                _before_copied_before_attempts())
 
 
+# ── [11] The failure path ───────────────────────────────────────────────
+
+class _Recorder:
+    """A prop store just real enough for ``generate`` to reach every stage."""
+
+    def __init__(self, root):
+        self.root = root
+
+    def install(self, stack):
+        from app.core import props as prop_store
+        from app.models import world as world_model
+
+        loc = {"name": "Demo house", "rooms": [
+            {"id": "hall", "layout": {"props": [
+                {"prop_id": "demo-chair", "variant": 0, "offset_y": 0.0}]}}]}
+        stack.patch(prop_store, "prop_dir",
+                    lambda pid, create=False: self.root / pid)
+        stack.patch(prop_store, "read_sidecar",
+                    lambda pid: {"description": "a plain wooden chair"})
+        stack.patch(prop_store, "target_variant", lambda pid: 0)
+        stack.patch(prop_store, "source_path", lambda pid, v: None)
+        stack.patch(world_model, "get_location_by_id", lambda lid: loc)
+        stack.patch(sa, "previous_variant", lambda pid, placement: None)
+        stack.patch(sa, "compose_insert_prompt",
+                    lambda subject, backend: {"prompt": "p", "negative": "n"})
+
+
+class _Patches:
+    """Undo everything on the way out, whatever the check did."""
+
+    def __init__(self):
+        self._undo = []
+
+    def patch(self, obj, name, value):
+        self._undo.append((obj, name, getattr(obj, name)))
+        setattr(obj, name, value)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        for obj, name, old in reversed(self._undo):
+            setattr(obj, name, old)
+        return False
+
+
+def _plate(tmp, polygon):
+    """A context plate on disk — the PNG and the sidecar ``render_context``
+    hands back."""
+    import json as _json
+
+    png = tmp / "context.png"
+    png.write_bytes(_PNG_1PX)
+    side = tmp / "context.json"
+    side.write_text(_json.dumps({
+        "location_id": "loc1",
+        "camera": {"resolution": [64, 64], "azimuth_deg": 45.0},
+        "mask": {"polygon_px": polygon},
+        "target": {"prop_id": "demo-chair", "room_id": "hall", "index": 0,
+                   "footprint": [], "ground_y": 0.0, "height_m": 0.9},
+    }), encoding="utf-8")
+    return {"png": str(png), "sidecar": str(side)}
+
+
+#: The smallest legal PNG — the plate's pixels never matter here, only that a
+#: file exists to copy.
+_PNG_1PX = bytes.fromhex(
+    "89504e470d0a1a0a0000000d494844520000000100000001080600000"
+    "01f15c4890000000a49444154789c6360000002000100ffff0300000600"
+    "05fdf2d1780000000049454e44ae426082")
+
+
+def _read_result(root):
+    import json as _json
+
+    path = root / "demo-chair" / sa.RUN_DIR_NAME
+    runs = sorted(p for p in path.iterdir() if p.is_dir())
+    return _json.loads((runs[-1] / "result.json").read_text(encoding="utf-8"))
+
+
+def part_failure_path():
+    print("\n[11] A run that stops says WHERE and WHY")
+    import shutil
+    import tempfile
+
+    from app.core import scene_context as sctx
+
+    square = [[10.0, 10.0], [50.0, 10.0], [50.0, 50.0], [10.0, 50.0]]
+
+    def run(render, extra=None, overrides=None):
+        root = Path(tempfile.mkdtemp(prefix="av-smoke-scene-asset-"))
+        try:
+            with _Patches() as stack:
+                _Recorder(root).install(stack)
+                stack.patch(sctx, "render_context", render)
+                for obj, name, value in (extra or ()):
+                    stack.patch(obj, name, value)
+                raised = None
+                try:
+                    rec = sa.generate("loc1", "hall", 0, overrides=overrides)
+                except Exception as exc:
+                    raised = exc
+                    rec = None
+                stored = _read_result(root)
+            return stored, rec, raised
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    # (a) The plate stage — the Blender render dies.
+    def boom(*a, **k):
+        raise RuntimeError("blender exited 1")
+
+    stored, _, raised = run(boom)
+    check_true("a dying context render still raises", isinstance(raised,
+                                                                RuntimeError))
+    check("...and the record names the stage", stored["failed_stage"], "plate")
+    check_true("...and quotes the reason",
+               "blender exited 1" in stored["failure_reason"])
+    check("...and is not ok", stored["ok"], False)
+    check_true("...and is finished, so no reader calls it interrupted",
+               not sa.interrupted(stored))
+
+    # (b) The mask stage — a plate whose region degenerated.
+    tmp = Path(tempfile.mkdtemp(prefix="av-smoke-plate-"))
+    try:
+        thin = _plate(tmp, [[1.0, 1.0], [2.0, 2.0]])
+        stored, _, raised = run(lambda *a, **k: thin)
+        check("a plate with no region stops in the mask stage",
+              stored["failed_stage"], "mask")
+        check_true("...naming the missing polygon",
+                   "mask polygon" in stored["failure_reason"])
+
+        # (c) The backend stage — nothing in the pool.
+        full = _plate(tmp, square)
+        stored, _, raised = run(
+            lambda *a, **k: full,
+            extra=[(sa, "select_backend", lambda glob="": (None, ""))])
+        check("an empty pool stops in the backend stage",
+              stored["failed_stage"], "backend")
+        check_true("...and the reason names the admin page",
+                   "Image/Video Generation" in stored["failure_reason"])
+
+        # (d) The insert stage — the backend answers with nothing. This is the
+        # user's 2026-08-20 run: three seeds, no image, and until now a record
+        # that said "insert produced no image" and nothing else.
+        backend = _Stub(category="inpaint", api_type="openai_diffusion",
+                        name="Flux1-Dev Inpaint", cost=0.0)
+        backend.model = "Flux1-Dev-Inpaint"
+        stored, rec, raised = run(
+            lambda *a, **k: full,
+            extra=[(sa, "select_backend", lambda glob="": (backend, "inpaint")),
+                   (sa, "insert_object", lambda *a, **k: None)],
+            overrides={"retries": 0})
+        check_true("an image-less insert does NOT raise — it is a result",
+                   raised is None)
+        check("the run ends in the insert stage", stored["failed_stage"],
+              "insert")
+        check("...and the returned record says the same", rec["failed_stage"],
+              "insert")
+        check_true("...and the reason names the backend and the alias",
+                   "Flux1-Dev Inpaint" in stored["failure_reason"]
+                   and "Flux1-Dev-Inpaint" in stored["failure_reason"])
+        check("...and every attempt carries its own stage",
+              [a["stage"] for a in stored["attempts"]], ["insert"])
+
+        # (e) A raising insert — a 503 from the gateway — is the same stage,
+        # not an anonymous exception from the retry loop.
+        def busy(*a, **k):
+            raise RuntimeError("HTTP 503 (kein Backend) nach 4 Versuchen")
+
+        stored, rec, raised = run(
+            lambda *a, **k: full,
+            extra=[(sa, "select_backend", lambda glob="": (backend, "inpaint")),
+                   (sa, "insert_object", busy)],
+            overrides={"retries": 1})
+        check("a raising insert is still the insert stage",
+              stored["failed_stage"], "insert")
+        check_true("...and the HTTP reason survives onto the record",
+                   "503" in stored["failure_reason"])
+        check("...and the retry budget was spent", len(stored["attempts"]), 2)
+
+        # (f) The note the pipeline persists when no inpaint backend exists —
+        # a config finding, never a config change.
+        img2img = _Stub(category="img2img", api_type="together",
+                        name="Together", cost=1.0)
+        img2img.model = "flux-schnell"
+        stored, rec, raised = run(
+            lambda *a, **k: full,
+            extra=[(sa, "select_backend", lambda glob="": (img2img, "img2img")),
+                   (sa, "insert_object", lambda *a, **k: None)],
+            overrides={"retries": 0})
+        check("a full-plate run records the note", stored["backend_note"],
+              sa.NO_INPAINT_NOTE)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # (g) A run whose PROCESS died: a stage, no finished_at, nothing running.
+    killed = {"stage": "insert", "ok": False, "attempts": []}
+    check_true("a record without finished_at reads as unfinished",
+               sa.interrupted(killed))
+    settled = sa.settle_interrupted(killed, running=False)
+    check("...and settles onto the stage it reached", settled["failed_stage"],
+          "insert")
+    check("...with the reason a killed run cannot write itself",
+          settled["failure_reason"], sa.INTERRUPTED_REASON)
+    same = sa.settle_interrupted(killed, running=True)
+    check_true("a run still OUT keeps its silence", not same.get(
+        "failed_stage"))
+    done = {"stage": "done", "ok": True, "finished_at": "2026-08-21T09:00:00"}
+    check_true("a finished run is never settled",
+               sa.settle_interrupted(done, running=False) is done)
+
+    # (h) The attempt→stage mapping, including the one an exception leaves.
+    check("an attempt names its own stage",
+          sa.attempt_stage({"stage": "mesh"}), "mesh")
+    check("a bare attempt record falls back to the insert",
+          sa.attempt_stage({}), "insert")
+
+
+# ── [12] The E5a symbols ────────────────────────────────────────────────
+
+#: Deleted by the "Ein Boden" rework (commit c9874527, E5a). A module that
+#: still CALLS one of these is a module that did not survive the rework — the
+#: import would not even fail, because every one of them is reached late,
+#: inside a stage, and only under the world data that triggers it.
+E5A_DELETED = ("scene_ground_lift", "ground_lift_at", "compose_terrain",
+               "natural_floor", "scene_relief")
+
+
+def part_e5a_symbols():
+    print("\n[12] The 'Ein Boden' rework left no callers behind")
+    import importlib
+
+    for name in ("app.core.scene_context", "app.core.scene_asset",
+                 "app.routes.scene_asset"):
+        try:
+            importlib.import_module(name)
+            ok, note = True, ""
+        except Exception as exc:                       # noqa: BLE001
+            ok, note = False, f"{type(exc).__name__}: {exc}"
+        check_true(f"{name} imports", ok, note)
+
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("app/core/scene_context.py", "app/core/scene_asset.py"):
+        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        called = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = (fn.id if isinstance(fn, ast.Name)
+                    else fn.attr if isinstance(fn, ast.Attribute) else "")
+            if name in E5A_DELETED:
+                called.add(name)
+        check_true(f"{rel} calls none of the deleted E5a symbols",
+                   not called, ", ".join(sorted(called)))
+
+    # The chain itself: every stage function `generate` walks has to exist and
+    # be callable by that name. A rename that a docstring survived but the
+    # caller did not is exactly the break this probe is red for.
+    for name in ("render_context",):
+        check_true(f"scene_context.{name} exists",
+                   callable(getattr(sc, name, None)))
+    for name in ("select_backend", "compose_insert_prompt", "insert_object",
+                 "cut_out", "write_cutout", "mesh_from_cutout", "place",
+                 "run_attempts", "_attempt", "_write_record",
+                 "settle_interrupted", "attempt_stage"):
+        check_true(f"scene_asset.{name} exists",
+                   callable(getattr(sa, name, None)))
+
+
 def main():
     part_expected()
     part_mask_grow()
@@ -715,6 +1109,8 @@ def main():
     part_retries()
     part_backend()
     part_before_after()
+    part_failure_path()
+    part_e5a_symbols()
     print()
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")

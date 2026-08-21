@@ -86,6 +86,26 @@ USE_CASE = "scene_asset"
 #: Sub-directory of the prop dir every run writes into.
 RUN_DIR_NAME = "scene_asset"
 
+# ── The stages a run walks, and the names it reports them under ─────────
+# One vocabulary for three readers: the record's ``stage`` while the run is
+# out, its ``failed_stage`` when it stopped, and the admin strip that labels
+# the four frames. Keep the values stable — they are persisted.
+STAGE_PLATE = "plate"       # 1 the Blender context render
+STAGE_MASK = "mask"         # 1b the region the plate marked, grown
+STAGE_BACKEND = "backend"   # 2 choosing the image backend and the prompt
+STAGE_INSERT = "insert"     # 3 the image model draws the object in
+STAGE_CUTOUT = "cutout"     # 3b the before/after difference, cleaned
+STAGE_MESH = "mesh"         # 4 image-to-3D plus normalisation
+STAGE_PLACE = "place"       # 5 yaw, contact check, stored placement
+STAGE_DONE = "done"
+
+#: What a run says when its process died before it could say anything else.
+#: A record stamped this way is one whose ``result.json`` never got a
+#: ``finished_at`` — see :func:`interrupted`.
+INTERRUPTED_REASON = (
+    "The run stopped without finishing — its process ended (server restart or "
+    "shutdown) while it was in this stage.")
+
 #: The sanitizer's clamp for ``offset_y`` — the sink must not propose a value
 #: the placement sanitizer would then silently cut (world_ops._sanitize_props).
 OFFSET_Y_LIMIT = 5.0
@@ -558,20 +578,27 @@ def ground_sampler(loc: Dict[str, Any], floor_y: float = 0.0,
 # ── Backend choice ──────────────────────────────────────────────────────
 
 def backend_takes_mask(backend: Any) -> bool:
-    """Can this backend inpaint?
+    """Can this backend inpaint? BOTH halves have to be true.
 
-    Two ways, and BOTH are the imagegen contract's, not ours: a backend
-    categorised ``inpaint``, or one whose api_type routes a mask at all.
-    Today that is ``openai_diffusion`` alone — its ``_is_inpaint`` flips to
-    ``POST /v1/images/edits`` as soon as a ``input_mask`` reference slot is
-    present, whatever its category. Every other backend class silently drops
-    the slot (LocalAI/Together fold reference images into ``ref_images``, A1111
-    and CivitAI take none), which would look like a successful edit and quietly
-    repaint the whole plate.
+    1. ``api_type == "openai_diffusion"`` — the only backend class that routes
+       a mask at all. Its ``_is_inpaint`` flips to ``POST /v1/images/edits`` as
+       soon as an ``input_mask`` reference slot is present. Every other class
+       silently drops the slot (LocalAI/Together fold reference images into
+       ``ref_images``, A1111 and CivitAI take none), which would look like a
+       successful edit and quietly repaint the whole plate.
+    2. ``category == "inpaint"`` — the alias behind the backend must actually
+       BE an inpaint workflow. The transport being able to carry a mask says
+       nothing about the model on the other end: an edits request against a
+       plain txt2img/img2img alias reaches the gateway and dies there, and it
+       dies late and unhelpfully — measured on 2026-08-20/21 against the alias
+       ``Flux1-Dev`` (category ``img2img``), which answered ``HTTP 502
+       (Generierung fehlgeschlagen)`` after 100 s and, once the alias had no
+       warm worker at all, ``HTTP 503 — No healthy backend for generation model
+       'Flux1-Dev'``. The world had ``Flux1-Dev Inpaint`` configured the whole
+       time; only the category tells the two apart.
     """
-    if getattr(backend, "category", "") == "inpaint":
-        return True
-    return getattr(backend, "api_type", "") == "openai_diffusion"
+    return (getattr(backend, "api_type", "") == "openai_diffusion"
+            and getattr(backend, "category", "") == "inpaint")
 
 
 def select_backend(glob: str = "") -> Tuple[Any, str]:
@@ -583,6 +610,12 @@ def select_backend(glob: str = "") -> Tuple[Any, str]:
     normal render matching by design — so the preference is applied here, over
     the pool's list: cheapest available inpaint-capable backend first, the
     normal image default second.
+
+    The cheapest-first sort is stable, so backends of equal cost keep their
+    configured order — but ``backend_takes_mask`` decides membership FIRST, and
+    it now demands the ``inpaint`` category. That is the whole reason the
+    ordering matters: with cost 0 on both, config order alone used to hand the
+    mask to the non-inpaint alias standing higher in the list.
 
     Returns ``(backend, "inpaint" | "img2img")``; ``(None, "")`` when the pool
     has nothing available.
@@ -613,6 +646,17 @@ def select_backend(glob: str = "") -> Tuple[Any, str]:
         return cheapest(img2img), "img2img"
     fallback = svc._select_backend()
     return (fallback, "img2img") if fallback else (None, "")
+
+
+#: What the record says when the run had to fall back to a full-plate edit —
+#: user-facing, because the cure is a config one and nothing in the code can
+#: apply it.
+NO_INPAINT_NOTE = (
+    "No inpaint-capable backend available: the run edited the whole plate "
+    "instead of the marked region, so the object's position is only as good as "
+    "the model felt like being. Configure an image backend of category "
+    "'inpaint' whose api type is 'openai_diffusion' under Admin → Settings → "
+    "Image/Video Generation, and make sure it is enabled and reachable.")
 
 
 # ── The insert step ─────────────────────────────────────────────────────
@@ -951,6 +995,62 @@ def run_dir(prop_id: str, stamp: str = "") -> Path:
     return out
 
 
+def _write_record(out: Path, record: Dict[str, Any]) -> None:
+    """``result.json``, written atomically so a reader never sees half of it.
+
+    Called after every stage, not once at the end: the file IS the run's state
+    while the run is out, and a reader that finds no ``finished_at`` is looking
+    at a run that is still going — or at one whose process died in the stage
+    the file names.
+    """
+    tmp = out / "result.json.tmp"
+    tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    tmp.replace(out / "result.json")
+
+
+def attempt_stage(attempt: Dict[str, Any]) -> str:
+    """The stage ONE attempt reached, from the attempt's own report.
+
+    An attempt stamps ``stage`` as it walks; an attempt that raised carries
+    none (``run_attempts`` builds its record from the exception alone), and the
+    insert is the stage it was in when it did, because that is the first thing
+    an attempt does.
+    """
+    return str(attempt.get("stage") or STAGE_INSERT)
+
+
+def interrupted(record: Dict[str, Any]) -> bool:
+    """Did this run's process die before the run could finish?
+
+    The record is written at every stage but ``finished_at`` is stamped exactly
+    once, at the end — so a record with a stage and no ``finished_at`` belongs
+    to a run that is either still out or was killed. The caller knows which:
+    ``is_running`` answers for the live process.
+    """
+    return bool(record.get("stage")) and not record.get("finished_at")
+
+
+def settle_interrupted(record: Dict[str, Any], running: bool) -> Dict[str, Any]:
+    """Fill in the reason a KILLED run could not write itself.
+
+    A run whose process died leaves a record that is truthful but mute: it has
+    the stage it reached and no ``finished_at``, and nothing more, because
+    nothing was left running to add a reason. Whether that is a live run or a
+    dead one is not in the file — it is in ``is_running`` — so the two are
+    joined at the reader, not at the writer. Pure: takes the record and the
+    answer, returns the record to show.
+    """
+    if running or not interrupted(record):
+        return record
+    out = dict(record)
+    out["failed_stage"] = out.get("failed_stage") or out.get("stage") or ""
+    out["failure_reason"] = out.get("failure_reason") or INTERRUPTED_REASON
+    out["failures"] = list(out.get("failures") or [out["failure_reason"]])
+    out["ok"] = False
+    return out
+
+
 def generate(location_id: str, room_id: str, index: int, *,
              subject: str = "", image_backend_glob: str = "",
              mesh_backend_glob: str = "",
@@ -962,29 +1062,106 @@ def generate(location_id: str, room_id: str, index: int, *,
     and every retry re-runs insert → cutout → mesh on a fresh seed. The bounded
     loop is the paper's render-inspect-refine with its vision inspection
     replaced by geometry (our rule: findings are numeric).
+
+    **The record exists before the work does.** ``result.json`` is written the
+    moment the run directory is (stage ``plate``, ``ok: false``, no
+    ``finished_at``) and rewritten after every stage, because a run that stops
+    has to say WHERE and WHY: a raising stage lands as ``failed_stage`` +
+    ``failure_reason``, and a run whose process dies mid-flight — a restart, a
+    kill — leaves the last stage it reached instead of leaving nothing at all.
+    Readers that only skipped directories without a ``result.json`` used to see
+    such a run as if it had never happened.
     """
     from app.core import props as prop_store
     from app.core.scene_context import render_context
+    from app.models.world import get_location_by_id
 
     par = params(overrides)
     target = {"kind": "prop", "room_id": room_id, "index": int(index)}
     started = utc_now()
 
-    plate = render_context(location_id, target, _tmp_plate_dir(), game=game)
-    sidecar = json.loads(Path(plate["sidecar"]).read_text(encoding="utf-8"))
-    tgt = sidecar.get("target") or {}
-    prop_id = str(tgt.get("prop_id") or "")
+    # WHOSE run this is, before anything is rendered: the run directory belongs
+    # to the prop, and the prop is named by the STORED placement — the same
+    # source the plate would report a minute later. Resolving it here is what
+    # buys the record its early existence, and the plate's own prop id is
+    # checked against it below, so a mismatch is still caught.
+    loc_rec = get_location_by_id(location_id) or {}
+    placement_before = authored_placement(loc_rec, room_id, int(index))
+    prop_id = str(placement_before.get("prop_id") or "")
     if not prop_id:
-        raise ValueError("placement carries no prop id")
+        raise ValueError(f"no prop placed at {room_id or 'ground'}#{index}")
     meta = prop_store.read_sidecar(prop_id) or {}
     subject = (subject or meta.get("description")
                or meta.get("name") or prop_id).strip()
 
-    out = run_dir(prop_id)
+    out = run_dir(prop_id, started.strftime("%Y%m%d-%H%M%S"))
+    record: Dict[str, Any] = {
+        "version": 1,
+        "location_id": location_id, "room_id": room_id, "index": int(index),
+        "prop_id": prop_id, "subject": subject,
+        # Seconds, like every other stamp here (``utc_now_iso``): this string
+        # is also the cutout's ``origin_ts`` badge, and the badge and the run
+        # directory have to name ONE moment.
+        "started_at": started.replace(microsecond=0).isoformat(),
+        "backend": "", "path": "",
+        "prompt": "", "negative": "",
+        "files": {}, "params": par, "attempts": [],
+        "stage": STAGE_PLATE, "ok": False,
+        "failed_stage": "", "failure_reason": "",
+    }
+    _write_record(out, record)
+
+    try:
+        return _run_chain(record, out, started, par, target, prop_id, subject,
+                          location_id, room_id, index, loc_rec,
+                          placement_before, image_backend_glob,
+                          mesh_backend_glob, game, render_context, prop_store)
+    except Exception as exc:
+        # The stage the record last announced IS the stage that raised — every
+        # step stamps it before it starts. Persisted, then re-raised: the queue
+        # header still fails, the strip now knows why.
+        record["failed_stage"] = record.get("stage") or STAGE_PLATE
+        record["failure_reason"] = f"{type(exc).__name__}: {exc}"
+        record["failures"] = [record["failure_reason"]]
+        record["ok"] = False
+        record["seconds"] = round((utc_now() - started).total_seconds(), 2)
+        record["finished_at"] = utc_now_iso()
+        _write_record(out, record)
+        logger.error("Scene asset %s (%s/%s#%d) stopped in stage %s: %s",
+                     prop_id, location_id, room_id, index,
+                     record["failed_stage"], record["failure_reason"])
+        raise
+
+
+def _run_chain(record: Dict[str, Any], out: Path, started, par: Dict[str, Any],
+               target: Dict[str, Any], prop_id: str, subject: str,
+               location_id: str, room_id: str, index: int,
+               loc_rec: Dict[str, Any], placement_before: Dict[str, Any],
+               image_backend_glob: str, mesh_backend_glob: str, game: Any,
+               render_context, prop_store) -> Dict[str, Any]:
+    """The stages of :func:`generate`, with ``record`` as their running log.
+
+    Split out for one reason only: the caller wraps this in the ``except`` that
+    turns a raising stage into a persisted ``failed_stage``/``failure_reason``,
+    and that wrapper must not be able to raise past its own bookkeeping.
+    """
+    plate = render_context(location_id, target, _tmp_plate_dir(), game=game)
+    sidecar = json.loads(Path(plate["sidecar"]).read_text(encoding="utf-8"))
+    tgt = sidecar.get("target") or {}
+    plate_prop = str(tgt.get("prop_id") or "")
+    if not plate_prop:
+        raise ValueError("placement carries no prop id")
+    if plate_prop != prop_id:
+        raise ValueError(f"placement changed while rendering: {prop_id} → "
+                         f"{plate_prop}")
+
     context_png = out / "context.png"
     context_png.write_bytes(Path(plate["png"]).read_bytes())
+    record["files"]["context"] = str(context_png)
 
     # The inpaint region: the sidecar's mask polygon, grown by the margin.
+    record["stage"] = STAGE_MASK
+    _write_record(out, record)
     poly = [[float(p[0]), float(p[1])] for p in (sidecar.get("mask") or {})
             .get("polygon_px") or []]
     if len(poly) < 3:
@@ -997,31 +1174,33 @@ def generate(location_id: str, room_id: str, index: int, *,
     width, height = (sidecar.get("camera") or {}).get("resolution") or [1024, 1024]
     mask_png = out / "mask.png"
     _write_mask_png(region, int(width), int(height), mask_png)
+    record["files"]["mask"] = str(mask_png)
+    record["mask"] = {"grow_px": round(grow_px, 2), "margin": par["mask_margin"],
+                      "polygon_px": [[round(p[0], 2), round(p[1], 2)]
+                                     for p in region]}
 
+    record["stage"] = STAGE_BACKEND
+    _write_record(out, record)
     backend, path_kind = select_backend(image_backend_glob)
     if backend is None:
-        raise RuntimeError("no image backend available")
+        raise RuntimeError(
+            "No image backend available for the insert. Enable an image "
+            "backend under Admin → Settings → Image/Video Generation.")
     composed = compose_insert_prompt(subject, backend)
+    record.update({"backend": backend.name, "path": path_kind,
+                   "prompt": composed["prompt"],
+                   "negative": composed["negative"]})
+    # A full-plate edit is a WEAKER run, not a broken one — say so on the
+    # record instead of letting the position drift silently.
+    if path_kind != "inpaint" and not image_backend_glob.strip():
+        record["backend_note"] = NO_INPAINT_NOTE
+        logger.warning("scene asset: %s", NO_INPAINT_NOTE)
 
     expected = expected_px_bbox(tgt.get("footprint") or [],
                                 float(tgt.get("ground_y") or 0.0),
                                 float(tgt.get("height_m") or 0.0),
                                 sidecar.get("camera") or {})
-    record: Dict[str, Any] = {
-        "version": 1,
-        "location_id": location_id, "room_id": room_id, "index": int(index),
-        "prop_id": prop_id, "subject": subject,
-        "started_at": utc_now_iso(),
-        "backend": backend.name, "path": path_kind,
-        "prompt": composed["prompt"], "negative": composed["negative"],
-        "mask": {"grow_px": round(grow_px, 2), "margin": par["mask_margin"],
-                 "polygon_px": [[round(p[0], 2), round(p[1], 2)]
-                                for p in region]},
-        "expected_px_bbox": [round(v, 2) for v in expected],
-        "files": {"context": str(context_png), "mask": str(mask_png)},
-        "params": par,
-        "attempts": [],
-    }
+    record["expected_px_bbox"] = [round(v, 2) for v in expected]
 
     # The variant is decided ONCE for the whole run: a retry refines the same
     # slot (its gallery keeps every attempt as a file), it does not eat another
@@ -1035,9 +1214,6 @@ def generate(location_id: str, room_id: str, index: int, *,
     # refines that very variant, the picture is overwritten a few lines below.
     # A live URL would therefore show the AFTER in both frames. The run
     # directory is immutable once written, so the copy stays true forever.
-    from app.models.world import get_location_by_id
-    loc_rec = get_location_by_id(location_id) or {}
-    placement_before = authored_placement(loc_rec, room_id, int(index))
     prev = previous_variant(prop_id, placement_before)
     record["previous_variant"] = prev
     prev_src = prop_store.source_path(prop_id, prev) if prev is not None else None
@@ -1057,6 +1233,8 @@ def generate(location_id: str, room_id: str, index: int, *,
     # one attempt, and a retry that repeated the same seed would repeat the
     # same picture and therefore the same failure.
     pinned = par.get("seed")
+    record["stage"] = STAGE_INSERT
+    _write_record(out, record)
     loop = run_attempts(
         lambda attempt, seed: _attempt(
             out, attempt, seed, context_png, mask_png, region, backend,
@@ -1074,12 +1252,20 @@ def generate(location_id: str, room_id: str, index: int, *,
 
     record["ok"] = ok
     record["failures"] = loop["failures"]
+    # WHERE the last attempt died and WHY, in the two fields a reader reads.
+    # An attempt names its own stage, so the run does not have to guess from
+    # which keys happen to be present.
+    record["stage"] = (STAGE_DONE if ok
+                       else attempt_stage(loop["attempts"][-1]
+                                          if loop["attempts"] else {}))
+    record["failed_stage"] = "" if ok else record["stage"]
+    record["failure_reason"] = "" if ok else "; ".join(loop["failures"])
     record["seconds"] = round((utc_now() - started).total_seconds(), 2)
     record["finished_at"] = utc_now_iso()
-    (out / "result.json").write_text(
-        json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_record(out, record)
     logger.info("Scene asset %s (%s/%s#%d): %s in %.1fs", prop_id,
-                location_id, room_id, index, "ok" if ok else "failed",
+                location_id, room_id, index,
+                "ok" if ok else f"failed in stage {record['failed_stage']}",
                 record["seconds"])
     return record
 
@@ -1122,21 +1308,46 @@ def _attempt(out: Path, attempt: int, seed: int, context_png: Path,
              prop_id: str, variant: int, par: Dict[str, Any],
              mesh_backend_glob: str,
              origin: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """One insert → cutout → mesh → place pass. Every check is recorded."""
+    """One insert → cutout → mesh → place pass. Every check is recorded.
+
+    ``res["stage"]`` moves with the pass, so a failed attempt names the step it
+    died in rather than leaving the run to infer it from which keys are set.
+    """
     suffix = "" if attempt == 0 else f"-{attempt + 1}"
-    res: Dict[str, Any] = {"attempt": attempt, "failures": [], "files": {}}
+    res: Dict[str, Any] = {"attempt": attempt, "failures": [], "files": {},
+                           "stage": STAGE_INSERT}
     camera = sidecar.get("camera") or {}
     size = tuple(int(v) for v in (camera.get("resolution") or [1024, 1024]))
 
-    blob = insert_object(context_png, mask_png, backend, path_kind,
-                         composed["prompt"], composed["negative"], seed, size)
+    try:
+        blob = insert_object(context_png, mask_png, backend, path_kind,
+                             composed["prompt"], composed["negative"], seed,
+                             size)
+    except Exception as exc:
+        # Caught HERE and not by ``run_attempts`` for one reason: the stage is
+        # only known here. A raising insert stays what it was — a failed
+        # attempt the next seed may survive — it just says where it died now.
+        # ``BackendBusyError`` included: load is not a defect, and a busy
+        # backend is exactly what the retry budget exists for.
+        res["failures"].append(f"insert: {type(exc).__name__}: {exc}")
+        logger.error("scene asset insert failed on %s: %s",
+                     getattr(backend, "name", "?"), exc)
+        return res
     if not blob:
-        res["failures"].append("insert produced no image")
+        # The backend classes answer an HTTP error with an empty list — the
+        # reason is in the log, not in the return value. Name what we DO know,
+        # so the record is actionable without a log dive: which backend, which
+        # alias, which path.
+        res["failures"].append(
+            f"the insert returned no image — backend {backend.name!r} "
+            f"(alias {getattr(backend, 'model', '') or '?'}, path {path_kind}) "
+            f"answered with nothing; its reason is in logs/main.log")
         return res
     edit_png = out / f"edit{suffix}.png"
     edit_png.write_bytes(blob)
     res["files"]["edit"] = str(edit_png)
 
+    res["stage"] = STAGE_CUTOUT
     cut = cut_out(context_png, edit_png, region,
                   threshold=par["diff_threshold"], use_rembg=par["rembg"])
     res["cutout"] = {k: cut[k] for k in ("diff_px", "region_px", "mask_px",
@@ -1182,15 +1393,23 @@ def _attempt(out: Path, attempt: int, seed: int, context_png: Path,
                                   equivalent_intrinsics(camera, aff).items()}}
 
     res["variant"] = variant
-    mesh = mesh_from_cutout(prop_id, cutout_png,
-                            float((sidecar.get("target") or {}).get("height_m") or 0.0),
-                            variant=variant, backend_glob=mesh_backend_glob,
-                            tolerance=par["height_tolerance"])
+    res["stage"] = STAGE_MESH
+    try:
+        mesh = mesh_from_cutout(
+            prop_id, cutout_png,
+            float((sidecar.get("target") or {}).get("height_m") or 0.0),
+            variant=variant, backend_glob=mesh_backend_glob,
+            tolerance=par["height_tolerance"])
+    except Exception as exc:      # same rule as the insert: stage, then retry
+        res["failures"].append(f"mesh: {type(exc).__name__}: {exc}")
+        logger.error("scene asset mesh failed for %s: %s", prop_id, exc)
+        return res
     res["mesh"] = mesh
     if not mesh.get("ok"):
         res["failures"].append(f"mesh: {mesh.get('error')}")
         return res
 
+    res["stage"] = STAGE_PLACE
     from app.models.world import get_location_by_id
     loc = get_location_by_id(sidecar.get("location_id") or "") or {}
     placement = place(sidecar, loc, mesh, _authored_offset_y(sidecar, loc), par)
@@ -1236,6 +1455,7 @@ def _attempt(out: Path, attempt: int, seed: int, context_png: Path,
     if stored is None:
         res["failures"].append("placement vanished while generating")
         return res
+    res["stage"] = STAGE_DONE
     res["ok"] = True
     return res
 
@@ -1356,9 +1576,14 @@ def trigger_scene_asset(location_id: str, room_id: str, placement_index: int, *,
                            mesh_backend_glob=mesh_backend_glob,
                            overrides=overrides)
             if not res.get("ok"):
-                error = "; ".join(res.get("failures") or ["failed"])
+                # The queue header carries the SAME two facts the record does:
+                # someone watching the task panel must not have to open the run
+                # to learn which stage went wrong.
+                stage = res.get("failed_stage") or "?"
+                error = (f"[{stage}] "
+                         + "; ".join(res.get("failures") or ["failed"]))
         except Exception as exc:
-            error = str(exc)
+            error = f"{type(exc).__name__}: {exc}"
             logger.error("Scene asset for %s failed: %s", key, exc)
         finally:
             if task_id:
