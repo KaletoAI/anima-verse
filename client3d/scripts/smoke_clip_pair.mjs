@@ -57,7 +57,7 @@
  *       the posed skeleton's body length (longest extent of the joint cloud
  *       — the admin pivot may turn it onto any axis) stays within 0.7 … 1.3
  *       of its bind length and the diagonal under 2.6 m; the library's own
- *       `idle-cmu.fbx` is run first as the reference of the harness. The
+ *       `idle-wait.fbx` is run first as the reference of the harness. The
  *       2026-08-21 finding was the opposite — per-bone translation/scale
  *       tracks in centimetres left "a stick figure of the mesh" (measured on
  *       the character model of the finding: 151 m joint extent against 1.4 m
@@ -244,7 +244,7 @@ async function main() {
     return e;
   };
   // the harness reference: the free library's own idle (CMU), present in git
-  shape.idle = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, 'idle-cmu.fbx'))), '').animations[0];
+  shape.idle = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, 'idle-wait.fbx'))), '').animations[0];
   for (const name of ['idle', 'handshake__a', 'salsa__b', 'dance']) {
     const e = adminApply(shape[name]);
     check(`${name} applied admin-style keeps the skeleton intact`,
