@@ -285,7 +285,7 @@ def existing_kinds(clip_set: str = "", source: str = "free") -> List[str]:
 def import_take(take_id: str, kind: str, *, clip_set: str = "",
                 start_s: float = 0.0, end_s: Optional[float] = None,
                 loop_s: Optional[float] = None, in_place: bool = True,
-                overwrite: bool = False) -> Dict[str, Any]:
+                overwrite: bool = False, speed: float = 1.0) -> Dict[str, Any]:
     """Converts one catalog take into the FREE library and records the trace.
 
     A PAIR take always imports BOTH halves — one clip kind, two files — with
@@ -311,7 +311,7 @@ def import_take(take_id: str, kind: str, *, clip_set: str = "",
     res = cmu_import.convert_take(
         kind, take_a, take_b, clip_set=cset, start_s=start_s, end_s=end_s,
         loop_s=loop_s, in_place=bool(in_place) and not take_b,
-        source_fps=take.get("framerate") or None)
+        source_fps=take.get("framerate") or None, speed=float(speed or 1.0))
     status = record_import(take_id, kind, cset, "free")
 
     # The pose dropdown and the animation-set fallback both read from the

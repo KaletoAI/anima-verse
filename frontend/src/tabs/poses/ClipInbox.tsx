@@ -93,6 +93,8 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const [endS, setEndS] = useState('')
   const [loopOn, setLoopOn] = useState(false)
   const [loopS, setLoopS] = useState('1.5')
+  /** playback factor baked into the clip: 0.5 = half speed, twice as long */
+  const [speed, setSpeed] = useState('1')
   const [inPlace, setInPlace] = useState(true)
   /** partner offset for pairs whose halves are not in one world space —
    *  packs say things like "set the male model to -0.3 on the forward axis" */
@@ -222,14 +224,15 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
       start_s: Number(startS) || 0,
       end_s: endS === '' ? null : Number(endS),
       loop_s: loopOn && !isPair ? Number(loopS) || 1 : null,
+      speed: Number(speed) || 1,
       in_place: inPlace && !isPair,
       offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
       overwrite,
       target,
       redistributable: target === 'free' ? redistributable : false,
     }
-  }, [clipSet, endS, entry, inPlace, isPair, kind, loopOn, loopS, offFwd, offSide, offUp,
-      overwrite, redistributable, restFile, second, startS, target])
+  }, [clipSet, endS, entry, inPlace, isPair, kind, loopOn, loopS, offFwd, offSide, offUp, speed,
+      overwrite, redistributable, restFile, second, speed, startS, target])
 
   const runProbe = useCallback(async () => {
     const body = formBody()
@@ -263,6 +266,7 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
         start_s: Number(startS) || 0,
         end_s: endS === '' ? null : Number(endS),
         loop_s: loopOn && !isPair ? Number(loopS) || 1 : null,
+        speed: Number(speed) || 1,
         in_place: inPlace && !isPair,
         offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
         overwrite,
@@ -281,7 +285,7 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
     } finally {
       setImporting(false)
     }
-  }, [clipSet, endS, entry, importing, inPlace, isPair, kind, loadClips, loopOn, loopS, offFwd, offSide, offUp,
+  }, [clipSet, endS, entry, importing, inPlace, isPair, kind, loadClips, loopOn, loopS, offFwd, offSide, offUp, speed,
       overwrite, redistributable, restFile, second, startS, t, target, toast])
 
   if (loading) return <div className="ga-placeholder">{t('Loading…')}</div>
@@ -444,6 +448,13 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
                   onChange={(e) => setEndS(e.target.value)} />
               </label>
             </div>
+
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span className="ga-hint">{t('Playback speed ×')}</span>
+              <input className="ga-input" type="number" step="0.05" min="0.1" max="4" style={{ width: 80 }}
+                value={speed} onChange={(e) => setSpeed(e.target.value)} />
+              <span className="ga-hint">{t('0.5 = half speed (twice as long); baked into the clip')}</span>
+            </label>
 
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input type="checkbox" checked={loopOn} disabled={isPair}

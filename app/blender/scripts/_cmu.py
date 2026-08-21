@@ -326,12 +326,17 @@ def best_loop_window(poses: Sequence[Pose], fps: float, min_s: float):
 
 
 def resample_indices(n_frames: int, source_fps: float, fps: float,
-                     start_s: float = 0.0, end_s: Optional[float] = None) -> List[int]:
+                     start_s: float = 0.0, end_s: Optional[float] = None,
+                     speed: float = 1.0) -> List[int]:
     """The source frame index for every output frame of a window, the same
-    stepping the converter uses (``cmu_clip._Take``)."""
+    stepping the converter uses (``cmu_clip._Take``). ``speed`` is the
+    playback factor: 0.5 plays the take at half speed — twice the output
+    frames over the same source window. ``start_s``/``end_s`` stay SOURCE
+    seconds."""
     first = int(round(start_s * source_fps))
     last = n_frames if end_s is None else min(n_frames, int(round(end_s * source_fps)))
-    step = source_fps / fps
+    speed = float(speed) if speed and speed > 0 else 1.0
+    step = source_fps * speed / fps
     idx = []
     t = float(first)
     while t < last - 1e-6:

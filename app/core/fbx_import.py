@@ -273,7 +273,7 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
                end_s: Optional[float] = None, loop_s: Optional[float] = None,
                in_place: bool = False, overwrite: bool = False,
                offset_b_m: Optional[List[float]] = None,
-               loops: Optional[bool] = None,
+               loops: Optional[bool] = None, speed: float = 1.0,
                target: str = "licensed", redistributable: bool = False,
                out_dir: Optional[Path] = None, rig: Optional[Path] = None,
                fps: int = 30, timeout_s: int = 900,
@@ -356,6 +356,7 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
               "loops": bool(loops) if loops is not None
               else any("loop" in Path(f).name.lower() for f in files),
               "offset_b_m": [float(v) for v in (offset_b_m or (0, 0, 0))][:3],
+              "speed": float(speed or 1.0),
               "bone_map": "auto", "source_name": names}
 
     st = runner.status()

@@ -327,7 +327,8 @@ def _build_take(role, fps, src_fps, by_frame, mix_pos, mix_frames, args,
     start_s = float(args.get("start_s", 0) or 0)
     end_s = args.get("end_s")
     idx = _cmu.resample_indices(len(by_frame), src_fps, fps, start_s,
-                                None if end_s is None else float(end_s))
+                                None if end_s is None else float(end_s),
+                                float(args.get("speed") or 1.0))
     sk = _FakeSkeleton()
     first = by_frame[idx[0]] if idx else by_frame[0]
     for name, child in CHILD.items():

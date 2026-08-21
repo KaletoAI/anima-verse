@@ -62,8 +62,8 @@ function rootAt(path: { times: ArrayLike<number>; xyz: Float32Array }, t: number
  *  that window (or the server-computed loop cut) will write. */
 export interface PlayWindow { start: number; end: number }
 
-export function ClipPreview({ kind = '', height = 300, urls, window: win }:
-  { kind?: string; height?: number; urls?: ClipUrls; window?: PlayWindow }) {
+export function ClipPreview({ kind = '', height = 300, urls, window: win, speed = 1 }:
+  { kind?: string; height?: number; urls?: ClipUrls; window?: PlayWindow; speed?: number }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<string>('')
@@ -76,6 +76,9 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win }:
   // not rebuild the whole scene (the figures and clips stay loaded).
   const winRef = useRef<PlayWindow | undefined>(win)
   winRef.current = win
+  /** playback factor (0.5 = half speed) — what an import with `speed` bakes in */
+  const speedRef = useRef(speed)
+  speedRef.current = speed > 0 ? speed : 1
 
   useEffect(() => {
     const host = hostRef.current
@@ -213,7 +216,7 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win }:
           const start = w ? Math.min(Math.max(w.start, 0), fullDuration) : 0
           const end = w && w.end > start ? Math.min(w.end, fullDuration) : fullDuration
           const duration = Math.max(end - start, 1 / 30)
-          const time = start + ((performance.now() - started) / 1000) % duration
+          const time = start + (((performance.now() - started) / 1000) * speedRef.current) % duration
           for (const p of players) {
             p.mixer.setTime(time)
             const r = rootAt(p.path, time)

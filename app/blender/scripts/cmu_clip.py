@@ -22,6 +22,8 @@ Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
              source_takes   names of the source takes, for the sidecar credit
              source_fps     capture rate of the take (120 default; 60 for the
                             takes the subject page lists as 60)
+             speed          playback factor baked into the clip (0.5 = half
+                            speed); start_s/end_s stay source seconds
 
 The FBX files and the ``<kind>.json`` sidecar land in the runner's out dir.
 
@@ -148,7 +150,7 @@ def _load_rig(path: str):
 class _Take:
     """One ASF/AMC pair solved to world poses, already resampled."""
 
-    def __init__(self, entry, fps, start_s, end_s, source_fps=None):
+    def __init__(self, entry, fps, start_s, end_s, source_fps=None, speed=1.0):
         self.role = entry.get("role", "")
         self.sk, frames = _cmu.load_clip(Path(entry["asf"]), Path(entry["amc"]))
         # Most of the database is 120 Hz, but 326 takes (the salsa subjects
@@ -157,7 +159,7 @@ class _Take:
         # fast (2026-08-21 finding, "hectic salsa").
         src = float(source_fps or _cmu.CMU_FPS)
         n = len(frames)
-        idx = _cmu.resample_indices(n, src, fps, start_s, end_s)
+        idx = _cmu.resample_indices(n, src, fps, start_s, end_s, speed)
         self.poses = [_cmu.solve_frame(self.sk, frames[i]) for i in idx]
         self.source_frames = n
 
@@ -512,7 +514,7 @@ def run(job):
     start_s = float(args.get("start_s", 0) or 0)
     end_s = args.get("end_s")
     takes = [_Take(e, fps, start_s, None if end_s is None else float(end_s),
-                   args.get("source_fps"))
+                   args.get("source_fps"), float(args.get("speed") or 1.0))
              for e in args["clips"]]
     source = {
         "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
@@ -651,6 +653,8 @@ def run_takes(takes, args, fps, source):
         # the source (a pack's "…Loop" file). A consumer repeats it for the
         # interaction's duration instead of playing it once.
         "loop": bool(loop or args.get("loops")),
+        # playback factor baked in (0.5 = half speed, twice the frames)
+        "speed": float(args.get("speed") or 1.0),
         "geometry": geometry,
         "source": source,
     }

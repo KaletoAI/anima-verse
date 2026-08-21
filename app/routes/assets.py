@@ -234,7 +234,8 @@ async def post_clip_catalog_import(take_id: str, request: Request,
             start_s=_num("start_s") or 0.0, end_s=_num("end_s"),
             loop_s=_num("loop_s"),
             in_place=bool(body.get("in_place", True)),
-            overwrite=bool(body.get("overwrite")))
+            overwrite=bool(body.get("overwrite")),
+            speed=_num("speed") or 1.0)
     except clip_catalog.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ClipImportError as e:
@@ -412,6 +413,7 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
             offset_b_m=[float(v) for v in (body.get("offset_b_m") or [0, 0, 0])][:3]
             if isinstance(body.get("offset_b_m"), list) else None,
             loops=None if body.get("loops") is None else bool(body.get("loops")),
+            speed=_num("speed") or 1.0,
             target=target, redistributable=redistributable, preview=preview)
     except fbx_import.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))

@@ -151,6 +151,7 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
                  anchor_s: Optional[float] = None, in_place: bool = False,
                  loop_s: Optional[float] = None,
                  source_fps: Optional[float] = None, fps: int = 30,
+                 speed: float = 1.0,
                  rig: Optional[Path] = None, cache: Optional[Path] = None,
                  timeout_s: int = 900) -> Dict[str, Any]:
     """Retargets one take (or a pair) and writes the clip files.
@@ -186,6 +187,7 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
               "end_s": end_s, "anchor_s": anchor_s,
               "source_fps": float(source_fps or catalog_framerate(take_a)),
               "in_place": bool(in_place), "loop_s": loop_s,
+              "speed": float(speed or 1.0),
               "source_takes": takes}
 
     st = runner.status()

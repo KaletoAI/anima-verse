@@ -167,6 +167,8 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
   const [endS, setEndS] = useState('')
   const [loopOn, setLoopOn] = useState(false)
   const [loopS, setLoopS] = useState('1.5')
+  /** playback factor baked into the clip: 0.5 = half speed, twice as long */
+  const [speed, setSpeed] = useState('1')
   /** the window the preview plays — start/end as typed, or the server's
    *  loop cut (same metric as the converter) when "seamless loop" is on */
   const [playWindow, setPlayWindow] = useState<PlayWindow | undefined>(undefined)
@@ -379,6 +381,7 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
         start_s: Number(startS) || 0,
         end_s: endS === '' ? null : Number(endS),
         loop_s: loopOn ? Number(loopS) || 1 : null,
+        speed: Number(speed) || 1,
         in_place: inPlace,
         overwrite,
         target: 'free',
@@ -405,7 +408,7 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
     } finally {
       setImporting(false)
     }
-  }, [clipSet, endS, importing, inPlace, kind, loadClips, loopOn, loopS,
+  }, [clipSet, endS, importing, inPlace, kind, loadClips, loopOn, loopS, speed,
       overwrite, selected, startS, t, toast])
 
   // ── facet definitions (label + the values offered) ──
@@ -737,7 +740,7 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
 
             {selected.clip && selected.clip_urls && (selected.clip_urls.solo || selected.clip_urls.a) ? (
               <>
-                <ClipPreview urls={selected.clip_urls} height={280} window={playWindow} />
+                <ClipPreview urls={selected.clip_urls} height={280} window={playWindow} speed={Number(speed) || 1} />
                 {loopOn && !selected.pair ? (
                   <div className="ga-hint">
                     {loopCut
@@ -804,6 +807,13 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
               ) : null}
 
               <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span className="ga-hint">{t('Playback speed ×')}</span>
+              <input className="ga-input" type="number" step="0.05" min="0.1" max="4" style={{ width: 80 }}
+                value={speed} onChange={(e) => setSpeed(e.target.value)} />
+              <span className="ga-hint">{t('0.5 = half speed (twice as long); baked into the clip')}</span>
+            </label>
+
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input type="checkbox" checked={loopOn} disabled={selected.pair}
                   onChange={(e) => setLoopOn(e.target.checked)} />
                 <span>{t('Cut to a seamless loop of at least')}</span>
