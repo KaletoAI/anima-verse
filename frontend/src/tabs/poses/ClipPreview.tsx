@@ -55,8 +55,12 @@ function rootAt(path: { times: ArrayLike<number>; xz: Float32Array }, t: number)
   return { x: xz[lo * 2] + (xz[hi * 2] - xz[lo * 2]) * f, z: xz[lo * 2 + 1] + (xz[hi * 2 + 1] - xz[lo * 2 + 1]) * f }
 }
 
-export function ClipPreview({ kind = '', height = 300, urls }:
-  { kind?: string; height?: number; urls?: ClipUrls }) {
+/** Play only [start, end) seconds of the clip, looped — what an import with
+ *  that window (or the server-computed loop cut) will write. */
+export interface PlayWindow { start: number; end: number }
+
+export function ClipPreview({ kind = '', height = 300, urls, window: win }:
+  { kind?: string; height?: number; urls?: ClipUrls; window?: PlayWindow }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<string>('')
@@ -65,6 +69,10 @@ export function ClipPreview({ kind = '', height = 300, urls }:
   // fresh object literal — the three URLs go in as ONE string and come apart
   // again inside.
   const urlKey = [urls?.a || '', urls?.b || '', urls?.solo || ''].join('|')
+  // The window is read by the running tick through a ref — changing it must
+  // not rebuild the whole scene (the figures and clips stay loaded).
+  const winRef = useRef<PlayWindow | undefined>(win)
+  winRef.current = win
 
   useEffect(() => {
     const host = hostRef.current
@@ -187,13 +195,17 @@ export function ClipPreview({ kind = '', height = 300, urls }:
         }
         if (disposed) return
         setStatus('')
-        const duration = Math.min(...players.map((p) => p.duration))
+        const fullDuration = Math.min(...players.map((p) => p.duration))
         const started = performance.now()
         let lastInfo = 0
         const tick = () => {
           if (disposed) return
           raf = requestAnimationFrame(tick)
-          const time = ((performance.now() - started) / 1000) % duration
+          const w = winRef.current
+          const start = w ? Math.min(Math.max(w.start, 0), fullDuration) : 0
+          const end = w && w.end > start ? Math.min(w.end, fullDuration) : fullDuration
+          const duration = Math.max(end - start, 1 / 30)
+          const time = start + ((performance.now() - started) / 1000) % duration
           for (const p of players) {
             p.mixer.setTime(time)
             const r = rootAt(p.path, time)
@@ -203,7 +215,7 @@ export function ClipPreview({ kind = '', height = 300, urls }:
             lastInfo = performance.now()
             const a = players[0].root.position
             const b = players[1]?.root.position
-            setInfo({ dist: b ? Math.hypot(a.x - b.x, a.z - b.z) : NaN, time, duration })
+            setInfo({ dist: b ? Math.hypot(a.x - b.x, a.z - b.z) : NaN, time, duration: end })
           }
           controls.update()
           renderer.render(scene, camera)

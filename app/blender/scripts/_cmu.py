@@ -282,3 +282,59 @@ def forward_xz(pose: Pose) -> Tuple[float, float]:
     f = mat_vec(pose.rot["root"], (0.0, 0.0, 1.0))
     n = math.hypot(f[0], f[2]) or 1.0
     return (f[0] / n, f[2] / n)
+
+
+# ------------------------------------------------------------ loop cutting
+
+# The bones whose rotation decides how well two frames "close" into a cycle.
+LOOP_BONES = ("lfemur", "ltibia", "lfoot", "rfemur", "rtibia", "rfoot", "lhumerus",
+              "lradius", "rhumerus", "rradius", "lowerback", "thorax", "upperneck")
+
+
+def pose_distance(a: Pose, b: Pose) -> float:
+    """How far two solved frames are apart: summed rotation angle of the
+    limb/torso bones (radians) plus the hips height difference (metres).
+    Shared by the Blender converter (the cut it makes) and the server (the
+    cut it previews) — ONE metric, so the preview shows the clip that will
+    be written."""
+    d = 0.0
+    for name in LOOP_BONES:
+        if name not in a.rot:
+            continue
+        ra, rb = a.rot[name], b.rot[name]
+        tr = sum(ra[i][j] * rb[i][j] for i in range(3) for j in range(3))
+        d += math.acos(max(-1.0, min(1.0, (tr - 1.0) / 2.0)))
+    d += abs(a.pos["root"][1] - b.pos["root"][1]) / 100.0
+    return d
+
+
+def best_loop_window(poses: Sequence[Pose], fps: float, min_s: float):
+    """``(i, j, distance)`` — the window [i, j) of at least ``min_s`` seconds
+    whose end pose is closest to its start pose. ``(0, n, None)`` when the
+    take is too short. O(n²) over a few hundred frames."""
+    n = len(poses)
+    min_len = max(2, int(round(min_s * fps)))
+    if n <= min_len + 1:
+        return 0, n, None
+    best = None
+    for i in range(0, n - min_len):
+        for j in range(i + min_len, n):
+            d = pose_distance(poses[i], poses[j])
+            if best is None or d < best[2]:
+                best = (i, j, d)
+    return best
+
+
+def resample_indices(n_frames: int, source_fps: float, fps: float,
+                     start_s: float = 0.0, end_s: Optional[float] = None) -> List[int]:
+    """The source frame index for every output frame of a window, the same
+    stepping the converter uses (``cmu_clip._Take``)."""
+    first = int(round(start_s * source_fps))
+    last = n_frames if end_s is None else min(n_frames, int(round(end_s * source_fps)))
+    step = source_fps / fps
+    idx = []
+    t = float(first)
+    while t < last - 1e-6:
+        idx.append(int(round(t)))
+        t += step
+    return idx

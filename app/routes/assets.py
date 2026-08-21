@@ -168,6 +168,25 @@ async def put_clip_catalog_status(take_id: str, request: Request,
     return {"take_id": take_id, "status": status}
 
 
+@router.get("/clip-catalog/{take_id}/loop-window")
+def get_clip_catalog_loop_window(take_id: str, start_s: float = 0.0,
+                                 end_s: Optional[float] = None, min_s: float = 1.0,
+                                 _: Dict[str, Any] = Depends(require_admin)
+                                 ) -> Dict[str, Any]:
+    """The loop window an import with these settings would cut — start/end in
+    take seconds — so the preview plays the very clip the converter writes
+    (same resampling, same seam metric; a second of CPU, no Blender)."""
+    from app.core.cmu_import import loop_window
+    take = clip_catalog.find_take(take_id.strip())
+    if not take:
+        raise HTTPException(status_code=404, detail=f"unknown take {take_id}")
+    try:
+        return loop_window(take_id.strip(), start_s=max(0.0, start_s), end_s=end_s,
+                           min_s=max(0.1, min_s))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 @router.post("/clip-catalog/{take_id}/import")
 async def post_clip_catalog_import(take_id: str, request: Request,
                                    _: Dict[str, Any] = Depends(require_admin)

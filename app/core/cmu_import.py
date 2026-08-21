@@ -15,6 +15,7 @@ Both callers live on top of this module: the CLI ``scripts/clip_import_cmu.py``
 and the catalog browser's import route. Nothing here knows about HTTP, and
 nothing in ``app/`` imports from ``scripts/``.
 """
+import importlib.util
 import json
 import ssl
 import urllib.error
@@ -200,3 +201,42 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
             "sidecar": res.get("data") or {},
             "outputs": res.get("outputs") or {},
             "seconds": res.get("seconds") or 0.0}
+
+
+# ------------------------------------------------------------------ preview
+
+_cmu_module = None
+
+
+def _cmu():
+    """The stdlib ASF/AMC reader the Blender script uses, loaded from the
+    scripts directory (it is not a package on purpose — Blender's Python
+    imports it by path too)."""
+    global _cmu_module
+    if _cmu_module is None:
+        path = Path(__file__).resolve().parents[1] / "blender" / "scripts" / "_cmu.py"
+        spec = importlib.util.spec_from_file_location("_cmu", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _cmu_module = mod
+    return _cmu_module
+
+
+def loop_window(take: str, *, start_s: float = 0.0, end_s: Optional[float] = None,
+                min_s: float = 1.0, fps: int = 30) -> Dict[str, Any]:
+    """The window the converter WOULD cut for a seamless loop of at least
+    ``min_s`` seconds inside [start_s, end_s] — same sampling, same seam
+    metric (``_cmu.best_loop_window``), no Blender. Lets the admin preview
+    play exactly the clip an import will write. Seconds are take time."""
+    cmu = _cmu()
+    asf, amc = take_files(take)
+    sk, frames = cmu.load_clip(asf, amc)
+    src = catalog_framerate(take)
+    idx = cmu.resample_indices(len(frames), src, fps, start_s, end_s)
+    poses = [cmu.solve_frame(sk, frames[i]) for i in idx]
+    i, j, d = cmu.best_loop_window(poses, fps, min_s)
+    return {"take": take, "source_fps": src, "fps": fps,
+            "window_start_s": round(start_s + i / fps, 3),
+            "window_end_s": round(start_s + j / fps, 3),
+            "seam_distance": None if d is None else round(d, 3),
+            "frames": j - i}

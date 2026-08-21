@@ -147,14 +147,7 @@ class _Take:
         # fast (2026-08-21 finding, "hectic salsa").
         src = float(source_fps or _cmu.CMU_FPS)
         n = len(frames)
-        first = int(round(start_s * src))
-        last = n if end_s is None else min(n, int(round(end_s * src)))
-        step = src / fps
-        idx = []
-        t = float(first)
-        while t < last - 1e-6:
-            idx.append(int(round(t)))
-            t += step
+        idx = _cmu.resample_indices(n, src, fps, start_s, end_s)
         self.poses = [_cmu.solve_frame(self.sk, frames[i]) for i in idx]
         self.source_frames = n
 
@@ -185,44 +178,14 @@ def _apply_rigid(take: _Take, theta: float, shift, floor: float, in_place: bool)
 
 
 LOOP_BLEND_FRAMES = 8
-LOOP_BONES = ("lfemur", "ltibia", "lfoot", "rfemur", "rtibia", "rfoot", "lhumerus",
-              "lradius", "rhumerus", "rradius", "lowerback", "thorax", "upperneck")
-
-
-def _pose_distance(sk, a, b) -> float:
-    """How far two solved frames are apart: summed rotation angle of the
-    limb/torso bones (radians) plus the hips height difference (metres)."""
-    d = 0.0
-    for name in LOOP_BONES:
-        if name not in a.rot:
-            continue
-        ra, rb = a.rot[name], b.rot[name]
-        # angle of ra^T rb from its trace
-        tr = sum(ra[i][j] * rb[i][j] for i in range(3) for j in range(3))
-        d += math.acos(max(-1.0, min(1.0, (tr - 1.0) / 2.0)))
-    d += abs(a.pos["root"][1] - b.pos["root"][1]) / 100.0
-    return d
 
 
 def _cut_loop(take, fps, min_s):
-    """Trims the take to the window [i, j) whose end pose is closest to its
-    start pose — the best place to cut a cycle — with at least ``min_s`` of
-    motion in it. The last LOOP_BLEND_FRAMES keys are then eased into the
-    first key at bake time (``_bake`` ``loop``), so the clip closes without
-    a visible jump. Returns the chosen (i, j, distance)."""
-    n = len(take.poses)
-    min_len = max(2, int(round(min_s * fps)))
-    if n <= min_len + 1:
-        return 0, n, None
-    best = None
-    # every start i, every end j with the minimum length; O(n²) on a few
-    # hundred frames is instant
-    for i in range(0, n - min_len):
-        for j in range(i + min_len, n):
-            d = _pose_distance(take.sk, take.poses[i], take.poses[j])
-            if best is None or d < best[2]:
-                best = (i, j, d)
-    i, j, d = best
+    """Trims the take to its best-closing window of at least ``min_s``
+    seconds (``_cmu.best_loop_window`` — the metric the server previews
+    with). The last LOOP_BLEND_FRAMES keys are eased into the first at bake
+    time (``_bake`` ``loop``). Returns the chosen (i, j, distance)."""
+    i, j, d = _cmu.best_loop_window(take.poses, fps, min_s)
     take.poses = take.poses[i:j]
     return i, j, d
 

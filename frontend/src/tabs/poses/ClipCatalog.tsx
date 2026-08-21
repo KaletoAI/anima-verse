@@ -29,7 +29,7 @@
  *   GET  /assets/animation-clips/trial/{rel}    (preview file)
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ClipPreview } from './ClipPreview'
+import { ClipPreview, type PlayWindow } from './ClipPreview'
 import { Sparkline } from './Sparkline'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
@@ -167,6 +167,10 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
   const [endS, setEndS] = useState('')
   const [loopOn, setLoopOn] = useState(false)
   const [loopS, setLoopS] = useState('1.5')
+  /** the window the preview plays — start/end as typed, or the server's
+   *  loop cut (same metric as the converter) when "seamless loop" is on */
+  const [playWindow, setPlayWindow] = useState<PlayWindow | undefined>(undefined)
+  const [loopCut, setLoopCut] = useState<{ start: number; end: number; seam: number | null } | null>(null)
   const [inPlace, setInPlace] = useState(true)
   const [overwrite, setOverwrite] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -402,6 +406,34 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
       overwrite, selected, startS, t, toast])
 
   // ── facet definitions (label + the values offered) ──
+  useEffect(() => {
+    if (!selected) { setPlayWindow(undefined); setLoopCut(null); return }
+    const start = Number(startS) || 0
+    const end = endS === '' ? selected.duration_s : Number(endS)
+    if (!loopOn || selected.pair) {
+      setLoopCut(null)
+      setPlayWindow(start > 0 || end < selected.duration_s ? { start, end } : undefined)
+      return
+    }
+    // the loop cut is the converter's own search, run on the server without
+    // Blender — a few hundred ms, so debounce the typing
+    let cancelled = false
+    const handle = setTimeout(async () => {
+      try {
+        const q = new URLSearchParams({ start_s: String(start), min_s: String(Number(loopS) || 1) })
+        if (endS !== '') q.set('end_s', String(end))
+        const r = await apiGet<{ window_start_s: number; window_end_s: number; seam_distance: number | null }>(
+          `/assets/clip-catalog/${encodeURIComponent(selected.id)}/loop-window?${q}`)
+        if (cancelled) return
+        setLoopCut({ start: r.window_start_s, end: r.window_end_s, seam: r.seam_distance })
+        setPlayWindow({ start: r.window_start_s, end: r.window_end_s })
+      } catch {
+        if (!cancelled) { setLoopCut(null); setPlayWindow({ start, end }) }
+      }
+    }, 400)
+    return () => { cancelled = true; clearTimeout(handle) }
+  }, [selected, startS, endS, loopOn, loopS])
+
   const facetDefs = useMemo<FacetDef[]>(() => {
       const f = catalog?.facets || {}
       const defs: FacetDef[] = [
@@ -687,7 +719,17 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
             </div>
 
             {selected.clip && selected.clip_urls && (selected.clip_urls.solo || selected.clip_urls.a) ? (
-              <ClipPreview urls={selected.clip_urls} height={280} />
+              <>
+                <ClipPreview urls={selected.clip_urls} height={280} window={playWindow} />
+                {loopOn && !selected.pair ? (
+                  <div className="ga-hint">
+                    {loopCut
+                      ? `${t('Loop cut the import will make')}: ${loopCut.start.toFixed(2)} – ${loopCut.end.toFixed(2)} s`
+                        + (loopCut.seam !== null ? ` · ${t('seam')} ${loopCut.seam.toFixed(2)}` : '')
+                      : t('Computing the loop cut…')}
+                  </div>
+                ) : null}
+              </>
             ) : (
               <div className="ga-form-hint">
                 {t('Not converted yet — the bulk conversion has not reached this take. It can still be imported: the import converts the original recording directly.')}
