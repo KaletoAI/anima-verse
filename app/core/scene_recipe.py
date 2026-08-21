@@ -50,7 +50,7 @@ is read through ``room_recipe`` exactly as the room recipe does it.
 """
 
 import math
-from typing import (Any, Dict, Iterator, List, Optional, Set,
+from typing import (Any, Dict, Iterator, List, Optional, Sequence, Set,
                     Tuple)
 
 from app.core.log import get_logger
@@ -419,7 +419,9 @@ def _room_floor_y(recipe: Dict[str, Any], storey: float) -> float:
     to carry two other jobs and has lost both: it compensated for a room cutting
     a hole into a LOCATION model on a slope (there is one ground now, and it is
     the same one the mesh stands on), and the author used it as a WATERLINE for
-    a zone whose floor kind is water (that is ``layout.water_level`` now, § G4).
+    a zone whose floor kind was water (since W1 a room has no water at all — the
+    painted AREA carries the mirror, and the room only names it via
+    ``floor_plan[].map_water``).
     Everything in the room still derives from here, so plate, walls, props,
     markers and diorama move as one.
     """
@@ -2047,13 +2049,11 @@ def _floor_plan(loc: Dict[str, Any], recipes: List[Dict[str, Any]],
     ONE ENTRY PER LEVEL-0 ROOM, in recipe order, and every part of it is the
     SAME derivation the ground bake uses: the hull is the recipe's ``outline``,
     which is ``room_recipe.room_outline_local`` — the very polygon
-    ``terrain_layers.location_floors`` transforms into world metres; the kind is
-    ``terrain_layers.floor_kind_of``; whether it is water is
-    ``terrain_layers.is_water_floor``. That identity is the point — the material
-    of the ground and the shape a consumer places NPCs on cannot disagree,
-    because there is one rule for each of the three — and it is measured in
-    ``scripts/smoke_terrain_layers.py``, which puts this list beside the baked
-    mask to the centimetre.
+    ``terrain_layers.location_floors`` transforms into world metres — and the
+    kind is ``terrain_layers.floor_kind_of``. That identity is the point: the
+    material of the ground and the shape a consumer places NPCs on cannot
+    disagree, and it is measured in ``scripts/smoke_terrain_layers.py``, which
+    puts this list beside the baked mask to the centimetre.
 
     * ``polygon_world`` — the room hull in the SCENE FRAME (local metres around
       the anchor pin), like every other coordinate in this payload.
@@ -2061,24 +2061,26 @@ def _floor_plan(loc: Dict[str, Any], recipes: List[Dict[str, Any]],
       that declares none (the terrain shows through, and the layer bake paints
       nothing there either).
     * ``closed`` — a room with a shell, as opposed to an open zone (§ A5).
-    * ``water_level_effective`` — present only on a water floor: the mirror the
-      bake carved its bed to, and **the one number in this payload that is an
-      ABSOLUTE world y** rather than a scene-frame one, because that is what a
-      water plane is measured in everywhere else (§ A18). It is the very number
-      ``GET /play/terrain-layers`` carries for the same room; it is quoted here
-      so a consumer of the floor plan needs no second request.
+    * ``map_water`` — ``{area_id, kind}`` when this room's hull lies on PAINTED
+      water (W1). A REFERENCE and nothing more: the room owns no mirror, no
+      depth and no bed, it merely stands where the map says water is, and saying
+      so is what lets the plan editor show "Map ground: water — <area>" instead
+      of offering per-room water sliders that shape nothing.
+
+    THE REFERENCE IS DERIVED, NEVER STORED, which is why it cannot dangle: it is
+    a MAJORITY-AREA containment test (:func:`_map_water_ref`) against the painted
+    areas of a water kind, run at compose time. Delete the lake and the line is
+    gone with it; move the room off the water and it is gone too.
 
     The yard (``is_ground``, § A13a) is not in it: it has no hull, it IS the
-    plot. An unplaced location yields an empty list — it owns no world metre,
-    so no zone-water mirror can be looked up for it either.
+    plot. An unplaced location yields an empty list — it owns no world metre, so
+    no containment could be decided for it either.
     """
-    from app.core.terrain_layers import (floor_kind_of, is_water_floor,
-                                         surface_classes)
-    from app.core.terrain_types import effective_catalog
-    loc_id = str(loc.get("id") or "")
-    catalog = effective_catalog()
-    classes = surface_classes()
-    levels: Optional[Dict[Tuple[str, str], float]] = None
+    from app.core.terrain_layers import floor_kind_of
+    from app.core.world_geometry import (effective_boundary,
+                                         polygon_local_to_world)
+    eff = effective_boundary(loc)
+    waters = _painted_waters() if eff is not None else []
     out: List[Dict[str, Any]] = []
     for recipe in recipes:
         if recipe.get("is_ground"):
@@ -2097,23 +2099,96 @@ def _floor_plan(loc: Dict[str, Any], recipes: List[Dict[str, Any]],
             "floor_kind": kind,
             "closed": closed,
         }
-        if kind and is_water_floor(kind, catalog, classes):
-            if levels is None:
-                # Asked ONCE, and only when a water floor is really in this
-                # location: building the height model is the price of a mirror,
-                # and most scenes have no pond in them.
-                try:
-                    from app.core.heightfield import world_model
-                    levels = world_model().zone_water_level_by_room
-                except Exception:        # noqa: BLE001 — no field, no mirror
-                    logger.warning("floor plan: no height model — a water "
-                                   "floor carries no mirror", exc_info=True)
-                    levels = {}
-            level = levels.get((loc_id, room_id))
-            if level is not None:
-                entry["water_level_effective"] = _r(level, 3)
+        if waters:
+            # The hull travels to WORLD metres through the ONE transform
+            # (§ A1.1) — the scene frame IS the location's local frame, so this
+            # is the same polygon ``terrain_layers.location_floors`` builds.
+            world = polygon_local_to_world(outline, eff[0], eff[1], eff[2])
+            ref = _map_water_ref(world, waters)
+            if ref is not None:
+                entry["map_water"] = ref
         out.append(entry)
     return out
+
+
+def _painted_waters() -> List[Dict[str, Any]]:
+    """Every painted area of a WATER kind, in priority order (W1).
+
+    ``models.terrain.list_areas`` order, i.e. z_order then paint order — the
+    same list ``terrain_query.kind_at`` answers point queries from, so "which
+    water is this room on" and "which ground is at this point" cannot name two
+    different lakes. A world that flags no kind as water answers an empty list
+    and every floor plan below costs nothing.
+    """
+    from app.core.heightfield import water_areas
+    from app.core.terrain_types import effective_catalog
+    from app.models.terrain import list_areas
+    try:
+        return [area for area, _box
+                in water_areas(list_areas(), effective_catalog())]
+    except Exception:                    # noqa: BLE001 — no world, no water
+        logger.warning("floor plan: painted water unreadable — no map "
+                       "reference", exc_info=True)
+        return []
+
+
+#: Samples per axis of the majority-area test below. 32 x 32 over the room's
+#: bounding box is 1024 probes — fine enough that a room half on the water
+#: answers within a percent of its true share, cheap enough to run per room of a
+#: scene, and a FIXED number, so the answer is a pure function of the two
+#: polygons rather than of how large somebody drew them.
+MAP_WATER_SAMPLES = 32
+
+
+def _map_water_ref(polygon: Optional[List[List[float]]],
+                   waters: Sequence[Dict[str, Any]]
+                   ) -> Optional[Dict[str, str]]:
+    """``{area_id, kind}`` of the painted water a room's hull LIES ON — or None.
+
+    MAJORITY AREA, not "the centre is inside": a room whose middle happens to
+    poke out of a bay is still on the lake, and a room that merely touches one
+    at a corner is not. The share is measured by sampling the hull's bounding
+    box on a fixed :data:`MAP_WATER_SAMPLES` lattice at CELL CENTRES, counting
+    the probes inside the hull and, of those, the ones inside the water — the
+    ratio of two areas, approximated the one way that needs no polygon clipper.
+
+    LAST CONTAINING AREA WINS on a tie, which is the priority law of the whole
+    ground (§ A16.7): ``waters`` arrives in paint order, so a later lake painted
+    over an earlier one is the one a room on both is said to lie on.
+    """
+    from app.core.world_geometry import point_in_polygon
+    if not polygon or len(polygon) < 3 or not waters:
+        return None
+    xs = [float(p[0]) for p in polygon]
+    zs = [float(p[1]) for p in polygon]
+    min_x, max_x, min_z, max_z = min(xs), max(xs), min(zs), max(zs)
+    if max_x <= min_x or max_z <= min_z:
+        return None
+    step_x = (max_x - min_x) / MAP_WATER_SAMPLES
+    step_z = (max_z - min_z) / MAP_WATER_SAMPLES
+    probes: List[Tuple[float, float]] = []
+    for j in range(MAP_WATER_SAMPLES):
+        pz = min_z + (j + 0.5) * step_z
+        for i in range(MAP_WATER_SAMPLES):
+            px = min_x + (i + 0.5) * step_x
+            if point_in_polygon(px, pz, polygon):
+                probes.append((px, pz))
+    if not probes:
+        return None
+    best: Optional[Dict[str, str]] = None
+    best_share = 0.5
+    for area in waters:
+        ring = area.get("polygon")
+        inside = sum(1 for px, pz in probes if point_in_polygon(px, pz, ring))
+        share = inside / len(probes)
+        # A MAJORITY, so STRICTLY more than half — a room lying exactly half on
+        # the water is not on it, and a tie between two lakes is won by the
+        # LATER one (``>= best_share`` once the half is cleared).
+        if share > 0.5 and share >= best_share:
+            best_share = share
+            best = {"area_id": str(area.get("id") or ""),
+                    "kind": str(area.get("kind") or "")}
+    return best
 
 
 

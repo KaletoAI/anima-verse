@@ -375,12 +375,21 @@ def delete_terrain_type_route(kind: str) -> Dict[str, Any]:
 def get_terrain_areas_route() -> Dict[str, Any]:
     """All painted areas bottom-to-top, plus the change signature.
 
-    A water area carries one ADDITIVE, server-computed field alongside its
-    authored ones: ``meta.water_level_effective`` — the mirror height the bake
-    really carved with (E1, § G4). The author's ``meta.water_level`` may be
-    unset ("auto (rim)"), and then this is the rim median the bake derived; set
-    it and the two are equal. It is output only and is never written back into
-    the authored field.
+    A water area carries TWO ADDITIVE, server-computed fields alongside its
+    authored ones (§ A16.3):
+
+    * ``meta.water_level_effective`` — the mirror height a FLAT consumer draws
+      one plane at. The author's ``meta.water_level`` may be unset ("auto
+      (rim)"), and then this is what the bake derived; set it and the two are
+      equal. On a flowing water it is the MID level of the profile.
+    * ``meta.water_profile`` — the whole mirror as a function of the place
+      (W1): ``{level_up, level_down, flow_dir_deg, axis_x, axis_z, dir_x,
+      dir_z, s_min, s_max}``. A river's mirror is a tilted plane, and this is
+      how a client evaluates it per vertex
+      (``heightfield.water_level_at``). Still water ships it too, with both
+      levels equal and ``flow_dir_deg: null``.
+
+    Both are output only and are never written back into the authored fields.
     """
     from app.core.heightfield import with_effective_water_level
     from app.models import terrain

@@ -81,12 +81,16 @@ and its default is **0**, the hard cut: a floor ends on the metre it was drawn
 on, which is the user's rule for floors and the opposite of a painted meadow's
 1.5 m fringe.
 
-WATER IS A LAYER HERE. A kind flagged `meta.water` gets its own layer index like
-any other, because the mask is the truth about "which ground is at this point"
-for the undergrowth gate and for the priority. What the water SURFACE looks like
-is not this module's business — the index answers it with the ``waters`` list
-(polygon + mirror height), the same shape a painted lake carries, so a client
-renders a room's pond with the machinery it renders a lake with.
+WATER IS A LAYER HERE, AND IT WEARS ITS BED (W1, 2026-08-21). A kind flagged
+`meta.water` gets its own layer index like any other, because the mask is the
+truth about "which ground is at this point" for the undergrowth gate and for the
+priority. What that layer PAINTS, though, is the ground UNDER the water — the
+area's `meta.bed_kind`, defaulting to the world's bare ground — because the
+mirror is a separate surface drawn over the terrain and painting the lake into
+the terrain as well makes the two fight. Whether a kind is water is asked of
+exactly ONE predicate (`terrain_types.is_water_kind`), by this table and by the
+bake alike; the zone-water list of room floors is gone with the fifth bake
+stage.
 
 PURE AND DETERMINISTIC. Everything below is a function of (areas, catalog,
 default kind); the model and the tiles are cached per :func:`layers_sig`, the
@@ -272,11 +276,17 @@ FLOOR_KIND_DEFAULT = "floor"
 class Floor(NamedTuple):
     """ONE level-0 floor polygon of ONE location, in WORLD metres.
 
-    The unit the bake, the zone-water carve and the scene payload's
-    ``floor_plan`` all speak: the room's own hull (``room_recipe``'s, never a
-    second derivation), the kind it wears, whether it is a closed room or an
-    open zone, its transition width and — for a water floor — the mirror the
-    author asked for (``None`` = derive it).
+    The unit the bake and the scene payload's ``floor_plan`` both speak: the
+    room's own hull (``room_recipe``'s, never a second derivation), the kind it
+    wears, whether it is a closed room or an open zone, and its transition
+    width.
+
+    IT SAYS NOTHING ABOUT WATER ANY MORE (W1, 2026-08-21). A floor used to be
+    able to BE water — carrying a mirror, a depth and a shore ramp, and carving
+    its own bed as the fifth bake stage. Water left the room plan entirely: it
+    is painted on the MAP, one polygon with its own mirror, bed and flow, and a
+    room that lies on it shows a reference (``scene_recipe._floor_plan`` →
+    ``map_water``) instead of owning one.
     """
     location_id: str
     room_id: str
@@ -284,10 +294,6 @@ class Floor(NamedTuple):
     kind: str
     closed: bool
     edge_blend_m: float
-    water: bool
-    water_level: Optional[float]
-    water_depth_m: float
-    shore_ramp_m: float
 
 
 def floor_edge_blend_of(layout: Any) -> float:
@@ -300,19 +306,6 @@ def floor_edge_blend_of(layout: Any) -> float:
         return FLOOR_EDGE_BLEND_DEFAULT_M
     value = sanitize_edge_blend(layout.get(EDGE_BLEND_KEY))
     return FLOOR_EDGE_BLEND_DEFAULT_M if value is None else value
-
-
-def floor_water_meta(layout: Any) -> Tuple[Optional[float], float, float]:
-    """``(water_level | None, depth_m, shore_ramp_m)`` of a water FLOOR.
-
-    THE SAME READER THE PAINTED LAKES USE (``heightfield.water_meta``), fed the
-    room's ``layout`` instead of an area's ``meta`` — the three numbers have the
-    same names, the same defaults and the same clamps in both places, and a
-    second spelling of them is a second lake physics nobody asked for. A missing
-    ``water_level`` answers None and the bake derives one (§ G4).
-    """
-    from app.core.heightfield import water_meta
-    return water_meta({"meta": layout if isinstance(layout, dict) else {}})
 
 
 def floor_kind_of(source: Any, closed: bool) -> str:
@@ -338,37 +331,34 @@ def floor_kind_of(source: Any, closed: bool) -> str:
     return FLOOR_KIND_DEFAULT if closed else ""
 
 
-def is_water_floor(kind: str, catalog: Optional[Dict[str, Dict[str, Any]]],
-                   surface_classes: Optional[Dict[str, str]] = None) -> bool:
-    """Is this FLOOR kind a water surface? Two catalogs, never the name.
+def bed_kind_of(area: Any, catalog: Optional[Dict[str, Dict[str, Any]]],
+                default_kind: str) -> str:
+    """WHICH GROUND LIES UNDER ONE PAINTED WATER — ``meta.bed_kind`` (W1).
 
-    A floor kind is a SURFACE-library id (``surfaces.floor``), which a terrain
-    kind only sometimes is. So the question is asked of both books, in the order
-    of specificity:
+    A lake is not a blue floor: what a swimmer sees below is sand, gravel or
+    rock, and until this round it was always the world's BARE ground, because
+    the renderer substituted layer 0 for any water layer. Now the AREA says it,
+    and the default is exactly that old substitution — ``default_kind``, the
+    world's own ``game.default_terrain_kind`` — so a world that authors nothing
+    keeps the ground it had.
 
-    1. the terrain catalog's ``meta.water`` (``terrain_types.is_water_kind``) —
-       the flag § G4 gave painted lakes;
-    2. the surface library's material CLASS (``water``/``ice``), which is the
-       very predicate the renderers decide a rippling surface by
-       (``@anima/scene-render`` ``isWaterClass``).
-
-    ``surface_classes`` maps a surface id to its declared material class and is
-    handed in so this module stays pure; absent, only the terrain catalog is
-    asked.
+    The answer is the empty string for anything that is not water: a bed is a
+    property of water and of nothing else. An authored kind the catalog does not
+    know is handed back all the same; the surface lookup falls through to the
+    default's, which is the same rule a terrain type without a ``surface`` gets.
     """
     from app.core.terrain_types import is_water_kind
-    kind = (kind or "").strip()
-    if not kind:
-        return False
-    if catalog is not None and is_water_kind(kind, catalog):
-        return True
-    cls = str((surface_classes or {}).get(kind) or "").strip().lower()
-    return cls in ("water", "ice")
+    kind = str((area or {}).get("kind") or "").strip()
+    if not kind or not is_water_kind(kind, catalog or {}):
+        return ""
+    meta = (area or {}).get("meta")
+    bed = str((meta or {}).get("bed_kind") or "").strip() if isinstance(
+        meta, dict) else ""
+    return bed or (default_kind or "").strip()
 
 
 def location_floors(loc: Dict[str, Any],
                     catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-                    surface_classes: Optional[Dict[str, str]] = None,
                     ) -> List[Floor]:
     """The level-0 floor polygons of ONE placed location, in PRIORITY ORDER.
 
@@ -433,22 +423,16 @@ def location_floors(loc: Dict[str, Any],
         kind = floor_kind_of(lay, closed)
         if not kind:
             continue                      # a kindless zone paints nothing
-        water = is_water_floor(kind, catalog, surface_classes)
-        level, depth, ramp = floor_water_meta(lay)
         entry = Floor(location_id=loc_id, room_id=room_id,
                       polygon=[[float(x), float(z)] for x, z in world],
                       kind=kind, closed=closed,
-                      edge_blend_m=floor_edge_blend_of(lay),
-                      water=water,
-                      water_level=(level if water else None),
-                      water_depth_m=depth, shore_ramp_m=ramp)
+                      edge_blend_m=floor_edge_blend_of(lay))
         (rooms if closed else zones).append(entry)
     return zones + rooms
 
 
 def world_floors(locations: Sequence[Dict[str, Any]],
                  catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-                 surface_classes: Optional[Dict[str, str]] = None,
                  ) -> List[Floor]:
     """Every location's level-0 floors, in ONE priority order.
 
@@ -469,7 +453,7 @@ def world_floors(locations: Sequence[Dict[str, Any]],
         ranked.append((-boundary_area_m2(loc), pos, loc))
     out: List[Floor] = []
     for _neg_area, _pos, loc in sorted(ranked, key=lambda e: (e[0], e[1])):
-        out.extend(location_floors(loc, catalog, surface_classes))
+        out.extend(location_floors(loc, catalog))
     return out
 
 
@@ -499,47 +483,90 @@ def layer_table(areas: Sequence[Dict[str, Any]],
     reason a default-kind shape maps back onto 0.
 
     Each entry carries what a renderer needs and nothing else: the ``kind`` (for
-    logs and for the undergrowth gate), the ``surface`` the type wears (the
-    library id, `terrain_types` — NEVER the kind's spelling; a floor kind IS its
-    own surface id), the transition width and whether the kind is water.
+    logs and for the undergrowth gate), the ``surface`` the ground WEARS here,
+    the transition width, whether the kind is water and — on a water layer — the
+    ``bed_kind`` whose surface that is.
+
+    WATER WEARS ITS BED (W1, § A16.7). A water layer stays a full layer: it owns
+    the mask at its own points, so the undergrowth gate and every point query
+    still answer "water here". What it must NOT do is paint water-coloured
+    albedo onto the terrain — the mirror is a separate surface drawn over it,
+    and painting the lake twice makes the shader fight itself. So the SURFACE of
+    a water layer is its BED's (``bed_kind_of``, default: the world's bare
+    ground, which is exactly what the renderer substituted by itself until now),
+    and its transition width is the bed kind's too whenever a bed was authored.
+    Two lakes of one kind with two beds are two layers, because the bed is part
+    of the key.
+
+    THE WATER FLAG COMES FROM ONE PREDICATE, ``terrain_types.is_water_kind``,
+    for every row — painted kinds and floor kinds alike. There used to be a
+    second book for floors (the surface library's material class), and two books
+    is how a ground ends up being water in the table and not in the bake.
     """
     from app.core.terrain_types import is_water_kind
     default_kind = (default_kind or "").strip()
     out: List[Dict[str, Any]] = []
-    seen: Dict[Tuple[str, float], int] = {}
+    seen: Dict[Tuple[str, float, str], int] = {}
     overflow = 0
 
-    def add(kind: str, surface: str, blend: float, water: bool) -> None:
+    def add(kind: str, surface: str, blend: float, water: bool,
+            bed: str = "") -> None:
         nonlocal overflow
-        key = (kind, round(float(blend), 2))
+        key = (kind, round(float(blend), 2), bed)
         if key in seen:
             return
         if len(out) >= MAX_LAYERS:
             overflow += 1
             return
         seen[key] = len(out)
-        out.append({"index": len(out), "kind": kind, "surface": surface,
-                    "edge_blend_m": key[1], "water": water})
+        entry: Dict[str, Any] = {"index": len(out), "kind": kind,
+                                 "surface": surface, "edge_blend_m": key[1],
+                                 "water": water}
+        if bed:
+            entry["bed_kind"] = bed
+        out.append(entry)
 
-    entry = catalog.get(default_kind)
-    add(default_kind, str((entry or {}).get("surface") or "").strip(),
-        edge_blend_of(entry), bool(is_water_kind(default_kind, catalog)))
-    for kind in sorted({str(a.get("kind") or "").strip()
-                        for a in (areas or [])}):
+    # INDEX 0, the bare ground. It goes through the same bed rule as any
+    # painted kind, for the one world that flags its DEFAULT kind as water.
+    _default_entry = catalog.get(default_kind)
+    _default_water = bool(is_water_kind(default_kind, catalog))
+    add(default_kind,
+        str((_default_entry or {}).get("surface") or "").strip(),
+        edge_blend_of(_default_entry), _default_water,
+        bed_kind_of({"kind": default_kind, "meta": {}}, catalog, default_kind)
+        if _default_water else "")
+    # SORTED BY (kind, bed), never by paint order: the table of one world has to
+    # be the same list on every request, so that a payload diff means the world
+    # moved and not that somebody re-drew a shape. The BED is part of the pair
+    # because two lakes of one kind on two beds are two layers.
+    for kind, bed in sorted({(str(a.get("kind") or "").strip(),
+                              bed_kind_of(a, catalog, default_kind))
+                             for a in (areas or [])}):
         if not kind:
             continue
         entry = catalog.get(kind)
-        add(kind, str((entry or {}).get("surface") or "").strip(),
-            edge_blend_of(entry), bool(is_water_kind(kind, catalog)))
-    for kind, blend, water in sorted({(f.kind, round(f.edge_blend_m, 2),
-                                       f.water) for f in (floors or [])}):
+        water = bool(is_water_kind(kind, catalog))
+        if not water:
+            add(kind, str((entry or {}).get("surface") or "").strip(),
+                edge_blend_of(entry), False)
+            continue
+        # A WATER AREA WEARS ITS BED: the surface and (once a bed is authored)
+        # the transition width are the BED kind's, while the kind and the flag
+        # stay the water's.
+        bed_entry = catalog.get(bed)
+        authored = bed != (default_kind or "").strip()
+        add(kind, str((bed_entry or {}).get("surface") or "").strip(),
+            edge_blend_of(bed_entry) if authored else edge_blend_of(entry),
+            True, bed)
+    for kind, blend in sorted({(f.kind, round(f.edge_blend_m, 2))
+                               for f in (floors or [])}):
         # A FLOOR IS ITS OWN SURFACE. ``surfaces.floor`` names a library entry
         # directly, where a terrain type points at one through its ``surface``
         # field — so a floor kind that the terrain catalog does not know wears
         # itself, and one it does know keeps the terrain type's own surface.
         entry = catalog.get(kind)
         surface = str((entry or {}).get("surface") or "").strip() or kind
-        add(kind, surface, blend, water)
+        add(kind, surface, blend, bool(is_water_kind(kind, catalog)))
     if overflow:
         logger.warning("terrain layers: %d layer(s) past the ceiling of %d "
                        "render as bare ground", overflow, MAX_LAYERS)
@@ -591,9 +618,13 @@ class LayerModel:
         catalog = catalog or {}
         floors = list(floors or [])
         self.layers = layer_table(areas, catalog, default_kind, floors)
-        by_kind: Dict[Tuple[str, float], int] = {
-            (entry["kind"], round(float(entry["edge_blend_m"]), 2)):
-            entry["index"] for entry in self.layers}
+        # (kind, width, BED) -> index. The bed is in the key because a water
+        # kind wears the ground under it (W1): two ponds of one kind over sand
+        # and over rock are two layers, and a rank has to find its own.
+        by_kind: Dict[Tuple[str, float, str], int] = {
+            (entry["kind"], round(float(entry["edge_blend_m"]), 2),
+             str(entry.get("bed_kind") or "")): entry["index"]
+            for entry in self.layers}
         #: rank -> layer index. Rank 0 is bare ground, i.e. layer 0.
         self.rank_layer: List[int] = [0]
         #: rank -> (parsed ring, world box). Index 0 is a placeholder for the
@@ -614,8 +645,12 @@ class LayerModel:
                 continue
             kind = str(area.get("kind") or "").strip()
             entry = catalog.get(kind)
+            bed = bed_kind_of(area, catalog, default_kind)
+            blend = edge_blend_of(entry)
+            if bed and bed != (default_kind or "").strip():
+                blend = edge_blend_of(catalog.get(bed))
             self.rank_layer.append(
-                by_kind.get((kind, round(edge_blend_of(entry), 2)), 0))
+                by_kind.get((kind, round(blend, 2), bed), 0))
             self.rings.append(ring)
             self.boxes.append(_ring_box(ring))
         self.floors: List[Floor] = []
@@ -625,7 +660,7 @@ class LayerModel:
                 continue
             self.floor_by_rank[len(self.rings)] = floor
             self.rank_layer.append(
-                by_kind.get((floor.kind, round(floor.edge_blend_m, 2)), 0))
+                by_kind.get((floor.kind, round(floor.edge_blend_m, 2), ""), 0))
             self.rings.append(ring)
             self.boxes.append(_ring_box(ring))
             self.floors.append(floor)
@@ -1114,22 +1149,6 @@ TILE_CACHE_MAX = 32
 BATCH_MAX = 16
 
 
-def surface_classes() -> Dict[str, str]:
-    """``surface id -> declared material class`` out of the surface library.
-
-    The second book :func:`is_water_floor` reads. It is a small dict of the
-    kinds an author gave a material to at all (matte kinds leave no entry), so
-    building it per signature costs one file read.
-    """
-    from app.core.surface_textures import get_kind_meta
-    out: Dict[str, str] = {}
-    for kind, meta in (get_kind_meta() or {}).items():
-        cls = ((meta or {}).get("material") or {}).get("class")
-        if isinstance(cls, str) and cls.strip():
-            out[str(kind)] = cls.strip().lower()
-    return out
-
-
 def floors_basis() -> List[Dict[str, Any]]:
     """What the LOCATION FLOORS of this world are made of, in hashable form.
 
@@ -1138,8 +1157,7 @@ def floors_basis() -> List[Dict[str, Any]]:
     is asked once per request. Everything a floor is a function of rides along —
     the pin (a moved or turned location moves its floors with it) and the whole
     ``layout`` blob of every room (its rectangle, its outline, its curves, its
-    rotation, its ``surfaces.floor``, its ``always_visible``, its width and its
-    water level).
+    rotation, its ``surfaces.floor``, its ``always_visible`` and its width).
     """
     from app.models.world import list_locations
     out: List[Dict[str, Any]] = []
@@ -1164,8 +1182,9 @@ def layers_sig() -> str:
     enrichment as well (prop variants, prop heights), so a prop gaining a low
     mesh would throw away every baked mask in the process for a picture that
     cannot change. This hashes the five things a mask really depends on: the
-    polygons, their order, the surface + width + water flag of every kind, which
-    kind the unpainted world is, and every placed room floor
+    polygons, their order AND their ``bed_kind`` (W1 — the ground a lake wears
+    is part of the cut), the surface + width + water flag + water widths of
+    every kind, which kind the unpainted world is, and every placed room floor
     (:func:`floors_basis`).
 
     The CLIENT still refetches on `terrain_sig` — that is the signature the
@@ -1178,13 +1197,16 @@ def layers_sig() -> str:
     basis = json.dumps({
         "default": default_kind(),
         "areas": [{"kind": a.get("kind"), "polygon": a.get("polygon"),
-                   "z_order": a.get("z_order")} for a in list_areas()],
+                   "z_order": a.get("z_order"),
+                   "bed": str(((a.get("meta") or {}).get("bed_kind")
+                               if isinstance(a.get("meta"), dict) else "")
+                              or "")}
+                  for a in list_areas()],
         "types": {k: {"surface": v.get("surface", ""),
                       "blend": edge_blend_of(v),
                       "water": bool((v.get("meta") or {}).get("water"))}
                   for k, v in catalog.items()},
         "floors": floors_basis(),
-        "surface_classes": surface_classes(),
     }, sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
 
@@ -1202,8 +1224,7 @@ def world_model() -> LayerModel:
     from app.models.world import list_locations
     catalog = effective_catalog()
     model = LayerModel(list_areas(), catalog, default_kind(),
-                       world_floors(list_locations(), catalog,
-                                    surface_classes()))
+                       world_floors(list_locations(), catalog))
     _MODEL = (sig, model)
     return model
 
@@ -1251,46 +1272,6 @@ def _format_key(tx: int, tz: int) -> str:
     return f"{tx},{tz}"
 
 
-def waters_payload(model: LayerModel) -> List[Dict[str, Any]]:
-    """Every ZONE WATER of the world as a surface a renderer can draw (E5a).
-
-    A room whose floor kind is water is a lake with a room id: it carves its bed
-    like a painted one (``heightfield``'s zone-water stamp) and it wants the same
-    flat mirror over it. So it travels in the same shape a painted lake does —
-    ``polygon`` in WORLD metres, ``water_level_effective`` in world y — and a
-    client renders both with one routine instead of inventing a second water.
-
-    The mirror is read off the HEIGHT model, because that is who decided it: the
-    author's ``layout.water_level`` where there is one, otherwise the plateau of
-    a built location or the rim median of a natural one. A room the bake never
-    saw (an unplaced location, a world without a heightfield) is left out rather
-    than given a guessed height — a plane at the wrong y is the drape of old.
-    """
-    if not model.floors:
-        return []
-    try:
-        from app.core.heightfield import world_model as height_model
-        levels = height_model().zone_water_level_by_room
-    except Exception:                       # noqa: BLE001 — no field, no water
-        logger.warning("terrain layers: no height model — zone waters have no "
-                       "mirror and are left out", exc_info=True)
-        return []
-    out: List[Dict[str, Any]] = []
-    for floor in model.floors:
-        if not floor.water:
-            continue
-        level = levels.get((floor.location_id, floor.room_id))
-        if level is None:
-            continue
-        out.append({"location_id": floor.location_id,
-                    "room_id": floor.room_id,
-                    "kind": floor.kind,
-                    "polygon": [[round(x, 3), round(z, 3)]
-                                for x, z in floor.polygon],
-                    "water_level_effective": round(float(level), 3)})
-    return out
-
-
 def index_payload() -> Dict[str, Any]:
     """The INDEX answer of ``GET /play/terrain-layers`` (no ``keys``)."""
     global _INDEX
@@ -1306,7 +1287,6 @@ def index_payload() -> Dict[str, Any]:
         "layers": model.layers,
         "overview": cached[2],
         "tile_keys": [_format_key(tx, tz) for tx, tz in cached[1]],
-        "waters": waters_payload(model),
     }
 
 

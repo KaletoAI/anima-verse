@@ -1250,9 +1250,9 @@ check("the village really counts as open ground",
 # along the polyline is exactly the 2 m of depth and nothing more.
 _lake_bed = hf_core.world_model()
 approx("the lake's mirror is the rim median, 0.0",
-       _lake_bed.water_level_by_area[
+       _lake_bed.water_profile_by_area[
            [a["id"] for a in terrain.list_areas()
-            if a["kind"] == "water"][0]], 0.0)
+            if a["kind"] == "water"][0]].level_up, 0.0)
 approx("...and its bed at the goal is 2 m under it",
        _lake_bed.final(900.0, 0.0), -2.0, 1e-9)
 approx("...while the approach on grass is still flat",

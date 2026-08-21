@@ -296,56 +296,6 @@ def placed_footprints() -> List[Tuple[float, float, float,
     return out
 
 
-def placed_zone_waters() -> List[Tuple[str, str, List[List[float]],
-                                       Optional[float], float, float]]:
-    """Every ROOM whose level-0 floor is WATER, as a carve input (E5a, § G4).
-
-    ``(location_id, room_id, polygon in WORLD metres, authored water_level or
-    None, depth_m, shore_ramp_m)`` — the fifth input of the bake, and the reason
-    a pond drawn as a room floor is a lake and not a blue rectangle painted over
-    the ground it does not fit.
-
-    THE POLYGONS COME FROM ``core.terrain_layers.world_floors``, the same
-    function that decides which layer the ground WEARS there. One derivation for
-    the material and for the shape of the bed: if the two ever came from two
-    places, the water would end where one of them said and the bed where the
-    other did, which is the two-grounds bug this whole plan exists to kill.
-
-    A location that is not placed, a room that is not on storey 0 and a floor
-    whose kind is not a water surface never appear here.
-    """
-    from app.core.terrain_layers import (surface_classes, world_floors)
-    from app.core.terrain_types import effective_catalog
-    from app.models.world import list_locations
-    out: List[Tuple[str, str, List[List[float]], Optional[float],
-                    float, float]] = []
-    for floor in world_floors(list_locations(), effective_catalog(),
-                              surface_classes()):
-        if not floor.water:
-            continue
-        out.append((floor.location_id, floor.room_id,
-                    [[round(x, 2), round(z, 2)] for x, z in floor.polygon],
-                    floor.water_level, floor.water_depth_m,
-                    floor.shore_ramp_m))
-    return out
-
-
-def zone_water_basis() -> List[Dict[str, Any]]:
-    """The ZONE WATERS of the bake, in hashable form (E5a).
-
-    The room-floor twin of :func:`water_basis`: a pond moved, resized, given a
-    mirror or turned into parquet changes the ground under it, so a client
-    holding the old grid would draw a bed the server does not have.
-
-    A world without a single water room floor contributes an empty list.
-    """
-    out: List[Dict[str, Any]] = []
-    for loc_id, room_id, polygon, level, depth, ramp in placed_zone_waters():
-        out.append({"location": loc_id, "room": room_id, "polygon": polygon,
-                    "level": level, "depth": depth, "ramp": ramp})
-    return out
-
-
 def relief_basis() -> List[Dict[str, Any]]:
     """The MICRO-RELIEF inputs of the raster, in hashable form.
 
@@ -377,25 +327,36 @@ def relief_basis() -> List[Dict[str, Any]]:
 
 
 def water_basis() -> List[Dict[str, Any]]:
-    """The WATER inputs of the bake, in hashable form (E1, § G4).
+    """The WATER inputs of the bake, in hashable form (E1, § A16.3).
 
-    Every painted area of a water kind with the three numbers that shape its
-    carve — the mirror height (absent while it is still "auto"), the depth and
-    the shore ramp. They belong in the signature for the same reason the height
-    areas do: moving a lake's level moves the ground under it, and a client
-    holding the old grid would draw a bed the server does not have.
+    Every painted area of a water kind with everything that shapes its carve —
+    the mirror (absent while it is still "auto"), the two optional END levels
+    and the flow bearing of a river, and the depth and shore ramp AS RESOLVED
+    against the kind's defaults. They belong in the signature for the same
+    reason the height areas do: moving a lake's level moves the ground under it,
+    and a client holding the old grid would draw a bed the server does not have.
+
+    THE RESOLVED WIDTHS ARE WHY THE KIND IS IN HERE AT ALL (W1): a world that
+    dials its "river" type from 2 m deep to 6 m changes every river bed in it
+    without touching a single area, and the effective numbers carry that into
+    the hash without a second basis function. ``bed_kind`` is NOT here — it
+    paints, it does not carve, and it lives in ``terrain_layers.layers_sig``.
 
     A world that flags no kind as water contributes an empty list and costs
     nothing, exactly like :func:`relief_basis` on a world without hills.
     """
     from app.core.heightfield import water_areas, water_meta
-    from app.core.terrain_types import effective_catalog
+    from app.core.terrain_types import effective_catalog, water_kind_defaults
     from app.models.terrain import list_areas
+    catalog = effective_catalog()
     out: List[Dict[str, Any]] = []
-    for area, _box in water_areas(list_areas(), effective_catalog()):
-        level, depth, ramp = water_meta(area)
+    for area, _box in water_areas(list_areas(), catalog):
+        meta = water_meta(area, water_kind_defaults(
+            str(area.get("kind") or ""), catalog))
         out.append({"id": area.get("id"), "polygon": area.get("polygon"),
-                    "level": level, "depth": depth, "ramp": ramp})
+                    "level": meta.level, "up": meta.level_up,
+                    "down": meta.level_down, "flow": meta.flow_dir_deg,
+                    "depth": meta.depth_m, "ramp": meta.shore_ramp_m})
     return out
 
 
@@ -420,10 +381,11 @@ def height_sig() -> str:
     :func:`placed_footprints`, so closing a room or drawing a building outline
     adds a whole entry to the basis while the place stands perfectly still.
 
-    AND SO DO THE WATER POLYGONS (:func:`water_basis`, E1, § G4): a lake's
-    mirror, depth and shore ramp shape the ground under it exactly as a height
-    area does — the PAINTED ones and, since E5a, the ROOM FLOORS of a water
-    kind (:func:`zone_water_basis`).
+    AND SO DO THE WATER POLYGONS (:func:`water_basis`, E1, § A16.3): a lake's
+    mirror, depth and shore ramp — and a river's flow bearing and end levels —
+    shape the ground under it exactly as a height area does. Only the PAINTED
+    ones: since W1 a room floor carves nothing at all, so the fifth basis is
+    gone with the fifth bake stage and there is no fallback reader.
 
     AND SO DOES THE MICRO-RELIEF (:func:`relief_basis`, decision 2026-08-13):
     since a terrain KIND may carry hills, painting such a kind — or editing its
@@ -433,8 +395,7 @@ def height_sig() -> str:
     basis = json.dumps({"areas": list_height_areas(),
                         "places": placed_footprints(),
                         "terrain": relief_basis(),
-                        "water": water_basis(),
-                        "zone_water": zone_water_basis()},
+                        "water": water_basis()},
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
 

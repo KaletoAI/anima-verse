@@ -211,57 +211,86 @@ def _sanitize_stroke(raw: Any) -> Dict[str, Any]:
 
 
 def _sanitize_water(meta: Dict[str, Any]) -> None:
-    """The three WATER numbers of a painted area, in place (E1, § G4).
+    """What a painted area authors about its own WATER, in place (§ A16.3, W1).
 
     A water polygon is the one painted shape that changes the GROUND without
     being a height area: the bake sinks its bed under the mirror
     (``core.heightfield.HeightModel._carve``), which is what makes "distant
-    terrain pokes through the lake" impossible in the DATA instead of
-    impossible in a shader. The three numbers are:
+    terrain pokes through the water" impossible in the DATA instead of
+    impossible in a shader. The fields are:
 
-    * ``water_level`` — the mirror, as a world y in metres. NO DEFAULT IS
-      INVENTED HERE: an absent level means "not settled yet", and
+    * ``water_level`` — the mirror of STILL water, as a world y in metres. NO
+      DEFAULT IS INVENTED HERE: an absent level means "not settled yet", and
       :func:`save_area` fills it in from the landscape (the median height along
       the rim) so it is a stored number from then on and stops moving when
       somebody paints a hill next to the lake. Only a finite number survives.
+    * ``water_level_up`` / ``water_level_down`` — the two ends of a FLOWING
+      water's tilted mirror, same units, same "absent = derive it" rule. Each
+      overrides its own end of the profile; a plain ``water_level`` sets both.
+    * ``flow_dir_deg`` — which way the water flows, 0…360, wrapped not clamped
+      (``heightfield.sanitize_flow_dir``). It is what turns one level into a
+      profile — and it is the same bearing the ripples scroll along.
     * ``water_depth_m`` — how far the bed lies under the mirror once the shore
       ramp is done. Clamped, never refused: an authoring slip should make a
       shallow lake, not lose the shape somebody drew.
     * ``shore_ramp_m`` — how far INSIDE the rim that full depth is reached. 0
       is legal and means a step, the walled basin.
+    * ``bed_kind`` — which ground the layer bake paints UNDER this water
+      (§ A16.7). A terrain-kind id, unvalidated here for the reason
+      ``surface`` is unvalidated on a type: a catalog is a living thing and a
+      reference must survive the kind being renamed into existence later.
 
-    They live on the AREA and not on the KIND because two lakes in one world
-    stand at two heights; whether a kind is water at all is the catalog's
-    answer (``terrain_types.is_water_kind``).
+    THE MIRROR IS THE AREA'S ALONE, because two lakes in one world stand at two
+    heights. THE TWO WIDTHS ARE ONLY AN OVERRIDE since W1: absent, the KIND's
+    own defaults apply (``terrain_types.water_kind_defaults``), which is why
+    they are dropped rather than defaulted when they are junk — a stored default
+    would silently outrank the kind forever. Whether a kind is water at all is
+    the catalog's answer (``terrain_types.is_water_kind``), never the name's.
     """
-    from app.core.heightfield import (WATER_DEPTH_DEFAULT_M, WATER_DEPTH_MAX_M,
-                                      WATER_DEPTH_MIN_M,
-                                      WATER_SHORE_RAMP_DEFAULT_M,
+    from app.core.heightfield import (WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M,
                                       WATER_SHORE_RAMP_MAX_M,
-                                      WATER_SHORE_RAMP_MIN_M)
-    # SERVER OUTPUT NEVER COMES BACK IN. ``water_level_effective`` is computed
-    # on the read path (``core.heightfield.with_effective_water_level``) so the
-    # editor can show what the carve really used; ``meta`` is a full replace on
-    # every write, so a client that round-trips what it read would otherwise
-    # store it. It is dropped here, once.
+                                      WATER_SHORE_RAMP_MIN_M,
+                                      sanitize_flow_dir)
+    # SERVER OUTPUT NEVER COMES BACK IN. ``water_level_effective`` and
+    # ``water_profile`` are computed on the read path
+    # (``core.heightfield.with_effective_water_level``) so the editor can show
+    # what the carve really used; ``meta`` is a full replace on every write, so
+    # a client that round-trips what it read would otherwise store them. They
+    # are dropped here, once.
     meta.pop("water_level_effective", None)
-    if "water_level" in meta:
-        level = _finite(meta.get("water_level"))
+    meta.pop("water_profile", None)
+    for key in ("water_level", "water_level_up", "water_level_down"):
+        if key not in meta:
+            continue
+        level = _finite(meta.get(key))
         if level is None:
-            meta.pop("water_level", None)
+            meta.pop(key, None)
         else:
-            meta["water_level"] = round(level, 3)
-    for key, default, low, high in (
-            ("water_depth_m", WATER_DEPTH_DEFAULT_M,
-             WATER_DEPTH_MIN_M, WATER_DEPTH_MAX_M),
-            ("shore_ramp_m", WATER_SHORE_RAMP_DEFAULT_M,
-             WATER_SHORE_RAMP_MIN_M, WATER_SHORE_RAMP_MAX_M)):
+            meta[key] = round(level, 3)
+    if "flow_dir_deg" in meta:
+        flow = sanitize_flow_dir(meta.get("flow_dir_deg"))
+        if flow is None:
+            meta.pop("flow_dir_deg", None)
+        else:
+            meta["flow_dir_deg"] = flow
+    for key, low, high in (
+            ("water_depth_m", WATER_DEPTH_MIN_M, WATER_DEPTH_MAX_M),
+            ("shore_ramp_m", WATER_SHORE_RAMP_MIN_M, WATER_SHORE_RAMP_MAX_M)):
         if key not in meta:
             continue
         value = _finite(meta.get(key))
         if value is None:
-            value = default
-        meta[key] = round(min(max(value, low), high), 3)
+            # NOT the module default: an unreadable override is no override,
+            # and the KIND is the one that answers then.
+            meta.pop(key, None)
+        else:
+            meta[key] = round(min(max(value, low), high), 3)
+    if "bed_kind" in meta:
+        bed = str(meta.get("bed_kind") or "").strip()[:40]
+        if bed:
+            meta["bed_kind"] = bed
+        else:
+            meta.pop("bed_kind", None)
 
 
 def sanitize_area(raw: Any) -> Dict[str, Any]:
@@ -479,35 +508,60 @@ def _note_relief_write() -> None:
 
 
 def settle_water_level(area: Dict[str, Any]) -> Dict[str, Any]:
-    """Give a WATER area a stored ``meta.water_level`` if it has none (§ G4).
+    """Freeze a WATER area's derived mirror into the stored meta (§ A16.3).
 
-    THE DEFAULT IS THE MEDIAN NATURAL HEIGHT ALONG THE RIM, and it is written
+    THE DEFAULT IS A MEDIAN NATURAL HEIGHT ALONG THE RIM, and it is written
     down HERE, at save time, rather than being recomputed on every bake. The
     difference matters: a computed default follows the landscape, so painting a
     hill beside a lake would raise the lake — and a lake that moves when its
     neighbourhood is edited is exactly the kind of hidden coupling this plan
     exists to remove. Once stored it is a number the author owns and can drag.
 
-    A non-water kind, an already-set level and a world whose height model
-    cannot be built (no DB in a smoke run) all leave the area untouched: the
-    bake computes the same median on the fly in that case, so nothing is lost
-    but the stability.
+    WHICH FIELD IS FROZEN FOLLOWS THE PROFILE (W1). Still water settles
+    ``water_level``, one number. FLOWING water settles ``water_level_up`` and
+    ``water_level_down`` — freezing a river into a single ``water_level`` would
+    flatten the very tilt the author asked for the moment they saved. Each end
+    is only written when the author left it open; a half-authored river keeps
+    its authored end exactly.
+
+    A non-water kind and a world whose height model cannot be built (no DB in a
+    smoke run) leave the area untouched: the bake derives the same numbers on
+    the fly in that case, so nothing is lost but the stability.
     """
-    from app.core.terrain_types import effective_catalog, is_water_kind
+    from app.core.terrain_types import (effective_catalog, is_water_kind,
+                                        water_kind_defaults)
     meta = area.get("meta")
-    if not isinstance(meta, dict) or "water_level" in meta:
+    if not isinstance(meta, dict):
         return area
+    kind = str(area.get("kind") or "")
     catalog = effective_catalog()
-    if not is_water_kind(str(area.get("kind") or ""), catalog):
+    if not is_water_kind(kind, catalog):
         return area
-    from app.core.heightfield import _median, _rim_samples, build_model
+    from app.core.heightfield import build_model, water_meta
     from app.models import heightfield as store
-    rim = _rim_samples(area.get("polygon") or [])
-    if not rim:
+    parsed = water_meta(area, water_kind_defaults(kind, catalog))
+    if parsed.flow_dir_deg is None:
+        if parsed.level is not None:
+            return area
+        keys = ("water_level",)
+    else:
+        keys = tuple(key for key, value in (("water_level_up",
+                                             parsed.level_up),
+                                            ("water_level_down",
+                                             parsed.level_down))
+                     if value is None and parsed.level is None)
+        if not keys:
+            return area
+    if len(area.get("polygon") or []) < 3:
         return area
     model = build_model(store.list_height_areas(), (), list_areas(), catalog)
-    meta["water_level"] = round(
-        _median([model.natural(px, pz) for px, pz in rim]), 3)
+    # THE ONE DERIVATION, asked of the bake itself rather than re-spelled here:
+    # the profile the model builds IS what the carve will use, so the number
+    # frozen into the area is the number the ground already has.
+    profile = model.water_profile_for(area.get("polygon"), parsed)
+    for key in keys:
+        meta[key] = round(profile.level_up if key != "water_level_down"
+                          else profile.level_down, 3)
     return area
 
 

@@ -766,7 +766,7 @@ Fernkulisse eingeschaltet ist, § A17).
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
-| `height_sig` | `str` (10) | Signatur über **alles, was die fünf Backstufen von `h_final` lesen** (§ A16.1): die autorierten Höhenflächen, das Mikro-Relief der gemalten Arten (`relief_inputs` — relief-freies Malen zählt nicht mit), die Wasser-Polygone samt ihren drei Zahlen (`water_basis`), die Zonen-Wasser (`zone_water_basis`) und die **Platzierungen der GEBAUTEN Orte** (ein verschobener Ort verschiebt sein Plateau; ein Ort, der einen Raum schließt oder öffnet, tritt in `placed_footprints()` ein oder aus — `level_ground` ist aus der Signatur verschwunden, § A16.4). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.5) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
+| `height_sig` | `str` (10) | Signatur über **alles, was die fünf Backstufen von `h_final` lesen** (§ A16.1): die autorierten Höhenflächen, das Mikro-Relief der gemalten Arten (`relief_inputs` — relief-freies Malen zählt nicht mit), die Wasser-Polygone samt ihren effektiven Zahlen (`water_basis`: Spiegel, beide Profil-Enden, Fließrichtung, aufgelöste Tiefe/Rampe — W1; ~~`zone_water_basis`~~ ist gelöscht) und die **Platzierungen der GEBAUTEN Orte** (ein verschobener Ort verschiebt sein Plateau; ein Ort, der einen Raum schließt oder öffnet, tritt in `placed_footprints()` ein oder aus — `level_ground` ist aus der Signatur verschwunden, § A16.4). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.5) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `game_time` | `{…}` | Die **Spieluhr** zu genau diesem Payload — derselbe Zeitpunkt, auf den alle Reisen unten gerechnet wurden. Fertig aufgeschlüsselt: `canonical` (`"Y0002-D109T14:00:00"`), `total_seconds`, `year`, `day_of_year`, `season`, `season_name`, `day_of_season`, `hour`, `minute`, `second`, `hour_fraction` (Sonnenstand), `weekday`/`weekday_name` (`null`/`""`, wenn die Welt keine Wochen kennt), `label`, `date_label`, `time` (HH:MM), `is_night`, `day_bucket`, `atmosphere` (`{season, temperature, weather, note, label}` — Temperatur/Wetter gehören der **Season**, nicht der Welt; `label` z. B. `"freezing, snow — often fog in the morning"`). **Nie gefoggt** — die Tageszeit sieht jeder. Der Client RENDERT daraus, er rechnet nichts: es gibt keine Weltzeitzone und kein reales Datum mehr, aus dem sich eine Spielstunde ableiten ließe |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
@@ -2789,9 +2789,9 @@ vorigen:
 ```
 1. Höhenflächen          (stärkste Auslenkung gewinnt)
 2. Mikro-Relief          (ADDITIV)
-3. Wasser-Carve (Karte)  (min, senkt nur)
+3. Wasser-Carve (Karte)  (min, senkt nur, gegen das LOKALE Niveau — W1)
 4. Location-Plateaus     (smoothstep-Rampe, kleinste Fläche zuletzt)
-5. Zonen-Wasser-Carve    (min, NACH den Plateaus)
+~~5. Zonen-Wasser-Carve~~  GELÖSCHT (W1, 2026-08-21)
 ```
 
 Stufe 5 steht ausdrücklich hinter Stufe 4: ein Teich im Innenhof liegt auf
@@ -2818,8 +2818,8 @@ Terrain-Vertex-Shader). Serverseitig ist der Vorrang `Kachel, sonst 0` — die
 
 **`height_sig`** hasht alles, was die fünf Stufen lesen: die Höhenflächen, das
 Mikro-Relief (`relief_inputs`), die Wasser-Polygone samt ihren drei Zahlen
-(`water_basis`), die Zonen-Wasser (`zone_water_basis`) und die Platzierungen
-der **gebauten** Orte — dafür braucht es kein eigenes Feld: ein Ort, der einen
+(`water_basis`, seit W1 mit Profil-Enden und Fließrichtung) und die
+Platzierungen der **gebauten** Orte — dafür braucht es kein eigenes Feld: ein Ort, der einen
 Raum schließt, tritt in `placed_footprints()` ein, ein Ort, der ihn öffnet,
 verlässt sie. Ändert sich die Signatur, holt der Client `GET /play/heightfield`
 neu und **verwirft Kachel-Index samt aller geladenen Kacheln** — sonst nie. Wie
@@ -2901,6 +2901,13 @@ Invariante 1 an dieser Stelle.
 
 ### A16.3 Stufe 3 + 5 — Wasser senkt sein Bett
 
+> **ÜBERHOLT durch den Nachtrag „Ein Wasser-Gesetz — W1" (2026-08-21).** Es
+> gibt keine fünfte Stufe (Zonen-Wasser) mehr, die Art trägt die Vorgaben für
+> Tiefe und Rampe, und der Spiegel ist ein PROFIL statt einer Zahl. Was hier
+> unverändert weitergilt: das `meta.water`-Flag als EINZIGES Prädikat, der
+> Rand-Median als Default, die `min`-Regel des Carves und Invariante 2 — nur
+> gegen `water_level_at(x, z)` statt gegen `water_level`.
+
 Ob eine Bodenart **Wasser** ist, sagt der Katalog: `meta.water` am Terrain-Typ
 (`terrain_types.is_water_kind`) bzw. die Material-KLASSE der
 Surface-Bibliothek (`water`/`ice`). **Nie über den Namen** — Arten sind ein
@@ -2945,10 +2952,10 @@ Gelände, und genau das ist die Uferlinie.
 > ein Gelände-Texel über dem Spiegel in der Tiefzone ist nicht
 > unwahrscheinlich, es ist arithmetisch unmöglich.
 
-Die Polygone des Zonen-Wassers kommen aus **derselben** Funktion, aus der auch
-das Material kommt (`terrain_layers.world_floors` →
-`models.heightfield.placed_zone_waters`): eine Ableitung für die Form des Betts
-und für die Farbe darüber.
+~~Die Polygone des Zonen-Wassers kommen aus derselben Funktion, aus der auch das
+Material kommt.~~ **Gelöscht mit W1** — es gibt kein Zonen-Wasser mehr; ein Raum
+auf Kartenwasser trägt nur noch den Verweis `map_water` in seinem
+`floor_plan`-Eintrag.
 
 ---
 
@@ -3353,6 +3360,9 @@ Client den Teich eines Raums mit der Maschinerie zeichnet, mit der er einen See
 zeichnet. Ein Raum, den der Bake nie gesehen hat (unplatzierte Location), bleibt
 **WEG** statt eine geratene Höhe zu bekommen.
 
+> **W1-Nachtrag:** die `waters`-Liste des Index ist ersatzlos gestrichen, und
+> ein Wasser-Layer trägt `bed_kind` und malt die Oberfläche seines BETTS.
+
 **Der Vertrag zum Refetch:** die Masken hängen an `terrain_sig` (die gemalten
 Flächen + der Art-Katalog) bzw. an `layers_sig` (`floors_basis`, die
 Grundrisse). Ein eigener Poll existiert nicht.
@@ -3435,6 +3445,14 @@ zweites Render-Target: der Boden ist bereits eine Funktion, die man fragen kann.
 Der **Discard bei `wsDepth ≤ 0`** ist das einzige Band, in dem Platte und
 Gelände dieselbe Fläche sind — das ist die Uferlinie, und ein Fragment, das dort
 am Tiefentest teilnimmt, flimmert, wie klein sein Alpha auch ist.
+
+> **ÜBERHOLT, soweit es die EBENHEIT betrifft** (Nachtrag „Ein Wasser-Gesetz
+> — W1"): der Spiegel einer Fläche mit `flow_dir_deg` ist eine GENEIGTE Ebene,
+> und ab W2 zieht der Client seine Platten-Vertices aus
+> `meta.water_profile`. Alles andere in diesem Abschnitt bleibt: die Höhe
+> steckt weiterhin in der GEOMETRIE der Platte, das Ufer kommt aus der Tiefe,
+> `null` wird nie 0 — und der Zonen-Wasser-Vorrang in `typeAt` stirbt mit den
+> Zonen-Wassern.
 
 **Die Zahlen** (`client3d/src/scene/waterPlaneMath.ts`):
 
@@ -4651,3 +4669,185 @@ Die Etappen-Texte mit ihren Vorher/Nachher-Tabellen, ihren Zwischenzuständen
 weiter") und ihren Löschlisten stehen in der Git-Historie: `81a9bb3c` (E1),
 `2f501d0e` (E2), `9062dbf9` (E3), `9e85bb18` (E4), `c9874527` (E5a),
 `9b7a424d` (E5b), `67f776d0` (Zonen-Wasser im Schwimmen).
+
+## Nachtrag 2026-08-21 (§ A16.3 / § A16.7 / § A16.8 / § B1): Ein Wasser-Gesetz — W1 (Server)
+
+*Etappe W1 aus `development_instructions/plan-fliessgewaesser.md`. Dieser
+Nachtrag **ersetzt** die Wasser-Aussagen von § A16.3 (die drei Zahlen, die
+Zonen-Wasser-Stufe), die `waters`-Liste in § A16.7, den Satz „die Fläche ist
+eben" in § A16.8 und die `zone_water_basis`-Erwähnung in der
+`height_sig`-Zeile (§ A1.3). W2 (Client) und W3 (Admin-UI) folgen; bis W2
+zeichnet der Client weiter EINE flache Platte — dafür fährt
+`water_level_effective` unverändert mit.*
+
+**DAS GESETZ, in vier Sätzen.** Wasser ist eine **ART**, kein Name und kein
+Raum: `meta.water` am Terrain-Typ macht JEDE Art zur Wasser-Art, und die Art
+trägt die Vorgaben `water_depth_m` (0,2…20, Default 2,0) und `shore_ramp_m`
+(0…20, Default 3,0). Wasser ist eine **FLÄCHE auf der Karte**: eine gemalte
+Fläche überschreibt die beiden Zahlen, setzt ihren Spiegel und wählt ihr Bett.
+Der Spiegel ist ein **PROFIL**, keine Zahl: ohne Fließrichtung eine Konstante
+(der See von bisher), mit einer eine entlang der Fließachse geneigte Ebene.
+Und ein **RAUM hat kein Wasser mehr** — die fünfte Backstufe ist gelöscht.
+
+### 1. Die Art trägt die Vorgaben, die Fläche überschreibt sie
+
+| Feld | Wo | Typ | Bedeutung |
+|---|---|---|---|
+| `meta.water` | **Art** | `bool` | Diese Bodenart IST Wasser. **Das EINE Prädikat** (`terrain_types.is_water_kind`) — Layer-Tabelle, Bake, Sanitizer und Lageplan fragen dieses und kein zweites. Das frühere zweite Buch (die Material-KLASSE der Surface-Bibliothek für Raumböden) ist ersatzlos weg. |
+| `meta.water_depth_m` | **Art** | 0,2…20 (2,0) | Vorgabe: wie tief das Bett unter dem Spiegel liegt, sobald die Uferrampe durch ist |
+| `meta.shore_ramp_m` | **Art** | 0…20 (3,0) | Vorgabe: wie weit INNERHALB des Umrisses die volle Tiefe erreicht ist. **0 ist ein WERT** (das Becken) und überlebt einen Save, wie `edge_blend_m` |
+| `meta.water_depth_m` / `meta.shore_ramp_m` | **Fläche** | dieselben Klemmen | Überschreiben die Vorgabe der Art. Fehlt der Schlüssel, antwortet die Art — deshalb wird ein unlesbarer Wert GELÖSCHT und nicht auf den Modul-Default gesetzt |
+| `meta.water_level` | **Fläche** | Welt-y (m) | Der Spiegel STEHENDEN Wassers. Fehlt er, leitet der Bake ihn her (Rand-Median); `save_area` friert ihn dann ein |
+| `meta.water_level_up` / `_down` | **Fläche** | Welt-y (m) | Die beiden Enden eines FLIESSENDEN Spiegels. Jedes überschreibt sein eigenes Ende; ein einfaches `water_level` setzt beide |
+| `meta.flow_dir_deg` | **Fläche** | 0…360, gewrappt | Die FLIESSRICHTUNG (stromabwärts). Buchstabiert wie jeder andere Yaw des Vertrags (§ A1.1): `dir = (sin θ, cos θ)`, also 0° nach +z, 90° nach +x. Sie treibt das Profil UND (ab W2) die Ripple-Scrollrichtung |
+| `meta.bed_kind` | **Fläche** | Art-Id | Welche Bodenart der Layer-Bake UNTER dem Wasser malt. Default: die blanke Welt (`game.default_terrain_kind`) — genau die Ersetzung, die der Client bisher selbst vornahm |
+
+Die Art kann den SPIEGEL nicht beantworten: zwei Seen einer Art stehen auf zwei
+Höhen. Alles andere darf sie.
+
+### 2. Das Spiegel-PROFIL — `water_level_at(x, z)`
+
+`app/core/heightfield.WaterProfile` ist die reine Funktion, und sie fährt als
+**neun Zahlen** additiv im Payload mit (`meta.water_profile`, siehe Nr. 4):
+
+```
+s      = (x − axis_x)·dir_x + (z − axis_z)·dir_z
+t      = clamp((s − s_min) / (s_max − s_min), 0, 1)
+level  = level_up + (level_down − level_up)·t
+```
+
+* **Die Achse** läuft durch den **Flächen-Schwerpunkt** (`axis_x/axis_z`, echte
+  Polygon-Schwerpunktformel, nicht das Mittel der Ecken) in Richtung
+  `dir = (sin θ, cos θ)`. `s_min`/`s_max` sind die Achsen-Koordinaten des
+  stromaufwärtigen und des stromabwärtigen Extrems des Polygons.
+* **Die beiden Enden**, wo der Autor sie offen lässt: der **Rand-Median des
+  jeweiligen DRITTELS** der Achsen-Spanne — `level_up` über die Randproben mit
+  `s ≤ s_min + Spanne/3`, `level_down` über die mit `s ≥ s_max − Spanne/3`.
+  Ein Drittel und nicht „die zwei Extrempunkte": ein mit vier Ecken gezeichneter
+  Fluss hätte je Ende genau eine Probe und nähme sein Niveau von einem
+  willkürlichen Quadratmeter Landschaft.
+* **Stehendes Wasser fällt heraus**, es ist kein Zweig daneben: ohne
+  `flow_dir_deg` ist `s_min == s_max == 0`, `level_up == level_down`, und die
+  Funktion antwortet überall dieselbe Zahl — das Gesetz von vorher, mit
+  derselben Arithmetik erreicht.
+
+### 3. Der Carve rechnet gegen das LOKALE Niveau
+
+```
+h = min(h, water_level_at(x, z) − water_depth_m · smoothstep(min(d_in/shore_ramp_m, 1)))
+```
+
+> **INVARIANTE 2, jetzt PUNKTWEISE.** Für jede Probe tiefer als `shore_ramp_m`
+> im Polygon gilt `h_final ≤ water_level_at(x, z) − ε`, `ε = min(depth, 0,25)` —
+> nicht gegen einen Mittelwert, sondern gegen den Spiegel AN DIESER STELLE.
+> Jenseits der Rampe ist `smoothstep(1) = 1` exakt, das zweite Argument des
+> `min` also `level_at(x,z) − depth`: arithmetisch, nicht gesampelt.
+
+**Die rote Gegenprobe steht im Smoke** (`scripts/smoke_height_bake.py` [8h]).
+Derselbe Fluss mit EINEM Spiegel auf dem Mittelniveau 5,0 lässt den Boden
+stromabwärts bei 2,35 stehen, während das lokale Niveau dort 1,025 ist — die
+Invariante ist um 1,575 m verletzt, und ein flacher Spiegel schneidet stromauf
+durch einen Boden, der 2,65 m über ihm liegt. Der geneigte Carve antwortet an
+derselben Stelle 0,025 und hält sie.
+
+### 4. Payload — additiv, und `water_level_effective` bleibt
+
+`GET /world/terrain-areas` und `GET /play/terrain` liefern je Wasser-Fläche
+unverändert `meta.water_level_effective` und **zusätzlich** `meta.water_profile`:
+
+```jsonc
+"meta": {
+  "flow_dir_deg": 270,
+  "water_level_up": 7.4, "water_level_down": 2.6,
+  "water_level_effective": 5.0,          // OUTPUT: das MITTELNIVEAU des Profils
+  "water_profile": {                     // OUTPUT: die neun Zahlen
+    "level_up": 7.4, "level_down": 2.6, "flow_dir_deg": 270.0,
+    "axis_x": 50.0, "axis_z": -30.0, "dir_x": -1.0, "dir_z": 0.0,
+    "s_min": -30.0, "s_max": 30.0 } }
+```
+
+**`water_level_effective` ist ab jetzt das MITTELNIVEAU** (das Mittel der beiden
+Enden = das Niveau in der Mitte der eigenen Achse). Für stehendes Wasser ist es
+exakt der Spiegel, der es immer war; für einen Fluss ist es die eine Ebene, die
+an beiden Enden am wenigsten danebenliegt — die ehrlichste Zahl für den
+FLACHEN Client, den W2 ablöst. Wer die Wahrheit will, liest `water_profile` und
+wertet die Formel aus Nr. 2 selbst aus. Beides ist **Ausgabe** und wird nie in
+die Autorenfelder zurückgeschrieben (der Sanitizer wirft beide auf dem Weg
+hinein weg).
+
+### 5. Der Layer-Schnitt: Wasser trägt sein BETT
+
+Ein Wasser-Layer bleibt ein voller Layer — die Maske muss „hier ist Wasser"
+beantworten, für den Unterwuchs-Filter und für jede Punktabfrage. Was er
+**malt**, ist ab W1 der Boden DARUNTER:
+
+* `surface` des Layers = die Oberfläche der **Bett-Art** (`meta.bed_kind`,
+  Default: die blanke Welt). Der Wasser-Layer malt also nie die Wasser-Textur
+  auf das Gelände — der Spiegel ist eine eigene Fläche darüber, und den See
+  zweimal zu malen ließ die beiden gegeneinander arbeiten.
+* `edge_blend_m` = die Übergangsbreite der **Bett-Art**, sobald eine autoriert
+  ist; ohne autoriertes Bett bleibt es die der Wasser-Art (heutige Zahl).
+* Der Tabellen-Eintrag nennt sein Bett: **`bed_kind`** (additiv, nur auf
+  Wasser-Layern). Der Schlüssel eines Layers ist damit `(kind, edge_blend_m,
+  bed_kind)`: **zwei Teiche einer Art auf zwei Betten sind zwei Layer.**
+* Das Feld `water` jeder Tabellenzeile — Karten-Arten wie Boden-Arten —
+  kommt aus dem EINEN Prädikat.
+* **Die `waters`-Liste des Index ist WEG.** Es gibt keine Zonen-Wasser mehr zu
+  listen. (Der laufende Client liest sie als `index.waters ?? []` und zeichnet
+  dann keine Zonen-Platten mehr — kein Fehler, nur das Ende eines Features.)
+
+### 6. Wasser verlässt den Lageplan — ersatzlos, ohne Kompat-Leser
+
+**Gelöscht** (keine Alias-Felder, keine Fallback-Reader):
+
+`heightfield.ZoneWaterInput` · `ZoneWaterStamp` · `HeightModel._build_zone_water`
+· `HeightModel._carve_zone` · `HeightModel.zone_water` ·
+`HeightModel.zone_water_level_by_room` · der Parameter `zone_waters` aller
+Bake-Einstiege · `models.heightfield.placed_zone_waters` · `zone_water_basis`
+(und ihr Eintrag in `height_sig`) · `terrain_layers.waters_payload` ·
+`is_water_floor` · `floor_water_meta` · `surface_classes` · die vier
+Wasser-Felder von `terrain_layers.Floor` · die drei Raum-Layout-Felder
+`water_level` / `water_depth_m` / `shore_ramp_m` (E5b-Regler) · das Feld
+`water_level_effective` im `floor_plan` der Szene.
+
+**Eine Boden-Art eines Raums darf keine Wasser-Art mehr sein.** Der Sanitizer
+(`world_ops._sanitize_room_layout`) wirft ein solches `surfaces.floor` mit einer
+Log-Zeile weg — an dem einen Schreibpfad, an dem es entstehen kann.
+
+**Stattdessen ein VERWEIS.** Der `floor_plan`-Eintrag eines Raums, dessen
+Grundriss (mehrheitlich, nach FLÄCHE) in einer gemalten Wasser-Fläche liegt,
+trägt additiv:
+
+```jsonc
+{ "room_id": "pond", "polygon_world": [...], "floor_kind": "sand",
+  "closed": false,
+  "map_water": { "area_id": "ta_pool", "kind": "water" } }
+```
+
+**Abgeleitet beim Komponieren, nie gespeichert** — deshalb kann er nicht
+hängen: verschwindet der See, verschwindet die Zeile. Mehrheit heißt STRIKT
+mehr als die Hälfte (genau halb liegt nicht darauf), gemessen auf einem festen
+32 × 32-Raster über der Hülle; bei Gleichstand gewinnt die SPÄTER gemalte
+Fläche — das Vorrangsgesetz des ganzen Bodens (§ A16.7), nicht ein hier
+erfundener Tie-Break. Raum-Semantik (Zugehörigkeit, Wahrnehmung) ändert sich
+nicht.
+
+### 7. Signaturen
+
+* `height_sig` hasht `water_basis()` mit den **effektiven** Zahlen (Spiegel,
+  beide Enden, Fließrichtung, aufgelöste Tiefe/Rampe): eine Welt, die ihre
+  Art „river" von 2 m auf 6 m dreht, ändert jedes Flussbett, ohne dass eine
+  Fläche angefasst wird — und die Signatur trägt das mit. `zone_water_basis`
+  ist aus dem Basis-Objekt raus.
+* `layers_sig` hasht zusätzlich das **`bed_kind` je Fläche**: das Bett malt,
+  also gehört es in den Schnitt, nicht in die Höhe. `surface_classes` ist raus.
+
+### 8. Die Beweise (§ B5a)
+
+| Skript | was es herleitet |
+|---|---|
+| `scripts/smoke_height_bake.py` **[8]** | die Fließachse (Yaw-Konvention, Wrapping), die beiden Drittel-Rand-Mediane von Hand (7,4 / 2,6 aus 31 Randproben je Ende), `level_at(x) = 0,08·x + 1,0`, der Carve gegen das lokale Niveau, Art-Vorgabe gegen Flächen-Überschreibung, die ungeflaggte Art (kein Carve), Invariante 2 punktweise über 2916 Proben (schlechtester Abstand exakt die Tiefe 1,0 m), die **roten** Gegenproben gegen den konstanten Spiegel, das Einfrieren beider Enden beim Save und die neun Payload-Zahlen |
+| `scripts/smoke_height_bake.py` **[9]** | die Löschung der fünften Stufe **namentlich**: 17 Symbole, die Bake-Signaturen, der `waters`-freie Index, die drei Raum-Wasserfelder und die gestrippte Wasser-Boden-Art |
+| `scripts/smoke_terrain_layers.py` **[13]** | Bett-Art als Layer (Oberfläche + eigene Übergangsbreite, zwei Betten = zwei Layer), die rote Probe „nichts malt die Wasser-Textur aufs Gelände", das EINE Prädikat Zeile für Zeile, und das **Kantengesetz**: dieselben zwei Rechtecke in zwei Malreihenfolgen geben die zwei Breiten |
+| `scripts/smoke_scene_recipe.py` **[4w]** | `map_water` von Hand (100 % / 75 % → Verweis; 50 % / 25 % / 0 % → keiner), Letzter-gewinnt, und dass der Eintrag sonst nichts über Wasser sagt |
+| `scripts/smoke_terrain_types.py`, `scripts/smoke_nav_grid.py` | Sanitizer der Art-Vorgaben bzw. der Bett-Carve unter der Laufregel |

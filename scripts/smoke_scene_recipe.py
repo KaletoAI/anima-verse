@@ -976,13 +976,15 @@ def test_area_locations() -> None:
     # A zone WITH a declared floor kind used to get a texture plate at the
     # zone's own height + 0.01. THAT PLATE IS GONE (E5a): a storey-0 zone
     # floor is a LAYER of the ground now (``core.terrain_layers``), cut into
-    # the terrain mask at the very polygon the floor plan carries — and a
-    # WATER floor gets a real mirror out of the bake instead of a drape.
+    # the terrain mask at the very polygon the floor plan carries. The kind
+    # here is SAND and not water: since W1 a floor kind may not be water at all
+    # (the sanitizer strips it — [4w] below), because water is painted on the
+    # map and a room only ever REFERS to it.
     import copy
     lake = copy.deepcopy(area_fixture(True))
     for r in lake["rooms"]:
         if r["id"] == "zone":
-            r["layout"]["surfaces"] = {"floor": "water"}
+            r["layout"]["surfaces"] = {"floor": "sand"}
     lake_sc = scene_recipe.compose_scene(lake, plan_width_m=PLAN_W,
                                          building_meta=GROUND_META)
     zp = [pl for pl in lake_sc["plates"] if pl.get("room_id") == "zone"]
@@ -992,7 +994,7 @@ def test_area_locations() -> None:
           not zp, str(zp))
     zone_plan = next(f for f in lake_sc["floor_plan"] if f["room_id"] == "zone")
     check("...its kind travels in the floor plan instead",
-          zone_plan["floor_kind"] == "water" and zone_plan["closed"] is False,
+          zone_plan["floor_kind"] == "sand" and zone_plan["closed"] is False,
           str(zone_plan))
     check("...on the very polygon the zone was drawn as (x 2…4, z 1…3)",
           [min(q[0] for q in zone_plan["polygon_world"]),
@@ -1023,8 +1025,9 @@ def test_room_floor_offset() -> None:
     # WHAT ``floor_offset_y`` STILL IS after "Ein Boden" E5a: a per-room lift
     # of everything that STANDS in the room. What it is NOT any more: a
     # compensation for a second ground (there is one now, and the room's mesh
-    # stands on it), and not a WATERLINE for a zone whose floor kind is water —
-    # that is ``layout.water_level``, which really moves a mirror.
+    # stands on it), and not a WATERLINE for a zone — since W1 a room has no
+    # water fields at all, and the mirror of the water it stands on belongs to
+    # the painted AREA (``map_water`` names which one).
     # Storey 0 has no plates left, so what the lift is measured on is the
     # room's WALLS and its props.
     base = scene()
@@ -1821,7 +1824,7 @@ def test_boundary_only_datum() -> None:
     print("\n[4e] boundary-only location: ONE ground, no slab, no surfaces")
     lake = {"id": "lake", "name": "Lake", "layout": {
         "x": 1.0, "y": 1.0, "w": 3.0, "d": 3.0, "level": 0,
-        "always_visible": True, "surfaces": {"floor": "water"},
+        "always_visible": True, "surfaces": {"floor": "gravel"},
         "props": [{"prop_id": "table", "at": [1.5, 1.5]}]}}
     far = {"id": "far", "name": "Far", "layout": {
         "x": 6.0, "y": 1.0, "w": 2.0, "d": 2.0, "level": 0,
@@ -1842,8 +1845,8 @@ def test_boundary_only_datum() -> None:
     check("NOT ONE plate — no level body, no surface, no cut edge",
           sc["plates"] == [], str(sc["plates"]))
     plan = {f["room_id"]: f for f in sc["floor_plan"]}
-    check("the water travels as a FLOOR PLAN entry instead of a plate",
-          plan["lake"]["floor_kind"] == "water"
+    check("the shore travels as a FLOOR PLAN entry instead of a plate",
+          plan["lake"]["floor_kind"] == "gravel"
           and plan["lake"]["closed"] is False, str(plan.get("lake")))
     check("...and so does the sand", plan["far"]["floor_kind"] == "sand",
           str(plan.get("far")))
@@ -3132,6 +3135,99 @@ def test_rotation_shared_walls() -> None:
           skew == [], str(skew))
 
 
+
+def test_map_water_reference() -> None:
+    """[4w] A ROOM ON PAINTED WATER SHOWS A REFERENCE, NOT A MIRROR (W1).
+
+    Water left the room plan. A room can no longer BE water — the sanitizer
+    strips a water floor kind (measured in ``scripts/smoke_height_bake.py``
+    [9], which has the catalog a DB gives it) — and the fifth bake stage that
+    carved a room's own bed is deleted. What the floor plan carries instead is
+    ``map_water``: ``{area_id, kind}`` of the painted water the room's hull
+    LIES ON, derived at compose time by MAJORITY AREA and never stored, so it
+    cannot dangle.
+
+    THE MEASUREMENT, by hand. ``_map_water_ref`` samples the hull's bounding
+    box on a fixed 32 x 32 lattice at CELL CENTRES and counts the probes that
+    are inside the hull and inside the water. Every room below is an axis
+    rectangle, so all 1024 probes are inside the hull and the share is the
+    share of COLUMNS whose centre lies in the water. A room spanning
+    ``x0 … x0 + 4`` has its i-th column centre at ``x0 + 0.125·i + 0.0625``,
+    and the water covers ``x < 0``:
+
+        pond   x −4 … 0    every column      -> 32/32 = 100 %  -> REFERENCE
+        most   x −3 … 1    i < 23.5          -> 24/32 =  75 %  -> REFERENCE
+        half   x −2 … 2    i < 15.5          -> 16/32 =  50 %  -> none, a
+                                                MAJORITY is strictly more
+        quarter x −1 … 3   i <  7.5          ->  8/32 =  25 %  -> none
+        dry    x  2 … 4    none                             0 %  -> none
+
+    TWO IDENTICAL LAKES are painted, and the reference names the LATER one:
+    that is the priority law of the whole ground (§ A16.7, the last containing
+    entry wins), not a tie-break invented here.
+    """
+    print("\n[4w] a room on painted water carries a map_water REFERENCE")
+    lakes = [
+        {"id": "ta_lake", "kind": "water",
+         "polygon": [[-6, -6], [0, -6], [0, 6], [-6, 6]], "meta": {}},
+        {"id": "ta_pool", "kind": "water",
+         "polygon": [[-6, -6], [0, -6], [0, 6], [-6, 6]], "meta": {}},
+    ]
+
+    def zone(room_id, x0):
+        return {"id": room_id, "name": room_id, "layout": {
+            "x": x0, "y": -4.0, "w": 4.0, "d": 4.0, "level": 0,
+            "always_visible": True, "surfaces": {"floor": "sand"}}}
+
+    loc = {"id": "loc", "pos_x": 0.0, "pos_z": 0.0, "yaw_deg": 0.0,
+           "map3d": {"plan_width_m": PLAN_W, "storey_height_m": STOREY_REAL,
+                     "boundary": [[-6, -6], [6, -6], [6, 6], [-6, 6]]},
+           "rooms": [zone("pond", -4.0), zone("most", -3.0),
+                     zone("half", -2.0), zone("quarter", -1.0),
+                     zone("dry", 2.0)]}
+    original = scene_recipe._painted_waters
+    scene_recipe._painted_waters = lambda: list(lakes)
+    try:
+        plan = {f["room_id"]: f
+                for f in scene_recipe.compose_scene(
+                    loc, plan_width_m=PLAN_W)["floor_plan"]}
+    finally:
+        scene_recipe._painted_waters = original
+    check("a room wholly on the water names it",
+          plan["pond"].get("map_water") == {"area_id": "ta_pool",
+                                            "kind": "water"},
+          str(plan["pond"].get("map_water")))
+    check("...and so does one at 75 %",
+          plan["most"].get("map_water") == {"area_id": "ta_pool",
+                                            "kind": "water"},
+          str(plan["most"].get("map_water")))
+    check("red: exactly HALF is not a majority — no reference",
+          "map_water" not in plan["half"], str(plan["half"]))
+    check("red: a quarter neither", "map_water" not in plan["quarter"],
+          str(plan["quarter"]))
+    check("red: and a room off the water carries nothing at all",
+          "map_water" not in plan["dry"], str(plan["dry"]))
+    check("the LATER lake wins the tie (the ground's own priority law)",
+          plan["pond"]["map_water"]["area_id"] == "ta_pool",
+          str(plan["pond"]["map_water"]))
+    check("red: the room owns NO mirror, no depth and no ramp — the whole "
+          "entry is polygon, kind, closed and the reference",
+          sorted(plan["pond"]) == ["closed", "floor_kind", "map_water",
+                                   "polygon_world", "room_id"],
+          str(sorted(plan["pond"])))
+    check("red: `water_level_effective` is gone from the floor plan",
+          not [f for f in plan.values() if "water_level_effective" in f],
+          str(list(plan)))
+    # …and with no painted water in the world there is no key anywhere, which
+    # is the state of every location that is not on a lake.
+    plan_dry = {f["room_id"]: f
+                for f in scene_recipe.compose_scene(
+                    loc, plan_width_m=PLAN_W)["floor_plan"]}
+    check("a world without painted water gives no room a reference",
+          not [rid for rid, f in plan_dry.items() if "map_water" in f],
+          str(sorted(plan_dry)))
+
+
 def main() -> int:
     test_scalars()
     test_scale_is_one()
@@ -3148,6 +3244,7 @@ def main() -> int:
     test_wall_skirt()
     test_contour_wall_texture()
     test_area_locations()
+    test_map_water_reference()
     test_boundary_only_datum()
     test_area_room_walk_height()
     test_elevator()

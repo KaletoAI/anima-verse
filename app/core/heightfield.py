@@ -49,14 +49,17 @@ shared lattice points BY CONSTRUCTION, not by luck.
 
 **THE STAMPS.** Two of them, in this order:
 
-* **Water carve** (§ G4): a painted area of a WATER kind declares a
-  ``water_level`` (world-y in metres), a ``water_depth_m`` and a
-  ``shore_ramp_m``. Inside the polygon the ground is pushed down to at most
-  ``water_level − depth_profile(d)``, where the profile smoothsteps from 0 at
-  the rim to the full depth ``shore_ramp_m`` inside. The invariant that buys —
-  deeper than the shore ramp the ground is at least ``ε`` below the mirror, in
-  EVERY raster — is what makes "distant terrain pokes through the lake"
-  impossible in the data instead of impossible in a shader.
+* **Water carve** (§ A16.3): a painted area of a WATER kind carries a mirror
+  PROFILE (:class:`WaterProfile`), a ``water_depth_m`` and a ``shore_ramp_m``.
+  Inside the polygon the ground is pushed down to at most
+  ``water_level_at(x, z) − depth_profile(d)``, where the depth profile
+  smoothsteps from 0 at the rim to the full depth ``shore_ramp_m`` inside.
+  Since W1 the mirror is LOCAL: without a ``flow_dir_deg`` it is one constant
+  (the lake of every round before), with one it interpolates between the
+  upstream and downstream levels along the flow axis (the river). The invariant
+  that buys — deeper than the shore ramp the ground is at least ``ε`` below the
+  mirror AT THAT POINT, in EVERY raster — is what makes "distant terrain pokes
+  through the water" impossible in the data instead of impossible in a shader.
 * **Location plateaus** (§ G5): every location that draws a BUILT floor
   stamps its plot flat. Not a flag any more —
   ``models.heightfield.placed_footprints`` hands out every location with a
@@ -97,7 +100,7 @@ exists.
 
 import math
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import (Any, Dict, List, NamedTuple, Optional, Sequence, Tuple)
 
 from app.core.log import get_logger
 
@@ -768,61 +771,197 @@ def _median(values: Sequence[float]) -> float:
     return (ordered[mid - 1] + ordered[mid]) * 0.5
 
 
-#: One water stamp: the polygon in WORLD metres, its box, the mirror height,
+class WaterProfile(NamedTuple):
+    """THE MIRROR OF ONE WATER AREA AS A FUNCTION OF THE PLACE (W1, § A16.3).
+
+    A lake is one number; a river is a plane tilted along its own flow. Both are
+    this: two end levels and the axis they are interpolated over. Without a
+    ``flow_dir_deg`` the two ends carry the SAME number and the profile is the
+    constant mirror of every round before this one — the old law is the
+    degenerate case of the new one, not a branch beside it.
+
+    * ``level_up`` / ``level_down`` — world y at the UPSTREAM and the DOWNSTREAM
+      end of the axis span, in metres.
+    * ``flow_dir_deg`` — the authored flow direction, ``None`` for still water.
+      The direction it names is the DOWNSTREAM one and it is spelled like every
+      other yaw in this contract (§ A1.1): ``dir = (sin θ, cos θ)``, so 0° flows
+      toward +z, 90° toward +x.
+    * ``axis_x`` / ``axis_z`` — the point the axis runs through: the polygon's
+      area centroid.
+    * ``dir_x`` / ``dir_z`` — that unit direction, (0, 0) for still water.
+    * ``s_min`` / ``s_max`` — the axis coordinates of the polygon's upstream and
+      downstream extremes, measured from the axis point.
+
+    IT IS THE WHOLE PAYLOAD TOO. ``GET /world/terrain-areas`` and
+    ``GET /play/terrain`` ship these nine numbers as ``meta.water_profile``, so
+    a client evaluates :func:`water_level_at` itself and the server never has to
+    rasterise a mirror.
+    """
+    level_up: float
+    level_down: float
+    flow_dir_deg: Optional[float]
+    axis_x: float
+    axis_z: float
+    dir_x: float
+    dir_z: float
+    s_min: float
+    s_max: float
+
+
+def water_level_at(profile: WaterProfile, x: float, z: float) -> float:
+    """The mirror of ``profile`` AT ONE POINT — a pure function, no state.
+
+    Project the point onto the flow axis, then interpolate linearly between the
+    two end levels::
+
+        s = (x − axis_x)·dir_x + (z − axis_z)·dir_z
+        t = clamp((s − s_min) / (s_max − s_min), 0, 1)
+        level = level_up + (level_down − level_up)·t
+
+    STILL WATER FALLS OUT OF IT: with no flow direction the span is empty and
+    both ends are the same number, so the answer is that number everywhere —
+    today's law, arrived at by the same arithmetic instead of by a second one.
+    The clamp on ``t`` matters at the very ends: a polygon is only extreme at
+    its rim, and a point exactly on it must not read past the level the rim
+    median was taken for.
+    """
+    span = profile.s_max - profile.s_min
+    if profile.flow_dir_deg is None or span <= 1e-9:
+        return profile.level_up
+    s = ((x - profile.axis_x) * profile.dir_x
+         + (z - profile.axis_z) * profile.dir_z)
+    t = (s - profile.s_min) / span
+    if t <= 0.0:
+        return profile.level_up
+    if t >= 1.0:
+        return profile.level_down
+    return profile.level_up + (profile.level_down - profile.level_up) * t
+
+
+def flow_direction(flow_dir_deg: Optional[float]) -> Tuple[float, float]:
+    """The DOWNSTREAM unit vector of a flow bearing — ``(sin θ, cos θ)``.
+
+    THE SAME MAPPING EVERY OTHER YAW IN THIS CONTRACT USES: it is
+    ``world_geometry.local_to_world(0, 1, 0, 0, θ)``, i.e. the local +z axis
+    turned by θ, which is what a marker's ``facing`` and a prop's ``yaw`` mean.
+    A river with ``flow_dir_deg`` 90 flows toward +x, and the client that
+    scrolls its ripples along the same bearing gets the same arrow.
+
+    The components are rounded to twelve decimals so the cardinal directions are
+    EXACTLY (0, ±1) / (±1, 0): ``cos(270°)`` is −1.8e−16 in binary floating
+    point, and a mirror that tilted by a femtometre across a river's width would
+    make two lattices disagree in the last bit for no reason at all.
+    """
+    if flow_dir_deg is None:
+        return (0.0, 0.0)
+    rad = math.radians(float(flow_dir_deg))
+    # ``0.0 if v == 0`` and not ``+ 0.0``: rounding ``cos(270°)`` gives NEGATIVE
+    # zero, which is equal to zero everywhere except in the JSON it would be
+    # written as.
+    return tuple(0.0 if v == 0 else v                     # type: ignore[return-value]
+                 for v in (round(math.sin(rad), 12), round(math.cos(rad), 12)))
+
+
+def sanitize_flow_dir(raw: Any) -> Optional[float]:
+    """One authored flow bearing, 0…360 — or None for "still".
+
+    WRAPPED, NOT CLAMPED: a bearing is an angle, so 370° is 10° and −90° is
+    270°; clamping would turn a slip of the wrist into a river flowing the wrong
+    way along the axis. Junk, an empty string and a non-finite number all answer
+    None, which is the shape of "no flow" everywhere: no key, no tilt, one
+    level.
+    """
+    if raw is None or f"{raw}".strip() == "":
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return round(value % 360.0, 3)
+
+
+#: One water stamp: the polygon in WORLD metres, its box, the mirror PROFILE,
 #: the depth under it and the width of the shore ramp — all in metres.
 WaterStamp = Tuple[List[List[float]], Tuple[float, float, float, float],
-                   float, float, float]
+                   WaterProfile, float, float]
 
 #: One plateau stamp: pin x/z, yaw, the outline in LOCAL metres, its world box,
 #: the target height and the ramp width in metres.
 PlateauStamp = Tuple[float, float, float, List[Tuple[float, float]],
                      Tuple[float, float, float, float], float, float]
 
-#: One ZONE WATER as it is handed IN (E5a, § G4 for room floors): the location
-#: and room it belongs to, its polygon in WORLD metres, the authored mirror
-#: (``None`` = derive it) and the two shape numbers. It is what
-#: ``models.heightfield.placed_zone_waters`` reads out of the room layouts.
-ZoneWaterInput = Tuple[str, str, List[List[float]], Optional[float],
-                       float, float]
 
-#: …and as it is STAMPED: the (location, room) key, the polygon, its box, the
-#: settled mirror, the depth and the shore ramp.
-ZoneWaterStamp = Tuple[Tuple[str, str], List[List[float]],
-                       Tuple[float, float, float, float], float, float, float]
+class WaterMeta(NamedTuple):
+    """Everything ONE painted water area authors about its own water.
+
+    The reader's half of ``models.terrain._sanitize_water``. The MIRROR fields
+    are optional — absent means "derive it from the rim" — while the two shape
+    widths always answer a number, because the KIND answers when the area does
+    not (``terrain_types.water_kind_defaults``).
+    """
+    level: Optional[float]
+    level_up: Optional[float]
+    level_down: Optional[float]
+    depth_m: float
+    shore_ramp_m: float
+    flow_dir_deg: Optional[float]
+    bed_kind: str
 
 
-def water_meta(area: Dict[str, Any]) -> Tuple[Optional[float], float, float]:
-    """``(water_level | None, depth_m, shore_ramp_m)`` of a painted water area.
+def water_meta(area: Dict[str, Any],
+               defaults: Optional[Tuple[float, float]] = None) -> WaterMeta:
+    """What one painted water area says about its water (§ A16.3, W1).
 
-    The reader's half of ``models.terrain._sanitize_water`` — the three numbers
-    are authored on the AREA, not on the kind, because two lakes in one world
-    stand at two heights. A missing or unreadable ``water_level`` answers None,
-    and then the model computes the default (the median height along the rim)
-    itself; the two clamped widths always answer a number.
+    THE MIRROR IS THE AREA'S ALONE — two lakes in one world stand at two
+    heights, and no kind can answer that. THE TWO WIDTHS ARE THE KIND'S UNLESS
+    THE AREA OVERRIDES THEM: ``defaults`` is ``(depth_m, shore_ramp_m)`` out of
+    ``terrain_types.water_kind_defaults``, and a key present on the area wins
+    over it. Without ``defaults`` the module constants stand in, which is what
+    every caller got before the kind had an opinion.
+
+    ``water_level`` sets BOTH ends of the profile (a still lake); the two end
+    fields override their own end, so a river may be authored at one end and
+    derived at the other. A missing or unreadable number answers None and the
+    model derives it (the rim median of § A16.3, per third along the axis where
+    there is a flow direction).
     """
     meta = area.get("meta")
     meta = meta if isinstance(meta, dict) else {}
-    try:
-        level: Optional[float] = float(meta["water_level"])
-    except (KeyError, TypeError, ValueError, OverflowError):
-        level = None
-    if level is not None and not math.isfinite(level):
-        level = None
-    try:
-        depth = float(meta.get("water_depth_m", WATER_DEPTH_DEFAULT_M))
-    except (TypeError, ValueError, OverflowError):
-        depth = WATER_DEPTH_DEFAULT_M
-    if not math.isfinite(depth):
-        depth = WATER_DEPTH_DEFAULT_M
-    try:
-        ramp = float(meta.get("shore_ramp_m", WATER_SHORE_RAMP_DEFAULT_M))
-    except (TypeError, ValueError, OverflowError):
-        ramp = WATER_SHORE_RAMP_DEFAULT_M
-    if not math.isfinite(ramp):
-        ramp = WATER_SHORE_RAMP_DEFAULT_M
-    return (level,
-            min(max(depth, WATER_DEPTH_MIN_M), WATER_DEPTH_MAX_M),
-            min(max(ramp, WATER_SHORE_RAMP_MIN_M), WATER_SHORE_RAMP_MAX_M))
+    default_depth, default_ramp = (defaults if defaults is not None
+                                   else (WATER_DEPTH_DEFAULT_M,
+                                         WATER_SHORE_RAMP_DEFAULT_M))
+
+    def _level(key: str) -> Optional[float]:
+        try:
+            value = float(meta[key])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        return value if math.isfinite(value) else None
+
+    def _width(key: str, fallback: float, low: float, high: float) -> float:
+        if key not in meta:
+            return min(max(fallback, low), high)
+        try:
+            value = float(meta[key])
+        except (TypeError, ValueError, OverflowError):
+            value = fallback
+        if not math.isfinite(value):
+            value = fallback
+        return min(max(value, low), high)
+
+    return WaterMeta(
+        level=_level("water_level"),
+        level_up=_level("water_level_up"),
+        level_down=_level("water_level_down"),
+        depth_m=_width("water_depth_m", default_depth,
+                       WATER_DEPTH_MIN_M, WATER_DEPTH_MAX_M),
+        shore_ramp_m=_width("shore_ramp_m", default_ramp,
+                            WATER_SHORE_RAMP_MIN_M, WATER_SHORE_RAMP_MAX_M),
+        flow_dir_deg=sanitize_flow_dir(meta.get("flow_dir_deg")),
+        bed_kind=str(meta.get("bed_kind") or "").strip(),
+    )
 
 
 def water_areas(terrain_areas: Sequence[Dict[str, Any]],
@@ -927,6 +1066,35 @@ def _ring_edge_distance(x: float, z: float,
     return best
 
 
+def _ring_centroid(ring: Sequence[Tuple[float, float]]) -> Tuple[float, float]:
+    """The AREA centroid of a parsed ring — the point a flow axis runs through.
+
+    The signed-area formula, not the mean of the vertices: a river drawn with
+    twenty points along one bank and two along the other would otherwise have
+    its axis dragged onto the detailed bank. A degenerate ring (zero area, all
+    points on a line) has no area centroid, so there the vertex mean is the
+    honest answer — and it only ever decides where the axis is ANCHORED, never
+    how steeply the mirror tilts (that is ``s_min``/``s_max``, which are
+    measured from the anchor and cancel it out).
+    """
+    if not ring:
+        return (0.0, 0.0)
+    twice_area = 0.0
+    cx = 0.0
+    cz = 0.0
+    n = len(ring)
+    for i in range(n):
+        ax, az = ring[i]
+        bx, bz = ring[(i + 1) % n]
+        cross = ax * bz - bx * az
+        twice_area += cross
+        cx += (ax + bx) * cross
+        cz += (az + bz) * cross
+    if abs(twice_area) < 1e-12:
+        return (sum(p[0] for p in ring) / n, sum(p[1] for p in ring) / n)
+    return (cx / (3.0 * twice_area), cz / (3.0 * twice_area))
+
+
 def _ring_distance(x: float, z: float,
                    ring: List[Tuple[float, float]]) -> float:
     """``world_geometry.polygon_distance`` on a PARSED ring — 0 inside."""
@@ -955,14 +1123,14 @@ class HeightModel:
        :meth:`natural` under the footprint and whose ramp width is widened
        against the rim step — again read from the landscape before any stamp,
        so two neighbouring places cannot answer differently depending on which
-       order the DB returned them in;
-    4. the ZONE WATER stamps (E5a) — a room whose floor kind is water — whose
-       default mirror is the median of the height AFTER the plateaus along
-       their own rim. **They carve LAST, and that is the whole reason they are
-       a fourth stage rather than more entries in stage 2:** a pond inside a
-       built location lies on a plot the plateau stamp planes flat, and a carve
-       run before that stamp would be planed away again. After it, the same
-       ``min`` law holds against the same invariant.
+       order the DB returned them in.
+
+    THERE IS NO FIFTH STAGE ANY MORE (W1, 2026-08-21). The zone-water carve —
+    a room whose floor kind was water — is deleted without a fallback reader:
+    water left the room plan entirely and lives on the MAP, where one polygon
+    carries its own mirror, its own bed and its own flow. A room that lies on
+    painted water now shows a REFERENCE in its floor plan
+    (``scene_recipe._floor_plan`` → ``map_water``) and shapes nothing.
 
     Both stamp geometries are computed ONCE here, never per point: they are
     properties of the WORLD, not of whatever window somebody is rastering.
@@ -976,8 +1144,7 @@ class HeightModel:
     def __init__(self, areas: Sequence[Dict[str, Any]] = (),
                  terrain_areas: Sequence[Dict[str, Any]] = (),
                  terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-                 footprints: Sequence["Footprint"] = (),
-                 zone_waters: Sequence[ZoneWaterInput] = ()):
+                 footprints: Sequence["Footprint"] = ()):
         self.boxes: List[AreaBox] = area_boxes(areas)
         self._area_index = _BoxIndex([b for _a, b in self.boxes])
         # (ring, height_m, falloff_m) per height area, parsed ONCE.
@@ -998,8 +1165,8 @@ class HeightModel:
         self._corners: Dict[Tuple[int, int, int], float] = {}
         self._kind_cache: Dict[Tuple[float, float],
                                Optional[Tuple[int, float, float]]] = {}
-        #: area id -> the mirror height the carve used, authored or derived.
-        self.water_level_by_area: Dict[str, float] = {}
+        #: area id -> the mirror PROFILE the carve used, authored or derived.
+        self.water_profile_by_area: Dict[str, WaterProfile] = {}
         self.water: List[WaterStamp] = self._build_water(terrain_areas,
                                                          terrain_catalog)
         self._water_index = _BoxIndex([w[1] for w in self.water])
@@ -1020,14 +1187,6 @@ class HeightModel:
             rad = math.radians(yaw or 0.0)
             self._plateau_fast.append((cx, cz, math.cos(rad), math.sin(rad),
                                        _ring(points) or [], h0, width))
-        #: (location id, room id) -> the mirror the zone carve used. What
-        #: ``terrain_layers.waters_payload`` renders the flat plane at.
-        self.zone_water_level_by_room: Dict[Tuple[str, str], float] = {}
-        self.zone_water: List[ZoneWaterStamp] = self._build_zone_water(
-            zone_waters)
-        self._zone_index = _BoxIndex([w[2] for w in self.zone_water])
-        self._zone_fast = [(_ring(w[1]) or [], w[3], w[4], w[5])
-                           for w in self.zone_water]
 
     # ── the authored landscape ──────────────────────────────────────────
 
@@ -1136,33 +1295,100 @@ class HeightModel:
     def _build_water(self, terrain_areas: Sequence[Dict[str, Any]],
                      catalog: Optional[Dict[str, Dict[str, Any]]]
                      ) -> List[WaterStamp]:
-        """Every water polygon with its mirror height settled (§ G4).
+        """Every water polygon with its mirror PROFILE settled (§ A16.3, W1).
 
-        THE DEFAULT MIRROR IS THE MEDIAN OF THE NATURAL HEIGHTS ALONG THE RIM,
+        THE DEFAULT MIRROR IS A MEDIAN OF THE NATURAL HEIGHTS ALONG THE RIM,
         computed here from :meth:`natural` — i.e. from the landscape before any
         stamp, water's own included. A lake whose level was read from the
         carved ground would sink a little further every time the world was
-        re-baked. An AUTHORED ``water_level`` always wins; the default only
-        exists so a freshly painted lake has a mirror at all, and
+        re-baked. An AUTHORED level always wins; the default only exists so a
+        freshly painted water has a mirror at all, and
         ``models.terrain.save_area`` persists it so it stops depending on the
         landscape around it.
+
+        WITHOUT A FLOW DIRECTION that is ONE median over the WHOLE rim and both
+        ends of the profile carry it — the still lake of every round before
+        this one. WITH one, the rim is split along the flow axis and each end
+        gets the median of ITS OWN THIRD:
+
+        * project every rim sample onto the axis, giving ``s`` per sample and
+          the span ``[s_min, s_max]`` the polygon occupies along it;
+        * ``level_up`` = median over the samples with ``s ≤ s_min + span/3``,
+          ``level_down`` = median over those with ``s ≥ s_max − span/3``.
+
+        A THIRD, not "the two extreme points": a river drawn with four corners
+        has one sample at each end and would take its levels from two arbitrary
+        pixels of the landscape. A third of the span is enough rim to be a
+        median and short enough that the middle of the river never votes on
+        either end.
         """
+        from app.core.terrain_types import water_kind_defaults
         out: List[WaterStamp] = []
         for area, box in water_areas(terrain_areas, catalog):
             polygon = area.get("polygon")
-            level, depth, ramp = water_meta(area)
-            if level is None:
-                rim = _rim_samples(polygon)
-                level = _median([self.natural(px, pz) for px, pz in rim])
-            out.append((polygon, box, float(level), depth, ramp))
-            # THE EFFECTIVE LEVEL, keyed by area id (E1b): the admin panel
-            # offers "auto (rim)" and still wants to show the number the carve
+            kind = str(area.get("kind") or "")
+            meta = water_meta(area, water_kind_defaults(kind, catalog or {}))
+            profile = self.water_profile_for(polygon, meta)
+            out.append((polygon, box, profile, meta.depth_m,
+                        meta.shore_ramp_m))
+            # THE EFFECTIVE PROFILE, keyed by area id (E1b): the admin panel
+            # offers "auto (rim)" and still wants to show the numbers the carve
             # actually used. It is server-computed OUTPUT — it is never written
-            # back into ``meta.water_level``, which stays the author's field.
+            # back into the authored fields, which stay the author's.
             area_id = str(area.get("id") or "")
             if area_id:
-                self.water_level_by_area[area_id] = round(float(level), 3)
+                self.water_profile_by_area[area_id] = profile
         return out
+
+    def water_profile_for(self, polygon: Any,
+                          meta: WaterMeta) -> WaterProfile:
+        """The mirror profile of ONE water polygon — the whole rule, once.
+
+        Authoring beats derivation at EACH END separately: ``water_level_up`` /
+        ``water_level_down`` win for their own end, a plain ``water_level`` wins
+        for both (that IS the still lake), and what neither names is the rim
+        median described in :meth:`_build_water`.
+        """
+        ring = _ring(polygon) or []
+        dir_x, dir_z = flow_direction(meta.flow_dir_deg)
+        axis_x, axis_z = _ring_centroid(ring)
+        rim = _rim_samples(polygon)
+        if meta.flow_dir_deg is None or not rim:
+            # STILL WATER: no axis, one median, both ends equal. The span is
+            # empty, so ``water_level_at`` returns ``level_up`` for every point
+            # without ever dividing by it.
+            level = meta.level_up if meta.level_up is not None else meta.level
+            if level is None:
+                level = meta.level_down
+            if level is None:
+                level = (_median([self.natural(px, pz) for px, pz in rim])
+                         if rim else 0.0)
+            return WaterProfile(level_up=float(level), level_down=float(level),
+                                flow_dir_deg=None, axis_x=axis_x,
+                                axis_z=axis_z, dir_x=0.0, dir_z=0.0,
+                                s_min=0.0, s_max=0.0)
+        projected = [(((px - axis_x) * dir_x + (pz - axis_z) * dir_z), px, pz)
+                     for px, pz in rim]
+        s_min = min(entry[0] for entry in projected)
+        s_max = max(entry[0] for entry in projected)
+        third = (s_max - s_min) / 3.0
+        up_cut = s_min + third
+        down_cut = s_max - third
+        level_up = meta.level_up if meta.level_up is not None else meta.level
+        level_down = (meta.level_down if meta.level_down is not None
+                      else meta.level)
+        if level_up is None:
+            level_up = _median([self.natural(px, pz)
+                                for s, px, pz in projected if s <= up_cut])
+        if level_down is None:
+            level_down = _median([self.natural(px, pz)
+                                  for s, px, pz in projected if s >= down_cut])
+        return WaterProfile(level_up=float(level_up),
+                            level_down=float(level_down),
+                            flow_dir_deg=float(meta.flow_dir_deg),
+                            axis_x=axis_x, axis_z=axis_z,
+                            dir_x=dir_x, dir_z=dir_z,
+                            s_min=s_min, s_max=s_max)
 
     def _build_plateaus(self, footprints: Sequence["Footprint"]
                         ) -> List[PlateauStamp]:
@@ -1243,43 +1469,6 @@ class HeightModel:
             out.append((cx, cz, yaw, points, box, h0, width))
         return out
 
-    def _build_zone_water(self, zone_waters: Sequence[ZoneWaterInput]
-                          ) -> List[ZoneWaterStamp]:
-        """Every ROOM whose floor is water, with its mirror settled (E5a).
-
-        THE DEFAULT MIRROR IS THE MEDIAN OF THE HEIGHT ALONG ITS OWN RIM, read
-        AFTER the plateaus — and that one rule covers both cases § G4 names:
-
-        * on a BUILT location the plateau stamp has planed the whole plot flat,
-          so every rim sample carries the plateau height and the median IS the
-          plateau height. A pond in a courtyard therefore sits at the courtyard's
-          own level without anybody looking a location up.
-        * on a NATURAL location nothing was stamped, so the median is the
-          landscape's own height around the zone — the very rule a painted lake
-          gets (:meth:`_build_water`).
-
-        An AUTHORED ``layout.water_level`` always wins, exactly as on an area.
-        """
-        from app.models.heightfield import polygon_bounds
-        out: List[ZoneWaterStamp] = []
-        for loc_id, room_id, polygon, level, depth, ramp in (zone_waters or []):
-            ring = _ring(polygon)
-            if ring is None:
-                continue
-            box = polygon_bounds(polygon)
-            if box is None:
-                continue
-            if level is None:
-                rim = _rim_samples(polygon)
-                level = _median([self._stamp(self._carve(self.natural(px, pz),
-                                                         px, pz), px, pz)
-                                 for px, pz in rim])
-            key = (str(loc_id), str(room_id))
-            out.append((key, list(polygon), box, float(level), float(depth),
-                        float(ramp)))
-            self.zone_water_level_by_room[key] = round(float(level), 3)
-        return out
-
     def plateau_ramp_box(self, index: int
                          ) -> Tuple[float, float, float, float]:
         """The world box a plateau stamp can write into — its outline PLUS its
@@ -1292,29 +1481,36 @@ class HeightModel:
     def final(self, x: float, z: float) -> float:
         """``h_final`` at one point — the whole pipeline, in order.
 
-        areas → micro-relief → water carve → plateaus → ZONE water carve. Every
-        step is metre parametrised, so this answer does not know and cannot know
-        which lattice (if any) it is being sampled on.
+        areas → micro-relief → water carve → plateaus. Every step is metre
+        parametrised, so this answer does not know and cannot know which lattice
+        (if any) it is being sampled on.
         """
         h = self.natural(x, z)
         h = self._carve(h, x, z)
-        h = self._stamp(h, x, z)
-        return self._carve_zone(h, x, z)
+        return self._stamp(h, x, z)
 
     def _carve(self, h: float, x: float, z: float) -> float:
-        """The water stamp: ``h = min(h, water_level − depth_profile(d))``.
+        """The water stamp: ``h = min(h, level_at(x,z) − depth_profile(d))``.
 
         ``d`` is the distance from the point to the polygon OUTLINE, so the
         profile is 0 at the rim and smoothsteps to the full depth
         ``shore_ramp_m`` metres inside. MIN, never assignment: a rock rising
         out of a lake stays where it is only if it is already below the
         mirror — anything above is cut, which is precisely the invariant.
+
+        THE LEVEL IS LOCAL (W1). It is ``water_level_at`` of this area's
+        profile, so a river's bed follows its own tilted mirror down the valley
+        instead of hanging from one plane; for still water the profile answers
+        the same number everywhere and this is literally the old expression. The
+        invariant grows with it: past the shore ramp the second argument of the
+        ``min`` is ``level_at(x,z) − depth``, so ``h ≤ level_at(x,z) − ε`` holds
+        POINTWISE, not against an average.
         """
         if not self.water:
             return h
         fast = self._water_fast
         for idx in self._water_index.at(x, z):
-            ring, level, depth, ramp = fast[idx]
+            ring, water_profile, depth, ramp = fast[idx]
             if not ring or not _inside_ring(x, z, ring):
                 continue
             if ramp <= 0.0:
@@ -1322,7 +1518,7 @@ class HeightModel:
             else:
                 profile = depth * smoothstep(
                     _ring_edge_distance(x, z, ring) / ramp)
-            bed = level - profile
+            bed = water_level_at(water_profile, x, z) - profile
             if bed < h:
                 h = bed
         return h
@@ -1354,40 +1550,14 @@ class HeightModel:
                 h = h0 + (h - h0) * smoothstep(d / width)
         return h
 
-    def _carve_zone(self, h: float, x: float, z: float) -> float:
-        """The ZONE water stamp — the same arithmetic as :meth:`_carve`, run
-        after the plateaus.
-
-        Same ``min``, same ``smoothstep`` shore profile, same distance to the
-        OUTLINE, so the E1 invariant (``h ≤ mirror − ε`` past the ramp) holds
-        for a room's pond exactly as it does for a painted lake — and in every
-        mip, because it is the same pure function underneath.
-        """
-        if not self.zone_water:
-            return h
-        fast = self._zone_fast
-        for idx in self._zone_index.at(x, z):
-            ring, level, depth, ramp = fast[idx]
-            if not ring or not _inside_ring(x, z, ring):
-                continue
-            if ramp <= 0.0:
-                profile = depth
-            else:
-                profile = depth * smoothstep(
-                    _ring_edge_distance(x, z, ring) / ramp)
-            bed = level - profile
-            if bed < h:
-                h = bed
-        return h
-
     # ── what the model REACHES ──────────────────────────────────────────
 
     def shaped_bounds(self) -> Optional[Tuple[float, float, float, float]]:
         """The union box of everything that can move a height away from 0 —
         or None for a world that shapes nothing.
 
-        Height areas, relief-CARRYING painted areas, water polygons, zone-water
-        polygons and every plateau's outline plus its ramp. It is a SUPERSET of
+        Height areas, relief-CARRYING painted areas, water polygons and every
+        plateau's outline plus its ramp. It is a SUPERSET of
         "where the ground is not flat", which is the property the tile index and
         the grid growth both hang on: outside it the world is answered 0 without
         rastering anything.
@@ -1402,7 +1572,6 @@ class HeightModel:
         boxes = [b for _a, b in self.boxes]
         boxes += [e[2] for e in self.relief if e[1] is not None]
         boxes += [w[1] for w in self.water]
-        boxes += [w[2] for w in self.zone_water]
         boxes += [self.plateau_ramp_box(i) for i in range(len(self.plateaus))]
         return boxes
 
@@ -1431,16 +1600,14 @@ def build_model(areas: Sequence[Dict[str, Any]] = (),
                 footprints: Sequence["Footprint"] = (),
                 terrain_areas: Sequence[Dict[str, Any]] = (),
                 terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-                zone_waters: Sequence[ZoneWaterInput] = ()
                 ) -> HeightModel:
-    """A :class:`HeightModel` from the five raster inputs — pure, no DB.
+    """A :class:`HeightModel` from the four raster inputs — pure, no DB.
 
     The argument order of :func:`rasterize`, so a smoke run can build a world
     out of literals and ask it anything.
     """
     return HeightModel(areas=areas, terrain_areas=terrain_areas,
-                       terrain_catalog=terrain_catalog, footprints=footprints,
-                       zone_waters=zone_waters)
+                       terrain_catalog=terrain_catalog, footprints=footprints)
 
 
 def rasterize(areas: Sequence[Dict[str, Any]],
@@ -1449,7 +1616,6 @@ def rasterize(areas: Sequence[Dict[str, Any]],
               terrain_areas: Sequence[Dict[str, Any]] = (),
               terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
               model: Optional[HeightModel] = None,
-              zone_waters: Sequence[ZoneWaterInput] = ()
               ) -> Dict[str, Any]:
     """The whole world as ONE grid — pure, deterministic, no DB.
 
@@ -1482,16 +1648,14 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     path builds one per generation); without it one is built here.
     """
     if model is None:
-        model = build_model(areas, footprints, terrain_areas, terrain_catalog,
-                            zone_waters)
+        model = build_model(areas, footprints, terrain_areas, terrain_catalog)
     # What the LANDSCAPE reaches — the height areas, the relief-carrying
-    # painted areas, the water polygons and the zone waters. The plateaus are
-    # handled apart because a place far outside all of that stamps 0 onto 0 and
-    # must not stretch the grid across the world to do it.
+    # painted areas and the water polygons. The plateaus are handled apart
+    # because a place far outside all of that stamps 0 onto 0 and must not
+    # stretch the grid across the world to do it.
     world_boxes = ([b for _a, b in model.boxes]
                    + [e[2] for e in model.relief if e[1] is not None]
-                   + [w[1] for w in model.water]
-                   + [w[2] for w in model.zone_water])
+                   + [w[1] for w in model.water])
     if not world_boxes:
         return {"origin_x": 0.0, "origin_z": 0.0,
                 "step_m": step_m or DEFAULT_STEP_M,
@@ -1558,7 +1722,6 @@ def tile_index_from(areas: Sequence[Dict[str, Any]] = (),
                     terrain_catalog: Optional[Dict[str, Dict[str, Any]]]
                     = None,
                     model: Optional[HeightModel] = None,
-                    zone_waters: Sequence[ZoneWaterInput] = ()
                     ) -> frozenset:
     """Which tiles the world has a ground in — pure, no DB (v2, 2026-08-14).
 
@@ -1586,12 +1749,10 @@ def tile_index_from(areas: Sequence[Dict[str, Any]] = (),
     about where the ground is. Handing in a ``model`` skips the rebuild.
     """
     if model is None:
-        model = build_model(areas, footprints, terrain_areas, terrain_catalog,
-                            zone_waters)
+        model = build_model(areas, footprints, terrain_areas, terrain_catalog)
     world_boxes = ([b for _a, b in model.boxes]
                    + [e[2] for e in model.relief if e[1] is not None]
-                   + [w[1] for w in model.water]
-                   + [w[2] for w in model.zone_water])
+                   + [w[1] for w in model.water])
     if not world_boxes:
         # Nothing shapes the ground: no tile, exactly as the overview returns
         # an empty grid.
@@ -1614,7 +1775,6 @@ def rasterize_tile(
         terrain_areas: Sequence[Dict[str, Any]] = (),
         terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
         model: Optional[HeightModel] = None,
-        zone_waters: Sequence[ZoneWaterInput] = ()
 ) -> Dict[str, Any]:
     """ONE 256 m tile of the world ground as a grid — pure, no DB.
 
@@ -1636,8 +1796,7 @@ def rasterize_tile(
     through where a narrow one flattened it.
     """
     if model is None:
-        model = build_model(areas, footprints, terrain_areas, terrain_catalog,
-                            zone_waters)
+        model = build_model(areas, footprints, terrain_areas, terrain_catalog)
     origin_x = tx * TILE_M
     origin_z = tz * TILE_M
     heights = model.grid(origin_x, origin_z, TILE_STEP_M,
@@ -1918,16 +2077,14 @@ def current_sig() -> str:
 def _tile_inputs() -> Tuple[List[Dict[str, Any]],
                             List[Tuple[float, float, float, float]],
                             List[Dict[str, Any]],
-                            Dict[str, Dict[str, Any]],
-                            List[ZoneWaterInput]]:
-    """The five raster inputs, read ONCE per generation.
+                            Dict[str, Dict[str, Any]]]:
+    """The four raster inputs, read ONCE per generation.
 
-    The same five :func:`get_field` reads and ``height_sig`` hashes — height
-    areas, levelling placements, painted terrain, type catalog and (since E5a)
-    the ZONE WATERS of the placed room layouts — kept here because the tiles are
-    built ON DEMAND: without it a tile miss would be five DB reads, and those
-    misses happen in the middle of a route, of a walk report, of an A*
-    expansion. With it a miss is arithmetic.
+    The same four :func:`get_field` reads and ``height_sig`` hashes — height
+    areas, levelling placements, painted terrain and the type catalog — kept
+    here because the tiles are built ON DEMAND: without it a tile miss would be
+    four DB reads, and those misses happen in the middle of a route, of a walk
+    report, of an A* expansion. With it a miss is arithmetic.
     """
     global _TILE_INPUTS
     cached = _TILE_INPUTS
@@ -1938,7 +2095,7 @@ def _tile_inputs() -> Tuple[List[Dict[str, Any]],
     from app.models import heightfield as store
     from app.models.terrain import list_areas
     data = (store.list_height_areas(), store.placed_footprints(),
-            list_areas(), effective_catalog(), store.placed_zone_waters())
+            list_areas(), effective_catalog())
     _TILE_INPUTS = (generation, data)
     return data
 
@@ -1957,8 +2114,8 @@ def world_model() -> HeightModel:
     if cached is not None and cached[0] == _GENERATION:
         return cached[1]
     generation = _GENERATION
-    areas, footprints, terrain_areas, catalog, zone_waters = _tile_inputs()
-    model = build_model(areas, footprints, terrain_areas, catalog, zone_waters)
+    areas, footprints, terrain_areas, catalog = _tile_inputs()
+    model = build_model(areas, footprints, terrain_areas, catalog)
     _MODEL = (generation, model)
     return model
 
@@ -2225,9 +2382,31 @@ def tiles_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
 TILE_STATS_MAX = 64
 
 
+def water_profile_payload(profile: WaterProfile) -> Dict[str, Any]:
+    """One :class:`WaterProfile` as the nine numbers a client reads (W1).
+
+    Everything ``water_level_at`` needs and nothing else, so a renderer builds
+    the same tilted mirror the bake carved against — per vertex, without asking
+    the server for a raster. ``flow_dir_deg`` is ``None`` for still water, and
+    then ``s_min == s_max`` and both levels are equal: the reader's own clamp
+    answers ``level_up`` everywhere without a special case.
+    """
+    return {"level_up": round(profile.level_up, 3),
+            "level_down": round(profile.level_down, 3),
+            "flow_dir_deg": (None if profile.flow_dir_deg is None
+                             else round(profile.flow_dir_deg, 3)),
+            "axis_x": round(profile.axis_x, 3),
+            "axis_z": round(profile.axis_z, 3),
+            "dir_x": round(profile.dir_x, 6),
+            "dir_z": round(profile.dir_z, 6),
+            "s_min": round(profile.s_min, 3),
+            "s_max": round(profile.s_max, 3)}
+
+
 def with_effective_water_level(areas: Sequence[Dict[str, Any]]
                                ) -> List[Dict[str, Any]]:
-    """Copies of the painted areas carrying ``meta.water_level_effective``.
+    """Copies of the painted areas carrying the bake's water OUTPUT —
+    ``meta.water_level_effective`` and ``meta.water_profile``.
 
     THE EFFECTIVE LEVEL IS OUTPUT, not authoring (E1b). ``meta.water_level`` is
     the author's field and may be unset ("auto (rim)"); this is the number the
@@ -2236,20 +2415,30 @@ def with_effective_water_level(areas: Sequence[Dict[str, Any]]
     a level the two are equal, which is the point — one field to read, whatever
     the author chose.
 
-    Only water areas gain the key; every other area is passed through as it is.
+    SINCE W1 IT IS THE MID LEVEL OF THE PROFILE, i.e. the mean of the two ends —
+    which for still water is still exactly the mirror it always was, and for a
+    river is the level at the middle of its own axis. That choice is deliberate:
+    the field is what a FLAT-mirror consumer draws one plane at, and the middle
+    is the plane that misses a tilted river by the least on both ends. A
+    consumer that wants the truth reads ``water_profile`` beside it and
+    evaluates :func:`water_level_at`.
+
+    Only water areas gain the keys; every other area is passed through as it is.
     Nothing is written back to the DB, and the input list is not mutated.
     """
-    levels = world_model().water_level_by_area
-    if not levels:
+    profiles = world_model().water_profile_by_area
+    if not profiles:
         return list(areas or [])
     out: List[Dict[str, Any]] = []
     for area in (areas or []):
-        level = levels.get(str(area.get("id") or ""))
-        if level is None:
+        profile = profiles.get(str(area.get("id") or ""))
+        if profile is None:
             out.append(area)
             continue
         meta = dict(area.get("meta") or {})
-        meta["water_level_effective"] = level
+        meta["water_level_effective"] = round(
+            (profile.level_up + profile.level_down) * 0.5, 3)
+        meta["water_profile"] = water_profile_payload(profile)
         out.append({**area, "meta": meta})
     return out
 

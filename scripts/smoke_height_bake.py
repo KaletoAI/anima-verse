@@ -17,10 +17,15 @@ Since E1 every step is evaluated PER POINT with METRE parameters
 (``core.heightfield.HeightModel``), in this order::
 
     areas (strongest deflection)  ->  micro-relief (additive)
-      ->  water carve  ->  location plateaus  ->  ZONE water carve (E5a)
+      ->  water carve  ->  location plateaus
 
 so ANY lattice is the same function sampled more or less finely, and two
 lattices agree at their shared points BY CONSTRUCTION. That is claim (a).
+
+THE FIFTH STAGE IS GONE since W1 ("Ein Wasser-Gesetz", 2026-08-21). A room
+whose floor kind was water used to carve its own bed AFTER the plateaus; water
+left the room plan entirely, so the stage, its inputs and its signature basis
+are deleted without a fallback reader — asserted BY NAME in section [9].
 
 THE FIXTURE (pure literals; the model never touches a DB)
 ---------------------------------------------------------
@@ -50,13 +55,12 @@ The catalog is two entries: "lake" carries ``meta.water`` (that flag, never the
 NAME, is what makes a kind carve — kinds are an open vocabulary) and "g"
 carries the two relief numbers.
 
-Section [8] adds the FIFTH input of the bake ("Ein Boden" E5a): a ROOM whose
-level-0 floor kind is a water surface. It carves exactly like a painted lake
-and it carves LAST — after the plateaus, because a pond in a courtyard lies on
-a plot the plateau stamp planes flat, and a carve run before that stamp would
-be planed away again. Its default mirror is the median of the height ALONG ITS
-OWN RIM, read after the plateaus, which makes "the plateau height for a built
-place, the landscape for a natural one" one rule instead of two.
+Section [8] adds the SLOPED MIRROR of W1 on its own model: a water area may
+declare a ``flow_dir_deg``, and then its mirror is not one number but a plane
+tilted along that axis, interpolated between an UPSTREAM and a DOWNSTREAM level
+that are each the rim median of their own third of the axis span. The carve
+runs against that LOCAL level, so the invariant becomes a pointwise statement.
+Section [9] is the deletion proof of the fifth stage.
 
 [1] THE WATER CARVE (§ G4).  Inside a water polygon
 
@@ -86,7 +90,9 @@ place, the landscape for a natural one" one rule instead of two.
 
     THE INVARIANT, checked over the WHOLE polygon on a dense grid: every
     sample deeper inside than shore_ramp_m (3 m) has
-        h_final <= water_level - eps,   eps = min(water_depth_m, 0.25) = 0.25
+        h_final <= level_at(x, z) - eps,  eps = min(water_depth_m, 0.25) = 0.25
+    which for this still lake is the constant 3.0 it always was (section [8g]
+    restates it on a river, where the two are not the same number)
     i.e. h <= 2.75 there. It holds with margin: the bed is 1.0 out there, and
     the natural ground is at most 6.0 which the MIN cuts to 1.0.
 
@@ -414,9 +420,17 @@ check_true(f"…and {shallow_count} shore samples were skipped by the rule",
 
 
 print("\n[2] the DERIVED mirror of a lake without an authored level (§ G4)")
-levels = MODEL.water_level_by_area
-near("WATER_SET keeps the authored 3.0", levels["ta_lake_set"], 3.0)
-near("WATER_AUTO derives the rim median 6.0", levels["ta_lake_auto"], 6.0)
+profiles = MODEL.water_profile_by_area
+near("WATER_SET keeps the authored 3.0",
+     profiles["ta_lake_set"].level_up, 3.0)
+near("WATER_AUTO derives the rim median 6.0",
+     profiles["ta_lake_auto"].level_up, 6.0)
+check("...and STILL water carries the same number at BOTH ends of its "
+      "profile — the lake is the degenerate river",
+      [profiles[k].level_up == profiles[k].level_down
+       and profiles[k].flow_dir_deg is None
+       and profiles[k].s_min == profiles[k].s_max
+       for k in ("ta_lake_set", "ta_lake_auto")], [True, True])
 near("…so its centre bed is 6.0 - 2.0", MODEL.final(140.0, 140.0), 4.0)
 near("…and its west rim (120,140) keeps NATURAL 8.0 (already under 6.0? no)",
      MODEL.final(120.0, 140.0), 6.0)
@@ -444,8 +458,14 @@ payload = {a["id"]: a for a in
            hf.with_effective_water_level(terrain_store.list_areas())}
 near("the authored lake reports 3.0 as its effective level",
      payload["ta_lake_set"]["meta"]["water_level_effective"], 3.0)
-near("the settled lake reports 6.0", 
+near("the settled lake reports 6.0",
      payload["ta_lake_auto"]["meta"]["water_level_effective"], 6.0)
+check("...and the PROFILE rides along additively (W1): still water, both "
+      "ends equal, no flow",
+      payload["ta_lake_set"]["meta"]["water_profile"],
+      {"level_up": 3.0, "level_down": 3.0, "flow_dir_deg": None,
+       "axis_x": 40.0, "axis_z": 40.0, "dir_x": 0.0, "dir_z": 0.0,
+       "s_min": 0.0, "s_max": 0.0})
 check("a non-water area gains no effective field at all",
       "water_level_effective" in payload["ta_grass"]["meta"], False)
 check("the authored fields are untouched",
@@ -816,166 +836,305 @@ check("…and reopening it restores the old one", store.height_sig(), sig_built)
 
 
 
-# ── [8] ZONE WATER: a room floor that carves its own bed (E5a, § G4) ────
-print("\n[8] zone water — a room whose floor kind is water carves its bed")
-# THE FIFTH INPUT of the bake. A room on storey 0 whose ``surfaces.floor`` is a
-# water surface is a lake with a room id: it gets the same three numbers a
-# painted lake has and the same ``min``-carve — only it runs LAST, AFTER the
-# location plateaus, which is the whole reason it is a separate stage.
+# ── [8] THE SLOPED MIRROR: a river is a plane, not a level (W1) ─────────
+print("\n[8] the mirror PROFILE — a river's level is a function of the place")
+# THE FIXTURE, on its OWN model so the arithmetic above stays untouched. The
+# landscape is the same plane NATURAL(x, z) = min(x, 200-x)/10, i.e. x/10 on
+# everything below, and it is z-independent for |z| <= 200.
 #
-# THREE ZONES, all hand-derived:
+#   RIVER_AUTO   rectangle (20,-40)-(80,-20), kind "river",
+#                flow_dir_deg 270, NO authored level -> both ends derived
+#   RIVER_SET    the same rectangle at z -80..-60, flow_dir_deg 270, with
+#                water_level_up 9.5 / water_level_down 0.5 AUTHORED
+#   CREEK        the same shape again at z -120..-100 painted with a kind that
+#                carries the two water numbers but NOT the water flag: the
+#                world-shaped case, and it must carve NOTHING
 #
-#   POOL     inside the BUILT plot, world (76,-144)-(84,-136), no authored
-#            level. The plateau has planed that plot to exactly H0 = 8.0, so
-#            every rim sample is 8.0 and the MEDIAN — i.e. the default mirror
-#            — is 8.0. That is § G4's "the location's plateau height for a
-#            built place", falling out of ONE rule instead of a lookup.
-#   POND     on a NATURAL location out at (295,-5)-(305,5). x >= 200 is
-#            outside the SLOPE polygon, so the landscape there is exactly 0
-#            and the rim median is 0.0.
-#   CISTERN  the same square 100 m further east, but with an AUTHORED level
-#            of -1.0 — which has to win over the derived 0.0.
+# The kind "river" carries the DEFAULTS water_depth_m 1.0 / shore_ramp_m 3.0.
+# Neither area repeats them, so every number below is the KIND's.
 #
-# The carve is the area law verbatim, depth 2.0 over a 3 m shore ramp:
-#     h = min(h, level - 2.0 * smoothstep(min(d_in / 3, 1)))
-#   POOL    (80,-140) d_in = 4   -> 8.0 - 2.0            = 6.0
-#           (77.5,-140) d_in = 1.5 -> smoothstep(0.5)=0.5 -> 8.0 - 1.0 = 7.0
-#           (76,-140)  d_in = 0   -> min(8.0, 8.0)       = 8.0
-#   POND    (300, 0)  d_in = 5   -> 0.0 - 2.0            = -2.0
-#           (296, 0)  d_in = 1   -> smoothstep(1/3) = 7/27
-#                                 -> -2 * 7/27           = -0.518518...
-#   CISTERN (400, 0)  d_in = 5   -> -1.0 - 2.0           = -3.0
-#           (395, 0)  d_in = 0   -> min(0.0, -1.0)       = -1.0   (MIN, never
-#                                   assignment: the carve only ever LOWERS)
-ZW_POOL = ("l1", "pool", [[76.0, -144.0], [84.0, -144.0],
-                          [84.0, -136.0], [76.0, -136.0]], None, 2.0, 3.0)
-ZW_POND = ("l2", "pond", [[295.0, -5.0], [305.0, -5.0],
-                          [305.0, 5.0], [295.0, 5.0]], None, 2.0, 3.0)
-ZW_CIST = ("l3", "cistern", [[395.0, -5.0], [405.0, -5.0],
-                             [405.0, 5.0], [395.0, 5.0]], -1.0, 2.0, 3.0)
-ZMODEL = hf.build_model([SLOPE], [PLOT], TERRAIN, CATALOG,
-                        [ZW_POOL, ZW_POND, ZW_CIST])
+# THE DIRECTION. ``flow_dir_deg`` is spelled like every other yaw in the
+# contract: dir = (sin t, cos t). 270 deg -> (-1, 0), i.e. the water flows
+# toward -x, which is downhill on this landscape.
+#
+# THE AXIS. Centroid of the rectangle = (50, -30); s(p) = (p - centroid) . dir
+# = 50 - x. Over the polygon s runs from -30 (x = 80, UPSTREAM) to +30
+# (x = 20, DOWNSTREAM), so span = 60 and a third is 20.
+#     upstream third:   s <= -30 + 20 = -10  <=>  x >= 60
+#     downstream third: s >=  30 - 20 =  10  <=>  x <= 40
+#
+# THE RIM SAMPLES (``_rim_samples``, 2 m apart, the START vertex of each edge
+# included and the END one left to the next edge):
+#     south (20,-40)->(80,-40): 30 samples, x = 20, 22, ..., 78
+#     east  (80,-40)->(80,-20): 10 samples, x = 80
+#     north (80,-20)->(20,-20): 30 samples, x = 80, 78, ..., 22
+#     west  (20,-20)->(20,-40): 10 samples, x = 20
+#
+# UPSTREAM THIRD (x >= 60): south contributes 60,62,...,78 (10), east 10 x 80,
+# north 80,78,...,60 (11) = 31 samples. As a multiset of x/10 that is
+#     2 x each of 6.0, 6.2, ..., 7.8   (20 values)   and   11 x 8.0
+# Sorted, the 16th of 31 is the median; the cumulative count reaches 16 at
+# 7.4 (2+2+2+2+2+2+2 = 14 up to 7.2, then 7.4 takes 15 and 16), so
+#
+#     level_up = 7.4
+#
+# DOWNSTREAM THIRD (x <= 40): south 20,22,...,40 (11), north 40,38,...,22 (10),
+# west 10 x 20 = 31 samples, i.e.
+#     11 x 2.0   and   2 x each of 2.2, 2.4, ..., 4.0
+# The 16th is 2.6 (11 at 2.0, 13 at 2.2, 15 at 2.4, 17 at 2.6), so
+#
+#     level_down = 2.6
+#
+# THE PROFILE, written out. t = (s - s_min)/span = (80 - x)/60, and
+#     level_at(x) = 7.4 + (2.6 - 7.4) * (80 - x)/60
+#                 = 7.4 - 0.08 * (80 - x)
+#                 = 0.08 * x + 1.0
+# which is 2.6 at x = 20, 5.0 at the centroid x = 50 and 7.4 at x = 80.
+# The EFFECTIVE level (what a flat consumer draws one plane at) is the mean of
+# the two ends, 5.0 — the level at the middle of the axis.
+#
+# THE CARVE against that LOCAL level, depth 1.0 over a 3 m shore ramp:
+#     h = min(h, level_at(x) - 1.0 * smoothstep(min(d_in/3, 1)))
+#   (50,-30) d_in = 10 >= 3 -> 5.00 - 1.0 = 4.00 ; NATURAL 5.0 -> 4.00
+#   (26,-30) d_in =  6      -> 3.08 - 1.0 = 2.08 ; NATURAL 2.6 -> 2.08
+#   (74,-30) d_in =  6      -> 6.92 - 1.0 = 5.92 ; NATURAL 7.4 -> 5.92
+#   (22,-30) d_in =  2 -> t = 2/3, smoothstep = 20/27
+#                      -> 2.76 - 20/27 = 2.019259259259...  ; NATURAL 2.2
+#   (20,-30) ON the outline is not inside it (the ray-cast rule) -> NATURAL 2.0
+CATALOG_R = dict(CATALOG)
+CATALOG_R["river"] = {"kind": "river", "name": "River", "passable": True,
+                      "speed_factor": 0.4,
+                      "meta": {"water": True, "water_depth_m": 1.0,
+                               "shore_ramp_m": 3.0}}
+CATALOG_R["creek"] = {"kind": "creek", "name": "Creek (unflagged)",
+                      "passable": True, "speed_factor": 0.6,
+                      "meta": {"water_depth_m": 1.0, "shore_ramp_m": 3.0}}
 
-near("the BUILT plot's pool takes the PLATEAU as its mirror",
-     ZMODEL.zone_water_level_by_room[("l1", "pool")], H0)
-near("...and the natural pond takes the rim median of the landscape",
-     ZMODEL.zone_water_level_by_room[("l2", "pond")], 0.0)
-near("...while an AUTHORED level wins outright",
-     ZMODEL.zone_water_level_by_room[("l3", "cistern")], -1.0)
+RIVER_AUTO = {"id": "ta_river_auto", "kind": "river", "z_order": 0,
+              "polygon": [[20, -40], [80, -40], [80, -20], [20, -20]],
+              "meta": {"flow_dir_deg": 270}}
+RIVER_SET = {"id": "ta_river_set", "kind": "river", "z_order": 0,
+             "polygon": [[20, -80], [80, -80], [80, -60], [20, -60]],
+             "meta": {"flow_dir_deg": 270, "water_level_up": 9.5,
+                      "water_level_down": 0.5}}
+CREEK = {"id": "ta_creek", "kind": "creek", "z_order": 0,
+         "polygon": [[20, -120], [80, -120], [80, -100], [20, -100]],
+         "meta": {"flow_dir_deg": 270}}
 
-near("POOL centre: plateau 8.0 - depth 2.0", ZMODEL.final(80.0, -140.0), 6.0)
-near("POOL half a ramp in: 8.0 - 2.0 * smoothstep(0.5)",
-     ZMODEL.final(77.5, -140.0), 7.0)
-near("POOL rim: min(8.0, 8.0) — the carve touches nothing there",
-     ZMODEL.final(76.0, -140.0), H0)
-near("POND centre: 0.0 - 2.0", ZMODEL.final(300.0, 0.0), -2.0)
-near("POND one metre in: -2 * 7/27", ZMODEL.final(296.0, 0.0),
-     -2.0 * (7.0 / 27.0))
-near("POND rim: 0.0", ZMODEL.final(295.0, 0.0), 0.0)
-near("CISTERN centre: -1.0 - 2.0", ZMODEL.final(400.0, 0.0), -3.0)
-near("CISTERN rim: min(0.0, -1.0) — the ground is CUT to the mirror",
-     ZMODEL.final(395.0, 0.0), -1.0)
+RMODEL = hf.build_model([SLOPE], [], [RIVER_AUTO, RIVER_SET, CREEK], CATALOG_R)
 
-print("\n[8b] the ORDER is the point: the carve runs AFTER the plateau")
-# RED COUNTER-PROBE. Were the zone water a fourth entry in stage 2 — i.e.
-# carved with the painted lakes, BEFORE the plateau stamps — the plot's stamp
-# would write h = h0 across its whole outline afterwards and plane the pool
-# away. The mutant's answer at the pool centre is therefore exactly the
-# plateau, 8.0, and it must not appear.
-check_not("red: the pool centre is NOT the un-carved plateau",
-          round(ZMODEL.final(80.0, -140.0), 6), round(H0, 6))
-# …and the same model WITHOUT the zone answers exactly that 8.0, which is what
-# makes the line above a measurement rather than a coincidence.
-near("...which is what the very same plot answers without the zone",
-     MODEL.final(80.0, -140.0), H0)
-near("...and the plot is still flat one metre outside the pool",
-     ZMODEL.final(85.0, -140.0), H0)
+print("\n[8a] the bearing is the contract's own yaw: dir = (sin t, cos t)")
+check("0 deg flows toward +z", hf.flow_direction(0.0), (0.0, 1.0))
+check("90 deg toward +x", hf.flow_direction(90.0), (1.0, 0.0))
+check("180 deg toward -z", hf.flow_direction(180.0), (0.0, -1.0))
+check("270 deg toward -x — the fixture's downhill", hf.flow_direction(270.0),
+      (-1.0, 0.0))
+check("a bearing WRAPS, it does not clamp: 370 is 10", hf.sanitize_flow_dir(370),
+      10.0)
+check("...and -90 is 270", hf.sanitize_flow_dir(-90), 270.0)
+check("junk and blanks are 'still', not 0", [hf.sanitize_flow_dir(x)
+                                             for x in ("", None, "abc",
+                                                       float("nan"))],
+      [None, None, None, None])
 
-print("\n[8c] the E1 invariant holds for a room's pond too")
-# Past the shore ramp the second argument of the min is the CONSTANT
-# ``level - depth``, whatever the landscape does — so this is arithmetic, not
-# sampling (§ A18.3). Measured over the pond on a 0.5 m grid all the same.
-EPS = min(2.0, 0.25)
-deep = worst = 0
-worst_gap = 1e9
-for i in range(21):
-    for j in range(21):
-        px, pz = 295.0 + i * 0.5, -5.0 + j * 0.5
-        d_in = min(px - 295.0, 305.0 - px, pz + 5.0, 5.0 - pz)
-        if d_in <= 3.0:
-            continue
-        deep += 1
-        gap = 0.0 - ZMODEL.final(px, pz)
-        worst_gap = min(worst_gap, gap)
-# d_in > 3 leaves the inner 4 x 4 m square, i.e. 7 x 7 samples at a 0.5 m step.
-check("deep probes taken", deep, 49)
-check_true(f"every one of them is at least {EPS} m under the mirror "
-           f"(worst gap {worst_gap:.4f} m)", worst_gap >= EPS)
+print("\n[8b] the DERIVED ends: a rim median per THIRD of the axis")
+AUTO = RMODEL.water_profile_by_area["ta_river_auto"]
+near("the axis runs through the centroid, x", AUTO.axis_x, 50.0)
+near("...and z", AUTO.axis_z, -30.0)
+check("the direction is exactly (-1, 0)", (AUTO.dir_x, AUTO.dir_z), (-1.0, 0.0))
+near("the polygon spans s = -30 (upstream)", AUTO.s_min, -30.0)
+near("...to s = +30 (downstream)", AUTO.s_max, 30.0)
+near("level_up  = the median of the upstream third = 7.4", AUTO.level_up, 7.4)
+near("level_down = the median of the downstream third = 2.6", AUTO.level_down,
+     2.6)
 
-print("\n[8d] a zone water shapes the tile index and the bounds")
-# A pond 300 m east of everything the world otherwise shapes has to bring its
-# own tile, or ``world_height`` would answer the flat 0 there and the bed would
-# exist for the picture and not for the rules.
-key = hf.tile_key(300.0, 0.0)
-check("the pond's tile", key, (1, 0))
-check_true("...is NOT indexed without the zone waters",
-           key not in hf.tile_index_from([SLOPE], [PLOT], TERRAIN, CATALOG))
-check_true("...and IS with them",
-           key in hf.tile_index_from([SLOPE], [PLOT], TERRAIN, CATALOG,
-                                     zone_waters=[ZW_POOL, ZW_POND, ZW_CIST]))
-check_true("the shaped bounds reach out to the cistern",
-           ZMODEL.shaped_bounds()[2] >= 405.0)
-# The TILE is the same function, so the carve is in it at the same numbers.
-_tile = hf.rasterize_tile(1, 0, [SLOPE], [PLOT], TERRAIN, CATALOG,
-                          zone_waters=[ZW_POOL, ZW_POND, ZW_CIST])
-near("the rastered tile carries the pond's bed at its centre",
-     hf.sample_height(_tile, 300.0, 0.0), -2.0, 1e-3)
+print("\n[8c] level_at(x, z) = 0.08 x + 1.0 — hand-derived, then measured")
+for _x in (20.0, 26.0, 35.0, 50.0, 74.0, 80.0):
+    near(f"level_at({_x}) = {0.08 * _x + 1.0}",
+         hf.water_level_at(AUTO, _x, -30.0), 0.08 * _x + 1.0, 1e-12)
+near("...and it does not depend on z at all (the axis is the x axis here)",
+     hf.water_level_at(AUTO, 35.0, -21.0),
+     hf.water_level_at(AUTO, 35.0, -39.0))
+near("past the upstream extreme it CLAMPS to level_up",
+     hf.water_level_at(AUTO, 200.0, -30.0), 7.4)
+near("...and past the downstream one to level_down",
+     hf.water_level_at(AUTO, -200.0, -30.0), 2.6)
 
-print("\n[8e] a water ROOM FLOOR is what produces those inputs")
-# The bridge from a stored location to the five-tuple above: the SAME function
-# the ground bake reads its layers from (``terrain_layers.world_floors``) —
-# one derivation for the material and for the shape of the bed.
-from app.core import terrain_layers as TL  # noqa: E402
-_pond_loc = {"id": "l2", "pos_x": 300.0, "pos_z": 0.0, "yaw_deg": 0.0,
-             "map3d": {"boundary": [[-10, -10], [10, -10], [10, 10],
-                                    [-10, 10]]},
-             "rooms": [{"id": "pond", "name": "Pond", "layout": {
-                 "x": -5.0, "y": -5.0, "w": 10.0, "d": 10.0, "level": 0,
-                 "always_visible": True, "surfaces": {"floor": "pond"}}}]}
-_floors = TL.world_floors([_pond_loc], CATALOG, {"pond": "water"})
-check("the room is recognised as WATER by its surface class, never its name",
-      [(f.room_id, f.water, f.water_level, f.water_depth_m, f.shore_ramp_m)
-       for f in _floors],
-      [("pond", True, None, hf.WATER_DEPTH_DEFAULT_M,
-        hf.WATER_SHORE_RAMP_DEFAULT_M)])
-check("...and its polygon IS the one the carve above was fed",
-      [[round(c, 3) for c in p] for p in _floors[0].polygon],
-      [[round(c, 3) for c in p] for p in ZW_POND[2]])
-check("red: without the water class the very same room carves nothing",
-      [f.water for f in TL.world_floors([_pond_loc], CATALOG, {})], [False])
-_authored = {**_pond_loc, "rooms": [{**_pond_loc["rooms"][0], "layout": {
-    **_pond_loc["rooms"][0]["layout"], "water_level": -1.0,
-    "water_depth_m": 4.0, "shore_ramp_m": 0.0}}]}
-check("the three numbers are read with the AREA's own reader (same clamps)",
-      [(f.water_level, f.water_depth_m, f.shore_ramp_m)
-       for f in TL.world_floors([_authored], CATALOG, {"pond": "water"})],
-      [(-1.0, 4.0, 0.0)])
+print("\n[8d] the carve uses the LOCAL level")
+near("(50,-30) mid-river: 5.00 - 1.0", RMODEL.final(50.0, -30.0), 4.0, 1e-12)
+near("(26,-30) downstream: 3.08 - 1.0", RMODEL.final(26.0, -30.0), 2.08, 1e-12)
+near("(74,-30) upstream: 6.92 - 1.0", RMODEL.final(74.0, -30.0), 5.92, 1e-12)
+near("(22,-30) on the shore ramp: 2.76 - 20/27",
+     RMODEL.final(22.0, -30.0), 2.76 - 20.0 / 27.0, 1e-12)
+near("...which is 2.0192592592…", RMODEL.final(22.0, -30.0),
+     2.0192592592592593, 1e-12)
+near("(20,-30) ON the outline is not inside it, so nothing is carved",
+     RMODEL.final(20.0, -30.0), 2.0)
+near("the DEPTH is the KIND's default 1.0, not the module's 2.0 — the area "
+     "repeats nothing", 5.0 - RMODEL.final(50.0, -30.0), 1.0, 1e-12)
 
-print("\n[8f] …and the height signature moves with them")
-# The reading path asks the SURFACE LIBRARY for the class (there is no terrain
-# type called "pond" in this world). The library is a SHARED, repo-tracked
-# file, so the fixture states the class in the one place the reader looks it
-# up rather than writing into it.
-TL.surface_classes = lambda: {"pond": "water"}
-with_locations([_pond_loc])
-_sig_wet = store.height_sig()
-check_true("a water room floor is in the basis",
-           [e["room"] for e in store.zone_water_basis()] == ["pond"])
-with_locations([{**_pond_loc, "rooms": [{**_pond_loc["rooms"][0], "layout": {
-    **_pond_loc["rooms"][0]["layout"], "surfaces": {"floor": "sand"}}}]}])
-check("turning the pond into sand empties the basis",
-      store.zone_water_basis(), [])
-check_true("...and moves the signature", store.height_sig() != _sig_wet)
+print("\n[8e] an AREA still overrides the kind, and an unflagged kind carves "
+      "nothing")
+_over = dict(RIVER_AUTO, id="ta_river_deep",
+             meta={"flow_dir_deg": 270, "water_depth_m": 4.0})
+_omodel = hf.build_model([SLOPE], [], [_over], CATALOG_R)
+near("an area depth of 4.0 beats the kind's 1.0: the bed is 5.0 - 4.0",
+     _omodel.final(50.0, -30.0), 5.0 - 4.0, 1e-12)
+near("the CREEK's kind carries both numbers but not the flag — NATURAL stands",
+     RMODEL.final(50.0, -110.0), natural(50.0))
+check("...and it never became a water stamp at all",
+      "ta_creek" in RMODEL.water_profile_by_area, False)
+check("flagging the very same kind makes it carve — the world-shaped case",
+      round(hf.build_model([SLOPE], [], [CREEK],
+                           {**CATALOG_R,
+                            "creek": {**CATALOG_R["creek"],
+                                      "meta": {**CATALOG_R["creek"]["meta"],
+                                               "water": True}}}
+                           ).final(50.0, -110.0), 6),
+      round(0.08 * 50.0 + 1.0 - 1.0, 6))
+
+print("\n[8f] the AUTHORED ends win outright (RIVER_SET)")
+# level_at(x) = 9.5 - 9 * (80 - x)/60 = 0.15 x - 2.5, so 0.5 at x = 20 and
+# 9.5 at x = 80; the mid level is 5.0. The bed past the ramp is that minus 1.0,
+# and the MIN keeps the landscape wherever it is already lower — which happens
+# at 0.15x - 3.5 >= 0.1x, i.e. from x = 70 upstream.
+SET = RMODEL.water_profile_by_area["ta_river_set"]
+near("level_up is the authored 9.5", SET.level_up, 9.5)
+near("level_down is the authored 0.5", SET.level_down, 0.5)
+for _x in (23.5, 50.0, 69.0):
+    near(f"({_x},-70) bed = 0.15x - 3.5 = {0.15 * _x - 3.5}",
+         RMODEL.final(_x, -70.0), 0.15 * _x - 3.5, 1e-12)
+near("(76.5,-70) upstream the LANDSCAPE is already lower — the MIN keeps 7.65",
+     RMODEL.final(76.5, -70.0), 7.65, 1e-12)
+
+print("\n[8g] INVARIANT 2, restated LOCALLY: h <= level_at(x,z) - eps")
+# eps = min(depth, 0.25) = 0.25. Deep means d_in > shore_ramp = 3 m, i.e.
+# x in (23, 77) and z in (-77, -63) — on the 0.5 m lattice that is x = 23.5 …
+# 76.5 (108 columns) x z = -76.5 … -63.5 (27 rows) = 2916 samples.
+# The gap level_at - h is exactly the DEPTH, 1.0 m, wherever the carve wrote
+# (x < 70, bed = level_at - 1.0), and 0.05x - 2.5 where the landscape is
+# already lower (x >= 70) — which at x = 70 is 1.0 as well and grows upstream.
+# So the WORST gap over the whole deep zone is exactly 1.0 m, hand-derived and
+# not sampled, and it clears eps = 0.25 with 0.75 m to spare.
+EPS_R = min(1.0, 0.25)
+deep_n = 0
+worst = 1e9
+_i = 0
+while _i < 108:
+    px = 23.5 + _i * 0.5
+    _j = 0
+    while _j < 27:
+        pz = -76.5 + _j * 0.5
+        deep_n += 1
+        worst = min(worst, hf.water_level_at(SET, px, pz)
+                    - RMODEL.final(px, pz))
+        _j += 1
+    _i += 1
+check("deep probes taken", deep_n, 2916)
+near("the WORST local gap is exactly the depth, 1.0 m", worst, 1.0, 1e-9)
+check_true(f"...so every one of them clears eps = {EPS_R}", worst >= EPS_R)
+
+print("\n[8h] RED: the CONSTANT-level carve breaks what the sloped one keeps")
+# THE MUTANT: the same river, the same depth, but ONE mirror at the mid level
+# 5.0 — which is what every round before W1 could express. Its bed past the
+# ramp is the constant 4.0, and the MIN keeps the landscape below x = 40.
+CONST = {"id": "ta_river_set", "kind": "river", "z_order": 0,
+         "polygon": RIVER_SET["polygon"], "meta": {"water_level": 5.0}}
+CMODEL = hf.build_model([SLOPE], [], [CONST], CATALOG_R)
+near("the mutant's mirror really is the constant 5.0",
+     CMODEL.water_profile_by_area["ta_river_set"].level_up, 5.0)
+near("...at BOTH ends", CMODEL.water_profile_by_area["ta_river_set"].level_down,
+     5.0)
+# (a) DOWNSTREAM the mutant leaves the ground ABOVE its own water line.
+near("at (23.5,-70) the mutant's ground is the landscape 2.35",
+     CMODEL.final(23.5, -70.0), 2.35, 1e-12)
+near("...while the local mirror there is 0.15·23.5 - 2.5 = 1.025",
+     hf.water_level_at(SET, 23.5, -70.0), 1.025, 1e-12)
+check_true("...so the mutant VIOLATES h <= level_at - 0.25 by 1.575 m",
+           CMODEL.final(23.5, -70.0) > 1.025 - EPS_R)
+near("...and the sloped carve at the same point answers 0.025",
+     RMODEL.final(23.5, -70.0), 0.025, 1e-12)
+check_true("...which clears it", RMODEL.final(23.5, -70.0) <= 1.025 - EPS_R)
+# (b) UPSTREAM the sloped bed stands ABOVE the constant plane — which is
+# exactly what a flat mirror at 5.0 would have to cut through.
+near("upstream the sloped ground is 7.65", RMODEL.final(76.5, -70.0), 7.65,
+     1e-12)
+near("...i.e. 2.65 m ABOVE the constant plane at 5.0",
+     RMODEL.final(76.5, -70.0) - 5.0, 2.65, 1e-12)
+near("...and the mutant had to gouge it down to 4.0 to hide that",
+     CMODEL.final(76.5, -70.0), 4.0, 1e-12)
+
+print("\n[8i] a river SETTLES its two ends, a lake settles its one level")
+terrain_types.save_world_type(CATALOG_R["river"])
+_before = terrain_store.save_area(dict(RIVER_AUTO))
+check("a flowing area is frozen at BOTH ends, never into one water_level",
+      sorted(k for k in _before["meta"] if k.startswith("water_level")),
+      ["water_level_down", "water_level_up"])
+near("...at the derived 7.4", _before["meta"]["water_level_up"], 7.4)
+near("...and 2.6", _before["meta"]["water_level_down"], 2.6)
+_half = terrain_store.save_area(dict(RIVER_AUTO, id="ta_river_half",
+                                     meta={"flow_dir_deg": 270,
+                                           "water_level_up": 3.0}))
+check("an author who set ONE end keeps it and only the other is derived",
+      [_half["meta"]["water_level_up"], _half["meta"]["water_level_down"]],
+      [3.0, 2.6])
+
+print("\n[8j] the profile in the PAYLOAD — the nine numbers, additively")
+hf.invalidate_cache()
+_areas = {a["id"]: a for a in
+          hf.with_effective_water_level(terrain_store.list_areas())}
+check("the river ships its whole tilted mirror",
+      _areas["ta_river_auto"]["meta"]["water_profile"],
+      {"level_up": 7.4, "level_down": 2.6, "flow_dir_deg": 270.0,
+       "axis_x": 50.0, "axis_z": -30.0, "dir_x": -1.0, "dir_z": 0.0,
+       "s_min": -30.0, "s_max": 30.0})
+near("...and the flat-consumer number beside it is the MID level",
+     _areas["ta_river_auto"]["meta"]["water_level_effective"], 5.0)
+
+
+# ── [9] THE ZONE-WATER STAGE IS GONE — asserted BY NAME (W1) ────────────
+print("\n[9] the fifth bake stage and everything that fed it is deleted")
+# NO FALLBACK READERS, so the proof is that the NAMES are gone: a reader that
+# still existed would keep a room's water alive silently.
+import inspect  # noqa: E402
+from app.core import terrain_layers as TL2  # noqa: E402
+from app.core import world_ops as WO  # noqa: E402
+
+for _name in ("ZoneWaterInput", "ZoneWaterStamp"):
+    check(f"red: heightfield.{_name} is gone", hasattr(hf, _name), False)
+for _name in ("_build_zone_water", "_carve_zone", "zone_water_level_by_room",
+              "zone_water"):
+    check(f"red: HeightModel.{_name} is gone", hasattr(MODEL, _name), False)
+check("red: build_model takes no zone_waters any more",
+      "zone_waters" in inspect.signature(hf.build_model).parameters, False)
+check("red: and neither does rasterize_tile",
+      "zone_waters" in inspect.signature(hf.rasterize_tile).parameters, False)
+for _name in ("placed_zone_waters", "zone_water_basis"):
+    check(f"red: models.heightfield.{_name} is gone", hasattr(store, _name),
+          False)
+check("red: the height signature basis names no zone water",
+      "zone_water" in store.height_sig.__doc__.lower()
+      or "zone_water" in inspect.getsource(store.height_sig), False)
+for _name in ("waters_payload", "is_water_floor", "floor_water_meta",
+              "surface_classes"):
+    check(f"red: terrain_layers.{_name} is gone", hasattr(TL2, _name), False)
+check("red: a Floor carries no water fields at all",
+      [f for f in TL2.Floor._fields if "water" in f or "shore" in f], [])
+check("red: the terrain-layers index ships no `waters` list",
+      "waters" in inspect.getsource(TL2.index_payload), False)
+_lay = WO._sanitize_room_layout({"x": 0, "y": 0, "w": 4, "d": 4,
+                            "water_level": 1.0, "water_depth_m": 2.0,
+                            "shore_ramp_m": 3.0,
+                            "surfaces": {"floor": "water", "wall": "brick"}})
+check("red: a room layout keeps NONE of the three water fields",
+      [k for k in _lay if "water" in k or "shore" in k], [])
+check("red: ...and a WATER floor kind is stripped at sanitize time",
+      _lay.get("surfaces"), {"wall": "brick"})
+_dry = WO._sanitize_room_layout({"x": 0, "y": 0, "w": 4, "d": 4,
+                            "surfaces": {"floor": "sand"}})
+check("...while a dry floor kind is untouched", _dry.get("surfaces"),
+      {"floor": "sand"})
+
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 for name in FAILURES:

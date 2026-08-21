@@ -1108,23 +1108,14 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     blend = sanitize_edge_blend(raw.get(EDGE_BLEND_KEY))
     if blend is not None:
         out[EDGE_BLEND_KEY] = blend
-    # WHERE THE MIRROR OF A WATER FLOOR STANDS, in world-y metres (E5a, § G4).
-    # A room whose floor kind is a water surface carves its bed out of the
-    # heightfield exactly as a painted lake does, and these are the same three
-    # numbers an area carries (``heightfield.water_meta`` reads them straight
-    # off this layout). ``water_level`` is OPTIONAL — the bake derives it from
-    # the plateau or the rim — and it REPLACES the ``floor_offset_y``
-    # waterline hack, which never moved a single height.
-    for key in ("water_level", "water_depth_m", "shore_ramp_m"):
-        value = raw.get(key)
-        if value is None or f"{value}".strip() == "":
-            continue
-        try:
-            num = float(value)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(num):
-            out[key] = round(num, 3)
+    # A ROOM HAS NO WATER FIELDS ANY MORE (W1, 2026-08-21). ``water_level``,
+    # ``water_depth_m`` and ``shore_ramp_m`` were the E5b per-room sliders of the
+    # zone-water carve; that carve is deleted, so the three keys are dropped on
+    # the way in without a fallback reader. Water is painted on the MAP, where
+    # one polygon owns its mirror, its bed and its flow — and a room that lies on
+    # painted water shows a REFERENCE to it in the floor plan
+    # (``scene_recipe._floor_plan`` → ``map_water``), derived by containment and
+    # never stored, so there is no such thing as a dangling water reference.
     # No recipe walls for this room: open zones, pavilions, areas inside an
     # area model. The server then emits no `walls` entries for it at all, so
     # both renderers follow without knowing the flag. Openings stay editor
@@ -1177,6 +1168,20 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
             val = surf.get(key)
             if isinstance(val, str) and val.strip():
                 surfaces[key] = val.strip()
+        # A FLOOR KIND MAY NOT BE WATER (W1, 2026-08-21). Water is a thing of
+        # the MAP now: it carries its own mirror, bed and flow and it carves the
+        # one heightfield. A room floor that named a water kind used to be a
+        # second, weaker water with its own bake stage, and stripping it here —
+        # loudly, at the one write path — is what makes that impossible rather
+        # than merely discouraged. ONE predicate decides it, the same one the
+        # layer table asks (``terrain_types.is_water_kind``).
+        floor_kind = surfaces.get("floor")
+        if floor_kind:
+            from app.core.terrain_types import is_water_kind
+            if is_water_kind(floor_kind):
+                logger.warning("room layout: floor kind %r is water — dropped; "
+                               "water belongs on the map (W1)", floor_kind)
+                surfaces.pop("floor", None)
         if surfaces:
             out["surfaces"] = surfaces
     ops = raw.get("openings")
@@ -1394,7 +1399,6 @@ _GROUND_FORBIDDEN = (
     "x", "y", "w", "d", "outline", "outline_curves", "openings", "surfaces",
     "level", "rotation", "model_at", "model_offset_y", "floor_offset_y",
     "always_visible", "no_walls", "clip_model", "edge_blend_m",
-    "water_level", "water_depth_m", "shore_ramp_m",
 )
 
 

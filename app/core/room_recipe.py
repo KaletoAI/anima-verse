@@ -864,15 +864,14 @@ def compose_recipe(room: Dict[str, Any],
     if lay.get("clip_model"):
         payload["clip_model"] = True
     # THE FLOOR AS A LAYER OF THE GROUND ("Ein Boden" E5a): how wide this
-    # floor's transition to the ground under it is, and — for a water floor —
-    # where its mirror stands. Carried into the recipe for the SAME reason as
-    # clip_model: only payload fields reach the signature below, so dialling
-    # either has to make the client re-fetch. ``relief_flat`` used to sit here
-    # and is gone with the scene's own relief (user decision 1).
-    for key in ("edge_blend_m", "water_level", "water_depth_m",
-                "shore_ramp_m"):
-        if lay.get(key) is not None:
-            payload[key] = lay[key]
+    # floor's transition to the ground under it is. Carried into the recipe for
+    # the SAME reason as clip_model: only payload fields reach the signature
+    # below, so dialling it has to make the client re-fetch. ``relief_flat``
+    # used to sit here and is gone with the scene's own relief (user decision
+    # 1); the three WATER fields are gone with the zone-water carve (W1) — a
+    # room has no water of its own any more, it only stands on some.
+    if lay.get("edge_blend_m") is not None:
+        payload["edge_blend_m"] = lay["edge_blend_m"]
     # No recipe walls for this room (open zone, pavilion). Read from the
     # recipe like clip_model, so the flag is inside the signature below and
     # toggling the checkbox makes the client re-fetch.
@@ -890,8 +889,8 @@ def compose_recipe(room: Dict[str, Any],
     # Where the room's FLOOR sits, in real metres relative to its storey —
     # same signature reasoning. Since "Ein Boden" (§ A16.9) this is a pure
     # FINE-TRIM dial of one room: it lifts what stands IN the room, it no
-    # longer compensates a second ground, and it is not a waterline
-    # (``layout.water_level`` is).
+    # longer compensates a second ground, and it is not a waterline (a room has
+    # no water since W1 — the painted AREA carries the mirror).
     if lay.get("floor_offset_y") is not None:
         payload["floor_offset_y"] = lay["floor_offset_y"]
     if lay.get("rotation") is not None:

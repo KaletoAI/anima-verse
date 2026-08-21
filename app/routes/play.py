@@ -1298,7 +1298,9 @@ def play_location_scene(location_id: str):
     is the terrain: its height is ``h_final`` and its material is the layer
     bake (``GET /play/terrain-layers``), so what travels here for it is
     ``floor_plan`` — one entry per level-0 room with its polygon, its floor
-    kind and, for a water floor, the mirror the bake carved to.
+    kind and, for a room that stands on painted water, a ``map_water``
+    REFERENCE (``{area_id, kind}``, derived by containment, never stored — a
+    room owns no water since W1).
 
     404 = nothing to compose (no building outline, no room with a layout and
     no building model) — that is the legacy auto-grid case, the client keeps
@@ -2478,9 +2480,10 @@ def get_terrain_route(user=Depends(get_current_user)):
         "types": sorted(effective_catalog().values(),
                         key=lambda t: t["kind"]),
         # A water area additionally carries ``meta.water_level_effective`` —
-        # the mirror height the bake carved with, derived where the author left
-        # ``water_level`` on "auto" (E1, § G4). Output only; the authored
-        # fields are untouched.
+        # the mirror a FLAT consumer draws one plane at, derived where the
+        # author left ``water_level`` on "auto" — and ``meta.water_profile``,
+        # the whole tilted mirror of a flowing water as nine numbers
+        # (§ A16.3, W1). Output only; the authored fields are untouched.
         "areas": with_effective_water_level(
             terrain.with_scatter_props(terrain.list_areas())),
         "sig": terrain.terrain_sig(),
@@ -2505,13 +2508,12 @@ def get_terrain_layers_route(keys: str = "", user=Depends(get_current_user)):
 
     * **without ``keys``** — the INDEX: the layer table, the world-wide COARSE
       id mask (``overview``, what the ground wears beyond the fine tiles),
-      ``tile_keys`` — every 256 m tile a painted shape or a LOCATION FLOOR
-      reaches into — and ``waters``, every ZONE WATER of the world as
-      ``{location_id, room_id, kind, polygon (world metres),
-      water_level_effective}``. A room whose level-0 floor kind is a water
-      surface carves its bed like a painted lake (E5a, § G4), so it gets the
-      same flat mirror from the same routine. Everything not listed is bare
-      ground and costs no request.
+      and ``tile_keys`` — every 256 m tile a painted shape or a LOCATION FLOOR
+      reaches into. Everything not listed is bare ground and costs no request.
+      THE ``waters`` LIST IS GONE (W1): a room floor cannot be water any more,
+      so there are no zone waters to list. Painted water travels where it
+      always did, on the areas of ``GET /play/terrain``, now with its full
+      ``meta.water_profile`` beside ``meta.water_level_effective``.
     * **with ``keys=tx:tz,tx:tz``** — the BATCH: the fine masks of those tiles,
       at most ``terrain_layers.BATCH_MAX`` per request. The keys are the height
       tiles' own (``heightfield.tile_key``), so one want-set steers both

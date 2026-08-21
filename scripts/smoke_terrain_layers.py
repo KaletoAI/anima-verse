@@ -343,7 +343,7 @@ FLOOR_CATALOG = {
 
 def test_location_floors():
     print("\n[10] location floors are the topmost layers (E5a)")
-    floors = TL.world_floors([PLAZA_LOC, HUT_LOC], FLOOR_CATALOG, {})
+    floors = TL.world_floors([PLAZA_LOC, HUT_LOC], FLOOR_CATALOG)
     check("the floors come in PRIORITY order: big plot first, zones before "
           "closed rooms, smallest plot LAST",
           [(f.location_id, f.room_id) for f in floors],
@@ -351,7 +351,7 @@ def test_location_floors():
            ("hut_loc", "hut")])
     check("...and the input order does NOT decide it — the AREA does",
           [(f.location_id, f.room_id) for f in
-           TL.world_floors([HUT_LOC, PLAZA_LOC], FLOOR_CATALOG, {})],
+           TL.world_floors([HUT_LOC, PLAZA_LOC], FLOOR_CATALOG)],
           [("plaza_loc", "plaza"), ("plaza_loc", "hall"),
            ("hut_loc", "hut")])
     model = TL.LayerModel(MEADOW, FLOOR_CATALOG, "grass", floors)
@@ -393,20 +393,20 @@ def test_location_floors():
     ])
     quiet["rooms"][2]["layout"]["level"] = 1
     check("the yard, a kindless zone and a storey-1 room contribute nothing",
-          TL.world_floors([quiet], FLOOR_CATALOG, {}), [])
+          TL.world_floors([quiet], FLOOR_CATALOG), [])
     check("...while a CLOSED room that names no kind still has a floor",
           [f.kind for f in TL.world_floors([_location("c", 400.0, 400.0, 5.0, [
-              _room("box", -2.0, -2.0, 4.0, 4.0, "")])], FLOOR_CATALOG, {})],
+              _room("box", -2.0, -2.0, 4.0, 4.0, "")])], FLOOR_CATALOG)],
           [TL.FLOOR_KIND_DEFAULT])
     check("an UNPLACED location owns no world metre and colours none",
           TL.world_floors([{"id": "nowhere", "rooms": [
-              _room("r", 0.0, 0.0, 2.0, 2.0, "wood")]}], FLOOR_CATALOG, {}), [])
+              _room("r", 0.0, 0.0, 2.0, 2.0, "wood")]}], FLOOR_CATALOG), [])
 
     print("\n[10c] the width is a property of the ROOM, and 0 is a value")
     wide = _location("wide", 500.0, 500.0, 10.0, [
         _room("soft", -5.0, -5.0, 10.0, 10.0, "sand", zone=True, blend=2.5)])
     two = TL.LayerModel(MEADOW, FLOOR_CATALOG, "grass",
-                        TL.world_floors([PLAZA_LOC, wide], FLOOR_CATALOG, {}))
+                        TL.world_floors([PLAZA_LOC, wide], FLOOR_CATALOG))
     check("the SAME kind at two widths is two layers — the shader reads the "
           "width out of the table",
           sorted((l["kind"], l["edge_blend_m"]) for l in two.layers
@@ -511,7 +511,7 @@ def test_three_regions():
     (wood, wood), `a == b`, and the distance is not consulted.
     """
     print("\n[12] two boundaries in one neighbourhood (2026-08-21)")
-    floors = TL.world_floors([TWO_ROOM_LOC], FLOOR_CATALOG, {})
+    floors = TL.world_floors([TWO_ROOM_LOC], FLOOR_CATALOG)
     model = TL.LayerModel([], FLOOR_CATALOG, "grass", floors)
     check("the table: bare ground, then the two floor kinds sorted",
           [(l["index"], l["kind"], l["edge_blend_m"]) for l in model.layers],
@@ -619,8 +619,7 @@ def test_mask_and_scene_agree():
         loc = {**PLAZA_LOC, "yaw_deg": yaw}
         scene = compose_scene(loc, plan_width_m=40.0)
         plan = {f["room_id"]: f for f in scene["floor_plan"]}
-        baked = {f.room_id: f for f in TL.world_floors([loc], FLOOR_CATALOG,
-                                                       {})}
+        baked = {f.room_id: f for f in TL.world_floors([loc], FLOOR_CATALOG)}
         check(f"yaw {yaw}: the same two rooms on both sides",
               sorted(plan), sorted(baked))
         worst = 0.0
@@ -639,9 +638,129 @@ def test_mask_and_scene_agree():
     # RED COUNTER-PROBE: forget the pin transform and a location 100 m out is
     # 100 m wrong — so the agreement above is the transform, not a tautology.
     raw = compose_scene(PLAZA_LOC, plan_width_m=40.0)["floor_plan"][0]
-    baked0 = TL.world_floors([PLAZA_LOC], FLOOR_CATALOG, {})[0]
+    baked0 = TL.world_floors([PLAZA_LOC], FLOOR_CATALOG)[0]
     check("red: the scene frame is NOT the world frame — the pin is 100 m out",
           abs(raw["polygon_world"][0][0] - baked0.polygon[0][0]) > 99.0, True)
+
+
+def test_water_bed_and_edge_law():
+    """[13] WATER WEARS ITS BED, and the top layer owns the edge (W1).
+
+    TWO CLAIMS, both hand-derived from § A16.7.
+
+    (a) THE BED. A water layer keeps its own ``kind`` — the mask has to answer
+        "water here" for the undergrowth gate and for every point query — but
+        what it PAINTS is the ground under the water. Without an authored
+        ``meta.bed_kind`` that is the world's bare ground, which is exactly the
+        substitution the renderer did by itself until now, so nothing looks
+        different until somebody turns the dial. With one, the layer wears that
+        kind's surface AND that kind's transition width, and two ponds of one
+        kind over two beds are TWO layers, because the bed is part of the key.
+
+        The catalog below: grass (default, surface "grass", width 1.5), rock
+        (surface "rock", width 3.0), water (surface "lake", flagged, width
+        1.5). Two water areas, one bare and one on rock. Sorted by (kind, bed),
+        the table is therefore
+
+            0  grass   surface grass  width 1.5  water False
+            1  water   surface grass  width 1.5  water True   bed grass
+            2  water   surface rock   width 3.0  water True   bed rock
+
+        and rank 1 (the bare pond) maps to layer 1, rank 2 (the rock pond) to
+        layer 2. Note what is NOT in the table: "lake", the water kind's own
+        surface, which nothing may paint onto the terrain.
+
+    (b) THE EDGE LAW, confirmed and pinned rather than rebuilt: at a shared
+        edge the LATER-painted layer decides the width. The bake writes that
+        into the pair — A is always the later-painted layer, never "the one I
+        am standing on" — and the shader reads ``b`` off A. So the same two
+        rectangles in the two paint orders give the two widths, and the number
+        the shader would use flips with the order and with nothing else.
+    """
+    print("\n[13] a water layer wears its BED, and the top layer owns the edge")
+    catalog = {
+        "grass": {"kind": "grass", "surface": "grass", "meta": {}},
+        "rock": {"kind": "rock", "surface": "rock",
+                 "meta": {TL.EDGE_BLEND_KEY: 3.0}},
+        "water": {"kind": "water", "surface": "lake",
+                  "meta": {"water": True}},
+    }
+    areas = [
+        {"id": "a_bare", "kind": "water", "z_order": 0,
+         "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]]},
+        {"id": "a_rock", "kind": "water", "z_order": 0,
+         "polygon": [[60, 0], [100, 0], [100, 40], [60, 40]],
+         "meta": {"bed_kind": "rock"}},
+    ]
+    m = TL.LayerModel(areas, catalog, "grass")
+    check("three layers: bare ground and the same water on two beds",
+          [(l["index"], l["kind"], l.get("bed_kind")) for l in m.layers],
+          [(0, "grass", None), (1, "water", "grass"), (2, "water", "rock")])
+    check("the bare pond paints the DEFAULT ground's surface",
+          m.layers[1]["surface"], "grass")
+    check("the rock pond paints ROCK's",
+          m.layers[2]["surface"], "rock")
+    check("red: nothing paints the water kind's own surface onto the terrain",
+          [l["surface"] for l in m.layers if l["surface"] == "lake"], [])
+    check("the bare pond keeps the WATER kind's own width (today's number)",
+          m.layers[1]["edge_blend_m"], TL.EDGE_BLEND_DEFAULT_M)
+    check("…and an authored bed brings its OWN width with it",
+          m.layers[2]["edge_blend_m"], 3.0)
+    check("each area finds its own layer", m.rank_layer, [0, 1, 2])
+    check("both are still WATER for the mask, the gate and every point query",
+          [m.layers[i]["water"] for i in (1, 2)], [True, True])
+    check("…and 'water' is still the answer at a point in either pond",
+          [m.layers[m.layer_at(20.0, 20.0)]["kind"],
+           m.layers[m.layer_at(80.0, 20.0)]["kind"]], ["water", "water"])
+
+    print("\n[13b] ONE predicate decides `water`, for every row of the table")
+    # Not "the table agrees with itself": the flag is recomputed here from
+    # ``terrain_types.is_water_kind`` — the one function § A16.3 names — and
+    # compared row by row, floors included. The second book (the surface
+    # library's material class) is gone; a floor is water only if the terrain
+    # catalog says its kind is.
+    from app.core.terrain_types import is_water_kind
+    floors = TL.world_floors([PLAZA_LOC, HUT_LOC], FLOOR_CATALOG)
+    table = TL.layer_table(AREAS, CATALOG, "grass", floors)
+    check("every row's flag IS is_water_kind(kind, catalog)",
+          [l["water"] for l in table],
+          [bool(is_water_kind(l["kind"], CATALOG)) for l in table])
+    check("…and the floor rows are in that list too",
+          sorted({l["kind"] for l in table}) != sorted({l["kind"]
+                                                        for l in
+                                                        TL.layer_table(
+                                                            AREAS, CATALOG,
+                                                            "grass")}), True)
+
+    print("\n[13c] the EDGE LAW: the LATER-painted layer owns the width")
+    over = [
+        {"id": "a_lower", "kind": "grass", "z_order": 0,
+         "polygon": [[0, 0], [100, 0], [100, 100], [0, 100]]},
+        {"id": "a_upper", "kind": "sand", "z_order": 0,
+         "polygon": [[40, 0], [100, 0], [100, 100], [40, 100]]},
+    ]
+    edge_catalog = {
+        "grass": {"kind": "grass", "surface": "grass",
+                  "meta": {TL.EDGE_BLEND_KEY: 4.0}},
+        "sand": {"kind": "sand", "surface": "sand",
+                 "meta": {TL.EDGE_BLEND_KEY: 0.0}},
+    }
+    top = TL.LayerModel(over, edge_catalog, "path")
+    flip = TL.LayerModel(list(reversed(over)), edge_catalog, "path")
+
+    def width_of(mdl, x, z):
+        """What the shader would use at (x, z): ``b`` of the pair's layer A —
+        i.e. of the LATER-painted of the two, which is the rank the bake
+        already resolves the point to on the winning side."""
+        return mdl.layers[mdl.layer_at(x, z)]["edge_blend_m"]
+
+    check("sand painted over grass: the shared edge is sand's HARD cut",
+          width_of(top, 60.0, 50.0), 0.0)
+    check("…and the same two shapes the other way round give grass's 4 m",
+          width_of(flip, 60.0, 50.0), 4.0)
+    check("red: the two orders really are the same geometry, only re-ranked",
+          [a["polygon"] for a in over],
+          [a["polygon"] for a in reversed(list(reversed(over)))])
 
 
 def main():
@@ -653,8 +772,11 @@ def main():
           [(0, "grass"), (1, "sand"), (2, "water")])
     check("a shape painted in the DEFAULT kind maps back onto layer 0",
           model.rank_layer, [0, 1, 2, 0])
-    check("the surface is the TYPE's own id, never the kind's spelling",
-          [l["surface"] for l in model.layers], ["grass", "sand", "lake"])
+    check("the surface is the TYPE's own id, never the kind's spelling — and "
+          "a WATER layer wears its BED, which here is the bare ground (W1)",
+          [l["surface"] for l in model.layers], ["grass", "sand", "grass"])
+    check("…which is what the water layer NAMES as its bed",
+          [l.get("bed_kind") for l in model.layers], [None, None, "grass"])
     check("water is flagged from the catalog, not from the name",
           [l["water"] for l in model.layers], [False, False, True])
     check("…and the transition width rides with it (sand asked for a hard cut)",
@@ -848,6 +970,7 @@ def main():
     test_location_floors()
     test_mask_and_scene_agree()
     test_three_regions()
+    test_water_bed_and_edge_law()
 
     print("\n[9] the RED counter-probes")
     # (a) THE CANONICAL ORDER. Pair the layers by "the one I am standing on"

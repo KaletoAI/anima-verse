@@ -39,9 +39,14 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from app.core.db import get_connection, transaction
+from app.core.heightfield import (WATER_DEPTH_DEFAULT_M, WATER_DEPTH_MAX_M,
+                                  WATER_DEPTH_MIN_M,
+                                  WATER_SHORE_RAMP_DEFAULT_M,
+                                  WATER_SHORE_RAMP_MAX_M,
+                                  WATER_SHORE_RAMP_MIN_M)
 from app.core.log import get_logger
 from app.core.terrain_layers import EDGE_BLEND_KEY, sanitize_edge_blend
 from app.core.timeutils import utc_now_iso
@@ -140,10 +145,24 @@ DEFAULT_RELIEF_WAVE_M = 32.0
 
 #: The catalog meta key that marks a kind as a WATER SURFACE (E1, § G4) — see
 #: :func:`is_water_kind`. It lives on the TYPE because "is this water" is a
-#: property of the material; the three numbers that shape one lake
-#: (``water_level``, ``water_depth_m``, ``shore_ramp_m``) live on the AREA,
-#: because two lakes in one world stand at two heights.
+#: property of the material, and it is the ONE predicate: table, bake and
+#: sanitizer all ask it and nobody asks anything else (W1, 2026-08-21).
 WATER_META_KEY = "water"
+
+#: THE TWO SHAPE NUMBERS, as DEFAULTS OF THE KIND (W1, 2026-08-21). How deep
+#: this water's bed lies under its mirror and how far inside the rim that full
+#: depth is reached. They used to live only on the AREA, which meant every
+#: painted puddle of a world had to repeat the same two numbers; now the KIND
+#: carries what its water is normally like and a single area may still override
+#: it (``models.terrain._sanitize_water``, area wins). The MIRROR stays on the
+#: area alone — two lakes of one kind stand at two heights, and that is the one
+#: number a kind can never answer.
+WATER_DEPTH_KEY = "water_depth_m"
+SHORE_RAMP_KEY = "shore_ramp_m"
+
+#: …and it is valid for ANY kind, including one created five minutes ago: the
+#: sanitizer whitelists the keys unconditionally and never looks at the name.
+WATER_KIND_KEYS = (WATER_DEPTH_KEY, SHORE_RAMP_KEY)
 
 
 def _shared_path() -> Path:
@@ -315,6 +334,27 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     # that shape it (``models.terrain._sanitize_water``).
     if WATER_META_KEY in meta:
         meta[WATER_META_KEY] = bool(meta[WATER_META_KEY])
+    # …AND THE TWO SHAPE NUMBERS THE KIND DEFAULTS (W1, 2026-08-21): how deep
+    # its bed lies and how wide its shore ramp is. Clamped against the very
+    # limits the area sanitizer clamps against, so "the kind says 2 m" and "this
+    # lake says 2 m" cannot mean two different things. They are whitelisted for
+    # EVERY kind, flagged or not: a kind may be turned into water long after
+    # somebody set the numbers, and a value that survived that edit is one the
+    # author already chose.
+    #
+    # ``shore_ramp_m`` shares the rule ``edge_blend_m`` has: 0 IS A VALUE (the
+    # walled basin, a step instead of a ramp), so it must survive a save — which
+    # is why neither goes through `_clamped_meta_number`.
+    for _key, _low, _high in (
+            (WATER_DEPTH_KEY, WATER_DEPTH_MIN_M, WATER_DEPTH_MAX_M),
+            (SHORE_RAMP_KEY, WATER_SHORE_RAMP_MIN_M, WATER_SHORE_RAMP_MAX_M)):
+        if _key not in meta:
+            continue
+        _num = _finite(meta.get(_key))
+        if _num is None:
+            meta.pop(_key, None)
+        else:
+            meta[_key] = round(min(max(_num, _low), _high), 3)
     # AND ONE MORE since "Ein Boden" (E3, § G3): HOW WIDE the transition from
     # this ground to the one under it is, in metres. It is the number that
     # replaces the renderer's fixed 1.5 m alpha fringe — the look becomes a
@@ -372,6 +412,36 @@ def is_water_kind(kind: str,
         return False
     meta = entry.get("meta")
     return bool(isinstance(meta, dict) and meta.get(WATER_META_KEY))
+
+
+def water_kind_defaults(kind: str,
+                        catalog: Optional[Dict[str, Dict[str, Any]]] = None
+                        ) -> Tuple[float, float]:
+    """``(water_depth_m, shore_ramp_m)`` this KIND declares — the DEFAULTS a
+    painted area of it inherits (W1, 2026-08-21).
+
+    THE ONE PLACE THE KIND'S TWO NUMBERS ARE READ, and the mirror image of
+    :func:`is_water_kind`: it answers from the catalog and never from the name,
+    so a world may call its rivers whatever it likes. A kind that declares
+    neither — including every kind that existed before this round — answers the
+    module defaults, which is exactly what the areas already carved with.
+
+    The AREA still wins over both (``models.terrain._sanitize_water`` keeps its
+    own copy of the key, ``heightfield.water_meta`` prefers it): the kind says
+    what its water is normally like, one lake says what IT is like.
+    """
+    if catalog is None:
+        catalog = effective_catalog()
+    entry = catalog.get((kind or "").strip())
+    meta = entry.get("meta") if isinstance(entry, dict) else None
+    meta = meta if isinstance(meta, dict) else {}
+    depth = _finite(meta.get(WATER_DEPTH_KEY))
+    ramp = _finite(meta.get(SHORE_RAMP_KEY))
+    return (WATER_DEPTH_DEFAULT_M if depth is None
+            else min(max(depth, WATER_DEPTH_MIN_M), WATER_DEPTH_MAX_M),
+            WATER_SHORE_RAMP_DEFAULT_M if ramp is None
+            else min(max(ramp, WATER_SHORE_RAMP_MIN_M),
+                     WATER_SHORE_RAMP_MAX_M))
 
 
 def _world_types() -> Dict[str, Dict[str, Any]]:
