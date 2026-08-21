@@ -299,7 +299,8 @@
         "adjusting the aperture of the canon r5 and testing the autofocus",
         "künstlerische aufnahme machen"
       ],
-      "animation": "idle"
+      "animation": "taking-fotos",
+      "solo": true
     },
     "watching_tv": {
       "prompt": "slumped comfortably on a sofa, legs extended or crossed, arms resting loosely on cushions or holding a remote, head tilted toward the screen",
@@ -509,6 +510,36 @@
         "salsa tanzen"
       ],
       "animation": "salsa",
+      "solo": false
+    },
+    "embracing": {
+      "prompt": "two people in a close embrace, one holding the other protectively, arms wrapped around, heads close together",
+      "synonyms": [
+        "hug",
+        "hugging",
+        "embrace",
+        "umarmen",
+        "umarmung",
+        "in den arm nehmen",
+        "festhalten",
+        "shelter",
+        "hold close"
+      ],
+      "animation": "embrace",
+      "solo": false
+    },
+    "comforting": {
+      "prompt": "one person comforting another, both hands on the other's shoulders, leaning in with a caring expression",
+      "synonyms": [
+        "comfort",
+        "console",
+        "trösten",
+        "troesten",
+        "trost spenden",
+        "hände auf die schultern",
+        "reassure"
+      ],
+      "animation": "comfort",
       "solo": false
     }
   }

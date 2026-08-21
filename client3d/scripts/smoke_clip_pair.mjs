@@ -14,8 +14,8 @@
  * The converter (`app/blender/scripts/cmu_clip.py`) writes both halves in ONE
  * frame: origin at the XZ midpoint of the two roots at the anchor frame, +X
  * pointing from A to B. The sidecar states that frame's numbers; the
- * handshake's are `root_distance_m` 0.738 at `anchor_s` 1.1, A at
- * (−0.369, 0), B at (+0.369, 0) (rounded to 3 decimals in the file). So:
+ * handshake's are `root_distance_m` at `anchor_s` 1.1 with A at
+ * (−d/2, 0) and B at (+d/2, 0) (rounded to 3 decimals in the file). So:
  *
  *   [1] naming/role: `parse` of the two file names yields the halves, the
  *       client indexes them as `handshake__a` / `handshake__b`
@@ -23,19 +23,21 @@
  *       not a/b roles false).
  *
  *   [2] the root path of each half, read from the raw hips position track in
- *       Mixamo centimetres → metres: at `anchor_s` A sits at x = −0.369 and
- *       B at x = +0.369 (±0.02 m — the sidecar rounds, and the client
+ *       Mixamo centimetres → metres: at `anchor_s` A sits at x = −d/2 (0.317 after the contact fit) and
+ *       B at x = +d/2 (±0.02 m — the sidecar rounds, and the client
  *       interpolates between 30 fps keys), both at z = 0 (±0.02); the two
- *       roots are 0.738 m apart (±0.03). At t = 0 they are ~1.98 m apart:
- *       the take starts with the walk towards each other.
+ *       roots `root_distance_m` apart (±0.03). At t = 0 they are 1.98 m minus
+ *       the contact-fit shift apart (the actors started 1.98 m apart; the
+ *       converter moves both halves `contact.shift_m` towards each other so
+ *       the rig's hands meet as the actors' did): the walk-up.
  *
  *   [3] the anchor transformation, the SAME formula on both sides
  *       (`interaction_engine._rotate` ↔ `npcs.tickInteraction`):
  *       x' = ax + x·cos(yaw) + z·sin(yaw), z' = az − x·sin(yaw) + z·cos(yaw).
  *       With the server's yaw for a partner standing in +Z of the actor
  *       (yaw = −π/2, see `scripts/smoke_interaction.py` [2]) and the anchor
- *       at (10, 22), A's root at the anchor moment lands at (10, 22 − 0.369)
- *       and B's at (10, 22 + 0.369): A stands south, B north, 0.738 m apart,
+ *       at (10, 22), A's root at the anchor moment lands at (10, 22 − d/2)
+ *       and B's at (10, 22 + d/2): A stands south, B north, d = `root_distance_m` apart,
  *       the line between them along +Z exactly as the server placed them.
  *
  *   [4] `rootPathAt` clamps: before the first key it answers the first key,
@@ -149,10 +151,18 @@ async function main() {
   near('A at the anchor moment: z', a.z, wantA[1], 0.02);
   near('B at the anchor moment: x', b.x, wantB[0], 0.02);
   near('B at the anchor moment: z', b.z, wantB[1], 0.02);
-  near('roots 0.738 m apart at the anchor', Math.hypot(a.x - b.x, a.z - b.z), geo.root_distance_m, 0.03);
+  near('roots root_distance_m apart at the anchor', Math.hypot(a.x - b.x, a.z - b.z), geo.root_distance_m, 0.03);
   const a0 = rootPathAt(paths.a.path, 0);
   const b0 = rootPathAt(paths.b.path, 0);
-  near('the take starts ~1.98 m apart (the walk-up)', Math.hypot(a0.x - b0.x, a0.z - b0.z), 1.98, 0.05);
+  // The walk-up: the actors started 1.98 m apart; minus the contact-fit shift
+  // (`geometry.contact.shift_m`, 0.106 m — both halves moved towards each
+  // other so the rig's hands meet like the actors') that is what the sidecar
+  // states as the start distance.
+  const startD = Math.hypot(geo.roles.a.start_xz_m[0] - geo.roles.b.start_xz_m[0],
+    geo.roles.a.start_xz_m[1] - geo.roles.b.start_xz_m[1]);
+  near('the take starts 1.98 m minus the contact shift apart', Math.hypot(a0.x - b0.x, a0.z - b0.z),
+    1.98 - (geo.contact?.shift_m ?? 0), 0.05);
+  near('… which is the sidecar start distance', Math.hypot(a0.x - b0.x, a0.z - b0.z), startD, 0.03);
   check('A starts on the −X side, B on +X', a0.x < -0.5 && b0.x > 0.5, `${a0.x.toFixed(2)} / ${b0.x.toFixed(2)}`);
 
   console.log('\n[3] the anchor transformation (server yaw convention)');

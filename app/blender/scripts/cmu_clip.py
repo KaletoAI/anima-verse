@@ -288,9 +288,16 @@ def _solve(arm, take: _Take):
     return [b.name for b in seen], rest, frames, lowest_per_frame
 
 
-def _bake(arm, take: _Take, fps: int, solved, floor_cm: float):
-    """Writes the solved frames into a fresh action on ``arm``; every hips
-    position is lifted by ``-floor_cm`` so the lowest foot touches y = 0."""
+def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
+          hips_scale: float = 1.0, offset=(0.0, 0.0)):
+    """Writes the solved frames into a fresh action on ``arm``.
+
+    Every frame is moved as a whole (rotations untouched): the hips height is
+    multiplied by ``hips_scale`` (the rig's leg length over the actor's — a
+    squat then takes the rig as deep as it took the actor, instead of leaving
+    the rig's longer legs dangling in the air), the whole take is shifted by
+    ``offset`` (x, z) cm (the pair's contact fit) and lifted by ``-floor_cm``
+    so the planted foot touches y = 0."""
     seen, rest, frames, _ = solved
     action = bpy.data.actions.new(name=f"Armature|{take.role or 'solo'}")
     arm.animation_data_create()
@@ -304,9 +311,12 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float):
         return curves[key]
 
     nframes = len(frames)
-    lift = Matrix.Translation(Vector((0.0, -floor_cm, 0.0)))
+    hips_name = PREFIX + "Hips"
     keys = {}   # (path, index) -> list of values
     for P in frames:
+        hips_y = P[hips_name].translation.y
+        lift = Matrix.Translation(Vector((offset[0], hips_y * (hips_scale - 1.0) - floor_cm,
+                                          offset[1])))
         for b in seen:
             R = rest[b.name]
             M = lift @ P[b.name]
@@ -435,21 +445,86 @@ def run(job):
     for take in takes:
         arm = _load_rig(args["rig"])
         solved.append(_solve(arm, take))
-    # The floor is the MEDIAN of the per-frame lowest foot point: while
-    # walking one foot is always planted, so that median is the planted
-    # foot's height; the absolute minimum would be a single toe-off dip and
-    # leave the standing foot hovering (measured 8-9 cm on the handshake).
-    lows = sorted(v for s in solved for v in s[3] if math.isfinite(v))
+    hips_name = PREFIX + "Hips"
+    # LEG RATIO per take: the rig's standing hip height over the actor's,
+    # both measured as "hips above the lowest foot point", median over the
+    # take. The hips translation is multiplied by it, so a deep knee bend
+    # lowers the rig as far as it lowered the actor (salsa finding: the rig,
+    # legs ~9 % longer, kept its hips at 0.59 m where the actor dipped to
+    # 0.45 m — and its feet came off the floor, "sitting in the air").
+    scales = []
+    for take, (_n, _r, frames, lows_t) in zip(takes, solved):
+        rig = sorted(P[hips_name].translation.y - low for P, low in zip(frames, lows_t)
+                     if math.isfinite(low))
+        act = sorted(pose.pos["root"][1] - _cmu.lowest_point_cm(take.sk, pose)
+                     for pose in take.poses)
+        k = (rig[len(rig) // 2] / act[len(act) // 2]) if rig and act and act[len(act) // 2] > 1 else 1.0
+        scales.append(k)
+    geometry["hips_scale"] = [round(k, 4) for k in scales]
+    # CONTACT FIT (pair): at the anchor frame the two closest hands of the
+    # ACTORS are this far apart; the rig's arms are not the actors', so the
+    # same pose leaves its hands farther apart (handshake: 25 cm instead of
+    # 11). Both halves are shifted towards each other along the hand-to-hand
+    # line by half the difference — a constant offset on the whole take, so
+    # nothing else changes.
+    offsets = [(0.0, 0.0) for _ in takes]
+    if len(takes) == 2:
+        ai = geometry["anchor_frame"]
+        a_idx, b_idx = (0, 1) if takes[0].role == "a" else (1, 0)
+        # A contact is a HAND on something: the other hand (handshake), a
+        # shoulder (comfort), the head or the hips (an embrace) — the closest
+        # such pair of the actors at the anchor frame is taken.
+        hands = {"LeftHand": "lhand", "RightHand": "rhand"}
+        targets = {**hands, "LeftArm": "lhumerus", "RightArm": "rhumerus",
+                   "Head": "head", "Hips": "root"}
+        best = None
+        for ha, ca in targets.items():
+            for hb, cb in targets.items():
+                if ha not in hands and hb not in hands:
+                    continue
+                pa = Vector(takes[a_idx].poses[ai].pos[ca])
+                pb = Vector(takes[b_idx].poses[ai].pos[cb])
+                d = (pa - pb).length
+                if best is None or d < best[0]:
+                    best = (d, ha, hb)
+        cmu_d, ha, hb = best
+        ra = solved[a_idx][2][ai][PREFIX + ha].translation
+        rb = solved[b_idx][2][ai][PREFIX + hb].translation
+        rig_d = (ra - rb).length
+        v = Vector((rb.x - ra.x, 0.0, rb.z - ra.z))
+        delta = rig_d - cmu_d
+        if v.length > 1e-6 and delta > 0:
+            v.normalize()
+            offsets[a_idx] = (v.x * delta / 2, v.z * delta / 2)
+            offsets[b_idx] = (-v.x * delta / 2, -v.z * delta / 2)
+        geometry["contact"] = {"hands": [ha, hb], "actor_distance_m": round(cmu_d / 100, 3),
+                               "rig_distance_m": round(rig_d / 100, 3),
+                               "shift_m": round(max(delta, 0.0) / 100, 3)}
+        for role, off in (("a", offsets[a_idx]), ("b", offsets[b_idx])):
+            r = geometry["roles"][role]
+            r["start_xz_m"] = [round(r["start_xz_m"][0] + off[0] / 100, 3),
+                               round(r["start_xz_m"][1] + off[1] / 100, 3)]
+            r["anchor_xz_m"] = [round(r["anchor_xz_m"][0] + off[0] / 100, 3),
+                                round(r["anchor_xz_m"][1] + off[1] / 100, 3)]
+        ga, gb = geometry["roles"]["a"]["anchor_xz_m"], geometry["roles"]["b"]["anchor_xz_m"]
+        geometry["root_distance_m"] = round(math.dist(ga, gb), 3)
+    # The floor is the MEDIAN of the per-frame lowest foot point (after the
+    # hips scaling): while walking one foot is always planted, so that median
+    # is the planted foot's height; the absolute minimum would be a single
+    # toe-off dip and leave the standing foot hovering (8-9 cm, handshake).
+    lows = sorted(low + P[hips_name].translation.y * (k - 1.0)
+                  for (_n, _r, frames, lows_t), k in zip(solved, scales)
+                  for P, low in zip(frames, lows_t) if math.isfinite(low))
     floor_cm = lows[len(lows) // 2] if lows else 0.0
     geometry["rig_floor_shift_cm"] = round(-floor_cm, 2)
     geometry["rig_floor_min_cm"] = round(lows[0] - floor_cm, 2) if lows else 0.0
-    for take, sol in zip(takes, solved):
+    for take, sol, k, off in zip(takes, solved, scales, offsets):
         arm = _load_rig(args["rig"])
         # The solve ran on an earlier load of the rig (gone with the scene
         # reset) — bones are carried by NAME and re-resolved here.
         seen, rest, frames, low = sol
         seen = [arm.data.bones[n] for n in seen]
-        _bake(arm, take, fps, (seen, rest, frames, low), floor_cm)
+        _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off)
         stem = f"{kind}__{take.role}" if take.role else kind
         path = out_dir / f"{stem}.fbx"
         _export(arm, path)

@@ -11,32 +11,45 @@
  "geometry": {
   "anchor_frame": 33,
   "anchor_s": 1.1,
-  "root_distance_m": 0.738,
+  "root_distance_m": 0.634,
   "floor_shift_cm": 3.64,
   "roles": {
    "a": {
     "start_xz_m": [
-     -0.928,
-     0.052
+     -0.876,
+     0.062
     ],
     "anchor_xz_m": [
-     -0.369,
-     0.0
+     -0.317,
+     0.01
     ]
    },
    "b": {
     "start_xz_m": [
-     1.037,
-     -0.199
+     0.985,
+     -0.209
     ],
     "anchor_xz_m": [
-     0.369,
-     0.0
+     0.317,
+     -0.01
     ]
    }
   },
-  "rig_floor_shift_cm": 6.94,
-  "rig_floor_min_cm": -5.54
+  "hips_scale": [
+   1.1526,
+   1.1205
+  ],
+  "contact": {
+   "hands": [
+    "RightHand",
+    "RightHand"
+   ],
+   "actor_distance_m": 0.193,
+   "rig_distance_m": 0.299,
+   "shift_m": 0.106
+  },
+  "rig_floor_shift_cm": -7.34,
+  "rig_floor_min_cm": -7.25
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
