@@ -52,6 +52,15 @@ export class Engine {
   modelEnv: THREE.Texture;
   /** Sun position from the game time (0..24); drives light, colours, sky. */
   private sunAngle = Math.PI * 0.35;   // default: late morning
+  /**
+   * The world clock the sun currently stands for, in hours 0..24 — derived
+   * from `sunAngle` rather than remembered beside it, so the readout of the
+   * ISOLATION panel (`debug3d.ts`) can never disagree with the light it is
+   * describing. Inverts `setGameHour`: `sunAngle = ((h − 6) / 12) · π`.
+   */
+  get gameHour(): number {
+    return (this.sunAngle / Math.PI) * 12 + 6;
+  }
   /** 0 = bright day, 1 = deep night — for window lights and the like. */
   nightFactor = 0;
   onDayNight: ((night: number) => void) | null = null;
@@ -184,7 +193,10 @@ export class Engine {
     // The blend factor reaches 1 at day=0.15 — a continuous handover to the night branch
     if (day > 0.15 && day < 0.35) sky.lerp(skyDusk, (0.35 - day) / 0.2);
     (this.scene.background as THREE.Color).copy(sky);
-    (this.scene.fog as THREE.Fog).color.copy(sky);
+    // The fog can be ABSENT: the isolation panel (`debug3d.ts`, toggle 3) takes
+    // it out of the scene, and a colour written into nothing would crash the
+    // next world-clock poll.
+    if (this.scene.fog) this.scene.fog.color.copy(sky);
     // Water surfaces mirror the sky (Fresnel in the shared material) — that
     // alone turns the lake orange in the evening and dark at night.
     setSurfaceSky(sky.getHex());

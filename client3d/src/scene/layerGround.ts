@@ -154,6 +154,11 @@ function makeLayerArray(): THREE.Vector4[] {
 /** Per layer: edge_blend_m, metres per texture tile, unused, unused. */
 const uLayer = { value: makeLayerArray() };
 
+/** Anisotropic samples the surface array is built with. Named because the
+ *  isolation panel's filtering test (toggle 18) has to put exactly this number
+ *  back when it is switched off again. */
+const SURFACE_ANISOTROPY = 4;
+
 // ── The state this module owns ──────────────────────────────────────────────
 
 let layers: TerrainLayer[] = [];
@@ -162,6 +167,79 @@ let ownedNearId: THREE.DataTexture | null = null;
 let ownedNearSd: THREE.DataTexture | null = null;
 let ownedFarId: THREE.DataTexture | null = null;
 let ownedArray: THREE.DataArrayTexture | null = null;
+
+// ── The isolation switches (`debug3d.ts`, toggles 7 and 18) ─────────────────
+//
+// WHAT THE WORLD SAYS, kept apart from what is BOUND. The payload writes the
+// three `live*` values below; `pushLayerWindows` decides what the shader really
+// gets. Two states can therefore not drift: a terrain signature that lands
+// while the compositor is switched off updates the live set, and switching the
+// toggle back on binds THAT one rather than a copy taken minutes ago.
+
+/** The surface array the payload built — `neutralArray` while there is none. */
+let liveSurf: THREE.Texture = neutralArray;
+/** `uLcNear.w`: the edge length of the fine mask window, 0 = no window. */
+let liveNearN = 0;
+/** `uLcFarSize`: the coarse mask's columns and rows, 0/0 = no coarse mask. */
+let liveFarCols = 0;
+let liveFarRows = 0;
+/** Isolation toggle 7: paint the ground in one flat colour. */
+let lcFlat = false;
+/** Isolation toggle 18: the surface array without mipmaps and without
+ *  anisotropy. */
+let lcLoFilter = false;
+
+/** The ONE place the three switchable uniforms are bound. */
+function pushLayerWindows(): void {
+  uSurf.value = lcFlat ? neutralArray : liveSurf;
+  uNear.value.w = lcFlat ? 0 : liveNearN;
+  uFarSize.value.set(lcFlat ? 0 : liveFarCols, lcFlat ? 0 : liveFarRows);
+}
+
+/**
+ * Switch the layer compositor off: no masks, no surface array, the ground in
+ * ONE flat colour — the heights stay exactly as they were.
+ *
+ * With both windows at size 0 `lcCompose` takes its `else` branch, the layer
+ * pair is (0, 0), and the one neutral texel of `neutralArray` is what the whole
+ * ground is multiplied by. Uniform writes only, so no program is rebuilt.
+ */
+export function setLayerCompositorFlat(on: boolean): void {
+  if (lcFlat === on) return;
+  lcFlat = on;
+  pushLayerWindows();
+}
+
+/**
+ * The texture-filtering test: the surface array with LINEAR minification (no
+ * mip chain) and anisotropy 1, or back to its built state.
+ *
+ * This one is NOT free — three re-uploads the whole array (32 slices at 512²
+ * RGBA in the live world), so expect a hitch on either edge. That is a
+ * transfer, not a compile.
+ */
+export function setLayerSurfaceFiltering(lowRes: boolean): void {
+  if (lcLoFilter === lowRes) return;
+  lcLoFilter = lowRes;
+  applySurfaceFiltering();
+}
+
+/** Bring `liveSurf` to whatever `lcLoFilter` currently asks for. Called on
+ *  every toggle AND after a fresh array was built, so a terrain signature that
+ *  lands while the test is running does not quietly restore the mip chain. */
+function applySurfaceFiltering(): void {
+  const tex = liveSurf;
+  if (tex === neutralArray) return;    // nothing built yet, nothing to filter
+  const minFilter = lcLoFilter ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
+  const anisotropy = lcLoFilter ? 1 : SURFACE_ANISOTROPY;
+  const mips = !lcLoFilter;
+  if (tex.minFilter === minFilter && tex.anisotropy === anisotropy
+      && tex.generateMipmaps === mips) return;
+  tex.minFilter = minFilter;
+  tex.anisotropy = anisotropy;
+  tex.generateMipmaps = mips;
+  tex.needsUpdate = true;
+}
 
 /** The layer table in force — read by the undergrowth gate, which has to turn a
  *  painted kind into the index the mask speaks. */
@@ -265,11 +343,13 @@ export async function setLayerTable(next: readonly TerrainLayer[],
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.generateMipmaps = true;
-  tex.anisotropy = 4;
+  tex.anisotropy = SURFACE_ANISOTROPY;
   tex.needsUpdate = true;
   ownedArray?.dispose();
   ownedArray = tex;
-  uSurf.value = tex;
+  liveSurf = tex;
+  applySurfaceFiltering();
+  pushLayerWindows();
 }
 
 /** Take over the COARSE world-wide id mask — what the ground wears beyond the
@@ -281,13 +361,17 @@ export function setLayerOverview(ov: TerrainLayerOverview | null): void {
   if (!ov || !(ov.cols > 1) || !(ov.rows > 1) || !(ov.step_m > 0) || !ov.id) {
     uFarId.value = neutralId;
     uFar.value.set(0, 0, 1, 0);
-    uFarSize.value.set(0, 0);
+    liveFarCols = 0;
+    liveFarRows = 0;
+    pushLayerWindows();
     return;
   }
   const bytes = base64Bytes(ov.id);
   if (!bytes || bytes.length < ov.cols * ov.rows * 2) {
     uFarId.value = neutralId;
-    uFarSize.value.set(0, 0);
+    liveFarCols = 0;
+    liveFarRows = 0;
+    pushLayerWindows();
     return;
   }
   const tex = new THREE.DataTexture(bytes, ov.cols, ov.rows,
@@ -303,7 +387,9 @@ export function setLayerOverview(ov: TerrainLayerOverview | null): void {
   ownedFarId = tex;
   uFarId.value = tex;
   uFar.value.set(ov.origin_x, ov.origin_z, ov.step_m, 0);
-  uFarSize.value.set(ov.cols, ov.rows);
+  liveFarCols = ov.cols;
+  liveFarRows = ov.rows;
+  pushLayerWindows();
 }
 
 /**
@@ -328,6 +414,8 @@ export function setLayerTiles(tiles: Map<string, TerrainLayerTile>,
     uNearId.value = neutralId;
     uNearSd.value = neutralSd;
     uNear.value.set(0, 0, 1, 0);
+    liveNearN = 0;
+    pushLayerWindows();
     return;
   }
   const idTex = new THREE.DataTexture(win.id, win.idSize, win.idSize,
@@ -356,6 +444,8 @@ export function setLayerTiles(tiles: Map<string, TerrainLayerTile>,
   uNearId.value = idTex;
   uNearSd.value = sdTex;
   uNear.value.set(win.originX, win.originZ, win.idStep, win.idSize);
+  liveNearN = win.idSize;
+  pushLayerWindows();
   uNearSdGeom.value.set(win.originX, win.originZ, win.sdStep, win.sdSize);
   uSdCode.value.set(win.sdZero, win.sdCodesPerM);
   uBandM.value = win.sdBandM;
@@ -376,9 +466,12 @@ export function disposeLayerGround(): void {
   uNearId.value = neutralId;
   uNearSd.value = neutralSd;
   uFarId.value = neutralId;
-  uSurf.value = neutralArray;
   uNear.value.set(0, 0, 1, 0);
-  uFarSize.value.set(0, 0);
+  liveSurf = neutralArray;
+  liveNearN = 0;
+  liveFarCols = 0;
+  liveFarRows = 0;
+  pushLayerWindows();
 }
 
 /** base64 -> bytes (browser). */

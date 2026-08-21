@@ -684,6 +684,7 @@ float tlodHeight( vec2 p, float nodeStep ) {
 export function terrainLodGlsl(): string {
   return `${terrainLodSampleGlsl()}
 uniform float uTlodRange[ ${MAX_LOD_LEVELS} ];
+uniform float uTlodNoMorph;
 attribute vec4 iNode;
 varying vec2 vTlodXZ;
 
@@ -712,7 +713,9 @@ void tlodCompute() {
   // The distance is taken to the FINEST ground under the vertex — one number
   // per world point, so every node that owns this point reads the same λ.
   float d = distance( vec3( p0.x, tlodHeight( p0, 0.0 ), p0.y ), cameraPosition );
-  float t = max( tlodLambda( d ) - iNode.w, 0.0 );
+  // The isolation panel's toggle 9 multiplies the morph factor out entirely:
+  // t = 0 puts every vertex on its own node's lattice (k = f = 0, gm = gi).
+  float t = max( tlodLambda( d ) - iNode.w, 0.0 ) * ( 1.0 - uTlodNoMorph );
   float k = min( floor( t ), ${MAX_LOD_LEVELS - 1}.0 );
   float f = t - k;
   float m1 = exp2( k );
@@ -776,9 +779,13 @@ void tlodCompute() {
 export function terrainLodNormalGlsl(): string {
   return `
 uniform float uTlodNormalSpan;
+uniform float uTlodFlatNormal;
 varying vec2 vTlodXZ;
 
 vec3 tlodNormalAt( vec2 p ) {
+  // The isolation panel's toggle 6: the ground is shaded as if it were level,
+  // which tells a SHADING shimmer from a geometric one.
+  if ( uTlodFlatNormal > 0.5 ) return vec3( 0.0, 1.0, 0.0 );
   float s = max( uTlodNormalSpan, 1e-3 );
   float hx = tlodHeight( vec2( p.x + s, p.y ), 0.0 ) - tlodHeight( vec2( p.x - s, p.y ), 0.0 );
   float hz = tlodHeight( vec2( p.x, p.y + s ), 0.0 ) - tlodHeight( vec2( p.x, p.y - s ), 0.0 );
@@ -951,6 +958,26 @@ const uRange = { value: new Array<number>(MAX_LOD_LEVELS).fill(0) };
  *  `patchTerrainLod` beside `uTlodRange`; see `terrainLodNormalGlsl` for why it
  *  is one fixed number and not a function of the LOD. */
 const uNormalSpan = { value: FALLBACK_BASE_STEP_M };
+/**
+ * THE TWO ISOLATION SWITCHES (`debug3d.ts`, toggles 6 and 9) — uniforms and
+ * never defines, so flipping one costs no recompile and the very next frame is
+ * drawn by the same program. Both are 0 in every normal run and the shader
+ * spends one comparison each on them.
+ *
+ * `uFlatNormal` = 1 makes `tlodNormalAt` answer straight up, which separates a
+ * shading defect from a geometry one; `uNoMorph` = 1 forces the per-vertex
+ * morph factor to 0, which separates the geomorph from everything else (and
+ * opens the LOD cracks the morph exists to close — that is the reading, not a
+ * side effect).
+ */
+const uFlatNormal = { value: 0 };
+const uNoMorph = { value: 0 };
+
+/** Flip the two switches above. Only the ISOLATION panel calls this. */
+export function setTerrainLodDebug(o: { flatNormal?: boolean; noMorph?: boolean }): void {
+  if (o.flatNormal !== undefined) uFlatNormal.value = o.flatNormal ? 1 : 0;
+  if (o.noMorph !== undefined) uNoMorph.value = o.noMorph ? 1 : 0;
+}
 
 /**
  * Hang the eight shared height uniforms into a shader that includes
@@ -1015,6 +1042,8 @@ export function patchTerrainLod(mat: THREE.Material): void {
     bindTerrainLodUniforms(shader.uniforms as unknown as Record<string, unknown>);
     (shader.uniforms as unknown as Record<string, unknown>).uTlodRange = uRange;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodNormalSpan = uNormalSpan;
+    (shader.uniforms as unknown as Record<string, unknown>).uTlodNoMorph = uNoMorph;
+    (shader.uniforms as unknown as Record<string, unknown>).uTlodFlatNormal = uFlatNormal;
     if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
     shader.vertexShader = terrainLodGlsl() + shader.vertexShader
       .replace('#include <uv_vertex>', `\ttlodCompute();
@@ -1101,6 +1130,14 @@ export interface TerrainLod {
   setMaterial(mat: THREE.Material): void;
   /** How many nodes the last selection drew, for the performance readout. */
   nodeCount(): number;
+  /**
+   * STOP RE-SELECTING (`debug3d.ts`, toggle 10). While frozen the per-frame
+   * quadtree selection is skipped and the instance buffer of the frame the
+   * switch was flipped keeps being drawn, however the camera moves. The one way
+   * to ask "does the shimmer come from the selection changing?" — a picture that
+   * still shimmers with the node set nailed down cannot blame the quadtree.
+   */
+  setFrozen(on: boolean): void;
   dispose(): void;
 }
 
@@ -1371,10 +1408,14 @@ export function createTerrainLod(): TerrainLod {
     nodes = picked.length;
   }
 
+  /** The isolation panel's LOD freeze — see `TerrainLod.setFrozen`. */
+  let frozen = false;
+
   mesh.onBeforeRender = (renderer, _scene, camera) => {
     // Shadow passes arrive with the light's orthographic camera; the terrain
     // does not cast, so there is nothing to select for them.
     if (!(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return;
+    if (frozen) return;
     viewportPx = renderer.getDrawingBufferSize(bufferSize).y;
     update(camera);
   };
@@ -1419,6 +1460,7 @@ export function createTerrainLod(): TerrainLod {
       mesh.material = mat;
     },
     nodeCount: () => nodes,
+    setFrozen(on) { frozen = on; },
     dispose() {
       geo.dispose();
       placeholder.dispose();

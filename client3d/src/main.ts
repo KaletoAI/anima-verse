@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import * as api from './api';
-import { initDebug3d } from './debug3d';
+import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
@@ -739,6 +739,18 @@ async function startApp(username: string, role: string) {
   const tiles = new Map<string, Tile>();
   // Numeric on-screen probe for remote diagnosis — inert without ?debug3d=1.
   initDebug3d(engine, tiles);
+  // …and its live sibling: the ISOLATION panel (Shift+I), which switches each
+  // layer of the picture off one at a time. Always available, because the
+  // defects it exists for are the ones nobody else can reproduce. It costs
+  // nothing while every switch is off — one frame hook that returns on an
+  // empty set.
+  initIsolation({
+    engine,
+    ground: terrainGround,
+    backdrop: backdrop.group,
+    figures: npcs.group,
+    tiles,
+  });
 
   // --- The open detail view: ONE explicit singleton (Etappe 3) --------------
   // Every downstream consumer (interior visibility, labels, roof fade, door

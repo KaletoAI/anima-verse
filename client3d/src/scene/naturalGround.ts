@@ -128,6 +128,30 @@ export const ngFieldSize = { value: new THREE.Vector2(1, 1) };
  */
 export const ngStrength = { value: 0 };
 
+/** What the WORLD says the strength is — 1 once a shaped relief has arrived,
+ *  0 while there is none. `ngStrength` is this, unless the isolation panel has
+ *  switched the stage off; keeping the two apart is what lets the panel restore
+ *  the right value even when a height field landed while it was off. */
+let ngLive = 0;
+/** The isolation panel's toggle 8 (`debug3d.ts`). */
+let ngDebugOff = false;
+
+/** The ONE place `ngStrength` is written. */
+function pushNgStrength(): void {
+  ngStrength.value = ngDebugOff ? 0 : ngLive;
+}
+
+/**
+ * Switch the whole natural-ground chain off (height AO, tint, anti-tiling) —
+ * the isolation panel and nothing else. A uniform, so no program is rebuilt;
+ * switching it back on restores whatever the world last said, not whatever it
+ * said when the toggle was flipped.
+ */
+export function setNaturalGroundDebugOff(on: boolean): void {
+  ngDebugOff = on;
+  pushNgStrength();
+}
+
 /** The texture we own and have to free before replacing it. The neutral one is
  *  never disposed: it is the fallback every future field falls back to. */
 let ownedField: THREE.DataTexture | null = null;
@@ -182,7 +206,8 @@ export function setNaturalGroundField(field: WorldHeightField | null): void {
   ngHeightTex.value = tex;
   ngField.value.set(field.origin_x, field.origin_z, step, 0);
   ngFieldSize.value.set(cols, rows);
-  ngStrength.value = 1;
+  ngLive = 1;
+  pushNgStrength();
 }
 
 /** Back to "no relief": the stage is neutral and the GPU memory is gone. */
@@ -192,7 +217,8 @@ function releaseField(): void {
   ngHeightTex.value = neutralFallback;
   ngField.value.set(0, 0, 1, 0);
   ngFieldSize.value.set(1, 1);
-  ngStrength.value = 0;
+  ngLive = 0;
+  pushNgStrength();
 }
 
 /** Materials that already carry the patch. Applying it twice would declare

@@ -868,6 +868,29 @@ export interface Ground {
   passableAt(x: number, z: number): boolean;
   /** Counts rebuilds — a cheap "has the ground changed" for redraw signatures. */
   revision(): number;
+  /** How many quadtree nodes the terrain drew in the last frame. */
+  terrainNodeCount(): number;
+  /** How many FINE height tiles (§ A16.3) are held right now. */
+  heightTileCount(): number;
+  /** The CDLOD terrain's own material, for the isolation panel's wireframe
+   *  test — `null` while the placeholder is still standing. */
+  terrainMaterial(): THREE.Material | null;
+  /** Freeze the terrain's quadtree selection (`TerrainLod.setFrozen`). */
+  setTerrainFrozen(on: boolean): void;
+  /**
+   * THE SCENE OBJECTS PER ISOLATION CATEGORY (`debug3d.ts`, toggles 11-13
+   * and 17) — rebuilt on every call, never a live array: the scatter entries
+   * and their impostor layers come and go with the LOD window, and a list
+   * handed out once would soon name meshes that are no longer in the scene.
+   *
+   * Only for the debug panel. Nothing in the game reads it.
+   */
+  debugParts(): {
+    terrain: THREE.Object3D[];
+    water: THREE.Object3D[];
+    undergrowth: THREE.Object3D[];
+    scatter: THREE.Object3D[];
+  };
   dispose(): void;
 }
 
@@ -2981,6 +3004,29 @@ export function createGround(): Ground {
     typeAt,
     passableAt: (x, z) => typeAt(x, z).passable,
     revision: () => rev,
+    terrainNodeCount: () => terrain.nodeCount(),
+    heightTileCount: () => relief.tiles.size,
+    // The terrain is ONE mesh with ONE material by construction (`terrainLod`),
+    // so the array case cannot occur — it is narrowed rather than handled.
+    terrainMaterial: () => (Array.isArray(terrain.mesh.material)
+      ? terrain.mesh.material[0] ?? null : terrain.mesh.material ?? null),
+    setTerrainFrozen: (on) => terrain.setFrozen(on),
+    debugParts() {
+      const scatter: THREE.Object3D[] = [];
+      for (const a of areaMeshes) {
+        for (const prop of a.scatter) {
+          scatter.push(prop.low);
+          if (prop.high) scatter.push(prop.high);
+          if (prop.impostor) scatter.push(prop.impostor.mesh);
+        }
+      }
+      return {
+        terrain: [terrain.mesh],
+        water: [...waterMeshes],
+        undergrowth: [undergrowth.group],
+        scatter,
+      };
+    },
     dispose() {
       clearAreas();
       // The terrain's height pyramids are shared module uniforms and outlive
