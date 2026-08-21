@@ -249,6 +249,20 @@ def delete_inbox(name: str) -> bool:
     return True
 
 
+def preview_dir() -> Path:
+    """Where a probe conversion lands (inside the inbox, hidden, overwritten
+    by the next probe)."""
+    return get_clips_inbox_dir() / ".preview"
+
+
+def preview_clip_path(name: str) -> Optional[Path]:
+    """A probe clip by file name — only the names the probe writes."""
+    if name not in ("preview.fbx", "preview__a.fbx", "preview__b.fbx"):
+        return None
+    p = preview_dir() / name
+    return p if p.is_file() else None
+
+
 def target_dir(target: str) -> Path:
     """The clip library an import writes into."""
     return get_animation_clips_dir() if target == "free" else get_licensed_clips_dir()
@@ -262,7 +276,8 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
                loops: Optional[bool] = None,
                target: str = "licensed", redistributable: bool = False,
                out_dir: Optional[Path] = None, rig: Optional[Path] = None,
-               fps: int = 30, timeout_s: int = 900) -> Dict[str, Any]:
+               fps: int = 30, timeout_s: int = 900,
+               preview: bool = False) -> Dict[str, Any]:
     """Retargets one inbox file (or a pair) onto the library rig and writes the
     clip into the chosen library.
 
@@ -274,6 +289,11 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
 
     Everything refusable raises ``ClipImportError``; "the kind is already
     there" raises ``ClipKindExists`` so a route can answer 409.
+
+    ``preview`` runs the very same conversion into the inbox's ``.preview``
+    folder (kind ``preview``), touches no library and no cache, and returns
+    the URLs a viewer plays — so the offset, window and reference pose can be
+    judged BEFORE anything is imported.
     """
     kind = cmu_import.validate_kind(kind)
     target = str(target or "licensed").strip().lower()
@@ -310,7 +330,7 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
     cset = str(clip_set or "").strip().lower()
     if cset and ("/" in cset or "\\" in cset or cset in (".", "..")):
         raise ClipImportError("set must be a plain directory name")
-    if not overwrite and kind in existing_kinds(cset, target):
+    if not preview and not overwrite and kind in existing_kinds(cset, target):
         raise ClipKindExists(
             f"'{kind}' already exists in the {target} library"
             f"{f' (set {cset})' if cset else ''} — tick overwrite to replace it")
@@ -342,6 +362,22 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
     if not st["executable"]:
         raise ClipImportError("no Blender executable found "
                               "(image_generation.blender_executable)")
+    if preview:
+        params["kind"] = "preview"
+        out = preview_dir()
+        out.mkdir(parents=True, exist_ok=True)
+        for stale in out.glob("preview*"):
+            stale.unlink()
+        res = runner.run("fbx_clip", inputs=inputs, params=params, out_dir=out,
+                         timeout_s=timeout_s)
+        if not res["ok"]:
+            raise ClipImportError(str(res.get("error") or "blender run failed"))
+        base = "/assets/clips-inbox/preview-clip/"
+        urls = ({"a": base + "preview__a.fbx", "b": base + "preview__b.fbx"}
+                if len(paths_in) == 2 else {"solo": base + "preview.fbx"})
+        return {"preview": True, "pair": len(paths_in) == 2, "urls": urls,
+                "sidecar": res.get("data") or {}, "seconds": res.get("seconds") or 0.0}
+
     out = Path(out_dir) if out_dir else target_dir(target)
     if cset:
         out = out / cset

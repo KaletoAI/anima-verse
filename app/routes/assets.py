@@ -335,10 +335,36 @@ def delete_clips_inbox(name: str,
     return {"name": name, "removed": removed}
 
 
+@router.post("/clips-inbox/preview")
+async def post_clips_inbox_preview(request: Request,
+                                   _: Dict[str, Any] = Depends(require_admin)
+                                   ) -> Dict[str, Any]:
+    """Probe conversion with the import form's values — same body as
+    ``/clips-inbox/import`` — into the inbox's hidden preview folder; answers
+    the URLs the preview plays. Nothing enters a library."""
+    return await _clips_inbox_convert(request, preview=True)
+
+
+@router.get("/clips-inbox/preview-clip/{name}")
+def get_clips_inbox_preview_clip(name: str, request: Request,
+                                 _: Dict[str, Any] = Depends(require_admin)):
+    from app.core import fbx_import
+    path = fbx_import.preview_clip_path(name)
+    if path is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return etag_file_response(path, request, "application/octet-stream",
+                              cache_control="no-cache")
+
+
 @router.post("/clips-inbox/import")
 async def post_clips_inbox_import(request: Request,
                                   _: Dict[str, Any] = Depends(require_admin)
                                   ) -> Dict[str, Any]:
+    """Imports one inbox file — or a pair — into a clip library, synchronously."""
+    return await _clips_inbox_convert(request, preview=False)
+
+
+async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any]:
     """Imports one inbox file — or a pair — into a clip library, synchronously.
 
     Body: ``{kind, files: [name] | [a, b], rest_file?, set?, start_s?, end_s?,
@@ -367,6 +393,8 @@ async def post_clips_inbox_import(request: Request,
         raise HTTPException(status_code=400, detail="files must be a list of names")
     target = str(body.get("target") or "licensed").strip().lower()
     redistributable = bool(body.get("redistributable"))
+    if preview:
+        target, redistributable = "licensed", False      # a probe enters no library
     if target == "free" and not redistributable:
         raise HTTPException(
             status_code=400,
@@ -384,7 +412,7 @@ async def post_clips_inbox_import(request: Request,
             offset_b_m=[float(v) for v in (body.get("offset_b_m") or [0, 0, 0])][:3]
             if isinstance(body.get("offset_b_m"), list) else None,
             loops=None if body.get("loops") is None else bool(body.get("loops")),
-            target=target, redistributable=redistributable)
+            target=target, redistributable=redistributable, preview=preview)
     except fbx_import.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ClipImportError as e:

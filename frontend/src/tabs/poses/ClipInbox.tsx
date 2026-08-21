@@ -207,6 +207,49 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const unknownRig = !!entry && !entry.probe.skeleton_family
   const isPair = !!second
 
+  /** probe conversion — the preview plays exactly what the form would import */
+  const [probe, setProbe] = useState<{ urls: { a?: string; b?: string; solo?: string }; seq: number; seconds: number } | null>(null)
+  const [probing, setProbing] = useState(false)
+
+  const formBody = useCallback((): Record<string, unknown> | null => {
+    if (!entry) return null
+    const files = isPair ? [entry.name, second] : [entry.name]
+    return {
+      kind: kind.trim().toLowerCase() || 'preview',
+      files,
+      rest_file: restFile || null,
+      set: clipSet,
+      start_s: Number(startS) || 0,
+      end_s: endS === '' ? null : Number(endS),
+      loop_s: loopOn && !isPair ? Number(loopS) || 1 : null,
+      in_place: inPlace && !isPair,
+      offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
+      overwrite,
+      target,
+      redistributable: target === 'free' ? redistributable : false,
+    }
+  }, [clipSet, endS, entry, inPlace, isPair, kind, loopOn, loopS, offFwd, offSide, offUp,
+      overwrite, redistributable, restFile, second, startS, target])
+
+  const runProbe = useCallback(async () => {
+    const body = formBody()
+    if (!body || probing) return
+    setProbing(true)
+    try {
+      const r = await apiPost<{ urls: { a?: string; b?: string; solo?: string }; seconds: number }>(
+        '/assets/clips-inbox/preview', body)
+      // cache-bust: the probe files are overwritten on every run
+      const bust = (u?: string) => (u ? `${u}?v=${Date.now()}` : undefined)
+      setProbe((prev) => ({ urls: { a: bust(r.urls.a), b: bust(r.urls.b), solo: bust(r.urls.solo) },
+        seq: (prev?.seq || 0) + 1, seconds: r.seconds || 0 }))
+      setImported(null)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setProbing(false)
+    }
+  }, [formBody, probing, t, toast])
+
   const runImport = useCallback(async () => {
     if (!entry || importing) return
     setImporting(true)
@@ -498,6 +541,21 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
                 : t('One Blender run of a few seconds; the new kind is selectable in the pose editor right after.')}
             </div>
 
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button type="button" className="ga-btn" disabled={probing || !entry}
+                onClick={() => void runProbe()}>
+                {probing ? t('Converting preview…') : t('Preview with these settings')}
+              </button>
+              <span className="ga-hint">
+                {t('Runs the conversion into a scratch folder — offset, window and reference pose exactly as the import would write them. Nothing is imported.')}
+              </span>
+            </div>
+            {probe && !imported ? (
+              <>
+                <ClipPreview key={`probe:${probe.seq}`} urls={probe.urls} height={300} />
+                <div className="ga-hint">{t('Preview of the current settings')} ({probe.seconds.toFixed(1)} s)</div>
+              </>
+            ) : null}
             {imported ? (
               <ClipPreview key={`${imported.kind}:${imported.seq}`} kind={imported.kind} height={300} />
             ) : null}
