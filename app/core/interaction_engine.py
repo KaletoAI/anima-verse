@@ -41,6 +41,9 @@ logger = get_logger(__name__)
 # Farther apart than this and the pair is not "together" — the clip's own
 # approach (the handshake take starts 2 m apart) covers the rest visually.
 MAX_START_DISTANCE_M = 4.5
+# How long a LOOPING pair clip runs (game seconds) — the clip itself is a
+# cycle of a second or two; the interaction is the scene, not the cycle.
+LOOP_INTERACTION_S = 30.0
 
 
 # ------------------------------------------------------------------ reading
@@ -90,6 +93,10 @@ def payload_for(character_name: str, profile: Dict[str, Any],
         "started_at_game": inter["started_at_game"],
         "elapsed_s": st["elapsed_s"],
         "duration_s": st["duration_s"],
+        # the clip's own length and whether it cycles — a looping clip is
+        # replayed (elapsed mod clip length) for the whole duration
+        "clip_duration_s": float(inter.get("clip_duration_s") or st["duration_s"]),
+        "loop": bool(inter.get("loop")),
         "rate": round(float(rate or 0.0), 4),
     }
 
@@ -153,6 +160,12 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
     duration = float(meta.get("duration_s") or 0.0)
     if duration <= 0:
         raise ValueError(f"pair clip '{kind}' has no sidecar duration")
+    # A cycle (sidecar ``loop``) is repeated for LOOP_INTERACTION_S game
+    # seconds — a 0.5 s cycle played once was a blink at any game speed.
+    clip_duration = duration
+    loop = bool(meta.get("loop"))
+    if loop:
+        duration = max(duration, LOOP_INTERACTION_S)
 
     profiles = {n: get_character_profile(n) or {} for n in (actor, partner)}
     for name, prof in profiles.items():
@@ -188,6 +201,7 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
             "id": inter_id, "kind": kind, "role": role, "partner": other,
             "pose_key": pose_key, "anchor": anchor,
             "started_at_game": started, "duration_s": round(duration, 3),
+            "clip_duration_s": round(clip_duration, 3), "loop": loop,
         }
         save_character_profile(name, prof)
         # The game-state position is where the clip holds the figure at the

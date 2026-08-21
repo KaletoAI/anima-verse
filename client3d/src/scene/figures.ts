@@ -1376,7 +1376,9 @@ export class Figure {
     this.terrainClip = false;
     this.sink = 0;
     const duration = action.getClip().duration || 1;
-    const want = Math.min(Math.max(t, 0), duration);
+    // an interaction may run longer than its clip (a looping cycle, § A8a):
+    // the clip repeats, the game clock keeps counting
+    const want = Math.max(t, 0) % duration;
     if (this.current !== action) {
       action.reset().fadeIn(0.25).play();
       action.time = want;
@@ -1385,8 +1387,10 @@ export class Figure {
       this.currentKind = clipName;
       this.root.userData.clipKind = clipName;
       this.root.userData.clipBound = true;
-    } else if (Math.abs(action.time - want) > PAIR_RESYNC_S) {
-      action.time = want;
+    } else {
+      // drift on the circle: the action's own time wraps at the clip end
+      const raw = Math.abs(action.time - want);
+      if (Math.min(raw, duration - raw) > PAIR_RESYNC_S) action.time = want;
     }
     action.timeScale = rate;
     return true;

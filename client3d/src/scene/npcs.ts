@@ -172,9 +172,12 @@ export interface PairPlay {
   /** `<kind>__<role>` — the clip half this figure plays */
   clip: string;
   anchor: { x: number; z: number; yaw: number };
-  /** clip time in game seconds */
+  /** interaction time in game seconds */
   elapsed: number;
   duration: number;
+  /** the clip's own length — a looping clip replays every clipDuration */
+  clipDuration: number;
+  loop: boolean;
   /** game seconds per real second (0 = frozen) */
   rate: number;
   stamp: number;
@@ -845,6 +848,7 @@ export class NpcManager {
       npc.interaction = {
         id: it.id, clip, anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw },
         elapsed: it.elapsed_s, duration: it.duration_s, rate: it.rate ?? 0, stamp,
+        clipDuration: it.clip_duration_s || it.duration_s, loop: !!it.loop,
       };
       npc.route = null;
       npc.waypoints = [];
@@ -869,9 +873,11 @@ export class NpcManager {
     const it = npc.interaction!;
     if (!npc.figure || !this.figures) return false;
     it.elapsed = Math.min(it.duration || Infinity, it.elapsed + dt * it.rate);
-    const root = this.figures.pairRootAt(it.clip, it.elapsed);
+    // clip time: a cycle replays, a one-shot holds its last frame
+    const clipT = it.loop && it.clipDuration > 0 ? it.elapsed % it.clipDuration : it.elapsed;
+    const root = this.figures.pairRootAt(it.clip, clipT);
     if (!root) return false;
-    if (!npc.figure.playPair(it.clip, it.elapsed, it.rate)) return false;
+    if (!npc.figure.playPair(it.clip, clipT, it.rate)) return false;
     const c = Math.cos(it.anchor.yaw);
     const s = Math.sin(it.anchor.yaw);
     const x = it.anchor.x + root.x * c + root.z * s;

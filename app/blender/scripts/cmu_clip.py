@@ -647,6 +647,10 @@ def run_takes(takes, args, fps, source):
         "source_fps": float(args.get("source_fps") or _cmu.CMU_FPS),
         "frames": nframes,
         "duration_s": round(nframes / fps, 3),
+        # A clip that CLOSES into a cycle — cut as one here, or declared by
+        # the source (a pack's "…Loop" file). A consumer repeats it for the
+        # interaction's duration instead of playing it once.
+        "loop": bool(loop or args.get("loops")),
         "geometry": geometry,
         "source": source,
     }

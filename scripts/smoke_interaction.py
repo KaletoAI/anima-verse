@@ -45,6 +45,11 @@ Hand-derived expectations:
   [7] The worldmap payload carries the ``interaction`` block on both
       characters while it runs (anchor, role, elapsed), and null after.
 
+  [8] A pair clip whose sidecar says ``loop`` (a pack's 0.5 s cycle) runs
+      for LOOP_INTERACTION_S game seconds — the payload says so
+      (``loop``, ``clip_duration_s`` 0.5) and a client replays the cycle;
+      after 5 s it is still running.
+
 Usage:  ./.venv/bin/python scripts/smoke_interaction.py
 """
 import json
@@ -99,6 +104,16 @@ def near(a, b, eps=1e-3) -> bool:
                  "roles": {"a": {"anchor_xz_m": [-0.3, 0.0]},
                            "b": {"anchor_xz_m": [0.3, 0.0]}}}}), encoding="utf-8")
 
+# A LOOPING pair (a pack's 0.5 s cycle): the interaction must run for
+# LOOP_INTERACTION_S game seconds, not for one cycle.
+(CLIPS / "sway__a.fbx").write_bytes(b"a")
+(CLIPS / "sway__b.fbx").write_bytes(b"b")
+(CLIPS / "sway.json").write_text(json.dumps({
+    "kind": "sway", "pair": True, "fps": 30, "frames": 15, "duration_s": 0.5, "loop": True,
+    "geometry": {"anchor_frame": 0, "root_distance_m": 0.2,
+                 "roles": {"a": {"anchor_xz_m": [-0.1, 0.0]}, "b": {"anchor_xz_m": [0.1, 0.0]}}}}),
+    encoding="utf-8")
+
 # A private pose catalog for the smoke: the real one must not be edited.
 CAT = Path(tempfile.mkdtemp(prefix="interaction-smoke-cat-"))
 _orig_catalog_path = pose_catalog.catalog_path
@@ -114,6 +129,7 @@ pose_catalog.catalog_path = _smoke_catalog_path
     "embracing": {"prompt": "two people hugging", "synonyms": ["hug"],
                   "animation": "hug", "solo": False},
     "kissing": {"prompt": "kissing", "synonyms": [], "animation": "kiss", "solo": False},
+    "swaying": {"prompt": "swaying together", "synonyms": [], "animation": "sway", "solo": False},
 }}), encoding="utf-8")
 pose_catalog.reload_catalogs()
 
@@ -151,13 +167,13 @@ new_character("Dee", 500.0, 0.0, FAR)
 
 # ── [1] discovery ───────────────────────────────────────────────────────
 print("[1] clip discovery + partner poses")
-check("pair_kinds finds hug", pair_kinds() == ["hug"], str(pair_kinds()))
+check("pair_kinds finds hug and sway", pair_kinds() == ["hug", "sway"], str(pair_kinds()))
 check("'embracing' is a partner pose with kind hug",
       ie.pair_kind_for_pose("embracing") == "hug")
 check("'standing' is not", ie.pair_kind_for_pose("standing") == "")
 check("'kissing' (no clip pair) is not", ie.pair_kind_for_pose("kissing") == "")
-check("partner_poses lists exactly embracing",
-      ie.partner_poses() == [("embracing", "hug")], str(ie.partner_poses()))
+check("partner_poses lists embracing and swaying",
+      sorted(ie.partner_poses()) == [("embracing", "hug"), ("swaying", "sway")], str(ie.partner_poses()))
 
 # ── [2]+[3] start ───────────────────────────────────────────────────────
 print("\n[2] anchor geometry")
@@ -256,6 +272,23 @@ set_character_pos("Ann", 12.0, 20.0)         # a manual move = teleport
 check("a manual position write frees both", ie.get_interaction("Ann") is None
       and ie.get_interaction("Bob") is None)
 check("the interaction's own position writes did NOT cancel it (proved by [3])", True)
+
+# ── [8] a looping pair runs for LOOP_INTERACTION_S, the clip repeats ───────
+print("\n[8] looping pair")
+set_game_time(START)
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 24.0)
+inter = ie.start_interaction("Ann", "Bob", "swaying")
+check("a 0.5 s cycle runs for LOOP_INTERACTION_S game seconds",
+      inter["duration_s"] == ie.LOOP_INTERACTION_S and inter["clip_duration_s"] == 0.5 and inter["loop"],
+      str({k: inter[k] for k in ("duration_s", "clip_duration_s", "loop")}))
+wm = build_worldmap_payload(show_all=True)
+row = {c["name"]: c for c in wm["characters"]}["Ann"]["interaction"]
+check("payload carries loop + clip_duration_s", row["loop"] is True and row["clip_duration_s"] == 0.5, str(row))
+set_game_time(START + GameDuration.of(seconds=5))
+check("still running after 5 s (one cycle would be long over)",
+      not ie.interaction_state(ie.get_interaction("Ann"), game_time())["done"])
+ie.end_interaction("Ann")
 
 print()
 if FAILURES:

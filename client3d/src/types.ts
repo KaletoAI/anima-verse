@@ -272,9 +272,12 @@ export interface MapInteraction {
   partner: string;
   anchor: { x: number; z: number; yaw: number };
   started_at_game: string;
-  /** GAME seconds into the clip at the time of this payload */
+  /** GAME seconds into the interaction at the time of this payload */
   elapsed_s: number;
   duration_s: number;
+  /** the clip's own length; with `loop` it repeats (elapsed mod this) */
+  clip_duration_s?: number;
+  loop?: boolean;
   /** GAME seconds per REAL second right now (0 = frozen world) */
   rate: number;
 }
