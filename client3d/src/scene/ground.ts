@@ -72,7 +72,7 @@ import { buildAreaGeometry,
   worldHeightRange } from '@anima/scene-render';
 import type { Point2, ScatterFootprint, ScatterInstance,
   SurfaceMaterialSpec, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
-  TerrainLayerIndex, TerrainLayerTile, TerrainLayerWater, WorldHeightField,
+  TerrainLayerIndex, TerrainLayerTile, WorldHeightField,
   WorldHeightTileStats,
   WorldHeightTiles } from '@anima/scene-render';
 import { fetchHeightfield, fetchHeightTiles, fetchTerrain,
@@ -103,7 +103,8 @@ import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterPlane, patchWaterShore } from './waterPlane';
-import { waterLevelOf, zoneWaterAt, zoneWaterMirrors } from './waterPlaneMath';
+import { waterLevelAt, waterProfileOf } from './waterPlaneMath';
+import type { WaterProfile } from './waterPlaneMath';
 import type { UndergrowthArea } from './undergrowth';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
@@ -131,9 +132,10 @@ const BASE_FALLBACK_M = 200;
  * level — because the painted grounds became a CUT in the one terrain surface
  * (`scene/layerGround.ts`) and nothing coplanar was left to separate. It left
  * `WATER_DRAPE_LIFT_M = 0.02` standing for the one drape it could not yet
- * replace. E4 replaced it: a lake is a FLAT MIRROR at its own
- * `water_level_effective` (`scene/waterPlane.ts`), which is not coplanar with
- * the bed under it by construction — the bed is carved to `h ≤ level − ε`.
+ * replace. E4 replaced it: a water is a MIRROR of its own
+ * (`scene/waterPlane.ts`) — flat then, a ruled surface over its profile since
+ * W2 — which is not coplanar with the bed under it by construction, because
+ * the bed is carved to `h ≤ water_level_at(x, z) − ε`.
  * There is no lift left in this file, and no drape.
  */
 
@@ -659,14 +661,20 @@ export interface TerrainPoint {
    *  numbers, because the two poses hang differently in the water (§ A9). */
   idle_sink_m: number;
   /**
-   * The MIRROR HEIGHT of the topmost area over this point in world metres, or
-   * `null` where the point is not water (E4, § G4).
+   * The MIRROR HEIGHT over THIS POINT in world metres, or `null` where the
+   * point is not water (E4, § G4; local since W2).
    *
-   * It is the AREA's number (`meta.water_level_effective`), not the kind's:
-   * two lakes in one world stand at two heights, and the same `water` kind
-   * paints both. It rides here because it is decided by the very same loop as
-   * the kind — the last containing area wins, and if that one is a sandbank
-   * painted over the lake, the point is not water any more.
+   * It is the AREA's own PROFILE evaluated here (`waterLevelAt` on
+   * `meta.water_profile`), not the kind's number and not the area's mid level:
+   * two lakes in one world stand at two heights, the same `water` kind paints
+   * both, and a river's mirror is a different height at every metre of its
+   * length. A swimmer's float height reads this, so reading the mid level
+   * would put him 2.4 m over his own bed at one end of the river and 2.4 m
+   * under it at the other.
+   *
+   * It rides here because it is decided by the very same loop as the kind —
+   * the last containing area wins, and if that one is a sandbank painted over
+   * the lake, the point is not water any more.
    */
   water_level: number | null;
 }
@@ -1113,17 +1121,11 @@ export function createGround(): Ground {
   let layerKey = '';
   let layersBusy = false;
   const areaMeshes: AreaMesh[] = [];
-  /** THE FLAT MIRRORS OF THE WORLD (E4/E5b) — every one of them, whatever it
-   *  came from: a painted lake, or a ROOM whose floor kind is a water surface
-   *  (`GET /play/terrain-layers` → `waters`, § A19 no. 5). One list, one
-   *  builder, one material cache — a pond in a courtyard is drawn by the
-   *  machinery that draws a lake, not by a second one. */
+  /** THE MIRRORS OF THE WORLD (E4; ruled since W2) — one per PAINTED water
+   *  area, and there is no second source: a room does not define water any
+   *  more (W1 § 6, the zone-water stage is deleted), it merely lies in a
+   *  painted one. One list, one builder, one material cache. */
   const waterMeshes: THREE.Mesh[] = [];
-  /** The zone waters of the last layer INDEX. They arrive with the masks
-   *  (`reloadLayers`), which is fetched before `rebuildAreas` on the same
-   *  signature, so the mirrors are always built from the table that is
-   *  standing. */
-  let zoneWaters: readonly TerrainLayerWater[] = [];
   /** Where the camera stood at the last `tickScatterLod` — the scatter LOD's
    *  only piece of view state. A REBUILD needs it too (an area has to come
    *  into the world binned, not with every instance at full detail), and that
@@ -2236,11 +2238,7 @@ export function createGround(): Ground {
     // catalog id and has not been a texture id since the assignment became
     // explicit.
     const surfaces = new Set<string>([surfaceOf(payload?.default_kind || ''),
-      ...areas.map((a) => surfaceOf(a.kind)),
-      // …and the ZONE WATERS, whose kinds are room floor kinds and need not
-      // appear on the map at all (§ A19 no. 5). A clone of a still-loading
-      // image stays blank, so a pond's mirror would come out untextured.
-      ...zoneWaters.map((w) => surfaceOf(w.kind))]);
+      ...areas.map((a) => surfaceOf(a.kind))]);
     await Promise.all([...surfaces].map((s) => preloadSurfaceTexture(s)));
 
     const next: AreaMesh[] = [];
@@ -2254,19 +2252,19 @@ export function createGround(): Ground {
     // `null` = a ring that encloses nothing: it draws nothing and covers
     // nothing. Each area is still built exactly once.
     const builtAreas = areas.map((area) => buildAreaGeometry(THREE, area.polygon));
-    /** ONE mirror material per water KIND, for the whole world (E4). The level
-     *  is carried by each plane's own y, never by a uniform, so two lakes at
-     *  two heights share one shader and cost two draw calls instead of two
-     *  programs. Filled lazily: a world without water builds none. */
+    /** ONE mirror material per water KIND, for the whole world (E4). Both the
+     *  things that differ per AREA ride on the GEOMETRY — the level in each
+     *  vertex's y, the flow in the `aWaterFlow` attribute — and never in a
+     *  uniform, so a lake, a second lake at another height and a tilted river
+     *  share one shader and cost three draw calls instead of three programs.
+     *  Filled lazily: a world without water builds none. */
     const waterMats = new Map<string, THREE.Material>();
-    /** THE ONE MIRROR BUILDER (E5b). Both sources feed it — a painted water
-     *  area and a room whose floor kind is a water surface — so a pond gets the
-     *  same material, the same shore shader and the same flat plane a lake
-     *  gets. `geometry` is the earcut of the outline at y = 0, i.e. already a
-     *  mirror; `buildWaterPlane` only lifts it to its level. */
+    /** THE ONE MIRROR BUILDER. `geometry` is the earcut of the outline in the
+     *  XZ plane; `buildWaterPlane` lifts every vertex onto the area's own
+     *  profile and hangs the flow direction on it as an attribute. */
     const nextWater: THREE.Mesh[] = [];
     const addMirror = (geometry: THREE.BufferGeometry, kind: string,
-                       level: number): void => {
+                       profile: WaterProfile): void => {
       let mat = waterMats.get(kind);
       if (!mat) {
         // 1 m per UV unit: the shape geometry's UVs are the world
@@ -2281,7 +2279,7 @@ export function createGround(): Ground {
         patchWaterShore(mat);
         waterMats.set(kind, mat);
       }
-      nextWater.push(buildWaterPlane(geometry, level, mat));
+      nextWater.push(buildWaterPlane(geometry, profile, mat));
     };
     areas.forEach((area, index) => {
       const built = builtAreas[index];
@@ -2292,16 +2290,16 @@ export function createGround(): Ground {
       // (`scene/layerGround.ts`), which is why the whole ladder of renderOrder,
       // depth bias and hairline lifts that used to stand here is gone.
       //
-      // TWO CONDITIONS SINCE E4, and both are data. The CLASS says what the
-      // surface LOOKS like (ripple or matte — never the colour or the kind's
-      // name, `isWaterClass`), and `meta.water_level_effective` says whether
-      // the bake carved a bed under it and at what height (§ A16 addendum § 2).
-      // Without a level there is no mirror to place: a plane guessed at the
-      // terrain's own height would be the drape all over again.
-      const water = isWaterClass(surfaceMaterialSpec(surfaceOf(area.kind))?.class);
-      const level = water ? waterLevelOf(area.meta) : null;
-      if (level !== null) {
-        addMirror(built.geometry, area.kind, level);
+      // ONE CONDITION SINCE W1, and it is data: `meta.water_profile`. The
+      // server owns the single water predicate (`terrain_types.is_water_kind`)
+      // and only an area that really carved a bed carries a profile, so asking
+      // for the profile IS asking "is this water, and against which mirror".
+      // The surface CLASS is not consulted here any more — it says what water
+      // LOOKS like (ripple or matte) and was a second book about what water IS,
+      // which is exactly the pair W1 collapsed into one.
+      const profile = waterProfileOf(area.meta);
+      if (profile) {
+        addMirror(built.geometry, area.kind, profile);
       } else {
         // Not a mirror, so the earcut is not drawn — and a geometry nobody
         // holds is a buffer nobody frees. Only the RING lives on (below); the
@@ -2345,17 +2343,13 @@ export function createGround(): Ground {
       });
     });
 
-    // …AND THE ZONE WATERS, through the very same builder (§ A19 no. 5). A room
-    // whose floor kind is a water surface carved its bed like a painted lake
-    // (`heightfield`'s fifth stage), so it wants the same flat mirror over it —
-    // and it already brings the two numbers that decides: the outline in WORLD
-    // metres and the level the bake settled on. The kind is a surface-library
-    // id like any other, so `addMirror` looks its material up unchanged.
-    for (const w of zoneWaterMirrors(zoneWaters)) {
-      const built = buildAreaGeometry(THREE, w.polygon);
-      if (!built) continue;                 // a ring that encloses nothing
-      addMirror(built.geometry, w.kind, w.level);
-    }
+    // THERE IS NO SECOND SOURCE OF WATER (W1 § 6). Until W1 a room whose floor
+    // kind was a water surface carved its own bed (`heightfield`'s fifth stage)
+    // and got a mirror of its own out of the layer index's `waters` list. That
+    // stage, that list and the room water fields are deleted: water is an ART
+    // on the MAP, and a room that lies in one merely says so in its floor plan
+    // (`map_water`, a derived reference). The loop that stood here is gone with
+    // them.
 
     // THE SWAP. Nothing above touched the scene, so the old ground stood until
     // this line and the new one is in place before the frame after it.
@@ -2640,16 +2634,15 @@ export function createGround(): Ground {
     layerFmt = index;
     layerSig = index.sig || sig;
     layerIndexKeys = new Set<string>(index.tile_keys ?? []);
-    // The zone waters ride with the index (§ A19 no. 5). A room the bake never
-    // saw is simply not in the list — a guessed height would be the drape of
-    // old, so nothing is invented for it here either.
-    zoneWaters = index.waters ?? [];
     layerTiles.clear();
     setLayerTiles(layerTiles, layerFmt);
     setLayerOverview(index.overview ?? null);
     const table: TerrainLayer[] = index.layers ?? [];
-    layerKey = table.map((l) => `${l.index}:${l.kind}:${l.surface}:${l.edge_blend_m}:${l.water ? 1 : 0}`)
-      .join('|');
+    // The BED belongs in the key (W1 § 5): two lakes of one kind on two beds
+    // are two layers wearing two images, and it is this string that decides
+    // whether the compositor's slice array is rebuilt.
+    layerKey = table.map((l) => `${l.index}:${l.kind}:${l.surface}:`
+      + `${l.edge_blend_m}:${l.water ? 1 : 0}:${l.bed_kind ?? ''}`).join('|');
     await setLayerTable(table, kindColor, (kind) => {
       const lib = surfaceFor(surfaceOf(kind), 'wall');
       return lib?.sizeM ?? 3;
@@ -2743,40 +2736,27 @@ export function createGround(): Ground {
    */
   function typeAt(x: number, z: number): TerrainPoint {
     let hit = '';
-    // The MIRROR of the same area (E4). Written in the same breath as the kind
-    // and by the same rule — the last containing area decides both — so a
-    // sandbank painted over a lake takes the water away with the kind instead
-    // of leaving a level behind that nothing draws.
+    // The MIRROR at THIS POINT (E4; local since W2). Written in the same breath
+    // as the kind and by the same rule — the last containing area decides both
+    // — so a sandbank painted over a lake takes the water away with the kind
+    // instead of leaving a level behind that nothing draws.
+    //
+    // ONE WATER SOURCE. The painted areas are it: the zone-water lookup that
+    // used to rank above them is deleted with the bake stage that fed it
+    // (W1 § 6), and so is the catalog borrowing that used to fetch swimming
+    // numbers for a room floor kind the terrain catalog had never heard of.
+    // A water kind on the map is a catalogued terrain kind by construction.
     let level: number | null = null;
     for (const a of payload?.areas ?? []) {
       if (!pointInRing(x, z, a.polygon)) continue;
       hit = a.kind || '';
-      level = waterLevelOf(a.meta);
-    }
-    // ZONE WATERS rank ABOVE painted areas, exactly as their floors do in the
-    // layer bake (§ A19 no. 5): a figure crossing a lake ZONE must float at
-    // its mirror, not wade on the carved bed beneath it.
-    const zone = zoneWaterAt(zoneWaters, x, z, pointInRing);
-    if (zone) {
-      hit = zone.kind || hit;
-      level = zone.level;
+      const profile = waterProfileOf(a.meta);
+      // The LOCAL level, never the area's mid one: over a river the figure has
+      // to float on the water line it can see at its own metre.
+      level = profile ? waterLevelAt(profile, x, z) : null;
     }
     const kind = hit || payload?.default_kind || '';
-    let entry = catalog.get(kind.toLowerCase());
-    if (!entry && zone) {
-      // A zone's floor kind is a surface-library id, not necessarily a
-      // terrain kind — but the swimming numbers (sink, animation, speed) live
-      // in the terrain catalog. Borrow the first catalogued kind flagged as
-      // water (`meta.water`, sorted by key so the pick is deterministic);
-      // standing dry-shod ON a lake would be the visible bug this exists for.
-      for (const key of [...catalog.keys()].sort()) {
-        const c = catalog.get(key);
-        if (c?.meta && (c.meta as Record<string, unknown>).water === true) {
-          entry = c;
-          break;
-        }
-      }
-    }
+    const entry = catalog.get(kind.toLowerCase());
     if (!entry) {
       return { kind, passable: true, speed_factor: 1, move_anim: '',
         idle_anim: '', move_sink_m: 0, idle_sink_m: 0, water_level: level };

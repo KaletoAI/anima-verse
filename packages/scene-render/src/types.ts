@@ -49,17 +49,25 @@ export interface ScenePlate {
  * `closed` tells a room from an open zone (§ A5).
  *
  * THERE ARE NO HEIGHTS IN IT, on purpose: a consumer asks the height sampler at
- * the point it is really placing something — never a plate, never a ray. The
- * single exception is `water_level_effective`, present only on a water floor,
- * and it is the one ABSOLUTE world y in the whole payload (§ A18: a mirror is
- * measured in world metres everywhere else too).
+ * the point it is really placing something — never a plate, never a ray. Since
+ * W1 there is no exception either: the last absolute y in this payload
+ * (`water_level_effective`) went with the room water it described.
+ *
+ * A ROOM HAS NO WATER OF ITS OWN ANY MORE (W1 § 6). Where a room's hull lies
+ * (by area, strictly more than half) inside a painted water area, the entry
+ * carries `map_water` — a REFERENCE, derived at compose time and never stored,
+ * so it cannot hang. It says: the MAP paints the ground here, this room does
+ * not. Room semantics (membership, perception, spots, centres) are untouched by
+ * it, and a renderer draws no floor surface of its own for such a room — which
+ * for storey 0 is nothing new, since E5a took the plates away from every room.
  */
 export interface SceneFloor {
   room_id: string
   polygon_world: [number, number][]
   floor_kind: string
   closed: boolean
-  water_level_effective?: number
+  /** The painted water area this room's floor lies in, or absent. */
+  map_water?: { area_id: string; kind: string }
 }
 
 /** Ein Wandstück — um Türen/Fenster bereits geteilt; das Glasband eines

@@ -74,7 +74,22 @@ export interface TerrainLayer {
   /** How wide the transition from this layer to the one under it is, metres.
    *  0 is the HARD CUT (a room floor, a kerb). */
   edge_blend_m: number
+  /** Whether this layer IS water — the server's single predicate
+   *  (`terrain_types.is_water_kind`), for the undergrowth gate and for point
+   *  queries. It says nothing about what the layer PAINTS: see `bed_kind`. */
   water: boolean
+  /**
+   * ONLY ON A WATER LAYER: the kind whose ground lies under the mirror (W1 § 5,
+   * `meta.bed_kind`, default the world's bare ground).
+   *
+   * A water layer never paints the water texture onto the terrain — the mirror
+   * is a separate surface above it — so its `surface` is already the BED's and
+   * this names the kind that surface came from. A renderer needs it only where
+   * it asks the KIND rather than the surface (a colour fallback, a tile size).
+   * It is also part of the layer's key on the server: two lakes of one kind on
+   * two beds are two layers.
+   */
+  bed_kind?: string
 }
 
 /** One baked tile of `GET /play/terrain-layers?keys=…`. A tile with no
@@ -117,32 +132,18 @@ export interface TerrainLayerFormat {
 }
 
 /**
- * ONE ZONE WATER of the world (§ A19 no. 5, "Ein Boden" E5a): a room whose
- * floor kind is a water surface carves its bed like a painted lake and wants
- * the same flat mirror over it.
+ * The INDEX answer of `GET /play/terrain-layers` (no `keys`).
  *
- * So it arrives in the very shape a painted lake carries its mirror in — the
- * outline in WORLD metres, the level in world y — and a renderer draws the pond
- * of a room with the machinery it draws a lake with, instead of inventing a
- * second water. A room the bake never saw (an unplaced location) is simply not
- * in the list; a guessed height would be the drape all over again.
+ * THERE IS NO `waters` LIST ANY MORE (W1 § 5). A room whose floor kind was a
+ * water surface used to carve its own bed and ride here as a `TerrainLayerWater`
+ * so a renderer could put a flat plane over it. That whole bake stage, the list
+ * and the room water fields are deleted: water is an ART on the MAP, and a room
+ * that lies in a painted one merely says so in its floor plan (`map_water`).
  */
-export interface TerrainLayerWater {
-  location_id: string
-  room_id: string
-  kind: string
-  polygon: [number, number][]
-  water_level_effective: number
-}
-
-/** The INDEX answer of `GET /play/terrain-layers` (no `keys`). */
 export interface TerrainLayerIndex extends TerrainLayerFormat {
   layers: TerrainLayer[]
   overview: TerrainLayerOverview
   tile_keys: string[]
-  /** Every zone water of the world (E5a) — always present, empty in a world
-   *  whose rooms have no water floor. */
-  waters: TerrainLayerWater[]
 }
 
 /** The BATCH answer of `GET /play/terrain-layers?keys=…`. */

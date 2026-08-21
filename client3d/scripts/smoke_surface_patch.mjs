@@ -768,9 +768,16 @@ async function main() {
     /const lib = surfaceFor\(surface, 'wall'\);/.test(groundSrc), true);
   check('…and for THAT id (material class)',
     /surfaceMaterialSpec\(surface\);/.test(groundSrc), true);
-  check('the fringe question reads the surface of the area\'s kind too',
+  // RED, since "Ein Wasser-Gesetz" W1/W2: the library is no longer asked
+  // WHETHER a painted area is water. The class says what water LOOKS like
+  // (ripple or matte) and was a second book about what water IS beside the
+  // server's one predicate; the mirror is built on `meta.water_profile` alone,
+  // so this question does not exist any more.
+  check('the mirror asks the PROFILE, never the material class',
+    /const profile = waterProfileOf\(area\.meta\);/.test(groundSrc), true);
+  check('…and no library question decides water any more',
     /isWaterClass\(surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\?\.class\)/
-      .test(groundSrc), true);
+      .test(groundSrc), false);
   check('the preload loads the named SURFACES, not the kinds',
     /preloadSurfaceTexture\(s\)/.test(groundSrc), true);
   // …and nowhere in this module does a terrain kind still reach the library.

@@ -32,8 +32,10 @@ export interface GroundMove {
    *  while it moves and while it waits. Which one counts is `sinkForState`. */
   sink: GroundSink;
   /** The MIRROR height over the point in world metres, or `null` where the
-   *  point is not water (E4, § G4: `meta.water_level_effective` of the topmost
-   *  area). A figure hangs its sink under THIS, not under the carved bed —
+   *  point is not water (E4, § G4; local since W2: the topmost area's
+   *  `meta.water_profile`, evaluated AT this point — over a river the water
+   *  line is a different height at every metre of its length).
+   *  A figure hangs its sink under THIS, not under the carved bed —
    *  `walk.floatRootY` is the one place that says so, for travellers, NPCs and
    *  the player's avatar alike. */
   water: number | null;

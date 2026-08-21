@@ -594,6 +594,14 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   //  - a diorama's `walk_y_world`, which arrives with the models further down
   //    and is written into these same entries there (it outranks both).
   // Where none of the three speaks, the floor is the terrain.
+  //
+  // AND NO ROOM PAINTS WATER (W1 § 6). An entry may carry `map_water`, the
+  // derived reference "this room's hull lies in that painted water area". It is
+  // read for nothing here on purpose: the room keeps its semantics (its centre,
+  // its spots, its huddle, all out of `polygon_world` below) and the MAP draws
+  // the ground and the mirror (`scene/ground.ts`). Storey 0 has drawn no floor
+  // surface of its own since E5a, so there is no surface to suppress — and the
+  // room's old water fields, which this loop never read either, are gone.
   const overlayOf = new Map(scene.rooms.map((r) => [r.room_id, r.overlay]));
   for (const floor of scene.floor_plan) {
     const id = floor.room_id;

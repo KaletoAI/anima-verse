@@ -1,5 +1,6 @@
 /**
- * THE WATER MIRROR — one flat plane per painted lake ("Ein Boden" E4, § G4).
+ * THE WATER MIRROR — one RULED surface per painted water ("Ein Boden" E4,
+ * § G4; tilted since "Ein Wasser-Gesetz" W2).
  *
  * WHAT IT REPLACES. Until E3 every painted ground was a transparent DRAPE laid
  * on the relief; E3 cut all of them into the one terrain material and left
@@ -9,11 +10,12 @@
  * surface FOLLOWS the bed, so a lake ran downhill and a swimmer floated over
  * the slope instead of on a water line.
  *
- * A lake has ONE height. Since E1 that height is a number in the payload
- * (`meta.water_level_effective`, § A16 addendum § 2), and the bed under it is
- * carved to `h ≤ level − ε` in EVERY mip level — so the mirror is a plain
- * earcut polygon at `y = level`, with no subdivision at all: a plane needs no
- * vertices in the middle.
+ * A LAKE HAS ONE HEIGHT, A RIVER HAS A PROFILE. Since W1 both are the same
+ * nine numbers in the payload (`meta.water_profile`, § A16.3), and the bed
+ * under them is carved to `h ≤ water_level_at(x, z) − ε` in EVERY mip level —
+ * so the mirror is a plain earcut polygon whose vertices are each lifted to the
+ * level of their own place (`liftToWaterProfile`), with no subdivision at all:
+ * a ruled surface needs no vertices in the middle either.
  *
  * THE SHORE COMES OUT OF THE DATA. `depth(x, z) = level − h(x, z)`, sampled in
  * the fragment shader from the very R32F pyramids the terrain's vertices are
@@ -24,13 +26,25 @@
  * a function we can ask.
  *
  * THE LEVEL IS THE GEOMETRY. The fragment reads the plane's own world `y`, so
- * every lake of one kind shares ONE material however many heights they stand
- * at — two lakes at two levels are two meshes, not two shaders.
+ * every water of one kind shares ONE material however many heights they stand
+ * at — two lakes at two levels are two meshes, not two shaders, and a tilted
+ * river is a third mesh on the same material. That is also why the SHORE did
+ * not have to change one line for W2: it always measured against the geometry.
+ *
+ * THE FLOW IS AN ATTRIBUTE, for the same reason. The ripple has to scroll
+ * downstream, and the flow direction belongs to the AREA while the material
+ * belongs to the KIND — a uniform would therefore have forced one material per
+ * area (and with it one compiled program's worth of state per lake) to say a
+ * thing that costs two floats. `aWaterFlow` is those two floats, constant over
+ * a mesh of a dozen vertices; a geometry that does not carry it reads (0, 0),
+ * which the shader spells "still water, keep the lake's crossing drift".
  */
 import * as THREE from 'three';
 import { bindTerrainLodUniforms, terrainLodSampleGlsl } from './terrainLod';
 import { WATER_FOAM_ALPHA, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
-  WATER_SHORE_BAND_M, waterShoreBody, waterShoreGlsl } from './waterPlaneMath';
+  WATER_SHORE_BAND_M, liftToWaterProfile, waterFlowVector, waterShoreBody,
+  waterShoreGlsl } from './waterPlaneMath';
+import type { WaterProfile } from './waterPlaneMath';
 
 /** The cache key this patch contributes, exported so the smoke can pin the
  *  combined key without carrying a copy of the string. */
@@ -99,26 +113,51 @@ export function patchWaterShore(mat: THREE.Material): void {
 }
 
 /**
- * The mirror of ONE painted lake: its own flat earcut, raised to its level.
+ * The mirror of ONE painted water: its own earcut, every vertex lifted to the
+ * level of its own place.
  *
  * `geometry` is what `buildAreaGeometry` already produced for this area — the
- * outline triangulated in the XZ plane at y = 0, which is EXACTLY a mirror and
- * needs nothing done to it. The mesh is simply moved up; the ownership of the
- * geometry passes to the caller's disposal bag as before.
+ * outline triangulated in the XZ plane, with a `y` that means nothing. This
+ * WRITES that `y`: `liftToWaterProfile` gives each vertex `waterLevelAt(x, z)`,
+ * which for a lake is one constant (the flat plane of E4, unchanged to the last
+ * bit) and for a river is the tilted plane its bed was carved against. The mesh
+ * itself stays at the origin — moving it would add a translation to a height
+ * that is already absolute. Ownership of the geometry passes to the caller's
+ * disposal bag as before.
  *
  * NO GRID SUBDIVISION. Every other ground mesh this client ever built was cut
- * along the height lattice so it could follow the relief; a mirror is a PLANE,
- * and the shore that used to need geometry is a fragment computation now. A
- * kilometre-wide lake is a handful of triangles.
+ * along the height lattice so it could follow the relief; a mirror is a RULED
+ * SURFACE, linear between its own outline vertices, and the shore that used to
+ * need geometry is a fragment computation now. A kilometre-long river is a
+ * handful of triangles.
  *
  * `depthWrite` stays off (set on the material) and `depthTest` on: the water is
  * drawn after the opaque terrain, is occluded by everything in front of it, and
  * occludes nothing itself — a bed seen through it is the point.
  */
-export function buildWaterPlane(geometry: THREE.BufferGeometry, levelY: number,
+export function buildWaterPlane(geometry: THREE.BufferGeometry,
+                                profile: WaterProfile,
                                 material: THREE.Material): THREE.Mesh {
+  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
+  liftToWaterProfile(pos.array as unknown as { length: number;
+                                               [index: number]: number },
+                     profile);
+  pos.needsUpdate = true;
+  // The bounding sphere was computed for a flat polygon at y ≈ 0; a river that
+  // climbs eight metres over its length would be culled by a sphere that does
+  // not contain it.
+  geometry.computeBoundingSphere();
+  // THE FLOW, one vec2 per vertex — see the file header for why it is not a
+  // uniform. It is constant over the mesh; the interpolator hands the fragment
+  // back exactly what was written.
+  const [fx, fz] = waterFlowVector(profile);
+  const flow = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i += 1) {
+    flow[i * 2] = fx;
+    flow[i * 2 + 1] = fz;
+  }
+  geometry.setAttribute('aWaterFlow', new THREE.BufferAttribute(flow, 2));
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.y = levelY;
   // A mirror takes shadows (a tree on the bank darkens the water) but casts
   // none — the same arrangement the drape had.
   mesh.receiveShadow = true;

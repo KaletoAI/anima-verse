@@ -29,11 +29,17 @@
  *    resized onto ONE square. A kind without a library texture gets a slice of
  *    its flat catalog colour, so the fallback is a texel and not a branch.
  *
- * WATER, THIS STAGE. A water layer's slice holds BARE GROUND's image: until E4
- * the lake surface is still drawn by its own ripple drape (`scene/ground.ts`),
- * and what the compositor paints under it is the bed. The mask still knows the
- * water layer — it has to, or the undergrowth would grow in the lake and the
- * priority would be a lie.
+ * WATER WEARS ITS BED, AND THE SERVER SAYS WHICH (W1 § 5). A water layer stays
+ * a full layer — the mask has to answer "here is water" for the undergrowth
+ * gate and every point query — but what it PAINTS is the ground underneath:
+ * the mirror is a separate surface drawn over it (`scene/waterPlane.ts`), and
+ * painting the lake twice made the two fight each other. Until W1 this file
+ * decided that itself, substituting layer 0's image for every water layer; now
+ * `surface` already IS the bed's (`meta.bed_kind`, defaulting to the bare
+ * world) and `bed_kind` names the kind it came from. So there is nothing to
+ * substitute any more — a slice wears the surface its table row names, water
+ * or not — and an authored gravel bed reaches the ground instead of being
+ * flattened back to the default kind.
  *
  * WHERE IT SITS IN THE CHAIN. `patchHole` (the basement cut) → `applyNaturalGround`
  * (colour patches + height AO) → THIS. Each patch inserts its body directly
@@ -190,10 +196,12 @@ export function layerWindow(): LayerMaskWindow | null {
 /**
  * Take over the layer TABLE and build the surface array from it.
  *
- * Every slice is drawn onto one `SLICE_PX` square: the library texture where
- * the kind names one, the flat catalog colour where it does not, and BARE
- * GROUND's image for a water layer (see the file header). `colorOf` is handed
- * in because the catalog lives in `scene/ground.ts` and importing it back here
+ * Every slice is drawn onto one `SLICE_PX` square: the library texture the
+ * layer's own `surface` names, or the flat catalog colour where it names none.
+ * On a WATER layer that surface is already the bed's (see the file header), so
+ * the colour fallback and the tile size have to ask the BED kind too —
+ * `bed_kind` is what the row carries for exactly that. `colorOf` is handed in
+ * because the catalog lives in `scene/ground.ts` and importing it back here
  * would close a cycle.
  *
  * Awaits the library first — `surfaceFor` only hands out fully loaded images,
@@ -212,14 +220,14 @@ export async function setLayerTable(next: readonly TerrainLayer[],
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const depth = Math.max(1, layers.length);
   const data = new Uint8Array(SLICE_PX * SLICE_PX * 4 * depth);
-  const bare = layers[0];
   for (let index = 0; index < layers.length; index += 1) {
     const layer = layers[index];
-    // A WATER layer wears the BED, not the lake: the ripple drape still draws
-    // the surface until E4, and painting the water texture under it as well
-    // would be the same image twice with the shader fighting itself.
-    const source = layer.water ? bare : layer;
-    const lib = surfaceFor(source.surface, 'wall');
+    // WHICH KIND'S LOOK THIS SLICE WEARS. The surface is the row's own — on a
+    // water row the server already put the BED's there — and the kind behind
+    // it is `bed_kind` where the row names one. No substitution happens here;
+    // the client renders the surface the table names (W1 § 5).
+    const kind = layer.bed_kind || layer.kind;
+    const lib = surfaceFor(layer.surface, 'wall');
     const at = index * SLICE_PX * SLICE_PX * 4;
     if (ctx && lib?.texture.image) {
       ctx.clearRect(0, 0, SLICE_PX, SLICE_PX);
@@ -230,7 +238,7 @@ export async function setLayerTable(next: readonly TerrainLayer[],
       // No library entry: the flat catalog colour, written once into the slice.
       // A texel is cheaper than a shader branch and behaves identically under
       // the anti-tile blend (two samples of one colour ARE that colour).
-      const c = new THREE.Color(colorOf(source.kind) || '#888888');
+      const c = new THREE.Color(colorOf(kind) || '#888888');
       const r = Math.round(c.r * 255);
       const g = Math.round(c.g * 255);
       const b = Math.round(c.b * 255);
@@ -242,7 +250,7 @@ export async function setLayerTable(next: readonly TerrainLayer[],
         data[k + 3] = 255;
       }
     }
-    const size = sizeOf ? sizeOf(source.kind) : (lib?.sizeM ?? 3);
+    const size = sizeOf ? sizeOf(kind) : (lib?.sizeM ?? 3);
     uLayer.value[index].set(layer.edge_blend_m, size > 0 ? size : 3, 0, 0);
   }
   for (let index = layers.length; index < LC_MAX_LAYERS; index += 1) {

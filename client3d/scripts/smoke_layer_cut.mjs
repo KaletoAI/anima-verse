@@ -137,9 +137,32 @@
  * And the scene-graph builder must not stack: `rebuildAreas` may set no
  * `renderOrder`, no `polygonOffset` and — since E4 — no `position.y` at all.
  * The last one it had was `WATER_DRAPE_LIFT_M`, the two centimetres that kept
- * the water drape off its own bed; the drape is a FLAT MIRROR now
- * (`scene/waterPlane.ts`), it stands at its area's `water_level_effective`, and
- * the constant is checked to be gone from the code like the ladders are.
+ * the water drape off its own bed; the drape is a MIRROR now
+ * (`scene/waterPlane.ts`) which carries its height in its own vertices, and the
+ * constant is checked to be gone from the code like the ladders are.
+ *
+ * ===========================================================================
+ * [7b] WATER WEARS ITS BED, AND THE SERVER SAYS WHICH (W1 § 5)
+ * ===========================================================================
+ * A water layer is a full layer — the mask has to answer "here is water" for
+ * the undergrowth gate and every point query — but what it PAINTS is the ground
+ * underneath, because the mirror is a second surface drawn over it and painting
+ * the lake twice made the two fight each other.
+ *
+ * WHO DECIDES THAT MOVED. Until W1 this client decided it: `setLayerTable`
+ * substituted layer 0's image (`layer.water ? bare : layer`) for every water
+ * row, which flattened an authored gravel bed back to the world's default kind
+ * and was a renderer inventing ground. Now the server ships it — `surface` on a
+ * water row IS the bed's, `bed_kind` names the kind it came from, and
+ * `edge_blend_m` is the bed's too wherever a bed was authored. So the client's
+ * whole job is to render the surface the table names, and the three checks
+ * below are: the substitution is gone, the kind fallback asks the bed, and the
+ * bed is part of the key that rebuilds the slice array.
+ *
+ * THE KEY IS A COUNTING ARGUMENT, not taste. The server keys a layer by
+ * `(kind, edge_blend_m, bed_kind)`, so two ponds of one kind on two beds are
+ * two rows with two images. A client whose `layerKey` left `bed_kind` out would
+ * see one string for both worlds and keep yesterday's slice array standing.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -509,19 +532,18 @@ check('…and no polygonOffset',
 const lifts = build.match(/\.position\.y = [^\n;]+;/g) ?? [];
 checkEq('…and no height at all any more: the mirror stands at its own level',
   lifts, []);
-check('only WATER still gets a mesh at all',
-  /const water = isWaterClass\(surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\?\.class\);/
-    .test(build) ? 1 : 0, 1);
-// …and since E5b a PAINTED lake and a room's WATER FLOOR are drawn by the same
-// three lines (§ A19 no. 5). One builder, two feeders — a second mirror
-// implementation is exactly what the addendum forbids.
+check('only WATER still gets a mesh at all — and the PROFILE is what says so',
+  /const profile = waterProfileOf\(area\.meta\);/.test(build) ? 1 : 0, 1);
+// ONE MIRROR BUILDER, and since W1 exactly ONE feeder: the painted areas. The
+// room water that used to feed it a second time is deleted with its bake stage
+// (W1 § 6), which is what makes "one water source" a countable claim.
 check('the mirror builder exists exactly once',
   (build.match(/const addMirror = \(/g) ?? []).length, 1);
 check('…the painted area feeds it',
-  /addMirror\(built\.geometry, area\.kind, level\);/.test(build) ? 1 : 0, 1);
-check('…and so does the ZONE water, out of the layer index',
-  /for \(const w of zoneWaterMirrors\(zoneWaters\)\) \{/.test(build) ? 1 : 0, 1);
-check('…with no buildWaterPlane call of its own',
+  /addMirror\(built\.geometry, area\.kind, profile\);/.test(build) ? 1 : 0, 1);
+check('RED: and nothing else does — the zone-water loop is gone',
+  /zoneWater/.test(build) ? 1 : 0, 0);
+check('…with exactly one buildWaterPlane call in the whole builder',
   (build.match(/buildWaterPlane\(/g) ?? []).length, 1);
 
 console.log('\n[7] the wiring, pinned by reading the source');
@@ -548,6 +570,33 @@ check('the masks are fetched on the terrain signature, with the areas',
 check('…and their window follows the height tiles\' own want set',
   /wantedTiles\(layerIndexKeys, tileM, anchorX, anchorZ,\n\s*HEIGHT_TILE_RADIUS_M\)/
     .test(groundSrc) ? 1 : 0, 1);
+
+console.log('\n[7b] a water layer wears its BED — and the server says which');
+const layerSrc = texts.get('client3d/src/scene/layerGround.ts');
+check('RED: the bare-ground substitution is gone from the compositor',
+  /layer\.water \? bare : layer/.test(layerSrc) ? 1 : 0, 0);
+check('…and with it the `bare` binding it needed',
+  /const bare = layers\[0\];/.test(layerSrc) ? 1 : 0, 0);
+check('the slice is drawn from the row\'s OWN surface, water or not',
+  /const lib = surfaceFor\(layer\.surface, 'wall'\);/.test(layerSrc) ? 1 : 0, 1);
+check('…and the colour fallback and the tile size ask the BED kind',
+  /const kind = layer\.bed_kind \|\| layer\.kind;/.test(layerSrc) ? 1 : 0, 1);
+check('the flat colour really uses it',
+  /colorOf\(kind\) \|\| '#888888'/.test(layerSrc) ? 1 : 0, 1);
+check('…and so does the metres-per-tile',
+  /sizeOf \? sizeOf\(kind\) : \(lib\?\.sizeM \?\? 3\)/.test(layerSrc) ? 1 : 0, 1);
+// Two beds must be two keys, or the slice array is never rebuilt for the
+// second world (see the docstring's counting argument).
+check('the layer key carries the bed, so two beds are two states',
+  /\$\{l\.edge_blend_m\}:\$\{l\.water \? 1 : 0\}:\$\{l\.bed_kind \?\? ''\}/
+    .test(groundSrc) ? 1 : 0, 1);
+// …and the payload type says the field exists, on water rows only.
+const cutSrc = await readFile(
+  join(ROOT, 'packages/scene-render/src/layerCut.ts'), 'utf8');
+check('`bed_kind` is an optional field of the layer row',
+  /bed_kind\?: string/.test(cutSrc) ? 1 : 0, 1);
+check('RED: and the index has no `waters` list left to draw from',
+  /waters: TerrainLayerWater\[\]/.test(cutSrc) ? 1 : 0, 0);
 
 console.log(`\n${passed} ok, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -44,7 +44,7 @@ export {
 } from './layerCut'
 export type {
   LayerMaskWindow, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
-  TerrainLayerIndex, TerrainLayerOverview, TerrainLayerTile, TerrainLayerWater,
+  TerrainLayerIndex, TerrainLayerOverview, TerrainLayerTile,
 } from './layerCut'
 
 export {

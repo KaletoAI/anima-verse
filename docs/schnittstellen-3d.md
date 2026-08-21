@@ -4966,8 +4966,9 @@ Ein `floor_plan`-Eintrag kann `map_water {area_id, kind}` tragen (W1 § 6). Der
 Mitte, Stände, Pulk) kommt weiter aus `polygon_world`, Boden und Spiegel malt
 die KARTE. Eine Fläche zu unterdrücken gibt es nicht, weil Stockwerk 0 seit E5a
 ohnehin keine eigene malt. Das Feld `water_level_effective` von `SceneFloor`
-ist tot (der Server sendet es nicht mehr) und steht nur noch deklariert da,
-weil die Admin-Lageplan-Vorschau es benennt — **W3 entfernt beides zusammen**.
+ist **ersatzlos gestrichen** — der Server sendet es seit W1 nicht mehr, W3 hat
+den letzten Leser (die Admin-Lageplan-Vorschau) entfernt, und der Typ nennt es
+seitdem nicht mehr.
 
 ### 6. Die Beweise (§ B5a)
 
@@ -4978,7 +4979,7 @@ weil die Admin-Lageplan-Vorschau es benennt — **W3 entfernt beides zusammen**.
 | **[5]** | die geneigte Masche: vier Ecken auf 2,6 / 7,4 / 7,4 / 2,6 (4,8 m Gefälle auf 60 m), die Linearität an Hälfte, Viertel und ⅞ der Kante, und der See **bitgleich** flach (`Object.is`) samt `level + 0 == 0 + level` |
 | **[6]** | Schwimmen am lokalen Niveau: Bett `0,08·x`, Tiefe überall 1,0 m, Wurzel/Körper bei x = 26/50/74 — und die **roten** Gegenproben des flachen Mittelniveaus (1,92 m über dem sichtbaren Wasser stromab, Waten stromauf, ein Watet/Schwimmt-Umschlag bei genau x = 55, den es in Wahrheit nirgends gibt) |
 | **[7]** | der Ufer-Shader auf der Schräge: Alpha 20/27 an jedem x — und **rot**, dass die flache Platte oberhalb x = 62,5 negative Tiefe hätte und ganz weggeworfen würde |
-| **[8]** | die Löschung **namentlich**: acht Symbole dürfen in `client3d/src` und `packages/scene-render/src` in keiner Nicht-Kommentar-Zeile mehr stehen; dazu die eine erlaubte Leiche (`SceneFloor.water_level_effective`, `@deprecated`, für W3) |
+| **[8]** | die Löschung **namentlich**: acht Symbole dürfen in `client3d/src` und `packages/scene-render/src` in keiner Nicht-Kommentar-Zeile mehr stehen, `SceneFloor.water_level_effective` eingeschlossen — und `map_water` steht an seiner Stelle |
 | **[9]** | die Ripple-Richtung: der stehende Fall ergibt exakt die alten Konstanten, 0°/90°/270° geben beide Lagen stromabwärts mit gegenläufiger Querkomponente, und die Beträge bleiben rotationsinvariant |
 | `client3d/scripts/smoke_layer_cut.mjs` **[7b]** | der Bett-Fall: die Ersetzung ist weg, das Slice kommt aus `layer.surface`, Farbe und Kachelmaß fragen `bed_kind`, und `bed_kind` steht im `layerKey` |
 | `client3d/scripts/smoke_surface_patch.mjs` | **rot**: keine Bibliotheksfrage entscheidet mehr über Wasser |

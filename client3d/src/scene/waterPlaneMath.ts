@@ -9,13 +9,20 @@
  * plane, chaining the shader patch — is `waterPlane.ts`.
  *
  * THE SHORE COMES OUT OF THE HEIGHT DATA, not out of a depth pass. The mirror
- * is a flat polygon at `water_level_effective`; the fragment shader samples the
- * SAME R32F height pyramids the terrain's vertices are placed by
+ * is a RULED surface over its outline — since W1 every vertex carries the level
+ * of its own place (`waterLevelAt`) — and the fragment shader samples the SAME
+ * R32F height pyramids the terrain's vertices are placed by
  * (`terrainLod.terrainLodSampleGlsl`), so the water depth under a pixel is
  * `plane y − h(x, z)` — a number in METRES, in our own data, identical near and
  * far. A screen-space depth texture would have been a second render target, a
  * second copy of the ground and a shore that changes width with the camera's
  * near/far planes; this one is a subtraction.
+ *
+ * THE LEVEL IS NEVER A UNIFORM. The shader reads `vWaterPlane.y`, i.e. the
+ * GEOMETRY, which is what let two lakes at two heights share one material —
+ * and it is also, unchanged, what lets a tilted river share it with them. W2
+ * had nothing to change in the shore for the slope; it only had to stop
+ * flattening the mesh.
  */
 
 /**
@@ -127,105 +134,178 @@ export function waterAlpha(depthM: number): number {
 }
 
 /**
- * The mirror height of a painted area, or `null` where there is none.
+ * THE MIRROR OF ONE WATER AREA AS A FUNCTION OF THE PLACE — the nine numbers
+ * of `meta.water_profile` (W1, § A16.3), read straight out of the payload.
  *
- * `meta.water_level_effective` is the SERVER's own answer (§ A16 addendum § 2,
- * `heightfield.with_effective_water_level`): the level the bake really carved
- * the bed with, derived from the rim median where the author left the level on
- * "auto". Reading it is the whole water test — an area that has one is an area
- * whose bed was carved, and an area without one has no mirror to draw. The
- * authored `meta.water_level` is deliberately NOT read: it may be unset, and a
- * client that fell back to it would draw a mirror at a height the ground was
- * never carved to.
+ * A lake is one number; a river is a plane tilted along its own flow. Both are
+ * this. Without a `flow_dir_deg` the two ends carry the SAME number, `s_min`
+ * and `s_max` are both 0, and `waterLevelAt` answers that number everywhere —
+ * the constant mirror of every round before W1, reached by the same arithmetic
+ * instead of by a branch beside it.
+ *
+ * The field names are the server's, verbatim (`heightfield.WaterProfile`): a
+ * renamed twin is how the two halves of one formula start to drift.
  */
-export function waterLevelOf(meta: Record<string, unknown> | null | undefined
-): number | null {
-  const raw = meta?.water_level_effective;
-  if (raw === null || raw === undefined) return null;
+export interface WaterProfile {
+  /** world y at the UPSTREAM end of the axis span, in metres */
+  level_up: number;
+  /** world y at the DOWNSTREAM end */
+  level_down: number;
+  /** the authored flow bearing, `null` for still water */
+  flow_dir_deg: number | null;
+  /** the point the axis runs through — the polygon's area centroid */
+  axis_x: number;
+  axis_z: number;
+  /** the DOWNSTREAM unit direction, `(sin θ, cos θ)`; (0, 0) for still water */
+  dir_x: number;
+  dir_z: number;
+  /** the axis coordinates of the upstream and downstream extremes */
+  s_min: number;
+  s_max: number;
+}
+
+/** The one numeric reader: a value that is not a finite number is not a
+ *  number at all. `Number(null)` IS 0 and `Number('')` IS 0, which is how a
+ *  missing level becomes a mirror at world zero — never here. */
+function finite(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === '') return null;
   const num = Number(raw);
   return Number.isFinite(num) ? num : null;
 }
 
-/** One zone water as the mirror builder wants it: the outline in WORLD metres,
- *  the surface kind, and the level the bake settled on. */
-export interface ZoneMirror {
-  kind: string;
-  polygon: [number, number][];
-  level: number;
+/**
+ * The PROFILE of a painted area, or `null` where there is none.
+ *
+ * `meta.water_profile` is the SERVER's own answer (W1 § 4): the very function
+ * the bake carved the bed against, shipped as nine numbers so a renderer builds
+ * the same tilted mirror without asking for a raster. Reading it is the WHOLE
+ * water test — an area that has one is an area whose bed was carved, an area
+ * without one has no mirror to draw. This is the ONE water source of the
+ * client: the surface material CLASS says what water looks like, never whether
+ * a thing is water (that book is the server's single `is_water_kind`).
+ *
+ * The authored `meta.water_level` is deliberately NOT read (it may be unset),
+ * and neither is `meta.water_level_effective` any more: that field is the MID
+ * level of the profile, i.e. what a FLAT consumer draws one plane at, and this
+ * client stopped being one in W2. A river drawn at its mid level stands 2.4 m
+ * over its own bed at one end and 2.4 m under it at the other.
+ *
+ * Every one of the nine has to be a finite number, `flow_dir_deg` excepted —
+ * `null` there is the shape of still water. One NaN in a vertex position and
+ * the whole plane leaves the frustum, so a broken profile draws nothing.
+ */
+export function waterProfileOf(meta: Record<string, unknown> | null | undefined
+): WaterProfile | null {
+  const raw = meta?.water_profile;
+  if (!raw || typeof raw !== 'object') return null;
+  const p = raw as Record<string, unknown>;
+  const level_up = finite(p.level_up);
+  const level_down = finite(p.level_down);
+  const axis_x = finite(p.axis_x);
+  const axis_z = finite(p.axis_z);
+  const dir_x = finite(p.dir_x);
+  const dir_z = finite(p.dir_z);
+  const s_min = finite(p.s_min);
+  const s_max = finite(p.s_max);
+  if (level_up === null || level_down === null || axis_x === null
+      || axis_z === null || dir_x === null || dir_z === null
+      || s_min === null || s_max === null) return null;
+  return { level_up, level_down, flow_dir_deg: finite(p.flow_dir_deg),
+    axis_x, axis_z, dir_x, dir_z, s_min, s_max };
 }
 
 /**
- * WHICH ZONE WATERS become a mirror (§ A19 no. 5, "Ein Boden" E5b).
+ * THE MIRROR AT ONE POINT — the pure TS twin of `heightfield.water_level_at`,
+ * line for line:
  *
- * A room whose floor kind is a water surface carves its bed like a painted lake
- * (`heightfield`'s fifth stage) and gets the same flat plane over it. The list
- * arrives with the layer INDEX (`GET /play/terrain-layers` → `waters`) and is
- * already the answer to "is this water": the server only puts a room in it that
- * really carved, and it leaves out a room the bake never saw rather than
- * guessing a height for it.
+ *     s     = (x − axis_x)·dir_x + (z − axis_z)·dir_z
+ *     t     = clamp((s − s_min) / (s_max − s_min), 0, 1)
+ *     level = level_up + (level_down − level_up)·t
  *
- * So the only thing left to decide here is whether an entry can be DRAWN, and
- * that is the same pair of conditions a painted lake has to meet: a ring that
- * encloses something (three points), and a FINITE level. A level that is not a
- * number would put a plane at NaN, from which no frame recovers — and it must
- * not fall back to the ground, which is the drape this whole stage deleted.
+ * STILL WATER FALLS OUT OF IT: with no flow direction the span is empty and
+ * both ends are the same number, so the answer is that number everywhere.
+ *
+ * THE CLAMP IS LOAD-BEARING at the very ends. A polygon is only extreme at its
+ * rim, and a point exactly on it must not read past the level the rim median
+ * was taken for — `t <= 0` answers `level_up` and `t >= 1` answers
+ * `level_down` EXACTLY, not `level_up + (level_down − level_up)·1`, so the two
+ * ends of the mesh sit on the two authored numbers to the last bit.
  */
-export function zoneWaterMirrors(
-  waters: readonly { kind?: unknown; polygon?: unknown;
-                     water_level_effective?: unknown }[] | null | undefined
-): ZoneMirror[] {
-  const out: ZoneMirror[] = [];
-  for (const w of waters ?? []) {
-    const polygon = Array.isArray(w?.polygon) ? w.polygon as [number, number][] : [];
-    if (polygon.length < 3) continue;
-    const raw = w?.water_level_effective;
-    // `null` is the shape of "the bake never carved this room" and must not
-    // become 0: `Number(null)` IS 0, and a plane at world zero over a courtyard
-    // pond is precisely the guessed height § A19 no. 5 refuses to draw.
-    if (raw === null || raw === undefined) continue;
-    const level = Number(raw);
-    if (!Number.isFinite(level)) continue;
-    out.push({ kind: String(w?.kind ?? ''), polygon, level });
-  }
-  return out;
+export function waterLevelAt(profile: WaterProfile, x: number, z: number
+): number {
+  const span = profile.s_max - profile.s_min;
+  if (profile.flow_dir_deg === null || span <= 1e-9) return profile.level_up;
+  const s = (x - profile.axis_x) * profile.dir_x
+          + (z - profile.axis_z) * profile.dir_z;
+  const t = (s - profile.s_min) / span;
+  if (t <= 0) return profile.level_up;
+  if (t >= 1) return profile.level_down;
+  return profile.level_up + (profile.level_down - profile.level_up) * t;
 }
 
 /**
- * THE ZONE WATER UNDER A POINT — the swimmer's half of § A19 no. 5.
+ * The DOWNSTREAM unit vector the ripple scrolls along, or (0, 0) for still
+ * water — the one piece of the profile the SHADER needs.
  *
- * `typeAt` used to read a mirror only off PAINTED areas, so a figure crossing
- * a lake ZONE (a room whose floor kind is water — the Mondscheinsee's middle)
- * waded on the carved bed two metres under the plane it could see. Room floors
- * rank ABOVE painted areas in the bake, so a zone that holds the point takes
- * it unconditionally; among overlapping zones the LAST one wins, the same
- * last-wins reading the mask itself uses.
- *
- * The ring test is INJECTED (`inside`), not re-implemented: point-in-polygon
- * lives in exactly one place (`@anima/scene-render` `pointInRing`), and this
- * file stays import-free for the smoke transpile. The smoke passes the same
- * even-odd twin it checks elsewhere.
+ * It is `(dir_x, dir_z)` and nothing derived: the server already spells the
+ * bearing as `(sin θ, cos θ)` (§ A1.1) and a second `sin`/`cos` here would be
+ * a second convention waiting to be spelled the other way round. What this
+ * adds is the ZERO: for still water `flow_dir_deg` is `null` and the direction
+ * is meaningless, and (0, 0) is what the shader reads as "no flow, keep the
+ * lake's own crossing drift" — today's look, unchanged.
  */
-export function zoneWaterAt(
-  waters: readonly { kind?: unknown; polygon?: unknown;
-                     water_level_effective?: unknown }[] | null | undefined,
-  x: number, z: number,
-  inside: (x: number, z: number, ring: [number, number][]) => boolean
-): ZoneMirror | null {
-  let hit: ZoneMirror | null = null;
-  for (const w of zoneWaterMirrors(waters)) {
-    if (inside(x, z, w.polygon)) hit = w;
+export function waterFlowVector(profile: WaterProfile | null | undefined
+): [number, number] {
+  if (!profile || profile.flow_dir_deg === null) return [0, 0];
+  const len = Math.hypot(profile.dir_x, profile.dir_z);
+  if (!(len > 1e-9)) return [0, 0];
+  return [profile.dir_x / len, profile.dir_z / len];
+}
+
+/**
+ * Lift a FLAT earcut onto the profile, in place — the whole of "the mirror is
+ * a ruled surface" (W2 no. 1).
+ *
+ * `positions` is a three.js position buffer: `(x, y, z)` triplets of the
+ * outline triangulated in the XZ plane, with the `y` component meaningless (it
+ * is whatever `rotateX(-π/2)` left of a zero). Each vertex is given the level
+ * of ITS OWN place, so a river's mesh is the tilted plane its bed was carved
+ * against and a lake's mesh comes out flat.
+ *
+ * NO SUBDIVISION IS NEEDED and none is done. The profile is LINEAR in the
+ * plane by construction (a clamped linear ramp along one axis), and the
+ * clamped part is linear too — flat. A ruled surface through the outline's
+ * vertices therefore reproduces it exactly wherever the polygon is convex, and
+ * where it is not, the earcut's own interior edges are the ruling. The only
+ * places the interpolation could deviate are inside a triangle that spans the
+ * clamp KINK at `s_min`/`s_max`, and there is none: those are the polygon's own
+ * extremes, so no interior point of the polygon lies past them.
+ *
+ * FOR A LAKE THIS IS BIT-IDENTICAL TO THE FLAT PLANE OF BEFORE. A constant
+ * profile answers `level_up` for every vertex, so the mesh is the same
+ * horizontal polygon it always was — it just carries its height in the
+ * vertices instead of in `mesh.position.y`, and `level + 0` and `0 + level`
+ * are the same float.
+ */
+export function liftToWaterProfile(positions: { length: number;
+                                                [index: number]: number },
+                                   profile: WaterProfile): void {
+  for (let i = 0; i + 2 < positions.length; i += 3) {
+    positions[i + 1] = waterLevelAt(profile, positions[i], positions[i + 2]);
   }
-  return hit;
 }
 
 /**
  * The shore, as the GLSL that rides on `terrainLodSampleGlsl()`.
  *
  * `vWaterPlane` is the fragment's WORLD position. Its `y` is the mirror height
- * itself — the plane is flat and sits at `water_level_effective`, so the level
- * is carried by the GEOMETRY and needs no uniform. That is what lets every lake
- * of one kind share ONE material however many levels they stand at: two lakes
- * at two heights are two meshes at two heights, not two shaders.
+ * itself — the mesh carries the profile in its vertices (`liftToWaterProfile`),
+ * so the level is carried by the GEOMETRY and needs no uniform. That is what
+ * lets every water of one kind share ONE material however many levels they
+ * stand at: two lakes at two heights are two meshes at two heights, not two
+ * shaders — AND it is why a tilted river needed no shore change at all in W2.
+ * `vWaterPlane.y` interpolates across the ruled surface, so `wsDepth` is the
+ * LOCAL level minus the ground, at every pixel, for free.
  *
  * `tlodHeight(p, 0.0)` asks for the FINEST level: `tlodLevel` clamps
  * `nodeStep / baseStep` at 1, so 0 selects mip 0. The drawn bed under a distant

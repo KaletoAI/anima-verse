@@ -232,21 +232,38 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
     shader.uniforms.uMapStrength = uMapStrength
     shader.uniforms.uMask = uMask
 
-    // Two varyings of its own, because they are two different things:
+    // Three varyings of its own, because they are three different things:
     // vWaterWorld is the WORLD position (the ripple runs across tile borders;
     // plate UVs would give a visible seam), vWaterUv the TILE UV (the mask
-    // belongs to this one tile).
+    // belongs to this one tile), and vWaterFlow the DOWNSTREAM direction of
+    // this one water area (W2 no. 2).
+    //
+    // THE FLOW IS AN ATTRIBUTE, NOT A UNIFORM, and that is the whole reason it
+    // can exist at all: this material is shared by every area of one KIND
+    // (client3d `ground.rebuildAreas` keeps exactly one per kind, so two lakes
+    // at two heights cost two draw calls and one program), while the flow
+    // belongs to the AREA. A uniform would have meant one material per area.
+    // Two floats on a mesh of a dozen vertices is nothing by comparison.
+    //
+    // A GEOMETRY WITHOUT THE ATTRIBUTE READS (0, 0). WebGL leaves an unbound
+    // attribute at its generic value, which three never writes and which starts
+    // at (0, 0, 0, 1) — and (0, 0) is precisely what the fragment spells "still
+    // water". So every water surface that is not a client3d mirror (the admin
+    // preview's floors, above all) keeps exactly the look it had.
     if (shader.vertexShader.includes(ANCHOR_VERT)) {
-      shader.vertexShader = 'varying vec2 vWaterWorld;\nvarying vec2 vWaterUv;\n'
+      shader.vertexShader = 'attribute vec2 aWaterFlow;\n'
+        + 'varying vec2 vWaterWorld;\nvarying vec2 vWaterUv;\n'
+        + 'varying vec2 vWaterFlow;\n'
         + shader.vertexShader.replace(ANCHOR_VERT,
           `${ANCHOR_VERT}\n  vWaterWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;`
-          + '\n  vWaterUv = uv;')
+          + '\n  vWaterUv = uv;\n  vWaterFlow = aWaterFlow;')
     } else {
       warnOnce(ANCHOR_VERT)
       return
     }
 
     shader.fragmentShader = 'varying vec2 vWaterWorld;\nvarying vec2 vWaterUv;\n'
+      + 'varying vec2 vWaterFlow;\n'
       + 'uniform float uTime;\nuniform vec3 uSky;\nuniform float uWaveM;\n'
       + 'uniform float uSpeed;\nuniform float uSkyMix;\nuniform vec3 uTint;\n'
       + 'uniform float uMapStrength;\nuniform sampler2D uMask;\n'
@@ -289,8 +306,28 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
     // seconds, 1.7 cm/s on the map — present, but invisible.
     float wDriftA = uTime * uSpeed / uWaveM;
     float wDriftB = uTime * uSpeed / ( uWaveM * 0.63 );
-    vec2 wUvA = vWaterWorld / uWaveM + vec2( wDriftA, wDriftA * 0.6 );
-    vec2 wUvB = vWaterWorld / ( uWaveM * 0.63 ) - vec2( wDriftB * 0.8, wDriftB * 1.3 );
+    // THE DIRECTION THE TWO LAYERS SCROLL IN (W2 no. 2). The frame is the
+    // FLOW's: wAx points downstream, wAy across it. With no flow (vWaterFlow
+    // == (0, 0), i.e. a lake, an ice sheet, or any surface that carries no
+    // attribute at all) the frame is the world's own axes and the two vectors
+    // below are literally the constants that stood here before — (1, 0.6) and
+    // −(0.8, 1.3), counter-scrolling, which is what a still surface looks like.
+    //
+    // WITH a flow BOTH layers travel downstream and only their CROSS component
+    // opposes: a river whose second layer ran upstream would read as two
+    // rivers. The lengths are untouched (1.0/0.6 and 0.8/1.3), so uSpeed still
+    // means the same metres per second it meant for a lake.
+    // The division is by a FLOORED length, never by the raw one: a still
+    // surface hands over (0, 0), and a normalize() of that is a NaN that the
+    // ternary would not reliably keep out of the result.
+    float wLen = length( vWaterFlow );
+    bool wStill = wLen < 1e-4;
+    vec2 wAx = wStill ? vec2( 1.0, 0.0 ) : vWaterFlow / max( wLen, 1e-4 );
+    vec2 wAy = vec2( -wAx.y, wAx.x );
+    vec2 wDirA = wAx + wAy * 0.6;
+    vec2 wDirB = wStill ? -( wAx * 0.8 + wAy * 1.3 ) : wAx * 0.8 - wAy * 1.3;
+    vec2 wUvA = vWaterWorld / uWaveM + wDirA * wDriftA;
+    vec2 wUvB = vWaterWorld / ( uWaveM * 0.63 ) + wDirB * wDriftB;
     vec3 wN = normalize( ( texture2D( normalMap, wUvA ).xyz * 2.0 - 1.0 )
                        + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 ) );
     wN = mix( vec3( 0.0, 0.0, 1.0 ), wN, wMask * wDetail );

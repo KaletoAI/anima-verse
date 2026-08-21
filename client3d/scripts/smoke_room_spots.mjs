@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * Smoke check for the ROOM SPOTS and the ZONE WATERS of "Ein Boden" E5b —
- * the two things that used to be measured against meshes and are read off data
- * now.
+ * Smoke check for the ROOM SPOTS of "Ein Boden" E5b — the centres, stands and
+ * seats that used to be measured against meshes and are read off data now.
  *
  * Usage:  node client3d/scripts/smoke_room_spots.mjs
  *
@@ -120,30 +119,14 @@
  *   (floor 2.90) has its surface at 3.35 and is still a seat — which is the
  *   whole point of measuring over the data floor instead of over zero.
  *
- * ============================================================================
- * [5] `zoneWaterMirrors` — a room's pond is drawn like a lake
- * ============================================================================
- * `GET /play/terrain-layers` (index mode) carries `waters`: one entry per room
- * whose floor kind is a water surface, with its outline in WORLD metres and the
- * mirror the bake settled on (§ A19 no. 5). The server has already decided that
- * these carved, and it leaves out a room the bake never saw — so the client's
- * only remaining question is whether an entry can be DRAWN, and that is the
- * same pair of conditions a painted lake meets: three points and a finite
- * level. A fixture index of five rows:
- *
- *   pond      water  4 points   level  8.0    -> drawn
- *   shallow   water  2 points   level  0.0    -> dropped (encloses nothing)
- *   unbaked   water  3 points   level  null   -> dropped (no mirror carved —
- *                                                and NOT 0, which is what
- *                                                `Number(null)` would make it)
- *   frozen    ice    3 points   level −2.5    -> drawn
- *   basin     water  4 points   level  3.0    -> drawn
- *
- * so three mirrors, at 8.0, −2.5 and 3.0. `pond` and `basin` share the KIND
- * `water` at two different levels: the level rides in each plane's own y
- * (`buildWaterPlane` sets `position.y`), never in a uniform, so those two are
- * two meshes on ONE material — two draw calls, one shader program. Counting the
- * distinct kinds of the result is therefore counting the materials: 2.
+ * THERE IS NO [5] ANY MORE. It checked `zoneWaterMirrors`: the mirrors of the
+ * rooms whose floor kind was a water surface, out of the layer index's `waters`
+ * list. "Ein Wasser-Gesetz" W1 deleted that bake stage, that list and the room
+ * water fields — water is an ART on the MAP now, and a room that lies in a
+ * painted one merely says so in its floor plan (`map_water`, a derived
+ * reference). The mirror arithmetic that replaced it is
+ * `client3d/scripts/smoke_water_plane.mjs`; what is left here is room GEOMETRY,
+ * which W1 did not touch.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -203,17 +186,15 @@ function compare(a, b, eps) {
   return a === b;
 }
 
-const { ground, water } = await loadModules([
+const { ground } = await loadModules([
   ['client3d/src/game/polygon.ts', 'polygon'],
   ['client3d/src/game/ground.ts', 'ground'],
-  ['client3d/src/scene/waterPlaneMath.ts', 'water'],
 ]);
 const { polygonCentroid, roomSpotGrid, furnitureUse,
   SPOT_GRID, SPOT_SPREAD, SPOT_FLAT_M,
   SEAT_MIN_M, SEAT_MAX_M, LIE_LENGTH_M, LIE_WIDTH_M } = ground;
 const { pointInPolygon } = (await loadModules(
   [['client3d/src/game/polygon.ts', 'polygon']])).polygon;
-const { zoneWaterMirrors } = water;
 
 // --- [1] the centre of a drawn room -----------------------------------------
 console.log('[1] polygonCentroid — the centre of MASS of the drawn hull');
@@ -299,41 +280,6 @@ check('THE FLOOR MOVES WITH THE ROOM: the same chair on storey 1 (floor 2.90)',
   furnitureUse(2.90, 3.35, 0.5, 0.5), 'sit');
 check('…and measured against zero it would be nothing at all',
   furnitureUse(0, 3.35, 0.5, 0.5), null);
-
-// --- [5] the zone waters -----------------------------------------------------
-console.log('\n[5] zoneWaterMirrors — a room\'s pond, out of the layer index');
-const WATERS = [
-  { location_id: 'kai', room_id: 'pond', kind: 'water',
-    polygon: [[295, -5], [305, -5], [305, 5], [295, 5]],
-    water_level_effective: 8.0 },
-  { location_id: 'kai', room_id: 'shallow', kind: 'water',
-    polygon: [[0, 0], [1, 0]], water_level_effective: 0 },
-  { location_id: 'see', room_id: 'unbaked', kind: 'water',
-    polygon: [[0, 0], [4, 0], [4, 4]], water_level_effective: null },
-  { location_id: 'see', room_id: 'frozen', kind: 'ice',
-    polygon: [[0, 0], [4, 0], [4, 4]], water_level_effective: -2.5 },
-  { location_id: 'hof', room_id: 'basin', kind: 'water',
-    polygon: [[10, 10], [12, 10], [12, 12], [10, 12]],
-    water_level_effective: 3.0 },
-];
-const mirrors = zoneWaterMirrors(WATERS);
-check('three of the five rows can be drawn', mirrors.length, 3);
-check('…and they are pond, frozen, basin — in index order',
-  mirrors.map((m) => m.level), [8.0, -2.5, 3.0]);
-check('the pond keeps its world outline unchanged', mirrors[0].polygon,
-  [[295, -5], [305, -5], [305, 5], [295, 5]]);
-check('a two-point ring encloses nothing and is dropped',
-  mirrors.some((m) => m.polygon.length < 3), false);
-check('a row without a carved mirror is dropped rather than guessed',
-  mirrors.some((m) => !Number.isFinite(m.level)), false);
-check('…and `null` is not silently read as world zero',
-  mirrors.some((m) => m.level === 0), false);
-check('two levels of ONE kind are two meshes on one material',
-  new Set(mirrors.map((m) => m.kind)).size, 2);
-check('…and three planes altogether', mirrors.length, 3);
-check('an empty index draws nothing', zoneWaterMirrors([]).length, 0);
-check('…and so does a world without the field at all',
-  zoneWaterMirrors(undefined).length, 0);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

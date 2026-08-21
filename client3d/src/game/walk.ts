@@ -311,8 +311,9 @@ export function groundWaterLevel(level: number | null,
  * the swimmer.
  *
  * THE NEW RULE, in the one place both the avatar and the NPCs read it. The
- * mirror is a number in the payload now (`meta.water_level_effective`, handed
- * in as `waterLevel`), so:
+ * mirror comes out of the payload now — since W2 as the LOCAL level of the
+ * area's own profile (`waterLevelAt(meta.water_profile, x, z)`, handed in as
+ * `waterLevel`), so:
  *
  *     root = waterLevel === null ? groundY : max( groundY + sink, waterLevel )
  *
