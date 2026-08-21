@@ -35,8 +35,8 @@
     ]
    }
   },
-  "rig_floor_shift_cm": 3.47,
-  "rig_floor_min_cm": -8.11
+  "rig_floor_shift_cm": 6.94,
+  "rig_floor_min_cm": -5.54
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",

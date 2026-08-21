@@ -19,6 +19,7 @@
  * under it — that is what the clear button next to the editor is for.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { PairPreview } from './PairPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -510,9 +511,12 @@ export function PosesTab() {
                       ) : null}
                     </select>
                     {data.pair_kinds?.includes(draft.animation) ? (
-                      <div className="ga-hint" style={{ marginTop: 4 }}>
-                        {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
-                      </div>
+                      <>
+                        <div className="ga-hint" style={{ marginTop: 4 }}>
+                          {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
+                        </div>
+                        <PairPreview kind={draft.animation} />
+                      </>
                     ) : null}
                   </Field>
                 ) : null}

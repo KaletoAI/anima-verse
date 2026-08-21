@@ -21,7 +21,7 @@ const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
 // ── Shared marker-figure sources (module cache — one fetch per session,
 // every viewer instance clones from these) ──
 let _figPromise: Promise<Object3D | null> | null = null
-const loadTestFigure = (): Promise<Object3D | null> => {
+export const loadTestFigure = (): Promise<Object3D | null> => {
   if (!_figPromise) {
     _figPromise = (async () => {
       try {
