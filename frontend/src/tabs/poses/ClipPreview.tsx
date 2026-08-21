@@ -1,14 +1,16 @@
 /**
- * PairPreview — two neutral 1.70 m figures playing the two halves of a PAIR
- * clip together, the way the 3D client does it (contract § A8a):
+ * ClipPreview — a neutral 1.70 m figure playing an animation kind; for a PAIR
+ * kind two figures playing the two halves together, the way the 3D client
+ * does it (contract § A8a):
  *
- *   * both halves share ONE anchor frame (origin = the anchor, +X from A to
- *     B); each figure's ROOT follows the hips XZ of its half (centimetres →
- *     metres), the hips position track itself is dropped like for every clip;
- *   * both mixers are driven from ONE clock, so the handshake meets and the
- *     dance stays in step — which is what this preview exists to judge;
- *   * a 1 m grid, the anchor and the live A↔B root distance give the metres
- *     a reference (a figure is 1.70 m, the same scale as everywhere else).
+ *   * a solo clip plays in place (the hips position track is dropped, as in
+ *     every renderer); a pair's halves share ONE anchor frame (origin = the
+ *     anchor, +X from A to B) and each figure's ROOT follows the hips XZ of
+ *     its half (centimetres → metres);
+ *   * all mixers are driven from ONE clock, so a handshake meets and a dance
+ *     stays in step — which is what this preview exists to judge;
+ *   * a 1 m grid, the anchor and (for a pair) the live A↔B root distance give
+ *     the metres a reference (a figure is 1.70 m, the scale used everywhere).
  *
  * three.js is imported dynamically, like in Model3DViewer — the admin bundle
  * must not carry it for the tabs that never show 3D.
@@ -49,7 +51,7 @@ function rootAt(path: { times: ArrayLike<number>; xz: Float32Array }, t: number)
   return { x: xz[lo * 2] + (xz[hi * 2] - xz[lo * 2]) * f, z: xz[lo * 2 + 1] + (xz[hi * 2 + 1] - xz[lo * 2 + 1]) * f }
 }
 
-export function PairPreview({ kind, height = 300 }: { kind: string; height?: number }) {
+export function ClipPreview({ kind, height = 300 }: { kind: string; height?: number }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<string>('')
@@ -70,11 +72,16 @@ export function PairPreview({ kind, height = 300 }: { kind: string; height?: num
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
         const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
         const listing = await apiGet<{ clips?: ApiClip[] }>('/assets/animation-clips')
-        const halves: Record<'a' | 'b', ApiClip | undefined> = {
-          a: (listing.clips || []).find((c) => c.kind === kind && c.role === 'a' && !c.set),
-          b: (listing.clips || []).find((c) => c.kind === kind && c.role === 'b' && !c.set),
-        }
-        if (!halves.a || !halves.b) { setStatus(t('Both halves (__a / __b) of this pair clip must exist.')); return }
+        const clips = listing.clips || []
+        // neutral set first, then any set of the kind (same pick as the viewers)
+        const pick = (role: string) =>
+          clips.find((c) => c.kind === kind && (c.role || '') === role && !c.set)
+          || clips.find((c) => c.kind === kind && (c.role || '') === role)
+        const isPair = !!(pick('a') && pick('b'))
+        const parts: Array<{ role: 'a' | 'b' | ''; clip: ApiClip }> = isPair
+          ? [{ role: 'a', clip: pick('a')! }, { role: 'b', clip: pick('b')! }]
+          : pick('') ? [{ role: '', clip: pick('')! }] : []
+        if (!parts.length) { setStatus(t('No clip file for this kind in shared/models/clips.')); return }
         const src = await loadTestFigure()
         if (!src) { setStatus(t('No test figure available (shared/models/figure).')); return }
         if (disposed) return
@@ -110,8 +117,8 @@ export function PairPreview({ kind, height = 300 }: { kind: string; height?: num
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
           return found
         }
-        for (const role of ['a', 'b'] as const) {
-          const obj = await fbx.loadAsync(halves[role]!.url)
+        for (const { role, clip: half } of parts) {
+          const obj = await fbx.loadAsync(half.url)
           const clip = obj.animations?.[0]
           if (!clip || disposed) return
           const path = rootPath(clip)
@@ -143,11 +150,11 @@ export function PairPreview({ kind, height = 300 }: { kind: string; height?: num
           const root = new THREE.Group()
           root.add(pivot)
           scene.add(root)
-          // label A / B over the head
+          // label A / B over the head (pair only)
           const canvas = document.createElement('canvas')
           canvas.width = 64; canvas.height = 64
           const ctx = canvas.getContext('2d')
-          if (ctx) {
+          if (ctx && role) {
             ctx.fillStyle = role === 'a' ? '#58a6ff' : '#f78166'
             ctx.font = 'bold 44px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
             ctx.fillText(role.toUpperCase(), 32, 34)
@@ -174,11 +181,11 @@ export function PairPreview({ kind, height = 300 }: { kind: string; height?: num
             const r = rootAt(p.path, time)
             p.root.position.set(r.x, 0, r.z)
           }
-          const a = players[0].root.position
-          const b = players[1].root.position
           if (performance.now() - lastInfo > 150) {
             lastInfo = performance.now()
-            setInfo({ dist: Math.hypot(a.x - b.x, a.z - b.z), time, duration })
+            const a = players[0].root.position
+            const b = players[1]?.root.position
+            setInfo({ dist: b ? Math.hypot(a.x - b.x, a.z - b.z) : NaN, time, duration })
           }
           controls.update()
           renderer.render(scene, camera)
@@ -200,8 +207,10 @@ export function PairPreview({ kind, height = 300 }: { kind: string; height?: num
       <div ref={hostRef} style={{ width: '100%', height, borderRadius: 6, overflow: 'hidden', background: '#0d1117' }} />
       <div className="ga-hint" style={{ marginTop: 4 }}>
         {status || (info
-          ? `${t('A ↔ B')}: ${info.dist.toFixed(2)} m · ${info.time.toFixed(1)} / ${info.duration.toFixed(1)} s`
-            + ` · ${t('figures 1.70 m, grid 1 m, +X = A → B')}`
+          ? (Number.isFinite(info.dist)
+            ? `${t('A ↔ B')}: ${info.dist.toFixed(2)} m · ${info.time.toFixed(1)} / ${info.duration.toFixed(1)} s`
+              + ` · ${t('figures 1.70 m, grid 1 m, +X = A → B')}`
+            : `${info.time.toFixed(1)} / ${info.duration.toFixed(1)} s · ${t('figure 1.70 m, grid 1 m, in place')}`)
           : '')}
       </div>
     </div>

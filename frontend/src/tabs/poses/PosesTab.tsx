@@ -19,7 +19,7 @@
  * under it — that is what the clear button next to the editor is for.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PairPreview } from './PairPreview'
+import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -469,8 +469,12 @@ export function PosesTab() {
               onSave={save}
               onDelete={isNew ? undefined : remove}
             />
-            <div className="ga-form">
-              <div className="ga-form-row">
+            {/* Two columns: the catalog text on the left, the 3D animation
+                with its preview on the right — the preview needs the room. */}
+            <div className="ga-form" style={{ display: 'grid',
+              gridTemplateColumns: isPose ? 'minmax(260px, 1fr) minmax(320px, 1.2fr)' : '1fr',
+              gap: 16, alignItems: 'start' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Field
                   label={t('Key')}
                   hint={t('Canonical name, lowercase (e.g. sitting). This is the render and cache key.')}
@@ -482,45 +486,6 @@ export function PosesTab() {
                     onChange={(e) => upd('key', e.target.value)}
                   />
                 </Field>
-                {isPose ? (
-                  <Field
-                    label={t('Animation')}
-                    hint={t('Clip kind a 3D figure plays. Options come from the clips present in shared/models/clips.')}
-                  >
-                    <select
-                      className="ga-input"
-                      value={draft.animation}
-                      onChange={(e) => {
-                        const kind = e.target.value
-                        // a pair clip has no solo half: the pose becomes a two-person one
-                        setDraft((d) => (d ? { ...d, animation: kind,
-                          solo: data.pair_kinds?.includes(kind) ? false : d.solo } : d))
-                      }}
-                    >
-                      <option value="">{t('— pick a kind —')}</option>
-                      {data.kinds.map((k) => (
-                        <option key={k} value={k}>
-                          {k}
-                        </option>
-                      ))}
-                      {/* keep an animation whose clip has since been removed */}
-                      {draft.animation && !data.kinds.includes(draft.animation) ? (
-                        <option value={draft.animation}>
-                          {draft.animation} ({t('no clip')})
-                        </option>
-                      ) : null}
-                    </select>
-                    {data.pair_kinds?.includes(draft.animation) ? (
-                      <>
-                        <div className="ga-hint" style={{ marginTop: 4 }}>
-                          {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
-                        </div>
-                        <PairPreview kind={draft.animation} />
-                      </>
-                    ) : null}
-                  </Field>
-                ) : null}
-              </div>
 
               <Field
                 label={isPose ? t('Pose text') : t('Expression text')}
@@ -570,6 +535,45 @@ export function PosesTab() {
                 </Field>
               ) : null}
 
+              </div>
+              {isPose ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <Field
+                    label={t('Animation')}
+                    hint={t('Clip kind a 3D figure plays. Options come from the clips present in shared/models/clips.')}
+                  >
+                    <select
+                      className="ga-input"
+                      value={draft.animation}
+                      onChange={(e) => {
+                        const kind = e.target.value
+                        // a pair clip has no solo half: the pose becomes a two-person one
+                        setDraft((d) => (d ? { ...d, animation: kind,
+                          solo: data.pair_kinds?.includes(kind) ? false : d.solo } : d))
+                      }}
+                    >
+                      <option value="">{t('— pick a kind —')}</option>
+                      {data.kinds.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                      {/* keep an animation whose clip has since been removed */}
+                      {draft.animation && !data.kinds.includes(draft.animation) ? (
+                        <option value={draft.animation}>
+                          {draft.animation} ({t('no clip')})
+                        </option>
+                      ) : null}
+                    </select>
+                    {data.pair_kinds?.includes(draft.animation) ? (
+                      <div className="ga-hint" style={{ marginTop: 4 }}>
+                        {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
+                      </div>
+                    ) : null}
+                    {draft.animation ? <ClipPreview kind={draft.animation} height={360} /> : null}
+                  </Field>
+                </div>
+              ) : null}
               {draft.is_default ? (
                 <div className="ga-form-hint">
                   {t('Default entry: every free text the catalog cannot absorb falls back to this key. It cannot be deleted.')}
