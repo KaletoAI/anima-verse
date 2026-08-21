@@ -3797,6 +3797,111 @@ async function main() {
   check('...and a flat stage on a non-zero datum too',
     storeyGroundLift(0, 123.4, -56.7, -2, flatGround(-2)), 0, 1e-12);
 
+  // ── § S2  THE FIELD ARRIVES LATE (user finding 2026-08-21) ───────────────
+  //
+  // THE DEFECT, and it is a RACE, not a number: the lift above was read ONCE,
+  // when the scene mounted. On a fresh page load a scene mounts as soon as its
+  // payload is there, which is BEFORE the 2 m height tiles under it — the
+  // sampler then answers the coarse overview, which at the Mondscheinsee does
+  // not even know the +2.8 m rise out of the lake bed and reports the pin's own
+  // -2.000 m. So the Mondscheinhütte was lifted by 0, stayed at its composed
+  // -2.280, and was buried. Re-saving the location changed the signature, the
+  // scene remounted at a moment when the tiles WERE there, and the hut stood
+  // correctly — until the next refresh. The world props never had this: they
+  // re-drape whenever the relief moves (§ A9a).
+  //
+  // THE TWO PHASES, by hand, for the hut at (-1511.28, -756.88), bottom_y
+  // -0.28, on the datum -2.000:
+  //
+  //   phase 1  overview only:  ground = -2.000 (the pin's own height)
+  //            lift  = -2.000 - (-2.000)          =  0
+  //            delta =  0 - 0                     =  0
+  //            world = -2.000 + (-0.28) + 0       = -2.280   <- buried
+  //   phase 2  the 2 m tile lands: ground = +0.335
+  //            lift  =  0.335 - (-2.000)          = +2.335
+  //            delta =  2.335 - 0                 = +2.335   <- the MOVE
+  //            world = -2.280 + 2.335             = +0.055
+  //
+  // and the one-shot mount with the fine field present is -2.000 + (-0.28) +
+  // 2.335 = +0.055 as well. THAT equality is the property: the drawn world may
+  // not depend on which of two network answers won the race.
+  //
+  // What is checked here is the shared law (`storeyGroundRelift`); the caller
+  // that owns the object is `sceneRecipe.reliftPlacement`, and it is the three
+  // lines `mock` copies below — take the step, move by `delta`, keep `lift`.
+  console.log('\nthe height field arrives LATE — mount and re-lift are one move');
+  const { storeyGroundRelift } =
+    await loadSharedModule('packages/scene-render/src/storeyGround.ts');
+  /** One placement's bookkeeping: `y` is where it hangs, `lift` what of the
+   *  terrain is already in it. `place` seats it on its composed bottom_y. */
+  const place = (bottomY) => ({ y: LAKE_DATUM + bottomY, lift: 0 });
+  const relift = (rec, x, z, sampler, level = 0) => {
+    const step = storeyGroundRelift(rec.lift, level, x, z, LAKE_DATUM, sampler);
+    rec.y += step.delta;
+    rec.lift = step.lift;
+    return step;
+  };
+  const HUT_X = -1511.28, HUT_Z = -756.88;
+  // The COARSE field: the overview knows the pin and nothing else, so it
+  // answers the datum everywhere — including under the hut.
+  const coarse = () => LAKE_DATUM;
+  const hut = place(-0.28);
+  check('phase 1 — mounted before the tiles: no lift at all',
+    relift(hut, HUT_X, HUT_Z, coarse).delta, 0, 1e-12);
+  check('...so the hut hangs at its composed -2.280', hut.y, -2.28, 1e-9);
+  const step2 = relift(hut, HUT_X, HUT_Z, lake);
+  check('phase 2 — the 2 m tile lands: the move is +2.335', step2.delta, 2.335, 1e-9);
+  check('...and the hut stands on +0.055', hut.y, 0.055, 1e-9);
+  // ORDER INDEPENDENCE, the whole point.
+  const oneShot = place(-0.28);
+  relift(oneShot, HUT_X, HUT_Z, lake);
+  check('a scene mounted WITH the field lands on the same y', oneShot.y, hut.y, 1e-12);
+  check('...and carries the same lift', hut.lift, oneShot.lift, 1e-12);
+  // RED: the pre-fix behaviour is phase 1 forever. The terrain under the hut
+  // is +0.335 and the hut hangs at -2.280 -> 2.615 m of soil over its floor,
+  // and the Nixenstrand hut the same arithmetic at +0.277 -> 2.557 m.
+  check('RED: without the re-lift the hut stays 2.615 m under its own shore',
+    Number((0.335 - place(-0.28).y).toFixed(3)), 2.615);
+  check('RED: ...and the second hut 2.557 m',
+    Number((0.277 - place(-0.28).y).toFixed(3)), 2.557);
+  check('with it, what is left is the dialled 0.28 m',
+    Number((0.335 - hut.y).toFixed(3)), 0.28);
+  // NO DOUBLE LIFT: the tick runs on every height revision, and a revision
+  // that does not move the ground under this hut may not move the hut.
+  const again = relift(hut, HUT_X, HUT_Z, lake);
+  check('a second re-lift on the same field is a no-op', again.delta, 0, 1e-12);
+  check('...and the hut has not moved', hut.y, 0.055, 1e-9);
+  // A FIELD THAT GOES AWAY (a tile evicted from the cache) says nothing, and
+  // "nothing to say" is not "come back down": the hut keeps standing where the
+  // last real answer put it. The MOUNT reads the same 0 as "not lifted yet",
+  // which is why this is the one case the re-lift may not simply diff.
+  check('a sampler that vanishes leaves the hut where it is',
+    relift(hut, HUT_X, HUT_Z, null).delta, 0, 1e-12);
+  check('...and it keeps its +2.335', hut.lift, 2.335, 1e-9);
+  check('...and a NaN answer is the same "nothing to say"',
+    relift(hut, HUT_X, HUT_Z, () => NaN).delta, 0, 1e-12);
+  check('...the hut is still on +0.055', hut.y, 0.055, 1e-9);
+  // A DECLARED STOREY is not carried by the terrain in either phase.
+  const upper = place(2.9);
+  check('an upper storey does not move when the tile lands',
+    relift(upper, HUT_X, HUT_Z, lake, 1).delta, 0, 1e-12);
+  check('...it stays on its plate', upper.y, LAKE_DATUM + 2.9, 1e-12);
+  // WHAT STANDS IN THE HUT MOVES WITH IT. The room's declared floor is
+  // `walk_y_world + lift` and its seat marks carry the same lift, so the
+  // distance between hut, floor and seat is the same in both phases — a figure
+  // may never be left standing on the height the payload composed while its
+  // hut sits one relief further on.
+  const WALK_Y = -0.26;                       // the hut's floor plank, dialled
+  const declaredAt = (lift) => WALK_Y + lift;
+  check('the declared floor moves by the very same 2.335',
+    declaredAt(step2.lift) - declaredAt(0), 2.335, 1e-9);
+  const seat = { y: -2.28 + 0.45, lift: 0 };  // a prop seat mark, composed
+  relift(seat, HUT_X, HUT_Z, coarse);
+  const seatCoarse = seat.y - place(-0.28).y;
+  relift(seat, HUT_X, HUT_Z, lake);
+  check('the seat mark keeps its 0.45 m over the hut base, before and after',
+    [seatCoarse, seat.y - hut.y], [0.45, 0.45], 1e-9);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

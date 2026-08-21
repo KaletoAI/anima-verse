@@ -252,6 +252,13 @@ export interface PlacedSceneModel {
   parent?: THREE.Object3D;
   /** object is the grey placeholder box (own geometry/material, disposable) */
   placeholder?: boolean;
+  /** THE STOREY-0 TERRAIN LIFT this object is currently standing on (§ A16.9).
+   *  Carried on the record and not re-derived from the object, because the
+   *  height field MOVES: a scene mounted before its fine tiles arrived is
+   *  re-lifted by the difference to this number (`reliftScene`), and a
+   *  difference needs the old value. 0 = no lift applied (a building model, a
+   *  declared storey, a field that had nothing to say). */
+  lift: number;
 }
 
 /**
@@ -364,7 +371,16 @@ export interface Tile {
     /** Absatz der Figurenwurzel unter der Fläche (Welt-Meter, Server) —
      *  beim Nachjustieren gegen die abgetastete Oberfläche erneut abziehen. */
     drop: number;
-    offsetY: number; fixed?: boolean }[]>>;
+    offsetY: number; fixed?: boolean;
+    /** Storey of the room this marker belongs to — only 0 is carried by the
+     *  terrain, so only there does the lift below ever become non-zero. */
+    level: number;
+    /** THE STOREY-0 TERRAIN LIFT baked into `p.y`, for `fixed` markers the
+     *  same bookkeeping the placements keep (§ A16.9): the height field moves,
+     *  and a seat mark that stayed behind leaves the sitter in the air where
+     *  the chair used to be. A room marker is re-derived absolutely by
+     *  `deriveRoomSpots` and does not read it. */
+    lift: number }[]>>;
   /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
   roomGroups: Map<string, THREE.Group>;
   /** Room rectangles in TILE-LOCAL metres (E4: a turned rectangle is not a

@@ -3,8 +3,8 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
   buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
-  SpecVerifier, storeyGroundLift, VERIFY_EPS, surfaceMaterial, wallLength,
-  wallTargets } from '@anima/scene-render';
+  SpecVerifier, storeyGroundLift, storeyGroundRelift, VERIFY_EPS,
+  surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
 import type { ModelTier, PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
@@ -31,21 +31,111 @@ const tierOf = (spec: SceneModelSpec, tiers: SceneTiers): ModelTier =>
   (spec.role === 'building' ? tiers.building : tiers.interior);
 
 /**
- * THE STOREY-0 GROUND LIFT of one spec on this tile (§ A16.9) — the client's
- * half of the one law in `@anima/scene-render/storeyGround`.
+ * PUT ONE PLACEMENT ON THE GROUND UNDER ITS OWN ANCHOR (§ A16.9) — the
+ * client's half of the one law in `@anima/scene-render/storeyGround`, and the
+ * single move that both MOUNTING and RE-DRAPING are.
  *
- * All this side does is put the two arguments in the right frame: the spec's
+ * All this side does is put the arguments in the right frame: the spec's
  * anchor is TILE-LOCAL, the height field is WORLD, so the anchor is turned by
  * the footprint yaw first (`tileToWorld`, § A1.1); and the datum the payload
  * was composed against is the tile's own centre, i.e. the ground under the
- * anchor pin. A building/ground model is excluded there, not here — the rule
- * itself says why.
+ * anchor pin. A building/ground model is excluded by the rule itself — it IS
+ * the plot rather than something standing on it.
+ *
+ * The record carries the lift it stands on; this moves the object by the
+ * DIFFERENCE to the lift the height field says now and writes the new value
+ * back. A fresh mount hands in a record with `lift: 0` and an object sitting on
+ * its composed `bottom_y`, so the first call IS the mount — which is what makes
+ * a scene mounted before its fine height tiles arrived end up, after the
+ * re-lift, at the very number a scene mounted after them lands on.
+ *
+ * Returns the lift now applied (the verify row and the room's declared floor
+ * both read it, and neither may derive it a second time).
  */
-function specGroundLift(tile: Tile, spec: SceneModelSpec): number {
-  if (spec.role === 'building') return 0;
-  const w = tileToWorld(tile, spec.anchor[0], spec.anchor[1], 0);
-  return storeyGroundLift(spec.level, w.x, w.z, tile.center.y,
-                          worldGroundSampler());
+function reliftPlacement(tile: Tile, rec: PlacedSceneModel): number {
+  if (rec.spec.role === 'building') return 0;
+  const w = tileToWorld(tile, rec.spec.anchor[0], rec.spec.anchor[1], 0);
+  const step = storeyGroundRelift(rec.lift, rec.spec.level, w.x, w.z,
+                                  tile.center.y, worldGroundSampler());
+  if (rec.object && step.delta) rec.object.position.y += step.delta;
+  rec.lift = step.lift;
+  return step.lift;
+}
+
+/**
+ * THE HEIGHT FIELD MOVED — put this tile's whole mounted scene back on it
+ * (user finding 2026-08-21, the sinking Mondscheinhütte).
+ *
+ * The occasion: `ground.heightRevision()` counts up when the overview arrives
+ * and again when each batch of 2 m tiles lands. A scene mounts as soon as its
+ * payload is there, which on a fresh page load is BEFORE the tiles under it —
+ * so every storey-0 placement was lifted onto whatever coarse answer the
+ * sampler had at that instant and kept it. The world props already re-ask
+ * (`worldProps.redrape`, § A9a); this is the same beat for the scene.
+ *
+ * WHAT MOVES, and it is everything the mount lifted:
+ *  - every non-building placement (dioramas, props, placeholders), by the
+ *    difference, through the same `reliftPlacement` the mount runs;
+ *  - the FIXED markers (prop seat marks), which are composed finished and are
+ *    therefore the only ones that carry a lift of their own;
+ *  - the DECLARED floors a diorama states (`walk_y_world + lift`) — in
+ *    `roomFloors` and in `tile.declaredFloors`, written absolutely so no
+ *    correction can apply twice;
+ *  - and then every room's stands, centre, seats and ROOM markers, which
+ *    `deriveRoomSpots` re-derives from the sampler as it stands now.
+ *
+ * Nothing else in the scene is touched: plates, walls and the building/ground
+ * model are not lifted by this law in the first place (§ A16.9).
+ */
+export function reliftScene(tile: Tile): void {
+  const placements = tile.placedModels;
+  if (!placements) return;
+  const walkY = new Map<string, number>();
+  let moved = false;
+  for (const rec of placements) {
+    const before = rec.lift;
+    const lift = reliftPlacement(tile, rec);
+    if (lift !== before) moved = true;
+    if (rec.spec.role === 'room' && rec.spec.walk_y_world !== undefined
+        && rec.spec.room_id) {
+      walkY.set(rec.spec.room_id, rec.spec.walk_y_world + lift);
+    }
+  }
+  // A prop marker is finished the moment it is composed and is never
+  // re-derived — so it is moved here, once, by its own difference. The same
+  // marker object hangs under BOTH the room id and the room name
+  // (`mountScene`), hence the identity set: a second pass over it would move
+  // it twice.
+  const seen = new Set<object>();
+  for (const byKind of tile.roomMarkers.values()) {
+    if (seen.has(byKind)) continue;
+    seen.add(byKind);
+    for (const entries of byKind.values()) {
+      for (const e of entries) {
+        if (!e.fixed) continue;
+        const step = storeyGroundRelift(e.lift, e.level, e.p.x, e.p.z,
+                                        tile.center.y, worldGroundSampler());
+        if (step.delta) e.p.y += step.delta;
+        e.lift = step.lift;
+      }
+    }
+  }
+  for (const floor of tile.declaredFloors) {
+    const top = walkY.get(floor.roomId);
+    if (top !== undefined) floor.top = top;
+  }
+  for (const [id, floor] of tile.roomFloors) {
+    const declared = walkY.get(id);
+    if (declared !== undefined) floor.declared = declared;
+    // A room whose floor is DECLARED and whose placements did not move has
+    // nothing to re-derive: its stands, its centre and its seats are all
+    // measured against that one number, and none of them asks the terrain.
+    // A room whose floor IS the terrain always does — its stands are sampled
+    // point by point, and the point of this call is that those points moved.
+    if (moved || floor.declared === undefined) {
+      deriveRoomSpots(tile, id, roomProps(placements, id));
+    }
+  }
 }
 
 /**
@@ -235,7 +325,7 @@ class Verifier {
   }
 
   /** Platziertes Modell gegen seine Spec prüfen. `groundLift` ist die
-   *  Etage-0-Geländehebung dieser Platzierung (§ A16.9, `specGroundLift`) —
+   *  Etage-0-Geländehebung dieser Platzierung (§ A16.9, `reliftPlacement`) —
    *  ohne sie läse jede auf einem Hang stehende Platzierung als Abweichung. */
   placement(obj: THREE.Object3D, spec: SceneModelSpec, tile: Tile,
             groundLift = 0): void {
@@ -748,6 +838,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       offsetY,
       drop,
       fixed,
+      // …and the two numbers the RE-LIFT needs when the height field moves
+      // (`reliftScene`): which storey this marker belongs to, and how much of
+      // the terrain is already in its `p.y`.
+      level,
+      lift: markerLift,
     }]);
   }
 
@@ -816,10 +911,13 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   const walkY = new Map<string, number>();
   verify.total = scene.models.length;
   await Promise.all(scene.models.map(async (spec) => {
-    // THE ONE PLACE this tile's terrain enters a placement (§ A16.9). Read
-    // ONCE per spec so mesh, placeholder, the room's declared floor and the
-    // verify row can never disagree about it.
-    const lift = specGroundLift(tile, spec);
+    // THE ONE PLACE this tile's terrain enters a placement (§ A16.9), and it
+    // is the SAME call the re-lift makes: the object is built on its composed
+    // `bottom_y`, its record starts at `lift: 0`, and `reliftPlacement` moves
+    // it onto the ground under its own anchor. Read ONCE per spec so mesh,
+    // placeholder, the room's declared floor and the verify row can never
+    // disagree about it.
+    let lift = 0;
     let source: THREE.Object3D | null = null;
     // Tier (§ B1 variants): the caller says which tier this mount loads —
     // view state (camera distance / open detail view, Etappe 3 of
@@ -838,14 +936,17 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       // Platzierung wird NIE verworfen (§ A2).
       const ph = buildPlaceholder(THREE, spec.placeholder_dims, placeholderMaterial());
       ph.receiveShadow = true;
-      ph.position.set(spec.anchor[0], spec.bottom_y + lift, spec.anchor[1]);
+      ph.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1]);
       // `+rad` since E4 — the same sign `placeModelSpec` turns a real mesh by
       // (§ A1.1). A placeholder that turned the other way would stand mirrored
       // against the mesh it stands in for.
       ph.rotation.y = deg(spec.yaw_deg);
       const parent = parentFor(spec.room_id);
       parent.add(ph);
-      placements.push({ spec, url, object: ph, parent, placeholder: true });
+      const rec: PlacedSceneModel = { spec, url, object: ph, parent,
+                                      placeholder: true, lift: 0 };
+      placements.push(rec);
+      lift = reliftPlacement(tile, rec);
       verify.placed += 1;
       // Auch der Platzhalter wird gegen seine Spec geprüft: er steht an
       // derselben Stelle und hat dieselbe Zielgröße wie das fehlende Mesh
@@ -862,7 +963,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       // verschwand die Platzierung stillschweigend und die Verify-Tabelle
       // meldete trotzdem „keine Abweichung". The ledger entry is still
       // written: a later tier swap may try the mesh again.
-      placements.push({ spec, url, object: null, parent: parentFor(spec.room_id) });
+      placements.push({ spec, url, object: null,
+                        parent: parentFor(spec.room_id), lift: 0 });
       verify.skip(spec);
       return;
     }
@@ -875,16 +977,17 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
                                   { clone: false, clip: false });
     if (spec.role === 'building') {
       applyBuildingModel(tile, placed, spec);
-      placements.push({ spec, url, object: placed });
+      placements.push({ spec, url, object: placed, lift: 0 });
     } else {
+      const parent = parentFor(spec.room_id);
+      parent.add(placed);
+      const rec: PlacedSceneModel = { spec, url, object: placed, parent, lift: 0 };
+      placements.push(rec);
       // The storey-0 terrain lift (§ A16.9). It rides on the placed group's y
       // AFTER `place()` has seated the mesh on `bottom_y`, so every step of
       // § B2 keeps working on the composed numbers and only the finished
       // object moves onto the ground under its own anchor.
-      if (lift) placed.position.y += lift;
-      const parent = parentFor(spec.room_id);
-      parent.add(placed);
-      placements.push({ spec, url, object: placed, parent });
+      lift = reliftPlacement(tile, rec);
       if (spec.role === 'room' && spec.walk_y_world !== undefined && spec.room_id) {
         // A diorama's declared floor moves WITH its mesh — otherwise the
         // figures of that room would keep standing on the height the payload
@@ -1159,12 +1262,14 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
         for (const m of oldMats) if (!tile.roofMats.includes(m)) m.dispose();
       }
     } else {
-      // Same storey-0 terrain lift the mount applies (§ A16.9) — re-derived
-      // from the SAME function rather than carried on the ledger, so a tier
-      // swap that happens after a height tile arrived lands on the height
-      // that is now known instead of the one that was.
-      const lift = specGroundLift(tile, rec.spec);
-      if (lift) placed.position.y += lift;
+      // Same storey-0 terrain lift the mount applies (§ A16.9) — through the
+      // SAME function, from the same `lift: 0` baseline: the fresh mesh sits on
+      // its composed `bottom_y`, so a tier swap that happens after a height
+      // tile arrived lands on the height that is now known instead of the one
+      // that was.
+      rec.object = placed;
+      rec.lift = 0;
+      reliftPlacement(tile, rec);
       applyModelClip(tile, placed, rec.spec);
       rec.parent?.add(placed);
       if (old) {
@@ -1195,12 +1300,13 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       if (!tile.roomGroups.has(id)) continue;
       const declaring = placements.find((r) => r.spec.role === 'room'
         && r.spec.room_id === id
-        && r.spec.walk_y_world !== undefined)?.spec;
+        && r.spec.walk_y_world !== undefined);
       // The declared floor carries the SAME storey-0 terrain lift its mesh
-      // does (§ A16.9) — the mount adds it too, and a swap that dropped it
-      // would put the room's figures back on the flat datum.
+      // does (§ A16.9) — read OFF THE RECORD, which is the lift that mesh is
+      // actually standing on after the swap re-lifted it. Deriving it again
+      // here would be a second reading of a field that moves.
       const declared = declaring
-        ? (declaring.walk_y_world as number) + specGroundLift(tile, declaring)
+        ? (declaring.spec.walk_y_world as number) + declaring.lift
         : undefined;
       // …and without a declaring diorama the ROOM PLATE is the floor, exactly
       // as in the mount above. The slot holder was placed on `plate.top_y` in

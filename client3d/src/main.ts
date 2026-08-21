@@ -41,7 +41,8 @@ import { setModelEnvironment } from './scene/glbMaterials';
 import { setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
-import { mountScene, SceneLibrary, setSceneModelTier, unmountScene } from './scene/sceneRecipe';
+import { mountScene, reliftScene, SceneLibrary, setSceneModelTier,
+  unmountScene } from './scene/sceneRecipe';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { figureTransition, placementOf, type ShownPlacement } from './game/placement';
 import { seededRandom } from './scene/textures';
@@ -655,9 +656,11 @@ async function startApp(username: string, role: string) {
   };
   worldPropsLayer.setLod(scatterLodCfgOf(
     loadScatterPrefs(localStorage.getItem(SCATTER_PREFS_KEY))));
-  /** The relief revision the world props were last draped on. -1 = never, so
-   *  the first LOD tick after a height field lands re-drapes them. */
-  let worldPropsHeightRev = -1;
+  /** The relief revision everything standing ON the ground was last draped on
+   *  — the world props and the mounted scenes alike, because they answer to
+   *  the same field. -1 = never, so the first LOD tick after a height field
+   *  lands re-drapes them. */
+  let groundDrapedRev = -1;
 
   // --- The far backdrop (§ A17) ---------------------------------------------
   //
@@ -818,8 +821,18 @@ async function startApp(username: string, role: string) {
     return scene?.area_detail && openLocationId !== locId ? 'low' : 'full';
   }
   function tickModelTiers() {
+    // THE RELIEF UNDER EVERY MOUNTED SCENE (user finding 2026-08-21, the
+    // sinking Mondscheinhütte). A scene mounts as soon as its payload is
+    // there, which on a fresh load is BEFORE the 2 m height tiles under it —
+    // so its storey-0 placements were lifted onto the coarse overview and kept
+    // that answer until the next remount. `heightRevision` counts up when the
+    // overview lands and again with every batch of tiles; on a change the
+    // scene is put back on the ground exactly as the world props below are.
+    const heightRev = terrainGround.heightRevision();
+    const heightMoved = heightRev !== groundDrapedRev;
     for (const tile of tiles.values()) {
       if (!tile.placedModels) continue;   // no mounted scene, nothing to swap
+      if (heightMoved) reliftScene(tile);
       const b = wantedBuildingTier(tile);
       if (buildingTierByLoc.get(tile.loc.id) !== b) {
         buildingTierByLoc.set(tile.loc.id, b);
@@ -847,9 +860,8 @@ async function startApp(username: string, role: string) {
     // re-asked here too, because a height field that lands after a prop was
     // placed would otherwise leave it floating until its next edit.
     worldPropsLayer.tick(engine.camera.position);
-    const wpHeightRev = terrainGround.heightRevision();
-    if (wpHeightRev !== worldPropsHeightRev) {
-      worldPropsHeightRev = wpHeightRev;
+    if (heightMoved) {
+      groundDrapedRev = heightRev;
       worldPropsLayer.redrape();
     }
     // …and fifth, on the same beat: WHERE the fine height tiles are needed

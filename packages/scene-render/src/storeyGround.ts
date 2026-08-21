@@ -79,3 +79,62 @@ export function storeyGroundLift(level: number | undefined,
   if (!Number.isFinite(y)) return 0
   return y - datumY
 }
+
+/** What `storeyGroundRelift` answers: the lift that is now applied, and the
+ *  y-DISTANCE the caller has to move its object by to get there from the lift
+ *  it was carrying. */
+export interface StoreyGroundStep {
+  /** the lift belonging to the height field as it stands NOW */
+  lift: number
+  /** `lift − applied` — the move, 0 when nothing changed */
+  delta: number
+}
+
+/**
+ * MOUNTING AND RE-DRAPING ARE THE SAME MOVE (user finding 2026-08-21).
+ *
+ * THE DEFECT THIS CLOSES. The lift above is read ONCE, when a scene is
+ * mounted — and on a fresh page load a scene mounts BEFORE the fine height
+ * tiles under it have arrived. The sampler then answers the coarse overview,
+ * or nothing at all, and every placement of that scene keeps that answer for
+ * as long as it stands: the Mondscheinhütte was buried 2.5 m deep after every
+ * refresh and stood correctly only after a re-save, because a re-save remounts
+ * the scene at a moment when the tiles happen to be there. That is an ORDER
+ * DEPENDENCE — the drawn world depended on which of two network answers won a
+ * race — and it is exactly the defect the world props (§ A9a `redrape`) do not
+ * have, because they re-ask the field whenever the relief moves.
+ *
+ * THE RULE: a lifted placement carries the lift it is standing on, and every
+ * time the height field moves it is moved by the DIFFERENCE to the lift the
+ * field now says. Passing `applied = 0` makes this the MOUNT — one function,
+ * so a scene that mounted coarse and was re-lifted fine ends at the very
+ * number a scene mounted once with the fine field lands on, and no placement
+ * can ever be lifted twice.
+ *
+ * "NOTHING TO SAY" IS NOT "COME BACK DOWN", and that is the one place this
+ * function may NOT simply diff the lift above. There, a field that has not
+ * arrived answers 0 — which is right for a MOUNT (nothing has lifted the
+ * object yet) and would be a fall for a re-lift: a tile evicted from the cache
+ * would drop a hut that is already standing correctly back into the lake. So a
+ * missing sampler, a non-finite sample and a non-finite datum all keep the lift
+ * the object carries and move it by nothing.
+ *
+ * Hand-derived in `client3d/scripts/smoke_walk_math.mjs` § S2 (§ B5a).
+ *
+ * @param applied the lift the object already carries (0 = it carries none yet)
+ */
+export function storeyGroundRelift(applied: number,
+                                   level: number | undefined,
+                                   worldX: number, worldZ: number,
+                                   datumY: number,
+                                   sampler?: GroundSampler | null): StoreyGroundStep {
+  const have = Number.isFinite(applied) ? applied : 0
+  // A declared storey stands on a plate: its lift is 0 as a STATEMENT, not as
+  // a missing answer, so anything applied comes back off.
+  if ((level ?? 0) !== 0) return { lift: 0, delta: -have }
+  if (!sampler || !Number.isFinite(datumY)) return { lift: have, delta: 0 }
+  const y = sampler(worldX, worldZ)
+  if (!Number.isFinite(y)) return { lift: have, delta: 0 }
+  const lift = y - datumY
+  return { lift, delta: lift - have }
+}
