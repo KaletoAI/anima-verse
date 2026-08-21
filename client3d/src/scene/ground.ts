@@ -103,7 +103,7 @@ import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterPlane, patchWaterShore } from './waterPlane';
-import { waterLevelOf, zoneWaterMirrors } from './waterPlaneMath';
+import { waterLevelOf, zoneWaterAt, zoneWaterMirrors } from './waterPlaneMath';
 import type { UndergrowthArea } from './undergrowth';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
@@ -2753,8 +2753,30 @@ export function createGround(): Ground {
       hit = a.kind || '';
       level = waterLevelOf(a.meta);
     }
+    // ZONE WATERS rank ABOVE painted areas, exactly as their floors do in the
+    // layer bake (§ A19 no. 5): a figure crossing a lake ZONE must float at
+    // its mirror, not wade on the carved bed beneath it.
+    const zone = zoneWaterAt(zoneWaters, x, z, pointInRing);
+    if (zone) {
+      hit = zone.kind || hit;
+      level = zone.level;
+    }
     const kind = hit || payload?.default_kind || '';
-    const entry = catalog.get(kind.toLowerCase());
+    let entry = catalog.get(kind.toLowerCase());
+    if (!entry && zone) {
+      // A zone's floor kind is a surface-library id, not necessarily a
+      // terrain kind — but the swimming numbers (sink, animation, speed) live
+      // in the terrain catalog. Borrow the first catalogued kind flagged as
+      // water (`meta.water`, sorted by key so the pick is deterministic);
+      // standing dry-shod ON a lake would be the visible bug this exists for.
+      for (const key of [...catalog.keys()].sort()) {
+        const c = catalog.get(key);
+        if (c?.meta && (c.meta as Record<string, unknown>).water === true) {
+          entry = c;
+          break;
+        }
+      }
+    }
     if (!entry) {
       return { kind, passable: true, speed_factor: 1, move_anim: '',
         idle_anim: '', move_sink_m: 0, idle_sink_m: 0, water_level: level };

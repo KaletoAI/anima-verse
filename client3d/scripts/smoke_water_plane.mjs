@@ -356,5 +356,37 @@ checkEq('a BUILT place: a tiled hall in a lake is a floor',
   groundWaterLevel(LEVEL, 'built'), null);
 checkEq('no lake, no level', groundWaterLevel(null, 'open'), null);
 
+console.log('\n[5] the zone water under a point — the swimmer\'s half (§ A19 no. 5)');
+// zoneWaterAt(waters, x, z, inside): a room whose floor is water ranks ABOVE
+// painted areas, and among overlapping zones the LAST one wins — the same
+// last-wins reading the layer mask uses. The ring test is INJECTED (the module
+// stays import-free); this even-odd twin is the textbook crossing rule.
+const inside = (x, z, ring) => {
+  let hit = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, zi] = ring[i];
+    const [xj, zj] = ring[j];
+    if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) hit = !hit;
+  }
+  return hit;
+};
+const POND = { kind: 'water', polygon: [[0, 0], [10, 0], [10, 10], [0, 10]],
+  water_level_effective: 2.0 };
+const POOL = { kind: 'pool_tile', polygon: [[4, 4], [8, 4], [8, 8], [4, 8]],
+  water_level_effective: 3.5 };
+check('a point in the pond carries the pond\'s mirror',
+  W.zoneWaterAt([POND, POOL], 2, 2, inside)?.level ?? null, 2.0);
+check('overlap: the LAST zone wins, like the mask',
+  W.zoneWaterAt([POND, POOL], 5, 5, inside)?.level ?? null, 3.5);
+checkEq('outside every zone the answer is null',
+  W.zoneWaterAt([POND, POOL], 20, 20, inside), null);
+checkEq('a zone the bake never carved (null level) is skipped, never 0',
+  W.zoneWaterAt([{ kind: 'water', polygon: POND.polygon,
+    water_level_effective: null }], 2, 2, inside), null);
+// The end of the chain: over the pond's 0.0 bed the figure floats at the
+// mirror — root = max(0.0 + 0.35, 2.0) = 2.0 (the E4 law, now fed by a ZONE).
+check('…and the swimmer floats at the zone mirror',
+  walk.floatRootY(0.0, W.zoneWaterAt([POND], 2, 2, inside).level, SINK), 2.0);
+
 console.log(`\n${passed} ok, ${failed} failed`);
 process.exit(failed ? 1 : 0);

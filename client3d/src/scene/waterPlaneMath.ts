@@ -191,6 +191,34 @@ export function zoneWaterMirrors(
 }
 
 /**
+ * THE ZONE WATER UNDER A POINT — the swimmer's half of § A19 no. 5.
+ *
+ * `typeAt` used to read a mirror only off PAINTED areas, so a figure crossing
+ * a lake ZONE (a room whose floor kind is water — the Mondscheinsee's middle)
+ * waded on the carved bed two metres under the plane it could see. Room floors
+ * rank ABOVE painted areas in the bake, so a zone that holds the point takes
+ * it unconditionally; among overlapping zones the LAST one wins, the same
+ * last-wins reading the mask itself uses.
+ *
+ * The ring test is INJECTED (`inside`), not re-implemented: point-in-polygon
+ * lives in exactly one place (`@anima/scene-render` `pointInRing`), and this
+ * file stays import-free for the smoke transpile. The smoke passes the same
+ * even-odd twin it checks elsewhere.
+ */
+export function zoneWaterAt(
+  waters: readonly { kind?: unknown; polygon?: unknown;
+                     water_level_effective?: unknown }[] | null | undefined,
+  x: number, z: number,
+  inside: (x: number, z: number, ring: [number, number][]) => boolean
+): ZoneMirror | null {
+  let hit: ZoneMirror | null = null;
+  for (const w of zoneWaterMirrors(waters)) {
+    if (inside(x, z, w.polygon)) hit = w;
+  }
+  return hit;
+}
+
+/**
  * The shore, as the GLSL that rides on `terrainLodSampleGlsl()`.
  *
  * `vWaterPlane` is the fragment's WORLD position. Its `y` is the mirror height
