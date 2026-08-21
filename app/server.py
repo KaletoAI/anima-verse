@@ -57,6 +57,7 @@ from app.routes import auth, store, characters, chat, group_chat, scheduler, ins
 from app.routes import admin_settings
 from app.routes import user_gallery
 from app.routes import assets
+from app.routes import clip_catalog_loops
 from app.routes import game_audio
 from app.routes import poses as poses_route
 from app.routes import secrets
@@ -583,6 +584,7 @@ app.middleware("http")(user_context_middleware)
 app.include_router(auth.router)
 app.include_router(store.router)
 app.include_router(assets.router)
+app.include_router(clip_catalog_loops.router)
 app.include_router(game_audio.router)
 app.include_router(poses_route.router)
 app.include_router(characters.router)

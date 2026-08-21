@@ -234,9 +234,77 @@ def loop_window(take: str, *, start_s: float = 0.0, end_s: Optional[float] = Non
     src = catalog_framerate(take)
     idx = cmu.resample_indices(len(frames), src, fps, start_s, end_s)
     poses = [cmu.solve_frame(sk, frames[i]) for i in idx]
-    i, j, d = cmu.best_loop_window(poses, fps, min_s)
+    i, j, d = _best_window_from_matrix(_pose_distance_matrix(cmu, poses), fps, min_s)
     return {"take": take, "source_fps": src, "fps": fps,
             "window_start_s": round(start_s + i / fps, 3),
             "window_end_s": round(start_s + j / fps, 3),
             "seam_distance": None if d is None else round(d, 3),
             "frames": j - i}
+
+
+LOOP_SUGGEST_MIN_S = (0.8, 1.5, 3.0, 6.0)
+LOOP_SUGGEST_CAP_S = 40.0
+
+
+def _pose_distance_matrix(cmu, poses):
+    """All-pairs ``_cmu.pose_distance`` as an n×n numpy array — the SAME
+    metric (summed rotation angle of LOOP_BONES + hips height), but per bone
+    as one matrix product: tr(RaᵀRb) = ⟨vec Ra, vec Rb⟩, so the n×9 flattened
+    rotations against themselves give every pair's trace at once. 1 200
+    frames (40 s) take well under a second instead of the pure-Python 48 s."""
+    import numpy as np
+    n = len(poses)
+    total = np.zeros((n, n))
+    for name in cmu.LOOP_BONES:
+        if name not in poses[0].rot:
+            continue
+        flat = np.array([[v for row in p.rot[name] for v in row] for p in poses])   # n×9
+        tr = flat @ flat.T
+        total += np.arccos(np.clip((tr - 1.0) / 2.0, -1.0, 1.0))
+    hips = np.array([p.pos["root"][1] for p in poses]) / 100.0
+    total += np.abs(hips[:, None] - hips[None, :])
+    return total
+
+
+def _best_window_from_matrix(dist, fps: int, min_s: float):
+    """``(i, j, distance)`` of the best-closing window with j − i ≥ min_s·fps,
+    read off the distance matrix (upper triangle beyond the minimum length)."""
+    import numpy as np
+    n = dist.shape[0]
+    min_len = max(2, int(round(min_s * fps)))
+    if n <= min_len + 1:
+        return 0, n, None
+    mask = np.triu(np.ones((n, n), dtype=bool), k=min_len)
+    masked = np.where(mask, dist, np.inf)
+    flat = int(np.argmin(masked))
+    i, j = divmod(flat, n)
+    return int(i), int(j), float(masked[i, j])
+
+
+def loop_suggestions(take: str, fps: int = 30) -> Dict[str, Any]:
+    """Candidate loop windows of a take for the catalog's Start/End fields:
+    for each minimum length in LOOP_SUGGEST_MIN_S the best-closing window
+    (``_cmu.best_loop_window``), the take capped at LOOP_SUGGEST_CAP_S so
+    the O(n²) search stays under a second or two. Windows that coincide
+    (same cut within a frame) are reported once, sorted by seam distance —
+    the first is the cleanest cycle the take has."""
+    cmu = _cmu()
+    asf, amc = take_files(take)
+    sk, frames = cmu.load_clip(asf, amc)
+    src = catalog_framerate(take)
+    idx = cmu.resample_indices(len(frames), src, fps, 0.0, LOOP_SUGGEST_CAP_S)
+    poses = [cmu.solve_frame(sk, frames[i]) for i in idx]
+    dist = _pose_distance_matrix(cmu, poses)
+    seen = {}
+    for min_s in LOOP_SUGGEST_MIN_S:
+        i, j, d = _best_window_from_matrix(dist, fps, min_s)
+        if d is None:
+            continue
+        key = (i, j)
+        if key not in seen:
+            seen[key] = {"start_s": round(i / fps, 3), "end_s": round(j / fps, 3),
+                         "length_s": round((j - i) / fps, 3), "min_s": min_s,
+                         "seam_distance": round(d, 3)}
+    out = sorted(seen.values(), key=lambda w: w["seam_distance"])
+    return {"take": take, "fps": fps, "source_fps": src,
+            "searched_s": round(len(poses) / fps, 3), "windows": out}

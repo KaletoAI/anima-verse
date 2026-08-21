@@ -170,6 +170,9 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
   /** the window the preview plays — start/end as typed, or the server's
    *  loop cut (same metric as the converter) when "seamless loop" is on */
   const [playWindow, setPlayWindow] = useState<PlayWindow | undefined>(undefined)
+  /** the take's best-closing windows (server: cmu_import.loop_suggestions) —
+   *  offered as Start/End presets; a click adopts the window and the loop */
+  const [loopSuggestions, setLoopSuggestions] = useState<Array<{ start_s: number; end_s: number; length_s: number; min_s: number; seam_distance: number }>>([])
   const [loopCut, setLoopCut] = useState<{ start: number; end: number; seam: number | null } | null>(null)
   const [inPlace, setInPlace] = useState(true)
   const [overwrite, setOverwrite] = useState(false)
@@ -406,6 +409,20 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
       overwrite, selected, startS, t, toast])
 
   // ── facet definitions (label + the values offered) ──
+  useEffect(() => {
+    setLoopSuggestions([])
+    if (!selected || selected.pair) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const r = await apiGet<{ windows: typeof loopSuggestions }>(
+          `/assets/clip-catalog/${encodeURIComponent(selected.id)}/loop-suggestions`)
+        if (!cancelled) setLoopSuggestions(r.windows || [])
+      } catch { /* no originals on disk — no suggestions */ }
+    })()
+    return () => { cancelled = true }
+  }, [selected])
+
   useEffect(() => {
     if (!selected) { setPlayWindow(undefined); setLoopCut(null); return }
     const start = Number(startS) || 0
@@ -767,6 +784,24 @@ export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) =>
                     onChange={(e) => setEndS(e.target.value)} />
                 </label>
               </div>
+
+              {loopSuggestions.length ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                  <span className="ga-hint">{t('Suggested loops')}:</span>
+                  {loopSuggestions.map((w) => (
+                    <button key={`${w.start_s}-${w.end_s}`} type="button" className="ga-btn ga-btn-sm"
+                      title={`${t('seam')} ${w.seam_distance.toFixed(2)} — ${t('lower is cleaner')}`}
+                      onClick={() => {
+                        // the window IS the cut: start/end and the loop's
+                        // minimum length pin the converter to exactly it
+                        setStartS(String(w.start_s)); setEndS(String(w.end_s))
+                        setLoopOn(true); setLoopS(String(w.min_s))
+                      }}>
+                      {w.start_s.toFixed(2)}–{w.end_s.toFixed(2)} s · {w.length_s.toFixed(1)} s · {t('seam')} {w.seam_distance.toFixed(2)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
 
               <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input type="checkbox" checked={loopOn} disabled={selected.pair}
