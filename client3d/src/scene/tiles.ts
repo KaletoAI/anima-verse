@@ -1,15 +1,12 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { sampleTerrain, surfaceMaterial, worldToLocalXZ } from '@anima/scene-render';
+import { sampleTerrain, worldToLocalXZ } from '@anima/scene-render';
 import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
-import { acceptsWalkHit, declaredFloorAt, plateCeiling, plateLift, recipeFloorAt,
+import { acceptsWalkHit, declaredFloorAt, plateCeiling, recipeFloorAt,
   standY, WALK_CLEARANCE_M,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
-import {
-  asphaltTexture, grassTexture, paversTexture, waterTexture,
-} from './textures';
 
 // --- The FOOTPRINT of a location (contract v6 "Gebiete", § A1.1) -------------
 //
@@ -84,7 +81,7 @@ export function setWorldGround(sampler: (x: number, z: number) => number): void 
  * and the detail record's own `map3d.boundary` for a location the map row says
  * nothing about. `null` is a real state — v6 Nr. 1 struck the "without an
  * anchor, a 10 m square" fallback without replacement, so such a place is a
- * pin: it claims no point, gets no plate, and says so once.
+ * pin: it claims no point on the plane and says so once.
  */
 export function footprintBoundary(loc: WorldLocation): [number, number][] | null {
   const pts = sanitizePolygon(loc.boundary ?? loc.map3d?.boundary);
@@ -92,7 +89,7 @@ export function footprintBoundary(loc: WorldLocation): [number, number][] | null
   if (!widthWarned.has(loc.id)) {
     widthWarned.add(loc.id);
     console.warn(`[tiles] ${loc.name || loc.id}: no boundary — the location has`
-      + ' no area at all (contract v6 Nr. 1), so no plate is drawn');
+      + ' no area at all (contract v6 Nr. 1), so it claims no ground');
   }
   return null;
 }
@@ -123,10 +120,9 @@ export function footprintWidth(loc: WorldLocation): number {
  * its ground (`level_ground`, § A16.1, opt-in) that is the flat plateau the
  * server made, under any other place it is the landscape at that point.
  * Because the whole tile group hangs off this one point, everything the place
- * is made of — the
- * plate, the shell, the rooms, the scene payload's tile-local metres — climbs
- * the hill together, and nothing inside the location has to know about relief
- * at all.
+ * is made of — the shell, the rooms, the scene payload's tile-local metres —
+ * climbs the hill together, and nothing inside the location has to know about
+ * relief at all.
  */
 export function footprintCentre(
   loc: { pos_x?: number | null; pos_z?: number | null }
@@ -275,9 +271,9 @@ export interface Tile {
   group: THREE.Group;
   /** Centre of the footprint in world metres — `group.position` (§ A1.1). */
   center: THREE.Vector3;
-  /** THE footprint outline in TILE-LOCAL metres (contract v6) — what the plate
-   *  is cut to and what `tileAt` tests a point against. `null` = the location
-   *  has no area at all, and then this tile claims no point on the plane. */
+  /** THE footprint outline in TILE-LOCAL metres (contract v6) — what `tileAt`
+   *  tests a point against. `null` = the location has no area at all, and then
+   *  this tile claims no point on the plane. */
   boundary: [number, number][] | null;
   /** Enclosed area of `boundary` in m². THE tie-breaker where footprints
    *  overlap: the smallest area wins (v6 Nr. 6). 0 without a boundary. */
@@ -395,15 +391,8 @@ export interface Tile {
   levelSwitch?: () => void;
   /** als outdoor markierte Räume (liefern keine Boden-Farbe fürs Gebäude) */
   roomOutdoor: Set<string>;
-  /** Boden-/Sockelplatte DIESER Kachel (immer opak, Höhe 0) — die Innenansicht
-   *  eines Gebäudes mit Keller muss durch sie hindurchsehen. */
-  groundPlate?: THREE.Mesh;
-  /** The world ground under the plate's drape lattice at the moment it was
-   *  built (`plateGroundSamples`) — the staleness reading of `relevelTiles`.
-   *  `undefined` for a tile that carries no plate at all. */
-  plateGround?: Float32Array | null;
-  /** Szene dieser Kachel nutzt eine Etage < 0 (aus dem Payload abgeleitet,
-   *  gesetzt von mountScene). Ohne Keller bleibt der Boden unangetastet. */
+  /** This tile's scene uses a storey < 0 (derived from the payload, set by
+   *  mountScene). Read by the camera rule that opens a basement view. */
   hasBasement?: boolean;
   /** Höhenfeld der montierten Szene (§ B1 Nr. 14) — fehlt = ebene Kachel.
    *  Objekthöhen kommen FERTIG gehoben aus dem Payload; das Feld dient hier
@@ -411,9 +400,6 @@ export interface Tile {
   terrain?: SceneTerrain;
   /** Kantenlänge des Bezugsquadrats, über dem `terrain` liegt (extent_m). */
   terrainExtent?: number;
-  /** Ebene Original-Geometrie der Kachelplatte, solange eine Relief-Szene
-   *  sie drapiert hat — unmountScene setzt sie zurück. */
-  flatGroundGeo?: THREE.BufferGeometry;
   /** Flächen-Location (plan-area-locations.md): das Location-Modell bleibt in
    *  der Innenansicht stehen und bekommt stattdessen Löcher. Das Handle
    *  schaltet sie mit dem Crossfade — Fernsicht intaktes Modell, Innenansicht
@@ -472,13 +458,11 @@ export function isAreaLocation(loc: WorldLocation): boolean {
 }
 
 const loader = new THREE.TextureLoader();
-let grassTex: THREE.Texture | null = null;
-let asphaltTex: THREE.Texture | null = null;
-let waterTex: THREE.Texture | null = null;
 
-/** Globale Oberflächen-Bibliothek vom Server (kind -> Fläche ODER
- *  Zusammenstellung); Fallback sind die eingebauten prozeduralen Texturen.
- *  Neuer Boden = neuer Bibliotheks-Eintrag, KEINE Client-Änderung. */
+/** The server's global surface library (kind -> surface). A new ground kind is
+ *  a new library entry, NOT a client change. The built-in procedural stand-ins
+ *  went with the footprint plate ("Ein Boden" E3): the only reader left is the
+ *  scene recipe, and a payload primitive names a kind the library has. */
 interface SurfaceEntry {
   url?: string; sizeM: number;
   /** Materialklasse der Art (Bibliothek) — Wasser wird anders beleuchtet als
@@ -486,7 +470,6 @@ interface SurfaceEntry {
   material?: SurfaceMaterialSpec | null;
 }
 const serverSurfaces = new Map<string, SurfaceEntry>();
-const serverSurfaceCache = new Map<string, THREE.Texture>();
 export function setSurfaceTextures(list: { kind: string; url?: string; size_m?: number;
                                            material?: SurfaceMaterialSpec | null }[]) {
   for (const t of list) {
@@ -513,30 +496,6 @@ export function hasSurfaceTexture(kind: string): boolean {
 // polygon an admin draws, not a texture the client guesses from a grid. Gone
 // with it: `setTerrainGrid`, `gridSurfaceKind`, the noise/zone baker and the
 // canvas compositing.
-
-/** Tileable surface texture of a terrain kind, repeated over a footprint
- *  `widthM` metres wide (server library first, built-in procedural fallback).
- *
- *  The base image is cached per kind, the REPEAT is per tile: footprints have
- *  different edge lengths now, so one shared texture object could not carry all
- *  of them — a clone is one object per plate and the image is shared. */
-function surfaceTexture(kind: string, fallback: THREE.Texture,
-                        widthM: number): THREE.Texture {
-  const entry = serverSurfaces.get(kind);
-  if (!entry?.url) return fallback;
-  let tex = serverSurfaceCache.get(kind);
-  if (!tex) {
-    tex = loader.load(entry.url);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    serverSurfaceCache.set(kind, tex);
-  }
-  const own = tex.clone();
-  own.needsUpdate = true;
-  own.wrapS = own.wrapT = THREE.RepeatWrapping;
-  own.repeat.set(widthM / entry.sizeM, widthM / entry.sizeM);
-  return own;
-}
 
 // Die Boden-Kachelung der Etagen-/Raumplatten läuft seit dem Szenen-Rezept
 // über `surfaceFor` (Kind kommt als `texture_kind` mit dem Primitiv, Maßstab
@@ -585,400 +544,20 @@ export function surfaceFor(
   return null;
 }
 
-function std(opts: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02, transparent: true, ...opts });
-}
+// THE TILE'S OWN GROUND DIED HERE ("Ein Boden" E3, plan § 3.1). Until 2026-08-21
+// every tile drew a second ground of its own: a footprint plate draped over the
+// world field (`plateGeometry`/`groundPlate`, y 0.04), a socle under a building
+// model (0.045), a backstop ladder that shoved that plate under a mounted scene
+// (`tilePlateY` −0.05/−0.13), a depth-bias rung in front of the terrain
+// (`PLATE_POLYGON_OFFSET` −33) and a staleness probe that re-draped it whenever
+// the height window sharpened (`plateGroundSamples`/`relevelTiles`). All of it
+// existed to hide the seam between two independent grounds. There is one ground
+// now — the CDLOD terrain composites the painted layers per texel and runs on
+// under every location — so the plate has nothing left to cover and every
+// crutch that kept it in front of the landscape goes with it, without
+// replacement. The tile still owns everything ABOVE the ground: label, height,
+// rooms, scene primitives, models.
 
-/** How fine the footprint plate is cut for the drape, and how many cells it may
- *  cost at most. 2 m is finer than any world field step (§ A16: 4 m and up), so
- *  the plate follows the landscape rather than interpolating over it; the cap
- *  keeps a 500 m area from paying 60 000 quads. */
-const DRAPE_STEP_M = 2;
-const DRAPE_MAX_SEGMENTS = 48;
-
-/** Below this LIFT anywhere over a footprint the plate stays the ONE quad it
- *  always was (metres). Same idea as the fog tiling of E8 task 5: cut only
- *  where the ground actually moves — a world without relief must cost exactly
- *  what it cost before. The lift is never negative (`plateLift`), so the
- *  largest one IS the spread. */
-const DRAPE_FLAT_EPS_M = 0.05;
-
-/** How high a plate rides over the tile floor, in metres — the ground plate of
- *  the footprint and the socle under a building model. The socle is the hair
- *  above the ground plate it always was. Exported so the smoke can measure the
- *  world height of a vertex instead of carrying a copy of the number
- *  (`client3d/scripts/smoke_plate_drape.mjs`). */
-export const PLATE_Y_M = 0.04;
-export const SOCLE_Y_M = 0.045;
-
-/**
- * WHERE THE TILE'S OWN PLATE GOES WHILE A SCENE IS MOUNTED, in metres.
- *
- * Three states, and the payload alone decides which (§ B1 addendum
- * 2026-08-20 part 2 — the server classifies, the renderer places):
- *
- *  - a DETAIL scene (`area_detail`) makes the plate the BACKSTOP under the
- *    storey-0 surfaces: −0.05, i.e. 0.14 m under the zone plates at 0.09.
- *    1 cm was not enough for the depth buffer at range (z-fighting waves,
- *    user picture 2026-08-03).
- *  - a NATURAL location (`natural_floor`) draws no storey slab at all, so its
- *    zone surfaces sit at 0.01 rather than 0.09 — the SAME 0.14 m of clearance
- *    is 0.01 − 0.14 = −0.13. Without this the plate would bury the very
- *    textures it backs: outside detail mode it sits at 0.04, three centimetres
- *    ABOVE them, and with its own depth bias pulling it forward it wins even
- *    where it is level.
- *  - anything else keeps the plate where the tile built it (0.04) — it lies ON
- *    the world ground there and is not a backstop at all.
- *
- * The tile plate is DRAPED over the world ground (`plateGeometry`) while these
- * scene surfaces are flat, so the clearance is a clearance only where the
- * landscape under the footprint is level with the pin; where the world rises
- * more than 0.14 m above it the plate comes through the zone textures. That is
- * the authored mismatch (a flat drawn zone over a rolling landscape), not a
- * datum question — `level_ground` on the location is what flattens it.
- */
-export const BACKSTOP_Y_M = -0.05;
-export const NATURAL_BACKSTOP_Y_M = -0.13;
-
-/** The y of the tile's own ground plate for a mounted scene — the ONE rule,
- *  hoisted out of `mountScene` so `smoke_walk_math.mjs` can check it by hand
- *  instead of copying the three numbers. */
-export function tilePlateY(scene: { area_detail?: boolean;
-                                    natural_floor?: boolean }): number {
-  if (scene.natural_floor) return NATURAL_BACKSTOP_Y_M;
-  if (scene.area_detail) return BACKSTOP_Y_M;
-  return PLATE_Y_M;
-}
-
-/** Is the tile's own plate a BACKSTOP under this scene (pushed back in the
- *  depth test) rather than the ground it normally is (pulled forward)? */
-export function tilePlateIsBackstop(scene: { area_detail?: boolean;
-                                             natural_floor?: boolean }): boolean {
-  return !!(scene.area_detail || scene.natural_floor);
-}
-
-/**
- * The DEPTH BIAS of a footprint plate — one rung in front of the world ground's
- * own ladder (`scene/ground.AREA_OFFSET_MAX` = 32, so this is −33).
- *
- * The same `polygonOffset` crutch the file already uses for the detail-mode
- * backstop (`sceneRecipe.mountScene`, 2026-08-03: "Z-Fighting-Wellen"), with
- * the SIGN MIRRORED, because the case is mirrored: the backstop must never
- * poke through the zone plates ABOVE it and is pushed back (+), a footprint
- * plate must never be poked through by the terrain BELOW it and is pulled
- * forward (−).
- *
- * WHY IT HAS TO CLEAR THE WHOLE LADDER, not just win by one unit. The painted
- * areas already pull THEMSELVES forward by `−min(index+1, AREA_OFFSET_MAX)`
- * (`scene/ground.ts`) to stack coplanar ground, while the plate carried no
- * bias at all — so the plate's 4 cm of air was competing against up to 32
- * depth units of the area under it. Worked out for this camera (near 0.2, far
- * 800, 24-bit depth: one depth unit at range z is 2.979e−7 · z² metres, so
- * 4 cm equals 134252 / z² units), the plate lost to an area of bias b beyond
- * z = sqrt(134252 / b):
- *
- *      b =  1 -> 366 m      b =  5 -> 164 m      b = 32 -> 65 m
- *      b =  2 -> 259 m      b = 10 -> 116 m
- *
- * which is exactly "the ground plate is partly covered by the texture of the
- * terrain under it, and it changes with view and movement". At one rung above
- * the ceiling the plate wins at every range, and it is no harsher on whatever
- * stands ON it than the topmost painted area already is.
- */
-export const PLATE_POLYGON_OFFSET = -33;
-
-/** Put a footprint plate one rung in front of the ground it lies on. Takes the
- *  three fields structurally so the smoke can check the real setter rather than
- *  a copy of it (`smoke_plate_drape.mjs` § 6). */
-export function applyPlateDepthBias(mat: {
-  polygonOffset: boolean; polygonOffsetFactor: number; polygonOffsetUnits: number;
-}): void {
-  mat.polygonOffset = true;
-  mat.polygonOffsetFactor = PLATE_POLYGON_OFFSET;
-  mat.polygonOffsetUnits = PLATE_POLYGON_OFFSET;
-}
-
-/**
- * UVs of a plate geometry, in METRES over the bounding box divided by
- * `widthM` — the square case's own mapping, generalised.
- *
- * The texture carries the repeat (`surfaceTexture`: `widthM / sizeM` on both
- * axes), so a uv that runs 0…1 across `widthM` metres puts one tile of the
- * image on every `sizeM` metres, whatever the outline's shape. Both axes are
- * divided by the SAME length, or a long thin place would stretch its grass.
- * `ShapeGeometry` would otherwise write metres straight into the uv and repeat
- * the image once per metre.
- */
-function plateUVs(geo: THREE.BufferGeometry, minPX: number, minPY: number,
-                  widthM: number): void {
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const span = widthM > 0 ? widthM : 1;
-  const uv = new Float32Array(pos.count * 2);
-  for (let i = 0; i < pos.count; i++) {
-    uv[i * 2] = (pos.getX(i) - minPX) / span;
-    uv[i * 2 + 1] = (pos.getY(i) - minPY) / span;
-  }
-  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-}
-
-/**
- * The drape LATTICE of a footprint polygon: the regular grid over its bounding
- * box the plate's vertices sit on, `DRAPE_STEP_M` apart and capped at
- * `DRAPE_MAX_SEGMENTS` per axis.
- *
- * One function, because two readers walk it and must not drift: the geometry
- * (`platePolygonGeometry`) and the staleness probe that asks whether the ground
- * under an ALREADY BUILT plate has moved (`plateGroundSamples`). `null` for an
- * outline that has no bounds at all.
- */
-function plateLattice(boundary: [number, number][]): {
-  minX: number; minZ: number; segX: number; segZ: number;
-  stepX: number; stepZ: number;
-} | null {
-  const b = polygonBounds(boundary);
-  if (!b) return null;
-  const spanX = b.maxX - b.minX;
-  const spanZ = b.maxZ - b.minZ;
-  const segX = Math.min(DRAPE_MAX_SEGMENTS,
-                        Math.max(1, Math.ceil(spanX / DRAPE_STEP_M)));
-  const segZ = Math.min(DRAPE_MAX_SEGMENTS,
-                        Math.max(1, Math.ceil(spanZ / DRAPE_STEP_M)));
-  return { minX: b.minX, minZ: b.minZ, segX, segZ,
-           stepX: spanX / segX, stepZ: spanZ / segZ };
-}
-
-/**
- * The plate geometry of ONE footprint polygon, in the plate's own frame.
- *
- * THE FRAME. The mesh is turned by −90° about X, so a vertex `(px, py, pz)`
- * sits at tile-local `(px, pz, −py)`: the outline point `(lx, lz)` becomes
- * `(lx, −lz)` and the HEIGHT is the local z. That is the frame the square
- * plate always lived in — only its shape changes here.
- *
- * TWO SHAPES, one rule (contract v6 Nr. 4). Without relief under it the plate
- * is the triangulated polygon itself (`THREE.Shape`, whose ear clipping handles
- * the concave outlines E1.1 allows) — as few triangles as the outline has, and
- * an exact rim. With relief it is the regular grid over the polygon's BOUNDING
- * BOX, `DRAPE_STEP_M` apart, with every cell whose CENTRE lies outside the
- * polygon left out. A cell straddling the rim survives whole: that is a
- * VISUAL matter, not the truth about where the place is — `tileAt` tests the
- * polygon itself, and a hand's breadth of grass past the rim is a hand's
- * breadth of grass.
- *
- * `liftAt` is the world ground over the tile floor at a TILE-LOCAL point
- * (`game/ground.plateLift`); `null` while nothing has been taken over, and then
- * the plate is flat by construction.
- */
-function platePolygonGeometry(boundary: [number, number][], widthM: number,
-                              liftAt: ((lx: number, lz: number) => number) | null
-): THREE.BufferGeometry {
-  const b = polygonBounds(boundary)!;
-  // Plate coordinates: px = lx, py = −lz. The z bounds therefore swap sides.
-  const minPX = b.minX;
-  const minPY = -b.maxZ;
-  const { segX, segZ, stepX, stepZ } = plateLattice(boundary)!;
-  // Does the ground move under this footprint at all? Probed on the DRAPE GRID
-  // itself, so nothing between the samples can hide (finding I2), and only
-  // INSIDE the polygon — a hill in the notch of an L is not under this plate.
-  let maxLift = 0;
-  if (liftAt) {
-    for (let iz = 0; iz <= segZ; iz++) {
-      for (let ix = 0; ix <= segX; ix++) {
-        const lx = b.minX + ix * stepX;
-        const lz = b.minZ + iz * stepZ;
-        if (!pointInPolygon(lx, lz, boundary)) continue;
-        const h = liftAt(lx, lz);
-        if (h > maxLift) maxLift = h;
-      }
-    }
-  }
-  if (maxLift <= DRAPE_FLAT_EPS_M) {
-    const shape = new THREE.Shape(
-      boundary.map(([lx, lz]) => new THREE.Vector2(lx, -lz)));
-    const geo = new THREE.ShapeGeometry(shape);
-    plateUVs(geo, minPX, minPY, widthM);
-    geo.computeVertexNormals();
-    return geo;
-  }
-  // The draped grid: lattice vertices, emitted only where a cell needs them.
-  const positions: number[] = [];
-  const index: number[] = [];
-  const slot = new Map<number, number>();
-  const vertexAt = (ix: number, iz: number): number => {
-    const key = iz * (segX + 1) + ix;
-    const known = slot.get(key);
-    if (known !== undefined) return known;
-    const lx = b.minX + ix * stepX;
-    const lz = b.minZ + iz * stepZ;
-    const at = positions.length / 3;
-    positions.push(lx, -lz, liftAt ? liftAt(lx, lz) : 0);
-    slot.set(key, at);
-    return at;
-  };
-  for (let iz = 0; iz < segZ; iz++) {
-    for (let ix = 0; ix < segX; ix++) {
-      const cx = b.minX + (ix + 0.5) * stepX;
-      const cz = b.minZ + (iz + 0.5) * stepZ;
-      if (!pointInPolygon(cx, cz, boundary)) continue;
-      const a = vertexAt(ix, iz);
-      const c = vertexAt(ix + 1, iz);
-      const d = vertexAt(ix + 1, iz + 1);
-      const e = vertexAt(ix, iz + 1);
-      // py = −lz, so a growing iz means a FALLING py — the winding below is
-      // the one that leaves the face pointing at world +Y after the −90° turn.
-      index.push(a, e, d, a, d, c);
-    }
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setIndex(index);
-  plateUVs(geo, minPX, minPY, widthM);
-  geo.computeVertexNormals();
-  return geo;
-}
-
-/**
- * The lift of one TILE-LOCAL point over the tile floor, or `null` while no
- * world ground has been taken over (`setWorldGround`) — then every plate is
- * flat by construction, which is also what a world without relief answers.
- *
- * The world lookup is this closure's business, the RULE is
- * `game/ground.plateLift` — the same one the figure stands by. The mapping is
- * § A1.1, the one `tileToWorld` uses, so `at` is the footprint's placement:
- * the centre in WORLD metres plus its yaw, because the vertices are TILE-LOCAL
- * and the world sampler is not.
- */
-function plateLiftFn(at: { x: number; y: number; z: number; yaw: number },
-): ((lx: number, lz: number) => number) | null {
-  const sample = worldGroundAt;
-  if (!sample) return null;
-  const cos = Math.cos(at.yaw);
-  const sin = Math.sin(at.yaw);
-  return (lx: number, lz: number): number => plateLift(
-    sample(at.x + lx * cos + lz * sin, at.z - lx * sin + lz * cos), at.y);
-}
-
-/**
- * The DRAPED plate geometry of a footprint polygon — the ONE entry every plate
- * of a tile is built from, so the ground plate of an open place and the socle
- * under a building model cannot describe two different surfaces.
- *
- * Exported for `client3d/scripts/smoke_plate_drape.mjs`, which measures the
- * world height of every vertex against the ground under it (§ B5a: numbers,
- * never screenshots).
- */
-export function plateGeometry(boundary: [number, number][], widthM: number,
-                              at: { x: number; y: number; z: number; yaw: number },
-): THREE.BufferGeometry {
-  return platePolygonGeometry(boundary, widthM, plateLiftFn(at));
-}
-
-/**
- * The WORLD GROUND under every point of a plate's drape lattice, in metres —
- * the reading a built plate is frozen against.
- *
- * A plate is draped once, when its tile is built, and the field arrives in
- * pieces: the 256 m height tiles are a WINDOW that follows the player
- * (`scene/heightTiles.ts`), so the ground under a footprint sharpens as
- * somebody walks towards it. `main.relevelTiles` used to ask ONE point whether
- * that had happened — the pin — which is sound for a 10 m square and blind for
- * a v6 outline hundreds of metres across, where the pin and the far rim are in
- * different height tiles. Then the plate kept a stale drape while the ground
- * under it moved, and the terrain grew through it AS THE PLAYER WALKED.
- *
- * `null` while no world ground has been taken over or the place has no outline
- * — there is no plate to be stale then either. `at` needs no y: this is the
- * ground itself, not the lift over the tile floor.
- */
-export function plateGroundSamples(boundary: [number, number][] | null | undefined,
-                                   at: { x: number; z: number; yaw: number },
-): Float32Array | null {
-  const sample = worldGroundAt;
-  if (!sample || !boundary) return null;
-  const grid = plateLattice(boundary);
-  if (!grid) return null;
-  const cos = Math.cos(at.yaw);
-  const sin = Math.sin(at.yaw);
-  const out = new Float32Array((grid.segX + 1) * (grid.segZ + 1));
-  let n = 0;
-  for (let iz = 0; iz <= grid.segZ; iz++) {
-    const lz = grid.minZ + iz * grid.stepZ;
-    for (let ix = 0; ix <= grid.segX; ix++) {
-      const lx = grid.minX + ix * grid.stepX;
-      out[n++] = sample(at.x + lx * cos + lz * sin, at.z - lx * sin + lz * cos);
-    }
-  }
-  return out;
-}
-
-/** Has the ground under a built plate moved by at least `epsM` ANYWHERE on its
- *  lattice? Two readings that were never taken (no field yet) have not moved;
- *  a lattice of a different size has, because the outline itself was redrawn. */
-export function plateGroundMoved(before: Float32Array | null | undefined,
-                                 after: Float32Array | null | undefined,
-                                 epsM = 1e-3): boolean {
-  if (!before || !after) return false;
-  if (before.length !== after.length) return true;
-  for (let i = 0; i < before.length; i++) {
-    if (Math.abs(before[i] - after[i]) >= epsM) return true;
-  }
-  return false;
-}
-
-/** Ground plate of the FOOTPRINT — the surface texture of the location's
- *  terrain kind (server library, else procedural), over the whole drawn
- *  BOUNDARY POLYGON (contract v6 Nr. 4; a legacy square is that polygon's four
- *  corners). The 2D map illustrations are NOT used as ground (baked-in shadows
- *  and objects do not belong in a 3D scene).
- *
- *  THE PLATE FOLLOWS THE LANDSCAPE (finding 4, 2026-08-13), by the same
- *  mechanism the world plate uses (`scene/ground.liftToField`): it is cut into
- *  cells and every vertex is lifted by the world ground under it. Without that
- *  the figure walks at the height of the terrain (`tileGroundY`) while a flat
- *  plate at the centre height cuts straight through the hill it stands on.
- *  Under a levelling footprint (`level_ground`, § A16.1) the field is flat and
- *  every lift is the same zero — the plate stays the ONE quad it was, and so it
- *  does in a world with no relief at all (`DRAPE_FLAT_EPS_M`).
- *
- *  IT ONLY EVER RISES (`game/ground.plateLift`, review finding I1). The figure
- *  stands on `standY` = the HIGHER of tile and world, so downhill the tile wins
- *  and a plate that followed the world down would sink away under it. Worked
- *  through by hand, a footprint whose centre stands on 2.0 m: at a point where
- *  the world reads 3.2 the vertex is lifted 1.2 and the figure walks at 3.2 —
- *  both on the same surface; at a point where the world reads 0.5 the lift is 0,
- *  the plate stays the tile floor 2.0 and the figure walks at 2.0 — again the
- *  same surface, with the landscape passing underneath.
- *
- *  THE FLATNESS PROBE READS THE DRAPE GRID, not a handful of points (review
- *  finding I2): a hill at the quarter point of an 80 m footprint is 28 m from
- *  every corner, edge midpoint and the centre, so a 3 × 3 probe read a spread
- *  of 0 and left the plate flat for exactly the layout the drape is for. The
- *  probe walks the same lattice the vertices sit on — at most 49² samples of
- *  plain arithmetic, once, when the tile is built (`platePolygonGeometry`).
- *
- *  THE MESH FRAME IS UNTOUCHED: the plate keeps its −90° rotation and its
- *  y = 0.04, because `sceneRecipe` writes that height (backstop mode) and
- *  drapes the SCENE relief on top through `drapeGeometry(…, gp.matrix)`. In
- *  that frame world +Y is local +Z, which is where the lift goes — the scene
- *  drape then ADDS its own along the same axis, so the two reliefs stack
- *  instead of overwriting each other.
- *
- *  `at` is the footprint's placement: the centre in WORLD metres plus its yaw,
- *  because the vertices are TILE-LOCAL and the world sampler is not. */
-function groundPlate(boundary: [number, number][], widthM: number,
-                     tex: THREE.Texture,
-                     material: SurfaceMaterialSpec | null | undefined,
-                     at: { x: number; y: number; z: number; yaw: number }): THREE.Mesh {
-  // The tile surface goes through the same factory as the scene plates: a water
-  // location should look on the map the way it looks in the room.
-  const mat = surfaceMaterial(THREE, { material, map: tex, transparent: true }) as THREE.MeshStandardMaterial;
-  applyPlateDepthBias(mat);
-  const plate = new THREE.Mesh(plateGeometry(boundary, widthM, at), mat);
-  plate.rotation.x = -Math.PI / 2;
-  plate.position.y = PLATE_Y_M;
-  plate.receiveShadow = true;
-  return plate;
-}
 
 // `makeTree` stand hier bis 2026-08-02: prozedurale Kegel-Bäume auf
 // forest-Kacheln. Seit Wald & Co. ihre Detailszene aus GESTREUTEN
@@ -987,19 +566,17 @@ function groundPlate(boundary: [number, number][], widthM: number,
 // Gelände sagt nur noch die Bodentextur, was drauf steht, sagt die Welt.
 
 
-/** The tile builds only the OUTSIDE: ground plate, socle, label. The
- *  procedural building shell died with the Prop-Welt programme (user decision
- *  2026-08-19) — a location without a server model shows its drawn ground and
- *  nothing invented on top. The interior (plates, walls, elevator, rooms,
- *  models) comes entirely from the scene recipe; `mountScene` (sceneRecipe.ts)
- *  builds it into these same tile fields. A location without a recipe (404)
- *  has, by server definition, neither a room layout nor an outline nor a
- *  building model — there is simply nothing to unfold. */
+/** The tile builds only the OUTSIDE, and since "Ein Boden" E3 that is the LABEL
+ *  and the reading height it hangs at — nothing else. The tile draws no ground
+ *  of its own any more: the terrain under it IS the ground of the place (plan
+ *  § 3.1), painted per texel by the one terrain material. The procedural
+ *  building shell died before it with the Prop-Welt programme (user decision
+ *  2026-08-19). The interior (plates, walls, elevator, rooms, models) comes
+ *  entirely from the scene recipe; `mountScene` (sceneRecipe.ts) builds it into
+ *  these same tile fields. A location without a recipe (404) has, by server
+ *  definition, neither a room layout nor an outline nor a building model —
+ *  there is simply nothing to unfold. */
 export function buildTile(loc: WorldLocation): Tile {
-  grassTex = grassTex ?? grassTexture();
-  asphaltTex = asphaltTex ?? asphaltTexture();
-  waterTex = waterTex ?? waterTexture();
-
   const style = detectStyle(loc);
   const isBuilding = !(loc.passable || loc.template_location_id);
   const isArea = isAreaLocation(loc);
@@ -1038,22 +615,6 @@ export function buildTile(loc: WorldLocation): Tile {
     fade: 0, fadeTarget: 0, occl: 0,
   };
 
-  const fallbackFor = (s: string) => (s === 'road' ? asphaltTex! : s === 'water' ? waterTex! : grassTex!);
-  // Ground = the surface texture of the terrain kind (server library AV3D-13,
-  // else procedural) — 2D map pictures are no fallback any more. The kind comes
-  // from the server (`surface_kind`); the legacy style only picks the
-  // procedural stand-in texture.
-  //
-  // NO BOUNDARY, NO PLATE (v6 Nr. 1): a location with no area is a pin, and a
-  // plate would be a square nobody drew.
-  const groundPlateFor = (): THREE.Mesh | null => {
-    if (!boundary) return null;
-    const kind = loc.surface_kind || style;
-    return groundPlate(boundary, width,
-                       surfaceTexture(kind, fallbackFor(style), width),
-                       surfaceMaterialSpec(kind),
-                       { x: center.x, y: center.y, z: center.z, yaw });
-  };
   // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
   const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
   tile.natureSite = natureSite;
@@ -1068,63 +629,19 @@ export function buildTile(loc: WorldLocation): Tile {
     tile.labelObj = label;
   };
 
+  // The three branches only set the READING HEIGHT of the label now: a
+  // transit place hangs it low, a named nature site a hand higher, a building
+  // at a fixed 4 m until its server model reports a real one
+  // (`applySceneBuilding`). The ground each branch used to draw for itself is
+  // the terrain (see the note above `buildTile`).
   if (!isBuilding) {
-    tile.groundPlate = groundPlateFor() ?? undefined;
-    if (tile.groundPlate) group.add(tile.groundPlate);
     tile.height = style === 'forest' ? 3 : 0.3;
   } else if (natureSite) {
-    tile.groundPlate = groundPlateFor() ?? undefined;
-    if (tile.groundPlate) group.add(tile.groundPlate);
     tile.height = style === 'forest' ? 3 : 0.6;
     addLabel();
   } else {
-    // Socle plate under a building: the location's declared ground (e.g.
-    // grass on a campus) before the paving default — "terrain = grass" is
-    // meant to show grass in the room view too, not stones. The kind is the
-    // server's (`surface_kind`); the legacy style vocabulary only picks the
-    // procedural fallback texture for a terrain the library has no entry for.
-    const tStyle = terrainKind(loc.terrain);
-    const tKind = loc.surface_kind || tStyle;
-    const plinthTex = tKind
-      ? surfaceTexture(tKind, fallbackFor(tStyle || ''), width)
-      : paversTexture();
-    // The socle follows the DRAWN OUTLINE like every other plate (v6 Nr. 4):
-    // one shape for the place, whether a house stands on it or not — AND the
-    // same drape, through the very same `plateGeometry`. It used to be built
-    // flat (`liftAt = null`), which was harmless while the socle was the few
-    // metres of paving around a procedural hut; since the shell was struck
-    // (2026-08-19) the socle IS the drawn area of the place, and a dead-flat
-    // one at the pin's height floats over the valley half of its own outline
-    // and lets the hill half grow straight through it. Measured by hand in
-    // `smoke_plate_drape.mjs`: on a 40 m outline over a 5 % slope the west rim
-    // stood 1.045 m in the air and the east rim was buried 0.955 m deep.
-    if (boundary) {
-      const plinthMat = std({ map: plinthTex });
-      applyPlateDepthBias(plinthMat);
-      const plinth = new THREE.Mesh(
-        plateGeometry(boundary, width,
-                      { x: center.x, y: center.y, z: center.z, yaw }),
-        plinthMat);
-      plinth.rotation.x = -Math.PI / 2;
-      plinth.position.y = SOCLE_Y_M;
-      plinth.receiveShadow = true;
-      group.add(plinth);
-      tile.groundPlate = plinth;
-    }
-
-    // No procedural stand-in: until a server model arrives the place is its
-    // socle plate. The label height is a fixed reading distance, not a fake
-    // building height.
     tile.height = 4;
     addLabel();
-  }
-
-  // The ground this plate was draped against — `main.relevelTiles` compares it
-  // with a fresh reading whenever the relief moves, so a plate whose landscape
-  // sharpened away from the pin is rebuilt instead of left standing stale.
-  if (tile.groundPlate) {
-    tile.plateGround = plateGroundSamples(boundary,
-                                          { x: center.x, z: center.z, yaw });
   }
 
   tile.facadeMats = tile.shellMats.filter((m) => !!m.emissiveMap);
@@ -1569,50 +1086,12 @@ export function applyTileFade(tile: Tile, dt: number) {
   const sm = tile.serverModel;
   if (!tile.interior) return;
 
-  // Ein Keller (Etage < 0) liegt UNTER dem Kachelboden — und der ist die
-  // eigene, immer opake Platte dieser Kachel, kein Teil des Szenen-Rezepts.
-  // Solange die Innenansicht einer Szene mit Unter-Etage steht, wird er zum
-  // Geist, sonst sieht man den Keller nie. Nachbarkacheln bleiben bewusst
-  // unangetastet — der Schrägblick durch fremdes Gelände ist akzeptiert.
-  const gp = tile.groundPlate;
-  if (gp) {
-    const gm = gp.material as THREE.MeshStandardMaterial;
-    if (tile.modelIsShellArea) {
-      // Detail-Modus (§ B6 Nr. 10): die Kachelplatte folgt dem FADE. Fern ist
-      // sie weg, weil das Modell dort seinen eigenen Boden mitbringt (Nr. 5) —
-      // eine Platte auf y 0,04 schnitte sein Gelände genau dort ab (der alte
-      // Mondscheinsee-Befund). Nah ist das Modell ausgeblendet und die Platte
-      // ist der Backstop unter der Detailszene, wo deren Raum-Platten die Zelle
-      // nicht abdecken. Gegenläufig zu roofMats unten, mit demselben Faktor:
-      // wo die Hülle bei 1/1,4 verschwunden ist, steht der Boden voll.
-      // Das Material gehört dieser Kachel allein (buildTile legt pro Platte
-      // eines an) — die Deckkraft hier zieht keine Nachbarkachel mit.
-      // Die Platte startet durchscheinend, der Zweig unten dreht das aber ab,
-      // solange die Kachel kein Detail-Modell trug (Umschalten per Remount).
-      // OHNE Server-Modell gibt es keine Fernsicht, die die Platte ersetzen
-      // könnte — dann bleibt sie IMMER voll da (Fernboden UND Backstop in
-      // einem). Gemessen 2026-08-03: v=0/o=0 bei dist 30 ließ die Zonen
-      // ohne Erde in der Luft stehen, der Fade-Übergang flackerte
-      // halbtransparent (die „grünen Flecken").
-      const fades = !!tile.serverModel;
-      if (gm.transparent !== fades) {
-        gm.transparent = fades;
-        gm.needsUpdate = true;
-      }
-      gp.visible = fades ? f > 0.03 : true;
-      gm.opacity = fades ? Math.min(1, f * 1.4) : 1;
-    } else {
-      const ghost = !!tile.hasBasement && f > 0.03;
-      if (gm.transparent !== ghost) {
-        gm.transparent = ghost;
-        // Ohne Tiefen-Schreiben verdeckt die Platte nichts mehr, was unter ihr
-        // liegt — der eigentliche Punkt der Übung.
-        gm.depthWrite = !ghost;
-        gm.needsUpdate = true;
-      }
-      gm.opacity = ghost ? Math.max(0.15, 1 - f * 0.85) : 1;
-    }
-  }
+  // THE GROUND-PLATE BRANCHES OF THIS FADE ARE GONE ("Ein Boden" E3): the tile
+  // owns no ground any more, so there is nothing here to ghost for a basement
+  // view and nothing to fade in behind a vanishing detail model. Both branches
+  // only ever dealt with the tile's own second ground — the terrain below is
+  // the world's and stays whole through the crossfade. (The basement's own
+  // discard rides on the terrain material now, plan § 3.4.)
 
   // Flächen-Location: statt das Modell wegzublenden werden seine Löcher
   // geschaltet — derselbe Zustand, andere Wirkung. Fernsicht zeigt die

@@ -15,8 +15,8 @@ import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
 import {
-  applyPlateDepthBias, PLATE_Y_M, preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
-  surfaceMaterialSpec, tileDirToWorld, tilePlateIsBackstop, tilePlateY, tileToWorld,
+  preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
+  surfaceMaterialSpec, tileDirToWorld, tileToWorld,
   type PlacedSceneModel, type Tile,
 } from './tiles';
 
@@ -434,9 +434,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   const style = scene.style;
   const floorYof = new Map(scene.levels.map((l) => [l.level, l.floor_y]));
   const levels = scene.levels.map((l) => l.level);
-  // Signal for the tile's view logic: a storey below ground exists, so the
-  // tile's own ground plate has to get out of the way while the interior is
-  // up (applyTileFade). The recipe itself needs nothing for this.
+  // Signal for the camera rule that opens a basement view (main.ts): this
+  // scene has a storey below ground. The recipe itself needs nothing for this.
   tile.hasBasement = levels.some((lv) => lv < 0);
 
   // ── Geländerelief (§ B1 Nr. 14) ─────────────────────────────────────────
@@ -451,48 +450,13 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // genau die Zonen-Texturen, die er stützen soll (User-Befund 2026-08-02).
   // Ein vorhandenes Modell bestätigt das Flag nur (display shell_area).
   tile.modelIsShellArea = !!scene.area_detail;
-  if (tile.groundPlate) {
-    // −0,05 statt −0,01: 1 cm unter den Etage-0-Platten reichte dem
-    // Tiefenpuffer aus der Distanz nicht (Z-Fighting-Wellen, User-Bild
-    // 2026-08-03); zusätzlich drückt polygonOffset den Backstop im
-    // Tiefenvergleich nach hinten, damit er auch bei drapierten,
-    // parallelen Flächen NIE durch die Zonen-Platten sticht.
-    //
-    // The OTHER branch is the mirror image and is the plate's own bias
-    // (`applyPlateDepthBias`): outside detail mode the plate lies ON the world
-    // ground and must never be poked through by it, so it is pulled forward
-    // instead of pushed back. Restoring it here rather than zeroing it is the
-    // point — a mounted scene used to strip the bias off the very plate the
-    // tile was built with.
-    // A NATURAL location (§ B1 addendum 2026-08-20 part 3) draws no storey
-    // slab, so its zone surfaces lie at 0.01 instead of 0.09 and the plate has
-    // to go the same 0.14 m further down (`tilePlateY`) — at 0.04 it would sit
-    // ABOVE them and bury the sand and the water it is meant to back.
-    tile.groundPlate.position.y = tilePlateY(scene);
-    const gm = tile.groundPlate.material as THREE.MeshStandardMaterial;
-    if (tilePlateIsBackstop(scene)) {
-      gm.polygonOffset = true;
-      gm.polygonOffsetFactor = 1;
-      gm.polygonOffsetUnits = 2;
-    } else {
-      applyPlateDepthBias(gm);
-    }
-    gm.needsUpdate = true;
-  }
-  if (scene.terrain && tile.groundPlate) {
-    // Die kachel-eigene Platte (kein Payload-Primitiv, sondern der Backstop
-    // unter der Detailszene) wellt sich mit. Nur die GEOMETRIE wird getauscht:
-    // Material, Höhe, Sichtbarkeit und der shell_area-Fade in applyTileFade
-    // hängen am Mesh und bleiben damit unangetastet. Das ebene Original hebt
-    // unmountScene wieder ein.
-    const gp = tile.groundPlate;
-    gp.updateMatrix();
-    const draped = drapeGeometry(THREE, gp.geometry, scene.terrain,
-                                 scene.extent_m, gp.matrix);
-    if (!tile.flatGroundGeo) tile.flatGroundGeo = gp.geometry;
-    else gp.geometry.dispose();
-    gp.geometry = draped;
-  }
+  // THE BACKSTOP IS GONE ("Ein Boden" E3, plan § 3.1). A mounted scene used to
+  // shove the tile's own ground plate under its storey-0 surfaces (−0.05, or
+  // −0.13 under a natural location), pushed it back in the depth test and
+  // re-draped its geometry over `scene.terrain` — three mechanisms whose only
+  // job was to keep a SECOND ground from poking through the first. The tile
+  // carries no plate any more, so nothing here places, biases or drapes one:
+  // what the scene does not cover, the world terrain shows.
 
   // Flächen-/Gelände-Location (Wald, See, Dorf): Räume sind ZONEN, keine
   // Zimmer — die Regel speist Raum-Labels, Panel UND die Platten unten.
@@ -1249,14 +1213,10 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // Kachel schon markiert, wenn die Location auch ohne Modell im
   // Detail-Modus ist.
   if (display === 'shell_area') tile.modelIsShellArea = true;
-  // Eine Flächen-Location BRINGT ihren Boden mit. Die kachel-eigene Platte
-  // (10 × 10 m, undurchsichtig, y 0,04) steht in keinem Payload — sie ist
-  // Client-Erfindung und schnitt das Modell auf ihrer Höhe ab: beim
-  // Mondscheinsee lag alles unter +0,04 dahinter, also Seebecken und Strand
-  // (Modell y −0,80 … +2,69). Für `display: ground` bleibt sie weg.
-  if (tile.groundPlate) tile.groundPlate.visible = !area;
-  // Die Backstop-Höhe (−0,01 im Detail-Modus) setzt mountScene zentral —
-  // hier würde sie nur dupliziert.
+  // An area model used to have to hide the tile's own plate here — a client
+  // invention that cut the model off at its own 4 cm (Mondscheinsee: lake bed
+  // and beach, model y −0.80 … +2.69, all of it behind the plate). There is no
+  // plate to hide since "Ein Boden" E3.
   tile.shellMats = [];
   // A kept far shell brought its own material clones into `roofMats`; they
   // stay in the fade, the roof's clones are added to them below.
@@ -1327,32 +1287,16 @@ export function unmountScene(tile: Tile): void {
   tile.modelIsShellArea = false;
   tile.modelWalkY = undefined;
   // The floors of this scene leave with it: until the next mount the tile has
-  // its plate and the world under it, exactly as a place without a recipe.
+  // the world terrain under it, exactly as a place without a recipe.
+  //
+  // NOTHING TO RESTORE HERE ANY MORE ("Ein Boden" E3): the unmount used to put
+  // the tile's own plate back — flat geometry, y 0.04, its own depth bias,
+  // visible again — because the mount had draped, lowered, biased and hidden
+  // it. No plate, no restore.
   tile.walkPlates = [];
   tile.declaredFloors = [];
   tile.terrain = undefined;
   tile.terrainExtent = undefined;
-  // Drapierte Kachelplatte zurückbauen: das ebene Original ist die Kachel,
-  // nicht die Szene — eine Location ohne Relief muss nach dem Remount wieder
-  // brettflach sein.
-  if (tile.flatGroundGeo) {
-    if (tile.groundPlate) {
-      tile.groundPlate.geometry.dispose();
-      tile.groundPlate.geometry = tile.flatGroundGeo;
-    } else {
-      tile.flatGroundGeo.dispose();
-    }
-    tile.flatGroundGeo = undefined;
-  }
-  if (tile.groundPlate) {
-    tile.groundPlate.visible = true;
-    tile.groundPlate.position.y = PLATE_Y_M;
-    // Und die eigene Tiefen-Vorspannung der Platte zurueck: der Detail-Modus
-    // hat sie auf den Backstop-Wert (+1/+2) gedreht, und ohne diese Zeile
-    // bliebe die Kachel nach dem Aushaengen hinter ihrem eigenen Gelaende.
-    applyPlateDepthBias(tile.groundPlate.material as THREE.MeshStandardMaterial);
-    (tile.groundPlate.material as THREE.MeshStandardMaterial).needsUpdate = true;
-  }
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
   tile.interior = null;

@@ -4586,3 +4586,238 @@ jetzt mit:
   ein Ort, der ihn öffnet, verlässt sie.
 
 `level_ground` ist aus der Signatur verschwunden.
+
+## Nachtrag 2026-08-21 (§ A17): Ein Boden — E3, der Layer-Schnitt
+
+Etappe E3 aus `development_instructions/plan-ein-boden.md` (§ G3). **Bindende
+User-Vorgabe:** Texturen werden nicht mehr übereinandergelegt, sondern
+**geschnitten** — pro Stelle gewinnt genau ein Layer, alles liegt auf EINER
+Fläche, die Übergangsbreite ist pro Bodenart einstellbar.
+
+### 1. Was ersatzlos weg ist
+
+Der Boden der offenen Welt war bis E2 ein STAPEL: pro gemalter Fläche ein
+transparentes Drape-Mesh, das auf dem Gelände lag, von seinen Nachbarn durch
+**drei** Tiefen-Krücken gleichzeitig getrennt (`renderOrder`-Leiter bei
+−10000 + i, `polygonOffset`-Leiter bis −32, y-Haarlinie 0,4 mm je Stufe) und
+mit ihnen über eine feste 1,5-m-**Alpha-Franse** verblendet, für die eigens
+Kantenband-Dreiecke nachverfeinert wurden (`ngRefineEdgeBand`, bis 20 000
+Dreiecke pro Fläche). Dazu die Fußabdruckplatte und der Sockel jeder Location
+— ein zweiter Boden über dem ersten.
+
+Alles davon ist gelöscht, ohne Ersatzschiene:
+`AREA_RENDER_ORDER_BASE`, `AREA_POLYGON_OFFSET`, `AREA_OFFSET_MAX`,
+`AREA_Y_STEP_M`, `AREA_Y_MAX_M`, `NG_EDGE_*` samt `ngEdgeAlpha` /
+`ngEdgeDistance` / `ngRefineEdgeBand` / `aEdgeDist`, `gridPlate`,
+`tile.groundPlate` samt Sockel, `PLATE_Y_M` / `SOCLE_Y_M` / `BACKSTOP_Y_M` /
+`NATURAL_BACKSTOP_Y_M` / `tilePlateY` / `tilePlateIsBackstop` /
+`PLATE_POLYGON_OFFSET` / `applyPlateDepthBias` / `plateGeometry` /
+`plateGroundSamples` / `plateGroundMoved` / `relevelTiles` / `plateLift`.
+`smoke_layer_cut.mjs` § 6 liest die Quellen darauf ab — eine Löschung ist das
+Einzige, was eine positive Prüfung nicht messen kann.
+
+Die EINZIGE verbliebene Drape-Fläche ist **Wasser**, bis E4 ihm einen ebenen
+Spiegel gibt; sie trägt eine einzelne Konstante `WATER_DRAPE_LIFT_M = 0,02 m`
+statt einer Leiter, weil über einem Quadratmeter immer nur eine Wasserfläche
+liegt.
+
+### 2. Zwei gebackene Masken je 256-m-Kachel
+
+`app/core/terrain_layers.py`, auf **denselben Kachel-Schlüsseln** wie das
+Höhenfeld (`heightfield.tile_key`) — ein Anker, ein Fenster, damit Form und
+Material des Bodens nie über verschiedenen Quadraten geschärft werden.
+
+| Maske | Auflösung | Format | Filter | Inhalt |
+|---|---|---|---|---|
+| `id` | **1 m/Texel** (256²) | RG8UI, 2 Byte | **NEAREST** | das PAAR (A, B) der Layer-Indizes an der nächsten Grenze |
+| `sd` | **0,5 m/Texel** (512²) | R8 | **LINEAR** | die SIGNIERTE Distanz zu genau dieser Grenze, in Metern |
+
+> **DAS PAAR IST KANONISCH — und das ist der ganze Trick.** Beide Seiten einer
+> Grenze tragen dasselbe (A, B): **A ist immer der SPÄTER gemalte Layer**,
+> niemals „der, auf dem ich stehe". Nur das VORZEICHEN von `sd` sagt, auf
+> welcher Seite ein Texel liegt. Damit setzen ein NEAREST-Integer-Zugriff und
+> eine LINEAR interpolierte Distanz eine durchgehende Kante zusammen: die id
+> darf an jeder Texel-Naht auf die andere Seite springen, ohne je zu ändern,
+> WELCHE zwei Materialien gemischt werden, und wo der Schnitt genau läuft,
+> kommt allein aus der interpolierten Distanz — subtexel-scharf, in jedem Zoom,
+> ohne ein einziges zusätzliches Dreieck. Wäre das Paar nach „der Layer hier"
+> geordnet, kippten A und B über der Linie, das Vorzeichen mit ihnen, und die
+> Kante risse an jeder Naht auf.
+
+**Warum eine Integer-Textur für die id:** `usampler2D` + `texelFetch`. Eine
+Integer-Textur kann *gar nicht* gefiltert werden — NEAREST erzwingt das FORMAT
+und nicht eine Sampler-Einstellung, die ein Treiber anders auslegen könnte, und
+der Wert kommt als genau das Byte an, das der Server geschrieben hat. Zwei
+R8-Unorm-Texturen hießen zwei Sampler, zwei `round(v·255)`-Dekodierungen und
+eine weitere Gelegenheit, dass ein gefiltertes Texel einen Layer erfindet.
+
+**Quantisierung, ausgeschrieben:** `code = clamp(round(sd · 127/8) + 128,
+1, 255)`, zurück `sd = (code − 128) / (127/8)`. 127 Codes je Seite einer
+EXAKT darstellbaren Null (128), Schritt 8/127 = 0,063 m, Band ±8 m. Code 0 wird
+nie geschrieben. Server: `terrain_layers.encode_sd/decode_sd`; Client:
+`@anima/scene-render` `decodeSd`, das seine zwei Zahlen aus dem PAYLOAD liest
+und nicht aus einer Konstante.
+
+**Priorität = das bestehende Datengesetz**, nichts Neues: der LETZTE
+enthaltende Eintrag gewinnt, in `list_areas`-Reihenfolge (z_order, dann
+Malreihenfolge) — genau die Regel, mit der `terrain_query.kind_at`
+Punktabfragen beantwortet. Die Bake füllt dafür ein Raster aus **Malrängen**
+(0 = ungemalte Welt, r = die r-te Fläche der Liste), sodass „wer liegt oben"
+ein Integer-Vergleich ist. `smoke_terrain_layers.py` [1] misst Raster ==
+`rank_at` == `kind_at` an 500 Gitterproben.
+
+**Wasser ist hier ein Layer.** Eine als `meta.water` geflaggte Art bekommt einen
+eigenen Index, weil die Maske die Wahrheit über „welcher Boden ist hier" für
+den Unterwuchs-Filter und für die Priorität ist. Wie die Wasser-OBERFLÄCHE
+aussieht, ist nicht Sache dieses Moduls — bis E4 malt der Kompositor unter der
+Kräusel-Drape das **Bett** (Index 0, blanker Boden).
+
+### 3. Der Endpunkt
+
+`GET /play/terrain-layers` — **ein** Endpunkt, zwei Modi, weil es zwei Hälften
+desselben Fensters sind:
+
+```jsonc
+// OHNE keys — der INDEX
+{
+  "sig": "…", "tile_m": 256.0,
+  "id_step_m": 1.0, "sd_step_m": 0.5, "sd_band_m": 8.0,
+  "sd_zero": 128, "sd_codes_per_m": 15.875,
+  "layers": [ { "index": 0, "kind": "grass", "surface": "grass",
+                "edge_blend_m": 1.5, "water": false }, … ],
+  "overview": { "origin_x": …, "origin_z": …, "step_m": 8.0,
+                "cols": 250, "rows": 250, "id": "<base64 cols·rows·2>" },
+  "tile_keys": ["0,0", "1,0", …]
+}
+
+// MIT keys=tx:tz,tx:tz — die BATCH, höchstens BATCH_MAX = 16 Kacheln
+{ "sig": "…", …, "layers": […],
+  "tiles": {
+    "1,0": { "origin_x": 256.0, "origin_z": 0.0,
+             "id_size": 256, "sd_size": 512,
+             "id": "<base64 256·256·2>", "sd": "<base64 512·512>" },
+    "2,0": { "origin_x": 512.0, "origin_z": 0.0, "uniform": 3 }
+  } }
+```
+
+`layers[0]` IST der blanke Boden (die `game.default_terrain_kind` der Welt);
+eine Fläche, die in der Default-Art gemalt ist, bildet auf 0 zurück statt einen
+Zwilling zu bekommen. Die Byte-Reihenfolge ist zeilenweise vom Kachel-Ursprung,
+Texel `(i, j)` deckt `[i·step, (i+1)·step)`. Eine Kachel ohne jede Grenze
+antwortet `uniform` und schickt **kein** Array — der Normalfall draußen in der
+offenen Welt, und der Unterschied zwischen 40 Byte und 384 kB.
+
+Kacheln, die der Index nicht kennt, bleiben WEG statt leer zu antworten: der
+Client weiß von dort schon, dass es blanker Boden ist. Der `keys`-Parser ist
+der des Höhenfelds (`heightfield.parse_tile_keys`), Fehler werden einmalig
+geloggt.
+
+**Der Vertrag zum Refetch:** die Masken hängen an `terrain_sig` — sie sind eine
+Funktion der gemalten Flächen plus des Art-Katalogs, und genau das deckt diese
+Signatur ab. Ein eigener Poll existiert nicht.
+
+### 4. Übergangsbreite je Art — `edge_blend_m`
+
+Neu am Terrain-Typ (`terrain_types`, `meta.edge_blend_m`, 0…8 m, Default
+**1,5**): wie breit der Übergang von diesem Boden zu dem darunter ist. Das
+ersetzt die feste 1,5-m-Franse des Renderers — der Look war eine Eigenschaft
+des CLIENTS und für jeden Boden der Welt gleich; jetzt ist er eine Eigenschaft
+des MATERIALS und der Autor stellt ihn pro Art ein (Terrain-Tab, Feld
+„Transition (m)").
+
+> **DAS EINZIGE Katalogfeld, in dem 0 ein WERT ist** und nicht „nicht gesetzt":
+> 0 ist der HARTE SCHNITT — Raumboden, Bordstein, gepflasterter Weg — und
+> überlebt deshalb einen Save. Es geht bewusst nicht durch
+> `_clamped_meta_number`, sondern durch `terrain_layers.sanitize_edge_blend`.
+
+Der Shader schneidet:
+
+```glsl
+float g = fwidth( sd );                       // IMMER, vor jedem Zweig
+float soft = smoothstep( -0.5*b, 0.5*b, sd ); // b > 0
+float hard = clamp( sd / max(g, 1e-6) + 0.5, 0.0, 1.0 );   // b == 0
+w = b > 0.0 ? soft : hard;
+```
+
+`b` kommt aus der Layer-Tabelle, **nach Art A**. Die halbe Breite liegt auf
+jeder Seite, also sind „1,5 m Übergang" wirklich 1,5 m Boden und nicht drei.
+Bei `b = 0` ist der Schnitt ein **ein Pixel breiter** Schritt, wo die Kamera
+auch steht: nah ist ein Pixel zentimeterklein und die Kante rasiermesserscharf,
+fern ist er metergroß und derselbe Ausdruck MITTELT die beiden Böden, statt zu
+flimmern. `fwidth` steht außerhalb jedes Zweigs — eine Ableitung in
+Kontrollfluss, der über ein Quad hinweg auseinanderläuft, ist in GLSL ES
+undefiniert, und genau dieser Zweig läuft an jeder Grenze auseinander.
+
+**Die Franse ist nicht weg, nur ihr Mechanismus.** Das Rauschen, das die Grenze
+organisch statt gezeichnet aussehen ließ, überlebt unverändert (0,5 m Ausschlag
+über 2 m Wellenlänge, `LC_EDGE_NOISE_M`/`LC_EDGE_WAVE_M`) — es schiebt jetzt
+die LINIE statt der Alpha, und sein Ausschlag ist auf die halbe Breite
+gedeckelt: bei `b = 0` also auf **null**, damit der harte Schnitt auf dem
+Meter endet, auf dem er gemalt wurde.
+
+### 5. Der Kompositor im Client
+
+`client3d/src/scene/layerGround.ts` hängt sich als LETZTES Patch in die
+Material-Kette der CDLOD-Fläche (`patchHole` → `applyNaturalGround` → **dies**)
+— und läuft damit als ERSTES im Shader, weil jedes Boden-Patch seinen Rumpf
+direkt hinter `#include <map_fragment>` einsetzt. Genau das verlangt § G3: der
+Kompositor schreibt die Albedo, die Naturstufen (Farbflecken, Höhen-AO)
+arbeiten auf dem KOMPONIERTEN Ergebnis.
+
+Das Terrain-Material trägt **keine `map`** — mit einer wäre `USE_MAP` gesetzt,
+und die Anti-Kachel-Stufe von `applyNaturalGround` würde die Breitprobe der
+DEFAULT-Art über jeden Wald blenden. Die Anti-Kachelung liegt statt dessen im
+Kompositor, **pro Layer** (`lcSurface`).
+
+Die Oberflächen der Arten liegen in EINER `DataArrayTexture`, eine Schicht je
+Layer-Index, jede auf 512² gebracht; eine Art ohne Bibliothekseintrag bekommt
+eine Schicht ihrer Katalogfarbe (ein Texel ist billiger als ein Shader-Zweig),
+ein Wasser-Layer bekommt die Schicht des blanken Bodens.
+
+**Zwei Fenster, wie beim Höhenfeld:** die geladenen Kacheln werden zu EINEM
+Rechteck gepackt (`packLayerWindow`) und folgen dem Höhen-Anker über dieselbe
+Wunschmenge (`wantedTiles`, Radius 560 m); darüber hinaus antwortet die
+weltweite GROBE `overview`-Maske. Sie trägt keine Distanz — bei 8 m/Texel ist
+jeder Übergang schmaler als ein Texel, also ist ein harter Schnitt die einzige
+ehrliche Antwort, und eine konstante sd-Textur baut sich der Client selbst.
+
+### 6. Der Unterwuchs liest die Maske (User-Entscheidung 5.2)
+
+Ein Büschel wächst nur, wo die OBERSTE Bodenart an seinem eigenen Punkt
+wirklich die Art ist, der es gehört. Gelesen wird das aus derselben Maske, aus
+der das Bild komponiert wird (`@anima/scene-render` `topLayerAt`, im Client
+`layerGround.topLayerIndexAt`). Die Polygon-Occluder bleiben als billiger
+erster Durchgang davor — die Maske ist die Wahrheit dahinter, und zwei
+Implementierungen von „oberste Art" sind zwei Antworten, die auseinanderlaufen
+werden. Gemessen in `smoke_undergrowth.mjs` § J, inklusive der Gegenprobe: ein
+Filter, der nie zutrifft, lässt nichts wachsen, während dieselbe Vorlage mit
+passendem Filter 21 Zellen füllt.
+
+### 7. Kostenbudget (gerechnet für eine 2 × 2-km-Welt)
+
+| Posten | Wert |
+|---|---|
+| eine Kachel roh | 393 216 Byte (id 131 072 + sd 262 144) |
+| ganze Welt roh / base64 | **24,0 MB** / 32,0 MB (61 Kacheln) |
+| eine Batch (16 Kacheln) | 6,3 MB roh / 8,4 MB auf der Leitung |
+| Fenster von 9 Kacheln auf der GPU | 3,54 MB |
+| Übersichtsmaske (8 m) | 63 504 Texel = **127 kB** |
+| Bake einer Kachel MIT Grenzen | ~0,32 s (kalt, danach LRU) |
+| Bake einer Kachel ohne Grenze | ~0,04 s, Antwort 40 Byte |
+| Fragment-Kosten | 1 id-Fetch + 1 sd-Fetch + 4 Array-Fetches |
+
+Die vier Array-Zugriffe statt der zwei aus der Recherche-Schätzung sind der
+Preis der Anti-Kachelung PRO LAYER (schmale und breite Probe, für A und für B).
+Dafür ist das Terrain jetzt **1 Draw-Call** statt einem Mesh je gemalter Fläche
+plus Platten.
+
+### 8. Zwischenzustand bis E4/E5
+
+* Wasserflächen zeichnen weiter ihre Kräusel-Drape (2 cm über dem Bett).
+* Szenen-Zonenplatten (0,01) rendern weiter — E5 macht Layer daraus. Ohne den
+  grauen Kachel-Backstop, den E3 gelöscht hat, können am **Mondscheinsee**
+  jetzt Gelände-Lücken zwischen Zonenplatte und Terrain sichtbar werden. Das
+  ist der erwartete Zwischenzustand, kein Regressionsbefund.
+* § A16 nennt weiterhin `SOCLE_Y_M`, `tiles.tilePlateY` und die gelöschte
+  `smoke_plate_drape.mjs`; das Vertragskapitel wird laut Plan in E5/E6 neu
+  geschrieben.

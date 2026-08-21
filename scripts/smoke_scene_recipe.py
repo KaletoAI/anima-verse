@@ -1506,19 +1506,29 @@ def test_floor_relation() -> None:
     """ONE floor, hand-derived — the chain of § B1/B2 addendum 2026-08-20.
 
     Everything a figure, a chair and a wall of the same room stand on has to
-    be the same surface, and these are the four numbers that say so (tile
-    metres, storey 0):
+    be the same surface, and these are the numbers that say so (tile metres,
+    storey 0):
 
-        socle plate  0.045  <  level plate 0.08  <=  room plate 0.10
+        terrain 0.00  <  level plate 0.08  <=  room plate 0.10
         prop bottom_y = room plate + PROP_CLEARANCE      = 0.11
         walk height   = room plate + WALK_CLEARANCE_M    = 0.11
 
-    The socle (``SOCLE_Y_M``) and the walk height belong to the client and are
-    checked there (``client3d/scripts/smoke_walk_math.mjs``); what this file
-    owns is that the SERVER's three numbers keep their order and that the
-    props keep standing on the plate — plus the one relation that ties the
-    building model into the chain: its declared walk surface is the level
-    plate, not a free-floating socle clearance.
+    THE SOCLE SUB-CHECK IS GONE (plan-ein-boden.md § 3.1, "Ein Boden" E3,
+    2026-08-21). The lower end of this chain used to be the client's own grass
+    socle plate at 0.045, quoted here by hand. That plate was a SECOND ground
+    drawn under every location and has been deleted without replacement — the
+    world terrain is the ground now, and under a location that builds, G5
+    stamps it flat at exactly the height the tile stands on, i.e. tile metre
+    0.00. So the relation this file can still own without reaching into the
+    client is the one below: the storey slab lifts the built floor clear of
+    that terrain, and the room's own plate is at or above the slab.
+
+    The walk height belongs to the client and is checked there
+    (``client3d/scripts/smoke_walk_math.mjs``); what this file owns is that the
+    SERVER's numbers keep their order and that the props keep standing on the
+    plate — plus the one relation that ties the building model into the chain:
+    its declared walk surface is the level plate, not a free-floating socle
+    clearance.
 
     THE FIXTURE THAT BROKE (user finding 2026-08-20, "Haus von Kai"): a shell
     mesh with a 0.240 m terrain pad, dialled ``offset_y −0.30`` / ``walk_y 0``
@@ -1532,20 +1542,23 @@ def test_floor_relation() -> None:
     that describes the pad and it is still 0 — but the walk height no longer
     depends on it at all: the plate is the floor (part B, client side).
     """
-    print("\n[7c] one floor: socle < level plate <= room plate = props = walk")
+    print("\n[7c] one floor: terrain < level plate <= room plate = props = walk")
     stub_props()
     sc = model_scene()
     level = [p for p in sc["plates"] if not p.get("room_id")][0]
     room_a = [p for p in sc["plates"] if p.get("room_id") == "a"][0]
     prop = spec_of(sc, "prop", "table")
-    socle_y = 0.045          # client `scene/tiles.SOCLE_Y_M`, quoted by hand
+    # The terrain under a location that BUILDS is the plateau G5 stamps there,
+    # and the tile stands on it — tile metre 0.00. Not a client constant any
+    # more: it is the datum the whole payload is composed around.
+    terrain_y = 0.0
     check("level plate 0.08 <= room plate 0.10 (the room's own floor wins)",
           near(level["top_y"], 0.08) and near(room_a["top_y"], 0.10)
           and level["top_y"] <= room_a["top_y"],
           f"{level['top_y']} / {room_a['top_y']}")
-    check("...and the tile's socle plate stays UNDER both (0.045)",
-          socle_y < level["top_y"] and socle_y < room_a["top_y"],
-          f"{socle_y} < {level['top_y']}")
+    check("...and both stand clear of the terrain datum 0.00",
+          terrain_y < level["top_y"] and terrain_y < room_a["top_y"],
+          f"{terrain_y} < {level['top_y']}")
     check("a prop of the room stands ON the room plate: 0.10 + 0.01",
           near(prop["bottom_y"], room_a["top_y"] + scene_recipe.PROP_CLEARANCE)
           and near(prop["bottom_y"], 0.11), str(prop["bottom_y"]))

@@ -36,12 +36,23 @@ export type { RayGroundOpts, WorldHeightField, WorldHeightTiles,
 export { hillshadeImage, MAP_RELIEF_Z_FACTOR } from './hillshade'
 export type { HillshadeOpts, HillshadeImage } from './hillshade'
 
-export { gridPlate, subdivideOnGrid, gridStepFor, GRID_MAX_CELLS } from './gridMesh'
-export type { GridBox, GridGeometry, PlateGeometry } from './gridMesh'
+export { subdivideOnGrid, gridStepFor, GRID_MAX_CELLS } from './gridMesh'
+export type { GridBox, GridGeometry } from './gridMesh'
+
+export {
+  decodeSd, layerPairAt, layerSdAt, layerWeight, lcNoise, lcPushedSd,
+  packLayerWindow, terrainLayerGlsl, terrainLayerVertexGlsl, topLayerAt,
+  LC_DETAIL_OFFSET, LC_DETAIL_SCALE, LC_EDGE_NOISE_M, LC_EDGE_WAVE_M,
+  LC_MIX_M, LC_MIX_MAX,
+} from './layerCut'
+export type {
+  LayerMaskWindow, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
+  TerrainLayerIndex, TerrainLayerOverview, TerrainLayerTile,
+} from './layerCut'
 
 export {
   buildAreaGeometry, signedArea, polygonArea, cleanRing, shapePoints,
-  AREA_EPS_M2, AREA_POLYGON_OFFSET,
+  AREA_EPS_M2,
 } from './groundAreas'
 export type { AreaGeometry, Point2 } from './groundAreas'
 

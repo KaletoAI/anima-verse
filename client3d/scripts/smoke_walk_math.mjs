@@ -690,9 +690,15 @@
  * building. The chain everything in a room has to meet (tile metres, § B1/B2
  * addendum of docs/schnittstellen-3d.md):
  *
- *   socle plate 0.045 < level plate 0.08 <= room plate 0.10
+ *   terrain 0.00 < level plate 0.08 <= room plate 0.10
  *   prop bottom_y = room plate + PROP_CLEARANCE  = 0.11   (server)
  *   walk height   = room plate + WALK_CLEARANCE_M = 0.11   (here)
+ *   doorstep      = walk height − terrain         = 0.11   (< max step 0.4)
+ *
+ * The lower end was the tile's own grass socle (0.045) until "Ein Boden" E3
+ * (plan-ein-boden.md § 3.1, 2026-08-21) deleted the footprint plate and the
+ * socle with it. It is the TERRAIN now — in tile metres 0.00, because the tile
+ * stands on the plateau G5 stamps under a location that builds.
  *
  * The rule: the HIGHEST plate whose hull contains the point and whose top is
  * still below the walk ceiling — the same ceiling the ray hits are judged by,
@@ -720,8 +726,8 @@
  * a 0.240 m terrain pad under its walls and was dialled offset_y −0.30, so
  * its floor sat at 0.06 − 0.30 + 0.240 = 0.000 and the figure stood at
  * 0.000 + 0.01 = 0.010 — 0.090 below the room plate its own props stood on
- * and 0.035 below the tile's grass socle (0.045), which is exactly what the
- * user saw. The plate answer is 0.10 + 0.01 = 0.11 = the props' bottom_y.
+ * (0.100 below the height the plate rule now answers), which is exactly what
+ * the user saw. The plate answer is 0.10 + 0.01 = 0.11 = the props' bottom_y.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -3507,24 +3513,49 @@ async function main() {
   check('no plates at all = no recipe floor', recipeFloorAt([], 0, 0, 1.2), null);
   check('...and neither does a tile that never got a list',
     recipeFloorAt(undefined, 0, 0, 1.2), null);
-  // THE CHAIN, hand-derived (§ B1/B2 addendum): socle < level <= room plate,
-  // and a figure stands exactly where the room's props stand.
-  const SOCLE_Y_M = 0.045;          // client `scene/tiles.SOCLE_Y_M`
+  // THE CHAIN, hand-derived (§ B1/B2 addendum + "Ein Boden" E3): terrain <
+  // level plate <= room plate, and a figure stands exactly where the room's
+  // props stand.
+  //
+  // THE SOCLE IS GONE (plan-ein-boden.md § 3.1, 2026-08-21). The lower end of
+  // this chain used to be the tile's own grass socle at 0.045 — a second
+  // ground the client drew under every building, deleted with the footprint
+  // plate. So the clearance chain is re-derived from what the SCENE PAYLOAD
+  // itself ships plus the ONE ground that is left:
+  //
+  //   terrain under a built location  0.00  in TILE metres — the tile stands
+  //                                         ON its plateau (`footprintCentre`)
+  //                                         and G5 stamps that plateau flat
+  //                                         under a location that builds
+  //   level plate top                 0.08  server LEVEL_PLATE_TOP
+  //   room plate top                  0.10  the room's own floor wins
+  //   prop bottom_y = 0.10 + PROP_CLEARANCE  0.01               = 0.11
+  //   walk height   = 0.10 + WALK_CLEARANCE_M 0.01              = 0.11
+  //
+  // The DOORSTEP is what the socle line used to guard in disguise: stepping
+  // from the terrain outside onto the room floor is 0.11 − 0.00 = 0.11 m, well
+  // inside the world's step limit (`game.max_step_height_m`, default 0.4 — see
+  // the header), so a built location stays enterable now that the ground
+  // outside its walls is the landscape itself rather than a 4.5 cm plate.
+  const TERRAIN_Y = 0;              // the stamped plateau, in tile metres
+  const MAX_STEP_M = 0.4;           // world default, hand-quoted
   const PROP_BOTTOM = 0.11;         // server: room plate 0.10 + PROP_CLEARANCE
   const roomFloor = recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING);
   check('the walk clearance IS the server\'s prop clearance', WALK_CLEARANCE_M, 0.01);
-  check('socle 0.045 < level plate 0.08 <= room plate 0.10',
-    SOCLE_Y_M < 0.08 && 0.08 <= roomFloor, true);
+  check('terrain 0.00 < level plate 0.08 <= room plate 0.10',
+    TERRAIN_Y < 0.08 && 0.08 <= roomFloor, true);
   check('figure and chair stand at ONE height: plate + 0.01 = 0.11',
     roomFloor + WALK_CLEARANCE_M, PROP_BOTTOM, 1e-9);
+  check('the doorstep terrain -> room floor is 0.11 m, under the step limit 0.4',
+    [roomFloor + WALK_CLEARANCE_M - TERRAIN_Y,
+      roomFloor + WALK_CLEARANCE_M - TERRAIN_Y < MAX_STEP_M ? 1 : 0],
+    [0.11, 1], 1e-9);
   // The regression pin: the mesh answer the same point used to give.
   const MESH_FLOOR = 0.06 + (-0.30) + 0.240;    // old pin + pad = 0.000
-  check('the OLD mesh answer was 0.010 — 0.090 under the plate, 0.035 under '
-    + 'the grass',
+  check('the OLD mesh answer was 0.010 — 0.100 under the plate',
     [MESH_FLOOR + WALK_CLEARANCE_M,
-      roomFloor + WALK_CLEARANCE_M - (MESH_FLOOR + WALK_CLEARANCE_M),
-      SOCLE_Y_M - (MESH_FLOOR + WALK_CLEARANCE_M)],
-    [0.010, 0.100, 0.035], 1e-9);
+      roomFloor + WALK_CLEARANCE_M - (MESH_FLOOR + WALK_CLEARANCE_M)],
+    [0.010, 0.100], 1e-9);
 
   // ── The DECLARED floor (§ B6 no. 7, user finding 2026-08-20) ────────────
   //

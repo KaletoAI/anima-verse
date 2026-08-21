@@ -128,42 +128,21 @@
  * (20) NEGATIVE HEIGHTS COMPARE LIKE ANY OTHER: standY(−1, −4) = −1.
  *
  * ----------------------------------------------------------------------------
- * [6] AND WHAT THE PLATE DOES — `game/ground.plateLift` (review finding I1)
+ * [6] and [7] ARE GONE ("Ein Boden" E3, plan-ein-boden.md § 3.1)
  * ----------------------------------------------------------------------------
- * The footprint plate is drawn where the figure walks, so it is derived from
- * `standY` and not written twice: `plateLift(worldY, tileY) = standY(tileY,
- * worldY) − tileY`. A tile standing on 2.0:
+ * Both sections measured the FOOTPRINT PLATE — the tile's own draped ground:
+ * [6] pinned `game/ground.plateLift` (the clamped mirror of `standY` that
+ * lifted a plate vertex onto the world field), [7] pinned which points the
+ * plate's flatness probe reads (3 × 3 blind vs. the 2 m drape grid, review
+ * finding I2). The tile draws no ground of its own any more — the terrain IS
+ * the ground under a location — so `plateLift`, the drape lattice and the
+ * flatness probe were deleted, and a check of deleted arithmetic proves
+ * nothing. What survived them is `standY` in [5]: a figure still reconciles a
+ * tile answer with the terrain under it, and case (15) is exactly that.
  *
- * (21) UPHILL, world 3.2: lift 1.2, and the figure stands on standY(2.0, 3.2)
- *      = 3.2 = tile floor + lift. Plate and figure on ONE surface.
- * (22) DOWNHILL, world 0.5: lift 0 — the plate stays the tile floor, and the
- *      figure stands on standY(2.0, 0.5) = 2.0. One surface again, with the
- *      landscape passing underneath.
- *      RED COUNTER-PROBE: the unclamped difference is −1.5, which would drop
- *      the plate a metre and a half away under a figure that stays at 2.0 —
- *      the finding mirrored, and what this clamp exists for.
- * (23) LEVEL / LEVELLED FOOTPRINT (world = tile = 2.0): lift 0, no cut.
- * (24) NO FIELD YET (world NaN): lift 0 — the plate is the flat square it was.
- *
- * ----------------------------------------------------------------------------
- * [7] WHERE THE FLATNESS PROBE LOOKS (review finding I2)
- * ----------------------------------------------------------------------------
- * The plate is cut only where the ground moves. WHICH points are asked decides
- * whether that is true, and a 3 × 3 probe (corners, edge midpoints, centre)
- * cannot see a hill between its samples. Hand-built field for exactly that:
- *
- *     origin (−4, −4), step 2, 5 × 5 support points at −4, −2, 0, 2, 4,
- *     all zero except h[3][3] = 5, i.e. the peak sits on (x, z) = (2, 2).
- *
- * A footprint of width 8 centred on (0, 0), tile floor 0:
- *   - the 3 × 3 probe asks (0, 0) and (±4, ±4)/(±4, 0)/(0, ±4). Every one of
- *     those is a support point of value 0 (the far ones clamp to the border,
- *     which is 0 as well) -> spread 0 -> ONE quad -> the hill cuts through the
- *     plate. THAT is the finding.
- *   - the DRAPE GRID at `DRAPE_STEP_M` = 2 m asks −4, −2, 0, 2, 4 on both
- *     axes, so (2, 2) is one of its 25 samples -> max lift 5 -> draped.
- * Both readings are taken on support points, so the bilinear reading used here
- * and the drawn sampler the client uses agree on them to the digit.
+ * The numbering below is deliberately NOT closed up — sections [8]… keep their
+ * names so the file's cross-references and the twin `scripts/smoke_heightfield.py`
+ * still point at the same content.
  *
  * ============================================================================
  * [8] THE TILED FIELD — `heightAt`, the ONE ladder over both rasters
@@ -361,7 +340,7 @@ function check(label, actual, expected, eps = 1e-9) {
 // module really exports.
 const mod = await loadModule(SRC, 'worldHeight');
 const { sampleWorldHeight, tileKeyAt, heightAt } = mod;
-const { groundLift, plateLift, standY } = await loadModule(
+const { groundLift, standY } = await loadModule(
   join(ROOT, 'client3d/src/game/ground.ts'), 'ground', ['polygon']);
 const { slopeBlocks } = await loadModule(
   join(ROOT, 'client3d/src/game/walk.ts'), 'walk');
@@ -476,34 +455,9 @@ check('both gone: the tile floor, never NaN', standY(NaN, NaN), 0);
 check('Infinity is not a height either', standY(1.25, Infinity), 1.25);
 check('negative heights compare like any other', standY(-1, -4), -1);
 
-console.log('\n[6] plateLift — the plate is drawn where the figure walks');
-const TILE_Y = 2;
-check('uphill: the plate rises with the world', plateLift(3.2, TILE_Y), 1.2, 1e-9);
-check('...and the figure stands on the same surface',
-  standY(TILE_Y, 3.2) - TILE_Y, 1.2, 1e-9);
-check('downhill: the plate stays the tile floor', plateLift(0.5, TILE_Y), 0);
-check('...and so does the figure', standY(TILE_Y, 0.5), TILE_Y);
-check('RED COUNTER-PROBE: unclamped, the plate would sink away',
-  0.5 - TILE_Y, -1.5, 1e-9);
-check('level ground / levelled footprint: no lift', plateLift(TILE_Y, TILE_Y), 0);
-check('no field yet: no lift', plateLift(NaN, TILE_Y), 0);
-
-console.log('[7] the flatness probe reads the drape grid, not nine points');
-// One peak on (2, 2) of a 2 m lattice — see the header for the derivation.
-const PEAK22 = {
-  origin_x: -4, origin_z: -4, step_m: 2, rows: 5, cols: 5,
-  heights: [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0],
-            [0, 0, 0, 5, 0], [0, 0, 0, 0, 0]],
-};
-check('the peak is where the derivation puts it',
-  sampleWorldHeight(PEAK22, 2, 2), 5);
-const maxLift = (points) => Math.max(...points.map(([x, z]) =>
-  plateLift(sampleWorldHeight(PEAK22, x, z), 0)));
-const axis3 = [-4, 0, 4];
-const grid = [-4, -2, 0, 2, 4];
-const cross = (vals) => vals.flatMap((x) => vals.map((z) => [x, z]));
-check('the 3x3 probe sees nothing — the finding', maxLift(cross(axis3)), 0);
-check('the drape grid (2 m) finds the hill', maxLift(cross(grid)), 5);
+// Sections [6] (plateLift) and [7] (the plate's flatness probe) were deleted
+// with the footprint plate itself — see the header. Nothing takes their place:
+// their subject no longer exists in the client.
 
 function checkText(label, actual, expected) {
   if (actual === expected) {

@@ -26,35 +26,18 @@
  *   (d) step 0 (no relief) is handed back unchanged                       -> 0
  *
  * ============================================================================
- * [2] `gridPlate` — the base plate on the field's own lines
+ * [2] `gridPlate` — GONE with "Ein Boden" E3
  * ============================================================================
- * `gridPlate(-5, -5, 5, 5, step 4, origin (-4, -4))`, no relief box = cut all
- * over. The cut part is snapped OUTWARD onto the grid anchored at the origin:
- *   x0 = -4 + floor((-5+4)/4)·4 = -4 + (-1)·4 = -8
- *   x1 = -4 + ceil(( 5+4)/4)·4 = -4 +   3 ·4 =  8    (z likewise)
- * so 16 m per axis at 4 m = 4 × 4 cells, 5 × 5 = 25 support points (75 pos
- * numbers, 50 uv numbers) and 16 · 6 = 96 index entries. The REPORTED extent
- * stays the one that was asked for (-5…5) — that is what the UVs are
- * normalised over, and the snap only adds a metre of ground past the frame.
- *   - the first vertex is (-8, 0, -8) at uv ((-8+5)/10, (5+8)/10) =
- *     (-0.3, 1.3): u grows with x, v is 1 at the MINIMUM z edge (what
- *     `PlaneGeometry` did after `rotateX(-90°)`), and the snapped overhang
- *     runs just outside 0…1, which is what RepeatWrapping is for;
- *   - vertex (i 2, j 2) = index 12 is the world origin (0, 0) at uv (0.5, 0.5);
- *   - the first cell is [0, 5, 6, 0, 6, 1]: its split runs from the minimum
- *     corner (index 0) to the maximum one (index 6);
- *   - every y is 0 — lifting is the caller's step.
- * A step of 0 gives the single quad of the flat world, extent unsnapped.
+ * The base plate was ONE mesh over the whole world frame, cut on the field's
+ * own lines, with every painted area draped on top of it. Both halves are gone:
+ * since E2 the terrain places its own vertices out of the height lattice in the
+ * vertex shader (`scene/terrainLod.ts`), and since E3 the painted grounds are a
+ * CUT in that one surface rather than meshes lying on it
+ * (`@anima/scene-render/layerCut.ts`). Nothing calls `gridPlate`, so it was
+ * deleted and there is nothing left here to derive by hand.
  *
- * (b) THE BUDGET GOES WHERE THE RELIEF IS. `gridPlate(-100, -100, 100, 100,
- *     step 4, origin (0, 0), relief [0…8] × [0…8])`: only the field's own box
- *     is cut (2 × 2 cells, 9 support points, 24 index entries), the rest is
- *     four plain quads — north (-100…100) × (-100…0), south (-100…100) ×
- *     (8…100), west (-100…0) × (0…8), east (8…100) × (0…8). 9 + 16 = 25
- *     vertices, 24 + 24 = 48 index entries, and the areas
- *       20 000 + 18 400 + 800 + 736 + 64 = 40 000 m²
- *     are exactly the 200 × 200 m asked for — so the ring covers the plate
- *     without a gap AND without overlapping the cut part.
+ * The section is kept as a HEADING and not silently renumbered, so a reader who
+ * remembers the old numbers finds out what happened to them.
  *
  * ============================================================================
  * [3] `subdivideOnGrid` — a painted area cut on the same lines
@@ -78,12 +61,13 @@
  *
  * (d) THE CRACK TEST, the one this whole file exists for. Cut the triangle
  *     (0,0), (8,0), (8,8) on the same grid and take the cell [4…8] × [0…4],
- *     which lies wholly inside it. Its two triangles must be the SAME two
- *     `gridPlate(0, 0, 8, 8, 4)` builds for that cell:
+ *     which lies wholly inside it. Its two triangles must be the two the RULE
+ *     states — the split from the cell's MINIMUM corner to its MAXIMUM one:
  *       (4,0), (4,4), (8,4)  and  (4,0), (8,4), (8,0)
- *     — same split, from the cell's minimum corner to its maximum one. That is
- *     what makes a meadow lie ON the plate over a hill instead of cutting
- *     through it.
+ *     That used to be checked against `gridPlate`'s own cell; with the plate
+ *     gone the diagonal is derived by hand instead, which is the same statement
+ *     without a second mesh to compare against. It is what makes the water
+ *     drape lie ON the terrain over a hill instead of cutting through it.
  *
  * ============================================================================
  * [3b] THE CONTOUR CELL — the RED counter-probe of "Ein Boden" E2
@@ -201,7 +185,7 @@ const [grid, height, travel] = await loadPure(
   'packages/scene-render/src/gridMesh.ts',
   'packages/scene-render/src/worldHeight.ts',
   'client3d/src/scene/travelPath.ts');
-const { gridPlate, gridStepFor, subdivideOnGrid } = grid;
+const { gridStepFor, subdivideOnGrid } = grid;
 const { sampleWorldHeight } = height;
 const { densifyPolyline, pointAtDistance } = travel;
 
@@ -213,45 +197,22 @@ check('1 500 m at step 4 (the largest world of § A16)',
   gridStepFor(-750, -750, 750, 750, 4), 8);
 check('no relief (step 0) is handed back', gridStepFor(0, 0, 400, 400, 0), 0);
 
-// --- [2] the base plate -----------------------------------------------------
-console.log('[2] gridPlate snaps onto the grid and splits every cell alike');
-const plate = gridPlate(-5, -5, 5, 5, 4, -4, -4);
-checkEq('the reported extent is the one asked for',
-  [plate.minX, plate.minZ, plate.maxX, plate.maxZ], [-5, -5, 5, 5]);
-checkEq('support points per axis', [plate.cols, plate.rows], [5, 5]);
-check('position numbers', plate.pos.length, 75);
-check('uv numbers', plate.uv.length, 50);
-check('index entries', plate.index.length, 96);
-checkEq('first vertex', plate.pos.slice(0, 3), [-8, 0, -8]);
-checkEq('first uv (the snapped overhang runs outside 0…1)',
-  plate.uv.slice(0, 2), [-0.3, 1.3]);
-checkEq('the world origin is vertex 12', plate.pos.slice(36, 39), [0, 0, 0]);
-checkEq('…at uv (0.5, 0.5)', plate.uv.slice(24, 26), [0.5, 0.5]);
-checkEq('the first cell splits minimum -> maximum corner',
-  plate.index.slice(0, 6), [0, 5, 6, 0, 6, 1]);
-check('every vertex lies at y = 0',
-  plate.pos.filter((_, i) => i % 3 === 1).reduce((a, b) => a + Math.abs(b), 0), 0);
-const ringed = gridPlate(-100, -100, 100, 100, 4, 0, 0,
-  { x0: 0, z0: 0, x1: 8, z1: 8 });
-check('a relief box cuts only itself: vertices', ringed.pos.length / 3, 25);
-check('…index entries', ringed.index.length, 48);
-const plateArea = (g) => {
-  let sum = 0;
-  for (let t = 0; t + 2 < g.index.length; t += 3) {
-    const v = [0, 1, 2].map((n) => g.index[t + n] * 3);
-    const [ax, az] = [g.pos[v[0]], g.pos[v[0] + 2]];
-    const [bx, bz] = [g.pos[v[1]], g.pos[v[1] + 2]];
-    const [cx, cz] = [g.pos[v[2]], g.pos[v[2] + 2]];
-    sum += Math.abs((bx - ax) * (cz - az) - (cx - ax) * (bz - az)) / 2;
-  }
-  return sum;
-};
-check('…and the ring covers the plate exactly, without overlap',
-  plateArea(ringed), 40000);
-const flatPlate = gridPlate(-100, -100, 100, 100, 0);
-checkEq('a flat world is one quad, unsnapped',
-  [flatPlate.pos.length, flatPlate.index.length, flatPlate.minX, flatPlate.maxX],
-  [12, 6, -100, 100]);
+// --- [2] the base plate — GONE with E3 --------------------------------------
+// `gridPlate` built ONE big mesh over the whole world frame, cut on the field's
+// own lines, and every painted area was draped on top of it. Both halves of
+// that arrangement are gone: since E2 the terrain places its own vertices out
+// of the height lattice in the vertex shader (`scene/terrainLod.ts`), and since
+// E3 the painted grounds are a CUT in that one surface rather than meshes on it
+// (`@anima/scene-render/layerCut.ts`). Nothing calls the plate, so there is
+// nothing here to derive by hand any more. What survived the removal —
+// `gridStepFor` above and `subdivideOnGrid` below — is checked exactly as
+// before; the ONE mesh still cut on the field's lines is the water drape, until
+// E4 gives it a level mirror.
+//
+// The crack test of [3] used to measure the area's cell against the PLATE's
+// cell. It now measures it against the diagonal the rule itself states (minimum
+// corner to maximum corner), which is the same statement without a second mesh
+// to compare against.
 
 // --- [3] the painted areas --------------------------------------------------
 console.log('[3] subdivideOnGrid cuts on the same lines');
@@ -299,17 +260,18 @@ const inCell = (t) => t.every(([x, z]) => x >= 4 - 1e-9 && x <= 8 + 1e-9
 const asKey = (tris) => tris.map((t) => t.map(([x, z]) => `${x},${z}`).sort().join('|'))
   .sort().join(' / ');
 const areaCell = triangles(big.pos).filter(inCell);
-const platePlain = gridPlate(0, 0, 8, 8, 4, 0, 0);
-const plateTris = [];
-for (let i = 0; i + 2 < platePlain.index.length; i += 3) {
-  plateTris.push([0, 1, 2].map((n) => {
-    const v = platePlain.index[i + n] * 3;
-    return [platePlain.pos[v], platePlain.pos[v + 2]];
-  }));
-}
+// THE RULE, DERIVED BY HAND: a full grid cell is split from its MINIMUM corner
+// (4, 0) to its MAXIMUM one (8, 4), so the cell [4…8]×[0…4] is exactly
+//   (4,0) (4,4) (8,4)   and   (4,0) (8,4) (8,0)
+// — the two triangles every consumer of this grid has to produce, whichever way
+// it arrived at the cell.
+const CELL_TRIS = [
+  [[4, 0], [4, 4], [8, 4]],
+  [[4, 0], [8, 4], [8, 0]],
+];
 check('the cell [4…8]×[0…4] of the area is two triangles', areaCell.length, 2);
-checkEq('…and they are the plate\'s own two',
-  asKey(areaCell), asKey(plateTris.filter(inCell)));
+checkEq('…and they are the minimum-to-maximum diagonal of the rule',
+  asKey(areaCell), asKey(CELL_TRIS));
 // …and that must not depend on how the triangle happened to be wound or
 // where earcut started it: the cell polygon comes out of the clipping in a
 // different order for each of these six, and the fan from the MINIMUM corner
@@ -321,7 +283,7 @@ for (const winding of [CORNERS, [...CORNERS].reverse()]) {
     const rot = [winding[r % 3], winding[(r + 1) % 3], winding[(r + 2) % 3]];
     const flat = rot.flatMap(([x, z]) => [x, 0, z]);
     const tris = triangles(subdivideOnGrid(flat, null, 4, 0, 0).pos).filter(inCell);
-    if (asKey(tris) === asKey(plateTris.filter(inCell))) sameCell += 1;
+    if (asKey(tris) === asKey(CELL_TRIS)) sameCell += 1;
   }
 }
 check('every winding and rotation gives that same cell', sameCell, 6);

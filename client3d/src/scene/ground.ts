@@ -2,15 +2,22 @@
  * The GROUND of the seamless metre world (plan-freie-weltkarte-e4-3d-client.md,
  * task 2).
  *
- * One base plane over the whole world in the default kind's look, and on top of
- * it the painted areas of `GET /play/terrain` — polygons in world metres, in
- * the order the server sorted them (bottom to top). This replaces the grid
- * world's per-cell plates: there are no cells any more, the ground is a plane
- * and the terrain is painted on it.
+ * ONE SURFACE SINCE E3. The world's ground is the CDLOD terrain mesh
+ * (`scene/terrainLod.ts`) and nothing else: the painted areas of
+ * `GET /play/terrain` are CUT INTO ITS MATERIAL per texel out of the masks the
+ * server bakes (`scene/layerGround.ts`, plan-ein-boden.md § G3), instead of
+ * being N transparent drape meshes stacked on it. What went with the drapes:
+ * the `renderOrder` ladder at −10000 + i, the `polygonOffset` ladder down to
+ * −32, the hairline y ladder of 0.4 mm per level, the alpha fringe and its
+ * refined edge band. The only drape left in the world is WATER's, until E4
+ * gives it a level mirror.
  *
  * WHAT LIVES WHERE
  *  - the polygon geometry is SHARED (`@anima/scene-render/groundAreas`), because
  *    the admin preview shows the same areas;
+ *  - the CUT is shared as well (`@anima/scene-render/layerCut`): the mask
+ *    format, the blend arithmetic and the GLSL are one source for both
+ *    renderers and for the smoke;
  *  - how a KIND is painted is shared too (`surfaceMaterial` + the surface-texture
  *    library the tiles already feed);
  *  - what is in THIS file is view state: which meshes stand in the scene, the
@@ -39,18 +46,13 @@
  * 64 m cells its 40 000-cell budget had coarsened the live world to — the
  * measured 2.433 m by which the surface a figure stood on differed from the
  * field the server judged its walk by. The base mesh's `gridPlate` and the ONE
- * world-wide cell size that went with it are gone too: the painted-area DRAPES
- * that live until E3 are each cut on their own budget now (`areaCellM`).
- *
- * Stacked areas are still separated by `renderOrder` + a depth bias and NOT by
- * a height ladder; the sub-millimetre hairline lift (`AREA_Y_STEP_M`, capped
- * at `AREA_Y_MAX_M`) rides ON TOP of the sampled height, which is the one
- * place where "the areas sit a hair above the ground" is allowed to be true.
+ * world-wide cell size that went with it are gone too.
  *
  * REFETCH. Neither the terrain nor the relief is ever withheld, so both are
  * fetched ONCE and again only when the worldmap poll reports a different
- * signature — `terrain_sig` for the painted areas, `height_sig` for the field.
- * `sync()` takes both and does nothing while they are unchanged.
+ * signature — `terrain_sig` for the painted areas AND for the layer masks
+ * (they are baked from exactly those areas plus the type catalog), `height_sig`
+ * for the field. `sync()` takes both and does nothing while they are unchanged.
  *
  * THE RELIEF ARRIVES TWICE SINCE v2 (§ A16.3), and this file is where the two
  * meet: the coarsenable OVERVIEW comes with the signature above, and the fine
@@ -61,7 +63,7 @@
  * exactly as it is when the overview does.
  */
 import * as THREE from 'three';
-import { AREA_POLYGON_OFFSET, buildAreaGeometry,
+import { buildAreaGeometry,
   gridStepFor, heightAt as worldHeightAt, pickVariant, pointInRing,
   propGroundFit, rayGroundHit,
   scatterCellInstances, scatterCellSeed, scatterClearM,
@@ -69,9 +71,11 @@ import { AREA_POLYGON_OFFSET, buildAreaGeometry,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
   worldHeightRange } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterFootprint, ScatterInstance,
-  SurfaceMaterialSpec, WorldHeightField, WorldHeightTileStats,
+  SurfaceMaterialSpec, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
+  TerrainLayerIndex, TerrainLayerTile, WorldHeightField, WorldHeightTileStats,
   WorldHeightTiles } from '@anima/scene-render';
-import { fetchHeightfield, fetchHeightTiles, fetchTerrain } from '../api';
+import { fetchHeightfield, fetchHeightTiles, fetchTerrain,
+  fetchTerrainLayers } from '../api';
 import type { HeightTileBatch } from '../api';
 import { localToWorld } from '../game/enterLocation';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
@@ -84,9 +88,11 @@ import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
   releaseImpostor } from './impostors';
-import { applyNaturalGround, NG_EDGE_ATTRIBUTE,
-  setNaturalGroundField } from './naturalGround';
-import { isWaterClass, ngRefineEdgeBand } from './naturalGroundMath';
+import { applyTerrainLayers, disposeLayerGround, layerIndexOfKind,
+  setLayerOverview, setLayerTable, setLayerTiles,
+  topLayerIndexAt } from './layerGround';
+import { applyNaturalGround, setNaturalGroundField } from './naturalGround';
+import { isWaterClass } from './naturalGroundMath';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
@@ -114,40 +120,31 @@ export const GROUND_Y = 0;
 export const BASE_MARGIN_M = 60;
 /** Edge length of the base plane when nothing is placed at all (metres). */
 const BASE_FALLBACK_M = 200;
-/** Depth-bias-free hairline lift per stacking level, and its ceiling. Read the
- *  file header: this is a rendering crutch, not a height model. */
-const AREA_Y_STEP_M = 0.0004;
-const AREA_Y_MAX_M = 0.01;
-/** Ceiling of the stacking depth bias. The bias only has to separate the layer
- *  from the one below it, and a world with two hundred painted areas must not
- *  ask the driver for a two-hundred-fold offset.
- *
- *  Exported because the footprint plate has to stand ONE RUNG in front of this
- *  whole ladder (`scene/tiles.PLATE_POLYGON_OFFSET`) — that file cannot import
- *  this one (this one takes `setWorldGround` from it), so the relation between
- *  the two numbers is pinned in `smoke_plate_drape.mjs` § 6 instead. */
-export const AREA_OFFSET_MAX = 32;
 /**
- * Where the painted areas sit in the TRANSPARENT pass: drawn far BEFORE
- * everything else in it, at `BASE + index + 1`.
+ * THE ONE LIFT LEFT, in metres — and it belongs to WATER alone.
  *
- * The areas became transparent materials with the soft edge (§ stage 4 of
- * `scene/naturalGround.ts`), and that moved them out of the opaque pass — where
- * they were drawn before every overlay in the world — into the pass three sorts
- * by `renderOrder`. At the natural ladder (1, 2, 3, …) they would land AFTER
- * every overlay that leaves its render order at the default 0: the selection
- * ring under an NPC, a path line, the door and boundary marks. Those overlays
- * deliberately do not write depth, so the opaque CORE of a drape drawn after
- * them simply paints over them — a selection ring vanishes on a painted
- * meadow.
+ * The three ladders that used to stand here are gone with E3: a `renderOrder`
+ * ladder at −10000 + i, a `polygonOffset` ladder down to −32 and a hairline y
+ * ladder of 0.4 mm per level, all three keeping N coplanar drape meshes apart.
+ * There are no drape meshes any more — the painted grounds are a CUT in the one
+ * terrain surface (`scene/layerGround.ts`), so there is nothing coplanar left
+ * to separate.
  *
- * A large negative base restores the old truth ("the ground is drawn first")
- * without touching anything else: the areas keep their order AMONG themselves,
- * which is what stacks them, and they stay behind the whole of the default-0
- * world. Ten thousand is simply more layers than any world will ever paint.
- * Exported so the smoke can pin the number instead of a copy of it.
+ * Except water, this stage. A lake is still drawn by its own ripple drape until
+ * E4 gives it a level mirror at `water_level`, and that drape follows the very
+ * heights the terrain mesh is built from — i.e. it IS coplanar with the terrain.
+ * Two centimetres is what keeps the depth test from tearing them apart at
+ * range, and it is ONE number rather than a ladder because there is only ever
+ * one water surface over a given square metre. It dies with E4.
  */
-export const AREA_RENDER_ORDER_BASE = -10000;
+export const WATER_DRAPE_LIFT_M = 0.02;
+
+/** Mask tiles asked for in ONE request — the server's own
+ *  `terrain_layers.BATCH_MAX`. Far below the height batch's 64 because one mask
+ *  tile is 384 kB of raw bytes against a height tile's 130 kB, and a tile that
+ *  has to be baked from cold costs about a second. A client that wants more
+ *  asks twice, which is what this loop does. */
+const LAYER_BATCH_MAX = 16;
 
 /** Fallback tuft size when a scatter entry names no model — HIP-HIGH next to a
  *  1.70 m figure, not knee-high (finding 2 of the E8 acceptance round: the old
@@ -464,7 +461,12 @@ function spreadOf(urls: readonly string[]): number | null {
 
 /** One built area: what stands in the scene, plus what the scatter LOD needs. */
 interface AreaMesh {
-  mesh: THREE.Mesh;
+  /** the WATER drape of this area, and `null` for every other ground: since E3
+   *  a painted ground is a CUT in the terrain surface and has no mesh at all
+   *  (`scene/layerGround.ts`). Water keeps a drape until E4 replaces it with a
+   *  level mirror. An area is still an entry here whatever it is made of — the
+   *  scatter and the undergrowth hang on it. */
+  mesh: THREE.Mesh | null;
   /** one scatter entry per authored row AND model variant — empty when nothing
    *  grows here (finding B17: the list hangs on the AREA, not on the terrain
    *  type; § B2 addendum: a prop with four meshes is four entries, each holding
@@ -1068,7 +1070,8 @@ export function createGround(): Ground {
    * because the wind patch lives here — importing it the other way round would
    * close a cycle between the two modules.
    */
-  const undergrowth = createUndergrowthField({ heightAt, applySway });
+  const undergrowth = createUndergrowthField({
+    heightAt, applySway, topLayerAt: topLayerIndexAt });
   group.add(undergrowth.group);
 
   /** Lift a flat vertex list onto the ground, in place. `pos` is `[x, y, z, …]`
@@ -1112,8 +1115,29 @@ export function createGround(): Ground {
   let builtFpSig: string | null = null;
 
   /** What the terrain's material was last built for — the default kind and the
-   *  frame, so a poll that changes neither costs no material at all. */
+   *  layer table, so a poll that changes neither costs no material at all. */
   let baseKey = '';
+
+  /**
+   * THE LAYER CUT (§ G3) — the baked masks the terrain material is painted
+   * from, and the loader that keeps them under the player.
+   *
+   * It follows the HEIGHT tiles exactly: same keys, same want set, same
+   * radius — one anchor, one window, so the ground's shape and the ground's
+   * material can never be sharpened over different squares of the world.
+   * `layerFmt` is the format block of the last answer (how the bytes decode);
+   * `layerIndexKeys` is which tiles carry anything at all, and everything
+   * outside it is bare ground and is never asked for.
+   */
+  const layerTiles = new Map<string, TerrainLayerTile>();
+  let layerFmt: TerrainLayerFormat | null = null;
+  let layerIndexKeys: ReadonlySet<string> = new Set<string>();
+  let layerSig: string | null = null;
+  /** The layer table as one string — part of `baseKey`, because a world that
+   *  gains a painted ground gains a slice in the compositor's array and the
+   *  program has to be rebuilt for it. */
+  let layerKey = '';
+  let layersBusy = false;
   const areaMeshes: AreaMesh[] = [];
   /** Where the camera stood at the last `tickScatterLod` — the scatter LOD's
    *  only piece of view state. A REBUILD needs it too (an area has to come
@@ -1210,14 +1234,13 @@ export function createGround(): Ground {
    * ARE the world coordinates (1 unit = 1 m), the base plane's run 0..1 over
    * its whole edge.
    *
-   * `edgeFade` is for the painted-area DRAPES alone: their geometry carries
-   * the distance to their own ring (`drapeArea`), so their material may fade
-   * out along it. The base plate has no ring and no such attribute — it is
-   * what the drapes fade out ONTO, and it stays opaque.
+   * SINCE E3 IT BUILDS TWO KINDS OF THING, and only one of them still carries a
+   * texture: the WATER drape (its own shader, its own image, until E4) and the
+   * TERRAIN (`rebuildBase`), which gets NO map at all — its albedo comes out of
+   * the layer compositor's texture array. See `applyTerrainLayers`.
    */
   function materialFor(kind: string, uvScaleM: number,
-                       sink: { dispose(): void }[],
-                       edgeFade = false): THREE.Material {
+                       sink: { dispose(): void }[]): THREE.Material {
     const surface = surfaceOf(kind);
     const lib = surfaceFor(surface, 'wall');
     const spec: SurfaceMaterialSpec | null = surfaceMaterialSpec(surface);
@@ -1250,7 +1273,7 @@ export function createGround(): Ground {
     // a HARD shore: the soft edge rides on this patch, and water is out of it
     // — a shoreline that dissolved into the meadow behind it would be a bank
     // nobody could see, and the water shader is where a shore would belong.
-    if (!isWaterClass(spec?.class)) applyNaturalGround(mat, edgeFade);
+    if (!isWaterClass(spec?.class)) applyNaturalGround(mat);
     sink.push(mat);
     return mat;
   }
@@ -1349,11 +1372,29 @@ export function createGround(): Ground {
     terrain.setExtent([wantX0, wantZ0, Math.max(wantX1, wantX0 + 1),
                        Math.max(wantZ1, wantZ0 + 1)]);
     const kind = payload?.default_kind || '';
-    const key = `${kind}|${surfaceOf(kind)}`;
+    // The key carries the LAYER TABLE as well, because the terrain's material is
+    // no longer about one kind: a world that gains a painted ground gains a
+    // slice in the compositor's array, and the program has to be rebuilt for it.
+    const key = `${kind}|${layerKey}`;
     if (key === baseKey) return;
     baseKey = key;
     drain(baseOwned);
-    terrain.setMaterial(materialFor(kind, 1, baseOwned));
+    // NO MAP, NO COLOUR OF ITS OWN. The albedo is composited from the layer
+    // array (`scene/layerGround.ts`); a `map` beside it would switch on the
+    // anti-tile stage of `applyNaturalGround`, which would blend the DEFAULT
+    // kind's wide sample over every forest in the world. White is the neutral
+    // multiplier the compositor writes into.
+    const mat = surfaceMaterial(THREE, { material: null, map: null,
+                                         color: 0xffffff });
+    patchHole(mat);
+    applyNaturalGround(mat);
+    // LAST IN THE CHAIN AND THEREFORE FIRST IN THE SHADER: every ground patch
+    // inserts its body directly after `#include <map_fragment>`, so the one
+    // applied last runs first. The compositor writes the albedo, the natural
+    // stages then work on what it wrote — the order plan § G3 asks for.
+    applyTerrainLayers(mat);
+    baseOwned.push(mat);
+    terrain.setMaterial(mat);
   }
 
   /**
@@ -2122,8 +2163,10 @@ export function createGround(): Ground {
 
   function clearAreas(): void {
     for (const a of areaMeshes) {
-      group.remove(a.mesh);
-      a.mesh.geometry.dispose();
+      if (a.mesh) {
+        group.remove(a.mesh);
+        a.mesh.geometry.dispose();
+      }
       disposeProps(a.scatter);
       drain(a.scatterOwned);
     }
@@ -2234,38 +2277,27 @@ export function createGround(): Ground {
    * the moment it was hung into the scene.
    */
   /**
-   * A painted area, cut on the ground grid and laid on the relief.
+   * A WATER area, cut on the ground grid and laid on the relief.
    *
-   * The flat geometry of `buildAreaGeometry` is a handful of big triangles
-   * from earcut; over a hill those four corners would drape and the metres in
+   * The flat geometry of `buildAreaGeometry` is a handful of big triangles from
+   * earcut; over a hill those four corners would drape and the metres in
    * between would cut straight through it. So the triangles are clipped along
-   * the SAME grid lines the base plate is built on (`subdivideOnGrid`) and
-   * every vertex is lifted by the field. The UVs survive because they are
-   * world metres and the cut interpolates them linearly — a texture that ran
-   * seamlessly across an area border still does.
+   * the height lattice's own lines (`subdivideOnGrid`) and every vertex is
+   * lifted by the field. The UVs survive because they are world metres and the
+   * cut interpolates them linearly.
    *
-   * AND IT CARRIES ITS OWN RIM. Every vertex gets the distance to the nearest
-   * edge of the area's ring as the `aEdgeDist` attribute, which is what lets
-   * the ground shader fade the area out over its last metre and a half
-   * (`scene/naturalGround.ts`, stage 4) instead of ending it on a drawn line.
-   * The ring is known HERE and nowhere else — the fragment shader has no idea
-   * what shape it is drawing — and the same pass refines the triangles
-   * wherever that distance cannot be interpolated across one
-   * (`ngRefineEdgeBand`): a flat world's earcut triangles have all three
-   * corners ON the ring, and a linear reading of "0, 0, 0" would fade the
-   * whole area away. The refinement happens AFTER the lift, so it splits the
-   * drape's own planes and describes the very same surface.
-   *
-   * A `null` ring is a kind that gets NO fringe — water, today: its material
-   * carries its own shader and never compiles the branch, so refining its
-   * triangles and filling a buffer nothing reads would be work for a picture
-   * that does not change.
+   * IT IS THE LAST DRAPE IN THE WORLD. Every other painted ground is a CUT in
+   * the terrain surface since E3 (`scene/layerGround.ts`) and has no mesh at
+   * all; water keeps one until E4 replaces it with a level mirror at
+   * `water_level`. With the drapes went the fringe geometry this function used
+   * to build — the per-vertex distance to the area's ring and the refinement
+   * pass that made it interpolable (`ngRefineEdgeBand`, up to 20 000
+   * triangles): water never had a fringe, and nothing else has a drape.
    *
    * The input geometry is consumed: it is read out and disposed here, because
    * from that moment on nothing else knows about it.
    */
-  function drapeArea(flat: THREE.BufferGeometry,
-                     ring: readonly Point2[] | null): THREE.BufferGeometry {
+  function drapeArea(flat: THREE.BufferGeometry): THREE.BufferGeometry {
     const ov = relief.overview;
     const src = flat.index ? flat.toNonIndexed() : flat;
     const pos = Array.from(src.getAttribute('position').array as ArrayLike<number>);
@@ -2274,8 +2306,8 @@ export function createGround(): Ground {
     if (src !== flat) src.dispose();
     flat.dispose();
     // The relief cut, when there is a relief: without one the earcut triangles
-    // go into the band refinement as they are — they lie flat, and flat is the
-    // one thing a subdivision would not change about them.
+    // are used as they are — they lie flat, and flat is the one thing a
+    // subdivision would not change about them.
     let cutPos = pos;
     let cutUv = uv;
     const cell = areaCellM(pos);
@@ -2285,15 +2317,9 @@ export function createGround(): Ground {
       cutUv = uv ? cut.uv : null;
       liftToField(cutPos);
     }
-    const band = ring ? ngRefineEdgeBand(cutPos, cutUv, ring) : null;
-    const outPos = band ? band.pos : cutPos;
-    const outUv = band ? band.uv : cutUv;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(outPos, 3));
-    if (outUv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(outUv, 2));
-    if (band) {
-      geo.setAttribute(NG_EDGE_ATTRIBUTE, new THREE.Float32BufferAttribute(band.dist, 1));
-    }
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(cutPos, 3));
+    if (cutUv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(cutUv, 2));
     geo.computeVertexNormals();
     geo.computeBoundingSphere();
     return geo;
@@ -2330,44 +2356,28 @@ export function createGround(): Ground {
     areas.forEach((area, index) => {
       const built = builtAreas[index];
       if (!built) return;   // a ring that encloses nothing has nothing to draw
-      // WHO GETS A FRINGE is decided once, here, and reaches the geometry and
-      // the material as the same answer — the class the material is built from
-      // (`isWaterClass`, the very source `materialFor` reads). A lake keeps its
-      // hard shore, and its drape is spared the refinement and the attribute.
-      const softEdge = !isWaterClass(surfaceMaterialSpec(surfaceOf(area.kind))?.class);
-      // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
-      // so the texture runs seamlessly across area borders.
-      const mesh = new THREE.Mesh(drapeArea(built.geometry, softEdge ? built.ring : null),
-                                  materialFor(area.kind, 1, nextOwned, softEdge));
-      mesh.receiveShadow = true;
-      // LIST ORDER decides what covers what — the server sorted the areas
-      // bottom to top (z_order, then paint order), so the index IS the layer.
-      //
-      // AND SINCE THE FRINGE, that order is also the BLEND order. The drapes
-      // are transparent materials now (`applyNaturalGround`, stage 4), so
-      // three draws them in the transparent pass, sorted by `renderOrder`
-      // rather than by distance: area 1 is on the screen before area 2 blends
-      // over it. The ladder starts at `AREA_RENDER_ORDER_BASE`, which is what
-      // keeps the ground UNDER the overlays of the world (read it — a natural
-      // 1, 2, 3 would paint the drapes over every selection ring and over the
-      // fog). Nothing here changes about DEPTH: the drapes still write it,
-      // still ride the `polygonOffset` ladder below and still sit on the
-      // sub-millimetre y ladder, which together are what keeps coplanar ground
-      // from z-fighting. A transparent material that stopped writing depth
-      // would gain nothing (the pass is already ordered) and would lose the
-      // ground its occlusion of what is drawn after it.
-      mesh.renderOrder = AREA_RENDER_ORDER_BASE + index + 1;
-      const mat = mesh.material as THREE.Material;
-      const bias = -Math.min((index + 1) * AREA_POLYGON_OFFSET, AREA_OFFSET_MAX);
-      mat.polygonOffset = true;
-      mat.polygonOffsetFactor = bias;
-      mat.polygonOffsetUnits = bias;
-      // The hairline lift rides ON TOP of the sampled height: the vertices
-      // carry the relief, this adds the fraction of a millimetre that keeps a
-      // driver with a weak depth bias from tearing two coplanar areas apart.
-      mesh.position.y = Math.min((index + 1) * AREA_Y_STEP_M, AREA_Y_MAX_M);
-      mesh.userData.terrainKind = area.kind;
-      mesh.userData.terrainAreaId = area.id;
+      // WHO STILL GETS A MESH: water, and nothing else. Every other painted
+      // ground is a CUT in the terrain surface since E3 — the compositor reads
+      // the server's baked masks and paints it into the one material
+      // (`scene/layerGround.ts`), which is why the whole ladder of renderOrder,
+      // depth bias and hairline lifts that used to stand here is gone. The
+      // CLASS decides, never the colour or the kind's name (`isWaterClass`),
+      // exactly as it decided who got a fringe before.
+      const water = isWaterClass(surfaceMaterialSpec(surfaceOf(area.kind))?.class);
+      let mesh: THREE.Mesh | null = null;
+      if (water) {
+        // 1 m per UV unit: the shape geometry's UVs are the world coordinates,
+        // so the texture runs seamlessly across area borders.
+        mesh = new THREE.Mesh(drapeArea(built.geometry),
+                              materialFor(area.kind, 1, nextOwned));
+        mesh.receiveShadow = true;
+        // The one lift left in the world — see `WATER_DRAPE_LIFT_M`. Two
+        // centimetres over a surface the drape is otherwise coplanar with, and
+        // it dies with E4.
+        mesh.position.y = WATER_DRAPE_LIFT_M;
+        mesh.userData.terrainKind = area.kind;
+        mesh.userData.terrainAreaId = area.id;
+      }
 
       // The CLEANED ring, the one the mesh was built from — see `ringBounds`.
       const [minX, minZ, maxX, maxZ] = ringBounds(built.ring);
@@ -2394,6 +2404,11 @@ export function createGround(): Ground {
       undergrowthAreas.push({
         id: area.id,
         kind: area.kind,
+        // WHICH LAYER THIS SHAPE IS, so the field can ask the baked mask
+        // whether the ground it grows on is really the topmost one at a
+        // candidate point (user decision 5.2). The polygon occluders stay as
+        // the cheap first pass; the mask is the truth behind them.
+        layer: layerIndexOfKind(area.kind),
         ring: built.ring,
         bounds: [minX, minZ, maxX, maxZ],
         value: undergrowthFor(area.kind),
@@ -2406,7 +2421,7 @@ export function createGround(): Ground {
     // this line and the new one is in place before the frame after it.
     clearAreas();
     for (const a of next) {
-      group.add(a.mesh);
+      if (a.mesh) group.add(a.mesh);
       for (const prop of a.scatter) {
         group.add(prop.low);
         // A full-detail mesh can exist before the swap: `buildScatter` bins
@@ -2665,6 +2680,92 @@ export function createGround(): Ground {
     }
   }
 
+  /**
+   * Take over the layer INDEX — the table, the coarse world mask, which tiles
+   * exist. Called when `terrain_sig` moves, which is the signature the masks
+   * really hang on (they are baked from the painted areas and the catalog).
+   *
+   * Failure keeps what stands and does NOT advance `layerSig`, so the next poll
+   * tries again — the rule every fetch in this file follows. A world whose
+   * masks never arrive draws bare ground everywhere, which is wrong about every
+   * wood and right about where the ground IS; a client that refused to draw a
+   * ground at all would be wrong about the whole world.
+   */
+  async function reloadLayers(sig: string): Promise<void> {
+    let index: TerrainLayerIndex;
+    try {
+      index = await fetchTerrainLayers() as TerrainLayerIndex;
+    } catch {
+      return;
+    }
+    layerFmt = index;
+    layerSig = index.sig || sig;
+    layerIndexKeys = new Set<string>(index.tile_keys ?? []);
+    layerTiles.clear();
+    setLayerTiles(layerTiles, layerFmt);
+    setLayerOverview(index.overview ?? null);
+    const table: TerrainLayer[] = index.layers ?? [];
+    layerKey = table.map((l) => `${l.index}:${l.kind}:${l.surface}:${l.edge_blend_m}:${l.water ? 1 : 0}`)
+      .join('|');
+    await setLayerTable(table, kindColor, (kind) => {
+      const lib = surfaceFor(surfaceOf(kind), 'wall');
+      return lib?.sizeM ?? 3;
+    });
+    // The masks moved, so the tiles under the player have to come with them.
+    await refreshLayerTiles();
+  }
+
+  /**
+   * Fetch the mask tiles the anchor wants, in batches, and hand the window over
+   * ONCE per batch.
+   *
+   * The want set is `wantedTiles` — the height tiles' own, with the height
+   * tiles' own radius: one window, one anchor. What differs is the BATCH SIZE
+   * (the server's `terrain_layers.BATCH_MAX`, far below the height batch's,
+   * because one mask tile is 384 kB of bytes against a height tile's 130 kB)
+   * and that nothing here is ever evicted piecemeal: the window is packed whole
+   * from whatever is held, so a tile leaving the set simply stops being copied.
+   */
+  async function refreshLayerTiles(): Promise<void> {
+    if (layersBusy || !layerFmt || !layerIndexKeys.size) return;
+    const tileM = Number(layerFmt.tile_m) || 0;
+    if (!(tileM > 0)) return;
+    const want = wantedTiles(layerIndexKeys, tileM, anchorX, anchorZ,
+                             HEIGHT_TILE_RADIUS_M);
+    const missing = want.filter((k) => !layerTiles.has(k));
+    if (!missing.length) return;
+    layersBusy = true;
+    const sig = layerSig;
+    try {
+      for (let i = 0; i < missing.length; i += LAYER_BATCH_MAX) {
+        let batch: TerrainLayerBatch;
+        try {
+          batch = await fetchTerrainLayers(
+            missing.slice(i, i + LAYER_BATCH_MAX)) as TerrainLayerBatch;
+        } catch {
+          return;   // keep what stands; the missing keys stay wanted
+        }
+        if (layerSig !== sig || (batch.sig && batch.sig !== sig)) return;
+        let taken = 0;
+        for (const [key, tile] of Object.entries(batch.tiles || {})) {
+          layerTiles.set(key, tile);
+          taken += 1;
+        }
+        if (!taken) continue;
+        // Everything the want set no longer holds leaves in the same breath:
+        // the window is packed from what is in the map, so an old tile would
+        // only stretch the rectangle and cost texels for ground nobody sees.
+        const keep = new Set(want);
+        for (const key of [...layerTiles.keys()]) {
+          if (!keep.has(key)) layerTiles.delete(key);
+        }
+        setLayerTiles(layerTiles, layerFmt);
+      }
+    } finally {
+      layersBusy = false;
+    }
+  }
+
   /** Drop the tiles nobody wants until the cache is back under its cap. The
    *  map is in "last wanted" order (see `refreshTiles`), so the front is the
    *  oldest — and a tile in the CURRENT want set is never dropped, however old,
@@ -2745,6 +2846,12 @@ export function createGround(): Ground {
         payload = await fetchTerrain();
         loadedSig = payload.sig || sig;
         rebuildCatalog();
+        // THE MASKS HANG ON `terrain_sig` TOO, and on nothing else: the bake is
+        // a function of the painted areas plus the type catalog, which is
+        // exactly what that signature covers. Fetched here rather than on its
+        // own beat so the table, the catalog and the areas are always one
+        // world — the compositor's slices are built from the catalog's colours.
+        await reloadLayers(loadedSig);
       } catch {
         // Keep whatever stands. `loadedSig` is deliberately NOT advanced, so
         // the next poll with the same signature tries again.
@@ -2795,6 +2902,9 @@ export function createGround(): Ground {
           // computed before the index arrived. It costs a set difference when
           // there is nothing to fetch.
           void refreshTiles();
+          // …and the MASK window rides the very same occasion, over the very
+          // same want set (§ G3).
+          void refreshLayerTiles();
           return Promise.resolve(false);
         }
         builtFpSig = fpSig;
@@ -2838,6 +2948,7 @@ export function createGround(): Ground {
       if (key === anchorTile) return;
       anchorTile = key;
       void refreshTiles();
+      void refreshLayerTiles();
     },
     heightAt,
     groundPointAt(ray) {
@@ -2932,6 +3043,9 @@ export function createGround(): Ground {
       // back explicitly or a client that tears its world down keeps the whole
       // overview on the GPU.
       setNaturalGroundField(null);
+      // …and the layer cut: three textures and one array, all module state and
+      // in no `*Owned` bag, so this is the only place they are freed.
+      disposeLayerGround();
       // …and the camera-local layer, for the same reason: its blade texture,
       // its one geometry and its material per kind outlive every rebuild and
       // are in no `*Owned` bag, so this is the only place they are freed.

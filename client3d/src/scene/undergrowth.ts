@@ -834,6 +834,10 @@ export function undergrowthMaterial(
 export interface UndergrowthArea {
   id: string;
   kind: string;
+  /** WHICH LAYER of the baked cut this shape is (`layerIndexOfKind`). The gate
+   *  below asks the mask whether the topmost ground at a candidate point is
+   *  really this one — see `topLayerAt` in `createUndergrowthField`. */
+  layer: number;
   /** the CLEANED ring, `[x, z]` in world metres */
   ring: readonly Point2[];
   /** `[minX, minZ, maxX, maxZ]` of that ring — the cheap intersection test */
@@ -946,6 +950,25 @@ export interface UndergrowthField {
 export function createUndergrowthField(opts: {
   heightAt: (x: number, z: number) => number;
   applySway: (mat: THREE.Material, swayM: number, refH: number) => void;
+  /**
+   * WHICH GROUND IS ON TOP at a world point, as a layer index — the gate of
+   * user decision 5.2 (plan-ein-boden.md § 5): a tuft grows only where the
+   * topmost layer really is the kind that owns it.
+   *
+   * It is the SAME reading the picture makes — the server's baked id/sd masks
+   * through `@anima/scene-render` `topLayerAt` (`scene/layerGround.ts`) — and
+   * that is the whole reason it is asked at all. The polygon occluders below
+   * already reject most of it, but they are a SECOND implementation of
+   * "topmost", and two implementations are two answers waiting to differ: a
+   * shape drawn with a hole, an area whose z_order was edited, a ring the
+   * cleaner simplified. The mask is what the ground is painted from, so a tuft
+   * that survives this gate is standing on the ground the player can see.
+   *
+   * Handed in rather than imported because `layerGround.ts` and this file are
+   * both owned by `ground.ts`, and importing it here would tie the layer to a
+   * module it has no other business with.
+   */
+  topLayerAt: (x: number, z: number) => number;
 }): UndergrowthField {
   const group = new THREE.Group();
   group.name = 'terrain-undergrowth';
@@ -1105,7 +1128,14 @@ export function createUndergrowthField(opts: {
         // visible, i.e. double the density right against the wall of a house.
         triesPerPoint: 1,
       });
-      const kept = points.filter((p) => pointInRing(p.x, p.z, area.ring));
+      // TWO FILTERS, AND THEY ARE NOT THE SAME QUESTION. The ring says "is this
+      // point inside the shape I am growing"; the MASK says "is this shape what
+      // the ground here is really made of" (user decision 5.2). The first is
+      // geometry, the second is the truth the picture is painted from, and the
+      // second is the one that ends a tuft standing on a path drawn over a
+      // meadow.
+      const kept = points.filter((p) => pointInRing(p.x, p.z, area.ring)
+        && opts.topLayerAt(p.x, p.z) === area.layer);
       if (!kept.length) return;
 
       if (!geometry) geometry = undergrowthGeometry(UNDERGROWTH_H_REF_M);

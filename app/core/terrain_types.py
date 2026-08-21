@@ -43,6 +43,7 @@ from typing import Any, Dict, Optional
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
+from app.core.terrain_layers import EDGE_BLEND_KEY, sanitize_edge_blend
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
@@ -314,6 +315,23 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     # that shape it (``models.terrain._sanitize_water``).
     if WATER_META_KEY in meta:
         meta[WATER_META_KEY] = bool(meta[WATER_META_KEY])
+    # AND ONE MORE since "Ein Boden" (E3, § G3): HOW WIDE the transition from
+    # this ground to the one under it is, in metres. It is the number that
+    # replaces the renderer's fixed 1.5 m alpha fringe — the look becomes a
+    # property of the MATERIAL instead of a constant of the client.
+    #
+    # THE ONE KEY HERE WHERE 0 IS A VALUE, which is why it does not go through
+    # `_clamped_meta_number`: everywhere else a zero says "not authored" and
+    # leaves no key, but a width of zero is the HARD CUT — the floor of a room,
+    # a kerb, a paved path — and § G3 names it explicitly. The whole shape rule
+    # lives in `terrain_layers.sanitize_edge_blend` so the sanitizer and the
+    # reader (`edge_blend_of`) cannot drift apart.
+    if EDGE_BLEND_KEY in meta:
+        value = sanitize_edge_blend(meta.get(EDGE_BLEND_KEY))
+        if value is None:
+            meta.pop(EDGE_BLEND_KEY, None)
+        else:
+            meta[EDGE_BLEND_KEY] = value
     entry = {
         "kind": kind,
         "name": name,

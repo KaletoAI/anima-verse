@@ -75,6 +75,14 @@ const SWAY_STEP = 0.01
 const UNDERGROWTH_MIN = 0
 const UNDERGROWTH_MAX = 1
 const UNDERGROWTH_STEP = 0.05
+// `terrain_layers.EDGE_BLEND_MIN_M/MAX_M/DEFAULT_M`. THE ONE FIELD HERE WHERE
+// ZERO IS A VALUE and not "unset": it is the HARD CUT of a room floor, a kerb,
+// a paved path (plan-ein-boden.md § G3), so it has its own setter and its own
+// dirty test below — every other number in this form treats 0 as "no key".
+const EDGE_BLEND_MIN = 0
+const EDGE_BLEND_MAX = 8
+const EDGE_BLEND_STEP = 0.1
+const EDGE_BLEND_DEFAULT = 1.5
 /** The shared seed's two undergrown kinds, named in the hint so the number in
  *  an empty field is not a mystery (`shared/terrain/types.json`). */
 const UNDERGROWTH_SEED_FOREST = 0.6
@@ -127,6 +135,24 @@ function setMetaNum(meta: Record<string, unknown>, key: string,
   else delete meta[key]
 }
 
+/** One optional number where ZERO IS A VALUE, IN PLACE —
+ *  `terrain_layers.sanitize_edge_blend`. Junk still leaves no key (which reads
+ *  back as the default width), but a typed 0 is stored as 0: the hard cut. */
+function setMetaBlend(meta: Record<string, unknown>, key: string,
+                      raw: string): void {
+  const num = parseFloat(raw)
+  if (Number.isFinite(num) && num >= 0) meta[key] = num
+  else delete meta[key]
+}
+
+/** …and its dirty test, on the same "0 is a value" rule. */
+function blendChanged(raw: string, stored: string): boolean {
+  const typed = parseFloat(raw)
+  const known = parseFloat(stored)
+  return (Number.isFinite(typed) && typed >= 0 ? typed : null)
+    !== (Number.isFinite(known) && known >= 0 ? known : null)
+}
+
 /** Whether an optional numeric field differs from what is stored, compared as
  *  NUMBERS — "0.40" is not a change to 0.4, and empty, junk and 0 are all the
  *  same "no value" the server keeps as a missing key. */
@@ -147,6 +173,7 @@ interface OwnedMeta {
   reliefWave: string
   sway: string
   undergrowth: string
+  edgeBlend: string
 }
 
 /** `meta` with the owned keys written — or with the KEY REMOVED where the
@@ -164,6 +191,7 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   setMetaNum(next, 'relief_wave_m', own.reliefWave)
   setMetaNum(next, 'sway_m', own.sway)
   setMetaNum(next, 'undergrowth', own.undergrowth)
+  setMetaBlend(next, 'edge_blend_m', own.edgeBlend)
   return next
 }
 
@@ -243,6 +271,15 @@ function undergrowthHint(t: (s: string) => string): string {
     .replace('{grass}', String(UNDERGROWTH_SEED_GRASS))
 }
 
+/** The transition hint. It has to say the two things the field cannot show:
+ *  that an EMPTY field is not zero (it is the default fringe) and that ZERO is
+ *  a real setting — the hard cut a room floor or a kerb needs. */
+function edgeBlendHint(t: (s: string) => string): string {
+  return t('How wide the transition from this ground to the one under it is, in metres (0–{max}) — empty = {def} m, the soft fringe every ground had before. 0 is the HARD CUT: the edge then runs exactly on the line that was painted, anti-aliased but not blended, which is what a room floor, a kerb or a paved path wants.')
+    .replace('{max}', String(EDGE_BLEND_MAX))
+    .replace('{def}', String(EDGE_BLEND_DEFAULT))
+}
+
 /** The wavelength hint — how wide one swell is, plus the default an amplitude
  *  without a wave falls back to. */
 function waveHint(t: (s: string) => string): string {
@@ -304,6 +341,7 @@ export function TerrainDetail({
   const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
   const [sway, setSway] = useState(metaNumOf(type, 'sway_m'))
   const [undergrowth, setUndergrowth] = useState(metaNumOf(type, 'undergrowth'))
+  const [edgeBlend, setEdgeBlend] = useState(metaNumOf(type, 'edge_blend_m'))
   /** The reset button is armed by the first click and fires on the second —
    *  no `window.confirm` in this UI, and the entry it removes may be the only
    *  copy of a hand-made ground. */
@@ -351,6 +389,7 @@ export function TerrainDetail({
     || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
     || numChanged(sway, metaNumOf(type, 'sway_m'))
     || numChanged(undergrowth, metaNumOf(type, 'undergrowth'))
+    || blendChanged(edgeBlend, metaNumOf(type, 'edge_blend_m'))
     || (speedBad ? speed !== String(type?.speed_factor) : speedNum !== type?.speed_factor)
 
   const canSave = dirty && !speedBad && !kindBad && !kindTaken
@@ -374,7 +413,7 @@ export function TerrainDetail({
       surface: surface.trim(),
       meta: withOwnedMeta(type?.meta,
         { moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway,
-          undergrowth }),
+          undergrowth, edgeBlend }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -390,9 +429,10 @@ export function TerrainDetail({
     setReliefWave(metaNumOf(saved, 'relief_wave_m'))
     setSway(metaNumOf(saved, 'sway_m'))
     setUndergrowth(metaNumOf(saved, 'undergrowth'))
-  }, [color, idleAnim, idleSink, kindBad, kindClean, kindTaken, moveAnim,
-      moveSink, name, onSave, passable, reliefAmp, reliefWave, speedBad,
-      speedNum, surface, sway, type, undergrowth])
+    setEdgeBlend(metaNumOf(saved, 'edge_blend_m'))
+  }, [color, edgeBlend, idleAnim, idleSink, kindBad, kindClean, kindTaken,
+      moveAnim, moveSink, name, onSave, passable, reliefAmp, reliefWave,
+      speedBad, speedNum, surface, sway, type, undergrowth])
 
   return (
     <>
@@ -713,6 +753,18 @@ export function TerrainDetail({
                 value={undergrowth}
                 placeholder={t('bare')}
                 onChange={(e) => setUndergrowth(e.target.value)}
+              />
+            </Field>
+            <Field label={t('Transition (m)')} compact hint={edgeBlendHint(t)}>
+              <input
+                className="ga-input ga-tt-num"
+                type="number"
+                min={EDGE_BLEND_MIN}
+                max={EDGE_BLEND_MAX}
+                step={EDGE_BLEND_STEP}
+                value={edgeBlend}
+                placeholder={String(EDGE_BLEND_DEFAULT)}
+                onChange={(e) => setEdgeBlend(e.target.value)}
               />
             </Field>
           </div>

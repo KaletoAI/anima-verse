@@ -6,7 +6,8 @@ import type {
 import type {
   SceneBoundaryOpening, SceneDoorway, SceneExtra, SceneMarker,
   SceneModelSpec, ScenePayload, ScenePlate, SceneProblem, SceneRoom,
-  SceneTerrain, SceneWall, WorldHeightField,
+  SceneTerrain, SceneWall, TerrainLayerBatch, TerrainLayerIndex,
+  WorldHeightField,
 } from '@anima/scene-render';
 // The audio manifest is TYPED and validated in the pure soundtrack module, so
 // the choosing side and the fetching side cannot drift apart (E4-T5).
@@ -282,6 +283,31 @@ export async function fetchHeightTiles(keys: readonly string[]
   const query = keys.map((k) => k.replace(',', ':')).join(',');
   return json<HeightTileBatch>(
     await fetch(`/play/heightfield/tiles?keys=${encodeURIComponent(query)}`));
+}
+
+/**
+ * The LAYER CUT of the ground (`GET /play/terrain-layers`, § G3) — the baked
+ * masks the terrain material composites its material out of.
+ *
+ * TWO MODES, ONE CALL, because they are two halves of the same window:
+ * WITHOUT keys the server answers the INDEX (the layer table, the coarse
+ * world-wide id mask and every tile a painted shape reaches into); WITH keys it
+ * answers the FINE masks of those tiles. The keys are the client's own
+ * `"tx,tz"` — the very keys the height tiles use, so one want-set steers both
+ * windows — and the wire wants `tx:tz` because the comma separates keys there.
+ *
+ * Throws like the three calls above. A swallowed failure would paint the whole
+ * world in the default kind and look perfectly fine while being wrong about
+ * every wood, path and shore in it.
+ */
+export async function fetchTerrainLayers(keys: readonly string[] = []
+): Promise<TerrainLayerIndex | TerrainLayerBatch> {
+  if (!keys.length) {
+    return json<TerrainLayerIndex>(await fetch('/play/terrain-layers'));
+  }
+  const query = keys.map((k) => k.replace(',', ':')).join(',');
+  return json<TerrainLayerBatch>(
+    await fetch(`/play/terrain-layers?keys=${encodeURIComponent(query)}`));
 }
 
 /** Move the avatar into another room of its current location — the same call

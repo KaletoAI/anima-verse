@@ -32,14 +32,14 @@
  * both renderers must AGREE on (§ B2/B5a), and a floor-plan preview that shows
  * the ground a shade darker in a hollow tells the author nothing.
  *
- * THE SOFT EDGE IS THE ONE STAGE THAT NEEDS THE GEOMETRY. Stages (1) to (3)
- * read nothing but the fragment's own world position; the fourth, the fringe a
- * painted area fades out over, needs to know how far the fragment is from the
- * area's ring — and only the drape builder knows the ring. It arrives as the
- * per-vertex attribute `aEdgeDist` (`scene/ground.ts` `drapeArea`), which is
- * why this stage is the one thing `applyNaturalGround` takes an argument for:
- * a material without that attribute must not even compile the branch, and the
- * `NG_EDGE_FADE` define is what keeps the base plate out of it.
+ * THREE STAGES SINCE E3, and the fourth is worth naming because it is gone: a
+ * painted area used to fade out over a per-vertex distance to its own ring
+ * (`aEdgeDist`), which is what made every drape a transparent mesh and every
+ * ground boundary a sorting problem. A boundary is now a CUT in the one terrain
+ * surface, its softness the layer's own `edge_blend_m` acting on the baked
+ * signed distance (`@anima/scene-render` `layerCut.ts`). What is left here
+ * reads nothing but the fragment's own world position, so it patches ONE
+ * material — the terrain's — and takes no arguments at all.
  *
  * THE HEIGHT FIELD ARRIVES AS A DATA TEXTURE, and that is the only resource
  * this file allocates: the OVERVIEW field the client already holds
@@ -68,22 +68,14 @@
 import * as THREE from 'three';
 import type { WorldHeightField } from '@anima/scene-render';
 import { ngAoTaps, NG_AO_DOWN, NG_AO_SPAN_M, NG_AO_UP, NG_DETAIL_OFFSET,
-  NG_DETAIL_SCALE, NG_EDGE_BAND_M, NG_EDGE_NOISE_M, NG_EDGE_WAVE_M, NG_MIX_M,
-  NG_MIX_MAX, NG_TINT_AMP, NG_TINT_M } from './naturalGroundMath';
+  NG_DETAIL_SCALE, NG_MIX_M, NG_MIX_MAX, NG_TINT_AMP,
+  NG_TINT_M } from './naturalGroundMath';
 
 /** The cache key this patch contributes. Exported so the smoke can pin the
  *  COMBINED key without carrying a copy of the string. CONSTANT on purpose:
  *  every number of the effect is either a GLSL literal that never changes or a
  *  shared uniform, so all patched ground materials compile to ONE program. */
 export const NG_CACHE_KEY = 'natural-ground';
-/** …and what a material with the soft edge adds to it. The fringe is a
- *  DIFFERENT PROGRAM — it reads an attribute the base plate does not have — so
- *  it says so in the key instead of relying on three noticing the define. */
-export const NG_EDGE_CACHE_KEY = 'natural-ground-edge';
-/** The define that switches the fringe on, and the name of the attribute it
- *  reads. Exported because the smoke has to count them on both variants. */
-export const NG_EDGE_DEFINE = 'NG_EDGE_FADE';
-export const NG_EDGE_ATTRIBUTE = 'aEdgeDist';
 
 // ── The shared uniforms ────────────────────────────────────────────────────
 // ONE object per value for every patched material — the `surfaceTimeUniform`
@@ -250,8 +242,7 @@ const lit = ngLit;
  * `naturalGroundMath` — the smoke pins that it stays that.
  */
 const NG_PRINTED_AMOUNTS = [NG_AO_DOWN, NG_AO_SPAN_M, NG_AO_UP, NG_DETAIL_OFFSET,
-  NG_DETAIL_SCALE, NG_EDGE_BAND_M, NG_EDGE_NOISE_M, NG_EDGE_WAVE_M, NG_MIX_M,
-  NG_MIX_MAX, NG_TINT_AMP, NG_TINT_M];
+  NG_DETAIL_SCALE, NG_MIX_M, NG_MIX_MAX, NG_TINT_AMP, NG_TINT_M];
 for (const v of NG_PRINTED_AMOUNTS) lit(v);
 
 /**
@@ -261,30 +252,10 @@ for (const v of NG_PRINTED_AMOUNTS) lit(v);
  * material arrives with `patchHole` already in the slot, so the combined key
  * reads `ground-hole+natural-ground`.
  *
- * ONE ARGUMENT, AND IT IS A PROGRAM SPLIT, not a setting: `edgeFade` says that
- * this material belongs to a painted area DRAPE, whose geometry carries the
- * `aEdgeDist` attribute, and only such a material may compile the fringe.
- * Everything else stays a constant of the view or a shared uniform — there is
- * nothing else a caller could pass that would not split the programs for
- * nothing.
- *
- * WHAT `edgeFade` DOES, in three places and all of them deliberate:
- *  - it sets the `NG_EDGE_FADE` define, so the preprocessor drops the branch
- *    (and the attribute declaration with it) on the base plate. Declaring an
- *    attribute the geometry has not got is an unbound attribute, which reads
- *    as 0 on most drivers: the plate would fade out along its whole rim.
- *  - it marks the material TRANSPARENT, because an alpha the blender never
- *    reads is an alpha nobody sees. Only the drapes get this; the plate under
- *    them stays opaque, which is what the fringe blends against.
- *  - it adds its own stage to the cache key.
- * `depthWrite` is deliberately LEFT ALONE, i.e. on. The drapes lie a hairline
- * above the plate and are separated from each other by `renderOrder` plus a
- * `polygonOffset` ladder (`scene/ground.ts`, `AREA_POLYGON_OFFSET`); that
- * arrangement is what keeps coplanar ground from z-fighting today, and it only
- * works while the ground writes depth. Turning it off would buy nothing —
- * within the transparent pass the areas are drawn in stacking order anyway,
- * bottom first — and would cost the ground its occlusion of everything drawn
- * after it.
+ * NO ARGUMENTS SINCE E3. The one it had (`edgeFade`) split the program for the
+ * alpha fringe of a painted-area drape; there are no drapes any more, the
+ * ground is opaque, and every number of the effect is either a GLSL literal or
+ * a shared uniform — so every patched ground compiles to ONE program.
  *
  * THE ANTI-TILE STAGE IS GUARDED BY `USE_MAP`, which is what makes the promise
  * "a single-coloured kind gets only the colour patches" true without a second
@@ -292,13 +263,9 @@ for (const v of NG_PRINTED_AMOUNTS) lit(v);
  * and one program serves both cases because three keys the map into its own
  * program parameters already.
  */
-export function applyNaturalGround(mat: THREE.Material, edgeFade = false): void {
+export function applyNaturalGround(mat: THREE.Material): void {
   if (ngPatched.has(mat)) return;
   ngPatched.add(mat);
-  if (edgeFade) {
-    mat.defines = { ...mat.defines, [NG_EDGE_DEFINE]: '' };
-    mat.transparent = true;
-  }
   const prev = mat.onBeforeCompile;
   // three's DEFAULT `customProgramCacheKey` returns `onBeforeCompile.toString()`
   // — only a patch with a key of its OWN is worth carrying. Read here, before
@@ -322,18 +289,9 @@ export function applyNaturalGround(mat: THREE.Material, edgeFade = false): void 
     // field rather than out of the geometry. Beside it, on a DRAPE only, the
     // distance to the area's own ring — measured per vertex when the drape was
     // built, because the ring exists there and nowhere else.
-    const vertHead = `varying vec2 vNgWorld;
-#ifdef ${NG_EDGE_DEFINE}
-  attribute float ${NG_EDGE_ATTRIBUTE};
-  varying float vNgEdge;
-#endif
-`;
-    shader.vertexShader = vertHead + shader.vertexShader
+    shader.vertexShader = 'varying vec2 vNgWorld;\n' + shader.vertexShader
       .replace(ANCHOR_VERT, `${ANCHOR_VERT}
-\tvNgWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;
-\t#ifdef ${NG_EDGE_DEFINE}
-\t\tvNgEdge = ${NG_EDGE_ATTRIBUTE};
-\t#endif`);
+\tvNgWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;`);
 
     // Value noise over WORLD metres: a fract-sin hash on the lattice, smoothly
     // interpolated — the same family the wind draws its phase from
@@ -346,9 +304,6 @@ uniform vec4 uNgField;
 uniform vec2 uNgFieldSize;
 uniform float uNgStrength;
 varying vec2 vNgWorld;
-#ifdef ${NG_EDGE_DEFINE}
-  varying float vNgEdge;
-#endif
 float ngHash( vec2 p ) {
   return fract( sin( dot( p, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
 }
@@ -432,28 +387,22 @@ float ngHeightAt( vec2 p ) {
     // An albedo above 1 is not a colour, and the brightening of (2) and (3)
     // can reach one on a ground that was already white.
     diffuseColor.rgb = clamp( diffuseColor.rgb, 0.0, 1.0 );
-    // (4) THE SOFT EDGE — a painted area fades out over the last metre and a
-    //     half of itself instead of ending on a drawn line, and the noise
-    //     pushes that line half a metre in and out so the fringe is a fringe
-    //     and not an outline. vNgEdge is the distance to the area's ring,
-    //     measured per vertex when the drape was built; the core of the area
-    //     is past the band and stays FULLY opaque, which is what keeps this a
-    //     fringe rather than a sorting problem. What comes through is what
-    //     lies under: the base plate, or the area below in the stack.
-    #ifdef ${NG_EDGE_DEFINE}
-      float ngEdgePush = ( ngNoise( vNgWorld / ${lit(NG_EDGE_WAVE_M)} + vec2( 5.0, 23.0 ) ) * 2.0 - 1.0 ) * ${lit(NG_EDGE_NOISE_M)};
-      diffuseColor.a *= smoothstep( 0.0, ${lit(NG_EDGE_BAND_M)}, vNgEdge + ngEdgePush );
-    #endif
+    // THE FOURTH STAGE — the alpha fringe a painted area faded out over — is
+    // GONE with E3. A ground boundary is no longer where two transparent
+    // meshes overlap but a CUT in the one terrain surface, and how soft it is
+    // is the layer's own edge_blend_m acting on the baked signed distance
+    // (scene-render layerCut). The noise that kept the border organic survives
+    // there, unchanged, pushing the LINE instead of the alpha.
   }
 `;
     shader.fragmentShader = head + shader.fragmentShader
       .replace(ANCHOR_FRAG, `${ANCHOR_FRAG}\n${body}`);
   };
-  // One cache key per PATCH COMBINATION — see `patchHole`: three keys the
+  // ONE cache key for every patched ground — see `patchHole`: three keys the
   // compiled program on this string PLUS the material's own defines, and the
   // ground materials differ in maps and colours, not in the patch. The fringe
-  // is the exception and says so: it is a different program, not a different
-  // number in the same one.
-  const own = edgeFade ? `${NG_CACHE_KEY}+${NG_EDGE_CACHE_KEY}` : NG_CACHE_KEY;
-  mat.customProgramCacheKey = () => (prevKey ? `${prevKey}+${own}` : own);
+  // used to be the exception; it is gone, so there is one program again.
+  mat.customProgramCacheKey = () => (prevKey
+    ? `${prevKey}+${NG_CACHE_KEY}`
+    : NG_CACHE_KEY);
 }

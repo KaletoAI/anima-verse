@@ -2484,6 +2484,67 @@ def get_terrain_route(user=Depends(get_current_user)):
     }
 
 
+#: One-shot state of the layer route's warning — a client fetch path, so a
+#: warning per request would drown the log (the ``backdrop.py`` pattern).
+_LAYER_KEY_WARNED: Dict[str, bool] = {}
+
+
+@router.get("/play/terrain-layers")
+def get_terrain_layers_route(keys: str = "", user=Depends(get_current_user)):
+    """The BAKED LAYER CUT of the ground — id + sd masks (E3, § G3).
+
+    Auth and fog exactly like ``/play/terrain``: any logged-in user, never
+    fogged. Which ground lies where is not local knowledge — it is the picture
+    of the world, and hiding it would only make the ground disagree with itself.
+
+    TWO MODES, ONE ENDPOINT, because the two answers are two halves of the same
+    window and a client asks for them in the same breath:
+
+    * **without ``keys``** — the INDEX: the layer table, the world-wide COARSE
+      id mask (``overview``, what the ground wears beyond the fine tiles) and
+      ``tile_keys``, every 256 m tile a painted shape reaches into. Everything
+      else is bare ground and costs no request.
+    * **with ``keys=tx:tz,tx:tz``** — the BATCH: the fine masks of those tiles,
+      at most ``terrain_layers.BATCH_MAX`` per request. The keys are the height
+      tiles' own (``heightfield.tile_key``), so one want-set steers both
+      windows.
+
+    THE BYTES. ``id`` is ``id_size²`` texels of TWO bytes — layer A (painted on
+    top at the nearest boundary) and layer B (the one under it) — base64 of the
+    raw buffer, row-major from the tile origin, read with NEAREST. ``sd`` is
+    ``sd_size²`` single bytes, the signed distance to that boundary in the
+    quantisation the payload states (``sd_zero``, ``sd_codes_per_m``), read
+    LINEARLY. A tile that carries no boundary at all answers ``uniform`` and no
+    arrays.
+
+    Tiles the index does not know are LEFT OUT rather than answered empty — the
+    client already knows they are bare ground, the same bargain
+    ``/play/heightfield/tiles`` strikes.
+    """
+    from app.core import terrain_layers
+    if not (keys or "").strip():
+        return terrain_layers.index_payload()
+    from app.core.heightfield import overflow_tile_keys, unusable_tile_tokens
+    junk = unusable_tile_tokens(keys)
+    if junk and not _LAYER_KEY_WARNED.get("junk"):
+        _LAYER_KEY_WARNED["junk"] = True
+        logger.warning(
+            "/play/terrain-layers: unreadable key%s '%s' skipped — the query "
+            "is keys=tx:tz,tx:tz with integer tile indices",
+            "s" if len(junk) > 1 else "", "', '".join(junk))
+    dropped = overflow_tile_keys(keys, cap=terrain_layers.BATCH_MAX)
+    if dropped and not _LAYER_KEY_WARNED.get("overflow"):
+        _LAYER_KEY_WARNED["overflow"] = True
+        logger.warning(
+            "/play/terrain-layers: %d key%s past the cap of %d dropped (first "
+            "%s) — ask in several batches; the missing tiles read as bare "
+            "ground on the client",
+            len(dropped), "s" if len(dropped) > 1 else "",
+            terrain_layers.BATCH_MAX,
+            ",".join(f"{tx}:{tz}" for tx, tz in dropped[:3]))
+    return terrain_layers.batch_payload(terrain_layers.parse_keys(keys))
+
+
 @router.get("/play/explored")
 def get_explored_route(user=Depends(get_current_user)):
     """The avatar's EXPLORATION MEMORY — the ground it has already been on.

@@ -1291,13 +1291,14 @@ async function main() {
   const area = {
     id: 'ta_wood',
     kind: 'forest',
+    layer: 1,
     ring: [[-BIG, -BIG], [BIG, -BIG], [BIG, BIG], [-BIG, BIG]],
     bounds: [-BIG, -BIG, BIG, BIG],
     value: 0.6,
     color: '#6a994e',
     swayM: 0.06,
   };
-  const grown3d = createUndergrowthField({ heightAt: () => 0, applySway });
+  const grown3d = createUndergrowthField({ heightAt: () => 0, applySway, topLayerAt: () => 1 });
   grown3d.setAreas([area], []);
   check('G1 nothing is built before there is an anchor',
     grown3d.group.children.length, 0);
@@ -1362,7 +1363,7 @@ async function main() {
   // …and the red counter-check: the colour half of the compaction removed.
   const looseColor = await loadField(noColorCompaction);
   const loose3d = looseColor.createUndergrowthField({
-    heightAt: () => 0, applySway: looseColor.applySway,
+    heightAt: () => 0, applySway: looseColor.applySway, topLayerAt: () => 1,
   });
   loose3d.setAreas([area], []);
   loose3d.setAnchor(32, 32);
@@ -1393,13 +1394,14 @@ async function main() {
   const path = {
     id: 'ta_path',
     kind: 'path',
+    layer: 1,
     ring: [[0, -BIG], [BIG, -BIG], [BIG, BIG], [0, BIG]],
     bounds: [0, -BIG, BIG, BIG],
     value: 0,
     color: '#a0a0a0',
     swayM: 0,
   };
-  const halved = createUndergrowthField({ heightAt: () => 0, applySway });
+  const halved = createUndergrowthField({ heightAt: () => 0, applySway, topLayerAt: () => 1 });
   halved.setAreas([area, path], []);
   halved.setAnchor(-32, 32);
   // The anchor's own cell (-1, 0) runs x −64 … 0, so it lies wholly west of
@@ -1448,7 +1450,7 @@ async function main() {
     return fp;
   };
   const far = counting([[4995, 4995], [5005, 4995], [5005, 5005], [4995, 5005]]);
-  const withFar = createUndergrowthField({ heightAt: () => 0, applySway });
+  const withFar = createUndergrowthField({ heightAt: () => 0, applySway, topLayerAt: () => 1 });
   withFar.setAreas([area], [far]);
   withFar.setAnchor(32, 32);
   check('G8 a place on the other side of the world is walked ONCE, when it is '
@@ -1460,7 +1462,7 @@ async function main() {
   // 22 … 42 on both axes: inside the anchor's own cell 0 … 64 and inside no
   // other, so exactly one cell asks it per candidate.
   const near = counting([[22, 22], [42, 22], [42, 42], [22, 42]]);
-  const withNear = createUndergrowthField({ heightAt: () => 0, applySway });
+  const withNear = createUndergrowthField({ heightAt: () => 0, applySway, topLayerAt: () => 1 });
   withNear.setAreas([area], [near]);
   withNear.setAnchor(32, 32);
   check('G8 …while a place INSIDE the anchor cell — and inside no other — is '
@@ -1524,6 +1526,62 @@ async function main() {
     seedCalls ? seedCalls.length : 0, 1);
   check('H …which is NOT the undergrowth\'s namespace',
     groundSrc.includes('undergrowthCellSeed('), false);
+
+  // =========================================================================
+  // [J] THE LAYER GATE — the mask decides, not the polygon (E3, decision 5.2)
+  // =========================================================================
+  // A tuft grows only where the TOPMOST ground at its own point really is the
+  // kind that owns it, read off the very masks the picture is composited from
+  // (`@anima/scene-render` `topLayerAt`, handed in as `topLayerAt`). The ring
+  // and the occluders are the cheap first pass; this is the truth behind them.
+  //
+  // THE FIXTURE, derived by hand: one wood covering everything (layer 1), and a
+  // gate that answers layer 2 — somebody else's ground — for every point with
+  // x >= 0. The wood's ring still contains those points, so the ring filter
+  // keeps them; only the gate can take them out.
+  //
+  // The anchor's own cell (0, 0) runs x 0…64, i.e. WHOLLY inside the half the
+  // gate hands to layer 2, so that cell must come out with nothing at all —
+  // and `buildCell` drops a layer with no kept points, so the mesh does not
+  // exist rather than existing empty.
+  console.log('\n[J] the layer gate');
+  const gated = createUndergrowthField({
+    heightAt: () => 0,
+    applySway,
+    topLayerAt: (x) => (x >= 0 ? 2 : 1),
+  });
+  gated.setAreas([area], []);
+  gated.setAnchor(-32, 32);
+  const gatedCells = gated.group.children.length;
+  // West of the border the gate says 1 and the wood keeps its full cell — the
+  // same 1966 tufts the ungated build produced for a cell of this density.
+  check('J1 a cell west of the gate keeps its own 1966 tufts',
+    gated.group.children[0].instanceMatrix.count, 1966);
+  // …and the want set is the SAME 21 cells as always: what the gate removes is
+  // the eight columns east of x = 0, which is exactly the thirteen of G7.
+  check('J2 the gate leaves the same thirteen cells the polygon rule leaves',
+    gatedCells, 13);
+  gated.dispose();
+
+  // The RED counter-probe: a gate that says "this is somebody else's ground"
+  // everywhere must grow NOTHING, however full the ring is. Without the gate
+  // the same fixture builds 21 cells.
+  const blocked = createUndergrowthField({
+    heightAt: () => 0, applySway, topLayerAt: () => 7,
+  });
+  blocked.setAreas([area], []);
+  blocked.setAnchor(32, 32);
+  check('J3 a gate that never matches grows nothing at all',
+    blocked.group.children.length, 0);
+  blocked.dispose();
+  const open = createUndergrowthField({
+    heightAt: () => 0, applySway, topLayerAt: () => 1,
+  });
+  open.setAreas([area], []);
+  open.setAnchor(32, 32);
+  check('J3 …while the identical fixture with a matching gate grows 21 cells',
+    open.group.children.length, 21);
+  open.dispose();
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

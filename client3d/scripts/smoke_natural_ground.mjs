@@ -10,9 +10,9 @@
  * ===========================================================================
  * WHAT IS UNDER TEST
  * ===========================================================================
- * `client3d/src/scene/naturalGround.ts` patches every OPEN-WORLD ground
- * material (the base plate and the painted area drapes of `scene/ground.ts`)
- * with three stages:
+ * `client3d/src/scene/naturalGround.ts` patches the OPEN-WORLD ground material
+ * (the CDLOD terrain of `scene/ground.ts`, and the one water drape left beside
+ * it) with three stages:
  *   (1) ANTI-TILE   the ground texture sampled a second time at 0.23× the
  *                   scale, shifted half a UV, blended by value noise over
  *                   world metres — one image, two periods, no visible repeat.
@@ -23,12 +23,12 @@
  *                   against the fragment's own height: lower than its
  *                   surroundings darkens by up to 12 %, higher brightens by up
  *                   to 6 %.
- *   (4) SOFT EDGE   a painted area fades out over the last 1.5 m of itself
- *                   along a noise-shifted line, so what lies under it comes
- *                   through instead of a drawn border. The distance to the
- *                   area's ring is a per-vertex attribute (`aEdgeDist`), and
- *                   only a material that HAS that attribute may compile the
- *                   branch — the base plate must not.
+ * THERE WAS A FOURTH — a painted area fading out over the last 1.5 m of itself
+ * — and it is gone with "Ein Boden" E3: a ground boundary is a CUT in the one
+ * terrain surface now, its width the layer's own `edge_blend_m`, and it is
+ * checked in `smoke_layer_cut.mjs`. Everything left here reads nothing but the
+ * fragment's own world position, so the patch takes no arguments and every
+ * ground compiles to one program.
  * The amplitudes live in `naturalGroundMath.ts` and the GLSL is PRINTED out of
  * them, so a hand check on the function and a string check on the composed
  * shader measure one number rather than two copies of it.
@@ -134,46 +134,16 @@
  * [7] THE WIRING, pinned by reading the source
  * ---------------------------------------------------------------------------
  * A patch is worth nothing where nobody applies it. `materialFor` is a closure
- * over fetched payloads and cannot be called from here, so its three lines are
- * pinned against the source text: the hole first, the natural ground guarded
- * by the water class, the field handed over in `reloadHeight` and given back
- * in `dispose`. And nowhere else: the admin preview and the shared package must
- * not import any of this (view polish is not geometry, § B2).
+ * over fetched payloads and cannot be called from here, so its lines are pinned
+ * against the source text: the hole first, the natural ground guarded by the
+ * water class, the field handed over in `reloadHeight` and given back in
+ * `dispose`. It is applied TWICE in the file since E3 — once through
+ * `materialFor` for the water drape, once by hand in `rebuildBase` for the
+ * terrain — and nowhere else: the admin preview and the shared package must not
+ * import any of this (view polish is not geometry, § B2).
  *
  * ---------------------------------------------------------------------------
- * [9] THE SOFT EDGE — the band, the attribute, the two programs
- * ---------------------------------------------------------------------------
- * The band by hand, on `ngEdgeAlpha`: 0 at the ring, 0.15625 a quarter of the
- * way in, 0.5 at 0.75 m (the smoothstep of a half is a half, exactly), 0.84375
- * at three quarters, 1 from 1.5 m — and 1 from 2 m WHATEVER the noise does,
- * which is what "the core is opaque" means as a number. The noise moves the
- * edge by half a metre either way: at 0.75 m it reads 0.925926 with the noise
- * at 1 and 0.074074 with it at 0.
- * The distance itself: to a SEGMENT and not to its line, over a CLOSED ring
- * (the edge from the last corner back to the first is an edge).
- * THE REFINEMENT is checked on the case that makes it necessary — a flat
- * world's earcut triangles, whose every corner lies on the ring. Unrefined,
- * the interpolated distance is 0 across the whole face and the area would fade
- * away completely; refined, the middle of it is opaque and a point 0.75 m in
- * still reads 0.75. Reading it the way the GPU does (barycentric, in the
- * triangle the point falls in) is the point: corners are not the question.
- * The surface must not move (a tilted plane comes back exactly), the winding
- * must not flip (a flipped piece is a hole), and the whole thing must stay
- * cheap.
- * THE EDGE NAME is quantised, and that is what makes the marks conforming: the
- * grid clip hands the two owners of a shared edge the same intersection as two
- * different doubles (it interpolates from both ends), and a raw key would name
- * that edge twice and let its owners disagree about splitting it.
- * THE TWO PROGRAMS: the drape carries the `NG_EDGE_FADE` define, is
- * transparent and says so in its cache key; the base plate has none of the
- * three and therefore never compiles the branch that reads an attribute it
- * has not got. Both still WRITE depth — the coplanar `renderOrder` +
- * `polygonOffset` ladder of `ground.ts` rests on that — and the drapes' ladder
- * starts at a large NEGATIVE base, which is what keeps the transparent ground
- * behind every overlay that leaves its render order at the default 0.
- *
- * ---------------------------------------------------------------------------
- * [8] THE RED COUNTER-CHECKS — eight mutants, eight losses
+ * [8] THE RED COUNTER-CHECKS — five mutants, five losses
  * ---------------------------------------------------------------------------
  * (a) ASSIGNMENT INSTEAD OF CHAIN. The bundle is rebuilt with the line that
  *     calls the previous callback deleted. Fed a material that already carries
@@ -194,19 +164,14 @@
  *     a support cell. This is the mutant the mapping was made a function for:
  *     while the line stood twice, one copy could lose it and every string
  *     check still found the other.
- * (f) THE BAND REFINEMENT gives up before its first pass. A coarse drape then
- *     reports "edge" in its middle, i.e. alpha 0 — the area vanishes where the
- *     truth is fully opaque.
- * (g) THE FRINGE ITSELF: the alpha line goes and the area ends on the drawn
- *     line of its polygon again, with everything else about the patch intact.
- * (h) AN UNPRINTABLE CONSTANT (1.505 m). The module must refuse to LOAD;
- *     without the assert `toFixed` would round it to 1.51 and the shader would
+ * (f) AN UNPRINTABLE CONSTANT (7.005 m). The module must refuse to LOAD;
+ *     without the assert `toFixed` would round it to 7.01 and the shader would
  *     spend a different number than the maths does.
- * (i) THE OLD RENDER-ORDER LADDER (1, 2, 3 …). Harmless while the drapes were
- *     opaque, fatal once they are not: in the transparent pass they would be
- *     drawn after every overlay that keeps the default order 0, and those write
- *     no depth — the opaque core of a painted area would paint over the
- *     selection ring under an NPC and punch a hole in the fog.
+ *
+ * THREE MUTANTS LEFT WITH E3, and they left with their subject: the band
+ * refinement, the fringe line and the render-order ladder of the transparent
+ * drapes. What replaced them is checked in `smoke_layer_cut.mjs`, including the
+ * counter-probes that the ladders are really GONE.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -264,10 +229,9 @@ async function loadClient(mutate) {
   const dir = await mkdtemp(join(ROOT, 'client3d/scripts/.smoke-'));
   try {
     const entry = 'export { applyNaturalGround, setNaturalGroundField, NG_CACHE_KEY,\n'
-      + '  NG_EDGE_ATTRIBUTE, NG_EDGE_CACHE_KEY, NG_EDGE_DEFINE, ngLit,\n'
-      + '  ngHeightTex, ngField, ngFieldSize, ngStrength }\n'
+      + '  ngLit, ngHeightTex, ngField, ngFieldSize, ngStrength }\n'
       + `  from '${NG_SRC}';\n`
-      + `export { patchHole, HOLE_CACHE_KEY, AREA_RENDER_ORDER_BASE } from '${GROUND_SRC}';\n`
+      + `export { patchHole, HOLE_CACHE_KEY } from '${GROUND_SRC}';\n`
       + `export { isWaterClass } from '${MATH_SRC}';\n`
       + "export { surfaceMaterial } from '@anima/scene-render';\n";
     const built = await esbuild.build({
@@ -356,29 +320,13 @@ function dropTheHalfTexel(text) {
   return text.replace(line, '( ( p - uNgField.xy ) / uNgField.z ) / uNgFieldSize');
 }
 
-/** Section [8f]'s mutant: the band refinement gives up before its first pass,
- *  so a drape keeps the triangles it came in with. */
-function refineNothing(source) {
-  const line = 'export const NG_EDGE_PASSES = 8;';
-  if (!source.includes(line)) throw new Error('the pass budget is no longer where the probe looks');
-  return source.replace(line, 'export const NG_EDGE_PASSES = 0;');
-}
-
-/** Section [8g]'s mutant: the alpha line goes, and with it the whole fringe —
- *  the area ends on the drawn line of its polygon again. */
-function dropTheFringe(text) {
-  const line = 'diffuseColor.a *= smoothstep( 0.0, ';
-  if (!text.includes(line)) throw new Error('the fringe line is no longer where the probe looks');
-  return text.replace(line, 'diffuseColor.rgb *= vec3( 1.0 ); // ');
-}
-
 /** Section [8h]'s mutant: a constant that two decimals cannot print. The
  *  module must refuse to LOAD; without the assert `toFixed` would round it and
- *  the shader would fade over 1.51 m while the maths says 1.505. */
+ *  the shader would blend over 7.01 m while the maths says 7.005. */
 function unprintableConstant(text) {
-  const line = 'NG_EDGE_BAND_M = 1.5;';
-  if (!text.includes(line)) throw new Error('the band width is no longer where the probe looks');
-  return text.replace(line, 'NG_EDGE_BAND_M = 1.505;');
+  const line = 'NG_MIX_M = 7;';
+  if (!text.includes(line)) throw new Error('the mix wavelength is no longer where the probe looks');
+  return text.replace(line, 'NG_MIX_M = 7.005;');
 }
 
 /** The stub shader: three's own anchor lines, in three's own order, and
@@ -443,20 +391,11 @@ const NG_MARKS = [
   ['frag', 'vec2 ngUv = ngFieldUvOf( vNgWorld );'],
   ['frag', 'diffuseColor.rgb *= 1.0 + ngShade * uNgStrength * ngIn;'],
   ['frag', 'diffuseColor.rgb = clamp( diffuseColor.rgb, 0.0, 1.0 );'],
-  // (4) the soft edge. The lines are PRINTED on every ground material and the
-  //     `NG_EDGE_FADE` define decides who compiles them — see [9].
-  ['vert', 'attribute float aEdgeDist;'],
-  ['vert', 'varying float vNgEdge;'],
-  ['vert', 'vNgEdge = aEdgeDist;'],
-  ['frag', 'varying float vNgEdge;'],
-  ['frag', 'float ngEdgePush = ( ngNoise( vNgWorld / 2.00 + vec2( 5.0, 23.0 ) ) * 2.0 - 1.0 ) * 0.50;'],
-  ['frag', 'diffuseColor.a *= smoothstep( 0.0, 1.50, vNgEdge + ngEdgePush );'],
+  // THERE IS NO FOURTH STAGE any more: the alpha fringe of a painted-area drape
+  // became a CUT in the terrain surface with E3, and its width is the layer's
+  // own `edge_blend_m` (`smoke_layer_cut.mjs`).
 ];
 const NG_UNIFORMS = ['uNgHeight', 'uNgField', 'uNgFieldSize', 'uNgStrength'];
-/** The drapes' place in the transparent pass, as `ground.ts` writes it — one
- *  regular expression for the truth in [9] and for the mutant in [8i], so the
- *  two sides cannot drift. */
-const AREA_ORDER_RE = /mesh\.renderOrder = AREA_RENDER_ORDER_BASE \+ index \+ 1;/;
 /** What `patchHole` writes — the predecessor the chain has to keep (the lines
  *  are the subject of `smoke_surface_patch.mjs`, here they are the witness). */
 const HOLE_MARKS = [
@@ -498,64 +437,18 @@ const q = (v) => Math.round(v * 10000) / 10000;
 /** …and six, where the hand value is a smoothstep of thirds (0.925926). */
 const q6 = (v) => Math.round(v * 1e6) / 1e6;
 
-/** A plane over the ground, for the check that the band refinement does not
- *  move the surface: any tilt will do as long as it is not flat. */
-const tiltY = (x, z) => 3 + 0.1 * x + 0.2 * z;
-
-/**
- * Read a refined drape the way the GPU does: find the triangle a point falls
- * in and interpolate its vertex values barycentrically.
- *
- * That is the whole question the `aEdgeDist` attribute has to answer — not
- * "what is at the corners" but "what does the fragment between them get" —
- * and it is why the coarse-drape case in [9] is a check and not a hope.
- */
-function sampleTri(band, x, z) {
-  for (let t = 0; t + 8 < band.pos.length; t += 9) {
-    const ax = band.pos[t]; const az = band.pos[t + 2];
-    const bx = band.pos[t + 3]; const bz = band.pos[t + 5];
-    const cx = band.pos[t + 6]; const cz = band.pos[t + 8];
-    const det = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-    if (Math.abs(det) < 1e-12) continue;
-    const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / det;
-    const l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / det;
-    const l3 = 1 - l1 - l2;
-    if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
-    const i = t / 3;
-    return { d: l1 * band.dist[i] + l2 * band.dist[i + 1] + l3 * band.dist[i + 2],
-             y: l1 * band.pos[t + 1] + l2 * band.pos[t + 4] + l3 * band.pos[t + 7] };
-  }
-  return null;
-}
-const sampleBand = (band, x, z) => sampleTri(band, x, z)?.d ?? NaN;
-const sampleBandY = (band, x, z) => sampleTri(band, x, z)?.y ?? NaN;
-
-/** Do all pieces of a refined drape run the same way round? A piece wound
- *  against its parent faces down and is culled away — a hole in the ground. */
-function windings(band) {
-  const signs = new Set();
-  for (let t = 0; t + 8 < band.pos.length; t += 9) {
-    const cross = (band.pos[t + 3] - band.pos[t]) * (band.pos[t + 8] - band.pos[t + 2])
-      - (band.pos[t + 5] - band.pos[t + 2]) * (band.pos[t + 6] - band.pos[t]);
-    if (Math.abs(cross) > 1e-9) signs.add(Math.sign(cross));
-  }
-  return signs.size === 1 ? 'all one way' : `${signs.size} windings`;
-}
-
 async function main() {
   const THREE = await import('three');
-  const { applyNaturalGround, setNaturalGroundField, NG_CACHE_KEY,
-    NG_EDGE_ATTRIBUTE, NG_EDGE_CACHE_KEY, NG_EDGE_DEFINE, ngLit,
+  const { applyNaturalGround, setNaturalGroundField, NG_CACHE_KEY, ngLit,
     ngHeightTex, ngField, ngFieldSize, ngStrength,
-    patchHole, HOLE_CACHE_KEY, AREA_RENDER_ORDER_BASE,
+    patchHole, HOLE_CACHE_KEY,
     isWaterClass, surfaceMaterial } = await loadClient();
   const M = await loadMath();
 
   /** One material through the patch(es), with its composed shader. */
-  function patched(before = null, mat = new THREE.MeshStandardMaterial({ color: 0x6a994e }),
-                   edgeFade = false) {
+  function patched(before = null, mat = new THREE.MeshStandardMaterial({ color: 0x6a994e })) {
     if (before) before(mat);
-    applyNaturalGround(mat, edgeFade);
+    applyNaturalGround(mat);
     const shader = stubShader();
     mat.onBeforeCompile(shader, null);
     return { mat, shader };
@@ -794,10 +687,13 @@ async function main() {
   console.log('\n[7] the wiring, pinned by reading the source');
   const groundSrc = await readFile(GROUND_SRC, 'utf8');
   check('materialFor patches the hole first',
-    /patchHole\(mat\);\n(\s*\/\/[^\n]*\n)*\s*if \(!isWaterClass\(spec\?\.class\)\) applyNaturalGround\(mat, edgeFade\);/
+    /patchHole\(mat\);\n(\s*\/\/[^\n]*\n)*\s*if \(!isWaterClass\(spec\?\.class\)\) applyNaturalGround\(mat\);/
       .test(groundSrc), true);
-  check('…and that is the only place it is applied',
-    groundSrc.split('applyNaturalGround(').length - 1, 1);
+  // TWICE since E3: once for the water drape through `materialFor`, once for
+  // the TERRAIN in `rebuildBase`, which builds its material by hand because it
+  // must carry no `map` (see `smoke_layer_cut.mjs` section [D]).
+  check('…and in exactly the two places E3 leaves',
+    groundSrc.split('applyNaturalGround(').length - 1, 2);
   check('the overview reaches the shader when height_sig moves',
     /heightRev \+= 1;[\s\S]{0,600}?setNaturalGroundField\(payload\);/.test(groundSrc), true);
   check('…and is handed back on teardown',
@@ -810,172 +706,6 @@ async function main() {
   const shared = await readFile(join(ROOT, 'packages/scene-render/src/materials.ts'), 'utf8');
   check('…and the shared package knows nothing of it either',
     shared.includes('naturalGround'), false);
-  // WHO GETS THE FRINGE: the painted-area drapes, and the base plate does not.
-  // ONE decision, out of the class the material is built from, reaching the
-  // geometry and the material alike — so a lake is spared the refinement and
-  // the attribute as well as the branch. The class is asked about the SURFACE
-  // the type names (`surfaceOf`, 2026-08-16), which is the very id
-  // `materialFor` builds the material from — the two must not ask different
-  // questions, or a lake would get a fringe its material knows nothing about.
-  check('the drape is built from its own ring and asks for the fringe',
-    /const softEdge = !isWaterClass\(surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\?\.class\);[\s\S]{0,300}?drapeArea\(built\.geometry, softEdge \? built\.ring : null\),\n\s*materialFor\(area\.kind, 1, nextOwned, softEdge\)/
-      .test(groundSrc), true);
-  check('…and a kind without a fringe gets neither refinement nor attribute',
-    /const band = ring \? ngRefineEdgeBand\(cutPos, cutUv, ring\) : null;/.test(groundSrc)
-      && /if \(band\) \{\n\s*geo\.setAttribute\(NG_EDGE_ATTRIBUTE/.test(groundSrc), true);
-  // …and the TERRAIN takes the material without one. Since "Ein Boden" E2 the
-  // base plate is gone: `scene/terrainLod.ts` places the ground's vertices
-  // itself, and one UV unit is one metre there (the drapes' own convention),
-  // so the fourth argument is simply absent — no ring, no fringe, and nothing
-  // for the plate's old whole-edge UV span to stretch.
-  check('…while the terrain takes the material without one',
-    /terrain\.setMaterial\(materialFor\(kind, 1, baseOwned\)\)/.test(groundSrc), true);
-  check('the drape writes the distance attribute the shader reads',
-    /geo\.setAttribute\(NG_EDGE_ATTRIBUTE, new THREE\.Float32BufferAttribute\(band\.dist, 1\)\)/
-      .test(groundSrc), true);
-  check('…out of the refinement, and after the lift (same surface, more triangles)',
-    /liftToField\(cutPos\);[\s\S]{0,200}?const band = ring \? ngRefineEdgeBand\(cutPos, cutUv, ring\) : null;/
-      .test(groundSrc), true);
-
-  console.log('\n[9] the soft edge — the band, the attribute, the two programs');
-  check('at the ring the ground is gone, and half way through the band it is half there',
-    [M.ngEdgeAlpha(0), M.ngEdgeAlpha(0.75), M.ngEdgeAlpha(1.5)], [0, 0.5, 1]);
-  check('…a quarter and three quarters of the way, on the smoothstep curve',
-    [M.ngEdgeAlpha(0.375), M.ngEdgeAlpha(1.125)], [0.15625, 0.84375]);
-  check('…and the CORE is opaque, whatever the noise does to the edge',
-    [M.ngEdgeAlpha(M.NG_EDGE_OPAQUE_M, 0), M.ngEdgeAlpha(20, 0), M.ngEdgeAlpha(20, 1)],
-    [1, 1, 1]);
-  check('the noise moves the edge, and measurably',
-    [q6(M.ngEdgeAlpha(0.75, 1)), q6(M.ngEdgeAlpha(0.75, 0))], [0.925926, 0.074074]);
-  check('…by half a metre either way, which is what the opaque distance adds up from',
-    [M.NG_EDGE_BAND_M, M.NG_EDGE_NOISE_M, M.NG_EDGE_OPAQUE_M], [1.5, 0.5, 2]);
-  check('a distance is to the SEGMENT, not to its line (a corner measures as a corner)',
-    [M.ngSegmentDistance(0, 0, 1, -1, 1, 1), q6(M.ngSegmentDistance(0, 0, 1, 1, 2, 2)),
-      M.ngSegmentDistance(3, 4, 0, 0, 0, 0)],
-    [1, q6(Math.SQRT2), 5]);
-  const square = [[0, 0], [10, 0], [10, 10], [0, 10]];
-  check('the ring is CLOSED — the edge from the last corner back to the first counts',
-    [M.ngEdgeDistance(5, 5, square), M.ngEdgeDistance(1, 5, square),
-      M.ngEdgeDistance(5, 0.75, square), M.ngEdgeDistance(0, 3, square),
-      M.ngEdgeDistance(9.5, 9.5, square)], [5, 1, 0.75, 0, 0.5]);
-  check('…and a ring with no edge at all is infinitely far from everywhere',
-    [M.ngEdgeDistance(1, 1, []), M.ngEdgeDistance(1, 1, null)], [Infinity, Infinity]);
-
-  // THE REFINEMENT, on the case that makes it necessary: a flat world's earcut
-  // triangles have EVERY corner on the ring, so an unrefined drape reads
-  // distance 0 across its whole face — the area would fade away completely.
-  const coarse = [0, 0, 0, 10, 0, 0, 10, 0, 10,
-                  0, 0, 0, 10, 0, 10, 0, 0, 10];
-  const band = M.ngRefineEdgeBand(coarse, null, square);
-  check('the coarse drape comes in with every corner on the ring',
-    [0, 1, 2, 3, 4, 5].map((n) => M.ngEdgeDistance(coarse[n * 3], coarse[n * 3 + 2], square)),
-    [0, 0, 0, 0, 0, 0]);
-  check('…and comes out with one distance per vertex',
-    band.dist.length, band.pos.length / 3);
-  check('the middle of the area is OPAQUE after the refinement',
-    sampleBand(band, 5, 5) >= M.NG_EDGE_OPAQUE_M, true);
-  check('…and the fringe of it still is the fringe, to the centimetre',
-    [q(sampleBand(band, 0.75, 5)), q(sampleBand(band, 5, 0.75)),
-      q(sampleBand(band, 9.25, 5))], [0.75, 0.75, 0.75]);
-  check('nothing moved: the refined mesh stays inside the ring it was cut from',
-    [Math.min(...band.pos.filter((_, i) => i % 3 === 0)),
-      Math.max(...band.pos.filter((_, i) => i % 3 === 0))], [0, 10]);
-  // The height is INTERPOLATED, never resampled: the drape arrives lifted onto
-  // the relief, and a midpoint lifted a second time would leave the plate.
-  const tilted = coarse.map((v, i) => (i % 3 === 1 ? tiltY(coarse[i - 1], coarse[i + 1]) : v));
-  const lifted = M.ngRefineEdgeBand(tilted, null, square);
-  check('the refinement describes the very same surface (the plane is preserved)',
-    [q(sampleBandY(lifted, 5, 5)), q(sampleBandY(lifted, 2.5, 7.5))],
-    [q(tiltY(5, 5)), q(tiltY(2.5, 7.5))]);
-  check('…and every piece keeps its parent\'s winding (a flipped one would be culled)',
-    windings(band), 'all one way');
-  // THE EDGE NAME, which is what makes the refinement seam-free. The two
-  // triangles that share an edge do NOT hold bit-identical endpoints: the grid
-  // clip interpolates the same intersection from both directions, `a + (b−a)·t`
-  // against `b + (a−b)·(1−t)`, which is one real number and two doubles. A raw
-  // key would name that edge twice and let its owners disagree about splitting
-  // it — precisely the alpha seam the marks exist to prevent.
-  const { ngEdgeKey } = M;
-  const vert = (x, z) => ({ x, y: 0, z, u: 0, v: 0, d: 0 });
-  const lerpFwd = (a, b, t) => a + (b - a) * t;
-  const lerpBack = (a, b, t) => b + (a - b) * (1 - t);
-  const cut = [0.1, 0.3, 0.7].map((t) => [lerpFwd(-7.3, 12.9, t), lerpBack(-7.3, 12.9, t)]);
-  check('the two directions of one clip really are different doubles',
-    cut.some(([f, b]) => f !== b), true);
-  check('…and still name the same edge',
-    cut.map(([f, b]) => ngEdgeKey(vert(f, 3), vert(9, 4))
-      === ngEdgeKey(vert(b, 3), vert(9, 4))), [true, true, true]);
-  check('…as does the same edge read backwards',
-    ngEdgeKey(vert(1, 2), vert(3, 4)), ngEdgeKey(vert(3, 4), vert(1, 2)));
-  const oneUlpAbove5 = 5 + Number.EPSILON * 4;   // the ulp at 5 is 4·EPSILON
-  check('one ULP away is a different double…', oneUlpAbove5 === 5, false);
-  check('…and still the same vertex',
-    ngEdgeKey(vert(oneUlpAbove5, 2), vert(9, 9)), ngEdgeKey(vert(5, 2), vert(9, 9)));
-  check('…while a real neighbour a millimetre away is NOT',
-    ngEdgeKey(vert(5.001, 2), vert(9, 9)) === ngEdgeKey(vert(5, 2), vert(9, 9)), false);
-  check('the UVs are carried along when there are any',
-    M.ngRefineEdgeBand(coarse, coarse.filter((_, i) => i % 3 !== 1), square).uv.length,
-    (band.pos.length / 3) * 2);
-  check('…and stay null when there were none', band.uv, null);
-  check('a triangle deep inside a huge area is not touched at all',
-    M.ngRefineEdgeBand([100, 0, 100, 200, 0, 100, 200, 0, 200], null,
-      [[0, 0], [1000, 0], [1000, 1000], [0, 1000]]).pos.length / 9, 1);
-  check('…and the whole of a small area is worth only a few hundred triangles',
-    band.pos.length / 9 < 400, true);
-
-  // THE TWO PROGRAMS. The plate has no `aEdgeDist` attribute, so it must not
-  // compile a line that reads one — an unbound attribute reads as 0 on most
-  // drivers, which would fade the plate out along its whole rim. The lines are
-  // printed on both; the DEFINE is what separates them.
-  const plate = patched();
-  const drapeEdge = patched(null, new THREE.MeshStandardMaterial({ color: 0x6a994e }), true);
-  check('the drape defines the fringe on', drapeEdge.mat.defines?.[NG_EDGE_DEFINE], '');
-  check('…and the base plate does not', plate.mat.defines?.[NG_EDGE_DEFINE], undefined);
-  check('…which is the only difference in their defines',
-    Object.keys(drapeEdge.mat.defines ?? {}).filter((k) => !(k in (plate.mat.defines ?? {}))),
-    [NG_EDGE_DEFINE]);
-  check('the drape blends, the plate stays opaque',
-    [drapeEdge.mat.transparent, plate.mat.transparent], [true, false]);
-  check('…and the drape still WRITES depth (the coplanar ladder rests on it)',
-    [drapeEdge.mat.depthWrite, plate.mat.depthWrite], [true, true]);
-  check('the fringe is a program of its own, and says so in the key',
-    [plate.mat.customProgramCacheKey(), drapeEdge.mat.customProgramCacheKey()],
-    [NG_CACHE_KEY, `${NG_CACHE_KEY}+${NG_EDGE_CACHE_KEY}`]);
-  check('…and chained after the hole it is all three, in order',
-    patched((m) => patchHole(m), new THREE.MeshStandardMaterial({}), true)
-      .mat.customProgramCacheKey(),
-    `${HOLE_CACHE_KEY}+${NG_CACHE_KEY}+${NG_EDGE_CACHE_KEY}`);
-  check('every line that reads the attribute stands inside the define',
-    [...drapeEdge.shader.vertexShader.matchAll(/#ifdef NG_EDGE_FADE([\s\S]*?)#endif/g)]
-      .map((m) => m[1]).join('').includes(NG_EDGE_ATTRIBUTE), true);
-  check('…and the attribute is named nowhere else in the vertex shader',
-    drapeEdge.shader.vertexShader.split(NG_EDGE_ATTRIBUTE).length - 1, 2);
-  check('…nor anywhere in the fragment shader (it travels as a varying)',
-    drapeEdge.shader.fragmentShader.includes(NG_EDGE_ATTRIBUTE), false);
-  // WHERE THE TRANSPARENT GROUND SITS IN THE PASS. Turning the drapes
-  // transparent moved them out of the opaque pass, where they were drawn
-  // before everything, into the one three sorts by `renderOrder` — and every
-  // overlay that leaves its order at the default 0 (fog clouds, selection
-  // rings, path lines, door marks) writes no depth, so a drape drawn after
-  // them paints its opaque core straight over them.
-  check('the drape ladder starts far in FRONT of the default overlays',
-    [AREA_RENDER_ORDER_BASE < 0, AREA_RENDER_ORDER_BASE + 1 + 200 < 0], [true, true]);
-  check('…and keeps the stacking order among the areas themselves',
-    [1, 2, 3].map((i) => AREA_RENDER_ORDER_BASE + i),
-    [AREA_RENDER_ORDER_BASE + 1, AREA_RENDER_ORDER_BASE + 2, AREA_RENDER_ORDER_BASE + 3]);
-  check('…which is the ladder ground.ts really builds',
-    AREA_ORDER_RE.test(groundSrc), true);
-  // The terrain stays where it was (it is opaque; the sorted pass ignores it).
-  // Its mesh moved out of `ground.ts` with E2, so the order is pinned where it
-  // is now set — `scene/terrainLod.ts`.
-  check('the terrain stays at render order 0',
-    /mesh\.renderOrder = 0;/.test(await readFile(LOD_SRC, 'utf8')), true);
-  check('the alpha is the LAST thing the stage does, after the colour clamp',
-    drapeEdge.shader.fragmentShader.indexOf('diffuseColor.rgb = clamp(')
-      < drapeEdge.shader.fragmentShader.indexOf('diffuseColor.a *='), true);
-  check('…and the colour work never touches alpha',
-    drapeEdge.shader.fragmentShader.split('diffuseColor.a').length - 1, 1);
-
   console.log('\n[8] the RED counter-checks — the chain, the sign, the flat world');
   const red = await loadClient(assignInsteadOfChain);
   const redMat = new THREE.MeshStandardMaterial({ color: 0x6a994e });
@@ -1032,39 +762,6 @@ async function main() {
   check('…while the truth writes it, once, for both readers',
     [meadow.shader.fragmentShader.split('+ 0.5 ) / uNgFieldSize').length - 1,
       meadow.shader.fragmentShader.split('ngFieldUvOf(').length - 1], [1, 3]);
-
-  const coarseOnly = await loadMath(refineNothing);
-  check('without the refinement the middle of a coarse area reads EDGE and fades away',
-    [sampleBand(coarseOnly.ngRefineEdgeBand(coarse, null, square), 5, 5),
-      coarseOnly.ngEdgeAlpha(0)], [0, 0]);
-  check('…while the truth carries the ground through, opaque',
-    [sampleBand(band, 5, 5) >= M.NG_EDGE_OPAQUE_M, M.ngEdgeAlpha(sampleBand(band, 5, 5))],
-    [true, 1]);
-
-  const hard = await loadClient(dropTheFringe);
-  const hardMat = new THREE.MeshStandardMaterial({});
-  hard.applyNaturalGround(hardMat, true);
-  const hardShader = stubShader();
-  hardMat.onBeforeCompile(hardShader, null);
-  check('without the alpha line the area ends on a drawn line again',
-    hardShader.fragmentShader.includes('diffuseColor.a'), false);
-  check('…while everything else about it is untouched (the probe measures the fringe)',
-    marksIn(hardShader, NG_MARKS).length, NG_MARKS.length - 1);
-
-  // [8i] THE OLD LADDER. Before the fringe the drapes were opaque and the
-  // opaque pass drew them before every overlay in the world; transparent, the
-  // natural 1, 2, 3 puts them AFTER everything that leaves its render order at
-  // 0 — and those overlays write no depth, so the drape's opaque core paints
-  // over them. The mutant is the line as it read then.
-  const oldLadder = groundSrc.replace(
-    'mesh.renderOrder = AREA_RENDER_ORDER_BASE + index + 1;',
-    'mesh.renderOrder = index + 1;');
-  check('the old ladder is really a different line', oldLadder === groundSrc, false);
-  check('…and it would put the painted ground OVER the default-0 overlays',
-    [AREA_ORDER_RE.test(oldLadder), /mesh\.renderOrder = index \+ 1;/.test(oldLadder)],
-    [false, true]);
-  check('…while the truth starts the ladder in front of them',
-    [AREA_ORDER_RE.test(groundSrc), AREA_RENDER_ORDER_BASE + 1 < 0], [true, true]);
 
   let printed = 'loaded';
   try {

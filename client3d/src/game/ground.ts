@@ -229,24 +229,13 @@ export function standY(walkY: number, terrainY: number): number {
   return Math.max(walk, terrain);
 }
 
-/**
- * How far the footprint PLATE is lifted over the tile floor at a point — the
- * drawn mirror of `standY`, and derived from it so the two cannot drift.
- *
- * THE PLATE ONLY EVER RISES. `standY` lets the tile answer win where the
- * landscape runs BELOW the footprint, so a plate that followed the world down
- * would sink away under a figure standing at the tile height — the same hole
- * as finding 4, only mirrored (review 2026-08-13, I1). Downhill the lift is
- * therefore 0: the plate stays the tile floor the figure stands on, and the
- * landscape passes underneath it.
- *
- * `worldY` is the world ground at the point, `tileY` the height the tile group
- * already stands on (`footprintCentre`) — only the DIFFERENCE belongs on a
- * vertex, or the plate would climb the hill twice.
- */
-export function plateLift(worldY: number, tileY: number): number {
-  return standY(tileY, worldY) - (Number.isFinite(tileY) ? tileY : 0);
-}
+// `plateLift` stood here until 2026-08-21 ("Ein Boden" E3, plan § 3.1): the
+// drawn mirror of `standY` that lifted every vertex of a tile's own footprint
+// plate onto the world ground, clamped so the plate never sank below the floor
+// the figure walked on. The tile draws no plate any more — the terrain IS the
+// ground under a location — so the rule has nothing left to lift. `standY`
+// itself stays: the figure still has to reconcile a tile answer (declared
+// floor, scene plate, model skin) with the terrain under it.
 
 /** One location's scene relief at the point being asked about: how LARGE its
  *  footprint is in m² and how high its own field lifts the ground there. Only

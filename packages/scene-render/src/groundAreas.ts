@@ -16,10 +16,14 @@
  * there against hand-derived areas, with no bundler and no Three.
  *
  * GROUND_Y DISCIPLINE: nothing here bakes a height in. Every vertex comes out
- * at y = 0; where the ground actually is, is the caller's `ground_y(x, z)` and
- * is applied by positioning the mesh, never by moving vertices. That is why
- * stacked areas are separated by `renderOrder` + `polygonOffset` and not by a
- * y ladder — see `AREA_POLYGON_OFFSET`.
+ * at y = 0; where the ground actually is, is the caller's `ground_y(x, z)`.
+ *
+ * PAINTED AREAS ARE NOT MESHES ANY MORE (E3). They used to be stacked, coplanar
+ * drapes held apart by a `renderOrder` ladder and a `polygonOffset` ladder
+ * (`AREA_POLYGON_OFFSET`, deleted with them); a painted ground is now a CUT in
+ * the one terrain surface (`layerCut.ts`). What is still built here is the
+ * geometry of a SHAPE — the water drape until E4, the admin preview's outlines,
+ * and the rings every scatter and undergrowth sampler filters against.
  */
 import type { BufferGeometry } from 'three'
 
@@ -31,20 +35,6 @@ export type Point2 = [number, number]
 /** Below this the ring encloses nothing worth a mesh (m2). Square metres of a
  *  world map — a nanometre-squared sliver is a data artefact, not an area. */
 export const AREA_EPS_M2 = 1e-9
-
-/**
- * Depth-bias units for a stacked area, applied as
- * `polygonOffsetFactor = -index * AREA_POLYGON_OFFSET`.
- *
- * Painted areas are COPLANAR by construction: they all lie on the ground
- * plane, and a path drawn across a meadow shares every micrometre of y with
- * it. Separating them by height would break the one rule the whole seamless
- * world rests on (`ground_y` is the ground, full stop) and would show as a
- * visible step at every area edge once relief arrives. So the order of the
- * list — bottom to top, as the server sorts it — becomes `renderOrder` plus a
- * depth bias, and the geometry stays flat.
- */
-export const AREA_POLYGON_OFFSET = 1
 
 /**
  * Shoelace of a ring, SIGNED: positive when the ring runs counter-clockwise in

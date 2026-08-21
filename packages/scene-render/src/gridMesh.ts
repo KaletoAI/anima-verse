@@ -3,10 +3,17 @@
  *
  * A flat world needs two triangles for its ground. A world with a relief needs
  * a vertex wherever the height changes, and the world's height changes at the
- * support points of the heightfield — so both pieces of the seamless ground
- * are cut on THAT grid: the base plate (`gridPlate`) is built on it, and every
- * painted area (`subdivideOnGrid`) is cut along the same lines. The caller
- * then lifts every vertex by `sampleWorldHeight` at its own world x/z.
+ * support points of the heightfield — so a mesh that has to LIE on the relief
+ * is cut on THAT grid (`subdivideOnGrid`) and the caller then lifts every
+ * vertex by `sampleWorldHeight` at its own world x/z.
+ *
+ * WHAT LEFT WITH E3. The base plate (`gridPlate`) is gone, and so is
+ * everything that existed only to keep it flush with the painted areas draped
+ * over it: since E2 the terrain draws itself out of the height lattice
+ * (`client3d/src/scene/terrainLod.ts`), and since E3 the painted grounds are a
+ * CUT IN THAT ONE SURFACE (`layerCut.ts`) rather than meshes lying on it.
+ * `subdivideOnGrid` stays because one thing still has to be draped this stage:
+ * the water drape, until E4 gives it a level mirror of its own.
  *
  * WHY NOT `drapeGeometry` (terrain.ts). That one halves every triangle until
  * its longest edge is short enough — five times at most (`MAX_SPLITS`), which
@@ -16,17 +23,14 @@
  * happens to be, so the base plate and a meadow lying on it would sample the
  * field at DIFFERENT points and drift apart between them.
  *
- * ONE GRID FOR EVERYTHING is what keeps the ground watertight. The lines are
- * anchored at the field's own origin, so plate and areas share every vertex
- * that falls on a grid line, and a full interior cell comes out as the very
- * same two triangles on both (see `fanTriangles`: the split runs from the
- * cell's minimum corner to its maximum one, on the plate as in an area).
- * What remains are the cells an area's OUTLINE crosses — there the two
- * surfaces are cut differently and can differ inside the cell by a fraction of
- * the cell's own curvature. That is what the hairline lift of the painted
- * areas (`AREA_Y_STEP_M`, ground.ts) is for; a relief authored with a falloff
- * shorter than one cell can still show the plate through an area edge, and the
- * cure for that is a falloff of at least one cell, not a taller ladder.
+ * THE LINES ARE ANCHORED AT THE FIELD'S OWN ORIGIN, so a cut mesh shares every
+ * vertex that falls on a grid line with the lattice the terrain is built from,
+ * and a full interior cell comes out as the very same two triangles (see
+ * `fanTriangles`: the split runs from the cell's minimum corner to its maximum
+ * one). The cells an outline CROSSES are cut differently and can differ inside
+ * the cell by a fraction of the cell's own curvature — which is why the water
+ * drape carries the one explicit lift left in this file's world
+ * (`ground.WATER_DRAPE_LIFT_M`) instead of a ladder of depth crutches.
  *
  * PURE ARITHMETIC, no imports at all — not even a type-only one. That is what
  * lets `client3d/scripts/smoke_relief_math.mjs` transpile this file and check
@@ -39,28 +43,10 @@
 export interface GridGeometry {
   pos: number[]
   uv: number[]
-  /** present on the plate (a regular grid indexes well), absent on a
-   *  subdivided area (its triangles share nothing worth an index) */
+  /** absent on a subdivided mesh — its triangles share nothing worth an
+   *  index. The field survives the removal of `gridPlate` (E3) because a
+   *  future regular grid would want it back. */
   index?: number[]
-}
-
-/** The plate, plus what the caller needs to know about the grid it got. */
-export interface PlateGeometry extends GridGeometry {
-  index: number[]
-  /** The extent the UVs are normalised over — what the caller ASKED for. The
-   *  cut part is snapped outward onto the grid and may reach up to one cell
-   *  further; that is ground past the frame and costs nothing but a metre of
-   *  quad. */
-  minX: number
-  minZ: number
-  maxX: number
-  maxZ: number
-  /** cell size the CUT part was built at (0 = nothing was cut at all) */
-  step: number
-  /** support points per axis of the cut part (cells + 1); 2 when the plate is
-   *  the single quad of a flat world */
-  cols: number
-  rows: number
 }
 
 /**
@@ -82,7 +68,7 @@ export interface PlateGeometry extends GridGeometry {
  *
  * THE BUDGET IS SPENT ON RELIEF, NOT ON PLAIN. It is measured over the field's
  * own box and never over the whole plate: outside the field the ground is
- * level and `gridPlate` covers it with four quads. A 100 m hill in a 1 500 m
+ * level and one quad describes it. A 100 m hill in a 1 500 m
  * world therefore stays at 4 m cells (29 × 29 = 841) instead of being coarsened
  * to 8 m to pay for 35 000 cells of empty plain.
  */
@@ -129,124 +115,8 @@ export function gridStepFor(minX: number, minZ: number, maxX: number, maxZ: numb
   return out
 }
 
-/** Grid coordinate of `v` rounded down / up onto the line grid anchored at
- *  `origin` with spacing `step`. */
-function snapDown(v: number, origin: number, step: number): number {
-  return origin + Math.floor((v - origin) / step) * step
-}
-function snapUp(v: number, origin: number, step: number): number {
-  return origin + Math.ceil((v - origin) / step) * step
-}
-
 /** An axis-aligned box in world metres. */
 export interface GridBox { x0: number; z0: number; x1: number; z1: number }
-
-/**
- * The base plate: a grid of cells where there is relief, plain quads where
- * there is none. y = 0 everywhere — lifting is the caller's step.
- *
- * `relief` is the box the HEIGHTFIELD covers (`origin + (cols−1)·step`, § A16).
- * Only there is the plate cut into cells: outside it the field is its own
- * border value everywhere, so the ground is a plane and one quad per side
- * describes it exactly. That distinction is not thrift for its own sake — a
- * hundred-metre hill in a fifteen-hundred-metre world would otherwise have to
- * share the cell budget with a million square metres of flat plain, and the
- * hill would be drawn at half the resolution to pay for it. Omit `relief` and
- * the whole plate is cut (a field that covers everything).
- *
- * The relief part is snapped OUTWARD onto the grid (`origin + k · step`), so
- * the plate's own vertex lines ARE the field's support lines and every cell is
- * one cell of the field. Beyond it the plate reaches exactly as far as it was
- * asked to.
- *
- * UVs run 0…1 over the whole plate, exactly as `THREE.PlaneGeometry` lays them
- * out after `rotateX(-90°)`: `u` grows with world x, `v` is 1 at the minimum z
- * edge. The material scales them by metres itself (`ground.ts`).
- *
- * Every cell is split from its MINIMUM corner to its maximum one — the same
- * diagonal `fanTriangles` gives a full cell of a painted area, and the same one
- * `sampleGroundHeight` reads. That is what makes plate, areas and figures
- * describe ONE surface inside a cell and not merely at its corners.
- *
- * A step of 0 or a degenerate extent gives the single quad of the flat world.
- */
-export function gridPlate(minX: number, minZ: number, maxX: number, maxZ: number,
-                          step: number, originX = 0, originZ = 0,
-                          relief?: GridBox | null): PlateGeometry {
-  const pos: number[] = []
-  const uv: number[] = []
-  const index: number[] = []
-  const w = maxX - minX
-  const d = maxZ - minZ
-  const flat = !(step > 0) || !(w > 0) || !(d > 0)
-  /** One vertex, UVs from its world position over the WHOLE plate. */
-  const vertex = (x: number, z: number): number => {
-    pos.push(x, 0, z)
-    uv.push(w > 0 ? (x - minX) / w : 0, d > 0 ? (maxZ - z) / d : 0)
-    return pos.length / 3 - 1
-  }
-  /** One flat quad, split minimum -> maximum corner like every cell. */
-  const quad = (x0: number, z0: number, x1: number, z1: number): void => {
-    if (!(x1 - x0 > 0) || !(z1 - z0 > 0)) return
-    const a = vertex(x0, z0)
-    const b = vertex(x1, z0)
-    const c = vertex(x1, z1)
-    const e = vertex(x0, z1)
-    index.push(a, e, c, a, c, b)
-  }
-  if (flat) {
-    quad(minX, minZ, maxX, maxZ)
-    return { pos, uv, index, minX, minZ, maxX, maxZ, step: 0, cols: 2, rows: 2 }
-  }
-  // The cut part: the plate, snapped outward onto the grid, clipped to what
-  // the field actually describes.
-  let x0 = snapDown(minX, originX, step)
-  let x1 = snapUp(maxX, originX, step)
-  let z0 = snapDown(minZ, originZ, step)
-  let z1 = snapUp(maxZ, originZ, step)
-  if (relief) {
-    x0 = Math.max(x0, snapDown(relief.x0, originX, step))
-    x1 = Math.min(x1, snapUp(relief.x1, originX, step))
-    z0 = Math.max(z0, snapDown(relief.z0, originZ, step))
-    z1 = Math.min(z1, snapUp(relief.z1, originZ, step))
-  }
-  if (!(x1 - x0 > 0) || !(z1 - z0 > 0)) {
-    // The relief lies outside the plate altogether — all plain.
-    quad(minX, minZ, maxX, maxZ)
-    return { pos, uv, index, minX, minZ, maxX, maxZ, step: 0, cols: 2, rows: 2 }
-  }
-  const cols = Math.max(1, Math.round((x1 - x0) / step))
-  const rows = Math.max(1, Math.round((z1 - z0) / step))
-  const first = pos.length / 3
-  for (let j = 0; j <= rows; j += 1) {
-    const z = j === rows ? z1 : z0 + ((z1 - z0) * j) / rows
-    for (let i = 0; i <= cols; i += 1) {
-      vertex(i === cols ? x1 : x0 + ((x1 - x0) * i) / cols, z)
-    }
-  }
-  const at = (i: number, j: number) => first + j * (cols + 1) + i
-  for (let j = 0; j < rows; j += 1) {
-    for (let i = 0; i < cols; i += 1) {
-      const a = at(i, j)          // minimum corner (min x, min z)
-      const b = at(i + 1, j)
-      const c = at(i + 1, j + 1)  // maximum corner
-      const e = at(i, j + 1)
-      // Wound so the face normal points UP after the caller leaves y = 0
-      // alone: in world XZ with +y towards the viewer, (a, e, c) turns
-      // counter-clockwise seen from above.
-      index.push(a, e, c, a, c, b)
-    }
-  }
-  // The plain ring around it, in four bands. Their seam with the cut part sits
-  // on the field's border, which § A16 pins to 0 — the two meet at the same
-  // height whatever the relief inside does.
-  quad(minX, minZ, maxX, z0)      // north
-  quad(minX, z1, maxX, maxZ)      // south
-  quad(minX, z0, x0, z1)          // west
-  quad(x1, z0, maxX, z1)          // east
-  return { pos, uv, index, minX, minZ, maxX, maxZ,
-           step, cols: cols + 1, rows: rows + 1 }
-}
 
 /** One vertex while it is being cut: world position plus its UV. */
 interface Vert { x: number; y: number; z: number; u: number; v: number }
@@ -309,7 +179,7 @@ function area2(a: Vert, b: Vert, c: Vert): number {
  *
  * Starting there is the whole trick: a full grid cell is a rectangle whichever
  * way it was cut out, and a fan from its minimum corner always splits it along
- * the minimum-to-maximum diagonal — the same one `gridPlate` uses. Plate and
+ * the minimum-to-maximum diagonal — the same one the terrain patch uses. Cut mesh and
  * painted area therefore describe the SAME surface over every full cell, and
  * neither can poke through the other there.
  */

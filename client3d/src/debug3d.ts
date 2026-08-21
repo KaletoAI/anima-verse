@@ -147,8 +147,9 @@ export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
                    sweepHigh ? 30 : 8);
     }
     const t = tile as unknown as Record<string, unknown>;
-    const gp = tile.groundPlate as THREE.Mesh | undefined;
-    const gm = gp && (gp.material as THREE.MeshStandardMaterial);
+    // The `ground` readout (y / visible / opacity / transparent / map of the
+    // tile's own plate) died with the plate itself ("Ein Boden" E3): a tile
+    // owns no ground any more, the terrain under it does.
     const head = {
       loc: (t.loc as { name?: string })?.name,
       dist: Math.round(engine.dist * 10) / 10,
@@ -157,16 +158,6 @@ export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
       shellArea: !!t.modelIsShellArea,
       terrain: !!t.terrain,
       levelFilter: t.levelFilter,
-      ground: gp ? {
-        y: Math.round(gp.position.y * 1000) / 1000,
-        visible: gp.visible ? 1 : 0,
-        opacity: gm ? Math.round(gm.opacity * 100) / 100 : -1,
-        transparent: gm?.transparent ? 1 : 0,
-        map: gm?.map
-          ? 'ld:' + String((gm.map.image as { src?: string } | undefined)?.src
-              || '').split('/').slice(-1)[0].slice(0, 28)
-          : '-',
-      } : null,
     };
     const rows = [
       ...rowsOf(tile.group, 'G'),
