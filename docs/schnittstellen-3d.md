@@ -3184,6 +3184,35 @@ geschärft werden.
 > geordnet, kippten A und B über der Linie, das Vorzeichen mit ihnen, und die
 > Kante risse an jeder Naht auf.
 
+> **…UND KANONISCH IST ES NUR JE GRENZE.** Stehen in einer Nachbarschaft
+> MEHRERE Grenzen (die Westwand eines Zimmers und die Küche an seiner Nordwand;
+> der Rand eines Strandes gegen den Wald und sein Rand gegen den See), dann las
+> ein Texel sein PAAR von der einen und sein VORZEICHEN von der anderen — und
+> beides zusammen ergab einen Boden, der an keiner von beiden liegt. Gemessen an
+> den Masken der laufenden Welt (Befundrunde 2026-08-21, Wohnzimmerboden „Haus
+> von Kai", Welt −1551,95 / −761,50): id-Texel = Paar der Westwand
+> (`wood | grass`) bei 2,75 m, sd-Texel = Vorzeichen der Nordlinie
+> (`rubber | wood`) bei 2,75 m, komponiert `A = wood, sd = −2,77` → **Wiese,
+> drei Meter innerhalb des Raums.** 627 solche Texel in den drei fotografierten
+> Regionen, 0 danach. Drei Regeln halten das Paar seitdem zusammen:
+>
+> 1. **Eine Grenze ist ein LAYER-Wechsel, kein Rangwechsel.** Zwei Formen
+>    derselben Bodenart, die sich berühren (ein Strand in drei Strichen gemalt),
+>    haben keine Kante dazwischen; eine Naht dort hat vorher das Distanzfeld
+>    ringsum von der echten Kante weggezogen.
+> 2. **Ein Texel nimmt nur Grenzen an, an denen sein EIGENER Layer beteiligt
+>    ist.** „Liege ich auf A's Seite" ist für einen dritten Boden keine Frage
+>    mit Antwort — sie wurde als „B" gelesen.
+> 3. **Ein id-Texel und die vier sd-Texel darunter sprechen von EINER Grenze:**
+>    die id nimmt die nächste der vier, alle vier werden gegen DIESES Paar
+>    signiert. Jenseits der Breite, in der der Übergang überhaupt noch gezeichnet
+>    wird (`collapse_band_m` = halbe Blendbreite + Rausch-Ausschlag + 1 m
+>    Reserve), **kollabiert das Paar auf (own, own)**: ein Texel tief in einem
+>    Boden braucht keinen Zweitplatzierten, und keinen zu nennen ist genau das,
+>    was aus einer Mittelachse keinen Haarstrich der falschen Art mehr macht.
+>    Die Distanz bleibt dabei unverändert — der Nachbar, der noch blendet, liest
+>    sie durch den LINEAR-Filter mit und darf dort keine Kante finden.
+
 **Warum eine Integer-Textur für die id:** `usampler2D` + `texelFetch`. Eine
 Integer-Textur kann *gar nicht* gefiltert werden — NEAREST erzwingt das FORMAT
 und nicht eine Sampler-Einstellung, die ein Treiber anders auslegen könnte.
@@ -3223,9 +3252,10 @@ gemalter Boden wächst, **ein Raumboden wird gezeichnet.**
 Der Shader schneidet:
 
 ```glsl
-float g = fwidth( sd );                       // IMMER, vor jedem Zweig
-float soft = smoothstep( -0.5*b, 0.5*b, sd ); // b > 0
-float hard = clamp( sd / max(g, 1e-6) + 0.5, 0.0, 1.0 );   // b == 0
+// EIN PIXEL, IN METERN BODEN — an der WELTPOSITION gemessen, vor jedem Zweig
+float pixelM = max( length( dFdx( world ) ), length( dFdy( world ) ) );
+float soft = smoothstep( -0.5*b, 0.5*b, sd );                  // b > 0
+float hard = clamp( sd / max(pixelM, 1e-6) + 0.5, 0.0, 1.0 );  // b == 0
 w = b > 0.0 ? soft : hard;
 ```
 
@@ -3234,9 +3264,20 @@ jeder Seite, also sind „1,5 m Übergang" wirklich 1,5 m Boden und nicht drei.
 Bei `b = 0` ist der Schnitt ein **ein Pixel breiter** Schritt, wo die Kamera
 auch steht: nah ist ein Pixel zentimeterklein und die Kante rasiermesserscharf,
 fern ist er metergroß und derselbe Ausdruck MITTELT die beiden Böden, statt zu
-flimmern. `fwidth` steht außerhalb jedes Zweigs — eine Ableitung in
+flimmern. Die Ableitung steht außerhalb jedes Zweigs — eine Ableitung in
 Kontrollfluss, der über ein Quad hinweg auseinanderläuft, ist in GLSL ES
 undefiniert, und genau dieser Zweig läuft an jeder Grenze auseinander.
+
+> **`pixelM` wird an der WELTPOSITION gemessen, nie als `fwidth( sd )`**
+> (Befundrunde 2026-08-21, Befund 3). Ein Distanzfeld hat den Gradienten 1, also
+> sind beide dieselbe Zahl, **solange das Feld glatt ist** — an einem Texel,
+> dessen Nachbar eine andere Grenze nennt, und am Rand des geladenen
+> Masken-Fensters ist es das nicht: dort explodiert die Ableitung der GESAMPELTEN
+> Distanz, „ein Pixel" wird metergroß, und der harte Schnitt fällt für dieses
+> eine Quad auf ein 50/50-Mittel zweier Böden zurück. Das war das
+> **hellblaue Aufblitzen einzelner Flächenstücke beim Drehen der Kamera** — die
+> Quad-Raster wandert mit der Kamera, also wandern die Flecken. Die
+> Weltposition ist per Konstruktion stetig.
 
 Weil `b` nach Art A gelesen wird, ist **eine Art bei zwei Breiten zwei Layer**;
 die Tabelle führt Einträge je `(kind, edge_blend_m)` und wächst über die

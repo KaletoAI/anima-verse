@@ -33,7 +33,9 @@
  *     unchanged, only its mechanism is.
  *
  * (b) A HARD CUT, `b = 0`, ANALYTICALLY ANTI-ALIASED: `clamp(sd/fw + 0.5,
- *     0, 1)` where `fw` is one pixel measured in metres of `sd` (`fwidth(sd)`).
+ *     0, 1)` where `fw` is one pixel measured in WORLD METRES —
+ *     `max(length(dFdx(world)), length(dFdy(world)))`, never `fwidth(sd)`
+ *     (finding round 2026-08-21, [5] below).
  *     That is a step ONE PIXEL wide wherever the camera stands. By hand with
  *     fw = 0.1 m (a pixel a decimetre across, i.e. standing on the ground):
  *
@@ -309,16 +311,24 @@ check('the per-layer numbers are an array sized by the caller\'s constant',
   has('uniform vec4 uLcLayer[ 64 ];'), 1);
 check('…and a smaller world compiles a smaller one',
   terrainLayerGlsl(8).includes('uniform vec4 uLcLayer[ 8 ];') ? 1 : 0, 1);
-// THE DERIVATIVE. `fwidth` in control flow that differs across a quad is
-// undefined in GLSL ES, and the branch here is exactly the one that differs:
-// `blendM` comes out of a uniform array indexed by the LAYER, which is what
-// changes across every boundary. So both branches are evaluated and the ?: picks
-// a finished number.
+// THE ANTI-ALIASING WIDTH. `fwidth( sd )` was the pixel size in metres only
+// while the sampled distance field is smooth. It is not smooth at a texel whose
+// neighbour names a different boundary, nor at the rim of the loaded window —
+// there the derivative explodes, the hard cut collapses to a 50/50 average of
+// two grounds for that quad, and the patch of wrong material comes and goes as
+// the camera turns (finding 3 of 2026-08-21). A distance field's gradient is
+// one, so the honest number is the pixel measured on the WORLD position, which
+// is continuous by construction.
 const weightFn = glsl.slice(glsl.indexOf('float lcWeight('),
                             glsl.indexOf('vec3 lcSurface('));
-check('fwidth is taken unconditionally, before any branch',
-  /float g = fwidth\( sd \);[\s\S]*return blendM > 0\.0 \? soft : hard;/.test(weightFn)
-    ? 1 : 0, 1);
+check('the hard cut is one pixel of WORLD, handed in',
+  /float lcWeight\( float sd, float blendM, float pixelM \)[\s\S]*clamp\( sd \/ max\( pixelM, 1e-6 \)/
+    .test(weightFn) ? 1 : 0, 1);
+check('red: the derivative of the SAMPLED distance is gone',
+  weightFn.includes('fwidth(') ? 1 : 0, 0);
+check('…and the pixel is measured on the world position, before any branch',
+  /float pixelM = max\( length\( dpdx \), length\( dpdy \) \);\n\s*float w = lcWeight\( sdN, blendM, pixelM \);/
+    .test(glsl) ? 1 : 0, 1);
 check('…and there is no `if` in the whole function',
   weightFn.includes('if (') ? 1 : 0, 0);
 check('the blend is centred on the line — half the width on each side',

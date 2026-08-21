@@ -29,6 +29,31 @@ cut comes entirely out of the interpolated distance. Ordering the pair by "the
 layer here" instead would flip A and B across the line, flip the sign with them,
 and tear the edge apart at every texel seam.
 
+…AND THE PAIR IS ONLY CANONICAL PER BOUNDARY, which is the whole reason for the
+three rules below (finding round 2026-08-21). A world with more than two grounds
+in one neighbourhood has SEVERAL boundaries competing, and a texel that reads
+its pair off one of them and its distance off another composes a material that
+is at neither: a wooden floor showed the meadow outside the house in metre-wide
+chevrons, the beach showed the forest in staircase cracks, and the kitchen's
+rubber bled into the living room. Measured, not guessed — the id texel and the
+sd texel under it carried the pairs of two DIFFERENT boundaries at exactly the
+same distance, i.e. on their medial axis. So:
+
+1. **A BOUNDARY IS A CHANGE OF LAYER, not of paint rank.** Two shapes of the
+   same material (three sand zones drawn in three strokes) touch without a
+   boundary between them; a seam there used to seed the distance field and pull
+   every texel around it off the real edge.
+2. **A TEXEL ONLY EVER TAKES A BOUNDARY ITS OWN LAYER IS PART OF.** The sign
+   "am I on A's side" is meaningless for a third ground standing near somebody
+   else's edge — it used to read as "B", which is how a floor came to show the
+   grass of a boundary it is not on either side of.
+3. **THE ID TEXEL AND THE FOUR SD TEXELS UNDER IT SPEAK OF ONE BOUNDARY.** The
+   id takes the NEAREST of its four, and all four are then signed against THAT
+   pair. Beyond the width where the transition is still being drawn
+   (:func:`collapse_band_m`) the pair collapses to (own, own) — a texel that is
+   far inside one ground needs no runner-up, and not naming one is what keeps a
+   medial axis from becoming a hairline of the wrong material.
+
 THE PRIORITY IS THE DATA LAW AND NOTHING NEW: the LAST containing area wins,
 in `models.terrain.list_areas` order (z_order, then paint order) — the very rule
 `core.terrain_query.kind_at` answers point queries with. The bake fills a raster
@@ -150,6 +175,41 @@ EDGE_BLEND_DEFAULT_M = 1.5
 EDGE_BLEND_MIN_M = 0.0
 EDGE_BLEND_MAX_M = 8.0
 EDGE_BLEND_KEY = "edge_blend_m"
+
+#: How far the edge NOISE may push a transition, in metres — the Python twin of
+#: ``@anima/scene-render`` ``LC_EDGE_NOISE_M``, and the reason it is spelled
+#: here at all is :func:`collapse_band_m`: the bake has to know how far out the
+#: shader is still drawing something before it may stop naming a runner-up. The
+#: push is itself capped at half the blend width (``lcPushedSd``), so a hard cut
+#: is not widened by it.
+EDGE_NOISE_M = 0.5
+
+#: The slack on top of the drawn transition, in metres, before a texel's pair
+#: collapses to (own, own).
+#:
+#: TWO SD TEXELS, and both of them are paid for: one because the shader's LINEAR
+#: fetch of the distance reaches into the neighbouring texel, so a texel whose
+#: own pair has already collapsed must not be read by a neighbour that is still
+#: blending; one because a HARD cut is anti-aliased over a PIXEL, and a pixel a
+#: hundred metres out is about a metre of ground. Wider than that and the
+#: collapse stops doing its job — the whole point of it is that two id texels
+#: deep inside one ground name the SAME thing, so the interpolated distance
+#: between them cannot cross zero and paint a hairline of somebody else.
+COLLAPSE_SLACK_M = 1.0
+
+
+def collapse_band_m(blend_m: float) -> float:
+    """How far from a boundary the pair still has to name a runner-up, metres.
+
+    Everything the shader still draws of the transition, plus
+    :data:`COLLAPSE_SLACK_M`: half the blend width lies on each side of the line
+    (``layerWeight``), the noise may push the line by up to
+    :data:`EDGE_NOISE_M` — itself capped at half the width — and past the sum of
+    those the weight is saturated, i.e. the runner-up contributes nothing to the
+    picture. A hard cut (0) therefore keeps its pair for exactly the slack.
+    """
+    blend = max(float(blend_m), 0.0)
+    return 0.5 * blend + min(EDGE_NOISE_M, 0.5 * blend) + COLLAPSE_SLACK_M
 
 
 def sanitize_edge_blend(raw: Any) -> Optional[float]:
@@ -668,25 +728,33 @@ _FAR = 1 << 30
 
 
 def bake_masks(grid: array, n: int, rank_layer: Sequence[int],
-               margin: int, out_n: int) -> Optional[Tuple[bytes, bytes]]:
+               margin: int, out_n: int,
+               blend_by_layer: Sequence[float] = ()
+               ) -> Optional[Tuple[bytes, bytes]]:
     """The two masks of one window, out of a rank raster — the CORE of E3.
 
     ``grid`` is ``n × n`` paint ranks on the sd lattice, ``margin`` texels of
     which are the apron that lets a boundary just OUTSIDE the window still
     answer distances inside it; ``out_n`` is the shipped edge (``n − 2·margin``).
-    Returns ``(id_bytes, sd_bytes)`` or **None when the window carries no
-    boundary at all** — a tile that is one single ground needs neither mask, and
-    saying so is worth about 400 kB per tile.
+    ``blend_by_layer`` is the transition width of every layer, i.e.
+    ``[l["edge_blend_m"] for l in model.layers]`` — the bake needs it for the
+    collapse of step 3 and for nothing else. Returns ``(id_bytes, sd_bytes)`` or
+    **None when the window carries no boundary at all** — a tile that is one
+    single ground needs neither mask, and saying so is worth about 400 kB per
+    tile.
 
     THREE STEPS.
 
-    1. **The sites.** Between two neighbouring lattice samples of different rank
-       lies a boundary, and its position is the MIDPOINT of the two. Sites are
-       therefore recorded in half-texel units (``2·index``), which is what makes
+    1. **The sites.** Between two neighbouring lattice samples of different
+       LAYER lies a boundary, and its position is the MIDPOINT of the two.
+       Different layer, not different rank: two shapes of one material that
+       touch (a beach drawn in three strokes) have no edge between them, and a
+       site there would pull every texel around it away from the real one.
+       Sites are recorded in half-texel units (``2·index``), which is what makes
        a midpoint an integer coordinate and the whole transform exact
-       arithmetic. Each site carries the PAIR of its two ranks — higher first,
-       and the higher one is the one painted later, i.e. the layer whose own
-       fringe this boundary is.
+       arithmetic. Each site carries the PAIR of its two LAYERS — the one whose
+       rank is higher first, i.e. the layer painted later, whose own fringe this
+       boundary is.
 
     2. **Two sweeps (dead reckoning).** A forward raster sweep propagates each
        texel's nearest site from its already-visited neighbours, a backward
@@ -694,6 +762,13 @@ def bake_masks(grid: array, n: int, rank_layer: Sequence[int],
        is what keeps the error of the propagated distance under a hundredth of a
        texel — and every candidate is compared as a SQUARED distance, so no
        square root is taken until the very last step.
+
+       A TEXEL ONLY TAKES A SITE ITS OWN LAYER IS PART OF. The sign of the
+       distance says "am I on A's side or on B's", and for a ground that is
+       neither there is no true answer — it used to be given B's, which is how a
+       parquet floor came to show the meadow of a boundary it stands on neither
+       side of. Rejecting those candidates costs nothing: the chain from a
+       texel to its own nearest edge runs through its own ground.
 
        THE BAND IS THE BUDGET. A texel whose distance passes
        :data:`SD_BAND_M` is dropped back to the sentinel and stops propagating:
@@ -703,23 +778,34 @@ def bake_masks(grid: array, n: int, rank_layer: Sequence[int],
        texel within the band runs entirely through texels that are NEARER to
        that site, i.e. through the band.
 
-    3. **The read-out.** The sd mask takes the distance at its own texel,
-       signed + when the texel's rank is the site's higher one, and quantised.
-       The id mask takes the PAIR of the site nearest to its own centre — which
-       is the same pair on both sides of the line, the property the whole
-       arrangement rests on. An id texel is 1 m and an sd texel 0.5 m, so an id
-       centre falls on the corner of four sd texels; it reads the one at
-       ``(2i, 2j)``, a quarter of a metre off. That cannot move an edge: the
-       pair is canonical, so both candidates carry the same two layers, and
-       WHERE the cut sits is the sd's business alone.
+    3. **The read-out — ONE BOUNDARY PER ID TEXEL.** An id texel is 1 m and an
+       sd texel 0.5 m, so four sd texels lie under each id texel. The id takes
+       the pair of the NEAREST site among those four, and all four are then
+       signed against THAT pair: + where the texel's own layer is A, − where it
+       is B. Reading the pair off one boundary and the sign off another is the
+       defect this replaces — at a medial axis the two are exactly equidistant,
+       and the composition of the two answers is a material that is at neither.
+
+       AND PAST :func:`collapse_band_m` THE PAIR COLLAPSES to (own, own). Out
+       there the weight is saturated, so the runner-up contributes nothing to
+       the picture — but naming one is what lets the LINEAR distance between two
+       id texels that named DIFFERENT ones cross zero and draw a hairline of the
+       wrong ground down the middle of a room. Two texels deep inside one ground
+       now say the same thing, and ``a == b`` makes the shader ignore the
+       distance altogether.
     """
     band_half = SD_BAND_M / SD_STEP_M * 2.0          # the band in half-texels
     band2 = int(band_half * band_half)
-    d2 = [_FAR] * (n * n)
-    sx = [0] * (n * n)
-    sz = [0] * (n * n)
-    hi = [0] * (n * n)                                # rank painted on top
-    lo = [0] * (n * n)                                # …and the one under it
+    total = n * n
+    d2 = [_FAR] * total
+    sx = [0] * total
+    sz = [0] * total
+    hi = [0] * total                                  # LAYER painted on top
+    lo = [0] * total                                  # …and the one under it
+    # The layer of every sample, once: the sites, the own-layer test and the
+    # read-out all ask for it, and `rank_layer[grid[k]]` in three loops over a
+    # 544² lattice is a million list lookups nobody needs.
+    lay = [rank_layer[r] for r in grid]
     any_site = False
 
     for j in range(n):
@@ -727,12 +813,12 @@ def bake_masks(grid: array, n: int, rank_layer: Sequence[int],
         z2 = 2 * j
         for i in range(n - 1):
             k = base + i
-            a = grid[k]
-            b = grid[k + 1]
-            if a == b:
+            la = lay[k]
+            lb = lay[k + 1]
+            if la == lb:
                 continue
             any_site = True
-            top, under = (a, b) if a > b else (b, a)
+            top, under = ((la, lb) if grid[k] > grid[k + 1] else (lb, la))
             mx = 2 * i + 1
             for t in (k, k + 1):
                 if d2[t] > 1:
@@ -746,12 +832,13 @@ def bake_masks(grid: array, n: int, rank_layer: Sequence[int],
         below = base + n
         z2 = 2 * j + 1
         for i in range(n):
-            a = grid[base + i]
-            b = grid[below + i]
-            if a == b:
+            la = lay[base + i]
+            lb = lay[below + i]
+            if la == lb:
                 continue
             any_site = True
-            top, under = (a, b) if a > b else (b, a)
+            top, under = ((la, lb) if grid[base + i] > grid[below + i]
+                          else (lb, la))
             mx = 2 * i
             for t in (base + i, below + i):
                 if d2[t] > 1:
@@ -767,6 +854,9 @@ def bake_masks(grid: array, n: int, rank_layer: Sequence[int],
         dm = d2[m]
         if dm >= d2[k] or dm >= _FAR:
             return
+        own = lay[k]
+        if own != hi[m] and own != lo[m]:
+            return              # not my boundary — its sign would be a lie
         dx = x2 - sx[m]
         dz = z2 - sz[m]
         v = dx * dx + dz * dz
@@ -811,40 +901,69 @@ def bake_masks(grid: array, n: int, rank_layer: Sequence[int],
                 relax(k, k + 1, x2, z2)
 
     # ── read-out ────────────────────────────────────────────────────────────
+    # The collapse distance of every layer, once. A layer the caller said
+    # nothing about keeps the default width, which is what `edge_blend_of`
+    # answers for a kind that names none.
+    widths = list(blend_by_layer)
+    bands = [collapse_band_m(widths[i] if i < len(widths)
+                             else EDGE_BLEND_DEFAULT_M)
+             for i in range(MAX_LAYERS)]
     sd = bytearray(out_n * out_n)
-    sqrt = math.sqrt
-    half_m = SD_STEP_M / 2.0                     # one half-texel in metres
-    for j in range(out_n):
-        src = (j + margin) * n + margin
-        dst = j * out_n
-        for i in range(out_n):
-            k = src + i
-            v = d2[k]
-            if v >= _FAR:
-                # Nothing within the band: the sign is the texel's own side of
-                # the world. Unpainted or not, it is FAR inside whatever it is,
-                # so the clamp is the honest answer and its sign is +.
-                sd[dst + i] = 255
-                continue
-            metres = sqrt(v) * half_m
-            if grid[k] != hi[k]:
-                metres = -metres
-            sd[dst + i] = encode_sd(metres)
-
     id_n = out_n // 2
     ids = bytearray(id_n * id_n * 2)
+    sqrt = math.sqrt
+    half_m = SD_STEP_M / 2.0                     # one half-texel in metres
     for j in range(id_n):
-        src = (2 * j + margin) * n + margin
-        dst = j * id_n * 2
+        row0 = (2 * j + margin) * n + margin
+        row1 = row0 + n
+        dst_id = j * id_n * 2
         for i in range(id_n):
-            k = src + 2 * i
-            if d2[k] >= _FAR:
-                own = rank_layer[grid[k]]
-                ids[dst + 2 * i] = own
-                ids[dst + 2 * i + 1] = own
+            quad = (row0 + 2 * i, row0 + 2 * i + 1,
+                    row1 + 2 * i, row1 + 2 * i + 1)
+            near = quad[0]
+            for k in quad[1:]:
+                if d2[k] < d2[near]:
+                    near = k
+            if d2[near] >= _FAR:
+                # Nothing within the band anywhere under this metre: whatever
+                # ground it is, it is far inside it and has no runner-up.
+                a_layer = b_layer = lay[quad[0]]
             else:
-                ids[dst + 2 * i] = rank_layer[hi[k]]
-                ids[dst + 2 * i + 1] = rank_layer[lo[k]]
+                a_layer = hi[near]
+                b_layer = lo[near]
+                if sqrt(d2[near]) * half_m > bands[a_layer]:
+                    a_layer = b_layer = lay[near]
+            ids[dst_id + 2 * i] = a_layer
+            ids[dst_id + 2 * i + 1] = b_layer
+            paired = a_layer != b_layer
+            for w in (0, 1):
+                src = row0 + w * n + 2 * i
+                dst = (2 * j + w) * out_n + 2 * i
+                for u in (0, 1):
+                    k = src + u
+                    out_k = dst + u
+                    v = d2[k]
+                    if v >= _FAR:
+                        # Nothing within the band: the texel is FAR inside
+                        # whatever it is, so the clamp is the honest answer and
+                        # its sign is +.
+                        sd[out_k] = 255
+                        continue
+                    own = lay[k]
+                    # THE SIGN IS AGAINST THE ID TEXEL'S PAIR, never against
+                    # this texel's own site: the shader reads ONE id and
+                    # interpolates these four, and two answers about two
+                    # different boundaries do not compose. Only where the id
+                    # texel has collapsed — or where a third ground meets
+                    # inside this very metre — is there no A to measure
+                    # against, and then the texel's own site decides.
+                    if paired:
+                        neg = (own == b_layer if own in (a_layer, b_layer)
+                               else own != hi[k])
+                    else:
+                        neg = own != hi[k]
+                    metres = sqrt(v) * half_m
+                    sd[out_k] = encode_sd(-metres if neg else metres)
     return bytes(ids), bytes(sd)
 
 
@@ -870,7 +989,8 @@ def tile_masks(model: LayerModel, tx: int, tz: int) -> Dict[str, Any]:
     origin_x = tx * TILE_M - margin * SD_STEP_M
     origin_z = tz * TILE_M - margin * SD_STEP_M
     grid = model.rank_grid(origin_x, origin_z, SD_STEP_M, n)
-    baked = bake_masks(grid, n, model.rank_layer, margin, out_n)
+    baked = bake_masks(grid, n, model.rank_layer, margin, out_n,
+                       [float(e["edge_blend_m"]) for e in model.layers])
     head = {"origin_x": tx * TILE_M, "origin_z": tz * TILE_M}
     if baked is None:
         head["uniform"] = model.rank_layer[grid[(n // 2) * n + n // 2]]

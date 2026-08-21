@@ -80,15 +80,34 @@ QUANTISED, and the quantisation is the contract: ``code = round(sd · 127/8) +
 the true one.
 
 ===========================================================================
-[4] THE BAND, and what lies past it
+[4] THE BAND, THE COLLAPSE, and what lies past both
 ===========================================================================
-The distance is carried ±8 m and no further. At x = 56.25 the boundary at 64 is
-7.75 m away — inside the band, so the texel still names the pair (2, 1) and a
-negative distance. At x = 55.75 it is 8.25 m away, past the band: the pair
-collapses to (own, own) = (1, 1) and the distance is the maximum positive code
-255 -> +8.0 m. Both readings composite to the SAME picture (a weight of 0
-against B = sand, and a weight of 1 against A = sand), which is what makes the
-clamp invisible.
+The distance is carried ±8 m and no further, and the PAIR is carried only as
+far as the transition is still being drawn (`collapse_band_m`): half the blend
+width on each side, plus the noise push (itself capped at half the width), plus
+`COLLAPSE_SLACK_M` = 1 m for the LINEAR fetch's reach and for the pixel-wide
+anti-aliasing of a hard cut. The lake's water is the default 1.5 m wide, so its
+band is 0.75 + 0.5 + 1 = 2.25 m.
+
+The pair is decided PER ID TEXEL, from the nearest of the four sd texels under
+it, so the id texel [61, 62) is judged by its sub-texel at 61.75 — 2.25 m out,
+exactly the band, so it is the LAST one that still names a runner-up:
+
+    x = 61.75   2.25 m outside water, still paired  -> (2, 1), −2.25 m
+    x = 60.75   3.25 m out, the pair has COLLAPSED  -> (1, 1), −3.25 m
+    x = 56.25   7.75 m out, same statement          -> (1, 1), −7.75 m
+    x = 55.75   8.25 m out, past the band as well   -> (1, 1), +8.0 m
+
+The distance keeps its true value and its sign through the collapse — a
+neighbouring texel that is still blending reads it through the hardware's LINEAR
+filter and must not find a cliff there. What the collapse changes is that the
+texel no longer NAMES a runner-up, so `a == b` and the shader ignores the
+distance altogether. THAT IS THE POINT: two id texels deep inside one ground
+used to name two different boundaries — the one to the west and the one to the
+north — and the interpolated distance between them crossed zero, which drew a
+line of the wrong material straight down the middle of a room ([12]).
+Quantised, −2.25 m is code 128 − round(2.25·15.875) = 128 − 36 = 92 and decodes
+to −2.2677; −3.25 m is 128 − 52 = 76 -> −3.2756.
 
 ===========================================================================
 [5] HOW FAR THE RASTER MAY BE FROM THE TRUE POLYGON
@@ -189,6 +208,28 @@ lists have to be the same points — asserted well inside a centimetre, which is
 the precision the plan coordinates are stored at. A yawed location is checked
 too: the transform is the only thing between the two, so if it were applied
 twice or not at all, 90° would show it.
+
+===========================================================================
+[12] TWO BOUNDARIES IN ONE NEIGHBOURHOOD (finding round 2026-08-21)
+===========================================================================
+The canonical pair is canonical PER BOUNDARY. Where two boundaries compete —
+a room's west wall and the kitchen against its north wall, a beach's edge
+against the forest and its edge against the lake — a texel used to read its
+PAIR off one of them and its SIGN off the other, and the two composed into a
+ground that is at neither. Decoded off the live world it looked like this, at
+the living-room floor of "Haus von Kai" (world −1551.95, −761.50):
+
+    id texel: the west wall's pair   (wood | grass)   at 2.75 m
+    sd texel: the north line's sign  (rubber | wood)  at 2.75 m
+    composed: A = wood, sd = −2.77  ->  GRASS, three metres inside the room
+
+627 texels like it in the three regions the user photographed; 0 after. The
+three rules that got there are in :func:`app.core.terrain_layers.bake_masks`
+and the whole section derives them by hand on a two-room fixture. Its last
+part is a SWEEP rather than a probe, because the defect was a thin wandering
+set of texels no handful of points would have caught: every interior texel of
+the house and its surroundings must draw what the priority law says, and no
+texel anywhere may name a pair its own ground is not part of.
 """
 
 import base64
@@ -398,6 +439,167 @@ def test_location_floors():
           True)
 
 
+# ── The three-room fixture (finding round 2026-08-21) ───────────────────────
+
+#: THE SHAPE OF THE FINDING, at round numbers. A house of two rooms that TOUCH,
+#: on bare ground — the living room of "Haus von Kai" with the kitchen against
+#: its north wall, which is where the user photographed metre-wide chevrons of
+#: meadow on the parquet and a strip of the kitchen's rubber floor beside them.
+#:
+#:      hall     world x 90…102, z 90…96   floor "wood"
+#:      kitchen  world x 90… 94, z 96…100  floor "tiles"
+#:
+#: Ranks, and therefore priority: 1 = hall, 2 = kitchen (room order). The layer
+#: table is the default kind first, then the floor kinds sorted:
+#:
+#:      0 grass (blend 1.5)   1 tiles (0.0)   2 wood (0.0)
+#:      rank_layer == [0, 2, 1]
+#:
+#: THREE BOUNDARIES, and their canonical pairs — A is always the layer of the
+#: HIGHER rank, i.e. the one painted later:
+#:
+#:      hall | grass      (x = 90 / z = 90 / x = 102 / z = 96 east of x = 94)
+#:                        hi = rank 1 -> wood,  lo = rank 0 -> grass  -> (2, 0)
+#:      hall | kitchen    (z = 96, x = 90…94)
+#:                        hi = rank 2 -> tiles, lo = rank 1 -> wood   -> (1, 2)
+#:      kitchen | grass   (x = 90 / x = 94 / z = 100, z = 96…100)     -> (1, 0)
+TWO_ROOM_LOC = _location("house", 100.0, 100.0, 20.0, [
+    _room("hall", -10.0, -10.0, 12.0, 6.0, "wood"),
+    _room("kitchen", -10.0, -4.0, 4.0, 4.0, "tiles"),
+])
+
+
+def test_three_regions():
+    """[12] TWO BOUNDARIES IN ONE NEIGHBOURHOOD — the finding round.
+
+    THE MEASUREMENT THAT STARTED IT. Decoded off the live world's own masks at
+    the living-room floor of "Haus von Kai" (world −1551.95, −761.50):
+
+        the ID texel carried the pair of the WEST wall   (wood | grass), 2.75 m
+        the SD texel carried the sign of the NORTH wall  (rubber | wood), 2.75 m
+        composed: A = wood, sd = −2.77  ->  it drew GRASS, three metres inside
+
+    The two boundaries are EXACTLY equidistant there, which is what a medial
+    axis is; which of them a texel ends up carrying is a tie-break of the
+    sweep, and the id lattice (1 m) and the sd lattice (0.5 m) broke it
+    differently. 627 such texels in the three regions the user photographed.
+
+    THE SAME SHAPE, BY HAND, in the fixture above. Take the point
+    (92.75, 93.75) inside the hall:
+
+        distance to the west wall  x = 90   ->  2.75 m
+        distance to the hall|kitchen line z = 96  ->  2.25 m
+
+    so the point's own nearest boundary is the hall|kitchen one and its sign is
+    NEGATIVE (wood is the B of that pair). The id texel it falls in is
+    [92, 93) x [93, 94), and the four sd texels under it sit at 92.25/92.75 and
+    93.25/93.75, i.e. at distances
+
+        (92.25, 93.25)  west 2.25  north 2.75   ->  2.25, the WEST wall
+        (92.75, 93.25)  west 2.75  north 2.75
+        (92.25, 93.75)  west 2.25  north 2.25
+        (92.75, 93.75)  west 2.75  north 2.25   ->  2.25, the NORTH line
+
+    THE OLD RULE read the pair off the corner texel (92.25, 93.25) — the west
+    wall, pair (wood, grass) — and the sign off the point's own texel — the
+    north line, −2.25 m — and drew grass. THE NEW RULE takes the nearest of the
+    four (2.25 m) and, because that is past the collapse band of wood
+    (`collapse_band_m(0) == 1.0 m`), names no runner-up at all: the pair is
+    (wood, wood), `a == b`, and the distance is not consulted.
+    """
+    print("\n[12] two boundaries in one neighbourhood (2026-08-21)")
+    floors = TL.world_floors([TWO_ROOM_LOC], FLOOR_CATALOG, {})
+    model = TL.LayerModel([], FLOOR_CATALOG, "grass", floors)
+    check("the table: bare ground, then the two floor kinds sorted",
+          [(l["index"], l["kind"], l["edge_blend_m"]) for l in model.layers],
+          [(0, "grass", 1.5), (1, "tiles", 0.0), (2, "wood", 0.0)])
+    check("…and the ranks map onto them", model.rank_layer, [0, 2, 1])
+    tile = TL.tile_masks(model, 0, 0)
+    ids = base64.b64decode(tile["id"])
+    sd = base64.b64decode(tile["sd"])
+    id_n, sd_n = tile["id_size"], tile["sd_size"]
+
+    def pair(x, z):
+        k = (int(z // TL.ID_STEP_M) * id_n + int(x // TL.ID_STEP_M)) * 2
+        return (ids[k], ids[k + 1])
+
+    def dist(x, z):
+        return TL.decode_sd(sd[int(z // TL.SD_STEP_M) * sd_n
+                               + int(x // TL.SD_STEP_M)])
+
+    def top(x, z):
+        a, b = pair(x, z)
+        return a if a == b else (a if dist(x, z) >= 0 else b)
+
+    print("  (a) the medial axis of two boundaries — the photographed defect")
+    check("2.75 m from the west wall, 2.25 m from the kitchen: NO runner-up",
+          pair(92.75, 93.75), (2, 2))
+    check("…so the parquet stays parquet", top(92.75, 93.75), 2)
+    # RED. The distance is untouched by the collapse and still says −2.27 m: it
+    # is the point's own nearest boundary, the kitchen line, and wood is that
+    # pair's B. Under the old rule THAT number met the west wall's pair, whose
+    # B is grass — which is the whole defect in two lines.
+    check("red: the distance under it is still the kitchen line's, negative",
+          round(dist(92.75, 93.75), 4), -2.2677)
+    check("red: had the pair been the west wall's, that sign would draw GRASS",
+          (2, 0)[1], 0)
+
+    print("  (b) …while a real boundary is still cut to the metre")
+    check("both sides of the hall|kitchen line carry ONE pair",
+          [pair(92.25, 95.75), pair(92.25, 96.25)], [(1, 2), (1, 2)])
+    q = 1.0 / TL.SD_CODES_PER_M
+    check("…0.25 m into the hall the sign is negative: wood is that pair's B",
+          dist(92.25, 95.75), -4 * q, 1e-12)
+    check("…0.25 m into the kitchen it is positive: tiles is A",
+          dist(92.25, 96.25), 4 * q, 1e-12)
+    check("…and the reading flips exactly there",
+          [top(92.25, 95.75), top(92.25, 96.25)], [2, 1])
+    check("the hall's west wall is cut just as sharply",
+          [top(89.75, 93.25), top(90.25, 93.25)], [0, 2])
+
+    print("  (c) the invariant, swept over the whole tile")
+    # THE ACCEPTANCE TEST OF THE ROUND, and it is a sweep rather than a probe
+    # because the defect was a THIN, wandering set of texels that no handful of
+    # points would have caught. Two properties, at every sd texel centre of the
+    # 256 m tile:
+    #
+    #   1. A TEXEL NEVER NAMES A PAIR ITS OWN GROUND IS NOT PART OF. That is
+    #      what makes the sign mean anything at all.
+    #   2. THE READING IS THE LAW, everywhere except within half an sd texel of
+    #      a boundary — where the raster legitimately cannot say more (see [5]).
+    #      "Interior" is decided by the law alone: the same answer at the point
+    #      and 0.6 m to each of the eight sides.
+    stranger = 0
+    defects = 0
+    interior = 0
+    worst = None
+    for j in range(sd_n):
+        cz = j * TL.SD_STEP_M + TL.SD_STEP_M / 2
+        if not (86.0 < cz < 104.0):
+            continue
+        for i in range(sd_n):
+            cx = i * TL.SD_STEP_M + TL.SD_STEP_M / 2
+            if not (86.0 < cx < 106.0):
+                continue
+            a, b = pair(cx, cz)
+            own = model.layer_at(cx, cz)
+            if own not in (a, b):
+                stranger += 1
+            if not all(model.layer_at(cx + dx, cz + dz) == own
+                       for dx in (-0.6, 0.0, 0.6) for dz in (-0.6, 0.0, 0.6)):
+                continue
+            interior += 1
+            if top(cx, cz) != own:
+                defects += 1
+                if worst is None:
+                    worst = (cx, cz, a, b, round(dist(cx, cz), 3), own)
+    check("no texel of the house and its surroundings names a stranger's pair",
+          stranger, 0)
+    check(f"…and none of the {interior} interior texels draws the wrong ground",
+          (defects, worst), (0, None))
+
+
+
 def test_mask_and_scene_agree():
     print("\n[11] the bake and the scene payload use ONE polygon")
     from app.core.scene_recipe import compose_scene
@@ -523,13 +725,20 @@ def main():
     check("the band ends where the contract says",
           [round(TL.decode_sd(1), 6), round(TL.decode_sd(255), 6)], [-8.0, 8.0])
 
-    print("\n[4] the band, and what lies past it")
-    check("7.75 m out still names the pair and a negative distance",
-          [id_at(56.5, Z), round(sd_at(56.25, Z), 4)], [(2, 1), -7.748])
-    check("8.25 m out is past the band: the pair collapses and the code saturates",
+    print("\n[4] the band, the collapse, and what lies past both")
+    check("2.25 m out — the last metre that still names the pair",
+          [id_at(61.5, Z), round(sd_at(61.75, Z), 4)], [(2, 1), -2.2677])
+    check("one metre further the pair has COLLAPSED, the distance is untouched",
+          [id_at(60.5, Z), round(sd_at(60.75, Z), 4)], [(1, 1), -3.2756])
+    check("7.75 m out is the same statement, one metre before the band ends",
+          [id_at(56.5, Z), round(sd_at(56.25, Z), 4)], [(1, 1), -7.748])
+    check("8.25 m out is past the band: the code saturates as well",
           [id_at(55.5, Z), sd_at(55.75, Z)], [(1, 1), 8.0])
     check("…and deep inside a ground it is the same statement",
           [id_at(30.0, Z), sd_at(30.0, Z)], [(1, 1), 8.0])
+    check("the collapse band is the drawn transition plus the slack",
+          [TL.collapse_band_m(0.0), TL.collapse_band_m(1.5),
+           TL.collapse_band_m(8.0)], [1.0, 2.25, 5.5])
 
     print("\n[5] how far the raster may be from the true polygon")
     worst = 0.0
@@ -627,6 +836,7 @@ def main():
 
     test_location_floors()
     test_mask_and_scene_agree()
+    test_three_regions()
 
     print("\n[9] the RED counter-probes")
     # (a) THE CANONICAL ORDER. Pair the layers by "the one I am standing on"

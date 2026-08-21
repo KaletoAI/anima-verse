@@ -184,8 +184,8 @@ export function lcPushedSd(sd: number, blendM: number,
  * THE CUT, as one number: how much of layer A a fragment shows.
  *
  * `sd` is the signed distance in metres (+ inside A), `blendM` the layer's own
- * transition width and `fw` the size of one PIXEL in metres of `sd`
- * (`fwidth(sd)` in the shader).
+ * transition width and `fw` the size of one PIXEL in world metres
+ * (`max(length(dFdx(world)), length(dFdy(world)))` in the shader).
  *
  * Two cases, and the second is why this is not a plain `smoothstep`:
  *
@@ -199,6 +199,16 @@ export function lcPushedSd(sd: number, blendM: number,
  *    the two materials instead of shimmering. A bare `step()` would stair-step
  *    along every diagonal; a fixed-width smoothstep would blur the near edge
  *    and still alias the far one.
+ *
+ * `fw` IS THE PIXEL MEASURED IN WORLD METRES, and it is measured on the world
+ * position — never as `fwidth(sd)` (finding round 2026-08-21). A distance field
+ * has a gradient of one, so the two are the same number wherever the field is
+ * smooth; where it is not — across a texel whose neighbour names a different
+ * boundary, or at the rim of the loaded mask window — `fwidth` of the SAMPLED
+ * distance explodes, the "one pixel" becomes metres, and the cut turns into a
+ * 50/50 average of two grounds for that one quad. That is a patch of the wrong
+ * material that appears and disappears as the camera turns, which is exactly
+ * what it looked like. The world position is continuous by construction.
  */
 export function layerWeight(sd: number, blendM: number, fw: number): number {
   const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v)
@@ -486,19 +496,23 @@ float lcNoise( vec2 p ) {
 
 /** The cut: how much of layer A this fragment shows. See \`layerWeight\`.
  *
- *  BOTH BRANCHES ARE EVALUATED, and that is not laziness: \`fwidth\` is a
- *  derivative, and a derivative taken inside control flow that differs across
- *  a quad is undefined in GLSL ES. \`blendM\` comes out of a uniform array
- *  indexed by the LAYER, which differs across a quad on every boundary — which
- *  is exactly where the hard-cut branch would be taken. So the width is read
- *  unconditionally and the branch picks a finished number.
+ *  \`pixelM\` IS THE PIXEL IN WORLD METRES, handed in from the world position's
+ *  own derivatives — NOT \`fwidth( sd )\`. A distance field has a gradient of
+ *  one, so where the field is smooth the two are the same number; where it is
+ *  not — a texel whose neighbour names a different boundary, the rim of the
+ *  loaded window — the derivative of the SAMPLED distance explodes and the hard
+ *  cut collapses to a 50/50 average of two grounds for that quad. That is a
+ *  patch of the wrong material that comes and goes as the camera turns.
+ *
+ *  BOTH BRANCHES ARE STILL EVALUATED: \`blendM\` comes out of a uniform array
+ *  indexed by the LAYER, which differs across a quad on every boundary, so the
+ *  width is read unconditionally and the branch picks a finished number.
  *  The \`max\` inside the smoothstep only keeps its two edges apart when the
  *  width is 0; that result is discarded. */
-float lcWeight( float sd, float blendM ) {
-  float g = fwidth( sd );
+float lcWeight( float sd, float blendM, float pixelM ) {
   float b = max( blendM, 1e-4 );
   float soft = smoothstep( -0.5 * b, 0.5 * b, sd );
-  float hard = clamp( sd / max( g, 1e-6 ) + 0.5, 0.0, 1.0 );
+  float hard = clamp( sd / max( pixelM, 1e-6 ) + 0.5, 0.0, 1.0 );
   return blendM > 0.0 ? soft : hard;
 }
 
@@ -555,7 +569,11 @@ void lcCompose( inout vec4 albedo ) {
   // is capped at half the width so a hard cut stays on the metre it was drawn.
   float cap = min( ${LC_EDGE_NOISE_GLSL}, 0.5 * max( blendM, 0.0 ) );
   float sdN = sd + ( lcNoise( p / ${LC_EDGE_WAVE_GLSL} + vec2( 5.0, 23.0 ) ) * 2.0 - 1.0 ) * cap;
-  float w = lcWeight( sdN, blendM );
+  // ONE PIXEL, IN METRES OF GROUND — the anti-aliasing width of a hard cut,
+  // measured on the continuous world position instead of on the sampled
+  // distance (see \`lcWeight\`).
+  float pixelM = max( length( dpdx ), length( dpdy ) );
+  float w = lcWeight( sdN, blendM, pixelM );
   float wide = lcNoise( p / ${LC_MIX_M_GLSL} ) * ${LC_MIX_MAX_GLSL};
   vec3 col = a == b
     ? lcSurface( a, p, dpdx, dpdy, wide )
