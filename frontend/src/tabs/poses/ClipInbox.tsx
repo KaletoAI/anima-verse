@@ -94,6 +94,11 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const [loopOn, setLoopOn] = useState(false)
   const [loopS, setLoopS] = useState('1.5')
   const [inPlace, setInPlace] = useState(true)
+  /** partner offset for pairs whose halves are not in one world space —
+   *  packs say things like "set the male model to -0.3 on the forward axis" */
+  const [offFwd, setOffFwd] = useState('0')
+  const [offSide, setOffSide] = useState('0')
+  const [offUp, setOffUp] = useState('0')
   const [overwrite, setOverwrite] = useState(false)
   const [target, setTarget] = useState<Target>('licensed')
   const [redistributable, setRedistributable] = useState(false)
@@ -216,6 +221,7 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
         end_s: endS === '' ? null : Number(endS),
         loop_s: loopOn && !isPair ? Number(loopS) || 1 : null,
         in_place: inPlace && !isPair,
+        offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
         overwrite,
         target,
         redistributable: target === 'free' ? redistributable : false,
@@ -232,7 +238,7 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
     } finally {
       setImporting(false)
     }
-  }, [clipSet, endS, entry, importing, inPlace, isPair, kind, loadClips, loopOn, loopS,
+  }, [clipSet, endS, entry, importing, inPlace, isPair, kind, loadClips, loopOn, loopS, offFwd, offSide, offUp,
       overwrite, redistributable, restFile, second, startS, t, target, toast])
 
   if (loading) return <div className="ga-placeholder">{t('Loading…')}</div>
@@ -405,6 +411,23 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
                 onChange={(e) => setLoopS(e.target.value)} />
               <span>s</span>
             </label>
+
+            {isPair ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span className="ga-hint">
+                  {t('Partner (B) offset in metres — forward / side / up. Packs whose halves were not recorded in one space say so, e.g. "set the male model to -0.3 on the forward axis" → forward -0.3.')}
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {([['forward', offFwd, setOffFwd], ['side', offSide, setOffSide], ['up', offUp, setOffUp]] as const).map(([lbl, val, set]) => (
+                    <label key={lbl} style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                      <span className="ga-hint">{t(lbl)}</span>
+                      <input className="ga-input" type="number" step="0.05" value={val}
+                        onChange={(e) => set(e.target.value)} />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input type="checkbox" checked={inPlace && !isPair} disabled={isPair}

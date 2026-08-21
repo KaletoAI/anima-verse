@@ -15,6 +15,10 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
              cmu_clip; plus
              bone_map       name of the skeleton family ("unity-humanoid";
                             "auto" detects it from the node names)
+             offset_b_m     [side, up, forward] metres added to every joint of
+                            half B before the pair is framed — for packs whose
+                            halves are NOT in one world space ("set the male
+                            model to -0.3 on the forward axis": [0, 0, -0.3])
              source_name    free text for the sidecar (file names)
 
 How it works — positions, not rotations
@@ -371,9 +375,13 @@ def run(job):
     takes = []
     src_fps = None
     used = family
+    off = [float(v) for v in (args.get("offset_b_m") or (0, 0, 0))]
     for role, path in entries:
         sfps, (f0, f1), by_frame, used, rot_frame = _load_source(path, family)
         src_fps = src_fps or sfps
+        if role == "b" and any(off):
+            shift = Vector((off[0] * 100.0, off[1] * 100.0, off[2] * 100.0))
+            by_frame = [{k: v + shift for k, v in P.items()} for P in by_frame]
         takes.append(_build_take(role, fps, sfps, by_frame, mix_pos, mix_frames, args,
                                  rot_frame, rest))
     args["source_fps"] = src_fps
@@ -381,6 +389,7 @@ def run(job):
               "files": list(args.get("source_name") or [Path(p).name for _r, p in entries]),
               "fingers": any("LeftHandIndex1" in t.sk.bones for t in takes),
               "rotation_mode": "rest-delta" if rest else "positional",
+              "offset_b_m": off,
               "rest_file": Path(inputs["rest"]).name if inputs.get("rest") else ""}
     return cmu_clip.run_takes(takes, args, fps, source)
 

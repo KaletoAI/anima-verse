@@ -381,6 +381,8 @@ async def post_clips_inbox_import(request: Request,
             loop_s=_num("loop_s"),
             in_place=bool(body.get("in_place")),
             overwrite=bool(body.get("overwrite")),
+            offset_b_m=[float(v) for v in (body.get("offset_b_m") or [0, 0, 0])][:3]
+            if isinstance(body.get("offset_b_m"), list) else None,
             target=target, redistributable=redistributable)
     except fbx_import.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))

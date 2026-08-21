@@ -258,6 +258,7 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
                clip_set: str = "", start_s: float = 0.0,
                end_s: Optional[float] = None, loop_s: Optional[float] = None,
                in_place: bool = False, overwrite: bool = False,
+               offset_b_m: Optional[List[float]] = None,
                target: str = "licensed", redistributable: bool = False,
                out_dir: Optional[Path] = None, rig: Optional[Path] = None,
                fps: int = 30, timeout_s: int = 900) -> Dict[str, Any]:
@@ -329,6 +330,7 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
               "end_s": end_s, "anchor_s": None,
               "in_place": bool(in_place) and len(paths_in) == 1,
               "loop_s": loop_s if len(paths_in) == 1 else None,
+              "offset_b_m": [float(v) for v in (offset_b_m or (0, 0, 0))][:3],
               "bone_map": "auto", "source_name": names}
 
     st = runner.status()
