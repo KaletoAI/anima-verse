@@ -256,6 +256,87 @@
  *     patches that touch.
  *
  * ============================================================================
+ * [9] COVERAGE — the selected nodes tile every visible piece of ground
+ * ============================================================================
+ * [5] and [8] say which nodes are picked and that they meet without a crack.
+ * Neither says the picked set has no HOLE in it: selection also CULLS, against
+ * the camera frustum, and a node wrongly culled is not a seam but a window to
+ * the sky — the light blue of `engine.ts` (`0x9fc7e8`, background and fog are
+ * the same colour), flashing on and off as the camera turns. That is what this
+ * section measures, and it measures it over the WHOLE COMPASS, because a
+ * culling mistake is by nature a mistake about one direction.
+ *
+ * THE INVARIANT. For a camera anywhere, the union of the SELECTED squares must
+ * contain every ground point that is
+ *   inside the view frustum ∩ inside the world frame ∩ nearer than the haze
+ * (520 m, `engine.ts`). Not "roughly cover": every sample, every heading.
+ *
+ * WHY IT IS DECIDABLE AT ALL — the theorem the check is built on. Let the box
+ * of every node contain the ground drawn over its square. A visible point p
+ * lies in the box of the leaf that owns it and, since a child's square and its
+ * heights are a subset of its parent's, in the box of EVERY ancestor of that
+ * leaf. So no ancestor can fail the frustum test, the recursion walks all the
+ * way down the chain that owns p, and somewhere on that chain a node is
+ * selected. Coverage therefore fails if and ONLY if some node's box is too
+ * small — which is why `nodeBounds` is written as a bound and not as a
+ * measurement, and why it now lives outside the renderer where this file can
+ * reach the shipped rule instead of a copy of it.
+ *
+ * THE FIXTURE is the reported region: a 5 120 m world frame
+ * [−2560, 2560]² — negative-heavy, so every `Math.floor` on a negative
+ * coordinate really runs — 256 m tiles at a 2 m step, an honest `min`/`max`
+ * per tile off that very lattice, and a camera at (−1550, −760), the spot the
+ * finding was reported from. Three orbit settings (8 m / −15°, 25 m / −25°,
+ * 60 m / −35°) and 360 headings each, on the § A1.8 compass: yaw 0 looks
+ * south (+z), 90 east (+x), 180 north (−z), 270 west (−x).
+ *
+ * (z1) THE NEGATIVE TILE KEYS AND BOXES, by hand, because a truncation instead
+ *      of a floor is the classic way a renderer loses the western half of a
+ *      world:
+ *        (−1550, −760) at 256 m -> floor(−6.0546875), floor(−2.96875)
+ *                               -> tile (−7, −3), which spans
+ *                                  x ∈ [−1792, −1536), z ∈ [−768, −512)
+ *                                  — and truncation would say (−6, −2), the
+ *                                  tile one step east AND one south.
+ *        node (64, −128) of 64 m -> tx ∈ {0}, tz ∈ {−1}: exactly ONE tile, and
+ *                                  neither (0, 0) nor (−1, −1) leaks in.
+ *        node (−128, −128) of 256 m -> the four tiles around the origin.
+ *        node (−256, −512) of 256 m -> tile (−1, −2) alone: the `− 1e-6`
+ *                                  keeps the tile that STARTS on its east edge
+ *                                  out.
+ * (z2) THE SWEEP: 0 misses, at all 1 080 headings of the three settings, over
+ *      4 373 188 sampled ground points. The selection is not the hole.
+ * (z3) RED COUNTER-PROBE A — the hypothesis this check was written for: a box
+ *      whose `min`/`max` are SWAPPED for nodes reaching into negative z (an
+ *      inverted, empty box). Measured at 8 m / −15°: coverage fails at 306 of
+ *      360 headings and loses 589 172 of 2 072 836 sampled points, i.e. 28 %
+ *      of the visible ground. So the check WOULD see a sign error in the node
+ *      box; it does not see one in the real rule.
+ * (z4) RED COUNTER-PROBE B — the tile key by `Math.trunc` instead of
+ *      `Math.floor`, i.e. the stats of the wrong tile everywhere west or north
+ *      of the origin. Measured at 25 m / −25°: coverage fails over one broad
+ *      band, headings 84°…202°. Also seen, also absent from the real rule.
+ * (z5) STABILITY, the other half of a flicker: over 7 200 yaw steps of 0.05°
+ *      the selected SET changes by at most a handful of nodes, and those are
+ *      the ones entering or leaving at the edge of the screen. There is no
+ *      node that toggles in the middle of the view from one frame to the next,
+ *      so no hysteresis is owed.
+ * (z6) THE SELECTION IS MIRROR-SYMMETRIC. A camera at (777, −333) and one at
+ *      (−777, 333) over a symmetric frame select the same tree, node for node,
+ *      through the point mirror (x, z) -> (−x − size, −z − size). Nothing in
+ *      the quadtree, the ranges or λ knows a compass quadrant — λ reads a
+ *      scalar distance, and the patch indices it snaps by are 0…32 whatever
+ *      the node's own sign.
+ * (z7) THE NEAR WINDOW, on its NEGATIVE side. The shader switches between the
+ *      two pyramids on a RECTANGLE, which is only invisible where both answer
+ *      the same number. [3](h) shows that south of a positive-coordinate tile;
+ *      here it is shown on all four margin strips of the window around tile
+ *      (−7, −3): window [−1920, −896] … [−1408, −384] (the tile grown by a
+ *      128 m margin, `NEAR_MARGIN_CELLS` = 2 over a 64 m overview), where
+ *      `heightAt` is the overview and the near pyramid, sampled from it at
+ *      2 m, reproduces it exactly.
+ *
+ * ============================================================================
  * [7] THE ANALYTIC CLICK — `rayGroundHit`
  * ============================================================================
  * The ground under the pointer is solved against the FIELD, not raycast
@@ -393,7 +474,7 @@ function checkEq(label, actual, expected) {
 const { lod, height } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MORPH_START, MAX_PIXEL_ERROR,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
-  morphedVertex, lodLambda, lodVertex, terrainLodGlsl } = lod;
+  morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
 
 // ── [1] the constants ───────────────────────────────────────────────────────
@@ -748,6 +829,338 @@ checkBelow('…and the whole fine edge stays within 4 cm of the coarse one',
   seamWorst, 0.04);
 check('(y) RED: with one morph per node the same edge stood off by',
   seamRed, 3, 1e-12);
+
+// ── [9] coverage over the whole compass ─────────────────────────────────────
+console.log('\n[9] the selected nodes tile every visible piece of ground');
+
+// (z1) the negative side of the tile lattice, by hand
+const TILE_M = 256;
+const bx = (x, size) => [Math.floor(x / TILE_M), Math.floor((x + size - 1e-6) / TILE_M)];
+checkEq('(z1) the reported spot (-1550, -760) is tile (-7, -3)',
+  [Math.floor(-1550 / TILE_M), Math.floor(-760 / TILE_M)], [-7, -3]);
+checkEq('…and that tile spans x [-1792, -1536), z [-768, -512)',
+  [-7 * TILE_M, -6 * TILE_M, -3 * TILE_M, -2 * TILE_M], [-1792, -1536, -768, -512]);
+checkEq('…while Math.trunc would name the tile east AND south of it',
+  [Math.trunc(-1550 / TILE_M), Math.trunc(-760 / TILE_M)], [-6, -2]);
+checkEq('a 64 m node at (64, -128) covers tile (0, -1) alone',
+  [bx(64, 64), bx(-128, 64)], [[0, 0], [-1, -1]]);
+checkEq('a 256 m node at (-128, -128) covers the four tiles around the origin',
+  [bx(-128, 256), bx(-128, 256)], [[-1, 0], [-1, 0]]);
+checkEq('a 256 m node at (-256, -512) stops at its own tile',
+  [bx(-256, 256), bx(-512, 256)], [[-1, -1], [-2, -2]]);
+
+// The compass world — see the docstring. Negative-heavy on purpose.
+const CX0 = -2560;
+const CZ0 = -2560;
+const CX1 = 2560;
+const CZ1 = 2560;
+const LEAF_M = PATCH_N * BASE;                  // 64
+/** A rolling relief with two hills, deliberately NOT symmetric in x and z, so
+ *  a direction-blind bug cannot hide behind a symmetric field. */
+const CH = (x, z) => 9 * Math.sin(x / 197) * Math.cos(z / 151)
+  + 14 * Math.exp(-(((x + 900) ** 2 + (z + 200) ** 2) / (2 * 320 ** 2)))
+  + 22 * Math.exp(-(((x - 400) ** 2 + (z + 1400) ** 2) / (2 * 260 ** 2)));
+/** Honest per-tile statistics: the extremes of the tile's OWN 2 m lattice,
+ *  which is what the server ships and what the drawn surface stays inside. */
+const cStats = new Map();
+let gMin = 0;
+let gMax = 0;
+for (let tz = CZ0 / TILE_M; tz < CZ1 / TILE_M; tz += 1) {
+  for (let tx = CX0 / TILE_M; tx < CX1 / TILE_M; tx += 1) {
+    let mn = Infinity;
+    let mx = -Infinity;
+    for (let j = 0; j <= TILE_M / BASE; j += 1) {
+      for (let i = 0; i <= TILE_M / BASE; i += 1) {
+        const v = CH(tx * TILE_M + i * BASE, tz * TILE_M + j * BASE);
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+    }
+    cStats.set(`${tx},${tz}`, { min: mn, max: mx });
+    gMin = Math.min(gMin, mn);
+    gMax = Math.max(gMax, mx);
+  }
+}
+const cGlobal = { min: gMin, max: gMax };
+check('the compass world holds tiles', cStats.size, 20 * 20);
+
+// The frustum, written out — three's own `setFromProjectionMatrix` (Gribb &
+// Hartmann: the rows of the view-projection added to and subtracted from the
+// w row) and its `intersectsBox` (the box corner FARTHEST along each plane
+// normal). Reimplemented here for the same reason `tlodGrid` is: a check that
+// imported the renderer's matrices could only prove them equal to themselves.
+const FOV_DEG = 45;
+const ASPECT = 16 / 9;
+const NEAR_M = 0.2;
+const FAR_M = 800;
+const HAZE_M = 520;
+const PIXELS = 1080;
+const camPixelScale = PIXELS / (2 * Math.tan((FOV_DEG * Math.PI) / 360));
+/** The server's own example error bounds (§ 4 of the E1 addendum), so the
+ *  ranges the sweep runs against are the widened ones a real world produces. */
+const CERR = [0, 0.5862, 0.85, 1.0, 1.1636, 3.3132];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+                          a[0] * b[1] - a[1] * b[0]];
+const unit = (a) => { const l = Math.hypot(a[0], a[1], a[2]); return [a[0] / l, a[1] / l, a[2] / l]; };
+function mul4(a, b) {
+  const o = new Array(16).fill(0);
+  for (let r = 0; r < 4; r += 1) {
+    for (let c = 0; c < 4; c += 1) {
+      let s = 0;
+      for (let k = 0; k < 4; k += 1) s += a[r * 4 + k] * b[k * 4 + c];
+      o[r * 4 + c] = s;
+    }
+  }
+  return o;
+}
+function frustumPlanes(eye, fwd) {
+  const zA = [-fwd[0], -fwd[1], -fwd[2]];
+  const xA = unit(cross3([0, 1, 0], zA));
+  const yA = cross3(zA, xA);
+  const view = [xA[0], xA[1], xA[2], -dot3(xA, eye),
+                yA[0], yA[1], yA[2], -dot3(yA, eye),
+                zA[0], zA[1], zA[2], -dot3(zA, eye),
+                0, 0, 0, 1];
+  const f = 1 / Math.tan((FOV_DEG * Math.PI) / 360);
+  const proj = [f / ASPECT, 0, 0, 0,
+                0, f, 0, 0,
+                0, 0, (FAR_M + NEAR_M) / (NEAR_M - FAR_M), (2 * FAR_M * NEAR_M) / (NEAR_M - FAR_M),
+                0, 0, -1, 0];
+  const m = mul4(proj, view);
+  const row = (r) => [m[r * 4], m[r * 4 + 1], m[r * 4 + 2], m[r * 4 + 3]];
+  const [m0, m1, m2, m3] = [row(0), row(1), row(2), row(3)];
+  const add = (a, b, s) => [a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2], a[3] + s * b[3]];
+  return [add(m3, m0, 1), add(m3, m0, -1), add(m3, m1, 1), add(m3, m1, -1),
+          add(m3, m2, 1), add(m3, m2, -1)]
+    .map((p) => { const l = Math.hypot(p[0], p[1], p[2]);
+                  return [p[0] / l, p[1] / l, p[2] / l, p[3] / l]; });
+}
+const boxSeen = (ps, x0, y0, z0, x1, y1, z1) => ps.every((p) =>
+  p[0] * (p[0] > 0 ? x1 : x0) + p[1] * (p[1] > 0 ? y1 : y0)
+  + p[2] * (p[2] > 0 ? z1 : z0) + p[3] >= 0);
+const pointSeen = (ps, x, y, z) => ps.every((p) => p[0] * x + p[1] * y + p[2] * z + p[3] >= 0);
+
+/** Where the eye stands for a heading: the orbit camera sits `dist` behind and
+ *  above the point it looks at, exactly the arrangement `engine.ts` builds. */
+function eyeFor(atX, atZ, yawDeg, pitchDeg, dist) {
+  const a = (yawDeg * Math.PI) / 180;
+  const pr = (pitchDeg * Math.PI) / 180;
+  const fwd = [Math.sin(a) * Math.cos(pr), Math.sin(pr), Math.cos(a) * Math.cos(pr)];
+  const ty = CH(atX, atZ) + 1.6;
+  return { fwd, eye: [atX - fwd[0] * dist, ty - fwd[1] * dist, atZ - fwd[2] * dist] };
+}
+/**
+ * One heading: select, then walk a polar fan of ground points and count the
+ * VISIBLE ones no selected square owns.
+ *
+ * The fan is ±40° about the view axis (the horizontal half-angle of a 45°/16:9
+ * frustum is atan(tan 22.5° · 16/9) = 36.4°, so it reaches past both edges)
+ * and its rings grow geometrically, which puts samples where the nodes are
+ * small as well as where they are large.
+ */
+function coverageAt(boundsFn, atX, atZ, yawDeg, pitchDeg, dist) {
+  const { fwd, eye } = eyeFor(atX, atZ, yawDeg, pitchDeg, dist);
+  const ps = frustumPlanes(eye, fwd);
+  const picked = selectLodNodes({
+    x0: CX0, z0: CZ0, x1: CX1, z1: CZ1,
+    leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+    camX: eye[0], camY: eye[1], camZ: eye[2],
+    boundsOf: boundsFn, levelErrorM: CERR, pixelScale: camPixelScale,
+    inView: (x, z, s, mnY, mxY) => boxSeen(ps, x, mnY, z, x + s, mxY, z + s),
+  });
+  const a = (yawDeg * Math.PI) / 180;
+  const flat = Math.cos((pitchDeg * Math.PI) / 180);
+  let miss = 0;
+  let tested = 0;
+  for (let r = 4; r <= HAZE_M; r *= 1.06) {
+    for (let da = -40; da <= 40; da += 1) {
+      const b = a + (da * Math.PI) / 180;
+      const px = eye[0] + Math.sin(b) * r * flat;
+      const pz = eye[2] + Math.cos(b) * r * flat;
+      if (px < CX0 || px > CX1 || pz < CZ0 || pz > CZ1) continue;
+      const py = CH(px, pz);
+      if (!pointSeen(ps, px, py, pz)) continue;
+      tested += 1;
+      let owned = false;
+      for (const n of picked) {
+        if (px >= n.x && px <= n.x + n.size && pz >= n.z && pz <= n.z + n.size) {
+          owned = true;
+          break;
+        }
+      }
+      if (!owned) miss += 1;
+    }
+  }
+  return { miss, tested, nodes: picked.length };
+}
+/** The whole compass for one orbit setting: total misses, total samples, and
+ *  the headings that failed, as ranges. */
+function sweepCompass(boundsFn, atX, atZ, pitchDeg, dist) {
+  let miss = 0;
+  let tested = 0;
+  const bad = [];
+  for (let yaw = 0; yaw < 360; yaw += 1) {
+    const r = coverageAt(boundsFn, atX, atZ, yaw, pitchDeg, dist);
+    miss += r.miss;
+    tested += r.tested;
+    if (r.miss) bad.push(yaw);
+  }
+  const ranges = [];
+  for (const y of bad) {
+    const last = ranges[ranges.length - 1];
+    if (last && y === last[1] + 1) last[1] = y;
+    else ranges.push([y, y]);
+  }
+  return { miss, tested, headings: bad.length,
+           ranges: ranges.map((r) => (r[0] === r[1] ? `${r[0]}` : `${r[0]}-${r[1]}`)).join(', ') };
+}
+const REPORTED_X = -1550;
+const REPORTED_Z = -760;
+const ORBITS = [[8, -15], [25, -25], [60, -35]];
+const honest = (x, z, size) => nodeBounds(cStats, TILE_M, cGlobal, x, z, size);
+let sweptSamples = 0;
+for (const [dist, pitch] of ORBITS) {
+  const r = sweepCompass(honest, REPORTED_X, REPORTED_Z, pitch, dist);
+  sweptSamples += r.tested;
+  check(`(z2) 360 headings at ${dist} m / ${pitch}°: visible ground with no node`
+    + ` (of ${r.tested} samples)`, r.miss, 0);
+  check('…failing headings', r.headings, 0);
+}
+checkAbove('(z2) ground points sampled over the whole compass', sweptSamples, 2.5e6);
+// (z3) RED A — the very hypothesis: a sign mix-up in the box for negative z.
+const redSwapZ = (x, z, size) => {
+  const b = honest(x, z, size);
+  return z < 0 ? { min: b.max, max: b.min } : b;
+};
+const redA = sweepCompass(redSwapZ, REPORTED_X, REPORTED_Z, -15, 8);
+checkAbove('(z3) RED A: an inverted box for z < 0 loses ground at headings',
+  redA.headings, 200);
+checkAbove('…and loses this many sampled points', redA.miss, 5e5);
+console.log(`       (RED A fails at headings ${redA.ranges})`);
+// (z4) RED B — the tile key by truncation instead of floor.
+const redTrunc = (x, z, size) => {
+  const tx0 = Math.trunc(x / TILE_M);
+  const tx1 = Math.trunc((x + size - 1e-6) / TILE_M);
+  const tz0 = Math.trunc(z / TILE_M);
+  const tz1 = Math.trunc((z + size - 1e-6) / TILE_M);
+  const covered = (tx1 - tx0 + 1) * (tz1 - tz0 + 1);
+  if (covered > 64) return cGlobal;
+  let min = Infinity;
+  let max = -Infinity;
+  let seen = 0;
+  for (let tz = tz0; tz <= tz1; tz += 1) {
+    for (let tx = tx0; tx <= tx1; tx += 1) {
+      const s = cStats.get(`${tx},${tz}`);
+      if (!s) continue;
+      seen += 1;
+      min = Math.min(min, s.min);
+      max = Math.max(max, s.max);
+    }
+  }
+  if (!seen) return cGlobal;
+  if (seen < covered) { min = Math.min(min, 0); max = Math.max(max, 0); }
+  return { min, max };
+};
+const redB = sweepCompass(redTrunc, REPORTED_X, REPORTED_Z, -25, 25);
+checkAbove('(z4) RED B: the tile key by trunc loses ground at headings',
+  redB.headings, 50);
+console.log(`       (RED B fails at headings ${redB.ranges})`);
+
+// (z5) stability — the other half of a flicker
+for (const [dist, pitch] of [[8, -15], [25, -25]]) {
+  let worst = 0;
+  let prev = null;
+  for (let yaw = 0; yaw < 360; yaw += 0.05) {
+    const { fwd, eye } = eyeFor(REPORTED_X, REPORTED_Z, yaw, pitch, dist);
+    const ps = frustumPlanes(eye, fwd);
+    const picked = selectLodNodes({
+      x0: CX0, z0: CZ0, x1: CX1, z1: CZ1,
+      leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+      camX: eye[0], camY: eye[1], camZ: eye[2],
+      boundsOf: honest, levelErrorM: CERR, pixelScale: camPixelScale,
+      inView: (x, z, s, mnY, mxY) => boxSeen(ps, x, mnY, z, x + s, mxY, z + s),
+    });
+    const set = new Set(picked.map((n) => `${n.level}:${n.x},${n.z}`));
+    if (prev) {
+      let diff = 0;
+      for (const k of set) if (!prev.has(k)) diff += 1;
+      for (const k of prev) if (!set.has(k)) diff += 1;
+      if (diff > worst) worst = diff;
+    }
+    prev = set;
+  }
+  checkBelow(`(z5) worst node churn per 0.05° of yaw at ${dist} m / ${pitch}°`,
+    worst, 8);
+}
+
+// (z6) the selection knows no quadrant
+const MIRROR_EXTENT = [-2048, -2048, 2048, 2048];
+const flatBounds = () => ({ min: 0, max: 6 });
+function selectAt(cx, cz) {
+  return selectLodNodes({
+    x0: MIRROR_EXTENT[0], z0: MIRROR_EXTENT[1], x1: MIRROR_EXTENT[2], z1: MIRROR_EXTENT[3],
+    leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+    camX: cx, camY: 12, camZ: cz, boundsOf: flatBounds,
+  });
+}
+const eastNorth = selectAt(777, -333);
+const westSouth = selectAt(-777, 333);
+checkAbove('(z6) the mirrored selections have nodes', eastNorth.length, 20);
+const mirrored = eastNorth.map((n) => `${n.level}:${-n.x - n.size},${-n.z - n.size}`).sort().join('|');
+checkEq('…and are the same tree through (x, z) -> (-x - size, -z - size)',
+  mirrored === westSouth.map((n) => `${n.level}:${n.x},${n.z}`).sort().join('|'), true);
+
+// (z7) the near window on its negative side — the pyramid switch is invisible
+// on all four margin strips, not only the one [3](h) walks.
+const NEG_TILE_N = 129;                 // 129 points at 2 m = one 256 m tile
+const NEG_TILE = {
+  origin_x: -1792, origin_z: -768, step_m: BASE, rows: NEG_TILE_N, cols: NEG_TILE_N,
+  heights: Array.from({ length: NEG_TILE_N }, (_, j) =>
+    Array.from({ length: NEG_TILE_N }, (_, i) => CH(-1792 + BASE * i, -768 + BASE * j))),
+};
+const NEG_OV_N = 81;                    // 81 points at 64 m over [-2560, 2560]
+const NEG_OVERVIEW = {
+  origin_x: CX0, origin_z: CZ0, step_m: 64, rows: NEG_OV_N, cols: NEG_OV_N,
+  heights: Array.from({ length: NEG_OV_N }, (_, j) =>
+    Array.from({ length: NEG_OV_N }, (_, i) => CH(CX0 + 64 * i, CZ0 + 64 * j))),
+};
+const NEG_COMPOSITE = { tileM: TILE_M, overview: NEG_OVERVIEW,
+                        tiles: new Map([['-7,-3', NEG_TILE]]) };
+check('the loaded tile really answers inside itself',
+  heightAt(NEG_COMPOSITE, -1700, -700) - sampleWorldHeight(NEG_TILE, -1700, -700), 0);
+// The window: the tile grown by max(16, 2 · 64) = 128 m, on the 2 m lattice.
+const NEG_X0 = -1792 - 128;
+const NEG_Z0 = -768 - 128;
+const NEG_COLS = Math.floor((-1536 + 128 - NEG_X0) / BASE) + 1;
+const NEG_ROWS = Math.floor((-512 + 128 - NEG_Z0) / BASE) + 1;
+checkEq('the near window around tile (-7, -3)',
+  [NEG_X0, NEG_Z0, NEG_COLS, NEG_ROWS], [-1920, -896, 257, 257]);
+checkEq('…so its rectangle is',
+  [NEG_X0, NEG_Z0, NEG_X0 + (NEG_COLS - 1) * BASE, NEG_Z0 + (NEG_ROWS - 1) * BASE],
+  [-1920, -896, -1408, -384]);
+const negNear = buildPyramid((x, z) => heightAt(NEG_COMPOSITE, x, z),
+                             NEG_X0, NEG_Z0, BASE, NEG_COLS, NEG_ROWS, MAX_LOD_LEVELS);
+const negFar = buildPyramid((x, z) => sampleWorldHeight(NEG_OVERVIEW, x, z),
+                            CX0, CZ0, 64, NEG_OV_N, NEG_OV_N, MAX_LOD_LEVELS);
+const STRIPS = [
+  ['west', [-1920, -1794], [-896, -384]],
+  ['east', [-1534, -1408], [-896, -384]],
+  ['north', [-1920, -1408], [-896, -770]],
+  ['south', [-1920, -1408], [-510, -384]],
+];
+for (const [name, [sx0, sx1], [sz0, sz1]] of STRIPS) {
+  let worstStrip = 0;
+  let n = 0;
+  for (let z = sz0; z <= sz1; z += 2) {
+    for (let x = sx0; x <= sx1; x += 2) {
+      worstStrip = Math.max(worstStrip,
+        Math.abs(pyramidHeight(negNear, x, z, 0) - pyramidHeight(negFar, x, z, 0)));
+      n += 1;
+    }
+  }
+  check(`(z7) near == far in the ${name} margin strip (${n} samples)`, worstStrip, 0, 1e-4);
+}
 
 // ── [7] the analytic click ──────────────────────────────────────────────────
 console.log('\n[7] the click is solved against the field, not raycast');

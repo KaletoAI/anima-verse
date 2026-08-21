@@ -398,6 +398,76 @@ export function lodRanges(minLodDistance: number, levels: number,
   return out;
 }
 
+/** What `nodeBounds` needs of one tile's statistics — the height span, and
+ *  nothing else. Structural on purpose, so the check can hand in plain
+ *  objects. */
+export interface NodeStatSpan {
+  min: number;
+  max: number;
+}
+
+/** How many tiles a node's box may be unioned over before the whole field's
+ *  range is taken instead. A root node of 2 048 m over 256 m tiles covers
+ *  exactly 64, so the shortcut never fires for a node the quadtree really has
+ *  — it is the guard for a world whose `tile_m` is small. */
+const STAT_TILE_SCAN_MAX = 64;
+
+/**
+ * The vertical box of a node, from the tile statistics where there are any —
+ * `{ min, max }` in metres.
+ *
+ * A node covering several tiles takes the UNION; a node the statistics say
+ * nothing about takes the whole field's range, which culls nothing and is
+ * never wrong.
+ *
+ * WHY IT IS A BOUND AND NOT A MEASUREMENT, and why that is the whole point.
+ * The box is what the frustum test culls against, so the ONE thing it must
+ * never do is be too small: a node whose drawn ground reaches above or below
+ * its box can be culled while it is on screen, and a patch culled on
+ * alternating frames is a hole to the sky. It IS a bound, twice over — a tile's
+ * `min`/`max` are read off its own 2 m raster, the drawn surface inside that
+ * tile is the bilinear of the very same numbers (and every coarser mip is a
+ * SUBSET of them, `buildPyramid`), so no vertex can leave the span. The proof
+ * that this suffices is `smoke_terrain_lod.mjs` [9]: with a box per node that
+ * contains its ground, no visible ground point can be missed at any heading.
+ *
+ * EXTRACTED FROM THE RENDERER so that proof measures the shipped rule rather
+ * than a copy of it (2026-08-21) — a coverage check that reimplemented the
+ * lookup would only prove the reimplementation right.
+ */
+export function nodeBounds(stats: ReadonlyMap<string, NodeStatSpan> | null | undefined,
+                           tileM: number,
+                           globalRange: NodeStatSpan,
+                           x: number, z: number, size: number): NodeStatSpan {
+  if (!stats?.size || !(tileM > 0)) return globalRange;
+  let min = Infinity;
+  let max = -Infinity;
+  // `Math.floor` and never `Math.trunc`: the world reaches west and north of
+  // the origin, and truncation would file every node at x < 0 or z < 0 under
+  // the tile one step east/south of the one it really covers.
+  const tx0 = Math.floor(x / tileM);
+  const tx1 = Math.floor((x + size - 1e-6) / tileM);
+  const tz0 = Math.floor(z / tileM);
+  const tz1 = Math.floor((z + size - 1e-6) / tileM);
+  const covered = (tx1 - tx0 + 1) * (tz1 - tz0 + 1);
+  if (covered > STAT_TILE_SCAN_MAX) return globalRange;
+  let seen = 0;
+  for (let tz = tz0; tz <= tz1; tz += 1) {
+    for (let tx = tx0; tx <= tx1; tx += 1) {
+      const s = stats.get(`${tx},${tz}`);
+      if (!s) continue;
+      seen += 1;
+      if (s.min < min) min = s.min;
+      if (s.max > max) max = s.max;
+    }
+  }
+  // A node that reaches past the indexed tiles reaches over flat ground
+  // (an unindexed tile IS the flat world), so 0 belongs in its box.
+  if (!seen) return globalRange;
+  if (seen < covered) { min = Math.min(min, 0); max = Math.max(max, 0); }
+  return { min, max };
+}
+
 /** Distance from a point to an axis-aligned box, metres — 0 inside it. */
 function boxDistance(px: number, py: number, pz: number,
                      x0: number, y0: number, z0: number,
@@ -1079,37 +1149,11 @@ export function createTerrainLod(): TerrainLod {
     else uNearRect.value.set(0, 0, -1, -1);
   }
 
-  /** The vertical box of a node, from the tile statistics where there are any.
-   *  A node covering several tiles takes the union; a node the statistics say
-   *  nothing about takes the whole field's range, which culls nothing and is
-   *  never wrong. */
+  /** The vertical box of a node — `nodeBounds` on what this renderer holds.
+   *  The rule itself is up there, exported, so the coverage check of § B5a
+   *  measures the shipped one. */
   function boundsOf(x: number, z: number, size: number): { min: number; max: number } {
-    const stats = relief?.stats;
-    const tileM = relief?.tileM ?? 0;
-    if (!stats?.size || !(tileM > 0)) return globalRange;
-    let min = Infinity;
-    let max = -Infinity;
-    const tx0 = Math.floor(x / tileM);
-    const tx1 = Math.floor((x + size - 1e-6) / tileM);
-    const tz0 = Math.floor(z / tileM);
-    const tz1 = Math.floor((z + size - 1e-6) / tileM);
-    if ((tx1 - tx0 + 1) * (tz1 - tz0 + 1) > 64) return globalRange;
-    let seen = 0;
-    for (let tz = tz0; tz <= tz1; tz += 1) {
-      for (let tx = tx0; tx <= tx1; tx += 1) {
-        const s = stats.get(`${tx},${tz}`);
-        if (!s) continue;
-        seen += 1;
-        if (s.min < min) min = s.min;
-        if (s.max > max) max = s.max;
-      }
-    }
-    // A node that reaches past the indexed tiles reaches over flat ground
-    // (an unindexed tile IS the flat world), so 0 belongs in its box.
-    const covered = (tx1 - tx0 + 1) * (tz1 - tz0 + 1);
-    if (!seen) return globalRange;
-    if (seen < covered) { min = Math.min(min, 0); max = Math.max(max, 0); }
-    return { min, max };
+    return nodeBounds(relief?.stats, relief?.tileM ?? 0, globalRange, x, z, size);
   }
 
   /**
