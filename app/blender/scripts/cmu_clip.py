@@ -222,8 +222,9 @@ def _frame_takes(takes, args):
     }
 
 
-FLOOR_BONES = ("LeftFoot", "RightFoot", "LeftToeBase", "RightToeBase",
-               "LeftToe_End", "RightToe_End")
+# The floor is the lowest point of the WHOLE body, not of the feet: a lying
+# or kneeling take has its head, hands or knees below the soles.
+FLOOR_BONES = tuple(BONE_MAP) + ("LeftToe_End", "RightToe_End")
 
 
 def _solve(arm, take: _Take):
@@ -255,6 +256,17 @@ def _solve(arm, take: _Take):
         else:
             align[b.name] = (cmu_name, _rot_between(mix_dir, cmu_dir))
 
+    # Standing leg length of BOTH skeletons from their rest geometry (hips
+    # joint to ankle, vertical): the hips translation is scaled by the ratio.
+    # Measured on the rest, never on the take — a take that only sits or
+    # kneels has no standing frame to measure on (first version did that and
+    # put a sitter's hips at 0.95 m).
+    # Bone LENGTHS along the chain on both sides (CMU's rest splays the legs,
+    # so a vertical projection would understate the actor's leg).
+    _chain = [bones[PREFIX + n].head_local for n in ("Hips", "LeftUpLeg", "LeftLeg", "LeftFoot")]
+    rig_leg = sum((_chain[i + 1] - _chain[i]).length for i in range(3))
+    act_leg = sum(take.sk.bones[n].length for n in ("lhipjoint", "lfemur", "ltibia")) * take.sk.unit_cm
+    leg_ratio = rig_leg / act_leg if act_leg > 1 else 1.0
     frames = []
     lowest_per_frame = []
     for pose in take.poses:
@@ -285,7 +297,7 @@ def _solve(arm, take: _Take):
                 frame_low = min(frame_low, M.translation.y)
         frames.append(P)
         lowest_per_frame.append(frame_low)
-    return [b.name for b in seen], rest, frames, lowest_per_frame
+    return [b.name for b in seen], rest, frames, lowest_per_frame, leg_ratio
 
 
 def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
@@ -298,7 +310,7 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
     the rig's longer legs dangling in the air), the whole take is shifted by
     ``offset`` (x, z) cm (the pair's contact fit) and lifted by ``-floor_cm``
     so the planted foot touches y = 0."""
-    seen, rest, frames, _ = solved
+    seen, rest, frames, _low = solved
     action = bpy.data.actions.new(name=f"Armature|{take.role or 'solo'}")
     arm.animation_data_create()
     arm.animation_data.action = action
@@ -446,20 +458,12 @@ def run(job):
         arm = _load_rig(args["rig"])
         solved.append(_solve(arm, take))
     hips_name = PREFIX + "Hips"
-    # LEG RATIO per take: the rig's standing hip height over the actor's,
-    # both measured as "hips above the lowest foot point", median over the
-    # take. The hips translation is multiplied by it, so a deep knee bend
+    # LEG RATIO per take (from the rest geometry, see _solve): the rig's leg
+    # over the actor's. The hips translation is multiplied by it, so a deep knee bend
     # lowers the rig as far as it lowered the actor (salsa finding: the rig,
     # legs ~9 % longer, kept its hips at 0.59 m where the actor dipped to
     # 0.45 m — and its feet came off the floor, "sitting in the air").
-    scales = []
-    for take, (_n, _r, frames, lows_t) in zip(takes, solved):
-        rig = sorted(P[hips_name].translation.y - low for P, low in zip(frames, lows_t)
-                     if math.isfinite(low))
-        act = sorted(pose.pos["root"][1] - _cmu.lowest_point_cm(take.sk, pose)
-                     for pose in take.poses)
-        k = (rig[len(rig) // 2] / act[len(act) // 2]) if rig and act and act[len(act) // 2] > 1 else 1.0
-        scales.append(k)
+    scales = [sol[4] for sol in solved]
     geometry["hips_scale"] = [round(k, 4) for k in scales]
     # CONTACT FIT (pair): at the anchor frame the two closest hands of the
     # ACTORS are this far apart; the rig's arms are not the actors', so the
@@ -513,7 +517,7 @@ def run(job):
     # is the planted foot's height; the absolute minimum would be a single
     # toe-off dip and leave the standing foot hovering (8-9 cm, handshake).
     lows = sorted(low + P[hips_name].translation.y * (k - 1.0)
-                  for (_n, _r, frames, lows_t), k in zip(solved, scales)
+                  for (_n, _r, frames, lows_t, _k), k in zip(solved, scales)
                   for P, low in zip(frames, lows_t) if math.isfinite(low))
     floor_cm = lows[len(lows) // 2] if lows else 0.0
     geometry["rig_floor_shift_cm"] = round(-floor_cm, 2)
@@ -522,7 +526,7 @@ def run(job):
         arm = _load_rig(args["rig"])
         # The solve ran on an earlier load of the rig (gone with the scene
         # reset) — bones are carried by NAME and re-resolved here.
-        seen, rest, frames, low = sol
+        seen, rest, frames, low, _ratio = sol
         seen = [arm.data.bones[n] for n in seen]
         _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off)
         stem = f"{kind}__{take.role}" if take.role else kind

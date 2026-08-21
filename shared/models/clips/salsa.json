@@ -36,8 +36,8 @@
    }
   },
   "hips_scale": [
-   1.1825,
-   1.2788
+   1.1444,
+   1.232
   ],
   "contact": {
    "hands": [
@@ -48,8 +48,8 @@
    "rig_distance_m": 0.14,
    "shift_m": 0.039
   },
-  "rig_floor_shift_cm": -13.68,
-  "rig_floor_min_cm": -16.78
+  "rig_floor_shift_cm": -9.66,
+  "rig_floor_min_cm": -14.72
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",

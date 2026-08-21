@@ -1,23 +1,23 @@
 {
- "kind": "dance",
+ "kind": "walk-cmu",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 545,
- "duration_s": 18.167,
+ "frames": 86,
+ "duration_s": 2.867,
  "geometry": {
-  "floor_shift_cm": 2.27,
+  "floor_shift_cm": 0.31,
   "in_place": true,
   "hips_scale": [
-   1.1014
+   1.1135
   ],
-  "rig_floor_shift_cm": 0.73,
-  "rig_floor_min_cm": -7.62
+  "rig_floor_shift_cm": -1.19,
+  "rig_floor_min_cm": -5.48
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "55_02"
+   "02_01"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }

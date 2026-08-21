@@ -1,23 +1,23 @@
 {
- "kind": "dance",
+ "kind": "victory-cmu",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 545,
- "duration_s": 18.167,
+ "frames": 205,
+ "duration_s": 6.833,
  "geometry": {
-  "floor_shift_cm": 2.27,
+  "floor_shift_cm": -6.62,
   "in_place": true,
   "hips_scale": [
-   1.1014
+   1.1042
   ],
-  "rig_floor_shift_cm": 0.73,
-  "rig_floor_min_cm": -7.62
+  "rig_floor_shift_cm": 1.19,
+  "rig_floor_min_cm": -1.85
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "55_02"
+   "79_69"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }

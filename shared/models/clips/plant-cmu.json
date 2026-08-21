@@ -1,23 +1,23 @@
 {
- "kind": "dance",
+ "kind": "plant-cmu",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 545,
- "duration_s": 18.167,
+ "frames": 505,
+ "duration_s": 16.833,
  "geometry": {
-  "floor_shift_cm": 2.27,
+  "floor_shift_cm": -3.59,
   "in_place": true,
   "hips_scale": [
-   1.1014
+   1.1568
   ],
-  "rig_floor_shift_cm": 0.73,
-  "rig_floor_min_cm": -7.62
+  "rig_floor_shift_cm": -0.93,
+  "rig_floor_min_cm": -2.86
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "55_02"
+   "80_20"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }
