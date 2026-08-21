@@ -30,6 +30,21 @@
  * 6.2-pixel hairline of sky at 127 m that reopened somewhere else every frame
  * the camera moved. See `lodLambda`.
  *
+ * THE SHADING NORMAL BELONGS TO THE FRAGMENT, NOT TO THE VERTEX (finding round
+ * 2026-08-21, second half). It used to be built in the VERTEX shader from
+ * central differences over the vertex's own morph pair — spans of
+ * `nodeStep·2^k` and twice that, blended by the same `f` — and every one of
+ * those three numbers is a function of the CAMERA DISTANCE. So the normal of a
+ * fixed piece of ground swung by up to 16–17° while nothing but the camera
+ * moved, and with a low sun (18:00, elevation 5.6°) 8.6 % of the ground crossed
+ * the `max(N·L, 0)` terminator from that alone: ground that lost its sun shows
+ * hemisphere sky plus fill and turns light blue — the whole-ground shimmer that
+ * was reported, bound to the sun's azimuth sector. `tlodNormalAt` takes the
+ * normal per FRAGMENT from the interpolated world position at ONE fixed metre
+ * span (`uTlodNormalSpan`, the base lattice step), so it is a pure function of
+ * (x, z) and cannot know
+ * where the camera is. See `terrainLodNormalGlsl`.
+ *
  * THE PYRAMIDS ARE CLIENT-SIDE and are pure DECIMATION — every coarse level
  * takes every second support point of the one below it. That is exact rather
  * than an approximation because the server's height is one pure function
@@ -670,9 +685,9 @@ export function terrainLodGlsl(): string {
   return `${terrainLodSampleGlsl()}
 uniform float uTlodRange[ ${MAX_LOD_LEVELS} ];
 attribute vec4 iNode;
+varying vec2 vTlodXZ;
 
 vec3 tlodWorld;
-vec3 tlodNormal;
 
 float tlodLambda( float d ) {
   float lam = 0.0;
@@ -710,17 +725,64 @@ void tlodCompute() {
   float e2 = nodeStep * m2;
   float h = mix( tlodHeight( p, e1 ), tlodHeight( p, e2 ), f );
   tlodWorld = vec3( p.x, h, p.y );
-  // The normal is the central difference of the SAME two levels, blended by the
-  // same f. It is shading and not geometry, but an unblended one jumped a whole
-  // level the instant a patch crossed a ring — a 64 m square of ground changing
-  // brightness in one frame, with the camera the only thing that moved.
-  float hx1 = tlodHeight( p + vec2( e1, 0.0 ), e1 ) - tlodHeight( p - vec2( e1, 0.0 ), e1 );
-  float hz1 = tlodHeight( p + vec2( 0.0, e1 ), e1 ) - tlodHeight( p - vec2( 0.0, e1 ), e1 );
-  float hx2 = tlodHeight( p + vec2( e2, 0.0 ), e2 ) - tlodHeight( p - vec2( e2, 0.0 ), e2 );
-  float hz2 = tlodHeight( p + vec2( 0.0, e2 ), e2 ) - tlodHeight( p - vec2( 0.0, e2 ), e2 );
-  vec3 n1 = normalize( vec3( -hx1, 2.0 * e1, -hz1 ) );
-  vec3 n2 = normalize( vec3( -hx2, 2.0 * e2, -hz2 ) );
-  tlodNormal = normalize( mix( n1, n2, f ) );
+  // The one thing the fragment stage needs of this: WHERE the point is. The
+  // shading normal is taken there, from this position alone (tlodNormalAt) —
+  // the vertex used to blend the normal out of its own morph pair, and every
+  // number in that pair is a function of the camera distance.
+  vTlodXZ = p;
+}
+`;
+}
+
+/**
+ * THE SHADING NORMAL, as the GLSL that rides on `terrainLodSampleGlsl()` — the
+ * FRAGMENT half, and the whole of the fix of 2026-08-21.
+ *
+ * n(x, z) = normalize( −(h(x+s, z) − h(x−s, z)), 2s, −(h(x, z+s) − h(x, z−s)) )
+ *
+ * with s = `uTlodNormalSpan` metres and h the FINEST level of the pyramids
+ * (`tlodHeight(q, 0.0)`, the very surface `heightAt` answers and the server
+ * judges walks by). Read what it does NOT contain: no node step, no LOD level,
+ * no morph fraction, no camera. The normal of a piece of ground is a pure
+ * function of that ground, so the camera cannot change it — which is the
+ * property, not a side effect. The vertex-side predecessor differenced the
+ * vertex's morph pair (`nodeStep·2^k` and twice it, blended by `f = frac(λ)`,
+ * λ the vertex's distance to the CAMERA) and swung by 16–17° on levels 0/1 from
+ * camera motion alone.
+ *
+ * WHY s IS THE BASE LATTICE STEP (2 m in the live world, `setField`). The height
+ * field IS bilinear over that lattice, so it carries no detail below it:
+ *  - a SHORTER span reads the bilinear derivative inside one cell — constant
+ *    across the cell and discontinuous at every cell edge, i.e. a 2 m facet
+ *    grid drawn over the whole world;
+ *  - the span s = one lattice step is the central difference AT a lattice
+ *    point, the mean of the two adjacent cell slopes, and is continuous in
+ *    (x, z) everywhere;
+ *  - a LONGER span (4 m, 8 m) smooths away relief the geometry still draws at
+ *    2 m, so a hill would be shaded flatter than its own silhouette.
+ *
+ * NO FOOTPRINT BLEND, deliberately, and the arithmetic says why. One pixel of
+ * the 45° / 1 080 px view spans 2·tan(22.5°)/1080 = 7.667e-4 rad; at distance d
+ * that is d·7.667e-4 m across the view and, at the flattest camera pitch this
+ * client uses (18°), d·7.667e-4/sin 18° = d·2.481e-3 m along it. Nyquist for a
+ * field whose finest structure is 2 m wants a footprint ≤ 1 m, i.e. d ≤ 403 m —
+ * and the scene fog (220…520 m, `engine.ts`) has already replaced
+ * (403−220)/300 = 61 % of the ground colour with sky there, 100 % at 520 m. So
+ * the ground can only alias where it is at most 39 % visible and fading. A
+ * footprint-driven span would buy that back at the price of a normal that
+ * changes with the camera again — the exact class of defect this replaces — and
+ * would have to be a function of `fwidth` alone to be admissible at all.
+ */
+export function terrainLodNormalGlsl(): string {
+  return `
+uniform float uTlodNormalSpan;
+varying vec2 vTlodXZ;
+
+vec3 tlodNormalAt( vec2 p ) {
+  float s = max( uTlodNormalSpan, 1e-3 );
+  float hx = tlodHeight( vec2( p.x + s, p.y ), 0.0 ) - tlodHeight( vec2( p.x - s, p.y ), 0.0 );
+  float hz = tlodHeight( vec2( p.x, p.y + s ), 0.0 ) - tlodHeight( vec2( p.x, p.y - s ), 0.0 );
+  return normalize( vec3( -hx, 2.0 * s, -hz ) );
 }
 `;
 }
@@ -741,6 +803,31 @@ export function gpuHeightAt(near: HeightPyramid | null, nearRect: readonly numbe
     return pyramidHeight(near, x, z, pyramidLevelFor(near, nodeStep));
   }
   return pyramidHeight(far, x, z, pyramidLevelFor(far, nodeStep));
+}
+
+/**
+ * The TypeScript twin of `tlodNormalAt` — the SHADING normal the fragment
+ * shader really computes at a world point, as a unit vector.
+ *
+ * Note what the signature cannot express: there is no camera, no node, no
+ * level and no morph in it. That is the property the whole change exists for,
+ * and the smoke asserts it by handing this function the same (x, z) from every
+ * camera it can think of ([10]).
+ */
+export function fragmentNormal(near: HeightPyramid | null,
+                               nearRect: readonly number[] | null,
+                               far: HeightPyramid | null,
+                               x: number, z: number, spanM: number
+): { x: number; y: number; z: number } {
+  const s = Math.max(spanM, 1e-3);
+  // The FINEST level of the pyramids, `tlodHeight(q, 0.0)` — the surface
+  // `heightAt` answers, whatever the ground under this pixel is drawn at.
+  const h = (px: number, pz: number): number =>
+    gpuHeightAt(near, nearRect, far, px, pz, 0);
+  const hx = h(x + s, z) - h(x - s, z);
+  const hz = h(x, z + s) - h(x, z - s);
+  const len = Math.hypot(hx, 2 * s, hz);
+  return { x: -hx / len, y: (2 * s) / len, z: -hz / len };
 }
 
 /**
@@ -859,6 +946,11 @@ const uExtent = { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) };
  *  its fragment shader but has no vertices to morph, so this one is bound in
  *  `patchTerrainLod` rather than in `bindTerrainLodUniforms`. */
 const uRange = { value: new Array<number>(MAX_LOD_LEVELS).fill(0) };
+/** The metre span of the shading normal's central difference — the base
+ *  lattice step, set in `setField`. FRAGMENT-ONLY and therefore bound in
+ *  `patchTerrainLod` beside `uTlodRange`; see `terrainLodNormalGlsl` for why it
+ *  is one fixed number and not a function of the LOD. */
+const uNormalSpan = { value: FALLBACK_BASE_STEP_M };
 
 /**
  * Hang the eight shared height uniforms into a shader that includes
@@ -881,16 +973,30 @@ export function bindTerrainLodUniforms(uniforms: Record<string, unknown>): void 
 }
 
 /**
- * Give a ground material the CDLOD vertex displacement.
+ * Give a ground material the CDLOD vertex displacement and its shading normal.
  *
- * THREE ANCHORS, and each one is deliberate:
+ * FOUR ANCHORS, and each one is deliberate:
  *  - `uv_vertex` computes the world position FIRST (everything below needs it)
  *    and then overwrites `vMapUv` with the world metres, because a patch's UV
  *    is its position in the world and not a fraction of a node — one UV unit
  *    is one metre, exactly as the painted-area drapes have it;
- *  - `beginnormal_vertex` takes the analytic normal;
+ *  - `beginnormal_vertex` pins the vertex normal to straight up. It is no
+ *    longer the shading normal (that is a fragment matter since 2026-08-21,
+ *    `terrainLodNormalGlsl`), but `vNormal` must still be a defined vector:
+ *    the patch geometry carries no `normal` attribute at all, so without this
+ *    three would interpolate whatever constant the driver hands an unbound
+ *    attribute and any consumer of it (a shadow normal bias, a tangent frame)
+ *    would read a NaN;
  *  - `begin_vertex` puts the world position into `transformed`, which is what
- *    every chunk after it (and the hole and natural-ground patches) reads.
+ *    every chunk after it (and the hole and natural-ground patches) reads;
+ *  - `normal_fragment_begin`, in the FRAGMENT shader, replaces the interpolated
+ *    normal with the one sampled at this pixel's own world position. `normal`
+ *    is three's VIEW-space vector there, so the world normal goes through
+ *    `viewMatrix` (the mesh sits at the origin with an identity matrix, so
+ *    object space is world space and no model matrix is owed).
+ *    `nonPerturbedNormal` is set with it — that is the copy the clearcoat and
+ *    iridescence paths read, and leaving the two disagreeing would be a bug
+ *    waiting for the first ground kind that switches one of them on.
  *
  * The mesh sits at the origin with an identity matrix, so object space IS
  * world space — the same arrangement the old base plate had, and what lets one
@@ -908,6 +1014,7 @@ export function patchTerrainLod(mat: THREE.Material): void {
     prev.call(mat, shader, renderer);
     bindTerrainLodUniforms(shader.uniforms as unknown as Record<string, unknown>);
     (shader.uniforms as unknown as Record<string, unknown>).uTlodRange = uRange;
+    (shader.uniforms as unknown as Record<string, unknown>).uTlodNormalSpan = uNormalSpan;
     if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
     shader.vertexShader = terrainLodGlsl() + shader.vertexShader
       .replace('#include <uv_vertex>', `\ttlodCompute();
@@ -916,9 +1023,15 @@ export function patchTerrainLod(mat: THREE.Material): void {
 \t\tvMapUv = ( mapTransform * vec3( tlodWorld.xz, 1.0 ) ).xy;
 \t#endif`)
       .replace('#include <beginnormal_vertex>',
-        '#include <beginnormal_vertex>\n\tobjectNormal = tlodNormal;')
+        '#include <beginnormal_vertex>\n\tobjectNormal = vec3( 0.0, 1.0, 0.0 );')
       .replace('#include <begin_vertex>',
         '#include <begin_vertex>\n\ttransformed = tlodWorld;');
+    if (!shader.fragmentShader.includes('#include <normal_fragment_begin>')) return;
+    shader.fragmentShader = terrainLodSampleGlsl() + terrainLodNormalGlsl()
+      + shader.fragmentShader.replace('#include <normal_fragment_begin>',
+        `#include <normal_fragment_begin>
+\tnormal = normalize( ( viewMatrix * vec4( tlodNormalAt( vTlodXZ ), 0.0 ) ).xyz );
+\tnonPerturbedNormal = normal;`);
   };
   mat.customProgramCacheKey = () => (prevKey
     ? `${prevKey}+${TERRAIN_LOD_CACHE_KEY}`
@@ -1272,6 +1385,9 @@ export function createTerrainLod(): TerrainLod {
       relief = next;
       baseStep = baseStepM > 0 ? baseStepM : finestStep(next) || FALLBACK_BASE_STEP_M;
       leafM = PATCH_N * baseStep;
+      // The shading normal differences over ONE base lattice step, whatever the
+      // ground under a pixel is drawn at (`terrainLodNormalGlsl`).
+      uNormalSpan.value = baseStep;
       farPyr = buildFar(next?.overview ?? null);
       nearRect = null;
       nearPyr = next ? buildNear(next, baseStep, anchorX, anchorZ) : null;

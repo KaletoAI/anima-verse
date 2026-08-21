@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
+import { SHADOW_HALF_M, SHADOW_MAP_PX, snapShadowCentre } from './shadowSnap';
 
 /**
  * Closest the camera may get to its target. Derived from the smallest figure
@@ -144,7 +145,7 @@ export class Engine {
     this.fill.position.set(-30, 20, -25);
     this.scene.add(this.fill);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.mapSize.set(SHADOW_MAP_PX, SHADOW_MAP_PX);
     this.sun.shadow.bias = -0.0004;
     this.scene.add(this.sun, this.sun.target);
 
@@ -456,12 +457,22 @@ export class Engine {
     this.camera.position.copy(this.target).add(off);
     this.camera.lookAt(this.target);
 
-    // The sun follows the map section so the shadow map can stay small
+    // The sun follows the map section so the shadow map can stay small — but it
+    // follows it in WHOLE SHADOW TEXELS (`scene/shadowSnap.ts`). A frustum that
+    // slid continuously with the target resampled the whole world on every
+    // pan, and every shadow edge in the picture crawled along its own outline.
     const sx = Math.cos(this.sunAngle), sy = Math.max(0.08, Math.sin(this.sunAngle));
-    this.sun.position.copy(this.target).add(new THREE.Vector3(sx * 60, sy * 80, 25));
-    this.sun.target.position.copy(this.target);
+    const sunOff = new THREE.Vector3(sx * 60, sy * 80, 25);
+    const centre = snapShadowCentre({
+      target: [this.target.x, this.target.y, this.target.z],
+      offset: [sunOff.x, sunOff.y, sunOff.z],
+    });
+    this.sun.target.position.set(centre[0], centre[1], centre[2]);
+    this.sun.position.copy(this.sun.target.position).add(sunOff);
     const s = this.sun.shadow.camera;
-    s.left = -70; s.right = 70; s.top = 70; s.bottom = -70; s.far = 300;
+    s.left = -SHADOW_HALF_M; s.right = SHADOW_HALF_M;
+    s.top = SHADOW_HALF_M; s.bottom = -SHADOW_HALF_M;
+    s.far = 300;
     s.updateProjectionMatrix();
 
     for (const fn of this.frameHooks) fn(dt);

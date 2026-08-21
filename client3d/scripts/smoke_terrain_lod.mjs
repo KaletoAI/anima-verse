@@ -360,6 +360,96 @@
  * (u) A RAY THAT STARTS BELOW THE GROUND hits at once, at its own origin:
  *     from (4, 1, 0) straight down, with the ramp at 2 m there.
  * (v) NO FIELD AT ALL is a miss, never a crash.
+ *
+ * ============================================================================
+ * [10] THE SHADING NORMAL IS A FUNCTION OF THE GROUND — the shimmer fix
+ * ============================================================================
+ * [8] made the drawn SURFACE a function of the world position. The LIGHT on it
+ * was not: the normal was built in the vertex shader as the central difference
+ * of the vertex's own morph pair — spans `nodeStep·2^k` and twice that, blended
+ * by `f = frac(λ)` — and λ is the vertex's distance to the CAMERA. So the
+ * brightness of a fixed piece of ground moved when nothing but the camera did,
+ * and with a low sun that is not a nuance: ground that falls past
+ * `max(N·L, 0)` keeps only hemisphere sky (`0xdfeeff`) and fill (`0xdde8ff`)
+ * and turns light blue. That is the whole-ground shimmer, and it is bound to
+ * the sun's azimuth sector because the terminator is.
+ *
+ * THE NEW LAW, `terrainLodNormalGlsl` / `fragmentNormal`, per FRAGMENT:
+ *
+ *   n(x, z) = normalize( −(h(x+s, z) − h(x−s, z)), 2s, −(h(x, z+s) − h(x, z−s)) )
+ *
+ * with s = the base lattice step (2 m) and h the FINEST level, whatever the
+ * ground under the pixel is drawn at. No node, no level, no morph, no camera.
+ *
+ * THE FIXTURE — a 1 m relief per axis on the 2 m lattice, with a period of 8 m,
+ * so the coarse levels are provably blind to it. Per axis
+ *   F(u) = 0 on [0, 2], (u−2)/2 on [2, 4], 1 on [4, 6], 1−(u−6)/2 on [6, 8],
+ * repeated; on the 2 m lattice that reads 0, 0, 1, 1, 0, 0, 1, 1. The field is
+ * H(x, z) = F(x) + F(z), which the bilinear reproduces exactly between the
+ * lattice points (a separable sum of functions that are linear inside a cell).
+ * The pyramid is 65 × 65 points at 2 m over [0, 128]², so
+ *   level 1 keeps every 2nd point: F(0), F(4), F(8), F(12) = 0, 1, 0, 1 — a
+ *          triangle wave of period 8, whose ±4 m central difference is
+ *          IDENTICALLY ZERO (the two taps are one whole period apart);
+ *   level 2 keeps every 4th point: F(0), F(8), F(16) = 0, 0, 0 — dead flat.
+ * So on this fixture EVERY span above 2 m answers "straight up", and the old
+ * law's blend runs from the true normal to the vertical.
+ *
+ * The probes are the 8 × 8 integer points of one period, placed at
+ * (32 + i, 32 + j), i, j ∈ 0…7 — 32 is a multiple of 8, so the phase is the
+ * one derived above, and the ±8 m taps stay far inside the window.
+ *
+ * (aa) THE FIXTURE ITSELF: the lattice column, the level shapes, and the two
+ *      coarse levels being blind (period 8 and flat).
+ * (bb) THE NORMAL AT A CREST FLANK. At (35, 35) — phase (3, 3) — the taps are
+ *      h(37,35) − h(33,35) = F(5) − F(1) = 1 − 0 = 1, and the same in z. So
+ *        n = normalize(−1, 4, −1) = (−1, 4, −1)/√18,
+ *      i.e. (−0.235702260…, 0.942809041…, −0.235702260…) and a tilt from the
+ *      vertical of acos(4/√18) = 19.4712206344°.
+ * (cc) CAMERA INVARIANCE, measured rather than argued: every probe is asked for
+ *      its normal from 200 cameras — 8 azimuths × 25 distances from 8 m to
+ *      700 m, i.e. λ from 0 to λ(700) = 3 + (700−512)/512 = 3.3671875 (the
+ *      first three terms have saturated), so the morph ramps of levels 0…3 are
+ *      all crossed. The answer is bitwise the
+ *      same 12 800 times over: the maximum deviation is 0, not 1e-9.
+ * (dd) RED COUNTER-PROBE — the OLD law over the very same sweep, rebuilt here
+ *      from its own arithmetic: L = ⌊λ⌋, f = λ − L, spans e1 = 2·2^L and
+ *      e2 = 2·e1, each sampled at the mip level its span names, blended by f.
+ *      At the nine probes with |h_x| = |h_z| = 1 it runs from (−1, 4, −1)/√18
+ *      at f = 0 to straight up at f = 1, so the normal of one fixed piece of
+ *      ground SWINGS by the full 19.4712206344° — the 16–17° class the live
+ *      world was measured at — with the camera as the only thing that moved.
+ * (ee) THE TERMINATOR, at the sun `engine.ts` really hangs at 18:00. There
+ *      `sunAngle = π`, so the light sits at
+ *        (cos π · 60, max(0.08, sin π) · 80, 25) = (−60, 6.4, 25),
+ *      |·| = √(3600 + 40.96 + 625) = √4265.96 = 65.3142…, i.e. an ELEVATION of
+ *      asin(6.4 / 65.3142) = 5.6233° and an azimuth atan2(25, −60) = 157.4°.
+ *      With n ∝ (−h_x, 4, −h_z) the lit test is
+ *        n · L ∝ 60·h_x − 25·h_z + 25.6 > 0.
+ *      Over the 64 probes h_x runs −1, 0, 1, 1, 1, 0, −1, −1 (and h_z the same
+ *      by symmetry), so
+ *        h_x = −1 (3 columns): −34.4 − 25·h_z < 0 for every h_z ∈ {−1, 0, 1}
+ *                              -> all 8 rows unlit -> 24 probes,
+ *        h_x =  0 (2 columns): 25.6 − 25·h_z < 0 needs h_z > 1.024 -> none,
+ *        h_x = +1 (3 columns): 85.6 − 25·h_z < 0 needs h_z > 3.424 -> none.
+ *      So 24 of 64 probes stand in their own shadow — and they do so from
+ *      EVERY camera, because the normal does not know about cameras: 0
+ *      terminator crossings over the whole sweep. Under the OLD law the same
+ *      24 are unlit at f = 0 and lit at f = 1 (a vertical normal at a sun 5.6°
+ *      above the horizon is always lit), which is 24 crossings = 37.5 % of the
+ *      ground flipping between sunlit and sky-blue as the camera moves.
+ * (ff) NO FOOTPRINT BLEND was added, so there is nothing to make a function of
+ *      the footprint: the shipped chunk names neither `cameraPosition` nor
+ *      `iNode`, `uTlodRange` or `fwidth`, and the vertex chunk no longer
+ *      computes a normal at all. The derivation for the fixed 2 m span is in
+ *      `terrainLodNormalGlsl`.
+ * (gg) THE COST, counted rather than guessed: the normal is 4 `tlodHeight`
+ *      taps and each tap is a bilinear over 4 `texelFetch`, so 16 texel reads
+ *      per GROUND FRAGMENT. The vertex shader gives 8 taps back (32 texels):
+ *      `tlodCompute` is down from 11 `tlodHeight` calls to 3. The 16 texels of
+ *      a fragment all lie in one 4 × 4 window of the R32F pyramid — 64 bytes,
+ *      shared by every neighbouring pixel whose footprint is under the 2 m
+ *      span, which at 45° / 1 080 px is every pixel nearer than 2.6 km.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -474,7 +564,8 @@ function checkEq(label, actual, expected) {
 const { lod, height } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MORPH_START, MAX_PIXEL_ERROR,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
-  morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl } = lod;
+  morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl,
+  terrainLodNormalGlsl, fragmentNormal, gpuHeightAt } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
 
 // ── [1] the constants ───────────────────────────────────────────────────────
@@ -1195,6 +1286,151 @@ check('(u) a ray starting under the ground hits at its own origin, y', under.y, 
 check('…at x', under.x, 4, 1e-9);
 checkEq('(v) no field at all is a miss',
   rayGroundHit(null, 0, 10, 0, 0, -1, 0, { minY: 0, maxY: 0 }), null);
+
+// ── [10] the shading normal ─────────────────────────────────────────────────
+console.log('\n[10] the shading normal is a function of the ground, not of the camera');
+/** One axis of the fixture: period 8, 1 m tall, flat over the two lattice
+ *  points on each side of its crest — see the docstring. */
+const rung = (u) => {
+  const i = Math.round(u / 2);
+  return ((i % 4) + 4) % 4 >= 2 ? 1 : 0;
+};
+const RELIEF = (x, z) => rung(x) + rung(z);
+const relPyr = buildPyramid(RELIEF, 0, 0, 2, 65, 65, MAX_LOD_LEVELS);
+const relRect = [0, 0, 128, 128];
+const SPAN = 2;
+// (aa) the fixture is what the derivation says it is
+checkEq('(aa) the lattice column reads 0,0,1,1,0,0,1,1',
+  [0, 1, 2, 3, 4, 5, 6, 7].map((i) => rung(i * 2)), [0, 0, 1, 1, 0, 0, 1, 1]);
+checkEq('…the level steps', relPyr.levels.map((l) => l.step), [2, 4, 8, 16, 32, 64]);
+check('…level 1 is a triangle wave of period 8: h(36) − h(28)',
+  pyramidHeight(relPyr, 36, 32, 1) - pyramidHeight(relPyr, 28, 32, 1), 0, 0);
+let flatL2 = 0;
+for (let x = 24; x <= 48; x += 1) flatL2 = Math.max(flatL2,
+  Math.abs(pyramidHeight(relPyr, x, 32, 2) - pyramidHeight(relPyr, 24, 32, 2)));
+check('…and level 2 is dead flat', flatL2, 0, 0);
+// (bb) the normal at the crest flank, by hand
+const nCrest = fragmentNormal(relPyr, relRect, null, 35, 35, SPAN);
+const S18 = Math.sqrt(18);
+check('(bb) n.x at (35, 35)', nCrest.x, -1 / S18, 1e-12);
+check('…n.y', nCrest.y, 4 / S18, 1e-12);
+check('…n.z', nCrest.z, -1 / S18, 1e-12);
+const degOff = (n) => (Math.acos(Math.min(Math.max(n.y, -1), 1)) * 180) / Math.PI;
+check('…the tilt from the vertical, degrees', degOff(nCrest), 19.4712206344, 1e-9);
+
+/** The 200 cameras: 8 azimuths × 25 distances from 8 m to 700 m, as offsets
+ *  from the ground point. Only their DISTANCE can reach the old law, so the
+ *  sweep is written as one. */
+const CAMS = [];
+for (let a = 0; a < 8; a += 1) {
+  for (let k = 0; k < 25; k += 1) {
+    const d = 8 * (700 / 8) ** (k / 24);
+    const phi = (a * Math.PI) / 4;
+    const pitch = 0.3 + 0.05 * a;
+    CAMS.push([Math.cos(phi) * Math.cos(pitch) * d, Math.sin(pitch) * d,
+               Math.sin(phi) * Math.cos(pitch) * d]);
+  }
+}
+const NRANGES = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS);
+check('the sweep crosses the morph ramps of levels 0…3, λ(700)',
+  lodLambda(700, NRANGES), 3 + (700 - 512) / 512, 1e-12);
+
+/** THE OLD LAW, rebuilt from its own arithmetic: the vertex's morph pair,
+ *  differenced at each span on the mip level that span names, blended by
+ *  `f = λ − ⌊λ⌋`. `d` is the vertex's distance to the CAMERA — the whole
+ *  defect in one argument. */
+function oldNormal(x, z, d) {
+  const lam = lodLambda(d, NRANGES);
+  const level = Math.max(0, Math.min(Math.floor(lam), MAX_LOD_LEVELS - 1));
+  const t = lam - level;
+  const k = Math.min(Math.floor(t), MAX_LOD_LEVELS - 1);
+  const f = t - k;
+  const e1 = SPAN * 2 ** level * 2 ** k;
+  const e2 = e1 * 2;
+  const at = (px, pz, e) => gpuHeightAt(relPyr, relRect, null, px, pz, e);
+  const one = (e) => {
+    const hx = at(x + e, z, e) - at(x - e, z, e);
+    const hz = at(x, z + e, e) - at(x, z - e, e);
+    const len = Math.hypot(hx, 2 * e, hz);
+    return [-hx / len, (2 * e) / len, -hz / len];
+  };
+  const [ax, ay, az] = one(e1);
+  const [bx, by, bz] = one(e2);
+  const mx = ax + (bx - ax) * f;
+  const my = ay + (by - ay) * f;
+  const mz = az + (bz - az) * f;
+  const len = Math.hypot(mx, my, mz);
+  return { x: mx / len, y: my / len, z: mz / len };
+}
+
+// The sun of `engine.ts` at 18:00 — the numbers, not a stand-in.
+const SUN = [Math.cos(Math.PI) * 60, Math.max(0.08, Math.sin(Math.PI)) * 80, 25];
+const SUN_LEN = Math.hypot(...SUN);
+check('the 18:00 sun stands at |(−60, 6.4, 25)|', SUN_LEN, Math.sqrt(4265.96), 1e-9);
+check('…which is an elevation of', (Math.asin(SUN[1] / SUN_LEN) * 180) / Math.PI,
+  5.6233, 1e-3);
+const dotSun = (n) => (n.x * SUN[0] + n.y * SUN[1] + n.z * SUN[2]) / SUN_LEN;
+
+let worstNew = 0;
+let swingOld = 0;
+let crossNew = 0;
+let crossOld = 0;
+let unlitNew = 0;
+for (let j = 0; j < 8; j += 1) {
+  for (let i = 0; i < 8; i += 1) {
+    const px = 32 + i;
+    const pz = 32 + j;
+    const ref = fragmentNormal(relPyr, relRect, null, px, pz, SPAN);
+    let litNewSeen = false;
+    let darkNewSeen = false;
+    let litOldSeen = false;
+    let darkOldSeen = false;
+    let minOldY = 1;
+    let maxOldY = -1;
+    for (const [ox, oy, oz] of CAMS) {
+      const d = Math.hypot(ox, oy, oz);
+      // (cc) the same ground point, asked from every camera in the sweep
+      const n = fragmentNormal(relPyr, relRect, null, px, pz, SPAN);
+      worstNew = Math.max(worstNew, Math.abs(n.x - ref.x), Math.abs(n.y - ref.y),
+                          Math.abs(n.z - ref.z));
+      if (dotSun(n) > 0) litNewSeen = true; else darkNewSeen = true;
+      // (dd) and the same point under the old law, from the same camera
+      const o = oldNormal(px, pz, d);
+      minOldY = Math.min(minOldY, o.y);
+      maxOldY = Math.max(maxOldY, o.y);
+      if (dotSun(o) > 0) litOldSeen = true; else darkOldSeen = true;
+    }
+    swingOld = Math.max(swingOld,
+      Math.abs(degOff({ y: minOldY }) - degOff({ y: maxOldY })));
+    if (litNewSeen && darkNewSeen) crossNew += 1;
+    if (litOldSeen && darkOldSeen) crossOld += 1;
+    if (dotSun(ref) <= 0) unlitNew += 1;
+  }
+}
+check(`(cc) the normal over ${CAMS.length} cameras × 64 probes — worst deviation`,
+  worstNew, 0, 0);
+check('(dd) RED: the old law swings, degrees', swingOld, 19.4712206344, 1e-9);
+checkAbove('…which is the 16° class the live world was measured at', swingOld, 16);
+check('(ee) probes standing in their own shadow at a 5.62° sun', unlitNew, 24);
+check('…terminator crossings over the whole sweep, NEW law', crossNew, 0, 0);
+check('…RED: the same count under the OLD law', crossOld, 24);
+check('…i.e. this share of the ground flipped with the camera, %',
+  (crossOld / 64) * 100, 37.5, 1e-9);
+
+// (ff) the shipped chunks, read as strings — the same kind of pin as [1]
+const nglsl = terrainLodNormalGlsl();
+checkEq('(ff) the fragment normal names no camera', /cameraPosition/.test(nglsl), false);
+checkEq('…no node attribute', /iNode/.test(nglsl), false);
+checkEq('…no LOD range', /uTlodRange/.test(nglsl), false);
+checkEq('…and no pixel footprint (none was needed)', /fwidth|dFdx|dFdy/.test(nglsl), false);
+checkEq('…while the vertex chunk computes no normal any more',
+  /tlodNormal\b/.test(glsl), false);
+// (gg) the cost, counted
+check('(gg) height taps of the fragment normal', nglsl.split('tlodHeight(').length - 1, 4);
+check('…texel reads per ground fragment, 4 taps × the bilinear\'s 4',
+  (nglsl.split('tlodHeight(').length - 1) * 4, 16);
+check('…height taps left in tlodCompute (11 before)',
+  glsl.slice(glsl.indexOf('void tlodCompute')).split('tlodHeight(').length - 1, 3);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);
