@@ -31,28 +31,31 @@ interface ApiClip { kind: string; role?: string; set?: string; url: string }
 export interface ClipUrls { a?: string; b?: string; solo?: string }
 
 /** Root path of a half: hips XZ per key, clip centimetres → metres. */
-function rootPath(clip: AnimationClip): { times: ArrayLike<number>; xz: Float32Array } {
+/** Standing hips height of the clip library's skeleton (metres) — every
+ *  converted clip puts a standing actor's hips there (cmu_clip leg ratio). */
+const CLIP_STAND_HIPS_M = 1.13
+
+function rootPath(clip: AnimationClip): { times: ArrayLike<number>; xyz: Float32Array } {
   const track = clip.tracks.find((tr) => tr.name.endsWith('.position') && /hips/i.test(tr.name))
-  if (!track) return { times: [0], xz: new Float32Array([0, 0]) }
+  if (!track) return { times: [0], xyz: new Float32Array([0, CLIP_STAND_HIPS_M, 0]) }
   const n = track.times.length
-  const xz = new Float32Array(n * 2)
-  for (let i = 0; i < n; i++) {
-    xz[i * 2] = track.values[i * 3] / 100
-    xz[i * 2 + 1] = track.values[i * 3 + 2] / 100
-  }
-  return { times: track.times, xz }
+  const xyz = new Float32Array(n * 3)
+  for (let i = 0; i < n * 3; i++) xyz[i] = track.values[i] / 100
+  return { times: track.times, xyz }
 }
 
-function rootAt(path: { times: ArrayLike<number>; xz: Float32Array }, t: number) {
-  const { times, xz } = path
+function rootAt(path: { times: ArrayLike<number>; xyz: Float32Array }, t: number) {
+  const { times, xyz } = path
   const n = times.length
-  if (t <= times[0]) return { x: xz[0], z: xz[1] }
-  if (t >= times[n - 1]) return { x: xz[(n - 1) * 2], z: xz[(n - 1) * 2 + 1] }
+  const at = (i: number) => ({ x: xyz[i * 3], y: xyz[i * 3 + 1], z: xyz[i * 3 + 2] })
+  if (t <= times[0]) return at(0)
+  if (t >= times[n - 1]) return at(n - 1)
   let lo = 0
   let hi = n - 1
   while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (times[mid] <= t) lo = mid; else hi = mid }
   const f = (t - times[lo]) / ((times[hi] - times[lo]) || 1)
-  return { x: xz[lo * 2] + (xz[hi * 2] - xz[lo * 2]) * f, z: xz[lo * 2 + 1] + (xz[hi * 2 + 1] - xz[lo * 2 + 1]) * f }
+  const a = at(lo); const b = at(hi)
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z + (b.z - a.z) * f }
 }
 
 /** Play only [start, end) seconds of the clip, looped — what an import with
@@ -137,7 +140,7 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win }:
 
         // ── figures + clips ──
         const fbx = new FBXLoader()
-        const players: Array<{ root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: ReturnType<typeof rootPath>; duration: number }> = []
+        const players: Array<{ root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: ReturnType<typeof rootPath>; duration: number; hipsBindY: number }> = []
         const hipsOf = (root: Object3D): Object3D | null => {
           let found: Object3D | null = null
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
@@ -176,6 +179,11 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win }:
           const root = new THREE.Group()
           root.add(pivot)
           scene.add(root)
+          // where the figure's hips sit in its bind pose — the clip's hips
+          // height is played RELATIVE to that: a lying clip (hips 0.2 m) drops
+          // the body, a standing one (1.13 m) leaves it where it binds
+          root.updateMatrixWorld(true)
+          const hipsBindY = instHips ? instHips.getWorldPosition(new THREE.Vector3()).y : FIGURE_H * 0.55
           // label A / B over the head (pair only)
           const canvas = document.createElement('canvas')
           canvas.width = 64; canvas.height = 64
@@ -191,7 +199,7 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win }:
           root.add(sprite)
           const mixer = new THREE.AnimationMixer(inst)
           mixer.clipAction(inplace).play()
-          players.push({ root, mixer, path, duration: clip.duration })
+          players.push({ root, mixer, path, duration: clip.duration, hipsBindY })
         }
         if (disposed) return
         setStatus('')
@@ -209,7 +217,9 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win }:
           for (const p of players) {
             p.mixer.setTime(time)
             const r = rootAt(p.path, time)
-            p.root.position.set(r.x, 0, r.z)
+            // hips height scaled by this figure's proportion (bind hips over
+            // the library's standing 1.13 m), minus the bind height itself
+            p.root.position.set(r.x, r.y * (p.hipsBindY / CLIP_STAND_HIPS_M) - p.hipsBindY, r.z)
           }
           if (performance.now() - lastInfo > 150) {
             lastInfo = performance.now()
