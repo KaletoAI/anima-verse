@@ -358,6 +358,11 @@ export function PosesTab() {
                     </span>
                   ) : null}
                 </span>
+                {isPose && data.pair_kinds?.includes(p.animation) ? (
+                  <span className="ga-source" title={t('Pair animation — needs a partner')}>
+                    {t('pair')}
+                  </span>
+                ) : null}
                 {p.is_default ? <span className="ga-source">{t('default')}</span> : null}
               </button>
             </li>
@@ -555,7 +560,7 @@ export function PosesTab() {
                       <option value="">{t('— pick a kind —')}</option>
                       {data.kinds.map((k) => (
                         <option key={k} value={k}>
-                          {k}
+                          {data.pair_kinds?.includes(k) ? `${k} — ${t('pair')}` : k}
                         </option>
                       ))}
                       {/* keep an animation whose clip has since been removed */}

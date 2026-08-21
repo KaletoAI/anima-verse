@@ -512,22 +512,6 @@
       "animation": "salsa",
       "solo": false
     },
-    "embracing": {
-      "prompt": "two people in a close embrace, one holding the other protectively, arms wrapped around, heads close together",
-      "synonyms": [
-        "hug",
-        "hugging",
-        "embrace",
-        "umarmen",
-        "umarmung",
-        "in den arm nehmen",
-        "festhalten",
-        "shelter",
-        "hold close"
-      ],
-      "animation": "embrace",
-      "solo": false
-    },
     "comforting": {
       "prompt": "one person comforting another, both hands on the other's shoulders, leaning in with a caring expression",
       "synonyms": [
