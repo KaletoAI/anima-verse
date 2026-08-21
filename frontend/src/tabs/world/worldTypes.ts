@@ -1,4 +1,4 @@
-import type { SurfaceMaterialSpec } from '@anima/scene-render'
+import type { SceneFloor, SurfaceMaterialSpec } from '@anima/scene-render'
 
 // Floor-plan placement of a room (AV3D-2). EVERYTHING IS METRES since
 // contract v6 Nr. 2 ("the metric wave") — the [0,1] fraction domain is deleted
@@ -45,20 +45,13 @@ export interface RoomLayout {
    *  `terrain_layers.sanitize_edge_blend`). DEFAULT 0 — the hard cut, because
    *  a floor is drawn, not grown; 0 is a VALUE and has to survive a save. */
   edge_blend_m?: number
-  /** WHERE THE MIRROR STANDS on a room whose floor kind is a water surface:
-   *  a world-y height in metres, and the only absolute height a layout
-   *  carries. OPTIONAL — absent means the bake derives it (the plateau under
-   *  a built location, the median along the rim on a natural one). It
-   *  replaced the `floor_offset_y` waterline hack, which moved no height at
-   *  all. */
-  water_level?: number
-  /** How far the bed is carved below that mirror, in metres. Server window
-   *  0.2…20, default 2.0 (`heightfield.WATER_DEPTH_*`). */
-  water_depth_m?: number
-  /** Over how many metres the bed climbs back to the untouched land at the
-   *  water's edge. Server window 0…20, default 3.0
-   *  (`heightfield.WATER_SHORE_RAMP_*`). */
-  shore_ramp_m?: number
+  // A ROOM HAS NO WATER FIELDS (W1, 2026-08-21). `water_level`,
+  // `water_depth_m` and `shore_ramp_m` were the E5b per-room dials of the
+  // zone-water carve; that whole bake stage is deleted and the server drops
+  // the three keys on the way in, without a fallback reader. Water is painted
+  // on the MAP now — one polygon owns its mirror, its bed and its flow — and a
+  // room that lies on painted water carries the derived reference
+  // `floor_plan[].map_water` instead (`readMapWater` below).
   /** Cut the room's diorama at its shell (§ B1): the renderer discards every
    *  fragment outside the room hull, so a model that overhangs its floor plan
    *  ends at the room. Ignored for outdoor rooms. */
@@ -418,23 +411,45 @@ export interface SurfaceKind {
   name: string
   url: string
   /** HOW the kind is lit (§ A9) — the library's own declaration, verbatim.
-   *  Its `class` is also the only honest answer to "is this water?": the
-   *  server asks the same question of the same book
-   *  (`terrain_layers.is_water_floor`), never of the kind's name and never of
-   *  its colour. */
+   *  IT DOES NOT ANSWER "is this water?" any more (W1): that second book is
+   *  deleted, and a library texture of class `water` without the terrain
+   *  kind's own `meta.water` flag is a wet LOOK, not physics. The one
+   *  predicate is `mapTypes.isWaterKind`. */
   material?: SurfaceMaterialSpec | null
 }
 
-/** Is this floor kind a WATER surface — the renderers' half of
- *  `terrain_layers.is_water_floor`. `ice` counts: a frozen sheet reflects and
- *  carries surface structure, it merely stands still, and the bake carves a
- *  bed under it exactly the same way. A kind the library does not know is not
- *  water; the NAME is never asked. */
-export function isWaterSurface(kind: string,
-                               kinds: SurfaceKind[]): boolean {
-  if (!kind) return false
-  const cls = kinds.find((s) => s.kind === kind)?.material?.class
-  return cls === 'water' || cls === 'ice'
+/**
+ * A ROOM STANDS ON PAINTED WATER — `floor_plan[].map_water` (W1 § 6).
+ *
+ * A REFERENCE and nothing more: the room owns no mirror, no depth and no bed,
+ * it merely stands where the map says water is. It is DERIVED at compose time
+ * by a majority-area containment test and never stored, so it cannot dangle —
+ * delete the lake and the line is gone with it.
+ */
+export interface MapWaterRef {
+  area_id: string
+  kind: string
+}
+
+/**
+ * That reference, read through a check.
+ *
+ * The field is additive on `SceneFloor`, which is declared once in
+ * `@anima/scene-render` for the admin preview and the 3D client alike. It is
+ * read defensively here for the same reason every other payload extra is: an
+ * older server simply does not send it, and a room that then claims to be on
+ * water would be worse than one that says nothing.
+ */
+export function readMapWater(floor: SceneFloor | undefined | null
+                            ): MapWaterRef | null {
+  const raw = (floor as unknown as Record<string, unknown> | undefined)
+    ?.map_water
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const areaId = typeof r.area_id === 'string' ? r.area_id.trim() : ''
+  const kind = typeof r.kind === 'string' ? r.kind.trim() : ''
+  if (!areaId || !kind) return null
+  return { area_id: areaId, kind }
 }
 
 /** The kind a closed room's floor wears when nobody named one — mirrors

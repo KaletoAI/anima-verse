@@ -3805,7 +3805,7 @@ sie produziert.
 | `scripts/smoke_slope_gate.py` | das Steilheits-Gate und die Ausnahme für **gebaute** Orte (`draws_built_floor`), plus die rote Gegenprobe „`natural_floor` steht in keinem Payload" |
 | `scripts/smoke_nav_grid.py` | Routing: Steilheits-Tod je Zelle, Fußabdruck-/Öffnungs-Ausnahmen, Höhenstrafe |
 | `scripts/smoke_world_geometry.py` | `ground_y` als die eine Lesung |
-| `scripts/smoke_water_meta.mjs` | der Leser der drei Wasser-Zahlen aus dem freien `meta` |
+| `scripts/smoke_water_meta.mjs` | was die Admin-UI über Wasser liest und zeichnet: die Leser aus dem freien `meta` (Zahlen, Profil, gewrappte Fließrichtung, Bett-Art), das EINE Prädikat `meta.water` gegen Namen und Material-Klasse, Art-Vorgabe vs. Flächen-Überschreibung, die Yaw-Konvention des Pfeils samt Flächen-Schwerpunkt (W3), und der `map_water`-Verweis des Lageplans |
 | `scripts/smoke_height_math.mjs` | die Autorierungs-Arithmetik des Karten-Editors (`heightMath.ts`) |
 
 **Server — Material und Szene**
@@ -4851,3 +4851,134 @@ nicht.
 | `scripts/smoke_terrain_layers.py` **[13]** | Bett-Art als Layer (Oberfläche + eigene Übergangsbreite, zwei Betten = zwei Layer), die rote Probe „nichts malt die Wasser-Textur aufs Gelände", das EINE Prädikat Zeile für Zeile, und das **Kantengesetz**: dieselben zwei Rechtecke in zwei Malreihenfolgen geben die zwei Breiten |
 | `scripts/smoke_scene_recipe.py` **[4w]** | `map_water` von Hand (100 % / 75 % → Verweis; 50 % / 25 % / 0 % → keiner), Letzter-gewinnt, und dass der Eintrag sonst nichts über Wasser sagt |
 | `scripts/smoke_terrain_types.py`, `scripts/smoke_nav_grid.py` | Sanitizer der Art-Vorgaben bzw. der Bett-Carve unter der Laufregel |
+
+## Nachtrag 2026-08-21 (§ A16.3 / § A16.7 / § A19 Nr. 5 / § G4): Ein Wasser-Gesetz — W2 (Client)
+
+*Etappe W2 aus `development_instructions/plan-fliessgewaesser.md`, die
+Lese-Seite des W1-Nachtrags oben. Er **ersetzt** dessen Satz „bis W2 zeichnet
+der Client weiter EINE flache Platte", **streicht** die Zonen-Wasser-Aussagen
+von § A19 Nr. 5 ersatzlos und **präzisiert** § G4 (der Spiegel ist keine
+Platte mehr). Was der Server liefert, ändert W2 nicht um eine Zahl: die neun
+Zahlen von W1 werden jetzt ausgewertet statt gemittelt. W3 (Admin-UI) folgt.*
+
+**DAS GESETZ, in vier Sätzen.** Der Spiegel ist eine **REGELFLÄCHE**: jeder
+Vertex des Earcuts trägt `water_level_at` seines eigenen Ortes, ein See kommt
+dabei bitgleich flach heraus wie bisher. Die **Fließrichtung treibt die
+Ripple**, und zwar als **Vertex-Attribut**, weil das Material der ART gehört
+und die Strömung der FLÄCHE. Es gibt **EINE Wasserquelle**: die gemalten
+Flächen — der Zonen-Lookup ist gelöscht, und Schwimmen rechnet gegen das
+LOKALE Niveau. Und der Client **malt kein Bett mehr selbst**: er rendert die
+Oberfläche, die die Layer-Tabelle nennt.
+
+### 1. Der Spiegel ist eine Regelfläche, keine Platte
+
+`scene/waterPlaneMath.ts` trägt den reinen TS-Zwilling der Server-Funktion:
+
+* `waterProfileOf(meta)` liest `meta.water_profile` — und **das ist der ganze
+  Wasser-Test**. Nur eine Fläche, die das eine Server-Prädikat
+  (`terrain_types.is_water_kind`) als Wasser gezählt hat, trägt ein Profil.
+  Die Material-KLASSE (`isWaterClass`) wird dafür **nicht mehr befragt**: sie
+  sagt, wie Wasser AUSSIEHT, und war das zweite Buch darüber, was Wasser IST.
+* `waterLevelAt(profile, x, z)` ist `heightfield.water_level_at`, Zeile für
+  Zeile, samt der beiden Klemmen — an den Enden liefert sie `level_up` bzw.
+  `level_down` **exakt**, nicht das Ergebnis einer Interpolation mit t = 0/1.
+* `liftToWaterProfile(positions, profile)` schreibt dieses Niveau in das `y`
+  jedes `(x, y, z)`-Tripels. Die Masche steht danach im Ursprung; ihre Höhe
+  ist absolut und darf nicht noch einmal verschoben werden.
+
+**KEINE UNTERTEILUNG, und das ist Arithmetik, kein Geschmack.** Das Profil ist
+in der Ebene linear, solange die Klemme nicht greift — und die greift nur
+AUSSERHALB von `[s_min, s_max]`, das sind die Extreme des Polygons selbst.
+Kein innerer Punkt erreicht den Knick, also gibt eine Regelfläche durch den
+Umriss die Funktion exakt wieder. Ein 60 m langer Fluss ist eine Handvoll
+Dreiecke.
+
+**DER UFER-SHADER BLIEB UNVERÄNDERT** — das ist der Befund von W2, nicht ein
+Versäumnis. `wsDepth = vWaterPlane.y − tlodHeight(vWaterPlane.xz)` liest die
+Höhe seit E4 aus der GEOMETRIE, nie aus einer Uniform; die Interpolation einer
+linearen Funktion über ein Dreieck IST diese Funktion, also misst er ohne eine
+Zeile Änderung gegen das lokale Niveau. Genau dieselbe Eigenschaft trug schon
+zwei Seen auf zwei Höhen auf EINEM Material.
+
+### 2. Die Fließrichtung als Vertex-Attribut
+
+`aWaterFlow` (vec2) trägt die stromabwärtige Einheitsrichtung
+(`dir_x`/`dir_z`, für stehendes Wasser `(0, 0)`) und liegt auf der Spiegel-
+Geometrie, nicht in einer Uniform. **Der Grund ist die Materialbindung:**
+`ground.rebuildAreas` hält genau EIN Material je Wasser-ART für die ganze
+Welt; eine Uniform hätte also ein Material je FLÄCHE erzwungen, um zwei Floats
+zu sagen. Auf einer Masche von einem Dutzend Vertices sind zwei Floats nichts.
+
+Der Ripple-Patch (`@anima/scene-render` `materials.ts`) baut daraus einen
+Rahmen — `wAx` stromabwärts, `wAy` quer — und legt die beiden Scroll-Vektoren
+hinein. **Ohne Strömung ist der Rahmen der der Welt**, und die beiden Vektoren
+sind buchstäblich die Konstanten von vorher: `A = (1, 0.6)`,
+`B = −(0.8, 1.3)`. Mit Strömung laufen **beide Lagen stromabwärts**
+(`A = wAx + wAy·0.6`, `B = wAx·0.8 − wAy·1.3`) und nur ihre Querkomponenten
+sind gegenläufig — eine zweite Lage, die stromauf liefe, läse sich als zwei
+Flüsse. Die Beträge (`√1.36`, `√2.33`) sind rotationsinvariant, `uSpeed` bleibt
+also dieselben Meter pro Sekunde.
+
+**Eine Geometrie ohne das Attribut liest `(0, 0)`** — WebGL lässt ein
+ungebundenes Attribut auf seinem generischen Wert `(0, 0, 0, 1)`, den three nie
+schreibt. Jede Wasserfläche, die keine client3d-Spiegelmasche ist (allen voran
+die Böden der Admin-Vorschau), behält damit exakt ihr Aussehen.
+
+### 3. Eine Wasserquelle — der Zonen-Lookup ist gelöscht
+
+**Gelöscht** (keine Alias-Felder, keine Fallback-Leser):
+`waterPlaneMath.zoneWaterAt` · `zoneWaterMirrors` · `ZoneMirror` ·
+`waterLevelOf` · der Zustand `ground.zoneWaters` · das Lesen von
+`index.waters` · die Zonen-Schleife in `rebuildAreas` · das **Borgen** eines
+beliebigen wasser-geflaggten Katalog-Eintrags für einen Raum-Bodenart-Namen ·
+`@anima/scene-render` `TerrainLayerWater` und das Feld `waters` von
+`TerrainLayerIndex`.
+
+`typeAt` liest den Spiegel damit aus genau einer Schleife: die letzte
+enthaltende gemalte Fläche gewinnt Art UND Niveau, und das Niveau ist
+`waterLevelAt(profile, x, z)` — **das lokale**, nicht `water_level_effective`.
+`floatRootY(groundY, levelAt, sink)` ist in seinem Gesetz unverändert; was sich
+geändert hat, ist was hineingereicht wird. Das ist der Unterschied zwischen
+einer Figur, die überall 0,6 m unter ihrer eigenen Wasserlinie hängt, und
+einer, die stromab 1,92 m ÜBER dem sichtbaren Wasser schwimmt und stromauf in
+1 m tiefem Wasser watet (die rote Gegenprobe im Smoke, von Hand gerechnet).
+
+`water_level_effective` fährt weiter mit und wird vom Client **nicht mehr
+gelesen**: es ist die eine Ebene für einen FLACHEN Konsumenten, und diesen
+Konsumenten gibt es hier nicht mehr.
+
+### 4. Der Bett-Hack ist tot
+
+`layerGround.setLayerTable` ersetzte für jede Wasser-Zeile das Bild von Layer 0
+(`layer.water ? bare : layer`). Das war ein Renderer, der Boden erfindet: eine
+autorierte Kies-Sohle wurde auf die Default-Art der Welt zurückgeflacht. Seit
+W1 IST `surface` einer Wasser-Zeile schon die des Bettes und `bed_kind` nennt
+die Art dazu, also entfällt die Ersetzung ersatzlos. Wo der Client die ART
+statt der Oberfläche braucht (Farb-Fallback, Meter je Kachel), fragt er
+`layer.bed_kind || layer.kind`. `bed_kind` ist zusätzlich Teil des `layerKey`,
+denn zwei Teiche einer Art auf zwei Betten sind zwei Zeilen mit zwei Bildern —
+ohne das im Schlüssel bliebe das Slice-Array der alten Welt stehen.
+
+### 5. Der Lageplan sagt nur noch Bescheid
+
+Ein `floor_plan`-Eintrag kann `map_water {area_id, kind}` tragen (W1 § 6). Der
+3D-Client liest es **absichtlich für nichts**: Raum-Semantik (Zugehörigkeit,
+Mitte, Stände, Pulk) kommt weiter aus `polygon_world`, Boden und Spiegel malt
+die KARTE. Eine Fläche zu unterdrücken gibt es nicht, weil Stockwerk 0 seit E5a
+ohnehin keine eigene malt. Das Feld `water_level_effective` von `SceneFloor`
+ist tot (der Server sendet es nicht mehr) und steht nur noch deklariert da,
+weil die Admin-Lageplan-Vorschau es benennt — **W3 entfernt beides zusammen**.
+
+### 6. Die Beweise (§ B5a)
+
+| Skript | was es herleitet |
+|---|---|
+| `client3d/scripts/smoke_water_plane.mjs` **[1]** | dass das PROFIL die einzige Wasserfrage ist: Mittelniveau allein ist keines, autoriertes Niveau keines, eine Zahl kaputt = kein Profil |
+| **[4]** | der Fixture-Fluss von Hand: Achse durch den Schwerpunkt (50, −30), `dir = (−1, 0)` aus 270°, `s_min/s_max = ∓30`, `level(x) = 0,08·x + 1,0` an sechs Stellen, beide Klemmen **exakt**, der See als entartete Spanne, der Flow-Vektor |
+| **[5]** | die geneigte Masche: vier Ecken auf 2,6 / 7,4 / 7,4 / 2,6 (4,8 m Gefälle auf 60 m), die Linearität an Hälfte, Viertel und ⅞ der Kante, und der See **bitgleich** flach (`Object.is`) samt `level + 0 == 0 + level` |
+| **[6]** | Schwimmen am lokalen Niveau: Bett `0,08·x`, Tiefe überall 1,0 m, Wurzel/Körper bei x = 26/50/74 — und die **roten** Gegenproben des flachen Mittelniveaus (1,92 m über dem sichtbaren Wasser stromab, Waten stromauf, ein Watet/Schwimmt-Umschlag bei genau x = 55, den es in Wahrheit nirgends gibt) |
+| **[7]** | der Ufer-Shader auf der Schräge: Alpha 20/27 an jedem x — und **rot**, dass die flache Platte oberhalb x = 62,5 negative Tiefe hätte und ganz weggeworfen würde |
+| **[8]** | die Löschung **namentlich**: acht Symbole dürfen in `client3d/src` und `packages/scene-render/src` in keiner Nicht-Kommentar-Zeile mehr stehen; dazu die eine erlaubte Leiche (`SceneFloor.water_level_effective`, `@deprecated`, für W3) |
+| **[9]** | die Ripple-Richtung: der stehende Fall ergibt exakt die alten Konstanten, 0°/90°/270° geben beide Lagen stromabwärts mit gegenläufiger Querkomponente, und die Beträge bleiben rotationsinvariant |
+| `client3d/scripts/smoke_layer_cut.mjs` **[7b]** | der Bett-Fall: die Ersetzung ist weg, das Slice kommt aus `layer.surface`, Farbe und Kachelmaß fragen `bed_kind`, und `bed_kind` steht im `layerKey` |
+| `client3d/scripts/smoke_surface_patch.mjs` | **rot**: keine Bibliotheksfrage entscheidet mehr über Wasser |

@@ -38,6 +38,10 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
 import { useI18n } from '../../i18n/I18nProvider'
 import { reliefWarnAmpM } from '../map/heightMath'
+import {
+  SHORE_RAMP_DEFAULT_M, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
+  WATER_DEPTH_DEFAULT_M, WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M,
+} from '../map/mapTypes'
 import type { TerrainType } from '../map/mapTypes'
 import type { SurfaceKind } from '../world/worldTypes'
 // The app's ONE fallback grey — the server's `terrain_types.DEFAULT_COLOR`,
@@ -83,6 +87,13 @@ const EDGE_BLEND_MIN = 0
 const EDGE_BLEND_MAX = 8
 const EDGE_BLEND_STEP = 0.1
 const EDGE_BLEND_DEFAULT = 1.5
+/** The DEPTH step of the water section. Its floor is 0.2 m and not 0: a bed
+ *  exactly at the mirror is not water, it is a wet floor, so the server clamps
+ *  rather than accepting it (`heightfield.WATER_DEPTH_MIN_M`). */
+const WATER_DEPTH_STEP = 0.1
+/** …and the ramp's. 0 IS A VALUE here, exactly like `edge_blend_m`: it is the
+ *  walled basin, a step instead of a beach, and it has to survive a save. */
+const SHORE_RAMP_STEP = 0.5
 /** The shared seed's two undergrown kinds, named in the hint so the number in
  *  an empty field is not a mystery (`shared/terrain/types.json`). */
 const UNDERGROWTH_SEED_FOREST = 0.6
@@ -105,6 +116,12 @@ const GRID_STEP_M = 2
 function metaStrOf(type: TerrainType | null, key: string): string {
   const raw = (type?.meta as Record<string, unknown> | undefined)?.[key]
   return typeof raw === 'string' ? raw : ''
+}
+
+/** Read one BOOLEAN meta key — the water flag. A missing key is `false`, which
+ *  is what "not water" is: there is no third state. */
+function metaBoolOf(type: TerrainType | null, key: string): boolean {
+  return !!(type?.meta as Record<string, unknown> | undefined)?.[key]
 }
 
 /** Read one optional NUMERIC meta key as the string its input shows — a
@@ -163,6 +180,16 @@ function numChanged(raw: string, stored: string): boolean {
     !== (Number.isFinite(known) && known > 0 ? known : null)
 }
 
+/** One BOOLEAN key, IN PLACE — written or GONE. `false` leaves no key behind:
+ *  "not water" is the absence of the flag everywhere the server asks it
+ *  (`terrain_types.is_water_kind`), so a stored `false` would only be a second
+ *  way of writing the same nothing. */
+function setMetaBool(meta: Record<string, unknown>, key: string,
+                     value: boolean): void {
+  if (value) meta[key] = true
+  else delete meta[key]
+}
+
 /** The `meta` keys this form owns, as their fields hold them. */
 interface OwnedMeta {
   moveAnim: string
@@ -174,6 +201,9 @@ interface OwnedMeta {
   sway: string
   undergrowth: string
   edgeBlend: string
+  water: boolean
+  waterDepth: string
+  shoreRamp: string
 }
 
 /** `meta` with the owned keys written — or with the KEY REMOVED where the
@@ -192,6 +222,11 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   setMetaNum(next, 'sway_m', own.sway)
   setMetaNum(next, 'undergrowth', own.undergrowth)
   setMetaBlend(next, 'edge_blend_m', own.edgeBlend)
+  setMetaBool(next, 'water', own.water)
+  setMetaNum(next, 'water_depth_m', own.waterDepth)
+  // The ramp shares the "0 is a value" rule of the transition, not the "empty
+  // means no key" rule of every other number: a ramp of 0 is the walled basin.
+  setMetaBlend(next, 'shore_ramp_m', own.shoreRamp)
   return next
 }
 
@@ -271,13 +306,44 @@ function undergrowthHint(t: (s: string) => string): string {
     .replace('{grass}', String(UNDERGROWTH_SEED_GRASS))
 }
 
-/** The transition hint. It has to say the two things the field cannot show:
- *  that an EMPTY field is not zero (it is the default fringe) and that ZERO is
- *  a real setting — the hard cut a room floor or a kerb needs. */
+/** The transition hint. It has to say the three things the field cannot show:
+ *  that an EMPTY field is not zero (it is the default fringe), that ZERO is a
+ *  real setting — the hard cut a room floor or a kerb needs — and WHOSE number
+ *  counts where two grounds meet, which is the question a second area next
+ *  door raises and this field alone can never answer (user rule 2026-08-21,
+ *  pinned in `scripts/smoke_terrain_layers.py` [13]). */
 function edgeBlendHint(t: (s: string) => string): string {
-  return t('How wide the transition from this ground to the one under it is, in metres (0–{max}) — empty = {def} m, the soft fringe every ground had before. 0 is the HARD CUT: the edge then runs exactly on the line that was painted, anti-aliased but not blended, which is what a room floor, a kerb or a paved path wants.')
+  return t('How wide the transition from this ground to the one under it is, in metres (0–{max}) — empty = {def} m, the soft fringe every ground had before. 0 is the HARD CUT: the edge then runs exactly on the line that was painted, anti-aliased but not blended, which is what a room floor, a kerb or a paved path wants. Where two grounds share an edge, the HIGHER layer’s number wins — the one painted on top decides how it fades into what is below.')
     .replace('{max}', String(EDGE_BLEND_MAX))
     .replace('{def}', String(EDGE_BLEND_DEFAULT))
+}
+
+/** The water-flag hint — what the checkbox switches on, said as the two things
+ *  that visibly change (a carved bed, a mirror) rather than as the flag it is.
+ *  It also has to say that the NAME never mattered: a world whose river kind is
+ *  called `lagoon` carves exactly like one whose kind is called `water`, and a
+ *  ground that was never flagged simply never carved, however blue it looked. */
+function waterFlagHint(t: (s: string) => string): string {
+  return t('This kind IS water: every area painted with it gets a bed carved under the world height field and a mirror drawn on top, so no terrain can poke through the surface at any distance. The name of the kind never decides this — only this box does, and any ground can be turned into water with it.')
+}
+
+/** The kind-DEFAULT depth hint. Its job is to say who wins: the number here is
+ *  what every area of this kind gets UNLESS that area typed its own, and
+ *  changing it therefore moves every bed nobody overrode. */
+function waterDepthHint(t: (s: string) => string): string {
+  return t('How far the bed lies under the mirror once the shore ramp is through, in metres ({min}–{max}) — empty = {def} m. It is the DEFAULT of this kind: a single painted area may type its own depth and wins, everything else follows this number the moment it changes.')
+    .replace('{min}', String(WATER_DEPTH_MIN_M))
+    .replace('{max}', String(WATER_DEPTH_MAX_M))
+    .replace('{def}', String(WATER_DEPTH_DEFAULT_M))
+}
+
+/** The kind-DEFAULT shore-ramp hint. Same override rule, plus the one thing a
+ *  number field cannot show: 0 is a setting here, not an empty field. */
+function shoreRampHint(t: (s: string) => string): string {
+  return t('How far INSIDE the outline the full depth is reached, in metres ({min}–{max}) — empty = {def} m, a beach that wades in. 0 is a VALUE: the bed drops at the line that was painted, which is the walled basin of a pool or a quay. The DEFAULT of this kind; a single painted area may override it.')
+    .replace('{min}', String(SHORE_RAMP_MIN_M))
+    .replace('{max}', String(SHORE_RAMP_MAX_M))
+    .replace('{def}', String(SHORE_RAMP_DEFAULT_M))
 }
 
 /** The wavelength hint — how wide one swell is, plus the default an amplitude
@@ -342,6 +408,9 @@ export function TerrainDetail({
   const [sway, setSway] = useState(metaNumOf(type, 'sway_m'))
   const [undergrowth, setUndergrowth] = useState(metaNumOf(type, 'undergrowth'))
   const [edgeBlend, setEdgeBlend] = useState(metaNumOf(type, 'edge_blend_m'))
+  const [water, setWater] = useState(metaBoolOf(type, 'water'))
+  const [waterDepth, setWaterDepth] = useState(metaNumOf(type, 'water_depth_m'))
+  const [shoreRamp, setShoreRamp] = useState(metaNumOf(type, 'shore_ramp_m'))
   /** The reset button is armed by the first click and fires on the second —
    *  no `window.confirm` in this UI, and the entry it removes may be the only
    *  copy of a hand-made ground. */
@@ -390,6 +459,9 @@ export function TerrainDetail({
     || numChanged(sway, metaNumOf(type, 'sway_m'))
     || numChanged(undergrowth, metaNumOf(type, 'undergrowth'))
     || blendChanged(edgeBlend, metaNumOf(type, 'edge_blend_m'))
+    || water !== metaBoolOf(type, 'water')
+    || numChanged(waterDepth, metaNumOf(type, 'water_depth_m'))
+    || blendChanged(shoreRamp, metaNumOf(type, 'shore_ramp_m'))
     || (speedBad ? speed !== String(type?.speed_factor) : speedNum !== type?.speed_factor)
 
   const canSave = dirty && !speedBad && !kindBad && !kindTaken
@@ -398,7 +470,7 @@ export function TerrainDetail({
   const save = useCallback(async () => {
     if (speedBad || !kindClean || kindBad || kindTaken) return
     // `meta` is free-form and belongs to whoever wrote it — this form owns
-    // exactly EIGHT keys in it and hands the rest back untouched. `surface` is
+    // exactly TWELVE keys in it and hands the rest back untouched. `surface` is
     // ALWAYS sent, empty string included: the route is a full replace, so a
     // body without the key would undress the ground on every save (which is
     // exactly what the old dialog did). The numbers go out unclamped on
@@ -413,7 +485,7 @@ export function TerrainDetail({
       surface: surface.trim(),
       meta: withOwnedMeta(type?.meta,
         { moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway,
-          undergrowth, edgeBlend }),
+          undergrowth, edgeBlend, water, waterDepth, shoreRamp }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -430,9 +502,13 @@ export function TerrainDetail({
     setSway(metaNumOf(saved, 'sway_m'))
     setUndergrowth(metaNumOf(saved, 'undergrowth'))
     setEdgeBlend(metaNumOf(saved, 'edge_blend_m'))
+    setWater(metaBoolOf(saved, 'water'))
+    setWaterDepth(metaNumOf(saved, 'water_depth_m'))
+    setShoreRamp(metaNumOf(saved, 'shore_ramp_m'))
   }, [color, edgeBlend, idleAnim, idleSink, kindBad, kindClean, kindTaken,
       moveAnim, moveSink, name, onSave, passable, reliefAmp, reliefWave,
-      speedBad, speedNum, surface, sway, type, undergrowth])
+      shoreRamp, speedBad, speedNum, surface, sway, type, undergrowth, water,
+      waterDepth])
 
   return (
     <>
@@ -681,6 +757,61 @@ export function TerrainDetail({
                 onChange={(e) => setIdleSink(e.target.value)}
               />
             </Field>
+          </div>
+        </div>
+
+        {/* WATER IS A KIND (§ A16.3, addendum "Ein Wasser-Gesetz" — W1). The
+            flag is the ONE predicate the bake, the layer table, the sanitizer
+            and the map editor all ask, so it belongs to the kind and not to a
+            name, a colour or a texture class. The two numbers under it are
+            what this kind's water is NORMALLY like; a single painted area may
+            override both, and the mirror itself is always the area's alone —
+            two lakes of one kind stand at two heights. */}
+        <div className="ga-section">
+          <div className="ga-form-section-label">{t('Water')}</div>
+          <Field label={t('Water kind')} inline hint={waterFlagHint(t)}>
+            <input
+              type="checkbox"
+              checked={water}
+              title={t('This kind is water: painted areas carve a bed and get a mirror')}
+              onChange={(e) => setWater(e.target.checked)}
+            />
+          </Field>
+          {/* The two numbers stay READABLE and EDITABLE on an unflagged kind,
+              exactly as the server whitelists them for every kind: a ground is
+              often given its depth before somebody decides it is water, and a
+              value that survived that edit is one the author already chose. */}
+          <div className="ga-form-row">
+            <Field label={t('Depth (m)')} compact hint={waterDepthHint(t)}>
+              <input
+                className="ga-input ga-tt-num"
+                type="number"
+                min={WATER_DEPTH_MIN_M}
+                max={WATER_DEPTH_MAX_M}
+                step={WATER_DEPTH_STEP}
+                value={waterDepth}
+                placeholder={String(WATER_DEPTH_DEFAULT_M)}
+                onChange={(e) => setWaterDepth(e.target.value)}
+              />
+            </Field>
+            <Field label={t('Shore ramp (m)')} compact hint={shoreRampHint(t)}>
+              <input
+                className="ga-input ga-tt-num"
+                type="number"
+                min={SHORE_RAMP_MIN_M}
+                max={SHORE_RAMP_MAX_M}
+                step={SHORE_RAMP_STEP}
+                value={shoreRamp}
+                placeholder={String(SHORE_RAMP_DEFAULT_M)}
+                onChange={(e) => setShoreRamp(e.target.value)}
+              />
+            </Field>
+          </div>
+          {/* WHAT THIS SECTION CANNOT SET, said where somebody would look for
+              it: the mirror is per AREA, and so are the flow direction and the
+              bed — a kind has no single water level to give. */}
+          <div className="ga-field-hint">
+            {t('The water LEVEL, the flow direction and the bed under the water belong to the painted area, not to the kind — select an area on the map to set them. Two lakes of one kind stand at two heights, so a kind could never answer for both.')}
           </div>
         </div>
 

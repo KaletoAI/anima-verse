@@ -32,7 +32,7 @@ import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
 import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
 import { fmtM } from './planGeometry'
 import type { Map3D, Room, SceneModelSpec, ScenePayload, ScenePlate } from './worldTypes'
-import { hasRect } from './worldTypes'
+import { hasRect, readMapWater } from './worldTypes'
 import { buildMeasureAids, disposeAids, useActiveMeasure,
   type MeasureKey } from './measureKit'
 
@@ -1016,24 +1016,32 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       if (visibleLevel(0)) {
         for (const floor of sc.floor_plan) {
           if (floor.polygon_world.length < 3) continue
-          // AN EMPTY KIND IS NOT A FALLBACK. A zone that names no floor lets
-          // the terrain through, and the bake paints nothing there either —
-          // so neither does the preview. Painting `floor_color` here would
-          // invent a surface the world does not have.
-          if (!floor.floor_kind) continue
-          const info = ensureSurfaceTex(floor.floor_kind)
+          // THE ROOM STANDS ON PAINTED WATER (W1 § 6). What marks it is the
+          // derived reference `map_water`, and nothing else: the per-room
+          // water numbers are deleted and `water_level_effective` never
+          // travels in a floor-plan entry any more — reading that was a dead
+          // branch that had silently stopped colouring any room at all.
+          const mapWater = readMapWater(floor)
+          // WHICH SURFACE THE ROOM WEARS. Its own floor kind, and for a water
+          // room the WATER AREA's kind: such a room names no floor of its own
+          // (the sanitizer strips a water floor kind at the write path), so
+          // the ground it stands on is the one the map paints there.
+          //
+          // AN EMPTY KIND IS STILL NOT A FALLBACK. A zone that names no floor
+          // and lies on no water lets the terrain through, and the bake paints
+          // nothing there either — so neither does the preview. Painting
+          // `floor_color` here would invent a surface the world does not have.
+          const floorKind = floor.floor_kind || mapWater?.kind || ''
+          if (!floorKind) continue
+          const info = ensureSurfaceTex(floorKind)
           const kindMat = surfaceListRef.current.map
-            .get(floor.floor_kind)?.material ?? null
-          // A WATER FLOOR IS THE MIRROR ITSELF — one surface, not two.
-          // `water_level_effective` marks a room whose floor kind is a water
-          // surface (§ A19 no. 4); the shared `surfaceMaterial` already gives
-          // its class the ripple and the fresnel, so a second plane laid over
-          // the polygon would be the same mirror drawn twice, coplanar with
-          // itself. What water needs on top of the kind is view state: it
-          // blends, and it writes no depth (§ G4 — the bed under it has to
-          // show through its shore, and two fragments of one sheet must not
-          // cull each other).
-          const water = floor.water_level_effective !== undefined
+            .get(floorKind)?.material ?? null
+          // What water needs is VIEW STATE, not a second surface: it blends
+          // and it writes no depth (§ G4 — the bed under it has to show
+          // through its shore, and two fragments of one sheet must not cull
+          // each other). No plane is laid over the polygon either; that would
+          // be the same mirror drawn twice, coplanar with itself.
+          const water = mapWater !== null
           const look = { material: kindMat, side: THREE.DoubleSide,
             ...(water ? { transparent: true, opacity: 0.85,
                           depthWrite: false } : {}) }
@@ -1051,20 +1059,16 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           // the polygon rule lives in @anima/scene-render and is not written
           // a second time here.
           //
-          // THE HEIGHT: y = 0, and no offset is derived from
-          // `water_level_effective`. That number is the one ABSOLUTE world y
-          // in the payload, while everything else here — plates, walls,
-          // models, the stage — is SCENE-FRAME metres around the anchor pin,
-          // whose zero IS the location's own ground (the plateau the bake
-          // stamps under a built plot, § G5). The preview knows no world
-          // datum for the plot, so it has nothing to subtract. y = 0 is also
-          // exactly where the mirror really stands whenever the bake DERIVED
-          // the level — plateau height on a built location, rim median on a
-          // natural one (§ A19 no. 4), which is the default case. Where an
-          // author dials `layout.water_level` away from that, the absolute
-          // number is what the room panel's field reads back; the preview
-          // keeps the sheet on the ground datum rather than inventing a
-          // second one.
+          // THE HEIGHT: y = 0, and NO absolute world y is read here at all.
+          // Everything in this preview — plates, walls, models, the stage —
+          // is SCENE-FRAME metres around the anchor pin, whose zero IS the
+          // location's own ground (the plateau the bake stamps under a built
+          // plot, § G5). The preview knows no world datum for the plot, so it
+          // has nothing to subtract. Since W1 the mirror of a water room is
+          // not the room's business either: it belongs to the painted AREA,
+          // which carries a whole PROFILE (a tilted plane on a river), and
+          // reproducing that here would be a second sampler next to the one in
+          // @anima/scene-render. The sheet stays on the ground datum.
           const spec: ScenePlate = {
             level: 0,
             outline: floor.polygon_world,
@@ -1072,7 +1076,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
             thickness: 0,
             opacity_role: 'ground',
             room_id: floor.room_id,
-            texture_kind: floor.floor_kind,
+            texture_kind: floorKind,
           }
           boxes.add(buildPlate(THREE, spec, mat))
         }

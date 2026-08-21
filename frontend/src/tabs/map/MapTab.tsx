@@ -36,7 +36,7 @@ import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { WorldPropLayer } from './WorldPropLayer'
 import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
-import { readScatter, readWater } from './mapTypes'
+import { readScatter, readWater, readWaterProfile } from './mapTypes'
 import {
   DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M,
 } from './heightMath'
@@ -1399,6 +1399,13 @@ export function MapTab() {
   const selWater = useMemo(
     () => readWater(selectedArea?.meta), [selectedArea])
 
+  /** …and the bake's OWN mirror for it (`meta.water_profile`, server output).
+   *  It is what the panel reads BACK where the author left an end level open:
+   *  the rim median of that end's third, a number nothing on this side may
+   *  compute a second time. */
+  const selWaterProfile = useMemo(
+    () => readWaterProfile(selectedArea?.meta), [selectedArea])
+
   /**
    * The painted areas the tray lists, TOPMOST FIRST.
    *
@@ -1840,14 +1847,16 @@ export function MapTab() {
   }, [patchAreaLocal, putArea, selectedArea])
 
   /**
-   * The three numbers of a WATER area (plan "Ein Boden" § 2 G4): the mirror,
-   * how deep the bed is carved under it and how far the shore ramps back up.
+   * What a WATER area authors about itself (§ A16.3, W1): its mirror, how deep
+   * the bed is carved under it, how far the shore ramps back up, which way it
+   * FLOWS and what the bake paints as its bed.
    *
    * They ride in `meta` like the scatter list, so the same rule holds: the
    * write is a full replace, the rest of `meta` travels along, and an
    * `undefined` in the patch DELETES the key instead of storing a zero. That
-   * is what hands a field back to the server's own default — the rim median
-   * for the level, its configured defaults for depth and ramp.
+   * is what hands a field back — the rim median for the level, the KIND's own
+   * numbers for depth and ramp, still water for the flow, the bare world for
+   * the bed.
    */
   const setAreaWater = useCallback((patch: Partial<TerrainWater>) => {
     const a = selectedArea
@@ -2612,6 +2621,7 @@ export function MapTab() {
               stroke={selStroke}
               scatter={selScatter}
               water={selWater}
+              waterProfile={selWaterProfile}
               props={propList}
               scatterColor={scatterColor}
               onWater={setAreaWater}

@@ -221,6 +221,150 @@ export function worldPolyToPath(points: Array<[number, number]>, view: View,
   return parts.join(' ') + (close ? ' Z' : '')
 }
 
+/**
+ * THE AREA CENTROID of a polygon in world metres — the point the flow axis of
+ * a water area runs through (`heightfield.WaterProfile.axis_x/axis_z`, W1 § 2).
+ *
+ * The real centroid formula, NOT the mean of the vertices: a river drawn with
+ * ten points along one bank and two along the other has its vertex mean pulled
+ * onto the dense bank, and an arrow drawn there would sit outside the water it
+ * describes. The two agree on a rectangle and disagree on everything else,
+ * which is why the server picked this one and why the preview must use the
+ * same one.
+ *
+ * A DEGENERATE ring (zero signed area — all points collinear, or a bow tie
+ * whose lobes cancel) has no centroid to compute: the vertex mean answers
+ * then, because a marker in roughly the right place beats no marker at all.
+ */
+export function polygonCentroid(points: Array<[number, number]>
+                               ): [number, number] {
+  const n = points.length
+  if (!n) return [0, 0]
+  let a2 = 0
+  let cx = 0
+  let cz = 0
+  for (let i = 0; i < n; i += 1) {
+    const [x0, z0] = points[i]
+    const [x1, z1] = points[(i + 1) % n]
+    const cross = x0 * z1 - x1 * z0
+    a2 += cross
+    cx += (x0 + x1) * cross
+    cz += (z0 + z1) * cross
+  }
+  if (Math.abs(a2) < 1e-9) {
+    let mx = 0
+    let mz = 0
+    for (const [x, z] of points) { mx += x; mz += z }
+    return [mx / n, mz / n]
+  }
+  return [cx / (3 * a2), cz / (3 * a2)]
+}
+
+/**
+ * THE DOWNSTREAM UNIT VECTOR of a flow bearing — `(sin θ, cos θ)`.
+ *
+ * The contract's ONE yaw mapping (§ A1.1), the same one
+ * `heightfield.flow_direction` uses: 0° runs toward +z, 90° toward +x. Writing
+ * it any other way here would draw an arrow pointing where the water does not
+ * go, which is the single thing this preview exists to rule out.
+ *
+ * The components are rounded to twelve decimals for the same reason the server
+ * rounds them: `cos(270°)` is −1.8e−16 in binary floating point, and a cardinal
+ * arrow must come out exactly axis-aligned.
+ */
+export function flowDirection(deg: number): [number, number] {
+  const rad = (deg * Math.PI) / 180
+  const round12 = (v: number) => {
+    const r = Math.round(v * 1e12) / 1e12
+    // −0 is equal to 0 everywhere except where it is rendered.
+    return r === 0 ? 0 : r
+  }
+  return [round12(Math.sin(rad)), round12(Math.cos(rad))]
+}
+
+/** The eight-point compass, CLOCKWISE from north — the order a compass rose
+ *  is read in. */
+const COMPASS_LETTERS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+
+/**
+ * THE COMPASS LETTER of a flow bearing, by the contract's own yaw convention
+ * (§ A1.1): `dir = (sin θ, cos θ)`, so 0° runs toward +z and 90° toward +x. On
+ * this map +z is SOUTH and +x is EAST (`worldToScreen` above), so 0° is S,
+ * 90° is E, 180° is N and 270° is W — spelled out deliberately, because
+ * guessing "0 = north" from a compass habit is exactly how a river ends up
+ * flowing backwards on the picture.
+ *
+ * THE TWO SCALES RUN OPPOSITE WAYS, and that is the whole arithmetic: the
+ * compass rose above steps CLOCKWISE from north, while a rising bearing steps
+ * from south toward east, i.e. ANTICLOCKWISE on that same rose. So the index
+ * is subtracted from the four eighth-turns that separate S from N, not added
+ * to them — `(4 − step) mod 8`, which sends 0° to S, 45° to SE, 90° to E and
+ * 270° to W.
+ */
+export function flowCompass(deg: number): string {
+  const step = Math.round((((deg % 360) + 360) % 360) / 45) % 8
+  return COMPASS_LETTERS[(4 - step + 8) % 8]
+}
+
+/** A flow arrow in WORLD metres: where it starts, where its tip is and the two
+ *  barbs of the head. Everything a renderer needs, and no pixels — the caller
+ *  projects it with `worldToScreen` like every other world shape. */
+export interface FlowArrow {
+  from: [number, number]
+  to: [number, number]
+  barbs: [[number, number], [number, number]]
+}
+
+/**
+ * THE ARROW THAT SHOWS WHICH WAY A WATER AREA FLOWS, in world metres.
+ *
+ * It sits on the area's own flow axis, centred on the centroid the profile is
+ * built around, and it points DOWNSTREAM — the direction `flow_dir_deg` names.
+ * Its length is a fraction of the polygon's extent ALONG that axis, so a
+ * kilometre of river and a ten-metre brook both get an arrow that reads as one
+ * inside its own shape, clamped so neither degenerates: too short and it is a
+ * dot, too long and it leaves the water at the bends.
+ *
+ * `null` for still water — a lake has no downstream, and drawing an arrow of
+ * some default bearing would be an invention. Pure: no view, no pixels, no
+ * DOM, so the numbers are checkable by hand (`scripts/smoke_water_meta.mjs`).
+ */
+export function flowArrow(polygon: Array<[number, number]>,
+  flowDirDeg: number | undefined,
+  opts: { minM?: number; maxM?: number; share?: number } = {}
+): FlowArrow | null {
+  if (flowDirDeg === undefined || polygon.length < 3) return null
+  const minM = opts.minM ?? 4
+  const maxM = opts.maxM ?? 60
+  const share = opts.share ?? 0.5
+  const [cx, cz] = polygonCentroid(polygon)
+  const [dx, dz] = flowDirection(flowDirDeg)
+  // The polygon's extent along the flow axis — the very span the server's
+  // profile interpolates over (`s_min`…`s_max`), measured from the centroid.
+  let sMin = Infinity
+  let sMax = -Infinity
+  for (const [x, z] of polygon) {
+    const s = (x - cx) * dx + (z - cz) * dz
+    if (s < sMin) sMin = s
+    if (s > sMax) sMax = s
+  }
+  const span = sMax - sMin
+  if (!Number.isFinite(span) || span <= 0) return null
+  const len = Math.min(maxM, Math.max(minM, span * share))
+  const half = len / 2
+  const from: [number, number] = [cx - dx * half, cz - dz * half]
+  const to: [number, number] = [cx + dx * half, cz + dz * half]
+  // The head: two barbs a quarter of the length back from the tip, swung out
+  // to either side by the perpendicular (−dz, dx).
+  const back = len * 0.25
+  const side = len * 0.15
+  const barb = (sign: number): [number, number] => [
+    to[0] - dx * back + sign * -dz * side,
+    to[1] - dz * back + sign * dx * side,
+  ]
+  return { from, to, barbs: [barb(1), barb(-1)] }
+}
+
 /** Where a point sits on a polyline: the closest point ON the line, the
  *  segment that carries it and how far the query point is away. */
 export interface NearestOnPolyline {

@@ -2,10 +2,19 @@
  * PlanSidePanel — the context column right of the floor plan. Everything that
  * belongs to the SELECTED shape and is not a click tool lives here: room info
  * (name, rotation, always-visible), how the room's FLOOR meets the ground
- * around it (edge transition, and the mirror of a water floor), the
- * animation-marker vocabulary + the marker list, and the room shell's surface
- * kinds. The 🪑 tool opens the prop palette below them. Purely presentational
- * — RoomLayoutEditor owns the state and hands in the callbacks.
+ * around it, the animation-marker vocabulary + the marker list, and the room
+ * shell's surface kinds. The 🪑 tool opens the prop palette below them. Purely
+ * presentational — RoomLayoutEditor owns the state and hands in the callbacks.
+ *
+ * WATER IS NOT EDITED HERE ANY MORE (W1, 2026-08-21). The three per-room dials
+ * (level, depth, shore ramp) drove a second, weaker water with its own bake
+ * stage; that stage is deleted and the server drops the three keys on the way
+ * in, so a dial here would have written into nothing. What is left is the
+ * honest half of the same statement: a room whose hull lies on painted water
+ * shows a REFERENCE to that area — derived at compose time, never stored — and
+ * its floor-kind picker no longer offers a water kind, because the sanitizer
+ * strips exactly those. Water is painted on the MAP, where one polygon owns
+ * its mirror, its bed and its flow.
  *
  * The YARD (§ A13a) is a shape here too, and the difference is what it does
  * NOT have: no shell block, no surfaces — it is the location surface, not a
@@ -14,12 +23,8 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { SliderInput } from '../../components/SliderInput'
 import { PropsPalette } from './PropsPalette'
-import { HEIGHT_MAX_M, SHORE_RAMP_DEFAULT_M, SHORE_RAMP_MAX_M,
-  WATER_DEPTH_DEFAULT_M, WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M,
-  WATER_LEVEL_SPAN_M } from '../map/TerrainTools'
 import type { PropFull } from '../props/propTypes'
-import type { Room, RoomLayout, SurfaceKind } from './worldTypes'
-import { floorKindOf, isWaterSurface } from './worldTypes'
+import type { MapWaterRef, Room, RoomLayout, SurfaceKind } from './worldTypes'
 
 /** Widest transition a floor may be given, in metres — the server window of
  *  `layout.edge_blend_m` (`terrain_layers.sanitize_edge_blend`). */
@@ -61,9 +66,8 @@ interface PlanSidePanelProps {
    *  been read. */
   onRotation: (deg: number) => void
   /** Patch of THIS room's layout — the generic write for the floor dials
-   *  (`edge_blend_m`, and the three water numbers of a water floor). A field
-   *  set to `undefined` is REMOVED, which is how a water level goes back to
-   *  "the bake decides"; 0 is an ordinary value and travels as 0. */
+   *  (today only `edge_blend_m`). A field set to `undefined` is REMOVED; 0 is
+   *  an ordinary value and travels as 0. */
   onLayout: (patch: Partial<RoomLayout>) => void
   /** Walls opt-out of THIS room. Stored negative (`no_walls`), shown positive
    *  — it is a property of the room SHELL, not of any model it may carry. */
@@ -72,7 +76,18 @@ interface PlanSidePanelProps {
   onFloorOffset: (value: number | undefined) => void
   /** Surface-texture kinds (deduplicated); url = thumbnail when one exists. */
   surfaceKinds: SurfaceKind[]
+  /** The ids of every WATER terrain kind (`meta.water`), as the catalog
+   *  answers them. The floor picker does not OFFER them: the server strips a
+   *  water floor kind at the one write path, so a UI that let it be picked
+   *  would only produce a selection that silently disappears on save. Empty
+   *  while the catalog has not answered — and then nothing is filtered, the
+   *  same rule the surface library follows about "not in the list". */
+  waterKinds: Set<string>
   onSurface: (key: 'floor' | 'wall', kind: string) => void
+  /** THIS room stands on painted water — the derived reference of the scene
+   *  payload (`floor_plan[].map_water`), or null. Read-only: it names the
+   *  area, it does not edit it. */
+  mapWater: MapWaterRef | null
   /** "✨ Furnish" (plan-room-furnish.md): opens the job dialog. The state
    *  string ('' = no job) is shown as a badge so a running job is visible
    *  without opening it. */
@@ -101,7 +116,7 @@ export function PlanSidePanel({
   clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
   markerMode, onArmMarker, onAlwaysVisible, onRotation, onLayout, onNoWalls,
   onFloorOffset,
-  surfaceKinds, onSurface,
+  surfaceKinds, waterKinds, onSurface, mapWater,
   furnishState, furnishDisabled, furnishHint, onFurnish,
   propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
@@ -179,62 +194,17 @@ export function PlanSidePanel({
         />
       ) : null}
 
-      {/* WATER FLOORS (§ A19 no. 4). A room whose floor kind is a water
-          surface is a lake with a room's outline: the bake carves its bed out
-          of the world height field with the very three numbers a painted lake
-          uses. Which kinds count is asked of the LIBRARY's material class —
-          never of the kind's name and never of its colour, the same book the
-          server asks. */}
-      {(layout.level || 0) === 0
-        && isWaterSurface(floorKindOf(layout), surfaceKinds) ? (
-        <>
-          <SliderInput
-            label={t('Water level (m)')}
-            title={t('The height the water surface stands at, as a world height in metres. Empty = the server decides: on a built plot the level of the ground the building stands on, out in the open the median height along this room’s own rim.')}
-            value={layout.water_level}
-            fallback={0}
-            min={layout.water_level === undefined
-              ? -HEIGHT_MAX_M
-              : Math.max(-HEIGHT_MAX_M, layout.water_level - WATER_LEVEL_SPAN_M)}
-            max={layout.water_level === undefined
-              ? HEIGHT_MAX_M
-              : Math.min(HEIGHT_MAX_M, layout.water_level + WATER_LEVEL_SPAN_M)}
-            step={0.05} fineStep="any"
-            clearable placeholder={t('auto')}
-            sliderWidth={72} inputWidth={62}
-            style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
-            onChange={(v) => onLayout({ water_level: v })}
-            onClear={() => onLayout({ water_level: undefined })}
-          />
-          <SliderInput
-            label={t('Depth (m)')}
-            title={t('How far the bed is carved below the water surface. Empty = the bake’s own default.')}
-            value={layout.water_depth_m}
-            fallback={WATER_DEPTH_DEFAULT_M}
-            min={WATER_DEPTH_MIN_M} max={WATER_DEPTH_MAX_M} step={0.1}
-            fineStep="any"
-            clearable placeholder={String(WATER_DEPTH_DEFAULT_M)}
-            sliderWidth={72} inputWidth={62}
-            style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
-            onChange={(v) => onLayout({ water_depth_m: v })}
-            onClear={() => onLayout({ water_depth_m: undefined })}
-          />
-          <SliderInput
-            label={t('Shore ramp (m)')}
-            title={t('Over how many metres the bed climbs back to the untouched land at the water’s edge. 0 = a wall at the shore.')}
-            value={layout.shore_ramp_m}
-            fallback={SHORE_RAMP_DEFAULT_M}
-            min={0} max={SHORE_RAMP_MAX_M} step={0.5} fineStep="any"
-            clearable placeholder={String(SHORE_RAMP_DEFAULT_M)}
-            sliderWidth={72} inputWidth={62}
-            style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
-            onChange={(v) => onLayout({ shore_ramp_m: v })}
-            onClear={() => onLayout({ shore_ramp_m: undefined })}
-          />
-          <span className="ga-hint">
-            {t('This room’s floor is water: the ground under it is dug out to the level minus the depth and ramped back to the land over the shore width, so no terrain pokes through the surface at any distance. Leave a field empty to let the server decide.')}
-          </span>
-        </>
+      {/* THE ROOM STANDS ON PAINTED WATER (W1 § 6) — a READ-ONLY reference,
+          not a dial. The room owns no mirror, no depth and no bed; it merely
+          lies on an area that does, and the line says which one so the author
+          knows where to go and edit it. Derived at compose time by containment
+          and never stored, so it cannot outlive the lake. */}
+      {mapWater ? (
+        <span className="ga-hint">
+          {t('Map ground: water — area {area} ({kind}). This room lies on painted water: the mirror, the depth, the shore ramp and the flow belong to that area on the map, not to the room. The room keeps its own walls, props and markers.')
+            .replace('{area}', mapWater.area_id)
+            .replace('{kind}', mapWater.kind)}
+        </span>
       ) : null}
 
       {/* Walls opt-out: open zones, pavilions, areas inside an area model.
@@ -297,6 +267,14 @@ export function PlanSidePanel({
       {surfaceKinds.length || layout.surfaces ? SURFACE_SLOTS.map(({ key, label }) => {
         const cur = layout.surfaces?.[key] || ''
         const thumb = surfaceKinds.find((s) => s.kind === cur)?.url
+        // A FLOOR MAY NOT BE WATER (W1 § 6). The server strips such a pick at
+        // the one write path, so offering it would mean watching a selection
+        // vanish on the next save with nothing said. Only the FLOOR is
+        // filtered — a wall may wear a wet-looking texture all it likes; what
+        // is forbidden is a room claiming to BE water.
+        const options = key === 'floor'
+          ? surfaceKinds.filter((s) => !waterKinds.has(s.kind))
+          : surfaceKinds
         return (
           <label key={key} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}>
             <span style={{ width: 32, flex: '0 0 auto' }}>{t(label)}</span>
@@ -311,11 +289,11 @@ export function PlanSidePanel({
               onChange={(e) => onSurface(key, e.target.value)}
             >
               <option value="">{t('— default —')}</option>
-              {surfaceKinds.map((s) => (
+              {options.map((s) => (
                 <option key={s.kind} value={s.kind}>{s.name}</option>
               ))}
-              {/* A stored kind the library no longer offers stays selectable. */}
-              {cur && !surfaceKinds.some((s) => s.kind === cur) ? (
+              {/* A stored kind the list no longer offers stays selectable. */}
+              {cur && !options.some((s) => s.kind === cur) ? (
                 <option value={cur}>{cur}</option>
               ) : null}
             </select>

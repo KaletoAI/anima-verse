@@ -18,8 +18,9 @@
  * now says so on the picture. The maths of both, and the hysteresis between
  * them, is `mapMath` (see the scatter-preview section there).
  *
- * Inside the paint part the order never changes: fills, then the scatter
- * preview, then the selection outline / centre line / handles / draft. The
+ * Inside the paint part the order never changes: fills, then the flow arrows
+ * of the water areas, then the scatter preview, then the selection outline /
+ * centre line / handles / draft. The
  * overlays are how the user sees WHAT they are editing, so nothing this layer
  * draws may cover them — which is why the selection outline is one of those
  * overlays and NOT the stroke of the selected area's own fill: an area painted
@@ -67,13 +68,15 @@ import type { ScatterFootprint } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useMapView } from './MapCanvas'
 import {
-  decorateStroke, scatterAreaCosts, scatterAreaPlan, scatterPreviewJobs,
-  scatterThinnedByArea, scatterThinnedPercentText, scatterWindowDots,
-  strokeToPolygon, visibleWorldRect, worldPolyToPath, worldToScreen,
+  decorateStroke, flowArrow, scatterAreaCosts, scatterAreaPlan,
+  scatterPreviewJobs, scatterThinnedByArea, scatterThinnedPercentText,
+  scatterWindowDots, strokeToPolygon, visibleWorldRect, worldPolyToPath,
+  worldToScreen,
   type ScatterDot, type ScatterPreviewJob, type ScatterThinnedDraw,
   type StrokeDeco,
 } from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
+import { isWaterKind, readWater } from './mapTypes'
 import type { TerrainArea, TerrainType } from './mapTypes'
 
 /** One opacity for every fill — see the module docstring. */
@@ -88,6 +91,11 @@ export const UNKNOWN_COLOR = '#888888'
 const COL_SELECTED = '#58a6ff'
 const COL_DRAFT = '#3fb950'
 const COL_WARN = '#d29922'
+/** The flow arrow of a water area: near-white with a dark halo, so it reads on
+ *  a light shallow and on a deep blue alike. It is an ANNOTATION, not paint —
+ *  it never changes with the kind's own colour. */
+const COL_FLOW = '#e6f2ff'
+const COL_FLOW_HALO = '#0d2233'
 
 /** Radius of a draft vertex marker, in pixels — the handle radius of
  *  `PolygonHandles`, so the ring being drawn and the ring being edited read as
@@ -384,6 +392,46 @@ export function TerrainLayer({
                 <text x={cp.x} y={cp.y + 5} fontSize={15} textAnchor="middle"
                   fill={COL_WARN}>⚠</text>
               )}
+            </g>
+          )
+        })}
+      </g>
+
+      {/* WHICH WAY THE WATER GOES (§ A16.3, W1). A flowing area's mirror is a
+          tilted plane, and the one thing an author cannot see in a blue
+          polygon is which end of it is downhill. The arrow sits on the very
+          axis the server builds the profile around — the AREA centroid, the
+          contract's yaw mapping — so what is drawn here and what the bake
+          carves are the same line. Still water gets none: a lake has no
+          downstream, and an arrow of some default bearing would be an
+          invention. Inert to the pointer, like every other overlay of this
+          layer. */}
+      <g pointerEvents="none">
+        {areas.map((a) => {
+          if (!isWaterKind(types[a.kind])) return null
+          const arrow = flowArrow(a.polygon, readWater(a.meta).flow_dir_deg)
+          if (!arrow) return null
+          const p0 = worldToScreen(arrow.from[0], arrow.from[1], view, w, h)
+          const p1 = worldToScreen(arrow.to[0], arrow.to[1], view, w, h)
+          const b0 = worldToScreen(arrow.barbs[0][0], arrow.barbs[0][1],
+            view, w, h)
+          const b1 = worldToScreen(arrow.barbs[1][0], arrow.barbs[1][1],
+            view, w, h)
+          // Under one screen pixel of shaft there is nothing left to read —
+          // a zoomed-out world would only get a smear of dots.
+          if (Math.hypot(p1.x - p0.x, p1.y - p0.y) < 6) return null
+          const d = `M${p0.x.toFixed(2)} ${p0.y.toFixed(2)}`
+            + `L${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`
+            + `M${b0.x.toFixed(2)} ${b0.y.toFixed(2)}`
+            + `L${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`
+            + `L${b1.x.toFixed(2)} ${b1.y.toFixed(2)}`
+          return (
+            <g key={`flow-${a.id}`}>
+              <path d={d} fill="none" stroke={COL_FLOW_HALO} strokeWidth={4}
+                strokeLinecap="round" strokeLinejoin="round"
+                strokeOpacity={0.55} />
+              <path d={d} fill="none" stroke={COL_FLOW} strokeWidth={1.6}
+                strokeLinecap="round" strokeLinejoin="round" />
             </g>
           )
         })}

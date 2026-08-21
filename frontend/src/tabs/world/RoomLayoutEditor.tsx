@@ -79,7 +79,9 @@ import { ScenePropPanel } from './ScenePropPanel'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
-import { GROUND_ROOM_ID, groundRoomLabel, hasRect } from './worldTypes'
+import { GROUND_ROOM_ID, groundRoomLabel, hasRect, readMapWater } from './worldTypes'
+import { isWaterKind } from '../map/mapTypes'
+import type { TerrainTypesResp } from '../map/mapTypes'
 
 const CANVAS_W = 420
 /** Under this side length a room is not a small room but a LEFTOVER: in the
@@ -367,9 +369,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // thumbnail wherever one exists.
   // What a picker STORES is the id; what it SHOWS is the name — the library
   // ships both, so no dropdown has to display "dark_stone" any more.
-  // `material` travels along because the side panel decides "is this floor
-  // water?" by the declared material CLASS (§ A19 no. 4) — the same book the
-  // server asks, never the kind's name.
+  // `material` travels along because the renderers need to know HOW a kind is
+  // lit (§ A9). It no longer answers "is this water?" — since W1 that is the
+  // terrain catalog's `meta.water` and nothing else (`waterKinds` below).
   const [surfaceKinds, setSurfaceKinds] = useState<SurfaceKind[]>([])
   useEffect(() => {
     apiGet<Array<{ kind?: string; name?: string; url?: string
@@ -388,6 +390,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           .sort((a, b) => a.name.localeCompare(b.name)))
       })
       .catch(() => setSurfaceKinds([]))
+  }, [])
+  // WHICH GROUNDS ARE WATER — the terrain catalog's own flag (W1). The floor
+  // picker must not offer one: `world_ops._sanitize_room_layout` strips a water
+  // floor kind at the one write path, so a pick would vanish on the next save
+  // with nothing said. A failed fetch leaves the set EMPTY and therefore
+  // filters nothing — "no catalog" and "no water kinds" are not the same
+  // statement, and guessing the difference is how a name match creeps back in.
+  const [waterKinds, setWaterKinds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    apiGet<TerrainTypesResp>('/world/terrain-types')
+      .then((d) => setWaterKinds(new Set(
+        (d.types || []).filter(isWaterKind).map((ty) => ty.kind))))
+      .catch(() => setWaterKinds(new Set()))
   }, [])
   // Top-down underlay: the placed room models rendered straight from above,
   // laid behind the rectangles — markers can be dropped on real furniture.
@@ -1528,6 +1543,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const selOrigin: Pt = selLay ? atOrigin(selLay, groundSel) : [0, 0]
   /** Why a room tool is off on the yard — one sentence, one owner. */
   const yardNoGeometry = t('The yard has no room geometry — it is the location surface.')
+  /**
+   * Does the SELECTED room stand on painted water (W1 § 6)?
+   *
+   * The answer is the SERVER's, read off the composed scene
+   * (`floor_plan[].map_water`) and not recomputed here: the containment test is
+   * a majority-by-area vote on a fixed raster, with the paint order breaking
+   * ties, and a second implementation of that in the editor would be exactly
+   * the drifting second opinion the shared scene recipe exists to prevent.
+   * The yard is never in the floor plan — it IS the plot, not a room on it.
+   */
+  const selectedMapWater = useMemo(() => {
+    if (!selectedRoom || groundSel) return null
+    const floor = (scene?.floor_plan || [])
+      .find((f) => f.room_id === selectedRoom.id)
+    return readMapWater(floor)
+  }, [groundSel, scene, selectedRoom])
 
   // Model presence for the SELECTED room — the plan-placement handle and
   // strip only show when a diorama model exists (anchored mode loads dims
@@ -3058,7 +3089,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           floor_offset_y: v,
         })}
         surfaceKinds={surfaceKinds}
+        waterKinds={waterKinds}
         onSurface={setSurface}
+        mapWater={selectedMapWater}
         furnishState={furnish.status?.state || ''}
         // Furnish reads the SAVED world, not the draft (the job runs
         // server-side): a freshly drawn room that is not saved yet would

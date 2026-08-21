@@ -27,11 +27,15 @@ import { SliderInput } from '../../components/SliderInput'
 import type { PropRef } from '../../lib/refs'
 import { fmtHeight, heightColor } from './HeightLayer'
 import { minFalloffFor, reliefStepNotice, tooSteep } from './heightMath'
-import { STROKE_STYLES, type StrokeStyle } from './mapMath'
+import { STROKE_STYLES, flowCompass, type StrokeStyle } from './mapMath'
 import { typeColor } from './TerrainLayer'
+import {
+  FLOW_DIR_MAX_DEG, FLOW_DIR_MIN_DEG, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
+  WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
+} from './mapTypes'
 import type {
   HeightArea, TerrainArea, TerrainScatterEntry, TerrainStroke, TerrainType,
-  TerrainWater,
+  TerrainWater, TerrainWaterProfile,
 } from './mapTypes'
 
 /**
@@ -375,26 +379,20 @@ export const HEIGHT_DEFAULT_M = 3
 export const FALLOFF_DEFAULT_M = 10
 
 /**
- * WHICH PAINTED GROUND CARRIES A WATER MIRROR (plan "Ein Boden" § 2 G4).
+ * WHICH PAINTED GROUND CARRIES A WATER MIRROR — asked of the CATALOG since W1
+ * (`mapTypes.isWaterKind`, § A16.3 addendum).
  *
- * The bake stamps a mirror under areas of exactly this kind — one entry, so
- * the day a second water kind joins the catalog it is one line here and one
- * line in the bake, never a guess spread over the editor. Everything else the
- * chip offers (kind palette, layers, scatter) is unaffected.
+ * There is no hardcoded kind id here any more. `meta.water` on the terrain
+ * type is the one predicate the server, the bake, the layer table and this
+ * editor all ask, so a world whose river is called `lagoon` carves exactly
+ * like one whose river is called `water` — and the kind editor can turn any
+ * ground into water with a click. The two carved numbers default from the KIND
+ * (`waterKindDefaults`) and a painted area may override them.
+ *
+ * The level has no constant default: it is the MEDIAN HEIGHT ALONG THE RIM of
+ * the polygon, which only the server can compute — an unset level says
+ * "auto (rim)" and no number.
  */
-export const WATER_KIND = 'water'
-
-/** The server's own defaults for the two carved numbers, shown as the
- *  placeholder of an unset field so the author reads what the bake will do
- *  instead of an empty box. The level has no constant: its default is the
- *  MEDIAN HEIGHT ALONG THE RIM of the polygon, which only the server can
- *  compute — an unset level says "auto (rim)" and no number. */
-export const WATER_DEPTH_DEFAULT_M = 2
-export const SHORE_RAMP_DEFAULT_M = 3
-/** The knobs' ranges, mirrored from the bake's clamps. */
-export const WATER_DEPTH_MIN_M = 0.2
-export const WATER_DEPTH_MAX_M = 20
-export const SHORE_RAMP_MAX_M = 20
 /** How far the level slider sweeps around a level that is already SET — a
  *  water mirror is trimmed in centimetres, not dragged across the world. An
  *  unset one sweeps the full world height range instead (`HEIGHT_MAX_M`), so
@@ -930,29 +928,42 @@ export function TerrainLayerHint({ defaultKindName, open, onOpen }: TerrainLayer
 }
 
 /**
- * THE THREE NUMBERS OF A WATER AREA (plan "Ein Boden" § 2 G4).
+ * WHAT A WATER AREA SAYS ABOUT ITSELF (§ A16.3, addendum "Ein Wasser-Gesetz").
  *
- * A lake is the one surface in this world that is FLAT, and until the bake
- * knew that, distant terrain kept poking through it: the mirror was drawn on
- * one raster and the ground under it on another, so a coarse level of detail
- * put a green ridge where the near view had water. The mirror is now a stored
- * number, the bake presses the bed to `level − depth` under the whole polygon
- * and ramps it back to the untouched land over the shore width, and the "is
- * the ground under the water?" question has a single answer at every distance.
+ * A lake used to be the one surface in this world that was FLAT, and until the
+ * bake knew that, distant terrain kept poking through it: the mirror was drawn
+ * on one raster and the ground under it on another, so a coarse level of
+ * detail put a green ridge where the near view had water. The bake now presses
+ * the bed to `level − depth` under the whole polygon and ramps it back to the
+ * untouched land over the shore width, and "is the ground under the water?"
+ * has a single answer at every distance.
  *
- * ALL THREE FIELDS MAY BE EMPTY, and empty is the normal state. It means "the
- * server decides": the level then sits at the median height along the rim of
- * this polygon — the number a lake would have if it simply filled the hollow
- * somebody painted — and depth and shore take the bake's own defaults, which
- * the empty fields show as their placeholder.
+ * SINCE W1 THE MIRROR IS A PROFILE, not a number. A FLOW DIRECTION tilts it
+ * along the flow axis between an upstream and a downstream level, and every
+ * one of those two ends may be left open — the rim median of that end's third
+ * of the polygon answers then, and the read-back line names what the bake
+ * really used. No flow direction = still water = one constant level, the lake
+ * of every round before this one.
+ *
+ * EVERY FIELD MAY BE EMPTY, and empty is the normal state. Depth and shore
+ * ramp then come from the KIND (the placeholder names the number in force),
+ * the level from the rim, and the bed from the bare world.
  *
  * The level slider sweeps the FULL world height range while nothing is set (a
  * mountain lake has to be reachable in one go) and tightens to
  * ±`WATER_LEVEL_SPAN_M` around a level that IS set, because the second visit
  * to this field trims centimetres rather than moving the lake.
  */
-function WaterFields({ water, onWater }: {
+function WaterFields({ water, profile, kindType, typeList, onWater }: {
   water: TerrainWater
+  /** The bake's own mirror for this area (server output) — the read-back of
+   *  the two end levels where the author left them open. */
+  profile: TerrainWaterProfile | null
+  /** The area's own terrain type: it carries the depth/ramp DEFAULTS the
+   *  empty fields fall back to. */
+  kindType: TerrainType | undefined
+  /** The whole catalog, for the bed-kind picker. */
+  typeList: TerrainType[]
   onWater: (patch: Partial<TerrainWater>) => void
 }) {
   const { t } = useI18n()
@@ -963,6 +974,17 @@ function WaterFields({ water, onWater }: {
   const levelMax = level === undefined
     ? HEIGHT_MAX_M
     : Math.min(HEIGHT_MAX_M, level + WATER_LEVEL_SPAN_M)
+  // The two numbers in force where this area authors none — the KIND's, never
+  // the module's, so the placeholder shows what the bake will really do.
+  const kindDefaults = waterKindDefaults(kindType)
+  const flow = water.flow_dir_deg
+  // A bed kind the catalog no longer holds stays SELECTABLE, the way a missing
+  // surface texture does: it is a legitimate reference to a ground that may
+  // come back, and dropping it from the list would rewrite the area on the
+  // next save. Water kinds are not offered — a bed of water is a second lake
+  // under the first one, and the layer bake would paint one over the other.
+  const bed = water.bed_kind || ''
+  const bedUnlisted = !!bed && !typeList.some((ty) => ty.kind === bed)
   return (
     <>
       <div className="ga-map-chip-row">
@@ -983,28 +1005,82 @@ function WaterFields({ water, onWater }: {
       <div className="ga-map-chip-row">
         <SliderInput
           label={t('Depth (m)')}
-          title={t('How far the bed is carved below the water surface. Empty = the bake’s own default.')}
+          title={t('How far the bed is carved below the water surface. Empty = the depth this terrain kind defaults to.')}
           value={water.water_depth_m}
-          fallback={WATER_DEPTH_DEFAULT_M}
+          fallback={kindDefaults.depthM}
           min={WATER_DEPTH_MIN_M} max={WATER_DEPTH_MAX_M} step={0.1}
           fineStep="any"
-          clearable placeholder={String(WATER_DEPTH_DEFAULT_M)}
+          clearable placeholder={String(kindDefaults.depthM)}
           onChange={(v) => onWater({ water_depth_m: v })}
           onClear={() => onWater({ water_depth_m: undefined })}
         />
         <SliderInput
           label={t('Shore ramp (m)')}
-          title={t('Over how many metres the bed climbs back to the untouched land at the water’s edge. 0 = a wall at the shore.')}
+          title={t('Over how many metres the bed climbs back to the untouched land at the water’s edge. 0 = a wall at the shore. Empty = the ramp this terrain kind defaults to.')}
           value={water.shore_ramp_m}
-          fallback={SHORE_RAMP_DEFAULT_M}
-          min={0} max={SHORE_RAMP_MAX_M} step={0.5} fineStep="any"
-          clearable placeholder={String(SHORE_RAMP_DEFAULT_M)}
+          fallback={kindDefaults.rampM}
+          min={SHORE_RAMP_MIN_M} max={SHORE_RAMP_MAX_M} step={0.5}
+          fineStep="any"
+          clearable placeholder={String(kindDefaults.rampM)}
           onChange={(v) => onWater({ shore_ramp_m: v })}
           onClear={() => onWater({ shore_ramp_m: undefined })}
         />
       </div>
+      {/* THE FLOW DIRECTION — the one field that turns a lake into a river.
+          Clearable, and empty is still water: no tilt, one level, exactly what
+          this panel did before. */}
+      <div className="ga-map-chip-row">
+        <SliderInput
+          label={t('Flow direction (°)')}
+          title={t('Which way this water flows, as a bearing in degrees: 0° south, 90° east, 180° north, 270° west. It tilts the mirror between an upstream and a downstream level and points the ripples the same way. Empty = still water — one level everywhere, which is what a lake is.')}
+          value={flow}
+          fallback={0}
+          min={FLOW_DIR_MIN_DEG} max={FLOW_DIR_MAX_DEG} step={5} fineStep="any"
+          clearable placeholder={t('still')}
+          unit="°"
+          onChange={(v) => onWater({ flow_dir_deg: v })}
+          onClear={() => onWater({ flow_dir_deg: undefined })}
+          readback={
+            <span className="ga-map-chip-label">
+              {flow === undefined ? t('still water (lake)') : flowCompass(flow)}
+            </span>
+          }
+        />
+      </div>
+      {/* WHAT THE BAKE READ BACK. Where the author leaves an end open, the rim
+          median of that third answers — a number only the server can compute,
+          so it is shown rather than re-derived here. */}
+      {flow !== undefined && profile ? (
+        <div className="ga-map-chip-row ga-map-chip-label">
+          {t('The bake carves this water from {up} m upstream down to {down} m downstream.')
+            .replace('{up}', profile.level_up.toFixed(2))
+            .replace('{down}', profile.level_down.toFixed(2))}
+        </div>
+      ) : null}
+      {/* THE BED — what the layer bake paints UNDER this water. Since W1 a
+          water layer never paints its own texture on the ground: the mirror is
+          its own surface above, and painting the lake twice had the two work
+          against each other. */}
+      <div className="ga-map-chip-row">
+        <span className="ga-map-chip-label">{t('Bed kind')}</span>
+        <select
+          className="ga-input"
+          style={{ flex: 1, minWidth: 0 }}
+          value={bed}
+          title={t('Which ground the bake paints under this water — sand, gravel, rock. Empty = the bare world, the ground that is there anyway.')}
+          onChange={(e) => onWater({ bed_kind: e.target.value || undefined })}
+        >
+          <option value="">{t('— bare world —')}</option>
+          {bedUnlisted ? (
+            <option value={bed}>{`${bed} ${t('(missing)')}`}</option>
+          ) : null}
+          {typeList.filter((ty) => !isWaterKind(ty)).map((ty) => (
+            <option key={ty.kind} value={ty.kind}>{ty.name || ty.kind}</option>
+          ))}
+        </select>
+      </div>
       <div className="ga-map-chip-row ga-map-chip-label">
-        {t('This keeps terrain from poking through the water at any distance. The world height field is baked down to the water level minus the depth under this whole area and ramped back up to the land over the shore width, so every level of detail stays below the same mirror. Leave a field empty to let the server decide — the level then sits at the median height along the rim of this area.')}
+        {t('This keeps terrain from poking through the water at any distance: the world height field is carved down to the water level minus the depth and ramped back up to the land over the shore width, so every level of detail stays below the same mirror. Depth and shore ramp are empty until this one area needs its own — the terrain kind answers otherwise, and the level comes from the rim.')}
       </div>
     </>
   )
@@ -1031,9 +1107,12 @@ export interface TerrainAreaChipProps {
   scatter: TerrainScatterEntry[]
   props: PropRef[]
   /** The area's water numbers, already CHECKED (`mapTypes.readWater`). Only
-   *  a `WATER_KIND` area shows them; every other one carries an empty object
-   *  and the chip says nothing about water. */
+   *  an area of a WATER KIND (`meta.water`) shows them; every other one
+   *  carries an empty object and the chip says nothing about water. */
   water: TerrainWater
+  /** The bake's own mirror for this area (`meta.water_profile`, server
+   *  output) — null for still water and for anything that is not water. */
+  waterProfile: TerrainWaterProfile | null
   /** The preview colour of the n-th entry — the same one the map draws. */
   scatterColor: (index: number) => string
   onScatter: (entries: TerrainScatterEntry[]) => void
@@ -1070,7 +1149,7 @@ export interface TerrainAreaChipProps {
  */
 export function TerrainAreaChip({
   area, types, typeList, typesError, stroke, scatter, props, water,
-  scatterColor,
+  waterProfile, scatterColor,
   onKind, onZOrder, onWidth, onScatter, onWater, onConvert, onDelete, onClose,
 }: TerrainAreaChipProps) {
   const { t } = useI18n()
@@ -1126,13 +1205,15 @@ export function TerrainAreaChip({
             onPick={() => onKind(ty.kind)} />
         ))}
       </div>
-      {/* THE WATER MIRROR (plan "Ein Boden" § 2 G4). Not folded away like the
-          scatter: an area that is water has these three numbers and nothing
-          else to say about them, and the level is the field the shore optics
-          hang on. An area whose kind the catalog no longer knows cannot be
-          written at all, so it does not offer them either. */}
-      {area.kind === WATER_KIND && known ? (
-        <WaterFields water={water} onWater={onWater} />
+      {/* THE WATER MIRROR (§ A16.3, W1). Not folded away like the scatter: an
+          area that is water has these numbers and nothing else to say about
+          them, and the level is the field the shore optics hang on. WHICH
+          areas are water is the CATALOG's answer (`meta.water`) and never the
+          kind's name — an area whose kind the catalog no longer knows cannot
+          be written at all, so it does not offer them either. */}
+      {isWaterKind(known) ? (
+        <WaterFields water={water} profile={waterProfile} kindType={known}
+          typeList={typeList} onWater={onWater} />
       ) : null}
       {/* What grows here (finding B17). Folded away by default: most areas
           grow nothing, and an area is selected far more often to be reshaped

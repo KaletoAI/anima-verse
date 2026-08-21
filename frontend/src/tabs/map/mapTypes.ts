@@ -264,26 +264,77 @@ export type TerrainMeta = {
 } & TerrainWater & Record<string, unknown>
 
 /**
- * THE THREE NUMBERS A WATER AREA CARRIES (plan "Ein Boden" § 2 G4).
+ * WHAT A WATER AREA AUTHORS ABOUT ITSELF (§ A16.3, addendum "Ein Wasser-Gesetz
+ * — W1").
  *
- * Water is the one surface that is FLAT: the bake presses the ground under a
- * water polygon down to `water_level − depth` and runs a shore ramp back up to
- * the untouched land, so no relief can poke through the mirror at any distance
- * or in any level of detail. All three are optional — an unset field means
- * "let the server decide", and the server's own default for the level is the
- * median height along the rim of the polygon.
+ * Water is a KIND (`meta.water` on the terrain type, `isWaterKind` below), and
+ * a painted area of such a kind says how ITS water stands: the bake presses
+ * the ground under the polygon down to `level − depth` and runs a shore ramp
+ * back up to the untouched land, so no relief can poke through the mirror at
+ * any distance or in any level of detail.
+ *
+ * EVERY FIELD IS OPTIONAL, and empty is the normal state:
+ *
+ * * depth and shore ramp fall back to the KIND's own defaults — which is why
+ *   an unreadable value loses its key instead of becoming a number, or a
+ *   stored default would silently outrank the kind forever;
+ * * the level falls back to the rim median (only the server can compute it);
+ * * without a flow direction the mirror is one constant level — the lake of
+ *   every round before this one, not a branch beside the river.
  *
  * They live in the area's free-form `meta`, which is a FULL REPLACE on every
  * write, so an unset field is an absent key and never a stored zero.
  */
 export interface TerrainWater {
-  /** The mirror, as a world-y height in metres. Absent = the rim median. */
+  /** The mirror of STILL water, as a world-y height in metres. Absent = the
+   *  rim median. It also sets BOTH ends of a flowing mirror at once. */
   water_level?: number
-  /** How deep the bed is carved under the mirror, in metres (0.2…20). */
+  /** The UPSTREAM end of a flowing mirror, world y in metres. Absent = the
+   *  rim median of the upstream third of the flow axis. */
+  water_level_up?: number
+  /** The DOWNSTREAM end, same units, same "absent = derived" rule. */
+  water_level_down?: number
+  /** Which way the water FLOWS (downstream), 0…360, wrapped not clamped —
+   *  spelled like every other yaw of the contract (§ A1.1): 0° toward +z,
+   *  90° toward +x. Absent = still water, one constant level. */
+  flow_dir_deg?: number
+  /** How deep the bed is carved under the mirror, in metres (0.2…20).
+   *  Absent = the kind's own default. */
   water_depth_m?: number
   /** Over how many metres the bed climbs back to the untouched land at the
-   *  shore, in metres (0…20). 0 = a wall at the water's edge. */
+   *  shore, in metres (0…20). 0 = a wall at the water's edge; absent = the
+   *  kind's own default. */
   shore_ramp_m?: number
+  /** Which terrain kind the layer bake paints UNDER this water. Absent = the
+   *  bare world (`default_kind`). */
+  bed_kind?: string
+}
+
+/**
+ * THE MIRROR AS A FUNCTION OF THE PLACE — server OUTPUT, never authored
+ * (`meta.water_profile`, W1 § 2).
+ *
+ * The nine numbers a consumer needs to evaluate the mirror itself:
+ *
+ *     s     = (x − axis_x)·dir_x + (z − axis_z)·dir_z
+ *     t     = clamp((s − s_min) / (s_max − s_min), 0, 1)
+ *     level = level_up + (level_down − level_up)·t
+ *
+ * Still water is the degenerate case, not a second formula: `s_min == s_max`
+ * and both ends carry the same number. The editor only READS it — the two end
+ * levels are what the area panel shows back when the author left them open —
+ * and the server drops both this and `water_level_effective` on the way in.
+ */
+export interface TerrainWaterProfile {
+  level_up: number
+  level_down: number
+  flow_dir_deg: number | null
+  axis_x: number
+  axis_z: number
+  dir_x: number
+  dir_z: number
+  s_min: number
+  s_max: number
 }
 
 /** A painted polygon in world metres (§ A1.5). Points are `[x, z]`, 3–256 of
@@ -340,22 +391,117 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
  */
 export function readWater(meta: TerrainMeta | undefined): TerrainWater {
   const out: TerrainWater = {}
-  const num = (v: unknown): number | undefined => {
-    // `null` and `''` both coerce to 0, which would invent a stored number
-    // where the key says nothing — only a real number counts.
-    if (typeof v !== 'number' && typeof v !== 'string') return undefined
-    if (typeof v === 'string' && v.trim() === '') return undefined
-    const n = Number(v)
-    return Number.isFinite(n) ? n : undefined
-  }
-  const level = num(meta?.water_level)
-  const depth = num(meta?.water_depth_m)
-  const ramp = num(meta?.shore_ramp_m)
+  const level = metaNum(meta?.water_level)
+  const levelUp = metaNum(meta?.water_level_up)
+  const levelDown = metaNum(meta?.water_level_down)
+  const flow = metaNum(meta?.flow_dir_deg)
+  const depth = metaNum(meta?.water_depth_m)
+  const ramp = metaNum(meta?.shore_ramp_m)
+  const bed = typeof meta?.bed_kind === 'string' ? meta.bed_kind.trim() : ''
   if (level !== undefined) out.water_level = level
+  if (levelUp !== undefined) out.water_level_up = levelUp
+  if (levelDown !== undefined) out.water_level_down = levelDown
+  // WRAPPED, NOT CLAMPED — `heightfield.sanitize_flow_dir`. A bearing is an
+  // angle: 370° is 10° and −90° is 270°, and clamping would turn a slip of the
+  // wrist into a river flowing the wrong way along its own axis.
+  if (flow !== undefined) out.flow_dir_deg = ((flow % 360) + 360) % 360
   if (depth !== undefined) out.water_depth_m = depth
   if (ramp !== undefined) out.shore_ramp_m = ramp
+  if (bed) out.bed_kind = bed
   return out
 }
+
+/** One number out of free-form `meta`, or `undefined`. `null`, `''` and `[]`
+ *  all coerce to 0 in JavaScript, which would invent a stored number where the
+ *  key says nothing — only a real, finite number counts. */
+function metaNum(v: unknown): number | undefined {
+  if (typeof v !== 'number' && typeof v !== 'string') return undefined
+  if (typeof v === 'string' && v.trim() === '') return undefined
+  const n = Number(v)
+  return Number.isFinite(n) ? n : undefined
+}
+
+/**
+ * The bake's OWN mirror of an area, read through a check
+ * (`meta.water_profile`, W1 § 4) — or `null` when the area carries none.
+ *
+ * It is server output and it is what the panel READS BACK: where the author
+ * left an end level open, this is the number the carve really used, so the
+ * editor can name it without implementing a rim median a second time. All nine
+ * numbers have to be there — a half profile is no profile, and guessing the
+ * missing half would be exactly the second opinion this field exists to avoid.
+ */
+export function readWaterProfile(meta: TerrainMeta | undefined
+                                ): TerrainWaterProfile | null {
+  const raw = meta?.water_profile
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const nums: Record<string, number> = {}
+  for (const key of ['level_up', 'level_down', 'axis_x', 'axis_z',
+    'dir_x', 'dir_z', 's_min', 's_max']) {
+    const n = metaNum(r[key])
+    if (n === undefined) return null
+    nums[key] = n
+  }
+  const flow = metaNum(r.flow_dir_deg)
+  return {
+    level_up: nums.level_up,
+    level_down: nums.level_down,
+    flow_dir_deg: flow === undefined ? null : flow,
+    axis_x: nums.axis_x,
+    axis_z: nums.axis_z,
+    dir_x: nums.dir_x,
+    dir_z: nums.dir_z,
+    s_min: nums.s_min,
+    s_max: nums.s_max,
+  }
+}
+
+/**
+ * IS THIS TERRAIN KIND WATER? — the client's half of THE ONE PREDICATE
+ * (`terrain_types.is_water_kind`, W1).
+ *
+ * It is the catalog's flag and NOTHING else: not the kind's name, not its
+ * colour, and since W1 not the material class of a surface texture either
+ * (that second book is deleted — a library texture of class `water` without
+ * the flag is a wet look, not physics). A kind the catalog does not know is
+ * not water, because nothing said it was.
+ */
+export function isWaterKind(type: TerrainType | undefined | null): boolean {
+  return !!(type?.meta as Record<string, unknown> | undefined)?.water
+}
+
+/**
+ * THE TWO NUMBERS A WATER KIND DEFAULTS — `terrain_types.water_kind_defaults`.
+ *
+ * The kind says what its water is normally like; a single painted area says
+ * what IT is like and wins (`TerrainWater`). Both are read through the same
+ * check, so "the kind says 2 m" and "this lake says 2 m" cannot end up meaning
+ * two different things. The module fallbacks are the server's own defaults.
+ */
+export function waterKindDefaults(type: TerrainType | undefined | null
+                                 ): { depthM: number; rampM: number } {
+  const meta = type?.meta as Record<string, unknown> | undefined
+  const depth = metaNum(meta?.water_depth_m)
+  const ramp = metaNum(meta?.shore_ramp_m)
+  return {
+    depthM: depth === undefined ? WATER_DEPTH_DEFAULT_M : depth,
+    rampM: ramp === undefined ? SHORE_RAMP_DEFAULT_M : ramp,
+  }
+}
+
+/** Server mirrors — `heightfield.WATER_DEPTH_*` / `WATER_SHORE_RAMP_*`. They
+ *  live HERE, next to the readers that fall back to them, so the kind editor
+ *  and the area panel quote one pair of numbers. */
+export const WATER_DEPTH_DEFAULT_M = 2
+export const WATER_DEPTH_MIN_M = 0.2
+export const WATER_DEPTH_MAX_M = 20
+export const SHORE_RAMP_DEFAULT_M = 3
+export const SHORE_RAMP_MIN_M = 0
+export const SHORE_RAMP_MAX_M = 20
+/** A bearing is an angle: the field sweeps a whole turn and 360 wraps to 0. */
+export const FLOW_DIR_MIN_DEG = 0
+export const FLOW_DIR_MAX_DEG = 360
 
 /** `GET /play/terrain`. `areas` arrive BOTTOM to TOP — the last entry is on
  *  top, and the topmost area that contains a point owns it. */
