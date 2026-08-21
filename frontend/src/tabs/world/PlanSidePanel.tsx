@@ -1,19 +1,29 @@
 /**
  * PlanSidePanel — the context column right of the floor plan. Everything that
  * belongs to the SELECTED shape and is not a click tool lives here: room info
- * (name, rotation, always-visible), the animation-marker vocabulary + the
- * marker list, and the room shell's surface kinds. The 🪑 tool opens
- * the prop palette below them. Purely presentational — RoomLayoutEditor owns
- * the state and hands in the callbacks.
+ * (name, rotation, always-visible), how the room's FLOOR meets the ground
+ * around it (edge transition, and the mirror of a water floor), the
+ * animation-marker vocabulary + the marker list, and the room shell's surface
+ * kinds. The 🪑 tool opens the prop palette below them. Purely presentational
+ * — RoomLayoutEditor owns the state and hands in the callbacks.
  *
  * The YARD (§ A13a) is a shape here too, and the difference is what it does
  * NOT have: no shell block, no surfaces — it is the location surface, not a
  * built room. Furnish, markers and the palette work on it like anywhere else.
  */
 import { useI18n } from '../../i18n/I18nProvider'
+import { SliderInput } from '../../components/SliderInput'
 import { PropsPalette } from './PropsPalette'
+import { HEIGHT_MAX_M, SHORE_RAMP_DEFAULT_M, SHORE_RAMP_MAX_M,
+  WATER_DEPTH_DEFAULT_M, WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M,
+  WATER_LEVEL_SPAN_M } from '../map/TerrainTools'
 import type { PropFull } from '../props/propTypes'
-import type { Room, SurfaceKind } from './worldTypes'
+import type { Room, RoomLayout, SurfaceKind } from './worldTypes'
+import { floorKindOf, isWaterSurface } from './worldTypes'
+
+/** Widest transition a floor may be given, in metres — the server window of
+ *  `layout.edge_blend_m` (`terrain_layers.sanitize_edge_blend`). */
+const EDGE_BLEND_MAX_M = 8
 
 /** The two shell surfaces a room may skin — mirrors layout.surfaces. */
 const SURFACE_SLOTS: Array<{ key: 'floor' | 'wall'; label: string }> = [
@@ -26,7 +36,7 @@ interface PlanSidePanelProps {
    *  may have none yet (§ A13a). */
   room: Room | null
   /** The selected shape is the YARD (§ A13a): placements only. Everything
-   *  about a room SHELL — surfaces, outdoor flag, relief opt-out, height
+   *  about a room SHELL — surfaces, outdoor flag, floor transition, height
    *  offset — is absent there, because the yard is the location surface and
    *  has no shell to describe. */
   ground: boolean
@@ -50,8 +60,11 @@ interface PlanSidePanelProps {
    *  the free angle — same field, and it is written where it has always
    *  been read. */
   onRotation: (deg: number) => void
-  /** Terrain-relief opt-out of THIS room (only offered on outdoor rooms). */
-  onReliefFlat: (value: boolean) => void
+  /** Patch of THIS room's layout — the generic write for the floor dials
+   *  (`edge_blend_m`, and the three water numbers of a water floor). A field
+   *  set to `undefined` is REMOVED, which is how a water level goes back to
+   *  "the bake decides"; 0 is an ordinary value and travels as 0. */
+  onLayout: (patch: Partial<RoomLayout>) => void
   /** Walls opt-out of THIS room. Stored negative (`no_walls`), shown positive
    *  — it is a property of the room SHELL, not of any model it may carry. */
   onNoWalls: (value: boolean) => void
@@ -86,7 +99,7 @@ const FURNISH_BADGE: Record<string, string> = {
 export function PlanSidePanel({
   room, ground, groundName,
   clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
-  markerMode, onArmMarker, onAlwaysVisible, onRotation, onReliefFlat, onNoWalls,
+  markerMode, onArmMarker, onAlwaysVisible, onRotation, onLayout, onNoWalls,
   onFloorOffset,
   surfaceKinds, onSurface,
   furnishState, furnishDisabled, furnishHint, onFurnish,
@@ -143,20 +156,85 @@ export function PlanSidePanel({
         <span>{t('Outdoor room (always visible)')}</span>
       </label>
 
-      {/* Terrain-relief opt-out (v5.2 Nr. 14). Only outdoor rooms can be
-          asked: an indoor room is level in any case, because walls need even
-          ground. Without a relief on the location the checkbox is simply
-          without effect, so it does not depend on it. */}
-      {layout.always_visible ? (
-        <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-          title={t('Keeps THIS outdoor room level while the terrain relief rolls the rest of the location — for a road, a paved square, a clearing. Indoor rooms are always flat anyway. Without a relief on the location it changes nothing.')}>
-          <input
-            type="checkbox"
-            checked={!!layout.relief_flat}
-            onChange={(e) => onReliefFlat(e.target.checked)}
+      {/* THE FLOOR AS A LAYER OF THE GROUND ("Ein Boden" E5a, § G3). A
+          level-0 room floor is no longer a plate laid over the terrain — it
+          is the topmost layer OF the terrain, and these dials say how it
+          meets the layers under it. The relief opt-out that used to stand
+          here is gone with the scene's own height field: there is nothing
+          left for a room to stay level against.
+
+          Only offered on storey 0: an upper floor or a basement still gets a
+          plate, and a plate has no transition to anything. */}
+      {(layout.level || 0) === 0 ? (
+        <SliderInput
+          label={t('Edge transition (m)')}
+          title={t('How far this floor fades into the ground around it. 0 draws a clean edge — parquet stops where the room stops. Turn it up and the floor washes out over that many metres, the way a sandy path runs into grass. Behind it: the floor is the topmost layer of the terrain, and this is the width the layer under it takes over in.')}
+          value={layout.edge_blend_m ?? 0}
+          min={0} max={EDGE_BLEND_MAX_M} step={0.1} fineStep="any"
+          sliderWidth={72} inputWidth={62}
+          style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
+          // 0 IS A VALUE — it is the default and the hard cut, and it has to
+          // reach the server as 0 rather than as a missing field.
+          onChange={(v) => onLayout({ edge_blend_m: v })}
+        />
+      ) : null}
+
+      {/* WATER FLOORS (§ A19 no. 4). A room whose floor kind is a water
+          surface is a lake with a room's outline: the bake carves its bed out
+          of the world height field with the very three numbers a painted lake
+          uses. Which kinds count is asked of the LIBRARY's material class —
+          never of the kind's name and never of its colour, the same book the
+          server asks. */}
+      {(layout.level || 0) === 0
+        && isWaterSurface(floorKindOf(layout), surfaceKinds) ? (
+        <>
+          <SliderInput
+            label={t('Water level (m)')}
+            title={t('The height the water surface stands at, as a world height in metres. Empty = the server decides: on a built plot the level of the ground the building stands on, out in the open the median height along this room’s own rim.')}
+            value={layout.water_level}
+            fallback={0}
+            min={layout.water_level === undefined
+              ? -HEIGHT_MAX_M
+              : Math.max(-HEIGHT_MAX_M, layout.water_level - WATER_LEVEL_SPAN_M)}
+            max={layout.water_level === undefined
+              ? HEIGHT_MAX_M
+              : Math.min(HEIGHT_MAX_M, layout.water_level + WATER_LEVEL_SPAN_M)}
+            step={0.05} fineStep="any"
+            clearable placeholder={t('auto')}
+            sliderWidth={72} inputWidth={62}
+            style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
+            onChange={(v) => onLayout({ water_level: v })}
+            onClear={() => onLayout({ water_level: undefined })}
           />
-          <span>{t('Keep flat (road, clearing)')}</span>
-        </label>
+          <SliderInput
+            label={t('Depth (m)')}
+            title={t('How far the bed is carved below the water surface. Empty = the bake’s own default.')}
+            value={layout.water_depth_m}
+            fallback={WATER_DEPTH_DEFAULT_M}
+            min={WATER_DEPTH_MIN_M} max={WATER_DEPTH_MAX_M} step={0.1}
+            fineStep="any"
+            clearable placeholder={String(WATER_DEPTH_DEFAULT_M)}
+            sliderWidth={72} inputWidth={62}
+            style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
+            onChange={(v) => onLayout({ water_depth_m: v })}
+            onClear={() => onLayout({ water_depth_m: undefined })}
+          />
+          <SliderInput
+            label={t('Shore ramp (m)')}
+            title={t('Over how many metres the bed climbs back to the untouched land at the water’s edge. 0 = a wall at the shore.')}
+            value={layout.shore_ramp_m}
+            fallback={SHORE_RAMP_DEFAULT_M}
+            min={0} max={SHORE_RAMP_MAX_M} step={0.5} fineStep="any"
+            clearable placeholder={String(SHORE_RAMP_DEFAULT_M)}
+            sliderWidth={72} inputWidth={62}
+            style={{ display: 'flex' }} sliderStyle={{ flex: 1 }}
+            onChange={(v) => onLayout({ shore_ramp_m: v })}
+            onClear={() => onLayout({ shore_ramp_m: undefined })}
+          />
+          <span className="ga-hint">
+            {t('This room’s floor is water: the ground under it is dug out to the level minus the depth and ramped back to the land over the shore width, so no terrain pokes through the surface at any distance. Leave a field empty to let the server decide.')}
+          </span>
+        </>
       ) : null}
 
       {/* Walls opt-out: open zones, pavilions, areas inside an area model.

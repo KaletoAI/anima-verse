@@ -9,7 +9,6 @@ import {
   groundScope, slideBlocked, slopeBlocks, terrainBlocks, terrainPace, walkDir,
   type GroundScope,
 } from './game/walk';
-import { groundLift, type ScenePatch } from './game/ground';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
 } from './game/clickmove';
@@ -37,7 +36,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, terrainLiftAt, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
@@ -1963,15 +1962,16 @@ async function startApp(username: string, role: string) {
             // metre on the map (k = 1), so the huddle radius is the metre
             // count `roomSlot` states.
             pos = roomCenter.clone().add(roomSlot(idx, mates.length, c.name));
-            // Relief (§ B1 Nr. 14): die Raum-Mitte ist EINE Höhe, der Boden
-            // unter der versetzten Figur ist es nicht. Als DIFFERENZ zur
-            // Mitte angesetzt, damit es egal bleibt, ob die Mitte selbst
-            // schon auf dem abgetasteten Hang liegt — sonst zählte die
-            // Hebung doppelt. Marker- und Spot-Positionen bleiben außen vor:
-            // die kommen gehoben vom Server bzw. vom Strahl auf die bereits
-            // drapierte Platte.
-            const rise = terrainLiftAt(tile, pos.x, pos.z)
-              - terrainLiftAt(tile, roomCenter.x, roomCenter.z);
+            // The room's centre is ONE height; the ground under a figure set
+            // aside from it is not. Applied as the DIFFERENCE of the terrain
+            // between the two points, so it stays right whether the centre is a
+            // declared floor or the landscape itself — an absolute sample here
+            // would flatten a declaring room onto the hill under it. Under a
+            // built plot the difference is 0 by construction (the plateau is
+            // flat, § G5); marker and spot positions are out of this branch,
+            // they carry their own data height.
+            const rise = reliefLiftAt(pos.x, pos.z)
+              - reliefLiftAt(roomCenter.x, roomCenter.z);
             if (rise) pos.setY(pos.y + rise);
           }
         } else {
@@ -2303,32 +2303,19 @@ async function startApp(username: string, role: string) {
 
   /**
    * Height of the ground at a WORLD point — the client's mirror of the
-   * server's `relief.ground_lift_at`.
+   * server's `relief.ground_at`, and since "Ein Boden" E5b it is ONE reading
+   * and nothing added to it: `terrainGround.heightAt`, the bilinear lattice the
+   * terrain's own vertices are placed from and the server judges steps by.
    *
-   * TWO SOURCES, ADDED (E8 task 4, the rule itself is `game/ground.groundLift`
-   * and hand-checked in `client3d/scripts/smoke_world_height.mjs`):
-   *
-   *  - the WORLD relief under everything — `terrainGround.heightAt`, the
-   *    bilinear reading of the heightfield. It used to be a second member
-   *    (`fieldHeightAt`) because the client also had a "drawn" height that
-   *    followed its own triangles; since "Ein Boden" E2 there is one reading,
-   *    and it is the one the server judges by. Until task 4 this term was
-   *    missing and the mirror knew scene relief only — the rubber band on
-   *    every world hill steeper than `max_slope_deg`.
-   *  - the SCENE relief of the innermost enclosing tile that HAS a field
-   *    (`terrainLiftAt`, the payload's own grid — never `tileGroundY`, whose
-   *    model skin is client-only and would refuse steps the server accepts).
-   *    A place without a field of its own does not flatten the ground it
-   *    stands on (finding F3).
+   * The second term is gone with the scene's own relief (§ A19 no. 6,
+   * decision 1): a location had a 17 x 17 field of its own, the innermost
+   * enclosing one counted (`groundLift`), and local relief is authored through
+   * the map's height areas now. Deliberately NOT `tileGroundY`: a declared
+   * room floor is a floor INSIDE a place, not the landscape, and using it here
+   * would refuse steps the server accepts.
    */
   function reliefLiftAt(x: number, z: number): number {
-    const patches: ScenePatch[] = [];
-    for (const tile of tiles.values()) {
-      if (!tile.terrain) continue;
-      if (!tileContains(tile, x, z)) continue;
-      patches.push({ area: tile.area, lift: terrainLiftAt(tile, x, z) });
-    }
-    return groundLift(terrainGround.heightAt(x, z), patches);
+    return terrainGround.heightAt(x, z);
   }
 
   /**
@@ -3442,7 +3429,7 @@ async function startApp(username: string, role: string) {
   /**
    * Height the avatar WALKS at INSIDE A BUILDING: the floor of the room it is
    * in, on every storey, taken from the same source the NPC placement uses
-   * (`roomCenters`, lifted onto the sampled floor by `sampleRoomWalkables`).
+   * (`roomCenters`, put on the room's data floor by `deriveRoomSpots`).
    * Null — the ground skin answers — everywhere else, and that is three cases:
    * a passable tile (street, park), a tile whose rooms the avatar is not in,
    * and an ALWAYS-VISIBLE outdoor zone. The last one is not a room with a
@@ -3451,18 +3438,13 @@ async function startApp(username: string, role: string) {
    * follows the slope. Taking the zone's single height there would float the
    * figure downhill and sink it uphill.
    *
-   * The ground skin (`tileGroundY`) is NOT an alternative inside a room, and
-   * the "Zur Rosinante" finding of the acceptance round is why: it raycasts
-   * the building/area MESH from above and takes the first hit below 1.2 m,
-   * which is a world metre and therefore an assumption about scale. In the
-   * SHRUNK-SCENE ERA (before E4; k = 1 since, § A1.8) Willowbrook ran at
-   * k = 0.21 — extent_m 10.5 over a 50 m plan — so a whole storey WAS 0.63 m
-   * and every ROOF of the village fitted inside that 1.2 m window: the ray hit
-   * the tavern's roof at ~0.6..0.9 instead of its floor plate at 0.037 and the
-   * avatar walked over the houses. The metre world has taken that particular
-   * trap away, but not the guess itself — reading the floor off the room
-   * removes it entirely, the number comes from the payload the room is built
-   * from.
+   * ONE SOURCE SINCE "Ein Boden" E5b, and this reads it: the room's centre is
+   * put on the room's own floor by `deriveRoomSpots` — a declared `walk_y`, a
+   * storey plate, or the terrain at that point — so the avatar's interior
+   * height and the room's NPC stands cannot be two numbers. The mesh raycast
+   * this used to have to argue against ("Zur Rosinante": the ray hit the
+   * tavern's ROOF at ~0.6…0.9 m instead of its floor, and the avatar walked
+   * over the houses) is deleted from the ladder altogether.
    */
   function roomFloorY(tile: Tile | null): number | null {
     if (!tile?.isBuilding) return null;

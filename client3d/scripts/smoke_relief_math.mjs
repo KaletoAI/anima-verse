@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Smoke check for the pure maths of the DRAPED GROUND (E8 task 3, § A16):
- * the grid geometry both renderers cut their ground on
- * (`packages/scene-render/src/gridMesh.ts`), the field query the fog hangs on
- * (`maxWorldHeightIn`, worldHeight.ts) and the two travel-line derivations in
- * `client3d/src/scene/travelPath.ts`.
+ * Smoke check for the pure maths of the ONE GROUND (§ A16): the field reading
+ * every consumer shares (`packages/scene-render/src/worldHeight.ts`) and the
+ * two travel-line derivations in `client3d/src/scene/travelPath.ts`.
+ *
+ * It used to cover the grid geometry both renderers cut their DRAPED ground on
+ * as well; that machinery is deleted (see [1]-[3] below).
  *
  * Usage:  node client3d/scripts/smoke_relief_math.mjs
  *
@@ -12,62 +13,21 @@
  * from the current output (§ B5a: numbers, not screenshots).
  *
  * ============================================================================
- * [1] `gridStepFor` — how fine the ground may be cut
+ * [1]–[3] THE GRID MESH — GONE with "Ein Boden" E5b
  * ============================================================================
- * The rule: the field's own `step`, DOUBLED until `ceil(w/step)·ceil(d/step)`
- * stays under the cell budget (40 000, derived in gridMesh.ts from the § A16
- * point budget).
- *   (a) 400 × 400 m at step 4  -> 100 × 100 = 10 000 cells                -> 4
- *   (b) 1 000 × 1 000 m at 4   -> 250 × 250 = 62 500 > 40 000; at 8 ->
- *       125 × 125 = 15 625                                                -> 8
- *   (c) 1 500 × 1 500 m at 4 (the largest world § A16 can describe, plus the
- *       2 × 60 m ground margin) -> 375² = 140 625 > 40 000; at 8 -> 188² =
- *       35 344                                                            -> 8
- *   (d) step 0 (no relief) is handed back unchanged                       -> 0
+ * `gridStepFor` (how fine a draped ground may be cut), `gridPlate` (the one big
+ * base plate the world was draped on, already deleted in E3) and
+ * `subdivideOnGrid` (a painted area cut on the same lines) were the machinery
+ * of DRAPING: a mesh sliced along the height lattice so it could follow the
+ * relief. E2 took the terrain's own vertices into the vertex shader, E3 turned
+ * every painted ground into a CUT in that one surface, E4 made the last drape —
+ * the water — a FLAT mirror, and E5b deleted the scene's own 17 x 17 relief
+ * (§ A19 no. 6). Nothing drapes anything any more, so
+ * `packages/scene-render/src/gridMesh.ts` and `terrain.ts` are deleted and
+ * there is nothing left here to derive by hand.
  *
- * ============================================================================
- * [2] `gridPlate` — GONE with "Ein Boden" E3
- * ============================================================================
- * The base plate was ONE mesh over the whole world frame, cut on the field's
- * own lines, with every painted area draped on top of it. Both halves are gone:
- * since E2 the terrain places its own vertices out of the height lattice in the
- * vertex shader (`scene/terrainLod.ts`), and since E3 the painted grounds are a
- * CUT in that one surface rather than meshes lying on it
- * (`@anima/scene-render/layerCut.ts`). Nothing calls `gridPlate`, so it was
- * deleted and there is nothing left here to derive by hand.
- *
- * The section is kept as a HEADING and not silently renumbered, so a reader who
- * remembers the old numbers finds out what happened to them.
- *
- * ============================================================================
- * [3] `subdivideOnGrid` — a painted area cut on the same lines
- * ============================================================================
- * (a) ONE CELL, ONE TRIANGLE. The triangle (0,0), (4,0), (4,4) with step 4 at
- *     origin (0, 0) lies inside a single cell: no grid line runs strictly
- *     between its bounds, so it comes back as itself — 1 triangle, area 8.
- *
- * (b) ACROSS A COLUMN BORDER. The triangle A(0,0), B(8,0), C(0,4), step 4:
- *     x = 4 cuts it, z has no interior line. On the hypotenuse B->C the cut
- *     sits at half the segment, i.e. (4, 2).
- *       low  (x <= 4): (0,0), (4,0), (4,2), (0,4)   shoelace 24/2 = 12 m²
- *       high (x >= 4): (4,0), (8,0), (4,2)          shoelace  8/2 =  4 m²
- *     Fanned from their minimum corners that is 2 + 1 = 3 triangles, and
- *     12 + 4 = 16 m² is exactly the original 8·4/2.
- *
- * (c) UVs STAY WORLD METRES. `buildAreaGeometry` hands out uv = (x, -z) (the
- *     shape plane of `groundAreas.ts`). The cut interpolates linearly and the
- *     UV is affine in the position, so EVERY output vertex — the ones on the
- *     grid lines included — still has u = x and v = -z.
- *
- * (d) THE CRACK TEST, the one this whole file exists for. Cut the triangle
- *     (0,0), (8,0), (8,8) on the same grid and take the cell [4…8] × [0…4],
- *     which lies wholly inside it. Its two triangles must be the two the RULE
- *     states — the split from the cell's MINIMUM corner to its MAXIMUM one:
- *       (4,0), (4,4), (8,4)  and  (4,0), (8,4), (8,0)
- *     That used to be checked against `gridPlate`'s own cell; with the plate
- *     gone the diagonal is derived by hand instead, which is the same statement
- *     without a second mesh to compare against. It is what makes the water
- *     drape lie ON the terrain over a hill instead of cutting through it.
+ * The sections are kept as a HEADING and not silently renumbered, so a reader
+ * who remembers the old numbers finds out what happened to them.
  *
  * ============================================================================
  * [3b] THE CONTOUR CELL — the RED counter-probe of "Ein Boden" E2
@@ -181,112 +141,18 @@ function checkEq(label, actual, expected) {
   }
 }
 
-const [grid, height, travel] = await loadPure(
-  'packages/scene-render/src/gridMesh.ts',
+const [height, travel] = await loadPure(
   'packages/scene-render/src/worldHeight.ts',
   'client3d/src/scene/travelPath.ts');
-const { gridStepFor, subdivideOnGrid } = grid;
 const { sampleWorldHeight } = height;
 const { densifyPolyline, pointAtDistance } = travel;
 
-// --- [1] the cell size ------------------------------------------------------
-console.log('[1] gridStepFor doubles until the mesh fits the budget');
-check('400 m at step 4', gridStepFor(0, 0, 400, 400, 4), 4);
-check('1 000 m at step 4', gridStepFor(0, 0, 1000, 1000, 4), 8);
-check('1 500 m at step 4 (the largest world of § A16)',
-  gridStepFor(-750, -750, 750, 750, 4), 8);
-check('no relief (step 0) is handed back', gridStepFor(0, 0, 400, 400, 0), 0);
-
-// --- [2] the base plate — GONE with E3 --------------------------------------
-// `gridPlate` built ONE big mesh over the whole world frame, cut on the field's
-// own lines, and every painted area was draped on top of it. Both halves of
-// that arrangement are gone: since E2 the terrain places its own vertices out
-// of the height lattice in the vertex shader (`scene/terrainLod.ts`), and since
-// E3 the painted grounds are a CUT in that one surface rather than meshes on it
-// (`@anima/scene-render/layerCut.ts`). Nothing calls the plate, so there is
-// nothing here to derive by hand any more. What survived the removal —
-// `gridStepFor` above and `subdivideOnGrid` below — is checked exactly as
-// before; the ONE mesh still cut on the field's lines is the water drape, until
-// E4 gives it a level mirror.
-//
-// The crack test of [3] used to measure the area's cell against the PLATE's
-// cell. It now measures it against the diagonal the rule itself states (minimum
-// corner to maximum corner), which is the same statement without a second mesh
-// to compare against.
-
-// --- [3] the painted areas --------------------------------------------------
-console.log('[3] subdivideOnGrid cuts on the same lines');
-
-/** Triangles of a flat position list as `[[x, z], …]` triples. */
-function triangles(pos) {
-  const out = [];
-  for (let t = 0; t + 8 < pos.length; t += 9) {
-    out.push([[pos[t], pos[t + 2]], [pos[t + 3], pos[t + 5]], [pos[t + 6], pos[t + 8]]]);
-  }
-  return out;
-}
-function triArea([a, b, c]) {
-  return Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2;
-}
-const totalArea = (pos) => triangles(pos).reduce((s, t) => s + triArea(t), 0);
-
-const oneCell = subdivideOnGrid([0, 0, 0, 4, 0, 0, 4, 0, 4], null, 4, 0, 0);
-check('a triangle inside one cell stays one triangle',
-  triangles(oneCell.pos).length, 1);
-check('…with its own area', totalArea(oneCell.pos), 8);
-
-const cut = subdivideOnGrid([0, 0, 0, 8, 0, 0, 0, 0, 4], null, 4, 0, 0);
-check('a triangle across a column border becomes three',
-  triangles(cut.pos).length, 3);
-check('…and keeps its area', totalArea(cut.pos), 16, 1e-9);
-check('…none of it beyond the original outline',
-  triangles(cut.pos).every(([a, b, c]) => [a, b, c].every(
-    ([x, z]) => x >= -1e-9 && z >= -1e-9 && x <= 8 + 1e-9 && z <= 4 + 1e-9)) ? 1 : 0, 1);
-
-// uv = (x, -z), the convention of `buildAreaGeometry`
-const uvCut = subdivideOnGrid([0, 0, 0, 8, 0, 0, 0, 0, 4],
-  [0, 0, 8, 0, 0, -4], 4, 0, 0);
-let uvDrift = 0;
-for (let i = 0, k = 0; i + 2 < uvCut.pos.length; i += 3, k += 2) {
-  uvDrift += Math.abs(uvCut.uv[k] - uvCut.pos[i]);
-  uvDrift += Math.abs(uvCut.uv[k + 1] + uvCut.pos[i + 2]);
-}
-check('UVs stay world metres through every cut', uvDrift, 0, 1e-12);
-
-// THE CRACK TEST: a full cell of an area is the plate's own cell.
-const big = subdivideOnGrid([0, 0, 0, 8, 0, 0, 8, 0, 8], null, 4, 0, 0);
-const inCell = (t) => t.every(([x, z]) => x >= 4 - 1e-9 && x <= 8 + 1e-9
-  && z >= -1e-9 && z <= 4 + 1e-9);
-const asKey = (tris) => tris.map((t) => t.map(([x, z]) => `${x},${z}`).sort().join('|'))
-  .sort().join(' / ');
-const areaCell = triangles(big.pos).filter(inCell);
-// THE RULE, DERIVED BY HAND: a full grid cell is split from its MINIMUM corner
-// (4, 0) to its MAXIMUM one (8, 4), so the cell [4…8]×[0…4] is exactly
-//   (4,0) (4,4) (8,4)   and   (4,0) (8,4) (8,0)
-// — the two triangles every consumer of this grid has to produce, whichever way
-// it arrived at the cell.
-const CELL_TRIS = [
-  [[4, 0], [4, 4], [8, 4]],
-  [[4, 0], [8, 4], [8, 0]],
-];
-check('the cell [4…8]×[0…4] of the area is two triangles', areaCell.length, 2);
-checkEq('…and they are the minimum-to-maximum diagonal of the rule',
-  asKey(areaCell), asKey(CELL_TRIS));
-// …and that must not depend on how the triangle happened to be wound or
-// where earcut started it: the cell polygon comes out of the clipping in a
-// different order for each of these six, and the fan from the MINIMUM corner
-// is what makes them all describe the same surface.
-const CORNERS = [[0, 0], [8, 0], [8, 8]];
-let sameCell = 0;
-for (const winding of [CORNERS, [...CORNERS].reverse()]) {
-  for (let r = 0; r < 3; r += 1) {
-    const rot = [winding[r % 3], winding[(r + 1) % 3], winding[(r + 2) % 3]];
-    const flat = rot.flatMap(([x, z]) => [x, 0, z]);
-    const tris = triangles(subdivideOnGrid(flat, null, 4, 0, 0).pos).filter(inCell);
-    if (asKey(tris) === asKey(CELL_TRIS)) sameCell += 1;
-  }
-}
-check('every winding and rotation gives that same cell', sameCell, 6);
+// --- [1]-[3] the grid mesh — GONE (see the header) ---------------------------
+// `gridStepFor`, `gridPlate` and `subdivideOnGrid` are deleted together with
+// the two package files that held them. Nothing is asserted here because there
+// is nothing to assert: the RED probe for their absence is the module list two
+// lines up, which no longer loads `packages/scene-render/src/gridMesh.ts` and
+// would fail to resolve it if somebody brought it back by accident.
 
 // --- [3b] the contour cell --------------------------------------------------
 console.log('[3b] the drawn-triangle reading is GONE — one sampler, the field');

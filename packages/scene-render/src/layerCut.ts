@@ -93,11 +93,33 @@ export interface TerrainLayerFormat {
   sd_codes_per_m: number
 }
 
+/**
+ * ONE ZONE WATER of the world (§ A19 no. 5, "Ein Boden" E5a): a room whose
+ * floor kind is a water surface carves its bed like a painted lake and wants
+ * the same flat mirror over it.
+ *
+ * So it arrives in the very shape a painted lake carries its mirror in — the
+ * outline in WORLD metres, the level in world y — and a renderer draws the pond
+ * of a room with the machinery it draws a lake with, instead of inventing a
+ * second water. A room the bake never saw (an unplaced location) is simply not
+ * in the list; a guessed height would be the drape all over again.
+ */
+export interface TerrainLayerWater {
+  location_id: string
+  room_id: string
+  kind: string
+  polygon: [number, number][]
+  water_level_effective: number
+}
+
 /** The INDEX answer of `GET /play/terrain-layers` (no `keys`). */
 export interface TerrainLayerIndex extends TerrainLayerFormat {
   layers: TerrainLayer[]
   overview: TerrainLayerOverview
   tile_keys: string[]
+  /** Every zone water of the world (E5a) — always present, empty in a world
+   *  whose rooms have no water floor. */
+  waters: TerrainLayerWater[]
 }
 
 /** The BATCH answer of `GET /play/terrain-layers?keys=…`. */

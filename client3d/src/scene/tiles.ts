@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { sampleTerrain, worldToLocalXZ } from '@anima/scene-render';
-import type { CutoutHandle, SceneModelSpec, SceneTerrain, SurfaceMaterialSpec } from '@anima/scene-render';
+import { worldToLocalXZ } from '@anima/scene-render';
+import type { CutoutHandle, SceneModelSpec, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
-import { acceptsWalkHit, declaredFloorAt, plateCeiling, recipeFloorAt,
-  standY, WALK_CLEARANCE_M,
+import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
+  recipeFloorAt, roomSpotGrid, SPOT_FLAT_M, standY, WALK_CLEARANCE_M,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
 
@@ -22,30 +22,11 @@ import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../
  *  and a tile is rebuilt on every layout change. */
 const widthWarned = new Set<string>();
 
-/** How high above the world the ground raycast of `tileGroundY` starts, in
- *  metres, before any relief is known. A ray has to start ABOVE what it is
- *  meant to hit — one that starts inside a hill finds nothing and the figure
- *  falls back to the tile floor on exactly the ground it should be standing
- *  on. */
-const RAY_START_FALLBACK_M = 20;
-/** Air above the highest ground the ray keeps: a location's model may stand a
- *  little proud of the terrain it is placed on. */
-const RAY_START_MARGIN_M = 5;
-let rayStartY = RAY_START_FALLBACK_M;
-
-/**
- * Raise the ground raycast above the world's relief (§ A16).
- *
- * Called by `scene/ground.ts` whenever the heightfield is taken over: the
- * relief is clamped at ±50 m, so the fixed 20 m the client used before is
- * INSIDE any hill taller than that. The start only ever grows — the fallback
- * is the floor, because a ray starting lower than it always did would be a
- * regression on the flat world it was chosen for.
- */
-export function setWorldRayStart(maxGroundY: number): void {
-  const want = (Number.isFinite(maxGroundY) ? maxGroundY : 0) + RAY_START_MARGIN_M;
-  rayStartY = Math.max(RAY_START_FALLBACK_M, want);
-}
+// THE GROUND RAYCAST IS GONE ("Ein Boden" E5b). `RAY_START_FALLBACK_M` /
+// `RAY_START_MARGIN_M` / `setWorldRayStart` existed to start a downward ray
+// above the world's relief so it could hit a location model's baked-in ground
+// skin. The height ladder reads DATA now — a declaration, a storey plate, the
+// terrain — so there is no ray to start and no height to start it above.
 
 /** The world ground under a point, or `null` while nothing has been taken
  *  over — see `setWorldGround`. */
@@ -264,6 +245,29 @@ export interface PlacedSceneModel {
   placeholder?: boolean;
 }
 
+/**
+ * THE FLOOR OF ONE ROOM of a mounted scene, as the spot derivation reads it.
+ *
+ * `hull` is the room polygon in TILE-LOCAL metres. On storey 0 it comes from
+ * `floor_plan[].polygon_world` (§ A19 no. 3) — the scene frame IS the tile
+ * frame — and on a declared storey from the room block's own `outline`, which
+ * is the same polygon the plate up there is drawn from.
+ *
+ * `declared` is the floor the payload STATES for this room in tile-local
+ * metres: a storey plate, the `overlay.y` of a zone lying on an area model, or
+ * a diorama's `walk_y_world`, which outranks both. It is absent exactly where
+ * the payload states nothing — a level-0 room without a declaration, whose
+ * floor is the terrain and is asked of the height sampler point by point.
+ *
+ * There is no storey datum in here: a marker already arrives as its own lift
+ * OVER that datum (`mountScene` writes `offsetY = y_world − levels[].floor_y`),
+ * so keeping the datum a second time would be one number in two places.
+ */
+export interface RoomFloor {
+  hull: [number, number][];
+  declared?: number;
+}
+
 export interface Tile {
   loc: WorldLocation;
   /** Fassaden mit Fensterraster — leuchten nachts (emissive) */
@@ -326,9 +330,14 @@ export interface Tile {
    *  its reference ray there; only x/z matter for that, so the y is the wall
    *  foot the payload names and is not lifted afterwards. */
   roomDoors: Map<string, THREE.Vector3>;
-  /** Bezugsrahmen der Begehbarkeits-Abtastung je Raum: Halter auf der
-   *  Raum-Mitte in Auflagehöhe + Maße der Raum-Umschließenden */
-  roomSlots: Map<string, { holder: THREE.Group; w: number; d: number }>;
+  /** THE STOREY-0 FLOORS of the mounted scene, as the spot derivation reads
+   *  them (§ A19 no. 3, "Ein Boden" E5b): the room hull in TILE-LOCAL metres
+   *  plus the floor the payload DECLARES for it, where it declares one. Filled
+   *  from `floor_plan` (level 0), from the storey plate (level != 0) and from
+   *  the overlay block (a zone on an area model); `deriveRoomSpots` turns each
+   *  entry into centre, stands and furniture. It replaced the holder groups the
+   *  6 x 6 raycast raster was shot from. */
+  roomFloors: Map<string, RoomFloor>;
   /** freie Stellflächen im Raum-Modell (Welt-Koordinaten auf Bodenhöhe) */
   roomSpots: Map<string, THREE.Vector3[]>;
   /** erkannte Sitzflächen (Möbelhöhe, kleine Flächen) */
@@ -374,9 +383,9 @@ export interface Tile {
    *  one entry per room whose diorama spec carries a `walk_y_world` — that
    *  height plus the room's hull in TILE-LOCAL metres. `tileWalkY` asks this
    *  list FIRST and for every display mode: the admin's dial is a statement
-   *  about the room's modelled floor and outranks both the drawn plate and the
-   *  mesh ray. It is the same number `sampleRoomWalkables` stands the NPC
-   *  spots on, so figure and spot cannot end up on two floors. */
+   *  about the room's modelled floor and outranks the storey plate under it.
+   *  It is the same number `deriveRoomSpots` stands the NPC spots on, so
+   *  figure and spot cannot end up on two floors. */
   declaredFloors: DeclaredFloor[];
   /** Wand-Materialien je Etage (fürs Etagen-Umschalten). Liste, weil
    *  texturierte Wände je Stück ein eigenes Material mit eigener repeat
@@ -394,12 +403,6 @@ export interface Tile {
   /** This tile's scene uses a storey < 0 (derived from the payload, set by
    *  mountScene). Read by the camera rule that opens a basement view. */
   hasBasement?: boolean;
-  /** Höhenfeld der montierten Szene (§ B1 Nr. 14) — fehlt = ebene Kachel.
-   *  Objekthöhen kommen FERTIG gehoben aus dem Payload; das Feld dient hier
-   *  nur dem Drapieren des Bodens und der Standhöhe der Figuren. */
-  terrain?: SceneTerrain;
-  /** Kantenlänge des Bezugsquadrats, über dem `terrain` liegt (extent_m). */
-  terrainExtent?: number;
   /** Flächen-Location (plan-area-locations.md): das Location-Modell bleibt in
    *  der Innenansicht stehen und bekommt stattdessen Löcher. Das Handle
    *  schaltet sie mit dem Crossfade — Fernsicht intaktes Modell, Innenansicht
@@ -606,7 +609,7 @@ export function buildTile(loc: WorldLocation): Tile {
     width, yaw, isBuilding, isArea, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomDoors: new Map(),
-    roomSlots: new Map(), roomSpots: new Map(),
+    roomFloors: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
     outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), walkPlates: [],
@@ -649,331 +652,210 @@ export function buildTile(loc: WorldLocation): Tile {
 }
 
 
-/** Begehbarkeit eines Raum-Aufbaus abtasten (Diorama-Modell ODER
- *  Rezept-Szene aus Hülle + Props): Raster von oben, 20. Perzentil =
- *  Bodenhöhe, deutlich höhere Treffer sind Möbel/Wände (dort keine
- *  Figuren). Füllt roomSpots/-SitSpots/-LieSpots, hebt Mitte/Ausgang auf
- *  die echte Bodenhöhe und verfeinert die Marker-Höhen (außer fertig
- *  komponierte prop_markers, fixed). */
-export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Object3D | THREE.Object3D[],
-                                    declaredFloor?: number) {
-  const slot = tile.roomSlots.get(roomId);
-  if (!slot) return;
-  const roots = (Array.isArray(root) ? root : [root]).filter(Boolean);
-  if (!roots.length) return;
+/**
+ * THE STANDS OF ONE ROOM, derived from the payload — the successor of the
+ * 6 x 6 raycast raster ("Ein Boden" E5b).
+ *
+ * WHAT IT REPLACES. Until E5b this shot 36 rays down at the room's plate mesh,
+ * read the floor out of the dominant 7 cm height bin, repaired that with a
+ * reference ray at the door (generated meshes have holes), and called
+ * everything within 12 cm of it a stand. Storey 0 draws no plate to ray any
+ * more, so the two halves come from where they always belonged: the SHAPE from
+ * `floor_plan` (§ A19 no. 3) and the HEIGHT from the one height function at the
+ * point being asked about.
+ *
+ * THE FLOOR, in three data rungs and no fourth (`roomFloorWorldY`): the room's
+ * declared floor where the payload states one (a diorama `walk_y_world`, a
+ * storey plate, an overlay zone on an area model), otherwise the TERRAIN — and
+ * under a built plot the terrain IS the flat plateau the bake stamped there
+ * (§ G5), which is why a built interior comes out level without anybody
+ * levelling it.
+ *
+ * THE FURNITURE STILL GETS MEASURED, and that is not a contradiction: a seat
+ * height is a property of an OBJECT, so it is read off the placed prop's own
+ * bounding box. What is no longer measured is the FLOOR it is judged against —
+ * that is the data height above (`furnitureUse`, `game/ground.ts`).
+ */
+export function deriveRoomSpots(tile: Tile, roomId: string,
+                                props: readonly THREE.Object3D[] = []): void {
+  const floor = tile.roomFloors.get(roomId);
+  if (!floor) return;
   tile.group.updateMatrixWorld(true);
-  // Abtastung unabhängig von der Material-Seitigkeit: generierte Meshes
-  // haben teils nach UNTEN orientierte Boden-Dreiecke — einseitig trifft
-  // sie der Strahl von oben nicht und fällt auf die Sockelplatte durch
-  // (Figuren stehen dann im Boden). Für die Dauer der Abtastung DoubleSide.
-  const savedSides: [THREE.Material, THREE.Side][] = [];
-  for (const r of roots) {
-    r.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-        savedSides.push([m, m.side]);
-        m.side = THREE.DoubleSide;
-      }
-    });
+  const { hull } = floor;
+  // The room's OWN frame: the bounding box of its hull carries the raster and
+  // the label rectangle, the area centroid carries the centre.
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const [px, pz] of hull) {
+    if (px < minX) minX = px;
+    if (px > maxX) maxX = px;
+    if (pz < minZ) minZ = pz;
+    if (pz > maxZ) maxZ = pz;
   }
-  const restoreSides = () => { for (const [m, s] of savedSides) m.side = s; };
-  const ray = new THREE.Raycaster();
-  const down = new THREE.Vector3(0, -1, 0);
-  // RELATIVE to the room's own holder, and that is what makes the 20 m below
-  // relief-proof (§ A16): `base` is a world position that travels with the
-  // tile, so a location standing on a hill rays from 20 m above ITS floor, not
-  // from 20 m above the flat world. The one absolute start in this file is
-  // `tileGroundY`'s, and that one follows the field (`setWorldRayStart`).
-  const base = slot.holder.getWorldPosition(new THREE.Vector3());
-  const N = 6;
-  const samples: { p: THREE.Vector3; ix: number; iz: number; uv?: THREE.Vector2; mesh?: THREE.Mesh }[] = [];
-  for (let ix = 0; ix < N; ix++) {
-    for (let iz = 0; iz < N; iz++) {
-      // The slot's w/d are the room's TILE-LOCAL extents, so the raster is
-      // laid out in the tile's frame and only then turned into the world — on
-      // a location standing at an angle a world-axis raster would sample a
-      // square that hangs out of the room on two corners and misses it on the
-      // other two. The rays themselves stay vertical, so the hits are world
-      // points either way; it is the sampled AREA that has to follow the room.
-      const off = tileDirToWorld(tile,
-        (ix / (N - 1) - 0.5) * slot.w * 0.78,
-        (iz / (N - 1) - 0.5) * slot.d * 0.78);
-      const ox = off.x;
-      const oz = off.z;
-      ray.set(new THREE.Vector3(base.x + ox, base.y + 20, base.z + oz), down);
-      const hit = ray.intersectObjects(roots, true)[0];
-      if (hit) samples.push({ p: hit.point.clone(), ix, iz, uv: hit.uv?.clone(), mesh: hit.object as THREE.Mesh });
-    }
-  }
-  if (samples.length < 5) { restoreSides(); return; }
-  // Bodenhöhe = DOMINANTE Höhenlage (7-cm-Raster) statt 20. Perzentil: bei
-  // Dioramen mit sichtbarem Sockelrand erwischte das Perzentil die Sockel-
-  // platte und stellte die Figuren IN den eigentlichen Boden. Bei Gleich-
-  // stand gewinnt die tiefere Lage (Boden unter Möbeln); Feinwert = Median
-  // der Treffer in der Gewinner-Lage.
-  const bins = new Map<number, number>();
-  for (const s of samples) {
-    const b = Math.round(s.p.y / 0.07);
-    bins.set(b, (bins.get(b) ?? 0) + 1);
-  }
-  let floorBin = 0, floorVotes = -1;
-  for (const [b, n] of bins) {
-    if (n > floorVotes || (n === floorVotes && b < floorBin)) { floorVotes = n; floorBin = b; }
-  }
-  const inBin = samples.map((s) => s.p.y)
-    .filter((y) => Math.abs(y - floorBin * 0.07) < 0.08)
-    .sort((a, b) => a - b);
-  let floor = inBin[Math.floor(inBin.length / 2)];
-  // Reference ray at the room's DOOR (`tile.roomDoors`, straight from the
-  // payload's `doorways[]`): generated meshes have HOLES in the floor at
-  // hidden places — grid rays fall through them onto the base plate and the
-  // dominant layer underestimates the floor (figures stand IN it). At the
-  // door the floor is practically always intact (it is what the generation
-  // looked at): if the hit there lies A LITTLE above the dominant layer, it
-  // IS the floor; clearly higher hits (furniture in front of the door) are
-  // not.
-  const doorP = tile.roomDoors.get(roomId);
-  if (doorP) {
-    ray.set(new THREE.Vector3(doorP.x, base.y + 20, doorP.z), down);
-    const eh = ray.intersectObjects(roots, true)[0];
-    if (eh && eh.point.y > floor + 0.1 && eh.point.y < floor + 0.55) floor = eh.point.y;
-  }
-  // walk_y (§ B6 Nr. 7): eine DEKLARIERTE Standhöhe schlägt die komplette
-  // Heuristik (dominante Lage + Tür-Referenz) — bei modellierten Böden
-  // (Podest, Löcher, versenkte Lounge) ist sie von außen nicht messbar.
-  // Spots/Sitze filtern dann relativ zum deklarierten Boden.
-  //
-  // IM RAHMEN DER TREFFER, nicht im Rahmen des Payloads: `floor` ist bis hier
-  // eine WELT-Höhe (Strahl-Treffer) und wird auch als solche weitergegeben
-  // (Steh-Spots, Raummitte unten), während `walk_y_world` ein KACHEL-Meter ist
-  // — das Rezept rechnet um den Kachelboden y = 0, und die Kachel steht auf
-  // ihrem Plateau (E8 Task 4, dieselbe Lehre wie in `tileWalkY`). Ohne den
-  // Aufschlag fände der Spot-Filter unten auf jedem Plateau keine einzige
-  // Probe mehr (Deklaration still wirkungslos), und bei kleinem Plateau sänke
-  // die Raummitte um genau die Plateauhöhe ein.
-  if (declaredFloor !== undefined) floor = tile.center.y + declaredFloor;
-  const spots = samples
-    .filter((s) => Math.abs(s.p.y - floor) < 0.12)               // eben genug = begehbar
-    .sort((a, b) => a.p.distanceToSquared(base) - b.p.distanceToSquared(base))
-    .map((s) => s.p.clone().setY(s.p.y + 0.01));
+  if (!Number.isFinite(minX)) return;
+  const bx = (minX + maxX) / 2;
+  const bz = (minZ + maxZ) / 2;
+  const w = Math.max(maxX - minX, 0.5);
+  const d = Math.max(maxZ - minZ, 0.5);
+  tile.roomRects.set(roomId, { x: bx, z: bz, w, d });
 
-  // Sitz-/Liegeflächen (Heuristik): flache Treffer in Möbelhöhe — über dem
-  // Boden, unter Tischhöhe (Figuren im Raum sind ~0,6 m groß). Große
-  // zusammenhängende Flächen = liegen (Bett/Sofa), kleine = sitzen.
-  const isFurniture = (s: { p: THREE.Vector3 }) => s.p.y > floor + 0.08 && s.p.y < floor + 0.32;
-  const cand = samples.filter(isFurniture);
-  const byCell = new Map(cand.map((s) => [`${s.ix},${s.iz}`, s]));
-  const visited = new Set<string>();
+  // THE RASTER FIRST, because the centre may need it. `roomSpotGrid` is the
+  // very raster the rays were shot on, with the polygon test where the ray hit
+  // used to be (`game/ground.ts`).
+  const grid = roomSpotGrid(hull, bx, bz, w, d);
+  // THE CENTRE is the area centroid of the drawn hull. On an L-shaped room
+  // that point can lie OUTSIDE the room, and then the nearest raster point is
+  // taken instead: it is inside by construction (the raster is filtered by the
+  // hull) and it is already computed. A full pole-of-inaccessibility would
+  // refine that by a few centimetres and cost a grid search per room — the
+  // consumers are a huddle, a label and a walk goal, none of which can tell
+  // the difference.
+  const cen = polygonCentroid(hull);
+  const inside = cen && pointInPolygon(cen.x, cen.z, hull) ? cen : (grid[0] ?? null);
+  const cx = inside ? inside.x : bx;
+  const cz = inside ? inside.z : bz;
+
+  const floorAt = (lx: number, lz: number) => roomFloorWorldY(tile, floor, lx, lz);
+  const floorY = floorAt(cx, cz);
+  // The centre, ONE instance under id AND name — the readers key by both.
+  const centre = tileToWorld(tile, cx, cz, 0).setY(floorY + WALK_CLEARANCE_M);
+  tile.roomCenters.set(roomId, centre);
+  const roomName = tile.loc.rooms.find((r) => r.id === roomId)?.name;
+  if (roomName) tile.roomCenters.set(roomName, centre);
+
+  // THE STANDS, each at ITS OWN ground and gated by the room's floor: a point
+  // whose ground runs more than `SPOT_FLAT_M` away from the room's own floor is
+  // the hillside an open zone happens to climb, not part of that floor. Under a
+  // built room the gate is inert — the plateau is flat to the millimetre.
+  const spots: THREE.Vector3[] = [];
+  for (const g of grid) {
+    const y = floorAt(g.x, g.z);
+    if (Math.abs(y - floorY) > SPOT_FLAT_M) continue;
+    spots.push(tileToWorld(tile, g.x, g.z, 0).setY(y + WALK_CLEARANCE_M));
+  }
+
+  // SIT / LIE: the top face of a placed prop, measured on the prop. Its own
+  // bounding box says how high and how large the surface is; `furnitureUse`
+  // says what a 1.70 m figure can do with it.
   const sit: THREE.Vector3[] = [];
   const lie: THREE.Vector3[] = [];
-  for (const s of cand) {
-    const key = `${s.ix},${s.iz}`;
-    if (visited.has(key)) continue;
-    const group: typeof cand = [];
-    const queue = [s];
-    visited.add(key);
-    while (queue.length) {
-      const cur = queue.pop()!;
-      group.push(cur);
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-        const nk = `${cur.ix + dx},${cur.iz + dz}`;
-        const nb = byCell.get(nk);
-        if (nb && !visited.has(nk) && Math.abs(nb.p.y - cur.p.y) < 0.07) {
-          visited.add(nk);
-          queue.push(nb);
-        }
-      }
-    }
-    const pts = group.map((g2) => g2.p.clone().setY(g2.p.y + 0.01));
-    if (group.length >= 3) lie.push(...pts);   // große Fläche: Bett/Sofa
-    else sit.push(...pts);                     // klein: Stuhl/Hocker/Bank
+  const box = new THREE.Box3();
+  for (const obj of props) {
+    if (!obj) continue;
+    box.setFromObject(obj);
+    if (box.isEmpty()) continue;
+    const use = furnitureUse(floorY, box.max.y,
+                             box.max.x - box.min.x, box.max.z - box.min.z);
+    if (!use) continue;
+    const at = new THREE.Vector3((box.min.x + box.max.x) / 2,
+                                 box.max.y + WALK_CLEARANCE_M,
+                                 (box.min.z + box.max.z) / 2);
+    (use === 'lie' ? lie : sit).push(at);
   }
 
-  // unter denselben Schlüsseln ablegen wie roomCenters (ID und Name)
-  const center = tile.roomCenters.get(roomId);
-  for (const [key, v] of tile.roomCenters) {
-    if (v !== center) continue;
-    if (spots.length) tile.roomSpots.set(key, spots);
-    if (sit.length) tile.roomSitSpots.set(key, sit);
-    if (lie.length) tile.roomLieSpots.set(key, lie);
-  }
-  if (spots.length) {
-    // Mitte auf die echte Bodenhöhe heben (Instanz für ID+Name geteilt)
-    center?.setY(floor + 0.01);
-  }
+  const put = (map: Map<string, THREE.Vector3[]>, list: THREE.Vector3[]) => {
+    if (!list.length) return;
+    map.set(roomId, list);
+    if (roomName) map.set(roomName, list);
+  };
+  put(tile.roomSpots, spots);
+  put(tile.roomSitSpots, sit);
+  put(tile.roomLieSpots, lie);
 
-  // Marker-Höhen verfeinern, plus Server-Feinjustierung. Sitz-Marker:
-  // Wurzel so verankern, dass die vom Clip abgesenkte Hüfte auf der
-  // Möbel-Oberkante landet (Oberfläche minus Clip-Sitzhöhe, nie unter dem
-  // Boden). Liege-/sonstige Marker liegen auf der Oberfläche (Matratze).
-  const markers = tile.roomMarkers.get(roomId);
-  if (markers) {
-    for (const entries of markers.values()) {
-      for (const e of entries) {
-        if (e.fixed) continue;   // prop_markers: Höhe kommt fertig vom Server
-        ray.set(new THREE.Vector3(e.p.x, base.y + 20, e.p.z), down);
-        const hit = ray.intersectObjects(roots, true)[0];
-        const surface = hit && hit.point.y < floor + 0.5 ? hit.point.y : floor;
-        // Der Absatz kommt vom Server (root_offset) — der Client kennt hier
-        // nur die abgetastete FLÄCHE, nicht den Berührpunkt des Clips.
-        // BEWUSST ohne Boden-Klemme: bei diesen Clips liegt die Wurzel
-        // richtigerweise unter dem Boden. Der Schlaf-Clip trägt den ganzen
-        // Körper 0,6 x Figurenhöhe über seiner Wurzel (auf einem Bett
-        // animiert), also 1,07 reale Meter — eine Klemme auf den Boden ließe
-        // die Figur genau so weit über der Matratze schweben.
-        e.p.setY(surface - e.drop + 0.01 + e.offsetY);
-      }
+  // MARKER HEIGHTS sit on the room's floor plus their own lift over the storey
+  // datum the composer measured them against — `offsetY` IS `y_world − datum`
+  // (`mountScene`), so this is the composed height with the room's real floor
+  // put under it. On a built ground floor `floorY` is the storey datum and the
+  // line reproduces the payload exactly; where the ROOM declares a floor of its
+  // own (a podium, a sunken lounge, a hut in a lake, an upper storey's plate)
+  // the marker follows it.
+  //
+  // WRITTEN ABSOLUTELY, never as a delta: a model tier swap re-derives the same
+  // room (`setSceneModelTier`), and a relative correction would apply twice.
+  // `fixed` markers (prop markers) are finished and are never touched.
+  for (const entries of tile.roomMarkers.get(roomId)?.values() ?? []) {
+    for (const e of entries) {
+      if (!e.fixed) e.p.setY(floorY - e.drop + e.offsetY);
     }
   }
-  restoreSides();
 }
 
-/** Standing height on TILE level (a figure outside the rooms, e.g. at the
- *  entrance): building meshes often carry a baked-in ground skin or terrain
- *  around the door — the figure stands on that actual surface instead of
- *  sinking into it at y = 0. A ray from above; with no hit it stays on the
- *  tile floor.
+/** The floor of ONE room at a tile-local point, in WORLD metres: the payload's
+ *  declaration where there is one, the terrain otherwise. `NaN` from a sampler
+ *  that has nothing to say reads as the tile's own datum — a room must not put
+ *  its stands at no height. */
+function roomFloorWorldY(tile: Tile, floor: RoomFloor,
+                         lx: number, lz: number): number {
+  if (floor.declared !== undefined) return tile.center.y + floor.declared;
+  const w = tileToWorld(tile, lx, lz, 0);
+  const y = worldGroundAt ? worldGroundAt(w.x, w.z) : NaN;
+  return Number.isFinite(y) ? y : tile.center.y;
+}
+
+/**
+ * WHERE A FIGURE STANDS on this tile, in WORLD metres.
  *
- *  WHICH hit counts is decided by the spec and no longer by a fixed 1.2 m mark
- *  (finding B8): the roof guard applies to BUILDING models and measures from
- *  their declared standing height (`walk_y_world`), while an AREA model
- *  (`display: ground`/`shell_area`) IS the ground and is not capped at all —
- *  otherwise the figure drops back to level 0 on a raised shore. The rule is a
- *  pure function in `game/ground.ts`.
+ * Two answers reconciled by `game/ground.standY`: the TILE's own
+ * (`tileWalkY` — a declared floor, a storey plate) and the WORLD's (the one
+ * height function, `heightAt` via `setWorldGround`). The higher wins, which
+ * under a BUILT location is a no-op by construction — the bake stamps the plot
+ * flat to exactly the height the tile stands on (§ G5) — and under a natural
+ * one is what keeps a figure on the landscape that runs on underneath.
  *
- *  EVERYTHING MEASURES RELATIVE TO THE TILE (E8 task 4). Since the tile stands
- *  on its plateau (`footprintCentre`), the ray hits are WORLD y while the spec
- *  number `walk_y_world` is a tile metre (the recipe computes around the tile
- *  floor y = 0). Without the subtraction here the roof limit would sit exactly
- *  the plateau height too low on a hill, and EVERY hit of a building on raised
- *  ground would read as "roof" — the figure would fall back to the tile floor,
- *  which is finding B8 all over again, only from above.
- *
- *  AND THE WORLD RUNS ON UNDERNEATH (finding 4 of the acceptance round
- *  2026-08-13). Everything above is measured from the tile's own centre, so it
- *  only ever knew ONE world height for the whole footprint. Under an unflagged
- *  place the landscape does not stop at the border: the figure walked at plate
- *  height while the ground rose through the plate, and at the border it jumped,
- *  because a traveller outside is sampled off the world field. The higher of the
- *  two wins (`game/ground.standY`), which is ALSO where both consumers of this
- *  function — the NPC placement and the walk/click height — inherit it from.
- *  Under a BUILT location the world term IS the plateau the bake stamped there
- *  (§ G5, no flag any more since E1), so the rule is a no-op by construction.
- *
- *  THE ONE SAMPLER ANSWERS (`heightAt` via `setWorldGround`). It used to be
- *  worth saying which of two: the client had a "drawn" height for the
- *  triangles on the screen and a bilinear one for predicting the server, and
- *  they were up to 2.433 m apart. Since "Ein Boden" E2 the terrain's own
- *  vertices come out of the bilinear lattice, so there is one number and the
- *  walk gate's mirror (`main.ts` `reliefLiftAt`) reads the very same one. */
+ * No sampler yet answers `NaN`, not a flat 0: a tile whose plateau lies below
+ * zero must not be lifted to it by a field that has not arrived.
+ */
 export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
-  // No sampler yet = no world answer at all (NaN), not a flat 0: a tile whose
-  // plateau is below zero must not be lifted to it by a missing field.
   return standY(tileWalkY(tile, at),
                 worldGroundAt ? worldGroundAt(at.x, at.z) : NaN);
 }
 
-/** The downward probe of `tileWalkY`, hoisted: it runs for every figure of
- *  every frame since the travellers share this height, and a Raycaster plus two
- *  vectors per call is garbage nobody needs. */
-const walkRay = new THREE.Raycaster();
-const walkRayFrom = new THREE.Vector3();
-const WALK_RAY_DOWN = new THREE.Vector3(0, -1, 0);
-
-/** The TILE's own answer — plate, model skin and scene relief, all measured
- *  from the tile centre. Split off so the world term above wraps the whole
- *  answer instead of one of its three exits.
+/**
+ * The TILE's own answer, measured from its centre — DATA ONLY since "Ein
+ * Boden" E5b. Split off so the world term above wraps the whole answer instead
+ * of one of its exits.
  *
- *  THE RECIPE'S FLOOR COMES FIRST for a building (decision 2026-08-20). A
- *  `shell` model is the PICTURE of a house; the floor of that house is the
- *  plate the payload draws and the surface it stands the room's props and
- *  markers on (`bottom_y = plate top + 0.01`). Raying the mesh instead asked a
- *  second, unrelated surface: "Haus von Kai" carries a 0.24 m ground pad under
- *  its walls, so the ray answered 0.000 while the room plate lay at 0.100 —
- *  the figure walked 9 cm below the floor its own furniture stood on, at the
- *  height of the tile's grass socle (0.045). Measured, § B5a.
+ * TWO RUNGS, in this order:
  *
- *  THE MESH STILL ANSWERS where it IS the ground and nowhere else: an area
- *  model (`ground` / `shell_area`, whose shore, slope and lake bed are the
- *  terrain of the place) and every point of a building tile that no plate
- *  covers — the yard around the house, a place whose payload draws no plates
- *  at all.
+ *  1. A ROOM'S DECLARATION (`declaredFloorAt`, user finding 2026-08-20,
+ *     Mondhütte). A room whose diorama spec carries a `walk_y_world` states
+ *     where its own modelled floor is — a podium, a sunken lounge, a hut
+ *     standing in a lake — and that statement outranks everything, in every
+ *     display mode. It is the same number `deriveRoomSpots` stands the room's
+ *     NPC spots on, which is what keeps a figure and its room's stands on ONE
+ *     surface.
+ *  2. THE STOREY PLATES (`recipeFloorAt`), which since E5a are the DECLARED
+ *     storeys only: an upper floor, a basement. On the ground floor this
+ *     answers `null` and the terrain has the floor. The pick is capped by
+ *     `plateCeiling` so a figure on the ground floor is never hoisted onto the
+ *     2.90 m slab above it.
  *
- *  AND A DECLARATION COMES BEFORE ALL OF IT (user finding 2026-08-20,
- *  Mondhütte): a room whose diorama spec carries a `walk_y_world` states where
- *  its own modelled floor is, and that dial used to reach only the NPC spots
- *  (`sampleRoomWalkables`) while the figure walked on the plate — or, in an
- *  area location, on nothing at all. Measured on Mondhütte inside the area
- *  location Mondscheinsee: room plate 0.09, diorama `bottom_y` −0.19, so a
- *  dialled `walk_y` 0.35 is `walk_y_world` 0.16 and the figure belongs at
- *  0.17 — it stood at 0.00, the bare tile floor, because `shell_area` skips
- *  the plate branch and the location has no mesh to ray.
- *
- *  THE PLATES ALSO ANSWER WHERE THERE IS NO MESH, whatever the display: an
- *  area location whose model was never generated (Mondscheinsee) draws its
- *  zone plates and nothing else, and those plates ARE its ground — the sand at
- *  0.09 that the figure stood 9 cm below. Where a mesh exists the area rule is
- *  untouched and the ray keeps answering (finding B8: shore, slope, lake bed).
- *  The plate pick is judged by `plateCeiling`, not by `walkCeiling`: the area
- *  exception is about mesh HITS, and an uncapped plate pick would hoist a
- *  ground-floor figure onto a level-1 plate. */
+ * AND THE THIRD RUNG IS THE TERRAIN, which is `lift` — the tile's own centre,
+ * i.e. the field at the location's anchor, with the world term of `tileGroundY`
+ * over it. The MESH RAY that used to sit between the plates and the ground is
+ * DELETED: an area model's walkable surface is the `walk_y_world` it declares,
+ * and where it declares none the terrain under it is the ground it was drawn
+ * over. Asking the triangles was a way of finding out which of two grounds was
+ * in front; there is one.
+ */
 function tileWalkY(tile: Tile, at: THREE.Vector3): number {
-  const lift = tile.center.y + terrainLiftAt(tile, at.x, at.z);
-  const target = tile.serverModel;
-  const info: GroundModelInfo = {
-    display: tile.modelIsGround ? 'ground'
-      : tile.modelIsShellArea ? 'shell_area' : 'shell',
-    walkY: tile.modelWalkY,
-  };
+  const lift = tile.center.y;
   if (tile.declaredFloors.length) {
     const local = worldToTile(tile, at.x, at.z);
     const declared = declaredFloorAt(tile.declaredFloors, local.x, local.z);
-    // No terrain lift on top: the declared height is derived from the
-    // diorama's `bottom_y`, which the recipe already raised onto the relief at
-    // the model's anchor (`_diorama_model`, contract v5.2 no. 14). Adding it
-    // again would count the hill twice — and `sampleRoomWalkables` takes the
-    // same number bare, which is what keeps figure and NPC spot on ONE floor.
     if (declared !== null) return tile.center.y + declared + WALK_CLEARANCE_M;
   }
-  if (tile.walkPlates.length && (info.display === 'shell' || !target)) {
+  if (tile.walkPlates.length) {
     const local = worldToTile(tile, at.x, at.z);
+    const info: GroundModelInfo = {
+      display: tile.modelIsGround ? 'ground'
+        : tile.modelIsShellArea ? 'shell_area' : 'shell',
+      walkY: tile.modelWalkY,
+    };
     const floor = recipeFloorAt(tile.walkPlates, local.x, local.z,
                                 plateCeiling(info));
-    if (floor !== null) {
-      return tile.center.y + floor + WALK_CLEARANCE_M
-        + terrainLiftAt(tile, at.x, at.z);
-    }
-  }
-  if (!target) return lift;
-  walkRay.set(walkRayFrom.set(at.x, rayStartY, at.z), WALK_RAY_DOWN);
-  for (const h of walkRay.intersectObject(target, true)) {
-    // The hit is world y, the ceiling a tile height: compare them in the SAME
-    // frame of reference, or the rule tips over with the plateau.
-    if (acceptsWalkHit(info, h.point.y - tile.center.y)) {
-      return h.point.y + WALK_CLEARANCE_M + terrainLiftAt(tile, at.x, at.z);
-    }
+    if (floor !== null) return tile.center.y + floor + WALK_CLEARANCE_M;
   }
   return lift;
-}
-
-/** Höhe des Geländereliefs an einem WELT-Punkt dieser Kachel (0 ohne Szene
- *  oder ohne Relief) — der Aufschlag auf den ebenen Boden.
- *
- *  Das ist die EINZIGE Stelle, an der der Client eine Relief-Höhe selbst
- *  ermittelt, und sie gilt nur für den Boden und die Figuren darauf: alles,
- *  was der Payload als Objekt beschreibt (Props, Marker, Ausgänge), kommt
- *  bereits gehoben — dort nochmals zu sampeln zählte die Hebung doppelt
- *  (Vertrag v5.2 Nr. 14, „Arbeitsteilung"). Das Payload rechnet um das
- *  KACHELZENTRUM, die Aufrufer reichen Weltkoordinaten herein. */
-export function terrainLiftAt(tile: Tile, x: number, z: number): number {
-  if (!tile.terrain) return 0;
-  // The height field is TILE-LOCAL, so a world point has to be turned back
-  // into the tile's frame first — subtracting the centre alone was only right
-  // while every tile stood at yaw 0.
-  const local = worldToTile(tile, x, z);
-  return sampleTerrain(tile.terrain, local.x, local.z,
-                       tile.terrainExtent || tile.width);
 }
 
 /** Kachel als Kamera-Verdecker aus-/einblenden (weich). Nachbarn zwischen

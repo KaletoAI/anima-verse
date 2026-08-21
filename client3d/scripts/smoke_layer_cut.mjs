@@ -351,7 +351,6 @@ const SOURCES = [
   'client3d/src/scene/terrainLod.ts',
   'client3d/src/scene/layerGround.ts',
   'packages/scene-render/src/groundAreas.ts',
-  'packages/scene-render/src/gridMesh.ts',
   'packages/scene-render/src/index.ts',
 ];
 const texts = new Map();
@@ -377,7 +376,12 @@ for (const dead of ['AREA_RENDER_ORDER_BASE', 'AREA_POLYGON_OFFSET',
   // …and with E4 the last lift of them all, plus the drape machinery that
   // only ever served it: the cut on the height lattice and the per-area cell
   // budget that sized it.
-  'WATER_DRAPE_LIFT_M', 'drapeArea', 'areaCellM']) {
+  'WATER_DRAPE_LIFT_M', 'drapeArea', 'areaCellM',
+  // …and with E5b the drape machinery itself, plus the scene relief it was
+  // built for: the package files `gridMesh.ts` and `terrain.ts` are deleted
+  // (§ A19 no. 6), so not one of these names may be imported any more.
+  'subdivideOnGrid', 'gridStepFor', 'GRID_MAX_CELLS',
+  'sampleTerrain', 'drapeGeometry', 'TERRAIN_CELLS']) {
   checkEq(`\`${dead}\` is gone from the code`, liveMentions(dead), []);
 }
 
@@ -398,8 +402,17 @@ checkEq('…and no height at all any more: the mirror stands at its own level',
 check('only WATER still gets a mesh at all',
   /const water = isWaterClass\(surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\?\.class\);/
     .test(build) ? 1 : 0, 1);
-check('…and every other ground is a mesh of null',
-  /let mesh: THREE\.Mesh \| null = null;/.test(build) ? 1 : 0, 1);
+// …and since E5b a PAINTED lake and a room's WATER FLOOR are drawn by the same
+// three lines (§ A19 no. 5). One builder, two feeders — a second mirror
+// implementation is exactly what the addendum forbids.
+check('the mirror builder exists exactly once',
+  (build.match(/const addMirror = \(/g) ?? []).length, 1);
+check('…the painted area feeds it',
+  /addMirror\(built\.geometry, area\.kind, level\);/.test(build) ? 1 : 0, 1);
+check('…and so does the ZONE water, out of the layer index',
+  /for \(const w of zoneWaterMirrors\(zoneWaters\)\) \{/.test(build) ? 1 : 0, 1);
+check('…with no buildWaterPlane call of its own',
+  (build.match(/buildWaterPlane\(/g) ?? []).length, 1);
 
 console.log('\n[7] the wiring, pinned by reading the source');
 check('the terrain material carries no map — or the anti-tile would blend the '

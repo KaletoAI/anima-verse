@@ -77,6 +77,7 @@ import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { ScenePropPanel } from './ScenePropPanel'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
+import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
 import { GROUND_ROOM_ID, groundRoomLabel, hasRect } from './worldTypes'
 
@@ -366,17 +367,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // thumbnail wherever one exists.
   // What a picker STORES is the id; what it SHOWS is the name — the library
   // ships both, so no dropdown has to display "dark_stone" any more.
+  // `material` travels along because the side panel decides "is this floor
+  // water?" by the declared material CLASS (§ A19 no. 4) — the same book the
+  // server asks, never the kind's name.
   const [surfaceKinds, setSurfaceKinds] = useState<SurfaceKind[]>([])
   useEffect(() => {
-    apiGet<Array<{ kind?: string; name?: string; url?: string }>>(
+    apiGet<Array<{ kind?: string; name?: string; url?: string
+                   material?: SurfaceMaterialSpec | null }>>(
       '/assets/surface-textures')
       .then((list) => {
-        const byKind = new Map<string, { name: string; url: string }>()
+        const byKind = new Map<string, Omit<SurfaceKind, 'kind'>>()
         for (const entry of Array.isArray(list) ? list : []) {
           const kind = (entry?.kind || '').trim()
           if (!kind || byKind.has(kind)) continue
           byKind.set(kind, { name: (entry.name || '').trim() || kind,
-                             url: entry.url || '' })
+                             url: entry.url || '',
+                             material: entry.material ?? null })
         }
         setSurfaceKinds(Array.from(byKind, ([kind, v]) => ({ kind, ...v }))
           .sort((a, b) => a.name.localeCompare(b.name)))
@@ -688,10 +694,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   }, [])
   /**
    * The square the top-down UNDERLAY covers: edge `scene.extent_m`, centred on
-   * the boundary's bounding box — the very frame `scene_recipe.terrain_frame`
-   * spans the relief lattice over. The snapshot camera is pointed at this
-   * centre and the image is laid at this rectangle, so the two agree by
-   * construction instead of by both assuming the pin.
+   * the boundary's bounding box — the frame the whole scene is composed in.
+   * The snapshot camera is pointed at this centre and the image is laid at
+   * this rectangle, so the two agree by construction instead of by both
+   * assuming the pin.
    */
   const snapshotFrame = useMemo(() => {
     const xs = boundaryM.map((p) => p[0])
@@ -743,19 +749,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const [gridStep, setGridStep] = useState(0.5)
   const gridStepRef = useRef(gridStep)
   gridStepRef.current = gridStep
-  // Relief wave width, said in something a person can picture: the server
-  // turns the authored metres into a grid over the plan (cells = plan width /
-  // wave, half-up, clamped to 2…22 — RELIEF_CELLS_MIN/MAX in
-  // app/core/scatter_curves.py, whose upper bound is what the drape can
-  // resolve), so the caption reports the swell count the current setting
-  // actually produces. Without a wave width the default is the fixed 16 cells
-  // every location had before the setting existed — the number the empty
-  // field's placeholder shows.
-  const reliefWaveDefaultM = planW > 0 ? Math.round((planW / 16) * 10) / 10 : 0
-  const reliefWaveM = map3d?.relief?.wave_m || reliefWaveDefaultM
-  const reliefSwells = reliefWaveM > 0 && planW > 0
-    ? Math.max(2, Math.min(22, Math.round(planW / reliefWaveM)))
-    : 0
   // ── Server-composed room vocabulary (contract § B1 `rooms`) ──────────
   // Shared-wall openings are TRUTH, not cosmetics — they come from the same
   // scene payload the 3D preview renders, in plan fractions. The editor
@@ -1907,96 +1900,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             <span>{t('Detail scene (model fades on zoom-in)')}</span>
           </label>
         ) : null}
-        {/* Terrain relief (v5.2 Nr. 14). A detail scene without a diorama is
-            dead flat; the amplitude rolls the ground and the server lifts
-            everything standing on it — no prop height is ever set by hand.
-            The seed is written WITH the first amplitude: the field is
-            deterministic, so a relief without a seed has no identity. */}
-        {onMap3d && map3d?.area_detail ? (
-          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Terrain relief: swing of the ground in real metres (0 = flat). A deterministic height field rolls the whole location; the server lifts props and markers onto it, indoor rooms stay level. Outdoor rooms can opt out per room ("Keep flat").')}>
-            ⛰
-            <span>{t('Relief (m)')}</span>
-            <input
-              className="ga-input"
-              type="number"
-              min={0}
-              max={5}
-              step={0.05}
-              style={{ width: 72 }}
-              value={map3d?.relief?.amplitude_m ?? ''}
-              onChange={(e) => {
-                const v = Number(e.target.value)
-                if (!e.target.value.trim() || !Number.isFinite(v) || v <= 0) {
-                  onMap3d('relief', undefined)
-                  return
-                }
-                onMap3d('relief', {
-                  ...map3d?.relief,
-                  amplitude_m: v,
-                  seed: map3d?.relief?.seed
-                    ?? crypto.getRandomValues(new Uint32Array(1))[0],
-                })
-              }}
-            />
-            {map3d?.relief ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                title={t('Roll a new height field — same amplitude, different hills.')}
-                onClick={() => onMap3d('relief', {
-                  ...map3d.relief!,
-                  seed: crypto.getRandomValues(new Uint32Array(1))[0],
-                })}
-              >
-                🎲
-              </button>
-            ) : null}
-          </label>
-        ) : null}
-        {/* The relief's SECOND axis: the amplitude says how high the ground
-            swings, this says how far apart the swells sit. Without it the
-            only way to get more relief was a steeper version of the same 16
-            humps — past half a metre that reads as a ploughed field. */}
-        {onMap3d && map3d?.area_detail && map3d?.relief ? (
-          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Wave width: how wide ONE ground swell is, in real metres. Small values make a choppy, ploughed-field look, large values make long, gentle rolls. Empty = the default of 16 swells across the plan.')}>
-            〰
-            <span>{t('Wave (m)')}</span>
-            <input
-              className="ga-input"
-              type="number"
-              min={1}
-              max={200}
-              step={1}
-              style={{ width: 72 }}
-              placeholder={reliefWaveDefaultM ? String(reliefWaveDefaultM) : ''}
-              value={map3d.relief.wave_m ?? ''}
-              onChange={(e) => {
-                const v = Number(e.target.value)
-                // Clamped to the SERVER's window (1…200 m, 2 decimals — the
-                // relief block of _sanitize_map3d). `min`/`max` do not stop a
-                // typed value, and the sanitizer drops a wave width outside
-                // its window entirely, falling back to the default grid — so
-                // an unclamped 0.5 would let the caption promise swells the
-                // server never builds.
-                const wave = e.target.value.trim() && Number.isFinite(v) && v > 0
-                  ? Math.round(Math.min(200, Math.max(1, v)) * 100) / 100
-                  : undefined
-                onMap3d('relief', { ...map3d.relief!, wave_m: wave })
-              }}
-            />
-            <span style={{ opacity: 0.7 }}>
-              {reliefSwells
-                ? (map3d.relief.wave_m
-                  ? t('≈ {n} swells across the {w} m plan')
-                  : t('default: ≈ {n} swells across the {w} m plan'))
-                  .replace('{n}', String(reliefSwells))
-                  .replace('{w}', String(planW))
-                : t('Set the plan width to see what a wave width means here.')}
-            </span>
-          </label>
-        ) : null}
+        {/* THE SCENE'S OWN RELIEF IS GONE ("Ein Boden" E5a, decision 1 of
+            the plan): the amplitude/seed/wave dials and the per-room "Keep
+            flat" opt-out that stood here rolled a 17 × 17 height field that
+            existed nowhere but in this one scene — a second ground next to
+            the world's. Local relief is authored on the map's HEIGHT AREAS
+            now, and every consumer reads the one field (`h_final`). */}
       </div>
 
       {/* NO BOUNDARY DRAWN. The location's footprint IS the drawn polygon, and
@@ -3141,9 +3050,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           always_visible: v || undefined,
         })}
         onRotation={setRotation}
-        onReliefFlat={(v) => updateLayout(selectedRoom?.id || '', {
-          relief_flat: v || undefined,
-        })}
+        onLayout={(patch) => updateLayout(selectedRoom?.id || '', patch)}
         onNoWalls={(v) => updateLayout(selectedRoom?.id || '', {
           no_walls: v || undefined,
         })}

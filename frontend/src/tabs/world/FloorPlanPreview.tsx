@@ -24,14 +24,13 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
-  drapeGeometry,
   applyClipOutline, disposeClipMaterials, pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
 import { fmtM } from './planGeometry'
-import type { Map3D, Room, SceneModelSpec, ScenePayload } from './worldTypes'
+import type { Map3D, Room, SceneModelSpec, ScenePayload, ScenePlate } from './worldTypes'
 import { hasRect } from './worldTypes'
 import { buildMeasureAids, disposeAids, useActiveMeasure,
   type MeasureKey } from './measureKit'
@@ -363,16 +362,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     }
     // A basement lies BELOW the reference square, and that square is not
     // level-bound — it stayed in the picture and covered the very storey the
-    // solo view was opened for. While a level < 0 is soloed it goes ghost;
-    // depthWrite off as well, so it cannot occlude what is underneath. The
+    // solo view was opened for. While a level < 0 is soloed it goes ghost. The
     // edge loop stays as it is: a line hides nothing and it keeps the plan's
-    // extent readable.
+    // extent readable. (`depthWrite` is off for the stage in ANY case now —
+    // see where the mesh is built.)
     {
       const under = solo !== null && solo < 0
       const gm = h.ground.material as Material & { opacity: number }
       gm.transparent = under
       gm.opacity = under ? 0.15 : 1
-      gm.depthWrite = !under
       gm.needsUpdate = true
     }
     // Scalars come FROM THE PAYLOAD (contract § A1): k = world metres per
@@ -388,8 +386,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     const PLATE_M = sc?.extent_m || DEFAULT_EXTENT_M
     // ...and the stage sits over the BOUNDARY's bounding box, not around the
     // pin: a v6 plot may be drawn anywhere around its anchor, and a stage
-    // centred on the pin would leave half the rooms off the plate. Same box
-    // the server spans its relief lattice over (`scene_recipe.terrain_frame`).
+    // centred on the pin would leave half the rooms off the plate.
     const bnd = sc?.boundary || []
     const stage = bnd.length >= 3
       ? [(Math.min(...bnd.map((p) => p[0])) + Math.max(...bnd.map((p) => p[0]))) / 2,
@@ -399,12 +396,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       o.scale.set(PLATE_M, PLATE_M, 1)
       o.position.x = stage[0]
       o.position.z = stage[1]
-      // NATURAL LOCATION (§ B1 addendum 2026-08-20 part 3): no storey slab, so
-      // the zone surfaces come at 0.01 instead of 0.09 and a stage at y = 0
-      // would be one centimetre under them — a coplanar fight across a 60 m
-      // plate. The stage drops the same 0.14 m the 3D client's tile plate
-      // drops (`tiles.tilePlateY`, −0.13): ONE number, both renderers.
-      o.position.y = sc?.natural_floor ? -0.13 : 0
+      // THE STAGE SITS AT y = 0, full stop ("Ein Boden" E5a). It used to drop
+      // 0.13 m under a natural location because that location's surfaces came
+      // at 0.01 while a built one's came at 0.08/0.10 — two grounds, and the
+      // stage had to duck under whichever was lower. There is one ground now:
+      // storey 0 IS the datum, and the aid lies in it.
+      o.position.y = 0
     }
     // A ground location brings its own floor: the stage plate would cut the
     // model at y = 0 exactly like the 3D client's tile plate did (Mondscheinsee
@@ -963,8 +960,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     const upperFloor = sc?.style.upper_floor_opacity ?? 1
 
     if (sc && showWallsRef.current) {
-      // Floor slabs. A textured kind tiles at its REAL size (size_m × k);
-      // thickness 0 means "texture surface only, no body" (outdoor rooms).
+      // Floor slabs of the DECLARED storeys — upper floors and basements.
+      // Storey 0 has none since E5a; its floors come from `floor_plan` below.
+      // A textured kind tiles at its REAL size (size_m × k).
       for (const plate of sc.plates) {
         if (!visibleLevel(plate.level) || plate.outline.length < 3) continue
         const upper = plate.opacity_role === 'upper'
@@ -986,26 +984,83 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
             transparent: upper, opacity: upper ? upperFloor : 1 })
         }
         const mesh = buildPlate(THREE, plate, mat)
-        if (plate.relief && sc.terrain) {
-          // Terrain relief (§ B1 Nr. 14): an outdoor plate of a non-flat room
-          // follows the height field instead of lying on top_y — subdivided
-          // and raised through the SAME sampler the 3D client uses, so the
-          // preview shows the slope the game shows. The stage plate below
-          // stays flat on purpose: it is the reference square, a measuring
-          // aid, not ground.
-          mesh.updateMatrix()
-          const flat = mesh.geometry
-          // `extent` is only the FALLBACK span for a payload without
-          // `terrain.origin`; where the field is present the shared sampler
-          // anchors on it (contract § B1 Nr. 14, v6 Nr. 2).
-          mesh.geometry = drapeGeometry(THREE, flat, sc.terrain, PLATE_M,
-                                        mesh.matrix)
-          flat.dispose()
-        }
         boxes.add(mesh)
         if (verifyRef.current) {
           verifier.primitive(mesh, VERIFY_ORIGIN,
             `plate:${plate.room_id || 'level'}@${plate.level}`, plateTargets(plate))
+        }
+      }
+
+      // ── Storey-0 floors (§ A19 no. 3) ────────────────────────────────
+      // `plates[]` carries DECLARED storeys only since E5a; storey 0 has no
+      // plate at all. Its height is the terrain (`h_final`) and its material
+      // is the layer bake, and what the payload still ships is the SHAPE:
+      // `floor_plan`, one hull per level-0 room, in the same scene frame the
+      // plates and the boundary use. They are surfaces, not bodies — no
+      // thickness, both sides, and under the same "Walls & floor" switch and
+      // level solo the plates answer to.
+      if (visibleLevel(0)) {
+        for (const floor of sc.floor_plan) {
+          if (floor.polygon_world.length < 3) continue
+          // AN EMPTY KIND IS NOT A FALLBACK. A zone that names no floor lets
+          // the terrain through, and the bake paints nothing there either —
+          // so neither does the preview. Painting `floor_color` here would
+          // invent a surface the world does not have.
+          if (!floor.floor_kind) continue
+          const info = ensureSurfaceTex(floor.floor_kind)
+          const kindMat = surfaceListRef.current.map
+            .get(floor.floor_kind)?.material ?? null
+          // A WATER FLOOR IS THE MIRROR ITSELF — one surface, not two.
+          // `water_level_effective` marks a room whose floor kind is a water
+          // surface (§ A19 no. 4); the shared `surfaceMaterial` already gives
+          // its class the ripple and the fresnel, so a second plane laid over
+          // the polygon would be the same mirror drawn twice, coplanar with
+          // itself. What water needs on top of the kind is view state: it
+          // blends, and it writes no depth (§ G4 — the bed under it has to
+          // show through its shore, and two fragments of one sheet must not
+          // cull each other).
+          const water = floor.water_level_effective !== undefined
+          const look = { material: kindMat, side: THREE.DoubleSide,
+            ...(water ? { transparent: true, opacity: 0.85,
+                          depthWrite: false } : {}) }
+          let mat: Material
+          if (info?.tex) {
+            const tile = info.sizeM * kFac
+            const tex = (info.tex as Texture).clone()
+            tex.needsUpdate = true
+            tex.repeat.set(1 / tile, 1 / tile)
+            mat = surfaceMaterial(THREE, { ...look, map: tex })
+          } else {
+            mat = surfaceMaterial(THREE, { ...look, color: floorColor })
+          }
+          // Geometry through the SHARED routine, from a flat stand-in plate:
+          // the polygon rule lives in @anima/scene-render and is not written
+          // a second time here.
+          //
+          // THE HEIGHT: y = 0, and no offset is derived from
+          // `water_level_effective`. That number is the one ABSOLUTE world y
+          // in the payload, while everything else here — plates, walls,
+          // models, the stage — is SCENE-FRAME metres around the anchor pin,
+          // whose zero IS the location's own ground (the plateau the bake
+          // stamps under a built plot, § G5). The preview knows no world
+          // datum for the plot, so it has nothing to subtract. y = 0 is also
+          // exactly where the mirror really stands whenever the bake DERIVED
+          // the level — plateau height on a built location, rim median on a
+          // natural one (§ A19 no. 4), which is the default case. Where an
+          // author dials `layout.water_level` away from that, the absolute
+          // number is what the room panel's field reads back; the preview
+          // keeps the sheet on the ground datum rather than inventing a
+          // second one.
+          const spec: ScenePlate = {
+            level: 0,
+            outline: floor.polygon_world,
+            top_y: 0,
+            thickness: 0,
+            opacity_role: 'ground',
+            room_id: floor.room_id,
+            texture_kind: floor.floor_kind,
+          }
+          boxes.add(buildPlate(THREE, spec, mat))
         }
       }
 
@@ -1369,12 +1424,21 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // Ground plate = the location's reference square, plus outline. Built
         // as a 1 × 1 plane and SCALED to `extent_m` on every rebuild — the
         // square is a per-location dial now, not a constant.
+        //
+        // IT IS AN AID, NOT A BODY, and since E5a it lies in the very plane
+        // the storey-0 floors do (both at y = 0 — there is one ground now).
+        // Two opaque coplanar meshes are the z-fight this whole rebuild
+        // exists to end, and the fix is not a bias ladder but the honest
+        // statement of what the square is: it writes no depth and is drawn
+        // first (`renderOrder`), so everything real — floors, walls, props —
+        // paints over it at any distance without a single offset constant.
         const groundGeo = new THREE.PlaneGeometry(1, 1)
         const ground = new THREE.Mesh(
           groundGeo,
-          new THREE.MeshBasicMaterial({ color: 0x2e3742 }),
+          new THREE.MeshBasicMaterial({ color: 0x2e3742, depthWrite: false }),
         )
         ground.rotation.x = -Math.PI / 2
+        ground.renderOrder = -1
         scene.add(ground)
         const outline = new THREE.LineSegments(
           new THREE.EdgesGeometry(groundGeo),

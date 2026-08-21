@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
-  buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials, drapeGeometry,
+  buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, VERIFY_EPS, surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
 import type { ModelTier, PrimitiveTarget, VerifyRow } from '@anima/scene-render';
@@ -15,9 +15,9 @@ import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
 import {
-  preloadSurfaceTexture, sampleRoomWalkables, surfaceFor,
+  deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld,
-  type PlacedSceneModel, type Tile,
+  type PlacedSceneModel, type RoomFloor, type Tile,
 } from './tiles';
 
 /** Which resolution tier a mount loads, per model group. `building` = the
@@ -375,6 +375,21 @@ function assertUnitScale(k: number): void {
  *  jeden Mount außer dem letzten für veraltet erklären. */
 const mountSeq = new WeakMap<Tile, number>();
 
+/** The PLACED PROPS of one room — what the sit/lie derivation measures its
+ *  bounding boxes on (`deriveRoomSpots`). A prop whose mesh never loaded and
+ *  that got no placeholder either has no object and therefore no surface; the
+ *  room diorama is deliberately not in the list, it is the room's SHELL and its
+ *  box would be the whole room. */
+function roomProps(placements: readonly PlacedSceneModel[], roomId: string
+): THREE.Object3D[] {
+  const out: THREE.Object3D[] = [];
+  for (const rec of placements) {
+    if (rec.spec.role !== 'prop' || rec.spec.room_id !== roomId) continue;
+    if (rec.object) out.push(rec.object);
+  }
+  return out;
+}
+
 /**
  * Die komplette Innenansicht einer Location aus dem Payload bauen.
  *
@@ -425,7 +440,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // deren Payload allein aus dem Gebäudemodell besteht (Mondscheinsee —
   // Modell, aber keine Räume/Platten/Wände), darf beim Reinzoomen NICHT
   // ausgeblendet werden; es gäbe nichts aufzudecken.
-  const hasInterior = scene.plates.length > 0 || scene.walls.length > 0
+  // …and since E5a a storey-0 room is DATA rather than a plate, so the floor
+  // plan counts here exactly as its plates used to: a location made of nothing
+  // but open zones still has an inside to uncover.
+  const hasInterior = scene.plates.length > 0 || scene.floor_plan.length > 0
+    || scene.walls.length > 0
     || scene.extras.length > 0 || scene.markers.length > 0
     || scene.models.some((m) => m.role !== 'building');
   tile.interior = hasInterior ? g : null;
@@ -438,12 +457,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // scene has a storey below ground. The recipe itself needs nothing for this.
   tile.hasBasement = levels.some((lv) => lv < 0);
 
-  // ── Geländerelief (§ B1 Nr. 14) ─────────────────────────────────────────
-  // Das Höhenfeld gilt für die ganze Kachel: die Figuren-Standhöhe liest es
-  // über `terrainLiftAt`, der Boden und die `relief`-Platten weiter unten
-  // werden darüber drapiert. Objekthöhen NICHT — die kommen fertig gehoben.
-  tile.terrain = scene.terrain;
-  tile.terrainExtent = scene.extent_m;
+  // THE SCENE'S OWN RELIEF IS GONE ("Ein Boden" E5a, decision 1): there is no
+  // `terrain` block in the payload any more and nothing is draped over one.
+  // Local relief is authored through the map's HEIGHT AREAS, and the one ground
+  // under a location is the world field (§ A16).
+  //
   // Detail-Modus der LOCATION (v5.2 Nr. 10) — kommt als Payload-Flag und
   // gilt auch OHNE Location-Modell (der Wald hat bewusst keins mehr): der
   // Backstop rutscht UNTER die Etage-0-Platten, sonst begräbt er bei 0,04
@@ -503,10 +521,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   const parentFor = (roomId: string | undefined) =>
     (roomId && roomGroup.get(roomId)) || g;
 
-  // ── Platten ─────────────────────────────────────────────────────────────
-  // Raum-Platten liefern zugleich Rechteck, Mitte und Auflagehöhe des Raums:
-  // roomRects (Label-Position), roomCenters (NPC-Standort) und der Slot für
-  // die Begehbarkeits-Abtastung entstehen aus ihrer Umschließenden.
+  // ── Plates: THE DECLARED STOREYS ONLY (E5a) ─────────────────────────────
+  // Storey 0 draws none any more — its height is the terrain and its material
+  // is the layer bake — so what is built here is upper floors and basements.
+  // A room plate of such a storey is still where that room's floor is, which is
+  // why its `top_y` travels into `roomFloors` below.
   const roomPlateTop = new Map<string, number>();
   /** Gebaute Primitive für den Verify-Durchgang — vermessen wird erst, wenn
    *  die Kachel-Matrizen stehen (sonst misst man Zwischenzustände). */
@@ -518,36 +537,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   tile.walkPlates = [];
   for (const plate of scene.plates) {
     const mesh = buildPlate(THREE, plate, plateMaterial(plate, style));
-    if (plate.relief && scene.terrain) {
-      // Outdoor-Platte eines nicht-flachen Raums: unterteilen und über das
-      // Gitter legen (§ B1 Nr. 14). Muss VOR der Begehbarkeits-Abtastung
-      // passieren — die tastet den Boden per Strahl ab und soll den Hang
-      // sehen, nicht die Ebene, von der er abgeleitet wurde.
-      mesh.updateMatrix();
-      const flat = mesh.geometry;
-      mesh.geometry = drapeGeometry(THREE, flat, scene.terrain,
-                                    scene.extent_m, mesh.matrix);
-      flat.dispose();
-    }
-    // Zonen-Platte ohne erklärte Boden-Art auf einer Flächen-Location: NICHT
-    // einfärben — die Palette-Farbe (das „Grün") gehört in Gebäude-Grundrisse,
-    // hier IST das Terrain der Boden. Die Platte bleibt im Graphen (Raum-
-    // Rechtecke, NPC-Mitten und die Begehbarkeits-Abtastung hängen an ihr),
-    // nur ihr Material wird voll durchsichtig (User-Befund 2026-08-02).
-    if (areaLoc && plate.room_id && outdoor.has(plate.room_id)
-        && !plate.texture_kind) {
-      const m = mesh.material as THREE.Material;
-      m.transparent = true;
-      m.opacity = 0;
-      m.depthWrite = false;
-    }
-    // THE FLOOR THE FIGURES STAND ON (§ B1 addendum 2026-08-20): every plate
-    // is one, level contour and room plate alike, and `tileWalkY` takes the
-    // highest one under the point. It is registered here rather than derived
-    // later because this is where the payload's outline and its `top_y` are
-    // in one hand — and it is registered for an AREA location too: there the
-    // model IS the ground and the walk rule never asks these, so the list
-    // costs nothing and stays true if that ever changes.
+    // THE FLOOR THE FIGURES STAND ON (§ B1 addendum 2026-08-20): every plate is
+    // one, and `tileWalkY` takes the highest one under the point that is still
+    // below the storey ceiling. Since E5a that list is a list of STOREYS.
     tile.walkPlates.push({ top: plate.top_y, outline: plate.outline });
     // Shadow flags are view state and stay here: upper storeys cast, every
     // plate receives.
@@ -560,50 +552,42 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       tile.levelSlabs.set(plate.level, mesh);
       continue;
     }
-    const id = plate.room_id;
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const [px, pz] of plate.outline) {
-      minX = Math.min(minX, px); maxX = Math.max(maxX, px);
-      minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz);
-    }
-    const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-    const w = Math.max(maxX - minX, 0.5), d = Math.max(maxZ - minZ, 0.5);
-    roomPlateTop.set(id, plate.top_y);
-    // `roomRects` stays TILE-LOCAL (it always was, minus the centre offset):
-    // an axis-aligned rectangle only means something in the frame it was
-    // measured in, and the tile may stand turned since E4. Its readers turn
-    // their query point instead (`worldToTile`).
-    tile.roomRects.set(id, { x: cx, z: cz, w, d });
-    // Raum-Mitte: eine Instanz, unter ID UND Name — die Abtastung hebt ihr Y
-    // später auf die gemessene Bodenhöhe (setY auf der geteilten Instanz).
-    const centre = tileToWorld(tile, cx, cz, plate.top_y + 0.01);
-    tile.roomCenters.set(id, centre);
-    const name = nameOf.get(id);
-    if (name) tile.roomCenters.set(name, centre);
-    // Bezugsrahmen für sampleRoomWalkables: Halter auf der Raum-Mitte in
-    // Auflagehöhe, Maße = Umschließende der Platte.
-    const holder = new THREE.Group();
-    holder.position.set(cx, plate.top_y, cz);
-    parentFor(id).add(holder);
-    tile.roomSlots.set(id, { holder, w, d });
+    roomPlateTop.set(plate.room_id, plate.top_y);
   }
 
-  // ── Overlay-Zonen (Flächen-Locations) ───────────────────────────────────
-  // Ein Outdoor-Raum außerhalb des Grundrisses wird nicht gebaut, er LIEGT auf
-  // der Modelloberfläche. Es gibt also keine Platte, von der Rechteck, Mitte
-  // und Höhe abzulesen wären — die kommen fertig aus dem Payload (der Server
-  // rechnet). Damit stehen NPCs, Marker, Labels und Klick-Ziele dort, wo die
-  // Zone liegt.
+  // ── THE FLOORS OF THE ROOMS, as data (§ A19 no. 3, E5b) ─────────────────
+  // One entry per room the payload gives a hull, and it is the ONLY frame the
+  // room's centre, its stands, its label rectangle and its NPC huddle come out
+  // of — the 6 x 6 raycast raster that used to find them is deleted.
+  //
+  // TWO SOURCES, one per kind of storey, and neither is a fallback for the
+  // other: storey 0 comes from `floor_plan`, which is what E5a put in the
+  // place of its plates; a DECLARED storey comes from its room block's own
+  // `outline`, which is the polygon its plate is drawn from.
+  //
+  // A DECLARATION is a payload field and there are three of them:
+  //  - a storey plate (`roomPlateTop`) — an upper floor or a basement;
+  //  - an OVERLAY zone (§ B, `room.overlay.y`) — a zone that lies ON an area
+  //    model's surface and never had a plate to read a height off;
+  //  - a diorama's `walk_y_world`, which arrives with the models further down
+  //    and is written into these same entries there (it outranks both).
+  // Where none of the three speaks, the floor is the terrain.
+  const overlayOf = new Map(scene.rooms.map((r) => [r.room_id, r.overlay]));
+  for (const floor of scene.floor_plan) {
+    const id = floor.room_id;
+    if (!id || floor.polygon_world.length < 3) continue;
+    const declared = overlayOf.get(id)?.y;
+    const entry: RoomFloor = { hull: floor.polygon_world };
+    if (declared !== undefined) entry.declared = declared;
+    tile.roomFloors.set(id, entry);
+  }
   for (const room of scene.rooms) {
-    const ov = room.overlay;
     const id = room.room_id;
-    if (!ov || !id) continue;
-    tile.roomRects.set(id, { x: ov.rect.x, z: ov.rect.z,
-                             w: ov.rect.w, d: ov.rect.d });
-    const centre = tileToWorld(tile, ov.centre[0], ov.centre[1], ov.y + 0.01);
-    tile.roomCenters.set(id, centre);
-    const name = nameOf.get(id);
-    if (name) tile.roomCenters.set(name, centre);
+    if (!id || room.level === 0 || (room.outline?.length ?? 0) < 3) continue;
+    const declared = roomPlateTop.get(id) ?? room.overlay?.y;
+    const entry: RoomFloor = { hull: room.outline };
+    if (declared !== undefined) entry.declared = declared;
+    tile.roomFloors.set(id, entry);
   }
 
   // ── Wände ───────────────────────────────────────────────────────────────
@@ -891,20 +875,14 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     tile.declaredFloors.push({ roomId: room.room_id, top, outline: room.outline });
   }
 
-  // ── Begehbarkeit abtasten (Sicht-/Spiel-Logik, bleibt Client) ───────────
-  // Über ALLES im Raum: Platte, Wände, Diorama, Props.
-  for (const [id, rg] of roomGroup) {
-    // walk_y (§ B6 Nr. 7): die deklarierte Standhöhe geht als Boden-SOLL in
-    // die Abtastung — sie schlägt dort die Höhen-Heuristik, und damit stehen
-    // auch die STEH-SPOTS (nicht nur Mitte/Exit) auf dem sichtbaren Boden.
-    //
-    // Ohne Diorama ist das SOLL die ROOM PLATE (decision 2026-08-20): sie ist
-    // der Boden, den der Payload zeichnet und auf den er die Props des Raums
-    // stellt — dieselbe Fläche, auf der `tileWalkY` die Figuren stehen lässt.
-    // Vorher entschied hier die Höhen-Heuristik über die Strahl-Treffer, und
-    // die fand in einem Raum ohne Diorama den Boden des Hüllen-Meshes: NPC-
-    // Spots und Figuren standen auf zwei verschiedenen Böden.
-    sampleRoomWalkables(tile, id, rg, walkY.get(id) ?? roomPlateTop.get(id));
+  // ── The stands of every room, from DATA (§ A19 no. 3, E5b) ──────────────
+  // A diorama's `walk_y_world` is the strongest declaration there is (§ B6
+  // no. 7) and outranks the storey plate / overlay height already written into
+  // the entry; it is folded in HERE because the models arrive asynchronously.
+  for (const [id, floor] of tile.roomFloors) {
+    const declared = walkY.get(id);
+    if (declared !== undefined) floor.declared = declared;
+    deriveRoomSpots(tile, id, roomProps(placements, id));
   }
 
   // ── Verify (§ B5a): primitives against the target ───────────────────────
@@ -1144,7 +1122,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
     rec.placeholder = false;
   }));
   if (tile.placedModels !== placements) return;
-  // A swapped diorama changes the sampled floor and furniture — re-read the
+  // A swapped mesh changes the furniture boxes — re-derive the
   // affected rooms exactly the way the mount does, so figures keep standing
   // on what is actually visible.
   if (group === 'interior') {
@@ -1153,8 +1131,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       if (rec.spec.role === 'room' && rec.spec.room_id) roomsChanged.add(rec.spec.room_id);
     }
     for (const id of roomsChanged) {
-      const rg = tile.roomGroups.get(id);
-      if (!rg) continue;
+      if (!tile.roomGroups.has(id)) continue;
       const declared = placements.find((r) => r.spec.role === 'room'
         && r.spec.room_id === id
         && r.spec.walk_y_world !== undefined)?.spec.walk_y_world;
@@ -1167,10 +1144,17 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       // spec object (`rec.spec` is untouched above), and `walk_y` is a dial of
       // the SUBJECT, read off the default tier's sidecar for every tier
       // (`location_model3d.get_client_meta`). `declared` is therefore the same
-      // number the mount already wrote. What DOES change is the mesh, which is
-      // why the sampling below has to run again.
-      sampleRoomWalkables(tile, id, rg,
-                          declared ?? tile.roomSlots.get(id)?.holder.position.y);
+      // number the mount already wrote.
+      //
+      // WHAT DOES CHANGE IS THE FURNITURE: a swapped mesh has its own bounding
+      // box, and the sit/lie targets are read off it (`deriveRoomSpots`). The
+      // FLOOR of the room is data and is unaffected by the swap — which is why
+      // the entry is left exactly as the mount wrote it.
+      if (declared !== undefined) {
+        const floor = tile.roomFloors.get(id);
+        if (floor) floor.declared = declared;
+      }
+      deriveRoomSpots(tile, id, roomProps(placements, id));
     }
   }
 }
@@ -1295,8 +1279,6 @@ export function unmountScene(tile: Tile): void {
   // it. No plate, no restore.
   tile.walkPlates = [];
   tile.declaredFloors = [];
-  tile.terrain = undefined;
-  tile.terrainExtent = undefined;
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
   tile.interior = null;
@@ -1304,7 +1286,7 @@ export function unmountScene(tile: Tile): void {
   tile.roomGroups.clear();
   tile.roomCenters.clear();
   tile.roomDoors.clear();
-  tile.roomSlots.clear();
+  tile.roomFloors.clear();
   tile.roomSpots.clear();
   tile.roomSitSpots.clear();
   tile.roomLieSpots.clear();

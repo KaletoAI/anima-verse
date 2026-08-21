@@ -3186,10 +3186,10 @@ Höhenquelle des Client-Spiegels), die handgerechnete Schattierungs-Tabelle
 (`client3d/scripts/smoke_hillshade.mjs` — Lampe, Rampen, Gipfel, Überhöhung
 [dreifach überhöht gezeichnet: aus dieser Ebene liest NIEMAND eine Neigung ab]
 und die roten Gegenproben gegen vertauschte Achse und gespiegelten
-Gradienten) und die Gitter-/Drape-Mathe in
-`client3d/scripts/smoke_relief_math.mjs` (Zellweite, Platte, Flächenschnitt
-inkl. Naht-Gegenprobe, Kontur-Zelle gegen die gemessene Plattenfläche,
-Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung). Regel und Routing:
+Gradienten) und das Feld-Lesen in
+`client3d/scripts/smoke_relief_math.mjs` (Kontur-Zelle als Gegenprobe der
+gelöschten Zweitlesung, Nebelhöhe, Reisenden-Höhe, Linien-Verdichtung — die
+Gitter-/Drape-Mathe darin ist mit `gridMesh.ts` gelöscht, § A20). Regel und Routing:
 `scripts/smoke_slope_gate.py` [6] und `scripts/smoke_nav_grid.py` [13]/[14].
 
 ### A16.3 Das Kachel-Höhenfeld — `GET /play/heightfield/tiles` — neu 2026-08-14
@@ -5188,3 +5188,199 @@ damit weg — es gibt ein Feld, und wer es formt, entscheidet der Bake einmal
   `waters` sind additiv und warten auf ihn. Ein Payload ohne Etage-0-Platten
   ist für den heutigen Client verlustfrei lesbar (er iteriert über `plates`),
   nur zeichnet er dort nichts mehr — der erwartete Zwischenzustand.
+
+## Nachtrag 2026-08-21 (§ A20): Ein Boden — E5b, die Renderer holen ihre Höhe aus Daten
+
+Etappe E5 aus `development_instructions/plan-ein-boden.md`, **Client-Hälfte**.
+E5a hat der Szene ihren Etage-0-Boden weggenommen und die Räume als Polygone
+weiterreisen lassen (§ A19). E5b ist die Gegenseite: der 3D-Client und die
+Admin-Vorschau lesen, was dort entsteht, und geben dafür jede Messung an einem
+Mesh auf. Am Ende dieser Etappe fragt kein Renderer mehr Dreiecke, wenn er
+wissen will, wie hoch der Boden ist.
+
+### 1. Die Figuren-Leiter — drei Sprossen, alle aus Daten
+
+```
+tileWalkY(tile, at) =
+  1. declaredFloorAt(tile.declaredFloors, …)   ein Raum sagt seinen Boden an
+  2. recipeFloorAt(tile.walkPlates, …)         eine DEKLARIERTE Etage (≠ 0)
+  3. tile.center.y                             das Gelände
+tileGroundY = standY(tileWalkY, heightAt(x, z))
+```
+
+**Die Mesh-Sprosse ist gelöscht**, und mit ihr `walkCeiling`,
+`acceptsWalkHit`, der Dachschutz von Befund B8 (1,2 m bzw. `Infinity` für ein
+Flächenmodell) und der ganze Strahlenapparat in `scene/tiles.ts`
+(`setWorldRayStart`, `RAY_START_*`, der `Raycaster`). Die begehbare Fläche
+eines Flächenmodells IST die Zahl, die seine Spec deklariert
+(`walk_y_world`); wo es keine deklariert, antwortet das Gelände, über das es
+gezeichnet wurde. Der Strahl war nur je ein Weg herauszufinden, welcher von
+ZWEI Böden vorn liegt — es gibt einen.
+
+`plateCeiling` **bleibt** und gilt jetzt für jedes `display` gleich: es ist
+die Etagen-Frage, und ein ungedeckelter Plattengriff hübe eine Figur im
+Erdgeschoss auf die Platte darüber.
+
+**Die Laufkette, neu hergeleitet** (`client3d/scripts/smoke_walk_math.mjs`,
+Etagenhöhe 2,8 m, keine Regler):
+
+| Größe | gebaut (Haus), ALT | natürlich (See), ALT | BEIDE, NEU |
+|---|---|---|---|
+| Boden, auf dem gestanden wird | 0,10 | 0,01 | **0,00** |
+| Wandfuß (Raum / Kontur) | 0,10 / 0,08 | — | **0,00** |
+| Prop `bottom_y` | 0,11 | 0,02 | **0,01** |
+| Diorama `bottom_y` (ohne Regler) | 0,12 | 0,03 | **0,02** |
+| Türschwelle ohne Deklaration | 0,10 | — | **0,00** |
+| Gebäudemodell `walk_y_world` | 0,08 + `offset_y` | 0,00 + `offset_y` | **`offset_y`** |
+
+Die drei alten BODEN-Zahlen — 0,10, 0,09, 0,01 — sind die roten Gegenproben
+dieser Etappe: auf Etage 0 darf keine von ihnen mehr aus der Leiter fallen.
+Die 0,01, die bleibt, ist die Anti-Z-Fight-Haarlinie des PROPS über dem
+Gelände, nie ein Boden.
+
+**Auf Etage 0 bekommt die Figur keinen `WALK_CLEARANCE_M`**, und das ist
+dieselbe Aussage von der anderen Seite: draußen läuft eine Figur auf genau
+`heightAt`, und drinnen läuft sie jetzt auf ebendiesem Boden. Die Sohle steht
+auf dem Gelände, die Unterkante des Stuhls 1 cm darüber — dafür ist
+`PROP_CLEARANCE` da. Die Zugabe wird nur auf den beiden DEKLARIERTEN Sprossen
+addiert, wo der Boden eine gezeichnete Fläche ist.
+
+Eine DEKLARIERTE Etage hat sich um keinen Millimeter bewegt: die Kontur-Platte
+der Etage 1 liegt weiter auf `1·2,8 + 0,08 = 2,88`, die Raumplatte darauf auf
+`1·2,8 + 0,10 = 2,90`, ein Keller-Raum auf `−2,8 + 0,10 = −2,70`.
+
+### 2. Raum-Spots kommen aus dem Grundriss
+
+`sampleRoomWalkables` ist gelöscht — 36 Strahlen von oben auf das Platten-Mesh,
+dominante 7-cm-Höhenlage als Boden, ein Referenzstrahl an der Tür als
+Reparatur, alles innerhalb von 12 cm ein Stellplatz. An seiner Stelle steht
+`scene/tiles.deriveRoomSpots`, gefüttert aus `floor_plan` (§ A19 Nr. 3), und
+die reinen Regeln liegen in `client3d/src/game/ground.ts`
+(`smoke_room_spots.mjs` leitet jede Zahl von Hand her):
+
+* **Raum-Mitte** = Flächen-**Schwerpunkt** des gezeichneten Rumpfes
+  (`polygonCentroid`, Shoelace — nicht der Eckenmittelwert, den eine mit zehn
+  Punkten gezeichnete Wand gegen die gegenüberliegende zöge). Liegt der
+  Schwerpunkt AUSSERHALB des Raums — bei einem L-Grundriss der Normalfall —,
+  gewinnt der nächstgelegene Rasterpunkt: der liegt konstruktionsbedingt
+  drinnen und ist ohnehin schon berechnet. Ein vollständiger
+  Pole-of-Inaccessibility verfeinerte das um Zentimeter und kostete eine
+  Gittersuche je Raum; die Verbraucher sind eine Menschentraube, ein Label und
+  ein Laufziel.
+* **Stellplätze** = dasselbe 6 × 6-Raster über 0,78 der Raum-Umschließenden,
+  auf dem die Strahlen saßen (`roomSpotGrid`) — mit dem POLYGON-Test dort, wo
+  vorher der Strahltreffer war. Jeder Platz bekommt seine EIGENE Datenhöhe;
+  die 12 cm bleiben als Toleranz (`SPOT_FLAT_M`), gemessen gegen die
+  Höhen-DATEN statt gegen Dreiecke. Unter einem gebauten Raum ist sie
+  konstruktionsbedingt wirkungslos (§ G5 hobelt das Grundstück eben), bei einer
+  offenen Zone hält sie die Traube vom Hang, den die Zone hinaufläuft.
+* **Bodenhöhe je Raum** (`roomFloorWorldY`): die Deklaration des Payloads, wo
+  es eine gibt — ein Dioramen-`walk_y_world`, eine Etagen-Platte, oder die
+  `overlay.y` einer Zone auf einem Flächenmodell —, sonst der HÖHEN-SAMPLER an
+  genau diesem Punkt. Unter einem gebauten Grundstück ist das der gestanzte
+  Plateau, weshalb ein gebautes Interieur eben herauskommt, ohne dass es
+  jemand ebnet.
+* **Sitz-/Liegeflächen** werden weiter GEMESSEN, und das ist kein Widerspruch:
+  eine Sitzhöhe ist eine Eigenschaft eines OBJEKTS und wird an der eigenen
+  Bounding-Box des platzierten Props abgelesen. Nicht mehr gemessen wird der
+  BODEN, gegen den sie beurteilt wird. Die Fenster sind für eine 1,70-m-Figur
+  neu hergeleitet (`furnitureUse`): Sitzfläche 0,25 … 0,70 m über dem Boden
+  (ein Tisch ab 0,72 m ist keine), Liegefläche zusätzlich mindestens
+  1,6 × 0,7 m. Das alte Fenster 0,08 … 0,32 m stammte aus der Zeit, als eine
+  Raum-Figur 0,60 m groß war (`k` war ein Maßstab; seit § B E4 ist es 1) und
+  hat seither nichts mehr gefangen.
+* **Tür-Referenz**: kein Strahl mehr. `tile.roomDoors` kommt wie bisher direkt
+  aus `doorways[]` (Position **und** `base_y`), und der Reparatur-Strahl an der
+  Tür entfällt ersatzlos — er glich ein Loch im Mesh aus, und es wird kein
+  Mesh mehr abgetastet.
+* **Marker** werden nur noch um die Differenz zwischen dem Boden des RAUMS und
+  dem Etagen-Datum verschoben, gegen das der Server sie komponiert hat. Auf
+  einem gebauten Erdgeschoss ist diese Differenz 0 und die Schleife ändert
+  nichts — genau der Punkt. `fixed`-Marker (Prop-Marker) bleiben unberührt.
+
+`roomSlots` (Halter-Gruppe + Maße) ist durch `tile.roomFloors: Map<string,
+RoomFloor>` ersetzt; `roomFloorY` (Avatar-Innenhöhe, `main.ts`) liest
+`roomCenters[…].y` und damit dieselbe Quelle wie die Spots.
+
+### 3. Zonen-Wasser wird gezeichnet wie ein See
+
+`GET /play/terrain-layers` (Index-Modus) trägt `waters` (§ A19 Nr. 5). Der
+Client führt die Liste in **denselben** Spiegel-Bauer wie die gemalten Flächen
+(`scene/ground.ts`, `addMirror` — ein Material je Wasser-ART für die ganze
+Welt, dieselbe Ufer-Shader-Kette aus § A18, dieselbe flache Earcut-Platte auf
+`water_level_effective`). Es gibt **keine zweite Implementierung**: der
+Teich eines Raums ist ein Mesh mehr, kein Shader mehr.
+
+Zu entscheiden bleibt nur, ob eine Zeile GEZEICHNET werden kann, und das sind
+dieselben zwei Bedingungen wie bei einem gemalten See — ein Ring, der etwas
+umschließt (drei Punkte), und ein ENDLICHER Spiegel
+(`waterPlaneMath.zoneWaterMirrors`). `null` ist die Form von „der Bake hat
+diesen Raum nie gesehen" und darf **nicht** zu 0 werden — `Number(null)` IST 0,
+und eine Ebene auf Welt-Null über einem Innenhof-Teich wäre genau die geratene
+Höhe, die § A19 Nr. 5 nicht zeichnet.
+
+Die ART eines Raumbodens ist eine Surface-Bibliotheks-Id, kein Terrain-Kind.
+`surfaceOf` beantwortet das jetzt wie der Server (§ A19 Nr. 4): erst die
+`surface` des Terrain-Typs, und wo der Katalog die Art gar nicht kennt, TRÄGT
+DIE ART SICH SELBST. Ohne das käme der Teich als matte Ebene statt als Wasser
+heraus.
+
+**Nicht in dieser Etappe:** die Schwimm-Logik (`walk.floatRootY`) liest
+weiterhin nur den Spiegel einer GEMALTEN Fläche (`typeAt` → `water_level`). Über
+einem Zonen-Wasser wird gewatet, nicht geschwommen; das Bett ist gecarvt, also
+läuft die Figur hinein — sichtbar richtig, mechanisch noch die alte Sprosse.
+
+### 4. Was ersatzlos gelöscht ist
+
+| Symbol | Wo | Warum |
+|---|---|---|
+| `sampleRoomWalkables` | `scene/tiles.ts` | Spots kommen aus `floor_plan` |
+| `setWorldRayStart`, `RAY_START_FALLBACK_M`, `RAY_START_MARGIN_M`, `walkRay` | `scene/tiles.ts` | kein Strahl mehr |
+| `terrainLiftAt`, `tile.terrain`, `tile.terrainExtent` | `scene/tiles.ts` | kein Szenen-Relief mehr |
+| `walkCeiling`, `acceptsWalkHit` | `game/ground.ts` | beurteilten Strahltreffer |
+| `groundLift`, `ScenePatch` | `game/ground.ts` | zweite Höhenquelle |
+| `sampleTerrain`, `drapeGeometry`, `TERRAIN_CELLS` (`terrain.ts`) | `@anima/scene-render` | nichts wird drapiert |
+| `subdivideOnGrid`, `gridStepFor`, `GRID_MAX_CELLS` (`gridMesh.ts`) | `@anima/scene-render` | nichts wird auf dem Gitter geschnitten |
+| `ScenePlate.relief`, `SceneTerrain`, `ScenePayload.terrain`, `ScenePayload.natural_floor` | `@anima/scene-render` `types.ts` | Felder aus dem Payload gestrichen (§ A19 Nr. 1/6) |
+| `map3d.relief` (Amplitude/Seed/Welle), `layout.relief_flat` | Admin-UI + `worldTypes.ts` | Bedienelemente ohne Wirkung |
+| `smoke_terrain_origin.mjs` | `client3d/scripts/` | maß ausschließlich `sampleTerrain` |
+
+Neu im Payload-Typ: `SceneFloor` + `ScenePayload.floor_plan`, und
+`TerrainLayerWater` + `TerrainLayerIndex.waters`.
+
+### 5. Admin: Vorschau und Raum-Panel
+
+* **`FloorPlanPreview`** zeichnet die Etage-0-Böden als flache texturierte
+  Polygone auf `y = 0` aus `floor_plan`, mit der Oberflächen-Textur ihrer Art;
+  eine LEERE Art zeichnet **nichts** (dort scheint das Gelände durch, und der
+  Bake malt dort ebenfalls nichts). Etagen ≠ 0 behalten ihre Platten. Der
+  `natural_floor`-Sonderfall der Bühnenplatte (−0,13) ist tot; die Bühne liegt
+  auf 0, schreibt keine Tiefe mehr und wird zuerst gezeichnet — sie ist eine
+  Messhilfe, kein Boden, und alles Echte malt ohne Offset-Konstante darüber.
+* **Die Abbildung Szenen-Frame ↔ Welt-y**, ausdrücklich: `polygon_world` ist
+  Szenen-Frame (lokale Meter um den Anker-Pin), `water_level_effective` ist die
+  einzige ABSOLUTE Welt-y-Zahl des Payloads. Die Vorschau kennt für das
+  Grundstück kein Welt-Datum und hat daher nichts abzuziehen; sie zeichnet den
+  Spiegel auf Szenen-Frame `y = 0` — und dort steht er auch wirklich, wann immer
+  der Bake den Pegel ABGELEITET hat (Plateauhöhe auf einer gebauten Location,
+  Randmedian auf einer natürlichen, § A19 Nr. 4). Stellt ein Autor
+  `layout.water_level` davon weg, liest das Raum-Panel die absolute Zahl; die
+  Vorschau erfindet dafür kein zweites Datum.
+* **`PlanSidePanel`** verliert die Relief-Opt-out-Checkbox und bekommt für
+  Etage-0-Räume „Edge transition (m)" (`layout.edge_blend_m`, 0…8, Default 0 —
+  **0 ist ein Wert** und muss als 0 gespeichert werden) sowie, für einen
+  Wasser-Boden, „Water level (m)" (optional, leer = der Bake entscheidet),
+  „Depth (m)" (0,2…20, Default 2,0) und „Shore ramp (m)" (0…20, Default 3,0).
+  Ob ein Boden Wasser ist, entscheidet die **Material-KLASSE** der
+  Surface-Bibliothek (`water`/`ice`) — nie der Name, nie die Farbe.
+
+### 6. Beweise (§ B5a)
+
+| Datei | was sie herleitet |
+|---|---|
+| `client3d/scripts/smoke_walk_math.mjs` | die neue Leiter, die identische Kette gebaut == natürlich, rote Gegenproben auf 0,10 / 0,09 / 0,01, `walkCeiling`/`acceptsWalkHit`/`groundLift` existieren nicht mehr |
+| `client3d/scripts/smoke_room_spots.mjs` (neu) | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter, Flachheits-Tor, Möbel-Fenster, Zonen-Wasser-Auswahl an einem Fixture-Index |
+| `client3d/scripts/smoke_layer_cut.mjs` | ein einziger Spiegel-Bauer, von beiden Quellen gespeist; die gelöschten Drape-Namen tauchen im Code nicht mehr auf |
+| `client3d/scripts/smoke_world_height.mjs` | eine Lesung statt zweier; die Zahlen, die der zweite Term nicht mehr erzeugt |
+| `client3d/scripts/smoke_relief_math.mjs` | auf Weltfeld + Reiselinie zurückgeschnitten |
+| `scripts/smoke_scene_recipe.py` | die Client-Quellen-Pins neu hergeleitet (Welt-Höhe-Umrechnung, kein `Raycaster`, kein `shell`-Vorbehalt am Plattenzweig) |

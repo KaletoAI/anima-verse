@@ -146,6 +146,50 @@ export function waterLevelOf(meta: Record<string, unknown> | null | undefined
   return Number.isFinite(num) ? num : null;
 }
 
+/** One zone water as the mirror builder wants it: the outline in WORLD metres,
+ *  the surface kind, and the level the bake settled on. */
+export interface ZoneMirror {
+  kind: string;
+  polygon: [number, number][];
+  level: number;
+}
+
+/**
+ * WHICH ZONE WATERS become a mirror (§ A19 no. 5, "Ein Boden" E5b).
+ *
+ * A room whose floor kind is a water surface carves its bed like a painted lake
+ * (`heightfield`'s fifth stage) and gets the same flat plane over it. The list
+ * arrives with the layer INDEX (`GET /play/terrain-layers` → `waters`) and is
+ * already the answer to "is this water": the server only puts a room in it that
+ * really carved, and it leaves out a room the bake never saw rather than
+ * guessing a height for it.
+ *
+ * So the only thing left to decide here is whether an entry can be DRAWN, and
+ * that is the same pair of conditions a painted lake has to meet: a ring that
+ * encloses something (three points), and a FINITE level. A level that is not a
+ * number would put a plane at NaN, from which no frame recovers — and it must
+ * not fall back to the ground, which is the drape this whole stage deleted.
+ */
+export function zoneWaterMirrors(
+  waters: readonly { kind?: unknown; polygon?: unknown;
+                     water_level_effective?: unknown }[] | null | undefined
+): ZoneMirror[] {
+  const out: ZoneMirror[] = [];
+  for (const w of waters ?? []) {
+    const polygon = Array.isArray(w?.polygon) ? w.polygon as [number, number][] : [];
+    if (polygon.length < 3) continue;
+    const raw = w?.water_level_effective;
+    // `null` is the shape of "the bake never carved this room" and must not
+    // become 0: `Number(null)` IS 0, and a plane at world zero over a courtyard
+    // pond is precisely the guessed height § A19 no. 5 refuses to draw.
+    if (raw === null || raw === undefined) continue;
+    const level = Number(raw);
+    if (!Number.isFinite(level)) continue;
+    out.push({ kind: String(w?.kind ?? ''), polygon, level });
+  }
+  return out;
+}
+
 /**
  * The shore, as the GLSL that rides on `terrainLodSampleGlsl()`.
  *

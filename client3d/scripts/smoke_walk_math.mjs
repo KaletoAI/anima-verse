@@ -694,75 +694,65 @@
  * playing time, so a busy room would otherwise put the client minutes behind
  * the world. 5 lines at once therefore leave [3rd, 4th, 5th].
  *
- * --- Walk height on a location model (finding B8; `game/ground.ts`) --------
- * `tileGroundY` shoots a ray from y = 20 down onto the location's server model
- * and takes the first hit that counts as GROUND. Which one that is used to be
- * a flat `y < 1.2` — the roof filter — and that cap is wrong for area models:
- * the Mondscheinsee mesh spans y −0.80 … +2.69 m, so every hit on the raised
- * shore was rejected and the figure dropped to the tile floor at 0.
+ * --- THE HEIGHT LADDER IS DATA-ONLY ("Ein Boden" E5b) ---------------------
+ * `tileWalkY` used to have three rungs and a raycast at the bottom of them.
+ * E5a took the storey-0 plates out of the payload and E5b takes the ray out of
+ * the client, so what is left is two data rungs and the terrain:
  *
- * The accept rule now reads the PAYLOAD (§ B `_building_model`,
- * `app/core/scene_recipe.py`):
- *   display "ground" / "shell_area"  (= map3d.area_model) — the model IS the
- *       ground of the location, relief included. No ceiling at all:
- *       walkCeiling = Infinity.
- *   display "shell" (a building) — keeps the roof protection, but measured
- *       from the model's own declared walkable height:
- *       walkCeiling = walk_y_world + ROOF_CLEARANCE_M (1.2).
- *       A building spec without a walk height falls back to 0 + 1.2 = 1.2,
- *       exactly the old constant.
- * Derived by hand from those two lines:
- *   shell, no walk_y_world:   ceiling 1.2      (0 + 1.2)
- *   shell, walk_y_world 0.06: ceiling 1.26     (BUILDING_BOTTOM_Y 0.06, the
- *                                               offset-free normal case)
- *   shell, walk_y_world 3.2:  ceiling 4.4      (a building on a plinth)
- *   ground / shell_area:      ceiling Infinity
- * The comparison is STRICT (`y < ceiling`), so 1.2 on a plain building is
- * already roof — the unchanged old behaviour.
+ *   1. a ROOM's declared `walk_y_world`  (`declaredFloorAt`)
+ *   2. a DECLARED STOREY's plate         (`recipeFloorAt`, capped by
+ *                                         `plateCeiling`)
+ *   3. the TERRAIN                       (`heightAt`, via `standY`)
  *
- * --- ONE FLOOR: the recipe's plate, not the mesh (decision 2026-08-20) -----
- * `recipeFloorAt(plates, lx, lz, ceiling)` — where a figure stands INSIDE a
- * building. The chain everything in a room has to meet (tile metres, § B1/B2
- * addendum of docs/schnittstellen-3d.md):
+ * `walkCeiling` and `acceptsWalkHit` are DELETED with the ray they judged.
+ * They existed to tell a location model's ground skin from its roof (the
+ * finding-B8 1.2 m mark, Infinity for an area model). An area model's walkable
+ * surface is the number its spec declares, and where it declares none the
+ * ground it was drawn over answers — there is no second surface left to sort
+ * out. `plateCeiling` STAYS and now applies to every display alike: it is the
+ * storey question, and an uncapped plate pick would hoist a ground-floor
+ * figure onto the slab above it.
  *
- *   terrain 0.00 < level plate 0.08 <= room plate 0.10
- *   prop bottom_y = room plate + PROP_CLEARANCE  = 0.11   (server)
- *   walk height   = room plate + WALK_CLEARANCE_M = 0.11   (here)
- *   doorstep      = walk height − terrain         = 0.11   (< max step 0.4)
+ * --- THE HEADLINE OF E5: built and natural are ONE chain -------------------
+ * § A19 no. 2 of docs/schnittstellen-3d.md states the ladder in one line:
  *
- * The lower end was the tile's own grass socle (0.045) until "Ein Boden" E3
- * (plan-ein-boden.md § 3.1, 2026-08-21) deleted the footprint plate and the
- * socle with it. It is the TERRAIN now — in tile metres 0.00, because the tile
- * stands on the plateau G5 stamps under a location that builds.
+ *     storey_floor_y(level, storey) = level·storey + (0 if level == 0 else 0.08)
  *
- * The rule: the HIGHEST plate whose hull contains the point and whose top is
- * still below the walk ceiling — the same ceiling the ray hits are judged by,
- * because it answers the same question (the highest surface that is not
- * already the next storey). Derived by hand on the Haus-von-Kai payload
- * (living room 8-point hull, kitchen 4-point hull, storey 2.8 m):
+ * — that is the datum of the storey CONTOUR plate and of the yard on it. A
+ * ROOM's own floor is drawn from the bare storey level plus what its plate
+ * lays over it (`_plate_top`): 0 on storey 0, and on a DECLARED storey 0.10
+ * (closed room) / 0.09 (zone) / 0.08 (yard). Storey 0 is the terrain, so both
+ * columns of the old table collapse into one — derived by hand for "Haus von
+ * Kai" (built) and "Mondscheinsee" (natural), storey 2.8 m:
  *
- *   plates: level0 top 0.08 (house contour), living room 0.10, kitchen 0.10,
- *           pool 0.00 (outdoor, thickness 0), level1 2.88, bedroom 2.90
- *   ceiling for that building = walk_y_world (−0.22) + 1.2 = 0.98
+ *   quantity                      built, OLD    natural, OLD    BOTH, NEW
+ *   floor stood on                0.10          0.01            0.00
+ *   wall foot (room / contour)    0.10 / 0.08   —               0.00
+ *   prop bottom_y                 0.11          0.02            0.01
+ *   diorama bottom_y (no dial)    0.12          0.03            0.02
+ *   doorstep without a declaration 0.10         —               0.00
+ *   building walk_y_world         0.08 + off_y  0.00 + off_y    off_y
  *
- *   (0.75, −1.5)  in the living room   -> 0.10   (room beats level plate)
- *   (−2.5, 3.75)  in the kitchen       -> 0.10
- *   (−5.8, −2.0)  the lift alcove — DRAWN INTO the living room -> 0.10
- *                 (that house's contour is exactly its two rooms, so the
- *                  "in the house, in no room -> level plate" case is derived
- *                  on a synthetic 10 m square with one 4 × 3 m room instead:
- *                  (−2, −2) -> 0.10, (2, 2) -> 0.08)
- *   (3.7, 4.6)    in the pool          -> 0.00   (an outdoor room IS a floor)
- *   (6.9, −6.5)   on the plot, outside the house -> null (the mesh answers)
- *   the bedroom's 2.90 is never returned: 2.90 >= 0.98, the next storey.
+ * The three old FLOOR numbers — 0.10, 0.09, 0.01 — are the red probes of this
+ * file: on storey 0 not one of them may come out of the ladder any more. The
+ * prop clearance 0.01 survives as a number, but as the PROP's anti-z-fight
+ * hair over the ground, never as a floor.
  *
- * WHAT THIS REPLACED, the regression pin: the same point in the living room
- * used to be the first accepted ray hit on the shell mesh. That mesh carries
- * a 0.240 m terrain pad under its walls and was dialled offset_y −0.30, so
- * its floor sat at 0.06 − 0.30 + 0.240 = 0.000 and the figure stood at
- * 0.000 + 0.01 = 0.010 — 0.090 below the room plate its own props stood on
- * (0.100 below the height the plate rule now answers), which is exactly what
- * the user saw. The plate answer is 0.10 + 0.01 = 0.11 = the props' bottom_y.
+ * WHERE THE FIGURE STANDS ON STOREY 0 there is no `WALK_CLEARANCE_M` either,
+ * and that is the same statement seen from the other side: outside a location
+ * a figure walks at exactly `heightAt`, and inside one it now walks on that
+ * very ground. So the sole is on the terrain and the chair's bottom face is
+ * 1 cm over it — which is what `PROP_CLEARANCE` is for. The clearance is added
+ * on the two DECLARED rungs only, where the floor is a drawn surface a sole
+ * would otherwise sink into.
+ *
+ * --- THE PLATES THAT ARE LEFT ---------------------------------------------
+ * `recipeFloorAt(plates, lx, lz, ceiling)` is unchanged and its list is not:
+ * "Haus von Kai" ships exactly two plates now, both on storey 1 — the storey
+ * contour at `1·2.8 + 0.08 = 2.88` and the bedroom at `1·2.8 + 0.10 = 2.90`.
+ * Its building spec declares `walk_y_world = offset_y = −0.30`, so the storey
+ * ceiling is `−0.30 + 1.2 = 0.90` and neither plate is in reach from the
+ * ground floor: the answer there is `null`, and `null` means the terrain.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -3511,202 +3501,182 @@ async function main() {
   check('a visibility change wins even when the room changes with it',
     figureTransition(SHOWN('hall', false), SHOWN('kitchen', true)), 'snap');
 
-  console.log('\nground — which ray hit counts as walkable (finding B8)');
-  const { walkCeiling, acceptsWalkHit, ROOF_CLEARANCE_M } = ground;
-  check('the clearance is the old constant', ROOF_CLEARANCE_M, 1.2);
+  console.log('\nground — the mesh rung is GONE (red counter-probes, E5b)');
+  const { ROOF_CLEARANCE_M, plateCeiling, recipeFloorAt, WALK_CLEARANCE_M,
+    declaredFloorAt, standY } = ground;
+  check('`walkCeiling` no longer exists', ground.walkCeiling === undefined, true);
+  check('…and neither does `acceptsWalkHit`',
+    ground.acceptsWalkHit === undefined, true);
+  check('…nor `groundLift`, the second height source of a scene',
+    ground.groundLift === undefined, true);
+  check('the clearance the STOREY question is still measured with', ROOF_CLEARANCE_M, 1.2);
   check('a building without a declared walk height keeps 1.2 m',
-    walkCeiling({ display: 'shell' }), 1.2);
+    plateCeiling({ display: 'shell' }), 1.2);
   check('…and so does a tile with no model info at all',
-    walkCeiling(undefined), 1.2);
-  check('a normal building measures from its walk_y_world 0.06',
-    walkCeiling({ display: 'shell', walkY: 0.06 }), 1.26);
+    plateCeiling(undefined), 1.2);
+  check('a building measures from its own walk_y_world −0.30',
+    plateCeiling({ display: 'shell', walkY: -0.30 }), 0.90, 1e-9);
   check('a building on a plinth carries the clearance up with it',
-    walkCeiling({ display: 'shell', walkY: 3.2 }), 4.4);
-  // `check` compares numbers with a tolerance, and Infinity − Infinity is
-  // NaN — so the unbounded ceiling is asserted as the identity it is.
-  check('an AREA model is not capped at all',
-    walkCeiling({ display: 'ground', walkY: 0 }) === Infinity, true);
+    plateCeiling({ display: 'shell', walkY: 3.2 }), 4.4);
+  // THE AREA EXCEPTION IS GONE WITH THE HITS IT WAS FOR: an area location's
+  // plates are storeys like anybody's, and the mesh it used to exempt is not
+  // asked any more.
+  check('an AREA model is judged by the same storey ceiling',
+    plateCeiling({ display: 'ground', walkY: 0 }), 1.2);
   check('…the detail-mode area model just the same',
-    walkCeiling({ display: 'shell_area' }) === Infinity, true);
-  const SHELL = { display: 'shell', walkY: 0.06 };
-  const LAKE = { display: 'ground', walkY: 0 };
-  check('building: the ground skin at the entrance is walkable',
-    acceptsWalkHit(SHELL, 0.2), true);
-  check('building: a roof hit at 3 m is rejected',
-    acceptsWalkHit(SHELL, 3), false);
-  check('building: the ceiling itself is already roof (strict <)',
-    acceptsWalkHit(SHELL, 1.26), false);
-  check('building: a hand below it still counts',
-    acceptsWalkHit(SHELL, 1.25), true);
-  check('area: the raised shore at 3 m is walkable',
-    acceptsWalkHit(LAKE, 3), true);
-  check('area: the water surface at 0.2 m as well',
-    acceptsWalkHit(LAKE, 0.2), true);
-  check('area: the Mondscheinsee upper edge (2.69 m) too',
-    acceptsWalkHit(LAKE, 2.69), true);
-  check('area: and the lake bed below zero (−0.8 m)',
-    acceptsWalkHit(LAKE, -0.8), true);
+    plateCeiling({ display: 'shell_area' }), 1.2);
 
-  console.log('\nground — ONE floor: the recipe plate the props stand on');
-  const { recipeFloorAt, WALK_CLEARANCE_M } = ground;
+  console.log('\nground — ONE floor, and on storey 0 it is the terrain');
   // The payload of "Haus von Kai" (worlds/Anima Divide, GET /play/locations/
-  // 20dc0cbd/scene), plates verbatim — the hulls are the outlines it ships.
+  // 20dc0cbd/scene) AFTER E5a: storey 0 ships no plate at all, so what is left
+  // is the storey-1 pair — contour 1·2.8 + LEVEL_PLATE_TOP 0.08 = 2.88, bedroom
+  // 1·2.8 + ROOM_PLATE_TOP 0.10 = 2.90. The hulls are the outlines it ships.
+  const KAI_HOUSE = [[-4.5, -4.5], [6, -4.5], [6, 1.5], [-0.5, 1.5],
+    [-0.5, 6], [-4.5, 6], [-4.5, -1], [-6.22, -1], [-6.25, -3.11],
+    [-4.53, -3.13]];
+  const KAI_BEDROOM = [[-6.25, -3.11], [-4.53, -3.13], [-4.5, -4.5],
+    [6, -4.5], [6, 1.5], [-0.5, 1.5], [-4.5, 1.5], [-4.5, -1], [-6.22, -1]];
   const KAI_PLATES = [
-    { top: 0.08, outline: [[-4.5, -4.5], [6, -4.5], [6, 1.5], [-0.5, 1.5],
-      [-0.5, 6], [-4.5, 6], [-4.5, -1], [-6.22, -1], [-6.25, -3.11],
-      [-4.53, -3.13]] },
-    { top: 2.88, outline: [[-4.5, -4.5], [6, -4.5], [6, 1.5], [-0.5, 1.5],
-      [-0.5, 6], [-4.5, 6], [-4.5, -1], [-6.22, -1], [-6.25, -3.11],
-      [-4.53, -3.13]] },
-    { top: 0.10, outline: [[6, -4.5], [6, 1.5], [-4.5, 1.5], [-4.5, -1],
-      [-6.22, -1], [-6.25, -3.11], [-4.53, -3.13], [-4.5, -4.5]] },
-    { top: 2.90, outline: [[-6.25, -3.11], [-4.53, -3.13], [-4.5, -4.5],
-      [6, -4.5], [6, 1.5], [-0.5, 1.5], [-4.5, 1.5], [-4.5, -1],
-      [-6.22, -1]] },
-    { top: 0.00, outline: [[1.22, 3.12], [6.22, 3.12], [6.22, 6.12],
-      [1.22, 6.12]] },
-    { top: 0.10, outline: [[-0.5, 6], [-4.5, 6], [-4.5, 1.5], [-0.5, 1.5]] },
+    { top: 2.88, outline: KAI_HOUSE },
+    { top: 2.90, outline: KAI_BEDROOM },
   ];
-  // walk_y_world −0.22 (0.08 + offset_y −0.30) + ROOF_CLEARANCE 1.2.
-  const KAI_CEILING = walkCeiling({ display: 'shell', walkY: -0.22 });
-  check('the ceiling of that building is 0.98', KAI_CEILING, 0.98, 1e-9);
-  check('living room: the ROOM plate wins over the level plate under it',
-    recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING), 0.10);
-  check('kitchen: its own plate, same height',
-    recipeFloorAt(KAI_PLATES, -2.5, 3.75, KAI_CEILING), 0.10);
-  // The lift alcove (x −6.25…−4.5, z −3.11…−1) is DRAWN INTO the living
-  // room's hull, so it is that room's floor — and with it the house contour
-  // is exactly living room + kitchen, with no gap between them. Hence the
-  // level plate is proven on a synthetic pair below rather than here.
-  check('the lift alcove belongs to the living room hull, so 0.10',
-    recipeFloorAt(KAI_PLATES, -5.8, -2.0, KAI_CEILING), 0.10);
-  const GAP_PLATES = [
-    { top: 0.08, outline: [[-5, -5], [5, -5], [5, 5], [-5, 5]] },
-    { top: 0.10, outline: [[-4, -4], [0, -4], [0, -1], [-4, -1]] },
-  ];
-  check('inside the room: its plate (0.10)',
-    recipeFloorAt(GAP_PLATES, -2, -2, 1.2), 0.10);
-  check('inside the house but in no room: the storey contour (0.08)',
-    recipeFloorAt(GAP_PLATES, 2, 2, 1.2), 0.08);
-  check('the pool is an outdoor room and IS a floor at 0.00',
-    recipeFloorAt(KAI_PLATES, 3.7, 4.6, KAI_CEILING), 0.00);
-  check('on the plot but outside the house: no plate, the mesh answers',
+  // walk_y_world = 0 + offset_y (−0.30) since E5a — the 0.08 storey datum it
+  // used to be measured from is gone with the storey-0 plate.
+  const KAI_CEILING = plateCeiling({ display: 'shell', walkY: -0.30 });
+  check('the storey ceiling of that building is 0.90', KAI_CEILING, 0.90, 1e-9);
+  // THE RED PROBES. Every one of these points answered a plate before E5a —
+  // 0.10 in a room, 0.08 in the house but in no room, 0.00 in the pool — and
+  // every one of them has to answer "no plate here" now, because the floor is
+  // the ground under it.
+  check('living room: NO plate on storey 0 any more',
+    recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING), null);
+  check('kitchen: the same',
+    recipeFloorAt(KAI_PLATES, -2.5, 3.75, KAI_CEILING), null);
+  check('the lift alcove: the same',
+    recipeFloorAt(KAI_PLATES, -5.8, -2.0, KAI_CEILING), null);
+  check('the pool (an outdoor room): the same',
+    recipeFloorAt(KAI_PLATES, 3.7, 4.6, KAI_CEILING), null);
+  check('on the plot, outside the house: unchanged, still null',
     recipeFloorAt(KAI_PLATES, 6.9, -6.5, KAI_CEILING), null);
-  check('the storey above is out of reach (2.90 >= 0.98)',
-    recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING) < 2.88, true);
-  check('...and with a ceiling above it, it IS the floor (upper storey)',
+  check('the storey above is out of reach from the ground floor (2.88 >= 0.90)',
+    recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING), null);
+  // …and the rule itself is untouched where it still has work: standing ON the
+  // first storey, the bedroom's 2.90 beats the contour's 2.88 under it.
+  check('on storey 1 the ROOM plate still wins over the contour',
     recipeFloorAt(KAI_PLATES, 0.75, -1.5, 4.0), 2.90);
+  check('…and in no room up there, the storey contour answers',
+    recipeFloorAt(KAI_PLATES, -2, 4.0, 4.0), 2.88);
   check('no plates at all = no recipe floor', recipeFloorAt([], 0, 0, 1.2), null);
   check('...and neither does a tile that never got a list',
     recipeFloorAt(undefined, 0, 0, 1.2), null);
-  // THE CHAIN, hand-derived (§ B1/B2 addendum + "Ein Boden" E3): terrain <
-  // level plate <= room plate, and a figure stands exactly where the room's
-  // props stand.
-  //
-  // THE SOCLE IS GONE (plan-ein-boden.md § 3.1, 2026-08-21). The lower end of
-  // this chain used to be the tile's own grass socle at 0.045 — a second
-  // ground the client drew under every building, deleted with the footprint
-  // plate. So the clearance chain is re-derived from what the SCENE PAYLOAD
-  // itself ships plus the ONE ground that is left:
-  //
-  //   terrain under a built location  0.00  in TILE metres — the tile stands
-  //                                         ON its plateau (`footprintCentre`)
-  //                                         and G5 stamps that plateau flat
-  //                                         under a location that builds
-  //   level plate top                 0.08  server LEVEL_PLATE_TOP
-  //   room plate top                  0.10  the room's own floor wins
-  //   prop bottom_y = 0.10 + PROP_CLEARANCE  0.01               = 0.11
-  //   walk height   = 0.10 + WALK_CLEARANCE_M 0.01              = 0.11
-  //
-  // The DOORSTEP is what the socle line used to guard in disguise: stepping
-  // from the terrain outside onto the room floor is 0.11 − 0.00 = 0.11 m, well
-  // inside the world's step limit (`game.max_step_height_m`, default 0.4 — see
-  // the header), so a built location stays enterable now that the ground
-  // outside its walls is the landscape itself rather than a 4.5 cm plate.
-  const TERRAIN_Y = 0;              // the stamped plateau, in tile metres
-  const MAX_STEP_M = 0.4;           // world default, hand-quoted
-  const PROP_BOTTOM = 0.11;         // server: room plate 0.10 + PROP_CLEARANCE
-  const roomFloor = recipeFloorAt(KAI_PLATES, 0.75, -1.5, KAI_CEILING);
-  check('the walk clearance IS the server\'s prop clearance', WALK_CLEARANCE_M, 0.01);
-  check('terrain 0.00 < level plate 0.08 <= room plate 0.10',
-    TERRAIN_Y < 0.08 && 0.08 <= roomFloor, true);
-  check('figure and chair stand at ONE height: plate + 0.01 = 0.11',
-    roomFloor + WALK_CLEARANCE_M, PROP_BOTTOM, 1e-9);
-  check('the doorstep terrain -> room floor is 0.11 m, under the step limit 0.4',
-    [roomFloor + WALK_CLEARANCE_M - TERRAIN_Y,
-      roomFloor + WALK_CLEARANCE_M - TERRAIN_Y < MAX_STEP_M ? 1 : 0],
-    [0.11, 1], 1e-9);
-  // The regression pin: the mesh answer the same point used to give.
-  const MESH_FLOOR = 0.06 + (-0.30) + 0.240;    // old pin + pad = 0.000
-  check('the OLD mesh answer was 0.010 — 0.100 under the plate',
-    [MESH_FLOOR + WALK_CLEARANCE_M,
-      roomFloor + WALK_CLEARANCE_M - (MESH_FLOOR + WALK_CLEARANCE_M)],
-    [0.010, 0.100], 1e-9);
+
+  console.log('\nground — the HEADLINE: built and natural are ONE chain');
+  // Hand-derived from § A19 no. 2, both columns, storey 2.8 m, no dials:
+  //   storey_floor_y(0, 2.8) = 0·2.8 + 0 = 0.00        (the terrain)
+  //   _plate_top(level 0)    = 0.00                     for EVERY kind of room
+  //   prop    bottom_y = 0.00 + 0.00 + PROP_CLEARANCE    0.01 = 0.01
+  //   diorama bottom_y = 0.00 + 0.00 + DIORAMA_CLEARANCE 0.02 = 0.02
+  //   figure           = the terrain itself                    = 0.00
+  const PROP_CLEARANCE = 0.01;        // server, hand-quoted
+  const DIORAMA_CLEARANCE = 0.02;     // server, hand-quoted
+  const STOREY_M = 2.8;
+  /** § A19 no. 2 in one line, written out here rather than imported — the
+   *  point of a derivation is that it is independent of the thing it checks. */
+  const storeyFloorY = (level, storey) => level * storey + (level === 0 ? 0 : 0.08);
+  const plateTop = (level, kind) => (level === 0 ? 0
+    : kind === 'room' ? 0.10 : kind === 'zone' ? 0.09 : 0.08);
+  // A ROOM's floor is its STOREY LEVEL plus what its own plate lays over it —
+  // `level·storey + _plate_top`, NOT `storey_floor_y + _plate_top`: the level
+  // plate's own 0.08 is the CONTOUR's datum (the yard and the storey slab
+  // stand on it), while a room plate is drawn from the bare storey level. That
+  // is why the storey-1 contour is 2.88 and the bedroom on it is 2.90 and not
+  // 2.98. On storey 0 both readings are 0, which is the whole point.
+  const chain = (level, kind) => {
+    const floor = level * STOREY_M + plateTop(level, kind);
+    return { floor, prop: floor + PROP_CLEARANCE,
+             diorama: floor + DIORAMA_CLEARANCE };
+  };
+  const BUILT = chain(0, 'room');       // Haus von Kai, a closed room
+  const NATURAL = chain(0, 'zone');     // Mondscheinsee, an open zone
+  check('built: the floor is the terrain', BUILT.floor, 0.00, 1e-9);
+  check('natural: the floor is the terrain', NATURAL.floor, 0.00, 1e-9);
+  check('THE HEADLINE — the two chains are the same three numbers',
+    [BUILT.floor, BUILT.prop, BUILT.diorama],
+    [NATURAL.floor, NATURAL.prop, NATURAL.diorama], 1e-9);
+  check('prop bottom_y is 0.01 on both', BUILT.prop, 0.01, 1e-9);
+  check('diorama bottom_y is 0.02 on both', BUILT.diorama, 0.02, 1e-9);
+  // RED PROBES on the three floor values the two chains used to have.
+  check('the old BUILT room floor 0.10 is nowhere in the chain',
+    BUILT.floor !== 0.10 && BUILT.prop !== 0.10 && BUILT.diorama !== 0.10, true);
+  check('the old BUILT zone surface 0.09 likewise',
+    NATURAL.floor !== 0.09 && NATURAL.prop !== 0.09, true);
+  check('the old NATURAL zone surface 0.01 is no FLOOR any more',
+    NATURAL.floor !== 0.01, true);
+  check('…the 0.01 that is left is the PROP\'s hair over the ground',
+    NATURAL.prop - NATURAL.floor, PROP_CLEARANCE, 1e-9);
+  // A DECLARED storey did not move one millimetre — that is what makes this a
+  // cull and not a redesign.
+  check('storey 1, closed room: 2.90, exactly as before',
+    chain(1, 'room').floor, 2.90, 1e-9);
+  check('storey 1, open zone: 2.89 (0.08 + 0.01), exactly as before',
+    chain(1, 'zone').floor, 2.89, 1e-9);
+  check('a basement keeps its floor too: −2.8 + 0.10',
+    chain(-1, 'room').floor, -2.70, 1e-9);
+  check('…and the storey CONTOUR of that basement is −2.8 + 0.08',
+    storeyFloorY(-1, STOREY_M), -2.72, 1e-9);
+  check('the storey-1 contour is 2.88, the room plate on it 2.90',
+    [storeyFloorY(1, STOREY_M), chain(1, 'room').floor], [2.88, 2.90], 1e-9);
+  // THE DOORSTEP, the thing the old chain's socle line guarded in disguise:
+  // stepping from the ground outside into a built room is now no step at all.
+  const MAX_STEP_M = 0.4;             // world default, hand-quoted
+  check('the doorstep terrain -> room floor is 0.00, under the step limit 0.4',
+    [BUILT.floor - 0.00, BUILT.floor - 0.00 < MAX_STEP_M ? 1 : 0],
+    [0.00, 1], 1e-9);
+  check('the walk clearance IS the server\'s prop clearance',
+    WALK_CLEARANCE_M, PROP_CLEARANCE);
 
   // ── The DECLARED floor (§ B6 no. 7, user finding 2026-08-20) ────────────
   //
   // MONDHÜTTE, a room with a diorama inside the AREA location Mondscheinsee
-  // (worlds/Anima Divide, GET /play/locations/2e2f52e9/scene). Every number
-  // below is derived by hand from the payload the server composes:
+  // (worlds/Anima Divide, GET /play/locations/2e2f52e9/scene). Re-derived on
+  // the E5a datum: the room's surface on storey 0 is the terrain (0.00), not
+  // the 0.01 zone plate of the E3 era and not the 0.09 of the slab era.
   //
-  // MONDSCHEINSEE IS A NATURAL LOCATION (§ B1 addendum 2026-08-20 part 3,
-  // `scene_recipe.is_natural_location`): no drawn building contour and not one
-  // closed room, so the payload emits NO level plate and its storey datum is
-  // the bare terrain. The slab era's grass podium (top 0.08, body 0.14) is
-  // gone, and every number of this chain moved down with it:
+  //   diorama bottom_y = 0.00 + DIORAMA_CLEARANCE 0.02
+  //                    + layout.model_offset_y (−0.30)          = −0.28
+  //   walk_y_world     = bottom_y + walk_y (0.35)               =  0.07
+  //   figure           = walk_y_world + WALK_CLEARANCE_M        =  0.08
   //
-  //   level plate (the whole boundary, grass)   NONE — not emitted
-  //   room plate  "Mondhütte" (sand)            top_y 0.00 + 0.01 = 0.01
-  //   diorama bottom_y = surface 0.01 + DIORAMA_CLEARANCE 0.02
-  //                    + layout.model_offset_y (−0.30)          = −0.27
-  //   walk_y_world = bottom_y + walk_y                          = −0.27 + w
-  //
-  // So a dialled walk_y of 0.35 is a declared 0.08, and the figure stands one
-  // WALK_CLEARANCE above it: 0.09. (The slab era said −0.19 / 0.16 / 0.17 for
-  // the same dials — the whole chain sat 0.08 higher.) What it did instead
-  // before 17f162ab: `shell_area` skipped the plate branch, the location has
-  // no mesh to ray, and the answer was the bare tile floor 0.00 — the dial
-  // looked dead in the client while the same number moved the NPC spots
-  // (`sampleRoomWalkables`).
-  //
-  // AND ABOVE ALL OF IT stands `standY` (§ A16): the WORLD relief runs on
-  // under a footprint that does not level its ground, and the Mondscheinsee
-  // does not (`level_ground` is opt-in and unset). Measured against the world
-  // heightfield of that world, the ground inside the hut's hull stands 0.18 to
-  // 0.41 m over the pin — above every number in the chain above — so the
-  // figure walks on the TERRAIN there, which is exactly what "the floor is the
-  // world terrain" means. The chain still has to be right: it is what answers
-  // wherever the landscape is level with the pin, and it is what the NPC spots
-  // of the same room take bare.
-  console.log('\nground — a DECLARED walk height beats plate and mesh');
-  const { declaredFloorAt, plateCeiling, standY } = ground;
+  // (The E3 datum said −0.27 / 0.08 / 0.09, the slab era −0.19 / 0.16 / 0.17 —
+  // the whole chain has come down one plate at a time.) The clearance IS added
+  // here and deliberately: a declared floor is a DRAWN surface, and a sole on
+  // it would z-fight the very mesh it stands on.
+  console.log('\nground — a DECLARED walk height beats the plates and the terrain');
   const HUT = [[-27.56, 10.43], [-19.8, 10.23], [-18.64, 15.37],
     [-24.15, 16.61], [-26.81, 13.67]];
-  const HUT_BOTTOM = 0.01 + 0.02 + (-0.30);
-  check('the diorama hangs at bottom_y −0.27', HUT_BOTTOM, -0.27, 1e-9);
+  const HUT_BOTTOM = 0.00 + DIORAMA_CLEARANCE + (-0.30);
+  check('the diorama hangs at bottom_y −0.28', HUT_BOTTOM, -0.28, 1e-9);
   const HUT_WALK = HUT_BOTTOM + 0.35;
-  check('a dialled walk_y 0.35 is walk_y_world 0.08', HUT_WALK, 0.08, 1e-9);
+  check('a dialled walk_y 0.35 is walk_y_world 0.07', HUT_WALK, 0.07, 1e-9);
   const LAKE_FLOORS = [{ roomId: 'd5535ee7', top: HUT_WALK, outline: HUT }];
   // The hut's anchor point (payload `anchor` [−21.28, 13.12]) is inside it.
-  check('inside the hut the DECLARATION answers, not the plate',
-    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12), 0.08, 1e-9);
-  check('...and the figure stands one clearance above it: 0.09',
-    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M, 0.09, 1e-9);
-  check('...0.09 above the bare tile floor 0.00 the client used to give, and '
-    + '0.07 above the room surface it would otherwise take',
-    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M
-      - (0.01 + WALK_CLEARANCE_M), 0.07, 1e-9);
+  check('inside the hut the DECLARATION answers',
+    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12), 0.07, 1e-9);
+  check('...and the figure stands one clearance above it: 0.08',
+    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M, 0.08, 1e-9);
+  check('...0.08 above the bare terrain the room would otherwise give',
+    declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M - 0.00,
+    0.08, 1e-9);
   // THE WORLD STILL WINS where it is higher (§ A16). 0.18 is the MEASURED
   // world ground inside the hut's hull, over the pin; the declaration answers
-  // 0.09, so the figure stands on the landscape. Both readings of the same
+  // 0.08, so the figure stands on the landscape. Both readings of the same
   // rule are pinned, so a future change to either cannot pass unnoticed.
-  check('the world relief over the See out-tops the whole chain (0.18 > 0.09)',
+  check('the world relief over the See out-tops the whole chain (0.18 > 0.08)',
     standY(declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M,
       0.18), 0.18, 1e-9);
   check('...and on level ground the declaration is what answers',
     standY(declaredFloorAt(LAKE_FLOORS, -21.28, 13.12) + WALK_CLEARANCE_M,
-      0.0), 0.09, 1e-9);
-  // Out on the lake (the "Seemitte" water plate at 0.09) nothing is declared.
+      0.0), 0.08, 1e-9);
   check('outside the hut nothing is declared', declaredFloorAt(LAKE_FLOORS, 0, 0), null);
   check('no declarations at all', declaredFloorAt([], -21.28, 13.12), null);
   check('...nor a tile that never got a list',
@@ -3717,9 +3687,8 @@ async function main() {
     declaredFloorAt([{ roomId: 'a', top: 0, outline: HUT }], -21.28, 13.12), 0);
   // MOST SPECIFIC FIRST: "Seeufer" is an always-visible outdoor zone that
   // covers the shore the hut stands on. Were both to declare, the hut wins —
-  // its hull is the smaller one (the shore polygon is orders of magnitude
-  // larger). Derived on two squares so the areas are checkable by hand:
-  // 20 × 20 = 400 m² against 2 × 2 = 4 m².
+  // its hull is the smaller one. Derived on two squares so the areas are
+  // checkable by hand: 20 × 20 = 400 m² against 2 × 2 = 4 m².
   const BIG = [[-10, -10], [10, -10], [10, 10], [-10, 10]];      // 400 m²
   const SMALL = [[-1, -1], [1, -1], [1, 1], [-1, 1]];            //   4 m²
   check('the SMALLER hull wins where two declarations overlap',
@@ -3735,42 +3704,6 @@ async function main() {
   check('a two-point "hull" declares nothing',
     declaredFloorAt([{ roomId: 'x', top: 5, outline: [[0, 0], [1, 1]] }], 0.5, 0.5),
     null);
-
-  // ── The PLATE ceiling: the area exception is about mesh HITS only ───────
-  //
-  // Mondscheinsee has no location model, so `tileWalkY` falls back to the
-  // drawn plates — and those are storeys even in an area location. The mesh
-  // ceiling is Infinity there (finding B8: shore, slope, lake bed are all
-  // ground); the plate ceiling is not, or a ground-floor figure would be
-  // hoisted onto a level-1 plate at 2.90.
-  console.log('\nground — plate ceiling vs. mesh ceiling');
-  check('a building: the two ceilings are the same number',
-    plateCeiling({ display: 'shell', walkY: -0.22 }),
-    walkCeiling({ display: 'shell', walkY: -0.22 }), 1e-9);
-  check('an area location: the mesh ceiling is uncapped',
-    walkCeiling({ display: 'shell_area' }) === Infinity, true);
-  check('...but its PLATES are still judged at 1.2',
-    plateCeiling({ display: 'shell_area' }), 1.2, 1e-9);
-  const LAKE_PLATES = [
-    { top: 0.01, outline: BIG },       // the shore's sand, on the terrain
-    { top: 0.01, outline: SMALL },     // the hut's sand surface
-    { top: 2.90, outline: SMALL },     // a hypothetical storey above it
-  ];
-  check('a natural location without a mesh: the sand at 0.01 is the ground',
-    recipeFloorAt(LAKE_PLATES, 0, 0, plateCeiling({ display: 'shell_area' })), 0.01);
-  check('...and the storey above stays out of reach',
-    recipeFloorAt(LAKE_PLATES, 0, 0, walkCeiling({ display: 'shell_area' })), 2.90);
-  // A BUILT area location still has its slab and its 0.09 zone surfaces — the
-  // very same rule, on the datum of 47abc26b, unchanged.
-  const BUILT_PLATES = [
-    { top: 0.08, outline: BIG },       // the grass level plate
-    { top: 0.09, outline: SMALL },     // an outdoor zone on it
-  ];
-  check('a BUILT one keeps the slab and its 0.09 zone surface',
-    recipeFloorAt(BUILT_PLATES, 0, 0, plateCeiling({ display: 'shell_area' })), 0.09);
-  // (Where the TILE's own plate goes under such a scene — the backstop rung
-  // the natural datum needed — is derived in `smoke_plate_drape.mjs` § 7,
-  // next to the drape it belongs to.)
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

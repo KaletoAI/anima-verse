@@ -203,14 +203,11 @@ export function buildPlaceholder(THREE: typeof import('three'),
 /** Plate: top face on `top_y`; a body additionally has its bottom face one
  *  thickness below it.
  *
- *  A `relief` plate has NO such target: the renderer deforms it over the
- *  height field (v5.2 Nr. 14), so its world box reaches from `top_y` minus
- *  the deepest dip to `top_y` plus the highest rise — a range the payload
- *  does not state as a number. The verifiable numbers of the relief are the
- *  ones the composer already applied (prop `bottom_y`, marker `y_world`) and
- *  the field itself, both checked in the server-side smoke test. */
+ *  Every plate is verifiable now: the `relief` exception died with the scene's
+ *  own height field ("Ein Boden" E5a, decision 1) — a plate that followed a
+ *  lattice had no stated world box, and there is no such plate any more. What
+ *  is left in `plates` is a declared storey, and a storey is flat. */
 export function plateTargets(plate: ScenePlate): PrimitiveTarget[] {
-  if (plate.relief) return []
   const targets: PrimitiveTarget[] = [
     { field: 'top_y', actual: (b) => b.max.y, target: plate.top_y },
   ]

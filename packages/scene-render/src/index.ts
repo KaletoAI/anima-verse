@@ -26,8 +26,6 @@ export { applyCutouts, disposeCutoutMaterials, CUTOUT_MAX_POLYS,
   CUTOUT_MAX_POINTS } from './cutouts'
 export type { CutoutHandle } from './cutouts'
 
-export { sampleTerrain, drapeGeometry, TERRAIN_CELLS } from './terrain'
-
 export { bilinear, latticeSample, sampleWorldHeight, worldHeightRange,
   tileKeyAt, heightAt, finestStep, rayGroundHit } from './worldHeight'
 export type { RayGroundOpts, WorldHeightField, WorldHeightTiles,
@@ -35,9 +33,6 @@ export type { RayGroundOpts, WorldHeightField, WorldHeightTiles,
 
 export { hillshadeImage, MAP_RELIEF_Z_FACTOR } from './hillshade'
 export type { HillshadeOpts, HillshadeImage } from './hillshade'
-
-export { subdivideOnGrid, gridStepFor, GRID_MAX_CELLS } from './gridMesh'
-export type { GridBox, GridGeometry } from './gridMesh'
 
 export {
   decodeSd, layerPairAt, layerSdAt, layerWeight, lcNoise, lcPushedSd,
@@ -47,7 +42,7 @@ export {
 } from './layerCut'
 export type {
   LayerMaskWindow, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
-  TerrainLayerIndex, TerrainLayerOverview, TerrainLayerTile,
+  TerrainLayerIndex, TerrainLayerOverview, TerrainLayerTile, TerrainLayerWater,
 } from './layerCut'
 
 export {
@@ -89,6 +84,6 @@ export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
-  SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
+  SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneFloor,
   SceneBoundaryOpening, SceneDoorway, SceneProblem,
 } from './types'

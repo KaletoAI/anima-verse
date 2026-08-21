@@ -33,11 +33,33 @@ export interface ScenePlate {
   texture_kind?: string
   opacity_role: 'ground' | 'upper'
   room_id?: string
-  /** Terrain relief (v5.2 Nr. 14): THIS plate follows the height field —
-   *  the renderer subdivides it and raises its vertices via `sampleTerrain`
-   *  instead of laying it flat on `top_y`. Only outdoor plates of non-flat
-   *  rooms carry it; storey plates, walls and every other plate stay flat. */
-  relief?: boolean
+}
+
+/**
+ * ONE STOREY-0 ROOM AS DATA — what replaced the storey-0 plates ("Ein Boden"
+ * E5a, § A19 no. 3).
+ *
+ * Storey 0 draws no plate any more: its height is the terrain (`h_final`) and
+ * its material is the layer bake. What a consumer still needs is the SHAPE, so
+ * the polygons travel as data — which is what they always were.
+ *
+ * `polygon_world` is the room hull in the SCENE FRAME (local metres around the
+ * anchor pin), like every other coordinate of this payload. `floor_kind` is
+ * what the ground WEARS there, the empty string for a zone that names none.
+ * `closed` tells a room from an open zone (§ A5).
+ *
+ * THERE ARE NO HEIGHTS IN IT, on purpose: a consumer asks the height sampler at
+ * the point it is really placing something — never a plate, never a ray. The
+ * single exception is `water_level_effective`, present only on a water floor,
+ * and it is the one ABSOLUTE world y in the whole payload (§ A18: a mirror is
+ * measured in world metres everywhere else too).
+ */
+export interface SceneFloor {
+  room_id: string
+  polygon_world: [number, number][]
+  floor_kind: string
+  closed: boolean
+  water_level_effective?: number
 }
 
 /** Ein Wandstück — um Türen/Fenster bereits geteilt; das Glasband eines
@@ -363,36 +385,14 @@ export interface SceneBoundaryOpening {
   inward: [number, number]
 }
 
-/** The detail scene's deterministic terrain relief (§ B1 Nr. 14):
- *  (n+1) × (n+1) support points over the reference square, `grid[j][i]` in
- *  WORLD metres; i runs west→east, j north→south, the border is 0. Absent =
- *  the scene is flat.
- *
- *  The RESOLUTION n is not a constant — it follows the author's wave width,
- *  so it is read from the payload (`grid.length - 1`, or `step`), never
- *  assumed.
- *
- *  The server has already lifted EVERYTHING standing in a non-flat room —
- *  renderers only drape ground and `relief` plates and sample figure heights
- *  (`sampleTerrain`); they never lift an object themselves. */
-export interface SceneTerrain {
-  /** Edge length of ONE grid cell in world metres (`extent_m / n`). */
-  step: number
-  /** (n+1) × (n+1) support points, `grid[j][i]`, world metres. */
-  grid: number[][]
-  /** Swing in world metres (already × k). */
-  amplitude_m: number
-  /** MIN CORNER of the support lattice in payload metres (contract v6 Nr. 2,
-   *  § B1 Nr. 14 — `scene_recipe.terrain_frame`). Since v6 the lattice spans a
-   *  square of edge `extent_m` over the BOUNDARY's bounding box, not a square
-   *  around the pin, so a lattice coordinate is
-   *  `u = (x − origin[0]) / (step · n)` — never `x / extent_m + 0.5`.
-   *  Optional in the TYPE only because a payload composed before the metric
-   *  wave carries no such field; where it IS present it is mandatory in the
-   *  arithmetic (`sampleTerrain`). For a boundary drawn around its own pin
-   *  both formulas give the same number. */
-  origin?: [number, number]
-}
+// THE SCENE'S OWN 17 x 17 RELIEF IS DELETED ("Ein Boden" E5a, decision 1 of
+// the plan): `SceneTerrain`, the `terrain` block of the payload, `map3d.relief`
+// and `layout.relief_flat` are gone without a replacement rail. A location has
+// no height field of its own any more — local relief is authored through the
+// map's HEIGHT AREAS, and the one ground under everything is `h_final`
+// (§ A16). With it went `sampleTerrain`/`drapeGeometry`/`TERRAIN_CELLS` and the
+// grid mesh they draped over (`subdivideOnGrid`/`gridStepFor`): nothing is
+// draped any more, so nothing needs cutting on a lattice.
 
 export interface ScenePayload {
   signature: string
@@ -417,7 +417,13 @@ export interface ScenePayload {
   storey_m: number
   levels: { level: number; floor_y: number }[]
   style: SceneStyle
+  /** THE FLOORS OF THE DECLARED STOREYS ONLY (E5a): upper storeys and
+   *  basements. Storey 0 has none — its floor is the terrain and its material
+   *  is the layer bake; what is left of it is `floor_plan`. */
   plates: ScenePlate[]
+  /** The storey-0 rooms as polygons + floor kinds (E5a, § A19 no. 3) — always
+   *  present, empty for a location without a level-0 room. */
+  floor_plan: SceneFloor[]
   walls: SceneWall[]
   extras: SceneExtra[]
   models: SceneModelSpec[]
@@ -432,21 +438,17 @@ export interface ScenePayload {
   outdoor_rooms: string[]
   /** Pass-throughs at the location edge (§ B1 Nr. 13) — only when authored. */
   boundary_openings?: SceneBoundaryOpening[]
-  /** Height field of the detail scene — only when `map3d.relief` is set. */
-  terrain?: SceneTerrain
   /** Detail mode of the LOCATION (v5.2 Nr. 10) — independent of whether a
-   *  location model exists: backstop plate, fade gate and zone rules hang off
-   *  this; `display: shell_area` on the building spec is merely its
-   *  per-model consequence. */
+   *  location model exists: the fade gate and the zone rules hang off this;
+   *  `display: shell_area` on the building spec is merely its per-model
+   *  consequence. */
   area_detail?: boolean
-  /** THE FLOOR OF THIS LOCATION IS THE WORLD TERRAIN (§ B1 addendum
-   *  2026-08-20 part 3, `scene_recipe.is_natural_location`): nobody drew a
-   *  building contour and every room is an open zone, so the payload emits NO
-   *  level plate and its storey datum is a bare 0 — the zone surfaces ride the
-   *  terrain 1 cm up instead of a 14 cm slab. The classification is the
-   *  SERVER's; a renderer must not re-derive it from the plate list. Only
-   *  present when true. */
-  natural_floor?: boolean
+  // `terrain` and `natural_floor` ARE GONE (E5a, § A19 no. 1 and no. 6). The
+  // first was the scene's own 17 x 17 relief; the second told a renderer that
+  // THIS location stood on the terrain rather than on a slab — a distinction
+  // that meant something only while there were two grounds. On storey 0 every
+  // location stands on the terrain now, so the flag would be true everywhere
+  // and say nothing.
 }
 
 /**

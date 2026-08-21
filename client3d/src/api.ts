@@ -5,8 +5,8 @@ import type {
 // outwards, the parsing helpers here need them in their own scope.
 import type {
   SceneBoundaryOpening, SceneDoorway, SceneExtra, SceneMarker,
-  SceneModelSpec, ScenePayload, ScenePlate, SceneProblem, SceneRoom,
-  SceneTerrain, SceneWall, TerrainLayerBatch, TerrainLayerIndex,
+  SceneFloor, SceneModelSpec, ScenePayload, ScenePlate, SceneProblem,
+  SceneRoom, SceneWall, TerrainLayerBatch, TerrainLayerIndex,
   WorldHeightField,
 } from '@anima/scene-render';
 // The audio manifest is TYPED and validated in the pure soundtrack module, so
@@ -492,7 +492,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 // frontend/src/tabs/world/worldTypes.ts) und waren bereits auseinander-
 // gelaufen. Re-Export, damit kein Importeur angefasst werden muss.
 export type {
-  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneTerrain,
+  ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneFloor,
   SceneMarker, SceneStyle, SceneRoom, ModelTier, SceneBoundaryOpening,
   SceneDoorway, SceneProblem,
   /** hiess hier frueher ApiOpening */
@@ -520,6 +520,11 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     levels: arr(data.levels),
     style: data.style ?? {},
     plates: arr<ScenePlate>(data.plates).filter((p) => arr(p.outline).length >= 3),
+    // THE STOREY-0 ROOMS AS DATA (§ A19 no. 3) — what replaced the storey-0
+    // plates. Same defensiveness as `plates`: a hull of fewer than three points
+    // encloses nothing, so it names no floor.
+    floor_plan: arr<SceneFloor>(data.floor_plan)
+      .filter((f) => arr(f.polygon_world).length >= 3),
     walls: arr<SceneWall>(data.walls),
     extras: arr<SceneExtra>(data.extras),
     // Modelle wandern unveraendert durch: `variants` je Stufe (§ B1) statt
@@ -541,17 +546,11 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     boundary_openings: Array.isArray(data.boundary_openings)
       && data.boundary_openings.length
       ? (data.boundary_openings as SceneBoundaryOpening[]) : undefined,
-    // Höhenfeld (§ B1 Nr. 14) — nur bei Relief-Locations im Payload. Ein
-    // Gitter ohne Zeilen ist kein Relief, sondern eine kaputte Antwort.
-    terrain: Array.isArray(data.terrain?.grid) && data.terrain.grid.length > 1
-      ? (data.terrain as SceneTerrain) : undefined,
     // Detail-Modus der Location (v5.2 Nr. 10) — gilt auch ohne Modell.
     area_detail: data.area_detail === true ? true : undefined,
-    // The floor of this location is the world terrain (§ B1 addendum part 3).
-    // Dropping this field here silently pinned the tile plate to the detail
-    // rung (−0.05) instead of the natural one (−0.13) — 8 cm above the very
-    // sand and water surfaces it must back (found 2026-08-21).
-    natural_floor: data.natural_floor === true ? true : undefined,
+    // `terrain` and `natural_floor` ARE NOT READ ANY MORE (E5a, § A19 no. 1
+    // and no. 6): the scene's own 17 x 17 relief is deleted, and "this
+    // location stands on the terrain" is true of every location now.
   };
 }
 

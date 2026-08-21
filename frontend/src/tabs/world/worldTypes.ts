@@ -1,3 +1,5 @@
+import type { SurfaceMaterialSpec } from '@anima/scene-render'
+
 // Floor-plan placement of a room (AV3D-2). EVERYTHING IS METRES since
 // contract v6 Nr. 2 ("the metric wave") — the [0,1] fraction domain is deleted
 // on both sides, and there is no migration: an old fraction blob simply
@@ -38,11 +40,25 @@ export interface RoomLayout {
   /** AV3D-12: show this room permanently, independent of the interior view
    *  — for outdoor rooms not covered by the building model. */
   always_visible?: boolean
-  /** Terrain relief opt-out (v5.2 Nr. 14): this OUTDOOR room stays level
-   *  while the rest of the location rolls — a road, a paved square, a
-   *  clearing. Indoor rooms are flat anyway (walls need even ground), so the
-   *  editor only offers it on always-visible rooms. */
-  relief_flat?: boolean
+  /** How wide THIS floor's transition to the layer under it is, in metres
+   *  (server window 0…8, 2 decimals, `world_ops._sanitize_layout` →
+   *  `terrain_layers.sanitize_edge_blend`). DEFAULT 0 — the hard cut, because
+   *  a floor is drawn, not grown; 0 is a VALUE and has to survive a save. */
+  edge_blend_m?: number
+  /** WHERE THE MIRROR STANDS on a room whose floor kind is a water surface:
+   *  a world-y height in metres, and the only absolute height a layout
+   *  carries. OPTIONAL — absent means the bake derives it (the plateau under
+   *  a built location, the median along the rim on a natural one). It
+   *  replaced the `floor_offset_y` waterline hack, which moved no height at
+   *  all. */
+  water_level?: number
+  /** How far the bed is carved below that mirror, in metres. Server window
+   *  0.2…20, default 2.0 (`heightfield.WATER_DEPTH_*`). */
+  water_depth_m?: number
+  /** Over how many metres the bed climbs back to the untouched land at the
+   *  water's edge. Server window 0…20, default 3.0
+   *  (`heightfield.WATER_SHORE_RAMP_*`). */
+  shore_ramp_m?: number
   /** Cut the room's diorama at its shell (§ B1): the renderer discards every
    *  fragment outside the room hull, so a model that overhangs its floor plan
    *  ends at the room. Ignored for outdoor rooms. */
@@ -207,17 +223,12 @@ export interface Map3D {
    *  rooms compose like a building interior — no cutouts, no overlay zones.
    *  Only meaningful together with area_model. */
   area_detail?: boolean
-  /** Terrain relief of the detail scene (§ B1 Nr. 14): a deterministic
-   *  height field over the terrain frame — since v6 Nr. 2 a square of edge
-   *  `plan_width_m` over the BOUNDARY's bounding box, whose min corner the
-   *  scene payload names as `terrain.origin`. `amplitude_m` is the swing in
-   *  REAL metres (0.05..5, × k at compose time), `seed` picks the field and
-   *  is mandatory — the editor always writes one. `wave_m` is the second
-   *  axis: how WIDE one swell is, in REAL metres (1..200); the server turns
-   *  it into the grid resolution, and without it the default 16 × 16 field
-   *  applies. Only valid together with area_model + area_detail; the
-   *  sanitizer drops it otherwise. Absent = the scene is dead flat. */
-  relief?: { amplitude_m: number; seed: number; wave_m?: number }
+  // `relief` — the scene's OWN 17 × 17 height field — IS GONE ("Ein Boden"
+  // E5a, decision 1 of the plan), and so is the `layout.relief_flat` opt-out
+  // that went with it. There is no per-location relief left to roll: local
+  // relief is authored through the map's HEIGHT AREAS, and the one ground
+  // under everything is `h_final`. The server sanitizer drops a submitted
+  // value, so there is no field left to write.
   /** The DRAWN footprint of the location (contract v6 Nr. 1 "Gebiete"): a
    *  closed point sequence in LOCAL METRES around the pin (`pos_x`/`pos_z`)
    *  and its `yaw_deg`, transformed with the ONE § A1.1 mapping. Stored open
@@ -248,10 +259,12 @@ export interface Map3D {
 // ── Scene recipe (docs/schnittstellen-3d.md part B) ──
 // The server composes the WHOLE scene of a location; renderers only display
 // it. Every number is already in WORLD metres around the anchor pin — no
-// fractions, no scale factors, no geometry decisions on this side. The metric
-// wave (v6 Nr. 2) changed neither the shape nor the values of this payload;
-// its ONE addition is `terrain.origin`, the min corner of the relief lattice,
-// which `sampleTerrain` in @anima/scene-render now anchors on.
+// fractions, no scale factors, no geometry decisions on this side.
+//
+// Since E5a ("Ein Boden") the payload carries NO storey-0 plate: `plates` are
+// the declared storeys only (upper floors, basements), and the level-0 rooms
+// travel as `floor_plan` — polygons plus their floor kind, no heights. The
+// `terrain` block and `natural_floor` are gone with the scene's own relief.
 // Source: GET /play/locations/{id}/scene, draft variant POST
 // /play/scene-preview (app/core/scene_recipe.py).
 //
@@ -262,7 +275,7 @@ export interface Map3D {
 // Re-exported so every existing importer keeps working unchanged.
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
-  SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneTerrain,
+  SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneFloor,
   SceneProblem,
 } from '@anima/scene-render'
 
@@ -404,4 +417,37 @@ export interface SurfaceKind {
   kind: string
   name: string
   url: string
+  /** HOW the kind is lit (§ A9) — the library's own declaration, verbatim.
+   *  Its `class` is also the only honest answer to "is this water?": the
+   *  server asks the same question of the same book
+   *  (`terrain_layers.is_water_floor`), never of the kind's name and never of
+   *  its colour. */
+  material?: SurfaceMaterialSpec | null
+}
+
+/** Is this floor kind a WATER surface — the renderers' half of
+ *  `terrain_layers.is_water_floor`. `ice` counts: a frozen sheet reflects and
+ *  carries surface structure, it merely stands still, and the bake carves a
+ *  bed under it exactly the same way. A kind the library does not know is not
+ *  water; the NAME is never asked. */
+export function isWaterSurface(kind: string,
+                               kinds: SurfaceKind[]): boolean {
+  if (!kind) return false
+  const cls = kinds.find((s) => s.kind === kind)?.material?.class
+  return cls === 'water' || cls === 'ice'
+}
+
+/** The kind a closed room's floor wears when nobody named one — mirrors
+ *  `app.core.terrain_layers.FLOOR_KIND_DEFAULT`. */
+export const FLOOR_KIND_DEFAULT = 'floor'
+
+/** WHAT THE GROUND WEARS in one room — the client's half of
+ *  `terrain_layers.floor_kind_of`. Where the author named nothing: a CLOSED
+ *  room gets the default floor (it has walls, so it has a floor, and it is
+ *  not the meadow outside), an open ZONE gets the empty string, i.e. no layer
+ *  at all and the terrain showing through. */
+export function floorKindOf(layout: RoomLayout | undefined | null): string {
+  const named = (layout?.surfaces?.floor || '').trim()
+  if (named) return named
+  return layout?.always_visible ? '' : FLOOR_KIND_DEFAULT
 }

@@ -59,36 +59,38 @@
  *      [[0, 10], [0, 10]] the point (2, 2) is 5.
  *
  * ============================================================================
- * [4] THE COMBINED HEIGHT SOURCE — the client's mirror of the walk rule
+ * [4] THE HEIGHT SOURCE IS ONE READING — the counter-probe of E5b
  * ============================================================================
- * E8 task 4. `main.ts` `reliefLiftAt` asks TWO sources and adds them:
- * the WORLD field (`sampleWorldHeight`, the bilinear reading — the server's
- * own) and, on top, the scene relief of the INNERMOST enclosing location that
- * has a field. The composition rule is `client3d/src/game/ground.groundLift`,
- * the walk verdict is `client3d/src/game/walk.slopeBlocks`; both are pure and
- * checked here against the very field above.
+ * `main.ts` `reliefLiftAt` used to ask TWO sources and add them: the WORLD
+ * field (`sampleWorldHeight`, the bilinear reading — the server's own) plus the
+ * scene relief of the INNERMOST enclosing location that had a field, composed
+ * by `game/ground.groundLift`. "Ein Boden" E5b deletes the second term with the
+ * field it read: a location has no 17 x 17 relief of its own any more (§ A19
+ * no. 6, decision 1), local relief is authored through the map's HEIGHT AREAS,
+ * and `reliefLiftAt` is one line. The walk verdict is unchanged
+ * (`client3d/src/game/walk.slopeBlocks`), and both are checked against the
+ * field above.
  *
- * (12) THE FLANK, walking east from (−2, 0) to (−1, 0), no scene relief:
+ * (12) THE FLANK, walking east from (−2, 0) to (−1, 0):
  *        h(−2, 0) = 2.5                                  (case 8 above)
  *        h(−1, 0): fx = (−1+4)/4 = 0.75 -> i = 0, tx = 0.75; fz = 1 -> j = 1
  *                  north = 0·0.25 + 5·0.75 = 3.75        -> 3.75
  *      so dh = 1.25 over dist 1. dist is NOT below 1 m, so the step limit
  *      does not apply; atan(1.25 / 1) = 51.3402° > 40° -> BLOCKED.
- *      RED COUNTER-PROBE, and it is the regression this task closes: with the
- *      world term LEFT OUT — the mirror as task 3 shipped it, scene relief
- *      only — both heights are 0, dh = 0 and the client walks on while the
- *      server refuses. That is the rubber band of the acceptance list.
- * (13) THE INNERMOST SCENE RELIEF WINS. At (2, 2) the world says 1.25.
- *      With two enclosing locations — a square of edge 80 (6400 m²) lifting
- *      0.2 m and a hut of edge 20 (400 m²) lifting 1.0 m — the answer is
- *      1.25 + 1.0 = 2.25: the SMALLER-AREA footprint is the more specific one
- *      (finding F3, and contract v6 Nr. 6 which replaced the smallest-width
- *      rule with it). With no patch at all it is the world alone, 1.25.
+ *      RED COUNTER-PROBE: on flat ground dh = 0 and nothing is refused — the
+ *      shape of the rubber-band regression that the world term closed.
+ * (13) THE SECOND TERM, AS THE NUMBER IT NO LONGER PRODUCES. At (2, 2) the
+ *      world says 1.25. Two enclosing locations — a square of edge 80
+ *      (6400 m²) lifting 0.2 m and a hut of edge 20 (400 m²) lifting 1.0 m —
+ *      would have made that 2.25 through the innermost of them (the smaller
+ *      area was the more specific answer, finding F3 / contract v6 Nr. 6) and
+ *      1.45 through the outermost. Neither is reachable: the point is 1.25,
+ *      which is exactly the height the server judges it by.
  * (14) THE PLATEAU IS FLAT, which is what makes a place walkable on a hill:
- *      the server levels the field under every footprint, so BOTH ends of a
- *      step inside it read the same height (5 on the levelled field below),
- *      dh = 0 and `slopeBlocks` is inert — even over 0.15 m, the walking lead
- *      that would refuse a 0.5 m rise as a step.
+ *      the bake stamps the field flat under every BUILT footprint (§ G5), so
+ *      BOTH ends of a step inside it read the same height (5 on the levelled
+ *      field below), dh = 0 and `slopeBlocks` is inert — even over 0.15 m, the
+ *      walking lead that would refuse a 0.5 m rise as a step.
  *
  * ============================================================================
  * [5] WHERE THE FIGURE STANDS INSIDE A FOOTPRINT — `game/ground.standY`
@@ -211,8 +213,8 @@
  * ============================================================================
  * "Ein Boden" E2. Until this stage the client carried a SECOND height: the
  * surface its one big base plate really was, two triangles per cell of
- * `cellM` (`gridStepFor`, which DOUBLED the field's step until the plate fit a
- * 40 000-cell budget — 64 m in the live world). Everything that touched the
+ * `cellM` (a step DOUBLED until the plate fit a 40 000-cell budget — 64 m in
+ * the live world; that helper is deleted with the drape it sized, E5b). Everything that touched the
  * ground was placed on THAT, because the ground the player saw was that mesh.
  * The mesh is gone: the terrain is a CDLOD patch whose vertices come out of
  * the lattice itself (`scene/terrainLod.ts`), so there is one answer and it is
@@ -340,8 +342,9 @@ function check(label, actual, expected, eps = 1e-9) {
 // module really exports.
 const mod = await loadModule(SRC, 'worldHeight');
 const { sampleWorldHeight, tileKeyAt, heightAt } = mod;
-const { groundLift, standY } = await loadModule(
+const groundMod = await loadModule(
   join(ROOT, 'client3d/src/game/ground.ts'), 'ground', ['polygon']);
+const { standY } = groundMod;
 const { slopeBlocks } = await loadModule(
   join(ROOT, 'client3d/src/game/walk.ts'), 'walk');
 
@@ -395,30 +398,38 @@ function checkBool(label, actual, expected) {
   }
 }
 
-console.log('[4] the combined height source — world field + scene relief');
+console.log('[4] the height source is ONE reading — the counter-probe of E5b');
 // The world's limits, the defaults of `game.max_step_height_m` / `max_slope_deg`.
 const STEP = 0.4;
 const SLOPE = 40;
-const hereH = groundLift(sampleWorldHeight(FIELD, -2, 0), []);
-const thereH = groundLift(sampleWorldHeight(FIELD, -1, 0), []);
+// `groundLift(worldHeight, patches)` IS GONE ("Ein Boden" E5b): it added the
+// innermost enclosing LOCATION's own 17 x 17 relief on top of the world field,
+// and that field is deleted (§ A19 no. 6, decision 1 — local relief is
+// authored through the map's height areas). What used to be
+// `groundLift(sampleWorldHeight(...), patches)` is `sampleWorldHeight(...)`,
+// full stop, and `main.reliefLiftAt` is one line because of it.
+checkBool('`groundLift` no longer exists', groundMod.groundLift === undefined, true);
+const hereH = sampleWorldHeight(FIELD, -2, 0);
+const thereH = sampleWorldHeight(FIELD, -1, 0);
 check('the flank at (-2, 0)', hereH, 2.5);
 check('the flank at (-1, 0)', thereH, 3.75);
 check('the rise over one metre', thereH - hereH, 1.25);
 checkBool('atan(1.25/1) = 51.34 deg > 40 -> the step is refused',
   slopeBlocks(thereH - hereH, 1, STEP, SLOPE), true);
-checkBool('RED COUNTER-PROBE: without the world term the mirror sees nothing',
-  slopeBlocks(groundLift(0, []) - groundLift(0, []), 1, STEP, SLOPE), false);
-
-// Two enclosing footprints as AREAS in m² (contract v6 Nr. 6): a square of
-// edge 80 is 6400 m², a hut of edge 20 is 400 m². The smallest area is the
-// most specific answer — the same order the old smallest-width rule gave.
-const PATCHES = [{ area: 6400, lift: 0.2 }, { area: 400, lift: 1 }];
-check('the innermost scene relief wins',
-  groundLift(sampleWorldHeight(FIELD, 2, 2), PATCHES), 2.25);
-check('...and the largest alone would have said',
-  groundLift(sampleWorldHeight(FIELD, 2, 2), [PATCHES[0]]), 1.45);
-check('no scene relief: the world alone',
-  groundLift(sampleWorldHeight(FIELD, 2, 2), []), 1.25);
+checkBool('RED COUNTER-PROBE: on flat ground the mirror sees nothing',
+  slopeBlocks(0, 1, STEP, SLOPE), false);
+// WHAT THE SECOND TERM USED TO DO, kept as a number so the deletion is
+// readable: two enclosing footprints (a square of edge 80 = 6400 m², a hut of
+// edge 20 = 400 m²) would have raised the point at (2, 2) — world height
+// 1.25 — to 2.25 through the innermost of them, and to 1.45 through the
+// outermost. Both readings are gone; the point is 1.25, the height the SERVER
+// judges it by.
+check('the point at (2, 2) is the world field and nothing added',
+  sampleWorldHeight(FIELD, 2, 2), 1.25);
+checkBool('RED: the old innermost-patch answer 2.25 is not reachable',
+  sampleWorldHeight(FIELD, 2, 2) === 2.25, false);
+checkBool('RED: nor the outermost-patch answer 1.45',
+  sampleWorldHeight(FIELD, 2, 2) === 1.45, false);
 
 // The levelled plateau under a footprint: the server pins these points, so
 // both ends of any step inside it read the same height.

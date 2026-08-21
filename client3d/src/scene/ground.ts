@@ -72,7 +72,8 @@ import { buildAreaGeometry,
   worldHeightRange } from '@anima/scene-render';
 import type { Point2, ScatterFootprint, ScatterInstance,
   SurfaceMaterialSpec, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
-  TerrainLayerIndex, TerrainLayerTile, WorldHeightField, WorldHeightTileStats,
+  TerrainLayerIndex, TerrainLayerTile, TerrainLayerWater, WorldHeightField,
+  WorldHeightTileStats,
   WorldHeightTiles } from '@anima/scene-render';
 import { fetchHeightfield, fetchHeightTiles, fetchTerrain,
   fetchTerrainLayers } from '../api';
@@ -84,7 +85,7 @@ import type { MapLocation, TerrainArea, TerrainPayload, TerrainScatterEntry, Ter
   WorldBounds } from '../types';
 import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
-import { preloadSurfaceTexture, setWorldGround, setWorldRayStart, surfaceFor,
+import { hasSurfaceTexture, preloadSurfaceTexture, setWorldGround, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
   releaseImpostor } from './impostors';
@@ -102,7 +103,7 @@ import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterPlane, patchWaterShore } from './waterPlane';
-import { waterLevelOf } from './waterPlaneMath';
+import { waterLevelOf, zoneWaterMirrors } from './waterPlaneMath';
 import type { UndergrowthArea } from './undergrowth';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
@@ -456,15 +457,12 @@ function spreadOf(urls: readonly string[]): number | null {
   return best;
 }
 
-/** One built area: what stands in the scene, plus what the scatter LOD needs. */
+/** One built area: what the scatter LOD needs of it. A painted ground has NO
+ *  mesh of its own — since E3 it is a CUT in the one terrain surface
+ *  (`scene/layerGround.ts`), and since E5b the one thing that still gets a mesh,
+ *  the water mirror, is kept in `waterMeshes` because a mirror is not only ever
+ *  a painted area: a room's water FLOOR is one too (§ A19 no. 5). */
 interface AreaMesh {
-  /** the WATER MIRROR of this area, and `null` for every other ground: since
-   *  E3 a painted ground is a CUT in the terrain surface and has no mesh at all
-   *  (`scene/layerGround.ts`), and since E4 the one exception is a FLAT plane
-   *  at the area's `water_level_effective` (`scene/waterPlane.ts`). An area is
-   *  still an entry here whatever it is made of — the scatter and the
-   *  undergrowth hang on it. */
-  mesh: THREE.Mesh | null;
   /** one scatter entry per authored row AND model variant — empty when nothing
    *  grows here (finding B17: the list hangs on the AREA, not on the terrain
    *  type; § B2 addendum: a prop with four meshes is four entries, each holding
@@ -1115,6 +1113,17 @@ export function createGround(): Ground {
   let layerKey = '';
   let layersBusy = false;
   const areaMeshes: AreaMesh[] = [];
+  /** THE FLAT MIRRORS OF THE WORLD (E4/E5b) — every one of them, whatever it
+   *  came from: a painted lake, or a ROOM whose floor kind is a water surface
+   *  (`GET /play/terrain-layers` → `waters`, § A19 no. 5). One list, one
+   *  builder, one material cache — a pond in a courtyard is drawn by the
+   *  machinery that draws a lake, not by a second one. */
+  const waterMeshes: THREE.Mesh[] = [];
+  /** The zone waters of the last layer INDEX. They arrive with the masks
+   *  (`reloadLayers`), which is fetched before `rebuildAreas` on the same
+   *  signature, so the mirrors are always built from the table that is
+   *  standing. */
+  let zoneWaters: readonly TerrainLayerWater[] = [];
   /** Where the camera stood at the last `tickScatterLod` — the scatter LOD's
    *  only piece of view state. A REBUILD needs it too (an area has to come
    *  into the world binned, not with every instance at full detail), and that
@@ -1191,8 +1200,16 @@ export function createGround(): Ground {
   /** The surface-library id of a terrain kind — the catalog entry's own
    *  answer (`surfaceOfType`), '' for a kind that names none or that the
    *  catalog does not know. THE one place a kind becomes a material here. */
+  /** WHICH library entry a ground kind wears. The terrain TYPE's own answer
+   *  first (`surfaces` of the catalog) — and where the catalog does not know
+   *  the kind at all, THE KIND CARRIES ITSELF, which is the server's own rule
+   *  for a ROOM FLOOR (§ A19 no. 4: `surfaces.floor` is a library id directly).
+   *  A zone water's `kind` arrives that way, and without this it would have
+   *  looked up nothing and come out as a matte plane instead of water. */
   function surfaceOf(kind: string): string {
-    return surfaceOfType(catalog.get((kind || '').toLowerCase()));
+    const key = (kind || '').toLowerCase();
+    const named = surfaceOfType(catalog.get(key));
+    return named || (key && hasSurfaceTexture(key) ? key : '');
   }
 
   /**
@@ -2091,14 +2108,15 @@ export function createGround(): Ground {
 
   function clearAreas(): void {
     for (const a of areaMeshes) {
-      if (a.mesh) {
-        group.remove(a.mesh);
-        a.mesh.geometry.dispose();
-      }
       disposeProps(a.scatter);
       drain(a.scatterOwned);
     }
     areaMeshes.length = 0;
+    for (const mesh of waterMeshes) {
+      group.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    waterMeshes.length = 0;
     drain(areaOwned);
   }
 
@@ -2218,7 +2236,11 @@ export function createGround(): Ground {
     // catalog id and has not been a texture id since the assignment became
     // explicit.
     const surfaces = new Set<string>([surfaceOf(payload?.default_kind || ''),
-      ...areas.map((a) => surfaceOf(a.kind))]);
+      ...areas.map((a) => surfaceOf(a.kind)),
+      // …and the ZONE WATERS, whose kinds are room floor kinds and need not
+      // appear on the map at all (§ A19 no. 5). A clone of a still-loading
+      // image stays blank, so a pond's mirror would come out untextured.
+      ...zoneWaters.map((w) => surfaceOf(w.kind))]);
     await Promise.all([...surfaces].map((s) => preloadSurfaceTexture(s)));
 
     const next: AreaMesh[] = [];
@@ -2237,6 +2259,30 @@ export function createGround(): Ground {
      *  two heights share one shader and cost two draw calls instead of two
      *  programs. Filled lazily: a world without water builds none. */
     const waterMats = new Map<string, THREE.Material>();
+    /** THE ONE MIRROR BUILDER (E5b). Both sources feed it — a painted water
+     *  area and a room whose floor kind is a water surface — so a pond gets the
+     *  same material, the same shore shader and the same flat plane a lake
+     *  gets. `geometry` is the earcut of the outline at y = 0, i.e. already a
+     *  mirror; `buildWaterPlane` only lifts it to its level. */
+    const nextWater: THREE.Mesh[] = [];
+    const addMirror = (geometry: THREE.BufferGeometry, kind: string,
+                       level: number): void => {
+      let mat = waterMats.get(kind);
+      if (!mat) {
+        // 1 m per UV unit: the shape geometry's UVs are the world
+        // coordinates, so the texture runs seamlessly across area borders.
+        // Transparent and depth-write-free — the shore ramp is an alpha, and
+        // a sheet of water must not hide the world behind it.
+        mat = materialFor(kind, 1, nextOwned,
+                          { transparent: true, depthWrite: false });
+        // …and LAST in the chain, after the ripple and the basement hole:
+        // the shore reads the height pyramids and writes the alpha
+        // (`waterPlane.ts`).
+        patchWaterShore(mat);
+        waterMats.set(kind, mat);
+      }
+      nextWater.push(buildWaterPlane(geometry, level, mat));
+    };
     areas.forEach((area, index) => {
       const built = builtAreas[index];
       if (!built) return;   // a ring that encloses nothing has nothing to draw
@@ -2254,26 +2300,8 @@ export function createGround(): Ground {
       // terrain's own height would be the drape all over again.
       const water = isWaterClass(surfaceMaterialSpec(surfaceOf(area.kind))?.class);
       const level = water ? waterLevelOf(area.meta) : null;
-      let mesh: THREE.Mesh | null = null;
       if (level !== null) {
-        let mat = waterMats.get(area.kind);
-        if (!mat) {
-          // 1 m per UV unit: the shape geometry's UVs are the world
-          // coordinates, so the texture runs seamlessly across area borders.
-          // Transparent and depth-write-free — the shore ramp is an alpha, and
-          // a sheet of water must not hide the world behind it.
-          mat = materialFor(area.kind, 1, nextOwned,
-                            { transparent: true, depthWrite: false });
-          // …and LAST in the chain, after the ripple and the basement hole:
-          // the shore reads the height pyramids and writes the alpha
-          // (`waterPlane.ts`).
-          patchWaterShore(mat);
-          waterMats.set(area.kind, mat);
-        }
-        mesh = buildWaterPlane(built.geometry, level, mat);
-        mesh.userData.terrainKind = area.kind;
-        mesh.userData.terrainAreaId = area.id;
-        mesh.userData.waterLevel = level;
+        addMirror(built.geometry, area.kind, level);
       } else {
         // Not a mirror, so the earcut is not drawn — and a geometry nobody
         // holds is a buffer nobody frees. Only the RING lives on (below); the
@@ -2292,9 +2320,7 @@ export function createGround(): Ground {
       // lives in `nextOwned` and stands until the terrain itself changes.
       const scatterOwned: { dispose(): void }[] = [];
       const scatter = buildScatter(area, built.ring, occluders, scatterOwned);
-      next.push({
-        mesh, scatter, area, ring: built.ring, occluders, scatterOwned,
-      });
+      next.push({ scatter, area, ring: built.ring, occluders, scatterOwned });
       // …and what grows here without anybody having said so (§ A9). The FIELD
       // grows it, per 64 m cell around the anchor (`scene/undergrowth.ts`), so
       // all this shape has to do is describe itself. NO occluder list: the
@@ -2319,11 +2345,26 @@ export function createGround(): Ground {
       });
     });
 
+    // …AND THE ZONE WATERS, through the very same builder (§ A19 no. 5). A room
+    // whose floor kind is a water surface carved its bed like a painted lake
+    // (`heightfield`'s fifth stage), so it wants the same flat mirror over it —
+    // and it already brings the two numbers that decides: the outline in WORLD
+    // metres and the level the bake settled on. The kind is a surface-library
+    // id like any other, so `addMirror` looks its material up unchanged.
+    for (const w of zoneWaterMirrors(zoneWaters)) {
+      const built = buildAreaGeometry(THREE, w.polygon);
+      if (!built) continue;                 // a ring that encloses nothing
+      addMirror(built.geometry, w.kind, w.level);
+    }
+
     // THE SWAP. Nothing above touched the scene, so the old ground stood until
     // this line and the new one is in place before the frame after it.
     clearAreas();
+    for (const mesh of nextWater) {
+      group.add(mesh);
+      waterMeshes.push(mesh);
+    }
     for (const a of next) {
-      if (a.mesh) group.add(a.mesh);
       for (const prop of a.scatter) {
         group.add(prop.low);
         // A full-detail mesh can exist before the swap: `buildScatter` bins
@@ -2445,9 +2486,6 @@ export function createGround(): Ground {
       // by decimation on the client, which is exact because every coarse
       // lattice is a subset of the fine one (§ G2).
       terrain.setField(relief, tileStepM, anchorX, anchorZ);
-      // The tiles ray their ground from above the WORLD, so the relief moves
-      // the start of that ray — see `setWorldRayStart`.
-      setWorldRayStart(fieldRange.max);
       return true;
     } catch {
       return false;
@@ -2566,7 +2604,6 @@ export function createGround(): Ground {
           if (r.max > fieldRange.max) fieldRange.max = r.max;
           if (r.min < fieldRange.min) fieldRange.min = r.min;
         }
-        setWorldRayStart(fieldRange.max);
         // The near pyramid is rebuilt from the tiles that now stand, through
         // `heightAt` itself — so the texture the vertex shader reads carries
         // the tile-first precedence and answers the same number every rule
@@ -2603,6 +2640,10 @@ export function createGround(): Ground {
     layerFmt = index;
     layerSig = index.sig || sig;
     layerIndexKeys = new Set<string>(index.tile_keys ?? []);
+    // The zone waters ride with the index (§ A19 no. 5). A room the bake never
+    // saw is simply not in the list — a guessed height would be the drape of
+    // old, so nothing is invented for it here either.
+    zoneWaters = index.waters ?? [];
     layerTiles.clear();
     setLayerTiles(layerTiles, layerFmt);
     setLayerOverview(index.overview ?? null);
@@ -2865,9 +2906,8 @@ export function createGround(): Ground {
       if (!hasRelief()) return null;
       const o = ray.ray.origin;
       const d = ray.ray.direction;
-      // The slab the march is clipped to is the field's own range — the same
-      // number the tile ray starts from (`setWorldRayStart`), and it only ever
-      // grows within a signature, so a ray never starts inside a hill it
+      // The slab the march is clipped to is the field's own range, and it only
+      // ever grows within a signature, so a ray never starts inside a hill it
       // cannot see.
       const hit = rayGroundHit(relief, o.x, o.y, o.z, d.x, d.y, d.z,
                                { minY: fieldRange.min, maxY: fieldRange.max });
