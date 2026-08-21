@@ -295,10 +295,10 @@ def spec_of(prop_id: str, **extra) -> dict:
     """The finished placement spec the payload carries for one placement."""
     recipe = {"room_id": "r1", "level": 0, "always_visible": True,
               "placements": [placement(prop_id, **extra)]}
-    # storey 0, slab 0: this smoke asserts the variant bookkeeping of the spec
-    # (`variants` / `model_variants` / `variant`), never its `bottom_y` — and
-    # the slab feeds nothing but that.
-    return _prop_models(recipe, 0.0, 0.0)[0]
+    # storey 0: this smoke asserts the variant bookkeeping of the spec
+    # (`variants` / `model_variants` / `variant`), never its `bottom_y`. The
+    # ``slab`` argument is gone with "Ein Boden" E5a — storey 0 has no plate.
+    return _prop_models(recipe, 0.0)[0]
 
 
 # ── Season fixture (E2c) ────────────────────────────────────────────────

@@ -33,9 +33,9 @@ def ground_y(x: float, z: float) -> float:
     """Ground height at (x, z) in WORLD metres — the authored relief (E8).
 
     Bilinear over the rastered heightfield; 0.0 wherever nothing was authored,
-    which is the whole world until someone paints a height area. The height of
-    a DETAIL SCENE is not in here — a location's own relief is a second field
-    on top of this one, and ``relief.ground_lift_at`` is where the two meet.
+    which is the whole world until someone paints a height area. Since "Ein
+    Boden" E5a there is NOTHING on top of it: a location has no height field of
+    its own any more, so this is ``h_final`` and the only ground there is.
     """
     from app.core.heightfield import world_height
     return world_height(x, z)

@@ -126,6 +126,69 @@ no key and reads back as the default.
 Index mode carries the table, the coarse overview and the tile keys; batch mode
 carries the tiles, capped at ``BATCH_MAX``. A key the index does not know is
 left out rather than answered empty.
+
+===========================================================================
+[10] LOCATION FLOORS ARE THE TOPMOST LAYERS ("Ein Boden" E5a, § G3/§ G5)
+===========================================================================
+A second fixture, two placed locations over one painted meadow, all of it in
+tile (0, 0):
+
+    PLAZA   pin (100, 100), yaw 0, boundary ±20  -> area 1600 m²
+            zone  "plaza"  local −10…10  -> world  90…110, floor "sand"
+            room  "hall"   local  −4…4   -> world  96…104, floor "wood"
+    HUT     pin  (98,  98), yaw 0, boundary ±3   -> area   36 m²
+            room  "hut"    local  −2…2   -> world  96…100, floor "tiles"
+    meadow  a painted terrain area over the whole tile
+
+THE LAYER TABLE grows past the terrain kinds — a floor kind is a
+SURFACE-library id, so "wood" and "tiles" are layers even though nobody
+painted them. Index 0 stays bare ground, the painted kinds follow sorted, then
+the floor kinds sorted by (kind, width):
+
+    0 grass (the default)   1 meadow      2 sand   3 tiles   4 wood
+
+and the ranks — bare, the painted area, then the floors in priority order
+(largest plot first, zones before closed rooms within a plot) — are
+
+    rank_layer == [0, 1, 2, 4, 3]
+      rank 1 meadow -> layer 1
+      rank 2 plaza  -> layer 2 (sand)
+      rank 3 hall   -> layer 4 (wood)
+      rank 4 hut    -> layer 3 (tiles)   <- the SMALLEST plot writes LAST
+
+THE FOUR PROBES, hand-derived from "the last containing entry wins":
+
+    (85, 85)   only the meadow                        -> 1
+    (92, 92)   meadow + plaza                         -> 2  (a FLOOR beats a
+                                                             painted area)
+    (102, 102) meadow + plaza + hall                  -> 4
+    (97, 97)   meadow + plaza + hall + hut            -> 3  (the 36 m² plot
+                                                             beats the 1600 m²
+                                                             one)
+
+THE TRANSITION WIDTH of a floor defaults to **0** — the hard cut — where a
+painted ground kind defaults to 1.5 m. A room may dial its own
+(``layout.edge_blend_m``), and a kind at two widths is two layers, because the
+width is what the shader reads out of the table.
+
+THE MASK CARRIES IT. On the row z = 102.25 (inside the hall, north of the hut)
+the boundary between plaza and hall sits at x = 96, exactly midway between the
+lattice samples at 95.75 (rank 2) and 96.25 (rank 3). Both texels therefore
+carry the SAME pair — A = the later-painted layer 4 (wood), B = layer 2 (sand)
+— and only the sign of the distance differs: −0.25 m outside, +0.25 m inside,
+i.e. codes 124 and 132.
+
+===========================================================================
+[11] THE MASK AND THE SCENE PAYLOAD AGREE ON THE SAME POLYGON
+===========================================================================
+``scene_recipe.compose_scene`` ships each storey-0 room in ``floor_plan`` as
+``polygon_world`` in the SCENE frame (local metres around the pin); the bake
+transforms the very same hull into world metres. Run the scene polygons through
+the ONE pin transform (``world_geometry.polygon_local_to_world``) and the two
+lists have to be the same points — asserted well inside a centimetre, which is
+the precision the plan coordinates are stored at. A yawed location is checked
+too: the transform is the only thing between the two, so if it were applied
+twice or not at all, 90° would show it.
 """
 
 import base64
@@ -195,6 +258,177 @@ def rect_boundary_distance(x, z, r):
     if dx == 0.0 and dz == 0.0:
         return min(x - x0, x1 - x, z - z0, z1 - z)
     return math.hypot(dx, dz)
+
+
+
+# ── The location-floor fixture (E5a) ────────────────────────────────────────
+
+def _room(room_id, x, y, w, d, floor, *, zone=False, blend=None):
+    lay = {"x": x, "y": y, "w": w, "d": d, "level": 0}
+    if floor:
+        lay["surfaces"] = {"floor": floor}
+    if zone:
+        lay["always_visible"] = True
+    if blend is not None:
+        lay["edge_blend_m"] = blend
+    return {"id": room_id, "name": room_id, "layout": lay}
+
+
+def _location(loc_id, x, z, half, rooms, yaw=0.0):
+    return {"id": loc_id, "pos_x": x, "pos_z": z, "yaw_deg": yaw,
+            "map3d": {"boundary": [[-half, -half], [half, -half],
+                                   [half, half], [-half, half]],
+                      "plan_width_m": 2 * half},
+            "rooms": rooms}
+
+
+PLAZA_LOC = _location("plaza_loc", 100.0, 100.0, 20.0, [
+    _room("plaza", -10.0, -10.0, 20.0, 20.0, "sand", zone=True),
+    _room("hall", -4.0, -4.0, 8.0, 8.0, "wood"),
+])
+HUT_LOC = _location("hut_loc", 98.0, 98.0, 3.0, [
+    _room("hut", -2.0, -2.0, 4.0, 4.0, "tiles"),
+])
+MEADOW = [{"id": "a_meadow", "kind": "meadow", "z_order": 0,
+           "polygon": [[0, 0], [256, 0], [256, 256], [0, 256]]}]
+FLOOR_CATALOG = {
+    "grass": {"kind": "grass", "surface": "grass", "meta": {}},
+    "meadow": {"kind": "meadow", "surface": "meadow", "meta": {}},
+}
+
+
+def test_location_floors():
+    print("\n[10] location floors are the topmost layers (E5a)")
+    floors = TL.world_floors([PLAZA_LOC, HUT_LOC], FLOOR_CATALOG, {})
+    check("the floors come in PRIORITY order: big plot first, zones before "
+          "closed rooms, smallest plot LAST",
+          [(f.location_id, f.room_id) for f in floors],
+          [("plaza_loc", "plaza"), ("plaza_loc", "hall"),
+           ("hut_loc", "hut")])
+    check("...and the input order does NOT decide it — the AREA does",
+          [(f.location_id, f.room_id) for f in
+           TL.world_floors([HUT_LOC, PLAZA_LOC], FLOOR_CATALOG, {})],
+          [("plaza_loc", "plaza"), ("plaza_loc", "hall"),
+           ("hut_loc", "hut")])
+    model = TL.LayerModel(MEADOW, FLOOR_CATALOG, "grass", floors)
+    check("the table grows past the painted kinds onto the FLOOR kinds",
+          [(l["index"], l["kind"]) for l in model.layers],
+          [(0, "grass"), (1, "meadow"), (2, "sand"), (3, "tiles"),
+           (4, "wood")])
+    check("a floor kind wears ITSELF as its surface (it IS a library id)",
+          [l["surface"] for l in model.layers],
+          ["grass", "meadow", "sand", "tiles", "wood"])
+    check("A FLOOR CUTS HARD (0 m) where a painted kind fringes (1.5 m)",
+          [l["edge_blend_m"] for l in model.layers],
+          [1.5, 1.5, 0.0, 0.0, 0.0])
+    check("the ranks map onto those layers", model.rank_layer, [0, 1, 2, 4, 3])
+
+    print("\n[10b] the four probes — the last containing entry wins")
+    check("only the painted meadow out at (85, 85)", model.layer_at(85.0, 85.0), 1)
+    check("A FLOOR BEATS A PAINTED AREA: the plaza's sand at (92, 92)",
+          model.layer_at(92.0, 92.0), 2)
+    check("a CLOSED room beats the zone it lies in: wood at (102, 102)",
+          model.layer_at(102.0, 102.0), 4)
+    check("THE SMALLEST PLOT WINS: the hut's tiles at (97, 97)",
+          model.layer_at(97.0, 97.0), 3)
+    # RED COUNTER-PROBES, one per rule.
+    check("red: were the plots ordered as they came, (97, 97) would be wood",
+          model.layer_at(97.0, 97.0) != 4, True)
+    check("red: without the floors the very same points are all meadow",
+          [TL.LayerModel(MEADOW, FLOOR_CATALOG, "grass").layer_at(x, z)
+           for x, z in ((92.0, 92.0), (97.0, 97.0), (102.0, 102.0))],
+          [1, 1, 1])
+    # THE YARD IS NOT A FLOOR (§ A13a) and a kindless ZONE paints nothing.
+    from app.models.world import GROUND_ROOM_ID
+    quiet = _location("quiet", 300.0, 300.0, 10.0, [
+        {"id": GROUND_ROOM_ID, "name": "", "layout": {
+            "x": -5.0, "y": -5.0, "w": 10.0, "d": 10.0, "level": 0,
+            "surfaces": {"floor": "sand"}}},
+        _room("open", -3.0, -3.0, 6.0, 6.0, "", zone=True),
+        _room("upstairs", -3.0, -3.0, 6.0, 6.0, "wood"),
+    ])
+    quiet["rooms"][2]["layout"]["level"] = 1
+    check("the yard, a kindless zone and a storey-1 room contribute nothing",
+          TL.world_floors([quiet], FLOOR_CATALOG, {}), [])
+    check("...while a CLOSED room that names no kind still has a floor",
+          [f.kind for f in TL.world_floors([_location("c", 400.0, 400.0, 5.0, [
+              _room("box", -2.0, -2.0, 4.0, 4.0, "")])], FLOOR_CATALOG, {})],
+          [TL.FLOOR_KIND_DEFAULT])
+    check("an UNPLACED location owns no world metre and colours none",
+          TL.world_floors([{"id": "nowhere", "rooms": [
+              _room("r", 0.0, 0.0, 2.0, 2.0, "wood")]}], FLOOR_CATALOG, {}), [])
+
+    print("\n[10c] the width is a property of the ROOM, and 0 is a value")
+    wide = _location("wide", 500.0, 500.0, 10.0, [
+        _room("soft", -5.0, -5.0, 10.0, 10.0, "sand", zone=True, blend=2.5)])
+    two = TL.LayerModel(MEADOW, FLOOR_CATALOG, "grass",
+                        TL.world_floors([PLAZA_LOC, wide], FLOOR_CATALOG, {}))
+    check("the SAME kind at two widths is two layers — the shader reads the "
+          "width out of the table",
+          sorted((l["kind"], l["edge_blend_m"]) for l in two.layers
+                 if l["kind"] == "sand"),
+          [("sand", 0.0), ("sand", 2.5)])
+    check("a dialled width is clamped and rounded like a catalog one",
+          [TL.floor_edge_blend_of({"edge_blend_m": v})
+           for v in (2.5, -1, 99, "wide", None)],
+          [2.5, 0.0, TL.EDGE_BLEND_MAX_M, 0.0, 0.0])
+
+    print("\n[10d] the mask carries the floor boundary")
+    tile = TL.tile_masks(model, 0, 0)
+    ids = base64.b64decode(tile["id"])
+    sd = base64.b64decode(tile["sd"])
+    id_n, sd_n = tile["id_size"], tile["sd_size"]
+
+    def pair(x, z):
+        k = (int(z // TL.ID_STEP_M) * id_n + int(x // TL.ID_STEP_M)) * 2
+        return (ids[k], ids[k + 1])
+
+    def dist(x, z):
+        return TL.decode_sd(sd[int(z // TL.SD_STEP_M) * sd_n
+                               + int(x // TL.SD_STEP_M)])
+
+    Z = 102.25          # inside the hall, north of the hut
+    check("plaza | hall at x = 96 carries ONE pair on both sides: (wood, sand)",
+          [pair(95.5, Z), pair(96.5, Z)], [(4, 2), (4, 2)])
+    q = 1.0 / TL.SD_CODES_PER_M
+    check("...0.25 m outside the hall", dist(95.75, Z), -4 * q, 1e-12)
+    check("...and 0.25 m inside it", dist(96.25, Z), 4 * q, 1e-12)
+    check("the index names the tile the floors reach into",
+          "0,0" in [TL._format_key(tx, tz) for tx, tz in TL.tile_index(model)],
+          True)
+
+
+def test_mask_and_scene_agree():
+    print("\n[11] the bake and the scene payload use ONE polygon")
+    from app.core.scene_recipe import compose_scene
+    from app.core.world_geometry import polygon_local_to_world
+    for yaw in (0.0, 90.0, 37.5):
+        loc = {**PLAZA_LOC, "yaw_deg": yaw}
+        scene = compose_scene(loc, plan_width_m=40.0)
+        plan = {f["room_id"]: f for f in scene["floor_plan"]}
+        baked = {f.room_id: f for f in TL.world_floors([loc], FLOOR_CATALOG,
+                                                       {})}
+        check(f"yaw {yaw}: the same two rooms on both sides",
+              sorted(plan), sorted(baked))
+        worst = 0.0
+        for room_id, entry in plan.items():
+            turned = polygon_local_to_world(entry["polygon_world"],
+                                            loc["pos_x"], loc["pos_z"], yaw)
+            other = baked[room_id].polygon
+            for (ax, az), (bx, bz) in zip(turned, other):
+                worst = max(worst, abs(ax - bx), abs(az - bz))
+        check(f"yaw {yaw}: point for point, well inside a centimetre",
+              worst < 0.01, True)
+        print(f"       measured worst: {worst:.6f} m")
+        check(f"yaw {yaw}: the kinds agree as well",
+              {r: e["floor_kind"] for r, e in plan.items()},
+              {r: f.kind for r, f in baked.items()})
+    # RED COUNTER-PROBE: forget the pin transform and a location 100 m out is
+    # 100 m wrong — so the agreement above is the transform, not a tautology.
+    raw = compose_scene(PLAZA_LOC, plan_width_m=40.0)["floor_plan"][0]
+    baked0 = TL.world_floors([PLAZA_LOC], FLOOR_CATALOG, {})[0]
+    check("red: the scene frame is NOT the world frame — the pin is 100 m out",
+          abs(raw["polygon_world"][0][0] - baked0.polygon[0][0]) > 99.0, True)
 
 
 def main():
@@ -390,6 +624,9 @@ def main():
     check("the query parser is the height tiles' own, capped at BATCH_MAX",
           len(TL.parse_keys(",".join(f"{i}:0" for i in range(40)))),
           TL.BATCH_MAX)
+
+    test_location_floors()
+    test_mask_and_scene_agree()
 
     print("\n[9] the RED counter-probes")
     # (a) THE CANONICAL ORDER. Pair the layers by "the one I am standing on"

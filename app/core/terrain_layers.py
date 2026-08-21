@@ -37,11 +37,25 @@ painting the areas in that order, so "who is on top" is a comparison of two
 integers and the picture and the rules cannot disagree about it. Asserted at 500
 lattice probes in `scripts/smoke_terrain_layers.py`.
 
+A LOCATION'S LEVEL-0 FLOORS ARE LAYERS TOO ("Ein Boden" E5, § G3/§ G5). Since
+E5a the plate era is over on storey 0: an open zone's sand and a closed room's
+parquet are not geometry laid over the ground, they are the ground's TOPMOST
+LAYER — the same mask, the same cut, the same width dial. Priority, from the
+bottom up: painted terrain areas, then a location's open zones, then its closed
+rooms; between two overlapping locations the SMALLER one wins (the containment
+law ``location_at_point`` already resolves nesting by). The yard (``is_ground``,
+§ A13a) contributes nothing at all — it IS the plateau ground under everything
+else. The transition width of a floor is the ROOM's own ``layout.edge_blend_m``
+and its default is **0**, the hard cut: a floor ends on the metre it was drawn
+on, which is the user's rule for floors and the opposite of a painted meadow's
+1.5 m fringe.
+
 WATER IS A LAYER HERE. A kind flagged `meta.water` gets its own layer index like
 any other, because the mask is the truth about "which ground is at this point"
 for the undergrowth gate and for the priority. What the water SURFACE looks like
-is not this module's business — until E4 the client keeps drawing its ripple
-drape over the mask and paints the lake bed underneath.
+is not this module's business — the index answers it with the ``waters`` list
+(polygon + mirror height), the same shape a painted lake carries, so a client
+renders a room's pond with the machinery it renders a lake with.
 
 PURE AND DETERMINISTIC. Everything below is a function of (areas, catalog,
 default kind); the model and the tiles are cached per :func:`layers_sig`, the
@@ -55,7 +69,8 @@ import json
 import math
 from array import array
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import (Any, Dict, List, NamedTuple, Optional, Sequence,
+                    Tuple)
 
 from app.core.log import get_logger
 
@@ -172,11 +187,232 @@ def edge_blend_of(entry: Optional[Dict[str, Any]]) -> float:
     return EDGE_BLEND_DEFAULT_M if value is None else value
 
 
+# ── Location floors: the topmost layers ─────────────────────────────────────
+
+#: THE TRANSITION WIDTH OF A FLOOR, in metres, when the room does not name one
+#: — and it is **0**, the hard cut, where a painted ground kind defaults to a
+#: 1.5 m fringe. A floor is drawn, not grown: parquet ends at the wall, a paved
+#: yard ends at its kerb, and a room whose sand should run out into the beach
+#: says so by dialling ``layout.edge_blend_m`` up.
+FLOOR_EDGE_BLEND_DEFAULT_M = 0.0
+
+#: The floor kind of a CLOSED room that names none. The twin of
+#: ``scene_recipe.DEFAULT_FLOOR_KIND``: a room with walls has a floor, and if
+#: nobody said which one it is still not the meadow outside. An open ZONE that
+#: names no kind contributes no layer at all — there the terrain is the answer.
+FLOOR_KIND_DEFAULT = "floor"
+
+
+class Floor(NamedTuple):
+    """ONE level-0 floor polygon of ONE location, in WORLD metres.
+
+    The unit the bake, the zone-water carve and the scene payload's
+    ``floor_plan`` all speak: the room's own hull (``room_recipe``'s, never a
+    second derivation), the kind it wears, whether it is a closed room or an
+    open zone, its transition width and — for a water floor — the mirror the
+    author asked for (``None`` = derive it).
+    """
+    location_id: str
+    room_id: str
+    polygon: List[List[float]]
+    kind: str
+    closed: bool
+    edge_blend_m: float
+    water: bool
+    water_level: Optional[float]
+    water_depth_m: float
+    shore_ramp_m: float
+
+
+def floor_edge_blend_of(layout: Any) -> float:
+    """One room's transition width, in metres — ``layout.edge_blend_m``.
+
+    Same clamp as a ground kind's (:func:`sanitize_edge_blend`, 0…8 m, 0 is a
+    VALUE), only the default differs: a floor's is the hard cut.
+    """
+    if not isinstance(layout, dict):
+        return FLOOR_EDGE_BLEND_DEFAULT_M
+    value = sanitize_edge_blend(layout.get(EDGE_BLEND_KEY))
+    return FLOOR_EDGE_BLEND_DEFAULT_M if value is None else value
+
+
+def floor_water_meta(layout: Any) -> Tuple[Optional[float], float, float]:
+    """``(water_level | None, depth_m, shore_ramp_m)`` of a water FLOOR.
+
+    THE SAME READER THE PAINTED LAKES USE (``heightfield.water_meta``), fed the
+    room's ``layout`` instead of an area's ``meta`` — the three numbers have the
+    same names, the same defaults and the same clamps in both places, and a
+    second spelling of them is a second lake physics nobody asked for. A missing
+    ``water_level`` answers None and the bake derives one (§ G4).
+    """
+    from app.core.heightfield import water_meta
+    return water_meta({"meta": layout if isinstance(layout, dict) else {}})
+
+
+def floor_kind_of(source: Any, closed: bool) -> str:
+    """WHAT THE GROUND WEARS in one room — the kind rule, spelled once.
+
+    ``source`` is the room's ``layout`` or the composed recipe; both carry the
+    same ``surfaces.floor``. Two answers where the author named nothing:
+
+    * a CLOSED room gets :data:`FLOOR_KIND_DEFAULT`. A room with walls has a
+      floor whether or not anybody named it, and it is not the meadow outside —
+      that is the whole point of the stage ("parquet under the furniture");
+    * an open ZONE gets the empty string, i.e. NO layer at all. A zone without
+      a kind is a place to stand, not a material, and the terrain under it is
+      the honest picture.
+
+    Read by the bake (:func:`location_floors`) and by the scene payload's
+    ``floor_plan`` (``scene_recipe._floor_plan``) — one rule, so the material of
+    the ground and the material a consumer is told about cannot differ.
+    """
+    kind = str((((source or {}).get("surfaces") or {}).get("floor")) or "").strip()
+    if kind:
+        return kind
+    return FLOOR_KIND_DEFAULT if closed else ""
+
+
+def is_water_floor(kind: str, catalog: Optional[Dict[str, Dict[str, Any]]],
+                   surface_classes: Optional[Dict[str, str]] = None) -> bool:
+    """Is this FLOOR kind a water surface? Two catalogs, never the name.
+
+    A floor kind is a SURFACE-library id (``surfaces.floor``), which a terrain
+    kind only sometimes is. So the question is asked of both books, in the order
+    of specificity:
+
+    1. the terrain catalog's ``meta.water`` (``terrain_types.is_water_kind``) —
+       the flag § G4 gave painted lakes;
+    2. the surface library's material CLASS (``water``/``ice``), which is the
+       very predicate the renderers decide a rippling surface by
+       (``@anima/scene-render`` ``isWaterClass``).
+
+    ``surface_classes`` maps a surface id to its declared material class and is
+    handed in so this module stays pure; absent, only the terrain catalog is
+    asked.
+    """
+    from app.core.terrain_types import is_water_kind
+    kind = (kind or "").strip()
+    if not kind:
+        return False
+    if catalog is not None and is_water_kind(kind, catalog):
+        return True
+    cls = str((surface_classes or {}).get(kind) or "").strip().lower()
+    return cls in ("water", "ice")
+
+
+def location_floors(loc: Dict[str, Any],
+                    catalog: Optional[Dict[str, Dict[str, Any]]] = None,
+                    surface_classes: Optional[Dict[str, str]] = None,
+                    ) -> List[Floor]:
+    """The level-0 floor polygons of ONE placed location, in PRIORITY ORDER.
+
+    Zones first, closed rooms after — that is the § G3 order ("terrain areas <
+    zone floors < closed-room floors"), and within each group the rooms keep the
+    order the location stores them in, which is the order the 2D plan paints
+    them in. The last one containing a point wins, exactly as with painted
+    areas.
+
+    THREE KINDS OF ROOM, THREE ANSWERS:
+
+    * an open ZONE (``always_visible``) contributes its ``surfaces.floor`` — and
+      NOTHING when it declares none: a zone without a kind is a place to stand,
+      not a material, and the terrain under it is the honest picture (that is
+      what the renderers already did with a kindless zone plate);
+    * a CLOSED room contributes its ``surfaces.floor`` or
+      :data:`FLOOR_KIND_DEFAULT` — a room with walls has a floor, whether or not
+      anybody named it. This is the whole point of the stage: parquet under the
+      furniture instead of grass;
+    * the YARD (``is_ground``, § A13a) contributes nothing. It is not a floor
+      laid on the ground, it IS the ground of the plot — and on a built location
+      that ground is the plateau the bake already stamped.
+
+    Only storey 0 is asked. Storeys above and below stay scene geometry (§ G5);
+    they have plates and this module has no third dimension to put them in.
+
+    An UNPLACED location (no pin, no drawn boundary) yields nothing: it owns no
+    square metre of world, so it can colour none.
+    """
+    from app.core.world_geometry import (effective_boundary,
+                                         polygon_local_to_world)
+    from app.core.room_recipe import room_outline_local
+    from app.models.world import GROUND_ROOM_ID
+    eff = effective_boundary(loc)
+    if eff is None:
+        return []
+    cx, cz, yaw, _pts = eff
+    loc_id = str(loc.get("id") or "")
+    zones: List[Floor] = []
+    rooms: List[Floor] = []
+    for room in (loc.get("rooms") or []):
+        if not isinstance(room, dict):
+            continue
+        room_id = str(room.get("id") or "")
+        if room_id == GROUND_ROOM_ID:
+            continue                      # the yard IS the ground (§ A13a)
+        lay = room.get("layout")
+        if not isinstance(lay, dict):
+            continue
+        try:
+            if int(lay.get("level") or 0) != 0:
+                continue                  # a storey keeps its plate (§ G5)
+        except (TypeError, ValueError):
+            continue
+        outline = room_outline_local(lay)
+        if len(outline) < 3:
+            continue
+        world = polygon_local_to_world(outline, cx, cz, yaw)
+        if world is None or len(world) < 3:
+            continue
+        closed = not bool(lay.get("always_visible"))
+        kind = floor_kind_of(lay, closed)
+        if not kind:
+            continue                      # a kindless zone paints nothing
+        water = is_water_floor(kind, catalog, surface_classes)
+        level, depth, ramp = floor_water_meta(lay)
+        entry = Floor(location_id=loc_id, room_id=room_id,
+                      polygon=[[float(x), float(z)] for x, z in world],
+                      kind=kind, closed=closed,
+                      edge_blend_m=floor_edge_blend_of(lay),
+                      water=water,
+                      water_level=(level if water else None),
+                      water_depth_m=depth, shore_ramp_m=ramp)
+        (rooms if closed else zones).append(entry)
+    return zones + rooms
+
+
+def world_floors(locations: Sequence[Dict[str, Any]],
+                 catalog: Optional[Dict[str, Dict[str, Any]]] = None,
+                 surface_classes: Optional[Dict[str, str]] = None,
+                 ) -> List[Floor]:
+    """Every location's level-0 floors, in ONE priority order.
+
+    LARGEST PLOT FIRST, so the SMALLEST writes last and wins — the containment
+    law of ``world_geometry.location_at_point`` and of the plateau stamps
+    (``heightfield._build_plateaus``), spelled here for the material of the
+    ground. A hut inside a village square paints its floor over the square's,
+    never the other way round, and neither of them needs a z-order.
+
+    ``sorted`` is stable, so two plots of equal area keep the order the world
+    handed them out in.
+    """
+    ranked: List[Tuple[float, int, Dict[str, Any]]] = []
+    from app.core.world_geometry import boundary_area_m2
+    for pos, loc in enumerate(locations or []):
+        if not isinstance(loc, dict):
+            continue
+        ranked.append((-boundary_area_m2(loc), pos, loc))
+    out: List[Floor] = []
+    for _neg_area, _pos, loc in sorted(ranked, key=lambda e: (e[0], e[1])):
+        out.extend(location_floors(loc, catalog, surface_classes))
+    return out
+
+
 # ── The layer table ─────────────────────────────────────────────────────────
 
 def layer_table(areas: Sequence[Dict[str, Any]],
                 catalog: Dict[str, Dict[str, Any]],
-                default_kind: str) -> List[Dict[str, Any]]:
+                default_kind: str,
+                floors: Sequence[Floor] = ()) -> List[Dict[str, Any]]:
     """The layers of this world, index 0 first — INDEX 0 IS BARE GROUND.
 
     Index 0 is the world's default kind (`game.default_terrain_kind`), i.e. the
@@ -187,34 +423,60 @@ def layer_table(areas: Sequence[Dict[str, Any]],
     between the default ground and itself, and a second slice of the same
     texture would be VRAM for a cut nobody can see.
 
+    THEN THE FLOOR KINDS (E5a), and the table stops being a list of terrain
+    kinds: a room's ``surfaces.floor`` is a surface-library id and may be a
+    material no painted area of this world uses. It is sorted the same way, and
+    it appears exactly once per (kind, WIDTH) pair — the width is what the
+    shader reads out of the table, so two rooms that wear the same parquet with
+    two different transitions really are two layers. A floor whose kind AND
+    width already exist as a terrain layer maps back onto it, for the same
+    reason a default-kind shape maps back onto 0.
+
     Each entry carries what a renderer needs and nothing else: the ``kind`` (for
     logs and for the undergrowth gate), the ``surface`` the type wears (the
-    library id, `terrain_types` — NEVER the kind's spelling), the transition
-    width and whether the kind is water.
+    library id, `terrain_types` — NEVER the kind's spelling; a floor kind IS its
+    own surface id), the transition width and whether the kind is water.
     """
     from app.core.terrain_types import is_water_kind
     default_kind = (default_kind or "").strip()
-    kinds = [default_kind]
-    seen = {default_kind}
-    for kind in sorted({str(a.get("kind") or "").strip() for a in (areas or [])}):
-        if not kind or kind in seen:
-            continue
-        seen.add(kind)
-        kinds.append(kind)
     out: List[Dict[str, Any]] = []
-    for index, kind in enumerate(kinds[:MAX_LAYERS]):
+    seen: Dict[Tuple[str, float], int] = {}
+    overflow = 0
+
+    def add(kind: str, surface: str, blend: float, water: bool) -> None:
+        nonlocal overflow
+        key = (kind, round(float(blend), 2))
+        if key in seen:
+            return
+        if len(out) >= MAX_LAYERS:
+            overflow += 1
+            return
+        seen[key] = len(out)
+        out.append({"index": len(out), "kind": kind, "surface": surface,
+                    "edge_blend_m": key[1], "water": water})
+
+    entry = catalog.get(default_kind)
+    add(default_kind, str((entry or {}).get("surface") or "").strip(),
+        edge_blend_of(entry), bool(is_water_kind(default_kind, catalog)))
+    for kind in sorted({str(a.get("kind") or "").strip()
+                        for a in (areas or [])}):
+        if not kind:
+            continue
         entry = catalog.get(kind)
-        out.append({
-            "index": index,
-            "kind": kind,
-            "surface": str((entry or {}).get("surface") or "").strip(),
-            "edge_blend_m": edge_blend_of(entry),
-            "water": bool(is_water_kind(kind, catalog)),
-        })
-    if len(kinds) > MAX_LAYERS:
-        logger.warning("terrain layers: %d kinds painted, only the first %d "
-                       "get a layer — the rest render as bare ground",
-                       len(kinds), MAX_LAYERS)
+        add(kind, str((entry or {}).get("surface") or "").strip(),
+            edge_blend_of(entry), bool(is_water_kind(kind, catalog)))
+    for kind, blend, water in sorted({(f.kind, round(f.edge_blend_m, 2),
+                                       f.water) for f in (floors or [])}):
+        # A FLOOR IS ITS OWN SURFACE. ``surfaces.floor`` names a library entry
+        # directly, where a terrain type points at one through its ``surface``
+        # field — so a floor kind that the terrain catalog does not know wears
+        # itself, and one it does know keeps the terrain type's own surface.
+        entry = catalog.get(kind)
+        surface = str((entry or {}).get("surface") or "").strip() or kind
+        add(kind, surface, blend, water)
+    if overflow:
+        logger.warning("terrain layers: %d layer(s) past the ceiling of %d "
+                       "render as bare ground", overflow, MAX_LAYERS)
     return out
 
 
@@ -248,14 +510,24 @@ class LayerModel:
     IS the priority (a higher rank was painted later, so it wins), and the layer
     index of a rank is a lookup — which is what lets the bake decide "who is on
     top" with an integer comparison while the payload still speaks in layers.
+
+    THE LOCATION FLOORS TAKE THE RANKS ABOVE THE AREAS (E5a). They are appended
+    after the painted shapes in the order :func:`world_floors` puts them in, so
+    "the last containing entry wins" is the WHOLE priority rule — there is no
+    second mechanism, no z-order and no special case for a room. What makes a
+    floor beat a meadow is that it comes later in one list.
     """
 
     def __init__(self, areas: Sequence[Dict[str, Any]],
                  catalog: Optional[Dict[str, Dict[str, Any]]],
-                 default_kind: str):
+                 default_kind: str,
+                 floors: Sequence[Floor] = ()):
         catalog = catalog or {}
-        self.layers = layer_table(areas, catalog, default_kind)
-        by_kind = {entry["kind"]: entry["index"] for entry in self.layers}
+        floors = list(floors or [])
+        self.layers = layer_table(areas, catalog, default_kind, floors)
+        by_kind: Dict[Tuple[str, float], int] = {
+            (entry["kind"], round(float(entry["edge_blend_m"]), 2)):
+            entry["index"] for entry in self.layers}
         #: rank -> layer index. Rank 0 is bare ground, i.e. layer 0.
         self.rank_layer: List[int] = [0]
         #: rank -> (parsed ring, world box). Index 0 is a placeholder for the
@@ -263,6 +535,10 @@ class LayerModel:
         self.rings: List[Optional[List[Tuple[float, float]]]] = [None]
         self.boxes: List[Tuple[float, float, float, float]] = [
             (math.inf, math.inf, -math.inf, -math.inf)]
+        #: rank -> the floor it came from, for the ranks that are floors. The
+        #: painted areas are absent from it, which is what "is this rank a
+        #: room's floor" is asked with.
+        self.floor_by_rank: Dict[int, Floor] = {}
         for area in (areas or []):
             ring = _ring(area.get("polygon"))
             if ring is None:
@@ -270,10 +546,23 @@ class LayerModel:
                 # take a rank either, or the ranks would stop being the order the
                 # DB handed out.
                 continue
-            self.rank_layer.append(by_kind.get(
-                str(area.get("kind") or "").strip(), 0))
+            kind = str(area.get("kind") or "").strip()
+            entry = catalog.get(kind)
+            self.rank_layer.append(
+                by_kind.get((kind, round(edge_blend_of(entry), 2)), 0))
             self.rings.append(ring)
             self.boxes.append(_ring_box(ring))
+        self.floors: List[Floor] = []
+        for floor in floors:
+            ring = _ring(floor.polygon)
+            if ring is None:
+                continue
+            self.floor_by_rank[len(self.rings)] = floor
+            self.rank_layer.append(
+                by_kind.get((floor.kind, round(floor.edge_blend_m, 2)), 0))
+            self.rings.append(ring)
+            self.boxes.append(_ring_box(ring))
+            self.floors.append(floor)
 
     # ── point queries (the scalar twin of the raster) ───────────────────────
 
@@ -699,15 +988,59 @@ TILE_CACHE_MAX = 32
 BATCH_MAX = 16
 
 
+def surface_classes() -> Dict[str, str]:
+    """``surface id -> declared material class`` out of the surface library.
+
+    The second book :func:`is_water_floor` reads. It is a small dict of the
+    kinds an author gave a material to at all (matte kinds leave no entry), so
+    building it per signature costs one file read.
+    """
+    from app.core.surface_textures import get_kind_meta
+    out: Dict[str, str] = {}
+    for kind, meta in (get_kind_meta() or {}).items():
+        cls = ((meta or {}).get("material") or {}).get("class")
+        if isinstance(cls, str) and cls.strip():
+            out[str(kind)] = cls.strip().lower()
+    return out
+
+
+def floors_basis() -> List[Dict[str, Any]]:
+    """What the LOCATION FLOORS of this world are made of, in hashable form.
+
+    Deliberately the RAW inputs and not the composed polygons: composing them
+    means running the room transform over every hull of every location, and this
+    is asked once per request. Everything a floor is a function of rides along —
+    the pin (a moved or turned location moves its floors with it) and the whole
+    ``layout`` blob of every room (its rectangle, its outline, its curves, its
+    rotation, its ``surfaces.floor``, its ``always_visible``, its width and its
+    water level).
+    """
+    from app.models.world import list_locations
+    out: List[Dict[str, Any]] = []
+    for loc in list_locations():
+        rooms = [(str(r.get("id") or ""), r.get("layout"))
+                 for r in (loc.get("rooms") or [])
+                 if isinstance(r, dict) and isinstance(r.get("layout"), dict)]
+        if not rooms:
+            continue
+        out.append({"id": loc.get("id"), "x": loc.get("pos_x"),
+                    "z": loc.get("pos_z"), "yaw": loc.get("yaw_deg"),
+                    "boundary": (loc.get("map3d") or {}).get("boundary"),
+                    "rooms": sorted(rooms)})
+    return out
+
+
 def layers_sig() -> str:
-    """Signature over everything the cut is made of — areas, catalog, default.
+    """Signature over everything the cut is made of — areas, catalog, default,
+    and since E5a the LOCATION FLOORS.
 
     It is NOT `terrain_sig`, deliberately. That one hashes the scatter
     enrichment as well (prop variants, prop heights), so a prop gaining a low
     mesh would throw away every baked mask in the process for a picture that
-    cannot change. This hashes the four things a mask really depends on: the
-    polygons, their order, the surface + width + water flag of every kind, and
-    which kind the unpainted world is.
+    cannot change. This hashes the five things a mask really depends on: the
+    polygons, their order, the surface + width + water flag of every kind, which
+    kind the unpainted world is, and every placed room floor
+    (:func:`floors_basis`).
 
     The CLIENT still refetches on `terrain_sig` — that is the signature the
     worldmap poll carries, and it moves whenever this one does.
@@ -724,6 +1057,8 @@ def layers_sig() -> str:
                       "blend": edge_blend_of(v),
                       "water": bool((v.get("meta") or {}).get("water"))}
                   for k, v in catalog.items()},
+        "floors": floors_basis(),
+        "surface_classes": surface_classes(),
     }, sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
 
@@ -738,18 +1073,27 @@ def world_model() -> LayerModel:
     from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
     from app.models.terrain import list_areas
-    model = LayerModel(list_areas(), effective_catalog(), default_kind())
+    from app.models.world import list_locations
+    catalog = effective_catalog()
+    model = LayerModel(list_areas(), catalog, default_kind(),
+                       world_floors(list_locations(), catalog,
+                                    surface_classes()))
     _MODEL = (sig, model)
     return model
 
 
-def get_tile(tx: int, tz: int) -> Dict[str, Any]:
+def get_tile(tx: int, tz: int, sig: Optional[str] = None) -> Dict[str, Any]:
     """One baked tile, kept in an LRU keyed by signature AND position.
 
     **The returned dict is SHARED — treat it as read-only**, the rule
     `heightfield.get_tile` states for the same reason.
+
+    ``sig`` may be handed in by a caller that has already read it (a batch reads
+    it ONCE, before the first tile is baked) — the signature now hashes every
+    placed room layout in the world, so asking for it per tile of a sixteen-tile
+    batch would be sixteen passes over the location table.
     """
-    sig = layers_sig()
+    sig = layers_sig() if sig is None else sig
     key = (sig, int(tx), int(tz))
     tile = _TILES.get(key)
     if tile is not None:
@@ -781,6 +1125,46 @@ def _format_key(tx: int, tz: int) -> str:
     return f"{tx},{tz}"
 
 
+def waters_payload(model: LayerModel) -> List[Dict[str, Any]]:
+    """Every ZONE WATER of the world as a surface a renderer can draw (E5a).
+
+    A room whose floor kind is water is a lake with a room id: it carves its bed
+    like a painted one (``heightfield``'s zone-water stamp) and it wants the same
+    flat mirror over it. So it travels in the same shape a painted lake does —
+    ``polygon`` in WORLD metres, ``water_level_effective`` in world y — and a
+    client renders both with one routine instead of inventing a second water.
+
+    The mirror is read off the HEIGHT model, because that is who decided it: the
+    author's ``layout.water_level`` where there is one, otherwise the plateau of
+    a built location or the rim median of a natural one. A room the bake never
+    saw (an unplaced location, a world without a heightfield) is left out rather
+    than given a guessed height — a plane at the wrong y is the drape of old.
+    """
+    if not model.floors:
+        return []
+    try:
+        from app.core.heightfield import world_model as height_model
+        levels = height_model().zone_water_level_by_room
+    except Exception:                       # noqa: BLE001 — no field, no water
+        logger.warning("terrain layers: no height model — zone waters have no "
+                       "mirror and are left out", exc_info=True)
+        return []
+    out: List[Dict[str, Any]] = []
+    for floor in model.floors:
+        if not floor.water:
+            continue
+        level = levels.get((floor.location_id, floor.room_id))
+        if level is None:
+            continue
+        out.append({"location_id": floor.location_id,
+                    "room_id": floor.room_id,
+                    "kind": floor.kind,
+                    "polygon": [[round(x, 3), round(z, 3)]
+                                for x, z in floor.polygon],
+                    "water_level_effective": round(float(level), 3)})
+    return out
+
+
 def index_payload() -> Dict[str, Any]:
     """The INDEX answer of ``GET /play/terrain-layers`` (no ``keys``)."""
     global _INDEX
@@ -790,11 +1174,13 @@ def index_payload() -> Dict[str, Any]:
         model = world_model()
         cached = (sig, tile_index(model), overview_mask(model))
         _INDEX = cached
+    model = world_model()
     return {
         **_format_block(sig),
-        "layers": world_model().layers,
+        "layers": model.layers,
         "overview": cached[2],
         "tile_keys": [_format_key(tx, tz) for tx, tz in cached[1]],
+        "waters": waters_payload(model),
     }
 
 
@@ -807,14 +1193,14 @@ def batch_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
     poll corrects) rather than stale ones labelled current.
     """
     sig = layers_sig()
-    index = set(tile_index(world_model()))
+    model = world_model()
+    index = set(tile_index(model))
     tiles: Dict[str, Any] = {}
     for tx, tz in keys:
         if (tx, tz) not in index:
             continue
-        tiles[_format_key(tx, tz)] = get_tile(tx, tz)
-    return {**_format_block(sig), "layers": world_model().layers,
-            "tiles": tiles}
+        tiles[_format_key(tx, tz)] = get_tile(tx, tz, sig)
+    return {**_format_block(sig), "layers": model.layers, "tiles": tiles}
 
 
 def _format_block(sig: str) -> Dict[str, Any]:

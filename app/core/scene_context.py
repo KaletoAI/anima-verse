@@ -695,10 +695,13 @@ def _dim(dims: Dict[str, Any], long_key: str, short_key: str,
 
 def _floor_datum(scene: Dict[str, Any], room_id: str) -> float:
     """The floor a room's placements stand on, in scene metres — the room's
-    own plate top, else the storey-0 level plate (the ground room, § A13a,
-    draws none of its own), else 0.0 for a location that draws no floor at
-    all. Read off the payload, never recomputed: the composer already
-    decided it (``scene_recipe._plate_top``)."""
+    own plate top, else the level plate of storey 0, else 0.0.
+
+    Read off the payload, never recomputed: the composer already decided it
+    (``scene_recipe._plate_top``). Since "Ein Boden" E5a storey 0 ships NO
+    plates at all, so a room on the ground falls through to 0.0 — which is the
+    right answer there, because the terrain IS its floor and the ground sampler
+    measures from exactly that."""
     plates = [p for p in (scene.get("plates") or []) if isinstance(p, dict)]
     for plate in plates:
         if str(plate.get("room_id") or "") == str(room_id) and room_id:
@@ -1238,11 +1241,10 @@ def _hex_rgb(value: Any, fallback: Vec3) -> Vec3:
 def _load_inputs(location_id: str, target: Dict[str, Any]):
     """Everything the composer needs, straight from the world DB and stores."""
     from app.core.location_model3d import derive_plan_width_m, get_client_meta
-    from app.core.relief import scene_ground_lift
     from app.core.room_recipe import compose_recipe
     from app.core.scene_recipe import compose_scene
     from app.core.surface_textures import library_kinds
-    from app.core.world_geometry import local_to_world
+    from app.core.world_geometry import ground_y, local_to_world
     from app.models.world import get_location_by_id
 
     loc = get_location_by_id(location_id)
@@ -1268,8 +1270,21 @@ def _load_inputs(location_id: str, target: Dict[str, Any]):
     yaw = float(loc.get("yaw_deg") or 0.0)
 
     def height_at(lx: float, lz: float) -> float:
+        """The ground in the scene frame, RELATIVE TO THE PIN.
+
+        ONE ground since "Ein Boden" E5a: the world height field, measured
+        against its own value under the pin — which is what the scene frame's
+        y = 0 is. It used to be the location's own 17 x 17 scene relief
+        (``relief.scene_ground_lift``), a second field the world knew nothing
+        about; that is deleted (user decision 1). Under a BUILT location the
+        bake has planed the plot flat, so this is 0 everywhere on it and the
+        patch is level, exactly as the old relief-less case was.
+        """
         wx, wz = local_to_world(lx, lz, cx, cz, yaw)
-        return scene_ground_lift(loc, wx, wz)
+        try:
+            return float(ground_y(wx, wz)) - float(ground_y(cx, cz))
+        except Exception:                   # pragma: no cover - no heightfield
+            return 0.0
 
     placements = None
     room_id = str(target.get("room_id") or "")

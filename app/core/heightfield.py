@@ -203,9 +203,8 @@ def sample_height(field: Optional[Dict[str, Any]], x: float, z: float) -> float:
     ``heights[0][0]``), ``step_m``, ``rows``/``cols`` and ``heights[j][i]``,
     the height at ``(origin_x + i·step, origin_z + j·step)``.
 
-    Grid fraction, then cell and mix — the very formula the scene sampler uses
-    (``scatter_curves.terrain_height`` / ``sampleTerrain``), only with a world
-    origin instead of a plan fraction::
+    Grid fraction, then cell and mix — the very formula every renderer samples
+    the ground with (``@anima/scene-render`` ``sampleWorldHeight``)::
 
         fx = clamp((x − origin_x) / step, 0, cols − 1)
         i  = min(floor(fx), cols − 2),   tx = fx − i        (fz/j/tz likewise)
@@ -366,8 +365,8 @@ def relief_params(kind: str, entry: Any
 def lattice_noise(seed: int, u: int, v: int) -> float:
     """One lattice corner of the noise field, in [−1, 1).
 
-    THE FORMULA OF THE OLD SCENE RELIEF, deliberately unchanged
-    (``scatter_curves.terrain_grid``, whose constants are imported rather than
+    THE FORMULA OF THE OLD SCENE RELIEF, deliberately unchanged (its two
+    spatial-hash primes are imported from ``scatter_curves`` rather than
     copied): one xorshift32 draw seeded with the spatial hash of the corner::
 
         rnd(u, v) = XorShift32((seed + u·73856093 + v·19349663) mod 2**32)
@@ -779,6 +778,18 @@ WaterStamp = Tuple[List[List[float]], Tuple[float, float, float, float],
 PlateauStamp = Tuple[float, float, float, List[Tuple[float, float]],
                      Tuple[float, float, float, float], float, float]
 
+#: One ZONE WATER as it is handed IN (E5a, § G4 for room floors): the location
+#: and room it belongs to, its polygon in WORLD metres, the authored mirror
+#: (``None`` = derive it) and the two shape numbers. It is what
+#: ``models.heightfield.placed_zone_waters`` reads out of the room layouts.
+ZoneWaterInput = Tuple[str, str, List[List[float]], Optional[float],
+                       float, float]
+
+#: …and as it is STAMPED: the (location, room) key, the polygon, its box, the
+#: settled mirror, the depth and the shore ramp.
+ZoneWaterStamp = Tuple[Tuple[str, str], List[List[float]],
+                       Tuple[float, float, float, float], float, float, float]
+
 
 def water_meta(area: Dict[str, Any]) -> Tuple[Optional[float], float, float]:
     """``(water_level | None, depth_m, shore_ramp_m)`` of a painted water area.
@@ -944,7 +955,14 @@ class HeightModel:
        :meth:`natural` under the footprint and whose ramp width is widened
        against the rim step — again read from the landscape before any stamp,
        so two neighbouring places cannot answer differently depending on which
-       order the DB returned them in.
+       order the DB returned them in;
+    4. the ZONE WATER stamps (E5a) — a room whose floor kind is water — whose
+       default mirror is the median of the height AFTER the plateaus along
+       their own rim. **They carve LAST, and that is the whole reason they are
+       a fourth stage rather than more entries in stage 2:** a pond inside a
+       built location lies on a plot the plateau stamp planes flat, and a carve
+       run before that stamp would be planed away again. After it, the same
+       ``min`` law holds against the same invariant.
 
     Both stamp geometries are computed ONCE here, never per point: they are
     properties of the WORLD, not of whatever window somebody is rastering.
@@ -958,7 +976,8 @@ class HeightModel:
     def __init__(self, areas: Sequence[Dict[str, Any]] = (),
                  terrain_areas: Sequence[Dict[str, Any]] = (),
                  terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-                 footprints: Sequence["Footprint"] = ()):
+                 footprints: Sequence["Footprint"] = (),
+                 zone_waters: Sequence[ZoneWaterInput] = ()):
         self.boxes: List[AreaBox] = area_boxes(areas)
         self._area_index = _BoxIndex([b for _a, b in self.boxes])
         # (ring, height_m, falloff_m) per height area, parsed ONCE.
@@ -1001,6 +1020,14 @@ class HeightModel:
             rad = math.radians(yaw or 0.0)
             self._plateau_fast.append((cx, cz, math.cos(rad), math.sin(rad),
                                        _ring(points) or [], h0, width))
+        #: (location id, room id) -> the mirror the zone carve used. What
+        #: ``terrain_layers.waters_payload`` renders the flat plane at.
+        self.zone_water_level_by_room: Dict[Tuple[str, str], float] = {}
+        self.zone_water: List[ZoneWaterStamp] = self._build_zone_water(
+            zone_waters)
+        self._zone_index = _BoxIndex([w[2] for w in self.zone_water])
+        self._zone_fast = [(_ring(w[1]) or [], w[3], w[4], w[5])
+                           for w in self.zone_water]
 
     # ── the authored landscape ──────────────────────────────────────────
 
@@ -1143,9 +1170,10 @@ class HeightModel:
 
         LARGEST AREA FIRST, so the SMALLEST writes last and has the final say —
         the hut on the village square is the more specific answer about the
-        square metre it stands on, the rule ``location_at_point`` and
-        ``relief.ground_lift_at`` already resolve nesting by. ``sorted`` is
-        stable, so equal areas keep the caller's order.
+        square metre it stands on, the rule ``location_at_point`` already
+        resolves nesting by — and the same rule ``terrain_layers.world_floors``
+        orders the LAYERS of the ground by. ``sorted`` is stable, so equal
+        areas keep the caller's order.
 
         TARGET = the MEDIAN of :meth:`natural` over the footprint, sampled on
         the 2 m world lattice inside the outline (the guaranteed interior point
@@ -1215,6 +1243,43 @@ class HeightModel:
             out.append((cx, cz, yaw, points, box, h0, width))
         return out
 
+    def _build_zone_water(self, zone_waters: Sequence[ZoneWaterInput]
+                          ) -> List[ZoneWaterStamp]:
+        """Every ROOM whose floor is water, with its mirror settled (E5a).
+
+        THE DEFAULT MIRROR IS THE MEDIAN OF THE HEIGHT ALONG ITS OWN RIM, read
+        AFTER the plateaus — and that one rule covers both cases § G4 names:
+
+        * on a BUILT location the plateau stamp has planed the whole plot flat,
+          so every rim sample carries the plateau height and the median IS the
+          plateau height. A pond in a courtyard therefore sits at the courtyard's
+          own level without anybody looking a location up.
+        * on a NATURAL location nothing was stamped, so the median is the
+          landscape's own height around the zone — the very rule a painted lake
+          gets (:meth:`_build_water`).
+
+        An AUTHORED ``layout.water_level`` always wins, exactly as on an area.
+        """
+        from app.models.heightfield import polygon_bounds
+        out: List[ZoneWaterStamp] = []
+        for loc_id, room_id, polygon, level, depth, ramp in (zone_waters or []):
+            ring = _ring(polygon)
+            if ring is None:
+                continue
+            box = polygon_bounds(polygon)
+            if box is None:
+                continue
+            if level is None:
+                rim = _rim_samples(polygon)
+                level = _median([self._stamp(self._carve(self.natural(px, pz),
+                                                         px, pz), px, pz)
+                                 for px, pz in rim])
+            key = (str(loc_id), str(room_id))
+            out.append((key, list(polygon), box, float(level), float(depth),
+                        float(ramp)))
+            self.zone_water_level_by_room[key] = round(float(level), 3)
+        return out
+
     def plateau_ramp_box(self, index: int
                          ) -> Tuple[float, float, float, float]:
         """The world box a plateau stamp can write into — its outline PLUS its
@@ -1227,13 +1292,14 @@ class HeightModel:
     def final(self, x: float, z: float) -> float:
         """``h_final`` at one point — the whole pipeline, in order.
 
-        areas → micro-relief → water carve → plateaus. Every step is metre
-        parametrised, so this answer does not know and cannot know which
-        lattice (if any) it is being sampled on.
+        areas → micro-relief → water carve → plateaus → ZONE water carve. Every
+        step is metre parametrised, so this answer does not know and cannot know
+        which lattice (if any) it is being sampled on.
         """
         h = self.natural(x, z)
         h = self._carve(h, x, z)
-        return self._stamp(h, x, z)
+        h = self._stamp(h, x, z)
+        return self._carve_zone(h, x, z)
 
     def _carve(self, h: float, x: float, z: float) -> float:
         """The water stamp: ``h = min(h, water_level − depth_profile(d))``.
@@ -1288,17 +1354,43 @@ class HeightModel:
                 h = h0 + (h - h0) * smoothstep(d / width)
         return h
 
+    def _carve_zone(self, h: float, x: float, z: float) -> float:
+        """The ZONE water stamp — the same arithmetic as :meth:`_carve`, run
+        after the plateaus.
+
+        Same ``min``, same ``smoothstep`` shore profile, same distance to the
+        OUTLINE, so the E1 invariant (``h ≤ mirror − ε`` past the ramp) holds
+        for a room's pond exactly as it does for a painted lake — and in every
+        mip, because it is the same pure function underneath.
+        """
+        if not self.zone_water:
+            return h
+        fast = self._zone_fast
+        for idx in self._zone_index.at(x, z):
+            ring, level, depth, ramp = fast[idx]
+            if not ring or not _inside_ring(x, z, ring):
+                continue
+            if ramp <= 0.0:
+                profile = depth
+            else:
+                profile = depth * smoothstep(
+                    _ring_edge_distance(x, z, ring) / ramp)
+            bed = level - profile
+            if bed < h:
+                h = bed
+        return h
+
     # ── what the model REACHES ──────────────────────────────────────────
 
     def shaped_bounds(self) -> Optional[Tuple[float, float, float, float]]:
         """The union box of everything that can move a height away from 0 —
         or None for a world that shapes nothing.
 
-        Height areas, relief-CARRYING painted areas, water polygons and every
-        plateau's outline plus its ramp. It is a SUPERSET of "where the ground
-        is not flat", which is the property the tile index and the grid growth
-        both hang on: outside it the world is answered 0 without rastering
-        anything.
+        Height areas, relief-CARRYING painted areas, water polygons, zone-water
+        polygons and every plateau's outline plus its ramp. It is a SUPERSET of
+        "where the ground is not flat", which is the property the tile index and
+        the grid growth both hang on: outside it the world is answered 0 without
+        rastering anything.
         """
         boxes = self.shaped_boxes()
         return _union(boxes) if boxes else None
@@ -1310,6 +1402,7 @@ class HeightModel:
         boxes = [b for _a, b in self.boxes]
         boxes += [e[2] for e in self.relief if e[1] is not None]
         boxes += [w[1] for w in self.water]
+        boxes += [w[2] for w in self.zone_water]
         boxes += [self.plateau_ramp_box(i) for i in range(len(self.plateaus))]
         return boxes
 
@@ -1337,15 +1430,17 @@ class HeightModel:
 def build_model(areas: Sequence[Dict[str, Any]] = (),
                 footprints: Sequence["Footprint"] = (),
                 terrain_areas: Sequence[Dict[str, Any]] = (),
-                terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None
+                terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
+                zone_waters: Sequence[ZoneWaterInput] = ()
                 ) -> HeightModel:
-    """A :class:`HeightModel` from the four raster inputs — pure, no DB.
+    """A :class:`HeightModel` from the five raster inputs — pure, no DB.
 
     The argument order of :func:`rasterize`, so a smoke run can build a world
     out of literals and ask it anything.
     """
     return HeightModel(areas=areas, terrain_areas=terrain_areas,
-                       terrain_catalog=terrain_catalog, footprints=footprints)
+                       terrain_catalog=terrain_catalog, footprints=footprints,
+                       zone_waters=zone_waters)
 
 
 def rasterize(areas: Sequence[Dict[str, Any]],
@@ -1353,7 +1448,8 @@ def rasterize(areas: Sequence[Dict[str, Any]],
               footprints: Sequence[Footprint] = (),
               terrain_areas: Sequence[Dict[str, Any]] = (),
               terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-              model: Optional[HeightModel] = None
+              model: Optional[HeightModel] = None,
+              zone_waters: Sequence[ZoneWaterInput] = ()
               ) -> Dict[str, Any]:
     """The whole world as ONE grid — pure, deterministic, no DB.
 
@@ -1386,14 +1482,16 @@ def rasterize(areas: Sequence[Dict[str, Any]],
     path builds one per generation); without it one is built here.
     """
     if model is None:
-        model = build_model(areas, footprints, terrain_areas, terrain_catalog)
+        model = build_model(areas, footprints, terrain_areas, terrain_catalog,
+                            zone_waters)
     # What the LANDSCAPE reaches — the height areas, the relief-carrying
-    # painted areas and the water polygons. The plateaus are handled apart
-    # because a place far outside all of that stamps 0 onto 0 and must not
-    # stretch the grid across the world to do it.
+    # painted areas, the water polygons and the zone waters. The plateaus are
+    # handled apart because a place far outside all of that stamps 0 onto 0 and
+    # must not stretch the grid across the world to do it.
     world_boxes = ([b for _a, b in model.boxes]
                    + [e[2] for e in model.relief if e[1] is not None]
-                   + [w[1] for w in model.water])
+                   + [w[1] for w in model.water]
+                   + [w[2] for w in model.zone_water])
     if not world_boxes:
         return {"origin_x": 0.0, "origin_z": 0.0,
                 "step_m": step_m or DEFAULT_STEP_M,
@@ -1459,7 +1557,8 @@ def tile_index_from(areas: Sequence[Dict[str, Any]] = (),
                     terrain_areas: Sequence[Dict[str, Any]] = (),
                     terrain_catalog: Optional[Dict[str, Dict[str, Any]]]
                     = None,
-                    model: Optional[HeightModel] = None
+                    model: Optional[HeightModel] = None,
+                    zone_waters: Sequence[ZoneWaterInput] = ()
                     ) -> frozenset:
     """Which tiles the world has a ground in — pure, no DB (v2, 2026-08-14).
 
@@ -1487,10 +1586,12 @@ def tile_index_from(areas: Sequence[Dict[str, Any]] = (),
     about where the ground is. Handing in a ``model`` skips the rebuild.
     """
     if model is None:
-        model = build_model(areas, footprints, terrain_areas, terrain_catalog)
+        model = build_model(areas, footprints, terrain_areas, terrain_catalog,
+                            zone_waters)
     world_boxes = ([b for _a, b in model.boxes]
                    + [e[2] for e in model.relief if e[1] is not None]
-                   + [w[1] for w in model.water])
+                   + [w[1] for w in model.water]
+                   + [w[2] for w in model.zone_water])
     if not world_boxes:
         # Nothing shapes the ground: no tile, exactly as the overview returns
         # an empty grid.
@@ -1512,7 +1613,8 @@ def rasterize_tile(
         footprints: Sequence[Footprint] = (),
         terrain_areas: Sequence[Dict[str, Any]] = (),
         terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-        model: Optional[HeightModel] = None
+        model: Optional[HeightModel] = None,
+        zone_waters: Sequence[ZoneWaterInput] = ()
 ) -> Dict[str, Any]:
     """ONE 256 m tile of the world ground as a grid — pure, no DB.
 
@@ -1534,7 +1636,8 @@ def rasterize_tile(
     through where a narrow one flattened it.
     """
     if model is None:
-        model = build_model(areas, footprints, terrain_areas, terrain_catalog)
+        model = build_model(areas, footprints, terrain_areas, terrain_catalog,
+                            zone_waters)
     origin_x = tx * TILE_M
     origin_z = tz * TILE_M
     heights = model.grid(origin_x, origin_z, TILE_STEP_M,
@@ -1815,14 +1918,16 @@ def current_sig() -> str:
 def _tile_inputs() -> Tuple[List[Dict[str, Any]],
                             List[Tuple[float, float, float, float]],
                             List[Dict[str, Any]],
-                            Dict[str, Dict[str, Any]]]:
-    """The four raster inputs, read ONCE per generation.
+                            Dict[str, Dict[str, Any]],
+                            List[ZoneWaterInput]]:
+    """The five raster inputs, read ONCE per generation.
 
-    The same four :func:`get_field` reads and ``height_sig`` hashes — height
-    areas, levelling placements, painted terrain, type catalog — kept here
-    because the tiles are built ON DEMAND: without it a tile miss would be four
-    DB reads, and those misses happen in the middle of a route, of a walk
-    report, of an A* expansion. With it a miss is arithmetic.
+    The same five :func:`get_field` reads and ``height_sig`` hashes — height
+    areas, levelling placements, painted terrain, type catalog and (since E5a)
+    the ZONE WATERS of the placed room layouts — kept here because the tiles are
+    built ON DEMAND: without it a tile miss would be five DB reads, and those
+    misses happen in the middle of a route, of a walk report, of an A*
+    expansion. With it a miss is arithmetic.
     """
     global _TILE_INPUTS
     cached = _TILE_INPUTS
@@ -1833,7 +1938,7 @@ def _tile_inputs() -> Tuple[List[Dict[str, Any]],
     from app.models import heightfield as store
     from app.models.terrain import list_areas
     data = (store.list_height_areas(), store.placed_footprints(),
-            list_areas(), effective_catalog())
+            list_areas(), effective_catalog(), store.placed_zone_waters())
     _TILE_INPUTS = (generation, data)
     return data
 
@@ -1852,8 +1957,8 @@ def world_model() -> HeightModel:
     if cached is not None and cached[0] == _GENERATION:
         return cached[1]
     generation = _GENERATION
-    areas, footprints, terrain_areas, catalog = _tile_inputs()
-    model = build_model(areas, footprints, terrain_areas, catalog)
+    areas, footprints, terrain_areas, catalog, zone_waters = _tile_inputs()
+    model = build_model(areas, footprints, terrain_areas, catalog, zone_waters)
     _MODEL = (generation, model)
     return model
 

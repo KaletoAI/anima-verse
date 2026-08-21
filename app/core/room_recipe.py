@@ -268,6 +268,25 @@ def _abs_shape(lay: Dict[str, Any]) -> List[List[float]]:
         return []
 
 
+def room_outline_local(lay: Any) -> List[List[float]]:
+    """A room's HULL in the location's local metres — the public name of
+    :func:`_abs_shape` ("Ein Boden" E5a).
+
+    It is byte for byte the polygon ``compose_recipe`` puts into its
+    ``outline`` (same tessellation, same room transform), and that identity is
+    the point: the LAYER BAKE of the ground (``core.terrain_layers``) and the
+    ZONE-WATER carve of the heightfield need a room's floor polygon without
+    paying for a whole recipe — props, scatter, mirrored openings and a
+    signature — and a second derivation of the hull would put the material of
+    the ground on a different rectangle than the scene payload draws its walls
+    on. Pinned in ``scripts/smoke_terrain_layers.py`` against
+    ``scene_recipe.compose_scene``.
+
+    [] when the layout has no usable rectangle.
+    """
+    return _abs_shape(lay if isinstance(lay, dict) else {})
+
+
 def _unit_edge(outline: List[List[float]], i: int) -> Optional[tuple]:
     """Directed edge i as (ax, ay, ux, uy, length); None for a degenerate one."""
     a = outline[i]
@@ -844,12 +863,16 @@ def compose_recipe(room: Dict[str, Any],
     # toggling the checkbox makes the client re-fetch.
     if lay.get("clip_model"):
         payload["clip_model"] = True
-    # Relief opt-out (§ B contract v5.2 Nr. 14): the room keeps a level floor
-    # even under a terrain relief. Read from the layout into the recipe for
-    # the SAME reason as clip_model — only payload fields reach the signature
-    # below, so ticking "keep flat" has to make the client re-fetch.
-    if lay.get("relief_flat"):
-        payload["relief_flat"] = True
+    # THE FLOOR AS A LAYER OF THE GROUND ("Ein Boden" E5a): how wide this
+    # floor's transition to the ground under it is, and — for a water floor —
+    # where its mirror stands. Carried into the recipe for the SAME reason as
+    # clip_model: only payload fields reach the signature below, so dialling
+    # either has to make the client re-fetch. ``relief_flat`` used to sit here
+    # and is gone with the scene's own relief (user decision 1).
+    for key in ("edge_blend_m", "water_level", "water_depth_m",
+                "shore_ramp_m"):
+        if lay.get(key) is not None:
+            payload[key] = lay[key]
     # No recipe walls for this room (open zone, pavilion). Read from the
     # recipe like clip_model, so the flag is inside the signature below and
     # toggling the checkbox makes the client re-fetch.

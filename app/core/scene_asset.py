@@ -503,22 +503,24 @@ def ground_sampler(loc: Dict[str, Any], floor_y: float = 0.0,
                    ) -> Callable[[float, float], float]:
     """``(lx, lz) → ground height`` in the location's SCENE frame.
 
-    Both halves of the ground, exactly as ``relief`` splits them: the world
-    height field (``world_geometry.ground_y``) plus the location's own scene
-    relief (``relief.scene_ground_lift``). The world half is taken RELATIVE TO
-    THE PIN, because the scene frame's y = 0 is the pin's ground — that is the
+    ONE ground since "Ein Boden" E5a: the world height field
+    (``world_geometry.ground_y``), and nothing on top of it — the location's own
+    17 x 17 scene relief and its ``scene_ground_lift`` sampler are deleted (user
+    decision 1). It is taken RELATIVE TO THE PIN, because the scene frame's
+    y = 0 is the pin's ground — that is the
     same constant the plate's sidecar records as ``frame.world_ground_y``. On a
     plateaued location the world half is flat and the term vanishes; on a
     location without a plateau it is the difference that decides whether a prop
     hovers.
 
-    ``floor_y`` is the THIRD term and the datum of the other two: the floor
-    the placement stands on (``target.floor_y``, § B1 addendum 2026-08-20) —
-    the room's plate, the yard's storey plate. The relief rides ON it, the way
-    the payload composes a ``bottom_y``; without it the check compares a
-    payload height against a bare terrain height and reads the floor itself as
-    a gap (0.09 at a 0.05 tolerance = nothing in contact, and the run sinks a
-    correctly standing prop into its own floor).
+    ``floor_y`` is the SECOND term and the datum of the first: the floor
+    the placement stands on (``target.floor_y``) — a declared storey's room
+    plate, and **0 on storey 0**, where the terrain itself is the floor (E5a).
+    The terrain rides ON it, the way the payload composes a ``bottom_y``;
+    without it the check compares a payload height against a bare terrain
+    height and reads the floor itself as a gap (an upper storey's 0.10 at a
+    0.05 tolerance = nothing in contact, and the run sinks a correctly standing
+    prop into its own floor).
 
     ``ground_offset_m`` is the PROP's own sink (§ B2 addendum 2026-08-20) and
     rides on the same side of the comparison for exactly the same reason: a
@@ -529,7 +531,6 @@ def ground_sampler(loc: Dict[str, Any], floor_y: float = 0.0,
     is measured as a gap. Blind to it, the check would read the full sink as a
     prop piercing the ground and undo it as a "correction".
     """
-    from app.core.relief import scene_ground_lift
     from app.core.world_geometry import ground_y, local_to_world
 
     cx = float(loc.get("pos_x") or 0.0)
@@ -547,11 +548,9 @@ def ground_sampler(loc: Dict[str, Any], floor_y: float = 0.0,
         except Exception:                    # pragma: no cover
             world = 0.0
         # floor first, terrain ON it — the same order the payload composes a
-        # `bottom_y` in (plate top + clearance + the relief lift) — and the
-        # prop's own sink with the floor, because it is part of the datum, not
-        # part of the gap.
-        return (float(floor_y) + float(ground_offset_m) + world
-                + float(scene_ground_lift(loc, wx, wz)))
+        # `bottom_y` in — and the prop's own sink with the floor, because it is
+        # part of the datum, not part of the gap.
+        return float(floor_y) + float(ground_offset_m) + world
 
     return sample
 

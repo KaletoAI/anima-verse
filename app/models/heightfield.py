@@ -296,6 +296,56 @@ def placed_footprints() -> List[Tuple[float, float, float,
     return out
 
 
+def placed_zone_waters() -> List[Tuple[str, str, List[List[float]],
+                                       Optional[float], float, float]]:
+    """Every ROOM whose level-0 floor is WATER, as a carve input (E5a, § G4).
+
+    ``(location_id, room_id, polygon in WORLD metres, authored water_level or
+    None, depth_m, shore_ramp_m)`` — the fifth input of the bake, and the reason
+    a pond drawn as a room floor is a lake and not a blue rectangle painted over
+    the ground it does not fit.
+
+    THE POLYGONS COME FROM ``core.terrain_layers.world_floors``, the same
+    function that decides which layer the ground WEARS there. One derivation for
+    the material and for the shape of the bed: if the two ever came from two
+    places, the water would end where one of them said and the bed where the
+    other did, which is the two-grounds bug this whole plan exists to kill.
+
+    A location that is not placed, a room that is not on storey 0 and a floor
+    whose kind is not a water surface never appear here.
+    """
+    from app.core.terrain_layers import (surface_classes, world_floors)
+    from app.core.terrain_types import effective_catalog
+    from app.models.world import list_locations
+    out: List[Tuple[str, str, List[List[float]], Optional[float],
+                    float, float]] = []
+    for floor in world_floors(list_locations(), effective_catalog(),
+                              surface_classes()):
+        if not floor.water:
+            continue
+        out.append((floor.location_id, floor.room_id,
+                    [[round(x, 2), round(z, 2)] for x, z in floor.polygon],
+                    floor.water_level, floor.water_depth_m,
+                    floor.shore_ramp_m))
+    return out
+
+
+def zone_water_basis() -> List[Dict[str, Any]]:
+    """The ZONE WATERS of the bake, in hashable form (E5a).
+
+    The room-floor twin of :func:`water_basis`: a pond moved, resized, given a
+    mirror or turned into parquet changes the ground under it, so a client
+    holding the old grid would draw a bed the server does not have.
+
+    A world without a single water room floor contributes an empty list.
+    """
+    out: List[Dict[str, Any]] = []
+    for loc_id, room_id, polygon, level, depth, ramp in placed_zone_waters():
+        out.append({"location": loc_id, "room": room_id, "polygon": polygon,
+                    "level": level, "depth": depth, "ramp": ramp})
+    return out
+
+
 def relief_basis() -> List[Dict[str, Any]]:
     """The MICRO-RELIEF inputs of the raster, in hashable form.
 
@@ -372,7 +422,8 @@ def height_sig() -> str:
 
     AND SO DO THE WATER POLYGONS (:func:`water_basis`, E1, § G4): a lake's
     mirror, depth and shore ramp shape the ground under it exactly as a height
-    area does.
+    area does — the PAINTED ones and, since E5a, the ROOM FLOORS of a water
+    kind (:func:`zone_water_basis`).
 
     AND SO DOES THE MICRO-RELIEF (:func:`relief_basis`, decision 2026-08-13):
     since a terrain KIND may carry hills, painting such a kind — or editing its
@@ -382,7 +433,8 @@ def height_sig() -> str:
     basis = json.dumps({"areas": list_height_areas(),
                         "places": placed_footprints(),
                         "terrain": relief_basis(),
-                        "water": water_basis()},
+                        "water": water_basis(),
+                        "zone_water": zone_water_basis()},
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]
 

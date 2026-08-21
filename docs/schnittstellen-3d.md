@@ -4974,3 +4974,217 @@ Verbraucher mehr**; sie stehen noch, weil ihr Löschen den halben
   auf zwei verschiedenen Höhen-Ideen.
 * § A16 nennt weiterhin gelöschte Namen; das Vertragskapitel wird laut Plan in
   E5/E6 neu geschrieben.
+
+## Nachtrag 2026-08-21 (§ A19): Ein Boden — E5a, das Ende der Etage-0-Platten
+
+Etappe E5 aus `development_instructions/plan-ein-boden.md`, **Server-Hälfte**
+(§ G3 für das Material, § G5 für die Geometrie, Entscheidungen 1 und 4 aus § 5).
+E1 hat dem Gelände EINE Höhenfunktion gegeben, E3 dem Boden EINEN Schnitt, E4
+dem Wasser EINEN Spiegel. E5a nimmt der Szene ihren eigenen Boden weg: auf
+Etage 0 gibt es keine Platte mehr — die Höhe ist `h_final`, das Material ist der
+Layer-Bake, und was von den Raumböden übrig bleibt, sind ihre Polygone als
+Daten. Die Client-Hälfte (E5b) folgt und liest, was hier entsteht.
+
+### 1. Was aus `plates[]` ersatzlos verschwindet
+
+| Bisher auf Etage 0 | Datum | Ersatz |
+|---|---|---|
+| Etagenplatte (Kontur, 0,14 m dick) | Oberkante 0,08 | das gestanzte Plateau des Geländes (§ G5) |
+| Raum-Bodenplatte je geschlossenem Raum | Oberkante 0,10 | Layer im Bake + `floor_plan` |
+| Zonen-Fläche je `always_visible`-Raum (dick 0) | Oberkante 0,09 | dito |
+| Overlay-Fläche einer Zone auf einem Flächenmodell | Modell-Oberfläche + 0,01 | dito |
+
+Damit sind die Konstanten `LEVEL_PLATE_TOP` / `ROOM_PLATE_TOP` /
+`OVERLAY_SURFACE_LIFT` **ausschließlich** die Datums einer DEKLARIERTEN Etage
+(Obergeschoss oder Keller). Auf Etage 0 kommt keine der drei Zahlen mehr vor;
+`scripts/smoke_scene_recipe.py` führt dafür rote Gegenproben (0,08 / 0,09 / 0,10
+dürfen dort in keinem `top_y`, `base_y` oder `bottom_y` auftauchen).
+
+Ebenfalls weg, weil ohne Verbraucher: der Parameter `slab` des Komponisten
+(0,08 wenn eine Location einen Boden zeichnete, sonst 0,0) und das Payload-Flag
+`natural_floor`. Letzteres sagte einem Renderer, dass DIESE Location auf dem
+Gelände steht statt auf einer Platte — eine Unterscheidung, die nur solange
+etwas bedeutete, wie es zwei Böden gab. `scene_recipe.is_natural_location`
+BLEIBT, aber ohne Payload-Rolle: es ist der Name des Gesetzes, nach dem der
+Bake stanzt (`models.heightfield.draws_built_floor` ist sein Zwilling auf der
+gespeicherten Location).
+
+**Der Keller bleibt Geometrie.** § G5 spricht von Obergeschossen; die
+Eigenschaft, die entscheidet, ist aber „deklarierte Etage" und nicht „oben":
+`level != 0`. Ein Keller auf −1 liegt eine Etage unter dem Gelände und behielte
+sonst gar keinen Boden.
+
+### 2. Die neue Höhenleiter, in einer Funktion
+
+```python
+storey_floor_y(level, storey) = level*storey + (0.0 if level == 0 else 0.08)
+```
+
+Alles, was auf einem Boden steht, misst von hier plus dem, was der RAUM
+darüberlegt (`_plate_top`): 0 auf Etage 0, sonst 0,10 (geschlossener Raum),
+0,09 (Zone) bzw. 0,08 (Hof). Die Laufketten von „Haus von Kai" und
+„Mondscheinsee", alt → neu:
+
+| Größe | gebaut (Haus), alt | gebaut, NEU | natürlich (See), alt | natürlich, NEU |
+|---|---|---|---|---|
+| Etagenplatte Oberkante | 0,08 | — | — | — |
+| Raumplatte / Zonenfläche | 0,10 / 0,09 | — | 0,01 | — |
+| Boden, auf dem gestanden wird | 0,10 | **0,00** (`h_final`) | 0,01 | **0,00** (`h_final`) |
+| Wandfuß (Raum) | 0,10 | **0,00** | — | — |
+| Wandfuß (Kontur) | 0,08 | **0,00** | — | — |
+| Prop im Raum | 0,11 | **0,01** | 0,02 | **0,01** |
+| Prop im Hof (§ A13a) | 0,09 | **0,01** | 0,01 | **0,01** |
+| Diorama (ohne `model_offset_y`) | 0,12 | **0,02** | 0,03 | **0,02** |
+| Türschwelle ohne Deklaration | 0,10 | **0,00** | — | — |
+| Gebäudemodell `walk_y_world` | 0,08 + `offset_y` | **`offset_y`** | 0,00 + `offset_y` | **`offset_y`** |
+| Aufzugs-Pad (Mitte) | +0,055 | **−0,025** | — | — |
+
+Die beiden Spalten „NEU" sind identisch — das ist der Punkt. `offset_y` je
+Platzierung, `ground_offset_m` je Prop und `model_offset_y` je Diorama wirken
+unverändert weiter (Entscheidung 4), nur messen sie jetzt überall von derselben
+Null.
+
+`layout.floor_offset_y` **überlebt als reiner Feinjustage-Regler** eines
+einzelnen Raums (hebt, was IM Raum steht). Seine zwei alten Nebenjobs sind weg:
+es gleicht keinen zweiten Boden mehr aus, und es ist **keine Wasserlinie** mehr
+— dafür gibt es `layout.water_level` (Nr. 4).
+
+### 3. `floor_plan` — die Etage-0-Räume als Daten
+
+Additiv im Szenen-Payload, eine Zeile je Raum auf Etage 0, in Rezept-Reihenfolge:
+
+```jsonc
+"floor_plan": [
+  { "room_id": "hall",
+    "polygon_world": [[-4,-4],[0,-4],[0,-1],[-4,-1]],   // SZENEN-Frame (m)
+    "floor_kind": "wood",
+    "closed": true },
+  { "room_id": "pond", "polygon_world": [...], "floor_kind": "water",
+    "closed": false, "water_level_effective": 8.0 }     // ABSOLUTES Welt-y
+]
+```
+
+* `polygon_world` ist der Raumrumpf im **Szenen-Frame** (lokale Meter um den
+  Anker-Pin), wie jede andere Koordinate dieses Payloads — tesselliert und
+  gedreht, also Punkt für Punkt der Rumpf, den auch der Bake benutzt.
+* `floor_kind` ist die Bodenart: `surfaces.floor`, sonst `"floor"` für einen
+  GESCHLOSSENEN Raum und der **leere String** für eine Zone, die keine nennt
+  (dort scheint das Gelände durch, und der Bake malt dort ebenfalls nichts).
+* `closed` unterscheidet Raum von offener Zone (§ A5).
+* `water_level_effective` steht nur auf einem Wasserboden und ist **die einzige
+  absolute Welt-y-Zahl in diesem Payload** — dieselbe, die
+  `GET /play/terrain-layers` für denselben Raum führt; sie reist mit, damit ein
+  Verbraucher des Grundrisses keine zweite Anfrage braucht.
+* **Keine Höhen sonst.** Raum-Spots, NPC-Plätze und Labels holen ihre Höhe aus
+  dem Höhen-Sampler an genau dem Punkt, um den es geht — nicht aus einer Platte
+  und nicht aus 6×6 Strahlen gegen ein Mesh.
+
+Der Hof (`__ground__`, § A13a) steht nicht drin: er hat keinen Rumpf, er IST
+das Grundstück. Etagen ≠ 0 stehen nicht drin: die haben Platten.
+
+### 4. Raumböden sind Layer — und Wasser-Raumböden sind Seen
+
+**Der Bake** (`app/core/terrain_layers.py`) nimmt die Etage-0-Rumpfpolygone jeder
+platzierten Location als OBERSTE Layer über die gemalten Flächen. Die Priorität
+ist wieder nur „der letzte enthaltende Eintrag gewinnt", in dieser Reihenfolge:
+
+1. gemalte Terrain-Flächen (z_order, Malreihenfolge);
+2. je Location, **größte Fläche zuerst** — die KLEINSTE schreibt zuletzt und
+   gewinnt (das Verschachtelungsgesetz von `location_at_point`);
+3. innerhalb einer Location: offene Zonen, dann geschlossene Räume, je in
+   Raum-Reihenfolge.
+
+Die **Übergangsbreite eines Bodens** ist `layout.edge_blend_m` (0…8 m,
+derselbe Sanitizer wie am Katalog-Feld, 0 ist ein WERT) — und der **Default ist
+0**, der harte Schnitt, gegen die 1,5 m einer gemalten Art. Ein Boden wird
+gezeichnet, nicht gewachsen. Da der Shader `b` aus der Layer-Tabelle nach Art A
+liest, ist eine Art bei zwei Breiten **zwei Layer**; die Tabelle führt darum
+Einträge je `(kind, edge_blend_m)` und wächst über die Terrain-Arten hinaus auf
+die Boden-Arten (eine Boden-Art trägt sich selbst als `surface`, weil
+`surfaces.floor` direkt eine Bibliotheks-Id ist).
+
+**Zonen-Wasser** (`app/core/heightfield.py`): ein Raum, dessen Bodenart eine
+Wasser-Oberfläche ist — entschieden aus dem Terrain-Katalog (`meta.water`) ODER
+der Material-KLASSE der Bibliothek (`water`/`ice`), nie aus dem Namen — carvt
+sein Bett wie eine gemalte Fläche, mit denselben drei Zahlen und demselben
+Reader (`heightfield.water_meta`, gefüttert mit dem `layout`):
+
+| Feld am `layout` | Bedeutung |
+|---|---|
+| `water_level` | der Spiegel in Welt-y. **Optional** |
+| `water_depth_m` | 0,2…20, Default 2,0 |
+| `shore_ramp_m` | 0…20, Default 3,0 |
+
+**Fehlt `water_level`, ist der Default der Median der Höhe ENTLANG DES EIGENEN
+UMRISSES, gelesen NACH den Plateaus** — und diese eine Regel deckt beide Fälle
+aus § G4 ab: auf einer GEBAUTEN Location hat der Plateau-Stempel das Grundstück
+eben gehobelt, also trägt jede Randprobe die Plateauhöhe und der Median IST sie;
+auf einer natürlichen ist es die Landschaft ringsum.
+
+Deshalb ist der Zonen-Carve eine **fünfte Stufe** der Pipeline und keine weiteren
+Einträge in der zweiten:
+
+```
+Höhenflächen → Mikro-Relief → Wasser-Carve (Karte) → Location-Plateaus
+   → ZONEN-Wasser-Carve
+```
+
+Ein Teich im Innenhof liegt auf einem Grundstück, das der Plateau-Stempel eben
+macht; vor dem Stempel gecarvt wäre er wieder weggehobelt. Nach ihm gilt dieselbe
+`min`-Regel und dieselbe E1-Invariante (`h ≤ Spiegel − ε`, `ε = min(Tiefe, 0,25)`)
+— nachgemessen in `scripts/smoke_height_bake.py` [8].
+
+Die Polygone kommen aus **derselben** Funktion, aus der auch das Material kommt
+(`terrain_layers.world_floors` → `models.heightfield.placed_zone_waters`): eine
+Ableitung für die Form des Betts und für die Farbe darüber. `height_sig` hasht
+sie (`zone_water_basis`), `layers_sig` hasht die Grundrisse (`floors_basis`) —
+ein verschobener Raum bäckt beides neu.
+
+### 5. Der Endpunkt-Nachtrag
+
+`GET /play/terrain-layers` (Index-Modus) trägt **zusätzlich**:
+
+```jsonc
+"waters": [
+  { "location_id": "…", "room_id": "pond", "kind": "water",
+    "polygon": [[295.0,-5.0], …],        // WELT-Meter
+    "water_level_effective": 0.0 }
+]
+```
+
+Dieselbe Form, in der eine gemalte Wasserfläche ihren Spiegel führt (§ A18), in
+WELT-Metern — damit ein Client den Teich eines Raums mit der Maschinerie
+zeichnet, mit der er einen See zeichnet, statt eine zweite zu erfinden. Ein Raum,
+den der Bake nie gesehen hat (unplatzierte Location), bleibt WEG statt eine
+geratene Höhe zu bekommen.
+
+### 6. Das szenen-eigene 17×17-Relief ist gelöscht
+
+Entscheidung 1 aus § 5 des Plans, ohne Ersatzschiene:
+`scene_recipe.compose_terrain` / `terrain_frame` / `_clip_grid_to_boundary`, der
+`terrain`-Block im Payload, `map3d.relief` samt Sanitizer, `layout.relief_flat`,
+`relief.scene_ground_lift` / `has_relief` / `ground_lift_at` und
+`scatter_curves.relief_cells` / `terrain_grid` / `terrain_height` samt
+`TERRAIN_CELLS` / `RELIEF_CELLS_MIN` / `RELIEF_CELLS_MAX`. Lokales Relief
+autoriert man über **Höhenflächen der Karte**.
+
+Was an ihre Stelle tritt, ist überall dieselbe Zeile: `world_geometry.ground_y`.
+`relief.ground_at(x, z)` ist ihr Name auf der Regel-Seite; `POST /play/pos`,
+`nav_grid`, `scene_asset.ground_sampler` und `scene_context` lesen sie. Die
+Auflösungsregel „die innerste ENTHALTENDE Location mit einem Feld gewinnt" ist
+damit weg — es gibt ein Feld, und wer es formt, entscheidet der Bake einmal
+(`draws_built_floor`).
+
+`shared/world_dev_schemas` darf `flat` weiter nennen; es erzeugt kein Feld mehr.
+
+### 7. Was der Client-Hälfte (E5b) noch fehlt
+
+* **Admin-Regler.** `layout.edge_blend_m` und `layout.water_level` /
+  `water_depth_m` / `shore_ramp_m` werden serverseitig sanitisiert, gespeichert,
+  gehasht und gebacken — im Raum-Layout-Editor gibt es dafür noch kein Feld.
+  Ebenso hat der jetzt tote Relief-Block (`map3d.relief`, „Keep flat") noch
+  Bedienelemente ohne Wirkung.
+* Der Renderer zieht seine Raum-Spots noch aus Platten; `floor_plan` und
+  `waters` sind additiv und warten auf ihn. Ein Payload ohne Etage-0-Platten
+  ist für den heutigen Client verlustfrei lesbar (er iteriert über `plates`),
+  nur zeichnet er dort nichts mehr — der erwartete Zwischenzustand.

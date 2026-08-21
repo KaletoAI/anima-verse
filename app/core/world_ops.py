@@ -865,36 +865,13 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # area_model, so it is dropped there.
     if out.get("area_model") and bool(raw.get("area_detail")):
         out["area_detail"] = True
-    # Terrain relief (plan-area-detail-scenes.md, contract v5.2 Nr. 14): a
-    # deterministic height field over the terrain frame, so a detail scene
-    # is not a billiard table. Only meaningful ON TOP of a detail scene —
-    # without ``area_detail`` there is no composed ground to lift and no
-    # relief plates to drape, so it is dropped there (same gate style as
-    # area_detail itself, which already implies area_model). ``amplitude_m``
-    # is REAL metres (× k when composing); ``seed`` is mandatory — a relief
-    # without a stored seed would re-roll the whole terrain on every edit.
-    # ``wave_m`` is the second axis: how WIDE one swell is, also in REAL
-    # metres (1…200 — narrower than a stride is noise, wider than a couple of
-    # map tiles is a single slope). It is optional; without it the composer
-    # uses the default grid, which is the field every location had before the
-    # wave width existed.
-    rel = raw.get("relief")
-    if out.get("area_detail") and isinstance(rel, dict):
-        try:
-            amplitude = float(rel.get("amplitude_m"))
-            seed = int(rel.get("seed")) & 0xFFFFFFFF
-        except (TypeError, ValueError):
-            amplitude = None
-        if amplitude is not None and 0.05 <= amplitude <= 5.0:
-            entry: Dict[str, Any] = {"amplitude_m": round(amplitude, 2),
-                                     "seed": seed}
-            try:
-                wave = float(rel.get("wave_m"))
-            except (TypeError, ValueError):
-                wave = None
-            if wave is not None and 1.0 <= wave <= 200.0:
-                entry["wave_m"] = round(wave, 2)
-            out["relief"] = entry
+    # ``map3d.relief`` IS GONE ("Ein Boden" E5a, user decision 1). A location
+    # used to carry a deterministic 17 x 17 height field of its OWN — amplitude,
+    # seed and wave width — composed per scene and added on top of the world
+    # relief. That was the second of the two grounds the whole plan was written
+    # against. Local relief is authored as HEIGHT AREAS of the map now, so the
+    # three dials have no reader left and are dropped on the next save without a
+    # fallback (the "no backward-compat" rule).
     # Boundary openings (plan-area-detail-scenes.md): pass-throughs at the
     # LOCATION edge (a road crossing the cell east–west = two entries).
     # Geometry + room link only — entry_room stays the gameplay gate.
@@ -1116,13 +1093,38 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     # at the shell.
     if raw.get("clip_model"):
         out["clip_model"] = True
-    # Relief opt-out (v5.2 Nr. 14): this room stays EVEN even when the
-    # location carries a terrain relief — a road, a paved square, a clearing.
-    # Indoor rooms (not ``always_visible``) are flat anyway, walls need a
-    # level floor, so the flag only says anything for outdoor rooms. Only
-    # stored when true, like always_visible.
-    if raw.get("relief_flat"):
-        out["relief_flat"] = True
+    # ``relief_flat`` IS GONE with the scene's own relief (E5a): there is no
+    # per-location height field left for a room to opt out of, and a room that
+    # wants level ground under it says so by being on a BUILT location, whose
+    # plot the bake planes flat (§ G5).
+    #
+    # HOW WIDE THIS FLOOR'S TRANSITION IS, in metres (E5a, § G3): a level-0
+    # room floor is a LAYER of the ground now (``core.terrain_layers``), and
+    # ``edge_blend_m`` is the width over which it gives way to the layer under
+    # it. 0…8 m, and the DEFAULT IS 0 — the hard cut, because a floor is drawn
+    # and not grown. It goes through the layer module's own sanitizer rather
+    # than ``_metre``: 0 is a VALUE here and has to survive a save.
+    from app.core.terrain_layers import EDGE_BLEND_KEY, sanitize_edge_blend
+    blend = sanitize_edge_blend(raw.get(EDGE_BLEND_KEY))
+    if blend is not None:
+        out[EDGE_BLEND_KEY] = blend
+    # WHERE THE MIRROR OF A WATER FLOOR STANDS, in world-y metres (E5a, § G4).
+    # A room whose floor kind is a water surface carves its bed out of the
+    # heightfield exactly as a painted lake does, and these are the same three
+    # numbers an area carries (``heightfield.water_meta`` reads them straight
+    # off this layout). ``water_level`` is OPTIONAL — the bake derives it from
+    # the plateau or the rim — and it REPLACES the ``floor_offset_y``
+    # waterline hack, which never moved a single height.
+    for key in ("water_level", "water_depth_m", "shore_ramp_m"):
+        value = raw.get(key)
+        if value is None or f"{value}".strip() == "":
+            continue
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(num):
+            out[key] = round(num, 3)
     # No recipe walls for this room: open zones, pavilions, areas inside an
     # area model. The server then emits no `walls` entries for it at all, so
     # both renderers follow without knowing the flag. Openings stay editor
@@ -1391,7 +1393,8 @@ def update_prop_placement(location_id: str, room_id: str, index: int,
 _GROUND_FORBIDDEN = (
     "x", "y", "w", "d", "outline", "outline_curves", "openings", "surfaces",
     "level", "rotation", "model_at", "model_offset_y", "floor_offset_y",
-    "always_visible", "no_walls", "relief_flat", "clip_model",
+    "always_visible", "no_walls", "clip_model", "edge_blend_m",
+    "water_level", "water_depth_m", "shore_ramp_m",
 )
 
 

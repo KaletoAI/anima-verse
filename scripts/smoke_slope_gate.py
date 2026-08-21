@@ -28,51 +28,52 @@ identical one (``client3d/src/game/walk.ts`` ``slopeBlocks``, hand-derived in
 ``client3d/scripts/smoke_walk_math.mjs``) — the two are checked against the
 same table, section [1] below.
 
-THE HEIGHT ITSELF comes from ``relief.scene_ground_lift``, and it samples the
-VERY grid ``compose_scene`` ships to the renderers (``scene_recipe``'s single
-``compose_terrain``): seed, wave width, flat hulls, tile rotation, all of it
-derived once. That is the whole reason this smoke cross-checks the gate's
-height against the composed payload in section [3] — the rule and the picture
-have to stand on one ground, and the only way they can drift is a second
-derivation.
+THE HEIGHT ITSELF is ``relief.ground_at``, and since "Ein Boden" E5a that is
+``world_geometry.ground_y`` and nothing else — the ONE baked heightfield, with
+every authored hill, every water carve and every location plateau already in it.
+The per-location 17 x 17 scene relief that used to be ADDED on top of it
+(``scene_recipe.compose_terrain`` -> ``relief.scene_ground_lift`` ->
+``relief.ground_lift_at``) is deleted (user decision 1 of plan-ein-boden.md
+§ 5), together with the "innermost ENCLOSING location that has a field" search
+this file used to measure in section [5]. Local relief is authored as HEIGHT
+AREAS of the map now, which is exactly what the fixture below paints.
 
-THE WORLD used below:
+THE WORLD used below — three painted height areas and two places:
 
-    CLIFF   (1000, 1000)  plan_width_m 8, yaw 0, area_detail with a relief
-                          (seed 1, amplitude 6 m, wave 0.5 m), ONE opening on
-                          boundary edge 0 (the north side of the square,
-                          v6 Nr. 5) at 0.5 -> world (1000, 996)
-    TURNED  (1200, 1000)  the same location turned by yaw 90
-    PLAIN   (1600, 1000)  the same geometry WITHOUT a relief (the inert case)
-    DOME    (2000, 1000)  plan_width_m 8 with a WIDE wave (4 m -> 2 cells, so
-                          3 × 3 support points and exactly ONE free value in
-                          the middle): a single gentle dome, amplitude 4.
-                          NO opening — a free boundary
-    HUT     (2000, 1000)  2 m wide, NO relief and no opening either, sitting
-                          INSIDE the dome — the nesting case of finding F3.
-                          Neither draws a door, so nothing in [5] can be
-                          exempt for standing at one
+    CLIFF AREA  (5004,5000)-(5044,5040), height 5 m, falloff 2 m
+                -> a wall: 0 m at its own outline, the full 5 m two metres in
+    LEDGE       a NATURAL location (no building outline, no closed room, so it
+                stamps no plateau) pinned at (5000, 5020), 8 m square, with ONE
+                boundary opening on its east edge -> world (5004, 5020), i.e.
+                exactly at the foot of the cliff
+    SLOPE AREA  (5200,5000)-(5240,5040), height 5 m, falloff 20 m
+                -> a long flank: h = d/4 with d the distance to the outline
+    GROVE       a NATURAL location on that flank, pinned at (5210, 5020),
+                8 m square — the case that a place which draws no floor lets
+                the landscape run straight through it
+    PLAIN       (1600, 1000) a place on ground nobody shaped: the inert case
+    HILL/HOUSE  section [6]'s own pair, unchanged
 
 HAND-DERIVED EXPECTATIONS.
 
-The grid. ``relief_cells(wave 0.5, extent 8) = round(8 / 0.5) = 16`` cells, so
-17 support points per side and a cell of ``8 / 16 = 0.5`` m. Point (i, j) sits
-at plan fraction (i/16, j/16); the border (i or j at 0 or 16) is pinned to 0,
-and every other point draws ONE xorshift32 number from the spatial hash
-``seed + i·73856093 + j·19349663``, mapped from [0, 1) to [−1, 1) and scaled by
-the amplitude. This file re-implements that PRNG independently (§ B5a: the
-smoke never trusts the source it verifies) and builds its own reference field,
-so every height below is derived, not recorded. With seed 1 and amplitude 6 the
-row j = 1 opens
+The cliff. A height area with ``falloff_m`` 2 rises linearly over the first two
+metres INSIDE its outline: ``h = 5 · min(1, d/2)`` with ``d`` the distance to
+that outline. The world lattice is anchored on the origin at a 2 m step
+(``heightfield.TILE_STEP_M``), so on the line z = 5020 it carries
 
-    i = 1 -> +1.5555   i = 2 -> −3.4171   i = 5 -> +2.0343
-    i = 8 -> +5.8997   i = 9 -> +3.9900
+    x = 5004  d = 0  ->  0.0        (the support point ON the outline)
+    x = 5006  d = 2  ->  5.0
+    x = 5008  d = 4  ->  5.0        (past the falloff, the full height)
 
-The frame. The payload is anchored around the TILE CENTRE in the location's own
-turned frame, so a node (i, j) sits at local ``(i·0.5 − 4, j·0.5 − 4)`` and, at
-yaw 0, at world ``(1000 + i·0.5 − 4, 1000 + j·0.5 − 4)``. Sampling exactly on a
-node returns that node's value (``u·n`` is a whole number, so the bilinear
-weight is 0).
+and ``ground_y`` mixes that lattice bilinearly, which makes every number in
+section [4] exact arithmetic rather than a sample:
+
+    h(5004.1) = 0.25     h(5004.2) = 0.5
+    h(5004.5) = 1.25     h(5005.0) = 2.5
+
+The flank. ``falloff_m`` 20 over the same 5 m gives ``h = d/4``, so on z = 5020
+
+    x = 5202  d = 2  -> 0.5     x = 5206  d = 6  -> 1.5
 
   [1] THE PREDICATE, the same table the client checks (limits 0.4 m / 40°):
       1.2 m over 0.5 m -> a STEP, 1.2 > 0.4                 -> blocked
@@ -104,71 +105,61 @@ weight is 0).
       clamped — step into [0.05, 5], slope into [10, 89]. 89° and not 90°:
       at 90° the tangent explodes and the rule stops meaning anything.
 
-  [3] THE HEIGHT, against the composed payload. ``scene_ground_lift`` at the
-      five nodes above returns exactly the reference values; the pinned border
-      (1000, 996) returns 0; a location without a relief, an unplaced one and
-      ``None`` return 0. And the grid the gate samples IS the grid
-      ``compose_scene`` ships — checked cell by cell, because a second
-      derivation of the field is the one way rule and picture can drift.
-      TURNED (yaw 90) puts node (1, 1) at ``(cx + lz, cz − lx)`` =
-      (1196.5, 1003.5) and must answer the same +1.5555. (The payload
-      rotation of the tile era is gone with contract v6 Nr. 4 — a location
-      faces the way its pin says, so there is exactly ONE field.)
+  [3] THE HEIGHT IS THE WORLD BAKE, and there is no second one. ``ground_at``
+      answers what ``ground_y`` answers, the scene payload carries NO
+      ``terrain`` block any more, and the four symbols the old second ground
+      was made of are GONE from their modules — a deletion is the one thing a
+      positive check cannot measure, so it is asserted by name:
+      ``relief.scene_ground_lift``, ``relief.ground_lift_at``,
+      ``scene_recipe.compose_terrain`` and ``scatter_curves.terrain_grid``.
 
-  [4] THE GATE, on the real route. The avatar stands INSIDE the location, so
-      no transition gate is involved and nothing but the height can refuse:
-      a) node (1,1) -> node (2,1) is 0.5 m apart with Δh = −3.4171 − 1.5555 =
-         −4.9726 m: a step 12× the limit -> 409 ``too_steep``, the message
-         names the STEP, and the last valid point comes back so the client can
-         snap the figure onto it. Neither end is near the opening: node (1,1)
-         is hypot(3.5, 0.5) = 3.5355 m from (1000, 996), node (2,1)
-         hypot(3, 0.5) = 3.0414 m — both well past the 1.5 m tolerance.
-      b) node (1,1) -> node (5,1) is 2 m apart with Δh = 2.0343 − 1.5555 =
-         +0.4788 m: atan(0.4788 / 2) = 13.4632° < 40 -> accepted. The nearer
-         end is still 1.5811 m from the opening, so this is the RULE letting
-         it through and not the exemption.
+  [4] THE GATE, on the real route, at the cliff:
+      a) (5004.5, 5020) -> (5005.0, 5020) is 0.5 m apart with Δh = 2.5 − 1.25 =
+         +1.25 m: a step three times the limit -> 409 ``too_steep``, the
+         message names the STEP, and the last valid point comes back so the
+         client can snap the figure onto it. Both ends are 0.5 m / 1.0 m from
+         the LEDGE opening at (5004, 5020) — but neither point lies IN the
+         ledge, so no opening of any location the report touches is asked and
+         the exemption cannot fire.
+      b) THE SHALLOW FLANK: (5202, 5020) -> (5206, 5020) is 4 m apart with
+         Δh = 1.5 − 0.5 = +1.0 m: atan(0.25) = 14.0362° < 40 -> accepted.
       c) THE COUNTER-PROBE, red without the rule: with ``max_step_height_m``
          at 5 m and ``max_slope_deg`` at 89° the IDENTICAL report of (a) is
          accepted. Nothing else in the chain changed, so the refusal in (a)
          was the height gate and only the height gate.
-      d) THE OPENING IS A RAMP END (E8 inventory finding 8). Node (8,1) ->
-         node (9,1) is the same kind of cliff (Δh = 3.99 − 5.8997 = −1.9097 m
-         over 0.5 m), but node (8,1) sits 0.5 m and node (9,1)
-         hypot(0.5, 0.5) = 0.7071 m from the opening — inside the 1.5 m
-         crossing tolerance -> accepted. Without the exemption a place on its
-         own plateau would be locked behind its own door.
-      e) INERT WITHOUT A RELIEF: the identical geometry on PLAIN (no
-         ``map3d.relief``) is accepted, both heights being 0. That is why the
-         gate cannot break a world that has no relief at all — and why
+      d) THE OPENING IS A RAMP END (E8 inventory finding 8). Walking IN through
+         the ledge's door, (5004.5, 5020) -> (5003.5, 5020), is Δh = 0 − 1.25 =
+         −1.25 m over 1.0 m, i.e. atan(1.25) = 51.3402° and blocked on its own
+         — but the arriving point lies in the ledge and 0.5 m from its opening,
+         inside the 1.5 m crossing tolerance -> accepted. Without the exemption
+         a place at the foot of a cliff would be locked behind its own door.
+      e) INERT WITHOUT A RELIEF: the same kind of report on PLAIN, where
+         nobody shaped the ground, is accepted with both heights 0. That is why
+         the gate cannot break a world without a relief — and why
          ``scripts/smoke_play_pos.py`` still passes unchanged.
-      f) A 2 cm LEAD UP THE SAME FACE — finding F1 in one report. The field is
-         linear inside a cell, so 0.02 m along the (1,1)->(2,1) edge is 0.04 of
-         it: h = 1.5555 · 0.96 + (−3.4171) · 0.04 = 1.356596, i.e.
-         Δh = −0.198904 — INSIDE the 0.4 m step cap, and atan(0.198904 / 0.02)
-         = 84.2582° all the same. The step limit alone is blind to a wall one
-         approaches in small enough moves, which is exactly what the client's
-         0.15 m lead does. The message must name the SLOPE here, not a step
-         that never fired.
+      f) A 10 cm LEAD UP THE SAME FACE — finding F1 in one report.
+         (5004.1, 5020) -> (5004.2, 5020) is Δh = 0.5 − 0.25 = +0.25 m, INSIDE
+         the 0.4 m step cap, and atan(0.25 / 0.1) = 68.1986° all the same. The
+         step limit alone is blind to a wall one approaches in small enough
+         moves, which is exactly what the client's 0.15 m lead does. The
+         message must name the SLOPE here, not a step that never fired.
 
-  [5] NESTING (finding F3). A place without a relief of its own does not
-      flatten the ground it stands on — it stands ON it, so the height comes
-      from the innermost ENCLOSING location that HAS a field
-      (``relief.ground_lift_at``). DOME's field is hand-derivable to the last
-      digit: 2 cells per axis means 3 × 3 support points, the border is pinned,
-      so the ONLY free value is the middle one — grid[1][1] = 1.037 at the tile
-      centre — and everything between is bilinear over a 4 m cell.
-      The two probe points sit on the centre line (u = 0.5), 0.5 m apart:
-        (2000, 1001.4) -> v = 1.4/8 + 0.5 = 0.675, fy = 1.35, ty = 0.35
-                          -> 1.037 · 0.65  = 0.674050   (outside the hut)
-        (2000, 1000.9) -> v = 0.9/8 + 0.5 = 0.6125, fy = 1.225, ty = 0.225
-                          -> 1.037 · 0.775 = 0.803675   (INSIDE the hut)
-      WITH the fix both come off DOME: Δh = −0.129625 over 0.5 m, no step
-      (0.1296 ≤ 0.4) and atan(0.25925) = 14.534° < 40 -> accepted.
-      RED COUNTER-PROBE: the hut's OWN lift is 0.0, so before the fix the pair
-      read Δh = 0.674050 over 0.5 m — a step 1.7× the limit, i.e. a 53.4°
-      cliff nobody authored, sealing an openingless hut from every side. The
-      smoke asserts both: that ``scene_ground_lift`` on the hut alone is still
-      0, that the old difference WOULD block, and that the route accepts.
+  [5] A NATURAL PLACE DOES NOT FLATTEN THE GROUND IT STANDS ON. The GROVE on
+      the flank draws no built floor (``draws_built_floor`` is False), so no
+      plateau is stamped and the landscape runs through it: 1.5 m at its west
+      edge, 2.5 m at its pin, 3.5 m at its east edge — the flank's own numbers.
+      RED COUNTER-PROBE: give the very same plot ONE CLOSED ROOM and it becomes
+      built, so the stamp fires and the whole footprint goes flat at the MEDIAN
+      of the natural heights under it. Those 25 lattice samples are 5 × 1.5,
+      5 × 2.0, 5 × 2.5, 5 × 3.0 and 5 × 3.5 (the flank depends on x alone
+      there), whose 13th value is 2.5 — so west edge, pin and east edge all
+      read 2.5 afterwards.
+
+      This section used to measure the opposite arrangement: a hut WITHOUT a
+      relief of its own inside a dome WITH one, resolved by "the innermost
+      enclosing location that has a field wins". That whole mechanism is gone
+      with the second ground (user decision 1) — there is one field, and who
+      shapes it is decided in the bake, once, by :func:`draws_built_floor`.
 
   [6] THE WORLD RELIEF (E8 task 4). Until now the gate only ever saw a
       location's own scene field; outside every footprint the world was flat
@@ -296,12 +287,16 @@ USER = {"username": "demo", "role": "user"}
 AVATAR = "demo_avatar"
 
 # The fixture's dials, all of them authored numbers rather than defaults.
-SEED = 1
-AMPLITUDE_M = 6.0
-WAVE_M = 0.5
 WIDTH_M = 8.0
-CELLS = 16
-CELL_M = WIDTH_M / CELLS          # 0.5 m
+#: The CLIFF: a height area whose ramp is two metres wide, so the 2 m world
+#: lattice carries 0 at its outline and the full height one step in.
+CLIFF_BOX = (5004.0, 5000.0, 5044.0, 5040.0)
+CLIFF_H_M = 5.0
+CLIFF_FALLOFF_M = 2.0
+#: The FLANK: the same height over a twenty-metre ramp, i.e. h = d/4.
+SLOPE_BOX = (5200.0, 5000.0, 5240.0, 5040.0)
+SLOPE_H_M = 5.0
+SLOPE_FALLOFF_M = 20.0
 
 
 def check(label, actual, expected):
@@ -328,55 +323,32 @@ def near(label, actual, expected, tol=1e-9):
                f"{actual}")
 
 
-# ── an INDEPENDENT reference height field (§ B5a) ───────────────────────
+# ── the hand-derived reference (§ B5a) ──────────────────────────────────
 
-def xorshift32_ref(seed: int):
-    """Re-implementation of the contract PRNG — the smoke never trusts the
-    source it verifies. Three lines on uint32: ``x ^= x<<13; x ^= x>>17;
-    x ^= x<<5``, seed 0 reads as 1."""
-    x = (seed & 0xFFFFFFFF) or 1
-    while True:
-        x ^= (x << 13) & 0xFFFFFFFF
-        x ^= x >> 17
-        x ^= (x << 5) & 0xFFFFFFFF
-        yield x / 4294967296.0
-
-
-def ref_grid(seed: int, amplitude: float, n: int):
-    """The height field by hand: border pinned to 0, every other point ONE
-    draw from the spatial hash ``seed + i·73856093 + j·19349663``, mapped to
-    [−1, 1) and scaled — rounded to 4 places, never −0.0 (no flat hulls in
-    this fixture, so the pinning rule is the border alone)."""
-    grid = []
-    for j in range(n + 1):
-        row = []
-        for i in range(n + 1):
-            if i in (0, n) or j in (0, n):
-                row.append(0.0)
-                continue
-            draw = next(xorshift32_ref((seed + i * 73856093 + j * 19349663)
-                                       & 0xFFFFFFFF))
-            value = round((draw * 2.0 - 1.0) * amplitude, 4)
-            row.append(value if value else 0.0)
-        grid.append(row)
-    return grid
+def ref_height(x: float, z: float, box, height: float, falloff: float
+               ) -> float:
+    """The height area rule, RE-IMPLEMENTED here — the smoke never trusts the
+    source it verifies. Zero outside the outline, else
+    ``height · min(1, d / falloff)`` with ``d`` the distance to the outline.
+    Axis-aligned boxes only, which is what this fixture paints."""
+    x0, z0, x1, z1 = box
+    if not (x0 <= x <= x1 and z0 <= z <= z1):
+        return 0.0
+    d = min(x - x0, x1 - x, z - z0, z1 - z)
+    return height * min(1.0, d / falloff) if falloff > 0 else height
 
 
-REF = ref_grid(SEED, AMPLITUDE_M, CELLS)
+def cliff_ref(x: float) -> float:
+    """The cliff's LATTICE value at a support point on the line z = 5020."""
+    return ref_height(x, 5020.0, CLIFF_BOX, CLIFF_H_M, CLIFF_FALLOFF_M)
 
 
-def node_local(i: int, j: int):
-    """Tile-local metres of support point (i, j): plan fraction (i/n, j/n) of
-    the reference square, whose centre is the tile centre."""
-    return (i * CELL_M - WIDTH_M / 2, j * CELL_M - WIDTH_M / 2)
-
-
-def node_world(cx: float, cz: float, i: int, j: int, yaw: float = 0.0):
-    """The same point in world metres — the composer's own local→world turn
-    (``world_geometry.local_to_world``, and the client's `tileToWorld`)."""
-    from app.core.world_geometry import local_to_world
-    lx, lz = node_local(i, j)
-    return local_to_world(lx, lz, cx, cz, yaw)
+def cliff_mix(x: float) -> float:
+    """…and the bilinear read between two of them (the field is constant in z
+    around z = 5020, so only the x pair mixes)."""
+    lo = math.floor(x / 2.0) * 2.0
+    t = (x - lo) / 2.0
+    return cliff_ref(lo) * (1.0 - t) + cliff_ref(lo + 2.0) * t
 
 
 # ── the world ───────────────────────────────────────────────────────────
@@ -422,34 +394,25 @@ def make_built(location_id: str) -> None:
     _save_world_data(data)
 
 
-def place(name: str, x: float, z: float, *, yaw: float = 0.0,
-          with_relief: bool = True,
-          width: float = WIDTH_M, wave: float = WAVE_M,
-          amplitude: float = AMPLITUDE_M, openings: bool = True) -> str:
-    """An area-detail location with ONE opening on its N edge (default 8 m
-    edge). ``openings=False`` draws none — a free boundary, so the nesting
-    case can walk in and out without the entry gate having anything to say."""
+def place(name: str, x: float, z: float, *, width: float = WIDTH_M,
+          opening_edge=None) -> str:
+    """A NATURAL location: a drawn boundary and nothing else.
+
+    No ``map3d.outline`` and no room at all, so ``draws_built_floor`` is False
+    and the bake stamps NO plateau under it (§ G5) — which is exactly what
+    every place in this fixture needs, because a plateau would plane away the
+    very flank the gate is measured on. ``opening_edge`` draws one boundary
+    opening in the middle of that edge (edge 1 = the east side of a centred
+    square, i.e. world ``(x + width/2, z)``).
+    """
     loc_id = add_location(name=name, description="slope-gate smoke")["id"]
     update_location_position(loc_id, x, z)
-    fields = {
-        "plan_width_m": width,
-        # A square outline, so the location composes a scene at all.
-        "outline": [[0, 0], [1, 0], [1, 1], [0, 1]],
-        "area_model": True,
-        "area_detail": True,
-        "boundary_openings": [{"edge": 0, "at": 0.5, "width_m": 2.0,
-                               "type": "passage", "room": ""}]
-        if openings else [],
-    }
-    if with_relief:
-        fields["relief"] = {"amplitude_m": amplitude, "seed": SEED,
-                            "wave_m": wave}
+    fields = {"plan_width_m": width}
+    if opening_edge is not None:
+        fields["boundary_openings"] = [
+            {"edge": int(opening_edge), "at": 0.5, "width_m": 2.0,
+             "type": "passage", "room": ""}]
     set_map3d(loc_id, **fields)
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == loc_id:
-            loc["yaw_deg"] = yaw
-    _save_world_data(data)
     return loc_id
 
 
@@ -492,29 +455,35 @@ def refusal_of(res):
 set_game_factor(0.0)
 set_game_time(START_GT)
 
-CLIFF = place("Smoke Cliff", 1000.0, 1000.0)
-TURNED = place("Smoke Cliff Turned", 1200.0, 1000.0, yaw=90.0)
-# A second, IDENTICAL copy — since v6 there is no per-clone rotation any
-# more, so this one exists to show the field is a pure function of the plan.
-SPUN = place("Smoke Cliff Spun", 1400.0, 1000.0)
-PLAIN = place("Smoke Flat", 1600.0, 1000.0, with_relief=False)
-# The nesting pair of finding F3: a WIDE-wave dome (4 m wave over an 8 m
-# square = 2 cells, so exactly one free support point in the middle) with a
-# 2 m hut of its own standing in the middle of it, relief-less and
-# opening-less.
-DOME_AMPLITUDE_M = 4.0
-# NEITHER of the two draws an opening: the entry gate then has nothing to
-# say in this case, and no point can be exempt from the height rule for
-# standing at a door — so what [5] measures is the height and only the height.
-DOME = place("Smoke Dome", 2000.0, 1000.0, wave=4.0,
-             amplitude=DOME_AMPLITUDE_M, openings=False)
-HUT = place("Smoke Hut", 2000.0, 1000.0, width=2.0, with_relief=False,
-            openings=False)
+# The two painted flanks the gate is measured on. They are WORLD height areas
+# — the only kind of relief left (user decision 1) — and they are stored before
+# any place is put on them, so every number below is the landscape's own.
+from app.models import heightfield as store  # noqa: E402
+store.save_height_area({"id": "cliff", "height_m": CLIFF_H_M,
+                        "falloff_m": CLIFF_FALLOFF_M,
+                        "polygon": [[CLIFF_BOX[0], CLIFF_BOX[1]],
+                                    [CLIFF_BOX[2], CLIFF_BOX[1]],
+                                    [CLIFF_BOX[2], CLIFF_BOX[3]],
+                                    [CLIFF_BOX[0], CLIFF_BOX[3]]]})
+store.save_height_area({"id": "flank", "height_m": SLOPE_H_M,
+                        "falloff_m": SLOPE_FALLOFF_M,
+                        "polygon": [[SLOPE_BOX[0], SLOPE_BOX[1]],
+                                    [SLOPE_BOX[2], SLOPE_BOX[1]],
+                                    [SLOPE_BOX[2], SLOPE_BOX[3]],
+                                    [SLOPE_BOX[0], SLOPE_BOX[3]]]})
+
+# The LEDGE sits at the foot of the cliff, its east opening exactly on the
+# outline the wall starts at: world (5000 + 4, 5020) = (5004, 5020).
+LEDGE = place("Smoke Ledge", 5000.0, 5020.0, opening_edge=1)
+# The GROVE stands ON the long flank — a place that draws no floor.
+GROVE = place("Smoke Grove", 5210.0, 5020.0)
+# A place on ground nobody shaped: the inert case.
+PLAIN = place("Smoke Flat", 1600.0, 1000.0)
 
 save_character_profile(AVATAR, {"current_location": "", "language": "en"},
                        create_new=True)
 set_character_pos(AVATAR, 0.0, 0.0)
-set_known_locations(AVATAR, [CLIFF, TURNED, SPUN, PLAIN, DOME, HUT])
+set_known_locations(AVATAR, [LEDGE, GROVE, PLAIN])
 set_active_character(AVATAR)
 # The throttle is the one rule about wall time and is not what this file
 # measures — off, so no case has to sleep.
@@ -602,60 +571,54 @@ def main() -> int:
     check("...and so is the slope limit",
           "max_slope_deg" in SECTIONS["game"]["fields"], True)
 
-    print("\n[3] scene_ground_lift — the height, against the composed payload")
-    cliff = get_location_by_id(CLIFF)
-    scene = scene_recipe.compose_scene(cliff, plan_width_m=WIDTH_M)
-    payload_grid = (scene.get("terrain") or {}).get("grid") or []
-    check("the payload ships a 17 × 17 field", len(payload_grid), CELLS + 1)
-    near("...with the cell the wave asks for",
-         (scene.get("terrain") or {}).get("step"), CELL_M)
-    check_true("the payload field IS the reference field (cell by cell)",
-               payload_grid == REF)
-    for i, j in ((1, 1), (2, 1), (5, 1), (8, 1), (9, 1)):
-        wx, wz = node_world(1000.0, 1000.0, i, j)
-        near(f"node ({i},{j}) at world ({wx}, {wz})",
-             relief.scene_ground_lift(cliff, wx, wz), REF[j][i], 1e-9)
-    near("the pinned border under the opening is 0",
-         relief.scene_ground_lift(cliff, 1000.0, 996.0), 0.0)
-    near("a location without a relief lifts nothing",
-         relief.scene_ground_lift(get_location_by_id(PLAIN), 1596.5, 996.5),
-         0.0)
-    near("no location at all lifts nothing",
-         relief.scene_ground_lift(None, 0.0, 0.0), 0.0)
-    unplaced = get_location_by_id(add_location(name="Smoke Unplaced",
-                                              description="")["id"])
-    near("an unplaced location lifts nothing",
-         relief.scene_ground_lift(unplaced, 0.0, 0.0), 0.0)
-    # The FRAME: yaw 90 maps local (lx, lz) to world (cx + lz, cz − lx).
-    turned = get_location_by_id(TURNED)
-    lx, lz = node_local(1, 1)
-    near("yaw 90: node (1,1) sits at world x = cx + lz",
-         node_world(1200.0, 1000.0, 1, 1, 90.0)[0], 1200.0 + lz, 1e-9)
-    near("...and at world z = cz − lx",
-         node_world(1200.0, 1000.0, 1, 1, 90.0)[1], 1000.0 - lx, 1e-9)
-    wx, wz = node_world(1200.0, 1000.0, 1, 1, 90.0)
-    near("...and answers the very same height",
-         relief.scene_ground_lift(turned, wx, wz), REF[1][1], 1e-9)
-    # ONE FIELD (v6 Nr. 4): the payload rotation is deleted, so a second
-    # copy of the same geometry answers with the reference field itself —
-    # gate and payload cannot drift apart any more.
-    spun = get_location_by_id(SPUN)
-    spun_scene = scene_recipe.compose_scene(spun, plan_width_m=WIDTH_M)
-    check_true("an unrotated payload IS the reference field",
-               spun_scene["terrain"]["grid"][1][1] == REF[1][1])
-    wx, wz = node_world(1400.0, 1000.0, 1, 1)
-    near("...and the gate samples that very field",
-         relief.scene_ground_lift(spun, wx, wz), REF[1][1], 1e-9)
+    print("\n[3] ONE ground — the world bake, and the deleted second one")
+    from app.core import scatter_curves  # noqa: E402
+    from app.core.world_geometry import ground_y  # noqa: E402
+    # The cliff, as the lattice carries it and as the mix reads it. Every
+    # number of section [4] comes off these four.
+    near("the support point ON the outline is 0", ground_y(5004.0, 5020.0),
+         cliff_ref(5004.0))
+    near("...and it really is 0", ground_y(5004.0, 5020.0), 0.0)
+    near("two metres in, the full 5 m", ground_y(5006.0, 5020.0),
+         cliff_ref(5006.0))
+    near("...and it really is 5", ground_y(5006.0, 5020.0), 5.0)
+    for probe in (5004.1, 5004.2, 5004.5, 5005.0):
+        near(f"the mix at x = {probe}", ground_y(probe, 5020.0),
+             cliff_mix(probe), 1e-9)
+    near("...which spells 1.25 at 5004.5", ground_y(5004.5, 5020.0), 1.25)
+    near("...and 2.5 at 5005.0", ground_y(5005.0, 5020.0), 2.5)
+    # THE RULE ASKS THE SAME FUNCTION, with no location in the question.
+    near("relief.ground_at IS ground_y", relief.ground_at(5004.5, 5020.0),
+         ground_y(5004.5, 5020.0))
+    near("...out in the flat world too", relief.ground_at(0.0, 0.0),
+         ground_y(0.0, 0.0))
+    # THE SECOND GROUND IS GONE. A deletion is the one thing a positive check
+    # cannot measure, so the four names are asserted by absence.
+    scene = scene_recipe.compose_scene(get_location_by_id(LEDGE),
+                                       plan_width_m=WIDTH_M)
+    check_true("the scene payload carries no `terrain` block",
+               "terrain" not in scene)
+    check_true("...and no `natural_floor` flag either",
+               "natural_floor" not in scene)
+    for mod, name in ((relief, "scene_ground_lift"),
+                      (relief, "ground_lift_at"),
+                      (relief, "has_relief"),
+                      (scene_recipe, "compose_terrain"),
+                      (scene_recipe, "terrain_frame"),
+                      (scatter_curves, "terrain_grid"),
+                      (scatter_curves, "relief_cells"),
+                      (scatter_curves, "terrain_height")):
+        check_true(f"red: {mod.__name__.split('.')[-1]}.{name} is deleted",
+                   not hasattr(mod, name))
 
-    print("\n[4a] the cliff refuses: 4.97 m of step over 0.5 m")
-    a_x, a_z = node_world(1000.0, 1000.0, 1, 1)
-    b_x, b_z = node_world(1000.0, 1000.0, 2, 1)
-    near("the two nodes are one cell apart", math.dist((a_x, a_z), (b_x, b_z)),
-         CELL_M, 1e-9)
-    near("the drop between them", REF[1][2] - REF[1][1], -4.9726, 1e-9)
-    near("neither end is near the opening (nearest is node (2,1))",
-         round(math.dist((b_x, b_z), (1000.0, 996.0)), 4), 3.0414, 1e-9)
-    park(a_x, a_z, CLIFF)
+    print("\n[4a] the cliff refuses: 1.25 m of step over 0.5 m")
+    a_x, a_z = 5004.5, 5020.0
+    b_x, b_z = 5005.0, 5020.0
+    near("the rise between them",
+         ground_y(b_x, b_z) - ground_y(a_x, a_z), 1.25, 1e-9)
+    check_true("...which is a STEP, three times the 0.4 m cap",
+               relief.slope_blocks(1.25, 0.5, 0.4, 40.0))
+    park(a_x, a_z, "")
     res = report(b_x, b_z)
     status, reason, pos, message = refusal_of(res)
     check("refused", res[0], "refused")
@@ -666,126 +629,104 @@ def main() -> int:
     check("the last valid point comes back", pos, {"x": a_x, "z": a_z})
     check("the avatar did not move", get_character_pos(AVATAR),
           {"x": a_x, "z": a_z})
+    # …and the exemption is NOT what could have saved it: neither end lies in
+    # the ledge, so no opening of any location this report touches is read.
+    from app.core.world_geometry import location_at_point  # noqa: E402
+    check("neither end of [4a] lies in a location",
+          [location_at_point(a_x, a_z, list_locations()),
+           location_at_point(b_x, b_z, list_locations())], [None, None])
 
-    print("\n[4b] the gentle rise is walked: 13.46° over 2 m")
-    c_x, c_z = node_world(1000.0, 1000.0, 5, 1)
-    near("the two nodes are 2 m apart", math.dist((a_x, a_z), (c_x, c_z)),
-         2.0, 1e-9)
-    near("the rise between them", REF[1][5] - REF[1][1], 0.4788, 1e-9)
-    near("its angle", math.degrees(math.atan2(0.4788, 2.0)), 13.4632, 1e-4)
-    near("...and it is NOT the opening exemption (1.58 m > 1.5 m)",
-         round(math.dist((c_x, c_z), (1000.0, 996.0)), 4), 1.5811, 1e-9)
-    park(a_x, a_z, CLIFF)
-    status, payload = report(c_x, c_z)
+    print("\n[4b] the gentle flank is walked: 14.04° over 4 m")
+    c_x, c_z = 5202.0, 5020.0
+    d_x, d_z = 5206.0, 5020.0
+    near("the flank at 5202", ground_y(c_x, c_z), 0.5, 1e-9)
+    near("...and at 5206", ground_y(d_x, d_z), 1.5, 1e-9)
+    near("its angle", math.degrees(math.atan2(1.0, 4.0)), 14.0362, 1e-4)
+    park(c_x, c_z, "")
+    status, payload = report(d_x, d_z)
     check("accepted", (payload or {}).get("ok") if status == "ok" else status,
           True)
     check("the avatar stands on the new point", get_character_pos(AVATAR),
-          {"x": c_x, "z": c_z})
+          {"x": d_x, "z": d_z})
 
     print("\n[4c] THE COUNTER-PROBE — with the limits wide open it goes")
     game["max_step_height_m"] = 5.0
     game["max_slope_deg"] = 89.0
-    park(a_x, a_z, CLIFF)
+    park(a_x, a_z, "")
     status, payload = report(b_x, b_z)
     check("the very same report of [4a] is accepted",
           (payload or {}).get("ok") if status == "ok" else status, True)
-    check("...and the avatar really moved onto the cliff",
+    check("...and the avatar really moved up the cliff",
           get_character_pos(AVATAR), {"x": b_x, "z": b_z})
     game.pop("max_step_height_m", None)
     game.pop("max_slope_deg", None)
 
-    print("\n[4d] an opening is a RAMP END — the same cliff is let through")
-    d_x, d_z = node_world(1000.0, 1000.0, 8, 1)
-    e_x, e_z = node_world(1000.0, 1000.0, 9, 1)
-    near("the drop between them", REF[1][9] - REF[1][8], -1.9097, 1e-9)
-    check_true("it would block on its own",
-               relief.slope_blocks(REF[1][9] - REF[1][8], CELL_M, 0.4, 40.0))
-    near("but node (8,1) is 0.5 m from the opening",
-         math.dist((d_x, d_z), (1000.0, 996.0)), 0.5, 1e-9)
-    near("...and node (9,1) 0.7071 m",
-         round(math.dist((e_x, e_z), (1000.0, 996.0)), 4), 0.7071, 1e-9)
-    park(d_x, d_z, CLIFF)
-    status, payload = report(e_x, e_z)
+    print("\n[4d] an opening is a RAMP END — walking in is let through")
+    from app.core.boundary_entry import opening_world_points  # noqa: E402
+    check("the ledge's opening sits on its east edge",
+          opening_world_points(get_location_by_id(LEDGE)),
+          [(1, (5004.0, 5020.0))])
+    in_x, in_z = 5003.5, 5020.0
+    near("the ground inside the ledge is untouched flat", ground_y(in_x, in_z),
+         0.0)
+    check_true("the crossing would block on its own",
+               relief.slope_blocks(0.0 - 1.25, 1.0, 0.4, 40.0))
+    near("its angle", math.degrees(math.atan2(1.25, 1.0)), 51.3402, 1e-4)
+    near("but the arriving point is 0.5 m from the opening",
+         math.dist((in_x, in_z), (5004.0, 5020.0)), 0.5, 1e-9)
+    park(a_x, a_z, "")
+    status, payload = report(in_x, in_z)
     check("accepted at the door", (payload or {}).get("ok")
           if status == "ok" else status, True)
+    check("...and it is the ledge one stands in",
+          (payload or {}).get("location_id"), LEDGE)
 
-    print("\n[4f] a 2 cm lead up the same face — the SLOPE limit catches it")
-    # The field is linear inside one cell, so 2 cm along the (1,1)->(2,1) edge
-    # is 0.04 of the cell: h = 1.5555·0.96 + (−3.4171)·0.04 = 1.356596, i.e.
-    # Δh = −0.198904 — INSIDE the 0.4 m step cap, and atan(0.198904 / 0.02) =
-    # 84.2582° all the same. This is finding F1 in one report: the step limit
-    # alone is blind to a wall one approaches in small enough moves, and the
-    # message has to name the SLOPE, not a step that never fired.
-    lead_x, lead_z = a_x + 0.02, a_z
-    near("the height 2 cm along the face",
-         relief.ground_lift_at(lead_x, lead_z, list_locations()),
-         REF[1][1] * 0.96 + REF[1][2] * 0.04, 1e-9)
-    near("its angle", math.degrees(math.atan2(0.198904, 0.02)), 84.2582, 1e-4)
-    check_true("the step cap alone would let it pass", 0.198904 <= 0.4)
-    park(a_x, a_z, CLIFF)
-    res = report(lead_x, lead_z)
+    print("\n[4f] a 10 cm lead up the same face — the SLOPE limit catches it")
+    lead_a, lead_b = 5004.1, 5004.2
+    near("the height 10 cm up the face", ground_y(lead_a, 5020.0), 0.25, 1e-9)
+    near("...and 10 cm further", ground_y(lead_b, 5020.0), 0.5, 1e-9)
+    check_true("the step cap alone would let it pass", 0.25 <= 0.4)
+    near("its angle", math.degrees(math.atan2(0.25, 0.1)), 68.1986, 1e-4)
+    park(lead_a, 5020.0, "")
+    res = report(lead_b, 5020.0)
     status, reason, _pos, message = refusal_of(res)
     check("refused", res[0], "refused")
     check("the reason", reason, "too_steep")
     check("the message names the SLOPE", message,
           "That slope is too steep to climb.")
 
-    print("\n[4e] inert without a relief (why smoke_play_pos is untouched)")
-    f_x, f_z = node_world(1600.0, 1000.0, 1, 1)
-    g_x, g_z = node_world(1600.0, 1000.0, 2, 1)
-    near("both heights are 0",
-         relief.scene_ground_lift(get_location_by_id(PLAIN), g_x, g_z), 0.0)
-    park(f_x, f_z, PLAIN)
-    status, payload = report(g_x, g_z)
+    print("\n[4e] inert where nobody shaped the ground")
+    near("both heights are 0", ground_y(1600.5, 1000.0), 0.0)
+    park(1600.0, 1000.0, PLAIN)
+    status, payload = report(1600.5, 1000.0)
     check("the identical geometry on flat ground is accepted",
           (payload or {}).get("ok") if status == "ok" else status, True)
 
-    print("\n[5] NESTING — a hut without a relief follows the ground it is on")
-    dome = get_location_by_id(DOME)
-    dome_grid = (scene_recipe.compose_scene(dome, plan_width_m=WIDTH_M)
-                 .get("terrain") or {}).get("grid") or []
-    check("the wide wave leaves a 3 × 3 field", len(dome_grid), 3)
-    check_true("...with the border pinned and ONE free value in the middle",
-               dome_grid == [[0.0, 0.0, 0.0], [0.0, dome_grid[1][1], 0.0],
-                             [0.0, 0.0, 0.0]] and dome_grid[1][1] != 0.0)
-    near("that value", dome_grid[1][1],
-         ref_grid(SEED, DOME_AMPLITUDE_M, 2)[1][1], 1e-9)
-    _all = list_locations()
-    out_x, out_z = 2000.0, 1001.4         # inside DOME, outside the hut
-    in_x, in_z = 2000.0, 1000.9           # inside the hut
-    near("the dome's height outside the hut (1.037 · 0.65)",
-         relief.ground_lift_at(out_x, out_z, _all), 0.674050, 1e-9)
-    near("...and INSIDE it, which is the fix (1.037 · 0.775)",
-         relief.ground_lift_at(in_x, in_z, _all), 0.803675, 1e-9)
-    near("the hut's OWN field is still nothing",
-         relief.scene_ground_lift(get_location_by_id(HUT), in_x, in_z), 0.0)
-    check_true("...and THAT difference would have been a 53° wall",
-               relief.slope_blocks(0.674050 - 0.0, 0.5, 0.4, 40.0))
-    near("the real difference", 0.674050 - 0.803675, -0.129625, 1e-9)
-    near("its angle", math.degrees(math.atan2(0.129625, 0.5)), 14.5340, 1e-4)
-    park(out_x, out_z, DOME)
-    status, payload = report(in_x, in_z)
-    check("walking into the hut is accepted", (payload or {}).get("ok")
-          if status == "ok" else status, True)
-    check("...and it really is the hut one stands in",
-          (payload or {}).get("location_id"), HUT)
-    status, payload = report(out_x, out_z)
-    check("and back out again", (payload or {}).get("ok")
-          if status == "ok" else status, True)
+    print("\n[5] a NATURAL place lets the landscape run through it")
+    from app.models.heightfield import draws_built_floor  # noqa: E402
+    grove = get_location_by_id(GROVE)
+    check("the grove draws no built floor", draws_built_floor(grove), False)
+    for x, expected in ((5206.0, 1.5), (5210.0, 2.5), (5214.0, 3.5)):
+        near(f"...so the flank runs on at x = {x}", ground_y(x, 5020.0),
+             expected, 1e-9)
+    # RED COUNTER-PROBE: one closed room makes the very same plot BUILT, the
+    # stamp fires, and the footprint goes flat at the MEDIAN of the 25 lattice
+    # samples under it — 5 each of 1.5/2.0/2.5/3.0/3.5, whose 13th is 2.5.
+    make_built(GROVE)
+    check("...and ONE closed room makes it built",
+          draws_built_floor(get_location_by_id(GROVE)), True)
+    for x in (5206.0, 5210.0, 5214.0):
+        near(f"red: the plot is now flat at the median, x = {x}",
+             ground_y(x, 5020.0), 2.5, 1e-9)
 
     print("\n[6] THE WORLD RELIEF — the gate outside every scene")
-    from app.core.boundary_entry import opening_world_points  # noqa: E402
-    from app.core.world_geometry import ground_y  # noqa: E402
-    from app.models import heightfield as store  # noqa: E402
     store.save_height_area({"id": "hill", "height_m": 5.0, "falloff_m": 4.0,
                             "polygon": [[3000, 3000], [3040, 3000],
                                         [3040, 3040], [3000, 3040]]})
     near("the flank at (3002, 3008)", ground_y(3002, 3008), 2.5)
     near("the flank at (3003, 3008)", ground_y(3003, 3008), 3.75)
-    near("no location is involved",
-         relief.scene_ground_lift(None, 3002, 3008), 0.0)
-    near("so the world alone answers", relief.ground_lift_at(
-        3002, 3008, list_locations()), 2.5)
+    near("the rule reads the world and nothing else",
+         relief.ground_at(3002, 3008), 2.5)
     near("the angle over one metre",
          math.degrees(math.atan2(1.25, 1.0)), 51.3402, 1e-4)
     park(3002.0, 3008.0, "")
@@ -823,7 +764,7 @@ def main() -> int:
     # here one closed room. Without it this house would stand on the untouched
     # flank, which is case (a) all over again.
     make_built(HOUSE)
-    set_known_locations(AVATAR, [CLIFF, TURNED, SPUN, PLAIN, DOME, HUT, HOUSE])
+    set_known_locations(AVATAR, [LEDGE, GROVE, PLAIN, HOUSE])
     check("the opening sits on the east edge (index 1)",
           opening_world_points(get_location_by_id(HOUSE)),
           [(1, (3004.0, 3020.0))])
@@ -837,7 +778,12 @@ def main() -> int:
     # WITHOUT the plateau pass rises 1.25 m (1.25 -> 2.5, the flank), i.e. the
     # very 51° the open flank is refused for.
     from app.core import heightfield as hf  # noqa: E402
-    _bare = hf.rasterize(store.list_height_areas())
+    # The HILL alone: the fixture also paints the cliff and the flank two
+    # kilometres east, and a raster over all three spans a box wide enough for
+    # ``_step_for`` to coarsen it — which would measure the doubling, not the
+    # plateau.
+    _bare = hf.rasterize([a for a in store.list_height_areas()
+                          if a["id"] == "hill"])
     near("unlevelled, the house's floor would rise from 1.25...",
          hf.sample_height(_bare, 3001, 3020), 1.25)
     near("...to 2.5 over that same metre",

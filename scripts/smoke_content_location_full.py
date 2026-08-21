@@ -586,6 +586,9 @@ MAP3D_IN = {
     "level_floors": {"0": "parquet", "-1": "stone"},
     "wall_kind": "brick",
     "area_model": True, "area_detail": True,
+    # ``relief`` is offered on purpose and must be DROPPED: a location's own
+    # 17 x 17 height field is gone with "Ein Boden" E5a (user decision 1), and
+    # the sanitizer keeps no fallback reader for it.
     "relief": {"amplitude_m": 0.8, "seed": 12345, "wave_m": 20},
 }
 CLEARING_IN = {
@@ -640,7 +643,6 @@ MAP3D_OUT = {
     "level_floors": {"0": "parquet", "-1": "stone"},
     "wall_kind": "brick",
     "area_model": True, "area_detail": True,
-    "relief": {"amplitude_m": 0.8, "seed": 12345, "wave_m": 20.0},
     "boundary_openings": [
         {"edge": 2, "at": 0.25, "width_m": 6.0, "type": "passage",
          "room": HUT},

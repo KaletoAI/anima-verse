@@ -21,7 +21,14 @@ in, so nothing is denormalized here):
 - ``boundary`` — the location's footprint as a polygon in the scene frame
                 (contract v6: the drawn outline, or the synthesized square of
                 edge ``extent_m`` as its four corners),
-- ``plates``  — one contour plate per used level plus one floor plate per room,
+- ``plates``  — the floors of the storeys ABOVE AND BELOW the ground: one
+                contour plate per such level plus one floor plate per room on
+                it. **Storey 0 has none** since "Ein Boden" E5a — the terrain
+                IS the floor there, its material is the layer bake
+                (``core.terrain_layers``) and its height is ``h_final``,
+- ``floor_plan`` — the storey-0 rooms as polygons + floor kinds, so a consumer
+                can place room spots and NPC stands without a plate to raycast
+                against (E5a),
 - ``walls``   — the building contour with its door gaps and the room shell
                 walls already split around every opening (window = sill +
                 head + glass segment),
@@ -30,10 +37,7 @@ in, so nothing is denormalized here):
 - ``models``  — ONE spec form for building, room diorama and prop; the client
                 runs the single ``place()`` routine of § B2 over it,
 - ``figures``/``markers`` — the figure scale and every anchor point already
-                resolved into world coordinates,
-- ``terrain`` — the optional height field of a detail scene; the composer has
-                already lifted every object standing on it, so the renderers
-                only drape their ground and sample figure heights.
+                resolved into world coordinates.
 
 Numbers are NOT free here: every constant below is quoted from the contract
 (``docs/schnittstellen-3d.md``, § A2/A3/A6 for the values, part B for the
@@ -46,7 +50,7 @@ is read through ``room_recipe`` exactly as the room recipe does it.
 """
 
 import math
-from typing import (Any, Callable, Dict, Iterator, List, Optional, Set,
+from typing import (Any, Dict, Iterator, List, Optional, Set,
                     Tuple)
 
 from app.core.log import get_logger
@@ -54,8 +58,6 @@ from app.core.model_store import DEFAULT_TIER, variant_urls
 from app.core.room_recipe import (SHARE_TOL_M, _WALKABLE_TYPES,
                                   compose_recipe, layout_rotation,
                                   room_transform)
-from app.core.scatter_curves import (relief_cells, terrain_grid,
-                                     terrain_height, variant_mix)
 
 logger = get_logger(__name__)
 
@@ -71,7 +73,15 @@ logger = get_logger(__name__)
 DEFAULT_EXTENT_M = 10.0
 # Storey height in metres when the location does not declare one.
 DEFAULT_STOREY_REAL_M = 3.0
-# Level plate: extruded downward, top at level × storey + 0.08, 0.14 thick.
+# Level plate of a DECLARED STOREY (level != 0): extruded downward, top at
+# level × storey + 0.08, 0.14 thick.
+#
+# STOREY 0 HAS NO PLATE SINCE "Ein Boden" E5a. Its floor is the world terrain:
+# the height is ``h_final`` (stamped flat under a built location, § G5) and the
+# material is the layer bake (§ G3). These two numbers are therefore the datum
+# of an UPPER STOREY and of a BASEMENT, nowhere else — every L0 occurrence of
+# 0.08/0.09/0.10 is gone, and ``scripts/smoke_scene_recipe.py`` keeps red
+# counter-probes that say so.
 LEVEL_PLATE_TOP = 0.08
 LEVEL_PLATE_THICKNESS = 0.14
 # Room floor plate: sits ABOVE the level plate (it overrides only its own
@@ -153,10 +163,14 @@ STAND_CLEARANCE = 0.12
 # ground while the PROPS in the same room already sat correctly on it
 # (user finding 2026-07-28, Mondscheinsee).
 DIORAMA_CLEARANCE = 0.02
-# An overlay zone that declares a floor kind gets its texture surface this far
-# above the model — coplanar with the mesh it would z-fight.
+# An outdoor zone ON A DECLARED STOREY (a roof terrace) lies this far above
+# that storey's level plate — coplanar with it they would z-fight. On storey 0
+# it has no consumer any more: a zone there is a LAYER of the ground bake, not
+# a surface laid over a slab (E5a).
 OVERLAY_SURFACE_LIFT = 0.01
-# The floor kind of a level plate without its own entry in map3d.level_floors.
+# The floor kind of a level plate without its own entry in map3d.level_floors —
+# and of a CLOSED room that names none (``core.terrain_layers``' twin
+# constant, which is what puts parquet rather than grass under the furniture).
 DEFAULT_FLOOR_KIND = "floor"
 
 # The renderers' colour vocabulary — ONE place for both of them (§ B1 style).
@@ -332,16 +346,44 @@ def _bbox_inside(outline: List[List[float]],
     return all(_point_in_polygon(x, z, contour) for x, z in corners)
 
 
-def _room_floor_y(recipe: Dict[str, Any], storey: float) -> float:
-    """The height the room's FLOOR sits at: its storey plus the room's own
-    offset (``layout.floor_offset_y``, metres).
+def storey_floor_y(level: int, storey: float) -> float:
+    """The FLOOR DATUM of one storey, in scene metres — where one stands on it.
 
-    Inside a building the offset is 0 and this is just the storey. It matters
-    where a room cuts a hole into a LOCATION model: terrain is not flat, so a
-    hut on the slope needs its floor where the ground actually is — otherwise
-    it floats over or sinks into the hole it made (user finding 2026-07-28).
-    Everything in the room derives from here, so plate, walls, props, markers
-    and diorama move as one.
+    THE WHOLE HEIGHT LADDER OF A SCENE, in one line and two cases (§ G5):
+
+    * storey 0 is the TERRAIN. Its datum is 0 in the scene frame, because the
+      scene frame's zero IS the ground under the pin — there is no plate, no
+      slab and no 0.08 to clear;
+    * every DECLARED storey above or below keeps its level plate, so its datum
+      is that plate's top, ``level·storey + LEVEL_PLATE_TOP``.
+
+    Before E5a this was a hard ``level·storey + 0.08`` everywhere plus a
+    ``slab`` parameter that was 0 on a natural location and 0.08 elsewhere —
+    two grounds, one of which the world relief knew nothing about.
+
+    THE BASEMENT IS NOT STOREY 0 EITHER. § G5 speaks of "upper storeys", but the
+    property that decides is being a DECLARED storey rather than the terrain: a
+    cellar at level −1 lies a storey under the ground and would otherwise lose
+    its floor to a terrain it is nowhere near.
+    """
+    level = int(level)
+    return level * storey + (0.0 if level == 0 else LEVEL_PLATE_TOP)
+
+
+def _room_floor_y(recipe: Dict[str, Any], storey: float) -> float:
+    """The room's STOREY datum plus its own offset (``layout.floor_offset_y``).
+
+    The bare storey level, not the floor one stands on: what a room's floor
+    lifts over it is :func:`_plate_top`, and the two are added wherever
+    something rests on that floor.
+
+    The offset is a per-room fine adjustment and nothing else since E5a. It used
+    to carry two other jobs and has lost both: it compensated for a room cutting
+    a hole into a LOCATION model on a slope (there is one ground now, and it is
+    the same one the mesh stands on), and the author used it as a WATERLINE for
+    a zone whose floor kind is water (that is ``layout.water_level`` now, § G4).
+    Everything in the room still derives from here, so plate, walls, props,
+    markers and diorama move as one.
     """
     return (int(recipe.get("level") or 0) * storey
             + _num(recipe.get("floor_offset_y")))
@@ -391,6 +433,13 @@ def level_plate_kind(level: int, level_floors: Any, ground_kind: str) -> str:
 
     Room plates lie ON TOP of the level plate and keep overriding their own
     area with their own ``surfaces.floor`` — untouched by this.
+
+    RULE 2 IS UNREACHABLE FROM ``_plates`` SINCE E5a, and deliberately kept:
+    storey 0 draws no level plate at all any more (the terrain is its floor and
+    the layer bake its material), so no plate ever asks this function about
+    level 0. The rule stays written down because it is the CONTRACT of the
+    location's ``terrain`` field — the ground OUTSIDE — and it is the one place
+    that says storey 0 is the terrain storey by definition.
     """
     if isinstance(level_floors, dict):
         declared = str(level_floors.get(str(level)) or "").strip()
@@ -403,8 +452,7 @@ def level_plate_kind(level: int, level_floors: Any, ground_kind: str) -> str:
 
 def is_natural_location(map3d: Dict[str, Any],
                         recipes: List[Dict[str, Any]]) -> bool:
-    """Does this location draw NO BUILT FLOOR — i.e. is its floor the world
-    terrain itself (§ B1 addendum 2026-08-20, part 3)?
+    """Does this location draw NO BUILT FLOOR — i.e. does it stamp no plateau?
 
     THE RULE, and it asks exactly two things:
 
@@ -413,8 +461,7 @@ def is_natural_location(map3d: Dict[str, Any],
        drawing where a lake ends is not the same as drawing a floor.
     2. no CLOSED room — every room is ``always_visible`` (§ A5, an open zone).
        The yard (``is_ground``, § A13a) is inherently open and never counts as
-       one; a location with even ONE closed room is a built place and keeps the
-       level plate and the 0.08 slab datum of the datum wave.
+       one.
 
     ``area_model`` is deliberately NOT part of it. A natural location may carry
     a terrain mesh (forest, village square) and may equally carry none at all —
@@ -422,13 +469,13 @@ def is_natural_location(map3d: Dict[str, Any],
     are the very case this rule exists for. Asking for a model would answer
     "does a mesh exist" instead of "did anybody draw a floor".
 
-    WHAT IT DECIDES: a natural location gets ``slab = 0`` and NO level plate.
-    Between the metric wave (8672c756) and this addendum, every location with a
-    drawn boundary got a 14 cm level plate — right for a house on a plot, and
-    for the lake it was a hard-edged podium of grass sitting over the landscape
-    with its sand and water 1 cm above it (user screenshots 2026-08-20). Nature
-    has no storey slab: its floor IS the terrain, and the surfaces drape onto
-    the relief.
+    WHAT IT DECIDES SINCE E5a: nothing in this payload. It has no ``slab`` to
+    zero and no level plate to suppress — storey 0 has neither for anybody now.
+    It survives as the NAME OF THE LAW the height bake stamps by
+    (``models.heightfield.draws_built_floor`` is this function's inverse, asked
+    of the stored location instead of the composed recipes, § G5): a BUILT place
+    planes its plot to one height, a natural one lets the landscape run through
+    it. The two spellings are kept in step by ``scripts/smoke_scene_recipe.py``.
     """
     if _outline_world(map3d):
         return False
@@ -442,21 +489,33 @@ def is_natural_location(map3d: Dict[str, Any],
 
 def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
             levels: List[int], storey: float,
-            relief_rooms: Optional[Set[str]] = None,
-            ground_kind: str = "",
-            slab: float = LEVEL_PLATE_TOP,
-            natural: bool = False) -> List[Dict[str, Any]]:
-    """One contour plate per used level + one floor plate per room.
+            ground_kind: str = "") -> List[Dict[str, Any]]:
+    """The floors of every DECLARED storey — one contour plate per level plus
+    one floor plate per room on it. **Storey 0 gets nothing** (E5a).
+
+    THE PLATE ERA IS OVER ON THE GROUND. Until E5a this function drew, on
+    storey 0, a level plate 0.14 m thick with its top at 0.08, a room plate per
+    room at 0.10 and a texture-only surface per outdoor zone at 0.09 — a second
+    ground stacked on the world's own, held apart from it by constants, and the
+    root of every "house sinks in the distance / grass over the parquet" finding
+    the plan was written for. On storey 0 the floor is now the TERRAIN: its
+    height is ``h_final`` (planed flat under a built location by the plateau
+    stamp, § G5) and its material is the LAYER BAKE, where the same room
+    polygons appear as the topmost layers of the ground (§ G3,
+    ``core.terrain_layers.location_floors``). What is left here is
+    ``floor_plan`` in the payload — the polygons, so a consumer still knows
+    where the rooms are.
+
+    A DECLARED STOREY IS UNTOUCHED, and that includes a basement: level ±1 and
+    beyond are scene geometry (§ G5, "Obergeschosse bleiben Szenen-Geometrie"),
+    at exactly the datums they always had — the level plate's top at
+    ``level·storey + 0.08``, the room plates at 0.10 on it, an outdoor zone as a
+    texture surface at 0.09. Nothing about an upper floor moved.
 
     The level plate carries the storey's floor kind (``level_plate_kind``);
     the rooms lay their own plates ON TOP, so a room floor overrides only its
     own area. Outdoor rooms (§ A5) get NO body — they appear as a plate of
-    thickness 0, i.e. a pure texture surface on the ground below.
-
-    ``relief_rooms`` are the room ids whose ground follows the terrain field
-    (v5.2 Nr. 14): their plate gets ``relief: true``, which is the renderers'
-    ONLY instruction to subdivide it and raise its vertices. Level plates and
-    every other room plate stay exactly as flat as before.
+    thickness 0, i.e. a pure texture surface on the level plate below.
 
     WHAT THE LEVEL PLATE IS SHAPED LIKE (contract v6 Nr. 4): the drawn
     location boundary — the plate is the triangulated boundary polygon, not a
@@ -466,19 +525,15 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     neither gets no level plate at all, exactly as before — the synthesized
     square is a transition crutch for the payload's ``boundary``
     field, never a floor somebody drew.
-
-    AND A NATURAL LOCATION GETS NONE EITHER (``natural``,
-    :func:`is_natural_location`), however clearly its plot is drawn: its floor
-    is the world terrain, so there is no storey slab to draw and nothing to cut
-    an edge against. ``slab`` is 0 there and every surface rides the terrain.
     """
     plates: List[Dict[str, Any]] = []
-    contour = [] if natural else (_outline_world(map3d)
-                                  or _drawn_boundary(map3d))
+    contour = _outline_world(map3d) or _drawn_boundary(map3d)
     level_floors = (map3d or {}).get("level_floors") or {}
     ground = min(levels)
     if contour:
         for level in levels:
+            if level == 0:
+                continue                    # the terrain is the floor here
             plates.append({
                 "level": level,
                 "outline": contour,
@@ -490,6 +545,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
             })
     for recipe in recipes:
         level = int(recipe.get("level") or 0)
+        if level == 0:
+            continue                        # …and here (``floor_plan``)
         outdoor = bool(recipe.get("always_visible"))
         outline = _room_outline_world(recipe)
         if not outline:
@@ -497,19 +554,7 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
         entry: Dict[str, Any] = {
             "level": level,
             "outline": outline,
-            # THE DATUM IS THE DRAWN FLOOR, for an outdoor room too (§ B1
-            # addendum 2026-08-20). An outdoor plate is a pure texture
-            # surface, and it used to be laid on the abstract storey level
-            # (level × storey) — 0.08 BELOW the level plate that covers the
-            # same ground, i.e. inside it. That was invisible while a level
-            # plate needed a drawn building outline; since the metric wave
-            # (8672c756) a boundary alone produces one, so every area
-            # location's sand and water sank into its own storey slab.
-            # It rides the SAME 0.01 the overlay surfaces ride
-            # (``_overlay_plates``): coplanar with the slab it would z-fight,
-            # and this way both paths to the same room answer one number.
-            "top_y": _r(_room_floor_y(recipe, storey)
-                        + _plate_top(recipe, slab)),
+            "top_y": _r(_room_floor_y(recipe, storey) + _plate_top(recipe)),
             "thickness": 0.0 if outdoor else ROOM_PLATE_THICKNESS,
             "opacity_role": _opacity_role(level, ground),
             "room_id": recipe.get("room_id") or "",
@@ -517,48 +562,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
         kind = str(((recipe.get("surfaces") or {}).get("floor")) or "").strip()
         if kind:
             entry["texture_kind"] = kind
-        if relief_rooms and entry["room_id"] in relief_rooms:
-            entry["relief"] = True
         plates.append(entry)
     return plates
-
-
-def _overlay_plates(recipes: List[Dict[str, Any]],
-                    overlay_rooms: Dict[str, Dict[str, Any]],
-                    ground: int) -> List[Dict[str, Any]]:
-    """Texture surfaces for outdoor zones that DECLARE a floor kind.
-
-    An overlay zone lies on the model and normally gets no plate — a surface
-    at storey height would cut straight through the terrain. But the zone
-    knows its real height (the measured model surface plus the room's own
-    offset), so a declared kind can be laid exactly there. That is what turns
-    a drawn area into a lake: a room over the water, floor kind ``water``, and
-    the material class does the rest. Without a declared kind nothing is
-    emitted — the model's own baked texture stays visible, as before.
-    """
-    out: List[Dict[str, Any]] = []
-    for recipe in recipes:
-        room_id = str(recipe.get("room_id") or "")
-        overlay = overlay_rooms.get(room_id)
-        if not overlay:
-            continue
-        kind = str(((recipe.get("surfaces") or {}).get("floor")) or "").strip()
-        if not kind:
-            continue
-        outline = _room_outline_world(recipe)
-        if not outline:
-            continue
-        level = int(recipe.get("level") or 0)
-        out.append({
-            "level": level,
-            "outline": outline,
-            "top_y": _r(_num(overlay.get("y")) + OVERLAY_SURFACE_LIFT),
-            "thickness": 0.0,
-            "texture_kind": kind,
-            "opacity_role": _opacity_role(level, ground),
-            "room_id": room_id,
-        })
-    return out
 
 
 # ── Walls ───────────────────────────────────────────────────────────────
@@ -767,7 +772,10 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                     "level": level,
                     "from": start,
                     "to": end,
-                    "base_y": _r(level * storey + LEVEL_PLATE_TOP),
+                    # The foot of the shell is the floor of its storey
+                    # (:func:`storey_floor_y`) — the terrain on storey 0 since
+                    # E5a, the level plate's top on every declared one.
+                    "base_y": _r(storey_floor_y(level, storey)),
                     "height": _r(height),
                     "thickness": WALL_THICKNESS,
                     "opacity_role": _opacity_role(level, min(levels)),
@@ -838,9 +846,9 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
     and its diorama. The BUILDING's contour walls are untouched.
     """
     level = int(recipe.get("level") or 0)
-    # Room shell walls stand on the ROOM plate (0.10), the contour walls on
-    # the level plate (0.08) — § A4/A6.
-    base = _room_floor_y(recipe, storey) + ROOM_PLATE_TOP
+    # Room shell walls stand on the ROOM's own floor (``_plate_top``): the
+    # room plate (0.10) on a declared storey, the TERRAIN (0.0) on storey 0.
+    base = _room_floor_y(recipe, storey) + _plate_top(recipe)
     height = _wall_height(storey)
     kind = str(((recipe.get("surfaces") or {}).get("wall")) or "").strip()
     room_id = recipe.get("room_id") or ""
@@ -952,7 +960,7 @@ def _doorways(recipes: List[Dict[str, Any]],
         level = int(recipe.get("level") or 0)
         # The wall's own foot — the same number _room_walls stands its
         # full-height pieces on (room plate, storey and level included).
-        base = _r(_room_floor_y(recipe, storey) + ROOM_PLATE_TOP)
+        base = _r(_room_floor_y(recipe, storey) + _plate_top(recipe))
         for _i, a, ux, uz, length, spans in _room_wall_edges(recipe):
             for s0, s1, op in spans:
                 if str(op.get("type") or "door").lower() not in _WALKABLE_TYPES:
@@ -1270,7 +1278,10 @@ def _elevator(map3d: Dict[str, Any], levels: List[int],
         return []
     ex, ez = _num(pos[0]), _num(pos[1])
     top_level = max([0] + list(levels))
-    shaft_top = (top_level + 1) * storey + LEVEL_PLATE_TOP
+    # The shaft reaches the floor of the storey ABOVE the topmost one, which is
+    # always a declared storey (``top_level`` ≥ 0) and therefore unchanged by
+    # E5a. Every other height here comes off :func:`storey_floor_y`.
+    shaft_top = storey_floor_y(top_level + 1, storey)
     outer = ELEVATOR_SHAFT_M
     column = max(ELEVATOR_COLUMN_M, 0.05)
 
@@ -1302,12 +1313,19 @@ def _elevator(map3d: Dict[str, Any], levels: List[int],
                         gw, shaft_top, gd, side=side))
     pad = ELEVATOR_PAD_M
     for level in levels:
+        # THE PAD HANGS UNDER THE FLOOR OF ITS STOREY — the same law as before,
+        # only the floor is now :func:`storey_floor_y` instead of a hard 0.08:
+        # on storey 0 the pad's top is the terrain (0.0) and one steps onto it
+        # level with the ground, on every declared storey it is the level
+        # plate's top exactly as it always was.
         out.append(_box("elevator_pad", ex,
-                        level * storey + LEVEL_PLATE_TOP - ELEVATOR_PAD_THICKNESS / 2,
+                        storey_floor_y(level, storey)
+                        - ELEVATOR_PAD_THICKNESS / 2,
                         ez, pad, ELEVATOR_PAD_THICKNESS, pad, level=level))
     cabin = ELEVATOR_CABIN_M
     cabin_h = max(ELEVATOR_CABIN_STOREY_FRAC * storey, 0.3)
-    out.append(_box("elevator_cabin", ex, LEVEL_PLATE_TOP + cabin_h / 2, ez,
+    out.append(_box("elevator_cabin", ex,
+                    storey_floor_y(0, storey) + cabin_h / 2, ez,
                     cabin, cabin_h, cabin, level=0))
     return out
 
@@ -1339,8 +1357,7 @@ def _variants(base_url: str, tiers: Any) -> Dict[str, str]:
 
 def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
                     meta: Dict[str, Any],
-                    extent: float,
-                    slab: float = LEVEL_PLATE_TOP) -> Optional[Dict[str, Any]]:
+                    extent: float) -> Optional[Dict[str, Any]]:
     """The location model as a placement spec (§ A2/B2).
 
     ONE scale factor on all three axes (user decision 2026-07-28 — nothing is
@@ -1373,11 +1390,9 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
       stood at basement height on a square that has no basement (user
       finding 2026-07-28). With the ground pinned to its level that is not
       expressible any more.
-    - ``display "shell"`` — a building is pinned by the SAME law, only to the
-      storey-0 floor the recipe really draws (``slab``, ``LEVEL_PLATE_TOP`` =
-      0.08 wherever one is drawn) instead of the abstract level datum 0: its
-      walkable surface lands there, ``offset_y`` trims from there, and the
-      mesh hangs below.
+    - ``display "shell"`` — a building is pinned by the SAME law, to the same
+      storey-0 floor: its walkable surface lands there, ``offset_y`` trims from
+      there, and the mesh hangs below.
 
       It used to pin the mesh's LOWER EDGE (a fixed 0.06 socle clearance +
       ``offset_y``), which is the model's floor only for a mesh that has no
@@ -1389,10 +1404,13 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
       dial that describes exactly this is ``walk_y``, and now it is the dial
       that places the model.
 
-    WHAT THIS MOVES: a building whose ``walk_y`` is 0 (undeclared — the mesh's
-    lower edge IS its floor) rises by 0.02 m, from the old 0.06 clearance to
-    the 0.08 storey floor. Nothing else changes for it, and no model is
-    measured automatically to fill ``walk_y`` in — that law stands (below).
+    WHAT E5a MOVES: the storey-0 floor IS the terrain now
+    (:func:`storey_floor_y`), so both anchors measure from 0 instead of from the
+    0.08 slab a drawn boundary used to produce. A building whose ``walk_y`` is 0
+    (undeclared — the mesh's lower edge IS its floor) therefore sits 8 cm lower
+    in the scene frame and exactly ON the ground, which under a built location
+    is the plateau the bake stamped. No model is measured automatically to fill
+    ``walk_y`` in — that law stands (below).
 
     Where the walkable surface SITS inside the mesh is the admin's ``walk_y``
     dial (metres above the lower edge, 0 = the lower edge itself) and
@@ -1429,27 +1447,22 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
     _bbox_cx = (min(_xs) + max(_xs)) / 2.0 if _bnd else 0.0
     _bbox_cz = (min(_zs) + max(_zs)) / 2.0 if _bnd else 0.0
 
+    # THE STOREY-0 FLOOR, and since E5a there is only one of it: the terrain,
+    # i.e. 0 in the scene frame (:func:`storey_floor_y`). Both kinds of model
+    # measure from it, and so does everything standing in the yard and in the
+    # zones on it (``_plate_top`` answers 0 there too) — which is what makes
+    # "one ground" true for a mesh as well as for a figure.
+    floor = storey_floor_y(0, 0.0)
     if ground:
-        # Level-0 floor, by definition — the terrain storey IS this model.
-        # And the level-0 floor is the plate the recipe DRAWS (§ B1 addendum
-        # 2026-08-20), not the abstract datum under it: an area model whose
-        # surface sat at 0 was 0.08 below its own storey plate, and every
-        # zone, NPC and prop pinned to that surface with it.
-        #
-        # ``slab`` IS that drawn floor and therefore 0 on a NATURAL location
-        # (part 3 of the addendum), which is the only thing that keeps ONE
-        # datum on an area location: the zones on this mesh read their height
-        # off ``walk_y_world`` while the props in the same zones read it off
-        # ``_plate_top(recipe, slab)``. Leaving this at a hard 0.08 while the
-        # slab went to 0 would put every yard prop 7 cm inside the mesh its
-        # own zone surface lies on.
-        walk_world = slab
+        # An area model IS the ground of storey 0, so its walkable surface
+        # lands on that floor and ``offset_y`` does not apply.
+        walk_world = floor
         bottom = walk_world - walk
     else:
-        # The SAME law, pinned to the floor the recipe draws for storey 0:
-        # the declared walkable surface lands on the level plate, the mesh
-        # hangs below it, and ``offset_y`` trims from there.
-        walk_world = slab + offset_y
+        # The SAME law for a building shell: the declared walkable surface
+        # lands on the storey-0 floor, the mesh hangs below it, and
+        # ``offset_y`` trims from there.
+        walk_world = floor + offset_y
         bottom = walk_world - walk
     spec: Dict[str, Any] = {
         "role": "building",
@@ -1497,14 +1510,14 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
 
 
 def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
-                   meta: Dict[str, Any], storey: float, slab: float,
-                   lift: Optional[Callable[[float, float], float]] = None,
+                   meta: Dict[str, Any], storey: float,
                    ) -> Optional[Dict[str, Any]]:
     """A room's diorama model as a placement spec (§ B2a).
 
-    ``slab`` is the storey's own floor plate, handed down to ``_plate_top``
-    (§ B1 addendum 2026-08-20) — the diorama rests on the SAME floor the
-    room's props do.
+    It rests on the SAME floor the room's props do (``_plate_top``): the
+    terrain on storey 0, the room plate on a declared storey. ``model_offset_y``
+    survives unchanged (user decision 4 of the plan) — it now measures from the
+    one ground instead of from a slab, so it means the same thing everywhere.
 
     ONE law of scale, no exception left (2026-07-28): the diorama scales like
     a prop — its declared width over its largest XZ side. The room
@@ -1519,10 +1532,6 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     calibrated via width_m/walk_y), whether or not the room carries prop
     placements. A room without a diorama simply has no model.
 
-    ``lift`` is the terrain sampler for a room that follows the relief
-    (v5.2 Nr. 14), called with the anchor's WORLD metres — rare for a diorama,
-    but the rule is one rule: everything standing in a non-flat room is raised
-    to the ground under its anchor.
     ``walk_y_world`` derives from ``bottom_y`` and rides along by itself.
     """
     if not meta:
@@ -1556,14 +1565,12 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "yaw_deg": _r(_num(lay.get("rotation")), 1),
         "anchor": [_r(anchor_u), _r(anchor_v)],
         # Same floor the room's PROPS stand on — ONE source for all of them
-        # (`_plate_top`): the room plate indoors, the storey's floor plate
-        # outdoors, the bare terrain on the ground. Plus the diorama
-        # clearance and the plan's dial.
+        # (`_plate_top`): the terrain on storey 0, the room plate on a
+        # declared storey. Plus the diorama clearance and the plan's dial.
         "bottom_y": _r(_room_floor_y(recipe, storey)
-                       + _plate_top(recipe, slab)
+                       + _plate_top(recipe)
                        + DIORAMA_CLEARANCE
-                       + _num(recipe.get("model_offset_y"))
-                       + (lift(anchor_u, anchor_v) if lift else 0.0)),
+                       + _num(recipe.get("model_offset_y"))),
         "measure": "xz",
     }
     width_m = _num(meta.get("width_m"))
@@ -1634,68 +1641,55 @@ def _cutouts(contour: List[List[float]],
     return polys
 
 
-def _plate_top(recipe: Dict[str, Any], slab: float) -> float:
-    """How far a carrier's floor lifts what stands on it, over the storey.
+def _plate_top(recipe: Dict[str, Any]) -> float:
+    """How far a room's floor lifts what stands on it, over its storey datum.
 
     THE ONE PLACE THIS IS DECIDED — the room's own plate reads it
     (``_plates``), and so does everything that stands on that plate: props,
-    markers and the room diorama. Three carriers, three answers:
+    markers and the room diorama.
 
-    * a BUILT room has a floor plate with a body — its top (0.10).
-    * an OUTDOOR room is a pure texture surface (§ A5), laid on the floor
-      below it plus the hair that keeps the two from z-fighting (0.08 + 0.01
-      on a storey slab, 0.00 + 0.01 on bare terrain).
-    * the GROUND (§ A13a) draws no surface of its own — it IS the yard — so
-      its placements stand DIRECTLY on the floor below (0.08 on a slab, 0.00
-      on bare terrain; no z-fight lift, there is no second surface to fight
-      with). Only the prop/marker clearance separates them from it.
+    **ON STOREY 0 THE ANSWER IS ZERO, for every kind of room** (E5a): the
+    terrain IS the floor, there is no plate to stand on, and a prop measures
+    from the ground under its own anchor. That single line replaces the whole
+    ``slab`` apparatus — 0.08 where a location drew a floor, 0.00 where it did
+    not, plus a 1 cm anti-z-fight hair on every zone — which existed only to
+    keep two grounds apart.
 
-    ``slab`` is the top of that storey plate over the storey datum —
-    ``LEVEL_PLATE_TOP`` where the location draws one (an outline or a drawn
-    boundary, ``_plates``), 0.0 where it draws none: a NATURAL location
-    (:func:`is_natural_location`) by decision, or a location with no drawn
-    shape at all. Until the § B1 addendum of 2026-08-20 both outdoor kinds
-    measured from the bare datum, which put them 0.08 INSIDE the level plate
-    covering the same ground — harmless while only a drawn building outline
-    produced such a plate, a buried floor since the metric wave (8672c756)
-    gives every location with a drawn boundary one.
+    On a DECLARED storey (an upper floor, a basement) nothing has moved:
 
-    THE 1 cm IS UNCONDITIONAL since part 3 of that addendum. It used to be
-    dropped when there was no slab ("nothing to z-fight with"), which was true
-    only while a slab-less location drew nothing under its zones either. A
-    natural location's zones lie on the TERRAIN, which is a surface like any
-    other — sand at 0.00 and terrain at 0.00 is the z-fight the constant was
-    invented against.
+    * a BUILT room has a floor plate with a body — its top (0.10);
+    * an OUTDOOR room is a pure texture surface (§ A5), laid on the level plate
+      plus the hair that keeps the two from z-fighting (0.08 + 0.01);
+    * the GROUND (§ A13a) draws no surface of its own — it IS the yard — so its
+      placements stand DIRECTLY on the level plate (0.08). It only ever exists
+      on storey 0, so in practice it takes the 0 above.
     """
+    if int(recipe.get("level") or 0) == 0:
+        return 0.0
     if recipe.get("is_ground"):
-        return slab
+        return LEVEL_PLATE_TOP
     if recipe.get("always_visible"):
-        return slab + OVERLAY_SURFACE_LIFT
+        return LEVEL_PLATE_TOP + OVERLAY_SURFACE_LIFT
     return ROOM_PLATE_TOP
 
 
-def _prop_models(recipe: Dict[str, Any], storey: float, slab: float,
-                 lift: Optional[Callable[[float, float], float]] = None,
+def _prop_models(recipe: Dict[str, Any], storey: float,
                  ) -> List[Dict[str, Any]]:
     """The room's prop placements as specs (REAL-SIZE rule, § A2).
 
     A placement never scales its prop: the size comes from the prop's own
     dims. Dangling ids and props without a mesh keep their placement and
     carry ``placeholder_dims`` so the consumer can draw a box.
-    Furniture stands ON the room plate (plate top + clearance); an outdoor
-    room and the ground have no plate, so the clearance sits on the storey
-    level directly.
+    Furniture stands ON the room's floor (plate top + clearance). On storey 0
+    that floor is the TERRAIN and ``_plate_top`` answers 0, so a prop's base is
+    the clearance alone — the client puts it on the ground under its own anchor
+    and the height ladder has exactly one rung there (E5a).
 
     GROUND OFFSET (§ B2 addendum 2026-08-20): the PROP may declare how deep it
     stands in the ground (``props.ground_offset_m``, ± 5 m, carried onto the
     recipe placement by ``room_recipe._carry_ground_offset``). It is added to
     the automatic base HERE and nowhere else on this path, and the placement's
     own ``offset_y`` stays what it always was — the per-instance trim on top.
-
-    ``lift`` samples the terrain relief (v5.2 Nr. 14) under each placement —
-    the height of a prop on a slope is NEVER set by hand (user rule): manual
-    anchor and scattered copy alike get the ground under their own anchor
-    added here. A flat room passes ``None`` and keeps every existing number.
 
     MODEL VARIANTS (E2.3, § B2 addendum): a prop may carry several meshes of
     the same object. ``model_variants`` is one tier-map per ACTIVE variant, in
@@ -1709,7 +1703,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float, slab: float,
     from app.core import props as prop_store
     level = int(recipe.get("level") or 0)
     room_id = recipe.get("room_id") or ""
-    plate_top = _plate_top(recipe, slab)
+    plate_top = _plate_top(recipe)
     floor_y = _room_floor_y(recipe, storey) + plate_top + PROP_CLEARANCE
     out: List[Dict[str, Any]] = []
     for placement in recipe.get("placements") or []:
@@ -1744,8 +1738,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float, slab: float,
             # added in exactly one place per path — the offset never rides on
             # `floor_y`, which is shared by every placement of the room.
             "bottom_y": _r(floor_y + _num(placement.get("ground_offset_m"))
-                           + _num(placement.get("offset_y"))
-                           + (lift(anchor_u, anchor_v) if lift else 0.0)),
+                           + _num(placement.get("offset_y"))),
         }
         # Only a prop that really HAS more than one variant says so: a
         # one-element list beside an identical `variants` map would be the
@@ -1818,8 +1811,6 @@ def _variant_index(placement: Dict[str, Any], count: int) -> int:
 # ── Markers, figures ────────────────────────────────────────────────────
 
 def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
-             slab: float,
-             lift: Optional[Callable[[float, float], float]] = None,
              ) -> List[Dict[str, Any]]:
     """Every marker of one room, finished in world coordinates.
 
@@ -1840,10 +1831,9 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     into the marker by hand (all 15 in the field carry a negative height).
     One source, both renderers, both marker sources.
 
-    ``lift`` is the terrain sampler of a room that follows the relief (v5.2
-    Nr. 14): a marker names a surface, and on a slope that surface has moved
-    with the ground under it — so the sample at the marker's OWN anchor is
-    added to ``y_world``, the same way it is added to a prop's ``bottom_y``.
+    ``y_world`` measures from the room's STOREY DATUM, which on storey 0 is the
+    terrain itself (E5a) — so a marker on the ground says "this far over the
+    ground under it" and the consumer samples ``h_final`` there.
     """
     room_id = recipe.get("room_id") or ""
     floor_y = _room_floor_y(recipe, storey)
@@ -1867,8 +1857,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
         entry: Dict[str, Any] = {
             "room_id": room_id,
             "at_world": [_r(anchor_u), _r(anchor_v)],
-            "y_world": _r(floor_y + _num(marker.get("offset_y"))
-                          + (lift(anchor_u, anchor_v) if lift else 0.0)),
+            "y_world": _r(floor_y + _num(marker.get("offset_y"))),
             "animation": marker.get("animation") or "",
             "root_offset": _root_drop(marker.get("animation")),
             "source": "room",
@@ -1887,7 +1876,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     # Prop markers are composed relative to the placement point on the floor;
     # the mesh itself stands plate top + clearance higher (§ A4) — the seat
     # heights ride along.
-    prop_lift = _plate_top(recipe, slab) + PROP_CLEARANCE
+    prop_lift = _plate_top(recipe) + PROP_CLEARANCE
     for marker in recipe.get("prop_markers") or []:
         try:
             placement = placements[int(marker.get("placement"))]
@@ -1909,9 +1898,7 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             # composed height. (The placement's `offset_y` is already inside
             # `height_m`, composed by `room_recipe.compose_prop_marker`.)
             "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m"))
-                          + _num(placement.get("ground_offset_m"))
-                          + (lift(_num(at[0]), _num(at[1]))
-                             if lift else 0.0)),
+                          + _num(placement.get("ground_offset_m"))),
             "animation": marker.get("animation") or "",
             "root_offset": _root_drop(marker.get("animation")),
             "source": "prop",
@@ -2033,144 +2020,89 @@ def _boundary_openings(map3d: Dict[str, Any],
     return out
 
 
+# ── The floor plan (E5a) ────────────────────────────────────────────────
 
+def _floor_plan(loc: Dict[str, Any], recipes: List[Dict[str, Any]],
+                ) -> List[Dict[str, Any]]:
+    """The STOREY-0 rooms as polygons + floor kinds — what replaces the plates.
 
-def terrain_frame(map3d: Dict[str, Any],
-                  extent: float) -> Tuple[float, float, float]:
-    """``(x0, z0, size)`` of the relief support grid, in local metres.
+    Until E5a a consumer found out where a room is by looking at its PLATE:
+    the 3D client shot 6 × 6 rays at the plate meshes to find NPC stands, the
+    admin preview measured room centres off them. Storey 0 has no plates any
+    more (``_plates``), so the polygons travel as data instead — which is what
+    they always were.
 
-    THE GRID SPANS THE LOCATION'S BOUNDARY, not a square around the pin
-    (contract v6 Nr. 2 — before the metric wave the reference square WAS the
-    footprint, so the two coincided; a drawn polygon may sit anywhere around
-    its pin and half the ground would have been left unrelieved).
+    ONE ENTRY PER LEVEL-0 ROOM, in recipe order, and every part of it is the
+    SAME derivation the ground bake uses: the hull is the recipe's ``outline``,
+    which is ``room_recipe.room_outline_local`` — the very polygon
+    ``terrain_layers.location_floors`` transforms into world metres; the kind is
+    ``terrain_layers.floor_kind_of``; whether it is water is
+    ``terrain_layers.is_water_floor``. That identity is the point — the material
+    of the ground and the shape a consumer places NPCs on cannot disagree,
+    because there is one rule for each of the three — and it is measured in
+    ``scripts/smoke_terrain_layers.py``, which puts this list beside the baked
+    mask to the centimetre.
 
-    It stays a SQUARE of edge ``extent`` — which is the wider side of the
-    boundary's bounding box (``plan_width_m``), so the square covers the box —
-    centred on the bounding box. One edge length means one ``terrain.step``
-    and one bilinear rule for both renderers, exactly as before. Without a
-    drawn boundary ``_boundary_local`` synthesizes the pin-centred square and
-    this returns the very frame the fraction era used.
+    * ``polygon_world`` — the room hull in the SCENE FRAME (local metres around
+      the anchor pin), like every other coordinate in this payload.
+    * ``floor_kind`` — what the ground WEARS there; the empty string for a zone
+      that declares none (the terrain shows through, and the layer bake paints
+      nothing there either).
+    * ``closed`` — a room with a shell, as opposed to an open zone (§ A5).
+    * ``water_level_effective`` — present only on a water floor: the mirror the
+      bake carved its bed to, and **the one number in this payload that is an
+      ABSOLUTE world y** rather than a scene-frame one, because that is what a
+      water plane is measured in everywhere else (§ A18). It is the very number
+      ``GET /play/terrain-layers`` carries for the same room; it is quoted here
+      so a consumer of the floor plan needs no second request.
+
+    The yard (``is_ground``, § A13a) is not in it: it has no hull, it IS the
+    plot. An unplaced location yields an empty list — it owns no world metre,
+    so no zone-water mirror can be looked up for it either.
     """
-    pts = _boundary_local(map3d, extent)
-    xs = [p[0] for p in pts]
-    zs = [p[1] for p in pts]
-    cx = (min(xs) + max(xs)) / 2.0
-    cz = (min(zs) + max(zs)) / 2.0
-    return (cx - extent / 2.0, cz - extent / 2.0, extent)
-
-
-def _clip_grid_to_boundary(grid: List[List[float]], map3d: Dict[str, Any],
-                           frame: Tuple[float, float, float]) -> None:
-    """Pin every relief support point OUTSIDE the drawn boundary to 0, in
-    place (contract v6 Nr. 4).
-
-    Point (i, j) sits at ``(x0 + i/n · size, z0 + j/n · size)`` of the terrain
-    frame (:func:`terrain_frame`). The test is the ordinary ray cast
-    (``point_in_polygon``), which answers correctly for the concave outlines
-    v6 allows.
-
-    Nothing happens without a DRAWN boundary: the synthesized square is the
-    grid's own frame, and its rim is pinned by ``terrain_grid`` already.
-    """
-    from app.core.world_geometry import point_in_polygon
-    boundary = _drawn_boundary(map3d)
-    if len(boundary) < 3:
-        return
-    n = len(grid) - 1
-    if n <= 0:
-        return
-    x0, z0, size = frame
-    for j in range(n + 1):
-        for i in range(n + 1):
-            if grid[j][i] == 0.0:
-                continue
-            if not point_in_polygon(x0 + size * i / n, z0 + size * j / n,
-                                    boundary):
-                grid[j][i] = 0.0
-
-
-def compose_terrain(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
-                    extent: float, variant: int
-                    ) -> Tuple[Optional[Dict[str, Any]], Set[str]]:
-    """The location's height field (``terrain`` payload block) and the ids of
-    the rooms that stand ON it — ``(None, set())`` when there is no relief.
-
-    Extracted out of :func:`compose_scene` so there stays exactly ONE grid
-    construction in the codebase: since E8 the WALKING GATE
-    (``app/core/relief.scene_ground_lift``) samples the very same field the
-    payload ships, and a second derivation of seed, wave width or flat hulls
-    would let the rule and the picture drift apart by construction.
-
-    A detail scene without a diorama is a billiard table; the relief gives it
-    a deterministic height field. The composer owns the whole vertical story:
-    it lifts EVERYTHING that stands in a non-flat room, and the renderers only
-    drape the ground they are told to drape — no object height is ever sampled
-    twice or set by hand.
-
-    FLAT = every indoor room (walls need a level floor) plus every outdoor
-    room that opted out via ``relief_flat`` (road, paved square). Their hulls
-    are pinned to zero in the field, so nothing in them moves by a single
-    digit. The recipe ``outline`` is already the tessellated hull in absolute
-    local metres — the same points the plates use, not a second derivation —
-    and only the normalization into the grid's own [0,1]² lattice coordinates
-    happens here.
-
-    THE FRAME IS THE BOUNDARY'S BOUNDING BOX (:func:`terrain_frame`, v6
-    Nr. 2): a square of edge ``extent_m`` centred on the box, which for a
-    boundary drawn around its pin is the very square the fraction era used.
-    It travels with the payload as ``terrain.origin``, so a consumer never
-    has to guess where the lattice starts.
-
-    CLIPPED AT THE BOUNDARY (contract v6 Nr. 4): the grid stays that regular
-    lattice, but every support point OUTSIDE the drawn
-    boundary polygon is pinned to 0, exactly like the rim already was. The
-    decision is made HERE, server-side and deterministically, so neither
-    renderer has to know what "outside" means: they drape the field they are
-    handed. Without a drawn boundary nothing is clipped — the effective
-    boundary is then the synthesized square itself, and its rim is
-    already the pinned border.
-
-    The relief only survives the sanitizer on an ``area_detail`` location; the
-    gate is repeated here because a hand-posted or legacy map3d must not put a
-    height field under an ordinary building either.
-    """
-    relief = (map3d or {}).get("relief")
-    if not isinstance(relief, dict) or not (map3d or {}).get("area_detail"):
-        return None, set()
-    amplitude_world = _num(relief.get("amplitude_m"))
-    if amplitude_world <= 0:
-        return None, set()
-    x0, z0, size = terrain_frame(map3d, extent)
-    relief_rooms: Set[str] = set()
-    flat_hulls: List[List[List[float]]] = []
+    from app.core.terrain_layers import (floor_kind_of, is_water_floor,
+                                         surface_classes)
+    from app.core.terrain_types import effective_catalog
+    loc_id = str(loc.get("id") or "")
+    catalog = effective_catalog()
+    classes = surface_classes()
+    levels: Optional[Dict[Tuple[str, str], float]] = None
+    out: List[Dict[str, Any]] = []
     for recipe in recipes:
-        # The lattice addresses itself in [0,1]² (``terrain_grid`` /
-        # ``terrain_height``), so the hulls are handed over in the SAME
-        # coordinates — one normalization, here, and nowhere else.
-        hull = [[(_num(p[0]) - x0) / size, (_num(p[1]) - z0) / size]
-                for p in recipe.get("outline") or []]
-        # The GROUND *is* the terrain (§ A13a): it follows the field by
-        # definition, and having no hull it flattens nothing.
         if recipe.get("is_ground"):
-            relief_rooms.add(str(recipe.get("room_id") or ""))
-        elif recipe.get("always_visible") and not recipe.get("relief_flat"):
-            relief_rooms.add(str(recipe.get("room_id") or ""))
-        elif len(hull) >= 3:
-            flat_hulls.append(hull)
-    # The wave width is authored in metres and divided into the edge length of
-    # the terrain frame — one metre, one metre, k = 1.
-    cells = relief_cells(relief.get("wave_m"), size)
-    grid = terrain_grid(variant_mix(int(_num(relief.get("seed"))), variant),
-                        amplitude_world, flat_hulls, cells)
-    _clip_grid_to_boundary(grid, map3d, (x0, z0, size))
-    # ``step`` follows the grid that was actually built, never the default —
-    # otherwise the renderers subdivide with a cell size that does not exist
-    # in the payload they were handed. ``origin`` is the lattice's min corner
-    # in local metres: with the frame no longer nailed to the pin, that is the
-    # one number a consumer cannot derive from ``extent_m`` alone.
-    return ({"step": _r(size / (len(grid) - 1)), "grid": grid,
-             "origin": [_r(x0), _r(z0)],
-             "amplitude_m": _r(amplitude_world)}, relief_rooms)
+            continue
+        if int(recipe.get("level") or 0) != 0:
+            continue
+        outline = _room_outline_world(recipe)
+        if not outline:
+            continue
+        room_id = str(recipe.get("room_id") or "")
+        closed = not bool(recipe.get("always_visible"))
+        kind = floor_kind_of(recipe, closed)
+        entry: Dict[str, Any] = {
+            "room_id": room_id,
+            "polygon_world": outline,
+            "floor_kind": kind,
+            "closed": closed,
+        }
+        if kind and is_water_floor(kind, catalog, classes):
+            if levels is None:
+                # Asked ONCE, and only when a water floor is really in this
+                # location: building the height model is the price of a mirror,
+                # and most scenes have no pond in them.
+                try:
+                    from app.core.heightfield import world_model
+                    levels = world_model().zone_water_level_by_room
+                except Exception:        # noqa: BLE001 — no field, no mirror
+                    logger.warning("floor plan: no height model — a water "
+                                   "floor carries no mirror", exc_info=True)
+                    levels = {}
+            level = levels.get((loc_id, room_id))
+            if level is not None:
+                entry["water_level_effective"] = _r(level, 3)
+        out.append(entry)
+    return out
+
 
 
 def layout_signature(map3d: Dict[str, Any],
@@ -2275,17 +2207,16 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # exist. It only became visible with the metric wave (8672c756), which
     # gave those locations a level plate to be buried under.
     contour_world = _outline_world(map3d) or _drawn_boundary(map3d)
-    # DOES THIS LOCATION DRAW A FLOOR AT ALL (§ B1 addendum 2026-08-20 part 3)?
-    # A natural one does not — no building contour, no closed room — and its
-    # storey datum stays the bare 0: the terrain IS its floor.
-    natural = is_natural_location(map3d, recipes)
-    # The storey's drawn floor, once for the whole scene — the level plate
-    # exists exactly where that contour does AND the location is not natural
-    # (``_plates``), and everything that stands on a floor measures from it.
-    slab = 0.0 if natural else (LEVEL_PLATE_TOP if contour_world else 0.0)
+    # THE ``slab`` IS GONE (E5a). It was the top of the storey-0 plate — 0.08
+    # where a location drew a floor, 0.0 where it did not — and every anchor in
+    # this composer measured from it. On storey 0 the floor is the terrain, so
+    # the datum is 0 for every location alike (:func:`storey_floor_y`) and the
+    # question "does this place draw a floor" only survives where it decides
+    # whether the BAKE stamps a plateau (``models.heightfield.draws_built_floor``,
+    # the inverse of :func:`is_natural_location`).
     models: List[Dict[str, Any]] = []
     markers: List[Dict[str, Any]] = []
-    building = _building_model(location, map3d, building_meta, extent, slab)
+    building = _building_model(location, map3d, building_meta, extent)
     if building:
         models.append(building)
 
@@ -2328,15 +2259,11 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                 y = _num(building.get("walk_y_world"),
                          _num(building.get("bottom_y")))
             else:
-                # No model: the zone lies on the floor the recipe DRAWS for
-                # this storey — its level plate — not on the abstract storey
-                # datum below it (§ B1 addendum 2026-08-20). Without this a
-                # boundary-only area location put its NPCs 0.08 inside its own
-                # slab, which is where the user found them (Mondscheinsee).
-                y = int(recipe.get("level") or 0) * storey + slab
-            # A zone on a SLOPE is not at the model's nominal ground either —
-            # the room's own height offset applies here exactly as it does to
-            # a built room's plate.
+                # No model: the zone lies on the floor of its storey, which on
+                # storey 0 is the TERRAIN itself (:func:`storey_floor_y`).
+                y = storey_floor_y(int(recipe.get("level") or 0), storey)
+            # The room's own height offset applies here exactly as it does to a
+            # built room's plate.
             y += _num(recipe.get("floor_offset_y"))
             overlay_rooms[str(recipe.get("room_id") or "")] = {
                 "centre": [_r(cx), _r(cz)],
@@ -2345,32 +2272,16 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                          "d": _r(max(max(zs) - min(zs), 0.5))},
                 "y": _r(y),
             }
-    terrain, relief_rooms = compose_terrain(map3d, recipes, extent, variant)
-    tx0, tz0, tsize = terrain_frame(map3d, extent)
-
-    def _lift_for(room_id: str) -> Optional[Callable[[float, float], float]]:
-        """The terrain sampler of one room — ``None`` for a flat room, which
-        is what keeps every existing number bit-identical there.
-
-        Called with the anchor's LOCAL METRES; the [0,1]² lattice coordinate
-        of the terrain frame is derived here, so no caller carries a frame."""
-        if terrain is None or room_id not in relief_rooms:
-            return None
-        return lambda px, pz: terrain_height(terrain["grid"],
-                                             (px - tx0) / tsize,
-                                             (pz - tz0) / tsize)
-
     for recipe in recipes:
         room_id = str(recipe.get("room_id") or "")
         room = by_room.get(room_id) or {}
-        lift = _lift_for(room_id)
         walls.extend(_room_walls(recipe, storey, min(levels)))
         diorama = _diorama_model(recipe, room, room_metas.get(room_id) or {},
-                                 storey, slab, lift)
+                                 storey)
         if diorama:
             models.append(diorama)
-        models.extend(_prop_models(recipe, storey, slab, lift))
-        markers.extend(_markers(recipe, room, storey, slab, lift))
+        models.extend(_prop_models(recipe, storey))
+        markers.extend(_markers(recipe, room, storey))
 
     # A threshold lies at the STANDING height of the rooms it joins, and THIS
     # is where that is decided (finding 2026-08-16: the 3D client recomputed
@@ -2440,15 +2351,19 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "storey_m": _r(storey),
         "levels": [{"level": lv, "floor_y": _r(lv * storey)} for lv in levels],
         "style": STYLE,
-        # Overlay rooms get no plate from the normal path: they lie ON the
-        # model, and a surface at storey height would cut through it. One that
-        # DECLARES a floor kind gets it at the zone's own height instead —
-        # that is how a drawn area becomes a lake (_overlay_plates).
-        "plates": (_plates(map3d, [r for r in recipes
-                                   if str(r.get("room_id") or "") not in overlay_rooms],
-                           levels, storey, relief_rooms,
-                           ground_kind, slab, natural)
-                   + _overlay_plates(recipes, overlay_rooms, min(levels))),
+        # THE FLOORS OF THE DECLARED STOREYS ONLY (E5a). Storey 0 has none —
+        # its floor is the terrain and its material is the layer bake — so what
+        # is left here is upper floors and basements. An overlay zone still
+        # gets no plate from the normal path: it lies ON an area model.
+        "plates": _plates(map3d,
+                          [r for r in recipes
+                           if str(r.get("room_id") or "") not in overlay_rooms],
+                          levels, storey, ground_kind),
+        # THE STOREY-0 ROOMS AS DATA, which is what replaces those plates: the
+        # polygons a consumer needs for room spots, NPC stands and labels
+        # (``_floor_plan``). Heights are not in it on purpose — they come from
+        # the height sampler, at the point the consumer actually asks about.
+        "floor_plan": _floor_plan(location, recipes),
         "walls": walls,
         "extras": _elevator(map3d, levels, storey),
         "models": models,
@@ -2468,22 +2383,18 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     }
     if boundary:
         out["boundary_openings"] = boundary
-    if terrain:
-        out["terrain"] = terrain
     # Detail mode is a property of the LOCATION, not of its model: a forest
     # may have no location model at all (the whole point of the detail
-    # scenes), and the renderers still need to know — backstop plate, fade
-    # gate and zone handling key off this flag; `display: shell_area` on the
-    # building spec is merely its per-model consequence (user finding
-    # 2026-08-02: without a model the backstop buried the zone plates).
+    # scenes), and the renderers still need to know — fade gate and zone
+    # handling key off this flag; `display: shell_area` on the building spec is
+    # merely its per-model consequence.
     if map3d.get("area_model") and map3d.get("area_detail"):
         out["area_detail"] = True
-    # THE FLOOR IS THE TERRAIN here (§ B1 addendum 2026-08-20 part 3,
-    # :func:`is_natural_location`). The classification is the SERVER's — a
-    # renderer must not re-derive "did anybody draw a floor" out of the plate
-    # list — and it is what tells a consumer that the tile's own draped ground
-    # plate is this location's floor rather than a backstop under a storey
-    # slab. Additive and only present when true, like ``area_detail``.
-    if natural:
-        out["natural_floor"] = True
+    # ``natural_floor`` IS GONE (E5a). It told a consumer that this location's
+    # floor was the terrain rather than a storey slab — a distinction that
+    # existed only while there were two grounds. On storey 0 EVERY location's
+    # floor is the terrain now, so the flag would be true everywhere and say
+    # nothing. :func:`is_natural_location` survives as the classifier the
+    # PLATEAU STAMP reads (``models.heightfield.draws_built_floor``), never as
+    # a payload field.
     return out

@@ -246,19 +246,25 @@ def main():
         return {p["level"]: p.get("texture_kind") for p in sc["plates"]
                 if "room_id" not in p}, sc["signature"]
 
+    # "EIN BODEN" E5a: STOREY 0 HAS NO LEVEL PLATE ANY MORE. The rule above is
+    # unchanged and still answers "grass" for level 0 (Part 4b measures it
+    # directly) — it simply has no plate left to paint there, because the floor
+    # of the terrain storey IS the terrain: its height is `h_final` and its
+    # material is the layer bake. What the payload still carries is the plate of
+    # every DECLARED storey, which is level 1 here.
     hit, sig_hit = level_kinds("grass")
-    check("the ground storey carries the terrain kind",
-          hit.get(0) == "grass", str(hit))
+    check("the ground storey draws no plate at all",
+          0 not in hit, str(hit))
     check("the storey above it stays 'floor'",
           hit.get(1) == "floor", str(hit))
     miss, sig_miss = level_kinds("gras")
     check("a terrain that misses the library changes no plate",
-          miss.get(0) == "floor" and miss.get(1) == "floor", str(miss))
+          0 not in miss and miss.get(1) == "floor", str(miss))
     check("the signature follows the resolved kind",
           sig_hit != sig_miss, f"{sig_hit[:8]} vs {sig_miss[:8]}")
     without, _ = level_kinds("grass", known=())
-    check("no library, no terrain kind — the default stands",
-          without.get(0) == "floor", str(without))
+    check("no library, no terrain kind — and still no ground plate",
+          0 not in without and without.get(1) == "floor", str(without))
 
     print("Part 5 — the ground room carries no GEOMETRY (§ A13a)")
     # ONE valid layout, handed to both rooms: everything but the id is equal,

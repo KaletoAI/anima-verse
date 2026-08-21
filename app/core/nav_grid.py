@@ -227,14 +227,12 @@ class NavContext:
     def height_at(self, x: float, z: float) -> float:
         """Ground height at a world point, metres — the WORLD relief.
 
-        Not ``relief.ground_lift_at``: a scene's own field is not asked here.
-        Under a place THAT ASKED FOR IT the world grid is LEVELLED FLAT
-        (the plateau pass of E8 task 4, opt-in since 2026-08-13), so the ground
-        a route crosses inside such a place is the plateau, and what a location
-        builds on top of its own floor is its business — the same split
-        "the place wins" draws for passability. Under an UNFLAGGED place the
-        authored landscape simply runs on, and this reads it like any other
-        ground.
+        Under a BUILT place (``draws_built_floor``, § G5) the world grid is
+        LEVELLED FLAT by the plateau stamp, so the ground a route crosses inside
+        such a place is the plateau; under a natural one the authored landscape
+        simply runs on, and this reads it like any other ground. Since "Ein
+        Boden" E5a there is no second field to add either way — a location
+        carries no relief of its own.
 
         IT IS ``heightfield.world_height`` NOW (v2, 2026-08-14), i.e. the 2 m
         TILES — the very function the walking gate of ``POST /play/pos`` asks.

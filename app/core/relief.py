@@ -1,19 +1,18 @@
 """Height relief of the walkable world — limits, sampler and the walk rule.
 
-THE FIRST CONSUMER OF A HEIGHT (E8 task 1). Until now every height in this
+THE FIRST CONSUMER OF A HEIGHT (E8 task 1). Until then every height in this
 world was a rendering detail: the scene payload lifted props and the renderers
 draped the ground, but no RULE ever asked how high anything was. This module is
 where the ground starts pushing back — a step too high and a slope too steep
-stop a walker, on the relief the detail scenes already have and, since task 2,
-on the authored world relief under them (``world_geometry.ground_y``).
+stop a walker, on the ONE authored world relief (``world_geometry.ground_y``).
 
 Three things live here, and they are deliberately separate:
 
 * the two WORLD SETTINGS (``game.max_step_height_m`` / ``game.max_slope_deg``)
   with the validating getters every other world dial has;
-* :func:`scene_ground_lift` — the height of the scene relief at a WORLD point,
-  sampled from the very grid ``compose_scene`` ships to the renderers (one
-  grid construction, ``scene_recipe.compose_terrain``);
+* :func:`ground_at` — the height of the ground at a WORLD point. Since "Ein
+  Boden" E5a it is ``ground_y`` and nothing else: the per-scene 17 x 17 relief
+  and its ``scene_ground_lift`` sampler are deleted (user decision 1);
 * :func:`slope_blocks` — the RULE as a pure predicate, so the client mirror
   (``client3d/src/game/walk.ts`` ``slopeBlocks``) and this side can be checked
   against the same hand-derived table.
@@ -28,7 +27,7 @@ either/or because each one alone can be walked round (see
 """
 
 import math
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict
 
 from app.core.log import get_logger
 
@@ -147,165 +146,29 @@ def slope_blocks(dh: float, dist: float, max_step: float,
         or math.degrees(math.atan2(rise, dist)) > float(max_slope_deg)
 
 
-# ── The scene relief as a height over the world ─────────────────────────
+# ── The ground of the WORLD, and there is only one ──────────────────────
 
-#: location id -> (fingerprint, footprint width, grid, terrain frame). The
-#: grid is a pure
-#: function of the location's plan, and the gate samples it up to twice per
-#: report at ~4 reports a second per avatar — recomposing the room recipes
-#: each time would tessellate every curved room edge for a lookup. The
-#: fingerprint covers everything the field is built from, so an author's edit
-#: reaches the rule with the next report.
-_grid_cache: Dict[str, Tuple[str, float, List[List[float]],
-                              Tuple[float, float, float]]] = {}
+def ground_at(x: float, z: float) -> float:
+    """Height of the ground at a WORLD point, in metres — ``h_final``.
 
+    THE ONE HEIGHT SOURCE THE RULES ASK, and since "Ein Boden" E5a it is one
+    line: ``world_geometry.ground_y``, i.e. the baked heightfield
+    (``core.heightfield.world_height``).
 
-def _fingerprint(map3d: Dict[str, Any], rooms: List[Dict[str, Any]],
-                 variant: int) -> str:
-    """Everything the height field is built from, hashed.
+    WHAT WAS HERE BEFORE, and why it is gone. A location used to carry a SECOND
+    height field of its own — a 17 x 17 procedural relief composed per scene
+    (``scene_recipe.compose_terrain``), sampled by ``scene_ground_lift`` and
+    ADDED to the world ground here. That was the second of the two grounds the
+    plan was written against: it existed only inside a location's own frame, the
+    world relief knew nothing about it, and the resolution rule it needed
+    ("the innermost ENCLOSING location that HAS a relief wins") was a whole
+    containment search on the walk-report path. User decision 1 of
+    plan-ein-boden.md § 5 struck it: local relief is authored as HEIGHT AREAS of
+    the map, which is the field this function reads.
 
-    ``scene_recipe.layout_signature`` is the shared part — the ``map3d`` blob
-    (relief seed/amplitude/wave, ``area_detail``, the drawn boundary, the
-    scale anchor) plus every room layout (the flat hulls); it is the same signature
-    the worldmap payload ships as ``layout_sig``, so there is ONE answer to
-    "what shapes this scene". The clone VARIANT is added on top and is exactly
-    why the payload's own ``layout_sig`` cannot be reused as it stands: it does
-    not cover ``variant_seed``, and two clones of one template differ in
-    nothing else — their fields would collide in this cache.
+    Kept as a named function rather than inlined at the call sites: it is the
+    RULE side of the height, and the walking gate, the router and the smokes all
+    say "the ground under this point" rather than naming a module.
     """
-    from app.core.scene_recipe import layout_signature
-    return f"{layout_signature(map3d, rooms)}:{variant}"
-
-
-def _terrain_of(loc: Dict[str, Any], width_m: float
-                ) -> Optional[Tuple[List[List[float]],
-                                    Tuple[float, float, float]]]:
-    """The location's height field as the CLIENT gets it plus the frame it is
-    spanned over (``scene_recipe.terrain_frame``), or ``None`` when the
-    location has no relief."""
-    from app.core.room_recipe import compose_recipe
-    from app.core.scene_recipe import (compose_terrain, derive_scalars,
-                                       terrain_frame)
-    map3d = loc.get("map3d") or {}
-    if not isinstance(map3d.get("relief"), dict) or not map3d.get("area_detail"):
-        return None
-    rooms = [r for r in (loc.get("rooms") or []) if isinstance(r, dict)]
-    variant = int(loc.get("variant_seed") or 0)
-    key = str(loc.get("id") or "")
-    fp = _fingerprint(map3d, rooms, variant)
-    cached = _grid_cache.get(key) if key else None
-    if cached and cached[0] == fp and cached[1] == width_m:
-        return cached[2], cached[3]
-    # ``extent_m`` IS the footprint width (k = 1 since E4), so the width the
-    # gate measured the point against is also the edge of the terrain frame.
-    extent, _k, _storey = derive_scalars(map3d, width_m)
-    recipes = [rec for rec in
-               (compose_recipe(room, [r for r in rooms if r is not room],
-                               variant_seed=variant, map3d=map3d)
-                for room in rooms) if rec]
-    terrain, _relief_rooms = compose_terrain(map3d, recipes, extent, variant)
-    if not terrain:
-        return None
-    # The field the renderers hold IS this one: since v6 (Nr. 4) nothing turns
-    # the finished payload any anymore — a location faces the way its pin says
-    # (§ A1.1), so the gate and the picture read the very same grid.
-    grid = terrain["grid"]
-    frame = terrain_frame(map3d, extent)
-    if key:
-        _grid_cache[key] = (fp, width_m, grid, frame)
-    return grid, frame
-
-
-def scene_ground_lift(loc: Optional[Dict[str, Any]], x: float,
-                      z: float) -> float:
-    """Height of a location's scene relief at the WORLD point (x, z), metres.
-
-    0.0 everywhere else — on a location without a drawn boundary (it has no
-    area, so it has no scene ground either), on a location without an
-    ``area_detail`` relief, and on the pinned border of the field itself. This
-    is the SCENE half of the height alone: what the world ground does under it
-    is ``world_geometry.ground_y``, and ``ground_lift_at`` adds the two.
-
-    THE FRAME, the one thing that can silently be wrong here. The payload is
-    anchored in the location's own turned frame around its PIN, and the client
-    samples it exactly that way (``scene/tiles.terrainLiftAt`` →
-    ``worldToLocalXZ`` → ``sampleTerrain``). So does this: turn the world point
-    into the location's local frame, then read the lattice coordinate off the
-    TERRAIN FRAME (``scene_recipe.terrain_frame``: the square of edge
-    ``extent_m`` over the boundary's bounding box — since v6 Nr. 2 that box,
-    not the pin, is what the field is spanned over) and sample the same
-    bilinear field (``scatter_curves.terrain_height``). Both turns are the
-    SAME formula (``world_geometry.world_to_local`` and ``scene-render``
-    ``worldToLocalXZ``), which is what keeps the rule and the picture on one
-    ground.
-    """
-    if not loc:
-        return 0.0
-    from app.core.scatter_curves import terrain_height
-    from app.core.world_geometry import (effective_boundary,
-                                         polygon_plan_width_m, world_to_local)
-    eff = effective_boundary(loc)
-    if eff is None:
-        return 0.0
-    cx, cz, yaw, pts = eff
-    width = polygon_plan_width_m(pts)
-    found = _terrain_of(loc, width)
-    if not found:
-        return 0.0
-    grid, (tx0, tz0, tsize) = found
-    lx, lz = world_to_local(x, z, cx, cz, yaw)
-    return terrain_height(grid, (lx - tx0) / tsize, (lz - tz0) / tsize)
-
-
-def has_relief(loc: Optional[Dict[str, Any]]) -> bool:
-    """Does this location carry a height field of its own? An ``area_detail``
-    location with a ``relief`` block and a real amplitude — the same three
-    conditions ``compose_terrain`` composes on, so "has a relief" and "ships a
-    terrain grid" cannot mean two different things."""
-    map3d = (loc or {}).get("map3d") or {}
-    relief = map3d.get("relief")
-    if not isinstance(relief, dict) or not map3d.get("area_detail"):
-        return False
-    try:
-        return float(relief.get("amplitude_m") or 0) > 0
-    except (TypeError, ValueError):
-        return False
-
-
-def ground_lift_at(x: float, z: float,
-                   locations: Sequence[Dict[str, Any]]) -> float:
-    """Height of the ground at a WORLD point over the WHOLE world, metres.
-
-    THE ONE HEIGHT SOURCE the rules ask. Not "the height of the location the
-    point derives to": a place that carries NO relief of its own does not
-    flatten the ground it stands on — it stands ON that ground. A hut placed on
-    a village square whose relief rises 2 m would otherwise sit in a hole of
-    its own making: the square answers 2 m, the hut answers 0, and the step
-    between them is an artificial 63° cliff sealing an openingless hut from
-    every side (review finding F3, 2026-08-13).
-
-    So the answer is the INNERMOST ENCLOSING location that HAS a relief:
-    the smallest AREA wins among those that do (contract v6, E1.2), the way
-    ``location_at_point`` resolves nesting, and a location without one is
-    simply transparent to the question.
-
-    THE WORLD GROUND IS UNDER ALL OF IT (E8 task 2). ``ground_y`` is the
-    authored world relief, and a scene's own field is a lift ON TOP of it: its
-    border is pinned to 0, so a location standing on a hill rides up with the
-    hill instead of cutting a flat shelf into it. Outside every scene relief
-    the answer is the world ground alone, and in a world nobody has shaped it
-    is 0.0 — the flat plate as before.
-    """
-    from app.core.world_geometry import (boundary_area_m2, boundary_contains,
-                                         ground_y)
-    best: Optional[Dict[str, Any]] = None
-    best_area: Optional[float] = None
-    for loc in locations or []:
-        if not has_relief(loc):
-            continue
-        if not boundary_contains(loc, x, z):
-            continue
-        area = boundary_area_m2(loc)
-        if best_area is None or area < best_area:
-            best, best_area = loc, area
-    return ground_y(x, z) + scene_ground_lift(best, x, z)
+    from app.core.world_geometry import ground_y
+    return ground_y(x, z)

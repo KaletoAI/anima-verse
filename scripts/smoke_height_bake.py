@@ -17,7 +17,7 @@ Since E1 every step is evaluated PER POINT with METRE parameters
 (``core.heightfield.HeightModel``), in this order::
 
     areas (strongest deflection)  ->  micro-relief (additive)
-      ->  water carve  ->  location plateaus
+      ->  water carve  ->  location plateaus  ->  ZONE water carve (E5a)
 
 so ANY lattice is the same function sampled more or less finely, and two
 lattices agree at their shared points BY CONSTRUCTION. That is claim (a).
@@ -49,6 +49,14 @@ lives inside that band.
 The catalog is two entries: "lake" carries ``meta.water`` (that flag, never the
 NAME, is what makes a kind carve — kinds are an open vocabulary) and "g"
 carries the two relief numbers.
+
+Section [8] adds the FIFTH input of the bake ("Ein Boden" E5a): a ROOM whose
+level-0 floor kind is a water surface. It carves exactly like a painted lake
+and it carves LAST — after the plateaus, because a pond in a courtyard lies on
+a plot the plateau stamp planes flat, and a carve run before that stamp would
+be planed away again. Its default mirror is the median of the height ALONG ITS
+OWN RIM, read after the plateaus, which makes "the plateau height for a built
+place, the landscape for a natural one" one rule instead of two.
 
 [1] THE WATER CARVE (§ G4).  Inside a water polygon
 
@@ -806,6 +814,168 @@ check("closing a room changes the height signature", sig_built != sig_open,
 with_locations([loc(rooms=[{"id": "r1", "layout": {}}])])
 check("…and reopening it restores the old one", store.height_sig(), sig_built)
 
+
+
+# ── [8] ZONE WATER: a room floor that carves its own bed (E5a, § G4) ────
+print("\n[8] zone water — a room whose floor kind is water carves its bed")
+# THE FIFTH INPUT of the bake. A room on storey 0 whose ``surfaces.floor`` is a
+# water surface is a lake with a room id: it gets the same three numbers a
+# painted lake has and the same ``min``-carve — only it runs LAST, AFTER the
+# location plateaus, which is the whole reason it is a separate stage.
+#
+# THREE ZONES, all hand-derived:
+#
+#   POOL     inside the BUILT plot, world (76,-144)-(84,-136), no authored
+#            level. The plateau has planed that plot to exactly H0 = 8.0, so
+#            every rim sample is 8.0 and the MEDIAN — i.e. the default mirror
+#            — is 8.0. That is § G4's "the location's plateau height for a
+#            built place", falling out of ONE rule instead of a lookup.
+#   POND     on a NATURAL location out at (295,-5)-(305,5). x >= 200 is
+#            outside the SLOPE polygon, so the landscape there is exactly 0
+#            and the rim median is 0.0.
+#   CISTERN  the same square 100 m further east, but with an AUTHORED level
+#            of -1.0 — which has to win over the derived 0.0.
+#
+# The carve is the area law verbatim, depth 2.0 over a 3 m shore ramp:
+#     h = min(h, level - 2.0 * smoothstep(min(d_in / 3, 1)))
+#   POOL    (80,-140) d_in = 4   -> 8.0 - 2.0            = 6.0
+#           (77.5,-140) d_in = 1.5 -> smoothstep(0.5)=0.5 -> 8.0 - 1.0 = 7.0
+#           (76,-140)  d_in = 0   -> min(8.0, 8.0)       = 8.0
+#   POND    (300, 0)  d_in = 5   -> 0.0 - 2.0            = -2.0
+#           (296, 0)  d_in = 1   -> smoothstep(1/3) = 7/27
+#                                 -> -2 * 7/27           = -0.518518...
+#   CISTERN (400, 0)  d_in = 5   -> -1.0 - 2.0           = -3.0
+#           (395, 0)  d_in = 0   -> min(0.0, -1.0)       = -1.0   (MIN, never
+#                                   assignment: the carve only ever LOWERS)
+ZW_POOL = ("l1", "pool", [[76.0, -144.0], [84.0, -144.0],
+                          [84.0, -136.0], [76.0, -136.0]], None, 2.0, 3.0)
+ZW_POND = ("l2", "pond", [[295.0, -5.0], [305.0, -5.0],
+                          [305.0, 5.0], [295.0, 5.0]], None, 2.0, 3.0)
+ZW_CIST = ("l3", "cistern", [[395.0, -5.0], [405.0, -5.0],
+                             [405.0, 5.0], [395.0, 5.0]], -1.0, 2.0, 3.0)
+ZMODEL = hf.build_model([SLOPE], [PLOT], TERRAIN, CATALOG,
+                        [ZW_POOL, ZW_POND, ZW_CIST])
+
+near("the BUILT plot's pool takes the PLATEAU as its mirror",
+     ZMODEL.zone_water_level_by_room[("l1", "pool")], H0)
+near("...and the natural pond takes the rim median of the landscape",
+     ZMODEL.zone_water_level_by_room[("l2", "pond")], 0.0)
+near("...while an AUTHORED level wins outright",
+     ZMODEL.zone_water_level_by_room[("l3", "cistern")], -1.0)
+
+near("POOL centre: plateau 8.0 - depth 2.0", ZMODEL.final(80.0, -140.0), 6.0)
+near("POOL half a ramp in: 8.0 - 2.0 * smoothstep(0.5)",
+     ZMODEL.final(77.5, -140.0), 7.0)
+near("POOL rim: min(8.0, 8.0) — the carve touches nothing there",
+     ZMODEL.final(76.0, -140.0), H0)
+near("POND centre: 0.0 - 2.0", ZMODEL.final(300.0, 0.0), -2.0)
+near("POND one metre in: -2 * 7/27", ZMODEL.final(296.0, 0.0),
+     -2.0 * (7.0 / 27.0))
+near("POND rim: 0.0", ZMODEL.final(295.0, 0.0), 0.0)
+near("CISTERN centre: -1.0 - 2.0", ZMODEL.final(400.0, 0.0), -3.0)
+near("CISTERN rim: min(0.0, -1.0) — the ground is CUT to the mirror",
+     ZMODEL.final(395.0, 0.0), -1.0)
+
+print("\n[8b] the ORDER is the point: the carve runs AFTER the plateau")
+# RED COUNTER-PROBE. Were the zone water a fourth entry in stage 2 — i.e.
+# carved with the painted lakes, BEFORE the plateau stamps — the plot's stamp
+# would write h = h0 across its whole outline afterwards and plane the pool
+# away. The mutant's answer at the pool centre is therefore exactly the
+# plateau, 8.0, and it must not appear.
+check_not("red: the pool centre is NOT the un-carved plateau",
+          round(ZMODEL.final(80.0, -140.0), 6), round(H0, 6))
+# …and the same model WITHOUT the zone answers exactly that 8.0, which is what
+# makes the line above a measurement rather than a coincidence.
+near("...which is what the very same plot answers without the zone",
+     MODEL.final(80.0, -140.0), H0)
+near("...and the plot is still flat one metre outside the pool",
+     ZMODEL.final(85.0, -140.0), H0)
+
+print("\n[8c] the E1 invariant holds for a room's pond too")
+# Past the shore ramp the second argument of the min is the CONSTANT
+# ``level - depth``, whatever the landscape does — so this is arithmetic, not
+# sampling (§ A18.3). Measured over the pond on a 0.5 m grid all the same.
+EPS = min(2.0, 0.25)
+deep = worst = 0
+worst_gap = 1e9
+for i in range(21):
+    for j in range(21):
+        px, pz = 295.0 + i * 0.5, -5.0 + j * 0.5
+        d_in = min(px - 295.0, 305.0 - px, pz + 5.0, 5.0 - pz)
+        if d_in <= 3.0:
+            continue
+        deep += 1
+        gap = 0.0 - ZMODEL.final(px, pz)
+        worst_gap = min(worst_gap, gap)
+# d_in > 3 leaves the inner 4 x 4 m square, i.e. 7 x 7 samples at a 0.5 m step.
+check("deep probes taken", deep, 49)
+check_true(f"every one of them is at least {EPS} m under the mirror "
+           f"(worst gap {worst_gap:.4f} m)", worst_gap >= EPS)
+
+print("\n[8d] a zone water shapes the tile index and the bounds")
+# A pond 300 m east of everything the world otherwise shapes has to bring its
+# own tile, or ``world_height`` would answer the flat 0 there and the bed would
+# exist for the picture and not for the rules.
+key = hf.tile_key(300.0, 0.0)
+check("the pond's tile", key, (1, 0))
+check_true("...is NOT indexed without the zone waters",
+           key not in hf.tile_index_from([SLOPE], [PLOT], TERRAIN, CATALOG))
+check_true("...and IS with them",
+           key in hf.tile_index_from([SLOPE], [PLOT], TERRAIN, CATALOG,
+                                     zone_waters=[ZW_POOL, ZW_POND, ZW_CIST]))
+check_true("the shaped bounds reach out to the cistern",
+           ZMODEL.shaped_bounds()[2] >= 405.0)
+# The TILE is the same function, so the carve is in it at the same numbers.
+_tile = hf.rasterize_tile(1, 0, [SLOPE], [PLOT], TERRAIN, CATALOG,
+                          zone_waters=[ZW_POOL, ZW_POND, ZW_CIST])
+near("the rastered tile carries the pond's bed at its centre",
+     hf.sample_height(_tile, 300.0, 0.0), -2.0, 1e-3)
+
+print("\n[8e] a water ROOM FLOOR is what produces those inputs")
+# The bridge from a stored location to the five-tuple above: the SAME function
+# the ground bake reads its layers from (``terrain_layers.world_floors``) —
+# one derivation for the material and for the shape of the bed.
+from app.core import terrain_layers as TL  # noqa: E402
+_pond_loc = {"id": "l2", "pos_x": 300.0, "pos_z": 0.0, "yaw_deg": 0.0,
+             "map3d": {"boundary": [[-10, -10], [10, -10], [10, 10],
+                                    [-10, 10]]},
+             "rooms": [{"id": "pond", "name": "Pond", "layout": {
+                 "x": -5.0, "y": -5.0, "w": 10.0, "d": 10.0, "level": 0,
+                 "always_visible": True, "surfaces": {"floor": "pond"}}}]}
+_floors = TL.world_floors([_pond_loc], CATALOG, {"pond": "water"})
+check("the room is recognised as WATER by its surface class, never its name",
+      [(f.room_id, f.water, f.water_level, f.water_depth_m, f.shore_ramp_m)
+       for f in _floors],
+      [("pond", True, None, hf.WATER_DEPTH_DEFAULT_M,
+        hf.WATER_SHORE_RAMP_DEFAULT_M)])
+check("...and its polygon IS the one the carve above was fed",
+      [[round(c, 3) for c in p] for p in _floors[0].polygon],
+      [[round(c, 3) for c in p] for p in ZW_POND[2]])
+check("red: without the water class the very same room carves nothing",
+      [f.water for f in TL.world_floors([_pond_loc], CATALOG, {})], [False])
+_authored = {**_pond_loc, "rooms": [{**_pond_loc["rooms"][0], "layout": {
+    **_pond_loc["rooms"][0]["layout"], "water_level": -1.0,
+    "water_depth_m": 4.0, "shore_ramp_m": 0.0}}]}
+check("the three numbers are read with the AREA's own reader (same clamps)",
+      [(f.water_level, f.water_depth_m, f.shore_ramp_m)
+       for f in TL.world_floors([_authored], CATALOG, {"pond": "water"})],
+      [(-1.0, 4.0, 0.0)])
+
+print("\n[8f] …and the height signature moves with them")
+# The reading path asks the SURFACE LIBRARY for the class (there is no terrain
+# type called "pond" in this world). The library is a SHARED, repo-tracked
+# file, so the fixture states the class in the one place the reader looks it
+# up rather than writing into it.
+TL.surface_classes = lambda: {"pond": "water"}
+with_locations([_pond_loc])
+_sig_wet = store.height_sig()
+check_true("a water room floor is in the basis",
+           [e["room"] for e in store.zone_water_basis()] == ["pond"])
+with_locations([{**_pond_loc, "rooms": [{**_pond_loc["rooms"][0], "layout": {
+    **_pond_loc["rooms"][0]["layout"], "surfaces": {"floor": "sand"}}}]}])
+check("turning the pond into sand empties the basis",
+      store.zone_water_basis(), [])
+check_true("...and moves the signature", store.height_sig() != _sig_wet)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 for name in FAILURES:

@@ -880,11 +880,10 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
             entry_room = opening_entry_room(derived, best_edge)
 
     # THE GROUND PUSHES BACK (E8 task 1). Height is a RULE from here on: a
-    # step too high or a slope too steep refuses the report, on the relief the
-    # detail scenes already carry. It sits AFTER the transition gate on
-    # purpose — the height of a point depends on WHICH location owns it, and
-    # entering through a door that the geometry allows must not be answered
-    # with "too steep" when the real reason is a rule.
+    # step too high or a slope too steep refuses the report, on the ONE baked
+    # world relief. It sits AFTER the transition gate on purpose — entering
+    # through a door that the geometry allows must not be answered with "too
+    # steep" when the real reason is a rule.
     #
     # Δh is measured between the last valid point and the reported one, and
     # that is computable without reconstructing any path: two points, two
@@ -898,15 +897,13 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     if here is not None:
         from app.core.boundary_entry import opening_world_points
         from app.core.relief import (STEP_DISTANCE_M, get_max_slope_deg,
-                                     get_max_step_height_m, ground_lift_at,
+                                     get_max_step_height_m, ground_at,
                                      slope_blocks)
-        # ``ground_lift_at`` asks the WORLD, not the derived location: a place
-        # without a relief of its own stands ON the ground under it instead of
-        # flattening it, so the innermost ENCLOSING relief answers. Without
-        # that a hut on a relief square would sit in a hole of its own making
-        # and seal itself off (finding F3).
-        dh = ground_lift_at(x, z, _locs) \
-            - ground_lift_at(here["x"], here["z"], _locs)
+        # ``ground_at`` asks the WORLD and nothing else ("Ein Boden" E5a): the
+        # baked heightfield already carries every plateau, every carve and every
+        # authored hill, so there is no per-location field left to resolve and
+        # no containment search on the walk-report path.
+        dh = ground_at(x, z) - ground_at(here["x"], here["z"])
         dist = math.hypot(x - here["x"], z - here["z"])
         def _at_an_opening() -> bool:
             """OPENINGS ARE RAMP ENDS. An authored opening sits on the edge
@@ -1292,10 +1289,16 @@ def _scene_inputs(location: dict, location_id: str,
 
 @router.get("/play/locations/{location_id}/scene")
 def play_location_scene(location_id: str):
-    """The whole location as a ready-to-render scene: plates, walls, extras,
-    model placement specs, figures, markers, doorways and problems — all in
-    world metres around the tile centre (contract § B1). Poll ``signature``
-    for changes.
+    """The whole location as a ready-to-render scene: plates, floor plan,
+    walls, extras, model placement specs, figures, markers, doorways and
+    problems — all in world metres around the tile centre (contract § B1).
+    Poll ``signature`` for changes.
+
+    ``plates`` covers the DECLARED storeys only since "Ein Boden" E5a. Storey 0
+    is the terrain: its height is ``h_final`` and its material is the layer
+    bake (``GET /play/terrain-layers``), so what travels here for it is
+    ``floor_plan`` — one entry per level-0 room with its polygon, its floor
+    kind and, for a water floor, the mirror the bake carved to.
 
     404 = nothing to compose (no building outline, no room with a layout and
     no building model) — that is the legacy auto-grid case, the client keeps
@@ -2501,9 +2504,14 @@ def get_terrain_layers_route(keys: str = "", user=Depends(get_current_user)):
     window and a client asks for them in the same breath:
 
     * **without ``keys``** — the INDEX: the layer table, the world-wide COARSE
-      id mask (``overview``, what the ground wears beyond the fine tiles) and
-      ``tile_keys``, every 256 m tile a painted shape reaches into. Everything
-      else is bare ground and costs no request.
+      id mask (``overview``, what the ground wears beyond the fine tiles),
+      ``tile_keys`` — every 256 m tile a painted shape or a LOCATION FLOOR
+      reaches into — and ``waters``, every ZONE WATER of the world as
+      ``{location_id, room_id, kind, polygon (world metres),
+      water_level_effective}``. A room whose level-0 floor kind is a water
+      surface carves its bed like a painted lake (E5a, § G4), so it gets the
+      same flat mirror from the same routine. Everything not listed is bare
+      ground and costs no request.
     * **with ``keys=tx:tz,tx:tz``** — the BATCH: the fine masks of those tiles,
       at most ``terrain_layers.BATCH_MAX`` per request. The keys are the height
       tiles' own (``heightfield.tile_key``), so one want-set steers both

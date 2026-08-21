@@ -318,8 +318,10 @@ def sanitize_layout(data: Any, *,
         if raw.get("open"):
             raw_layout["always_visible"] = True
             raw_layout["no_walls"] = True
-            if raw.get("flat"):
-                raw_layout["relief_flat"] = True
+        # ``flat`` HAS NO EFFECT ANY MORE ("Ein Boden" E5a, user decision 1): a
+        # location carries no relief of its own for a sub-area to opt out of.
+        # The word stays legal in the world-dev schema so an old prompt answer
+        # still applies; it simply produces no field.
         surfaces = raw_layout.get("surfaces")
         if library and isinstance(surfaces, dict):
             kept = {}
