@@ -1,23 +1,36 @@
 {
- "kind": "swim-cmu",
+ "kind": "digging",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 194,
- "duration_s": 6.467,
+ "frames": 224,
+ "duration_s": 7.467,
  "geometry": {
-  "floor_shift_cm": -6.51,
+  "floor_shift_cm": -6.78,
   "in_place": true,
+  "loop": {
+   "min_s": 3.0,
+   "cut_frames": [
+    2,
+    226
+   ],
+   "cut_s": [
+    0.067,
+    7.533
+   ],
+   "seam_distance": 0.901,
+   "blend_frames": 8
+  },
   "hips_scale": [
    1.1042
   ],
-  "rig_floor_shift_cm": -0.16,
-  "rig_floor_min_cm": -2.47
+  "rig_floor_shift_cm": 0.02,
+  "rig_floor_min_cm": -2.58
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "79_02"
+   "79_04"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }

@@ -30,6 +30,10 @@ Options:
     --anchor <s>      pair: second that defines the anchor frame
                       (default: when the two roots are closest)
     --in-place        solo: strip the horizontal root travel
+    --loop <s>        solo: cut to the best-closing window of at least <s>
+                      seconds (end pose closest to start pose) and ease the
+                      last frames into the first — a seamless cycle for
+                      walk/run/idle-type clips
     --fps <n>         output frame rate (default 30)
     --cache <dir>     where the downloaded ASF/AMC files are kept
                       (default: storage-independent ~/.cache/anima-verse/cmu)
@@ -100,6 +104,7 @@ def main() -> int:
     ap.add_argument("--end", type=float, default=None)
     ap.add_argument("--anchor", type=float, default=None)
     ap.add_argument("--in-place", action="store_true")
+    ap.add_argument("--loop", type=float, default=None)
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--cache", default=str(Path.home() / ".cache" / "anima-verse" / "cmu"))
     ap.add_argument("--rig", default="")
@@ -138,7 +143,7 @@ def main() -> int:
         inputs["asf"], inputs["amc"] = take_files(a.take_a, cache)
 
     params = {"kind": kind, "fps": a.fps, "start_s": a.start, "end_s": a.end,
-              "anchor_s": a.anchor, "in_place": bool(a.in_place),
+              "anchor_s": a.anchor, "in_place": bool(a.in_place), "loop_s": a.loop,
               "source_takes": takes}
     st = runner.status()
     if not st["executable"]:

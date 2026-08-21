@@ -16,6 +16,9 @@ Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
                             anchor frame (default: when the roots are closest)
              in_place       SOLO ONLY — strip the horizontal root travel
                             (Mixamo "In Place")
+             loop_s         SOLO ONLY — cut the take to its best-closing
+                            window of at least this many seconds and ease
+                            the tail into the head (a seamless cycle)
              source_takes   names of the source takes, for the sidecar credit
 
 The FBX files and the ``<kind>.json`` sidecar land in the runner's out dir.
@@ -174,6 +177,49 @@ def _apply_rigid(take: _Take, theta: float, shift, floor: float, in_place: bool)
                 pose.pos[name] = (p[0] - rx, p[1], p[2] - rz)
 
 
+LOOP_BLEND_FRAMES = 8
+LOOP_BONES = ("lfemur", "ltibia", "lfoot", "rfemur", "rtibia", "rfoot", "lhumerus",
+              "lradius", "rhumerus", "rradius", "lowerback", "thorax", "upperneck")
+
+
+def _pose_distance(sk, a, b) -> float:
+    """How far two solved frames are apart: summed rotation angle of the
+    limb/torso bones (radians) plus the hips height difference (metres)."""
+    d = 0.0
+    for name in LOOP_BONES:
+        if name not in a.rot:
+            continue
+        ra, rb = a.rot[name], b.rot[name]
+        # angle of ra^T rb from its trace
+        tr = sum(ra[i][j] * rb[i][j] for i in range(3) for j in range(3))
+        d += math.acos(max(-1.0, min(1.0, (tr - 1.0) / 2.0)))
+    d += abs(a.pos["root"][1] - b.pos["root"][1]) / 100.0
+    return d
+
+
+def _cut_loop(take, fps, min_s):
+    """Trims the take to the window [i, j) whose end pose is closest to its
+    start pose — the best place to cut a cycle — with at least ``min_s`` of
+    motion in it. The last LOOP_BLEND_FRAMES keys are then eased into the
+    first key at bake time (``_bake`` ``loop``), so the clip closes without
+    a visible jump. Returns the chosen (i, j, distance)."""
+    n = len(take.poses)
+    min_len = max(2, int(round(min_s * fps)))
+    if n <= min_len + 1:
+        return 0, n, None
+    best = None
+    # every start i, every end j with the minimum length; O(n²) on a few
+    # hundred frames is instant
+    for i in range(0, n - min_len):
+        for j in range(i + min_len, n):
+            d = _pose_distance(take.sk, take.poses[i], take.poses[j])
+            if best is None or d < best[2]:
+                best = (i, j, d)
+    i, j, d = best
+    take.poses = take.poses[i:j]
+    return i, j, d
+
+
 def _frame_takes(takes, args):
     """Puts the takes into the clip's frame of reference; returns sidecar geometry."""
     floor = min(t.lowest() for t in takes)
@@ -301,7 +347,7 @@ def _solve(arm, take: _Take):
 
 
 def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
-          hips_scale: float = 1.0, offset=(0.0, 0.0)):
+          hips_scale: float = 1.0, offset=(0.0, 0.0), loop: bool = False):
     """Writes the solved frames into a fresh action on ``arm``.
 
     Every frame is moved as a whole (rotations untouched): the hips height is
@@ -345,6 +391,32 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
                 lpath = f'pose.bones["{b.name}"].location'
                 for i, v in enumerate((t.x, t.y, t.z)):
                     keys.setdefault((lpath, i), []).append(v)
+    if loop and nframes > 2 * LOOP_BLEND_FRAMES:
+        # Ease the tail into the head: the last K keys blend towards key 0
+        # (quaternions slerped per bone, the hips location lerped), so frame
+        # n-1 → frame 0 is continuous when the clip repeats.
+        K = LOOP_BLEND_FRAMES
+        from mathutils import Quaternion
+        by_path = {}
+        for (path, index), vals in keys.items():
+            by_path.setdefault(path, {})[index] = vals
+        for path, comps in by_path.items():
+            if path.endswith("rotation_quaternion"):
+                q0 = Quaternion((comps[0][0], comps[1][0], comps[2][0], comps[3][0]))
+                for k in range(K):
+                    fi = nframes - K + k
+                    w = (k + 1) / (K + 1)
+                    q = Quaternion((comps[0][fi], comps[1][fi], comps[2][fi], comps[3][fi]))
+                    qb = q.slerp(q0, w)
+                    for c, v in enumerate((qb.w, qb.x, qb.y, qb.z)):
+                        comps[c][fi] = v
+            else:
+                for c in comps:
+                    v0 = comps[c][0]
+                    for k in range(K):
+                        fi = nframes - K + k
+                        w = (k + 1) / (K + 1)
+                        comps[c][fi] = comps[c][fi] * (1 - w) + v0 * w
     for (path, index), vals in keys.items():
         curve = fc(path, index)
         curve.keyframe_points.add(nframes)
@@ -446,7 +518,18 @@ def run(job):
     end_s = args.get("end_s")
     takes = [_Take(e, fps, start_s, None if end_s is None else float(end_s))
              for e in args["clips"]]
+    loop_min = args.get("loop_s")
+    loop = loop_min is not None and len(takes) == 1
+    loop_info = None
+    if loop:
+        i, j, d = _cut_loop(takes[0], fps, float(loop_min))
+        loop_info = {"min_s": float(loop_min), "cut_frames": [i, j],
+                     "cut_s": [round(i / fps, 3), round(j / fps, 3)],
+                     "seam_distance": None if d is None else round(d, 3),
+                     "blend_frames": LOOP_BLEND_FRAMES}
     geometry = _frame_takes(takes, args)
+    if loop_info:
+        geometry["loop"] = loop_info
     out_dir = Path(args["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     kind = args["kind"]
@@ -528,7 +611,7 @@ def run(job):
         # reset) — bones are carried by NAME and re-resolved here.
         seen, rest, frames, low, _ratio = sol
         seen = [arm.data.bones[n] for n in seen]
-        _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off)
+        _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop)
         stem = f"{kind}__{take.role}" if take.role else kind
         path = out_dir / f"{stem}.fbx"
         _export(arm, path)

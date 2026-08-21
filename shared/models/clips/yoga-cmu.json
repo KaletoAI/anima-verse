@@ -3,16 +3,29 @@
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 276,
- "duration_s": 9.2,
+ "frames": 121,
+ "duration_s": 4.033,
  "geometry": {
-  "floor_shift_cm": -1.47,
+  "floor_shift_cm": -1.53,
   "in_place": true,
+  "loop": {
+   "min_s": 4.0,
+   "cut_frames": [
+    149,
+    270
+   ],
+   "cut_s": [
+    4.967,
+    9.0
+   ],
+   "seam_distance": 0.792,
+   "blend_frames": 8
+  },
   "hips_scale": [
    1.115
   ],
-  "rig_floor_shift_cm": 4.29,
-  "rig_floor_min_cm": -1.01
+  "rig_floor_shift_cm": 4.53,
+  "rig_floor_min_cm": -0.57
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
