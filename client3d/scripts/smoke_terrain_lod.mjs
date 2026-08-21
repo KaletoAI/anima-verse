@@ -450,6 +450,66 @@
  *      a fragment all lie in one 4 × 4 window of the R32F pyramid — 64 bytes,
  *      shared by every neighbouring pixel whose footprint is under the 2 m
  *      span, which at 45° / 1 080 px is every pixel nearer than 2.6 km.
+ *
+ * ============================================================================
+ * [11] A SPLIT DOES NOT MOVE THE GROUND — the transition probe (2026-08-21)
+ * ============================================================================
+ * The isolation panel's toggle 10 ("LOD frozen") was reported to take the
+ * whole-ground shimmer away, which would put the blame on the per-frame CHANGE
+ * OF THE SELECTED NODE SET — split and merge. This section measures that claim
+ * instead of arguing it, and the answer is no: what a split costs is a quarter
+ * of a pixel.
+ *
+ * THE FIXTURE FIRST, because the obvious one proves nothing. The compass world
+ * `CH` of [9] is three waves whose shortest period is 151 m: its 2 m lattice
+ * and its 4 m decimation answer the same number to half a millimetre, so the
+ * morph has nothing to carry and a transition probe run on it reports a pop of
+ * 4e-3 m — a renderer with the morph deleted would pass. `TR` adds three short
+ * waves (periods 8.2, 18 and 46 m) so that the levels genuinely disagree; (hh)
+ * asserts that gap is over half a metre and that `CH` has none.
+ *
+ * (ii) THE SHARED VERTICES ARE EXACT. One parent (level 2, 256 m) and its SW
+ *      child (level 1, 128 m), one camera: every vertex the two have in common
+ *      lands on the same point at the same height — 0, not 1e-9. That is the
+ *      whole of § A16.6's "the level cancels": t_child = λ − (L−1) = t_parent
+ *      + 1, so k_child = k_parent + 1 and f is the SAME number, and the world
+ *      snap pitch `nodeStep · 2^k` and the two mip spans `nodeStep · 2^k`,
+ *      `· 2^(k+1)` come out identical in metres. Hypotheses "two distance
+ *      metrics" and "the split threshold misses the morph end" die here: the
+ *      metrics agree exactly, whatever the camera.
+ * (jj) THE DIFFERENCE IS THE VERTICES THE CHILD ADDS. Its odd-index vertices
+ *      are supposed to collapse onto their even twin — that is what
+ *      `mix(gi − gi mod m1, gi − gi mod m2, f)` does — but only if both use the
+ *      SAME f, and f is each vertex's own λ. A twin pair shares both
+ *      `gi − gi mod m1` and `gi − gi mod m2`, so the entire separation is those
+ *      two identical numbers blended with two different f:
+ *
+ *        offset = (gi mod m2 − gi mod m1) · Δt · nodeStep
+ *
+ *      measured 0.357 m, and the closed form matches the drawn position to
+ *      3e-13. It lifts the extra vertex 0.086 m off the parent's surface, so
+ *      adding it (a split) or dropping it (a merge) moves the ground by that
+ *      much. The term is proportional to `m1 = 2^⌊t⌋`, i.e. it only exists on
+ *      nodes selected FINER than their own ring — the far children of a node
+ *      split because a near sibling demanded it.
+ * (kk) AND IT IS SUB-PIXEL. 60 m of camera path heading east–north, 12
+ *      transitions, 11 560 ground points read from the OLD node set and the NEW
+ *      one at the SAME camera: worst 0.101 m, and 0.25 px of a 45° / 1 080 px
+ *      view. `MAX_PIXEL_ERROR` = 2 px is what a whole LEVEL of vertical error
+ *      may cost, so the ceiling here is a quarter of that and the mean a
+ *      fiftieth. A quarter-pixel step on scattered patches is not a
+ *      whole-ground shimmer.
+ * (ll) NO COMPASS DIRECTION, which was the other hypothesis (a corner bias in
+ *      the box distance would make nodes east and north of the camera split
+ *      earlier than their mirror images). The WORLD is mirrored through the
+ *      origin — every tile (tx, tz) becomes (−tx−1, −tz−1), because tile tx
+ *      spans [tx·T, (tx+1)·T) — and the opposite heading is walked: all 120
+ *      frames answer the exactly mirrored tree. (z6) shows the same on a flat
+ *      box; this shows it with the height boxes carrying real relief.
+ *
+ * WHAT THIS SECTION DOES NOT SAY: where the reported shimmer comes from. It
+ * says the selection is not it, and it pins the one real residue (jj) with a
+ * bound, so a future change that lets it grow into the visible is caught.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1431,6 +1491,285 @@ check('…texel reads per ground fragment, 4 taps × the bilinear\'s 4',
   (nglsl.split('tlodHeight(').length - 1) * 4, 16);
 check('…height taps left in tlodCompute (11 before)',
   glsl.slice(glsl.indexOf('void tlodCompute')).split('tlodHeight(').length - 1, 3);
+
+// ── [11] the transition probe ───────────────────────────────────────────────
+console.log('\n[11] a split does not move the ground — the transition probe');
+
+/**
+ * A relief with structure AT the 2 m lattice.
+ *
+ * The compass world `CH` of [9] is three smooth waves whose shortest period is
+ * 151 m, so its 2 m lattice and its 4 m decimation answer almost the same
+ * number and the morph has nothing to carry — (hh) measures that, and it is
+ * why this section brings its own field instead of borrowing that one: a
+ * transition probe run on `CH` reports a pop of 4e-3 m and would pass on a
+ * renderer with no morph at all.
+ */
+const TR = (x, z) => 9 * Math.sin(x / 197) * Math.cos(z / 151)
+  + 0.9 * Math.sin(x / 1.3) * Math.cos(z / 1.1)
+  + 0.6 * Math.sin(x / 2.9 + z / 3.7)
+  + 1.4 * Math.sin(x / 7.3) * Math.sin(z / 6.1);
+const TR_X0 = -2048;
+const TR_Z0 = -1280;
+const TR_N = 513;                             // 1 024 m at 2 m
+const trPyr = buildPyramid(TR, TR_X0, TR_Z0, BASE, TR_N, TR_N, MAX_LOD_LEVELS);
+const TR_RECT = [TR_X0, TR_Z0, TR_X0 + (TR_N - 1) * BASE, TR_Z0 + (TR_N - 1) * BASE];
+const TR_EXT = [-2560, -2560, 2560, 2560];
+let mipGap = 0;
+let chGap = 0;
+for (let z = -1000; z <= -900; z += 2) {
+  for (let x = -1700; x <= -1600; x += 2) {
+    mipGap = Math.max(mipGap, Math.abs(pyramidHeight(trPyr, x, z, 0)
+      - pyramidHeight(trPyr, x, z, 1)));
+    chGap = Math.max(chGap, Math.abs(CH(x, z) - (CH(x - 2, z) + CH(x + 2, z)) / 2));
+  }
+}
+checkAbove('(hh) the fixture: the 2 m and the 4 m mip really disagree, metres',
+  mipGap, 0.5);
+checkBelow('…RED: the compass world of [9] does not, so it cannot probe a morph',
+  chGap, 0.01);
+
+// Honest per-tile boxes over the stretch the path can see; everything else
+// falls back to a range that contains the whole field, which culls nothing.
+const trStats = new Map();
+for (let tz = -6; tz <= -1; tz += 1) {
+  for (let tx = -9; tx <= -4; tx += 1) {
+    let mn = Infinity;
+    let mx = -Infinity;
+    for (let j = 0; j <= TILE_M / BASE; j += 1) {
+      for (let i = 0; i <= TILE_M / BASE; i += 1) {
+        const v = TR(tx * TILE_M + i * BASE, tz * TILE_M + j * BASE);
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+    }
+    trStats.set(`${tx},${tz}`, { min: mn, max: mx });
+  }
+}
+// The amplitudes sum to 9 + 0.9 + 0.6 + 1.4 = 11.9, so ±12 contains the field
+// everywhere — a bound, which is all `nodeBounds` may ever be.
+const TR_GLOBAL = { min: -12, max: 12 };
+const trBounds = (x, z, size) => nodeBounds(trStats, TILE_M, TR_GLOBAL, x, z, size);
+const TR_RANGES = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, CERR, camPixelScale);
+checkEq('the rings this section measures against',
+  TR_RANGES.map((r) => Math.round(r * 10) / 10), [382.1, 554.1, 651.8, 1024, 2159.7, 4096]);
+
+function trSelect(cam) {
+  return selectLodNodes({
+    x0: TR_EXT[0], z0: TR_EXT[1], x1: TR_EXT[2], z1: TR_EXT[3],
+    leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+    camX: cam.x, camY: cam.y, camZ: cam.z,
+    boundsOf: trBounds, levelErrorM: CERR, pixelScale: camPixelScale,
+  });
+}
+/** One vertex of a node — the whole of `tlodCompute`, position and height. */
+function trVertex(node, gx, gz, cam) {
+  return lodVertex(node, gx, gz, trPyr, TR_RECT, trPyr, TR_EXT, cam, TR_RANGES);
+}
+// (ii)/(jj) ONE parent, ONE child, ONE camera — where exactly do they differ?
+const trCam = { x: -1669.6, y: TR(-1669.6, -630.4) + 12, z: -630.4 };
+const trParent = { x: -1280, z: -1152, size: 256, level: 2, morph: 0 };
+const trChild = { x: -1280, z: -1152, size: 128, level: 1, morph: 0 };
+let sharedWorstV = 0;
+let oddOffset = 0;
+let oddHeight = 0;
+let derivedWorst = 0;
+for (let gz = 0; gz <= PATCH_N; gz += 1) {
+  for (let gx = 0; gx <= PATCH_N; gx += 1) {
+    const c = trVertex(trChild, gx, gz, trCam);
+    if (gx % 2 === 0 && gz % 2 === 0) {
+      const p = trVertex(trParent, gx / 2, gz / 2, trCam);
+      sharedWorstV = Math.max(sharedWorstV, Math.abs(c.x - p.x), Math.abs(c.z - p.z),
+                              Math.abs(c.y - p.y));
+      continue;
+    }
+    // The odd ones are supposed to COLLAPSE onto their even twin.
+    const e = trVertex(trChild, gx - (gx % 2), gz - (gz % 2), trCam);
+    const off = Math.hypot(c.x - e.x, c.z - e.z);
+    oddOffset = Math.max(oddOffset, off);
+    oddHeight = Math.max(oddHeight, Math.abs(c.y - e.y));
+    // …and the offset is (g mod m2 − g mod m1) · Δt · nodeStep, closed form.
+    // A vertex and its twin share both `g − g mod m1` and `g − g mod m2` (for
+    // m1 ≥ 2), so the ONLY thing that separates them is that `mix` blends those
+    // two identical numbers with two DIFFERENT f — and f is the vertex's own
+    // λ. Pairs straddling a k boundary, and k = 0 where the twins do not share
+    // `g − g mod m1` at all, are their own case and sit out.
+    const k = Math.min(Math.floor(c.t), MAX_LOD_LEVELS - 1);
+    if (k < 1 || Math.floor(e.t) !== k) continue;
+    const m1 = 2 ** k;
+    const m2 = m1 * 2;
+    const step = trChild.size / PATCH_N;
+    const dt = c.t - e.t;
+    const want = Math.hypot(((gx % m2) - (gx % m1)) * dt * step,
+                            ((gz % m2) - (gz % m1)) * dt * step);
+    derivedWorst = Math.max(derivedWorst, Math.abs(off - want));
+  }
+}
+check('(ii) every vertex the parent and the child SHARE agrees', sharedWorstV, 0, 0);
+checkAbove('(jj) …while a vertex the child adds misses its own twin by, metres',
+  oddOffset, 0.3);
+checkAbove('…which lifts it off the parent\'s surface by, metres', oddHeight, 0.05);
+check('…and that offset IS (g mod m2 − g mod m1) · Δt · nodeStep, to',
+  derivedWorst, 0, 1e-12);
+
+// (kk) THE SWEEP: the surface before and after every transition, same camera.
+/** The drawn mesh of one node — `tlodCompute` at all 1 089 vertices. */
+function trMesh(node, cam) {
+  const V = [];
+  for (let gz = 0; gz <= PATCH_N; gz += 1) {
+    const row = [];
+    for (let gx = 0; gx <= PATCH_N; gx += 1) row.push(trVertex(node, gx, gz, cam));
+    V.push(row);
+  }
+  return V;
+}
+function triY(a, b, c, x, z) {
+  const den = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+  if (Math.abs(den) < 1e-12) return null;
+  const l1 = ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / den;
+  const l2 = ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / den;
+  const l3 = 1 - l1 - l2;
+  if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) return null;
+  return l1 * a.y + l2 * b.y + l3 * c.y;
+}
+/** The height a node's TRIANGLES answer at (x, z) — the surface, not the
+ *  vertices. The morph slides a vertex up to `m2` cells towards the node's own
+ *  corner, so the cell holding the point is looked for in a window that wide. */
+function meshY(node, V, x, z) {
+  const step = node.size / PATCH_N;
+  const gi = Math.floor((x - node.x) / step);
+  const gj = Math.floor((z - node.z) / step);
+  for (let dj = -16; dj <= 16; dj += 1) {
+    for (let di = -16; di <= 16; di += 1) {
+      const i = gi + di;
+      const j = gj + dj;
+      if (i < 0 || j < 0 || i >= PATCH_N || j >= PATCH_N) continue;
+      const t1 = triY(V[j][i], V[j + 1][i], V[j + 1][i + 1], x, z);
+      if (t1 !== null) return t1;
+      const t2 = triY(V[j][i], V[j + 1][i + 1], V[j][i + 1], x, z);
+      if (t2 !== null) return t2;
+    }
+  }
+  return null;
+}
+function trSurface(nodes, cam) {
+  const cache = new Map();
+  return (x, z) => {
+    for (let i = 0; i < nodes.length; i += 1) {
+      const n = nodes[i];
+      if (x < n.x || x > n.x + n.size || z < n.z || z > n.z + n.size) continue;
+      let V = cache.get(i);
+      if (!V) { V = trMesh(n, cam); cache.set(i, V); }
+      const y = meshY(n, V, x, z);
+      if (y !== null) return y;
+    }
+    return null;
+  };
+}
+const nkey = (n) => `${n.level}:${n.x},${n.z}`;
+/** One walk: every frame where the node set changes, the OLD set's surface and
+ *  the NEW set's surface are read at the same points from the same camera. The
+ *  pop is reported in PIXELS as well as in metres, because a metre at 700 m is
+ *  not the same defect as a metre at 30 m. */
+function sweepTransitions(yawDeg, stepM, steps) {
+  const ang = (yawDeg * Math.PI) / 180;
+  const dx = Math.sin(ang);
+  const dz = Math.cos(ang);
+  let prevSet = null;
+  let prevNodes = null;
+  let transitions = 0;
+  let worstM = 0;
+  let worstPx = 0;
+  let sumPx = 0;
+  let samples = 0;
+  for (let s = 0; s < steps; s += 1) {
+    const cx = -1700 + dx * stepM * s;
+    const cz = -600 + dz * stepM * s;
+    const cam = { x: cx, y: TR(cx, cz) + 12, z: cz };
+    const nodes = trSelect(cam);
+    const set = new Set(nodes.map(nkey));
+    if (prevSet) {
+      const appeared = nodes.filter((n) => !prevSet.has(nkey(n)));
+      if (appeared.length) {
+        transitions += 1;
+        const oldS = trSurface(prevNodes, cam);
+        const newS = trSurface(nodes, cam);
+        for (const n of appeared) {
+          const q = n.size / 16;
+          for (let j = 0; j <= 16; j += 1) {
+            for (let i = 0; i <= 16; i += 1) {
+              const x = n.x + i * q + 0.137;
+              const z = n.z + j * q + 0.211;
+              const oy = oldS(x, z);
+              const ny = newS(x, z);
+              if (oy === null || ny === null) continue;
+              const d = Math.abs(ny - oy);
+              const dist = Math.hypot(x - cam.x, cam.y - ny, z - cam.z);
+              const px = (d * camPixelScale) / dist;
+              worstM = Math.max(worstM, d);
+              worstPx = Math.max(worstPx, px);
+              sumPx += px;
+              samples += 1;
+            }
+          }
+        }
+      }
+    }
+    prevSet = set;
+    prevNodes = nodes;
+  }
+  return { transitions, worstM, worstPx, meanPx: sumPx / Math.max(samples, 1), samples };
+}
+// Heading 135° is east–north, the sector the shimmer was reported in.
+const swept = sweepTransitions(135, 0.5, 120);
+checkAbove('(kk) transitions over 60 m heading east–north', swept.transitions, 5);
+checkAbove('…ground points compared across them', swept.samples, 1e4);
+console.log(`       (worst pop ${swept.worstM.toFixed(4)} m, `
+  + `mean ${swept.meanPx.toExponential(2)} px)`);
+// THE BOUND, derived: `MAX_PIXEL_ERROR` = 2 px is what a whole LEVEL of
+// vertical error is allowed to cost. A split, which is meant to cost nothing at
+// all, may not spend a quarter of that — and on average not a fiftieth.
+checkBelow('…the worst of them, in PIXELS of a 45° / 1 080 px view',
+  swept.worstPx, MAX_PIXEL_ERROR / 4);
+checkBelow('…and the mean over every point compared', swept.meanPx,
+  MAX_PIXEL_ERROR / 50);
+
+// (ll) NO COMPASS DIRECTION. Hypothesis (B) was a corner bias in the box
+// distance — nodes east and north of the camera splitting earlier than their
+// mirror images. Mirror the WORLD through the origin (every tile (tx, tz)
+// becomes (−tx−1, −tz−1), because tile tx spans [tx·T, (tx+1)·T)) and walk the
+// opposite heading: the selection must answer the mirrored tree at every step.
+const mirStats = new Map();
+for (const [k, v] of trStats) {
+  const [tx, tz] = k.split(',').map(Number);
+  mirStats.set(`${-tx - 1},${-tz - 1}`, v);
+}
+const mirBounds = (x, z, size) => nodeBounds(mirStats, TILE_M, TR_GLOBAL, x, z, size);
+let mirrorWorst = 0;
+let mirrorFrames = 0;
+for (let s = 0; s < 120; s += 1) {
+  const cx = -1700 + Math.sin((135 * Math.PI) / 180) * 0.5 * s;
+  const cz = -600 + Math.cos((135 * Math.PI) / 180) * 0.5 * s;
+  const cy = TR(cx, cz) + 12;
+  const here = selectLodNodes({
+    x0: TR_EXT[0], z0: TR_EXT[1], x1: TR_EXT[2], z1: TR_EXT[3],
+    leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+    camX: cx, camY: cy, camZ: cz, boundsOf: trBounds,
+    levelErrorM: CERR, pixelScale: camPixelScale,
+  });
+  const there = selectLodNodes({
+    x0: TR_EXT[0], z0: TR_EXT[1], x1: TR_EXT[2], z1: TR_EXT[3],
+    leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+    camX: -cx, camY: cy, camZ: -cz, boundsOf: mirBounds,
+    levelErrorM: CERR, pixelScale: camPixelScale,
+  });
+  const a = here.map((n) => `${n.level}:${-n.x - n.size},${-n.z - n.size}`).sort().join('|');
+  const b = there.map(nkey).sort().join('|');
+  if (a !== b) mirrorWorst += 1;
+  mirrorFrames += 1;
+}
+check('(ll) frames whose mirror image is a different tree', mirrorWorst, 0);
+checkAbove('…frames walked east–north and its mirror', mirrorFrames, 100);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);
