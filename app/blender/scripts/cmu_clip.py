@@ -89,6 +89,16 @@ BONE_MAP = {
     "RightUpLeg": "rfemur", "RightLeg": "rtibia",
     "RightFoot": "rfoot", "RightToeBase": "rtoes",
 }
+# Finger bones carry their own Mixamo short name as the intermediate name:
+# CMU has no finger data (a take's skeleton lacks them → no track), a
+# source that has fingers (fbx_clip) delivers them under these names.
+FINGERS = [f"{side}Hand{finger}{n}" for side in ("Left", "Right")
+           for finger in ("Thumb", "Index", "Middle", "Ring", "Pinky") for n in (1, 2, 3)]
+BONE_MAP.update({f: f for f in FINGERS})
+# The bones the CURRENT take actually drives (set per take before export):
+# only those get a track — an undriven bone written at rest would overwrite
+# the model's own finger pose.
+DRIVEN = set()
 PREFIX = "mixamorig:"
 # Bones whose CMU and Mixamo rest DIRECTIONS describe the same segment, so the
 # fixed rest alignment A_i (Mixamo rest dir → CMU rest dir) is meaningful:
@@ -283,6 +293,12 @@ def _solve(arm, take: _Take):
     rig_leg = sum((_chain[i + 1] - _chain[i]).length for i in range(3))
     act_leg = sum(take.sk.bones[n].length for n in ("lhipjoint", "lfemur", "ltibia")) * take.sk.unit_cm
     leg_ratio = rig_leg / act_leg if act_leg > 1 else 1.0
+    # The hips lift is faded by how upright the actor is: hips at a full
+    # leg length above the floor (standing) → the full ratio; hips on the
+    # floor (lying) → none. A lying or kneeling body rests ON the floor, its
+    # hips height is contact geometry, not leg length — scaling it pushed a
+    # lying partner 11 cm under the floor (2026-08-21, pair import).
+    stand_cm = act_leg if act_leg > 1 else 100.0
     frames = []
     lowest_per_frame = []
     for pose in take.poses:
@@ -313,11 +329,20 @@ def _solve(arm, take: _Take):
                 frame_low = min(frame_low, M.translation.y)
         frames.append(P)
         lowest_per_frame.append(frame_low)
-    return [b.name for b in seen], rest, frames, lowest_per_frame, leg_ratio
+    return [b.name for b in seen], rest, frames, lowest_per_frame, (leg_ratio, stand_cm)
+
+
+def _hips_lift(hips_y: float, hips_scale: float, stand_cm: float) -> float:
+    """How much the hips rise for the leg ratio at this height: the full
+    ``hips_y · (k − 1)`` when standing, fading to nothing as the hips reach
+    the floor (see ``_solve``)."""
+    upright = max(0.0, min(1.0, hips_y / (0.9 * stand_cm))) if stand_cm > 1 else 1.0
+    return hips_y * (hips_scale - 1.0) * upright
 
 
 def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
-          hips_scale: float = 1.0, offset=(0.0, 0.0), loop: bool = False):
+          hips_scale: float = 1.0, offset=(0.0, 0.0), loop: bool = False,
+          stand_cm: float = 100.0):
     """Writes the solved frames into a fresh action on ``arm``.
 
     Every frame is moved as a whole (rotations untouched): the hips height is
@@ -343,7 +368,7 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
     keys = {}   # (path, index) -> list of values
     for P in frames:
         hips_y = P[hips_name].translation.y
-        lift = Matrix.Translation(Vector((offset[0], hips_y * (hips_scale - 1.0) - floor_cm,
+        lift = Matrix.Translation(Vector((offset[0], _hips_lift(hips_y, hips_scale, stand_cm) - floor_cm,
                                           offset[1])))
         for b in seen:
             R = rest[b.name]
@@ -441,7 +466,7 @@ def _patch_fbx_track_shape():
         # clip skeleton's — Mixamo clips carry no finger tracks either.
         mapped = is_bone and any(
             key.endswith(PREFIX + m) or key.endswith(PREFIX.rstrip(":") + m)
-            or (PREFIX + m + "|") in key for m in BONE_MAP)
+            or (PREFIX + m + "|") in key for m in DRIVEN)
         if mapped and group == "Lcl Rotation":
             mask[:] = True
         elif mapped and group == "Lcl Translation" and key.endswith("Hips"):
@@ -489,6 +514,21 @@ def run(job):
     takes = [_Take(e, fps, start_s, None if end_s is None else float(end_s),
                    args.get("source_fps"))
              for e in args["clips"]]
+    source = {
+        "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
+        "takes": list(args.get("source_takes") or []),
+        "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. "
+                  "The database was created with funding from NSF EIA-0196217.",
+    }
+    return run_takes(takes, args, fps, source)
+
+
+def run_takes(takes, args, fps, source):
+    """Everything after the takes exist — shared by every source format
+    (CMU ASF/AMC here, foreign FBX in ``fbx_clip.py``): loop cut, frame of
+    reference, solve/bake/export per take, sidecar. A take is anything with
+    ``role``, ``sk`` (bones with direction/length, ``unit_cm``) and ``poses``
+    (``_cmu.Pose``: world rotation from rest + position per bone)."""
     loop_min = args.get("loop_s")
     loop = loop_min is not None and len(takes) == 1
     loop_info = None
@@ -517,7 +557,8 @@ def run(job):
     # lowers the rig as far as it lowered the actor (salsa finding: the rig,
     # legs ~9 % longer, kept its hips at 0.59 m where the actor dipped to
     # 0.45 m — and its feet came off the floor, "sitting in the air").
-    scales = [sol[4] for sol in solved]
+    scales = [sol[4][0] for sol in solved]
+    stands = [sol[4][1] for sol in solved]
     geometry["hips_scale"] = [round(k, 4) for k in scales]
     # CONTACT FIT (pair): at the anchor frame the two closest hands of the
     # ACTORS are this far apart; the rig's arms are not the actors', so the
@@ -570,19 +611,30 @@ def run(job):
     # hips scaling): while walking one foot is always planted, so that median
     # is the planted foot's height; the absolute minimum would be a single
     # toe-off dip and leave the standing foot hovering (8-9 cm, handshake).
-    lows = sorted(low + P[hips_name].translation.y * (k - 1.0)
-                  for (_n, _r, frames, lows_t, _k), k in zip(solved, scales)
-                  for P, low in zip(frames, lows_t) if math.isfinite(low))
-    floor_cm = lows[len(lows) // 2] if lows else 0.0
+    # Per take the MEDIAN of its frames; a pair takes the LOWER of the two
+    # medians — the partner lying on the floor defines it, not the one
+    # kneeling over them (a pooled median sank the lying one 13 cm).
+    medians = []
+    all_lows = []
+    for (_n, _r, frames, lows_t, _k), k, stand in zip(solved, scales, stands):
+        lows = sorted(low + _hips_lift(P[hips_name].translation.y, k, stand)
+                      for P, low in zip(frames, lows_t) if math.isfinite(low))
+        if lows:
+            medians.append(lows[len(lows) // 2])
+            all_lows.extend(lows)
+    lows = sorted(all_lows)
+    floor_cm = min(medians) if medians else 0.0
     geometry["rig_floor_shift_cm"] = round(-floor_cm, 2)
     geometry["rig_floor_min_cm"] = round(lows[0] - floor_cm, 2) if lows else 0.0
-    for take, sol, k, off in zip(takes, solved, scales, offsets):
+    for take, sol, k, off, stand in zip(takes, solved, scales, offsets, stands):
+        DRIVEN.clear()
+        DRIVEN.update(m for m, c in BONE_MAP.items() if c in take.sk.bones)
         arm = _load_rig(args["rig"])
         # The solve ran on an earlier load of the rig (gone with the scene
         # reset) — bones are carried by NAME and re-resolved here.
         seen, rest, frames, low, _ratio = sol
         seen = [arm.data.bones[n] for n in seen]
-        _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop)
+        _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand)
         stem = f"{kind}__{take.role}" if take.role else kind
         path = out_dir / f"{stem}.fbx"
         _export(arm, path)
@@ -596,12 +648,7 @@ def run(job):
         "frames": nframes,
         "duration_s": round(nframes / fps, 3),
         "geometry": geometry,
-        "source": {
-            "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
-            "takes": list(args.get("source_takes") or []),
-            "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. "
-                      "The database was created with funding from NSF EIA-0196217.",
-        },
+        "source": source,
     }
     side = out_dir / f"{kind}.json"
     side.write_text(json.dumps(sidecar, indent=1), encoding="utf-8")
