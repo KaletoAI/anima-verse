@@ -78,7 +78,7 @@ def _read_json(path: Path, cache: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     except (OSError, ValueError) as e:
         logger.warning("unreadable %s: %s", path.name, e)
         return None
-    if not isinstance(data, dict):
+    if not isinstance(data, (dict, list)):
         return None
     cache["mtime"], cache["data"] = stamp, data
     return data
@@ -86,13 +86,14 @@ def _read_json(path: Path, cache: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def load_catalog() -> Optional[Dict[str, Any]]:
     """The raw ``_catalog.json`` document, None when there is none."""
-    return _read_json(catalog_path(), _catalog_cache)
+    data = _read_json(catalog_path(), _catalog_cache)
+    return data if isinstance(data, dict) else None
 
 
 def load_status() -> Dict[str, Dict[str, Any]]:
     """The review state per take id — an empty dict is the normal start."""
     data = _read_json(status_path(), _status_cache) or {}
-    takes = data.get("takes")
+    takes = data.get("takes") if isinstance(data, dict) else None
     return takes if isinstance(takes, dict) else {}
 
 
@@ -158,6 +159,26 @@ def record_import(take_id: str, kind: str, clip_set: str = "",
     return take_status(take_id)
 
 
+_index_cache: Dict[str, Any] = {"mtime": None, "data": None}
+
+
+def converted_clips() -> Dict[str, str]:
+    """``take id → relative clip path`` from the converter's ``_index.json``
+    (a list of records, or a dict keyed by id in older runs); empty when the
+    file is missing. A pair's record names its A half."""
+    data = _read_json(get_trial_clips_dir() / "_index.json", _index_cache)
+    if not data:
+        return {}
+    records = data.values() if isinstance(data, dict) else data
+    out: Dict[str, str] = {}
+    for rec in records:
+        if isinstance(rec, dict) and rec.get("id") and rec.get("clip"):
+            out[str(rec["id"])] = str(rec["clip"])
+            for partner in rec.get("pair_takes") or []:
+                out.setdefault(str(partner), str(rec["clip"]))
+    return out
+
+
 def catalog_with_status() -> Optional[Dict[str, Any]]:
     """The catalog document with a ``status`` block merged into every take.
 
@@ -169,11 +190,20 @@ def catalog_with_status() -> Optional[Dict[str, Any]]:
     if data is None:
         return None
     status = load_status()
+    # Clip paths come LIVE from the converter's _index.json: the enrich run
+    # copies them into the catalog only when it runs, and a catalog built
+    # while the conversion was still going says "not converted" for clips
+    # that have long existed (2026-08-21: "nice UI, but without a preview it
+    # is worth nothing"). The index is the converter's own ledger, so a
+    # path found there is a file that exists.
+    clips = converted_clips()
     takes = []
     for take in data.get("takes") or []:
         if not isinstance(take, dict):
             continue
         row = status.get(take.get("id")) or {}
+        if not take.get("clip") and take.get("id") in clips:
+            take = {**take, "clip": clips[take["id"]]}
         takes.append({**take, "status": {
             "favorite": bool(row.get("favorite")),
             "rejected": bool(row.get("rejected")),
