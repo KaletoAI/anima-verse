@@ -420,7 +420,9 @@ export function initIsolation(deps: IsolationDeps): void {
       `yaw ${r1(yawToCompassDeg(engine.yaw))}°   dist ${r1(engine.dist)} m\n`
       + `game ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}   `
       + `sun az ${r1(sunAz)}°  el ${r1(sunEl)}°\n`
-      + `nodes ${ground.terrainNodeCount()}   height tiles ${ground.heightTileCount()}\n`
+      + `nodes ${ground.terrainNodeCount()}   ground tri `
+      + `${Math.round(ground.terrainTriangleCount() / 1000)}k   `
+      + `height tiles ${ground.heightTileCount()}\n`
       + `fps ${r1(fpsNow)}   off: ${encodeIsolation(active) || '-'}`;
   }
 

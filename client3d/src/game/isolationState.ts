@@ -105,8 +105,11 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
     cost: 'none' },
   { id: 10, label: 'LOD frozen',
     note: 'The quadtree selection stops re-running in the terrain mesh’s '
-      + 'onBeforeRender. The instance buffer of the frame the toggle was flipped '
-      + 'on keeps being drawn while the camera moves.',
+      + 'onBeforeRender, AND the eye the per-vertex morph is measured from is '
+      + 'pinned to that frame (uTlodFreeze). So the ground keeps exactly the '
+      + 'geometry of the frame the toggle was flipped on, seen from a moving '
+      + 'viewpoint — not a frozen list re-morphed against a live camera, which '
+      + 'would open cracks of its own.',
     cost: 'none' },
   { id: 11, label: 'Water planes hidden',
     note: 'visible = false on every water mirror of the painted areas.',

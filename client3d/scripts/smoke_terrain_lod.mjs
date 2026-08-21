@@ -23,7 +23,9 @@
  *   3. the drawn surface has to be crack-free, which since 2026-08-21 means
  *      something stronger than "a node reaches morph 1 in time": the surface
  *      is a function of the WORLD POSITION alone, so two patches cannot
- *      disagree about a point they share whatever their levels are ([8]).
+ *      disagree about a point they share whatever their levels are ([8]) —
+ *      and since 2026-08-22 that has to hold for the vertices one side has and
+ *      the other does not, which is what a T-junction is made of ([12]).
  *
  * ============================================================================
  * [1] THE CONSTANTS ARE DERIVED, not tasted
@@ -156,15 +158,25 @@
  * and `d < ranges[L−1]` is FALSE at equality, so it is selected rather than
  * split — the ring boundary belongs to the coarser level.
  *
- * (n) 4 + 3 + 3 + 3 + 3 = 16 nodes, and none at level 5.
- * (o) THE MORPHS. For a selected node at level L the range is
- *     ranges[L] = 128·2^L = 2·size and the morph runs over
- *     [0.5·ranges[L], ranges[L]] = [size, 2·size]:
- *       the corner node (d = 0)        -> clamped to 0
- *       an axis node   (d = size)      -> (size − size)/size          = 0
- *       the diagonal   (d = size·√2)   -> (size√2 − size)/size = √2−1 = 0.414213562…
- *     The SAME number at every level, which is what "one halving of density
- *     per doubling of distance" means.
+ * (n) 4 + 3 + 3 + 3 + 3 = 16 nodes, and none at level 5. Every one of them
+ *     draws the WHOLE patch (`cells` = 32): the out-of-range rule only emits a
+ *     half-sized quadrant when a child has left its level's ring, and with the
+ *     camera on the corner no child of a node that split has.
+ * (o) THE MORPHS. A level-L node owns the ring [ranges[L−1], ranges[L]] =
+ *     [size, 2·size] and its morph runs over the LAST HALF OF THAT RING,
+ *     [1.5·size, 2·size] — Strugar's "last half", anchored in the ring and not
+ *     at the origin (`lodLambda`, and see [12] for what the difference costs):
+ *       the corner node (d = 0)        -> 0
+ *       an axis node   (d = size)      -> the ring has only just begun    = 0
+ *       the diagonal   (d = 1.414·size)-> still short of 1.5·size         = 0
+ *     LEVEL 0 IS THE EXCEPTION, and it is not an exception to the rule but to
+ *     the arithmetic: its ring starts at 0, so its ramp starts at 0.5·128 = 64
+ *     = size and its diagonal node at d = size·√2 sits (√2 − 1) = 0.414213562…
+ *     of the way through it.
+ * (o2) THE RAMP ITSELF, on one node alone in the world. [0, 128]² at level 1
+ *     owns [128, 256] and morphs over [192, 256]; a camera on the x axis at
+ *     128 + d stands exactly d from its east face, so d = 192 -> 0,
+ *     d = 224 -> 0.5, d = 256 -> 1.
  *
  * ============================================================================
  * [6] CRACK-FREENESS, measured
@@ -238,13 +250,13 @@
  *
  *     THE 17 SHARED VERTICES therefore agree to the last bit — that is what
  *     closes the seam. The fine node's OTHER 16, the ones that collapse onto
- *     the coarse lattice, read their λ at the point they start from rather than
- *     at the one they end on and so miss it by a hair: they land within 4 cm on
- *     this fixture, i.e. under 0.7 % of the 6 m the two mips are apart, and
- *     0.036 m at 128 m is 0.37 pixels (fov 45°, 1 080 px). It is a
- *     second-order term of the same λ and not a hole: a second λ evaluation
- *     after the snap would remove it and cost a fetch per vertex for a third
- *     of a pixel.
+ *     the coarse lattice, used to read their λ at the point they START from
+ *     rather than at the one they end on, and missed it by up to 4 cm on this
+ *     fixture. Since § A16.6 (2026-08-22) the morph is read at the BLOCK a
+ *     vertex snaps into and not at the vertex, so those 16 land on the coarse
+ *     polyline exactly: the whole fine edge lies ON the coarse one, 0 and not
+ *     0.036 m. The derivation is in `lodVertex`; what it buys over the whole
+ *     ground is [12].
  *
  * (y) RED COUNTER-PROBE: the same two nodes drawn as the renderer drew them
  *     before, with ONE morph per node. Both morphs are 0 here (the fine node's
@@ -478,27 +490,29 @@
  *      metrics" and "the split threshold misses the morph end" die here: the
  *      metrics agree exactly, whatever the camera.
  * (jj) THE DIFFERENCE IS THE VERTICES THE CHILD ADDS. Its odd-index vertices
- *      are supposed to collapse onto their even twin — that is what
+ *      are supposed to collapse onto their even twin wherever the child draws
+ *      on a lattice coarser than its own (k = ⌊t⌋ ≥ 1) — that is what
  *      `mix(gi − gi mod m1, gi − gi mod m2, f)` does — but only if both use the
- *      SAME f, and f is each vertex's own λ. A twin pair shares both
- *      `gi − gi mod m1` and `gi − gi mod m2`, so the entire separation is those
- *      two identical numbers blended with two different f:
+ *      SAME f. While f was each vertex's own λ they did not: a twin pair shares
+ *      both `gi − gi mod m1` and `gi − gi mod m2`, so the entire separation was
+ *      those two identical numbers blended with two different f,
  *
  *        offset = (gi mod m2 − gi mod m1) · Δt · nodeStep
  *
- *      measured 0.357 m, and the closed form matches the drawn position to
- *      3e-13. It lifts the extra vertex 0.086 m off the parent's surface, so
- *      adding it (a split) or dropping it (a merge) moves the ground by that
- *      much. The term is proportional to `m1 = 2^⌊t⌋`, i.e. it only exists on
- *      nodes selected FINER than their own ring — the far children of a node
- *      split because a near sibling demanded it.
- * (kk) AND IT IS SUB-PIXEL. 60 m of camera path heading east–north, 12
- *      transitions, 11 560 ground points read from the OLD node set and the NEW
- *      one at the SAME camera: worst 0.101 m, and 0.25 px of a 45° / 1 080 px
- *      view. `MAX_PIXEL_ERROR` = 2 px is what a whole LEVEL of vertical error
- *      may cost, so the ceiling here is a quarter of that and the mean a
- *      fiftieth. A quarter-pixel step on scattered patches is not a
- *      whole-ground shimmer.
+ *      measured 0.357060 m sideways and 0.086354 m in height. That is the
+ *      vertex hanging beside the neighbour's edge — a T-junction, and on a
+ *      flat-shaded, unfiltered, single-coloured ground still a sliver of sky.
+ *      Since § A16.6 (2026-08-22) f is read at the BLOCK the vertex snaps into,
+ *      which every member of the block shares, so the offset is 0 in both axes.
+ *      The red probe here rebuilds the per-vertex reading and reproduces both
+ *      old numbers to the digit.
+ * (kk) AND A SPLIT NOW COSTS NOTHING AT ALL. 60 m of camera path heading
+ *      east–north, 32 transitions, 15 895 ground points read from the OLD node
+ *      set and the NEW one at the SAME camera: the worst difference is
+ *      3.5e-13 m. It used to be 0.101 m (0.25 px of a 45° / 1 080 px view) and
+ *      the check asked for no more than a quarter of `MAX_PIXEL_ERROR`; the
+ *      bound is now float precision, because the drawn surface is a function of
+ *      the world point and its block and neither knows which piece drew it.
  * (ll) NO COMPASS DIRECTION, which was the other hypothesis (a corner bias in
  *      the box distance would make nodes east and north of the camera split
  *      earlier than their mirror images). The WORLD is mirrored through the
@@ -507,9 +521,50 @@
  *      frames answer the exactly mirrored tree. (z6) shows the same on a flat
  *      box; this shows it with the height boxes carrying real relief.
  *
- * WHAT THIS SECTION DOES NOT SAY: where the reported shimmer comes from. It
- * says the selection is not it, and it pins the one real residue (jj) with a
- * bound, so a future change that lets it grow into the visible is caught.
+ * WHAT THIS SECTION SAYS SINCE § A16.6: exchanging one piece for four moves the
+ * ground by nothing measurable, and the one real residue (jj) is gone rather
+ * than bounded. [12] is what pays for that.
+ *
+ * ============================================================================
+ * [12] NO VERTEX HANGS BESIDE A NEIGHBOUR'S EDGE — the T-junction probe
+ * ============================================================================
+ * [8] and [11] measure single hand-picked pairs. This section measures the
+ * WHOLE DRAWN GROUND: for every stretch of edge two rendered pieces share, every
+ * vertex of each side must lie ON the other side's chain. A vertex that does not
+ * is a T-junction — the ground has a hairline it cannot close — and on a
+ * flat-shaded, unfiltered, single-coloured ground that hairline is still sky.
+ * (The isolation panel measured exactly that: toggles 6, 7 and 18 together left
+ * the light-blue shimmer standing, while toggle 10 took it away.)
+ *
+ * THE MEASURE IS A DISTANCE TO THE CHAIN, not a height read at a coordinate,
+ * and that is not pedantry. The morph slides a vertex ALONG the shared edge as
+ * well as across it, and under the old rule it slid two twins past each other:
+ * the edge folded back on itself by 0.276 m. An evaluation at a coordinate then
+ * reports 0.1 m of "gap" between two IDENTICAL chains, which is a measurement of
+ * the probe and not of the ground.
+ *
+ * THE SWEEP is the `TR` world of [11] — the only fixture here whose 2 m lattice
+ * and 4 m decimation really disagree — over 120 frames of the 60 m east–north
+ * walk plus all 24 headings of a 15° compass at its start, 144 camera settings
+ * and 4 550 801 edge vertices in all.
+ *
+ * (mm) 0 vertices off the neighbour's chain by more than a micrometre, worst
+ *      1.5e-13 m. That is float precision, not a small number.
+ * (nn) RED — the old rule, rebuilt here from its own arithmetic (`redSelect`
+ *      hands every child the finer level whether its own distance is still in
+ *      the ring or not, `redLambda` anchors every ramp at the origin,
+ *      `redVertex` reads the morph per vertex): 108 352 of 5 206 454 tests off,
+ *      worst 0.1046 m. At 500 m that is 0.27 px of sky, and it moves to a
+ *      different edge with every camera step, which is what a shimmer is.
+ * (oo) NO PIECE IS DRAWN BEYOND ITS OWN RING. `morph` is λ at the piece's
+ *      nearest point minus its level, and λ(range[i]) = i + 1 exactly
+ *      (`lodLambda`), so `morph ≤ 1` IS the out-of-range rule. 0 offenders now;
+ *      18 934 under the old rule, i.e. nearly half of every piece it drew.
+ * (pp) AND IT IS CHEAPER. Same number of pieces per frame — a far child that
+ *      used to be emitted at the finer level is now emitted as its parent's
+ *      quadrant, one instance either way — but the quadrant carries the
+ *      PARENT's spacing over the child's square, so it costs a quarter of the
+ *      triangles: 461 835 per frame against 572 075, 81 %.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -840,7 +895,8 @@ checkEq('the level-0 nodes', picked.filter((n) => n.level === 0).map(key).sort()
   ['0:0,0', '0:0,64', '0:64,0', '0:64,64']);
 checkEq('the level-4 nodes', picked.filter((n) => n.level === 4).map(key).sort(),
   ['4:0,1024', '4:1024,0', '4:1024,1024']);
-const MORPH_DIAG = Math.SQRT2 - 1;
+checkEq('…and every one of them draws the whole patch',
+  picked.every((n) => n.cells === PATCH_N), true);
 for (const level of [0, 1, 2, 3, 4]) {
   const size = 64 * (1 << level);
   const corner = picked.find((n) => n.level === level && n.x === 0 && n.z === 0);
@@ -848,7 +904,27 @@ for (const level of [0, 1, 2, 3, 4]) {
   const diag = picked.find((n) => n.level === level && n.x === size && n.z === size);
   if (level === 0) check(`(o) level 0, the corner node (d = 0)`, corner.morph, 0);
   check(`(o) level ${level}, the axis node (d = size)`, axis.morph, 0);
-  check(`…the diagonal one (d = size·√2)`, diag.morph, MORPH_DIAG, 1e-12);
+  // The ramp of level L runs over the LAST HALF OF ITS OWN RING. Level 0's ring
+  // starts at 0, so its ramp begins at 0.5·range[0] = size and the diagonal node
+  // at d = size·√2 is (√2 − 1) of the way through it. Every level above has its
+  // ring start at range[L−1] = size, so its ramp begins at 1.5·size — past the
+  // 1.414·size the diagonal stands at, and the node has not begun to morph.
+  check(`…the diagonal one (d = size·√2 = 1.414·size)`, diag.morph,
+    level === 0 ? Math.SQRT2 - 1 : 0, 1e-12);
+}
+// (o2) AND THE RAMP ITSELF, on one node with nothing else in the world. The
+// node [0, 128]² at level 1 owns the ring [128, 256] and its morph runs over
+// the LAST HALF of that ring, [192, 256]. A camera on the x axis at 128 + d is
+// exactly d from its east face:
+//   d = 192 -> the ramp has not started        -> 0
+//   d = 224 -> (224 − 192) / 64                -> 0.5
+//   d = 256 -> the ring ends                   -> 1
+for (const [camX, want] of [[320, 0], [352, 0.5], [384, 1]]) {
+  const one = selectLodNodes({
+    x0: 0, z0: 0, x1: 128, z1: 128, leafM: 64, levels: 2, minLodDistance: 128,
+    camX, camY: 0, camZ: 0, boundsOf: FLAT_BOUNDS,
+  });
+  check(`(o2) the level-1 ramp at d = ${camX - 128} m`, one[0].morph, want, 1e-12);
 }
 // The ring boundary belongs to the COARSER level: at exactly `ranges[L-1]` the
 // node is selected, not split. One metre nearer and it splits.
@@ -873,9 +949,9 @@ console.log('\n[6] a fully morphed node IS its parent — no skirt, no crack');
 const CRACK = buildPyramid((x, z) => (((x / 8) % 2 === 1) ? 6 : 0),
                            0, 0, 8, 33, 33, MAX_LOD_LEVELS);
 const RECT = null;
-const childFull = { x: 0, z: 0, size: 256, level: 1, morph: 1 };
-const childOwn = { x: 0, z: 0, size: 256, level: 1, morph: 0 };
-const parent = { x: 0, z: 0, size: 512, level: 2, morph: 0 };
+const childFull = { x: 0, z: 0, size: 256, level: 1, cells: PATCH_N, morph: 1 };
+const childOwn = { x: 0, z: 0, size: 256, level: 1, cells: PATCH_N, morph: 0 };
+const parent = { x: 0, z: 0, size: 512, level: 2, cells: PATCH_N, morph: 0 };
 let edgeWorst = 0;
 let ownWorst = 0;
 for (let g = 0; g <= PATCH_N; g += 1) {
@@ -916,9 +992,11 @@ check('(w) λ(0)', lodLambda(0, RANGES), 0);
 check('(w) λ(64)', lodLambda(64, RANGES), 0);
 check('(w) λ(96)', lodLambda(96, RANGES), 0.5);
 check('(w) λ(128) = one whole level', lodLambda(128, RANGES), 1);
-check('(w) λ(192)', lodLambda(192, RANGES), 1.5);
+check('(w) λ(192) — level 1\'s ramp only STARTS here', lodLambda(192, RANGES), 1);
+check('(w) λ(224)', lodLambda(224, RANGES), 1.5);
 check('(w) λ(256)', lodLambda(256, RANGES), 2);
-check('(w) λ(400)', lodLambda(400, RANGES), 2.5625);
+check('(w) λ(400)', lodLambda(400, RANGES), 2.125);
+check('(w) λ(512)', lodLambda(512, RANGES), 3);
 // A 6 m step every other 4 m of z — see the docstring: the 2 m, 4 m and 8 m
 // mips all read it differently, at the very points the two nodes meet on.
 const SEAM = buildPyramid((x, z) => ((Math.floor(z / 4) % 2 === 1) ? 6 : 0),
@@ -976,8 +1054,7 @@ for (let g = 0; g <= PATCH_N; g += 1) {
   if (onRb !== null) seamRed = Math.max(seamRed, Math.abs(ra.y - onRb));
 }
 check('(x) every vertex the two SHARE agrees exactly', sharedWorst, 0, 1e-12);
-checkBelow('…and the whole fine edge stays within 4 cm of the coarse one',
-  seamWorst, 0.04);
+check('…and the whole fine edge lies ON the coarse one', seamWorst, 0, 1e-9);
 check('(y) RED: with one morph per node the same edge stood off by',
   seamRed, 3, 1e-12);
 
@@ -1378,13 +1455,13 @@ check('…n.z', nCrest.z, -1 / S18, 1e-12);
 const degOff = (n) => (Math.acos(Math.min(Math.max(n.y, -1), 1)) * 180) / Math.PI;
 check('…the tilt from the vertical, degrees', degOff(nCrest), 19.4712206344, 1e-9);
 
-/** The 200 cameras: 8 azimuths × 25 distances from 8 m to 700 m, as offsets
+/** The 200 cameras: 8 azimuths × 25 distances from 8 m to 1 000 m, as offsets
  *  from the ground point. Only their DISTANCE can reach the old law, so the
  *  sweep is written as one. */
 const CAMS = [];
 for (let a = 0; a < 8; a += 1) {
   for (let k = 0; k < 25; k += 1) {
-    const d = 8 * (700 / 8) ** (k / 24);
+    const d = 8 * (1000 / 8) ** (k / 24);
     const phi = (a * Math.PI) / 4;
     const pitch = 0.3 + 0.05 * a;
     CAMS.push([Math.cos(phi) * Math.cos(pitch) * d, Math.sin(pitch) * d,
@@ -1392,8 +1469,8 @@ for (let a = 0; a < 8; a += 1) {
   }
 }
 const NRANGES = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS);
-check('the sweep crosses the morph ramps of levels 0…3, λ(700)',
-  lodLambda(700, NRANGES), 3 + (700 - 512) / 512, 1e-12);
+check('the sweep crosses the morph ramps of levels 0…3, λ(1000)',
+  lodLambda(1000, NRANGES), 3 + (1000 - 768) / 256, 1e-12);
 
 /** THE OLD LAW, rebuilt from its own arithmetic: the vertex's morph pair,
  *  differenced at each span on the mip level that span names, blended by
@@ -1489,8 +1566,19 @@ checkEq('…while the vertex chunk computes no normal any more',
 check('(gg) height taps of the fragment normal', nglsl.split('tlodHeight(').length - 1, 4);
 check('…texel reads per ground fragment, 4 taps × the bilinear\'s 4',
   (nglsl.split('tlodHeight(').length - 1) * 4, 16);
-check('…height taps left in tlodCompute (11 before)',
-  glsl.slice(glsl.indexOf('void tlodCompute')).split('tlodHeight(').length - 1, 3);
+// The VERTEX cost, after the T-junction fix of 2026-08-22. `tlodCompute` taps
+// the height twice for the blend and asks `tlodMorphAt` — one tap each — once
+// for the vertex itself and once per step of the block descent, which runs at
+// most MAX_LOD_LEVELS − 1 = 5 times. Worst case 2 + 1 + 5 = 8 taps per vertex,
+// still fewer than the 11 the shader carried before the shading normal moved to
+// the fragment stage.
+const compute = glsl.slice(glsl.indexOf('void tlodCompute'));
+check('…height taps in tlodCompute itself', compute.split('tlodHeight(').length - 1, 2);
+check('…and morph reads, one before the descent and one inside it',
+  compute.split('tlodMorphAt(').length - 1, 2);
+check('…one tap each, so the worst case per vertex is',
+  2 + 1 + (MAX_LOD_LEVELS - 1), 8);
+checkBelow('…which is still under what the vertex stage cost before', 8, 11);
 
 // ── [11] the transition probe ───────────────────────────────────────────────
 console.log('\n[11] a split does not move the ground — the transition probe');
@@ -1566,51 +1654,93 @@ function trSelect(cam) {
 function trVertex(node, gx, gz, cam) {
   return lodVertex(node, gx, gz, trPyr, TR_RECT, trPyr, TR_EXT, cam, TR_RANGES);
 }
+/**
+ * THE OLD λ, rebuilt from its own arithmetic: every level's ramp anchored at
+ * the ORIGIN (`MORPH_START · range[i]`) instead of inside the level's own ring.
+ * The two agree while the ranges double exactly and part company as soon as the
+ * screen-space error rule widens one — which is why [12] uses it as a red probe.
+ */
+function redLambda(d, ranges) {
+  let lam = 0;
+  for (const r of ranges) {
+    if (!(r > 0)) continue;
+    const t = (d - MORPH_START * r) / ((1 - MORPH_START) * r);
+    lam += t <= 0 ? 0 : t >= 1 ? 1 : t;
+  }
+  return lam;
+}
+/**
+ * THE OLD `tlodCompute`, rebuilt: the morph coordinate read at the VERTEX
+ * itself rather than at the block it snaps into, and the old λ. `morphedVertex`
+ * is the shipped one — it takes t as an argument, so what this reimplements is
+ * precisely the half that changed.
+ */
+function redVertex(node, gx, gz, pyr, rect, ext, cam, ranges) {
+  const step = node.size / node.cells;
+  let x0 = node.x + Math.min(gx, node.cells) * step;
+  let z0 = node.z + Math.min(gz, node.cells) * step;
+  if (ext) {
+    x0 = Math.min(Math.max(x0, ext[0]), ext[2]);
+    z0 = Math.min(Math.max(z0, ext[1]), ext[3]);
+  }
+  const y0 = gpuHeightAt(pyr, rect, pyr, x0, z0, 0);
+  const d = Math.hypot(x0 - cam.x, y0 - cam.y, z0 - cam.z);
+  const t = Math.max(0, ranges === null ? 0 : redLambda(d, ranges) - node.level);
+  return { ...morphedVertex(node, gx, gz, pyr, rect, pyr, ext, t), t };
+}
+
 // (ii)/(jj) ONE parent, ONE child, ONE camera — where exactly do they differ?
+// The two are built by hand: after the out-of-range rule of § A16.6 a rendered
+// parent and a rendered child of it cannot both occur, and what is asked here is
+// the VERTEX ARITHMETIC, which has to hold for any pair of levels that meet.
 const trCam = { x: -1669.6, y: TR(-1669.6, -630.4) + 12, z: -630.4 };
-const trParent = { x: -1280, z: -1152, size: 256, level: 2, morph: 0 };
-const trChild = { x: -1280, z: -1152, size: 128, level: 1, morph: 0 };
+const trParent = { x: -1280, z: -1152, size: 256, level: 2, cells: PATCH_N, morph: 0 };
+const trChild = { x: -1280, z: -1152, size: 128, level: 1, cells: PATCH_N, morph: 0 };
 let sharedWorstV = 0;
 let oddOffset = 0;
 let oddHeight = 0;
-let derivedWorst = 0;
+let redOffset = 0;
+let redHeight = 0;
+let deepest = 0;
 for (let gz = 0; gz <= PATCH_N; gz += 1) {
   for (let gx = 0; gx <= PATCH_N; gx += 1) {
     const c = trVertex(trChild, gx, gz, trCam);
+    deepest = Math.max(deepest, Math.floor(c.t));
     if (gx % 2 === 0 && gz % 2 === 0) {
       const p = trVertex(trParent, gx / 2, gz / 2, trCam);
       sharedWorstV = Math.max(sharedWorstV, Math.abs(c.x - p.x), Math.abs(c.z - p.z),
                               Math.abs(c.y - p.y));
       continue;
     }
-    // The odd ones are supposed to COLLAPSE onto their even twin.
+    // The vertices the child ADDS are supposed to COLLAPSE onto their even twin
+    // wherever the child is drawing on a lattice coarser than its own (k ≥ 1) —
+    // that is what `mix(gi − gi mod m1, gi − gi mod m2, f)` does, and it does it
+    // only if both use the SAME f.
     const e = trVertex(trChild, gx - (gx % 2), gz - (gz % 2), trCam);
-    const off = Math.hypot(c.x - e.x, c.z - e.z);
-    oddOffset = Math.max(oddOffset, off);
-    oddHeight = Math.max(oddHeight, Math.abs(c.y - e.y));
-    // …and the offset is (g mod m2 − g mod m1) · Δt · nodeStep, closed form.
-    // A vertex and its twin share both `g − g mod m1` and `g − g mod m2` (for
-    // m1 ≥ 2), so the ONLY thing that separates them is that `mix` blends those
-    // two identical numbers with two DIFFERENT f — and f is the vertex's own
-    // λ. Pairs straddling a k boundary, and k = 0 where the twins do not share
-    // `g − g mod m1` at all, are their own case and sit out.
-    const k = Math.min(Math.floor(c.t), MAX_LOD_LEVELS - 1);
-    if (k < 1 || Math.floor(e.t) !== k) continue;
-    const m1 = 2 ** k;
-    const m2 = m1 * 2;
-    const step = trChild.size / PATCH_N;
-    const dt = c.t - e.t;
-    const want = Math.hypot(((gx % m2) - (gx % m1)) * dt * step,
-                            ((gz % m2) - (gz % m1)) * dt * step);
-    derivedWorst = Math.max(derivedWorst, Math.abs(off - want));
+    if (Math.floor(c.t) >= 1) {
+      oddOffset = Math.max(oddOffset, Math.hypot(c.x - e.x, c.z - e.z));
+      oddHeight = Math.max(oddHeight, Math.abs(c.y - e.y));
+    }
+    const rc = redVertex(trChild, gx, gz, trPyr, TR_RECT, TR_EXT, trCam, TR_RANGES);
+    const re = redVertex(trChild, gx - (gx % 2), gz - (gz % 2), trPyr, TR_RECT,
+                         TR_EXT, trCam, TR_RANGES);
+    if (Math.floor(rc.t) >= 1) {
+      redOffset = Math.max(redOffset, Math.hypot(rc.x - re.x, rc.z - re.z));
+      redHeight = Math.max(redHeight, Math.abs(rc.y - re.y));
+    }
   }
 }
 check('(ii) every vertex the parent and the child SHARE agrees', sharedWorstV, 0, 0);
-checkAbove('(jj) …while a vertex the child adds misses its own twin by, metres',
-  oddOffset, 0.3);
-checkAbove('…which lifts it off the parent\'s surface by, metres', oddHeight, 0.05);
-check('…and that offset IS (g mod m2 − g mod m1) · Δt · nodeStep, to',
-  derivedWorst, 0, 1e-12);
+checkAbove('…and the child really is drawing coarser than its own level here, k',
+  deepest, 0);
+// (jj) THE VERTICES THE CHILD ADDS. Reading the morph at the vertex's BLOCK
+// instead of at the vertex (§ A16.6, `lodVertex`) makes every one of them land
+// exactly on the twin it is meant to disappear into.
+check('(jj) a vertex the child adds misses its own twin by, metres', oddOffset, 0, 0);
+check('…and stands off the parent\'s surface by, metres', oddHeight, 0, 0);
+checkAbove('…RED: with the morph read per VERTEX it missed by, metres',
+  redOffset, 0.3);
+checkAbove('…and hung this far off the parent\'s surface, metres', redHeight, 0.05);
 
 // (kk) THE SWEEP: the surface before and after every transition, same camera.
 /** The drawn mesh of one node — `tlodCompute` at all 1 089 vertices. */
@@ -1726,13 +1856,15 @@ checkAbove('(kk) transitions over 60 m heading east–north', swept.transitions,
 checkAbove('…ground points compared across them', swept.samples, 1e4);
 console.log(`       (worst pop ${swept.worstM.toFixed(4)} m, `
   + `mean ${swept.meanPx.toExponential(2)} px)`);
-// THE BOUND, derived: `MAX_PIXEL_ERROR` = 2 px is what a whole LEVEL of
-// vertical error is allowed to cost. A split, which is meant to cost nothing at
-// all, may not spend a quarter of that — and on average not a fiftieth.
-checkBelow('…the worst of them, in PIXELS of a 45° / 1 080 px view',
-  swept.worstPx, MAX_PIXEL_ERROR / 4);
-checkBelow('…and the mean over every point compared', swept.meanPx,
-  MAX_PIXEL_ERROR / 50);
+// THE BOUND, re-derived after § A16.6 (2026-08-22). It used to be a fraction of
+// `MAX_PIXEL_ERROR`: a split cost 0.101 m, a quarter of a pixel, and the check
+// asked for no more than that. It now costs NOTHING, and the reason is
+// structural rather than lucky — the drawn surface is a function of the world
+// point and the block it lies in, and neither of those knows which piece drew
+// it, so exchanging one piece for four cannot move the ground at all. The bound
+// is therefore float precision and not a pixel budget.
+check('…the worst of them, metres', swept.worstM, 0, 1e-9);
+check('…and in PIXELS of a 45° / 1 080 px view', swept.worstPx, 0, 1e-9);
 
 // (ll) NO COMPASS DIRECTION. Hypothesis (B) was a corner bias in the box
 // distance — nodes east and north of the camera splitting earlier than their
@@ -1770,6 +1902,189 @@ for (let s = 0; s < 120; s += 1) {
 }
 check('(ll) frames whose mirror image is a different tree', mirrorWorst, 0);
 checkAbove('…frames walked east–north and its mirror', mirrorFrames, 100);
+
+// ── [12] the T-junction probe ───────────────────────────────────────────────
+console.log('\n[12] no vertex hangs beside a neighbour\'s edge — the T-junction probe');
+
+/** Distance from a point to an axis-aligned box, the shipped `boxDistance`
+ *  rewritten for the red selection below. */
+function redBoxDist(px, py, pz, x0, y0, z0, x1, y1, z1) {
+  const dx = Math.max(x0 - px, 0, px - x1);
+  const dy = Math.max(y0 - py, 0, py - y1);
+  const dz = Math.max(z0 - pz, 0, pz - z1);
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+/**
+ * THE OLD SELECTION, rebuilt: split on the node's own distance and hand every
+ * one of the four children the finer level, whether that child's own distance
+ * is still inside the ring or not. `cells` is `PATCH_N` for all of them, since
+ * a parent quadrant is exactly what this rule cannot express.
+ */
+function redSelect(o) {
+  const out = [];
+  const top = o.levels - 1;
+  const ranges = lodRanges(o.minLodDistance, o.levels, o.levelErrorM, o.pixelScale);
+  const visit = (x, z, level) => {
+    const size = o.leafM * (1 << level);
+    if (x >= o.x1 || z >= o.z1 || x + size <= o.x0 || z + size <= o.z0) return;
+    const b = o.boundsOf(x, z, size);
+    if (o.inView && !o.inView(x, z, size, b.min, b.max)) return;
+    const d = redBoxDist(o.camX, o.camY, o.camZ,
+                         x, b.min, z, x + size, b.max, z + size);
+    if (level > 0 && ranges[level - 1] > 0 && d < ranges[level - 1]) {
+      const half = size / 2;
+      visit(x, z, level - 1);
+      visit(x + half, z, level - 1);
+      visit(x, z + half, level - 1);
+      visit(x + half, z + half, level - 1);
+      return;
+    }
+    out.push({ x, z, size, level, cells: PATCH_N,
+               morph: Math.max(0, redLambda(d, ranges) - level) });
+  };
+  const rootSize = o.leafM * (1 << top);
+  for (let rz = Math.floor(o.z0 / rootSize); rz <= Math.floor((o.z1 - 1e-6) / rootSize); rz += 1) {
+    for (let rx = Math.floor(o.x0 / rootSize); rx <= Math.floor((o.x1 - 1e-6) / rootSize); rx += 1) {
+      visit(rx * rootSize, rz * rootSize, top);
+    }
+  }
+  return out;
+}
+
+/**
+ * The four DRAWN edges of a piece, each as a chain of (along-axis, height)
+ * points. The morph slides a vertex along the edge as well as across it, so the
+ * chain is not a graph over the axis and the comparison below has to be a
+ * distance to the chain rather than an evaluation at a coordinate — that is not
+ * pedantry: measured with an evaluation, two IDENTICAL chains report 0.1 m
+ * wherever the old rule folded one back on itself.
+ */
+function edgesOf(node, vertexFn, cam) {
+  const c = node.cells;
+  const line = (fn) => {
+    const pts = [];
+    for (let g = 0; g <= c; g += 1) pts.push(fn(g));
+    return pts;
+  };
+  return {
+    west: line((g) => { const v = vertexFn(node, 0, g, cam); return { a: v.z, y: v.y }; }),
+    east: line((g) => { const v = vertexFn(node, c, g, cam); return { a: v.z, y: v.y }; }),
+    north: line((g) => { const v = vertexFn(node, g, 0, cam); return { a: v.x, y: v.y }; }),
+    south: line((g) => { const v = vertexFn(node, g, c, cam); return { a: v.x, y: v.y }; }),
+  };
+}
+/** Distance from a point to a polygonal chain, in the (along, height) plane. */
+function distToChain(pts, a, y) {
+  let best = Infinity;
+  for (let i = 0; i + 1 < pts.length; i += 1) {
+    const dx = pts[i + 1].a - pts[i].a;
+    const dy = pts[i + 1].y - pts[i].y;
+    const len2 = dx * dx + dy * dy;
+    let u = len2 > 0 ? ((a - pts[i].a) * dx + (y - pts[i].y) * dy) / len2 : 0;
+    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    const d = Math.hypot(pts[i].a + u * dx - a, pts[i].y + u * dy - y);
+    if (d < best) best = d;
+  }
+  return best;
+}
+/**
+ * One camera: select, then walk every pair of pieces that share a stretch of
+ * edge and ask how far each side's vertices stand off the other side's chain.
+ * `triangles` counts the NON-DEGENERATE ones, `beyond` the pieces whose own
+ * nearest point has already left their level's ring.
+ */
+function tjunctionAt(cam, selectFn, vertexFn, acc) {
+  const nodes = selectFn(cam);
+  const E = nodes.map((n) => edgesOf(n, vertexFn, cam));
+  for (const n of nodes) {
+    acc.triangles += n.cells * n.cells * 2;
+    if (n.level < MAX_LOD_LEVELS - 1 && n.morph > 1 + 1e-12) acc.beyond += 1;
+    if (n.morph < 0) acc.negative += 1;
+  }
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = 0; j < nodes.length; j += 1) {
+      if (i === j) continue;
+      const A = nodes[i];
+      const B = nodes[j];
+      let pair = null;
+      if (Math.abs(A.x + A.size - B.x) < 1e-9) {
+        const lo = Math.max(A.z, B.z);
+        const hi = Math.min(A.z + A.size, B.z + B.size);
+        if (hi - lo > 1e-9) pair = [E[i].east, E[j].west, lo, hi];
+      } else if (Math.abs(A.z + A.size - B.z) < 1e-9) {
+        const lo = Math.max(A.x, B.x);
+        const hi = Math.min(A.x + A.size, B.x + B.size);
+        if (hi - lo > 1e-9) pair = [E[i].south, E[j].north, lo, hi];
+      }
+      if (!pair) continue;
+      const [pa, pb, lo, hi] = pair;
+      for (const [from, onto] of [[pa, pb], [pb, pa]]) {
+        for (const p of from) {
+          if (p.a < lo - 1e-9 || p.a > hi + 1e-9) continue;
+          const d = distToChain(onto, p.a, p.y);
+          if (d > acc.worst) acc.worst = d;
+          if (d > 1e-6) acc.bad += 1;
+          acc.tested += 1;
+        }
+      }
+    }
+  }
+  acc.nodes += nodes.length;
+  acc.frames += 1;
+}
+/** The whole sweep: the 60 m NE walk of (kk) plus all 24 headings of a
+ *  15°-compass at its start, which is where the finding was reported. */
+function tjunctionSweep(selectFn, vertexFn) {
+  const acc = { worst: 0, bad: 0, tested: 0, nodes: 0, frames: 0,
+                triangles: 0, beyond: 0, negative: 0 };
+  for (let s = 0; s < 120; s += 1) {
+    const cx = -1700 + Math.sin((135 * Math.PI) / 180) * 0.5 * s;
+    const cz = -600 + Math.cos((135 * Math.PI) / 180) * 0.5 * s;
+    tjunctionAt({ x: cx, y: TR(cx, cz) + 12, z: cz }, selectFn, vertexFn, acc);
+  }
+  for (let h = 0; h < 24; h += 1) {
+    const a = (h * 15 * Math.PI) / 180;
+    const cx = -1700 + Math.sin(a) * 30;
+    const cz = -600 + Math.cos(a) * 30;
+    tjunctionAt({ x: cx, y: TR(cx, cz) + 12, z: cz }, selectFn, vertexFn, acc);
+  }
+  return acc;
+}
+const redTrSelect = (cam) => redSelect({
+  x0: TR_EXT[0], z0: TR_EXT[1], x1: TR_EXT[2], z1: TR_EXT[3],
+  leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+  camX: cam.x, camY: cam.y, camZ: cam.z,
+  boundsOf: trBounds, levelErrorM: CERR, pixelScale: camPixelScale,
+});
+const now = tjunctionSweep(trSelect, (n, gx, gz, cam) => trVertex(n, gx, gz, cam));
+const before = tjunctionSweep(redTrSelect,
+  (n, gx, gz, cam) => redVertex(n, gx, gz, trPyr, TR_RECT, TR_EXT, cam, TR_RANGES));
+checkAbove('(mm) camera settings walked (120 m of path + 24 headings)', now.frames, 140);
+checkAbove('…edge vertices measured against the neighbour\'s chain', now.tested, 3e6);
+check('(mm) vertices standing off the neighbour\'s edge by more than 1 µm',
+  now.bad, 0);
+check('…and the worst of them, metres', now.worst, 0, 1e-9);
+console.log(`       (worst ${now.worst.toExponential(2)} m over ${now.tested} tests)`);
+checkAbove('(nn) RED: the old rule leaves this many hanging vertices',
+  before.bad, 1e4);
+checkAbove('…and the worst of them stands off by, metres', before.worst, 0.05);
+console.log(`       (RED worst ${before.worst.toFixed(4)} m, `
+  + `${before.bad} of ${before.tested} tests)`);
+// (oo) THE OUT-OF-RANGE RULE ITSELF: `morph` is λ at the piece's nearest point
+// minus its level, so `morph ≤ 1` says the piece lies inside its own ring.
+check('(oo) pieces drawn at a level whose ring they have left', now.beyond, 0);
+check('…and none with a negative morph either', now.negative, 0);
+checkAbove('…RED: under the old rule this many were', before.beyond, 1e3);
+// (pp) WHAT IT COSTS. The out-of-range quadrants draw a child-sized square at
+// the parent's spacing — a quarter of the triangles the old rule spent on the
+// same ground — so the far half of the ground gets cheaper, not dearer.
+const triNow = Math.round(now.triangles / now.frames);
+const triRed = Math.round(before.triangles / before.frames);
+console.log(`       (${Math.round(now.nodes / now.frames)} pieces / `
+  + `${triNow} triangles per frame, was `
+  + `${Math.round(before.nodes / before.frames)} / ${triRed})`);
+checkBelow('(pp) real triangles per frame, as a share of the old rule\'s',
+  triNow / triRed, 1);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

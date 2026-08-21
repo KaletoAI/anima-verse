@@ -30,6 +30,35 @@
  * 6.2-pixel hairline of sky at 127 m that reopened somewhere else every frame
  * the camera moved. See `lodLambda`.
  *
+ * …BUT NOT TO THE VERTEX ALONE — TO THE BLOCK IT SNAPS INTO (finding round
+ * 2026-08-22). Wherever λ has climbed past a piece's own level the piece is
+ * drawing on a lattice coarser than its own and several of its vertices snap to
+ * ONE point. They only really merge if they blend with the same f, and f was
+ * each vertex's own λ: a twin pair therefore separated by
+ * `(gi mod m2 − gi mod m1) · Δt · nodeStep` — 0.357 m sideways, 0.086 m up —
+ * which leaves the added vertex hanging beside the coarser neighbour's edge.
+ * That is a T-junction, and a T-junction on a flat-shaded, unfiltered,
+ * single-coloured ground is still a sliver of sky: exactly what the isolation
+ * panel measured, with toggles 6, 7 and 18 all on and the light-blue shimmer
+ * standing, while toggle 10 took it away. Three things fix it and all three are
+ * needed:
+ *
+ *  - `lodLambda` anchors each level's morph ramp INSIDE that level's own ring,
+ *    so λ(range[i]) = i + 1 exactly even after the screen-space error rule has
+ *    widened a range out of the doubling. Without it a coarse piece begins
+ *    morphing before its own ring starts and stands 3.9 m off the fine piece
+ *    beside it;
+ *  - `lodVertex` / `tlodCompute` read the morph at the vertex's BLOCK, found by
+ *    a descent over anchors every member of the block shares, so the added
+ *    vertices land on their twin exactly instead of nearly;
+ *  - `selectLodNodes` never renders a node at a level whose ring it lies
+ *    outside — the parent draws those quadrants itself. That is Strugar's own
+ *    rule; here it is what keeps the coarse blocks rare and the far ground
+ *    cheap (19 % fewer triangles per frame) rather than what closes the seam.
+ *
+ * `smoke_terrain_lod.mjs` [12] measures the T-junctions over the whole drawn
+ * ground: 0 (1.5e-13 m) now, 0.1046 m and 108 352 hanging vertices before.
+ *
  * THE SHADING NORMAL BELONGS TO THE FRAGMENT, NOT TO THE VERTEX (finding round
  * 2026-08-21, second half). It used to be built in the VERTEX shader from
  * central differences over the vertex's own morph pair — spans of
@@ -109,26 +138,42 @@ export const MAX_LOD_LEVELS = 6;
  */
 export const MIN_LOD_DISTANCE_M = 128;
 
-/** Where in a level's range the morph towards the parent starts, as a fraction
- *  of it. Strugar's CDLOD paper uses "the last half"; below that the node draws
- *  its own lattice unblended, which is what makes the morph=0 path assertable
- *  against `heightAt`. */
+/** Where in a level's own RING the morph towards the parent starts, as a
+ *  fraction of it: `s_i = range[i−1] + MORPH_START · (range[i] − range[i−1])`.
+ *  Strugar's CDLOD paper calls for "the last half" of the ring, and the ring is
+ *  what it has to be measured in — anchoring the ramp at the origin instead
+ *  (`MORPH_START · range[i]`) is the same number only while the ranges double
+ *  exactly, and the screen-space error rule widens them out of the doubling all
+ *  the time. See `lodLambda`. Below `s_i` the piece draws its own lattice
+ *  unblended, which is what makes the morph=0 path assertable against
+ *  `heightAt`. */
 export const MORPH_START = 0.5;
 
 /**
  * THE CONTINUOUS LOD COORDINATE — how coarse the ground is at a distance of
  * `d` metres, as a real number rather than a level index.
  *
- * λ = Σ_i clamp( (d − MORPH_START·range[i]) / ((1 − MORPH_START)·range[i]), 0, 1 )
+ * λ = Σ_i clamp( (d − s_i) / (range[i] − s_i), 0, 1 ),
+ *     s_i = range[i−1] + MORPH_START · (range[i] − range[i−1]),  range[−1] = 0
  *
- * Read it term by term: level i's morph runs from 0 at `MORPH_START·range[i]`
- * to 1 at `range[i]`, and every level nearer than that has long finished its
- * own morph and contributes a whole 1. With the geometric ranges (each twice
- * the one inside it) `MORPH_START·range[i]` IS `range[i−1]`, so the terms tile
- * the axis exactly and λ is the piecewise-linear "level + morph" the ring
- * structure describes: λ(range[i]) = i + 1, λ(0) = 0. It stays continuous and
- * monotone when the screen-space error rule widens a range out of the doubling
- * (`lodRanges`), which a hand-written piecewise formula would not.
+ * Read it term by term: level i's morph runs from 0 at `s_i` to 1 at
+ * `range[i]`, and `s_i` lies INSIDE level i's own ring `[range[i−1], range[i]]`
+ * — the last half of it, which is what Strugar's paper calls for. So the ramps
+ * cannot overlap: for a distance inside ring i every nearer term has finished
+ * (1) and every farther term has not begun (0), and λ(d) = i + morph. That
+ * gives λ(range[i]) = i + 1 and λ(0) = 0 EXACTLY, whatever `lodRanges` did to
+ * the boundaries.
+ *
+ * THE RAMP IS ANCHORED IN THE RING AND NOT AT THE ORIGIN (2026-08-22). It used
+ * to be `MORPH_START · range[i]`, which is the same number only while the ranges
+ * double exactly — and the screen-space error rule (`MAX_PIXEL_ERROR`) widens
+ * them out of the doubling all the time. Measured on the widened ranges
+ * [382, 554, 652, 1024, …]: a level-3 piece began morphing at 512 m although its
+ * own ring only starts at 652 m, so where a level-2 neighbour had finished
+ * morphing onto the level-3 lattice, the level-3 piece had ALREADY left it —
+ * a 3.9 m step in the ground along the edge they share (`smoke_terrain_lod.mjs`
+ * [12] measures it as the red probe). λ(range[i]) = i + 1 is not a nicety, it is
+ * the identity the whole seam argument rests on.
  *
  * WHY IT EXISTS AT ALL — this is the crack fix of 2026-08-21. Until now the
  * morph was ONE number per node, taken from the node's bounding-box distance
@@ -150,10 +195,20 @@ export const MORPH_START = 0.5;
  */
 export function lodLambda(d: number, ranges: readonly number[]): number {
   let lam = 0;
+  let prev = 0;
   for (const r of ranges) {
     if (!(r > 0)) continue;
-    const span = (1 - MORPH_START) * r;
-    const t = (d - MORPH_START * r) / span;
+    const start = prev + MORPH_START * (r - prev);
+    prev = r;
+    // A ring of zero width (two equal ranges — only a hand-edited error list
+    // can produce one) owns no level and no morph: λ steps over it. Nothing is
+    // ever emitted at such a level, so the step is a function of the distance
+    // alone and every piece reads it the same way.
+    if (!(r > start)) {
+      lam += d >= r ? 1 : 0;
+      continue;
+    }
+    const t = (d - start) / (r - start);
     lam += t <= 0 ? 0 : t >= 1 ? 1 : t;
   }
   return lam;
@@ -322,21 +377,31 @@ export function pyramidLevelFor(pyr: HeightPyramid | null, stepM: number): numbe
 
 // ── The quadtree ───────────────────────────────────────────────────────────
 
-/** One selected quadtree node: its south-west corner and edge length in world
- *  metres, and the level it draws at.
+/**
+ * One selected piece of terrain: its south-west corner and edge length in world
+ * metres, the level it draws at, and how many patch cells per axis that costs.
  *
- *  `morph` is the morph coordinate at the node's NEAREST point,
- *  `max(lodLambda(d_min) − level, 0)`: 0 = its own lattice, 1 = exactly the
- *  parent's, and above 1 it keeps going up the pyramid. It is a DIAGNOSTIC and
- *  the input of the arithmetic twin `morphedVertex` — the renderer hands the
- *  shader the node's LEVEL and lets every vertex read its own λ (see
- *  `lodLambda`), because one number per node is precisely what cracked the
- *  ground. */
+ * `cells` is `PATCH_N` for a WHOLE node and `PATCH_N / 2` for a parent QUADRANT
+ * — the out-of-range rule of `selectLodNodes` emits those, and they carry the
+ * parent's vertex spacing over a child-sized square. The vertex spacing is
+ * therefore always `size / cells = baseStep · 2^level`, and the level alone
+ * says how dense the piece is drawn.
+ *
+ * `morph` is the morph coordinate at the piece's NEAREST point,
+ * `max(lodLambda(d_min) − level, 0)`: 0 = its own lattice, 1 = exactly the
+ * parent's. For every piece but a root it stays in [0, 1] since the
+ * out-of-range rule of `selectLodNodes` (2026-08-22) — a piece is never emitted
+ * at a level whose ring it lies outside. It is a DIAGNOSTIC and the input of
+ * the arithmetic twin `morphedVertex`; the renderer hands the shader the LEVEL
+ * and lets every vertex read its own λ (see `lodLambda`), because one number
+ * per node is what cracked the ground before.
+ */
 export interface LodNode {
   x: number;
   z: number;
   size: number;
   level: number;
+  cells: number;
   morph: number;
 }
 
@@ -494,7 +559,7 @@ function boxDistance(px: number, py: number, pz: number,
 }
 
 /**
- * Which nodes the terrain is drawn from, at which level, morphed how far.
+ * Which pieces of terrain are drawn, at which level, morphed how far.
  *
  * THE RULE, top down from the roots (Strugar CDLOD):
  *
@@ -506,17 +571,35 @@ function boxDistance(px: number, py: number, pz: number,
  *   otherwise it is SELECTED, and `morph` records `lodLambda(d) − L` at its
  *   nearest point (a diagnostic — the shader morphs per VERTEX, `lodLambda`).
  *
+ * THE OUT-OF-RANGE RULE, and it is the T-junction fix of 2026-08-22. A node is
+ * NEVER drawn at a level whose ring it does not lie in. When a node at level
+ * L+1 splits because SOME child needs level L, the children that do not — the
+ * far ones, whose own box distance has already reached `lodRange[L]` — are not
+ * emitted at level L. The PARENT draws those quadrants itself, at level L+1, as
+ * a piece of `size / 2` with `PATCH_N / 2` cells: the parent's vertex spacing
+ * over the child's square.
+ *
+ * WHAT THAT BUYS, and what it does not. Every emitted piece then satisfies
+ * `lodRange[L−1] ≤ d < lodRange[L]` at its NEAREST point, so its own `morph` is
+ * in [0, 1] — measured over a 144-camera sweep, 0 pieces outside their ring
+ * against 18 934 under the old rule, nearly half of everything it drew. And a
+ * far child that used to be drawn at the finer level is now drawn as its
+ * parent's quadrant: the same ONE instance either way, but at the parent's
+ * spacing, so it costs a quarter of the triangles (461 835 per frame against
+ * 572 075, [12](pp)).
+ *
+ * IT DOES NOT, on its own, close the T-junctions. A piece is as wide as its own
+ * ring here (`size = range[L] / 2` and the ring is `[range[L]/2, range[L]]`), so
+ * its OUTER strip still reaches into the next ring however it was selected, and
+ * there λ − L is above 1 whatever selection did. What closes the seam is that
+ * the morph is read at the vertex's block (`lodVertex`) and that λ's ramps sit
+ * inside their own rings (`lodLambda`); this rule keeps those coarse blocks rare
+ * and the far ground cheap. See the file header for the three together.
+ *
  * THE ERROR TERM IS INSIDE THE RANGE, not a second test beside it — see
  * `MAX_PIXEL_ERROR` for why a per-node error test cracks the ground.
  * `levelErrorM[i+1]` is what level i+1 would cost, so it is `lodRange[i]` — the
  * boundary at which level i+1 is allowed to start — that has to move.
- *
- * WHAT MAKES IT CRACK-FREE, without a skirt, is NOT this function: it is that
- * the drawn surface is a function of the world position and nothing else
- * (`lodLambda`, `terrainLodGlsl`). Selection only decides how DENSELY a stretch
- * of that one surface is sampled, so a mistake here costs triangles, never a
- * seam — which is the whole reason the morph moved off the node and onto the
- * vertex.
  *
  * DISTANCE IS 3D and measured to the node's BOX, not to its centre: a node
  * 512 m wide whose near edge is under the camera must not be treated as
@@ -531,30 +614,49 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
   const top = levels - 1;
   const ranges = lodRanges(o.minLodDistance, levels, o.levelErrorM, o.pixelScale);
 
-  const visit = (x: number, z: number, level: number): void => {
+  /** A square's box distance, or `null` when it is off the world frame or out
+   *  of view. Computed ONCE per square and handed on, so a child is never
+   *  measured twice — the quadrant rule needs the child's distance in the
+   *  parent's loop and the child's own recursion needs the same number. */
+  const probe = (x: number, z: number, size: number): number | null => {
+    if (x >= o.x1 || z >= o.z1 || x + size <= o.x0 || z + size <= o.z0) return null;
+    const b = o.boundsOf(x, z, size);
+    if (o.inView && !o.inView(x, z, size, b.min, b.max)) return null;
+    return boxDistance(o.camX, o.camY, o.camZ,
+                       x, b.min, z, x + size, b.max, z + size);
+  };
+
+  const emit = (x: number, z: number, size: number, level: number,
+                cells: number, d: number): void => {
+    // The morph at the piece's NEAREST point. For every piece but a root it is
+    // in [0, 1] by construction — `lodRange[level−1] ≤ d < lodRange[level]`
+    // holds after the out-of-range rule, and λ(lodRange[i]) = i + 1 exactly
+    // (`lodLambda`). A root has no coarser level to be pushed up to and simply
+    // keeps counting past 1 out there. `smoke_terrain_lod.mjs` [12] asserts it.
+    out.push({ x, z, size, level, cells,
+               morph: Math.max(lodLambda(d, ranges) - level, 0) });
+  };
+
+  const visit = (x: number, z: number, level: number, d: number): void => {
     if (out.length >= MAX_NODES) return;
     const size = leaf * (1 << level);
-    if (x >= o.x1 || z >= o.z1 || x + size <= o.x0 || z + size <= o.z0) return;
-    const b = o.boundsOf(x, z, size);
-    if (o.inView && !o.inView(x, z, size, b.min, b.max)) return;
-    const d = boxDistance(o.camX, o.camY, o.camZ,
-                          x, b.min, z, x + size, b.max, z + size);
-    if (level > 0 && ranges[level - 1] > 0 && d < ranges[level - 1]) {
+    const inner = level > 0 ? ranges[level - 1] : 0;
+    if (inner > 0 && d < inner) {
       const half = size / 2;
-      visit(x, z, level - 1);
-      visit(x + half, z, level - 1);
-      visit(x, z + half, level - 1);
-      visit(x + half, z + half, level - 1);
+      for (let q = 0; q < 4; q += 1) {
+        const cx = x + ((q & 1) ? half : 0);
+        const cz = z + ((q & 2) ? half : 0);
+        const cd = probe(cx, cz, half);
+        if (cd === null) continue;
+        // THE OUT-OF-RANGE RULE: a child past `lodRange[level − 1]` is not a
+        // level-(level − 1) node. Its quadrant is drawn by THIS node instead.
+        if (cd < inner) visit(cx, cz, level - 1, cd);
+        else emit(cx, cz, half, level, PATCH_N / 2, cd);
+        if (out.length >= MAX_NODES) return;
+      }
       return;
     }
-    // The node's own morph coordinate, for the diagnostic and for the
-    // arithmetic twin. With the geometric ranges it is the very number the old
-    // per-node formula gave, `clamp((d − 0.5·range[L]) / (0.5·range[L]), 0, 1)`
-    // — λ(d) − L is that clamp as long as it stays inside one level, and it
-    // keeps counting past 1 instead of saturating, which is what a node beyond
-    // its own ring really draws.
-    const morph = Math.max(0, lodLambda(d, ranges) - level);
-    out.push({ x, z, size, level, morph });
+    emit(x, z, size, level, PATCH_N, d);
   };
 
   const rootSize = leaf * (1 << top);
@@ -564,7 +666,8 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
   const rz1 = Math.floor((o.z1 - 1e-6) / rootSize);
   for (let rz = rz0; rz <= rz1; rz += 1) {
     for (let rx = rx0; rx <= rx1; rx += 1) {
-      visit(rx * rootSize, rz * rootSize, top);
+      const d = probe(rx * rootSize, rz * rootSize, rootSize);
+      if (d !== null) visit(rx * rootSize, rz * rootSize, top, d);
     }
   }
   return out;
@@ -655,36 +758,55 @@ float tlodHeight( vec2 p, float nodeStep ) {
  *
  * `iNode` is (south-west x, south-west z, edge length, LEVEL) — the level and
  * NOT a morph, since 2026-08-21. Every vertex reads its own λ out of
- * `uTlodRange` (`lodLambda`) and derives from it BOTH the lattice it snaps to
- * and the two mip levels it blends, so the drawn surface is a function of the
- * world position alone and two patches cannot disagree about a vertex they
- * share. The old per-node morph is what opened 6-pixel hairlines of sky
- * between neighbouring leaf patches; the derivation is in `lodLambda`.
+ * `uTlodRange` (`lodLambda`), so the drawn surface is a function of the world
+ * position alone and two patches cannot disagree about a vertex they share. The
+ * old per-node morph is what opened 6-pixel hairlines of sky between
+ * neighbouring leaf patches; the derivation is in `lodLambda`.
  *
- * WHY IT IS EXACT, and not merely better. Let a vertex of a node at level L sit
- * at the world point p, with vertex spacing e = baseStep·2^L, and let
- * t = λ(p) − L, k = ⌊t⌋, f = t − k. It snaps to grid multiples of 2^k blended
- * towards 2^(k+1), i.e. to the WORLD lattice of step e·2^k = baseStep·2^(L+k) =
- * baseStep·2^⌊λ⌋ — a number that no longer mentions L. Its two height taps are
- * `nodeStep·2^k` and `·2^(k+1)`, i.e. the mip pair (⌊λ⌋, ⌊λ⌋+1), and the blend
- * is f = λ − ⌊λ⌋. Every one of those depends on λ and p only, so a neighbour at
- * ANY level answers the same number at the same point. The node's own origin is
- * a multiple of 32·baseStep·2^L and therefore of baseStep·2^⌊λ⌋ for every
- * ⌊λ⌋ ≤ 5, so the two also snap onto the same ABSOLUTE lattice, not merely onto
- * one of the same pitch.
+ * THE LEVEL SAYS HOW DENSE, THE SIZE SAYS HOW BIG (§ A16.6, 2026-08-22). The
+ * vertex spacing is `uTlodBaseStep · 2^level` and NOT `size / PATCH_N`, because
+ * a selected piece is no longer always a whole node: the out-of-range rule of
+ * `selectLodNodes` also emits parent QUADRANTS — a child-sized square carrying
+ * the parent's spacing, i.e. `PATCH_N / 2` cells per axis. `cells` falls out of
+ * the two numbers, and the patch indices past it are clamped onto the last row
+ * and column, which is the same collapse-to-degenerate the world frame uses
+ * below: a vertex each, no fragments, no seam. There is nothing to justify
+ * beyond that — the alternative, four sub-draws with a quadrant bitmask, needs
+ * one draw call per quadrant (this renderer has exactly ONE) or a per-vertex
+ * mask test that cannot be made degenerate for a DIAGONAL mask, where a cell at
+ * the patch centre survives as a stray sliver.
  *
- * λ is fed the FINEST height (`tlodHeight(p0, 0.0)`) rather than the node's own
+ * WHY IT IS EXACT. Let a vertex of a piece at level L sit at the world point p,
+ * with spacing e = baseStep·2^L, and let t = λ(p) − L, k = ⌊t⌋, f = t − k. It
+ * snaps to grid multiples of 2^k blended towards 2^(k+1), i.e. onto the WORLD
+ * lattice of step e·2^k = baseStep·2^(L+k) = baseStep·2^⌊λ⌋ — a number that no
+ * longer mentions L. Its two height taps are `e·2^k` and `·2^(k+1)`, the mip
+ * pair (⌊λ⌋, ⌊λ⌋+1), blended by f = λ − ⌊λ⌋. Every one of those depends on λ
+ * and p alone, so a neighbour at ANY level answers the same number at the same
+ * point. The piece's origin is a multiple of 16·baseStep·2^L, hence of
+ * baseStep·2^⌊λ⌋ for every ⌊λ⌋ this renderer reaches, so the two also snap onto
+ * the same ABSOLUTE lattice and not merely onto one of the same pitch.
+ *
+ * TWICE, AND THE SECOND TIME AT THE OWNER. k ≥ 1 means the piece is drawing on
+ * a lattice coarser than its own and several of its vertices snap to one point.
+ * Reading λ per VERTEX made those twins miss each other by
+ * `(gi mod m2 − gi mod m1)·Δt·nodeStep` — 0.357 m — and one of them then hung
+ * beside the coarser neighbour's edge as a T-junction. So the morph is read at
+ * the vertex's OWNER, `gi − gi mod 2^k`, which every vertex of the block shares;
+ * `tlodMorphAt` is called once to find k and once at that owner. The owner is a
+ * point of the same world lattice for the neighbour too, so the exactness above
+ * survives it. Derivation and numbers: `lodVertex`.
+ *
+ * λ is fed the FINEST height (`tlodHeight(p, 0.0)`) rather than the piece's own
  * level, for the last part of the same argument: a level-dependent distance
  * would make λ level-dependent again, and with it the surface.
- *
- * `t` is never negative for a selected node: the quadtree only stops splitting
- * at level L once the box distance has reached `range[L−1]`, where λ is already
- * L, and a vertex inside the node's box is never nearer than the box is.
  */
 export function terrainLodGlsl(): string {
   return `${terrainLodSampleGlsl()}
 uniform float uTlodRange[ ${MAX_LOD_LEVELS} ];
 uniform float uTlodNoMorph;
+uniform float uTlodBaseStep;
+uniform vec4 uTlodFreeze;
 attribute vec4 iNode;
 varying vec2 vTlodXZ;
 
@@ -692,41 +814,73 @@ vec3 tlodWorld;
 
 float tlodLambda( float d ) {
   float lam = 0.0;
+  float prev = 0.0;
   for ( int i = 0; i < ${MAX_LOD_LEVELS}; i ++ ) {
     float r = uTlodRange[ i ];
-    if ( r > 0.0 ) lam += clamp( ( d - ${MORPH_START} * r ) / ( ${1 - MORPH_START} * r ), 0.0, 1.0 );
+    if ( r > 0.0 ) {
+      float s = prev + ${MORPH_START} * ( r - prev );
+      prev = r;
+      lam += ( r > s ) ? clamp( ( d - s ) / ( r - s ), 0.0, 1.0 ) : step( r, d );
+    }
   }
   return lam;
 }
 
-void tlodCompute() {
-  float nodeStep = iNode.z / ${PATCH_N}.0;
-  vec2 gi = position.xz * ${PATCH_N}.0;
+// The morph coordinate at one lattice point of this piece: λ there, minus the
+// piece's own level. nodeStep and eye are passed in so the two calls in
+// tlodCompute cannot drift apart.
+float tlodMorphAt( vec2 gi, float nodeStep, vec3 eye ) {
   // CLAMPED TO THE WORLD FRAME. A quadtree node is a power-of-two square and
   // the frame is not, so the outermost nodes reach past it; without this the
   // ground would run on behind the backdrop ring that is supposed to close the
   // view (ground.BASE_MARGIN_M). Clamping collapses the vertices outside onto
-  // the border instead of clipping triangles — degenerate triangles cost a
-  // vertex each and no fragments, and because every node clamps against the
-  // SAME rectangle the ground stays whole along it.
-  vec2 p0 = clamp( iNode.xy + gi * nodeStep, uTlodExtent.xy, uTlodExtent.zw );
-  // The distance is taken to the FINEST ground under the vertex — one number
-  // per world point, so every node that owns this point reads the same λ.
-  float d = distance( vec3( p0.x, tlodHeight( p0, 0.0 ), p0.y ), cameraPosition );
-  // The isolation panel's toggle 9 multiplies the morph factor out entirely:
-  // t = 0 puts every vertex on its own node's lattice (k = f = 0, gm = gi).
-  float t = max( tlodLambda( d ) - iNode.w, 0.0 ) * ( 1.0 - uTlodNoMorph );
-  float k = min( floor( t ), ${MAX_LOD_LEVELS - 1}.0 );
-  float f = t - k;
+  // the border instead of clipping triangles, and because every node clamps
+  // against the SAME rectangle the ground stays whole along it.
+  vec2 p = clamp( iNode.xy + gi * nodeStep, uTlodExtent.xy, uTlodExtent.zw );
+  // The distance is taken to the FINEST ground under the point — one number per
+  // world point, so every piece that owns this point reads the same λ.
+  float d = distance( vec3( p.x, tlodHeight( p, 0.0 ), p.y ), eye );
+  return max( tlodLambda( d ) - iNode.w, 0.0 );
+}
+
+void tlodCompute() {
+  float nodeStep = uTlodBaseStep * exp2( iNode.w );
+  // How many of the patch's cells this piece uses: PATCH_N for a whole node,
+  // PATCH_N / 2 for a parent quadrant. The rest collapse onto the last row and
+  // column and cost a vertex each and no fragments.
+  float cells = floor( iNode.z / nodeStep + 0.5 );
+  vec2 gi = min( position.xz * ${PATCH_N}.0, vec2( cells ) );
+  // The isolation panel's toggle 10 freezes the camera the MORPH is measured
+  // from, so the frozen node set is drawn by the very rule that selected it —
+  // see TerrainLod.setFrozen.
+  vec3 eye = mix( cameraPosition, uTlodFreeze.xyz, uTlodFreeze.w );
+  // WHERE THE MORPH IS READ. Where λ has climbed past this piece's level the
+  // piece draws on a coarser lattice and several of its vertices snap to the
+  // same point. They are only truly redundant if they carry the SAME k and f,
+  // so both are read at the block they belong to and never at the vertex: the
+  // coarsest block level j whose own anchor still reports λ >= level + j wins.
+  // Every vertex of that block shares every anchor from the top down to it, so
+  // every vertex of it reaches the same answer — and the neighbour one level up
+  // reaches it too, one step later in the same descent. See lodVertex.
+  float k = 0.0;
+  float t = tlodMorphAt( gi, nodeStep, eye );
+  for ( int j = ${MAX_LOD_LEVELS - 1}; j >= 1; j -- ) {
+    float m = exp2( float( j ) );
+    float tj = tlodMorphAt( gi - mod( gi, m ), nodeStep, eye );
+    if ( floor( tj ) >= float( j ) ) { k = float( j ); t = tj; break; }
+  }
+  // The isolation panel's toggle 9 multiplies the morph out entirely: k = f = 0
+  // puts every vertex on its own lattice (gm = gi).
+  float nm = 1.0 - uTlodNoMorph;
+  k *= nm;
+  float f = clamp( t - k, 0.0, 1.0 ) * nm;
   float m1 = exp2( k );
   float m2 = m1 * 2.0;
   // The morph snaps every vertex onto the coarser of the two lattices λ names
   // (every 2^(k+1)-th index) and blends there from the finer one.
   vec2 gm = mix( gi - mod( gi, m1 ), gi - mod( gi, m2 ), f );
   vec2 p = clamp( iNode.xy + gm * nodeStep, uTlodExtent.xy, uTlodExtent.zw );
-  float e1 = nodeStep * m1;
-  float e2 = nodeStep * m2;
-  float h = mix( tlodHeight( p, e1 ), tlodHeight( p, e2 ), f );
+  float h = mix( tlodHeight( p, nodeStep * m1 ), tlodHeight( p, nodeStep * m2 ), f );
   tlodWorld = vec3( p.x, h, p.y );
   // The one thing the fragment stage needs of this: WHERE the point is. The
   // shading normal is taken there, from this position alone (tlodNormalAt) —
@@ -838,14 +992,25 @@ export function fragmentNormal(near: HeightPyramid | null,
 }
 
 /**
- * What a vertex of a node really lands on — position and height, the whole of
- * `tlodCompute`'s second half as arithmetic.
+ * What a vertex of a piece really lands on AT A GIVEN morph coordinate —
+ * position and height, the second half of `tlodCompute` as arithmetic.
  *
  * `gx`/`gz` are the vertex's integer indices inside the patch (0 … `PATCH_N`);
- * `extent` is the world frame the shader clamps against, `null` for "no frame";
- * `t` is the morph coordinate λ − level, which may run past 1 (`node.morph` by
- * default, the value at the node's nearest point). `t = 1` therefore still
- * means "exactly the parent's lattice", the identity the crack check rests on.
+ * indices past the piece's own `cells` collapse onto its last row and column,
+ * exactly as the shader's `min(gi, cells)` does. `extent` is the world frame the
+ * shader clamps against, `null` for "no frame"; `t` is the morph coordinate
+ * λ − level (`node.morph` by default, the value at the piece's nearest point).
+ *
+ * `t` MAY RUN PAST 1, and that is the property the whole seam argument rests
+ * on. With k = ⌊t⌋ and f = t − k the vertex snaps to every 2^k-th index and
+ * blends to every 2^(k+1)-th, i.e. onto the WORLD lattice of step
+ * `baseStep · 2^(level + k)` = `baseStep · 2^⌊λ⌋` — a number that no longer
+ * mentions the piece's own level. So a piece at level L and its coarser
+ * neighbour at L+1 place a shared vertex at the same point, at the same height,
+ * from the same two mip levels: the level CANCELS. Clamping t to [0, 1] would
+ * break exactly that (measured: 3.9 m of step along a shared edge) — see
+ * `lodVertex` for the second half, which is what makes the vertices the finer
+ * piece ADDS collapse exactly.
  */
 export function morphedVertex(node: LodNode, gx: number, gz: number,
                               near: HeightPyramid | null,
@@ -854,12 +1019,15 @@ export function morphedVertex(node: LodNode, gx: number, gz: number,
                               extent: readonly number[] | null = null,
                               t: number = node.morph
 ): { x: number; z: number; y: number } {
-  const nodeStep = node.size / PATCH_N;
+  const nodeStep = node.size / node.cells;
   const k = Math.min(Math.floor(Math.max(t, 0)), MAX_LOD_LEVELS - 1);
   const f = Math.max(t, 0) - k;
   const m1 = 2 ** k;
   const m2 = m1 * 2;
-  const snap = (g: number): number => (g - (g % m1)) * (1 - f) + (g - (g % m2)) * f;
+  const snap = (g: number): number => {
+    const gc = Math.min(g, node.cells);
+    return (gc - (gc % m1)) * (1 - f) + (gc - (gc % m2)) * f;
+  };
   let x = node.x + snap(gx) * nodeStep;
   let z = node.z + snap(gz) * nodeStep;
   if (extent) {
@@ -880,10 +1048,30 @@ export interface LodCamera {
 }
 
 /**
- * The WHOLE of `tlodCompute` as arithmetic: the vertex's own λ and the point it
- * lands on. This is what the smoke asserts two neighbouring patches agree on —
- * `morphedVertex` alone cannot say it, because the agreement lives in the λ
- * that both of them compute for the same world point.
+ * The WHOLE of `tlodCompute` as arithmetic: the morph coordinate a vertex reads
+ * and the point it lands on. This is what the smoke asserts two neighbouring
+ * pieces agree on — `morphedVertex` alone cannot say it, because the agreement
+ * lives in the λ that both of them compute for the same world point.
+ *
+ * THE MORPH IS READ AT THE VERTEX'S OWNER, NOT AT THE VERTEX (the T-junction fix
+ * of 2026-08-22). Where λ has climbed past the piece's own level — the outer
+ * strip of a piece, the part that borders the coarser ring — k = ⌊t⌋ is ≥ 1 and
+ * the piece is drawing at a lattice coarser than its own: several of its
+ * vertices then snap to the SAME point and are meant to be redundant. They are
+ * redundant only if they blend with the same f, and f used to be each vertex's
+ * own. Two such twins therefore separated by
+ * `(gi mod m2 − gi mod m1) · Δt · nodeStep` — 0.357 m sideways and 0.086 m in
+ * height on the live world — which leaves one of them hanging beside the
+ * neighbour's edge: a T-junction, and a sliver of sky at every camera step.
+ *
+ * So the vertex first asks λ where it is (`t0`), takes k from that, and then
+ * asks λ again at its OWNER — the vertex it snaps onto, index
+ * `gi − gi mod 2^k`. Every vertex of one owner-block reads the owner's λ, so
+ * they carry the same k and f and land on exactly the same point: the extra
+ * vertices become degenerate rather than nearly-degenerate. The owner is a
+ * lattice point of the same world lattice for the coarser neighbour too
+ * (`morphedVertex`: the level cancels), so the two pieces still agree exactly.
+ * One more `heightAt` tap per vertex is the whole price.
  */
 export function lodVertex(node: LodNode, gx: number, gz: number,
                           near: HeightPyramid | null,
@@ -892,17 +1080,30 @@ export function lodVertex(node: LodNode, gx: number, gz: number,
                           extent: readonly number[] | null,
                           cam: LodCamera, ranges: readonly number[]
 ): { x: number; z: number; y: number; t: number } {
-  const nodeStep = node.size / PATCH_N;
-  let x0 = node.x + gx * nodeStep;
-  let z0 = node.z + gz * nodeStep;
-  if (extent) {
-    x0 = Math.min(Math.max(x0, extent[0]), extent[2]);
-    z0 = Math.min(Math.max(z0, extent[1]), extent[3]);
+  const nodeStep = node.size / node.cells;
+  /** The morph coordinate at the lattice point (ix, iz) of this piece. */
+  const tAt = (ix: number, iz: number): number => {
+    let x = node.x + ix * nodeStep;
+    let z = node.z + iz * nodeStep;
+    if (extent) {
+      x = Math.min(Math.max(x, extent[0]), extent[2]);
+      z = Math.min(Math.max(z, extent[1]), extent[3]);
+    }
+    const y = gpuHeightAt(near, nearRect, far, x, z, 0);
+    const d = Math.hypot(x - cam.x, y - cam.y, z - cam.z);
+    return Math.max(lodLambda(d, ranges) - node.level, 0);
+  };
+  const gi = Math.min(gx, node.cells);
+  const gj = Math.min(gz, node.cells);
+  let k = 0;
+  let t = tAt(gi, gj);
+  for (let j = MAX_LOD_LEVELS - 1; j >= 1; j -= 1) {
+    const m = 2 ** j;
+    const tj = tAt(gi - (gi % m), gj - (gj % m));
+    if (Math.floor(tj) >= j) { k = j; t = tj; break; }
   }
-  const y0 = gpuHeightAt(near, nearRect, far, x0, z0, 0);
-  const d = Math.hypot(x0 - cam.x, y0 - cam.y, z0 - cam.z);
-  const t = Math.max(0, lodLambda(d, ranges) - node.level);
-  return { ...morphedVertex(node, gx, gz, near, nearRect, far, extent, t), t };
+  return { ...morphedVertex(node, gx, gz, near, nearRect, far, extent,
+                            k + Math.min(Math.max(t - k, 0), 1)), t };
 }
 
 // ── The renderer ───────────────────────────────────────────────────────────
@@ -953,6 +1154,14 @@ const uExtent = { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) };
  *  its fragment shader but has no vertices to morph, so this one is bound in
  *  `patchTerrainLod` rather than in `bindTerrainLodUniforms`. */
 const uRange = { value: new Array<number>(MAX_LOD_LEVELS).fill(0) };
+/** The base lattice step in metres, set in `setField`. VERTEX-ONLY: it is what
+ *  turns a piece's LEVEL into its vertex spacing (`terrainLodGlsl`), which is
+ *  what lets a parent quadrant carry the parent's spacing over a child-sized
+ *  square. */
+const uBaseStep = { value: FALLBACK_BASE_STEP_M };
+/** The frozen camera for the morph — xyz the eye, w = 1 while the isolation
+ *  panel's toggle 10 holds the selection still. See `TerrainLod.setFrozen`. */
+const uFreeze = { value: new THREE.Vector4(0, 0, 0, 0) };
 /** The metre span of the shading normal's central difference — the base
  *  lattice step, set in `setField`. FRAGMENT-ONLY and therefore bound in
  *  `patchTerrainLod` beside `uTlodRange`; see `terrainLodNormalGlsl` for why it
@@ -1041,6 +1250,8 @@ export function patchTerrainLod(mat: THREE.Material): void {
     prev.call(mat, shader, renderer);
     bindTerrainLodUniforms(shader.uniforms as unknown as Record<string, unknown>);
     (shader.uniforms as unknown as Record<string, unknown>).uTlodRange = uRange;
+    (shader.uniforms as unknown as Record<string, unknown>).uTlodBaseStep = uBaseStep;
+    (shader.uniforms as unknown as Record<string, unknown>).uTlodFreeze = uFreeze;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodNormalSpan = uNormalSpan;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodNoMorph = uNoMorph;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodFlatNormal = uFlatNormal;
@@ -1128,14 +1339,28 @@ export interface TerrainLod {
   /** The ground material — built by the owner (kind, textures, hole patch,
    *  natural-ground stages) and patched here. */
   setMaterial(mat: THREE.Material): void;
-  /** How many nodes the last selection drew, for the performance readout. */
+  /** How many pieces the last selection drew, for the performance readout. */
   nodeCount(): number;
+  /** How many NON-DEGENERATE triangles those pieces draw — `Σ cells² · 2`. The
+   *  patch always submits `PATCH_N² · 2` per instance; the ones past a piece's
+   *  own `cells` collapse onto its last row and column and rasterize nothing,
+   *  so this is the number that says what the ground really costs. */
+  triangleCount(): number;
   /**
    * STOP RE-SELECTING (`debug3d.ts`, toggle 10). While frozen the per-frame
    * quadtree selection is skipped and the instance buffer of the frame the
-   * switch was flipped keeps being drawn, however the camera moves. The one way
-   * to ask "does the shimmer come from the selection changing?" — a picture that
-   * still shimmers with the node set nailed down cannot blame the quadtree.
+   * switch was flipped keeps being drawn, however the camera moves.
+   *
+   * IT FREEZES THE DRAWING RULE, NOT ONLY THE LIST (2026-08-22). The morph is a
+   * function of each vertex's distance to the camera, so a frozen node set drawn
+   * against a LIVE camera is not the frozen frame: the pieces keep morphing, and
+   * once the camera has moved the invariant that makes them meet — a piece's
+   * coarser neighbour lies entirely beyond `lodRange[L]` — no longer holds, so
+   * the toggle would open the very cracks it is meant to rule out. The frozen
+   * eye is therefore handed to the shader as well (`uTlodFreeze`), and what the
+   * toggle shows is exactly the geometry of the frame it was flipped on, seen
+   * from a moving viewpoint. A picture that still shimmers under it cannot blame
+   * the terrain geometry at all.
    */
   setFrozen(on: boolean): void;
   dispose(): void;
@@ -1193,6 +1418,7 @@ export function createTerrainLod(): TerrainLod {
   let leafM = 0;
   let flat = true;
   let nodes = 0;
+  let triangles = 0;
   /** The height span of everything held — the fallback box of a node the tile
    *  statistics say nothing about, and the switch that says "flat world". */
   let globalRange = { min: 0, max: 0 };
@@ -1357,6 +1583,7 @@ export function createTerrainLod(): TerrainLod {
     if (!leafM) {
       geo.instanceCount = 0;
       nodes = 0;
+      triangles = 0;
       return;
     }
     camera.updateMatrixWorld();
@@ -1393,6 +1620,7 @@ export function createTerrainLod(): TerrainLod {
     });
     grow(picked.length);
     const arr = nodeAttr.array as Float32Array;
+    triangles = 0;
     for (let i = 0; i < picked.length; i += 1) {
       const n = picked[i];
       arr[i * 4] = n.x;
@@ -1400,8 +1628,12 @@ export function createTerrainLod(): TerrainLod {
       arr[i * 4 + 2] = n.size;
       // THE LEVEL, not the morph: every vertex reads its own λ and subtracts
       // this (`lodLambda`, `tlodCompute`). One morph per node is what stood two
-      // neighbouring patches 0.61 m apart along the edge they share.
+      // neighbouring patches 0.61 m apart along the edge they share. The level
+      // also FIXES THE VERTEX SPACING (`uTlodBaseStep · 2^level`), which is how
+      // a parent quadrant draws a child-sized square at the parent's density —
+      // `cells` is `size / spacing` and needs no attribute of its own.
       arr[i * 4 + 3] = n.level;
+      triangles += n.cells * n.cells * 2;
     }
     nodeAttr.needsUpdate = true;
     geo.instanceCount = picked.length;
@@ -1418,6 +1650,10 @@ export function createTerrainLod(): TerrainLod {
     if (frozen) return;
     viewportPx = renderer.getDrawingBufferSize(bufferSize).y;
     update(camera);
+    // The eye the morph would be measured from if the next frame froze. Kept
+    // current so `setFrozen(true)` needs no camera of its own.
+    uFreeze.value.set(camera.position.x, camera.position.y, camera.position.z,
+                      uFreeze.value.w);
   };
 
   return {
@@ -1429,6 +1665,11 @@ export function createTerrainLod(): TerrainLod {
       // The shading normal differences over ONE base lattice step, whatever the
       // ground under a pixel is drawn at (`terrainLodNormalGlsl`).
       uNormalSpan.value = baseStep;
+      // …and the vertex spacing of a piece is that step doubled per level
+      // (`terrainLodGlsl`). Two uniforms for one number on purpose: the normal
+      // span is a shading decision that may yet move, the base step is the
+      // lattice itself.
+      uBaseStep.value = baseStep;
       farPyr = buildFar(next?.overview ?? null);
       nearRect = null;
       nearPyr = next ? buildNear(next, baseStep, anchorX, anchorZ) : null;
@@ -1460,7 +1701,11 @@ export function createTerrainLod(): TerrainLod {
       mesh.material = mat;
     },
     nodeCount: () => nodes,
-    setFrozen(on) { frozen = on; },
+    triangleCount: () => triangles,
+    setFrozen(on) {
+      frozen = on;
+      uFreeze.value.w = on ? 1 : 0;
+    },
     dispose() {
       geo.dispose();
       placeholder.dispose();

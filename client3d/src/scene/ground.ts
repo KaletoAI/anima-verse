@@ -868,8 +868,11 @@ export interface Ground {
   passableAt(x: number, z: number): boolean;
   /** Counts rebuilds — a cheap "has the ground changed" for redraw signatures. */
   revision(): number;
-  /** How many quadtree nodes the terrain drew in the last frame. */
+  /** How many quadtree pieces the terrain drew in the last frame. */
   terrainNodeCount(): number;
+  /** How many NON-DEGENERATE triangles those pieces cost
+   *  (`TerrainLod.triangleCount`). */
+  terrainTriangleCount(): number;
   /** How many FINE height tiles (§ A16.3) are held right now. */
   heightTileCount(): number;
   /** The CDLOD terrain's own material, for the isolation panel's wireframe
@@ -3005,6 +3008,7 @@ export function createGround(): Ground {
     passableAt: (x, z) => typeAt(x, z).passable,
     revision: () => rev,
     terrainNodeCount: () => terrain.nodeCount(),
+    terrainTriangleCount: () => terrain.triangleCount(),
     heightTileCount: () => relief.tiles.size,
     // The terrain is ONE mesh with ONE material by construction (`terrainLod`),
     // so the array case cannot occur — it is narrowed rather than handled.
