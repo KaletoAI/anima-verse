@@ -1,13 +1,12 @@
 /**
- * The WORLD relief — the ONE height sampler both renderers use (§ A16).
+ * The WORLD relief — the ONE height answer both renderers and every rule use
+ * (§ A16, contract addendum "Ein Boden — E1"; plan-ein-boden.md § G1/G2).
  *
  * Not to be confused with `terrain.ts` next door: that one samples the relief
  * of a DETAIL SCENE, a 17 × 17 field over one location's reference square.
  * This one samples the open world — a grid of support points in world metres,
  * anchored at the world origin, delivered by `GET /play/heightfield`. A figure
- * walking cross-country stands on THIS field; inside a location's footprint
- * the scene field is added on top of it (the server does that addition for
- * every rule it applies, `app/core/relief.ground_lift_at`).
+ * walking cross-country stands on THIS field.
  *
  * THE TWIN. `app/core/heightfield.sample_height` is the same formula in
  * Python, and it has to be the same: the server refuses a walk report whose
@@ -18,13 +17,23 @@
  * `client3d/scripts/smoke_world_height.mjs` — with the same field and the same
  * expected numbers. Change one side, change the table, change the other.
  *
- * SINCE v2 THE FIELD ARRIVES TWICE (§ A16.3): a coarsenable overview for the
- * distance, and 256 m tiles in an always-fine step (the server's own, 2 m
- * today) for everything the
- * ground DECIDES. `sampleWorldHeight` and its rectangle helpers read ONE field
- * and are unchanged by that — they are how a single grid is read, overview or
- * tile alike. The ladder over both lives at the bottom of this file
- * (`WorldHeightTiles`, `sampleCompositeHeight`).
+ * ONE ANSWER SINCE E2, and that is the whole point of this revision. Until
+ * "Ein Boden" this file carried THREE readings of one landscape: the bilinear
+ * field (`sampleWorldHeight`), a "drawn ground" that re-interpolated the field
+ * along the triangles a renderer had cut it into (`sampleGroundHeight` /
+ * `sampleCompositeGroundHeight`), and — through the cell size those two took —
+ * whatever the mesh budget had coarsened the cells to. Measured on the live
+ * world the drawn reading stood up to 2.433 m (p95 1.584 m) off the field the
+ * server judges by, because the client drew 64 m cells while the server read a
+ * 2 m lattice. The drawn readings are GONE: the terrain is rendered by a CDLOD
+ * patch mesh whose vertices sample this very lattice (`client3d/src/scene/
+ * terrainLod.ts`), so the surface the player sees and the number every rule
+ * reads are the same function, and `heightAt` below is that function.
+ *
+ * THE FIELD ARRIVES TWICE (§ A16.3): a coarsenable overview for the distance,
+ * and 256 m tiles in an always-fine step (the server's, 2 m today) for
+ * everything the ground DECIDES. `sampleWorldHeight` reads ONE grid, overview
+ * or tile alike; `heightAt` is the ladder over both.
  *
  * `three` is not imported here (nor anything else): this is pure arithmetic,
  * which is what lets the smoke transpile the file and run it on its own.
@@ -46,21 +55,83 @@ export interface WorldHeightField {
 }
 
 /**
- * Height of the world ground at (x, z) in world metres — bilinear.
+ * What a tile says about ITSELF — the quadtree half of the payload (§ G2,
+ * addendum § 4).
  *
- * Grid fraction, then cell, then mix — the very shape `sampleTerrain` uses,
- * with a world origin instead of a plan fraction:
+ * `min`/`max` are the tile's height span, which is what a node needs for a
+ * frustum box and for an occlusion test. `err[k]` is the largest VERTICAL
+ * error in metres a renderer makes by drawing the tile on mip level
+ * `mip_levels_m[k]` instead of on the base lattice — an exact bound, not a
+ * sample (the difference of two bilinear fields is bilinear and takes its
+ * extrema in the corners), which is what lets a screen-space error test be a
+ * guarantee rather than a guess.
+ */
+export interface WorldHeightTileStats {
+  min: number
+  max: number
+  err: number[]
+}
+
+/**
+ * The bilinear mix of four cell corners — THE arithmetic of this file.
  *
- *   `fx = clamp((x − origin_x) / step, 0, cols − 1)`,
+ * It exists as its own function for one reason: the same four multiplications
+ * run on the CPU (here), in Python (`heightfield.sample_height`) and in the
+ * terrain VERTEX SHADER (`terrainLod.ts`, four `texelFetch` and this mix by
+ * hand). Three copies of an expression are three chances to write `1 - tz`
+ * where the other two write `tz`, and the whole "Ein Boden" contract is that
+ * they answer the same number.
+ *
+ * `h00` is the corner at (i, j), `h10` at (i+1, j), `h01` at (i, j+1), `h11`
+ * at (i+1, j+1); `tx`/`tz` are the fractions inside the cell.
+ */
+export function bilinear(h00: number, h10: number, h01: number, h11: number,
+                         tx: number, tz: number): number {
+  const north = h00 * (1 - tx) + h10 * tx
+  const south = h01 * (1 - tx) + h11 * tx
+  return north * (1 - tz) + south * tz
+}
+
+/**
+ * Bilinear reading of ANY lattice, through a fetch callback.
+ *
+ * Grid fraction, then cell, then mix:
+ *
+ *   `fx = clamp((x − originX) / step, 0, cols − 1)`,
  *   `i = min(floor(fx), cols − 2)`, `tx = fx − i` (`fz`/`j`/`tz` likewise),
- *   then the bilinear mix of `h[j][i]`, `h[j][i+1]`, `h[j+1][i]`,
- *   `h[j+1][i+1]`.
+ *   then `bilinear` of the four corners.
  *
  * OUTSIDE THE GRID the border value applies, and that is exact rather than a
  * fallback: the server always rasters a ring of support points outside every
  * authored area, so the whole border is 0 and clamping there means "the flat
- * world". A field with fewer than 2 × 2 points carries no relief and answers
- * 0 — which is also what an empty world sends.
+ * world".
+ *
+ * THE CALLBACK is what makes this one function serve three shapes: the payload
+ * arrays (`sampleWorldHeight`), a packed `Float32Array` mip pyramid
+ * (`terrainLod.ts`), and the GLSL mirror the smoke evaluates in TypeScript. A
+ * lattice smaller than 2 × 2 carries no relief and answers 0.
+ */
+export function latticeSample(at: (i: number, j: number) => number,
+                              cols: number, rows: number,
+                              originX: number, originZ: number, step: number,
+                              x: number, z: number): number {
+  if (!(cols >= 2) || !(rows >= 2) || !(step > 0)) return 0
+  const clamp = (v: number, hi: number) => (v < 0 ? 0 : v > hi ? hi : v)
+  const fx = clamp((x - originX) / step, cols - 1)
+  const fz = clamp((z - originZ) / step, rows - 1)
+  const i = Math.min(Math.floor(fx), cols - 2)
+  const j = Math.min(Math.floor(fz), rows - 2)
+  return bilinear(at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1),
+                  fx - i, fz - j)
+}
+
+/**
+ * Height of the world ground at (x, z) in world metres — bilinear, ONE grid.
+ *
+ * THE SHAPE IS TAKEN FROM THE ARRAY, not from `rows`/`cols`: those two are a
+ * description of the data and this function is on the walk path. A row shorter
+ * than the rest must make a reader sample a slightly wrong height, never
+ * throw. The server's twin reads the array the same way.
  */
 export function sampleWorldHeight(field: WorldHeightField | null | undefined,
                                   x: number, z: number): number {
@@ -69,86 +140,18 @@ export function sampleWorldHeight(field: WorldHeightField | null | undefined,
   if (!h || h.length < 2) return 0
   const rows = h.length
   const cols = h[0]?.length || 0
-  const step = field.step_m
-  if (cols < 2 || !(step > 0)) return 0
-  const clamp = (v: number, hi: number) => (v < 0 ? 0 : v > hi ? hi : v)
-  const fx = clamp((x - field.origin_x) / step, cols - 1)
-  const fz = clamp((z - field.origin_z) / step, rows - 1)
-  const i = Math.min(Math.floor(fx), cols - 2)
-  const j = Math.min(Math.floor(fz), rows - 2)
-  const tx = fx - i
-  const tz = fz - j
-  const rowN = h[j] || []
-  const rowS = h[j + 1] || []
-  const north = (rowN[i] || 0) * (1 - tx) + (rowN[i + 1] || 0) * tx
-  const south = (rowS[i] || 0) * (1 - tx) + (rowS[i + 1] || 0) * tx
-  return north * (1 - tz) + south * tz
-}
-
-/**
- * Height of the DRAWN ground at (x, z) — the surface a renderer really builds.
- *
- * NOT the same number as `sampleWorldHeight`, and the difference is the whole
- * point. The field is defined bilinear (§ A16) and the server judges by that;
- * a MESH cannot be bilinear, it is triangles. Every renderer here cuts its
- * ground into cells of `cellM` and splits each cell from its minimum corner to
- * its maximum one (`gridMesh.gridPlate`), so within a cell the drawn surface is
- * one of two PLANES:
- *
- *   tz <= tx (the half towards +x):  h00 + tx·(h10 − h00) + tz·(h11 − h10)
- *   tz >  tx (the half towards +z):  h00 + tz·(h01 − h00) + tx·(h11 − h01)
- *
- * with `h00…h11` the four cell corners and `tx`/`tz` the fractions inside it.
- * The two agree on the diagonal, and both agree with the bilinear field at all
- * four corners — they part company INSIDE the cell, by up to a quarter of the
- * cell's twist `|h00 + h11 − h01 − h10|`. Measured on a plain 5 m hill with a
- * 10 m falloff on an 8 m grid that is a full metre.
- *
- * SO EVERYTHING THAT TOUCHES THE GROUND USES THIS ONE: the plate's vertices
- * (where it equals the bilinear reading anyway, they sit on corners), the
- * vertices of a painted area (which land wherever its outline runs — the
- * bilinear reading is what sank a meadow a metre into the plate), and every
- * figure, prop and marker standing on it. `sampleWorldHeight` stays what it
- * always was: the twin of the server's own reading of the field.
- *
- * `cellM` is the size the ground was actually cut at — `gridStepFor`'s answer,
- * which may be a doubling of the field's own `step_m`. Omitting it means "the
- * field's step", which is right whenever nothing was coarsened.
- */
-export function sampleGroundHeight(field: WorldHeightField | null | undefined,
-                                   x: number, z: number,
-                                   cellM?: number): number {
-  if (!field) return 0
-  const step = cellM && cellM > 0 ? cellM : field.step_m
-  if (!(step > 0)) return sampleWorldHeight(field, x, z)
-  const i = Math.floor((x - field.origin_x) / step)
-  const j = Math.floor((z - field.origin_z) / step)
-  const x0 = field.origin_x + i * step
-  const z0 = field.origin_z + j * step
-  const tx = (x - x0) / step
-  const tz = (z - z0) / step
-  // The corners are read through the bilinear sampler on purpose: on the
-  // field's own grid it returns the support point exactly, and on a COARSENED
-  // grid (a doubled step) the corner is still a support point — while outside
-  // the field it clamps to the border, which is the flat world the ring quads
-  // of the plate lie in.
-  const h00 = sampleWorldHeight(field, x0, z0)
-  const h10 = sampleWorldHeight(field, x0 + step, z0)
-  const h01 = sampleWorldHeight(field, x0, z0 + step)
-  const h11 = sampleWorldHeight(field, x0 + step, z0 + step)
-  return tz <= tx
-    ? h00 + tx * (h10 - h00) + tz * (h11 - h10)
-    : h00 + tz * (h01 - h00) + tx * (h11 - h01)
+  return latticeSample((i, j) => {
+    const v = h[j]?.[i]
+    return typeof v === 'number' && Number.isFinite(v) ? v : 0
+  }, cols, rows, field.origin_x, field.origin_z, field.step_m, x, z)
 }
 
 /**
  * Lowest and highest support point of the field, in metres.
  *
- * What it is FOR: everything that has to start above the whole world. The 3D
- * client rays its tiles from a fixed height (`scene/tiles.ts`), and a fixed 20
- * used to be that height — with a relief clamped at ±50 m (§ A1.7) a ray from
- * 20 m starts INSIDE a hill and finds nothing, which reads as a figure falling
- * back to the flat world on exactly the ground it should stand on.
+ * What it is FOR: everything that has to start above the whole world — the
+ * analytic click march below clips its ray to this slab, and the tile ray of
+ * `scene/tiles.ts` starts above it.
  *
  * The support points ARE the extremes: between them the field is bilinear, and
  * a bilinear patch never leaves the range of its four corners. An empty or
@@ -168,112 +171,9 @@ export function worldHeightRange(field: WorldHeightField | null | undefined
   return { min, max }
 }
 
-/** How many sample lines per axis `maxWorldHeightIn` may put across a
- *  rectangle. A fog rectangle can span the whole world, and 64 × 64 samples
- *  per rectangle is the budget at which a hundred of them still cost a
- *  millisecond or two on a rebuild that happens when the fog moves and never
- *  per frame. */
-const MAX_RECT_LINES = 64
-
-/** The sample coordinates across `[lo, hi]`: both ends plus every grid line
- *  strictly between them, thinned by a stride when there are more than
- *  `MAX_RECT_LINES` of them. */
-function rectLines(lo: number, hi: number, origin: number, step: number): number[] {
-  const out: number[] = [lo]
-  if (step > 0 && hi > lo) {
-    const first = Math.floor((lo - origin) / step) + 1
-    const last = Math.ceil((hi - origin) / step) - 1
-    const count = last - first + 1
-    const stride = count > MAX_RECT_LINES ? Math.ceil(count / MAX_RECT_LINES) : 1
-    for (let k = first; k <= last; k += stride) {
-      const c = origin + k * step
-      if (c > lo && c < hi) out.push(c)
-    }
-  }
-  if (hi > lo) out.push(hi)
-  return out
-}
-
 /**
- * Highest ground inside an axis-aligned rectangle of world metres.
- *
- * WHAT IT IS FOR: the fog quads (§ A12). A veil is one flat rectangle over
- * ground that is no longer flat, so it has to hang above the highest thing
- * under it — a quad on the average height sticks out of every hill it covers,
- * and the mountain pokes through the cloud.
- *
- * It reads the DRAWN ground (`sampleGroundHeight`), because that is what a
- * cloud can stick out of. Over each half-cell that surface is a PLANE, so its
- * maximum over any sub-rectangle sits at a corner of that piece: sampling the
- * rectangle's own edges plus every cell line inside it visits them all bar the
- * points where the cell diagonal leaves the rectangle, and those lie between
- * two corner heights that are themselves visited whenever they are inside.
- *
- * THE APPROXIMATION is the stride (`MAX_RECT_LINES`): a rectangle spanning
- * more than 64 cells per axis is sampled on every n-th line instead, so a
- * single peak between two sampled lines can be missed and the veil over a very
- * large rectangle can hang a little low. A TILED rectangle (`fogRects`, ~64 m
- * per quad) never comes close on a 4 m grid. A rectangle that stayed whole
- * because this very sampling found no relief under it (E8 task 5,
- * `worldHeightRangeIn`) can be world-wide — but then the same samples that
- * would have to miss the peak already say the ground is level, and a peak thin
- * enough to hide between two sample lines is thin enough to be a cloud's worth
- * of nothing. The stride is a guard, not the working case.
- */
-export function maxWorldHeightIn(field: WorldHeightField | null | undefined,
-                                 x0: number, z0: number,
-                                 x1: number, z1: number,
-                                 cellM?: number): number {
-  return scanRect(field, x0, z0, x1, z1, cellM).max
-}
-
-/**
- * How much the drawn ground RISES AND FALLS inside a rectangle, in metres —
- * `max − min` over the same samples `maxWorldHeightIn` takes.
- *
- * WHAT IT IS FOR: the fog's tiling decision (E8 task 5). A veil rectangle is
- * cut into 64 m quads so one hill cannot lift a world-wide band into the sky —
- * but over ground that does not move, all those quads hang at the very same
- * height, and the tiling buys nothing but draw calls. This is the question
- * "does the ground under this rectangle move at all", and `fogRects` keeps a
- * rectangle whole whenever the answer is "not enough to see".
- *
- * 0 for a missing field: a world with no relief is flat everywhere, which is
- * exactly what "no range" says.
- */
-export function worldHeightRangeIn(field: WorldHeightField | null | undefined,
-                                   x0: number, z0: number,
-                                   x1: number, z1: number,
-                                   cellM?: number): number {
-  const { min, max } = scanRect(field, x0, z0, x1, z1, cellM)
-  return max - min
-}
-
-/** The one scan both rectangle queries share: the drawn ground's lowest and
- *  highest sample inside the rectangle (0/0 without a field). */
-function scanRect(field: WorldHeightField | null | undefined,
-                  x0: number, z0: number, x1: number, z1: number,
-                  cellM?: number): { min: number; max: number } {
-  if (!field) return { min: 0, max: 0 }
-  const step = cellM && cellM > 0 ? cellM : field.step_m
-  const xs = rectLines(Math.min(x0, x1), Math.max(x0, x1), field.origin_x, step)
-  const zs = rectLines(Math.min(z0, z1), Math.max(z0, z1), field.origin_z, step)
-  let max = -Infinity
-  let min = Infinity
-  for (const z of zs) {
-    for (const x of xs) {
-      const h = sampleGroundHeight(field, x, z, step)
-      if (h > max) max = h
-      if (h < min) min = h
-    }
-  }
-  if (!Number.isFinite(max) || !Number.isFinite(min)) return { min: 0, max: 0 }
-  return { min, max }
-}
-
-/**
- * The TILED height field as a client holds it (§ A16.3) — the coarse overview
- * plus whichever fine tiles have arrived.
+ * The TILED height field as a client holds it (§ A16.3) — the coarse overview,
+ * whichever fine tiles have arrived, and what those tiles say about themselves.
  *
  * WHY THERE ARE TWO GRIDS AT ALL: one grid cannot be both. The overview covers
  * the whole world and is therefore coarsened as soon as somebody paints far
@@ -288,11 +188,18 @@ function scanRect(field: WorldHeightField | null | undefined,
  * which tiles EXIST is the loader's business, and it does not have to be told
  * here — an unindexed tile and a not-yet-fetched one read the same way, through
  * the overview.
+ *
+ * `stats` and `mipLevelsM` are the E1 addendum (§ G2) and are OPTIONAL because
+ * nothing that stands on the ground needs them: they steer the RENDERER's
+ * quadtree (which node at which level, and whether its error is worth another
+ * split). A composite without them draws at the distance rule alone.
  */
 export interface WorldHeightTiles {
   tileM: number
   overview: WorldHeightField | null
   tiles: Map<string, WorldHeightField>
+  stats?: Map<string, WorldHeightTileStats>
+  mipLevelsM?: number[]
 }
 
 /**
@@ -317,7 +224,7 @@ export function tileKeyAt(tileM: number, x: number, z: number): string {
 }
 
 /**
- * Height of the world ground at (x, z) from the tiled field — fine tile first.
+ * THE height of the world ground at (x, z) — the one answer, for everything.
  *
  * THE PRECEDENCE IS BINDING FOR EVERY READER (§ A16.3):
  *
@@ -328,22 +235,23 @@ export function tileKeyAt(tileM: number, x: number, z: number): string {
  * The server's own reading (`heightfield.world_height`) is the same ladder
  * minus its middle rung — it never looks at the overview at all.
  *
- * AND THE TWO SOURCES ARE NEVER MIXED for one point, which is the part that
- * looks over-strict until you see why. A tile and a coarsened overview are not
- * two accuracies of one number, they are two different landscapes: at 32 m
- * seven of eight support points per axis are gone, so a 22 m hill has none left
- * and simply does not exist in the overview — and the levelling ramp around a
- * footprint (§ A16.1) is "one cell wide", i.e. 32 m there against 4 m in the
- * tile, so a levelled place reaches differently far in the two rasters even
- * where resolution alone would explain nothing. Averaging or blending them
- * would invent ground that neither raster claims.
+ * AND THE TWO SOURCES ARE NEVER MIXED for one point. A tile and a coarsened
+ * overview are not two accuracies of one number: at 32 m fifteen of sixteen
+ * support points per axis are gone, so a 22 m hill has none left and simply
+ * does not exist in the overview. Averaging or blending them would invent
+ * ground that neither raster claims. A loaded tile therefore answers ALONE,
+ * including where it has no support point for the question:
+ * `sampleWorldHeight` clamps to the tile's border, and that clamp is the
+ * tile's statement, not a gap the overview may fill.
  *
- * A loaded tile therefore answers ALONE, including where it has no support
- * point for the question: `sampleWorldHeight` clamps to the tile's border, and
- * that clamp is the tile's statement, not a gap the overview may fill.
+ * SINCE E1 THE TWO AGREE WHERE THEY OVERLAP anyway — the server's height is
+ * one pure function of (x, z) sampled on two lattices, and no step of the bake
+ * measures in raster cells any more (addendum § 1). What is left of the
+ * difference is resolution, which is what the LOD morph is for and no longer a
+ * data change under the player's feet.
  */
-export function sampleCompositeHeight(c: WorldHeightTiles | null | undefined,
-                                      x: number, z: number): number {
+export function heightAt(c: WorldHeightTiles | null | undefined,
+                         x: number, z: number): number {
   if (!c) return 0
   // No guard on `tileM` here: `tileKeyAt` owns that rule and answers `''` for a
   // composite without a tile size, which no map of tiles has an entry for.
@@ -355,106 +263,136 @@ export function sampleCompositeHeight(c: WorldHeightTiles | null | undefined,
 }
 
 /**
- * The lattice the rectangle helpers walk: the FINEST grid the composite holds.
+ * The FINEST lattice step the composite holds, in metres — 0 without any.
  *
- * A loaded tile decides it whenever there is one — its `step_m` is the step
- * that never coarsens, and its origin is a multiple of the tile size, hence a
- * point of the one world-origin-anchored grid. WHICH tile we take is therefore
+ * A loaded tile decides it whenever there is one; without any tile the
+ * overview's own grid is the finest thing there is. WHICH tile we take is
  * irrelevant: all tile origins are congruent modulo the step, so they all
- * describe the same lattice. Without any tile the overview's own grid is the
- * finest thing there is, and with neither there is no ground to walk at all.
+ * describe the same lattice.
  *
- * TWO SERVER GUARANTEES CARRY THAT, and both are worth naming because the
- * congruence is what the whole file leans on. First, `tile_m` is a multiple of
- * the fine step (256 / 4), so every tile origin lies on the fine grid. Second,
- * the OVERVIEW's origin lies on it as well: `heightfield._axis_origin` snaps it
- * to a multiple of the overview's own step, and `_step_for` only ever DOUBLES
- * the fine step — so overview lines are a subset of tile lines, never an offset
- * raster. Break either and the two grids describe different points and the
- * lattice below would depend on which field answered.
+ * TWO SERVER GUARANTEES CARRY THAT. First, `tile_m` is a multiple of the fine
+ * step (256 / 2), so every tile origin lies on the fine grid. Second, the
+ * OVERVIEW's origin lies on it as well: `heightfield._axis_origin` snaps it to
+ * a multiple of the overview's own step, and `_step_for` only ever DOUBLES the
+ * fine step — so overview lines are a subset of tile lines, never an offset
+ * raster.
  */
-function compositeLattice(c: WorldHeightTiles
-): { originX: number; originZ: number; step: number } | null {
+export function finestStep(c: WorldHeightTiles | null | undefined): number {
+  if (!c) return 0
+  let best = 0
   for (const tile of c.tiles?.values() ?? []) {
-    if (tile && tile.step_m > 0) {
-      return { originX: tile.origin_x, originZ: tile.origin_z, step: tile.step_m }
-    }
+    if (tile && tile.step_m > 0 && (best === 0 || tile.step_m < best)) best = tile.step_m
   }
+  if (best > 0) return best
   const ov = c.overview
-  if (ov && ov.step_m > 0) {
-    return { originX: ov.origin_x, originZ: ov.origin_z, step: ov.step_m }
+  return ov && ov.step_m > 0 ? ov.step_m : 0
+}
+
+/** How many march steps `rayGroundHit` may take before it gives up. A click
+ *  ray over a 2 km world at a 2 m lattice is 1 000 steps when it runs flat
+ *  along the ground; past this the step is stretched instead, which costs
+ *  accuracy on a ray nobody can aim that precisely anyway. */
+const MAX_MARCH_STEPS = 4096
+/** Bisection rounds after the sign change. 40 halvings of a metre-sized
+ *  bracket land far below the millimetre the picture is drawn in. */
+const BISECT_ROUNDS = 40
+
+/** What `rayGroundHit` needs to know besides the ray. */
+export interface RayGroundOpts {
+  /** The height slab the world lies in — `worldHeightRange` widened by
+   *  whatever the caller adds on top of the field. The march is clipped to it,
+   *  which is what keeps a ray fired at the sky from walking 4 000 samples
+   *  before admitting it missed. */
+  minY: number
+  maxY: number
+  /** How far along the ray to look, metres. Default 4 000 — past the far
+   *  plane of any view this client draws. */
+  maxDistM?: number
+  /** Horizontal advance per march step, metres. Defaults to the composite's
+   *  finest lattice step, which is the resolution the ground is defined at. */
+  stepM?: number
+}
+
+/**
+ * Where a ray meets the ground — ANALYTIC, against the field itself.
+ *
+ * WHY IT IS NOT A RAYCAST ANY MORE. Click-to-walk used to intersect the ray
+ * with the one big drawn base mesh, which meant the goal was read off whatever
+ * triangles the mesh budget had left — 64 m cells in the live world, up to
+ * 2.433 m off the field the server judges the walk by. The ground is now a
+ * CDLOD mesh whose triangles change with the camera, so a raycast would give a
+ * different goal at a different zoom for the same pixel. So the ray is solved
+ * against the DATA: march `f(t) = ray.y(t) − heightAt(ray.xz(t))` until it
+ * changes sign, then bisect.
+ *
+ * THE STEP is one lattice cell of horizontal advance, so no cell is skipped.
+ * The honest limit: inside a cell the field along a slanted line is quadratic
+ * and can carry one interior extremum, so a ray that grazes a single 2 m bump
+ * and comes back out can be missed. That is a pixel-wide aiming case on a
+ * click, and the alternative — a half-step march — doubles the cost of every
+ * click for it.
+ *
+ * A RAY THAT STARTS BELOW THE GROUND hits at once (`t0`), which is the honest
+ * answer for a camera that has dipped into a hill: the player clicked, and the
+ * ground under the click is right there.
+ *
+ * Answers `null` for a miss — a ray into the sky, a ray parallel to and above
+ * the world, a composite with no field at all.
+ */
+export function rayGroundHit(c: WorldHeightTiles | null | undefined,
+                             ox: number, oy: number, oz: number,
+                             dx: number, dy: number, dz: number,
+                             opts: RayGroundOpts
+): { x: number; y: number; z: number } | null {
+  if (!c) return null
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  if (!(len > 0) || !Number.isFinite(len)) return null
+  const ux = dx / len
+  const uy = dy / len
+  const uz = dz / len
+  const maxDist = opts.maxDistM && opts.maxDistM > 0 ? opts.maxDistM : 4000
+  // The slab, widened by a metre so a ray aimed exactly at the highest support
+  // point still gets a bracket to bisect in.
+  const loY = Math.min(opts.minY, opts.maxY) - 1
+  const hiY = Math.max(opts.minY, opts.maxY) + 1
+  let t0 = 0
+  let t1 = maxDist
+  if (Math.abs(uy) > 1e-9) {
+    const tA = (loY - oy) / uy
+    const tB = (hiY - oy) / uy
+    t0 = Math.max(0, Math.min(tA, tB))
+    t1 = Math.min(maxDist, Math.max(tA, tB))
+  } else if (oy < loY || oy > hiY) {
+    return null   // running flat, above or below the whole world
+  }
+  if (!(t1 > t0)) return null
+  const f = (t: number): number =>
+    (oy + t * uy) - heightAt(c, ox + t * ux, oz + t * uz)
+  if (f(t0) <= 0) {
+    return { x: ox + t0 * ux, y: oy + t0 * uy, z: oz + t0 * uz }
+  }
+  const lattice = opts.stepM && opts.stepM > 0 ? opts.stepM : finestStep(c)
+  const hs = Math.sqrt(ux * ux + uz * uz)
+  let dt = lattice > 0 && hs > 1e-9 ? lattice / hs : (t1 - t0)
+  if (!(dt > 0)) dt = t1 - t0
+  if ((t1 - t0) / dt > MAX_MARCH_STEPS) dt = (t1 - t0) / MAX_MARCH_STEPS
+  let ta = t0
+  for (let tb = t0 + dt; ; tb += dt) {
+    if (tb > t1) tb = t1
+    const fb = f(tb)
+    if (fb <= 0) {
+      // Bracketed: [ta, tb] holds the crossing. Bisect on the sign of `f`.
+      let lo = ta
+      let hi = tb
+      for (let k = 0; k < BISECT_ROUNDS; k += 1) {
+        const mid = (lo + hi) / 2
+        if (f(mid) > 0) lo = mid
+        else hi = mid
+      }
+      return { x: ox + hi * ux, y: oy + hi * uy, z: oz + hi * uz }
+    }
+    ta = tb
+    if (tb >= t1) break
   }
   return null
-}
-
-/**
- * The cell grid the composite ground is DRAWN on: where its cells begin and how
- * big they are. The composite twin of the `cellM` argument that runs through
- * `sampleGroundHeight` and `scanRect`.
- *
- * THE ORIGIN IS THE OVERVIEW'S, and that is not a preference. Both renderers
- * cut their ground with `gridMesh` anchored at the FIELD's origin — `ground.ts`
- * hands `field.origin_x`/`origin_z` to `gridPlate` and `subdivideOnGrid`, and
- * that field is the overview — so a sampler anchoring its cells anywhere else
- * would answer for a different pair of triangles than the mesh is built of,
- * i.e. off the drawn surface by up to a quarter of a cell's twist. Tile origins
- * are congruent to the overview's modulo the fine step (the two guarantees
- * above), so the fine grid remains a subgrid whichever anchor one takes — but
- * only ONE of them is where the mesh was actually cut.
- *
- * `cellM` is the size the ground was really cut at (`gridStepFor`, a doubling
- * of the field's own step). Omitting it — or a non-positive one — means "the
- * finest thing the composite holds", which is what the field itself describes
- * when nobody has coarsened anything.
- */
-function drawnLattice(c: WorldHeightTiles, cellM?: number
-): { originX: number; originZ: number; step: number } | null {
-  const fine = compositeLattice(c)
-  if (!fine) return null
-  const ov = c.overview && c.overview.step_m > 0 ? c.overview : null
-  return {
-    originX: ov ? ov.origin_x : fine.originX,
-    originZ: ov ? ov.origin_z : fine.originZ,
-    step: cellM && cellM > 0 ? cellM : fine.step,
-  }
-}
-
-/**
- * Height of the DRAWN ground at (x, z) on the tiled field — the composite twin
- * of `sampleGroundHeight`, and for the very same reason (§ A16.3).
- *
- * A mesh is triangles. Over each cell of `cellM` the ground is the two planes
- * `sampleGroundHeight` describes, and a figure placed at the bilinear reading
- * instead sits off that surface by up to a quarter of the cell's twist — a
- * measured metre on a 5 m hill. So everything that TOUCHES the drawn ground
- * asks here, and only the mirror of the server's own rule (which judges the
- * field, not the mesh) asks `sampleCompositeHeight`.
- *
- * The four corners are read through the composite ladder, one by one. A cell
- * lying across the border of the loaded tiles therefore takes some corners from
- * a tile and some from the overview — which is not a mixture but exactly what
- * the plate does: its vertices were lifted by this same ladder, and the plane
- * between them IS the drawn ground there. That seam sits at the loading radius,
- * far outside the fog (`heightTiles.ts`).
- */
-export function sampleCompositeGroundHeight(c: WorldHeightTiles | null | undefined,
-                                            x: number, z: number,
-                                            cellM?: number): number {
-  if (!c) return 0
-  const lat = drawnLattice(c, cellM)
-  if (!lat) return 0
-  const step = lat.step
-  const i = Math.floor((x - lat.originX) / step)
-  const j = Math.floor((z - lat.originZ) / step)
-  const x0 = lat.originX + i * step
-  const z0 = lat.originZ + j * step
-  const tx = (x - x0) / step
-  const tz = (z - z0) / step
-  const h00 = sampleCompositeHeight(c, x0, z0)
-  const h10 = sampleCompositeHeight(c, x0 + step, z0)
-  const h01 = sampleCompositeHeight(c, x0, z0 + step)
-  const h11 = sampleCompositeHeight(c, x0 + step, z0 + step)
-  return tz <= tx
-    ? h00 + tx * (h10 - h00) + tz * (h11 - h10)
-    : h00 + tz * (h01 - h00) + tx * (h11 - h01)
 }

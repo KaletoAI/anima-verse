@@ -28,11 +28,10 @@ export type { CutoutHandle } from './cutouts'
 
 export { sampleTerrain, drapeGeometry, TERRAIN_CELLS } from './terrain'
 
-export { sampleWorldHeight, sampleGroundHeight, worldHeightRange,
-  maxWorldHeightIn, worldHeightRangeIn } from './worldHeight'
-export { tileKeyAt, sampleCompositeHeight,
-  sampleCompositeGroundHeight } from './worldHeight'
-export type { WorldHeightField, WorldHeightTiles } from './worldHeight'
+export { bilinear, latticeSample, sampleWorldHeight, worldHeightRange,
+  tileKeyAt, heightAt, finestStep, rayGroundHit } from './worldHeight'
+export type { RayGroundOpts, WorldHeightField, WorldHeightTiles,
+  WorldHeightTileStats } from './worldHeight'
 
 export { hillshadeImage, MAP_RELIEF_Z_FACTOR } from './hillshade'
 export type { HillshadeOpts, HillshadeImage } from './hillshade'

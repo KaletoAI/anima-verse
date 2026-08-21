@@ -260,9 +260,12 @@ export interface ScenePatch { area: number; lift: number }
  *
  * TWO HEIGHT SOURCES, ONE ANSWER, and that is the whole rule:
  *
- *  - `worldHeight` is the authored WORLD relief (§ A16, `sampleWorldHeight` —
- *    the bilinear reading, the server's own). It is under EVERYTHING, inside a
- *    location as much as out in the wilderness. Until task 4 the client's
+ *  - `worldHeight` is the authored WORLD relief (§ A16, `@anima/scene-render`
+ *    `heightAt` — the bilinear reading of the data, and since "Ein Boden" E2
+ *    the ONLY one the client has: the terrain's own vertices are placed from
+ *    it, so the number this rule adds up is the number the picture is built
+ *    from AND the number the server judges by). It is under EVERYTHING, inside
+ *    a location as much as out in the wilderness. Until task 4 the client's
  *    mirror left this term out and knew only the scene relief, which is
  *    exactly the rubber band the acceptance list described: the figure walked
  *    up a world hill the client thought was flat and the server pulled it
@@ -274,11 +277,12 @@ export interface ScenePatch { area: number; lift: number }
  *    which is `tileAt`'s smallest-wins rule restricted to those that answer at
  *    all — the same order, now measured in m² rather than in edge length.
  *
- * Under a footprint that levels its ground (`level_ground`, § A16.1, opt-in)
- * the world term is FLAT by construction, so this adds the plateau height and
- * not a second slope under the scene. Under an unflagged place the authored
- * landscape simply runs on underneath; the sum is the same one either way,
- * which is why the opt-in changes nothing about this rule.
+ * Under a BUILT location the world term is FLAT by construction — the bake
+ * stamps a plateau there (§ G5; since E1 that follows from the location
+ * drawing a floor, there is no `level_ground` flag any more) — so this adds
+ * the plateau height and not a second slope under the scene. Under a natural
+ * place the authored landscape simply runs on underneath; the sum is the same
+ * one either way, which is why the stamp changes nothing about this rule.
  */
 export function groundLift(worldHeight: number,
                            patches: readonly ScenePatch[]): number {

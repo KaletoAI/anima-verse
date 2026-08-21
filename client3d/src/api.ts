@@ -210,6 +210,29 @@ export interface HeightfieldPayload extends WorldHeightField {
   /** Every tile the world has a ground in, as `"tx,tz"`. Anything outside this
    *  list is flat and is never asked for. */
   tiles: string[];
+  /** The mip levels a tile reports an error for, in metres — `[4, 8, 16, 32,
+   *  64]` today (E1 addendum § 4, § G2). They are multiples of `tile_step_m`
+   *  AND divide the tile edge, so each coarse lattice is a SUBSET of the base
+   *  one: a client may derive them by plain decimation and still be reading
+   *  the server's own height function. */
+  mip_levels_m?: number[];
+  /** Per tile, `"tx,tz"` → what the terrain quadtree needs about it. Capped at
+   *  the server's `TILE_STATS_MAX`; the rest arrives with the tiles. */
+  tile_stats?: Record<string, HeightTileStats>;
+  /** `false` when `tile_stats` was cut short by that cap. */
+  tile_stats_complete?: boolean;
+}
+
+/** What one tile says about ITSELF (§ G2): its height span, and the exact
+ *  largest VERTICAL error in metres a renderer makes by drawing it on
+ *  `mip_levels_m[k]` instead of on the base lattice. Exact rather than
+ *  sampled — the difference of two bilinear fields is bilinear and takes its
+ *  extrema in the corners — which is what lets a screen-space error test be a
+ *  guarantee. */
+export interface HeightTileStats {
+  min: number;
+  max: number;
+  err: number[];
 }
 
 /** One tile's grid as the batch endpoint sends it — WITHOUT a `step_m` of its
@@ -221,6 +244,10 @@ export interface HeightTileGrid {
   rows: number;
   cols: number;
   heights: number[][];
+  /** The tile's own quadtree statistics (§ G2) — always present since E1, and
+   *  the reason `GET /play/heightfield` may cap its `tile_stats`: whatever the
+   *  overview could not carry rides in here. */
+  stats?: HeightTileStats;
 }
 
 /** The answer of `GET /play/heightfield/tiles`. `tiles` holds only what the
@@ -231,6 +258,9 @@ export interface HeightTileBatch {
   tile_m: number;
   step_m: number;
   tiles: Record<string, HeightTileGrid>;
+  /** The same level list the overview carries — repeated so a batch is
+   *  readable on its own. */
+  mip_levels_m?: number[];
 }
 
 /**

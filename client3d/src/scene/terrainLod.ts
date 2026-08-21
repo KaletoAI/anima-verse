@@ -1,0 +1,1074 @@
+/**
+ * THE TERRAIN, drawn from the data it is defined by — CDLOD (plan-ein-boden.md
+ * § G2, decision 5.3 "VOLL").
+ *
+ * WHAT IT REPLACES. Until E2 the open world's ground was ONE big drawn mesh:
+ * `gridPlate` over the whole world frame, cut at whatever cell size kept it
+ * under a 40 000-cell budget — 64 m in the live world — and every vertex
+ * lifted out of the height field. Two things followed, both measured:
+ *
+ *  - the DRAWN surface stood up to 2.433 m (p95 1.584 m) away from the
+ *    bilinear field the server judges walks by, because inside a 64 m cell a
+ *    mesh is two triangles and the field is not;
+ *  - the ground changed SHAPE as tiles arrived, since the same mesh was re-cut
+ *    against a composite that had just gained a finer raster.
+ *
+ * Here the ground is a quadtree of ONE instanced 32 × 32 patch. Every vertex
+ * fetches its height out of the very lattice `heightAt` reads (four
+ * `texelFetch` and the bilinear mix of `@anima/scene-render` `bilinear`), so
+ * the drawn surface and the rule's answer are the same function — assertable,
+ * and asserted, to 1e-4 in `smoke_terrain_lod.mjs`. Detail is a MORPH between
+ * two mip levels of that lattice, not a different landscape: a node blends
+ * into its parent over the last half of its range, so nothing pops and nothing
+ * cracks (no skirts, no stitching).
+ *
+ * THE PYRAMIDS ARE CLIENT-SIDE and are pure DECIMATION — every coarse level
+ * takes every second support point of the one below it. That is exact rather
+ * than an approximation because the server's height is one pure function
+ * sampled on lattices that are subsets of each other (E1, addendum § 1/§ 4):
+ * a decimated level IS the function on the coarser lattice, and the server's
+ * own `err[k]` bound therefore describes what this renderer really draws.
+ *
+ * TWO PYRAMIDS, ONE FUNCTION. The near one covers the loaded fine tiles at the
+ * server's fine step and is filled from `heightAt` itself, so it carries the
+ * tile-first precedence. The far one is the overview. They are switched by
+ * RECTANGLE, not blended — and that seam is invisible by construction, because
+ * the near window is grown a margin PAST the loaded tiles, and out there
+ * `heightAt` is the overview, so both pyramids answer the same number in the
+ * strip where the branch flips.
+ *
+ * WHAT IS NOT HERE: the material. The ground keeps the material
+ * `scene/ground.ts` builds for the default kind, with the basement hole
+ * (`patchHole`) and the natural-ground stages (`applyNaturalGround`) already
+ * in its `onBeforeCompile` slot. This module CHAINS one more patch onto it —
+ * the vertex displacement — and never assigns, the rule of every shader patch
+ * in this client.
+ */
+import * as THREE from 'three';
+import { finestStep, heightAt, latticeSample } from '@anima/scene-render';
+import type { WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
+
+/**
+ * Cells per axis of the one patch — 32, and the number is derived rather than
+ * tasted.
+ *
+ * The server's fine lattice is 2 m and its mip pyramid has exactly five levels
+ * above it (`MIP_LEVELS_M = 4, 8, 16, 32, 64`). With 32 cells a leaf node is
+ * 32 · 2 = 64 m and its vertices land on EVERY support point of the base
+ * lattice — one vertex per datum, never a subdivision of ground that carries
+ * no more detail — and the six node steps that follow (2, 4, 8, 16, 32, 64 m)
+ * are the base plus precisely those five declared levels. So every level this
+ * renderer draws has a server-declared error bound, and none of them
+ * extrapolates.
+ *
+ * 64 would halve the instance count (4 225 vertices per patch instead of
+ * 1 089) at the price of a leaf of 128 m: the LOD would then be chosen in
+ * 128 m lumps, which over the 520 m the haze leaves visible is four rings
+ * instead of eight — coarser culling and a visibly steppier morph front. The
+ * draw call count is 1 either way, so the trade buys nothing that matters
+ * here.
+ */
+export const PATCH_N = 32;
+
+/** How many node levels the quadtree may hold — the base lattice plus the five
+ *  declared mip levels (see `PATCH_N`). Level 0 is the finest. */
+export const MAX_LOD_LEVELS = 6;
+
+/**
+ * `lodRange[0]` in metres: how close the camera must be for the FINEST level.
+ *
+ * `lodRange[i] = MIN_LOD_DISTANCE_M · 2^i`, i.e. 128, 256, 512, 1024, 2048 m.
+ * The scene haze closes at 520 m (`engine.ts`), so everything a player can see
+ * is drawn at levels 0–2 (2, 4 and 8 m between vertices) — and 560 m is
+ * exactly how far the fine tiles are loaded (`heightTiles.ts`
+ * `HEIGHT_TILE_RADIUS_M`), so the near pyramid covers every node that is drawn
+ * finer than the overview can answer. Past the haze the levels are a picture.
+ */
+export const MIN_LOD_DISTANCE_M = 128;
+
+/** Where in a level's range the morph towards the parent starts, as a fraction
+ *  of it. Strugar's CDLOD paper uses "the last half"; below that the node draws
+ *  its own lattice unblended, which is what makes the morph=0 path assertable
+ *  against `heightAt`. */
+export const MORPH_START = 0.5;
+
+/**
+ * How many pixels of vertical error a level may show — the screen-space budget
+ * the server's own bound is spent against.
+ *
+ * The distance rule alone knows nothing about the ground: on a world of
+ * gentle meadows 128 m per level is generous, and on one full of cliffs the
+ * same 128 m is a visible staircase. The server ships the exact bound per mip
+ * level (`stats.err[k]`, § G2), so a level may only be used from
+ * `err · pixelScale / MAX_PIXEL_ERROR` metres away, and the LOD ranges are
+ * pushed out until that holds.
+ *
+ * IT WIDENS THE RANGES, IT DOES NOT SPLIT SINGLE NODES, and that is a
+ * correctness matter rather than a taste. CDLOD is crack-free because two
+ * neighbouring nodes are at most one level apart AND the finer one has morphed
+ * fully onto the coarser one's lattice by the time the coarser is chosen —
+ * which holds only while both nodes measure against the SAME ranges. A
+ * per-node error test would give a rugged node a finer level than its smooth
+ * neighbour at the same distance, with no morph between them: a seam as tall
+ * as the error it was meant to remove. So the error is taken per LEVEL, over
+ * everything loaded, and moves the ring boundaries for the whole world at
+ * once.
+ */
+export const MAX_PIXEL_ERROR = 2;
+
+/** The base lattice step to fall back on when the payload names none, metres —
+ *  the server's own `TILE_STEP_M`. It is only ever reached by a world with no
+ *  relief at all, where the leaf size decides nothing but how many quads the
+ *  flat ground is drawn as. */
+const FALLBACK_BASE_STEP_M = 2;
+
+/** Ceiling on selected nodes per frame. A guard, not a working limit: the
+ *  working case is 60–120 nodes. Without it a pathological camera (inside the
+ *  ground, at the origin of a 100 km world) walks the whole quadtree. */
+const MAX_NODES = 4096;
+
+/** Texels per axis the near pyramid may have. 1025 at a 2 m step is 2 048 m,
+ *  nearly twice the 1 120 m the tile radius can span — the cap is a memory
+ *  guard for a world with a different tile size, never the working case.
+ *  1025² floats plus the mip chain is 5.6 MB. */
+const NEAR_MAX_TEXELS = 1025;
+
+/** How far past the loaded tiles the near window reaches, in metres. It has to
+ *  be at least one OVERVIEW cell so the rectangle the shader switches on lies
+ *  in ground where near and far answer the same number — see the file header.
+ *  Two overview cells, floor 16 m, is that with room to spare. */
+const NEAR_MARGIN_CELLS = 2;
+const NEAR_MARGIN_MIN_M = 16;
+
+// ── The pyramid ────────────────────────────────────────────────────────────
+
+/** One level of a height pyramid: its lattice and where its rows sit in the
+ *  packed texture. The ORIGIN is the pyramid's — decimation keeps it. */
+export interface PyramidLevel {
+  cols: number;
+  rows: number;
+  step: number;
+  /** First row of this level inside the packed data, in texels. */
+  row0: number;
+}
+
+/**
+ * A height pyramid, packed for ONE texture.
+ *
+ * The levels are stacked vertically in a single `Float32Array` of `texW ×
+ * texH`, because GLSL ES 3.00 forbids indexing an array of SAMPLERS with a
+ * value that is not a constant expression — while indexing an array of `vec4`
+ * with the per-instance level is perfectly legal. So the level is a lookup in
+ * a uniform array and the sampler never changes.
+ */
+export interface HeightPyramid {
+  originX: number;
+  originZ: number;
+  /** Metres between support points of level 0. */
+  step: number;
+  levels: PyramidLevel[];
+  data: Float32Array;
+  texW: number;
+  texH: number;
+}
+
+/**
+ * Build a pyramid by sampling `at` on the base lattice and DECIMATING upwards.
+ *
+ * `levelCount` is a wish: a level with fewer than two support points per axis
+ * carries no surface and ends the chain.
+ *
+ * DECIMATION, NOT AVERAGING, and that is the contract of § G2: the coarse
+ * lattice is a SUBSET of the fine one, so taking every second point IS the
+ * height function on the coarse lattice — the very grid the server computed
+ * `err[k]` against. An averaging (box) filter would produce a surface no
+ * lattice of the model describes and the error bound would stop being a bound.
+ */
+export function buildPyramid(at: (x: number, z: number) => number,
+                             originX: number, originZ: number, step: number,
+                             cols: number, rows: number,
+                             levelCount: number): HeightPyramid {
+  const levels: PyramidLevel[] = [];
+  let c = Math.max(2, Math.floor(cols));
+  let r = Math.max(2, Math.floor(rows));
+  let s = step;
+  let height = 0;
+  for (let k = 0; k < levelCount; k += 1) {
+    levels.push({ cols: c, rows: r, step: s, row0: height });
+    height += r;
+    const nc = Math.floor((c - 1) / 2) + 1;
+    const nr = Math.floor((r - 1) / 2) + 1;
+    if (nc < 2 || nr < 2) break;
+    c = nc;
+    r = nr;
+    s *= 2;
+  }
+  const texW = levels[0].cols;
+  const data = new Float32Array(texW * height);
+  const base = levels[0];
+  for (let j = 0; j < base.rows; j += 1) {
+    const z = originZ + j * step;
+    const row = j * texW;
+    for (let i = 0; i < base.cols; i += 1) {
+      data[row + i] = at(originX + i * step, z);
+    }
+  }
+  for (let k = 1; k < levels.length; k += 1) {
+    const lv = levels[k];
+    const prev = levels[k - 1];
+    for (let j = 0; j < lv.rows; j += 1) {
+      const src = (prev.row0 + j * 2) * texW;
+      const dst = (lv.row0 + j) * texW;
+      for (let i = 0; i < lv.cols; i += 1) data[dst + i] = data[src + i * 2];
+    }
+  }
+  return { originX, originZ, step, levels, data, texW, texH: height };
+}
+
+/**
+ * The height a pyramid answers at (x, z) on level `k` — the CPU MIRROR of the
+ * shader's `tlodGrid`, arithmetic for arithmetic.
+ *
+ * It runs through `latticeSample`, the same function `sampleWorldHeight` runs
+ * through, so the only thing that could differ between CPU and GPU is the
+ * fetch — and the smoke reimplements that fetch on its own to keep the check
+ * independent of this very line.
+ */
+export function pyramidHeight(pyr: HeightPyramid | null, x: number, z: number,
+                              k: number): number {
+  if (!pyr) return 0;
+  const lv = pyr.levels[Math.max(0, Math.min(k, pyr.levels.length - 1))];
+  if (!lv) return 0;
+  return latticeSample(
+    (i, j) => pyr.data[(lv.row0 + j) * pyr.texW + i] ?? 0,
+    lv.cols, lv.rows, pyr.originX, pyr.originZ, lv.step, x, z);
+}
+
+/** Which level of the pyramid draws a node whose vertices are `stepM` apart —
+ *  `round(log2(stepM / baseStep))`, clamped into the chain. The same three
+ *  lines run in the shader (`tlodLevel`). */
+export function pyramidLevelFor(pyr: HeightPyramid | null, stepM: number): number {
+  if (!pyr || !(pyr.step > 0)) return 0;
+  const k = Math.round(Math.log2(Math.max(stepM / pyr.step, 1)));
+  return Math.max(0, Math.min(k, pyr.levels.length - 1));
+}
+
+// ── The quadtree ───────────────────────────────────────────────────────────
+
+/** One selected quadtree node: its south-west corner and edge length in world
+ *  metres, the level it draws at, and how far it has morphed towards its
+ *  parent (0 = its own lattice, 1 = exactly the parent's). */
+export interface LodNode {
+  x: number;
+  z: number;
+  size: number;
+  level: number;
+  morph: number;
+}
+
+/** What `selectLodNodes` has to be told. Everything is plain numbers and
+ *  callbacks so the selection can be derived by hand in a smoke without a
+ *  camera, a renderer or a world. */
+export interface LodSelectOpts {
+  /** The world rectangle the terrain covers. */
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+  /** Edge length of a LEAF node (level 0), metres. */
+  leafM: number;
+  /** How many levels the tree may have (leaf included). */
+  levels: number;
+  /** `lodRange[0]`, metres. 0 switches the distance rule off entirely and
+   *  selects nothing but roots — the flat world, which has no detail to spend
+   *  triangles on. */
+  minLodDistance: number;
+  /** Where the camera is. */
+  camX: number;
+  camY: number;
+  camZ: number;
+  /** The vertical box of a node — `{ min, max }` in metres. */
+  boundsOf: (x: number, z: number, size: number) => { min: number; max: number };
+  /** The largest vertical error in metres that DRAWING AT LEVEL i costs,
+   *  anywhere in the loaded world (`levelErrorM[i]`, from the server's
+   *  `stats.err`). Missing or 0 switches the error rule off for that level. */
+  levelErrorM?: readonly number[];
+  /** Pixels per metre of vertical error at one metre of distance —
+   *  `viewportHeightPx / (2 · tan(fovY/2))`. 0 switches the error rule off. */
+  pixelScale?: number;
+  /** Is any part of the node's box inside the view? `undefined` = everything
+   *  is. */
+  inView?: (x: number, z: number, size: number, minY: number, maxY: number) => boolean;
+}
+
+/**
+ * The LOD ring boundaries in metres, `lodRange[i]` per level.
+ *
+ * Two terms, and the larger wins per level:
+ *  - the geometric one, `minLodDistance · 2^i` — one halving of the vertex
+ *    density per doubling of the distance, which is what keeps the number of
+ *    vertices per pixel constant;
+ *  - the ERROR one, `levelErrorM[i+1] · pixelScale / MAX_PIXEL_ERROR` — the
+ *    nearest distance at which level i+1 stays inside its pixel budget. It
+ *    lands on `lodRange[i]` because that is the boundary level i+1 begins at.
+ *
+ * MADE MONOTONE afterwards. The two terms are each monotone in the level (the
+ * server's `err` grows with the mip level), so the max of them is too — but a
+ * hand-edited error list must not be able to produce a ring that starts before
+ * the one inside it, which would select a coarse node inside a fine ring and
+ * crack the ground.
+ *
+ * `minLodDistance` 0 is the FLAT world: every range is 0, nothing is ever
+ * split, and the terrain is drawn from its roots. A level surface has no
+ * detail to spend triangles on.
+ */
+export function lodRanges(minLodDistance: number, levels: number,
+                          levelErrorM?: readonly number[],
+                          pixelScale?: number): number[] {
+  const out: number[] = [];
+  const scale = pixelScale && pixelScale > 0 ? pixelScale : 0;
+  for (let i = 0; i < levels; i += 1) {
+    let r = minLodDistance * (1 << i);
+    const err = levelErrorM?.[i + 1] ?? 0;
+    if (minLodDistance > 0 && scale > 0 && err > 0) {
+      r = Math.max(r, (err * scale) / MAX_PIXEL_ERROR);
+    }
+    if (i > 0 && r < out[i - 1]) r = out[i - 1];
+    out.push(r);
+  }
+  return out;
+}
+
+/** Distance from a point to an axis-aligned box, metres — 0 inside it. */
+function boxDistance(px: number, py: number, pz: number,
+                     x0: number, y0: number, z0: number,
+                     x1: number, y1: number, z1: number): number {
+  const dx = Math.max(x0 - px, 0, px - x1);
+  const dy = Math.max(y0 - py, 0, py - y1);
+  const dz = Math.max(z0 - pz, 0, pz - z1);
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+/**
+ * Which nodes the terrain is drawn from, at which level, morphed how far.
+ *
+ * THE RULE, top down from the roots (Strugar CDLOD):
+ *
+ *   `lodRange[i] = max( minLodDistance · 2^i,
+ *                       levelErrorM[i+1] · pixelScale / MAX_PIXEL_ERROR )`,
+ *                 then made monotone;
+ *   a node at level L is SPLIT when the camera is nearer than `lodRange[L−1]`
+ *   — i.e. level L owns the ring `[lodRange[L−1], lodRange[L])`;
+ *   otherwise it is SELECTED, with
+ *   `morph = clamp((d − MORPH_START·lodRange[L]) / ((1−MORPH_START)·lodRange[L]), 0, 1)`.
+ *
+ * THE ERROR TERM IS INSIDE THE RANGE, not a second test beside it — see
+ * `MAX_PIXEL_ERROR` for why a per-node error test cracks the ground.
+ * `levelErrorM[i+1]` is what level i+1 would cost, so it is `lodRange[i]` — the
+ * boundary at which level i+1 is allowed to start — that has to move.
+ *
+ * THE MORPH IS WHAT MAKES IT CRACK-FREE, without a skirt: a node reaches
+ * morph 1 — every vertex snapped onto its PARENT's lattice, every height taken
+ * from the parent's level — before the distance can push its neighbour up a
+ * level. Two adjacent nodes one level apart therefore describe the same
+ * polyline along their shared edge, by construction rather than by stitching.
+ *
+ * DISTANCE IS 3D and measured to the node's BOX, not to its centre: a node
+ * 512 m wide whose near edge is under the camera must not be treated as
+ * 256 m away, and a camera high over a valley must not pull the valley floor
+ * to the finest level because it is directly below.
+ */
+export function selectLodNodes(o: LodSelectOpts): LodNode[] {
+  const out: LodNode[] = [];
+  const levels = Math.max(1, Math.min(Math.floor(o.levels), MAX_LOD_LEVELS));
+  const leaf = o.leafM;
+  if (!(leaf > 0) || !(o.x1 > o.x0) || !(o.z1 > o.z0)) return out;
+  const top = levels - 1;
+  const ranges = lodRanges(o.minLodDistance, levels, o.levelErrorM, o.pixelScale);
+
+  const visit = (x: number, z: number, level: number): void => {
+    if (out.length >= MAX_NODES) return;
+    const size = leaf * (1 << level);
+    if (x >= o.x1 || z >= o.z1 || x + size <= o.x0 || z + size <= o.z0) return;
+    const b = o.boundsOf(x, z, size);
+    if (o.inView && !o.inView(x, z, size, b.min, b.max)) return;
+    const d = boxDistance(o.camX, o.camY, o.camZ,
+                          x, b.min, z, x + size, b.max, z + size);
+    if (level > 0 && ranges[level - 1] > 0 && d < ranges[level - 1]) {
+      const half = size / 2;
+      visit(x, z, level - 1);
+      visit(x + half, z, level - 1);
+      visit(x, z + half, level - 1);
+      visit(x + half, z + half, level - 1);
+      return;
+    }
+    const range = ranges[level];
+    const start = MORPH_START * range;
+    const span = range - start;
+    const morph = span > 0 ? Math.max(0, Math.min(1, (d - start) / span)) : 0;
+    out.push({ x, z, size, level, morph });
+  };
+
+  const rootSize = leaf * (1 << top);
+  const rx0 = Math.floor(o.x0 / rootSize);
+  const rx1 = Math.floor((o.x1 - 1e-6) / rootSize);
+  const rz0 = Math.floor(o.z0 / rootSize);
+  const rz1 = Math.floor((o.z1 - 1e-6) / rootSize);
+  for (let rz = rz0; rz <= rz1; rz += 1) {
+    for (let rx = rx0; rx <= rx1; rx += 1) {
+      visit(rx * rootSize, rz * rootSize, top);
+    }
+  }
+  return out;
+}
+
+// ── The GLSL twin ──────────────────────────────────────────────────────────
+
+/**
+ * The vertex-side height fetch, as GLSL.
+ *
+ * WHAT MAKES IT THE SAME NUMBER AS `heightAt`: `tlodGrid` is `latticeSample`
+ * written out — the same clamp, the same `min(floor(f), n−2)`, the same
+ * `bilinear` — with `texelFetch` for the array read. `texelFetch` and not
+ * `texture()`: R32F is not filterable in core WebGL2 (that needs
+ * `OES_texture_float_linear`), and a driver that DID filter it would round the
+ * weights in its own way, which is exactly the "nearly the same" this whole
+ * stage exists to end.
+ *
+ * The smoke does not read this string. It reimplements the arithmetic
+ * independently and checks it against `heightAt` on hand-derived fixtures — a
+ * check that read the string could only prove the string equals itself.
+ */
+export function terrainLodGlsl(): string {
+  return `
+uniform sampler2D uTlodNear;
+uniform sampler2D uTlodFar;
+uniform vec4 uTlodNearGeom;
+uniform vec4 uTlodFarGeom;
+uniform vec4 uTlodNearLevel[ ${MAX_LOD_LEVELS} ];
+uniform vec4 uTlodFarLevel[ ${MAX_LOD_LEVELS} ];
+uniform vec4 uTlodNearRect;
+uniform vec4 uTlodExtent;
+attribute vec4 iNode;
+
+float tlodGrid( sampler2D tex, vec2 origin, vec4 lv, vec2 p ) {
+  float cols = lv.x;
+  float rows = lv.y;
+  float step = lv.z;
+  if ( cols < 2.0 || rows < 2.0 || step <= 0.0 ) return 0.0;
+  float fx = clamp( ( p.x - origin.x ) / step, 0.0, cols - 1.0 );
+  float fz = clamp( ( p.y - origin.y ) / step, 0.0, rows - 1.0 );
+  float fi = min( floor( fx ), cols - 2.0 );
+  float fj = min( floor( fz ), rows - 2.0 );
+  float tx = fx - fi;
+  float tz = fz - fj;
+  int i = int( fi );
+  int j = int( fj + lv.w );
+  float h00 = texelFetch( tex, ivec2( i, j ), 0 ).r;
+  float h10 = texelFetch( tex, ivec2( i + 1, j ), 0 ).r;
+  float h01 = texelFetch( tex, ivec2( i, j + 1 ), 0 ).r;
+  float h11 = texelFetch( tex, ivec2( i + 1, j + 1 ), 0 ).r;
+  float north = h00 * ( 1.0 - tx ) + h10 * tx;
+  float south = h01 * ( 1.0 - tx ) + h11 * tx;
+  return north * ( 1.0 - tz ) + south * tz;
+}
+
+int tlodLevel( float baseStep, float count, float nodeStep ) {
+  if ( baseStep <= 0.0 ) return 0;
+  float k = floor( log2( max( nodeStep / baseStep, 1.0 ) ) + 0.5 );
+  return int( clamp( k, 0.0, count - 1.0 ) );
+}
+
+float tlodHeight( vec2 p, float nodeStep ) {
+  if ( uTlodNearGeom.w > 0.0
+       && p.x >= uTlodNearRect.x && p.x <= uTlodNearRect.z
+       && p.y >= uTlodNearRect.y && p.y <= uTlodNearRect.w ) {
+    int k = tlodLevel( uTlodNearGeom.z, uTlodNearGeom.w, nodeStep );
+    return tlodGrid( uTlodNear, uTlodNearGeom.xy, uTlodNearLevel[ k ], p );
+  }
+  int k = tlodLevel( uTlodFarGeom.z, uTlodFarGeom.w, nodeStep );
+  return tlodGrid( uTlodFar, uTlodFarGeom.xy, uTlodFarLevel[ k ], p );
+}
+
+vec3 tlodWorld;
+vec3 tlodNormal;
+
+void tlodCompute() {
+  float nodeStep = iNode.z / ${PATCH_N}.0;
+  vec2 gi = position.xz * ${PATCH_N}.0;
+  // The morph snaps every vertex onto the PARENT lattice (every second index),
+  // which is what makes a fully morphed node describe its parent's polyline.
+  vec2 gm = mix( gi, gi - mod( gi, 2.0 ), iNode.w );
+  // CLAMPED TO THE WORLD FRAME. A quadtree node is a power-of-two square and
+  // the frame is not, so the outermost nodes reach past it; without this the
+  // ground would run on behind the backdrop ring that is supposed to close the
+  // view (ground.BASE_MARGIN_M). Clamping collapses the vertices outside onto
+  // the border instead of clipping triangles — degenerate triangles cost a
+  // vertex each and no fragments, and because a node and its parent clamp
+  // against the SAME rectangle the morph stays crack-free along it.
+  vec2 p = clamp( iNode.xy + gm * nodeStep, uTlodExtent.xy, uTlodExtent.zw );
+  float h = mix( tlodHeight( p, nodeStep ),
+                 tlodHeight( p, nodeStep * 2.0 ), iNode.w );
+  tlodWorld = vec3( p.x, h, p.y );
+  // The normal is a central difference on the node's OWN level: it is shading,
+  // not geometry, and a morph-blended normal would double the fetches for a
+  // difference nobody can see.
+  float e = nodeStep;
+  float hx = tlodHeight( p + vec2( e, 0.0 ), nodeStep )
+           - tlodHeight( p - vec2( e, 0.0 ), nodeStep );
+  float hz = tlodHeight( p + vec2( 0.0, e ), nodeStep )
+           - tlodHeight( p - vec2( 0.0, e ), nodeStep );
+  tlodNormal = normalize( vec3( -hx, 2.0 * e, -hz ) );
+}
+`;
+}
+
+/**
+ * The TypeScript twin of `tlodCompute`'s height — what the GPU really answers
+ * for a point on a node.
+ *
+ * Used by the smoke to assert `|h_gpu − h_cpu| < 1e-4` on the morph-0 path,
+ * and by nothing at runtime: the runtime asks `heightAt`, which is the point
+ * of the whole exercise.
+ */
+export function gpuHeightAt(near: HeightPyramid | null, nearRect: readonly number[] | null,
+                            far: HeightPyramid | null,
+                            x: number, z: number, nodeStep: number): number {
+  if (near && nearRect && x >= nearRect[0] && x <= nearRect[2]
+      && z >= nearRect[1] && z <= nearRect[3]) {
+    return pyramidHeight(near, x, z, pyramidLevelFor(near, nodeStep));
+  }
+  return pyramidHeight(far, x, z, pyramidLevelFor(far, nodeStep));
+}
+
+/** What a morphed vertex of a node really lands on — position and height, the
+ *  whole of `tlodCompute` as arithmetic. `gx`/`gz` are the vertex's integer
+ *  indices inside the patch (0 … `PATCH_N`); `extent` is the world frame the
+ *  shader clamps against, `null` for "no frame". */
+export function morphedVertex(node: LodNode, gx: number, gz: number,
+                              near: HeightPyramid | null,
+                              nearRect: readonly number[] | null,
+                              far: HeightPyramid | null,
+                              extent: readonly number[] | null = null
+): { x: number; z: number; y: number } {
+  const nodeStep = node.size / PATCH_N;
+  const m = node.morph;
+  const mx = gx * (1 - m) + (gx - (gx % 2)) * m;
+  const mz = gz * (1 - m) + (gz - (gz % 2)) * m;
+  let x = node.x + mx * nodeStep;
+  let z = node.z + mz * nodeStep;
+  if (extent) {
+    x = Math.min(Math.max(x, extent[0]), extent[2]);
+    z = Math.min(Math.max(z, extent[1]), extent[3]);
+  }
+  const own = gpuHeightAt(near, nearRect, far, x, z, nodeStep);
+  const parent = gpuHeightAt(near, nearRect, far, x, z, nodeStep * 2);
+  return { x, z, y: own * (1 - m) + parent * m };
+}
+
+// ── The renderer ───────────────────────────────────────────────────────────
+
+/** Materials that already carry the CDLOD displacement. Same guard as
+ *  `patchHole` and `applyNaturalGround`: the patch CHAINS, so applying it
+ *  twice would declare `tlodWorld` a second time and the shader would not
+ *  compile. */
+const lodPatched = new WeakSet<THREE.Material>();
+
+/** The cache key this patch contributes, exported so the smoke can pin the
+ *  combined key without carrying a copy of the string. */
+export const TERRAIN_LOD_CACHE_KEY = 'terrain-lod';
+
+/** The one texel of nothing every empty state falls back to — a driver handed
+ *  an unbound sampler is a warning at best and a black ground at worst. Built
+ *  once and never freed, the `neutralFallback` pattern of `naturalGround.ts`. */
+function makeNeutral(): THREE.DataTexture {
+  const tex = new THREE.DataTexture(new Float32Array(1), 1, 1,
+                                    THREE.RedFormat, THREE.FloatType);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.unpackAlignment = 1;
+  tex.needsUpdate = true;
+  return tex;
+}
+const neutralTex = makeNeutral();
+
+function makeLevelArray(): THREE.Vector4[] {
+  const out: THREE.Vector4[] = [];
+  for (let i = 0; i < MAX_LOD_LEVELS; i += 1) out.push(new THREE.Vector4(0, 0, 0, 0));
+  return out;
+}
+
+/** The shared uniform objects — ONE per value for every patched material, the
+ *  pattern of `naturalGround.ts`. Swapping a pyramid is therefore one
+ *  assignment and nothing recompiles. */
+const uNear: { value: THREE.Texture } = { value: neutralTex };
+const uFar: { value: THREE.Texture } = { value: neutralTex };
+const uNearGeom = { value: new THREE.Vector4(0, 0, 1, 0) };
+const uFarGeom = { value: new THREE.Vector4(0, 0, 1, 0) };
+const uNearLevel = { value: makeLevelArray() };
+const uFarLevel = { value: makeLevelArray() };
+const uNearRect = { value: new THREE.Vector4(0, 0, -1, -1) };
+const uExtent = { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) };
+
+/**
+ * Give a ground material the CDLOD vertex displacement.
+ *
+ * THREE ANCHORS, and each one is deliberate:
+ *  - `uv_vertex` computes the world position FIRST (everything below needs it)
+ *    and then overwrites `vMapUv` with the world metres, because a patch's UV
+ *    is its position in the world and not a fraction of a node — one UV unit
+ *    is one metre, exactly as the painted-area drapes have it;
+ *  - `beginnormal_vertex` takes the analytic normal;
+ *  - `begin_vertex` puts the world position into `transformed`, which is what
+ *    every chunk after it (and the hole and natural-ground patches) reads.
+ *
+ * The mesh sits at the origin with an identity matrix, so object space IS
+ * world space — the same arrangement the old base plate had, and what lets one
+ * sampled height serve the ground, the areas and the figures without a
+ * transform in between.
+ */
+export function patchTerrainLod(mat: THREE.Material): void {
+  if (lodPatched.has(mat)) return;
+  lodPatched.add(mat);
+  const prev = mat.onBeforeCompile;
+  const prevKey = Object.prototype.hasOwnProperty.call(mat, 'customProgramCacheKey')
+    ? String(mat.customProgramCacheKey())
+    : '';
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev.call(mat, shader, renderer);
+    shader.uniforms.uTlodNear = uNear;
+    shader.uniforms.uTlodFar = uFar;
+    shader.uniforms.uTlodNearGeom = uNearGeom;
+    shader.uniforms.uTlodFarGeom = uFarGeom;
+    shader.uniforms.uTlodNearLevel = uNearLevel;
+    shader.uniforms.uTlodFarLevel = uFarLevel;
+    shader.uniforms.uTlodNearRect = uNearRect;
+    shader.uniforms.uTlodExtent = uExtent;
+    if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
+    shader.vertexShader = terrainLodGlsl() + shader.vertexShader
+      .replace('#include <uv_vertex>', `\ttlodCompute();
+#include <uv_vertex>
+\t#ifdef USE_MAP
+\t\tvMapUv = ( mapTransform * vec3( tlodWorld.xz, 1.0 ) ).xy;
+\t#endif`)
+      .replace('#include <beginnormal_vertex>',
+        '#include <beginnormal_vertex>\n\tobjectNormal = tlodNormal;')
+      .replace('#include <begin_vertex>',
+        '#include <begin_vertex>\n\ttransformed = tlodWorld;');
+  };
+  mat.customProgramCacheKey = () => (prevKey
+    ? `${prevKey}+${TERRAIN_LOD_CACHE_KEY}`
+    : TERRAIN_LOD_CACHE_KEY);
+}
+
+/** The one patch geometry — `PATCH_N`² cells in [0, 1]², every cell split from
+ *  its minimum corner to its maximum one (the split `gridMesh` uses, so the
+ *  triangulation of the ground reads the same everywhere). */
+function patchGeometry(): { pos: Float32Array; uv: Float32Array; index: Uint16Array } {
+  const n = PATCH_N;
+  const side = n + 1;
+  const pos = new Float32Array(side * side * 3);
+  const uv = new Float32Array(side * side * 2);
+  for (let j = 0; j < side; j += 1) {
+    for (let i = 0; i < side; i += 1) {
+      const v = j * side + i;
+      pos[v * 3] = i / n;
+      pos[v * 3 + 1] = 0;
+      pos[v * 3 + 2] = j / n;
+      uv[v * 2] = i / n;
+      uv[v * 2 + 1] = j / n;
+    }
+  }
+  const index = new Uint16Array(n * n * 6);
+  let k = 0;
+  for (let j = 0; j < n; j += 1) {
+    for (let i = 0; i < n; i += 1) {
+      const a = j * side + i;
+      index[k] = a; index[k + 1] = a + side; index[k + 2] = a + side + 1;
+      index[k + 3] = a; index[k + 4] = a + side + 1; index[k + 5] = a + 1;
+      k += 6;
+    }
+  }
+  return { pos, uv, index };
+}
+
+/** A packed pyramid as an R32F data texture, read by `texelFetch` alone —
+ *  hence NEAREST and no mipmaps: the filtering is done by hand in the shader,
+ *  which is what makes it the same arithmetic as the CPU's. */
+function pyramidTexture(pyr: HeightPyramid): THREE.DataTexture {
+  const tex = new THREE.DataTexture(pyr.data, pyr.texW, pyr.texH,
+                                    THREE.RedFormat, THREE.FloatType);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.generateMipmaps = false;
+  tex.unpackAlignment = 1;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/** What the terrain renderer offers its owner (`scene/ground.ts`). */
+export interface TerrainLod {
+  /** The mesh, to be hung into the ground group once. */
+  readonly mesh: THREE.Mesh;
+  /** Take over the relief. `baseStepM` is the server's FINE step
+   *  (`tile_step_m`), which fixes the leaf size for good — a lattice that
+   *  changed size when a tile arrived would re-anchor the whole quadtree. */
+  setField(relief: WorldHeightTiles | null, baseStepM: number,
+           anchorX: number, anchorZ: number): void;
+  /** The world rectangle to cover, `[minX, minZ, maxX, maxZ]`. */
+  setExtent(rect: readonly [number, number, number, number]): void;
+  /** The ground material — built by the owner (kind, textures, hole patch,
+   *  natural-ground stages) and patched here. */
+  setMaterial(mat: THREE.Material): void;
+  /** How many nodes the last selection drew, for the performance readout. */
+  nodeCount(): number;
+  dispose(): void;
+}
+
+/**
+ * Build the terrain renderer. One mesh, one draw call, no state of its own
+ * beyond the two pyramids and the instance buffer.
+ *
+ * THE SELECTION RUNS PER FRAME, from the mesh's own `onBeforeRender`. That is
+ * deliberate rather than convenient: the morph is a function of the camera's
+ * distance, so a selection on the 1 Hz LOD beat would step the ground in
+ * visible jumps while the camera flies — the very popping CDLOD exists to
+ * remove. A selection is a few hundred box distances and costs less than one
+ * of the draws it saves. Shadow passes are skipped (they come with the light's
+ * orthographic camera).
+ */
+export function createTerrainLod(): TerrainLod {
+  const patch = patchGeometry();
+  const geo = new THREE.InstancedBufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(patch.pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(patch.uv, 2));
+  geo.setIndex(new THREE.BufferAttribute(patch.index, 1));
+  // The bounding sphere is never used for culling (the mesh is not culled as a
+  // whole — its nodes are), but three computes one on demand and would do it
+  // from the UNDISPLACED patch, i.e. a sphere of radius 1 at the origin. A
+  // world-sized one is the honest answer for geometry that is placed in the
+  // vertex shader.
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+
+  let capacity = 256;
+  let nodeAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
+  nodeAttr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('iNode', nodeAttr);
+  geo.instanceCount = 0;
+
+  /** The placeholder until the owner hands the real ground material in — it
+   *  draws nothing, so a client whose terrain payload has not arrived shows an
+   *  empty world rather than a magenta one. */
+  const placeholder = new THREE.MeshBasicMaterial({ visible: false });
+  const mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material> = new THREE.Mesh(geo, placeholder);
+  mesh.frustumCulled = false;
+  mesh.receiveShadow = true;
+  mesh.renderOrder = 0;
+  mesh.matrixAutoUpdate = false;
+
+  let relief: WorldHeightTiles | null = null;
+  let baseStep = 0;
+  let nearPyr: HeightPyramid | null = null;
+  let farPyr: HeightPyramid | null = null;
+  let nearTex: THREE.DataTexture | null = null;
+  let farTex: THREE.DataTexture | null = null;
+  let nearRect: [number, number, number, number] | null = null;
+  let extent: [number, number, number, number] = [-100, -100, 100, 100];
+  let leafM = 0;
+  let flat = true;
+  let nodes = 0;
+  /** The height span of everything held — the fallback box of a node the tile
+   *  statistics say nothing about, and the switch that says "flat world". */
+  let globalRange = { min: 0, max: 0 };
+  /** Drawing-buffer height in pixels, read off the renderer per frame: the
+   *  screen-space error rule needs it and this module has no canvas. */
+  let viewportPx = 0;
+
+  const frustum = new THREE.Frustum();
+  const viewProj = new THREE.Matrix4();
+  const box = new THREE.Box3();
+  const bufferSize = new THREE.Vector2();
+
+  function setLevels(target: THREE.Vector4[], pyr: HeightPyramid | null): void {
+    for (let i = 0; i < MAX_LOD_LEVELS; i += 1) {
+      const lv = pyr?.levels[i];
+      if (lv) target[i].set(lv.cols, lv.rows, lv.step, lv.row0);
+      else target[i].set(0, 0, 0, 0);
+    }
+  }
+
+  /** The overview as its own pyramid — the far half of the field. */
+  function buildFar(ov: WorldHeightField | null): HeightPyramid | null {
+    const rows = ov?.heights?.length ?? 0;
+    const cols = ov?.heights?.[0]?.length ?? 0;
+    if (!ov || rows < 2 || cols < 2 || !(ov.step_m > 0)) return null;
+    const at = (x: number, z: number): number => {
+      const fx = Math.round((x - ov.origin_x) / ov.step_m);
+      const fz = Math.round((z - ov.origin_z) / ov.step_m);
+      const v = ov.heights[fz]?.[fx];
+      return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+    };
+    return buildPyramid(at, ov.origin_x, ov.origin_z, ov.step_m, cols, rows,
+                        MAX_LOD_LEVELS);
+  }
+
+  /**
+   * The near window — the loaded tiles at the fine step, filled from
+   * `heightAt` itself.
+   *
+   * Filling it through the sampler rather than copying tile rows is what makes
+   * the branch in the shader honest: inside the window the texture IS
+   * `heightAt`, tile-first precedence and all, and in the margin strip past
+   * the loaded tiles it is the overview — the same number the far pyramid
+   * carries there, which is why switching between the two at the rectangle's
+   * edge is not a seam.
+   */
+  function buildNear(c: WorldHeightTiles, step: number,
+                     anchorX: number, anchorZ: number): HeightPyramid | null {
+    if (!c.tiles?.size || !(step > 0) || !(c.tileM > 0)) return null;
+    let x0 = Infinity;
+    let z0 = Infinity;
+    let x1 = -Infinity;
+    let z1 = -Infinity;
+    for (const key of c.tiles.keys()) {
+      const [tx, tz] = key.split(',').map(Number);
+      if (!Number.isFinite(tx) || !Number.isFinite(tz)) continue;
+      x0 = Math.min(x0, tx * c.tileM);
+      z0 = Math.min(z0, tz * c.tileM);
+      x1 = Math.max(x1, (tx + 1) * c.tileM);
+      z1 = Math.max(z1, (tz + 1) * c.tileM);
+    }
+    if (!Number.isFinite(x0)) return null;
+    const ovStep = c.overview?.step_m ?? step;
+    const margin = Math.max(NEAR_MARGIN_MIN_M, NEAR_MARGIN_CELLS * ovStep);
+    x0 -= margin; z0 -= margin; x1 += margin; z1 += margin;
+    // Snapped onto the fine lattice, which is anchored at the world origin —
+    // the tile origins are multiples of `tileM` and `tileM` is a multiple of
+    // the step, so the window's lattice IS the tiles' lattice.
+    x0 = Math.floor(x0 / step) * step;
+    z0 = Math.floor(z0 / step) * step;
+    let cols = Math.floor((x1 - x0) / step) + 1;
+    let rows = Math.floor((z1 - z0) / step) + 1;
+    if (cols > NEAR_MAX_TEXELS || rows > NEAR_MAX_TEXELS) {
+      // The cap bites only for a tile size this client has never seen. Centre
+      // what is left on the anchor so the player at least stands in it.
+      const halfX = Math.min(cols, NEAR_MAX_TEXELS) * step / 2;
+      const halfZ = Math.min(rows, NEAR_MAX_TEXELS) * step / 2;
+      x0 = Math.floor((anchorX - halfX) / step) * step;
+      z0 = Math.floor((anchorZ - halfZ) / step) * step;
+      cols = Math.min(cols, NEAR_MAX_TEXELS);
+      rows = Math.min(rows, NEAR_MAX_TEXELS);
+    }
+    if (cols < 2 || rows < 2) return null;
+    const pyr = buildPyramid((x, z) => heightAt(c, x, z), x0, z0, step,
+                             cols, rows, MAX_LOD_LEVELS);
+    nearRect = [x0, z0, x0 + (cols - 1) * step, z0 + (rows - 1) * step];
+    return pyr;
+  }
+
+  function uploadPyramids(): void {
+    nearTex?.dispose();
+    farTex?.dispose();
+    nearTex = nearPyr ? pyramidTexture(nearPyr) : null;
+    farTex = farPyr ? pyramidTexture(farPyr) : null;
+    uNear.value = nearTex ?? neutralTex;
+    uFar.value = farTex ?? neutralTex;
+    uNearGeom.value.set(nearPyr?.originX ?? 0, nearPyr?.originZ ?? 0,
+                        nearPyr?.step ?? 1, nearPyr?.levels.length ?? 0);
+    uFarGeom.value.set(farPyr?.originX ?? 0, farPyr?.originZ ?? 0,
+                       farPyr?.step ?? 1, farPyr?.levels.length ?? 0);
+    setLevels(uNearLevel.value, nearPyr);
+    setLevels(uFarLevel.value, farPyr);
+    if (nearPyr && nearRect) uNearRect.value.set(...nearRect);
+    else uNearRect.value.set(0, 0, -1, -1);
+  }
+
+  /** The vertical box of a node, from the tile statistics where there are any.
+   *  A node covering several tiles takes the union; a node the statistics say
+   *  nothing about takes the whole field's range, which culls nothing and is
+   *  never wrong. */
+  function boundsOf(x: number, z: number, size: number): { min: number; max: number } {
+    const stats = relief?.stats;
+    const tileM = relief?.tileM ?? 0;
+    if (!stats?.size || !(tileM > 0)) return globalRange;
+    let min = Infinity;
+    let max = -Infinity;
+    const tx0 = Math.floor(x / tileM);
+    const tx1 = Math.floor((x + size - 1e-6) / tileM);
+    const tz0 = Math.floor(z / tileM);
+    const tz1 = Math.floor((z + size - 1e-6) / tileM);
+    if ((tx1 - tx0 + 1) * (tz1 - tz0 + 1) > 64) return globalRange;
+    let seen = 0;
+    for (let tz = tz0; tz <= tz1; tz += 1) {
+      for (let tx = tx0; tx <= tx1; tx += 1) {
+        const s = stats.get(`${tx},${tz}`);
+        if (!s) continue;
+        seen += 1;
+        if (s.min < min) min = s.min;
+        if (s.max > max) max = s.max;
+      }
+    }
+    // A node that reaches past the indexed tiles reaches over flat ground
+    // (an unindexed tile IS the flat world), so 0 belongs in its box.
+    const covered = (tx1 - tx0 + 1) * (tz1 - tz0 + 1);
+    if (!seen) return globalRange;
+    if (seen < covered) { min = Math.min(min, 0); max = Math.max(max, 0); }
+    return { min, max };
+  }
+
+  /**
+   * The worst vertical error per NODE LEVEL, in metres — recomputed whenever
+   * the field changes, never per frame.
+   *
+   * Level L draws its vertices `baseStep · 2^L` apart, which for L ≥ 1 is one
+   * of the server's declared `mip_levels_m`; level 0 is the base lattice and
+   * has no error at all. The maximum is taken over every tile the client knows
+   * a statistic for, because the ranges are world-wide (see `MAX_PIXEL_ERROR`)
+   * — a per-node maximum would crack the ground.
+   */
+  function computeLevelError(): number[] {
+    const out = new Array<number>(MAX_LOD_LEVELS).fill(0);
+    const stats = relief?.stats;
+    const mips = relief?.mipLevelsM;
+    if (!stats?.size || !mips?.length || !(baseStep > 0)) return out;
+    for (let level = 1; level < MAX_LOD_LEVELS; level += 1) {
+      const k = mips.indexOf(baseStep * (1 << level));
+      if (k < 0) continue;
+      let err = 0;
+      for (const s of stats.values()) {
+        const v = s.err?.[k];
+        if (typeof v === 'number' && v > err) err = v;
+      }
+      out[level] = err;
+    }
+    return out;
+  }
+  let levelErrorM: number[] = new Array<number>(MAX_LOD_LEVELS).fill(0);
+
+  function grow(n: number): void {
+    if (n <= capacity) return;
+    while (capacity < n) capacity *= 2;
+    geo.deleteAttribute('iNode');
+    nodeAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
+    nodeAttr.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('iNode', nodeAttr);
+  }
+
+  /**
+   * Re-select the nodes for a camera and hand them to the instance buffer.
+   *
+   * A WORLD WITH NO RELIEF STILL GETS A GROUND. Without a pyramid the shader's
+   * `tlodGrid` answers 0 for every fetch (a level of fewer than two support
+   * points carries no surface), and `flat` puts every node at the root level —
+   * so the flat world comes out as the handful of big quads it used to be
+   * drawn as, rather than as nothing at all.
+   */
+  function update(camera: THREE.Camera): void {
+    if (!leafM) {
+      geo.instanceCount = 0;
+      nodes = 0;
+      return;
+    }
+    camera.updateMatrixWorld();
+    viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(viewProj);
+    const cam = camera.position;
+    const persp = camera as THREE.PerspectiveCamera;
+    const fov = persp.isPerspectiveCamera ? persp.fov : 0;
+    // Pixels per metre of vertical error at one metre — the projection's own
+    // scale. Without a canvas height the error rule simply does not fire.
+    const pixelScale = fov > 0 && viewportPx > 0
+      ? viewportPx / (2 * Math.tan((fov * Math.PI) / 360))
+      : 0;
+    const picked = selectLodNodes({
+      x0: extent[0], z0: extent[1], x1: extent[2], z1: extent[3],
+      leafM,
+      levels: MAX_LOD_LEVELS,
+      minLodDistance: flat ? 0 : MIN_LOD_DISTANCE_M,
+      camX: cam.x, camY: cam.y, camZ: cam.z,
+      boundsOf,
+      levelErrorM,
+      pixelScale,
+      inView: (x, z, size, minY, maxY) => {
+        box.min.set(x, minY, z);
+        box.max.set(x + size, maxY, z + size);
+        return frustum.intersectsBox(box);
+      },
+    });
+    grow(picked.length);
+    const arr = nodeAttr.array as Float32Array;
+    for (let i = 0; i < picked.length; i += 1) {
+      const n = picked[i];
+      arr[i * 4] = n.x;
+      arr[i * 4 + 1] = n.z;
+      arr[i * 4 + 2] = n.size;
+      arr[i * 4 + 3] = n.morph;
+    }
+    nodeAttr.needsUpdate = true;
+    geo.instanceCount = picked.length;
+    nodes = picked.length;
+  }
+
+  mesh.onBeforeRender = (renderer, _scene, camera) => {
+    // Shadow passes arrive with the light's orthographic camera; the terrain
+    // does not cast, so there is nothing to select for them.
+    if (!(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return;
+    viewportPx = renderer.getDrawingBufferSize(bufferSize).y;
+    update(camera);
+  };
+
+  return {
+    mesh,
+    setField(next, baseStepM, anchorX, anchorZ) {
+      relief = next;
+      baseStep = baseStepM > 0 ? baseStepM : finestStep(next) || FALLBACK_BASE_STEP_M;
+      leafM = PATCH_N * baseStep;
+      farPyr = buildFar(next?.overview ?? null);
+      nearRect = null;
+      nearPyr = next ? buildNear(next, baseStep, anchorX, anchorZ) : null;
+      let min = 0;
+      let max = 0;
+      for (const pyr of [nearPyr, farPyr]) {
+        const base = pyr?.levels[0];
+        if (!pyr || !base) continue;
+        for (let j = 0; j < base.rows; j += 1) {
+          const row = j * pyr.texW;
+          for (let i = 0; i < base.cols; i += 1) {
+            const v = pyr.data[row + i];
+            if (v < min) min = v;
+            if (v > max) max = v;
+          }
+        }
+      }
+      globalRange = { min, max };
+      flat = !(max > min);
+      levelErrorM = computeLevelError();
+      uploadPyramids();
+    },
+    setExtent(rect) {
+      extent = [rect[0], rect[1], rect[2], rect[3]];
+      uExtent.value.set(rect[0], rect[1], rect[2], rect[3]);
+    },
+    setMaterial(mat) {
+      patchTerrainLod(mat);
+      mesh.material = mat;
+    },
+    nodeCount: () => nodes,
+    dispose() {
+      geo.dispose();
+      placeholder.dispose();
+      nearTex?.dispose();
+      farTex?.dispose();
+      nearTex = null;
+      farTex = null;
+      // The pyramids are module-shared uniforms and outlive this closure, so
+      // they are handed back explicitly — the rule `setNaturalGroundField(null)`
+      // follows for the same reason.
+      uNear.value = neutralTex;
+      uFar.value = neutralTex;
+      uNearRect.value.set(0, 0, -1, -1);
+    },
+  };
+}

@@ -24,19 +24,28 @@
  *    different lifetime from everything else here. This file feeds it the
  *    shapes, the anchor and the LOD beat.
  *
- * GROUND_Y DISCIPLINE, as amended by the world relief (E8 task 3). The ground
- * is still one height and one only — `ground_y(x, z)`, which since § A16 is
- * the heightfield sampled at that point instead of the constant 0. Nothing
- * here invents a height of its own: the base plate and every painted area are
- * cut on the FIELD's grid (`@anima/scene-render` `gridMesh`) and every vertex
- * is lifted by `sampleGroundHeight` at its own world x/z — the sampler that
- * reads the TRIANGULATED surface the mesh really is, so plate, areas, props
- * and figures describe one surface inside a cell and not merely at its
- * corners. Stacked areas are still separated by `renderOrder` + a depth
- * bias and NOT by a height ladder; the sub-millimetre hairline lift
- * (`AREA_Y_STEP_M`, capped at `AREA_Y_MAX_M`) now rides ON TOP of the sampled
- * height, which is the one place where "the areas sit a hair above the plate"
- * is allowed to be true.
+ * GROUND_Y DISCIPLINE, as rewritten by "Ein Boden" E2. The ground is one
+ * height and one only — `ground_y(x, z)`, which since § A16 is the heightfield
+ * sampled at that point instead of the constant 0, and since E2 there is ONE
+ * reading of it: `@anima/scene-render` `heightAt`, bilinear on the data,
+ * finest loaded tile before overview. It is what the figures stand on, what
+ * the props and the scatter and the undergrowth sit on, what the painted areas
+ * are draped by, what a click resolves against — and, through the CDLOD
+ * terrain (`scene/terrainLod.ts`), what the picture is BUILT from: the vertex
+ * shader fetches the very same lattice with the very same bilinear mix.
+ *
+ * WHAT DIED WITH IT: the "drawn ground" sampler that re-read the field along
+ * the triangles of the one big base plate. That plate is gone, and with it the
+ * 64 m cells its 40 000-cell budget had coarsened the live world to — the
+ * measured 2.433 m by which the surface a figure stood on differed from the
+ * field the server judged its walk by. The base mesh's `gridPlate` and the ONE
+ * world-wide cell size that went with it are gone too: the painted-area DRAPES
+ * that live until E3 are each cut on their own budget now (`areaCellM`).
+ *
+ * Stacked areas are still separated by `renderOrder` + a depth bias and NOT by
+ * a height ladder; the sub-millimetre hairline lift (`AREA_Y_STEP_M`, capped
+ * at `AREA_Y_MAX_M`) rides ON TOP of the sampled height, which is the one
+ * place where "the areas sit a hair above the ground" is allowed to be true.
  *
  * REFETCH. Neither the terrain nor the relief is ever withheld, so both are
  * fetched ONCE and again only when the worldmap poll reports a different
@@ -53,14 +62,15 @@
  */
 import * as THREE from 'three';
 import { AREA_POLYGON_OFFSET, buildAreaGeometry,
-  gridPlate, gridStepFor, pickVariant, pointInRing,
-  propGroundFit, sampleCompositeGroundHeight, sampleCompositeHeight,
+  gridStepFor, heightAt as worldHeightAt, pickVariant, pointInRing,
+  propGroundFit, rayGroundHit,
   scatterCellInstances, scatterCellSeed, scatterClearM,
   SCATTER_CELL_M, subdivideOnGrid,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
   worldHeightRange } from '@anima/scene-render';
 import type { GridBox, Point2, ScatterFootprint, ScatterInstance,
-  SurfaceMaterialSpec, WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
+  SurfaceMaterialSpec, WorldHeightField, WorldHeightTileStats,
+  WorldHeightTiles } from '@anima/scene-render';
 import { fetchHeightfield, fetchHeightTiles, fetchTerrain } from '../api';
 import type { HeightTileBatch } from '../api';
 import { localToWorld } from '../game/enterLocation';
@@ -83,6 +93,7 @@ import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
   instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterGroundOffset,
   scatterSway, scatterTargetH } from './scatterLod';
 import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
+import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import type { UndergrowthArea } from './undergrowth';
 
@@ -699,28 +710,27 @@ export interface Ground {
    */
   setHeightAnchor(x: number, z: number): void;
   /**
-   * The world's ground height at a point (§ A16), in metres.
+   * The world's ground height at a point (§ A16), in metres — THE one answer.
    *
-   * THE one height source of the client: the base plate and the painted areas
-   * are draped with it, the figures stand on it, and `main.ts` `groundY()`
-   * falls back to it wherever no location's own model answers. 0 until the
-   * field has arrived, and 0 for ever in a world nobody has shaped — the flat
-   * world is a relief like any other, it just happens to be level.
+   * Since "Ein Boden" E2 there is no second one. It is the bilinear reading of
+   * the data (`@anima/scene-render` `heightAt`: finest loaded tile, else
+   * overview), which is at once
+   *
+   *  - what the SERVER judges a walk by (`heightfield.world_height` →
+   *    `POST /play/pos`), so the client's mirror of the slope rule predicts
+   *    the same refusals;
+   *  - what the PICTURE is built from — the CDLOD terrain fetches this very
+   *    lattice in its vertex shader (`scene/terrainLod.ts`), asserted equal to
+   *    1e-4 in `smoke_terrain_lod.mjs`;
+   *  - and what every figure, prop, tuft and marker stands on.
+   *
+   * It used to be two functions (`heightAt` for the drawn triangles,
+   * `fieldHeightAt` for the field) that differed by up to 2.433 m on the live
+   * world. 0 until the field has arrived, and 0 for ever in a world nobody has
+   * shaped — the flat world is a relief like any other, it just happens to be
+   * level.
    */
   heightAt(x: number, z: number): number;
-  /**
-   * The world's ground as THE SERVER reads it — bilinear, not triangulated.
-   *
-   * The other height, and the difference is a rule rather than a picture: the
-   * field is defined bilinear (§ A16) and the walking gate judges a step by
-   * THAT reading (`relief.ground_lift_at` → `POST /play/pos`). A mesh cannot
-   * be bilinear, so `heightAt` answers the drawn surface, which inside a cell
-   * differs by up to a quarter of its twist — a measured metre on a steep
-   * hill. Everything that has to PREDICT the server (the client's mirror of
-   * the slope rule) asks here; everything that has to touch the ground the
-   * player sees asks `heightAt`.
-   */
-  fieldHeightAt(x: number, z: number): number;
   // `maxHeightIn` and `heightRangeIn` — the highest ground inside a world
   // rectangle and how much it moves there — went with the veil (contract v6
   // Nr. 8): they existed to hang the fog quads and to decide which of them was
@@ -729,15 +739,20 @@ export interface Ground {
   // `@anima/scene-render`) rather than staying as dormant code; a future fog
   // round writes them against the field it actually needs.
   /**
-   * Where a pointer ray meets the DRAWN ground, or `null` when it misses.
+   * Where a pointer ray meets the ground, or `null` when it misses.
    *
    * The click-to-walk goal used to be read against a horizontal plane at the
    * figure's own height, which on a slope puts the goal metres away from the
-   * pointer (at 40° and a flat camera angle: 7-14 m). The draped plate is the
-   * surface the player sees, so that is what the ray asks.
+   * pointer (at 40° and a flat camera angle: 7-14 m). Then it was a raycast
+   * against the one big drawn plate — which since E2 does not exist, and could
+   * not be trusted if it did: the CDLOD terrain's triangles change with the
+   * camera, so the same pixel would answer a different goal at a different
+   * zoom. It is solved ANALYTICALLY against the field instead
+   * (`rayGroundHit`), which is the same surface `heightAt` describes and the
+   * same one the server will judge the walk on.
    *
-   * Costs a brute-force triangle test over the plate (three.js has no BVH) —
-   * fine for a click, never for a frame.
+   * Costs a march at the lattice step plus a bisection — a few hundred
+   * bilinear reads for a click, and nothing at all per frame.
    */
   groundPointAt(ray: THREE.Raycaster): THREE.Vector3 | null;
   /** Counts how often the RELIEF was taken over — a signature of its own,
@@ -949,11 +964,23 @@ export function createGround(): Ground {
    * deliberately so: nothing waits for the field, the ground is simply draped
    * again when it lands.
    *
-   * MUTATED IN PLACE, never replaced: `heightAt` runs per vertex of the plate
-   * and per figure per frame, and a fresh wrapper object per call would be a
-   * few hundred thousand allocations for nothing.
+   * MUTATED IN PLACE, never replaced: `heightAt` runs per figure per frame and
+   * per texel of the terrain pyramid, and a fresh wrapper object per call
+   * would be a few hundred thousand allocations for nothing.
+   *
+   * `stats`/`mipLevelsM` are the E1 addendum (§ G2): per tile a height span
+   * and an exact vertical error bound per mip level. Nothing that STANDS on
+   * the ground reads them — they steer the terrain quadtree (which node at
+   * which level, and whether its error is worth another split).
    */
-  const relief: WorldHeightTiles = { tileM: 0, overview: null, tiles: new Map() };
+  const relief: WorldHeightTiles = {
+    tileM: 0, overview: null, tiles: new Map(),
+    stats: new Map<string, WorldHeightTileStats>(), mipLevelsM: [],
+  };
+  /** The server's FINE step in metres (`tile_step_m`) — the lattice every rule
+   *  reads and the one the terrain's leaf node is sized from. Held apart from
+   *  the overview's own `step_m`, which coarsens with the world. */
+  let tileStepM = 0;
   let loadedHeightSig: string | null = null;
   let heightRev = 0;
   /** Every tile the world HAS a ground in (`tiles` of `GET /play/heightfield`).
@@ -989,45 +1016,42 @@ export function createGround(): Ground {
    *  ray that starts too high costs nothing while one that starts too low is
    *  the bug above. */
   let fieldRange = { min: 0, max: 0 };
-  /** The cell size plate and areas are cut at — ONE for the whole ground, so
-   *  the two always meet on the same lines (`gridStepFor`, gridMesh.ts). 0
-   *  while there is no relief at all: then nothing is subdivided. */
-  let cellM = 0;
 
   /** Has any relief arrived at all — the overview, or at least one tile? */
   const hasRelief = (): boolean => !!relief.overview || relief.tiles.size > 0;
 
   /**
-   * The ground under a point — the DRAWN one
-   * (`sampleCompositeGroundHeight`), not the bilinear field.
+   * THE ground under a point — bilinear on the data, and the only reading
+   * there is ("Ein Boden" E2).
    *
-   * The mesh is triangles: within a cell the plate is two planes, and a vertex
-   * or a figure placed at the field's bilinear reading sits off that surface by
-   * up to a quarter of the cell's twist — a measured metre on a 5 m hill with a
-   * 10 m falloff. ONE sampler for the plate, the areas, the props and every
-   * figure is what makes them describe one surface (§ A16). `cellM` is what
-   * ties it to the mesh: it is the size the ground was really cut at, and the
-   * sampler answers for the very cell the plate is made of.
+   * It used to have a twin: this one answered the DRAWN surface (the two
+   * triangles the base plate had cut its cell into) while `fieldHeightAt`
+   * answered the field, and on the live world the two stood up to 2.433 m
+   * apart because the mesh budget had coarsened the plate to 64 m cells. The
+   * plate is gone; the terrain is now built by sampling this very function in
+   * the vertex shader (`scene/terrainLod.ts`), so the surface the player sees,
+   * the number the rules read and the number the SERVER reads are one.
    */
   const heightAt = (x: number, z: number): number =>
-    (hasRelief() ? sampleCompositeGroundHeight(relief, x, z, cellM) : GROUND_Y);
-
-  /** The BILINEAR reading of the field — the server's own (see the interface).
-   *  Used by the walk-rule mirror, never by anything that is drawn, and it goes
-   *  through the same ladder: the server judges a step by the fine TILE
-   *  (`heightfield.world_height`), so a mirror reading the overview would
-   *  predict a refusal on ground nobody is walking on. */
-  const fieldHeightAt = (x: number, z: number): number =>
-    (hasRelief() ? sampleCompositeHeight(relief, x, z) : GROUND_Y);
+    (hasRelief() ? worldHeightAt(relief, x, z) : GROUND_Y);
 
   // THE GROUND HOOK (E8 task 4): a location's tile stands on the ground under
   // its centre, and this is where `scene/tiles.ts` gets that height from. The
-  // sampler is a closure over `field`/`cellM`, so it stays correct across every
-  // refetch without anyone re-registering it — and it is the DRAWN ground on
-  // purpose: the tile has to sit on the surface the player sees. Under a
-  // footprint that levels its ground (`level_ground`, § A16.1, opt-in) the two
-  // readings agree anyway, because the server flattens the field there.
+  // sampler is a closure over `relief`, so it stays correct across every
+  // refetch without anyone re-registering it.
   setWorldGround(heightAt);
+
+  /**
+   * THE TERRAIN ITSELF — one instanced patch, a quadtree, and the height taken
+   * from the lattice above in the vertex shader (`scene/terrainLod.ts`).
+   *
+   * It is created once and lives as long as this ground does: what changes is
+   * the field it samples (`setField`, on every relief arrival), the rectangle
+   * it covers (`setExtent`, when the world frame moves) and the material it
+   * wears (`setMaterial`, when the default kind or its texture changes).
+   */
+  const terrain = createTerrainLod();
+  group.add(terrain.mesh);
 
   /**
    * THE LAYER NOBODY AUTHORED (§ A9), grown where it is seen.
@@ -1048,12 +1072,13 @@ export function createGround(): Ground {
   group.add(undergrowth.group);
 
   /** Lift a flat vertex list onto the ground, in place. `pos` is `[x, y, z, …]`
-   *  in WORLD metres (both the plate and the subdivided areas are), so the
-   *  sample point is the vertex itself. */
+   *  in WORLD metres (the subdivided area drapes are), so the sample point is
+   *  the vertex itself — and the sampler is the ONE sampler, the same the
+   *  terrain's own vertices are placed by. */
   function liftToField(pos: number[]): void {
     if (!hasRelief()) return;
     for (let i = 0; i < pos.length; i += 3) {
-      pos[i + 1] += sampleCompositeGroundHeight(relief, pos[i], pos[i + 2], cellM);
+      pos[i + 1] += heightAt(pos[i], pos[i + 2]);
     }
   }
 
@@ -1086,7 +1111,8 @@ export function createGround(): Ground {
   let footprints: readonly ScatterFootprint[] = [];
   let builtFpSig: string | null = null;
 
-  let baseMesh: THREE.Mesh | null = null;
+  /** What the terrain's material was last built for — the default kind and the
+   *  frame, so a poll that changes neither costs no material at all. */
   let baseKey = '';
   const areaMeshes: AreaMesh[] = [];
   /** Where the camera stood at the last `tickScatterLod` — the scatter LOD's
@@ -1243,94 +1269,91 @@ export function createGround(): Ground {
   }
 
   /**
-   * The cell size the WHOLE ground is cut at, in metres — 0 for a flat world,
-   * where nothing is subdivided at all.
+   * The cell size ONE painted-area DRAPE is cut at, in metres — 0 where the
+   * ground under it does not move, and nothing is subdivided at all.
    *
-   * ONE number for the plate and every painted area (`gridStepFor` doubles the
-   * field's own step until the plate stays under `GRID_MAX_CELLS`). A plate
-   * cut coarser than the areas on it would have the areas sampling the field
-   * where the plate only interpolates between two of its vertices — the
-   * meadow would sink into the hill it is painted on.
+   * IT IS PER AREA, and since E2 it has to be. Until then this was ONE number
+   * for the base plate and every drape on it: they had to be cut on the same
+   * lines, so the number was the plate's — `gridStepFor` doubling the
+   * OVERVIEW's step until a mesh over the whole world frame stayed under
+   * `GRID_MAX_CELLS`, measured 64 m in the live world. Both surfaces were then
+   * the same chord of the field and lay flush.
    *
-   * IT IS THE OVERVIEW'S STEP THIS STARTS FROM, not the tiles' finer one, and
-   * that is a mesh decision rather than a height one: the plate spans the whole
-   * world frame and its budget is 40 000 cells whatever raster it samples. The
-   * tiles sharpen every CORNER of that mesh (each vertex is lifted through the
-   * composite ladder) and every reading the rules take — they do not make the
-   * plate finer. The seam where the loaded tiles end sits at 560 m, behind the
-   * scene haze (`heightTiles.ts`).
+   * The plate is gone: the terrain draws the field itself, down to the 2 m
+   * lattice under the camera. A drape still cut at 64 m would be a chord of
+   * that surface — up to 1.584 m (p95) below it on the measured world — and a
+   * meadow a metre and a half inside the hill it is painted on is a meadow
+   * nobody sees. So each drape gets its OWN budget over its OWN polygon: a
+   * 200 m meadow is cut at the fine step and lies on the terrain to the
+   * centimetre, and only a wood spanning kilometres is coarsened at all.
    *
-   * A field of nothing but zeroes is FLAT and says so: today's worlds have no
-   * relief at all, and giving them forty thousand cells for a surface that is
-   * level would be paid every rebuild for nothing.
+   * Different areas may therefore be cut on different lines, which used to be
+   * forbidden and now costs nothing: they are separate meshes, every vertex of
+   * each lands on the ONE field, and nothing has to meet anything.
+   *
+   * THE DRAPES ARE A TRANSITIONAL STATE — E3 replaces the whole stack of
+   * transparent area meshes with one layer cut in the terrain material, and
+   * this number goes with them.
+   *
+   * A field of nothing but zeroes is FLAT and says so: giving it forty thousand
+   * cells for a surface that is level would be paid every rebuild for nothing.
    */
-  function cellFor(bounds: WorldBounds | null): number {
-    const step = relief.overview?.step_m ?? 0;
+  function areaCellM(pos: readonly number[]): number {
+    const step = tileStepM > 0 ? tileStepM : (relief.overview?.step_m ?? 0);
     const box = reliefBox();
     if (!(step > 0) || !box) return 0;
     if (fieldRange.min === 0 && fieldRange.max === 0) return 0;
-    const [px0, pz0, px1, pz1] = plateExtent(bounds);
-    // The budget is spent where there IS relief: the field's box, clipped to
-    // what the plate shows of it. A hill in the corner of a huge world keeps
-    // the native cell size instead of paying for the plain around it.
-    const x0 = Math.max(px0, box.x0);
-    const z0 = Math.max(pz0, box.z0);
-    const x1 = Math.min(px1, box.x1);
-    const z1 = Math.min(pz1, box.z1);
-    if (!(x1 > x0) || !(z1 > z0)) return 0;   // the relief is off the plate
+    let ax0 = Infinity;
+    let az0 = Infinity;
+    let ax1 = -Infinity;
+    let az1 = -Infinity;
+    for (let i = 0; i + 2 < pos.length; i += 3) {
+      if (pos[i] < ax0) ax0 = pos[i];
+      if (pos[i] > ax1) ax1 = pos[i];
+      if (pos[i + 2] < az0) az0 = pos[i + 2];
+      if (pos[i + 2] > az1) az1 = pos[i + 2];
+    }
+    // The budget is spent where there IS relief: the polygon's own box, clipped
+    // to the field's. A meadow painted out on the flat rim of the world needs
+    // no subdivision at all.
+    const x0 = Math.max(ax0, box.x0);
+    const z0 = Math.max(az0, box.z0);
+    const x1 = Math.min(ax1, box.x1);
+    const z1 = Math.min(az1, box.z1);
+    if (!(x1 > x0) || !(z1 > z0)) return 0;   // the area is off the relief
     return gridStepFor(x0, z0, x1, z1, step);
   }
 
   /**
-   * The plane under everything, in the look of the unpainted ground — and
-   * since E8 the LANDSCAPE under everything.
+   * The LANDSCAPE under everything — the frame it covers and the look it wears.
    *
-   * Without a relief it stays the two triangles it always was. With one it is
-   * a grid of cells on the field's own lines (`gridPlate`), every vertex
-   * lifted by the sampled height: the plate IS the world's terrain, and the
-   * painted areas are cut on the same grid so they lie on it instead of
-   * cutting through it.
+   * There is no geometry to build here any more: `scene/terrainLod.ts` places
+   * every vertex from the height lattice in its own vertex shader, per frame,
+   * at the resolution the camera deserves. What this function still owns is
+   * the two things the terrain cannot know — how far the world reaches
+   * (`setExtent`) and what the unpainted ground looks like (`setMaterial`).
    *
-   * The plate is built in WORLD coordinates and the mesh sits at the origin —
-   * not at the plate's centre with local coordinates around it. That is what
-   * lets one and the same sampled height serve the plate, the areas and the
-   * figures without a transform in between, and it costs nothing: a mesh's
-   * bounding sphere is what culls it, and that is computed either way.
+   * ONE UV UNIT IS ONE METRE, which is what the painted-area drapes have used
+   * all along: the base plate used to stretch a single UV span over its whole
+   * edge, so a world that grew re-scaled its own grass. The terrain reads its
+   * UV from the world position in the vertex shader, so the repeat comes out
+   * of the surface library's own `sizeM` and stays put whatever the frame does.
+   *
+   * The material is rebuilt only when the DEFAULT KIND changes — not on a
+   * moved frame, not on a new relief: neither can change what the ground is
+   * made of, and a rebuild would recompile a program and re-clone a texture
+   * for a picture that does not move.
    */
   function rebuildBase(bounds: WorldBounds | null): void {
     const [wantX0, wantZ0, wantX1, wantZ1] = plateExtent(bounds);
+    terrain.setExtent([wantX0, wantZ0, Math.max(wantX1, wantX0 + 1),
+                       Math.max(wantZ1, wantZ0 + 1)]);
     const kind = payload?.default_kind || '';
-    const key = `${kind}|${wantX0}|${wantZ0}|${wantX1}|${wantZ1}|${heightRev}`;
-    if (baseMesh && key === baseKey) return;
-    if (baseMesh) {
-      group.remove(baseMesh);
-      baseMesh.geometry.dispose();
-      baseMesh = null;
-      drain(baseOwned);
-    }
+    const key = `${kind}|${surfaceOf(kind)}`;
+    if (key === baseKey) return;
     baseKey = key;
-    const plate = gridPlate(wantX0, wantZ0, Math.max(wantX1, wantX0 + 1),
-                            Math.max(wantZ1, wantZ0 + 1), cellM,
-                            relief.overview?.origin_x ?? 0,
-                            relief.overview?.origin_z ?? 0,
-                            reliefBox());
-    liftToField(plate.pos);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(plate.pos, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(plate.uv, 2));
-    geo.setIndex(plate.index);
-    geo.computeVertexNormals();
-    geo.computeBoundingSphere();
-    const w = plate.maxX - plate.minX;
-    const d = plate.maxZ - plate.minZ;
-    // The base tiles over its WHOLE edge, so one UV unit is `w` metres wide
-    // and `d` deep. Non-square worlds would stretch the texture; the shorter
-    // edge decides, which repeats a little more often than it stretches.
-    const mesh = new THREE.Mesh(geo, materialFor(kind, Math.min(w, d), baseOwned));
-    mesh.receiveShadow = true;
-    mesh.renderOrder = 0;
-    baseMesh = mesh;
-    group.add(mesh);
+    drain(baseOwned);
+    terrain.setMaterial(materialFor(kind, 1, baseOwned));
   }
 
   /**
@@ -2255,8 +2278,9 @@ export function createGround(): Ground {
     // one thing a subdivision would not change about them.
     let cutPos = pos;
     let cutUv = uv;
-    if (cellM > 0 && ov) {
-      const cut = subdivideOnGrid(pos, uv, cellM, ov.origin_x, ov.origin_z);
+    const cell = areaCellM(pos);
+    if (cell > 0 && ov) {
+      const cut = subdivideOnGrid(pos, uv, cell, ov.origin_x, ov.origin_z);
       cutPos = cut.pos;
       cutUv = uv ? cut.uv : null;
       liftToField(cutPos);
@@ -2474,7 +2498,20 @@ export function createGround(): Ground {
       // would be a piece of a world that no longer exists, sitting in front of
       // the overview that replaced it — and the sampler prefers the tile.
       relief.tiles.clear();
+      relief.stats?.clear();
       relief.tileM = Number(payload.tile_m) || 0;
+      tileStepM = Number(payload.tile_step_m) || 0;
+      // The quadtree half of the payload (E1 addendum § 4). `tile_stats` is
+      // capped at the server's `TILE_STATS_MAX`; whatever is missing rides in
+      // with the tiles themselves, and a node with no statistics simply falls
+      // back to the field's whole range — which culls nothing and is never
+      // wrong.
+      relief.mipLevelsM = Array.isArray(payload.mip_levels_m)
+        ? payload.mip_levels_m.map(Number) : [];
+      for (const [key, s] of Object.entries(payload.tile_stats ?? {})) {
+        relief.stats?.set(key, { min: Number(s.min) || 0, max: Number(s.max) || 0,
+                                 err: (s.err ?? []).map(Number) });
+      }
       tileIndex = new Set<string>(Array.isArray(payload.tiles) ? payload.tiles : []);
       anchorTile = null;   // …so the next anchor recomputes the want set
       loadedHeightSig = payload.sig || heightSig;
@@ -2486,6 +2523,11 @@ export function createGround(): Ground {
       // through shared uniforms — nothing recompiles, and a world with no
       // relief at all switches the stage off instead of shading against zero.
       setNaturalGroundField(payload);
+      // …and the TERRAIN takes it over here: the overview becomes its far
+      // pyramid, the (now empty) tile set its near one. Mip levels are derived
+      // by decimation on the client, which is exact because every coarse
+      // lattice is a subset of the fine one (§ G2).
+      terrain.setField(relief, tileStepM, anchorX, anchorZ);
       // The tiles ray their ground from above the WORLD, so the relief moves
       // the start of that ray — see `setWorldRayStart`.
       setWorldRayStart(fieldRange.max);
@@ -2529,6 +2571,17 @@ export function createGround(): Ground {
         origin_x: grid.origin_x, origin_z: grid.origin_z, step_m: step,
         rows: grid.rows, cols: grid.cols, heights: grid.heights,
       });
+      // The tile carries its own quadtree statistics since E1 (§ G2). It may
+      // already be in the map from `GET /play/heightfield`; the tile's own copy
+      // is the same arithmetic on the same raster, so overwriting is a no-op
+      // that costs nothing and keeps the uncapped case complete.
+      if (grid.stats) {
+        relief.stats?.set(key, {
+          min: Number(grid.stats.min) || 0,
+          max: Number(grid.stats.max) || 0,
+          err: (grid.stats.err ?? []).map(Number),
+        });
+      }
       taken += 1;
     }
     return taken;
@@ -2597,7 +2650,13 @@ export function createGround(): Ground {
           if (r.min < fieldRange.min) fieldRange.min = r.min;
         }
         setWorldRayStart(fieldRange.max);
-        cellM = cellFor(lastBounds);
+        // The near pyramid is rebuilt from the tiles that now stand, through
+        // `heightAt` itself — so the texture the vertex shader reads carries
+        // the tile-first precedence and answers the same number every rule
+        // does. Its window is the loaded tiles plus a margin, and out in that
+        // margin near and far agree, which is what makes the switch between
+        // them invisible.
+        terrain.setField(relief, tileStepM, anchorX, anchorZ);
         await rebuildAreas();
         rebuildBase(lastBounds);
       }
@@ -2692,7 +2751,6 @@ export function createGround(): Ground {
         ok = false;
       }
     }
-    cellM = cellFor(bounds);
     // A failed terrain fetch does NOT cost the relief its rebuild: the areas
     // are re-cut from the payload that stands, and standing on the old ground
     // while the world is draped around it is the one state that would look
@@ -2729,7 +2787,6 @@ export function createGround(): Ground {
         // have to be sampled again around the new footprints (finding B18).
         // No refetch for that: neither the painted ground nor the relief has
         // changed.
-        cellM = cellFor(bounds);
         rebuildBase(bounds);
         if (!fpMoved) {
           // THE IDLE POLL IS THE TILE LOADER'S SECOND OCCASION (§ A16.3): the
@@ -2783,11 +2840,17 @@ export function createGround(): Ground {
       void refreshTiles();
     },
     heightAt,
-    fieldHeightAt,
     groundPointAt(ray) {
-      if (!baseMesh) return null;
-      const hits = ray.intersectObject(baseMesh, false);
-      return hits.length ? hits[0].point.clone() : null;
+      if (!hasRelief()) return null;
+      const o = ray.ray.origin;
+      const d = ray.ray.direction;
+      // The slab the march is clipped to is the field's own range — the same
+      // number the tile ray starts from (`setWorldRayStart`), and it only ever
+      // grows within a signature, so a ray never starts inside a hill it
+      // cannot see.
+      const hit = rayGroundHit(relief, o.x, o.y, o.z, d.x, d.y, d.z,
+                               { minY: fieldRange.min, maxY: fieldRange.max });
+      return hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
     },
     heightRevision: () => heightRev,
     // THE OVERVIEW FIELD ITSELF, for the readers that draw the relief instead
@@ -2857,11 +2920,11 @@ export function createGround(): Ground {
     revision: () => rev,
     dispose() {
       clearAreas();
-      if (baseMesh) {
-        group.remove(baseMesh);
-        baseMesh.geometry.dispose();
-        baseMesh = null;
-      }
+      // The terrain's height pyramids are shared module uniforms and outlive
+      // this closure, so they are handed back explicitly — the very reason the
+      // ground shader's own field is handed back a few lines below.
+      group.remove(terrain.mesh);
+      terrain.dispose();
       drain(baseOwned);
       drain(areaOwned);
       // The height texture of the ground shader is module state, not a member

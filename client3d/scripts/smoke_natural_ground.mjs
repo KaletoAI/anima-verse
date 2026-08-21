@@ -217,6 +217,9 @@ const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const NG_SRC = join(ROOT, 'client3d/src/scene/naturalGround.ts');
 const MATH_SRC = join(ROOT, 'client3d/src/scene/naturalGroundMath.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
+/** The CDLOD terrain — since "Ein Boden" E2 the ground MESH lives here, while
+ *  `ground.ts` keeps the material, the drapes and the samplers. */
+const LOD_SRC = join(ROOT, 'client3d/src/scene/terrainLod.ts');
 const PREVIEW_SRC = join(ROOT, 'frontend/src/tabs/world/FloorPlanPreview.tsx');
 
 // ── The canvas the shared module draws its wave normal map on ──────────────
@@ -798,7 +801,7 @@ async function main() {
   check('the overview reaches the shader when height_sig moves',
     /heightRev \+= 1;[\s\S]{0,600}?setNaturalGroundField\(payload\);/.test(groundSrc), true);
   check('…and is handed back on teardown',
-    /dispose\(\) \{[\s\S]{0,600}?setNaturalGroundField\(null\);/.test(groundSrc), true);
+    /dispose\(\) \{[\s\S]{0,1200}?setNaturalGroundField\(null\);/.test(groundSrc), true);
   check('…twice in the file and nowhere else',
     groundSrc.split('setNaturalGroundField(').length - 1, 2);
   const preview = await readFile(PREVIEW_SRC, 'utf8');
@@ -820,8 +823,13 @@ async function main() {
   check('…and a kind without a fringe gets neither refinement nor attribute',
     /const band = ring \? ngRefineEdgeBand\(cutPos, cutUv, ring\) : null;/.test(groundSrc)
       && /if \(band\) \{\n\s*geo\.setAttribute\(NG_EDGE_ATTRIBUTE/.test(groundSrc), true);
-  check('…while the base plate takes the material without one',
-    /materialFor\(kind, Math\.min\(w, d\), baseOwned\)/.test(groundSrc), true);
+  // …and the TERRAIN takes the material without one. Since "Ein Boden" E2 the
+  // base plate is gone: `scene/terrainLod.ts` places the ground's vertices
+  // itself, and one UV unit is one metre there (the drapes' own convention),
+  // so the fourth argument is simply absent — no ring, no fringe, and nothing
+  // for the plate's old whole-edge UV span to stretch.
+  check('…while the terrain takes the material without one',
+    /terrain\.setMaterial\(materialFor\(kind, 1, baseOwned\)\)/.test(groundSrc), true);
   check('the drape writes the distance attribute the shader reads',
     /geo\.setAttribute\(NG_EDGE_ATTRIBUTE, new THREE\.Float32BufferAttribute\(band\.dist, 1\)\)/
       .test(groundSrc), true);
@@ -957,8 +965,11 @@ async function main() {
     [AREA_RENDER_ORDER_BASE + 1, AREA_RENDER_ORDER_BASE + 2, AREA_RENDER_ORDER_BASE + 3]);
   check('…which is the ladder ground.ts really builds',
     AREA_ORDER_RE.test(groundSrc), true);
-  check('the base plate stays where it was (it is opaque; the pass ignores it)',
-    /mesh\.renderOrder = 0;/.test(groundSrc), true);
+  // The terrain stays where it was (it is opaque; the sorted pass ignores it).
+  // Its mesh moved out of `ground.ts` with E2, so the order is pinned where it
+  // is now set — `scene/terrainLod.ts`.
+  check('the terrain stays at render order 0',
+    /mesh\.renderOrder = 0;/.test(await readFile(LOD_SRC, 'utf8')), true);
   check('the alpha is the LAST thing the stage does, after the colour clamp',
     drapeEdge.shader.fragmentShader.indexOf('diffuseColor.rgb = clamp(')
       < drapeEdge.shader.fragmentShader.indexOf('diffuseColor.a *='), true);

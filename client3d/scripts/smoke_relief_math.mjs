@@ -86,12 +86,15 @@
  *     through it.
  *
  * ============================================================================
- * [3b] THE CONTOUR CELL — why the ground is sampled TRIANGULATED
+ * [3b] THE CONTOUR CELL — the RED counter-probe of "Ein Boden" E2
  * ============================================================================
- * The cell test above only covers vertices that land ON the grid. An area's
- * OUTLINE runs where it was painted, so its vertices sit anywhere INSIDE a
- * cell — and there the bilinear field and the drawn mesh are two different
- * surfaces. Measured case, from the regime the first version called safe:
+ * THIS SECTION USED TO BE THE OPPOSITE CLAIM. Until E2 the client sampled a
+ * "drawn" ground: it re-read the field along the two triangles its base plate
+ * had cut a cell into, because vertices, props and figures had to sit on the
+ * MESH rather than on the field. That mesh is gone — the terrain is a CDLOD
+ * patch whose vertices come out of the lattice itself — and with it the second
+ * height. What stays is the NUMBER, kept here as a counter-probe: this is how
+ * far the two used to be apart, and it must not come back.
  *
  * A height area with `height_m` 5 and `falloff_m` 10, its corner at the world
  * origin (the quadrant x ≥ 0, z ≥ 0), on the 8 m grid a big world gets:
@@ -102,38 +105,17 @@
  * Take the first cell, [0…8] × [0…8]:
  *     h00 = 0 (0,0)   h10 = 0 (8,0)   h01 = 0 (0,8)   h11 = 4 (8,8)
  * and its middle, (4, 4), tx = tz = 0.5:
- *     bilinear      = (0 + 0 + 0 + 4) / 4                        = 1.00 m
+ *     bilinear        = (0 + 0 + 0 + 4) / 4                      = 1.00 m
  *     drawn (tz ≤ tx) = h00 + 0.5·(h10 − h00) + 0.5·(h11 − h10)  = 2.00 m
- * A metre apart — an area vertex lifted by the field sinks A FULL METRE under
- * the plate it lies on, and the plate comes through the meadow. The error
- * scales with the cell's TWIST |h00 + h11 − h01 − h10| (here 4), not with the
- * falloff, which is why "falloff ≥ one cell" was never the bound.
+ * A metre apart, and the error scales with the cell's TWIST
+ * |h00 + h11 − h01 − h10| (here 4) rather than with the falloff — which is why
+ * "falloff ≥ one cell" was never the bound, and why the fix had to be one
+ * sampler rather than a finer plate.
  *
- * The checks: the drawn sampler agrees with the plate's own surface (measured
- * barycentrically on the lifted plate triangles) at the cell middle AND at a
- * handful of other points, while the bilinear one is 1.00 m off at the middle
- * — the red counter-check of the first version.
- *
- * ============================================================================
- * [4] `maxWorldHeightIn` — the height of a fog quad
- * ============================================================================
- * THE FIELD is the one `smoke_world_height.mjs` uses: origin (-4, -4), step 4,
- * a single 5 m peak at (0, 0), heights [[0,0,0],[0,5,0],[0,0,0]].
- *   (a) the whole field, (-4,-4)…(4,4): the grid line x = 0 / z = 0 is sampled
- *       and hits the peak                                              -> 5
- *   It reads the DRAWN ground, so the numbers are the triangulated ones:
- *   (b) (1,1)…(3,3), a rectangle with no grid line inside: the maximum sits at
- *       the CORNER nearest the peak, and that corner lies in the cell
- *       [0…4]² whose corners are h00 = 5 (the peak), h10 = h01 = h11 = 0.
- *       At (1,1): tx = tz = 0.25, tz <= tx, so
- *       5 + 0.25·(0−5) + 0.25·(0−0)                                -> 3.75
- *       (the other three corners give 1.25 each)
- *   (c) (-2,-2)…(2,2) — the peak is INSIDE the rectangle and on none of its
- *       corners. The grid lines x = 0 and z = 0 are sampled, so the answer is
- *       the peak                                                    -> 5
- *       (the nearest corner alone reads 0 + 0.5·(0−0) + 0.5·(5−0) = 2.5 —
- *        that is the discriminating half of this case)
- *   (d) no field at all                                               -> 0
+ * The checks: `sampleWorldHeight` answers the bilinear 1.00 m; the drawn
+ * formula — written out HERE, in this file, because the package no longer
+ * carries it — answers 2.00 m; and the package exports no sampler that would
+ * answer the second number for anybody.
  *
  * ============================================================================
  * [5] A TRAVELLER'S HEIGHT AT ITS PROGRESS
@@ -220,7 +202,7 @@ const [grid, height, travel] = await loadPure(
   'packages/scene-render/src/worldHeight.ts',
   'client3d/src/scene/travelPath.ts');
 const { gridPlate, gridStepFor, subdivideOnGrid } = grid;
-const { maxWorldHeightIn, sampleGroundHeight, sampleWorldHeight } = height;
+const { sampleWorldHeight } = height;
 const { densifyPolyline, pointAtDistance } = travel;
 
 // --- [1] the cell size ------------------------------------------------------
@@ -345,7 +327,7 @@ for (const winding of [CORNERS, [...CORNERS].reverse()]) {
 check('every winding and rotation gives that same cell', sameCell, 6);
 
 // --- [3b] the contour cell --------------------------------------------------
-console.log('[3b] inside a cell the DRAWN ground is the triangulated one');
+console.log('[3b] the drawn-triangle reading is GONE — one sampler, the field');
 /** The field of the derivation: a 5 m area with a 10 m falloff whose corner is
  *  the world origin, rastered on an 8 m grid. */
 const CORNER_FIELD = (() => {
@@ -362,52 +344,39 @@ checkEq('the rastered field', CORNER_FIELD.heights,
   [[0, 0, 0, 0], [0, 4, 4, 4], [0, 4, 5, 5], [0, 4, 5, 5]]);
 check('bilinear in the middle of the contour cell',
   sampleWorldHeight(CORNER_FIELD, 4, 4), 1);
-check('the DRAWN ground there', sampleGroundHeight(CORNER_FIELD, 4, 4, 8), 2);
 
-/** The plate's own surface at (x, z): lift its vertices, find the triangle the
- *  point falls in and interpolate barycentrically. This is the mesh, measured
- *  — not a second formula. */
-function plateSurfaceAt(plate, lift, x, z) {
-  const pos = [...plate.pos];
-  for (let i = 0; i < pos.length; i += 3) pos[i + 1] += lift(pos[i], pos[i + 2]);
-  for (let t = 0; t + 2 < plate.index.length; t += 3) {
-    const v = [0, 1, 2].map((n) => plate.index[t + n] * 3);
-    const [ax, az] = [pos[v[0]], pos[v[0] + 2]];
-    const [bx, bz] = [pos[v[1]], pos[v[1] + 2]];
-    const [cx, cz] = [pos[v[2]], pos[v[2] + 2]];
-    const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-    if (Math.abs(den) < 1e-12) continue;
-    const wa = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / den;
-    const wb = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / den;
-    const wc = 1 - wa - wb;
-    if (wa < -1e-9 || wb < -1e-9 || wc < -1e-9) continue;
-    return wa * pos[v[0] + 1] + wb * pos[v[1] + 1] + wc * pos[v[2] + 1];
-  }
-  return NaN;
+/** The DEAD reading, written out here because the package no longer carries
+ *  it: the cell of `cellM` is split from its minimum corner to its maximum
+ *  one, so inside it the surface is one of two PLANES. This is what every
+ *  figure, prop and area vertex used to be placed by. */
+function drawnTriangle(field, x, z, cellM) {
+  const i = Math.floor((x - field.origin_x) / cellM);
+  const j = Math.floor((z - field.origin_z) / cellM);
+  const x0 = field.origin_x + i * cellM;
+  const z0 = field.origin_z + j * cellM;
+  const tx = (x - x0) / cellM;
+  const tz = (z - z0) / cellM;
+  const h00 = sampleWorldHeight(field, x0, z0);
+  const h10 = sampleWorldHeight(field, x0 + cellM, z0);
+  const h01 = sampleWorldHeight(field, x0, z0 + cellM);
+  const h11 = sampleWorldHeight(field, x0 + cellM, z0 + cellM);
+  return tz <= tx
+    ? h00 + tx * (h10 - h00) + tz * (h11 - h10)
+    : h00 + tz * (h01 - h00) + tx * (h11 - h01);
 }
-const CORNER_PLATE = gridPlate(0, 0, 24, 24, 8, 0, 0);
-const drawn = (x, z) => sampleGroundHeight(CORNER_FIELD, x, z, 8);
-for (const [x, z] of [[4, 4], [2, 6], [6, 2], [10, 3], [13, 17], [8, 8]]) {
-  check(`the plate's surface at (${x}, ${z}) IS the drawn sampler`,
-    plateSurfaceAt(CORNER_PLATE, drawn, x, z), drawn(x, z), 1e-9);
-}
-check('a bilinearly lifted vertex sinks under it by',
-  drawn(4, 4) - sampleWorldHeight(CORNER_FIELD, 4, 4), 1);
+check('what the drawn triangle used to answer there',
+  drawnTriangle(CORNER_FIELD, 4, 4, 8), 2);
+check('…the gap that is now gone', drawnTriangle(CORNER_FIELD, 4, 4, 8)
+  - sampleWorldHeight(CORNER_FIELD, 4, 4), 1);
+checkEq('and the package exports no sampler that answers the second number',
+  ['sampleGroundHeight', 'sampleCompositeGroundHeight', 'maxWorldHeightIn',
+    'worldHeightRangeIn'].filter((n) => n in height), []);
 
-// --- [4] the fog height -----------------------------------------------------
-console.log('[4] maxWorldHeightIn — what a fog quad has to clear');
+// --- [5] the traveller on the slope ----------------------------------------
 const FIELD = {
   origin_x: -4, origin_z: -4, step_m: 4, rows: 3, cols: 3,
   heights: [[0, 0, 0], [0, 5, 0], [0, 0, 0]],
 };
-check('the whole field', maxWorldHeightIn(FIELD, -4, -4, 4, 4), 5);
-check('a rectangle beside the peak', maxWorldHeightIn(FIELD, 1, 1, 3, 3), 3.75);
-check('a rectangle AROUND the peak (no corner sees it)',
-  maxWorldHeightIn(FIELD, -2, -2, 2, 2), 5);
-check('…its corners alone would say', sampleGroundHeight(FIELD, -2, -2), 2.5);
-check('no field at all', maxWorldHeightIn(null, -4, -4, 4, 4), 0);
-
-// --- [5] the traveller on the slope ----------------------------------------
 console.log('[5] a traveller stands on the ground under its progress');
 const ROUTE = [[-4, 0], [4, 0]];
 for (const [progress, expected] of [[0, 0], [2, 2.5], [4, 5], [6, 2.5], [8, 0]]) {

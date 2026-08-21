@@ -1341,13 +1341,15 @@ export function sampleRoomWalkables(tile: Tile, roomId: string, root: THREE.Obje
  *  because a traveller outside is sampled off the world field. The higher of the
  *  two wins (`game/ground.standY`), which is ALSO where both consumers of this
  *  function — the NPC placement and the walk/click height — inherit it from.
- *  Under a levelling footprint (`level_ground`, § A16.1) the world term IS the
- *  plateau, so the rule is a no-op there by construction.
+ *  Under a BUILT location the world term IS the plateau the bake stamped there
+ *  (§ G5, no flag any more since E1), so the rule is a no-op by construction.
  *
- *  The DRAWN sampler answers (`heightAt` via `setWorldGround`), not the bilinear
- *  field: the figure stands on the triangles that are on the screen. The walk
- *  gate keeps its own bilinear mirror (`main.ts` `reliefLiftAt`) — that one
- *  predicts the SERVER, and the server reads the field. */
+ *  THE ONE SAMPLER ANSWERS (`heightAt` via `setWorldGround`). It used to be
+ *  worth saying which of two: the client had a "drawn" height for the
+ *  triangles on the screen and a bilinear one for predicting the server, and
+ *  they were up to 2.433 m apart. Since "Ein Boden" E2 the terrain's own
+ *  vertices come out of the bilinear lattice, so there is one number and the
+ *  walk gate's mirror (`main.ts` `reliefLiftAt`) reads the very same one. */
 export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
   // No sampler yet = no world answer at all (NaN), not a flat 0: a tile whose
   // plateau is below zero must not be lifted to it by a missing field.

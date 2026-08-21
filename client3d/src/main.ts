@@ -2303,12 +2303,13 @@ async function startApp(username: string, role: string) {
    * TWO SOURCES, ADDED (E8 task 4, the rule itself is `game/ground.groundLift`
    * and hand-checked in `client3d/scripts/smoke_world_height.mjs`):
    *
-   *  - the WORLD relief under everything — `terrainGround.fieldHeightAt`, the
-   *    BILINEAR reading of the heightfield. Bilinear and not the drawn surface
-   *    (`heightAt`) on purpose: this function exists to predict what the
-   *    server will say, and the server reads the field, not our triangles.
-   *    Until task 4 this term was missing and the mirror knew scene relief
-   *    only — the rubber band on every world hill steeper than `max_slope_deg`.
+   *  - the WORLD relief under everything — `terrainGround.heightAt`, the
+   *    bilinear reading of the heightfield. It used to be a second member
+   *    (`fieldHeightAt`) because the client also had a "drawn" height that
+   *    followed its own triangles; since "Ein Boden" E2 there is one reading,
+   *    and it is the one the server judges by. Until task 4 this term was
+   *    missing and the mirror knew scene relief only — the rubber band on
+   *    every world hill steeper than `max_slope_deg`.
    *  - the SCENE relief of the innermost enclosing tile that HAS a field
    *    (`terrainLiftAt`, the payload's own grid — never `tileGroundY`, whose
    *    model skin is client-only and would refuse steps the server accepts).
@@ -2322,7 +2323,7 @@ async function startApp(username: string, role: string) {
       if (!tileContains(tile, x, z)) continue;
       patches.push({ area: tile.area, lift: terrainLiftAt(tile, x, z) });
     }
-    return groundLift(terrainGround.fieldHeightAt(x, z), patches);
+    return groundLift(terrainGround.heightAt(x, z), patches);
   }
 
   /**

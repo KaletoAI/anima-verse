@@ -166,7 +166,7 @@
  * and the drawn sampler the client uses agree on them to the digit.
  *
  * ============================================================================
- * [8] THE TILED FIELD — `sampleCompositeHeight` and the composite rectangles
+ * [8] THE TILED FIELD — `heightAt`, the ONE ladder over both rasters
  * ============================================================================
  * § A16.3. Since v2 the same landscape arrives as TWO rasters: a coarsenable
  * overview over everything, and 256 m tiles in the always-fine 4 m step. The
@@ -228,48 +228,82 @@
  *      the walk across the seam drops 6.9982421875 m. The continuity check
  *      bites.
  * ============================================================================
- * [8e] THE DRAWN GROUND OF THE COMPOSITE — `sampleCompositeGroundHeight`
+ * [8e] THE DRAWN GROUND IS GONE — one sampler, and the numbers it replaced
  * ============================================================================
- * Task 3 review, finding 1. A renderer does not draw the bilinear field, it
- * draws two triangles per cell of `cellM` (`gridStepFor`, which DOUBLES the
- * field's step until the plate fits its budget). Over such a cell the drawn
- * surface stands up to a quarter of the cell's twist above the field — so a
- * veil hung on the fine 4 m lattice alone would hang INSIDE the hill the
- * player sees, and a figure placed at the bilinear height would float or sink.
+ * "Ein Boden" E2. Until this stage the client carried a SECOND height: the
+ * surface its one big base plate really was, two triangles per cell of
+ * `cellM` (`gridStepFor`, which DOUBLED the field's step until the plate fit a
+ * 40 000-cell budget — 64 m in the live world). Everything that touched the
+ * ground was placed on THAT, because the ground the player saw was that mesh.
+ * The mesh is gone: the terrain is a CDLOD patch whose vertices come out of
+ * the lattice itself (`scene/terrainLod.ts`), so there is one answer and it is
+ * the field.
  *
- * THE FIELD FOR THIS SECTION: a flat 3 x 3 overview at step 256 (so the drawn
- * lattice is anchored at the origin and the overview contributes nothing), and
- * one loaded tile (0,0) of 65 x 65 zeroes with a single support point lifted —
+ * THIS SECTION KEEPS THE NUMBERS AS COUNTER-PROBES. The dead formula is
+ * written out inside the file (`drawnTriangle`) because the package does not
+ * carry it any more, and the checks pin (a) that the sampler answers the
+ * bilinear reading, (b) how far the plate used to be from it, and (c) that no
+ * export answers the plate's number for anybody.
+ *
+ * THE FIELD FOR THIS SECTION: a flat 3 x 3 overview at step 256 (so the
+ * overview contributes nothing and every number comes from the tile), and one
+ * loaded tile (0,0) of 65 x 65 zeroes with a single support point lifted —
  * ONE corner of a cell, which is what a twist is.
  *
  * (33) THE TWIST TILE has its 8 m on the support point i = j = 34, i.e. at
- *      (136, 136); everything else in the tile is 0. On a CELL CORNER the drawn
- *      ground IS the composite reading — both triangulations meet the field
- *      there: (136, 136) -> 8 and (128, 128) -> 0, at any cell size.
- * (34) INSIDE A 4 m CELL, at (134, 134): the cell is [132, 136]^2 with corners
- *      h00 = h10 = h01 = 0 and h11 = 8, tx = tz = 0.5. tz <= tx, so the drawn
- *      half is h00 + tx·(h10 − h00) + tz·(h11 − h10) = 0 + 0 + 0.5·8 = 4, while
- *      the BILINEAR reading of the same point is 0.25 · 8 = 2. The gap is 2 m —
- *      a quarter of the cell's twist |0 + 8 − 0 − 0| = 8, exactly as the header
- *      of `sampleGroundHeight` says.
- * (35) THE SAME POINT ON AN 8 m PLATE, (134, 134) with cellM = 8: the cell is
- *      [128, 136]^2, whose corners are (128,128) = (136,128) = (128,136) = 0 and
- *      (136,136) = 8; tx = tz = 6/8 = 0.75, tz <= tx -> 0 + 0.75·0 + 0.75·8 = 6.
- *      SO THE COARSER PLATE STANDS HIGHER STILL: 6 against the 4 of the 4 m
- *      cells and the 2 of the field. That is the finding in one number.
- * (36) AND IT CUTS BOTH WAYS: what the plate does NOT have is not drawn. A
- *      tile with its 5 m on the support point i = j = 33, i.e. at (132, 132),
- *      sits BETWEEN the corners of an 8 m grid. The field reads 5 there and the
- *      4 m plate has that point as a cell CORNER, so it reads 5 as well — but
- *      the 8 m cell [128, 136]^2 has four zero corners, and the ground drawn at
- *      (132, 132) is therefore 0. Whoever asks the field instead of the plate
- *      clears a hill nobody drew.
+ *      (136, 136); everything else in the tile is 0. On a support point every
+ *      reading agrees: (136, 136) -> 8.
+ * (34) INSIDE THE CELL, at (134, 134). The 4 m cell is [132, 136]^2 with
+ *      corners h00 = h10 = h01 = 0 and h11 = 8, tx = tz = 0.5:
+ *        BILINEAR (the answer today) = 0.25 · 8                     = 2
+ *        the 4 m triangle (tz <= tx) = 0 + 0.5·(0−0) + 0.5·(8−0)    = 4
+ *        the 8 m cell [128, 136]^2, tx = tz = 0.75                  = 6
+ *      i.e. the coarser the plate, the further from the field — 2 m and 4 m of
+ *      error on a single 8 m spike, which is the shape of the 2.433 m measured
+ *      on the live world's 64 m cells.
+ * (35) SO THE CELL SIZE NO LONGER CHANGES THE ANSWER. The differences above
+ *      are asserted as the gaps that USED to exist (−2 and −4); the sampler
+ *      itself takes no cell size at all any more, and the module exports
+ *      neither `sampleCompositeGroundHeight` nor `sampleGroundHeight`.
+ * (36) AND IT CUT BOTH WAYS: what the plate did NOT have, it did not draw. A
+ *      spike on the support point i = j = 33, i.e. at (132, 132), sits BETWEEN
+ *      the corners of an 8 m grid, so that plate drew 0 over a 5 m hill — a
+ *      figure walked straight through it. The sampler answers the hill.
+ *
+ * ============================================================================
+ * [9] THE SERVER'S OWN FORMULA, ON BOTH STEP SIZES
+ * ============================================================================
+ * The bilinear reading has to be formula-identical to
+ * `app/core/heightfield.sample_height` — the server refuses a walk by ITS
+ * reading, so a client half a metre away shows a hill the player is refused on.
+ * Since E1 the server's height is one pure function sampled on lattices that
+ * are subsets of each other (addendum § 1), and the client draws BOTH: the
+ * 2 m tiles under the play and the 4 m overview behind it. So the formula is
+ * pinned on both.
+ *
+ * THE FIXTURE is a square pyramid, apex at the world origin, foot on the 8 m
+ * ring: h(x, z) = 5 · max(0, 1 − max(|x|, |z|) / 8), rastered over
+ * [-8, 8]^2 at 2 m (9 x 9 points) and at 4 m (5 x 5). The 4 m lattice is a
+ * SUBSET of the 2 m one, which is the congruence § A16.3 guarantees.
+ *
+ * (37) The raster sizes, so a wrong fixture cannot pass silently.
+ * (38) ON SUPPORT POINTS both rasters carry the function exactly: apex 5, the
+ *      4 m point (4, 0) -> 5·(1 − 4/8) = 2.5 in BOTH, the foot (8, 8) -> 0.
+ * (39) BETWEEN them, at (1, 0), the arithmetic is written out in the code and
+ *      both rasters answer 4.375 — that line of the pyramid is linear and both
+ *      carry its ends.
+ * (40) At (1, 1) the twist bites: 2 m -> 4.0625, 4 m -> 3.90625, a gap of
+ *      0.15625 m. That gap is the RESOLUTION difference, which is what the LOD
+ *      morph is for; it is no longer a data change under the player's feet,
+ *      because the two rasters are the same function.
+ * (41) AND THE LADDER PICKS THE FINE ONE: with the 2 m raster loaded as tile
+ *      "0,0" of a 16 m tile world, (1, 1) reads 4.0625 while (-1, -1) — in the
+ *      unloaded tile "-1,-1" — reads the overview's 3.90625.
  *
  * WHAT IS NOT HERE ANY MORE: the rectangle helpers `maxCompositeHeightIn` /
- * `compositeHeightRangeIn`. They existed to hang the fog quads of § A12 and to
- * decide which of them was worth tiling; contract v6 Nr. 8 switched the veil
- * off, and they went with it rather than staying as dormant code. Their cases
- * (29)-(32) and (36)-(37) of the earlier revision went with them.
+ * `compositeHeightRangeIn` (contract v6 Nr. 8 switched the veil off) and, as
+ * of E2, `maxWorldHeightIn` / `worldHeightRangeIn` with them — the last two
+ * read the drawn ground and had no caller left once the fog was gone.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -322,10 +356,11 @@ function check(label, actual, expected, eps = 1e-9) {
   }
 }
 
-const {
-  sampleWorldHeight, tileKeyAt, sampleCompositeHeight,
-  sampleCompositeGroundHeight,
-} = await loadModule(SRC, 'worldHeight');
+// The whole namespace, not just the names used: section [8e] asserts that the
+// DEAD samplers are absent, and it can only do that by looking at what the
+// module really exports.
+const mod = await loadModule(SRC, 'worldHeight');
+const { sampleWorldHeight, tileKeyAt, heightAt } = mod;
 const { groundLift, plateLift, standY } = await loadModule(
   join(ROOT, 'client3d/src/game/ground.ts'), 'ground', ['polygon']);
 const { slopeBlocks } = await loadModule(
@@ -536,22 +571,22 @@ checkText('negative tiles are ordinary tiles',
 
 console.log('[8a] the precedence table');
 check('a point in a loaded tile reads the fine ramp',
-  sampleCompositeHeight(COMPOSITE, 128, 8), 1);
+  heightAt(COMPOSITE, 128, 8), 1);
 check('...where the overview would have said something else',
   sampleWorldHeight(OVERVIEW, 128, 8), 0.59375);
 check('the eastern tile answers for its own square',
-  sampleCompositeHeight(COMPOSITE, 384, 8), 3);
+  heightAt(COMPOSITE, 384, 8), 3);
 check('...against an overview reading of', sampleWorldHeight(OVERVIEW, 384, 8),
   1.59375);
 check('an indexed but unloaded tile falls to the overview',
-  sampleCompositeHeight(COMPOSITE, 100, 300), 3.90625);
+  heightAt(COMPOSITE, 100, 300), 3.90625);
 check('no overview under an unloaded tile: the flat world',
-  sampleCompositeHeight(
+  heightAt(
     { tileM: TILE_M, overview: null, tiles: new Map([['0,0', TILE_00]]) },
     100, 300), 0);
-check('an empty composite is flat', sampleCompositeHeight(
+check('an empty composite is flat', heightAt(
   { tileM: TILE_M, overview: null, tiles: new Map() }, 0, 0), 0);
-check('no composite at all is flat', sampleCompositeHeight(null, 128, 8), 0);
+check('no composite at all is flat', heightAt(null, 128, 8), 0);
 
 console.log('[8b] the two rasters are never mixed for one point');
 const SHORT_TILE = {
@@ -559,7 +594,7 @@ const SHORT_TILE = {
   heights: [[0, 1, 2], [0, 1, 2], [0, 1, 2]],
 };
 check('a loaded tile answers alone, even where it has no support point',
-  sampleCompositeHeight(
+  heightAt(
     { tileM: TILE_M, overview: OVERVIEW, tiles: new Map([['0,0', SHORT_TILE]]) },
     128, 8), 2);
 check('...and that is NOT the overview it refused to mix in',
@@ -570,8 +605,8 @@ check('the western tile carries the seam column',
   sampleWorldHeight(TILE_00, 256, 12), 2);
 check('the eastern tile carries the very same point',
   sampleWorldHeight(TILE_10, 256, 12), 2);
-const westOfSeam = sampleCompositeHeight(COMPOSITE, 255.999, 12);
-const onSeam = sampleCompositeHeight(COMPOSITE, 256, 12);
+const westOfSeam = heightAt(COMPOSITE, 255.999, 12);
+const onSeam = heightAt(COMPOSITE, 256, 12);
 check('a millimetre west of the seam', westOfSeam, 1.9999921875);
 check('on the seam itself', onSeam, 2);
 check('the walk across it is the ramp over that millimetre',
@@ -593,60 +628,151 @@ const CORRUPT = {
 check('RED COUNTER-PROBE: a corrupted border column breaks the shared point',
   sampleWorldHeight(CORRUPT_00, 256, 12) - sampleWorldHeight(TILE_10, 256, 12), 7);
 check('...and the composite drops seven metres across the seam',
-  sampleCompositeHeight(CORRUPT, 255.999, 12)
-    - sampleCompositeHeight(CORRUPT, 256, 12), 6.9982421875);
+  heightAt(CORRUPT, 255.999, 12)
+    - heightAt(CORRUPT, 256, 12), 6.9982421875);
 
-console.log('[8e] the DRAWN ground of the composite — cells, not the field');
-// A flat overview: the drawn lattice is anchored on its origin (0, 0) and the
-// overview itself adds nothing, so every number below comes from the tile.
+console.log('[8e] the drawn ground is GONE — the counter-probes of E2');
+// A flat overview: every number below therefore comes from the tile, and any
+// answer that is not the tile's is the overview leaking in.
 const OV_FLAT = {
   origin_x: 0, origin_z: 0, step_m: 256, rows: 3, cols: 3,
   heights: [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
 };
-/** A 65 x 65 tile of zeroes with ONE support point lifted — the twist of the
- *  cell that corner belongs to. `i`/`j` are the support point's indices, so the
- *  point sits at (4i, 4j) metres. */
-function spikeTile(i0, j0, h) {
+/** A tile of zeroes with ONE support point lifted — the twist of the cell that
+ *  corner belongs to. `i`/`j` are the support point's indices, so the point
+ *  sits at (step·i, step·j) metres. */
+function spikeTile(i0, j0, h, step = TILE_STEP, n = TILE_N) {
   const heights = [];
-  for (let j = 0; j < TILE_N; j += 1) {
+  for (let j = 0; j < n; j += 1) {
     const row = [];
-    for (let i = 0; i < TILE_N; i += 1) row.push(i === i0 && j === j0 ? h : 0);
+    for (let i = 0; i < n; i += 1) row.push(i === i0 && j === j0 ? h : 0);
     heights.push(row);
   }
-  return { origin_x: 0, origin_z: 0, step_m: TILE_STEP, rows: TILE_N, cols: TILE_N, heights };
+  return { origin_x: 0, origin_z: 0, step_m: step, rows: n, cols: n, heights };
 }
+
+/** THE DEAD READING, written out here and nowhere else: the two planes a cell
+ *  of `cellM` used to be split into. Nothing in the package answers this any
+ *  more, which is the point of the section. */
+function drawnTriangle(c, x, z, cellM) {
+  const i = Math.floor(x / cellM);
+  const j = Math.floor(z / cellM);
+  const x0 = i * cellM;
+  const z0 = j * cellM;
+  const tx = (x - x0) / cellM;
+  const tz = (z - z0) / cellM;
+  const h00 = heightAt(c, x0, z0);
+  const h10 = heightAt(c, x0 + cellM, z0);
+  const h01 = heightAt(c, x0, z0 + cellM);
+  const h11 = heightAt(c, x0 + cellM, z0 + cellM);
+  return tz <= tx
+    ? h00 + tx * (h10 - h00) + tz * (h11 - h10)
+    : h00 + tz * (h01 - h00) + tx * (h11 - h01);
+}
+
 // (33) 8 m on the support point (136, 136) — a corner of the 4 m AND of the
-// 8 m grid, which is what makes the two plates disagree between the corners.
+// 8 m grid, which is what made the two plates disagree between the corners.
 const TWIST = {
   tileM: TILE_M, overview: OV_FLAT, tiles: new Map([['0,0', spikeTile(34, 34, 8)]]),
 };
 check('the lifted support point sits at (136, 136)',
-  sampleCompositeHeight(TWIST, 136, 136), 8);
-check('a cell corner is the composite reading itself, at 4 m cells',
-  sampleCompositeGroundHeight(TWIST, 136, 136, 4), 8);
-check('...and at 8 m cells', sampleCompositeGroundHeight(TWIST, 136, 136, 8), 8);
-check('the low corner is 0 either way',
-  sampleCompositeGroundHeight(TWIST, 128, 128, 8), 0);
-check('(34) inside the 4 m cell the drawn ground is the triangle plane',
-  sampleCompositeGroundHeight(TWIST, 134, 134, 4), 4);
-check('...where the FIELD says half of that',
-  sampleCompositeHeight(TWIST, 134, 134), 2);
-check('...the gap being a quarter of the cell twist 8',
-  sampleCompositeGroundHeight(TWIST, 134, 134, 4) - sampleCompositeHeight(TWIST, 134, 134),
-  2);
-check('(35) the same point on an 8 m plate stands higher still',
-  sampleCompositeGroundHeight(TWIST, 134, 134, 8), 6);
-// (36) The other direction: a spike BETWEEN the corners of the 8 m grid is not
-// on that plate at all, and nothing may clear a hill nobody drew.
+  heightAt(TWIST, 136, 136), 8);
+check('(34) inside the cell the ONE sampler answers the bilinear reading',
+  heightAt(TWIST, 134, 134), 2);
+check('...the 4 m triangle would have said', drawnTriangle(TWIST, 134, 134, 4), 4);
+check('...and the 64 m cells of the live world, here at 8 m, more still',
+  drawnTriangle(TWIST, 134, 134, 8), 6);
+check('(35) EVERY cell size answers the same number now: 4 m',
+  heightAt(TWIST, 134, 134) - drawnTriangle(TWIST, 134, 134, 4), -2);
+check('...8 m — the same field, a different plate, and the field wins',
+  heightAt(TWIST, 134, 134) - drawnTriangle(TWIST, 134, 134, 8), -4);
+checkText('and no exported sampler answers a plate reading',
+  ['sampleCompositeGroundHeight', 'sampleGroundHeight'].filter((n) => n in mod).join(','),
+  '');
+
+// (36) THE OTHER DIRECTION, and this is the case the plate could not draw at
+// all: a spike BETWEEN the corners of the coarse grid. The field has it, the
+// plate had four zero corners — a hill nobody drew, and a figure that walked
+// through it. Now there is one answer and it is the hill.
 const BETWEEN = {
   tileM: TILE_M, overview: OV_FLAT, tiles: new Map([['0,0', spikeTile(33, 33, 5)]]),
 };
 check('(36) the spike sits at (132, 132), between the 8 m corners',
-  sampleCompositeHeight(BETWEEN, 132, 132), 5);
-check('...the 4 m plate has it as a cell CORNER and draws it',
-  sampleCompositeGroundHeight(BETWEEN, 132, 132, 4), 5);
-check('...while the 8 m cell has four zero corners, so the ground drawn is 0',
-  sampleCompositeGroundHeight(BETWEEN, 132, 132, 8), 0);
+  heightAt(BETWEEN, 132, 132), 5);
+check('...the 8 m plate drew 0 there', drawnTriangle(BETWEEN, 132, 132, 8), 0);
+check('...the sampler answers the hill, whatever anyone draws',
+  heightAt(BETWEEN, 132, 132), 5);
+
+// ============================================================================
+console.log('\n[9] the SERVER formula, on both step sizes');
+// (37) The very peak of section [1], rastered at 2 m and at 4 m over the same
+// 16 x 16 m window: h(x, z) = 5 · max(0, 1 − max(|x|, |z|) / 8), a square
+// pyramid whose apex is the world origin and whose foot is the 8 m ring.
+function pyramidField(step) {
+  const n = 16 / step + 1;
+  const heights = [];
+  for (let j = 0; j < n; j += 1) {
+    const row = [];
+    for (let i = 0; i < n; i += 1) {
+      const x = -8 + i * step;
+      const z = -8 + j * step;
+      row.push(5 * Math.max(0, 1 - Math.max(Math.abs(x), Math.abs(z)) / 8));
+    }
+    heights.push(row);
+  }
+  return { origin_x: -8, origin_z: -8, step_m: step, rows: n, cols: n, heights };
+}
+const P2 = pyramidField(2);
+const P4 = pyramidField(4);
+check('the 2 m raster is 9 x 9 support points', P2.cols * P2.rows, 81);
+check('the 4 m raster is 5 x 5', P4.cols * P4.rows, 25);
+// SUPPORT POINTS: both rasters carry the function exactly where they have a
+// point, and the 4 m lattice is a SUBSET of the 2 m one (§ A16.3 congruence).
+check('(38) the apex, 2 m', sampleWorldHeight(P2, 0, 0), 5);
+check('...4 m', sampleWorldHeight(P4, 0, 0), 5);
+check('the 4 m support point (4, 0): 5·(1 − 4/8)', sampleWorldHeight(P4, 4, 0), 2.5);
+check('...and the 2 m raster has that point too', sampleWorldHeight(P2, 4, 0), 2.5);
+check('the foot ring (8, 8)', sampleWorldHeight(P2, 8, 8), 0);
+// BETWEEN the points the two rasters part company, and the arithmetic says by
+// how much — this is the bilinear formula, hand-derived, on each step.
+// (39) At (1, 0):
+//   2 m — fx = (1+8)/2 = 4.5 -> i = 4, tx = 0.5; fz = (0+8)/2 = 4 -> j = 4,
+//         tz = 0, so the cell is [0, 2] x [0, 2] and only its north edge
+//         counts: h(0,0) = 5, h(2,0) = 3.75 -> 5·0.5 + 3.75·0.5   = 4.375
+//   4 m — fx = 9/4 = 2.25 -> i = 2, tx = 0.25; fz = 2 -> j = 2, tz = 0:
+//         h(0,0) = 5, h(4,0) = 2.5 -> 5·0.75 + 2.5·0.25           = 4.375
+//   The two agree here because this line of the pyramid is linear and both
+//   rasters carry its ends.
+check('(39) (1, 0) at 2 m', sampleWorldHeight(P2, 1, 0), 4.375);
+check('...and at 4 m — the same, this line of the pyramid being linear',
+  sampleWorldHeight(P4, 1, 0), 4.375);
+// (40) At (1, 1) the twist bites and the two rasters differ:
+//   2 m — cell [0, 2]^2, corners h(0,0) = 5, h(2,0) = 3.75, h(0,2) = 3.75,
+//         h(2,2) = 3.75; tx = tz = 0.5
+//         north = 4.375, south = 3.75
+//         -> 4.375·0.5 + 3.75·0.5                                 = 4.0625
+//   4 m — cell [0, 4]^2, corners 5, 2.5, 2.5, 2.5; tx = tz = 0.25
+//         north = 5·0.75 + 2.5·0.25 = 4.375, south = 2.5
+//         -> 4.375·0.75 + 2.5·0.25                                = 3.90625
+check('(40) (1, 1) at 2 m', sampleWorldHeight(P2, 1, 1), 4.0625);
+check('...at 4 m', sampleWorldHeight(P4, 1, 1), 3.90625);
+check('...the coarser raster is lower by', sampleWorldHeight(P2, 1, 1)
+  - sampleWorldHeight(P4, 1, 1), 0.15625);
+// (41) THE LADDER PICKS THE FINE ONE, and both rasters cover the SAME window
+// here, so the only thing that decides is the precedence. Tile "0,0" of a 16 m
+// tile world is the 2 m pyramid; everything outside it falls to the 4 m
+// overview.
+//   (1, 1) lies in tile "0,0" -> the 2 m reading, 4.0625 (case 40).
+//   (-1, -1) lies in tile "-1,-1", which is NOT loaded -> the overview:
+//       cell [-4, 0]^2, corners h(-4,-4) = h(0,-4) = h(-4,0) = 2.5,
+//       h(0,0) = 5; tx = tz = 0.75
+//       north = 2.5, south = 2.5·0.25 + 5·0.75 = 4.375
+//       -> 2.5·0.25 + 4.375·0.75 = 0.625 + 3.28125 = 3.90625
+const FINE = { tileM: 16, overview: P4, tiles: new Map([['0,0', P2]]) };
+check('(41) inside the loaded tile the FINE raster answers',
+  heightAt(FINE, 1, 1), 4.0625);
+check('...while a point in an unloaded tile takes the overview',
+  heightAt(FINE, -1, -1), 3.90625);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);
