@@ -565,13 +565,15 @@ export function PosesTab() {
                         </option>
                       ) : null}
                     </select>
-                    {data.pair_kinds?.includes(draft.animation) ? (
-                      <div className="ga-hint" style={{ marginTop: 4 }}>
-                        {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
-                      </div>
-                    ) : null}
-                    {draft.animation ? <ClipPreview kind={draft.animation} height={360} /> : null}
                   </Field>
+                  {data.pair_kinds?.includes(draft.animation) ? (
+                    <div className="ga-form-hint">
+                      {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
+                    </div>
+                  ) : null}
+                  {/* Below the select, not inside the Field: .ga-field-control
+                      is a flex ROW and would put the canvas beside the select. */}
+                  {draft.animation ? <ClipPreview kind={draft.animation} height={360} /> : null}
                 </div>
               ) : null}
               {draft.is_default ? (
