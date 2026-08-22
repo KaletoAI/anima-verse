@@ -580,6 +580,54 @@ export interface NodeStatSpan {
   max: number;
 }
 
+/** What the level-error rule needs of one tile's statistics: one exact
+ *  vertical error bound per entry of the server's `mip_levels_m`. Structural
+ *  like `NodeStatSpan`, and for the same reason. */
+export interface LevelErrorStat {
+  err?: readonly number[];
+}
+
+/**
+ * The worst vertical error per NODE LEVEL, in metres — the pure rule behind
+ * `TerrainLod.setField`/`refreshStats`.
+ *
+ * Level L draws its vertices `baseStepM · 2^L` apart, which for L ≥ 1 is one
+ * of the server's declared `mipLevelsM`; level 0 is the base lattice and has
+ * no error at all. The maximum is taken over EVERY tile a statistic is known
+ * for, because `lodRanges` turns it into world-wide ring distances — a
+ * per-node maximum would give two neighbours different rings and crack the
+ * ground along the seam.
+ *
+ * THAT IS WHY THE STATISTICS HAVE TO BE COMPLETE. `GET /play/heightfield`
+ * ships at most `TILE_STATS_MAX` = 64 of them; over a maximum, a missing tile
+ * is not a small error but no error at all, so a world of 200 tiles reported
+ * the roughness of its first 64 and the rings came out too wide — distant
+ * ground drawn at a level whose real error is several times the pixel budget.
+ * `scene/ground.ts` fetches the remainder (`GET /play/heightfield/stats`) and
+ * calls `refreshStats`.
+ *
+ * EXTRACTED FROM THE RENDERER so the check measures the shipped rule rather
+ * than a copy of it — the reason `nodeBounds` stands up here too.
+ */
+export function levelErrorsFrom(
+  stats: ReadonlyMap<string, LevelErrorStat> | null | undefined,
+  mipLevelsM: readonly number[] | null | undefined,
+  baseStepM: number, levels: number): number[] {
+  const out = new Array<number>(Math.max(0, levels)).fill(0);
+  if (!stats?.size || !mipLevelsM?.length || !(baseStepM > 0)) return out;
+  for (let level = 1; level < out.length; level += 1) {
+    const k = mipLevelsM.indexOf(baseStepM * (1 << level));
+    if (k < 0) continue;
+    let err = 0;
+    for (const s of stats.values()) {
+      const v = s.err?.[k];
+      if (typeof v === 'number' && v > err) err = v;
+    }
+    out[level] = err;
+  }
+  return out;
+}
+
 /** How many tiles a node's box may be unioned over before the whole field's
  *  range is taken instead. A root node of 2 048 m over 256 m tiles covers
  *  exactly 64, so the shortcut never fires for a node the quadtree really has
@@ -1550,6 +1598,16 @@ export interface TerrainLod {
    *  changed size when a tile arrived would re-anchor the whole quadtree. */
   setField(relief: WorldHeightTiles | null, baseStepM: number,
            anchorX: number, anchorZ: number): void;
+  /** The relief's STATISTICS grew without its heights changing — re-derive the
+   *  per-level errors and nothing else.
+   *
+   *  The narrow half of `setField`: the tile statistics arrive after the
+   *  overview does (`GET /play/heightfield` caps them at 64,
+   *  `GET /play/heightfield/stats` delivers the rest), and only `levelErrorM`
+   *  is cached off them. `nodeBounds` reads the very same map per call and is
+   *  current the moment a statistic lands; the pyramids are built from HEIGHTS
+   *  and would be rebuilt for nothing. */
+  refreshStats(): void;
   /** The world rectangle to cover, `[minX, minZ, maxX, maxZ]`. */
   setExtent(rect: readonly [number, number, number, number]): void;
   /** The ground material — built by the owner (kind, textures, hole patch,
@@ -1757,32 +1815,12 @@ export function createTerrainLod(): TerrainLod {
     return nodeBounds(relief?.stats, relief?.tileM ?? 0, globalRange, x, z, size);
   }
 
-  /**
-   * The worst vertical error per NODE LEVEL, in metres — recomputed whenever
-   * the field changes, never per frame.
-   *
-   * Level L draws its vertices `baseStep · 2^L` apart, which for L ≥ 1 is one
-   * of the server's declared `mip_levels_m`; level 0 is the base lattice and
-   * has no error at all. The maximum is taken over every tile the client knows
-   * a statistic for, because the ranges are world-wide (see `MAX_PIXEL_ERROR`)
-   * — a per-node maximum would crack the ground.
-   */
+  /** The worst vertical error per NODE LEVEL of the relief that stands —
+   *  recomputed whenever the field changes or its statistics grow, never per
+   *  frame. The rule itself is `levelErrorsFrom`, up there and exported. */
   function computeLevelError(): number[] {
-    const out = new Array<number>(MAX_LOD_LEVELS).fill(0);
-    const stats = relief?.stats;
-    const mips = relief?.mipLevelsM;
-    if (!stats?.size || !mips?.length || !(baseStep > 0)) return out;
-    for (let level = 1; level < MAX_LOD_LEVELS; level += 1) {
-      const k = mips.indexOf(baseStep * (1 << level));
-      if (k < 0) continue;
-      let err = 0;
-      for (const s of stats.values()) {
-        const v = s.err?.[k];
-        if (typeof v === 'number' && v > err) err = v;
-      }
-      out[level] = err;
-    }
-    return out;
+    return levelErrorsFrom(relief?.stats, relief?.mipLevelsM,
+                           baseStep, MAX_LOD_LEVELS);
   }
   let levelErrorM: number[] = new Array<number>(MAX_LOD_LEVELS).fill(0);
 
@@ -1903,6 +1941,9 @@ export function createTerrainLod(): TerrainLod {
       globalRange = { min, max };
       levelErrorM = computeLevelError();
       uploadPyramids();
+    },
+    refreshStats() {
+      levelErrorM = computeLevelError();
     },
     setExtent(rect) {
       extent = [rect[0], rect[1], rect[2], rect[3]];

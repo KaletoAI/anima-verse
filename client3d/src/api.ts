@@ -285,6 +285,39 @@ export async function fetchHeightTiles(keys: readonly string[]
     await fetch(`/play/heightfield/tiles?keys=${encodeURIComponent(query)}`));
 }
 
+/** The answer of `GET /play/heightfield/stats` — statistics only, no grids.
+ *  Keys the index does not know are simply absent, exactly as in the tile
+ *  batch. */
+export interface HeightTileStatsBatch {
+  sig: string;
+  tile_stats: Record<string, HeightTileStats>;
+}
+
+/**
+ * The per-tile STATISTICS of a set of tiles (`GET /play/heightfield/stats`,
+ * § G2) — without their grids, and therefore without their kilobytes.
+ *
+ * The overview caps `tile_stats` at the server's `TILE_STATS_MAX` = 64 and
+ * says so through `tile_stats_complete`. The terrain quadtree takes its worst
+ * vertical error PER LEVEL over every tile it holds a statistic for, so on a
+ * world with more than 64 tiles that maximum is too small and the distant
+ * ground is drawn coarser than the error budget allows. This call fetches the
+ * remainder in the background (`scene/ground.ts`).
+ *
+ * At most `HEIGHT_TILE_BATCH_MAX` keys per call — and unlike the tile batch
+ * the server REFUSES a longer one (400) rather than trimming it, because a
+ * silently missing statistic reads as "complete" on this side. Same key
+ * spelling as `fetchHeightTiles`: `"tx,tz"` here, `tx:tz` on the wire.
+ *
+ * Throws like the calls above; the caller keeps what it has and asks again.
+ */
+export async function fetchHeightTileStats(keys: readonly string[]
+): Promise<HeightTileStatsBatch> {
+  const query = keys.map((k) => k.replace(',', ':')).join(',');
+  return json<HeightTileStatsBatch>(
+    await fetch(`/play/heightfield/stats?keys=${encodeURIComponent(query)}`));
+}
+
 /**
  * The LAYER CUT of the ground (`GET /play/terrain-layers`, § G3) — the baked
  * masks the terrain material composites its material out of.

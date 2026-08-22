@@ -75,9 +75,9 @@ import type { Point2, ScatterFootprint, ScatterInstance,
   TerrainLayerIndex, TerrainLayerTile, WorldHeightField,
   WorldHeightTileStats,
   WorldHeightTiles } from '@anima/scene-render';
-import { fetchHeightfield, fetchHeightTiles, fetchTerrain,
+import { fetchHeightfield, fetchHeightTiles, fetchHeightTileStats, fetchTerrain,
   fetchTerrainLayers } from '../api';
-import type { HeightTileBatch } from '../api';
+import type { HeightTileBatch, HeightTileStatsBatch } from '../api';
 import { localToWorld } from '../game/enterLocation';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import { sanitizePolygon } from '../game/polygon';
@@ -2523,9 +2523,82 @@ export function createGround(): Ground {
       // by decimation on the client, which is exact because every coarse
       // lattice is a subset of the fine one (§ G2).
       terrain.setField(relief, tileStepM, anchorX, anchorZ);
+      // …and the statistics the cap kept back are fetched BEHIND the picture
+      // (§ G2). Deliberately not awaited: the ground is already draped, and
+      // what the remainder buys is a level, not a surface.
+      if (payload.tile_stats_complete === false) void fillMissingStats(loadedHeightSig);
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /** The relief a statistics fill is running for — `null` while none is.
+   *  A signature, not a boolean: a fill that outlived its relief has to stand
+   *  down at its next resumption, and a NEW relief must be able to start its
+   *  own fill in the same tick without waiting for the old one to notice. */
+  let statsFillSig: string | null = null;
+
+  /**
+   * Fetch the tile statistics the overview's cap kept back, in the background.
+   *
+   * `GET /play/heightfield` carries at most `TILE_STATS_MAX` = 64 of them and
+   * says so through `tile_stats_complete`. The terrain quadtree takes its worst
+   * vertical error PER LEVEL over every tile it holds a statistic for
+   * (`levelErrorsFrom`), so on a world with more than 64 tiles that maximum was
+   * the roughness of the first 64 alone — the rings came out too wide and the
+   * distant ground was drawn coarser than the pixel budget allows, until those
+   * tiles happened to be walked into and loaded with their grids.
+   *
+   * Statistics are a few dozen bytes each, so the rest is simply asked for
+   * (`GET /play/heightfield/stats`), 64 keys per request like every other
+   * batch here. The rules of the tile loader, verbatim:
+   *
+   *  - NOTHING IS AWAITED BY THE CALLER. The first picture is already drawn;
+   *    this only sharpens which level it is drawn at.
+   *  - A FAILED batch keeps what stands and gives up until the next relief —
+   *    the error is a level, not a hole, and a retry loop on the poll path
+   *    would be a request per three seconds for a picture nobody misses.
+   *  - CANCELLATION IS BY SIGNATURE, checked after every await and against the
+   *    batch's own `sig`: a batch belonging to a relief that has been replaced
+   *    is dropped whole, so it can never poison the new one's error budget.
+   *
+   * The want list is taken ONCE, before the first request, so the loop
+   * terminates whatever the answers are: a key the index has and the server
+   * declines to answer is asked for exactly once.
+   */
+  async function fillMissingStats(sig: string | null): Promise<void> {
+    if (!sig || statsFillSig === sig) return;
+    statsFillSig = sig;
+    try {
+      const missing = [...tileIndex].filter((k) => !relief.stats?.has(k));
+      for (const batch of tileBatches(missing)) {
+        if (loadedHeightSig !== sig) return;
+        const want = batch.filter((k) => !relief.stats?.has(k));
+        if (!want.length) continue;
+        let payload: HeightTileStatsBatch;
+        try {
+          payload = await fetchHeightTileStats(want);
+        } catch {
+          return;   // the level stays coarse until the next relief
+        }
+        if (loadedHeightSig !== sig || (payload.sig && payload.sig !== sig)) return;
+        let taken = 0;
+        for (const [key, s] of Object.entries(payload.tile_stats || {})) {
+          relief.stats?.set(key, { min: Number(s.min) || 0, max: Number(s.max) || 0,
+                                   err: (s.err ?? []).map(Number) });
+          taken += 1;
+        }
+        // The narrow re-trigger (`TerrainLod.refreshStats`): only the cached
+        // per-level errors are re-derived. `nodeBounds` reads the same map per
+        // call and is current already, and the pyramids are built from HEIGHTS
+        // — nothing about the drapery changed.
+        if (taken) terrain.refreshStats();
+      }
+    } finally {
+      // …unless a newer relief has claimed the slot in the meantime, in which
+      // case that fill owns it and this one leaves it alone.
+      if (statsFillSig === sig) statsFillSig = null;
     }
   }
 
@@ -2901,6 +2974,11 @@ export function createGround(): Ground {
           // …and the MASK window rides the very same occasion, over the very
           // same want set (§ G3).
           void refreshLayerTiles();
+          // …and so does the STATISTICS fill (§ G2), which is how a batch that
+          // failed gets a second chance without a retry loop of its own. It is
+          // a set difference over the tile index and nothing at all once the
+          // statistics are complete.
+          void fillMissingStats(loadedHeightSig);
           return Promise.resolve(false);
         }
         builtFpSig = fpSig;

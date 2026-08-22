@@ -2375,6 +2375,34 @@ def tiles_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
             "mip_levels_m": list(MIP_LEVELS_M), "tiles": tiles}
 
 
+def stats_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
+    """The STATISTICS of the named tiles, without their grids (§ G2).
+
+    The other half of :data:`TILE_STATS_MAX`. The overview ships the first
+    64 tiles' statistics and says so (``tile_stats_complete``); everything past
+    that used to arrive only with the tile itself, so a client that draws the
+    whole world from a quadtree — where the worst error per LEVEL is taken over
+    every tile it knows a statistic for — underestimated that maximum on any
+    world with more than 64 tiles and drew the distant ground too coarse until
+    those tiles happened to be loaded. This endpoint lets it ask for the rest.
+
+    Same rules as :func:`tiles_payload`, for the same reasons: only indexed
+    tiles come back (an unindexed one IS the flat world and needs no answer),
+    and THE SIGNATURE IS READ FIRST, before a single tile is rastered, so a
+    client can never hold statistics labelled newer than the raster they were
+    read off.
+
+    A tile whose statistic is not cached yet costs a raster (~90 ms), which is
+    why the route caps the batch — but the raster lands in the process LRU, so
+    the tile's own request afterwards is a cache hit and the bill is paid once.
+    """
+    sig = current_sig()
+    index = tile_index()
+    return {"sig": sig,
+            "tile_stats": {format_tile_key(tx, tz): tile_stats(tx, tz)
+                           for tx, tz in keys if (tx, tz) in index}}
+
+
 #: How many tiles the OVERVIEW payload carries statistics for. Every one of
 #: them has to be rastered (the numbers are read off the finished 129² array),
 #: so this is a WORK budget for one request and not a payload one — the whole

@@ -3104,7 +3104,24 @@ Downsampling.
   "tiles": { "1,0": { "origin_x": 256.0, "origin_z": 0.0,
                       "rows": 129, "cols": 129, "heights": [[…], …],
                       "stats": { "min": …, "max": …, "err": […] } } } }
+
+// GET /play/heightfield/stats?keys=tx:tz,tx:tz   (höchstens 64 Schlüssel)
+{ "sig": "…",                     // wie oben ZUERST gelesen, vor jeder Rasterung
+  "tile_stats": { "1,0": { "min": …, "max": …, "err": […] } } }
 ```
+
+**`/play/heightfield/stats` liefert NUR die Statistik** — dieselben Zahlen wie
+`tile_stats` der Übersicht, ohne Gitter und damit ohne Kilobytes. Es ist die
+andere Hälfte von `tile_stats_complete: false`: ein CDLOD-Client nimmt seinen
+größten senkrechten Fehler JE STUFE über alle Kacheln, für die er eine
+Statistik hat, also unterschätzt er ihn auf einer Welt mit mehr als 64 Kacheln
+und zeichnet die Ferne zu grob, bis diese Kacheln zufällig geladen werden. Der
+Client holt den Rest im Hintergrund nach (`scene/ground.ts`, Stapel zu 64) und
+rechnet nur seine Stufen-Fehler neu (`TerrainLod.refreshStats`) — die Pyramiden
+hängen an den HÖHEN und bleiben stehen. Nicht indizierte Kacheln fehlen in der
+Antwort wie beim Kachel-Batch; **über der Kappe antwortet der Endpunkt aber
+400 statt zu kürzen**, denn eine still fehlende Statistik liest sich auf der
+Client-Seite nicht als „flach dort", sondern als „vollständig".
 
 `err[k]` ist der **größte senkrechte Fehler in Metern**, den ein Renderer
 macht, wenn er die Kachel auf Ebene `mip_levels_m[k]` zeichnet statt auf der

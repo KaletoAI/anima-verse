@@ -2680,6 +2680,39 @@ def get_heightfield_tiles_route(keys: str = "", user=Depends(get_current_user)):
     return tiles_payload(parse_tile_keys(keys))
 
 
+@router.get("/play/heightfield/stats")
+def get_heightfield_stats_route(keys: str = "", user=Depends(get_current_user)):
+    """The per-tile STATISTICS of the named tiles, without their grids (§ G2).
+
+    Auth and fog exactly like ``/play/heightfield``: any logged-in user, never
+    fogged. ``keys`` is the same ``tx:tz,tx:tz`` query the tile batch uses, and
+    the answer keys them the way the index does (``"tx,tz"``).
+
+    WHY IT EXISTS. ``GET /play/heightfield`` carries at most
+    ``TILE_STATS_MAX`` = 64 tiles' statistics and sets
+    ``tile_stats_complete: false`` past that. A CDLOD client takes its worst
+    vertical error PER LEVEL over every tile it knows a statistic for, so on a
+    world with more than 64 tiles that maximum was too small and the distant
+    ground was drawn too coarse until the missing tiles happened to be loaded.
+    Statistics are a few dozen bytes per tile — the grids are what is heavy —
+    so the rest can simply be fetched.
+
+    The batch is CAPPED HARD instead of trimmed: unlike the tile batch, a
+    silently missing statistic is not "flat ground there" but a level error the
+    client believes is complete while it is not. Over the cap the request is a
+    400 and the client splits, which it does anyway.
+    """
+    from app.core.heightfield import (TILE_BATCH_MAX, parse_tile_keys,
+                                      stats_payload)
+    wanted = parse_tile_keys(keys, cap=0)
+    if len(wanted) > TILE_BATCH_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"at most {TILE_BATCH_MAX} tile keys per request, "
+                   f"got {len(wanted)}")
+    return stats_payload(wanted)
+
+
 @router.get("/play/scenes")
 async def play_scenes(user=Depends(get_current_user), limit: int = 5):
     """„Was bisher geschah" — zuletzt konsolidierte Szenen, an denen der Avatar

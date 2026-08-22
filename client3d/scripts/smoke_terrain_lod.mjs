@@ -858,6 +858,7 @@ const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX
   MAX_RANGE_WIDENING,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
   morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl, selectLodFitted,
+  levelErrorsFrom,
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
 
@@ -1107,6 +1108,94 @@ checkEq('…while every capped ladder is monotone and inside one doubling',
   [capMono(ERR, 2000), capMono(HOSTILE, 200), capMono([0, 9, 9, 9, 9, 9], 5000)],
   [true, true, true]);
 checkEq('(m) a flat world has no ranges', lodRanges(0, 6, ERR, 2000), [0, 0, 0, 0, 0, 0]);
+
+/**
+ * (m2) THE ERROR LIST IS TAKEN OVER *ALL* TILES — `levelErrorsFrom`, and what
+ *     an incomplete `tile_stats` costs.
+ *
+ * `GET /play/heightfield` ships at most `TILE_STATS_MAX` = 64 tile statistics
+ * and says so through `tile_stats_complete`; the rest is fetched from
+ * `GET /play/heightfield/stats`. The rule below takes a MAXIMUM per level, so
+ * a missing tile is not a small contribution but no contribution at all: the
+ * ladder above is then built from the roughness of the first 64 tiles alone.
+ *
+ * THE FIXTURE — 100 tiles keyed `"i,0"`, i = 0…99, in the server's own order
+ * (`sorted(tile_index())` is by tx, then tz), each with the five mip errors
+ *     err(i) = [ i/128, 2i/128, 3i/128, 4i/128, 5i/128 ]  metres
+ * — dyadic, so every number here is exact in binary. The roughest tiles are
+ * the LAST ones, which is the case that matters: the cap keeps the first 64.
+ *
+ * The node level L draws its vertices `2 · 2^L` m apart, so L = 1…5 are the
+ * server's `mip_levels_m` [4, 8, 16, 32, 64] and L = 0 is the base lattice
+ * with no error at all. Hence, per level, the maximum of column k over the
+ * tiles held:
+ *     all 100 tiles   -> i = 99: [0, 99/128, 198/128, 297/128, 396/128, 495/128]
+ *                              = [0, 0.7734375, 1.546875, 2.3203125,
+ *                                 3.09375, 3.8671875]
+ *     first 64 only   -> i = 63: [0, 63/128, 126/128, 189/128, 252/128, 315/128]
+ *                              = [0, 0.4921875, 0.984375, 1.4765625,
+ *                                 1.96875, 2.4609375]
+ * — 99/63 = 1.5714… times too small on EVERY level.
+ *
+ * WHAT THAT COSTS, through `lodRanges(128, 6, err, 500)`. The error term is
+ * `err · 500 / MAX_PIXEL_ERROR` = `err · 250`, the geometric ring is
+ * `128 · 2^i`, and the widening is capped at twice that:
+ *     complete: 250 · [0.7734375, 1.546875, 2.3203125, 3.09375, 3.8671875]
+ *             = [193.359375, 386.71875, 580.078125, 773.4375, 966.796875]
+ *       i = 0: max(128,  min(193.359375, 256))  = 193.359375
+ *       i = 1: max(256,  min(386.71875,  512))  = 386.71875
+ *       i = 2: max(512,  min(580.078125, 1024)) = 580.078125
+ *       i = 3: max(1024, min(773.4375,   2048)) = 1024      (geometry wins)
+ *       i = 4: max(2048, min(966.796875, 4096)) = 2048      (geometry wins)
+ *       i = 5: no err[6]                        = 4096
+ *     capped:   250 · [0.4921875, 0.984375, 1.4765625, 1.96875, 2.4609375]
+ *             = [123.046875, 246.09375, 369.140625, 492.1875, 615.234375]
+ *       every one of them is BELOW its geometric ring, so the ladder collapses
+ *       to the purely geometric [128, 256, 512, 1024, 2048, 4096].
+ *
+ * That is the defect in one number: with two thirds of the statistics missing
+ * the finest ring reaches 128 m instead of 193.359375 m — the ground between
+ * them is drawn one level coarser than the two-pixel budget allows, and
+ * nothing in the picture says so.
+ */
+const statsFor = (n, from = 0) => {
+  const m = new Map();
+  for (let i = from; i < n; i += 1) {
+    m.set(`${i},0`, { err: [1, 2, 3, 4, 5].map((f) => (i * f) / 128) });
+  }
+  return m;
+};
+const MIPS = [4, 8, 16, 32, 64];
+const allStats = statsFor(100);
+const cappedStats = statsFor(64);
+check('(m2) the fixture has one statistic per tile', allStats.size, 100);
+checkEq('…the level errors over ALL 100 tiles',
+  levelErrorsFrom(allStats, MIPS, BASE, MAX_LOD_LEVELS),
+  [0, 0.7734375, 1.546875, 2.3203125, 3.09375, 3.8671875]);
+checkEq('…RED: over the first 64 alone, too small on every level',
+  levelErrorsFrom(cappedStats, MIPS, BASE, MAX_LOD_LEVELS),
+  [0, 0.4921875, 0.984375, 1.4765625, 1.96875, 2.4609375]);
+checkEq('…and the ladder the complete list buys',
+  lodRanges(128, MAX_LOD_LEVELS,
+            levelErrorsFrom(allStats, MIPS, BASE, MAX_LOD_LEVELS), 500),
+  [193.359375, 386.71875, 580.078125, 1024, 2048, 4096]);
+checkEq('…RED: the capped list falls back to the purely geometric rings',
+  lodRanges(128, MAX_LOD_LEVELS,
+            levelErrorsFrom(cappedStats, MIPS, BASE, MAX_LOD_LEVELS), 500),
+  [128, 256, 512, 1024, 2048, 4096]);
+// The order the statistics arrive in cannot matter — it is a maximum. The
+// 36 tiles the cap dropped are merged in the other way round and answer the
+// same list, which is what `fillMissingStats` does per batch.
+const merged = new Map([...statsFor(100, 64), ...cappedStats]);
+checkEq('…merging the missing 36 in afterwards restores it, order-free',
+  levelErrorsFrom(merged, MIPS, BASE, MAX_LOD_LEVELS),
+  [0, 0.7734375, 1.546875, 2.3203125, 3.09375, 3.8671875]);
+// The degenerate inputs of the rule: no statistics at all, and a base step
+// whose doublings (6, 12, 24, 48, 96 m) are no declared mip level.
+checkEq('…no statistics at all -> no error anywhere',
+  levelErrorsFrom(new Map(), MIPS, BASE, MAX_LOD_LEVELS), [0, 0, 0, 0, 0, 0]);
+checkEq('…a base step the server declares no level for -> the same',
+  levelErrorsFrom(allStats, MIPS, 3, MAX_LOD_LEVELS), [0, 0, 0, 0, 0, 0]);
 
 // ── [5] the selection ───────────────────────────────────────────────────────
 console.log('\n[5] the quadtree — camera on the world corner');
