@@ -106,6 +106,15 @@ from app.core.log import get_logger
 
 logger = get_logger("heightfield")
 
+#: Code version of the bake, mixed into ``models.heightfield.height_sig`` as
+#: ``code_version``. Bump whenever the code that derives this payload changes
+#: its output for unchanged data — a changed carve, ramp or relief rule leaves
+#: every authored area untouched, so without this the signature stands still
+#: and every client and every stored raster keeps the ground of the old code.
+#: It lives HERE, next to the bake it describes, and not next to the signature
+#: it feeds: whoever changes ``h_final`` is reading this file.
+HEIGHT_BAKE_VERSION = 1
+
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
 #: crosses one cell in a bit over a second. It travels WITH the dataset (the

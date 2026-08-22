@@ -61,6 +61,13 @@ from app.core.room_recipe import (SHARE_TOL_M, _WALKABLE_TYPES,
 
 logger = get_logger(__name__)
 
+#: Code version of the scene geometry, mixed into :func:`_signature`.
+#: Bump whenever the code that derives this payload changes its output for
+#: unchanged data — otherwise the signature stays put after a pure code change
+#: and every client keeps serving the old geometry until someone happens to
+#: save the location.
+SCENE_RECIPE_VERSION = 1
+
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
 # every plan coordinate is stored in local metres, so nothing is denormalized
@@ -1955,7 +1962,13 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     would be covered — the textures would not, and a running client would keep
     a summer ground under a winter sky until it reloaded. One token settles
     both, and a world without seasons contributes the empty string, i.e. the
-    signature it always had."""
+    signature it always had.
+
+    :data:`SCENE_RECIPE_VERSION` is in here as ``code_version`` because the
+    payload is a function of the CODE as much as of the data: a changed
+    geometry rule used to leave every signature exactly where it was, so
+    clients and caches kept the old scene until someone saved the location by
+    hand. Bumping the constant moves every scene signature at once."""
     import hashlib
     import json
     from app.core.game_time import get_calendar
@@ -1967,6 +1980,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     except Exception:
         season = ""
     payload = {
+        "code_version": SCENE_RECIPE_VERSION,
         "map3d": location.get("map3d") or {},
         "plan_width_m": round(float(plan_width_m or 0), 3),
         "ground_kind": ground_kind,

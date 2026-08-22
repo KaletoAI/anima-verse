@@ -391,8 +391,15 @@ def height_sig() -> str:
     since a terrain KIND may carry hills, painting such a kind — or editing its
     amplitude or wave in the catalog — moves the ground exactly as a height
     area does. Painting a kind WITHOUT relief does not appear here at all.
+
+    AND SO DOES THE BAKE CODE ITSELF (``HEIGHT_BAKE_VERSION``): the grid is a
+    function of the code as much as of the areas, and a changed carve or ramp
+    rule used to leave this signature exactly where it was — clients and stored
+    rasters kept the old ground until someone saved an area by hand.
     """
-    basis = json.dumps({"areas": list_height_areas(),
+    from app.core.heightfield import HEIGHT_BAKE_VERSION
+    basis = json.dumps({"code_version": HEIGHT_BAKE_VERSION,
+                        "areas": list_height_areas(),
                         "places": placed_footprints(),
                         "terrain": relief_basis(),
                         "water": water_basis()},

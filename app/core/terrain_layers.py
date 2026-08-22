@@ -111,6 +111,16 @@ from app.core.log import get_logger
 
 logger = get_logger(__name__)
 
+#: Code version of the cut, mixed into :func:`layers_sig` as ``code_version``.
+#: Bump whenever the code that derives this payload changes its output for
+#: unchanged data — a changed blend, floor or water rule leaves every painted
+#: area untouched, so without this the signature stands still and every cached
+#: model and tile in this process keeps the masks of the old code.
+#: ``models.terrain.terrain_sig`` hashes it too — that is the signature the
+#: worldmap poll carries, so a bump reaches running clients and not only the
+#: caches below.
+LAYER_CUT_VERSION = 1
+
 # ── The lattices ────────────────────────────────────────────────────────────
 
 #: Metres per texel of the ID mask. One metre is the scale of the thing the
@@ -1189,12 +1199,18 @@ def layers_sig() -> str:
 
     The CLIENT still refetches on `terrain_sig` — that is the signature the
     worldmap poll carries, and it moves whenever this one does.
+
+    A SIXTH thing rides along, :data:`LAYER_CUT_VERSION`: the masks are a
+    function of the cut CODE as much as of the polygons, and a changed rule
+    used to leave this signature exactly where it was — the model and the tile
+    cache below then served the old cut until a save moved a polygon.
     """
     from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
     from app.models.terrain import list_areas
     catalog = effective_catalog()
     basis = json.dumps({
+        "code_version": LAYER_CUT_VERSION,
         "default": default_kind(),
         "areas": [{"kind": a.get("kind"), "polygon": a.get("polygon"),
                    "z_order": a.get("z_order"),

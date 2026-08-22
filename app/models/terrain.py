@@ -608,7 +608,13 @@ def terrain_sig() -> str:
     signature, which meant a seed change was invisible until a restart while
     ``GET /play/terrain`` already served the new numbers under the old
     ``sig``.
+
+    AND THE CUT CODE (``terrain_layers.LAYER_CUT_VERSION``): the masks a client
+    draws are a function of the cut code as much as of the polygons, and this
+    is the signature the worldmap poll carries — bumping the constant has to
+    reach a running client, not only the mask caches inside this process.
     """
+    from app.core.terrain_layers import LAYER_CUT_VERSION
     from app.core.terrain_types import effective_catalog
     # The ENRICHED block, not the stored rows (2026-08-20, same doctrine as
     # the seed catalog above and the same fix world_props_sig applied): the
@@ -617,7 +623,8 @@ def terrain_sig() -> str:
     # reach a running client the same way a painted row does. Hashing the
     # stored rows alone kept the old sig while /play/terrain already served
     # the new maps.
-    basis = json.dumps({"areas": with_scatter_props(list_areas()),
+    basis = json.dumps({"code_version": LAYER_CUT_VERSION,
+                        "areas": with_scatter_props(list_areas()),
                         "types": effective_catalog()},
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]

@@ -773,6 +773,20 @@ Fernkulisse eingeschaltet ist, § A17).
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
 | `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
 
+**Jede Signatur hasht eine Server-Code-Version mit.** `height_sig`
+(`HEIGHT_BAKE_VERSION` in `app/core/heightfield.py`), die Szenen-`signature`
+aus § B1 (`SCENE_RECIPE_VERSION` in `app/core/scene_recipe.py`) sowie
+`terrain_sig` samt dem serverinternen `layers_sig` (beide `LAYER_CUT_VERSION`
+in `app/core/terrain_layers.py`) nehmen ihre Konstante als `code_version` in
+die gehashte Basis auf. Grund: die Payloads sind Funktionen des **Codes** so gut
+wie der Daten — eine geänderte Geometrie-, Back- oder Schnittregel ließ die
+Signatur früher stehen, und Client wie Prozess-Caches hielten das alte
+Ergebnis, bis jemand zufällig eine Fläche oder einen Ort speicherte. Wer die
+ableitende Rechnung ändert, erhöht die Konstante um 1; damit bewegt sich die
+Signatur für **alle** Welten und jeder Client holt neu. Ein Downgrade des
+Servers ist derselbe Fall in der Gegenrichtung — auch dort ist die Signatur
+eine andere, also wird neu geholt.
+
 **Warum die beiden Grenzwerte hier reisen (E8 Task 1).** Der Server beurteilt
 jeden gemeldeten Punkt mit genau diesen zwei Zahlen, und der Client spiegelt
 die Regel, damit die Figur gar nicht erst in eine Absage läuft. Sie brauchen
