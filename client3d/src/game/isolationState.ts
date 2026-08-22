@@ -20,11 +20,11 @@
  */
 
 /** Lowest and highest id the panel knows. Anything outside is dropped on
- *  decode rather than clamped — a `20` in a shared link is a typo or a link
- *  from a newer client, and honouring it as `19` would isolate the wrong
+ *  decode rather than clamped — a `21` in a shared link is a typo or a link
+ *  from a newer client, and honouring it as `20` would isolate the wrong
  *  suspect without saying so. */
 export const ISO_MIN_ID = 1;
-export const ISO_MAX_ID = 19;
+export const ISO_MAX_ID = 20;
 
 /** Where a chosen set is kept between reloads. */
 export const ISO_STORAGE_KEY = 'av3d.debug.isolation.v1';
@@ -143,6 +143,11 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
     cost: 'upload' },
   { id: 19, label: 'Wireframe terrain',
     note: 'material.wireframe on the terrain material — the crack/hole test.',
+    cost: 'none' },
+  { id: 20, label: 'Terrain culling off',
+    note: 'Draws every selected terrain node regardless of the camera frustum '
+      + '— if the shimmer stops, a node box is smaller than its drawn surface '
+      + 'and the culling drops visible ground.',
     cost: 'none' },
 ];
 

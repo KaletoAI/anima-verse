@@ -101,6 +101,7 @@ import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
   scatterSway, scatterTargetH } from './scatterLod';
 import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createTerrainLod } from './terrainLod';
+import type { TerrainCullStats } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterPlane, patchWaterShore } from './waterPlane';
 import { waterLevelAt, waterProfileOf } from './waterPlaneMath';
@@ -880,6 +881,11 @@ export interface Ground {
   terrainMaterial(): THREE.Material | null;
   /** Freeze the terrain's quadtree selection (`TerrainLod.setFrozen`). */
   setTerrainFrozen(on: boolean): void;
+  /** Draw every selected terrain node, frustum or not
+   *  (`TerrainLod.setCullOff`, the isolation panel's toggle 20). */
+  setTerrainCullOff(on: boolean): void;
+  /** What the last terrain selection culled (`TerrainLod.cullStats`). */
+  terrainCullStats(): TerrainCullStats;
   /**
    * THE SCENE OBJECTS PER ISOLATION CATEGORY (`debug3d.ts`, toggles 11-13
    * and 17) — rebuilt on every call, never a live array: the scatter entries
@@ -3015,6 +3021,8 @@ export function createGround(): Ground {
     terrainMaterial: () => (Array.isArray(terrain.mesh.material)
       ? terrain.mesh.material[0] ?? null : terrain.mesh.material ?? null),
     setTerrainFrozen: (on) => terrain.setFrozen(on),
+    setTerrainCullOff: (on) => terrain.setCullOff(on),
+    terrainCullStats: () => terrain.cullStats(),
     debugParts() {
       const scatter: THREE.Object3D[] = [];
       for (const a of areaMeshes) {

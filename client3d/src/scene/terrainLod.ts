@@ -1325,6 +1325,29 @@ function pyramidTexture(pyr: HeightPyramid): THREE.DataTexture {
   return tex;
 }
 
+/**
+ * What the last selection did with the frustum test — the isolation panel's
+ * toggle 20 reads this and nothing else does.
+ *
+ * `culled` counts the SQUARES the frustum test rejected while the quadtree was
+ * walked, and it is counted whether the toggle is on or off: with the toggle
+ * off it says whether culling is doing anything at all in this view, with it on
+ * it says how much ground the culling WOULD have dropped. `drawn` and `max` are
+ * the instances the frame really submitted against `MAX_NODES`, so a selection
+ * that runs into the cap (which culling-off makes far likelier) says so instead
+ * of quietly losing its far pieces.
+ */
+export interface TerrainCullStats {
+  /** squares the frustum test rejected in the last selection */
+  culled: number;
+  /** instances the last selection emitted */
+  drawn: number;
+  /** the hard cap `MAX_NODES` those instances are counted against */
+  max: number;
+  /** true while toggle 20 holds the frustum test out of the selection */
+  off: boolean;
+}
+
 /** What the terrain renderer offers its owner (`scene/ground.ts`). */
 export interface TerrainLod {
   /** The mesh, to be hung into the ground group once. */
@@ -1363,6 +1386,22 @@ export interface TerrainLod {
    * the terrain geometry at all.
    */
   setFrozen(on: boolean): void;
+  /**
+   * DRAW EVERY SELECTED NODE (`debug3d.ts`, toggle 20). The quadtree walk is
+   * unchanged — same split/merge rule, same out-of-range rule, same per-node
+   * morph, same instance buffer — only the frustum verdict stops removing
+   * pieces from it.
+   *
+   * WHAT IT ANSWERS. The frustum is tested against a node's BOX, and that box
+   * is a bound taken from the tile statistics (`nodeBounds`). A box that turned
+   * out to be SMALLER than the surface the node really draws would let a node
+   * be culled while its ground is on screen — and a piece dropped on alternating
+   * frames is exactly a shimmer. With the test out of the way that failure mode
+   * cannot occur, so a shimmer that survives this toggle is not a culling one.
+   */
+  setCullOff(on: boolean): void;
+  /** What the last selection culled — for the isolation panel's readout. */
+  cullStats(): TerrainCullStats;
   dispose(): void;
 }
 
@@ -1419,6 +1458,10 @@ export function createTerrainLod(): TerrainLod {
   let flat = true;
   let nodes = 0;
   let triangles = 0;
+  /** Toggle 20: the frustum verdict is counted but no longer obeyed. */
+  let cullOff = false;
+  /** Squares the frustum test rejected during the last selection. */
+  let culled = 0;
   /** The height span of everything held — the fallback box of a node the tile
    *  statistics say nothing about, and the switch that says "flat world". */
   let globalRange = { min: 0, max: 0 };
@@ -1584,8 +1627,10 @@ export function createTerrainLod(): TerrainLod {
       geo.instanceCount = 0;
       nodes = 0;
       triangles = 0;
+      culled = 0;
       return;
     }
+    culled = 0;
     camera.updateMatrixWorld();
     viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     frustum.setFromProjectionMatrix(viewProj);
@@ -1615,9 +1660,19 @@ export function createTerrainLod(): TerrainLod {
       inView: (x, z, size, minY, maxY) => {
         box.min.set(x, minY, z);
         box.max.set(x + size, maxY, z + size);
-        return frustum.intersectsBox(box);
+        if (frustum.intersectsBox(box)) return true;
+        // Counted before the verdict is handed back, so the number means the
+        // same thing in both modes: how many squares the frustum WOULD remove.
+        // With toggle 20 on the rejection is answered as "in view", which is
+        // the only line of this selection the toggle touches.
+        culled += 1;
+        return cullOff;
       },
     });
+    // BEFORE anything is written into it: `grow` doubles the instance buffer
+    // until it holds the whole selection, so the buffer can never be the thing
+    // that drops a piece — with the frustum test out of the way the only cap
+    // left is `MAX_NODES`, and `cullStats` reports the frame against it.
     grow(picked.length);
     const arr = nodeAttr.array as Float32Array;
     triangles = 0;
@@ -1706,6 +1761,8 @@ export function createTerrainLod(): TerrainLod {
       frozen = on;
       uFreeze.value.w = on ? 1 : 0;
     },
+    setCullOff(on) { cullOff = on; },
+    cullStats: () => ({ culled, drawn: nodes, max: MAX_NODES, off: cullOff }),
     dispose() {
       geo.dispose();
       placeholder.dispose();

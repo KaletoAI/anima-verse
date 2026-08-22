@@ -20,12 +20,17 @@
  * ============================================================================
  * [1] THE ID RANGE
  * ============================================================================
- * The panel has 19 switches, numbered 1..19 with no gaps. So:
- *   valid   : 1, 2, 19
- *   invalid : 0, 20, -1, 3.5, NaN
- * Out-of-range ids are DROPPED, never clamped: a `20` in a shared link is
- * either a typo or a link from a newer client, and honouring it as `19` would
+ * The panel has 20 switches, numbered 1..20 with no gaps. So:
+ *   valid   : 1, 2, 19, 20
+ *   invalid : 0, 21, -1, 3.5, NaN
+ * Out-of-range ids are DROPPED, never clamped: a `21` in a shared link is
+ * either a typo or a link from a newer client, and honouring it as `20` would
  * be a state nobody chose.
+ *
+ * THE RANGE IS THE ONE THING THAT MOVES when a switch is added, and it moves in
+ * two places that have to agree: `ISO_MAX_ID` and the number of entries in
+ * `ISOLATION_TOGGLES`. 20 here is hand-counted from that list — 19 was the
+ * count until "Terrain culling off" was added on 2026-08-22.
  *
  * ============================================================================
  * [2] `encodeIsolation` — ascending, deduplicated, comma-separated
@@ -39,7 +44,8 @@
  *   {3, 6, 3}       -> "3,6"         (a Set cannot hold 3 twice anyway)
  *   {2, 10, 1}      -> "1,2,10"      (numeric, not lexicographic: a string
  *                                     sort would give "1,10,2")
- *   {0, 3, 20}      -> "3"           (the invalid ids never reach the string)
+ *   {2, 20, 1}      -> "1,2,20"      (…and 20 is now a switch, so it survives)
+ *   {0, 3, 21}      -> "3"           (the invalid ids never reach the string)
  *
  * ============================================================================
  * [3] `decodeIsolation` — strictly digits per token
@@ -57,13 +63,13 @@
  *   "+3"            -> []            (Number("+3") = 3 — same trap)
  *   "-3"            -> []
  *   "3px"           -> []
- *   "0,20,abc,,7"   -> [7]           (every other token fails a rule above)
+ *   "0,21,abc,,7"   -> [7]           (every other token fails a rule above)
  *   "1e1"           -> []            (Number("1e1") = 10; not digits)
  *
  * ROUND TRIP: decode(encode(S)) is S sorted ascending, for every S of valid
- * ids. Checked exhaustively below over all 2^19 = 524 288 subsets? No — over
+ * ids. Checked exhaustively below over all 2^20 = 1 048 576 subsets? No — over
  * a hand-picked spread plus 2 000 pseudo-random subsets, which is the same
- * statement at a thousandth of the cost.
+ * statement at a five-hundredth of the cost.
  *
  * ============================================================================
  * [4] `readIsoHash` — three DIFFERENT answers, all of them used
@@ -110,7 +116,7 @@
  */
 
 const MIN_ID = 1;
-const MAX_ID = 19;
+const MAX_ID = 20;
 const HASH_KEY = 'iso';
 
 // ── the reimplementation the checks are made against ────────────────────────
@@ -180,16 +186,18 @@ function eq(label, got, want) {
 
 // ── [1] the id range ────────────────────────────────────────────────────────
 
-console.log('[1] the id range 1..19, dropped and never clamped');
+console.log('[1] the id range 1..20, dropped and never clamped');
 eq('(a) 1 is an id', isId(1), true);
 eq('…19 is an id', isId(19), true);
+eq('…20 is an id (Terrain culling off)', isId(20), true);
 eq('…0 is not', isId(0), false);
-eq('…20 is not', isId(20), false);
+eq('…21 is not', isId(21), false);
 eq('…-1 is not', isId(-1), false);
 eq('…3.5 is not', isId(3.5), false);
 eq('…NaN is not', isId(NaN), false);
-eq('(b) 20 is DROPPED by encode, not clamped to 19', encode([20]), '');
-eq('…and by decode', decode('20'), []);
+eq('(b) 21 is DROPPED by encode, not clamped to 20', encode([21]), '');
+eq('…and by decode', decode('21'), []);
+eq('…while 20 now passes both', decode(encode([20])), [20]);
 
 // ── [2] encode ──────────────────────────────────────────────────────────────
 
@@ -199,7 +207,8 @@ eq('…one id', encode([3]), '3');
 eq('…sorted ascending', encode([6, 3]), '3,6');
 eq('…deduplicated', encode([3, 6, 3]), '3,6');
 eq('(d) NUMERIC order, not lexicographic', encode([2, 10, 1]), '1,2,10');
-eq('(e) invalid ids never reach the string', encode([0, 3, 20]), '3');
+eq('…and 20 sorts last, not between 2 and 3', encode([2, 20, 1]), '1,2,20');
+eq('(e) invalid ids never reach the string', encode([0, 3, 21]), '3');
 
 // ── [3] decode ──────────────────────────────────────────────────────────────
 
@@ -217,12 +226,12 @@ eq('…RED: "+3" is dropped', decode('+3'), []);
 eq('…RED: "-3" is dropped', decode('-3'), []);
 eq('…RED: "3px" is dropped', decode('3px'), []);
 eq('…RED: "1e1" is dropped', decode('1e1'), []);
-eq('(h) a mixed line keeps only what is legal', decode('0,20,abc,,7'), [7]);
+eq('(h) a mixed line keeps only what is legal', decode('0,21,abc,,7'), [7]);
 
 console.log('\n…and the round trip decode(encode(S)) = sort(S)');
 const spread = [
-  [], [1], [19], [1, 19], [3, 6], [6, 3], [2, 10, 1],
-  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+  [], [1], [19], [20], [1, 20], [3, 6], [6, 3], [2, 10, 1],
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
 ];
 let tripBad = 0;
 for (const s of spread) {
@@ -240,7 +249,8 @@ for (let i = 0; i < 2000; i += 1) {
   const want = [...new Set(s)].sort((a, b) => a - b);
   if (JSON.stringify(decode(encode(s))) !== JSON.stringify(want)) tripBad += 1;
 }
-eq('(i) 2 008 round trips, failures', tripBad, 0);
+// 9 hand-picked sets + 2 000 generated ones = 2 009.
+eq('(i) 2 009 round trips, failures', tripBad, 0);
 
 // ── [4] readIsoHash ─────────────────────────────────────────────────────────
 
@@ -301,7 +311,8 @@ for (const h of hashes) {
     if (read !== (v || null)) tripHashBad += 1;
   }
 }
-eq('(v) 64 write/read round trips, failures', tripHashBad, 0);
+// 8 hashes × 9 spread sets = 72.
+eq('(v) 72 write/read round trips, failures', tripHashBad, 0);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);
