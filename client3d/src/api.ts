@@ -128,6 +128,58 @@ async function refusal(res: Response): Promise<ApiError> {
     typeof obj?.location_id === 'string' ? obj.location_id : '');
 }
 
+/** The answer of `GET /account/characters`: which characters this account may
+ *  take over. The server has already narrowed the list twice — to the ones
+ *  whose template carries `playable_avatar`, and (for a non-admin) to the
+ *  account's `allowed_characters` — so the client shows it as it comes. */
+export interface PlayableCharacters {
+  characters: string[];
+  /** the one the account controls right now, `''` when none is set */
+  active_character: string;
+  /** the one a fresh login starts on — not shown, but part of the answer */
+  default_character: string;
+}
+
+/** The characters the player may take over (`GET /account/characters`).
+ *  Read when the game menu opens, not polled: the set changes with the
+ *  world's cast, not with the frame. */
+export async function listPlayableCharacters(): Promise<PlayableCharacters> {
+  return json<PlayableCharacters>(await fetch('/account/characters'));
+}
+
+/** The answer of `POST /account/switch-character`. */
+export interface SwitchedCharacter {
+  status: string;
+  /** who the account controlled before — that character turns autonomous again */
+  previous_character: string;
+  active_character: string;
+}
+
+/**
+ * Take over another character (`POST /account/switch-character`).
+ *
+ * Throws an `ApiError` carrying the SERVER's reason for every refusal it
+ * writes for this call — no access (403), not an avatar (400), unknown (404).
+ * That text names the character and the rule, so the caller shows it as it is
+ * instead of guessing from the status code.
+ *
+ * The caller reloads the page afterwards: avatar, role and the whole known-
+ * places view of the running world belong to the character that was left.
+ */
+export async function switchCharacter(name: string): Promise<SwitchedCharacter> {
+  const res = await fetch('/account/switch-character', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ character_name: name }),
+  });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('auth:required'));
+    throw new AuthError();
+  }
+  if (!res.ok) throw await refusal(res);
+  return res.json() as Promise<SwitchedCharacter>;
+}
+
 // `avatarStep` lived here: one compass step of the avatar over
 // `POST /world/avatar/step`. The route was deleted with the grid world (E3)
 // and `postPos` below has replaced it (E4 task 5) — the client no longer asks

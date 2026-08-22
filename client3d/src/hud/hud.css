@@ -674,6 +674,16 @@
   cursor: pointer;
 }
 #hud .hud-menu-seg button:hover { border-color: var(--accent, #6aa9ff); }
+/* A pill that is refusing input — the character rows lock themselves while the
+   switch is with the server. The colour is inherited, so a browser's own
+   disabled dimming barely shows; and :hover still matches a disabled button,
+   which would otherwise light the border of a control that does nothing. */
+#hud .hud-menu-seg button:disabled,
+#hud .hud-menu-seg button:disabled:hover {
+  opacity: 0.45;
+  cursor: default;
+  border-color: var(--border, #30363d);
+}
 #hud .hud-menu-seg button.on {
   border-color: var(--accent, #6aa9ff);
   background: color-mix(in srgb, var(--accent, #6aa9ff) 24%, transparent);

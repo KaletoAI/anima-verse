@@ -335,17 +335,25 @@ const titleSink: WaitSink = {
 };
 
 /**
- * Marker that survives exactly ONE reload, for the ONE case that still needs
- * one: a re-login as a DIFFERENT player (see `installReloginGate`). The world
- * that stands belongs to the old session, so the page is loaded again — and
- * then the title screen's "Enter world" gate would be a door the player has
- * just walked through. With the marker set, boot goes straight in.
+ * Marker that survives exactly ONE reload, for the two cases that need one: a
+ * re-login as a DIFFERENT player (see `installReloginGate`) and taking over
+ * another character from the game menu (`GameMenu.tsx`). Both leave a world
+ * standing that belongs to the session before — avatar, role and the known-
+ * places view were built for it — so the page is loaded again, and then the
+ * title screen's "Enter world" gate would be a door the player has just walked
+ * through. With the marker set, boot goes straight in.
  *
- * It is NOT used anywhere else. The admin's view switch applies live
+ * There is no third user. The admin's view switch applies live
  * (`applyShowAll`), and a logout must land on the title screen, so
  * `backToTitle` deliberately leaves the marker alone.
  */
 const RESUME_KEY = 'av3d.resume';
+
+/** Set the marker, for a caller that is about to `location.reload()` — the key
+ *  itself stays here, so there is only ever one spelling of it. */
+export function markResume(): void {
+  sessionStorage.setItem(RESUME_KEY, '1');
+}
 
 /**
  * Stand in for the title screen's button as the audio gesture.
@@ -394,7 +402,7 @@ function installReloginGate(username: string): void {
         const user = await api.login(u, p);
         reloginOpen = false;
         if (user.username !== username) {
-          sessionStorage.setItem(RESUME_KEY, '1');
+          markResume();
           location.reload();
         }
       },

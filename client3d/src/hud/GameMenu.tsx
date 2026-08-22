@@ -16,12 +16,22 @@
  * PRESENTATIONAL: it owns no SETTING. `Hud.tsx` holds the prefs, applies the
  * volumes to the audio engine and writes `localStorage` — see `setPrefs` there
  * for the contract between the sliders (live) and the switches (stored for the
- * drivers of tasks 5/6). The one `useState` in here holds the TEXT of the
- * three distance fields while they are being typed, which is a keyboard and
- * not a setting; nothing leaves this file until it is a valid triple.
+ * drivers of tasks 5/6). The `useState`s in here hold no setting either: the
+ * TEXT of the three distance fields while they are being typed, which is a
+ * keyboard and not a setting (nothing leaves this file until it is a valid
+ * triple), and the list of playable characters, which belongs to the SERVER
+ * and is only read here.
+ *
+ * THE ONE ACTION ON THIS SCREEN is the character switch: the client is built
+ * for ONE avatar per session, so taking over another one goes the path that
+ * already exists — resume marker (`markResume` in `main.ts`), then
+ * `location.reload()`. No in-place rebuild, and nothing is lost: the world
+ * comes back without the title gate.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useI18n } from '@anima/player-ui';
+import { listPlayableCharacters, switchCharacter } from '../api';
+import { markResume } from '../main';
 import { checkScatterPrefs, DEFAULT_SCATTER_PREFS, SCATTER_PREF_MAX_M,
   SCATTER_PREF_MIN_M } from '../game/prefs';
 import type { Prefs, ScatterPrefs, TtsMode } from '../game/prefs';
@@ -169,6 +179,53 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
     onScatterChange({ ...DEFAULT_SCATTER_PREFS });
   };
 
+  /**
+   * The playable characters of this account, read ONCE when the menu opens —
+   * `Hud.tsx` mounts this component with the panel, so mounting IS opening.
+   * `null` means the answer is still on its way, which is not the same as an
+   * empty list: one waits, the other says there is nobody to take over.
+   */
+  const [chars, setChars] = useState<string[] | null>(null);
+  /** the character the account controls right now (server's word, not ours) */
+  const [activeChar, setActiveChar] = useState('');
+  /** the character being taken over — locks every row while the server answers */
+  const [switching, setSwitching] = useState('');
+  /** the server's own refusal text, shown unchanged; `''` = nothing wrong */
+  const [charError, setCharError] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    listPlayableCharacters().then((r) => {
+      if (!live) return;
+      setChars(r.characters || []);
+      setActiveChar(r.active_character || '');
+    }).catch((e: unknown) => {
+      if (!live) return;
+      // An empty list plus the reason: the section says what it knows instead
+      // of spinning forever. A 401 has already asked for a login of its own.
+      setChars([]);
+      setCharError(e instanceof Error ? e.message : String(e));
+    });
+    return () => { live = false; };
+  }, []);
+
+  const takeOver = async (name: string) => {
+    setSwitching(name);
+    setCharError('');
+    try {
+      await switchCharacter(name);
+      // The world that stands belongs to the character just left, so it is
+      // rebuilt from scratch — with the marker, so boot walks past the gate.
+      markResume();
+      location.reload();
+      // No `setSwitching('')` on this path: the page is going away, and
+      // unlocking the rows would only invite a second click into the reload.
+    } catch (e: unknown) {
+      setCharError(e instanceof Error ? e.message : String(e));
+      setSwitching('');
+    }
+  };
+
   const volumes: Array<{ field: VolumeField; label: string }> = [
     { field: 'master', label: t('Master') },
     { field: 'music', label: t('Music') },
@@ -263,6 +320,43 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
           </p>
         </section>
       )}
+
+      {/* Who the player IS. Not a setting of this browser but a change to the
+          account, which is why it sits next to "Session" rather than among the
+          sliders: one click here hands the old character back to the agent
+          loop and loads the world for the new one. */}
+      <section className="hud-menu-section">
+        <h3 className="hud-menu-head">{t('Character')}</h3>
+        {chars === null && (
+          <p className="hud-menu-hint">{t('Loading…')}</p>
+        )}
+        {chars !== null && chars.length === 0 && (
+          <p className="hud-menu-hint">{t('No playable characters available.')}</p>
+        )}
+        {(chars || []).map((name) => (
+          <div key={name} className="hud-menu-row">
+            <span className="hud-menu-label">{name}</span>
+            {name === activeChar ? (
+              // The one being played is a statement, not an offer — switching
+              // to oneself would reload the world for nothing.
+              <span className="hud-menu-value">{t('Playing')}</span>
+            ) : (
+              <div className="hud-menu-seg">
+                <button type="button" disabled={switching !== ''}
+                  onClick={() => { void takeOver(name); }}>
+                  {switching === name ? t('Switching…') : t('Take over')}
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+        {charError !== '' && (
+          <p className="hud-menu-warn">{charError}</p>
+        )}
+        <p className="hud-menu-hint">
+          {t('Take over another character. The one you leave becomes autonomous again; the world reloads.')}
+        </p>
+      </section>
 
       <section className="hud-menu-section">
         <h3 className="hud-menu-head">{t('Session')}</h3>
