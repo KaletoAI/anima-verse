@@ -54,10 +54,10 @@
  *  - `selectLodNodes` never renders a node at a level whose ring it lies
  *    outside — the parent draws those quadrants itself. That is Strugar's own
  *    rule; here it is what keeps the coarse blocks rare and the far ground
- *    cheap (19 % fewer triangles per frame) rather than what closes the seam.
+ *    cheap (23 % fewer triangles per frame) rather than what closes the seam.
  *
  * `smoke_terrain_lod.mjs` [12] measures the T-junctions over the whole drawn
- * ground: 0 (1.5e-13 m) now, 0.1046 m and 108 352 hanging vertices before.
+ * ground: 0 (2.1e-13 m) now, 0.1171 m and 100 779 hanging vertices before.
  *
  * THE SHADING NORMAL BELONGS TO THE FRAGMENT, NOT TO THE VERTEX (finding round
  * 2026-08-21, second half). It used to be built in the VERTEX shader from
@@ -191,14 +191,17 @@ export const MORPH_START = 0.5;
  *
  * THE RAMP IS ANCHORED IN THE RING AND NOT AT THE ORIGIN (2026-08-22). It used
  * to be `MORPH_START · range[i]`, which is the same number only while the ranges
- * double exactly — and the screen-space error rule (`MAX_PIXEL_ERROR`) widens
- * them out of the doubling all the time. Measured on the widened ranges
- * [382, 554, 652, 1024, …]: a level-3 piece began morphing at 512 m although its
- * own ring only starts at 652 m, so where a level-2 neighbour had finished
- * morphing onto the level-3 lattice, the level-3 piece had ALREADY left it —
- * a 3.9 m step in the ground along the edge they share (`smoke_terrain_lod.mjs`
- * [12] measures it as the red probe). λ(range[i]) = i + 1 is not a nicety, it is
- * the identity the whole seam argument rests on.
+ * double exactly — and the screen-space error rule (`MAX_PIXEL_ERROR`) still
+ * widens them out of the doubling, cap (`MAX_RANGE_WIDENING`) or no cap. On the
+ * ranges the smoke's own `TR` fixture produces, [256, 512, 652, 1024, 2160,
+ * 4096]: level 3 owns the ring [652, 1024], so its ramp belongs in
+ * [652 + 0.5 · 372, 1024] = [838, 1024] — while the origin anchor would have
+ * started it at 0.5 · 1024 = 512 m, 140 m before its own ring even begins. Where
+ * a level-2 neighbour had finished morphing onto the level-3 lattice, the
+ * level-3 piece had therefore ALREADY left it: a step in the ground along the
+ * edge they share, which `smoke_terrain_lod.mjs` [12](nn) measures as part of
+ * its red probe. λ(range[i]) = i + 1 is not a nicety, it is the identity the
+ * whole seam argument rests on.
  *
  * WHY IT EXISTS AT ALL — this is the crack fix of 2026-08-21. Until now the
  * morph was ONE number per node, taken from the node's bounding-box distance
@@ -248,7 +251,8 @@ export function lodLambda(d: number, ranges: readonly number[]): number {
  * same 128 m is a visible staircase. The server ships the exact bound per mip
  * level (`stats.err[k]`, § G2), so a level may only be used from
  * `err · pixelScale / MAX_PIXEL_ERROR` metres away, and the LOD ranges are
- * pushed out until that holds.
+ * pushed out until that holds — by at most one doubling, see
+ * `MAX_RANGE_WIDENING` for what an uncapped push cost.
  *
  * IT WIDENS THE RANGES, IT DOES NOT SPLIT SINGLE NODES, and that is a
  * correctness matter rather than a taste. CDLOD is crack-free because two
@@ -262,6 +266,26 @@ export function lodLambda(d: number, ranges: readonly number[]): number {
  * once.
  */
 export const MAX_PIXEL_ERROR = 2;
+
+/**
+ * How far the error rule may WIDEN a ring beyond its geometric size, as a
+ * factor — 2 means "one doubling", i.e. the rule may push a level out by one
+ * step of the ladder and no further.
+ *
+ * Measured on the live big world (2026-08-22): the mip errors grow by only
+ * 2.2× over five levels (micro-relief painted ON the 2 m lattice costs its
+ * full amplitude once decimated), so uncapped the rule widened the innermost
+ * ring from 128 m to 1538 m and the finest pieces covered a 1.5 km disc —
+ * 2952 pieces, 91.8 % of them behind the 520 m haze, scaling with draw-buffer
+ * height until MAX_NODES was hit at 1530 px. Capped at one doubling the same
+ * camera draws 372 pieces at 1280 px and 390 at 2160 px, and the ladder is
+ * 256/512/1024/2048/3379/4096 m: the four inner rings sit AT the cap at both
+ * viewports and are therefore resolution-independent — level for level the same
+ * 67/58/59/65 pieces — while the rule keeps its job of shifting a level by one
+ * step, which here it spends on level 4 (2048 → 3379 m). A jump from level 5 to
+ * level 1 removed only 54 % of that error for 15× the pieces.
+ */
+export const MAX_RANGE_WIDENING = 2;
 
 /** The base lattice step to fall back on when the payload names none, metres —
  *  the server's own `TILE_STEP_M`. It is only ever reached by a world with no
@@ -280,13 +304,18 @@ const FALLBACK_BASE_STEP_M = 2;
  * pathological camera (inside the ground, at the origin of a 100 km world)
  * would walk the whole quadtree.
  *
- * REACHING IT IS NO LONGER A TRUNCATION (2026-08-22, second finding). The
- * live 16.6 km world reaches it at a 1 530 px viewport, and what the
- * depth-first walk had not got to yet was ground nobody drew — 61 % of the
- * frame at 2 160 px, the nearest missing square 240 m from the camera. Every
- * selection now goes through `selectLodFitted`, which COARSENS the rings until
- * the set fits instead of dropping its tail; the early return inside
+ * REACHING IT IS NO LONGER A TRUNCATION (2026-08-22, second finding). While the
+ * error rule was uncapped the live 16.6 km world reached it at a 1 530 px
+ * viewport, and what the depth-first walk had not got to yet was ground nobody
+ * drew — 30 % of the frame at 2 160 px, the nearest missing square 240 m from
+ * the camera. `MAX_RANGE_WIDENING` takes that particular world back to a few
+ * hundred pieces, but the cap is a statement about how far a level may be
+ * pushed and the ceiling has to hold for any error list at all. So every
+ * selection goes through `selectLodFitted`, which COARSENS the rings until the
+ * set fits instead of dropping its tail; the early return inside
  * `selectLodNodes` is what tells it the cap was reached.
+ * `smoke_terrain_lod.mjs` [14] drives it by handing the UNCAPPED ladder in as
+ * `LodSelectOpts.ranges` — the world that really overran the buffer.
  */
 export const MAX_NODES = 4096;
 
@@ -502,13 +531,18 @@ export interface LodSelectOpts {
  *    vertices per pixel constant;
  *  - the ERROR one, `levelErrorM[i+1] · pixelScale / MAX_PIXEL_ERROR` — the
  *    nearest distance at which level i+1 stays inside its pixel budget. It
- *    lands on `lodRange[i]` because that is the boundary level i+1 begins at.
+ *    lands on `lodRange[i]` because that is the boundary level i+1 begins at,
+ *    and it is CAPPED at `MAX_RANGE_WIDENING` times the geometric ring.
  *
- * MADE MONOTONE afterwards. The two terms are each monotone in the level (the
- * server's `err` grows with the mip level), so the max of them is too — but a
- * hand-edited error list must not be able to produce a ring that starts before
- * the one inside it, which would select a coarse node inside a fine ring and
- * crack the ground.
+ * THE CAP MAKES THE LADDER MONOTONE BY CONSTRUCTION (2026-08-22), and the line
+ * that repaired it afterwards is kept as the belt to that braces:
+ *   `g_i ≤ range[i] ≤ MAX_RANGE_WIDENING · g_i = g_(i+1) ≤ range[i+1]`
+ * with `g_i = minLodDistance · 2^i`, whatever the error list says. Before the
+ * cap the error term could invert the ladder — a big `err[1]` beside a small
+ * `err[2]` really did produce a ring starting inside the one before it, which
+ * selects a coarse node inside a fine ring and cracks the ground.
+ * `smoke_terrain_lod.mjs` [4](l) derives both, the capped ladder and the
+ * inversion the uncapped one still shows.
  *
  * `minLodDistance` 0 answers "every range is 0", i.e. nothing is ever split and
  * the terrain is drawn from its roots. NOTHING PASSES IT ANY MORE (2026-08-22):
@@ -526,7 +560,11 @@ export function lodRanges(minLodDistance: number, levels: number,
     let r = minLodDistance * (1 << i);
     const err = levelErrorM?.[i + 1] ?? 0;
     if (minLodDistance > 0 && scale > 0 && err > 0) {
-      r = Math.max(r, (err * scale) / MAX_PIXEL_ERROR);
+      // The error term, capped at MAX_RANGE_WIDENING times the geometric ring:
+      // the rule may shift a level by one step, never buy fine detail for
+      // ground the haze has already replaced.
+      r = Math.max(r, Math.min((err * scale) / MAX_PIXEL_ERROR,
+                               r * MAX_RANGE_WIDENING));
     }
     if (i > 0 && r < out[i - 1]) r = out[i - 1];
     out.push(r);
@@ -621,8 +659,8 @@ function boxDistance(px: number, py: number, pz: number,
  * THE RULE, top down from the roots (Strugar CDLOD):
  *
  *   `lodRange[i] = max( minLodDistance · 2^i,
- *                       levelErrorM[i+1] · pixelScale / MAX_PIXEL_ERROR )`,
- *                 then made monotone;
+ *                       min( levelErrorM[i+1] · pixelScale / MAX_PIXEL_ERROR,
+ *                            minLodDistance · 2^i · MAX_RANGE_WIDENING ) )`;
  *   a node at level L is SPLIT when the camera is nearer than `lodRange[L−1]`
  *   — i.e. level L owns the ring `[lodRange[L−1], lodRange[L])`;
  *   otherwise it is SELECTED, and `morph` records `lodLambda(d) − L` at its
@@ -639,11 +677,11 @@ function boxDistance(px: number, py: number, pz: number,
  * WHAT THAT BUYS, and what it does not. Every emitted piece then satisfies
  * `lodRange[L−1] ≤ d < lodRange[L]` at its NEAREST point, so its own `morph` is
  * in [0, 1] — measured over a 144-camera sweep, 0 pieces outside their ring
- * against 18 934 under the old rule, nearly half of everything it drew. And a
+ * against 12 587 under the old rule, two pieces in five of what it drew. And a
  * far child that used to be drawn at the finer level is now drawn as its
  * parent's quadrant: the same ONE instance either way, but at the parent's
- * spacing, so it costs a quarter of the triangles (461 835 per frame against
- * 572 075, [12](pp)).
+ * spacing, so it costs a quarter of the triangles (335 275 per frame against
+ * 436 779, [12](pp)).
  *
  * IT DOES NOT, on its own, close the T-junctions. A piece is as wide as its own
  * ring here (`size = range[L] / 2` and the ring is `[range[L]/2, range[L]]`), so
@@ -780,14 +818,22 @@ let fitWarned = false;
  * with a gentle error list. Measured on the live 16.6 × 14.4 km world, whose
  * per-tile error bound is 2…4.4 m at every mip level (the painted micro-relief
  * is structure AT the 2 m lattice, so decimating it once already costs its full
- * amplitude), the screen-space rule widens `lodRange[0]` from 128 m to
+ * amplitude), the UNCAPPED screen-space rule widened `lodRange[0]` from 128 m to
  * `1.9913 · pixelScale / 2` — 1 538 m at a 1 280 px viewport, 2 596 m at
- * 2 160 px — and the FINEST level is drawn over a disk of that radius: 2 952
+ * 2 160 px — and the FINEST level was drawn over a disk of that radius: 2 952
  * pieces at 1 280 px, and 4 096 — the ceiling — from 1 530 px up. Past it the
  * depth-first walk simply stopped, and what it had not reached yet was ground
- * that was never emitted: at a 2 160 px viewport 61 % of the world frame, with
- * the nearest missing square 240 m from the camera and well inside the haze.
- * That is the hole-in-the-sky class the frustum cull was deleted for.
+ * that was never emitted: at a 2 160 px viewport 1 083 of 3 640 frame samples,
+ * with the nearest missing square 240 m from the camera and well inside the
+ * haze. That is the hole-in-the-sky class the frustum cull was deleted for.
+ *
+ * `MAX_RANGE_WIDENING` has since taken THAT world's ladder back to a clean
+ * doubling (256/512/1024/2048/3379/4096 at 1 280 px, 372 pieces), so the live
+ * world no longer comes near the ceiling. The guard stays and is still proven:
+ * the cap bounds how far a level may be pushed, not how much ground a frame
+ * holds, and a world with more levels of relief than this one would reach the
+ * buffer's end the same way. [14] drives it with the uncapped ladder handed in
+ * as `ranges`.
  *
  * WHAT IT DOES INSTEAD. The rings are HALVED, all of them at once, until the
  * selection fits — the same ring structure, moved in. Uniformly and not level

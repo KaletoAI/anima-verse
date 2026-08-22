@@ -109,26 +109,45 @@
  * ============================================================================
  * [4] THE LOD RANGES
  * ============================================================================
- * `lodRange[i] = max(minLodDistance · 2^i, levelErrorM[i+1] · pixelScale /
- * MAX_PIXEL_ERROR)`, then made monotone.
+ * `lodRange[i] = max(minLodDistance · 2^i,
+ *                    min(levelErrorM[i+1] · pixelScale / MAX_PIXEL_ERROR,
+ *                        minLodDistance · 2^i · MAX_RANGE_WIDENING))`.
+ *
+ * THE CAP IS THE 2026-08-22 CHANGE: the error rule may push a level OUT BY ONE
+ * STEP OF THE LADDER and no further. Uncapped it widened the live world's
+ * innermost ring from 128 m to 1 538 m — the finest level over a 1.5 km disc,
+ * 2 952 pieces of which 92 % stood behind the 520 m haze; [14] measures that
+ * world and what the cap does to it.
  *
  * (j) WITHOUT an error list: 128 · 2^i -> [128, 256, 512, 1024, 2048, 4096].
  * (k) WITH the contract's own example errors (§ 4 of the E1 addendum:
  *     err = [0.5862, 0.85, 1.0, 1.1636, 3.3132] for levels 1…5) and a pixel
- *     scale of 2 000 px/m/m, the error term is err · 2000 / 2 = err · 1000:
- *       i=0: max(128,  586.2)  = 586.2
- *       i=1: max(256,  850)    = 850
- *       i=2: max(512,  1000)   = 1000
- *       i=3: max(1024, 1163.6) = 1163.6
- *       i=4: max(2048, 3313.2) = 3313.2
- *       i=5: max(4096, 0)      = 4096   (no level 6 to bound)
- *     Every ring is pushed OUT, i.e. the rugged world is drawn finer.
- * (l) THE MONOTONE GUARD: err = [0, 5, 0.1] at scale 200 gives
- *       i=0: max(128, 5·100)   = 500
- *       i=1: max(256, 0.1·100) = 10 -> raised to 500
- *       i=2: max(512, 0)       = 512
- *     A ring may never start before the one inside it, or a coarse node would
- *     be selected inside a fine ring and the ground would crack.
+ *     scale of 2 000 px/m/m, the error term is err · 2000 / 2 = err · 1000 and
+ *     the cap is twice the geometric ring:
+ *       i=0: max(128,  min(586.2,  256))  = 256      <- held at the cap
+ *       i=1: max(256,  min(850,    512))  = 512      <- held at the cap
+ *       i=2: max(512,  min(1000,   1024)) = 1000
+ *       i=3: max(1024, min(1163.6, 2048)) = 1163.6
+ *       i=4: max(2048, min(3313.2, 4096)) = 3313.2
+ *       i=5: max(4096, 0)                 = 4096   (no level 6 to bound)
+ *     Every ring is still pushed OUT — the rugged world is drawn finer — but
+ *     the two innermost, where the rule asked for 4.6× and 3.3× the geometric
+ *     ring, get one doubling and stop there.
+ * (l) THE MONOTONE GUARD IS NOW STRUCTURAL, which is a result and not a
+ *     deletion. With the cap,
+ *       g_i ≤ range[i] ≤ MAX_RANGE_WIDENING · g_i = g_(i+1) ≤ range[i+1],
+ *     g_i = minLodDistance · 2^i: a ring can never start before the one inside
+ *     it, whatever a hand-edited error list says. The fixture is the hostile
+ *     shape — a huge error at level 1 beside a small one at level 2 — err =
+ *     [0, 10, 3] at scale 200, i.e. an error term of err · 100:
+ *       i=0: max(128, min(1000, 256)) = 256   <- held at the cap
+ *       i=1: max(256, min(300,  512)) = 300   <- the rule really moves this one
+ *       i=2: max(512, 0)              = 512
+ *     RED: the SAME list without the cap is [1000, 300, 512] — level 1's ring
+ *     starting 700 m inside level 0's, which is a coarse node selected in a
+ *     fine ring and a cracked ground. That is the inversion the
+ *     `if (r < out[i−1])` line had to repair after the fact and the cap now
+ *     forbids outright; the line stays as the belt to that braces.
  * (m) A FLAT WORLD (minLodDistance 0) has no ranges at all — nothing splits,
  *     and the terrain is drawn from its roots.
  *
@@ -323,8 +342,11 @@
  *                                  keeps the tile that STARTS on its east edge
  *                                  out.
  * (z2) THE SWEEP: 0 misses, at all 1 080 headings of the three settings, over
- *      4 373 188 sampled ground points, with at most 296 pieces in any one of
- *      them — the number the instance buffer is allocated against.
+ *      4 373 188 sampled ground points, with at most 221 pieces in any one of
+ *      them — well under the number the instance buffer is allocated against.
+ *      (296 before `MAX_RANGE_WIDENING`: this world's error list asked for a
+ *      1.5× wider innermost ring than the cap allows, so a quarter of the
+ *      pieces were fine ones drawn past their geometric ring.)
  * (z3) RED COUNTER-PROBE A — THE DEFECT THAT WAS MEASURED. three.js uploads an
  *      `InstancedBufferGeometry`'s dirty attributes in `projectObject`
  *      (`WebGLObjects.update`, guarded by "Update once per frame"), and
@@ -333,22 +355,47 @@
  *      so the ROWS the card read were the previous frame's while
  *      `geometry.instanceCount` — read at draw time — was this frame's. The
  *      probe draws exactly that: the previous heading's culled list, cut off at
- *      this heading's count. Measured at 8 m / −15°, one degree of yaw per
- *      frame: 40 of 360 headings lose ground, 20 466 sampled points in all. The
- *      SAME staleness against the shipped renderer loses nothing, because
+ *      this heading's count.
+ *
+ *      HOW BIG THE DEFECT IS is a property of the RINGS, so it was re-measured
+ *      when `MAX_RANGE_WIDENING` moved this world's innermost ring from 382 m
+ *      back to 256 m: at 8 m / −15°, one degree of yaw per frame, 25 of 360
+ *      headings lose ground over 13 122 sampled points — it was 40 headings and
+ *      20 466 points on the uncapped rings, which drew a quarter more pieces and
+ *      so had a quarter more of them to get wrong. The check therefore asks only
+ *      that the defect is still there in force (a dozen headings, five figures
+ *      of ground); the exact count belongs to the fixture, not to the law.
+ *
+ *      The SAME staleness against the shipped renderer loses nothing, because
  *      without a cull the selection is a function of the camera's POSITION and
  *      a changed heading does not change it.
  * (z4) RED COUNTER-PROBE B — THE CULL'S OWN BOX. `tile_stats` is capped
  *      server-side (`TILE_STATS_MAX`) and `nodeBounds` folds a zero into the
  *      box for every tile it holds no statistic for. Put the frustum test back
  *      with three quarters of the statistics missing and, at 25 m / −25°,
- *      155 of 360 headings lose ground, 15 800 sampled points. A cull is only
+ *      132 of 360 headings lose ground, 14 498 sampled points. A cull is only
  *      as honest as the bound it culls against; this one could not be made
  *      honest without shipping every tile's statistic.
  * (z5) STABILITY, the other half of a flicker: over 7 200 yaw steps of 0.05°
  *      the selected SET changes by at most a handful of nodes — and those come
  *      from the orbit camera's EYE moving with the yaw, not from the heading:
  *      nothing in the selection reads a direction any more.
+ *
+ *      THE BOUND, DERIVED. The orbit eye stands `dist · cos(pitch)` from the
+ *      point it looks at, so one 0.05° step carries it
+ *      `dist · cos(pitch) · 0.05° in radians` — at 25 m / −25° that is
+ *      25 · 0.9063 · 8.727e−4 = 0.0198 m, two centimetres. A piece changes only
+ *      if its box distance crosses a ring boundary inside those two centimetres,
+ *      and ONE crossing exchanges one piece for at most four: 5 entries of the
+ *      set. Two crossings at once (siblings share a box distance over flat
+ *      ground) make 10, three make 15, so the check asks for fewer than 16. The
+ *      measurement is 5 at 8 m / −15° and 13 at 25 m / −25°, out of roughly 200
+ *      pieces — three simultaneous events at the very worst step, never a
+ *      redrawn frame. At 8 m / −15° the eye moves 6.7 mm per step and the worst
+ *      is 5, i.e. a single crossing. (Both stayed under two events on the
+ *      uncapped rings, whose boundaries lay at 382/554 m instead of on the
+ *      doubling 256/512 m — where a whole row of same-level siblings, all of
+ *      them a power of two from the camera, reaches the boundary together.)
  * (z6) THE SELECTION IS MIRROR-SYMMETRIC. A camera at (777, −333) and one at
  *      (−777, 333) over a symmetric frame select the same tree, node for node,
  *      through the point mirror (x, z) -> (−x − size, −z − size). Nothing in
@@ -393,11 +440,13 @@
  * (uu) THE CEILING. Nothing is culled, so the whole frame is selected every
  *      frame: 432 camera settings over the flat world (6 zoom steps × 72
  *      headings, the engine's own pitch law) reach at most 136 pieces, the
- *      compass world at most 296, against an instance buffer of `MAX_NODES` =
- *      4 096 that is allocated once and never replaced.
+ *      compass world at most 221, against an instance buffer of `MAX_NODES` =
+ *      4 096 that is allocated once and never replaced. The flat world has no
+ *      error list at all, so `MAX_RANGE_WIDENING` cannot touch its 136; the
+ *      compass world's 296 fell to 221 with it.
  *
  * ============================================================================
- * [14] THE CEILING COARSENS, IT DOES NOT TRUNCATE — `selectLodFitted`
+ * [14] THE CAP, AND THE CEILING THAT COARSENS RATHER THAN TRUNCATES
  * ============================================================================
  * [13](uu) sweeps two SMALL worlds with a gentle error list and finds a few
  * hundred pieces, which is what made `MAX_NODES` read like a guard against a
@@ -406,35 +455,70 @@
  * 2…4.4 m at EVERY mip level, because the painted micro-relief (grass 1.0 m,
  * deep forest 1.5 m) is structure at the 2 m lattice itself — decimating it
  * once already costs its full amplitude, so `err[k]` barely grows with k
- * instead of halving with it. The screen-space rule then widens `lodRange[0]`
- * from 128 m to `1.9913 · 1303.7 / 2` = 1 298 m and the FINEST level is drawn
- * over a disk of that radius — 1 538 m at the 1 280 px viewport the reported
- * reading was taken at (`pixelScale` = 1 280 / (2 · tan 22.5°) = 1 545.1,
- * so `1.9913 · 1545.1 / 2` = 1 538.4 m).
+ * instead of halving with it.
+ *
+ * WHAT THE UNCAPPED RULE MADE OF THAT. `pixelScale` = 1 280 / (2 · tan 22.5°) =
+ * 1 545.0967, so the error term is `err · 1545.0967 / 2 = err · 772.5483` and
+ * level 0's is `1.9913 · 772.5483` = 1 538.4 m: the FINEST level drawn over a
+ * disk of a kilometre and a half. 2 952 pieces at 1 280 px and 4 096 — the
+ * ceiling — from 1 530 px up.
+ *
+ * WHAT THE CAP MAKES OF IT (`MAX_RANGE_WIDENING` = 2, 2026-08-22). Every error
+ * term is measured against twice its own geometric ring:
+ *   i=0: max( 128, min(1.9913 · 772.55 = 1538.4,  256)) =  256   <- at the cap
+ *   i=1: max( 256, min(2.945  · 772.55 = 2275.2,  512)) =  512   <- at the cap
+ *   i=2: max( 512, min(3.7229 · 772.55 = 2876.1, 1024)) = 1024   <- at the cap
+ *   i=3: max(1024, min(3.5949 · 772.55 = 2777.2, 2048)) = 2048   <- at the cap
+ *   i=4: max(2048, min(4.3741 · 772.55 = 3379.2, 4096)) = 3379.2 <- the rule
+ *   i=5: max(4096, 0)                                   = 4096
+ * — a clean doubling with ONE level moved, level 4, by 1.65 of its 2.0 allowance.
+ * At a 2 160 px buffer the scale is 2 607.3506 and every error term is 1.69×
+ * larger, so level 4 reaches its cap too and the ladder is
+ * [256, 512, 1024, 2048, 4096, 4096]. The four inner rings are therefore THE
+ * SAME at both viewports, which is the whole point: how far the finest ground
+ * reaches must not be a function of the window's height.
  *
  * (vv) THE FIXTURE IS THAT WORLD, by its numbers and not by a fetch: the frame,
  *      the error list read off the server's own `heightfield.tile_stats`, and
  *      a flat box for every node (the live field spans 5.4 m, so a box is a
- *      rounding error against 1 538 m of ring). At a 1 280 px viewport it
- *      selects 2 952 pieces — three digits from the ceiling, and the number
- *      the isolation panel reported (2 973) to within the camera's own yaw.
- * (ww) THE RED PROBE: the same fixture at 2 160 px. `selectLodNodes` alone
- *      returns exactly `MAX_NODES` = 4 096 pieces, and a 256 m lattice over the
- *      frame finds hundreds of samples no piece owns — ground that was never
- *      emitted, because the depth-first walk stopped where the cap was reached.
- *      From a camera east and south of the origin — (3 000, 3 000), where the
- *      roots around it are ones the row-major walk reaches LATE — 1 083 of
- *      3 640 frame samples are uncovered and the nearest of them is 240 m
- *      away, i.e. inside the 520 m haze and in plain view.
- * (xx) THE GUARD: `selectLodFitted` on the same camera halves the rings until
- *      the set fits — under the cap, and the 256 m lattice finds NO uncovered
- *      sample, on the frame and inside the haze alike. Halving is uniform, so
- *      the ranges stay monotone and `λ(range[i]) = i + 1` still holds exactly:
- *      the crack argument of [8]/[12] is untouched by the coarsening.
- * (yy) IT IS A NO-OP WHERE IT FITS: the flat world of [13] and the compass
- *      world of [9] come back with `coarsenings` 0 and exactly the list
- *      `selectLodNodes` returns, so the guard costs nothing where nothing is
- *      wrong.
+ *      rounding error against a ring of hundreds of metres). The ladder above is
+ *      asserted at both viewports, and with it the ONE number the cap is for:
+ *      1 538.4 m is what level 0 asked for and 256 m is what it gets.
+ * (vv2) THE PIECE COUNT THAT FOLLOWS. At the reported camera the fixture selects
+ *      372 pieces at 1 280 px and 390 at 2 160 px, `coarsenings` 0 both times —
+ *      against 2 952 and the truncating 4 096 under the uncapped ladder. The
+ *      18 extra pieces at 2 160 px are ALL at levels 4 and 5, where the ladder
+ *      really did move (49/74 -> 70/71); levels 0…3 come back 67/58/59/65 at
+ *      both, piece for piece, because their rings are pinned at the cap.
+ *      A ROUGH CHECK ON THE ORDER, by hand: level L owns the annulus
+ *      [128 · 2^(L−1), 128 · 2^L] and its pieces are 64 · 2^L wide, so
+ *      π(4 − 1)(64 · 2^L)² / (64 · 2^L)² = 3π ≈ 9.4 whole pieces per level if
+ *      the rings were circles and the quadtree could cut squares to fit; the
+ *      out-of-range rule pays for the difference in half-sized quadrants (92 of
+ *      the 372 here), and the roots outside the last ring for the rest.
+ * (ww) THE RED PROBE — THE WORLD THAT REALLY OVERRAN THE BUFFER, put back by
+ *      handing `LodSelectOpts.ranges` the UNCAPPED ladder (derived here from the
+ *      same arithmetic, including the monotone repair the old code ran:
+ *      [2596.0, 3839.3, 4853.5, 4853.5, 5702.4, 5702.4] at 2 160 px, where the
+ *      raw level-3 term 4 686.6 falls below level 2's and is raised).
+ *      `selectLodNodes` then returns exactly `MAX_NODES` = 4 096 pieces, and a
+ *      256 m lattice over the frame finds ground no piece owns — the walk simply
+ *      stopped. From a camera east and south of the origin — (3 000, 3 000),
+ *      where the roots around it are ones the row-major walk reaches LATE —
+ *      1 083 of 3 640 frame samples are uncovered and the nearest of them is
+ *      240 m away, i.e. inside the 520 m haze and in plain view. The cap is not
+ *      what makes this safe: it is one world's error list, and the ceiling has
+ *      to hold for every world's.
+ * (xx) THE GUARD: `selectLodFitted` on the same camera and the same uncapped
+ *      rings halves them until the set fits — under the cap, and the 256 m
+ *      lattice finds NO uncovered sample, on the frame and inside the haze
+ *      alike. Halving is uniform, so the ranges stay monotone and
+ *      `λ(range[i]) = i + 1` still holds exactly: the crack argument of [8]/[12]
+ *      is untouched by the coarsening.
+ * (yy) IT IS A NO-OP WHERE IT FITS: the live world under the SHIPPED (capped)
+ *      rings, the flat world of [13] and the compass world of [9] all come back
+ *      with `coarsenings` 0 and exactly the list `selectLodNodes` returns, so
+ *      the guard costs nothing where nothing is wrong.
  *
  * ============================================================================
  * [7] THE ANALYTIC CLICK — `rayGroundHit`
@@ -595,12 +679,15 @@
  *      The red probe here rebuilds the per-vertex reading and reproduces both
  *      old numbers to the digit.
  * (kk) AND A SPLIT NOW COSTS NOTHING AT ALL. 60 m of camera path heading
- *      east–north, 32 transitions, 15 895 ground points read from the OLD node
- *      set and the NEW one at the SAME camera: the worst difference is
- *      3.5e-13 m. It used to be 0.101 m (0.25 px of a 45° / 1 080 px view) and
- *      the check asked for no more than a quarter of `MAX_PIXEL_ERROR`; the
- *      bound is now float precision, because the drawn surface is a function of
- *      the world point and its block and neither knows which piece drew it.
+ *      east–north, 23 transitions, 14 161 ground points read from the OLD node
+ *      set and the NEW one at the SAME camera: the worst difference is 3.4e-9 m,
+ *      and those nanometres are the PROBE's barycentric division by the
+ *      determinant of a triangle the morph has collapsed, not the ground (the
+ *      derivation is at the check). It used to be 0.101 m (0.25 px of a
+ *      45° / 1 080 px view) and the check asked for no more than a quarter of
+ *      `MAX_PIXEL_ERROR`; the bound is now a micrometre, because the drawn
+ *      surface is a function of the world point and its block and neither knows
+ *      which piece drew it.
  * (ll) NO COMPASS DIRECTION, which was the other hypothesis (a corner bias in
  *      the box distance would make nodes east and north of the camera split
  *      earlier than their mirror images). The WORLD is mirrored through the
@@ -634,25 +721,27 @@
  * THE SWEEP is the `TR` world of [11] — the only fixture here whose 2 m lattice
  * and 4 m decimation really disagree — over 120 frames of the 60 m east–north
  * walk plus all 24 headings of a 15° compass at its start, 144 camera settings
- * and 4 550 801 edge vertices in all.
+ * and 3 346 436 edge vertices in all (it was 4 550 801 before
+ * `MAX_RANGE_WIDENING` pulled this world's innermost ring back from 382 m to
+ * 256 m and with it a quarter of the pieces).
  *
  * (mm) 0 vertices off the neighbour's chain by more than a micrometre, worst
- *      1.5e-13 m. That is float precision, not a small number.
+ *      2.1e-13 m. That is float precision, not a small number.
  * (nn) RED — the old rule, rebuilt here from its own arithmetic (`redSelect`
  *      hands every child the finer level whether its own distance is still in
  *      the ring or not, `redLambda` anchors every ramp at the origin,
- *      `redVertex` reads the morph per vertex): 108 352 of 5 206 454 tests off,
- *      worst 0.1046 m. At 500 m that is 0.27 px of sky, and it moves to a
+ *      `redVertex` reads the morph per vertex): 100 779 of 3 947 500 tests off,
+ *      worst 0.1171 m. At 500 m that is 0.3 px of sky, and it moves to a
  *      different edge with every camera step, which is what a shimmer is.
  * (oo) NO PIECE IS DRAWN BEYOND ITS OWN RING. `morph` is λ at the piece's
  *      nearest point minus its level, and λ(range[i]) = i + 1 exactly
  *      (`lodLambda`), so `morph ≤ 1` IS the out-of-range rule. 0 offenders now;
- *      18 934 under the old rule, i.e. nearly half of every piece it drew.
+ *      12 587 under the old rule, i.e. two pieces in five of what it drew.
  * (pp) AND IT IS CHEAPER. Same number of pieces per frame — a far child that
  *      used to be emitted at the finer level is now emitted as its parent's
  *      quadrant, one instance either way — but the quadrant carries the
  *      PARENT's spacing over the child's square, so it costs a quarter of the
- *      triangles: 461 835 per frame against 572 075, 81 %.
+ *      triangles: 335 275 per frame against 436 779, 77 %.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -766,6 +855,7 @@ function checkEq(label, actual, expected) {
 
 const { lod, height } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX_PIXEL_ERROR,
+  MAX_RANGE_WIDENING,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
   morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl, selectLodFitted,
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt } = lod;
@@ -955,14 +1045,67 @@ check('(i) RED: level 1 is NOT the sampler, and misses by more than a metre',
   mipWorst > 1 ? 1 : 0, 1);
 
 // ── [4] the ranges ──────────────────────────────────────────────────────────
-console.log('\n[4] the LOD ranges — geometry, widened by the server\'s error bound');
+console.log('\n[4] the LOD ranges — geometry, widened by the error bound, capped at one doubling');
 checkEq('(j) without an error list', lodRanges(128, 6),
   [128, 256, 512, 1024, 2048, 4096]);
 const ERR = [0, 0.5862, 0.85, 1.0, 1.1636, 3.3132];
+check('the error rule may widen a ring by one doubling', MAX_RANGE_WIDENING, 2);
 checkEq('(k) with the contract\'s own example errors at 2 000 px/m/m',
   lodRanges(128, 6, ERR, 2000).map((v) => Math.round(v * 1e4) / 1e4),
-  [586.2, 850, 1000, 1163.6, 3313.2, 4096]);
-checkEq('(l) the monotone guard', lodRanges(128, 3, [0, 5, 0.1], 200), [500, 500, 512]);
+  [256, 512, 1000, 1163.6, 3313.2, 4096]);
+// …and the two the cap holds are exactly the two the rule asked too much for:
+// 586.2 / 128 = 4.6 doublings' worth and 850 / 256 = 3.3.
+checkEq('…the levels the cap held, and what they had asked for',
+  [0, 1].map((i) => [Math.round((ERR[i + 1] * 2000) / MAX_PIXEL_ERROR * 10) / 10,
+                     128 * (1 << i) * MAX_RANGE_WIDENING]),
+  [[586.2, 256], [850, 512]]);
+/**
+ * (l) THE LADDER IS MONOTONE BY CONSTRUCTION UNDER THE CAP — derived in the
+ * docstring, measured here on the shape that used to invert it: a huge error at
+ * level 1 beside a small one at level 2. The error term is err · 200 / 2 =
+ * err · 100, so [1000, 300] against geometric rings of [128, 256] and caps of
+ * [256, 512].
+ */
+const HOSTILE = [0, 10, 3];
+checkEq('(l) the hostile error list, capped', lodRanges(128, 3, HOSTILE, 200),
+  [256, 300, 512]);
+/**
+ * THE LADDER AS IT WAS BEFORE THE CAP, written out from its own arithmetic
+ * rather than by calling the shipped function — `MAX_RANGE_WIDENING` cannot be
+ * turned off from outside, and a red probe that asked the shipped code to
+ * misbehave would prove nothing anyway.
+ *
+ * `monotone` is the repair line the old `lodRanges` ran afterwards: off here in
+ * (l), where the point is that the raw terms really do invert, and ON in [14],
+ * which reproduces the world that overran `MAX_NODES` and therefore needs the
+ * old function's answer to the digit.
+ */
+const uncappedLadder = (min, levels, err, scale, monotone = false) => {
+  const out = [];
+  for (let i = 0; i < levels; i += 1) {
+    let r = min * (1 << i);
+    const e = err?.[i + 1] ?? 0;
+    if (min > 0 && scale > 0 && e > 0) r = Math.max(r, (e * scale) / MAX_PIXEL_ERROR);
+    if (monotone && i > 0 && r < out[i - 1]) r = out[i - 1];
+    out.push(r);
+  }
+  return out;
+};
+// RED: level 1's ring starts INSIDE level 0's as soon as the cap is gone.
+const hostileRaw = uncappedLadder(128, 3, HOSTILE, 200);
+checkEq('…RED: uncapped, the same list inverts the ladder', hostileRaw,
+  [1000, 300, 512]);
+check('…RED: by this many metres, level 1 starting inside level 0',
+  hostileRaw[0] - hostileRaw[1], 700);
+// …and the capped ladder cannot: range[i] ≤ 2·g_i = g_(i+1) ≤ range[i+1].
+const capMono = (err, scale) => {
+  const r = lodRanges(128, 6, err, scale);
+  return r.every((v, i) => (i === 0 || v >= r[i - 1])
+    && v <= 128 * (1 << i) * MAX_RANGE_WIDENING + 1e-9);
+};
+checkEq('…while every capped ladder is monotone and inside one doubling',
+  [capMono(ERR, 2000), capMono(HOSTILE, 200), capMono([0, 9, 9, 9, 9, 9], 5000)],
+  [true, true, true]);
 checkEq('(m) a flat world has no ranges', lodRanges(0, 6, ERR, 2000), [0, 0, 0, 0, 0, 0]);
 
 // ── [5] the selection ───────────────────────────────────────────────────────
@@ -1379,8 +1522,11 @@ const oneFrameLate = (deg, pitchDeg, dist) => ({ eye, fwd, ps, select, boundsFn 
 };
 const redLate = sweepCompass(honest, REPORTED_X, REPORTED_Z, -15, 8,
                              oneFrameLate(1, -15, 8));
+// The floor is a dozen headings and five figures of ground, not the exact count:
+// how many headings the staleness bites at is a property of the fixture's rings
+// (25 under the capped ladder, 40 under the uncapped one — see the docstring).
 checkAbove('(z3) RED A: the previous frame\'s rows under this frame\'s count'
-  + ' lose ground at headings', redLate.headings, 25);
+  + ' lose ground at headings', redLate.headings, 12);
 checkAbove('…and lose this many sampled points', redLate.miss, 1e4);
 console.log(`       (RED A fails at headings ${redLate.ranges})`);
 // …and the same staleness against the SHIPPED renderer, which culls nothing:
@@ -1444,8 +1590,10 @@ for (const [dist, pitch] of [[8, -15], [25, -25]]) {
     }
     prev = set;
   }
+  // Three simultaneous split/merge events, 5 entries each — the derivation of
+  // the two centimetres the eye moves per step is in the docstring.
   checkBelow(`(z5) worst node churn per 0.05° of yaw at ${dist} m / ${pitch}°`,
-    worst, 8);
+    worst, 16);
 }
 
 // (z6) the selection knows no quadrant
@@ -1764,9 +1912,28 @@ for (let tz = -6; tz <= -1; tz += 1) {
 // everywhere — a bound, which is all `nodeBounds` may ever be.
 const TR_GLOBAL = { min: -12, max: 12 };
 const trBounds = (x, z, size) => nodeBounds(trStats, TILE_M, TR_GLOBAL, x, z, size);
+/**
+ * THE RINGS THIS SECTION AND [12] MEASURE AGAINST, derived by hand from the
+ * error list `CERR` and the 1 080 px pixel scale
+ * 1080 / (2 · tan 22.5°) = 1080 / 0.8284271 = 1303.6753, so the error term is
+ * `err · 1303.6753 / 2 = err · 651.8377` and the cap is twice the geometric
+ * ring:
+ *   i=0: max(128,  min(0.5862 · 651.84 =  382.1, 256))  =  256   <- at the cap
+ *   i=1: max(256,  min(0.85   · 651.84 =  554.1, 512))  =  512   <- at the cap
+ *   i=2: max(512,  min(1.0    · 651.84 =  651.8, 1024)) =  651.8 <- the rule
+ *   i=3: max(1024, min(1.1636 · 651.84 =  758.5, 2048)) = 1024
+ *   i=4: max(2048, min(3.3132 · 651.84 = 2159.7, 4096)) = 2159.7 <- the rule
+ *   i=5: max(4096, 0)                                   = 4096
+ * Two rings still stand OUT of the doubling (652 and 2160), which is what makes
+ * this fixture a fair test of `lodLambda`'s ring-anchored ramp: level 3 owns
+ * [652, 1024] and must not begin morphing at 0.5 · 1024 = 512.
+ */
 const TR_RANGES = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, CERR, camPixelScale);
 checkEq('the rings this section measures against',
-  TR_RANGES.map((r) => Math.round(r * 10) / 10), [382.1, 554.1, 651.8, 1024, 2159.7, 4096]);
+  TR_RANGES.map((r) => Math.round(r * 10) / 10), [256, 512, 651.8, 1024, 2159.7, 4096]);
+checkEq('…two of them still out of the doubling, the rest held at the cap',
+  TR_RANGES.map((r, i) => Math.round((r / (MIN_LOD_DISTANCE_M * (1 << i))) * 100) / 100),
+  [2, 2, 1.27, 1, 1.05, 1]);
 
 function trSelect(cam) {
   return selectLodNodes({
@@ -1982,15 +2149,32 @@ checkAbove('(kk) transitions over 60 m heading east–north', swept.transitions,
 checkAbove('…ground points compared across them', swept.samples, 1e4);
 console.log(`       (worst pop ${swept.worstM.toFixed(4)} m, `
   + `mean ${swept.meanPx.toExponential(2)} px)`);
-// THE BOUND, re-derived after § A16.6 (2026-08-22). It used to be a fraction of
-// `MAX_PIXEL_ERROR`: a split cost 0.101 m, a quarter of a pixel, and the check
-// asked for no more than that. It now costs NOTHING, and the reason is
-// structural rather than lucky — the drawn surface is a function of the world
-// point and the block it lies in, and neither of those knows which piece drew
-// it, so exchanging one piece for four cannot move the ground at all. The bound
-// is therefore float precision and not a pixel budget.
-check('…the worst of them, metres', swept.worstM, 0, 1e-9);
-check('…and in PIXELS of a 45° / 1 080 px view', swept.worstPx, 0, 1e-9);
+/**
+ * THE BOUND, re-derived after § A16.6 (2026-08-22). It used to be a fraction of
+ * `MAX_PIXEL_ERROR`: a split cost 0.101 m, a quarter of a pixel, and the check
+ * asked for no more than that. It now costs NOTHING, and the reason is
+ * structural rather than lucky — the drawn surface is a function of the world
+ * point and the block it lies in, and neither of those knows which piece drew
+ * it, so exchanging one piece for four cannot move the ground at all.
+ *
+ * SO THE BOUND IS THE PROBE'S OWN ARITHMETIC, and it is worth writing down what
+ * that is, because it is not the double epsilon. `meshY` reads the surface by
+ * BARYCENTRIC interpolation, dividing by the triangle's determinant `den`, and
+ * a morphed patch is full of triangles the morph has collapsed: three vertices
+ * on one line, `den` a rounding residue of products of world coordinates around
+ * 1.7e3 m, i.e. (1.7e3)² · 2.2e−16 ≈ 6e−10 — just past the 1e−12 the probe
+ * rejects a triangle at. Such a sliver returns weights whose noise is amplified
+ * by the same tiny divisor, so the floor of the METHOD is nanometres and moves
+ * with the fixture's rings, while the floor of the LAW is the 2.2e−13 that [12]
+ * measures on vertices, where no division happens. The threshold is therefore
+ * the micrometre [12](mm) calls "on the chain" — six orders under the 0.101 m
+ * the old rule cost, and nine under the ground's own relief.
+ */
+check('…the worst of them, metres', swept.worstM, 0, 1e-6);
+// 1 µm at the 10 m the nearest sample can stand from the eye is
+// 1e-6 · 1303.7 / 10 = 1.3e-4 px, so a thousandth of a pixel is the matching
+// ceiling on the other axis.
+check('…and in PIXELS of a 45° / 1 080 px view', swept.worstPx, 0, 1e-3);
 
 // (ll) NO COMPASS DIRECTION. Hypothesis (B) was a corner bias in the box
 // distance — nodes east and north of the camera splitting earlier than their
@@ -2319,7 +2503,8 @@ console.log(`       (flat world at most ${flatMax} pieces, compass world at most
   + `${maxSweepNodes}, buffer ${MAX_NODES})`);
 
 // ── [14] the ceiling coarsens, it does not truncate ─────────────────────────
-console.log('\n[14] the node ceiling coarsens the rings instead of dropping the tail');
+console.log('\n[14] the widening is capped at one doubling, and the ceiling coarsens '
+  + 'instead of dropping the tail');
 
 /**
  * THE LIVE WORLD, by its numbers. `world_bounds` comes from
@@ -2341,11 +2526,15 @@ const LIVE_EXT = [LIVE_BOUNDS.min_x - LIVE_MARGIN_M, LIVE_BOUNDS.min_z - LIVE_MA
                   LIVE_BOUNDS.max_x + LIVE_MARGIN_M, LIVE_BOUNDS.max_z + LIVE_MARGIN_M];
 const LIVE_ERR = [0, 1.9913, 2.945, 3.7229, 3.5949, 4.3741];
 const liveFlat = () => ({ min: 0, max: 0 });
-const liveOpts = (eye, px) => ({
+/** `ranges` is how the red probes put the UNCAPPED ladder back: the shipped
+ *  `lodRanges` can no longer produce it, and `LodSelectOpts.ranges` is the one
+ *  door the selection has for rings it did not compute itself. */
+const liveOpts = (eye, px, ranges) => ({
   x0: LIVE_EXT[0], z0: LIVE_EXT[1], x1: LIVE_EXT[2], z1: LIVE_EXT[3],
   leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
   camX: eye[0], camY: eye[1], camZ: eye[2], boundsOf: liveFlat,
   levelErrorM: LIVE_ERR, pixelScale: px / (2 * Math.tan((FOV_DEG * Math.PI) / 360)),
+  ...(ranges ? { ranges } : {}),
 });
 /** The engine's camera law again, about an arbitrary point of the live frame. */
 const liveEye = (yawDeg, dist, tx, tz) => {
@@ -2388,23 +2577,75 @@ function uncovered(picked, eye) {
   return { miss, tested, nearMiss, nearTested, nearest };
 }
 
-// (vv) the reported reading, reproduced.
+// (vv) THE CAPPED LADDER, at both viewports — the derivation is in the
+// docstring, and the number the cap exists to refuse is asserted beside it.
+const livePx = (px) => px / (2 * Math.tan((FOV_DEG * Math.PI) / 360));
 const liveCam = liveEye(45, 12, REPORTED_X, REPORTED_Z);
-const liveRanges = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, LIVE_ERR,
-                             1280 / (2 * Math.tan((FOV_DEG * Math.PI) / 360)));
-check('(vv) the error rule widens lodRange[0] to, metres',
-  Math.round(liveRanges[0] * 10) / 10, 1538.4);
-checkAbove('…which is this many times the geometric 128 m',
-  Math.round(liveRanges[0] / MIN_LOD_DISTANCE_M), 11);
-const live1280 = selectLodFitted(liveOpts(liveCam, 1280));
-check('(vv) pieces at Haus von Kai, 1 280 px', live1280.nodes.length, 2952);
-check('…and the rings did not have to be coarsened for it', live1280.coarsenings, 0);
-check('…finest-level (64 m) pieces among them',
-  live1280.nodes.filter((n) => n.level === 0).length, 1914);
+const liveRanges = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, LIVE_ERR, livePx(1280));
+const liveRanges2160 = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, LIVE_ERR,
+                                 livePx(2160));
+check('the pixel scale of a 1 280 px buffer at 45°', livePx(1280), 1545.0967, 1e-4);
+check('(vv) what level 0 asked for, metres',
+  Math.round(((LIVE_ERR[1] * livePx(1280)) / MAX_PIXEL_ERROR) * 10) / 10, 1538.4);
+check('…and what the cap gives it', liveRanges[0], MIN_LOD_DISTANCE_M * MAX_RANGE_WIDENING);
+checkEq('(vv) the capped ladder at 1 280 px',
+  liveRanges.map((r) => Math.round(r * 10) / 10), [256, 512, 1024, 2048, 3379.2, 4096]);
+checkEq('…and at 2 160 px, where level 4 reaches its cap too',
+  liveRanges2160.map((r) => Math.round(r * 10) / 10), [256, 512, 1024, 2048, 4096, 4096]);
+checkEq('…so the four inner rings do not depend on the buffer height at all',
+  liveRanges.slice(0, 4), liveRanges2160.slice(0, 4));
+checkEq('…and no ring stands more than one doubling out of the ladder',
+  liveRanges.every((r, i) => r <= MIN_LOD_DISTANCE_M * (1 << i) * MAX_RANGE_WIDENING + 1e-9)
+  && liveRanges2160.every((r, i) =>
+    r <= MIN_LOD_DISTANCE_M * (1 << i) * MAX_RANGE_WIDENING + 1e-9), true);
+// RED: the uncapped ladder is a different world — a 1 538 m innermost ring.
+const liveUncapped = uncappedLadder(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, LIVE_ERR,
+                                    livePx(1280), true);
+check('…RED: uncapped, lodRange[0] was, metres',
+  Math.round(liveUncapped[0] * 10) / 10, 1538.4);
+checkAbove('…RED: which is this many times the geometric 128 m',
+  Math.round(liveUncapped[0] / MIN_LOD_DISTANCE_M), 11);
 
-// (ww) RED — the same world at a 2 160 px drawing buffer, WITHOUT the guard.
+// (vv2) the pieces that follow from the capped ladder.
+const live1280 = selectLodFitted(liveOpts(liveCam, 1280));
+const live2160 = selectLodFitted(liveOpts(liveCam, 2160));
+const perLv = (sel) => {
+  const c = [0, 0, 0, 0, 0, 0];
+  for (const n of sel.nodes) c[n.level] += 1;
+  return c;
+};
+check('(vv2) pieces at the reported camera, 1 280 px', live1280.nodes.length, 372);
+check('…and at 2 160 px', live2160.nodes.length, 390);
+check('…the rings did not have to be coarsened for either',
+  live1280.coarsenings + live2160.coarsenings, 0);
+checkEq('…and levels 0…3 are the same count at both, ring for ring',
+  perLv(live1280).slice(0, 4), perLv(live2160).slice(0, 4));
+checkEq('…the whole per-level split at 1 280 px', perLv(live1280),
+  [67, 58, 59, 65, 49, 74]);
+checkEq('…and at 2 160 px, where only levels 4 and 5 move',
+  perLv(live2160), [67, 58, 59, 65, 70, 71]);
+check('…half-sized quadrants among the 372',
+  live1280.nodes.filter((n) => n.cells === PATCH_N / 2).length, 92);
+// RED: what the SAME camera drew before the cap — the uncapped rings handed in.
+const liveRed1280 = selectLodNodes(liveOpts(liveCam, 1280, liveUncapped));
+check('…RED: the uncapped ladder drew this many pieces there', liveRed1280.length, 2952);
+check('…RED: of which finest-level (64 m) ones',
+  liveRed1280.filter((n) => n.level === 0).length, 1914);
+
+// (ww) RED — the uncapped world at a 2 160 px drawing buffer, WITHOUT the guard.
+// The rings are handed in rather than asked for: `MAX_RANGE_WIDENING` is not a
+// switch, and a probe that made the shipped function misbehave would measure the
+// probe. The ceiling itself is a property of the SELECTION and has to stay
+// proven for any ring ladder, capped or not.
+const redRanges = uncappedLadder(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, LIVE_ERR,
+                                 livePx(2160), true);
+checkEq('(ww) the uncapped ladder the red probe selects against',
+  redRanges.map((r) => Math.round(r * 10) / 10),
+  [2596, 3839.3, 4853.5, 4853.5, 5702.4, 5702.4]);
+check('…where the raw level-3 term fell below level 2\'s and was raised',
+  Math.round(((LIVE_ERR[4] * livePx(2160)) / MAX_PIXEL_ERROR) * 10) / 10, 4686.6);
 const redCam = liveEye(45, 12, 3000, 3000);
-const redRaw = selectLodNodes(liveOpts(redCam, 2160));
+const redRaw = selectLodNodes(liveOpts(redCam, 2160, redRanges));
 const redCover = uncovered(redRaw, redCam);
 check('(ww) RED: selectLodNodes alone stops at exactly the ceiling',
   redRaw.length, MAX_NODES);
@@ -2415,8 +2656,8 @@ check(`…RED: of ${redCover.nearTested} samples inside the haze, uncovered`,
 checkBelow('…RED: and the nearest of those stood this far from the camera, m',
   Math.round(redCover.nearest), HAZE_M);
 
-// (xx) the guard on the very same camera.
-const redFit = selectLodFitted(liveOpts(redCam, 2160));
+// (xx) the guard on the very same camera and the very same rings.
+const redFit = selectLodFitted(liveOpts(redCam, 2160, redRanges));
 checkBelow('(xx) selectLodFitted stays under the ceiling', redFit.nodes.length, MAX_NODES);
 check('…by halving the rings this many times', redFit.coarsenings, 1);
 const fitCover = uncovered(redFit.nodes, redCam);
@@ -2434,23 +2675,26 @@ check('…inside the haze, uncovered', fitCover.nearMiss, 0);
  * and range[4] = range[5] — and `lodLambda` steps over such a ring by design,
  * so λ skips a level there. Nothing is ever emitted at a zero-width level.)
  */
-const honestRedRanges = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, LIVE_ERR,
-                                  2160 / (2 * Math.tan((FOV_DEG * Math.PI) / 360)));
 checkEq('…the coarsened rings are still monotone',
   redFit.ranges.every((r, i) => i === 0 || r >= redFit.ranges[i - 1]), true);
-checkEq('…and are exactly the honest rings halved',
-  redFit.ranges.every((r, i) => Math.abs(r - honestRedRanges[i] / 2) < 1e-9), true);
+checkEq('…and are exactly the rings it started from, halved',
+  redFit.ranges.every((r, i) => Math.abs(r - redRanges[i] / 2) < 1e-9), true);
 let lamOff = 0;
 for (let d = 0; d <= 4000; d += 7) {
   const a = lodLambda(d, redFit.ranges);
-  const b = lodLambda(2 * d, honestRedRanges);
+  const b = lodLambda(2 * d, redRanges);
   lamOff = Math.max(lamOff, Math.abs(a - b));
 }
 check('…so the coarsened λ(d) IS the honest λ(2d), worst deviation', lamOff, 0, 1e-12);
 console.log(`       (${redRaw.length} truncated pieces, ${redCover.miss}/${redCover.tested} `
   + `frame samples with no ground -> ${redFit.nodes.length} coarsened pieces, 0 uncovered)`);
 
-// (yy) …and it is a no-op wherever the honest rings already fit.
+// (yy) …and it is a no-op wherever the honest rings already fit — the live
+// world under the SHIPPED (capped) rings first, which is the case that used to
+// need the guard and no longer does.
+check('(yy) the live world, capped rings: coarsenings', live1280.coarsenings, 0);
+check('…and the very list selectLodNodes returns',
+  live1280.nodes.length, selectLodNodes(liveOpts(liveCam, 1280)).length);
 const flatFit = selectLodFitted({
   x0: FLAT_EXT[0], z0: FLAT_EXT[1], x1: FLAT_EXT[2], z1: FLAT_EXT[3],
   leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
@@ -2458,7 +2702,7 @@ const flatFit = selectLodFitted({
   boundsOf: flatLevel, pixelScale: camPixelScale,
 });
 check('(yy) the level world: coarsenings', flatFit.coarsenings, 0);
-check('…and the very list selectLodNodes returns', flatFit.nodes.length, nowRings.length);
+check('…and its list too', flatFit.nodes.length, nowRings.length);
 const compassOpts = {
   x0: CX0, z0: CZ0, x1: CX1, z1: CZ1,
   leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
