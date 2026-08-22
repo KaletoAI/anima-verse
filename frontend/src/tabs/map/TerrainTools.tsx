@@ -27,15 +27,17 @@ import { SliderInput } from '../../components/SliderInput'
 import type { PropRef } from '../../lib/refs'
 import { fmtHeight, heightColor } from './HeightLayer'
 import { minFalloffFor, reliefStepNotice, tooSteep } from './heightMath'
-import { STROKE_STYLES, flowCompass, type StrokeStyle } from './mapMath'
+import {
+  STROKE_STYLES, flowCompass, formatAreaM2, polygonAreaM2, type StrokeStyle,
+} from './mapMath'
 import { typeColor } from './TerrainLayer'
 import {
   FLOW_DIR_MAX_DEG, FLOW_DIR_MIN_DEG, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
   WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
 } from './mapTypes'
 import type {
-  HeightArea, TerrainArea, TerrainScatterEntry, TerrainStroke, TerrainType,
-  TerrainWater, TerrainWaterProfile,
+  FlowAlong, HeightArea, TerrainArea, TerrainScatterEntry, TerrainStroke,
+  TerrainType, TerrainWater, TerrainWaterProfile,
 } from './mapTypes'
 
 /**
@@ -945,6 +947,22 @@ export function TerrainLayerHint({ defaultKindName, open, onOpen }: TerrainLayer
  * really used. No flow direction = still water = one constant level, the lake
  * of every round before this one.
  *
+ * AND SINCE W4a AN AREA DRAWN AS A LINE FLOWS ALONG THAT LINE, so this panel
+ * offers EXACTLY ONE flow control and which one depends on the area:
+ *
+ * * drawn with the line tool → the three-way choice (still / along the line /
+ *   against it, `meta.flow_along`), because a river bends and one bearing
+ *   cannot say where a meander runs;
+ * * an ordinary polygon → the bearing field of W1 (`meta.flow_dir_deg`), which
+ *   is the straight axis such an area has and nothing more.
+ *
+ * NEVER BOTH, and not only for tidiness: the bake lets the line win over the
+ * bearing (`heightfield.is_flowing`), so a visible degree field on a drawn
+ * river would be a control that changes nothing. The other way round it would
+ * be worse — a bearing left over from before the line was drawn keeps flowing
+ * the area while the panel says "still" — so the three-way choice CLEARS
+ * `flow_dir_deg` whenever it writes.
+ *
  * EVERY FIELD MAY BE EMPTY, and empty is the normal state. Depth and shore
  * ramp then come from the KIND (the placeholder names the number in force),
  * the level from the rim, and the bed from the bare world.
@@ -954,11 +972,14 @@ export function TerrainLayerHint({ defaultKindName, open, onOpen }: TerrainLayer
  * ±`WATER_LEVEL_SPAN_M` around a level that IS set, because the second visit
  * to this field trims centimetres rather than moving the lake.
  */
-function WaterFields({ water, profile, kindType, typeList, onWater }: {
+function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
   water: TerrainWater
   /** The bake's own mirror for this area (server output) — the read-back of
    *  the two end levels where the author left them open. */
   profile: TerrainWaterProfile | null
+  /** Was this area DRAWN AS A LINE (`meta.stroke`)? Then it has an axis of its
+   *  own and flows along it; otherwise it is a polygon with a bearing. */
+  hasLine: boolean
   /** The area's own terrain type: it carries the depth/ramp DEFAULTS the
    *  empty fields fall back to. */
   kindType: TerrainType | undefined
@@ -1026,35 +1047,84 @@ function WaterFields({ water, profile, kindType, typeList, onWater }: {
           onClear={() => onWater({ shore_ramp_m: undefined })}
         />
       </div>
-      {/* THE FLOW DIRECTION — the one field that turns a lake into a river.
-          Clearable, and empty is still water: no tilt, one level, exactly what
-          this panel did before. */}
-      <div className="ga-map-chip-row">
-        <SliderInput
-          label={t('Flow direction (°)')}
-          title={t('Which way this water flows, as a bearing in degrees: 0° south, 90° east, 180° north, 270° west. It tilts the mirror between an upstream and a downstream level and points the ripples the same way. Empty = still water — one level everywhere, which is what a lake is.')}
-          value={flow}
-          fallback={0}
-          min={FLOW_DIR_MIN_DEG} max={FLOW_DIR_MAX_DEG} step={5} fineStep="any"
-          clearable placeholder={t('still')}
-          unit="°"
-          onChange={(v) => onWater({ flow_dir_deg: v })}
-          onClear={() => onWater({ flow_dir_deg: undefined })}
-          readback={
-            <span className="ga-map-chip-label">
-              {flow === undefined ? t('still water (lake)') : flowCompass(flow)}
-            </span>
-          }
-        />
-      </div>
+      {/* THE FLOW — the one control that turns a lake into a river, and which
+          one it is depends on what the area IS (W4a). A drawn line flows along
+          itself; a polygon flows along a bearing. Exactly one of the two is on
+          screen, never both. */}
+      {hasLine ? (
+        <>
+          <div className="ga-map-chip-row">
+            <span className="ga-map-chip-label">{t('Flow')}</span>
+            <select
+              className="ga-input"
+              style={{ flex: 1, minWidth: 0 }}
+              value={water.flow_along || ''}
+              title={t('Which way this water runs along the line it was drawn as. The mirror falls from knot to knot down that line and the ripples follow every bend.')}
+              onChange={(e) => onWater({
+                flow_along: (e.target.value || undefined) as FlowAlong | undefined,
+                // The bearing of W1 is the straight axis this line replaced.
+                // The bake ignores it here, so leaving it stored would be a
+                // number that acts on nothing — except when the choice goes
+                // back to "still", where it would keep the area flowing behind
+                // the panel's back. It goes, either way.
+                flow_dir_deg: undefined,
+              })}
+            >
+              <option value="">{t('Still')}</option>
+              <option value="forward">{t('Along the line')}</option>
+              <option value="reverse">{t('Against the line')}</option>
+            </select>
+          </div>
+          <div className="ga-map-chip-row ga-map-chip-label">
+            {t('This area was drawn as a line, so its own centre line is the flow axis — “along” runs in the order the points were drawn, “against” the other way. The arrows on the map follow it bend by bend, and the water level falls from one line point to the next; it never runs uphill.')}
+          </div>
+        </>
+      ) : (
+        <div className="ga-map-chip-row">
+          <SliderInput
+            label={t('Flow direction (°)')}
+            title={t('Which way this water flows, as a bearing in degrees: 0° south, 90° east, 180° north, 270° west. It tilts the mirror between an upstream and a downstream level and points the ripples the same way. Empty = still water — one level everywhere, which is what a lake is.')}
+            value={flow}
+            fallback={0}
+            min={FLOW_DIR_MIN_DEG} max={FLOW_DIR_MAX_DEG} step={5} fineStep="any"
+            clearable placeholder={t('still')}
+            unit="°"
+            onChange={(v) => onWater({ flow_dir_deg: v })}
+            onClear={() => onWater({ flow_dir_deg: undefined })}
+            readback={
+              <span className="ga-map-chip-label">
+                {flow === undefined ? t('still water (lake)') : flowCompass(flow)}
+              </span>
+            }
+          />
+        </div>
+      )}
       {/* WHAT THE BAKE READ BACK. Where the author leaves an end open, the rim
           median of that third answers — a number only the server can compute,
-          so it is shown rather than re-derived here. */}
-      {flow !== undefined && profile ? (
+          so it is shown rather than re-derived here.
+          FLOWING IS "AT LEAST TWO KNOTS", once and for both kinds of area: the
+          profile's axis is one knot for still water, so the very same test
+          covers the bearing river of W1 and the drawn one of W4a without this
+          panel reading either authoring field a second time. */}
+      {profile && profile.axis.length >= 2 ? (
         <div className="ga-map-chip-row ga-map-chip-label">
           {t('The bake carves this water from {up} m upstream down to {down} m downstream.')
             .replace('{up}', profile.level_up.toFixed(2))
             .replace('{down}', profile.level_down.toFixed(2))}
+        </div>
+      ) : null}
+      {/* THE KNOTS THEMSELVES — the levels the bake measured along the line, in
+          flow order. On a bent river the two ends above say almost nothing:
+          they cannot show that the middle of the run sits between them, nor
+          that it never climbs back (the bake's running minimum). This does,
+          and it is READ-ONLY — every one of these numbers is derived from the
+          ground the line crosses, and the only knots an author may set are the
+          two ends, through the level fields above. */}
+      {profile && profile.axis.length >= 2 ? (
+        <div className="ga-map-chip-row ga-map-chip-label">
+          {t('Levels along the line: {levels} m')
+            .replace('{levels}', profile.axis
+              .map((knot) => knot[3].toFixed(1)).join(' → '))}
         </div>
       ) : null}
       {/* THE BED — what the layer bake paints UNDER this water. Since W1 a
@@ -1191,6 +1261,18 @@ export function TerrainAreaChip({
         )}
         <span className="ga-map-chip-pos">{t('layer {n}').replace('{n}', String(area.z_order))}</span>
       </div>
+      {/* HOW MUCH GROUND THIS AREA COVERS. The point count says how the shape
+          is BUILT and nothing about how big it is — a four-corner rectangle can
+          be a courtyard or a whole valley — and the size is what a scatter
+          density (per 100 m²), a bake cost and a walk across it are read
+          against. Every kind of area, not just water: it is geometry, and the
+          kind has no say in it. For an area drawn as a LINE this is the
+          generated ribbon, which is the ground it really covers; its centre
+          line has no area at all. */}
+      <div className="ga-map-chip-row ga-map-chip-label">
+        {t('Area: {area}').replace('{area}',
+          formatAreaM2(polygonAreaM2(area.polygon)))}
+      </div>
       {stroke && known ? (
         <div className="ga-map-chip-row">
           <WidthField widthM={stroke.width_m} onWidth={onWidth} />
@@ -1213,6 +1295,7 @@ export function TerrainAreaChip({
           be written at all, so it does not offer them either. */}
       {isWaterKind(known) ? (
         <WaterFields water={water} profile={waterProfile} kindType={known}
+          hasLine={!!stroke && stroke.points.length >= 2}
           typeList={typeList} onWater={onWater} />
       ) : null}
       {/* What grows here (finding B17). Folded away by default: most areas

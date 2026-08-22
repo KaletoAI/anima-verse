@@ -35,6 +35,16 @@
  * polygon's AREA centroid — the very point `heightfield.WaterProfile` builds
  * its axis around — and not through the mean of the vertices, which a densely
  * pointed bank would drag off the water.
+ *
+ * SINCE W4a A DRAWN RIVER FLOWS ALONG ITS OWN LINE ([13]…[15]), and the admin
+ * is the THIRD implementation of one function: `heightfield.water_level_at`,
+ * `client3d/src/scene/waterPlaneMath.ts` and `mapMath.waterLevelAt` must
+ * answer the same number, or the preview draws a river the bake did not carve.
+ * The hairpin below is the server smoke's own case
+ * (`scripts/smoke_height_bake.py` [8k]) with its numbers re-derived here by
+ * hand — including the RED counter-check that the straight axis of W1 gets the
+ * middle of a bend wrong, which is the whole reason the axis became a
+ * polyline.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -141,6 +151,7 @@ const {
 } = await loadModule(TYPES_SRC, 'ts', 'watermeta-');
 const {
   polygonCentroid, flowDirection, flowArrow, flowCompass,
+  flowArrowsAlong, flowAxisPoints, waterFlowAt, waterLevelAt,
 } = await loadBundled(MATH_SRC, 'watermath-');
 const { readMapWater } = await loadModule(WORLD_SRC, 'ts', 'waterref-');
 const {
@@ -241,10 +252,11 @@ check('an area that overrides the kind reads its own number',
 check('an area that overrides nothing reads no number at all',
   readWater({}).water_depth_m, undefined);
 
-console.log('[7] the profile — nine numbers or nothing');
+console.log('[7] the profile — nine numbers AND the axis, or nothing');
 const PROFILE = {
   level_up: 7.4, level_down: 2.6, flow_dir_deg: 270,
   axis_x: 50, axis_z: -30, dir_x: -1, dir_z: 0, s_min: -30, s_max: 30,
+  axis: [[80, -30, -30, 7.4], [20, -30, 30, 2.6]],
 };
 check('the payload example of the addendum, verbatim',
   readWaterProfile({ water_profile: PROFILE }),
@@ -257,6 +269,25 @@ check('still water carries a null bearing, not a missing key',
 check('no profile key at all', readWaterProfile({}), null);
 check('a profile that is not an object', readWaterProfile({ water_profile: 3 }),
   null);
+// THE AXIS IS ONE OF THE REQUIRED FIELDS SINCE W4a. The knots ARE the mirror;
+// the nine numbers are its shadow on one plane. Rebuilding the axis from them
+// would flatten every meander back onto the straight chord the polyline exists
+// to replace — so no axis is no profile, exactly like a missing level.
+check('a profile without an axis is no profile',
+  readWaterProfile({ water_profile: { ...PROFILE, axis: undefined } }), null);
+check('an empty axis is no profile either',
+  readWaterProfile({ water_profile: { ...PROFILE, axis: [] } }), null);
+check('a knot short of a number takes the whole profile with it',
+  readWaterProfile({ water_profile: { ...PROFILE, axis: [[80, -30, -30]] } }),
+  null);
+check('an unreadable knot level is not 0 m',
+  readWaterProfile({ water_profile: {
+    ...PROFILE, axis: [[80, -30, -30, null], [20, -30, 30, 2.6]] } }), null);
+check('an axis that is not a list is no axis',
+  readWaterProfile({ water_profile: { ...PROFILE, axis: 3 } }), null);
+check('one knot is a legitimate axis — that is what still water is',
+  readWaterProfile({ water_profile: {
+    ...PROFILE, axis: [[50, -30, 0, 7.4]] } })?.axis, [[50, -30, 0, 7.4]]);
 
 console.log('[8] the yaw convention — 0° to +z, 90° to +x (§ A1.1)');
 // `heightfield.flow_direction`, by hand: (sin θ, cos θ), rounded so the
@@ -373,6 +404,138 @@ check('...in either direction',
   readMapWater({ map_water: { kind: 'water' } }), null);
 check('and neither is a blank one',
   readMapWater({ map_water: { area_id: '  ', kind: 'water' } }), null);
+
+console.log('[13] W4a — a drawn river flows along its OWN line');
+// THE TWO WORDS AND NOTHING ELSE (`terrain._sanitize_water`). A third word is
+// not a third state: it is the same "still" an absent key is, so it loses the
+// key here exactly as it does on the server.
+check('forward survives', readWater({ flow_along: 'forward' }),
+  { flow_along: 'forward' });
+check('reverse survives', readWater({ flow_along: 'reverse' }),
+  { flow_along: 'reverse' });
+check('the word is trimmed and lower-cased, like the sanitizer does',
+  readWater({ flow_along: ' Reverse ' }), { flow_along: 'reverse' });
+check('a third word is not a third state', readWater({ flow_along: 'sideways' }),
+  {});
+check('an empty string is not a direction', readWater({ flow_along: '' }), {});
+check('and neither is a number', readWater({ flow_along: 1 }), {});
+check('a bearing and a line can both be stored — the reader keeps both, the '
+  + 'BAKE lets the line win',
+  readWater({ flow_along: 'forward', flow_dir_deg: 90 }),
+  { flow_dir_deg: 90, flow_along: 'forward' });
+
+// THE HAIRPIN OF `scripts/smoke_height_bake.py` [8k], number for number — the
+// same three knots the server derives from a drawn line, so the admin twin and
+// the bake answer one function. Arc lengths by hand:
+//   A(150,300) -> B(249,280):  |(99, −20)| = √(9801 + 400) = √10201 = 101
+//   B(249,280) -> C(201,260):  |(−48, −20)| = √(2304 + 400) = √2704 = 52
+// so s = 0 / 101 / 153, and the cross-section medians are 10 / 8 / 6 m.
+const HAIRPIN = {
+  level_up: 10, level_down: 6, flow_dir_deg: null,
+  axis_x: 150, axis_z: 300, dir_x: 0, dir_z: 0, s_min: 0, s_max: 153,
+  axis: [[150, 300, 0, 10], [249, 280, 101, 8], [201, 260, 153, 6]],
+};
+near('the middle knot reads its OWN level, not the mean of the ends',
+  waterLevelAt(HAIRPIN, 249, 280), 8);
+// THE RED COUNTER-CHECK: the straight W1 chord A→C is |(51, −40)| = √4201 =
+// 64.815 m long, and B projects onto it at (99·51 + (−20)(−40))/64.815 =
+// 5849/64.815 = 90.24 m — PAST the downstream end. A single tilted plane
+// therefore answers 6.0 in the middle of the bend: it cannot fall along a
+// meander at all, which is the whole reason the axis became a polyline.
+const CHORD_LEN = Math.hypot(51, 40);
+const CHORD = { ...HAIRPIN,
+  axis: [[150, 300, 0, 10], [201, 260, CHORD_LEN, 6]] };
+near('the straight chord of W1 gets it wrong — 6.0, the downstream clamp',
+  waterLevelAt(CHORD, 249, 280), 6);
+// The leg midpoints: s = 50.5 -> 10 + (8 − 10)·(50.5/101) = 9.0
+//                   s = 127  ->  8 + (6 −  8)·(26/52)    = 7.0
+near('halfway down the first leg is halfway between 10 and 8',
+  waterLevelAt(HAIRPIN, 199.5, 290), 9);
+near('halfway down the second leg is halfway between 8 and 6',
+  waterLevelAt(HAIRPIN, 225, 270), 7);
+// The clamps. 50 m upstream of A the foot is A itself (the first segment's
+// projection is negative and clamps to its start), so the level is the one the
+// cross-section at A was measured for — never extrapolated past it.
+near('upstream of the source the level clamps to the first knot',
+  waterLevelAt(HAIRPIN, 100, 300), 10);
+near('...and past the mouth to the last one',
+  waterLevelAt(HAIRPIN, 201, 240), 6);
+// Still water is ONE knot and the same function, not a branch beside it.
+const LAKE = { ...HAIRPIN, axis: [[10, 20, 0, 4.5]] };
+near('one knot answers its level everywhere', [
+  waterLevelAt(LAKE, 10, 20), waterLevelAt(LAKE, -900, 900),
+], [4.5, 4.5]);
+
+console.log('[14] the tangent the arrows and the ripples share');
+// The unit direction of the NEAREST segment: (99, −20)/101 on the first leg,
+// (−48, −20)/52 on the second. A point beside a bend reads the leg it is
+// beside, not the chord of the whole river.
+near('the first leg', waterFlowAt(HAIRPIN, 199.5, 290),
+  [99 / 101, -20 / 101]);
+near('the second leg', waterFlowAt(HAIRPIN, 225, 270), [-48 / 52, -20 / 52]);
+// Exactly ON the middle knot both legs are equally near, and the EARLIER one
+// wins — `nearestOnPolyline` compares with `<`, never `<=`, and so does the
+// server's own loop.
+near('an exact tie on a knot goes to the segment already flowed',
+  waterFlowAt(HAIRPIN, 249, 280), [99 / 101, -20 / 101]);
+check('still water has no downstream at all', waterFlowAt(LAKE, 10, 20), [0, 0]);
+check('and neither has nothing', waterFlowAt(null, 0, 0), [0, 0]);
+
+console.log('[15] the axis the map draws its arrows along');
+const LINE = [[150, 300], [249, 280], [201, 260]];
+check('forward is the order the points were drawn',
+  flowAxisPoints(LINE, 'forward'), LINE);
+check('reverse is the same line read from the far end',
+  flowAxisPoints(LINE, 'reverse'), [[201, 260], [249, 280], [150, 300]]);
+check('no word, no flow', flowAxisPoints(LINE, undefined), null);
+check('a third word is no flow either', flowAxisPoints(LINE, 'sideways'), null);
+check('one point is not a direction',
+  flowAxisPoints([[150, 300]], 'forward'), null);
+check('and neither is no line at all', flowAxisPoints(null, 'forward'), null);
+// ONE ARROW PER SEGMENT, by hand. First leg: 101 m long, half of it is 50.5 m
+// (inside the 4…60 m clamp), centred on the midpoint (199.5, 290); the half
+// length 25.25 m along (99, −20)/101 is exactly (24.75, −5), because
+// 25.25 = 101/4:
+//   from = (199.5 − 24.75, 290 + 5) = (174.75, 295)
+//   to   = (199.5 + 24.75, 290 − 5) = (224.25, 285)
+// Second leg: 52 m long, half of it is 26 m, half-length 13 m along
+// (−48, −20)/52 = (−12/13, −5/13) is exactly (−12, −5):
+//   from = (225 + 12, 270 + 5) = (237, 275)   to = (213, 265)
+const along = flowArrowsAlong(flowAxisPoints(LINE, 'forward'));
+check('a three-knot line gets two arrows, one per segment', along.length, 2);
+near('the first follows the first leg',
+  [...along[0].from, ...along[0].to], [174.75, 295, 224.25, 285]);
+near('the second follows the second leg, around the bend',
+  [...along[1].from, ...along[1].to], [237, 275, 213, 265]);
+// Against the line: the same two segments, every arrow turned end for end.
+const against = flowArrowsAlong(flowAxisPoints(LINE, 'reverse'));
+near('reversing the line reverses every arrow on it',
+  [...against[0].from, ...against[0].to, ...against[1].from, ...against[1].to],
+  [213, 265, 237, 275, 224.25, 285, 174.75, 295]);
+// The barbs of the second leg: len/4 = 6.5 m back from the tip, len·0.15 =
+// 3.9 m out along the perpendicular (−dz, dx) = (5/13, −12/13):
+//   tip (213, 265) − (−12/13, −5/13)·6.5 = (219, 267.5)
+//   ± (5/13, −12/13)·3.9 = ±(1.5, −3.6)  ->  (220.5, 263.9) and (217.5, 271.1)
+near('its head sits back from the tip, one barb each side',
+  [...along[1].barbs[0], ...along[1].barbs[1]],
+  [220.5, 263.9, 217.5, 271.1]);
+// A segment shorter than the 4 m minimum keeps its arrow INSIDE itself: the
+// clamp raises 1.5 m to 4 m, and the segment length caps it back to 3 m. An
+// arrow sticking out over the neighbouring knot would point at water that
+// flows the other way.
+const kink = flowArrowsAlong([[0, 0], [3, 0]]);
+near('a short kink gets an arrow that still fits between its two knots',
+  Math.hypot(kink[0].to[0] - kink[0].from[0],
+    kink[0].to[1] - kink[0].from[1]), 3);
+// The same two clamps the polygon arrow has, per segment.
+const longLeg = flowArrowsAlong([[0, 0], [400, 0]]);
+near('a long reach is capped at 60 m',
+  Math.hypot(longLeg[0].to[0] - longLeg[0].from[0],
+    longLeg[0].to[1] - longLeg[0].from[1]), 60);
+check('a collapsed segment has no direction and gets no arrow',
+  flowArrowsAlong([[5, 5], [5, 5]]).length, 0);
+check('a line of one point has no segment to draw on',
+  flowArrowsAlong([[5, 5]]).length, 0);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

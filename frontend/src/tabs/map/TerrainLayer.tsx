@@ -68,15 +68,15 @@ import type { ScatterFootprint } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useMapView } from './MapCanvas'
 import {
-  decorateStroke, flowArrow, scatterAreaCosts, scatterAreaPlan,
-  scatterPreviewJobs, scatterThinnedByArea, scatterThinnedPercentText,
-  scatterWindowDots, strokeToPolygon, visibleWorldRect, worldPolyToPath,
-  worldToScreen,
-  type ScatterDot, type ScatterPreviewJob, type ScatterThinnedDraw,
-  type StrokeDeco,
+  decorateStroke, flowArrow, flowArrowsAlong, flowAxisPoints, scatterAreaCosts,
+  scatterAreaPlan, scatterPreviewJobs, scatterThinnedByArea,
+  scatterThinnedPercentText, scatterWindowDots, strokeToPolygon,
+  visibleWorldRect, worldPolyToPath, worldToScreen,
+  type FlowArrow, type ScatterDot, type ScatterPreviewJob,
+  type ScatterThinnedDraw, type StrokeDeco,
 } from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
-import { isWaterKind, readWater } from './mapTypes'
+import { isWaterKind, readStrokePoints, readWater } from './mapTypes'
 import type { TerrainArea, TerrainType } from './mapTypes'
 
 /** One opacity for every fill — see the module docstring. */
@@ -397,34 +397,54 @@ export function TerrainLayer({
         })}
       </g>
 
-      {/* WHICH WAY THE WATER GOES (§ A16.3, W1). A flowing area's mirror is a
-          tilted plane, and the one thing an author cannot see in a blue
-          polygon is which end of it is downhill. The arrow sits on the very
-          axis the server builds the profile around — the AREA centroid, the
-          contract's yaw mapping — so what is drawn here and what the bake
-          carves are the same line. Still water gets none: a lake has no
-          downstream, and an arrow of some default bearing would be an
-          invention. Inert to the pointer, like every other overlay of this
-          layer. */}
+      {/* WHICH WAY THE WATER GOES (§ A16.3, W1/W4a). A flowing area's mirror
+          falls downhill, and the one thing an author cannot see in a blue
+          polygon is which end of it is the low one.
+          TWO KINDS OF AREA, TWO ARROW SHAPES, and the area decides which:
+          * DRAWN AS A LINE (W4a) → one arrow per segment of that very line,
+            pointing the way `meta.flow_along` reads it. A single arrow through
+            the centroid would lie on a meander — on a hairpin it points
+            straight across both legs — and the whole point of W4a is that the
+            water follows the bends.
+          * an ordinary POLYGON → the one arrow on the straight axis of W1,
+            through the AREA centroid along `flow_dir_deg`, which is the very
+            axis the server builds that profile around.
+          The line wins where both are set, exactly as the bake lets it win
+          (`heightfield.is_flowing`). Still water gets no arrow at all: a lake
+          has no downstream, and an arrow of some default bearing would be an
+          invention. Inert to the pointer, like every other overlay here. */}
       <g pointerEvents="none">
         {areas.map((a) => {
           if (!isWaterKind(types[a.kind])) return null
-          const arrow = flowArrow(a.polygon, readWater(a.meta).flow_dir_deg)
-          if (!arrow) return null
-          const p0 = worldToScreen(arrow.from[0], arrow.from[1], view, w, h)
-          const p1 = worldToScreen(arrow.to[0], arrow.to[1], view, w, h)
-          const b0 = worldToScreen(arrow.barbs[0][0], arrow.barbs[0][1],
-            view, w, h)
-          const b1 = worldToScreen(arrow.barbs[1][0], arrow.barbs[1][1],
-            view, w, h)
-          // Under one screen pixel of shaft there is nothing left to read —
-          // a zoomed-out world would only get a smear of dots.
-          if (Math.hypot(p1.x - p0.x, p1.y - p0.y) < 6) return null
-          const d = `M${p0.x.toFixed(2)} ${p0.y.toFixed(2)}`
-            + `L${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`
-            + `M${b0.x.toFixed(2)} ${b0.y.toFixed(2)}`
-            + `L${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`
-            + `L${b1.x.toFixed(2)} ${b1.y.toFixed(2)}`
+          const water = readWater(a.meta)
+          const axis = flowAxisPoints(readStrokePoints(a.meta), water.flow_along)
+          const arrows: FlowArrow[] = axis ? flowArrowsAlong(axis) : []
+          if (!axis) {
+            const one = flowArrow(a.polygon, water.flow_dir_deg)
+            if (one) arrows.push(one)
+          }
+          if (!arrows.length) return null
+          const parts: string[] = []
+          for (const arrow of arrows) {
+            const p0 = worldToScreen(arrow.from[0], arrow.from[1], view, w, h)
+            const p1 = worldToScreen(arrow.to[0], arrow.to[1], view, w, h)
+            const b0 = worldToScreen(arrow.barbs[0][0], arrow.barbs[0][1],
+              view, w, h)
+            const b1 = worldToScreen(arrow.barbs[1][0], arrow.barbs[1][1],
+              view, w, h)
+            // Under six screen pixels of shaft there is nothing left to read —
+            // a zoomed-out world would only get a smear of dots. Per arrow, so
+            // a long reach of a river keeps its arrow while a short kink beside
+            // it drops out instead of taking the whole line down with it.
+            if (Math.hypot(p1.x - p0.x, p1.y - p0.y) < 6) continue
+            parts.push(`M${p0.x.toFixed(2)} ${p0.y.toFixed(2)}`
+              + `L${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`
+              + `M${b0.x.toFixed(2)} ${b0.y.toFixed(2)}`
+              + `L${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`
+              + `L${b1.x.toFixed(2)} ${b1.y.toFixed(2)}`)
+          }
+          if (!parts.length) return null
+          const d = parts.join('')
           return (
             <g key={`flow-${a.id}`}>
               <path d={d} fill="none" stroke={COL_FLOW_HALO} strokeWidth={4}

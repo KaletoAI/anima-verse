@@ -404,7 +404,11 @@ export function MapTab() {
   // stroke width does — the toolbar is unmounted whenever the mode changes.
   const [heightAreas, setHeightAreas] = useState<HeightArea[]>([])
   const [selHeight, setSelHeight] = useState('')
-  const [heightTool, setHeightTool] = useState<HeightTool>('draw')
+  // …and Heights opens on "Select" for the reason Terrain does
+  // (`lastTerrainModeRef`): the first click on a relief area must show it, not
+  // start a new one over it. This state IS the memory — no mode change touches
+  // it — so only the first start changes.
+  const [heightTool, setHeightTool] = useState<HeightTool>('select')
   const [newHeightM, setNewHeightM] = useState(HEIGHT_DEFAULT_M)
   const [newFalloffM, setNewFalloffM] = useState(FALLOFF_DEFAULT_M)
   // How coarse the world's relief grid IS, and the finest it can be — both
@@ -736,8 +740,14 @@ export function MapTab() {
    *  switch has to send them back to it: a user who was reshaping an area and
    *  looks at a location expects Terrain to be the way BACK to reshaping, not
    *  a brush in the hand. Heights remembers the same way — through its own
-   *  `heightTool` state, which no mode change touches. */
-  const lastTerrainModeRef = useRef<TerrainMode>('paint')
+   *  `heightTool` state, which no mode change touches.
+   *
+   *  IT STARTS ON "SELECT", not on the brush. Opening the map with a brush in
+   *  hand makes the very first click on an existing area the first corner of a
+   *  new one on top of it — the one gesture in this editor that cannot be read
+   *  as "show me this". Picking is the safe opening move, drawing is the one
+   *  the user asks for; the memory above then keeps whichever they used last. */
+  const lastTerrainModeRef = useRef<TerrainMode>('edit-area')
 
   /** Switching modes drops everything the previous mode had armed — an
    *  abandoned draft or a selection whose chip is no longer reachable would

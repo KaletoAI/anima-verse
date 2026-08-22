@@ -285,6 +285,13 @@ export type TerrainMeta = {
  * They live in the area's free-form `meta`, which is a FULL REPLACE on every
  * write, so an unset field is an absent key and never a stored zero.
  */
+export type FlowAlong = 'forward' | 'reverse'
+
+/** The two words `meta.flow_along` may carry — the server's own list
+ *  (`heightfield.FLOW_ALONG_VALUES`). Anything else is not a third state but
+ *  the SAME state as absent: still water. */
+export const FLOW_ALONG_VALUES: readonly FlowAlong[] = ['forward', 'reverse']
+
 export interface TerrainWater {
   /** The mirror of STILL water, as a world-y height in metres. Absent = the
    *  rim median. It also sets BOTH ends of a flowing mirror at once. */
@@ -294,10 +301,17 @@ export interface TerrainWater {
   water_level_up?: number
   /** The DOWNSTREAM end, same units, same "absent = derived" rule. */
   water_level_down?: number
-  /** Which way the water FLOWS (downstream), 0…360, wrapped not clamped —
+  /** Which way POLYGON water FLOWS (downstream), 0…360, wrapped not clamped —
    *  spelled like every other yaw of the contract (§ A1.1): 0° toward +z,
-   *  90° toward +x. Absent = still water, one constant level. */
+   *  90° toward +x. Absent = still water, one constant level. An area drawn
+   *  with the LINE tool carries its own axis and uses `flow_along` instead;
+   *  where both are set the line wins and this is ignored (W4a). */
   flow_dir_deg?: number
+  /** Which way an area drawn as a LINE flows ALONG that line (W4a): in the
+   *  order its points were drawn (`forward`), against it (`reverse`), or
+   *  absent = still. A river bends, and one bearing cannot say where a
+   *  meander runs — so the line the author drew IS the flow axis. */
+  flow_along?: FlowAlong
   /** How deep the bed is carved under the mirror, in metres (0.2…20).
    *  Absent = the kind's own default. */
   water_depth_m?: number
@@ -310,20 +324,33 @@ export interface TerrainWater {
   bed_kind?: string
 }
 
+/** One knot of a flow axis: `[x, z, s, level]` — the world position, the arc
+ *  length from the FIRST knot, and the mirror height there. The server's own
+ *  tuple (`heightfield.WaterKnot`), field for field. */
+export type TerrainWaterKnot = [number, number, number, number]
+
 /**
  * THE MIRROR AS A FUNCTION OF THE PLACE — server OUTPUT, never authored
- * (`meta.water_profile`, W1 § 2).
+ * (`meta.water_profile`, W1 § 2 / W4a).
  *
- * The nine numbers a consumer needs to evaluate the mirror itself:
+ * SINCE W4a THE AXIS IS A POLYLINE, and `axis` is the truth:
  *
- *     s     = (x − axis_x)·dir_x + (z − axis_z)·dir_z
- *     t     = clamp((s − s_min) / (s_max − s_min), 0, 1)
- *     level = level_up + (level_down − level_up)·t
+ *     s     = arc coordinate of the NEAREST point on the polyline
+ *             (every segment projected with a clamp, shortest distance wins)
+ *     level = linear between the two knots s falls between, clamped at both
+ *             ends of the line
  *
- * Still water is the degenerate case, not a second formula: `s_min == s_max`
- * and both ends carry the same number. The editor only READS it — the two end
- * levels are what the area panel shows back when the author left them open —
- * and the server drops both this and `water_level_effective` on the way in.
+ * Both older laws fall out of it instead of standing beside it: still water is
+ * ONE knot (the clamp answers its level everywhere) and a straight river is
+ * TWO (the projection onto that single segment IS W1's
+ * `clamp((s − s_min)/span, 0, 1)`). `mapMath.waterLevelAt` is the editor's
+ * twin of that function.
+ *
+ * The nine numbers stay what they were — the best SINGLE tilted plane through
+ * the same water, for a reader that has not learned the polyline. The editor
+ * only READS all of it: the two end levels are what the area panel shows back
+ * where the author left them open, and the server drops both this and
+ * `water_level_effective` on the way in.
  */
 export interface TerrainWaterProfile {
   level_up: number
@@ -335,6 +362,9 @@ export interface TerrainWaterProfile {
   dir_z: number
   s_min: number
   s_max: number
+  /** The knots in FLOW order, never empty: one = still, two = the straight
+   *  axis of W1, N = the line the author drew (W4a). */
+  axis: TerrainWaterKnot[]
 }
 
 /** A painted polygon in world metres (§ A1.5). Points are `[x, z]`, 3–256 of
@@ -405,6 +435,14 @@ export function readWater(meta: TerrainMeta | undefined): TerrainWater {
   // angle: 370° is 10° and −90° is 270°, and clamping would turn a slip of the
   // wrist into a river flowing the wrong way along its own axis.
   if (flow !== undefined) out.flow_dir_deg = ((flow % 360) + 360) % 360
+  // TWO WORDS OR NOTHING (`terrain._sanitize_water`). A third word is not a
+  // third state: it is the same "still" that an absent key is, so it loses the
+  // key here exactly as it does on the server.
+  const along = typeof meta?.flow_along === 'string'
+    ? meta.flow_along.trim().toLowerCase() : ''
+  if ((FLOW_ALONG_VALUES as readonly string[]).includes(along)) {
+    out.flow_along = along as FlowAlong
+  }
   if (depth !== undefined) out.water_depth_m = depth
   if (ramp !== undefined) out.shore_ramp_m = ramp
   if (bed) out.bed_kind = bed
@@ -430,6 +468,14 @@ function metaNum(v: unknown): number | undefined {
  * editor can name it without implementing a rim median a second time. All nine
  * numbers have to be there — a half profile is no profile, and guessing the
  * missing half would be exactly the second opinion this field exists to avoid.
+ *
+ * AND SINCE W4a THE AXIS IS ONE OF THEM. The knots ARE the mirror; the nine
+ * numbers are only its shadow on one plane. So a payload without at least one
+ * usable knot is no profile either: rebuilding the axis out of the nine would
+ * be that second opinion again, and it would flatten every meander back onto
+ * the straight chord the polyline exists to replace. A knot with an unreadable
+ * number fails the whole profile for the same reason a level does — half an
+ * axis is a mirror with a hole in it.
  */
 export function readWaterProfile(meta: TerrainMeta | undefined
                                 ): TerrainWaterProfile | null {
@@ -443,6 +489,15 @@ export function readWaterProfile(meta: TerrainMeta | undefined
     if (n === undefined) return null
     nums[key] = n
   }
+  if (!Array.isArray(r.axis) || !r.axis.length) return null
+  const axis: TerrainWaterKnot[] = []
+  for (const knot of r.axis as unknown[]) {
+    if (!Array.isArray(knot) || knot.length < 4) return null
+    const four = [metaNum(knot[0]), metaNum(knot[1]),
+      metaNum(knot[2]), metaNum(knot[3])]
+    if (four.some((n) => n === undefined)) return null
+    axis.push(four as TerrainWaterKnot)
+  }
   const flow = metaNum(r.flow_dir_deg)
   return {
     level_up: nums.level_up,
@@ -454,7 +509,42 @@ export function readWaterProfile(meta: TerrainMeta | undefined
     dir_z: nums.dir_z,
     s_min: nums.s_min,
     s_max: nums.s_max,
+    axis,
   }
+}
+
+/**
+ * The CENTRE LINE of an area drawn with the line tool, read through a check —
+ * or `null` for an ordinary painted polygon.
+ *
+ * It is the geometry half of `MapTab.readStroke` and exists beside it on
+ * purpose: that one builds the whole editable RECIPE (width, style, the two
+ * decoration numbers) for the handles, this one answers the single question
+ * the map preview and the flow control ask — "does this area carry a line, and
+ * where does it run?". Nothing here may import the editor's own minimum point
+ * count; the bar is the SERVER's (`heightfield.is_flowing`): two points make
+ * an axis, one does not.
+ *
+ * `meta` is free-form JSON passed through verbatim, so every point is checked.
+ * One unreadable coordinate drops the whole line rather than bending it
+ * somewhere the author never clicked.
+ */
+export function readStrokePoints(meta: TerrainMeta | undefined
+                                ): Array<[number, number]> | null {
+  const raw: unknown = meta?.stroke
+  if (!raw || typeof raw !== 'object') return null
+  const { points, width_m: width } = raw as Record<string, unknown>
+  if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) return null
+  if (!Array.isArray(points) || points.length < 2) return null
+  const out: Array<[number, number]> = []
+  for (const p of points as unknown[]) {
+    if (!Array.isArray(p) || p.length < 2) return null
+    const [x, z] = p as unknown[]
+    if (typeof x !== 'number' || !Number.isFinite(x)) return null
+    if (typeof z !== 'number' || !Number.isFinite(z)) return null
+    out.push([x, z])
+  }
+  return out
 }
 
 /**

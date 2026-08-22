@@ -58,7 +58,8 @@ import {
 } from '@anima/scene-render'
 import type { Point2, ScatterFootprint } from '@anima/scene-render'
 import { readScatter } from './mapTypes'
-import type { TerrainArea } from './mapTypes'
+import type { FlowAlong, TerrainArea, TerrainWaterKnot,
+  TerrainWaterProfile } from './mapTypes'
 
 /** Viewport state: world point at the canvas centre + zoom. */
 export interface View {
@@ -261,6 +262,74 @@ export function polygonCentroid(points: Array<[number, number]>
 }
 
 /**
+ * HOW MUCH GROUND A PAINTED AREA COVERS, in square metres.
+ *
+ * The shoelace, taken by absolute value, so a ring painted clockwise measures
+ * the same as one painted the other way — and it is the SHARED one
+ * (`@anima/scene-render.polygonArea`), the very routine the scatter budget and
+ * both renderers already measure areas with. A second shoelace here would be a
+ * second opinion about a number the editor shows the author.
+ *
+ * The ring is cleaned first (`cleanRing`), which is what makes this the area of
+ * the shape that is really DRAWN: a repeated closing corner (the editor may or
+ * may not store one) is not an edge, and a non-finite corner is DROPPED rather
+ * than turning the whole measurement into `NaN` — the renderers mesh that same
+ * cleaned ring, so the number beside the shape is the number of the shape.
+ * Fewer than three surviving points enclose nothing and measure 0.
+ *
+ * A STROKE AREA IS MEASURED BY ITS POLYGON like every other area, because that
+ * polygon IS the ground it covers: the centre line has no area, and the ribbon
+ * generated from it is what the bake paints and what a walker stands on.
+ *
+ * Verification cases (hand-derived, § B5a — arithmetic, not screenshots):
+ *
+ *   [(0,0),(10,0),(10,20),(0,20)]  -> 200      (a 10 × 20 m rectangle)
+ *   the same ring drawn backwards  -> 200      (winding-blind)
+ *   [(0,0),(30,0),(0,40)]          -> 600      (½ · 30 · 40)
+ *   [(0,0),(10,0)]                 -> 0        (two points enclose nothing)
+ *   [(0,0),(10,NaN),(10,20),(0,20)]-> 100      (the broken corner is dropped;
+ *                                               the triangle that is left)
+ */
+export function polygonAreaM2(polygon: Array<[number, number]> | null | undefined
+                             ): number {
+  return polygonArea(cleanRing(polygon))
+}
+
+/** At and above this an area is easier to read in hectares as well — one
+ *  hectare is 10 000 m², so the second reading starts where it first says
+ *  "1.00 ha" instead of a fraction. */
+export const AREA_HECTARE_M2 = 10000
+
+/**
+ * An area as the panel prints it: `"1 234 m²"`, and from a hectare up the same
+ * number in hectares beside it — `"12 300 m² (1.23 ha)"`.
+ *
+ * SQUARE METRES STAY THE LEAD NUMBER at every size. They are the unit
+ * everything else in this editor is in (widths, ramps, depths, the grid), so a
+ * reader can hold an area against a room's footprint without converting
+ * anything; the hectares are the second reading that makes a landscape-sized
+ * number graspable, not a replacement for the first.
+ *
+ * The digit grouping is done here and NOT by `toLocaleString`: the separator
+ * that call picks depends on the machine's locale, which would make the same
+ * world read differently on two computers and this check unrepeatable. The
+ * space is a NARROW NO-BREAK SPACE (U+202F) — the thousands separator of the
+ * SI convention, and unbreakable so a number never wraps in the middle.
+ *
+ * Verification cases (hand-derived): 0 -> `0 m²`, 999.4 -> `999 m²`,
+ * 1234 -> `1 234 m²`, 9999.5 -> `10 000 m²` (rounded, and the hectare reading
+ * follows the ROUNDED number the reader sees), 12300 -> `12 300 m² (1.23 ha)`,
+ * 1234567 -> `1 234 567 m² (123.46 ha)`.
+ */
+export function formatAreaM2(m2: number): string {
+  const rounded = Number.isFinite(m2) ? Math.round(m2) : 0
+  const grouped = String(rounded).replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f')
+  const base = `${grouped} m²`
+  if (rounded < AREA_HECTARE_M2) return base
+  return `${base} (${(rounded / AREA_HECTARE_M2).toFixed(2)} ha)`
+}
+
+/**
  * THE DOWNSTREAM UNIT VECTOR of a flow bearing — `(sin θ, cos θ)`.
  *
  * The contract's ONE yaw mapping (§ A1.1), the same one
@@ -315,8 +384,27 @@ export interface FlowArrow {
   barbs: [[number, number], [number, number]]
 }
 
+/** One arrow of a given length, centred on (`cx`, `cz`) and pointing along the
+ *  UNIT vector (`dx`, `dz`). The head is two barbs a quarter of the length back
+ *  from the tip, swung out to either side by the perpendicular (−dz, dx). One
+ *  routine for both arrow makers below, so a straight river and a drawn one
+ *  cannot end up with differently shaped heads. */
+function arrowAt(cx: number, cz: number, dx: number, dz: number,
+  len: number): FlowArrow {
+  const half = len / 2
+  const from: [number, number] = [cx - dx * half, cz - dz * half]
+  const to: [number, number] = [cx + dx * half, cz + dz * half]
+  const back = len * 0.25
+  const side = len * 0.15
+  const barb = (sign: number): [number, number] => [
+    to[0] - dx * back + sign * -dz * side,
+    to[1] - dz * back + sign * dx * side,
+  ]
+  return { from, to, barbs: [barb(1), barb(-1)] }
+}
+
 /**
- * THE ARROW THAT SHOWS WHICH WAY A WATER AREA FLOWS, in world metres.
+ * THE ARROW THAT SHOWS WHICH WAY A POLYGON WATER AREA FLOWS, in world metres.
  *
  * It sits on the area's own flow axis, centred on the centroid the profile is
  * built around, and it points DOWNSTREAM — the direction `flow_dir_deg` names.
@@ -324,6 +412,11 @@ export interface FlowArrow {
  * kilometre of river and a ten-metre brook both get an arrow that reads as one
  * inside its own shape, clamped so neither degenerates: too short and it is a
  * dot, too long and it leaves the water at the bends.
+ *
+ * ONE STRAIGHT AXIS IS ALL A POLYGON HAS, and that is the whole of what this
+ * draws. An area drawn with the LINE tool carries its own bent axis and is
+ * drawn by `flowArrowsAlong` instead (W4a) — where both exist the line wins,
+ * exactly as it does in the bake (`heightfield.is_flowing`).
  *
  * `null` for still water — a lake has no downstream, and drawing an arrow of
  * some default bearing would be an invention. Pure: no view, no pixels, no
@@ -351,18 +444,68 @@ export function flowArrow(polygon: Array<[number, number]>,
   const span = sMax - sMin
   if (!Number.isFinite(span) || span <= 0) return null
   const len = Math.min(maxM, Math.max(minM, span * share))
-  const half = len / 2
-  const from: [number, number] = [cx - dx * half, cz - dz * half]
-  const to: [number, number] = [cx + dx * half, cz + dz * half]
-  // The head: two barbs a quarter of the length back from the tip, swung out
-  // to either side by the perpendicular (−dz, dx).
-  const back = len * 0.25
-  const side = len * 0.15
-  const barb = (sign: number): [number, number] => [
-    to[0] - dx * back + sign * -dz * side,
-    to[1] - dz * back + sign * dx * side,
-  ]
-  return { from, to, barbs: [barb(1), barb(-1)] }
+  return arrowAt(cx, cz, dx, dz, len)
+}
+
+/**
+ * THE AXIS AN AREA DRAWN AS A LINE FLOWS ALONG, in flow order — or `null` when
+ * it does not flow (W4a).
+ *
+ * `meta.flow_along` is the whole authoring: `forward` is the order the points
+ * were clicked, `reverse` is that line read from the far end, and an absent
+ * word is still water. Reversing the POINTS instead of carrying a sign is what
+ * keeps everything downstream of here — arrows, tangents, levels — a single
+ * unsigned walk from `axis[0]` to `axis[n−1]`, which is exactly how the server
+ * builds its knots.
+ *
+ * Two points are the bar, not the editor's own minimum: one point is not a
+ * direction (`heightfield.is_flowing`).
+ */
+export function flowAxisPoints(points: Array<[number, number]> | null | undefined,
+  along: FlowAlong | undefined): Array<[number, number]> | null {
+  if (!points || points.length < 2) return null
+  if (along !== 'forward' && along !== 'reverse') return null
+  return along === 'forward' ? points.slice() : points.slice().reverse()
+}
+
+/**
+ * THE ARROWS OF A RIVER THAT FOLLOWS ITS OWN LINE — one per SEGMENT of the
+ * axis, in world metres (W4a).
+ *
+ * A river bends, and one arrow through the centroid says nothing about where a
+ * meander runs: on a hairpin it points straight across the two legs. One arrow
+ * per segment, centred on that segment's midpoint and pointing along it, says
+ * the one thing the author needs to check — that the water runs down the line
+ * the way they meant it to, around every bend.
+ *
+ * Each arrow is a share of ITS OWN segment, clamped the way the polygon arrow
+ * is and then capped by the segment length, so a long straight reach gets a
+ * readable arrow while a short kink gets one that still fits between its two
+ * knots instead of sticking out over the neighbours.
+ *
+ * The axis is taken as GIVEN — in flow order, from `flowAxisPoints` or from a
+ * profile's knots. Zero-length segments are skipped rather than repaired: they
+ * have no direction, and inventing one would point somewhere nobody drew.
+ */
+export function flowArrowsAlong(axis: Array<[number, number]>,
+  opts: { minM?: number; maxM?: number; share?: number } = {}
+): FlowArrow[] {
+  const minM = opts.minM ?? 4
+  const maxM = opts.maxM ?? 60
+  const share = opts.share ?? 0.5
+  const out: FlowArrow[] = []
+  for (let i = 0; i + 1 < axis.length; i++) {
+    const [ax, az] = axis[i]
+    const [bx, bz] = axis[i + 1]
+    const dx = bx - ax
+    const dz = bz - az
+    const segLen = Math.hypot(dx, dz)
+    if (!Number.isFinite(segLen) || segLen <= 0) continue
+    const len = Math.min(segLen, Math.min(maxM, Math.max(minM, segLen * share)))
+    out.push(arrowAt((ax + bx) / 2, (az + bz) / 2,
+      dx / segLen, dz / segLen, len))
+  }
+  return out
 }
 
 /** Where a point sits on a polyline: the closest point ON the line, the
@@ -445,6 +588,111 @@ export function nearestOnPolyline(points: Array<[number, number]>,
     if (d < best.distM) best = { index: i, t, x: fx, z: fz, distM: d }
   }
   return best
+}
+
+/**
+ * THE MIRROR OF ONE WATER AREA AT ONE POINT — the editor's twin of
+ * `heightfield.water_level_at` and of `client3d`'s
+ * `waterPlaneMath.waterLevelAt` (W4a, § A16.3 nr. 2).
+ *
+ * THREE IMPLEMENTATIONS OF ONE FUNCTION, and this is the third; they answer
+ * the same number or the admin preview draws a river the bake did not carve.
+ * The rule is two lines:
+ *
+ *     s     = arc coordinate of the NEAREST point on the axis polyline
+ *             (every segment projected with a clamp, shortest distance wins)
+ *     level = linear between the two knots s falls between, CLAMPED at both
+ *             ends of the line
+ *
+ * The projection is `nearestOnPolyline` above — the same routine the journey
+ * overlay uses, not a second copy of it, down to the tie rule (an exact tie
+ * goes to the EARLIER segment, `<` and never `<=`, which is what the server's
+ * loop does too).
+ *
+ * BOTH OLDER LAWS ARE SPECIAL CASES, not branches beside it: still water is
+ * ONE knot, so the nearest point is that knot and the clamp answers its level
+ * everywhere; a straight river is TWO knots at the axis extremes, so the
+ * projection onto that single segment IS W1's `clamp((s − s_min)/span, 0, 1)`.
+ *
+ * THE CLAMP IS LOAD-BEARING at both ends: the knots sit where the levels were
+ * MEASURED (a cross-section median of the natural ground), and a point past
+ * the last knot must not read past the level that measurement stands for.
+ *
+ * Hand-derived (§ B5a), the hairpin of `scripts/smoke_height_bake.py` [8k]:
+ * knots A(150, 300) s = 0 level 10, B(249, 280) s = 101 level 8,
+ * C(201, 260) s = 153 level 6.
+ *
+ *   (249, 280)   -> the middle knot itself, s = 101       -> 8.0
+ *                   (the straight W1 chord A→C would answer 6.0: the bend
+ *                   projects PAST its own downstream end)
+ *   (199.5, 290) -> midpoint of the first leg, s = 50.5   -> 9.0
+ *   (225, 270)   -> midpoint of the second leg, s = 127   -> 7.0
+ *   (100, 300)   -> 50 m upstream of A, foot clamps to A  -> 10.0
+ */
+export function waterLevelAt(profile: TerrainWaterProfile,
+  x: number, z: number): number {
+  const axis = profile.axis
+  if (!axis.length) return profile.level_up
+  if (axis.length < 2) return axis[0][3]
+  const foot = nearestOnPolyline(axis.map((k) => [k[0], k[1]]), x, z)
+  if (!foot) return axis[0][3]
+  const a = axis[foot.index]
+  const b = axis[Math.min(foot.index + 1, axis.length - 1)]
+  const s = a[2] + (b[2] - a[2]) * foot.t
+  return axisLevelAt(axis, s)
+}
+
+/** The level of an axis at arc coordinate `s`, linear between the knots and
+ *  clamped at both ends — the inner half of `waterLevelAt`, split out because
+ *  it is the half the server states as its own rule. A one-knot axis answers
+ *  its own level: its `s` is both the first and the last. */
+function axisLevelAt(axis: readonly TerrainWaterKnot[], s: number): number {
+  if (s <= axis[0][2]) return axis[0][3]
+  const last = axis[axis.length - 1]
+  if (s >= last[2]) return last[3]
+  for (let i = 1; i < axis.length; i++) {
+    const [, , aS, aLevel] = axis[i - 1]
+    const [, , bS, bLevel] = axis[i]
+    if (s <= bS) {
+      const span = bS - aS
+      if (span <= 1e-12) return bLevel
+      return aLevel + (bLevel - aLevel) * ((s - aS) / span)
+    }
+  }
+  return last[3]
+}
+
+/**
+ * WHICH WAY THE WATER RUNS AT ONE POINT — the unit tangent of the axis segment
+ * nearest to it, `[0, 0]` where there is no flow (W4a).
+ *
+ * The counterpart of `waterLevelAt` and the same walk: the nearest segment
+ * decides, so a point beside a bend reads the leg it is beside, not the chord
+ * of the whole river. It is what the ripples scroll along in the 3D client
+ * (`aWaterFlow`, per vertex) and what the map preview's arrows point at —
+ * derived from the SAME knots, so the picture and the water agree.
+ *
+ * Still water is `[0, 0]` and not some default bearing: a lake has no
+ * downstream, and a zero is what every consumer already reads as "no flow".
+ *
+ * Hand-derived on the hairpin above: at (199.5, 290) the first leg carries it,
+ * (99, −20)/101 = (0.980198, −0.198020); at (225, 270) the second,
+ * (−48, −20)/52 = (−0.923077, −0.384615). Exactly ON the middle knot both legs
+ * are equally near and the EARLIER one wins, so the answer there is the first
+ * leg's tangent — the tie rule of `nearestOnPolyline`, which is the server's.
+ */
+export function waterFlowAt(profile: TerrainWaterProfile | null | undefined,
+  x: number, z: number): [number, number] {
+  const axis = profile?.axis
+  if (!axis || axis.length < 2) return [0, 0]
+  const foot = nearestOnPolyline(axis.map((k) => [k[0], k[1]]), x, z)
+  if (!foot) return [0, 0]
+  const i = Math.min(foot.index, axis.length - 2)
+  const dx = axis[i + 1][0] - axis[i][0]
+  const dz = axis[i + 1][1] - axis[i][1]
+  const len = Math.hypot(dx, dz)
+  if (!(len > 1e-9)) return [0, 0]
+  return [dx / len, dz / len]
 }
 
 /**

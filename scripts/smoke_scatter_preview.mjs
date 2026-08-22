@@ -418,6 +418,7 @@ async function main() {
     scatterThinnedDots, scatterThinnedPercentText,
     SCATTER_AREA_TRUE_MAX, SCATTER_TRUE_TOTAL,
     SCATTER_TRUE_ON, SCATTER_TRUE_OFF,
+    polygonAreaM2, formatAreaM2, AREA_HECTARE_M2,
   } = await loadBundled(SRC, 'scatterpreview-');
   const {
     scatterWantedCount, SCATTER_MAX_PER_ENTRY, scatterCellInstances,
@@ -855,6 +856,57 @@ async function main() {
   // wood as 16 dots. The new picture must not agree with that.
   differs('I8 …and the new picture is not the old one',
     wood, 16);
+
+  // ==========================================================================
+  // (J) THE AREA THE PANEL PRINTS — the same square metres every density above
+  //     is counted against, now shown to the author on the selected area.
+  // ==========================================================================
+  // `polygonAreaM2` is the SHARED shoelace (`@anima/scene-render.polygonArea`)
+  // over a cleaned ring, not a second one: every `m2` in this file is measured
+  // with that routine, and a chip that disagreed with it would put a number
+  // beside a dot count derived from another. All by hand:
+  console.log('(J) the area readout of the selected chip');
+  check('J1 a 10 × 20 m rectangle is 200 m2',
+    polygonAreaM2([[0, 0], [10, 0], [10, 20], [0, 20]]), 200);
+  check('J1 …and the same ring painted the other way round measures the same',
+    polygonAreaM2([[0, 20], [10, 20], [10, 0], [0, 0]]), 200);
+  // A right triangle with legs 30 and 40: ½ · 30 · 40 = 600 m2. Shoelace, by
+  // hand: ½·|(0·0 − 30·0) + (30·40 − 0·0) + (0·0 − 0·40)| = ½·1200 = 600.
+  check('J2 a 30 × 40 m right triangle is 600 m2',
+    polygonAreaM2([[0, 0], [30, 0], [0, 40]]), 600);
+  check('J2 …and a repeated closing corner changes nothing',
+    polygonAreaM2([[0, 0], [30, 0], [0, 40], [0, 0]]), 600);
+  check('J3 two points enclose nothing',
+    polygonAreaM2([[0, 0], [10, 0]]), 0);
+  // A corner that is not a number is DROPPED, not fatal — `cleanRing` again,
+  // and the same ring the renderers mesh. The rectangle minus its broken
+  // corner is the triangle (0,0), (10,20), (0,20): ½·|0·20 − 10·0 + 10·20 −
+  // 0·20 + 0·0 − 0·20| = ½·200 = 100 m2. The readout names the shape that is
+  // actually drawn, and never NaN.
+  check('J3 …and a corner that is not a number is dropped, not fatal',
+    polygonAreaM2([[0, 0], [10, NaN], [10, 20], [0, 20]]), 100);
+  check('J4 no polygon at all is no area', polygonAreaM2(undefined), 0);
+  // The print. The grouping separator is fixed in the code and NOT the
+  // machine's locale, or the same world would read differently on two
+  // computers; hectares join in at 10 000 m2 and never replace the metres.
+  const NBSP = '\u202f';  // narrow no-break space, the SI thousands separator
+  check('J5 small areas are plain square metres',
+    [formatAreaM2(0), formatAreaM2(999.4), formatAreaM2(1234)],
+    ['0 m²', '999 m²', `1${NBSP}234 m²`]);
+  check('J6 a hectare is where the second reading starts',
+    [formatAreaM2(AREA_HECTARE_M2 - 1), formatAreaM2(AREA_HECTARE_M2)],
+    [`9${NBSP}999 m²`, `10${NBSP}000 m² (1.00 ha)`]);
+  check('J7 the example of the round, and a landscape-sized one',
+    [formatAreaM2(12300), formatAreaM2(1234567)],
+    [`12${NBSP}300 m² (1.23 ha)`, `1${NBSP}234${NBSP}567 m² (123.46 ha)`]);
+  // The rounding happens ONCE: 9 999.5 m2 prints as 10 000 m2, so the hectare
+  // reading has to follow the number the reader SEES, not the raw one.
+  check('J8 the hectare reading follows the rounded metres',
+    formatAreaM2(9999.5), `10${NBSP}000 m² (1.00 ha)`);
+  // The wood of section (I), end to end: 89 646.28 m2 is just under nine
+  // hectares, and that is the number a "5 per 100 m2" row is read against.
+  check('J9 the reporting world’s wood reads as itself',
+    formatAreaM2(89646.28), `89${NBSP}646 m² (8.96 ha)`);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
