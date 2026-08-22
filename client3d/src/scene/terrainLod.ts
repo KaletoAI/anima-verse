@@ -1364,6 +1364,12 @@ export interface TerrainLod {
   setMaterial(mat: THREE.Material): void;
   /** How many pieces the last selection drew, for the performance readout. */
   nodeCount(): number;
+  /** DIAGNOSTIC: the instance cap three.js froze for this geometry at its
+   *  first bind (`geometry._maxInstanceCount`, set once for a plain Mesh over
+   *  an InstancedBufferGeometry and never raised when the attribute grows) and
+   *  the current attribute capacity. `cap < nodeCount()` means the renderer
+   *  silently drops the tail of the selection every frame. */
+  instanceCap(): { cap: number; capacity: number };
   /** How many NON-DEGENERATE triangles those pieces draw — `Σ cells² · 2`. The
    *  patch always submits `PATCH_N² · 2` per instance; the ones past a piece's
    *  own `cells` collapse onto its last row and column and rasterize nothing,
@@ -1756,6 +1762,10 @@ export function createTerrainLod(): TerrainLod {
       mesh.material = mat;
     },
     nodeCount: () => nodes,
+    instanceCap: () => ({
+      cap: (geo as unknown as { _maxInstanceCount?: number })._maxInstanceCount ?? -1,
+      capacity: (geo.getAttribute('iNode') as THREE.InstancedBufferAttribute | undefined)?.count ?? 0,
+    }),
     triangleCount: () => triangles,
     setFrozen(on) {
       frozen = on;

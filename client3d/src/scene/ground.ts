@@ -871,6 +871,8 @@ export interface Ground {
   revision(): number;
   /** How many quadtree pieces the terrain drew in the last frame. */
   terrainNodeCount(): number;
+  /** DIAGNOSTIC: three.js' frozen instance cap vs the buffer capacity. */
+  terrainInstanceCap(): { cap: number; capacity: number };
   /** How many NON-DEGENERATE triangles those pieces cost
    *  (`TerrainLod.triangleCount`). */
   terrainTriangleCount(): number;
@@ -3014,6 +3016,7 @@ export function createGround(): Ground {
     passableAt: (x, z) => typeAt(x, z).passable,
     revision: () => rev,
     terrainNodeCount: () => terrain.nodeCount(),
+    terrainInstanceCap: () => terrain.instanceCap(),
     terrainTriangleCount: () => terrain.triangleCount(),
     heightTileCount: () => relief.tiles.size,
     // The terrain is ONE mesh with ONE material by construction (`terrainLod`),
