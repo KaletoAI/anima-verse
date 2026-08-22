@@ -629,6 +629,19 @@ async function startApp(username: string, role: string) {
   // basement hole below.
   const terrainGround = createGround();
   engine.scene.add(terrainGround.group);
+  // THE TERRAIN'S QUADTREE SELECTION, once per frame and BEFORE the render.
+  // It used to run in the terrain mesh's own `onBeforeRender`, which three.js
+  // calls AFTER it has already uploaded the geometry's instance attribute
+  // (`WebGLObjects.update` out of `projectObject`) — so the card drew the
+  // previous frame's node list under this frame's instance count. This is the
+  // first frame hook registered, so nothing else can move the camera between
+  // the selection and the draw; the engine sets the camera before it runs any
+  // hook at all. See `Ground.tickTerrain`.
+  const drawBufferPx = new THREE.Vector2();
+  engine.addFrameHook(() => {
+    terrainGround.tickTerrain(
+      engine.camera, engine.renderer.getDrawingBufferSize(drawBufferPx).y);
+  });
   // THE DETAIL DISTANCES OF THE SCATTER, read here for the same reason the
   // audio drivers read their own settings (E4-T4): this runs long before the
   // React island that owns the menu mounts, and a ground built at the module's

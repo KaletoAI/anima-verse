@@ -20,17 +20,18 @@
  * ============================================================================
  * [1] THE ID RANGE
  * ============================================================================
- * The panel has 20 switches, numbered 1..20 with no gaps. So:
- *   valid   : 1, 2, 19, 20
- *   invalid : 0, 21, -1, 3.5, NaN
- * Out-of-range ids are DROPPED, never clamped: a `21` in a shared link is
- * either a typo or a link from a newer client, and honouring it as `20` would
+ * The panel has 19 switches, numbered 1..19 with no gaps. So:
+ *   valid   : 1, 2, 18, 19
+ *   invalid : 0, 20, -1, 3.5, NaN
+ * Out-of-range ids are DROPPED, never clamped: a `20` in a shared link is
+ * either a typo or a link from another client, and honouring it as `19` would
  * be a state nobody chose.
  *
- * THE RANGE IS THE ONE THING THAT MOVES when a switch is added, and it moves in
- * two places that have to agree: `ISO_MAX_ID` and the number of entries in
- * `ISOLATION_TOGGLES`. 20 here is hand-counted from that list — 19 was the
- * count until "Terrain culling off" was added on 2026-08-22.
+ * THE RANGE IS THE ONE THING THAT MOVES when a switch is added or retired, and
+ * it moves in two places that have to agree: `ISO_MAX_ID` and the number of
+ * entries in `ISOLATION_TOGGLES`. 19 here is hand-counted from that list — 20
+ * held for one day, while "Terrain culling off" existed (2026-08-22); the cull
+ * it switched off is deleted, so the switch went with it.
  *
  * ============================================================================
  * [2] `encodeIsolation` — ascending, deduplicated, comma-separated
@@ -44,8 +45,8 @@
  *   {3, 6, 3}       -> "3,6"         (a Set cannot hold 3 twice anyway)
  *   {2, 10, 1}      -> "1,2,10"      (numeric, not lexicographic: a string
  *                                     sort would give "1,10,2")
- *   {2, 20, 1}      -> "1,2,20"      (…and 20 is now a switch, so it survives)
- *   {0, 3, 21}      -> "3"           (the invalid ids never reach the string)
+ *   {2, 19, 1}      -> "1,2,19"      (19 is the last switch, so it survives)
+ *   {0, 3, 20}      -> "3"           (the invalid ids never reach the string)
  *
  * ============================================================================
  * [3] `decodeIsolation` — strictly digits per token
@@ -116,7 +117,7 @@
  */
 
 const MIN_ID = 1;
-const MAX_ID = 20;
+const MAX_ID = 19;
 const HASH_KEY = 'iso';
 
 // ── the reimplementation the checks are made against ────────────────────────
@@ -186,18 +187,19 @@ function eq(label, got, want) {
 
 // ── [1] the id range ────────────────────────────────────────────────────────
 
-console.log('[1] the id range 1..20, dropped and never clamped');
+console.log('[1] the id range 1..19, dropped and never clamped');
 eq('(a) 1 is an id', isId(1), true);
-eq('…19 is an id', isId(19), true);
-eq('…20 is an id (Terrain culling off)', isId(20), true);
+eq('…18 is an id', isId(18), true);
+eq('…19 is an id (Wireframe terrain, the last one)', isId(19), true);
 eq('…0 is not', isId(0), false);
+eq('…20 is not — the retired "Terrain culling off"', isId(20), false);
 eq('…21 is not', isId(21), false);
 eq('…-1 is not', isId(-1), false);
 eq('…3.5 is not', isId(3.5), false);
 eq('…NaN is not', isId(NaN), false);
-eq('(b) 21 is DROPPED by encode, not clamped to 20', encode([21]), '');
-eq('…and by decode', decode('21'), []);
-eq('…while 20 now passes both', decode(encode([20])), [20]);
+eq('(b) 20 is DROPPED by encode, not clamped to 19', encode([20]), '');
+eq('…and by decode', decode('20'), []);
+eq('…while 19 passes both', decode(encode([19])), [19]);
 
 // ── [2] encode ──────────────────────────────────────────────────────────────
 
@@ -207,8 +209,8 @@ eq('…one id', encode([3]), '3');
 eq('…sorted ascending', encode([6, 3]), '3,6');
 eq('…deduplicated', encode([3, 6, 3]), '3,6');
 eq('(d) NUMERIC order, not lexicographic', encode([2, 10, 1]), '1,2,10');
-eq('…and 20 sorts last, not between 2 and 3', encode([2, 20, 1]), '1,2,20');
-eq('(e) invalid ids never reach the string', encode([0, 3, 21]), '3');
+eq('…and 19 sorts last, not between 1 and 2', encode([2, 19, 1]), '1,2,19');
+eq('(e) invalid ids never reach the string', encode([0, 3, 20]), '3');
 
 // ── [3] decode ──────────────────────────────────────────────────────────────
 
@@ -226,12 +228,12 @@ eq('…RED: "+3" is dropped', decode('+3'), []);
 eq('…RED: "-3" is dropped', decode('-3'), []);
 eq('…RED: "3px" is dropped', decode('3px'), []);
 eq('…RED: "1e1" is dropped', decode('1e1'), []);
-eq('(h) a mixed line keeps only what is legal', decode('0,21,abc,,7'), [7]);
+eq('(h) a mixed line keeps only what is legal', decode('0,20,abc,,7'), [7]);
 
 console.log('\n…and the round trip decode(encode(S)) = sort(S)');
 const spread = [
-  [], [1], [19], [20], [1, 20], [3, 6], [6, 3], [2, 10, 1],
-  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+  [], [1], [18], [19], [1, 19], [3, 6], [6, 3], [2, 10, 1],
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
 ];
 let tripBad = 0;
 for (const s of spread) {

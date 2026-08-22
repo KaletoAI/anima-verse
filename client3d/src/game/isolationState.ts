@@ -20,11 +20,17 @@
  */
 
 /** Lowest and highest id the panel knows. Anything outside is dropped on
- *  decode rather than clamped — a `21` in a shared link is a typo or a link
- *  from a newer client, and honouring it as `20` would isolate the wrong
- *  suspect without saying so. */
+ *  decode rather than clamped — a `20` in a shared link is a typo or a link
+ *  from another client, and honouring it as `19` would isolate the wrong
+ *  suspect without saying so.
+ *
+ *  20 WAS "Terrain culling off" for one day (2026-08-22). It did its job: with
+ *  it on the ground stopped vanishing, which is what identified the terrain's
+ *  per-piece frustum cull as the cause. The cull is deleted, so the switch has
+ *  nothing left to switch and the id is retired rather than kept as a no-op —
+ *  a suspect list whose entries do nothing is worse than a shorter one. */
 export const ISO_MIN_ID = 1;
-export const ISO_MAX_ID = 20;
+export const ISO_MAX_ID = 19;
 
 /** Where a chosen set is kept between reloads. */
 export const ISO_STORAGE_KEY = 'av3d.debug.isolation.v1';
@@ -143,11 +149,6 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
     cost: 'upload' },
   { id: 19, label: 'Wireframe terrain',
     note: 'material.wireframe on the terrain material — the crack/hole test.',
-    cost: 'none' },
-  { id: 20, label: 'Terrain culling off',
-    note: 'Draws every selected terrain node regardless of the camera frustum '
-      + '— if the shimmer stops, a node box is smaller than its drawn surface '
-      + 'and the culling drops visible ground.',
     cost: 'none' },
 ];
 

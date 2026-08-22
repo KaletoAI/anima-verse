@@ -271,28 +271,34 @@
  * [9] COVERAGE — the selected nodes tile every visible piece of ground
  * ============================================================================
  * [5] and [8] say which nodes are picked and that they meet without a crack.
- * Neither says the picked set has no HOLE in it: selection also CULLS, against
- * the camera frustum, and a node wrongly culled is not a seam but a window to
- * the sky — the light blue of `engine.ts` (`0x9fc7e8`, background and fog are
- * the same colour), flashing on and off as the camera turns. That is what this
- * section measures, and it measures it over the WHOLE COMPASS, because a
- * culling mistake is by nature a mistake about one direction.
+ * Neither says the picked set has no HOLE in it, and a missing node is not a
+ * seam but a window to the sky — the light blue of `engine.ts` (`0x9fc7e8`,
+ * background and fog are the same colour), flashing on and off as the camera
+ * turns. That is what this section measures, and it measures it over the WHOLE
+ * COMPASS, because a hole of this kind is by nature about one direction.
+ *
+ * SINCE 2026-08-22 THE SELECTION CULLS NOTHING, so the invariant below holds by
+ * construction and the section is a regression guard rather than a discovery.
+ * What it still measures is the two things that DID lose ground, both kept as
+ * red probes: the drawn list arriving one frame late (z3) and the frustum test
+ * with a box the server's capped statistics do not cover (z4).
  *
  * THE INVARIANT. For a camera anywhere, the union of the SELECTED squares must
  * contain every ground point that is
  *   inside the view frustum ∩ inside the world frame ∩ nearer than the haze
  * (520 m, `engine.ts`). Not "roughly cover": every sample, every heading.
  *
- * WHY IT IS DECIDABLE AT ALL — the theorem the check is built on. Let the box
- * of every node contain the ground drawn over its square. A visible point p
- * lies in the box of the leaf that owns it and, since a child's square and its
+ * WHY IT WAS DECIDABLE AT ALL WHILE THE CULL EXISTED — the theorem the check
+ * was built on, and the one the red probes now break on purpose. Let the box of
+ * every node contain the ground drawn over its square. A visible point p lies
+ * in the box of the leaf that owns it and, since a child's square and its
  * heights are a subset of its parent's, in the box of EVERY ancestor of that
- * leaf. So no ancestor can fail the frustum test, the recursion walks all the
- * way down the chain that owns p, and somewhere on that chain a node is
- * selected. Coverage therefore fails if and ONLY if some node's box is too
- * small — which is why `nodeBounds` is written as a bound and not as a
- * measurement, and why it now lives outside the renderer where this file can
- * reach the shipped rule instead of a copy of it.
+ * leaf. So no ancestor could fail the frustum test, the recursion walked all
+ * the way down the chain that owns p, and somewhere on that chain a node was
+ * selected. Coverage therefore failed if and ONLY if some node's box was too
+ * small — and (z4) shows that the shipped `nodeBounds` really can be too small,
+ * because `tile_stats` is capped and a tile with no statistic is folded in as
+ * flat ground at zero whether it is flat or not.
  *
  * THE FIXTURE is the reported region: a 5 120 m world frame
  * [−2560, 2560]² — negative-heavy, so every `Math.floor` on a negative
@@ -317,22 +323,32 @@
  *                                  keeps the tile that STARTS on its east edge
  *                                  out.
  * (z2) THE SWEEP: 0 misses, at all 1 080 headings of the three settings, over
- *      4 373 188 sampled ground points. The selection is not the hole.
- * (z3) RED COUNTER-PROBE A — the hypothesis this check was written for: a box
- *      whose `min`/`max` are SWAPPED for nodes reaching into negative z (an
- *      inverted, empty box). Measured at 8 m / −15°: coverage fails at 306 of
- *      360 headings and loses 589 172 of 2 072 836 sampled points, i.e. 28 %
- *      of the visible ground. So the check WOULD see a sign error in the node
- *      box; it does not see one in the real rule.
- * (z4) RED COUNTER-PROBE B — the tile key by `Math.trunc` instead of
- *      `Math.floor`, i.e. the stats of the wrong tile everywhere west or north
- *      of the origin. Measured at 25 m / −25°: coverage fails over one broad
- *      band, headings 84°…202°. Also seen, also absent from the real rule.
+ *      4 373 188 sampled ground points, with at most 296 pieces in any one of
+ *      them — the number the instance buffer is allocated against.
+ * (z3) RED COUNTER-PROBE A — THE DEFECT THAT WAS MEASURED. three.js uploads an
+ *      `InstancedBufferGeometry`'s dirty attributes in `projectObject`
+ *      (`WebGLObjects.update`, guarded by "Update once per frame"), and
+ *      `projectObject` runs over the whole scene BEFORE the first
+ *      `object.onBeforeRender`. The selection used to be written in that hook,
+ *      so the ROWS the card read were the previous frame's while
+ *      `geometry.instanceCount` — read at draw time — was this frame's. The
+ *      probe draws exactly that: the previous heading's culled list, cut off at
+ *      this heading's count. Measured at 8 m / −15°, one degree of yaw per
+ *      frame: 40 of 360 headings lose ground, 20 466 sampled points in all. The
+ *      SAME staleness against the shipped renderer loses nothing, because
+ *      without a cull the selection is a function of the camera's POSITION and
+ *      a changed heading does not change it.
+ * (z4) RED COUNTER-PROBE B — THE CULL'S OWN BOX. `tile_stats` is capped
+ *      server-side (`TILE_STATS_MAX`) and `nodeBounds` folds a zero into the
+ *      box for every tile it holds no statistic for. Put the frustum test back
+ *      with three quarters of the statistics missing and, at 25 m / −25°,
+ *      155 of 360 headings lose ground, 15 800 sampled points. A cull is only
+ *      as honest as the bound it culls against; this one could not be made
+ *      honest without shipping every tile's statistic.
  * (z5) STABILITY, the other half of a flicker: over 7 200 yaw steps of 0.05°
- *      the selected SET changes by at most a handful of nodes, and those are
- *      the ones entering or leaving at the edge of the screen. There is no
- *      node that toggles in the middle of the view from one frame to the next,
- *      so no hysteresis is owed.
+ *      the selected SET changes by at most a handful of nodes — and those come
+ *      from the orbit camera's EYE moving with the yaw, not from the heading:
+ *      nothing in the selection reads a direction any more.
  * (z6) THE SELECTION IS MIRROR-SYMMETRIC. A camera at (777, −333) and one at
  *      (−777, 333) over a symmetric frame select the same tree, node for node,
  *      through the point mirror (x, z) -> (−x − size, −z − size). Nothing in
@@ -347,6 +363,38 @@
  *      128 m margin, `NEAR_MARGIN_CELLS` = 2 over a 64 m overview), where
  *      `heightAt` is the overview and the near pyramid, sampled from it at
  *      2 m, reproduces it exactly.
+ *
+ * ============================================================================
+ * [13] A LEVEL WORLD IS DRAWN BY THE RINGS
+ * ============================================================================
+ * Until 2026-08-22 a world whose overview was level took `minLodDistance` 0:
+ * every range 0, nothing ever split, the whole world drawn from its roots. The
+ * isolation panel measured what that means on the "3D Test" world — a 7 km
+ * frame, no height areas, the location at (−10, 10): SIXTEEN pieces of 2 048 m
+ * for the entire world, of which the frustum kept three or four. At that
+ * granularity every per-frame decision about a piece is a decision about a
+ * square kilometre, which is how one wrong verdict became a hole in the sky.
+ *
+ * (qq) THE MODEL IS THAT WORLD, hand-derived before anything is asserted about
+ *      the new rule: leaf 32 · 2 = 64 m, 6 levels, root 64 · 2^5 = 2 048 m,
+ *      frame [−3500, 3500] covering roots −2…1 per axis = 4 × 4 = 16, every one
+ *      of them 2 048 m. That is the panel's own "16".
+ * (rr) THE SAME CAMERA WITH THE RINGS: 136 pieces, sized 64…2 048 m. Three
+ *      digits, one draw call, and the near ground drawn at the 64 m leaf the
+ *      server has data for instead of in 2 km lumps.
+ * (ss) NO PIECE IS WIDER THAN ITS OWN DISTANCE, which is the ring structure as
+ *      one number: `lodRange[i] = 128 · 2^i`, a whole node at level L is
+ *      `64 · 2^L` wide and is emitted only once its box distance has reached
+ *      `lodRange[L−1] = 64 · 2^L` — the same number. Level 0 is capped by the
+ *      leaf instead. Inside the haze: 0 breaches now, 4 under the shortcut, the
+ *      worst of them 32× wider than the ring allows.
+ * (tt) …and the shaped compass world of [9] keeps the property, so it is the
+ *      rule and not an accident of a level field.
+ * (uu) THE CEILING. Nothing is culled, so the whole frame is selected every
+ *      frame: 432 camera settings over the flat world (6 zoom steps × 72
+ *      headings, the engine's own pitch law) reach at most 136 pieces, the
+ *      compass world at most 296, against an instance buffer of `MAX_NODES` =
+ *      4 096 that is allocated once and never replaced.
  *
  * ============================================================================
  * [7] THE ANALYTIC CLICK — `rayGroundHit`
@@ -677,7 +725,7 @@ function checkEq(label, actual, expected) {
 }
 
 const { lod, height } = await loadLod();
-const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MORPH_START, MAX_PIXEL_ERROR,
+const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX_PIXEL_ERROR,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
   morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl,
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt } = lod;
@@ -1187,16 +1235,19 @@ function eyeFor(atX, atZ, yawDeg, pitchDeg, dist) {
  * and its rings grow geometrically, which puts samples where the nodes are
  * small as well as where they are large.
  */
-function coverageAt(boundsFn, atX, atZ, yawDeg, pitchDeg, dist) {
+function coverageAt(boundsFn, atX, atZ, yawDeg, pitchDeg, dist, drawn = null) {
   const { fwd, eye } = eyeFor(atX, atZ, yawDeg, pitchDeg, dist);
   const ps = frustumPlanes(eye, fwd);
-  const picked = selectLodNodes({
+  const select = (e) => selectLodNodes({
     x0: CX0, z0: CZ0, x1: CX1, z1: CZ1,
     leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
-    camX: eye[0], camY: eye[1], camZ: eye[2],
+    camX: e[0], camY: e[1], camZ: e[2],
     boundsOf: boundsFn, levelErrorM: CERR, pixelScale: camPixelScale,
-    inView: (x, z, s, mnY, mxY) => boxSeen(ps, x, mnY, z, x + s, mxY, z + s),
   });
+  // The SHIPPED renderer draws the whole selection — there is no frustum test
+  // in it since 2026-08-22. `drawn` is how a RED probe puts one back, or hands
+  // the frame a list that was selected for a different camera.
+  const picked = drawn ? drawn({ eye, fwd, ps, select, boundsFn }) : select(eye);
   const a = (yawDeg * Math.PI) / 180;
   const flat = Math.cos((pitchDeg * Math.PI) / 180);
   let miss = 0;
@@ -1224,14 +1275,16 @@ function coverageAt(boundsFn, atX, atZ, yawDeg, pitchDeg, dist) {
 }
 /** The whole compass for one orbit setting: total misses, total samples, and
  *  the headings that failed, as ranges. */
-function sweepCompass(boundsFn, atX, atZ, pitchDeg, dist) {
+function sweepCompass(boundsFn, atX, atZ, pitchDeg, dist, drawn = null) {
   let miss = 0;
   let tested = 0;
+  let maxNodes = 0;
   const bad = [];
   for (let yaw = 0; yaw < 360; yaw += 1) {
-    const r = coverageAt(boundsFn, atX, atZ, yaw, pitchDeg, dist);
+    const r = coverageAt(boundsFn, atX, atZ, yaw, pitchDeg, dist, drawn);
     miss += r.miss;
     tested += r.tested;
+    if (r.nodes > maxNodes) maxNodes = r.nodes;
     if (r.miss) bad.push(yaw);
   }
   const ranges = [];
@@ -1240,7 +1293,7 @@ function sweepCompass(boundsFn, atX, atZ, pitchDeg, dist) {
     if (last && y === last[1] + 1) last[1] = y;
     else ranges.push([y, y]);
   }
-  return { miss, tested, headings: bad.length,
+  return { miss, tested, headings: bad.length, maxNodes,
            ranges: ranges.map((r) => (r[0] === r[1] ? `${r[0]}` : `${r[0]}-${r[1]}`)).join(', ') };
 }
 const REPORTED_X = -1550;
@@ -1248,66 +1301,99 @@ const REPORTED_Z = -760;
 const ORBITS = [[8, -15], [25, -25], [60, -35]];
 const honest = (x, z, size) => nodeBounds(cStats, TILE_M, cGlobal, x, z, size);
 let sweptSamples = 0;
+let maxSweepNodes = 0;
 for (const [dist, pitch] of ORBITS) {
   const r = sweepCompass(honest, REPORTED_X, REPORTED_Z, pitch, dist);
   sweptSamples += r.tested;
+  maxSweepNodes = Math.max(maxSweepNodes, r.maxNodes);
   check(`(z2) 360 headings at ${dist} m / ${pitch}°: visible ground with no node`
     + ` (of ${r.tested} samples)`, r.miss, 0);
   check('…failing headings', r.headings, 0);
 }
 checkAbove('(z2) ground points sampled over the whole compass', sweptSamples, 2.5e6);
-// (z3) RED A — the very hypothesis: a sign mix-up in the box for negative z.
-const redSwapZ = (x, z, size) => {
-  const b = honest(x, z, size);
-  return z < 0 ? { min: b.max, max: b.min } : b;
+checkBelow('…and the largest selection any of those frames drew', maxSweepNodes, MAX_NODES);
+console.log(`       (at most ${maxSweepNodes} pieces per frame, cap ${MAX_NODES})`);
+
+// (z3) RED A — THE ONE-FRAME-LATE INSTANCE BUFFER, the defect that was measured
+// on 2026-08-22. three.js uploads an InstancedBufferGeometry's dirty attributes
+// in `projectObject` (`WebGLObjects.update`, "Update once per frame"), which
+// runs over the whole scene BEFORE the first `object.onBeforeRender`. The
+// selection used to be written in that hook, so the rows the card read were the
+// PREVIOUS frame's while `instanceCount` was this frame's. Here the frame is
+// drawn with the list selected one degree of yaw earlier — and because the old
+// code also culled per piece, that list was a different set every frame.
+const cullAll = (list, planes, boundsFn) => list.filter((n) => {
+  const b = boundsFn(n.x, n.z, n.size);
+  return boxSeen(planes, n.x, b.min, n.z, n.x + n.size, b.max, n.z + n.size);
+});
+const oneFrameLate = (deg, pitchDeg, dist) => ({ eye, fwd, ps, select, boundsFn }) => {
+  const yawNow = (Math.atan2(fwd[0], fwd[2]) * 180) / Math.PI;
+  const prev = eyeFor(REPORTED_X, REPORTED_Z, yawNow - deg, pitchDeg, dist);
+  // What the card really had: the ROWS of the previous frame (selected and
+  // culled against the previous camera), cut off at THIS frame's instance
+  // count. Both halves are the shipped code of 2026-08-21 — the write in
+  // `onBeforeRender`, the count read at draw time.
+  const rows = cullAll(select(prev.eye), frustumPlanes(prev.eye, prev.fwd), boundsFn);
+  const count = cullAll(select(eye), ps, boundsFn).length;
+  return rows.slice(0, count);
 };
-const redA = sweepCompass(redSwapZ, REPORTED_X, REPORTED_Z, -15, 8);
-checkAbove('(z3) RED A: an inverted box for z < 0 loses ground at headings',
-  redA.headings, 200);
-checkAbove('…and loses this many sampled points', redA.miss, 5e5);
-console.log(`       (RED A fails at headings ${redA.ranges})`);
-// (z4) RED B — the tile key by truncation instead of floor.
-const redTrunc = (x, z, size) => {
-  const tx0 = Math.trunc(x / TILE_M);
-  const tx1 = Math.trunc((x + size - 1e-6) / TILE_M);
-  const tz0 = Math.trunc(z / TILE_M);
-  const tz1 = Math.trunc((z + size - 1e-6) / TILE_M);
-  const covered = (tx1 - tx0 + 1) * (tz1 - tz0 + 1);
-  if (covered > 64) return cGlobal;
-  let min = Infinity;
-  let max = -Infinity;
-  let seen = 0;
-  for (let tz = tz0; tz <= tz1; tz += 1) {
-    for (let tx = tx0; tx <= tx1; tx += 1) {
-      const s = cStats.get(`${tx},${tz}`);
-      if (!s) continue;
-      seen += 1;
-      min = Math.min(min, s.min);
-      max = Math.max(max, s.max);
-    }
-  }
-  if (!seen) return cGlobal;
-  if (seen < covered) { min = Math.min(min, 0); max = Math.max(max, 0); }
-  return { min, max };
+const redLate = sweepCompass(honest, REPORTED_X, REPORTED_Z, -15, 8,
+                             oneFrameLate(1, -15, 8));
+checkAbove('(z3) RED A: the previous frame\'s rows under this frame\'s count'
+  + ' lose ground at headings', redLate.headings, 25);
+checkAbove('…and lose this many sampled points', redLate.miss, 1e4);
+console.log(`       (RED A fails at headings ${redLate.ranges})`);
+// …and the same staleness against the SHIPPED renderer, which culls nothing:
+// the selection then depends on the camera POSITION alone, so a heading that is
+// one frame old changes nothing at all and the count matches the rows.
+const lateNoCull = (deg, pitchDeg, dist) => ({ fwd, select }) => {
+  const yawNow = (Math.atan2(fwd[0], fwd[2]) * 180) / Math.PI;
+  return select(eyeFor(REPORTED_X, REPORTED_Z, yawNow - deg, pitchDeg, dist).eye);
 };
-const redB = sweepCompass(redTrunc, REPORTED_X, REPORTED_Z, -25, 25);
-checkAbove('(z4) RED B: the tile key by trunc loses ground at headings',
-  redB.headings, 50);
-console.log(`       (RED B fails at headings ${redB.ranges})`);
+const lateNow = sweepCompass(honest, REPORTED_X, REPORTED_Z, -15, 8,
+                             lateNoCull(1, -15, 8));
+check('…while without the cull the very same staleness loses nothing',
+  lateNow.miss, 0);
+
+// (z4) RED B — THE CULL'S OWN BOX, where the server's per-tile statistics do not
+// reach. `tile_stats` is capped (`TILE_STATS_MAX`), and `nodeBounds` folds a
+// ZERO into the box for every tile it has no statistic for — the flat world an
+// unindexed tile stands for. A tile that exists and carries hills but whose
+// statistic was capped away therefore gets a box that does not contain its own
+// ground, and the frustum test rejects it while it is on screen. That is the
+// second reason the per-piece cull is gone rather than repaired.
+const capped = new Map();
+let kept = 0;
+for (const [key, v] of cStats) {
+  // Every fourth tile keeps its statistic — a cap that bites, in the pattern a
+  // server-side cap really produces (the first N of an ordered scan).
+  if (kept % 4 === 0) capped.set(key, v);
+  kept += 1;
+}
+const cappedBounds = (x, z, size) => nodeBounds(capped, TILE_M, { min: 0, max: 0 },
+                                                x, z, size);
+const cullWithBox = ({ eye, ps, select }) => select(eye)
+  .filter((n) => {
+    const b = cappedBounds(n.x, n.z, n.size);
+    return boxSeen(ps, n.x, b.min, n.z, n.x + n.size, b.max, n.z + n.size);
+  });
+const redBox = sweepCompass(honest, REPORTED_X, REPORTED_Z, -25, 25, cullWithBox);
+checkAbove('(z4) RED B: the cull with a box the capped statistics do not cover'
+  + ' loses ground at headings', redBox.headings, 20);
+checkAbove('…and loses this many sampled points', redBox.miss, 1e3);
+console.log(`       (RED B fails at headings ${redBox.ranges})`);
 
 // (z5) stability — the other half of a flicker
 for (const [dist, pitch] of [[8, -15], [25, -25]]) {
   let worst = 0;
   let prev = null;
   for (let yaw = 0; yaw < 360; yaw += 0.05) {
-    const { fwd, eye } = eyeFor(REPORTED_X, REPORTED_Z, yaw, pitch, dist);
-    const ps = frustumPlanes(eye, fwd);
+    const { eye } = eyeFor(REPORTED_X, REPORTED_Z, yaw, pitch, dist);
     const picked = selectLodNodes({
       x0: CX0, z0: CZ0, x1: CX1, z1: CZ1,
       leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
       camX: eye[0], camY: eye[1], camZ: eye[2],
       boundsOf: honest, levelErrorM: CERR, pixelScale: camPixelScale,
-      inView: (x, z, s, mnY, mxY) => boxSeen(ps, x, mnY, z, x + s, mxY, z + s),
     });
     const set = new Set(picked.map((n) => `${n.level}:${n.x},${n.z}`));
     if (prev) {
@@ -1928,7 +2014,6 @@ function redSelect(o) {
     const size = o.leafM * (1 << level);
     if (x >= o.x1 || z >= o.z1 || x + size <= o.x0 || z + size <= o.z0) return;
     const b = o.boundsOf(x, z, size);
-    if (o.inView && !o.inView(x, z, size, b.min, b.max)) return;
     const d = redBoxDist(o.camX, o.camY, o.camZ,
                          x, b.min, z, x + size, b.max, z + size);
     if (level > 0 && ranges[level - 1] > 0 && d < ranges[level - 1]) {
@@ -2085,6 +2170,113 @@ console.log(`       (${Math.round(now.nodes / now.frames)} pieces / `
   + `${Math.round(before.nodes / before.frames)} / ${triRed})`);
 checkBelow('(pp) real triangles per frame, as a share of the old rule\'s',
   triNow / triRed, 1);
+
+// ── [13] the flat world gets the rings too ──────────────────────────────────
+console.log('\n[13] a level world is drawn by the rings, not by its roots');
+
+/**
+ * THE 3D-TEST WORLD, as the readout described it: a world frame of about 7 km,
+ * no height areas, the location at (-10, 10). Its overview is level, so the
+ * shortcut that was deleted on 2026-08-22 gave it `minLodDistance` 0 — every
+ * range 0, nothing ever split, the whole world drawn from its roots.
+ *
+ * THE CALIBRATION IS HAND-DERIVED AND MATCHES THE PANEL. A leaf is
+ * `PATCH_N · baseStep` = 32 · 2 = 64 m and the tree has 6 levels, so a root is
+ * 64 · 2^5 = 2 048 m. The frame [-3500, 3500] reaches roots
+ * floor(-3500/2048) = -2 up to floor(3499.999/2048) = 1, i.e. 4 per axis and
+ * 16 in all — which is exactly the "16" the isolation panel read with the
+ * frustum test switched off, and the 3 to 4 it read with it on were those of
+ * the 16 that a 800 m / 45° frustum kept.
+ */
+const FLAT_EXT = [-3500, -3500, 3500, 3500];
+const FLAT_AT = [-10, 10];
+const flatLevel = () => ({ min: 0, max: 0 });
+const flatSelect = (eye, minLod) => selectLodNodes({
+  x0: FLAT_EXT[0], z0: FLAT_EXT[1], x1: FLAT_EXT[2], z1: FLAT_EXT[3],
+  leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: minLod,
+  camX: eye[0], camY: eye[1], camZ: eye[2],
+  boundsOf: flatLevel, pixelScale: camPixelScale,
+});
+// The engine's own camera law (`scene/engine.ts`): pitch 18° at MIN_DIST 0.8 m,
+// 62° at MAX_DIST 150 m, the eye `dist` behind and above the point it looks at.
+const flatEye = (yawDeg, dist) => {
+  const zoomK = Math.min(Math.max((dist - 0.8) / (150 - 0.8), 0), 1);
+  const pitch = 18 + (62 - 18) * Math.sqrt(zoomK);
+  const a = (yawDeg * Math.PI) / 180;
+  const pr = (pitch * Math.PI) / 180;
+  const fwd = [Math.sin(a) * Math.cos(pr), -Math.sin(pr), Math.cos(a) * Math.cos(pr)];
+  return [FLAT_AT[0] - fwd[0] * dist, -fwd[1] * dist, FLAT_AT[1] - fwd[2] * dist];
+};
+const flatCam = flatEye(45, 12);
+// (qq) the model IS the world the panel measured — before anything is asserted
+// about the new rule.
+const wasRoots = flatSelect(flatCam, 0);
+check('(qq) the deleted shortcut drew the 7 km world as this many pieces',
+  wasRoots.length, 16);
+checkEq('…every one of them a 2 048 m root',
+  [...new Set(wasRoots.map((n) => n.size))], [64 * 2 ** (MAX_LOD_LEVELS - 1)]);
+// (rr) …and what the rings make of the same camera.
+const nowRings = flatSelect(flatCam, MIN_LOD_DISTANCE_M);
+checkAbove('(rr) the same camera with the rings, pieces', nowRings.length, 100);
+checkBelow('…and still a three-digit count', nowRings.length, 1000);
+console.log(`       (${wasRoots.length} pieces of 2048 m -> ${nowRings.length} pieces, `
+  + `${[...new Set(nowRings.map((n) => n.size))].sort((a, b) => a - b).join('/')} m)`);
+/**
+ * (ss) NO PIECE IS WIDER THAN ITS OWN DISTANCE, and that is the ring structure
+ * written as one number. `lodRange[i] = 128 · 2^i` and a leaf is 64 m, so a
+ * whole node at level L has `size = 64 · 2^L` and is only emitted once its box
+ * distance has reached `lodRange[L-1] = 128 · 2^(L-1) = 64 · 2^L` — the same
+ * number. A level-0 leaf has no inner ring and is capped by the leaf size
+ * instead. Under the deleted shortcut a piece 2 048 m wide stood at distance 0,
+ * i.e. 32 leaves wide where the rule allows one.
+ */
+const ringBreaches = (picked, eye) => {
+  let bad = 0;
+  let worst = 0;
+  for (const n of picked) {
+    const d = Math.hypot(Math.max(n.x - eye[0], 0, eye[0] - (n.x + n.size)),
+                         eye[1],
+                         Math.max(n.z - eye[2], 0, eye[2] - (n.z + n.size)));
+    if (d > HAZE_M) continue;
+    const allowed = Math.max(LEAF_M, d);
+    if (n.size > allowed + 1e-9) { bad += 1; worst = Math.max(worst, n.size / allowed); }
+  }
+  return { bad, worst };
+};
+check('(ss) pieces inside the haze wider than their own distance', 
+  ringBreaches(nowRings, flatCam).bad, 0);
+checkAbove('…RED: under the deleted shortcut, this many were',
+  ringBreaches(wasRoots, flatCam).bad, 3);
+console.log(`       (RED: the worst stood ${ringBreaches(wasRoots, flatCam).worst.toFixed(0)}x `
+  + 'wider than the ring allows)');
+// (tt) …and the SHAPED worlds keep the property, so it is the rule and not an
+// accident of a level field.
+for (const [name, picked, eye] of [
+  ['the compass world', selectLodNodes({
+    x0: CX0, z0: CZ0, x1: CX1, z1: CZ1,
+    leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+    camX: REPORTED_X, camY: CH(REPORTED_X, REPORTED_Z) + 14, camZ: REPORTED_Z,
+    boundsOf: honest, levelErrorM: CERR, pixelScale: camPixelScale,
+  }), [REPORTED_X, CH(REPORTED_X, REPORTED_Z) + 14, REPORTED_Z]],
+]) {
+  check(`(tt) ${name}: pieces inside the haze wider than their distance`,
+    ringBreaches(picked, eye).bad, 0);
+}
+// (uu) THE CEILING. Nothing is culled any more, so the whole frame is selected
+// every frame — the number the instance buffer is allocated for has to hold it
+// over every camera, not over the lucky one.
+let flatMax = 0;
+let flatFrames = 0;
+for (const dist of [0.8, 3, 12, 40, 90, 150]) {
+  for (let yaw = 0; yaw < 360; yaw += 5) {
+    flatMax = Math.max(flatMax, flatSelect(flatEye(yaw, dist), MIN_LOD_DISTANCE_M).length);
+    flatFrames += 1;
+  }
+}
+checkAbove('(uu) camera settings swept over the flat 7 km world', flatFrames, 400);
+checkBelow('…and the largest selection any of them produced', flatMax, MAX_NODES);
+console.log(`       (flat world at most ${flatMax} pieces, compass world at most `
+  + `${maxSweepNodes}, buffer ${MAX_NODES})`);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

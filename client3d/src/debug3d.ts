@@ -352,7 +352,6 @@ export function initIsolation(deps: IsolationDeps): void {
     setLayerCompositorFlat(on(7));
     setNaturalGroundDebugOff(on(8));
     ground.setTerrainFrozen(on(10));
-    ground.setTerrainCullOff(on(20));
     setLayerSurfaceFiltering(on(18));
     if (!on(19)) {
       const mat = ground.terrainMaterial() as THREE.MeshStandardMaterial | null;
@@ -417,27 +416,19 @@ export function initIsolation(deps: IsolationDeps): void {
     const hh = Math.floor(((hour % 24) + 24) % 24);
     const mm = Math.floor((((hour % 1) + 1) % 1) * 60);
     const r1 = (v: number) => (Math.round(v * 10) / 10).toFixed(1);
-    // What the frustum test did to the last terrain selection. With toggle 20
-    // OFF this says whether culling is active in this view at all — a `culled: 0`
-    // while the picture shimmers rules the culling out without flipping
-    // anything. With it ON the same count is what the culling WOULD have
-    // dropped, and `drawn of max` says whether the uncapped selection ran into
-    // `MAX_NODES` (the only limit left once the frustum is out of the way — the
-    // instance buffer grows to fit before the frame is written).
-    const cull = ground.terrainCullStats();
-    const cullText = cull.off
-      ? `culled-off: ${cull.drawn} of ${cull.max} drawn   `
-        + `(would cull ${cull.culled})`
-      : `culled: ${cull.culled}`;
     readout.textContent =
       `yaw ${r1(yawToCompassDeg(engine.yaw))}°   dist ${r1(engine.dist)} m\n`
       + `game ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}   `
       + `sun az ${r1(sunAz)}°  el ${r1(sunEl)}°\n`
+      // `nodes` is the whole selection — nothing is culled since 2026-08-22, so
+      // this is what the one draw call really submits. `cap/capacity` are both
+      // MAX_NODES and must stay equal: a cap below the capacity would mean
+      // three froze its own number at the first bind and the tail of every
+      // larger selection is silently missing.
       + `nodes ${ground.terrainNodeCount()}   cap ${ground.terrainInstanceCap().cap}`
       + `/${ground.terrainInstanceCap().capacity}   ground tri `
       + `${Math.round(ground.terrainTriangleCount() / 1000)}k   `
       + `height tiles ${ground.heightTileCount()}\n`
-      + `${cullText}\n`
       + `fps ${r1(fpsNow)}   off: ${encodeIsolation(active) || '-'}`;
   }
 

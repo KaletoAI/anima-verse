@@ -89,6 +89,31 @@
  * `heightAt` is the overview, so both pyramids answer the same number in the
  * strip where the branch flips.
  *
+ * WHAT IS NOT HERE ANY MORE: PER-PIECE FRUSTUM CULLING, AND THE FLAT-WORLD
+ * SHORTCUT (2026-08-22, the "ground plate vanishes for single frames" finding).
+ * Three things had grown together into one defect:
+ *
+ *  - a world whose OVERVIEW was level took `minLodDistance` 0 and was drawn
+ *    from its roots — 3 to 4 pieces of 2 048 m for the whole visible world;
+ *  - each of those pieces was frustum-tested against its own box, so a single
+ *    verdict decided a square kilometre of ground;
+ *  - and the verdict reached the GPU one frame late. three.js uploads an
+ *    `InstancedBufferGeometry`'s dirty attributes in `projectObject`
+ *    (`WebGLObjects.update`, "Update once per frame"), which runs over the whole
+ *    scene BEFORE the first `object.onBeforeRender` — and the selection was
+ *    written in `onBeforeRender`. `geometry.instanceCount` is read at draw time
+ *    and was this frame's; the ROWS were the previous frame's. While the camera
+ *    turned, the card therefore drew the first n entries of a list selected for
+ *    a different heading: pieces missing, pieces drawn twice, and the isolation
+ *    panel's toggle 20 (culling off) making the whole thing go away because a
+ *    list that never changes cannot be stale.
+ *
+ * So the cull is gone (every square inside the world frame is emitted, and the
+ * one draw call carries a few hundred instances instead of a few dozen), the
+ * shortcut is gone (`MIN_LOD_DISTANCE_M` applies to a level world too), the
+ * instance buffer is allocated once at `MAX_NODES` and never replaced, and the
+ * selection runs in the TICK before `renderer.render` (`TerrainLod.update`).
+ *
  * WHAT IS NOT HERE: the material. The ground keeps the material
  * `scene/ground.ts` builds for the default kind, with the basement hole
  * (`patchHole`) and the natural-ground stages (`applyNaturalGround`) already
@@ -244,10 +269,18 @@ export const MAX_PIXEL_ERROR = 2;
  *  flat ground is drawn as. */
 const FALLBACK_BASE_STEP_M = 2;
 
-/** Ceiling on selected nodes per frame. A guard, not a working limit: the
- *  working case is 60–120 nodes. Without it a pathological camera (inside the
- *  ground, at the origin of a 100 km world) walks the whole quadtree. */
-const MAX_NODES = 4096;
+/**
+ * Ceiling on selected nodes per frame — AND the instance buffer's capacity,
+ * allocated once and never re-allocated (`createTerrainLod`).
+ *
+ * A guard, not a working limit: with no frustum culling left (2026-08-22) the
+ * whole world frame is selected every frame and the working case is a few
+ * hundred pieces — `smoke_terrain_lod.mjs` [13] sweeps the full compass over
+ * three worlds and reports the maximum it reaches. Without a ceiling a
+ * pathological camera (inside the ground, at the origin of a 100 km world)
+ * would walk the whole quadtree.
+ */
+export const MAX_NODES = 4096;
 
 /** Texels per axis the near pyramid may have. 1025 at a 2 m step is 2 048 m,
  *  nearly twice the 1 120 m the tile radius can span — the cap is a memory
@@ -419,8 +452,10 @@ export interface LodSelectOpts {
   /** How many levels the tree may have (leaf included). */
   levels: number;
   /** `lodRange[0]`, metres. 0 switches the distance rule off entirely and
-   *  selects nothing but roots — the flat world, which has no detail to spend
-   *  triangles on. */
+   *  selects nothing but roots. The renderer never passes it — the rings apply
+   *  to every world, a level one included (see `createTerrainLod`); it is kept
+   *  because it is what makes `lodRanges` a total function and the smoke
+   *  derives the degenerate case from it. */
   minLodDistance: number;
   /** Where the camera is. */
   camX: number;
@@ -435,9 +470,6 @@ export interface LodSelectOpts {
   /** Pixels per metre of vertical error at one metre of distance —
    *  `viewportHeightPx / (2 · tan(fovY/2))`. 0 switches the error rule off. */
   pixelScale?: number;
-  /** Is any part of the node's box inside the view? `undefined` = everything
-   *  is. */
-  inView?: (x: number, z: number, size: number, minY: number, maxY: number) => boolean;
 }
 
 /**
@@ -457,9 +489,12 @@ export interface LodSelectOpts {
  * the one inside it, which would select a coarse node inside a fine ring and
  * crack the ground.
  *
- * `minLodDistance` 0 is the FLAT world: every range is 0, nothing is ever
- * split, and the terrain is drawn from its roots. A level surface has no
- * detail to spend triangles on.
+ * `minLodDistance` 0 answers "every range is 0", i.e. nothing is ever split and
+ * the terrain is drawn from its roots. NOTHING PASSES IT ANY MORE (2026-08-22):
+ * it used to be what a world with no relief got, and a world drawn in 2 048 m
+ * lumps is one whose every per-frame decision is a decision about a square
+ * kilometre. The rings apply to every world now; the degenerate case survives
+ * as the boundary the smoke derives the ring arithmetic against.
  */
 export function lodRanges(minLodDistance: number, levels: number,
                           levelErrorM?: readonly number[],
@@ -500,20 +535,21 @@ const STAT_TILE_SCAN_MAX = 64;
  * nothing about takes the whole field's range, which culls nothing and is
  * never wrong.
  *
- * WHY IT IS A BOUND AND NOT A MEASUREMENT, and why that is the whole point.
- * The box is what the frustum test culls against, so the ONE thing it must
- * never do is be too small: a node whose drawn ground reaches above or below
- * its box can be culled while it is on screen, and a patch culled on
- * alternating frames is a hole to the sky. It IS a bound, twice over — a tile's
- * `min`/`max` are read off its own 2 m raster, the drawn surface inside that
- * tile is the bilinear of the very same numbers (and every coarser mip is a
- * SUBSET of them, `buildPyramid`), so no vertex can leave the span. The proof
- * that this suffices is `smoke_terrain_lod.mjs` [9]: with a box per node that
- * contains its ground, no visible ground point can be missed at any heading.
+ * WHAT IT IS FOR, since the frustum cull was deleted (2026-08-22): the LOD
+ * DISTANCE and nothing else. `selectLodNodes` measures to the node's box, so a
+ * node high on a cliff must not be treated as if its ground lay at zero — the
+ * box is what makes "distance to the node" mean the distance to the ground the
+ * node draws. It used to be the box the frustum test culled against as well,
+ * and being a hair too small was fatal there; being a hair too small here costs
+ * a slightly wrong level at the far end of a ring and nothing more.
  *
- * EXTRACTED FROM THE RENDERER so that proof measures the shipped rule rather
- * than a copy of it (2026-08-21) — a coverage check that reimplemented the
- * lookup would only prove the reimplementation right.
+ * It IS a bound either way, twice over — a tile's `min`/`max` are read off its
+ * own 2 m raster, the drawn surface inside that tile is the bilinear of the
+ * very same numbers (and every coarser mip is a SUBSET of them,
+ * `buildPyramid`), so no vertex can leave the span.
+ *
+ * EXTRACTED FROM THE RENDERER (2026-08-21) so the checks measure the shipped
+ * rule rather than a copy of it.
  */
 export function nodeBounds(stats: ReadonlyMap<string, NodeStatSpan> | null | undefined,
                            tileM: number,
@@ -605,6 +641,21 @@ function boxDistance(px: number, py: number, pz: number,
  * 512 m wide whose near edge is under the camera must not be treated as
  * 256 m away, and a camera high over a valley must not pull the valley floor
  * to the finest level because it is directly below.
+ *
+ * THERE IS NO FRUSTUM TEST HERE, AND THAT IS THE 2026-08-22 DECISION. Every
+ * square inside the world frame is emitted, whatever the camera looks at. The
+ * per-piece cull it replaces was measured to drop ground that was on screen:
+ * with the OLD flat-world shortcut the whole visible world was 3–4 pieces of
+ * 2 048 m, so one rejected piece was a square kilometre of sky — and because
+ * three.js uploads an `InstancedBufferGeometry`'s attributes in `projectObject`
+ * BEFORE it calls the mesh's `onBeforeRender` (three 0.185.1, `WebGLObjects.
+ * update` "Update once per frame"), the GPU drew the PREVIOUS frame's node list
+ * under the CURRENT frame's `instanceCount`. A list that changes every frame
+ * (which is what culling makes it) therefore drew a set that had never been
+ * selected for any camera. Both halves are gone: the list is written before the
+ * render (`TerrainLod.update`) and it no longer depends on the heading at all,
+ * so a stale upload cannot even arise. What the cull saved is a few hundred
+ * instances of ONE draw call; what it cost was the ground.
  */
 export function selectLodNodes(o: LodSelectOpts): LodNode[] {
   const out: LodNode[] = [];
@@ -614,14 +665,14 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
   const top = levels - 1;
   const ranges = lodRanges(o.minLodDistance, levels, o.levelErrorM, o.pixelScale);
 
-  /** A square's box distance, or `null` when it is off the world frame or out
-   *  of view. Computed ONCE per square and handed on, so a child is never
-   *  measured twice — the quadrant rule needs the child's distance in the
-   *  parent's loop and the child's own recursion needs the same number. */
+  /** A square's box distance, or `null` when it is off the world frame — the
+   *  ONE reason a square is dropped since 2026-08-22. Computed ONCE per square
+   *  and handed on, so a child is never measured twice: the quadrant rule needs
+   *  the child's distance in the parent's loop and the child's own recursion
+   *  needs the same number. */
   const probe = (x: number, z: number, size: number): number | null => {
     if (x >= o.x1 || z >= o.z1 || x + size <= o.x0 || z + size <= o.z0) return null;
     const b = o.boundsOf(x, z, size);
-    if (o.inView && !o.inView(x, z, size, b.min, b.max)) return null;
     return boxDistance(o.camX, o.camY, o.camZ,
                        x, b.min, z, x + size, b.max, z + size);
   };
@@ -1325,33 +1376,28 @@ function pyramidTexture(pyr: HeightPyramid): THREE.DataTexture {
   return tex;
 }
 
-/**
- * What the last selection did with the frustum test — the isolation panel's
- * toggle 20 reads this and nothing else does.
- *
- * `culled` counts the SQUARES the frustum test rejected while the quadtree was
- * walked, and it is counted whether the toggle is on or off: with the toggle
- * off it says whether culling is doing anything at all in this view, with it on
- * it says how much ground the culling WOULD have dropped. `drawn` and `max` are
- * the instances the frame really submitted against `MAX_NODES`, so a selection
- * that runs into the cap (which culling-off makes far likelier) says so instead
- * of quietly losing its far pieces.
- */
-export interface TerrainCullStats {
-  /** squares the frustum test rejected in the last selection */
-  culled: number;
-  /** instances the last selection emitted */
-  drawn: number;
-  /** the hard cap `MAX_NODES` those instances are counted against */
-  max: number;
-  /** true while toggle 20 holds the frustum test out of the selection */
-  off: boolean;
-}
-
 /** What the terrain renderer offers its owner (`scene/ground.ts`). */
 export interface TerrainLod {
   /** The mesh, to be hung into the ground group once. */
   readonly mesh: THREE.Mesh;
+  /**
+   * SELECT THE FRAME'S PIECES AND WRITE THEM INTO THE INSTANCE BUFFER — called
+   * once per frame from the tick, BEFORE `renderer.render`.
+   *
+   * IT MAY NOT RUN FROM `onBeforeRender`, and that is measured rather than
+   * tasted (2026-08-22). three.js uploads a geometry's dirty attributes in
+   * `projectObject` — `WebGLObjects.update`, guarded by "Update once per frame"
+   * — and `projectObject` runs over the whole scene BEFORE the first
+   * `object.onBeforeRender`. A selection written in `onBeforeRender` therefore
+   * reaches the GPU one frame late, while `geometry.instanceCount` (read at
+   * draw time) is this frame's number: the card draws the first `n` rows of the
+   * PREVIOUS frame's list. Written here, the buffer is dirty before
+   * `projectObject` sees it and the drawn set is the selected set.
+   *
+   * `viewportPx` is the drawing buffer's height in pixels — the screen-space
+   * error rule needs it and this module has no canvas.
+   */
+  update(camera: THREE.Camera, viewportPx: number): void;
   /** Take over the relief. `baseStepM` is the server's FINE step
    *  (`tile_step_m`), which fixes the leaf size for good — a lattice that
    *  changed size when a tile arrived would re-anchor the whole quadtree. */
@@ -1364,11 +1410,13 @@ export interface TerrainLod {
   setMaterial(mat: THREE.Material): void;
   /** How many pieces the last selection drew, for the performance readout. */
   nodeCount(): number;
-  /** DIAGNOSTIC: the instance cap three.js froze for this geometry at its
-   *  first bind (`geometry._maxInstanceCount`, set once for a plain Mesh over
-   *  an InstancedBufferGeometry and never raised when the attribute grows) and
-   *  the current attribute capacity. `cap < nodeCount()` means the renderer
-   *  silently drops the tail of the selection every frame. */
+  /** DIAGNOSTIC: the instance cap three.js draws against
+   *  (`geometry._maxInstanceCount`) and the attribute's capacity. Both are
+   *  `MAX_NODES` and stay there — the buffer is allocated once and never
+   *  replaced, and the cap is set by hand because three freezes it at the first
+   *  bind of a plain Mesh over an InstancedBufferGeometry and never raises it
+   *  again (three issues #19595, #26363, #32099). `cap < nodeCount()` would
+   *  mean the renderer silently drops the tail of the selection every frame. */
   instanceCap(): { cap: number; capacity: number };
   /** How many NON-DEGENERATE triangles those pieces draw — `Σ cells² · 2`. The
    *  patch always submits `PATCH_N² · 2` per instance; the ones past a piece's
@@ -1392,22 +1440,6 @@ export interface TerrainLod {
    * the terrain geometry at all.
    */
   setFrozen(on: boolean): void;
-  /**
-   * DRAW EVERY SELECTED NODE (`debug3d.ts`, toggle 20). The quadtree walk is
-   * unchanged — same split/merge rule, same out-of-range rule, same per-node
-   * morph, same instance buffer — only the frustum verdict stops removing
-   * pieces from it.
-   *
-   * WHAT IT ANSWERS. The frustum is tested against a node's BOX, and that box
-   * is a bound taken from the tile statistics (`nodeBounds`). A box that turned
-   * out to be SMALLER than the surface the node really draws would let a node
-   * be culled while its ground is on screen — and a piece dropped on alternating
-   * frames is exactly a shimmer. With the test out of the way that failure mode
-   * cannot occur, so a shimmer that survives this toggle is not a culling one.
-   */
-  setCullOff(on: boolean): void;
-  /** What the last selection culled — for the isolation panel's readout. */
-  cullStats(): TerrainCullStats;
   dispose(): void;
 }
 
@@ -1415,13 +1447,14 @@ export interface TerrainLod {
  * Build the terrain renderer. One mesh, one draw call, no state of its own
  * beyond the two pyramids and the instance buffer.
  *
- * THE SELECTION RUNS PER FRAME, from the mesh's own `onBeforeRender`. That is
- * deliberate rather than convenient: the morph is a function of the camera's
- * distance, so a selection on the 1 Hz LOD beat would step the ground in
- * visible jumps while the camera flies — the very popping CDLOD exists to
- * remove. A selection is a few hundred box distances and costs less than one
- * of the draws it saves. Shadow passes are skipped (they come with the light's
- * orthographic camera).
+ * THE SELECTION RUNS PER FRAME, from the tick (`TerrainLod.update`, called by
+ * `scene/ground.ts` `tickTerrain` out of `main.ts`'s frame hook). Per frame and
+ * not on the 1 Hz LOD beat because the morph is a function of the camera's
+ * distance: a slower beat would step the ground in visible jumps while the
+ * camera flies, the very popping CDLOD exists to remove. A selection is a few
+ * hundred box distances and costs less than one of the draws it saves. From the
+ * TICK and not from the mesh's `onBeforeRender` because three uploads the
+ * instance attribute before it calls that hook — see `TerrainLod.update`.
  */
 export function createTerrainLod(): TerrainLod {
   const patch = patchGeometry();
@@ -1436,11 +1469,20 @@ export function createTerrainLod(): TerrainLod {
   // vertex shader.
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
 
-  let capacity = 256;
-  let nodeAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
+  // THE INSTANCE BUFFER IS ALLOCATED ONCE, AT THE CEILING, AND NEVER REPLACED
+  // (2026-08-22). three.js freezes `geometry._maxInstanceCount` at the FIRST
+  // bind of a plain Mesh over an InstancedBufferGeometry
+  // (`WebGLBindingStates.setupVertexAttributes`, guarded by `=== undefined`)
+  // and never raises it again, so a buffer that grew later kept drawing against
+  // the capacity it happened to have when the first frame was submitted — the
+  // tail of every larger selection silently missing. Setting the cap by hand to
+  // the ceiling the selection is clamped to (`MAX_NODES`) makes the two one
+  // number. 4 096 instances × 4 floats is 64 kB, held for the session.
+  const nodeAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NODES * 4), 4);
   nodeAttr.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute('iNode', nodeAttr);
   geo.instanceCount = 0;
+  (geo as unknown as { _maxInstanceCount: number })._maxInstanceCount = MAX_NODES;
 
   /** The placeholder until the owner hands the real ground material in — it
    *  draws nothing, so a client whose terrain payload has not arrived shows an
@@ -1461,24 +1503,11 @@ export function createTerrainLod(): TerrainLod {
   let nearRect: [number, number, number, number] | null = null;
   let extent: [number, number, number, number] = [-100, -100, 100, 100];
   let leafM = 0;
-  let flat = true;
   let nodes = 0;
   let triangles = 0;
-  /** Toggle 20: the frustum verdict is counted but no longer obeyed. */
-  let cullOff = false;
-  /** Squares the frustum test rejected during the last selection. */
-  let culled = 0;
   /** The height span of everything held — the fallback box of a node the tile
-   *  statistics say nothing about, and the switch that says "flat world". */
+   *  statistics say nothing about. */
   let globalRange = { min: 0, max: 0 };
-  /** Drawing-buffer height in pixels, read off the renderer per frame: the
-   *  screen-space error rule needs it and this module has no canvas. */
-  let viewportPx = 0;
-
-  const frustum = new THREE.Frustum();
-  const viewProj = new THREE.Matrix4();
-  const box = new THREE.Box3();
-  const bufferSize = new THREE.Vector2();
 
   function setLevels(target: THREE.Vector4[], pyr: HeightPyramid | null): void {
     for (let i = 0; i < MAX_LOD_LEVELS; i += 1) {
@@ -1610,36 +1639,29 @@ export function createTerrainLod(): TerrainLod {
   }
   let levelErrorM: number[] = new Array<number>(MAX_LOD_LEVELS).fill(0);
 
-  function grow(n: number): void {
-    if (n <= capacity) return;
-    while (capacity < n) capacity *= 2;
-    geo.deleteAttribute('iNode');
-    nodeAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
-    nodeAttr.setUsage(THREE.DynamicDrawUsage);
-    geo.setAttribute('iNode', nodeAttr);
-  }
-
   /**
    * Re-select the nodes for a camera and hand them to the instance buffer.
    *
-   * A WORLD WITH NO RELIEF STILL GETS A GROUND. Without a pyramid the shader's
-   * `tlodGrid` answers 0 for every fetch (a level of fewer than two support
-   * points carries no surface), and `flat` puts every node at the root level —
-   * so the flat world comes out as the handful of big quads it used to be
-   * drawn as, rather than as nothing at all.
+   * A WORLD WITH NO RELIEF STILL GETS A GROUND, and since 2026-08-22 it gets
+   * the SAME ground every other world gets: the rings apply, a level world is
+   * drawn by the same 64 m leaves near the camera and the same coarse pieces
+   * far away. The shortcut that used to answer "no relief → no ranges → roots
+   * only" made the whole visible world 3–4 pieces of 2 048 m — a granularity at
+   * which every per-frame decision about a piece is a decision about a square
+   * kilometre, which is how one wrong verdict became a hole in the sky. It also
+   * lied about the relief: a "flat" world is only flat in the OVERVIEW, and the
+   * painted kinds' micro-relief (`app/core/heightfield.py`) rides in with the
+   * fine tiles, where the very same shortcut had already decided there was
+   * nothing to spend triangles on.
    */
-  function update(camera: THREE.Camera): void {
+  function update(camera: THREE.Camera, viewportPx: number): void {
     if (!leafM) {
       geo.instanceCount = 0;
       nodes = 0;
       triangles = 0;
-      culled = 0;
       return;
     }
-    culled = 0;
     camera.updateMatrixWorld();
-    viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-    frustum.setFromProjectionMatrix(viewProj);
     const cam = camera.position;
     const persp = camera as THREE.PerspectiveCamera;
     const fov = persp.isPerspectiveCamera ? persp.fov : 0;
@@ -1648,38 +1670,21 @@ export function createTerrainLod(): TerrainLod {
     const pixelScale = fov > 0 && viewportPx > 0
       ? viewportPx / (2 * Math.tan((fov * Math.PI) / 360))
       : 0;
-    const minLodDistance = flat ? 0 : MIN_LOD_DISTANCE_M;
     // The rings the shader measures its λ against — the SAME pure function
     // `selectLodNodes` runs on the same four arguments, so the selection and
     // the morph cannot describe two different worlds.
-    const ranges = lodRanges(minLodDistance, MAX_LOD_LEVELS, levelErrorM, pixelScale);
+    const ranges = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, levelErrorM, pixelScale);
     for (let i = 0; i < MAX_LOD_LEVELS; i += 1) uRange.value[i] = ranges[i] ?? 0;
     const picked = selectLodNodes({
       x0: extent[0], z0: extent[1], x1: extent[2], z1: extent[3],
       leafM,
       levels: MAX_LOD_LEVELS,
-      minLodDistance,
+      minLodDistance: MIN_LOD_DISTANCE_M,
       camX: cam.x, camY: cam.y, camZ: cam.z,
       boundsOf,
       levelErrorM,
       pixelScale,
-      inView: (x, z, size, minY, maxY) => {
-        box.min.set(x, minY, z);
-        box.max.set(x + size, maxY, z + size);
-        if (frustum.intersectsBox(box)) return true;
-        // Counted before the verdict is handed back, so the number means the
-        // same thing in both modes: how many squares the frustum WOULD remove.
-        // With toggle 20 on the rejection is answered as "in view", which is
-        // the only line of this selection the toggle touches.
-        culled += 1;
-        return cullOff;
-      },
     });
-    // BEFORE anything is written into it: `grow` doubles the instance buffer
-    // until it holds the whole selection, so the buffer can never be the thing
-    // that drops a piece — with the frustum test out of the way the only cap
-    // left is `MAX_NODES`, and `cullStats` reports the frame against it.
-    grow(picked.length);
     const arr = nodeAttr.array as Float32Array;
     triangles = 0;
     for (let i = 0; i < picked.length; i += 1) {
@@ -1704,21 +1709,20 @@ export function createTerrainLod(): TerrainLod {
   /** The isolation panel's LOD freeze — see `TerrainLod.setFrozen`. */
   let frozen = false;
 
-  mesh.onBeforeRender = (renderer, _scene, camera) => {
-    // Shadow passes arrive with the light's orthographic camera; the terrain
-    // does not cast, so there is nothing to select for them.
-    if (!(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return;
-    if (frozen) return;
-    viewportPx = renderer.getDrawingBufferSize(bufferSize).y;
-    update(camera);
-    // The eye the morph would be measured from if the next frame froze. Kept
-    // current so `setFrozen(true)` needs no camera of its own.
-    uFreeze.value.set(camera.position.x, camera.position.y, camera.position.z,
-                      uFreeze.value.w);
-  };
-
   return {
     mesh,
+    update(camera, viewportPx) {
+      // Shadow passes never reach here any more (the tick calls this once, with
+      // the scene camera), but a caller handing in the light's orthographic one
+      // would select a ground for a viewpoint nobody draws from.
+      if (!(camera as THREE.PerspectiveCamera).isPerspectiveCamera) return;
+      if (frozen) return;
+      update(camera, viewportPx);
+      // The eye the morph would be measured from if the next frame froze. Kept
+      // current so `setFrozen(true)` needs no camera of its own.
+      uFreeze.value.set(camera.position.x, camera.position.y, camera.position.z,
+                        uFreeze.value.w);
+    },
     setField(next, baseStepM, anchorX, anchorZ) {
       relief = next;
       baseStep = baseStepM > 0 ? baseStepM : finestStep(next) || FALLBACK_BASE_STEP_M;
@@ -1749,7 +1753,6 @@ export function createTerrainLod(): TerrainLod {
         }
       }
       globalRange = { min, max };
-      flat = !(max > min);
       levelErrorM = computeLevelError();
       uploadPyramids();
     },
@@ -1771,8 +1774,6 @@ export function createTerrainLod(): TerrainLod {
       frozen = on;
       uFreeze.value.w = on ? 1 : 0;
     },
-    setCullOff(on) { cullOff = on; },
-    cullStats: () => ({ culled, drawn: nodes, max: MAX_NODES, off: cullOff }),
     dispose() {
       geo.dispose();
       placeholder.dispose();

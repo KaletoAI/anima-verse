@@ -101,7 +101,6 @@ import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
   scatterSway, scatterTargetH } from './scatterLod';
 import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createTerrainLod } from './terrainLod';
-import type { TerrainCullStats } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterPlane, patchWaterShore } from './waterPlane';
 import { waterLevelAt, waterProfileOf } from './waterPlaneMath';
@@ -869,6 +868,21 @@ export interface Ground {
   passableAt(x: number, z: number): boolean;
   /** Counts rebuilds — a cheap "has the ground changed" for redraw signatures. */
   revision(): number;
+  /**
+   * THE TERRAIN'S PER-FRAME SELECTION — call it once per frame, from the tick,
+   * BEFORE `renderer.render`.
+   *
+   * It is a tick step and not the mesh's own `onBeforeRender` because three.js
+   * uploads an instanced geometry's dirty attributes in `projectObject`, before
+   * the first `onBeforeRender` of the frame: a selection written in that hook
+   * reaches the card one frame late while `instanceCount` does not, so the card
+   * draws the first n rows of the previous frame's list. See `TerrainLod.update`
+   * for the measurement that produced this rule.
+   *
+   * `viewportPx` is the drawing buffer's HEIGHT in pixels — the screen-space
+   * error rule spends the server's error bound against it.
+   */
+  tickTerrain(camera: THREE.Camera, viewportPx: number): void;
   /** How many quadtree pieces the terrain drew in the last frame. */
   terrainNodeCount(): number;
   /** DIAGNOSTIC: three.js' frozen instance cap vs the buffer capacity. */
@@ -883,11 +897,6 @@ export interface Ground {
   terrainMaterial(): THREE.Material | null;
   /** Freeze the terrain's quadtree selection (`TerrainLod.setFrozen`). */
   setTerrainFrozen(on: boolean): void;
-  /** Draw every selected terrain node, frustum or not
-   *  (`TerrainLod.setCullOff`, the isolation panel's toggle 20). */
-  setTerrainCullOff(on: boolean): void;
-  /** What the last terrain selection culled (`TerrainLod.cullStats`). */
-  terrainCullStats(): TerrainCullStats;
   /**
    * THE SCENE OBJECTS PER ISOLATION CATEGORY (`debug3d.ts`, toggles 11-13
    * and 17) — rebuilt on every call, never a live array: the scatter entries
@@ -3015,6 +3024,7 @@ export function createGround(): Ground {
     typeAt,
     passableAt: (x, z) => typeAt(x, z).passable,
     revision: () => rev,
+    tickTerrain: (camera, viewportPx) => terrain.update(camera, viewportPx),
     terrainNodeCount: () => terrain.nodeCount(),
     terrainInstanceCap: () => terrain.instanceCap(),
     terrainTriangleCount: () => terrain.triangleCount(),
@@ -3024,8 +3034,6 @@ export function createGround(): Ground {
     terrainMaterial: () => (Array.isArray(terrain.mesh.material)
       ? terrain.mesh.material[0] ?? null : terrain.mesh.material ?? null),
     setTerrainFrozen: (on) => terrain.setFrozen(on),
-    setTerrainCullOff: (on) => terrain.setCullOff(on),
-    terrainCullStats: () => terrain.cullStats(),
     debugParts() {
       const scatter: THREE.Object3D[] = [];
       for (const a of areaMeshes) {
