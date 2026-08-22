@@ -1740,6 +1740,42 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
                                           "move_sink_m": 0.35,
                                           "idle_sink_m": 1.3}} ]
   ```
+- **`swim_from_m` — AB WELCHER WASSERTIEFE die vier Schlüssel oben überhaupt
+  gelten** (W4c, 2026-08-23). Ein whitelisteter `meta`-Schlüssel, eine Zahl in
+  Metern (geklemmt 0…10, zwei Dezimalen; **0 IST EIN WERT** — „ab der Kante
+  schwimmen", das Verhalten jeder Wasser-Art vor dieser Runde — nur Junk lässt
+  den Schlüssel weg, fehlender Schlüssel = 1,0 m). Schwimmen war bis dahin eine
+  Eigenschaft der ART: `move_anim: swim` lief auf JEDEM Pixel einer
+  Wasserfläche, knöcheltief auf der Uferrampe eingeschlossen.
+
+  Vertrag für die Renderer, eine Zeile: `Tiefe = Wasserspiegel − Boden` an der
+  Figur (beides liegt vor — lokales Niveau aus `meta.water_profile`, Höhe aus
+  der Höhen-Pyramide).
+  - `Tiefe ≥ swim_from_m` → SCHWIMMEN: `move_anim`/`idle_anim` und die beiden
+    Absenkungen wie oben, der Körper hängt unter dem SPIEGEL.
+  - `Tiefe < swim_from_m` → WATEN: der Boden sagt **nichts** — eigener
+    Geh-/Lauf- bzw. Steh-Clip, Absenkung 0, und der SPIEGEL gilt für die
+    Figur nicht (sie steht auf dem Bett). Die vier Felder werden GEMEINSAM
+    abgeschaltet: bliebe das Niveau stehen, hübe `max(Boden, Spiegel)` den
+    Watenden auf die Wasseroberfläche.
+
+  Passierbarkeit und Tempo bleiben Sache der ART: `speed_factor` gilt für die
+  ganze Fläche, Waten ist ebenfalls langsam. Der Server trägt die Zahl nur
+  (Katalog-Sanitizer), gerechnet wird sie im Client
+  (`client3d/src/game/walk.wadeGate`). Saat: `river` trägt 1,0 neben Tiefe
+  1,2 m und Uferrampe 1,0 m; `water`/`deep_water` nennen keinen Schlüssel und
+  bekommen damit dieselbe 1,0.
+
+  ```
+  types: [ …, {kind: "river", …, "meta": {"water": true,
+                                          "water_depth_m": 1.2,
+                                          "shore_ramp_m": 1.0,
+                                          "move_anim": "swim",
+                                          "idle_anim": "treading-water",
+                                          "move_sink_m": 0.35,
+                                          "idle_sink_m": 1.3,
+                                          "swim_from_m": 1.0}} ]
+  ```
 - **`sway_m` — wie weit das WEHT, was auf einem Boden wächst** (2026-08-14).
   Ein whitelisteter `meta`-Schlüssel, eine Zahl in Metern (geklemmt 0,01…0,5,
   zwei Dezimalen, 0/leer/Junk = Schlüssel weg) = maximale seitliche Auslenkung

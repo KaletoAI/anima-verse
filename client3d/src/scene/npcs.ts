@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
-import { MOVE_EPS_M, floatRootY, groundSink, groundWaterLevel, idleClip,
-  moveClip, sinkForState,
+import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
+  groundWaterLevel, idleClip, moveClip, sinkForState, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
@@ -39,6 +39,11 @@ export interface GroundMove {
    *  `walk.floatRootY` is the one place that says so, for travellers, NPCs and
    *  the player's avatar alike. */
   water: number | null;
+  /** FROM WHICH WATER DEPTH the four fields above count at all
+   *  (`meta.swim_from_m`, W4c) — shallower water is WADED, and then the ground
+   *  says nothing: the figure keeps its own clips, sinks by nothing and stands
+   *  on the bed. `walk.wadeGate` is the one place that applies it. */
+  swimFrom: number;
 }
 /** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
 const SELECT_COLOR = 0xf2d98c;
@@ -263,7 +268,8 @@ export class NpcManager {
    */
   private groundMoveAt: (x: number, z: number) => GroundMove =
     () => ({ anim: '', idle: '', scope: 'wilderness',
-      sink: { move: 0, idle: 0 }, water: null });
+      sink: { move: 0, idle: 0 }, water: null,
+      swimFrom: SWIM_FROM_DEFAULT_M });
 
   constructor(private figures: FigureLibrary | null = null) {}
 
@@ -941,12 +947,21 @@ export class NpcManager {
         // (`delta.y = 0` above), so deciding the pose before the height is not
         // a circle.
         const travelling = d > 0.02 || (r.rateMS ?? 0) > 0;
-        const gm = this.groundMoveAt(at[0], at[1]);
-        const groundIdle = idleClip(gm.idle, gm.scope);
+        const raw = this.groundMoveAt(at[0], at[1]);
+        // TWO REACH RULES, in order: the SCOPE (a built place replaces the
+        // ground with its floor) and, since W4c, the WATER DEPTH under the
+        // figure — shallower than the kind's `swim_from_m` the ground says
+        // nothing at all and the traveller wades through on its own walk clip,
+        // feet on the bed. `goalPos.y` is still the raw terrain height of the
+        // point the walk has reached, which is exactly the bed to measure
+        // against; it becomes the float height two lines further down.
+        const gm = wadeGate({ anim: raw.anim, idle: raw.idle, sink: raw.sink,
+          water: groundWaterLevel(raw.water, raw.scope) },
+        goalPos.y, raw.swimFrom);
+        const groundIdle = idleClip(gm.idle, raw.scope);
         const sinkM = groundSink(sinkForState(travelling, groundIdle, gm.sink),
-                                 gm.scope);
-        goalPos.y = floatRootY(goalPos.y,
-          groundWaterLevel(gm.water, gm.scope), sinkM);
+                                 raw.scope);
+        goalPos.y = floatRootY(goalPos.y, gm.water, sinkM);
         if (d > 0.05) {
           // Catch-up speed: WALK_SPEED, or the JOURNEY's own pace when that is
           // faster. A fixed WALK_SPEED was a brake, not a smoother — the game
@@ -977,7 +992,7 @@ export class NpcManager {
           // rule's reach (`groundSink`). It is the VERY number the root was
           // placed with above, which is what makes the pair meet: root − sink
           // is the surface the body rests on.
-          npc.figure.play(travelling ? moveClip(gm.anim, false, gm.scope)
+          npc.figure.play(travelling ? moveClip(gm.anim, false, raw.scope)
             : (groundIdle || 'idle'), travelling || !!groundIdle, sinkM);
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
@@ -1015,14 +1030,23 @@ export class NpcManager {
       // ROOT height need the same answer, and asking twice is how the two
       // start to disagree. Since E4 the height is part of it: over water the
       // root rides the MIRROR and not the carved bed (`walk.floatRootY`).
-      const standGm = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
-      const standIdle = idleClip(standGm.idle, standGm.scope);
+      const standRaw = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
+      // …and since W4c the DEPTH decides whether that word applies at all: the
+      // bed is sampled UNDER THE FIGURE (never the waypoint's stored y, which
+      // is a goal and may be a lake away), because "how deep does the water
+      // stand around me" is a question about where the figure IS.
+      const standBedY = this.groundY(npc.root.position.x, npc.root.position.z);
+      const standGm = wadeGate({ anim: standRaw.anim, idle: standRaw.idle,
+        sink: standRaw.sink,
+        water: groundWaterLevel(standRaw.water, standRaw.scope) },
+      standBedY, standRaw.swimFrom);
+      const standIdle = idleClip(standGm.idle, standRaw.scope);
       const standSink = groundSink(
-        sinkForState(moving, standIdle, standGm.sink), standGm.scope);
+        sinkForState(moving, standIdle, standGm.sink), standRaw.scope);
       // Match the height to the CURRENT waypoint — that is what makes the
       // vertical ride between two lift stops (AV3D-12).
       const goalY = floatRootY(npc.waypoints[0]?.y ?? npc.target.y,
-        groundWaterLevel(standGm.water, standGm.scope), standSink);
+        standGm.water, standSink);
       npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
       if (!moving && npc.figure) {
         // Stehend: Marker-Richtung > Nachbarn ansehen > Kamera-Grundrichtung
@@ -1055,7 +1079,7 @@ export class NpcManager {
         // very number the root was raised with above, which is what makes the
         // pair meet: root − sink is the surface the body rests on.
         npc.figure.play(
-          moving ? moveClip(standGm.anim, dist > RUN_DISTANCE, standGm.scope)
+          moving ? moveClip(standGm.anim, dist > RUN_DISTANCE, standRaw.scope)
             : (standIdle || standingClip), moving || !!standIdle, standSink);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben

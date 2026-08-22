@@ -77,6 +77,35 @@ Throwaway storage. Hand-derived expectations:
       stands in a barrier, and nobody waits in one.
       `sink_m` is GONE, without an alias: the key was one day old, and a
       stored one is a dead free-form key nothing reads (checked below).
+  [8c] ONE MORE, and it is what turns SWIMMING from a property of the KIND
+      into one of the water DEPTH under the figure (W4c, 2026-08-23):
+      `swim_from_m`. Until it existed, `move_anim: swim` played on every
+      pixel of a water area, ankle-deep on the shore ramp included. From
+      this depth on the two clips and the two depths of [8]/[8b] apply;
+      shallower water is WADED — the figure keeps its own walk/run and
+      standing clips, is not sunk at all and stands on the bed (the rule
+      itself is the CLIENT's, `client3d/src/game/walk.wadeGate`, checked in
+      `client3d/scripts/smoke_walk_math.mjs`; the server only carries the
+      number). It does NOT share the shape rule of the two sinks: 0 IS A
+      VALUE here — "swim from the very rim", i.e. the behaviour of every
+      water kind before this round — so it clamps like `shore_ramp_m`
+      instead of dropping the key, and only junk leaves nothing behind:
+        1.0        -> 1.0     the seed value of `river` (and the default a
+                              kind without the key gets, read by the client)
+        0          -> 0.0     KEPT, unlike a sink of 0 — the pre-W4c water
+        0.75       -> 0.75    ankle-to-knee water is authorable
+        1.2349     -> 1.23    two decimals, the editor's precision
+        99         -> 10.0    deeper than any authored water gets: past it
+                              the threshold could never be reached and the
+                              figure would wade across a sea
+        −3         -> 0.0     clamped up, not dropped: "from the rim"
+        "deep" / NaN / "" / None -> the KEY IS GONE (and the client then
+                              reads its default metre)
+      The seed's `river` carries it at 1.0 next to a 1.2 m depth and a 1.0 m
+      shore ramp: a 6 m wide river reaches full depth over 4 m of its width,
+      so the middle is swum and the two ramps are waded. `water` and
+      `deep_water` name none — the open sea is deep everywhere it matters,
+      and an absent key is the same metre.
 
   [9] TWO MORE whitelisted meta keys since the micro-relief decision
       (2026-08-13): `relief_amplitude_m` and `relief_wave_m`, the random
@@ -212,9 +241,9 @@ def check(label, actual, expected):
 
 print("[1] fresh world serves the shared seed")
 cat = terrain_types.effective_catalog()
-SHARED_KINDS = {"grass", "forest", "sand", "path", "water", "deep_water",
-                "rock"}
-check("seven shared kinds present", SHARED_KINDS <= set(cat), True)
+SHARED_KINDS = {"grass", "forest", "sand", "path", "water", "river",
+                "deep_water", "rock"}
+check("eight shared kinds present", SHARED_KINDS <= set(cat), True)
 check("grass passable", cat["grass"]["passable"], True)
 check("grass speed", cat["grass"]["speed_factor"], 1.0)
 check("water is swum, not blocked", cat["water"]["passable"], True)
@@ -421,6 +450,53 @@ check("the barrier kind has neither — nobody stands or waits in it",
        if k in ((terrain_types.get_type("deep_water") or {}).get("meta") or {})],
       [])
 
+print("[8c] swim_from_m — from which DEPTH the four above apply at all")
+check("the river seed's threshold survives", meta_of({"swim_from_m": 1.0}),
+      {"swim_from_m": 1.0})
+check("A ZERO IS KEPT here, unlike a sink of 0 — swim from the very rim",
+      meta_of({"swim_from_m": 0}), {"swim_from_m": 0.0})
+check("...and a negative one is clamped up to it, never dropped",
+      meta_of({"swim_from_m": -3}), {"swim_from_m": 0.0})
+check("ankle-to-knee water is authorable", meta_of({"swim_from_m": 0.75}),
+      {"swim_from_m": 0.75})
+check("...rounded to two decimals", meta_of({"swim_from_m": 1.2349}),
+      {"swim_from_m": 1.23})
+check("deeper than any authored water is clamped to ten metres",
+      meta_of({"swim_from_m": 99}), {"swim_from_m": 10.0})
+for _junk in ("deep", float("nan"), "", None):
+    check(f"junk ({_junk!r}) leaves no key — the client reads its default",
+          meta_of({"swim_from_m": _junk}), {})
+check("it travels with the clips and the two sinks",
+      meta_of({"move_anim": "swim", "idle_anim": "treading-water",
+               "move_sink_m": 0.35, "idle_sink_m": 1.3, "swim_from_m": 1.0}),
+      {"move_anim": "swim", "idle_anim": "treading-water",
+       "move_sink_m": 0.35, "idle_sink_m": 1.3, "swim_from_m": 1.0})
+# THE SEED KIND OF W4b: a river is narrow, so it is shaped by its own two
+# numbers (1.2 m deep over a 1 m ramp) rather than by the module defaults a
+# lake keeps — and it is the first kind that says where swimming starts.
+check("the seed ships a river with its own depth, ramp and threshold",
+      (terrain_types.get_type("river") or {}).get("meta"),
+      {"water": True, "water_depth_m": 1.2, "shore_ramp_m": 1.0,
+       "move_anim": "swim", "idle_anim": "treading-water",
+       "move_sink_m": 0.35, "idle_sink_m": 1.3, "swim_from_m": 1.0})
+check("...it is water by the one predicate",
+      terrain_types.is_water_kind("river"), True)
+check("...and the KIND answers its two shape numbers, not the module ones",
+      terrain_types.water_kind_defaults("river"), (1.2, 1.0))
+check("...while the lake kind still answers the module defaults",
+      terrain_types.water_kind_defaults("water"), (2.0, 3.0))
+check("...one is walked into at a wading pace",
+      ((terrain_types.get_type("river") or {}).get("passable"),
+       (terrain_types.get_type("river") or {}).get("speed_factor")),
+      (True, 0.4))
+check("...and it wears the water material of the surface library",
+      (terrain_types.get_type("river") or {}).get("surface"), "water")
+check("the older water kinds name no threshold — an absent key is the "
+      "client's metre",
+      [k for k in ("water", "deep_water")
+       if "swim_from_m" in ((terrain_types.get_type(k) or {}).get("meta") or {})],
+      [])
+
 print("[9] the micro-relief keys")
 check("an authored amplitude survives", meta_of({"relief_amplitude_m": 0.4}),
       {"relief_amplitude_m": 0.4})
@@ -564,8 +640,8 @@ _seed = {k: terrain_types.effective_catalog()[k].get("surface", "<no key>")
          for k in sorted(SHARED_KINDS)}
 check("the seed names its materials explicitly", _seed,
       {"deep_water": "deep_water", "forest": "forest", "grass": "grass",
-       "path": "<no key>", "rock": "<no key>", "sand": "sand",
-       "water": "water"})
+       "path": "<no key>", "rock": "<no key>", "river": "water",
+       "sand": "sand", "water": "water"})
 
 terrain_types.save_world_type(
     {"kind": "clay", "name": "Clay", "color": "#a9744f",

@@ -297,6 +297,96 @@ export function groundWaterLevel(level: number | null,
   return scope === 'built' ? null : level;
 }
 
+/** From which water DEPTH a figure swims instead of wading, in metres, where
+ *  the kind names no `meta.swim_from_m` — the mirror of
+ *  `terrain_types.SWIM_FROM_DEFAULT_M`. Roughly where an adult's feet stop
+ *  carrying it. */
+export const SWIM_FROM_DEFAULT_M = 1.0;
+
+/** What the GROUND imposes on a figure at one point, as `wadeGate` reads and
+ *  returns it: the two clips it names, its two depths and the mirror over the
+ *  point (already cut to its scope by `groundWaterLevel`). It is the water
+ *  half of `npcs.GroundMove`, which is why the scope itself is not in it —
+ *  that reach was applied before this one. */
+export interface GroundWater {
+  /** `meta.move_anim`, or `''` — what a MOVING figure plays here */
+  anim: string;
+  /** `meta.idle_anim`, or `''` — what a WAITING figure plays here */
+  idle: string;
+  /** `meta.move_sink_m` / `meta.idle_sink_m` */
+  sink: GroundSink;
+  /** the mirror over the point in world metres, or `null` where none applies */
+  water: number | null;
+}
+
+/**
+ * SWIMMING IS A DEPTH, NOT A KIND (W4c, 2026-08-23) — the SECOND reach rule of
+ * the ground contract, next to the scope one above.
+ *
+ * THE BUG IT ENDS. Until now `meta.move_anim: swim` played on every pixel of a
+ * water area, ankle-deep on the shore ramp included: a figure crossing a ford,
+ * or standing on the rim of a river whose ramp is a metre wide, crawled through
+ * water that reached its shins. The client has both numbers it needs to know
+ * better — the mirror over the point (`groundWaterLevel`) and the bed under the
+ * figure — so the ground's water word is gated by what they say:
+ *
+ *     depth = waterLevel − groundY
+ *     depth ≥ swimFromM  ->  SWIM: the ground's clips and sinks as before, the
+ *                            body hangs `move_sink_m` under the mirror
+ *     depth <  swimFromM  ->  WADE: the ground says NOTHING — the figure keeps
+ *                            its own walk/run and standing clips, sinks by
+ *                            nothing and stands on the BED (`water: null`, so
+ *                            `floatRootY` leaves the terrain height alone)
+ *
+ * The mirror has to go with the clips: leaving it in while zeroing the sink
+ * would put the wader ON the water surface (`floatRootY` = max(groundY, level)),
+ * which is the opposite of standing in the water. All four fields answer one
+ * question, so they are gated in one place and not four.
+ *
+ * WHY THE SINK GOES TO ZERO AND NOT TO SOMETHING SMALL: a wader plays a walk
+ * clip, and a walk clip is authored standing on the ground it is played on.
+ * The water reaching the hips is drawn by the water surface passing through the
+ * figure, not by dropping the figure into the bed.
+ *
+ * NO WATER, NO GATE. Where the point carries no mirror (`water === null` — the
+ * whole dry world, and every built place, which `groundWaterLevel` already cut)
+ * the word passes through untouched: a bog with a `move_sink_m` still swallows
+ * ankles, and a kind with a `move_anim` of its own still names it. This is what
+ * keeps the rule to WATER and out of every other ground.
+ *
+ * Worked through with the river seed (`swim_from_m` 1.0, mirror at L = 5.0):
+ *
+ *     depth 0.4 -> groundY 4.6, wades: walk/idle clip, sink 0, root 4.6
+ *     depth 1.0 -> groundY 4.0, THE THRESHOLD, swims: swim/treading-water,
+ *                  root = max(4.0 + 0.35, 5.0) = 5.0
+ *     depth 1.6 -> groundY 3.4, swims: root = max(3.75, 5.0) = 5.0
+ *
+ * `swimFromM` is the kind's number as `ground.typeAt` read it; junk and a
+ * negative one fall back to `SWIM_FROM_DEFAULT_M`, and a 0 is kept — it means
+ * "swim from the very rim", which is exactly what every water kind did before
+ * this round.
+ */
+export function wadeGate(word: GroundWater, groundY: number,
+                         swimFromM: number): GroundWater {
+  const level = word.water;
+  // No mirror over the point, or no ground under the figure to measure against:
+  // nothing to decide, and inventing a depth out of a NaN would silently
+  // undress every ground the sampler has not answered for yet.
+  if (level === null || !Number.isFinite(level) || !Number.isFinite(groundY)) {
+    return word;
+  }
+  if (level - groundY >= swimFrom(swimFromM)) return word;
+  return { anim: '', idle: '', sink: { move: 0, idle: 0 }, water: null };
+}
+
+/** The kind's swim threshold, made a number — junk and a negative one are the
+ *  default, a 0 is a value. One place, so the gate and every caller that wants
+ *  to show the number agree on what an unauthored kind means. */
+export function swimFrom(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value : SWIM_FROM_DEFAULT_M;
+}
+
 /**
  * WHERE A FIGURE'S ROOT STANDS over water — "Ein Boden" E4 (§ G4), and the end
  * of the swimmer who hung in the lake bed.
@@ -356,6 +446,13 @@ export function groundWaterLevel(level: number | null,
  * `sink` is what `groundSink(sinkForState(...), scope)` already answered, so
  * everything that rule says still holds: a built place has no sink and no
  * mirror either, and junk is no depth.
+ *
+ * SINCE W4c THE SHALLOW END RARELY GETS HERE AT ALL: `wadeGate` hands this a
+ * `waterLevel` of `null` below the kind's `swim_from_m`, so the wading rows of
+ * the table above are what the gate itself produces (`root = groundY`, feet on
+ * the bed, sink 0) and the `max` only decides for a figure that IS swimming.
+ * The arithmetic is unchanged — a kind with `swim_from_m: 0` still walks the
+ * whole table, and the crossover still falls out of the `max`.
  */
 export function floatRootY(groundY: number, waterLevel: number | null,
                            sink: number): number {

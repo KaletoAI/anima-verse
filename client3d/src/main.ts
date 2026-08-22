@@ -531,6 +531,10 @@ async function startApp(username: string, role: string) {
       // (`walk.floatRootY`). It travels with the clips and the sinks because
       // it is the same lookup — `typeAt` reads the topmost area once.
       water: type.water_level,
+      // …and FROM WHICH DEPTH of that water the swimming word counts at all
+      // (W4c): shallower is waded on the figure's own walk clip, feet on the
+      // bed. `walk.wadeGate` in the manager applies it.
+      swimFrom: type.swim_from_m,
       scope: groundScopeAt(x, z) };
   });
   engine.scene.add(npcs.group);

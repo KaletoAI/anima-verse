@@ -660,6 +660,12 @@ export interface TerrainPoint {
   /** catalog `meta.idle_sink_m`, or 0 — the same while it WAITS on it. Two
    *  numbers, because the two poses hang differently in the water (§ A9). */
   idle_sink_m: number;
+  /** catalog `meta.swim_from_m` — from which WATER DEPTH under the figure the
+   *  two clips and the two depths above apply at all (W4c). Shallower water is
+   *  WADED: the figure keeps its own clips and stands on the bed. A kind that
+   *  names none answers `walk.SWIM_FROM_DEFAULT_M`, never 0 — an unauthored
+   *  threshold is a metre, not "swim in a puddle". */
+  swim_from_m: number;
   /**
    * The MIRROR HEIGHT over THIS POINT in world metres, or `null` where the
    * point is not water (E4, § G4; local since W2).
@@ -2875,7 +2881,8 @@ export function createGround(): Ground {
     const entry = catalog.get(kind.toLowerCase());
     if (!entry) {
       return { kind, passable: true, speed_factor: 1, move_anim: '',
-        idle_anim: '', move_sink_m: 0, idle_sink_m: 0, water_level: level };
+        idle_anim: '', move_sink_m: 0, idle_sink_m: 0,
+        swim_from_m: SWIM_FROM_DEFAULT_M, water_level: level };
     }
     // A ground that says nothing sinks nobody — and junk is nothing, never
     // NaN: one NaN in the drop and the figure is at no height for good.
@@ -2891,6 +2898,10 @@ export function createGround(): Ground {
       idle_anim: String(entry.meta?.idle_anim ?? '').trim(),
       move_sink_m: depth(entry.meta?.move_sink_m),
       idle_sink_m: depth(entry.meta?.idle_sink_m),
+      // …and FROM WHICH DEPTH those two count at all (W4c). Not `depth()`: a
+      // threshold of 0 is a value here ("swim from the very rim") while a
+      // MISSING one is a metre, so the two cannot share one reader.
+      swim_from_m: swimFrom(entry.meta?.swim_from_m as number | undefined),
       water_level: level,
     };
   }

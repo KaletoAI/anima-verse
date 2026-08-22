@@ -246,6 +246,46 @@
  * `null` and nobody floats inside it. The full shore/plane arithmetic is
  * `client3d/scripts/smoke_water_plane.mjs`.
  *
+ * --- wadeGate: SWIMMING IS A DEPTH, NOT A KIND (W4c, 2026-08-23) ----------
+ * The SECOND reach rule of the ground contract. Until now `meta.move_anim:
+ * swim` played on every pixel of a water area — ankle-deep on the shore ramp
+ * included — so a figure crossing a ford crawled through water at its shins.
+ * The kind now says FROM WHICH DEPTH that word counts (`meta.swim_from_m`,
+ * default 1 m), and the client measures the depth it already has:
+ *
+ *   depth = waterLevel − groundY
+ *   depth ≥ swim_from_m -> SWIM: the word passes through unchanged
+ *   depth <  swim_from_m -> WADE: `{anim:'', idle:'', sink:{0,0}, water:null}`
+ *
+ * All four fields are gated TOGETHER, and the mirror is the one that proves
+ * why: zeroing the sink while leaving the level in would hand `floatRootY` a
+ * `max(groundY, level)` and put the wader ON the water surface — the opposite
+ * of standing in it.
+ *
+ * Derived with the river seed of `shared/terrain/types.json` (`swim_from_m`
+ * 1.0, `move_sink_m` 0.35, `idle_sink_m` 1.3) and a mirror at L = 5.0. The
+ * three depths asked for, moving and waiting, with the root that comes out of
+ * `floatRootY(groundY, gated.water, sink)`:
+ *
+ *   depth  groundY  gate  moving: clip/sink/root      waiting: clip/sink/root
+ *   0.4    4.6      wade  walk  / 0    / 4.60         (own idle) / 0    / 4.60
+ *   1.0    4.0      swim  swim  / 0.35 / max(4.35,5)=5  treading / 1.3  / max(5.3,5)=5.3
+ *   1.6    3.4      swim  swim  / 0.35 / max(3.75,5)=5  treading / 1.3  / max(4.7,5)=5
+ *
+ * — 1.0 is the threshold and is INCLUDED (`>=`), which is what makes the rule
+ * a single line instead of a band; the waiting root at depth 1.0 sits ABOVE
+ * the mirror because a treader whose foot hangs 1.3 m down still stands on a
+ * 1.0 m bed, exactly as `floatRootY`'s own crossover table says.
+ *
+ * A kind that names NO threshold answers `SWIM_FROM_DEFAULT_M` = 1.0 through
+ * `swimFrom`, so it reads the very same three rows; an authored 0 is kept and
+ * means "swim from the very rim" — the behaviour every water kind had before
+ * this round. A NON-WATER ground is untouched, and that is the case that keeps
+ * the rule out of the rest of the world: with `water: null` there is no depth
+ * to measure, so a bog's `move_sink_m` still swallows ankles.
+ * RED COUNTER-PROBE, implemented below: the pre-W4c rule is "no gate at all",
+ * i.e. the word passing through whatever the depth — it swims the 0.4 m ford.
+ *
  * --- slopeBlocks: THE HEIGHT GATE (E8 task 1) -----------------------------
  * The client's half of the server rule of `POST /play/pos` § A15 Nr. 8, the
  * exact mirror of `relief.slope_blocks`. The SLOPE limit holds at every
@@ -866,7 +906,7 @@ async function main() {
     bubble, minimap, locks, placement, ground } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
-    groundScope, MIN_PACE,
+    groundScope, wadeGate, swimFrom, SWIM_FROM_DEFAULT_M, MIN_PACE,
     MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
@@ -1244,6 +1284,81 @@ async function main() {
     check('a sea at world zero is still a level', groundWaterLevel(0, 'open'), 0);
     check('no lake, no level', groundWaterLevel(null, 'open'), null);
     check('a NaN is no level', groundWaterLevel(NaN, 'wilderness'), null);
+  }
+
+  console.log('wadeGate — swimming starts at a DEPTH, not at a kind (W4c)');
+  {
+    // The river seed of `shared/terrain/types.json`, and a mirror at L = 5.
+    const L = 5.0;
+    const RIVER = { anim: 'swim', idle: 'treading-water',
+      sink: { move: 0.35, idle: 1.3 }, water: L };
+    const WADED = { anim: '', idle: '', sink: { move: 0, idle: 0 },
+      water: null };
+    // The whole chain at one depth, exactly as npcs.ts runs it: gate the word,
+    // then ask the unchanged rules what clip, what sink and what root come out.
+    const at = (depth, swim, moving) => {
+      const groundY = L - depth;
+      const g = wadeGate({ ...RIVER }, groundY, swim);
+      const groundIdle = idleClip(g.idle, 'wilderness');
+      const sink = groundSink(sinkForState(moving, groundIdle, g.sink),
+        'wilderness');
+      return {
+        clip: moving ? moveClip(g.anim, false, 'wilderness')
+          : (groundIdle || 'idle'),
+        sink,
+        root: floatRootY(groundY, g.water, sink),
+      };
+    };
+    check('depth 0.4 m at a 1 m threshold: the gate hands back NOTHING',
+      wadeGate({ ...RIVER }, L - 0.4, 1.0), WADED);
+    check('...so a MOVING figure walks the ford, unsunk, on the bed',
+      at(0.4, 1.0, true), { clip: 'walk', sink: 0, root: 4.6 });
+    check('...and a WAITING one keeps its own standing clip on the bed',
+      at(0.4, 1.0, false), { clip: 'idle', sink: 0, root: 4.6 });
+    check('depth 1.0 m IS the threshold — the word passes through',
+      wadeGate({ ...RIVER }, L - 1.0, 1.0), RIVER);
+    check('...moving: the swim clip, 0.35 under the mirror',
+      at(1.0, 1.0, true), { clip: 'swim', sink: 0.35, root: 5.0 });
+    check('...waiting: treading water, and a 1.3 m foot still finds the '
+      + '1.0 m bed', at(1.0, 1.0, false),
+    { clip: 'treading-water', sink: 1.3, root: 5.3 });
+    check('depth 1.6 m: swimming, moving',
+      at(1.6, 1.0, true), { clip: 'swim', sink: 0.35, root: 5.0 });
+    check('...and treading water, feet off the bed at last',
+      at(1.6, 1.0, false),
+      { clip: 'treading-water', sink: 1.3, root: 5.0 });
+    // A KIND WITHOUT THE FIELD reads the module default of one metre, so the
+    // three rows above hold for it unchanged (`ground.typeAt` uses `swimFrom`).
+    check('the default threshold is one metre', SWIM_FROM_DEFAULT_M, 1.0);
+    check('a kind that names none answers it', swimFrom(undefined), 1.0);
+    check('...and so does a junk one', swimFrom('deep'), 1.0);
+    check('...and a negative one', swimFrom(-2), 1.0);
+    check('...while an authored 0 is kept: swim from the very rim',
+      swimFrom(0), 0);
+    check('the unauthored kind wades the 0.4 m ford like the seed does',
+      wadeGate({ ...RIVER }, L - 0.4, swimFrom(undefined)), WADED);
+    check('...and swims its 1.6 m the same way',
+      wadeGate({ ...RIVER }, L - 1.6, swimFrom(undefined)), RIVER);
+    check('a threshold of 0 swims the ankle-deep rim — the pre-W4c water',
+      wadeGate({ ...RIVER }, L - 0.05, 0), RIVER);
+    // NOT WATER, NOT GATED — the case that keeps the rule out of every other
+    // ground: with no mirror there is no depth to measure.
+    const BOG = { anim: '', idle: '', sink: { move: 0.2, idle: 0.2 },
+      water: null };
+    check('a bog carries no mirror, so nothing is taken from it',
+      wadeGate({ ...BOG }, 4.6, 1.0), BOG);
+    check('...it still swallows ankles while walking',
+      sinkForState(true, '', wadeGate({ ...BOG }, 4.6, 1.0).sink), 0.2);
+    check('a NaN bed decides nothing either — the word survives',
+      wadeGate({ ...RIVER }, NaN, 1.0), RIVER);
+    // RED COUNTER-PROBE, EXECUTED: the pre-W4c rule is no gate at all.
+    const ungated = (word) => word;
+    check('RED: ungated, the 0.4 m ford is swum',
+      moveClip(ungated({ ...RIVER }).anim, false, 'wilderness'), 'swim');
+    check('...where the rule in force walks it', at(0.4, 1.0, true).clip,
+      'walk');
+    check('...and in real water the two agree', at(1.6, 1.0, true).clip,
+      moveClip(ungated({ ...RIVER }).anim, false, 'wilderness'));
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

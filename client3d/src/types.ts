@@ -495,8 +495,9 @@ export interface TerrainType {
   speed_factor: number;
   /** Open bag of extras — a type says how ground LOOKS and how it is walked,
    *  nothing about what grows on it (the scatter moved to the AREA with
-   *  finding B17). FOUR keys in it are a contract: `move_anim`, `idle_anim`
-   *  and the two depths `move_sink_m` / `idle_sink_m`. */
+   *  finding B17). FIVE keys in it are a contract: `move_anim`, `idle_anim`,
+   *  the two depths `move_sink_m` / `idle_sink_m` and the depth they start at,
+   *  `swim_from_m`. */
   meta?: TerrainTypeMeta;
 }
 
@@ -522,6 +523,12 @@ export interface TerrainTypeMeta {
    *  hand's width down, a treader hangs upright and its foot is a body length
    *  down. Only in force where the ground also names an `idle_anim`. */
   idle_sink_m?: number;
+  /** FROM WHICH WATER DEPTH under the figure the two clips and the two depths
+   *  above count at all, in metres (W4c, 0…10) — shallower water is WADED: the
+   *  figure keeps its own walk/run and standing clips and stands on the bed.
+   *  Absent = `walk.SWIM_FROM_DEFAULT_M` (1 m); an authored 0 means "swim from
+   *  the very rim", which is what water did before this round. */
+  swim_from_m?: number;
   /** How far what GROWS on this ground bends in the wind, in metres (§ A9,
    *  0.01…0.5) — the sideways deflection of a blade's TIP, quadratic in the
    *  height above the ground. Read per painted AREA, so every scatter entry

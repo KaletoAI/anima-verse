@@ -99,6 +99,30 @@ SINK_MIN, SINK_MAX = 0.0, 1.5
 #: is doing (§ A9).
 SINK_KEYS = ("move_sink_m", "idle_sink_m")
 
+#: FROM WHICH WATER DEPTH ONE SWIMS, in metres (W4c, 2026-08-23). Swimming
+#: used to be a property of the KIND alone — a ground with ``move_anim: swim``
+#: was swum on every one of its pixels, ankle-deep on the shore ramp included,
+#: which is what made a figure crawl through a puddle. It is a DEPTH: shallower
+#: water is WADED (the figure keeps its own walk/run clip and stands on the
+#: bed, no sink at all), from here on it swims with ``move_sink_m`` under the
+#: mirror, and the standing case is the same line — ``idle_anim`` /
+#: ``idle_sink_m`` only apply from this depth, below it the figure keeps its
+#: own standing clip on the bed.
+#:
+#: The default is a metre, which is roughly where an adult's feet stop carrying
+#: it; a kind that names nothing gets exactly that. ZERO IS A VALUE and has to
+#: survive a save (the ``shore_ramp_m`` rule): it means "swim from the very
+#: rim", i.e. the behaviour of every water kind before this round. The upper
+#: clamp is ten metres — past that no authored water is deep enough to ever
+#: reach the threshold, so the figure would wade across a sea.
+#:
+#: THE NUMBER IS READ BY THE CLIENT ONLY (``client3d/src/game/walk.wadeGate``):
+#: passability and pace stay the kind's business, and ``speed_factor`` keeps
+#: counting over the whole area — wading is slow too.
+SWIM_FROM_KEY = "swim_from_m"
+SWIM_FROM_DEFAULT_M = 1.0
+SWIM_FROM_MIN_M, SWIM_FROM_MAX_M = 0.0, 10.0
+
 #: HOW FAR THE SCATTER OF THIS GROUND BENDS IN THE WIND, in metres — the
 #: maximum sideways deflection of a blade's TIP (decision 2026-08-14). The
 #: number hangs on the KIND, so all scatter of a swaying kind moves, tufts and
@@ -297,6 +321,21 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     for _sink_key in SINK_KEYS:
         if _sink_key in meta:
             _clamped_meta_number(meta, _sink_key, SINK_MIN, SINK_MAX)
+    # AND THE DEPTH THOSE TWO START AT (W4c, 2026-08-23): `swim_from_m`. It
+    # belongs next to the two sinks because it is the same sentence — how a
+    # figure carries itself in this ground — and it is what turns "swimming" from
+    # a property of the KIND into one of the water DEPTH under the figure.
+    # Unlike the sinks it does NOT go through `_clamped_meta_number`: 0 is a
+    # value here (swim from the very rim, the pre-W4c behaviour) and has to
+    # survive a save, exactly like `shore_ramp_m` and `edge_blend_m`. Junk
+    # leaves no key, and no key is the module default of one metre.
+    if SWIM_FROM_KEY in meta:
+        _swim = _finite(meta.get(SWIM_FROM_KEY))
+        if _swim is None:
+            meta.pop(SWIM_FROM_KEY, None)
+        else:
+            meta[SWIM_FROM_KEY] = round(
+                min(max(_swim, SWIM_FROM_MIN_M), SWIM_FROM_MAX_M), 2)
     # TWO MORE since the micro-relief decision (2026-08-13): the random small
     # hills this ground carries, baked into the WORLD HEIGHTFIELD by
     # ``app/core/heightfield`` (§ A16) rather than rendered by anyone — server

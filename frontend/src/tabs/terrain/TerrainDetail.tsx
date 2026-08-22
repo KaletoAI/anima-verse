@@ -70,6 +70,14 @@ const RELIEF_WAVE_STEP = 1
 const SINK_MIN = 0
 const SINK_MAX = 1.5
 const SINK_STEP = 0.05
+// `terrain_types.SWIM_FROM_*`. THE THIRD FIELD OF THE MOVEMENT SENTENCE (W4c):
+// from which WATER DEPTH the two clips and the two sinks above count at all.
+// 0 IS A VALUE here — "swim from the very rim", what every water kind did
+// before this round — so an empty field is the server's metre, not a zero.
+const SWIM_FROM_MIN = 0
+const SWIM_FROM_MAX = 10
+const SWIM_FROM_STEP = 0.1
+const SWIM_FROM_DEFAULT = 1
 const SWAY_MIN = 0.01
 const SWAY_MAX = 0.5
 const SWAY_STEP = 0.01
@@ -196,6 +204,7 @@ interface OwnedMeta {
   idleAnim: string
   moveSink: string
   idleSink: string
+  swimFrom: string
   reliefAmp: string
   reliefWave: string
   sway: string
@@ -217,6 +226,10 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   setMetaStr(next, 'idle_anim', own.idleAnim)
   setMetaNum(next, 'move_sink_m', own.moveSink)
   setMetaNum(next, 'idle_sink_m', own.idleSink)
+  // The swim threshold shares the "0 is a value" rule of the transition width:
+  // a 0 means "swim from the very rim" and has to survive a save, while an
+  // empty field is the server's default metre.
+  setMetaBlend(next, 'swim_from_m', own.swimFrom)
   setMetaNum(next, 'relief_amplitude_m', own.reliefAmp)
   setMetaNum(next, 'relief_wave_m', own.reliefWave)
   setMetaNum(next, 'sway_m', own.sway)
@@ -283,6 +296,17 @@ function moveSinkHint(t: (s: string) => string): string {
 function idleSinkHint(t: (s: string) => string): string {
   return t('The same while the figure WAITS on this ground, in metres (0–{max}) — a separate number, because the waiting pose hangs differently: someone treading water stands upright and its lowest point is a foot a whole body length down. Only in force where an idle animation is set above.')
     .replace('{max}', String(SINK_MAX))
+}
+
+/** The swim-threshold hint (W4c) — the field that turns swimming from a
+ *  property of the KIND into one of the water DEPTH under the figure. It says
+ *  what the SHALLOW side looks like, because that is the case the number
+ *  creates and the one nobody can see in the field. */
+function swimFromHint(t: (s: string) => string): string {
+  return t('From which water DEPTH a figure swims here, in metres ({min}–{max}) — empty = {def} m. Shallower water is waded: the figure walks on the bed with its own clips and is not sunk at all; from this depth the two animations and the two sink depths above take over. 0 = swim from the very rim.')
+    .replace('{min}', String(SWIM_FROM_MIN))
+    .replace('{max}', String(SWIM_FROM_MAX))
+    .replace('{def}', String(SWIM_FROM_DEFAULT))
 }
 
 /** The sway hint — what bends, how far, and what does NOT bend. The last part
@@ -403,6 +427,7 @@ export function TerrainDetail({
   const [idleAnim, setIdleAnim] = useState(metaStrOf(type, 'idle_anim'))
   const [moveSink, setMoveSink] = useState(metaNumOf(type, 'move_sink_m'))
   const [idleSink, setIdleSink] = useState(metaNumOf(type, 'idle_sink_m'))
+  const [swimFrom, setSwimFrom] = useState(metaNumOf(type, 'swim_from_m'))
   const [reliefAmp, setReliefAmp] = useState(metaNumOf(type, 'relief_amplitude_m'))
   const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
   const [sway, setSway] = useState(metaNumOf(type, 'sway_m'))
@@ -454,6 +479,7 @@ export function TerrainDetail({
     || idleAnim.trim() !== metaStrOf(type, 'idle_anim')
     || numChanged(moveSink, metaNumOf(type, 'move_sink_m'))
     || numChanged(idleSink, metaNumOf(type, 'idle_sink_m'))
+    || blendChanged(swimFrom, metaNumOf(type, 'swim_from_m'))
     || numChanged(reliefAmp, metaNumOf(type, 'relief_amplitude_m'))
     || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
     || numChanged(sway, metaNumOf(type, 'sway_m'))
@@ -470,7 +496,7 @@ export function TerrainDetail({
   const save = useCallback(async () => {
     if (speedBad || !kindClean || kindBad || kindTaken) return
     // `meta` is free-form and belongs to whoever wrote it — this form owns
-    // exactly TWELVE keys in it and hands the rest back untouched. `surface` is
+    // exactly THIRTEEN keys in it and hands the rest back untouched. `surface` is
     // ALWAYS sent, empty string included: the route is a full replace, so a
     // body without the key would undress the ground on every save (which is
     // exactly what the old dialog did). The numbers go out unclamped on
@@ -484,8 +510,9 @@ export function TerrainDetail({
       speed_factor: speedNum,
       surface: surface.trim(),
       meta: withOwnedMeta(type?.meta,
-        { moveAnim, idleAnim, moveSink, idleSink, reliefAmp, reliefWave, sway,
-          undergrowth, edgeBlend, water, waterDepth, shoreRamp }),
+        { moveAnim, idleAnim, moveSink, idleSink, swimFrom, reliefAmp,
+          reliefWave, sway, undergrowth, edgeBlend, water, waterDepth,
+          shoreRamp }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -497,6 +524,7 @@ export function TerrainDetail({
     setIdleAnim(metaStrOf(saved, 'idle_anim'))
     setMoveSink(metaNumOf(saved, 'move_sink_m'))
     setIdleSink(metaNumOf(saved, 'idle_sink_m'))
+    setSwimFrom(metaNumOf(saved, 'swim_from_m'))
     setReliefAmp(metaNumOf(saved, 'relief_amplitude_m'))
     setReliefWave(metaNumOf(saved, 'relief_wave_m'))
     setSway(metaNumOf(saved, 'sway_m'))
@@ -507,8 +535,8 @@ export function TerrainDetail({
     setShoreRamp(metaNumOf(saved, 'shore_ramp_m'))
   }, [color, edgeBlend, idleAnim, idleSink, kindBad, kindClean, kindTaken,
       moveAnim, moveSink, name, onSave, passable, reliefAmp, reliefWave,
-      shoreRamp, speedBad, speedNum, surface, sway, type, undergrowth, water,
-      waterDepth])
+      shoreRamp, speedBad, speedNum, surface, sway, swimFrom, type,
+      undergrowth, water, waterDepth])
 
   return (
     <>
@@ -755,6 +783,28 @@ export function TerrainDetail({
                 value={idleSink}
                 placeholder={t('on top')}
                 onChange={(e) => setIdleSink(e.target.value)}
+              />
+            </Field>
+          </div>
+          {/* THE DEPTH THE TWO ROWS ABOVE START AT (W4c). It stands under them
+              and not in the Water section on purpose: it decides which CLIP
+              and which SINK a figure gets, which is what this section is
+              about — the Water section shapes the bed, this one carries the
+              figure. It counts for any ground the map covers with water, so
+              it stays readable on an unflagged kind like the two shape
+              numbers do. */}
+          <div className="ga-form-row">
+            <Field label={t('Swim from depth (m)')} compact
+              hint={swimFromHint(t)}>
+              <input
+                className="ga-input ga-tt-num"
+                type="number"
+                min={SWIM_FROM_MIN}
+                max={SWIM_FROM_MAX}
+                step={SWIM_FROM_STEP}
+                value={swimFrom}
+                placeholder={String(SWIM_FROM_DEFAULT)}
+                onChange={(e) => setSwimFrom(e.target.value)}
               />
             </Field>
           </div>
