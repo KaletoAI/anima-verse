@@ -2921,6 +2921,11 @@ Invariante 1 an dieser Stelle.
 > unverändert weitergilt: das `meta.water`-Flag als EINZIGES Prädikat, der
 > Rand-Median als Default, die `min`-Regel des Carves und Invariante 2 — nur
 > gegen `water_level_at(x, z)` statt gegen `water_level`.
+>
+> **Und die Achse dieses Profils ist seit W4a eine POLYLINIE** (Nachtrag
+> „W4a", 2026-08-23): eine mit dem Linienwerkzeug gezeichnete Fläche fließt
+> entlang ihrer eigenen Mittellinie (`meta.flow_along`), der See ist die
+> Polylinie mit EINEM Knoten und die gerade Achse von W1 die mit zweien.
 
 Ob eine Bodenart **Wasser** ist, sagt der Katalog: `meta.water` am Terrain-Typ
 (`terrain_types.is_water_kind`) bzw. die Material-KLASSE der
@@ -4671,7 +4676,8 @@ Und ein **RAUM hat kein Wasser mehr** — die fünfte Backstufe ist gelöscht.
 | `meta.water_depth_m` / `meta.shore_ramp_m` | **Fläche** | dieselben Klemmen | Überschreiben die Vorgabe der Art. Fehlt der Schlüssel, antwortet die Art — deshalb wird ein unlesbarer Wert GELÖSCHT und nicht auf den Modul-Default gesetzt |
 | `meta.water_level` | **Fläche** | Welt-y (m) | Der Spiegel STEHENDEN Wassers. Fehlt er, leitet der Bake ihn her (Rand-Median); `save_area` friert ihn dann ein |
 | `meta.water_level_up` / `_down` | **Fläche** | Welt-y (m) | Die beiden Enden eines FLIESSENDEN Spiegels. Jedes überschreibt sein eigenes Ende; ein einfaches `water_level` setzt beide |
-| `meta.flow_dir_deg` | **Fläche** | 0…360, gewrappt | Die FLIESSRICHTUNG (stromabwärts). Buchstabiert wie jeder andere Yaw des Vertrags (§ A1.1): `dir = (sin θ, cos θ)`, also 0° nach +z, 90° nach +x. Sie treibt das Profil UND (ab W2) die Ripple-Scrollrichtung |
+| `meta.flow_dir_deg` | **Fläche** | 0…360, gewrappt | Die FLIESSRICHTUNG (stromabwärts) von POLYGON-Wasser. Buchstabiert wie jeder andere Yaw des Vertrags (§ A1.1): `dir = (sin θ, cos θ)`, also 0° nach +z, 90° nach +x. Sie treibt das Profil UND (ab W2) die Ripple-Scrollrichtung. Trägt die Fläche eine Linie, die sie entlangfließt, wird sie **ignoriert** (W4a) |
+| `meta.flow_along` | **Fläche** | `"forward"` / `"reverse"` / fehlt | **W4a:** Fließt eine mit dem LINIENWERKZEUG gezeichnete Fläche entlang ihrer Mittellinie (`meta.stroke.points`) — in Zeichenreihenfolge oder gegen sie; fehlt der Schlüssel, steht das Wasser. Alles andere verliert den Schlüssel. Ein Fluss macht Biegungen, und eine einzelne Gradzahl kann nicht sagen, wo ein Mäander langläuft |
 | `meta.bed_kind` | **Fläche** | Art-Id | Welche Bodenart der Layer-Bake UNTER dem Wasser malt. Default: die blanke Welt (`game.default_terrain_kind`) — genau die Ersetzung, die der Client bisher selbst vornahm |
 
 Die Art kann den SPIEGEL nicht beantworten: zwei Seen einer Art stehen auf zwei
@@ -4679,29 +4685,48 @@ Höhen. Alles andere darf sie.
 
 ### 2. Das Spiegel-PROFIL — `water_level_at(x, z)`
 
-`app/core/heightfield.WaterProfile` ist die reine Funktion, und sie fährt als
-**neun Zahlen** additiv im Payload mit (`meta.water_profile`, siehe Nr. 4):
+`app/core/heightfield.WaterProfile` ist die reine Funktion, und sie fährt
+additiv im Payload mit (`meta.water_profile`, siehe Nr. 4). **Seit W4a ist die
+Achse eine POLYLINIE**, das Feld `axis`: Knoten `[x, z, s, level]` in
+Fließreihenfolge, `s` = Bogenlänge ab dem ersten Knoten, `level` = Welt-y dort.
 
 ```
-s      = (x − axis_x)·dir_x + (z − axis_z)·dir_z
-t      = clamp((s − s_min) / (s_max − s_min), 0, 1)
-level  = level_up + (level_down − level_up)·t
+s      = Bogenkoordinate des NÄCHSTEN Punktes auf der Polylinie
+         (jedes Segment mit Klemme projiziert, kürzester Abstand gewinnt)
+level  = linear zwischen den beiden Knoten, zwischen denen s liegt,
+         an beiden Enden geklemmt
 ```
 
-* **Die Achse** läuft durch den **Flächen-Schwerpunkt** (`axis_x/axis_z`, echte
-  Polygon-Schwerpunktformel, nicht das Mittel der Ecken) in Richtung
-  `dir = (sin θ, cos θ)`. `s_min`/`s_max` sind die Achsen-Koordinaten des
-  stromaufwärtigen und des stromabwärtigen Extrems des Polygons.
-* **Die beiden Enden**, wo der Autor sie offen lässt: der **Rand-Median des
-  jeweiligen DRITTELS** der Achsen-Spanne — `level_up` über die Randproben mit
-  `s ≤ s_min + Spanne/3`, `level_down` über die mit `s ≥ s_max − Spanne/3`.
-  Ein Drittel und nicht „die zwei Extrempunkte": ein mit vier Ecken gezeichneter
-  Fluss hätte je Ende genau eine Probe und nähme sein Niveau von einem
-  willkürlichen Quadratmeter Landschaft.
-* **Stehendes Wasser fällt heraus**, es ist kein Zweig daneben: ohne
-  `flow_dir_deg` ist `s_min == s_max == 0`, `level_up == level_down`, und die
-  Funktion antwortet überall dieselbe Zahl — das Gesetz von vorher, mit
-  derselben Arithmetik erreicht.
+* **Beide alten Gesetze sind Sonderfälle, kein Zweig daneben.** Stehendes
+  Wasser ist EIN Knoten (am Flächen-Schwerpunkt): der nächste Punkt ist dieser
+  Knoten, die Klemme antwortet überall sein Niveau. Ein gerader Fluss aus
+  `flow_dir_deg` ist ZWEI Knoten — die Extreme des Polygons auf der Achse mit
+  `level_up`/`level_down` —, und die Projektion auf dieses eine Segment IST das
+  `clamp((s − s_min)/(s_max − s_min), 0, 1)` von W1, Klemme inklusive.
+* **Warum überhaupt eine Polylinie:** projiziert man eine 180°-Schleife auf eine
+  Gerade, liegen Ober- und Unterlauf am selben Achsenpunkt und der Spiegel der
+  Biegung kann gar nicht fallen. Entlang der eigenen Linie kann er es immer.
+* **Die Knoten-Niveaus einer gezeichneten Linie**: je Knoten der **Median der
+  Naturhöhe über einen QUERSCHNITT** — 9 Proben senkrecht zur lokalen Tangente,
+  verteilt über `width_m`/2 + Uferrampe zu jeder Seite (der Rand-Median von oben,
+  lokal statt je Drittel). Danach **stromabwärts monoton** (laufendes Minimum):
+  Wasser fließt nie bergauf. Erst dann gewinnt der Autor: `water_level` macht
+  alle Knoten gleich (gezeichnet, aber stehend), `water_level_up`/`_down`
+  ersetzen den ersten/letzten Knoten und die inneren werden **affin** in die
+  neue Spanne eingepasst — ihre Form bleibt, ihre Enden werden die autorierten.
+* **Die beiden Enden von POLYGON-Wasser**, wo der Autor sie offen lässt: der
+  **Rand-Median des jeweiligen DRITTELS** der Achsen-Spanne — `level_up` über die
+  Randproben mit `s ≤ s_min + Spanne/3`, `level_down` über die mit
+  `s ≥ s_max − Spanne/3`. Ein Drittel und nicht „die zwei Extrempunkte": ein mit
+  vier Ecken gezeichneter Fluss hätte je Ende genau eine Probe und nähme sein
+  Niveau von einem willkürlichen Quadratmeter Landschaft.
+* **Die neun Zahlen bleiben** — für einen Leser, der die Polylinie nicht kennt,
+  die beste EINE geneigte Ebene: `level_up`/`level_down` sind das Niveau des
+  ERSTEN und des LETZTEN Knotens, `axis_x/axis_z` der erste Knoten (bei
+  Polygon-Wasser weiter der Flächen-Schwerpunkt), `flow_dir_deg` die Peilung der
+  **Sehne erster → letzter Knoten** (bei Polygon-Wasser die autorierte) und
+  `s_min`/`s_max` die Spanne auf dieser Sehne. Bei stehendem Wasser bleibt
+  `flow_dir_deg` `null` und `s_min == s_max == 0`.
 
 ### 3. Der Carve rechnet gegen das LOKALE Niveau
 
@@ -4732,10 +4757,14 @@ unverändert `meta.water_level_effective` und **zusätzlich** `meta.water_profil
   "flow_dir_deg": 270,
   "water_level_up": 7.4, "water_level_down": 2.6,
   "water_level_effective": 5.0,          // OUTPUT: das MITTELNIVEAU des Profils
-  "water_profile": {                     // OUTPUT: die neun Zahlen
+  "water_profile": {                     // OUTPUT: die neun Zahlen …
     "level_up": 7.4, "level_down": 2.6, "flow_dir_deg": 270.0,
     "axis_x": 50.0, "axis_z": -30.0, "dir_x": -1.0, "dir_z": 0.0,
-    "s_min": -30.0, "s_max": 30.0 } }
+    "s_min": -30.0, "s_max": 30.0,
+    // … und seit W4a die WAHRHEIT daneben: die Knoten [x, z, s, level] in
+    // Fließreihenfolge, auf 3 Nachkommastellen. Ein Knoten = stehend, zwei =
+    // die gerade Achse oben, N = die gezeichnete Linie.
+    "axis": [[80.0, -30.0, -30.0, 7.4], [20.0, -30.0, 30.0, 2.6]] } }
 ```
 
 **`water_level_effective` ist ab jetzt das MITTELNIVEAU** (das Mittel der beiden
@@ -4819,6 +4848,7 @@ nicht.
 | Skript | was es herleitet |
 |---|---|
 | `scripts/smoke_height_bake.py` **[8]** | die Fließachse (Yaw-Konvention, Wrapping), die beiden Drittel-Rand-Mediane von Hand (7,4 / 2,6 aus 31 Randproben je Ende), `level_at(x) = 0,08·x + 1,0`, der Carve gegen das lokale Niveau, Art-Vorgabe gegen Flächen-Überschreibung, die ungeflaggte Art (kein Carve), Invariante 2 punktweise über 2916 Proben (schlechtester Abstand exakt die Tiefe 1,0 m), die **roten** Gegenproben gegen den konstanten Spiegel, das Einfrieren beider Enden beim Save und die neun Payload-Zahlen |
+| `scripts/smoke_height_bake.py` **[8k]** | **W4a:** die Fließachse als POLYLINIE — die drei Knoten-Niveaus 10/8/6 einer Haarnadel als Querschnitts-Mediane von Hand, das Niveau am mittleren Knoten (8,0) gegen die **rote** Gegenprobe der geraden W1-Sehne (6,0: die Biegung projiziert hinter das eigene Unterlauf-Ende), Bogenlängen 101/153 und die Mitten-Niveaus 9,0/7,0, der Carve gegen das lokale Niveau, das laufende Minimum (10/11/6 → 10/10/6, rückwärts gezeichnet 6/6/6), autorierte Enden 12/4 über 10/8/6 → 12/8/4, `water_level` = alle Knoten gleich, `flow_along` schlägt `flow_dir_deg`, der Sanitizer der zwei Wörter und das EINE Prädikat `is_flowing` samt Settle-Pfad |
 | `scripts/smoke_height_bake.py` **[9]** | die Löschung der fünften Stufe **namentlich**: 17 Symbole, die Bake-Signaturen, der `waters`-freie Index, die drei Raum-Wasserfelder und die gestrippte Wasser-Boden-Art |
 | `scripts/smoke_terrain_layers.py` **[13]** | Bett-Art als Layer (Oberfläche + eigene Übergangsbreite, zwei Betten = zwei Layer), die rote Probe „nichts malt die Wasser-Textur aufs Gelände", das EINE Prädikat Zeile für Zeile, und das **Kantengesetz**: dieselben zwei Rechtecke in zwei Malreihenfolgen geben die zwei Breiten |
 | `scripts/smoke_scene_recipe.py` **[4w]** | `map_water` von Hand (100 % / 75 % → Verweis; 50 % / 25 % / 0 % → keiner), Letzter-gewinnt, und dass der Eintrag sonst nichts über Wasser sagt |

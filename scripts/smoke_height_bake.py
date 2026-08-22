@@ -60,7 +60,10 @@ declare a ``flow_dir_deg``, and then its mirror is not one number but a plane
 tilted along that axis, interpolated between an UPSTREAM and a DOWNSTREAM level
 that are each the rim median of their own third of the axis span. The carve
 runs against that LOCAL level, so the invariant becomes a pointwise statement.
-Section [9] is the deletion proof of the fifth stage.
+Section [8k] is W4a on top of it: an area DRAWN AS A LINE flows along that line
+(``meta.flow_along``), so the axis is a POLYLINE with one knot per drawn point
+— and the two laws above are its one-knot and its two-knot case, read by the
+same function. Section [9] is the deletion proof of the fifth stage.
 
 [1] THE WATER CARVE (§ G4).  Inside a water polygon
 
@@ -461,11 +464,11 @@ near("the authored lake reports 3.0 as its effective level",
 near("the settled lake reports 6.0",
      payload["ta_lake_auto"]["meta"]["water_level_effective"], 6.0)
 check("...and the PROFILE rides along additively (W1): still water, both "
-      "ends equal, no flow",
+      "ends equal, no flow, and (W4a) ONE axis knot at the centroid",
       payload["ta_lake_set"]["meta"]["water_profile"],
       {"level_up": 3.0, "level_down": 3.0, "flow_dir_deg": None,
        "axis_x": 40.0, "axis_z": 40.0, "dir_x": 0.0, "dir_z": 0.0,
-       "s_min": 0.0, "s_max": 0.0})
+       "s_min": 0.0, "s_max": 0.0, "axis": [[40.0, 40.0, 0.0, 3.0]]})
 check("a non-water area gains no effective field at all",
       "water_level_effective" in payload["ta_grass"]["meta"], False)
 check("the authored fields are untouched",
@@ -1083,13 +1086,190 @@ print("\n[8j] the profile in the PAYLOAD — the nine numbers, additively")
 hf.invalidate_cache()
 _areas = {a["id"]: a for a in
           hf.with_effective_water_level(terrain_store.list_areas())}
-check("the river ships its whole tilted mirror",
+check("the river ships its whole tilted mirror — the nine numbers unchanged "
+      "by W4a, plus the two knots they are the plane through",
       _areas["ta_river_auto"]["meta"]["water_profile"],
       {"level_up": 7.4, "level_down": 2.6, "flow_dir_deg": 270.0,
        "axis_x": 50.0, "axis_z": -30.0, "dir_x": -1.0, "dir_z": 0.0,
-       "s_min": -30.0, "s_max": 30.0})
+       "s_min": -30.0, "s_max": 30.0,
+       "axis": [[80.0, -30.0, -30.0, 7.4], [20.0, -30.0, 30.0, 2.6]]})
 near("...and the flat-consumer number beside it is the MID level",
      _areas["ta_river_auto"]["meta"]["water_level_effective"], 5.0)
+
+
+# ── [8k] THE FLOW AXIS IS THE DRAWN LINE (W4a) ──────────────────────────
+print("\n[8k] a river follows its own line — the axis is a POLYLINE")
+# THE LANDSCAPE, on its own model again. ONE height area, a 400 x 400 square
+# with a 400 m falloff, so inside it
+#
+#   BOWL(x, z) = 40 · min(1, d/400) = d/10,
+#   d = min(x, 400-x, z-200, 600-z)      (distance to the OUTLINE)
+#
+# and in the band x in [140,300], z in [250,315] the smallest of the four is
+# ALWAYS z-200 (it is at most 115 there, the others at least 140), so
+#
+#   BOWL = (z - 200)/10       — a plane that falls toward -z, 0.1 m per metre.
+#
+# THE RIVER, drawn with the LINE tool: three clicked points, width 6 m, and
+# the kind's shore ramp 3 m. Its meta carries `flow_along: "forward"`, so the
+# axis is that line in drawing order — the polygon below is only the carve's
+# MASK and says nothing about the flow. That separation IS W4a.
+#
+#   A = (150, 300)   B = (249, 280)   C = (201, 260)
+#
+# a hairpin: 99 m east and 20 m down-slope, then 48 m back west and 20 m down.
+#   |AB| = sqrt(99² + 20²) = sqrt(10201) = 101   -> s(B) = 101
+#   |BC| = sqrt(48² + 20²) = sqrt(2704)  = 52    -> s(C) = 153
+#
+# THE KNOT LEVELS are the median of BOWL over a CROSS SECTION at each knot:
+# 9 probes perpendicular to the local tangent, spread over width/2 + ramp = 6 m
+# to either side. BOWL is LINEAR there and the probes are symmetric about the
+# knot, so the median is the middle probe — the knot's own height:
+#
+#   level(A) = (300-200)/10 = 10      level(B) = 8      level(C) = 6
+#
+# (every probe stays inside the band above: the widest offset moves a knot by
+# 6 m, and x never leaves [144, 253].)
+#
+# Monotone downstream (10 > 8 > 6), so the running minimum changes nothing
+# here — [8k-mono] below is the case where it does.
+BOWL = {"id": "ha_bowl", "polygon": [[0, 200], [400, 200], [400, 600],
+                                     [0, 600]],
+        "height_m": 40.0, "falloff_m": 400.0, "meta": {}}
+U_POINTS = [[150, 300], [249, 280], [201, 260]]
+U_MASK = [[140, 250], [300, 250], [300, 315], [140, 315]]
+
+
+def u_river(area_id, meta):
+    """The hairpin above with one meta — the polygon is the carve mask only."""
+    return {"id": area_id, "kind": "river", "z_order": 0, "polygon": U_MASK,
+            "meta": dict(meta, stroke={"points": U_POINTS, "width_m": 6.0})}
+
+
+U_RIVER = u_river("ta_u", {"flow_along": "forward"})
+UMODEL = hf.build_model([BOWL], [], [U_RIVER], CATALOG_R)
+U = UMODEL.water_profile_by_area["ta_u"]
+
+check("the axis has one knot per drawn point, (x, z, s, level) each",
+      [[round(v, 6) for v in knot] for knot in U.axis],
+      [[150.0, 300.0, 0.0, 10.0], [249.0, 280.0, 101.0, 8.0],
+       [201.0, 260.0, 153.0, 6.0]])
+near("AT the middle knot the mirror is that knot's level, 8.0",
+     hf.water_level_at(U, 249.0, 280.0), 8.0, 1e-12)
+near("halfway along the first leg it is the mean of its two knots, 9.0",
+     hf.water_level_at(U, 199.5, 290.0), 9.0, 1e-12)
+near("...and halfway along the second, 7.0",
+     hf.water_level_at(U, 225.0, 270.0), 7.0, 1e-12)
+near("upstream of the first knot the polyline CLAMPS to 10.0",
+     hf.water_level_at(U, 150.0, 400.0), 10.0, 1e-12)
+# THE RED COUNTER-PROBE: the same river as ONE tilted plane — which is exactly
+# what the nine numbers beside the axis say, and all W1 could express. Its axis
+# is the CHORD A -> C = (51, -40), |chord|² = 51² + 40² = 4201. The middle knot
+# projects onto it at
+#     u = ((249-150)·51 + (280-300)·(-40)) / 4201 = (5049 + 800)/4201 = 1.392…
+# i.e. PAST the downstream end, where the clamp answers level_down = 6.0. The
+# bend of a hairpin has no place on its own chord — that is the whole finding.
+CHORD = math.sqrt(4201.0)
+STRAIGHT = hf.WaterProfile(level_up=10.0, level_down=6.0,
+                           flow_dir_deg=180.0 - math.degrees(
+                               math.atan(51.0 / 40.0)),
+                           axis_x=150.0, axis_z=300.0,
+                           dir_x=51.0 / CHORD, dir_z=-40.0 / CHORD,
+                           s_min=0.0, s_max=CHORD,
+                           axis=((150.0, 300.0, 0.0, 10.0),
+                                 (201.0, 260.0, CHORD, 6.0)))
+near("RED: the STRAIGHT W1 axis answers 6.0 at that same point — the bend "
+     "projects past its own downstream end", hf.water_level_at(STRAIGHT,
+                                                               249.0, 280.0),
+     6.0, 1e-12)
+near("the carve uses the LOCAL level: 8.0 - the kind's depth 1.0",
+     UMODEL.final(249.0, 280.0), 7.0, 1e-12)
+
+print("\n[8k-nine] the nine numbers stay readable: the plane through the ends")
+near("level_up is the FIRST knot", U.level_up, 10.0, 1e-12)
+near("level_down is the LAST", U.level_down, 6.0, 1e-12)
+near("the axis point is the first knot, x", U.axis_x, 150.0, 1e-12)
+near("...and z", U.axis_z, 300.0, 1e-12)
+near("the bearing is the CHORD's: 180° - atan(51/40)", U.flow_dir_deg,
+     180.0 - math.degrees(math.atan(51.0 / 40.0)), 1e-3)
+near("...and the span is the chord's own length sqrt(4201)", U.s_max, CHORD,
+     1e-6)
+near("the flat-consumer level stays the mean of the two ends",
+     (U.level_up + U.level_down) * 0.5, 8.0, 1e-12)
+
+print("\n[8k-mono] water never runs uphill — the running minimum")
+# The same hairpin with the middle knot lifted to z = 310, i.e. BOWL 11.0:
+# raw knots 10 / 11 / 6, and the running minimum downstream gives 10 / 10 / 6.
+UP_HILL = u_river("ta_u_up", {"flow_along": "forward"})
+UP_HILL["meta"]["stroke"]["points"] = [[150, 300], [249, 310], [201, 260]]
+_up = hf.build_model([BOWL], [], [UP_HILL], CATALOG_R
+                     ).water_profile_by_area["ta_u_up"]
+check("a knot that measures HIGHER than the one above it is pulled down",
+      [round(knot[3], 6) for knot in _up.axis], [10.0, 10.0, 6.0])
+_rev = hf.build_model([BOWL], [],
+                      [u_river("ta_u_rev", {"flow_along": "reverse"})],
+                      CATALOG_R).water_profile_by_area["ta_u_rev"]
+check("flowing the SAME line backwards runs it uphill — 6/8/10 flattens to "
+      "the source level", [round(knot[3], 6) for knot in _rev.axis],
+      [6.0, 6.0, 6.0])
+check("...and its knots are the drawn points in reverse order",
+      [[knot[0], knot[1]] for knot in _rev.axis],
+      [[201.0, 260.0], [249.0, 280.0], [150.0, 300.0]])
+
+print("\n[8k-authored] authored ends win, the inner shape is remapped")
+# Derived 10 / 8 / 6 with authored ends 12 / 4: the span 10-6 = 4 becomes
+# 12-4 = 8, so every knot is stretched by (12-4)/(10-6) = 2 about the LAST one:
+#     12 = 4 + (10-6)·2      8 = 4 + (8-6)·2      4 = 4 + (6-6)·2
+_ends = hf.build_model([BOWL], [],
+                       [u_river("ta_u_ends", {"flow_along": "forward",
+                                              "water_level_up": 12.0,
+                                              "water_level_down": 4.0})],
+                       CATALOG_R).water_profile_by_area["ta_u_ends"]
+check("12 / 4 authored over a derived 10 / 8 / 6 gives 12 / 8 / 4",
+      [round(knot[3], 6) for knot in _ends.axis], [12.0, 8.0, 4.0])
+_still = hf.build_model([BOWL], [],
+                        [u_river("ta_u_flat", {"flow_along": "forward",
+                                               "water_level": 9.5})],
+                        CATALOG_R).water_profile_by_area["ta_u_flat"]
+check("a plain water_level makes every knot that number — drawn, but standing",
+      [round(knot[3], 6) for knot in _still.axis], [9.5, 9.5, 9.5])
+
+print("\n[8k-fallback] no flow_along = polygon water, unchanged")
+_bearing = hf.build_model([BOWL], [],
+                          [u_river("ta_u_deg", {"flow_dir_deg": 270})],
+                          CATALOG_R).water_profile_by_area["ta_u_deg"]
+check("a drawn area that is not flowed along its line keeps the W1 axis: two "
+      "knots", len(_bearing.axis), 2)
+near("...from the authored bearing, not from the line", _bearing.flow_dir_deg,
+     270.0)
+_both = hf.build_model([BOWL], [],
+                       [u_river("ta_u_both", {"flow_along": "forward",
+                                              "flow_dir_deg": 270})],
+                       CATALOG_R).water_profile_by_area["ta_u_both"]
+check("with BOTH authored the LINE wins and flow_dir_deg is ignored",
+      [len(_both.axis), round(_both.flow_dir_deg, 3)],
+      [3, round(180.0 - math.degrees(math.atan(51.0 / 40.0)), 3)])
+check("the sanitizer keeps only the two words", [
+    terrain_store.sanitize_area({"kind": "river", "polygon": U_MASK,
+                                 "meta": {"flow_along": raw}})["meta"]
+    .get("flow_along")
+    for raw in ("forward", "reverse", "FORWARD", "sideways", "", None, 3)],
+    ["forward", "reverse", "forward", None, None, None, None])
+check("'flowing' is ONE predicate: a drawn line flowed along it needs no "
+      "bearing at all",
+      [hf.is_flowing(hf.water_meta(u_river("x", m)))
+       for m in ({"flow_along": "forward"}, {"flow_along": "reverse"},
+                 {"flow_dir_deg": 270}, {}, {"flow_along": "sideways"})],
+      [True, True, True, False, False])
+# The SETTLE path asks that predicate too (``models.terrain.settle_water_level``)
+# — a line-drawn river must freeze its two ENDS, because freezing it into one
+# ``water_level`` would flatten the very fall the author drew. The numbers come
+# from the STORED landscape here, not from BOWL, so only the KEYS are asserted.
+_settled = terrain_store.settle_water_level(terrain_store.sanitize_area(
+    u_river("ta_u_settle", {"flow_along": "forward"})))
+check("a river drawn as a LINE settles its two ENDS, never one water_level",
+      sorted(k for k in _settled["meta"] if k.startswith("water_level")),
+      ["water_level_down", "water_level_up"])
 
 
 # ── [9] THE ZONE-WATER STAGE IS GONE — asserted BY NAME (W1) ────────────

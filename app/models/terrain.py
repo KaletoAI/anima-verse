@@ -229,7 +229,14 @@ def _sanitize_water(meta: Dict[str, Any]) -> None:
       overrides its own end of the profile; a plain ``water_level`` sets both.
     * ``flow_dir_deg`` — which way the water flows, 0…360, wrapped not clamped
       (``heightfield.sanitize_flow_dir``). It is what turns one level into a
-      profile — and it is the same bearing the ripples scroll along.
+      profile — and it is the same bearing the ripples scroll along. It is the
+      field of POLYGON water: an area that was drawn as a LINE has an axis of
+      its own and ``flow_along`` below wins over it.
+    * ``flow_along`` — ``"forward"`` (the drawing order of ``meta.stroke``),
+      ``"reverse"`` or absent (still): which way an area drawn as a LINE flows
+      along that line (W4a). Anything else loses the key, which is the same
+      "no flow" state as absent — a river follows its own bends, and one
+      bearing cannot say where a meander runs.
     * ``water_depth_m`` — how far the bed lies under the mirror once the shore
       ramp is done. Clamped, never refused: an authoring slip should make a
       shallow lake, not lose the shape somebody drew.
@@ -247,7 +254,8 @@ def _sanitize_water(meta: Dict[str, Any]) -> None:
     would silently outrank the kind forever. Whether a kind is water at all is
     the catalog's answer (``terrain_types.is_water_kind``), never the name's.
     """
-    from app.core.heightfield import (WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M,
+    from app.core.heightfield import (FLOW_ALONG_VALUES, WATER_DEPTH_MAX_M,
+                                      WATER_DEPTH_MIN_M,
                                       WATER_SHORE_RAMP_MAX_M,
                                       WATER_SHORE_RAMP_MIN_M,
                                       sanitize_flow_dir)
@@ -273,6 +281,12 @@ def _sanitize_water(meta: Dict[str, Any]) -> None:
             meta.pop("flow_dir_deg", None)
         else:
             meta["flow_dir_deg"] = flow
+    if "flow_along" in meta:
+        along = str(meta.get("flow_along") or "").strip().lower()
+        if along in FLOW_ALONG_VALUES:
+            meta["flow_along"] = along
+        else:
+            meta.pop("flow_along", None)
     for key, low, high in (
             ("water_depth_m", WATER_DEPTH_MIN_M, WATER_DEPTH_MAX_M),
             ("shore_ramp_m", WATER_SHORE_RAMP_MIN_M, WATER_SHORE_RAMP_MAX_M)):
@@ -524,6 +538,13 @@ def settle_water_level(area: Dict[str, Any]) -> Dict[str, Any]:
     is only written when the author left it open; a half-authored river keeps
     its authored end exactly.
 
+    WHAT "FLOWING" MEANS IS THE BAKE'S ANSWER (``heightfield.is_flowing``, W4a),
+    not a second reading of the fields here: an area drawn as a line and flowed
+    along it (``flow_along``) is a river even without a ``flow_dir_deg``, and
+    settling it as one still level would be exactly the flattening this rule
+    exists to prevent. Only the two ENDS are frozen — the inner knots of a drawn
+    line stay derived, because the line may be redrawn.
+
     A non-water kind and a world whose height model cannot be built (no DB in a
     smoke run) leave the area untouched: the bake derives the same numbers on
     the fly in that case, so nothing is lost but the stability.
@@ -537,10 +558,10 @@ def settle_water_level(area: Dict[str, Any]) -> Dict[str, Any]:
     catalog = effective_catalog()
     if not is_water_kind(kind, catalog):
         return area
-    from app.core.heightfield import build_model, water_meta
+    from app.core.heightfield import build_model, is_flowing, water_meta
     from app.models import heightfield as store
     parsed = water_meta(area, water_kind_defaults(kind, catalog))
-    if parsed.flow_dir_deg is None:
+    if not is_flowing(parsed):
         if parsed.level is not None:
             return area
         keys = ("water_level",)

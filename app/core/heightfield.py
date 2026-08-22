@@ -54,9 +54,10 @@ shared lattice points BY CONSTRUCTION, not by luck.
   Inside the polygon the ground is pushed down to at most
   ``water_level_at(x, z) − depth_profile(d)``, where the depth profile
   smoothsteps from 0 at the rim to the full depth ``shore_ramp_m`` inside.
-  Since W1 the mirror is LOCAL: without a ``flow_dir_deg`` it is one constant
-  (the lake of every round before), with one it interpolates between the
-  upstream and downstream levels along the flow axis (the river). The invariant
+  Since W1 the mirror is LOCAL, and since W4a its axis is a POLYLINE: a lake is
+  one knot and one constant (the lake of every round before), a river drawn with
+  the line tool one knot per drawn point, and the level interpolates along that
+  line — through every bend, not across the chord of it. The invariant
   that buys — deeper than the shore ramp the ground is at least ``ε`` below the
   mirror AT THAT POINT, in EVERY raster — is what makes "distant terrain pokes
   through the water" impossible in the data instead of impossible in a shader.
@@ -780,31 +781,46 @@ def _median(values: Sequence[float]) -> float:
     return (ordered[mid - 1] + ordered[mid]) * 0.5
 
 
+#: One knot of a flow axis: ``(x, z, s, level)`` — the world position, the arc
+#: coordinate measured from the FIRST knot and the mirror height there.
+WaterKnot = Tuple[float, float, float, float]
+
+
 class WaterProfile(NamedTuple):
-    """THE MIRROR OF ONE WATER AREA AS A FUNCTION OF THE PLACE (W1, § A16.3).
+    """THE MIRROR OF ONE WATER AREA AS A FUNCTION OF THE PLACE (W1/W4a, § A16.3).
 
-    A lake is one number; a river is a plane tilted along its own flow. Both are
-    this: two end levels and the axis they are interpolated over. Without a
-    ``flow_dir_deg`` the two ends carry the SAME number and the profile is the
-    constant mirror of every round before this one — the old law is the
-    degenerate case of the new one, not a branch beside it.
+    A lake is one number; a river is a surface that follows its own drawn line.
+    Both are this: a POLYLINE OF KNOTS, each carrying a level, interpolated
+    along the line. A lake is that polyline with ONE knot, a straight river the
+    one with two — the old laws are degenerate cases of the new one, not
+    branches beside it.
 
-    * ``level_up`` / ``level_down`` — world y at the UPSTREAM and the DOWNSTREAM
-      end of the axis span, in metres.
-    * ``flow_dir_deg`` — the authored flow direction, ``None`` for still water.
-      The direction it names is the DOWNSTREAM one and it is spelled like every
-      other yaw in this contract (§ A1.1): ``dir = (sin θ, cos θ)``, so 0° flows
-      toward +z, 90° toward +x.
-    * ``axis_x`` / ``axis_z`` — the point the axis runs through: the polygon's
-      area centroid.
+    * ``axis`` — the knots ``(x, z, s, level)`` in FLOW order (§ A16.3, W4a):
+      ``s`` is the arc length from the first knot, ``level`` the world y there.
+      ONE knot means still water and ``s`` is 0; two or more mean the water
+      flows from ``axis[0]`` toward ``axis[-1]``. It is never empty, which is
+      what lets :func:`water_level_at` be one straight-line expression.
+
+    The nine numbers below are the same mirror as ONE TILTED PLANE — what a
+    reader that never heard of the polyline gets, and for a two-knot axis the
+    whole truth:
+
+    * ``level_up`` / ``level_down`` — the levels of the FIRST and the LAST knot.
+    * ``flow_dir_deg`` — the downstream bearing, ``None`` for still water: the
+      authored one for polygon water, and for a drawn line the bearing of the
+      chord FIRST → LAST knot (the best single plane through a meander). It is
+      spelled like every other yaw in this contract (§ A1.1):
+      ``dir = (sin θ, cos θ)``, so 0° flows toward +z, 90° toward +x.
+    * ``axis_x`` / ``axis_z`` — the point that plane's axis runs through: the
+      polygon's area centroid for polygon water, the first knot for a line.
     * ``dir_x`` / ``dir_z`` — that unit direction, (0, 0) for still water.
-    * ``s_min`` / ``s_max`` — the axis coordinates of the polygon's upstream and
-      downstream extremes, measured from the axis point.
+    * ``s_min`` / ``s_max`` — the axis coordinates of the upstream and the
+      downstream extreme along it.
 
     IT IS THE WHOLE PAYLOAD TOO. ``GET /world/terrain-areas`` and
-    ``GET /play/terrain`` ship these nine numbers as ``meta.water_profile``, so
-    a client evaluates :func:`water_level_at` itself and the server never has to
-    rasterise a mirror.
+    ``GET /play/terrain`` ship the nine numbers AND the knots as
+    ``meta.water_profile``, so a client evaluates :func:`water_level_at` itself
+    and the server never has to rasterise a mirror.
     """
     level_up: float
     level_down: float
@@ -815,36 +831,84 @@ class WaterProfile(NamedTuple):
     dir_z: float
     s_min: float
     s_max: float
+    axis: Tuple[WaterKnot, ...]
+
+
+def _axis_s_at(axis: Tuple[WaterKnot, ...], x: float, z: float) -> float:
+    """The arc coordinate of the point on ``axis`` NEAREST to ``(x, z)``.
+
+    Every segment is projected onto with a clamp to its own ends, and the
+    shortest distance wins; the answer is that segment's ``s`` interpolated by
+    the projection. The candidate the loop starts from is the FIRST KNOT, which
+    is the whole answer for a one-knot (still) axis and is dominated by the
+    first segment for every longer one.
+    """
+    best_x, best_z, best_s, _ = axis[0]
+    best_d2 = (x - best_x) * (x - best_x) + (z - best_z) * (z - best_z)
+    i = 1
+    while i < len(axis):
+        ax, az, a_s, _ = axis[i - 1]
+        bx, bz, b_s, _ = axis[i]
+        dx, dz = bx - ax, bz - az
+        seg = dx * dx + dz * dz
+        u = 0.0 if seg <= 1e-18 else ((x - ax) * dx + (z - az) * dz) / seg
+        u = 0.0 if u < 0.0 else (1.0 if u > 1.0 else u)
+        px, pz = ax + dx * u, az + dz * u
+        d2 = (x - px) * (x - px) + (z - pz) * (z - pz)
+        if d2 < best_d2:
+            best_d2 = d2
+            best_s = a_s + (b_s - a_s) * u
+        i += 1
+    return best_s
+
+
+def _axis_level_at(axis: Tuple[WaterKnot, ...], s: float) -> float:
+    """The level of ``axis`` at arc coordinate ``s``, linear between the knots.
+
+    CLAMPED AT BOTH ENDS, and that matters: the knots sit where the levels were
+    measured, and a point past the last one must not read past the level that
+    measurement stands for. A one-knot axis answers its own level here, because
+    its ``s`` is both the first and the last.
+    """
+    if s <= axis[0][2]:
+        return axis[0][3]
+    if s >= axis[-1][2]:
+        return axis[-1][3]
+    i = 1
+    while i < len(axis):
+        a_s, a_level = axis[i - 1][2], axis[i - 1][3]
+        b_s, b_level = axis[i][2], axis[i][3]
+        if s <= b_s:
+            span = b_s - a_s
+            if span <= 1e-12:
+                return b_level
+            return a_level + (b_level - a_level) * ((s - a_s) / span)
+        i += 1
+    return axis[-1][3]
 
 
 def water_level_at(profile: WaterProfile, x: float, z: float) -> float:
     """The mirror of ``profile`` AT ONE POINT — a pure function, no state.
 
-    Project the point onto the flow axis, then interpolate linearly between the
-    two end levels::
+    THE AXIS IS A POLYLINE (W4a), and the rule is the same three lines it was
+    when it was a straight one::
 
-        s = (x − axis_x)·dir_x + (z − axis_z)·dir_z
-        t = clamp((s − s_min) / (s_max − s_min), 0, 1)
-        level = level_up + (level_down − level_up)·t
+        s     = arc coordinate of the NEAREST point on the polyline
+                (each segment projected with a clamp, shortest distance wins)
+        level = linear between the two knots s falls between, clamped at
+                both ends of the line
 
-    STILL WATER FALLS OUT OF IT: with no flow direction the span is empty and
-    both ends are the same number, so the answer is that number everywhere —
-    today's law, arrived at by the same arithmetic instead of by a second one.
-    The clamp on ``t`` matters at the very ends: a polygon is only extreme at
-    its rim, and a point exactly on it must not read past the level the rim
-    median was taken for.
+    A MEANDER IS THE REASON: projecting a 180° loop onto one straight axis puts
+    its two ends at the same axis point, so the mirror of a bend could not fall
+    at all. Along its OWN line it always can.
+
+    BOTH OLD LAWS FALL OUT OF IT, no branch beside them: still water is ONE
+    knot, so the nearest point is that knot and the clamp answers its level
+    everywhere; a straight river is TWO knots at the axis extremes, so the
+    projection onto the single segment is exactly the ``(s − s_min)/span`` of
+    W1, clamp included.
     """
-    span = profile.s_max - profile.s_min
-    if profile.flow_dir_deg is None or span <= 1e-9:
-        return profile.level_up
-    s = ((x - profile.axis_x) * profile.dir_x
-         + (z - profile.axis_z) * profile.dir_z)
-    t = (s - profile.s_min) / span
-    if t <= 0.0:
-        return profile.level_up
-    if t >= 1.0:
-        return profile.level_down
-    return profile.level_up + (profile.level_down - profile.level_up) * t
+    return _axis_level_at(profile.axis, _axis_s_at(profile.axis, x, z))
 
 
 def flow_direction(flow_dir_deg: Optional[float]) -> Tuple[float, float]:
@@ -902,6 +966,17 @@ PlateauStamp = Tuple[float, float, float, List[Tuple[float, float]],
                      Tuple[float, float, float, float], float, float]
 
 
+#: The two directions a drawn line may be flowed along — and ``None``, which is
+#: "still". ``forward`` is the drawing order of ``meta.stroke.points``.
+FLOW_ALONG_VALUES = ("forward", "reverse")
+
+#: How many probes one cross-section of a drawn river takes for its knot level
+#: (§ A16.3, W4a). ODD, so the median is a probe and not a mean of two, and
+#: small: the section is a handful of metres wide and the median only has to
+#: outvote the micro-relief.
+WATER_AXIS_CROSS_SAMPLES = 9
+
+
 class WaterMeta(NamedTuple):
     """Everything ONE painted water area authors about its own water.
 
@@ -909,6 +984,12 @@ class WaterMeta(NamedTuple):
     are optional — absent means "derive it from the rim" — while the two shape
     widths always answer a number, because the KIND answers when the area does
     not (``terrain_types.water_kind_defaults``).
+
+    ``flow_along`` and the two ``stroke_*`` fields are the DRAWN LINE (W4a):
+    the centre line the line tool already stores in ``meta.stroke`` becomes the
+    flow axis when the author flows the area along it. They are read here, and
+    not from the polygon, because the polygon is the ribbon AROUND the line and
+    has no direction of its own.
     """
     level: Optional[float]
     level_up: Optional[float]
@@ -917,6 +998,22 @@ class WaterMeta(NamedTuple):
     shore_ramp_m: float
     flow_dir_deg: Optional[float]
     bed_kind: str
+    flow_along: Optional[str]
+    stroke_points: Tuple[Tuple[float, float], ...]
+    stroke_width_m: float
+
+
+def is_flowing(meta: WaterMeta) -> bool:
+    """Does this area's mirror TILT at all? — the one predicate, once (W4a).
+
+    A drawn line wins over a bearing: an area that carries both is a river
+    somebody drew, and ``flow_dir_deg`` would be the straight axis its own line
+    replaced. Without a usable line the bearing still answers, which is polygon
+    water and every river painted before W4a.
+    """
+    if meta.flow_along in FLOW_ALONG_VALUES and len(meta.stroke_points) >= 2:
+        return True
+    return meta.flow_dir_deg is not None
 
 
 def water_meta(area: Dict[str, Any],
@@ -960,6 +1057,8 @@ def water_meta(area: Dict[str, Any],
             value = fallback
         return min(max(value, low), high)
 
+    along = str(meta.get("flow_along") or "").strip().lower()
+    points, width = _stroke_line(meta.get("stroke"))
     return WaterMeta(
         level=_level("water_level"),
         level_up=_level("water_level_up"),
@@ -970,7 +1069,115 @@ def water_meta(area: Dict[str, Any],
                             WATER_SHORE_RAMP_MIN_M, WATER_SHORE_RAMP_MAX_M),
         flow_dir_deg=sanitize_flow_dir(meta.get("flow_dir_deg")),
         bed_kind=str(meta.get("bed_kind") or "").strip(),
+        flow_along=along if along in FLOW_ALONG_VALUES else None,
+        stroke_points=points,
+        stroke_width_m=width,
     )
+
+
+def _stroke_line(raw: Any) -> Tuple[Tuple[Tuple[float, float], ...], float]:
+    """The centre line of ``meta.stroke`` — points and ribbon width, or empty.
+
+    The recipe is whitelisted on the way in (``models.terrain._sanitize_stroke``),
+    so this only has to survive a hand-written fixture and an area drawn as a
+    polygon: anything that is not a readable line answers ``((), 0.0)`` and the
+    area is polygon water.
+    """
+    if not isinstance(raw, dict):
+        return ((), 0.0)
+    points: List[Tuple[float, float]] = []
+    for point in (raw.get("points") or []):
+        try:
+            px, pz = float(point[0]), float(point[1])
+        except (TypeError, ValueError, IndexError, KeyError, OverflowError):
+            return ((), 0.0)
+        if not (math.isfinite(px) and math.isfinite(pz)):
+            return ((), 0.0)
+        points.append((px, pz))
+    try:
+        width = float(raw.get("width_m"))
+    except (TypeError, ValueError, OverflowError):
+        width = 0.0
+    if not math.isfinite(width) or width < 0.0:
+        width = 0.0
+    return (tuple(points), width)
+
+
+def _stroke_knots(meta: WaterMeta) -> List[Tuple[float, float, float]]:
+    """The drawn line as ``(x, z, s)`` knots IN FLOW ORDER (W4a).
+
+    ``forward`` is the order the author clicked the points in, ``reverse`` the
+    other way round; ``s`` is the arc length from the first knot of that order.
+    Repeated points are dropped: a double click leaves a zero-length segment,
+    which has no tangent and no share of the arc, and every rule downstream
+    would have to ask about it.
+    """
+    points = list(meta.stroke_points)
+    if meta.flow_along == "reverse":
+        points.reverse()
+    knots: List[Tuple[float, float, float]] = []
+    total = 0.0
+    for px, pz in points:
+        if knots:
+            step = math.hypot(px - knots[-1][0], pz - knots[-1][1])
+            if step <= 1e-9:
+                continue
+            total += step
+        knots.append((px, pz, total))
+    return knots
+
+
+def _knot_tangent(knots: List[Tuple[float, float, float]],
+                  i: int) -> Tuple[float, float]:
+    """The unit flow direction AT one knot — the local tangent of the line.
+
+    An inner knot uses the chord of its two NEIGHBOURS, so the cross section of
+    a bend is cut across the bend and not across one of its two legs; the ends
+    use their own single segment. A knot whose neighbours coincide (a hairpin
+    that turns back on itself) has no chord and falls back to the segment
+    leading INTO it, which is the direction the water arrives from.
+    """
+    last = len(knots) - 1
+    if i <= 0:
+        pairs = ((0, 1),)
+    elif i >= last:
+        pairs = ((last - 1, last),)
+    else:
+        pairs = ((i - 1, i + 1), (i - 1, i), (i, i + 1))
+    for a, b in pairs:
+        dx = knots[b][0] - knots[a][0]
+        dz = knots[b][1] - knots[a][1]
+        length = math.hypot(dx, dz)
+        if length > 1e-9:
+            return (dx / length, dz / length)
+    return (0.0, 1.0)
+
+
+def _authored_axis_levels(levels: List[float], arc: List[float],
+                          meta: WaterMeta) -> List[float]:
+    """The derived knot levels with the AUTHORED ends imposed (W4a).
+
+    ``water_level`` flattens the whole line to one number. Otherwise each end
+    the author named replaces its knot and the rest is remapped affinely into
+    the resulting span — same shape, authored ends. A derived shape that is
+    already flat has nothing to keep, so it becomes a straight ramp along the
+    arc length instead of a division by zero.
+    """
+    if meta.level is not None:
+        return [float(meta.level)] * len(levels)
+    if meta.level_up is None and meta.level_down is None:
+        return levels
+    first, last = levels[0], levels[-1]
+    up = float(meta.level_up) if meta.level_up is not None else first
+    down = float(meta.level_down) if meta.level_down is not None else last
+    span = first - last
+    if abs(span) > 1e-9:
+        scale = (up - down) / span
+        return [down + (value - last) * scale for value in levels]
+    total = arc[-1] - arc[0]
+    if total <= 1e-9:
+        return [up] * len(levels)
+    return [up + (down - up) * ((s - arc[0]) / total) for s in arc]
 
 
 def water_areas(terrain_areas: Sequence[Dict[str, Any]],
@@ -1330,6 +1537,10 @@ class HeightModel:
         pixels of the landscape. A third of the span is enough rim to be a
         median and short enough that the middle of the river never votes on
         either end.
+
+        AN AREA FLOWED ALONG ITS DRAWN LINE (``meta.flow_along``, W4a) does not
+        come through here at all: its axis is the line, its levels are one
+        median per KNOT, and the rule is in :meth:`_stroke_profile`.
         """
         from app.core.terrain_types import water_kind_defaults
         out: List[WaterStamp] = []
@@ -1353,19 +1564,31 @@ class HeightModel:
                           meta: WaterMeta) -> WaterProfile:
         """The mirror profile of ONE water polygon — the whole rule, once.
 
+        THREE CASES, ONE FUNCTION AT THE END (W4a). An area flowed along its
+        DRAWN LINE takes that line as its axis (:meth:`_stroke_profile`); one
+        with a ``flow_dir_deg`` takes the straight axis of W1, written down as
+        the two-knot degenerate case; one with neither is a lake and is the
+        one-knot case. Whatever comes out, ``water_level_at`` reads it the same
+        way.
+
         Authoring beats derivation at EACH END separately: ``water_level_up`` /
         ``water_level_down`` win for their own end, a plain ``water_level`` wins
         for both (that IS the still lake), and what neither names is the rim
         median described in :meth:`_build_water`.
         """
+        if (meta.flow_along in FLOW_ALONG_VALUES
+                and len(meta.stroke_points) >= 2):
+            knots = _stroke_knots(meta)
+            if len(knots) >= 2:
+                return self._stroke_profile(knots, meta)
         ring = _ring(polygon) or []
         dir_x, dir_z = flow_direction(meta.flow_dir_deg)
         axis_x, axis_z = _ring_centroid(ring)
         rim = _rim_samples(polygon)
         if meta.flow_dir_deg is None or not rim:
-            # STILL WATER: no axis, one median, both ends equal. The span is
-            # empty, so ``water_level_at`` returns ``level_up`` for every point
-            # without ever dividing by it.
+            # STILL WATER: no direction, one median, ONE knot. The nearest
+            # point on a one-knot polyline is that knot, so ``water_level_at``
+            # answers its level everywhere without ever dividing by a span.
             level = meta.level_up if meta.level_up is not None else meta.level
             if level is None:
                 level = meta.level_down
@@ -1375,7 +1598,8 @@ class HeightModel:
             return WaterProfile(level_up=float(level), level_down=float(level),
                                 flow_dir_deg=None, axis_x=axis_x,
                                 axis_z=axis_z, dir_x=0.0, dir_z=0.0,
-                                s_min=0.0, s_max=0.0)
+                                s_min=0.0, s_max=0.0,
+                                axis=((axis_x, axis_z, 0.0, float(level)),))
         projected = [(((px - axis_x) * dir_x + (pz - axis_z) * dir_z), px, pz)
                      for px, pz in rim]
         s_min = min(entry[0] for entry in projected)
@@ -1392,12 +1616,89 @@ class HeightModel:
         if level_down is None:
             level_down = _median([self.natural(px, pz)
                                   for s, px, pz in projected if s >= down_cut])
+        # THE STRAIGHT AXIS AS TWO KNOTS: the upstream and the downstream
+        # extreme of the polygon, ON the axis, carrying their own end level.
+        # The projection onto that single segment IS the ``(s − s_min)/span``
+        # of W1 — same arithmetic, one reader.
         return WaterProfile(level_up=float(level_up),
                             level_down=float(level_down),
                             flow_dir_deg=float(meta.flow_dir_deg),
                             axis_x=axis_x, axis_z=axis_z,
                             dir_x=dir_x, dir_z=dir_z,
-                            s_min=s_min, s_max=s_max)
+                            s_min=s_min, s_max=s_max,
+                            axis=((axis_x + dir_x * s_min,
+                                   axis_z + dir_z * s_min,
+                                   s_min, float(level_up)),
+                                  (axis_x + dir_x * s_max,
+                                   axis_z + dir_z * s_max,
+                                   s_max, float(level_down))))
+
+    def _stroke_profile(self, knots: List[Tuple[float, float, float]],
+                        meta: WaterMeta) -> WaterProfile:
+        """The mirror of a river that follows its DRAWN LINE (W4a, § A16.3).
+
+        THE LEVEL OF ONE KNOT is the median of :meth:`natural` over a CROSS
+        SECTION at that knot: :data:`WATER_AXIS_CROSS_SAMPLES` probes
+        perpendicular to the local tangent, spread over the ribbon's own width
+        plus the shore ramp on both sides. It is the rim median of § A16.3 taken
+        LOCALLY — a river is only ever a few metres wide, and a median across
+        it is decided by the valley it lies in, not by the one square metre the
+        line happens to pass over.
+
+        THEN DOWNSTREAM IS MONOTONE: a running minimum along the flow. Water
+        never runs uphill, and a drawn line that crosses a rise would otherwise
+        put a step in the mirror there.
+
+        THEN THE AUTHOR WINS. ``water_level`` makes every knot that number (a
+        drawn but standing water). ``water_level_up`` / ``water_level_down``
+        replace the first / last knot, and the inner knots are remapped AFFINELY
+        into the new span: their shape — where the river falls fast and where it
+        pools — is the landscape's answer and survives, only its two ends become
+        the authored ones. Where the derived shape is FLAT there is no shape to
+        keep and the knots ramp linearly along ``s``.
+        """
+        levels = [self._cross_median(knots, i, meta)
+                  for i in range(len(knots))]
+        i = 1
+        while i < len(levels):
+            if levels[i] > levels[i - 1]:
+                levels[i] = levels[i - 1]
+            i += 1
+        levels = _authored_axis_levels(levels, [k[2] for k in knots], meta)
+        axis = tuple((kx, kz, ks, lv)
+                     for (kx, kz, ks), lv in zip(knots, levels))
+        # THE NINE NUMBERS for a reader that only knows the tilted plane: the
+        # chord FIRST → LAST knot is the best single axis through a meander,
+        # and the two end levels are the ones the plane must hit.
+        first, last = axis[0], axis[-1]
+        dx, dz = last[0] - first[0], last[1] - first[1]
+        if math.hypot(dx, dz) <= 1e-9:
+            # A LINE THAT RETURNS TO ITS START (a full loop) has no chord; the
+            # first segment is the only honest bearing left, and the span
+            # collapses to zero, so the nine-number reader sees one flat plane.
+            dx, dz = axis[1][0] - first[0], axis[1][1] - first[1]
+        bearing = round(math.degrees(math.atan2(dx, dz)) % 360.0, 3)
+        dir_x, dir_z = flow_direction(bearing)
+        s_max = ((last[0] - first[0]) * dir_x + (last[1] - first[1]) * dir_z)
+        return WaterProfile(level_up=axis[0][3], level_down=axis[-1][3],
+                            flow_dir_deg=bearing,
+                            axis_x=first[0], axis_z=first[1],
+                            dir_x=dir_x, dir_z=dir_z,
+                            s_min=0.0, s_max=s_max, axis=axis)
+
+    def _cross_median(self, knots: List[Tuple[float, float, float]], i: int,
+                      meta: WaterMeta) -> float:
+        """The natural height ACROSS the river at knot ``i`` — its median."""
+        tx, tz = _knot_tangent(knots, i)
+        px, pz = knots[i][0], knots[i][1]
+        half = meta.stroke_width_m * 0.5 + meta.shore_ramp_m
+        n = WATER_AXIS_CROSS_SAMPLES
+        step = (2.0 * half) / (n - 1)
+        # The perpendicular of (tx, tz) is (−tz, tx); the offsets run from one
+        # bank to the other and include the centre exactly once (n is odd).
+        return _median([self.natural(px - tz * (step * k - half),
+                                     pz + tx * (step * k - half))
+                        for k in range(n)])
 
     def _build_plateaus(self, footprints: Sequence["Footprint"]
                         ) -> List[PlateauStamp]:
@@ -2420,13 +2721,18 @@ TILE_STATS_MAX = 64
 
 
 def water_profile_payload(profile: WaterProfile) -> Dict[str, Any]:
-    """One :class:`WaterProfile` as the nine numbers a client reads (W1).
+    """One :class:`WaterProfile` as the numbers a client reads (W1, W4a).
 
     Everything ``water_level_at`` needs and nothing else, so a renderer builds
-    the same tilted mirror the bake carved against — per vertex, without asking
-    the server for a raster. ``flow_dir_deg`` is ``None`` for still water, and
-    then ``s_min == s_max`` and both levels are equal: the reader's own clamp
+    the same mirror the bake carved against — per vertex, without asking the
+    server for a raster. ``flow_dir_deg`` is ``None`` for still water, and then
+    ``s_min == s_max`` and both levels are equal: the reader's own clamp
     answers ``level_up`` everywhere without a special case.
+
+    ``axis`` is the TRUTH since W4a: the knots ``[x, z, s, level]`` in flow
+    order, one for still water and two for a straight river. The nine numbers
+    beside it stay what they were — the best single tilted plane — for a reader
+    that has not learned the polyline yet.
     """
     return {"level_up": round(profile.level_up, 3),
             "level_down": round(profile.level_down, 3),
@@ -2437,7 +2743,10 @@ def water_profile_payload(profile: WaterProfile) -> Dict[str, Any]:
             "dir_x": round(profile.dir_x, 6),
             "dir_z": round(profile.dir_z, 6),
             "s_min": round(profile.s_min, 3),
-            "s_max": round(profile.s_max, 3)}
+            "s_max": round(profile.s_max, 3),
+            "axis": [[round(kx, 3), round(kz, 3), round(ks, 3),
+                      round(level, 3)]
+                     for kx, kz, ks, level in profile.axis]}
 
 
 def with_effective_water_level(areas: Sequence[Dict[str, Any]]

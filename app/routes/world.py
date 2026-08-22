@@ -383,11 +383,13 @@ def get_terrain_areas_route() -> Dict[str, Any]:
       (rim)"), and then this is what the bake derived; set it and the two are
       equal. On a flowing water it is the MID level of the profile.
     * ``meta.water_profile`` — the whole mirror as a function of the place
-      (W1): ``{level_up, level_down, flow_dir_deg, axis_x, axis_z, dir_x,
-      dir_z, s_min, s_max}``. A river's mirror is a tilted plane, and this is
-      how a client evaluates it per vertex
-      (``heightfield.water_level_at``). Still water ships it too, with both
-      levels equal and ``flow_dir_deg: null``.
+      (W1, W4a): ``{level_up, level_down, flow_dir_deg, axis_x, axis_z, dir_x,
+      dir_z, s_min, s_max, axis}``. ``axis`` is the TRUTH — the knots
+      ``[x, z, s, level]`` of the flow polyline in flow order, one for still
+      water, two for a straight river — and the nine numbers beside it are the
+      best single tilted plane through its ends. This is how a client evaluates
+      the mirror per vertex (``heightfield.water_level_at``). Still water ships
+      it too, with both levels equal and ``flow_dir_deg: null``.
 
     Both are output only and are never written back into the authored fields.
     """
