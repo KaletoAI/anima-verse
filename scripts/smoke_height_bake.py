@@ -117,7 +117,10 @@ same function. Section [9] is the deletion proof of the fifth stage.
     Centre (140,140): d_in 20 >= 3 -> bed 6.0 - 2.0 = 4.0, NATURAL 6.0 -> 4.0.
     The EFFECTIVE level is reported for both lakes (E1b): 3.0 for the authored
     one, 6.0 for the derived one — and it is OUTPUT, never written back into
-    the authored ``meta.water_level``.
+    the authored ``meta.water_level``. Beside it rides the effective DEPTH
+    (``water_depth_effective``, W4b): the kind's default with the area's
+    override applied, 2.0 for these lakes and 1.0 for the river of [8j], which
+    is the number a renderer draws the shore's opacity from (¾ of it).
 
 [3] THE AUTO-PLATEAU (§ G5).  PLOT draws a built floor, so it stamps — no
     flag anywhere.
@@ -469,8 +472,13 @@ check("...and the PROFILE rides along additively (W1): still water, both "
       {"level_up": 3.0, "level_down": 3.0, "flow_dir_deg": None,
        "axis_x": 40.0, "axis_z": 40.0, "dir_x": 0.0, "dir_z": 0.0,
        "s_min": 0.0, "s_max": 0.0, "axis": [[40.0, 40.0, 0.0, 3.0]]})
+near("...and so does the bed DEPTH the carve used (W4b): the renderer draws "
+     "a water fully at ¾ of it and must not resolve kind-vs-area a second time",
+     payload["ta_lake_set"]["meta"]["water_depth_effective"], 2.0)
 check("a non-water area gains no effective field at all",
       "water_level_effective" in payload["ta_grass"]["meta"], False)
+check("...and no effective depth either",
+      "water_depth_effective" in payload["ta_grass"]["meta"], False)
 check("the authored fields are untouched",
       [payload["ta_lake_set"]["meta"]["water_depth_m"],
        payload["ta_lake_set"]["meta"]["shore_ramp_m"]], [2.0, 3.0])
@@ -1095,6 +1103,14 @@ check("the river ships its whole tilted mirror — the nine numbers unchanged "
        "axis": [[80.0, -30.0, -30.0, 7.4], [20.0, -30.0, 30.0, 2.6]]})
 near("...and the flat-consumer number beside it is the MID level",
      _areas["ta_river_auto"]["meta"]["water_level_effective"], 5.0)
+near("...and the effective DEPTH is the KIND's 1.0, resolved — the area never "
+     "repeated it, and no client has to look the kind up to draw the shore",
+     _areas["ta_river_auto"]["meta"]["water_depth_effective"], 1.0)
+# …and where the AREA overrides, the reported depth is the AREA's — the same
+# `water_meta` resolution the carve of [8e] used, read off the model that
+# `with_effective_water_level` ships from.
+near("an area that DOES override reports its own 4.0, not the kind's 1.0",
+     _omodel.water_depth_by_area["ta_river_deep"], 4.0)
 
 
 # ── [8k] THE FLOW AXIS IS THE DRAWN LINE (W4a) ──────────────────────────

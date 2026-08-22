@@ -2978,6 +2978,7 @@ zwei Höhen stehen:
 | `water_depth_m` | `float` 0,2…20 (Default **2,0**) | Wie tief das Bett unter dem Spiegel liegt, sobald die Ufer-Rampe durch ist |
 | `shore_ramp_m` | `float` 0…20 (Default **3,0**) | Wie weit INNERHALB des Umrisses die volle Tiefe erreicht ist; 0 = Stufe (Becken) |
 | `water_level_effective` | `float` (nur Ausgabe) | Der Spiegel, mit dem die Bake wirklich gecarvt hat. Fährt additiv in `GET /world/terrain-areas`, `GET /play/terrain` und `GET /play/terrain-layers` mit und wird **nie** in das Autorenfeld zurückgeschrieben |
+| `water_depth_effective` | `float` (nur Ausgabe) | Die TIEFE, mit der die Bake wirklich gecarvt hat: Art-Vorgabe + Flächen-Überschreibung + Klemme, schon aufgelöst. Fährt neben `water_level_effective` mit; der Renderer zieht daraus die Deckkraft (§ A16.3 Nr. 4, W4b) |
 
 Der Median-Default deckt **beide** Fälle mit einer Regel ab: auf einer GEBAUTEN
 Location hat der Plateau-Stempel das Grundstück eben gehobelt, also trägt jede
@@ -4793,6 +4794,7 @@ unverändert `meta.water_level_effective` und **zusätzlich** `meta.water_profil
   "flow_dir_deg": 270,
   "water_level_up": 7.4, "water_level_down": 2.6,
   "water_level_effective": 5.0,          // OUTPUT: das MITTELNIVEAU des Profils
+  "water_depth_effective": 1.2,          // OUTPUT: die BETT-TIEFE des Carves
   "water_profile": {                     // OUTPUT: die neun Zahlen …
     "level_up": 7.4, "level_down": 2.6, "flow_dir_deg": 270.0,
     "axis_x": 50.0, "axis_z": -30.0, "dir_x": -1.0, "dir_z": 0.0,
@@ -4811,6 +4813,18 @@ FLACHEN Client, den W2 ablöst. Wer die Wahrheit will, liest `water_profile` und
 wertet die Formel aus Nr. 2 selbst aus. Beides ist **Ausgabe** und wird nie in
 die Autorenfelder zurückgeschrieben (der Sanitizer wirft beide auf dem Weg
 hinein weg).
+
+**`water_depth_effective` ist dasselbe für das BETT** (W4b): die Tiefe, mit der
+der Carve wirklich gerechnet hat — die Vorgabe der ART, mit der Überschreibung
+der FLÄCHE und den Klemmen von Nr. 1 schon angewendet (`heightfield.water_meta`).
+Sie steht neben `water_level_effective`, weil sie dieselbe Art Antwort ist: das
+Ergebnis einer Auflösung, die ein Client sonst ein zweites Mal implementieren
+müsste. Er braucht sie, weil die **Deckkraft** einer Wasserfläche ¾ ihrer
+eigenen Tiefe ist (`client3d/src/scene/waterPlaneMath.waterOpaqueDepthM`,
+Vertex-Attribut `aWaterOpaque`): ein 1,2-m-Fluss ist ab 0,9 m Tiefe deckend, ein
+2-m-See erst ab 1,5 m — mit EINER Konstante blieb der schmale Fluss bis zur
+Mitte durchsichtig. Fehlt der Schlüssel (die Fläche hat kein gecarvtes Bett),
+rechnet der Client mit dem Vorgabe-See weiter.
 
 ### 5. Der Layer-Schnitt: Wasser trägt sein BETT
 

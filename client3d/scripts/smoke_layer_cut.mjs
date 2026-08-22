@@ -539,8 +539,10 @@ check('only WATER still gets a mesh at all — and the PROFILE is what says so',
 // (W1 § 6), which is what makes "one water source" a countable claim.
 check('the mirror builder exists exactly once',
   (build.match(/const addMirror = \(/g) ?? []).length, 1);
-check('…the painted area feeds it',
-  /addMirror\(built\.geometry, area\.kind, profile\);/.test(build) ? 1 : 0, 1);
+check('…the painted area feeds it — with its own opaque depth beside the '
+  + 'profile since W4b',
+  /addMirror\(built\.geometry, area\.kind, profile,\n\s*waterOpaqueDepthM\(area\.meta\?\.water_depth_effective\)\);/
+    .test(build) ? 1 : 0, 1);
 check('RED: and nothing else does — the zone-water loop is gone',
   /zoneWater/.test(build) ? 1 : 0, 0);
 check('…with exactly one buildWaterPlane call in the whole builder',

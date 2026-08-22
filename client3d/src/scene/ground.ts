@@ -81,6 +81,9 @@ import type { HeightTileBatch, HeightTileStatsBatch } from '../api';
 import { localToWorld } from '../game/enterLocation';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import { sanitizePolygon } from '../game/polygon';
+// The swim threshold's ONE reader (W4c) — `typeAt` hands the number on, the
+// rule that uses it lives in `walk.wadeGate`.
+import { SWIM_FROM_DEFAULT_M, swimFrom } from '../game/walk';
 import type { MapLocation, TerrainArea, TerrainPayload, TerrainScatterEntry, TerrainType,
   WorldBounds } from '../types';
 import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
@@ -103,7 +106,8 @@ import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterPlane, patchWaterShore } from './waterPlane';
-import { waterLevelAt, waterProfileOf } from './waterPlaneMath';
+import { waterLevelAt, waterOpaqueDepthM,
+  waterProfileOf } from './waterPlaneMath';
 import type { WaterProfile } from './waterPlaneMath';
 import type { UndergrowthArea } from './undergrowth';
 
@@ -2310,10 +2314,12 @@ export function createGround(): Ground {
     const waterMats = new Map<string, THREE.Material>();
     /** THE ONE MIRROR BUILDER. `geometry` is the earcut of the outline in the
      *  XZ plane; `buildWaterPlane` lifts every vertex onto the area's own
-     *  profile and hangs the flow direction on it as an attribute. */
+     *  profile and hangs the flow direction and the opaque depth on it as
+     *  attributes. `opaqueDepthM` is ¾ of the area's own bed depth (W4b), so a
+     *  shallow river is drawn opaque where a deep lake still fades. */
     const nextWater: THREE.Mesh[] = [];
     const addMirror = (geometry: THREE.BufferGeometry, kind: string,
-                       profile: WaterProfile): void => {
+                       profile: WaterProfile, opaqueDepthM: number): void => {
       let mat = waterMats.get(kind);
       if (!mat) {
         // 1 m per UV unit: the shape geometry's UVs are the world
@@ -2328,7 +2334,7 @@ export function createGround(): Ground {
         patchWaterShore(mat);
         waterMats.set(kind, mat);
       }
-      nextWater.push(buildWaterPlane(geometry, profile, mat));
+      nextWater.push(buildWaterPlane(geometry, profile, mat, opaqueDepthM));
     };
     areas.forEach((area, index) => {
       const built = builtAreas[index];
@@ -2348,7 +2354,12 @@ export function createGround(): Ground {
       // which is exactly the pair W1 collapsed into one.
       const profile = waterProfileOf(area.meta);
       if (profile) {
-        addMirror(built.geometry, area.kind, profile);
+        // …and HOW DEEP this water is, the second number the bake reports
+        // (W4b): `meta.water_depth_effective` is the kind's default with this
+        // area's override already applied, so the ¾ that make it opaque are
+        // taken from the area's own bed and not from the default lake's.
+        addMirror(built.geometry, area.kind, profile,
+                  waterOpaqueDepthM(area.meta?.water_depth_effective));
       } else {
         // Not a mirror, so the earcut is not drawn — and a geometry nobody
         // holds is a buffer nobody frees. Only the RING lives on (below); the

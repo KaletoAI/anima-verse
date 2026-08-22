@@ -1383,6 +1383,12 @@ class HeightModel:
                                Optional[Tuple[int, float, float]]] = {}
         #: area id -> the mirror PROFILE the carve used, authored or derived.
         self.water_profile_by_area: Dict[str, WaterProfile] = {}
+        #: area id -> the bed DEPTH the carve used, in metres: the kind's
+        #: default with the area's own override applied and clamped
+        #: (:func:`water_meta`). Output like the profile beside it, and shipped
+        #: as ``meta.water_depth_effective`` so a renderer never has to repeat
+        #: that resolution to know how deep this water is.
+        self.water_depth_by_area: Dict[str, float] = {}
         self.water: List[WaterStamp] = self._build_water(terrain_areas,
                                                          terrain_catalog)
         self._water_index = _BoxIndex([w[1] for w in self.water])
@@ -1558,6 +1564,7 @@ class HeightModel:
             area_id = str(area.get("id") or "")
             if area_id:
                 self.water_profile_by_area[area_id] = profile
+                self.water_depth_by_area[area_id] = meta.depth_m
         return out
 
     def water_profile_for(self, polygon: Any,
@@ -2752,7 +2759,8 @@ def water_profile_payload(profile: WaterProfile) -> Dict[str, Any]:
 def with_effective_water_level(areas: Sequence[Dict[str, Any]]
                                ) -> List[Dict[str, Any]]:
     """Copies of the painted areas carrying the bake's water OUTPUT —
-    ``meta.water_level_effective`` and ``meta.water_profile``.
+    ``meta.water_level_effective``, ``meta.water_depth_effective`` and
+    ``meta.water_profile``.
 
     THE EFFECTIVE LEVEL IS OUTPUT, not authoring (E1b). ``meta.water_level`` is
     the author's field and may be unset ("auto (rim)"); this is the number the
@@ -2769,21 +2777,35 @@ def with_effective_water_level(areas: Sequence[Dict[str, Any]]
     consumer that wants the truth reads ``water_profile`` beside it and
     evaluates :func:`water_level_at`.
 
+    ``water_depth_effective`` IS THE SAME KIND OF ANSWER FOR THE BED (W4b): the
+    depth the carve really used, i.e. the kind's default with this area's own
+    override applied and clamped. The renderer needs it because how opaque a
+    water is drawn is ¾ of its depth — a shallow river and a deep lake do not
+    fade in over the same metres — and resolving kind-versus-area a second time
+    in a client is exactly the double bookkeeping ``water_level_effective``
+    exists to prevent.
+
     Only water areas gain the keys; every other area is passed through as it is.
     Nothing is written back to the DB, and the input list is not mutated.
     """
-    profiles = world_model().water_profile_by_area
+    model = world_model()
+    profiles = model.water_profile_by_area
     if not profiles:
         return list(areas or [])
+    depths = model.water_depth_by_area
     out: List[Dict[str, Any]] = []
     for area in (areas or []):
-        profile = profiles.get(str(area.get("id") or ""))
+        area_id = str(area.get("id") or "")
+        profile = profiles.get(area_id)
         if profile is None:
             out.append(area)
             continue
         meta = dict(area.get("meta") or {})
         meta["water_level_effective"] = round(
             (profile.level_up + profile.level_down) * 0.5, 3)
+        depth = depths.get(area_id)
+        if depth is not None:
+            meta["water_depth_effective"] = round(depth, 3)
         meta["water_profile"] = water_profile_payload(profile)
         out.append({**area, "meta": meta})
     return out

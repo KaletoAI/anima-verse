@@ -26,27 +26,68 @@
  */
 
 /**
- * How deep the water has to be before it is fully drawn, in metres.
+ * The bake's own default bed depth, in metres — `heightfield.WATER_DEPTH_DEFAULT_M`.
  *
- * DERIVED FROM THE BAKE, not tasted. E1 (§ A16 addendum § 2) carves a bed with
- * `water_depth_m = 2.0` reached over `shore_ramp_m = 3.0` of ground, via
- * `smoothstep`:
+ * The ONE place this client repeats a server number, and it repeats it for one
+ * job only: to stand in when a payload carries no `meta.water_depth_effective`
+ * at all. Every area that really was baked ships its own.
+ */
+const WATER_DEPTH_DEFAULT_M = 2.0;
+
+/**
+ * How much of a water's own depth it has to reach before it is fully drawn.
  *
- *     depth(d) = 2.0 · smoothstep( d / 3.0 ),   d = metres inside the outline
+ * DERIVED FROM THE BAKE, not tasted. E1 (§ A16 addendum § 2) carves the bed of
+ * an area with `water_depth_m` metres of depth, reached over `shore_ramp_m` of
+ * ground, via `smoothstep`:
  *
- * so 1.5 m of depth is `smoothstep(t) = 0.75`, i.e. `3t² − 2t³ = 0.75`, i.e.
- * t ≈ 0.6736 and d ≈ 2.02 m. In other words: with the DEFAULT lake the water
- * fades in over the first two thirds of its shore ramp and is fully drawn by
- * the time the bed levels off — the ramp the author draws IS the ramp one sees,
- * and a shallow pond authored with `water_depth_m = 0.6` never reaches full
- * opacity at all, which is what a shallow pond looks like.
+ *     depth(d) = water_depth_m · smoothstep( d / shore_ramp_m )
+ *
+ * Asking for full opacity at ¾ of the depth therefore asks for it where
+ * `smoothstep(t) = 0.75`, i.e. `3t² − 2t³ = 0.75`, i.e. t ≈ 0.6736 — AT THE
+ * SAME FRACTION OF THE SHORE RAMP, whatever the depth is. The water fades in
+ * over the first two thirds of the ramp the author drew and is fully drawn by
+ * the time the bed levels off: for the default lake (2.0 m over 3.0 m) that is
+ * 2.02 m inside the outline, for the seeded river (1.2 m over 1.0 m) 0.674 m.
+ *
+ * THAT IS THE WHOLE OF W4b. Until then the band was the CONSTANT 1.5 m below —
+ * the ¾ of the default lake, frozen — and a 6 m wide river with two 1 m banks
+ * never reached it, so it stayed see-through to its own middle while the lake
+ * next to it looked right. The fraction is the law; the metres are the area's.
+ */
+const WATER_OPAQUE_FRACTION = 0.75;
+
+/**
+ * How deep THIS water has to be before it is fully drawn, in metres (W4b).
+ *
+ * `depthM` is the area's effective bed depth as the payload ships it
+ * (`meta.water_depth_effective`, § A16.3 — the kind's default with the area's
+ * override already applied, so this side never repeats that resolution). A
+ * value that is not a positive finite number is not a depth: the default lake
+ * answers instead, which is what every water looked like before W4b.
+ */
+export function waterOpaqueDepthM(depthM: unknown): number {
+  const raw = Number(depthM);
+  const depth = Number.isFinite(raw) && raw > 0 ? raw : WATER_DEPTH_DEFAULT_M;
+  return depth * WATER_OPAQUE_FRACTION;
+}
+
+/**
+ * The opaque depth of the DEFAULT lake, in metres — the stand-in, and nothing
+ * else.
+ *
+ * It is `waterOpaqueDepthM(2.0)` and is DERIVED FROM IT, not typed out beside
+ * it: since W4b the number the shader reads is the AREA's (the `aWaterOpaque`
+ * attribute), and this is only what a mirror without a shipped depth falls back
+ * to. 1.5 m, unchanged, so a world whose payload predates the field looks
+ * exactly as it did.
  *
  * It is also, to the centimetre, the default transition width of every other
  * ground (`edge_blend_m = 1.5`, § A17 § 4) — a lake ends over the same metres
  * a meadow ends over. That is a coincidence of two defaults and not a
  * dependency; this one is measured in DEPTH, the other in ground distance.
  */
-export const WATER_SHORE_BAND_M = 1.5;
+export const WATER_SHORE_BAND_M = waterOpaqueDepthM(WATER_DEPTH_DEFAULT_M);
 
 /** How deep the foam reaches, in metres. Half a metre is roughly where a
  *  wading figure's shin is (`move_sink_m` of the water kinds is a knee), so the
@@ -77,7 +118,8 @@ function smoothstep01(t: number): number {
 }
 
 /**
- * How much of the water is drawn over a bed `depthM` under the mirror, 0…1.
+ * How much of the water is drawn over a bed `depthM` under the mirror, 0…1,
+ * for a water that is fully drawn at `opaqueDepthM` (W4b).
  *
  * `depthM ≤ 0` is not water at all — the bed is at or above the mirror, which
  * happens outside the carved outline and nowhere inside it (the E1 invariant).
@@ -85,7 +127,9 @@ function smoothstep01(t: number): number {
  * the one band where the plane and the terrain are coplanar, and a fragment
  * that takes part in the depth test there flickers however small its alpha is.
  *
- * Hand values with the 1.5 m band, `t = depth / 1.5`, `3t² − 2t³`:
+ * THE BAND IS A PARAMETER, not a constant any more: it is ¾ of the AREA's own
+ * bed depth (`waterOpaqueDepthM`), handed to the shader per vertex. Hand values
+ * for the default lake (depth 2.0 -> band 1.5), `t = depth / 1.5`, `3t² − 2t³`:
  *
  *     0.0   -> t = 0        -> 0            (discarded, see above)
  *     0.15  -> t = 0.1      -> 0.028
@@ -95,10 +139,20 @@ function smoothstep01(t: number): number {
  *     1.125 -> t = 0.75     -> 0.84375
  *     1.5   -> t = 1        -> 1
  *     2.0   -> clamped      -> 1
+ *
+ * …and for the seeded river (depth 1.2 -> band 0.9), the same six fractions of
+ * the band, i.e. the same six answers 0.6 times as deep:
+ *
+ *     0.09  -> t = 0.1      -> 0.028
+ *     0.18  -> t = 0.2      -> 0.104
+ *     0.225 -> t = 0.25     -> 0.15625
+ *     0.45  -> t = 0.5      -> 0.5
+ *     0.675 -> t = 0.75     -> 0.84375
+ *     0.9   -> t = 1        -> 1
  */
-export function waterShoreAlpha(depthM: number): number {
+export function waterShoreAlpha(depthM: number, opaqueDepthM: number): number {
   if (!Number.isFinite(depthM) || depthM <= 0) return 0;
-  return smoothstep01(depthM / WATER_SHORE_BAND_M);
+  return smoothstep01(depthM / opaqueDepthM);
 }
 
 /**
@@ -122,31 +176,52 @@ export function waterFoam(depthM: number): number {
  * The alpha a water fragment really carries: the shore ramp plus what the foam
  * adds back at the rim, clamped.
  *
+ * With the default lake's band (1.5 m):
+ *
  *     depth 0.0  -> 0     + 1·0.15      = 0.15
  *     depth 0.15 -> 0.028 + 0.84375·0.15 = 0.1546875
  *     depth 0.3  -> 0.104 + 0.5·0.15    = 0.179
  *     depth 0.6  -> 0.352 + 0           = 0.352
  *     depth 1.5  -> 1     + 0           = 1
+ *
+ * The FOAM does not scale with the band (W4b): it is half a metre of real
+ * water at a real rim, the same half metre in a pond and in a lake.
  */
-export function waterAlpha(depthM: number): number {
-  const a = waterShoreAlpha(depthM) + waterFoam(depthM) * WATER_FOAM_ALPHA;
+export function waterAlpha(depthM: number, opaqueDepthM: number): number {
+  const a = waterShoreAlpha(depthM, opaqueDepthM)
+    + waterFoam(depthM) * WATER_FOAM_ALPHA;
   return a <= 0 ? 0 : a >= 1 ? 1 : a;
 }
 
 /**
- * THE MIRROR OF ONE WATER AREA AS A FUNCTION OF THE PLACE — the nine numbers
- * of `meta.water_profile` (W1, § A16.3), read straight out of the payload.
+ * One knot of the flow axis: `[x, z, s, level]` — the world position, the arc
+ * length from the FIRST knot, and the mirror height there
+ * (`heightfield.WaterKnot`, § A16.3).
+ */
+export type WaterKnot = [number, number, number, number];
+
+/**
+ * THE MIRROR OF ONE WATER AREA AS A FUNCTION OF THE PLACE — `meta.water_profile`
+ * (W1, polyline since W4a, § A16.3), read straight out of the payload.
  *
- * A lake is one number; a river is a plane tilted along its own flow. Both are
- * this. Without a `flow_dir_deg` the two ends carry the SAME number, `s_min`
- * and `s_max` are both 0, and `waterLevelAt` answers that number everywhere —
- * the constant mirror of every round before W1, reached by the same arithmetic
- * instead of by a branch beside it.
+ * THE TRUTH IS `axis`, the knots. A lake is ONE knot, a straight river TWO, a
+ * river drawn with the line tool one per drawn point — the old laws are the
+ * degenerate cases of the new one and `waterLevelAt` is one code path for all
+ * three. A meander is why: projected onto a single straight axis, the two ends
+ * of a 180° loop land on the same axis point, so the mirror of a bend could not
+ * fall at all.
+ *
+ * The nine numbers beside it are the same mirror as ONE TILTED PLANE — what a
+ * reader that never heard of the polyline gets. THIS client is not one of them
+ * any more (nothing below reads them), and they are kept in the type because
+ * the type is the payload, verbatim.
  *
  * The field names are the server's, verbatim (`heightfield.WaterProfile`): a
  * renamed twin is how the two halves of one formula start to drift.
  */
 export interface WaterProfile {
+  /** the knots in FLOW order, at least one — the axis itself */
+  axis: WaterKnot[];
   /** world y at the UPSTREAM end of the axis span, in metres */
   level_up: number;
   /** world y at the DOWNSTREAM end */
@@ -174,6 +249,30 @@ function finite(raw: unknown): number | null {
 }
 
 /**
+ * The knots of `raw`, or `null` where they are not a usable axis (W4a).
+ *
+ * A list of at least one quadruple of finite numbers, and nothing else. The
+ * axis is what the whole mirror is evaluated on since W4a, so a payload whose
+ * axis is broken has NO mirror — the same rule the nine numbers already
+ * followed, for the same reason: one NaN in a vertex position and the entire
+ * plane leaves the frustum.
+ */
+function axisOf(raw: unknown): WaterKnot[] | null {
+  if (!Array.isArray(raw) || raw.length < 1) return null;
+  const out: WaterKnot[] = [];
+  for (const knot of raw) {
+    if (!Array.isArray(knot) || knot.length < 4) return null;
+    const x = finite(knot[0]);
+    const z = finite(knot[1]);
+    const s = finite(knot[2]);
+    const level = finite(knot[3]);
+    if (x === null || z === null || s === null || level === null) return null;
+    out.push([x, z, s, level]);
+  }
+  return out;
+}
+
+/**
  * The PROFILE of a painted area, or `null` where there is none.
  *
  * `meta.water_profile` is the SERVER's own answer (W1 § 4): the very function
@@ -191,14 +290,17 @@ function finite(raw: unknown): number | null {
  * over its own bed at one end and 2.4 m under it at the other.
  *
  * Every one of the nine has to be a finite number, `flow_dir_deg` excepted —
- * `null` there is the shape of still water. One NaN in a vertex position and
- * the whole plane leaves the frustum, so a broken profile draws nothing.
+ * `null` there is the shape of still water — AND SO DOES EVERY KNOT of the
+ * `axis` (W4a), which is the part this client actually evaluates. One NaN in a
+ * vertex position and the whole plane leaves the frustum, so a broken profile
+ * draws nothing.
  */
 export function waterProfileOf(meta: Record<string, unknown> | null | undefined
 ): WaterProfile | null {
   const raw = meta?.water_profile;
   if (!raw || typeof raw !== 'object') return null;
   const p = raw as Record<string, unknown>;
+  const axis = axisOf(p.axis);
   const level_up = finite(p.level_up);
   const level_down = finite(p.level_down);
   const axis_x = finite(p.axis_x);
@@ -207,59 +309,133 @@ export function waterProfileOf(meta: Record<string, unknown> | null | undefined
   const dir_z = finite(p.dir_z);
   const s_min = finite(p.s_min);
   const s_max = finite(p.s_max);
-  if (level_up === null || level_down === null || axis_x === null
-      || axis_z === null || dir_x === null || dir_z === null
+  if (axis === null || level_up === null || level_down === null
+      || axis_x === null || axis_z === null || dir_x === null || dir_z === null
       || s_min === null || s_max === null) return null;
+  // In the payload's own key order, so a smoke may compare the whole object
+  // against the JSON it came from.
   return { level_up, level_down, flow_dir_deg: finite(p.flow_dir_deg),
-    axis_x, axis_z, dir_x, dir_z, s_min, s_max };
+    axis_x, axis_z, dir_x, dir_z, s_min, s_max, axis };
+}
+
+/**
+ * The NEAREST POINT on the axis, as `[s, segment]` — the twin of
+ * `heightfield._axis_s_at`, with the winning segment kept beside its arc
+ * coordinate so the flow can be read off the same projection.
+ *
+ * Every segment is projected onto WITH A CLAMP to its own ends, and the
+ * shortest distance wins; the answer is that segment's `s` interpolated by the
+ * projection. The candidate the loop starts from is the FIRST KNOT — the whole
+ * answer for a one-knot (still) axis, and dominated by the first segment for
+ * every longer one.
+ *
+ * THE COMPARISON IS STRICT (`<`), exactly as on the server, and that decides
+ * the ties: a point sitting ON a knot is at distance 0 from both of its legs,
+ * and the earlier — the UPSTREAM — leg keeps it. The level is the same number
+ * either way; the flow tangent is not, and this is where that choice is made.
+ */
+function nearestOnAxis(axis: WaterKnot[], x: number, z: number
+): [number, number] {
+  let bestS = axis[0][2];
+  let bestD2 = (x - axis[0][0]) * (x - axis[0][0])
+             + (z - axis[0][1]) * (z - axis[0][1]);
+  let bestSeg = 0;
+  for (let i = 1; i < axis.length; i += 1) {
+    const [ax, az, aS] = axis[i - 1];
+    const [bx, bz, bS] = axis[i];
+    const dx = bx - ax;
+    const dz = bz - az;
+    const seg = dx * dx + dz * dz;
+    let u = seg <= 1e-18 ? 0 : ((x - ax) * dx + (z - az) * dz) / seg;
+    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    const px = ax + dx * u;
+    const pz = az + dz * u;
+    const d2 = (x - px) * (x - px) + (z - pz) * (z - pz);
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestS = aS + (bS - aS) * u;
+      bestSeg = i - 1;
+    }
+  }
+  return [bestS, bestSeg];
+}
+
+/**
+ * The level of the axis at arc coordinate `s`, linear between the knots — the
+ * twin of `heightfield._axis_level_at`.
+ *
+ * CLAMPED AT BOTH ENDS, and that matters: the knots sit where the levels were
+ * measured, and a point past the last one must not read past the level that
+ * measurement stands for. `s <= axis[0][2]` answers the first knot EXACTLY and
+ * `s >= axis[last][2]` the last one EXACTLY — not a lerp with t = 0 or 1 — so
+ * the ends of the mesh sit on the authored numbers to the last bit. A one-knot
+ * axis answers its own level here, because its `s` is both the first and the
+ * last.
+ */
+function axisLevelAt(axis: WaterKnot[], s: number): number {
+  if (s <= axis[0][2]) return axis[0][3];
+  const last = axis[axis.length - 1];
+  if (s >= last[2]) return last[3];
+  for (let i = 1; i < axis.length; i += 1) {
+    const [, , aS, aLevel] = axis[i - 1];
+    const [, , bS, bLevel] = axis[i];
+    if (s <= bS) {
+      const span = bS - aS;
+      if (span <= 1e-12) return bLevel;
+      return aLevel + (bLevel - aLevel) * ((s - aS) / span);
+    }
+  }
+  return last[3];
 }
 
 /**
  * THE MIRROR AT ONE POINT — the pure TS twin of `heightfield.water_level_at`,
- * line for line:
+ * line for line, and ONE code path since W4a:
  *
- *     s     = (x − axis_x)·dir_x + (z − axis_z)·dir_z
- *     t     = clamp((s − s_min) / (s_max − s_min), 0, 1)
- *     level = level_up + (level_down − level_up)·t
+ *     s     = arc coordinate of the NEAREST point on the polyline
+ *             (each segment projected with a clamp, shortest distance wins)
+ *     level = linear between the two knots s falls between, clamped at both
+ *             ends of the line
  *
- * STILL WATER FALLS OUT OF IT: with no flow direction the span is empty and
- * both ends are the same number, so the answer is that number everywhere.
- *
- * THE CLAMP IS LOAD-BEARING at the very ends. A polygon is only extreme at its
- * rim, and a point exactly on it must not read past the level the rim median
- * was taken for — `t <= 0` answers `level_up` and `t >= 1` answers
- * `level_down` EXACTLY, not `level_up + (level_down − level_up)·1`, so the two
- * ends of the mesh sit on the two authored numbers to the last bit.
+ * BOTH OLD LAWS FALL OUT OF IT, no branch beside them. Still water is ONE knot,
+ * so the nearest point is that knot and the clamp answers its level everywhere.
+ * A straight river is TWO knots at the axis extremes, so the projection onto
+ * the single segment IS the `clamp((s − s_min)/(s_max − s_min), 0, 1)` of W1 —
+ * which is why the nine numbers are no longer read here at all: they say the
+ * same thing, less well.
  */
 export function waterLevelAt(profile: WaterProfile, x: number, z: number
 ): number {
-  const span = profile.s_max - profile.s_min;
-  if (profile.flow_dir_deg === null || span <= 1e-9) return profile.level_up;
-  const s = (x - profile.axis_x) * profile.dir_x
-          + (z - profile.axis_z) * profile.dir_z;
-  const t = (s - profile.s_min) / span;
-  if (t <= 0) return profile.level_up;
-  if (t >= 1) return profile.level_down;
-  return profile.level_up + (profile.level_down - profile.level_up) * t;
+  return axisLevelAt(profile.axis, nearestOnAxis(profile.axis, x, z)[0]);
 }
 
 /**
- * The DOWNSTREAM unit vector the ripple scrolls along, or (0, 0) for still
- * water — the one piece of the profile the SHADER needs.
+ * The DOWNSTREAM unit vector AT ONE POINT — the tangent of the nearest segment,
+ * or (0, 0) for still water. The one piece of the profile the SHADER needs.
  *
- * It is `(dir_x, dir_z)` and nothing derived: the server already spells the
- * bearing as `(sin θ, cos θ)` (§ A1.1) and a second `sin`/`cos` here would be
- * a second convention waiting to be spelled the other way round. What this
- * adds is the ZERO: for still water `flow_dir_deg` is `null` and the direction
- * is meaningless, and (0, 0) is what the shader reads as "no flow, keep the
- * lake's own crossing drift" — today's look, unchanged.
+ * IT IS LOCAL SINCE W4a, and that is the whole of the finding: a river bends,
+ * so its ripples have to bend with it. `waterFlowAt` is evaluated per VERTEX
+ * (`waterPlane.buildWaterPlane`), the interpolator carries it across the
+ * triangles, and the drift turns through the meander instead of pointing one
+ * way over a whole hairpin.
+ *
+ * The knots are already in FLOW order — the server reverses them for
+ * `flow_along: "reverse"` — so `b − a` is downstream and no bearing is read.
+ * A ONE-KNOT axis has no segment and answers (0, 0), which the ripple shader
+ * spells "no flow, keep the lake's own crossing drift": today's look for every
+ * still water, unchanged. So does a zero-length segment, which cannot name a
+ * direction at all.
  */
-export function waterFlowVector(profile: WaterProfile | null | undefined
-): [number, number] {
-  if (!profile || profile.flow_dir_deg === null) return [0, 0];
-  const len = Math.hypot(profile.dir_x, profile.dir_z);
+export function waterFlowAt(profile: WaterProfile | null | undefined,
+                            x: number, z: number): [number, number] {
+  const axis = profile?.axis;
+  if (!axis || axis.length < 2) return [0, 0];
+  const seg = nearestOnAxis(axis, x, z)[1];
+  const dx = axis[seg + 1][0] - axis[seg][0];
+  const dz = axis[seg + 1][1] - axis[seg][1];
+  const len = Math.hypot(dx, dz);
   if (!(len > 1e-9)) return [0, 0];
-  return [profile.dir_x / len, profile.dir_z / len];
+  return [dx / len, dz / len];
 }
 
 /**
@@ -272,14 +448,22 @@ export function waterFlowVector(profile: WaterProfile | null | undefined
  * of ITS OWN place, so a river's mesh is the tilted plane its bed was carved
  * against and a lake's mesh comes out flat.
  *
- * NO SUBDIVISION IS NEEDED and none is done. The profile is LINEAR in the
- * plane by construction (a clamped linear ramp along one axis), and the
- * clamped part is linear too — flat. A ruled surface through the outline's
- * vertices therefore reproduces it exactly wherever the polygon is convex, and
- * where it is not, the earcut's own interior edges are the ruling. The only
- * places the interpolation could deviate are inside a triangle that spans the
- * clamp KINK at `s_min`/`s_max`, and there is none: those are the polygon's own
- * extremes, so no interior point of the polygon lies past them.
+ * NO SUBDIVISION IS DONE, and for a STRAIGHT axis none is needed: the profile
+ * is LINEAR in the plane by construction (a clamped linear ramp along one
+ * axis), and the clamped part is linear too — flat. A ruled surface through the
+ * outline's vertices therefore reproduces it exactly wherever the polygon is
+ * convex, and where it is not, the earcut's own interior edges are the ruling.
+ * The only places the interpolation could deviate are inside a triangle that
+ * spans the clamp KINK at `s_min`/`s_max`, and there is none: those are the
+ * polygon's own extremes, so no interior point of the polygon lies past them.
+ *
+ * A DRAWN AXIS (W4a) is piecewise linear, and so is what this writes: exact at
+ * every vertex, and exact between them wherever the outline itself is cut at
+ * the knots — which a ribbon drawn with the line tool is, its joints being the
+ * knots. A wide MASK polygon over a bent axis gets the ruling between its own
+ * corners instead, i.e. the bend is smoothed over in the mirror's surface while
+ * the level a swimmer, the carve and the shore read (`waterLevelAt`) stays
+ * exact everywhere. Subdividing such a mask is a question for a later round.
  *
  * FOR A LAKE THIS IS BIT-IDENTICAL TO THE FLAT PLANE OF BEFORE. A constant
  * profile answers `level_up` for every vertex, so the mesh is the same
@@ -307,6 +491,16 @@ export function liftToWaterProfile(positions: { length: number;
  * `vWaterPlane.y` interpolates across the ruled surface, so `wsDepth` is the
  * LOCAL level minus the ground, at every pixel, for free.
  *
+ * `vWaterOpaque` IS THE SECOND THING THE GEOMETRY CARRIES (W4b): the metres of
+ * depth at which THIS water is fully drawn, ¾ of its own bed depth
+ * (`waterOpaqueDepthM`), written into every vertex as `aWaterOpaque`. It used
+ * to be the uniform `uShoreBandM` holding the one constant 1.5 m — the ¾ of the
+ * DEFAULT lake — which is why a 6 m river with two 1 m banks stayed
+ * see-through to its middle: it never reached a depth the lake's number called
+ * opaque. An attribute and not a uniform for the reason the flow already is
+ * one: it belongs to the AREA while the material belongs to the KIND, and one
+ * material has to serve every lake and river of that kind.
+ *
  * `tlodHeight(p, 0.0)` asks for the FINEST level: `tlodLevel` clamps
  * `nodeStep / baseStep` at 1, so 0 selects mip 0. The drawn bed under a distant
  * lake is coarser than that, and the difference is deliberately ignored — the
@@ -317,7 +511,7 @@ export function liftToWaterProfile(positions: { length: number;
 export function waterShoreGlsl(): string {
   return `
 varying vec3 vWaterPlane;
-uniform float uShoreBandM;
+varying float vWaterOpaque;
 uniform float uFoamBandM;
 uniform float uFoamStrength;
 uniform float uFoamAlpha;
@@ -407,7 +601,7 @@ export function waterShoreBody(): string {
     if ( wsDepth <= 0.0 ) discard;
     float wsFoam = 1.0 - wsSmooth( wsDepth / uFoamBandM );
     outgoingLight = mix( outgoingLight, vec3( 1.0 ), wsFoam * uFoamStrength );
-    diffuseColor.a *= clamp( wsSmooth( wsDepth / uShoreBandM )
+    diffuseColor.a *= clamp( wsSmooth( wsDepth / vWaterOpaque )
                              + wsFoam * uFoamAlpha, 0.0, 1.0 )
                     * clamp( wsDepth / wsEdge, 0.0, 1.0 );
   }
