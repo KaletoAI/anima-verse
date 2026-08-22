@@ -397,6 +397,46 @@
  *      4 096 that is allocated once and never replaced.
  *
  * ============================================================================
+ * [14] THE CEILING COARSENS, IT DOES NOT TRUNCATE — `selectLodFitted`
+ * ============================================================================
+ * [13](uu) sweeps two SMALL worlds with a gentle error list and finds a few
+ * hundred pieces, which is what made `MAX_NODES` read like a guard against a
+ * camera nobody has. The live world is neither small nor gentle: 16.6 × 14.4 km
+ * (`world_bounds ± ground.BASE_MARGIN_M`) and a per-tile error bound of
+ * 2…4.4 m at EVERY mip level, because the painted micro-relief (grass 1.0 m,
+ * deep forest 1.5 m) is structure at the 2 m lattice itself — decimating it
+ * once already costs its full amplitude, so `err[k]` barely grows with k
+ * instead of halving with it. The screen-space rule then widens `lodRange[0]`
+ * from 128 m to `1.9913 · 1303.7 / 2` = 1 298 m and the FINEST level is drawn
+ * over a disk of that radius — 1 538 m at the 1 280 px viewport the reported
+ * reading was taken at (`pixelScale` = 1 280 / (2 · tan 22.5°) = 1 545.1,
+ * so `1.9913 · 1545.1 / 2` = 1 538.4 m).
+ *
+ * (vv) THE FIXTURE IS THAT WORLD, by its numbers and not by a fetch: the frame,
+ *      the error list read off the server's own `heightfield.tile_stats`, and
+ *      a flat box for every node (the live field spans 5.4 m, so a box is a
+ *      rounding error against 1 538 m of ring). At a 1 280 px viewport it
+ *      selects 2 952 pieces — three digits from the ceiling, and the number
+ *      the isolation panel reported (2 973) to within the camera's own yaw.
+ * (ww) THE RED PROBE: the same fixture at 2 160 px. `selectLodNodes` alone
+ *      returns exactly `MAX_NODES` = 4 096 pieces, and a 256 m lattice over the
+ *      frame finds hundreds of samples no piece owns — ground that was never
+ *      emitted, because the depth-first walk stopped where the cap was reached.
+ *      From a camera east and south of the origin — (3 000, 3 000), where the
+ *      roots around it are ones the row-major walk reaches LATE — 1 083 of
+ *      3 640 frame samples are uncovered and the nearest of them is 240 m
+ *      away, i.e. inside the 520 m haze and in plain view.
+ * (xx) THE GUARD: `selectLodFitted` on the same camera halves the rings until
+ *      the set fits — under the cap, and the 256 m lattice finds NO uncovered
+ *      sample, on the frame and inside the haze alike. Halving is uniform, so
+ *      the ranges stay monotone and `λ(range[i]) = i + 1` still holds exactly:
+ *      the crack argument of [8]/[12] is untouched by the coarsening.
+ * (yy) IT IS A NO-OP WHERE IT FITS: the flat world of [13] and the compass
+ *      world of [9] come back with `coarsenings` 0 and exactly the list
+ *      `selectLodNodes` returns, so the guard costs nothing where nothing is
+ *      wrong.
+ *
+ * ============================================================================
  * [7] THE ANALYTIC CLICK — `rayGroundHit`
  * ============================================================================
  * The ground under the pointer is solved against the FIELD, not raycast
@@ -727,7 +767,7 @@ function checkEq(label, actual, expected) {
 const { lod, height } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX_PIXEL_ERROR,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
-  morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl,
+  morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl, selectLodFitted,
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
 
@@ -2277,6 +2317,157 @@ checkAbove('(uu) camera settings swept over the flat 7 km world', flatFrames, 40
 checkBelow('…and the largest selection any of them produced', flatMax, MAX_NODES);
 console.log(`       (flat world at most ${flatMax} pieces, compass world at most `
   + `${maxSweepNodes}, buffer ${MAX_NODES})`);
+
+// ── [14] the ceiling coarsens, it does not truncate ─────────────────────────
+console.log('\n[14] the node ceiling coarsens the rings instead of dropping the tail');
+
+/**
+ * THE LIVE WORLD, by its numbers. `world_bounds` comes from
+ * `core/world_ops.py` (every placed location's outline and every painted
+ * polygon), the ground plate grows it by `ground.BASE_MARGIN_M` = 60 m, and
+ * the error list is the per-level MAXIMUM of `heightfield.tile_stats` over the
+ * tiles the client really holds — the 64-tile world-wide `index_stats_payload`
+ * block plus the 25 tiles inside the 560 m load radius. Baked off a COPY of
+ * `worlds/Anima Divide/world.db` through `heightfield.rasterize_tile` /
+ * `tile_stats`, i.e. the server's own arithmetic and not a fetch.
+ *
+ * The boxes are FLAT here on purpose: that world's whole relief spans 5.4 m
+ * (-2.0 … 3.4), which against a 1 538 m ring is a rounding error — so the
+ * count below is a property of the RINGS and cannot be blamed on a hill.
+ */
+const LIVE_BOUNDS = { min_x: -7907.36, min_z: -6505.66, max_x: 8544.28, max_z: 7726.95 };
+const LIVE_MARGIN_M = 60;                       // ground.BASE_MARGIN_M
+const LIVE_EXT = [LIVE_BOUNDS.min_x - LIVE_MARGIN_M, LIVE_BOUNDS.min_z - LIVE_MARGIN_M,
+                  LIVE_BOUNDS.max_x + LIVE_MARGIN_M, LIVE_BOUNDS.max_z + LIVE_MARGIN_M];
+const LIVE_ERR = [0, 1.9913, 2.945, 3.7229, 3.5949, 4.3741];
+const liveFlat = () => ({ min: 0, max: 0 });
+const liveOpts = (eye, px) => ({
+  x0: LIVE_EXT[0], z0: LIVE_EXT[1], x1: LIVE_EXT[2], z1: LIVE_EXT[3],
+  leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+  camX: eye[0], camY: eye[1], camZ: eye[2], boundsOf: liveFlat,
+  levelErrorM: LIVE_ERR, pixelScale: px / (2 * Math.tan((FOV_DEG * Math.PI) / 360)),
+});
+/** The engine's camera law again, about an arbitrary point of the live frame. */
+const liveEye = (yawDeg, dist, tx, tz) => {
+  const zoomK = Math.min(Math.max((dist - 0.8) / (150 - 0.8), 0), 1);
+  const pitch = (18 + (62 - 18) * Math.sqrt(zoomK)) * Math.PI / 180;
+  const a = (yawDeg * Math.PI) / 180;
+  return [tx + Math.sin(a) * Math.cos(pitch) * dist, Math.sin(pitch) * dist,
+          tz + Math.cos(a) * Math.cos(pitch) * dist];
+};
+/**
+ * Ground the selection does not own — a 256 m lattice over the WHOLE frame,
+ * because the shipped rule culls nothing and therefore owes every square of
+ * it. The haze half is reported apart: an uncovered sample nearer than 520 m
+ * is not a coarser picture, it is sky.
+ */
+function uncovered(picked, eye) {
+  let miss = 0;
+  let tested = 0;
+  let nearMiss = 0;
+  let nearTested = 0;
+  let nearest = Infinity;
+  for (let z = LIVE_EXT[1] + 64; z < LIVE_EXT[3]; z += 256) {
+    for (let x = LIVE_EXT[0] + 64; x < LIVE_EXT[2]; x += 256) {
+      tested += 1;
+      let owned = false;
+      for (const n of picked) {
+        if (x >= n.x && x <= n.x + n.size && z >= n.z && z <= n.z + n.size) {
+          owned = true;
+          break;
+        }
+      }
+      const d = Math.hypot(x - eye[0], z - eye[2]);
+      if (d <= HAZE_M) {
+        nearTested += 1;
+        if (!owned) { nearMiss += 1; nearest = Math.min(nearest, d); }
+      }
+      if (!owned) miss += 1;
+    }
+  }
+  return { miss, tested, nearMiss, nearTested, nearest };
+}
+
+// (vv) the reported reading, reproduced.
+const liveCam = liveEye(45, 12, REPORTED_X, REPORTED_Z);
+const liveRanges = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, LIVE_ERR,
+                             1280 / (2 * Math.tan((FOV_DEG * Math.PI) / 360)));
+check('(vv) the error rule widens lodRange[0] to, metres',
+  Math.round(liveRanges[0] * 10) / 10, 1538.4);
+checkAbove('…which is this many times the geometric 128 m',
+  Math.round(liveRanges[0] / MIN_LOD_DISTANCE_M), 11);
+const live1280 = selectLodFitted(liveOpts(liveCam, 1280));
+check('(vv) pieces at Haus von Kai, 1 280 px', live1280.nodes.length, 2952);
+check('…and the rings did not have to be coarsened for it', live1280.coarsenings, 0);
+check('…finest-level (64 m) pieces among them',
+  live1280.nodes.filter((n) => n.level === 0).length, 1914);
+
+// (ww) RED — the same world at a 2 160 px drawing buffer, WITHOUT the guard.
+const redCam = liveEye(45, 12, 3000, 3000);
+const redRaw = selectLodNodes(liveOpts(redCam, 2160));
+const redCover = uncovered(redRaw, redCam);
+check('(ww) RED: selectLodNodes alone stops at exactly the ceiling',
+  redRaw.length, MAX_NODES);
+checkAbove('…RED: frame samples it left with no ground at all',
+  redCover.miss, 1000);
+check(`…RED: of ${redCover.nearTested} samples inside the haze, uncovered`,
+  redCover.nearMiss, 6);
+checkBelow('…RED: and the nearest of those stood this far from the camera, m',
+  Math.round(redCover.nearest), HAZE_M);
+
+// (xx) the guard on the very same camera.
+const redFit = selectLodFitted(liveOpts(redCam, 2160));
+checkBelow('(xx) selectLodFitted stays under the ceiling', redFit.nodes.length, MAX_NODES);
+check('…by halving the rings this many times', redFit.coarsenings, 1);
+const fitCover = uncovered(redFit.nodes, redCam);
+check(`…and of the ${fitCover.tested} frame samples, uncovered`, fitCover.miss, 0);
+check('…inside the haze, uncovered', fitCover.nearMiss, 0);
+/**
+ * HALVING IS A PURE RESCALING OF λ, which is what makes it safe for the seam.
+ * `lodLambda` anchors each ramp inside its own ring — `s_i = range[i−1] +
+ * MORPH_START · (range[i] − range[i−1])` — so halving every range halves every
+ * `s_i` with it and `(d − s/2)/((r − s)/2) = (2d − s)/(r − s)`: the coarsened
+ * λ at d is the honest λ at 2d, EXACTLY. Nothing about the morph's shape
+ * changes, only how far out it happens, so the arguments of [8] and [12] carry
+ * over unchanged. (The identity λ(range[i]) = i + 1 is NOT asserted here: this
+ * world's error list collapses two rings to zero width — range[2] = range[3]
+ * and range[4] = range[5] — and `lodLambda` steps over such a ring by design,
+ * so λ skips a level there. Nothing is ever emitted at a zero-width level.)
+ */
+const honestRedRanges = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, LIVE_ERR,
+                                  2160 / (2 * Math.tan((FOV_DEG * Math.PI) / 360)));
+checkEq('…the coarsened rings are still monotone',
+  redFit.ranges.every((r, i) => i === 0 || r >= redFit.ranges[i - 1]), true);
+checkEq('…and are exactly the honest rings halved',
+  redFit.ranges.every((r, i) => Math.abs(r - honestRedRanges[i] / 2) < 1e-9), true);
+let lamOff = 0;
+for (let d = 0; d <= 4000; d += 7) {
+  const a = lodLambda(d, redFit.ranges);
+  const b = lodLambda(2 * d, honestRedRanges);
+  lamOff = Math.max(lamOff, Math.abs(a - b));
+}
+check('…so the coarsened λ(d) IS the honest λ(2d), worst deviation', lamOff, 0, 1e-12);
+console.log(`       (${redRaw.length} truncated pieces, ${redCover.miss}/${redCover.tested} `
+  + `frame samples with no ground -> ${redFit.nodes.length} coarsened pieces, 0 uncovered)`);
+
+// (yy) …and it is a no-op wherever the honest rings already fit.
+const flatFit = selectLodFitted({
+  x0: FLAT_EXT[0], z0: FLAT_EXT[1], x1: FLAT_EXT[2], z1: FLAT_EXT[3],
+  leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+  camX: flatCam[0], camY: flatCam[1], camZ: flatCam[2],
+  boundsOf: flatLevel, pixelScale: camPixelScale,
+});
+check('(yy) the level world: coarsenings', flatFit.coarsenings, 0);
+check('…and the very list selectLodNodes returns', flatFit.nodes.length, nowRings.length);
+const compassOpts = {
+  x0: CX0, z0: CZ0, x1: CX1, z1: CZ1,
+  leafM: LEAF_M, levels: MAX_LOD_LEVELS, minLodDistance: MIN_LOD_DISTANCE_M,
+  camX: REPORTED_X, camY: CH(REPORTED_X, REPORTED_Z) + 14, camZ: REPORTED_Z,
+  boundsOf: honest, levelErrorM: CERR, pixelScale: camPixelScale,
+};
+const compassFit = selectLodFitted(compassOpts);
+check('…the compass world: coarsenings', compassFit.coarsenings, 0);
+check('…and its list too', compassFit.nodes.length, selectLodNodes(compassOpts).length);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

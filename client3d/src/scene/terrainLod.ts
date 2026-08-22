@@ -279,6 +279,14 @@ const FALLBACK_BASE_STEP_M = 2;
  * three worlds and reports the maximum it reaches. Without a ceiling a
  * pathological camera (inside the ground, at the origin of a 100 km world)
  * would walk the whole quadtree.
+ *
+ * REACHING IT IS NO LONGER A TRUNCATION (2026-08-22, second finding). The
+ * live 16.6 km world reaches it at a 1 530 px viewport, and what the
+ * depth-first walk had not got to yet was ground nobody drew — 61 % of the
+ * frame at 2 160 px, the nearest missing square 240 m from the camera. Every
+ * selection now goes through `selectLodFitted`, which COARSENS the rings until
+ * the set fits instead of dropping its tail; the early return inside
+ * `selectLodNodes` is what tells it the cap was reached.
  */
 export const MAX_NODES = 4096;
 
@@ -470,6 +478,19 @@ export interface LodSelectOpts {
   /** Pixels per metre of vertical error at one metre of distance —
    *  `viewportHeightPx / (2 · tan(fovY/2))`. 0 switches the error rule off. */
   pixelScale?: number;
+  /**
+   * The ring boundaries to select against, metres — normally left out, and
+   * then `lodRanges` is asked for them.
+   *
+   * IT EXISTS SO THE SELECTION AND THE SHADER CANNOT DESCRIBE TWO WORLDS.
+   * `selectLodFitted` may COARSEN the rings to stay under `MAX_NODES`, and the
+   * per-vertex morph reads its own λ out of `uTlodRange`: if the renderer
+   * uploaded the honest ranges while the selection had used coarsened ones,
+   * every piece would morph against a ring it was not chosen for — the exact
+   * disagreement `lodLambda` exists to rule out. So the fitted ranges are
+   * handed BACK to the caller and handed IN here, one array for both.
+   */
+  ranges?: readonly number[];
 }
 
 /**
@@ -663,7 +684,8 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
   const leaf = o.leafM;
   if (!(leaf > 0) || !(o.x1 > o.x0) || !(o.z1 > o.z0)) return out;
   const top = levels - 1;
-  const ranges = lodRanges(o.minLodDistance, levels, o.levelErrorM, o.pixelScale);
+  const ranges = o.ranges
+    ?? lodRanges(o.minLodDistance, levels, o.levelErrorM, o.pixelScale);
 
   /** A square's box distance, or `null` when it is off the world frame — the
    *  ONE reason a square is dropped since 2026-08-22. Computed ONCE per square
@@ -722,6 +744,85 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
     }
   }
   return out;
+}
+
+/** What `selectLodFitted` answers: the pieces, the rings they were chosen
+ *  against, and how many times those rings had to be halved to fit. */
+export interface LodSelection {
+  nodes: LodNode[];
+  /** The rings the selection really used — what the shader must morph against
+   *  (`LodSelectOpts.ranges`). */
+  ranges: number[];
+  /** 0 = the honest rings fitted. n > 0 = they were halved n times. */
+  coarsenings: number;
+}
+
+/**
+ * How often the rings may be halved before the attempt is given up. Each step
+ * quarters the area of the finest ring, so eight of them divide it by 65 536 —
+ * far past the point where every ring has collapsed and the tree is drawn from
+ * its roots, which is the coarsest picture there is.
+ */
+const MAX_FIT_STEPS = 8;
+
+/** Whether the coarsening has already been reported this session — the log is
+ *  a one-shot, since the condition holds for every frame while it holds at
+ *  all and a per-frame warning would be a stream. */
+let fitWarned = false;
+
+/**
+ * THE SELECTION, GUARANTEED TO FIT — `selectLodNodes` with the ceiling turned
+ * from a silent truncation into a deliberate coarsening.
+ *
+ * WHY IT EXISTS (finding 2026-08-22). `MAX_NODES` was described as a guard
+ * against a pathological camera, and the sweeps of `smoke_terrain_lod.mjs`
+ * [13] reported a few hundred pieces — but both were measured on SMALL worlds
+ * with a gentle error list. Measured on the live 16.6 × 14.4 km world, whose
+ * per-tile error bound is 2…4.4 m at every mip level (the painted micro-relief
+ * is structure AT the 2 m lattice, so decimating it once already costs its full
+ * amplitude), the screen-space rule widens `lodRange[0]` from 128 m to
+ * `1.9913 · pixelScale / 2` — 1 538 m at a 1 280 px viewport, 2 596 m at
+ * 2 160 px — and the FINEST level is drawn over a disk of that radius: 2 952
+ * pieces at 1 280 px, and 4 096 — the ceiling — from 1 530 px up. Past it the
+ * depth-first walk simply stopped, and what it had not reached yet was ground
+ * that was never emitted: at a 2 160 px viewport 61 % of the world frame, with
+ * the nearest missing square 240 m from the camera and well inside the haze.
+ * That is the hole-in-the-sky class the frustum cull was deleted for.
+ *
+ * WHAT IT DOES INSTEAD. The rings are HALVED, all of them at once, until the
+ * selection fits — the same ring structure, moved in. Uniformly and not level
+ * by level, because a selection is only crack-free while every node measures
+ * against the same monotone ranges (`MAX_PIXEL_ERROR`): halving keeps the
+ * ladder monotone and keeps `λ(range[i]) = i + 1` exact, so the morph argument
+ * survives it untouched. Each step quarters the area of the finest ring, so the
+ * dominant term falls by 4 per step and one or two steps are the whole story.
+ *
+ * IT COARSENS, IT NEVER DROPS. Every root is still visited and every quadrant
+ * still emitted, so the frame stays covered whatever the rings do — the picture
+ * gets blockier, not holed. That is the trade: the cap is a memory limit of the
+ * instance buffer and the ONE thing it must not cost is ground.
+ */
+export function selectLodFitted(o: LodSelectOpts): LodSelection {
+  const levels = Math.max(1, Math.min(Math.floor(o.levels), MAX_LOD_LEVELS));
+  let ranges = o.ranges
+    ? [...o.ranges]
+    : lodRanges(o.minLodDistance, levels, o.levelErrorM, o.pixelScale);
+  let nodes = selectLodNodes({ ...o, ranges });
+  let step = 0;
+  while (nodes.length >= MAX_NODES && step < MAX_FIT_STEPS) {
+    step += 1;
+    ranges = ranges.map((r) => r / 2);
+    nodes = selectLodNodes({ ...o, ranges });
+  }
+  if (step > 0 && !fitWarned) {
+    fitWarned = true;
+    // Not a debug line: it names a world whose ground is being drawn coarser
+    // than its own data, which is worth knowing when a picture looks blocky.
+    console.warn(`[terrain] the LOD rings were halved ${step}x to stay under `
+      + `${MAX_NODES} pieces — ${nodes.length} selected, rings now `
+      + `${ranges.map((r) => Math.round(r)).join('/')} m`);
+  }
+  return { nodes, ranges, coarsenings: step };
 }
 
 // ── The GLSL twin ──────────────────────────────────────────────────────────
@@ -1670,12 +1771,11 @@ export function createTerrainLod(): TerrainLod {
     const pixelScale = fov > 0 && viewportPx > 0
       ? viewportPx / (2 * Math.tan((fov * Math.PI) / 360))
       : 0;
-    // The rings the shader measures its λ against — the SAME pure function
-    // `selectLodNodes` runs on the same four arguments, so the selection and
-    // the morph cannot describe two different worlds.
-    const ranges = lodRanges(MIN_LOD_DISTANCE_M, MAX_LOD_LEVELS, levelErrorM, pixelScale);
-    for (let i = 0; i < MAX_LOD_LEVELS; i += 1) uRange.value[i] = ranges[i] ?? 0;
-    const picked = selectLodNodes({
+    // The pieces AND the rings they were chosen against — `selectLodFitted`
+    // may halve the rings to stay under `MAX_NODES`, and the shader has to
+    // morph against the rings the selection really used or every piece would
+    // measure its λ on a ladder it was not picked from.
+    const sel = selectLodFitted({
       x0: extent[0], z0: extent[1], x1: extent[2], z1: extent[3],
       leafM,
       levels: MAX_LOD_LEVELS,
@@ -1685,6 +1785,8 @@ export function createTerrainLod(): TerrainLod {
       levelErrorM,
       pixelScale,
     });
+    const picked = sel.nodes;
+    for (let i = 0; i < MAX_LOD_LEVELS; i += 1) uRange.value[i] = sel.ranges[i] ?? 0;
     const arr = nodeAttr.array as Float32Array;
     triangles = 0;
     for (let i = 0; i < picked.length; i += 1) {
