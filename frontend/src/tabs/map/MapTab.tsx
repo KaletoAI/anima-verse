@@ -336,6 +336,35 @@ function PropGridPicker({ grid, onGrid }: {
   )
 }
 
+/* ── The relief contours as a VIEW ─────────────────────────────────────────
+ *
+ * The authored relief used to be visible only inside its own tool. But where
+ * the ground rises is a question every other gesture has too — a path painted
+ * across a slope, a bench placed on a hillside — so the outlines stay on the
+ * canvas in every mode, subdued and inert (see `HeightLayer`).
+ *
+ * A view, therefore remembered per browser like the prop grid: somebody who
+ * switched the contours off did so about the way they work, not about one
+ * session. Default ON — the layer was invisible until now, and a switch nobody
+ * finds is only worth adding if it starts by showing what it controls.
+ */
+const CONTOURS_KEY = 'ga.map.contours'
+
+/** Read the remembered switch. Storage can throw (private mode, a browser with
+ *  site data switched off) and can hold anything at all, so every path ends at
+ *  the default rather than at a broken map. */
+function loadContours(): boolean {
+  try {
+    const raw = window.localStorage.getItem(CONTOURS_KEY)
+    return raw === null ? true : raw !== '0'
+  } catch { return true }
+}
+
+function saveContours(on: boolean): void {
+  try { window.localStorage.setItem(CONTOURS_KEY, on ? '1' : '0') }
+  catch { /* a browser that refuses storage still gets its contours */ }
+}
+
 /** The two findings the server reports about a DRAWN boundary (contract v6
  *  Nr. 1 + Nr. 9). Everything else in `problems[]` belongs to the floor plan
  *  and is shown where floor plans are edited, not here. */
@@ -611,7 +640,12 @@ export function MapTab() {
    *  clicked through, and neither the terrain hit test nor a relief handle can
    *  do anything about that from below (finding 6). */
   const [locsOn, setLocsOn] = useState(true)
-  /** The tray's display panel, folded or not. Session state like the three
+  /** Are the relief contours drawn OUTSIDE the heights mode? A pure VIEW
+   *  switch — the heights mode itself always draws its own layer full-strength,
+   *  so this never takes the relief away from the tool that edits it. */
+  const [contoursOn, setContoursOn] = useState(loadContours)
+  useEffect(() => { saveContours(contoursOn) }, [contoursOn])
+  /** The tray's display panel, folded or not. Session state like the four
    *  switches inside it — and folded to start with, because they are set once
    *  and then read rarely. */
   const [displayOpen, setDisplayOpen] = useState(false)
@@ -2604,6 +2638,8 @@ export function MapTab() {
           onLocations={toggleLocs}
           roofs={roofOn}
           onRoofs={toggleRoofs}
+          contours={contoursOn}
+          onContours={setContoursOn}
           roofsZoomedOut={roofsZoomedOut}
           roofMinPxPerM={ROOF_MIN_PX_PER_M}
         />
@@ -2767,13 +2803,17 @@ export function MapTab() {
             {/* In a ground mode only the unpainted wash goes here; the painted
                 areas and every overlay follow AFTER the placements. */}
             <TerrainLayer {...terrainProps} part={groundMode ? 'ground' : 'all'} />
-            {/* The relief, only in its own mode: terrain and heights are
-                different questions about the same ground, and two
-                half-transparent polygon stacks on top of each other stop being
-                readable as either. */}
-            {mode === 'heights' ? (
+            {/* The relief. FULL in its own mode — filled, labelled, editable.
+                In every other one the "Contours" view draws the same areas as
+                subdued outlines: where the ground rises is a question a painted
+                path and a placed bench have too, and line work over the terrain
+                is not the unreadable second polygon stack a filled copy would
+                be. Inert either way outside heights, so the active tool keeps
+                every click (see `HeightLayer`). */}
+            {mode === 'heights' || contoursOn ? (
               <HeightLayer
                 areas={heightAreas}
+                subdued={mode !== 'heights'}
                 selectedId={selHeight}
                 editing={heightTool === 'select'}
                 maxSlopeDeg={maxSlopeDeg}

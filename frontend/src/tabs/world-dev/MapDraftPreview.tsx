@@ -605,6 +605,10 @@ export function MapDraftPreview({
                   areas={heightAreas}
                   selectedId=""
                   editing={false}
+                  // The draft preview shows the relief AS the subject next to
+                  // the terrain it was generated with, so it stays at full
+                  // strength — subdued is for the map editor's other tools.
+                  subdued={false}
                   maxSlopeDeg={DEFAULT_MAX_SLOPE_DEG}
                   maxStepM={DEFAULT_MAX_STEP_M}
                   draft={NO_POINTS}

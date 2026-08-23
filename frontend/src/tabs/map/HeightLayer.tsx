@@ -11,9 +11,13 @@
  * "how high is it here" that nobody could compare with the one the rules use,
  * and the numbers are what an author actually edits.
  *
- * It is drawn only in the heights mode. Terrain and relief are different
- * questions about the same ground, and two half-transparent polygon stacks on
- * top of each other stop being readable as either.
+ * In its own mode it is drawn FULL: filled by sign, labelled, editable.
+ * Outside it the layer stays on the canvas as SUBDUED contours (the "Contours"
+ * view switch, on by default) — outlines only, no fill, everything at
+ * `SUBDUED_OPACITY`, and inert. That keeps the old objection answered: two
+ * half-transparent polygon STACKS on top of each other stop being readable as
+ * either, so the background copy is line work, not a second stack, and it says
+ * where the ground rises while somebody paints terrain or places props.
  *
  * The handles are the SHARED gesture (`PolygonHandles`), the same one the
  * painted terrain is reshaped with.
@@ -45,6 +49,11 @@ export function heightColor(m: number): string {
  *  a height area says something ABOUT ground that stays visible. */
 const FILL_OPACITY = 0.22
 
+/** How strong the layer reads OUTSIDE the heights mode. Low enough that the
+ *  active tool's own colours stay the foreground, high enough that a hill's
+ *  outline and its metre number are still readable over painted ground. */
+const SUBDUED_OPACITY = 0.45
+
 /** Radius of a draft vertex marker, in pixels (the handle radius). */
 const HANDLE_R = 5
 
@@ -68,6 +77,10 @@ export interface HeightLayerProps {
   selectedId: string
   /** Handles are live only while an area is selected for editing. */
   editing: boolean
+  /** Drawn as background contours instead of the editable relief: no fill, no
+   *  handles, no draft, no pointer events, and the whole group dimmed. True in
+   *  every mode BUT heights. */
+  subdued: boolean
   /** The two walk limits (worldmap payload) — an area whose ramp is steeper
    *  than they allow is marked here and explained in its chip. */
   maxSlopeDeg: number
@@ -83,7 +96,7 @@ export interface HeightLayerProps {
 }
 
 export function HeightLayer({
-  areas, selectedId, editing, maxSlopeDeg, maxStepM, draft, draftCursor,
+  areas, selectedId, editing, subdued, maxSlopeDeg, maxStepM, draft, draftCursor,
   draftWillClose,
   onVertexMove, onVertexDelete, onEdgeInsert,
 }: HeightLayerProps) {
@@ -97,12 +110,19 @@ export function HeightLayer({
     : draft
 
   return (
-    <g>
+    // Subdued the WHOLE group is inert, not just its parts: the active tool
+    // owns every click on this canvas, and a background picture that swallowed
+    // one would be a defect nobody could see the cause of.
+    <g opacity={subdued ? SUBDUED_OPACITY : undefined}
+      pointerEvents={subdued ? 'none' : undefined}>
       <g pointerEvents="none">
         {areas.map((a) => {
           if (a.polygon.length < 3) return null
           const color = heightColor(a.height_m)
-          const isSel = a.id === selectedId
+          // Nothing is SELECTED outside the heights mode — the selection is a
+          // state of that editor, and drawing it elsewhere would promise an
+          // edit the mode cannot do.
+          const isSel = !subdued && a.id === selectedId
           const c = centroid(a.polygon)
           const cp = worldToScreen(c[0], c[1], view, w, h)
           const steep = tooSteep(a.height_m, a.falloff_m, maxSlopeDeg, maxStepM)
@@ -111,7 +131,8 @@ export function HeightLayer({
               {/* evenodd like every other polygon here: the engine answers
                   point queries by ray casting, which IS the even-odd rule. */}
               <path d={worldPolyToPath(a.polygon, view, w, h)}
-                fill={color} fillOpacity={FILL_OPACITY} fillRule="evenodd"
+                fill={subdued ? 'none' : color}
+                fillOpacity={subdued ? 0 : FILL_OPACITY} fillRule="evenodd"
                 stroke={isSel ? COL_SELECTED : color}
                 strokeWidth={isSel ? 2 : 1.5}
                 strokeOpacity={isSel ? 1 : 0.85} />
@@ -120,18 +141,22 @@ export function HeightLayer({
                 paintOrder="stroke" fontWeight={600}>
                 {fmtHeight(a.height_m)}
               </text>
-              <text x={cp.x} y={cp.y + 14} fontSize={11} textAnchor="middle"
-                fill={steep ? COL_WARN : color} stroke="#0d1117"
-                strokeWidth={3} paintOrder="stroke">
-                {(steep ? '⚠ ' : '')
-                  + t('ramp {n} m').replace('{n}', String(a.falloff_m))}
-              </text>
+              {/* The ramp belongs to EDITING the relief — outside the heights
+                  mode a contour answers "how high", nothing more. */}
+              {subdued ? null : (
+                <text x={cp.x} y={cp.y + 14} fontSize={11} textAnchor="middle"
+                  fill={steep ? COL_WARN : color} stroke="#0d1117"
+                  strokeWidth={3} paintOrder="stroke">
+                  {(steep ? '⚠ ' : '')
+                    + t('ramp {n} m').replace('{n}', String(a.falloff_m))}
+                </text>
+              )}
             </g>
           )
         })}
       </g>
 
-      {editing && selected && selected.polygon.length >= 3 ? (
+      {!subdued && editing && selected && selected.polygon.length >= 3 ? (
         <PolygonHandles
           points={selected.polygon}
           closed
@@ -146,7 +171,7 @@ export function HeightLayer({
       {/* The ring being drawn: open to the cursor, closed only when the click
           actually closes it — the terrain draft's rules, because it is the
           same gesture on the same canvas. */}
-      {draft.length ? (
+      {!subdued && draft.length ? (
         <g pointerEvents="none">
           <path d={worldPolyToPath(draftPts, view, w, h, draft.length >= 3)}
             fill={draft.length >= 3 ? COL_HILL : 'none'}

@@ -1698,6 +1698,10 @@ export interface MapDisplayPanelProps {
   /** The roof switch takes no argument — flipping it also drops the rendered
    *  pictures, which is how they are refreshed (see `MapTab`). */
   onRoofs: () => void
+  /** The relief contours outside the heights mode. Remembered per browser,
+   *  unlike the session-only switches above it. */
+  contours: boolean
+  onContours: (on: boolean) => void
   /** The zoom is under the budget gate: the switch says so instead of showing
    *  empty squares that read as "there are no models". */
   roofsZoomedOut: boolean
@@ -1705,7 +1709,7 @@ export interface MapDisplayPanelProps {
 }
 
 /**
- * What the map DRAWS — three switches that change nothing about the world.
+ * What the map DRAWS — four switches that change nothing about the world.
  *
  * They sit in the tray, not in the toolbar, and folded away by default: they
  * are set once and then looked at rarely, while the toolbar next to them is
@@ -1721,11 +1725,11 @@ export interface MapDisplayPanelProps {
  */
 export function MapDisplayPanel({
   open, onOpen, scatterPreview, onScatterPreview, locations, onLocations,
-  roofs, onRoofs, roofsZoomedOut, roofMinPxPerM,
+  roofs, onRoofs, contours, onContours, roofsZoomedOut, roofMinPxPerM,
 }: MapDisplayPanelProps) {
   const { t } = useI18n()
   // What is NOT at its default — a marker for the header, a sentence for the
-  // tooltip. Both are built from the same three questions, in the order the
+  // tooltip. Both are built from the same four questions, in the order the
   // switches stand in.
   const marks: string[] = []
   const said: string[] = []
@@ -1743,6 +1747,12 @@ export function MapDisplayPanel({
   } else if (roofs) {
     marks.push('🏢')
     said.push(t('The building roofs are on'))
+  }
+  // This one is on by DEFAULT, so the header speaks up when it is off — the
+  // relief silently missing from the map is exactly the state worth naming.
+  if (!contours) {
+    marks.push('⛰ ' + t('off'))
+    said.push(t('The relief contours are switched off'))
   }
   const base = t('What the map draws — none of it changes the world')
   return (
@@ -1790,6 +1800,16 @@ export function MapDisplayPanel({
               disabled={!locations} />
             🏢 {t('Building roofs')}
             {roofsZoomedOut && locations ? ' ' + t('(zoom in)') : ''}
+          </label>
+          {/* The relief as background line work in every other mode. The
+              heights tool draws its own layer full-strength whatever this
+              says — a switch must not take the relief away from the editor
+              that edits it. */}
+          <label className="ga-map-toolbar-check"
+            title={t('Draw the outlines of the height areas over every tool, dimmed and click-through. The Heights tool always shows the full relief.')}>
+            <input type="checkbox" checked={contours}
+              onChange={(e) => onContours(e.target.checked)} />
+            ⛰ {t('Contours')}
           </label>
         </div>
       ) : null}
