@@ -14,9 +14,9 @@
  * angle, and an SVG `rotate()` turns the other way, so it is NEGATED for the
  * marker and its direction pin.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMapView } from './MapCanvas'
-import { worldToScreen } from './mapMath'
+import { gridLinesInView, snapToGrid, worldToScreen } from './mapMath'
 import type { WorldProp } from './mapTypes'
 
 /** Movement below this is a click, not a drag (the placement layer's slop). */
@@ -30,6 +30,10 @@ const FACE_PX = 14
 const COL_PROP = '#a371f7'
 const COL_SELECTED = '#58a6ff'
 const COL_GHOST = '#3fb950'
+/** The snap raster. Drawn ON TOP of the ground, so it has to stay faint —
+ *  it is an aid for the hand, not a layer of the world. Every fifth line
+ *  reads a little stronger, the same rhythm the canvas' metre grid uses. */
+const COL_GRID = '#58a6ff'
 
 interface WorldPropLayerProps {
   worldProps: readonly WorldProp[]
@@ -37,7 +41,9 @@ interface WorldPropLayerProps {
   onSelect: (id: string) => void
   /** Commits ONE finished drag in world metres. */
   onMove: (id: string, x: number, z: number) => void
-  /** Metre grid the drag snaps to; 0 = centimetres. */
+  /** Metre grid the drag snaps to AND the layer draws; 0 = off (centimetres).
+   *  The caller zeroes it outside the props tool, so nothing is drawn and
+   *  nothing snaps where props are not being edited. */
   snapM: number
   /** Armed prop preview: where the pointer is, or null. */
   ghostPt: { x: number; z: number } | null
@@ -59,10 +65,6 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
   // Bound ONCE: a drag that leaves the marker (or the canvas) has to keep
   // arriving, and re-binding on every state change would drop it mid-gesture.
   useEffect(() => {
-    const snapV = (v: number) => {
-      const s = snapRef.current
-      return s > 0 ? Math.round(v / s) * s : Math.round(v * 100) / 100
-    }
     const move = (e: PointerEvent) => {
       const d = dragRef.current
       if (!d) return
@@ -73,8 +75,13 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
         d.moved = true
       }
       const px = viewRef.current.pxPerM
-      d.x = snapV(d.ox + dx / px)
-      d.z = snapV(d.oz + dy / px)
+      // SHIFT is the escape hatch — the same modifier the boundary handles
+      // already call "free-hand, as everywhere" (`PolygonHandles.snap`). Hold
+      // it and the raster lets go for this one move, so a rock can sit where
+      // no line runs. One modifier for one meaning across the whole tab.
+      const step = e.shiftKey ? 0 : snapRef.current
+      d.x = snapToGrid(d.ox + dx / px, step)
+      d.z = snapToGrid(d.oz + dy / px, step)
       setDrag({ id: d.id, x: d.x, z: d.z })
     }
     const up = () => {
@@ -95,6 +102,12 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
     }
   }, [])
 
+  /** The raster to draw. Empty whenever the grid is off OR its lines would
+   *  crowd closer than `GRID_MIN_SPACING_PX` on screen — `gridLinesInView`
+   *  decides both, so the drawing and the smoke check agree by construction. */
+  const grid = useMemo(() => gridLinesInView(view, w, h, snapM),
+    [view, w, h, snapM])
+
   const startDrag = useCallback((e: React.PointerEvent, wp: WorldProp) => {
     if (e.button !== 0) return
     e.stopPropagation()          // the canvas must not pan
@@ -109,8 +122,27 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
   const ordered = [...worldProps].sort((a, b) => (
     a.id === selectedId ? 1 : b.id === selectedId ? -1 : 0))
 
+  // The world x/z of a grid line as a canvas pixel. `worldToScreen` answers
+  // both coordinates at once; only one of them is wanted per axis.
+  const gx = (x: number) => worldToScreen(x, 0, view, w, h).x
+  const gz = (z: number) => worldToScreen(0, z, view, w, h).y
+
   return (
     <g>
+      {/* The snap raster, FIRST — under every marker, and inert: a click on a
+          grid line is a click on the ground. */}
+      {grid.xs.length || grid.zs.length ? (
+        <g pointerEvents="none" stroke={COL_GRID} strokeWidth={1}>
+          {grid.xs.map((x) => (
+            <line key={`gx${x}`} x1={gx(x)} y1={0} x2={gx(x)} y2={h}
+              opacity={Math.round(x / snapM) % 5 === 0 ? 0.34 : 0.14} />
+          ))}
+          {grid.zs.map((z) => (
+            <line key={`gz${z}`} x1={0} y1={gz(z)} x2={w} y2={gz(z)}
+              opacity={Math.round(z / snapM) % 5 === 0 ? 0.34 : 0.14} />
+          ))}
+        </g>
+      ) : null}
       {ordered.map((wp) => {
         const dragging = drag && drag.id === wp.id
         const p = worldToScreen(dragging ? drag.x : wp.x,

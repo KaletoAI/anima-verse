@@ -71,8 +71,10 @@ export interface MapCanvasProps {
    *  The event comes along so a tool can read its modifier keys. */
   onBackgroundClick?: (wx: number, wz: number, e: PointerEvent) => void
   /** Cursor position in world metres — for a coordinate readout or a rubber
-   *  band. Fires on every move over the canvas. */
-  onPointerWorldMove?: (wx: number, wz: number) => void
+   *  band. Fires on every move over the canvas. The event comes along for the
+   *  same reason it does on the click: a tool whose preview reacts to a
+   *  modifier has to read it while the pointer moves, not only when it lands. */
+  onPointerWorldMove?: (wx: number, wz: number, e: ReactPointerEvent) => void
   className?: string
   /** Cursor over empty ground; a parent with an armed tool says 'crosshair'. */
   cursor?: string
@@ -277,7 +279,7 @@ export function MapCanvas({
     const r = el.getBoundingClientRect()
     const p = screenToWorld(e.clientX - r.left, e.clientY - r.top,
       viewRef.current, r.width, r.height)
-    onPointerWorldMove(p.x, p.z)
+    onPointerWorldMove(p.x, p.z, e)
   }, [onPointerWorldMove])
 
   const ctx = useMemo<MapViewInfo>(() => ({ view, w: size.w, h: size.h }),

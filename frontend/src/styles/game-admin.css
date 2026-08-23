@@ -2192,6 +2192,13 @@ a.ga-btn {
   padding: 2px 6px;
   font-size: 12px;
 }
+/* The dropdown half of a two-part field (the props' grid picker: presets in
+   the list, anything else in the number next to it). Same height and type
+   size as the input, so the pair reads as ONE setting. */
+.ga-terrain-width select {
+  padding: 2px 6px;
+  font-size: 12px;
+}
 /* The limit a typed height runs into, named next to the field it is typed in
    (finding 14) — the clamp used to happen silently on save. */
 .ga-height-clamp {

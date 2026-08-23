@@ -1887,3 +1887,90 @@ export function scatterThinnedPercentText(drawn: number, wanted: number): string
   if (p < 0.01) return '<0.01'
   return p.toFixed(2)
 }
+
+/* ─────────────────────── THE PLACEMENT GRID (§ A9a) ───────────────────────
+ *
+ * A world prop is set by hand at ONE point, and by hand alone a row of fence
+ * posts never lines up. The grid is the answer: while it is on, a placed or
+ * dragged prop lands on the nearest grid line and its yaw lands on the nearest
+ * 15°. The angle belongs to the same switch on purpose — a grid that aligns
+ * the positions but leaves every post turned by 7° buys nothing.
+ *
+ * The raster is anchored at the WORLD ORIGIN, not at the first prop and not at
+ * the view: two props snapped to a 1 m grid on opposite ends of the world are
+ * on the same lines, and panning never moves them.
+ */
+
+/** The angle raster the grid enforces, in degrees. Twenty-four positions on
+ *  the circle — fine enough for a fence that follows a bend, coarse enough
+ *  that two neighbours read as parallel. */
+export const PROP_YAW_STEP_DEG = 15
+
+/** Below this on-screen spacing the grid is NOT drawn. Lines closer than a
+ *  few pixels stop being a raster and become a moiré that hides the ground
+ *  underneath — the snap itself keeps working, only the drawing stops. */
+export const GRID_MIN_SPACING_PX = 6
+
+/** Safety net against a pathological view (or a caller passing `minPx` 0)
+ *  asking for a million `<line>` elements. */
+const GRID_MAX_LINES_PER_AXIS = 1000
+
+/**
+ * SNAP ONE VALUE onto a raster of `step`, anchored at zero.
+ *
+ * Half-way values round AWAY FROM ZERO, symmetrically about the origin —
+ * `Math.round` alone rounds −0.5 up to −0, so −0.25 at step 0.5 would come
+ * back as 0 while +0.25 came back as +0.5, and a grid that behaves differently
+ * west of the origin is not a grid. The result is rounded to two decimals
+ * because that is the precision the server stores (§ A9a).
+ *
+ * `step <= 0` means "no grid": the value is only trimmed to centimetres, which
+ * is what the free placement did before this feature existed.
+ */
+export function snapToGrid(value: number, step: number): number {
+  const v = Number(value)
+  if (!Number.isFinite(v)) return 0
+  const s = Number(step)
+  if (!Number.isFinite(s) || s <= 0) return Math.round(v * 100) / 100 + 0
+  const n = Math.round(Math.abs(v) / s)
+  return Math.round((v < 0 ? -n : n) * s * 100) / 100 + 0
+}
+
+/** The grid lines the canvas has to draw, in WORLD metres. */
+export interface GridLines {
+  /** Verticals — world x of every line inside the view. */
+  xs: number[]
+  /** Horizontals — world z of every line inside the view. */
+  zs: number[]
+}
+
+/**
+ * THE LINES OF THE SNAP RASTER INSIDE THE CURRENT VIEW, both axes.
+ *
+ * Inclusive at both ends: a line exactly on the edge of the window is visible
+ * and therefore drawn (a 10 m window at step 2 m carries six lines, not five).
+ * Returns nothing at all when the raster would be finer than `minPx` on
+ * screen, so the caller draws nothing rather than a grey wash.
+ */
+export function gridLinesInView(view: View, w: number, h: number, step: number,
+  minPx: number = GRID_MIN_SPACING_PX): GridLines {
+  const none: GridLines = { xs: [], zs: [] }
+  const s = Number(step)
+  if (!Number.isFinite(s) || s <= 0) return none
+  if (!(view.pxPerM > 0) || !(w > 0) || !(h > 0)) return none
+  if (s * view.pxPerM < minPx) return none
+  const r = visibleWorldRect(view, w, h)
+  const xs: number[] = []
+  const zs: number[] = []
+  // The comparison is against the raw product, not the rounded line: a line
+  // 0.004 m outside the window is outside it.
+  for (let n = Math.ceil(r.min_x / s);
+    n * s <= r.max_x && xs.length < GRID_MAX_LINES_PER_AXIS; n++) {
+    xs.push(Math.round(n * s * 100) / 100 + 0)
+  }
+  for (let n = Math.ceil(r.min_z / s);
+    n * s <= r.max_z && zs.length < GRID_MAX_LINES_PER_AXIS; n++) {
+    zs.push(Math.round(n * s * 100) / 100 + 0)
+  }
+  return { xs, zs }
+}

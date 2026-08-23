@@ -11,8 +11,9 @@ import { renderTopDownSnapshot } from '../world/topDownSnapshot'
 import type { Map3D, ScenePayload, SceneProblem } from '../world/worldTypes'
 import { MapCanvas } from './MapCanvas'
 import {
-  FIT_FALLBACK_PX_PER_M, areaInRect, decorateStroke, fitBounds, isStrokeStyle,
-  localToWorld, pointInPolygon, strokeToPolygon, visibleWorldRect,
+  FIT_FALLBACK_PX_PER_M, PROP_YAW_STEP_DEG, areaInRect, decorateStroke,
+  fitBounds, isStrokeStyle, localToWorld, pointInPolygon, snapToGrid,
+  strokeToPolygon, visibleWorldRect,
   type MapBounds, type StrokeDeco, type StrokeStyle, type View,
 } from './mapMath'
 import {
@@ -201,6 +202,139 @@ const YAW_QUARTER = 90
 
 /** Snap step of the placement grid when the toggle is on (§ E2 brief). */
 const SNAP_M = 10
+
+/* ── The world-prop placement grid (§ A9a) ─────────────────────────────────
+ *
+ * The location grid above is ONE fixed step, because a location is a plot and
+ * plots sit on a coarse raster. A prop is furniture: a row of fence posts
+ * wants 1 m, a paved square 0.5 m, a line of trees 5 m. So this one is a
+ * SETTING — presets plus a free number — and it is remembered per browser,
+ * because the step belongs to the way somebody builds, not to the world.
+ *
+ * Anchored at the world origin, never at the view: two props snapped to the
+ * same step are on the same lines wherever they stand.
+ */
+const PROP_GRID_KEY = 'ga.map.propGrid'
+/** The quick picks of the dropdown, in metres. */
+const PROP_GRID_PRESETS_M = [0.5, 1, 2, 5]
+/** …and the range the free number field accepts. Under 10 cm the raster is
+ *  finer than the stored precision; over 50 m it is coarser than most of what
+ *  gets placed by hand. */
+const PROP_GRID_MIN_M = 0.1
+const PROP_GRID_MAX_M = 50
+const PROP_GRID_DEFAULT_M = 1
+
+/** Grid setting: whether it bites, and how wide it is. The step SURVIVES
+ *  switching the grid off — turning it back on must return the raster the
+ *  user set, not the default. */
+interface PropGridPref { on: boolean; stepM: number }
+
+const PROP_GRID_DEFAULT: PropGridPref = { on: true, stepM: PROP_GRID_DEFAULT_M }
+
+/** Clamp + round one step to something the grid can actually use. */
+const cleanGridStep = (v: number): number => (
+  Number.isFinite(v)
+    ? Math.round(Math.min(PROP_GRID_MAX_M, Math.max(PROP_GRID_MIN_M, v)) * 100) / 100
+    : PROP_GRID_DEFAULT_M
+)
+
+/** Read the remembered setting. Storage can throw (private mode, a browser
+ *  with site data switched off) and can hold anything at all, so every path
+ *  ends at the default rather than at a broken editor. */
+function loadPropGrid(): PropGridPref {
+  try {
+    const raw = window.localStorage.getItem(PROP_GRID_KEY)
+    if (!raw) return PROP_GRID_DEFAULT
+    const p = JSON.parse(raw) as Partial<PropGridPref>
+    return {
+      on: p.on !== false,
+      stepM: cleanGridStep(Number(p.stepM)),
+    }
+  } catch { return PROP_GRID_DEFAULT }
+}
+
+function savePropGrid(pref: PropGridPref): void {
+  try {
+    window.localStorage.setItem(PROP_GRID_KEY, JSON.stringify(pref))
+  } catch { /* a browser that refuses storage still gets to place props */ }
+}
+
+/**
+ * The grid picker of the props toolbar: a dropdown of the four common steps
+ * plus Off, and a free metre field next to it for everything else.
+ *
+ * Both say the same number — picking 2 m fills the field, typing 0.75 puts the
+ * dropdown on "Custom" — so there is one setting on screen, not two that can
+ * disagree. Typing a step also switches the grid ON: a number nobody can see
+ * the effect of would be a dead knob.
+ */
+function PropGridPicker({ grid, onGrid }: {
+  grid: PropGridPref; onGrid: (g: PropGridPref) => void
+}) {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState(String(grid.stepM))
+  useEffect(() => { setDraft(String(grid.stepM)) }, [grid.stepM])
+  const typed = parseFloat(draft)
+  const bad = Number.isFinite(typed)
+    && (typed < PROP_GRID_MIN_M || typed > PROP_GRID_MAX_M)
+  const commit = () => {
+    const v = parseFloat(draft)
+    if (!Number.isFinite(v)) { setDraft(String(grid.stepM)); return }
+    const step = cleanGridStep(v)
+    // A blur that changed NOTHING must not switch the grid back on: tabbing
+    // through a field is not a decision about it.
+    if (step === grid.stepM) { setDraft(String(step)); return }
+    onGrid({ on: true, stepM: step })
+  }
+  const sel = !grid.on
+    ? 'off'
+    : PROP_GRID_PRESETS_M.includes(grid.stepM) ? String(grid.stepM) : 'custom'
+  return (
+    <label className="ga-terrain-width"
+      title={t('Placing and dragging a prop snaps it onto this raster (anchored at the world origin) and its rotation onto {n}° steps. Hold Shift while dragging to place it free-hand.')
+        .replace('{n}', String(PROP_YAW_STEP_DEG))}>
+      {t('Grid')}
+      <select className="ga-input" value={sel}
+        onChange={(e) => {
+          const v = e.target.value
+          if (v === 'off') onGrid({ on: false, stepM: grid.stepM })
+          else if (v !== 'custom') onGrid({ on: true, stepM: parseFloat(v) })
+        }}>
+        <option value="off">{t('Off')}</option>
+        {PROP_GRID_PRESETS_M.map((m) => (
+          <option key={m} value={String(m)}>{m} m</option>
+        ))}
+        {/* Only offered once it IS the state — "Custom" is what typing a
+            number produces, never a thing to choose and then wonder about. */}
+        {sel === 'custom' ? (
+          <option value="custom">{t('Custom')}</option>
+        ) : null}
+      </select>
+      <input
+        className={'ga-input' + (bad ? ' ga-tt-invalid' : '')}
+        type="number" step={0.1}
+        min={PROP_GRID_MIN_M} max={PROP_GRID_MAX_M}
+        value={draft}
+        aria-invalid={bad}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return
+          e.stopPropagation()
+          e.currentTarget.blur()
+        }}
+      />
+      m
+      {bad ? (
+        <span className="ga-height-clamp">
+          {typed > PROP_GRID_MAX_M
+            ? t('max {n} m').replace('{n}', String(PROP_GRID_MAX_M))
+            : t('min {n} m').replace('{n}', String(PROP_GRID_MIN_M))}
+        </span>
+      ) : null}
+    </label>
+  )
+}
 
 /** The two findings the server reports about a DRAWN boundary (contract v6
  *  Nr. 1 + Nr. 9). Everything else in `problems[]` belongs to the floor plan
@@ -446,6 +580,13 @@ export function MapTab() {
   const [wpYawDraft, setWpYawDraft] = useState('')
   const [wpOffsetDraft, setWpOffsetDraft] = useState('')
   const [wpDelArmed, setWpDelArmed] = useState('')
+  /** The placement raster of the props tool — remembered per browser, so the
+   *  way somebody builds survives a reload. */
+  const [propGrid, setPropGrid] = useState<PropGridPref>(loadPropGrid)
+  useEffect(() => { savePropGrid(propGrid) }, [propGrid])
+  /** The step that actually BITES: 0 whenever the grid is off, and 0 outside
+   *  the props tool — nothing else on this canvas is placed by this raster. */
+  const propGridM = propGrid.on && mode === 'props' ? propGrid.stepM : 0
 
   // Per-location cache-buster for the map icon (bumped after a change).
   const [iconVer, setIconVer] = useState<Record<string, number>>({})
@@ -721,6 +862,8 @@ export function MapTab() {
   heightToolRef.current = heightTool
   const armedPropRef = useRef<PropFull | null>(null)
   armedPropRef.current = armedProp
+  const propGridRef = useRef(0)
+  propGridRef.current = propGridM
   // Is a modal covering the canvas? The handler is bound once, so this cannot
   // be read from the state directly.
   const modalRef = useRef(false)
@@ -821,12 +964,16 @@ export function MapTab() {
   // re-render the tab on every mouse move. The point is SNAPPED here, not only
   // on the click: a preview that shows a spot the placement will not use is
   // worse than none (with the 10 m grid it can be off by up to 7.07 m).
-  const onWorldMove = useCallback((x: number, z: number) => {
+  const onWorldMove = useCallback((x: number, z: number,
+                                   e?: { shiftKey: boolean }) => {
     if (ghostRef.current) setGhostPt({ x: snapV(x), z: snapV(z) })
-    // An armed PROP follows the cursor unsnapped: a bench in the wilderness
-    // is placed where the eye wants it, not on the 10 m location grid.
+    // An armed PROP follows the cursor on the PROP grid — never on the 10 m
+    // location raster, and never at all while Shift is held. Snapped here and
+    // not only on the click, for the reason above: a preview that shows a spot
+    // the placement will not use is worse than none.
     else if (armedPropRef.current) {
-      setGhostPt({ x: Math.round(x * 100) / 100, z: Math.round(z * 100) / 100 })
+      const step = e?.shiftKey ? 0 : propGridRef.current
+      setGhostPt({ x: snapToGrid(x, step), z: snapToGrid(z, step) })
     }
     // Only a running draft needs the rubber band; without one this must not
     // re-render the tab on every mouse move.
@@ -1250,21 +1397,27 @@ export function MapTab() {
 
   /** The armed palette card lands here: ONE prop at the clicked point.
    *
-   *  The point is NOT snapped to the location grid — a landmark rock is aimed
-   *  by eye, and a 10 m raster would put it anywhere but where it was
-   *  clicked. The palette STAYS armed, so a row of fence posts is a row of
-   *  clicks; Escape or the Cancel pill disarms.
+   *  The point is snapped to the PROPS grid, never to the 10 m location
+   *  raster — and to nothing at all when the grid is off or Shift is held,
+   *  which is what a landmark rock aimed by eye wants. The snap happens HERE,
+   *  on the client: the route keeps taking free coordinates, so a payload
+   *  written by anything else is not judged by this editor's raster.
+   *
+   *  The palette STAYS armed, so a row of fence posts is a row of clicks;
+   *  Escape or the Cancel pill disarms.
    *
    *  Yaw and lift start at 0 and the variant starts unset (the placement id
    *  decides, § A9a) — everything the chip can change afterwards. */
-  const placeWorldProp = useCallback(async (wx: number, wz: number) => {
+  const placeWorldProp = useCallback(async (wx: number, wz: number,
+                                            free = false) => {
     const p = armedPropRef.current
     if (!p) return
+    const step = free ? 0 : propGridRef.current
     try {
       const r = await apiPost<{ world_prop?: WorldProp }>('/world/world-props', {
         prop_id: p.id,
-        x: Math.round(wx * 100) / 100,
-        z: Math.round(wz * 100) / 100,
+        x: snapToGrid(wx, step),
+        z: snapToGrid(wz, step),
         yaw_deg: 0, offset_y: 0,
       })
       await reloadWorldProps()
@@ -1324,6 +1477,15 @@ export function MapTab() {
   const selectedWp = useMemo(
     () => worldProps.find((p) => p.id === selWp) || null,
     [selWp, worldProps])
+
+  /** The ANGLE half of the grid. A raster that lines the posts up but leaves
+   *  each of them turned by 7° has aligned nothing anybody can see, so the
+   *  grid owns the yaw too: while it is on, every rotation this chip writes
+   *  lands on a `PROP_YAW_STEP_DEG` step — the turn buttons included, which
+   *  otherwise only ADD their step to whatever crooked angle was there. */
+  const gridYaw = useCallback((deg: number): number => normYaw(
+    propGrid.on ? snapToGrid(deg, PROP_YAW_STEP_DEG) : deg,
+  ), [propGrid.on])
 
   // The chip's two text drafts follow the selection, never the other way
   // round (the placement layer's pattern for `yawDraft`).
@@ -2028,9 +2190,14 @@ export function MapTab() {
     await reloadHeights()
   }, [reloadHeights, selectedHeight, t, toast])
 
-  const onBackgroundClick = useCallback((wx: number, wz: number) => {
+  const onBackgroundClick = useCallback((wx: number, wz: number,
+                                         e?: { shiftKey: boolean }) => {
     if (ghostRef.current) { void placeGhost(wx, wz); return }
-    if (armedPropRef.current) { void placeWorldProp(wx, wz); return }
+    // Shift = free-hand, the tab's universal modifier (`PolygonHandles`).
+    if (armedPropRef.current) {
+      void placeWorldProp(wx, wz, !!e?.shiftKey)
+      return
+    }
     const m = modeRef.current
     if (m === 'paint') { addDraftPoint(wx, wz); return }
     // A prop is a POINT, so there is nothing to hit-test here: the markers
@@ -2500,6 +2667,13 @@ export function MapTab() {
               {t('Snap {n} m').replace('{n}', String(SNAP_M))}
             </label>
           ) : null}
+          {/* The props' own raster. Only in their tool: it is the only
+              gesture on this canvas it applies to, and a grid picker offered
+              while somebody paints ground would be a knob without an effect
+              (§ A9a). */}
+          {mode === 'props' ? (
+            <PropGridPicker grid={propGrid} onGrid={setPropGrid} />
+          ) : null}
           <span className="ga-map-toolbar-info">
             {t('{n} placed').replace('{n}', String(placed.length))}
           </span>
@@ -2633,9 +2807,10 @@ export function MapTab() {
                 selectedId={selWp}
                 onSelect={setSelWp}
                 onMove={(id, x, z) => { void commitWorldProp(id, { x, z }) }}
-                // No snap: a landmark is aimed by eye, and the 10 m location
-                // grid would put every prop anywhere but where it was clicked.
-                snapM={0}
+                // The props' OWN raster (never the 10 m location grid), and 0
+                // outside the props tool — the layer draws exactly the grid it
+                // snaps to, so what is shown and what happens cannot drift.
+                snapM={propGridM}
                 ghostPt={armedProp ? ghostPt : null}
               />
             </g>
@@ -2706,18 +2881,18 @@ export function MapTab() {
                 <button type="button" className="ga-btn ga-btn-sm"
                   title={t('Turn left {n}°').replace('{n}', String(YAW_FINE))}
                   onClick={() => { void commitWorldProp(selectedWp.id,
-                    { yaw_deg: normYaw((selectedWp.yaw_deg || 0) - YAW_FINE) }) }}>
+                    { yaw_deg: gridYaw((selectedWp.yaw_deg || 0) - YAW_FINE) }) }}>
                   ⟲{YAW_FINE}°
                 </button>
                 <button type="button" className="ga-btn ga-btn-sm"
                   title={t('Turn right {n}°').replace('{n}', String(YAW_FINE))}
                   onClick={() => { void commitWorldProp(selectedWp.id,
-                    { yaw_deg: normYaw((selectedWp.yaw_deg || 0) + YAW_FINE) }) }}>
+                    { yaw_deg: gridYaw((selectedWp.yaw_deg || 0) + YAW_FINE) }) }}>
                   ⟳{YAW_FINE}°
                 </button>
                 <button type="button" className="ga-btn ga-btn-sm"
                   onClick={() => { void commitWorldProp(selectedWp.id,
-                    { yaw_deg: normYaw((selectedWp.yaw_deg || 0) + YAW_QUARTER) }) }}>
+                    { yaw_deg: gridYaw((selectedWp.yaw_deg || 0) + YAW_QUARTER) }) }}>
                   +{YAW_QUARTER}°
                 </button>
                 <input className="ga-input ga-map-chip-yaw" type="number" step={1}
@@ -2726,7 +2901,7 @@ export function MapTab() {
                   onBlur={() => {
                     const v = parseFloat(wpYawDraft)
                     if (Number.isFinite(v)) {
-                      void commitWorldProp(selectedWp.id, { yaw_deg: normYaw(v) })
+                      void commitWorldProp(selectedWp.id, { yaw_deg: gridYaw(v) })
                     } else setWpYawDraft(String(normYaw(selectedWp.yaw_deg || 0)))
                   }}
                   onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
