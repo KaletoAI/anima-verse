@@ -280,12 +280,13 @@ def add_memory(character_name: str,
         "tags": tags or [],
         "related_character": related_character,
     }
+    row_id = 0
     try:
         meta = _build_meta(entry)
         if extra_meta:
             meta.update(extra_meta)
         with transaction() as conn:
-            conn.execute("""
+            cur = conn.execute("""
                 INSERT INTO memories
                 (character_name, tier, ts, game_ts, content, source_ids, tags, meta)
                 VALUES (?, ?, ?, ?, ?, '[]', ?, ?)
@@ -298,8 +299,20 @@ def add_memory(character_name: str,
                 json.dumps(tags or [], ensure_ascii=False),
                 json.dumps(meta, ensure_ascii=False),
             ))
+            row_id = int(cur.lastrowid or 0)
     except Exception as e:
         logger.error("add_memory DB error for %s: %s", character_name, e)
+
+    # Keep the situational-memory vector cache warm. Fire-and-forget: the
+    # first internal embedding loads an ONNX model, and add_memory runs inside
+    # chat, thought and skill turns — none of them may wait for it. Only the
+    # types the situational block considers are worth a vector.
+    if row_id and memory_type in ("semantic", "commitment"):
+        try:
+            from app.core.memory_situational import schedule_embedding
+            schedule_embedding(row_id, content)
+        except Exception as e:
+            logger.debug("scheduling memory embedding failed: %s", e)
     logger.debug("+1 memory [%s] for %s: %s", memory_type, character_name, content[:80])
     return entry
 

@@ -1212,6 +1212,17 @@ async def chat(request: Request) -> StreamingResponse:
         if _content_tools:
             logger.info("Content Tools: %s", ", ".join(_content_tools))
 
+    # --- Situational memories for THIS message ---
+    # Embedding + (on the first turns) the lazy vector backfill are blocking
+    # work, so they go into a thread — the SSE handler's event loop must stay
+    # free. The raw user text is the query on purpose: an image description
+    # block would only dilute it. Never raises (see build_situational_block).
+    _situational_block = ""
+    if user_input:
+        from app.core.memory_situational import build_situational_block
+        _situational_block = await asyncio.to_thread(
+            build_situational_block, current_agent, user_input)
+
     agent = StreamingAgent(
         llm=llm,
         tool_format=tool_format,
@@ -1227,7 +1238,15 @@ async def chat(request: Request) -> StreamingResponse:
         # A (plan-follow-room-conversation-bug): im in-person-Gespräch keinen
         # SetLocation im selben Antwort-Turn — man geht nicht weg, während
         # man spricht. Remote (messaging/phone) bleibt unberührt.
-        suppress_move_in_conversation=(medium == "in_person"))
+        suppress_move_in_conversation=(medium == "in_person"),
+        # Situational memories: the facts/promises that fit THIS message, hung
+        # on the user turn. Not on the system prompt — its cached prefix has
+        # to stay byte-identical, and it is only rebuilt every few minutes, so
+        # a message-driven selection there would answer the wrong message
+        # (plan-memory-facts-and-commitments.md, Task 5). Both chat modes go
+        # through the same StreamingAgent, so single and rp_first both get it;
+        # thought turns build their own agent and never pass a suffix.
+        user_turn_suffix=_situational_block)
 
     async def generate():
         # Queue-Tracking: Chat als aktiv registrieren (pausiert nur Provider-Queue)
@@ -1272,7 +1291,9 @@ async def chat(request: Request) -> StreamingResponse:
         try:
             timestamp = utc_now_iso()
             history_text = "\n".join([msg["content"] for msg in messages])
-            tokens_input = estimate_tokens(system_content + history_text + _effective_user_input)
+            tokens_input = estimate_tokens(
+                system_content + history_text + _effective_user_input
+                + _situational_block)
             full_response = ""
             _tool_image_urls = []  # Bild-URLs aus Tool-Results
             _tool_exec_counts = {}  # Tool-Name -> Ausfuehrungszaehler

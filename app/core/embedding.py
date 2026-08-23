@@ -1,9 +1,10 @@
 """Embedding generation — internal (fastembed/ONNX) or external (routed model).
 
-Only consumer today: the pose/expression catalog resolver
-(``pose_catalog.resolve_to_catalog``). Returns a vector or ``None`` — on
-``None`` the resolver falls back to plain alias equality, no crash, no queue
-block.
+Two consumers: the pose/expression catalog resolver
+(``pose_catalog.resolve_to_catalog``) and the situational memory block
+(``memory_situational``). Returns a vector or ``None`` — on ``None`` the
+catalog falls back to plain alias equality and the memory block is simply
+omitted; no crash, no queue block, ever.
 
 Backend choice via ``config.embedding.backend``:
   - ``auto`` (default): the external model when the ``pose_embedding`` task is
@@ -57,12 +58,51 @@ def embed(text: str) -> Optional[List[float]]:
         return _embed_internal(text)
     if backend == "external":
         return _embed_external(text)
-    # auto: extern bevorzugen wenn geroutet, sonst intern
+    # auto: prefer the external model when routed, otherwise the internal one
     if _external_configured():
         vec = _embed_external(text)
         if vec is not None:
             return vec
     return _embed_internal(text)
+
+
+def current_model_id() -> str:
+    """Identifier of the model ``embed()`` would use right now.
+
+    Vectors from two different models are not comparable, so every persisted
+    vector is stamped with this string and a mismatch means "re-embed". Shape:
+    ``internal:<model>`` / ``external:<model>``. Returns ``""`` when no model
+    can be resolved at all — the caller then skips the feature, exactly as it
+    does for a ``None`` vector.
+    """
+    cfg = config.get("embedding", {}) or {}
+    backend = (cfg.get("backend") or "auto").strip().lower()
+    internal_id = "internal:" + (
+        (cfg.get("internal_model") or DEFAULT_INTERNAL_MODEL).strip())
+    if backend == "internal":
+        return internal_id
+    inst, prov = _resolve_external()
+    external_id = f"external:{inst.model}" if (inst and prov) else ""
+    if backend == "external":
+        return external_id
+    return external_id or internal_id
+
+
+def cosine_similarity(a: List[float], b: List[float]) -> float:
+    """Cosine similarity of two vectors. Returns 0.0 on any inconsistency.
+
+    Lives next to ``embed`` because every consumer of a vector needs it — the
+    catalog resolver and the situational memory selection both compare what
+    this module produced.
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
 
 
 # ── intern (fastembed/ONNX) ──────────────────────────────────────────────

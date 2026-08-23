@@ -238,6 +238,19 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
     "CREATE INDEX IF NOT EXISTS idx_memories_char_tier_ts ON memories (character_name, tier, ts)",
+    # One embedding vector per memory row, for the situational memory block at
+    # the user turn (app/core/memory_situational.py). memory_id is the PRIMARY
+    # KEY, so a model change simply overwrites the row instead of piling up
+    # dead vectors; ``model_id`` records which model produced it, and a
+    # mismatch means "re-embed on touch". The vector is a raw float32 blob —
+    # small, and never read by anything but the cosine comparison.
+    """CREATE TABLE IF NOT EXISTS memory_embeddings (
+        memory_id INTEGER PRIMARY KEY,
+        model_id  TEXT NOT NULL,
+        vector    BLOB NOT NULL,
+        ts        TEXT NOT NULL,
+        FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+    )""",
     """CREATE TABLE IF NOT EXISTS summaries (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,

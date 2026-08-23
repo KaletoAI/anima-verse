@@ -467,6 +467,28 @@ StreamEvent = Union[
 ]
 
 
+def compose_messages(system_content: str, history: List,
+                     user_input: str, user_turn_suffix: str = "") -> List[Dict[str, str]]:
+    """The message list as it goes to the provider: system, history, user turn.
+
+    ``user_turn_suffix`` is per-turn context that belongs to the CURRENT
+    message and must stay out of the system prompt — the situational memory
+    block (``memory_situational``) is the one user today. It is appended to
+    the user turn and nowhere else, so the cached system prefix stays
+    byte-identical and the tool-decision prompt (which is built from the raw
+    ``user_input``) never sees it.
+
+    Its own function so the placement can be checked without a provider:
+    ``scripts/smoke_memory_situational.py``.
+    """
+    content = user_input
+    if user_turn_suffix:
+        content = f"{user_input}\n\n{user_turn_suffix}" if user_input else user_turn_suffix
+    return [{"role": "system", "content": system_content},
+            *history,
+            {"role": "user", "content": content}]
+
+
 # ---------------------------------------------------------------------------
 # Stream result container
 # ---------------------------------------------------------------------------
@@ -509,7 +531,8 @@ class StreamingAgent:
         mode: str = "no_tools",
         constrained_tools: bool = False,
         chat_task_id: str = "",
-        suppress_move_in_conversation: bool = False):
+        suppress_move_in_conversation: bool = False,
+        user_turn_suffix: str = ""):
         self.llm = llm
         self.tool_llm = tool_llm or llm  # Fallback auf Chat-LLM wenn kein Tool-LLM konfiguriert
         self.tool_system_content = tool_system_content  # Minimaler System-Prompt fuer Tool-LLM
@@ -536,6 +559,10 @@ class StreamingAgent:
         # not walk away in the same turn. Set only for in-person chat, NOT for
         # autonomous thought turns (legitimate movement).
         self.suppress_move_in_conversation = suppress_move_in_conversation
+        # Per-turn context appended to the user message only (see
+        # compose_messages). Empty for every path that has no such context —
+        # thought turns deliberately included.
+        self.user_turn_suffix = user_turn_suffix
         # Raw text of the Tool-LLM decision from the last rp_first run. The
         # Tool-LLM phase suppresses ContentEvents, so callers (e.g. the agent
         # loop's "Recent turns" panel) can only see it through this attribute.
@@ -991,7 +1018,9 @@ class StreamingAgent:
             active_llm: LLM to use for this call
             system_content: System prompt
             history: Message history (list of dicts)
-            user_input: User message (always the original)
+            user_input: User message (always the original; a configured
+                ``user_turn_suffix`` is appended to the turn that goes out,
+                not to this value)
             llm_label: Label for logging ("LLM", "Chat-LLM")
             detect_tools: Whether to scan for tool calls in stream
             iteration: Iteration number for LoopInfoEvent
@@ -1009,9 +1038,11 @@ class StreamingAgent:
                 pass  # Non-fatal — display only.
 
         # Message-Liste aufbauen
-        stream_messages = [{"role": "system", "content": system_content}]
-        stream_messages.extend(history)
-        stream_messages.append({"role": "user", "content": user_input})
+        stream_messages = compose_messages(
+            system_content, history, user_input, self.user_turn_suffix)
+        # What actually went out as the user turn — the logs and the token
+        # estimate below have to show the suffix, not the bare message.
+        _logged_user_input = stream_messages[-1]["content"]
 
         # Konfiguration
         _HEARTBEAT_INTERVAL = 15  # Sekunden
@@ -1074,7 +1105,7 @@ class StreamingAgent:
                 _aiter = active_llm.astream(stream_messages).__aiter__()
             except Exception as _init_err:
                 self._log_llm_error(
-                    active_llm, system_content, user_input, llm_label,
+                    active_llm, system_content, _logged_user_input, llm_label,
                     _init_err, _iter_start, history=history)
                 raise
 
@@ -1115,7 +1146,7 @@ class StreamingAgent:
                             except Exception:
                                 pass  # re-init failed too — fall through to raise
                     self._log_llm_error(
-                        active_llm, system_content, user_input, llm_label,
+                        active_llm, system_content, _logged_user_input, llm_label,
                         _chunk_err, _iter_start, partial_response=iteration_response,
                         history=history)
                     raise _chunk_err
@@ -1256,7 +1287,7 @@ class StreamingAgent:
 
         # --- LLM-Logging ---
         self._log_llm_call(
-            active_llm, system_content, user_input, iteration_response,
+            active_llm, system_content, _logged_user_input, iteration_response,
             llm_label, _iter_start, history=history,
             finish_reason=finish_reason)
 

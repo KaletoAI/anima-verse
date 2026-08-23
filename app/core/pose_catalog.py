@@ -119,20 +119,9 @@ def validate_catalog(axis: str) -> List[str]:
 CATALOG_THRESHOLD = 0.60
 
 
-def cosine_similarity(a: List[float], b: List[float]) -> float:
-    """Cosine similarity of two vectors. Returns 0.0 on any inconsistency.
-
-    Lives here because the catalog resolver is its only consumer since the
-    pose-variant matcher was removed.
-    """
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(y * y for y in b) ** 0.5
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
+# Cosine similarity lives with the vectors it compares (app/core/embedding.py)
+# — the situational memory block is a second consumer since Aug 2026.
+from app.core.embedding import cosine_similarity  # noqa: E402
 
 
 def _alias_index(axis: str) -> Dict[str, str]:
