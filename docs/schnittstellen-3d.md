@@ -5190,3 +5190,130 @@ seitdem nicht mehr.
 | **[9]** | die Ripple-Richtung: der stehende Fall ergibt exakt die alten Konstanten, 0°/90°/270° geben beide Lagen stromabwärts mit gegenläufiger Querkomponente, und die Beträge bleiben rotationsinvariant |
 | `client3d/scripts/smoke_layer_cut.mjs` **[7b]** | der Bett-Fall: die Ersetzung ist weg, das Slice kommt aus `layer.surface`, Farbe und Kachelmaß fragen `bed_kind`, und `bed_kind` steht im `layerKey` |
 | `client3d/scripts/smoke_surface_patch.mjs` | **rot**: keine Bibliotheksfrage entscheidet mehr über Wasser |
+
+## Nachtrag 2026-08-23 (§ B2): Ein Prop steht auf einem Prop, und ein Prop darf halb sein
+
+Zwei Eingriffe am Lageplan, beide an DERSELBEN Platzierung und beide ohne ein
+zweites Prop in der Bibliothek: den Teekessel auf den Tisch stellen, und den
+Tisch zur Hälfte an die Wand stellen.
+
+### 1. Obenauf — die Stapelregel
+
+**Es gibt KEIN neues Höhenfeld.** Die Platzierung trägt seit je `offset_y`
+(Meter, additiv zum Raumboden, ±5 m, Abwesenheit = 0) — das ist das Feld, in
+dem eine Stapelung landet. Neu ist nur, wer die Zahl AUSRECHNET.
+
+**Die Regel, ein Satz:** die Unterkante des gestellten Props landet exakt auf
+der Oberfläche des OBERSTEN Props, dessen gedrehter Fußabdruck seinen Punkt
+überdeckt. Ausgeschrieben über die Basisleiter des Nachtrags 2026-08-20
+(automatische Basis + `ground_offset_m` des PROPS + `offset_y` der
+PLATZIERUNG):
+
+```
+top(Träger)      = ground_offset_m(Träger) + offset_y(Träger) + height_m(Träger)
+offset_y(Ziel)   = top(Träger) − ground_offset_m(Ziel)
+```
+
+Die automatische Basis kürzt sich weg — Träger und Ziel stehen im selben Raum
+auf derselben Platte, gespeichert wird nur die Differenz. Beide Bodenversätze
+stehen drin, weil beide echt sind: ein 10 cm eingesunkener Tisch hat seine
+Platte 10 cm tiefer, und ein Prop, das selbst einsinkt, soll auf der Platte
+stehen und nicht in ihr.
+
+„Darunter" ist ein FUSSABDRUCK-Test, keine Entfernung: jede andere Platzierung,
+deren gedrehte Box (`width_m × depth_m`, um `+rad(yaw)` gedreht, § A1.1) den
+Punkt der Platzierung enthält, ist Kandidat; von denen gewinnt die mit der
+höchsten Oberfläche (Becher auf Tablett auf Tisch). Streu-Kopien zählen nie —
+sie entstehen erst zur Compose-Zeit, ein Autor kann auf keine zeigen.
+
+**Wo die Regel lebt:** `app/core/props.stack_offset_y` (rein, ohne Bibliothek)
+plus `placement_stack_offset_y` (mit ihr davor), erreichbar über
+`POST /world/props/stack-y` mit `{props: [...], index: n}` →
+`{"offset_y": 0.75}` bzw. `{"offset_y": null}`. Der Rumpf trägt die
+Platzierungsliste, wie `POST /play/scene-preview` den Location-Entwurf trägt —
+der Lageplan fragt also auch für ungespeicherte Arbeit. **Kein Renderer rechnet
+hier etwas**: das Ergebnis steht in `offset_y`, und beide Renderer lesen
+weiterhin nur `bottom_y`.
+
+**Bedienung:** Lageplan → Prop-Leiste → „Place on top" (angeboten, sobald
+wirklich etwas darunter liegt) und „Place on floor" als Umkehrung.
+
+**Handrechnung (§ B5a)** — `scripts/smoke_scene_recipe.py` **[7f]**, Tisch
+1,2 × 0,8 × 0,75 m bei (2, 3), Teekessel 0,2 × 0,2 × 0,25 m:
+
+| Fall | Ergebnis |
+|---|---|
+| Kessel über der Tischmitte | `0 + 0 + 0.75 − 0 = 0.75` |
+| 0,55 m aus der Mitte (Halbmaße 0,6 × 0,4) | weiterhin `0.75` |
+| derselbe Punkt, Tisch auf Yaw 90° | `lz = 0.55 > 0.4` → **nichts darunter** |
+| Tablett (0,05 m) liegt schon auf dem Tisch | `0.75 + 0.05 = 0.80` (das OBERSTE gewinnt) |
+| Tisch 5 cm eingesunken | `−0.05 + 0.75 = 0.70` |
+| Kessel selbst 5 cm einsinkend | `0.75 + 0.05 = 0.80`, Unterkante wieder `0.75` |
+| Payload, Etage 0 | Tisch `bottom_y = 0.01`, Kessel `0.01 + 0.75 = 0.76` |
+
+### 2. Der Tiefenschnitt — `cut_plane`
+
+Ein halber Tisch an der Wand ist DIESER Tisch mit einer Ebene hindurch, kein
+zweiter Bibliothekseintrag. Die Platzierung trägt dafür zwei Felder:
+
+```
+cut_keep   # Bruchteil der TIEFE, der stehen bleibt: 0.05 … 1.0
+cut_side   # welche Hälfte BLEIBT: "front" | "back"
+```
+
+Sanitizer wie bei `ground_offset_m` — **Abwesenheit ist die Aussage**: `1.0`
+(ganzes Prop), alles über 1 (geklemmt auf 1.0) und jeder Unsinn schreiben
+KEINEN Schlüssel; unter 0,05 wird geklemmt, nie abgelehnt; ohne `cut_side`
+steht „back". Streu-Kopien erben keinen Schnitt.
+
+**Geschnitten wird immer quer zur TIEFE** — der lokalen z-Achse des Props — und
+die Ebene dreht mit dem Platzierungs-Yaw. `cut_side` benennt die Hälfte, die
+STEHEN BLEIBT: `"front"` ist auf dem Plan die obere Kante des ungedrehten
+Fußabdrucks (lokal −z), `"back"` die untere (lokal +z). Das Prop hängt an seiner
+eigenen Mitte (§ B2 Schritt 3), lokal z läuft also −d/2 … +d/2:
+
+```
+back:   z_cut = +d/2 − keep·d,   n_lokal = (0, 0, +1)
+front:  z_cut = −d/2 + keep·d,   n_lokal = (0, 0, −1)
+n = σ·(sin θ, 0, cos θ)        P = Anker + z_cut·(sin θ, 0, cos θ)      c = −n·P
+```
+
+**Payload — `cut_plane` am Platzierungs-Spec (`models[]`, Rolle `prop`):**
+
+```
+cut_plane?: { normal: [nx, 0, nz], constant: c }
+```
+
+in den Weltmetern des Payloads, mit three.js' eigener Konvention: **behalten
+wird, wo `n·p + c >= 0`**. Fehlt = ungeschnitten. Der Server liefert damit ein
+FERTIGES PRIMITIV wie Platten und Wände; der Konsument baut genau eine
+`THREE.Plane` daraus und rechnet nichts nach.
+
+**Was der Renderer tut** (`applyDepthCut`, `@anima/scene-render/depthCut.ts` —
+EINE Implementierung für Admin-Vorschau und 3D-Client): die Ebene NACH dem
+Einhängen bauen und mit der Elternmatrix in den Weltraum heben
+(`Material.clippingPlanes` ist Weltraum, der Szenen-Payload spricht die Meter
+der Location — im Client hebt sie erst die Kachelgruppe mit Pin und Yaw), die
+Materialien KLONEN (der Modell-Cache teilt sie), `clippingPlanes` setzen,
+`clipShadows` an und `DoubleSide`. Beide Renderer schalten dafür einmalig
+`renderer.localClippingEnabled = true`. Ein späteres Nachheben (§ A16.9) ist
+harmlos: es verschiebt nur in y, und diese Normale hat keine y-Komponente.
+
+**Die Schnittfläche bleibt OFFEN** — das ist eine Clipping-Ebene, kein CSG.
+Bewusst akzeptiert, dieselbe Abmachung wie beim Hüllen-Clip (§ B1); deshalb
+DoubleSide und deshalb der Hinweis in der Bedienung, die Schnittkante an eine
+Wand zu stellen.
+
+**Bedienung:** Lageplan → Prop-Leiste → „Depth cut (%)" (100 = ungeschnitten)
+plus ein Umschalter Vorderteil/Hinterteil.
+
+**Handrechnung (§ B5a)** — `scripts/smoke_scene_recipe.py` **[7g]**, Prop der
+Tiefe 2 m bei (2, 3), `keep` 0,5:
+
+| Fall | Ebene |
+|---|---|
+| back, Yaw 90° | `z_cut = 0`, `n = (1, 0, 0)`, `c = −2` → behalten wo x ≥ 2 |
+| front, Yaw 90° | `n = (−1, 0, 0)`, `c = +2` → die komplementäre Hälfte |
+| back, Yaw 0°, keep 0,25 | `z_cut = 0.5`, `n = (0, 0, 1)`, `c = −3.5` |
+| keep 1,0 | **keine Ebene** |
+| Payload: Tisch (Tiefe 0,8) bei Welt (−2,0, −2,5), back, keep 0,5 | `n = (0, 0, 1)`, `c = 2.5` |

@@ -229,6 +229,20 @@ export interface SceneModelSpec {
    *  stehen, in den Löchern steht das Rezept-Innenleben. Nur am
    *  building-Spec, nur bei `map3d.area_model`. */
   cutouts?: [number, number][][]
+  /** Prop-Platzierungen mit TIEFENSCHNITT (§ B2-Nachtrag 2026-08-23): die
+   *  fertige Schnittebene in den Weltmetern des Payloads — ein halber Tisch an
+   *  der Wand, ohne zweites Prop in der Bibliothek. Fehlt = ungeschnitten.
+   *  Der Renderer baut daraus EINE `THREE.Plane` und hängt sie ans Material
+   *  (`applyDepthCut`); er rechnet nichts nach. */
+  cut_plane?: SceneCutPlane
+}
+
+/** Eine Halbraum-Ebene in den Weltmetern des Szenen-Payloads. Behalten wird,
+ *  wo `normal·p + constant >= 0` — three.js' eigene `Plane`-Konvention, damit
+ *  aus den zwei Feldern genau ein Konstruktoraufruf wird. */
+export interface SceneCutPlane {
+  normal: [number, number, number]
+  constant: number
 }
 
 export interface SceneMarker {

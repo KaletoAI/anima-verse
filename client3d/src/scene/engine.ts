@@ -134,6 +134,11 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Per-material clipping planes (§ B2 addendum 2026-08-23, the prop depth
+    // cut). Without this three ignores `Material.clippingPlanes` entirely and
+    // a cut prop simply stands there whole; nothing else in the scene sets
+    // any, so it costs nothing.
+    this.renderer.localClippingEnabled = true;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
 

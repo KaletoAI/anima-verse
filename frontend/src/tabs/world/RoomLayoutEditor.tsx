@@ -52,7 +52,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { SliderInput } from '../../components/SliderInput'
 import {
@@ -3142,6 +3142,29 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           if (patch === null) setPropSel(null)
           updateLayout(selectedRoom.id || '', { props: list.length ? list : undefined })
         }
+        // Which OTHER placements this one stands over — the same turned-box
+        // test that cycles the selection through a stack, asked at the
+        // placement's own spot instead of at the cursor. It decides only
+        // whether the button is offered; the height comes from the server.
+        const stackSupports = propsAtPoint(
+          selectedRoom.layout || {}, selOrigin,
+          placement.at[0] - selOrigin[0], placement.at[1] - selOrigin[1],
+        ).filter((i) => i !== propSel)
+        const placeOnTop = async () => {
+          try {
+            const res = await apiPost<{ offset_y?: number | null }>(
+              '/world/props/stack-y',
+              { props: selectedRoom.layout?.props || [], index: propSel })
+            if (res?.offset_y === null || res?.offset_y === undefined) {
+              toast(t('Nothing underneath: move the prop over another one first.'),
+                    'error')
+              return
+            }
+            patchProp({ offset_y: res.offset_y || undefined })
+          } catch (e) {
+            toast(t('Error') + ': ' + (e as Error).message, 'error')
+          }
+        }
         return (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="ga-hint" style={{ fontWeight: 600 }}>
@@ -3214,6 +3237,67 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 className="ga-input"
               />
             </label>
+            {/* Set it down ON the piece it stands over — the teapot onto the
+                table. The button is OFFERED by the same footprint test that
+                picks a prop out of a stack here (`propsAtPoint`); the height
+                itself is the SERVER's answer (`POST /world/props/stack-y`,
+                `props.stack_offset_y`), so the plan, the preview and the 3D
+                client cannot each arrive at their own surface. */}
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={!stackSupports.length}
+              title={stackSupports.length
+                ? t('Set this prop down on the top surface of the prop underneath it (the topmost one, if several).')
+                : t('Nothing underneath: move the prop over another one first.')}
+              onClick={() => { void placeOnTop() }}
+            >
+              ⬒ {t('Place on top')}
+            </button>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={!placement.offset_y}
+              title={t('Back down onto the floor — clears the vertical offset.')}
+              onClick={() => patchProp({ offset_y: undefined })}
+            >
+              ⬓ {t('Place on floor')}
+            </button>
+            {/* DEPTH CUT (§ B2 addendum 2026-08-23): how much of the prop's
+                depth survives — half a table against a wall is this table
+                with a plane through it, not a second library entry. 100 % =
+                uncut and the placement stores no key at all. The plane is the
+                SERVER's (`cut_plane` on the scene spec); this dial only says
+                how much and from which side. */}
+            <SliderInput
+              label="✂"
+              ariaLabel={t('Depth cut (%)')}
+              title={t('Cut the prop across its depth: how many percent of it remain. 100 = whole prop. The cut face stays open, so put it against a wall.')}
+              min={5}
+              max={100}
+              step={5}
+              value={Math.round((placement.cut_keep ?? 1) * 100)}
+              onChange={(v) => patchProp({
+                cut_keep: v >= 100 ? undefined : Math.round(v) / 100,
+                cut_side: v >= 100 ? undefined
+                  : (placement.cut_side || 'back'),
+              })}
+              unit="%"
+              sliderWidth={100}
+              inputWidth={62}
+            />
+            {placement.cut_keep && placement.cut_keep < 1 ? (
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                title={t('Which half remains: “front” is the top of the footprint on the plan, “back” the bottom — turned with the prop’s yaw.')}
+                onClick={() => patchProp({
+                  cut_side: placement.cut_side === 'front' ? 'back' : 'front',
+                })}
+              >
+                {placement.cut_side === 'front' ? t('Keep front') : t('Keep back')}
+              </button>
+            ) : null}
             {/* Scatter (v5.2 Nr. 12): a placement property — this anchor
                 throws `scatter_count` copies over the room from its own
                 seed; spacing alone rules the density (0 = may overlap). */}

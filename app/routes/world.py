@@ -1534,6 +1534,34 @@ async def import_prop_route(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/props/stack-y")
+async def prop_stack_y(request: Request) -> Dict[str, Any]:
+    """THE STACKING RULE for the floor plan (body: ``{props: [...], index: n}``)
+    → ``{"offset_y": 0.75}``, or ``{"offset_y": null}`` when nothing lies under
+    that placement.
+
+    ``props`` is the room's (or the yard's) ``layout.props`` AS THE EDITOR HOLDS
+    IT — unsaved draft included, like ``POST /play/scene-preview`` takes a draft
+    location. ``index`` names the placement to set down; every other placement
+    whose turned footprint covers its spot is a candidate, and the topmost one
+    wins (``props.stack_offset_y``). The rule is computed HERE and nowhere else:
+    the client stores the answer in ``offset_y`` and both renderers keep reading
+    the base the scene spec composes from it.
+    """
+    from app.core.props import placement_stack_offset_y
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    placements = data.get("props")
+    if not isinstance(placements, list):
+        raise HTTPException(status_code=400, detail="props must be a list")
+    try:
+        index = int(data.get("index"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="index required")
+    return {"offset_y": placement_stack_offset_y(placements, index)}
+
+
 @router.get("/props/{prop_id}/export")
 def export_prop_route(prop_id: str,
                       _: Dict[str, Any] = Depends(require_admin)) -> StreamingResponse:

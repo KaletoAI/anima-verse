@@ -542,6 +542,21 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                 entry["variant"] = max(0, int(placement.get("variant")))
             except (TypeError, ValueError):
                 pass
+        # The DEPTH CUT of this placement (§ B2 addendum 2026-08-23) travels
+        # as it was authored; the scene spec turns it into the finished
+        # ``cut_plane``, because only there is the placement's world anchor
+        # known. A scattered copy carries none — the cut is an act on ONE
+        # hand-placed piece of furniture.
+        if placement.get("cut_keep") is not None:
+            try:
+                keep = float(placement.get("cut_keep"))
+            except (TypeError, ValueError):
+                keep = 1.0
+            if 0 < keep < 1:
+                entry["cut_keep"] = _r(keep, 3)
+                entry["cut_side"] = ("front"
+                                     if placement.get("cut_side") == "front"
+                                     else "back")
         prop = prop_store.get_prop(pid)
         if not prop:
             entry["missing"] = True

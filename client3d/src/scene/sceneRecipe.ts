@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { applyClipOutline, applyCutouts, buildExtra, buildPlaceholder,
+import { applyClipOutline, applyCutouts, applyDepthCut, buildExtra,
+  buildPlaceholder,
   buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials,
+  disposeCutMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, storeyGroundLift, storeyGroundRelift, VERIFY_EPS,
   surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
@@ -947,6 +949,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
                                       placeholder: true, lift: 0 };
       placements.push(rec);
       lift = reliftPlacement(tile, rec);
+      // A stand-in for a CUT prop is cut too (§ B2 addendum 2026-08-23) —
+      // otherwise the missing half of the table reappears the moment its mesh
+      // fails to load. The plane is world space and needs the mounted object.
+      applyDepthCut(THREE, ph, spec.cut_plane);
       verify.placed += 1;
       // Auch der Platzhalter wird gegen seine Spec geprüft: er steht an
       // derselben Stelle und hat dieselbe Zielgröße wie das fehlende Mesh
@@ -983,6 +989,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       parent.add(placed);
       const rec: PlacedSceneModel = { spec, url, object: placed, parent, lift: 0 };
       placements.push(rec);
+      // The DEPTH CUT of a placed prop (§ B2 addendum 2026-08-23): the server
+      // states the plane, this hangs it on the material clones. It runs after
+      // `parent.add`, because `Material.clippingPlanes` is world space and the
+      // payload's metres only become world metres through the tile group.
+      applyDepthCut(THREE, placed, spec.cut_plane);
       // The storey-0 terrain lift (§ A16.9). It rides on the placed group's y
       // AFTER `place()` has seated the mesh on `bottom_y`, so every step of
       // § B2 keeps working on the composed numbers and only the finished
@@ -1272,9 +1283,13 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       reliftPlacement(tile, rec);
       applyModelClip(tile, placed, rec.spec);
       rec.parent?.add(placed);
+      // …and the cut survives the tier swap, for the same reason the clip
+      // does: it belongs to the PLACEMENT, not to the mesh that fills it.
+      applyDepthCut(THREE, placed, rec.spec.cut_plane);
       if (old) {
         old.parent?.remove(old);
         disposeClipMaterials(old);
+        disposeCutMaterials(old);
         const mesh = old as THREE.Mesh;
         if (rec.placeholder && mesh.isMesh) {
           // The grey box owns its geometry and material (buildPlaceholder).

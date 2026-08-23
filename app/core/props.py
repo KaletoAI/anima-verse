@@ -117,7 +117,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.game_time import (current_season_tokens, sanitize_season_tags,
                                 season_tags_active)
@@ -191,6 +191,12 @@ SWAY_FACTOR_MIN, SWAY_FACTOR_MAX = 0.0, 1.0
 #: automatic base + ``ground_offset_m`` + ``offset_y``.
 GROUND_OFFSET_DEFAULT = 0.0
 GROUND_OFFSET_MIN, GROUND_OFFSET_MAX = -5.0, 5.0
+
+#: How much of a placed prop's DEPTH survives its cut (§ B2 addendum
+#: 2026-08-23) — a fraction, 1.0 = the whole prop. The floor never reaches 0:
+#: an infinitely thin slab is a prop nobody can see and an authoring slip that
+#: looks like a lost placement, so the dial stops at 5 %.
+CUT_KEEP_MIN = 0.05
 
 # Marker fractions may leave the raw bounding box by half a box per axis —
 # the HEIGHT axis reaches a full box below (deep seats in tall machines);
@@ -1167,6 +1173,135 @@ def prop_ground_extent(prop_id: str) -> Dict[str, float]:
         return {}
     dims = _effective_dims(meta)
     return {"width_m": dims["width_m"], "depth_m": dims["depth_m"]}
+
+
+def prop_stack_facts(prop_id: str) -> Dict[str, float]:
+    """Everything the stacking rule needs about ONE prop, out of ONE sidecar
+    read — ``{}`` for an id this world has no record for.
+
+    The union of :func:`prop_ground_extent` (the footprint a prop covers) and
+    the two vertical facts of :func:`prop_scatter_facts` (how tall it is, how
+    deep it stands): "put the teapot on the table" asks all four at once, and a
+    second directory walk per placement would be the same read twice.
+    """
+    meta = read_sidecar(prop_id)
+    if not meta:
+        return {}
+    dims = _effective_dims(meta)
+    return {"width_m": dims["width_m"], "depth_m": dims["depth_m"],
+            "height_m": dims["height_m"],
+            "ground_offset_m": ground_offset_of(meta)}
+
+
+def _footprint_contains(box: Dict[str, Any], px: float, pz: float) -> bool:
+    """Is the point inside the prop's TURNED footprint box?
+
+    The point and the box centre are in the SAME stored frame — room-local
+    metres in a room, location-local metres on the yard (§ A13a) — so nothing
+    converts; the frame only has to be one and the same for both.
+
+    The turn is the world's (§ A1.1 / § B2 step 3): a prop is drawn with
+    ``rotation.y = +rad(yaw)``, which maps a local point to
+    ``x = lx·cos θ + lz·sin θ``, ``z = −lx·sin θ + lz·cos θ``. Testing a world
+    point therefore applies the INVERSE turn and compares against the half
+    extents. That is the same arithmetic the floor plan's own hit test runs
+    (``RoomLayoutEditor.propsAtPoint``), where the plan's y axis IS z — keep
+    the two in lockstep or a prop can only be stacked where it is not.
+    """
+    th = math.radians(float(box.get("yaw") or 0.0))
+    dx = px - float(box["at"][0])
+    dz = pz - float(box["at"][1])
+    cos, sin = math.cos(th), math.sin(th)
+    lx = dx * cos - dz * sin
+    lz = dx * sin + dz * cos
+    return (abs(lx) <= float(box.get("width_m") or 0.0) / 2.0
+            and abs(lz) <= float(box.get("depth_m") or 0.0) / 2.0)
+
+
+def stack_offset_y(boxes: Sequence[Dict[str, Any]], index: int) -> Optional[float]:
+    """THE STACKING RULE — the ``offset_y`` that sets one placement down on the
+    prop it stands over ("put the teapot on the table"). ``None`` when no other
+    placement's footprint covers this one's spot.
+
+    PURE arithmetic over already-resolved boxes, so the numbers are checkable
+    by hand (``scripts/smoke_scene_recipe.py`` [7f]). One box is a placement
+    joined with its library facts::
+
+        {at: [u, v], yaw?, offset_y?, width_m, depth_m, height_m,
+         ground_offset_m?}
+
+    ``at``/``yaw`` are the stored placement, the dims and ``ground_offset_m``
+    belong to the PROP (:func:`prop_stack_facts`).
+
+    The rule is one sentence: **the placed prop's base lands exactly on the top
+    surface of the TOPMOST prop underneath it.** Written out over the base
+    ladder the scene spec composes (§ B2 addendum 2026-08-20, automatic floor +
+    the prop's own ``ground_offset_m`` + the placement's ``offset_y``)::
+
+        top(support) = ground_offset_m(support) + offset_y(support) + height_m(support)
+        offset_y(target) = top(support) − ground_offset_m(target)
+
+    Both ground offsets are in there because both are real: a support that sinks
+    10 cm into the floor has its top 10 cm lower, and a target authored to sink
+    would otherwise sink into the table top instead of onto it. The automatic
+    floor cancels — support and target stand in the same room, on the same
+    plate, and only the difference is stored.
+
+    "Underneath" is a FOOTPRINT test, not a distance: any other placement whose
+    turned box covers this placement's anchor qualifies, and of those the one
+    with the highest top surface wins (a mug on a tray on a table). Ties fall to
+    the LATER placement — the one drawn on top in the plan.
+    """
+    if index < 0 or index >= len(boxes):
+        return None
+    target = boxes[index]
+    px, pz = float(target["at"][0]), float(target["at"][1])
+    best: Optional[float] = None
+    for i, box in enumerate(boxes):
+        if i == index or not box:
+            continue
+        if not _footprint_contains(box, px, pz):
+            continue
+        top = (float(box.get("ground_offset_m") or 0.0)
+               + float(box.get("offset_y") or 0.0)
+               + float(box.get("height_m") or 0.0))
+        if best is None or top >= best:
+            best = top
+    if best is None:
+        return None
+    return round(best - float(target.get("ground_offset_m") or 0.0), 3)
+
+
+def placement_stack_offset_y(placements: Sequence[Dict[str, Any]],
+                             index: int) -> Optional[float]:
+    """:func:`stack_offset_y` for a STORED placement list — the library read in
+    front of the pure rule.
+
+    ``placements`` is ``layout.props`` as the floor-plan editor holds it
+    (``prop_id``, ``at``, ``yaw?``, ``offset_y?``); a placement whose prop the
+    library does not know drops out of the candidate list — a dangling id has no
+    measurable surface to stand on. Scattered copies never take part: they are
+    computed at compose time and stored nowhere, so no author can point at one.
+    """
+    facts: Dict[str, Dict[str, float]] = {}
+    boxes: List[Optional[Dict[str, Any]]] = []
+    for placement in placements:
+        if not isinstance(placement, dict):
+            boxes.append(None)
+            continue
+        pid = safe_prop_id(str(placement.get("prop_id") or ""))
+        if pid and pid not in facts:
+            facts[pid] = prop_stack_facts(pid)
+        f = facts.get(pid) or {}
+        at = placement.get("at")
+        if not f or not isinstance(at, (list, tuple)) or len(at) != 2:
+            boxes.append(None)
+            continue
+        boxes.append({"at": [at[0], at[1]], "yaw": placement.get("yaw"),
+                      "offset_y": placement.get("offset_y"), **f})
+    if index < 0 or index >= len(boxes) or not boxes[index]:
+        return None
+    return stack_offset_y([b or {} for b in boxes], index)
 
 
 def prop_id_from_model_url(url: Any) -> str:

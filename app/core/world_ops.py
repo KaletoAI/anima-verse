@@ -1283,10 +1283,14 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
     area from ``scatter_seed`` at compose time; the placement itself stays as
     the manually positioned anchor. Σ scatter_count ≤ 120 per carrier, on top
     of the ≤ 100 manual placements.
+
+    It may also be CUT (``cut_keep``/``cut_side``, § B2 addendum 2026-08-23):
+    half a table against a wall is this table with a clipping plane through it,
+    not a second library entry.
     """
     if not isinstance(raw, list):
         return []
-    from app.core.props import safe_prop_id
+    from app.core.props import CUT_KEEP_MIN, safe_prop_id
     placements: List[Dict[str, Any]] = []
     scatter_total = 0
     for p in raw:
@@ -1316,6 +1320,25 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
                 entry["offset_y"] = round(max(-5.0, min(5.0, float(off))), 3)
             except (TypeError, ValueError):
                 pass
+        # THE DEPTH CUT (§ B2 addendum 2026-08-23): how much of the prop's
+        # DEPTH survives, and from which side. Half a table against a wall is
+        # a placement property, not a second prop — the mesh is cut by a
+        # clipping plane at render time, so the library keeps ONE table.
+        # A whole prop is the statement of ABSENCE: keep 1.0 (and anything
+        # unusable) writes no key, exactly like ``ground_offset_m``.
+        keep = p.get("cut_keep")
+        if keep is not None and f"{keep}".strip() != "":
+            try:
+                v = round(max(CUT_KEEP_MIN, min(1.0, float(keep))), 3)
+            except (TypeError, ValueError):
+                v = 1.0
+            if v < 1.0:
+                entry["cut_keep"] = v
+                # Which HALF REMAINS. "front" is the side the plan draws at
+                # the top of an unturned footprint (local −z), "back" the
+                # bottom (local +z); the plane turns with the placement yaw.
+                entry["cut_side"] = ("front" if str(p.get("cut_side") or "")
+                                     .strip().lower() == "front" else "back")
         # WHICH model variant this placement shows (E2.3): a POSITION in the
         # prop's active variant list, resolved by ``scene_recipe._variant_index``
         # (out of range wraps, so a deleted mesh never makes a placement

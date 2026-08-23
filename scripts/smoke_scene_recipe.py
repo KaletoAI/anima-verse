@@ -2272,6 +2272,228 @@ def test_prop_ground_offset() -> None:
           near(flat["bottom_y"], 0.01), str(flat.get("bottom_y")))
 
 
+# The stacking fixture: a table one may put something ON, and the something.
+# Both are the CONTRACT's own worked example for § B2 addendum 2026-08-23 and
+# carry round dims on purpose — every number in [7f] is one line of mental
+# arithmetic away from them.
+STACK_TABLE = {
+    "id": "table", "name": "Table",
+    "width_m": 1.2, "depth_m": 0.8, "height_m": 0.75,
+    "rotation": {"x": 0, "y": 0, "z": 0}, "bbox": [1.2, 0.75, 0.8],
+    "has_model": True, "model_tiers": ["full"], "model_signature": "tabsig",
+}
+STACK_TEAPOT = {
+    "id": "teapot", "name": "Teapot",
+    "width_m": 0.2, "depth_m": 0.2, "height_m": 0.25,
+    "rotation": {"x": 0, "y": 0, "z": 0}, "bbox": [0.2, 0.25, 0.2],
+    "has_model": True, "model_tiers": ["full"], "model_signature": "potsig",
+}
+
+
+def stub_stack_props() -> None:
+    """Stub the library with the two props of [7f] — the smoke never touches
+    the real prop directory."""
+    from app.core import props as prop_store
+    recs = {"table": STACK_TABLE, "teapot": STACK_TEAPOT}
+    prop_store.get_prop = lambda pid: dict(recs[pid]) if pid in recs else None
+
+
+def test_prop_stacking() -> None:
+    """[7f] PUT THE TEAPOT ON THE TABLE (§ B2 addendum 2026-08-23).
+
+    The rule is one sentence: the placed prop's base lands exactly on the top
+    surface of the TOPMOST prop whose turned footprint covers its spot. Over
+    the base ladder the scene spec composes (automatic floor + the PROP's own
+    ``ground_offset_m`` + the PLACEMENT's ``offset_y``) that is
+
+        top(support)     = ground_offset(support) + offset_y(support) + height(support)
+        offset_y(target) = top(support) − ground_offset(target)
+
+    HAND-DERIVED, with the table 1.2 × 0.8 × 0.75 m at (2, 3) and the teapot
+    0.2 × 0.2 × 0.25 m:
+
+      a) teapot at (2, 3), table flat on the floor:
+         top = 0 + 0 + 0.75 = 0.75  →  offset_y = 0.75 − 0 = 0.75
+      b) teapot at (2.55, 3), table NOT turned: the footprint half extents are
+         0.6 × 0.4, so lx = 0.55 ≤ 0.6, lz = 0.00 ≤ 0.4 — still on the table,
+         still 0.75.
+      c) the same spot with the table at yaw 90°: the inverse turn gives
+         lx = 0.55·cos 90 − 0.00·sin 90 = 0.00 and
+         lz = 0.55·sin 90 + 0.00·cos 90 = 0.55 > 0.4 — the teapot now stands
+         BESIDE the turned table, and the rule answers "nothing underneath".
+      d) a tray 0.5 × 0.5 × 0.05 already lying on the table (offset_y 0.75):
+         top = 0 + 0.75 + 0.05 = 0.80 — the TOPMOST surface wins, 0.80.
+      e) the table sunk 5 cm into the floor (ground_offset −0.05):
+         top = −0.05 + 0 + 0.75 = 0.70.
+      f) a teapot that is itself authored to sink 5 cm:
+         offset_y = 0.75 − (−0.05) = 0.80, and its base is then
+         0.00 + (−0.05) + 0.80 = 0.75 — ON the table top, not in it.
+
+    THE PAYLOAD SIDE, same numbers on storey 0 (floor 0.00, prop clearance
+    0.01, § A16.9 / [7c]):
+
+        table  bottom_y = 0.00 + 0.01                = 0.01
+        teapot bottom_y = 0.00 + 0.01 + 0.75         = 0.76
+        teapot − table  = 0.75 = the table's height — which is exactly what
+        "standing on it" means, and what both renderers draw: `place()` seats
+        every mesh on `bottom_y` (§ B2 step 4) and the verify diff of § B5a
+        checks that very field.
+    """
+    print("\n[7f] a prop stands on a prop (put the teapot on the table)")
+    from app.core.props import stack_offset_y
+
+    def boxes(table_yaw=0.0, teapot_at=(2.0, 3.0), table_go=0.0,
+              teapot_go=0.0, tray=False):
+        out = [{"at": [2.0, 3.0], "yaw": table_yaw, "width_m": 1.2,
+                "depth_m": 0.8, "height_m": 0.75, "ground_offset_m": table_go},
+               {"at": list(teapot_at), "width_m": 0.2, "depth_m": 0.2,
+                "height_m": 0.25, "ground_offset_m": teapot_go}]
+        if tray:
+            out.append({"at": [2.0, 3.0], "offset_y": 0.75, "width_m": 0.5,
+                        "depth_m": 0.5, "height_m": 0.05})
+        return out
+
+    check("a) teapot over the table centre: offset_y = 0.75",
+          near(stack_offset_y(boxes(), 1), 0.75), str(stack_offset_y(boxes(), 1)))
+    off_b = stack_offset_y(boxes(teapot_at=(2.55, 3.0)), 1)
+    check("b) 0.55 m off centre is still on the 1.2 m table: 0.75",
+          near(off_b, 0.75), str(off_b))
+    off_c = stack_offset_y(boxes(table_yaw=90.0, teapot_at=(2.55, 3.0)), 1)
+    check("c) ...and beside it once the table turns 90°: nothing underneath",
+          off_c is None, str(off_c))
+    off_d = stack_offset_y(boxes(tray=True), 1)
+    check("d) a tray on the table wins: 0.75 + 0.05 = 0.80",
+          near(off_d, 0.80), str(off_d))
+    off_e = stack_offset_y(boxes(table_go=-0.05), 1)
+    check("e) a table sunk 5 cm carries its top down: 0.70",
+          near(off_e, 0.70), str(off_e))
+    off_f = stack_offset_y(boxes(teapot_go=-0.05), 1)
+    check("f) a teapot that sinks 5 cm gets 0.80, so its base is 0.75",
+          near(off_f, 0.80) and near(-0.05 + off_f, 0.75), str(off_f))
+    check("red: a prop alone in the room has nothing to stand on",
+          stack_offset_y([boxes()[1]], 0) is None, "None expected")
+
+    # ── and the stored answer reaches the payload unchanged ──
+    stub_stack_props()
+    loc = fixture()
+    for room in loc["rooms"]:
+        if room["id"] == "a":
+            # Room-local metres inside the 4 × 3 m room "a"; the arithmetic
+            # above does not care WHERE the pair stands, only that both stand
+            # in the same frame.
+            room["layout"]["props"] = [
+                {"prop_id": "table", "at": [2.0, 1.5]},
+                {"prop_id": "teapot", "at": [2.0, 1.5], "offset_y": 0.75}]
+    sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    table = spec_of(sc, "prop", "table")
+    teapot = spec_of(sc, "prop", "teapot")
+    check("the table stands on the ground: 0.00 + 0.01",
+          near(table["bottom_y"], 0.01), str(table.get("bottom_y")))
+    check("the teapot stands on the table: 0.01 + 0.75 = 0.76",
+          near(teapot["bottom_y"], 0.76), str(teapot.get("bottom_y")))
+    check("...i.e. exactly the table's 0.75 m above it",
+          near(teapot["bottom_y"] - table["bottom_y"], 0.75),
+          f'{teapot.get("bottom_y")} vs {table.get("bottom_y")}')
+    stub_props()
+
+
+def test_prop_depth_cut() -> None:
+    """[7g] HALF A TABLE AGAINST THE WALL (§ B2 addendum 2026-08-23).
+
+    A placement may cut its prop across the DEPTH — the mesh is clipped at
+    render time, so the library keeps ONE table. The server states the finished
+    plane in payload world metres, ``{normal, constant}``, with three.js' own
+    rule: a fragment is KEPT where ``n·p + c >= 0``. ``side`` names the half
+    that REMAINS — ``front`` = the top of an unturned footprint on the plan
+    (local −z), ``back`` = the bottom (local +z).
+
+    HAND-DERIVED, for a prop of depth 2 m at (2, 3) with ``keep`` 0.5. The prop
+    hangs on its own centre (§ B2 step 3), so local z runs −1 … +1:
+
+      a) side "back", yaw 90°:
+         z_cut = +d/2 − keep·d = 1 − 1 = 0, n_local = (0, 0, +1).
+         R_y(+90) maps (0, 0, 1) to (sin 90, 0, cos 90) = (1, 0, 0), and the
+         plane point is the anchor itself (z_cut = 0), so
+         c = −(1·2 + 0·3) = −2 → kept where x ≥ 2. The table's back half lay
+         along +x once the yaw turned the depth axis onto it, which is exactly
+         the half that stands.
+      b) the same with side "front": n = −(1, 0, 0) and c = +2 → kept where
+         x ≤ 2. The two halves are complementary, as two halves must be.
+      c) side "back", yaw 0°, keep 0.25:
+         z_cut = 1 − 0.5 = 0.5, n = (0, 0, 1), P = (2, 3.5),
+         c = −3.5 → kept where z ≥ 3.5, i.e. the rearmost quarter.
+      d) keep 1.0 is the whole prop and states NOTHING: no plane at all.
+
+    And on the payload, with the [7f] table (depth 0.8 m) in room "a" at
+    room-local (2.0, 1.5) — world (−4 + 2, −4 + 1.5) = (−2.0, −2.5) — cut to
+    half from the back at yaw 0:
+
+        z_cut = 0.4 − 0.5·0.8 = 0.0,  n = (0, 0, 1),  P = (−2.0, −2.5)
+        c     = −(0·(−2.0) + 1·(−2.5)) = 2.5
+    """
+    print("\n[7g] the depth cut of a placed prop")
+    cut = scene_recipe.depth_cut_plane
+    a = cut(2.0, 3.0, 90.0, 2.0, 0.5, "back")
+    check("a) depth 2 m, yaw 90°, keep 0.5 back: n = (1,0,0), c = −2",
+          a and near(a["normal"][0], 1.0) and near(a["normal"][1], 0.0)
+          and near(a["normal"][2], 0.0) and near(a["constant"], -2.0), str(a))
+    b = cut(2.0, 3.0, 90.0, 2.0, 0.5, "front")
+    check("b) ...the front half is its mirror: n = (−1,0,0), c = +2",
+          b and near(b["normal"][0], -1.0) and near(b["constant"], 2.0), str(b))
+    c = cut(2.0, 3.0, 0.0, 2.0, 0.25, "back")
+    check("c) yaw 0, keep 0.25 back: n = (0,0,1), c = −3.5",
+          c and near(c["normal"][2], 1.0) and near(c["normal"][0], 0.0)
+          and near(c["constant"], -3.5), str(c))
+    check("d) keep 1.0 says nothing — no plane",
+          cut(2.0, 3.0, 0.0, 2.0, 1.0, "back") is None, "None expected")
+    check("red: a keep of 0 would be a plane through nothing, and is refused",
+          cut(2.0, 3.0, 0.0, 2.0, 0.0, "back") is None, "None expected")
+
+    stub_stack_props()
+    loc = fixture()
+    for room in loc["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["props"] = [
+                {"prop_id": "table", "at": [2.0, 1.5],
+                 "cut_keep": 0.5, "cut_side": "back"}]
+    sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    plane = spec_of(sc, "prop", "table").get("cut_plane")
+    check("the payload carries the finished plane: n = (0,0,1), c = 2.5",
+          plane and near(plane["normal"][2], 1.0)
+          and near(plane["normal"][0], 0.0) and near(plane["constant"], 2.5),
+          str(plane))
+    # An UNCUT placement of the same prop must not carry the key at all — an
+    # absent statement, like `ground_offset_m` next door.
+    for room in loc["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["props"] = [{"prop_id": "table", "at": [2.0, 1.5]}]
+    whole = spec_of(scene_recipe.compose_scene(loc, plan_width_m=PLAN_W),
+                    "prop", "table")
+    check("...and an uncut prop carries no key",
+          "cut_plane" not in whole, str(sorted(whole)))
+
+    # THE SANITIZER (world_ops._sanitize_props): the stored statement.
+    from app.core.world_ops import _sanitize_props
+    def one(**kw):
+        return (_sanitize_props([{"prop_id": "table", "at": [1.0, 1.0], **kw}])
+                or [{}])[0]
+    check("a stored cut keeps its fraction and its side",
+          one(cut_keep=0.5, cut_side="front").get("cut_keep") == 0.5
+          and one(cut_keep=0.5, cut_side="front").get("cut_side") == "front",
+          str(one(cut_keep=0.5, cut_side="front")))
+    check("keep 1.0 writes NO key (absence is the statement)",
+          "cut_keep" not in one(cut_keep=1.0), str(one(cut_keep=1.0)))
+    check("...and so does a keep above 1 (clamped to 1.0)",
+          "cut_keep" not in one(cut_keep=3.0), str(one(cut_keep=3.0)))
+    check("a keep below the floor is clamped to 0.05, never refused",
+          one(cut_keep=0.001).get("cut_keep") == 0.05, str(one(cut_keep=0.001)))
+    check("junk is no authoring statement and loses the key",
+          "cut_keep" not in one(cut_keep="x"), str(one(cut_keep="x")))
+    check("an unnamed side falls to 'back'",
+          one(cut_keep=0.5).get("cut_side") == "back", str(one(cut_keep=0.5)))
+    stub_props()
+
+
 def plate_of(sc: dict, room_id: str) -> dict:
     """The room's FLOOR as the payload carries it, under one key.
 
@@ -3254,6 +3476,8 @@ def main() -> int:
     test_room_and_prop_specs()
     test_markers_figures()
     test_prop_ground_offset()
+    test_prop_stacking()
+    test_prop_depth_cut()
     test_clip_outline()
     test_signature()
     test_curved_outline()

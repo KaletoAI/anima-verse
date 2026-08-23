@@ -25,6 +25,8 @@ export type { GroundSampler, StoreyGroundStep } from './storeyGround'
 
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
+export { applyDepthCut, cutPlaneFor, disposeCutMaterials } from './depthCut'
+
 export { applyCutouts, CUTOUT_MAX_POLYS,
   CUTOUT_MAX_POINTS } from './cutouts'
 export type { CutoutHandle } from './cutouts'
@@ -93,5 +95,5 @@ export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneFloor,
-  SceneBoundaryOpening, SceneDoorway, SceneProblem,
+  SceneBoundaryOpening, SceneCutPlane, SceneDoorway, SceneProblem,
 } from './types'

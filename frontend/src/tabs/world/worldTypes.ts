@@ -128,6 +128,14 @@ export interface RoomPropPlacement {
   /** Minimum centre distance between the copies in metres (0..5). 0 = they
    *  may overlap — the WHOLE density rule, there is no footprint minimum. */
   scatter_spacing_m?: number
+  /** DEPTH CUT (§ B2 addendum 2026-08-23): the fraction of the prop's DEPTH
+   *  that remains (0.05…1). Absent = uncut — half a table against a wall is
+   *  this table with a clipping plane through it, not a second prop. The
+   *  server turns it into the finished `cut_plane` of the scene spec. */
+  cut_keep?: number
+  /** Which half REMAINS: 'front' is the top of the footprint on the plan
+   *  (local −z), 'back' the bottom (local +z). Turns with the yaw. */
+  cut_side?: 'front' | 'back'
 }
 
 export interface RoomOpening {

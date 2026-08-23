@@ -25,7 +25,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   anchorFigureBind, figureRootY,
-  applyClipOutline, disposeClipMaterials, pickModelVariant, placeModelSpec, plateTargets,
+  applyClipOutline, applyDepthCut, disposeClipMaterials, disposeCutMaterials,
+  pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, flatGround, storeyGroundLift,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
@@ -470,6 +471,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // The subtree's geometry/textures belong to the cache — but a shell
         // clip put PRIVATE material clones on it (§ B1), and those are ours.
         disposeClipMaterials(o)
+        disposeCutMaterials(o)
         return
       }
       const mesh = o as Mesh
@@ -519,6 +521,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       if (spec.clip_outline?.length) {
         applyClipOutline(THREE, outer, spec.clip_outline)
       }
+      // The prop DEPTH CUT (§ B2 addendum 2026-08-23) — after `boxes.add`,
+      // because the plane is world space and only a mounted object knows its
+      // parent chain. On this stage that chain is the identity, so the
+      // preview's plane is the payload's plane unchanged; in the 3D client
+      // the tile group turns it. Same call, same picture.
+      applyDepthCut(THREE, outer, spec.cut_plane)
       if (verifyRef.current) verifyPlacement(outer, spec)
       return outer
     }
@@ -775,6 +783,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         standIn.rotation.y = deg(spec.yaw_deg)
         standIn.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1])
         boxes.add(standIn)
+        // A stand-in for a CUT prop is cut too — same reason as in the client.
+        applyDepthCut(THREE, standIn, spec.cut_plane)
       }
     }
 
@@ -1312,6 +1322,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // Contract camera (Kamera & Maussteuerung): FOV 45, near 0.5, far 800.
         const camera = new THREE.PerspectiveCamera(45, width / height, 0.5, 800)
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+        // Per-material clipping planes — the prop depth cut (§ B2 addendum
+        // 2026-08-23). The 3D client's engine sets the same flag; without it
+        // three ignores `Material.clippingPlanes` and only ONE of the two
+        // renderers would cut, which is the drift § B5 exists to prevent.
+        renderer.localClippingEnabled = true
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
         renderer.setSize(width, height)
         mount.appendChild(renderer.domElement)
@@ -1471,7 +1486,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         scene.add(boxes)
         disposers.push(() => {
           const disposeSafe = (o: Object3D) => {
-            if (o.userData.__noDispose) { disposeClipMaterials(o); return }
+            if (o.userData.__noDispose) {
+              disposeClipMaterials(o); disposeCutMaterials(o); return
+            }
             const mesh = o as Mesh
             mesh.geometry?.dispose?.()
             const m = mesh.material as Material | Material[] | undefined

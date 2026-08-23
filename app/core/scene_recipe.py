@@ -1767,11 +1767,61 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         if len(model_variants) > 1:
             spec["model_variants"] = model_variants
             spec["variant"] = _variant_index(placement, len(model_variants))
+        # The DEPTH CUT, already turned into a plane in world metres — the
+        # renderers only hand it to a material (§ B2 addendum 2026-08-23).
+        cut = depth_cut_plane(anchor_u, anchor_v, _num(placement.get("yaw")),
+                              dims[1], _num(placement.get("cut_keep"), 1.0),
+                              str(placement.get("cut_side") or "back"))
+        if cut:
+            spec["cut_plane"] = cut
         if not has_model:
             spec["placeholder_dims"] = {"w": _r(dims[0]), "d": _r(dims[1]),
                                         "h": _r(dims[2])}
         out.append(spec)
     return out
+
+
+def depth_cut_plane(anchor_u: float, anchor_v: float, yaw_deg: float,
+                    depth_m: float, keep: float, side: str,
+                    ) -> Optional[Dict[str, Any]]:
+    """THE DEPTH CUT as a FINISHED PLANE (§ B2 addendum 2026-08-23) — half a
+    table against a wall, without a second prop in the library.
+
+    Returns ``{"normal": [nx, 0, nz], "constant": c}`` in the payload's own
+    world metres, with the renderer's rule: a fragment is KEPT where
+    ``n·p + c >= 0``. That is exactly ``THREE.Plane``'s convention, so the
+    consumer builds one object and hands it to the material — no renderer
+    decides where the cut runs (the finding of § B5: geometry exists once).
+    ``None`` for a prop that is not cut at all.
+
+    The cut always runs across the prop's DEPTH, i.e. its LOCAL z axis, and it
+    turns with the placement yaw. ``side`` names the half that REMAINS:
+    ``"front"`` is the side the floor plan draws at the TOP of an unturned
+    footprint (local −z), ``"back"`` the bottom (local +z). The prop hangs on
+    its own centre (§ B2 step 3), so local z runs −d/2 … +d/2 and the plane
+    sits at
+
+        back:   z_cut = +d/2 − keep·d,  n_local = (0, 0, +1)
+        front:  z_cut = −d/2 + keep·d,  n_local = (0, 0, −1)
+
+    turned into the world by the SAME rotation the mesh gets
+    (``R_y(+yaw)``, § A1.1): ``n = σ·(sin θ, 0, cos θ)`` and, with the plane
+    point ``P = anchor + z_cut·(sin θ, 0, cos θ)``, ``c = −n·P``.
+
+    The cut face stays OPEN — this is a clipping plane, not CSG. Consumers draw
+    the cut mesh double-sided so the hollow does not show through.
+    """
+    if not (0 < keep < 1) or depth_m <= 0:
+        return None
+    sigma = -1.0 if side == "front" else 1.0
+    z_cut = sigma * (depth_m / 2.0) - sigma * keep * depth_m
+    th = math.radians(yaw_deg)
+    dir_x, dir_z = math.sin(th), math.cos(th)
+    nx, nz = sigma * dir_x, sigma * dir_z
+    px = anchor_u + z_cut * dir_x
+    pz = anchor_v + z_cut * dir_z
+    return {"normal": [_r(nx, 4), 0.0, _r(nz, 4)],
+            "constant": _r(-(nx * px + nz * pz), 4)}
 
 
 def _prop_variant_urls(prop_id: str,
