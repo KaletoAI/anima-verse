@@ -42,6 +42,16 @@
  * VERTEX, so a river that bends carries its ripples around the bend — the
  * attribute was there, it merely used to hold one direction for the whole area.
  *
+ * AND ITS LENGTH IS HOW FAST THIS AREA RUNS (finding 2026-08-23 no. 2). The
+ * tangent is a UNIT vector, so its length was 1.0 on every flowing water ever
+ * built; an area that authors `meta.flow_speed_m_s` scales it by the RATIO of
+ * its own metres per second to its kind's `flow_speed` dial, and the fragment
+ * multiplies `uFlowSpeed` by that length. No second attribute, no second
+ * varying, and — the reason it is the length and not a float of its own — a
+ * geometry that says nothing keeps reading (0, 0) as "still", where a missing
+ * float attribute would read 0 and freeze every water that never heard of the
+ * field. The direction is unaffected: the shader normalises the same vector.
+ *
  * AND SO IS THE OPAQUE DEPTH (W4b). `aWaterOpaque` is the metres of water this
  * area needs before it is drawn fully — ¾ of its own bed depth. It was the
  * uniform `uShoreBandM` holding the constant 1.5 m, and a 6 m wide river with
@@ -149,7 +159,8 @@ export function patchWaterShore(mat: THREE.Material): void {
 export function buildWaterPlane(geometry: THREE.BufferGeometry,
                                 profile: WaterProfile,
                                 material: THREE.Material,
-                                opaqueDepthM: number): THREE.Mesh {
+                                opaqueDepthM: number,
+                                flowFactor = 1): THREE.Mesh {
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
   liftToWaterProfile(pos.array as unknown as { length: number;
                                                [index: number]: number },
@@ -166,6 +177,12 @@ export function buildWaterPlane(geometry: THREE.BufferGeometry,
   // straight river every vertex still gets the same pair, which is what the
   // area-wide vector used to write.
   //
+  // `flowFactor` is the LENGTH that tangent is scaled to — 1 unless this area
+  // authors a flow speed of its own (`@anima/scene-render waterFlowFactor`, and
+  // the file header for why the speed rides on the length). Still water is
+  // untouched by it: `waterFlowAt` answers (0, 0) there, and 0 × anything is
+  // still exactly (0, 0), which is the state the shader reads as a lake.
+  //
   // …and THE OPAQUE DEPTH beside it, one float per vertex (W4b): the metres of
   // water this area needs before it is fully drawn. Constant over the mesh, and
   // an attribute for the same reason the flow is one — it belongs to the AREA,
@@ -174,8 +191,8 @@ export function buildWaterPlane(geometry: THREE.BufferGeometry,
   const opaque = new Float32Array(pos.count);
   for (let i = 0; i < pos.count; i += 1) {
     const [fx, fz] = waterFlowAt(profile, pos.getX(i), pos.getZ(i));
-    flow[i * 2] = fx;
-    flow[i * 2 + 1] = fz;
+    flow[i * 2] = fx * flowFactor;
+    flow[i * 2 + 1] = fz * flowFactor;
     opaque[i] = opaqueDepthM;
   }
   geometry.setAttribute('aWaterFlow', new THREE.BufferAttribute(flow, 2));

@@ -34,6 +34,12 @@ import { useState, type CSSProperties, type ReactNode } from 'react'
  * `clearable` gives the field an empty state for dials whose "unset" is a
  * real value (a marker facing that means "face the neighbours"): clearing the
  * text and committing calls `onClear` instead of `onChange`.
+ *
+ * `slider={false}` drops the track and leaves the number field alone — for
+ * values that are TYPED, not swept (a water level in world metres, a depth in
+ * metres: user request 2026-08-23). Everything else stays exactly as it is,
+ * clamps and rounding included, so a field can lose its slider without
+ * changing what it accepts or what it writes.
  */
 export interface SliderInputProps {
   /** Current value. `undefined` renders the number field empty and parks the slider on `fallback`. */
@@ -63,6 +69,8 @@ export interface SliderInputProps {
   placeholder?: string
   title?: string
   disabled?: boolean
+  /** Show the range track at all. `false` = a plain number field. Default true. */
+  slider?: boolean
   /** Width of the range track. Default 100. */
   sliderWidth?: number | string
   /** Extra style for the range track, e.g. `{ flex: 1 }` in a stretching row. */
@@ -105,6 +113,7 @@ export function SliderInput({
   placeholder,
   title,
   disabled = false,
+  slider = true,
   sliderWidth = 100,
   sliderStyle,
   inputWidth = 72,
@@ -154,21 +163,23 @@ export function SliderInput({
       style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em', ...style }}
     >
       {label}
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={shown}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        style={{ width: sliderWidth, minWidth: 0, ...sliderStyle }}
-        onChange={(e) => {
-          setDraft(null)
-          const n = e.target.valueAsNumber
-          if (Number.isFinite(n)) onChange(snap(clampTo(n, min, max)))
-        }}
-      />
+      {slider ? (
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={shown}
+          disabled={disabled}
+          aria-label={ariaLabel}
+          style={{ width: sliderWidth, minWidth: 0, ...sliderStyle }}
+          onChange={(e) => {
+            setDraft(null)
+            const n = e.target.valueAsNumber
+            if (Number.isFinite(n)) onChange(snap(clampTo(n, min, max)))
+          }}
+        />
+      ) : null}
       <input
         className="ga-input"
         type="number"

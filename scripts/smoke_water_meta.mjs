@@ -45,6 +45,21 @@
  * hand — including the RED counter-check that the straight axis of W1 gets the
  * middle of a bend wrong, which is the whole reason the axis became a
  * polyline.
+ *
+ * AND SINCE 2026-08-23 AN AREA MAY SAY HOW FAST IT RUNS ([16],
+ * `meta.flow_speed_m_s`). It is an OVERRIDE of the surface KIND's `flow_speed`
+ * dial, so it is read with that dial's own range and CLAMPED — 5 m/s is "as
+ * fast as this goes", not the 3 m/s a wrapped bearing would make of it. The
+ * renderers never receive the metres per second: `waterFlowFactor`
+ * (`@anima/scene-render`, pinned here because the admin's number and the
+ * renderer's factor must be one number) turns it into the RATIO against the
+ * kind, which travels as the LENGTH of the per-vertex flow attribute so the
+ * shader can multiply its kind-wide `uFlowSpeed` by it. Two consequences are
+ * checked by hand: no override is EXACTLY 1 (the unit tangent every water has
+ * carried since W4a, i.e. nothing already built moves differently), and an
+ * authored 0 is floored to 1e-3 — a zero-length vector is what the shader
+ * spells "lake", and a lake drifts at 0.25 m/s, which is FASTER than the
+ * standstill the author asked for.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -163,9 +178,19 @@ const {
   'WATER_DEPTH_MAX_M', 'SHORE_RAMP_MIN_M', 'SHORE_RAMP_MAX_M',
   'FLOW_DIR_MIN_DEG', 'FLOW_DIR_MAX_DEG',
 ]);
-const { WATER_LEVEL_SPAN_M, HEIGHT_MAX_M } = await readConsts(TOOLS_SRC, [
-  'WATER_LEVEL_SPAN_M', 'HEIGHT_MAX_M',
+const { HEIGHT_MAX_M } = await readConsts(TOOLS_SRC, ['HEIGHT_MAX_M']);
+const {
+  FLOW_SPEED_MIN_M_S, FLOW_SPEED_MAX_M_S, FLOW_SPEED_DEFAULT_M_S,
+} = await readConsts(TYPES_SRC, [
+  'FLOW_SPEED_MIN_M_S', 'FLOW_SPEED_MAX_M_S', 'FLOW_SPEED_DEFAULT_M_S',
 ]);
+// The RENDER side of the same number, from the package both renderers share:
+// `waterFlowFactor` turns the area's metres per second into the factor the
+// shader multiplies its kind's `uFlowSpeed` by. `materials.ts` carries only
+// `import type`, so the single-file transform above reaches it.
+const { waterFlowFactor, WATER_FLOW_FACTOR_MIN, WATER_FLOW_SPEED_DEFAULT_M_S,
+  WATER_FLOW_SPEED_MAX_M_S } = await loadModule(
+  join(ROOT, 'packages/scene-render/src/materials.ts'), 'ts', 'watermat-');
 
 console.log('[1] nothing stored means nothing read');
 check('no meta at all', readWater(undefined), {});
@@ -370,20 +395,28 @@ check('the default shore ramp is inside that range',
 check('the bearing sweeps a whole turn',
   [FLOW_DIR_MIN_DEG, FLOW_DIR_MAX_DEG], [0, 360]);
 
-// The level knob, by hand from the rule in `WaterFields`:
-//   unset  -> [-HEIGHT_MAX_M, +HEIGHT_MAX_M]              = [-50, 50]
-//   set 12 -> [12 - 10, 12 + 10] clamped to ±50           = [2, 22]
-//   set 45 -> [45 - 10, min(50, 45 + 10)]                 = [35, 50]
-const levelRange = (level) => (level === undefined
-  ? [-HEIGHT_MAX_M, HEIGHT_MAX_M]
-  : [Math.max(-HEIGHT_MAX_M, level - WATER_LEVEL_SPAN_M),
-    Math.min(HEIGHT_MAX_M, level + WATER_LEVEL_SPAN_M)]);
+// THE LEVEL FIELD IS TYPED, NOT SWEPT (user request 2026-08-23), and with the
+// slider goes the ±10 m window that used to close around a level already set.
+// That window was a SLIDER resolution, not a rule about water: as the clamp of
+// a typed field it would have swallowed the very edit the field is for — a lake
+// moved from 2 m to 40 m would have committed 12. The range is the world's:
+//   any level, set or not -> [-HEIGHT_MAX_M, +HEIGHT_MAX_M] = [-50, 50]
+const levelRange = () => [-HEIGHT_MAX_M, HEIGHT_MAX_M];
 check('an unset level reaches every height a world has',
-  levelRange(undefined), [-50, 50]);
-check('a set level is trimmed ±10 m around itself',
-  levelRange(12), [2, 22]);
-check('...and never past the world clamp',
-  levelRange(45), [35, 50]);
+  levelRange(), [-50, 50]);
+check('...and so does a level that is already set',
+  levelRange(12), [-50, 50]);
+// RED: the window that stood here would have clamped a retype to its own edge.
+check('RED: the old ±10 m window would have refused 40 m on a 2 m lake',
+  Math.min(Math.max(40, 2 - 10), 2 + 10), 12);
+// …and the three metre fields say so themselves: no track, same clamps.
+const toolsSrc = await readFile(TOOLS_SRC, 'utf8');
+// Four fields, not three: the level, the depth, the shore ramp — and the flow
+// speed of [16], which is typed for the same reason.
+check('every metre/second field of the water panel carries no slider',
+  (toolsSrc.match(/^\s+slider=\{false\}$/gm) || []).length, 4);
+check('RED: and the window constant is gone with the track',
+  /WATER_LEVEL_SPAN_M\s*=/.test(toolsSrc), false);
 
 console.log('[12] the floor plan says WHERE the water is, never how deep');
 // W1 § 6: a room lying on painted water carries a REFERENCE and nothing more.
@@ -536,6 +569,96 @@ check('a collapsed segment has no direction and gets no arrow',
   flowArrowsAlong([[5, 5], [5, 5]]).length, 0);
 check('a line of one point has no segment to draw on',
   flowArrowsAlong([[5, 5]]).length, 0);
+
+console.log('[16] the AREA’s own flow speed — read, clamped, and the factor '
+  + 'it becomes');
+// `meta.flow_speed_m_s` (finding 2026-08-23 no. 2) is an OVERRIDE of the
+// SURFACE KIND's `flow_speed` dial, so it takes that dial's range and is
+// CLAMPED like the two widths — a speed is not an angle, and 5 m/s means "as
+// fast as this goes", not 5 − 2 the way a bearing wraps.
+check('the speed field takes the kind dial’s own range',
+  [FLOW_SPEED_MIN_M_S, FLOW_SPEED_MAX_M_S], [0, 2]);
+check('...and the panel quotes the kind default the renderer uses',
+  FLOW_SPEED_DEFAULT_M_S, WATER_FLOW_SPEED_DEFAULT_M_S);
+check('the raised default is 0.15 m/s, not the 0.08 that read as standing',
+  WATER_FLOW_SPEED_DEFAULT_M_S, 0.15);
+check('a plain speed is read', readWater({ flow_speed_m_s: 0.4 }),
+  { flow_speed_m_s: 0.4 });
+check('0 m/s is an authored standstill, not "unset"',
+  readWater({ flow_speed_m_s: 0 }), { flow_speed_m_s: 0 });
+check('a numeric string is a number (JSON round trips)',
+  readWater({ flow_speed_m_s: '1.25' }), { flow_speed_m_s: 1.25 });
+check('too fast clamps to the dial’s top',
+  readWater({ flow_speed_m_s: 9 }), { flow_speed_m_s: 2 });
+check('a negative speed clamps to a standstill',
+  readWater({ flow_speed_m_s: -4 }), { flow_speed_m_s: 0 });
+for (const junk of [null, '', '   ', NaN, Infinity, [], {}, 'fast']) {
+  check(`junk is no override (${JSON.stringify(junk)})`,
+    readWater({ flow_speed_m_s: junk }), {});
+}
+
+// THE FACTOR, hand-derived. The shader multiplies the KIND's `uFlowSpeed` by
+// the LENGTH of the flow attribute, so the length an area sends is
+// `area m/s ÷ kind m/s` — and the product is the area's own metres per second
+// again, whatever the kind is dialled to:
+//   0.30 over the default 0.15 -> 2      -> 0.15 · 2    = 0.30 m/s
+//   0.03 over the default 0.15 -> 0.2    -> 0.15 · 0.2  = 0.03 m/s
+//   0.60 over a kind at 0.40   -> 1.5    -> 0.40 · 1.5  = 0.60 m/s
+check('twice the kind’s speed is a factor of 2',
+  waterFlowFactor(0.3, WATER_FLOW_SPEED_DEFAULT_M_S), 2);
+check('...a fifth of it a factor of 0.2',
+  Math.round(waterFlowFactor(0.03, WATER_FLOW_SPEED_DEFAULT_M_S) * 1e12) / 1e12,
+  0.2);
+near('...and the kind it is measured against is the kind, not the default',
+  waterFlowFactor(0.6, 0.4), 1.5, 1e-12);
+for (const [area, kind] of [[0.3, 0.15], [0.03, 0.15], [0.6, 0.4], [2, 0.15]]) {
+  near(`kind ${kind} m/s × factor = the authored ${area} m/s`,
+    kind * waterFlowFactor(area, kind), area, 1e-12);
+}
+// ABSENT IS EXACTLY 1 — the unit tangent of W4a, i.e. every water built before
+// this field existed keeps the attribute it always had, bit for bit.
+check('no override is a factor of exactly 1',
+  waterFlowFactor(undefined, WATER_FLOW_SPEED_DEFAULT_M_S), 1);
+for (const junk of [null, '', '   ', NaN, Infinity, [], {}, 'fast', true]) {
+  check(`...and so is junk (${JSON.stringify(junk)})`,
+    waterFlowFactor(junk, WATER_FLOW_SPEED_DEFAULT_M_S), 1);
+}
+// A KIND THAT DOES NOT FLOW CANNOT BE MADE TO: `uFlowSpeed` is 0 there (ice),
+// and 0 × anything is 0 — so the ratio would be a division by zero pretending
+// to mean something. 1 is returned instead.
+check('a kind standing at 0 m/s answers 1, not infinity',
+  waterFlowFactor(0.5, 0), 1);
+check('...and a missing kind speed falls back to the default',
+  waterFlowFactor(0.3, undefined), 2);
+// THE FLOOR. The shader reads a flow shorter than 1e-4 as STILL — a lake, which
+// drifts at `uSpeed` (0.25 m/s), i.e. FASTER. An authored 0 must therefore not
+// arrive as a zero-length vector: it is floored to 1e-3, ten times that
+// threshold, which on the default kind is 0.15 mm/s — one 1.6 m wavelength in
+// about three hours, a river standing still while staying a river.
+check('a river dialled to 0 is floored above the still threshold',
+  waterFlowFactor(0, WATER_FLOW_SPEED_DEFAULT_M_S), WATER_FLOW_FACTOR_MIN);
+check('...and that floor is ten times the shader’s 1e-4', WATER_FLOW_FACTOR_MIN,
+  1e-3);
+check('RED: an unfloored 0 would have been read as a lake at 0.25 m/s',
+  0 < 1e-4, true);
+near('the floored current is 0.15 mm/s',
+  WATER_FLOW_SPEED_DEFAULT_M_S * WATER_FLOW_FACTOR_MIN, 0.00015, 1e-9);
+check('the render ceiling is the panel’s ceiling',
+  WATER_FLOW_SPEED_MAX_M_S, FLOW_SPEED_MAX_M_S);
+check('...so a hand-written 99 m/s cannot outrun the dial',
+  waterFlowFactor(99, WATER_FLOW_SPEED_DEFAULT_M_S),
+  waterFlowFactor(WATER_FLOW_SPEED_MAX_M_S, WATER_FLOW_SPEED_DEFAULT_M_S));
+
+// …and the panel offers the field, on flowing water only: a lake reads the
+// still-water dial, where this number would change nothing.
+check('the panel has a flow-speed field',
+  /label=\{t\('Flow speed \(m\/s\)'\)\}/.test(toolsSrc), true);
+check('...shown only where the water flows',
+  /\{flowing \? \(/.test(toolsSrc), true);
+check('...and "flowing" is the bake’s own rule: a line says so, a polygon '
+  + 'carries a bearing',
+  /const flowing = hasLine \? !!water\.flow_along : flow !== undefined/
+    .test(toolsSrc), true);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -69,6 +69,7 @@ import { buildAreaGeometry,
   scatterCellInstances, scatterCellSeed, scatterClearM,
   SCATTER_CELL_M,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
+  waterFlowFactor, WATER_FLOW_SPEED_DEFAULT_M_S,
   worldHeightRange } from '@anima/scene-render';
 import type { Point2, ScatterFootprint, ScatterInstance,
   SurfaceMaterialSpec, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
@@ -2340,10 +2341,16 @@ export function createGround(): Ground {
      *  XZ plane; `buildWaterPlane` lifts every vertex onto the area's own
      *  profile and hangs the flow direction and the opaque depth on it as
      *  attributes. `opaqueDepthM` is ¾ of the area's own bed depth (W4b), so a
-     *  shallow river is drawn opaque where a deep lake still fades. */
+     *  shallow river is drawn opaque where a deep lake still fades.
+     *
+     *  `flowFactor` is the third thing that belongs to the AREA and rides on
+     *  the geometry (finding 2026-08-23 no. 2): how fast this one water runs
+     *  against its kind's dial, carried as the LENGTH of the flow attribute. It
+     *  is 1 for every area that authors no speed — the unit tangent of W4a. */
     const nextWater: THREE.Mesh[] = [];
     const addMirror = (geometry: THREE.BufferGeometry, kind: string,
-                       profile: WaterProfile, opaqueDepthM: number): void => {
+                       profile: WaterProfile, opaqueDepthM: number,
+                       flowFactor: number): void => {
       let mat = waterMats.get(kind);
       if (!mat) {
         // 1 m per UV unit: the shape geometry's UVs are the world
@@ -2358,7 +2365,8 @@ export function createGround(): Ground {
         patchWaterShore(mat);
         waterMats.set(kind, mat);
       }
-      nextWater.push(buildWaterPlane(geometry, profile, mat, opaqueDepthM));
+      nextWater.push(buildWaterPlane(geometry, profile, mat, opaqueDepthM,
+                                     flowFactor));
     };
     areas.forEach((area, index) => {
       const built = builtAreas[index];
@@ -2382,8 +2390,16 @@ export function createGround(): Ground {
         // (W4b): `meta.water_depth_effective` is the kind's default with this
         // area's override already applied, so the ¾ that make it opaque are
         // taken from the area's own bed and not from the default lake's.
+        // …and HOW FAST it runs, the one water number the bake has no opinion
+        // about: `meta.flow_speed_m_s` is a pure look, so it is read straight
+        // off the area's meta and turned into a factor against the KIND's own
+        // `flow_speed` dial — the uniform the shader multiplies. An area
+        // without the key answers exactly 1, i.e. the unit tangent of W4a.
         addMirror(built.geometry, area.kind, profile,
-                  waterOpaqueDepthM(area.meta?.water_depth_effective));
+                  waterOpaqueDepthM(area.meta?.water_depth_effective),
+                  waterFlowFactor(area.meta?.flow_speed_m_s,
+                                  surfaceMaterialSpec(surfaceOf(area.kind))
+                                    ?.flow_speed ?? WATER_FLOW_SPEED_DEFAULT_M_S));
       } else {
         // Not a mirror, so the earcut is not drawn — and a geometry nobody
         // holds is a buffer nobody frees. Only the RING lives on (below); the

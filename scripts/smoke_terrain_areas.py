@@ -253,6 +253,30 @@ Throwaway storage. Hand-derived expectations:
                                character the untagged one, because the payload
                                is the same payload
 
+ [17] meta.flow_speed_m_s — how fast ONE painted water runs (finding
+      2026-08-23 no. 2). It is an OVERRIDE of the SURFACE KIND's `flow_speed`
+      dial, so it takes exactly that dial's range (0…2 m/s,
+      `surface_textures._MATERIAL_RANGES`) and is CLAMPED, never refused: a
+      speed is not an angle, and 5 m/s means "as fast as this goes", not
+      5 − 2 m/s the way a bearing wraps.
+        0.4       -> 0.4          (a plain value survives)
+        "0.456"   -> 0.46         (coerced, two decimals — a centimetre per
+                                   second is finer than any eye reads on a
+                                   ripple, and the number travels to clients)
+        0.455     -> 0.46         (round-half-up, the rule every other metre
+                                   number here uses)
+        99 / -3   -> 2.0 / 0.0    (both ends of the kind's own dial)
+        0         -> 0.0 KEPT     — the one value that must not be dropped: a
+                                   river dialled to a standstill is authored,
+                                   and the renderer draws it as a river that
+                                   does not move (the factor is floored above
+                                   the shader's still threshold), not as a lake
+        NaN / inf / None / "" / [] / "fast" -> the KEY IS DROPPED; the kind
+                                   answers again, which is what absence means
+      It reaches the client through `meta` untouched and changes NOTHING about
+      the bake: an area carrying it carves exactly the bed it carved without
+      it, which is checked here against a second sanitize of the same area.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_areas.py
 """
 import asyncio
@@ -1239,6 +1263,46 @@ check("…and the winter signature is the untagged one again "
       "(the payload is identical)", terrain.terrain_sig(), _sig_untagged)
 props.set_variant_seasons(BUSH, _bush_v1, [])
 terrain.delete_area(_season_area["id"])
+
+print("\n[17] meta.flow_speed_m_s — the area's own current, clamped to the "
+      "kind's dial")
+
+
+def speed_of(meta):
+    """`meta` through the real sanitizer, water fields only."""
+    return terrain.sanitize_area({"kind": "water", "polygon": SQUARE,
+                                  "meta": meta})["meta"]
+
+
+check("a plain value survives", speed_of({"flow_speed_m_s": 0.4}),
+      {"flow_speed_m_s": 0.4})
+check("a numeric string is coerced to two decimals",
+      speed_of({"flow_speed_m_s": "0.456"}), {"flow_speed_m_s": 0.46})
+check("...rounding half UP, like every other number here",
+      speed_of({"flow_speed_m_s": 0.455}), {"flow_speed_m_s": 0.46})
+check("above the kind's dial clamps to its top",
+      speed_of({"flow_speed_m_s": 99}), {"flow_speed_m_s": 2.0})
+check("...and below it to its bottom",
+      speed_of({"flow_speed_m_s": -3}), {"flow_speed_m_s": 0.0})
+# THE ONE VALUE THAT IS NOT JUNK. 0 m/s is an authored standstill and the
+# renderer keeps drawing a river (streaks, downstream anisotropy) that does not
+# move; dropping the key would hand the water back to the kind and speed it up.
+check("0 is KEPT — a river dialled to a standstill is authored",
+      speed_of({"flow_speed_m_s": 0}), {"flow_speed_m_s": 0.0})
+for junk in (float("nan"), float("inf"), None, "", [], "fast", {}):
+    check(f"junk loses the key ({junk!r})", speed_of({"flow_speed_m_s": junk}),
+          {})
+check("a foreign meta key survives next to it",
+      speed_of({"flow_speed_m_s": 1.5, "note": "free form"}),
+      {"flow_speed_m_s": 1.5, "note": "free form"})
+# IT IS A LOOK, NOT A SHAPE: the bake never reads it, so an area carrying it
+# must sanitize to the same water fields as one without it.
+_shaped = {"water_level": 3.0, "water_depth_m": 1.2, "shore_ramp_m": 2.0,
+           "flow_dir_deg": 90}
+check("the bake's own water fields are untouched by it",
+      {k: v for k, v in speed_of({**_shaped, "flow_speed_m_s": 1.9}).items()
+       if k != "flow_speed_m_s"},
+      speed_of(dict(_shaped)))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

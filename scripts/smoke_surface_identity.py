@@ -176,8 +176,12 @@ def main() -> int:
     # downstream (the same number reads several times faster). `speed` is the
     # still-water metres per second, `flow_speed` the flowing one.
     check("still water keeps its 0.25 m/s", (water or {}).get("speed"), 0.25)
-    check("...and flowing water is far slower", (water or {}).get("flow_speed"),
-          0.08)
+    # 0.15, not 0.08: the first round pointed the ripple downstream and then had
+    # to slow it down, and 0.08 m/s read as a standing river (follow-up finding
+    # 2026-08-23, "the river now moves too slowly"). Still slower than the lake,
+    # because a river's two layers add up instead of cancelling.
+    check("...and flowing water is still slower than the lake",
+          (water or {}).get("flow_speed"), 0.15)
     clamped = st.sanitize_material({"class": "water", "wave_m": 999,
                                     "speed": -5, "flow_speed": 99, "sky_mix": 2,
                                     "roughness": -1, "map_strength": 7,

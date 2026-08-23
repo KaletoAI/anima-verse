@@ -210,7 +210,7 @@ def _sanitize_stroke(raw: Any) -> Dict[str, Any]:
     whitelisted — the editor regenerates the polygon FROM these fields, so a
     stray key or a NaN spacing would reshape ground on the next edit.
 
-    * ``points`` / ``width_m`` — the clicked centre line (2..256 points, the
+    * ``points`` / ``width_m`` — the clicked centre line (2..1024 points, the
       same rounding and the same range as an outline) and the width of the
       ribbon it becomes. Both are required: without them there is nothing to
       regenerate, and a half-recipe would put the editor's handles where the
@@ -279,6 +279,16 @@ def _sanitize_water(meta: Dict[str, Any]) -> None:
       along that line (W4a). Anything else loses the key, which is the same
       "no flow" state as absent — a river follows its own bends, and one
       bearing cannot say where a meander runs.
+    * ``flow_speed_m_s`` — HOW FAST this one water runs, in metres per second,
+      0…2 (finding 2026-08-23: "the river now moves too slowly"). It is an
+      OVERRIDE like the two widths: absent, the SURFACE KIND's ``flow_speed``
+      dial answers (``core.surface_textures``), so a world tunes all its rivers
+      in one place and only the odd torrent says its own number. It reaches the
+      renderer as the LENGTH of the per-vertex flow attribute
+      (``client3d/src/scene/waterPlane.ts``), never as a uniform — one material
+      still serves every water of a kind. It changes NOTHING about the bake:
+      the carve, the mirror and the flow AXIS are untouched, so it is not part
+      of ``heightfield.WaterMeta``.
     * ``water_depth_m`` — how far the bed lies under the mirror once the shore
       ramp is done. Clamped, never refused: an authoring slip should make a
       shallow lake, not lose the shape somebody drew.
@@ -329,6 +339,18 @@ def _sanitize_water(meta: Dict[str, Any]) -> None:
             meta["flow_along"] = along
         else:
             meta.pop("flow_along", None)
+    if "flow_speed_m_s" in meta:
+        # The SAME range the kind's dial has (`surface_textures._MATERIAL_RANGES`
+        # `flow_speed`), so an area can say anything the kind could have said and
+        # nothing more. Two decimals: a centimetre per second is finer than any
+        # eye can tell on a ripple, and it keeps the stored number short.
+        # Junk DROPS the key rather than storing 0 — 0 m/s is a legible authored
+        # state (a frozen river) and must not be what a typo means.
+        speed = _finite(meta.get("flow_speed_m_s"))
+        if speed is None:
+            meta.pop("flow_speed_m_s", None)
+        else:
+            meta["flow_speed_m_s"] = round(min(max(speed, 0.0), 2.0), 2)
     for key, low, high in (
             ("water_depth_m", WATER_DEPTH_MIN_M, WATER_DEPTH_MAX_M),
             ("shore_ramp_m", WATER_SHORE_RAMP_MIN_M, WATER_SHORE_RAMP_MAX_M)):

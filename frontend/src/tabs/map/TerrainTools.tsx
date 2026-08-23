@@ -32,7 +32,8 @@ import {
 } from './mapMath'
 import { typeColor } from './TerrainLayer'
 import {
-  FLOW_DIR_MAX_DEG, FLOW_DIR_MIN_DEG, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
+  FLOW_DIR_MAX_DEG, FLOW_DIR_MIN_DEG, FLOW_SPEED_DEFAULT_M_S,
+  FLOW_SPEED_MAX_M_S, FLOW_SPEED_MIN_M_S, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
   WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
 } from './mapTypes'
 import type {
@@ -424,12 +425,6 @@ export const FALLOFF_DEFAULT_M = 10
  * the polygon, which only the server can compute — an unset level says
  * "auto (rim)" and no number.
  */
-/** How far the level slider sweeps around a level that is already SET — a
- *  water mirror is trimmed in centimetres, not dragged across the world. An
- *  unset one sweeps the full world height range instead (`HEIGHT_MAX_M`), so
- *  the first number can be any height a world has. */
-export const WATER_LEVEL_SPAN_M = 10
-
 /**
  * A metre knob with a NAMED clamp — the `WidthField` pattern, with a sign and
  * a limit that says itself. The relief's height and ramp are typed into it,
@@ -999,10 +994,16 @@ export function TerrainLayerHint({ defaultKindName, open, onOpen }: TerrainLayer
  * ramp then come from the KIND (the placeholder names the number in force),
  * the level from the rim, and the bed from the bare world.
  *
- * The level slider sweeps the FULL world height range while nothing is set (a
- * mountain lake has to be reachable in one go) and tightens to
- * ±`WATER_LEVEL_SPAN_M` around a level that IS set, because the second visit
- * to this field trims centimetres rather than moving the lake.
+ * THE THREE METRE FIELDS ARE TYPED, NOT SWEPT (user request 2026-08-23). A
+ * water level is a world height somebody reads off the terrain, a depth and a
+ * shore ramp are numbers somebody knows — none of the three is found by
+ * dragging, and the track only ate the room the number needed. They keep their
+ * clamps, their steps and their "empty = the kind/the rim decides" state; only
+ * the slider is gone (`SliderInput slider={false}`). With it goes the level's
+ * ±10 m window around an already-set level, which existed so a DRAG could still
+ * trim centimetres there: as a clamp on a TYPED field it would refuse the very
+ * number the field is for (a lake moved from 2 m to 40 m would silently land at
+ * 12). The level therefore accepts the whole world height range, set or not.
  */
 function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
   water: TerrainWater
@@ -1021,16 +1022,16 @@ function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
 }) {
   const { t } = useI18n()
   const level = water.water_level
-  const levelMin = level === undefined
-    ? -HEIGHT_MAX_M
-    : Math.max(-HEIGHT_MAX_M, level - WATER_LEVEL_SPAN_M)
-  const levelMax = level === undefined
-    ? HEIGHT_MAX_M
-    : Math.min(HEIGHT_MAX_M, level + WATER_LEVEL_SPAN_M)
   // The two numbers in force where this area authors none — the KIND's, never
   // the module's, so the placeholder shows what the bake will really do.
   const kindDefaults = waterKindDefaults(kindType)
   const flow = water.flow_dir_deg
+  // DOES THIS WATER FLOW AT ALL? — the same rule the bake uses
+  // (`heightfield.is_flowing`), read off the two authoring fields: a drawn line
+  // flows when it says so, a polygon flows when it carries a bearing. Only then
+  // is a flow SPEED a control at all: a lake reads `uSpeed`, the kind's
+  // still-water dial, and this number would change nothing on it.
+  const flowing = hasLine ? !!water.flow_along : flow !== undefined
   // A bed kind the catalog no longer holds stays SELECTABLE, the way a missing
   // surface texture does: it is a legitimate reference to a ground that may
   // come back, and dropping it from the list would rewrite the area on the
@@ -1046,7 +1047,8 @@ function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
           title={t('The height the water surface stands at, as a world height in metres. Empty = the server pins it to the median height along the rim of this area.')}
           value={level}
           fallback={0}
-          min={levelMin} max={levelMax} step={0.05} fineStep="any"
+          slider={false}
+          min={-HEIGHT_MAX_M} max={HEIGHT_MAX_M} step={0.05} fineStep="any"
           clearable placeholder={t('auto (rim)')}
           onChange={(v) => onWater({ water_level: v })}
           onClear={() => onWater({ water_level: undefined })}
@@ -1061,6 +1063,7 @@ function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
           title={t('How far the bed is carved below the water surface. Empty = the depth this terrain kind defaults to.')}
           value={water.water_depth_m}
           fallback={kindDefaults.depthM}
+          slider={false}
           min={WATER_DEPTH_MIN_M} max={WATER_DEPTH_MAX_M} step={0.1}
           fineStep="any"
           clearable placeholder={String(kindDefaults.depthM)}
@@ -1072,6 +1075,7 @@ function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
           title={t('Over how many metres the bed climbs back to the untouched land at the water’s edge. 0 = a wall at the shore. Empty = the ramp this terrain kind defaults to.')}
           value={water.shore_ramp_m}
           fallback={kindDefaults.rampM}
+          slider={false}
           min={SHORE_RAMP_MIN_M} max={SHORE_RAMP_MAX_M} step={0.5}
           fineStep="any"
           clearable placeholder={String(kindDefaults.rampM)}
@@ -1131,6 +1135,39 @@ function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
           />
         </div>
       )}
+      {/* HOW FAST IT RUNS (finding 2026-08-23 no. 2, `meta.flow_speed_m_s`).
+          ONLY ON FLOWING WATER, and that is not tidiness: the shader reads the
+          still-water dial on a lake, so this number would sit there doing
+          nothing at all. It is an OVERRIDE — empty means the water's surface
+          KIND answers, which is where a world speeds up every river at once.
+          A number left behind by an area that has since been set back to
+          "still" is NOT cleared: unlike the bearing of W4a it acts on nothing
+          while the water stands, and it is the speed the author picked for the
+          moment the flow comes back. */}
+      {flowing ? (
+        <>
+          <div className="ga-map-chip-row">
+            <SliderInput
+              label={t('Flow speed (m/s)')}
+              title={t('How fast this one water runs, in metres per second. Empty = the speed of its surface kind. It changes the ripple and nothing else — the bed, the mirror and the flow direction stay exactly as they are.')}
+              value={water.flow_speed_m_s}
+              fallback={FLOW_SPEED_DEFAULT_M_S}
+              slider={false}
+              min={FLOW_SPEED_MIN_M_S} max={FLOW_SPEED_MAX_M_S} step={0.01}
+              clearable
+              placeholder={t('kind ({n} m/s)')
+                .replace('{n}', String(FLOW_SPEED_DEFAULT_M_S))}
+              unit="m/s"
+              onChange={(v) => onWater({ flow_speed_m_s: v })}
+              onClear={() => onWater({ flow_speed_m_s: undefined })}
+            />
+          </div>
+          <div className="ga-map-chip-row ga-map-chip-label">
+            {t('Empty = the flow speed of this water’s surface kind ({n} m/s unless that kind was dialled elsewhere), so one setting speeds up every river of a world and this field is for the single torrent that differs. 0 stops the current without turning the water into a lake.')
+              .replace('{n}', String(FLOW_SPEED_DEFAULT_M_S))}
+          </div>
+        </>
+      ) : null}
       {/* WHAT THE BAKE READ BACK. Where the author leaves an end open, the rim
           median of that third answers — a number only the server can compute,
           so it is shown rather than re-derived here.

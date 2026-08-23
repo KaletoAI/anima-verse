@@ -420,8 +420,10 @@
  * ONE SPEED COULD NOT SERVE BOTH. A lake counter-scrolls its layers, so they
  * cancel and 0.25 m/s reads slow; a river sends both downstream, where the
  * same 0.25 reads several times faster. So `speed` stays the still number and
- * `flow_speed` (default 0.08 m/s, `uFlowSpeed`) is the flowing one; the shader
- * picks per pixel, `wSpeed = wStill ? uSpeed : uFlowSpeed`.
+ * `flow_speed` (default 0.15 m/s since [9e], `uFlowSpeed`) is the flowing one;
+ * the shader picks per pixel, `wSpeed = wStill ? uSpeed : uFlowSpeed · wLen`,
+ * where the length is the AREA's own factor ([9e]) and 1 unless it says
+ * otherwise.
  *
  * ANISOTROPY. The wave normal map is isotropic — circles, not streaks. The
  * stretch therefore happens in the LOOKUP: the sample coordinate is projected
@@ -457,6 +459,36 @@
  * full-strength sheets, and EXACTLY 0.0 when still, which is what keeps a lake
  * bit for bit the lake it was: `x + (…)·0.0 == x` for every finite `x`, and a
  * texture sample, being `2·[0,1] − 1`, is always finite.
+ *
+ * ===========================================================================
+ * [9e] ONE AREA MAY RUN FASTER THAN ITS KIND (finding 2026-08-23 no. 2)
+ * ===========================================================================
+ * `flow_speed` is the KIND's dial, raised to 0.15 m/s in the same round ("the
+ * river now moves too slowly"). A single painted area may override it with
+ * `meta.flow_speed_m_s`, and that override travels as the LENGTH of
+ * `aWaterFlow`: the attribute has been a UNIT tangent since W4a, so the shader
+ * reads `wSpeed = uFlowSpeed · wLen` and nothing already built changes by one
+ * bit. The encoder is `waterFlowFactor` (`@anima/scene-render`), the ratio
+ * `area m/s ÷ kind m/s`, on the fixture river whose tangent is exactly (−1, 0):
+ *
+ *     no override -> 1      -> 0.15 · 1     = 0.15 m/s   (the unit tangent)
+ *     0.45 m/s    -> 3      -> 0.15 · 3     = 0.45 m/s
+ *     0.03 m/s    -> 0.2    -> 0.15 · 0.2   = 0.03 m/s
+ *     0 m/s       -> 1e-3   -> 0.15 · 1e-3  = 0.15 mm/s
+ *
+ * WHY THE LENGTH AND NOT A FLOAT OF ITS OWN: a geometry that carries no such
+ * attribute reads its generic value, and for a float that is 0 — which would
+ * multiply every water that never heard of the field down to a standstill. The
+ * flow's generic value is (0, 0), which the shader already spells "still", so
+ * the one encoding that needs no migration is the one that costs no attribute.
+ *
+ * AND WHY THE FLOOR: `wStill` is `wLen < 1e-4`, so a zero-length vector is a
+ * LAKE — and a lake drifts at `uSpeed` = 0.25 m/s, three times faster than the
+ * river was, in a crossing pattern instead of streaks. An authored 0 m/s is
+ * therefore floored to 1e-3, ten times the threshold: 0.15 mm/s, one 1.6 m
+ * wavelength in about three hours, a river that stands still and stays a river.
+ * The direction survives all of it untouched — the shader divides by the very
+ * length it multiplies by.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -534,13 +566,18 @@ function checkIs(label, actual, expected) {
   }
 }
 
-const [W, walk] = await loadPure('client3d/src/scene/waterPlaneMath.ts',
-                                 'client3d/src/game/walk.ts');
+const [W, walk, mats] = await loadPure('client3d/src/scene/waterPlaneMath.ts',
+                                       'client3d/src/game/walk.ts',
+                                       'packages/scene-render/src/materials.ts');
 const { WATER_EDGE_FADE_M, WATER_FOAM_ALPHA, WATER_FOAM_BAND_M,
   WATER_FOAM_STRENGTH, WATER_SHORE_BAND_M, liftToWaterProfile, waterAlpha,
   waterEdgeFade, waterFlowAt, waterFoam, waterLevelAt, waterOpaqueDepthM,
   waterProfileOf, waterShoreAlpha, waterShoreBody, waterShoreGlsl } = W;
 const { floatRootY, groundWaterLevel } = walk;
+// The shared package's own half of the flow attribute — the factor its LENGTH
+// carries. `materials.ts` imports nothing but types, so it loads the same way.
+const { waterFlowFactor, WATER_FLOW_FACTOR_MIN,
+  WATER_FLOW_SPEED_DEFAULT_M_S } = mats;
 
 // ── The fixture, as the payload ships it ───────────────────────────────────
 /** The nine numbers of the fixture river and its TWO-KNOT axis (docstring [4]).
@@ -1191,14 +1228,14 @@ for (const [deg, flow, a, b] of [
 console.log('\n[9c] two speeds, a ripple stretched along the flow, a streak');
 const LAMBDA = 1.6;          // wave_m default
 const S_STILL = 0.25;        // speed default        (lake)
-const S_FLOW = 0.08;         // flow_speed default   (river)
+const S_FLOW = 0.15;         // flow_speed default   (river)
 check('a lake drifts at its own dial', S_STILL, 0.25);
-check('…a current at the new one, three times slower', S_FLOW, 0.08);
+check('…a current at the new one, still slower than the lake', S_FLOW, 0.15);
 // A's along component is exactly 1.0, so flow_speed IS the downstream m/s.
 check('…and layer A of that current makes exactly that downstream',
-  (DOWN[0][0] * -1 + DOWN[0][1] * 0) * S_FLOW, 0.08, 1e-15);
+  (DOWN[0][0] * -1 + DOWN[0][1] * 0) * S_FLOW, 0.15, 1e-15);
 check('…layer B trails it at 0.8 of that',
-  (DOWN[1][0] * -1 + DOWN[1][1] * 0) * S_FLOW, 0.064, 1e-15);
+  (DOWN[1][0] * -1 + DOWN[1][1] * 0) * S_FLOW, 0.12, 1e-15);
 /** The squeeze: project into the flow frame, divide the ALONG part by `k`. */
 function squash(frame, [x, z], k) {
   const { ax, ay } = frame;
@@ -1273,7 +1310,7 @@ check('RED: no normalize of a possibly-zero vector anywhere in the patch',
 
 console.log('\n[9d] …and so are the two speeds, the stretch and the streak');
 check('the drift picks between the still and the flowing dial',
-  /float wSpeed = wStill \? uSpeed : uFlowSpeed;/.test(matSrc) ? 1 : 0, 1);
+  /float wSpeed = wStill \? uSpeed : uFlowSpeed \* wLen;/.test(matSrc) ? 1 : 0, 1);
 check('…and both layers drift by it', (matSrc.match(
   /float wDrift[AB] = uTime \* wSpeed \* wFlowSign \/ /g) || []).length, 2);
 check('the drift SIGN is +1 still, −1 flowing (the ripple ran upstream)',
@@ -1284,8 +1321,11 @@ check('flow_speed reaches the shader as its own uniform',
   /shader\.uniforms\.uFlowSpeed = uFlowSpeed\b/.test(matSrc) ? 1 : 0, 1);
 check('…declared in the fragment source',
   /uniform float uFlowSpeed;/.test(matSrc) ? 1 : 0, 1);
-check('…and defaulted to 0.08 m/s',
-  /uFlowSpeed = \{ value: spec\.flow_speed \?\? 0\.08 \}/.test(matSrc) ? 1 : 0, 1);
+check('…and defaulted to the kind default, by name not by copy',
+  /uFlowSpeed = \{ value: spec\.flow_speed \?\? WATER_FLOW_SPEED_DEFAULT_M_S \}/
+    .test(matSrc) ? 1 : 0, 1);
+check('…which is 0.15 m/s since the follow-up finding',
+  /export const WATER_FLOW_SPEED_DEFAULT_M_S = 0\.15/.test(matSrc) ? 1 : 0, 1);
 // STILL WATER IS UNCHANGED, and these are the constants that say so: every new
 // branch is a ternary whose still side carries the old number.
 check('the cross factors keep 0.6 / 1.3 when still',
@@ -1306,6 +1346,79 @@ check('…read as a ribbon 8× longer than wide, sliding downstream',
     .test(matSrc) ? 1 : 0, 1);
 check('RED: the streak tap is unconditional (derivatives need it)',
   /if[^\n]*wStill[^\n]*\{[^}]*texture2D/.test(matSrc) ? 1 : 0, 0);
+
+// ── [9e] the AREA's own speed rides on the LENGTH of the flow ──────────────
+// See the docstring section [9e]. `aWaterFlow` has been a UNIT tangent since
+// W4a, so its length was 1.0 on every flowing water ever built; an area that
+// authors `meta.flow_speed_m_s` scales it by the ratio of its own metres per
+// second to its KIND's dial, and the fragment multiplies `uFlowSpeed` by that
+// length. Hand-derived on the fixture river, whose tangent at (50, −30) is
+// exactly (−1, 0):
+//   no override            -> length 1        -> 0.15 · 1    = 0.15 m/s
+//   0.45 m/s over 0.15     -> length 3        -> 0.15 · 3    = 0.45 m/s
+//   0.03 m/s over 0.15     -> length 0.2      -> 0.15 · 0.2  = 0.03 m/s
+//   0 m/s over 0.15        -> length 1e-3     -> 0.15 · 1e-3 = 0.15 mm/s
+console.log('\n[9e] the flow attribute carries the AREA\'s speed as its length');
+const TANGENT = waterFlowAt(RIVER, 50, -30);
+checkVec('the fixture river\'s tangent is the unit vector it always was',
+  TANGENT, [-1, 0]);
+/** What `buildWaterPlane` writes into `aWaterFlow` for one vertex. */
+const encode = ([fx, fz], factor) => [fx * factor, fz * factor];
+for (const [areaSpeed, factor] of [[undefined, 1], [0.45, 3], [0.03, 0.2],
+  [0.15, 1]]) {
+  const f = waterFlowFactor(areaSpeed, WATER_FLOW_SPEED_DEFAULT_M_S);
+  check(`${areaSpeed ?? 'no'} m/s over the kind's 0.15 is a factor of`,
+    f, factor, 1e-12);
+  const a = encode(TANGENT, f);
+  check('…so the attribute comes out that long',
+    Math.hypot(a[0], a[1]), factor, 1e-12);
+  // AND POINTING WHERE IT DID: the shader divides by that same length, so the
+  // frame is untouched — the ripple direction may not move by a millimetre.
+  checkVec('…and still points downstream, unchanged',
+    [a[0] / Math.hypot(a[0], a[1]), a[1] / Math.hypot(a[0], a[1])],
+    TANGENT, 1e-12);
+  check('…and uFlowSpeed · length is the authored m/s again',
+    WATER_FLOW_SPEED_DEFAULT_M_S * Math.hypot(a[0], a[1]),
+    areaSpeed === undefined ? WATER_FLOW_SPEED_DEFAULT_M_S : areaSpeed, 1e-12);
+}
+// THE ONE THING THE LENGTH MAY NOT DO: fall to zero. `wStill` is `wLen < 1e-4`,
+// and a still surface drifts at uSpeed (0.25 m/s) — FASTER than the standstill
+// an author asking for 0 m/s wants, and in a lake's crossing pattern instead of
+// the river's streaks. The factor is floored at 1e-3, ten times that threshold.
+const stopped = encode(TANGENT,
+  waterFlowFactor(0, WATER_FLOW_SPEED_DEFAULT_M_S));
+check('a river dialled to 0 m/s keeps a length above the still threshold',
+  Math.hypot(stopped[0], stopped[1]), WATER_FLOW_FACTOR_MIN, 1e-15);
+check('…which is ten times the shader\'s own 1e-4',
+  Math.hypot(stopped[0], stopped[1]) / 1e-4, 10, 1e-9);
+check('RED: an unfloored 0 would have been shorter than the threshold',
+  0 < 1e-4 ? 1 : 0, 1);
+check('…and it still moves, at 0.15 mm/s',
+  WATER_FLOW_SPEED_DEFAULT_M_S * Math.hypot(stopped[0], stopped[1]),
+  0.00015, 1e-12);
+// STILL WATER IS UNTOUCHED BY ALL OF IT: `waterFlowAt` answers (0, 0) on a lake
+// and 0 × anything is 0, so the attribute stays the exact pair the shader reads
+// as "still" whatever an author dialled.
+const lakeTangent = waterFlowAt(LAKE, 12, -4);
+checkVec('a lake hands over (0, 0)', lakeTangent, [0, 0]);
+for (const f of [1, 3, 0.2, WATER_FLOW_FACTOR_MIN]) {
+  checkEq(`…and stays (0, 0) at factor ${f}`, encode(lakeTangent, f), [0, 0]);
+}
+// The builder is what writes it, and the ratio is computed against the KIND's
+// own dial in `ground.ts` — not against the module default, or a world that
+// slowed all its rivers down would speed this one back up.
+check('the mesh builder scales the tangent by the factor',
+  /flow\[i \* 2\] = fx \* flowFactor;/.test(planeSrc)
+  && /flow\[i \* 2 \+ 1\] = fz \* flowFactor;/.test(planeSrc) ? 1 : 0, 1);
+check('RED: and no second attribute was added for it',
+  /aWaterSpeed|aFlowSpeed/.test(planeSrc + matSrc) ? 1 : 0, 0);
+const groundSrc = await readFile(
+  join(ROOT, 'client3d/src/scene/ground.ts'), 'utf8');
+check('the area\'s number is read straight off its meta',
+  /waterFlowFactor\(area\.meta\?\.flow_speed_m_s,/.test(groundSrc) ? 1 : 0, 1);
+check('…and measured against THIS KIND\'s dial',
+  /surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\s*\n?\s*\?\.flow_speed \?\? WATER_FLOW_SPEED_DEFAULT_M_S/
+    .test(groundSrc) ? 1 : 0, 1);
 
 console.log(`\n${passed} ok, ${failed} failed`);
 process.exit(failed ? 1 : 0);

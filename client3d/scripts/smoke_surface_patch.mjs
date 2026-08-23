@@ -406,8 +406,11 @@ const WATER_MARKS = [
   ['vert', 'vWaterWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;'],
   ['frag', 'uniform float uTime;'],
   // Two speeds since 2026-08-23: `speed` is still water, `flow_speed` a
-  // current. The drift picks between them, so the marker is the picked one.
-  ['frag', 'float wSpeed = wStill ? uSpeed : uFlowSpeed;'],
+  // current. The drift picks between them, so the marker is the picked one —
+  // and since the same day's follow-up the current is scaled by the LENGTH of
+  // the flow attribute, which is how ONE painted area runs faster than its
+  // kind (`meta.flow_speed_m_s`, `waterFlowFactor`).
+  ['frag', 'float wSpeed = wStill ? uSpeed : uFlowSpeed * wLen;'],
   ['frag', 'float wDriftA = uTime * wSpeed * wFlowSign / uWaveM;'],
   ['frag', 'diffuseColor.rgb = mix( uTint'],
   ['frag', 'roughnessFactor = mix( 0.85'],

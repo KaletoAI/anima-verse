@@ -740,7 +740,13 @@ _MATERIAL_RANGES: Dict[str, Any] = {
     # reads several times faster. `speed` stays the STILL-water metres per
     # second, `flow_speed` is what a surface with a flow direction uses — the
     # shader picks between them per pixel (scene-render materials.ts).
-    "flow_speed": (0.0, 2.0, 0.08),
+    #
+    # 0.15 m/s since the follow-up finding 2026-08-23 ("the river now moves too
+    # slowly"): 0.08 read as a standing river once the ripple was pointed the
+    # right way. It stays the KIND's number — a single area may override it
+    # (``terrain._sanitize_water`` ``flow_speed_m_s``), which the renderer
+    # carries as the LENGTH of its flow attribute.
+    "flow_speed": (0.0, 2.0, 0.15),
     "sky_mix": (0.0, 1.0, 0.55),
     "roughness": (0.0, 1.0, 0.08),
     "metalness": (0.0, 1.0, 0.05),

@@ -38,13 +38,73 @@ export interface SurfaceMaterialSpec {
    *  is non-zero (a river). One number could not serve both: a lake
    *  counter-scrolls its two ripple layers, so the net motion reads slow,
    *  while a river sends both downstream and the very same number reads
-   *  fast (user finding 2026-08-23). */
+   *  fast (user finding 2026-08-23). A single AREA may run faster or slower
+   *  than its kind — that override rides on the LENGTH of the flow attribute
+   *  and multiplies this number (`waterFlowFactor`). */
   flow_speed?: number
   sky_mix?: number
   roughness?: number
   metalness?: number
   /** Emissive strength of class `glow` (0 = off). */
   glow?: number
+}
+
+/** What a water KIND flows at when it declares no `flow_speed`, in m/s — the
+ *  mirror of `core.surface_textures._MATERIAL_RANGES['flow_speed']`. Raised
+ *  from 0.08 to 0.15 on 2026-08-23 ("the river now moves too slowly"): once the
+ *  ripple ran downstream instead of upstream, 0.08 read as a standing river. */
+export const WATER_FLOW_SPEED_DEFAULT_M_S = 0.15
+
+/** The fastest a water may be dialled to, in m/s — the same ceiling the kind's
+ *  own dial has, so an AREA can ask for nothing a kind could not have asked
+ *  for. */
+export const WATER_FLOW_SPEED_MAX_M_S = 2
+
+/**
+ * The smallest factor a FLOWING water may carry, and it is a hard floor rather
+ * than a rounding.
+ *
+ * The factor rides on the LENGTH of `aWaterFlow`, and the fragment reads a
+ * length below `1e-4` as STILL — the state of a lake, which drifts at `uSpeed`
+ * (0.25 m/s), i.e. FASTER. An authored 0 m/s therefore must not reach the
+ * shader as a zero-length vector: it is floored to `1e-3`, ten times the still
+ * threshold, which on the default kind is 0.15 mm/s — one wavelength in about
+ * three hours, a river standing still while keeping every flowing trait
+ * (streaks, anisotropy, the downstream sign) that "still" would drop.
+ */
+export const WATER_FLOW_FACTOR_MIN = 1e-3
+
+/**
+ * How much faster (or slower) ONE painted area runs than its kind — the number
+ * the renderer multiplies `uFlowSpeed` by, encoded as the LENGTH of the
+ * per-vertex flow attribute.
+ *
+ * `areaSpeedMs` is the area's own `meta.flow_speed_m_s` (free-form meta, so
+ * anything may arrive); `kindSpeedMs` is the kind's `flow_speed` dial. The
+ * answer is EXACTLY 1 wherever the area authors nothing readable, which is what
+ * keeps every existing water bit-identical: the attribute stays the unit
+ * tangent it has been since W4a.
+ *
+ * Why a RATIO and not the absolute speed: the shader's `uFlowSpeed` is the
+ * kind's uniform and one material serves every area of that kind — the area may
+ * only scale what the material already carries. A kind that does not flow at
+ * all (`flow_speed` 0, e.g. ice) therefore cannot be made to flow by an area:
+ * `0 × anything` is 0, and 1 is returned so nothing pretends otherwise.
+ */
+export function waterFlowFactor(areaSpeedMs: unknown,
+                                kindSpeedMs: number | undefined): number {
+  // `Number(null)`, `Number('')` and `Number([])` are all 0 — a missing key
+  // would otherwise read as "this river stands still".
+  if (typeof areaSpeedMs !== 'number'
+      && !(typeof areaSpeedMs === 'string' && areaSpeedMs.trim() !== '')) return 1
+  const area = Number(areaSpeedMs)
+  if (!Number.isFinite(area)) return 1
+  const kind = typeof kindSpeedMs === 'number' && Number.isFinite(kindSpeedMs)
+    ? kindSpeedMs
+    : WATER_FLOW_SPEED_DEFAULT_M_S
+  if (kind <= 0) return 1
+  const speed = Math.min(Math.max(area, 0), WATER_FLOW_SPEED_MAX_M_S)
+  return Math.max(speed / kind, WATER_FLOW_FACTOR_MIN)
 }
 
 export interface SurfaceMaterialOptions {
@@ -224,7 +284,7 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
                           mask: Texture): void {
   const uWave = { value: Math.max(spec.wave_m ?? 1.6, 0.05) }
   const uSpeed = { value: spec.speed ?? 0.05 }
-  const uFlowSpeed = { value: spec.flow_speed ?? 0.08 }
+  const uFlowSpeed = { value: spec.flow_speed ?? WATER_FLOW_SPEED_DEFAULT_M_S }
   const uSkyMix = { value: spec.sky_mix ?? 0.55 }
   const uTint = { value: hex3(spec.tint) }
   const uMapStrength = { value: spec.map_strength ?? 0.75 }
@@ -330,7 +390,18 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
     // sends BOTH downstream, so the identical number reads several times
     // faster. One dial cannot serve both, and lowering it would freeze the
     // lakes. uSpeed stays the still-water number, uFlowSpeed is the river's.
-    float wSpeed = wStill ? uSpeed : uFlowSpeed;
+    //
+    // …AND THE LENGTH OF THE FLOW IS THE AREA'S OWN FACTOR (finding
+    // 2026-08-23 no. 2, meta.flow_speed_m_s). The attribute has always been
+    // a UNIT tangent, so wLen was 1.0 on every flowing water and this
+    // multiplication changes not one existing pixel; an area that authors its
+    // own speed sends the ratio (area m/s ÷ kind m/s) as that length instead,
+    // and uFlowSpeed · wLen is the area's metres per second again. The
+    // DIRECTION is untouched — wAx divides the very same vector by wLen — and
+    // so is the still branch: the encoder floors the factor at 1e-3, ten times
+    // the 1e-4 threshold below, so a river dialled to 0 never turns into a
+    // lake drifting at uSpeed.
+    float wSpeed = wStill ? uSpeed : uFlowSpeed * wLen;
     // The offset is divided by the wavelength of the RESPECTIVE layer —
     // which makes the speed real METRES PER SECOND, and both layers drift at
     // the same rate although their wavelengths differ. Without the division it

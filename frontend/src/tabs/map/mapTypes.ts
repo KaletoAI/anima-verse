@@ -320,6 +320,11 @@ export interface TerrainWater {
    *  absent = still. A river bends, and one bearing cannot say where a
    *  meander runs — so the line the author drew IS the flow axis. */
   flow_along?: FlowAlong
+  /** How fast this ONE water runs, in metres per second (0…2). Absent = the
+   *  speed of its SURFACE KIND (`flow_speed` on the kind's material), which is
+   *  where a world tunes all its rivers at once. It is a look and nothing else:
+   *  the bake, the mirror and the flow axis do not read it. */
+  flow_speed_m_s?: number
   /** How deep the bed is carved under the mirror, in metres (0.2…20).
    *  Absent = the kind's own default. */
   water_depth_m?: number
@@ -453,6 +458,16 @@ export function readWater(meta: TerrainMeta | undefined): TerrainWater {
     ? meta.flow_along.trim().toLowerCase() : ''
   if ((FLOW_ALONG_VALUES as readonly string[]).includes(along)) {
     out.flow_along = along as FlowAlong
+  }
+  // CLAMPED, like the two widths on the server (`terrain._sanitize_water`) and
+  // unlike the bearing: a speed is not an angle, so 5 m/s is not 5 − 2 m/s, it
+  // is "as fast as this may go". An unreadable value is no override at all —
+  // 0 m/s is a legible authored state (a river standing still) and must not be
+  // what `null` or `''` silently means.
+  const flowSpeed = metaNum(meta?.flow_speed_m_s)
+  if (flowSpeed !== undefined) {
+    out.flow_speed_m_s = Math.min(Math.max(flowSpeed, FLOW_SPEED_MIN_M_S),
+                                  FLOW_SPEED_MAX_M_S)
   }
   if (depth !== undefined) out.water_depth_m = depth
   if (ramp !== undefined) out.shore_ramp_m = ramp
@@ -603,6 +618,18 @@ export const SHORE_RAMP_MAX_M = 20
 /** A bearing is an angle: the field sweeps a whole turn and 360 wraps to 0. */
 export const FLOW_DIR_MIN_DEG = 0
 export const FLOW_DIR_MAX_DEG = 360
+/** How fast ONE water may be dialled to run, in m/s — the same range the
+ *  SURFACE KIND's own `flow_speed` dial has
+ *  (`surface_textures._MATERIAL_RANGES`), because an area may say anything its
+ *  kind could have said and nothing more. */
+export const FLOW_SPEED_MIN_M_S = 0
+export const FLOW_SPEED_MAX_M_S = 2
+/** What a water kind flows at while it declares nothing — the mirror of
+ *  `@anima/scene-render WATER_FLOW_SPEED_DEFAULT_M_S`. Only the hint under the
+ *  area's speed field quotes it: the terrain panel does not hold the surface
+ *  catalog, so it names the number in force for an untouched kind rather than
+ *  guessing at a kind that was edited. */
+export const FLOW_SPEED_DEFAULT_M_S = 0.15
 
 /** `GET /play/terrain`. `areas` arrive BOTTOM to TOP — the last entry is on
  *  top, and the topmost area that contains a point owns it. */
