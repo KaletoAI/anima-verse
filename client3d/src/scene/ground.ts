@@ -68,8 +68,9 @@ import { buildAreaGeometry,
   propBoxFootprints, propGroundFit, rayGroundHit,
   scatterCellInstances, scatterCellSeed, scatterClearM,
   SCATTER_CELL_M,
+  strokeWidthM,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
-  waterFlowFactor, WATER_FLOW_SPEED_DEFAULT_M_S,
+  waterFlowFactor, waterfallsFrom, WATER_FLOW_SPEED_DEFAULT_M_S,
   worldHeightRange } from '@anima/scene-render';
 import type { Point2, ScatterFootprint, ScatterInstance,
   SurfaceMaterialSpec, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
@@ -85,7 +86,8 @@ import { sanitizePolygon } from '../game/polygon';
 // The swim threshold's ONE reader (W4c) — `typeAt` hands the number on, the
 // rule that uses it lives in `walk.wadeGate`.
 import { SWIM_FROM_DEFAULT_M, swimFrom } from '../game/walk';
-import type { MapLocation, TerrainArea, TerrainPayload, TerrainScatterEntry, TerrainType,
+import type { MapLocation, TerrainArea, TerrainMeta, TerrainPayload,
+  TerrainScatterEntry, TerrainType,
   WorldBounds } from '../types';
 import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
@@ -106,6 +108,7 @@ import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
 import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
 import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
+import { buildWaterfall } from './waterfall';
 import { buildWaterPlane, patchWaterShore } from './waterPlane';
 import { waterLevelAt, waterOpaqueDepthM,
   waterProfileOf } from './waterPlaneMath';
@@ -2346,11 +2349,19 @@ export function createGround(): Ground {
      *  `flowFactor` is the third thing that belongs to the AREA and rides on
      *  the geometry (finding 2026-08-23 no. 2): how fast this one water runs
      *  against its kind's dial, carried as the LENGTH of the flow attribute. It
-     *  is 1 for every area that authors no speed — the unit tangent of W4a. */
+     *  is 1 for every area that authors no speed — the unit tangent of W4a.
+     *
+     *  AND THE FALLS COME OUT OF THE SAME PROFILE (W5). Where the axis drops
+     *  faster than water runs, the ruled mirror would draw a five-metre cliff
+     *  as a pane of glass; `waterfallsFrom` names those segments and
+     *  `buildWaterfall` hangs a curtain and a foam disc there. They join the
+     *  mirrors in `nextWater`, so they live and die with them — a fall is not a
+     *  thing of its own, it is a place a river is steep. */
     const nextWater: THREE.Mesh[] = [];
     const addMirror = (geometry: THREE.BufferGeometry, kind: string,
                        profile: WaterProfile, opaqueDepthM: number,
-                       flowFactor: number): void => {
+                       flowFactor: number, meta: TerrainMeta | undefined
+    ): void => {
       let mat = waterMats.get(kind);
       if (!mat) {
         // 1 m per UV unit: the shape geometry's UVs are the world
@@ -2367,6 +2378,13 @@ export function createGround(): Ground {
       }
       nextWater.push(buildWaterPlane(geometry, profile, mat, opaqueDepthM,
                                      flowFactor));
+      // …and the FALLS of that very axis (W5). The width is the drawn ribbon's
+      // own (`meta.stroke.width_m`) — a polygon water has none, and has no
+      // interior knots either, so both halves of the question answer "no fall"
+      // for the same shape.
+      for (const fall of waterfallsFrom(profile, strokeWidthM(meta))) {
+        nextWater.push(...buildWaterfall(fall, mat, nextOwned));
+      }
     };
     areas.forEach((area, index) => {
       const built = builtAreas[index];
@@ -2399,7 +2417,8 @@ export function createGround(): Ground {
                   waterOpaqueDepthM(area.meta?.water_depth_effective),
                   waterFlowFactor(area.meta?.flow_speed_m_s,
                                   surfaceMaterialSpec(surfaceOf(area.kind))
-                                    ?.flow_speed ?? WATER_FLOW_SPEED_DEFAULT_M_S));
+                                    ?.flow_speed ?? WATER_FLOW_SPEED_DEFAULT_M_S),
+                  area.meta);
       } else {
         // Not a mirror, so the earcut is not drawn — and a geometry nobody
         // holds is a buffer nobody frees. Only the RING lives on (below); the

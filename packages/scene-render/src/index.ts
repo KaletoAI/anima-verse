@@ -92,6 +92,10 @@ export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
   WATER_FLOW_SPEED_DEFAULT_M_S, WATER_FLOW_SPEED_MAX_M_S } from './materials'
 export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 
+export { strokeWidthM, waterfallsFrom, WATERFALL_MIN_DROP_M,
+  WATERFALL_MIN_SLOPE } from './waterfall'
+export type { Waterfall, WaterfallAxis, WaterfallKnot } from './waterfall'
+
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneFloor,
