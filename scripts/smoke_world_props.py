@@ -110,6 +110,33 @@ HAND-DERIVED EXPECTATIONS
             prop that merely has no mesh yet is a normal placement waiting
             for a generation, not a broken one
 
+  [9] the GROUND BOXES (§ A9b, user finding 2026-08-23)
+        `prop_boxes` is the block both scatter samplers keep clear — one row
+        per placement, `{id, x, z, yaw_deg, half_w, half_d}` in world metres,
+        served by `GET /play/terrain` (3D client) and `GET /world/world-props`
+        (map editor) out of this one function. The half-extents are half the
+        prop's REAL width and depth plus `PROP_BOX_MARGIN_M` = 0.25 on both.
+        Every seeded prop here is 2.0 wide and 1.0 deep:
+
+            half_w = 2.0 / 2 + 0.25 = 1.25
+            half_d = 1.0 / 2 + 0.25 = 0.75
+
+        and the 4.0 x 2.0 sapling of this section gives 2.25 / 1.25.
+
+        - a placement whose prop RECORD is gone has no size and no box (it
+          renders nothing either)
+        - a placement whose prop merely has no MESH yet DOES get its box: the
+          author placed it and that ground is spoken for
+        - a placement inside a placed location's boundary gets no box — the
+          outline already excludes the scatter over its whole area, and the
+          box would be the same answer a second time in every payload. Fixture:
+          a location at (100, 100) with a 20 m square boundary, i.e. world
+          90..110 in both axes; a prop at (105, 100) is inside it, one at
+          (130, 100) is not.
+        - `terrain_sig` MOVES when a box moves: that is the signature the 3D
+          client refetches its ground on, and nothing else in the worldmap
+          poll covers a world prop's geometry.
+
 Usage:  ./.venv/bin/python scripts/smoke_world_props.py
 """
 import hashlib
@@ -396,6 +423,55 @@ check("…but it has no variant to choose from",
 prop_store.delete_prop(GHOST)
 check("a deleted prop shows as missing",
       get_world_props_route()["world_props"][1]["missing"], True)
+
+print("\n[9] the ground boxes (§ A9b)")
+from app.models.terrain import terrain_sig  # noqa: E402
+from app.models.world import (_load_world_data, _save_world_data,  # noqa: E402
+                              add_location, update_location_position)
+
+# [8] left exactly two placements standing: the live Fence at (1, 1) and the
+# one whose prop record it deleted in its last line.
+boxes = {b["id"]: b for b in wp.prop_boxes()}
+check("a placement whose prop record is gone has no box",
+      gone["id"] in boxes, False)
+check("…so one box is left", len(boxes), 1)
+check("half the real width plus the margin", boxes[keep["id"]]["half_w"], 1.25)
+check("half the real depth plus the margin", boxes[keep["id"]]["half_d"], 0.75)
+check("anchor and turn travel unchanged",
+      (boxes[keep["id"]]["x"], boxes[keep["id"]]["z"],
+       boxes[keep["id"]]["yaw_deg"]), (1.0, 1.0, 0.0))
+
+# A prop with a RECORD but no mesh: placed ground is spoken for, mesh or not.
+SAPLING = prop_store.create_prop(name="Sapling", width_m=4.0, height_m=2.0,
+                                 depth_m=2.0)["id"]
+sapling = wp.save_world_prop({"prop_id": SAPLING, "x": 50.0, "z": 50.0,
+                              "yaw_deg": 30.0})
+boxes = {b["id"]: b for b in wp.prop_boxes()}
+check("a prop with no mesh yet still keeps its ground clear",
+      (boxes[sapling["id"]]["half_w"], boxes[sapling["id"]]["half_d"]),
+      (2.25, 1.25))
+
+# …and a placement inside a location's own outline needs no box of its own.
+camp = add_location(name="Alder Camp", description="Boundary fixture.")["id"]
+update_location_position(camp, 100.0, 100.0)
+_world = _load_world_data()
+for _entry in _world.get("locations", []):
+    if _entry.get("id") == camp:
+        # The drawn outline of contract v6, in LOCAL metres around the pin.
+        _entry["map3d"] = {"boundary": [[-10, -10], [10, -10],
+                                        [10, 10], [-10, 10]]}
+        break
+_save_world_data(_world)
+inside = wp.save_world_prop({"prop_id": FENCE, "x": 105.0, "z": 100.0})
+outside = wp.save_world_prop({"prop_id": FENCE, "x": 130.0, "z": 100.0})
+boxes = {b["id"]: b for b in wp.prop_boxes()}
+check("a placement inside a location boundary gets no box",
+      inside["id"] in boxes, False)
+check("…one outside it does", outside["id"] in boxes, True)
+
+_sig_before = terrain_sig()
+wp.save_world_prop({**outside, "x": 131.0})
+check("terrain_sig moves when a box moves", terrain_sig() != _sig_before, True)
 
 shutil.rmtree(STORAGE, ignore_errors=True)
 shutil.rmtree(CLIPS, ignore_errors=True)

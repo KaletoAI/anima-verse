@@ -2583,11 +2583,18 @@ def get_terrain_route(user=Depends(get_current_user)):
     its real height, `sway_factor` = how much of its ground's wind it takes
     part in, § A9) — derived here, not stored, so a low variant generated later
     or a corrected height reaches the clients with the next refetch.
+
+    ``prop_boxes`` rides along (§ A9b): the ground box of every deliberately
+    placed world prop, which the scatter is sampled AROUND exactly like a
+    location's outline. It travels with the terrain rather than with the
+    worldmap block because the scatter is what needs it, and ``terrain_sig``
+    covers it — a bench moved one metre re-samples the wood around it.
     """
     from app.core.heightfield import with_effective_water_level
     from app.core.terrain_query import default_kind
     from app.core.terrain_types import effective_catalog
     from app.models import terrain
+    from app.models.world_props import prop_boxes
     return {
         # ONE source of truth for the unpainted ground: the same resolver the
         # point queries use, so the map never paints a different default than
@@ -2602,6 +2609,11 @@ def get_terrain_route(user=Depends(get_current_user)):
         # (§ A16.3, W1). Output only; the authored fields are untouched.
         "areas": with_effective_water_level(
             terrain.with_scatter_props(terrain.list_areas())),
+        # The placed props' ground boxes — the SECOND source of scatter
+        # exclusions next to the location outlines. Derived here, never
+        # stored (`world_props.prop_boxes`): a corrected prop size reaches the
+        # clients with the next refetch, like the scatter enrichment above.
+        "prop_boxes": prop_boxes(),
         "sig": terrain.terrain_sig(),
     }
 

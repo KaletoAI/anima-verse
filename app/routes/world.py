@@ -457,7 +457,14 @@ def get_world_props_route() -> Dict[str, Any]:
     Each row carries the library ``name`` of its prop and ``missing``: a
     placement whose prop was deleted renders nothing and cannot be repaired —
     the editor is where it becomes visible instead of silently occupying a
-    slot of the cap."""
+    slot of the cap.
+
+    ``prop_boxes`` is the same block ``GET /play/terrain`` serves the 3D client
+    (§ A9b), out of the same one function: the ground each placement occupies,
+    which the map editor's scatter preview keeps clear exactly as the client
+    does. It rides on this answer and not on the terrain because THIS is what
+    the editor refetches after every prop write — the preview around a moved
+    bench is right in the same breath the bench moves."""
     from app.core import props as prop_store
     from app.models import world_props
     facts: Dict[str, Dict[str, Any]] = {}
@@ -478,6 +485,7 @@ def get_world_props_route() -> Dict[str, Any]:
         row["variant_count"] = facts[pid]["variants"]
         row["missing"] = not facts[pid]["name"]
     return {"world_props": rows, "count": len(rows),
+            "prop_boxes": world_props.prop_boxes(),
             "max": world_props.MAX_WORLD_PROPS,
             "warn_at": world_props.WARN_WORLD_PROPS,
             "sig": world_props.world_props_sig()}

@@ -32,6 +32,8 @@ import {
   type HeightTool, type MapPrimary, type MapSub, type PaintShape,
   type TerrainMode,
 } from './TerrainTools'
+import { propBoxFootprints } from '@anima/scene-render'
+import type { ScatterPropBox } from '@anima/scene-render'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { WorldPropLayer } from './WorldPropLayer'
 import { PropsPalette } from '../world/PropsPalette'
@@ -434,6 +436,10 @@ export function MapTab() {
   // next click, and the two cap numbers as the SERVER states them (the editor
   // invents no ceiling of its own — it only shows how close the world is).
   const [worldProps, setWorldProps] = useState<WorldProp[]>([])
+  /** The ground each placement occupies (§ A9b) — the SERVER's numbers, since
+   *  only it knows the props' real sizes. The scatter preview keeps them
+   *  clear exactly as the 3D client does; see `scatterFootprints`. */
+  const [wpBoxes, setWpBoxes] = useState<ScatterPropBox[]>([])
   const [selWp, setSelWp] = useState('')
   const [armedProp, setArmedProp] = useState<PropFull | null>(null)
   const [wpCap, setWpCap] = useState({ max: 0, warnAt: 0 })
@@ -615,6 +621,10 @@ export function MapTab() {
     try {
       const r = await apiGet<WorldPropsResp>('/world/world-props')
       setWorldProps(r.world_props || [])
+      // …and with them the ground they occupy (§ A9b): this fetch runs after
+      // every prop write, so the scatter preview follows a moved bench in the
+      // same breath the bench moves.
+      setWpBoxes(r.prop_boxes || [])
       setWpCap({ max: Number(r.max) || 0, warnAt: Number(r.warn_at) || 0 })
     } catch (e) {
       toast(t('Failed to load world props') + ': ' + (e as Error).message, 'error')
@@ -1389,7 +1399,15 @@ export function MapTab() {
   // sampler ray-casts them; `@anima/scene-render` scatter.ts): the drawn
   // boundary through the ONE § A1.1 pin transform. A location without a
   // boundary has no area and excludes nothing — same rule as the server.
-  const scatterFootprints = useMemo(() => placed.flatMap((l) => {
+  //
+  // TWO SOURCES, ONE LIST (§ A9b, user finding 2026-08-23): next to the drawn
+  // location outlines stand the GROUND BOXES of the individually placed world
+  // props, turned into the very same footprint shape by the shared package
+  // (`propBoxFootprints` — a rotated rectangle as four points, so a prop at an
+  // angle keeps exactly the ground it covers). A scatter instance is not
+  // "placed" and contributes nothing here; only what an author put down by
+  // hand does. The 3D client joins the identical two halves in `ground.ts`.
+  const scatterFootprints = useMemo(() => [...placed.flatMap((l) => {
     const local = boundaryLocal(l)
     if (!local || l.pos_x == null || l.pos_z == null) return []
     const yaw = l.yaw_deg ?? 0
@@ -1397,7 +1415,7 @@ export function MapTab() {
       const p = localToWorld(l.pos_x as number, l.pos_z as number, yaw, lx, lz)
       return [p.x, p.z] as [number, number]
     }) }]
-  }), [placed])
+  }), ...propBoxFootprints(wpBoxes)], [placed, wpBoxes])
 
   /** What the selected area GROWS, checked (finding B17). */
   const selScatter = useMemo(

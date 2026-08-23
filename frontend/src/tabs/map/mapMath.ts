@@ -1734,6 +1734,13 @@ export interface ScatterDot {
  *
  * Cells are enumerated per area and only inside its own bounding box, so a
  * viewport over empty ground walks nothing.
+ *
+ * `footprints` is BOTH kinds of placed thing, built by the caller
+ * (`MapTab.scatterFootprints`) and identical to the list `ground.ts` holds:
+ * the drawn location outlines (finding B18) AND the ground boxes of the
+ * individually placed world props (§ A9b, `propBoxFootprints`). The sampler
+ * knows no difference between them, which is the point — one exclusion rule,
+ * two sources.
  */
 export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
   rect: MapBounds, footprints: readonly ScatterFootprint[]): ScatterDot[] {

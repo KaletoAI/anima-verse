@@ -1148,6 +1148,27 @@ def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
             "ground_offset_m": ground_offset_of(meta)}
 
 
+def prop_ground_extent(prop_id: str) -> Dict[str, float]:
+    """How much GROUND one prop covers — ``{"width_m", "depth_m"}`` in metres,
+    ``{}`` for an id this world has no record for.
+
+    The horizontal half of :func:`prop_scatter_facts`' answer, out of the same
+    single sidecar read and the same :func:`_effective_dims`, because it is
+    asked for a different reason: the scatter has to stay OUT of the box a
+    deliberately placed prop occupies (``world_props.prop_boxes``, § A9b).
+
+    The two dims are the REAL ones stored after the orientation fix — x and z
+    of the object as it stands — never anything measured on the mesh, whose
+    normalisation destroyed the scale. ``height_m`` is deliberately not
+    returned: a box on the ground plane has no use for it.
+    """
+    meta = read_sidecar(prop_id)
+    if not meta:
+        return {}
+    dims = _effective_dims(meta)
+    return {"width_m": dims["width_m"], "depth_m": dims["depth_m"]}
+
+
 def prop_id_from_model_url(url: Any) -> str:
     """The prop id behind the canonical model URL (``/assets/props/<id>/model``
     — the very string :func:`list_props` hands out as ``model_url`` and the map

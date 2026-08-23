@@ -681,6 +681,106 @@
  *      nothing at all across a bucket border, which is most of the map.
  *
  * ============================================================================
+ * (P) THE PLACED PROPS' BOXES — scatter does not grow inside a bench
+ * ============================================================================
+ * A world prop (`app/models/world_props.py`, § A9b) is ONE prop placed by hand
+ * at one point: a landmark rock, a signpost, a bench in the wilderness. The
+ * sampler knew placed LOCATIONS and nothing else, so the scatter grew straight
+ * through every one of them. The fix adds NO rule: the server hands out the
+ * box each placement occupies (`prop_boxes`: centre, `yaw_deg`, `half_w`,
+ * `half_d` — half the prop's real width and depth plus a 0.25 m margin) and
+ * `propBoxFootprint` turns it into the very `ScatterFootprint` a location
+ * contributes.
+ *
+ * THE FIXTURE, used by every case below: a 4 x 2 m prop at (5, 5), yaw 30°,
+ * i.e. `half_w` 2, `half_d` 1 — the margin is the server's, so the numbers
+ * here are the box as it arrives. With
+ *
+ *     cos 30° = 0.8660254037844386,  sin 30° = 0.5
+ *
+ * the four corners follow from § A1.1
+ *     x = 5 + lx·cos + lz·sin,   z = 5 - lx·sin + lz·cos
+ * over the local corners (-2,-1), (+2,-1), (+2,+1), (-2,+1):
+ *
+ *     (-2,-1) -> x = 5 - 1.7320508075688772 - 0.5 = 2.7679491924311228
+ *                z = 5 + 1 - 0.8660254037844386   = 5.133974596215561
+ *     (+2,-1) -> x = 5 + 1.7320508075688772 - 0.5 = 6.232050807568877
+ *                z = 5 - 1 - 0.8660254037844386   = 3.1339745962155614
+ *     (+2,+1) -> x = 5 + 1.7320508075688772 + 0.5 = 7.232050807568877
+ *                z = 5 - 1 + 0.8660254037844386   = 4.866025403784439
+ *     (-2,+1) -> x = 5 - 1.7320508075688772 + 0.5 = 3.7679491924311228
+ *                z = 5 + 1 + 0.8660254037844386   = 6.866025403784439
+ *
+ * (P1) THE CORNERS, exactly those four, in that order.
+ *
+ * (P2) A BOX THAT ENCLOSES NOTHING IS NO BOX: a non-finite centre, a
+ *      half-extent of 0 or a negative one give `null`, and `propBoxFootprints`
+ *      drops them instead of passing an empty outline on. A missing `yaw_deg`
+ *      is read as 0 — a box that is not turned, which is what "no turn" means.
+ *
+ * (P3) WHICH CANDIDATES DIE, on a 10 x 10 ring (0..10 in both axes) at density
+ *      7 over 100 m² -> wanted 7, `triesPerPoint` 1 -> exactly 7 candidates.
+ *      The stream feeds (x/10, z/10, 0) per candidate, so `yaw` is 0
+ *      throughout and `x = 10·r`. Each is judged in the BOX's own frame
+ *      (`worldToLocalXZ`, the inverse of the mapping above):
+ *
+ *          lx = dx·cos - dz·sin,   lz = dx·sin + dz·cos,   d = point - (5,5)
+ *          inside  <=>  |lx| <= 2  and  |lz| <= 1
+ *
+ *        1. (5, 5)      lx 0, lz 0                          -> INSIDE, dies
+ *        2. (6, 5)      lx 0.8660254, lz 0.5                -> INSIDE, dies
+ *        3. (5, 6)      lx -0.5, lz 0.8660254               -> INSIDE, dies
+ *        4. (3.2, 4.2)  lx -1.5588457+0.4  = -1.1588457
+ *                       lz -0.9-0.6928203  = -1.5928203     -> outside, stands
+ *        5. (7.1, 4.8)  lx  1.8186533+0.1  =  1.9186533
+ *                       lz  1.05-0.1732051 =  0.8767949     -> INSIDE, dies
+ *        6. (1, 1)      lx -3.4641016+2 = -1.4641016
+ *                       lz -2-3.4641016 = -5.4641016        -> outside, stands
+ *        7. (9, 9)      lx  3.4641016-2 =  1.4641016
+ *                       lz  2+3.4641016 =  5.4641016        -> outside, stands
+ *
+ *      -> three instances survive: (3.2, 4.2), (1, 1), (9, 9).
+ *
+ *      CANDIDATES 4 AND 5 ARE THE POINT OF THE ROTATION, one in each
+ *      direction. The prop's axis-aligned bounding box is x 3..7, z 4..6:
+ *      (3.2, 4.2) lies INSIDE that box and outside the real prop, (7.1, 4.8)
+ *      lies OUTSIDE it and inside the real prop. Either mistake is visible on
+ *      the map — a bare patch where nothing stands, a tree inside the bench.
+ *
+ * (P4) THE RED COUNTER-CHECK: a mutant whose corners are built with cos 1 /
+ *      sin 0, i.e. the axis-aligned box 3..7 × 4..6. It must NOT reproduce
+ *      (P3)'s answer. Its own, candidate by candidate:
+ *        1. (5, 5)     inside 3..7 × 4..6                 -> dies
+ *        2. (6, 5)     inside                             -> dies
+ *        3. (5, 6)     exactly on the MAX-Z edge, which the half-open ray cast
+ *                      puts outside (`pointInFootprint`) -> stands
+ *        4. (3.2, 4.2) inside                             -> dies
+ *        5. (7.1, 4.8) x 7.1 > 7                          -> stands
+ *        6./7.                                            -> stand
+ *      -> [(5,6), (7.1,4.8), (1,1), (9,9)]: the swap derived above —
+ *      (3.2, 4.2) gone, (7.1, 4.8) standing — and (5, 6) on top of it, which
+ *      the TURNED box contains squarely (lz 0.866 < 1) and the square only
+ *      grazes. Three of the seven verdicts differ; the mutant is not a near
+ *      miss, it is a different prop.
+ *
+ * (P5) A BOX FULLY INSIDE A LOCATION FOOTPRINT IS REDUNDANT, NEVER HARMFUL.
+ *      The square 2..8 × 2..8 contains every corner of the fixture box (x
+ *      2.768..7.232, z 3.134..6.866), so with both footprints the answer must
+ *      be the location's alone: candidates 1-5 all lie in 2..8 × 2..8 and die
+ *      there, 6 and 7 stand -> [(1,1), (9,9)] with or without the box. The
+ *      server drops such a box (`prop_boxes` skips a placement inside a
+ *      boundary), and this is the proof that dropping it is an economy and not
+ *      a behaviour.
+ *
+ * (P6) SAME AREA OR ANOTHER, THE BOX EXCLUDES. A scattered copy is not
+ *      "placed": only hand-placed props make boxes, and every entry of every
+ *      area is sampled around all of them. Checked as maths (the same box
+ *      excludes the same candidate under two different area seeds) and as
+ *      WIRING on `ground.ts`, which holds ONE `footprints` list — the drawn
+ *      location outlines plus `propBoxFootprints(payload.prop_boxes)` — and
+ *      hands that one list to every cell of every area.
+ *
+ * ============================================================================
  * (E) THE CLIENT'S SCATTER CONSTANTS
  * ============================================================================
  * `client3d/src/scene/ground.ts` imports three.js and cannot be loaded here,
@@ -1082,6 +1182,16 @@ function ownBucketOnly(source) {
     + '        for (let dx = 0; dx <= 0 && !crowded; dx += 1) {\n');
 }
 
+/** Section (P4)'s mutant: a placed prop's box is built AXIS-ALIGNED — the turn
+ *  the author gave the prop is dropped, so the box clears ground the prop
+ *  never covers on two corners and grows props inside it on the other two.
+ *  See the header for the derivation. */
+function axisAlignedPropBox(source) {
+  return source.replace(
+    '  const cos = Math.cos(yawRad)\n  const sin = Math.sin(yawRad)\n',
+    '  const cos = 1\n  const sin = 0\n');
+}
+
 /** Section (M6)'s mutant: the clearance is thrown away and the old "is its
  *  CENTRE inside?" decides again — the state the user reported as scatter
  *  overhanging into locations. */
@@ -1152,6 +1262,7 @@ async function main() {
     scatterWantedCount, scatterCellAt, scatterCellInstances, scatterCellRing,
     scatterCellSeed, scatterCellSpan, scatterCellsInBox, wantedScatterCells,
     scatterSeedHash, scatterVariantIndex,
+    propBoxFootprint, propBoxFootprints,
     footprintBlocks, footprintDistance, scatterClearM,
     SCATTER_CELL_M, SCATTER_CLEAR_HEIGHT_RATIO, SCATTER_MAX_PER_CELL,
   } = await loadTs(SRC);
@@ -1888,6 +1999,90 @@ async function main() {
     bucketMutantOut,
     [{ x: 3.9, z: 1, yaw: 0 }, { x: 4.1, z: 1, yaw: 0 }]);
 
+  console.log('\n(P) the placed props\' boxes — scatter does not grow in a bench');
+  /** The fixture of the whole section: a 4 x 2 m prop at (5,5), turned 30°.
+   *  `half_w`/`half_d` arrive from the server with its margin already in. */
+  const PROP_BOX = { id: 'wp_1', x: 5, z: 5, yaw_deg: 30, half_w: 2, half_d: 1 };
+  /** The four corners, hand-derived in the header from § A1.1. */
+  const PROP_BOX_CORNERS = [
+    [2.7679491924311228, 5.133974596215561],
+    [6.232050807568877, 3.1339745962155614],
+    [7.232050807568877, 4.866025403784439],
+    [3.7679491924311228, 6.866025403784439],
+  ];
+  // (P1) the corners
+  check('P1 the box is the ROTATED rectangle, four corners in local order',
+    propBoxFootprint(PROP_BOX).points, PROP_BOX_CORNERS);
+  check('P1 …and a whole block comes back as footprints',
+    propBoxFootprints([PROP_BOX]), [{ points: PROP_BOX_CORNERS }]);
+  // (P2) a box that encloses nothing is no box
+  check('P2 a half-extent of 0 encloses nothing',
+    propBoxFootprint({ ...PROP_BOX, half_d: 0 }), null);
+  check('P2 a negative half-extent likewise',
+    propBoxFootprint({ ...PROP_BOX, half_w: -2 }), null);
+  check('P2 a non-finite centre likewise',
+    propBoxFootprint({ ...PROP_BOX, x: NaN }), null);
+  check('P2 …and the block drops them instead of passing empty outlines',
+    propBoxFootprints([{ ...PROP_BOX, half_w: 0 }, PROP_BOX, null]),
+    [{ points: PROP_BOX_CORNERS }]);
+  check('P2 no yaw is no turn: the plain box 3..7 x 4..6',
+    propBoxFootprint({ x: 5, z: 5, half_w: 2, half_d: 1 }).points,
+    [[3, 4], [7, 4], [7, 6], [3, 6]]);
+  check('P2 nothing at all is an empty list', propBoxFootprints(undefined), []);
+  // (P3) which of the seven candidates die — see the header for each one
+  const BOX_RING = [[0, 0], [10, 0], [10, 10], [0, 10]];
+  const BOX_SAMPLE = {
+    ring: BOX_RING, areaM2: 100, densityPer100m2: 7, seed: 'p3',
+    triesPerPoint: 1,
+  };
+  const BOX_STREAM = [
+    0.5, 0.5, 0, 0.6, 0.5, 0, 0.5, 0.6, 0, 0.32, 0.42, 0,
+    0.71, 0.48, 0, 0.1, 0.1, 0, 0.9, 0.9, 0,
+  ];
+  const BOX_TRUE = [{ x: 3.2, z: 4.2, yaw: 0 }, { x: 1, z: 1, yaw: 0 },
+    { x: 9, z: 9, yaw: 0 }];
+  check('P3 the four candidates inside the turned box die, three stand',
+    scatterInstances({
+      ...BOX_SAMPLE, footprints: propBoxFootprints([PROP_BOX]),
+      rng: stream(BOX_STREAM),
+    }),
+    BOX_TRUE);
+  check('P3 …and with no box at all every one of the seven stands',
+    scatterInstances({ ...BOX_SAMPLE, rng: stream(BOX_STREAM) }).length, 7);
+  // (P4) the red counter-check: the axis-aligned box swaps two of them
+  const boxMutant = await loadTs(SRC, axisAlignedPropBox);
+  const boxMutantOut = boxMutant.scatterInstances({
+    ...BOX_SAMPLE, footprints: boxMutant.propBoxFootprints([PROP_BOX]),
+    rng: stream(BOX_STREAM),
+  });
+  checkNot('P4 the axis-aligned mutant does NOT reproduce that answer',
+    boxMutantOut, BOX_TRUE);
+  check('P4 …it kills (3.2, 4.2), keeps (7.1, 4.8) and grazes past (5, 6)',
+    boxMutantOut,
+    [{ x: 5, z: 6, yaw: 0 }, { x: 7.1, z: 4.8, yaw: 0 },
+      { x: 1, z: 1, yaw: 0 }, { x: 9, z: 9, yaw: 0 }]);
+  // (P5) a box inside a location footprint is redundant, never harmful
+  const LOC_OVER_BOX = { points: [[2, 2], [8, 2], [8, 8], [2, 8]] };
+  const locAlone = scatterInstances({
+    ...BOX_SAMPLE, footprints: [LOC_OVER_BOX], rng: stream(BOX_STREAM),
+  });
+  check('P5 the location alone leaves the two candidates outside it',
+    locAlone, [{ x: 1, z: 1, yaw: 0 }, { x: 9, z: 9, yaw: 0 }]);
+  check('P5 …and adding the enclosed box changes nothing',
+    scatterInstances({
+      ...BOX_SAMPLE,
+      footprints: [LOC_OVER_BOX, ...propBoxFootprints([PROP_BOX])],
+      rng: stream(BOX_STREAM),
+    }),
+    locAlone);
+  // (P6) same area or another — a box is nobody's scatter
+  const boxFps = propBoxFootprints([PROP_BOX]);
+  check('P6 the same box excludes the same candidate under any area seed',
+    ['ta_own:0', 'ta_other:3'].map((seed) => scatterInstances({
+      ...BOX_SAMPLE, seed, footprints: boxFps, rng: stream(BOX_STREAM),
+    })),
+    [BOX_TRUE, BOX_TRUE]);
+
   console.log('\n(D) the RED counter-check — a mutant that fails these cases');
   const RED = {
     ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
@@ -1931,6 +2126,16 @@ async function main() {
     true);
   check('E …and the measurement is filed where the mesh is grounded',
     groundSrc.includes('noteSpread(url, geometry);'), true);
+  // (P6)'s wiring half, on the same source: ONE footprint list, built from the
+  // location outlines AND the placed props' boxes, handed to every area.
+  check('P6 ground.ts turns the payload boxes into footprints',
+    groundSrc.includes('propFootprints = propBoxFootprints(payload.prop_boxes);'),
+    true);
+  check('P6 …joins them with the location outlines into the ONE list',
+    groundSrc.includes('footprints = locFootprints.concat(propFootprints);'),
+    true);
+  check('P6 …and the drawn location outlines are the other half',
+    groundSrc.includes('locFootprints = worldFootprints(locations);'), true);
 
   // The constants of the LOD, which section (I) derives its expectations from.
   // Loaded here because (G) and (H) below read the same module.

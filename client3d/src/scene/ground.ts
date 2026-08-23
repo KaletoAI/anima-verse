@@ -65,7 +65,7 @@
 import * as THREE from 'three';
 import { buildAreaGeometry,
   heightAt as worldHeightAt, pickVariant, pointInRing,
-  propGroundFit, rayGroundHit,
+  propBoxFootprints, propGroundFit, rayGroundHit,
   scatterCellInstances, scatterCellSeed, scatterClearM,
   SCATTER_CELL_M,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
@@ -1142,12 +1142,30 @@ export function createGround(): Ground {
     heightAt, applySway, topLayerAt: topLayerIndexAt });
   group.add(undergrowth.group);
 
-  /** The footprints the scatter keeps clear (finding B18) — drawn outlines in
-   *  WORLD metres (`worldFootprints`) — and the signature the areas standing
-   *  in the scene were sampled against. `null` means "never built", which is
-   *  not the same as "built against no locations at all". */
+  /**
+   * The footprints the scatter keeps clear — and the signature the areas
+   * standing in the scene were sampled against. `null` means "never built",
+   * which is not the same as "built against no locations at all".
+   *
+   * TWO SOURCES, ONE LIST. The placed LOCATIONS' drawn outlines (finding B18,
+   * `worldFootprints`) arrive with the worldmap poll; the placed PROPS' ground
+   * boxes (user finding 2026-08-23, `propBoxFootprints`) arrive with the
+   * terrain payload. They are held apart because they land on different
+   * occasions — a location may move without a terrain refetch and a prop may
+   * move without the location list changing — and joined into the ONE list
+   * every sampler here reads, so a wood and the ferns under it are excluded by
+   * exactly the same shapes.
+   */
   let footprints: readonly ScatterFootprint[] = [];
+  let locFootprints: readonly ScatterFootprint[] = [];
+  let propFootprints: readonly ScatterFootprint[] = [];
   let builtFpSig: string | null = null;
+
+  /** Join the two halves above. Called on both occasions, never per frame —
+   *  the list is read by every cell of every area of a rebuild. */
+  function refreshFootprints(): void {
+    footprints = locFootprints.concat(propFootprints);
+  }
 
   /** What the terrain's material was last built for — the default kind and the
    *  layer table, so a poll that changes neither costs no material at all. */
@@ -2942,6 +2960,12 @@ export function createGround(): Ground {
       try {
         payload = await fetchTerrain();
         loadedSig = payload.sig || sig;
+        // THE PLACED PROPS' BOXES ride in with the terrain (§ A9b) and reach
+        // the scatter here — a bench moved one metre bumps `terrain_sig`
+        // (`terrain.terrain_sig` hashes the boxes), so this is the same
+        // occasion the painted ground is refetched on and never a second poll.
+        propFootprints = propBoxFootprints(payload.prop_boxes);
+        refreshFootprints();
         rebuildCatalog();
         // THE MASKS HANG ON `terrain_sig` TOO, and on nothing else: the bake is
         // a function of the painted areas plus the type catalog, which is
@@ -2978,7 +3002,8 @@ export function createGround(): Ground {
       if (tilesBusy) return Promise.resolve(false);
       const fpSig = footprintSig(locations);
       const fpMoved = builtFpSig !== null && builtFpSig !== fpSig;
-      footprints = worldFootprints(locations);
+      locFootprints = worldFootprints(locations);
+      refreshFootprints();
       // The relief has its own signature and its own fetch (§ A16). `null`
       // is "never fetched", so the first sync always asks — a world whose
       // `height_sig` is the empty string of an older server asks once and is

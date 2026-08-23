@@ -13,6 +13,8 @@
  * worldmap rows and silently return nothing. They share their geometry through
  * `MapGeometry` and part ways after it.
  */
+import type { ScatterPropBox } from '@anima/scene-render'
+
 import type { MapBounds, StrokeStyle } from './mapMath'
 import type { Map3D, RoomLayout } from '../world/worldTypes'
 
@@ -701,6 +703,18 @@ export interface WorldProp {
 export interface WorldPropsResp {
   world_props: WorldProp[]
   count: number
+  /**
+   * The GROUND BOX of every placement the scatter has to stay out of (§ A9b),
+   * the same block `GET /play/terrain` serves the 3D client — centre, turn and
+   * the two half-extents of the prop's real size plus the server's margin.
+   *
+   * It rides on THIS answer because this is what the editor refetches after
+   * every prop write, so the preview around a moved bench is right in the same
+   * breath the bench moves. `ScatterPropBox` of `@anima/scene-render` is the
+   * shape; `propBoxFootprints` turns it into the footprints the preview keeps
+   * clear. Absent from an older server = nothing extra is excluded.
+   */
+  prop_boxes?: ScatterPropBox[]
   max: number
   warn_at: number
   sig: string

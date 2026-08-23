@@ -389,6 +389,93 @@ export function scatterClearM(heightM: number,
   return h * SCATTER_CLEAR_HEIGHT_RATIO
 }
 
+/**
+ * The ground box of ONE deliberately placed prop — the second source of
+ * exclusions, next to the placed locations (user finding 2026-08-23).
+ *
+ * A landmark rock, a signpost, a bench in the wilderness (`world_props`,
+ * § A9a) stands where an author put it, and the scatter used to grow straight
+ * through it: the sampler only ever knew about location outlines, and a prop
+ * is not a location. So the server hands out the box each placement occupies —
+ * centre, turn and the two half-extents of its real size plus a margin
+ * (`world_props.prop_boxes`, § A9b) — and the box becomes a FOOTPRINT like any
+ * other. No new rule in the sampler, only a new source.
+ *
+ * WORLD METRES and DEGREES, exactly as the payload carries them: `x`/`z` is
+ * the placement's own anchor, `yaw_deg` the turn the renderers set the mesh
+ * to (`place.ts`, `yawG.rotation.y`), and the half-extents run along the
+ * prop's OWN axes — `half_w` along its local x, `half_d` along its local z.
+ *
+ * A SCATTERED copy is never in this list. Only what somebody placed by hand
+ * counts as placed: the instances of an area — its own and every other area's
+ * — are all sampled AROUND these boxes, so nothing grows inside the bench and
+ * the bench does not thin the wood behind it.
+ */
+export interface ScatterPropBox {
+  x: number
+  z: number
+  yaw_deg: number
+  /** half the box along the prop's local x, in metres (margin included) */
+  half_w: number
+  /** half the box along the prop's local z, in metres (margin included) */
+  half_d: number
+}
+
+/**
+ * One placed prop's box as a footprint — the ROTATED RECTANGLE, as four
+ * points in world metres.
+ *
+ * `ScatterFootprint` is a polygon and nothing else, which is exactly what a
+ * turned box needs: an axis-aligned box around a prop at 30° would clear
+ * ground the prop never covers on two corners and leave ground it does cover
+ * growing on the other two. So the four corners are mapped through the ONE
+ * § A1.1 transform every local frame in this project uses:
+ *
+ *     x = cx + lx·cos(yaw) + lz·sin(yaw)
+ *     z = cz − lx·sin(yaw) + lz·cos(yaw)
+ *
+ * (the inverse of `worldToLocalXZ`, and the very rotation `place.ts` gives the
+ * mesh), over the local corners (−hw,−hd), (+hw,−hd), (+hw,+hd), (−hw,+hd).
+ *
+ * `null` for anything that encloses no ground — a junk coordinate, a
+ * non-positive half-extent. The all-or-nothing rule of the outlines applies
+ * here too: a box nobody can name blocks nothing rather than blocking
+ * something wrong.
+ */
+export function propBoxFootprint(box: ScatterPropBox): ScatterFootprint | null {
+  const cx = Number(box?.x)
+  const cz = Number(box?.z)
+  const hw = Number(box?.half_w)
+  const hd = Number(box?.half_d)
+  const yawDeg = Number(box?.yaw_deg)
+  if (!Number.isFinite(cx) || !Number.isFinite(cz)) return null
+  if (!(hw > 0) || !(hd > 0)) return null
+  const yawRad = ((Number.isFinite(yawDeg) ? yawDeg : 0) * Math.PI) / 180
+  const cos = Math.cos(yawRad)
+  const sin = Math.sin(yawRad)
+  const corner = (lx: number, lz: number): ScatterPoint2 => [
+    cx + lx * cos + lz * sin,
+    cz - lx * sin + lz * cos,
+  ]
+  return {
+    points: [corner(-hw, -hd), corner(hw, -hd), corner(hw, hd), corner(-hw, hd)],
+  }
+}
+
+/** Every usable box of a payload block as footprints — the list a caller
+ *  appends to its location footprints (`ground.ts`, `MapTab.tsx`). A box that
+ *  encloses nothing is dropped, never passed on as an empty outline. */
+export function propBoxFootprints(
+  boxes: readonly ScatterPropBox[] | null | undefined,
+): ScatterFootprint[] {
+  const out: ScatterFootprint[] = []
+  for (const box of boxes ?? []) {
+    const fp = propBoxFootprint(box)
+    if (fp) out.push(fp)
+  }
+  return out
+}
+
 /** What `scatterInstances` needs to know. */
 export interface ScatterSampleOptions {
   /** The CLEANED world ring the area is drawn from (`cleanRing`), `[x, z]` in

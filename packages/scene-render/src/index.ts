@@ -58,6 +58,7 @@ export {
   scatterSeedHash, scatterVariantIndex,
   seededRandom, pointInRing, pointInFootprint, worldToLocalXZ,
   footprintBlocks, footprintDistance, scatterClearM,
+  propBoxFootprint, propBoxFootprints,
   SCATTER_CLEAR_HEIGHT_RATIO, SCATTER_MAX_PER_ENTRY, SCATTER_TRIES_PER_POINT,
   scatterCellAt, scatterCellInstances, scatterCellRing, scatterCellSeed,
   scatterCellSpan, scatterCellsInBox, scatterCellCountInBox, wantedScatterCells,
@@ -65,7 +66,7 @@ export {
 } from './scatter'
 export type {
   PropGroundFit, ScatterCellOptions, ScatterEntry, ScatterFootprint,
-  ScatterInstance, ScatterPoint2, ScatterSampleOptions,
+  ScatterInstance, ScatterPoint2, ScatterPropBox, ScatterSampleOptions,
 } from './scatter'
 
 export { SpecVerifier, VERIFY_EPS } from './verify'

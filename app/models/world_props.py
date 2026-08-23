@@ -341,6 +341,79 @@ def payload_rows() -> List[Dict[str, Any]]:
     return out
 
 
+#: How much clear ground a placed prop keeps around its own edges, in metres —
+#: added to BOTH half-extents of every box. A bench whose slats end exactly
+#: where the grass begins reads as a bench in a hedge; a hand's width of bare
+#: ground around it reads as a bench. It is deliberately ONE number for every
+#: prop: a per-prop margin would be a second size dial next to the real dims,
+#: authored nowhere and explainable to nobody.
+PROP_BOX_MARGIN_M = 0.25
+
+
+def prop_boxes() -> List[Dict[str, Any]]:
+    """The GROUND BOX of every placed prop — what the scatter must not stand
+    in (§ A9b, user finding 2026-08-23).
+
+    A landmark rock, a signpost, a bench in the wilderness is placed by hand at
+    one point, and until now the scatter grew straight through it: the sampler
+    knew placed LOCATIONS (``scatter.ScatterFootprint``) and nothing else. One
+    row per placement, and the renderers turn it into the very same footprint
+    shape a location contributes — no new rule in the sampler, only a new
+    source.
+
+    One row is ``{id, x, z, yaw_deg, half_w, half_d}``: the placement's own
+    anchor and turn, plus half the prop's REAL width and depth
+    (``props.prop_ground_extent``) with :data:`PROP_BOX_MARGIN_M` on top. The
+    half-extents run along the PROP's axes, so the box is a rotated rectangle
+    and the consumers map its four corners through the one § A1.1 transform.
+
+    TWO KINDS OF PLACEMENT ARE LEFT OUT:
+
+    * one whose prop this world has no record for — it has no size and renders
+      nothing, so there is no box to keep clear. A prop that HAS a record but
+      no mesh yet does get its box: the author placed it, and the ground it
+      will stand on is already spoken for.
+    * one standing inside a placed location's boundary — that outline already
+      excludes the scatter over its whole area (``boundary_contains``), and a
+      second, smaller shape inside it would be the same answer twice in every
+      payload of every world.
+
+    Scattered copies are never in here. Only what somebody placed by hand is
+    "placed": every area's instances, its own and its neighbours', are sampled
+    around these boxes.
+    """
+    from app.core.props import prop_ground_extent
+    from app.core.world_geometry import boundary_contains
+    from app.models.world import list_locations
+
+    rows = list_world_props()
+    if not rows:
+        return []
+    locations = list_locations()
+    extents: Dict[str, Dict[str, float]] = {}
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        pid = row["prop_id"]
+        if pid not in extents:
+            extents[pid] = prop_ground_extent(pid)
+        dims = extents[pid]
+        if not dims:
+            continue
+        x = row["x"]
+        z = row["z"]
+        if any(boundary_contains(loc, x, z) for loc in locations):
+            continue
+        out.append({
+            "id": row["id"],
+            "x": x,
+            "z": z,
+            "yaw_deg": row["yaw_deg"],
+            "half_w": round(dims["width_m"] / 2 + PROP_BOX_MARGIN_M, 3),
+            "half_d": round(dims["depth_m"] / 2 + PROP_BOX_MARGIN_M, 3),
+        })
+    return out
+
+
 def world_props_sig(rows: Optional[List[Dict[str, Any]]] = None) -> str:
     """10-char signature over the FINISHED block — bumps whenever a placement
     moves, a prop is re-sized or a new mesh lands, and never otherwise.

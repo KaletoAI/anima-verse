@@ -679,6 +679,7 @@ def terrain_sig() -> str:
     """
     from app.core.terrain_layers import LAYER_CUT_VERSION
     from app.core.terrain_types import effective_catalog
+    from app.models.world_props import prop_boxes
     # The ENRICHED block, not the stored rows (2026-08-20, same doctrine as
     # the seed catalog above and the same fix world_props_sig applied): the
     # scatter enrichment (variant tier maps, prop heights) is half of what a
@@ -686,8 +687,15 @@ def terrain_sig() -> str:
     # reach a running client the same way a painted row does. Hashing the
     # stored rows alone kept the old sig while /play/terrain already served
     # the new maps.
+    #
+    # AND THE PLACED PROPS' BOXES (2026-08-23), by the very same doctrine:
+    # ``/play/terrain`` serves them (§ A9b) and the scatter is sampled around
+    # them, so moving a bench one metre has to reach a running client — this
+    # is the signature its ground hangs on, and nothing else in the poll
+    # covers a world prop's geometry.
     basis = json.dumps({"code_version": LAYER_CUT_VERSION,
                         "areas": with_scatter_props(list_areas()),
+                        "prop_boxes": prop_boxes(),
                         "types": effective_catalog()},
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]

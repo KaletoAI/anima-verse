@@ -2033,6 +2033,91 @@ Routine liest.
 - **Nav-Grid, Perzeption, Prompts: gar nicht.** Ein Welt-Prop ist für die
   Simulation nicht vorhanden.
 
+## A9b. Prop-Boxen — die Streu wächst nicht durch eine Bank (2026-08-23)
+
+**Befund des Nutzers:** die Streu (§ A9) stand mitten in einzeln gesetzten
+Welt-Props (§ A9a). Der Sampler kannte bis dahin nur gesetzte **Locations**
+(`ScatterFootprint`, Befund B18) — und ein Prop ist keine Location.
+
+**Die Regel — es ist keine neue Regel.** Der Server liefert pro Platzierung
+die **Grundfläche**, die sie belegt; beide Renderer machen daraus einen
+Footprint wie jeden anderen und geben ihn dem geteilten Sampler
+(`packages/scene-render/src/scatter.ts`) mit. Im Sampler ändert sich **nichts**
+— nur die Quelle ist neu.
+
+```
+ausgeschlossen  <=>  footprintBlocks(box, x, z, clearM)
+```
+
+also exakt dieselbe Freihaltung, die auch eine Location bekommt: der Abstand
+des Streu-Exemplars (`clearM`, halbe Eigenbreite) zählt mit, ein 8-m-Baum hängt
+also auch nicht über die Bank.
+
+### Payload — `prop_boxes`
+
+Ein Block, EINE Quelle: `app/models/world_props.prop_boxes()`. Ausgeliefert an
+beiden Stellen, an denen der jeweilige Verbraucher ohnehin liest:
+
+| Route | Verbraucher |
+|---|---|
+| `GET /play/terrain` → `prop_boxes` | 3D-Client (`client3d/src/scene/ground.ts`) |
+| `GET /world/world-props` → `prop_boxes` | Karten-Editor (`frontend/src/tabs/map/MapTab.tsx`) |
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `id` | `str` | die Platzierungs-ID (§ A9a) |
+| `x`, `z` | `float` | Anker in Welt-Metern — dieselben Zahlen wie in `world_props` |
+| `yaw_deg` | `float` | Drehung der Platzierung, 0…360 |
+| `half_w` | `float` | halbe REALE Breite (lokales x) **plus Rand** |
+| `half_d` | `float` | halbe REALE Tiefe (lokales z) **plus Rand** |
+
+Der Rand ist `world_props.PROP_BOX_MARGIN_M` = **0,25 m**, auf beide
+Halbachsen addiert — eine Handbreit blanker Boden um das Objekt. Bewusst EINE
+Zahl für alle Props: ein Rand pro Prop wäre ein zweiter Größenregler neben den
+echten Maßen, nirgends autoriert.
+
+**Gedreht, nicht achsenparallel.** `ScatterFootprint` ist ein Polygon, und
+`propBoxFootprint()` (im geteilten Paket) rechnet die vier Ecken über die EINE
+§-A1.1-Abbildung aus — über die lokalen Ecken (−hw,−hd), (+hw,−hd), (+hw,+hd),
+(−hw,+hd):
+
+```
+x = cx + lx·cos(yaw) + lz·sin(yaw)
+z = cz − lx·sin(yaw) + lz·cos(yaw)
+```
+
+Eine achsenparallele Box um ein um 30° gedrehtes Prop wäre an zwei Ecken zu
+groß (kahler Fleck) und an zwei Ecken zu klein (Baum in der Bank) — beides auf
+der Karte sichtbar. Handrechnung dazu in
+`client3d/scripts/smoke_scatter_math.mjs` Abschnitt (P), inkl. rotem
+Gegenversuch (Mutant mit cos 1 / sin 0).
+
+**Was KEINE Box bekommt:**
+
+- eine Platzierung, deren Prop-Datensatz weg ist — sie hat keine Größe und
+  rendert ohnehin nichts;
+- eine Platzierung **innerhalb der Boundary einer gesetzten Location**: dieses
+  Outline schließt die Streu bereits über seine ganze Fläche aus
+  (`boundary_contains`), die Box wäre dieselbe Antwort ein zweites Mal in jedem
+  Payload jeder Welt. Redundant, nicht falsch — der Sampler liefert mit Box
+  dasselbe Ergebnis (Smoke (P5)).
+
+Eine Platzierung, deren Prop nur **noch kein Mesh** hat, bekommt ihre Box
+dagegen sehr wohl: der Autor hat sie gesetzt, der Boden ist vergeben.
+
+**Streu-Kopien sind nie in diesem Block.** „Gesetzt" heißt von Hand gesetzt.
+Die Instanzen jeder Fläche — der eigenen wie jeder anderen — werden um diese
+Boxen herum gesampelt; eine Streu-Kopie dünnt umgekehrt nichts aus.
+
+**Signatur:** `terrain_sig` hasht die Boxen mit (dieselbe Doktrin wie bei der
+Streu-Anreicherung, § A9). Eine um einen Meter versetzte Bank bewegt also die
+Signatur, der Client holt `/play/terrain` neu und sampelt den Wald um sie herum
+neu. Der Karten-Editor braucht das nicht: er lädt `/world/world-props` nach
+jedem Prop-Schreibvorgang ohnehin neu.
+
+**Prüfungen (§ B5a):** `client3d/scripts/smoke_scatter_math.mjs` (P1)–(P6),
+`scripts/smoke_world_props.py` [9].
+
 ## A10. Kamera & Steuerung (Referenz, unverändert)
 
 FOV 45°, near 0,5, far 800; Orbit um Bodenpunkt, dist 2,5..150,
