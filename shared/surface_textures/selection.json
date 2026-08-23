@@ -9,6 +9,17 @@
   "dark_stone": "dark_stone_1785094673.jpg",
   "dark_stone_2": "dark_stone_2_1785267141.jpg",
   "water": "water_1785274635.jpg",
-  "forest": "forest_1786052223.jpg",
-  "deep_forest": "deep_forest_1786831520.jpg"
+  "forest": {
+    "autumn": "forest_1784407246.jpg",
+    "spring": "forest_1786052223.jpg",
+    "summer": "forest_1786052194.jpg",
+    "winter": "forest_1787309196.jpg"
+  },
+  "deep_forest": {
+    "": "deep_forest_1787309347.jpg",
+    "autumn": "deep_forest_1787309319.jpg",
+    "spring": "deep_forest_1786831520.jpg",
+    "summer": "deep_forest_1787309319.jpg",
+    "winter": "deep_forest_1787309347.jpg"
+  }
 }
