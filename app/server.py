@@ -178,6 +178,20 @@ async def lifespan(app: FastAPI):
     except Exception as _tse:
         logger.warning("terrain surface migration failed: %s", _tse)
 
+    # The micro-relief belongs to the painted AREA now, not to the terrain KIND
+    # (2026-08-23): a kind-level amplitude made every meadow in a world equally
+    # bumpy. The kind lost the two keys without a fallback reader, so the value
+    # the old rule would have used is copied onto every area of that kind once
+    # — otherwise every existing world would flatten on this boot. Runs AFTER
+    # the surface migration for no reason but order; the two do not touch.
+    try:
+        from app.core.terrain_relief_migration import migrate_area_relief_once
+        _tr = migrate_area_relief_once()
+        if _tr and (_tr.get("areas") or _tr.get("kept")):
+            logger.info("Terrain relief moved to the areas: %s", _tr)
+    except Exception as _tre:
+        logger.warning("terrain relief migration failed: %s", _tre)
+
     # Prop-Marker benennen jetzt die OBERFLAECHE; der Sitz-Absatz reist als
     # root_offset im Payload mit. Hebt die gespeicherten Brueche um genau
     # diesen Betrag an, damit sich optisch nichts bewegt (2026-07-28).

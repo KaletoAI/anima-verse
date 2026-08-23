@@ -766,7 +766,7 @@ Fernkulisse eingeschaltet ist, § A17).
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
-| `height_sig` | `str` (10) | Signatur über **alles, was die fünf Backstufen von `h_final` lesen** (§ A16.1): die autorierten Höhenflächen, das Mikro-Relief der gemalten Arten (`relief_inputs` — relief-freies Malen zählt nicht mit), die Wasser-Polygone samt ihren effektiven Zahlen (`water_basis`: Spiegel, beide Profil-Enden, Fließrichtung, aufgelöste Tiefe/Rampe — W1; ~~`zone_water_basis`~~ ist gelöscht) und die **Platzierungen der GEBAUTEN Orte** (ein verschobener Ort verschiebt sein Plateau; ein Ort, der einen Raum schließt oder öffnet, tritt in `placed_footprints()` ein oder aus — `level_ground` ist aus der Signatur verschwunden, § A16.4). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.5) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
+| `height_sig` | `str` (10) | Signatur über **alles, was die fünf Backstufen von `h_final` lesen** (§ A16.1): die autorierten Höhenflächen, das Mikro-Relief der gemalten **Flächen** (`relief_inputs` — relief-freies Malen zählt nicht mit), die Wasser-Polygone samt ihren effektiven Zahlen (`water_basis`: Spiegel, beide Profil-Enden, Fließrichtung, aufgelöste Tiefe/Rampe — W1; ~~`zone_water_basis`~~ ist gelöscht) und die **Platzierungen der GEBAUTEN Orte** (ein verschobener Ort verschiebt sein Plateau; ein Ort, der einen Raum schließt oder öffnet, tritt in `placed_footprints()` ein oder aus — `level_ground` ist aus der Signatur verschwunden, § A16.4). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.5) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `game_time` | `{…}` | Die **Spieluhr** zu genau diesem Payload — derselbe Zeitpunkt, auf den alle Reisen unten gerechnet wurden. Fertig aufgeschlüsselt: `canonical` (`"Y0002-D109T14:00:00"`), `total_seconds`, `year`, `day_of_year`, `season`, `season_name`, `day_of_season`, `hour`, `minute`, `second`, `hour_fraction` (Sonnenstand), `weekday`/`weekday_name` (`null`/`""`, wenn die Welt keine Wochen kennt), `label`, `date_label`, `time` (HH:MM), `is_night`, `day_bucket`, `atmosphere` (`{season, temperature, weather, note, label}` — Temperatur/Wetter gehören der **Season**, nicht der Welt; `label` z. B. `"freezing, snow — often fog in the morning"`). **Nie gefoggt** — die Tageszeit sieht jeder. Der Client RENDERT daraus, er rechnet nichts: es gibt keine Weltzeitzone und kein reales Datum mehr, aus dem sich eine Spielstunde ableiten ließe |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 9) |
@@ -3039,11 +3039,22 @@ flachen Welt drumherum geschlagen wird.
 
 `height_m` ist auf **±50 m** geklemmt (§ A1.7).
 
-**Mikro-Relief der Terrain-Arten.** Zwei whitelistete Katalog-Felder je Art
+**Mikro-Relief der gemalten FLÄCHE.** Zwei whitelistete Felder je **Fläche**
 (`meta.relief_amplitude_m`, `meta.relief_wave_m`) erzeugen zufällige kleine
-Hügel überall dort, wo diese Art gemalt ist — **eingebacken, nicht gerendert**,
+Hügel überall dort, wo diese Fläche liegt — **eingebacken, nicht gerendert**,
 also im EINEN Feld, das Server-Gate, Client-Spiegel und beide Renderer lesen.
 Es gibt bewusst **keinen TS-Zwilling**.
+
+> **Es ist eine Eigenschaft der INSTANZ, nicht der Art** (Entscheid
+> 2026-08-23). Bis dahin trug die Terrain-ART die zwei Zahlen, womit jede Wiese
+> einer Welt exakt so hügelig war wie jede andere: „Grasland" konnte nicht
+> gleichzeitig eine wellige Hochebene und eine ebene Weide sein. Die Felder
+> sind ohne Rückfall-Leser zur Fläche gewandert — die Art kennt sie nicht mehr,
+> es gibt keinen Art-Default, und eine Fläche ohne die Keys ist eben. Eine
+> einmalige Boot-Migration (`core/terrain_relief_migration.py`) schreibt den
+> Wert, den die alte Regel benutzt hätte, in jede Fläche der betreffenden Art
+> und räumt die Art-Zeilen leer; das Bild bleibt dabei exakt stehen, weil der
+> Seed weiterhin aus dem ART-NAMEN kommt.
 
 ```
 seed(art)  = FNV-1a 32 über den ART-NAMEN (es gibt KEIN Seed-Feld):
@@ -3056,7 +3067,10 @@ h_relief   = bilinear(rnd über die vier Ecken) · relief_amplitude_m
 Der Seed ist ein Hash des NAMENS, weil ein gespeicherter Seed durch jede
 Katalog-Änderung, jeden Export und jeden Klon mitgeschleppt werden müsste, nur
 um den Boden stillzuhalten. Negative Ecken sind sauber definiert
-(`& 0xFFFFFFFF`), zwei Flächen derselben Art setzen sich also nahtlos fort.
+(`& 0xFFFFFFFF`), zwei Flächen derselben Art **mit denselben zwei Zahlen**
+setzen sich also nahtlos fort. Der Seed bestimmt das MUSTER, die Fläche, wie
+hoch und wie breit es ausfällt: zwei Flächen einer Art mit verschiedenen
+Amplituden lesen sich als derselbe Boden, der hier stärker wellt als dort.
 
 **Klemmen.** `relief_amplitude_m` 0,05…2,0 m (fehlend oder 0 = kein Relief).
 Die Obergrenze ist eine **Begehbarkeits**-Grenze: zwei Nachbar-Stützpunkte
@@ -3065,11 +3079,16 @@ auf dem 2-m-Kachelraster also `atan(2·2,0/2,0)` = **63°** im Maximum. Der
 Editor **warnt** ab `tile_step_m · tan(max_slope_deg) / 2` (0,84 m bei den
 Vorgaben) — beide Zahlen kommen vom Server (`heightMath.reliefWarnAmpM`),
 geklemmt wird nichts. `relief_wave_m` **4**…200 m, fehlend = **32 m**; die
-Untergrenze ist 2 × `TILE_STEP_M` (**Nyquist**).
+Untergrenze ist 2 × `TILE_STEP_M` (**Nyquist**). Beide Klemmen liegen seit dem
+Umzug in `models/terrain.py` (`RELIEF_AMPLITUDE_MIN_M`/`_MAX_M`,
+`RELIEF_WAVE_MIN_M`/`_MAX_M`, `DEFAULT_RELIEF_WAVE_M`) — beim Sanitizer, der
+sie schreibt.
 
-**Welche Art an einem Punkt gilt**, ist die Regel von `terrain_query.kind_at` —
-die OBERSTE gemalte Fläche, die ihn enthält (letzter Treffer gewinnt). Eine
-flache Art über einer hügeligen nimmt das Relief also wieder weg. Ein Punkt,
+**Welche Fläche an einem Punkt gilt**, ist die Regel von
+`terrain_query.kind_at` — die OBERSTE gemalte Fläche, die ihn enthält (letzter
+Treffer gewinnt). Eine flache Fläche über einer hügeligen nimmt das Relief also
+wieder weg, und zwei hügelige derselben Art entscheidet dieselbe Regel: die
+obere antwortet, ganz. Ein Punkt,
 den KEINE Fläche bedeckt, bekommt kein Relief: die unbemalte Welt bleibt eben,
 und nur deshalb ist das Gitter überhaupt begrenzbar.
 

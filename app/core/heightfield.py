@@ -100,6 +100,7 @@ exists.
 """
 
 import math
+import threading
 from collections import OrderedDict
 from typing import (Any, Dict, List, NamedTuple, Optional, Sequence, Tuple)
 
@@ -114,7 +115,12 @@ logger = get_logger("heightfield")
 #: and every client and every stored raster keeps the ground of the old code.
 #: It lives HERE, next to the bake it describes, and not next to the signature
 #: it feeds: whoever changes ``h_final`` is reading this file.
-HEIGHT_BAKE_VERSION = 1
+#:
+#: v2 (2026-08-23): the micro-relief reads the painted AREA's own two numbers
+#: instead of its KIND's. Every authored byte of an existing world can stay
+#: exactly where it is and the ground still comes out differently, which is
+#: precisely the case this counter exists for.
+HEIGHT_BAKE_VERSION = 2
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -127,7 +133,7 @@ DEFAULT_STEP_M = 4.0
 #: overview's step (decision 2026-08-14). The tiles are the ground every rule
 #: reads (:func:`world_height`), so this, not :data:`DEFAULT_STEP_M`, is the
 #: finest the world ever gets and the Nyquist limit an authored relief wave is
-#: clamped against (``terrain_types.RELIEF_WAVE_MIN`` = 2 × this). Two metres
+#: clamped against (``models.terrain.RELIEF_WAVE_MIN_M`` = 2 × this). Two metres
 #: is what makes a 4 m wave authorable at all: at a 4 m step the editor had to
 #: clamp anything below 8 m away, and a meadow whose swells are a walker's
 #: stride wide could not be described.
@@ -328,7 +334,12 @@ def relief_seed(kind: str) -> int:
 
     Different kinds therefore get unrelated hill patterns, and two areas of the
     SAME kind continue each other seamlessly — the lattice is one world-wide
-    field per kind, not a per-area one.
+    field per kind, not a per-area one. THAT SURVIVED the move of the two
+    numbers to the area (2026-08-23), and deliberately: the seed decides the
+    PATTERN, the area decides how tall and how wide it is, so two neighbouring
+    meadows of one kind and one amplitude still have no seam between them,
+    while two of different amplitudes read as the same ground rolling more in
+    one place than in the other.
     """
     h = 2166136261
     for byte in (kind or "").encode("utf-8"):
@@ -336,26 +347,34 @@ def relief_seed(kind: str) -> int:
     return h
 
 
-def relief_params(kind: str, entry: Any
+def relief_params(kind: str, area: Any
                   ) -> Optional[Tuple[int, float, float]]:
-    """``(seed, amplitude_m, wave_m)`` of a catalog entry, or None.
+    """``(seed, amplitude_m, wave_m)`` of one PAINTED AREA, or None.
 
-    None means "this ground is flat", and that is the answer for a missing
-    key, a junk value, a non-finite one and an amplitude of 0 alike — the
-    sanitizer already drops those keys on write
-    (``terrain_types.sanitize_type``), so this is the reader's half of the
-    same rule and covers a catalog row that never went through it.
+    THE TWO NUMBERS COME FROM THE AREA, THE SEED FROM ITS KIND (decision
+    2026-08-23). Relief used to be a catalog field, which meant every meadow in
+    a world was exactly as bumpy as every other one; it is authored per painted
+    shape now (``models.terrain._sanitize_relief``), and this reads that. The
+    SEED stays a hash of the kind name, so two areas of one kind that ask for
+    the same hills still continue each other seamlessly — and two that ask for
+    different amplitudes get the same pattern at two different heights, which
+    is what "the same ground, rolling here and flat there" looks like.
+
+    None means "this area is flat", and that is the answer for a missing key, a
+    junk value, a non-finite one and an amplitude of 0 alike — the sanitizer
+    already drops those keys on write, so this is the reader's half of the same
+    rule and covers a row that never went through it.
 
     BOTH NUMBERS ARE CLAMPED HERE TOO, and the wave one matters: it is the
     Nyquist limit of the raster the RULES read (2 × :data:`TILE_STEP_M`), and a
     field that cannot carry its own wave would alias differently at every step
     size.
     """
-    from app.core.terrain_types import (DEFAULT_RELIEF_WAVE_M,
-                                        RELIEF_AMPLITUDE_MAX,
-                                        RELIEF_AMPLITUDE_MIN, RELIEF_WAVE_MAX,
-                                        RELIEF_WAVE_MIN)
-    meta = entry.get("meta") if isinstance(entry, dict) else None
+    from app.models.terrain import (DEFAULT_RELIEF_WAVE_M,
+                                    RELIEF_AMPLITUDE_MAX_M,
+                                    RELIEF_AMPLITUDE_MIN_M, RELIEF_WAVE_MAX_M,
+                                    RELIEF_WAVE_MIN_M)
+    meta = area.get("meta") if isinstance(area, dict) else None
     if not isinstance(meta, dict):
         return None
     try:
@@ -364,14 +383,14 @@ def relief_params(kind: str, entry: Any
         return None
     if not math.isfinite(amp) or amp <= 0.0:
         return None
-    amp = min(max(amp, RELIEF_AMPLITUDE_MIN), RELIEF_AMPLITUDE_MAX)
+    amp = min(max(amp, RELIEF_AMPLITUDE_MIN_M), RELIEF_AMPLITUDE_MAX_M)
     try:
         wave = float(meta.get("relief_wave_m") or DEFAULT_RELIEF_WAVE_M)
     except (TypeError, ValueError, OverflowError):
         wave = DEFAULT_RELIEF_WAVE_M
     if not math.isfinite(wave) or wave <= 0.0:
         wave = DEFAULT_RELIEF_WAVE_M
-    wave = min(max(wave, RELIEF_WAVE_MIN), RELIEF_WAVE_MAX)
+    wave = min(max(wave, RELIEF_WAVE_MIN_M), RELIEF_WAVE_MAX_M)
     return (relief_seed(kind), round(amp, 2), round(wave, 2))
 
 
@@ -403,7 +422,7 @@ def lattice_noise(seed: int, u: int, v: int) -> float:
 
 def micro_relief_at(params: Optional[Tuple[int, float, float]],
                     x: float, z: float) -> float:
-    """The micro-relief a terrain kind adds at (x, z), in metres.
+    """The micro-relief a painted area adds at (x, z), in metres.
 
     Value noise on a lattice of edge ``wave_m`` that is ANCHORED AT THE WORLD
     ORIGIN, exactly like the height grid itself: the corner indices are
@@ -440,8 +459,7 @@ def micro_relief_at(params: Optional[Tuple[int, float, float]],
     return (north * (1.0 - tz) + south * tz) * amp
 
 
-def relief_inputs(terrain_areas: Sequence[Dict[str, Any]],
-                  catalog: Optional[Dict[str, Dict[str, Any]]]
+def relief_inputs(terrain_areas: Sequence[Dict[str, Any]]
                   ) -> List[Tuple[Dict[str, Any],
                                   Optional[Tuple[int, float, float]],
                                   Tuple[float, float, float, float]]]:
@@ -452,28 +470,25 @@ def relief_inputs(terrain_areas: Sequence[Dict[str, Any]],
     ``models.heightfield.height_sig`` hashes it. A signature over a different
     list than the raster consumes is how a stale grid survives an edit.
 
+    IT ASKS THE AREAS, NOT THE CATALOG (decision 2026-08-23) — the catalog
+    parameter is gone, without a fallback reader. Relief is authored per
+    painted shape now, which is why two areas of ONE kind may answer two
+    different amplitudes here.
+
     Two kinds of entry come back, in the areas' own bottom-to-top order:
 
-    * an area whose KIND carries relief — ``params`` is its
-      ``(seed, amplitude, wave)``;
-    * an area whose kind does NOT, but which lies OVER one that does —
-      ``params`` is None. It still matters, because the topmost kind at a
-      point decides (``terrain_query.kind_at``): a paved square painted on a
-      bumpy meadow flattens the ground it covers.
+    * an area that AUTHORS relief — ``params`` is its
+      ``(seed, amplitude, wave)``, the seed hashed from its kind;
+    * an area that authors NONE but lies OVER one that does — ``params`` is
+      None. It still matters, because the topmost area at a point decides
+      (``terrain_query.kind_at``'s rule): a paved square painted on a bumpy
+      meadow flattens the ground it covers.
 
     Everything else is dropped, and that is the point of the filter: painting
-    on a world whose catalog carries no relief at all changes NOTHING about
-    the heightfield, so it must not change the signature and must not cost a
+    on a world where nobody authored any relief changes NOTHING about the
+    heightfield, so it must not change the signature and must not cost a
     re-raster. An empty list means the whole pass is a no-op.
     """
-    catalog = catalog or {}
-    params_by_kind: Dict[str, Tuple[int, float, float]] = {}
-    for kind, entry in catalog.items():
-        params = relief_params(kind, entry)
-        if params is not None:
-            params_by_kind[kind] = params
-    if not params_by_kind:
-        return []
     from app.models.heightfield import polygon_bounds
     out: List[Tuple[Dict[str, Any], Optional[Tuple[int, float, float]],
                     Tuple[float, float, float, float]]] = []
@@ -485,9 +500,9 @@ def relief_inputs(terrain_areas: Sequence[Dict[str, Any]],
         box = polygon_bounds(polygon)
         if box is None:
             continue
-        params = params_by_kind.get(str(area.get("kind") or ""))
+        params = relief_params(str(area.get("kind") or ""), area)
         if params is None:
-            # A flat kind is only an input where it can ERASE something: over
+            # A flat area is only an input where it can ERASE something: over
             # an area with relief that was painted BEFORE it. Anywhere else it
             # writes the 0 that is already there.
             # The test is the bounding BOXES, i.e. a superset of the true
@@ -500,6 +515,10 @@ def relief_inputs(terrain_areas: Sequence[Dict[str, Any]],
         else:
             active.append(box)
         out.append((area, params, box))
+    # NO EARLY EXIT IS NEEDED for a world nobody made bumpy: a flat area only
+    # gets in over an `active` box, and without a single bumpy area there is
+    # none — the list comes out empty by itself, which is what "the whole pass
+    # is off" means to both readers.
     return out
 
 
@@ -1376,8 +1395,10 @@ class HeightModel:
                 ([] if _r is None else _r,
                  float(_area.get("height_m") or 0.0),
                  float(_area.get("falloff_m") or 0.0)))
-        self.relief: List[ReliefEntry] = relief_inputs(terrain_areas,
-                                                       terrain_catalog)
+        # The catalog has no say in the relief any more (2026-08-23): the two
+        # numbers are the AREA's, so this reads the areas alone. The catalog is
+        # still what the WATER stamps below resolve their defaults against.
+        self.relief: List[ReliefEntry] = relief_inputs(terrain_areas)
         self._relief_index = _BoxIndex([e[2] for e in self.relief])
         self._relief_fast: List[Tuple[List[Tuple[float, float]],
                                       Optional[Tuple[int, float, float]]]] = [
@@ -1442,13 +1463,15 @@ class HeightModel:
 
     def _kind_at(self, x: float, z: float
                  ) -> Optional[Tuple[int, float, float]]:
-        """The relief parameters of the TOPMOST painted kind at a point.
+        """The relief parameters of the TOPMOST painted area at a point.
 
         ``terrain_query.kind_at``'s rule — the LAST painted area containing the
         point wins — which is why the list is walked backwards and the first
-        hit answers. A flat kind painted over a bumpy one therefore answers
+        hit answers. A flat area painted over a bumpy one therefore answers
         None: it ERASES the hills it covers, which is the whole reason
-        :func:`relief_inputs` carries those flat areas at all.
+        :func:`relief_inputs` carries those flat areas at all. Since the relief
+        is the AREA's own (2026-08-23) this also settles two areas of the SAME
+        kind that ask for different hills: the upper one answers, whole.
         """
         fast = self._relief_fast
         for idx in reversed(self._relief_index.at(x, z)):

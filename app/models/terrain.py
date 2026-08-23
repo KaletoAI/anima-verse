@@ -15,10 +15,14 @@ scatters (model, density, target height), authored per area since finding
 B17 — a forest with two kinds of tree and a clearing without any is one
 painted shape each, and a terrain TYPE cannot say that.
 
-Since 2026-08-13 a painted area may also shape the GROUND ITSELF: if its kind
-carries a micro-relief in the type catalog, the world heightfield gets that
-kind's random small hills wherever the area lies (§ A16.2) — which is why the
-writers here ring ``models.heightfield.note_world_write``.
+A painted area may also shape the GROUND ITSELF: ``meta.relief_amplitude_m`` /
+``meta.relief_wave_m`` bake random small hills into the world heightfield
+wherever the area lies (§ A16.2) — which is why the writers here ring
+``models.heightfield.note_world_write``. Since 2026-08-23 those two numbers
+belong to the AREA and not to its kind: relief is a property of the shape
+somebody painted, so two areas of one kind may be a rolling upland and a flat
+pasture. There is no kind-level default and no fallback reader — an area that
+authors nothing is flat.
 
 Everything is validated ON WRITE: the readers downstream
 (``world_geometry.point_in_polygon``) fail closed on malformed vertices
@@ -87,6 +91,34 @@ STROKE_SPACING_MAX_M = 100.0
 #: from "a hand-drawn wobble" to "a river delta".
 STROKE_AMPLITUDE_MIN_M = 0.5
 STROKE_AMPLITUDE_MAX_M = 30.0
+
+#: MICRO-RELIEF, how high the random small hills of THIS PAINTED AREA stand, in
+#: metres, as a half-swing around the authored level (the noise runs in
+#: [-1, 1)). The upper clamp is a WALKABILITY limit, not a taste one: two
+#: neighbouring support points may differ by at most 2*amp over one grid step,
+#: i.e. atan(2*2.0 / 2.0) = 63 deg at the maximum on the tile grid the rules
+#: read. The lower clamp is the smallest swing that is still visible at all;
+#: anything below it means "no relief", and that is written by leaving the key
+#: out.
+#:
+#: IT IS A PROPERTY OF THE AREA, NOT OF THE KIND (decision 2026-08-23). It used
+#: to live on the terrain TYPE, which meant every meadow in the world was
+#: exactly as bumpy as every other one: a rolling upland and a flat pasture
+#: could not both be "grass". The two numbers moved here without a fallback
+#: reader — a kind carries no relief any more, and an area that authors none is
+#: flat.
+RELIEF_AMPLITUDE_MIN_M, RELIEF_AMPLITUDE_MAX_M = 0.05, 2.0
+#: How wide ONE swell of that relief is, in metres — the edge length of the
+#: noise lattice. The lower clamp is 2 x ``heightfield.TILE_STEP_M``: NYQUIST.
+#: A wave shorter than two support points cannot be carried by the grid at all,
+#: it would only alias into a different, coarser pattern that changes whenever
+#: the raster step doubles. It follows the TILE step, never the overview's —
+#: the tiles are the raster every rule reads.
+RELIEF_WAVE_MIN_M, RELIEF_WAVE_MAX_M = 4.0, 200.0
+#: The wave an area with an amplitude but no authored wave gets — a swell every
+#: 32 m, eight cells wide at the default overview step: gentle rolling, not a
+#: choppy field. Read by ``core.heightfield.relief_params``, never stored.
+DEFAULT_RELIEF_WAVE_M = 32.0
 
 
 def _finite(value: Any) -> Any:
@@ -371,6 +403,39 @@ def _sanitize_water(meta: Dict[str, Any]) -> None:
             meta.pop("bed_kind", None)
 
 
+def _sanitize_relief(meta: Dict[str, Any]) -> None:
+    """The two MICRO-RELIEF numbers of one area, IN PLACE (§ A16.2).
+
+    THE SHAPE RULE of every optional number in this world: a value that says
+    nothing — absent, junk, non-finite, zero, negative — leaves NO key behind,
+    so no reader ever has to tell "authored as 0" from "not authored". Anything
+    else is CLAMPED rather than refused (an authoring slip should move the
+    ground to the limit, not lose the whole area) and rounded to two decimals,
+    the precision the editor offers. A number that only ROUNDS to zero says
+    nothing either, hence the second test after the rounding.
+
+    Whitelisted for EVERY area, not only for the kinds that used to carry
+    relief: the kind has no say in this any more, and two areas of one kind are
+    exactly the case the move was made for — a rolling upland and a flat
+    pasture, both "grass".
+    """
+    for key, low, high in (
+            ("relief_amplitude_m", RELIEF_AMPLITUDE_MIN_M,
+             RELIEF_AMPLITUDE_MAX_M),
+            ("relief_wave_m", RELIEF_WAVE_MIN_M, RELIEF_WAVE_MAX_M)):
+        if key not in meta:
+            continue
+        num = _finite(meta.get(key))
+        if num is None or num <= 0:
+            meta.pop(key, None)
+            continue
+        value = round(min(max(num, low), high), 2)
+        if value <= 0:
+            meta.pop(key, None)
+        else:
+            meta[key] = value
+
+
 def sanitize_area(raw: Any) -> Dict[str, Any]:
     """Whitelist + coerce one area; raises ValueError on junk."""
     from app.core.terrain_types import effective_catalog
@@ -406,6 +471,12 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
     # as water AFTER a shape was painted with it, and a number that survived
     # that edit is one the author already set.
     _sanitize_water(meta)
+    # …and the two MICRO-RELIEF numbers (§ A16.2). They live on the AREA since
+    # 2026-08-23 — the kind carries no relief at all any more — and they are
+    # whitelisted for every area for the same reason the water numbers are:
+    # what a shape says about its own ground is the author's, whatever kind it
+    # happens to wear at the moment.
+    _sanitize_relief(meta)
     return {"id": area_id, "kind": kind,
             "polygon": _sanitize_polygon(raw.get("polygon")),
             "z_order": z_order,
@@ -572,14 +643,14 @@ def area_exists(area_id: str) -> bool:
 def _note_relief_write() -> None:
     """A painted area may have moved the WORLD HEIGHTFIELD — check, then act.
 
-    Since the micro-relief (decision 2026-08-13) a terrain KIND can carry
-    random small hills, and they are baked into the world grid wherever that
-    kind is painted (``app/core/heightfield``, § A16.2). So painting is an
-    authoring act on the RELIEF too, and the same hook that answers a moved
-    location answers it: ``note_world_write`` compares the signature of the
-    cached field against the current one and only pays for a raster when the
-    ground really moved. Painting a kind without relief — the normal case —
-    costs that comparison and nothing more.
+    An area may carry random small hills of its own (:func:`_sanitize_relief`,
+    per AREA since 2026-08-23), and they are baked into the world grid wherever
+    it lies (``app/core/heightfield``, § A16.2) — as may a water polygon, which
+    carves its bed. So painting is an authoring act on the RELIEF too, and the
+    same hook that answers a moved location answers it: ``note_world_write``
+    compares the signature of the cached field against the current one and only
+    pays for a raster when the ground really moved. Painting a flat, dry area —
+    the normal case — costs that comparison and nothing more.
     """
     from app.models.heightfield import note_world_write
     note_world_write()

@@ -302,23 +302,27 @@ def relief_basis() -> List[Dict[str, Any]]:
     """The MICRO-RELIEF inputs of the raster, in hashable form.
 
     Not "the painted terrain": exactly the areas
-    ``core.heightfield.relief_inputs`` hands the raster — the ones painted
-    with a kind that carries relief, plus the flat ones lying over them, each
-    with the two catalog numbers that shape its hills. Same function, same
-    list, so the signature cannot describe a different world than the grid
-    does.
+    ``core.heightfield.relief_inputs`` hands the raster — the ones that AUTHOR
+    relief, plus the flat ones lying over them, each with the two numbers that
+    shape its hills. Same function, same list, so the signature cannot describe
+    a different world than the grid does.
+
+    THE NUMBERS ARE THE AREA'S OWN since 2026-08-23, which is why nothing has
+    to be added here for the move: the areas were already hashed, and the two
+    numbers travel inside the very entries this walks. What DID have to move is
+    the code version (``core.heightfield.HEIGHT_BAKE_VERSION``) — the RULE
+    changed for data that did not.
 
     THE POINT OF THE FILTER is what it leaves out (decision 2026-08-13):
-    painting on a world whose catalog carries no relief changes no height at
-    all, so it must not move this signature and must not cost a re-raster.
-    Terrain is painted stroke by stroke; a heightfield rebuild per stroke would
-    be paid by whoever walks next.
+    painting on a world where nobody authored relief changes no height at all,
+    so it must not move this signature and must not cost a re-raster. Terrain
+    is painted stroke by stroke; a heightfield rebuild per stroke would be paid
+    by whoever walks next.
     """
     from app.core.heightfield import relief_inputs
-    from app.core.terrain_types import effective_catalog
     from app.models.terrain import list_areas
     out: List[Dict[str, Any]] = []
-    for area, params, _box in relief_inputs(list_areas(), effective_catalog()):
+    for area, params, _box in relief_inputs(list_areas()):
         out.append({"kind": area.get("kind"),
                     "polygon": area.get("polygon"),
                     # The seed is derivable from the kind, so only the two
@@ -391,10 +395,10 @@ def height_sig() -> str:
     ones: since W1 a room floor carves nothing at all, so the fifth basis is
     gone with the fifth bake stage and there is no fallback reader.
 
-    AND SO DOES THE MICRO-RELIEF (:func:`relief_basis`, decision 2026-08-13):
-    since a terrain KIND may carry hills, painting such a kind — or editing its
-    amplitude or wave in the catalog — moves the ground exactly as a height
-    area does. Painting a kind WITHOUT relief does not appear here at all.
+    AND SO DOES THE MICRO-RELIEF (:func:`relief_basis`, decision 2026-08-13,
+    per AREA since 2026-08-23): an area that authors hills — or a change to its
+    amplitude or wave — moves the ground exactly as a height area does. An area
+    that authors none does not appear here at all.
 
     AND SO DOES THE BAKE CODE ITSELF (``HEIGHT_BAKE_VERSION``): the grid is a
     function of the code as much as of the areas, and a changed carve or ramp

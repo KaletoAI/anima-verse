@@ -3,8 +3,10 @@
  *
  * It is the whole of what a terrain type is, in the order one thinks about it:
  * what it IS (Basics), what it LOOKS like (Surface), what it does to a figure
- * on it (Movement & water), what shape it has (Relief), and what grows on it
- * (Vegetation). It replaces the two-row table of the map editor's old type
+ * on it (Movement & water), and what grows on it (Vegetation). What SHAPE the
+ * ground has is not here: the micro-relief moved to the painted AREA on
+ * 2026-08-23 (§ A16.2) and is edited in the map's area panel — a kind-level
+ * amplitude made every meadow of a world equally bumpy. It replaces the two-row table of the map editor's old type
  * dialog — that one had run out of columns at nine fields and had to hide the
  * tenth in a second row; a section is the place a tenth field can go without
  * anybody having to widen anything.
@@ -37,7 +39,6 @@ import { useCallback, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
 import { useI18n } from '../../i18n/I18nProvider'
-import { reliefWarnAmpM } from '../map/heightMath'
 import {
   SHORE_RAMP_DEFAULT_M, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
   WATER_DEPTH_DEFAULT_M, WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M,
@@ -58,15 +59,6 @@ const SPEED_MAX = 2
 const SPEED_STEP = 0.05
 const NAME_MAX = 60
 const ANIM_MAX = 40
-const RELIEF_AMP_MIN = 0.05
-const RELIEF_AMP_MAX = 2
-const RELIEF_AMP_STEP = 0.05
-// `terrain_types.RELIEF_WAVE_MIN` = 2 × `heightfield.TILE_STEP_M` (Nyquist).
-// It halved on 2026-08-14 with the tile step, which is what made a 4 m swell
-// authorable at all.
-const RELIEF_WAVE_MIN = 4
-const RELIEF_WAVE_MAX = 200
-const RELIEF_WAVE_STEP = 1
 const SINK_MIN = 0
 const SINK_MAX = 1.5
 const SINK_STEP = 0.05
@@ -106,19 +98,6 @@ const SHORE_RAMP_STEP = 0.5
  *  an empty field is not a mystery (`shared/terrain/types.json`). */
 const UNDERGROWTH_SEED_FOREST = 0.6
 const UNDERGROWTH_SEED_GRASS = 0.3
-/** `terrain_types.DEFAULT_RELIEF_WAVE_M` — what an amplitude without a wave
- *  gets, named in the hint so an empty field is not a mystery. */
-const RELIEF_WAVE_DEFAULT = 32
-/** `heightfield.TILE_STEP_M` — the FALLBACK grid step of the steepness hint,
- *  for the moment before the server has answered one. It is the step of the
- *  fine height TILES, i.e. the raster every walk rule reads and the FINEST
- *  there is; the coarsenable overview only ever makes a slope gentler, so the
- *  number quoted here is the worst case. The live value comes from the server
- *  (`GET /world/height-areas` → `tile_step_m`), because a pinned one had to be
- *  hand-edited when the tiles halved on 2026-08-14 and the hint's angle rose
- *  with it (2 m of amplitude now reach 63° over one cell, not 45°). */
-const GRID_STEP_M = 2
-
 /** Read one of the string meta keys this form owns. Everything else in `meta`
  *  belongs to whoever wrote it and travels along untouched. */
 function metaStrOf(type: TerrainType | null, key: string): string {
@@ -205,8 +184,6 @@ interface OwnedMeta {
   moveSink: string
   idleSink: string
   swimFrom: string
-  reliefAmp: string
-  reliefWave: string
   sway: string
   undergrowth: string
   edgeBlend: string
@@ -230,8 +207,6 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   // a 0 means "swim from the very rim" and has to survive a save, while an
   // empty field is the server's default metre.
   setMetaBlend(next, 'swim_from_m', own.swimFrom)
-  setMetaNum(next, 'relief_amplitude_m', own.reliefAmp)
-  setMetaNum(next, 'relief_wave_m', own.reliefWave)
   setMetaNum(next, 'sway_m', own.sway)
   setMetaNum(next, 'undergrowth', own.undergrowth)
   setMetaBlend(next, 'edge_blend_m', own.edgeBlend)
@@ -241,47 +216,6 @@ function withOwnedMeta(meta: Record<string, unknown> | undefined,
   // means no key" rule of every other number: a ramp of 0 is the walled basin.
   setMetaBlend(next, 'shore_ramp_m', own.shoreRamp)
   return next
-}
-
-/** The steepness hint of the amplitude field: the worst case two neighbouring
- *  support points can build out of the noise alone is `atan(2·amp / step)` —
- *  63° at the clamp of 2 m over the 2 m tile step. An empty field quotes that
- *  clamp, so the sentence says what the limit means before anything is typed.
- *
- *  THE TYPED NUMBER IS CLAMPED FIRST, like the server clamps it on save: the
- *  sentence describes what WILL BE STORED, not what stands in the field. A
- *  typed 5 promised "5 m … 79°" while 2 m/63° is what arrives, and a typed
- *  0.02 promised 1° where 0.05 is stored. */
-function amplitudeHint(t: (s: string) => string, raw: string,
-                       stepM: number): string {
-  const typed = parseFloat(raw)
-  const amp = Number.isFinite(typed) && typed > 0
-    ? Math.min(RELIEF_AMP_MAX, Math.max(RELIEF_AMP_MIN, typed))
-    : RELIEF_AMP_MAX
-  const deg = Math.round(Math.atan(2 * amp / stepM) * 180 / Math.PI)
-  return t('Height of the random hills of this ground, in metres — empty = flat. {amp} m builds slopes of up to {deg}° over one {step} m grid step.')
-    .replace('{amp}', String(amp))
-    .replace('{deg}', String(deg))
-    .replace('{step}', String(stepM))
-}
-
-/** The steepness WARNING of the amplitude field: from `reliefWarnAmpM` on, the
- *  worst case above is steeper than the walk gate lets anyone climb, so single
- *  spots of that ground turn into obstacles. Informative only — the clamp
- *  stays at 2 m (user decision 2026-08-14), nothing is blocked or corrected.
- *  The typed number is clamped first, exactly like the hint above it: a typed
- *  5 is stored as 2, and warning about the 5 would name a ground nobody gets.
- *  `''` = nothing to warn about (flat, below the threshold, or no threshold
- *  because the server has not answered a tile step yet). */
-function amplitudeWarn(t: (s: string) => string, raw: string,
-                       warnAmpM: number | null): string {
-  if (warnAmpM === null) return ''
-  const typed = parseFloat(raw)
-  if (!Number.isFinite(typed) || typed <= 0) return ''
-  const amp = Math.min(RELIEF_AMP_MAX, Math.max(RELIEF_AMP_MIN, typed))
-  if (amp <= warnAmpM) return ''
-  return t('Above ~{max} m the random hills get steeper than walkers can climb — spots of this ground become impassable.')
-    .replace('{max}', warnAmpM.toFixed(2))
 }
 
 /** The MOVE sink hint — what the number does, where it stops, and why it is
@@ -370,15 +304,6 @@ function shoreRampHint(t: (s: string) => string): string {
     .replace('{def}', String(SHORE_RAMP_DEFAULT_M))
 }
 
-/** The wavelength hint — how wide one swell is, plus the default an amplitude
- *  without a wave falls back to. */
-function waveHint(t: (s: string) => string): string {
-  return t('Width of one hill of this ground, in metres ({min}–{max}) — empty = {def} m.')
-    .replace('{min}', String(RELIEF_WAVE_MIN))
-    .replace('{max}', String(RELIEF_WAVE_MAX))
-    .replace('{def}', String(RELIEF_WAVE_DEFAULT))
-}
-
 export interface TerrainDetailProps {
   /** The entry being edited, or `null` for the create form. */
   type: TerrainType | null
@@ -393,11 +318,6 @@ export interface TerrainDetailProps {
    *  "no list" are not the same statement. A stored id is still offered and
    *  still selected in that case, just without a verdict on it. */
   surfaces: SurfaceKind[]
-  /** The step of the fine height TILES and the walk gate's slope limit, both
-   *  straight from the server. 0 = not answered yet, and then the relief hint
-   *  falls back to the mirrored constant and the warning simply says nothing. */
-  tileStepM: number
-  maxSlopeDeg: number
   busy: boolean
   /** Write the entry; answers the SANITIZED row the server stored, or `null`
    *  when the write failed (the caller has already said so). */
@@ -411,7 +331,7 @@ export interface TerrainDetailProps {
 }
 
 export function TerrainDetail({
-  type, source, existingKinds, surfaces, tileStepM, maxSlopeDeg, busy,
+  type, source, existingKinds, surfaces, busy,
   onSave, onReset, onCancel,
 }: TerrainDetailProps) {
   const { t } = useI18n()
@@ -428,8 +348,6 @@ export function TerrainDetail({
   const [moveSink, setMoveSink] = useState(metaNumOf(type, 'move_sink_m'))
   const [idleSink, setIdleSink] = useState(metaNumOf(type, 'idle_sink_m'))
   const [swimFrom, setSwimFrom] = useState(metaNumOf(type, 'swim_from_m'))
-  const [reliefAmp, setReliefAmp] = useState(metaNumOf(type, 'relief_amplitude_m'))
-  const [reliefWave, setReliefWave] = useState(metaNumOf(type, 'relief_wave_m'))
   const [sway, setSway] = useState(metaNumOf(type, 'sway_m'))
   const [undergrowth, setUndergrowth] = useState(metaNumOf(type, 'undergrowth'))
   const [edgeBlend, setEdgeBlend] = useState(metaNumOf(type, 'edge_blend_m'))
@@ -447,14 +365,6 @@ export function TerrainDetail({
   const speedNum = parseFloat(speed)
   const speedBad = !Number.isFinite(speedNum)
     || speedNum < SPEED_MIN || speedNum > SPEED_MAX
-
-  // The grid step the hint divides by: the server's, as soon as it has
-  // answered one, and the mirrored constant only until then.
-  const stepM = tileStepM > 0 ? tileStepM : GRID_STEP_M
-  /** From which amplitude the micro relief can outclimb the walk gate — out of
-   *  the server's own two numbers, never a constant here (§ A16.2). */
-  const warnAmpM = reliefWarnAmpM(maxSlopeDeg, tileStepM)
-  const ampWarn = amplitudeWarn(t, reliefAmp, warnAmpM)
 
   // A stored surface the library does not hold has to stay SELECTABLE either
   // way — a `<select>` whose value matches no option shows the first one
@@ -480,8 +390,6 @@ export function TerrainDetail({
     || numChanged(moveSink, metaNumOf(type, 'move_sink_m'))
     || numChanged(idleSink, metaNumOf(type, 'idle_sink_m'))
     || blendChanged(swimFrom, metaNumOf(type, 'swim_from_m'))
-    || numChanged(reliefAmp, metaNumOf(type, 'relief_amplitude_m'))
-    || numChanged(reliefWave, metaNumOf(type, 'relief_wave_m'))
     || numChanged(sway, metaNumOf(type, 'sway_m'))
     || numChanged(undergrowth, metaNumOf(type, 'undergrowth'))
     || blendChanged(edgeBlend, metaNumOf(type, 'edge_blend_m'))
@@ -496,7 +404,7 @@ export function TerrainDetail({
   const save = useCallback(async () => {
     if (speedBad || !kindClean || kindBad || kindTaken) return
     // `meta` is free-form and belongs to whoever wrote it — this form owns
-    // exactly THIRTEEN keys in it and hands the rest back untouched. `surface` is
+    // exactly ELEVEN keys in it and hands the rest back untouched. `surface` is
     // ALWAYS sent, empty string included: the route is a full replace, so a
     // body without the key would undress the ground on every save (which is
     // exactly what the old dialog did). The numbers go out unclamped on
@@ -510,9 +418,8 @@ export function TerrainDetail({
       speed_factor: speedNum,
       surface: surface.trim(),
       meta: withOwnedMeta(type?.meta,
-        { moveAnim, idleAnim, moveSink, idleSink, swimFrom, reliefAmp,
-          reliefWave, sway, undergrowth, edgeBlend, water, waterDepth,
-          shoreRamp }),
+        { moveAnim, idleAnim, moveSink, idleSink, swimFrom, sway,
+          undergrowth, edgeBlend, water, waterDepth, shoreRamp }),
     })
     if (!saved) return
     setName(saved.name || '')
@@ -525,8 +432,6 @@ export function TerrainDetail({
     setMoveSink(metaNumOf(saved, 'move_sink_m'))
     setIdleSink(metaNumOf(saved, 'idle_sink_m'))
     setSwimFrom(metaNumOf(saved, 'swim_from_m'))
-    setReliefAmp(metaNumOf(saved, 'relief_amplitude_m'))
-    setReliefWave(metaNumOf(saved, 'relief_wave_m'))
     setSway(metaNumOf(saved, 'sway_m'))
     setUndergrowth(metaNumOf(saved, 'undergrowth'))
     setEdgeBlend(metaNumOf(saved, 'edge_blend_m'))
@@ -534,7 +439,7 @@ export function TerrainDetail({
     setWaterDepth(metaNumOf(saved, 'water_depth_m'))
     setShoreRamp(metaNumOf(saved, 'shore_ramp_m'))
   }, [color, edgeBlend, idleAnim, idleSink, kindBad, kindClean, kindTaken,
-      moveAnim, moveSink, name, onSave, passable, reliefAmp, reliefWave,
+      moveAnim, moveSink, name, onSave, passable,
       shoreRamp, speedBad, speedNum, surface, sway, swimFrom, type,
       undergrowth, water, waterDepth])
 
@@ -861,52 +766,8 @@ export function TerrainDetail({
               it: the mirror is per AREA, and so are the flow direction and the
               bed — a kind has no single water level to give. */}
           <div className="ga-field-hint">
-            {t('The water LEVEL, the flow direction and the bed under the water belong to the painted area, not to the kind — select an area on the map to set them. Two lakes of one kind stand at two heights, so a kind could never answer for both.')}
+            {t('The water LEVEL, the flow direction, the bed under the water and the ground’s micro-relief belong to the painted area, not to the kind — select an area on the map to set them. Two lakes of one kind stand at two heights, and one grass can roll here and lie flat there, so a kind could never answer for both.')}
           </div>
-        </div>
-
-        <div className="ga-section">
-          <div className="ga-form-section-label">{t('Relief')}</div>
-          <div className="ga-form-row">
-            <Field
-              label={t('Relief amplitude (m)')}
-              compact
-              hint={amplitudeHint(t, reliefAmp, stepM)}
-            >
-              <input
-                className="ga-input ga-tt-num"
-                type="number"
-                min={RELIEF_AMP_MIN}
-                max={RELIEF_AMP_MAX}
-                step={RELIEF_AMP_STEP}
-                value={reliefAmp}
-                placeholder={t('flat')}
-                onChange={(e) => setReliefAmp(e.target.value)}
-              />
-            </Field>
-            <Field
-              label={t('Relief wavelength (m)')}
-              compact
-              hint={waveHint(t)}
-            >
-              <input
-                className="ga-input ga-tt-num"
-                type="number"
-                min={RELIEF_WAVE_MIN}
-                max={RELIEF_WAVE_MAX}
-                step={RELIEF_WAVE_STEP}
-                value={reliefWave}
-                placeholder={String(RELIEF_WAVE_DEFAULT)}
-                onChange={(e) => setReliefWave(e.target.value)}
-              />
-            </Field>
-          </div>
-          {/* THE STEEPNESS WARNING of the amplitude, on its own line under the
-              two fields. Amber and informative: the value is stored as typed,
-              the clamp stays at 2 m. */}
-          {ampWarn ? (
-            <div className="ga-field-hint ga-field-warn">{ampWarn}</div>
-          ) : null}
         </div>
 
         <div className="ga-section">

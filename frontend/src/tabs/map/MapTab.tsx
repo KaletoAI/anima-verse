@@ -39,13 +39,13 @@ import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { WorldPropLayer } from './WorldPropLayer'
 import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
-import { readScatter, readWater, readWaterProfile } from './mapTypes'
+import { readRelief, readScatter, readWater, readWaterProfile } from './mapTypes'
 import {
-  DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M,
+  DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M, reliefWarnAmpM,
 } from './heightMath'
 import type {
   EditorLocation, HeightArea, HeightAreaWriteResp, HeightAreasResp,
-  TerrainArea, TerrainMeta, TerrainWater,
+  TerrainArea, TerrainMeta, TerrainRelief, TerrainWater,
   TerrainPayload, TerrainScatterEntry, TerrainStroke, TerrainType,
   TerrainTypesResp, WorldProp, WorldPropsResp, WorldmapPayload,
 } from './mapTypes'
@@ -558,6 +558,11 @@ export function MapTab() {
   // the same number it judges with.
   const [maxSlopeDeg, setMaxSlopeDeg] = useState(DEFAULT_MAX_SLOPE_DEG)
   const [maxStepM, setMaxStepM] = useState(DEFAULT_MAX_STEP_M)
+  /** The step of the fine height TILES, straight from the server (§ A16.2).
+   *  0 = not answered yet, and then the area panel's steepness warning simply
+   *  says nothing — a warning that names a step the world does not have is
+   *  worse than none. */
+  const [tileStepM, setTileStepM] = useState(0)
   /** The top-down scatter preview — a VIEW, so it survives every mode. */
   const [scatterOn, setScatterOn] = useState(false)
   /** The prop library for the scatter model picker of the area chip — fetched
@@ -747,6 +752,11 @@ export function MapTab() {
       noteHeightStep(r.step_m)
       const def = Number(r.default_step_m)
       if (Number.isFinite(def) && def > 0) setHeightStepDefaultM(def)
+      // The TILE step rides along in the same answer (§ A16.2): the area
+      // panel's relief warning is measured against it, and it is a different
+      // number from the overview step above since the tiles halved.
+      const tile = Number(r.tile_step_m)
+      if (Number.isFinite(tile) && tile > 0) setTileStepM(tile)
     } catch (e) {
       toast(t('Failed to load heights') + ': ' + (e as Error).message, 'error')
       return false
@@ -1596,6 +1606,17 @@ export function MapTab() {
   const selWaterProfile = useMemo(
     () => readWaterProfile(selectedArea?.meta), [selectedArea])
 
+  /** The selected area's own MICRO-RELIEF, checked (§ A16.2). Read for every
+   *  area: since 2026-08-23 the two numbers belong to the painted shape and
+   *  not to its kind, so any area may carry them. */
+  const selRelief = useMemo(
+    () => readRelief(selectedArea?.meta), [selectedArea])
+
+  /** From which amplitude that relief outclimbs the walk gate, in metres —
+   *  out of the SERVER's own two numbers, never a constant here (§ A16.2). */
+  const reliefWarnM = useMemo(
+    () => reliefWarnAmpM(maxSlopeDeg, tileStepM), [maxSlopeDeg, tileStepM])
+
   /**
    * The painted areas the tray lists, TOPMOST FIRST.
    *
@@ -2039,18 +2060,25 @@ export function MapTab() {
   }, [patchAreaLocal, putArea, selectedArea])
 
   /**
-   * What a WATER area authors about itself (§ A16.3, W1): its mirror, how deep
-   * the bed is carved under it, how far the shore ramps back up, which way it
-   * FLOWS and what the bake paints as its bed.
+   * The NUMBERS an area authors about its own ground — one writer for two
+   * panels, because it is one rule.
+   *
+   * WATER (§ A16.3, W1): its mirror, how deep the bed is carved under it, how
+   * far the shore ramps back up, which way it FLOWS and what the bake paints
+   * as its bed. RELIEF (§ A16.2, per area since 2026-08-23): how high and how
+   * wide the random small hills over it stand.
    *
    * They ride in `meta` like the scatter list, so the same rule holds: the
    * write is a full replace, the rest of `meta` travels along, and an
    * `undefined` in the patch DELETES the key instead of storing a zero. That
    * is what hands a field back — the rim median for the level, the KIND's own
    * numbers for depth and ramp, still water for the flow, the bare world for
-   * the bed.
+   * the bed, flat ground for a missing amplitude and the server's 32 m for a
+   * missing wave.
    */
-  const setAreaWater = useCallback((patch: Partial<TerrainWater>) => {
+  const setAreaMeta = useCallback((
+    patch: Partial<TerrainWater & TerrainRelief>,
+  ) => {
     const a = selectedArea
     if (!a) return
     const meta: TerrainMeta = { ...a.meta }
@@ -2829,7 +2857,10 @@ export function MapTab() {
               waterProfile={selWaterProfile}
               props={propList}
               scatterColor={scatterColor}
-              onWater={setAreaWater}
+              relief={selRelief}
+              reliefWarnAmpM={reliefWarnM}
+              onWater={setAreaMeta}
+              onRelief={setAreaMeta}
               onKind={setAreaKind}
               onZOrder={bumpAreaZ}
               onWidth={setStrokeAreaWidth}

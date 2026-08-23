@@ -107,31 +107,32 @@ Throwaway storage. Hand-derived expectations:
       `deep_water` name none — the open sea is deep everywhere it matters,
       and an absent key is the same metre.
 
-  [9] TWO MORE whitelisted meta keys since the micro-relief decision
-      (2026-08-13): `relief_amplitude_m` and `relief_wave_m`, the random
-      small hills the world heightfield bakes in wherever this kind is
-      painted (§ A16.2). Same shape rule as `move_anim` — a value that says
-      nothing leaves NO key behind — plus CLAMPS, because a slip should move
-      the ground to the limit rather than lose the entry:
-        amplitude 0.4      -> 0.4          (the authored case)
-        amplitude 99       -> 2.0          the walkability limit: two
-                                           neighbouring support points differ
-                                           by at most 2·amp over one grid step,
-                                           atan(2·2/2) = 63 deg on the 2 m tile
-                                           grid the rules read (45 deg while
-                                           that step was 4 m)
-        amplitude 0.001    -> 0.05         below this nothing is visible
-        amplitude 0.4449   -> 0.44         two decimals, the editor's precision
-        amplitude 0 / −1 / "much" / NaN / "" -> the KEY IS GONE
-        wave 2             -> 4.0          NYQUIST: 2 × the 2 m TILE step, a
-                                           wave the grid cannot carry at all
-                                           (the floor halved with the step on
-                                           2026-08-14)
-        wave 999           -> 200.0
-        wave 0 / junk      -> the KEY IS GONE (and the reader then uses 32 m)
-      The keys are independent: a wave without an amplitude survives as a
-      number and simply means nothing, and neither key disturbs `move_anim`
-      or any free-form neighbour.
+  [9] THE MICRO-RELIEF IS GONE FROM THE KIND (decision 2026-08-23). Its two
+      keys, `relief_amplitude_m` and `relief_wave_m`, were whitelisted here
+      from 2026-08-13 until then, which made every meadow of a world exactly
+      as bumpy as every other one. They belong to the painted AREA now
+      (scripts/smoke_terrain_areas.py, § A16.2) and left this module WITHOUT
+      a fallback: no clamp, no default, no reader.
+
+      The DELETION PROOF is the same shape [7] uses for the scatter list that
+      moved to the area: what a whitelist used to catch now travels through
+      `meta` verbatim, because `meta` is free-form and a key nobody claims is
+      just data.
+        amplitude 99    -> 99      NOT the old clamp of 2.0
+        amplitude 0     -> 0       NOT "the key is gone"
+        wave 2          -> 2       NOT the old Nyquist floor of 4.0
+        amplitude "much"-> "much"  NOT dropped as junk
+      Asserted BY NAME as well: `RELIEF_AMPLITUDE_MIN`/`_MAX`,
+      `RELIEF_WAVE_MIN`/`_MAX` and `DEFAULT_RELIEF_WAVE_M` do not exist in
+      `terrain_types` any more — they live next to the area sanitizer that
+      writes them (`models.terrain.RELIEF_*`).
+
+      And the READER agrees, which is what makes the deletion real rather
+      than cosmetic: an area painted with a kind whose row still carries the
+      two numbers contributes NOTHING to `heightfield.relief_inputs` — the
+      world stays flat until the AREA says otherwise.
+
+      No shared seed kind carries either key.
 
   [10] ONE MORE since the terrain animations (2026-08-14): `sway_m`, how far
       what GROWS on this ground bends in the wind — the maximum sideways
@@ -205,6 +206,26 @@ Throwaway storage. Hand-derived expectations:
       worn the heath texture; now nothing anywhere re-derives the name, so
       it renders the default ground until an author says otherwise.
 
+  [13] THE RELIEF MIGRATION, on the same throwaway world
+      (`terrain_relief_migration`). The kind lost the two micro-relief keys
+      without a fallback reader ([9]), so an existing world would FLATTEN on
+      the boot that dropped them. The value the old rule would have used is
+      written into every painted area of that kind, once:
+        kind "downs" (0.8 / 24), painted TWICE   -> BOTH areas carry 0.8 / 24
+                   — which is the picture the one bumpy kind used to make, and
+                   the two areas can now be told apart for the first time
+        kind "moss" (1.5), area already at 0.1   -> the AREA keeps its 0.1
+                   (its keys are the author's; a repair never overwrites one)
+        kind "slab" (no relief)                  -> its area stays flat
+      Then the kind rows lose the two keys AND NOTHING ELSE (a free-form
+      `note` next to them survives).
+      Idempotence is the world_kv marker, not the content: a second call
+      returns None.
+      THE PICTURE IS PRESERVED, asserted at the consumer: after the run
+      `heightfield.relief_params` answers `(seed("downs"), 0.8, 24.0)` for
+      both areas — the same seed, because the seed is still hashed from the
+      KIND name, and the same two numbers the kind used to hand the bake.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_types.py
 """
 import json
@@ -224,6 +245,14 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import terrain_types  # noqa: E402
+from app.core import heightfield as hf  # noqa: E402
+from app.models import terrain as terrain_store  # noqa: E402
+
+
+def _square(x, z, size):
+    """One axis-aligned square polygon — the fixture's only geometry."""
+    return [[x, z], [x + size, z], [x + size, z + size], [x, z + size]]
+
 
 FAILURES = []
 CHECKED = 0
@@ -497,42 +526,51 @@ check("the older water kinds name no threshold — an absent key is the "
        if "swim_from_m" in ((terrain_types.get_type(k) or {}).get("meta") or {})],
       [])
 
-print("[9] the micro-relief keys")
-check("an authored amplitude survives", meta_of({"relief_amplitude_m": 0.4}),
-      {"relief_amplitude_m": 0.4})
-check("...clamped at the walkability limit",
-      meta_of({"relief_amplitude_m": 99}), {"relief_amplitude_m": 2.0})
-check("...and up to the smallest visible swing",
-      meta_of({"relief_amplitude_m": 0.001}), {"relief_amplitude_m": 0.05})
-check("...rounded to two decimals",
-      meta_of({"relief_amplitude_m": 0.4449}), {"relief_amplitude_m": 0.44})
-check("a zero amplitude leaves no key behind",
-      meta_of({"relief_amplitude_m": 0}), {})
-check("...and neither does a negative one",
-      meta_of({"relief_amplitude_m": -1}), {})
-check("...nor junk", meta_of({"relief_amplitude_m": "much"}), {})
-check("...nor NaN", meta_of({"relief_amplitude_m": float("nan")}), {})
-check("...nor an empty string", meta_of({"relief_amplitude_m": ""}), {})
-check("a wave shorter than two support points is clamped (Nyquist)",
-      meta_of({"relief_wave_m": 2}), {"relief_wave_m": 4.0})
-check("...and a huge one to the upper limit",
-      meta_of({"relief_wave_m": 999}), {"relief_wave_m": 200.0})
-check("a zero wave leaves no key behind (the reader uses 32 m)",
-      meta_of({"relief_wave_m": 0}), {})
-check("...and neither does junk", meta_of({"relief_wave_m": "wide"}), {})
-check("both together, with a neighbour and a move_anim",
-      meta_of({"relief_amplitude_m": 0.4, "relief_wave_m": 32,
+print("[9] the micro-relief is GONE from the kind")
+# THE DELETION PROOF, shaped like [7]: a key nobody whitelists is free-form
+# data, so what the old rule CHANGED now travels through untouched.
+check("an amplitude past the old clamp is no longer clamped",
+      meta_of({"relief_amplitude_m": 99}), {"relief_amplitude_m": 99})
+check("...a zero is no longer dropped",
+      meta_of({"relief_amplitude_m": 0}), {"relief_amplitude_m": 0})
+check("...junk is no longer refused",
+      meta_of({"relief_amplitude_m": "much"}), {"relief_amplitude_m": "much"})
+check("...and a wave under the old Nyquist floor stays where it was typed",
+      meta_of({"relief_wave_m": 2}), {"relief_wave_m": 2})
+check("a whole relief pair rides along verbatim, next to a real key",
+      meta_of({"relief_amplitude_m": 0.4449, "relief_wave_m": 999,
                "move_anim": " swim ", "note": "x"}),
-      {"relief_amplitude_m": 0.4, "relief_wave_m": 32.0,
+      {"relief_amplitude_m": 0.4449, "relief_wave_m": 999,
        "move_anim": "swim", "note": "x"})
-check("a meta without them is untouched", meta_of({"note": "free form"}),
-      {"note": "free form"})
+# …AND BY NAME: the clamps left with the fields, they did not go quiet.
+check("the module holds no relief clamp any more",
+      [n for n in ("RELIEF_AMPLITUDE_MIN", "RELIEF_AMPLITUDE_MAX",
+                   "RELIEF_WAVE_MIN", "RELIEF_WAVE_MAX",
+                   "DEFAULT_RELIEF_WAVE_M")
+       if hasattr(terrain_types, n)], [])
+check("...they live next to the sanitizer that writes them, on the AREA",
+      [n for n in ("RELIEF_AMPLITUDE_MIN_M", "RELIEF_AMPLITUDE_MAX_M",
+                   "RELIEF_WAVE_MIN_M", "RELIEF_WAVE_MAX_M",
+                   "DEFAULT_RELIEF_WAVE_M")
+       if not hasattr(terrain_store, n)], [])
+# THE READER AGREES — that is what makes the deletion real. An area of a kind
+# whose row still carries both numbers contributes NOTHING to the bake: the
+# world stays flat until the AREA says otherwise.
 terrain_types.save_world_type(
     {"kind": "meadow", "name": "Meadow", "color": "#7ac74f",
      "meta": {"relief_amplitude_m": 0.4, "relief_wave_m": 32}})
-check("they survive the save/read round trip",
-      (terrain_types.get_type("meadow") or {}).get("meta"),
-      {"relief_amplitude_m": 0.4, "relief_wave_m": 32.0})
+_leftover = (terrain_types.get_type("meadow") or {}).get("meta") or {}
+check("a hand-edited row may still HOLD the two numbers", _leftover,
+      {"relief_amplitude_m": 0.4, "relief_wave_m": 32})
+_plain_area = {"id": "ta_m", "kind": "meadow", "z_order": 0, "meta": {},
+               "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]]}
+check("...and an area of it is STILL no input to the relief pass",
+      hf.relief_inputs([_plain_area]), [])
+check("...while the same area saying it itself IS one",
+      [(a["id"], p[1], p[2]) for a, p, _b in hf.relief_inputs(
+          [{**_plain_area, "meta": {"relief_amplitude_m": 0.4,
+                                    "relief_wave_m": 32.0}}])],
+      [("ta_m", 0.4, 32.0)])
 terrain_types.delete_world_type("meadow")
 check("no shared kind carries a relief by default",
       [k for k, e in terrain_types.effective_catalog().items()
@@ -701,6 +739,69 @@ check("...and the name match is dead: a same-named library id dresses nobody",
       (terrain_types.get_type("heath") or {}).get("surface", "<no key>"),
       "<no key>")
 for _kind in ("moor", "bog", "fen", "heath"):
+    terrain_types.delete_world_type(_kind)
+
+print("[13] the boot migration hands the relief from the kind to the areas")
+from app.core import terrain_relief_migration as trm  # noqa: E402
+
+# THE FIXTURE, one kind of each case the migration can meet:
+#   "downs"  a kind with relief, painted TWICE — both areas must take it over,
+#            and that is exactly the picture that used to be one bumpy kind
+#   "moss"   a kind with relief and an area that ALREADY authors its own,
+#            which is the author's answer and must survive untouched
+#   "slab"   a kind without relief — its area stays flat
+terrain_types.save_world_type(
+    {"kind": "downs", "name": "Downs", "color": "#7ac74f",
+     "meta": {"relief_amplitude_m": 0.8, "relief_wave_m": 24,
+              "note": "keep me"}})
+terrain_types.save_world_type(
+    {"kind": "moss", "name": "Moss", "color": "#4f7a55",
+     "meta": {"relief_amplitude_m": 1.5}})
+terrain_types.save_world_type(
+    {"kind": "slab", "name": "Slab", "color": "#999999"})
+_a1 = terrain_store.save_area({"kind": "downs", "polygon": _square(0, 0, 40)})
+_a2 = terrain_store.save_area({"kind": "downs", "polygon": _square(80, 0, 40)})
+_a3 = terrain_store.save_area({"kind": "moss", "polygon": _square(0, 80, 40),
+                               "meta": {"relief_amplitude_m": 0.1}})
+_a4 = terrain_store.save_area({"kind": "slab", "polygon": _square(80, 80, 40)})
+check("the marker is unset before the run",
+      bool(get_world_setting("migrated_area_relief_v1")), False)
+_rstats = trm.migrate_area_relief_once()
+check("two areas took the relief over, one kept its own",
+      (_rstats.get("areas"), _rstats.get("kept")), (2, 1))
+
+
+def _meta(area_id):
+    for a in terrain_store.list_areas():
+        if a["id"] == area_id:
+            return a.get("meta") or {}
+    return {}
+
+
+check("the first area of the bumpy kind now says it itself",
+      _meta(_a1["id"]), {"relief_amplitude_m": 0.8, "relief_wave_m": 24.0})
+check("...and so does the second — one kind, two areas, same picture",
+      _meta(_a2["id"]), {"relief_amplitude_m": 0.8, "relief_wave_m": 24.0})
+check("an area that already authored its own is untouched",
+      _meta(_a3["id"]), {"relief_amplitude_m": 0.1})
+check("an area of a flat kind stays flat", _meta(_a4["id"]), {})
+check("the kind rows lost the two keys — and nothing else",
+      (terrain_types.get_type("downs") or {}).get("meta"), {"note": "keep me"})
+check("...the second one too",
+      (terrain_types.get_type("moss") or {}).get("meta"), {})
+check("the marker is set after the run",
+      get_world_setting("migrated_area_relief_v1"), "1")
+check("a second run is a no-op (the marker, not the content)",
+      trm.migrate_area_relief_once(), None)
+# THE PICTURE IS PRESERVED, which is the whole point: the bake now reads the
+# two areas and gets the parameters the kind used to hand it, seed included.
+check("both areas feed the bake with what the kind used to give it",
+      [hf.relief_params(a["kind"], a) for a in terrain_store.list_areas()
+       if a["id"] in (_a1["id"], _a2["id"])],
+      [(hf.relief_seed("downs"), 0.8, 24.0)] * 2)
+for _a in (_a1, _a2, _a3, _a4):
+    terrain_store.delete_area(_a["id"])
+for _kind in ("downs", "moss", "slab"):
     terrain_types.delete_world_type(_kind)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")

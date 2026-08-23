@@ -288,11 +288,20 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     exactly what "largest wins" and "sampled while writing" would both leave —
     answers 5.2 at the hut's centre.
 
-[13] THE MICRO-RELIEF OF A TERRAIN KIND (decision 2026-08-13). A terrain type
-    may carry ``relief_amplitude_m`` (0.05..2.0 m) and ``relief_wave_m``
-    (8..200 m, absent = 32 m), and the world heightfield gets random small
-    hills wherever that kind is painted. It is BAKED IN here so that server
-    gate, client mirror and both renderers read the one ``heights`` array.
+[13] THE MICRO-RELIEF OF A PAINTED AREA (decision 2026-08-13, per AREA since
+    2026-08-23). A painted area may carry ``relief_amplitude_m`` (0.05..2.0 m)
+    and ``relief_wave_m`` (4..200 m, absent = 32 m), and the world heightfield
+    gets random small hills wherever that area lies. It is BAKED IN here so
+    that server gate, client mirror and both renderers read the one
+    ``heights`` array.
+
+    THE TWO NUMBERS USED TO LIVE ON THE KIND, which made every meadow of a
+    world exactly as bumpy as every other one. They are the AREA's now, with
+    no kind-level default behind them; the SEED is still hashed from the kind
+    NAME, so the pattern is shared and only its height and width are the
+    area's. This block's fixture says that in one place: ``set_relief`` writes
+    a PLAIN catalog row and remembers the two numbers for ``paint``, which
+    stamps them onto each area it saves.
 
     THE FORMULA, value noise on a world-origin-anchored lattice of edge
     ``wave``:
@@ -570,7 +579,7 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
 
 [16] A 4 m RELIEF WAVE — what the 2 m tile step actually bought (Nachwelle,
     2026-08-14). The wave a terrain kind may ask for is clamped at
-    2 × the TILE step (`terrain_types.RELIEF_WAVE_MIN`, Nyquist), so halving
+    2 × the TILE step (`models.terrain.RELIEF_WAVE_MIN_M`, Nyquist), so halving
     that step halved the floor: 8 m -> 4 m. THAT is the user-facing change, and
     it is what this section measures.
 
@@ -589,7 +598,7 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     support point in the middle of every wave cell (index 65 of 129), at a 4 m
     step it has none — one support point per wave instead of two.
 
-    RED COUNTER-PROBE (a), THE OLD FLOOR: read with `RELIEF_WAVE_MIN` at 8 the
+    RED COUNTER-PROBE (a), THE OLD FLOOR: read with `RELIEF_WAVE_MIN_M` at 8 the
     very same catalog row becomes an 8 m wave, i.e. a DIFFERENT ground — at
     (642,642) it stands at +0.260513117624 where the wave the author asked for
     dips to −0.111142964044. That was the silent substitution before the
@@ -1350,16 +1359,42 @@ R_36_16 = 0.75 * RND_21 + 0.25 * RND_31     # +0.199239390088, a border HILL
 R_36_32 = 0.75 * RND_22 + 0.25 * RND_32     # −0.335605335422, a border DIP
 
 
+#: What the areas of each KIND are shaped like in this run. Fixture
+#: bookkeeping, NOT a server concept: since 2026-08-23 the two relief numbers
+#: live on the painted AREA, so "the kind is bumpy" is a sentence this script
+#: keeps and `paint()` writes out, one area at a time.
+RELIEF_BY_KIND = {}
+
+
 def set_relief(kind, amplitude=None, wave=None):
-    """Write one terrain kind, with or without a micro-relief."""
+    """Write one terrain kind, and say how its areas are shaped.
+
+    The catalog row itself stays PLAIN — a kind carries no relief any more.
+    The two numbers are remembered for :func:`paint` and written onto every
+    area of that kind that already stands, which is what one catalog edit used
+    to do to a whole world in a single write.
+    """
     meta = {}
     if amplitude is not None:
         meta["relief_amplitude_m"] = amplitude
     if wave is not None:
         meta["relief_wave_m"] = wave
+    RELIEF_BY_KIND[kind] = meta
     terrain_types.save_world_type({"kind": kind, "name": kind.upper(),
                                    "color": "#7ac74f", "passable": True,
-                                   "speed_factor": 1.0, "meta": meta})
+                                   "speed_factor": 1.0, "meta": {}})
+    for area in terrain.list_areas():
+        if area.get("kind") != kind:
+            continue
+        rest = {k: v for k, v in (area.get("meta") or {}).items()
+                if not k.startswith("relief_")}
+        terrain.save_area({**area, "meta": {**rest, **meta}})
+
+
+def paint(kind, polygon):
+    """Save an area of ``kind``, shaped by what :func:`set_relief` remembered."""
+    return terrain.save_area({"kind": kind, "polygon": polygon,
+                              "meta": dict(RELIEF_BY_KIND.get(kind) or {})})
 
 
 def raster_now():
@@ -1372,17 +1407,19 @@ def raster_now():
 
 set_relief("g", amplitude=1.0, wave=16.0)
 set_relief("p")
-GRASS = terrain.save_area({"kind": "g", "polygon": square(0, 0, 40, 40)})
+GRASS = paint("g", square(0, 0, 40, 40))
 store.save_height_area(dict(HILL))
 
 check("the seed is a hash of the kind NAME", hf.relief_seed("g"), SEED_G)
 check("...and another kind gets an unrelated one",
       hf.relief_seed("p") != SEED_G, True)
-check("the catalog entry reads back as (seed, amplitude, wave)",
-      hf.relief_params("g", terrain_types.get_type("g")),
-      (SEED_G, 1.0, 16.0))
-check("a kind without an amplitude carries no relief",
-      hf.relief_params("p", terrain_types.get_type("p")), None)
+check("the AREA reads back as (seed, amplitude, wave) — the seed still hashed"
+      " from the kind, the two numbers the area's own",
+      hf.relief_params("g", GRASS), (SEED_G, 1.0, 16.0))
+check("...while the KIND row it was painted with says nothing any more",
+      (terrain_types.get_type("g") or {}).get("meta"), {})
+check("an area without an amplitude carries no relief",
+      hf.relief_params("p", {"meta": {}}), None)
 near("rnd(1,1) — the corner derived by hand",
      hf.lattice_noise(SEED_G, 1, 1), RND_11, 1e-11)
 near("the relief at (16,16), a lattice corner",
@@ -1432,13 +1469,13 @@ near("a state that wraps past 0 (u = −60) is the unsigned 32-bit one",
      hf.lattice_noise((SEED_G - 60 * 73856093) % 4294967296, 0, 0), 1e-15)
 store.delete_height_area(store.list_height_areas()[0]["id"])
 terrain.delete_area(GRASS["id"])
-WIDE = terrain.save_area({"kind": "g", "polygon": square(-40, -40, 40, 40)})
+WIDE = paint("g", square(-40, -40, 40, 40))
 f13d = raster_now()
 check("a relief kind alone builds a grid (no height area at all)",
       (f13d["rows"], f13d["cols"], f13d["origin_x"]), (23, 23, -44.0))
 near("(−16,−16) is the corner rnd(−1,−1)", at(f13d, 7, 7), RND_M11, 5e-4)
 terrain.delete_area(WIDE["id"])
-GRASS = terrain.save_area({"kind": "g", "polygon": square(0, 0, 40, 40)})
+GRASS = paint("g", square(0, 0, 40, 40))
 store.save_height_area(dict(HILL))
 
 print("  [13f] the plateau still wins — and it is the MEDIAN of the bumps")
@@ -1474,7 +1511,7 @@ check_not("RED COUNTER-PROBE: the old SINGLE probe at the centre said 4.707,"
 delete_location(PLACE)
 
 print("  [13g] the topmost kind decides")
-PATH = terrain.save_area({"kind": "p", "polygon": square(14, 14, 40, 40)})
+PATH = paint("p", square(14, 14, 40, 40))
 _areas = terrain.list_areas()
 check("kind_at agrees about (20,20)", kind_at(20, 20, areas=_areas), "p")
 check("...and about (4,4)", kind_at(4, 4, areas=_areas), "g")
@@ -1483,15 +1520,13 @@ near("under the flat kind the ground is the authored 5 again",
      at(f13g, 6, 6), 5.0, 5e-4)
 near("...while (4,4) keeps its hills", at(f13g, 2, 2), 5.086, 5e-4)
 check("a flat area over a bumpy one IS an input of the pass",
-      [a.get("kind") for a, _p, _b in hf.relief_inputs(
-          _areas, terrain_types.effective_catalog())], ["g", "p"])
+      [a.get("kind") for a, _p, _b in hf.relief_inputs(_areas)], ["g", "p"])
 terrain.delete_area(PATH["id"])
 
-print("  [13i] no relief in the catalog = the pass never happened")
-set_relief("g")           # the same kind, amplitude gone
+print("  [13i] no area authors relief = the pass never happened")
+set_relief("g")           # the same kind, the areas' amplitude gone
 check("...so nothing is an input any more",
-      hf.relief_inputs(terrain.list_areas(),
-                       terrain_types.effective_catalog()), [])
+      hf.relief_inputs(terrain.list_areas()), [])
 check("and the grid is byte-for-byte the pure area raster",
       raster_now()["heights"]
       == hf.rasterize(store.list_height_areas())["heights"], True)
@@ -1500,15 +1535,15 @@ print("  [13j] the signature")
 for _a in list(terrain.list_areas()):
     terrain.delete_area(_a["id"])
 _sig0 = store.height_sig()
-_flat_area = terrain.save_area({"kind": "p", "polygon": square(0, 0, 40, 40)})
+_flat_area = paint("p", square(0, 0, 40, 40))
 check("painting a flat kind leaves the signature alone",
       store.height_sig(), _sig0)
-_g_area = terrain.save_area({"kind": "g", "polygon": square(0, 0, 40, 40)})
-check("...and so does painting a kind that carries no relief YET",
+_g_area = paint("g", square(0, 0, 40, 40))
+check("...and so does painting an area that authors no relief YET",
       store.height_sig(), _sig0)
 set_relief("g", amplitude=1.0, wave=16.0)
 _sig_relief = store.height_sig()
-check("giving the kind an amplitude moves it", _sig_relief != _sig0, True)
+check("giving the area an amplitude moves it", _sig_relief != _sig0, True)
 set_relief("g", amplitude=0.5, wave=16.0)
 check("changing the amplitude moves it again",
       store.height_sig() != _sig_relief, True)
@@ -1521,7 +1556,7 @@ check("...and so does the wave", store.height_sig() != _sig_relief, True)
 # again. The basis carries kind/polygon/relief only, never an id, which is why
 # the removal has to give the SAME string back and not merely a different one.
 _sig_wave = store.height_sig()
-_over = terrain.save_area({"kind": "p", "polygon": square(8, 8, 24, 24)})
+_over = paint("p", square(8, 8, 24, 24))
 check("a flat area painted OVER the active relief moves the signature",
       store.height_sig() != _sig_wave, True)
 terrain.delete_area(_over["id"])
@@ -1533,7 +1568,7 @@ check("taking the relief away gives EXACTLY the old signature back",
 terrain.delete_area(_g_area["id"])
 terrain.delete_area(_flat_area["id"])
 
-print("  [13k] the reader clamps a catalog row the sanitizer never saw")
+print("  [13k] the reader clamps an area row the sanitizer never saw")
 check("amplitude 99 -> 2.0, wave 2 -> 4.0 (Nyquist, 2 x the 2 m tile step)",
       hf.relief_params("g", {"meta": {"relief_amplitude_m": 99,
                                       "relief_wave_m": 2}}),
@@ -1561,8 +1596,8 @@ for _a in list(terrain.list_areas()):
     terrain.delete_area(_a["id"])
 set_relief("g", amplitude=1.0, wave=16.0)
 set_relief("w")                     # the flat neighbour: water
-terrain.save_area({"kind": "g", "polygon": square(0, 0, 40, 40)})
-terrain.save_area({"kind": "w", "polygon": square(40, 0, 80, 40)})
+paint("g", square(0, 0, 40, 40))
+paint("w", square(40, 0, 80, 40))
 _areas_l = terrain.list_areas()
 check("kind_at agrees where the seam runs",
       [kind_at(36, 32, areas=_areas_l), kind_at(40, 32, areas=_areas_l)],
@@ -1619,7 +1654,7 @@ near("2 m further in, the dip at (36,32) SURVIVES — the band is 2 m wide",
 # RED COUNTER-PROBE, executed: the pass WITHOUT the mask, rebuilt from the
 # module's own pieces — the topmost-kind rule (`relief_inputs` + the ray-cast)
 # and the noise, and nothing else. It is the state the finding was reported on.
-_relief_l = hf.relief_inputs(_areas_l, terrain_types.effective_catalog())
+_relief_l = hf.relief_inputs(_areas_l)
 
 
 def _unclamped_at(px, pz):
@@ -1657,16 +1692,16 @@ T14_A2 = {"id": "t14_a2", "polygon": square(300, 200, 420, 300),
           "height_m": -9.0, "falloff_m": 0.0}
 T14_AREAS = [T14_A1, T14_A2]
 T14_TERRAIN = [{"kind": "g", "polygon": square(264, 240, 396, 264),
-                "z_order": 0}]
-T14_CATALOG = {"g": {"passable": True, "speed_factor": 1.0,
-                     "meta": {"relief_amplitude_m": 1.0,
-                              "relief_wave_m": 16.0}}}
+                "z_order": 0,
+                "meta": {"relief_amplitude_m": 1.0,
+                         "relief_wave_m": 16.0}}]
+T14_CATALOG = {"g": {"passable": True, "speed_factor": 1.0, "meta": {}}}
 T14_BIG = fp_square(340.0, 140.0, 40.0)
 T14_SMALL = fp_square(356.0, 152.0, 8.0)
 T14_WEST = fp_square(260.0, 220.0, 8.0)
 T14_FAR = fp_square(2000.0, 2000.0, 20.0)
 T14_FPS = [T14_BIG, T14_SMALL, T14_WEST, T14_FAR]
-T14_RELIEF = hf.relief_inputs(T14_TERRAIN, T14_CATALOG)
+T14_RELIEF = hf.relief_inputs(T14_TERRAIN)
 
 # THE STEP IS FORCED to the TILE step: the comparison is about the tiles, and
 # both a coarsened overview and the overview's own 4 m default would make it
@@ -1909,7 +1944,7 @@ for _a in list(terrain.list_areas()):
 set_relief("g", amplitude=1.0, wave=16.0)
 store.save_height_area(T14_A1)
 store.save_height_area(T14_A2)
-terrain.save_area({"kind": "g", "polygon": square(264, 240, 396, 264)})
+paint("g", square(264, 240, 396, 264))
 for _name, _fp in [("T14 Big", T14_BIG), ("T14 Small", T14_SMALL),
                    ("T14 West", T14_WEST), ("T14 Far", T14_FAR)]:
     # The outline's own edge, so the placed location and the literal above
@@ -1947,7 +1982,9 @@ check("the world's tile IS the pure one",
 print("  [14d] what one tile costs (reported, not asserted)")
 _giant_area = [{"id": "t14_giant", "polygon": square(0, 0, 8000, 8000),
                 "height_m": 12.0, "falloff_m": 40.0}]
-_giant_terrain = [{"kind": "g", "polygon": square(0, 0, 8000, 8000)}]
+_giant_terrain = [{"kind": "g", "polygon": square(0, 0, 8000, 8000),
+                   "meta": {"relief_amplitude_m": 1.0,
+                            "relief_wave_m": 16.0}}]
 _t0 = time.perf_counter()
 _giant_tile = hf.rasterize_tile(3, 3, _giant_area, footprints=(),
                                 terrain_areas=_giant_terrain,
@@ -1968,7 +2005,8 @@ check("...while its tiles stay at the fine step, relief and all",
 # world point index 32 of 65 named at the 4 m step.
 near("...deep inside the area, at the full height plus its noise",
      _giant_tile["heights"][64][64] - 12.0,
-     hf.micro_relief_at(hf.relief_params("g", T14_CATALOG["g"]), 896.0, 896.0),
+     hf.micro_relief_at(hf.relief_params("g", _giant_terrain[0]), 896.0,
+                        896.0),
      5e-4)
 
 print("[15] the tile-key query and the batch payload")
@@ -2025,10 +2063,10 @@ check("two-digit tile indices sort numerically, not lexicographically",
 
 print("\n[16] a 4 m relief wave — what the 2 m tile step bought")
 
-T16_CATALOG = {"w": {"passable": True, "speed_factor": 1.0,
-                     "meta": {"relief_amplitude_m": 0.5,
-                              "relief_wave_m": 4.0}}}
-T16_TERRAIN = [{"kind": "w", "polygon": square(600, 600, 700, 700)}]
+T16_CATALOG = {"w": {"passable": True, "speed_factor": 1.0, "meta": {}}}
+T16_TERRAIN = [{"kind": "w", "polygon": square(600, 600, 700, 700),
+                "meta": {"relief_amplitude_m": 0.5,
+                         "relief_wave_m": 4.0}}]
 T16_SEED = hf.relief_seed("w")
 # The four corners of the wave cell (640,640)-(644,644), from the primitive
 # [13]b derives by hand (xorshift32 step by step).
@@ -2039,7 +2077,7 @@ T16_N11 = hf.lattice_noise(T16_SEED, 161, 161)
 T16_MID = 0.5 * (T16_N00 + T16_N10 + T16_N01 + T16_N11) / 4.0
 
 check("the 4 m wave survives the reader's clamp — the floor is 2 x 2 m now",
-      hf.relief_params("w", T16_CATALOG["w"]), (T16_SEED, 0.5, 4.0))
+      hf.relief_params("w", T16_TERRAIN[0]), (T16_SEED, 0.5, 4.0))
 near("the mid-cell value, mixed by hand from the four corners",
      T16_MID, -0.111142964044, 1e-11)
 near("RED COUNTER-PROBE: at the old 8 m floor the same row built another "

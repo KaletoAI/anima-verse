@@ -46,14 +46,16 @@ lives inside that band.
     WATER_SET   square (20,20)-(60,60), kind "lake",
                 water_level 3.0, water_depth_m 2.0, shore_ramp_m 3.0
     WATER_AUTO  square (120,120)-(160,160), kind "lake", NO water_level
-    GRASS       band (100,-100)-(180,-20), kind "g",
+    GRASS       band (100,-100)-(180,-20), kind "g", with its OWN
                 relief_amplitude_m 1.0, relief_wave_m 16
     PLOT        a BUILT location, pin (80,-140), yaw 0, local outline the
                 centred 20 m square -> world (70,-150)-(90,-130)
 
 The catalog is two entries: "lake" carries ``meta.water`` (that flag, never the
 NAME, is what makes a kind carve — kinds are an open vocabulary) and "g"
-carries the two relief numbers.
+carries NOTHING. The two relief numbers are the AREA's since 2026-08-23: a
+kind-level amplitude made every meadow of a world equally bumpy, and section
+[5c] is the case the old model could not express at all.
 
 Section [8] adds the SLOPED MIRROR of W1 on its own model: a water area may
 declare a ``flow_dir_deg``, and then its mirror is not one number but a plane
@@ -204,6 +206,39 @@ same function. Section [9] is the deletion proof of the fifth stage.
     Two landscapes again, in the same place. The metre rule probes 2 m in
     every raster, so the dip is kept in all of them.
 
+[5c] TWO AREAS OF ONE KIND, TWO RELIEFS (decision 2026-08-23) — the case the
+    kind-level model could not express at all. Three bands of the SAME kind
+    "g", side by side, outside every height area, so h_final IS the relief:
+
+        C  x in [140,200]  amplitude 1.00, wave 16
+        A  x in [200,300]  amplitude 1.00, wave 16
+        B  x in [300,400]  amplitude 0.25, wave 16
+
+    The seed is STILL hashed from the kind name, so all three sample the ONE
+    noise field of "g"; only how tall it stands is theirs. Both probe points
+    are lattice CORNERS (x a multiple of the 16 m wave), where the bilinear
+    mix collapses to the single draw rnd(u, v) — and both draws are positive,
+    so the edge rule cannot touch them:
+
+        (240,-64)  u=15, v=-4  rnd = +0.601476330776 -> h = 0.601476330776
+        (368,-64)  u=23, v=-4  rnd = +0.329562937841 -> h = 0.082390734460
+                                                          = rnd · 0.25
+
+    RED COUNTER-PROBE, THE OLD MODEL: put the two numbers back on the KIND and
+    leave the areas silent — the state every world was in before this change —
+    and the ground is FLAT at both points, because nothing reads the kind any
+    more (`relief_inputs` answers an empty list). And where the old model DID
+    work it had one amplitude for both bands: it would give B the full draw,
+    4 × the 0.082390734460 the area asks for.
+
+    THE SEAMS, both of them, out of the same field:
+        C | A (x=200, SAME numbers): 0.051160196017 -> 0.156314309512, a step
+            of 0.105154113495 m over 2 m — the field's own slope, no seam
+        A | B (x=300, DIFFERENT amplitudes): -0.170306254062 -> the same field
+            at a quarter, -0.048629130266; a step of 0.121677123796 m. That is
+            the authored price of a per-area relief and not a defect: the
+            amplitude changes where the author drew the contour.
+
 [6] THE PYRAMID (§ G2, claim (d)).  A tile reports ``min``/``max`` and, per
     mip level 4/8/16/32/64 m, the largest vertical error of drawing that level
     instead of the 2 m base.
@@ -307,13 +342,13 @@ WATER_AUTO = {"id": "ta_lake_auto", "kind": "lake", "z_order": 0,
               "meta": {}}
 GRASS = {"id": "ta_grass", "kind": "g", "z_order": 0,
          "polygon": [[100, -100], [180, -100], [180, -20], [100, -20]],
-         "meta": {}}
+         "meta": {"relief_amplitude_m": 1.0, "relief_wave_m": 16.0}}
 
 CATALOG = {
     "lake": {"kind": "lake", "name": "Lake", "passable": True,
              "speed_factor": 0.4, "meta": {"water": True}},
     "g": {"kind": "g", "name": "Grass", "passable": True, "speed_factor": 1.0,
-          "meta": {"relief_amplitude_m": 1.0, "relief_wave_m": 16.0}},
+          "meta": {}},
 }
 
 PLOT_LOCAL = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)]
@@ -743,6 +778,99 @@ check("the probe distance is a metre constant", hf.RELIEF_EDGE_PROBE_M, 2.0)
 near("a dip 1 m inside the band edge is still clamped to 0",
      MODEL.natural(101.0, -60.0) - natural(101.0),
      max(0.0, hand_noise(101.0, -60.0, SEED_G)), 1e-12)
+
+
+print("\n[5c] TWO AREAS, ONE KIND, TWO RELIEFS — the case the kind could not say")
+# THE FIXTURE (pure literals again, no DB): three bands of the SAME kind "g",
+# side by side, at z in [-100,-20] and outside every height area, so h_final IS
+# the micro-relief and nothing else.
+#     C  x in [140,200]  amplitude 1.0,  wave 16
+#     A  x in [200,300]  amplitude 1.0,  wave 16
+#     B  x in [300,400]  amplitude 0.25, wave 16
+C5 = {"id": "ta_c", "kind": "g", "z_order": 0,
+      "polygon": [[140, -100], [200, -100], [200, -20], [140, -20]],
+      "meta": {"relief_amplitude_m": 1.0, "relief_wave_m": 16.0}}
+A5 = {"id": "ta_a", "kind": "g", "z_order": 0,
+      "polygon": [[200, -100], [300, -100], [300, -20], [200, -20]],
+      "meta": {"relief_amplitude_m": 1.0, "relief_wave_m": 16.0}}
+B5 = {"id": "ta_b", "kind": "g", "z_order": 0,
+      "polygon": [[300, -100], [400, -100], [400, -20], [300, -20]],
+      "meta": {"relief_amplitude_m": 0.25, "relief_wave_m": 16.0}}
+M5 = hf.build_model([], [], [C5, A5, B5], CATALOG)
+
+# THE SEED IS STILL THE KIND'S, the two numbers are the AREA's — which is the
+# whole sentence of the move, read off the parameter tuple.
+check("both areas answer the SAME seed, hashed from the one kind name",
+      (hf.relief_params("g", A5)[0], hf.relief_params("g", B5)[0]),
+      (SEED_G, SEED_G))
+check("...and two DIFFERENT amplitudes, each its own area's",
+      (hf.relief_params("g", A5)[1:], hf.relief_params("g", B5)[1:]),
+      ((1.0, 16.0), (0.25, 16.0)))
+
+# THE TWO POINTS, both lattice CORNERS (x a multiple of the 16 m wave), where
+# the bilinear mix collapses to the single corner draw rnd(u, v) — so the
+# expected height is one hand-derived number times the area's own amplitude.
+# Both draws are POSITIVE, so the edge rule cannot reach them either way.
+#   (240,-64): u = 15, v = -4, rnd = +0.601476330776 -> h = 0.601476330776
+#   (368,-64): u = 23, v = -4, rnd = +0.329562937841 -> h = 0.082390734460
+RND_15_M4 = rnd(SEED_G, 15, -4)
+RND_23_M4 = rnd(SEED_G, 23, -4)
+near("rnd(15,-4), the corner under A, derived by hand",
+     RND_15_M4, 0.601476330776, 1e-11)
+near("rnd(23,-4), the corner under B", RND_23_M4, 0.329562937841, 1e-11)
+near("A stands at the full draw — amplitude 1.0",
+     M5.final(240.0, -64.0), 0.601476330776, 1e-11)
+near("B stands at a QUARTER of its own draw — amplitude 0.25",
+     M5.final(368.0, -64.0), 0.082390734460, 1e-11)
+near("...i.e. exactly the area's own amplitude, not the kind's",
+     M5.final(368.0, -64.0) / RND_23_M4, 0.25, 1e-12)
+check_true("the two areas of ONE kind are two different grounds",
+           abs(M5.final(240.0, -64.0)) > 4.0 * abs(M5.final(368.0, -64.0)))
+
+# RED COUNTER-PROBE, THE OLD MODEL: put the two numbers back on the KIND and
+# leave the areas silent. That is what every world looked like before
+# 2026-08-23 — and now it is FLAT, because nothing reads the kind any more.
+OLD_CATALOG = {**CATALOG,
+               "g": {**CATALOG["g"],
+                     "meta": {"relief_amplitude_m": 1.0,
+                              "relief_wave_m": 16.0}}}
+SILENT = [{**A5, "meta": {}}, {**B5, "meta": {}}]
+check("red: with the numbers on the KIND, nothing is an input at all",
+      hf.relief_inputs(SILENT), [])
+M5_OLD = hf.build_model([], [], SILENT, OLD_CATALOG)
+near("red: ...and the ground under both areas is 0.0",
+     abs(M5_OLD.final(240.0, -64.0)) + abs(M5_OLD.final(368.0, -64.0)), 0.0)
+# …and the other half of the counter-probe: the old model could not tell the
+# two bands apart even when it DID work — one kind, one amplitude, so the two
+# points would have differed only by their draws.
+near("red: the old model gives B the FULL draw, four times what it asks for",
+     hf.micro_relief_at((SEED_G, 1.0, 16.0), 368.0, -64.0),
+     4.0 * 0.082390734460, 1e-11)
+
+# THE SEED STAYED SHARED, and that is what keeps a world in one piece: C and A
+# ask for the same two numbers, so their common border at x = 200 carries no
+# seam — the value on either side is the ONE noise field, sampled 1 m apart.
+near("two areas with the same numbers continue each other: west of the seam",
+     M5.final(199.0, -64.0), hand_noise(199.0, -64.0, SEED_G, 1.0, 16.0),
+     1e-11)
+near("...and east of it, out of the very same field",
+     M5.final(201.0, -64.0), hand_noise(201.0, -64.0, SEED_G, 1.0, 16.0),
+     1e-11)
+near("…so the step across that seam is the FIELD's own slope and nothing "
+     "else: 0.156314309512 - 0.051160196017",
+     M5.final(201.0, -64.0) - M5.final(199.0, -64.0), 0.105154113495, 1e-11)
+
+# AND THE OTHER SEAM, where the two numbers DIFFER (A | B at x = 300), is the
+# honest price of the move: the amplitude jumps at the painted contour, so the
+# ground does too. Both sides are hand-derived from the ONE noise field:
+#   (299,-64)  noise -0.170306254062 x 1.00 = -0.170306254062
+#   (301,-64)  noise -0.194516521064 x 0.25 = -0.048629130266
+near("at the seam between two DIFFERENT amplitudes the west side is A's",
+     M5.final(299.0, -64.0), -0.170306254062, 1e-11)
+near("...and the east side is a quarter of the same field, B's",
+     M5.final(301.0, -64.0), -0.048629130266, 1e-11)
+near("...a step of 0.121677123796 m over 2 m — authored, not a bug",
+     M5.final(301.0, -64.0) - M5.final(299.0, -64.0), 0.121677123796, 1e-11)
 
 
 print("\n[6] the pyramid: min/max and a TRUE error bound per mip level")

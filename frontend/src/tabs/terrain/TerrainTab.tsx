@@ -13,31 +13,25 @@
  * effective catalog on the left with its origin marked (world row or shared
  * seed), the selected kind or the create form on the right.
  *
- * WHAT IT READS, and why each of the three:
+ * WHAT IT READS, and why each of the two:
  *   - `GET /world/terrain-types` — the effective catalog plus `sources`, the
  *     one answer that says which kinds exist and where each comes from.
  *   - `GET /assets/surface-textures` — the library the Surface picker offers.
  *     A failed fetch leaves the picker with "none" alone and marks NOTHING as
  *     missing: an empty list is not evidence that a stored id is gone.
- *   - `GET /world/height-areas` — for `tile_step_m` and `max_slope_deg`, the
- *     two numbers the amplitude sentence needs (§ A16.2): the grid step the
- *     relief hint divides by, and the walk gate the WARNING is measured
- *     against. It used to take a second fetch of `/play/worldmap` for the
- *     slope alone — the whole map, per mount, for one float; the route carries
- *     both walk limits since 2026-08-16. It is best-effort: without it the
- *     hint falls back to the mirrored constant and the warning simply says
- *     nothing, which is what it did before the server had answered anyway.
- * The two relief numbers used to travel down from `MapTab` as props; the tab
- * fetches them itself, because a tab that hangs off another tab's state is a
- * tab in name only.
+ *
+ * IT NO LONGER FETCHES `GET /world/height-areas` (2026-08-23). That fetch
+ * existed for `tile_step_m` + `max_slope_deg`, the two numbers the micro-relief
+ * amplitude sentence was measured against — and the micro-relief is a property
+ * of the painted AREA now (§ A16.2), edited in the map's area panel. A kind has
+ * no shape to speak of any more, so the tab has nothing to ask the heightfield.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ListHeader } from '../../components/ListHeader'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { DEFAULT_MAX_SLOPE_DEG } from '../map/heightMath'
-import type { HeightAreasResp, TerrainType, TerrainTypesResp } from '../map/mapTypes'
+import type { TerrainType, TerrainTypesResp } from '../map/mapTypes'
 import type { SurfaceKind } from '../world/worldTypes'
 import { TerrainDetail } from './TerrainDetail'
 
@@ -52,10 +46,6 @@ export function TerrainTab() {
   const [creating, setCreating] = useState(false)
   const [busy, setBusy] = useState(false)
   const [query, setQuery] = useState('')
-  /** The two server numbers the relief hint and warning need. 0 = not answered
-   *  yet — see the module doc. */
-  const [tileStepM, setTileStepM] = useState(0)
-  const [maxSlopeDeg, setMaxSlopeDeg] = useState(DEFAULT_MAX_SLOPE_DEG)
 
   const load = useCallback(async () => {
     try {
@@ -84,21 +74,6 @@ export function TerrainTab() {
                          url: e.url || '' }))
           .sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => setSurfaces([]))
-  }, [])
-
-  // The two relief numbers, in ONE fetch and best-effort — a tab that cannot
-  // say how steep 2 m get is still a tab that edits ground.
-  useEffect(() => {
-    apiGet<HeightAreasResp>('/world/height-areas')
-      .then((r) => {
-        const tile = r?.tile_step_m
-        if (Number.isFinite(tile) && (tile as number) > 0) setTileStepM(tile as number)
-        const deg = r?.max_slope_deg
-        if (Number.isFinite(deg) && (deg as number) > 0) setMaxSlopeDeg(deg as number)
-      })
-      // The hint falls back to the mirrored constant, the warning keeps the
-      // server's own default.
-      .catch(() => { /* both fall back */ })
   }, [])
 
   /** Write one entry. Answers the SANITIZED row so the form can refill from
@@ -218,8 +193,6 @@ export function TerrainTab() {
             source="world"
             existingKinds={kinds}
             surfaces={surfaces}
-            tileStepM={tileStepM}
-            maxSlopeDeg={maxSlopeDeg}
             busy={busy}
             onSave={putType}
             onCancel={() => setCreating(false)}
@@ -237,8 +210,6 @@ export function TerrainTab() {
             source={selectedSource}
             existingKinds={kinds}
             surfaces={surfaces}
-            tileStepM={tileStepM}
-            maxSlopeDeg={maxSlopeDeg}
             busy={busy}
             onSave={putType}
             onReset={selectedSource === 'world'

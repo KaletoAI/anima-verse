@@ -277,6 +277,28 @@ Throwaway storage. Hand-derived expectations:
       the bake: an area carrying it carves exactly the bed it carved without
       it, which is checked here against a second sanitize of the same area.
 
+ [18] meta.relief_amplitude_m / meta.relief_wave_m — HOW BUMPY THIS AREA IS
+      (§ A16.2, moved here from the terrain KIND on 2026-08-23). A kind-level
+      amplitude made every meadow of a world exactly as bumpy as every other
+      one; the two numbers are the painted shape's now, with no kind-level
+      default and no fallback reader behind them.
+      The clamps came along unchanged, on the `move_anim` shape rule — a value
+      that says nothing leaves NO key behind, everything else is clamped
+      rather than refused and rounded to two decimals:
+        amplitude 0.4    -> 0.4     the authored case
+        amplitude 99     -> 2.0     the WALKABILITY limit: two neighbouring
+                                    support points differ by at most 2·amp
+                                    over one grid step, atan(2·2/2) = 63° on
+                                    the 2 m tile grid the rules read
+        amplitude 0.001  -> 0.05    below this nothing is visible
+        amplitude 0.4449 -> 0.44    two decimals, the editor's precision
+        amplitude 0 / −1 / "much" / NaN / "" -> the KEY IS GONE
+        wave 2           -> 4.0     NYQUIST: 2 × the 2 m TILE step
+        wave 999         -> 200.0
+        wave 0 / junk    -> the KEY IS GONE (the reader then uses 32 m)
+      And the sentence the move was made for, through a real round trip: TWO
+      areas of ONE kind, one at 0.2 and one at 1.6/12, each keeping its own.
+
 Usage:  ./.venv/bin/python scripts/smoke_terrain_areas.py
 """
 import asyncio
@@ -1303,6 +1325,80 @@ check("the bake's own water fields are untouched by it",
       {k: v for k, v in speed_of({**_shaped, "flow_speed_m_s": 1.9}).items()
        if k != "flow_speed_m_s"},
       speed_of(dict(_shaped)))
+
+print("\n[18] meta.relief_* — how bumpy THIS area is (§ A16.2)")
+# THE MICRO-RELIEF MOVED HERE FROM THE KIND (decision 2026-08-23). It used to
+# be two whitelisted CATALOG fields, which made every meadow of a world exactly
+# as bumpy as every other one; the kind lost them without a fallback reader
+# (scripts/smoke_terrain_types.py [9]) and this is where they landed.
+#
+# The clamps came along unchanged, and the shape rule is the `move_anim` one:
+# a value that says nothing leaves NO key behind, everything else is clamped
+# rather than refused and rounded to two decimals.
+#   amplitude 0.4      -> 0.4     the authored case
+#   amplitude 99       -> 2.0     the WALKABILITY limit: two neighbouring
+#                                 support points differ by at most 2*amp over
+#                                 one grid step, atan(2*2/2) = 63 deg on the
+#                                 2 m tile grid the rules read
+#   amplitude 0.001    -> 0.05    below this nothing is visible
+#   amplitude 0.4449   -> 0.44    two decimals, the editor's precision
+#   amplitude 0 / -1 / "much" / NaN / "" -> the KEY IS GONE
+#   wave 2             -> 4.0     NYQUIST: 2 x the 2 m TILE step
+#   wave 999           -> 200.0
+#   wave 0 / junk      -> the KEY IS GONE (and the reader then uses 32 m)
+
+
+def relief_of(meta):
+    """`meta` through the real sanitizer — an ordinary, non-water kind."""
+    return terrain.sanitize_area({"kind": "grass", "polygon": SQUARE,
+                                  "meta": meta})["meta"]
+
+
+check("an authored amplitude survives", relief_of({"relief_amplitude_m": 0.4}),
+      {"relief_amplitude_m": 0.4})
+check("...clamped at the walkability limit",
+      relief_of({"relief_amplitude_m": 99}), {"relief_amplitude_m": 2.0})
+check("...and up to the smallest visible swing",
+      relief_of({"relief_amplitude_m": 0.001}), {"relief_amplitude_m": 0.05})
+check("...rounded to two decimals",
+      relief_of({"relief_amplitude_m": 0.4449}), {"relief_amplitude_m": 0.44})
+check("a zero amplitude leaves no key behind",
+      relief_of({"relief_amplitude_m": 0}), {})
+check("...and neither does a negative one",
+      relief_of({"relief_amplitude_m": -1}), {})
+check("...nor junk", relief_of({"relief_amplitude_m": "much"}), {})
+check("...nor NaN", relief_of({"relief_amplitude_m": float("nan")}), {})
+check("...nor an empty string", relief_of({"relief_amplitude_m": ""}), {})
+check("a wave shorter than two support points is clamped (Nyquist)",
+      relief_of({"relief_wave_m": 2}), {"relief_wave_m": 4.0})
+check("...and a huge one to the upper limit",
+      relief_of({"relief_wave_m": 999}), {"relief_wave_m": 200.0})
+check("a zero wave leaves no key behind (the reader uses 32 m)",
+      relief_of({"relief_wave_m": 0}), {})
+check("...and neither does junk", relief_of({"relief_wave_m": "wide"}), {})
+check("both together, next to a stroke-less free-form neighbour",
+      relief_of({"relief_amplitude_m": 0.4, "relief_wave_m": 32,
+                 "note": "x"}),
+      {"relief_amplitude_m": 0.4, "relief_wave_m": 32.0, "note": "x"})
+check("a meta without them is untouched", relief_of({"note": "free form"}),
+      {"note": "free form"})
+# THE ROUND TRIP, and the sentence the whole move was made for: TWO areas of
+# ONE kind, saying two different things about the same ground.
+_r_soft = terrain.save_area({"kind": "grass", "polygon": SQUARE,
+                             "meta": {"relief_amplitude_m": 0.2}})
+_r_wild = terrain.save_area({"kind": "grass",
+                             "polygon": [[40, 40], [50, 40], [50, 50],
+                                         [40, 50]],
+                             "meta": {"relief_amplitude_m": 1.6,
+                                      "relief_wave_m": 12}})
+_r_by_id = {a["id"]: (a.get("meta") or {}) for a in terrain.list_areas()}
+check("the gentle one survives the save/read round trip",
+      _r_by_id.get(_r_soft["id"]), {"relief_amplitude_m": 0.2})
+check("...and the wild one of the SAME kind keeps its own numbers",
+      _r_by_id.get(_r_wild["id"]),
+      {"relief_amplitude_m": 1.6, "relief_wave_m": 12.0})
+terrain.delete_area(_r_soft["id"])
+terrain.delete_area(_r_wild["id"])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 sys.exit(1 if FAILURES else 0)

@@ -7,14 +7,20 @@ it (``meta.move_anim``, the clip that replaces walk/run), how one WAITS
 on it (``meta.idle_anim``, the clip that replaces the standing one) and how
 DEEP one stands in it while doing either (``meta.move_sink_m`` /
 ``meta.idle_sink_m`` — two depths, because a swimmer lies flat and a treader
-hangs upright, and the same drop cannot serve both). Since
-2026-08-13 also how BUMPY it is (``meta.relief_amplitude_m`` /
-``meta.relief_wave_m``, the micro-relief baked into the world heightfield,
-§ A16), since 2026-08-14 how far what grows on it WAVES in the wind
-(``meta.sway_m``, § A9) and, since 2026-08-15, how much grows there WITHOUT
-anybody authoring it (``meta.undergrowth``, § A9). NO terrain
-property is ever hardcoded anywhere else — every consumer (passability,
-pace, relief, payload, editor palette) reads this catalog.
+hangs upright, and the same drop cannot serve both). Since 2026-08-14 also how
+far what grows on it WAVES in the wind (``meta.sway_m``, § A9) and, since
+2026-08-15, how much grows there WITHOUT anybody authoring it
+(``meta.undergrowth``, § A9). NO terrain property is ever hardcoded anywhere
+else — every consumer (passability, pace, payload, editor palette) reads this
+catalog.
+
+HOW BUMPY THE GROUND IS, IT DOES NOT SAY (decision 2026-08-23). The
+micro-relief (``relief_amplitude_m`` / ``relief_wave_m``, § A16.2) was a
+catalog field from 2026-08-13 until then, which made every meadow in a world
+exactly as bumpy as every other one. It belongs to the painted AREA now
+(``models.terrain._sanitize_relief``), and it left here WITHOUT a default and
+without a fallback reader: a kind that still carries the keys in a hand-edited
+row loses them on the next save, and nothing reads them meanwhile.
 
 Two layers, override-replace per kind (the activity-library rule): the
 shared seed ``shared/terrain/types.json`` ships the defaults, a world row
@@ -57,26 +63,6 @@ _KIND_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 SPEED_MIN, SPEED_MAX = 0.0, 2.0
 DEFAULT_COLOR = "#888888"
-
-#: MICRO-RELIEF (decision 2026-08-13) — how high the random small hills of
-#: this ground stand, in metres, as a half-swing around the authored level
-#: (the noise runs in [−1, 1)). The upper clamp is a WALKABILITY limit, not a
-#: taste one: two neighbouring support points may differ by at most 2·amp over
-#: one grid step, i.e. atan(2·2.0 / 2.0) = 63° at the maximum on the tile grid
-#: the rules read (45° while that step was 4 m) — past that the ground would
-#: build slopes nobody can climb out of the noise alone. The
-#: lower clamp is the smallest swing that is still visible at all; anything
-#: below it means "no relief", and that is written by leaving the key out.
-RELIEF_AMPLITUDE_MIN, RELIEF_AMPLITUDE_MAX = 0.05, 2.0
-
-#: How wide ONE swell of that relief is, in metres — the edge length of the
-#: noise lattice. The lower clamp is 2 × ``heightfield.TILE_STEP_M``: NYQUIST.
-#: A wave shorter than two support points cannot be carried by the grid at all,
-#: it would only alias into a different, coarser pattern that changes whenever
-#: the raster step doubles. It follows the TILE step, never the overview's —
-#: the tiles are the raster every rule reads, and since they went to 2 m
-#: (2026-08-14) a 4 m wave is something an author may ask for.
-RELIEF_WAVE_MIN, RELIEF_WAVE_MAX = 4.0, 200.0
 
 #: HOW DEEP A FIGURE STANDS IN THIS GROUND, in metres — the clamp shared by
 #: the two depth keys. The clip ground normalisation puts the LOWEST body point
@@ -161,11 +147,6 @@ SWAY_MIN, SWAY_MAX = 0.01, 0.5
 #: read as a closed floor. Contract detail for the renderers:
 #: ``docs/schnittstellen-3d.md`` § A9.
 UNDERGROWTH_MIN, UNDERGROWTH_MAX = 0.0, 1.0
-
-#: The wave a kind with an amplitude but no authored wave gets — a swell every
-#: 32 m, eight grid cells wide at the default step: the gentle rolling the
-#: user asked for ("just to make random small hills"), not a choppy field.
-DEFAULT_RELIEF_WAVE_M = 32.0
 
 #: The catalog meta key that marks a kind as a WATER SURFACE (E1, § G4) — see
 #: :func:`is_water_kind`. It lives on the TYPE because "is this water" is a
@@ -336,19 +317,14 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
         else:
             meta[SWIM_FROM_KEY] = round(
                 min(max(_swim, SWIM_FROM_MIN_M), SWIM_FROM_MAX_M), 2)
-    # TWO MORE since the micro-relief decision (2026-08-13): the random small
-    # hills this ground carries, baked into the WORLD HEIGHTFIELD by
-    # ``app/core/heightfield`` (§ A16) rather than rendered by anyone — server
-    # gates, client mirror and both renderers read the one ``heights`` array.
-    # Only the two numbers live here; the formula and the seed do not (the
-    # seed is a hash of the kind name, ``heightfield.relief_seed``).
-    if "relief_amplitude_m" in meta:
-        _clamped_meta_number(meta, "relief_amplitude_m",
-                             RELIEF_AMPLITUDE_MIN, RELIEF_AMPLITUDE_MAX)
-    if "relief_wave_m" in meta:
-        _clamped_meta_number(meta, "relief_wave_m",
-                             RELIEF_WAVE_MIN, RELIEF_WAVE_MAX)
-    # AND ONE MORE since the terrain-animation decision (2026-08-14): how far
+    # THE MICRO-RELIEF IS NOT HERE ANY MORE (decision 2026-08-23). Its two
+    # numbers moved to the painted AREA (``models.terrain._sanitize_relief``),
+    # because "how bumpy is this ground" is a statement about one painted shape
+    # and not about a material: a kind-level amplitude made every meadow in the
+    # world equally bumpy. Nothing is whitelisted for them here, so a row that
+    # still carries the keys loses them on its next save — and nothing reads
+    # them in the meantime.
+    # ONE MORE since the terrain-animation decision (2026-08-14): how far
     # what GROWS on this ground bends in the wind. Same shape rule as every
     # other number here — no key means "stands still", which is what every
     # kind without it does. The renderer reads it off the AREA's kind, so a
@@ -528,17 +504,21 @@ def get_type(kind: str) -> Optional[Dict[str, Any]]:
     return effective_catalog().get((kind or "").strip())
 
 
-def _note_relief_write() -> None:
+def _note_ground_write() -> None:
     """A catalog write may have moved the WORLD HEIGHTFIELD — check, then act.
 
-    Since the micro-relief (2026-08-13) a terrain KIND carries a height: its
-    ``relief_amplitude_m``/``relief_wave_m`` are baked into the world grid
-    wherever that kind is painted. So editing the catalog changes the ground
-    itself, exactly as moving a height area does — and the same hook answers
-    it: ``note_world_write`` compares the signature the cached field was built
-    from against the current one and only pays for a raster when the answer
-    really moved. A colour or a name change costs the comparison and nothing
-    else.
+    A terrain KIND still carries ground: ``meta.water`` decides whether a
+    painted area carves a bed at all, and ``water_depth_m``/``shore_ramp_m``
+    are the DEFAULTS that carve resolves against (W1) — so dialling a world's
+    "river" from 2 m to 6 m deep moves every river bed in it without a single
+    area being touched. The micro-relief left this file on 2026-08-23 and is
+    the AREA's business now, but the hook is not: editing the catalog can still
+    change the ground itself, exactly as moving a height area does.
+
+    The same hook answers it either way: ``note_world_write`` compares the
+    signature the cached field was built from against the current one and only
+    pays for a raster when the answer really moved. A colour or a name change
+    costs the comparison and nothing else.
     """
     from app.models.heightfield import note_world_write
     note_world_write()
@@ -561,7 +541,7 @@ def save_world_type(raw: Any) -> Dict[str, Any]:
              1 if entry["passable"] else 0, entry["speed_factor"],
              json.dumps(entry["meta"], ensure_ascii=False),
              entry.get("surface", ""), utc_now_iso()))
-    _note_relief_write()
+    _note_ground_write()
     return entry
 
 
@@ -573,8 +553,8 @@ def delete_world_type(kind: str) -> bool:
                            ((kind or "").strip(),))
         deleted = cur.rowcount > 0
     if deleted:
-        # The SHARED entry becomes effective again — including its relief, or
-        # its lack of one. Dropping an override is a ground change like any
-        # other.
-        _note_relief_write()
+        # The SHARED entry becomes effective again — including its water
+        # defaults, or its lack of them. Dropping an override is a ground
+        # change like any other.
+        _note_ground_write()
     return deleted

@@ -33,12 +33,14 @@ import {
 import { typeColor } from './TerrainLayer'
 import {
   FLOW_DIR_MAX_DEG, FLOW_DIR_MIN_DEG, FLOW_SPEED_DEFAULT_M_S,
-  FLOW_SPEED_MAX_M_S, FLOW_SPEED_MIN_M_S, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
+  FLOW_SPEED_MAX_M_S, FLOW_SPEED_MIN_M_S, RELIEF_AMP_MAX_M, RELIEF_AMP_MIN_M,
+  RELIEF_WAVE_DEFAULT_M, RELIEF_WAVE_MAX_M, RELIEF_WAVE_MIN_M,
+  SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
   WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
 } from './mapTypes'
 import type {
-  FlowAlong, HeightArea, TerrainArea, TerrainScatterEntry, TerrainStroke,
-  TerrainType, TerrainWater, TerrainWaterProfile,
+  FlowAlong, HeightArea, TerrainArea, TerrainRelief, TerrainScatterEntry,
+  TerrainStroke, TerrainType, TerrainWater, TerrainWaterProfile,
 } from './mapTypes'
 
 /**
@@ -1225,6 +1227,87 @@ function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
   )
 }
 
+/**
+ * HOW BUMPY THIS ONE AREA IS (§ A16.2) — two numbers, typed, not swept.
+ *
+ * The micro-relief is BAKED into the world heightfield: random small hills
+ * wherever this area lies, in the one field the walk rules, the server gate and
+ * both renderers read. Nothing renders it separately, so what is set here moves
+ * the ground itself, exactly as a height area does.
+ *
+ * IT IS A PROPERTY OF THIS AREA, NOT OF ITS KIND (decision 2026-08-23), which
+ * is why the fields live in this panel and not in the Terrain tab any more. A
+ * kind-level amplitude made every meadow of a world equally bumpy; "grass" can
+ * now be a rolling upland in one place and a flat pasture in the next. The
+ * pattern still comes from the kind (the noise seed is a hash of its name), so
+ * two neighbouring areas of one kind with the same two numbers still have no
+ * seam between them.
+ *
+ * EMPTY IS THE NORMAL STATE: no amplitude = flat ground, no wave = the server's
+ * 32 m swell. The numbers go out UNCLAMPED — the server clamps and the panel
+ * refills from what it stored, so a typed 5 comes back as the stored 2.
+ *
+ * THE STEEPNESS WARNING under them is informative and clamps nothing: from
+ * `tile_step_m · tan(max_slope_deg) / 2` on, the worst flank the noise can
+ * build between two support points is steeper than the walk gate lets anybody
+ * climb, and single spots of this ground turn into obstacles. Both numbers come
+ * from the server; without them the line simply says nothing.
+ */
+function ReliefFields({ relief, warnAmpM, onRelief }: {
+  relief: TerrainRelief
+  /** From which amplitude the hills outclimb the walk gate, in metres — or
+   *  null while the server has not answered the two numbers it is made of. */
+  warnAmpM: number | null
+  onRelief: (patch: Partial<TerrainRelief>) => void
+}) {
+  const { t } = useI18n()
+  const amp = relief.relief_amplitude_m
+  // The typed value is CLAMPED before it is judged, exactly as the server will
+  // store it: warning about a typed 5 would name a ground nobody ever gets.
+  const ampClamped = amp === undefined
+    ? undefined
+    : Math.min(RELIEF_AMP_MAX_M, Math.max(RELIEF_AMP_MIN_M, amp))
+  const steep = warnAmpM !== null && ampClamped !== undefined
+    && ampClamped > warnAmpM
+  return (
+    <>
+      <div className="ga-map-chip-row">
+        <SliderInput
+          label={t('Relief amplitude (m)')}
+          title={t('How high the random small hills of this area stand, in metres. It is baked into the world heightfield, so figures walk over it. Empty = flat ground.')}
+          value={amp}
+          fallback={0}
+          slider={false}
+          min={RELIEF_AMP_MIN_M} max={RELIEF_AMP_MAX_M} step={0.05}
+          fineStep="any"
+          clearable placeholder={t('flat')}
+          onChange={(v) => onRelief({ relief_amplitude_m: v })}
+          onClear={() => onRelief({ relief_amplitude_m: undefined })}
+        />
+        <SliderInput
+          label={t('Relief wavelength (m)')}
+          title={t('How wide ONE swell of those hills is, in metres — small values make a choppy field, large ones a gentle roll. Empty = the server’s {n} m.')
+            .replace('{n}', String(RELIEF_WAVE_DEFAULT_M))}
+          value={relief.relief_wave_m}
+          fallback={RELIEF_WAVE_DEFAULT_M}
+          slider={false}
+          min={RELIEF_WAVE_MIN_M} max={RELIEF_WAVE_MAX_M} step={1}
+          fineStep="any"
+          clearable placeholder={String(RELIEF_WAVE_DEFAULT_M)}
+          onChange={(v) => onRelief({ relief_wave_m: v })}
+          onClear={() => onRelief({ relief_wave_m: undefined })}
+        />
+      </div>
+      {steep ? (
+        <div className="ga-map-chip-row ga-map-chip-warn">
+          {t('Above ~{max} m the random hills get steeper than walkers can climb — spots of this area become impassable.')
+            .replace('{max}', (warnAmpM as number).toFixed(2))}
+        </div>
+      ) : null}
+    </>
+  )
+}
+
 export interface TerrainAreaChipProps {
   area: TerrainArea
   types: Record<string, TerrainType>
@@ -1252,12 +1335,22 @@ export interface TerrainAreaChipProps {
   /** The bake's own mirror for this area (`meta.water_profile`, server
    *  output) — null for still water and for anything that is not water. */
   waterProfile: TerrainWaterProfile | null
+  /** The area's own MICRO-RELIEF, already CHECKED (`mapTypes.readRelief`).
+   *  Every area may carry it — it is the shape's property, not the kind's. */
+  relief: TerrainRelief
+  /** From which amplitude those hills outclimb the walk gate, in metres
+   *  (`heightMath.reliefWarnAmpM` out of the server's own two numbers), or
+   *  null while the server has not answered them. */
+  reliefWarnAmpM: number | null
   /** The preview colour of the n-th entry — the same one the map draws. */
   scatterColor: (index: number) => string
   onScatter: (entries: TerrainScatterEntry[]) => void
   /** Write one or more water numbers. `undefined` in the patch DROPS the key,
    *  which hands the field back to the server's default. */
   onWater: (patch: Partial<TerrainWater>) => void
+  /** The same for the two relief numbers — `undefined` DROPS the key, which is
+   *  how "flat" and "the default wave" are written. */
+  onRelief: (patch: Partial<TerrainRelief>) => void
   /** Drop `meta.stroke` and keep the polygon: the area becomes an ordinary
    *  one, editable point by point. One way, hence the confirmation. */
   onConvert: () => void
@@ -1288,8 +1381,9 @@ export interface TerrainAreaChipProps {
  */
 export function TerrainAreaChip({
   area, types, typeList, typesError, stroke, scatter, props, water,
-  waterProfile, scatterColor,
-  onKind, onZOrder, onWidth, onScatter, onWater, onConvert, onDelete, onClose,
+  waterProfile, relief, reliefWarnAmpM, scatterColor,
+  onKind, onZOrder, onWidth, onScatter, onWater, onRelief, onConvert, onDelete,
+  onClose,
 }: TerrainAreaChipProps) {
   const { t } = useI18n()
   const [armed, setArmed] = useState(false)
@@ -1381,6 +1475,16 @@ export function TerrainAreaChip({
         <WaterFields water={water} profile={waterProfile} kindType={known}
           hasLine={!!stroke && stroke.points.length >= 2}
           typeList={typeList} onWater={onWater} />
+      ) : null}
+      {/* HOW BUMPY THIS AREA IS (§ A16.2). Not folded away and not limited to
+          one sort of ground: since 2026-08-23 the micro-relief is the AREA's
+          own, so every area may say it — a water area included, whose bed the
+          hills roughen under the mirror. An area whose kind the catalog no
+          longer knows cannot be written at all, hence the same gate every
+          other write here carries. */}
+      {known ? (
+        <ReliefFields relief={relief} warnAmpM={reliefWarnAmpM}
+          onRelief={onRelief} />
       ) : null}
       {/* What grows here (finding B17). Folded away by default: most areas
           grow nothing, and an area is selected far more often to be reshaped

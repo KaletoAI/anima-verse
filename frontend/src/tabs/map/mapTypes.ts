@@ -269,7 +269,34 @@ export interface TerrainStroke {
 export type TerrainMeta = {
   stroke?: TerrainStroke
   scatter?: TerrainScatterEntry[]
-} & TerrainWater & Record<string, unknown>
+} & TerrainWater & TerrainRelief & Record<string, unknown>
+
+/**
+ * HOW BUMPY THIS ONE PAINTED AREA IS (§ A16.2).
+ *
+ * The micro-relief is baked into the world heightfield — random small hills
+ * wherever this area lies, in the ONE height field that the walk rules, the
+ * server gate and both renderers read. Nothing renders it separately.
+ *
+ * IT BELONGS TO THE AREA, NOT TO THE KIND (decision 2026-08-23). It used to be
+ * a terrain-TYPE field, which meant every meadow in a world was exactly as
+ * bumpy as every other one: "grass" could not be a rolling upland here and a
+ * flat pasture there. The kind carries no relief at all any more — there is no
+ * default behind these two keys and no fallback reader, so an area that
+ * authors nothing is flat.
+ *
+ * The PATTERN still comes from the kind (the noise seed is a hash of its
+ * name), so two areas of one kind asking for the same numbers still continue
+ * each other without a seam.
+ */
+export interface TerrainRelief {
+  /** Half-swing of the hills in metres, 0.05…2. Absent = flat. The upper end
+   *  is a walkability limit, not a taste one. */
+  relief_amplitude_m?: number
+  /** Edge length of one swell in metres, 4…200. Absent = the server's 32 m.
+   *  The lower end is Nyquist on the 2 m height tiles. */
+  relief_wave_m?: number
+}
 
 /**
  * WHAT A WATER AREA AUTHORS ABOUT ITSELF (§ A16.3, addendum "Ein Wasser-Gesetz
@@ -475,6 +502,25 @@ export function readWater(meta: TerrainMeta | undefined): TerrainWater {
   return out
 }
 
+/**
+ * The two MICRO-RELIEF numbers of an area, read through a check — the reader's
+ * half of `TerrainRelief`, exactly as `readWater` is for the water ones.
+ *
+ * A value that is not a finite number loses its key rather than becoming 0:
+ * "flat" and "the server's default wave" are both written by leaving the key
+ * out, and neither may be inferred from junk. Clamping is the SERVER's job
+ * (`models.terrain._sanitize_relief`) — the field sends what was typed and
+ * refills from the stored answer, so a typed 5 shows up as the stored 2.
+ */
+export function readRelief(meta: TerrainMeta | undefined): TerrainRelief {
+  const out: TerrainRelief = {}
+  const amp = metaNum(meta?.relief_amplitude_m)
+  const wave = metaNum(meta?.relief_wave_m)
+  if (amp !== undefined) out.relief_amplitude_m = amp
+  if (wave !== undefined) out.relief_wave_m = wave
+  return out
+}
+
 /** One number out of free-form `meta`, or `undefined`. `null`, `''` and `[]`
  *  all coerce to 0 in JavaScript, which would invent a stored number where the
  *  key says nothing — only a real, finite number counts. */
@@ -630,6 +676,17 @@ export const FLOW_SPEED_MAX_M_S = 2
  *  catalog, so it names the number in force for an untouched kind rather than
  *  guessing at a kind that was edited. */
 export const FLOW_SPEED_DEFAULT_M_S = 0.15
+
+/** Server mirrors — `models.terrain.RELIEF_*`. The amplitude's upper end is a
+ *  WALKABILITY limit (two neighbouring support points may differ by at most
+ *  2·amp over one 2 m tile step, i.e. 63° at the maximum), the wave's lower
+ *  one is NYQUIST on that same raster. An area that authors no wave gets the
+ *  server's 32 m, which is what the field's placeholder says. */
+export const RELIEF_AMP_MIN_M = 0.05
+export const RELIEF_AMP_MAX_M = 2
+export const RELIEF_WAVE_MIN_M = 4
+export const RELIEF_WAVE_MAX_M = 200
+export const RELIEF_WAVE_DEFAULT_M = 32
 
 /** `GET /play/terrain`. `areas` arrive BOTTOM to TOP — the last entry is on
  *  top, and the topmost area that contains a point owns it. */
