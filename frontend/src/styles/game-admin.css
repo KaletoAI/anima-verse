@@ -2118,6 +2118,9 @@ a.ga-btn {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The layer arrows in the chip header: the close button's own button style,
+   only with the arrow glyph brought down to the optical weight of the ×. */
+.ga-map-chip-z { font-size: 15px; }
 .ga-map-chip-tag {
   font-size: 10px;
   font-style: italic;

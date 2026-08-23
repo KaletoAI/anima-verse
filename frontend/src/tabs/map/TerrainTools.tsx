@@ -1311,6 +1311,21 @@ export function TerrainAreaChip({
             {stroke.style === 'jagged' ? t('jagged') : t('wavy')}
           </span>
         ) : null}
+        {/* Layering sits in the header as two arrows, right next to the close
+            button: it is the one action used again and again while stacking
+            areas, and a full button row buys it nothing. The disabled state is
+            the same one every other write carries — an area whose kind the
+            catalog no longer knows cannot be re-layered either. */}
+        <button type="button" className="ga-modal-close ga-map-chip-z"
+          disabled={!known}
+          title={t('Bring forward') + ' — ' + t('Draw this area over the ones around it')}
+          aria-label={t('Bring forward')}
+          onClick={() => onZOrder(1)}>↑</button>
+        <button type="button" className="ga-modal-close ga-map-chip-z"
+          disabled={!known}
+          title={t('Send back') + ' — ' + t('Draw this area under the ones around it')}
+          aria-label={t('Send back')}
+          onClick={() => onZOrder(-1)}>↓</button>
         <button type="button" className="ga-modal-close"
           title={t('Clear selection')} onClick={onClose}>×</button>
       </div>
@@ -1389,16 +1404,6 @@ export function TerrainAreaChip({
           onChange={onScatter} />
       ) : null}
       <div className="ga-map-chip-actions">
-        <button type="button" className="ga-btn ga-btn-sm" disabled={!known}
-          title={t('Draw this area over the ones around it')}
-          onClick={() => onZOrder(1)}>
-          {t('Bring forward')}
-        </button>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={!known}
-          title={t('Draw this area under the ones around it')}
-          onClick={() => onZOrder(-1)}>
-          {t('Send back')}
-        </button>
         {stroke && known ? (
           convArmed ? (
             <>
