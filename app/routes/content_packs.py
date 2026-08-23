@@ -4,6 +4,9 @@ Multi-catalog: `content_marketplace.catalogs` is a list of
 `{name, url, auth_token, enabled}` entries. Each catalog has its own
 on-disk cache under `worlds/<w>/.cache/content_catalog_<slug>.json`.
 
+A pack download streams into a temp file in that same `.cache` dir, capped at
+`content_marketplace.max_pack_mb` — nothing is buffered in RAM.
+
 Auth: if `auth_token` is set, it is sent as the `Authorization` header on
 catalog and download requests. A bare token is prepended with `token `
 (works for GitHub PATs and Forgejo); an already-prefixed value
@@ -14,9 +17,11 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,11 +51,35 @@ CODE_PACK_TYPES = {"skill_package"}
 
 _inflight_catalog: Dict[str, float] = {}
 
+# Download cap for a single pack. The schema default in
+# `config_schema.SECTIONS["content_marketplace"]["fields"]["max_pack_mb"]`
+# mirrors these three numbers — keep them in sync.
+DEFAULT_MAX_PACK_MB = 500
+MIN_MAX_PACK_MB = 1
+MAX_MAX_PACK_MB = 4096
+
 
 # ── Config / catalog selection ────────────────────────────────────────────
 
 def _cfg() -> Dict[str, Any]:
     return config.get("content_marketplace", {}) or {}
+
+
+def _max_pack_mb() -> int:
+    """Configured pack-size cap in MB (`content_marketplace.max_pack_mb`).
+
+    Unset, empty or unparsable falls back to the schema default; anything
+    else is clamped into [MIN_MAX_PACK_MB, MAX_MAX_PACK_MB] so a typo in the
+    config can neither disable the cap nor make every install fail.
+    """
+    raw = _cfg().get("max_pack_mb")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return DEFAULT_MAX_PACK_MB
+    try:
+        mb = int(float(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_PACK_MB
+    return max(MIN_MAX_PACK_MB, min(MAX_MAX_PACK_MB, mb))
 
 
 def _slugify(name: str) -> str:
@@ -109,10 +138,15 @@ def _auth_header(token: str) -> Dict[str, str]:
 
 # ── Cache ────────────────────────────────────────────────────────────────
 
-def _cache_path(slug: str) -> Path:
+def _cache_dir() -> Path:
+    """`worlds/<w>/.cache` — the catalog caches and the download temp files."""
     p = get_storage_dir() / ".cache"
     p.mkdir(parents=True, exist_ok=True)
-    return p / f"content_catalog_{slug}.json"
+    return p
+
+
+def _cache_path(slug: str) -> Path:
+    return _cache_dir() / f"content_catalog_{slug}.json"
 
 
 def _read_cache(slug: str) -> Optional[Dict[str, Any]]:
@@ -295,19 +329,47 @@ async def _fetch_catalog(url: str, headers: Dict[str, str], timeout: float = 15.
     return {"packs": packs, "source_url": url, "host_kind": endpoints["host_kind"]}
 
 
-async def _download(url: str, headers: Dict[str, str], *, max_bytes: int = 100 * 1024 * 1024) -> bytes:
-    """Stream-download a pack, capped at `max_bytes`."""
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, headers=headers) as client:
-        async with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            buf = io.BytesIO()
-            total = 0
-            async for chunk in resp.aiter_bytes():
-                total += len(chunk)
-                if total > max_bytes:
-                    raise ValueError(f"pack exceeds {max_bytes} bytes limit")
-                buf.write(chunk)
-            return buf.getvalue()
+def _mb_label(nbytes: int) -> str:
+    """Render a byte cap as MB for an error message — whole numbers stay
+    whole, a sub-MB test limit still prints something readable."""
+    mb = nbytes / (1024 * 1024)
+    return str(int(mb)) if mb >= 1 and float(mb).is_integer() else f"{mb:.3g}"
+
+
+async def _download(url: str, headers: Dict[str, str], *,
+                    max_bytes: Optional[int] = None) -> Path:
+    """Stream-download a pack to DISK and return the temp file's path.
+
+    The pack is never held in RAM: it goes chunk-by-chunk into a unique temp
+    file under the world's `.cache` dir, and the size cap is checked while
+    streaming, so an oversized download is aborted instead of being buffered
+    first. The caller OWNS the returned path and must unlink it in a
+    `finally`; every failure inside here cleans up its own partial file.
+
+    `max_bytes` overrides the configured cap (`content_marketplace.max_pack_mb`).
+    """
+    limit = int(max_bytes) if max_bytes is not None else _max_pack_mb() * 1024 * 1024
+    fd, tmp_name = tempfile.mkstemp(prefix="pack_", suffix=".zip.part",
+                                    dir=str(_cache_dir()))
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True,
+                                         headers=headers) as client:
+                async with client.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    total = 0
+                    async for chunk in resp.aiter_bytes():
+                        total += len(chunk)
+                        if total > limit:
+                            raise ValueError(
+                                f"pack exceeds the {_mb_label(limit)} MB limit "
+                                "(content_marketplace.max_pack_mb)")
+                        fh.write(chunk)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return tmp
 
 
 def _is_fresh(cached: Dict[str, Any], ttl_minutes: int) -> bool:
@@ -387,14 +449,49 @@ def _find_pack(catalog_data: Dict[str, Any], pack_id: str) -> Optional[Dict[str,
     return None
 
 
-def _verify_checksum(content: bytes, expected: str) -> None:
+def _verify_checksum(path: Path, expected: str) -> None:
+    """Hash a downloaded pack from disk, in chunks — the file is never read
+    into RAM as a whole just to check it."""
     if not expected:
         return
-    actual = hashlib.sha256(content).hexdigest()
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    actual = h.hexdigest()
     if actual.lower() != expected.strip().lower():
         raise ValueError(
             f"checksum mismatch: pack rejected (expected {expected[:12]}…, got {actual[:12]}…)"
         )
+
+
+def _assert_readable_zip(path: Path) -> None:
+    """A truncated or non-ZIP download must fail as a clean 400, not deep
+    inside an importer. Only the central directory is read — from the file,
+    not from a copy in memory."""
+    import zipfile as _zip
+    try:
+        with _zip.ZipFile(path) as zf:
+            if not zf.namelist():
+                raise ValueError("pack ZIP is empty")
+    except _zip.BadZipFile as e:
+        raise ValueError(f"invalid pack ZIP: {e}")
+
+
+def _install_downloaded(pack_type: str, path: Path, *, overwrite: bool = False,
+                        mode: str = "full", intro: str = "") -> Dict[str, Any]:
+    """Install a pack that was streamed to disk by `_download`.
+
+    Every importer under `app.core.content_io` / `character_io` takes the ZIP
+    as `bytes` — that is the shared contract with the upload/import routes,
+    which hand them an `UploadFile` body — so the archive is read back here,
+    at the last possible moment. Everything that can reject the pack (the
+    size cap, the checksum, the ZIP structure) has already run against the
+    FILE by then, so a bad or oversized download never reaches RAM.
+    """
+    _assert_readable_zip(path)
+    return _dispatch_install(pack_type, path.read_bytes(), overwrite=overwrite,
+                             mode=mode, intro=intro)
 
 
 def _dispatch_install(pack_type: str, content: bytes,
@@ -523,17 +620,21 @@ async def install_pack(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="pack has no download_url")
 
     headers = _auth_header(catalog["auth_token"])
+    tmp: Optional[Path] = None
     try:
-        content = await _download(download_url, headers)
-        _verify_checksum(content, (pack.get("checksum_sha256") or ""))
-        result = _dispatch_install(pack_type, content, overwrite=overwrite,
-                                   mode=mode, intro=intro)
+        tmp = await _download(download_url, headers)
+        _verify_checksum(tmp, (pack.get("checksum_sha256") or ""))
+        result = _install_downloaded(pack_type, tmp, overwrite=overwrite,
+                                     mode=mode, intro=intro)
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"download failed: {e}")
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
     return {
         "status": "success",
@@ -572,17 +673,21 @@ async def install_pack_url(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"unsupported pack type: {pack_type!r}")
 
     headers = _auth_header(token)
+    tmp: Optional[Path] = None
     try:
-        content = await _download(url, headers)
-        _verify_checksum(content, sha)
-        result = _dispatch_install(pack_type, content, overwrite=overwrite,
-                                   mode=mode, intro=intro)
+        tmp = await _download(url, headers)
+        _verify_checksum(tmp, sha)
+        result = _install_downloaded(pack_type, tmp, overwrite=overwrite,
+                                     mode=mode, intro=intro)
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"download failed: {e}")
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
     return {"status": "success", "pack_type": pack_type, "result": result}
 

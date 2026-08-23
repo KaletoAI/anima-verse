@@ -1039,6 +1039,14 @@ SECTIONS = {
                 "max": 1440,
                 "description": "How long each catalog response is cached locally. 0 = always re-fetch. SYSTEM time.",
             },
+            "max_pack_mb": {
+                "type": "int",
+                "label": "Max pack size (MB)",
+                "default": 500,
+                "min": 1,
+                "max": 4096,
+                "description": "Size cap for a single pack download. The pack streams into a temp file under the world's .cache dir, never into memory, and a larger download is aborted mid-stream. Raise this for big location or collection packs.",
+            },
             "allow_install_url": {
                 "type": "bool",
                 "label": "Allow ad-hoc URL install",
