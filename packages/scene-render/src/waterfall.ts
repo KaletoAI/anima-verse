@@ -15,10 +15,15 @@
  * simplifies the level polyline back down, so a knot survives exactly where the
  * mirror BENDS. That is what puts knots on both sides of a cliff the author
  * drew straight across — before it, a two-click river over a 3 m step was one
- * 100 m ramp of slope 0.03 and no rule here could ever have seen a fall — and
- * it is also what keeps one fall ONE fall: the simplification hands this
- * function one segment per bend rather than one per sample, so a drop is not
- * split into a stack of curtains each carrying a fraction of it.
+ * 100 m ramp of slope 0.03 and no rule here could ever have seen a fall.
+ *
+ * BUT THE KNOTS ARE NOT THE FALL EITHER, and that is why the drop is measured
+ * over a RUN of segments rather than over one: a click the author happened to
+ * place halfway down the cliff survives the simplification (it is a bend of the
+ * drawn LINE, never dropped), and it used to cut one 3 m drop into two 1.5 m
+ * ones — neither past the metre a fall has to lose, so the waterfall vanished
+ * where somebody had clicked in it. The rule therefore joins every maximal run
+ * of consecutive STEEP segments first and asks about the drop of the run.
  *
  * IT IS A PURE FUNCTION and it lives here, beside `materials.ts`'s water dials,
  * for the reason the whole package exists: the 3D client draws the curtain
@@ -51,12 +56,15 @@ export interface WaterfallAxis {
  * ONE FALL, in world metres — everything a renderer needs to hang a curtain,
  * and nothing about how it looks.
  *
- * `x`/`z` is the MIDPOINT of the falling segment (the lip is one end and the
- * pool the other; the middle is the one point that is on the fall whichever way
- * the renderer leans its sheet), `dirX`/`dirZ` the unit DOWNSTREAM direction of
- * that segment, `width` the river's own width, and `topY`/`bottomY` the mirror
- * levels of the two knots — the height the water leaves at and the height it
- * arrives at.
+ * `x`/`z` is the MIDPOINT of the falling run BY ARC LENGTH (the lip is one end
+ * and the pool the other; the middle is the one point that is on the fall
+ * whichever way the renderer leans its sheet) — by arc and not by chord,
+ * because a run of several segments may bend and the chord's middle would then
+ * hang beside the water rather than in it. `dirX`/`dirZ` is the unit DOWNSTREAM
+ * direction of the run, its CHORD: over a bent fall no single segment's bearing
+ * is the fall's, and the straight line from lip to pool is. `width` is the
+ * river's own width, and `topY`/`bottomY` the mirror levels of the run's first
+ * and last knot — the height the water leaves at and the height it arrives at.
  */
 export interface Waterfall {
   x: number
@@ -69,8 +77,8 @@ export interface Waterfall {
 }
 
 /**
- * How far the mirror has to drop over ONE segment before that segment is a
- * fall, in metres.
+ * How far the mirror has to drop over one steep RUN before that run is a fall,
+ * in metres.
  *
  * 1.0 m is `swim_from_m`'s own default (W4c): the depth at which this world
  * stops walking a figure and starts swimming it, i.e. the smallest height of
@@ -80,13 +88,17 @@ export interface Waterfall {
  * like and what it should stay.
  *
  * IT IS ONE OF TWO CONDITIONS, never alone: a bed that loses 4 m over 200 m of
- * river passes this one and is a valley, not a fall.
+ * river passes this one and is a valley, not a fall. And it is asked of the
+ * whole RUN, once — see `waterfallsFrom`.
  */
 export const WATERFALL_MIN_DROP_M = 1.0
 
 /**
  * How STEEP that drop has to be — metres of fall per metre of run along the
  * axis.
+ *
+ * IT IS THE PER-SEGMENT CONDITION, and the only one: a segment is steep or it
+ * is not, and steepness is what joins neighbours into one fall.
  *
  * 0.5 is a 1-in-2 slope, 26.6°. A river bed the bake carves runs at a small
  * fraction of that (the seeded river loses 1.2 m of depth over its whole 6 m
@@ -126,19 +138,39 @@ export function strokeWidthM(meta: Record<string, unknown> | null | undefined
 }
 
 /**
- * THE FALLS OF ONE WATER AREA — every axis segment that drops faster than water
- * runs, in flow order.
+ * THE FALLS OF ONE WATER AREA — every stretch of axis that drops faster than
+ * water runs, in flow order.
  *
- * The rule, per consecutive pair of knots `a -> b` (b is downstream, the knots
- * are in flow order and the bake has already made the levels non-increasing):
+ * TWO STEPS, and the order between them IS the rule. First, per consecutive
+ * pair of knots `a -> b` (b is downstream, the knots are in flow order and the
+ * bake has already made the levels non-increasing):
  *
  *     drop  = a.level − b.level          metres lost
  *     run   = b.s − a.s                  metres of axis spent
- *     fall  <=>  drop > 1.0  AND  drop / run > 0.5
+ *     steep <=>  run > 0  AND  drop / run > 0.5
  *
- * BOTH, and both STRICTLY — a value sitting exactly on a threshold is not past
- * it, so the two constants name the smallest thing that is NOT a fall and the
- * numbers in the smoke can be read straight off them.
+ * Then every MAXIMAL RUN of consecutive steep segments is one candidate, and
+ * only the candidate is asked for its height:
+ *
+ *     fall  <=>  first.level − last.level > 1.0
+ *
+ * THE MINIMUM DROP BELONGS TO THE RUN, NOT TO THE SEGMENT, and that is the
+ * whole reason for the two steps. A knot inside a cliff — an author's click
+ * halfway down it, which the simplification keeps because it is a bend of the
+ * LINE — splits one drop into two, and asking each half for a full metre made
+ * a 3 m fall disappear the moment somebody clicked in the middle of it. The
+ * slope survives that split (it is a ratio and does not care where the cut
+ * is), so the slope is what runs are built from and the drop is measured once,
+ * over the whole run. The merged run is steep by construction: a weighted mean
+ * of slopes each past 0.5 is past 0.5.
+ *
+ * BOTH CONDITIONS STILL HOLD, and both STRICTLY — a value sitting exactly on a
+ * threshold is not past it, so the two constants name the smallest thing that
+ * is NOT a fall and the numbers in the smoke can be read straight off them.
+ *
+ * A RUN OF ONE SEGMENT IS THE OLD RULE, unchanged down to the arithmetic: its
+ * drop is that segment's drop, its chord that segment, its arc midpoint the
+ * mean of its two ends.
  *
  * THREE KNOTS AT LEAST. A polygon river's axis is the two extremes of one
  * straight ramp (`heightfield.water_profile_for`): its single segment IS the
@@ -156,9 +188,11 @@ export function strokeWidthM(meta: Record<string, unknown> | null | undefined
  * or neither does: the axes with interior knots are exactly the drawn ones, and
  * a drawn area always carries `width_m`.
  *
- * A zero-length segment names no direction and is skipped (its `run` is 0, so
- * the slope test would divide by zero); so is a segment that RISES, which the
- * bake's monotonicity rules out but a hand-written fixture does not.
+ * A zero-length segment is not steep and therefore ENDS a run (its `run` is 0,
+ * so the slope test would divide by zero); so does a segment that RISES, which
+ * the bake's monotonicity rules out but a hand-written fixture does not. A knot
+ * that is not four finite numbers makes the whole axis unreadable and the
+ * answer empty — half a river is worse than none.
  */
 export function waterfallsFrom(profile: WaterfallAxis | null | undefined,
                                widthM: unknown): Waterfall[] {
@@ -166,44 +200,93 @@ export function waterfallsFrom(profile: WaterfallAxis | null | undefined,
   const width = finite(widthM)
   if (!Array.isArray(axis) || axis.length < 3) return []
   if (width === null || width <= 0) return []
-  const falls: Waterfall[] = []
-  for (let i = 1; i < axis.length; i += 1) {
-    const a = axis[i - 1]
-    const b = axis[i]
-    if (!Array.isArray(a) || !Array.isArray(b)) return []
-    const ax = finite(a[0])
-    const az = finite(a[1])
-    const aS = finite(a[2])
-    const aLevel = finite(a[3])
-    const bx = finite(b[0])
-    const bz = finite(b[1])
-    const bS = finite(b[2])
-    const bLevel = finite(b[3])
-    if (ax === null || az === null || aS === null || aLevel === null
-        || bx === null || bz === null || bS === null || bLevel === null) {
-      return []
-    }
-    const drop = aLevel - bLevel
-    const run = bS - aS
-    if (!(drop > WATERFALL_MIN_DROP_M)) continue
-    if (!(run > 0)) continue
-    if (!(drop / run > WATERFALL_MIN_SLOPE)) continue
-    // The downstream direction of THIS segment, from the world positions and
-    // not from the profile's area-wide `dir_x`/`dir_z`: a drawn river bends,
-    // and a curtain across the wrong bearing is a curtain along the stream.
-    const dx = bx - ax
-    const dz = bz - az
-    const len = Math.hypot(dx, dz)
-    if (!(len > 1e-9)) continue
-    falls.push({
-      x: (ax + bx) * 0.5,
-      z: (az + bz) * 0.5,
-      dirX: dx / len,
-      dirZ: dz / len,
-      width,
-      topY: aLevel,
-      bottomY: bLevel,
-    })
+  // The whole axis is read FIRST, because a run spans several knots and a rule
+  // that groups them cannot re-read a pair at a time.
+  const knots: AxisKnot[] = []
+  for (const raw of axis) {
+    if (!Array.isArray(raw)) return []
+    const x = finite(raw[0])
+    const z = finite(raw[1])
+    const s = finite(raw[2])
+    const level = finite(raw[3])
+    if (x === null || z === null || s === null || level === null) return []
+    knots.push({ x, z, s, level })
   }
+  const falls: Waterfall[] = []
+  const close = (lo: number, hi: number): void => {
+    const fall = runToFall(knots, lo, hi, width)
+    if (fall !== null) falls.push(fall)
+  }
+  // Maximal runs of consecutive steep segments, in flow order. `start` is the
+  // first KNOT of the open run, or −1 while none is open.
+  let start = -1
+  for (let i = 1; i < knots.length; i += 1) {
+    if (isSteep(knots[i - 1], knots[i])) {
+      if (start < 0) start = i - 1
+      continue
+    }
+    if (start >= 0) close(start, i - 1)
+    start = -1
+  }
+  if (start >= 0) close(start, knots.length - 1)
   return falls
+}
+
+/** One knot, read out of the payload's four numbers once. */
+interface AxisKnot {
+  x: number
+  z: number
+  s: number
+  level: number
+}
+
+/** Does the water FALL over this one segment rather than run down it —
+ *  `WATERFALL_MIN_SLOPE`, and nothing about how far it falls. */
+function isSteep(a: AxisKnot, b: AxisKnot): boolean {
+  const run = b.s - a.s
+  if (!(run > 0)) return false
+  return (a.level - b.level) / run > WATERFALL_MIN_SLOPE
+}
+
+/** One maximal steep run `lo -> hi` (knot indices) as a fall, or `null` when
+ *  it does not lose enough height to be one. */
+function runToFall(knots: AxisKnot[], lo: number, hi: number,
+                   width: number): Waterfall | null {
+  const top = knots[lo]
+  const bottom = knots[hi]
+  if (!(top.level - bottom.level > WATERFALL_MIN_DROP_M)) return null
+  // The downstream direction of THIS run, from the world positions and not
+  // from the profile's area-wide `dir_x`/`dir_z`: a drawn river bends, and a
+  // curtain across the wrong bearing is a curtain along the stream.
+  const dx = bottom.x - top.x
+  const dz = bottom.z - top.z
+  const len = Math.hypot(dx, dz)
+  if (!(len > 1e-9)) return null
+  const [x, z] = arcMidpoint(knots, lo, hi)
+  return { x, z, dirX: dx / len, dirZ: dz / len, width,
+    topY: top.level, bottomY: bottom.level }
+}
+
+/**
+ * The point halfway along the run BY ARC LENGTH — on the axis, never beside it.
+ *
+ * A single segment answers the plain mean of its two ends, which is what this
+ * rule has always shipped and what the smoke's numbers are written against; a
+ * longer run walks its own `s` to the half and interpolates inside the segment
+ * that contains it. `s` grows strictly along a steep run (every one of its
+ * segments has `run > 0`), so that segment always exists.
+ */
+function arcMidpoint(knots: AxisKnot[], lo: number,
+                     hi: number): [number, number] {
+  const a0 = knots[lo]
+  const b0 = knots[hi]
+  if (hi - lo === 1) return [(a0.x + b0.x) * 0.5, (a0.z + b0.z) * 0.5]
+  const sMid = (a0.s + b0.s) * 0.5
+  let i = lo + 1
+  while (i < hi && knots[i].s < sMid) i += 1
+  const a = knots[i - 1]
+  const b = knots[i]
+  const span = b.s - a.s
+  const u = span > 1e-9 ? (sMid - a.s) / span : 0
+  return [a.x + (b.x - a.x) * u, a.z + (b.z - a.z) * u]
 }

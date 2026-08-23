@@ -683,6 +683,23 @@ def settle_water_level(area: Dict[str, Any]) -> Dict[str, Any]:
     A non-water kind and a world whose height model cannot be built (no DB in a
     smoke run) leave the area untouched: the bake derives the same numbers on
     the fly in that case, so nothing is lost but the stability.
+
+    THE MODEL IS BORROWED WHERE THERE IS ONE (``heightfield.cached_model``,
+    2026-08-24). Building one costs the stamp geometry of the WHOLE world, and
+    since W5b that includes the stroke profile of every drawn river — up to 256
+    knots × 9 cross probes each — so a fresh build per save made one editor
+    stroke pay for every OTHER river in the world. The warm model answers the
+    same numbers: it is dropped by the very generation counter every authoring
+    write bumps (``_note_relief_write`` → ``note_world_write``), and that write
+    happens AFTER this function in :func:`save_area`, so what is cached here is
+    exactly the pre-save world a fresh read would return. Its footprints do not
+    enter the answer either — a water profile is read from ``natural()``, which
+    is the height areas plus the micro-relief and knows nothing of plateaus.
+
+    A COLD cache still builds the lean model of before (no footprints): a save
+    invalidates two lines later, so a model built here would never be reused,
+    and paying for every plot's plateau on top would make the cold path worse
+    rather than better.
     """
     from app.core.terrain_types import (effective_catalog, is_water_kind,
                                         water_kind_defaults)
@@ -693,7 +710,8 @@ def settle_water_level(area: Dict[str, Any]) -> Dict[str, Any]:
     catalog = effective_catalog()
     if not is_water_kind(kind, catalog):
         return area
-    from app.core.heightfield import build_model, is_flowing, water_meta
+    from app.core.heightfield import (build_model, cached_model, is_flowing,
+                                      water_meta)
     from app.models import heightfield as store
     parsed = water_meta(area, water_kind_defaults(kind, catalog))
     if not is_flowing(parsed):
@@ -710,7 +728,10 @@ def settle_water_level(area: Dict[str, Any]) -> Dict[str, Any]:
             return area
     if len(area.get("polygon") or []) < 3:
         return area
-    model = build_model(store.list_height_areas(), (), list_areas(), catalog)
+    model = cached_model()
+    if model is None:
+        model = build_model(store.list_height_areas(), (), list_areas(),
+                            catalog)
     # THE ONE DERIVATION, asked of the bake itself rather than re-spelled here:
     # the profile the model builds IS what the carve will use, so the number
     # frozen into the area is the number the ground already has.

@@ -1266,17 +1266,21 @@ def _simplify_axis(knots: List[Tuple[float, float, float]],
 
     A straight river down an even slope therefore ships the two knots it was
     drawn with, and a cliff ships the two knots that straddle it.
+
+    THE TWO ENDS NEED NO SPECIAL CASE. ``at_click`` is
+    :func:`_stroke_knots`' own answer and always opens with index 0 and closes
+    with the last knot — the densifier starts at the first drawn point and
+    appends the last one of every leg — so keeping the clicked indices keeps
+    the ends, and there are always at least two of them (the only caller,
+    :meth:`HeightModel._stroke_profile`, is reached with two drawn points at
+    the very least). That is also why the leg list below cannot come out empty.
     """
     keep = [False] * len(knots)
     for idx in at_click:
         keep[idx] = True
-    keep[0] = True
-    keep[-1] = True
     # Douglas-Peucker per leg, explicit stack (a knot count in the hundreds is
     # no reason to lean on the interpreter's recursion limit).
     stack = [(at_click[i - 1], at_click[i]) for i in range(1, len(at_click))]
-    if not stack:
-        stack = [(0, len(knots) - 1)]
     while stack:
         lo, hi = stack.pop()
         if hi - lo < 2:
@@ -2673,6 +2677,28 @@ def world_model() -> HeightModel:
         model = build_model(areas, footprints, terrain_areas, catalog)
         _MODEL = (generation, model)
         return model
+
+
+def cached_model() -> Optional[HeightModel]:
+    """The model this process ALREADY holds for the current generation, or None.
+
+    :func:`world_model` without the build: it answers only out of the warm
+    cache and never pays for a cold one. The one caller that needs exactly that
+    is ``models.terrain.settle_water_level``, which asks for a single water
+    profile on a SAVE path — reusing a model somebody else already built is
+    free, while building one for that single question (and then invalidating it
+    two lines later with the write) is not.
+
+    A model out of this cache describes the same world a fresh
+    :func:`build_model` would read: every writer of a height area, a placement
+    or a painted area invalidates (``note_world_write`` / ``_invalidate``), so a
+    live generation cannot outlive the DB state it was built from — that is the
+    same guarantee every tile and every ``ground_y`` already rests on.
+    """
+    cached = _MODEL
+    if cached is None or cached[0] != _GENERATION:
+        return None
+    return cached[1]
 
 
 def tile_index() -> frozenset:

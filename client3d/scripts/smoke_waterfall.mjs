@@ -182,6 +182,59 @@
  * the level, which is exactly the unit a curtain is hung on.
  *
  * ===========================================================================
+ * [10] A CLICK INSIDE THE CLIFF — the drop belongs to the RUN (2026-08-24)
+ * ===========================================================================
+ * The knots are the bends of the LEVEL plus the author's own clicks, and a
+ * click is never dropped (it is a bend of the LINE). So an author who clicked
+ * halfway down a cliff hands this rule TWO segments where the ground has one
+ * drop — and asking each of them for a full metre made the waterfall vanish
+ * exactly where somebody had clicked in it.
+ *
+ * The fix is in the grouping, not in the thresholds: maximal runs of
+ * consecutive STEEP segments (slope > 0.5) are joined FIRST, and the 1 m
+ * minimum is asked of the joined run once.
+ *
+ *   (a) THE SPLIT DROP — 3.0 / 2.1 / 1.2 at s = 0 / 1.5 / 3.0
+ *
+ *       seg 1  drop 0.9  run 1.5  slope 0.6 > 0.5 ✓  steep, 0.9 > 1.0 ? NO
+ *       seg 2  drop 0.9  run 1.5  slope 0.6 > 0.5 ✓  steep, 0.9 > 1.0 ? NO
+ *
+ *       Per segment: NO fall at all — the bug. Merged: one run, knots 0..2,
+ *       drop 3.0 − 1.2 = 1.8 > 1.0 ✓ over a run of 3.0 (slope 0.6, still past
+ *       the slope threshold, as a mean of slopes past it must be). ONE fall,
+ *       top 3.0, bottom 1.2, arc midpoint s = 1.5 → the middle knot (1.5, 0),
+ *       chord (3, 0) → direction (1, 0).
+ *
+ *   (b) THREE STEPS — 3.0 / 2.1 / 1.2 / 0.3 at s = 0 / 1.5 / 3.0 / 4.5
+ *
+ *       All three segments steep (0.6 each), none past 1 m alone. Merged drop
+ *       2.7 over 4.5. The arc midpoint is s = 2.25, which lies INSIDE the
+ *       second segment: (2.25 − 1.5) / 1.5 = 0.5 of the way from (1.5, 0) to
+ *       (3, 0) → x = 2.25.
+ *
+ *   (c) A BENT FALL — (0,0) s 0 level 3.0, (1.5,0) s 1.5 level 2.1,
+ *       (1.5,−1.5) s 3.0 level 1.2
+ *
+ *       Both segments steep, merged drop 1.8. The CHORD is (1.5, −1.5), length
+ *       √4.5 = 2.1213203, so the direction is (0.7071068, −0.7071068) — and
+ *       the position is the ARC midpoint (1.5, 0), the elbow, NOT the chord's
+ *       middle (0.75, −0.75), which lies in the dry corner beside the water.
+ *
+ *   (d) A POOL BETWEEN TWO STAIRCASES — 6.0 / 5.1 / 4.2 / 4.1 / 3.2 / 2.3 at
+ *       s = 0 / 1.5 / 3 / 23 / 24.5 / 26
+ *
+ *       seg 3 loses 0.1 over 20 m (slope 0.005) and is NOT steep, so it ends
+ *       the first run and opens nothing. TWO falls, not one:
+ *         knots 0..2  drop 1.8  top 6.0  bottom 4.2  arc mid s 1.5  → x 1.5
+ *         knots 3..5  drop 1.8  top 4.1  bottom 2.3  arc mid s 24.5 → x 24.5
+ *       Merging across the pool would have hung one 3.7 m curtain over 26 m of
+ *       river, which is the failure mode this direction has to avoid.
+ *
+ *   (e) A RUN OF ONE SEGMENT IS THE OLD RULE. Every fixture of [2], [4], [6]
+ *       and [9] is a single steep segment between two flat ones and keeps the
+ *       numbers it always had; the plan's fixture is re-asserted here.
+ *
+ * ===========================================================================
  * [8] THE 3D HALF, structurally
  * ===========================================================================
  * `client3d/src/scene/waterfall.ts` imports three and cannot be transpiled into
@@ -391,17 +444,100 @@ check('it points downstream', cliffFalls[0]?.dirX, 1);
 check('…and nowhere sideways', cliffFalls[0]?.dirZ, 0);
 check('the water leaves at the plateau\'s level', cliffFalls[0]?.topY, 3);
 check('…and arrives at the low ground\'s', cliffFalls[0]?.bottomY, 0);
-check('the drop is the plateau\'s own height', 3 - 0, 3);
-check('…over a run of 2 m, i.e. a slope of 1.5', 3 / 2, 1.5);
+// The drop and the slope are read out of the ANSWER and the axis it was read
+// from — 3 − 0 = 3 metres lost over s 42 − 40 = 2 metres of run, i.e. 1.5,
+// which is three times the threshold the rule applies.
+const cliffDrop = (cliffFalls[0]?.topY ?? NaN) - (cliffFalls[0]?.bottomY ?? NaN);
+const cliffRun = CLIFF_AXIS.axis[2][2] - CLIFF_AXIS.axis[1][2];
+check('the drop is the plateau\'s own height', cliffDrop, 3);
+check('…over a run of 2 m', cliffRun, 2);
+check('…i.e. a slope of 1.5', cliffDrop / cliffRun, 1.5);
+check('…which is three times WATERFALL_MIN_SLOPE',
+  (cliffDrop / cliffRun) / WATERFALL_MIN_SLOPE, 3);
 check('the curtain spans the drawn ribbon', cliffFalls[0]?.width, 6);
 // RED: the very same river, as the CLICKS alone described it before W5b.
 const CLICKS_ONLY = { axis: [[0, 0, 0, 3], [100, 0, 100, 0]] };
 checkEq('RED: the two-knot axis of the same two clicks has NO fall at all',
   waterfallsFrom(CLICKS_ONLY, 6), []);
-check('RED: …its drop passes the drop threshold', 3 - 0, 3);
-check('RED: …and its slope misses the slope one by a factor of 17',
-  3 / 100, 0.03);
-check('RED: …which is how a 3 m cliff stayed invisible', 0.03 > 0.5 ? 1 : 0, 0);
+const clickDrop = CLICKS_ONLY.axis[0][3] - CLICKS_ONLY.axis[1][3];
+const clickSlope = clickDrop / (CLICKS_ONLY.axis[1][2] - CLICKS_ONLY.axis[0][2]);
+check('RED: …its drop is three times the drop threshold',
+  clickDrop / WATERFALL_MIN_DROP_M, 3);
+check('RED: …while its slope, 3 / 100', clickSlope, 0.03);
+check('RED: …misses the slope threshold by a factor of 16⅔',
+  WATERFALL_MIN_SLOPE / clickSlope, 16.6666667, 1e-7);
+check('RED: …which is how a 3 m cliff stayed invisible',
+  clickSlope > WATERFALL_MIN_SLOPE ? 1 : 0, 0);
+
+// ── [10] a click inside the cliff: the drop belongs to the run ─────────────
+console.log('\n[10] two sub-metre steps of one cliff are ONE fall');
+const SPLIT = { axis: [[0, 0, 0, 3], [1.5, 0, 1.5, 2.1], [3, 0, 3, 1.2]] };
+const split = waterfallsFrom(SPLIT, 6);
+check('RED: each segment alone loses less than the metre a fall must lose',
+  SPLIT.axis[0][3] - SPLIT.axis[1][3], 0.9);
+check('RED: …and so does the second', SPLIT.axis[1][3] - SPLIT.axis[2][3], 0.9);
+check('RED: …yet each is steeper than the slope threshold',
+  (SPLIT.axis[0][3] - SPLIT.axis[1][3]) / (SPLIT.axis[1][2] - SPLIT.axis[0][2]),
+  0.6, 1e-15);
+check('so the run is one fall, not none', split.length, 1);
+check('its drop is the run\'s, 3.0 − 1.2', split[0]?.topY - split[0]?.bottomY,
+  1.8, 1e-15);
+check('it leaves at the first knot\'s level', split[0]?.topY, 3);
+check('…and arrives at the last one\'s', split[0]?.bottomY, 1.2);
+check('it stands at the arc midpoint — the clicked knot itself', split[0]?.x,
+  1.5);
+check('…on the line', split[0]?.z, 0);
+check('and points along the chord of the run', split[0]?.dirX, 1);
+check('…which here is the drawn line', split[0]?.dirZ, 0);
+
+console.log('\n[10b] three steps: the midpoint falls INSIDE a segment');
+const THREE = { axis: [[0, 0, 0, 3], [1.5, 0, 1.5, 2.1], [3, 0, 3, 1.2],
+  [4.5, 0, 4.5, 0.3]] };
+const three = waterfallsFrom(THREE, 6);
+check('still one fall', three.length, 1);
+check('drop 3.0 − 0.3', three[0]?.topY - three[0]?.bottomY, 2.7, 1e-15);
+check('arc midpoint s = 2.25, half way along the SECOND segment', three[0]?.x,
+  2.25);
+
+console.log('\n[10c] a bent fall hangs at its elbow, not beside the water');
+const BENT = { axis: [[0, 0, 0, 3], [1.5, 0, 1.5, 2.1], [1.5, -1.5, 3, 1.2]] };
+const bent = waterfallsFrom(BENT, 6);
+check('one fall', bent.length, 1);
+check('the arc midpoint is the elbow (x)', bent[0]?.x, 1.5);
+check('…and (z)', bent[0]?.z, 0);
+check('RED: the CHORD midpoint would sit in the dry corner (x)',
+  (BENT.axis[0][0] + BENT.axis[2][0]) * 0.5, 0.75);
+check('RED: …and (z)', (BENT.axis[0][1] + BENT.axis[2][1]) * 0.5, -0.75);
+check('the direction IS the chord, √4.5 long (x)', bent[0]?.dirX, 0.7071068,
+  1e-7);
+check('…and (z)', bent[0]?.dirZ, -0.7071068, 1e-7);
+check('it is a unit direction', Math.hypot(bent[0]?.dirX, bent[0]?.dirZ), 1,
+  1e-15);
+
+console.log('\n[10d] a pool between two staircases keeps them two falls');
+const POOLED = { axis: [[0, 0, 0, 6], [1.5, 0, 1.5, 5.1], [3, 0, 3, 4.2],
+  [23, 0, 23, 4.1], [24.5, 0, 24.5, 3.2], [26, 0, 26, 2.3]] };
+const pooled = waterfallsFrom(POOLED, 6);
+check('RED: the pool loses this little over 20 m',
+  POOLED.axis[2][3] - POOLED.axis[3][3], 0.1, 1e-15);
+check('RED: …i.e. a slope of 0.005, far short of the threshold',
+  (POOLED.axis[2][3] - POOLED.axis[3][3])
+  / (POOLED.axis[3][2] - POOLED.axis[2][2]), 0.005, 1e-15);
+check('two falls, not one long curtain', pooled.length, 2);
+check('the first from', pooled[0]?.topY, 6);
+check('…down to', pooled[0]?.bottomY, 4.2);
+check('…at its arc midpoint', pooled[0]?.x, 1.5);
+check('the second from', pooled[1]?.topY, 4.1);
+check('…down to', pooled[1]?.bottomY, 2.3);
+check('…at its arc midpoint', pooled[1]?.x, 24.5);
+
+console.log('\n[10e] a run of ONE segment is the rule it always was');
+const planAgain = waterfallsFrom(PLAN_AXIS, strokeWidthM(PLAN_META));
+check('the plan\'s fixture is still exactly one fall', planAgain.length, 1);
+check('…at the same midpoint (x)', planAgain[0]?.x, 20.9);
+check('…and (z)', planAgain[0]?.z, -1.2);
+check('…from', planAgain[0]?.topY, 9.8);
+check('…down to', planAgain[0]?.bottomY, 4);
 
 // ── [8] the 3D half, structurally ──────────────────────────────────────────
 console.log('\n[8] the curtain: the arrangement W5 decided on');
