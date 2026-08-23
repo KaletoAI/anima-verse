@@ -65,7 +65,13 @@ async def inject(request: Request):
     Body: ``{speaker, content, volume?, addressees?, location_id?, room_id?}``.
     Leeres location_id/room_id -> aktueller State des Sprechers.
     """
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_inject_sync, body)
+
+
+def _inject_sync(body):
+    """The blocking body of ``inject`` — runs in the threadpool."""
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be a JSON object")
 

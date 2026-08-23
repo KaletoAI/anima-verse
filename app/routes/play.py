@@ -7,8 +7,9 @@ Avatars — read-only in diesem Schritt; Äußerungen senden kommt als Nächstes
 Die gebaute Shell liegt (wie game-admin) unter ``static/game_admin/play.html``
 — derselbe ``frontend/``-Build, aber eine eigene Seite/Route.
 """
+import threading
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -284,6 +285,14 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     block rules (the entry-room constraint only applies to leaving the
     location). Going onto the ground is an ordinary room change like any
     other and runs through the same check — a rule may lock the ground too."""
+    import asyncio
+
+    body = await request.json()
+    return await asyncio.to_thread(_play_enter_room_sync, user, body)
+
+
+def _play_enter_room_sync(user, body: Any):
+    """The blocking body of ``play_enter_room`` — runs in the threadpool."""
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        get_character_language,
@@ -292,8 +301,6 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
                                        save_character_current_room,
                                        set_is_sleeping)
     from app.models.world import GROUND_ROOM_ID, get_location_by_id
-
-    body = await request.json()
     # An empty room_id means "onto the location's ground" — and since the
     # ground is a room of its own it is addressed by its id from here on, so
     # exactly one path exists and the checks below apply to it as well.
@@ -605,6 +612,27 @@ _POS_STALE_WINDOW_MS = 15000.0
 #: single report claiming an hour of walking would buy an unbounded jump.
 _POS_CLIENT_ELAPSED_CAP_S = 30.0
 
+#: One report lock per avatar, handed out under its guard — the same shape as
+#: the per-tile bake locks in ``core/heightfield``/``core/terrain_layers``.
+#: The report used to be serialized IMPLICITLY, by running on the event loop;
+#: now that it runs in the threadpool two reports of the SAME avatar can be in
+#: the handler at once, and they would race the two baselines
+#: (``_pos_report_at``/``_pos_client_at``) against the position write: the
+#: later report could read the older one's baseline, or be overtaken by it at
+#: ``set_character_pos``. Per AVATAR, so two players never wait for each other.
+_POS_LOCKS: Dict[str, threading.Lock] = {}
+_POS_LOCKS_GUARD = threading.Lock()
+
+
+def _pos_lock(avatar: str) -> threading.Lock:
+    """The report lock of one avatar, created on first ask."""
+    with _POS_LOCKS_GUARD:
+        lock = _POS_LOCKS.get(avatar)
+        if lock is None:
+            lock = threading.Lock()
+            _POS_LOCKS[avatar] = lock
+        return lock
+
 
 @router.post("/play/pos")
 async def play_pos(request: Request, user=Depends(get_current_user)):
@@ -738,12 +766,50 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     position write that is not a travel step; the ticker would otherwise pull
     the figure back onto its baked polyline on the next tick).
 
+    OFF THE EVENT LOOP (2026-08-24). Everything after the body parse is
+    blocking work — a dozen DB reads, the terrain and relief lookups, the
+    position write — and a walking client sends up to four reports a second per
+    player, which is what made this route the top event-loop staller in the
+    watchdog dumps. The route therefore only parses the body and resolves what
+    is REQUEST-SCOPED (the active character), then hands the whole judgement to
+    the threadpool; ``_play_pos_sync`` serializes it per avatar so the loop's
+    implicit serialization is not lost.
+
     Gates hand-derived in ``scripts/smoke_play_pos.py``.
     """
+    import asyncio
+    from app.models.account import get_active_character
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="x/z required")
+    # REQUEST-SCOPED — resolved HERE, before the thread hop: the active
+    # character comes out of the logged-in user's settings in the request
+    # context, and everything below only ever needs the resulting plain name.
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=400, detail="no active avatar")
+    return await asyncio.to_thread(_play_pos_sync, avatar, body)
+
+
+def _play_pos_sync(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """``POST /play/pos`` in the threadpool, SERIALIZED PER AVATAR.
+
+    The lock replaces what the event loop used to give this route for free:
+    two reports of the same avatar must not interleave, because each of them
+    reads the two baselines, judges against them and writes the position — and
+    two reports of DIFFERENT avatars have nothing to say to each other and stay
+    parallel. See ``play_pos`` for the gates themselves.
+    """
+    with _pos_lock(avatar):
+        return _play_pos_report(avatar, body)
+
+
+def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """The report itself — the chain documented on ``play_pos``. Blocking."""
     import math
     import time
     from app.core.i18n import t
-    from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
                                       get_character_language,
@@ -753,12 +819,6 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
                                       set_is_sleeping,
                                       set_character_pos)
 
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="x/z required")
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        raise HTTPException(status_code=400, detail="no active avatar")
     lang = get_character_language(avatar) or "de"
 
     from app.core.party_engine import is_party_follower
@@ -1457,11 +1517,17 @@ async def play_scene_preview(request: Request, _=Depends(require_admin)):
     unchecked user payload reaches the composer. With a known ``id`` the
     stored model metas (scale anchor, orientation fixes, width_m) are pulled
     in, so the preview matches what the client will see."""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_play_scene_preview_sync, _, data)
+
+
+def _play_scene_preview_sync(_, data: Any):
+    """The blocking body of ``play_scene_preview`` — runs in the threadpool."""
     from app.models.world import get_location_by_id
     from app.core.scene_recipe import compose_scene
     from app.core.surface_textures import library_kinds
     from app.core.world_ops import _sanitize_map3d, _sanitize_rooms_layout
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     rooms = [{"id": str(r.get("id") or ""),
@@ -1501,12 +1567,18 @@ def _party_block(avatar: str):
 @router.post("/play/party/respond")
 async def play_party_respond(request: Request, user=Depends(get_current_user)):
     """Avatar beantwortet eine Party-Einladung (Ja/Nein) aus dem Chat-Fenster."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_party_respond_sync, user, body)
+
+
+def _play_party_respond_sync(user, body: Any):
+    """The blocking body of ``play_party_respond`` — runs in the threadpool."""
     from app.models.account import get_active_character
     from app.core.party_engine import get_invite, resolve_pending_invite
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
-    body = await request.json()
     invite_id = str(body.get("invite_id") or "").strip() if isinstance(body, dict) else ""
     accept = bool(body.get("accept")) if isinstance(body, dict) else False
     if not invite_id:
@@ -2191,9 +2263,15 @@ async def play_equip(request: Request, user=Depends(get_current_user)):
     """Zieht EIN Outfit-Piece an — merged mit dem Rest (nur die Slots dieses
     Pieces, inkl. Multi-Slot), verdrängt nur Konflikte. NICHT das ganze Outfit
     ersetzen (dafür ist apply-outfit-set)."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_equip_sync, user, body)
+
+
+def _play_equip_sync(user, body: Any):
+    """The blocking body of ``play_equip`` — runs in the threadpool."""
     from app.models.inventory import equip_piece
     avatar = _require_avatar()
-    body = await request.json()
     item_id = str((body or {}).get("item_id") or "").strip()
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id required")
@@ -2214,9 +2292,15 @@ async def play_equip(request: Request, user=Depends(get_current_user)):
 @router.post("/play/unequip")
 async def play_unequip(request: Request, user=Depends(get_current_user)):
     """Legt das Piece eines Slots ab (inkl. aller Mirror-Slots des Pieces)."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_unequip_sync, user, body)
+
+
+def _play_unequip_sync(user, body: Any):
+    """The blocking body of ``play_unequip`` — runs in the threadpool."""
     from app.models.inventory import unequip_piece
     avatar = _require_avatar()
-    body = await request.json()
     slot = str((body or {}).get("slot") or "").strip()
     item_id = str((body or {}).get("item_id") or "").strip()
     if not slot and not item_id:
@@ -2242,9 +2326,15 @@ async def play_unequip(request: Request, user=Depends(get_current_user)):
 @router.post("/play/use-item")
 async def play_use_item(request: Request, user=Depends(get_current_user)):
     """Benutzt/konsumiert ein Item."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_use_item_sync, user, body)
+
+
+def _play_use_item_sync(user, body: Any):
+    """The blocking body of ``play_use_item`` — runs in the threadpool."""
     from app.models.inventory import consume_item
     avatar = _require_avatar()
-    body = await request.json()
     item_id = str((body or {}).get("item_id") or "").strip()
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id required")
@@ -2324,9 +2414,15 @@ async def play_give(request: Request, user=Depends(get_current_user)):
     Uses gift_item — the same transfer path as the chat composer's gift: it
     moves the piece (instead of copying it), refuses non-transferable items and
     records the relationship boost."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_give_sync, user, body)
+
+
+def _play_give_sync(user, body: Any):
+    """The blocking body of ``play_give`` — runs in the threadpool."""
     from app.models.inventory import gift_item, get_item, get_equipped_item_ids
     avatar = _require_avatar()
-    body = await request.json()
     item_id = str((body or {}).get("item_id") or "").strip()
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id required")
@@ -2360,11 +2456,17 @@ async def play_give(request: Request, user=Depends(get_current_user)):
 @router.post("/play/drop")
 async def play_drop(request: Request, user=Depends(get_current_user)):
     """Put an inventory item down in the avatar's current room."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_drop_sync, user, body)
+
+
+def _play_drop_sync(user, body: Any):
+    """The blocking body of ``play_drop`` — runs in the threadpool."""
     from app.models.inventory import drop_item
     from app.models.character import (get_character_current_location,
                                       get_character_current_room)
     avatar = _require_avatar()
-    body = await request.json()
     item_id = str((body or {}).get("item_id") or "").strip()
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id required")
@@ -2978,9 +3080,15 @@ def _require_avatar() -> str:
 @router.post("/play/self/mood")
 async def play_set_mood(request: Request, user=Depends(get_current_user)):
     """Avatar setzt seine eigene Stimmung."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_set_mood_sync, user, body)
+
+
+def _play_set_mood_sync(user, body: Any):
+    """The blocking body of ``play_set_mood`` — runs in the threadpool."""
     from app.models.character import save_character_current_feeling
     avatar = _require_avatar()
-    body = await request.json()
     feeling = str((body or {}).get("mood") or "").strip()
     save_character_current_feeling(avatar, feeling)
     return {"ok": True, "mood": feeling}
@@ -3013,10 +3121,16 @@ async def play_set_activity(request: Request, user=Depends(get_current_user)):
 @router.post("/play/self/outfit")
 async def play_set_outfit(request: Request, user=Depends(get_current_user)):
     """Avatar zieht ein gespeichertes Outfit-Set an (reused apply_equipped_pieces)."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_set_outfit_sync, user, body)
+
+
+def _play_set_outfit_sync(user, body: Any):
+    """The blocking body of ``play_set_outfit`` — runs in the threadpool."""
     from app.models.character import get_character_outfits
     from app.models.inventory import apply_equipped_pieces, get_item
     avatar = _require_avatar()
-    body = await request.json()
     outfit_id = str((body or {}).get("outfit_id") or "").strip()
     name = str((body or {}).get("name") or "").strip()
     if not outfit_id and not name:
@@ -3065,8 +3179,14 @@ def play_get_layout(user=Depends(get_current_user)):
 @router.put("/play/layout")
 async def play_put_layout(request: Request, user=Depends(get_current_user)):
     """Persistiert das UI-Layout im User-Profil (folgt dem User über Geräte)."""
-    from app.models.account import _update_current_user_settings
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_play_put_layout_sync, user, body)
+
+
+def _play_put_layout_sync(user, body: Any):
+    """The blocking body of ``play_put_layout`` — runs in the threadpool."""
+    from app.models.account import _update_current_user_settings
     layout = body.get("layout") if isinstance(body, dict) else None
     if layout is None:
         raise HTTPException(status_code=400, detail="layout required")
@@ -3115,12 +3235,18 @@ async def play_save_figures(request: Request, user=Depends(get_current_user)):
     """Persists figure anchors + size in the character data, keyed to room +
     background image (``bg``) + expression image hash. Only figures present in
     the avatar's room."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_save_figures_sync, user, body)
+
+
+def _play_save_figures_sync(user, body: Any):
+    """The blocking body of ``play_save_figures`` — runs in the threadpool."""
     from app.core.room_entry import _list_characters_in_room
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        get_character_current_room,
                                        set_scene_position)
-    body = await request.json()
     positions = body.get("positions") if isinstance(body, dict) else None
     bg = str(body.get("bg") or "") if isinstance(body, dict) else ""
     if not isinstance(positions, dict):
@@ -3153,9 +3279,15 @@ def play_list_layouts(user=Depends(get_current_user)):
 @router.put("/play/layouts")
 async def play_save_layout(request: Request, user=Depends(get_current_user)):
     """Speichert das aktuelle Layout unter einem Namen."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_save_layout_sync, user, body)
+
+
+def _play_save_layout_sync(user, body: Any):
+    """The blocking body of ``play_save_layout`` — runs in the threadpool."""
     from app.models.account import (_current_user_settings,
                                     _update_current_user_settings)
-    body = await request.json()
     name = str((body or {}).get("name") or "").strip() if isinstance(body, dict) else ""
     layout = body.get("layout") if isinstance(body, dict) else None
     if not name or layout is None:
@@ -3325,13 +3457,19 @@ def play_messages_thread(partner: str, user=Depends(get_current_user)):
 async def play_messages_send(request: Request, user=Depends(get_current_user)):
     """Avatar sendet eine DM: symmetrisch speichern (Empfänger-Inbox + Avatar-
     History) und den Charakter bumpen — er darf antworten oder ignorieren."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_messages_send_sync, user, body)
+
+
+def _play_messages_send_sync(user, body: Any):
+    """The blocking body of ``play_messages_send`` — runs in the threadpool."""
     from app.models.account import get_active_character
     from app.models.chat import save_message
     from app.core.timeutils import utc_now_iso
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=404, detail="Kein aktiver Avatar")
-    body = await request.json()
     partner = (body.get("partner") or "").strip()
     content = (body.get("content") or "").strip()
     if not partner or not content:

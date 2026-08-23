@@ -42,7 +42,13 @@ async def create_rule_route(request: Request) -> Dict[str, Any]:
     Body: ``{"rule": {...}, "target": "world"|"shared"}`` — ``target`` defaults
     to ``world``. ``shared`` schreibt in ``shared/rules/rules.json``.
     """
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_create_rule_route_sync, data)
+
+
+def _create_rule_route_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``create_rule_route`` — runs in the threadpool."""
     rule = data.get("rule", {})
     target = _normalize_target(data.get("target", "world"))
     if not rule.get("name") or not rule.get("type"):
@@ -59,7 +65,13 @@ async def update_rule_route(rule_id: str, request: Request) -> Dict[str, Any]:
     automatisch einen Override an, falls die Rule bisher nur in der Shared-
     Baseline existiert.
     """
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_update_rule_route_sync, rule_id, data)
+
+
+def _update_rule_route_sync(rule_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_rule_route`` — runs in the threadpool."""
     updates = data.get("rule", {})
     target = _normalize_target(data.get("target", "world"))
     updated = update_rule(rule_id, updates, target_dir=target)

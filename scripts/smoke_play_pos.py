@@ -256,6 +256,17 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       against 30 ms of the new one is far outside the 15 s leftover window —
       so the baseline is dropped and the new session's first report is taken.
 
+  [22] ONE REPORT AT A TIME PER AVATAR (2026-08-24). The route hands
+      everything after the body parse to the threadpool, so the event loop
+      stops being the thing that serialized two reports of the same avatar.
+      What serializes them now is a per-avatar lock, and this case shows it is
+      really held for the WHOLE report: with the avatar's lock taken by the
+      test, a report started in another thread does not finish (it is still
+      waiting after 0.3 s — well past the few milliseconds it needs when the
+      way is free), and it completes as an ordinary acceptance the moment the
+      lock is released. Two DIFFERENT avatars get two different locks, which
+      is what keeps two players out of each other's way.
+
 NOTE ON THE PARKING HELPER. ``park()`` writes the avatar's point directly
 (``set_character_pos``) and forgets the report clock — it is WORLD SETUP, not
 a call of the route: walking the 45 m up to HALL through the route would be a
@@ -879,6 +890,32 @@ def main() -> int:
     check("...it is a real acceptance", (fresh or {}).get("ok"), True)
     check("the avatar followed it", get_character_pos(AVATAR),
           {"x": 800.0, "z": 805.0})
+
+    print("\n[22] one report at a time per avatar")
+    import threading
+    check("the same avatar always gets the SAME lock",
+          play_route._pos_lock(AVATAR) is play_route._pos_lock(AVATAR), True)
+    check("another avatar gets its own",
+          play_route._pos_lock(AVATAR) is play_route._pos_lock("someone-else"),
+          False)
+    park(800.0, 805.0)
+    held: list = []
+
+    def _report_in_thread():
+        held.append(report(800.0, 806.0))
+
+    lock = play_route._pos_lock(AVATAR)
+    lock.acquire()
+    worker = threading.Thread(target=_report_in_thread, daemon=True)
+    worker.start()
+    worker.join(0.3)
+    check("a second report waits while the lock is held", held, [])
+    lock.release()
+    worker.join(5.0)
+    check("...and goes through once it is released",
+          held[0][0] if held else None, "ok")
+    check("the avatar followed it", get_character_pos(AVATAR),
+          {"x": 800.0, "z": 806.0})
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

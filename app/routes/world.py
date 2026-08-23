@@ -56,8 +56,14 @@ def get_locations_route(character_name: str = Query("", alias="agent_name")
 @router.post("/locations")
 async def create_location_route(request: Request) -> Dict[str, Any]:
     """Erstellt oder aktualisiert einen Ort."""
+    data = await request.json()
+    return await asyncio.to_thread(_create_location_route_sync, data)
+
+
+def _create_location_route_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``create_location_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         return world_ops.create_location_with_extras(data)
     except HTTPException:
         raise
@@ -90,8 +96,15 @@ def seed_boundaries_route() -> Dict[str, Any]:
 @router.put("/locations/{location_id}")
 async def update_location_route(location_id: str, request: Request) -> Dict[str, Any]:
     """Aktualisiert einen Ort (Umbenennung per ID)."""
+    data = await request.json()
+    return await asyncio.to_thread(_update_location_route_sync,
+                                   location_id, data)
+
+
+def _update_location_route_sync(location_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_location_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         return world_ops.update_location_with_extras(location_id, data)
     except HTTPException:
         raise
@@ -106,8 +119,15 @@ async def clone_location_route(template_id: str, request: Request) -> Dict[str, 
     Called by the worldmap drag&drop when the user pulls a passable template
     out of the tray onto the map.
     """
+    data = await request.json()
+    return await asyncio.to_thread(_clone_location_route_sync,
+                                   template_id, data)
+
+
+def _clone_location_route_sync(template_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``clone_location_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         pos_x = data.get("pos_x")
         pos_z = data.get("pos_z")
         if pos_x is None or pos_z is None:
@@ -230,9 +250,15 @@ async def post_game_time(
 
     Body: ``{game_time?: {year, season, day, hour, minute} | "Y0002-D109T14:00:00",
     factor?: number}``."""
+    data = await request.json()
+    return await asyncio.to_thread(_post_game_time_sync, lang, _, data)
+
+
+def _post_game_time_sync(lang: str, _: Dict[str, Any],
+                         data: Any) -> Dict[str, Any]:
+    """The blocking body of ``post_game_time`` — runs in the threadpool."""
     from app.core.timeutils import (get_game_clock_info, set_game_factor,
                                     set_game_time)
-    data = await request.json()
     raw_time = data.get("game_time")
     if isinstance(raw_time, str) and not raw_time.strip():
         raw_time = None
@@ -296,6 +322,11 @@ def get_world_settings() -> Dict[str, Any]:
 async def put_world_settings(request: Request) -> Dict[str, Any]:
     """Set world-level settings from the request body."""
     data = await request.json()
+    return await asyncio.to_thread(_put_world_settings_sync, data)
+
+
+def _put_world_settings_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``put_world_settings`` — runs in the threadpool."""
     return world_ops.apply_world_settings(data)
 
 
@@ -307,8 +338,16 @@ async def update_location_position_route(location_id: str, request: Request) -> 
     A null or missing coordinate unplaces the location; a missing ``yaw_deg``
     leaves the stored rotation untouched.
     """
+    data = await request.json()
+    return await asyncio.to_thread(_update_location_position_route_sync,
+                                   location_id, data)
+
+
+def _update_location_position_route_sync(location_id: str,
+                                         data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_location_position_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         pos_x = data.get("pos_x")
         pos_z = data.get("pos_z")
         yaw_deg = data.get("yaw_deg")
@@ -349,8 +388,14 @@ def get_terrain_types_route() -> Dict[str, Any]:
 @router.put("/terrain-types/{kind}")
 async def put_terrain_type_route(kind: str, request: Request) -> Dict[str, Any]:
     """Create/replace the WORLD override of one terrain kind."""
-    from app.core import terrain_types
     data = await request.json()
+    return await asyncio.to_thread(_put_terrain_type_route_sync, kind, data)
+
+
+def _put_terrain_type_route_sync(kind: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``put_terrain_type_route`` — runs in the
+    threadpool."""
+    from app.core import terrain_types
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     data["kind"] = kind
@@ -386,8 +431,12 @@ def get_terrain_areas_route() -> Dict[str, Any]:
       (W1, W4a): ``{level_up, level_down, flow_dir_deg, axis_x, axis_z, dir_x,
       dir_z, s_min, s_max, axis}``. ``axis`` is the TRUTH — the knots
       ``[x, z, s, level]`` of the flow polyline in flow order, one for still
-      water, two for a straight river — and the nine numbers beside it are the
-      best single tilted plane through its ends. This is how a client evaluates
+      water, two for a straight river, and for a river drawn with the line tool
+      one wherever its mirror BENDS (W5b: the line is sampled every
+      ``heightfield.WATER_AXIS_STEP_M`` and simplified back down, so the count
+      follows the ground and not the author's clicks) — and the nine numbers
+      beside it are the best single tilted plane through its ends. This is how a
+      client evaluates
       the mirror per vertex (``heightfield.water_level_at``). Still water ships
       it too, with both levels equal and ``flow_dir_deg: null``.
 
@@ -399,18 +448,41 @@ def get_terrain_areas_route() -> Dict[str, Any]:
             "sig": terrain.terrain_sig()}
 
 
-@router.post("/terrain-areas")
-async def post_terrain_area_route(request: Request) -> Dict[str, Any]:
-    """Paint a new area; the id is assigned by the server."""
+def _save_terrain_area(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize + persist ONE painted area — blocking, runs in the threadpool.
+
+    NO LOCK, deliberately, and for the same reason ``delete_terrain_area_route``
+    next door needs none: every thread gets its own SQLite connection
+    (``core/db.get_connection``), the model wraps its write in one transaction,
+    and WAL + ``busy_timeout`` settle two writers. Painting is an editor action
+    of a single admin anyway — this is about not blocking the event loop while
+    the outline is sanitized and written, not about concurrent painters.
+    """
     from app.models import terrain
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Body must be an object")
-    data.pop("id", None)
     try:
         return {"status": "success", "area": terrain.save_area(data)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/terrain-areas")
+async def post_terrain_area_route(request: Request) -> Dict[str, Any]:
+    """Paint a new area; the id is assigned by the server."""
+    import asyncio
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    data.pop("id", None)
+    return await asyncio.to_thread(_save_terrain_area, data)
+
+
+def _put_terrain_area(area_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """The existence check plus the write of ``put_terrain_area_route``."""
+    from app.models import terrain
+    if not terrain.area_exists(area_id):
+        raise HTTPException(status_code=404, detail="terrain area not found")
+    data["id"] = area_id
+    return _save_terrain_area(data)
 
 
 @router.put("/terrain-areas/{area_id}")
@@ -421,17 +493,11 @@ async def put_terrain_area_route(area_id: str, request: Request) -> Dict[str, An
     silently create the area — and a client repeating a stale PUT would bring a
     just-deleted area back. Creating is POST's job (which assigns the id).
     """
-    from app.models import terrain
+    import asyncio
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    if not terrain.area_exists(area_id):
-        raise HTTPException(status_code=404, detail="terrain area not found")
-    data["id"] = area_id
-    try:
-        return {"status": "success", "area": terrain.save_area(data)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return await asyncio.to_thread(_put_terrain_area, area_id, data)
 
 
 @router.delete("/terrain-areas/{area_id}")
@@ -494,8 +560,14 @@ def get_world_props_route() -> Dict[str, Any]:
 @router.post("/world-props")
 async def post_world_prop_route(request: Request) -> Dict[str, Any]:
     """Place a new prop; the id is assigned by the server. 400 at the cap."""
-    from app.models import world_props
     data = await request.json()
+    return await asyncio.to_thread(_post_world_prop_route_sync, data)
+
+
+def _post_world_prop_route_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``post_world_prop_route`` — runs in the
+    threadpool."""
+    from app.models import world_props
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     data.pop("id", None)
@@ -516,8 +588,15 @@ async def put_world_prop_route(placement_id: str,
     silently create the placement — and a client repeating a stale PUT would
     bring a just-deleted one back. Creating is POST's job (which assigns the
     id and is the only path that meets the cap)."""
-    from app.models import world_props
     data = await request.json()
+    return await asyncio.to_thread(_put_world_prop_route_sync, placement_id,
+                                   data)
+
+
+def _put_world_prop_route_sync(placement_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``put_world_prop_route`` — runs in the
+    threadpool."""
+    from app.models import world_props
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     if not world_props.world_prop_exists(placement_id):
@@ -603,9 +682,15 @@ async def post_height_area_route(request: Request) -> Dict[str, Any]:
     step and not a forecast — the editor compares it with the one it held and
     says out loud when the drawing just coarsened the world.
     """
+    data = await request.json()
+    return await asyncio.to_thread(_post_height_area_route_sync, data)
+
+
+def _post_height_area_route_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``post_height_area_route`` — runs in the
+    threadpool."""
     from app.core.heightfield import current_step_m
     from app.models import heightfield
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     data.pop("id", None)
@@ -627,9 +712,15 @@ async def put_height_area_route(area_id: str, request: Request) -> Dict[str, Any
     Carries ``step_m`` like the POST does — dragging one vertex 8 km east
     coarsens the world's grid exactly as drawing a new area there would.
     """
+    data = await request.json()
+    return await asyncio.to_thread(_put_height_area_route_sync, area_id, data)
+
+
+def _put_height_area_route_sync(area_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``put_height_area_route`` — runs in the
+    threadpool."""
     from app.core.heightfield import current_step_m
     from app.models import heightfield
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     if not heightfield.height_area_exists(area_id):
@@ -708,10 +799,18 @@ async def location_model3d_generate(location_id: str, request: Request) -> Dict[
     (default ``full``); ``lod_faces`` additionally asks the alias to bake a
     reduced stage in the SAME job, which lands as the ``low`` variant.
     Background job — poll status for pending."""
+    data = await request.json()
+    return await asyncio.to_thread(_location_model3d_generate_sync,
+                                   location_id, data)
+
+
+def _location_model3d_generate_sync(location_id: str,
+                                    data: Any) -> Dict[str, Any]:
+    """The blocking body of ``location_model3d_generate`` — runs in the
+    threadpool."""
     from app.core.location_model3d import trigger_generation
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     source_image = str(data.get("source_image") or "").strip()
@@ -890,6 +989,15 @@ async def location_roof_generate(location_id: str, request: Request) -> Dict[str
     Background job — poll ``model3d/status`` for ``pending``. The description
     is validated and clamped again here: what the UI sends is a suggestion,
     not a contract."""
+    data = await request.json()
+    return await asyncio.to_thread(_location_roof_generate_sync, location_id,
+                                   data)
+
+
+def _location_roof_generate_sync(location_id: str,
+                                 data: Any) -> Dict[str, Any]:
+    """The blocking body of ``location_roof_generate`` — runs in the
+    threadpool."""
     from app.blender import runner
     from app.core.roof_model import trigger_roof_generation, validate_description
     if not get_location_by_id(location_id):
@@ -898,7 +1006,6 @@ async def location_roof_generate(location_id: str, request: Request) -> Dict[str
         raise HTTPException(status_code=503,
                             detail="Blender is not available — the roof is "
                                    "built locally, not on a backend.")
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     raw = data.get("description") if isinstance(data.get("description"), dict) else data
@@ -926,10 +1033,18 @@ async def location_model3d_select(location_id: str, request: Request) -> Dict[st
     /play/locations/{id}/model?tier=. An empty {file} deselects: on the
     default tier nothing is rendered until another one is chosen/generated,
     on any other tier that tier ceases to exist."""
+    data = await request.json()
+    return await asyncio.to_thread(_location_model3d_select_sync, location_id,
+                                   data)
+
+
+def _location_model3d_select_sync(location_id: str,
+                                  data: Any) -> Dict[str, Any]:
+    """The blocking body of ``location_model3d_select`` — runs in the
+    threadpool."""
     from app.core.location_model3d import select_model
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
-    data = await request.json()
     filename = str((data or {}).get("file") or "").strip()
     tier = _tier((data or {}).get("tier"))
     if not select_model(location_id, filename, tier=tier):
@@ -958,10 +1073,18 @@ async def location_model3d_rotation(location_id: str, request: Request) -> Dict[
     the active one). Delivered to every client via /model/meta — generated
     meshes come out arbitrarily oriented, the admin dials the fix in the
     viewer."""
+    data = await request.json()
+    return await asyncio.to_thread(_location_model3d_rotation_sync,
+                                   location_id, data)
+
+
+def _location_model3d_rotation_sync(location_id: str,
+                                    data: Any) -> Dict[str, Any]:
+    """The blocking body of ``location_model3d_rotation`` — runs in the
+    threadpool."""
     from app.core.location_model3d import set_rotation
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
@@ -980,10 +1103,18 @@ async def location_model3d_offset(location_id: str, request: Request) -> Dict[st
     thickness varies); negative sinks the model into the terrain. ``walk_y``
     is the walkable surface above the model bottom (stand height of overlay
     zones on an area location)."""
+    data = await request.json()
+    return await asyncio.to_thread(_location_model3d_offset_sync, location_id,
+                                   data)
+
+
+def _location_model3d_offset_sync(location_id: str,
+                                  data: Any) -> Dict[str, Any]:
+    """The blocking body of ``location_model3d_offset`` — runs in the
+    threadpool."""
     from app.core.location_model3d import set_offset_y
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
@@ -1005,10 +1136,18 @@ async def location_model3d_width(location_id: str, request: Request) -> Dict[str
     becomes this many metres. Undeclared, the location's own width
     (map3d.plan_width_m) stands in, which is exactly what the retired
     map3d.size produced at its default 1."""
+    data = await request.json()
+    return await asyncio.to_thread(_location_model3d_width_sync, location_id,
+                                   data)
+
+
+def _location_model3d_width_sync(location_id: str,
+                                 data: Any) -> Dict[str, Any]:
+    """The blocking body of ``location_model3d_width`` — runs in the
+    threadpool."""
     from app.core.location_model3d import set_width_m
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
@@ -1054,9 +1193,17 @@ async def room_model3d_generate(location_id: str, room_id: str,
     (body: {source_image, backend?, face_num?, texture_size?, tier?,
     lod_faces?}). Same tier contract as the building model. Background job —
     poll status."""
+    data = await request.json()
+    return await asyncio.to_thread(_room_model3d_generate_sync, location_id,
+                                   room_id, data)
+
+
+def _room_model3d_generate_sync(location_id: str, room_id: str,
+                                data: Any) -> Dict[str, Any]:
+    """The blocking body of ``room_model3d_generate`` — runs in the
+    threadpool."""
     from app.core.location_model3d import trigger_generation
     _require_room(location_id, room_id)
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     source_image = str(data.get("source_image") or "").strip()
@@ -1149,9 +1296,17 @@ async def room_model3d_select(location_id: str, room_id: str,
     """Make a stored model the ACTIVE room model of a resolution tier (body:
     {file, tier?}). An empty {file} on the default tier selects NO model — the
     room renders without a diorama."""
+    data = await request.json()
+    return await asyncio.to_thread(_room_model3d_select_sync, location_id,
+                                   room_id, data)
+
+
+def _room_model3d_select_sync(location_id: str, room_id: str,
+                              data: Any) -> Dict[str, Any]:
+    """The blocking body of ``room_model3d_select`` — runs in the
+    threadpool."""
     from app.core.location_model3d import select_model
     _require_room(location_id, room_id)
-    data = await request.json()
     filename = str((data or {}).get("file") or "").strip()
     tier = _tier((data or {}).get("tier"))
     if not select_model(location_id, filename, room_id=room_id, tier=tier):
@@ -1178,9 +1333,17 @@ async def room_model3d_rotation(location_id: str, room_id: str,
     """Persist a room model's orientation fix ({x,y,z} in 90-degree steps;
     optional {file} targets a stored model, default the active one) — same
     contract as the building model."""
+    data = await request.json()
+    return await asyncio.to_thread(_room_model3d_rotation_sync, location_id,
+                                   room_id, data)
+
+
+def _room_model3d_rotation_sync(location_id: str, room_id: str,
+                                data: Any) -> Dict[str, Any]:
+    """The blocking body of ``room_model3d_rotation`` — runs in the
+    threadpool."""
     from app.core.location_model3d import set_rotation
     _require_room(location_id, room_id)
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
@@ -1200,9 +1363,17 @@ async def room_model3d_walk_y(location_id: str, room_id: str,
     or holes make the standing height unmeasurable from outside, so the admin
     dials it against the reference figure. Delivered via /model/meta and as
     ``walk_y_world`` on the room's spec in /play/locations/{id}/scene."""
+    data = await request.json()
+    return await asyncio.to_thread(_room_model3d_walk_y_sync, location_id,
+                                   room_id, data)
+
+
+def _room_model3d_walk_y_sync(location_id: str, room_id: str,
+                              data: Any) -> Dict[str, Any]:
+    """The blocking body of ``room_model3d_walk_y`` — runs in the
+    threadpool."""
     from app.core.location_model3d import set_walk_y
     _require_room(location_id, room_id)
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
@@ -1221,9 +1392,16 @@ async def room_model3d_width(location_id: str, room_id: str,
     largest side from the source image; placement stays untouched — the
     value makes the room's content scale explicit (rect extent / width_m)
     and figures in the room derive from it (1.7 m × scale)."""
+    data = await request.json()
+    return await asyncio.to_thread(_room_model3d_width_sync, location_id,
+                                   room_id, data)
+
+
+def _room_model3d_width_sync(location_id: str, room_id: str,
+                             data: Any) -> Dict[str, Any]:
+    """The blocking body of ``room_model3d_width`` — runs in the threadpool."""
     from app.core.location_model3d import set_width_m
     _require_room(location_id, room_id)
-    data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     try:
@@ -1295,8 +1473,14 @@ async def surface_texture_generate(request: Request) -> Dict[str, Any]:
     A NEW kind needs only a name: the server derives the id from it and
     answers with the id it used. Sending an explicit ``kind`` overrides that
     — the caller never has to slugify anything itself."""
-    from app.core.surface_textures import trigger_generation
     data = await request.json()
+    return await asyncio.to_thread(_surface_texture_generate_sync, data)
+
+
+def _surface_texture_generate_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``surface_texture_generate`` — runs in the
+    threadpool."""
+    from app.core.surface_textures import trigger_generation
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     kind = trigger_generation(
@@ -1322,8 +1506,14 @@ async def surface_texture_meta(kind: str, request: Request) -> Dict[str, Any]:
     material clears the declaration). The id is NOT editable — it
     sits in file names and in world data (terrain, level_floors, room floor
     kinds, blend toward), so changing it would be a data migration."""
-    from app.core.surface_textures import set_kind_meta
     data = await request.json()
+    return await asyncio.to_thread(_surface_texture_meta_sync, kind, data)
+
+
+def _surface_texture_meta_sync(kind: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``surface_texture_meta`` — runs in the
+    threadpool."""
+    from app.core.surface_textures import set_kind_meta
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     entry = set_kind_meta(kind, name=data.get("name"),
@@ -1340,8 +1530,14 @@ async def surface_texture_blend_set(kind: str, request: Request) -> Dict[str, An
     a zone gradient toward a neighbor kind instead of a texture; the
     client mixes it generically. A blend wins over texture files of the
     same kind in the client list."""
-    from app.core.surface_textures import set_blend
     data = await request.json()
+    return await asyncio.to_thread(_surface_texture_blend_set_sync, kind, data)
+
+
+def _surface_texture_blend_set_sync(kind: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``surface_texture_blend_set`` — runs in the
+    threadpool."""
+    from app.core.surface_textures import set_blend
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     clean = set_blend(kind, data.get("blend"))
@@ -1377,8 +1573,14 @@ async def surface_texture_upload(kind: str, file: UploadFile = File(...),
 async def surface_texture_size(kind: str, request: Request) -> Dict[str, Any]:
     """Set the physical edge length in metres (body: {size_m}, optional
     {file} targets a stored version, default the active one; 3 = default)."""
-    from app.core.surface_textures import set_size_m
     data = await request.json()
+    return await asyncio.to_thread(_surface_texture_size_sync, kind, data)
+
+
+def _surface_texture_size_sync(kind: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``surface_texture_size`` — runs in the
+    threadpool."""
+    from app.core.surface_textures import set_size_m
     if not isinstance(data, dict) or not set_size_m(
             kind, data.get("size_m"), filename=str(data.get("file") or "").strip()):
         raise HTTPException(status_code=400, detail="bad kind or size_m")
@@ -1395,8 +1597,14 @@ async def surface_texture_select(kind: str, request: Request) -> Dict[str, Any]:
     falls back to the default otherwise. An empty ``file`` WITH a season clears
     that slot again. The answer carries the kind's slots as they now stand, so
     the strip re-draws from the server rather than from a guess."""
-    from app.core.surface_textures import select_texture, selection_slots
     data = await request.json()
+    return await asyncio.to_thread(_surface_texture_select_sync, kind, data)
+
+
+def _surface_texture_select_sync(kind: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``surface_texture_select`` — runs in the
+    threadpool."""
+    from app.core.surface_textures import select_texture, selection_slots
     if not isinstance(data, dict) or not select_texture(
             kind, str(data.get("file") or "").strip(),
             season=str(data.get("season") or "").strip()):
@@ -1468,8 +1676,13 @@ async def prop_generate(request: Request) -> Dict[str, Any]:
     image_backend?, mesh_backend?}). Missing dims become the largest given one;
     they are refined from the mesh proportions once the model exists.
     Background job — poll /world/props for pending."""
-    from app.core.props import create_prop, trigger_generation
     data = await request.json()
+    return await asyncio.to_thread(_prop_generate_sync, data)
+
+
+def _prop_generate_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_generate`` — runs in the threadpool."""
+    from app.core.props import create_prop, trigger_generation
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     name = str(data.get("name") or "").strip()
@@ -1498,8 +1711,13 @@ async def prop_create(request: Request) -> Dict[str, Any]:
     """Create a prop record (body: {name, category?, width_m?, depth_m?,
     height_m?, tags?}). Missing dims become the largest given one. The
     model/source files follow via upload or the generation chain."""
-    from app.core.props import create_prop
     data = await request.json()
+    return await asyncio.to_thread(_prop_create_sync, data)
+
+
+def _prop_create_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_create`` — runs in the threadpool."""
+    from app.core.props import create_prop
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     name = str(data.get("name") or "").strip()
@@ -1548,8 +1766,13 @@ async def prop_stack_y(request: Request) -> Dict[str, Any]:
     the client stores the answer in ``offset_y`` and both renderers keep reading
     the base the scene spec composes from it.
     """
-    from app.core.props import placement_stack_offset_y
     data = await request.json()
+    return await asyncio.to_thread(_prop_stack_y_sync, data)
+
+
+def _prop_stack_y_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_stack_y`` — runs in the threadpool."""
+    from app.core.props import placement_stack_offset_y
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     placements = data.get("props")
@@ -1600,8 +1823,13 @@ async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
     the mesh again. `sway_factor` at its default 1.0 (and any junk) clears the
     key rather than storing it, and `ground_offset_m` does the same at its
     default 0.0 — the prop then simply stands on the ground."""
-    from app.core.props import update_prop
     data = await request.json()
+    return await asyncio.to_thread(_prop_update_sync, prop_id, data)
+
+
+def _prop_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_update`` — runs in the threadpool."""
+    from app.core.props import update_prop
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     prop = update_prop(prop_id, data)
@@ -1649,8 +1877,13 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
 async def prop_rotation(prop_id: str, request: Request) -> Dict[str, Any]:
     """Persist the prop's orientation fix (body: {x,y,z} in degrees, free
     values with 0.1° resolution — the 3D client applies it on load)."""
-    from app.core.props import set_rotation
     data = await request.json()
+    return await asyncio.to_thread(_prop_rotation_sync, prop_id, data)
+
+
+def _prop_rotation_sync(prop_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_rotation`` — runs in the threadpool."""
+    from app.core.props import set_rotation
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     prop = set_rotation(prop_id, data)
@@ -1663,8 +1896,13 @@ async def prop_rotation(prop_id: str, request: Request) -> Dict[str, Any]:
 async def prop_markers(prop_id: str, request: Request) -> Dict[str, Any]:
     """Replace the object-local marker list (body: {markers: [{animation, at:
     [u,v,w], facing?}]}) — same vocabulary as room markers, object-local frame."""
-    from app.core.props import set_markers
     data = await request.json()
+    return await asyncio.to_thread(_prop_markers_sync, prop_id, data)
+
+
+def _prop_markers_sync(prop_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_markers`` — runs in the threadpool."""
+    from app.core.props import set_markers
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     prop = set_markers(prop_id, data.get("markers"))
@@ -1749,10 +1987,15 @@ async def prop_model_select(prop_id: str, request: Request) -> Dict[str, Any]:
     An empty {file} deselects: on the default tier nothing is rendered until
     another one is chosen/generated, on any other tier that tier ceases to
     exist."""
+    data = await request.json()
+    return await asyncio.to_thread(_prop_model_select_sync, prop_id, data)
+
+
+def _prop_model_select_sync(prop_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_model_select`` — runs in the threadpool."""
     from app.core.props import get_prop, select_model
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
-    data = await request.json()
     filename = str((data or {}).get("file") or "").strip()
     tier = _tier((data or {}).get("tier"))
     if not select_model(prop_id, filename, tier=tier):
@@ -2074,8 +2317,16 @@ async def set_location_map_image_route(location_id: str, request: Request) -> Di
     Leerer ``file`` entfernt die Wahl (Fallback auf first-match). Das Bild muss
     in der Galerie des Owners (Template bei Klonen) liegen.
     """
-    from app.models.world import set_location_map_image
     data = await request.json()
+    return await asyncio.to_thread(_set_location_map_image_route_sync,
+                                   location_id, data)
+
+
+def _set_location_map_image_route_sync(location_id: str,
+                                       data: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_location_map_image_route`` — runs in the
+    threadpool."""
+    from app.models.world import set_location_map_image
     image_type = (data.get("type") or "").strip()
     filename = (data.get("file") or "").strip()
     if image_type != "map_2d":
@@ -2093,8 +2344,16 @@ async def set_location_map_rotation_route(location_id: str, request: Request) ->
     Body: ``{"rotation": 0|90|180|270}``. Nur Anzeige (CSS rotate), das Bild
     selbst bleibt unveraendert.
     """
-    from app.models.world import set_location_map_rotation
     data = await request.json()
+    return await asyncio.to_thread(_set_location_map_rotation_route_sync,
+                                   location_id, data)
+
+
+def _set_location_map_rotation_route_sync(location_id: str,
+                                          data: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_location_map_rotation_route`` — runs in the
+    threadpool."""
+    from app.models.world import set_location_map_rotation
     try:
         rotation = int(data.get("rotation", 0))
     except (TypeError, ValueError):
@@ -2144,8 +2403,16 @@ async def generate_location_background(location_name: str, request: Request) -> 
 @router.delete("/locations/{location_name}/background")
 async def delete_location_background(request: Request, location_name: str) -> Dict[str, Any]:
     """Loescht die Hintergrundbild-Referenz eines Ortes (per ID oder Name)."""
+    data = await request.json()
+    return await asyncio.to_thread(_delete_location_background_sync,
+                                   location_name, data)
+
+
+def _delete_location_background_sync(location_name: str,
+                                     data: Any) -> Dict[str, Any]:
+    """The blocking body of ``delete_location_background`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         user_id = data.get("user_id", "").strip()
         return world_ops.clear_location_backgrounds(location_name)
     except HTTPException:
@@ -2388,9 +2655,17 @@ def delete_gallery_image(
 async def move_gallery_image_route(
     location_name: str, image_name: str, request: Request) -> Dict[str, Any]:
     """Verschiebt ein Galerie-Bild in eine andere Location (Datei + Prompt/Typ/Meta)."""
+    body = await request.json()
+    return await asyncio.to_thread(_move_gallery_image_route_sync,
+                                   location_name, image_name, body)
+
+
+def _move_gallery_image_route_sync(location_name: str, image_name: str,
+                                   body: Any) -> Dict[str, Any]:
+    """The blocking body of ``move_gallery_image_route`` — runs in the
+    threadpool."""
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-    body = await request.json()
     target = (body.get("target") or "").strip()
     if not target:
         raise HTTPException(status_code=400, detail="target (Ziel-Location) fehlt")
@@ -2412,6 +2687,14 @@ async def toggle_gallery_background(
     request: Request) -> Dict[str, Any]:
     """Toggled ob ein Galerie-Bild als Hintergrund in Frage kommt."""
     body = await request.json()
+    return await asyncio.to_thread(_toggle_gallery_background_sync,
+                                   location_name, image_name, body)
+
+
+def _toggle_gallery_background_sync(location_name: str, image_name: str,
+                                    body: Any) -> Dict[str, Any]:
+    """The blocking body of ``toggle_gallery_background`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "").strip()
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
@@ -2425,6 +2708,14 @@ async def set_gallery_image_room_route(
     request: Request) -> Dict[str, Any]:
     """Setzt den Raum eines Galerie-Bildes."""
     body = await request.json()
+    return await asyncio.to_thread(_set_gallery_image_room_route_sync,
+                                   location_name, image_name, body)
+
+
+def _set_gallery_image_room_route_sync(location_name: str, image_name: str,
+                                       body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_gallery_image_room_route`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "").strip()
     room_id = body.get("room", "").strip()
     if ".." in image_name or "/" in image_name:
@@ -2439,6 +2730,14 @@ async def set_gallery_image_type_route(
     request: Request) -> Dict[str, Any]:
     """Setzt den Typ eines Galerie-Bildes (day/night/map oder leer)."""
     body = await request.json()
+    return await asyncio.to_thread(_set_gallery_image_type_route_sync,
+                                   location_name, image_name, body)
+
+
+def _set_gallery_image_type_route_sync(location_name: str, image_name: str,
+                                       body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_gallery_image_type_route`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "").strip()
     image_type = body.get("type", "").strip()
     if ".." in image_name or "/" in image_name:
@@ -2488,8 +2787,16 @@ async def set_prompt_changed_flag(
     Body: {"user_id": "...", "room_id": "..." (optional), "value": true/false}
     Ohne room_id wird das Flag auf Location-Ebene gesetzt/entfernt.
     """
+    body = await request.json()
+    return await asyncio.to_thread(_set_prompt_changed_flag_sync,
+                                   location_id, body)
+
+
+def _set_prompt_changed_flag_sync(location_id: str,
+                                  body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_prompt_changed_flag`` — runs in the
+    threadpool."""
     try:
-        body = await request.json()
         user_id = body.get("user_id", "").strip()
         room_id = body.get("room_id", "").strip()
         value = body.get("value", False)

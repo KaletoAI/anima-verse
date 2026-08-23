@@ -506,10 +506,16 @@ async def prompt_filters_save(request: Request, user=Depends(require_admin)):
     Wenn die id auch in shared/prompt_filters/filters.json existiert, ist das
     ein Override. Sonst wird ein neuer world-only Filter angelegt.
     """
-    import json as _json
-    from app.core.db import transaction
 
     body = await request.json()
+    return await asyncio.to_thread(_prompt_filters_save_sync, user, body)
+
+
+def _prompt_filters_save_sync(user, body: Any):
+    """The blocking body of ``prompt_filters_save`` — runs in the
+    threadpool."""
+    import json as _json
+    from app.core.db import transaction
     fid = (body.get("id") or "").strip()
     condition = (body.get("condition") or "").strip()
     label = (body.get("label") or "").strip()
@@ -585,11 +591,18 @@ async def prompt_filters_move(filter_id: str, request: Request, user=Depends(req
         without touching the shared baseline)
       - the shared entry stays put; the world row simply shadows it
     """
+
+    body = await request.json()
+    return await asyncio.to_thread(_prompt_filters_move_sync, filter_id, user,
+                                   body)
+
+
+def _prompt_filters_move_sync(filter_id: str, user, body: Any):
+    """The blocking body of ``prompt_filters_move`` — runs in the
+    threadpool."""
     import json as _json
     from app.core.db import transaction
     from app.core.prompt_filters import _load_shared, _load_world, _SHARED_FILE
-
-    body = await request.json()
     target = (body.get("target") or "").strip().lower()
     if target not in ("shared", "world"):
         raise HTTPException(status_code=400, detail="target must be 'shared' or 'world'")
@@ -973,6 +986,13 @@ def llm_task_state_get(user=Depends(require_admin)):
 async def llm_task_state_runtime_preset(request: Request, user=Depends(require_admin)):
     """Aktiviert ein Preset als Runtime-Disable (nicht persistent)."""
     data = await request.json()
+    return await asyncio.to_thread(_llm_task_state_runtime_preset_sync, user,
+                                   data)
+
+
+def _llm_task_state_runtime_preset_sync(user, data: Any):
+    """The blocking body of ``llm_task_state_runtime_preset`` — runs in the
+    threadpool."""
     preset = (data.get("preset") or "").strip()
     from app.core.llm_task_state import activate_preset_runtime, clear_runtime
     if not preset or preset == "none":
@@ -1151,6 +1171,11 @@ def templates_read(path: str, user=Depends(require_admin)):
 @router.post("/templates/file")
 async def templates_save(request: Request, user=Depends(require_admin)):
     body = await request.json()
+    return await asyncio.to_thread(_templates_save_sync, user, body)
+
+
+def _templates_save_sync(user, body: Any):
+    """The blocking body of ``templates_save`` — runs in the threadpool."""
     path = (body.get("path") or "").strip()
     content = body.get("content")
     if not path or content is None:
@@ -1340,8 +1365,15 @@ async def llm_suitability_test_start(request: Request, user=Depends(require_admi
     """Startet den Eignungstest fuer EIN Modell asynchron im Hintergrund und gibt
     den initialen Status zurueck. Fortschritt/Ergebnis via .../status pollen.
     Das Gesamtergebnis wird am Ende in model_capabilities.json gespeichert."""
-    from app.core.model_suitability import start_test
     body = await request.json()
+    return await asyncio.to_thread(_llm_suitability_test_start_sync,
+                                   user, body)
+
+
+def _llm_suitability_test_start_sync(user, body: Any):
+    """The blocking body of ``llm_suitability_test_start`` — runs in the
+    threadpool."""
+    from app.core.model_suitability import start_test
     provider = str((body or {}).get("provider") or "").strip()
     model = str((body or {}).get("model") or "").strip()
     if not model:
@@ -1384,8 +1416,13 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
 @router.post("/settings/validate")
 async def settings_validate(request: Request, user=Depends(require_admin)):
     """Validate config and return list of issues."""
-    from app.core.config_validator import validate_config
     data = await request.json()
+    return await asyncio.to_thread(_settings_validate_sync, user, data)
+
+
+def _settings_validate_sync(user, data: Any):
+    """The blocking body of ``settings_validate`` — runs in the threadpool."""
+    from app.core.config_validator import validate_config
     issues = validate_config(data)
     return {"issues": issues, "errors": sum(1 for i in issues if i["level"] == "error"), "warnings": sum(1 for i in issues if i["level"] == "warning")}
 
@@ -1564,6 +1601,11 @@ async def agent_loop_bump(request: Request, user=Depends(require_admin)):
     Useful for debugging / forcing immediate attention without forced_thoughts.
     """
     body = await request.json()
+    return await asyncio.to_thread(_agent_loop_bump_sync, user, body)
+
+
+def _agent_loop_bump_sync(user, body: Any):
+    """The blocking body of ``agent_loop_bump`` — runs in the threadpool."""
     name = (body.get("character") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="character required")

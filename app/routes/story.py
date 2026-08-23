@@ -358,6 +358,11 @@ async def play_story_section(request: Request) -> StreamingResponse:
 async def restart_story(request: Request) -> Dict[str, Any]:
     """Loescht den gespeicherten State einer Story (Neustart)."""
     data = await request.json()
+    return await asyncio.to_thread(_restart_story_sync, data)
+
+
+def _restart_story_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``restart_story`` — runs in the threadpool."""
     user_id = data.get("user_id", "")
     character_name = data.get("character_name", "")
     story_filename = data.get("story_filename", "")
@@ -382,8 +387,13 @@ def get_story_raw(filename: str) -> Dict[str, Any]:
 @router.put("/raw/{filename}")
 async def save_story_raw(filename: str, request: Request) -> Dict[str, Any]:
     """Speichert den bearbeiteten Markdown-Inhalt einer Story."""
-    STORIES_DIR = _get_storage_dir() / "stories"
     data = await request.json()
+    return await asyncio.to_thread(_save_story_raw_sync, filename, data)
+
+
+def _save_story_raw_sync(filename: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``save_story_raw`` — runs in the threadpool."""
+    STORIES_DIR = _get_storage_dir() / "stories"
     content = data.get("content", "")
     if not content.strip():
         raise HTTPException(status_code=400, detail="Leerer Inhalt")

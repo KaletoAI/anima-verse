@@ -47,7 +47,13 @@ async def create_route(request: Request) -> Dict[str, Any]:
     If no explicit trigger is given but a location_id is, the intent fires
     on entering that location; otherwise it is a standing intent.
     """
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_create_route_sync, data)
+
+
+def _create_route_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``create_route`` — runs in the threadpool."""
     title = (data.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
@@ -94,7 +100,13 @@ async def create_route(request: Request) -> Dict[str, Any]:
 
 @router.patch("/{intent_id}")
 async def patch_route(intent_id: str, request: Request) -> Dict[str, Any]:
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_patch_route_sync, intent_id, data)
+
+
+def _patch_route_sync(intent_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``patch_route`` — runs in the threadpool."""
     result = update_intent(intent_id, **data)
     if not result:
         raise HTTPException(status_code=404, detail="Intent not found")
@@ -124,7 +136,13 @@ def complete_route(intent_id: str) -> Dict[str, str]:
 
 @router.post("/{intent_id}/progress")
 async def progress_route(intent_id: str, request: Request) -> Dict[str, Any]:
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_progress_route_sync, intent_id, data)
+
+
+def _progress_route_sync(intent_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``progress_route`` — runs in the threadpool."""
     character = (data.get("character") or "").strip()
     note = (data.get("note") or "").strip()
     if not character or not note:

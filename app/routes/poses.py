@@ -138,7 +138,13 @@ def list_entries(axis: str = Query("pose"),
 async def create_entry(request: Request,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Creates a catalog entry on the given axis."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_create_entry_sync, _, body)
+
+
+def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
+    """The blocking body of ``create_entry`` — runs in the threadpool."""
     axis = _axis(body.get("axis") or "pose")
     key = _key(body.get("key"))
     prompt = str(body.get("prompt") or "").strip()
@@ -166,13 +172,20 @@ async def create_entry(request: Request,
 async def update_entry(key: str, request: Request, axis: str = Query("pose"),
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Updates prompt / synonyms / animation / solo of a catalog entry."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_update_entry_sync, key, axis, _, body)
+
+
+def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
+                       body: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_entry`` — runs in the threadpool."""
     axis = _axis(axis)
     key = key.strip().lower()
     data = _read(axis)
     entry = data["entries"].get(key)
     if entry is None:
         raise HTTPException(status_code=404, detail="Entry not found")
-    body = await request.json()
     if "prompt" in body:
         entry["prompt"] = str(body["prompt"] or "").strip()
     if "synonyms" in body:
@@ -238,7 +251,13 @@ async def approve_candidate(request: Request,
     deleted afterwards: it resolves now, and if it still does not, the miss
     has to show up again instead of hiding behind a terminal status.
     """
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_approve_candidate_sync, _, body)
+
+
+def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
+    """The blocking body of ``approve_candidate`` — runs in the threadpool."""
     axis = _axis(body.get("axis") or "pose")
     raw_text = str(body.get("raw_text") or "").strip().lower()
     if not raw_text:
@@ -297,7 +316,13 @@ async def dismiss_candidate(request: Request,
                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Marks a candidate as ``dismissed`` — it stays recorded but never shows
     up in the open list again."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_dismiss_candidate_sync, _, body)
+
+
+def _dismiss_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
+    """The blocking body of ``dismiss_candidate`` — runs in the threadpool."""
     axis = _axis(body.get("axis") or "pose")
     raw_text = str(body.get("raw_text") or "").strip().lower()
     if not raw_text:

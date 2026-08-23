@@ -148,7 +148,13 @@ def like_post(post_id: str, liker_name: str = "") -> Dict[str, Any]:
 @router.post("/post/{post_id}/comment")
 async def comment_post(post_id: str, request: Request) -> Dict[str, Any]:
     """Fuegt einen Kommentar zu einem Post hinzu."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_comment_post_sync, post_id, data)
+
+
+def _comment_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``comment_post`` — runs in the threadpool."""
     user_id = data.get("user_id", "")
     commenter_name = data.get("commenter_name", "").strip()
     text = data.get("text", "").strip()
@@ -201,10 +207,17 @@ async def comment_post(post_id: str, request: Request) -> Dict[str, Any]:
 @router.post("/post/{post_id}/detect-characters")
 async def detect_post_characters(post_id: str, request: Request) -> Dict[str, Any]:
     """Erkennt im Post verwendete Characters aus reference_images Metadaten."""
-    from app.models.character import list_available_characters
-    from app.models.account import get_active_character
+    import asyncio
 
     data = await request.json()
+    return await asyncio.to_thread(_detect_post_characters_sync, post_id, data)
+
+
+def _detect_post_characters_sync(post_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``detect_post_characters`` — runs in the
+    threadpool."""
+    from app.models.character import list_available_characters
+    from app.models.account import get_active_character
     user_id = data.get("user_id", "")
 
     post = get_post(post_id)
@@ -267,10 +280,17 @@ async def detect_post_characters(post_id: str, request: Request) -> Dict[str, An
 @router.post("/post/{post_id}/regenerate")
 async def regenerate_post_image(post_id: str, request: Request):
     """Regenerates a post image via the core image-service pipeline."""
-    from app.skills.image_regenerate import regenerate_image
-    from app.models.character import get_character_config
+    import asyncio
 
     data = await request.json()
+    return await asyncio.to_thread(_regenerate_post_image_sync, post_id, data)
+
+
+def _regenerate_post_image_sync(post_id: str, data: Any):
+    """The blocking body of ``regenerate_post_image`` — runs in the
+    threadpool."""
+    from app.skills.image_regenerate import regenerate_image
+    from app.models.character import get_character_config
     user_id = data.get("user_id", "")
 
     post = get_post(post_id)
@@ -450,7 +470,14 @@ async def suggest_instagram_animate_prompt(post_id: str, request: Request) -> Di
 @router.post("/post/{post_id}/animate")
 async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, Any]:
     """Animates an Instagram image as a video."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_animate_instagram_post_sync, post_id, data)
+
+
+def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``animate_instagram_post`` — runs in the
+    threadpool."""
     user_id = data.get("user_id", "")
 
     post = get_post(post_id)

@@ -31,7 +31,13 @@ async def save_config_route(request: Request):
     Fields are normalised (unknown skill keys dropped, invalid modes
     coerced to the default ``rp_first``).
     """
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_save_config_route_sync, body)
+
+
+def _save_config_route_sync(body):
+    """The blocking body of ``save_config_route`` — runs in the threadpool."""
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be a JSON object")
     saved = save_storyteller_config(body)

@@ -119,7 +119,14 @@ def delete_gallery_image(filename: str) -> Dict[str, str]:
 @router.post("/{filename}/comment")
 async def save_gallery_comment(filename: str, request: Request) -> Dict[str, str]:
     """Speichert einen Kommentar fuer ein User-Galerie-Bild."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_save_gallery_comment_sync, filename, data)
+
+
+def _save_gallery_comment_sync(filename: str, data: Any) -> Dict[str, str]:
+    """The blocking body of ``save_gallery_comment`` — runs in the
+    threadpool."""
     comment = data.get("comment", "")
     save_user_gallery_comment(filename, comment)
     return {"status": "success"}

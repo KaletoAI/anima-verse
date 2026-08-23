@@ -77,12 +77,18 @@ async def write_image(
     Because this write comes from outside (not internal generation), the sidecar
     JSON is automatically marked postprocessed=true.
     """
+    import asyncio
+
+    data = await request.body()
+    return await asyncio.to_thread(_write_image_sync, path, x_api_key, data)
+
+
+def _write_image_sync(path: str, x_api_key: Optional[str], data):
+    """The blocking body of ``write_image`` — runs in the threadpool."""
     _require_api_key(x_api_key)
     target = _resolve_in_storage(path)
     if not target.parent.is_dir():
         raise HTTPException(status_code=404, detail="target directory not found")
-
-    data = await request.body()
     if not data:
         raise HTTPException(status_code=400, detail="empty body")
 

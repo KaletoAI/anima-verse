@@ -34,7 +34,15 @@ def get_template_route(template_name: str) -> Dict[str, Any]:
 @router.post("/{template_name}")
 async def save_template_route(template_name: str, request: Request) -> Dict[str, Any]:
     """Create or update a template."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_save_template_route_sync, template_name,
+                                   body)
+
+
+def _save_template_route_sync(template_name: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``save_template_route`` — runs in the
+    threadpool."""
     template = body.get("template")
 
     if not template:

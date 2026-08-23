@@ -26,7 +26,16 @@ async def create_secret_route(
     character_name: str,
     request: Request) -> Dict[str, Any]:
     """Erstellt ein neues Geheimnis."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_create_secret_route_sync, character_name,
+                                   body)
+
+
+def _create_secret_route_sync(character_name: str,
+                              body: Any) -> Dict[str, Any]:
+    """The blocking body of ``create_secret_route`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "")
     content = body.get("content", "").strip()
 
@@ -98,7 +107,16 @@ async def update_secret_route(
     secret_id: str,
     request: Request) -> Dict[str, Any]:
     """Aktualisiert ein Geheimnis."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_update_secret_route_sync, character_name,
+                                   secret_id, body)
+
+
+def _update_secret_route_sync(character_name: str, secret_id: str,
+                              body: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_secret_route`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "")
 
     updates = {k: v for k, v in body.items() if k != "user_id"}

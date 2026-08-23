@@ -22,7 +22,14 @@ def get_world_setup_route():
 @router.put("")
 async def save_world_setup_route(request: Request):
     """Persist the world setup. Body: ``{"description": "..."}``."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_save_world_setup_route_sync, body)
+
+
+def _save_world_setup_route_sync(body):
+    """The blocking body of ``save_world_setup_route`` — runs in the
+    threadpool."""
     description = body.get("description")
     if description is not None and not isinstance(description, str):
         raise HTTPException(status_code=400, detail="description must be a string")

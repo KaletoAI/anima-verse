@@ -61,8 +61,15 @@ def export_item_route(item_id: str) -> StreamingResponse:
 @router.post("/items/export-bundle")
 async def export_items_bundle_route(request: Request) -> StreamingResponse:
     """Bundle multiple items into one ZIP. Body: {"item_ids": [...]}"""
-    from app.core.content_io import export_items_to_bundle_zip
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_export_items_bundle_route_sync, body)
+
+
+def _export_items_bundle_route_sync(body: Any) -> StreamingResponse:
+    """The blocking body of ``export_items_bundle_route`` — runs in the
+    threadpool."""
+    from app.core.content_io import export_items_to_bundle_zip
     ids = body.get("item_ids") or []
     if not isinstance(ids, list) or not ids:
         raise HTTPException(status_code=400, detail="item_ids must be a non-empty list")
@@ -111,8 +118,16 @@ async def import_item_route(
 
 @router.post("/items/{item_id}/move-to-shared")
 async def move_item_to_shared_route(item_id: str, request: Request) -> Dict[str, Any]:
-    from app.models.inventory import move_item_to_shared
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_move_item_to_shared_route_sync, item_id,
+                                   body)
+
+
+def _move_item_to_shared_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``move_item_to_shared_route`` — runs in the
+    threadpool."""
+    from app.models.inventory import move_item_to_shared
     user_id = (body.get("user_id") or "").strip()
     result = move_item_to_shared(item_id)
     if result.get("status") != "ok":
@@ -122,8 +137,16 @@ async def move_item_to_shared_route(item_id: str, request: Request) -> Dict[str,
 
 @router.post("/items/{item_id}/move-to-world")
 async def move_item_to_world_route(item_id: str, request: Request) -> Dict[str, Any]:
-    from app.models.inventory import move_item_to_world
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_move_item_to_world_route_sync, item_id,
+                                   body)
+
+
+def _move_item_to_world_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``move_item_to_world_route`` — runs in the
+    threadpool."""
+    from app.models.inventory import move_item_to_world
     user_id = (body.get("user_id") or "").strip()
     result = move_item_to_world(item_id)
     if result.get("status") != "ok":
@@ -144,7 +167,13 @@ def get_item_route(
 @router.post("/items")
 async def create_item_route(request: Request) -> Dict[str, Any]:
     """Erstellt ein neues Item."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_create_item_route_sync, body)
+
+
+def _create_item_route_sync(body: Any) -> Dict[str, Any]:
+    """The blocking body of ``create_item_route`` — runs in the threadpool."""
     user_id = body.get("user_id", "")
     name = body.get("name", "").strip()
 
@@ -188,7 +217,13 @@ async def create_item_route(request: Request) -> Dict[str, Any]:
 @router.put("/items/{item_id}")
 async def update_item_route(item_id: str, request: Request) -> Dict[str, Any]:
     """Aktualisiert ein Item."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_update_item_route_sync, item_id, body)
+
+
+def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_item_route`` — runs in the threadpool."""
     user_id = body.get("user_id", "")
 
     # Altes prompt_fragment festhalten — Variant-Invalidierung nur wenn sich
@@ -570,7 +605,16 @@ async def add_room_item_route(
     room_id: str,
     request: Request) -> Dict[str, Any]:
     """Platziert ein Item in einem Raum."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_add_room_item_route_sync, location_id,
+                                   room_id, body)
+
+
+def _add_room_item_route_sync(location_id: str, room_id: str,
+                              body: Any) -> Dict[str, Any]:
+    """The blocking body of ``add_room_item_route`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "")
     item_id = body.get("item_id", "")
     if not item_id:
@@ -622,7 +666,16 @@ async def add_inventory_item_route(
     character_name: str,
     request: Request) -> Dict[str, Any]:
     """Fuegt ein Item zum Character-Inventar hinzu."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_add_inventory_item_route_sync,
+                                   character_name, body)
+
+
+def _add_inventory_item_route_sync(character_name: str,
+                                   body: Any) -> Dict[str, Any]:
+    """The blocking body of ``add_inventory_item_route`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "")
     item_id = body.get("item_id", "")
     if not item_id:
@@ -645,7 +698,16 @@ async def update_inventory_item_route(
     item_id: str,
     request: Request) -> Dict[str, Any]:
     """Aktualisiert einen Inventar-Eintrag (equipped, notes)."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_update_inventory_item_route_sync,
+                                   character_name, item_id, body)
+
+
+def _update_inventory_item_route_sync(character_name: str, item_id: str,
+                                      body: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_inventory_item_route`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "")
 
     updates = {k: v for k, v in body.items() if k != "user_id"}
@@ -675,8 +737,17 @@ async def use_inventory_item_route(
 
     Body: { user_id }
     """
-    from app.models.inventory import consume_item, get_item
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_use_inventory_item_route_sync,
+                                   character_name, item_id, body)
+
+
+def _use_inventory_item_route_sync(character_name: str, item_id: str,
+                                   body: Any) -> Dict[str, Any]:
+    """The blocking body of ``use_inventory_item_route`` — runs in the
+    threadpool."""
+    from app.models.inventory import consume_item, get_item
     user_id = body.get("user_id", "")
     item = get_item(item_id)
     if not item:
@@ -736,8 +807,17 @@ async def give_inventory_item_route(
     Body: { user_id, to_character }
     Returns: { ok, boost, item_name, rarity }
     """
-    from app.models.inventory import gift_item
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_give_inventory_item_route_sync,
+                                   character_name, item_id, body)
+
+
+def _give_inventory_item_route_sync(character_name: str, item_id: str,
+                                    body: Any) -> Dict[str, Any]:
+    """The blocking body of ``give_inventory_item_route`` — runs in the
+    threadpool."""
+    from app.models.inventory import gift_item
     user_id = body.get("user_id", "")
     to_character = (body.get("to_character") or "").strip()
     if not to_character:
@@ -759,8 +839,17 @@ async def pickup_inventory_item_route(
     Body: { user_id, location_id, room_id, item_id, quantity? }
     Returns: { ok, item_name }
     """
-    from app.models.inventory import pick_up_item
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_pickup_inventory_item_route_sync,
+                                   character_name, body)
+
+
+def _pickup_inventory_item_route_sync(character_name: str,
+                                      body: Any) -> Dict[str, Any]:
+    """The blocking body of ``pickup_inventory_item_route`` — runs in the
+    threadpool."""
+    from app.models.inventory import pick_up_item
     location_id = (body.get("location_id") or "").strip()
     room_id = (body.get("room_id") or "").strip()
     item_id = (body.get("item_id") or "").strip()
@@ -783,8 +872,17 @@ async def drop_inventory_item_route(
     Body: { user_id, location_id, room_id, quantity? }
     Returns: { ok, item_name }
     """
-    from app.models.inventory import drop_item
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_drop_inventory_item_route_sync,
+                                   character_name, item_id, body)
+
+
+def _drop_inventory_item_route_sync(character_name: str, item_id: str,
+                                    body: Any) -> Dict[str, Any]:
+    """The blocking body of ``drop_inventory_item_route`` — runs in the
+    threadpool."""
+    from app.models.inventory import drop_item
     location_id = (body.get("location_id") or "").strip()
     room_id = (body.get("room_id") or "").strip()
     quantity = int(body.get("quantity") or 1)
@@ -826,9 +924,15 @@ async def equip_route(character_name: str, request: Request) -> Dict[str, Any]:
     Pieces (category=outfit_piece) werden in ihren Slot equipped, alle
     anderen Items in equipped_items.
     """
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_equip_route_sync, character_name, body)
+
+
+def _equip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``equip_route`` — runs in the threadpool."""
     from app.models.inventory import (
         get_item, equip_piece, equip_item)
-    body = await request.json()
     user_id = (body.get("user_id") or "").strip()
     item_id = (body.get("item_id") or "").strip()
     if not item_id:
@@ -862,8 +966,14 @@ async def unequip_route(character_name: str, request: Request) -> Dict[str, Any]
       - {"user_id": "...", "item_id": "..."} — gezielt das Item entfernen
         (sucht erst in equipped_pieces, dann in equipped_items)
     """
-    from app.models.inventory import unequip_piece, unequip_item
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_unequip_route_sync, character_name, body)
+
+
+def _unequip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``unequip_route`` — runs in the threadpool."""
+    from app.models.inventory import unequip_piece, unequip_item
     user_id = (body.get("user_id") or "").strip()
     slot = (body.get("slot") or "").strip()
     item_id = (body.get("item_id") or "").strip()
@@ -915,8 +1025,17 @@ async def apply_equipped_route(character_name: str, request: Request) -> Dict[st
     Slots die belegt sind aber nicht in pieces auftauchen, werden ebenfalls
     geleert (pieces ist der vollstaendige Soll-State).
     """
-    from app.models.inventory import apply_equipped_pieces
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_apply_equipped_route_sync, character_name,
+                                   body)
+
+
+def _apply_equipped_route_sync(character_name: str,
+                               body: Any) -> Dict[str, Any]:
+    """The blocking body of ``apply_equipped_route`` — runs in the
+    threadpool."""
+    from app.models.inventory import apply_equipped_pieces
     user_id = (body.get("user_id") or "").strip()
     pieces = body.get("pieces") or {}
     remove_slots = body.get("remove_slots") or []
@@ -945,9 +1064,18 @@ async def apply_outfit_set_route(character_name: str, request: Request) -> Dict[
 
     Equipped jedes Piece aus outfit.pieces[].
     """
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_apply_outfit_set_route_sync,
+                                   character_name, body)
+
+
+def _apply_outfit_set_route_sync(character_name: str,
+                                 body: Any) -> Dict[str, Any]:
+    """The blocking body of ``apply_outfit_set_route`` — runs in the
+    threadpool."""
     from app.models.character import get_character_outfits
     from app.models.inventory import apply_equipped_pieces, get_item
-    body = await request.json()
     outfit_id = (body.get("outfit_id") or "").strip()
     name = (body.get("name") or "").strip()
     # user_id wird hier nicht verwendet — kein Pflicht-Guard (konsistent zu

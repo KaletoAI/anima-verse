@@ -140,6 +140,11 @@ def list_events_route(lang: str = "en") -> Dict[str, Any]:
 async def create_event_route(request: Request) -> Dict[str, Any]:
     """Creates a new event."""
     body = await request.json()
+    return await asyncio.to_thread(_create_event_route_sync, body)
+
+
+def _create_event_route_sync(body: Any) -> Dict[str, Any]:
+    """The blocking body of ``create_event_route`` — runs in the threadpool."""
     text = body.get("text", "").strip()
     location_id = body.get("location_id") or None
     # category: ambient | social | disruption | danger (empty = uncategorized).

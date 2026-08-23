@@ -80,7 +80,13 @@ def get_style() -> Dict[str, str]:
 @router.put("/style")
 async def set_style(request: Request) -> Dict[str, Any]:
     """Set the user's notification style preference."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_set_style_sync, body)
+
+
+def _set_style_sync(body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_style`` — runs in the threadpool."""
     user_id = body.get("user_id", "")
     style = body.get("style", "modern")
     if style not in ("modern", "medieval", "magical"):

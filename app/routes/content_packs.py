@@ -987,7 +987,14 @@ async def export_collection_route(request: Request) -> Response:
     Entries are exported through the same dispatcher the publish route uses;
     executable packages and nested collections are not exportable content.
     """
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_export_collection_route_sync, body)
+
+
+def _export_collection_route_sync(body: Any) -> Response:
+    """The blocking body of ``export_collection_route`` — runs in the
+    threadpool."""
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     name = (body.get("name") or "").strip()
@@ -1043,7 +1050,14 @@ def list_skill_packages() -> Dict[str, Any]:
 async def remove_skill_package_route(request: Request) -> Dict[str, Any]:
     """Body: {"package_id": "..."} — delete an installed skill package and
     reload skills (R7: folder removal is complete)."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_remove_skill_package_route_sync, body)
+
+
+def _remove_skill_package_route_sync(body: Any) -> Dict[str, Any]:
+    """The blocking body of ``remove_skill_package_route`` — runs in the
+    threadpool."""
     pkg_id = (body.get("package_id") or "").strip()
     if not pkg_id:
         raise HTTPException(status_code=400, detail="package_id required")

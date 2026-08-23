@@ -292,8 +292,17 @@ def get_character_current_feeling_route(character_name: str) -> Dict[str, Any]:
 @router.post("/{character_name}/current-feeling")
 async def update_character_current_feeling(character_name: str, request: Request) -> Dict[str, Any]:
     """Aktualisiert das aktuelle Gefuehl"""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_update_character_current_feeling_sync,
+                                   character_name, data)
+
+
+def _update_character_current_feeling_sync(character_name: str,
+                                           data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_character_current_feeling`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         user_id = data.get("user_id", "")
         feeling = data.get("current_feeling", "")
 
@@ -333,8 +342,17 @@ async def switch_template_route(character_name: str, request: Request) -> Dict[s
     mode="diff": Gibt nur den Diff zurueck (keine Aenderung)
     mode="apply": Fuehrt den Wechsel durch (neue Defaults setzen, alte Felder loeschen)
     """
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_switch_template_route_sync,
+                                   character_name, data)
+
+
+def _switch_template_route_sync(character_name: str,
+                                data: Any) -> Dict[str, Any]:
+    """The blocking body of ``switch_template_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         return character_ops.apply_template_switch(character_name, data)
     except HTTPException:
         raise
@@ -361,8 +379,17 @@ def get_home_location_route(
 @router.post("/{character_name}/home-location")
 async def save_home_location_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Speichert Home-Location und Home-Room eines Characters."""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_save_home_location_route_sync,
+                                   character_name, data)
+
+
+def _save_home_location_route_sync(character_name: str,
+                                   data: Any) -> Dict[str, Any]:
+    """The blocking body of ``save_home_location_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         user_id = data.get("user_id", "").strip()
         if not character_name:
             raise HTTPException(status_code=400, detail="user_id und character_name fehlen")
@@ -454,8 +481,17 @@ async def set_decency_preference(character_name: str, request: Request) -> Dict[
     """Speichert die free-text decency_preference (z.B. "often barefoot, no
     underwear"). Reiner Stil-Hinweis fuer die Outfit-Erstellung — Bedeckung
     entscheidet Decency."""
-    from app.models.character import get_character_profile, save_character_profile
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_set_decency_preference_sync,
+                                   character_name, body)
+
+
+def _set_decency_preference_sync(character_name: str,
+                                 body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_decency_preference`` — runs in the
+    threadpool."""
+    from app.models.character import get_character_profile, save_character_profile
     pref = str((body or {}).get("decency_preference") or "").strip()
     profile = get_character_profile(character_name) or {}
     if pref:
@@ -489,8 +525,17 @@ async def add_character_outfit_route(character_name: str, request: Request) -> D
 
     Akzeptiert neues Format: {user_id, id?, name, outfit, locations[], activities[]}
     """
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_add_character_outfit_route_sync,
+                                   character_name, data)
+
+
+def _add_character_outfit_route_sync(character_name: str,
+                                     data: Any) -> Dict[str, Any]:
+    """The blocking body of ``add_character_outfit_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         user_id = data.get("user_id", "")
 
         outfit_data = {
@@ -528,8 +573,17 @@ def delete_character_route(character_name: str) -> Dict[str, Any]:
 @router.delete("/{character_name}/outfits")
 async def delete_character_outfit_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Loescht ein Outfit per ID."""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_delete_character_outfit_route_sync,
+                                   character_name, data)
+
+
+def _delete_character_outfit_route_sync(character_name: str,
+                                        data: Any) -> Dict[str, Any]:
+    """The blocking body of ``delete_character_outfit_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         user_id = data.get("user_id", "")
         outfit_id = data.get("id", "")
         if not outfit_id:
@@ -584,8 +638,17 @@ async def generate_all_outfit_images_route(character_name: str, request: Request
     Verwendet die gleiche Pipeline wie generate_outfit_image_route,
     aber fuer jedes Outfit einzeln. Laeuft im Hintergrund ueber die Task-Queue.
     """
-    import threading
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_generate_all_outfit_images_route_sync,
+                                   character_name, data)
+
+
+def _generate_all_outfit_images_route_sync(character_name: str,
+                                           data: Any) -> Dict[str, Any]:
+    """The blocking body of ``generate_all_outfit_images_route`` — runs in the
+    threadpool."""
+    import threading
     user_id = data.get("user_id", "")
 
     outfits = get_character_outfits(character_name)
@@ -654,8 +717,17 @@ def get_outfit_lock_route(character_name: str) -> Dict[str, Any]:
 @router.post("/{character_name}/outfit-lock")
 async def set_outfit_lock_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Setzt/entfernt die Outfit-Sperre (blockiert Auto-Outfit-Aenderungen)."""
-    from app.models.character import set_outfit_locked, is_outfit_locked
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_set_outfit_lock_route_sync, character_name,
+                                   data)
+
+
+def _set_outfit_lock_route_sync(character_name: str,
+                                data: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_outfit_lock_route`` — runs in the
+    threadpool."""
+    from app.models.character import set_outfit_locked, is_outfit_locked
     user_id = data.get("user_id", "").strip()
     locked = bool(data.get("locked"))
     set_outfit_locked(character_name, locked)
@@ -674,8 +746,17 @@ def get_decency_exempt_route(character_name: str) -> Dict[str, Any]:
 async def set_decency_exempt_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Setzt/entfernt decency_exempt. Gesetzt = Decency-Regeln aufgehoben
     (nude_ok), unabhaengig von Anwesenheit. Compliance reagiert sofort."""
-    from app.models.character import set_decency_exempt, get_state_flags
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_set_decency_exempt_route_sync,
+                                   character_name, data)
+
+
+def _set_decency_exempt_route_sync(character_name: str,
+                                   data: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_decency_exempt_route`` — runs in the
+    threadpool."""
+    from app.models.character import set_decency_exempt, get_state_flags
     exempt = bool(data.get("exempt"))
     set_decency_exempt(character_name, exempt)
     try:
@@ -698,8 +779,17 @@ def get_default_outfit_route(character_name: str) -> Dict[str, Any]:
 @router.post("/{character_name}/default-outfit")
 async def update_default_outfit(character_name: str, request: Request) -> Dict[str, Any]:
     """Aktualisiert das Default-Outfit"""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_update_default_outfit_sync,
+                                   character_name, data)
+
+
+def _update_default_outfit_sync(character_name: str,
+                                data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_default_outfit`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         user_id = data.get("user_id", "")
         outfit = data.get("default_outfit", "")
 
@@ -980,8 +1070,17 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
 @router.delete("/{character_name}/outfit-expression/cache")
 async def clear_outfit_expression_cache_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Clears the expression image cache for a character."""
-    from app.core.expression_regen import clear_expression_cache
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_clear_outfit_expression_cache_route_sync,
+                                   character_name, data)
+
+
+def _clear_outfit_expression_cache_route_sync(character_name: str,
+                                              data: Any) -> Dict[str, Any]:
+    """The blocking body of ``clear_outfit_expression_cache_route`` —
+    runs in the threadpool."""
+    from app.core.expression_regen import clear_expression_cache
     user_id = data.get("user_id", "")
     count = clear_expression_cache(character_name)
     return {"status": "success", "cleared": count}
@@ -1045,7 +1144,16 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
 async def set_outfit_imagegen_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Speichert Workflow/Model/LoRA-Override fuer den Outfit-Image-Service.
     Alle Felder leer loescht den Override komplett."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_set_outfit_imagegen_route_sync,
+                                   character_name, body)
+
+
+def _set_outfit_imagegen_route_sync(character_name: str,
+                                    body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_outfit_imagegen_route`` — runs in the
+    threadpool."""
     return character_ops.apply_outfit_imagegen(character_name, body)
 
 
@@ -1065,8 +1173,17 @@ async def resolve_tokens_route(character_name: str, request: Request) -> Dict[st
     backend source. Only tokens a template field declares via a replacement
     block targeting target_key resolve; anything else stays literal.
     """
-    from app.models.character_template import resolve_profile_tokens, get_template
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_resolve_tokens_route_sync, character_name,
+                                   data)
+
+
+def _resolve_tokens_route_sync(character_name: str,
+                               data: Any) -> Dict[str, Any]:
+    """The blocking body of ``resolve_tokens_route`` — runs in the
+    threadpool."""
+    from app.models.character_template import resolve_profile_tokens, get_template
     text = str(data.get("text", "") or "")
     target_key = str(data.get("target_key", "") or "character_appearance")
     profile = get_character_profile(character_name)
@@ -1096,8 +1213,17 @@ def get_active_conditions_route(character_name: str) -> Dict[str, Any]:
 @router.post("/{character_name}/profile")
 async def update_profile_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Aktualisiert Character-Profil Felder (bulk update)"""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_update_profile_route_sync,
+                                   character_name, data)
+
+
+def _update_profile_route_sync(character_name: str,
+                               data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_profile_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         return character_ops.apply_profile_update(character_name, data)
     except HTTPException:
         raise
@@ -1117,8 +1243,17 @@ def get_config_route(character_name: str) -> Dict[str, Any]:
 @router.post("/{character_name}/config")
 async def update_config_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Aktualisiert Character-Config Felder (bulk update)"""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_update_config_route_sync,
+                                   character_name, data)
+
+
+def _update_config_route_sync(character_name: str,
+                              data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_config_route`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         return character_ops.apply_config_update(character_name, data)
     except HTTPException:
         raise
@@ -1427,10 +1562,19 @@ async def generate_character_model_refs(character_name: str,
 async def set_character_model_refs_auto(character_name: str, request: Request) -> Dict[str, Any]:
     """Per-image toggles for the automatic outfit-change render
     (body: {tpose?: bool, pose?: bool})."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_set_character_model_refs_auto_sync,
+                                   character_name, body)
+
+
+def _set_character_model_refs_auto_sync(character_name: str,
+                                        body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_character_model_refs_auto`` — runs in the
+    threadpool."""
     from app.core.model_refs import set_auto_kinds
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
-    body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     return {"auto": set_auto_kinds(character_name, body)}
@@ -1531,8 +1675,17 @@ async def upload_character_model3d(character_name: str, request: Request) -> Dic
 @router.post("/{character_name}/model3d/rig")
 async def set_character_model3d_rig(character_name: str, request: Request) -> Dict[str, Any]:
     """Updates the rig of the current outfit's model (mixamo|generic)."""
-    from app.core.model3d import set_model3d_rig
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_set_character_model3d_rig_sync,
+                                   character_name, body)
+
+
+def _set_character_model3d_rig_sync(character_name: str,
+                                    body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_character_model3d_rig`` — runs in the
+    threadpool."""
+    from app.core.model3d import set_model3d_rig
     rig = str(body.get("rig") or "").strip().lower()
     if rig not in MODEL_RIG_VALUES:
         raise HTTPException(status_code=400,
@@ -1651,10 +1804,19 @@ async def set_character_model3d_options(character_name: str, request: Request) -
     backend's configured default applies again) and/or
     {"auto_generate": true|false} (generate the mesh automatically on the
     cheapest backend once a new combination's T-pose render succeeded)."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_set_character_model3d_options_sync,
+                                   character_name, body)
+
+
+def _set_character_model3d_options_sync(character_name: str,
+                                        body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_character_model3d_options`` — runs in the
+    threadpool."""
     from app.core.model3d import set_model3d_options
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
-    body = await request.json()
     if not isinstance(body, dict) or not (
             "no_fingers" in body or "auto_generate" in body):
         raise HTTPException(status_code=400,
@@ -1911,8 +2073,17 @@ def stop_character_outfit_batch(character_name: str) -> Dict[str, Any]:
 @router.post("/{character_name}/images/{image_filename}/comment")
 async def save_image_comment_endpoint(character_name: str, image_filename: str, request: Request) -> Dict[str, Any]:
     """Speichert einen Kommentar fuer ein Bild"""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_save_image_comment_endpoint_sync,
+                                   character_name, image_filename, body)
+
+
+def _save_image_comment_endpoint_sync(character_name: str, image_filename: str,
+                                      body: Any) -> Dict[str, Any]:
+    """The blocking body of ``save_image_comment_endpoint`` — runs in the
+    threadpool."""
     try:
-        body = await request.json()
         comment = body.get("comment", "")
         add_character_image_comment(character_name, image_filename, comment)
         return {"status": "success"}
@@ -2034,7 +2205,15 @@ def get_body_slots(character_name: str) -> Dict[str, Any]:
 @router.post("/{character_name}/body-slots/{slot_id}")
 async def save_body_slot(character_name: str, slot_id: str, request: Request) -> Dict[str, Any]:
     """Stores attribute values for one declared slot. Body: {"values": {attr: value}}."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_save_body_slot_sync, character_name,
+                                   slot_id, data)
+
+
+def _save_body_slot_sync(character_name: str, slot_id: str,
+                         data: Any) -> Dict[str, Any]:
+    """The blocking body of ``save_body_slot`` — runs in the threadpool."""
     values = data.get("values") if isinstance(data, dict) else None
     if not isinstance(values, dict):
         raise HTTPException(status_code=400, detail="values object required")
@@ -2090,8 +2269,17 @@ async def save_soul_file(character_name: str, section_id: str, request: Request)
 @router.put("/{character_name}/skills/{skill_name}/enabled")
 async def toggle_character_skill(character_name: str, skill_name: str, request: Request) -> Dict[str, Any]:
     """Toggles a skill enabled/disabled for a character."""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_toggle_character_skill_sync,
+                                   character_name, skill_name, data)
+
+
+def _toggle_character_skill_sync(character_name: str, skill_name: str,
+                                 data: Any) -> Dict[str, Any]:
+    """The blocking body of ``toggle_character_skill`` — runs in the
+    threadpool."""
     try:
-        data = await request.json()
         user_id = data.get("user_id", "")
         enabled = data.get("enabled", True)
 
@@ -2134,8 +2322,18 @@ def get_character_skill_config_route(character_name: str, skill_name: str) -> Di
 @router.post("/{character_name}/skills/{skill_name}")
 async def update_character_skill_config_route(character_name: str, skill_name: str, request: Request) -> Dict[str, Any]:
     """Speichert die character-spezifische Skill-Konfiguration (Merge)."""
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(_update_character_skill_config_route_sync,
+                                   character_name, skill_name, data)
+
+
+def _update_character_skill_config_route_sync(character_name: str,
+                                              skill_name: str,
+                                              data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_character_skill_config_route`` —
+    runs in the threadpool."""
     try:
-        data = await request.json()
         user_id = data.get("user_id", "")
         config = data.get("config", {})
         if not isinstance(config, dict):
@@ -2173,7 +2371,16 @@ async def regenerate_character_image(character_name: str, image_name: str, reque
     Nutzt den gespeicherten Prompt, optional verbessert durch User-Feedback,
     und generiert ein neues Bild das das alte ersetzt.
     """
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_regenerate_character_image_sync,
+                                   character_name, image_name, body)
+
+
+def _regenerate_character_image_sync(character_name: str, image_name: str,
+                                     body: Any) -> Dict[str, Any]:
+    """The blocking body of ``regenerate_character_image`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "")
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail=f"Ungueltiger Dateiname: {image_name}")
@@ -2264,7 +2471,16 @@ async def suggest_animate_prompt(character_name: str, image_name: str, request: 
 @router.post("/{character_name}/images/{image_name}/animate")
 async def animate_character_image(character_name: str, image_name: str, request: Request) -> Dict[str, Any]:
     """Animiert ein Galerie-Bild als Video."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_animate_character_image_sync,
+                                   character_name, image_name, body)
+
+
+def _animate_character_image_sync(character_name: str, image_name: str,
+                                  body: Any) -> Dict[str, Any]:
+    """The blocking body of ``animate_character_image`` — runs in the
+    threadpool."""
     user_id = body.get("user_id", "")
     if ".." in image_name or "/" in image_name:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
@@ -2409,7 +2625,16 @@ def get_videogen_options(character_name: str) -> Dict[str, Any]:
 @router.post("/{character_name}/skills/video_generation/config")
 async def save_videogen_config(character_name: str, request: Request) -> Dict[str, Any]:
     """Speichert die VideoGen-Config (ImageGen + Animation Einstellungen)."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_save_videogen_config_sync, character_name,
+                                   data)
+
+
+def _save_videogen_config_sync(character_name: str,
+                               data: Any) -> Dict[str, Any]:
+    """The blocking body of ``save_videogen_config`` — runs in the
+    threadpool."""
     return character_ops.apply_videogen_config(character_name, data)
 
 
@@ -2475,8 +2700,17 @@ async def set_known_locations_route(character_name: str, request: Request) -> Di
     Body: {"known_locations": ["loc_id", ...]}. Leere Liste = kennt nichts
     (strict mode bleibt aktiv). Auto-Discovery beim Betreten ergaenzt spaeter.
     """
-    from app.models.character import set_known_locations
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_set_known_locations_route_sync,
+                                   character_name, data)
+
+
+def _set_known_locations_route_sync(character_name: str,
+                                    data: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_known_locations_route`` — runs in the
+    threadpool."""
+    from app.models.character import set_known_locations
     ids = data.get("known_locations")
     if not isinstance(ids, list):
         raise HTTPException(status_code=400, detail="known_locations must be a list")

@@ -20,7 +20,13 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 @router.post("/login")
 async def login(request: Request, response: Response) -> Dict[str, Any]:
     """Logs a user in and sets the session cookie."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_login_sync, response, data)
+
+
+def _login_sync(response: Response, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``login`` — runs in the threadpool."""
     username = (data.get("username") or "").strip()
     password = (data.get("password") or "").strip()
     if not username or not password:
@@ -95,7 +101,13 @@ async def create_user_route(
     request: Request,
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_create_user_route_sync, _, data)
+
+
+def _create_user_route_sync(_: Dict[str, Any], data: Any) -> Dict[str, Any]:
+    """The blocking body of ``create_user_route`` — runs in the threadpool."""
     username = (data.get("username") or "").strip()
     password = (data.get("password") or "").strip()
     role = (data.get("role") or "user").strip()
@@ -113,7 +125,14 @@ async def update_user_route(
     user_id: str, request: Request,
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_update_user_route_sync, user_id, _, data)
+
+
+def _update_user_route_sync(user_id: str, _: Dict[str, Any],
+                            data: Any) -> Dict[str, Any]:
+    """The blocking body of ``update_user_route`` — runs in the threadpool."""
     password = data.pop("password", None)
     try:
         if password:

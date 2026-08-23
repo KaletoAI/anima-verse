@@ -246,6 +246,12 @@ async def get_group_session(location_id: str = "") -> Dict[str, Any]:
 async def reset_group_session(request: Request):
     """Close the current group session and create a fresh one."""
     data = await request.json()
+    return await asyncio.to_thread(_reset_group_session_sync, data)
+
+
+def _reset_group_session_sync(data: Any):
+    """The blocking body of ``reset_group_session`` — runs in the
+    threadpool."""
     session_id = data.get("session_id", "")
     location_id = data.get("location_id", "")
 

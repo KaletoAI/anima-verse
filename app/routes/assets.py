@@ -164,7 +164,16 @@ async def put_clip_catalog_status(take_id: str, request: Request,
                                   ) -> Dict[str, Any]:
     """Sets ``favorite`` / ``rejected`` on one take. Only the fields present in
     the body are touched, so a favorite click never clears a rejection."""
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_put_clip_catalog_status_sync, take_id, _,
+                                   body)
+
+
+def _put_clip_catalog_status_sync(take_id: str, _: Dict[str, Any],
+                                  body: Any) -> Dict[str, Any]:
+    """The blocking body of ``put_clip_catalog_status`` — runs in the
+    threadpool."""
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
     fav = body.get("favorite")
@@ -210,7 +219,16 @@ async def post_clip_catalog_import(take_id: str, request: Request,
     the whole reason its clips may live in the tracked library. Anything else
     belongs to the (later) generic importer, not here.
     """
+    import asyncio
     body = await request.json()
+    return await asyncio.to_thread(_post_clip_catalog_import_sync, take_id, _,
+                                   body)
+
+
+def _post_clip_catalog_import_sync(take_id: str, _: Dict[str, Any],
+                                   body: Any) -> Dict[str, Any]:
+    """The blocking body of ``post_clip_catalog_import`` — runs in the
+    threadpool."""
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
     target = str(body.get("target") or "free").strip().lower()

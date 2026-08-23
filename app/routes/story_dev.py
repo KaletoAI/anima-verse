@@ -225,7 +225,13 @@ async def refine_story(request: Request):
 @router.post("/load")
 async def load_story(request: Request):
     """Loads an existing story file into a dev session for LLM refinement."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_load_story_sync, data)
+
+
+def _load_story_sync(data: Any):
+    """The blocking body of ``load_story`` — runs in the threadpool."""
     model = data.get("model", "")
     provider = data.get("provider", "")
     content = data.get("content", "")
@@ -255,7 +261,13 @@ async def load_story(request: Request):
 @router.post("/save")
 async def save_story(request: Request):
     """Saves the current story result as a .md file."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_save_story_sync, data)
+
+
+def _save_story_sync(data: Any):
+    """The blocking body of ``save_story`` — runs in the threadpool."""
     session_id = data.get("session_id", "")
 
     if not session_id or session_id not in _sessions:
@@ -287,7 +299,13 @@ async def save_story(request: Request):
 @router.post("/cleanup")
 async def cleanup_session(request: Request):
     """Removes a story dev session from memory."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_cleanup_session_sync, data)
+
+
+def _cleanup_session_sync(data: Any):
+    """The blocking body of ``cleanup_session`` — runs in the threadpool."""
     session_id = data.get("session_id", "")
     _sessions.pop(session_id, None)
     return {"status": "ok"}

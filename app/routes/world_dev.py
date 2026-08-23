@@ -1113,7 +1113,13 @@ async def world_dev_chat(request: Request):
 @router.post("/apply")
 async def apply_world_data(request: Request):
     """Applies generated location/room data to the world."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_apply_world_data_sync, data)
+
+
+def _apply_world_data_sync(data: Any):
+    """The blocking body of ``apply_world_data`` — runs in the threadpool."""
     user_id = data.get("user_id", "")
     location_data = data.get("location_data", {})
     if not location_data or not location_data.get("name"):
@@ -1222,8 +1228,14 @@ async def preview_map(request: Request):
     without a second round trip) — the preview map and the applied map are
     the same geometry by construction.
     """
-    from app.core.map_layout_apply import layout_counts
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_preview_map_sync, data)
+
+
+def _preview_map_sync(data: Any):
+    """The blocking body of ``preview_map`` — runs in the threadpool."""
+    from app.core.map_layout_apply import layout_counts
     normalized, warnings = _normalize_map_body(data.get("map_data"))
     return {"status": "ok", "normalized": normalized, "warnings": warnings,
             "counts": layout_counts(normalized)}
@@ -1249,8 +1261,14 @@ async def apply_map(request: Request):
     ``/world-dev/map-restore`` can undo the apply. That is the undo the map
     editor itself does not have.
     """
-    from app.core.map_layout_apply import (apply_map_layout, map_snapshot)
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_apply_map_sync, data)
+
+
+def _apply_map_sync(data: Any):
+    """The blocking body of ``apply_map`` — runs in the threadpool."""
+    from app.core.map_layout_apply import (apply_map_layout, map_snapshot)
     mode = (data.get("mode") or "merge").strip()
     if mode not in ("merge", "replace_terrain"):
         raise HTTPException(status_code=400,
@@ -1300,8 +1318,15 @@ async def restore_map_snapshot(request: Request):
     ``removed`` counts the places the apply after this snapshot CREATED and the
     restore deleted again — a place made by hand afterwards is never touched.
     """
-    from app.core.map_layout_apply import restore_snapshot
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_restore_map_snapshot_sync, data)
+
+
+def _restore_map_snapshot_sync(data: Any):
+    """The blocking body of ``restore_map_snapshot`` — runs in the
+    threadpool."""
+    from app.core.map_layout_apply import restore_snapshot
     snapshot_id = (data.get("snapshot_id") or "").strip()
     if not snapshot_id:
         raise HTTPException(status_code=400, detail="snapshot_id required")
@@ -1359,8 +1384,14 @@ async def preview_layout(request: Request):
     The normalized plan is exactly what an apply would write, so the drawn
     preview and the applied floor plan are the same geometry by construction.
     """
-    from app.core.layout_apply import layout_counts
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_preview_layout_sync, data)
+
+
+def _preview_layout_sync(data: Any):
+    """The blocking body of ``preview_layout`` — runs in the threadpool."""
+    from app.core.layout_apply import layout_counts
     normalized, warnings = _normalize_layout_body(
         data.get("layout_data"), str(data.get("location_id") or ""))
     return {"status": "ok", "normalized": normalized, "warnings": warnings,
@@ -1386,8 +1417,14 @@ async def apply_layout_route(request: Request):
     sharing floor are authoring states the ``problems[]`` system reports on the
     finished world; only junk was dropped, in the sanitizer, before this point.
     """
-    from app.core.layout_apply import apply_layout, layout_snapshot
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_apply_layout_route_sync, data)
+
+
+def _apply_layout_route_sync(data: Any):
+    """The blocking body of ``apply_layout_route`` — runs in the threadpool."""
+    from app.core.layout_apply import apply_layout, layout_snapshot
     location_id = str(data.get("location_id") or "").strip()
     normalized, warnings = _normalize_layout_body(data.get("layout_data"),
                                                   location_id)
@@ -1431,8 +1468,14 @@ async def restore_layout(request: Request):
     Returns:  {"status": "success",
                "restored": {location_id, rooms, entry_room}}
     """
-    from app.core.layout_apply import restore_layout_snapshot
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_restore_layout_sync, data)
+
+
+def _restore_layout_sync(data: Any):
+    """The blocking body of ``restore_layout`` — runs in the threadpool."""
+    from app.core.layout_apply import restore_layout_snapshot
     snapshot_id = (data.get("snapshot_id") or "").strip()
     if not snapshot_id:
         raise HTTPException(status_code=400, detail="snapshot_id required")
@@ -1614,7 +1657,14 @@ def _apply_character_internal(char_data: Dict[str, Any],
 @router.post("/apply-character")
 async def apply_character_data(request: Request):
     """Applies generated character data (profile + outfits)."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_apply_character_data_sync, data)
+
+
+def _apply_character_data_sync(data: Any):
+    """The blocking body of ``apply_character_data`` — runs in the
+    threadpool."""
     user_id = data.get("user_id", "")
     char_data = data.get("character_data", {})
     if not char_data or not char_data.get("character_name"):
@@ -1703,7 +1753,13 @@ async def apply_outfit_data(request: Request):
 
     Body: {character_name, outfit: {name, pieces, locations?, activities?, excluded_locations?}}
     """
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_apply_outfit_data_sync, data)
+
+
+def _apply_outfit_data_sync(data: Any):
+    """The blocking body of ``apply_outfit_data`` — runs in the threadpool."""
     char_name = (data.get("character_name") or "").strip()
     outfit = data.get("outfit") or {}
     if not char_name:
@@ -1723,7 +1779,13 @@ async def apply_soul_data(request: Request):
 
     Body: {character_name, section: "personality"|"tasks"|..., content: "..."}
     """
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_apply_soul_data_sync, data)
+
+
+def _apply_soul_data_sync(data: Any):
+    """The blocking body of ``apply_soul_data`` — runs in the threadpool."""
     char_name = (data.get("character_name") or "").strip()
     section = (data.get("section") or "").strip()
     content = data.get("content") or ""
@@ -1757,7 +1819,14 @@ async def apply_profile_patch_data(request: Request):
     Body: {character_name, fields: {key: value, ...}}
     Soul-Felder (source_file) werden ignoriert — die laufen ueber /apply-soul.
     """
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_apply_profile_patch_data_sync, data)
+
+
+def _apply_profile_patch_data_sync(data: Any):
+    """The blocking body of ``apply_profile_patch_data`` — runs in the
+    threadpool."""
     char_name = (data.get("character_name") or "").strip()
     fields = data.get("fields") or {}
     if not char_name:
@@ -1795,7 +1864,13 @@ async def apply_profile_patch_data(request: Request):
 @router.post("/cleanup")
 async def cleanup_session(request: Request):
     """Removes a world dev session from memory."""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_cleanup_session_sync, data)
+
+
+def _cleanup_session_sync(data: Any):
+    """The blocking body of ``cleanup_session`` — runs in the threadpool."""
     session_id = data.get("session_id", "")
     _sessions.pop(session_id, None)
     return {"status": "ok"}
@@ -2234,7 +2309,13 @@ async def preview_json(request: Request):
     Returns: {detected_type, type_hint_used, normalized: {...}, warnings: [...],
               valid: bool, error?: "..."}
     """
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_preview_json_sync, data)
+
+
+def _preview_json_sync(data: Any):
+    """The blocking body of ``preview_json`` — runs in the threadpool."""
     try:
         payload = _coerce_json_payload(data.get("json"))
     except HTTPException as e:
@@ -2284,7 +2365,13 @@ async def apply_json(request: Request):
     Body: {"json": <obj|string>, "type_hint"?: "...", "user_id"?: "..."}
     Returns: {status, type, name, warnings, ...result}
     """
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_apply_json_sync, data)
+
+
+def _apply_json_sync(data: Any):
+    """The blocking body of ``apply_json`` — runs in the threadpool."""
     payload = _coerce_json_payload(data.get("json"))
     type_hint = (data.get("type_hint") or "").strip()
     user_id = data.get("user_id", "")

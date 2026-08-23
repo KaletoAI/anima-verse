@@ -114,7 +114,13 @@ def get_user_profile_image_file():
 @router.post("/{user_id}/{key}")
 async def store_data(key: str, request: Request) -> Dict[str, str]:
     """Speichert einen Wert für einen bestimmten Key"""
+    import asyncio
     data = await request.json()
+    return await asyncio.to_thread(_store_data_sync, key, data)
+
+
+def _store_data_sync(key: str, data: Any) -> Dict[str, str]:
+    """The blocking body of ``store_data`` — runs in the threadpool."""
     value = data.get("value", "")
 
     # Verwende die Model-Funktionen für bekannte Keys
