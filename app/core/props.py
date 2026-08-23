@@ -93,6 +93,25 @@ cube that the model's proportions have not informed yet: it is True on
 creation, and False as soon as a dim is edited or the mesh arrives and the
 dims are redistributed over its proportions (largest edge kept).
 
+DIMS PER VARIANT (2026-08-24). A variant is a whole version of the object, and
+versions are not all the same size — a sapling beside the grown pine, a low
+wall beside the tall one. So a variant entry may carry its OWN
+``width_m`` / ``depth_m`` / ``height_m``, each an OVERRIDE of the prop value
+and stored by the same law as every other optional key: only when it says
+something, never as a copy of the inherited number::
+
+    "model_variants": [{"stem": "model", "active": true},
+                       {"stem": "model-v2", "active": true, "height_m": 2.4}]
+
+The resolution rule lives in ONE function, :func:`variant_dims`: the named
+variant's override where it has one, the prop's value otherwise. The prop
+record keeps the PROP-level dims — that is what the admin form edits and what
+the mesh proportions are redistributed over — and everything that knows WHICH
+variant it is drawing (a placement, a scattered copy, a world prop, the
+stacking rule) resolves through that one function. A reader with no variant in
+hand answers for the PRIMARY variant, exactly like every other unqualified
+read here.
+
 ``bbox`` = ``[bx, by, bz]``, the AABB edge lengths of model.glb in MESH units
 on the RAW mesh axes (before the orientation fix), rounded to 5 decimals. It
 is measured once when the model arrives (generation or upload) and lazily
@@ -170,6 +189,11 @@ SEASONS_KEY = "seasons"
 
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
+#: A variant may OVERRIDE any of the three dims (2026-08-24). Same key names
+#: as on the master record, same coercion, and the same "absence is the
+#: statement" law as ``seasons``: an override that equals the inherited value
+#: would be the same fact in two places, so only a real override is stored.
+#: See :func:`variant_dims` for the one resolution rule.
 
 #: How hard THIS prop bends in the wind — a multiplier on the sway of the
 #: ground it grows on (§ A9), not a length. How far a meadow waves is the
@@ -349,7 +373,13 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     every writer stores the sanitized list back, so it has to survive here.
 
     ``seasons`` (E2c) survives by the same law: kept when it names seasons,
-    dropped when it is empty — no dependency is stored as ABSENCE."""
+    dropped when it is empty — no dependency is stored as ABSENCE.
+
+    So do the per-variant DIM OVERRIDES (2026-08-24): each of the three keys
+    survives only as a usable number, clamped exactly like the prop-level field
+    (:func:`_coerce_dim_m`, (0, 100]). Junk, zero and a negative value are no
+    authoring statement and lose the key, which is precisely the sentence
+    "this variant is as big as its prop"."""
     raw = meta.get(VARIANTS_KEY) if isinstance(meta, dict) else None
     out: List[Dict[str, Any]] = []
     seen: set = set()
@@ -369,6 +399,10 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             seasons = sanitize_season_tags(entry.get(SEASONS_KEY))
             if seasons:
                 rec[SEASONS_KEY] = seasons
+            for key in DIM_KEYS:
+                dim = _coerce_dim_m(entry.get(key), 0.0)
+                if dim > 0:
+                    rec[key] = dim
             out.append(rec)
     return out or [{"stem": MODEL_STEM, "active": True}]
 
@@ -655,6 +689,38 @@ def _effective_dims(meta: Dict[str, Any]) -> Dict[str, float]:
                            meta.get("bbox"), meta.get("rotation"))
 
 
+def variant_dims(meta: Dict[str, Any], variant: Any = None) -> Dict[str, float]:
+    """THE RESOLUTION RULE for the per-variant dims (2026-08-24), in one place:
+    **the variant's own override where it has one, the prop's value
+    otherwise** — ``{"width_m", "depth_m", "height_m"}`` in metres.
+
+    ``variant`` is the STORE index (the position in ``model_variants``, the
+    same number every variant-scoped route and every serving URL uses).
+    ``None``, a negative index or one this prop has no variant for answers for
+    the PRIMARY variant — the first effectively active one, exactly like every
+    other unqualified read in this module (``/model`` without a parameter, the
+    bbox measurement, the payload's single ``variants`` map).
+
+    An override is never a copy of the inherited number: a variant with no key
+    of its own answers character for character what :func:`_effective_dims`
+    answers, so a prop whose variants are all the same size costs the feature
+    nothing.
+    """
+    dims = _effective_dims(meta)
+    entries = _variant_list(meta)
+    try:
+        i = -1 if variant is None else int(variant)
+    except (TypeError, ValueError):
+        i = -1
+    if not 0 <= i < len(entries):
+        i = _effective_indices(entries)[0]
+    entry = entries[i]
+    for key in DIM_KEYS:
+        if key in entry:
+            dims[key] = float(entry[key])
+    return dims
+
+
 def _coerce_tags(raw: Any) -> List[str]:
     """Free-text tags — accepts a list or a comma/newline string; deduped
     case-insensitively, capped at 30."""
@@ -915,7 +981,14 @@ def model_tiers(prop_id: str, variant: Any = None) -> List[str]:
 
 def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
     """Every EFFECTIVELY ACTIVE variant that HAS a mesh, in payload order:
-    ``[{"variant": <store index>, "tiers": [...]}, …]``.
+    ``[{"variant": <store index>, "tiers": [...], "dims": {…}}, …]``.
+
+    ``dims`` are the three real metres THIS variant renders at — its own
+    override where it has one, the prop's value otherwise
+    (:func:`variant_dims`). It rides along because the consumers of this list
+    (the world-prop payload, the ground boxes, the terrain scatter) resolve a
+    POSITION in it into one placement, and asking the library a second time per
+    position would be the same sidecar read once per variant.
 
     "Effectively" = manually active AND in season (E2c,
     :func:`_effective_indices`) — the season gate sits in that one function, so
@@ -932,19 +1005,29 @@ def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
     variant 1 off leaves the payload with variants 0 and 2, and the serving
     URL of the second entry must say ``?variant=2``. A list position as the
     URL index would silently serve the mesh the admin just switched off."""
-    entries = _variant_list(read_sidecar(prop_id))
+    meta = read_sidecar(prop_id)
+    entries = _variant_list(meta)
     out: List[Dict[str, Any]] = []
     for i in _effective_indices(entries):
         tiers = model_tiers(prop_id, i)
         if tiers:
-            out.append({"variant": i, "tiers": tiers})
+            out.append({"variant": i, "tiers": tiers,
+                        "dims": variant_dims(meta, i)})
     return out
 
 
 def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
     seasons, in_season, tiers, has_model, model_file, model_url, signature,
-    has_source, source_url, image}]`` — every variant, active or not, in order.
+    has_source, source_url, image, dims, effective_dims}]`` — every variant,
+    active or not, in order.
+
+    ``dims`` are the OVERRIDES this variant stores and nothing else (a missing
+    key = inherited), because that is what the three inputs of the strip edit;
+    ``effective_dims`` is what the variant really renders at, which is what
+    their placeholders show. Two fields for two questions — "what did I
+    author here" and "how big is this thing" — and never one of them faked as
+    the other.
 
     ``seasons`` are the season names this variant is tagged for (E2c; empty =
     no dependency, the default) and ``in_season`` says whether that tag matches
@@ -985,6 +1068,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "source_url": ((src_base if i == primary else f"{src_base}?variant={i}")
                            if has_source else ""),
             "image": _image_meta(meta, entry["stem"]),
+            "dims": {k: entry[k] for k in DIM_KEYS if k in entry},
+            "effective_dims": variant_dims(meta, i),
         })
     return out
 
@@ -1078,6 +1163,46 @@ def set_variant_seasons(prop_id: str, variant: int, seasons: Any) -> bool:
     return True
 
 
+def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
+    """Override this variant's real size, or clear the override (2026-08-24).
+
+    ``dims`` is a patch: only the keys it names are touched, so setting the
+    height alone leaves an existing width override where it is. A usable number
+    is stored (clamped to (0, 100] like the prop-level field), and EVERYTHING
+    else — ``None``, an empty string, zero, junk — clears the key, because
+    "this variant is as big as its prop" is stored as ABSENCE and nothing else.
+
+    Deliberately NOT refused for a generating variant, exactly like the season
+    tag: a size moves no file and renames no stem. Nor does it touch
+    ``dims_estimated``, which is a statement about the PROP's dims — a variant
+    override neither confirms nor invalidates the mesh proportions the prop was
+    measured from.
+    """
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return False
+    entries = _variant_list(meta)
+    try:
+        i = int(variant)
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= i < len(entries):
+        return False
+    patch = dims if isinstance(dims, dict) else {}
+    for key in DIM_KEYS:
+        if key not in patch:
+            continue
+        value = _coerce_dim_m(patch.get(key), 0.0)
+        if value > 0:
+            entries[i][key] = value
+        else:
+            entries[i].pop(key, None)
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return True
+
+
 def delete_variant(prop_id: str, variant: int) -> bool:
     """Remove one variant WITH its stored meshes, its selection entry and its
     SOURCE IMAGE. Refused for the last remaining variant — a prop always has
@@ -1130,7 +1255,12 @@ def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
 
     * ``height_m`` — the prop's REAL height in metres, the very number the
       Props tab shows. The mesh file cannot say it: its normalisation destroyed
-      the scale, so it is the library record or nothing.
+      the scale, so it is the library record or nothing. Of the PRIMARY variant
+      (2026-08-24), deliberately: which variant a painted-scatter instance
+      shows is the one placement decision this server does NOT make — the
+      instances are sampled client-side in a camera window and pick their
+      variant there — so there is no variant to resolve here, and the entry
+      carries the primary one's height like it carries its URL.
     * ``sway_factor`` — how much of its ground's wind this prop takes part in
       (see :data:`SWAY_FACTOR_DEFAULT`).
     * ``ground_offset_m`` — how deep this prop stands in the ground, wherever
@@ -1149,19 +1279,25 @@ def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
     meta = read_sidecar(prop_id)
     if not meta:
         return {}
-    return {"height_m": _effective_dims(meta)["height_m"],
+    return {"height_m": variant_dims(meta)["height_m"],
             "sway_factor": sway_factor_of(meta),
             "ground_offset_m": ground_offset_of(meta)}
 
 
-def prop_ground_extent(prop_id: str) -> Dict[str, float]:
+def prop_ground_extent(prop_id: str, variant: Any = None) -> Dict[str, float]:
     """How much GROUND one prop covers — ``{"width_m", "depth_m"}`` in metres,
     ``{}`` for an id this world has no record for.
 
     The horizontal half of :func:`prop_scatter_facts`' answer, out of the same
-    single sidecar read and the same :func:`_effective_dims`, because it is
+    single sidecar read and the same :func:`variant_dims`, because it is
     asked for a different reason: the scatter has to stay OUT of the box a
     deliberately placed prop occupies (``world_props.prop_boxes``, § A9b).
+
+    ``variant`` is the STORE index of the variant this box is asked for; a
+    caller that knows which mesh stands there passes it, and ``None`` answers
+    for the primary variant (:func:`variant_dims`). A sapling variant of a pine
+    keeps less ground clear than the grown one, and the box is the ground the
+    mesh really covers.
 
     The two dims are the REAL ones stored after the orientation fix — x and z
     of the object as it stands — never anything measured on the mesh, whose
@@ -1171,11 +1307,11 @@ def prop_ground_extent(prop_id: str) -> Dict[str, float]:
     meta = read_sidecar(prop_id)
     if not meta:
         return {}
-    dims = _effective_dims(meta)
+    dims = variant_dims(meta, variant)
     return {"width_m": dims["width_m"], "depth_m": dims["depth_m"]}
 
 
-def prop_stack_facts(prop_id: str) -> Dict[str, float]:
+def prop_stack_facts(prop_id: str, variant: Any = None) -> Dict[str, float]:
     """Everything the stacking rule needs about ONE prop, out of ONE sidecar
     read — ``{}`` for an id this world has no record for.
 
@@ -1183,14 +1319,45 @@ def prop_stack_facts(prop_id: str) -> Dict[str, float]:
     the two vertical facts of :func:`prop_scatter_facts` (how tall it is, how
     deep it stands): "put the teapot on the table" asks all four at once, and a
     second directory walk per placement would be the same read twice.
+
+    ``variant`` is the STORE index of the variant standing there (``None`` =
+    the primary one). Both ends of the stacking rule need it: a teapot on the
+    TALL variant of a table lands higher than on the low one, and the height it
+    lands at is the support's own.
     """
     meta = read_sidecar(prop_id)
     if not meta:
         return {}
-    dims = _effective_dims(meta)
+    dims = variant_dims(meta, variant)
     return {"width_m": dims["width_m"], "depth_m": dims["depth_m"],
             "height_m": dims["height_m"],
             "ground_offset_m": ground_offset_of(meta)}
+
+
+def placement_variant(prop_id: str, position: Any) -> Optional[int]:
+    """The STORE index behind a placement's ``variant``, or ``None`` when the
+    prop publishes no variant at all (no record, or no mesh anywhere).
+
+    Two index spaces meet here, and confusing them is the classic defect of
+    this feature (§ B2 addendum): a PLACEMENT stores a POSITION in the
+    published list (``active_variant_tiers`` / ``model_variants``), while every
+    sidecar-level function — :func:`variant_dims`, the serving URL, the
+    variant-scoped routes — speaks the STORE index. Switching variant 1 off
+    leaves the payload with the store indices 0 and 2, so position 1 IS store
+    index 2.
+
+    The position wraps modulo the published count, exactly like the payload
+    resolves it: a stored index must never make a placement disappear because
+    an admin deleted a mesh.
+    """
+    entries = active_variant_tiers(prop_id)
+    if not entries:
+        return None
+    try:
+        pos = int(position or 0)
+    except (TypeError, ValueError):
+        pos = 0
+    return int(entries[pos % len(entries)].get("variant") or 0)
 
 
 def _footprint_contains(box: Dict[str, Any], px: float, pz: float) -> bool:
@@ -1278,21 +1445,39 @@ def placement_stack_offset_y(placements: Sequence[Dict[str, Any]],
     front of the pure rule.
 
     ``placements`` is ``layout.props`` as the floor-plan editor holds it
-    (``prop_id``, ``at``, ``yaw?``, ``offset_y?``); a placement whose prop the
-    library does not know drops out of the candidate list — a dangling id has no
-    measurable surface to stand on. Scattered copies never take part: they are
-    computed at compose time and stored nowhere, so no author can point at one.
+    (``prop_id``, ``at``, ``yaw?``, ``offset_y?``, ``variant?``); a placement
+    whose prop the library does not know drops out of the candidate list — a
+    dangling id has no measurable surface to stand on. Scattered copies never
+    take part: they are computed at compose time and stored nowhere, so no
+    author can point at one.
+
+    EVERY box is resolved for ITS OWN variant (2026-08-24), target and support
+    alike: the placement's ``variant`` is a POSITION in the published list, so
+    it goes through :func:`placement_variant` before the facts are read. A
+    table placed as its tall variant carries the teapot at the tall variant's
+    height, and the same teapot placed as its own small variant sinks by its
+    own ground offset — the rule below is untouched, it is only fed the right
+    numbers.
     """
-    facts: Dict[str, Dict[str, float]] = {}
+    # Cached per prop AND position: two placements of the same prop may show
+    # two different variants, and those are two different sizes.
+    facts: Dict[Tuple[str, int], Dict[str, float]] = {}
     boxes: List[Optional[Dict[str, Any]]] = []
     for placement in placements:
         if not isinstance(placement, dict):
             boxes.append(None)
             continue
         pid = safe_prop_id(str(placement.get("prop_id") or ""))
-        if pid and pid not in facts:
-            facts[pid] = prop_stack_facts(pid)
-        f = facts.get(pid) or {}
+        try:
+            pos = max(0, int(placement.get("variant") or 0))
+        except (TypeError, ValueError):
+            pos = 0
+        key = (pid, pos)
+        if pid and key not in facts:
+            # `placement_variant` answers None for a prop that publishes no
+            # variant at all, and that is exactly the primary-variant read.
+            facts[key] = prop_stack_facts(pid, placement_variant(pid, pos))
+        f = facts.get(key) or {}
         at = placement.get("at")
         if not f or not isinstance(at, (list, tuple)) or len(at) != 2:
             boxes.append(None)
@@ -1946,9 +2131,16 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         _demand_low(prop_id, i, vt)
     gallery = galleries[0]
     tiers = tier_lists[0]
-    variant_tiers = [{"variant": i, "tiers": vt}
+    # …plus the three real metres each of them renders at (2026-08-24): a
+    # variant may override the prop's dims, and a placement reads its size off
+    # the entry it draws (`room_recipe._placement_dims`) instead of off the
+    # record, which stays the PROP's own size.
+    variant_tiers = [{"variant": i, "tiers": vt, "dims": variant_dims(meta, i)}
                      for i, vt in zip(active_idx, tier_lists) if vt]
     has_model = bool(tiers)
+    # The PROP-level dims, never a variant's override: this is what the admin
+    # form edits, what the mesh proportions are redistributed over, and the
+    # value every variant inherits that authors none.
     dims = _effective_dims(meta)
     rec: Dict[str, Any] = {
         "id": prop_id,
@@ -1965,8 +2157,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         "has_model": has_model,
         "model_tiers": tiers,
         # Every active variant that has a mesh, in payload order:
-        # `[{variant: <store index>, tiers: [...]}, …]`, element 0 being the
-        # primary one (its `tiers` IS `model_tiers`). The store index is not
+        # `[{variant: <store index>, tiers: [...], dims: {…}}, …]`, element 0
+        # being the primary one (its `tiers` IS `model_tiers`; its `dims` are
+        # the record's own unless it overrides them). The store index is not
         # the position — a switched-off variant leaves a gap — and it is what
         # the serving URL names. Turns into `model_variants` on a spec.
         "variant_tiers": variant_tiers,

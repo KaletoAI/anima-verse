@@ -23,12 +23,30 @@
  * tagged for another season keeps its meshes but renders nowhere until that
  * season comes round, which the chip row says in as many words. A world
  * without seasons gets no chips at all: the tags would be inert.
+ *
+ * SIZE PER VARIANT (2026-08-24): three small number inputs per chip, the same
+ * width/depth/height the prop itself carries above — as an OVERRIDE. Empty is
+ * the normal state and means "as big as the prop", which is what the greyed
+ * placeholder shows; typing a number makes this one version its own size (a
+ * sapling beside the grown pine), clearing the field gives the inherited value
+ * back. The server stores exactly that: a number when there is one, no key at
+ * all otherwise.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import type { PropVariant } from './propTypes'
+import type { PropDims, PropVariant } from './propTypes'
+
+type DimKey = 'width_m' | 'depth_m' | 'height_m'
+
+/** The three overridable dims in the prop form's own order. `label` is the
+ *  short caption on the input, `title` the sentence behind it. */
+const DIM_FIELDS: Array<{ key: DimKey; label: string; title: string }> = [
+  { key: 'width_m', label: 'W', title: 'Width (m)' },
+  { key: 'depth_m', label: 'D', title: 'Depth (m)' },
+  { key: 'height_m', label: 'H', title: 'Height (m)' },
+]
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   onChanged, generating = [], worldSeasons = [], currentSeason = '' }: {
@@ -65,6 +83,12 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // window.confirm.
   const [armedDel, setArmedDel] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  // What is being TYPED into a size field, keyed `<store index>:<dim>`. An
+  // entry lives only while the field is edited: the commit drops it again and
+  // the input falls back to the stored override, so a background reload can
+  // never stomp what is under the cursor and no sync effect is needed.
+  const [dimDraft, setDimDraft] = useState<Record<string, string>>({})
+  useEffect(() => { setDimDraft({}) }, [propId])
   // Arming is bound to an INDEX, and a delete renumbers everything behind it —
   // so any change of the list disarms rather than pointing at another variant.
   useEffect(() => { setArmedDel(null) }, [propId, variants.length])
@@ -111,6 +135,28 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       () => apiPost(`/world/props/${enc}/variants/${v.index}/seasons`,
         { seasons: next }),
       next.length ? t('Seasons saved') : t('Season tag cleared'))
+  }, [enc, run, t])
+
+  // Commit ONE size field of ONE variant. An empty or unusable input is not a
+  // size: it clears the override and the variant inherits the prop's value
+  // again — the same law the server stores by, so the field echoes back what
+  // was really kept. Nothing is sent when the value did not move.
+  const commitDim = useCallback((v: PropVariant, key: DimKey, raw: string) => {
+    setDimDraft((d) => {
+      const next = { ...d }
+      delete next[`${v.index}:${key}`]
+      return next
+    })
+    const n = parseFloat(raw)
+    const value = Number.isFinite(n) && n > 0
+      ? Math.round(Math.min(n, 100) * 1000) / 1000
+      : null
+    const stored = (v.dims as PropDims)[key] ?? null
+    if (value === stored) return
+    void run(
+      () => apiPost(`/world/props/${enc}/variants/${v.index}/dims`,
+        { [key]: value }),
+      value === null ? t('Size override cleared') : t('Variant size saved'))
   }, [enc, run, t])
 
   const remove = useCallback((index: number) => {
@@ -177,6 +223,46 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                     {t('no image')}
                   </span>
                 )}
+              </div>
+              {/* The variant's own size (2026-08-24). Empty inherits the
+                  prop's value, and the placeholder is that very number — so
+                  an untouched row reads as "as big as the prop" without a
+                  second label saying so. */}
+              <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                {DIM_FIELDS.map((f) => {
+                  const draftKey = `${v.index}:${f.key}`
+                  const stored = (v.dims as PropDims)[f.key]
+                  const shown = dimDraft[draftKey]
+                    ?? (stored === undefined ? '' : String(stored))
+                  return (
+                    <label
+                      key={f.key}
+                      style={{ display: 'flex', alignItems: 'center', gap: 2 }}
+                      title={`${t(f.title)} — ${t('this variant only. Empty = as big as the prop itself ({n} m).').replace('{n}', String(v.effective_dims[f.key]))}`}
+                    >
+                      <span className="ga-hint">{t(f.label)}</span>
+                      <input
+                        className="ga-input"
+                        type="number"
+                        min={0.01}
+                        max={100}
+                        step={0.05}
+                        style={{ width: 62, padding: '1px 3px' }}
+                        disabled={busy}
+                        value={shown}
+                        placeholder={String(v.effective_dims[f.key])}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          setDimDraft((d) => ({ ...d, [draftKey]: value }))
+                        }}
+                        onBlur={(e) => commitDim(v, f.key, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur()
+                        }}
+                      />
+                    </label>
+                  )
+                })}
               </div>
               {/* Season chips (E2c). A set, not a single choice: a variant may
                   depict two seasons. No chip lit = every season, which is why
@@ -266,6 +352,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       </div>
       <span className="ga-hint">
         {t('Several meshes of the SAME object — scattered copies pick one of them, so a wood is not one tree twenty times. ★ marks the primary variant, which is what anything that does not ask for a variant gets. The selected chip decides which variant the preview and the mesh gallery below show.')}
+        {' '}
+        {t('W/D/H are that variant’s own size in metres. Leave them empty and the variant is as big as the prop above; fill one in and this version alone gets that measurement — a sapling beside the grown tree.')}
         {worldSeasons.length ? (
           ' ' + t('A variant with no season chip lit renders all year; light one up and it renders only then. If EVERY variant is out of season the prop keeps rendering its primary one — a placement never becomes a hole.')
         ) : null}

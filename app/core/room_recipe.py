@@ -496,6 +496,33 @@ def _carry_ground_offset(entry: Dict[str, Any], prop: Dict[str, Any]) -> None:
         entry["ground_offset_m"] = _r(off, 2)
 
 
+def _placement_dims(prop: Dict[str, Any], variant: Any) -> Dict[str, float]:
+    """The three real metres THIS placement renders at (2026-08-24).
+
+    A model variant may override the prop's dims — a sapling beside the grown
+    pine — so the size comes from the VARIANT the placement shows, and only
+    from the prop record when it shows none. The library resolved both when it
+    built the record (``props.variant_dims``); all that happens here is the
+    index lookup.
+
+    ``variant`` is a POSITION in ``variant_tiers`` (the published list), never
+    a store index — the same number ``scene_recipe._variant_index`` resolves
+    against ``model_variants``, and it wraps the same way, so a placement whose
+    stored index outlived a deleted mesh keeps a size instead of vanishing.
+    """
+    entries = prop.get("variant_tiers") or []
+    if entries:
+        try:
+            pos = max(0, int(variant or 0)) % len(entries)
+        except (TypeError, ValueError):
+            pos = 0
+        dims = entries[pos].get("dims")
+        if isinstance(dims, dict) and dims:
+            return {k: float(dims.get(k) or prop[k])
+                    for k in ("width_m", "depth_m", "height_m")}
+    return {k: float(prop[k]) for k in ("width_m", "depth_m", "height_m")}
+
+
 def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                      default_u: float, default_v: float,
                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -562,9 +589,10 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             entry["missing"] = True
             placements.append(entry)
             continue
-        entry["dims"] = {"width_m": prop["width_m"],
-                         "depth_m": prop["depth_m"],
-                         "height_m": prop["height_m"]}
+        # The size of the VARIANT this placement shows, not of the prop record
+        # (2026-08-24) — the scene spec turns it into `max_m`, the depth cut
+        # and the placeholder box, and the markers below scale with it.
+        entry["dims"] = _placement_dims(prop, entry.get("variant"))
         _carry_ground_offset(entry, prop)
         entry["has_model"] = bool(prop.get("has_model"))
         if prop.get("has_model"):
@@ -583,7 +611,8 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         bbox = prop.get("bbox")
         if not bbox:
             continue  # no measurable mesh — markers stay object data only
-        dims = [prop["width_m"], prop["depth_m"], prop["height_m"]]
+        dims = [entry["dims"]["width_m"], entry["dims"]["depth_m"],
+                entry["dims"]["height_m"]]
         for marker in (prop.get("markers") or []):
             composed = compose_prop_marker(
                 bbox=bbox, rotation=prop.get("rotation"), dims=dims,
@@ -653,9 +682,14 @@ def _scatter_into(placements: List[Dict[str, Any]],
             if not prop:
                 entry["missing"] = True
             else:
-                entry["dims"] = {"width_m": prop["width_m"],
-                                 "depth_m": prop["depth_m"],
-                                 "height_m": prop["height_m"]}
+                # WHICH variant this copy shows decides HOW BIG it is: the
+                # index is resolved first, and the dims are read off that very
+                # entry (2026-08-24). A wood of one prop can therefore be
+                # saplings and grown trees, not one tree in two textures.
+                if prop.get("has_model"):
+                    entry["variant"] = prop_store.scatter_variant_index(
+                        seed, i, variant_count)
+                entry["dims"] = _placement_dims(prop, entry.get("variant"))
                 # A scattered copy is the SAME object, so it sinks by the same
                 # amount as the anchor it was thrown from — the offset belongs
                 # to the prop, not to the placement.
@@ -665,8 +699,6 @@ def _scatter_into(placements: List[Dict[str, Any]],
                     entry["model_tiers"] = prop.get("model_tiers") or []
                     entry["variant_tiers"] = prop.get("variant_tiers") or []
                     entry["model_sig"] = prop.get("model_signature") or ""
-                    entry["variant"] = prop_store.scatter_variant_index(
-                        seed, i, variant_count)
             placements.append(entry)
 
 

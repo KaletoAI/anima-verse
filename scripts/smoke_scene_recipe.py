@@ -2329,6 +2329,13 @@ def test_prop_stacking() -> None:
          offset_y = 0.75 − (−0.05) = 0.80, and its base is then
          0.00 + (−0.05) + 0.80 = 0.75 — ON the table top, not in it.
 
+    The rule below is PURE — it is handed finished boxes and never asks the
+    library, so the per-variant sizes of 2026-08-24 change nothing here. WHICH
+    box a placement gets (a variant may override the prop's dims, for the
+    support as well as for the target) is `props.placement_stack_offset_y`, and
+    its hand derivation lives in `scripts/smoke_prop_variants.py` [18], against
+    a real prop directory.
+
     THE PAYLOAD SIDE, same numbers on storey 0 (floor 0.00, prop clearance
     0.01, § A16.9 / [7c]):
 

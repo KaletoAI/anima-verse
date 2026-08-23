@@ -1956,7 +1956,7 @@ Eine Zeile:
   x: 12.5, z: -40.0,           # WELTMETER
   yaw_deg: 45.0,               # Grad, Drehsinn dieses Vertrags (§ A1.1/§ B2)
   offset_y: 0.0,               # Anhebung ÜBER dem Boden, Meter (±50)
-  max_m: 1.8,                  # größte ECHTE Kante des Objekts, Meter
+  max_m: 1.8,                  # größte ECHTE Kante der GEZEIGTEN Variante, Meter
   measure: "xyz",              # das EINE Maßstabsgesetz von place() (§ B2)
   fix_euler: {x:0, y:90, z:0}, # Orientierungs-Fix des Props, Grad
   variants: {full: "…", low: "…"},   # Stufen-Karte der PRIMÄREN Variante
@@ -1974,7 +1974,11 @@ Eine Zeile:
   Objekt meint, sondern „kniehoch" oder „baumhoch".)
 - **`max_m` und `fix_euler` sind ABGELEITET, nie gespeichert** — genau wie
   die Zusatzfelder der Streu-Einträge (§ A9): eine im Props-Tab korrigierte
-  Größe oder ein nachgezogener Fix wirkt beim nächsten Poll.
+  Größe oder ein nachgezogener Fix wirkt beim nächsten Poll. `max_m` gehört
+  seit dem Nachtrag 2026-08-24 zur **gezeigten Variante**, nicht zum Prop:
+  trägt die Variante hinter `variant` eigene Maße, sind es deren Maße —
+  dieselbe Liste, derselbe Index, also kann eine Zeile nie auf ein Mesh
+  skaliert werden, das sie gar nicht zeichnet.
 - **Der Boden kommt vom Client.** Der Server schickt `offset_y`, der
   Renderer setzt `bottom_y = Bodenhöhe(x, z) + offset_y` mit **seinem**
   Höhen-Sampler (`heightAt`, § A16.5) — derselbe, mit dem die Streu steht.
@@ -2070,6 +2074,12 @@ beiden Stellen, an denen der jeweilige Verbraucher ohnehin liest:
 | `yaw_deg` | `float` | Drehung der Platzierung, 0…360 |
 | `half_w` | `float` | halbe REALE Breite (lokales x) **plus Rand** |
 | `half_d` | `float` | halbe REALE Tiefe (lokales z) **plus Rand** |
+
+Die realen Maße sind die der **gezeigten Variante** (Nachtrag 2026-08-24) —
+aufgelöst über dieselbe Formel wie die Payload-Zeile (`variant` der
+Platzierung, sonst `variant_index(id, n)`), damit die freigehaltene Fläche die
+Fläche des Meshes ist, das dort wirklich steht. Ein Prop mit Datensatz, aber
+ohne jedes Mesh, behält seine Box in den Maßen der primären Variante.
 
 Der Rand ist `world_props.PROP_BOX_MARGIN_M` = **0,25 m**, auf beide
 Halbachsen addiert — eine Handbreit blanker Boden um das Objekt. Bewusst EINE
@@ -4582,6 +4592,33 @@ sehen nur eine andere Liste. Was sie sehen MÜSSEN, ist der Wechsel: die
 Szenen-`signature` (§ B1) nimmt die aktuelle Jahreszeit als Token auf, und
 `terrain_sig`/`world_props_sig` hashen ohnehin den angereicherten Block.
 
+**Nachtrag 2026-08-24 — MASSE JE VARIANTE.** Eine Variante ist eine ganze
+Fassung des Gegenstands, und Fassungen sind nicht gleich groß: der Setzling
+neben der ausgewachsenen Kiefer, die niedrige neben der hohen Mauer. Eine
+Variante darf deshalb `width_m` / `depth_m` / `height_m` selbst führen —
+jeweils als **Überschreibung** des Prop-Wertes und nach demselben Gesetz wie
+`seasons`: gespeichert wird nur, was etwas aussagt, ein fehlender Schlüssel
+heißt „so groß wie das Prop". Geklemmt wird wie beim Prop-Feld (`(0, 100]`
+Meter); Müll, 0 und negative Werte verlieren den Schlüssel.
+
+Die **Auflösungsregel steht an EINER Stelle** (`props.variant_dims`): *die
+eigene Zahl der Variante, sonst die des Props*. Der Prop-Datensatz behält seine
+PROP-Maße — das ist, was das Admin-Formular bearbeitet und worüber die
+Mesh-Proportionen verteilt werden —, und alles, was weiß, WELCHE Variante es
+zeichnet, löst über diese eine Funktion auf: die Platzierung im Raum/Hof (auch
+jede Streu-Kopie, über ihren aufgelösten `variant`-Index), das Welt-Prop
+(`max_m`), die Boden-Box der Streu-Aussparung (§ A9b) und die Stapel-Regel
+(„Teekanne auf den Tisch") für Ziel UND Unterlage. Wer keine Variante in der
+Hand hält, bekommt die PRIMÄRE — wie bei jedem anderen unqualifizierten Zugriff
+hier. Das betrifft genau einen Leser: die gemalte Terrain-Streu (§ A9,
+`prop_height_m`), deren Instanzen erst im Client gesampelt werden und dort ihre
+Variante ziehen; sie trägt die Höhe der primären Variante, so wie sie deren URL
+trägt.
+
+**Am Payload ändert sich keine Form.** Es sind dieselben Felder mit denselben
+Bedeutungen, sie tragen nur die Zahlen der Variante statt die des Props —
+Renderer bleiben dumm.
+
 **Wer die Variante wählt: der Server. Wer sie ausführt: der Renderer.**
 Der Index steht fertig in der Spec; kein Renderer würfelt und keiner rechnet
 ihn nach. Für Streu-Kopien einer Platzierung (`scatter_count`/`scatter_seed`,
@@ -5225,6 +5262,13 @@ deren gedrehte Box (`width_m × depth_m`, um `+rad(yaw)` gedreht, § A1.1) den
 Punkt der Platzierung enthält, ist Kandidat; von denen gewinnt die mit der
 höchsten Oberfläche (Becher auf Tablett auf Tisch). Streu-Kopien zählen nie —
 sie entstehen erst zur Compose-Zeit, ein Autor kann auf keine zeigen.
+
+`width_m` / `depth_m` / `height_m` sind dabei die Maße der **gezeigten
+Variante** (Nachtrag 2026-08-24), für Ziel wie Träger einzeln aufgelöst: eine
+Teekanne auf der HOHEN Variante eines Tisches landet höher als auf der
+niedrigen. Der `variant` einer Platzierung ist eine POSITION in der
+veröffentlichten Liste, also geht er durch `props.placement_variant`, bevor die
+Maße gelesen werden.
 
 **Wo die Regel lebt:** `app/core/props.stack_offset_y` (rein, ohne Bibliothek)
 plus `placement_stack_offset_y` (mit ihr davor), erreichbar über

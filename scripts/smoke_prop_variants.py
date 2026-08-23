@@ -109,6 +109,13 @@ so day-of-year 5/35/65/95 is day 5 of spring/summer/autumn/winter):
   - the SCENE signature carries the season, so a season change reaches a
     polling client even where nothing stored has moved.
 
+DIMS PER VARIANT (2026-08-24). A variant may carry its own `width_m` /
+`depth_m` / `height_m` as an OVERRIDE of the prop's — a sapling beside the
+grown tree. One rule, `props.variant_dims`: the variant's own number, else the
+prop's; no variant in hand answers for the primary one. The hand derivation of
+section [18] — sanitizer, resolution, payload scale and the stacking rule —
+stands in `dims_section`'s own docstring, next to the checks it explains.
+
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
 import io
@@ -284,6 +291,132 @@ def set_no_seasons() -> None:
     """A world whose calendar has NO seasons at all — the inert case."""
     from app.core import game_time as gt
     gt._CALENDAR_CACHE = gt.Calendar(seasons=())
+
+
+def dims_section() -> None:
+    """[18] DIMS PER VARIANT (2026-08-24). Hand-derived throughout.
+
+    THE SEED: a prop "Crate" of 1.0 x 1.0 x 1.0 m with TWO meshed, active
+    variants; variant 1 overrides ONLY its height, to 2.0 m.
+
+        variant 0   no override            -> 1.0 x 1.0 x 1.0
+        variant 1   height_m 2.0           -> 1.0 x 1.0 x 2.0
+
+    From the one resolution rule ("the variant's own number, else the prop's")
+    every expectation below follows:
+
+      - `variant_dims(meta, 0)` = the prop's cube, `variant_dims(meta, 1)`
+        carries the 2.0 and NOTHING else — an override is per key, not per
+        record;
+      - an unqualified read (`None`, a negative index, an index this prop has
+        no variant for) answers for the PRIMARY variant, which is variant 0
+        here, so it stays the cube;
+      - the payload scale is `max_m` = the largest edge of the VARIANT the
+        placement shows: 1.0 for a placement of variant 0, 2.0 for one of
+        variant 1 — one prop, two sizes, and both from the same record;
+      - THE STACKING RULE reads the support's own variant. A second crate
+        standing on the first at the same spot lands at
+            top(support) = 0 + 0 + height(support)
+        i.e. 2.0 on variant 1 and 1.0 on variant 0. The support's mesh IS its
+        height, and that is the whole point of the feature.
+
+    THE SANITIZER, same clamp as the prop-level field (`(0, 100]`, 3 decimals)
+    and the same "absence is the statement" law as `seasons`:
+
+        2.5      -> 2.5          a real override
+        150      -> 100.0        clamped, never refused (a typo costs the limit)
+        0 / -3   -> no key       not a size
+        "junk"   -> no key       no authoring statement either
+        cleared  -> no key       the variant inherits again
+    """
+    print("\n[18] dims per variant (2026-08-24)")
+    from app.core.room_recipe import _placement_dims
+
+    crate = store.create_prop(name="Crate", width_m=1.0, depth_m=1.0,
+                              height_m=1.0)["id"]
+    put_mesh(crate, 0)
+    put_mesh(crate, store.add_variant(crate))
+    check("the seed has two meshed variants",
+          [e["variant"] for e in store.active_variant_tiers(crate)] == [0, 1],
+          str(store.active_variant_tiers(crate)))
+    check("...and variant 0 is the primary one", store.primary_variant(crate) == 0)
+
+    # ── the sanitizer ──
+    store.set_variant_dims(crate, 1, {"height_m": 150})
+    check("150 m is clamped to the 100 m limit, not refused",
+          store.list_variants(crate)[1]["dims"] == {"height_m": 100.0},
+          str(store.list_variants(crate)[1]["dims"]))
+    store.set_variant_dims(crate, 1, {"height_m": "junk", "width_m": -3,
+                                      "depth_m": 0})
+    check("junk, a negative and a zero all lose their key",
+          store.list_variants(crate)[1]["dims"] == {},
+          str(store.list_variants(crate)[1]["dims"]))
+    store.set_variant_dims(crate, 1, {"height_m": 2.5})
+    check("a real number is stored", store.list_variants(crate)[1]["dims"]
+          == {"height_m": 2.5}, str(store.list_variants(crate)[1]["dims"]))
+    store.set_variant_dims(crate, 1, {"width_m": 1.5})
+    check("...and a second key joins it instead of replacing it",
+          store.list_variants(crate)[1]["dims"]
+          == {"height_m": 2.5, "width_m": 1.5},
+          str(store.list_variants(crate)[1]["dims"]))
+    store.set_variant_dims(crate, 1, {"width_m": None})
+    check("clearing ONE key leaves the other standing",
+          store.list_variants(crate)[1]["dims"] == {"height_m": 2.5},
+          str(store.list_variants(crate)[1]["dims"]))
+    check("an index this prop has no variant for is refused",
+          not store.set_variant_dims(crate, 7, {"height_m": 2.0}))
+
+    # ── the resolution rule ──
+    store.set_variant_dims(crate, 1, {"height_m": 2.0})
+    meta = store.read_sidecar(crate)
+    cube = {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
+    tall = {"width_m": 1.0, "depth_m": 1.0, "height_m": 2.0}
+    check("variant 0 inherits the prop's cube",
+          store.variant_dims(meta, 0) == cube, str(store.variant_dims(meta, 0)))
+    check("variant 1 carries its own height and inherits the rest",
+          store.variant_dims(meta, 1) == tall, str(store.variant_dims(meta, 1)))
+    check("an unqualified read answers for the PRIMARY variant",
+          store.variant_dims(meta) == cube, str(store.variant_dims(meta)))
+    check("...and so does an index this prop has no variant for",
+          store.variant_dims(meta, 9) == cube, str(store.variant_dims(meta, 9)))
+    check("the prop record keeps the PROP's own dims",
+          [(store.get_prop(crate) or {}).get(k) for k in
+           ("width_m", "depth_m", "height_m")] == [1.0, 1.0, 1.0],
+          str(store.get_prop(crate)))
+    check("...while its variant entries carry one dims map each",
+          [e["dims"] for e in (store.get_prop(crate) or {})["variant_tiers"]]
+          == [cube, tall],
+          str((store.get_prop(crate) or {})["variant_tiers"]))
+
+    # ── the placement: how big the payload draws it ──
+    prop = store.get_prop(crate) or {}
+    check("the recipe gives a placement of variant 0 the cube",
+          _placement_dims(prop, 0) == cube, str(_placement_dims(prop, 0)))
+    check("...and one of variant 1 the 2 m height",
+          _placement_dims(prop, 1) == tall, str(_placement_dims(prop, 1)))
+    check("...a stored index beyond the list wraps, it never loses its size",
+          _placement_dims(prop, 2) == cube, str(_placement_dims(prop, 2)))
+    check("max_m of a placement of variant 0 is 1.0",
+          spec_of(crate, dims=cube, variant=0)["max_m"] == 1.0,
+          str(spec_of(crate, dims=cube, variant=0)["max_m"]))
+    check("...and of one of variant 1 exactly its own 2.0",
+          spec_of(crate, dims=tall, variant=1)["max_m"] == 2.0,
+          str(spec_of(crate, dims=tall, variant=1)["max_m"]))
+
+    # ── the stacking rule reads the SUPPORT's variant ──
+    def stack_on(variant: int):
+        placements = [{"prop_id": crate, "at": [0.0, 0.0], "variant": variant},
+                      {"prop_id": crate, "at": [0.0, 0.0]}]
+        return store.placement_stack_offset_y(placements, 1)
+
+    check("a crate on the 2 m variant of a crate lands at 2.0",
+          stack_on(1) == 2.0, str(stack_on(1)))
+    check("...on the 1 m variant of the SAME prop at 1.0",
+          stack_on(0) == 1.0, str(stack_on(0)))
+    check("red: without a variant the support is the primary one, 1.0",
+          store.placement_stack_offset_y(
+              [{"prop_id": crate, "at": [0.0, 0.0]},
+               {"prop_id": crate, "at": [0.0, 0.0]}], 1) == 1.0)
 
 
 def season_section() -> None:
@@ -494,10 +627,14 @@ def main() -> int:
     put_mesh(fern, 0)
     put_mesh(fern, 0, tier="low")
     put_mesh(fern, store.target_variant(fern))
+    # `dims` rides along per entry since the per-variant sizes (2026-08-24):
+    # the fern was created without dims, so both variants are the 1 m
+    # placeholder cube and neither overrides it.
+    cube = {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
     check("the record lists tiers per active variant, with its store index",
           (store.get_prop(fern) or {}).get("variant_tiers")
-          == [{"variant": 0, "tiers": ["full", "low"]},
-              {"variant": 1, "tiers": ["full"]}],
+          == [{"variant": 0, "tiers": ["full", "low"], "dims": cube},
+              {"variant": 1, "tiers": ["full"], "dims": cube}],
           str((store.get_prop(fern) or {}).get("variant_tiers")))
     spec = spec_of(fern)
     check("model_variants has one map per active variant",
@@ -844,6 +981,7 @@ def main() -> int:
           store.pending_variants() == {} and store.is_pending() == [],
           str(store.pending_variants()))
 
+    dims_section()
     season_section()
 
     print()

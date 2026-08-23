@@ -31,7 +31,7 @@ import hashlib
 import json
 import math
 import secrets
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import get_connection, transaction
 from app.core.timeutils import utc_now_iso
@@ -236,14 +236,16 @@ def delete_world_props_of(prop_id: str) -> int:
 
 def _prop_facts(prop_id: str) -> Dict[str, Any]:
     """What ONE prop contributes to every placement of it (§ A9a) — out of one
-    library read: the ONE scale number, the orientation fix and the tier maps
-    of its ACTIVE variants.
+    library read: the scale number OF EACH ACTIVE VARIANT, the orientation fix
+    and their tier maps.
 
-    ``max_m`` is the largest REAL edge of the object in metres and
-    ``measure`` is ``xyz`` — the very scale law the scene props run on
-    (§ B2, ``place()``), so a bench outside a house is the same size as the
-    same bench inside it. The mesh's own extent says nothing: normalisation
-    destroyed it.
+    ``max_list[i]`` is the largest REAL edge in metres of the variant at
+    payload position ``i``, and the row's ``max_m`` is the entry of the variant
+    that row shows — a variant may override the prop's dims (2026-08-24), so
+    the scale belongs to the mesh, not to the record. ``measure`` is ``xyz``,
+    the very scale law the scene props run on (§ B2, ``place()``), so a bench
+    outside a house is the same size as the same bench inside it. The mesh's
+    own extent says nothing: normalisation destroyed it.
 
     ``{}`` when the prop is gone or carries no mesh at all — then there is
     nothing to render and the placement is dropped from the block.
@@ -266,11 +268,16 @@ def _prop_facts(prop_id: str) -> Dict[str, Any]:
         maps.append(variant_urls(base if pos == 0 else f"{base}?variant={idx}",
                                  entry.get("tiers") or []))
     rot = meta.get("rotation") if isinstance(meta.get("rotation"), dict) else {}
-    dims = [_finite(meta.get(k)) or 0.0
-            for k in ("width_m", "height_m", "depth_m")]
+    # ONE scale number per published variant, in the same order as the URL maps
+    # (2026-08-24): a variant may override the prop's dims, and a placement
+    # that shows the sapling variant must be scaled to the sapling. The
+    # library resolved override-or-inherit when it built the entries.
+    max_list = [round(max(_finite(entry.get("dims", {}).get(k)) or 0.0
+                          for k in ("width_m", "height_m", "depth_m")) or 1.0, 3)
+                for entry in entries]
     return {
         "name": str(meta.get("name") or prop_id),
-        "max_m": round(max(dims) or 1.0, 3),
+        "max_list": max_list,
         "fix_euler": {a: _finite(rot.get(a)) or 0.0 for a in ("x", "y", "z")},
         "variant_maps": maps,
         # How deep the OBJECT stands in the ground, wherever it stands — the
@@ -318,7 +325,10 @@ def payload_rows() -> List[Dict[str, Any]]:
             "x": row["x"], "z": row["z"],
             "yaw_deg": row["yaw_deg"],
             "offset_y": row["offset_y"],
-            "max_m": facts["max_m"],
+            # The scale of the variant THIS row shows (2026-08-24) — same
+            # index, same list, so a placement can never be scaled to a mesh
+            # it is not drawing.
+            "max_m": facts["max_list"][idx],
             "measure": "xyz",
             "fix_euler": facts["fix_euler"],
             # The PRIMARY variant's tier map — unchanged for every prop that
@@ -362,10 +372,15 @@ def prop_boxes() -> List[Dict[str, Any]]:
     source.
 
     One row is ``{id, x, z, yaw_deg, half_w, half_d}``: the placement's own
-    anchor and turn, plus half the prop's REAL width and depth
-    (``props.prop_ground_extent``) with :data:`PROP_BOX_MARGIN_M` on top. The
-    half-extents run along the PROP's axes, so the box is a rotated rectangle
-    and the consumers map its four corners through the one § A1.1 transform.
+    anchor and turn, plus half the REAL width and depth of the VARIANT this
+    placement shows (``props.prop_ground_extent``, resolved through the same
+    :func:`variant_index` the payload row runs on) with
+    :data:`PROP_BOX_MARGIN_M` on top. A variant may override the prop's dims
+    (2026-08-24), and the ground a placement keeps clear is the ground its own
+    mesh covers — the sapling variant of a pine claims less than the grown one.
+    The half-extents run along the PROP's axes, so the box is a rotated
+    rectangle and the consumers map its four corners through the one § A1.1
+    transform.
 
     TWO KINDS OF PLACEMENT ARE LEFT OUT:
 
@@ -382,7 +397,7 @@ def prop_boxes() -> List[Dict[str, Any]]:
     "placed": every area's instances, its own and its neighbours', are sampled
     around these boxes.
     """
-    from app.core.props import prop_ground_extent
+    from app.core.props import active_variant_tiers, prop_ground_extent
     from app.core.world_geometry import boundary_contains
     from app.models.world import list_locations
 
@@ -390,13 +405,28 @@ def prop_boxes() -> List[Dict[str, Any]]:
     if not rows:
         return []
     locations = list_locations()
-    extents: Dict[str, Dict[str, float]] = {}
+    # Per prop: the store indices it publishes (in payload position order) and
+    # the primary extent. A prop with a record but NO mesh publishes nothing
+    # and keeps its ground clear at the primary size — the author placed it,
+    # and the mesh is what is still missing, not the claim on the ground.
+    published: Dict[str, List[int]] = {}
+    extents: Dict[Tuple[str, Optional[int]], Dict[str, float]] = {}
     out: List[Dict[str, Any]] = []
     for row in rows:
         pid = row["prop_id"]
-        if pid not in extents:
-            extents[pid] = prop_ground_extent(pid)
-        dims = extents[pid]
+        if pid not in published:
+            published[pid] = [int(e.get("variant") or 0)
+                              for e in active_variant_tiers(pid)]
+        store = published[pid]
+        if store:
+            pos = (row["variant"] if row["variant"] is not None
+                   else variant_index(row["id"], len(store)))
+            variant: Optional[int] = store[pos % len(store)]
+        else:
+            variant = None
+        if (pid, variant) not in extents:
+            extents[(pid, variant)] = prop_ground_extent(pid, variant)
+        dims = extents[(pid, variant)]
         if not dims:
             continue
         x = row["x"]

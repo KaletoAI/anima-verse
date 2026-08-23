@@ -48,8 +48,14 @@ async def _body(request: Request) -> Dict[str, Any]:
 @router.get("/props/{prop_id}/variants")
 def prop_variants(prop_id: str) -> Dict[str, Any]:
     """The prop's model variants: ``{variants: [{index, stem, active, seasons,
-    in_season, primary, tiers, has_model, model_file, model_url, signature}],
-    max, generating_variants, world_seasons, current_season}``.
+    in_season, primary, tiers, has_model, model_file, model_url, signature,
+    dims, effective_dims}], max, generating_variants, world_seasons,
+    current_season}``.
+
+    ``dims`` are the per-variant size OVERRIDES that are stored (a missing key
+    = inherited from the prop), ``effective_dims`` what the variant really
+    renders at — the strip edits the first and shows the second as the
+    placeholder of an empty field.
 
     ``max`` is the configured ceiling on ACTIVE variants
     (``image_generation.prop_variant_max``) — the strip greys its "add" action
@@ -135,6 +141,29 @@ async def prop_variant_seasons(prop_id: str, index: int,
         raise HTTPException(status_code=404, detail="Variant not found")
     return {"status": "ok", "index": index,
             "seasons": list_variants(prop_id)[index]["seasons"]}
+
+
+@router.post("/props/{prop_id}/variants/{index}/dims")
+async def prop_variant_dims(prop_id: str, index: int,
+                            request: Request) -> Dict[str, Any]:
+    """Override this variant's real size (body: ``{width_m?, depth_m?,
+    height_m?}``; a null / empty / unusable value clears that one override).
+
+    A variant is a whole version of the object, and versions differ in size —
+    a sapling beside the grown pine. Only the keys the body names are touched,
+    so the three inputs of the strip can be committed one at a time. Never
+    refused for a running generation: a size moves no file and renames no stem.
+
+    The answer carries the stored OVERRIDES and the EFFECTIVE dims, so the
+    strip shows what was really kept and what the variant now renders at."""
+    from app.core.props import list_variants, set_variant_dims
+    _variant(prop_id, index)
+    body = await _body(request)
+    if not set_variant_dims(prop_id, index, body):
+        raise HTTPException(status_code=404, detail="Variant not found")
+    entry = list_variants(prop_id)[index]
+    return {"status": "ok", "index": index, "dims": entry["dims"],
+            "effective_dims": entry["effective_dims"]}
 
 
 @router.delete("/props/{prop_id}/variants/{index}")

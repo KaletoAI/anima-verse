@@ -137,6 +137,21 @@ HAND-DERIVED EXPECTATIONS
           client refetches its ground on, and nothing else in the worldmap
           poll covers a world prop's geometry.
 
+  [10] A VARIANT MAY BE ITS OWN SIZE (2026-08-24)
+        A variant may override `width_m`/`depth_m`/`height_m` of its prop, and
+        a placement is scaled to — and keeps clear the ground of — the variant
+        it really shows. Fixture: a pine of 2.0 x 1.0 x 3.0 m whose variant 1
+        is the grown tree, 4.0 m wide and 6.0 m tall (depth inherited):
+
+            row of variant 0   max_m = max(2.0, 3.0, 1.0) = 3.0
+            row of variant 1   max_m = max(4.0, 6.0, 1.0) = 6.0
+            box of variant 0   half_w = 2.0/2 + 0.25 = 1.25 ; half_d = 0.75
+            box of variant 1   half_w = 4.0/2 + 0.25 = 2.25 ; half_d = 0.75
+
+        A placement without a stored variant is resolved by the formula of [2]
+        and its box follows THAT mesh: `wp_deadbeef` gives 4080674006 mod 2 = 0,
+        the sapling, so 1.25.
+
 Usage:  ./.venv/bin/python scripts/smoke_world_props.py
 """
 import hashlib
@@ -472,6 +487,49 @@ check("…one outside it does", outside["id"] in boxes, True)
 _sig_before = terrain_sig()
 wp.save_world_prop({**outside, "x": 131.0})
 check("terrain_sig moves when a box moves", terrain_sig() != _sig_before, True)
+
+print("\n[10] a variant may be its own size (2026-08-24)")
+for row in wp.list_world_props():
+    wp.delete_world_prop(row["id"])
+# The seed of this section, and every number below follows from it: a pine of
+# 2.0 x 1.0 x 3.0 m (w x d x h, like every prop here) whose SECOND variant is
+# the grown tree — 4.0 m wide and 6.0 m tall, depth inherited.
+PINE = seed_prop("Pine", variants=2)
+prop_store.set_variant_dims(PINE, 1, {"width_m": 4.0, "height_m": 6.0})
+check("the override is stored on variant 1 alone",
+      [v["dims"] for v in prop_store.list_variants(PINE)],
+      [{}, {"width_m": 4.0, "height_m": 6.0}])
+small = wp.save_world_prop({"prop_id": PINE, "x": 200.0, "z": 0.0,
+                            "variant": 0})
+big = wp.save_world_prop({"prop_id": PINE, "x": 210.0, "z": 0.0,
+                          "variant": 1})
+rows = {r["id"]: r for r in wp.payload_rows()}
+# max_m = the largest edge of the variant THIS row shows:
+#   variant 0  max(2.0, 3.0, 1.0) = 3.0
+#   variant 1  max(4.0, 6.0, 1.0) = 6.0
+check("max_m of the sapling variant", rows[small["id"]]["max_m"], 3.0)
+check("max_m of the grown variant", rows[big["id"]]["max_m"], 6.0)
+check("...and both rows still name the same prop",
+      (rows[small["id"]]["prop_id"], rows[big["id"]]["prop_id"]), (PINE, PINE))
+# The ground box follows the same size:
+#   variant 0  half_w = 2.0 / 2 + 0.25 = 1.25 ; half_d = 1.0 / 2 + 0.25 = 0.75
+#   variant 1  half_w = 4.0 / 2 + 0.25 = 2.25 ; half_d unchanged at 0.75
+boxes = {b["id"]: b for b in wp.prop_boxes()}
+check("the sapling keeps its own ground clear",
+      (boxes[small["id"]]["half_w"], boxes[small["id"]]["half_d"]),
+      (1.25, 0.75))
+check("the grown one keeps more of it",
+      (boxes[big["id"]]["half_w"], boxes[big["id"]]["half_d"]),
+      (2.25, 0.75))
+# A placement with NO stored variant is resolved by the formula, and the box
+# has to follow THAT mesh — md5("wp_deadbeef")[:8] = 4080674006, mod 2 = 0,
+# so this one shows the sapling.
+auto = wp.save_world_prop({"id": "wp_deadbeef", "prop_id": PINE,
+                           "x": 220.0, "z": 0.0})
+check("an auto-picked variant lands on 0 here",
+      wp.variant_index(auto["id"], 2), 0)
+check("...so its box is the sapling's",
+      ({b["id"]: b for b in wp.prop_boxes()}[auto["id"]]["half_w"]), 1.25)
 
 shutil.rmtree(STORAGE, ignore_errors=True)
 shutil.rmtree(CLIPS, ignore_errors=True)

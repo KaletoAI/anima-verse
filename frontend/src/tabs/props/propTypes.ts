@@ -14,6 +14,15 @@ export interface PropMarker {
   facing?: number
 }
 
+/** Real extent in metres after the orientation fix. A VARIANT may override
+ *  any of the three (2026-08-24), which is why the keys are optional here:
+ *  a missing one is inherited from the prop, never a stored zero. */
+export interface PropDims {
+  width_m?: number
+  depth_m?: number
+  height_m?: number
+}
+
 export interface PropFull {
   id: string
   name: string
@@ -68,7 +77,13 @@ export interface PropFull {
    *  request serves. `variant` is the STORE INDEX, not the position in this
    *  list: a switched-off variant leaves a gap. Anything that addresses a
    *  variant over the API uses that number, never the array position. */
-  variant_tiers?: Array<{ variant: number; tiers: string[] }>
+  variant_tiers?: Array<{
+    variant: number
+    tiers: string[]
+    /** The three real metres THIS variant renders at — its own override where
+     *  it has one, the prop's value otherwise (props.variant_dims). */
+    dims?: PropDims
+  }>
   /** How many active variants actually carry a mesh. */
   variant_count?: number
   /** ACTIVE model variants in total — the ones a scene renders. */
@@ -134,6 +149,12 @@ export interface PropVariant {
   source_url: string
   /** What that image was rendered/uploaded with. */
   image: PropSourceImage
+  /** The size OVERRIDES this variant stores — a missing key means "as big as
+   *  the prop". This is what the three inputs of the strip edit. */
+  dims: PropDims
+  /** What the variant really renders at (override or inherited): the value
+   *  behind an empty input's placeholder. All three keys are always set. */
+  effective_dims: Required<PropDims>
 }
 
 export interface ImageBackendInfo {
