@@ -207,7 +207,10 @@ type DragState =
   | { kind: 'resize'; roomId: string; startX: number; startY: number; origW: number; origD: number; mPerPx: number }
   | { kind: 'opening'; roomId: string; index: number; edge: number }
   | { kind: 'curveCtl'; roomId: string; edge: number }
-  | { kind: 'prop'; roomId: string; index: number }
+  // A prop press carries its start point for the SAME `MOVE_START_PX`
+  // threshold a room move uses: below it the press stays a click, and only a
+  // click may advance the stack cycle (see `startPropDrag`).
+  | { kind: 'prop'; roomId: string; index: number; startX: number; startY: number; moving?: boolean }
   | { kind: 'ghost'; roomId: string; index: number }
   | { kind: 'model'; roomId: string }
   | null
@@ -421,6 +424,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const [canvasPx, setCanvasPx] = useState(CANVAS_W)
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState>(null)
+  // Did the last prop press travel past `MOVE_START_PX`, i.e. was it a DRAG?
+  // `dragRef` is already cleared on pointerup, and the click that follows the
+  // release still has to know — a drag positions and selects its own piece
+  // and must never advance the stack cycle.
+  const propDraggedRef = useRef(false)
   const roomsRef = useRef(rooms)
   roomsRef.current = rooms
 
@@ -1254,6 +1262,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         // Prop / ghost / model drag: reposition inside the room — METRES from
         // the room's min corner. The piece keeps its real size, only `at`
         // moves; the raster applies unless Shift asks for free hand.
+        if (drag.kind === 'prop' && !drag.moving) {
+          // Same threshold a room move uses: a press that barely twitches is a
+          // CLICK (it cycles the stack, see the prop layer below), and only
+          // real travel turns it into a drag. Crossing it is also the moment
+          // the dragged piece becomes the selection — the press itself must
+          // not select, or the cycle could never leave the topmost piece.
+          if (Math.hypot(e.clientX - drag.startX,
+                         e.clientY - drag.startY) < MOVE_START_PX) return
+          drag.moving = true
+          propDraggedRef.current = true
+          setPropSel(drag.index)
+        }
         const raster = (v: number) => (e.shiftKey ? v : snapToGrid(v, step))
         const o = atOrigin(lay, ground)
         const [su, sv] = storedAt(lay, ground,
@@ -1333,14 +1353,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }, [])
 
   // Drag a placed prop within its room (no drag while a tool is armed).
+  //
+  // THE PRESS SELECTS NOTHING. Only the topmost footprint of a stack receives
+  // the pointer events, so a press that selected its own index would rewrite
+  // `propSel` to that same top piece before EVERY click — the cycle below
+  // would restart there each time and the pieces underneath stayed
+  // unreachable (user finding 2026-08-24). The selection is therefore made in
+  // exactly two places: the click handler (cycling) and the move handler
+  // (once a real drag begins). Selecting the ROOM is safe — it cannot break a
+  // cycle inside a room that was not selected yet — but only when it actually
+  // changes, because `setSelected` clears `propSel`.
   const startPropDrag = useCallback(
     (e: React.PointerEvent, room: Room, index: number) => {
       if (clickMode || armedProp || !room.id) return
       e.preventDefault()
       e.stopPropagation()
-      setSelected(room.id)
-      setPropSel(index)
-      dragRef.current = { kind: 'prop', roomId: room.id, index }
+      if (room.id !== selectedRef.current) setSelected(room.id)
+      propDraggedRef.current = false
+      dragRef.current = { kind: 'prop', roomId: room.id, index,
+                          startX: e.clientX, startY: e.clientY }
     }, [clickMode, armedProp, setSelected])
 
   // Drag a pending furnishing ghost within its room.
@@ -2604,9 +2635,23 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                     onClick={(e) => {
                       if (clickMode || armedProp) return
                       e.stopPropagation()
+                      // A DRAG NEVER CYCLES: it already moved and selected its
+                      // own piece (move handler, `MOVE_START_PX`). Only a
+                      // press that stayed put reaches the cycle below.
+                      if (propDraggedRef.current) {
+                        propDraggedRef.current = false
+                        return
+                      }
                       setSelected(room.id || '')
-                      // Stacked footprints: repeated clicks cycle through
-                      // everything under the cursor (topmost first).
+                      // Stacked footprints: repeated clicks on the same spot
+                      // walk through everything under the cursor. `hits` is
+                      // ASCENDING BY PLACEMENT INDEX — the same order the
+                      // stacking rule uses (later placement wins ties, it is
+                      // drawn and picked on top), so `hits[last]` is the
+                      // topmost piece and the one a fresh click takes. Each
+                      // further click moves ONE ENTRY ON in that list and
+                      // wraps, so the walk runs top → bottom → upwards → top
+                      // and reaches every piece of the stack.
                       // Metres from the shape's min corner — through the
                       // CANVAS, not through the room box: a turned box has a
                       // rotated bounding rect, and its client rect would be
@@ -2619,6 +2664,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                         setPropSel(i)
                         return
                       }
+                      // `propSel` is the selection as it stood BEFORE this
+                      // click (the press no longer touches it) — that is what
+                      // makes the cycle advance instead of restarting. A
+                      // selection from elsewhere is not in `hits`, so the
+                      // click falls back to the topmost piece.
                       const pos = room.id === selected && propSel !== null
                         ? hits.indexOf(propSel) : -1
                       setPropSel(pos >= 0
@@ -3142,14 +3192,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           if (patch === null) setPropSel(null)
           updateLayout(selectedRoom.id || '', { props: list.length ? list : undefined })
         }
-        // Which OTHER placements this one stands over — the same turned-box
-        // test that cycles the selection through a stack, asked at the
-        // placement's own spot instead of at the cursor. It decides only
-        // whether the button is offered; the height comes from the server.
-        const stackSupports = propsAtPoint(
+        // Everything standing on this exact spot — the same turned-box test
+        // that cycles the selection through a stack, asked at the placement's
+        // own spot instead of at the cursor. Same ASCENDING-BY-INDEX order as
+        // there (later placement wins ties = topmost), so `n/N` counts from
+        // the bottom of the stack and N is the whole stack. The selection
+        // itself always hits its own footprint, hence it is always in here.
+        const stackHits = propsAtPoint(
           selectedRoom.layout || {}, selOrigin,
           placement.at[0] - selOrigin[0], placement.at[1] - selOrigin[1],
-        ).filter((i) => i !== propSel)
+        )
+        // Which OTHER placements this one stands over. It decides only
+        // whether the button is offered; the height comes from the server.
+        const stackSupports = stackHits.filter((i) => i !== propSel)
         const placeOnTop = async () => {
           try {
             const res = await apiPost<{ offset_y?: number | null }>(
@@ -3170,6 +3225,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             <span className="ga-hint" style={{ fontWeight: 600 }}>
               🪑 {dims?.name || placement.prop_id}:
             </span>
+            {/* A stack is invisible on the plan — the top footprint covers the
+                rest. This says how deep the selection sits and that there is
+                anything else here at all, so the cycling click is
+                discoverable instead of a secret. */}
+            {stackHits.length > 1 ? (
+              <span
+                className="ga-hint"
+                title={t('Click the same spot again to select the next prop in this stack.')}
+                style={{ border: '1px solid #444c56', borderRadius: 10,
+                         padding: '1px 7px', cursor: 'help' }}
+              >
+                {t('{n}/{N} here')
+                  .replace('{n}', String(stackHits.indexOf(propSel) + 1))
+                  .replace('{N}', String(stackHits.length))}
+              </span>
+            ) : null}
             {/* Position in METRES from the shape's min corner (v6 Nr. 2), so
                 the slider runs over its own box and the readback is a length
                 one can measure against the 1.70 m figure on the plan. On the
