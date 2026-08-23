@@ -28,13 +28,22 @@ port of (`frontend/src/tabs/map/mapMath.ts`), the rest from the geometry.
               at 5, 15, …, 95 -> 10 of them, 12 points in all. Normal (0,-1),
               so side A is NEGATIVE z and the sides alternate; every |z| lies
               in [0.8, 2] (DEFLECTION_MIN_FACTOR 0.4 × amplitude … amplitude).
-        the same line wavy: the SAME point count and the same positions, but
-              NOT the alternating sequence — that is what tells them apart.
+        the same line WAVY: a continuous curve, not one point per deflection.
+              offset(d) = A(d)·sin(phase + 2π·d/(4·spacing)) sampled every
+              min(spacing/3, 3) = 3 m, so the arc positions are 0, 3, …, 99
+              plus the end at 100 -> 35 points. A(d) cosine-eases through the
+              deflection heights and is 0 at both ends, so z(0) = z(100) = 0
+              and |z| <= 2 throughout. The two styles read the SAME random
+              stream (phase, then the heights), which is why switching between
+              them keeps the heights.
         [(0,0),(10,0),(10,10)] jagged: the clicked corner (10,0) survives, at
-              index 2 of 5 points.
-        [(0,0),(1000,0)] jagged spacing 2: 500 deflections would be 502 points,
-              so the cap bites — room = 120 − 2 = 118, spacing 1000/118 =
-              8.4745…, 120 points, capped True.
+              index 2 of 5 points. The corner-normal blend does not reach
+              either deflection — both sit exactly spacing/2 = 5 away and the
+              window is half-open — so this case is unchanged by it.
+        [(0,0),(1000,0)] jagged spacing 2: 500 deflections, 502 points, inside
+              the 1024-point budget — `capped` False. Ten times that line does
+              bite: room = 1024 − 2 = 1022, spacing 10000/1022 = 9.7847…,
+              1024 points, capped True.
         amplitude 0 / style "straight" -> the input array itself.
       And the PRNG underneath is bit-exact with the editor's
       (`@anima/scene-render.seededRandom`, FNV-1a + xorshift), verified in
@@ -80,7 +89,10 @@ port of (`frontend/src/tabs/map/mapMath.ts`), the rest from the geometry.
         an id no location has     -> dropped + unknown_location
         a point outside the bounds box -> out_of_bounds, area KEPT
         the bow-tie polygon       -> self_intersecting, area KEPT
-        a 300-point polygon       -> dropped + too_many_points
+        a 2100-point polygon      -> dropped + too_many_points (the cap is
+                                     2050, and above 400 points the O(n²)
+                                     self-intersection HINT is skipped, so
+                                     "too_many_points" is the only warning)
         a 2-point polygon         -> dropped + invalid_geometry
         a stroke entry            -> meta.stroke is the RECIPE, polygon is the
               ribbon (the [1] rectangle), meta.source "world_dev"
@@ -256,22 +268,64 @@ check_true("jagged: every |z| in [0.8, 2]",
            all(0.8 <= abs(p[1]) <= 2.0 for p in JAG["points"][1:-1]))
 
 WAV = mla.decorate_stroke([[0, 0], [100, 0]], "wavy", 10, 2)
-check("wavy: same point count", len(WAV["points"]), 12)
-check("wavy: same deflection positions",
-      [p[0] for p in WAV["points"]], [p[0] for p in JAG["points"]])
+check("wavy: sampled every 3 m — 34 positions + the end", len(WAV["points"]),
+      35)
+check("wavy: the arc positions are 0, 3, …, 99, 100",
+      [p[0] for p in WAV["points"]], [float(k * 3) for k in range(34)] + [100.0])
+check("wavy: both ends stay where they were clicked",
+      [WAV["points"][0], WAV["points"][-1]], [[0, 0], [100, 0]])
 check_true("wavy: |z| <= 2 throughout",
            all(abs(p[1]) <= 2.0 for p in WAV["points"]))
-check_true("wavy differs from jagged",
-           [p[1] for p in WAV["points"]] != [p[1] for p in JAG["points"]])
+check("wavy: not capped", WAV["capped"], False)
+# The very curve, re-derived from the rule and the shared PRNG: phase, then
+# the deflection heights at 5, 15, …, 95, cosine-eased and pinned to 0 at both
+# ends, times sin(phase + 2π·d/40). The normal of a west→east line is (0,-1),
+# so x IS the arc position and the whole offset lands in z.
+_r = mla.seeded_random(mla.stroke_seed([[0, 0], [100, 0]]))
+_phase = _r() * math.pi * 2
+_aD = [0.0] + [5.0 + 10 * i for i in range(10)] + [100.0]
+_aH = [0.0] + [2 * (0.4 + 0.6 * _r()) for _ in range(10)] + [0.0]
+
+
+def _env(d: float) -> float:
+    i = 0
+    while i + 2 < len(_aD) and _aD[i + 1] < d:
+        i += 1
+    t = (d - _aD[i]) / (_aD[i + 1] - _aD[i])
+    return _aH[i] + (_aH[i + 1] - _aH[i]) * (1 - math.cos(math.pi * t)) / 2
+
+
+check("wavy: every point IS A(d)·sin(phase + π·d/20)",
+      [p[1] for p in WAV["points"][1:-1]],
+      [mla._round2(-_env(k * 3) * math.sin(_phase + math.pi * (k * 3) / 20))
+       for k in range(1, 34)])
 
 COR = mla.decorate_stroke([[0, 0], [10, 0], [10, 10]], "jagged", 10, 2)
 check("corner survives the weave", len(COR["points"]), 5)
 check("the clicked corner is still there", COR["points"][2], [10.0, 0.0])
+check("...and the blend reached neither deflection (both 5 away)",
+      [COR["points"][1][0], COR["points"][3][1]], [5.0, 5.0])
+# …but a corner NEARER than half a spacing does blend: [(0,0),(7,0),(7,7)],
+# one deflection at 5, half = min(5, 3.5, 3.5) = 3.5, b = ease(1.5/7)
+# = 0.1090843 -> normal (0.1215330, -0.9925874) instead of (0, -1).
+BENT = mla.decorate_stroke([[0, 0], [7, 0], [7, 7]], "jagged", 10, 2)
+_b = (1 - math.cos(math.pi * (1.5 / 7))) / 2
+_n = (_b / math.hypot(_b, 1 - _b), -(1 - _b) / math.hypot(_b, 1 - _b))
+near("blended normal x", _n[0], 0.1215330, 1e-6)
+near("blended normal z", _n[1], -0.9925874, 1e-6)
+near("the deflection rides it", BENT["points"][1][0],
+     5 + (BENT["points"][1][1] / _n[1]) * _n[0], 0.011)
 
-CAP = mla.decorate_stroke([[0, 0], [1000, 0]], "jagged", 2, 2)
-check("cap: 120 points", len(CAP["points"]), mla.MAX_DECORATED_POINTS)
+FIT = mla.decorate_stroke([[0, 0], [1000, 0]], "jagged", 2, 2)
+check("1000 m at spacing 2 now fits: 502 points", len(FIT["points"]), 502)
+check("...uncapped", FIT["capped"], False)
+CAP = mla.decorate_stroke([[0, 0], [10000, 0]], "jagged", 2, 2)
+check("cap: 1024 points", len(CAP["points"]), mla.MAX_DECORATED_POINTS)
 check("cap: flagged", CAP["capped"], True)
-near("cap: spacing 1000/118", CAP["spacing_m"], 1000 / 118, 1e-9)
+near("cap: spacing 10000/1022", CAP["spacing_m"], 10000 / 1022, 1e-9)
+KM = mla.decorate_stroke([[0, 0], [1000, 0]], "wavy", 10, 2)
+check("a kilometre of wavy river is 335 points, uncapped",
+      [len(KM["points"]), KM["capped"], KM["spacing_m"]], [335, False, 10])
 
 check("amplitude 0 -> untouched",
       mla.decorate_stroke([[0, 0], [100, 0]], "jagged", 10, 0)["points"],
@@ -420,9 +474,10 @@ check("bow-tie warned", codes(warns), ["self_intersecting"])
 check("bow-tie area KEPT", len(norm["terrain_areas"]), 1)
 
 norm, warns = sane({"terrain_areas": [
-    {"kind": "grass", "polygon": [[i * 0.1, (i % 7) * 0.1] for i in range(300)]}]})
-check("300 points warned", codes(warns), ["too_many_points"])
-check("300 points dropped", norm["terrain_areas"], [])
+    {"kind": "grass",
+     "polygon": [[i * 0.1, (i % 7) * 0.1] for i in range(2100)]}]})
+check("2100 points warned", codes(warns), ["too_many_points"])
+check("2100 points dropped", norm["terrain_areas"], [])
 
 norm, warns = sane({"terrain_areas": [
     {"kind": "grass", "polygon": [[0, 0], [10, 0]]}],

@@ -79,7 +79,7 @@ a small village fits in 300 × 300 m, a region in a few kilometres.
 - `kind` — **exactly one** of the kinds listed under **Terrain kinds**. Nothing else exists;
   an unknown kind is dropped.
 - `label` — a short name for the shape, shown in the map editor. Optional but helpful.
-- `polygon` — the outline as `[[x, z], …]`, **3 to 24 points**. More is allowed (up to 256) but is
+- `polygon` — the outline as `[[x, z], …]`, **3 to 24 points**. More is allowed (up to 2050) but is
   almost never needed: a wood is a shape, not a tracing. Do not repeat the first point at the end;
   the ring closes itself. The outline must not cross itself.
 - `stroke` — use this **instead of** `polygon` for anything long and thin: a river, a road, a

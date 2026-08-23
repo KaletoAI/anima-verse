@@ -67,8 +67,10 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
 [4] SANITIZER. height_m is CLAMPED (an authoring slip moves the ground to the
     limit, it does not lose the shape): 80 -> 50, −80 -> −50, junk/absent ->
     0.0. falloff_m is a width: −5 -> 0 (a wall, legal), 2000 -> 1000.
-    The outline follows the terrain-area rules: 2 points, 257 points, a
-    coordinate of 1e9, NaN and a dict vertex all raise ValueError. New ids are
+    The outline follows the terrain-area rules: 2 points, MAX_POINTS + 1 =
+    2051 points, a coordinate of 1e9, NaN and a dict vertex all raise
+    ValueError. (The ceiling is the terrain area's — set over there by what
+    the LINE TOOL generates; a height area is only ever clicked by hand.) New ids are
     prefixed "ha_".
 [5] SIGNATURE + STORE + ground_y. With HILL saved:
       ground_y(20,20) = 5.0                (a support point)
@@ -772,8 +774,8 @@ check("falloff clamped", store.sanitize_height_area(
     {"polygon": square(0, 0, 1, 1), "falloff_m": 2000})["falloff_m"], 1000.0)
 raises_value_error("2 points", lambda: store.sanitize_height_area(
     {"polygon": [[0, 0], [1, 1]]}))
-raises_value_error("257 points", lambda: store.sanitize_height_area(
-    {"polygon": [[0, 0]] * 257}))
+raises_value_error("MAX_POINTS + 1 points", lambda: store.sanitize_height_area(
+    {"polygon": [[0, 0]] * (store.MAX_POINTS + 1)}))
 raises_value_error("coordinate 1e9", lambda: store.sanitize_height_area(
     {"polygon": square(0, 0, 1e9, 1)}))
 raises_value_error("NaN coordinate", lambda: store.sanitize_height_area(

@@ -25,8 +25,8 @@ import { TerrainLayer, scatterColor, typeColor } from './TerrainLayer'
 import { HeightLayer } from './HeightLayer'
 import {
   FALLOFF_DEFAULT_M, HEIGHT_DEFAULT_M, HeightAreaChip, HeightAreaList,
-  MAX_COORD, MAX_POINTS, MAX_STROKE_POINTS, MAX_Z_ORDER, MIN_POINTS,
-  MIN_STROKE_POINTS, MapDisplayPanel, STROKE_AMPLITUDE_DEFAULT_M,
+  MAX_COORD, MAX_DRAFT_POINTS, MAX_POINTS, MAX_STROKE_POINTS, MAX_Z_ORDER,
+  MIN_POINTS, MIN_STROKE_POINTS, MapDisplayPanel, STROKE_AMPLITUDE_DEFAULT_M,
   STROKE_SPACING_DEFAULT_M, STROKE_WIDTH_DEFAULT_M, TerrainAreaChip,
   TerrainAreaList, TerrainLayerHint, TerrainToolbar, primaryOf,
   type HeightTool, type MapPrimary, type MapSub, type PaintShape,
@@ -1497,8 +1497,10 @@ export function MapTab() {
    *
    * The checks are on the GENERATED polygon, never on the click count: a
    * mitered join costs 2 points but a bevelled one costs 4, so a bendy line can
-   * multiply its clicks by four (`4n − 4` worst case) and blow through the
-   * server's 256-point limit that 100 clicks look safely under.
+   * multiply its centre points by four (`4n − 4` worst case) and blow through
+   * the server's `MAX_POINTS` limit that the decoration's own budget
+   * (`MAX_DECORATED_POINTS`, a bound on the MITRED case only) looks safely
+   * under.
    *
    * The area floor is `widthM²/100` — a hundredth of the smallest honest
    * ribbon, the square of one width. What it catches is the blob: two clicks
@@ -1680,7 +1682,7 @@ export function MapTab() {
         return
       }
     }
-    const cap = line ? MAX_STROKE_POINTS : MAX_POINTS
+    const cap = line ? MAX_STROKE_POINTS : MAX_DRAFT_POINTS
     if (cur.length >= cap) {
       toast((line
         ? t('A line holds at most {n} points')

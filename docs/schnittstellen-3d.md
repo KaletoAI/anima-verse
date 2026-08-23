@@ -864,8 +864,10 @@ immer sichtbar, nur Locations verstecken sich.
 - `types` ist der **wirksame** Katalog, nach `kind` sortiert.
 - `areas` kommen **von unten nach oben**: `z_order` aufsteigend, bei
   Gleichstand die Malreihenfolge. Der LETZTE Eintrag liegt oben.
-- `polygon` = `[[x, z], …]` in Welt-Metern, auf 2 Stellen gerundet, 3–256
-  Punkte, automatisch geschlossen.
+- `polygon` = `[[x, z], …]` in Welt-Metern, auf 2 Stellen gerundet, 3–2050
+  Punkte, automatisch geschlossen. Die Obergrenze setzt das LINIENWERKZEUG:
+  eine `wavy`-Linie wird alle 3 m abgetastet, ein Kilometer Fluss sind 335
+  Mittellinien-Punkte und das gehrte Band darum ist doppelt so breit.
 - `sig` ist dieselbe Signatur wie `terrain_sig` in der Weltkarte: einmal
   holen, bei Signaturwechsel neu holen. Sie deckt die Flächen **und den
   WIRKSAMEN Katalog** ab (Grundstock + Welt-Zeilen, Runde 2 der
@@ -1108,7 +1110,7 @@ Routers.
 | `DELETE /world/height-areas/{id}` | Löscht eine Höhenfläche (der Boden dort fällt auf die flache Welt zurück); **404**, wenn es sie nicht gab |
 
 Geprüft wird **beim Schreiben**, nicht beim Lesen (die Leser scheitern
-still): Art muss im Katalog stehen · Polygon 3–256 endliche
+still): Art muss im Katalog stehen · Polygon 3–2050 endliche
 `[x, z]`-Punkte, Betrag ≤ 100 000, auf 2 Stellen gerundet · `z_order`
 geklemmt auf ±10 000 · `speed_factor` geklemmt auf 0…2 (nicht-endlich →
 1,0) · `color` genau `#rrggbb` · `kind` klein, 1–40 Zeichen aus

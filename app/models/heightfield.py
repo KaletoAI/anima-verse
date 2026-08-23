@@ -33,8 +33,10 @@ from app.core.timeutils import utc_now_iso
 
 #: Outline limits — the same ones a painted terrain area has
 #: (``app/models/terrain.py``), because both are polygons in world metres that
-#: every renderer parses.
-MAX_POINTS = 256
+#: every renderer parses. The number itself is set over there, by what the
+#: LINE TOOL generates; a height area is only ever clicked by hand and stays
+#: far below it.
+MAX_POINTS = 2050
 MAX_COORD = 100_000.0
 
 #: How far the ground may leave the flat world, in metres, in either
@@ -59,11 +61,11 @@ def _finite(value: Any) -> Optional[float]:
 
 
 def _sanitize_polygon(raw: Any) -> List[List[float]]:
-    """The outline, 3..256 finite ``[x, z]`` points on the 2-decimal metre
-    grid. Identical rules to a terrain area's polygon — same reasons, listed
-    in ``app/models/terrain._sanitize_polygon``."""
+    """The outline, 3..:data:`MAX_POINTS` finite ``[x, z]`` points on the
+    2-decimal metre grid. Identical rules to a terrain area's polygon — same
+    reasons, listed in ``app/models/terrain._sanitize_polygon``."""
     if not isinstance(raw, list) or not 3 <= len(raw) <= MAX_POINTS:
-        raise ValueError("polygon needs 3..256 points")
+        raise ValueError(f"polygon needs 3..{MAX_POINTS} points")
     pts: List[List[float]] = []
     for pt in raw:
         try:

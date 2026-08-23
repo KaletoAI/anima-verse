@@ -56,13 +56,27 @@ STROKE_MITER_LIMIT_WIDTHS = 2
 #: Two stroke points closer than this are the same click, not a segment.
 STROKE_EPS = 1e-9
 #: Points a DECORATED centre line may end up with — the budget of the
-#: server's 256-point polygon limit counted where it is spent (a mitred
-#: ribbon is 2n points wide).
-MAX_DECORATED_POINTS = 120
+#: server's polygon limit (``app.models.terrain.MAX_POINTS``) counted where it
+#: is spent (a mitred ribbon is 2n points wide). 1024 is what a KILOMETRE of
+#: ``wavy`` river needs at a sample every 3 m.
+MAX_DECORATED_POINTS = 1024
 #: The smallest deflection, as a fraction of the amplitude.
 DEFLECTION_MIN_FACTOR = 0.4
-#: Deflections per full wave of the ``wavy`` style.
+#: Deflection spacings per full wave of the ``wavy`` style — the sine's period
+#: is ``4 · spacing``.
 WAVE_SPACINGS_PER_PERIOD = 4
+#: How finely ``wavy`` SAMPLES that sine: at least this many samples per
+#: deflection spacing, i.e. 12 per period.
+WAVE_SAMPLES_PER_SPACING = 3
+#: …and never further apart than this, in metres.
+WAVE_SAMPLE_MAX_M = 3.0
+#: How far to either side of a clicked CORNER the side normal is blended from
+#: the incoming segment's to the outgoing one's, as a fraction of the spacing.
+CORNER_BLEND_SPACINGS = 0.5
+#: Above this many vertices the O(n²) self-intersection HINT is skipped — see
+#: :func:`polygon_self_intersects`. 400 points is 160 000 edge tests, which is
+#: still instant; the 2050 the sanitizer takes would be four million.
+SELF_INTERSECT_MAX_POINTS = 400
 #: The three styles a centre line may be bent with (``mapMath.STROKE_STYLES``).
 STROKE_STYLES = ("straight", "jagged", "wavy")
 
@@ -181,21 +195,39 @@ def _clean_line(points: Any) -> Optional[List[List[float]]]:
     return line
 
 
+def _ease(t: float) -> float:
+    """Cosine ease over ``[0, 1]``: 0 at 0, 1 at 1, FLAT at both ends — the
+    twin of ``mapMath.ease``. The flat ends are what makes every join it
+    interpolates kink-free."""
+    return (1 - math.cos(math.pi * t)) / 2
+
+
 def decorate_stroke(points: Any, style: str, spacing_m: float,
                     amplitude_m: float, seed: str = "") -> Dict[str, Any]:
     """Bend a clicked centre line — the step BEFORE :func:`stroke_to_polygon`.
 
-    The port of ``mapMath.decorateStroke``. Returns
+    The port of ``mapMath.decorateStroke``, whose docstring carries the full
+    rule and every hand-derived case. Returns
     ``{"points": [...], "spacing_m": float, "capped": bool}``; the input list
     comes back unchanged for the ``straight`` style, an unknown style, a
     non-positive spacing or amplitude, a line with fewer than two distinct
     points and a line of zero length — a decoration that cannot be computed
     is no decoration, never half of one.
 
-    Hand-derived (the TS docstring's cases, pinned in the smoke):
+    In short: deflections of random height ``[0.4·A, A]`` sit at arc length
+    ``spacing/2``, ``3·spacing/2``, …; ``jagged`` puts ONE point per deflection
+    on alternating sides, ``wavy`` draws the CONTINUOUS curve
+    ``offset(d) = A(d)·sin(phase + 2π·d/(4·spacing))`` — ``A(d)`` the
+    deflection heights cosine-eased into each other and pinned to 0 at the two
+    clicked ends — sampled every ``min(spacing/3, 3 m)``. At a clicked corner
+    the side normal is blended over ``±spacing/2`` of arc length instead of
+    snapping, so the corner bends.
+
+    Hand-derived (the TS docstring's cases, pinned in the smokes):
     ``[(0,0),(100,0)]``, jagged, spacing 10, amplitude 2 → deflections at
     5, 15, …, 95, so 10 of them and 12 points in all, alternating sides of the
-    normal ``(0,-1)`` with heights in ``[0.8, 2]``.
+    normal ``(0,-1)`` with heights in ``[0.8, 2]``; the same line WAVY → arc
+    positions 0, 3, …, 99 plus the end 100, i.e. 35 points.
     """
     plain = {"points": points, "spacing_m": spacing_m, "capped": False}
     if style not in ("jagged", "wavy"):
@@ -216,45 +248,151 @@ def decorate_stroke(points: Any, style: str, spacing_m: float,
     if not total > 0:
         return plain
 
+    # The per-segment side-A normal (dz, -dx), unit length.
+    nrm: List[Tuple[float, float]] = []
+    for i in range(1, len(line)):
+        seg_len = cum[i] - cum[i - 1]
+        nrm.append(((line[i][1] - line[i - 1][1]) / seg_len,
+                    -(line[i][0] - line[i - 1][0]) / seg_len))
+
+    # The budget. ``jagged`` spends one point per deflection, so its budget IS
+    # the spacing; ``wavy`` spends one per SAMPLE, so the sample step is what
+    # has to give and the spacing follows it up — fewer samples per period is
+    # the zigzag this style exists to avoid.
     room = MAX_DECORATED_POINTS - len(line)
     if room <= 0:
         return {"points": line, "spacing_m": sp, "capped": True}
     spacing = sp
     capped = False
-    if spacing < total / room:
+    step = 0.0
+    if style == "wavy":
+        step = min(spacing / WAVE_SAMPLES_PER_SPACING, WAVE_SAMPLE_MAX_M)
+        if step < total / room:
+            step = total / room
+            spacing = max(spacing, step * WAVE_SAMPLES_PER_SPACING)
+            capped = True
+    elif spacing < total / room:
         spacing = total / room
         capped = True
 
+    # The deflections: where they sit and how high they are. The phase is
+    # drawn first and the heights in one run, so both styles read the same
+    # stream and switching between them keeps the heights.
     rnd = seeded_random(seed or stroke_seed(line))
     phase = rnd() * math.pi * 2
-    out: List[List[float]] = [line[0]]
-    seg = 1
-    i = 0
+    anchor_d: List[float] = []
+    anchor_h: List[float] = []
     d = spacing / 2
     while d < total - STROKE_EPS:
-        while seg < len(line) - 1 and cum[seg] <= d:
-            out.append(line[seg])
+        anchor_d.append(d)
+        anchor_h.append(am * (DEFLECTION_MIN_FACTOR
+                              + (1 - DEFLECTION_MIN_FACTOR) * rnd()))
+        d += spacing
+
+    def normal_at(d: float, seg: int) -> Tuple[float, float]:
+        """The unit side normal at arc length ``d`` on segment ``seg``
+        (1-based), blended across a clicked corner instead of snapping at it.
+        The window is clipped to half of either adjoining segment, so two
+        corners can never claim the same sample."""
+        for c in (seg - 1, seg):
+            if c < 1 or c > len(line) - 2:
+                continue
+            dd = d - cum[c]
+            half = min(spacing * CORNER_BLEND_SPACINGS,
+                       (cum[c] - cum[c - 1]) / 2, (cum[c + 1] - cum[c]) / 2)
+            if not half > STROKE_EPS or abs(dd) >= half:
+                continue
+            b = _ease((dd + half) / (2 * half))
+            mx = (1 - b) * nrm[c - 1][0] + b * nrm[c][0]
+            mz = (1 - b) * nrm[c - 1][1] + b * nrm[c][1]
+            ml = math.hypot(mx, mz)
+            # A hairpin's two normals cancel — there is no "between" to blend
+            # to, so the segment's own normal stands.
+            if ml > STROKE_EPS:
+                return (mx / ml, mz / ml)
+        return nrm[seg - 1]
+
+    # The offset's amplitude: the deflection heights, cosine-eased into each
+    # other and pinned to 0 at both clicked ends, so the curve leaves and
+    # re-enters the line tangentially. ``env_i`` walks with the samples.
+    env_d = [0.0] + anchor_d + [total]
+    env_h = [0.0] + anchor_h + [0.0]
+    env_i = [0]
+
+    def envelope(d: float) -> float:
+        i = env_i[0]
+        while i + 2 < len(env_d) and env_d[i + 1] < d:
+            i += 1
+        env_i[0] = i
+        span = env_d[i + 1] - env_d[i]
+        if not span > 0:
+            return env_h[i + 1]
+        t = min(1.0, max(0.0, (d - env_d[i]) / span))
+        return env_h[i] + (env_h[i + 1] - env_h[i]) * _ease(t)
+
+    # The arc positions to put a point at, each tagged with the deflection it
+    # belongs to — or CLICK for a clicked point, reproduced and not computed.
+    ds: List[float] = []
+    tag: List[int] = []
+    click = -1
+    if style == "jagged":
+        walk = 1
+        for i, ad in enumerate(anchor_d):
+            while walk < len(line) - 1 and cum[walk] <= ad:
+                ds.append(cum[walk])
+                tag.append(click)
+                walk += 1
+            ds.append(ad)
+            tag.append(i)
+        while walk < len(line) - 1:
+            ds.append(cum[walk])
+            tag.append(click)
+            walk += 1
+    else:
+        walk = 1
+
+        def push(d: float) -> None:
+            if ds and d - ds[-1] <= STROKE_EPS:
+                return
+            ds.append(d)
+            tag.append(0)
+
+        k = 0
+        while k * step < total - STROKE_EPS:
+            d = k * step
+            while walk <= len(line) - 2 and cum[walk] < d - STROKE_EPS:
+                push(cum[walk])
+                walk += 1
+            push(d)
+            k += 1
+        while walk <= len(line) - 2:
+            push(cum[walk])
+            walk += 1
+
+    out: List[List[float]] = [line[0]]
+    seg = 1
+    for k in range(len(ds)):
+        d = ds[k]
+        while seg < len(line) - 1 and (cum[seg] <= d if style == "jagged"
+                                       else cum[seg] < d - STROKE_EPS):
             seg += 1
+        if tag[k] == click:
+            out.append(line[seg - 1])
+            continue
+        if d <= STROKE_EPS:            # the start cap, already standing
+            continue
         ax, az = line[seg - 1]
         bx, bz = line[seg]
-        seg_len = cum[seg] - cum[seg - 1]
-        f = (d - cum[seg - 1]) / seg_len
-        nx = (bz - az) / seg_len
-        nz = -(bx - ax) / seg_len
-        height = am * (DEFLECTION_MIN_FACTOR
-                       + (1 - DEFLECTION_MIN_FACTOR) * rnd())
+        f = (d - cum[seg - 1]) / (cum[seg] - cum[seg - 1])
+        nx, nz = normal_at(d, seg)
         if style == "jagged":
-            side = 1.0 if i % 2 == 0 else -1.0
+            off = anchor_h[tag[k]] * (1.0 if tag[k] % 2 == 0 else -1.0)
         else:
-            side = math.sin(phase + (i * 2 * math.pi) / WAVE_SPACINGS_PER_PERIOD)
-        off = height * side
+            off = envelope(d) * math.sin(
+                phase + (2 * math.pi * d) / (WAVE_SPACINGS_PER_PERIOD * spacing))
         out.append([_round2(ax + f * (bx - ax) + off * nx),
                     _round2(az + f * (bz - az) + off * nz)])
-        d += spacing
-        i += 1
-    while seg < len(line):
-        out.append(line[seg])
-        seg += 1
+    out.append(line[-1])
     return {"points": out, "spacing_m": spacing, "capped": capped}
 
 
@@ -404,11 +542,19 @@ def _segments_cross(a: List[float], b: List[float],
 
 
 def polygon_self_intersects(polygon: Sequence[Sequence[float]]) -> bool:
-    """Does the ring cross itself? A plain O(n²) edge test — polygons here
-    are capped at 256 points, and the answer is a WARNING, not a gate."""
+    """Does the ring cross itself? A plain O(n²) edge test, and the answer is
+    a WARNING, not a gate.
+
+    That is also why it simply gives up above
+    :data:`SELF_INTERSECT_MAX_POINTS`: the polygon limit is 2050 since a
+    sampled ``wavy`` line generates rings that long, and 2050 points are four
+    MILLION edge tests for a hint that nothing depends on. A ring that long is
+    machine-generated from a centre line anyway — it crosses itself exactly
+    where the line does, which the author can see.
+    """
     pts = [[float(p[0]), float(p[1])] for p in polygon]
     n = len(pts)
-    if n < 4:
+    if n < 4 or n > SELF_INTERSECT_MAX_POINTS:
         return False
     for i in range(n):
         a, b = pts[i], pts[(i + 1) % n]
@@ -430,7 +576,7 @@ WARNING_CODES = (
     "unknown_kind",       # terrain kind not in the catalog — area dropped
     "unknown_location",   # location id not in this world — entry dropped
     "invalid_geometry",   # polygon/stroke unusable — entry dropped
-    "too_many_points",    # more than the 256 the sanitizer takes — dropped
+    "too_many_points",    # more than the sanitizer takes — entry dropped
     "self_intersecting",  # ring crosses itself — kept
     "out_of_bounds",      # a point outside the agreed box — kept
     "on_impassable",      # a place standing on impassable ground — kept
@@ -597,6 +743,10 @@ def sanitize_map_layout(data: Any, *,
     is not an object or carries nothing at all; everything else is a warning,
     because "a hut on the rocks" is an authoring decision and not a defect.
     """
+    # Read where it is enforced, not mirrored: the sanitizer is the one that
+    # refuses an oversized ring, so the WARNING must quote its number.
+    from app.models.terrain import MAX_POINTS as MAX_POLYGON_POINTS
+
     if not isinstance(data, dict):
         raise ValueError("map layout must be an object")
 
@@ -666,10 +816,10 @@ def sanitize_map_layout(data: Any, *,
                 continue
             polygon = [[_round2(x), _round2(z)] for x, z in polygon]
 
-        if len(polygon) > 256:
+        if len(polygon) > MAX_POLYGON_POINTS:
             _warn(warnings, "too_many_points", ref,
                   f"'{name}': {len(polygon)} points, the map takes at most "
-                  f"256 — area dropped.")
+                  f"{MAX_POLYGON_POINTS} — area dropped.")
             continue
         if polygon_self_intersects(polygon):
             _warn(warnings, "self_intersecting", ref,
@@ -707,10 +857,10 @@ def sanitize_map_layout(data: Any, *,
                   f"points — height area dropped.")
             continue
         polygon = [[_round2(x), _round2(z)] for x, z in polygon]
-        if len(polygon) > 256:
+        if len(polygon) > MAX_POLYGON_POINTS:
             _warn(warnings, "too_many_points", ref,
                   f"'{name}': {len(polygon)} points, the map takes at most "
-                  f"256 — height area dropped.")
+                  f"{MAX_POLYGON_POINTS} — height area dropped.")
             continue
         if polygon_self_intersects(polygon):
             _warn(warnings, "self_intersecting", ref,

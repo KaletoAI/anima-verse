@@ -7,8 +7,14 @@ Throwaway storage. Hand-derived expectations:
       -> id starts with "ta_", z_order 0, polygon values rounded floats.
   [2] save_area with kind "nope_unknown" -> ValueError (kind must exist in
       the effective catalog).
-  [3] save_area with 2 points -> ValueError; 257 points -> ValueError;
-      coordinate 1e9 -> ValueError.
+  [3] save_area with 2 points -> ValueError; MAX_POINTS + 1 = 2051 points ->
+      ValueError; coordinate 1e9 -> ValueError. The ceiling is 2050 =
+      2 · MAX_DECORATED_POINTS + 2 since 2026-08-23: a `wavy` line is sampled
+      every 3 m so that its sine reads as a curve, a kilometre of river is 335
+      centre points, and the mitred ribbon around a centre line is twice as
+      wide plus the two points one bevelled join adds. The centre LINE of a
+      stroke recipe has its own, half as high (MAX_STROKE_POINTS = 1024) —
+      it is what the outline is generated from.
   [4] Update: save_area({id: <id1>, kind: "water", polygon: ...,
       z_order: 5}) -> list_areas() returns it LAST (highest z_order).
   [5] delete_area(<id1>) -> True; second delete -> False.
@@ -217,8 +223,10 @@ Throwaway storage. Hand-derived expectations:
       these fields, so a stray key or a NaN spacing would reshape ground on
       the next edit.
       Required, or the recipe is refused outright (ValueError): `points`
-      (2..256 [x, z] numbers, rounded and range-checked exactly like an
-      outline — one point is not a line) and `width_m` (a positive number).
+      (2..MAX_STROKE_POINTS = 1024 [x, z] numbers, rounded and range-checked
+      exactly like an outline, only capped at half its 2050 because the
+      outline is GENERATED from this line — one point is not a line) and
+      `width_m` (a positive number).
       Optional and whitelisted:
         style       "straight"/"jagged"/"wavy", trimmed; anything else loses
                     the key, and a missing style IS straight — the state of
@@ -349,17 +357,23 @@ raises_value_error("2 points raises",
                    lambda: terrain.save_area({"kind": "water",
                                               "polygon": [[0, 0], [1, 1]]}))
 raises_value_error(
-    "257 points raises",
-    lambda: terrain.save_area({"kind": "water",
-                               "polygon": [[i, i] for i in range(257)]}))
+    "MAX_POINTS + 1 points raises",
+    lambda: terrain.save_area(
+        {"kind": "water",
+         "polygon": [[i, i] for i in range(terrain.MAX_POINTS + 1)]}))
 raises_value_error(
     "1e9 coordinate raises",
     lambda: terrain.save_area({"kind": "water",
                                "polygon": [[0, 0], [1e9, 0], [1, 1]]}))
-check("256 points accepted",
-      len(terrain.sanitize_area({"kind": "water",
-                                 "polygon": [[i, i] for i in range(256)]})["polygon"]),
-      256)
+check("MAX_POINTS = 2050 = 2 · MAX_DECORATED_POINTS + 2", terrain.MAX_POINTS,
+      2050)
+check("...and exactly that many points are accepted",
+      len(terrain.sanitize_area(
+          {"kind": "water",
+           "polygon": [[i, i] for i in range(terrain.MAX_POINTS)]})["polygon"]),
+      2050)
+check("the CENTRE LINE of a recipe is capped at half that",
+      terrain.MAX_STROKE_POINTS, 1024)
 
 print("[4] update lifts the area to the top")
 area2 = terrain.save_area({"kind": "grass", "polygon": SQUARE})
@@ -1030,9 +1044,15 @@ for bad in (0, -2, float("nan"), "wide"):
                        lambda bad=bad: stroke_of({"points": LINE, "width_m": bad}))
 raises_value_error("one point is not a line",
                    lambda: stroke_of({"points": [[0, 0]], "width_m": 3}))
+check("MAX_STROKE_POINTS line points accepted",
+      len(stroke_of({"points": [[i, i]
+                                for i in range(terrain.MAX_STROKE_POINTS)],
+                     "width_m": 3})["points"]), 1024)
 raises_value_error(
-    "257 line points raise",
-    lambda: stroke_of({"points": [[i, i] for i in range(257)], "width_m": 3}))
+    "one line point more raises",
+    lambda: stroke_of({"points": [[i, i]
+                                  for i in range(terrain.MAX_STROKE_POINTS + 1)],
+                       "width_m": 3}))
 raises_value_error("a junk vertex raises",
                    lambda: stroke_of({"points": [[0, 0], {"x": 1}], "width_m": 3}))
 raises_value_error(

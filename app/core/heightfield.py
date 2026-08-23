@@ -736,9 +736,13 @@ def _rim_samples(ring: Sequence[Sequence[float]], spacing: float = 2.0,
     vertices matters for exactly the shapes that hurt: a lake drawn with four
     corners has its interesting heights in the middle of its edges.
 
-    The cap keeps a 256-point outline around a kilometre-wide area from turning
-    into a hundred thousand height evaluations; past it the spacing simply
-    grows. Degenerate rings (fewer than three points) answer empty.
+    The cap keeps an outline around a kilometre-wide area from turning into a
+    hundred thousand height evaluations; past it the spacing simply grows. It
+    is a cap on the SPACING, not on the count: every edge contributes at least
+    one sample, so a ring with more vertices than the cap answers one per
+    vertex — which is the ceiling the sanitizer sets (2050, and 670 for the
+    kilometre of `wavy` river that made it that high). Degenerate rings (fewer
+    than three points) answer empty.
     """
     pts: List[Tuple[float, float]] = []
     n = len(ring)

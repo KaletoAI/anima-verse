@@ -35,7 +35,29 @@ from typing import Any, Dict, List
 from app.core.db import get_connection, transaction
 from app.core.timeutils import utc_now_iso
 
-MAX_POINTS = 256
+#: Vertices ONE polygon may carry — the outline of a painted area, and by
+#: mirror (``app.models.heightfield``) of a height area.
+#:
+#: It is the LINE TOOL that sets the number. A line drawn ``wavy`` is sampled
+#: every 3 m so that its sine reads as a curve instead of a chain of corners
+#: (``mapMath.decorateStroke``), which a kilometre of river spends 335 centre
+#: points on; the mitred ribbon around a centre line is ``2n`` points wide, so
+#: the budget is ``2 · MAX_DECORATED_POINTS + 2`` = 2050 — the centre-line cap
+#: (1024) doubled, plus the two points one bevelled join adds.
+#:
+#: What the raise costs, measured where it is spent: the terrain masks are
+#: baked by a SCANLINE (``core.terrain_layers.rank_grid``), i.e. O(rows × ring)
+#: and not O(texels × ring), so a 670-point river costs 2.6× a 256-point one
+#: on a bake that is cached by signature; ``pointInRing`` in the scatter
+#: sampler is O(ring) per candidate, some 120 candidates per 64 m cell. The one
+#: place the raise does NOT pay for itself is the O(n²) self-intersection
+#: WARNING of the map-apply, which is why that one skips oversized rings
+#: (``core.map_layout_apply.SELF_INTERSECT_MAX_POINTS``).
+MAX_POINTS = 2050
+#: Points the CENTRE LINE of a stroke recipe may carry (``meta.stroke``). The
+#: editor's own gesture cap is far lower (100 clicks); this is the ceiling the
+#: decorated line is budgeted against.
+MAX_STROKE_POINTS = 1024
 MAX_COORD = 100_000.0
 MAX_Z_ORDER = 10_000
 #: Scatter entries one area may carry. What GROWS on a painted area is
@@ -143,12 +165,15 @@ def _sanitize_scatter_list(raw: Any) -> List[Dict[str, Any]]:
     return [_sanitize_scatter_entry(entry) for entry in raw]
 
 
-def _sanitize_points(raw: Any, minimum: int, what: str) -> List[List[float]]:
+def _sanitize_points(raw: Any, minimum: int, what: str,
+                     maximum: int = MAX_POINTS) -> List[List[float]]:
     """A list of ``[x, z]`` world metres, whitelisted and rounded — the outline
-    of an area (``minimum`` 3) and the centre line of a stroke recipe
-    (``minimum`` 2) are the same kind of list under two names."""
-    if not isinstance(raw, list) or not minimum <= len(raw) <= MAX_POINTS:
-        raise ValueError(f"{what} needs {minimum}..{MAX_POINTS} points")
+    of an area (``minimum`` 3, up to :data:`MAX_POINTS`) and the centre line of
+    a stroke recipe (``minimum`` 2, up to :data:`MAX_STROKE_POINTS`) are the
+    same kind of list under two names, and only the ceiling differs: the line
+    is what the outline is GENERATED from, so it is half the outline's."""
+    if not isinstance(raw, list) or not minimum <= len(raw) <= maximum:
+        raise ValueError(f"{what} needs {minimum}..{maximum} points")
     pts: List[List[float]] = []
     for pt in raw:
         # A vertex may be any 2-element sequence of numbers. Everything else
@@ -209,7 +234,8 @@ def _sanitize_stroke(raw: Any) -> Dict[str, Any]:
     if width is None or width <= 0:
         raise ValueError("meta.stroke needs a positive width_m")
     out: Dict[str, Any] = {
-        "points": _sanitize_points(raw.get("points"), 2, "meta.stroke"),
+        "points": _sanitize_points(raw.get("points"), 2, "meta.stroke",
+                                   MAX_STROKE_POINTS),
         "width_m": round(width, 2),
     }
     style = raw.get("style")

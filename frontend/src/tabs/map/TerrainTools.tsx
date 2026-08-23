@@ -87,8 +87,15 @@ export type PaintShape = 'area' | 'line'
 /** Server mirrors — `_sanitize_polygon`/`sanitize_area` in
  *  `app/models/terrain.py`. */
 export const MIN_POINTS = 3
-export const MAX_POINTS = 256
+export const MAX_POINTS = 2050
 export const MAX_COORD = 100000
+
+/** Clicks ONE hand-drawn ring may take. Not a server mirror: the storage cap
+ *  above is what the LINE TOOL generates (a sampled `wavy` kilometre is 670
+ *  outline points), and nobody clicks a ring two thousand times — a gesture
+ *  that long is a stuck mouse button, and every one of those clicks is a
+ *  handle to drag afterwards. */
+export const MAX_DRAFT_POINTS = 256
 export const MAX_Z_ORDER = 10000
 
 /** Server mirror — `app/models/terrain.MAX_SCATTER_ENTRIES`. */
@@ -132,9 +139,8 @@ export const MIN_STROKE_POINTS = 2
 
 /** Click limit of a centre LINE. It is not the server's — the server only ever
  *  sees the generated polygon, which a bendy line inflates by up to 4n−4
- *  points. This caps the gesture at something that cannot possibly overrun the
- *  256-point polygon limit by accident; the generated polygon is checked on
- *  top of it, because a hairpin chain overruns it anyway. */
+ *  points. This caps the GESTURE; the generated polygon is checked against
+ *  `MAX_POINTS` on top of it, because a hairpin chain overruns that anyway. */
 export const MAX_STROKE_POINTS = 100
 
 /** Stroke width in metres: a footpath at the bottom, a broad river at the top,
@@ -741,14 +747,17 @@ export function TerrainToolbar({
                     onCommit={onAmplitudeM} />
                 </>
               )}
-              {/* One area holds 256 outline points and a deflection costs two
-                  of them, so a dense line on a long stroke is thinned out
-                  instead of refused on save — and says so, because a line
-                  drawn coarser than its own field claims is the kind of
-                  silence that gets read as a broken knob. */}
+              {/* One area holds `MAX_POINTS` outline points and every centre
+                  point costs two of them, so a line long enough to overrun
+                  that is drawn coarser instead of being refused on save — and
+                  says so, because a line drawn coarser than its own field
+                  claims is the kind of silence that gets read as a broken
+                  knob. It takes some three kilometres of `wavy` river to get
+                  here. */}
               {cappedSpacingM > 0 ? (
                 <span className="ga-map-arm warn"
-                  title={t('An area may hold 256 outline points, and every deflection spends two of them. The line still gets its style — just at the closest spacing that fits. Shorten the line or set a wider spacing to draw the one you asked for.')}>
+                  title={t('An area may hold {max} outline points, and every point of the centre line spends two of them. The line still gets its style — just at the closest spacing that fits. Shorten the line or set a wider spacing to draw the one you asked for.')
+                    .replace('{max}', String(MAX_POINTS))}>
                   {t('Too many deflections for one area — this line is drawn with one every {n} m.')
                     .replace('{n}', String(Math.round(cappedSpacingM * 10) / 10))}
                 </span>
@@ -806,7 +815,7 @@ export function TerrainToolbar({
                     .replace('{max}', String(MAX_STROKE_POINTS))
                   : t('{n} of {max} points — click the first one to close, Escape discards')
                     .replace('{n}', String(draftLen))
-                    .replace('{max}', String(MAX_POINTS)))}
+                    .replace('{max}', String(MAX_DRAFT_POINTS)))}
             {draftLen > 0 ? (
               <>
                 <button type="button" className="ga-btn ga-btn-sm"
@@ -867,7 +876,7 @@ export function TerrainToolbar({
                     ? t('Click the map to set the first point')
                     : t('{n} of {max} points — click the first one to close, Escape discards')
                       .replace('{n}', String(draftLen))
-                      .replace('{max}', String(MAX_POINTS))}
+                      .replace('{max}', String(MAX_DRAFT_POINTS))}
                 {draftLen > 0 ? (
                   <>
                     <button type="button" className="ga-btn ga-btn-sm"
