@@ -205,8 +205,9 @@ export function terrainPace(speedFactor: number, scope: GroundScope): number {
  * not swim across a tiled hall standing in a lake.
  *
  * The clip kind goes into the open vocabulary of `Figure.play` unchecked —
- * a kind no model carries falls back through `figures.CLIP_FALLBACK` (swim →
- * walk) and finally to idle, which is the same road every other kind takes.
+ * a kind no model carries falls back through `clipCoverage.resolveClipKind` —
+ * same FAMILY first (`walk` ↔ `walk-cmu`), then `CLIP_FALLBACK` (swim → walk),
+ * finally idle, which is the same road every other kind takes.
  * STANDING is `idleClip`'s business, not this one's.
  */
 export function moveClip(moveAnim: string, running: boolean,

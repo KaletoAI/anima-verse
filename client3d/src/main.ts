@@ -4,6 +4,7 @@ import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { activityToClipKind, FigureLibrary } from './scene/figures';
+import { animFamily, matchAnimKind } from './scene/clipCoverage';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
   groundScope, slideBlocked, slopeBlocks, terrainBlocks, terrainPace, walkDir,
@@ -1978,11 +1979,21 @@ async function startApp(username: string, role: string) {
           // Aktivitäts-Animation entscheidet die Stellfläche. Kuratierte
           // Marker (AV3D-11) schlagen die Heuristik aus der Modell-Abtastung.
           const kind = c.activity_animation || activityToClipKind(c.activity || '');
-          const marked = tile.roomMarkers.get(inRoom)?.get(kind);
+          // Marker und Kind treffen sich über die FAMILIE (`matchAnimKind`):
+          // a marker authored `walk` serves a character on `walk-cmu` and the
+          // other way round — the exact kind still wins wherever it exists.
+          // Without it the pose catalog's `walk` → `walk-cmu` rename of
+          // 2026-08-24 silently unhooked every marker authored before it.
+          const byKind = tile.roomMarkers.get(inRoom);
+          const markerKind = byKind ? matchAnimKind([...byKind.keys()], kind) : '';
+          const marked = markerKind ? byKind!.get(markerKind) : undefined;
           const sit = tile.roomSitSpots.get(inRoom);
           const lieDown = tile.roomLieSpots.get(inRoom);
-          const pool = kind === 'lie' ? (lieDown?.length ? lieDown : sit)
-            : kind === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
+          // Die Stellflächen-Wahl läuft über dieselbe Familie — `sit-cmu` ist
+          // ein Sitzen und gehört auf die Sitz-Flächen.
+          const family = animFamily(kind);
+          const pool = family === 'lie' ? (lieDown?.length ? lieDown : sit)
+            : family === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
           if (marked?.length) {
             // kuratierter Marker: Position, Blickrichtung UND Neigung
             const m = marked[idx % marked.length];

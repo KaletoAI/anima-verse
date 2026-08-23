@@ -80,6 +80,96 @@
  *   ([], [idle])                           -> ''
  *
  * ---------------------------------------------------------------------------
+ * (1c) animFamily(kind) — the family of an animation kind
+ * ---------------------------------------------------------------------------
+ * Everything before the FIRST `-`, trimmed and lower-cased; an empty kind is
+ * the idle family. The inner `_` is NOT a separator (the server's parser cuts
+ * only a trailing `_<number>` take suffix), and a LEADING `-` separates
+ * nothing — there is no motion in front of it, so the kind stays whole.
+ *
+ *   walk            -> walk        walk-cmu       -> walk
+ *   run-fast        -> run         "  RUN  "      -> run
+ *   swim-idle       -> swim        treading-water -> treading
+ *   sit_a           -> sit_a       -cmu           -> -cmu
+ *   ''              -> idle        undefined      -> idle
+ *
+ * WHY: the pose catalog renamed walking's kind `walk` → `walk-cmu` on
+ * 2026-08-24. Every literal `'walk'` in the client stopped matching — the
+ * procedural gait of a clip-less rig froze, the clip fallback dropped to idle
+ * and room markers authored `walk` matched nothing. The family is the grouping
+ * that survives a rename: the hyphen separates the motion from the SOURCE of
+ * the take.
+ *
+ * ---------------------------------------------------------------------------
+ * (1d) matchAnimKind(available, kind) — the exact kind, else a relative
+ * ---------------------------------------------------------------------------
+ * Exact wins; then the FAMILY BASE among the relatives; then the first listed
+ * relative; `''` when nothing is of the sort. The entry comes back AS PASSED
+ * IN, so the caller can look it up in its own map. It matches BOTH ways —
+ * that is the marker half of the finding.
+ *
+ *   ([walk, idle], walk-cmu)                 -> walk        rename, rig side
+ *   ([walk-cmu, idle], walk)                 -> walk-cmu    rename, marker side
+ *   ([walk, walk-cmu], walk-cmu)             -> walk-cmu    exact beats the
+ *                                                           relative listed first
+ *   ([walk-mixamo, walk], walk-cmu)          -> walk        the family BASE
+ *                                                           beats another take
+ *   ([walk-mixamo, walk-cmu], walk)          -> walk-mixamo no base -> first
+ *   ([" Walk "], walk-cmu)                   -> " Walk "    returned unchanged
+ *   ([run, run-fast], run-fast)              -> run-fast
+ *   ([idle-loop], idle)                      -> idle-loop
+ *   ([idle, sit], walk-cmu)                  -> ''
+ *   ([], walk) / ([walk], '')                -> ''
+ *
+ * ---------------------------------------------------------------------------
+ * (1e) clipKindChain(kind) / resolveClipKind(kind, bound) — WHICH clip plays
+ * ---------------------------------------------------------------------------
+ * The chain is kind → its `CLIP_FALLBACK` stand-in → its FAMILY'S stand-in →
+ * idle, blanks and duplicates dropped. The family of the kind is no step of
+ * its own because every step is matched with `matchAnimKind`, which already
+ * takes a relative once the exact kind is missing — that is what keeps the two
+ * directions symmetric.
+ *
+ *   walk-cmu       -> [walk-cmu, idle]
+ *   walk           -> [walk, idle]
+ *   run            -> [run, walk, idle]              (fallback run -> walk)
+ *   run-fast       -> [run-fast, walk, idle]         (via the FAMILY entry)
+ *   swim-idle      -> [swim-idle, swim, walk, idle]  (own entry, then swim's)
+ *   treading-water -> [treading-water, idle]         (own entry IS idle)
+ *   lie            -> [lie, sit, idle]
+ *   idle / ''      -> [idle]
+ *
+ * `resolveClipKind` walks that chain against the kinds a rig has bound:
+ *
+ *   (walk-cmu, [walk, idle])            -> walk       THE FINDING: the rig
+ *                                                     keeps its old walk take
+ *   (walk-cmu, [walk, walk-cmu, idle])  -> walk-cmu   exact stays preferred
+ *   (walk, [walk-cmu, idle])            -> walk-cmu   and the other way round
+ *   (walk-cmu, [idle])                  -> idle
+ *   (walk-cmu, [sit])                   -> ''         nothing of the sort
+ *   (run-fast, [run, walk, idle])       -> run        the run take, not walk
+ *   (run-fast, [walk, idle])            -> walk       run's stand-in
+ *   (run-fast, [walk-cmu, idle])        -> walk-cmu   stand-in via family
+ *   (run, [walk, idle])                 -> walk
+ *   (swim, [walk, idle])                -> walk       unchanged from before
+ *   (swim-idle, [swim, walk])           -> swim       unchanged from before
+ *   (treading-water, [walk, idle])      -> idle       the treader STANDS, it
+ *                                                     does not walk on water
+ *   (idle, [idle, walk])                -> idle       idle untouched
+ *   (idle, [walk])                      -> ''         caller plays what it has
+ *
+ * ---------------------------------------------------------------------------
+ * (1f) proceduralGait(kind) — what a CLIP-LESS rig has to fake
+ * ---------------------------------------------------------------------------
+ * `run` / `walk` by family, `null` for stand-and-breathe. A rig without clips
+ * cannot fall back to anything, so a missed gait is a figure sliding across
+ * the map stock still — precisely what `walk-cmu` did to it.
+ *
+ *   walk -> walk   walk-cmu -> walk   run -> run   run-fast -> run
+ *   RUN  -> run    idle -> null       sit -> null  swim -> null
+ *   ''   -> null   null -> null       walking -> null (a family of its own)
+ *
+ * ---------------------------------------------------------------------------
  * (2) animatablePool(pool) — WHICH rigs may stand in at random
  * ---------------------------------------------------------------------------
  * The rigs the library fits; all of them when none fits (a figure with three
@@ -133,7 +223,11 @@ function check(label, actual, expected) {
 }
 
 async function main() {
-  const { missingClipKinds, animatablePool, resolveClipName } = await loadClipCoverage();
+  const {
+    missingClipKinds, animatablePool, resolveClipName,
+    animFamily, matchAnimKind, clipKindChain, resolveClipKind, proceduralGait,
+    CLIP_FALLBACK,
+  } = await loadClipCoverage();
 
   console.log('missingClipKinds — the kinds a rig cannot play');
   check('library swim missing, own walk/idle bound',
@@ -180,6 +274,120 @@ async function main() {
   };
   check('RED PROBE: substring-only would hand `swim` the swim-idle clip',
     substringOnly(['swim-idle', 'swim'], ['swim']), 'swim-idle');
+
+  console.log('animFamily — the family of a kind (first token before the `-`)');
+  check('walk is its own family', animFamily('walk'), 'walk');
+  check('THE RENAME: walk-cmu is a walk', animFamily('walk-cmu'), 'walk');
+  check('run-fast is a run', animFamily('run-fast'), 'run');
+  check('trimmed and lower-cased', animFamily('  RUN  '), 'run');
+  check('swim-idle belongs to swim', animFamily('swim-idle'), 'swim');
+  check('treading-water is its own thing', animFamily('treading-water'), 'treading');
+  check('the inner underscore is no separator', animFamily('sit_a'), 'sit_a');
+  check('an empty kind is idle', animFamily(''), 'idle');
+  check('...and so is a missing one', animFamily(undefined), 'idle');
+  check('a leading dash separates nothing', animFamily('-cmu'), '-cmu');
+
+  console.log('matchAnimKind — exact, else the family, both ways');
+  check('THE FINDING: a rig on walk serves a wanted walk-cmu',
+    matchAnimKind(['walk', 'idle'], 'walk-cmu'), 'walk');
+  check('...and a marker on walk-cmu serves a wanted walk',
+    matchAnimKind(['walk-cmu', 'idle'], 'walk'), 'walk-cmu');
+  check('the exact kind beats the relative listed first',
+    matchAnimKind(['walk', 'walk-cmu'], 'walk-cmu'), 'walk-cmu');
+  check('among relatives the family BASE wins',
+    matchAnimKind(['walk-mixamo', 'walk'], 'walk-cmu'), 'walk');
+  check('...and without a base the first listed one',
+    matchAnimKind(['walk-mixamo', 'walk-cmu'], 'walk'), 'walk-mixamo');
+  check('the entry comes back exactly as passed in',
+    matchAnimKind([' Walk '], 'walk-cmu'), ' Walk ');
+  check('run-fast takes itself', matchAnimKind(['run', 'run-fast'], 'run-fast'), 'run-fast');
+  check('idle-loop stands in for idle', matchAnimKind(['idle-loop'], 'idle'), 'idle-loop');
+  check('another family is no match', matchAnimKind(['idle', 'sit'], 'walk-cmu'), '');
+  check('nothing available -> empty', matchAnimKind([], 'walk'), '');
+  check('no kind wanted -> empty', matchAnimKind(['walk'], ''), '');
+  // RED COUNTER-PROBE: the exact-only lookup this replaces — the rig with the
+  // old walk take finds NOTHING for walk-cmu, which is the reported bug.
+  const exactOnly = (available, kind) => available.find((n) => n === kind) ?? '';
+  check('RED PROBE: exact-only lookup misses walk-cmu on a walk rig',
+    exactOnly(['walk', 'idle'], 'walk-cmu'), '');
+
+  console.log('clipKindChain — kind, its stand-in, its family\'s, idle');
+  check('a renamed kind needs no stand-in of its own',
+    clipKindChain('walk-cmu'), ['walk-cmu', 'idle']);
+  check('walk likewise', clipKindChain('walk'), ['walk', 'idle']);
+  check('run falls to walk', clipKindChain('run'), ['run', 'walk', 'idle']);
+  check('run-fast reaches walk through the FAMILY entry',
+    clipKindChain('run-fast'), ['run-fast', 'walk', 'idle']);
+  check('swim-idle: own entry, then swim\'s',
+    clipKindChain('swim-idle'), ['swim-idle', 'swim', 'walk', 'idle']);
+  check('the treader stands rather than walks',
+    clipKindChain('treading-water'), ['treading-water', 'idle']);
+  check('lie sits down', clipKindChain('lie'), ['lie', 'sit', 'idle']);
+  check('idle is the floor itself', clipKindChain('idle'), ['idle']);
+  check('an empty kind is idle', clipKindChain(''), ['idle']);
+
+  console.log('resolveClipKind — which kind a rig actually plays');
+  check('THE FINDING: walk-cmu plays the rig\'s old walk take',
+    resolveClipKind('walk-cmu', ['walk', 'idle']), 'walk');
+  check('...and the exact take stays preferred where it exists',
+    resolveClipKind('walk-cmu', ['walk', 'walk-cmu', 'idle']), 'walk-cmu');
+  check('...and a wanted walk finds the walk-cmu take',
+    resolveClipKind('walk', ['walk-cmu', 'idle']), 'walk-cmu');
+  check('no gait at all -> idle', resolveClipKind('walk-cmu', ['idle']), 'idle');
+  check('nothing of the sort -> empty', resolveClipKind('walk-cmu', ['sit']), '');
+  check('run-fast takes the run take before the walk one',
+    resolveClipKind('run-fast', ['run', 'walk', 'idle']), 'run');
+  check('...and walks when there is no run take',
+    resolveClipKind('run-fast', ['walk', 'idle']), 'walk');
+  check('...even when the walk take carries the new name',
+    resolveClipKind('run-fast', ['walk-cmu', 'idle']), 'walk-cmu');
+  check('run -> walk, unchanged', resolveClipKind('run', ['walk', 'idle']), 'walk');
+  check('swim -> walk, unchanged', resolveClipKind('swim', ['walk', 'idle']), 'walk');
+  check('swim-idle -> swim, unchanged',
+    resolveClipKind('swim-idle', ['swim', 'walk']), 'swim');
+  check('treading-water stands, it does not walk on water',
+    resolveClipKind('treading-water', ['walk', 'idle']), 'idle');
+  check('idle is untouched', resolveClipKind('idle', ['idle', 'walk']), 'idle');
+  check('...and a rig without any idle answers nothing',
+    resolveClipKind('idle', ['walk']), '');
+  // RED COUNTER-PROBE: the resolution before the family step — exact kind,
+  // explicit stand-in, idle. It drops the walker to idle, statue-still.
+  const preFix = (kind, bound) => {
+    const fallback = CLIP_FALLBACK[kind];
+    return [kind, fallback, 'idle'].find((k) => k && bound.includes(k)) ?? '';
+  };
+  check('RED PROBE: the pre-family chain drops walk-cmu to idle',
+    preFix('walk-cmu', ['walk', 'idle']), 'idle');
+
+  console.log('proceduralGait — the gait a clip-less rig fakes');
+  check('walk', proceduralGait('walk'), 'walk');
+  check('THE GATE FIRES for walk-cmu (the static-rig finding)',
+    proceduralGait('walk-cmu'), 'walk');
+  check('run', proceduralGait('run'), 'run');
+  check('run-fast is still a run', proceduralGait('run-fast'), 'run');
+  check('case does not matter', proceduralGait('RUN'), 'run');
+  check('idle stands', proceduralGait('idle'), null);
+  check('sit stands', proceduralGait('sit'), null);
+  check('swim stands (no gait for a stroke)', proceduralGait('swim'), null);
+  check('no kind stands', proceduralGait(''), null);
+  check('null stands', proceduralGait(null), null);
+  check('`walking` is a family of its own, as it always was',
+    proceduralGait('walking'), null);
+  // RED COUNTER-PROBE: the literal gate this replaces.
+  const literalGate = (k) => (k === 'walk' || k === 'run' ? k : null);
+  check('RED PROBE: the literal gate misses walk-cmu', literalGate('walk-cmu'), null);
+
+  console.log('the rules are WIRED at their consumers');
+  const figures = await readFile(join(ROOT, 'client3d/src/scene/figures.ts'), 'utf8');
+  const mainTs = await readFile(join(ROOT, 'client3d/src/main.ts'), 'utf8');
+  check('figures.play resolves through resolveClipKind',
+    /resolveClipKind\(kind,/.test(figures), true);
+  check('the procedural gait gate asks proceduralGait',
+    /proceduralGait\(this\.currentKind\)/.test(figures), true);
+  check('...and no literal kind comparison is left in figures.ts',
+    !/currentKind === '(walk|run)'/.test(figures), true);
+  check('the room markers match through matchAnimKind',
+    /matchAnimKind\(\[\.\.\.byKind\.keys\(\)\], kind\)/.test(mainTs), true);
 
   console.log('animatablePool — the rigs a character may be drawn from');
   const soldier = { name: 'Soldier', libraryFits: true };

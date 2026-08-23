@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { seededRandom } from './textures';
-import { animatablePool, missingClipKinds, resolveClipName } from './clipCoverage';
+import {
+  animFamily, animatablePool, missingClipKinds, proceduralGait, resolveClipKind,
+  resolveClipName,
+} from './clipCoverage';
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
@@ -566,23 +569,6 @@ const CLIP_SYNONYMS: Record<string, string[]> = {
   lie: ['lie', 'lay', 'sleep'],
   dance: ['dance', 'samba'],
   wave: ['wave', 'greet'],
-};
-
-/** Stand-in clip when the wanted one is missing (before falling back to idle):
- *  someone lying down should at least sit, a runner walk fast — and a swimmer
- *  walk, because the terrain clips (`move_anim`/`idle_anim`, § A9) name kinds
- *  out of an OPEN vocabulary that not every model carries. A model without
- *  `treading-water` simply stands in the lake, which is where it stood before
- *  the key existed — no break, just no water. */
-const CLIP_FALLBACK: Record<string, ClipKind> = {
-  lie: 'sit',
-  run: 'walk',
-  swim: 'walk',
-  // A clip kind is the whole file name since 2026-08-13, so `swim-idle` is a
-  // kind of its own — and the nearest thing to it on a rig without it is the
-  // swimming stroke, not standing.
-  'swim-idle': 'swim',
-  'treading-water': 'idle',
 };
 
 /** Modelle, deren gebundene Kinds schon geloggt wurden (einmal je Modell,
@@ -1308,11 +1294,17 @@ export class Figure {
         && this.sink === sinkM) return;
     this.terrainClip = terrainClip;
     this.sink = sinkM;
-    const fallback = CLIP_FALLBACK[kind];
-    const resolved = this.actions.get(kind)
-      ?? (fallback ? this.actions.get(fallback) : undefined)
-      ?? this.actions.get('idle')
+    // WHICH kind actually plays: exact first, then a take of the same FAMILY
+    // (`walk-cmu` ↔ `walk`), then the curated stand-in, then idle — the one
+    // rule, `clipCoverage.resolveClipKind`. Without the family step a rig
+    // whose library predates the catalog's `walk` → `walk-cmu` rename fell
+    // straight through to idle and moonwalked across the map.
+    const chosenKind = resolveClipKind(kind, [...this.actions.keys()]);
+    const resolved = (chosenKind ? this.actions.get(chosenKind) : undefined)
       ?? [...this.actions.values()][0];
+    // Did we get the motion that was asked for, or only a stand-in? By family,
+    // so a `run-cmu` served from `run` counts as the real thing.
+    const gotFamily = !!chosenKind && animFamily(chosenKind) === animFamily(kind);
     // Beobachtbar machen, WELCHES Kind gewünscht war und ob es überhaupt
     // gebunden ist — ohne das ist von außen nicht unterscheidbar, ob ein Kind
     // gespielt oder still auf idle zurückgefallen ist (Abnahme A4).
@@ -1324,16 +1316,19 @@ export class Figure {
     // ground's sink depth comes on top of that measurement, in world metres.
     this.setClipDrop(terrainClip && resolved
       ? clipGroundOffset(resolved.getClip()) * this.baseScale + sinkM : 0);
+    // Stand-in pace: no idle clip at all -> slow motion (reads as breathing);
+    // no clip of the RUN family -> the walk take, sped up. Judged by family so
+    // that a `run-cmu` served from `run` runs at its own pace.
+    const wantFamily = animFamily(kind);
+    const paceOf = () => (wantFamily === 'idle' && !gotFamily ? 0.1
+      : wantFamily === 'run' && !gotFamily ? 1.5 : 1);
     if (!resolved || resolved === this.current) {
       this.currentKind = kind;
       // Fallback-Fall: gleicher Clip, aber ggf. Tempo anpassen (siehe unten)
-      if (this.current) this.current.timeScale = kind === 'idle' && !this.actions.has('idle') ? 0.1 : 1;
+      if (this.current) this.current.timeScale = paceOf();
       return;
     }
-    // Fallback-Tempo: fehlender Idle-Clip -> Zeitlupe (wirkt wie Wippen);
-    // fehlender Run-Clip -> Walk beschleunigt
-    resolved.timeScale = kind === 'idle' && !this.actions.has('idle') ? 0.1
-      : kind === 'run' && !this.actions.has('run') ? 1.5 : 1;
+    resolved.timeScale = paceOf();
     resolved.reset().fadeIn(0.25).play();
     this.current?.fadeOut(0.25);
     this.current = resolved;
@@ -1422,9 +1417,12 @@ export class Figure {
     // nicht wie eine Statue wirkt (Tier-Rigs von UniRig haben keine Clips).
     if (this.isStatic) {
       const inst = this.root.children[0];
-      const walking = this.currentKind === 'walk' || this.currentKind === 'run';
-      if (walking && this.legs.length) {
-        const running = this.currentKind === 'run';
+      // WHICH gait, by family (`clipCoverage.proceduralGait`): `walk-cmu` is a
+      // walk and `run-fast` a run. A literal comparison froze the figure
+      // statue-still the moment the pose catalog renamed the kind.
+      const gait = proceduralGait(this.currentKind);
+      if (gait && this.legs.length) {
+        const running = gait === 'run';
         this.walkPhase += dt * (running ? 11 : 7);
         for (const leg of this.legs) {
           const swing = Math.sin(this.walkPhase + (running ? leg.phaseRun : leg.phaseWalk)) * 0.45;

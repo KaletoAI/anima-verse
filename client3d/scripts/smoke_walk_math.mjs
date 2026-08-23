@@ -142,8 +142,10 @@
  *   moveClip('', false, 'wilderness')              -> 'walk'
  *   moveClip('', true,  'wilderness')              -> 'run'
  *   moveClip('   ', true, 'open')                  -> 'run'
- * A kind no model carries is not this file's problem: `figures.CLIP_FALLBACK`
- * maps swim -> walk and everything unknown ends at idle.
+ * A kind no model carries is not this file's problem:
+ * `clipCoverage.resolveClipKind` takes a same-family take first (walk-cmu for
+ * walk), then `CLIP_FALLBACK` (swim -> walk), and everything unknown ends at
+ * idle.
  *
  * --- idleClip: the ground names the STANDING clip too (water round) --------
  * The acceptance finding of 2026-08-13: a figure standing still in a lake
