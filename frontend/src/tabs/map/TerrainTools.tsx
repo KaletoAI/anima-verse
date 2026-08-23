@@ -1272,14 +1272,17 @@ function ReliefFields({ relief, warnAmpM, onRelief }: {
   return (
     <>
       <div className="ga-map-chip-row">
+        {/* step 0.1: the number field's up/down arrows walk in tenths of a
+            metre (user 2026-08-23) — with fineStep "any" the browser stepped
+            them by a whole metre. Typing stays free: commit rounds to the
+            step's decimals, which one decimal is. */}
         <SliderInput
           label={t('Relief amplitude (m)')}
           title={t('How high the random small hills of this area stand, in metres. It is baked into the world heightfield, so figures walk over it. Empty = flat ground.')}
           value={amp}
           fallback={0}
           slider={false}
-          min={RELIEF_AMP_MIN_M} max={RELIEF_AMP_MAX_M} step={0.05}
-          fineStep="any"
+          min={RELIEF_AMP_MIN_M} max={RELIEF_AMP_MAX_M} step={0.1}
           clearable placeholder={t('flat')}
           onChange={(v) => onRelief({ relief_amplitude_m: v })}
           onClear={() => onRelief({ relief_amplitude_m: undefined })}
