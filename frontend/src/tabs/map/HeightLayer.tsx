@@ -4,12 +4,15 @@
  *
  * A height area is a polygon in world metres plus a height and a ramp width;
  * the server rasters those into the grid every client samples. This layer
- * shows exactly what was AUTHORED, never the raster: outline, fill by sign,
- * and the two numbers written into the shape. That is the whole design
- * decision of v1 — NO HILLSHADE, no contour lines, no rendering of the
- * interpolated field. A shaded picture would be a second, prettier answer to
- * "how high is it here" that nobody could compare with the one the rules use,
- * and the numbers are what an author actually edits.
+ * shows exactly what was AUTHORED, never the raster: outline, the line where
+ * the ramp ends, fill by sign, and the two numbers written into the shape.
+ * That is the whole design decision of v1 — NO HILLSHADE, no contour lines, no
+ * rendering of the interpolated field. A shaded picture would be a second,
+ * prettier answer to "how high is it here" that nobody could compare with the
+ * one the rules use, and the numbers are what an author actually edits. The
+ * crest line is not an exception to that: it is not sampled from anything, it
+ * is the ramp width the author typed, drawn where the bake's own distance rule
+ * puts it (`heightMath.rampCrestRing`).
  *
  * In its own mode it is drawn FULL: filled by sign, labelled, editable.
  * Outside it the layer stays on the canvas as SUBDUED contours (the "Contours"
@@ -26,7 +29,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { useMapView } from './MapCanvas'
 import { worldPolyToPath, worldToScreen } from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
-import { tooSteep } from './heightMath'
+import { rampCrestRing, tooSteep } from './heightMath'
 import type { HeightArea } from './mapTypes'
 
 /** Ground that rises, ground that sinks, and the selection. Two colours
@@ -126,6 +129,7 @@ export function HeightLayer({
           const c = centroid(a.polygon)
           const cp = worldToScreen(c[0], c[1], view, w, h)
           const steep = tooSteep(a.height_m, a.falloff_m, maxSlopeDeg, maxStepM)
+          const crest = rampCrestRing(a.polygon, a.falloff_m)
           return (
             <g key={a.id}>
               {/* evenodd like every other polygon here: the engine answers
@@ -136,6 +140,29 @@ export function HeightLayer({
                 stroke={isSel ? COL_SELECTED : color}
                 strokeWidth={isSel ? 2 : 1.5}
                 strokeOpacity={isSel ? 1 : 0.85} />
+              {/* WHERE THE RAMP ENDS. The solid line above is the foot: the
+                  server writes nothing outside the outline and exactly 0 on it
+                  (`heightfield._area_value`, lines 1252–1266), so the outline
+                  IS where the relief has blended into the surrounding ground.
+                  The ramp runs INWARDS from there and the ground stands at
+                  full height only `falloff_m` metres in — that inner line is
+                  what the map used to leave to the imagination, and it is the
+                  difference between a hill one can build on and one that is
+                  all flank. Dashed, so the authored outline stays the shape
+                  and this stays a consequence of it; in the area's own colour,
+                  because it is the same area. In every mode: the subdued group
+                  dims it to 45 % with everything else, and outside the heights
+                  mode "how high, and how much of it is flat" is exactly as
+                  worth knowing. No fill — a second stack of translucent
+                  polygons is the thing the contour view was built to avoid.
+                  Absent (null) when there is no ramp, or when the ramp eats
+                  the whole area and no plateau is left. */}
+              {crest ? (
+                <path d={worldPolyToPath(crest, view, w, h)}
+                  fill="none" stroke={color} strokeWidth={1}
+                  strokeOpacity={0.85} strokeDasharray="5 4"
+                  pointerEvents="none" />
+              ) : null}
               <text x={cp.x} y={cp.y} fontSize={13} textAnchor="middle"
                 fill={color} stroke="#0d1117" strokeWidth={3}
                 paintOrder="stroke" fontWeight={600}>

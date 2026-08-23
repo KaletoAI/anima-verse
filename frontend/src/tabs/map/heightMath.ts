@@ -1,8 +1,13 @@
 /**
  * heightMath — the authoring arithmetic of the world relief (§ A16).
  *
- * One question, asked in two places (the layer draws a warning glyph, the chip
- * writes the sentence): is this ramp steeper than a walker can climb?
+ * Two questions about one authored ramp. The first, asked in two places (the
+ * layer draws a warning glyph, the chip writes the sentence): is this ramp
+ * steeper than a walker can climb? The second, drawn by the layer alone: WHERE
+ * DOES THE RAMP END — see `rampCrestRing` at the foot of this file, which is
+ * the bake's own inward distance rule turned into a line.
+ *
+ * The steepness question first.
  *
  * The server judges every reported step with TWO limits (§ A15 Nr. 8,
  * `app/core/relief.slope_blocks`) and both travel in the worldmap payload:
@@ -164,4 +169,221 @@ export function tooSteep(heightM: number, falloffM: number,
   const need = minFalloffFor(heightM, maxSlopeDeg, maxStepM)
   if (!need) return false
   return !(falloffM >= need)
+}
+
+/* ── Where the ramp ends ────────────────────────────────────────────────── */
+
+/**
+ * THE SERVER RAMPS INWARD, and that decides everything below.
+ *
+ * `app/core/heightfield._area_value` (lines 1252–1266, the one place the rule
+ * is spelled; documented on the public twin `area_height_at`, lines 294–313):
+ *
+ *     if not _inside_ring(x, z, ring): return None      # nothing OUTSIDE
+ *     if falloff <= 0:                 return height
+ *     return height * min(1.0, _ring_edge_distance(x, z, ring) / falloff)
+ *
+ * So an area writes NOTHING outside its outline, stands at exactly 0 ON the
+ * outline, and reaches its full `height_m` at `falloff_m` metres INSIDE it.
+ * The authored outline therefore already IS the foot line — the line where the
+ * relief has fully blended into the surrounding ground — and the line the map
+ * was missing is the other end: the CREST, where the ramp is done and the
+ * ground stands at full height. Offsetting the outline outwards would draw a
+ * reach the bake does not have.
+ *
+ * The rule is a pure DISTANCE rule (`_ring_edge_distance` = shortest distance
+ * to the outline, any direction), so the crest is exactly the set
+ *
+ *     { p inside the polygon : distance(p, outline) >= falloff_m }
+ *
+ * i.e. the polygon eroded by a disc of radius `falloff_m` — a true buffer, not
+ * a per-edge inset. Its boundary is exact and closed-form:
+ *
+ *   * along each edge: that edge, moved `falloff_m` inwards;
+ *   * at a CONVEX corner: the two inset edge lines simply MEET — a sharp
+ *     corner (the miter point), exact, no approximation;
+ *   * at a REFLEX corner: a circular ARC of radius `falloff_m` around the
+ *     vertex, because there the nearest outline point IS the vertex.
+ *
+ * THE ONLY APPROXIMATION is that arc, drawn as a polyline of at most
+ * `RAMP_ARC_STEP_DEG` per segment. Its error is the sagitta of one chord,
+ *
+ *     e = r · (1 − cos(step/2)) = falloff_m · (1 − cos 5°) = 0.0038 · falloff_m
+ *
+ * — 11 mm on a 3 m ramp, 38 mm on a 10 m one, and always INSIDE the true arc
+ * (a chord never bulges out), so the drawn line never claims more plateau than
+ * the bake makes. Straight sections and convex corners — the whole of every
+ * rectangular area, which is most of them — are exact to the metre.
+ */
+export const RAMP_ARC_STEP_DEG = 10
+
+/** Below this |cross product| of two unit edge directions a corner counts as
+ *  straight (≈ 0.006°): the two inset lines are parallel there and intersecting
+ *  them would divide by ~0. */
+const TURN_EPS = 1e-7
+
+/** Shortest distance from a point to the OUTLINE of a polygon, in metres —
+ *  the client twin of `heightfield.edge_distance` / `_ring_edge_distance`.
+ *  The outline, not the interior: this is the number the server's ramp rule
+ *  divides by, and the crest ring is where it equals `falloff_m`. */
+export function outlineDistance(x: number, z: number,
+  polygon: Array<[number, number]>): number {
+  let best = Infinity
+  const n = polygon.length
+  for (let i = 0; i < n; i += 1) {
+    const [ax, az] = polygon[i]
+    const [bx, bz] = polygon[(i + 1) % n]
+    const dx = bx - ax
+    const dz = bz - az
+    const l2 = dx * dx + dz * dz
+    let t = l2 > 0 ? ((x - ax) * dx + (z - az) * dz) / l2 : 0
+    t = t < 0 ? 0 : t > 1 ? 1 : t
+    const d = Math.hypot(x - (ax + t * dx), z - (az + t * dz))
+    if (d < best) best = d
+  }
+  return best
+}
+
+/** Ray casting, the even-odd rule — the same answer the server's
+ *  `_inside_ring` (`world_geometry.point_in_polygon`) gives. */
+function insideRing(x: number, z: number,
+  polygon: Array<[number, number]>): boolean {
+  let inside = false
+  const n = polygon.length
+  for (let i = 0, j = n - 1; i < n; j = i, i += 1) {
+    const [xi, zi] = polygon[i]
+    const [xj, zj] = polygon[j]
+    if ((zi > z) !== (zj > z)
+      && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+/** Twice the signed area — the orientation of the ring, whatever the frame:
+ *  positive and negative rings both occur here (nothing normalises what the
+ *  author draws), and the inward normal is the LEFT one only for the positive
+ *  sense. */
+function signedArea2(polygon: Array<[number, number]>): number {
+  let a = 0
+  const n = polygon.length
+  for (let i = 0; i < n; i += 1) {
+    const [x1, z1] = polygon[i]
+    const [x2, z2] = polygon[(i + 1) % n]
+    a += x1 * z2 - x2 * z1
+  }
+  return a
+}
+
+/** The ring without a repeated closing vertex and without duplicate points —
+ *  a zero-length edge has no direction to offset along. */
+function cleanRing(polygon: Array<[number, number]>): Array<[number, number]> {
+  const out: Array<[number, number]> = []
+  for (const p of polygon) {
+    if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) return []
+    const last = out[out.length - 1]
+    if (last && Math.abs(last[0] - p[0]) < 1e-9
+      && Math.abs(last[1] - p[1]) < 1e-9) continue
+    out.push([p[0], p[1]])
+  }
+  while (out.length >= 2) {
+    const a = out[0]
+    const b = out[out.length - 1]
+    if (Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9) out.pop()
+    else break
+  }
+  return out
+}
+
+/**
+ * THE CREST RING of a height area: where its ramp has finished, in world
+ * metres — the outline offset INWARDS by `rampM`, joined the way the bake's
+ * distance rule joins it (see the block comment above).
+ *
+ * `null` when there is nothing honest to draw: fewer than three points, no
+ * ramp (`falloff_m` 0 — the area is a wall, its crest IS its outline), or a
+ * ramp so wide that it swallows the area (nothing left standing at full
+ * height, e.g. 6 m of ramp on a 10 m square). The last case is checked, never
+ * assumed: every point of the result must really lie inside the polygon at
+ * `rampM` from its outline, and the ring must keep the sense it started with —
+ * an inset that folds through itself fails both.
+ */
+export function rampCrestRing(polygon: Array<[number, number]>, rampM: number
+): Array<[number, number]> | null {
+  if (!Array.isArray(polygon) || polygon.length < 3) return null
+  if (!Number.isFinite(rampM) || rampM <= 0) return null
+  const ring = cleanRing(polygon)
+  const n = ring.length
+  if (n < 3) return null
+  const a2 = signedArea2(ring)
+  if (!a2) return null
+  const sense = a2 > 0 ? 1 : -1
+
+  // The inward normal of an edge: the LEFT one on a positively oriented ring,
+  // the right one on the other — measured in the SAME (x, z) frame the signed
+  // area was measured in, so the map's z-down screen sense never enters.
+  const dirs: Array<[number, number]> = []
+  for (let i = 0; i < n; i += 1) {
+    const [ax, az] = ring[i]
+    const [bx, bz] = ring[(i + 1) % n]
+    const len = Math.hypot(bx - ax, bz - az)
+    if (!len) return null
+    dirs.push([(bx - ax) / len, (bz - az) / len])
+  }
+  const normal = (d: [number, number]): [number, number] =>
+    [-d[1] * sense, d[0] * sense]
+
+  const out: Array<[number, number]> = []
+  const step = (RAMP_ARC_STEP_DEG * Math.PI) / 180
+  for (let i = 0; i < n; i += 1) {
+    const [cx, cz] = ring[i]
+    const din = dirs[(i - 1 + n) % n]
+    const dout = dirs[i]
+    const nin = normal(din)
+    const nout = normal(dout)
+    const pin: [number, number] = [cx + nin[0] * rampM, cz + nin[1] * rampM]
+    const pout: [number, number] = [cx + nout[0] * rampM, cz + nout[1] * rampM]
+    // Positive = the ring turns towards its own inside here (convex corner),
+    // negative = away from it (reflex corner).
+    const turn = (din[0] * dout[1] - din[1] * dout[0]) * sense
+    if (turn > TURN_EPS) {
+      // Convex: the two inset lines meet. EXACT — one point, no arc.
+      const denom = din[0] * dout[1] - din[1] * dout[0]
+      const t = ((pout[0] - pin[0]) * dout[1] - (pout[1] - pin[1]) * dout[0])
+        / denom
+      out.push([pin[0] + din[0] * t, pin[1] + din[1] * t])
+    } else if (turn < -TURN_EPS) {
+      // Reflex: the nearest outline point is the vertex itself, so the crest
+      // runs around it on a circle of radius `rampM`. The sweep is the short
+      // way — a corner turns by less than 180° or it is not a corner.
+      const a0 = Math.atan2(pin[1] - cz, pin[0] - cx)
+      const a1 = Math.atan2(pout[1] - cz, pout[0] - cx)
+      let sweep = a1 - a0
+      while (sweep > Math.PI) sweep -= 2 * Math.PI
+      while (sweep < -Math.PI) sweep += 2 * Math.PI
+      const parts = Math.max(1, Math.ceil(Math.abs(sweep) / step))
+      for (let k = 0; k <= parts; k += 1) {
+        const ang = a0 + (sweep * k) / parts
+        out.push([cx + Math.cos(ang) * rampM, cz + Math.sin(ang) * rampM])
+      }
+    } else {
+      // Straight through: one point on the single inset line.
+      out.push(pin)
+    }
+  }
+  if (out.length < 3) return null
+
+  // Does what came out actually stand at full height? The ramp is a distance
+  // rule, so the test is the distance rule — measured, not trusted.
+  const eps = 1e-6 * Math.max(1, rampM)
+  for (const [x, z] of out) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null
+    if (!insideRing(x, z, ring)) return null
+    if (outlineDistance(x, z, ring) < rampM - eps) return null
+  }
+  // A ring that lost its sense (or its area) folded through itself: the ramps
+  // of opposite edges met, and there is no plateau left to outline.
+  if (signedArea2(out) * sense <= 0) return null
+  return out
 }
