@@ -102,6 +102,7 @@ import base64
 import hashlib
 import json
 import math
+import threading
 from array import array
 from collections import OrderedDict
 from typing import (Any, Dict, List, NamedTuple, Optional, Sequence,
@@ -1158,6 +1159,29 @@ TILE_CACHE_MAX = 32
 #: which is what its own load policy does anyway.
 BATCH_MAX = 16
 
+#: Guards the FILL of `_MODEL` and `_INDEX` — the twin of
+#: `heightfield._DERIVED_LOCK` and for the same reason: `/play/terrain-layers`
+#: answers from the threadpool, and building the model parses every ring once.
+#: Reentrant, because `index_payload` calls `world_model` from inside it.
+_DERIVED_LOCK = threading.RLock()
+
+#: One bake lock per `(sig, tx, tz)`, handed out under its guard. Per TILE so
+#: two threads baking two different tiles still run in parallel; a tile from a
+#: cold cache costs about a second, which is exactly the cost worth not paying
+#: twice. Cleared with the caches.
+_TILE_LOCKS: Dict[Tuple[str, int, int], threading.Lock] = {}
+_TILE_LOCKS_GUARD = threading.Lock()
+
+
+def _tile_lock(key: Tuple[str, int, int]) -> threading.Lock:
+    """The bake lock of one tile key, created on first ask."""
+    with _TILE_LOCKS_GUARD:
+        lock = _TILE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _TILE_LOCKS[key] = lock
+        return lock
+
 
 def floors_basis() -> List[Dict[str, Any]]:
     """What the LOCATION FLOORS of this world are made of, in hashable form.
@@ -1234,15 +1258,19 @@ def world_model() -> LayerModel:
     cached = _MODEL
     if cached is not None and cached[0] == sig:
         return cached[1]
-    from app.core.terrain_query import default_kind
-    from app.core.terrain_types import effective_catalog
-    from app.models.terrain import list_areas
-    from app.models.world import list_locations
-    catalog = effective_catalog()
-    model = LayerModel(list_areas(), catalog, default_kind(),
-                       world_floors(list_locations(), catalog))
-    _MODEL = (sig, model)
-    return model
+    with _DERIVED_LOCK:
+        cached = _MODEL
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        from app.core.terrain_query import default_kind
+        from app.core.terrain_types import effective_catalog
+        from app.models.terrain import list_areas
+        from app.models.world import list_locations
+        catalog = effective_catalog()
+        model = LayerModel(list_areas(), catalog, default_kind(),
+                           world_floors(list_locations(), catalog))
+        _MODEL = (sig, model)
+        return model
 
 
 def get_tile(tx: int, tz: int, sig: Optional[str] = None) -> Dict[str, Any]:
@@ -1265,11 +1293,17 @@ def get_tile(tx: int, tz: int, sig: Optional[str] = None) -> Dict[str, Any]:
         except KeyError:
             pass
         return tile
-    tile = tile_masks(world_model(), int(tx), int(tz))
-    _TILES[key] = tile
-    while len(_TILES) > TILE_CACHE_MAX:
-        _TILES.popitem(last=False)
-    return tile
+    # The MISS is locked per tile — see `_tile_lock`. The hit path above stays
+    # lock-free.
+    with _tile_lock(key):
+        tile = _TILES.get(key)
+        if tile is not None:
+            return tile
+        tile = tile_masks(world_model(), int(tx), int(tz))
+        _TILES[key] = tile
+        while len(_TILES) > TILE_CACHE_MAX:
+            _TILES.popitem(last=False)
+        return tile
 
 
 def invalidate_cache() -> None:
@@ -1280,6 +1314,8 @@ def invalidate_cache() -> None:
     _MODEL = None
     _INDEX = None
     _TILES.clear()
+    with _TILE_LOCKS_GUARD:
+        _TILE_LOCKS.clear()
 
 
 def _format_key(tx: int, tz: int) -> str:
@@ -1294,9 +1330,12 @@ def index_payload() -> Dict[str, Any]:
     sig = layers_sig()
     cached = _INDEX
     if cached is None or cached[0] != sig:
-        model = world_model()
-        cached = (sig, tile_index(model), overview_mask(model))
-        _INDEX = cached
+        with _DERIVED_LOCK:
+            cached = _INDEX
+            if cached is None or cached[0] != sig:
+                model = world_model()
+                cached = (sig, tile_index(model), overview_mask(model))
+                _INDEX = cached
     model = world_model()
     return {
         **_format_block(sig),

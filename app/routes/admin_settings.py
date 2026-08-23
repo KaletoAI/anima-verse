@@ -23,7 +23,7 @@ router = APIRouter(prefix="/admin", tags=["admin-settings"],
 # ── API Endpoints ──
 
 @router.get("/settings", response_class=HTMLResponse)
-async def settings_page():
+def settings_page():
     """Serve the admin settings HTML page."""
     return HTMLResponse(
         content=_build_settings_html(),
@@ -31,7 +31,7 @@ async def settings_page():
 
 
 @router.get("/world-name")
-async def world_name(user=Depends(require_admin)):
+def world_name(user=Depends(require_admin)):
     """Return the active world name (= storage dir basename) so the admin
     UI can display which world it's actually configuring. Prevents the
     "I just saved Hotopia data into anima-dome" footgun where a stale
@@ -42,7 +42,7 @@ async def world_name(user=Depends(require_admin)):
 
 
 @router.get("/users", response_class=HTMLResponse)
-async def users_page():
+def users_page():
     """Serve the user-management HTML page."""
     return HTMLResponse(
         content=_build_users_html(),
@@ -51,7 +51,7 @@ async def users_page():
 
 
 @router.get("/llm-stats", response_class=HTMLResponse)
-async def llm_stats_page():
+def llm_stats_page():
     """Serve the LLM-Stats admin HTML page (read-only Auswertung)."""
     return HTMLResponse(
         content=_build_llm_stats_html(),
@@ -60,9 +60,9 @@ async def llm_stats_page():
 
 
 @router.get("/llm-stats/data")
-async def llm_stats_data(
-    request: Request,
-    user=Depends(require_admin)):
+def llm_stats_data(
+                   request: Request,
+                   user=Depends(require_admin)):
     """Aggregierte LLM-Call-Statistik fuer den Admin-Stats-Tab.
 
     Query-Parameter:
@@ -252,7 +252,7 @@ _MASKABLE_FILTER_FIELDS = ("icon", "label", "condition", "drop_blocks",
 
 
 @router.get("/prompt-filters/data")
-async def prompt_filters_data(user=Depends(require_admin)):
+def prompt_filters_data(user=Depends(require_admin)):
     """Liste der gemergten Prompt-Filter (shared baseline + world overlay).
 
     Jeder Eintrag bekommt ein ``source``-Feld: "shared" / "world".
@@ -340,7 +340,7 @@ async def prompt_filters_data(user=Depends(require_admin)):
 
 
 @router.get("/prompt-filters/validate")
-async def prompt_filters_validate(condition: str = "", user=Depends(require_admin)):
+def prompt_filters_validate(condition: str = "", user=Depends(require_admin)):
     """Live-Validierung einer Condition fuer den Editor — nutzt EXAKT dieselbe
     Funktion wie die Laufzeit-Pruefung (keine Frontend-Regex-Duplikate)."""
     from app.core.activity_engine import validate_condition_references
@@ -456,7 +456,7 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
 
 
 @router.get("/help-topics")
-async def help_topics(user=Depends(require_admin)):
+def help_topics(user=Depends(require_admin)):
     """Hilfe-Themen fuers kontextsensitive Help-Panel (eine Quelle, kein Frontend-Duplikat).
 
     Der ``__STATS__``-Platzhalter im condition-Topic wird mit den echten Stat-Keys
@@ -552,7 +552,7 @@ async def prompt_filters_save(request: Request, user=Depends(require_admin)):
 
 
 @router.delete("/prompt-filters/{filter_id}")
-async def prompt_filters_delete(filter_id: str, user=Depends(require_admin)):
+def prompt_filters_delete(filter_id: str, user=Depends(require_admin)):
     """Entfernt den world-overlay-Eintrag fuer diese id.
 
     Wenn dieselbe id auch im shared baseline existiert, wird damit der
@@ -693,7 +693,7 @@ async def prompt_filters_import(
 
 
 @router.get("/settings/data")
-async def settings_data(user=Depends(require_admin)):
+def settings_data(user=Depends(require_admin)):
     """Return full config with sensitive fields masked.
 
     Empty fields are pre-filled with their schema default so the user
@@ -706,7 +706,7 @@ async def settings_data(user=Depends(require_admin)):
 
 
 @router.get("/settings/raw")
-async def settings_raw(user=Depends(require_admin)):
+def settings_raw(user=Depends(require_admin)):
     """Return full config without masking (for save round-trip).
 
     Empty fields are pre-filled with their schema default so the admin UI
@@ -719,7 +719,7 @@ async def settings_raw(user=Depends(require_admin)):
 
 
 @router.post("/settings/lora-library/clear-discovered")
-async def lora_library_clear_discovered(user=Depends(require_admin)):
+def lora_library_clear_discovered(user=Depends(require_admin)):
     """Removes every discovered entry from the LoRA library (manual entries
     stay). Reset helper — e.g. to re-test the per-backend LoRA filter with a
     clean discovery run. Persists server-side so a following sync works on
@@ -879,7 +879,7 @@ async def settings_save(request: Request, user=Depends(require_admin)):
 
 
 @router.get("/settings/llm-tasks")
-async def settings_llm_tasks(user=Depends(require_admin)):
+def settings_llm_tasks(user=Depends(require_admin)):
     """The LLM task catalog for the admin UI: tasks plus the label tables.
 
     The label tables ride along once (not per task) so the UI can render the
@@ -959,7 +959,7 @@ async def settings_model_capabilities_lookup(request: Request, user=Depends(requ
 
 
 @router.get("/settings/llm-task-state")
-async def llm_task_state_get(user=Depends(require_admin)):
+def llm_task_state_get(user=Depends(require_admin)):
     from app.core.llm_task_state import (
         disabled_tasks, runtime_disabled_tasks, get_presets)
     return {
@@ -1044,13 +1044,13 @@ def _validate_llm_routing(routing) -> str:
 
 
 @router.get("/settings/schema")
-async def settings_schema(user=Depends(require_admin)):
+def settings_schema(user=Depends(require_admin)):
     """Return field schema for UI rendering."""
     return get_schema()
 
 
 @router.get("/settings/use-case-defaults")
-async def settings_use_case_defaults(user=Depends(require_admin)):
+def settings_use_case_defaults(user=Depends(require_admin)):
     """Eingebaute Use-Case-Style-Defaults (pro use_case × Familie) — dienen in
     der Admin-UI als grauer Placeholder bei leerem Feld."""
     from app.core.config import _DEFAULT_IMAGE_USE_CASES, _PROMPT_STYLE_FAMILIES
@@ -1062,7 +1062,7 @@ async def settings_use_case_defaults(user=Depends(require_admin)):
 
 
 @router.get("/settings/media-backend-status")
-async def media_backend_status(user=Depends(require_admin)):
+def media_backend_status(user=Depends(require_admin)):
     """Runtime state of every instantiated media backend, keyed by name.
 
     The backends table on the settings page merges this into its Status
@@ -1100,7 +1100,7 @@ async def media_backend_online(request: Request, user=Depends(require_admin)):
 
 
 @router.get("/settings/imagegen-targets")
-async def imagegen_targets(user=Depends(require_admin)):
+def imagegen_targets(user=Depends(require_admin)):
     """Returns the list of image-gen targets for admin selects (backends only).
 
     Format: [{"value": "CivitAI", "label": "...", "type": "backend", "available": True}, ...]
@@ -1131,14 +1131,14 @@ async def imagegen_targets(user=Depends(require_admin)):
 
 
 @router.get("/templates/list")
-async def templates_list(user=Depends(require_admin)):
+def templates_list(user=Depends(require_admin)):
     """List all .md files under shared/templates/llm/."""
     from app.core.template_preview import list_templates
     return {"templates": list_templates()}
 
 
 @router.get("/templates/file")
-async def templates_read(path: str, user=Depends(require_admin)):
+def templates_read(path: str, user=Depends(require_admin)):
     from app.core.template_preview import read_template
     try:
         return {"path": path, "content": read_template(path)}
@@ -1164,8 +1164,8 @@ async def templates_save(request: Request, user=Depends(require_admin)):
 
 
 @router.get("/templates/render")
-async def templates_render(path: str, agent: str = "", avatar: str = "",
-                           user=Depends(require_admin)):
+def templates_render(path: str, agent: str = "", avatar: str = "",
+                     user=Depends(require_admin)):
     """Render the template at ``path`` against real production data for
     the given agent + avatar."""
     from app.core.template_preview import render_with_real_data
@@ -1173,7 +1173,7 @@ async def templates_render(path: str, agent: str = "", avatar: str = "",
 
 
 @router.get("/templates", response_class=HTMLResponse)
-async def templates_page(user=Depends(require_admin)):
+def templates_page(user=Depends(require_admin)):
     """Template playground: top bar + 2-column editor/preview."""
     return _TEMPLATES_PAGE_HTML
 
@@ -1308,21 +1308,21 @@ async def provider_models(provider_name: str, user=Depends(require_admin)):
 
 
 @router.get("/settings/providers-list")
-async def providers_list(user=Depends(require_admin)):
+def providers_list(user=Depends(require_admin)):
     """Namen aller konfigurierten Provider — fuer den Suitability-Test-Picker."""
     return {"providers": [p.get("name", "") for p in config.get("providers", [])
                           if p.get("name")]}
 
 
 @router.get("/settings/llm-suitability-checks")
-async def llm_suitability_checks(user=Depends(require_admin)):
+def llm_suitability_checks(user=Depends(require_admin)):
     """Metadaten der Eignungs-Checks (id/label/category) — fuer die UI-Vorschau."""
     from app.core.model_suitability import list_checks
     return {"checks": list_checks()}
 
 
 @router.get("/settings/llm-suitability-cases")
-async def llm_suitability_cases(user=Depends(require_admin)):
+def llm_suitability_cases(user=Depends(require_admin)):
     """Info zum eingefrorenen Fixture-Satz (Anzahl Faelle, pro Task, Build-Zeit)."""
     from app.core.model_suitability import cases_info
     return cases_info()
@@ -1351,8 +1351,8 @@ async def llm_suitability_test_start(request: Request, user=Depends(require_admi
 
 
 @router.get("/settings/llm-suitability-test/status")
-async def llm_suitability_test_status(provider: str = "", model: str = "",
-                                      user=Depends(require_admin)):
+def llm_suitability_test_status(provider: str = "", model: str = "",
+                                user=Depends(require_admin)):
     """Aktueller Status/Fortschritt eines (laufenden oder fertigen) Tests."""
     from app.core.model_suitability import get_job
     if not model:
@@ -1363,7 +1363,7 @@ async def llm_suitability_test_status(provider: str = "", model: str = "",
 
 
 @router.get("/settings/llm-suitability-test/jobs")
-async def llm_suitability_test_jobs(user=Depends(require_admin)):
+def llm_suitability_test_jobs(user=Depends(require_admin)):
     """Alle bekannten Test-Jobs (laufend/fertig/fehler) — fuer die 'laufende
     Tests'-Liste. Ohne Check-Details (nur Kurzstatus)."""
     from app.core.model_suitability import list_jobs
@@ -1391,7 +1391,7 @@ async def settings_validate(request: Request, user=Depends(require_admin)):
 
 
 @router.get("/settings/restart-pending")
-async def settings_restart_pending(user=Depends(require_admin)):
+def settings_restart_pending(user=Depends(require_admin)):
     """Liste der Felder, die seit dem letzten Server-Start veraendert wurden
     und nur durch einen Restart wirksam werden.
     """
@@ -1478,7 +1478,7 @@ def _parse_world_scope(request: Request) -> str:
 
 
 @router.post("/image-postprocess/dryrun")
-async def image_postprocess_dryrun(request: Request, user=Depends(require_admin)):
+def image_postprocess_dryrun(request: Request, user=Depends(require_admin)):
     """Scan items or map-tagged gallery images without writing.
 
     Query:
@@ -1500,7 +1500,7 @@ async def image_postprocess_dryrun(request: Request, user=Depends(require_admin)
 
 
 @router.post("/image-postprocess/migrate")
-async def image_postprocess_migrate(request: Request, user=Depends(require_admin)):
+def image_postprocess_migrate(request: Request, user=Depends(require_admin)):
     """Re-encode images in place. Destructive — originals are not kept.
 
     Query:
@@ -1521,7 +1521,7 @@ async def image_postprocess_migrate(request: Request, user=Depends(require_admin
 # ── Agent Loop ────────────────────────────────────────────────────────
 
 @router.get("/agent-loop/status")
-async def agent_loop_status(user=Depends(require_admin)):
+def agent_loop_status(user=Depends(require_admin)):
     """Return AgentLoop status for the admin panel.
 
     Mirrors ``AgentLoop.status()``: running, paused, current agent,
@@ -1573,7 +1573,7 @@ async def agent_loop_bump(request: Request, user=Depends(require_admin)):
 
 
 @router.get("/agent-loop", response_class=HTMLResponse)
-async def agent_loop_page(user=Depends(require_admin)):
+def agent_loop_page(user=Depends(require_admin)):
     """Minimal HTML panel for the AgentLoop: status + pause toggle + recent turns."""
     from fastapi.responses import HTMLResponse as _HTMLResp
     return _HTMLResp(_AGENT_LOOP_HTML, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})

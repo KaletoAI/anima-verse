@@ -398,7 +398,7 @@ async def save_story_raw(filename: str, request: Request) -> Dict[str, Any]:
 
 
 @router.delete("/file/{filename}")
-async def delete_story_file(filename: str) -> Dict[str, Any]:
+def delete_story_file(filename: str) -> Dict[str, Any]:
     """Loescht eine Story-Datei."""
     STORIES_DIR = _get_storage_dir() / "stories"
     path = STORIES_DIR / filename

@@ -44,14 +44,14 @@ _NO_CACHE = {"Cache-Control": "no-cache"}
 
 
 @router.get("/game-admin", include_in_schema=False)
-async def game_admin_page():
+def game_admin_page():
     if not _SHELL_PATH.is_file():
         return HTMLResponse(content=_DEV_HINT, status_code=503)
     return FileResponse(_SHELL_PATH, headers=_NO_CACHE)
 
 
 @router.get("/game-admin/", include_in_schema=False)
-async def game_admin_page_slash():
+def game_admin_page_slash():
     if not _SHELL_PATH.is_file():
         return HTMLResponse(content=_DEV_HINT, status_code=503)
     return FileResponse(_SHELL_PATH, headers=_NO_CACHE)

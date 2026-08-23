@@ -16,14 +16,14 @@ router = APIRouter(prefix="/templates", tags=["templates"])
 
 
 @router.get("/list")
-async def list_all_templates(template_type: str = "") -> Dict[str, Any]:
+def list_all_templates(template_type: str = "") -> Dict[str, Any]:
     """List all available templates."""
     templates = list_templates(template_type=template_type or None)
     return {"templates": templates}
 
 
 @router.get("/{template_name}")
-async def get_template_route(template_name: str) -> Dict[str, Any]:
+def get_template_route(template_name: str) -> Dict[str, Any]:
     """Get a template by name."""
     template = get_template(template_name)
     if template is None:
@@ -48,7 +48,7 @@ async def save_template_route(template_name: str, request: Request) -> Dict[str,
 
 
 @router.delete("/{template_name}")
-async def delete_template_route(template_name: str) -> Dict[str, Any]:
+def delete_template_route(template_name: str) -> Dict[str, Any]:
     """Delete a template (cannot delete 'human-default')."""
     if template_name == "human-default":
         raise HTTPException(status_code=400, detail="Cannot delete default template")
@@ -59,7 +59,7 @@ async def delete_template_route(template_name: str) -> Dict[str, Any]:
 
 
 @router.get("/coverage/{character_name}")
-async def get_template_coverage(character_name: str) -> Dict[str, Any]:
+def get_template_coverage(character_name: str) -> Dict[str, Any]:
     """Pruefe welche Template-extra_activities in der Welt-Library vorhanden sind.
 
     Liefert pro extra_activity einen Status:
@@ -90,7 +90,7 @@ async def get_template_coverage(character_name: str) -> Dict[str, Any]:
 
 
 @router.post("/coverage/{character_name}/seed")
-async def seed_template_coverage(character_name: str) -> Dict[str, Any]:
+def seed_template_coverage(character_name: str) -> Dict[str, Any]:
     """Legt fuer alle fehlenden Template-extra_activities Skelett-Eintraege
     in der Welt-Library an.
 
@@ -104,7 +104,7 @@ async def seed_template_coverage(character_name: str) -> Dict[str, Any]:
 
 
 @router.get("/readiness/{character_name}")
-async def get_readiness(character_name: str) -> Dict[str, Any]:
+def get_readiness(character_name: str) -> Dict[str, Any]:
     """Berechnet abgeleitete Capabilities aus Kombinationen von Settings.
 
     Zeigt nur Features die sich aus mehreren Einstellungen ergeben — der User

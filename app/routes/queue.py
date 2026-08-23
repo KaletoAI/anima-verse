@@ -27,7 +27,10 @@ async def queue_status() -> Dict[str, Any]:
     # so a contended lock never blocks the event loop.
     combined = await asyncio.to_thread(pm.get_combined_status)
     tq = get_task_queue()
-    tq_status = tq.get_status()
+    # Same reason: get_status() and get_tracked_recent() query task_queue.db.
+    # This route is POLLED by the queue panel, so the SQLite reads were a
+    # recurring loop stall (event-loop watchdog, 2026-08-23).
+    tq_status = await asyncio.to_thread(tq.get_status)
 
     # Active tracked tasks (running ODER pending) — Image-Gen, TTS, GPU-Tasks
     # die ausserhalb der TaskQueue laufen aber im Panel sichtbar sein sollen.
@@ -49,14 +52,14 @@ async def queue_status() -> Dict[str, Any]:
         "recent": combined["recent"],
         # Tracked + background tasks (unified)
         "active_tasks": _active,
-        "recent_tasks": tq.get_tracked_recent(),
+        "recent_tasks": await asyncio.to_thread(tq.get_tracked_recent),
         # Background tasks (flat, no named queues)
         "bg_tasks": tq_status,
     }
 
 
 @router.delete("/tasks/{task_id}")
-async def cancel_task(task_id: str) -> Dict[str, Any]:
+def cancel_task(task_id: str) -> Dict[str, Any]:
     """Bricht einen wartenden oder laufenden Task in der Queue ab."""
     from app.core.provider_manager import get_provider_manager
     from app.core.task_queue import get_task_queue
@@ -109,7 +112,7 @@ async def force_resume_queues() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @router.get("/tasks/status")
-async def task_queue_status() -> Dict[str, Any]:
+def task_queue_status() -> Dict[str, Any]:
     """Gibt Status aller persistenten Task-Queues zurück."""
     from app.core.task_queue import get_task_queue
     return get_task_queue().get_status()
@@ -132,7 +135,7 @@ async def resume_task_queue(queue_name: str) -> Dict[str, Any]:
 
 
 @router.delete("/tasks/item/{task_id}")
-async def cancel_bg_task(task_id: str) -> Dict[str, Any]:
+def cancel_bg_task(task_id: str) -> Dict[str, Any]:
     """Bricht einen wartenden oder laufenden Background-Task ab."""
     from app.core.task_queue import get_task_queue
     ok = get_task_queue().cancel_task(task_id)
@@ -142,7 +145,7 @@ async def cancel_bg_task(task_id: str) -> Dict[str, Any]:
 
 
 @router.post("/tasks/item/{task_id}/retry")
-async def retry_bg_task(task_id: str) -> Dict[str, Any]:
+def retry_bg_task(task_id: str) -> Dict[str, Any]:
     """Setzt einen fehlgeschlagenen Task auf 'pending' zurück."""
     from app.core.task_queue import get_task_queue
     ok = get_task_queue().retry_task(task_id)
@@ -152,7 +155,7 @@ async def retry_bg_task(task_id: str) -> Dict[str, Any]:
 
 
 @router.post("/tasks/item/{task_id}/move")
-async def move_bg_task(task_id: str, queue_name: str = "") -> Dict[str, Any]:
+def move_bg_task(task_id: str, queue_name: str = "") -> Dict[str, Any]:
     """Verschiebt einen pending Task in eine andere Queue."""
     if not queue_name:
         raise HTTPException(status_code=400, detail="queue_name erforderlich")
@@ -164,7 +167,7 @@ async def move_bg_task(task_id: str, queue_name: str = "") -> Dict[str, Any]:
 
 
 @router.post("/tasks/item/{task_id}/priority")
-async def change_bg_task_priority(task_id: str, priority: int = 20) -> Dict[str, Any]:
+def change_bg_task_priority(task_id: str, priority: int = 20) -> Dict[str, Any]:
     """Ändert die Priorität eines pending Tasks (niedriger = schneller)."""
     from app.core.task_queue import get_task_queue
     ok = get_task_queue().change_priority(task_id, priority)
@@ -174,8 +177,8 @@ async def change_bg_task_priority(task_id: str, priority: int = 20) -> Dict[str,
 
 
 @router.delete("/tasks/clear")
-async def clear_bg_tasks(hours: float = 24.0, status: str = "",
-                          queue_name: str = "") -> Dict[str, Any]:
+def clear_bg_tasks(hours: float = 24.0, status: str = "",
+                   queue_name: str = "") -> Dict[str, Any]:
     """Löscht alte abgeschlossene Tasks aus der Datenbank."""
     from app.core.task_queue import get_task_queue
     deleted = get_task_queue().clear_completed(older_than_hours=hours, queue_name=queue_name)
@@ -183,7 +186,7 @@ async def clear_bg_tasks(hours: float = 24.0, status: str = "",
 
 
 @router.post("/story-arc/generate")
-async def trigger_story_arc_generate() -> Dict[str, Any]:
+def trigger_story_arc_generate() -> Dict[str, Any]:
     """Triggert manuell eine Story-Arc-Generierung."""
     from app.core.background_queue import get_background_queue
     bq = get_background_queue()
@@ -192,7 +195,7 @@ async def trigger_story_arc_generate() -> Dict[str, Any]:
 
 
 @router.delete("/story-arc/{arc_id}")
-async def delete_story_arc(arc_id: str) -> Dict[str, Any]:
+def delete_story_arc(arc_id: str) -> Dict[str, Any]:
     """Löscht einen einzelnen Story Arc."""
     from app.models.story_arcs import remove_arc
     success = remove_arc(arc_id)
@@ -202,7 +205,7 @@ async def delete_story_arc(arc_id: str) -> Dict[str, Any]:
 
 
 @router.get("/story-arc/status")
-async def story_arc_status() -> Dict[str, Any]:
+def story_arc_status() -> Dict[str, Any]:
     """Zeigt alle Story Arcs eines Users."""
     from app.models.story_arcs import get_all_arcs
     arcs = get_all_arcs()

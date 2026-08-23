@@ -22,7 +22,7 @@ router = APIRouter(prefix="/user/gallery", tags=["user_gallery"])
 
 
 @router.get("")
-async def list_user_gallery() -> Dict[str, Any]:
+def list_user_gallery() -> Dict[str, Any]:
     """Listet alle User-Galerie-Bilder mit Metadaten."""
     try:
         images = get_user_gallery_images()
@@ -40,7 +40,7 @@ async def list_user_gallery() -> Dict[str, Any]:
 
 
 @router.get("/{filename}")
-async def serve_user_gallery_image(filename: str):
+def serve_user_gallery_image(filename: str):
     """Gibt ein einzelnes User-Galerie-Bild zurueck."""
     if ".." in filename or "/" in filename:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
@@ -104,7 +104,7 @@ async def upload_user_gallery_image(request: Request) -> Dict[str, Any]:
 
 
 @router.delete("/{filename}")
-async def delete_gallery_image(filename: str) -> Dict[str, str]:
+def delete_gallery_image(filename: str) -> Dict[str, str]:
     """Loescht ein Bild aus der User-Galerie."""
     if ".." in filename or "/" in filename:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")

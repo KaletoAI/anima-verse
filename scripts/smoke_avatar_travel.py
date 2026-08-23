@@ -298,14 +298,14 @@ def main() -> int:
           (payload or {}).get("reason") if status == "ok" else "?", "")
 
     print("\n[2] POST /play/travel/cancel drops the journey")
-    res = asyncio.run(play_travel_cancel(user=USER))
+    res = play_travel_cancel(user=USER)
     check("cancelled", res.get("cancelled"), True)
     check("the abandoned target is reported", res.get("target_id"), MARKET)
     check("no journey left", travel_engine.get_journey("demo_avatar"), None)
     check("no movement target left", get_movement_target("demo_avatar"), "")
     check("the avatar stayed where it was",
           get_character_current_location("demo_avatar"), HOME)
-    res = asyncio.run(play_travel_cancel(user=USER))
+    res = play_travel_cancel(user=USER)
     check("a second cancel is a no-op, not a failure",
           res.get("cancelled"), False)
 
@@ -355,7 +355,7 @@ def main() -> int:
     delete_rule(rule["id"] if isinstance(rule, dict) else rule)
     status, _ = travel(MARKET)
     check("without the rule the same trip starts", status, "ok")
-    asyncio.run(play_travel_cancel(user=USER))
+    play_travel_cancel(user=USER)
 
     print("\n[6] an access rule on the TARGET refuses the start")
     rule = add_rule({"type": "block", "action": "enter", "name": "Barred gate",
@@ -398,13 +398,13 @@ def main() -> int:
     check("with the key the same trip starts", status, "ok")
     check("… and it really is a journey",
           bool((payload or {}).get("journey")), True)
-    asyncio.run(play_travel_cancel(user=USER))
+    play_travel_cancel(user=USER)
 
     print("\n[7] GET /play/scene carries the running journey")
-    scene = asyncio.run(play_scene(user=USER))
+    scene = play_scene(user=USER)
     check("no travel while standing still", scene.get("travel"), None)
     travel(MARKET)
-    scene = asyncio.run(play_scene(user=USER))
+    scene = play_scene(user=USER)
     trav = scene.get("travel") or {}
     check("the travelling target", trav.get("target_id"), MARKET)
     check("the travelling target name", trav.get("target_name"), "Smoke Market")
@@ -415,10 +415,10 @@ def main() -> int:
     check("the ETA in game wall-clock time", trav.get("eta_hhmm"),
           GameTime.parse(state["eta_game"]).time_hhmm())
     check("the total distance", trav.get("total_m"), state["total_m"])
-    asyncio.run(play_travel_cancel(user=USER))
+    play_travel_cancel(user=USER)
 
     print("\n[8] the destination list's data source")
-    wm = asyncio.run(play_worldmap(user=USER, show_all=0))
+    wm = play_worldmap(user=USER, show_all=0)
     check("the payload is fogged", wm.get("fogged"), True)
     entries = {e["id"]: e for e in wm.get("locations", [])}
     check_true("the known target is on the map", MARKET in entries)
@@ -451,7 +451,7 @@ def main() -> int:
     check_true("the travel routes exist instead",
                {"/play/travel", "/play/travel/cancel"} <= play_paths,
                sorted(p for p in play_paths if "travel" in p))
-    scene = asyncio.run(play_scene(user=USER))
+    scene = play_scene(user=USER)
     check("no neighbors block in /play/scene", "neighbors" in scene, False)
     check("no entry_room_name in /play/scene either",
           "entry_room_name" in scene, False)
@@ -462,7 +462,7 @@ def main() -> int:
     new_character("npc_close", "", 55.0, 0.0, [])
     new_character("npc_far", "", 55.0, 60.0, [])
     set_character_pos("demo_avatar", 50.0, 0.0)
-    scene = asyncio.run(play_scene(user=USER))
+    scene = play_scene(user=USER)
     check("the avatar stands in the wilderness", scene.get("location_id"), "")
     check("present = everyone inside the hearing radius",
           sorted(scene.get("present") or []), ["npc_close"])

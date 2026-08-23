@@ -141,7 +141,7 @@ async def clone_location_route(template_id: str, request: Request) -> Dict[str, 
 # machinery.
 
 @router.get("/freeze-status")
-async def get_freeze_status() -> Dict[str, Any]:
+def get_freeze_status() -> Dict[str, Any]:
     """Aktueller World-Freeze-Status (autonome Simulation eingefroren?)."""
     from app.models.world import is_world_frozen
     return {"frozen": is_world_frozen()}
@@ -172,7 +172,7 @@ async def unfreeze_world(
 
 
 @router.get("/game-time")
-async def get_game_time(lang: str = Query("en")) -> Dict[str, Any]:
+def get_game_time(lang: str = Query("en")) -> Dict[str, Any]:
     """Game clock info: system now, the world instant fully rendered, anchors,
     factor, freeze and the world CALENDAR.
 
@@ -261,7 +261,7 @@ async def post_game_time(
 
 
 @router.get("/sleep-status")
-async def get_sleep_status() -> Dict[str, Any]:
+def get_sleep_status() -> Dict[str, Any]:
     """Aktueller World-Sleep-Status (alle NPCs schlafen?)."""
     from app.models.world import is_world_sleeping
     return {"sleeping": is_world_sleeping()}
@@ -287,7 +287,7 @@ async def wake_world_route(
 
 
 @router.get("/settings")
-async def get_world_settings() -> Dict[str, Any]:
+def get_world_settings() -> Dict[str, Any]:
     """World-level settings (news channel presentation)."""
     return world_ops.build_world_settings_payload()
 
@@ -2184,14 +2184,14 @@ async def imagegen_enhance_prompt(request: Request) -> Dict[str, Any]:
 
 
 @router.get("/compose-cache")
-async def compose_cache_status(_u=Depends(require_admin)) -> Dict[str, Any]:
+def compose_cache_status(_u=Depends(require_admin)) -> Dict[str, Any]:
     """Size of the LLM prompt-compose cache (admin use-case editor)."""
     from app.core.prompt_compose_llm import cache_size
     return {"entries": cache_size()}
 
 
 @router.post("/compose-cache/clear")
-async def compose_cache_clear(_u=Depends(require_admin)) -> Dict[str, Any]:
+def compose_cache_clear(_u=Depends(require_admin)) -> Dict[str, Any]:
     """Drop every cached LLM-composed prompt — the only way to make "Compose
     with AI" start over for prompts whose inputs did not change."""
     from app.core.prompt_compose_llm import clear_cache
@@ -2347,7 +2347,7 @@ async def generate_gallery_image(location_name: str, request: Request) -> Dict[s
 
 
 @router.delete("/locations/{location_name}/gallery/{image_name}")
-async def delete_gallery_image(
+def delete_gallery_image(
     location_name: str,
     image_name: str) -> Dict[str, Any]:
     """Loescht ein Galerie-Bild (per ID oder Name)."""
@@ -2476,7 +2476,7 @@ async def set_prompt_changed_flag(
 # === Messaging-Frame (Phone-Chat-Layout) ===
 
 @router.get("/messaging-frame")
-async def get_messaging_frame() -> Dict[str, Any]:
+def get_messaging_frame() -> Dict[str, Any]:
     """Liefert Frame-Status + bbox-Metadaten fuer Frontend-Composite.
 
     Returns:
@@ -2495,7 +2495,7 @@ async def get_messaging_frame() -> Dict[str, Any]:
 
 
 @router.get("/messaging-frame.png")
-async def get_messaging_frame_image() -> FileResponse:
+def get_messaging_frame_image() -> FileResponse:
     """Liefert das prozessierte Frame-Bild (PNG mit transparenter Anzeigeflaeche)."""
     from app.core.messaging_frame import get_frame_path, has_frame
     if not has_frame():
@@ -2525,7 +2525,7 @@ async def post_messaging_frame_generate(request: Request) -> Dict[str, Any]:
 
 
 @router.delete("/messaging-frame")
-async def delete_messaging_frame() -> Dict[str, Any]:
+def delete_messaging_frame() -> Dict[str, Any]:
     """Loescht das aktuelle Frame (Frontend faellt auf CSS-Default zurueck)."""
     from app.core.messaging_frame import get_frame_path, get_frame_meta_path
     for p in (get_frame_path(), get_frame_meta_path()):

@@ -18,7 +18,7 @@ router = APIRouter(prefix="/account", tags=["account"])
 
 
 @router.get("/characters")
-async def list_characters(request: Request) -> Dict[str, Any]:
+def list_characters(request: Request) -> Dict[str, Any]:
     """List characters the player can control (Avatar-faehige Characters).
 
     Chatbots (Template ohne playable_avatar Flag) werden ausgefiltert —

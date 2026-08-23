@@ -14,7 +14,7 @@ router = APIRouter(prefix="/admin/world-setup", tags=["world-setup"],
 
 
 @router.get("")
-async def get_world_setup_route():
+def get_world_setup_route():
     """Return the current world setup (always a dict with `description`)."""
     return get_world_setup()
 

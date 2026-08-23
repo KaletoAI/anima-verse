@@ -546,7 +546,7 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
 
 
 @router.delete("/post/{post_id}/animation")
-async def delete_instagram_animation(post_id: str) -> Dict[str, Any]:
+def delete_instagram_animation(post_id: str) -> Dict[str, Any]:
     """Loescht nur die Animation (Video) eines Posts, nicht das Bild/den Post."""
     post = get_post(post_id)
     if not post:

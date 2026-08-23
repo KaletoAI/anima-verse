@@ -105,7 +105,7 @@ def list_chatbots() -> Dict[str, Any]:
 
 
 @router.get("/animate/services")
-async def list_animate_services() -> List[Dict[str, Any]]:
+def list_animate_services() -> List[Dict[str, Any]]:
     """Liefert die verfuegbaren Animation-Services fuer das Frontend."""
     from app.skills.animate import get_animate_services
     return get_animate_services()
@@ -309,7 +309,7 @@ async def update_character_current_feeling(character_name: str, request: Request
 
 @router.get("/{character_name}/status-effects")
 def get_status_effects_route(
-    character_name: str) -> Dict[str, Any]:
+                             character_name: str) -> Dict[str, Any]:
     """Gibt die aktuellen Status-Werte eines Characters zurueck.
 
     Beim ersten Aufruf: Initialisiert status_effects aus Trait-Defaults
@@ -346,7 +346,7 @@ async def switch_template_route(character_name: str, request: Request) -> Dict[s
 
 @router.get("/{character_name}/home-location")
 def get_home_location_route(
-    character_name: str) -> Dict[str, Any]:
+                            character_name: str) -> Dict[str, Any]:
     """Gibt Home-Location und Home-Room eines Characters zurueck."""
     if not character_name:
         return {"home_location": "", "home_room": ""}
@@ -514,7 +514,7 @@ async def add_character_outfit_route(character_name: str, request: Request) -> D
 
 
 @router.delete("/{character_name}")
-async def delete_character_route(character_name: str) -> Dict[str, Any]:
+def delete_character_route(character_name: str) -> Dict[str, Any]:
     """Loescht einen Character vollstaendig (DB + Storage-Verzeichnis)."""
     if not character_name:
         raise HTTPException(status_code=400, detail="character_name fehlt")
@@ -553,7 +553,7 @@ async def generate_profile_image_route(character_name: str, request: Request) ->
 
 
 @router.get("/{character_name}/outfits/{outfit_id}/image-prompt")
-async def get_outfit_image_prompt(character_name: str, outfit_id: str) -> Dict[str, str]:
+def get_outfit_image_prompt(character_name: str, outfit_id: str) -> Dict[str, str]:
     """Berechnet den Prompt fuer ein Outfit-Bild (Vorschau fuer Dialog)."""
 
     outfits = get_character_outfits(character_name)
@@ -633,7 +633,7 @@ def get_current_outfit_route(character_name: str) -> Dict[str, Any]:
 
 
 @router.post("/{character_name}/current-outfit/refresh")
-async def refresh_current_outfit(character_name: str, request: Request) -> Dict[str, Any]:
+def refresh_current_outfit(character_name: str, request: Request) -> Dict[str, Any]:
     """Decency-Compliance auf den Char anwenden und Outfit-Beschreibung zurueckliefern."""
     from app.core.outfit_compliance import apply_outfit_compliance
     from app.core.outfit_renderer import render_outfit
@@ -988,7 +988,7 @@ async def clear_outfit_expression_cache_route(character_name: str, request: Requ
 
 
 @router.get("/{character_name}/expressions")
-async def list_expressions_route(character_name: str) -> Dict[str, Any]:
+def list_expressions_route(character_name: str) -> Dict[str, Any]:
     """Lists all cached expression variants of a character with their
     parameters (mood, activity, equipped, model, seed, backend, workflow, …).
     """
@@ -998,7 +998,7 @@ async def list_expressions_route(character_name: str) -> Dict[str, Any]:
 
 
 @router.get("/{character_name}/expressions/{filename}")
-async def serve_expression_route(character_name: str, filename: str):
+def serve_expression_route(character_name: str, filename: str):
     """Serves a single expression variant image by filename."""
     from app.core.expression_regen import _get_expressions_dir
     expr_dir = _get_expressions_dir(character_name)
@@ -1016,7 +1016,7 @@ async def serve_expression_route(character_name: str, filename: str):
 
 
 @router.delete("/{character_name}/expressions/{filename}")
-async def delete_expression_route(character_name: str, filename: str) -> Dict[str, Any]:
+def delete_expression_route(character_name: str, filename: str) -> Dict[str, Any]:
     """Deletes a single expression variant image + its JSON sidecar."""
     from app.core.expression_regen import delete_expression
     ok = delete_expression(character_name, filename)
@@ -1026,7 +1026,7 @@ async def delete_expression_route(character_name: str, filename: str) -> Dict[st
 
 
 @router.get("/{character_name}/outfit-imagegen")
-async def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
+def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
     """Liefert die per-Character Overrides fuer den Outfit-/Variant-Image-
     Service (Workflow + Model + LoRAs). Leere Werte = Defaults."""
     from app.models.character import get_character_profile
@@ -2018,7 +2018,7 @@ def get_available_skills_for_character(character_name: str) -> Dict[str, Any]:
 
 
 @router.get("/{character_name}/prompt-preview")
-async def get_prompt_preview_route(character_name: str) -> Dict[str, Any]:
+def get_prompt_preview_route(character_name: str) -> Dict[str, Any]:
     """Effective prompts (scene person description / face / outfit line)
     as they would render right now — admin preview for the Appearance and
     Wardrobe editors."""
@@ -2317,10 +2317,10 @@ async def animate_character_image(character_name: str, image_name: str, request:
 
 @router.get("/{character_name}/export")
 def export_character(
-    character_name: str,
-    include_chats: bool = Query(False, description="Include chat history"),
-    include_stories: bool = Query(False, description="Include story progress"),
-) -> StreamingResponse:
+                     character_name: str,
+                     include_chats: bool = Query(False, description="Include chat history"),
+                     include_stories: bool = Query(False, description="Include story progress"),
+                     ) -> StreamingResponse:
     """Exports a character as a ZIP bundle (DB rows + filesystem dir).
 
     The ZIP carries a manifest.json plus `files/` (char dir contents) and

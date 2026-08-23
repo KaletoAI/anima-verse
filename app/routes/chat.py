@@ -100,7 +100,7 @@ def _get_chat_partner() -> str:
 
 
 @router.delete("/history")
-async def chat_history_delete(days: int, character: str = "") -> Dict[str, Any]:
+def chat_history_delete(days: int, character: str = "") -> Dict[str, Any]:
     """Loescht Chat-Messages der letzten ``days`` Tage.
 
     Query-Params:
@@ -117,8 +117,8 @@ async def chat_history_delete(days: int, character: str = "") -> Dict[str, Any]:
 
 
 @router.get("/{user_id}/history")
-async def chat_history(limit: int = 2, offset: int = 0,
-                       since_id: int = 0) -> Dict[str, Any]:
+def chat_history(limit: int = 2, offset: int = 0,
+                 since_id: int = 0) -> Dict[str, Any]:
     """Gibt die letzten N Chat-Nachrichten zurueck (fuer Page-Reload).
 
     offset=0 bedeutet die neuesten Nachrichten, offset=2 ueberspringt die 2 neuesten usw.
@@ -160,7 +160,7 @@ async def upload_chat_image(request: Request) -> Dict[str, Any]:
 
 
 @router.get("/{user_id}/upload-image/{image_id}")
-async def get_chat_upload(image_id: str):
+def get_chat_upload(image_id: str):
     """Serve an uploaded chat image."""
     from fastapi.responses import Response
     from app.core.chat_ops import resolve_chat_upload_path
@@ -172,7 +172,7 @@ async def get_chat_upload(image_id: str):
 
 
 @router.get("/{user_id}/image-library")
-async def chat_image_library(character: str = None) -> Dict[str, Any]:
+def chat_image_library(character: str = None) -> Dict[str, Any]:
     """List images from character libraries for linking in chat.
 
     If character is specified, returns only that character's images.

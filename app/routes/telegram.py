@@ -103,7 +103,7 @@ async def register_telegram_user(request: Request) -> Dict[str, Any]:
 
 
 @router.get("/status")
-async def telegram_status() -> Dict[str, Any]:
+def telegram_status() -> Dict[str, Any]:
     """
     Health Check für Telegram Channel und Polling-Status
 
@@ -227,7 +227,7 @@ async def send_to_telegram(request: Request) -> Dict[str, Any]:
 
 
 @router.get("/chat_history/{user_id}/{character_name}")
-async def get_telegram_chat_history(character_name: str) -> Dict[str, Any]:
+def get_telegram_chat_history(character_name: str) -> Dict[str, Any]:
     """
     Hole Chat-Verlauf für einen User gefiltert nach Telegram Kanal
     

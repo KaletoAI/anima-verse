@@ -22,7 +22,7 @@ router = APIRouter(prefix="/relationships", tags=["relationships"])
 # ---------------------------------------------------------------------------
 
 @router.get("/")
-async def list_relationships(character: Optional[str] = Query(None)):
+def list_relationships(character: Optional[str] = Query(None)):
     """List all relationships, optionally filtered by character."""
     if character:
         return get_character_relationships(character)
@@ -30,7 +30,7 @@ async def list_relationships(character: Optional[str] = Query(None)):
 
 
 @router.get("/{char_a}/{char_b}")
-async def get_relationship_detail(
+def get_relationship_detail(
     char_a: str,
     char_b: str):
     """Get a specific relationship including history."""
@@ -51,7 +51,7 @@ class RelationshipUpdate(BaseModel):
 
 
 @router.put("/{char_a}/{char_b}")
-async def update_relationship(
+def update_relationship(
     char_a: str,
     char_b: str,
     body: RelationshipUpdate):
@@ -69,7 +69,7 @@ async def update_relationship(
 
 
 @router.post("/reclassify-all")
-async def reclassify_all(decay_blocked_tension: bool = Query(True)):
+def reclassify_all(decay_blocked_tension: bool = Query(True)):
     """Re-classify every relationship using current compatibility rules.
 
     Use after editing romantic_blocked_with / romantic_interests to fix

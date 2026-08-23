@@ -238,8 +238,6 @@ def main() -> int:
     # run while the world is still empty, because build_memory_relationships
     # drops partners that no longer exist.
     print("routes")
-    import asyncio
-
     from app.models.account import set_active_character
     from app.models.character import save_character_profile
     from app.models.world import add_location, list_locations
@@ -257,13 +255,13 @@ def main() -> int:
                                       "current_room": "r1"}, create_new=True)
     set_active_character(AVATAR)
 
-    others = asyncio.run(play_others(user=None))
+    others = play_others(user=None)
     check("others avatar", others.get("avatar"), AVATAR)
     check("others relation", [(c["name"], c.get("relation"))
                               for c in others.get("characters", [])],
           [(NPC, expected_rel)])
 
-    route_arcs = asyncio.run(play_story_arcs(user=None))
+    route_arcs = play_story_arcs(user=None)
     check("route arc ids", [a["id"] for a in route_arcs["arcs"]],
           expected_order)
 

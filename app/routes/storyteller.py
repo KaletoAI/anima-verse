@@ -16,7 +16,7 @@ router = APIRouter(prefix="/admin/storyteller", tags=["storyteller"],
 
 
 @router.get("/config")
-async def get_config_route():
+def get_config_route():
     """Return the current storyteller config plus the full list of known
     skill keys (so the UI can render unknown skills consistently)."""
     return {

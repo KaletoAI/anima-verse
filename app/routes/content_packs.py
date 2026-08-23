@@ -328,7 +328,7 @@ def _annotate(cached: Dict[str, Any], stale: bool, catalog: Dict[str, Any]) -> D
 # ── Endpoints ────────────────────────────────────────────────────────────
 
 @router.get("/catalogs")
-async def list_catalogs() -> Dict[str, Any]:
+def list_catalogs() -> Dict[str, Any]:
     """List configured catalogs (id, name, url) — no auth tokens leak out."""
     return {
         "catalogs": [
@@ -923,12 +923,12 @@ async def export_collection_route(request: Request) -> Response:
 
 
 @router.get("/types")
-async def supported_types() -> Dict[str, Any]:
+def supported_types() -> Dict[str, Any]:
     return {"types": sorted(SUPPORTED_TYPES), "code_types": sorted(CODE_PACK_TYPES)}
 
 
 @router.get("/skill-packages")
-async def list_skill_packages() -> Dict[str, Any]:
+def list_skill_packages() -> Dict[str, Any]:
     """Marketplace-installed skill packages (plugins/installed/)."""
     from app.core.skill_package_io import list_installed_skill_packages
     return {"packages": list_installed_skill_packages()}

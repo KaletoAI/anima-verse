@@ -2260,6 +2260,41 @@ _TILES: "OrderedDict[Tuple[int, int, int], Dict[str, Any]]" = OrderedDict()
 #: the client's want-set (~28 tiles) stays well under the limit.
 TILE_CACHE_MAX = 128
 
+#: Guards the per-generation DERIVED caches above (`_MODEL`, `_TILE_INDEX`,
+#: `_TILE_INPUTS`) while they are being FILLED. Reentrant because the fillers
+#: call each other (`tile_index` → `world_model` → `_tile_inputs`).
+#:
+#: WHY IT EXISTS. The height routes answer from the threadpool (plain ``def``
+#: endpoints), so several requests can miss the same cold cache in the same
+#: millisecond. Every value here is a pure function of the generation, so a
+#: double build was never WRONG — it was the stamp geometry (a median under
+#: every plot) paid twice or more at once. The fast hit path never takes it.
+_DERIVED_LOCK = threading.RLock()
+
+#: Guards only the swap of the `_TILE_STATS` container to a new generation —
+#: deliberately NOT held across :func:`get_tile`, which takes a tile lock and
+#: then `_DERIVED_LOCK`; holding this one across that call would invert the
+#: lock order and could deadlock.
+_STATS_LOCK = threading.Lock()
+
+#: One lock per tile key currently being rastered, plus the guard that hands
+#: them out. Per TILE and not one global lock so two threads asking for two
+#: DIFFERENT cold tiles still raster in parallel — the whole point of moving
+#: the routes into the threadpool. Cleared with the caches on a generation
+#: bump, so the dict never outgrows the world's tile count.
+_TILE_LOCKS: Dict[Tuple[int, int, int], threading.Lock] = {}
+_TILE_LOCKS_GUARD = threading.Lock()
+
+
+def _tile_lock(key: Tuple[int, int, int]) -> threading.Lock:
+    """The build lock of one tile key, created on first ask."""
+    with _TILE_LOCKS_GUARD:
+        lock = _TILE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _TILE_LOCKS[key] = lock
+        return lock
+
 
 def invalidate_cache() -> None:
     """Drop the cached field AND every cached tile (tests + authoring writes).
@@ -2284,6 +2319,8 @@ def invalidate_cache() -> None:
     _MODEL = None
     _TILE_STATS = None
     _TILES.clear()
+    with _TILE_LOCKS_GUARD:
+        _TILE_LOCKS.clear()
 
 
 def get_field() -> Dict[str, Any]:
@@ -2312,20 +2349,29 @@ def get_field() -> Dict[str, Any]:
     cached = _CACHE
     if cached is not None and cached[0] == _GENERATION:
         return cached[1]
-    generation = _GENERATION
-    sig = store.height_sig()
-    stored = store.load_grid()
-    if stored is not None and stored.get("sig") == sig:
-        _CACHE = (generation, stored)
-        return stored
-    field = rasterize((), model=world_model())
-    field["sig"] = sig
-    try:
-        store.store_grid(field)
-    except Exception as exc:   # a cache that cannot be written is not fatal
-        logger.warning("Could not store the rastered heightfield: %s", exc)
-    _CACHE = (generation, field)
-    return field
+    # A cold overview costs a 0.39 s raster AND a row written back to the DB.
+    # `/play/heightfield` answers from the threadpool, so two clients arriving
+    # together would each pay it and each store their own copy of the same
+    # grid; `_DERIVED_LOCK` is reentrant, which is what lets `world_model()`
+    # below be called from inside it.
+    with _DERIVED_LOCK:
+        cached = _CACHE
+        if cached is not None and cached[0] == _GENERATION:
+            return cached[1]
+        generation = _GENERATION
+        sig = store.height_sig()
+        stored = store.load_grid()
+        if stored is not None and stored.get("sig") == sig:
+            _CACHE = (generation, stored)
+            return stored
+        field = rasterize((), model=world_model())
+        field["sig"] = sig
+        try:
+            store.store_grid(field)
+        except Exception as exc:   # a cache that cannot be written is not fatal
+            logger.warning("Could not store the rastered heightfield: %s", exc)
+        _CACHE = (generation, field)
+        return field
 
 
 def current_step_m() -> float:
@@ -2434,11 +2480,15 @@ def world_model() -> HeightModel:
     cached = _MODEL
     if cached is not None and cached[0] == _GENERATION:
         return cached[1]
-    generation = _GENERATION
-    areas, footprints, terrain_areas, catalog = _tile_inputs()
-    model = build_model(areas, footprints, terrain_areas, catalog)
-    _MODEL = (generation, model)
-    return model
+    with _DERIVED_LOCK:
+        cached = _MODEL
+        if cached is not None and cached[0] == _GENERATION:
+            return cached[1]
+        generation = _GENERATION
+        areas, footprints, terrain_areas, catalog = _tile_inputs()
+        model = build_model(areas, footprints, terrain_areas, catalog)
+        _MODEL = (generation, model)
+        return model
 
 
 def tile_index() -> frozenset:
@@ -2453,10 +2503,14 @@ def tile_index() -> frozenset:
     cached = _TILE_INDEX
     if cached is not None and cached[0] == _GENERATION:
         return cached[1]
-    generation = _GENERATION
-    keys = tile_index_from(model=world_model())
-    _TILE_INDEX = (generation, keys)
-    return keys
+    with _DERIVED_LOCK:
+        cached = _TILE_INDEX
+        if cached is not None and cached[0] == _GENERATION:
+            return cached[1]
+        generation = _GENERATION
+        keys = tile_index_from(model=world_model())
+        _TILE_INDEX = (generation, keys)
+        return keys
 
 
 def get_tile(tx: int, tz: int) -> Dict[str, Any]:
@@ -2471,6 +2525,12 @@ def get_tile(tx: int, tz: int) -> Dict[str, Any]:
 
     **The returned dict is SHARED — treat it as read-only**, exactly like
     :func:`get_field`'s.
+
+    THE MISS IS LOCKED, per tile (:func:`_tile_lock`). The height routes answer
+    from the threadpool, so several requests can miss the same cold tile at
+    once and each pay the 80 ms; with the lock the first one rasters and the
+    rest wait for its result. The HIT path above stays lock-free — it is on the
+    walk-report path and must cost a dict lookup.
     """
     key = (_GENERATION, int(tx), int(tz))
     tile = _TILES.get(key)
@@ -2486,11 +2546,15 @@ def get_tile(tx: int, tz: int) -> Dict[str, Any]:
             # would sit on the walk-report path.
             pass
         return tile
-    tile = rasterize_tile(int(tx), int(tz), (), model=world_model())
-    _TILES[key] = tile
-    while len(_TILES) > TILE_CACHE_MAX:
-        _TILES.popitem(last=False)
-    return tile
+    with _tile_lock(key):
+        tile = _TILES.get(key)
+        if tile is not None:
+            return tile
+        tile = rasterize_tile(int(tx), int(tz), (), model=world_model())
+        _TILES[key] = tile
+        while len(_TILES) > TILE_CACHE_MAX:
+            _TILES.popitem(last=False)
+        return tile
 
 
 def tile_stats(tx: int, tz: int) -> Dict[str, Any]:
@@ -2504,8 +2568,18 @@ def tile_stats(tx: int, tz: int) -> Dict[str, Any]:
     global _TILE_STATS
     cached = _TILE_STATS
     if cached is None or cached[0] != _GENERATION:
-        cached = (_GENERATION, {})
-        _TILE_STATS = cached
+        # Only the container SWAP is locked. Two threads that each installed
+        # their own fresh dict would leave one of them writing into an orphan,
+        # so its statistic would be computed again on the next ask — cheap, but
+        # the cap on `index_stats_payload` makes it a per-request cost. The
+        # lock is released before `get_tile` below: that one takes a tile lock
+        # and then `_DERIVED_LOCK`, and holding this across it would invert the
+        # order.
+        with _STATS_LOCK:
+            cached = _TILE_STATS
+            if cached is None or cached[0] != _GENERATION:
+                cached = (_GENERATION, {})
+                _TILE_STATS = cached
     key = (int(tx), int(tz))
     stats = cached[1].get(key)
     if stats is None:

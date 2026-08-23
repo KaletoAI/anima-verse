@@ -1132,16 +1132,22 @@ class TravelTicker:
             logger.info("TravelTicker stopped")
 
     async def _run(self) -> None:
+        # BOTH halves run in a worker thread. They are plain synchronous work
+        # — SQLite reads and writes per travelling character, sight discovery
+        # and `mark_explored`, and discovery reads the ground, which may raster
+        # a cold height tile (~80 ms each). On the loop that was a stall of the
+        # whole server every few seconds; in a thread it delays nothing but the
+        # next tick.
         while True:
             try:
-                advance_all_journeys()
+                await asyncio.to_thread(advance_all_journeys)
             except Exception:
                 logger.exception("travel tick failed")
             try:
                 # Pair interactions end on the game clock too; the same beat
                 # closes the ones whose clip has run out.
                 from app.core.interaction_engine import settle_finished
-                settle_finished()
+                await asyncio.to_thread(settle_finished)
             except Exception:
                 logger.exception("interaction settle failed")
             await asyncio.sleep(_TICK_SECONDS)

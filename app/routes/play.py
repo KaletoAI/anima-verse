@@ -109,7 +109,7 @@ def _bg_id(location_id: str, room: str) -> str:
 
 
 @router.get("/play", include_in_schema=False)
-async def play_page():
+def play_page():
     # Shell wird BEWUSST ohne Auth ausgeliefert: das ist nur das statische
     # React-Bundle (kein Secret). Die SPA gated sich selbst client-seitig ueber
     # <AuthGate> (zeigt das Login-Formular bei fehlender Session). Eine
@@ -142,9 +142,16 @@ def _player_capabilities(avatar: str) -> list:
 
 
 @router.get("/play/scene")
-async def play_scene(user=Depends(get_current_user), limit: int = 100):
+def play_scene(user=Depends(get_current_user), limit: int = 100):
     """The avatar's PERCEIVED room scene plus its movement context (rooms,
-    who is around)."""
+    who is around).
+
+    A PLAIN ``def`` on purpose: nothing here is awaited — it is perception
+    reads, character profiles and the journey block, all synchronous SQLite —
+    and FastAPI runs a plain handler in the threadpool. As a coroutine it held
+    the event loop for the whole build, and this route is POLLED, so the
+    watchdog saw it as a recurring stall (2026-08-23).
+    """
     from app.core.perception import nearby_in_the_open
     from app.core.room_entry import _list_characters_in_room
     from app.models import perception_store
@@ -515,7 +522,7 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
 
 
 @router.post("/play/travel/cancel")
-async def play_travel_cancel(user=Depends(get_current_user)):
+def play_travel_cancel(user=Depends(get_current_user)):
     """The avatar calls off its journey and stays where it is.
 
     Idempotent: without a running journey nothing happens and
@@ -1175,7 +1182,7 @@ async def play_scene_render(request: Request, user=Depends(get_current_user)):
 
 
 @router.get("/play/scene-render/image")
-async def play_scene_render_image(sig: str, user=Depends(get_current_user)):
+def play_scene_render_image(sig: str, user=Depends(get_current_user)):
     """Serves a rendered scene image by its cache signature."""
     import re as _re
     from app.core.scene_render import get_scene_image_path
@@ -1513,7 +1520,7 @@ async def play_party_respond(request: Request, user=Depends(get_current_user)):
 
 
 @router.post("/play/party/leave")
-async def play_party_leave(user=Depends(get_current_user)):
+def play_party_leave(user=Depends(get_current_user)):
     """Avatar verlaesst seine Party (Follower steigt aus, Leader = Aufloesung)."""
     from app.models.account import get_active_character
     from app.core.party_engine import leave_party, clear_invites_for
@@ -1806,7 +1813,7 @@ async def play_say(request: Request, user=Depends(get_current_user)):
 
 
 @router.get("/play/self")
-async def play_self(user=Depends(get_current_user)):
+def play_self(user=Depends(get_current_user)):
     """Eigener Zustand des Avatars (B Tier 1): Mood, Activity, Status-Bars,
     Conditions, aktuelles Outfit + Auswahl-Listen für die Steuerung. Ein Call."""
     from app.models.account import get_active_character
@@ -1918,7 +1925,7 @@ def _require_present_target(avatar: str, raw_target) -> str:
 
 
 @router.get("/play/others")
-async def play_others(user=Depends(get_current_user)):
+def play_others(user=Depends(get_current_user)):
     """Zustand ALLER anwesenden anderen Charaktere (wie /play/self, je Character).
     Für das Others-Panel — read-only."""
     from app.models.account import get_active_character
@@ -1955,7 +1962,7 @@ async def play_others(user=Depends(get_current_user)):
 
 
 @router.get("/play/story-arcs")
-async def play_story_arcs(user=Depends(get_current_user)):
+def play_story_arcs(user=Depends(get_current_user)):
     """The avatar's quest book: running arcs first, then the last finished
     ones. Spoiler-free by construction — see build_player_story_arcs."""
     from app.core.world_ops import build_player_story_arcs
@@ -1964,7 +1971,7 @@ async def play_story_arcs(user=Depends(get_current_user)):
 
 
 @router.get("/play/notices")
-async def play_notices(user=Depends(get_current_user)):
+def play_notices(user=Depends(get_current_user)):
     """Banner-relevante Hinweise für den Avatar (B Tier 1): kritische Events am
     Ort, aktive Bewegungs-Sperre (Block/Force), ungelesene Notifications."""
     from app.models.account import get_active_character
@@ -2034,7 +2041,7 @@ async def play_notices(user=Depends(get_current_user)):
 
 
 @router.get("/play/news")
-async def play_news(user=Depends(get_current_user)):
+def play_news(user=Depends(get_current_user)):
     """News channel for the avatar: active (unresolved) events at its own
     location + global events, newest first. danger/disruption = "breaking".
     Also ships the world-configured presentation style (modern/newspaper/flyer).
@@ -2173,7 +2180,7 @@ def build_belongings(character_name: str) -> dict:
 
 
 @router.get("/play/belongings")
-async def play_belongings(user=Depends(get_current_user)):
+def play_belongings(user=Depends(get_current_user)):
     """Belongings des aktiven Avatars."""
     from app.models.account import get_active_character
     return build_belongings((get_active_character() or "").strip())
@@ -2382,7 +2389,7 @@ async def play_drop(request: Request, user=Depends(get_current_user)):
 
 
 @router.get("/play/item/{item_id}")
-async def play_item_detail(item_id: str, user=Depends(get_current_user)):
+def play_item_detail(item_id: str, user=Depends(get_current_user)):
     """Detail of ONE item the avatar owns — description, category/slots,
     effects, rarity and the image URL. Anything not in the avatar's inventory
     is a 404: the player surface never browses the world item catalogue."""
@@ -2474,7 +2481,7 @@ def _build_gallery_payload(character: str) -> dict:
 
 
 @router.get("/play/gallery")
-async def play_gallery(user=Depends(get_current_user)):
+def play_gallery(user=Depends(get_current_user)):
     """Bilder-Galerie des eigenen Avatars (Tier 2, read-only). Avatar serverseitig."""
     from app.models.account import get_active_character
     avatar = (get_active_character() or "").strip()
@@ -2484,7 +2491,7 @@ async def play_gallery(user=Depends(get_current_user)):
 
 
 @router.get("/play/galleries")
-async def play_galleries(user=Depends(get_current_user)):
+def play_galleries(user=Depends(get_current_user)):
     """Liste der Galerien, die der aktive Avatar durchstoebern darf
     (eigene zuerst, danach freigegebene fremde)."""
     from app.models.account import get_active_character
@@ -2510,7 +2517,7 @@ async def play_galleries(user=Depends(get_current_user)):
 
 
 @router.get("/play/gallery/{character}")
-async def play_gallery_of(character: str, user=Depends(get_current_user)):
+def play_gallery_of(character: str, user=Depends(get_current_user)):
     """Galerie eines bestimmten Characters — nur wenn der aktive Avatar in
     dessen Freigabeliste steht (oder es die eigene Galerie ist)."""
     from app.models.account import get_active_character
@@ -2524,7 +2531,7 @@ async def play_gallery_of(character: str, user=Depends(get_current_user)):
 
 
 @router.delete("/play/gallery/{character}/image/{filename}")
-async def play_gallery_delete_image(character: str, filename: str, user=Depends(get_current_user)):
+def play_gallery_delete_image(character: str, filename: str, user=Depends(get_current_user)):
     """Loescht ein Bild aus der Galerie des EIGENEN aktiven Avatars.
 
     IDOR-Schutz: nur die eigene Galerie ist loeschbar — sonst koennte jeder
@@ -2550,13 +2557,17 @@ async def play_gallery_delete_image(character: str, filename: str, user=Depends(
 
 
 @router.get("/play/worldmap")
-async def play_worldmap(user=Depends(get_current_user),
-                        show_all: int = Query(0, alias="all")):
+def play_worldmap(user=Depends(get_current_user),
+                  show_all: int = Query(0, alias="all")):
     """Aggregated 2D world map — fog of war by default (§ A12).
 
     Default: only what the active avatar knows (`known_locations`, strict).
     `?all=1` lifts the fog and is reserved for admins (403 otherwise) — the
     unfiltered view for world building and debugging.
+
+    A PLAIN ``def`` for the same reason as ``/play/scene``: the payload is
+    built synchronously (every character, inventory, prop sidecars, model
+    store) and this is the 3-second poll every client runs.
     """
     from app.models.account import get_active_character
     from app.core.world_ops import build_worldmap_payload
@@ -2736,6 +2747,12 @@ def get_heightfield_route(user=Depends(get_current_user)):
     instead. ``tiles`` is the index — every tile the world has a ground in —
     and a client fetches those from ``/play/heightfield/tiles``. The two are
     never mixed: a reader takes either the tiles or the overview.
+
+    A PLAIN ``def``, and it has to be: ``index_stats_payload`` may raster up to
+    ``TILE_STATS_MAX`` cold tiles at ~80 ms each, so a cold call is seconds of
+    pure arithmetic. In the threadpool that delays only this request; the
+    tile-level locks in ``heightfield`` keep two callers from rastering the
+    same tile twice.
     """
     from app.core.heightfield import (TILE_M, TILE_STEP_M, get_field,
                                       index_stats_payload, tile_index_keys)
@@ -2842,7 +2859,7 @@ def get_heightfield_stats_route(keys: str = "", user=Depends(get_current_user)):
 
 
 @router.get("/play/scenes")
-async def play_scenes(user=Depends(get_current_user), limit: int = 5):
+def play_scenes(user=Depends(get_current_user), limit: int = 5):
     """„Was bisher geschah" — zuletzt konsolidierte Szenen, an denen der Avatar
     beteiligt war (Zeit · Ort/Raum · Mit-Teilnehmer · Summary). Recap-Leiste im
     Chat, neueste zuerst."""
@@ -2873,7 +2890,7 @@ async def play_scenes(user=Depends(get_current_user), limit: int = 5):
 
 
 @router.get("/play/journal")
-async def play_journal(user=Depends(get_current_user)):
+def play_journal(user=Depends(get_current_user)):
     """Gedächtnis + Tagebuch des Avatars (Tier 2, read-only). Avatar serverseitig
     aufgelöst; reused load_memories + diary.get_diary_entries."""
     from app.models.account import get_active_character
@@ -2907,7 +2924,7 @@ async def play_journal(user=Depends(get_current_user)):
 
 
 @router.get("/play/schedule")
-async def play_schedule(user=Depends(get_current_user)):
+def play_schedule(user=Depends(get_current_user)):
     """Daily schedule of the avatar (read-only, R5). Same data as the admin
     scheduler route, but avatar-resolved server-side and with the location id
     already resolved to its name."""
@@ -3037,7 +3054,7 @@ async def play_set_outfit(request: Request, user=Depends(get_current_user)):
 
 
 @router.get("/play/layout")
-async def play_get_layout(user=Depends(get_current_user)):
+def play_get_layout(user=Depends(get_current_user)):
     """Gespeichertes UI-Layout des Users (react-grid-layout breakpoint-map) oder
     None, wenn noch keins gespeichert wurde."""
     from app.models.account import _current_user_settings
@@ -3058,7 +3075,7 @@ async def play_put_layout(request: Request, user=Depends(get_current_user)):
 
 
 @router.get("/play/figures")
-async def play_get_figures(bg: str = "", user=Depends(get_current_user)):
+def play_get_figures(bg: str = "", user=Depends(get_current_user)):
     """Figure anchors in the environment panel (name → {x, y, scale}; x as a
     fraction 0..1, y may exceed 1 — the figure may overhang the stage bottom
     up to the frontend's FIG_OVERHANG boundary) for the CURRENT room +
@@ -3125,7 +3142,7 @@ async def play_save_figures(request: Request, user=Depends(get_current_user)):
 
 
 @router.get("/play/layouts")
-async def play_list_layouts(user=Depends(get_current_user)):
+def play_list_layouts(user=Depends(get_current_user)):
     """Alle benannten Layout-Presets des Users (Name → {grid, open})."""
     from app.models.account import _current_user_settings
     us = _current_user_settings() or {}
@@ -3151,7 +3168,7 @@ async def play_save_layout(request: Request, user=Depends(get_current_user)):
 
 
 @router.delete("/play/layouts/{name}")
-async def play_delete_layout(name: str, user=Depends(get_current_user)):
+def play_delete_layout(name: str, user=Depends(get_current_user)):
     """Löscht einen benannten Layout-Preset."""
     from app.models.account import (_current_user_settings,
                                     _update_current_user_settings)
@@ -3219,7 +3236,7 @@ def _phone_set_read(avatar: str, partner: str, ts: str) -> None:
 
 
 @router.get("/play/messages")
-async def play_messages_list(user=Depends(get_current_user)):
+def play_messages_list(user=Depends(get_current_user)):
     """Kontaktliste: 1:1-Konversationen des Avatars mit Vorschau, Unread, Status."""
     from app.models.account import get_active_character
     from app.models.chat import get_chat_history
@@ -3263,7 +3280,7 @@ async def play_messages_list(user=Depends(get_current_user)):
 
 
 @router.post("/play/messages/read-all")
-async def play_messages_read_all(user=Depends(get_current_user)):
+def play_messages_read_all(user=Depends(get_current_user)):
     """Markiert alle 1:1-Konversationen des Avatars als gelesen (Unread → 0)."""
     from app.models.account import get_active_character
     from app.models.chat import get_chat_history
@@ -3282,7 +3299,7 @@ async def play_messages_read_all(user=Depends(get_current_user)):
 
 
 @router.get("/play/messages/thread")
-async def play_messages_thread(partner: str, user=Depends(get_current_user)):
+def play_messages_thread(partner: str, user=Depends(get_current_user)):
     """1:1-Verlauf mit einem Partner. Markiert die Konversation als gelesen."""
     from app.models.account import get_active_character
     from app.models.chat import get_chat_history

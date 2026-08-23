@@ -20,7 +20,7 @@ router = APIRouter(prefix="/admin/observer", tags=["observer"],
 
 
 @router.get("/presence")
-async def presence():
+def presence():
     """Alle Locations/Raeume mit den aktuell anwesenden Characters."""
     from app.core.room_entry import _list_characters_in_room
     from app.models.world import list_locations
@@ -44,7 +44,7 @@ async def presence():
 
 
 @router.get("/room")
-async def room_view(location_id: str, room_id: str = "", limit: int = 100):
+def room_view(location_id: str, room_id: str = "", limit: int = 100):
     """Objektive Sicht: rohe Sprechakte eines Raums (ganze Location bei leerem
     room_id), aelteste zuerst."""
     rows = perception_store.get_room_utterances(location_id, room_id, limit)
@@ -52,7 +52,7 @@ async def room_view(location_id: str, room_id: str = "", limit: int = 100):
 
 
 @router.get("/character/{name}/stream")
-async def character_stream(name: str, limit: int = 100, before: str = ""):
+def character_stream(name: str, limit: int = 100, before: str = ""):
     """Subjektive Sicht: der Wahrnehmungs-Stream eines Characters."""
     rows = perception_store.get_character_stream(name, limit, before or None)
     return {"perceiver": name, "perceptions": rows}
