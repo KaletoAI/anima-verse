@@ -2358,7 +2358,8 @@ export function createGround(): Ground {
      *  mirrors in `nextWater`, so they live and die with them — a fall is not a
      *  thing of its own, it is a place a river is steep. */
     const nextWater: THREE.Mesh[] = [];
-    const addMirror = (geometry: THREE.BufferGeometry, kind: string,
+    const addMirror = (geometry: THREE.BufferGeometry, ring: Point2[],
+                       kind: string,
                        profile: WaterProfile, opaqueDepthM: number,
                        flowFactor: number, meta: TerrainMeta | undefined
     ): void => {
@@ -2376,8 +2377,13 @@ export function createGround(): Ground {
         patchWaterShore(mat);
         waterMats.set(kind, mat);
       }
+      // The RING goes in beside the earcut (W5c): where the axis has interior
+      // knots, `buildWaterPlane` cuts the outline at their cross-lines and
+      // builds its own pieces, so the mirror bends where the level bends
+      // instead of ramping straight across a cliff. A lake and a polygon river
+      // keep the geometry built above, unchanged.
       nextWater.push(buildWaterPlane(geometry, profile, mat, opaqueDepthM,
-                                     flowFactor));
+                                     flowFactor, ring));
       // …and the FALLS of that very axis (W5). The width is the drawn ribbon's
       // own (`meta.stroke.width_m`) — a polygon water has none, and has no
       // interior knots either, so both halves of the question answer "no fall"
@@ -2413,7 +2419,7 @@ export function createGround(): Ground {
         // off the area's meta and turned into a factor against the KIND's own
         // `flow_speed` dial — the uniform the shader multiplies. An area
         // without the key answers exactly 1, i.e. the unit tangent of W4a.
-        addMirror(built.geometry, area.kind, profile,
+        addMirror(built.geometry, built.ring, area.kind, profile,
                   waterOpaqueDepthM(area.meta?.water_depth_effective),
                   waterFlowFactor(area.meta?.flow_speed_m_s,
                                   surfaceMaterialSpec(surfaceOf(area.kind))

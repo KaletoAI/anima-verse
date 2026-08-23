@@ -345,6 +345,97 @@
  * `0 + level` are one number.
  *
  * ===========================================================================
+ * [5c] THE MESH FOLLOWS THE KNOTS — the cliff, cut into strips (W5c)
+ * ===========================================================================
+ * [5] holds while the profile between two outline vertices is ONE straight
+ * ramp. Over the [4e] cliff it does not: the ribbon has four corners over
+ * 100 m, the profile has four knots, and the ruled surface between the corners
+ * is the very two-knot ramp [4e] prints as the RED counter-probe. The reader
+ * was right and the DRAWING was wrong — a mirror floating before the lip and
+ * diving after it.
+ *
+ * `subdivideRibbonByAxis(ring, axis)` cuts the outline at the INTERIOR knots
+ * before the earcut runs. The rule is a running REMAINDER: at each interior
+ * knot the remainder is split by that knot's cross-line into the piece upstream
+ * (a strip) and the piece downstream (the new remainder), so the pieces tile
+ * the outline exactly — splitting one polygon by one line gives back that
+ * polygon, whatever the next line does.
+ *
+ * THE CLIFF RIBBON is the 6 m wide, 100 m long band of the [4e] stroke:
+ *
+ *     ring = (0,−3) (100,−3) (100,3) (0,3)          area 6 · 100 = 600 m²
+ *     axis = [0,0,0,3] [40,0,40,3] [42,0,42,0] [100,0,100,0]
+ *
+ * Both interior knots sit on a straight axis, so both cross-lines are the plain
+ * perpendicular — x = 40 and x = 42. Sutherland–Hodgman on the first, keeping
+ * x ≤ 40, walks the ring edge by edge:
+ *
+ *     (0,−3) f=+40 kept · edge to (100,−3) f=−60 crosses at t = 40/100 = 0.4
+ *                                                      -> (40,−3)
+ *     (100,−3) dropped · (100,3) dropped, no crossing between them
+ *     edge (100,3) -> (0,3) crosses at t = 0.6         -> (40,3)
+ *     (0,3) f=+40 kept
+ *
+ * i.e. exactly the rectangle (0,−3) (40,−3) (40,3) (0,3), and the other side is
+ * its complement. The second cut splits THAT remainder at x = 42. Three strips:
+ *
+ *     x ∈ [0, 40]    6 · 40 = 240 m²      corners all at level 3.0
+ *     x ∈ [40, 42]   6 ·  2 =  12 m²      3.0 upstream, 0.0 downstream
+ *     x ∈ [42, 100]  6 · 58 = 348 m²      corners all at level 0.0
+ *                            ---------
+ *                             600 m²      = the ribbon, to the last bit
+ *
+ * FOUR VERTICES AND TWO TRIANGLES BECOME TWELVE AND SIX. The strips are earcut
+ * separately (each is its own `THREE.Shape`), so the rows at x = 40 and x = 42
+ * are doubled — which is what makes the surface bend there at all.
+ *
+ * WHAT THE DRAWN SURFACE NOW READS, against the two-knot ramp it used to be
+ * (`3 − 0.03·x`, [4e]'s red probe, and here it is the MESH's error and not the
+ * reader's):
+ *
+ *     x      waterLevelAt   drawn now   drawn before   the old error
+ *     31     3.0            3.0         2.07           0.93 m under the plateau
+ *     39     3.0            3.0         1.83           1.17 m under it
+ *     41     1.5            1.5         1.77           the lip itself
+ *     43     0.0            0.0         1.71           1.71 m of water in the air
+ *     51     0.0            0.0         1.47           1.47 m in the air
+ *
+ * The new column is `waterLevelAt` itself, everywhere and not only at the five
+ * probes: inside a strip the level is affine in x (one straight piece of the
+ * profile) and the strip's four lifted corners are coplanar, so the ruled
+ * surface over them IS that piece. The old column's worst place is x = 42, the
+ * foot of the step: `3 − 1.26 = 1.74` m of mirror standing on ground at 0.
+ *
+ * THE STRIP INTERPOLATION IS READ BY A FAN here, from each strip's first
+ * corner, and that is not a shortcut around the real earcut: with four coplanar
+ * corners every triangulation of the quad interpolates the same plane, so the
+ * diagonal `THREE.ShapeGeometry` picks cannot change a number above. What the
+ * fan does NOT stand in for is a concave strip — that is why the builder runs
+ * the same `buildAreaGeometry` earcut the whole painted world runs, checked
+ * below as a source claim rather than guessed at.
+ *
+ * A BENT AXIS IS THE PARTITION'S OWN TEST. Two cross-lines that cross INSIDE
+ * the mask would double-count a wedge and drop another if each strip were
+ * clipped from the full outline; the running remainder cannot. Square
+ * (−30,−10) (40,−10) (40,40) (−30,40), 70 · 50 = 3500 m², under the L-shaped
+ * axis (−20,0) (20,0) (20,20) (−20,20): the knot at (20,0) bends from +x to
+ * +z, so its cross-line normal is the BISECTOR (0.7071, 0.7071), and the one at
+ * (20,20) bends from +z to −x, normal (−0.7071, 0.7071). The two lines meet at
+ * (20,20) — the second knot itself, inside the square — and the three strips
+ * still sum to 3500.
+ *
+ * ONE AND TWO KNOTS ARE UNTOUCHED, and provably the same buffers: the function
+ * returns the ARRAY IT WAS GIVEN, the caller sees a single strip and keeps the
+ * geometry `buildAreaGeometry` already made. A lake and a polygon river draw
+ * what they drew before W5c, bit for bit.
+ *
+ * AND A CROSS-LINE THAT MISSES THE MASK COSTS NOTHING. An axis that runs on
+ * past its outline (knots at x = −20 … −5, or at x = 150) puts every interior
+ * knot outside: one side of each cut is empty, empty pieces are dropped, and
+ * the single surviving piece is again "keep what you have". No empty earcut,
+ * no NaN, no crash.
+ *
+ * ===========================================================================
  * [6] THE WADE/SWIM CROSSOVER, at the LOCAL level
  * ===========================================================================
  * `root = max(groundY + sink, waterLevel)`; the body reference is always
@@ -607,7 +698,8 @@ const [W, walk, mats] = await loadPure('client3d/src/scene/waterPlaneMath.ts',
 const { WATER_EDGE_FADE_M, WATER_FOAM_ALPHA, WATER_FOAM_BAND_M,
   WATER_FOAM_STRENGTH, WATER_SHORE_BAND_M, liftToWaterProfile, waterAlpha,
   waterEdgeFade, waterFlowAt, waterFoam, waterLevelAt, waterOpaqueDepthM,
-  waterProfileOf, waterShoreAlpha, waterShoreBody, waterShoreGlsl } = W;
+  waterProfileOf, waterShoreAlpha, waterShoreBody, waterShoreGlsl,
+  subdivideRibbonByAxis } = W;
 const { floatRootY, groundWaterLevel } = walk;
 // The shared package's own half of the flow attribute — the factor its LENGTH
 // carries. `materials.ts` imports nothing but types, so it loads the same way.
@@ -828,8 +920,10 @@ check('the vertex half declares the attribute',
   /attribute float aWaterOpaque;/.test(planeSrc) ? 1 : 0, 1);
 check('…and hands it straight to the fragment',
   /vWaterOpaque = aWaterOpaque;/.test(planeSrc) ? 1 : 0, 1);
+// `geo` and not `geometry` since W5c: the builder draws the CUT geometry where
+// the axis has interior knots (see [5c]) and the one it was handed otherwise.
 check('the mesh builder writes it per vertex',
-  /geometry\.setAttribute\('aWaterOpaque'/.test(planeSrc) ? 1 : 0, 1);
+  /geo\.setAttribute\('aWaterOpaque'/.test(planeSrc) ? 1 : 0, 1);
 check('RED: and the flow is no longer one vector for a whole area',
   /waterFlowVector/.test(planeSrc) ? 1 : 0, 0);
 check('…it is the tangent AT THE VERTEX',
@@ -1083,6 +1177,148 @@ checkIs('an empty span with a bearing set still answers level_up, never NaN',
 check('an odd tail of numbers is left alone rather than half-written',
   (() => { const a = [1, 9, 2, 5]; liftToWaterProfile(a, LAKE); return a[3]; })(),
   5);
+
+// ── [5c] the mesh follows the knots: the cliff, cut into strips (W5c) ──────
+console.log('\n[5c] the mirror MESH is cut at the axis knots (W5c)');
+/** The [4e] stroke as its ribbon: 6 m wide, 100 m long, four corners. */
+const RIBBON = [[0, -3], [100, -3], [100, 3], [0, 3]];
+/** Shoelace, unsigned — the ring's own area in m². */
+const ringArea = (r) => Math.abs(r.reduce((sum, [x0, z0], i) => {
+  const [x1, z1] = r[(i + 1) % r.length];
+  return sum + x0 * z1 - x1 * z0;
+}, 0)) / 2;
+/** A ring as a FAN from its first corner — see the docstring for why that
+ *  stands in for the real earcut here and where it stops standing in. */
+const fan = (r) => {
+  const out = [];
+  for (let i = 1; i + 1 < r.length; i += 1) out.push([r[0], r[i], r[i + 1]]);
+  return out;
+};
+const triArea = ([a, b, c]) => Math.abs((b[0] - a[0]) * (c[1] - a[1])
+  - (c[0] - a[0]) * (b[1] - a[1])) / 2;
+/** The height the DRAWN surface carries at (x, z): the containing triangle's
+ *  three corners lifted by `waterLevelAt`, read barycentrically — i.e. exactly
+ *  what the rasteriser interpolates across `liftToWaterProfile`'s output. */
+function drawnAt(strips, profile, x, z) {
+  for (const strip of strips) {
+    for (const [a, b, c] of fan(strip)) {
+      const d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+      if (Math.abs(d) < 1e-12) continue;
+      const l1 = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (z - c[1])) / d;
+      const l2 = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (z - c[1])) / d;
+      const l3 = 1 - l1 - l2;
+      if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+      return l1 * waterLevelAt(profile, a[0], a[1])
+        + l2 * waterLevelAt(profile, b[0], b[1])
+        + l3 * waterLevelAt(profile, c[0], c[1]);
+    }
+  }
+  return null;
+}
+/** A ring against hand-written corners, to the ninth decimal: a clip's
+ *  crossing point is `a + (b − a)·t` and `40 + 60·(2/60)` is not required to
+ *  be the integer 42 in binary. */
+const checkRing = (label, actual, expected) => checkEq(label,
+  actual.map((p) => p.map((v) => Number(v.toFixed(9)))), expected);
+
+const cliffStrips = subdivideRibbonByAxis(RIBBON, CLIFF.axis);
+check('the four knots cut the ribbon into three strips', cliffStrips.length, 3);
+checkRing('the first strip is the plateau, up to the last knot before the lip',
+  cliffStrips[0], [[0, -3], [40, -3], [40, 3], [0, 3]]);
+checkRing('the second is the two metres of the step itself', cliffStrips[1],
+  [[40, -3], [42, -3], [42, 3], [40, 3]]);
+checkRing('the third is the low ground, from the foot to the mouth',
+  cliffStrips[2], [[42, -3], [100, -3], [100, 3], [42, 3]]);
+check('…240 m² of plateau', ringArea(cliffStrips[0]), 240, 1e-6);
+check('…12 m² of step', ringArea(cliffStrips[1]), 12, 1e-6);
+check('…348 m² below it', ringArea(cliffStrips[2]), 348, 1e-6);
+check('and the three tile the ribbon exactly: 6 · 100 = 600 m²',
+  cliffStrips.reduce((s, r) => s + ringArea(r), 0), 600, 1e-6);
+const cliffTris = cliffStrips.flatMap(fan);
+check('two triangles become six', cliffTris.length, 6);
+check('…whose areas sum to the ribbon as well',
+  cliffTris.reduce((s, t) => s + triArea(t), 0), 600, 1e-6);
+check('four vertices become twelve',
+  cliffStrips.reduce((s, r) => s + r.length, 0), 12);
+// THE DRAWN SURFACE, probe by probe, against the reader every other water
+// mechanic already uses. The row at x = 40 and the row at x = 42 are what make
+// these agree — before W5c the mesh was the single quad below.
+const OLD_MESH = [RIBBON];
+for (const [x, drawn, before] of [[31, 3.0, 2.07], [39, 3.0, 1.83],
+  [41, 1.5, 1.77], [43, 0.0, 1.71], [51, 0.0, 1.47]]) {
+  check(`at x = ${x} the mesh draws ${drawn}, the profile's own number`,
+    drawnAt(cliffStrips, CLIFF, x, 0), drawn, 1e-9);
+  check(`…and it IS waterLevelAt there`, drawnAt(cliffStrips, CLIFF, x, 0),
+    waterLevelAt(CLIFF, x, 0), 1e-12);
+  check(`RED: the undivided quad drew ${before} at x = ${x}`,
+    drawnAt(OLD_MESH, CLIFF, x, 0), before, 1e-9);
+}
+check('off the centre line too — the strips are cut across the full width',
+  drawnAt(cliffStrips, CLIFF, 39, 2.5), 3.0, 1e-9);
+check('…and at the far bank', drawnAt(cliffStrips, CLIFF, 43, -2.5), 0.0, 1e-9);
+// The whole length, not only the five probes: the surface IS the profile now,
+// and the worst place of the old one was the foot of the step.
+let worstNew = 0;
+let worstOld = 0;
+for (let x = 0; x <= 100; x += 0.25) {
+  const exact = waterLevelAt(CLIFF, x, 0);
+  worstNew = Math.max(worstNew,
+    Math.abs(drawnAt(cliffStrips, CLIFF, x, 0) - exact));
+  worstOld = Math.max(worstOld, Math.abs(drawnAt(OLD_MESH, CLIFF, x, 0) - exact));
+}
+check('the cut mesh is the profile over the whole 100 m', worstNew, 0, 1e-12);
+check('RED: the undivided one stood 1.74 m out at the foot of the step',
+  worstOld, 1.74, 1e-9);
+// A BENT AXIS: two cross-lines that cross INSIDE the mask, which is where a
+// naive "clip against both half-planes" loses a wedge and draws another twice.
+const BENT = waterProfileOf({ water_profile: { ...LAKE_META.water_profile,
+  axis: [[-20, 0, 0, 9], [20, 0, 40, 6], [20, 20, 60, 3], [-20, 20, 100, 0]] } });
+const SQUARE = [[-30, -10], [40, -10], [40, 40], [-30, 40]];
+const bentStrips = subdivideRibbonByAxis(SQUARE, BENT.axis);
+check('an L-shaped axis cuts its mask into three strips too',
+  bentStrips.length, 3);
+check('…and they still tile it: 70 · 50 = 3500 m²',
+  bentStrips.reduce((s, r) => s + ringArea(r), 0), ringArea(SQUARE), 1e-6);
+check('…which is the square the clips started from', ringArea(SQUARE), 3500,
+  1e-9);
+// ONE AND TWO KNOTS: the array itself comes back, so the caller keeps the
+// geometry `buildAreaGeometry` already built — the same buffers, not equal ones.
+checkIs('a lake is handed back the very ring it gave',
+  subdivideRibbonByAxis(RIBBON, LAKE.axis)[0], RIBBON);
+check('…as ONE strip, which the builder reads as "nothing to cut"',
+  subdivideRibbonByAxis(RIBBON, LAKE.axis).length, 1);
+checkIs('…and so is a two-knot polygon river',
+  subdivideRibbonByAxis(RIBBON, RIVER.axis)[0], RIBBON);
+check('…also one strip', subdivideRibbonByAxis(RIBBON, RIVER.axis).length, 1);
+checkIs('a ring with no axis at all is untouched as well',
+  subdivideRibbonByAxis(RIBBON, undefined)[0], RIBBON);
+// CROSS-LINES THAT MISS: an axis running on past its own mask.
+const BEFORE_AXIS = [[-20, 0, 0, 3], [-10, 0, 10, 3], [-5, 0, 15, 0],
+  [0, 0, 20, 0]];
+const AFTER_AXIS = [[0, 0, 0, 3], [150, 0, 150, 3], [160, 0, 160, 0],
+  [200, 0, 200, 0]];
+const missedBefore = subdivideRibbonByAxis(RIBBON, BEFORE_AXIS);
+const missedAfter = subdivideRibbonByAxis(RIBBON, AFTER_AXIS);
+check('knots entirely upstream of the mask leave one piece',
+  missedBefore.length, 1);
+check('…of the mask\'s own area, undivided', ringArea(missedBefore[0]), 600,
+  1e-6);
+check('knots entirely downstream leave one piece as well',
+  missedAfter.length, 1);
+check('…and it is the whole ribbon too', ringArea(missedAfter[0]), 600, 1e-6);
+check('a ring too small to enclose anything is handed straight back',
+  subdivideRibbonByAxis([[0, 0], [1, 0]], CLIFF.axis).length, 1);
+// …and the BUILDER is what carries this into the mesh — the claims the fan
+// above cannot make, read off the source.
+check('the builder cuts the outline before it lifts anything',
+  /const strips = subdivideRibbonByAxis\(ring, profile\.axis\);/.test(planeSrc)
+    ? 1 : 0, 1);
+check('…and a single strip touches no buffer at all',
+  /strips\.length > 1 \? earcutStrips\(strips\) : null/.test(planeSrc) ? 1 : 0, 1);
+check('…the pieces go through the SAME earcut every painted area goes through',
+  /buildAreaGeometry\(THREE, s\)/.test(planeSrc) ? 1 : 0, 1);
+check('…and the outline\'s own earcut is freed, never leaked',
+  /geometry\.dispose\(\);/.test(planeSrc) ? 1 : 0, 1);
 
 // ── [6] the wade/swim crossover ────────────────────────────────────────────
 console.log('\n[6] the figure floats on the LEVEL, not in the bed');

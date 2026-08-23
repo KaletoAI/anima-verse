@@ -59,9 +59,11 @@
  * the wide lake beside it looked right.
  */
 import * as THREE from 'three';
+import { buildAreaGeometry } from '@anima/scene-render';
+import type { Point2 } from '@anima/scene-render';
 import { bindTerrainLodUniforms, terrainLodSampleGlsl } from './terrainLod';
 import { WATER_FOAM_ALPHA, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
-  liftToWaterProfile, waterFlowAt, waterShoreBody,
+  liftToWaterProfile, subdivideRibbonByAxis, waterFlowAt, waterShoreBody,
   waterShoreGlsl } from './waterPlaneMath';
 import type { WaterProfile } from './waterPlaneMath';
 
@@ -134,6 +136,58 @@ export function patchWaterShore(mat: THREE.Material): void {
 }
 
 /**
+ * The earcut of the STRIPS as ONE geometry — positions, uvs, normals and index
+ * concatenated, with each strip's indices shifted by the vertices before it.
+ *
+ * Every piece comes out of the SAME `buildAreaGeometry` the whole world's
+ * painted areas come out of (the `THREE.ShapeGeometry` earcut, the z flip, the
+ * `rotateX(-π/2)`), so a strip is triangulated exactly as the undivided
+ * outline was and its uv stays the world coordinate a metre of texture is
+ * measured in. Concave strips are therefore handled — the clip can produce
+ * them, and nothing here assumes it cannot.
+ *
+ * Strips that enclose nothing (`buildAreaGeometry` answers `null`) are dropped
+ * with their geometry; `null` comes back when fewer than two survive, and the
+ * caller keeps the geometry it already had.
+ */
+function earcutStrips(strips: Point2[][]): THREE.BufferGeometry | null {
+  const built = strips.map((s) => buildAreaGeometry(THREE, s))
+    .filter((b): b is NonNullable<typeof b> => !!b);
+  if (built.length < 2) {
+    for (const b of built) b.geometry.dispose();
+    return null;
+  }
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  let base = 0;
+  for (const { geometry } of built) {
+    const pos = geometry.getAttribute('position');
+    const nrm = geometry.getAttribute('normal');
+    const uv = geometry.getAttribute('uv');
+    const idx = geometry.getIndex();
+    for (let i = 0; i < pos.count; i += 1) {
+      positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+      normals.push(nrm.getX(i), nrm.getY(i), nrm.getZ(i));
+      uvs.push(uv.getX(i), uv.getY(i));
+    }
+    if (idx) for (let i = 0; i < idx.count; i += 1) indices.push(base + idx.getX(i));
+    else for (let i = 0; i < pos.count; i += 1) indices.push(base + i);
+    base += pos.count;
+    geometry.dispose();
+  }
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position',
+    new THREE.BufferAttribute(new Float32Array(positions), 3));
+  merged.setAttribute('normal',
+    new THREE.BufferAttribute(new Float32Array(normals), 3));
+  merged.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  merged.setIndex(indices);
+  return merged;
+}
+
+/**
  * The mirror of ONE painted water: its own earcut, every vertex lifted to the
  * level of its own place.
  *
@@ -152,6 +206,19 @@ export function patchWaterShore(mat: THREE.Material): void {
  * need geometry is a fragment computation now. A kilometre-long river is a
  * handful of triangles.
  *
+ * ONE CUT, AND ONLY WHERE THE LEVEL BENDS (W5c). The ruled surface is exact
+ * between vertices only while the profile between them is one straight ramp,
+ * and since W5b a drawn river's is not: the bake keeps a knot wherever the
+ * mirror bends, and a two-click ribbon has four corners over a hundred metres.
+ * `subdivideRibbonByAxis` splits the OUTLINE at those knots' cross-lines and
+ * this builds the pieces into one geometry, so the mesh has a vertex row
+ * exactly where the level turns — at a cliff, two rows two metres apart, and
+ * flat ground on both sides of them instead of one long ramp through the step.
+ * The count follows the AXIS and nothing else: the W5b simplification already
+ * threw away every knot the level does not bend at, so the cliff fixture pays
+ * three strips (twelve vertices, six triangles) and a lake pays nothing — one
+ * and two knot profiles keep the geometry they came with, to the bit.
+ *
  * `depthWrite` stays off (set on the material) and `depthTest` on: the water is
  * drawn after the opaque terrain, is occluded by everything in front of it, and
  * occludes nothing itself — a bed seen through it is the point.
@@ -160,8 +227,22 @@ export function buildWaterPlane(geometry: THREE.BufferGeometry,
                                 profile: WaterProfile,
                                 material: THREE.Material,
                                 opaqueDepthM: number,
-                                flowFactor = 1): THREE.Mesh {
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
+                                flowFactor: number,
+                                ring: Point2[]): THREE.Mesh {
+  // THE STRIPS FIRST, because everything below runs over the vertices this
+  // decides on. A single strip means "nothing to cut" — a lake, a polygon
+  // river, or an axis whose cross-lines all miss the mask — and then the
+  // geometry that came in is the one that is drawn, untouched.
+  const strips = subdivideRibbonByAxis(ring, profile.axis);
+  const cut = strips.length > 1 ? earcutStrips(strips) : null;
+  let geo = geometry;
+  if (cut) {
+    // The outline's own earcut is not drawn any more, and a buffer nobody
+    // holds is a buffer nobody frees: this function owns what it was handed.
+    geometry.dispose();
+    geo = cut;
+  }
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   liftToWaterProfile(pos.array as unknown as { length: number;
                                                [index: number]: number },
                      profile);
@@ -169,7 +250,7 @@ export function buildWaterPlane(geometry: THREE.BufferGeometry,
   // The bounding sphere was computed for a flat polygon at y ≈ 0; a river that
   // climbs eight metres over its length would be culled by a sphere that does
   // not contain it.
-  geometry.computeBoundingSphere();
+  geo.computeBoundingSphere();
   // THE FLOW, one vec2 per vertex — see the file header for why it is not a
   // uniform. It is the TANGENT OF THE AXIS AT THAT VERTEX since W4a
   // (`waterFlowAt`), so a drawn river's ripples turn through its own bends
@@ -195,9 +276,9 @@ export function buildWaterPlane(geometry: THREE.BufferGeometry,
     flow[i * 2 + 1] = fz * flowFactor;
     opaque[i] = opaqueDepthM;
   }
-  geometry.setAttribute('aWaterFlow', new THREE.BufferAttribute(flow, 2));
-  geometry.setAttribute('aWaterOpaque', new THREE.BufferAttribute(opaque, 1));
-  const mesh = new THREE.Mesh(geometry, material);
+  geo.setAttribute('aWaterFlow', new THREE.BufferAttribute(flow, 2));
+  geo.setAttribute('aWaterOpaque', new THREE.BufferAttribute(opaque, 1));
+  const mesh = new THREE.Mesh(geo, material);
   // A mirror takes shadows (a tree on the bank darkens the water) but casts
   // none — the same arrangement the drape had.
   mesh.receiveShadow = true;

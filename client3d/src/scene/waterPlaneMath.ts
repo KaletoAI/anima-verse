@@ -460,16 +460,24 @@ export function waterFlowAt(profile: WaterProfile | null | undefined,
  * polygon's own extremes, so no interior point of the polygon lies past them.
  *
  * A DRAWN AXIS (W4a) is piecewise linear, and so is what this writes: exact at
- * every vertex, and exact between them wherever the outline itself is cut at
- * the knots. SINCE W5b IT USUALLY IS NOT: the bake samples the drawn line every
- * 2 m and keeps a knot wherever the mirror bends, so a knot at a cliff has no
- * vertex of the ribbon beside it and the SURFACE ramps straight between the
- * ribbon's own corners while `waterLevelAt` — the carve, the shore alpha, the
- * swimmer's float height and the waterfall detection — reads the exact profile.
- * The fall's own curtain (`scene/waterfall.ts`) covers that seam where it is
- * largest; subdividing the mask so the mirror mesh follows the fall too is the
- * open half of this and belongs to a later round, together with the same
- * question for a wide MASK polygon over a bent axis.
+ * every vertex, and exact between them ONLY where the outline itself is cut at
+ * the knots — which since W5c IT IS. `subdivideRibbonByAxis` splits the outline
+ * at every interior knot before the earcut runs, so the mesh HAS a vertex row
+ * wherever the mirror bends and the ruled surface between two rows is the
+ * profile's own straight piece. Until then a two-click ribbon over a cliff had
+ * four corners over 100 m: `waterLevelAt` was exact (the carve, the shore alpha,
+ * the swimmer's float height, the waterfall detection all read it) while the
+ * DRAWN surface ramped straight across the step — floating before the lip,
+ * diving after it, with only the fall's own curtain (`scene/waterfall.ts`)
+ * covering the seam.
+ *
+ * WHAT REMAINS is the WIDTH, and it is a different question: the cuts are
+ * perpendicular cross-lines through the knots, so along a BENT axis a strip is
+ * still one flat piece across its width while `waterLevelAt` bows with the
+ * bend. The error is second order in the width (the sagitta of the bend over
+ * half a ribbon) where it used to be first order in the LENGTH, and no water
+ * this client draws is wide enough for it to be visible; a mask so wide that it
+ * is would want cuts along the width too.
  *
  * FOR A LAKE THIS IS BIT-IDENTICAL TO THE FLAT PLANE OF BEFORE. A constant
  * profile answers `level_up` for every vertex, so the mesh is the same
@@ -483,6 +491,166 @@ export function liftToWaterProfile(positions: { length: number;
   for (let i = 0; i + 2 < positions.length; i += 3) {
     positions[i + 1] = waterLevelAt(profile, positions[i], positions[i + 2]);
   }
+}
+
+/** A world point on the ground plane, `[x, z]` in metres — the shape of a
+ *  painted outline (`@anima/scene-render` `Point2`, spelled out rather than
+ *  imported: this file has no runtime import and its smoke transpiles it
+ *  alone). */
+export type WaterPoint2 = [number, number];
+
+/** Below this a clipped piece encloses nothing worth an earcut (m²) — the same
+ *  `AREA_EPS_M2` a painted area is measured against. A strip this small is a
+ *  sliver the clip produced where the outline merely grazes a cross-line, not a
+ *  piece of water. */
+const STRIP_EPS_M2 = 1e-9;
+
+/** Shoelace of a ring, SIGNED — the local twin of `@anima/scene-render`
+ *  `signedArea`, for the same reason `WaterPoint2` is spelled out here. */
+function ringSignedArea(ring: readonly WaterPoint2[]): number {
+  const n = ring.length;
+  if (n < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < n; i += 1) {
+    const [x0, z0] = ring[i];
+    const [x1, z1] = ring[(i + 1) % n];
+    sum += x0 * z1 - x1 * z0;
+  }
+  return sum / 2;
+}
+
+/**
+ * The UNIT NORMAL of the cross-line through knot `i` — the direction "further
+ * downstream", perpendicular to the axis where the axis is straight and to the
+ * ANGLE BISECTOR where it bends.
+ *
+ * The bisector is the honest choice and it is the cheap one: the exact set of
+ * points whose nearest axis point is the knot itself is a WEDGE, not a line, so
+ * no single line is the true boundary between two segments' territories. The
+ * bisector is the wedge's own axis of symmetry — it splits the disputed corner
+ * evenly instead of leaning the cut into one of the two legs — and where the
+ * two legs are collinear (every ribbon of a straight river, and every knot the
+ * W5b densification inserted ON a drawn segment) the wedge collapses and the
+ * bisector IS the perpendicular, exactly.
+ *
+ * `null` where no direction can be named: a zero-length leg, or two legs that
+ * cancel — an axis that doubles back on itself in a point. Such a knot is
+ * skipped, which costs a cut and never a triangle.
+ */
+function crossNormalAt(axis: WaterKnot[], i: number): WaterPoint2 | null {
+  const [px, pz] = axis[i - 1];
+  const [cx, cz] = axis[i];
+  const [qx, qz] = axis[i + 1];
+  const inLen = Math.hypot(cx - px, cz - pz);
+  const outLen = Math.hypot(qx - cx, qz - cz);
+  let nx = 0;
+  let nz = 0;
+  if (inLen > 1e-9) { nx += (cx - px) / inLen; nz += (cz - pz) / inLen; }
+  if (outLen > 1e-9) { nx += (qx - cx) / outLen; nz += (qz - cz) / outLen; }
+  const len = Math.hypot(nx, nz);
+  if (!(len > 1e-9)) return null;
+  return [nx / len, nz / len];
+}
+
+/**
+ * One Sutherland–Hodgman pass: the part of `ring` on the `sign` side of the
+ * line through `(cx, cz)` with normal `n`.
+ *
+ * `f(p) = (p − c) · n` is the signed distance to the line, so `sign > 0` keeps
+ * what is downstream of the cross-line and `sign < 0` what is upstream. A
+ * vertex within `1e-9` of the line counts as ON it and is kept by BOTH sides —
+ * that is what makes the two passes give back the whole polygon and not two
+ * pieces with a hairline missing between them.
+ *
+ * The rule is the textbook one, per edge `a → b`: emit `a` if it is kept, and
+ * emit the crossing point whenever the edge really changes side (strictly, so a
+ * vertex lying on the line never produces a duplicate of itself).
+ */
+function clipHalfPlane(ring: readonly WaterPoint2[], n: WaterPoint2,
+                       cx: number, cz: number, sign: number): WaterPoint2[] {
+  const out: WaterPoint2[] = [];
+  const at = (p: WaterPoint2): number => {
+    const f = ((p[0] - cx) * n[0] + (p[1] - cz) * n[1]) * sign;
+    return Math.abs(f) < 1e-9 ? 0 : f;
+  };
+  for (let i = 0; i < ring.length; i += 1) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    const fa = at(a);
+    const fb = at(b);
+    if (fa >= 0) out.push([a[0], a[1]]);
+    if ((fa > 0 && fb < 0) || (fa < 0 && fb > 0)) {
+      const t = fa / (fa - fb);
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+  }
+  return out;
+}
+
+/**
+ * THE OUTLINE, CUT INTO STRIPS AT THE AXIS KNOTS (W5c) — the mesh's answer to
+ * the cliff.
+ *
+ * WHY. The mirror is a RULED surface: the earcut lifts the outline's OWN
+ * vertices onto the profile and interpolates linearly between them. That is
+ * exact while the profile is one straight ramp — the whole world before W4a —
+ * and it is exact for a lake, which is one constant. It is NOT exact for a
+ * drawn river since W5b: the bake keeps a knot wherever the mirror bends, so a
+ * two-click ribbon over a 3 m step has FOUR corners over 100 m and its surface
+ * ramps straight from one end to the other. `waterLevelAt` reads 3.0 ten metres
+ * before the lip and the drawn mesh reads 2.07 there; ten metres after it the
+ * reader says 0.0 and the mesh stands 1.47 m in the air.
+ *
+ * THE RULE, and it is a partition and not a set of overlapping clips: walk the
+ * INTERIOR knots in flow order carrying a REMAINDER, which starts as the whole
+ * outline. At each knot, split the remainder by that knot's cross-line
+ * (`crossNormalAt`) into the piece upstream of it — emitted as a strip — and
+ * the piece downstream, which becomes the new remainder. What is left after the
+ * last interior knot is the last strip. Splitting one polygon by one line
+ * always gives back exactly that polygon, so the strips tile the outline
+ * whatever the lines do to each other: no gap on the outside of a bend, no
+ * double-drawn wedge on the inside, and the areas sum.
+ *
+ * Empty and sliver pieces (< `STRIP_EPS_M2`) are dropped, so a cross-line that
+ * misses the polygon altogether — an axis that runs on past its mask — costs a
+ * comparison and nothing else.
+ *
+ * FEWER THAN THREE KNOTS RETURNS THE OUTLINE ITSELF, the very array that came
+ * in. A lake (one knot) and a polygon river (two) are the cases the ruled
+ * surface already reproduced exactly, and the caller reads a single strip as
+ * "keep the geometry you already have" — so those two draw the identical
+ * buffers they drew before this function existed, not merely equal ones.
+ */
+export function subdivideRibbonByAxis(ring: readonly WaterPoint2[],
+                                      axis: readonly WaterKnot[] | null
+                                        | undefined
+): WaterPoint2[][] {
+  const inRing = ring as WaterPoint2[];
+  if (!Array.isArray(ring) || ring.length < 3) return [inRing];
+  if (!Array.isArray(axis) || axis.length < 3) return [inRing];
+  const knots = axis as WaterKnot[];
+  const strips: WaterPoint2[][] = [];
+  let rest: WaterPoint2[] = inRing as WaterPoint2[];
+  for (let i = 1; i < knots.length - 1; i += 1) {
+    const n = crossNormalAt(knots, i);
+    if (!n) continue;
+    const [cx, cz] = knots[i];
+    const upstream = clipHalfPlane(rest, n, cx, cz, -1);
+    const downstream = clipHalfPlane(rest, n, cx, cz, 1);
+    if (Math.abs(ringSignedArea(upstream)) >= STRIP_EPS_M2) {
+      strips.push(upstream);
+    }
+    if (Math.abs(ringSignedArea(downstream)) < STRIP_EPS_M2) {
+      rest = [];
+      break;
+    }
+    rest = downstream;
+  }
+  if (Math.abs(ringSignedArea(rest)) >= STRIP_EPS_M2) strips.push(rest);
+  // Nothing survived the clips — a ring so thin that every piece is a sliver.
+  // The untouched outline is what it drew before, and the caller's own earcut
+  // is the one thing that gets to call it empty.
+  return strips.length ? strips : [inRing];
 }
 
 /**
