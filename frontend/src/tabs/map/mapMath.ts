@@ -1277,6 +1277,10 @@ export interface ScatterPreviewJob {
   /** the instance's horizontal half-extent (`scatterClearM`) — the ESTIMATE,
    *  see `scatterPreviewJobs` */
   clearM: number
+  /** the least distance this row's own props keep from each other, as
+   *  authored (`min_spacing_m`); 0 = no constraint. Carried on the job so
+   *  BOTH preview modes hand the sampler the number the 3D world hands it. */
+  minSpacingM: number
   /** true props over the whole area, uncapped */
   wanted: number
   /** …and over one full cell (`SCATTER_MAX_PER_CELL` guarded) */
@@ -1338,6 +1342,10 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
         density: e.density_per_100m2,
         clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m)
           : (e.model ? 2 : 0.8)),
+        // NOT an approximation, unlike the clearance above: the spacing is a
+        // plain authored distance, so the preview subtracts exactly the props
+        // the world subtracts.
+        minSpacingM: Number(e.min_spacing_m) > 0 ? Number(e.min_spacing_m) : 0,
         wanted,
         // The window's unit of cost — the count the CELL sampler asks for,
         // from the same rule and with the same per-cell guard it applies.
@@ -1568,6 +1576,7 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
         seed: scatterCellSeed(job.areaId, job.index, cx, cz),
         footprints,
         clearM: job.clearM,
+        minSpacingM: job.minSpacingM,
         occluders: job.occluders,
       })) out.push({ x: p.x, z: p.z, entry: job.index })
     }
@@ -1647,6 +1656,11 @@ export function scatterThinnedByArea(jobs: readonly ScatterPreviewJob[],
       footprints,
       occluders: job.occluders,
       clearM: job.clearM,
+      // The overview thins the WHOLE area to a dot budget, and the spacing
+      // travels with it: a thinned picture is the PREFIX of the same run, so
+      // every dot in it is a prop the world really plants at that distance
+      // from its neighbours.
+      minSpacingM: job.minSpacingM,
       maxPoints: share,
     })) {
       dots.push({ x: p.x, z: p.z, entry: job.index })

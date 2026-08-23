@@ -545,7 +545,7 @@ export interface TerrainTypeMeta {
 }
 
 /** What an area GROWS — `meta.scatter[]`, one entry per prop kind. The server
- *  STORES exactly three fields (`app/models/terrain._sanitize_scatter_list`)
+ *  STORES exactly four fields (`app/models/terrain._sanitize_scatter_list`)
  *  and adds `variants`, `prop_height_m` + `sway_factor` on delivery;
  *  `scene/ground.ts` reads them and hands them to the shared sampler. */
 export interface TerrainScatterEntry {
@@ -557,6 +557,13 @@ export interface TerrainScatterEntry {
    *  this tall, and the built-in tuft is built this high. Absent = the prop's
    *  own `prop_height_m`, see there. */
   height_m?: number;
+  /** The least distance in metres this entry's OWN instances keep from each
+   *  other — handed to the shared sampler as `minSpacingM`, which subtracts
+   *  every candidate standing closer than this to a prop it already placed.
+   *  Absent or 0 = no constraint. A row whose spacing cannot be met at its
+   *  density ends up thinner than the density asks for, which is the honest
+   *  answer to "40 trees per 100 m2, 4 m apart". */
+  min_spacing_m?: number;
   /** The REAL height of the prop behind `model`, in metres, from its library
    *  record — added by `GET /play/terrain`, never stored and never authored.
    *  It is the target height when the entry authors none, so a tree scatters

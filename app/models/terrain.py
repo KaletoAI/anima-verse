@@ -45,6 +45,12 @@ MAX_SCATTER_ENTRIES = 8
 #: Longest ``model`` URL a scatter entry may name. Truncating one would only
 #: produce a 404 that looks like a configured model.
 MODEL_URL_MAX = 300
+#: Widest gap a scatter row may keep between its own instances, in metres.
+#: 100 m is a whole scatter cell and a half (``SCATTER_CELL_M`` = 64), so
+#: anything above it can no longer be met inside the cell it is sampled in —
+#: a bigger number would not thin the wood any further, it would only make the
+#: rejection loop run out of tries.
+MIN_SPACING_MAX_M = 100.0
 #: How a stroke recipe bends its centre line before it is widened. The same
 #: three the editor offers (``mapMath.STROKE_STYLES``); absent means straight,
 #: which is what every line drawn before the styles existed is.
@@ -71,7 +77,7 @@ def _finite(value: Any) -> Any:
 
 
 def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
-    """One entry of ``meta.scatter``, whitelisted to EXACTLY the three fields
+    """One entry of ``meta.scatter``, whitelisted to EXACTLY the four fields
     the renderers read (``packages/scene-render/src/scatter.ts`` and the
     editor's preview + area dialog).
 
@@ -87,6 +93,13 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
     * ``model`` — URL of the prop mesh to instance (``/assets/props/<id>/model``,
       the very URL ``props.model_url`` hands out). A non-string, blank or
       over-long value loses the key and the tuft stands in its place.
+    * ``min_spacing_m`` — the least distance THIS entry's own instances keep
+      from each other, in metres. Only a value > 0 is a spacing; junk, 0 and
+      anything negative lose the key, and then the sampler places as it always
+      did. Clamped to ``MIN_SPACING_MAX_M`` (never refused: the field is a
+      knob, like every other metre in this module) and kept to two decimals —
+      a scatter is not authored in millimetres, and the number travels to
+      every client.
 
     Raises ValueError when the entry is not an object at all — a list of junk
     is an authoring mistake worth a 400, not something to silently drop.
@@ -100,6 +113,9 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
     height = _finite(raw.get("height_m"))
     if height is not None and height > 0:
         out["height_m"] = round(height, 3)
+    spacing = _finite(raw.get("min_spacing_m"))
+    if spacing is not None and spacing > 0:
+        out["min_spacing_m"] = round(min(spacing, MIN_SPACING_MAX_M), 2)
     model = raw.get("model")
     if isinstance(model, str) and model.strip():
         url = model.strip()
@@ -353,7 +369,7 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ``model_variants``, ``prop_height_m``, ``sway_factor`` and
     ``ground_offset_m``, PAYLOAD ONLY, never stored (§ A9).
 
-    The stored entry keeps its exactly three authored fields; every addition is
+    The stored entry keeps its exactly four authored fields; every addition is
     a fact about the PROP, not about the painting, so they are derived when the
     areas are handed out instead of being frozen into the DB (a low variant
     generated afterwards, a corrected height, or a boulder later told to stand

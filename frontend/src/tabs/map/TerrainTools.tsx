@@ -113,6 +113,11 @@ const NEW_SCATTER_ENTRY: TerrainScatterEntry = {
  *  number, the renderers decide it. */
 const SCATTER_FALLBACK_HEIGHT_M = 2
 
+/** Server mirror — `app/models/terrain.MIN_SPACING_MAX_M`. The widest gap a
+ *  scatter row may keep between its own props; the server clamps to it rather
+ *  than refusing, so this is the knob's range and not a rejection threshold. */
+export const SCATTER_SPACING_MAX_M = 100
+
 /** The URL a scatter `model` stores: exactly the `model_url` the prop library
  *  hands out on the server (`app/core/props.py`), and exactly what the 3D
  *  ground passes to its GLB loader unchanged (`client3d/src/scene/ground.ts`
@@ -290,6 +295,9 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
     // cleared field would travel as `null` and read back as junk.
     const e = out[i]
     if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
+    if (!(typeof e.min_spacing_m === 'number' && e.min_spacing_m > 0)) {
+      delete e.min_spacing_m
+    }
     if (!e.model) delete e.model
     onChange(out)
   }
@@ -342,6 +350,21 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
               placeholder={model ? String(inherited) : undefined}
               step={0.5}
               onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}
+            />
+            {/* HOW FAR THIS ROW'S OWN PROPS STAY APART. It is a per-ROW knob
+                and not a per-area one: a wood is trees far apart with ferns
+                between them, and the two rows that make it say two different
+                distances. Empty and 0 are the same answer — no constraint —
+                so the field carries no placeholder to inherit. */}
+            <ScatterNum
+              label={t('Min. spacing (m)')}
+              title={t('Instances of this entry keep at least this distance from each other. 0 = none.')}
+              value={typeof e.min_spacing_m === 'number' ? e.min_spacing_m : null}
+              step={0.5}
+              onCommit={(v) => patch(i, {
+                min_spacing_m: v && v > 0
+                  ? Math.min(v, SCATTER_SPACING_MAX_M) : undefined,
+              })}
             />
             <button type="button" className="ga-btn ga-btn-sm"
               title={t('Remove this scatter')}

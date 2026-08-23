@@ -170,7 +170,7 @@ export interface WorldmapPayload {
  * grows (finding B17; it used to hang on the terrain TYPE, which could only
  * ever say "all forest everywhere grows this one tree").
  *
- * The server whitelists exactly these three fields
+ * The server whitelists exactly these four fields
  * (`app/models/terrain._sanitize_scatter_list`), the 3D ground instances them
  * and the map preview draws them — all three from the ONE shared sampler
  * (`@anima/scene-render` → `scatterInstances`). No list = nothing is
@@ -189,6 +189,12 @@ export interface TerrainScatterEntry {
   /** URL of a prop mesh to instance — `/assets/props/<id>/model`, the same
    *  URL the prop library hands out. Absent = the built-in tuft. */
   model?: string
+  /** The least distance in metres THIS entry's own instances keep from each
+   *  other. Absent or 0 = no constraint. The sampler subtracts a candidate
+   *  that stands closer than this to a prop it has already placed, so a row
+   *  whose spacing does not fit its density simply ends up thinner
+   *  (`@anima/scene-render` → `minSpacingM`). */
+  min_spacing_m?: number
 }
 
 /** One kind of ground in the effective catalog (§ A1.5). `passable`,
@@ -388,8 +394,9 @@ export interface TerrainArea {
  * and the preview always see the same list.
  *
  * Every field is coerced, never trusted: a junk density is 0 (scatter nothing,
- * exactly how both renderers read it) and a height that is not a height loses
- * the key, so a model keeps its own size.
+ * exactly how both renderers read it), and a height that is not a height or a
+ * spacing that is not a spacing loses its key — so a model keeps its own size
+ * and a row nobody spaced is sampled as it always was.
  */
 export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[] {
   const raw = meta?.scatter
@@ -400,10 +407,12 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
     const e = item as unknown as Record<string, unknown>
     const density = Number(e.density_per_100m2)
     const height = Number(e.height_m)
+    const spacing = Number(e.min_spacing_m)
     const entry: TerrainScatterEntry = {
       density_per_100m2: Number.isFinite(density) && density > 0 ? density : 0,
     }
     if (Number.isFinite(height) && height > 0) entry.height_m = height
+    if (Number.isFinite(spacing) && spacing > 0) entry.min_spacing_m = spacing
     if (typeof e.model === 'string' && e.model) entry.model = e.model
     out.push(entry)
   }

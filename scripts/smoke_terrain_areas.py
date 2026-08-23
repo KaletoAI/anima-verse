@@ -53,11 +53,26 @@ Throwaway storage. Hand-derived expectations:
  [11] meta.scatter whitelist (finding B17 — moved here from the terrain
       TYPE, where it lived as ONE block; an area carries a LIST, because a
       wood with two kinds of tree is one painted shape).
-      Per entry, exactly three fields survive: density_per_100m2 (float,
+      Per entry, exactly four fields survive: density_per_100m2 (float,
       always present, junk/negative -> 0.0), height_m (float > 0, optional
-      — the TARGET height the prop is scaled to) and model (non-empty
-      string, optional, never truncated). Junk keys inside an entry are
-      dropped. The list itself: a non-list raises (the field moved AS a
+      — the TARGET height the prop is scaled to), model (non-empty
+      string, optional, never truncated) and min_spacing_m (float > 0,
+      optional — the least distance the row's OWN instances keep from each
+      other). Junk keys inside an entry are dropped.
+      The spacing is a knob, so it is CLAMPED and never refused:
+        2.5      -> 2.5          (a plain value survives)
+        "3.456"  -> 3.46         (coerced, two decimals — a scatter is not
+                                  authored in millimetres and the number
+                                  travels to every client)
+        3.455    -> 3.46         (round-half-up on the .005, the same
+                                  banker-free rounding every metre here uses;
+                                  pinned so a change of rule is visible)
+        150      -> 100.0        (MIN_SPACING_MAX_M; 100 m is a scatter cell
+                                  and a half, so a bigger gap cannot be met
+                                  inside the cell it is sampled in anyway)
+        100      -> 100.0        (exactly at the limit, untouched)
+        0 / -1 / NaN / inf / "wide" / None -> the KEY IS DROPPED, which is
+                                  how both renderers read "no constraint". The list itself: a non-list raises (the field moved AS a
       list, so a bare object is an old client, not a guess), an entry that
       is not an object raises, more than MAX_SCATTER_ENTRIES (8) raises, an
       empty list is kept as sent ("authored to nothing"). Foreign meta keys
@@ -489,8 +504,10 @@ def scatter_of(meta):
 
 check("a valid list is kept verbatim",
       scatter_of({"scatter": [{"density_per_100m2": 12.5, "height_m": 4.0,
+                               "min_spacing_m": 3.0,
                                "model": "/assets/props/tree/model"}]}),
       {"scatter": [{"density_per_100m2": 12.5, "height_m": 4.0,
+                    "min_spacing_m": 3.0,
                     "model": "/assets/props/tree/model"}]})
 check("several entries on one area — the point of the move",
       scatter_of({"scatter": [{"density_per_100m2": 3},
@@ -512,6 +529,30 @@ check("numeric strings are coerced",
 for bad in (0, -1, float("inf"), float("nan"), "tall"):
     check(f"height {bad!r} loses the key",
           scatter_of({"scatter": [{"density_per_100m2": 1, "height_m": bad}]}),
+          {"scatter": [{"density_per_100m2": 1.0}]})
+check("a spacing survives as authored",
+      scatter_of({"scatter": [{"density_per_100m2": 1, "min_spacing_m": 2.5}]}),
+      {"scatter": [{"density_per_100m2": 1.0, "min_spacing_m": 2.5}]})
+check("a spacing is coerced and kept to two decimals",
+      scatter_of({"scatter": [{"density_per_100m2": 1,
+                               "min_spacing_m": "3.456"}]}),
+      {"scatter": [{"density_per_100m2": 1.0, "min_spacing_m": 3.46}]})
+check("…and .455 rounds up, not to even",
+      scatter_of({"scatter": [{"density_per_100m2": 1, "min_spacing_m": 3.455}]}),
+      {"scatter": [{"density_per_100m2": 1.0, "min_spacing_m": 3.46}]})
+check(f"a spacing past {terrain.MIN_SPACING_MAX_M} m is clamped, not refused",
+      scatter_of({"scatter": [{"density_per_100m2": 1, "min_spacing_m": 150}]}),
+      {"scatter": [{"density_per_100m2": 1.0,
+                    "min_spacing_m": terrain.MIN_SPACING_MAX_M}]})
+check("a spacing exactly at the limit is untouched",
+      scatter_of({"scatter": [{"density_per_100m2": 1,
+                               "min_spacing_m": terrain.MIN_SPACING_MAX_M}]}),
+      {"scatter": [{"density_per_100m2": 1.0,
+                    "min_spacing_m": terrain.MIN_SPACING_MAX_M}]})
+for bad in (0, -1, float("inf"), float("nan"), "wide", None, [4]):
+    check(f"spacing {bad!r} loses the key (no constraint)",
+          scatter_of({"scatter": [{"density_per_100m2": 1,
+                                   "min_spacing_m": bad}]}),
           {"scatter": [{"density_per_100m2": 1.0}]})
 for bad in (42, "   ", None, ["a"]):
     check(f"model {bad!r} loses the key",
@@ -554,12 +595,14 @@ check(f"exactly {terrain.MAX_SCATTER_ENTRIES} entries pass",
 _scat = terrain.save_area(
     {"kind": "water", "polygon": SQUARE,
      "meta": {"scatter": [{"density_per_100m2": 9, "height_m": 6,
+                           "min_spacing_m": 1.25,
                            "model": "/assets/props/fern/model"}],
               "note": "free form"}})
 # ``water_level`` rides along because "water" is a water kind here (see [1]).
 check("the list survives the save/read round trip",
       next(a["meta"] for a in terrain.list_areas() if a["id"] == _scat["id"]),
       {"scatter": [{"density_per_100m2": 9.0, "height_m": 6.0,
+                    "min_spacing_m": 1.25,
                     "model": "/assets/props/fern/model"}],
        "note": "free form", "water_level": 0.0})
 terrain.delete_area(_scat["id"])

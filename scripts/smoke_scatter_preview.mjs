@@ -259,10 +259,23 @@
  *      of three direct `scatterCellInstances` calls with
  *      `scatterCellSeed('ta_pin', 0, cx, 0)`, byte for byte (JSON).
  * (F4) …and no instance carries a `variant` key on EITHER side: the map
- *      editor reads no variant maps (`readScatter` whitelists three fields),
+ *      editor reads no variant maps (`readScatter` whitelists four fields),
  *      so a mix would itself be a mismatch with what the builder asks for.
  * (F5) The order is the raster's own: row-major cells, x inner — so the first
  *      dot of the list lies in cell (0,0) and the last in cell (2,0).
+ * (F6) THE AUTHORED MINIMUM SPACING travels the whole way (2026-08-23). The
+ *      field is a rendering contract like the density beside it, so the
+ *      preview must hand the sampler the number the 3D world hands it — that
+ *      is the entire point of the shared package.
+ *        · `scatterPreviewJobs` reads `min_spacing_m` off the row onto the
+ *          job (0 where nobody authored one, as in the (E1) fixture);
+ *        · `scatterWindowDots` over the (F) window with a 3 m spacing on the
+ *          row === the same three direct `scatterCellInstances` calls with
+ *          `minSpacingM: 3`, byte for byte;
+ *        · it really BIT: fewer dots than the same window without it, and no
+ *          two dots OF ONE CELL closer than 3 m. Per cell, because a cell is
+ *          its own run of the sampler — across the seam a pair may stand
+ *          closer, which is the documented price of the 64 m raster.
  *
  * ============================================================================
  * (G) THE THINNED LABEL — what the overview admits to
@@ -549,6 +562,8 @@ async function main() {
     // wanted over the whole shape: 192 · 64 = 12 288 m2 at 5 per 100 m2 is
     // round(122.88 · 5) = round(614.4) = 614 props.
     [1, 'ta_pin', 0, 5, 0.4, 205, 614]);
+  check('E1 …and nobody authored a spacing on it, so the job carries 0',
+    jobs[0]?.minSpacingM, 0);
   check('E1 one 64 m cell of ground at 5 per 100 m2 carries 205 candidates',
     scatterWantedCount(SCATTER_CELL_M * SCATTER_CELL_M, 5, 4000), 205);
   // The area's own cost, and the two numbers it is the smaller of: 3 cells of
@@ -659,6 +674,46 @@ async function main() {
   // picture — otherwise (F3) would be pinning an exclusion that never ran.
   differs('F2 …a run without the footprint really does differ',
     scatterWindowDots(jobs, RECT, []), dots);
+
+  // (F6) the authored spacing, end to end: the same fixture with 3 m on the row
+  const SPACED_AREAS = [
+    { ...AREAS[0], meta: { scatter: [{ density_per_100m2: 5, min_spacing_m: 3 }] } },
+    AREAS[1],
+  ];
+  const spacedJobs = scatterPreviewJobs(SPACED_AREAS);
+  check('F6 the row\'s spacing is read onto the job',
+    spacedJobs[0]?.minSpacingM, 3);
+  const spacedDots = scatterWindowDots(spacedJobs, RECT, FOOTPRINTS);
+  const spacedDirect = [0, 1, 2].flatMap((cx) => scatterCellInstances({
+    ring: AREA_RING,
+    cx,
+    cz: 0,
+    densityPer100m2: 5,
+    seed: scatterCellSeed('ta_pin', 0, cx, 0),
+    footprints: FOOTPRINTS,
+    clearM: CLEAR_M,
+    minSpacingM: 3,
+    occluders: [COVER_RING],
+  }).map((p) => ({ x: p.x, z: p.z, entry: 0 })));
+  check('F6 …and the preview is the sampler\'s own answer with it, byte for byte',
+    JSON.stringify(spacedDots), JSON.stringify(spacedDirect));
+  check('F6 …it really bit: fewer dots than the same window without it',
+    spacedDots.length < dots.length && spacedDots.length > 0, true);
+  // Per CELL: a cell is its own run, so the seam between two of them is the
+  // one place a pair may stand closer than the author asked for.
+  let tooClose = 0;
+  for (const cx of [0, 1, 2]) {
+    const cell = spacedDots.filter((d) => d.x >= cx * 64 && d.x < (cx + 1) * 64);
+    for (let i = 0; i < cell.length; i += 1) {
+      for (let k = i + 1; k < cell.length; k += 1) {
+        if (Math.hypot(cell[i].x - cell[k].x, cell[i].z - cell[k].z) < 3) {
+          tooClose += 1;
+        }
+      }
+    }
+  }
+  check('F6 …and no two dots of one cell stand closer than the authored 3 m',
+    tooClose, 0);
 
   console.log('\n(G) the label of the thinned overview');
   check('G1 the reporting world: 3 995 dots of 6 282 498 props is "0.06"',

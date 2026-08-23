@@ -576,6 +576,111 @@
  *      are the whole instance count either way — a split may not lose a prop.
  *
  * ============================================================================
+ * (S) THE MINIMUM SPACING — a row's own props keep their distance (2026-08-23)
+ * ============================================================================
+ * A scatter row may author `min_spacing_m`: the least distance two instances
+ * OF THAT ROW may stand apart. The sampler takes it as `minSpacingM` and turns
+ * it into ONE MORE SUBTRACT-ONLY VERDICT, asked after the ring, the occluders
+ * and the footprints, on a candidate that has already drawn all three of its
+ * numbers:
+ *
+ *     rejected  <=>  hypot(x - a.x, z - a.z) < minSpacingM
+ *                    for an instance `a` this run has ALREADY ACCEPTED
+ *
+ * STRICTLY LESS, exactly as the footprint clearance is (`footprintBlocks`,
+ * section M): a prop at exactly the authored distance STANDS. Two of the four
+ * survivors below sit at exactly 4.0 m from the first, so a `<=` cannot pass
+ * this section.
+ *
+ * THE FIXTURE, a 10 x 10 m ring (0,0) (10,0) (10,10) (0,10): area 100 m2, so
+ * density 5 wants round(100/100 * 5) = 5 instances, and `triesPerPoint` 1
+ * bounds the run at exactly five candidates — 15 numbers, the whole run on
+ * paper. x = 0 + r*10, z = 0 + r*10, yaw = r*2pi:
+ *
+ *     c0  0.10, 0.10, 0.00  -> ( 1, 1) yaw 0
+ *     c1  0.30, 0.30, 0.00  -> ( 3, 3) yaw 0
+ *     c2  0.50, 0.10, 0.50  -> ( 5, 1) yaw pi
+ *     c3  0.80, 0.40, 0.25  -> ( 8, 4) yaw tau/4
+ *     c4  0.10, 0.50, 0.00  -> ( 1, 5) yaw 0
+ *
+ * (S1) SPACING 0 IS TODAY, EXACTLY. All five candidates lie in the ring and
+ *      nothing else rejects, so the list is those five points. `minSpacingM`
+ *      absent, 0, -1 and NaN must all give that same list — and on the SEEDED
+ *      path (no hand-fed stream) too, which is the regression proof: a world
+ *      that never touches the field is sampled byte for byte as before.
+ *
+ * (S2) SPACING 4, BY PAIRWISE DISTANCE. Every candidate is measured against
+ *      the ones ALREADY ACCEPTED, in order:
+ *        c0 (1,1)  nothing placed yet                     -> KEPT
+ *        c1 (3,3)  to (1,1): hypot(2,2) = sqrt 8  = 2.8284 < 4  -> DROPPED
+ *        c2 (5,1)  to (1,1): hypot(4,0)          = 4.0000 not < 4 -> KEPT
+ *        c3 (8,4)  to (1,1): hypot(7,3) = sqrt 58 = 7.6158
+ *                  to (5,1): hypot(3,3) = sqrt 18 = 4.2426 -> KEPT
+ *        c4 (1,5)  to (1,1): hypot(0,4)          = 4.0000 not < 4
+ *                  to (5,1): hypot(4,4) = sqrt 32 = 5.6569
+ *                  to (8,4): hypot(7,1) = sqrt 50 = 7.0711 -> KEPT
+ *      -> [ {1,1,0}, {5,1,pi}, {8,4,tau/4}, {1,5,0} ]. Note c1 is measured
+ *      against (1,1) ALONE: a candidate the spacing drops is not there to
+ *      crowd anybody, which is what "already accepted" means.
+ *      THE YAWS ARE (S1)'S YAWS. All three numbers are drawn before any
+ *      verdict, so the spacing SUBTRACTS the crowded prop and leaves the
+ *      others exactly where and how they stood — the property of (C2), (C8)
+ *      and (M4), now with a fourth kind of rejection.
+ *
+ * (S3) FOUR OF FIVE, AND THE SAMPLER DOES NOT GO LOOKING FOR A FIFTH. The
+ *      budget stays `wanted * triesPerPoint` = 5 candidates; an entry whose
+ *      spacing its density cannot afford simply ends up thinner. The stream
+ *      of exactly 15 numbers proves it: `stream()` throws on the 16th, so a
+ *      sampler that raised its tries to fill the count could not pass (S2) at
+ *      all.
+ *
+ * (S4) THE EDGE IS REAL, FROM THE OTHER SIDE. The same run at spacing 4.01
+ *      loses BOTH 4.0 m props: c2 and c4 are now inside the radius, and c3 is
+ *      then measured against (1,1) alone (7.6158) and stands.
+ *      -> [ {1,1,0}, {8,4,tau/4} ], two instead of four.
+ *      And at spacing 2.5, which every pair of the five already keeps (the
+ *      closest is 2.8284), the answer is (S1) verbatim: a spacing nobody
+ *      violates changes nothing.
+ *
+ * (S5) THE CANDIDATE ORDINAL SURVIVES IT — the variant rule of (N3), tested
+ *      against the new verdict. With three variants and the seed 'A' (whose
+ *      hash is divisible by 3, see N1, so the ring starts at 0) the survivors
+ *      c0, c2, c3, c4 must show (0 + candidate) mod 3:
+ *        c0 -> 0,  c2 -> 2,  c3 -> 0,  c4 -> 1
+ *      Counting over the SURVIVORS instead would give 0, 1, 2, 0 — every prop
+ *      behind a crowded one a different species, and the whole reason the
+ *      ordinal is the candidate's.
+ *
+ * (S6) THE PREFIX PROPERTY STILL HOLDS (the one the editor's thinned preview
+ *      rides on, C14). Acceptance of a candidate depends only on the
+ *      candidates BEFORE it, so a lower `maxPoints` still yields the head of
+ *      the same list: on a 100 x 100 m ring at density 0.5 (wanted 50) with
+ *      spacing 4, `maxPoints` 10 gives the first 10 of those 50. A property,
+ *      not a recorded value — the seeded stream cannot be simulated on paper.
+ *
+ * (S7) THROUGH THE CELL SAMPLER, which is where the authored scatter really
+ *      goes. Cell (0,0) is 0..64 in both axes, so x = r*64, z = r*64, and
+ *      density 0.09765625 wants round(40.96 * 0.09765625) = 4 candidates at
+ *      the cell sampler's fixed one try each:
+ *        0.015625, 0.015625, 0.00 -> ( 1, 1) yaw 0
+ *        0.046875, 0.046875, 0.00 -> ( 3, 3) yaw 0      -> 2.8284 m, DROPPED
+ *        0.078125, 0.015625, 0.50 -> ( 5, 1) yaw pi     -> 4.0 m,    KEPT
+ *        0.125000, 0.062500, 0.25 -> ( 8, 4) yaw tau/4  -> 4.2426 m, KEPT
+ *      -> three props, the (S2) arithmetic on the cell's own box.
+ *
+ * (S8) THE RED COUNTER-CHECK — the mutant that makes the grid a lie. The
+ *      accepted points are bucketed by a grid of exactly `spacing` metres and
+ *      a candidate looks at its own bucket AND THE EIGHT AROUND IT; the mutant
+ *      looks only at its own. Derivation, on a 10 x 10 ring at density 2
+ *      (wanted 2, one try each) with spacing 4:
+ *        0.39, 0.10, 0.00 -> (3.9, 1)  bucket (floor(3.9/4), floor(1/4)) = (0,0)
+ *        0.41, 0.10, 0.00 -> (4.1, 1)  bucket (floor(4.1/4), floor(1/4)) = (1,0)
+ *      The two stand 0.2 m apart — a fifth of the authored spacing — but in
+ *      NEIGHBOURING buckets, so the mutant keeps both and the true sampler
+ *      keeps one. A grid that only ever looked in its own cell would enforce
+ *      nothing at all across a bucket border, which is most of the map.
+ *
+ * ============================================================================
  * (E) THE CLIENT'S SCATTER CONSTANTS
  * ============================================================================
  * `client3d/src/scene/ground.ts` imports three.js and cannot be loaded here,
@@ -963,6 +1068,18 @@ function randomInsteadOfHash(source) {
     + '  h ^= h >>> 16;\n'
     + '  return (h >>> 0) / 4294967296;\n',
     '  return Math.random();\n');
+}
+
+/** Section (S8)'s mutant: the spacing grid looks ONLY in the candidate's own
+ *  bucket instead of in the 3x3 block around it, so two props on either side
+ *  of a bucket border never see each other — the spacing would hold nowhere
+ *  except by luck. See the header for the derivation. */
+function ownBucketOnly(source) {
+  return source.replace(
+    '      for (let dz = -1; dz <= 1 && !crowded; dz += 1) {\n'
+    + '        for (let dx = -1; dx <= 1 && !crowded; dx += 1) {\n',
+    '      for (let dz = 0; dz <= 0 && !crowded; dz += 1) {\n'
+    + '        for (let dx = 0; dx <= 0 && !crowded; dx += 1) {\n');
 }
 
 /** Section (M6)'s mutant: the clearance is thrown away and the old "is its
@@ -1668,6 +1785,108 @@ async function main() {
     /scatterVariantIndex\(/.test(mixSrc), false);
   check('N5 the payload list it reads is `model_variants` (§ A9)',
     mixSrc.includes('const list = entry.model_variants;'), true);
+
+  console.log('\n(S) the MINIMUM SPACING — a row\'s own props keep their distance');
+  // The 10 x 10 fixture of the header: 5 wanted, one try each, 15 numbers.
+  const SPACE_RING = [[0, 0], [10, 0], [10, 10], [0, 10]];
+  const SPACE_SAMPLE = {
+    ring: SPACE_RING, areaM2: 100, densityPer100m2: 5, seed: 'A',
+    triesPerPoint: 1,
+  };
+  const SPACE_STREAM = [0.10, 0.10, 0.00, 0.30, 0.30, 0.00, 0.50, 0.10, 0.50,
+    0.80, 0.40, 0.25, 0.10, 0.50, 0.00];
+  const SPACE_ALL = [
+    { x: 1, z: 1, yaw: 0 }, { x: 3, z: 3, yaw: 0 },
+    { x: 5, z: 1, yaw: Math.PI }, { x: 8, z: 4, yaw: TAU * 0.25 },
+    { x: 1, z: 5, yaw: 0 },
+  ];
+  // (S2) the four survivors: (3,3) is 2.8284 m from (1,1); the two at exactly
+  // 4.0 m stand, because the test is strictly less.
+  const SPACE_KEPT = [SPACE_ALL[0], SPACE_ALL[2], SPACE_ALL[3], SPACE_ALL[4]];
+  check('S1 without a spacing all five candidates stand',
+    scatterInstances({ ...SPACE_SAMPLE, rng: stream(SPACE_STREAM) }),
+    SPACE_ALL);
+  for (const none of [undefined, 0, -1, NaN, null, 'far']) {
+    check(`S1 minSpacingM ${String(none)} is no constraint — the same five`,
+      scatterInstances({
+        ...SPACE_SAMPLE, minSpacingM: none, rng: stream(SPACE_STREAM),
+      }),
+      SPACE_ALL);
+  }
+  // …and on the SEEDED path, where there is no hand-fed stream to keep in
+  // step: a world that never touches the field is sampled as it always was.
+  const SEEDED = {
+    ring: [[0, 0], [100, 0], [100, 100], [0, 100]], areaM2: 10000,
+    densityPer100m2: 0.5, seed: scatterSeed('ta_space', 0),
+  };
+  const seededPlain = scatterInstances(SEEDED);
+  check('S1 …and the seeded path is untouched by the option existing',
+    [scatterInstances({ ...SEEDED, minSpacingM: 0 }),
+      scatterInstances({ ...SEEDED, minSpacingM: undefined })],
+    [seededPlain, seededPlain]);
+  check('S2 spacing 4 SUBTRACTS the crowded candidate — the rest is (S1) verbatim',
+    scatterInstances({
+      ...SPACE_SAMPLE, minSpacingM: 4, rng: stream(SPACE_STREAM),
+    }),
+    SPACE_KEPT);
+  // (S3) the entry ends thinner than the density asked for, and the run is
+  // still the five candidates the budget allows — `stream` throws on a sixth.
+  check('S3 four of the five wanted, and no extra try to fill the count',
+    scatterInstances({
+      ...SPACE_SAMPLE, minSpacingM: 4, rng: stream(SPACE_STREAM),
+    }).length,
+    4);
+  check('S4 spacing 4.01 takes BOTH exact-4 m props away',
+    scatterInstances({
+      ...SPACE_SAMPLE, minSpacingM: 4.01, rng: stream(SPACE_STREAM),
+    }),
+    [SPACE_ALL[0], SPACE_ALL[3]]);
+  check('S4 …and a spacing every pair already keeps changes nothing',
+    scatterInstances({
+      ...SPACE_SAMPLE, minSpacingM: 2.5, rng: stream(SPACE_STREAM),
+    }),
+    SPACE_ALL);
+  check('S5 the survivors keep the variants of their CANDIDATE ordinals',
+    scatterInstances({
+      ...SPACE_SAMPLE, minSpacingM: 4, variantCount: 3,
+      rng: stream(SPACE_STREAM),
+    }).map((p) => p.variant),
+    [0, 2, 0, 1]);
+  // (S6) the prefix property, with the spacing switched on
+  const spacedFull = scatterInstances({ ...SEEDED, minSpacingM: 4 });
+  const spacedHead = scatterInstances({ ...SEEDED, minSpacingM: 4, maxPoints: 10 });
+  check('S6 a spaced run still plants something to be a prefix OF',
+    [spacedFull.length > 10, spacedHead.length], [true, 10]);
+  check('S6 …and maxPoints 10 is the first 10 of the very same list',
+    spacedHead, spacedFull.slice(0, 10));
+  // (S7) through the cell sampler — the path the authored scatter really takes
+  check('S7 the cell sampler passes the spacing through to the same rule',
+    scatterCellInstances({
+      ring: scatterCellRing(0, 0), cx: 0, cz: 0,
+      densityPer100m2: 0.09765625, seed: 's7', minSpacingM: 4,
+      rng: stream([0.015625, 0.015625, 0.00, 0.046875, 0.046875, 0.00,
+        0.078125, 0.015625, 0.50, 0.125, 0.0625, 0.25]),
+    }),
+    [{ x: 1, z: 1, yaw: 0 }, { x: 5, z: 1, yaw: Math.PI },
+      { x: 8, z: 4, yaw: TAU * 0.25 }]);
+  // (S8) the red counter-check: two props 0.2 m apart across a bucket border
+  const BUCKET_SAMPLE = {
+    ring: SPACE_RING, areaM2: 100, densityPer100m2: 2, seed: 'A',
+    triesPerPoint: 1, minSpacingM: 4,
+  };
+  const BUCKET_STREAM = [0.39, 0.10, 0.00, 0.41, 0.10, 0.00];
+  check('S8 two candidates 0.2 m apart across a bucket border: one survives',
+    scatterInstances({ ...BUCKET_SAMPLE, rng: stream(BUCKET_STREAM) }),
+    [{ x: 3.9, z: 1, yaw: 0 }]);
+  const bucketMutant = await loadTs(SRC, ownBucketOnly);
+  const bucketMutantOut = bucketMutant.scatterInstances({
+    ...BUCKET_SAMPLE, rng: stream(BUCKET_STREAM),
+  });
+  checkNot('S8 the "own bucket only" mutant does NOT reproduce that answer',
+    bucketMutantOut, [{ x: 3.9, z: 1, yaw: 0 }]);
+  check('S8 …it keeps both, 0.2 m apart at an authored 4 m — the defect',
+    bucketMutantOut,
+    [{ x: 3.9, z: 1, yaw: 0 }, { x: 4.1, z: 1, yaw: 0 }]);
 
   console.log('\n(D) the RED counter-check — a mutant that fails these cases');
   const RED = {

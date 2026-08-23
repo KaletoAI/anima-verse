@@ -1535,6 +1535,12 @@ export function createGround(): Ground {
           footprints,
           clearM,
           occluders,
+          // HOW FAR THIS ROW'S OWN PROPS STAY APART (authored, 2026-08-23).
+          // Straight through from the entry — the sampler is the one place
+          // that knows where the props already stand, and the map editor's
+          // preview hands the very same number to the very same call.
+          minSpacingM: Number(entry.min_spacing_m) > 0
+            ? Number(entry.min_spacing_m) : undefined,
           variantCount: kinds.length,
         })) (buckets[p.variant ?? 0] ?? buckets[0]).push(p);
       }

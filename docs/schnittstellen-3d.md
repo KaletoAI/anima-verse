@@ -947,16 +947,36 @@ immer sichtbar, nur Locations verstecken sich.
 
 **`areas[].meta.scatter` — die Streuung (Vertrag für BEIDE Renderer):**
 
-Eine **Liste** je Fläche, höchstens 8 Einträge, jeder Eintrag genau drei
+Eine **Liste** je Fläche, höchstens 8 Einträge, jeder Eintrag genau vier
 Felder (Server-Whitelist `app/models/terrain._sanitize_scatter_list`):
 
 ```
 scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = keine
             model?: str,                # /assets/props/<id>/model; fehlt = eingebautes Büschel
-            height_m?: float}, … ]      # ZIELHÖHE: das Prop wird uniform darauf skaliert
+            height_m?: float,           # ZIELHÖHE: das Prop wird uniform darauf skaliert
+            min_spacing_m?: float}, … ] # Mindestabstand der EIGENEN Instanzen, 0..100 m
 ```
 
 - **Fehlende oder leere Liste = es wächst nichts.** Es gibt keine Vorgabe.
+- **`min_spacing_m` ist der Mindestabstand der Instanzen EINES Eintrags
+  untereinander** (Metern, 0..100, zwei Nachkommastellen; fehlend oder 0 =
+  keine Bedingung). Beide Renderer geben ihn unverändert an den einen Sampler
+  weiter (`@anima/scene-render` → `minSpacingM`), der Kandidaten so verwirft:
+
+  ```
+  verworfen  <=>  hypot(x − a.x, z − a.z) < min_spacing_m
+                  für eine in DIESEM Lauf bereits angenommene Instanz a
+  ```
+
+  Echt kleiner, genau wie die Freihaltung um einen Grundriss: ein Prop im
+  exakt eingestellten Abstand steht. Der Test läuft NACH Ring, Occludern und
+  Grundrissen auf einem Kandidaten, der seine drei Zahlen schon gezogen hat —
+  eine weitere Ablehnung, die nur SUBTRAHIERT, also bleiben Kandidaten-Ordinal
+  (Varianten-Formel unten) und die Präfix-Eigenschaft der Vorschau unberührt.
+  Er gilt je **Eintrag** (Farne dürfen unter Bäumen stehen) und je **Zelle**
+  (eine Zelle ist ein eigener Lauf, an der Naht kann ein Paar enger stehen).
+  **Das Try-Budget bleibt `wanted · triesPerPoint`:** ein Eintrag, dessen
+  Abstand seine Dichte nicht zulässt, endet einfach mit weniger Instanzen.
 - **Der Server hängt an einen Eintrag mit Prop-`model` zusätzlich
   `variants: {tier: "/assets/props/<id>/model?tier=<tier>"}`** — nur die
   Stufen, die das Prop WIRKLICH hat, aufgelöst mit derselben einen Regel

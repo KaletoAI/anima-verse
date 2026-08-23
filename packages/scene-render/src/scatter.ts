@@ -62,6 +62,10 @@ export interface ScatterEntry {
    *  flat default, the built-in tuft to its tuft height) — NEVER the model's
    *  authored size, which is no size at all in a world measured in metres. */
   height_m?: number
+  /** The least distance in metres this entry's own instances keep from each
+   *  other (`ScatterSampleOptions.minSpacingM`). Absent or 0 = no constraint,
+   *  which is what every scatter authored before this field is. */
+  min_spacing_m?: number
 }
 
 /** One placed instance: where it stands and which way it faces (radians). */
@@ -421,6 +425,32 @@ export interface ScatterSampleOptions {
    * on the server (`point_in_polygon`).
    */
   occluders?: readonly (readonly ScatterPoint2[])[]
+  /**
+   * The least distance IN METRES two instances OF THIS ENTRY may stand apart
+   * — authored per row as `min_spacing_m` (2026-08-23).
+   *
+   *     rejected  <=>  hypot(x - a.x, z - a.z) < minSpacingM
+   *                    for any instance `a` this run has ALREADY ACCEPTED
+   *
+   * Strictly less, exactly as the footprint clearance is (`footprintBlocks`):
+   * a candidate at exactly the authored distance STANDS. And exactly as the
+   * clearance does, it is asked AFTER the ring, the occluders and the
+   * footprints, on a candidate that has already drawn all three of its
+   * numbers — one more verdict that only ever SUBTRACTS, so the candidate
+   * ordinal a variant hangs on and the prefix property below are untouched.
+   *
+   * IT IS THE ENTRY'S OWN INSTANCES AND NOBODY ELSE'S. Two rows of one area
+   * are two runs with two seeds, so ferns may still stand under the trees —
+   * which is what an author asking "keep MY trees apart" means. Across a cell
+   * border it is likewise not enforced: a cell is its own run
+   * (`scatterCellInstances`), so two instances 63 m apart in x may end up
+   * closer than the spacing across the seam. That is the price of the raster
+   * that made the density scale-free, and it costs at most a pair per border.
+   *
+   * Absent, 0 or junk = no constraint, and then this file behaves byte for
+   * byte as it did before the option existed.
+   */
+  minSpacingM?: number
   /** Hard ceiling; defaults to `SCATTER_MAX_PER_ENTRY`. */
   maxPoints?: number
   /**
@@ -486,8 +516,18 @@ export function scatterWantedCount(areaM2: number, densityPer100m2: number,
  *   z   = minZ + r · (maxZ − minZ)
  *   yaw = r · 2π
  *   reject when the point is outside the ring, inside a covering area
- *     (`occluders`) or within `clearM` of any footprint (`footprintBlocks` —
- *     the plain "inside" test when no clearance is given)
+ *     (`occluders`), within `clearM` of any footprint (`footprintBlocks` —
+ *     the plain "inside" test when no clearance is given) or closer than
+ *     `minSpacingM` to an instance this run has already accepted
+ *
+ * THE SPACING BUYS ITS DISTANCE WITH PROPS, NOT WITH TRIES. The budget is the
+ * same `wanted * triesPerPoint` it always was, so an entry whose spacing
+ * cannot be satisfied that often simply ends with FEWER instances than the
+ * density asked for — a wood at 40 trees per 100 m2 and 4 m apart wants a
+ * prop every 2.5 m2 and cannot have one, and the honest answer is the thinner
+ * wood. Raising the budget instead would spend a rejection loop per missing
+ * prop on every cell of every area, every rebuild, to place props the author
+ * has already said do not fit.
  *
  * THREE NUMBERS PER CANDIDATE, ALWAYS — the yaw is drawn before the test even
  * though a rejected candidate never uses it. That one wasted number is what
@@ -537,6 +577,21 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
   // candidate that has already drawn its three numbers.
   const clearM = opts.clearM
   const occluders = opts.occluders ?? []
+  // THE SPACING, and the grid that makes it affordable. Read once, like the
+  // clearance above: it is one number for the whole entry.
+  //
+  // A LIST OF ACCEPTED POINTS WOULD BE O(n^2) — at `SCATTER_MAX_PER_ENTRY`
+  // that is two million distance tests for one entry, paid in the frame a cell
+  // comes into view. So the accepted points are bucketed by a grid of exactly
+  // `spacing` metres: anything closer than `spacing` to a candidate lies in
+  // the candidate's own bucket or one of the eight around it, and nothing else
+  // is ever looked at. The work per candidate is then the number of props
+  // within about one spacing of it, which is a handful by construction — the
+  // spacing is the very thing that keeps that count low.
+  const spacing = Number(opts.minSpacingM)
+  const spaced = Number.isFinite(spacing) && spacing > 0
+  const spacing2 = spacing * spacing
+  const buckets: Map<string, ScatterPoint2[]> | null = spaced ? new Map() : null
   // How many meshes this entry's prop has to choose between, and therefore
   // whether the instances say anything about it at all (see `variantCount`).
   const variants = Math.floor(Number(opts.variantCount))
@@ -570,6 +625,34 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
       if (footprintBlocks(fp, x, z, clearM)) { covered = true; break }
     }
     if (covered) continue
+    // …and the LAST subtraction: too close to one of this entry's own props.
+    // Everything is drawn and every other verdict is in, so a candidate the
+    // spacing takes away is a candidate removed and nothing more — the props
+    // beside it keep their places and their variants.
+    if (buckets) {
+      const bx = Math.floor(x / spacing)
+      const bz = Math.floor(z / spacing)
+      let crowded = false
+      for (let dz = -1; dz <= 1 && !crowded; dz += 1) {
+        for (let dx = -1; dx <= 1 && !crowded; dx += 1) {
+          const near = buckets.get(`${bx + dx},${bz + dz}`)
+          if (!near) continue
+          for (const [ax, az] of near) {
+            const ex = x - ax
+            const ez = z - az
+            // Squared, so the innermost test of the innermost loop costs no
+            // square root. `<` and not `<=`: a prop at exactly the authored
+            // distance stands, as it does at a footprint's clearance.
+            if (ex * ex + ez * ez < spacing2) { crowded = true; break }
+          }
+        }
+      }
+      if (crowded) continue
+      const key = `${bx},${bz}`
+      const bucket = buckets.get(key)
+      if (bucket) bucket.push([x, z])
+      else buckets.set(key, [[x, z]])
+    }
     out.push(mixing
       ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }
       : { x, z, yaw })
@@ -814,6 +897,11 @@ export interface ScatterCellOptions {
   clearM?: number
   /** the cleaned rings of the areas painted ABOVE this one */
   occluders?: readonly (readonly ScatterPoint2[])[]
+  /** the least distance this entry's instances keep from each other, exactly
+   *  as in `scatterInstances` — WITHIN THIS CELL. A cell is its own run, so
+   *  the seam between two cells is the one place a pair may end up closer;
+   *  see `ScatterSampleOptions.minSpacingM`. */
+  minSpacingM?: number
   /** the per-cell guard; defaults to `SCATTER_MAX_PER_CELL` */
   maxPoints?: number
   /** active model variants of this entry's prop — see
@@ -851,6 +939,11 @@ export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[
     footprints: opts.footprints,
     clearM: opts.clearM,
     occluders: opts.occluders,
+    // The spacing is judged over the CELL's accepted points, i.e. including
+    // the ones the ring filter below drops again: the stream of a cell — and
+    // every verdict on it — must not depend on which areas reach into it, or
+    // two areas meeting in one cell would move each other's props.
+    minSpacingM: opts.minSpacingM,
     maxPoints: opts.maxPoints ?? SCATTER_MAX_PER_CELL,
     // ONE TRY PER WANTED INSTANCE, and that is the difference between sampling
     // a CELL and sampling a shape: the ring IS the box, so nothing is ever
