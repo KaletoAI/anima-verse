@@ -3,12 +3,22 @@
  * the mirror is already built on ("Ein Wasser-Gesetz" W5).
  *
  * NO NEW AUTHORSHIP, and that is the whole design. A river drawn with the line
- * tool ships its own centre line as `meta.water_profile.axis` (W4a): one knot
- * per drawn point, each carrying the arc coordinate `s` and the level of the
+ * tool ships its own centre line as `meta.water_profile.axis` (W4a): knots
+ * along that line, each carrying the arc coordinate `s` and the level of the
  * mirror there, already made monotonically falling downstream by the bake. A
  * waterfall is therefore not a thing an author places — it is a SEGMENT of that
  * line whose level falls faster than water runs, and it can be read off the
  * payload every renderer already has.
+ *
+ * THE KNOTS ARE NOT THE CLICKS (W5b). The bake samples the drawn line every
+ * `WATER_AXIS_STEP_M` (2 m), measures a level at every sample and then
+ * simplifies the level polyline back down, so a knot survives exactly where the
+ * mirror BENDS. That is what puts knots on both sides of a cliff the author
+ * drew straight across — before it, a two-click river over a 3 m step was one
+ * 100 m ramp of slope 0.03 and no rule here could ever have seen a fall — and
+ * it is also what keeps one fall ONE fall: the simplification hands this
+ * function one segment per bend rather than one per sample, so a drop is not
+ * split into a stack of curtains each carrying a fraction of it.
  *
  * IT IS A PURE FUNCTION and it lives here, beside `materials.ts`'s water dials,
  * for the reason the whole package exists: the 3D client draws the curtain
@@ -131,11 +141,14 @@ export function strokeWidthM(meta: Record<string, unknown> | null | undefined
  * numbers in the smoke can be read straight off them.
  *
  * THREE KNOTS AT LEAST. A polygon river's axis is the two extremes of one
- * straight ramp (`heightfield._straight_profile`): its single segment IS the
+ * straight ramp (`heightfield.water_profile_for`): its single segment IS the
  * whole river, so calling it a fall would drop a curtain across the entire
- * length of the water. Only a line-drawn river has interior knots, and only
- * there does "this stretch is steeper than the rest" mean anything. A lake is
- * one knot and has no segment at all.
+ * length of the water. Only a line-drawn river has interior knots — the bake
+ * puts them where its mirror bends (W5b), which is exactly where "this stretch
+ * is steeper than the rest" means anything. A drawn river whose level falls
+ * evenly simplifies back to its two ends and is one ramp again, correctly: a
+ * mirror with no bend in it has no fall in it. A lake is one knot and has no
+ * segment at all.
  *
  * `widthM` is the river's ribbon width (`strokeWidthM`); a width that is not a
  * positive finite number gives NO falls — a curtain has to span the stream, and

@@ -146,6 +146,42 @@
  * construction, because the axes with interior knots ARE the drawn ones.
  *
  * ===========================================================================
+ * [9] THE CLIFF BETWEEN TWO CLICKS — where the falls actually come from (W5b)
+ * ===========================================================================
+ * Every axis above is hand-written, which is what a unit check of a pure
+ * function should be. THIS one is the payload the server really ships for the
+ * case the user reported (`scripts/smoke_height_bake.py` [8l], same numbers):
+ * a river drawn with TWO clicks, (0,0) -> (100,0), 6 m wide, across a plateau
+ * that ends at x = 41 with a 3 m step.
+ *
+ * Until W5b the knots were the CLICKS, so that river's axis was
+ *
+ *     [[0,0,0,3], [100,0,100,0]]
+ *
+ * — two knots, one ramp, 3 m of drop spread over 100 m of run. NO FALL, and
+ * for three independent reasons: fewer than three knots, a slope of 0.03, and
+ * nothing anywhere near the edge to read. The cliff was invisible in the data.
+ *
+ * Since W5b the server samples the drawn line every 2 m, measures a level per
+ * sample and simplifies the result back to where the level BENDS:
+ *
+ *     [[0,0,0,3], [40,0,40,3], [42,0,42,0], [100,0,100,0]]
+ *
+ *     0->40   drop 0.0  run 40   -> no
+ *     40->42  drop 3.0  run  2   3.0 > 1.0 ✓  3.0/2 = 1.5 > 0.5 ✓  -> FALL
+ *     42->100 drop 0.0  run 58   -> no
+ *
+ * ONE FALL, midpoint (41, 0), direction (1, 0), top 3, bottom 0, width 6.
+ *
+ * AND THE SIMPLIFICATION IS WHY IT IS ONE. The sampler alone would have cut
+ * the drop into as many segments as it took steps over the edge, and each
+ * shortened segment carries a SHORTER DROP — the slope test survives that (it
+ * is a ratio) but `WATERFALL_MIN_DROP_M` does not, and a stack of curtains is
+ * not a waterfall. Because a genuinely straight fall deviates from its own
+ * chord by nothing, the simplification hands this rule ONE segment per bend of
+ * the level, which is exactly the unit a curtain is hung on.
+ *
+ * ===========================================================================
  * [8] THE 3D HALF, structurally
  * ===========================================================================
  * `client3d/src/scene/waterfall.ts` imports three and cannot be transpiled into
@@ -339,6 +375,33 @@ checkEq('…and a zero width draws nothing either',
   waterfallsFrom(PLAN_AXIS, 0), []);
 check('a width that arrives as a string still spans the stream',
   waterfallsFrom(PLAN_AXIS, '6')[0]?.width, 6);
+
+// ── [9] the cliff between two clicks ───────────────────────────────────────
+console.log('\n[9] the payload the server really ships for a two-click river');
+const CLIFF_AXIS = { axis: [[0, 0, 0, 3], [40, 0, 40, 3], [42, 0, 42, 0],
+  [100, 0, 100, 0]] };
+const CLIFF_META = { stroke: { points: [[0, 0], [100, 0]], width_m: 6 },
+  water_profile: CLIFF_AXIS };
+const cliffFalls = waterfallsFrom(CLIFF_AXIS, strokeWidthM(CLIFF_META));
+check('exactly one fall, at the edge', cliffFalls.length, 1);
+check('it stands at the middle of the 2 m segment that straddles the lip',
+  cliffFalls[0]?.x, 41);
+check('…on the drawn line', cliffFalls[0]?.z, 0);
+check('it points downstream', cliffFalls[0]?.dirX, 1);
+check('…and nowhere sideways', cliffFalls[0]?.dirZ, 0);
+check('the water leaves at the plateau\'s level', cliffFalls[0]?.topY, 3);
+check('…and arrives at the low ground\'s', cliffFalls[0]?.bottomY, 0);
+check('the drop is the plateau\'s own height', 3 - 0, 3);
+check('…over a run of 2 m, i.e. a slope of 1.5', 3 / 2, 1.5);
+check('the curtain spans the drawn ribbon', cliffFalls[0]?.width, 6);
+// RED: the very same river, as the CLICKS alone described it before W5b.
+const CLICKS_ONLY = { axis: [[0, 0, 0, 3], [100, 0, 100, 0]] };
+checkEq('RED: the two-knot axis of the same two clicks has NO fall at all',
+  waterfallsFrom(CLICKS_ONLY, 6), []);
+check('RED: …its drop passes the drop threshold', 3 - 0, 3);
+check('RED: …and its slope misses the slope one by a factor of 17',
+  3 / 100, 0.03);
+check('RED: …which is how a 3 m cliff stayed invisible', 0.03 > 0.5 ? 1 : 0, 0);
 
 // ── [8] the 3D half, structurally ──────────────────────────────────────────
 console.log('\n[8] the curtain: the arrangement W5 decided on');

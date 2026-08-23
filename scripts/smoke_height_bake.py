@@ -63,9 +63,24 @@ tilted along that axis, interpolated between an UPSTREAM and a DOWNSTREAM level
 that are each the rim median of their own third of the axis span. The carve
 runs against that LOCAL level, so the invariant becomes a pointwise statement.
 Section [8k] is W4a on top of it: an area DRAWN AS A LINE flows along that line
-(``meta.flow_along``), so the axis is a POLYLINE with one knot per drawn point
-— and the two laws above are its one-knot and its two-knot case, read by the
-same function. Section [9] is the deletion proof of the fifth stage.
+(``meta.flow_along``), so the axis is a POLYLINE along the drawn line — and the
+two laws above are its one-knot and its two-knot case, read by the same
+function.
+
+Section [8l] is W5b, and it is a BUG FIX with a number: the knots used to sit
+only where the author CLICKED, so a river drawn over a cliff with two clicks got
+one straight ramp between them — the mirror hung in the air past the edge and
+carved a canyon into the plateau before it, and nothing downstream could see the
+cliff because no knot was near it. The drawn line is now SAMPLED by arc length
+every ``core.heightfield.WATER_AXIS_STEP_M`` = 2 m (the tile step, and the run
+at which the two waterfall thresholds meet) BEFORE the cross-section medians are
+taken, and the resulting level polyline is SIMPLIFIED again — Douglas-Peucker on
+``(s, level)`` with a 5 cm tolerance, per drawn leg, clicked points fixed — so
+the payload carries the knots the mirror actually bends at and no others. The
+sampled knots lie ON the drawn legs, so dropping one cannot move the axis; only
+the clicks are bends, and they are never dropped.
+
+Section [9] is the deletion proof of the fifth stage.
 
 [1] THE WATER CARVE (§ G4).  Inside a water polygon
 
@@ -1294,10 +1309,27 @@ U_RIVER = u_river("ta_u", {"flow_along": "forward"})
 UMODEL = hf.build_model([BOWL], [], [U_RIVER], CATALOG_R)
 U = UMODEL.water_profile_by_area["ta_u"]
 
-check("the axis has one knot per drawn point, (x, z, s, level) each",
+check("the axis ships the knots the line was DRAWN with — a leg whose level "
+      "falls evenly needs no knot in the middle of it",
       [[round(v, 6) for v in knot] for knot in U.axis],
       [[150.0, 300.0, 0.0, 10.0], [249.0, 280.0, 101.0, 8.0],
        [201.0, 260.0, 153.0, 6.0]])
+# …and it is not that the line was never SAMPLED (W5b): the levels were
+# measured every 2 m and every one of them sat on the straight line between its
+# neighbours, so the simplification put the three drawn points back. 101 m of
+# leg 1 is ceil(101/2) = 51 equal parts of 1.9803… m, 52 m of leg 2 is 26 parts
+# of exactly 2 m, and the knots are one more than the parts: 1 + 51 + 26 = 78.
+_dense, _clicks = hf._stroke_knots(hf.water_meta(U_RIVER, (1.0, 3.0)))
+check("the line IS sampled — 78 knots before the level simplifies them away",
+      len(_dense), 78)
+check("...and the clicked points are among them, at these indices", _clicks,
+      (0, 51, 77))
+near("...leg 1 is sampled every 101/51 m", _dense[1][2], 101.0 / 51.0, 1e-12)
+near("...and leg 2 every 52/26 = 2 m exactly", _dense[52][2] - _dense[51][2],
+     2.0, 1e-12)
+check("no knot of the sampled line is further from the last than the step",
+      max(round(_dense[i][2] - _dense[i - 1][2], 9)
+          for i in range(1, len(_dense))) <= hf.WATER_AXIS_STEP_M, True)
 near("AT the middle knot the mirror is that knot's level, 8.0",
      hf.water_level_at(U, 249.0, 280.0), 8.0, 1e-12)
 near("halfway along the first leg it is the mean of its two knots, 9.0",
@@ -1342,14 +1374,53 @@ near("the flat-consumer level stays the mean of the two ends",
      (U.level_up + U.level_down) * 0.5, 8.0, 1e-12)
 
 print("\n[8k-mono] water never runs uphill — the running minimum")
-# The same hairpin with the middle knot lifted to z = 310, i.e. BOWL 11.0:
-# raw knots 10 / 11 / 6, and the running minimum downstream gives 10 / 10 / 6.
+# The same hairpin with the middle CLICK lifted to z = 310, i.e. BOWL 11.0:
+# the clicked levels are 10 / 11 / 6 and the running minimum gives 10 / 10 / 6.
+# ON THE DENSIFIED LINE (W5b) that is a sharper statement than it used to be,
+# because the minimum is now clamped knot by knot and the simplification says
+# where it stops clamping:
+#
+#   LEG 1  A(150,300) -> B(249,310):  |AB| = sqrt(99² + 10²) = sqrt(9901)
+#          = 99.50376877…  The raw level RISES 10 -> 11 along it, so every
+#          sampled knot is pinned to the source level 10 — the whole leg is
+#          flat, and a flat run between two kept knots deviates by nothing and
+#          is dropped again.
+#
+#   LEG 2  B(249,310) -> C(201,260):  |BC| = sqrt(48² + 50²) = sqrt(4804)
+#          = 69.31089380…, subdivided into ceil(69.31/2) = 35 equal parts of
+#          1.98031… m. The SEVENTH of them is exactly one fifth of the leg
+#          (7/35), which is exactly where the line comes back down through
+#          z = 300 — the raw level is 10 again there and the clamp lets go:
+#              x = 249 - 48/5 = 239.4      z = 310 - 50/5 = 300
+#              s = sqrt(9901) + sqrt(4804)/5 = 113.36594753…
+#          Before it the profile is flat at 10, after it the raw level falls
+#          linearly to 6 (BOWL is a plane and z is linear in s), so BOTH sides
+#          are straight and only this ONE corner survives the simplification.
+#
+# FOUR KNOTS, then, and the third is the corner the old rule could not see at
+# all: with knots only at the clicks the mirror fell from 10 to 6 in ONE ramp
+# across the whole of leg 2, so at that very corner it read 10 - 4/5 = 9.2 —
+# 0.8 m BELOW the ground it was supposed to lie on, which is 0.8 m of bank the
+# carve would have dug away.
 UP_HILL = u_river("ta_u_up", {"flow_along": "forward"})
 UP_HILL["meta"]["stroke"]["points"] = [[150, 300], [249, 310], [201, 260]]
 _up = hf.build_model([BOWL], [], [UP_HILL], CATALOG_R
                      ).water_profile_by_area["ta_u_up"]
+_l1, _l2 = math.sqrt(9901.0), math.sqrt(4804.0)
 check("a knot that measures HIGHER than the one above it is pulled down",
-      [round(knot[3], 6) for knot in _up.axis], [10.0, 10.0, 6.0])
+      [round(knot[3], 6) for knot in _up.axis], [10.0, 10.0, 10.0, 6.0])
+check("...and the level stays pinned until the LINE comes back down to it — "
+      "one corner knot, not one long ramp",
+      [[round(knot[0], 6), round(knot[1], 6)] for knot in _up.axis],
+      [[150.0, 300.0], [249.0, 310.0], [239.4, 300.0], [201.0, 260.0]])
+near("the corner sits at sqrt(9901) + sqrt(4804)/5 along the line",
+     _up.axis[2][2], _l1 + _l2 / 5.0, 1e-9)
+near("...i.e. the mirror is still 10.0 there", hf.water_level_at(_up, 239.4,
+                                                                300.0),
+     10.0, 1e-12)
+near("RED: the ONE-RAMP reading of the same two clicks is 9.2 there — 0.8 m "
+     "UNDER the ground the water lies on",
+     10.0 + (6.0 - 10.0) * ((_l2 / 5.0) / _l2), 9.2, 1e-12)
 _rev = hf.build_model([BOWL], [],
                       [u_river("ta_u_rev", {"flow_along": "reverse"})],
                       CATALOG_R).water_profile_by_area["ta_u_rev"]
@@ -1414,6 +1485,173 @@ _settled = terrain_store.settle_water_level(terrain_store.sanitize_area(
 check("a river drawn as a LINE settles its two ENDS, never one water_level",
       sorted(k for k in _settled["meta"] if k.startswith("water_level")),
       ["water_level_down", "water_level_up"])
+
+
+# ── [8l] THE CLIFF BETWEEN TWO CLICKS (W5b) ─────────────────────────────
+print("\n[8l] a river over a 3 m step — the knots are where the GROUND bends")
+# THE LANDSCAPE is one height area with NO falloff, which is the module's own
+# spelling of a hard edge (``_area_value``: ``falloff <= 0 -> height``):
+#
+#     PLATEAU  (-100,-100)-(41,100), height_m 3.0, falloff_m 0.0
+#     STEP(x)  = 3.0  for x < 41   (inside the outline)
+#              = 0.0  for x > 41   (outside it)
+#
+# THE RIVER is drawn with TWO clicks straight across that edge, (0,0) -> (100,0),
+# 6 m wide, kind "river" (depth 1.0, shore ramp 3.0). Its carve mask is the
+# ribbon (0,-3)-(100,3). Two clicks is the case the author actually draws and
+# the case the old rule was blindest in: the only two knots WERE the ends.
+#
+# THE SAMPLED LINE: one leg of 100 m at a 2 m step is ceil(100/2) = 50 equal
+# parts, so knots at s = 0, 2, 4, …, 100 and s IS x here. Each level is the
+# median of 9 probes ACROSS the river (z from -6 to +6 at that x), and STEP does
+# not depend on z at all, so the median is STEP(x):
+#
+#     x <= 40  ->  3.0          x >= 42  ->  0.0
+#
+# (no knot lands on 41, the edge itself). Monotone already, nothing authored.
+#
+# THE SIMPLIFICATION then keeps first, last and every knot whose level is more
+# than 5 cm off the line between the knots kept around it:
+#     the chord (0,3) -> (100,0) is 3 - 0.03·s; the worst deviation on it is at
+#     s = 40 (3.0 against 1.8, i.e. 1.2 m) -> KEEP 40
+#     then (40,3) -> (100,0) is 3 - 0.05·(s-40); the worst is at s = 42
+#     (0.0 against 2.9) -> KEEP 42
+#     what is left is flat on both sides -> nothing else survives
+#
+#     axis = [(0,0,0,3), (40,0,40,3), (42,0,42,0), (100,0,100,0)]
+#
+# FOUR KNOTS, and the drop of the whole 3 m sits in ONE 2 m segment.
+STEP_AREA = {"id": "ha_step", "polygon": [[-100, -100], [41, -100],
+                                          [41, 100], [-100, 100]],
+             "height_m": 3.0, "falloff_m": 0.0, "meta": {}}
+CLIFF_RIVER = {"id": "ta_cliff", "kind": "river", "z_order": 0,
+               "polygon": [[0, -3], [100, -3], [100, 3], [0, 3]],
+               "meta": {"flow_along": "forward",
+                        "stroke": {"points": [[0, 0], [100, 0]],
+                                   "width_m": 6.0}}}
+CMODEL_W5 = hf.build_model([STEP_AREA], [], [CLIFF_RIVER], CATALOG_R)
+CLIFF = CMODEL_W5.water_profile_by_area["ta_cliff"]
+check("the plateau really is a hard step: 3.0 up to the edge, 0.0 past it",
+      [CMODEL_W5.natural(x, 0.0) for x in (0.0, 20.0, 40.0, 42.0, 100.0)],
+      [3.0, 3.0, 3.0, 0.0, 0.0])
+check("the axis has a knot on each side of the edge and nowhere else",
+      [[round(v, 6) for v in knot] for knot in CLIFF.axis],
+      [[0.0, 0.0, 0.0, 3.0], [40.0, 0.0, 40.0, 3.0],
+       [42.0, 0.0, 42.0, 0.0], [100.0, 0.0, 100.0, 0.0]])
+near("the mirror hugs the plateau right up to the lip", CLIFF.axis[1][3], 3.0)
+near("...and has arrived at the low ground 2 m later", CLIFF.axis[2][3], 0.0)
+check("the whole 3 m drop is ONE segment of the axis, 2 m long",
+      [round(CLIFF.axis[1][3] - CLIFF.axis[2][3], 6),
+       round(CLIFF.axis[2][2] - CLIFF.axis[1][2], 6)], [3.0, 2.0])
+# THE FALL, read the way `@anima/scene-render.waterfallsFrom` reads it — both
+# thresholds, both strict, on every consecutive pair. Only the middle segment
+# passes, so the client twin draws exactly ONE curtain (its own smoke pins the
+# same axis: `client3d/scripts/smoke_waterfall.mjs`).
+_segments = [(round(CLIFF.axis[i - 1][3] - CLIFF.axis[i][3], 6),
+              round(CLIFF.axis[i][2] - CLIFF.axis[i - 1][2], 6))
+             for i in range(1, len(CLIFF.axis))]
+check("drop and run per segment", _segments, [(0.0, 40.0), (3.0, 2.0),
+                                              (0.0, 58.0)])
+check("exactly one of them is a fall: drop > 1.0 AND drop/run > 0.5",
+      [drop > 1.0 and drop / run > 0.5 for drop, run in _segments],
+      [False, True, False])
+near("...and the water leaves at 3.0", CLIFF.axis[1][3], 3.0)
+near("...and arrives at 0.0", CLIFF.axis[2][3], 0.0)
+
+print("\n[8l-red] the two-knot ramp: a canyon before the lip, air past it")
+# THE MUTANT is the axis the clicked-points-only rule produced for this very
+# river — two knots, 3.0 at x = 0 and 0.0 at x = 100, i.e. level_at = 3 - 0.03x.
+# It is built here by hand from the module's own type, exactly like the straight
+# W1 counter-probe of [8k].
+RAMP = hf.WaterProfile(level_up=3.0, level_down=0.0, flow_dir_deg=90.0,
+                       axis_x=0.0, axis_z=0.0, dir_x=1.0, dir_z=0.0,
+                       s_min=0.0, s_max=100.0,
+                       axis=((0.0, 0.0, 0.0, 3.0),
+                             (100.0, 0.0, 100.0, 0.0)))
+near("RED: 20 m before the edge the ramp reads 2.4", hf.water_level_at(
+    RAMP, 20.0, 0.0), 2.4, 1e-12)
+check_true("...which is 0.6 m UNDER the plateau it is running over",
+           CMODEL_W5.natural(20.0, 0.0) - hf.water_level_at(RAMP, 20.0, 0.0)
+           > 0.5)
+near("RED: 19 m past the edge it reads 1.2", hf.water_level_at(RAMP, 60.0, 0.0),
+     1.2, 1e-12)
+check_true("...over a ground of 0.0 — the mirror hanging in the air, which is "
+           "the reported symptom",
+           hf.water_level_at(RAMP, 60.0, 0.0) - CMODEL_W5.natural(60.0, 0.0)
+           > 1.0)
+near("the sampled axis answers the plateau's own 3.0 there instead",
+     hf.water_level_at(CLIFF, 20.0, 0.0), 3.0, 1e-12)
+near("...and the low ground's own 0.0 past the edge",
+     hf.water_level_at(CLIFF, 60.0, 0.0), 0.0, 1e-12)
+near("...and 1.5 at the lip itself, halfway between its two knots",
+     hf.water_level_at(CLIFF, 41.0, 0.0), 1.5, 1e-12)
+# THE CARVE, which is what the author sees as a canyon. 20 m in, d_in is 3 m
+# (the ribbon is 6 m wide), i.e. exactly the shore ramp, so the full depth 1.0
+# applies: the bed is level - 1.0 either way, but the LEVEL differs.
+near("the carve now cuts a 1.0 m bed into the plateau: 3.0 - 1.0",
+     CMODEL_W5.final(20.0, 0.0), 2.0, 1e-12)
+near("RED: the ramp cut 1.4 there — 1.6 m of canyon into a 3 m plateau",
+     hf.water_level_at(RAMP, 20.0, 0.0) - 1.0, 1.4, 1e-12)
+near("...and the bed past the edge is the low ground's own, 0.0 - 1.0",
+     CMODEL_W5.final(60.0, 0.0), -1.0, 1e-12)
+check_true("INVARIANT 2 still holds at both probes: h <= level_at - 0.25",
+           all(CMODEL_W5.final(px, 0.0)
+               <= hf.water_level_at(CLIFF, px, 0.0) - 0.25
+               for px in (20.0, 60.0)))
+
+print("\n[8l-lip] ten metres either side of the lip — the reported symptom")
+# THE TWO PROBES THE REPORT NAMES, one on each side of the edge at x = 41:
+#
+#   UPSTREAM  x = 31  ground 3.0 (plateau)
+#       sampled axis : level 3.0  — the mirror lies ON the plateau it crosses
+#       two-knot ramp: level = 3 - 0.03·31 = 2.07, i.e. 0.93 m BELOW the banks
+#                      it runs between. That is "the water is almost gone": the
+#                      mirror has sunk into a slot 20 m before the fall, with a
+#                      0.93 m wall of untouched plateau on either side of it.
+#   DOWNSTREAM x = 51  ground 0.0 (past the step)
+#       sampled axis : level 0.0  — the mirror lies ON the low ground
+#       two-knot ramp: level = 3 - 0.03·51 = 1.47, i.e. 1.47 m ABOVE a ground
+#                      of zero. That is "the mound of water": a slab hanging in
+#                      the air with nothing under it.
+#
+# AND THE CARVE UPSTREAM, which is the same statement in bed metres. The ribbon
+# is 6 m wide, so at z = 0 the distance to its outline is 3 m — exactly the
+# shore ramp — and the full depth applies:
+#       sampled axis : bed = 3.0 - 1.0 = 2.0, i.e. exactly water_depth_m of
+#                      water in a bed cut into the plateau, banks at 3.0
+#       two-knot ramp: bed = min(3.0, 2.07 - 1.0) = 1.07, i.e. the SAME 1.0 m
+#                      of water, but 1.93 m down a trench — the mirror dived
+#                      under the ground it should be lying on, taking the bed
+#                      with it.
+near("upstream (10 m before the lip) the mirror is the plateau's own 3.0",
+     hf.water_level_at(CLIFF, 31.0, 0.0), 3.0, 1e-12)
+near("...flush with the ground beside it, to the centimetre",
+     CMODEL_W5.natural(31.0, 0.0) - hf.water_level_at(CLIFF, 31.0, 0.0), 0.0,
+     0.01)
+near("RED: the two-knot ramp read 2.07 there", hf.water_level_at(RAMP, 31.0,
+                                                                0.0),
+     2.07, 1e-12)
+near("...0.93 m BELOW its own banks — 'the water is almost gone'",
+     CMODEL_W5.natural(31.0, 0.0) - hf.water_level_at(RAMP, 31.0, 0.0), 0.93,
+     1e-12)
+near("downstream (10 m past the lip) the mirror is the low ground's own 0.0",
+     hf.water_level_at(CLIFF, 51.0, 0.0), 0.0, 1e-12)
+near("...flush with it as well", hf.water_level_at(CLIFF, 51.0, 0.0)
+     - CMODEL_W5.natural(51.0, 0.0), 0.0, 0.01)
+near("RED: the two-knot ramp read 1.47 there", hf.water_level_at(RAMP, 51.0,
+                                                                0.0),
+     1.47, 1e-12)
+near("...1.47 m ABOVE a ground of zero — 'a mound of water'",
+     hf.water_level_at(RAMP, 51.0, 0.0) - CMODEL_W5.natural(51.0, 0.0), 1.47,
+     1e-12)
+near("the upstream bed is cut exactly water_depth_m below the mirror",
+     hf.water_level_at(CLIFF, 31.0, 0.0) - CMODEL_W5.final(31.0, 0.0), 1.0,
+     1e-12)
+near("...at 2.0, one metre under the plateau", CMODEL_W5.final(31.0, 0.0), 2.0,
+     1e-12)
+near("RED: the ramp put that same 1 m of water at 1.07 — 1.93 m down a trench",
+     min(CMODEL_W5.natural(31.0, 0.0), hf.water_level_at(RAMP, 31.0, 0.0)
+         - 1.0), 1.07, 1e-12)
 
 
 # ── [9] THE ZONE-WATER STAGE IS GONE — asserted BY NAME (W1) ────────────

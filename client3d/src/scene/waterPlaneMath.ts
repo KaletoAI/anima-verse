@@ -205,7 +205,9 @@ export type WaterKnot = [number, number, number, number];
  * (W1, polyline since W4a, § A16.3), read straight out of the payload.
  *
  * THE TRUTH IS `axis`, the knots. A lake is ONE knot, a straight river TWO, a
- * river drawn with the line tool one per drawn point — the old laws are the
+ * river drawn with the line tool one wherever its mirror BENDS (W5b: the bake
+ * samples that line every 2 m and simplifies the levels back down, so the knots
+ * are the ground's bends and not the author's clicks) — the old laws are the
  * degenerate cases of the new one and `waterLevelAt` is one code path for all
  * three. A meander is why: projected onto a single straight axis, the two ends
  * of a 180° loop land on the same axis point, so the mirror of a bend could not
@@ -459,11 +461,15 @@ export function waterFlowAt(profile: WaterProfile | null | undefined,
  *
  * A DRAWN AXIS (W4a) is piecewise linear, and so is what this writes: exact at
  * every vertex, and exact between them wherever the outline itself is cut at
- * the knots — which a ribbon drawn with the line tool is, its joints being the
- * knots. A wide MASK polygon over a bent axis gets the ruling between its own
- * corners instead, i.e. the bend is smoothed over in the mirror's surface while
- * the level a swimmer, the carve and the shore read (`waterLevelAt`) stays
- * exact everywhere. Subdividing such a mask is a question for a later round.
+ * the knots. SINCE W5b IT USUALLY IS NOT: the bake samples the drawn line every
+ * 2 m and keeps a knot wherever the mirror bends, so a knot at a cliff has no
+ * vertex of the ribbon beside it and the SURFACE ramps straight between the
+ * ribbon's own corners while `waterLevelAt` — the carve, the shore alpha, the
+ * swimmer's float height and the waterfall detection — reads the exact profile.
+ * The fall's own curtain (`scene/waterfall.ts`) covers that seam where it is
+ * largest; subdividing the mask so the mirror mesh follows the fall too is the
+ * open half of this and belongs to a later round, together with the same
+ * question for a wide MASK polygon over a bent axis.
  *
  * FOR A LAKE THIS IS BIT-IDENTICAL TO THE FLAT PLANE OF BEFORE. A constant
  * profile answers `level_up` for every vertex, so the mesh is the same

@@ -56,8 +56,10 @@ shared lattice points BY CONSTRUCTION, not by luck.
   smoothsteps from 0 at the rim to the full depth ``shore_ramp_m`` inside.
   Since W1 the mirror is LOCAL, and since W4a its axis is a POLYLINE: a lake is
   one knot and one constant (the lake of every round before), a river drawn with
-  the line tool one knot per drawn point, and the level interpolates along that
-  line — through every bend, not across the chord of it. The invariant
+  the line tool a knot every :data:`WATER_AXIS_STEP_M` along that line (W5b —
+  the clicks are knots too, but they no longer decide where the mirror is
+  allowed to bend), and the level interpolates along the line — through every
+  bend, not across the chord of it. The invariant
   that buys — deeper than the shore ramp the ground is at least ``ε`` below the
   mirror AT THAT POINT, in EVERY raster — is what makes "distant terrain pokes
   through the water" impossible in the data instead of impossible in a shader.
@@ -120,7 +122,13 @@ logger = get_logger("heightfield")
 #: instead of its KIND's. Every authored byte of an existing world can stay
 #: exactly where it is and the ground still comes out differently, which is
 #: precisely the case this counter exists for.
-HEIGHT_BAKE_VERSION = 2
+#:
+#: v3 (2026-08-24, W5b): a drawn river's flow axis is SAMPLED along the line
+#: (:data:`WATER_AXIS_STEP_M`) instead of only at the clicked points, so its
+#: mirror follows the ground it runs over and its carve stops digging a canyon
+#: on the way to a cliff. Same stroke, same clicks, different bed — the counter
+#: is what makes every client refetch and every stored raster rebuild.
+HEIGHT_BAKE_VERSION = 3
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -999,6 +1007,52 @@ FLOW_ALONG_VALUES = ("forward", "reverse")
 #: outvote the micro-relief.
 WATER_AXIS_CROSS_SAMPLES = 9
 
+#: How finely a drawn river's flow axis is SAMPLED, in metres (W5b) — the
+#: distance between two knots of the DENSIFIED axis, before the clicked points
+#: are put back and the level is simplified again.
+#:
+#: TWO METRES BECAUSE THAT IS WHAT THE GROUND IS. :data:`TILE_STEP_M` is the
+#: finest lattice this world is ever evaluated on and the Nyquist limit the
+#: authored relief wave is clamped against, so a knot every 2 m asks the
+#: landscape every question it can answer and no more.
+#:
+#: AND BECAUSE IT IS THE RUN AT WHICH THE TWO WATERFALL THRESHOLDS MEET. A fall
+#: is a segment with ``drop > 1.0 m`` AND ``drop/run > 0.5``
+#: (``@anima/scene-render``'s ``WATERFALL_MIN_DROP_M`` /
+#: ``WATERFALL_MIN_SLOPE``); at a run of 2 m the smallest drop the first names
+#: is exactly the smallest slope the second names. A COARSER step would hide
+#: falls the thresholds call falls — at 8 m spacing a 3 m cliff reads as a
+#: slope of 0.375 and no renderer would ever see it — and a finer one would
+#: only interpolate the ground between two of its own support points.
+WATER_AXIS_STEP_M = 2.0
+
+#: How far a knot's level may sit off the straight line between the knots kept
+#: around it before that knot is kept too, in metres (W5b).
+#:
+#: FIVE CENTIMETRES IS THE READER'S OWN ERROR: ``water_level_at`` interpolates
+#: LINEARLY between two knots, so this deviation IS the height by which a
+#: dropped knot would move the mirror — a fifth of the smallest carve depth and
+#: far under anything a shore fade or a swimming figure can show. Everything
+#: coarser than it is kept, which is why a cliff (metres) survives the
+#: simplification untouched while the centimetre wobble of the micro-relief
+#: along a long straight river collapses back to the two points that were drawn.
+WATER_AXIS_SIMPLIFY_M = 0.05
+
+#: The most knots the densifier INSERTS into one axis (W5b) — the payload cap.
+#:
+#: The step grows for a line longer than ``(MAX − 1) · step`` = about half a
+#: kilometre, so a river drawn across a continent costs a bounded number of
+#: cross-section medians at bake time and a bounded number of numbers in every
+#: worldmap payload. The price is stated rather than hidden: on such a line the
+#: smallest fall that can still be READ is half the grown step, so a 2 km river
+#: (step 7.9 m) shows its 4 m falls and not its 2 m ones.
+#:
+#: THE CLICKED POINTS ARE NOT CAPPED. They are the line the author drew, and
+#: dropping one would cut a bend out of the river's course — correctness before
+#: byte count. A stroke may carry up to ``models.terrain.MAX_STROKE_POINTS``
+#: points and every one of them stays a knot.
+WATER_AXIS_MAX_KNOTS = 256
+
 
 class WaterMeta(NamedTuple):
     """Everything ONE painted water area authors about its own water.
@@ -1126,28 +1180,121 @@ def _stroke_line(raw: Any) -> Tuple[Tuple[Tuple[float, float], ...], float]:
     return (tuple(points), width)
 
 
-def _stroke_knots(meta: WaterMeta) -> List[Tuple[float, float, float]]:
-    """The drawn line as ``(x, z, s)`` knots IN FLOW ORDER (W4a).
+def _stroke_knots(meta: WaterMeta
+                  ) -> Tuple[List[Tuple[float, float, float]],
+                             Tuple[int, ...]]:
+    """The drawn line as ``(x, z, s)`` knots IN FLOW ORDER, DENSIFIED (W4a/W5b).
 
     ``forward`` is the order the author clicked the points in, ``reverse`` the
     other way round; ``s`` is the arc length from the first knot of that order.
     Repeated points are dropped: a double click leaves a zero-length segment,
     which has no tangent and no share of the arc, and every rule downstream
     would have to ask about it.
+
+    SINCE W5b THE KNOTS ARE NOT THE CLICKS. A river drawn with two clicks over a
+    3 m cliff used to get exactly two knots, one at each click, and the mirror
+    between them was ONE straight ramp: it hung in the air past the edge and cut
+    a canyon into the plateau before it, and no reader could see the cliff at
+    all because no knot sat there. So the line is RESAMPLED by arc length at
+    :data:`WATER_AXIS_STEP_M`, and the levels are measured at every one of those
+    knots — the cliff lands between two of them whether the author clicked there
+    or not.
+
+    EACH DRAWN LEG IS SUBDIVIDED EVENLY, into ``ceil(len / step)`` parts, so no
+    knot ever sits a centimetre from a clicked one and the spacing is at most
+    the step. The CLICKED points stay knots exactly where they are (their index
+    is what the second element of the answer lists): they are the bends of the
+    line, they carry the arc length of the whole leg, and the (x, z) course of
+    the axis is the author's, not the sampler's.
+
+    The step GROWS for a line long enough to overrun
+    :data:`WATER_AXIS_MAX_KNOTS`, which is the only cap here — the clicked
+    points are never thinned.
     """
     points = list(meta.stroke_points)
     if meta.flow_along == "reverse":
         points.reverse()
-    knots: List[Tuple[float, float, float]] = []
-    total = 0.0
+    drawn: List[Tuple[float, float]] = []
     for px, pz in points:
-        if knots:
-            step = math.hypot(px - knots[-1][0], pz - knots[-1][1])
-            if step <= 1e-9:
-                continue
-            total += step
-        knots.append((px, pz, total))
-    return knots
+        if drawn and math.hypot(px - drawn[-1][0], pz - drawn[-1][1]) <= 1e-9:
+            continue
+        drawn.append((px, pz))
+    if len(drawn) < 2:
+        return ([(px, pz, 0.0) for px, pz in drawn], (0,) if drawn else ())
+    lengths = [math.hypot(drawn[i][0] - drawn[i - 1][0],
+                          drawn[i][1] - drawn[i - 1][1])
+               for i in range(1, len(drawn))]
+    total = math.fsum(lengths)
+    step = max(WATER_AXIS_STEP_M, total / max(1, WATER_AXIS_MAX_KNOTS - 1))
+    knots: List[Tuple[float, float, float]] = [(drawn[0][0], drawn[0][1], 0.0)]
+    at_click: List[int] = [0]
+    s0 = 0.0
+    for i, seg in enumerate(lengths):
+        ax, az = drawn[i]
+        bx, bz = drawn[i + 1]
+        parts = max(1, int(math.ceil(seg / step)))
+        for k in range(1, parts):
+            u = k / parts
+            knots.append((ax + (bx - ax) * u, az + (bz - az) * u, s0 + seg * u))
+        s0 += seg
+        knots.append((bx, bz, s0))
+        at_click.append(len(knots) - 1)
+    return (knots, tuple(at_click))
+
+
+def _simplify_axis(knots: List[Tuple[float, float, float]],
+                   levels: List[float], at_click: Tuple[int, ...]
+                   ) -> List[int]:
+    """Which knots the axis SHIPS — the indices to keep, in order (W5b).
+
+    THE (x, z) COURSE MAY NOT CHANGE, and that is what makes this safe: the
+    densifier only ever inserts knots ON the straight leg between two clicked
+    points, so every inserted knot is collinear with the two clicks around it
+    and dropping it cannot move the line by a millimetre. A CLICKED knot is a
+    bend — dropping one WOULD cut the corner — so the clicked indices are kept
+    unconditionally and only the inserted ones are ever candidates.
+
+    WHAT IS SIMPLIFIED IS THEREFORE THE LEVEL ALONE: Douglas-Peucker on the
+    ``(s, level)`` polyline, run per drawn leg (the clicked knots are its fixed
+    anchors), keeping every knot that deviates by more than
+    :data:`WATER_AXIS_SIMPLIFY_M` from the line between the knots kept around
+    it. The deviation is measured VERTICALLY, in level at the knot's own ``s``,
+    and not as the perpendicular distance of the textbook algorithm: vertical IS
+    the error a reader of :func:`water_level_at` sees there, while a
+    perpendicular would mix metres of arc with metres of height and change its
+    mind with the length of the river.
+
+    A straight river down an even slope therefore ships the two knots it was
+    drawn with, and a cliff ships the two knots that straddle it.
+    """
+    keep = [False] * len(knots)
+    for idx in at_click:
+        keep[idx] = True
+    keep[0] = True
+    keep[-1] = True
+    # Douglas-Peucker per leg, explicit stack (a knot count in the hundreds is
+    # no reason to lean on the interpreter's recursion limit).
+    stack = [(at_click[i - 1], at_click[i]) for i in range(1, len(at_click))]
+    if not stack:
+        stack = [(0, len(knots) - 1)]
+    while stack:
+        lo, hi = stack.pop()
+        if hi - lo < 2:
+            continue
+        a_s, a_level = knots[lo][2], levels[lo]
+        span = knots[hi][2] - a_s
+        slope = 0.0 if span <= 1e-12 else (levels[hi] - a_level) / span
+        worst, at = WATER_AXIS_SIMPLIFY_M, -1
+        for i in range(lo + 1, hi):
+            dev = abs(levels[i] - (a_level + slope * (knots[i][2] - a_s)))
+            if dev > worst:
+                worst, at = dev, i
+        if at < 0:
+            continue
+        keep[at] = True
+        stack.append((lo, at))
+        stack.append((at, hi))
+    return [i for i, flag in enumerate(keep) if flag]
 
 
 def _knot_tangent(knots: List[Tuple[float, float, float]],
@@ -1612,9 +1759,9 @@ class HeightModel:
         """
         if (meta.flow_along in FLOW_ALONG_VALUES
                 and len(meta.stroke_points) >= 2):
-            knots = _stroke_knots(meta)
+            knots, at_click = _stroke_knots(meta)
             if len(knots) >= 2:
-                return self._stroke_profile(knots, meta)
+                return self._stroke_profile(knots, at_click, meta)
         ring = _ring(polygon) or []
         dir_x, dir_z = flow_direction(meta.flow_dir_deg)
         axis_x, axis_z = _ring_centroid(ring)
@@ -1668,8 +1815,13 @@ class HeightModel:
                                    s_max, float(level_down))))
 
     def _stroke_profile(self, knots: List[Tuple[float, float, float]],
+                        at_click: Tuple[int, ...],
                         meta: WaterMeta) -> WaterProfile:
         """The mirror of a river that follows its DRAWN LINE (W4a, § A16.3).
+
+        THE KNOTS ARE THE DENSIFIED LINE (:func:`_stroke_knots`, W5b), not the
+        author's clicks: a level measured only where somebody happened to click
+        is a level that cannot see a cliff between two clicks.
 
         THE LEVEL OF ONE KNOT is the median of :meth:`natural` over a CROSS
         SECTION at that knot: :data:`WATER_AXIS_CROSS_SAMPLES` probes
@@ -1681,7 +1833,11 @@ class HeightModel:
 
         THEN DOWNSTREAM IS MONOTONE: a running minimum along the flow. Water
         never runs uphill, and a drawn line that crosses a rise would otherwise
-        put a step in the mirror there.
+        put a step in the mirror there. On the densified line this is also what
+        makes an edge SHARP: the last knot before the lip keeps the plateau's
+        level and the first one past it has already fallen, so the whole drop
+        sits in one step of the axis instead of being smeared over the whole
+        river.
 
         THEN THE AUTHOR WINS. ``water_level`` makes every knot that number (a
         drawn but standing water). ``water_level_up`` / ``water_level_down``
@@ -1690,6 +1846,11 @@ class HeightModel:
         pools — is the landscape's answer and survives, only its two ends become
         the authored ones. Where the derived shape is FLAT there is no shape to
         keep and the knots ramp linearly along ``s``.
+
+        THEN THE LINE IS SIMPLIFIED AGAIN (:func:`_simplify_axis`): what the
+        dense sampling had to ask, the payload does not have to carry. A river
+        down an even slope ships the knots it was drawn with; only where the
+        level actually bends does a sampled knot survive.
         """
         levels = [self._cross_median(knots, i, meta)
                   for i in range(len(knots))]
@@ -1699,8 +1860,8 @@ class HeightModel:
                 levels[i] = levels[i - 1]
             i += 1
         levels = _authored_axis_levels(levels, [k[2] for k in knots], meta)
-        axis = tuple((kx, kz, ks, lv)
-                     for (kx, kz, ks), lv in zip(knots, levels))
+        axis = tuple((knots[i][0], knots[i][1], knots[i][2], levels[i])
+                     for i in _simplify_axis(knots, levels, at_click))
         # THE NINE NUMBERS for a reader that only knows the tilted plane: the
         # chord FIRST → LAST knot is the best single axis through a meander,
         # and the two end levels are the ones the plane must hit.

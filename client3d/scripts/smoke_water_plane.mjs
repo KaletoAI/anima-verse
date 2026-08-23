@@ -280,6 +280,41 @@
  * crossing drift.
  *
  * ===========================================================================
+ * [4e] THE CLIFF — knots where the GROUND bends, not where the author clicked
+ * ===========================================================================
+ * THE REPORTED BUG (2026-08-24) and the server's answer to it, W5b: a river
+ * drawn with TWO clicks over a 3 m plateau edge used to get exactly two knots,
+ * one per click, so its mirror was ONE straight ramp between them. It ramped
+ * down long BEFORE the edge (the water sank into a slot with its own banks
+ * towering over it — "the water is almost gone") and was still too high long
+ * AFTER it (a slab standing in the air over the low ground — "a mound of
+ * water").
+ *
+ * THE SERVER NOW SAMPLES THE DRAWN LINE every 2 m before it measures the
+ * levels, and simplifies the result back to the knots the level actually bends
+ * at (`scripts/smoke_height_bake.py` [8l] derives the whole chain by hand). For
+ * the fixture there — plateau 3.0 up to x = 41, 0.0 past it, river (0,0) to
+ * (100,0) — the payload that reaches this side is
+ *
+ *     axis = [[0,0,0,3], [40,0,40,3], [42,0,42,0], [100,0,100,0]]
+ *
+ * and every number below follows from the rule this file already checks
+ * ("nearest point on the polyline, then linear between the two knots"):
+ *
+ *     x = 21, 31, 40   ->  3.0    the plateau's own level, flat to the lip
+ *     x = 41           ->  1.5    halfway between the two knots that straddle
+ *                                 the edge: 3 + (0 − 3)·(41 − 40)/2
+ *     x = 42, 51, 100  ->  0.0    the low ground's own level
+ *
+ * THE RED COUNTER-PROBE is the two-knot axis, i.e. exactly what the clicks
+ * alone gave: `level = 3 − 0.03·x`, so
+ *
+ *     x = 31 -> 2.07   0.93 m UNDER the 3 m plateau it crosses
+ *     x = 51 -> 1.47   1.47 m OVER a ground of 0
+ *
+ * Both are the symptom, in metres, on the client's own reader.
+ *
+ * ===========================================================================
  * [5] THE SLOPED MESH — one y per vertex, and a lake still comes out flat
  * ===========================================================================
  * `liftToWaterProfile` writes `waterLevelAt(profile, x, z)` into the `y` of
@@ -604,6 +639,17 @@ const HAIRPIN_META = { water_depth_effective: 1.2,
     dir_z: -40.0 / Math.sqrt(4201), s_min: 0.0, s_max: Math.sqrt(4201),
     axis: [[150.0, 300.0, 0.0, 10.0], [249.0, 280.0, 101.0, 8.0],
       [201.0, 260.0, 153.0, 6.0]] } };
+/** The CLIFF of docstring [4e] — the same payload `scripts/smoke_height_bake.py`
+ *  [8l] derives on the server: TWO clicks over a 3 m step, and FOUR knots,
+ *  because since W5b the line is sampled every 2 m and simplified back to where
+ *  the level actually bends. Depth 1.0, the seeded river's bed. */
+const CLIFF_META = { water_depth_effective: 1.0,
+  stroke: { points: [[0, 0], [100, 0]], width_m: 6 },
+  water_profile: { level_up: 3.0, level_down: 0.0, flow_dir_deg: 90.0,
+    axis_x: 0.0, axis_z: 0.0, dir_x: 1.0, dir_z: 0.0,
+    s_min: 0.0, s_max: 100.0,
+    axis: [[0.0, 0.0, 0.0, 3.0], [40.0, 0.0, 40.0, 3.0],
+      [42.0, 0.0, 42.0, 0.0], [100.0, 0.0, 100.0, 0.0]] } };
 
 // ── [1] the profile comes from the payload ─────────────────────────────────
 console.log('[1] the mirror is a PROFILE, and only the payload names it');
@@ -953,6 +999,45 @@ check('every tangent is a unit vector',
   Math.max(...[[199.5, 290], [225, 270], [249, 280], [150, 400]]
     .map(([x, z]) => Math.abs(Math.hypot(...waterFlowAt(U, x, z)) - 1))),
   0, 1e-12);
+
+// ── [4e] the cliff: the axis has knots where the GROUND bends (W5b) ────────
+console.log('\n[4e] the CLIFF — the mirror follows the step, not the chord');
+const CLIFF = waterProfileOf(CLIFF_META);
+const cLevel = (x, z = 0) => waterLevelAt(CLIFF, x, z);
+checkIs('upstream, 10 m before the lip, the mirror is the plateau\'s 3.0',
+  cLevel(31), 3.0);
+checkIs('…and 20 m before it as well — no ramp starts early', cLevel(21), 3.0);
+checkIs('at the last knot before the lip it is still 3.0', cLevel(40), 3.0);
+check('at the lip itself, halfway between the two knots', cLevel(41), 1.5,
+  1e-12);
+checkIs('two metres past it the mirror is the low ground\'s 0.0', cLevel(42),
+  0.0);
+checkIs('…and 10 m past the lip, still 0.0', cLevel(51), 0.0);
+checkIs('…and at the mouth', cLevel(100), 0.0);
+// THE RED COUNTER-PROBE: the two-knot axis the clicked-points-only rule shipped
+// for the very same two clicks — `level = 3 − 0.03·x` all the way down.
+const RAMP = { ...CLIFF, axis: [[0, 0, 0, 3], [100, 0, 100, 0]] };
+check('RED: the two-knot ramp reads 2.07 ten metres BEFORE the lip',
+  waterLevelAt(RAMP, 31, 0), 2.07, 1e-12);
+check('…i.e. 0.93 m below the 3 m plateau it is crossing — the water sinks '
+  + 'into a slot long before the edge',
+  3 - waterLevelAt(RAMP, 31, 0), 0.93, 1e-12);
+check('RED: …and 1.47 ten metres AFTER it', waterLevelAt(RAMP, 51, 0), 1.47,
+  1e-12);
+check('…i.e. 1.47 m of water standing on ground that is at 0 — the mound',
+  waterLevelAt(RAMP, 51, 0) - 0, 1.47, 1e-12);
+// The shore reads the DEPTH under the pixel, so the same two probes decide how
+// opaque the surface is (docstring [2], `waterOpaqueDepthM` = ¾ of the bed
+// depth). Upstream the bed is 1.0 m under a mirror at 3.0, i.e. the full depth.
+check('the opaque depth of this river is ¾ of its 1.0 m bed',
+  waterOpaqueDepthM(CLIFF_META.water_depth_effective), 0.75, 1e-12);
+check('upstream the water is its full 1.0 m deep, i.e. fully opaque',
+  waterShoreAlpha(3.0 - 2.0,
+    waterOpaqueDepthM(CLIFF_META.water_depth_effective)), 1, 1e-12);
+console.log('\n[4e-flow] and the ripple still runs straight down the line');
+checkVec('the tangent is the one leg\'s, on both sides of the lip',
+  waterFlowAt(CLIFF, 31, 0), [1, 0]);
+checkVec('…and past it', waterFlowAt(CLIFF, 51, 0), [1, 0]);
 
 // ── [5] the sloped mesh ────────────────────────────────────────────────────
 console.log('\n[5] the mirror mesh is a RULED surface — one y per vertex');

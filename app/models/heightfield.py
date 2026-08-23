@@ -338,7 +338,9 @@ def water_basis() -> List[Dict[str, Any]]:
     Every painted area of a water kind with everything that shapes its carve —
     the mirror (absent while it is still "auto"), the two optional END levels,
     the flow bearing of a river AND (W4a) the drawn line it may follow instead
-    (``flow_along`` plus the centre line itself), and the depth and shore ramp
+    (``flow_along`` plus the centre line AND its ribbon WIDTH — the width is the
+    reach of the cross section every knot level is the median of, W5b, so it
+    shapes the bed as directly as the line does), and the depth and shore ramp
     AS RESOLVED against the kind's defaults. They belong in the signature for the same
     reason the height areas do: moving a lake's level moves the ground under it,
     and a client holding the old grid would draw a bed the server does not have.
@@ -364,6 +366,7 @@ def water_basis() -> List[Dict[str, Any]]:
                     "level": meta.level, "up": meta.level_up,
                     "down": meta.level_down, "flow": meta.flow_dir_deg,
                     "along": meta.flow_along, "line": meta.stroke_points,
+                    "width": meta.stroke_width_m,
                     "depth": meta.depth_m, "ramp": meta.shore_ramp_m})
     return out
 

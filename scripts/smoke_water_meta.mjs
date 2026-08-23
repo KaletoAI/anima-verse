@@ -411,10 +411,14 @@ check('RED: the old ±10 m window would have refused 40 m on a 2 m lake',
   Math.min(Math.max(40, 2 - 10), 2 + 10), 12);
 // …and the three metre fields say so themselves: no track, same clamps.
 const toolsSrc = await readFile(TOOLS_SRC, 'utf8');
-// Four fields, not three: the level, the depth, the shore ramp — and the flow
-// speed of [16], which is typed for the same reason.
+// SIX, and the count is over the whole panel file rather than over the water
+// section alone: the water level, the depth, the shore ramp and the flow speed
+// of [16] — plus the two MICRO-RELIEF fields (amplitude, wavelength) that moved
+// onto the area in the same file (commit a9a0365e) and are typed for exactly
+// the same reason. Every one of them is a metre-or-per-second number an author
+// types; a track that ends at the panel's width is what they must not have.
 check('every metre/second field of the water panel carries no slider',
-  (toolsSrc.match(/^\s+slider=\{false\}$/gm) || []).length, 4);
+  (toolsSrc.match(/^\s+slider=\{false\}$/gm) || []).length, 6);
 check('RED: and the window constant is gone with the track',
   /WATER_LEVEL_SPAN_M\s*=/.test(toolsSrc), false);
 

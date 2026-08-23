@@ -116,6 +116,17 @@ const NEW_SCATTER_ENTRY: TerrainScatterEntry = {
   density_per_100m2: 1,
 }
 
+/** How many knot levels the water panel spells out before it collapses the run
+ *  (W5b). Twelve fits a chip row at the panel's width; a river drawn over even
+ *  ground ships the knots it was drawn with and stays well under it, while one
+ *  over broken ground can carry up to `heightfield.WATER_AXIS_MAX_KNOTS` and
+ *  would otherwise print a paragraph of decimals into a label. */
+const LEVEL_CHIPS_MAX = 12
+
+/** How many of them the collapsed form shows at EACH end — the source level and
+ *  the mouth are what an author reads a river's profile against. */
+const LEVEL_CHIPS_HEAD = 3
+
 /** The target height a scatter row inherits when it authors none: the prop's
  *  own library height, and the 3D client's flat fallback where there is no
  *  prop (the built-in tuft, a hand-written URL). Mirrors
@@ -1190,12 +1201,24 @@ function WaterFields({ water, profile, hasLine, kindType, typeList, onWater }: {
           that it never climbs back (the bake's running minimum). This does,
           and it is READ-ONLY — every one of these numbers is derived from the
           ground the line crosses, and the only knots an author may set are the
-          two ends, through the level fields above. */}
+          two ends, through the level fields above.
+          SINCE W5b THE COUNT IS THE GROUND'S, not the author's: the bake
+          samples the drawn line every 2 m and keeps a knot wherever the mirror
+          bends, so a river over broken ground can carry dozens. A chip row is
+          not a table — past LEVEL_CHIPS_MAX the ends are shown with the count
+          of what lies between them, and the shape is read on the map. */}
       {profile && profile.axis.length >= 2 ? (
         <div className="ga-map-chip-row ga-map-chip-label">
-          {t('Levels along the line: {levels} m')
-            .replace('{levels}', profile.axis
-              .map((knot) => knot[3].toFixed(1)).join(' → '))}
+          {profile.axis.length <= LEVEL_CHIPS_MAX
+            ? t('Levels along the line: {levels} m')
+              .replace('{levels}', profile.axis
+                .map((knot) => knot[3].toFixed(1)).join(' → '))
+            : t('Levels along the line: {head} → … → {tail} m ({n} knots)')
+              .replace('{head}', profile.axis.slice(0, LEVEL_CHIPS_HEAD)
+                .map((knot) => knot[3].toFixed(1)).join(' → '))
+              .replace('{tail}', profile.axis.slice(-LEVEL_CHIPS_HEAD)
+                .map((knot) => knot[3].toFixed(1)).join(' → '))
+              .replace('{n}', String(profile.axis.length))}
         </div>
       ) : null}
       {/* THE BED — what the layer bake paints UNDER this water. Since W1 a

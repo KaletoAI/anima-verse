@@ -4943,6 +4943,26 @@ level  = linear zwischen den beiden Knoten, zwischen denen s liegt,
   alle Knoten gleich (gezeichnet, aber stehend), `water_level_up`/`_down`
   ersetzen den ersten/letzten Knoten und die inneren werden **affin** in die
   neue Spanne eingepasst — ihre Form bleibt, ihre Enden werden die autorierten.
+* **Die Knoten sind NICHT die Klicks** (W5b, 2026-08-24). Vor den
+  Querschnitts-Medianen wird die gezeichnete Linie **nach Bogenlänge abgetastet**
+  — `heightfield.WATER_AXIS_STEP_M` = 2 m, je Teilstrecke gleichmäßig in
+  `ceil(Länge/Schritt)` Teile, die geklickten Punkte bleiben Knoten. Danach
+  laufen die Regeln oben unverändert (Median je Knoten, laufendes Minimum,
+  autorierte Enden). Zum Schluss wird die Knotenliste wieder **vereinfacht**:
+  Douglas-Peucker auf `(s, level)`, Toleranz `WATER_AXIS_SIMPLIFY_M` = 0,05 m,
+  je Teilstrecke mit den Klicks als festen Ankern, Abweichung **senkrecht in
+  der Höhe** gemessen (genau der Fehler, den ein Leser von `water_level_at`
+  sieht). Eingefügte Knoten liegen auf der geraden Teilstrecke zwischen zwei
+  Klicks, ihr Wegfall kann die Achse also nicht um einen Millimeter versetzen;
+  Klick-Knoten sind Biegungen und fallen nie weg. Ein Fluss über gleichmäßigem
+  Gefälle liefert damit exakt die gezeichneten Punkte, ein Fluss über eine
+  3-m-Kante zwei Knoten dies- und jenseits der Kante. Obergrenze
+  `WATER_AXIS_MAX_KNOTS` = 256 eingefügte Knoten (darüber wächst der Schritt).
+  **Grund:** mit Knoten nur an den Klicks war der Spiegel zwischen zwei Klicks
+  EINE Rampe — er sank lange vor der Kante unter den Boden (Carve schnitt eine
+  Schlucht) und stand lange danach in der Luft, und `waterfallsFrom` konnte die
+  Kante nicht sehen, weil kein Knoten in ihrer Nähe lag. `HEIGHT_BAKE_VERSION`
+  ist deshalb auf 3.
 * **Die beiden Enden von POLYGON-Wasser**, wo der Autor sie offen lässt: der
   **Rand-Median des jeweiligen DRITTELS** der Achsen-Spanne — `level_up` über die
   Randproben mit `s ≤ s_min + Spanne/3`, `level_down` über die mit
@@ -5090,7 +5110,8 @@ nicht.
 | Skript | was es herleitet |
 |---|---|
 | `scripts/smoke_height_bake.py` **[8]** | die Fließachse (Yaw-Konvention, Wrapping), die beiden Drittel-Rand-Mediane von Hand (7,4 / 2,6 aus 31 Randproben je Ende), `level_at(x) = 0,08·x + 1,0`, der Carve gegen das lokale Niveau, Art-Vorgabe gegen Flächen-Überschreibung, die ungeflaggte Art (kein Carve), Invariante 2 punktweise über 2916 Proben (schlechtester Abstand exakt die Tiefe 1,0 m), die **roten** Gegenproben gegen den konstanten Spiegel, das Einfrieren beider Enden beim Save und die neun Payload-Zahlen |
-| `scripts/smoke_height_bake.py` **[8k]** | **W4a:** die Fließachse als POLYLINIE — die drei Knoten-Niveaus 10/8/6 einer Haarnadel als Querschnitts-Mediane von Hand, das Niveau am mittleren Knoten (8,0) gegen die **rote** Gegenprobe der geraden W1-Sehne (6,0: die Biegung projiziert hinter das eigene Unterlauf-Ende), Bogenlängen 101/153 und die Mitten-Niveaus 9,0/7,0, der Carve gegen das lokale Niveau, das laufende Minimum (10/11/6 → 10/10/6, rückwärts gezeichnet 6/6/6), autorierte Enden 12/4 über 10/8/6 → 12/8/4, `water_level` = alle Knoten gleich, `flow_along` schlägt `flow_dir_deg`, der Sanitizer der zwei Wörter und das EINE Prädikat `is_flowing` samt Settle-Pfad |
+| `scripts/smoke_height_bake.py` **[8k]** | **W4a:** die Fließachse als POLYLINIE — die drei Knoten-Niveaus 10/8/6 einer Haarnadel als Querschnitts-Mediane von Hand, das Niveau am mittleren Knoten (8,0) gegen die **rote** Gegenprobe der geraden W1-Sehne (6,0: die Biegung projiziert hinter das eigene Unterlauf-Ende), Bogenlängen 101/153 und die Mitten-Niveaus 9,0/7,0, der Carve gegen das lokale Niveau, das laufende Minimum (10/11/6 → 10/10/6, seit W5b mit dem Eckknoten dort, wo die Linie wieder auf 10 fällt: 10/10/**10**/6 bei (239,4 | 300), rückwärts gezeichnet 6/6/6), autorierte Enden 12/4 über 10/8/6 → 12/8/4, `water_level` = alle Knoten gleich, `flow_along` schlägt `flow_dir_deg`, der Sanitizer der zwei Wörter und das EINE Prädikat `is_flowing` samt Settle-Pfad |
+| `scripts/smoke_height_bake.py` **[8l]** | **W5b:** die Verdichtung der Achse — eine harte 3-m-Kante bei x = 41 (Höhenfläche mit `falloff_m` 0), ein mit ZWEI Klicks gezeichneter Fluss (0,0)→(100,0), Abtastung alle 2 m ⇒ Achse `[0,3] [40,3] [42,0] [100,0]`, der ganze Abfall in EINEM 2-m-Segment (Gefälle 1,5 ⇒ genau ein Wasserfall), Spiegel 10 m vor der Kante = 3,0 und 10 m danach = 0,0, Bett-Tiefe oberhalb exakt `water_depth_m`; **rote** Gegenproben der Zwei-Knoten-Rampe: 2,07 statt 3,0 (0,93 m unter den eigenen Ufern — „Wasser fast weg", Carve gräbt bis 1,07) und 1,47 statt 0,0 (1,47 m über dem Boden — „Wasserhügel"), Gefälle 0,03 ⇒ kein Fall. Zwillinge: `client3d/scripts/smoke_water_plane.mjs` **[4e]**, `client3d/scripts/smoke_waterfall.mjs` **[9]** |
 | `scripts/smoke_height_bake.py` **[9]** | die Löschung der fünften Stufe **namentlich**: 17 Symbole, die Bake-Signaturen, der `waters`-freie Index, die drei Raum-Wasserfelder und die gestrippte Wasser-Boden-Art |
 | `scripts/smoke_terrain_layers.py` **[13]** | Bett-Art als Layer (Oberfläche + eigene Übergangsbreite, zwei Betten = zwei Layer), die rote Probe „nichts malt die Wasser-Textur aufs Gelände", das EINE Prädikat Zeile für Zeile, und das **Kantengesetz**: dieselben zwei Rechtecke in zwei Malreihenfolgen geben die zwei Breiten |
 | `scripts/smoke_scene_recipe.py` **[4w]** | `map_water` von Hand (100 % / 75 % → Verweis; 50 % / 25 % / 0 % → keiner), Letzter-gewinnt, und dass der Eintrag sonst nichts über Wasser sagt |

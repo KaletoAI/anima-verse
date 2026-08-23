@@ -7,7 +7,10 @@
  * and answers which of its segments drops faster than water runs. This file
  * only turns each answer into two meshes — no author places a fall, no payload
  * field carries one, and an area whose axis has no steep segment builds
- * nothing at all.
+ * nothing at all. Since W5b that axis carries knots wherever the mirror BENDS
+ * (the bake samples the drawn line every 2 m and simplifies back), which is why
+ * a cliff an author simply drew straight across now has a segment to be found
+ * on at all.
  *
  * WHY A CURTAIN AND NOT PARTICLES (W5 decision). A fall is a SHEET of water
  * seen from tens of metres away, and a sheet is what the ruled mirror already

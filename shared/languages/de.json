@@ -2062,6 +2062,7 @@
     "Empty = the flow speed of this water’s surface kind ({n} m/s unless that kind was dialled elsewhere), so one setting speeds up every river of a world and this field is for the single torrent that differs. 0 stops the current without turning the water into a lake.": "Leer = die Fließgeschwindigkeit der Oberflächen-Art dieses Wassers ({n} m/s, sofern diese Art nicht anderswo verstellt wurde) — eine Einstellung beschleunigt also jeden Fluss einer Welt, und dieses Feld ist für den einen Wildbach, der davon abweicht. 0 hält die Strömung an, ohne das Wasser in einen See zu verwandeln.",
     "The bake carves this water from {up} m upstream down to {down} m downstream.": "Der Bake höhlt dieses Wasser von {up} m im Oberlauf bis {down} m im Unterlauf aus.",
     "Levels along the line: {levels} m": "Niveaus entlang der Linie: {levels} m",
+    "Levels along the line: {head} → … → {tail} m ({n} knots)": "Niveaus entlang der Linie: {head} → … → {tail} m ({n} Knoten)",
     "Area: {area}": "Fläche: {area}",
     "Bed kind": "Bett-Art",
     "— bare world —": "— blanke Welt —",
