@@ -169,13 +169,22 @@ def main() -> int:
           st.sanitize_material({"class": "lava"}), None)
     water = st.sanitize_material({"class": "water"})
     check("water carries every dial", sorted(water or {}),
-          ["class", "map_strength", "roughness", "sky_mix", "speed", "wave_m"])
+          ["class", "flow_speed", "map_strength", "roughness", "sky_mix",
+           "speed", "wave_m"])
+    # Two speeds, because one cannot serve both: a lake counter-scrolls its two
+    # ripple layers (they cancel, the motion reads slow), a river sends both
+    # downstream (the same number reads several times faster). `speed` is the
+    # still-water metres per second, `flow_speed` the flowing one.
+    check("still water keeps its 0.25 m/s", (water or {}).get("speed"), 0.25)
+    check("...and flowing water is far slower", (water or {}).get("flow_speed"),
+          0.08)
     clamped = st.sanitize_material({"class": "water", "wave_m": 999,
-                                    "speed": -5, "sky_mix": 2,
+                                    "speed": -5, "flow_speed": 99, "sky_mix": 2,
                                     "roughness": -1, "map_strength": 7,
                                     "tint": "nonsense"})
     check("wave_m clamped to the max", (clamped or {}).get("wave_m"), 20.0)
     check("speed clamped to the min", (clamped or {}).get("speed"), 0.0)
+    check("flow_speed clamped to the max", (clamped or {}).get("flow_speed"), 2.0)
     check("an invalid tint is dropped", "tint" in (clamped or {}), False)
     check("a valid tint is lowercased",
           (st.sanitize_material({"class": "water", "tint": "#1A2B3C"}) or {}).get("tint"),
@@ -186,6 +195,7 @@ def main() -> int:
     # under a name, and a spec must never claim one its class ignores.
     ice = st.sanitize_material({"class": "ice"}) or {}
     check("ice stands still by default", ice.get("speed"), 0.0)
+    check("...on a current too — ice does not flow", ice.get("flow_speed"), 0.0)
     check("...with a longer swell than water", ice.get("wave_m"), 4.0)
     gloss = st.sanitize_material({"class": "gloss", "wave_m": 9,
                                   "roughness": 0.4, "metalness": 0.9}) or {}

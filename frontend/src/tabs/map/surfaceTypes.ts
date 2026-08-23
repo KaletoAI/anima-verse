@@ -47,9 +47,9 @@ export interface TexGroup {
  *  default: it is optional there, so the UI supplies a sensible one per class
  *  when you switch. */
 export const CLASS_DEFAULTS: Record<string, Record<string, number | string>> = {
-  water: { tint: '#3f7fb8', map_strength: 0.75, wave_m: 1.6, speed: 0.25,
+  water: { tint: '#3f7fb8', map_strength: 0.75, wave_m: 1.6, speed: 0.25, flow_speed: 0.08,
            sky_mix: 0.55, roughness: 0.08 },
-  ice: { tint: '#cfe6f2', map_strength: 0.6, wave_m: 4, speed: 0,
+  ice: { tint: '#cfe6f2', map_strength: 0.6, wave_m: 4, speed: 0, flow_speed: 0,
          sky_mix: 0.7, roughness: 0.05 },
   gloss: { tint: '#ffffff', map_strength: 1, roughness: 0.25, metalness: 0.05 },
   glow: { tint: '#ffd08a', map_strength: 1, glow: 1 },
@@ -62,7 +62,8 @@ export type MaterialDial = [string, string, number, number, number]
 export const CLASS_DIALS: Record<string, MaterialDial[]> = {
   water: [
     ['wave_m', 'Ripple length (m)', 0.2, 20, 0.1],
-    ['speed', 'Flow (m/s)', 0, 2, 0.01],
+    ['speed', 'Ripple drift, still water (m/s)', 0, 2, 0.01],
+    ['flow_speed', 'Current, flowing water (m/s)', 0, 2, 0.01],
     ['sky_mix', 'Sky reflection', 0, 1, 0.05],
     ['roughness', 'Roughness', 0, 1, 0.01],
     ['map_strength', 'Texture vs. tint', 0, 1, 0.05],
@@ -73,6 +74,7 @@ export const CLASS_DIALS: Record<string, MaterialDial[]> = {
     ['roughness', 'Roughness', 0, 1, 0.01],
     ['map_strength', 'Texture vs. tint', 0, 1, 0.05],
     ['speed', 'Drift (m/s)', 0, 2, 0.01],
+    ['flow_speed', 'Drift on a current (m/s)', 0, 2, 0.01],
   ],
   gloss: [
     ['roughness', 'Roughness', 0, 1, 0.01],

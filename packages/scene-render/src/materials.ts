@@ -31,7 +31,15 @@ export interface SurfaceMaterialSpec {
   tint?: string
   map_strength?: number
   wave_m?: number
+  /** Metres per second of STILL water — a lake, an ice sheet, any surface
+   *  whose `aWaterFlow` attribute reads (0, 0). */
   speed?: number
+  /** Metres per second of FLOWING water — used only where the flow attribute
+   *  is non-zero (a river). One number could not serve both: a lake
+   *  counter-scrolls its two ripple layers, so the net motion reads slow,
+   *  while a river sends both downstream and the very same number reads
+   *  fast (user finding 2026-08-23). */
+  flow_speed?: number
   sky_mix?: number
   roughness?: number
   metalness?: number
@@ -216,17 +224,19 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
                           mask: Texture): void {
   const uWave = { value: Math.max(spec.wave_m ?? 1.6, 0.05) }
   const uSpeed = { value: spec.speed ?? 0.05 }
+  const uFlowSpeed = { value: spec.flow_speed ?? 0.08 }
   const uSkyMix = { value: spec.sky_mix ?? 0.55 }
   const uTint = { value: hex3(spec.tint) }
   const uMapStrength = { value: spec.map_strength ?? 0.75 }
   const uMask = { value: mask }
 
-  // Kein Typ am Parameter: three leitet ihn aus `onBeforeCompile` her.
+  // No type on the parameter: three infers it from `onBeforeCompile`.
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = surfaceTimeUniform
     shader.uniforms.uSky = uSky
     shader.uniforms.uWaveM = uWave
     shader.uniforms.uSpeed = uSpeed
+    shader.uniforms.uFlowSpeed = uFlowSpeed
     shader.uniforms.uSkyMix = uSkyMix
     shader.uniforms.uTint = uTint
     shader.uniforms.uMapStrength = uMapStrength
@@ -265,7 +275,8 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
     shader.fragmentShader = 'varying vec2 vWaterWorld;\nvarying vec2 vWaterUv;\n'
       + 'varying vec2 vWaterFlow;\n'
       + 'uniform float uTime;\nuniform vec3 uSky;\nuniform float uWaveM;\n'
-      + 'uniform float uSpeed;\nuniform float uSkyMix;\nuniform vec3 uTint;\n'
+      + 'uniform float uSpeed;\nuniform float uFlowSpeed;\n'
+      + 'uniform float uSkyMix;\nuniform vec3 uTint;\n'
       + 'uniform float uMapStrength;\nuniform sampler2D uMask;\n'
       + shader.fragmentShader
 
@@ -299,24 +310,13 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
     // very lesson scene-render layerCut.ts spells out.
     float wPx = max( length( dFdx( vWaterWorld ) ), length( dFdy( vWaterWorld ) ) );
     float wDetail = clamp( 1.0 - wPx / uWaveM, 0.0, 1.0 );
-    // The offset is divided by the wavelength of the RESPECTIVE layer —
-    // which makes uSpeed real METRES PER SECOND, and both layers drift at the
-    // same speed although their wavelengths differ. Without the division
-    // uSpeed was "wavelengths per second": 0.05 meant one crest every 20
-    // seconds, 1.7 cm/s on the map — present, but invisible.
-    float wDriftA = uTime * uSpeed / uWaveM;
-    float wDriftB = uTime * uSpeed / ( uWaveM * 0.63 );
     // THE DIRECTION THE TWO LAYERS SCROLL IN (W2 no. 2). The frame is the
     // FLOW's: wAx points downstream, wAy across it. With no flow (vWaterFlow
     // == (0, 0), i.e. a lake, an ice sheet, or any surface that carries no
-    // attribute at all) the frame is the world's own axes and the two vectors
-    // below are literally the constants that stood here before — (1, 0.6) and
-    // −(0.8, 1.3), counter-scrolling, which is what a still surface looks like.
+    // attribute at all) the frame is the world's own axes and every ternary
+    // below takes its still branch — which reproduces, constant for constant,
+    // the shader that stood here before.
     //
-    // WITH a flow BOTH layers travel downstream and only their CROSS component
-    // opposes: a river whose second layer ran upstream would read as two
-    // rivers. The lengths are untouched (1.0/0.6 and 0.8/1.3), so uSpeed still
-    // means the same metres per second it meant for a lake.
     // The division is by a FLOORED length, never by the raw one: a still
     // surface hands over (0, 0), and a normalize() of that is a NaN that the
     // ternary would not reliably keep out of the result.
@@ -324,12 +324,87 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
     bool wStill = wLen < 1e-4;
     vec2 wAx = wStill ? vec2( 1.0, 0.0 ) : vWaterFlow / max( wLen, 1e-4 );
     vec2 wAy = vec2( -wAx.y, wAx.x );
-    vec2 wDirA = wAx + wAy * 0.6;
-    vec2 wDirB = wStill ? -( wAx * 0.8 + wAy * 1.3 ) : wAx * 0.8 - wAy * 1.3;
-    vec2 wUvA = vWaterWorld / uWaveM + wDirA * wDriftA;
-    vec2 wUvB = vWaterWorld / ( uWaveM * 0.63 ) + wDirB * wDriftB;
+    // TWO SPEEDS, NOT ONE (user finding 2026-08-23: "the water flows too fast
+    // and the direction is not clearly recognisable"). A lake counter-scrolls
+    // its two layers, so they cancel and the net motion reads slow; a river
+    // sends BOTH downstream, so the identical number reads several times
+    // faster. One dial cannot serve both, and lowering it would freeze the
+    // lakes. uSpeed stays the still-water number, uFlowSpeed is the river's.
+    float wSpeed = wStill ? uSpeed : uFlowSpeed;
+    // The offset is divided by the wavelength of the RESPECTIVE layer —
+    // which makes the speed real METRES PER SECOND, and both layers drift at
+    // the same rate although their wavelengths differ. Without the division it
+    // would be "wavelengths per second": 0.05 meant one crest every 20
+    // seconds, 1.7 cm/s on the map — present, but invisible.
+    //
+    // AND THE SIGN. Adding v·t to a SAMPLE coordinate slides the picture the
+    // OTHER way — uv + vec2( t, 0 ) is the classic leftward scroll. So the
+    // offset that has stood here since the lake was written carries the crests
+    // AGAINST wDirA, i.e. upstream on a river, which is the second half of
+    // "the flow direction is not clearly recognisable": the ripple ran the
+    // wrong way. Flowing water therefore drifts by −1, and the crests travel
+    // along wDirA the way the vector says.
+    //
+    // Still water keeps the +1 it always had, deliberately: a lake has no
+    // reference direction — its two sheets counter-scroll either way, and the
+    // requirement is that it looks EXACTLY as it did, not that it agrees with
+    // a river about a sign nobody can see on it.
+    float wFlowSign = wStill ? 1.0 : -1.0;
+    float wDriftA = uTime * wSpeed * wFlowSign / uWaveM;
+    float wDriftB = uTime * wSpeed * wFlowSign / ( uWaveM * 0.63 );
+    // THE CROSS COMPONENTS. Still water wants the two sheets to run across
+    // each other — (1, 0.6) and −(0.8, 1.3) counter-scrolling is what a lake
+    // looks like. A river must not: those cross components are 31° and 58° off
+    // the flow, and 58° is not a stream, it is the diagonal shimmer the finding
+    // names. Flowing water therefore keeps the ALONG components (1.0 and 0.8)
+    // and shrinks the cross ones to 0.15 and 0.3 — 8.5° and 20.6° off the flow,
+    // both plainly downstream, yet still of OPPOSITE SIGN and of different
+    // magnitude, so the two sheets go on beating against each other instead of
+    // sliding as one rigid photograph.
+    //
+    // Layer A's along component is exactly 1.0, so on flowing water uFlowSpeed
+    // IS the downstream metres per second of the leading layer; B follows at
+    // 0.8 of it. (On still water the old lengths √1.36 / √2.33 are untouched.)
+    float wCrossA = wStill ? 0.6 : 0.15;
+    float wCrossB = wStill ? 1.3 : 0.3;
+    vec2 wDirA = wAx + wAy * wCrossA;
+    vec2 wDirB = wStill ? -( wAx * 0.8 + wAy * wCrossB ) : wAx * 0.8 - wAy * wCrossB;
+    vec2 wRawA = vWaterWorld / uWaveM + wDirA * wDriftA;
+    vec2 wRawB = vWaterWorld / ( uWaveM * 0.63 ) + wDirB * wDriftB;
+    // ANISOTROPY: a current does not ripple in circles, it draws STREAKS. The
+    // wave normal map is isotropic, so the stretch happens in the lookup —
+    // squeeze the ALONG-flow coordinate by 3, leave the cross one alone, and
+    // every crest comes out three times as long as it is wide, pulled down the
+    // stream. 3 is the smallest ratio that reads as a direction at a glance;
+    // more and the map's own frequencies smear into bands.
+    //
+    // The squeeze is applied to the WHOLE sample coordinate, drift included,
+    // and that is what keeps the metres per second honest: the map is linear,
+    // so squeezing (world/λ + dir·drift) is the same field, stretched, sampled
+    // at the same argument — the crests still travel at wSpeed · |dir| m/s.
+    // Still water squeezes by 1 in the world's own frame, i.e. not at all.
+    float wAniso = 3.0;
+    vec2 wUvA = wStill ? wRawA
+      : wAx * ( dot( wRawA, wAx ) / wAniso ) + wAy * dot( wRawA, wAy );
+    vec2 wUvB = wStill ? wRawB
+      : wAx * ( dot( wRawB, wAx ) / wAniso ) + wAy * dot( wRawB, wAy );
+    // A THIRD, FAINT LAYER: the same map read as a long ribbon — 2 λ across
+    // the flow, 8 × that along it — sliding downstream at the same speed. Its
+    // crests are lines PARALLEL to the current, so the direction reads even in
+    // flat light, where no highlight moves and the two ripple sheets say
+    // nothing. Weight 0.35 against the two full-strength layers: visible as
+    // texture, never as a second wave. Exactly 0 on still water, so the sum
+    // below is bit for bit the lake it always was (the tap itself stays
+    // unconditional — a texture fetch under non-uniform control flow has no
+    // defined derivatives).
+    float wStreak = wStill ? 0.0 : 0.35;
+    vec2 wRawC = ( vWaterWorld + wAx * ( uTime * wSpeed * wFlowSign ) )
+                 / ( uWaveM * 2.0 );
+    vec2 wUvC = wAx * ( dot( wRawC, wAx ) / 8.0 ) + wAy * dot( wRawC, wAy );
     vec3 wN = normalize( ( texture2D( normalMap, wUvA ).xyz * 2.0 - 1.0 )
-                       + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 ) );
+                       + ( texture2D( normalMap, wUvB ).xyz * 2.0 - 1.0 )
+                       + ( texture2D( normalMap, wUvC ).xyz * 2.0 - 1.0 )
+                         * wStreak );
     wN = mix( vec3( 0.0, 0.0, 1.0 ), wN, wMask * wDetail );
     wN.xy *= normalScale;
     normal = normalize( tbn * wN );

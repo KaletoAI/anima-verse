@@ -733,6 +733,14 @@ _MATERIAL_RANGES: Dict[str, Any] = {
     "map_strength": (0.0, 1.0, 0.75),
     "wave_m": (0.2, 20.0, 1.6),
     "speed": (0.0, 2.0, 0.25),
+    # Two speeds, not one (user finding 2026-08-23: "the water flows too fast
+    # and the flow direction is not clearly recognisable"). A lake
+    # counter-scrolls its two ripple layers, so they cancel and the net motion
+    # reads slow; a river sends both downstream, where the very same number
+    # reads several times faster. `speed` stays the STILL-water metres per
+    # second, `flow_speed` is what a surface with a flow direction uses — the
+    # shader picks between them per pixel (scene-render materials.ts).
+    "flow_speed": (0.0, 2.0, 0.08),
     "sky_mix": (0.0, 1.0, 0.55),
     "roughness": (0.0, 1.0, 0.08),
     "metalness": (0.0, 1.0, 0.05),
@@ -741,15 +749,17 @@ _MATERIAL_RANGES: Dict[str, Any] = {
 # Which numbers a class actually carries — everything else is dropped, so a
 # spec never claims a dial its class ignores.
 _CLASS_FIELDS: Dict[str, tuple] = {
-    "water": ("map_strength", "wave_m", "speed", "sky_mix", "roughness"),
-    "ice": ("map_strength", "wave_m", "speed", "sky_mix", "roughness"),
+    "water": ("map_strength", "wave_m", "speed", "flow_speed", "sky_mix",
+              "roughness"),
+    "ice": ("map_strength", "wave_m", "speed", "flow_speed", "sky_mix",
+            "roughness"),
     "gloss": ("map_strength", "roughness", "metalness"),
     "glow": ("map_strength", "glow"),
 }
 # Where a class wants something other than the generic default. Ice is water
 # standing still: no flow, a longer swell, more sky and a fainter texture.
 _CLASS_DEFAULTS: Dict[str, Dict[str, float]] = {
-    "ice": {"speed": 0.0, "wave_m": 4.0, "sky_mix": 0.7,
+    "ice": {"speed": 0.0, "flow_speed": 0.0, "wave_m": 4.0, "sky_mix": 0.7,
             "roughness": 0.05, "map_strength": 0.6},
     "gloss": {"roughness": 0.25, "metalness": 0.05, "map_strength": 1.0},
     "glow": {"map_strength": 1.0, "glow": 1.0},

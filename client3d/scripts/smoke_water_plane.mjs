@@ -381,29 +381,82 @@
  *     B = −(wAx·0.8 + wAy·1.3)      = (−0.8, −1.3)
  *
  * WITH a flow BOTH layers go downstream and only their CROSS component
- * opposes — a river whose second layer ran upstream would read as two rivers:
+ * opposes — a river whose second layer ran upstream would read as two rivers.
+ * The cross factors are NOT the lake's, though (user finding 2026-08-23, "the
+ * flow direction is not clearly recognisable"): 0.6 and 1.3 against along
+ * components of 1.0 and 0.8 put the two sheets 31° and 58° off the flow, and a
+ * layer travelling 58° off the stream is the diagonal shimmer the finding
+ * names. Flowing water keeps the along components and shrinks the cross ones:
  *
- *     A = wAx + wAy·0.6 ,  B = wAx·0.8 − wAy·1.3
+ *     A = wAx + wAy·0.15 ,  B = wAx·0.8 − wAy·0.3
+ *
+ *     atan(0.15 / 1.0) =  8.5308…°      atan(0.3 / 0.8) = 20.5560…°
+ *
+ * — both plainly downstream, still of OPPOSITE SIGN and different magnitude,
+ * so the two sheets go on beating against one another.
  *
  * The fixture river flows 270°, i.e. `dir = (−1, 0)`, so `wAx = (−1, 0)` and
  * `wAy = (−0, −1) = (0, −1)`:
  *
- *     A = (−1, 0) + (0, −0.6)  = (−1.0, −0.6)   · flow = +1.0   downstream
- *     B = (−0.8, 0) − (0, −1.3) = (−0.8,  1.3)   · flow = +0.8   downstream
+ *     A = (−1, 0) + (0, −0.15)  = (−1.0, −0.15)  · flow = +1.0   downstream
+ *     B = (−0.8, 0) − (0, −0.3) = (−0.8,  0.30)  · flow = +0.8   downstream
  *
- * and their cross components are −0.6 against +1.3: opposite signs, so the two
- * sheets still cross each other, which is what makes the surface read as water
- * rather than as a moving photograph.
- *
- * THE SPEEDS ARE UNTOUCHED, and that is a rotation argument: `|A| = √1.36` and
- * `|B| = √2.33` whichever way the frame points, so `uSpeed` still means the
- * metres per second it meant for a lake. Two more bearings, by the same
- * arithmetic:
+ * THE STILL LENGTHS ARE UNTOUCHED, and that is a rotation argument: `|A| =
+ * √1.36` and `|B| = √2.33` whichever way a LAKE's frame points, so `uSpeed`
+ * still means the metres per second it always meant. A river's layers are
+ * shorter by construction — `|A| = √1.0225`, `|B| = √0.73` — and since A's
+ * along component is exactly 1.0, `uFlowSpeed` IS the downstream metres per
+ * second of the leading sheet, with B following at 0.8 of it. Two more
+ * bearings, by the same arithmetic:
  *
  *     0°  dir (0, 1):   wAx = ( 0, 1), wAy = (−1, 0)
- *                       A = (−0.6, 1.0)   B = ( 1.3, 0.8)   both +z
+ *                       A = (−0.15, 1.0)  B = ( 0.3, 0.8)   both +z
  *     90° dir (1, 0):   wAx = ( 1, 0), wAy = ( 0, 1)
- *                       A = ( 1.0, 0.6)   B = ( 0.8, −1.3)  both +x
+ *                       A = ( 1.0, 0.15)  B = ( 0.8, −0.3)  both +x
+ *
+ * ===========================================================================
+ * [9c] TWO SPEEDS, A STRETCHED RIPPLE, AND A STREAK (finding 2026-08-23)
+ * ===========================================================================
+ * ONE SPEED COULD NOT SERVE BOTH. A lake counter-scrolls its layers, so they
+ * cancel and 0.25 m/s reads slow; a river sends both downstream, where the
+ * same 0.25 reads several times faster. So `speed` stays the still number and
+ * `flow_speed` (default 0.08 m/s, `uFlowSpeed`) is the flowing one; the shader
+ * picks per pixel, `wSpeed = wStill ? uSpeed : uFlowSpeed`.
+ *
+ * ANISOTROPY. The wave normal map is isotropic — circles, not streaks. The
+ * stretch therefore happens in the LOOKUP: the sample coordinate is projected
+ * into the flow frame and its ALONG component divided by 3, so a crest comes
+ * out three times as long as it is wide. On the default `wave_m` 1.6 that is
+ * 1.6 m across the stream against 4.8 m along it.
+ *
+ * AND THE SIGN, which is the other half of "the direction is not clearly
+ * recognisable": adding `v·t` to a SAMPLE coordinate slides the picture the
+ * OTHER way — `uv + vec2(t, 0)` is the classic LEFTWARD scroll — so the offset
+ * that has stood here since the lake was written carried the crests AGAINST
+ * `wDirA`, i.e. UPSTREAM on a river. Flowing water drifts by `wFlowSign = −1`;
+ * still water keeps `+1`, because a lake has no reference direction (its two
+ * sheets counter-scroll either way) and the requirement is that it looks
+ * exactly as before, not that it agrees about a sign nobody can see on it.
+ *
+ * AND THE STRETCH IS FREE OF SPEED, because the squeeze `S` is LINEAR and is
+ * applied to the WHOLE coordinate, drift included:
+ *
+ *     uv(p, t) = S( p/λ + dir·(σ·t·s/λ) ) = S( (p + dir·σ·s·t) / λ )
+ *
+ * so a feature at `p` at time `t` sits at `p − dir·σ·s·dt` at `t + dt`,
+ * whatever S does — with `σ = −1` that is `p + dir·s·dt`, DOWNSTREAM, at
+ * `s·|dir|` metres per second. Checked numerically below with λ = 1.6,
+ * s = 0.08, t = 7, dt = 2.5, p = (12, −4): the two coordinates must come out
+ * EQUAL, not merely close.
+ *
+ * THE STREAK LAYER is the same map read as a ribbon: `(world + wAx·t·s)/(2λ)`,
+ * then squeezed by 8 along the flow. Its crests repeat every `2λ = 3.2 m`
+ * ACROSS the stream and every `2λ·8 = 25.6 m` ALONG it — lines parallel to the
+ * current, sliding downstream at the same `s`, so the direction reads even in
+ * flat light where no highlight moves. Weight 0.35 against the two
+ * full-strength sheets, and EXACTLY 0.0 when still, which is what keeps a lake
+ * bit for bit the lake it was: `x + (…)·0.0 == x` for every finite `x`, and a
+ * texture sample, being `2·[0,1] − 1`, is always finite.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1075,15 +1128,22 @@ check('…and typeAt reads the level AT THE POINT',
 console.log('\n[9] the ripple scroll direction follows the flow');
 /** The shader's frame arithmetic, written out INDEPENDENTLY (the GLSL is
  *  checked structurally below). `flow` is `vWaterFlow`; (0, 0) is still. */
-function rippleDirs([fx, fz]) {
+function waterFrame([fx, fz]) {
   const len = Math.hypot(fx, fz);
   const still = len < 1e-4;
   const ax = still ? [1, 0] : [fx / Math.max(len, 1e-4), fz / Math.max(len, 1e-4)];
-  const ay = [-ax[1], ax[0]];
-  const a = [ax[0] + ay[0] * 0.6, ax[1] + ay[1] * 0.6];
+  return { still, ax, ay: [-ax[1], ax[0]] };
+}
+function rippleDirs(flow) {
+  const { still, ax, ay } = waterFrame(flow);
+  // The cross factors shrink on a current (finding 2026-08-23) — the along
+  // ones do not. Still water keeps 0.6 / 1.3, constant for constant.
+  const cA = still ? 0.6 : 0.15;
+  const cB = still ? 1.3 : 0.3;
+  const a = [ax[0] + ay[0] * cA, ax[1] + ay[1] * cA];
   const b = still
-    ? [-(ax[0] * 0.8 + ay[0] * 1.3), -(ax[1] * 0.8 + ay[1] * 1.3)]
-    : [ax[0] * 0.8 - ay[0] * 1.3, ax[1] * 0.8 - ay[1] * 1.3];
+    ? [-(ax[0] * 0.8 + ay[0] * cB), -(ax[1] * 0.8 + ay[1] * cB)]
+    : [ax[0] * 0.8 - ay[0] * cB, ax[1] * 0.8 - ay[1] * cB];
   return [a, b];
 }
 const STILL = rippleDirs([0, 0]);
@@ -1091,29 +1151,105 @@ checkEq('still water: layer A is the constant that stood here before',
   STILL[0], [1, 0.6]);
 checkEq('…and layer B is its counter-scrolling one', STILL[1], [-0.8, -1.3]);
 const DOWN = rippleDirs(waterFlowAt(RIVER, 50, -30));   // the axis: (−1, 0)
-checkEq('the fixture river (270°, toward −x): layer A', DOWN[0], [-1, -0.6]);
-checkEq('…and layer B', DOWN[1], [-0.8, 1.3]);
+checkEq('the fixture river (270°, toward −x): layer A', DOWN[0], [-1, -0.15]);
+checkEq('…and layer B', DOWN[1], [-0.8, 0.3]);
 check('BOTH layers travel downstream — A along the flow',
   DOWN[0][0] * -1 + DOWN[0][1] * 0, 1, 1e-12);
 check('…and B along it too (this is what a river reads as)',
   DOWN[1][0] * -1 + DOWN[1][1] * 0, 0.8, 1e-12);
 check('…while their CROSS components oppose, so the two still beat',
   Math.sign(DOWN[0][1]) * Math.sign(DOWN[1][1]), -1);
-// The SPEEDS are untouched, so uSpeed still means the metres per second it
-// meant for a lake: the frame is a rotation, and a rotation keeps lengths.
-check('layer A drifts at the same rate as on a lake',
-  Math.hypot(...DOWN[0]) - Math.hypot(...STILL[0]), 0, 1e-12);
-check('…and so does layer B', Math.hypot(...DOWN[1]) - Math.hypot(...STILL[1]),
-  0, 1e-12);
-check('…which are √1.36 and √2.33', Math.hypot(...STILL[0]), Math.sqrt(1.36), 1e-15);
+// …and both now run CLOSE to the flow: 58° off it was the diagonal shimmer
+// the finding names, 20° is a stream.
+check('layer A is 8.5308…° off the flow', Math.atan2(0.15, 1) * 180 / Math.PI,
+  8.530765609948139, 1e-12);
+check('…and layer B 20.5560…°, the widest of the two',
+  Math.atan2(0.3, 0.8) * 180 / Math.PI, 20.556045219583664, 1e-12);
+// A LAKE's lengths are untouched — the frame is a rotation, and a rotation
+// keeps lengths, so uSpeed means exactly the metres per second it always did.
+check('a lake still drifts at √1.36', Math.hypot(...STILL[0]),
+  Math.sqrt(1.36), 1e-15);
+check('…and √2.33', Math.hypot(...STILL[1]), Math.sqrt(2.33), 1e-15);
+// A RIVER's are shorter by construction, and A's ALONG component is exactly
+// 1.0 — which is what makes uFlowSpeed the downstream m/s of the leading sheet.
+check('a river layer A is √1.0225 long', Math.hypot(...DOWN[0]),
+  Math.sqrt(1.0225), 1e-15);
+check('…and layer B √0.73', Math.hypot(...DOWN[1]), Math.sqrt(0.73), 1e-15);
 for (const [deg, flow, a, b] of [
-  [0, [0, 1], [-0.6, 1], [1.3, 0.8]],
-  [90, [1, 0], [1, 0.6], [0.8, -1.3]],
-  [270, [-1, 0], [-1, -0.6], [-0.8, 1.3]],
+  [0, [0, 1], [-0.15, 1], [0.3, 0.8]],
+  [90, [1, 0], [1, 0.15], [0.8, -0.3]],
+  [270, [-1, 0], [-1, -0.15], [-0.8, 0.3]],
 ]) {
   const [da, db] = rippleDirs(flow);
   checkEq(`${deg}° -> A`, da.map((v) => Math.round(v * 1e12) / 1e12), a);
   checkEq(`${deg}° -> B`, db.map((v) => Math.round(v * 1e12) / 1e12), b);
+}
+
+// ── [9c] two speeds, the stretched ripple, the streak ──────────────────────
+// See the docstring section [9c]. The numbers here are the shader's, written
+// out a second time from the derivation, not read out of it.
+console.log('\n[9c] two speeds, a ripple stretched along the flow, a streak');
+const LAMBDA = 1.6;          // wave_m default
+const S_STILL = 0.25;        // speed default        (lake)
+const S_FLOW = 0.08;         // flow_speed default   (river)
+check('a lake drifts at its own dial', S_STILL, 0.25);
+check('…a current at the new one, three times slower', S_FLOW, 0.08);
+// A's along component is exactly 1.0, so flow_speed IS the downstream m/s.
+check('…and layer A of that current makes exactly that downstream',
+  (DOWN[0][0] * -1 + DOWN[0][1] * 0) * S_FLOW, 0.08, 1e-15);
+check('…layer B trails it at 0.8 of that',
+  (DOWN[1][0] * -1 + DOWN[1][1] * 0) * S_FLOW, 0.064, 1e-15);
+/** The squeeze: project into the flow frame, divide the ALONG part by `k`. */
+function squash(frame, [x, z], k) {
+  const { ax, ay } = frame;
+  const al = (x * ax[0] + z * ax[1]) / k;
+  const cr = x * ay[0] + z * ay[1];
+  return [ax[0] * al + ay[0] * cr, ax[1] * al + ay[1] * cr];
+}
+const STILL_FRAME = waterFrame([0, 0]);
+const FLOW_FRAME = waterFrame(waterFlowAt(RIVER, 50, -30));
+checkEq('still water squeezes by 1 in the world frame, i.e. not at all',
+  squash(STILL_FRAME, [12, -4], 1), [12, -4]);
+// The ripple is 3× as long as it is wide: on wave_m 1.6 that is 1.6 m across
+// the stream against 4.8 m along it (a texture period is 1 in uv).
+check('a crest is 1.6 m across the stream', LAMBDA, 1.6);
+check('…and 4.8 m along it', LAMBDA * 3, 4.8, 1e-15);
+// SPEED SURVIVES THE STRETCH because the squeeze is linear and takes the whole
+// coordinate, drift included: uv(p, t) == uv(p − dir·s·dt, t + dt), EXACTLY.
+const P = [12, -4];
+const T0 = 7;
+const DT = 2.5;
+const SIGMA = -1;             // wFlowSign on a current; a lake keeps +1
+function uvA(p, t) {
+  const [dx, dz] = DOWN[0];
+  const drift = t * S_FLOW * SIGMA / LAMBDA;
+  return squash(FLOW_FRAME, [p[0] / LAMBDA + dx * drift, p[1] / LAMBDA + dz * drift], 3);
+}
+// Where the crest that sat at P at T0 has got to at T0 + DT: p − dir·σ·s·dt,
+// which with σ = −1 is p + dir·s·dt — DOWNSTREAM, at flow_speed·|A| m/s.
+const moved = [P[0] - DOWN[0][0] * SIGMA * S_FLOW * DT,
+               P[1] - DOWN[0][1] * SIGMA * S_FLOW * DT];
+checkEq('the stretched crest still travels at flow_speed·|A| m/s',
+  uvA(moved, T0 + DT).map((v) => Math.round(v * 1e12) / 1e12),
+  uvA(P, T0).map((v) => Math.round(v * 1e12) / 1e12));
+// …and DOWNSTREAM, not against the current: the fixture river runs toward −x,
+// so the crest must have moved toward −x too. `+ dir·drift` alone would have
+// walked it the other way — the ripple ran upstream before this round.
+check('…and it travelled DOWNSTREAM (toward −x on the fixture river)',
+  Math.sign(moved[0] - P[0]), -1);
+check('…by exactly |A|·flow_speed·dt metres',
+  Math.hypot(moved[0] - P[0], moved[1] - P[1]),
+  Math.hypot(...DOWN[0]) * S_FLOW * DT, 1e-15);
+check('RED: the old sign would have carried it upstream',
+  Math.sign(P[0] - DOWN[0][0] * S_FLOW * DT - P[0]), 1);
+// The STREAK: the same map as a ribbon, 2λ across the stream, 8× that along.
+check('the streak repeats every 3.2 m across the stream', LAMBDA * 2, 3.2, 1e-15);
+check('…and every 25.6 m along it', LAMBDA * 2 * 8, 25.6, 1e-15);
+check('…at weight 0.35 when flowing', 0.35, 0.35);
+// And exactly 0 when still — which is why a lake is bit for bit unchanged.
+for (const sample of [-1, -0.5, 0, 0.25, 1]) {
+  check(`RED: streak·0 leaves a lake normal alone (${sample})`,
+    sample + sample * 0.0, sample, 0);
 }
 
 console.log('\n[9b] …and the GLSL is that arithmetic, structurally');
@@ -1131,9 +1267,45 @@ check('the frame is built from the flow, with the still case named',
 check('…and the cross axis is its perpendicular',
   /vec2 wAy = vec2\( -wAx\.y, wAx\.x \);/.test(matSrc) ? 1 : 0, 1);
 check('both layers are offset ALONG that frame',
-  /vec2 wUvA = vWaterWorld \/ uWaveM \+ wDirA \* wDriftA;/.test(matSrc) ? 1 : 0, 1);
+  /vec2 wRawA = vWaterWorld \/ uWaveM \+ wDirA \* wDriftA;/.test(matSrc) ? 1 : 0, 1);
 check('RED: no normalize of a possibly-zero vector anywhere in the patch',
   /normalize\( vWaterFlow \)/.test(matSrc) ? 1 : 0, 0);
+
+console.log('\n[9d] …and so are the two speeds, the stretch and the streak');
+check('the drift picks between the still and the flowing dial',
+  /float wSpeed = wStill \? uSpeed : uFlowSpeed;/.test(matSrc) ? 1 : 0, 1);
+check('…and both layers drift by it', (matSrc.match(
+  /float wDrift[AB] = uTime \* wSpeed \* wFlowSign \/ /g) || []).length, 2);
+check('the drift SIGN is +1 still, −1 flowing (the ripple ran upstream)',
+  /float wFlowSign = wStill \? 1\.0 : -1\.0;/.test(matSrc) ? 1 : 0, 1);
+check('…and the streak rides the same sign',
+  /wAx \* \( uTime \* wSpeed \* wFlowSign \)/.test(matSrc) ? 1 : 0, 1);
+check('flow_speed reaches the shader as its own uniform',
+  /shader\.uniforms\.uFlowSpeed = uFlowSpeed\b/.test(matSrc) ? 1 : 0, 1);
+check('…declared in the fragment source',
+  /uniform float uFlowSpeed;/.test(matSrc) ? 1 : 0, 1);
+check('…and defaulted to 0.08 m/s',
+  /uFlowSpeed = \{ value: spec\.flow_speed \?\? 0\.08 \}/.test(matSrc) ? 1 : 0, 1);
+// STILL WATER IS UNCHANGED, and these are the constants that say so: every new
+// branch is a ternary whose still side carries the old number.
+check('the cross factors keep 0.6 / 1.3 when still',
+  /float wCrossA = wStill \? 0\.6 : 0\.15;/.test(matSrc)
+  && /float wCrossB = wStill \? 1\.3 : 0\.3;/.test(matSrc) ? 1 : 0, 1);
+check('…the anisotropy is 3 and skipped entirely when still',
+  /float wAniso = 3\.0;/.test(matSrc)
+  && /vec2 wUvA = wStill \? wRawA/.test(matSrc) ? 1 : 0, 1);
+check('…and the streak weighs 0 when still, 0.35 on a current',
+  /float wStreak = wStill \? 0\.0 : 0\.35;/.test(matSrc) ? 1 : 0, 1);
+check('the stretch divides the ALONG component only',
+  /wAx \* \( dot\( wRawA, wAx \) \/ wAniso \) \+ wAy \* dot\( wRawA, wAy \)/
+    .test(matSrc) ? 1 : 0, 1);
+check('the streak is the SAME map, no new texture',
+  (matSrc.match(/texture2D\( normalMap, wUv[ABC] \)/g) || []).length, 3);
+check('…read as a ribbon 8× longer than wide, sliding downstream',
+  /vec2 wUvC = wAx \* \( dot\( wRawC, wAx \) \/ 8\.0 \) \+ wAy \* dot\( wRawC, wAy \);/
+    .test(matSrc) ? 1 : 0, 1);
+check('RED: the streak tap is unconditional (derivatives need it)',
+  /if[^\n]*wStill[^\n]*\{[^}]*texture2D/.test(matSrc) ? 1 : 0, 0);
 
 console.log(`\n${passed} ok, ${failed} failed`);
 process.exit(failed ? 1 : 0);

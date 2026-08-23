@@ -49,10 +49,11 @@
  * then `patchHole`. Hand expectations, each one a line the patches write:
  *   water   vertex   `varying vec2 vWaterWorld;` + the assignment after
  *                    `begin_vertex`
- *           fragment `wDriftA` (the drift of the ripple), the tint mix
+ *           fragment `wSpeed` (still vs. flowing, 2026-08-23) and `wDriftA`
+ *                    (the drift of the ripple), the tint mix
  *                    `diffuseColor.rgb = mix( uTint`, the roughness mask
  *                    `roughnessFactor = mix( 0.85`, the fresnel `wFres`
- *           uniforms uTime, uSky, uWaveM, uSpeed, uSkyMix, uTint,
+ *           uniforms uTime, uSky, uWaveM, uSpeed, uFlowSpeed, uSkyMix, uTint,
  *                    uMapStrength, uMask
  *           and `#include <normal_fragment_maps>` is GONE — that anchor is
  *           replaced, and a chain that ran the hole patch on the untouched
@@ -404,7 +405,10 @@ const WATER_MARKS = [
   ['vert', 'varying vec2 vWaterWorld;'],
   ['vert', 'vWaterWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;'],
   ['frag', 'uniform float uTime;'],
-  ['frag', 'float wDriftA = uTime * uSpeed / uWaveM;'],
+  // Two speeds since 2026-08-23: `speed` is still water, `flow_speed` a
+  // current. The drift picks between them, so the marker is the picked one.
+  ['frag', 'float wSpeed = wStill ? uSpeed : uFlowSpeed;'],
+  ['frag', 'float wDriftA = uTime * wSpeed * wFlowSign / uWaveM;'],
   ['frag', 'diffuseColor.rgb = mix( uTint'],
   ['frag', 'roughnessFactor = mix( 0.85'],
   ['frag', 'float wFres = pow('],
@@ -416,8 +420,8 @@ const HOLE_MARKS = [
   ['frag', 'uHoleOn > 0.5'],
   ['frag', 'discard;'],
 ];
-const WATER_UNIFORMS = ['uTime', 'uSky', 'uWaveM', 'uSpeed', 'uSkyMix', 'uTint',
-  'uMapStrength', 'uMask'];
+const WATER_UNIFORMS = ['uTime', 'uSky', 'uWaveM', 'uSpeed', 'uFlowSpeed',
+  'uSkyMix', 'uTint', 'uMapStrength', 'uMask'];
 const HOLE_UNIFORMS = ['uHole', 'uHoleOn'];
 /** What the sway writes — all of it in the VERTEX shader, where `transformed`
  *  lives. The amplitude is a literal, so the list is a function of it. */
