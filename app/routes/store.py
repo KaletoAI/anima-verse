@@ -62,10 +62,16 @@ async def upload_user_profile_image(request: Request) -> Dict[str, Any]:
         from app.models.account import get_active_character, get_user_profile as _gup_img, save_user_profile as _sup_img
         _active = get_active_character()
         if _active:
+            # Same per-character profile lock as every other profile
+            # read-modify-write (equip, decency, world-dev patch): this route
+            # still runs on the event loop, but the writers it races do not
+            # any more, so the loop no longer keeps them apart.
+            from app.core.keyed_lock import keyed_lock
             from app.models.character import get_character_profile, save_character_profile
-            _cp = get_character_profile(_active)
-            _cp["profile_image"] = image_filename
-            save_character_profile(_active, _cp)
+            with keyed_lock("character_profile", _active):
+                _cp = get_character_profile(_active)
+                _cp["profile_image"] = image_filename
+                save_character_profile(_active, _cp)
         else:
             _p = _gup_img()
             _p["profile_image"] = image_filename

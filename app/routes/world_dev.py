@@ -1553,51 +1553,59 @@ def _apply_character_internal(char_data: Dict[str, Any],
 
     profile_fields, config_fields = _get_generable_fields(template)
 
-    profile = get_character_profile(char_name)
-    if not profile.get("character_name"):
-        profile["character_name"] = char_name
-        profile["template"] = template
-        profile["created_by"] = created_by or "world_dev"
-
     from app.models.character_template import get_template
     from app.models.character import get_character_dir
-    tmpl = get_template(template)
-    soul_field_map: Dict[str, str] = {}
-    if tmpl:
-        for section in tmpl.get("sections", []):
-            for field in section.get("fields", []):
-                fk = field.get("key", "")
-                sf = field.get("source_file", "")
-                if fk and sf:
-                    soul_field_map[fk] = sf
 
-    for key in profile_fields:
-        if key in soul_field_map:
-            continue
-        if key in char_data:
-            profile[key] = char_data[key]
+    # SERIALIZED PER CHARACTER (``character_profile``): from the read to the
+    # save this is one read-modify-write of the whole profile. The apply runs
+    # in the threadpool like every other route body, so a concurrent writer of
+    # the same character (a profile patch, an equip) would otherwise be
+    # overwritten with the pre-state this call read.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", char_name):
+        profile = get_character_profile(char_name)
+        if not profile.get("character_name"):
+            profile["character_name"] = char_name
+            profile["template"] = template
+            profile["created_by"] = created_by or "world_dev"
 
-    if tmpl:
-        for section in tmpl.get("sections", []):
-            for field in section.get("fields", []):
-                key = field.get("key", "")
-                default = field.get("default")
-                if not key or default is None:
-                    continue
-                if key in soul_field_map:
-                    continue
-                if key not in profile:
-                    profile[key] = default
-                elif key == "roleplay_instructions" and isinstance(default, str) and default:
-                    current = str(profile[key])
-                    if default not in current:
-                        profile[key] = default + "\n\n" + current
+        tmpl = get_template(template)
+        soul_field_map: Dict[str, str] = {}
+        if tmpl:
+            for section in tmpl.get("sections", []):
+                for field in section.get("fields", []):
+                    fk = field.get("key", "")
+                    sf = field.get("source_file", "")
+                    if fk and sf:
+                        soul_field_map[fk] = sf
 
-    for k in list(profile.keys()):
-        if k in soul_field_map:
-            profile.pop(k, None)
+        for key in profile_fields:
+            if key in soul_field_map:
+                continue
+            if key in char_data:
+                profile[key] = char_data[key]
 
-    save_character_profile(char_name, profile, create_new=_is_new)
+        if tmpl:
+            for section in tmpl.get("sections", []):
+                for field in section.get("fields", []):
+                    key = field.get("key", "")
+                    default = field.get("default")
+                    if not key or default is None:
+                        continue
+                    if key in soul_field_map:
+                        continue
+                    if key not in profile:
+                        profile[key] = default
+                    elif key == "roleplay_instructions" and isinstance(default, str) and default:
+                        current = str(profile[key])
+                        if default not in current:
+                            profile[key] = default + "\n\n" + current
+
+        for k in list(profile.keys()):
+            if k in soul_field_map:
+                profile.pop(k, None)
+
+        save_character_profile(char_name, profile, create_new=_is_new)
 
     if soul_field_map:
         char_dir = get_character_dir(char_name, create=True)
@@ -1826,37 +1834,45 @@ async def apply_profile_patch_data(request: Request):
 
 def _apply_profile_patch_data_sync(data: Any):
     """The blocking body of ``apply_profile_patch_data`` — runs in the
-    threadpool."""
+    threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``): read the profile, patch
+    fields, write the whole profile back. In the threadpool that races every
+    other profile writer of the same character (equip, decency, a second
+    patch) and the later write would drop the earlier change.
+    """
+    from app.core.keyed_lock import keyed_lock
     char_name = (data.get("character_name") or "").strip()
     fields = data.get("fields") or {}
     if not char_name:
         raise HTTPException(status_code=400, detail="character_name erforderlich")
     if not isinstance(fields, dict) or not fields:
         raise HTTPException(status_code=400, detail="fields (dict) erforderlich")
-    profile = get_character_profile(char_name)
-    if not profile.get("character_name"):
-        raise HTTPException(status_code=404, detail=f"Character '{char_name}' nicht gefunden")
+    with keyed_lock("character_profile", char_name):
+        profile = get_character_profile(char_name)
+        if not profile.get("character_name"):
+            raise HTTPException(status_code=404, detail=f"Character '{char_name}' nicht gefunden")
 
-    # Soul-Felder rausfiltern (gehen ueber /apply-soul)
-    template = profile.get("template", "")
-    soul_field_keys: set = set()
-    if template:
-        from app.models.character_template import get_template
-        tmpl = get_template(template)
-        if tmpl:
-            for sec in tmpl.get("sections", []):
-                for fld in sec.get("fields", []):
-                    if fld.get("source_file") and fld.get("key"):
-                        soul_field_keys.add(fld["key"])
-    applied = {}
-    for k, v in fields.items():
-        if k in soul_field_keys:
-            logger.info("WorldDev profile-patch: '%s' uebersprungen (Soul-Feld)", k)
-            continue
-        profile[k] = v
-        applied[k] = v
-    save_character_profile(char_name, profile)
-    logger.info("WorldDev: Profile-Patch fuer '%s' (%d Felder)", char_name, len(applied))
+        # Soul fields are filtered out (they go through /apply-soul).
+        template = profile.get("template", "")
+        soul_field_keys: set = set()
+        if template:
+            from app.models.character_template import get_template
+            tmpl = get_template(template)
+            if tmpl:
+                for sec in tmpl.get("sections", []):
+                    for fld in sec.get("fields", []):
+                        if fld.get("source_file") and fld.get("key"):
+                            soul_field_keys.add(fld["key"])
+        applied = {}
+        for k, v in fields.items():
+            if k in soul_field_keys:
+                logger.info("WorldDev profile-patch: '%s' skipped (soul field)", k)
+                continue
+            profile[k] = v
+            applied[k] = v
+        save_character_profile(char_name, profile)
+    logger.info("WorldDev: profile patch for '%s' (%d fields)", char_name, len(applied))
     return {"status": "success", "character": char_name,
             "applied_fields": list(applied.keys())}
 
@@ -2450,34 +2466,16 @@ def _apply_json_sync(data: Any):
                 "section": section, "warnings": [], "size": len(content)}
 
     if detected == "profile-patch":
+        # ONE patch implementation, not two: the smart import hands the
+        # payload to the same helper the /apply-profile-patch route uses, so
+        # the soul-field filter AND the per-character profile lock (the
+        # read-modify-write of the whole profile) exist exactly once.
         char_name = (payload.get("character_name") or "").strip()
-        fields = payload.get("fields") or {}
-        if not char_name:
-            raise HTTPException(status_code=400, detail="character_name erforderlich")
-        if not isinstance(fields, dict) or not fields:
-            raise HTTPException(status_code=400, detail="fields (dict) erforderlich")
-        profile = get_character_profile(char_name)
-        if not profile.get("character_name"):
-            raise HTTPException(status_code=404, detail=f"Character '{char_name}' nicht gefunden")
-        # Filter soul fields (those go via /apply-soul)
-        template = profile.get("template", "")
-        soul_field_keys: set = set()
-        if template:
-            from app.models.character_template import get_template
-            tmpl = get_template(template)
-            if tmpl:
-                for sec in tmpl.get("sections", []):
-                    for fld in sec.get("fields", []):
-                        if fld.get("source_file") and fld.get("key"):
-                            soul_field_keys.add(fld["key"])
-        applied = {}
-        for k, v in fields.items():
-            if k in soul_field_keys:
-                continue
-            profile[k] = v
-            applied[k] = v
-        save_character_profile(char_name, profile)
+        res = _apply_profile_patch_data_sync({
+            "character_name": char_name,
+            "fields": payload.get("fields") or {},
+        })
         return {"status": "success", "type": "profile-patch", "name": char_name,
-                "applied_fields": list(applied.keys()), "warnings": []}
+                "applied_fields": res.get("applied_fields") or [], "warnings": []}
 
     raise HTTPException(status_code=400, detail=f"Unbekannter Typ: {detected}")

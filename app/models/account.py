@@ -166,18 +166,39 @@ def _current_user_settings() -> Optional[Dict[str, Any]]:
 
 
 def _update_current_user_settings(updates: Dict[str, Any]) -> bool:
-    """Aktualisiert settings des aktuellen Users. True wenn gespeichert."""
+    """Updates the current user's settings. True when saved.
+
+    SERIALIZED PER USER (``user_settings``). This merges into the WHOLE
+    settings blob and writes it back, and its callers no longer run on the
+    event loop (the routes moved into the threadpool 2026-08-24): the layout
+    autosave, a named-layout save and an ``active_character`` switch can be in
+    here at the same time, each having read the pre-state — the last write
+    then wins for every key, silently dropping the others. The lock sits in
+    HERE and not at the call sites so every caller is covered, including the
+    ones that only pass a single key.
+    """
     try:
         from app.core.auth_dependency import get_current_user_from_ctx
+        from app.core.keyed_lock import keyed_lock
         from app.core.users import update_user
         user = get_current_user_from_ctx()
         if not user:
             return False
-        settings = dict(user.get("settings") or {})
-        settings.update(updates)
-        update_user(user["id"], settings=settings)
-        # Context-Cache aktualisieren damit nachfolgende Reads die Aenderung sehen
-        user["settings"] = settings
+        # Keyed by the account (its id; the username is the fallback for a
+        # context object that carries no id).
+        key = str(user.get("id") or user.get("username") or "")
+        with keyed_lock("user_settings", key):
+            # The merge base is re-read INSIDE the lock. The context object
+            # was filled when the request was authenticated, which is long
+            # before this line — merging into that snapshot would reintroduce
+            # exactly the lost update the lock is here to prevent.
+            from app.core.users import get_user_by_id
+            fresh = get_user_by_id(user["id"]) if user.get("id") else None
+            settings = dict((fresh or user).get("settings") or {})
+            settings.update(updates)
+            update_user(user["id"], settings=settings)
+            # Refresh the context cache so later reads see the change.
+            user["settings"] = settings
         return True
     except Exception:
         return False

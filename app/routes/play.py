@@ -309,45 +309,53 @@ def _play_enter_room_sync(user, body: Any):
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
-    # A party follower cannot move on its own (not even between rooms) — the
-    # leader drags it along. The UI hides the controls; this is the hard
-    # backstop. Same sentence as the travel route's refusal, translated the
-    # same way: one refusal, one wording.
-    from app.core.i18n import t
-    from app.core.party_engine import is_party_follower
-    if is_party_follower(avatar):
-        lang = get_character_language(avatar) or "de"
-        raise HTTPException(status_code=403, detail={
-            "reason": "party_follower",
-            "message": t("You are part of a party and your leader takes you "
-                         "along — you cannot move on your own.", lang)})
-    loc = (get_character_current_location(avatar) or "").strip()
-    loc_obj = get_location_by_id(loc) if loc else None
-    valid = {(r.get("id") or "") for r in ((loc_obj.get("rooms") if loc_obj else None) or [])}
-    if room_id not in valid:
-        raise HTTPException(status_code=400, detail="room not in current location")
-    # The second of the two gates (plan-betreten-und-tueren.md § 5 A): a
-    # block rule may forbid a ROOM, not just a location. The location step
-    # has checked this since it was written; the room change never did, so
-    # every room rule was bypassed by walking.
-    from app.models.rules import check_access
-    ok_enter, enter_msg = check_access(avatar, loc, room_id=room_id)
-    if not ok_enter:
-        raise HTTPException(status_code=403, detail={
-            "reason": "block_enter", "message": enter_msg})
-    save_character_current_room(avatar, room_id)
-    # Movement interrupts the running pose — otherwise the avatar keeps
-    # "cooking" although they just changed rooms.
-    clear_pose_intent(avatar)
-    # Player-driven movement is the clearest wake signal there is: without
-    # this, a sleeping avatar keeps "Sleeping" (flag + sleep expression) after
-    # walking to another room. set_is_sleeping(False) also drops the sleep
-    # pose/variant. Deliberately ONLY here (player-initiated move) — model-
-    # level auto-wake would break offmap-sleep transfers and rule-driven
-    # moves of sleeping characters.
-    if is_character_sleeping(avatar):
-        set_is_sleeping(avatar, False)
-        logger.info("enter-room: %s woke up by moving to %s", avatar, room_id)
+    # THE SAME LOCK THE POSITION REPORT TAKES (``_pos_lock``, namespace
+    # ``avatar_state``): both routes write where this avatar is, and both run
+    # in the threadpool since 2026-08-24. Without it a room change can land
+    # between a report's read and its write — the report then re-derives the
+    # room from its own older reading and the change is gone. Blocking here:
+    # this is one deliberate click, not a four-per-second stream, so it waits
+    # for the report instead of being dropped.
+    with _pos_lock(avatar):
+        # A party follower cannot move on its own (not even between rooms) —
+        # the leader drags it along. The UI hides the controls; this is the
+        # hard backstop. Same sentence as the travel route's refusal,
+        # translated the same way: one refusal, one wording.
+        from app.core.i18n import t
+        from app.core.party_engine import is_party_follower
+        if is_party_follower(avatar):
+            lang = get_character_language(avatar) or "de"
+            raise HTTPException(status_code=403, detail={
+                "reason": "party_follower",
+                "message": t("You are part of a party and your leader takes "
+                             "you along — you cannot move on your own.", lang)})
+        loc = (get_character_current_location(avatar) or "").strip()
+        loc_obj = get_location_by_id(loc) if loc else None
+        valid = {(r.get("id") or "") for r in ((loc_obj.get("rooms") if loc_obj else None) or [])}
+        if room_id not in valid:
+            raise HTTPException(status_code=400, detail="room not in current location")
+        # The second of the two gates (plan-betreten-und-tueren.md § 5 A): a
+        # block rule may forbid a ROOM, not just a location. The location step
+        # has checked this since it was written; the room change never did, so
+        # every room rule was bypassed by walking.
+        from app.models.rules import check_access
+        ok_enter, enter_msg = check_access(avatar, loc, room_id=room_id)
+        if not ok_enter:
+            raise HTTPException(status_code=403, detail={
+                "reason": "block_enter", "message": enter_msg})
+        save_character_current_room(avatar, room_id)
+        # Movement interrupts the running pose — otherwise the avatar keeps
+        # "cooking" although they just changed rooms.
+        clear_pose_intent(avatar)
+        # Player-driven movement is the clearest wake signal there is: without
+        # this, a sleeping avatar keeps "Sleeping" (flag + sleep expression)
+        # after walking to another room. set_is_sleeping(False) also drops the
+        # sleep pose/variant. Deliberately ONLY here (player-initiated move) —
+        # model-level auto-wake would break offmap-sleep transfers and
+        # rule-driven moves of sleeping characters.
+        if is_character_sleeping(avatar):
+            set_is_sleeping(avatar, False)
+            logger.info("enter-room: %s woke up by moving to %s", avatar, room_id)
     return {"ok": True, "room_id": room_id}
 
 
@@ -612,26 +620,23 @@ _POS_STALE_WINDOW_MS = 15000.0
 #: single report claiming an hour of walking would buy an unbounded jump.
 _POS_CLIENT_ELAPSED_CAP_S = 30.0
 
-#: One report lock per avatar, handed out under its guard — the same shape as
-#: the per-tile bake locks in ``core/heightfield``/``core/terrain_layers``.
-#: The report used to be serialized IMPLICITLY, by running on the event loop;
-#: now that it runs in the threadpool two reports of the SAME avatar can be in
-#: the handler at once, and they would race the two baselines
+#: Namespace of the AVATAR-STATE lock (``app/core/keyed_lock``): everything
+#: that writes where one avatar is standing shares it — the position report
+#: AND the room change, because both derive the avatar's whereabouts, and a
+#: room change landing between a report's read and its write would be lost.
+#: The state used to be serialized IMPLICITLY, by running on the event loop;
+#: now that these routes run in the threadpool two of them can be in their
+#: handlers at once, and they would race the two baselines
 #: (``_pos_report_at``/``_pos_client_at``) against the position write: the
 #: later report could read the older one's baseline, or be overtaken by it at
 #: ``set_character_pos``. Per AVATAR, so two players never wait for each other.
-_POS_LOCKS: Dict[str, threading.Lock] = {}
-_POS_LOCKS_GUARD = threading.Lock()
+_AVATAR_STATE_NS = "avatar_state"
 
 
 def _pos_lock(avatar: str) -> threading.Lock:
-    """The report lock of one avatar, created on first ask."""
-    with _POS_LOCKS_GUARD:
-        lock = _POS_LOCKS.get(avatar)
-        if lock is None:
-            lock = threading.Lock()
-            _POS_LOCKS[avatar] = lock
-        return lock
+    """The avatar-state lock of one avatar, created on first ask."""
+    from app.core.keyed_lock import keyed_lock
+    return keyed_lock(_AVATAR_STATE_NS, avatar)
 
 
 @router.post("/play/pos")
@@ -646,6 +651,12 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
 
     The chain, in order:
 
+      0. SUPERSEDED — the avatar's state lock is taken without waiting; a
+         report that finds another one of the SAME avatar in the handler is
+         dropped SILENTLY (200 ``{ok: false, superseded: true}``). Waiting
+         would park a threadpool worker per report behind a slow write, and
+         the point would be stale by the time it got the lock anyway — the
+         next report (≤ 250 ms) carries a fresher one,
       1. a party FOLLOWER owns no movement at all (403 ``party_follower``, the
          same backstop ``/play/travel`` applies),
       2. the numbers are finite (400): a NaN sails through every comparison
@@ -800,9 +811,25 @@ def _play_pos_sync(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     reads the two baselines, judges against them and writes the position — and
     two reports of DIFFERENT avatars have nothing to say to each other and stay
     parallel. See ``play_pos`` for the gates themselves.
+
+    THE LOCK IS NEVER WAITED FOR. A walker sends up to four reports a second;
+    if the holder is stuck in a slow DB write, every follow-up report would
+    park a threadpool worker behind it — a handful of walkers would drain the
+    shared executor, which is exactly the stall this route was moved off the
+    event loop to avoid. And a report that waited would be pointless anyway:
+    by the time it got the lock the figure has walked on, and the next report
+    (≤ 250 ms later, ``POS_REPORT_MS`` = 330 ms while moving, sooner on stop)
+    carries a fresher point. So a contended report is DROPPED like the
+    throttle drops one: 200 ``{ok: false, superseded: true}``, which the
+    client already reads as "not taken, still dirty, report again next tick".
     """
-    with _pos_lock(avatar):
+    lock = _pos_lock(avatar)
+    if not lock.acquire(blocking=False):
+        return {"ok": False, "superseded": True}
+    try:
         return _play_pos_report(avatar, body)
+    finally:
+        lock.release()
 
 
 def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -2269,13 +2296,21 @@ async def play_equip(request: Request, user=Depends(get_current_user)):
 
 
 def _play_equip_sync(user, body: Any):
-    """The blocking body of ``play_equip`` — runs in the threadpool."""
+    """The blocking body of ``play_equip`` — runs in the threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``): ``equip_piece`` reads
+    the profile, changes the equipped slots and writes the whole profile back.
+    Two equips of the same avatar at once (a double click, two open tabs) each
+    read the pre-state and the later write drops the earlier piece.
+    """
+    from app.core.keyed_lock import keyed_lock
     from app.models.inventory import equip_piece
     avatar = _require_avatar()
     item_id = str((body or {}).get("item_id") or "").strip()
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id required")
-    res = equip_piece(avatar, item_id, source="avatar")
+    with keyed_lock("character_profile", avatar):
+        res = equip_piece(avatar, item_id, source="avatar")
     if res.get("status") != "ok":
         raise HTTPException(status_code=400, detail=res.get("reason", "equip failed"))
     # Direct action is world-visible: narrator line -> NPCs can react.
@@ -2298,14 +2333,20 @@ async def play_unequip(request: Request, user=Depends(get_current_user)):
 
 
 def _play_unequip_sync(user, body: Any):
-    """The blocking body of ``play_unequip`` — runs in the threadpool."""
+    """The blocking body of ``play_unequip`` — runs in the threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``), same read-modify-write
+    on the profile as ``_play_equip_sync``.
+    """
+    from app.core.keyed_lock import keyed_lock
     from app.models.inventory import unequip_piece
     avatar = _require_avatar()
     slot = str((body or {}).get("slot") or "").strip()
     item_id = str((body or {}).get("item_id") or "").strip()
     if not slot and not item_id:
         raise HTTPException(status_code=400, detail="slot or item_id required")
-    res = unequip_piece(avatar, slot=slot, item_id=item_id, source="avatar")
+    with keyed_lock("character_profile", avatar):
+        res = unequip_piece(avatar, slot=slot, item_id=item_id, source="avatar")
     if res.get("status") != "ok":
         raise HTTPException(status_code=400, detail=res.get("reason", "unequip failed"))
     # Direct action is world-visible: narrator line -> NPCs can react.
@@ -3127,7 +3168,13 @@ async def play_set_outfit(request: Request, user=Depends(get_current_user)):
 
 
 def _play_set_outfit_sync(user, body: Any):
-    """The blocking body of ``play_set_outfit`` — runs in the threadpool."""
+    """The blocking body of ``play_set_outfit`` — runs in the threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``): ``apply_equipped_pieces``
+    is one read-modify-write over the whole equipped state, and it races both
+    the single-piece equips above and a second outfit apply.
+    """
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_outfits
     from app.models.inventory import apply_equipped_pieces, get_item
     avatar = _require_avatar()
@@ -3152,9 +3199,10 @@ def _play_set_outfit_sync(user, body: Any):
     for _slot, _color in (target.get("pieces_colors") or {}).items():
         if _color and pieces_by_slot.get(_slot):
             pieces_meta[_slot] = {"color": str(_color).strip()}
-    apply_equipped_pieces(avatar, pieces=pieces_by_slot,
-                          remove_slots=list(target.get("remove_slots") or []),
-                          pieces_meta=pieces_meta, source="play_outfit")
+    with keyed_lock("character_profile", avatar):
+        apply_equipped_pieces(avatar, pieces=pieces_by_slot,
+                              remove_slots=list(target.get("remove_slots") or []),
+                              pieces_meta=pieces_meta, source="play_outfit")
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
         from app.core.perception import announce_action

@@ -930,7 +930,15 @@ async def equip_route(character_name: str, request: Request) -> Dict[str, Any]:
 
 
 def _equip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
-    """The blocking body of ``equip_route`` — runs in the threadpool."""
+    """The blocking body of ``equip_route`` — runs in the threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``): equipping reads the
+    profile, changes the equipped slots and writes the whole profile back.
+    Since this body runs in the threadpool the event loop no longer keeps two
+    of them apart, and two equips of the same character would each read the
+    pre-state — the later write silently drops the earlier piece.
+    """
+    from app.core.keyed_lock import keyed_lock
     from app.models.inventory import (
         get_item, equip_piece, equip_item)
     user_id = (body.get("user_id") or "").strip()
@@ -940,10 +948,11 @@ def _equip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
     item = get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="item not found")
-    if item.get("category") == "outfit_piece":
-        result = equip_piece(character_name, item_id, source="wardrobe_ui")
-    else:
-        result = equip_item(character_name, item_id, source="wardrobe_ui")
+    with keyed_lock("character_profile", character_name):
+        if item.get("category") == "outfit_piece":
+            result = equip_piece(character_name, item_id, source="wardrobe_ui")
+        else:
+            result = equip_item(character_name, item_id, source="wardrobe_ui")
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "equip failed"))
     # Direct (UI) action is world-visible: narrator line -> others can react.
@@ -972,18 +981,24 @@ async def unequip_route(character_name: str, request: Request) -> Dict[str, Any]
 
 
 def _unequip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
-    """The blocking body of ``unequip_route`` — runs in the threadpool."""
+    """The blocking body of ``unequip_route`` — runs in the threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``), same profile
+    read-modify-write as ``_equip_route_sync``.
+    """
+    from app.core.keyed_lock import keyed_lock
     from app.models.inventory import unequip_piece, unequip_item
     user_id = (body.get("user_id") or "").strip()
     slot = (body.get("slot") or "").strip()
     item_id = (body.get("item_id") or "").strip()
     if not slot and not item_id:
         raise HTTPException(status_code=400, detail="slot or item_id required")
-    # erst als Piece (slot oder item_id), dann als equipped Item
-    result = unequip_piece(character_name, slot=slot, item_id=item_id,
-                            source="wardrobe_ui")
-    if result.get("status") != "ok" and item_id:
-        result = unequip_item(character_name, item_id, source="wardrobe_ui")
+    with keyed_lock("character_profile", character_name):
+        # First as a piece (slot or item_id), then as an equipped item.
+        result = unequip_piece(character_name, slot=slot, item_id=item_id,
+                               source="wardrobe_ui")
+        if result.get("status") != "ok" and item_id:
+            result = unequip_item(character_name, item_id, source="wardrobe_ui")
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("reason", "unequip failed"))
     # Direct (UI) action is world-visible: narrator line -> others can react.
@@ -1033,8 +1048,13 @@ async def apply_equipped_route(character_name: str, request: Request) -> Dict[st
 
 def _apply_equipped_route_sync(character_name: str,
                                body: Any) -> Dict[str, Any]:
-    """The blocking body of ``apply_equipped_route`` — runs in the
-    threadpool."""
+    """The blocking body of ``apply_equipped_route`` — runs in the threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``): the whole equipped state
+    is one read-modify-write, and it races both the single-piece equips above
+    and a second apply of the same character.
+    """
+    from app.core.keyed_lock import keyed_lock
     from app.models.inventory import apply_equipped_pieces
     user_id = (body.get("user_id") or "").strip()
     pieces = body.get("pieces") or {}
@@ -1044,9 +1064,10 @@ def _apply_equipped_route_sync(character_name: str,
         raise HTTPException(status_code=400, detail="pieces must be {slot: item_id}")
     if not isinstance(pieces_meta, dict):
         pieces_meta = {}
-    result = apply_equipped_pieces(character_name,
-        pieces=pieces, remove_slots=remove_slots,
-        pieces_meta=pieces_meta, source="ui_wardrobe")
+    with keyed_lock("character_profile", character_name):
+        result = apply_equipped_pieces(character_name,
+            pieces=pieces, remove_slots=remove_slots,
+            pieces_meta=pieces_meta, source="ui_wardrobe")
     return {
         "status": "ok",
         "changed": result["changed"],
@@ -1073,7 +1094,12 @@ async def apply_outfit_set_route(character_name: str, request: Request) -> Dict[
 def _apply_outfit_set_route_sync(character_name: str,
                                  body: Any) -> Dict[str, Any]:
     """The blocking body of ``apply_outfit_set_route`` — runs in the
-    threadpool."""
+    threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``) around the apply, like
+    every other equip path here.
+    """
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_outfits
     from app.models.inventory import apply_equipped_pieces, get_item
     outfit_id = (body.get("outfit_id") or "").strip()
@@ -1114,11 +1140,12 @@ def _apply_outfit_set_route_sync(character_name: str,
             if _color and pieces_by_slot.get(_slot):
                 pieces_meta[_slot] = {"color": str(_color).strip()}
 
-    result = apply_equipped_pieces(character_name,
-        pieces=pieces_by_slot,
-        remove_slots=list(target.get("remove_slots") or []),
-        pieces_meta=pieces_meta,
-        source="outfit_preset")
+    with keyed_lock("character_profile", character_name):
+        result = apply_equipped_pieces(character_name,
+            pieces=pieces_by_slot,
+            remove_slots=list(target.get("remove_slots") or []),
+            pieces_meta=pieces_meta,
+            source="outfit_preset")
     return {
         "status": "ok",
         "outfit_id": target.get("id"),

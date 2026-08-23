@@ -452,7 +452,13 @@ export interface BackdropSpec {
  *  - `stale`: its `seq` is not newer than the last ACCEPTED one, so it is a
  *    leftover of a request we already aborted (§ A15, 2026-08-23). Dropping
  *    it is what keeps a stalled server from taking a point seconds behind the
- *    figure as the newest one and snapping the walk back onto it.
+ *    figure as the newest one and snapping the walk back onto it;
+ *  - `superseded`: another report of the same avatar was still in the
+ *    handler, and the server never waits for it (2026-08-24) — the next
+ *    report carries a fresher point anyway.
+ *
+ * The caller handles `ok: false` as ONE case and does not read the flags, so
+ * a new one added by the server needs no client change.
  *
  * Everything else is a 4xx and arrives as an `ApiError` with the server's
  * `reason`, its player-facing `message` and the LAST VALID point to snap the
@@ -462,6 +468,7 @@ export interface PosReport {
   ok: boolean;
   throttled?: boolean;
   stale?: boolean;
+  superseded?: boolean;
   pos?: { x: number; z: number };
   location_id?: string;
   room_id?: string;

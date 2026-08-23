@@ -1,6 +1,9 @@
 """Admin Settings Routes — JSON-based configuration management."""
 import asyncio
 import json
+import os
+import tempfile
+from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import HTMLResponse
@@ -497,6 +500,55 @@ def help_topics(user=Depends(require_admin)):
     return {"topics": topics}
 
 
+@contextmanager
+def _prompt_filters_txn():
+    """Serializes every writer of the prompt-filter STORE (both halves).
+
+    A filter lives in one of two places — the shared baseline JSON file and
+    the per-world overlay table — and ``/prompt-filters/{id}/move`` reads BOTH
+    and then writes one and deletes from the other. A save or a delete landing
+    inside that window either gets moved along by mistake or resurrects an
+    overlay row the move has just removed. Since these bodies run in the
+    threadpool (2026-08-24) the event loop no longer keeps them apart.
+
+    ONE key for the whole store (the shared file's path): filter edits are
+    rare admin clicks, and a per-id lock would not cover the move's two-store
+    read at all.
+    """
+    from app.core.keyed_lock import keyed_lock
+    from app.core.prompt_filters import _SHARED_FILE
+    with keyed_lock("prompt_filters", str(_SHARED_FILE)):
+        yield
+
+
+def _write_shared_filters(filters: List[Dict[str, Any]]) -> None:
+    """ATOMIC write of the shared baseline — temp file, then rename.
+
+    The previous ``write_text`` truncated the file first, so a crash or a
+    concurrent reader could see half a document — and an unreadable baseline
+    silently degrades every prompt that relies on a filter. ``os.replace`` is
+    atomic within a filesystem, hence the temp file in the SAME directory. Its
+    permissions are carried over from the file being replaced — ``mkstemp``
+    creates 0600, and the baseline is a tracked repo file whose mode must not
+    change under an edit.
+    """
+    from app.core.prompt_filters import _SHARED_FILE
+    _SHARED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    mode = _SHARED_FILE.stat().st_mode & 0o777 if _SHARED_FILE.exists() else 0o644
+    fd, tmp = tempfile.mkstemp(dir=str(_SHARED_FILE.parent), suffix=".json.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"filters": filters}, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, mode)
+        os.replace(tmp, str(_SHARED_FILE))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 @router.post("/prompt-filters/save")
 async def prompt_filters_save(request: Request, user=Depends(require_admin)):
     """Upsert eines Filters in die per-world prompt_filters-Tabelle.
@@ -512,8 +564,10 @@ async def prompt_filters_save(request: Request, user=Depends(require_admin)):
 
 
 def _prompt_filters_save_sync(user, body: Any):
-    """The blocking body of ``prompt_filters_save`` — runs in the
-    threadpool."""
+    """The blocking body of ``prompt_filters_save`` — runs in the threadpool.
+
+    Serialized against the move/delete of the same store (``_prompt_filters_txn``).
+    """
     import json as _json
     from app.core.db import transaction
     fid = (body.get("id") or "").strip()
@@ -536,7 +590,7 @@ def _prompt_filters_save_sync(user, body: Any):
     valid = set(_prompt_filter_block_keys())
     drop_blocks = [b for b in drop_blocks if b in valid]
 
-    with transaction() as conn:
+    with _prompt_filters_txn(), transaction() as conn:
         conn.execute("""
             INSERT INTO prompt_filters (id, condition, label, drop_blocks,
                                         prompt_modifier, enabled, meta,
@@ -567,7 +621,9 @@ def prompt_filters_delete(filter_id: str, user=Depends(require_admin)):
     """
     from app.core.db import transaction
 
-    with transaction() as conn:
+    # Same store lock as save/move — a delete landing inside a move's
+    # read-write window would be undone by it (or undo it).
+    with _prompt_filters_txn(), transaction() as conn:
         conn.execute("DELETE FROM prompt_filters WHERE id=?", (filter_id,))
     return {"status": "ok", "id": filter_id}
 
@@ -598,8 +654,13 @@ async def prompt_filters_move(filter_id: str, request: Request, user=Depends(req
 
 
 def _prompt_filters_move_sync(filter_id: str, user, body: Any):
-    """The blocking body of ``prompt_filters_move`` — runs in the
-    threadpool."""
+    """The blocking body of ``prompt_filters_move`` — runs in the threadpool.
+
+    THE WHOLE MOVE IS ONE TRANSACTION (``_prompt_filters_txn``): it reads both
+    stores, writes one of them and deletes from the other, and a save or a
+    delete of the same filter landing in between would leave the two halves
+    disagreeing. The shared file is written atomically (``_write_shared_filters``).
+    """
     import json as _json
     from app.core.db import transaction
     from app.core.prompt_filters import _load_shared, _load_world, _SHARED_FILE
@@ -607,68 +668,65 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
     if target not in ("shared", "world"):
         raise HTTPException(status_code=400, detail="target must be 'shared' or 'world'")
 
-    # Resolve the canonical filter to move — world override wins over shared.
-    world = {(e.get("id") or "").strip(): e for e in _load_world() if e.get("id")}
-    shared = {(e.get("id") or "").strip(): e for e in _load_shared() if e.get("id")}
-    src = world.get(filter_id) or shared.get(filter_id)
-    if not src:
-        raise HTTPException(status_code=404, detail="filter not found")
+    with _prompt_filters_txn():
+        # Resolve the canonical filter to move — world override wins over shared.
+        world = {(e.get("id") or "").strip(): e for e in _load_world() if e.get("id")}
+        shared = {(e.get("id") or "").strip(): e for e in _load_shared() if e.get("id")}
+        src = world.get(filter_id) or shared.get(filter_id)
+        if not src:
+            raise HTTPException(status_code=404, detail="filter not found")
 
-    # Stripping internal-only keys keeps both stores tidy.
-    clean = {k: v for k, v in src.items() if k not in ("source", "_origin", "meta")}
+        # Stripping internal-only keys keeps both stores tidy.
+        clean = {k: v for k, v in src.items() if k not in ("source", "_origin", "meta")}
 
-    if target == "shared":
-        _SHARED_FILE.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            existing = _json.loads(_SHARED_FILE.read_text(encoding="utf-8")) if _SHARED_FILE.exists() else {}
-        except Exception:
-            existing = {}
-        filters = list(existing.get("filters") or [])
-        replaced = False
-        for i, f in enumerate(filters):
-            if (f.get("id") or "").strip() == filter_id:
-                filters[i] = clean
-                replaced = True
-                break
-        if not replaced:
-            filters.append(clean)
-        _SHARED_FILE.write_text(
-            _json.dumps({"filters": filters}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if target == "shared":
+            try:
+                existing = _json.loads(_SHARED_FILE.read_text(encoding="utf-8")) if _SHARED_FILE.exists() else {}
+            except Exception:
+                existing = {}
+            filters = list(existing.get("filters") or [])
+            replaced = False
+            for i, f in enumerate(filters):
+                if (f.get("id") or "").strip() == filter_id:
+                    filters[i] = clean
+                    replaced = True
+                    break
+            if not replaced:
+                filters.append(clean)
+            _write_shared_filters(filters)
+            with transaction() as conn:
+                conn.execute("DELETE FROM prompt_filters WHERE id=?", (filter_id,))
+            return {"status": "ok", "id": filter_id, "target": "shared"}
+
+        # target == "world": upsert the resolved filter into the world overlay.
+        drops = clean.get("drop_blocks") or []
         with transaction() as conn:
-            conn.execute("DELETE FROM prompt_filters WHERE id=?", (filter_id,))
-        return {"status": "ok", "id": filter_id, "target": "shared"}
-
-    # target == "world": upsert the resolved filter into the world overlay.
-    drops = clean.get("drop_blocks") or []
-    with transaction() as conn:
-        conn.execute(
-            """
-            INSERT INTO prompt_filters (id, condition, label, drop_blocks,
-                                        prompt_modifier, enabled, meta,
-                                        icon, image_modifier)
-            VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                condition=excluded.condition,
-                label=excluded.label,
-                drop_blocks=excluded.drop_blocks,
-                prompt_modifier=excluded.prompt_modifier,
-                enabled=excluded.enabled,
-                icon=excluded.icon,
-                image_modifier=excluded.image_modifier
-            """,
-            (
-                filter_id,
-                (clean.get("condition") or "").strip(),
-                (clean.get("label") or "").strip(),
-                _json.dumps(drops if isinstance(drops, list) else [], ensure_ascii=False),
-                (clean.get("prompt_modifier") or "").strip(),
-                1 if clean.get("enabled", True) else 0,
-                (clean.get("icon") or "").strip(),
-                (clean.get("image_modifier") or "").strip(),
-            ),
-        )
+            conn.execute(
+                """
+                INSERT INTO prompt_filters (id, condition, label, drop_blocks,
+                                            prompt_modifier, enabled, meta,
+                                            icon, image_modifier)
+                VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    condition=excluded.condition,
+                    label=excluded.label,
+                    drop_blocks=excluded.drop_blocks,
+                    prompt_modifier=excluded.prompt_modifier,
+                    enabled=excluded.enabled,
+                    icon=excluded.icon,
+                    image_modifier=excluded.image_modifier
+                """,
+                (
+                    filter_id,
+                    (clean.get("condition") or "").strip(),
+                    (clean.get("label") or "").strip(),
+                    _json.dumps(drops if isinstance(drops, list) else [], ensure_ascii=False),
+                    (clean.get("prompt_modifier") or "").strip(),
+                    1 if clean.get("enabled", True) else 0,
+                    (clean.get("icon") or "").strip(),
+                    (clean.get("image_modifier") or "").strip(),
+                ),
+            )
     return {"status": "ok", "id": filter_id, "target": "world"}
 
 

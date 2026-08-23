@@ -490,15 +490,23 @@ async def set_decency_preference(character_name: str, request: Request) -> Dict[
 def _set_decency_preference_sync(character_name: str,
                                  body: Any) -> Dict[str, Any]:
     """The blocking body of ``set_decency_preference`` — runs in the
-    threadpool."""
+    threadpool.
+
+    SERIALIZED PER CHARACTER (``character_profile``): read the profile, change
+    one field, write the WHOLE profile back — in the threadpool that races
+    every other profile writer of the same character (the equip family above
+    all) and would overwrite its change with a pre-state copy.
+    """
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     pref = str((body or {}).get("decency_preference") or "").strip()
-    profile = get_character_profile(character_name) or {}
-    if pref:
-        profile["decency_preference"] = pref
-    else:
-        profile.pop("decency_preference", None)
-    save_character_profile(character_name, profile)
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        if pref:
+            profile["decency_preference"] = pref
+        else:
+            profile.pop("decency_preference", None)
+        save_character_profile(character_name, profile)
     return {"status": "ok", "character": character_name, "decency_preference": pref}
 
 

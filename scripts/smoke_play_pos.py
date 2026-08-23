@@ -256,16 +256,21 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       against 30 ms of the new one is far outside the 15 s leftover window —
       so the baseline is dropped and the new session's first report is taken.
 
-  [22] ONE REPORT AT A TIME PER AVATAR (2026-08-24). The route hands
-      everything after the body parse to the threadpool, so the event loop
-      stops being the thing that serialized two reports of the same avatar.
-      What serializes them now is a per-avatar lock, and this case shows it is
-      really held for the WHOLE report: with the avatar's lock taken by the
-      test, a report started in another thread does not finish (it is still
-      waiting after 0.3 s — well past the few milliseconds it needs when the
-      way is free), and it completes as an ordinary acceptance the moment the
-      lock is released. Two DIFFERENT avatars get two different locks, which
-      is what keeps two players out of each other's way.
+  [22] ONE REPORT AT A TIME PER AVATAR, AND THE SECOND IS DROPPED
+      (2026-08-24). The route hands everything after the body parse to the
+      threadpool, so the event loop stops being the thing that serialized two
+      reports of the same avatar. What serializes them now is a per-avatar
+      lock — taken WITHOUT WAITING: a walker sends up to four reports a
+      second, and parking each contended one on the lock would tie a
+      threadpool worker to it (the shared executor is what the move off the
+      event loop was meant to protect), while the point it carries is stale by
+      the time the lock is free anyway. So with the avatar's lock taken by the
+      test, a report started in another thread comes back AT ONCE with 200
+      ``{ok: false, superseded: true}`` and writes nothing — the client reads
+      every ``ok: false`` the same way (still dirty, report again next tick,
+      ≤ 250 ms later), and the report after the release is an ordinary
+      acceptance. Two DIFFERENT avatars get two different locks, which is what
+      keeps two players out of each other's way.
 
 NOTE ON THE PARKING HELPER. ``park()`` writes the avatar's point directly
 (``set_character_pos``) and forgets the report clock — it is WORLD SETUP, not
@@ -891,7 +896,7 @@ def main() -> int:
     check("the avatar followed it", get_character_pos(AVATAR),
           {"x": 800.0, "z": 805.0})
 
-    print("\n[22] one report at a time per avatar")
+    print("\n[22] one report at a time per avatar — the second is SUPERSEDED")
     import threading
     check("the same avatar always gets the SAME lock",
           play_route._pos_lock(AVATAR) is play_route._pos_lock(AVATAR), True)
@@ -908,12 +913,21 @@ def main() -> int:
     lock.acquire()
     worker = threading.Thread(target=_report_in_thread, daemon=True)
     worker.start()
-    worker.join(0.3)
-    check("a second report waits while the lock is held", held, [])
-    lock.release()
+    # It must NOT wait: the report finds the lock taken and answers at once.
     worker.join(5.0)
-    check("...and goes through once it is released",
-          held[0][0] if held else None, "ok")
+    check("a second report does not wait for the lock", worker.is_alive(), False)
+    check("...it answers 200, not an error", held[0][0] if held else None, "ok")
+    check("...as a non-acceptance", (held[0][1] if held else {}).get("ok"), False)
+    check("...flagged superseded",
+          (held[0][1] if held else {}).get("superseded"), True)
+    check("nothing was written while the lock was held",
+          get_character_pos(AVATAR), {"x": 800.0, "z": 805.0})
+    lock.release()
+    # The lock is free again: the very next report is an ordinary acceptance,
+    # which is what makes the drop harmless — the client retries ≤ 250 ms later.
+    status, again = report(800.0, 806.0)
+    check("the next report goes through once the lock is free", status, "ok")
+    check("...and is a real acceptance", (again or {}).get("ok"), True)
     check("the avatar followed it", get_character_pos(AVATAR),
           {"x": 800.0, "z": 806.0})
 

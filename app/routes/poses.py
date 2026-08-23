@@ -14,7 +14,10 @@ approval flow here. The animation vocabulary is NOT hardcoded either: it is
 whatever clips the world currently ships.
 """
 import json
-from typing import Any, Dict, List
+import os
+import tempfile
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -37,9 +40,34 @@ def _axis(axis: str) -> str:
     return value
 
 
+@contextmanager
+def _catalog_txn(axis: str) -> Iterator[None]:
+    """Serializes ONE catalog file against every other writer of it.
+
+    The editor's write paths are all ``_read`` → change → ``_write`` over the
+    WHOLE document. They used to be kept apart by the event loop; since the
+    route bodies run in the threadpool (2026-08-24) two admins (or two tabs)
+    can be inside one at the same time, both read the same document and the
+    later write drops the earlier entry. The alias checks
+    (``_require_free_aliases``) have the same problem: they read the catalog
+    cache, and without the lock two new entries can each pass the check for an
+    alias only one of them may own.
+
+    Keyed by the catalog FILE PATH, so the ``pose`` and the ``expression``
+    axis do not wait for each other. Blocking — these are rare admin clicks,
+    and a dropped edit would have to be retyped.
+    """
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("pose_catalog", str(pose_catalog.catalog_path(axis))):
+        yield
+
+
 def _read(axis: str) -> Dict[str, Any]:
     """Raw catalog document of an axis (keeps ``_comment`` and any field this
-    router does not know about, so a write never eats them)."""
+    router does not know about, so a write never eats them).
+
+    Call it inside :func:`_catalog_txn` whenever the result is written back.
+    """
     try:
         data = json.loads(pose_catalog.catalog_path(axis).read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
@@ -52,10 +80,32 @@ def _read(axis: str) -> Dict[str, Any]:
 
 
 def _write(axis: str, data: Dict[str, Any]) -> None:
+    """ATOMIC catalog write — temp file in the same directory, then rename.
+
+    The old in-place ``open(path, "w")`` truncated the catalog before writing
+    it: a crash, a full disk or a reader arriving mid-write saw a truncated or
+    empty document — and this file is the render key of every pose and
+    expression, so an empty one takes the whole world's poses with it.
+    ``os.replace`` is atomic within one filesystem, which is why the temp file
+    is created in the catalog's OWN directory. Its permissions are carried
+    over from the file being replaced — ``mkstemp`` creates 0600, and the
+    catalog is a tracked repo file whose mode must not change under an edit.
+    """
     path = pose_catalog.catalog_path(axis)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".json.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, mode)
+        os.replace(tmp, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     # Drops the catalog cache, the alias embeddings and the expression memo.
     epm.reload_presets()
 
@@ -153,18 +203,19 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     animation = str(body.get("animation") or "").strip().lower()
     if axis == "pose" and not animation:
         raise HTTPException(status_code=400, detail="animation missing")
-    data = _read(axis)
-    if key in data["entries"]:
-        raise HTTPException(status_code=409, detail="Entry already exists")
-    synonyms = _synonyms(body.get("synonyms") or [])
-    _require_free_aliases(axis, [key] + synonyms)
+    with _catalog_txn(axis):
+        data = _read(axis)
+        if key in data["entries"]:
+            raise HTTPException(status_code=409, detail="Entry already exists")
+        synonyms = _synonyms(body.get("synonyms") or [])
+        _require_free_aliases(axis, [key] + synonyms)
 
-    entry: Dict[str, Any] = {"prompt": prompt, "synonyms": synonyms}
-    if axis == "pose":
-        entry["animation"] = animation
-        entry["solo"] = bool(body.get("solo", True))
-    data["entries"][key] = entry
-    _write(axis, data)
+        entry: Dict[str, Any] = {"prompt": prompt, "synonyms": synonyms}
+        if axis == "pose":
+            entry["animation"] = animation
+            entry["solo"] = bool(body.get("solo", True))
+        data["entries"][key] = entry
+        _write(axis, data)
     return {"status": "success", "key": key, "axis": axis}
 
 
@@ -182,27 +233,28 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
     """The blocking body of ``update_entry`` — runs in the threadpool."""
     axis = _axis(axis)
     key = key.strip().lower()
-    data = _read(axis)
-    entry = data["entries"].get(key)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    if "prompt" in body:
-        entry["prompt"] = str(body["prompt"] or "").strip()
-    if "synonyms" in body:
-        synonyms = _synonyms(body["synonyms"] or [])
-        # The entry's OWN key is excluded: re-saving it with the synonyms it
-        # already holds must stay legal.
-        _require_free_aliases(axis, synonyms, exclude_key=key)
-        entry["synonyms"] = synonyms
-    if "animation" in body and axis == "pose":
-        anim = str(body["animation"] or "").strip().lower()
-        if not anim:
-            raise HTTPException(status_code=400, detail="animation missing")
-        entry["animation"] = anim
-    if "solo" in body and axis == "pose":
-        entry["solo"] = bool(body["solo"])
-    data["entries"][key] = entry
-    _write(axis, data)
+    with _catalog_txn(axis):
+        data = _read(axis)
+        entry = data["entries"].get(key)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        if "prompt" in body:
+            entry["prompt"] = str(body["prompt"] or "").strip()
+        if "synonyms" in body:
+            synonyms = _synonyms(body["synonyms"] or [])
+            # The entry's OWN key is excluded: re-saving it with the synonyms
+            # it already holds must stay legal.
+            _require_free_aliases(axis, synonyms, exclude_key=key)
+            entry["synonyms"] = synonyms
+        if "animation" in body and axis == "pose":
+            anim = str(body["animation"] or "").strip().lower()
+            if not anim:
+                raise HTTPException(status_code=400, detail="animation missing")
+            entry["animation"] = anim
+        if "solo" in body and axis == "pose":
+            entry["solo"] = bool(body["solo"])
+        data["entries"][key] = entry
+        _write(axis, data)
     return {"status": "success", "key": key, "axis": axis}
 
 
@@ -213,15 +265,16 @@ def delete_entry(key: str, axis: str = Query("pose"),
     is the target every unresolvable free text falls back to."""
     axis = _axis(axis)
     key = key.strip().lower()
-    data = _read(axis)
-    entry = data["entries"].get(key)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    if entry.get("_default"):
-        raise HTTPException(status_code=400,
-                            detail="the default entry cannot be deleted")
-    data["entries"].pop(key, None)
-    _write(axis, data)
+    with _catalog_txn(axis):
+        data = _read(axis)
+        entry = data["entries"].get(key)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        if entry.get("_default"):
+            raise HTTPException(status_code=400,
+                                detail="the default entry cannot be deleted")
+        data["entries"].pop(key, None)
+        _write(axis, data)
     return {"status": "success", "key": key, "axis": axis}
 
 
@@ -262,50 +315,52 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     raw_text = str(body.get("raw_text") or "").strip().lower()
     if not raw_text:
         raise HTTPException(status_code=400, detail="raw_text missing")
-    data = _read(axis)
-    target = str(body.get("as_synonym_of") or "").strip().lower()
+    with _catalog_txn(axis):
+        data = _read(axis)
+        target = str(body.get("as_synonym_of") or "").strip().lower()
 
-    if target:
-        entry = data["entries"].get(target)
-        if entry is None:
-            raise HTTPException(status_code=404, detail="Entry not found")
-        owner = _alias_owner(axis, raw_text)
-        if owner and owner != target:
-            raise HTTPException(status_code=409,
-                                detail=f"'{raw_text}' already belongs to '{owner}'")
-        synonyms = [str(s).strip().lower() for s in (entry.get("synonyms") or [])
-                    if str(s).strip()]
-        if raw_text != target and raw_text not in synonyms:
-            synonyms.append(raw_text)
-        entry["synonyms"] = synonyms
-        data["entries"][target] = entry
-        key = target
-    else:
-        key = _key(body.get("key"))
-        prompt = str(body.get("prompt") or "").strip()
-        if not prompt:
-            raise HTTPException(status_code=400, detail="prompt missing")
-        animation = str(body.get("animation") or "").strip().lower()
-        # Only non-emptiness is checked: the kind vocabulary is world-dependent
-        # (whatever clips exist), so an unknown kind is a warning, not a wall.
-        if axis == "pose" and not animation:
-            raise HTTPException(status_code=400, detail="animation missing")
-        if key in data["entries"]:
-            raise HTTPException(status_code=409, detail="Entry already exists")
-        # The candidate text itself becomes a synonym unless it IS the key —
-        # on top of whatever the admin typed into the form.
-        synonyms: List[str] = []
-        for alias in _synonyms(body.get("synonyms") or []) + [raw_text]:
-            if alias != key and alias not in synonyms:
-                synonyms.append(alias)
-        _require_free_aliases(axis, [key] + synonyms)
-        entry = {"prompt": prompt, "synonyms": synonyms}
-        if axis == "pose":
-            entry["animation"] = animation
-            entry["solo"] = bool(body.get("solo", True))
-        data["entries"][key] = entry
+        if target:
+            entry = data["entries"].get(target)
+            if entry is None:
+                raise HTTPException(status_code=404, detail="Entry not found")
+            owner = _alias_owner(axis, raw_text)
+            if owner and owner != target:
+                raise HTTPException(status_code=409,
+                                    detail=f"'{raw_text}' already belongs to '{owner}'")
+            synonyms = [str(s).strip().lower() for s in (entry.get("synonyms") or [])
+                        if str(s).strip()]
+            if raw_text != target and raw_text not in synonyms:
+                synonyms.append(raw_text)
+            entry["synonyms"] = synonyms
+            data["entries"][target] = entry
+            key = target
+        else:
+            key = _key(body.get("key"))
+            prompt = str(body.get("prompt") or "").strip()
+            if not prompt:
+                raise HTTPException(status_code=400, detail="prompt missing")
+            animation = str(body.get("animation") or "").strip().lower()
+            # Only non-emptiness is checked: the kind vocabulary is
+            # world-dependent (whatever clips exist), so an unknown kind is a
+            # warning, not a wall.
+            if axis == "pose" and not animation:
+                raise HTTPException(status_code=400, detail="animation missing")
+            if key in data["entries"]:
+                raise HTTPException(status_code=409, detail="Entry already exists")
+            # The candidate text itself becomes a synonym unless it IS the key
+            # — on top of whatever the admin typed into the form.
+            synonyms: List[str] = []
+            for alias in _synonyms(body.get("synonyms") or []) + [raw_text]:
+                if alias != key and alias not in synonyms:
+                    synonyms.append(alias)
+            _require_free_aliases(axis, [key] + synonyms)
+            entry = {"prompt": prompt, "synonyms": synonyms}
+            if axis == "pose":
+                entry["animation"] = animation
+                entry["solo"] = bool(body.get("solo", True))
+            data["entries"][key] = entry
 
-    _write(axis, data)
+        _write(axis, data)
     pose_catalog.delete_candidate(axis, raw_text)
     logger.info("candidate approved: %s/%r -> %r", axis, raw_text, key)
     return {"status": "success", "axis": axis, "key": key}
