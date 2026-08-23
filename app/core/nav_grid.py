@@ -17,7 +17,7 @@ leave or enter a building — or when the terrain AT ITS CENTRE is impassable
 AND that centre lies out in the WILDERNESS (the place wins, decision
 2026-08-13: painted ground judges PASSABILITY between the places, never the
 inside of one — see :meth:`_Search.blocked`), or when the GROUND UNDER IT IS
-TOO STEEP to stand on (E8 task 4, the walking rule of § A15 no. 8 measured as
+TOO STEEP to stand on (E8 task 4, the walking rule of § A15 no. 9 measured as
 the slope at the cell centre — :meth:`_Search.too_steep`; that one steps back
 only inside a place that LEVELS its ground, since flattening became opt-in).
 A* walks the 8 neighbours (no corner-cutting: a diagonal needs both
@@ -141,7 +141,7 @@ SLOPE_COST_S_PER_M = 4.0
 # the point a walker would actually cross at. An opening is BY DEFINITION the
 # way in — a place on its own plateau has its step exactly there, and refusing
 # it would lock every such location behind its own door for the router while
-# an avatar walks through it (§ A15 no. 8, the ramp-end exemption).
+# an avatar walks through it (§ A15 no. 9, the ramp-end exemption).
 OPENING_EXEMPT_M = 1.5 + NAV_CELL_M
 
 _SQRT2 = math.sqrt(2.0)

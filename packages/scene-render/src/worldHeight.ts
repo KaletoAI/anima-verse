@@ -10,7 +10,7 @@
  *
  * THE TWIN. `app/core/heightfield.sample_height` is the same formula in
  * Python, and it has to be the same: the server refuses a walk report whose
- * slope is too steep (§ A15 Nr. 8) using its own reading of this field, so a
+ * slope is too steep (§ A15 Nr. 9) using its own reading of this field, so a
  * renderer that drapes the ground half a metre differently produces a figure
  * refused where the picture says the hill is gentle. Both are checked against
  * ONE hand-derived table — `scripts/smoke_heightfield.py` section [8] and

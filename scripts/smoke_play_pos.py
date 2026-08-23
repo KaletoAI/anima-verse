@@ -21,23 +21,27 @@ The validation chain, in the order the route applies it:
      ``/play/travel`` refuses with),
   2. the numbers are finite (400 — a NaN sails through every later
      comparison and poisons the JSON encoder),
-  3. THROTTLE: at most ~4 accepted reports a second per avatar. Excess is
+  3. STALE: a report whose ``seq`` is not newer than the last ACCEPTED one is
+     dropped SILENTLY (200 ``{ok: false, stale: true}``) — case [21],
+  4. THROTTLE: at most ~4 accepted reports a second per avatar. Excess is
      dropped SILENTLY (200 ``{ok: false, throttled: true}``) — a client that
      reports every frame must not collect error toasts,
-  4. plausible step against the real time since the LAST ACCEPTED report:
+  5. plausible step against the time elapsed since the LAST ACCEPTED report:
      allowance = max(5 m, 3 × travel_speed × game_factor × elapsed,
      3 × 3.4 m/s × elapsed). THREE terms: the floor, the GAME-clock term and
      the REAL-clock term — the last one exists because free walking is not
      coupled to the game clock, so a frozen or slow world (factor 0) must not
      collect 409s from an honest walker. Generous on purpose — this is an
      anti-teleport bound, not a precision anticheat (409 ``too_far`` + the
-     last valid point),
-  5. the LOCATION of the point (``location_at_point``) — derived FIRST,
+     last valid point). ``elapsed`` is the CLIENT's own ``t_ms`` difference
+     when the report is stamped, the server's processing-time difference when
+     it is not (case [21]),
+  6. the LOCATION of the point (``location_at_point``) — derived FIRST,
      because it decides whether the terrain check applies at all,
-  6. terrain ``passability_at`` at the reported point, ONLY OUT IN THE
+  7. terrain ``passability_at`` at the reported point, ONLY OUT IN THE
      WILDERNESS (409 ``impassable`` + the last valid point) — inside a placed
      footprint the FOOTPRINT WINS (decision 2026-08-13, case [20]),
-  7. the LOCATION TRANSITION derived from the point, through the FULL gate
+  8. the LOCATION TRANSITION derived from the point, through the FULL gate
      (see below).
 
 A running journey is CANCELLED by the first accepted report — free walking
@@ -220,6 +224,38 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       Plus the wilderness half, untouched: a rock patch x ∈ [640, 650],
       z ∈ [40, 50] with no location anywhere near it refuses (645, 42).
 
+  [21] THE ORDERING PAIR ``seq`` + ``t_ms`` (2026-08-23) — the answer to the
+      snap-back loop a BLOCKED EVENT LOOP produces. The client gives a report
+      8 s and then aborts it, but the request keeps running on the server and
+      is processed late; taken as the newest point it drags the server's
+      baseline seconds behind the figure, and every honest report after it
+      looks like a 12 m stride in 0.4 s. Four probes, all with the game clock
+      frozen (factor 0, so the game term of the allowance is 0):
+        a) two stamped reports, ``seq`` 1 then 5, land the avatar on
+           (800, 803) — plain wilderness grass, nothing near it;
+        b) THE LEFTOVER: ``seq`` 2 at (800, 802). One metre away, grass, in
+           the wilderness — it would sail through every single gate, which is
+           the point: only the ORDER refuses it. Answer 200
+           ``{ok: false, stale: true}``, and the stored point stays
+           (800, 803). No correction is sent, so nothing snaps back;
+        c) THE STALLED SERVER: the client walked 20 m while the loop was
+           blocked for 3 s and its clock says so (``t_ms`` 2000 → 5000), while
+           the gap between the two handler runs is ≈ 0. Client-measured
+           elapsed 3.0 s → allowance max(5, 0, 3 × 3.4 × 3.0) = 30.6 m, and
+           20 m is inside it → accepted;
+        d) THE COUNTER-PROBE, the same 20 m from the same point with NO stamp:
+           elapsed is the server's ≈ 0, the allowance falls back to the 5 m
+           floor and it is refused ``too_far`` — which is both halves at once,
+           the proof that (c) was really the client's clock and the proof that
+           an unstamped client is judged exactly as before (a 2 m step right
+           after it is accepted, so what refuses is the distance and not a
+           block).
+      Plus the RELOAD: a fresh session restarts its counter at 1, and a
+      baseline of ``seq`` 40 would make every one of its reports "stale"
+      forever. The client clock gives it away — 90 s of the old session
+      against 30 ms of the new one is far outside the 15 s leftover window —
+      so the baseline is dropped and the new session's first report is taken.
+
 NOTE ON THE PARKING HELPER. ``park()`` writes the avatar's point directly
 (``set_character_pos``) and forgets the report clock — it is WORLD SETUP, not
 a call of the route: walking the 45 m up to HALL through the route would be a
@@ -364,22 +400,31 @@ def place(name: str, x: float, z: float, *, room: str = "",
     return loc_id
 
 
-def report(x: float, z: float):
-    """POST /play/pos → ("ok", payload) or ("refused", (status, detail))."""
+def report(x: float, z: float, seq: int = None, t_ms: float = None):
+    """POST /play/pos → ("ok", payload) or ("refused", (status, detail)).
+
+    ``seq``/``t_ms`` are the client's ORDERING PAIR (case [21]) and are only
+    put into the body when given — every other case here reports UNSTAMPED,
+    which is the behaviour the pair must leave untouched.
+    """
+    payload = {"x": x, "z": z}
+    if seq is not None:
+        payload["seq"], payload["t_ms"] = seq, t_ms
     try:
-        return "ok", asyncio.run(play_pos(_FakeRequest({"x": x, "z": z}),
-                                          user=USER))
+        return "ok", asyncio.run(play_pos(_FakeRequest(payload), user=USER))
     except HTTPException as exc:
         return "refused", (exc.status_code, exc.detail)
 
 
 def park(x: float, z: float, room: str = "") -> None:
-    """World setup, not a move: put the avatar at a point and forget the
-    report clock, so the next report is judged like a session's first one."""
+    """World setup, not a move: put the avatar at a point and forget BOTH
+    report baselines (the server's clock and the client's ordering pair), so
+    the next report is judged like a session's first one."""
     set_character_pos(AVATAR, x, z)
     if room:
         save_character_current_room(AVATAR, room)
     play_route._pos_report_at.pop(AVATAR, None)
+    play_route._pos_client_at.pop(AVATAR, None)
 
 
 def refusal_of(res):
@@ -775,6 +820,65 @@ def main() -> int:
     status, reason, _pos, _loc, _msg = refusal_of(res)
     check("wilderness rock is still a wall", res[0], "refused")
     check("the reason", reason, "impassable")
+
+    print("\n[21] the ordering pair: a leftover cannot pull the walk back")
+    # (a) the baseline — two STAMPED reports out in empty wilderness
+    # (x ≈ 800, z ≈ 800: no location, no painted area, flat ground).
+    park(800.0, 800.0)
+    status, _payload = report(800.0, 801.0, seq=1, t_ms=1000.0)
+    check("the first stamped report is accepted", status, "ok")
+    status, _payload = report(800.0, 803.0, seq=5, t_ms=2000.0)
+    check("the second stamped report is accepted", status, "ok")
+    check("the avatar stands where it put it", get_character_pos(AVATAR),
+          {"x": 800.0, "z": 803.0})
+    # (b) THE LEFTOVER. A point that would pass every gate — 1 m away, grass,
+    # wilderness — refused by its ORDER alone (seq 2 <= 5). This is the report
+    # that used to become the server's "last valid point" and snap the figure
+    # back onto a spot seconds behind it.
+    status, late = report(800.0, 802.0, seq=2, t_ms=1200.0)
+    check("the call succeeded — 200, not an error", status, "ok")
+    check("...but nothing was taken", (late or {}).get("ok"), False)
+    check("...and it says why", (late or {}).get("stale"), True)
+    check("no correction was sent with it", (late or {}).get("pos"), None)
+    check("the baseline point did not move backwards",
+          get_character_pos(AVATAR), {"x": 800.0, "z": 803.0})
+    # (c) THE STALLED SERVER. The loop was blocked for 3 s: the client walked
+    # 20 m and its clock says so (t_ms 2000 → 5000), while the gap between the
+    # two handler runs is ≈ 0 — pinned here by setting the server baseline to
+    # NOW, so the case measures the rule and not the machine.
+    # allowance = max(5, 0 [factor 0], 3 × 3.4 × 3.0) = 30.6 m > 20 m.
+    play_route._pos_report_at[AVATAR] = time.monotonic()
+    status, _payload = report(820.0, 803.0, seq=6, t_ms=5000.0)
+    check("20 m over 3 s of CLIENT time is allowed", status, "ok")
+    check("the avatar followed it", get_character_pos(AVATAR),
+          {"x": 820.0, "z": 803.0})
+    # (d) THE COUNTER-PROBE: identical geometry, identical server clock, but
+    # UNSTAMPED. Now elapsed is the server's ≈ 0 and the allowance is the bare
+    # 5 m floor — refused. Both halves in one probe: (c) really was the
+    # client's clock, and a client without the pair is judged as before.
+    park(800.0, 803.0)
+    play_route._pos_report_at[AVATAR] = time.monotonic()
+    res = report(820.0, 803.0)
+    status, reason, pos, _loc, _msg = refusal_of(res)
+    check("the same step on the SERVER's clock is refused", res[0], "refused")
+    check("the status", status, 409)
+    check("the reason", reason, "too_far")
+    check("the last valid point comes back", pos, {"x": 800.0, "z": 803.0})
+    status, _payload = report(802.0, 803.0)   # 2 m — inside the bare floor
+    check("...and an unstamped step inside the floor still passes", status,
+          "ok")
+    # (e) THE RELOAD. A fresh session restarts its counter at 1; against a
+    # baseline of seq 40 every report of it would be "stale" forever. The
+    # client clock gives the restart away (90 s → 30 ms is far outside the
+    # 15 s leftover window), so the baseline is dropped instead.
+    park(800.0, 803.0)
+    status, _payload = report(800.0, 804.0, seq=40, t_ms=90000.0)
+    check("the old session's last report is accepted", status, "ok")
+    status, fresh = report(800.0, 805.0, seq=1, t_ms=30.0)
+    check("the reloaded session's first report is not stale", status, "ok")
+    check("...it is a real acceptance", (fresh or {}).get("ok"), True)
+    check("the avatar followed it", get_character_pos(AVATAR),
+          {"x": 800.0, "z": 805.0})
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

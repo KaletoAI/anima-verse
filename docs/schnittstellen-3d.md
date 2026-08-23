@@ -769,7 +769,7 @@ Fernkulisse eingeschaltet ist, § A17).
 | `height_sig` | `str` (10) | Signatur über **alles, was die fünf Backstufen von `h_final` lesen** (§ A16.1): die autorierten Höhenflächen, das Mikro-Relief der gemalten Arten (`relief_inputs` — relief-freies Malen zählt nicht mit), die Wasser-Polygone samt ihren effektiven Zahlen (`water_basis`: Spiegel, beide Profil-Enden, Fließrichtung, aufgelöste Tiefe/Rampe — W1; ~~`zone_water_basis`~~ ist gelöscht) und die **Platzierungen der GEBAUTEN Orte** (ein verschobener Ort verschiebt sein Plateau; ein Ort, der einen Raum schließt oder öffnet, tritt in `placed_footprints()` ein oder aus — `level_ground` ist aus der Signatur verschwunden, § A16.4). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.5) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `game_time` | `{…}` | Die **Spieluhr** zu genau diesem Payload — derselbe Zeitpunkt, auf den alle Reisen unten gerechnet wurden. Fertig aufgeschlüsselt: `canonical` (`"Y0002-D109T14:00:00"`), `total_seconds`, `year`, `day_of_year`, `season`, `season_name`, `day_of_season`, `hour`, `minute`, `second`, `hour_fraction` (Sonnenstand), `weekday`/`weekday_name` (`null`/`""`, wenn die Welt keine Wochen kennt), `label`, `date_label`, `time` (HH:MM), `is_night`, `day_bucket`, `atmosphere` (`{season, temperature, weather, note, label}` — Temperatur/Wetter gehören der **Season**, nicht der Welt; `label` z. B. `"freezing, snow — often fog in the morning"`). **Nie gefoggt** — die Tageszeit sieht jeder. Der Client RENDERT daraus, er rechnet nichts: es gibt keine Weltzeitzone und kein reales Datum mehr, aus dem sich eine Spielstunde ableiten ließe |
-| `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 8) |
+| `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 9) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
 | `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
 
@@ -2302,7 +2302,7 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | `world_bounds` | **nein** | siehe unten |
 | `terrain_sig` | **nein** | Gelände wird nie gefoggt (§ A1.5) |
 | `game_time` | **nein** | die Spieluhr sieht jeder — Tageszeit ist keine Ortskenntnis |
-| `max_step_height_m`, `max_slope_deg` | **nein** | die zwei Lauf-Grenzwerte (§ A1.3, § A15 Nr. 8). Regeln sind keine Ortskenntnis — ein Grenzwert verrät nichts über die Welt |
+| `max_step_height_m`, `max_slope_deg` | **nein** | die zwei Lauf-Grenzwerte (§ A1.3, § A15 Nr. 9). Regeln sind keine Ortskenntnis — ein Grenzwert verrät nichts über die Welt |
 | `avatar`, `current_location_id` | nein | der Avatar sieht sich selbst |
 
 Unplatzierte Orte gelten dabei als **sichtbar** — sie passieren den Filter, und
@@ -2554,11 +2554,38 @@ nicht mehr pro Kante um Erlaubnis, sondern **beurteilt einen gemeldeten
 Punkt**. `POST /world/avatar/step` ist mit E3 gelöscht und hat hier keinen
 Nachfolger pro Richtung.
 
-**Request** `{"x": <Meter>, "z": <Meter>}` · **Antwort**
-`{ok: true, pos: {x, z}, location_id, room_id}`.
+**Request** `{"x": <Meter>, "z": <Meter>, "seq": <Zähler>, "t_ms": <ms>}` ·
+**Antwort** `{ok: true, pos: {x, z}, location_id, room_id}`.
 
 **Meldefrequenz:** ~3/s während der Bewegung plus einmal beim Anhalten.
 Server-Drossel ~4/s.
+
+**`seq` + `t_ms` — das Reihenfolge-Paar (2026-08-23, optional).** `seq` ist
+ein Zähler, den der Client pro Meldung SEINER Sitzung hochzählt, `t_ms` seine
+eigene Dauer-Uhr (`performance.now()`) im Moment der Messung. Beide existieren
+für EINEN Fehlerfall: eine **blockierte Event-Loop**. Der Client hat pro
+Meldung eine Frist (8 s), bricht danach ab und läuft weiter — der Request
+läuft auf dem Server aber weiter und wird Sekunden später doch verarbeitet.
+Ohne das Paar wird dieser Nachzügler als neuester Punkt akzeptiert, die
+Basislinie des Servers fällt hinter die Figur zurück, die nächste ehrliche
+Meldung gilt als 12-Meter-Satz „in 0,4 s" und wird abgelehnt — der Spieler
+wird beim Geradeauslaufen immer wieder zurückgerissen. Mit dem Paar gilt:
+
+* eine Meldung, deren `seq` **nicht neuer** ist als die der letzten
+  AKZEPTIERTEN, wird STILL verworfen (200 `{ok: false, stale: true}`) — nichts
+  wird geschrieben, **keine Korrektur** gesendet; der Client behandelt sie wie
+  `throttled` (Punkt bleibt ungemeldet und wird erneut gesendet). Die
+  Basislinie verfällt nach 10 s Serverzeit bzw. sobald die Client-Uhr mehr als
+  15 s zurückfällt, damit ein **Reload** (Zähler startet wieder bei 1) sich von
+  selbst fängt;
+* die Schrittweite (Nr. 5) misst über `t_ms − letztes t_ms` — die Zeit, die
+  wirklich beim LAUFEN verging — statt über den Abstand zweier Handler-Läufe,
+  den ein Stillstand auf null zusammendrückt. Geklemmt nach unten auf das
+  Drossel-Intervall, nach oben auf 30 s (eine Client-Uhr ist keine
+  vertrauenswürdige Uhr).
+
+Ein Client, der die beiden Felder **nicht** schickt, wird exakt wie bisher
+beurteilt (Serverzeit als Maß, keine Reihenfolge-Prüfung).
 
 **Die Gate-Kette, in genau dieser Reihenfolge** (jede Absage trägt
 `{reason, message, pos, location_id}`, wobei `pos` der LETZTE GÜLTIGE Punkt
@@ -2569,14 +2596,15 @@ auseinanderstehen):
 |---|---|---|
 | 1 | Party-**Follower** besitzt keine eigene Bewegung | 403 `party_follower` |
 | 2 | `x`/`z` sind endliche Zahlen | 400 |
-| 3 | **Drossel** ~4 Meldungen/s — Überschuss wird STILL verworfen, kein Fehler-Toast | 200 `{ok: false, throttled: true}` |
-| 4 | **Schrittweite** gegen die ECHTE Zeit seit der letzten AKZEPTIERTEN Meldung | 409 `too_far` |
-| 5 | **Location des Punktes** ableiten (`location_at_point`) — entscheidet Nr. 6 | — |
-| 6 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`); NUR die Passierbarkeit, das Tempo wird hier nie geprüft | 409 `impassable` |
-| 7 | **Location-Übergang** — EXIT vor ENTRY | 403 (siehe unten) |
-| 8 | **Höhe** des Punktes gegen den letzten gültigen (Steigung immer, Stufe zusätzlich unter 1 m — siehe unten) | 409 `too_steep` |
+| 3 | **Nachzügler** — `seq` nicht neuer als die letzte akzeptierte Meldung; STILL verworfen, kein Fehler-Toast, keine Korrektur | 200 `{ok: false, stale: true}` |
+| 4 | **Drossel** ~4 Meldungen/s — Überschuss wird STILL verworfen, kein Fehler-Toast | 200 `{ok: false, throttled: true}` |
+| 5 | **Schrittweite** gegen die vergangene Zeit seit der letzten AKZEPTIERTEN Meldung (Client-`t_ms`, sonst Serverzeit) | 409 `too_far` |
+| 6 | **Location des Punktes** ableiten (`location_at_point`) — entscheidet Nr. 7 | — |
+| 7 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`); NUR die Passierbarkeit, das Tempo wird hier nie geprüft | 409 `impassable` |
+| 8 | **Location-Übergang** — EXIT vor ENTRY | 403 (siehe unten) |
+| 9 | **Höhe** des Punktes gegen den letzten gültigen (Steigung immer, Stufe zusätzlich unter 1 m — siehe unten) | 409 `too_steep` |
 
-**Die Erlaubnis in Nr. 4 hat DREI Terme**, und der dritte ist keine
+**Die Erlaubnis in Nr. 5 hat DREI Terme**, und der dritte ist keine
 Verzierung:
 
 ```
@@ -2593,7 +2621,7 @@ Sekunde läuft — ohne den dritten Term sammelte ein ehrlicher Läufer dort
 Anticheat**; ohne Basislinie (frische Sitzung, Übernahme, Admin-Move) wird
 der erste Punkt ungeprüft genommen.
 
-**FOOTPRINT GEWINNT — FÜR DIE PASSIERBARKEIT (Nr. 5 vor Nr. 6, Entscheidung
+**FOOTPRINT GEWINNT — FÜR DIE PASSIERBARKEIT (Nr. 6 vor Nr. 7, Entscheidung
 2026-08-13, präzisiert durch Befund 3).** Gemaltes Gelände beurteilt, wo man
 STEHEN darf, zwischen den Orten. Liegt der gemeldete Punkt in
 IRGENDEINEM platzierten Fußabdruck (eigener wie fremder), entfällt der
@@ -2601,7 +2629,7 @@ Gelände-Check ganz — eine Location wird AUF die Welt gesetzt und erbt nicht
 den Boden, den jemand darunter gemalt hat. Sonst wäre eine Halle auf einem
 Felsplateau oder ein Dorf auf einer Insel im See ein Ort, in dem man keinen
 Schritt tun kann und jede Meldung eine Absage bekommt (Abnahme-Befund B1);
-das Tor eines Ortes sind seine Öffnungen und Regeln (Nr. 7), nie der Fels
+das Tor eines Ortes sind seine Öffnungen und Regeln (Nr. 8), nie der Fels
 darunter. Das ist zugleich die **Voraussetzung für das E8-Plateau**: dort
 wird die Heightmap unter dem Fußabdruck planiert (sofern der Ort es
 verlangt, § A16.4), und der Fels unter dieser Planierung darf die geebnete
@@ -2631,7 +2659,7 @@ Server und Client tragen beide Regeln je einmal
 automatisch. **Die Gate-Kette oben ändert sich dadurch NICHT** — das Tempo
 ist keine Erlaubnis, es wird nirgends geprüft, es wird gelaufen.
 
-**Der Übergang (Nr. 7).** Gleiche Location oder Wildnis → Wildnis ist frei.
+**Der Übergang (Nr. 8).** Gleiche Location oder Wildnis → Wildnis ist frei.
 Sonst:
 
 * **EXIT** — `boundary_entry.may_leave` mit dem Raum, in dem der Avatar
@@ -2661,7 +2689,7 @@ Sonst:
   eine Hütte auf einem Dorfplatz) ist beides: EXIT der alten, dann ENTRY der
   neuen.
 
-**DAS HÖHEN-GATE (Nr. 8) — neu 2026-08-13 (E8 Task 1).** Bis hierher hat in
+**DAS HÖHEN-GATE (Nr. 9) — neu 2026-08-13 (E8 Task 1).** Bis hierher hat in
 dieser Welt keine einzige REGEL nach einer Höhe gefragt: das Szenen-Payload hob
 Props, die Renderer drapierten den Boden, und eine Felswand ließ sich so leicht
 hochlaufen wie eine Wiese. Jetzt vergleicht der Server den Boden unter dem
@@ -3082,7 +3110,7 @@ kleinste schreibt zuletzt** (das Verschachtelungsgesetz von
 > seines Mittels. Eine bis zur Kappung verbreiterte Rampe hat also einen
 > steilsten Meter von `atan(1,5 · tan 35°)` = **46,4°** — immer noch über der
 > Laufgrenze von 40°. Ein Ort an einer sehr steilen Flanke behält damit einen
-> Rand, den seine Öffnungs-Ausnahme tragen muss (§ A15 Nr. 8). Was der Stempel
+> Rand, den seine Öffnungs-Ausnahme tragen muss (§ A15 Nr. 9). Was der Stempel
 > bringt: der Rand ist eine mehrere Meter breite Rampe statt einer
 > Ein-Zellen-Klippe von bis zu 68°.
 

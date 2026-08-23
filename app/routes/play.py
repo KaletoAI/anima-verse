@@ -8,7 +8,7 @@ Die gebaute Shell liegt (wie game-admin) unter ``static/game_admin/play.html``
 — derselbe ``frontend/``-Build, aber eine eigene Seite/Route.
 """
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -575,16 +575,39 @@ _POS_OPENING_TOLERANCE_M = 1.5
 #: not world state — a restart simply grants everyone one free first report,
 #: which is the same grace a takeover gets.
 _pos_report_at: Dict[str, float] = {}
+#: The CLIENT's stamp of each avatar's last ACCEPTED report: ``(seq, t_ms)``,
+#: the two fields a client may send along (below). Beside ``_pos_report_at``
+#: and for the same reason: process-local, a plausibility baseline, no world
+#: state. Absent for a client that sends neither.
+_pos_client_at: Dict[str, Tuple[int, float]] = {}
+#: How long a client baseline stays a baseline (seconds of SERVER monotonic
+#: time since the last accepted report). A report with an older ``seq`` is a
+#: leftover the client has long given up on — but only for as long as such a
+#: leftover can still be in flight; the client's own deadline is 8 s. After
+#: this window the baseline is treated as dead, which is what makes a RELOAD
+#: (fresh session → ``seq`` restarts at 1) recover on its own instead of
+#: having every report of the new session refused as "stale" forever.
+_POS_STALE_WINDOW_S = 10.0
+#: The same window measured on the CLIENT's clock (milliseconds): a leftover
+#: report is at most the client's deadline old, so its ``t_ms`` sits just
+#: behind the baseline's. A new session's clock restarts near zero and falls
+#: far behind it — which is the second, faster half of the reload recovery.
+_POS_STALE_WINDOW_MS = 15000.0
+#: Upper bound of the CLIENT-measured elapsed time the step allowance is built
+#: from (seconds). A client clock is not a trusted clock: without a cap a
+#: single report claiming an hour of walking would buy an unbounded jump.
+_POS_CLIENT_ELAPSED_CAP_S = 30.0
 
 
 @router.post("/play/pos")
 async def play_pos(request: Request, user=Depends(get_current_user)):
     """The avatar reports where it is standing (free walking, E4 task 5).
 
-    Body: ``{"x": <metres>, "z": <metres>}``. The client walks the figure
-    itself and sends the result; this judges the point and writes it. There is
-    no server-side route computation and no per-boundary permission any more —
-    the answer is the accepted point, its location and its room.
+    Body: ``{"x": <metres>, "z": <metres>}`` plus the OPTIONAL ordering pair
+    ``{"seq": <counter>, "t_ms": <performance.now()>}``. The client walks the
+    figure itself and sends the result; this judges the point and writes it.
+    There is no server-side route computation and no per-boundary permission
+    any more — the answer is the accepted point, its location and its room.
 
     The chain, in order:
 
@@ -592,24 +615,29 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
          same backstop ``/play/travel`` applies),
       2. the numbers are finite (400): a NaN sails through every comparison
          below and poisons the JSON encoder afterwards,
-      3. THROTTLE — at most ~4 accepted reports a second. Excess is dropped
+      3. STALE — a report whose ``seq`` is not newer than the last ACCEPTED
+         one is dropped SILENTLY (200 ``{ok: false, stale: true}``), see the
+         paragraph below,
+      4. THROTTLE — at most ~4 accepted reports a second. Excess is dropped
          SILENTLY (200 ``{ok: false, throttled: true}``): a client that reports
          too eagerly must not collect error toasts for it,
-      4. plausible step against the real time since the last ACCEPTED report,
-         allowance ``max(5 m, 3 × travel_speed × game_factor × elapsed,
-         3 × 3.4 m/s × elapsed)`` — THREE terms, and the last one is why a
-         frozen or slow world does not strand an honest walker (409
-         ``too_far``),
-      5. the LOCATION of the point (``location_at_point``) — derived FIRST,
-         because it decides whether step 6 applies at all,
-      6. terrain ``passability_at`` at the point, ONLY OUT IN THE WILDERNESS
+      5. plausible step against the elapsed time since the last ACCEPTED
+         report, allowance ``max(5 m, 3 × travel_speed × game_factor ×
+         elapsed, 3 × 3.4 m/s × elapsed)`` — THREE terms, and the last one is
+         why a frozen or slow world does not strand an honest walker (409
+         ``too_far``). ``elapsed`` is the CLIENT's own ``t_ms`` difference
+         when the client sends the pair, and the server's processing-time
+         difference when it does not,
+      6. the LOCATION of the point (``location_at_point``) — derived FIRST,
+         because it decides whether step 7 applies at all,
+      7. terrain ``passability_at`` at the point, ONLY OUT IN THE WILDERNESS
          (409 ``impassable``) — inside a placed footprint the FOOTPRINT WINS
          (decision 2026-08-13), see below. PASSABILITY only: the terrain's
          ``speed_factor`` is not gated anywhere in this chain — it applies
          everywhere, footprint included (finding 3, § A15), and the client
          walks it,
-      7. the LOCATION TRANSITION through the FULL gate (below),
-      8. the HEIGHT of the point against the last valid one (409
+      8. the LOCATION TRANSITION through the FULL gate (below),
+      9. the HEIGHT of the point against the last valid one (409
          ``too_steep``) — a step higher than ``game.max_step_height_m`` over
          less than a metre, or a slope steeper than ``game.max_slope_deg``
          over more (``core/relief.slope_blocks``). Last because the height of
@@ -620,6 +648,37 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     Every refusal carries ``{reason, message, pos, location_id}`` where ``pos``
     is the LAST VALID point — the client snaps the figure back onto it, so a
     refusal never leaves the two views disagreeing.
+
+    ORDER AND ELAPSED TIME — WHY THE CLIENT'S TWO EXTRA FIELDS EXIST
+    (2026-08-23). This route used to measure the step against its own
+    PROCESSING time, and it took whichever report reached the handler as the
+    newest one. Both break the moment the event loop stalls for seconds (a
+    backend probe blocking it is enough): the client hits its own deadline,
+    ABORTS the request and walks on, the stalled server then processes that
+    long-abandoned report anyway, sets the baseline point back to where the
+    figure stood seconds ago and stamps it NOW — and the next honest report is
+    judged as a 12 m stride "in 0.4 s" and refused. The player is snapped
+    backwards, over and over, walking a straight line.
+
+    Two fields close both holes and neither loosens the speed gate:
+
+      * ``seq`` — a counter the client raises for every report of its session.
+        A report that is not newer than the last ACCEPTED one is a leftover of
+        exactly that kind and is dropped without writing anything and without
+        a correction (``{ok: false, stale: true}``; a correction is what
+        snapped the figure back). The baseline expires after
+        ``_POS_STALE_WINDOW_S`` of server time — or as soon as the client
+        clock falls more than ``_POS_STALE_WINDOW_MS`` behind — so a RELOAD,
+        whose counter restarts at 1, recovers on its own instead of being
+        locked out for the rest of the process' life,
+      * ``t_ms`` — the client's own duration clock (``performance.now()``).
+        The step allowance is built from ``t_ms − last_t_ms``, the time that
+        really passed WHILE WALKING, instead of from the gap between two
+        handler runs, which a stall compresses to nothing. Clamped from below
+        by the throttle interval and from above by
+        ``_POS_CLIENT_ELAPSED_CAP_S`` — a client clock is not a trusted clock.
+
+    A client that sends neither field is judged exactly as before.
 
     FOOTPRINT WINS — FOR THE PASSABILITY (decision 2026-08-13, narrowed by
     finding 3). Painted terrain judges whether one MAY STAND out in the
@@ -709,8 +768,42 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     if not (math.isfinite(x) and math.isfinite(z)):
         raise HTTPException(status_code=400, detail="x/z must be finite")
 
+    # The ordering pair, ALL OR NOTHING: a report is either stamped by the
+    # client (both fields, both usable numbers) or it is not stamped at all —
+    # half a stamp would give an ordering without a clock or the other way
+    # round, and both are worse than the plain server-side judgement.
+    seq: Optional[int] = None
+    t_ms: Optional[float] = None
+    try:
+        _seq_raw, _t_raw = body.get("seq"), body.get("t_ms")
+        if _seq_raw is not None and _t_raw is not None:
+            seq, t_ms = int(_seq_raw), float(_t_raw)
+            if not math.isfinite(t_ms):
+                seq, t_ms = None, None
+    except (TypeError, ValueError):
+        seq, t_ms = None, None
+
     now = time.monotonic()
     last_at = _pos_report_at.get(avatar)
+    client_base = _pos_client_at.get(avatar)
+    # THE BASELINE EXPIRES. Only a report that could still be in flight can be
+    # a leftover; beyond that window a lower counter is a NEW SESSION (a
+    # reload restarts at 1), and holding on to the old baseline would refuse
+    # every single report it ever sends.
+    if client_base is not None and last_at is not None and (
+            now - last_at > _POS_STALE_WINDOW_S
+            or (t_ms is not None
+                and client_base[1] - t_ms > _POS_STALE_WINDOW_MS)):
+        client_base = None
+        _pos_client_at.pop(avatar, None)
+
+    # STALE — the answer to the stalled-loop snap-back (see the docstring).
+    # Nothing is written and NO correction is sent: the client keeps the point
+    # dirty and reports it again, which is what a dropped report deserves.
+    if seq is not None and client_base is not None and seq <= client_base[0]:
+        logger.debug("pos stale: %s seq %d <= %d", avatar, seq, client_base[0])
+        return {"ok": False, "stale": True}
+
     if last_at is not None and now - last_at < _POS_REPORT_INTERVAL_S:
         return {"ok": False, "throttled": True}
 
@@ -730,15 +823,31 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     if here is not None and last_at is not None:
         from app.core.timeutils import game_speed_factor
         from app.core.travel_engine import get_travel_speed_m_s
-        elapsed = max(0.0, now - last_at)
+        # WHOSE CLOCK. The client's, whenever it stamped both reports: what
+        # the allowance is about is the time the figure spent WALKING, and a
+        # blocked event loop compresses the gap between two handler runs to
+        # nothing while the player keeps covering ground (2026-08-23). The
+        # server's own gap is the fallback for a client that sends no stamp.
+        if t_ms is not None and client_base is not None:
+            elapsed = min(_POS_CLIENT_ELAPSED_CAP_S,
+                          max(_POS_REPORT_INTERVAL_S,
+                              (t_ms - client_base[1]) / 1000.0))
+        else:
+            elapsed = max(0.0, now - last_at)
         allowance = max(_POS_STEP_FLOOR_M,
                         _POS_STEP_FACTOR * get_travel_speed_m_s()
                         * game_speed_factor() * elapsed,
                         _POS_STEP_FACTOR * _POS_WALK_SPEED_M_S * elapsed)
         if math.hypot(x - here["x"], z - here["z"]) > allowance:
+            # The clock is NAMED in the line: reading "in 0.40s" without
+            # knowing whose 0.40 s that was is what made this refusal so hard
+            # to read while the event loop was stalling (2026-08-23).
             logger.info("pos refused (too far): %s %.2f,%.2f -> %.2f,%.2f "
-                        "in %.2fs (allowance %.2f m)", avatar,
-                        here["x"], here["z"], x, z, elapsed, allowance)
+                        "in %.2fs %s (allowance %.2f m)", avatar,
+                        here["x"], here["z"], x, z, elapsed,
+                        "client" if (t_ms is not None
+                                     and client_base is not None)
+                        else "server", allowance)
             refuse(409, "too_far",
                    t("You cannot get there that quickly.", lang))
 
@@ -980,6 +1089,13 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
         set_is_sleeping(avatar, False)
         logger.info("pos: %s woke up by walking", avatar)
     _pos_report_at[avatar] = now
+    # The client baseline follows the accepted report — or is DROPPED when
+    # this one came without a stamp, so a stamped and an unstamped client on
+    # the same avatar never measure against each other's clock.
+    if seq is not None and t_ms is not None:
+        _pos_client_at[avatar] = (seq, t_ms)
+    else:
+        _pos_client_at.pop(avatar, None)
     return {"ok": True, "pos": written["pos"],
             "location_id": written["location_id"],
             "room_id": get_character_current_room(avatar) or ""}

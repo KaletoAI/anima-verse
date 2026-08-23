@@ -194,21 +194,31 @@ export async function switchCharacter(name: string): Promise<SwitchedCharacter> 
  * FULL entry/exit gate when the point derives another location) and answers
  * with what it stored.
  *
- * Two answers are normal and neither is an error: an accepted report
- * (`ok: true`) and a throttled one (`ok: false, throttled: true`, the server
- * takes ~4 a second). Everything else throws an `ApiError` whose `pos` is the
- * last valid point — the caller snaps the figure back onto it and shows
- * `message`.
+ * Three answers are normal and none of them is an error: an accepted report
+ * (`ok: true`), a throttled one (`ok: false, throttled: true`, the server
+ * takes ~4 a second) and a stale one (`ok: false, stale: true`, below).
+ * Everything else throws an `ApiError` whose `pos` is the last valid point —
+ * the caller snaps the figure back onto it and shows `message`.
  *
  * `signal` puts a deadline on it: reports are frequent and a request that
  * never answers must not tie the next one up.
+ *
+ * `seq` and `tMs` are the ORDERING PAIR (2026-08-23, § A15): `seq` counts the
+ * reports of this session, `tMs` is `performance.now()` at the moment the
+ * report was taken. They exist because a request we ABORTED on the deadline
+ * keeps running on a stalled server: without them that leftover is processed
+ * late, becomes the server's "last valid point" and every fresh report is
+ * judged against a point seconds behind the figure — the snap-back loop. With
+ * them the server drops the leftover (`stale`) and measures the step against
+ * the time that really passed while walking, not between two handler runs.
  */
-export async function postPos(x: number, z: number, signal?: AbortSignal
+export async function postPos(x: number, z: number, signal?: AbortSignal,
+  seq?: number, tMs?: number
 ): Promise<PosReport> {
   const res = await fetch('/play/pos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ x, z }),
+    body: JSON.stringify({ x, z, seq, t_ms: tMs }),
     signal,
   });
   if (res.status === 401) {

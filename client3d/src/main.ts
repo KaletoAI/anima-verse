@@ -157,7 +157,7 @@ const MINIMAP_MS = 250;
  * more than a body width, and more than the walk-in's own arrival threshold.
  */
 const OPENING_WALK_IN_M = 0.5;
-/** Fallbacks for the two walk limits (§ A15 Nr. 8) when the worldmap payload
+/** Fallbacks for the two walk limits (§ A15 Nr. 9) when the worldmap payload
  *  carries none — the same numbers `app/core/relief.py` defaults to, so a
  *  client talking to an older server judges the ground the way that server
  *  does. */
@@ -1212,7 +1212,7 @@ async function startApp(username: string, role: string) {
    * The two WALK LIMITS of the world (§ A12): how high a step the figure
    * takes and how steep a slope it climbs. They are SERVER settings — the
    * height gate of `POST /play/pos` judges every reported point with exactly
-   * these two numbers (§ A15 Nr. 8) — and they ride along on the worldmap
+   * these two numbers (§ A15 Nr. 9) — and they ride along on the worldmap
    * poll, so an admin who changes them reaches a running client within one
    * poll instead of at the next reload. An older server sends neither, and
    * then the built-in defaults are the very ones `app/core/relief.py` falls
@@ -2368,7 +2368,7 @@ async function startApp(username: string, role: string) {
   }
 
   /**
-   * Does the HEIGHT between two points stop the figure (§ A15 Nr. 8)?
+   * Does the HEIGHT between two points stop the figure (§ A15 Nr. 9)?
    *
    * The rule is `walk.slopeBlocks` and the limits are the world's
    * (`maxStepHeightM` / `maxSlopeDeg`, off the worldmap payload) — this only
@@ -2891,7 +2891,9 @@ async function startApp(username: string, role: string) {
   /** Deadline for one report. Only ONE may be in flight (a second could
    *  overtake the first and the server would judge the steps out of order), so
    *  a request that never answers would silence the channel for the rest of
-   *  the session. */
+   *  the session. Giving up on it does NOT recall it: it keeps running on the
+   *  server and may be processed minutes late — which is what `posSeq` below
+   *  is for. */
   const POS_TIMEOUT_MS = 8000;
   /** How far the local figure may stand from the server's point before the
    *  correction is a snap rather than a walk (metres). Below it the figure
@@ -2905,6 +2907,14 @@ async function startApp(username: string, role: string) {
   const REFUSAL_QUIET_MS = 4000;
 
   let posInFlight = false;
+  /** Counts the reports of THIS session, one up per request. It travels with
+   *  every report (`seq`) and is the server's ordering: a request we gave up
+   *  on (the deadline above) keeps running on a stalled server, and without a
+   *  counter that leftover would be accepted late as the newest point — the
+   *  server's baseline would fall seconds behind the figure and pull the walk
+   *  back onto it, over and over (2026-08-23). The server drops anything not
+   *  newer than the last it accepted. */
+  let posSeq = 0;
   /** When the last report went out (`performance.now()`, a DURATION clock). */
   let lastReportAt = 0;
   /** The point the last report carried, so a standing figure reports once and
@@ -2975,17 +2985,26 @@ async function startApp(username: string, role: string) {
    *  a toast, or (the throttle) nothing at all. */
   async function reportPos(x: number, z: number): Promise<void> {
     posInFlight = true;
-    lastReportAt = performance.now();
+    const sentAt = performance.now();
+    lastReportAt = sentAt;
+    const seq = ++posSeq;
     const abort = new AbortController();
     const deadline = setTimeout(() => abort.abort(), POS_TIMEOUT_MS);
     try {
-      const res = await api.postPos(x, z, abort.signal);
-      // Throttled: the server took none of it and said so. Not an error, not
-      // a correction — but the point IS still unreported, so the dirty flag
-      // has to go back up. `tickPosReport` cleared it when it sent this call,
-      // and a figure that stops right afterwards would never move again — no
-      // further `markMoved`, no further report, and the server would keep a
-      // stale stop point that only the poll's echo check papers over.
+      // The point is stamped with WHEN it was taken and WHICH report it is:
+      // the server measures the step over the client's own elapsed time (the
+      // time really spent walking) and drops anything not newer than what it
+      // last accepted. Both fields exist for one failure: a blocked event
+      // loop, which compresses the server's own clock to nothing and lets a
+      // long-abandoned report land last (§ A15).
+      const res = await api.postPos(x, z, abort.signal, seq, sentAt);
+      // Throttled or STALE: the server took none of it and said so. Not an
+      // error, not a correction — but the point IS still unreported, so the
+      // dirty flag has to go back up. `tickPosReport` cleared it when it sent
+      // this call, and a figure that stops right afterwards would never move
+      // again — no further `markMoved`, no further report, and the server
+      // would keep a stale stop point that only the poll's echo check papers
+      // over.
       if (!res.ok) { posDirty = true; return; }
       reportedPos = { x, z };
       adoptReport(res);
@@ -3004,6 +3023,11 @@ async function startApp(username: string, role: string) {
         // stays where it is and the next report tries again — which it can
         // only do while the point counts as unreported, so the flag goes back
         // up here too (same swallowed-stop-report trap as the throttle above).
+        // AN ABORT ENDS HERE AND NOWHERE ELSE. `fetch` rejects the moment the
+        // deadline fires, so the answer that server may still send is never
+        // read, never parsed and can never reach `correctTo` — the abandoned
+        // request cannot correct the figure from the past. What it CAN still
+        // do is arrive at the server; that half is the `seq` above.
         if (!abort.signal.aborted) console.warn('[walk] position report failed', e);
         posDirty = true;
         return;

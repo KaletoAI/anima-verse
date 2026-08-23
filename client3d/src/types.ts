@@ -444,10 +444,15 @@ export interface BackdropSpec {
  * rounding), `location_id`/`room_id` are what the point derived, which is how
  * a crossing announces itself before the next worldmap poll repeats it.
  *
- * `ok: false` with `throttled` is the ONE non-error refusal: the report came
- * in faster than the server accepts them (~4 a second) and was dropped. It is
- * not a failure and never reaches the player — the next report carries the
- * same position anyway.
+ * `ok: false` carries the TWO non-error refusals, and both mean the same
+ * thing to the caller — the report was not taken, the point is still
+ * unreported, nothing is corrected and the player is never told:
+ *  - `throttled`: it came in faster than the server accepts them (~4 a
+ *    second) and was dropped;
+ *  - `stale`: its `seq` is not newer than the last ACCEPTED one, so it is a
+ *    leftover of a request we already aborted (§ A15, 2026-08-23). Dropping
+ *    it is what keeps a stalled server from taking a point seconds behind the
+ *    figure as the newest one and snapping the walk back onto it.
  *
  * Everything else is a 4xx and arrives as an `ApiError` with the server's
  * `reason`, its player-facing `message` and the LAST VALID point to snap the
@@ -456,6 +461,7 @@ export interface BackdropSpec {
 export interface PosReport {
   ok: boolean;
   throttled?: boolean;
+  stale?: boolean;
   pos?: { x: number; z: number };
   location_id?: string;
   room_id?: string;
@@ -627,6 +633,26 @@ export interface TerrainPayload {
   default_kind: string;
   types: TerrainType[];
   areas: TerrainArea[];
+  /**
+   * The ground box of every deliberately placed world prop (§ A9b) — what the
+   * scatter is sampled AROUND, exactly like a placed location's outline.
+   *
+   * Structurally `ScatterPropBox` of `@anima/scene-render`, which is where the
+   * four corners are worked out (`propBoxFootprints`); written out here
+   * because this file describes the PAYLOAD, and the payload is what the
+   * server sends whether or not a package happens to have a matching type.
+   *
+   * Absent from an older server: then nothing is excluded and the world looks
+   * as it did before, which is the only harmless answer.
+   */
+  prop_boxes?: {
+    id: string;
+    x: number;
+    z: number;
+    yaw_deg: number;
+    half_w: number;
+    half_d: number;
+  }[];
   /** matches `WorldMap.terrain_sig`; a change means refetch */
   sig: string;
 }
