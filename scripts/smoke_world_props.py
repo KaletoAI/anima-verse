@@ -34,6 +34,15 @@ HAND-DERIVED EXPECTATIONS
         variant = -1        -> ValueError
         update keeps the id and does NOT create a second row
 
+        and the PUT's rule (must_exist=True, core.bulk_edit.GoneError):
+          on a stored id      -> replaces it, still one row
+          on an unknown id    -> GoneError, and nothing is created
+          on an id a DELETE removes BETWEEN the call and the write (injected
+          through the sanitizer, which runs in exactly that window)
+                              -> GoneError, and the row stays gone. The old
+                                 check-then-write (world_prop_exists in the
+                                 route, upsert in the model) resurrected it.
+
   [2] the variant formula   variant_index(id, n) = int(md5(id)[:8], 16) mod n
 
         md5 of the four ids used here, first 8 hex digits and their value:
@@ -207,6 +216,25 @@ def raises(label: str, fn) -> None:
     FAILURES.append(label)
 
 
+def raises_gone(label: str, fn) -> None:
+    """The singular PUT's refusal — ``core.bulk_edit.GoneError``, nothing else
+    (a ValueError here would be a 400 and would hide the resurrection)."""
+    global CHECKED
+    CHECKED += 1
+    from app.core.bulk_edit import GoneError
+    try:
+        fn()
+    except GoneError as e:
+        print(f"  ✓ {label}: GoneError({e})")
+        return
+    except Exception as e:  # noqa: BLE001 — anything else is the defect
+        print(f"  ✗ {label}: {type(e).__name__}({e}) — expected GoneError")
+        FAILURES.append(label)
+        return
+    print(f"  ✗ {label}: no GoneError")
+    FAILURES.append(label)
+
+
 def seed_prop(name: str, variants: int = 1, rotation=None) -> str:
     """A prop record with `variants` active variants, each carrying ONE mesh.
 
@@ -264,8 +292,40 @@ wp.save_world_prop({**a, "x": 5.0})
 check("update keeps the row count", wp.count_world_props(), 2)
 check("update moved the row",
       [r["x"] for r in wp.list_world_props() if r["id"] == a["id"]], [5.0])
-check("exists", wp.world_prop_exists(a["id"]), True)
-check("does not exist", wp.world_prop_exists("wp_nope"), False)
+check("a replacing write updates the row",
+      wp.save_world_prop({**a, "x": 6.0}, must_exist=True)["x"], 6.0)
+check("...and there is still one of it", wp.count_world_props(), 2)
+raises_gone("a replacing write on an unknown id",
+            lambda: wp.save_world_prop({**a, "id": "wp_nope"},
+                                       must_exist=True))
+check("...and it created nothing", wp.count_world_props(), 2)
+
+# THE RACE the 404 exists for: the store is an upsert, so a stale PUT that
+# arrives after a DELETE would put the placement back under its old id. The
+# rule sits in the WRITE (an UPDATE matching no row), not in a lookup before
+# it — a check-then-write leaves exactly this window, and since the route runs
+# in the threadpool it is a real one. The delete is injected through the
+# sanitizer, which runs after the route entered and before the transaction.
+_racer = wp.save_world_prop({"prop_id": BOULDER, "x": 30.0, "z": 30.0})
+_real_sanitize = wp.sanitize_world_prop
+
+
+def _delete_mid_write(raw):
+    """Stands in for the sanitizer: deletes the row on its way past."""
+    wp.delete_world_prop(_racer["id"])
+    return _real_sanitize(raw)
+
+
+wp.sanitize_world_prop = _delete_mid_write
+try:
+    raises_gone("PUT while a DELETE lands mid-write",
+                lambda: wp.save_world_prop({**_racer, "x": 31.0},
+                                           must_exist=True))
+finally:
+    wp.sanitize_world_prop = _real_sanitize
+check("the raced placement was NOT resurrected",
+      [r["id"] for r in wp.list_world_props()].count(_racer["id"]), 0)
+check("two rows again", wp.count_world_props(), 2)
 
 raises("unknown prop", lambda: wp.save_world_prop({"prop_id": "nope",
                                                    "x": 0, "z": 0}))

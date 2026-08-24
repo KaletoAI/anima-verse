@@ -133,34 +133,41 @@ def list_height_areas() -> List[Dict[str, Any]]:
     return out
 
 
-def height_area_exists(area_id: str) -> bool:
-    """True when an area with this id is stored — the PUT route's ONE lookup,
-    so a stale write answers 404 instead of resurrecting a deleted area."""
-    area_id = (area_id or "").strip()
-    if not area_id:
-        return False
-    conn = get_connection()
-    return conn.execute("SELECT 1 FROM height_areas WHERE id=?",
-                        (area_id,)).fetchone() is not None
-
-
-def save_height_area(raw: Any) -> Dict[str, Any]:
+def save_height_area(raw: Any, must_exist: bool = False) -> Dict[str, Any]:
     """Create (no ``id``) or replace (with ``id``) one height area; returns the
-    sanitized entry. Raises ValueError when it is not usable."""
+    sanitized entry. Raises ValueError when it is not usable.
+
+    ``must_exist`` is the singular PUT's rule, spelled exactly as its terrain
+    twin (:func:`app.models.terrain.save_area`): the WRITE itself refuses —
+    an ``UPDATE`` matching no row raises ``core.bulk_edit.GoneError`` — so a
+    stale PUT racing a DELETE cannot raise a deleted hill from the dead.
+    """
     area = sanitize_height_area(raw)
     # Microsecond resolution, because this stamp is the batch save's version
     # token (:func:`height_area_stamps`) — see ``terrain._edit_stamp``.
     now = utc_now_iso("microseconds")
     with transaction() as conn:
-        conn.execute(
-            "INSERT INTO height_areas (id, polygon, height_m, falloff_m, "
-            "meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET polygon=excluded.polygon, "
-            "height_m=excluded.height_m, falloff_m=excluded.falloff_m, "
-            "meta=excluded.meta, updated_at=excluded.updated_at",
-            (area["id"], json.dumps(area["polygon"], ensure_ascii=False),
-             area["height_m"], area["falloff_m"],
-             json.dumps(area["meta"], ensure_ascii=False), now, now))
+        if must_exist:
+            cur = conn.execute(
+                "UPDATE height_areas SET polygon=?, height_m=?, falloff_m=?, "
+                "meta=?, updated_at=? WHERE id=?",
+                (json.dumps(area["polygon"], ensure_ascii=False),
+                 area["height_m"], area["falloff_m"],
+                 json.dumps(area["meta"], ensure_ascii=False), now,
+                 area["id"]))
+            if not cur.rowcount:
+                from app.core.bulk_edit import GoneError
+                raise GoneError("height area")
+        else:
+            conn.execute(
+                "INSERT INTO height_areas (id, polygon, height_m, falloff_m, "
+                "meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET polygon=excluded.polygon, "
+                "height_m=excluded.height_m, falloff_m=excluded.falloff_m, "
+                "meta=excluded.meta, updated_at=excluded.updated_at",
+                (area["id"], json.dumps(area["polygon"], ensure_ascii=False),
+                 area["height_m"], area["falloff_m"],
+                 json.dumps(area["meta"], ensure_ascii=False), now, now))
     _invalidate()
     return area
 

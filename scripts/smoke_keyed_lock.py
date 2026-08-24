@@ -56,6 +56,18 @@ Case [6] — the namespaces the routes actually use:
   - ``keyed_lock("character_profile", name)`` is a DIFFERENT lock from the
     avatar-state one for the same name: the two guard different state and
     must never wait for each other.
+
+Case [7] — `app/routes/chat.py::_extract_location`, the narrative room change
+of the chat stream. It writes TWO characters' whereabouts (the speaking
+character, then the avatar following it into the room) with
+``save_character_current_room``, a read-modify-write of the whole profile —
+and it runs on the event loop, while the play routes that write the same
+field run in the threadpool since 2026-08-24. What is assertable without a
+race harness is the LOCK IDENTITY, and it is the point: driven with stubs,
+the helper must take ``keyed_lock("avatar_state", <name>)`` — the very object
+``play._pos_lock`` returns — for each of the two names, and each write must
+happen while that name's lock is HELD (checked from inside the write stub, so
+a lock taken around the wrong span fails the check).
 """
 import json
 import os
@@ -277,6 +289,72 @@ def main() -> int:
     check("the profile lock of the same name is a different one",
           play_route._pos_lock("demo") is keyed_lock("character_profile", "demo"),
           False)
+
+    print("\n[7] the chat stream's narrative room change takes the same lock")
+    import app.core.keyed_lock as keyed_lock_mod
+    import app.models.account as account_model
+    import app.models.character as character_model
+    import app.models.rules as rules_model
+    import app.models.world as world_model
+    import app.routes.chat as chat_route
+
+    taken: list = []
+    held: list = []
+    real_keyed_lock = keyed_lock_mod.keyed_lock
+
+    def spy_lock(namespace, key):
+        lock = real_keyed_lock(namespace, key)
+        taken.append((namespace, key, lock))
+        return lock
+
+    def spy_save_room(name, room_id, **kw):
+        # The proof that the span COVERS the write, not merely that a lock was
+        # asked for somewhere in the function.
+        held.append((name, keyed_lock("avatar_state", name).locked()))
+
+    saved = {
+        "keyed_lock": keyed_lock_mod.keyed_lock,
+        "save_room": character_model.save_character_current_room,
+        "active": account_model.get_active_character,
+        "loc_by_id": world_model.get_location_by_id,
+        "room_by_name": world_model.get_room_by_name,
+        "check_leave": rules_model.check_leave,
+        "cur_loc": chat_route.get_character_current_location,
+        "cur_room": chat_route.get_character_current_room,
+    }
+    keyed_lock_mod.keyed_lock = spy_lock
+    character_model.save_character_current_room = spy_save_room
+    account_model.get_active_character = lambda: "player"
+    world_model.get_location_by_id = lambda lid: {
+        "id": "loc1", "rooms": [{"id": "room_new", "name": "Kitchen"}]}
+    world_model.get_room_by_name = lambda loc, name: {"id": "room_new"}
+    rules_model.check_leave = lambda *a, **kw: (True, "")
+    chat_route.get_character_current_location = lambda name: "loc1"
+    chat_route.get_character_current_room = lambda name: "room_old"
+    try:
+        out = chat_route._extract_location("npc", "**I am at Kitchen**")
+    finally:
+        keyed_lock_mod.keyed_lock = saved["keyed_lock"]
+        character_model.save_character_current_room = saved["save_room"]
+        account_model.get_active_character = saved["active"]
+        world_model.get_location_by_id = saved["loc_by_id"]
+        world_model.get_room_by_name = saved["room_by_name"]
+        rules_model.check_leave = saved["check_leave"]
+        chat_route.get_character_current_location = saved["cur_loc"]
+        chat_route.get_character_current_room = saved["cur_room"]
+
+    check("the helper moved the character", out and out.get("room"), "room_new")
+    check("both room writes ran", [n for n, _ in held], ["npc", "player"])
+    check("...each one INSIDE its own avatar-state lock",
+          [h for _, h in held], [True, True])
+    check("the locks it took are the avatar-state ones",
+          [(ns, k) for ns, k, _ in taken],
+          [("avatar_state", "npc"), ("avatar_state", "player")])
+    check("...and they ARE the objects the play routes take",
+          [lock is keyed_lock("avatar_state", k) for _, k, lock in taken],
+          [True, True])
+    check("the character's lock is not the avatar's",
+          taken[0][2] is taken[1][2], False)
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:

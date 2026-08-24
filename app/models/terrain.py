@@ -625,21 +625,6 @@ def list_areas() -> List[Dict[str, Any]]:
     return out
 
 
-def area_exists(area_id: str) -> bool:
-    """True when an area with this id is stored.
-
-    ``save_area`` is an upsert, so the PUT route needs this ONE cheap lookup
-    to answer 404 instead of resurrecting a just-deleted area under its old id.
-    """
-    area_id = (area_id or "").strip()
-    if not area_id:
-        return False
-    conn = get_connection()
-    row = conn.execute("SELECT 1 FROM terrain_areas WHERE id=?",
-                       (area_id,)).fetchone()
-    return row is not None
-
-
 def _note_relief_write() -> None:
     """A painted area may have moved the WORLD HEIGHTFIELD — check, then act.
 
@@ -756,21 +741,44 @@ def _edit_stamp() -> str:
     return utc_now_iso("microseconds")
 
 
-def save_area(raw: Any) -> Dict[str, Any]:
+def save_area(raw: Any, must_exist: bool = False) -> Dict[str, Any]:
     """Create (no ``id``) or replace (with ``id``) one area; returns the
-    sanitized entry. Raises ValueError when the area is not usable."""
+    sanitized entry. Raises ValueError when the area is not usable.
+
+    ``must_exist`` is the singular PUT's rule (``core.bulk_edit.GoneError``):
+    replace an area that IS stored, and raise instead of creating one. It is
+    the WRITE that decides — a plain ``UPDATE`` matching no row — and not a
+    lookup before it: between a check and an upsert a DELETE from another
+    thread fits, and the upsert would then put the deleted area back under its
+    old id. The same reason the batch save checks its stamps in the planner and
+    writes in one transaction.
+    """
     area = settle_water_level(sanitize_area(raw))
     now = _edit_stamp()
     with transaction() as conn:
-        conn.execute(
-            "INSERT INTO terrain_areas (id, kind, polygon, z_order, meta, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, "
-            "polygon=excluded.polygon, z_order=excluded.z_order, "
-            "meta=excluded.meta, updated_at=excluded.updated_at",
-            (area["id"], area["kind"],
-             json.dumps(area["polygon"], ensure_ascii=False), area["z_order"],
-             json.dumps(area["meta"], ensure_ascii=False), now, now))
+        if must_exist:
+            cur = conn.execute(
+                "UPDATE terrain_areas SET kind=?, polygon=?, z_order=?, "
+                "meta=?, updated_at=? WHERE id=?",
+                (area["kind"],
+                 json.dumps(area["polygon"], ensure_ascii=False),
+                 area["z_order"],
+                 json.dumps(area["meta"], ensure_ascii=False), now,
+                 area["id"]))
+            if not cur.rowcount:
+                from app.core.bulk_edit import GoneError
+                raise GoneError("terrain area")
+        else:
+            conn.execute(
+                "INSERT INTO terrain_areas (id, kind, polygon, z_order, meta, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, "
+                "polygon=excluded.polygon, z_order=excluded.z_order, "
+                "meta=excluded.meta, updated_at=excluded.updated_at",
+                (area["id"], area["kind"],
+                 json.dumps(area["polygon"], ensure_ascii=False),
+                 area["z_order"],
+                 json.dumps(area["meta"], ensure_ascii=False), now, now))
     _note_relief_write()
     return area
 

@@ -45,15 +45,29 @@ Throwaway storage. Hand-derived expectations:
  [10] A PUT never resurrects a deleted area. save_area is an upsert
       (INSERT … ON CONFLICT DO UPDATE), so the id in the body decides — a
       client repeating a stale PUT after the area was deleted would recreate
-      it under exactly its old id. The route therefore checks first:
-        area_exists(<fresh id>)      -> True
-        area_exists(<deleted id>)    -> False
-        area_exists("")              -> False (no id is not an existing id)
+      it under exactly its old id. The WRITE refuses, not a lookup before it:
+      save_area(..., must_exist=True) is a plain UPDATE, and 0 matched rows
+      raise core.bulk_edit.GoneError (the singular half of the batch's
+      "deleted on the server").
+        save_area({id: <deleted id>}, must_exist=True) -> GoneError, and
+                                  list_areas() still does not contain it
+        save_area({id: <live id>, z_order: 3}, must_exist=True) -> replaces,
+                                  one row, so the rule is not simply refusing
+                                  everything
       and the route itself, called directly with a fake Request:
         PUT on the deleted id  -> HTTPException 404, list_areas() unchanged
         PUT on the live id     -> {"status": "success"}, kind updated to
-                                  "grass" (so the 404 guard is not simply
-                                  rejecting everything)
+                                  "grass"
+        PUT while a DELETE lands BETWEEN the route's entry and the write
+                               -> 404, and the row stays gone. The delete is
+                                  injected through settle_water_level, which
+                                  save_area calls after sanitizing and before
+                                  the transaction — exactly the window a
+                                  concurrent DELETE has now that these routes
+                                  run in the threadpool. RED PROBE: with the
+                                  old check-then-write (area_exists in the
+                                  route, upsert in the model) this sequence
+                                  answered 200 and brought the area back.
       POST stays create-only, so this closes the only resurrection path.
 
  [11] meta.scatter whitelist (finding B17 — moved here from the terrain
@@ -523,13 +537,43 @@ class _FakeRequest:
         return self._payload
 
 
+def raises_gone(label, fn):
+    """The singular PUT's refusal — ``core.bulk_edit.GoneError``, nothing else
+    (a ValueError here would be a 400 and would hide the resurrection)."""
+    global CHECKED
+    CHECKED += 1
+    from app.core.bulk_edit import GoneError
+    try:
+        fn()
+    except GoneError as e:
+        print(f"  ✓ {label}: GoneError({str(e)!r})")
+        return
+    except Exception as e:  # noqa: BLE001 — anything else is the defect
+        print(f"  ✗ {label}: {type(e).__name__}({e}) — expected GoneError")
+        FAILURES.append(label)
+        return
+    print(f"  ✗ {label}: no exception — expected GoneError")
+    FAILURES.append(label)
+
+
 live = terrain.save_area({"kind": "water", "polygon": SQUARE})
 gone = terrain.save_area({"kind": "water", "polygon": SQUARE})
 gone_id = gone["id"]
 terrain.delete_area(gone_id)
-check("exists for a live area", terrain.area_exists(live["id"]), True)
-check("gone after delete", terrain.area_exists(gone_id), False)
-check("empty id is not an existing id", terrain.area_exists(""), False)
+
+# The model's own rule, below the route: a replacing write refuses instead of
+# creating, and it is the WRITE that refuses.
+raises_gone("save_area(must_exist) on a deleted id",
+            lambda: terrain.save_area({"id": gone_id, "kind": "water",
+                                       "polygon": SQUARE}, must_exist=True))
+check("...and it stayed deleted",
+      [a["id"] for a in terrain.list_areas()].count(gone_id), 0)
+check("save_area(must_exist) on a live id replaces",
+      terrain.save_area({"id": live["id"], "kind": "water",
+                         "polygon": SQUARE, "z_order": 3},
+                        must_exist=True)["z_order"], 3)
+check("...without creating a second row",
+      [a["id"] for a in terrain.list_areas()].count(live["id"]), 1)
 
 _ids_before = [a["id"] for a in terrain.list_areas()]
 CHECKED += 1
@@ -543,7 +587,8 @@ except HTTPException as e:
     print(f"  {'✓' if ok else '✗'} PUT on a deleted id: {e.status_code} {e.detail!r}")
     if not ok:
         FAILURES.append("PUT on a deleted id")
-check("deleted area stayed deleted", terrain.area_exists(gone_id), False)
+check("deleted area stayed deleted",
+      [a["id"] for a in terrain.list_areas()].count(gone_id), 0)
 check("area list untouched", [a["id"] for a in terrain.list_areas()], _ids_before)
 
 _res = asyncio.run(put_terrain_area_route(
@@ -552,6 +597,43 @@ check("PUT on a live id succeeds", _res["status"], "success")
 check("PUT on a live id updates", _res["area"]["kind"], "grass")
 check("still one row for that id",
       [a["id"] for a in terrain.list_areas()].count(live["id"]), 1)
+
+# THE RACE ITSELF, made deterministic: the DELETE lands AFTER the route has
+# entered and BEFORE the write. ``settle_water_level`` runs between the two in
+# ``save_area``, so deleting from there is exactly the window a concurrent
+# DELETE gets — and since these routes run in the threadpool it is a real one.
+# The old code checked ``area_exists`` in the ROUTE and then upserted, so this
+# very sequence recreated the area under its old id (the red probe: with the
+# check-then-write the PUT answered 200 and the row came back).
+racer = terrain.save_area({"kind": "grass", "polygon": SQUARE})
+racer_id = racer["id"]
+_real_settle = terrain.settle_water_level
+
+
+def _delete_mid_write(area):
+    """Stands in for ``settle_water_level``: deletes the row on its way past."""
+    terrain.delete_area(racer_id)
+    return _real_settle(area)
+
+
+terrain.settle_water_level = _delete_mid_write
+CHECKED += 1
+try:
+    asyncio.run(put_terrain_area_route(
+        racer_id, _FakeRequest({"kind": "water", "polygon": SQUARE})))
+    print("  ✗ DELETE between check and write: PUT returned instead of 404")
+    FAILURES.append("DELETE between check and write")
+except HTTPException as e:
+    ok = e.status_code == 404
+    print(f"  {'✓' if ok else '✗'} DELETE between check and write: "
+          f"{e.status_code} {e.detail!r}")
+    if not ok:
+        FAILURES.append("DELETE between check and write")
+finally:
+    terrain.settle_water_level = _real_settle
+check("the raced area was NOT resurrected",
+      [a["id"] for a in terrain.list_areas()].count(racer_id), 0)
+
 terrain.delete_area(live["id"])
 
 print("[11] meta.scatter whitelist (moved from the terrain type, B17)")

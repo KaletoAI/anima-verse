@@ -43,6 +43,29 @@ REASON_CHANGED = "changed on the server"
 REASON_GONE = "deleted on the server"
 
 
+class GoneError(Exception):
+    """A write that must REPLACE an existing object found none stored.
+
+    The SINGULAR half of :data:`REASON_GONE`, so that both halves of the same
+    rule live in one module: a batch reports the refusal per object, a singular
+    PUT raises this and its route answers 404. Every store here is an upsert,
+    so without the rule a stale PUT arriving after a DELETE would raise the
+    object from the dead under its old id.
+
+    The models raise it from INSIDE the write statement (``must_exist=True`` →
+    a plain ``UPDATE`` whose ``rowcount`` is 0), never from a lookup before it:
+    a check-then-write leaves exactly the window a DELETE fits through, and
+    since those routes moved into the threadpool (2026-08-24) two of them
+    really do run at once.
+
+    ``str(exc)`` is the 404 detail — hence the object's name, not an id.
+    """
+
+    def __init__(self, what: str = "object") -> None:
+        super().__init__(f"{what} not found")
+        self.what = what
+
+
 def plan_batch(upserts: Any, deletes: Any, stamps: Mapping[str, str],
                sanitize: Callable[[Dict[str, Any]], Dict[str, Any]],
                ) -> Tuple[List[Dict[str, Any]], List[str],

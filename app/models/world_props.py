@@ -168,32 +168,33 @@ def count_world_props() -> int:
     return int(row[0] if row else 0)
 
 
-def world_prop_exists(placement_id: str) -> bool:
-    """True when a placement with this id is stored.
-
-    :func:`save_world_prop` is an upsert, so the PUT route needs this ONE
-    cheap lookup to answer 404 instead of resurrecting a just-deleted
-    placement under its old id."""
-    placement_id = (placement_id or "").strip()
-    if not placement_id:
-        return False
-    conn = get_connection()
-    row = conn.execute("SELECT 1 FROM world_props WHERE id=?",
-                       (placement_id,)).fetchone()
-    return row is not None
-
-
-def save_world_prop(raw: Any) -> Dict[str, Any]:
+def save_world_prop(raw: Any, must_exist: bool = False) -> Dict[str, Any]:
     """Create (no ``id``) or replace (with ``id``) one placement; returns the
     sanitized entry. Raises ValueError when it is not usable — including the
     cap, which is checked on CREATE only: moving or re-aiming an existing
     placement must stay possible in a world that is already at the ceiling.
+
+    ``must_exist`` is the singular PUT's rule, spelled exactly as its terrain
+    twin (:func:`app.models.terrain.save_area`): the WRITE refuses — an
+    ``UPDATE`` matching no row raises ``core.bulk_edit.GoneError`` — so a stale
+    PUT racing a DELETE cannot bring a removed placement back. It skips the cap
+    for the same reason the existing-row branch does: replacing costs no slot.
     """
     entry = sanitize_world_prop(raw)
     # Microsecond resolution, because this stamp is the batch save's version
     # token (:func:`world_prop_stamps`) — see ``terrain._edit_stamp``.
     now = utc_now_iso("microseconds")
     with transaction() as conn:
+        if must_exist:
+            cur = conn.execute(
+                "UPDATE world_props SET prop_id=?, x=?, z=?, yaw_deg=?, "
+                "offset_y=?, variant=?, updated_at=? WHERE id=?",
+                (entry["prop_id"], entry["x"], entry["z"], entry["yaw_deg"],
+                 entry["offset_y"], entry["variant"], now, entry["id"]))
+            if not cur.rowcount:
+                from app.core.bulk_edit import GoneError
+                raise GoneError("world prop")
+            return entry
         row = conn.execute("SELECT 1 FROM world_props WHERE id=?",
                            (entry["id"],)).fetchone()
         if row is None:

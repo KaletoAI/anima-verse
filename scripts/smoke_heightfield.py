@@ -173,8 +173,11 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
 [10] ROUTES. POST assigns the id; PUT on an unknown id is 404 and creates
     NOTHING (the store is an upsert, so a repeated stale PUT would otherwise
     resurrect a deleted hill); PUT on a live id replaces it; DELETE twice is
-    404 the second time. GET /play/heightfield returns exactly the field plus
-    its signature.
+    404 the second time. And the RACE the 404 exists for: a DELETE landing
+    between the route's entry and the write (injected through the sanitizer,
+    which runs in exactly that window) is 404 too and leaves the hill gone —
+    the old check-then-write answered 200 and brought it back.
+    GET /play/heightfield returns exactly the field plus its signature.
 [11] THE AUTO-PLATEAU (E1, plan-ein-boden.md § G5). A location that draws a
     BUILT floor — a ``map3d.outline`` or at least one CLOSED room — stamps its
     plot flat. There is no flag any more: ``level_ground`` is gone, and a
@@ -980,6 +983,38 @@ check("PUT on the live id", route_status(
     _FakeRequest({"polygon": square(0, 0, 40, 40), "height_m": 7,
                   "falloff_m": 4})), 200)
 check("the edit landed", store.list_height_areas()[0]["height_m"], 7.0)
+
+# A DELETE THAT LANDS BETWEEN THE ROUTE'S ENTRY AND THE WRITE (the terrain
+# twin's probe, § [10] of smoke_terrain_areas.py): the store is an upsert, so
+# the old check-then-write — height_area_exists in the route, upsert in the
+# model — answered 200 here and raised the deleted hill from the dead. The
+# rule now lives in the WRITE (an UPDATE matching no row), so the window is
+# closed. The delete is injected through the sanitizer, which runs after the
+# route entered and before the transaction — exactly that window.
+_real_sanitize = store.sanitize_height_area
+
+
+def _delete_mid_write(raw):
+    """Stands in for the sanitizer: deletes the row on its way past."""
+    store.delete_height_area(new_id)
+    return _real_sanitize(raw)
+
+
+store.sanitize_height_area = _delete_mid_write
+try:
+    check("PUT while a DELETE lands mid-write", route_status(
+        put_height_area_route, new_id,
+        _FakeRequest({"polygon": square(0, 0, 40, 40), "height_m": 9,
+                      "falloff_m": 4})), 404)
+finally:
+    store.sanitize_height_area = _real_sanitize
+check("the raced area was NOT resurrected",
+      [a["id"] for a in store.list_height_areas()].count(new_id), 0)
+# Put it back so the payload checks below see the world they were derived for.
+store.save_height_area({"id": new_id, "polygon": square(0, 0, 40, 40),
+                        "height_m": 7, "falloff_m": 4})
+check("the hill is back for the payload checks",
+      store.list_height_areas()[0]["height_m"], 7.0)
 
 # The AREA list answers the two walk limits alongside the steps (2026-08-16),
 # so the terrain editor turns an amplitude into "this becomes unwalkable" out

@@ -448,7 +448,8 @@ def get_terrain_areas_route() -> Dict[str, Any]:
             "sig": terrain.terrain_sig()}
 
 
-def _save_terrain_area(data: Dict[str, Any]) -> Dict[str, Any]:
+def _save_terrain_area(data: Dict[str, Any],
+                       must_exist: bool = False) -> Dict[str, Any]:
     """Sanitize + persist ONE painted area — blocking, runs in the threadpool.
 
     NO LOCK, deliberately, and for the same reason ``delete_terrain_area_route``
@@ -457,10 +458,18 @@ def _save_terrain_area(data: Dict[str, Any]) -> Dict[str, Any]:
     and WAL + ``busy_timeout`` settle two writers. Painting is an editor action
     of a single admin anyway — this is about not blocking the event loop while
     the outline is sanitized and written, not about concurrent painters.
+
+    ``must_exist`` is what the PUT adds to the POST: the write replaces a
+    stored area or answers 404, and the model decides that inside the write
+    itself (``core.bulk_edit.GoneError``).
     """
+    from app.core.bulk_edit import GoneError
     from app.models import terrain
     try:
-        return {"status": "success", "area": terrain.save_area(data)}
+        return {"status": "success",
+                "area": terrain.save_area(data, must_exist=must_exist)}
+    except GoneError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -516,21 +525,24 @@ def _put_terrain_areas_bulk_sync(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _put_terrain_area(area_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """The existence check plus the write of ``put_terrain_area_route``."""
-    from app.models import terrain
-    if not terrain.area_exists(area_id):
-        raise HTTPException(status_code=404, detail="terrain area not found")
+    """The replacing write of ``put_terrain_area_route``."""
     data["id"] = area_id
-    return _save_terrain_area(data)
+    return _save_terrain_area(data, must_exist=True)
 
 
 @router.put("/terrain-areas/{area_id}")
 async def put_terrain_area_route(area_id: str, request: Request) -> Dict[str, Any]:
     """Replace one EXISTING area (kind, outline, z_order, meta); 404 otherwise.
 
-    The store is an upsert, so without this check a PUT on an unknown id would
+    The store is an upsert, so without this rule a PUT on an unknown id would
     silently create the area — and a client repeating a stale PUT would bring a
     just-deleted area back. Creating is POST's job (which assigns the id).
+
+    THE WRITE DECIDES, not a lookup before it (``core.bulk_edit.GoneError``):
+    this route runs in the threadpool, so a DELETE fits between a check and an
+    upsert — and the upsert would then resurrect exactly the area the DELETE
+    removed. The batch route refuses the same case per object as
+    ``REASON_GONE``; one rule, two shapes.
     """
     import asyncio
     data = await request.json()
@@ -647,10 +659,13 @@ async def put_world_prop_route(placement_id: str,
     """Replace one EXISTING placement (prop, point, yaw, lift, variant); 404
     otherwise.
 
-    The store is an upsert, so without this check a PUT on an unknown id would
+    The store is an upsert, so without this rule a PUT on an unknown id would
     silently create the placement — and a client repeating a stale PUT would
     bring a just-deleted one back. Creating is POST's job (which assigns the
-    id and is the only path that meets the cap)."""
+    id and is the only path that meets the cap).
+
+    The WRITE decides, not a lookup before it — see the terrain twin above for
+    why a check-then-write is a race in the threadpool."""
     data = await request.json()
     return await asyncio.to_thread(_put_world_prop_route_sync, placement_id,
                                    data)
@@ -659,15 +674,17 @@ async def put_world_prop_route(placement_id: str,
 def _put_world_prop_route_sync(placement_id: str, data: Any) -> Dict[str, Any]:
     """The blocking body of ``put_world_prop_route`` — runs in the
     threadpool."""
+    from app.core.bulk_edit import GoneError
     from app.models import world_props
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    if not world_props.world_prop_exists(placement_id):
-        raise HTTPException(status_code=404, detail="world prop not found")
     data["id"] = placement_id
     try:
         return {"status": "success",
-                "world_prop": world_props.save_world_prop(data)}
+                "world_prop": world_props.save_world_prop(data,
+                                                          must_exist=True)}
+    except GoneError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -803,7 +820,9 @@ async def put_height_area_route(area_id: str, request: Request) -> Dict[str, Any
 
     404 on an unknown id, for the reason the terrain route has it: the store is
     an upsert, so a repeated stale PUT would otherwise raise a deleted hill
-    from the dead under its old id.
+    from the dead under its old id — and the WRITE decides that, not a lookup
+    before it (``core.bulk_edit.GoneError``), because a check-then-write leaves
+    a DELETE exactly the window it needs.
 
     Carries ``step_m`` like the POST does — dragging one vertex 8 km east
     coarsens the world's grid exactly as drawing a new area there would.
@@ -815,15 +834,16 @@ async def put_height_area_route(area_id: str, request: Request) -> Dict[str, Any
 def _put_height_area_route_sync(area_id: str, data: Any) -> Dict[str, Any]:
     """The blocking body of ``put_height_area_route`` — runs in the
     threadpool."""
+    from app.core.bulk_edit import GoneError
     from app.core.heightfield import current_step_m
     from app.models import heightfield
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    if not heightfield.height_area_exists(area_id):
-        raise HTTPException(status_code=404, detail="height area not found")
     data["id"] = area_id
     try:
-        area = heightfield.save_height_area(data)
+        area = heightfield.save_height_area(data, must_exist=True)
+    except GoneError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "success", "area": area, "step_m": current_step_m()}

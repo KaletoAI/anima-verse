@@ -1677,6 +1677,7 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
     Wenn der Chat-Character den Ort wechselt, geht der Spieler-Avatar
     automatisch mit (gemeinsam einen Ort besuchen).
     """
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import save_character_current_room
     from app.models.account import get_active_character
     from app.models.world import get_location_by_id, get_room_by_name
@@ -1702,7 +1703,16 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
             # wuerde der Avatar in einen Raum gesetzt, der nicht zu seiner
             # Location gehoert.
             if player_loc and player_loc == agent_loc:
-                save_character_current_room(player, room_id)
+                # THE AVATAR-STATE LOCK of this avatar (``core.keyed_lock``),
+                # the very one ``POST /play/enter-room`` and the position
+                # report take: all three write where the avatar is standing,
+                # and ``save_character_current_room`` is a read-modify-write of
+                # the whole profile. This path runs on the event loop while
+                # those two run in the threadpool since 2026-08-24, so nothing
+                # serializes them any more. Around the WRITE only — the LLM
+                # work before it must not hold a lock.
+                with keyed_lock("avatar_state", player):
+                    save_character_current_room(player, room_id)
                 logger.info("Avatar %s folgt %s -> Room %s", player, agent_name, room_id)
 
     # 1. Raum-Match: Ist es ein Raum an der aktuellen Location?
@@ -1735,7 +1745,12 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
                             return None
                     except Exception as _rerr:
                         logger.debug("Chat room-leave-Check fehlgeschlagen: %s", _rerr)
-                    save_character_current_room(agent_name, room_id)
+                    # Same lock, keyed on the CHARACTER whose room is written
+                    # (see ``_move_avatar_room`` above). Not nested with the
+                    # avatar's: that write follows this one, it does not sit
+                    # inside it — two narrow spans, never two locks at once.
+                    with keyed_lock("avatar_state", agent_name):
+                        save_character_current_room(agent_name, room_id)
                     _move_avatar_room(room_id)
                     logger.info("Room %s: %s -> %s (%s)", agent_name, old_room, room_id, new_name)
                     return {"name": new_name, "room": room_id, "location_id": old_loc}
