@@ -161,6 +161,37 @@ HAND-DERIVED EXPECTATIONS
         and its box follows THAT mesh: `wp_deadbeef` gives 4080674006 mod 2 = 0,
         the sapling, so 1.25.
 
+  [11] ONE RESOLUTION RULE (`resolved_variant`, 2026-08-24)
+        Which mesh a placement shows is asked by three consumers — the payload
+        row, the ground box and the editor listing — and answered by ONE
+        function, so a variant picked in the map editor cannot mean one mesh
+        in the 3D client and another in the scatter. The rule:
+
+            an AUTHORED index wins        variant = 1  -> 1
+            otherwise the formula of [2]  variant = -  -> md5 mod count
+            and either way it WRAPS       variant = 5, count 2 -> 1
+            (never clamps, so switching a mesh off never hides a prop)
+            junk falls back to the formula (the sanitizer refuses it on the
+            way IN; this is the last line for a row written past it)
+            count 0 has nothing to choose from      -> 0
+
+        Hand-derived from md5("wp_deadbeef")[:8] = 4080674006: mod 2 = 0,
+        mod 3 = 2, and −1 mod 2 = 1 (Python's modulo answers non-negative).
+
+        End to end on the pine of [10]: pinning its auto placement to the
+        grown variant moves the payload row to `max_m` 6.0 and its box to
+        half_w 2.25 in the same breath. And because a placement stores a
+        POSITION in the PUBLISHED list, switching variant 0 off leaves one
+        position that IS the grown tree — every placement of the pine then
+        keeps 2.25 clear, the sapling-pinned one included.
+
+        The editor listing carries what the picker needs and nothing it would
+        have to compute: `variant_indices` (the store index behind each
+        position, so its label reads like the prop page's chip) and
+        `variant_auto` (what "Auto" resolves to for THIS placement, whatever
+        is stored — an unsaved draft switching back to Auto can name its mesh
+        before the save).
+
 Usage:  ./.venv/bin/python scripts/smoke_world_props.py
 """
 import hashlib
@@ -590,6 +621,59 @@ check("an auto-picked variant lands on 0 here",
       wp.variant_index(auto["id"], 2), 0)
 check("...so its box is the sapling's",
       ({b["id"]: b for b in wp.prop_boxes()}[auto["id"]]["half_w"]), 1.25)
+
+print("\n[11] the ONE resolution rule")
+# `resolved_variant` is the single function the payload row, the ground box and
+# the editor listing run through. Every number below follows from the formula
+# of [2]: md5("wp_deadbeef")[:8] = 4080674006, mod 2 = 0, mod 3 = 2.
+check("no stored index: the formula picks",
+      wp.resolved_variant("wp_deadbeef", None, 2), 0)
+check("...and it follows the published count",
+      wp.resolved_variant("wp_deadbeef", None, 3), 2)
+check("a stored index WINS over the formula",
+      wp.resolved_variant("wp_deadbeef", 1, 2), 1)
+check("...also when it names what the formula would have picked",
+      wp.resolved_variant("wp_deadbeef", 0, 2), 0)
+check("an out-of-range index wraps instead of hiding the prop",
+      wp.resolved_variant("wp_deadbeef", 5, 2), 1)
+check("a negative one wraps into the list too",
+      wp.resolved_variant("wp_deadbeef", -1, 2), 1)
+check("junk written past the sanitizer falls back to the formula",
+      wp.resolved_variant("wp_deadbeef", "x", 2), 0)
+check("nothing to choose from", wp.resolved_variant("wp_deadbeef", 7, 0), 0)
+
+# End to end: the auto placement of [10] showed the sapling; pinning it to the
+# grown variant has to move the payload row AND the ground box.
+wp.save_world_prop({**auto, "variant": 1})
+rows = {r["id"]: r for r in wp.payload_rows()}
+check("the payload row of a pinned placement names the pinned position",
+      rows[auto["id"]]["variant"], 1)
+check("...is scaled to that variant", rows[auto["id"]]["max_m"], 6.0)
+check("...and keeps that variant's ground clear",
+      {b["id"]: b for b in wp.prop_boxes()}[auto["id"]]["half_w"], 2.25)
+
+# The editor listing: what the variant picker reads, without a second lookup.
+listing = {r["id"]: r for r in get_world_props_route()["world_props"]}
+check("the listing names the store index behind every position",
+      listing[auto["id"]]["variant_indices"], [0, 1])
+check("...how many there are", listing[auto["id"]]["variant_count"], 2)
+check("...and what Auto resolves to, whatever is stored",
+      listing[auto["id"]]["variant_auto"], 0)
+
+# A placement stores a POSITION in the PUBLISHED list: switching variant 0 off
+# leaves ONE position, and it is the grown tree — so every placement of the
+# pine keeps 2.25 clear, the one pinned to the sapling included.
+prop_store.set_variant_active(PINE, 0, False)
+check("one variant switched off, one position published",
+      len(prop_store.active_variant_tiers(PINE)), 1)
+boxes = {b["id"]: b for b in wp.prop_boxes()}
+check("the pinned placement wraps onto it",
+      boxes[auto["id"]]["half_w"], 2.25)
+check("...and so does the one pinned to the position that is gone",
+      boxes[small["id"]]["half_w"], 2.25)
+prop_store.set_variant_active(PINE, 0, True)
+check("switching it back on restores the sapling's box",
+      {b["id"]: b for b in wp.prop_boxes()}[small["id"]]["half_w"], 1.25)
 
 shutil.rmtree(STORAGE, ignore_errors=True)
 shutil.rmtree(CLIPS, ignore_errors=True)

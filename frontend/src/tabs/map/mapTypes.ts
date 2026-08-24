@@ -807,7 +807,24 @@ export interface WorldProp {
    *  exactly that many indices instead of holding a ceiling of its own
    *  (`image_generation.prop_variant_max` is configurable). */
   variant_count?: number
+  /** The STORE index behind each of those positions, in the same order —
+   *  `variant` is a POSITION in the published list (§ B2 addendum), while the
+   *  prop page numbers its chips by store index. This is what lets the picker
+   *  name the same variant the prop page names. */
+  variant_indices?: number[]
+  /** Which position the SERVER's formula picks for this placement when
+   *  `variant` is null (`world_props.resolved_variant`) — the mesh behind
+   *  "Auto". Never recomputed here: the md5 rule lives on the server alone. */
+  variant_auto?: number
   missing?: boolean
+}
+
+/** One placement's ground box as the world-prop routes ship it: the shared
+ *  `ScatterPropBox` (centre, turn, the two half-extents) plus the PLACEMENT it
+ *  belongs to. The sampler never needs that id — it only keeps ground clear —
+ *  but the editor does: it draws each rectangle on its own prop. */
+export interface WorldPropBox extends ScatterPropBox {
+  id: string
 }
 
 /** `GET /world/world-props` — the placements plus the two cap numbers, so the
@@ -830,7 +847,7 @@ export interface WorldPropsResp {
    * shape; `propBoxFootprints` turns it into the footprints the preview keeps
    * clear. Absent from an older server = nothing extra is excluded.
    */
-  prop_boxes?: ScatterPropBox[]
+  prop_boxes?: WorldPropBox[]
   max: number
   warn_at: number
   sig: string

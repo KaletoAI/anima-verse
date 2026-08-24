@@ -576,6 +576,18 @@ def get_world_props_route() -> Dict[str, Any]:
     the editor is where it becomes visible instead of silently occupying a
     slot of the cap.
 
+    The VARIANT picker is fed from here and looks nothing up a second time
+    (2026-08-24): ``variant_count`` is how many meshes there are to choose
+    from, ``variant_indices`` the STORE index behind each of those positions
+    (so the editor's label reads like the prop page's variant chip), and
+    ``variant_auto`` what the hash of ``world_props.resolved_variant`` picks
+    for THIS placement — the label behind "Auto". The variant a placement
+    really shows is ``variant`` when it is set and ``variant_auto`` otherwise:
+    the one server rule, handed out as a number, never recomputed on a client.
+    ``variant_auto`` is deliberately the AUTO pick and not the resolved one, so
+    an unsaved draft that switches the picker back to "Auto" can name the mesh
+    it will land on without waiting for the save.
+
     ``prop_boxes`` is the same block ``GET /play/terrain`` serves the 3D client
     (§ A9b), out of the same one function: the ground each placement occupies,
     which the map editor's scatter preview keeps clear exactly as the client
@@ -590,16 +602,25 @@ def get_world_props_route() -> Dict[str, Any]:
         pid = row["prop_id"]
         if pid not in facts:
             meta = prop_store.read_sidecar(pid)
+            # The STORE index of every published position, in payload order —
+            # the two index spaces of § B2's addendum meet in the picker, and
+            # the editor must not guess which is which.
+            stores = ([int(e.get("variant") or 0)
+                       for e in prop_store.active_variant_tiers(pid)]
+                      if meta else [])
             facts[pid] = {
                 "name": str(meta.get("name") or "") if meta else "",
                 # How many meshes there are to CHOOSE from — the editor offers
                 # exactly that many indices instead of holding a ceiling of
                 # its own (`prop_variant_max` is configurable).
-                "variants": (len(prop_store.active_variant_tiers(pid))
-                             if meta else 0),
+                "variants": len(stores),
+                "stores": stores,
             }
         row["name"] = facts[pid]["name"]
         row["variant_count"] = facts[pid]["variants"]
+        row["variant_indices"] = facts[pid]["stores"]
+        row["variant_auto"] = world_props.resolved_variant(
+            row["id"], None, facts[pid]["variants"])
         row["missing"] = not facts[pid]["name"]
     return {"world_props": rows, "count": len(rows),
             # ``{id: updated_at}`` — the batch save's version tokens, beside

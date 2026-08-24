@@ -34,7 +34,6 @@ import {
   type TerrainMode,
 } from './TerrainTools'
 import { propBoxFootprints } from '@anima/scene-render'
-import type { ScatterPropBox } from '@anima/scene-render'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { WorldPropLayer } from './WorldPropLayer'
 import { PropsPalette } from '../world/PropsPalette'
@@ -53,7 +52,7 @@ import type {
   EditorLocation, HeightArea, HeightAreasResp,
   TerrainArea, TerrainMeta, TerrainRelief, TerrainWater,
   TerrainPayload, TerrainScatterEntry, TerrainStroke, TerrainType,
-  TerrainTypesResp, WorldProp, WorldPropsResp, WorldmapPayload,
+  TerrainTypesResp, WorldProp, WorldPropBox, WorldPropsResp, WorldmapPayload,
 } from './mapTypes'
 
 /**
@@ -566,6 +565,26 @@ const strokeLine = (s: TerrainStroke): Array<[number, number]> => {
  *  decimals, +50 with none) — the sign is therefore split off first. */
 const fmtPos = (v: number): string => (v < 0 ? '-' : '') + fmtM(Math.abs(v))
 
+/** A stored variant index as the position that is really rendered. The server
+ *  wraps MODULO the published count and never clamps
+ *  (`world_props.resolved_variant`), so a picker showing the raw number would
+ *  claim a mesh the world does not draw once a variant is switched off. */
+const wrapVariant = (variant: number, count: number): number => (
+  count > 0 ? ((Math.trunc(variant) % count) + count) % count : 0)
+
+/** How ONE variant of a placement is NAMED — by its STORE index + 1, exactly
+ *  like the variant chips on the prop page, so the two screens never disagree
+ *  about which mesh is meant. A placement stores a POSITION in the published
+ *  list (§ B2 addendum) and the server ships the store index behind each
+ *  position; a draft placement that has not seen the server yet falls back to
+ *  the position, which is the same number until a variant is switched off. */
+const variantLabel = (wp: WorldProp, pos: number,
+                      t: (en: string) => string): string => {
+  const store = wp.variant_indices?.[pos]
+  return t('Variant {n}').replace(
+    '{n}', String((typeof store === 'number' ? store : pos) + 1))
+}
+
 /** Flat 2D map icon as an HTML thumbnail (tray). Hidden when the location has
  *  none — a broken image would claim the entry is misconfigured. The map
  *  itself draws the same URL as an SVG `<image>`, which needs no such guard. */
@@ -668,8 +687,9 @@ export function MapTab() {
   const [worldProps, setWorldProps] = useState<WorldProp[]>([])
   /** The ground each placement occupies (§ A9b) — the SERVER's numbers, since
    *  only it knows the props' real sizes. The scatter preview keeps them
-   *  clear exactly as the 3D client does; see `scatterFootprints`. */
-  const [wpBoxes, setWpBoxes] = useState<ScatterPropBox[]>([])
+   *  clear exactly as the 3D client does (see `scatterFootprints`), and the
+   *  props layer draws them as the footprint rectangle under each marker. */
+  const [wpBoxes, setWpBoxes] = useState<WorldPropBox[]>([])
   const [selWp, setSelWp] = useState('')
   const [armedProp, setArmedProp] = useState<PropFull | null>(null)
   const [wpCap, setWpCap] = useState({ max: 0, warnAt: 0 })
@@ -3171,6 +3191,12 @@ export function MapTab() {
                 // snaps to, so what is shown and what happens cannot drift.
                 snapM={propGridM}
                 ghostPt={armedProp ? ghostPt : null}
+                // The ground each placement covers, straight from the server
+                // (§ A9b) — the same block the scatter preview keeps clear, so
+                // the rectangle on the map IS the ground that stays bare. It
+                // follows a variant change with the refetch after the Save.
+                boxes={wpBoxes}
+                showBoxes={mode === 'props'}
               />
             </g>
           </MapCanvas>
@@ -3289,24 +3315,37 @@ export function MapTab() {
                 <span className="ga-map-chip-label">m</span>
               </div>
               {/* Which MESH of a multi-variant prop this one shows. "Auto"
-                  is the formula of § A9a (the placement id decides), a number
-                  pins it. Out-of-range wraps server-side, so a variant the
-                  admin later deletes never hides the prop. A prop with ONE
-                  mesh has nothing to choose from and shows no row. */}
+                  is the formula of § A9a (the placement id decides) and says
+                  which variant it lands on, a number pins it. Out-of-range
+                  wraps server-side, so a variant the admin later deletes never
+                  hides the prop — and the value below shows that wrap, i.e.
+                  the mesh really rendered. A prop with ONE mesh has nothing to
+                  choose from and shows no row. The footprint rectangle on the
+                  map follows a change with the refetch after the Save: a
+                  variant may be its own size. */}
               {(selectedWp.variant_count || 0) > 1 ? (
               <div className="ga-map-chip-row">
                 <span className="ga-map-chip-label">{t('Variant')}</span>
                 <select className="ga-input"
-                  title={t('Auto lets the placement id pick a mesh, so a row of the same prop is not the same mesh twice.')}
-                  value={selectedWp.variant == null ? '' : String(selectedWp.variant)}
+                  title={t('Auto lets the placement id pick a mesh, so a row of the same prop is not the same mesh twice. A pinned variant may have its own size — the footprint rectangle follows it once the change is saved.')}
+                  value={selectedWp.variant == null ? ''
+                    : String(wrapVariant(selectedWp.variant,
+                                         selectedWp.variant_count || 1))}
                   onChange={(e) => {
                     const raw = e.target.value
                     commitWorldProp(selectedWp.id,
                       { variant: raw === '' ? null : Number(raw) })
                   }}>
-                  <option value="">{t('Auto')}</option>
+                  <option value="">
+                    {t('Auto ({v})').replace('{v}',
+                      variantLabel(selectedWp, selectedWp.variant_auto || 0, t))}
+                  </option>
                   {Array.from({ length: selectedWp.variant_count || 1 },
-                    (_, i) => (<option key={i} value={i}>{`#${i}`}</option>))}
+                    (_, i) => (
+                      <option key={i} value={i}>
+                        {variantLabel(selectedWp, i, t)}
+                      </option>
+                    ))}
                 </select>
               </div>
               ) : null}

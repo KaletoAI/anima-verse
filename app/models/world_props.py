@@ -21,10 +21,13 @@ editor warns from :data:`WARN_WORLD_PROPS` on. Every placement is its own
 draw call in both renderers (instancing the rest is parked), so the ceiling is
 a rendering budget, not a storage one.
 
-**Which mesh a placement shows** is :func:`variant_index` — the ONE formula,
-resolved on the server exactly like the scattered copies of a room placement
-(``props.scatter_variant_index``, § B2 addendum). Renderers read the number,
-they never derive it.
+**Which mesh a placement shows** is :func:`resolved_variant` — the ONE rule:
+the index an author pinned on the placement, or :func:`variant_index` (the
+placement id's hash) when nobody pinned one. It is resolved on the server
+exactly like the scattered copies of a room placement
+(``props.scatter_variant_index``, § B2 addendum): the payload row, the ground
+box and the editor listing all run through that one function. Renderers read
+the number, they never derive it.
 """
 
 import hashlib
@@ -100,6 +103,42 @@ def variant_index(placement_id: str, count: Any) -> int:
         return 0
     digest = hashlib.md5(str(placement_id or "").encode("utf-8")).hexdigest()
     return int(digest[:8], 16) % n
+
+
+def resolved_variant(placement_id: str, stored: Any, count: Any) -> int:
+    """WHICH published position a placement really shows — THE ONE RULE.
+
+    Every consumer of a world prop asks the same question and must get the
+    same number: the payload row (which mesh URL travels), the ground box
+    (which size keeps the scatter out) and the editor listing (what the
+    variant picker says "Auto" resolves to). It lived inline in two places
+    until 2026-08-24; one formula in two bodies is one formula that drifts.
+
+    The rule: an AUTHORED index wins (``placement.variant``), otherwise the
+    hash of :func:`variant_index` picks. Either way the answer wraps MODULO
+    ``count`` and is never clamped — an admin switching a mesh off moves every
+    position below it, and a stored index must not make a placement vanish.
+    A stored value that is not a number at all falls back to the formula: the
+    sanitizer refuses junk on the way in, so this is the last line for a row
+    that predates it or was written past it.
+
+    ``count`` 0 or less has nothing to choose from and answers 0.
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return 0
+    if n <= 0:
+        return 0
+    if stored is None:
+        return variant_index(placement_id, n)
+    try:
+        idx = int(stored)
+    except (TypeError, ValueError):
+        return variant_index(placement_id, n)
+    # Python's modulo answers non-negative for a positive divisor, so a
+    # negative index that slipped past the sanitizer still lands in the list.
+    return idx % n
 
 
 def sanitize_world_prop(raw: Any) -> Dict[str, Any]:
@@ -379,11 +418,9 @@ def payload_rows() -> List[Dict[str, Any]]:
         if not facts:
             continue
         maps: List[Dict[str, str]] = facts["variant_maps"]
-        idx = (row["variant"] if row["variant"] is not None
-               else variant_index(row["id"], len(maps)))
-        # MODULO, never clamped: the variant count moves when an admin adds or
-        # deletes a mesh, and a stored index must not make a placement vanish.
-        idx = idx % len(maps) if maps else 0
+        # THE ONE rule (:func:`resolved_variant`) — authored index or hash,
+        # wrapped modulo the published count.
+        idx = resolved_variant(row["id"], row["variant"], len(maps))
         spec: Dict[str, Any] = {
             "id": row["id"],
             "prop_id": pid,
@@ -440,7 +477,7 @@ def prop_boxes() -> List[Dict[str, Any]]:
     One row is ``{id, x, z, yaw_deg, half_w, half_d}``: the placement's own
     anchor and turn, plus half the REAL width and depth of the VARIANT this
     placement shows (``props.prop_ground_extent``, resolved through the same
-    :func:`variant_index` the payload row runs on) with
+    :func:`resolved_variant` the payload row runs on) with
     :data:`PROP_BOX_MARGIN_M` on top. A variant may override the prop's dims
     (2026-08-24), and the ground a placement keeps clear is the ground its own
     mesh covers — the sapling variant of a pine claims less than the grown one.
@@ -485,9 +522,10 @@ def prop_boxes() -> List[Dict[str, Any]]:
                               for e in active_variant_tiers(pid)]
         store = published[pid]
         if store:
-            pos = (row["variant"] if row["variant"] is not None
-                   else variant_index(row["id"], len(store)))
-            variant: Optional[int] = store[pos % len(store)]
+            # Same one rule as the payload row, so a box can never belong to a
+            # mesh the placement is not drawing (:func:`resolved_variant`).
+            pos = resolved_variant(row["id"], row["variant"], len(store))
+            variant: Optional[int] = store[pos]
         else:
             variant = None
         if (pid, variant) not in extents:

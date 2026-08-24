@@ -212,7 +212,7 @@ export function boundaryScreenPoints(loc: BoundarySource, view: View,
 }
 
 /** An SVG path over world points (terrain polygons, journey lines). */
-export function worldPolyToPath(points: Array<[number, number]>, view: View,
+export function worldPolyToPath(points: readonly [number, number][], view: View,
   w: number, h: number, close = true): string {
   if (!points.length) return ''
   const parts = points.map(([x, z], i) => {
