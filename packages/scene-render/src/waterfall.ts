@@ -65,6 +65,17 @@ export interface WaterfallAxis {
  * is the fall's, and the straight line from lip to pool is. `width` is the
  * river's own width, and `topY`/`bottomY` the mirror levels of the run's first
  * and last knot — the height the water leaves at and the height it arrives at.
+ *
+ * `chordM` IS THAT STRAIGHT LINE'S LENGTH, and it is what tells a renderer HOW
+ * STEEP the fall stands on the ground. Under Wasser v2 K-A the water surface IS
+ * the terrain (`client3d/src/scene/waterShade.ts`), so the mirror between lip
+ * and pool is drawn as a steep, opaque, WET FACE running exactly `chordM`
+ * metres from `x ∓ dir · chordM/2`. A curtain hung over a shorter run than that
+ * is buried in its own waterfall for the whole lower half of its height — the
+ * measured symptom of 2026-08-24, "the fall has the waterfall texture only at
+ * the top". The renderer needs the number to lean the sheet clear of the face,
+ * and it can be had for nothing here: the chord is already computed to get the
+ * direction.
  */
 export interface Waterfall {
   x: number
@@ -74,6 +85,7 @@ export interface Waterfall {
   width: number
   topY: number
   bottomY: number
+  chordM: number
 }
 
 /**
@@ -264,7 +276,7 @@ function runToFall(knots: AxisKnot[], lo: number, hi: number,
   if (!(len > 1e-9)) return null
   const [x, z] = arcMidpoint(knots, lo, hi)
   return { x, z, dirX: dx / len, dirZ: dz / len, width,
-    topY: top.level, bottomY: bottom.level }
+    topY: top.level, bottomY: bottom.level, chordM: len }
 }
 
 /**

@@ -43,7 +43,8 @@ import type { Waterfall } from '@anima/scene-render';
 import { WATER_FOAM_STRENGTH } from './waterPlaneMath';
 
 /**
- * How far downstream the sheet leans per metre of fall.
+ * How far downstream the sheet's FOOT leans out per metre of fall, measured
+ * from the foot of the wet face the terrain draws.
  *
  * A jet leaving the lip at a walking pace is a parabola: it falls `h` metres in
  * `√(2h/g)` seconds and travels `v·√(2h/g)` metres while it does, which for
@@ -51,11 +52,23 @@ import { WATER_FOAM_STRENGTH } from './waterPlaneMath';
  * rather than that `1/√h`, because the difference over the falls a world holds
  * is a hand's width and one number reads the same everywhere.
  *
- * IT IS ALSO WHAT GETS THE SHEET OUT OF THE HILL. The fall's own point is the
- * MIDDLE of the segment, where the bed sits halfway between top and bottom, so
- * a strictly vertical curtain would have its lower half buried in the slope in
- * front of it. Leaning the top back and the foot forward puts the sheet along
- * the bed instead of through it.
+ * IT IS ALSO WHAT GETS THE SHEET OUT OF THE HILL, and since 2026-08-24 that is
+ * the whole of its job. Under Wasser v2 K-A the mirror between lip and pool IS
+ * the ground: the terrain is lifted to `max(h, w_level)`, so the fall stands
+ * there as a steep OPAQUE wet face running the fall's own chord
+ * (`Waterfall.chordM`). The curtain used to hang from the arc MIDPOINT over a
+ * run of `WATERFALL_LEAN · h` metres — steeper than that face whenever the
+ * chord is longer than 0.3 h, i.e. for every fall shallower than 73°. Measured
+ * on the fixture below (drop 5.8 m, chord 3 m): the sheet ran 1.74 m of ground
+ * against the face's 3 m, so above the midpoint it stood in front of the face
+ * and below it up to 0.63 m BEHIND it — the whole lower half occluded by the
+ * water's own wall, which is exactly the reported "the fall only has the
+ * waterfall texture at the top".
+ *
+ * The sheet is therefore hung from the LIP (the face's own top edge) and given
+ * the same run as the face plus this lean at the foot, so the two are 0 apart
+ * at the lip and `WATERFALL_LEAN · h` apart at the pool — in front everywhere,
+ * by `WATERFALL_LEAN · h · (1 − u)` at height fraction `u`.
  */
 const WATERFALL_LEAN = 0.3;
 
@@ -215,8 +228,10 @@ function patchCurtain(mat: THREE.Material, speedTilesS: number,
  * for the reason every water height here is absolute: the levels in the payload
  * are, and a mesh position under them would be a second place a height could be
  * wrong. `across` is the horizontal perpendicular of the flow, so the strip
- * spans the river; the lean puts the lip edge upstream of the fall's point and
- * the foot downstream of it.
+ * spans the river; the lip edge sits half the fall's CHORD upstream of the
+ * fall's point — i.e. on the lip itself — and the foot half a chord downstream
+ * plus the lean, which is what keeps the sheet in front of the wet face the
+ * terrain draws behind it (`WATERFALL_LEAN`).
  *
  * An empty list comes back for a fall of no height — the detection cannot
  * produce one (it needs a drop over a metre), so this only ever fires on a
@@ -234,11 +249,13 @@ export function buildWaterfall(fall: Waterfall,
   const acrossX = fall.dirZ;
   const acrossZ = -fall.dirX;
   const halfW = fall.width * 0.5;
-  const lean = WATERFALL_LEAN * height * 0.5;
-  const topX = fall.x - fall.dirX * lean;
-  const topZ = fall.z - fall.dirZ * lean;
-  const botX = fall.x + fall.dirX * lean;
-  const botZ = fall.z + fall.dirZ * lean;
+  // The wet face's own half-run, and the lean that carries the foot clear of it.
+  const halfRun = Math.max(fall.chordM, 0) * 0.5;
+  const lean = WATERFALL_LEAN * height;
+  const topX = fall.x - fall.dirX * halfRun;
+  const topZ = fall.z - fall.dirZ * halfRun;
+  const botX = fall.x + fall.dirX * (halfRun + lean);
+  const botZ = fall.z + fall.dirZ * (halfRun + lean);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
     topX - acrossX * halfW, fall.topY, topZ - acrossZ * halfW,

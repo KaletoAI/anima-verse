@@ -216,22 +216,57 @@ export function waterAbsorb(depthM: number, opaqueDepthM: number,
 }
 
 /**
+ * How much of a pixel the foam may whiten where the WATER itself covers almost
+ * nothing (0…1) — the lace at the very waterline.
+ *
+ * It is the mesh mirror's own rim number, carried over: there the foam did not
+ * only tint the light, it also ADDED this much alpha back, "without it the
+ * shoreline fades to nothing and the last hand's width of water is invisible".
+ * Under K-A there is no alpha to add to — the ground is opaque — so the same
+ * 0.15 appears here, as the floor of the cover the whitening is multiplied by.
+ */
+export const WATER_FOAM_MIN_COVER = 0.15;
+
+/**
  * HOW MUCH FOAM whitens the pixel, 0…1 — full at the waterline, gone at
- * `WATER_FOAM_BAND_M` (0.6 m), times the same rim ramp.
+ * `WATER_FOAM_BAND_M` (0.6 m), times the rim ramp AND times how much water
+ * really stands over the pixel.
  *
  * The band does NOT scale with the water's depth (W4b): half a metre of real
- * water at a real rim is the same half metre in a pond and in a lake. Hand
- * values with the rim ramp saturated:
+ * water at a real rim is the same half metre in a pond and in a lake.
  *
- *     0.0  -> 0        (the rim ramp is 0 exactly where the water ends)
- *     0.15 -> 0.84375
- *     0.3  -> 0.5
- *     0.45 -> 0.15625
- *     0.6  -> 0
+ * ── THE COVER, AND WHY IT IS NOT OPTIONAL (finding 2026-08-24) ───────────────
+ * The mirror was a TRANSPARENT surface: it whitened its own outgoing light by
+ * `foam · WATER_FOAM_STRENGTH` and then handed the whole fragment to the blend
+ * at `alpha = clamp(shoreAlpha + foam · 0.15, 0, 1) · rim`. So the white that
+ * ever reached the screen was `foam · strength · alpha` — three small factors
+ * at the rim, i.e. a lace. K-A E4 kept the first two and dropped the third,
+ * because the terrain is opaque and there is no alpha left to drop it into:
+ * measured on a river (bed 1.0 m, opaque band 0.75 m), a pixel with 5 cm of
+ * water over it went from 0.094 white to 0.588 — 6.26× — and one with 30 cm
+ * from 0.128 to 0.300. That is the "white edges and corners at the waterline",
+ * and it is loudest exactly where the water is thinnest: the flooded bank
+ * inside the raster's dilation ring, and the lattice staircase the ring ends on.
+ *
+ * The cover is therefore multiplied back in, constant for constant, so the
+ * shipped white is the mirror's again. Hand values for a river (opaque band
+ * 0.75 m) with the rim ramp saturated, `foam · min(shoreAlpha + foam·0.15, 1)`:
+ *
+ *     0.05 -> 0.9803241 · (0.0127407 + 0.1470486) = 0.1566349
+ *     0.30 -> 0.5       · (0.352     + 0.075    ) = 0.2135
+ *     0.60 -> 0                                   = 0
+ *
+ * times `WATER_FOAM_STRENGTH` (0.6) that is 0.0939809 / 0.1281 / 0 of the way
+ * to white — the mirror's own three numbers.
  */
-export function waterFoamAt(depthM: number, edgeM: number): number {
+export function waterFoamAt(depthM: number, opaqueDepthM: number,
+                            edgeM: number): number {
   if (!(depthM > 0)) return 0;
-  return waterFoam(depthM) * waterEdgeFade(depthM, edgeM);
+  const foam = waterFoam(depthM);
+  const cover = Math.min(
+    waterShoreAlpha(depthM, Math.max(opaqueDepthM, 1e-3))
+      + foam * WATER_FOAM_MIN_COVER, 1);
+  return foam * cover * waterEdgeFade(depthM, edgeM);
 }
 
 /** The albedo a water pixel carries: the bed blended toward the tint by the
@@ -417,8 +452,14 @@ void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
   vec4 look0 = texelFetch( uTlodWaterLook, ivec2( 0, layer ), 0 );
   vec4 look1 = texelFetch( uTlodWaterLook, ivec2( 1, layer ), 0 );
   vec4 look2 = texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 );
-  twA = twSmooth( d / max( look1.w, 1e-3 ) ) * rim;
-  twFoam = ( 1.0 - twSmooth( d / ${WATER_FOAM_BAND_M} ) ) * rim;
+  float shore = twSmooth( d / max( look1.w, 1e-3 ) );
+  twA = shore * rim;
+  // THE FOAM, and the COVER it is multiplied by — the mirror's own alpha, which
+  // an opaque ground has nowhere else to put. See waterFoamAt: without it a
+  // hand's width of water at the rim is painted 6.26× as white as the surface
+  // this replaced, which is the white edge and the white lattice corner.
+  float rawFoam = 1.0 - twSmooth( d / ${WATER_FOAM_BAND_M} );
+  twFoam = rawFoam * min( shore + rawFoam * ${WATER_FOAM_MIN_COVER}, 1.0 ) * rim;
   twSkyMix = look0.w;
   twN = twRipple( vTlodXZ, gx, gy, max( look1.x, 0.05 ), look1.y, look1.z );
   // THE ABSORPTION, on the ALBEDO and not on the finished light: the bed the

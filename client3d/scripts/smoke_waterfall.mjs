@@ -251,6 +251,56 @@
  *       and travels 1.5 · 1.0874129 = 1.6311194 m while it does, i.e.
  *       1.6311194 / 5.8 = 0.2812275 of its own height.
  *
+ * ===========================================================================
+ * [9] THE CURTAIN MUST HANG IN FRONT OF ITS OWN WATERFALL (2026-08-24)
+ * ===========================================================================
+ * Under Wasser v2 K-A the mirror between lip and pool is not a mesh any more:
+ * the terrain is lifted to `max(h, w_level)`, so the fall stands on the ground
+ * as a steep, OPAQUE, wet face running the fall's own chord. On the plan's
+ * fixture that face runs from knot B (20, 0) at y 9.8 to knot C (21.8, −2.4)
+ * at y 4 — 3 m of ground for 5.8 m of drop.
+ *
+ * Write the run coordinate `r` of a point as its signed distance from the
+ * fall's own point (20.9, −1.2) along `dir` = (0.6, −0.8), and the height as
+ * `u = (y − 4) / 5.8` (0 at the pool, 1 at the lip). The FACE is then the
+ * straight line
+ *
+ *     r_face(u) = (chord/2)·(1 − 2u) = 1.5·(1 − 2u)
+ *
+ * THE DEFECT. The curtain used to hang from the same midpoint over a run of
+ * `WATERFALL_LEAN · h = 1.74 m`, i.e. `r_old(u) = 0.87·(1 − 2u)`. So
+ *
+ *     r_old − r_face = (0.87 − 1.5)·(1 − 2u) = −0.63·(1 − 2u)
+ *
+ * which is NEGATIVE — upstream, i.e. inside the hill — for every u below 0.5
+ * and reaches −0.63 m at the pool. Exactly the lower HALF of the sheet stood
+ * behind the water's own wall, and only the upper half was ever drawn: the
+ * reported "the waterfall only has the waterfall texture at the top", and the
+ * reason iso switch 22 ("water lift off") makes the whole curtain appear.
+ *
+ * THE FIX, and its numbers. The sheet is hung from the LIP and given the
+ * face's own run plus the lean at its foot:
+ *
+ *     halfRun = chord/2 = 1.5      lean = 0.3 · 5.8 = 1.74
+ *     top = (20.9, −1.2) − (0.6, −0.8)·1.5          = (20.0,   0.0)
+ *     bot = (20.9, −1.2) + (0.6, −0.8)·(1.5 + 1.74) = (22.844, −3.792)
+ *
+ * The top corner IS knot B, the lip, to the metre. The foot sits
+ * hypot(22.844 − 21.8, −3.792 + 2.4) = hypot(1.044, 1.392) = √3.0276 = 1.74 m
+ * downstream of knot C, the face's foot — the lean, exactly. And in between
+ *
+ *     r_new(u) − r_face(u) = 1.74·(1 − u)
+ *
+ * so the sheet is in front of the face at every height, by 1.74 m at the pool,
+ * 0.87 m halfway up, and 0 at the lip — where the curtain's own shader already
+ * fades its last 6 % of v to nothing.
+ *
+ * THE TEXTURE WAS NEVER THE PROBLEM. The first suspicion was the wrap mode —
+ * a fresh `THREE.CanvasTexture` clamps, and the curtain tiles its uv by
+ * `width / 2.5` × `height / 2.5`, both well over 1. But the map is THE shared
+ * one and `materials.makeWaveNormal` sets `wrapS = wrapT = RepeatWrapping` on
+ * it before anybody sees it; the pin below is on that line.
+ *
  * …and the arrangement: the curtain takes THE one wave normal map of the
  * process straight from `materials.surfaceWaveNormal` — the very texture the
  * terrain's own water pixels scroll (K-A E4), and no second one — rides the
@@ -342,6 +392,7 @@ check('the water leaves at the upstream knot\'s level', fall.topY, 9.8);
 check('…and arrives at the downstream one\'s', fall.bottomY, 4);
 check('the drop is the plan\'s 5.8 m', fall.topY - fall.bottomY, 5.8, 1e-12);
 check('it is as wide as the drawn ribbon', fall.width, 6);
+check('and it carries the run\'s CHORD, |BC| = 3', fall.chordM, 3, 1e-12);
 // RED: the AREA's own bearing is not the fall's — see docstring [2].
 const chord = Math.hypot(33.8, 18.4);
 check('RED: the area-wide chord is this long', chord, 38.4837628, 1e-7);
@@ -552,6 +603,8 @@ const groundSrc = await readFile(
   join(ROOT, 'client3d/src/scene/ground.ts'), 'utf8');
 const lodSrc = await readFile(
   join(ROOT, 'client3d/src/scene/terrainLod.ts'), 'utf8');
+const matSrc = await readFile(
+  join(ROOT, 'packages/scene-render/src/materials.ts'), 'utf8');
 check('the sheet drifts at the MEAN speed of falling water, √(g·h/2)',
   /Math\.sqrt\(WATERFALL_G \* Math\.max\(heightM, 0\) \* 0\.5\)/.test(fallSrc)
     ? 1 : 0, 1);
@@ -563,6 +616,55 @@ check('the sheet leans downstream, 0.3 m per metre of fall',
   /const WATERFALL_LEAN = 0\.3;/.test(fallSrc) ? 1 : 0, 1);
 check('RED: which is about the chord of a 1.5 m/s jet over that same 5.8 m',
   (1.5 * Math.sqrt((2 * 5.8) / 9.81)) / 5.8, 0.2812275, 1e-7);
+
+// ── [9] the curtain hangs in FRONT of the wet face (2026-08-24) ─────────────
+console.log('\n[9] the sheet clears the wet face the terrain draws behind it');
+check('the sheet spans the fall\'s own chord, from the LIP',
+  /const halfRun = Math\.max\(fall\.chordM, 0\) \* 0\.5;/.test(fallSrc)
+  && /const topX = fall\.x - fall\.dirX \* halfRun;/.test(fallSrc) ? 1 : 0, 1);
+check('…and its foot leans the full WATERFALL_LEAN · h past the face\'s foot',
+  /const lean = WATERFALL_LEAN \* height;/.test(fallSrc)
+  && /const botX = fall\.x \+ fall\.dirX \* \(halfRun \+ lean\);/.test(fallSrc)
+    ? 1 : 0, 1);
+check('RED: the old half-lean about the midpoint is gone',
+  /WATERFALL_LEAN \* height \* 0\.5/.test(fallSrc) ? 1 : 0, 0);
+// The four numbers of the docstring, on the plan's fixture.
+const H9 = fall.topY - fall.bottomY;          // 5.8
+const halfRun9 = fall.chordM * 0.5;           // 1.5
+const lean9 = 0.3 * H9;                       // 1.74
+check('the lean over a 5.8 m fall is', lean9, 1.74, 1e-12);
+check('the top corner lands ON the lip knot B (x)',
+  fall.x - fall.dirX * halfRun9, 20, 1e-12);
+check('…and (z)', fall.z - fall.dirZ * halfRun9, 0, 1e-12);
+check('the foot lands here (x)',
+  fall.x + fall.dirX * (halfRun9 + lean9), 22.844, 1e-12);
+check('…and (z)', fall.z + fall.dirZ * (halfRun9 + lean9), -3.792, 1e-12);
+check('…i.e. exactly the lean downstream of the face\'s foot, knot C',
+  Math.hypot(fall.x + fall.dirX * (halfRun9 + lean9) - 21.8,
+             fall.z + fall.dirZ * (halfRun9 + lean9) + 2.4), 1.74, 1e-12);
+// The clearance r_new(u) − r_face(u) = lean·(1 − u): never negative.
+const rFace = (u) => halfRun9 * (1 - 2 * u);
+const rNew = (u) => -halfRun9 * u + (halfRun9 + lean9) * (1 - u);
+check('clearance at the pool (u = 0)', rNew(0) - rFace(0), 1.74, 1e-12);
+check('…halfway up (u = 0.5)', rNew(0.5) - rFace(0.5), 0.87, 1e-12);
+check('…and at the lip (u = 1), where the shader fades the sheet out anyway',
+  rNew(1) - rFace(1), 0, 1e-12);
+let behind = 0;
+for (let i = 0; i <= 100; i += 1) if (rNew(i / 100) - rFace(i / 100) < 0) behind += 1;
+check('RED: not one of 101 heights stands behind the face', behind, 0);
+// …and the state that was measured: the old sheet, half of it inside the hill.
+const rOld = (u) => 0.3 * H9 * 0.5 * (1 - 2 * u);
+check('RED: the OLD foot stood this far INSIDE the wall',
+  rOld(0) - rFace(0), -0.63, 1e-12);
+let oldBehind = 0;
+for (let i = 0; i <= 100; i += 1) if (rOld(i / 100) - rFace(i / 100) < 0) oldBehind += 1;
+check('RED: …and exactly half its height was occluded', oldBehind, 50);
+// The texture suspicion, refuted at the source: the ONE shared map repeats.
+check('the shared wave map repeats — the curtain tiles it 2.4 x 2.32 times',
+  /tex\.wrapS = tex\.wrapT = T\.RepeatWrapping/.test(matSrc) ? 1 : 0, 1);
+check('…and the curtain really does tile it by width and height over 2.5 m',
+  /fall\.width \/ WATERFALL_WAVE_M, height \/ WATERFALL_WAVE_M/.test(fallSrc)
+    ? 1 : 0, 1);
 check('the foam radius grows with the fall',
   /WATERFALL_FOAM_RADIUS_PER_M \* heightM/.test(fallSrc) ? 1 : 0, 1);
 check('…and is never narrower than the stream itself',

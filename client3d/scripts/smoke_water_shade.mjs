@@ -46,25 +46,56 @@
  *     × 0.5     = 4.120370e-4
  *
  * ============================================================================
- * [2] THE FOAM DOES NOT SCALE WITH THE WATER
+ * [2] THE FOAM DOES NOT SCALE WITH THE WATER — BUT IT IS COVERED BY IT
  * ============================================================================
- * `waterFoamAt(d, edge)` = `(1 − smoothstep(d / 0.6)) · rim`. Half a metre of
- * real water at a real rim is the same half metre in a pond and in a lake, so
- * `WATER_FOAM_BAND_M` is 0.6 whatever the bed depth is:
+ * `waterFoamAt(d, opaque, edge)` = `foam(d) · cover(d) · rim`, with
+ *
+ *     foam(d)  = 1 − smoothstep(d / 0.6)          the band, W4b
+ *     cover(d) = min(smoothstep(d / opaque) + foam(d)·0.15, 1)
+ *
+ * The BAND does not scale with the bed: half a metre of real water at a real
+ * rim is the same half metre in a pond and in a lake, so `WATER_FOAM_BAND_M`
+ * is 0.6 whatever the depth is —
  *
  *     d = 0.15 -> 1 − 0.15625 = 0.84375
  *     d = 0.3  -> 1 − 0.5     = 0.5
  *     d = 0.45 -> 1 − 0.84375 = 0.15625
  *     d = 0.6  -> 1 − 1       = 0
  *
+ * — and the COVER is the mirror's own alpha, which K-A has to carry explicitly
+ * because the ground it shades is opaque (finding 2026-08-24, "white edges and
+ * corners at the waterline"). The mesh mirror whitened its light by
+ * `foam · 0.6` and then blended the WHOLE fragment at
+ * `clamp(shoreAlpha + foam·0.15, 0, 1) · rim`, so the white that ever reached
+ * the screen was the product of all three. E4 kept two of them.
+ *
+ * On the lake fixture (opaque band 1.5 m), rim saturated:
+ *
+ *     d      foam      shoreAlpha   cover                     foam·cover
+ *     0.15   0.84375   0.028        0.028 + 0.1265625         0.130412109375
+ *                                   = 0.1545625
+ *     0.3    0.5       0.104        0.104 + 0.075   = 0.179   0.0895
+ *     0.45   0.15625   0.216        0.216 + 0.0234375         0.037412109375
+ *                                   = 0.2394375
+ *     0.6    0         —            —                         0
+ *
+ * times `WATER_FOAM_STRENGTH` = 0.6 that is 0.0782473 / 0.0537 / 0.0224473 of
+ * the way to white. WITHOUT the cover the same three pixels are 0.50625 / 0.30
+ * / 0.09375 — 6.47× / 5.59× / 4.18× as white, which is the reported white rim
+ * and the white lattice corner where the raster's dilation ring ends. The RED
+ * probes below are exactly those three broken numbers.
+ *
  * AND IT IS THE FOAM THE RIM RAMP EXISTS FOR. `waterFoam(0)` is 1 — full white
  * — while a pixel one hair further out is bare ground, so without the ramp the
  * brightest line in the picture would step across a boundary whose sub-pixel
- * position moves with the camera. At d = 0.025 m, edge 0.05 m:
- *     t = 0.025/0.6 = 0.0416667
- *     3t² − 2t³ = 3(0.00173611) − 2(7.233796e-5) = 0.00520833 − 1.446759e-4
- *               = 0.00506366
- *     (1 − 0.00506366) × 0.5 = 0.49746817
+ * position moves with the camera. At d = 0.025 m, edge 0.05 m, lake band 1.5:
+ *     foam:  t = 0.025/0.6 = 1/24
+ *            3t² − 2t³ = 0.005208333333 − 0.000144675926 = 0.005063657407
+ *            foam = 0.994936342593
+ *     shore: t = 0.025/1.5 = 1/60
+ *            3t² − 2t³ = 0.000833333333 − 0.000009259259 = 0.000824074074
+ *     cover = 0.000824074074 + 0.994936342593·0.15 = 0.150064525463
+ *     foam · cover = 0.149304650117 ,  × rim 0.5 = 0.074652325059
  *
  * ============================================================================
  * [3] THE TINT BLEND IS A MIX AND NOTHING ELSE
@@ -178,8 +209,8 @@ function checkNear(label, actual, expected, eps) {
 
 const { shade, plane, mat } = await load();
 const { waterAbsorb, waterFoamAt, waterTintBlend, waterLookFrom, waterTintRgb,
-  packWaterLook, terrainWaterFragmentGlsl, WATER_LOOK_DEFAULT,
-  WATER_LOOK_TEXELS } = shade;
+  packWaterLook, terrainWaterFragmentGlsl, WATER_FOAM_MIN_COVER,
+  WATER_LOOK_DEFAULT, WATER_LOOK_TEXELS } = shade;
 const { WATER_EDGE_FADE_M, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
   waterOpaqueDepthM } = plane;
 
@@ -211,17 +242,33 @@ check('…and a FAT pixel widens the ramp instead of the water',
   waterAbsorb(0.5, LAKE, 2.0), (3 * (1 / 3) ** 2 - 2 * (1 / 3) ** 3) * 0.25, 1e-12);
 
 // ── [2] the foam ────────────────────────────────────────────────────────────
-console.log('\n[2] the foam is half a metre of real water, in every water');
+console.log('\n[2] the foam is half a metre of real water — covered by the water');
 check('the band is 0.6 m', WATER_FOAM_BAND_M, 0.6);
-check('depth 0.15', waterFoamAt(0.15, EDGE), 0.84375);
-check('depth 0.3', waterFoamAt(0.3, EDGE), 0.5);
-check('depth 0.45', waterFoamAt(0.45, EDGE), 0.15625);
-check('depth 0.6 — gone', waterFoamAt(0.6, EDGE), 0);
-check('depth 1.0 — still gone', waterFoamAt(1.0, EDGE), 0);
+check('the cover floor is the mirror\'s own rim alpha', WATER_FOAM_MIN_COVER, 0.15);
+check('depth 0.15', waterFoamAt(0.15, LAKE, EDGE), 0.130412109375, 1e-12);
+check('depth 0.3', waterFoamAt(0.3, LAKE, EDGE), 0.0895, 1e-12);
+check('depth 0.45', waterFoamAt(0.45, LAKE, EDGE), 0.037412109375, 1e-12);
+check('depth 0.6 — gone', waterFoamAt(0.6, LAKE, EDGE), 0);
+check('depth 1.0 — still gone', waterFoamAt(1.0, LAKE, EDGE), 0);
 check('the rim ramp is what keeps the white line from stepping',
-  waterFoamAt(0.025, EDGE), 0.4974681712963, 1e-12);
-checkEq('…and the foam band does NOT follow the bed depth',
-  waterFoamAt(0.3, EDGE) === waterFoamAt(0.3, EDGE), true);
+  waterFoamAt(0.025, LAKE, EDGE), 0.074652325059, 1e-11);
+// RED: THE MEASURED DEFECT OF 2026-08-24 — the foam without the mirror's alpha.
+// These are the three numbers the shipped code must NOT answer any more; each
+// is the plain band times the rim ramp, i.e. up to 6.47× the white above.
+check('RED: the uncovered band at 0.15 (the white rim that was reported)',
+  waterFoamAt(0.15, LAKE, EDGE) === 0.84375 ? 1 : 0, 0);
+check('RED: …at 0.3', waterFoamAt(0.3, LAKE, EDGE) === 0.5 ? 1 : 0, 0);
+check('RED: …at 0.45', waterFoamAt(0.45, LAKE, EDGE) === 0.15625 ? 1 : 0, 0);
+// The ratio IS one over the cover — the band cancels — so it is written that
+// way: 1 / 0.1545625 = 6.46987464617…
+check('RED: …and it was 6.47× as white at 0.15',
+  0.84375 / waterFoamAt(0.15, LAKE, EDGE), 1 / 0.1545625, 1e-9);
+// The BAND still does not follow the bed — only the COVER does, and it is the
+// same factor the absorption already rides.
+// The river's band is 0.9 m, so at 0.3 m the shore curve stands at
+// t = 1/3 -> 3/9 − 2/27 = 7/27, and the cover is 7/27 + 0.5·0.15.
+check('a SHALLOWER bed foams the same band, only better covered',
+  waterFoamAt(0.3, RIVER, EDGE), 0.5 * (7 / 27 + 0.075), 1e-12);
 
 // ── [3] the blend, and the red probe ────────────────────────────────────────
 console.log('\n[3] the blend — and what a DRY pixel must come out as');
@@ -232,7 +279,7 @@ checkNear('fully absorbed is the tint', waterTintBlend([1, 0.5, 0], [0, 0.5, 1],
 checkNear('RED: absorption 0 leaves the GROUND COLOUR untouched',
   waterTintBlend([1, 0.5, 0], [0, 0.5, 1], 0), [1, 0.5, 0], 1e-12);
 check('RED: a depth of 0 absorbs nothing', waterAbsorb(0, LAKE, EDGE), 0);
-check('RED: …and foams nothing', waterFoamAt(0, EDGE), 0);
+check('RED: …and foams nothing', waterFoamAt(0, LAKE, EDGE), 0);
 check('RED: a NEGATIVE depth is not water either', waterAbsorb(-1, LAKE, EDGE), 0);
 check('RED: nor is a NaN one', waterAbsorb(NaN, LAKE, EDGE), 0);
 // That is the whole isolation switch 22: `uTlodNoWater` makes every lift a
@@ -332,8 +379,18 @@ checkEq('…and so is its strength',
 checkEq('the rim ramp is floored at the shared edge fade',
   glsl.includes(`max( fwidth( d ), ${WATER_EDGE_FADE_M} )`), true);
 checkEq('…and BOTH water factors are multiplied by it',
-  glsl.includes('twSmooth( d / max( look1.w, 1e-3 ) ) * rim')
-  && glsl.includes(`( 1.0 - twSmooth( d / ${WATER_FOAM_BAND_M} ) ) * rim`), true);
+  glsl.includes('twA = shore * rim;')
+  && glsl.includes('* rim;\n'), true);
+checkEq('the foam carries the COVER the mirror\'s alpha used to be',
+  glsl.includes(
+    `twFoam = rawFoam * min( shore + rawFoam * ${WATER_FOAM_MIN_COVER}, 1.0 ) * rim;`),
+  true);
+checkEq('RED: …and never the bare band again (the white rim of 2026-08-24)',
+  glsl.includes(`twFoam = ( 1.0 - twSmooth( d / ${WATER_FOAM_BAND_M} ) ) * rim;`),
+  false);
+checkEq('the cover reuses the ABSORPTION\'s own shore curve, not a second one',
+  glsl.includes('float shore = twSmooth( d / max( look1.w, 1e-3 ) );')
+  && (glsl.match(/twSmooth\( d \/ max\( look1\.w/g) ?? []).length === 1, true);
 checkEq('EVERYTHING keys on the depth varying, and nothing else',
   glsl.includes('float d = vTlodWet;') && glsl.includes('if ( d <= 0.0 ) return;'), true);
 checkEq('RED: the fragment reads no height pyramid for its shoreline',

@@ -6171,3 +6171,104 @@ Autorenmodell der vorgesehene Weg und kostet nichts.
 | Relief bis an die Wasserlinie, wobbelnder Rand-Median, Kragen zurück | ebenda **[11a]**–**[11d]** |
 | 0-Rampen-Becken unverändert, Signatur erreicht die laufende Welt | ebenda **[11e]**, **[11f]** |
 | Wegkosten am See: 53,0 s statt 53,664 s, von Hand hergeleitet | `scripts/smoke_nav_grid.py` |
+
+---
+
+## Nachtrag 2026-08-24 (§ B5a): Zwei Sichtbefunde am K-A-Wasser — Schaum-Deckung und Vorhang-Verdeckung (Client)
+
+*Reine Renderer-Korrekturen. Keine Nutzlast, kein Bake, keine Signatur ändert
+sich; `HEIGHT_BAKE_VERSION` bleibt **8**.*
+
+### 1. „Weiße Ränder und Ecken am Wasserrand" — der Schaum hat seine Deckung verloren
+
+Der Spiegel war eine DURCHSICHTIGE Fläche: er weißte sein eigenes Licht mit
+`foam · WATER_FOAM_STRENGTH` und wurde danach mit
+`alpha = clamp(shoreAlpha + foam · 0,15, 0, 1) · rim` über den Grund geblendet.
+Auf den Schirm kam also das **Produkt aller drei** Faktoren — am Rand drei
+kleine Zahlen, also eine Spitze. K-A E4 hat die ersten beiden übernommen und
+den dritten fallen gelassen, weil der Boden, den es schattiert, undurchsichtig
+ist und es kein Alpha mehr gibt, in das er fallen könnte.
+
+Gemessen auf der Seefixture (Deckungstiefe 1,5 m, Randrampe gesättigt):
+
+| Tiefe | Schaumband | Deckung | weiß VORHER | weiß NACHHER | Faktor |
+|---|---|---|---|---|---|
+| 0,15 m | 0,84375 | 0,1545625 | 0,50625 | 0,0782473 | 6,47× |
+| 0,30 m | 0,5 | 0,179 | 0,30 | 0,0537 | 5,59× |
+| 0,45 m | 0,15625 | 0,2394375 | 0,09375 | 0,0224473 | 4,18× |
+
+Am lautesten ist das genau dort, wo am wenigsten Wasser steht: auf der
+überfluteten Bank im Dilatationsring (E6 hat die Bankklemme absichtlich
+zurückgebaut, „der Lift deckt es ab") und an der Gitter-Treppe, auf der dieser
+Ring endet — die gemeldeten weißen Ränder UND Ecken. Auf einer gemäanderten
+6-m-Fixture mit 1,2-m-Mikrorelief ist das Schaumband quer gemessen **11,5 m**
+breit statt der ~3 m, die ein 3-m-Uferrampen-Fluss vorsieht, und **696 von 1968**
+Ringpunkten 3,5–7 m ausserhalb des Umrisses werden gehoben.
+
+**Regel jetzt** (`client3d/src/scene/waterShade.ts`, `waterFoamAt` und ihr
+GLSL-Zwilling): `foam · min(shoreAlpha + foam · WATER_FOAM_MIN_COVER, 1) · rim`.
+`WATER_FOAM_MIN_COVER` = 0,15 ist die Randzahl des Spiegels, wörtlich; die
+Deckung benutzt dieselbe Uferkurve, die die Absorption schon reitet — keine
+zweite Kurve. Nachweis: `smoke_water_shade.mjs` [2] (Handtabelle + die drei
+ROTEN Proben mit den kaputten Zahlen) und [6] (GLSL-Zeile, plus ROTE Probe,
+dass das nackte Band nicht mehr vorkommt).
+
+### 2. „Der Wasserfall hat nur oben die Wasserfall-Textur" — der Vorhang stand in seiner eigenen Wand
+
+Unter K-A ist der Spiegel zwischen Lippe und Gumpen der BODEN: das Terrain wird
+auf `max(h, w_level)` gehoben, der Fall steht also als steile, **undurchsichtige,
+nasse Wand** über die Sehne des Laufs. Der Vorhang hing aber am Bogen-MITTELPUNKT
+über einen Lauf von `WATERFALL_LEAN · h` — steiler als diese Wand, sobald die
+Sehne länger als `0,3 h` ist, also bei jedem Fall flacher als 73°.
+
+Auf der Plan-Fixture (Fallhöhe 5,8 m, Sehne 3 m) mit `r` = Laufkoordinate ab dem
+Fallpunkt und `u` = Höhenanteil (0 = Gumpen, 1 = Lippe):
+
+```
+r_Wand(u) = 1,5 · (1 − 2u)        r_alt(u) = 0,87 · (1 − 2u)
+r_alt − r_Wand = −0,63 · (1 − 2u)   ->  −0,63 m am Fuß, < 0 für jedes u < 0,5
+```
+
+Genau die untere **Hälfte** stand hinter dem eigenen Wasser — deshalb war der
+Vorhang mit Isolationsschalter 22 („Water lift off") vollständig sichtbar. Die
+Wrap-Mode-Verdächtigung war falsch: `materials.makeWaveNormal` setzt
+`wrapS = wrapT = RepeatWrapping`, bevor sie irgendjemand sieht (im Smoke
+angenagelt).
+
+**Regel jetzt:** `Waterfall` trägt zusätzlich `chordM` (die Sehne des Laufs,
+in `runToFall` ohnehin berechnet). Der Vorhang hängt an der **Lippe** und
+bekommt den Lauf der Wand plus den Lean am Fuß:
+
+```
+top = (x, z) − dir · chordM/2                bot = (x, z) + dir · (chordM/2 + 0,3 h)
+r_neu(u) − r_Wand(u) = 0,3 h · (1 − u)   ->  1,74 / 0,87 / 0 m bei u = 0 / 0,5 / 1
+```
+
+Der obere Rand fällt damit exakt auf die Lippe (auf der Fixture Knoten B
+(20, 0)), der Fuß 1,74 m hinter den Wandfuß (Knoten C), und die Naht an der
+Lippe deckt der Vorhang-Shader mit seiner eigenen 6-%-Ausblendung ab. Nachweis:
+`smoke_waterfall.mjs` [9] — vier Ecken, drei Abstände, 101 Höhen ohne
+Verdeckung, plus die ROTEN Proben des alten Zustands.
+
+### 3. Offen und NICHT gefixt: der Fluss zerfällt ab Mip 2
+
+Der dritte Befund („nur jeder zweite Abschnitt fließendes Wasser") ist gemessen,
+aber nicht behoben — er ist keine Panne in einer der drei verdächtigten Stellen,
+sondern die Auflösungsgrenze von K-A selbst. Auf derselben Mäander-Fixture:
+
+| Gitter | gehobene Flusspunkte | kleinstes interpoliertes \|flow\| |
+|---|---|---|
+| 2 m (Level 0) | 123 / 123 | 1,0000 |
+| 4 m (Level 1) | 123 / 123 | 0,9997 |
+| 8 m (Level 2) | **44 / 123** | 0,9996 |
+| 16 m (Level 3) | **0 / 123** | — |
+
+Der Fließvektor ist also überall in Ordnung (Server: 150 von 150 Gitterpunkten
+eines 700-m-Flusses über drei Kacheln tragen `|flow| = 1`, alle drei Kacheln
+liefern die Arrays; Client: der Varying fällt nirgends unter 0,9996, wo Wasser
+gehoben wird). Was verschwindet, ist der GEHOBENE Punkt: ein 6 m breites Bett
+mit ±3 m Carve hat auf einem 8-m-Gitter meist keinen Stützpunkt mehr im Bett,
+also ist `h_k ≥ w_k` und der Lift greift nicht. Das Mesh-Mirror hatte dieses
+Problem nicht — er war ein Polygon in voller Auflösung. Die drei ehrlichen
+Optionen (Level-Deckel für wasserführende Knoten, feineres Wasserraster, oder
+akzeptieren) sind eine Entscheidung, keine Fehlerbehebung.
