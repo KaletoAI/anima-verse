@@ -3196,7 +3196,10 @@ export function MapTab() {
                 // the rectangle on the map IS the ground that stays bare. It
                 // follows a variant change with the refetch after the Save.
                 boxes={wpBoxes}
-                showBoxes={mode === 'props'}
+                // Always on (user 2026-08-25): the footprint is part of the
+                // map picture, not a tool overlay — the 6 px rule keeps the
+                // overview clean.
+                showBoxes
               />
             </g>
           </MapCanvas>
