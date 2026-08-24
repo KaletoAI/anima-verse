@@ -71,6 +71,13 @@ Hand-derived expectations (``EXPLORED_CELL_M`` = 64 m, ``MARK_RADIUS_CELLS``
       statement count goes from 0 to 45 (5 × 9). Without this run, [4] would
       pass on a ``mark_explored`` that had quietly stopped writing at all.
 
+THE TWO CALLERS are checked where their fixtures already stand, not here: an
+ACCEPTED ``POST /play/pos`` marks and a REFUSED one does not
+(``scripts/smoke_discovery.py`` [4]), and the travel ticker marks every
+character with a point (``smoke_discovery.py`` [3]). This file owns the maths,
+the payload and the cache — that file owns the two write paths, whose world
+(locations, painted water, a journey) it builds anyway.
+
 Usage:  ./.venv/bin/python scripts/smoke_exploration.py
 """
 import os

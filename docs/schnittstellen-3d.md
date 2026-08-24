@@ -2443,8 +2443,18 @@ einer leeren Fläche.
 
 ### Der Schleier hat ein Gedächtnis — neu 2026-08-16
 
+> **Stand seit 2026-08-19 (v6 Nr. 8 / E1.3): der Client zeichnet KEINEN
+> Schleier mehr** — `game/fog.ts`, die Wolken und der Client-Speicher dieses
+> Payloads sind gelöscht, die Fog-Neukonzeption bekommt eine eigene Runde. Das
+> **Gedächtnis selbst bleibt Server-Wahrheit und wird weiter geschrieben und
+> ausgeliefert**: `explored_cells`, `explored_sig` und `GET /play/explored`
+> gelten unverändert wie unten beschrieben, damit eine Welt, die heute gespielt
+> wird, ihre erkundeten Zellen nicht erst ab dem Tag der neuen Fog-Runde kennt.
+> Der Rest dieses Abschnitts beschreibt also den Vertrag, nicht das aktuelle
+> Bild auf dem Schirm.
+
 Der **Übersichts-Schleier** (nur `client3d`, nur die Übersichts-Kamera; im
-verkörperten Nahmodus gibt es weiterhin gar keinen Schleier) spart seit
+verkörperten Nahmodus gab es ohnehin nie einen Schleier) spart seit
 2026-08-16 **zwei** Dinge aus: die Grundflächen der **bekannten Orte** — das
 war er immer — **und** die **erkundeten Zellen**, also den Boden, auf dem der
 Avatar schon gestanden hat. Vorher blieb ein Wald zwischen zwei Orten für

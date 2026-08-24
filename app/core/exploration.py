@@ -1,10 +1,17 @@
 """The EXPLORATION MEMORY — which patches of the world a character has been in.
 
-The overview veil (``client3d/src/game/fog.ts``) used to subtract the known
-LOCATIONS from the world frame and nothing else: between two places the world
-stayed covered forever, however often one walked through it (finding B14). This
-module is the memory that was missing — the server's record of where somebody
-has actually stood, so the veil can spare that ground too.
+The overview veil of the 3D client used to subtract the known LOCATIONS from
+the world frame and nothing else: between two places the world stayed covered
+forever, however often one walked through it (finding B14). This module is the
+memory that was missing — the server's record of where somebody has actually
+stood, so the veil can spare that ground too.
+
+**THE VEIL ITSELF IS GONE FOR NOW** (2026-08-19, contract v6 Nr. 8 / decision
+E1.3: ``client3d/src/game/fog.ts`` and its client-side store are deleted, the
+fog gets a round of its own). The MEMORY stays and keeps being written and
+served — a world played today must not start remembering only on the day the
+new veil arrives. So this module has no consumer at the moment; that is
+deliberate, not a leftover (see ``docs/schnittstellen-3d.md`` § A12).
 
 **THE UNIT IS A 64 m CELL, ANCHORED AT THE WORLD ORIGIN.** The same edge length
 and the same anchor as the veil's own tiling (``FOG_TILE_M``) and the automatic
@@ -51,10 +58,12 @@ from app.core.log import get_logger
 logger = get_logger("exploration")
 
 #: Edge length of one exploration cell in world metres. The veil's own tile
-#: (``FOG_TILE_M`` in ``client3d/src/game/fog.ts``) is the SAME number by
-#: intent: the client spares whole cells out of the veil, and a cell that did
-#: not line up with the tiling would have to be cut out of a quad instead of
-#: replacing one.
+#: (``FOG_TILE_M``, while the veil existed) was the SAME number by intent: the
+#: client spares whole cells out of the veil, and a cell that did not line up
+#: with the tiling would have to be cut out of a quad instead of replacing one.
+#: The automatic undergrowth (``UNDERGROWTH_CELL_M`` = 64 in
+#: ``client3d/src/scene/scatterLod.ts``) still uses it, so the number keeps a
+#: live twin.
 EXPLORED_CELL_M = 64.0
 
 #: How many cells in every direction around the character's own are marked.

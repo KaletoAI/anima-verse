@@ -71,6 +71,16 @@ Discovery is one-sided: known stays known (``add_known_location`` is
 idempotent, ``known_locations`` stays strict — a missing list is NOT
 "knows everything").
 
+THE EXPLORATION MEMORY RIDES ALONG (2026-08-16, ``core/exploration.py``).
+Both write paths above record a SECOND, additive fact at the very same point:
+the 3×3 block of 64 m cells around the position, so the overview veil can
+spare ground somebody has walked. It is checked HERE rather than in a smoke of
+its own because it lives or dies with the two callers this file already drives
+— the cell maths, the payload of ``GET /play/explored`` and the write-avoidance
+cache belong to ``scripts/smoke_exploration.py``. The cells are anchored at the
+world ORIGIN, so ``cx = floor(x / 64)`` and one point records
+{cx−1, cx, cx+1} × {cz−1, cz, cz+1}, ordered by cx then cz.
+
 Cases:
   [1] ``boundary_distance_m`` — the hand table above, incl. rotation, and
       the rim table against ``boundary_contains``.
@@ -83,9 +93,28 @@ Cases:
       its south edge at z = 55, so a walker on the road x = 500 is 55 m away
       at z = 0 (out of range, nothing) and 45 m away at z = 10 (discovered).
       Plus an IDLER standing still: no journey, but a point — discovered.
+      The EXPLORATION half of the same two ticks: (500, 0) is cell
+      (floor(500/64), floor(0/64)) = (7, 0) — 500 = 7·64 + 52 — so the ticker
+      records the nine cells {6,7,8} × {−1,0,1} and nothing else; the tick at
+      z = 10 is STILL inside cell (7, 0) (10 < 64), so it records nothing more.
   [4] ``/play/pos``: an accepted report reveals what it walks past; a REFUSED
       one (impassable water) reveals nothing, and the very next accepted
       report from the same spot does.
+      The EXPLORATION memory follows the identical rule on the identical three
+      reports. The avatar starts with an EMPTY memory (``new_char`` gave it no
+      point, so no tick above could have marked it) and ``park`` is a direct
+      write that marks nothing:
+        (40, 50) accepted → cell (0, 0) → exactly the nine cells
+                            {−1,0,1} × {−1,0,1};
+        (300, 285) REFUSED → cell (4, 4) (300 = 4·64 + 44, 285 = 4·64 + 29):
+                            not ONE of its nine cells appears, the memory is
+                            byte for byte the nine from before;
+        (300, 281) accepted → the SAME cell (4, 4), and now all nine are
+                            there. That is the red counter-check the refusal
+                            needs: without it the case would pass on a route
+                            that had stopped marking at all. 18 cells total.
+      And the fourth report of the case, (300, 279), is inside cell (4, 4)
+      again — the in-process cache leaves the count at 18.
   [5] the discover RULE fires on DISTANCE — and in the WILDERNESS, where the
       old code returned early because there was no current location.
       Probability 0 → nothing; out of range → nothing.
@@ -126,6 +155,8 @@ from app.core import config, travel_engine  # noqa: E402
 from app.core.config_schema import SECTIONS  # noqa: E402
 from app.core.discovery import (  # noqa: E402
     discover_in_range, get_discovery_range_m, locations_within)
+from app.core.exploration import (  # noqa: E402
+    cell_key, cell_of, explored_cells, explored_sig)
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.core.world_geometry import (  # noqa: E402
@@ -248,6 +279,17 @@ def discovery_names_in_history(character_name: str) -> list:
         if entry.get("type") == "discovery":
             out.append(entry.get("value", ""))
     return out
+
+
+def explored_block(cx0: int, cz0: int) -> list:
+    """The nine cell keys ONE point records — the marking radius is 1 cell.
+
+    Built in the order ``explored_cells`` answers in (cx ascending, cz
+    ascending inside), so the expectation can be compared as a list and a
+    wrong order would show.
+    """
+    return [cell_key(cx0 + dx, cz0 + dz)
+            for dx in (-1, 0, 1) for dz in (-1, 0, 1)]
 
 
 def set_yaw(location_id: str, yaw: float) -> None:
@@ -472,12 +514,21 @@ def main() -> int:
     set_known_locations(WALKER, [])
     set_character_pos(WALKER, 500.0, 0.0)
     give_journey(WALKER, ROADSIDE, [[500, 0, 0], [500, 40, 40]])
+    check("the walker's memory starts empty", explored_cells(WALKER), [])
     tick_at(0)
     check("at z=0 the roadside is 55 m away — out of range",
           get_known_locations(WALKER), [])
+    # The exploration twin of the same tick: the point is written, so the cell
+    # block around it is recorded — whether anything was DISCOVERED there or
+    # not. (500, 0) is cell (7, 0), 500 = 7·64 + 52.
+    check("the cell of (500, 0)", (cell_of(500.0), cell_of(0.0)), (7, 0))
+    check("...and the ticker recorded its 3x3 block",
+          explored_cells(WALKER), explored_block(7, 0))
     tick_at(10)
     check("at z=10 it is 45 m away — discovered",
           get_known_locations(WALKER), [ROADSIDE])
+    check("...but z=10 is the SAME cell, so nothing was recorded twice",
+          explored_cells(WALKER), explored_block(7, 0))
     travel_engine.cancel_journey(WALKER)
 
     set_known_locations(IDLER, [])
@@ -527,10 +578,16 @@ def main() -> int:
 
     print("\n[4] /play/pos — accepted reveals, refused does not")
     set_known_locations(AVATAR, [])
+    # The avatar was never given a point, so no tick above could have marked
+    # it and `park` writes the position without going through the route: the
+    # memory below is made by these three reports and by nothing else.
+    check("the avatar's memory starts empty", explored_cells(AVATAR), [])
     park(30.0, 50.0)
     status, _payload = report(40.0, 50.0)
     check("the report was accepted", status, "ok")
     check("what it walked past is known", get_known_locations(AVATAR), [ALPHA])
+    check("...and the walked ground is remembered: cell (0, 0)",
+          explored_cells(AVATAR), explored_block(0, 0))
 
     park(300.0, 280.0)
     status, detail = report(300.0, 285.0)
@@ -539,12 +596,21 @@ def main() -> int:
     check_true("a refused report reveals nothing",
                POND_HOUSE not in get_known_locations(AVATAR),
                str(get_known_locations(AVATAR)))
+    check("the cell of the refused point", (cell_of(300.0), cell_of(285.0)),
+          (4, 4))
+    check("…and a refused report remembers nothing either",
+          explored_cells(AVATAR), explored_block(0, 0))
     park(300.0, 280.0)
     status, _payload = report(300.0, 281.0)
     check("a step aside is accepted", status, "ok")
     check_true("…and reveals the same house",
                POND_HOUSE in get_known_locations(AVATAR),
                str(get_known_locations(AVATAR)))
+    # RED COUNTER-CHECK for the refusal: the accepted report stands in the
+    # very same cell (4, 4) and records all nine of its cells. Without this
+    # half the check above would pass on a route that had stopped marking.
+    check("…and NOW the nine cells around (4, 4) are there",
+          explored_cells(AVATAR), explored_block(0, 0) + explored_block(4, 4))
 
     # …and it does so WITHOUT reading the location table a second time. A
     # walking client sends up to four reports a second, so every avoidable
@@ -570,6 +636,11 @@ def main() -> int:
         world_module.list_locations = real_list_locations
     check("the accepted report was accepted", status, "ok")
     check("…and read the location table exactly twice", len(calls), 2)
+    # (300, 279) is cell (4, 4) again — the write-avoidance cache of the
+    # exploration memory means this report costs no INSERT at all, and the
+    # count of remembered cells stands still at 9 + 9.
+    check("…and a report from the same cell remembers nothing new",
+          explored_sig(AVATAR), "18")
 
     print("\n[5] the discover rule fires on distance, in the wilderness")
     rule = add_rule({"name": "Smoke Sight", "type": "discover",

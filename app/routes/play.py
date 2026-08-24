@@ -2843,8 +2843,11 @@ def get_explored_route(user=Depends(get_current_user)):
 
     ``{"cells": ["cx,cz", ...], "sig": "<count>"}``, where a cell is the
     ``EXPLORED_CELL_M`` (64 m) square anchored at the world origin
-    (``app/core/exploration.py``). The overview veil of the 3D client spares
-    these in addition to the footprints of the known locations (§ A12).
+    (``app/core/exploration.py``). The overview veil spares these in addition
+    to the footprints of the known locations (§ A12) — while there IS one: the
+    3D client has drawn no veil since 2026-08-19 (v6 Nr. 8 / E1.3), so this
+    route has no caller at the moment. It keeps answering on purpose, because
+    the memory behind it keeps being written (see the module).
 
     Auth exactly like ``/play/terrain``: any logged-in user, no ``all`` flag.
     It is not FOGGED — it IS the fog's own record — but it is strictly PER
