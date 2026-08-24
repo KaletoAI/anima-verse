@@ -40,26 +40,39 @@
  * meshes then simply reach further than the stage that exists to replace them.
  *
  * ============================================================================
- * (B) THE THINNING — flat 1 at the cull line, a quarter at 400 m
+ * (B) THE THINNING — it CONTINUES the mesh line (2026-08-24)
  * ============================================================================
- * A straight line over the stage's OWN span, `1 → IMPOSTOR_MIN_SHARE` (0.25)
- * over `cullM → 400`. With the default cull of 120 the span is 280 m, so
+ * The stage starts at the share the meshes ended on, `SCATTER_MIN_SHARE` =
+ * 0.25, and falls to `IMPOSTOR_TAIL_FACTOR` (a quarter) OF THAT over the reach
+ * the sampled cell window really has (`impostorReachM`) — not over the 400 m
+ * of `IMPOSTOR_FAR_M`, which no window ever fills:
  *
- *   share(d) = 1 − ((d − 120) / 280) · 0.75
+ *   cull 120 -> k = ceil(120/64) = 2 cells to each side
+ *            -> the window's corner is √2 · (k+1) · 64 = 271.5290566 m
+ *   share(d) = 0.25 · (1 − min((d − 120) / 151.5290566, 1) · 0.75)
  *
- *   260 m: (260−120)/280 = 0.5    -> 1 − 0.375  = 0.625
- *   190 m: (190−120)/280 = 0.25   -> 1 − 0.1875 = 0.8125
- *   400 m: 1                      -> 0.25       (the floor, at the very edge)
- *   120 m and nearer: 0 — outside the window there is no share at all.
+ *   120 m and nearer:  0 — outside the window there is no share at all
+ *   120⁺ m:            0.25    — the mesh line's own last value, no step
+ *   195.7645283 m:     0.15625 (the midpoint of the span, t = 0.5)
+ *   271.5290566 m:     0.0625  (the corner, t = 1)
+ *   400 m:             0.0625  — held at the floor past the corner
  *
- * (B4) THE SETS NEST, and that is what makes the swap invisible. Both
- * thinnings pick by `instanceHash(index)`, so an instance drawn as a MESH just
- * inside the line (share 0.25 there) is drawn as a BILLBOARD just outside it
- * (share 1). Checked over 1000 indices: mesh-visible at 119 m implies
- * impostor-visible at 121 m, without exception. The reverse does not hold, and
- * that is the honest cost of two spans: crossing the line outward the wood
- * gets FULLER (billboards are cheap, meshes are not). Nothing moves while it
- * happens, which is the property that matters.
+ * The full derivation of the reach, the continuity of the two lines and the
+ * red counter-check against the OLD rule (which restarted at 1) are section
+ * (W) of `smoke_scatter_math.mjs`: they relate this line to `instanceShare`,
+ * and that file has both halves of it.
+ *
+ * (B4) THE SETS NEST — and since the line stopped restarting they nest the
+ * way a walk outward should. Both thinnings pick by `instanceHash(index)`, so
+ * the billboards just outside the line are a SUBSET of the meshes just inside
+ * it: at 119 m the mesh share is 1 − (74/75)·0.75 = 0.26, at 121 m the
+ * billboard share is 0.25 · (1 − (1/151.5290566)·0.75) = 0.2487, and every
+ * index under the smaller number is under the bigger one. Checked over 1000
+ * indices: impostor-visible at 121 m implies mesh-visible at 119 m, without
+ * exception. Crossing the line outward the wood now only ever gets THINNER —
+ * the four-fold jump to a full share, and the ~1 % of instances that leave
+ * along the way, are two different things: the first was a step, this is the
+ * same continuous line the meshes were already on. Nothing moves either way.
  *
  * ============================================================================
  * (C) THE QUAD — a bake frame, and what it becomes in the world
@@ -267,8 +280,9 @@ const um3 = (p) => p.map(um);
 async function main() {
   const lod = await loadTs(LOD_SRC);
   const { IMPOSTOR_BAKE_PAD, IMPOSTOR_ELEV_RAD, IMPOSTOR_FAR_M,
-    IMPOSTOR_MIN_SHARE, impostorBakeVerdict, impostorCorners, impostorFrame,
-    impostorInWindow, impostorQuad, impostorShare, impostorVisible, impostorYaw,
+    IMPOSTOR_TAIL_FACTOR, impostorBakeVerdict, impostorCorners, impostorFrame,
+    impostorInWindow, impostorQuad, impostorReachM, impostorShare,
+    impostorVisible, impostorYaw,
     instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS } = lod;
   const cfg = SCATTER_LOD_DEFAULTS;   // 35 / 45 / 120, the defaults a player never touches
 
@@ -293,28 +307,36 @@ async function main() {
   check('A5 …and its share is 0, not a negative one',
     impostorShare(450, farCull), 0);
 
-  console.log('\n(B) the thinning — 1 at the cull line, a quarter at 400 m');
-  check('the floor is a quarter', IMPOSTOR_MIN_SHARE, 0.25);
-  check('260 m -> 0.625', um(impostorShare(260, cfg)), 0.625);
-  check('190 m -> 0.8125', um(impostorShare(190, cfg)), 0.8125);
-  check('400 m -> the floor', um(impostorShare(400, cfg)), 0.25);
+  console.log('\n(B) the thinning — it continues the mesh line');
+  const REACH = Math.SQRT2 * 3 * 64;   // k = 2 cells to each side, the corner
+  check('the tail keeps a quarter of the start', IMPOSTOR_TAIL_FACTOR, 0.25);
+  check('the window really reaches 271.529 m, not 400',
+    um(impostorReachM(cfg.cullM)), um(REACH));
+  check('120.000001 m -> the mesh line\'s own last value',
+    um(impostorShare(120.000001, cfg)), 0.25);
+  check('the midpoint of the span -> 0.15625',
+    um(impostorShare((120 + REACH) / 2, cfg)), 0.15625);
+  check('the corner -> 0.0625', um(impostorShare(REACH, cfg)), 0.0625);
+  check('400 m -> the floor, held past the corner',
+    um(impostorShare(400, cfg)), 0.0625);
   check('120 m -> nothing (outside the window)', impostorShare(120, cfg), 0);
   check('60 m -> nothing either', impostorShare(60, cfg), 0);
   // instance 0 has hash 0 and therefore survives as long as anything does
   check('instance 0 is drawn at the very edge', impostorVisible(0, 400, cfg), true);
   check('…and nothing is drawn beyond it', impostorVisible(0, 401, cfg), false);
   let drawn = 0;
-  for (let i = 0; i < 1000; i += 1) if (impostorVisible(i, 260, cfg)) drawn += 1;
-  // The hash is uniform to ~3.5 % over 1000 indices (`instanceHash`), so 0.625
-  // of 1000 must land near 625 — the band is the mixer's measured quality, not
-  // a recorded number.
-  check('B3 about 62.5 % of 1000 instances survive at 260 m',
-    drawn > 590 && drawn < 660, true);
+  for (let i = 0; i < 1000; i += 1) if (impostorVisible(i, 195.7645283, cfg)) drawn += 1;
+  // The hash is uniform to ~3.5 % over 1000 indices (`instanceHash`), so 0.15625
+  // of 1000 must land near 156 — the band is three binomial sigmas
+  // (sqrt(1000 · 0.15625 · 0.84375) = 11.5), which is what (I4) of
+  // `smoke_scatter_math.mjs` derives for the low shares.
+  check('B3 about 15.6 % of 1000 instances survive at the midpoint',
+    drawn > 121 && drawn < 191, true);
   let nested = true;
   for (let i = 0; i < 1000; i += 1) {
-    if (instanceVisible(i, 119, cfg) && !impostorVisible(i, 121, cfg)) nested = false;
+    if (impostorVisible(i, 121, cfg) && !instanceVisible(i, 119, cfg)) nested = false;
   }
-  check('B4 every mesh drawn just inside the line is a billboard just outside it',
+  check('B4 every billboard just outside the line is a mesh just inside it',
     nested, true);
 
   console.log('\n(C) the quad — a bake frame, and what it becomes in the world');

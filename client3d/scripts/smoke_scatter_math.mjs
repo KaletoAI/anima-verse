@@ -1087,6 +1087,63 @@
  *      picture, which is the whole reason the near ring is never cut.
  *
  * ============================================================================
+ * (W) THE SEAM AT THE CULL LINE — the billboards CONTINUE the mesh thinning
+ * ============================================================================
+ * The two thinnings are two halves of one line and are checked together, which
+ * is why they are checked HERE and not only in `smoke_impostors.mjs`: the
+ * property is a relation between `instanceShare` (the meshes) and
+ * `impostorShare` (the billboards), and a file that saw only one of them could
+ * not see the step between them.
+ *
+ * WHAT WAS WRONG (the acceptance finding of 2026-08-22, decided 2026-08-24).
+ * The mesh line thins to `SCATTER_MIN_SHARE` = 0.25 by the cull distance, and
+ * the billboard line RESTARTED at a full 1 there — so crossing 120 m outwards
+ * the wood got four times denser in one step. Its span was calibrated to
+ * `IMPOSTOR_FAR_M` = 400 m on top of that, a distance the sampled cell window
+ * never reaches, so the thinning was never really applied either.
+ *
+ * (W1) CONTINUITY, and it is by construction rather than by a tuned number:
+ *        instanceShare(120, DEF) = 1 − (75/75)·0.75      = 0.25
+ *        impostorShare(120⁺, DEF) = 0.25 · (1 − 0⁺·0.75) = 0.25
+ *      The window is OPEN at the near end (`impostorInWindow`), so the
+ *      billboard side is read just past the line, at 120.000001 m. Checked
+ *      with the second cfg too (cullM = 60): both sides give 0.25 there, so
+ *      the rule follows the argument and not the module's constants.
+ *
+ * (W2) THE REAL REACH OF THE WINDOW, derived exactly as the cost diagnostics
+ *      derived it. The scatter is sampled in the `(2k+1)²` square of 64 m
+ *      cells around the anchor's own cell, `k = scatterCellSpan(cullM)` (K6),
+ *      and nothing outside it exists to be drawn. With the anchor anywhere
+ *      inside its own cell:
+ *        cull 120 → k = 2 → guaranteed  2·64      = 128 m
+ *                           axis max    3·64      = 192 m
+ *                           corner max  √2·3·64   = 271.5290566 m
+ *      i.e. the "~130…270 m" of the diagnostics, against the 400 m the old
+ *      span assumed. `impostorReachM` answers the CORNER, the supremum, so the
+ *      line reaches its floor exactly where the last instance that can exist
+ *      stands. Capped at `IMPOSTOR_FAR_M`: cull 300 → k = 5 → √2·6·64 = 543 m
+ *      → 400.
+ *
+ * (W3) THE LINE ITSELF, `share(d) = 0.25 · (1 − t·0.75)`,
+ *      `t = min((d − cullM)/(reach − cullM), 1)`:
+ *        the midpoint (120 + 151.5290566/2 = 195.7645283 m) → t = 0.5
+ *          → 0.25 · 0.625 = 0.15625, a hand-exact number at an irrational
+ *            distance, which is the case that pins the SHAPE of the line.
+ *        the corner (271.5290566 m) → t = 1 → 0.25 · 0.25 = 0.0625
+ *        400 m (past the corner, inside the stage) → clamped, 0.0625 as well
+ *        120 m and nearer → 0, there is no billboard share at all there.
+ *      MONOTONE NON-INCREASING over the whole walk: 0…400 m in 0.5 m steps of
+ *      the combined line (meshes up to `cullM`, billboards past it) never
+ *      rises — 801 samples, and the step at the seam is the one it would show.
+ *
+ * (W4) THE RED COUNTER-CHECK is the OLD rule, restored by mutating the source:
+ *      the span back to `IMPOSTOR_FAR_M − cullM` and the start back to 1. It
+ *      answers 1 just past the cull line where the truth is 0.25 (the 4×
+ *      step), 0.8125 at 190 m where the real line is already at 0.1633, and
+ *      its combined walk is NOT monotone. Same 1000 indices, same hash: the
+ *      mutant draws about 4× the billboards the rule now draws at 190 m.
+ *
+ * ============================================================================
  * (J) THE DETAIL DISTANCES AS A SETTING — `client3d/src/game/prefs.ts`
  * ============================================================================
  * The three distances are a LOCAL view setting (localStorage), so the same
@@ -1296,6 +1353,25 @@ function noConeNearKeep(source) {
   return source.replace(
     '  if (!(d2 > SCATTER_CONE_NEAR_M * SCATTER_CONE_NEAR_M)) return true;\n',
     '');
+}
+
+/** Section (W4)'s mutant: the impostor thinning as it stood until 2026-08-24 —
+ *  restarting at a full 1 where the meshes had just thinned to a quarter, and
+ *  calibrated to `IMPOSTOR_FAR_M` instead of to the reach of the cell window.
+ *  It is the behaviour the acceptance round reported as a visible density jump
+ *  at the 120 m line. */
+function impostorShareRestartsFull(source) {
+  return source.replace(
+    '  const span = impostorReachM(cfg.cullM) - cfg.cullM;\n'
+    + '  // A window whose corner does not clear the cull line has no span to thin\n'
+    + '  // over (only reachable from a hand-built cfg): the whole of it is the floor.\n'
+    + '  if (!(span > 0)) return SCATTER_MIN_SHARE * IMPOSTOR_TAIL_FACTOR;\n'
+    + '  const t = Math.min((distM - cfg.cullM) / span, 1);\n'
+    + '  return SCATTER_MIN_SHARE * (1 - t * (1 - IMPOSTOR_TAIL_FACTOR));\n',
+    '  const span = IMPOSTOR_FAR_M - cfg.cullM;\n'
+    + '  if (!(span > 0)) return 0;\n'
+    + '  const t = (distM - cfg.cullM) / span;\n'
+    + '  return 1 - t * (1 - IMPOSTOR_TAIL_FACTOR);\n');
 }
 
 /** Section (M6)'s mutant: the clearance is thrown away and the old "is its
@@ -2621,6 +2697,109 @@ async function main() {
     [noKeep.inViewCone(0, -50, 0, 1, COS75), seen(0, -50),
       noKeep.inViewCone(...at100(10), 0, 1, COS75), seen(...at100(10))],
     [false, false, true, true]);
+
+  console.log('\n(W) the seam at the cull line — the billboards continue the '
+    + 'mesh thinning');
+  const {
+    IMPOSTOR_FAR_M, IMPOSTOR_TAIL_FACTOR, IMPOSTOR_WINDOW_CELL_M,
+    IMPOSTOR_WINDOW_SPAN_MAX, impostorReachM, impostorShare, impostorVisible,
+    impostorWindowSpan, SCATTER_MIN_SHARE: MIN_SHARE,
+  } = await loadTs(LOD_SRC);
+  // The window constants this file mirrors are the SAMPLER's — pinned against
+  // the package, the way (J1) pins the prefs' stored defaults. `scatterLod.ts`
+  // may not import them (it has to stay transpile-alone), so this is what keeps
+  // the two copies from drifting.
+  check('W the mirrored cell edge IS the sampler\'s',
+    IMPOSTOR_WINDOW_CELL_M, SCATTER_CELL_M);
+  check('W …and the span ceiling is floor(sqrt(4096)/2)',
+    IMPOSTOR_WINDOW_SPAN_MAX, Math.floor(Math.sqrt(4096) / 2));
+  check('W …so the mirrored span is the sampler\'s for every cull distance',
+    [120, 60, 300, 5, 2000].map(impostorWindowSpan),
+    [120, 60, 300, 5, 2000].map(scatterCellSpan));
+
+  // (W1) continuity — the two lines meet at the cull distance
+  const JUST_PAST = 120.000001;
+  check('W1 the mesh line ends at a quarter', instanceShare(120, DEF), 0.25);
+  check('W1 …which is SCATTER_MIN_SHARE itself', MIN_SHARE, 0.25);
+  check('W1 …and the billboard line starts there', impostorShare(JUST_PAST, DEF),
+    0.25, 1e-6);
+  check('W1 the same continuity on a cfg of its own (cull 60)',
+    [instanceShare(60, CFG2), impostorShare(60.000001, CFG2)], [0.25, 0.25],
+    1e-6);
+
+  // (W2) the real reach of the cell window
+  check('W2 cull 120 -> k = 2, so the corner is sqrt(2)*3*64',
+    [impostorWindowSpan(120), impostorReachM(120)],
+    [2, Math.SQRT2 * 3 * 64]);
+  check('W2 …i.e. 271.529 m, where the old span assumed 400',
+    Math.round(impostorReachM(120) * 1000) / 1000, 271.529);
+  check('W2 the guaranteed and the axis reach of that window are 128 and 192',
+    [2 * 64, 3 * 64], [128, 192]);
+  check('W2 cull 60 -> k = 1 -> sqrt(2)*2*64 = 181.019',
+    Math.round(impostorReachM(60) * 1000) / 1000,
+    Math.round(Math.SQRT2 * 2 * 64 * 1000) / 1000);
+  check('W2 cull 300 -> the corner is 543 m, so the stage\'s own end caps it',
+    [Math.round(Math.SQRT2 * 6 * 64), impostorReachM(300)],
+    [543, IMPOSTOR_FAR_M]);
+
+  // (W3) the line itself
+  const REACH = Math.SQRT2 * 3 * 64;
+  check('W3 the tail keeps a quarter of the start', IMPOSTOR_TAIL_FACTOR, 0.25);
+  check('W3 the midpoint of the span -> 0.25 * 0.625 = 0.15625',
+    impostorShare((120 + REACH) / 2, DEF), 0.15625);
+  check('W3 the corner of the window -> 0.0625', impostorShare(REACH, DEF), 0.0625);
+  check('W3 …and past it the floor is HELD, not dropped to nothing',
+    [impostorShare(300, DEF), impostorShare(IMPOSTOR_FAR_M, DEF)],
+    [0.0625, 0.0625]);
+  check('W3 190 m -> 0.25 * (1 - (70/151.5290566) * 0.75)',
+    impostorShare(190, DEF), 0.25 * (1 - (70 / (REACH - 120)) * 0.75), 1e-9);
+  check('W3 the cull line itself has no billboard share',
+    [impostorShare(120, DEF), impostorShare(60, DEF), impostorShare(401, DEF)],
+    [0, 0, 0]);
+  /** The combined line of both stages, sampled every half metre out to 400 m. */
+  const walk = (share) => {
+    const out = [];
+    for (let d = 0; d <= 400.0001; d += 0.5) {
+      out.push(d <= DEF.cullM ? instanceShare(d, DEF) : share(d, DEF));
+    }
+    return out;
+  };
+  const rises = (line) => line.some((v, i) => i > 0 && v > line[i - 1] + 1e-12);
+  const combined = walk(impostorShare);
+  check('W3 the walk is 801 samples', combined.length, 801);
+  check('W3 …and it never rises — one non-increasing line, no seam',
+    rises(combined), false);
+
+  // (W4) the red counter-check: the old rule, restored by mutation
+  const oldLine = await loadTs(LOD_SRC, impostorShareRestartsFull);
+  check('W4 the old rule restarts at a full 1 just past the cull line',
+    oldLine.impostorShare(JUST_PAST, DEF), 1, 1e-6);
+  checkNot('W4 …which is NOT what the rule now answers there',
+    impostorShare(JUST_PAST, DEF), 1, 1e-6);
+  check('W4 the old rule at 190 m -> 1 - (70/280)*0.75 = 0.8125',
+    oldLine.impostorShare(190, DEF), 0.8125);
+  check('W4 …where the real line is at a sixth of that plus a hair',
+    Math.round(impostorShare(190, DEF) * 1e6) / 1e6, 0.163383);
+  const oldCombined = [];
+  for (let d = 0; d <= 400.0001; d += 0.5) {
+    oldCombined.push(d <= DEF.cullM
+      ? instanceShare(d, DEF) : oldLine.impostorShare(d, DEF));
+  }
+  check('W4 …and its combined walk RISES at the seam', rises(oldCombined), true);
+  // The counts follow the shares, over the very same indices and the very same
+  // hash: 1000 * 0.163383 = 163 against 1000 * 0.8125 = 813 at 190 m. The band
+  // is three binomial sigmas (sqrt(1000*p*(1-p)) = 11.7 and 12.3) — what is
+  // pinned is that THIS mix lands inside it, as in (I4).
+  let now = 0;
+  let then = 0;
+  for (let i = 0; i < 1000; i += 1) {
+    if (impostorVisible(i, 190, DEF)) now += 1;
+    if (oldLine.impostorVisible(i, 190, DEF)) then += 1;
+  }
+  check('W4 about 163 of 1000 billboards are drawn at 190 m',
+    now > 128 && now < 198, true);
+  check('W4 …where the old rule drew about 813 of them',
+    then > 776 && then < 850, true);
 
   console.log('\n(J) the detail distances as a local setting — prefs.ts');
   const {

@@ -270,7 +270,9 @@ export function instanceTier(
  * instance's own distance and against a given cfg.
  *
  * The line: flat 1 up to `farM`, straight down to
- * `SCATTER_MIN_SHARE` at `cullM`, nothing beyond. `cullM > farM` need not be
+ * `SCATTER_MIN_SHARE` at `cullM`, nothing beyond — and `impostorShare` picks
+ * the line up at exactly that value, so the two stages meet without a step.
+ * `cullM > farM` need not be
  * checked before the division: the only branch that divides is the one where
  * `distM` is above `farM` and at most `cullM`, which cannot be reached unless
  * the two differ.
@@ -496,14 +498,90 @@ export function inViewCone(dx: number, dz: number,
  *  billboard that vanishes at 400 m does so behind enough haze that nobody
  *  sees it go. A CONSTANT and not a preference: the object-LOD menu sets the
  *  three MESH distances, and a fourth number for a stage that costs one draw
- *  call per entry would be a setting for the sake of having one. */
+ *  call per entry would be a setting for the sake of having one.
+ *
+ *  IT IS THE HARD CAP, NOT THE CALIBRATION. The window of cells the scatter is
+ *  sampled in ends far nearer than this (`impostorReachM`), so the THINNING is
+ *  calibrated to that reach; this number only says where the stage stops for
+ *  good, whatever the window would allow. */
 export const IMPOSTOR_FAR_M = 400;
 
-/** The share of billboards still drawn immediately before that edge — the
- *  props' own `SCATTER_MIN_SHARE`, over its own span. A quarter of a wood
- *  still reads as a wood on the horizon, which is the very reason the meshes
- *  keep a floor rather than fading to nothing. */
-export const IMPOSTOR_MIN_SHARE = 0.25;
+/** What is left of the stage's OWN starting share at the far end of the window
+ *  — a quarter of it, not a quarter of everything.
+ *
+ *  A FACTOR and no longer a share (2026-08-24). The line used to run from a
+ *  full 1 at the cull distance down to a quarter at `IMPOSTOR_FAR_M`, which
+ *  was wrong at both ends: it restarted at 1 where the meshes had just thinned
+ *  to `SCATTER_MIN_SHARE` (the visible density jump at the 120 m seam, the
+ *  documented acceptance finding), and it was calibrated to 400 m, a distance
+ *  the cell window never reaches (`impostorReachM`) — so the far half of the
+ *  line was never walked and the thinning was theoretical. It now starts where
+ *  the meshes ended and falls to this fraction of that over the window the
+ *  camera really holds: 0.25 → 0.0625 at the default distances. */
+export const IMPOSTOR_TAIL_FACTOR = 0.25;
+
+/** Edge of one scatter cell, in world metres — the client's copy of
+ *  `SCATTER_CELL_M` (`@anima/scene-render/scatter.ts`), which this file may not
+ *  import (see the header: it must stay import-free so the smoke can transpile
+ *  it alone). `smoke_scatter_math.mjs` pins the two against each other, the way
+ *  it already pins `prefs.ts`' stored defaults against `SCATTER_LOD_DEFAULTS`. */
+export const IMPOSTOR_WINDOW_CELL_M = 64;
+
+/** The largest half-span `scatterCellSpan` will hand back — its own
+ *  `floor(sqrt(SCATTER_CELLS_MAX) / 2)` = `floor(sqrt(4096) / 2)`, mirrored
+ *  here for the same reason as the cell edge above. */
+export const IMPOSTOR_WINDOW_SPAN_MAX = 32;
+
+/**
+ * How many cells lie to EACH side of the anchor's own cell — `scatterCellSpan`
+ * of the shared sampler, to the letter: `k = ceil(cullM / 64)`, at least one
+ * and at most `IMPOSTOR_WINDOW_SPAN_MAX`.
+ *
+ * The window the scatter is sampled in is the `(2k+1)²` square of cells around
+ * the cell the anchor stands in (`wantedScatterCells`, called from
+ * `scene/ground.ts` with `lodCfg.cullM`). Nothing outside it is sampled, so
+ * nothing outside it can be drawn — by the meshes OR by the billboards.
+ */
+export function impostorWindowSpan(cullM: number): number {
+  const cull = Number(cullM);
+  if (!Number.isFinite(cull) || cull <= 0) return 1;
+  return Math.max(1, Math.min(Math.ceil(cull / IMPOSTOR_WINDOW_CELL_M),
+    IMPOSTOR_WINDOW_SPAN_MAX));
+}
+
+/**
+ * How far the billboards can REALLY reach, in metres — the far end the
+ * thinning is calibrated to.
+ *
+ * THE DERIVATION, and it is the one the cost diagnostics used. The window is
+ * the square of cells `k = impostorWindowSpan(cullM)` to each side of the
+ * anchor's cell, i.e. the world box from `(cx − k)·64` to `(cx + k + 1)·64`
+ * along each axis. The anchor itself stands ANYWHERE inside its own cell, so
+ * along one axis the farthest edge of that box is at most `(k + 1)·64` m away
+ * (attained when the anchor sits on the opposite edge of its own cell) and at
+ * least `k·64` m away. The farthest point of the window is its CORNER, at
+ * `sqrt(2)·(k + 1)·64` m.
+ *
+ * At the default cull distance of 120 m that is `k = 2` and
+ *
+ *     guaranteed reach  =        2·64 = 128 m
+ *     axis maximum      =        3·64 = 192 m
+ *     corner maximum    = √2 ·   3·64 = 271.53 m
+ *
+ * — the "real reach of ~130…270 m" of the diagnostics round, against the 400 m
+ * the old thinning span assumed. The corner maximum is what this function
+ * answers: it is the supremum, so the line reaches its floor exactly where the
+ * last instance that can exist stands, and never earlier than one that does.
+ *
+ * Capped at `IMPOSTOR_FAR_M`, because that is where the stage ends whatever the
+ * window would allow — a player who sets the cull to 300 m gets a window whose
+ * corner is 543 m out, and no billboard is drawn past 400 m either way.
+ */
+export function impostorReachM(cullM: number): number {
+  const k = impostorWindowSpan(cullM);
+  const corner = Math.SQRT2 * (k + 1) * IMPOSTOR_WINDOW_CELL_M;
+  return Math.min(corner, IMPOSTOR_FAR_M);
+}
 
 /**
  * How far the bake camera is raised above the horizon, in radians (10°).
@@ -545,24 +623,47 @@ export function impostorInWindow(distM: number, cfg: ScatterLodCfg): boolean {
 }
 
 /**
- * What share of the billboards is drawn at that distance: flat 1 at the cull
- * line, straight down to `IMPOSTOR_MIN_SHARE` at `IMPOSTOR_FAR_M`.
+ * What share of the billboards is drawn at that distance: `SCATTER_MIN_SHARE`
+ * at the cull line, straight down to `IMPOSTOR_TAIL_FACTOR` of that at
+ * `impostorReachM(cfg.cullM)` — 0.25 → 0.0625 over 120 → 271.53 m at the
+ * default distances.
  *
- * ITS OWN SPAN, not a continuation of `instanceShare`. The mesh line ends at a
- * quarter because drawing a mesh is expensive; a billboard is two triangles,
- * so the stage starts full and spends its own 280 m getting thin. The visible
- * consequence is honest and worth naming: crossing the cull line OUTWARD the
- * wood gets fuller, because trees the mesh thinning had taken away come back
- * as billboards. Nothing MOVES while that happens — the two thinnings share
- * `instanceHash`, so the meshes drawn inside the line are a subset of the
- * billboards drawn outside it.
+ * IT CONTINUES `instanceShare` INSTEAD OF RESTARTING (2026-08-24, the
+ * acceptance decision on the density seam). The stage used to begin at a full
+ * 1 where the meshes had just thinned to a quarter, so the wood got abruptly
+ * FULLER as one crossed the cull line outwards — nothing moved and nothing
+ * vanished, but the jump was plainly visible. Starting at `SCATTER_MIN_SHARE`
+ * makes the two lines meet: `instanceShare(cullM) = SCATTER_MIN_SHARE` and the
+ * first billboard just past the line draws the same share, so the seam is gone
+ * by construction rather than by a tuned number. Two thirds of the billboards
+ * go with it, which is the other half of the finding — the stage was the most
+ * expensive part of the scatter.
+ *
+ * AND OVER THE WINDOW THAT EXISTS, not over 400 m: the old span ran to
+ * `IMPOSTOR_FAR_M`, a distance the sampled cell window never reaches
+ * (`impostorReachM`), so at the real edge of the window the line had walked a
+ * third of its way and the thinning was, in effect, never applied. Calibrated
+ * to the corner of the real window it reaches its floor exactly where the last
+ * instance that can exist stands.
+ *
+ * BEYOND that corner (and up to `IMPOSTOR_FAR_M`, where the window ends for
+ * good) the share is held AT the floor rather than dropped to zero: no
+ * instance can stand there, and a clamp is the answer that cannot lose a
+ * billboard should an anchor ever sit further from the camera than assumed.
+ *
+ * The sets still NEST both ways round: both thinnings pick by `instanceHash`,
+ * and the share no longer rises anywhere along the walk, so an instance drawn
+ * as a billboard outside the line is drawn as a mesh inside it and vice versa
+ * — the swap at the cull line is a swap of representation and nothing else.
  */
 export function impostorShare(distM: number, cfg: ScatterLodCfg): number {
   if (!impostorInWindow(distM, cfg)) return 0;
-  const span = IMPOSTOR_FAR_M - cfg.cullM;
-  if (!(span > 0)) return 0;
-  const t = (distM - cfg.cullM) / span;
-  return 1 - t * (1 - IMPOSTOR_MIN_SHARE);
+  const span = impostorReachM(cfg.cullM) - cfg.cullM;
+  // A window whose corner does not clear the cull line has no span to thin
+  // over (only reachable from a hand-built cfg): the whole of it is the floor.
+  if (!(span > 0)) return SCATTER_MIN_SHARE * IMPOSTOR_TAIL_FACTOR;
+  const t = Math.min((distM - cfg.cullM) / span, 1);
+  return SCATTER_MIN_SHARE * (1 - t * (1 - IMPOSTOR_TAIL_FACTOR));
 }
 
 /**
