@@ -5493,3 +5493,94 @@ zwei halbe Bandbreiten auseinander). Der Schnitt landet AUF dem Sprung — mehr
 kann eine Fläche nicht, und es ist derselbe Sprung, mit dem die Bake das Bett
 gegraben hat. Kosten: ein Stück je Knoten (255 Stücke für einen 256-Knoten-
 Mäander, 15 ms), Deckel `WATER_STRIP_MAX` = 1024.
+
+## Nachtrag 2026-08-24 (§ A16.3 / § G4): Das reliefreie Band bekommt sein eigenes Maß — W5e (Server)
+
+*Befund des Users nach Bake v5: „die Wellen des angrenzenden Geländes am Rand
+des Wassers" sind KOMPLETT unverändert. Der Nachtrag **ersetzt** die Breiten-
+Aussage von W5d Nr. 1 (die Regel selbst bleibt); der Client ändert sich nicht.
+`HEIGHT_BAKE_VERSION` **5 → 6**.*
+
+### Die Zahl, die es überführt
+
+W5d hat das Mikro-Relief am Wasser ausgeblendet und dafür das **`shore_ramp_m`**
+der Fläche als Bandbreite genommen — mit der Begründung, die zwei Hälften eines
+Ufers sollten eine Zahl teilen. Genau das war der Fehler: die beiden Zahlen
+beschreiben verschiedene DINGE. Der Rampenwert sagt, wie schnell das BETT fällt;
+das Band muss sagen, wie weit eine WELLE des Nachbargeländes niedergehalten
+wird. Die Saat-Art `river` deklariert 1,0 m Rampe (`shared/terrain/types.json`),
+`water` nimmt die 3,0 m Vorgabe — die autorierte Welle einer Wiese ist typisch
+**16 m** lang. Ein 1–4-m-Band liegt damit INNERHALB einer einzigen Flanke.
+
+Gemessen auf der Fixture von `scripts/smoke_height_bake.py` **[11h]** (See
+(0,0)–(40,40), Wiese Amplitude 1,0 / Welle 16, Probe 8 m östlich des Umrisses):
+
+| Bandbreite | Gewicht 1 m vom Umriss | Kamm 8 m draußen | Schlimmstes im 4-m-Kragen |
+|---|---|---|---|
+| 1 m (Saat `river`) | **1,0** | **0,968 m** | 0,772 m |
+| 3 m (Vorgabe `water`) | 1,0 | **0,968 m** | — |
+| 4 m (Fixture W5d) | 1,0 | **0,968 m** | — |
+| **16 m (v6)** | **0,0112** | **0,484 m** | **0,121 m** |
+
+Dreimal dieselbe Zahl: das Band hat den Kamm nie berührt, es hat nur den letzten
+Meter der Flanke umgeformt. Vom Wasser aus ist das exakt „nichts hat sich
+geändert".
+
+### Die Regel (eine, `HeightModel._relief_weight`)
+
+    Band = max(shore_ramp_m, RELIEF_SHORE_FADE_M)      RELIEF_SHORE_FADE_M = 16 m
+
+`RELIEF_SHORE_FADE_M` ist **eine Flanke der Standardwelle**
+(`models.terrain.DEFAULT_RELIEF_WAVE_M` 32 / 2, im Smoke gegen diese Konstante
+geprüft, damit die beiden nicht auseinanderlaufen). Eine Welle steigt über eine
+Flanke und fällt über die nächste; ein Band, das kürzer als eine Flanke ist,
+kann eine Flanke nur eindellen. Das `max` sorgt dafür, dass das relieffreie Band
+nie INNERHALB des Bankklemmen-Bandes endet.
+
+**Bewusst NICHT die Welle der Nachbarfläche selbst.** Erstens spränge die
+Bandbreite an jeder Grenze zwischen zwei Reliefflächen, und ein Sprung im
+Gewicht ist eine Stufe im Boden — ein Uferdefekt gegen einen Naht-Riss getauscht.
+Zweitens geht `relief_wave_m` bis 200 m: ein Fluss durch eine hügelige Welt
+planierte dann einen 100-m-Korridor an beiden Ufern. Drittens braucht eine lange
+Welle gar kein breites Band — über 16 m einer 200-m-Welle steigt der Boden nur um
+etwa `Amplitude · 16/100`, das Band entlässt sie also von selbst sanft.
+
+**Kein Ausschalter mehr.** `shore_ramp_m = 0` heißt weiterhin „Becken mit einer
+Stufe als Ufer" und betrifft nur das BETT (Carve unverändert geprüft, [11e]);
+für das Relief der Nachbarfläche sagt diese Null nichts. Die Regel des Users ist
+ohne Ausnahme formuliert.
+
+**Wer das Relief autoriert, ist egal** ([11i]): das Gewicht ist Geometrie gegen
+den WASSER-Umriss und wird in `natural()` auf das fertige Rauschen angewandt —
+die Wiese nebenan, der Wald jenseits des Flusses und eine zweite Fläche über dem
+Wasser selbst werden vom selben Band verblasst.
+
+### § G4, Rand-Hälfte: die Schranke wird nur besser
+
+Eine Probe im Polygon wird aus den vier Ecken ihrer Gitterzelle gezeichnet; eine
+Ecke AUSSERHALB liegt höchstens `step·√2` vom Umriss. Damit gilt (Fixture ohne
+Höhenfläche):
+
+    gezeichnet − Spiegel ≤ max(WATER_BANK_LIP_M, Amplitude · smoothstep(step·√2 / Band))
+
+Der zweite Term fällt monoton in `Band` — ein breiteres Band kann die Schranke
+nur senken. Auf dem 2-m-Gitter: `1,0 · smoothstep(2,83/16) = 0,083 m`, unter der
+Lippe (0,1 m) und damit **konstruktiv**, wo das 4-m-Band von v5 rechnerisch
+0,786 m zuließ und nur die Messung es rettete. Gemessen (**[11g]**):
+
+| Gitter | v6 gezeichnet über dem Spiegel | ohne Verblassen (rot) |
+|---|---|---|
+| 2 m | 0,0828 m (≤ Lippe, konstruktiv) | 0,3892 m |
+| 4 m | 0,0918 m (≤ Lippe) | 0,4260 m |
+| 8 m | 0,0979 m (≤ Lippe) | 0,4463 m |
+| 16 m | 0,2069 m (jenseits der Konstruktion) | 0,3571 m |
+
+### Erreicht die Änderung eine laufende Welt?
+
+Ja, und das ist geprüft statt angenommen (**[11j]**): `height_sig()` hasht
+`code_version` = `HEIGHT_BAKE_VERSION`, die Signatur bewegt sich also allein
+durch den Versionssprung; `get_field()` nimmt die gespeicherte Rasterzeile aus
+`world_heightfield` NUR bei `stored.sig == sig`; die Kacheln, die der Client
+zeichnet, werden per Konstruktion nie persistiert (`get_tile`), und der Client
+holt Übersicht wie Kacheln neu, sobald `height_sig` im Worldmap-Payload springt.
+Es gibt kein zwischengespeichertes Artefakt, das den Neustart überlebt.

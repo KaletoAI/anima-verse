@@ -1791,8 +1791,9 @@ def unclamped(model, x, z):
     return model._stamp(model._carve(model.natural(x, z), x, z), x, z)
 
 
-print("\n[10a] the rule change is versioned — v3 -> v4, and v4 -> v5 in [11]")
-check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 5)
+print("\n[10a] the rule change is versioned — v3 -> v4, and v4 -> v5 -> v6 "
+      "in [11]")
+check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 6)
 near("the lip is a hand's width of bank over the mirror", LIP, 0.1, 1e-12)
 check("...and it is under the shallowest legal bed",
       LIP < hf.WATER_DEPTH_MIN_M, True)
@@ -1901,17 +1902,28 @@ print("\n[11] the micro-relief is faded out at every water's edge (v5)")
 #                painted AFTER the lake, so `_kind_at` answers "g" inside the
 #                polygon too — exactly the configuration of [10g]
 #
-# THE WEIGHT is `smoothstep(d / shore_ramp_m)` on the distance to the OUTLINE,
-# and 0 inside the polygon. With a 4 m ramp the quarter points are whole
-# metres, so every number below is the smoothstep table by hand:
+# THE BAND IS NOT THE SHORE RAMP SINCE v6 (W5e). It is
+# `max(shore_ramp_m, RELIEF_SHORE_FADE_M)` = max(4, 16) = 16 m on this fixture,
+# and [11h] is the measurement that forced the change: with the ramp as the
+# band the weight was back at 1.0 ONE METRE from the outline and the crest 8 m
+# out stood 0.968 m over the mirror — identical at a 1 m, a 3 m and a 4 m ramp,
+# i.e. exactly the "nothing has changed" the user reported from the water.
 #
-#   d = 0 m   (on the outline)  t = 0     -> 0
-#   d = 1 m                     t = 0.25  -> 3·0.0625 − 2·0.015625 = 0.15625
-#   d = 2 m                     t = 0.5   -> 3·0.25   − 2·0.125    = 0.5
-#   d = 3 m                     t = 0.75  -> 3·0.5625 − 2·0.421875 = 0.84375
-#   d = 4 m   (the band's end)  t = 1     -> 1
-#   d = 5 m   (past it)                   -> 1
-#   inside the polygon                    -> 0
+# THE WEIGHT is `smoothstep(d / band)` on the distance to the OUTLINE, and 0
+# inside the polygon. With a 16 m band the quarter points are 4/8/12 m, so
+# every number below is the smoothstep table by hand:
+#
+#   d =  0 m  (on the outline)  t = 0      -> 0
+#   d =  1 m                    t = 0.0625 -> 3·0.00390625 − 2·0.000244140625
+#                                             = 0.01123046875
+#   d =  2 m                    t = 0.125  -> 3·0.015625 − 2·0.001953125
+#                                             = 0.04296875
+#   d =  4 m                    t = 0.25   -> 3·0.0625 − 2·0.015625 = 0.15625
+#   d =  8 m                    t = 0.5    -> 3·0.25   − 2·0.125    = 0.5
+#   d = 12 m                    t = 0.75   -> 3·0.5625 − 2·0.421875 = 0.84375
+#   d = 16 m  (the band's end)  t = 1      -> 1
+#   d = 17 m  (past it)                    -> 1
+#   inside the polygon                     -> 0
 #
 # …and the ground follows it exactly: `natural = hand_noise · weight`.
 #
@@ -1935,33 +1947,47 @@ FADE_MEADOW = {"id": "ta_fade_meadow", "kind": "g", "z_order": 1,
 FMODEL = hf.build_model([], [], [FADE_LAKE, FADE_MEADOW], CATALOG)
 
 
-def v5_weight(d):
-    """The documented curve, re-derived here: smoothstep(d / 4)."""
-    t = min(max(d / 4.0, 0.0), 1.0)
+#: The band of this fixture: max(shore_ramp_m 4, RELIEF_SHORE_FADE_M 16).
+FADE_BAND_M = 16.0
+
+
+def v6_weight(d):
+    """The documented curve, re-derived here: smoothstep(d / 16)."""
+    t = min(max(d / FADE_BAND_M, 0.0), 1.0)
     return t * t * (3.0 - 2.0 * t)
 
 
-def v4_natural(model, x, z):
-    """``h_natural`` as v4 computed it — the relief at FULL weight (RED)."""
+def unfaded_natural(model, x, z):
+    """``h_natural`` with NO fade at all — the relief at FULL weight (RED)."""
     return model.natural(x, z) \
         + model._micro(x, z) * (1.0 - model._relief_weight(x, z))
 
 
+# The name the older sections use for the same counterfactual.
+v4_natural = unfaded_natural
+
+
 print("  [11a] the weight curve, by hand")
-for d, want in ((0.0, 0.0), (1.0, 0.15625), (2.0, 0.5), (3.0, 0.84375),
-                (4.0, 1.0), (5.0, 1.0)):
+for d, want in ((0.0, 0.0), (1.0, 0.01123046875), (2.0, 0.04296875),
+                (4.0, 0.15625), (8.0, 0.5), (12.0, 0.84375), (16.0, 1.0),
+                (17.0, 1.0)):
     near(f"weight at d = {d} m east of the outline",
          FMODEL._relief_weight(40.0 + d, 10.0), want, 1e-12)
 near("inside the polygon the carve owns the ground: weight 0",
      FMODEL._relief_weight(20.0, 20.0), 0.0, 1e-12)
 near("…and deep inside it too", FMODEL._relief_weight(5.0, 35.0), 0.0, 1e-12)
+near("the band is max(shore_ramp_m, RELIEF_SHORE_FADE_M), not the ramp",
+     hf._relief_fade_width(hf.water_meta(FADE_LAKE)), FADE_BAND_M, 1e-12)
+near("…and a water that ramps its bed wider keeps the wider band",
+     hf._relief_fade_width(hf.water_meta(
+         {"meta": {"shore_ramp_m": 18.0}})), 18.0, 1e-12)
 
 print("  [11b] the ground IS the noise times that weight")
-for d in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0):
+for d in (0.0, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 17.0):
     x = 40.0 + d
-    near(f"natural at d = {d} m = hand_noise · {v5_weight(d)}",
+    near(f"natural at d = {d} m = hand_noise · {v6_weight(d)}",
          FMODEL.natural(x, 10.0),
-         hand_noise(x, 10.0, SEED_G) * v5_weight(d), 1e-12)
+         hand_noise(x, 10.0, SEED_G) * v6_weight(d), 1e-12)
 near("…and inside the polygon the relief is gone outright",
      FMODEL.natural(20.0, 20.0), 0.0, 1e-12)
 check_not("…which is NOT what v4 answered there",
@@ -2010,18 +2036,20 @@ print("  [11g] …and the COARSE lattices keep the rim guarantee with it")
 #
 # THE BOUND IS HAND-DERIVED, and the relief fade is what makes it derivable.
 # A probe inside the polygon is drawn from the four corners of ITS OWN lattice
-# cell, and those lie at most `step` metres away from it — so for
+# cell; a corner OUTSIDE the polygon therefore lies at most `step·√2` from the
+# outline. Inside the polygon the carve gives `h ≤` the mirror; outside, the
+# ground of this fixture (which has no height area at all) is
 #
-#     step ≤ shore_ramp_m
+#     h ≤ max(mirror + WATER_BANK_LIP_M,          the clamp's floor
+#             amplitude · smoothstep(step·√2 / band))
 #
-# every corner of that cell is either INSIDE the polygon (the carve: h ≤ the
-# mirror) or in the relief-free band outside it, where the ground is the AREA
-# height raised by the clamp — and this fixture has no height area at all, so
-# that is exactly `mirror + WATER_BANK_LIP_M`. The drawn value is a convex
-# combination of the four, hence AT MOST the lip over the mirror. With a 4 m
-# ramp that covers the 2 m and 4 m lattices by construction; at 8 m a cell may
-# reach a corner outside the band and the construction says nothing, so that
-# one is a measurement and is labelled as one.
+# and the drawn value is a convex combination of the four corners, hence at
+# most that. WIDENING THE BAND ONLY EVER TIGHTENS IT — the second term is
+# monotone falling in `band` — so the v6 bound is a strict improvement on v5's
+# at every lattice: at the 2 m lattice 1.0·smoothstep(2.83/16) = 0.083 m, still
+# under the lip, where the 4 m band of v5 gave smoothstep(2.83/4) = 0.786 m and
+# only the MEASUREMENT saved it. Past that the construction says nothing and
+# the numbers below are measurements, labelled as such.
 #
 # THE RED PROBE IS v4 AT THE SAME LATTICES, mirror and all: the relief at full
 # weight, the mirror the median of those wobbling rim heights. It stands over
@@ -2076,15 +2104,24 @@ def _v4_drawn(step):
                              V4_MIRROR, step)
 
 
-for _step in (2.0, 4.0):
-    _v5 = drawn_over_mirror(FMODEL.final, 0.0, _step)
-    check_true(f"v5 at the {_step} m lattice (≤ the 4 m ramp) cannot exceed "
-               f"the lip — it draws {round(_v5, 4)}",
-               _v5 <= hf.WATER_BANK_LIP_M + 1e-12)
-_v5_8 = drawn_over_mirror(FMODEL.final, 0.0, 8.0)
-check_true(f"at 8 m the construction says nothing and the fixture draws "
-           f"{round(_v5_8, 4)} — still inside the lip",
-           _v5_8 <= hf.WATER_BANK_LIP_M + 1e-12)
+_v6 = drawn_over_mirror(FMODEL.final, 0.0, 2.0)
+check_true(f"v6 at the 2 m lattice cannot exceed the lip by construction — it "
+           f"draws {round(_v6, 4)}", _v6 <= hf.WATER_BANK_LIP_M + 1e-12)
+for _step in (4.0, 8.0):
+    _drawn = drawn_over_mirror(FMODEL.final, 0.0, _step)
+    check_true(f"…and at the {_step} m lattice it measures "
+               f"{round(_drawn, 4)} — still inside the lip",
+               _drawn <= hf.WATER_BANK_LIP_M + 1e-12)
+# The 16 m lattice is past the band, so a cell may reach a corner where the
+# relief is fully back and no construction covers it. It is reported as the
+# measurement it is, against the same lattice WITHOUT the fade.
+_v6_16 = drawn_over_mirror(FMODEL.final, 0.0, 16.0)
+_v4_16 = _v4_drawn(16.0)
+check_true(f"at the 16 m lattice v6 draws {round(_v6_16, 4)} m over the mirror "
+           f"where the unfaded ground drew {round(_v4_16, 4)} m — past the lip, "
+           "but under it", _v6_16 < _v4_16)
+check_true("…and still under what the unfaded ground drew at the FINEST 2 m "
+           f"lattice ({round(_v4_drawn(2.0), 4)} m)", _v6_16 < _v4_drawn(2.0))
 for _step in (2.0, 4.0, 8.0):
     _v4 = _v4_drawn(_step)
     check_true(f"RED: v4 at the {_step} m lattice stood {round(_v4, 4)} m over "
@@ -2093,30 +2130,176 @@ check_true(f"…the FINEST lattice included ({round(_v4_drawn(2.0), 4)} m), so "
            "this was never a mip defect at all",
            _v4_drawn(2.0) > 3.0 * hf.WATER_BANK_LIP_M)
 
-print("  [11e] a ramp of 0 fades nothing OUTSIDE its own outline")
+print("  [11e] a ramp of 0 no longer switches the fade off (v6)")
+# v5 let `shore_ramp_m = 0` opt out of the fade entirely, because the fade WAS
+# the ramp. Since v6 the two are different questions — the ramp says how fast
+# the BED drops, the band how far a WAVE of the neighbouring ground is held
+# down — and the user's rule has no exception in it. So the basin with a step
+# for a bank keeps its step (the carve is untouched) and still gets the full
+# 16 m relief-free collar.
 STEP_LAKE = {"id": "ta_step_lake", "kind": "lake", "z_order": 0,
              "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]],
              "meta": {"water_depth_m": 2.0, "shore_ramp_m": 0.0}}
 SMODEL = hf.build_model([], [], [STEP_LAKE, FADE_MEADOW], CATALOG)
-near("a basin with a step for a bank keeps the meadow at its very rim",
-     SMODEL._relief_weight(40.5, 10.0), 1.0, 1e-12)
-near("…and still has no relief INSIDE itself",
+near("half a metre out the meadow is all but gone — smoothstep(0.5/16)",
+     SMODEL._relief_weight(40.5, 10.0), 0.00286865234375, 1e-12)
+check_not("…which is NOT the untouched meadow v5 left there",
+          round(SMODEL._relief_weight(40.5, 10.0), 12), 1.0)
+near("…the band still ends at 16 m", SMODEL._relief_weight(56.0, 10.0), 1.0,
+     1e-12)
+near("…and it still has no relief INSIDE itself",
      SMODEL._relief_weight(20.0, 20.0), 0.0, 1e-12)
+near("the BED of a 0-ramp basin is unchanged: full depth at the rim",
+     SMODEL.final(39.0, 20.0), SMODEL.water_profile_by_area[
+         "ta_step_lake"].level_up - 2.0, 1e-12)
 
-print("  [11f] two shore bands overlapping: the SMALLEST weight wins")
+print("  [11f] two bands overlapping: the SMALLEST weight wins")
 NEAR_LAKE = {"id": "ta_near_lake", "kind": "lake", "z_order": 0,
              "polygon": [[44, 0], [84, 0], [84, 40], [44, 40]],
              "meta": {"water_depth_m": 2.0, "shore_ramp_m": 4.0}}
 NMODEL = hf.build_model([], [], [FADE_LAKE, NEAR_LAKE, FADE_MEADOW], CATALOG)
-# The 4 m strip between the two lakes: at x = 41 the west lake is 1 m away
-# (weight 0.15625) and the east one 3 m (0.84375) — the west one decides.
+# The 4 m strip between the two lakes, and with a 16 m band BOTH of them reach
+# across all of it: at x = 41 the west rim is 1 m away (weight 0.01123046875)
+# and the east one 3 m (smoothstep(3/16) = 3·0.03515625 − 2·0.006591796875 =
+# 0.09228515625) — the west one decides.
 near("at x = 41 the nearer rim decides", NMODEL._relief_weight(41.0, 10.0),
-     0.15625, 1e-12)
+     0.01123046875, 1e-12)
 near("at x = 43 the other one does", NMODEL._relief_weight(43.0, 10.0),
-     0.15625, 1e-12)
-near("and in the middle both say the same 0.5",
-     NMODEL._relief_weight(42.0, 10.0), 0.5, 1e-12)
+     0.01123046875, 1e-12)
+near("and in the middle both say the same smoothstep(2/16)",
+     NMODEL._relief_weight(42.0, 10.0), 0.04296875, 1e-12)
+_strip = max(NMODEL._relief_weight(41.0 + 0.25 * i, 10.0) for i in range(9))
+check_true(f"the whole strip between the two lakes stays at {round(_strip, 5)} "
+           "of the meadow — the 4 m band left HALF of it standing in the "
+           "middle", _strip <= 0.04296875 + 1e-12)
 
+
+print("  [11h] THE W5e FINDING: a 1 m band inside a 16 m wave does nothing")
+# THE USER'S RE-REPORT, 2026-08-24: "the waves of the adjacent terrain at the
+# edge of the water" are COMPLETELY unchanged after v5. This is that report as
+# arithmetic, and it convicts the BAND WIDTH.
+#
+# The seed `river` kind declares `shore_ramp_m` 1.0 (`shared/terrain/types.json`)
+# and the seed `water` kind takes the 3 m default, while a meadow's authored
+# wave is 16 m — the very fixture above. A band of 1…4 m therefore sits INSIDE
+# a single flank of the wave it is meant to suppress: the weight is back at
+# full one to four metres out, and the crest of that wave, half a wavelength
+# away, never hears about the water at all.
+#
+# THE RED PROBE IS v5 ITSELF, re-implemented here from its own rule
+# (`smoothstep(d / shore_ramp_m)`, 0 inside) rather than called, so this section
+# still measures v5 after v5's code is gone.
+RIVER_RAMPS = (1.0, 3.0, 4.0)
+CREST = (48.0, 16.0)          # 8 m east of the rim, a crest of the 16 m wave
+CREST_D = 8.0
+
+
+def v5_weight_at(x, z, ramp, ring):
+    """`_relief_weight` as v5 computed it: the band IS `shore_ramp_m` (RED)."""
+    if hf._inside_ring(x, z, ring):
+        return 0.0
+    if ramp <= 0.0:
+        return 1.0
+    d = hf._ring_edge_distance(x, z, ring)
+    return 1.0 if d >= ramp else ss(d / ramp)
+
+
+_ring_lake = hf._ring(FADE_LAKE["polygon"])
+near("the probe really is 8 m outside the outline",
+     hf._ring_edge_distance(*CREST, _ring_lake), CREST_D, 1e-12)
+_crest_raw = FMODEL._micro(*CREST)
+check_true(f"…and it really is a crest: the unfaded relief there is "
+           f"{round(_crest_raw, 4)} m", _crest_raw > 0.9)
+for _ramp in RIVER_RAMPS:
+    _w = v5_weight_at(*CREST, _ramp, _ring_lake)
+    near(f"RED v5 with a {_ramp} m band: weight at the crest is a flat 1.0",
+         _w, 1.0, 1e-12)
+    near(f"RED v5 with a {_ramp} m band: the crest stands "
+         f"{round(_crest_raw * _w, 4)} m over the mirror",
+         _crest_raw * _w, _crest_raw, 1e-12)
+near("RED v5 was back at FULL relief one metre out (1 m band)",
+     v5_weight_at(41.0, 10.0, 1.0, _ring_lake), 1.0, 1e-12)
+# …and v6, on the same point, with the band hand-derived: smoothstep(8/16).
+near("v6 halves the crest — smoothstep(8/16) = 0.5",
+     FMODEL._relief_weight(*CREST), 0.5, 1e-12)
+near("…so the ground there is exactly half the wave",
+     FMODEL.natural(*CREST), _crest_raw * 0.5, 1e-12)
+near("…and one metre out it is a hundredth of it, not all of it",
+     FMODEL._relief_weight(41.0, 10.0), 0.01123046875, 1e-12)
+# The whole collar, not one lucky probe: the worst ground in the first 4 m
+# around the lake, before and after. 4 m is the reach of the widest seed ramp,
+# i.e. the ground v5 claimed to have flattened.
+_collar_v5 = []
+_collar_v6 = []
+_gx = -8.0
+while _gx <= 48.0 + 1e-9:
+    _gz = -8.0
+    while _gz <= 48.0 + 1e-9:
+        if not hf._inside_ring(_gx, _gz, _ring_lake) \
+                and hf._ring_edge_distance(_gx, _gz, _ring_lake) <= 4.0:
+            _raw = FMODEL._micro(_gx, _gz)
+            _collar_v5.append(_raw * v5_weight_at(_gx, _gz, 1.0, _ring_lake))
+            _collar_v6.append(FMODEL.natural(_gx, _gz))
+        _gz += 0.5
+    _gx += 0.5
+_worst_v5 = max(_collar_v5)
+_worst_v6 = max(_collar_v6)
+check_true(f"RED: in the 4 m collar v5's 1 m band left {round(_worst_v5, 4)} m "
+           "of wave standing", _worst_v5 > 0.5)
+check_true(f"…v6 leaves {round(_worst_v6, 4)} m of it — a sixth",
+           _worst_v6 < 0.2 * _worst_v5)
+
+print("  [11i] the band is tied to the relief's OWN scale, and to nobody's kind")
+from app.models.terrain import (DEFAULT_RELIEF_WAVE_M,  # noqa: E402
+                                RELIEF_WAVE_MAX_M)
+near("RELIEF_SHORE_FADE_M is one FLANK of the default wave",
+     hf.RELIEF_SHORE_FADE_M, DEFAULT_RELIEF_WAVE_M / 2.0, 1e-12)
+check_true("…and the longest authorable wave is far past it, which is why the "
+           "band is a constant and not that wave's own half",
+           RELIEF_WAVE_MAX_M / 2.0 > 4.0 * hf.RELIEF_SHORE_FADE_M)
+# THE FADE IS GEOMETRY AGAINST THE WATER'S OUTLINE, so it does not care which
+# area authors the relief it suppresses — a second meadow of a DIFFERENT kind,
+# a different amplitude and a different wave, painted only on the far side, is
+# faded by the very same band.
+OTHER_MEADOW = {"id": "ta_other", "kind": "g2", "z_order": 2,
+                "polygon": [[-40, -40], [0, -40], [0, 80], [-40, 80]],
+                "meta": {"relief_amplitude_m": 0.8, "relief_wave_m": 24.0}}
+OMODEL = hf.build_model([], [], [FADE_LAKE, FADE_MEADOW, OTHER_MEADOW],
+                        {**CATALOG, "g2": {"kind": "g2", "meta": {}}})
+near("west of the lake, where the OTHER kind paints, the band is the same",
+     OMODEL._relief_weight(-1.0, 20.0), 0.01123046875, 1e-12)
+near("…and the ground there is that other kind's noise times it",
+     OMODEL.natural(-1.0, 20.0),
+     OMODEL._micro(-1.0, 20.0) * 0.01123046875, 1e-12)
+check_true("…which really is a different relief: its unfaded value differs "
+           "from the east meadow's", abs(OMODEL._micro(-1.0, 20.0)
+                                         - OMODEL._micro(41.0, 20.0)) > 1e-6)
+
+print("  [11j] the stored raster cannot survive a rule change")
+# THE OTHER "nothing has changed" CANDIDATE, ruled out with a number: the bake
+# result is persisted in `world_heightfield` and only rebuilt when the row's
+# `sig` no longer matches `height_sig()`. If that signature ignored the code
+# version, a restart would hand every client the OLD ground for ever.
+_before = store2.height_sig()
+_bumped = hf.HEIGHT_BAKE_VERSION + 1
+try:
+    hf.HEIGHT_BAKE_VERSION = _bumped
+    _after = store2.height_sig()
+finally:
+    hf.HEIGHT_BAKE_VERSION = _bumped - 1
+check_not("moving ONLY the code version moves the signature", _after, _before)
+near("…and it is exactly 10 characters, like the other one", len(_after), 10,
+     0)
+check("the restored version is the one this bake ships",
+      hf.HEIGHT_BAKE_VERSION, 6)
+# `get_field` uses the stored row ONLY on a signature match — the line that
+# makes the bump reach a running world.
+_get_field_src = _inspect.getsource(hf.get_field)
+check_true("get_field rejects a stored raster whose sig differs",
+           'stored.get("sig") == sig' in _get_field_src)
+check_true("…and there is no second, unversioned store: the tiles the client "
+           "renders are never persisted",
+           "NOTHING IS STORED IN THE DB" in _inspect.getsource(hf.get_tile))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 for name in FAILURES:

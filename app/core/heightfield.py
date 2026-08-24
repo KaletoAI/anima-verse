@@ -65,13 +65,17 @@ shared lattice points BY CONSTRUCTION, not by luck.
   that buys — deeper than the shore ramp the ground is at least ``ε`` below the
   mirror AT THAT POINT, in EVERY raster — is what makes "distant terrain pokes
   through the water" impossible in the data instead of impossible in a shader.
-* **No relief at the waterline** (v5, 2026-08-24): the micro-relief is
-  multiplied by a weight that is 0 inside every water polygon and on its
-  outline and smoothsteps back to 1 over the ``shore_ramp_m`` band outside it
+* **No relief at the waterline** (v5, 2026-08-24; its width v6, W5e): the
+  micro-relief is multiplied by a weight that is 0 inside every water polygon
+  and on its outline and smoothsteps back to 1 over a band of
+  ``max(shore_ramp_m, RELIEF_SHORE_FADE_M)`` metres outside it
   (:meth:`HeightModel._relief_weight`). The mirror of a lake is the MEDIAN of
   the natural heights along its rim, so a rim that wobbles by ±1 m has half its
   perimeter standing over its own water — the measured cause of "holes between
   water and land", and one no clamp could repair, because a clamp only raises.
+  The band is the relief's ruler, not the bed's: v5 used ``shore_ramp_m`` for
+  it, which on the seed river is 1 m against a 16 m wave and left the crest 8 m
+  out standing 0.968 m over the mirror.
 * **The bank clamp** (v4, 2026-08-24): the OTHER half of that shore. In the band
   of ``shore_ramp_m`` metres OUTSIDE the polygon the ground is held at at least
   the mirror of the nearest outline point plus :data:`WATER_BANK_LIP_M` — a lerp
@@ -158,7 +162,16 @@ logger = get_logger("heightfield")
 #: v4 finding and the bigger one: the mirror is the MEDIAN of the rim heights,
 #: so a rim that wobbles has half its perimeter standing above its own water —
 #: which the bank clamp could not fix, because the clamp only ever raises.
-HEIGHT_BAKE_VERSION = 5
+#:
+#: v6 (2026-08-24, W5e): THE FADE GETS ITS OWN WIDTH. v5 borrowed the band from
+#: ``shore_ramp_m``, and the seed river carries 1 m of it while a meadow's waves
+#: are 16 m long: the fade reshaped the last metre of a wave and left the crest
+#: 8 m out standing at its full 0.968 m — measured, unchanged between a 1 m, a
+#: 3 m and a 4 m ramp, which is exactly the "nothing has changed" the user saw
+#: from the water. The band is now :data:`RELIEF_SHORE_FADE_M` wide (a wider
+#: ``shore_ramp_m`` still wins), i.e. at least one FLANK of the relief it
+#: suppresses, and it no longer has an off switch.
+HEIGHT_BAKE_VERSION = 6
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -203,6 +216,50 @@ MAX_POINTS = 120_000
 #: The value is :data:`TILE_STEP_M`, so the tiles — the ground every rule reads
 #: — keep exactly the heights they had.
 RELIEF_EDGE_PROBE_M = 2.0
+
+#: How wide the RELIEF-FREE BAND around a water polygon is, in metres — the
+#: width over which the micro-relief comes back from 0 at the waterline to its
+#: full amplitude (W5e, 2026-08-24, :meth:`HeightModel._relief_weight`).
+#:
+#: THE MEASURED REASON IT IS NOT ``shore_ramp_m``. v5 used the water's own
+#: shore ramp for both halves of the shore — the bed ramp inside and the relief
+#: fade outside — because they are two sides of one shoreline. But the two
+#: numbers describe different THINGS: the ramp is how fast the bed drops, the
+#: fade is how far a WAVE of the neighbouring ground has to be held down. The
+#: seed ``river`` declares a 1 m ramp and a meadow's authored wave is typically
+#: 16 m long, so the fade sat inside a single flank: measured on the fixture of
+#: ``scripts/smoke_height_bake.py`` [11h], the weight was back at 1.0 one metre
+#: from the outline and the crest 8 m out stood 0.968 m over the mirror — the
+#: same 0.968 m at a 1 m, a 3 m and a 4 m ramp. A band that only reshapes the
+#: last metre of a wave changes nothing anybody standing in the water can see.
+#:
+#: THE WIDTH IS ONE FLANK OF THE DEFAULT WAVE — ``DEFAULT_RELIEF_WAVE_M / 2``
+#: (32 / 2), asserted against that constant in the smoke so the two cannot
+#: drift apart. A wave rises over one flank and falls over the next, so a band
+#: shorter than a flank can never do more than dent the flank it sits in, while
+#: one flank long is enough to take a crest down to the waterline over its own
+#: natural rise. It is deliberately NOT the ADJACENT area's own
+#: ``relief_wave_m``:
+#:
+#: * the width would then JUMP at every border between two relief areas, and a
+#:   jump in the weight is a step in the ground — a crack along the seam where
+#:   two meadows meet at a shore, one shore defect traded for another;
+#: * the authored wave goes up to ``RELIEF_WAVE_MAX_M`` = 200 m, so a river
+#:   through a rolling world would flatten a 100 m corridor along both banks —
+#:   an intervention far larger than the bump it removes;
+#: * a long wave needs no wide band anyway: over 16 m of a 200 m wave the
+#:   ground only climbs about ``amplitude · 16/100``, so the fade lets it out
+#:   gently on its own. A short wave (the 4 m minimum) is covered several times
+#:   over, which costs nothing but a flatter beach.
+#:
+#: AND IT HAS NO OFF SWITCH, unlike the ramp it used to borrow (``0`` is a value
+#: there and means "a basin with a step for a bank"). The rule the user gave is
+#: unconditional — "there must be NO relief at the water's edge" — and the whole
+#: finding above is that the bed's shape and the neighbour's waves are not the
+#: same question. The effective band is ``max(shore_ramp_m, this)``: a water
+#: that ramps its bed over more than a flank keeps the wider of the two, so the
+#: relief-free band always covers the bank clamp's band as well.
+RELIEF_SHORE_FADE_M = 16.0
 
 #: The plateau ramp of a built location, in metres (§ G5). Width is
 #: :data:`PLATEAU_RAMP_FACTOR` · √(area/π) — half the radius of the circle of
@@ -1201,6 +1258,23 @@ def water_meta(area: Dict[str, Any],
     )
 
 
+def _relief_fade_width(meta: WaterMeta) -> float:
+    """How wide THIS water's relief-free band is, in metres (v6, W5e).
+
+    ONE RULE, ONE PLACE: ``max(shore_ramp_m, RELIEF_SHORE_FADE_M)``. The
+    constant carries the whole justification for the width; what this adds is
+    the ``max``, and it is there so the band never ends INSIDE the bank clamp's
+    band — a water that ramps its bed over 30 m would otherwise get its relief
+    back 16 m out, in the middle of the ground the clamp is still lifting.
+
+    Read by the fade itself AND by the box index that decides which waters a
+    point is even asked about, which is why it is a function and not two
+    expressions: an index grown by less than the band silently drops the fade
+    of every water whose rim lies in another bucket.
+    """
+    return max(meta.shore_ramp_m, RELIEF_SHORE_FADE_M)
+
+
 def _stroke_line(raw: Any) -> Tuple[Tuple[Tuple[float, float], ...], float]:
     """The centre line of ``meta.stroke`` — points and ribbon width, or empty.
 
@@ -1646,12 +1720,15 @@ class HeightModel:
         # same read of the authored areas, so the outline a fade uses and the
         # outline its carve uses cannot part company.
         self._water_input = self._read_water(terrain_areas, terrain_catalog)
-        #: (ring, shore_ramp_m) per water area — the relief fade's own input.
+        #: (ring, band width) per water area — the relief fade's own input. The
+        #: width is NOT the shore ramp since v6 but
+        #: ``max(shore_ramp_m, RELIEF_SHORE_FADE_M)``: the ramp shapes the bed,
+        #: the band has to outlast a WAVE of the ground beside it.
         self._relief_fade: List[Tuple[List[Tuple[float, float]], float]] = [
-            (_ring(area.get("polygon")) or [], meta.shore_ramp_m)
+            (_ring(area.get("polygon")) or [], _relief_fade_width(meta))
             for area, _box, meta in self._water_input]
         self._relief_fade_index = _BoxIndex(
-            [_grown(box, max(0.0, meta.shore_ramp_m))
+            [_grown(box, _relief_fade_width(meta))
              for _area, box, meta in self._water_input])
         self.water: List[WaterStamp] = self._build_water()
         # THE INDEX IS OVER THE BANK BOX, not over the outline's (v4): since
@@ -1714,7 +1791,7 @@ class HeightModel:
         return h
 
     def _relief_weight(self, x: float, z: float) -> float:
-        """How much of the micro-relief survives at (x, z) — 0…1 (v5).
+        """How much of the micro-relief survives at (x, z) — 0…1 (v5, v6).
 
         THE USER'S RULE, VERBATIM: "there must be NO relief at the water's
         edge" (2026-08-24). It is the finding behind the shore holes, measured:
@@ -1726,40 +1803,55 @@ class HeightModel:
         of meadow standing over the lake it borders, at the FINEST lattice, in
         every LOD.
 
-        THE BAND is the water's own ``shore_ramp_m``, the very width the bed
-        ramp uses INSIDE the rim, and the curve is the same
-        :func:`smoothstep` — so the two halves of one shore number are mirror
-        images of each other::
+        THE BAND IS THE FADE'S OWN WIDTH SINCE v6 (W5e,
+        :func:`_relief_fade_width` = ``max(shore_ramp_m,
+        RELIEF_SHORE_FADE_M)``). v5 borrowed ``shore_ramp_m`` for it, on the
+        reasoning that the two halves of one shoreline should share one number
+        — and that was the defect: the seed river's ramp is 1 m while a
+        meadow's wave is 16 m long, so the fade only ever reshaped the LAST
+        METRE of a wave whose crest, 8 m out, went on standing 0.968 m over the
+        mirror (measured; the same 0.968 m at a 1 m, a 3 m and a 4 m ramp). A
+        band has to outlast one FLANK of the wave it suppresses or it does
+        nothing that can be seen from the water.
+
+        The curve is still :func:`smoothstep`, now over that band::
 
             d = 0 (the outline)      -> 0        no relief at the waterline
-            d = ramp/2               -> 0.5      half of it
-            d ≥ ramp                 -> 1        the meadow, untouched
+            d = band/2               -> 0.5      half of it
+            d ≥ band                 -> 1        the meadow, untouched
 
         INSIDE THE POLYGON IT IS 0 OUTRIGHT. The carve owns that ground, a
         bumpy bed under a mirror is nothing anybody can see, and a relief that
         ran up to the rim from the inside would put the very bump back that
         this exists to remove.
 
-        The SMALLEST weight wins where two shore bands overlap — a strip
-        between two lakes is as relief-free as either of them asks for — and a
-        water with ``shore_ramp_m = 0`` (a basin with a step for a bank) fades
-        nothing outside its own outline, which is what a step IS.
+        The SMALLEST weight wins where two bands overlap — a strip between two
+        lakes is as relief-free as either of them asks for. THERE IS NO OPT-OUT
+        any more: ``shore_ramp_m = 0`` still means "a basin with a step for a
+        bank" for the BED, and says nothing about the waves of the ground next
+        to it (v5 let that zero switch the fade off entirely).
+
+        IT DOES NOT CARE WHO AUTHORED THE RELIEF. The weight is geometry
+        against the water's OUTLINE and is applied to the finished noise in
+        :meth:`natural`, so the meadow next door, the forest across the river
+        and a second area lying over the water itself are all faded by the same
+        band — the water's own kind never enters into it.
         """
         if not self._relief_fade:
             return 1.0
         weight = 1.0
         for idx in self._relief_fade_index.at(x, z):
-            ring, ramp = self._relief_fade[idx]
+            ring, band = self._relief_fade[idx]
             if not ring:
                 continue
             if _inside_ring(x, z, ring):
                 return 0.0
-            if ramp <= 0.0:
+            if band <= 0.0:
                 continue
             d = _ring_edge_distance(x, z, ring)
-            if d >= ramp:
+            if d >= band:
                 continue
-            value = smoothstep(d / ramp)
+            value = smoothstep(d / band)
             if value < weight:
                 weight = value
         return weight
@@ -3033,39 +3125,107 @@ def get_tile(tx: int, tz: int) -> Dict[str, Any]:
         return tile
 
 
+def _stats_cache() -> Tuple[str, Dict[Tuple[int, int], Dict[str, Any]]]:
+    """The generation's statistics map, PRELOADED FROM THE DB, with its sig.
+
+    Three levels, cheapest first — the very shape :func:`get_field` uses for
+    the overview: the process map (an integer comparison), the rows stored
+    under the current signature (a restart costs one SELECT), and finally the
+    raster, which is then stored (:func:`tile_stats_many`).
+
+    WHY THE DB LEVEL EXISTS. A statistic is read off a finished 129² tile, so
+    a cold map means rastering every tile a client asks about: measured
+    2026-08-24 on a 1077-tile world, 17 batches of ``GET
+    /play/heightfield/stats`` took 102 s against the same 17 batches taking
+    1 s on a warm process. That cost is a property of the RASTER, not of the
+    process, so it belongs in the same store the raster does.
+
+    A STORED ``err`` OF THE WRONG LENGTH IS DROPPED. The list has one entry per
+    :data:`MIP_LEVELS_M` and the signature does not hash that tuple — only
+    :data:`HEIGHT_BAKE_VERSION` — so a changed level list would otherwise hand
+    a CDLOD client a per-level error for a level it does not have. Cheap to
+    test, and the tile behind a dropped row is still rasterable.
+
+    Only the container SWAP is locked. The signature and the DB read happen
+    OUTSIDE :data:`_STATS_LOCK`, so it is never held across anything that takes
+    a tile lock or ``_DERIVED_LOCK`` — two threads arriving together may each
+    read the same rows once, which costs a SELECT and nothing else.
+    """
+    global _TILE_STATS
+    cached = _TILE_STATS
+    if cached is not None and cached[0] == _GENERATION:
+        return cached[1], cached[2]
+    generation = _GENERATION
+    sig = current_sig()
+    table: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    if sig:
+        from app.models import heightfield as store
+        try:
+            stored = store.load_tile_stats(sig)
+        except Exception as exc:   # a cache that cannot be read is not fatal
+            logger.warning("Could not read the stored tile statistics: %s", exc)
+            stored = {}
+        levels = len(MIP_LEVELS_M)
+        table = {key: stats for key, stats in stored.items()
+                 if len(stats.get("err") or ()) == levels}
+    with _STATS_LOCK:
+        cached = _TILE_STATS
+        if cached is not None and cached[0] == _GENERATION:
+            return cached[1], cached[2]
+        _TILE_STATS = (generation, sig, table)
+        return sig, table
+
+
 def tile_stats(tx: int, tz: int) -> Dict[str, Any]:
-    """The pyramid statistics of one tile, cached per generation (§ G2).
+    """The pyramid statistics of one tile (§ G2), cached and STORED.
 
     ``{"min", "max", "err": [one per MIP level]}`` — see
     :func:`tile_stats_from`. A tile outside the index answers a flat zero
     record without rastering anything, exactly as :func:`world_height` answers
-    0 there.
+    0 there, and that record is not stored: it is a statement about the flat
+    world, true for every signature and worth no row.
     """
-    global _TILE_STATS
-    cached = _TILE_STATS
-    if cached is None or cached[0] != _GENERATION:
-        # Only the container SWAP is locked. Two threads that each installed
-        # their own fresh dict would leave one of them writing into an orphan,
-        # so its statistic would be computed again on the next ask — cheap, but
-        # the cap on `index_stats_payload` makes it a per-request cost. The
-        # lock is released before `get_tile` below: that one takes a tile lock
-        # and then `_DERIVED_LOCK`, and holding this across it would invert the
-        # order.
-        with _STATS_LOCK:
-            cached = _TILE_STATS
-            if cached is None or cached[0] != _GENERATION:
-                cached = (_GENERATION, {})
-                _TILE_STATS = cached
     key = (int(tx), int(tz))
-    stats = cached[1].get(key)
-    if stats is None:
-        if key not in tile_index():
-            stats = {"min": 0.0, "max": 0.0,
-                     "err": [0.0] * len(MIP_LEVELS_M)}
-        else:
+    if key not in tile_index():
+        return {"min": 0.0, "max": 0.0, "err": [0.0] * len(MIP_LEVELS_M)}
+    return tile_stats_many((key,))[key]
+
+
+def tile_stats_many(keys: Sequence[Tuple[int, int]]
+                    ) -> Dict[Tuple[int, int], Dict[str, Any]]:
+    """The statistics of several tiles, with ONE write back for the batch.
+
+    The plural form exists for the write, not for the read: a payload asks for
+    up to :data:`TILE_BATCH_MAX` tiles at once, and storing each of them in its
+    own transaction would put a commit between two rasters that already cost
+    90 ms each. Everything else is :func:`tile_stats` per key.
+
+    KEYS OUTSIDE THE INDEX ARE LEFT OUT of the answer, the rule every tile
+    payload follows: an unindexed tile IS the flat world and the callers here
+    (:func:`tiles_payload`, :func:`stats_payload`, :func:`index_stats_payload`)
+    filter on the index anyway.
+    """
+    sig, table = _stats_cache()
+    index = tile_index()
+    out: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    fresh: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for tx, tz in keys:
+        key = (int(tx), int(tz))
+        if key in out or key not in index:
+            continue
+        stats = table.get(key)
+        if stats is None:
             stats = tile_stats_from(get_tile(key[0], key[1]))
-        cached[1][key] = stats
-    return stats
+            table[key] = stats
+            fresh[key] = stats
+        out[key] = stats
+    if fresh and sig:
+        from app.models import heightfield as store
+        try:
+            store.store_tile_stats(sig, fresh)
+        except Exception as exc:   # a cache that cannot be written is not fatal
+            logger.warning("Could not store the tile statistics: %s", exc)
+    return out
 
 
 def world_height(x: float, z: float) -> float:
