@@ -360,10 +360,17 @@ Hand-derived expectations:
          midpoints x = 871, 873, … 899. Ten of them (871…889) lie west of
          890.5 and are grass at 1.0 -> 20 m -> 20 s; five (891…899) lie inside
          the lake at 0.4 -> 2 / 0.4 = 5 s each -> 25 s. TOTAL 45 s, against the
-         30 s the same walk costs when the place is not open ground.
-         The route is still the straight line: every way to a goal 10 m deep
-         in the lake crosses the same water, and going round the rim (out at
+         30 s the same walk costs when the place is not open ground — plus the
+         relief the lake carves and raises: 8.664 s, derived height by height
+         at the section itself (bank clamp, heightfield v4).
+         The route still walks straight IN: every way to a goal 10 m deep in
+         the lake crosses the same water, and going round the rim (out at
          z = 11, back down through 9 m of water) is both longer and wetter.
+         Since the shore carries an 8 cm bank it no longer follows the airline
+         to the centimetre — it crosses the ridge a metre north — so what the
+         check asserts is the property, not the polyline: monotone in x, inside
+         a one-metre corridor, and never dearer than the straight line (which
+         is `_smooth`'s own rule for keeping a bend).
       b) TWO RED COUNTER-PROBES, both landing on 30 s:
          1. THE BUILDING (the round-2 decision, measured end to end): clear
             `map3d.area_model` on the very same location and rebuild the
@@ -1243,11 +1250,30 @@ check("the village really counts as open ground",
 # SINCE "EIN BODEN" E1 (§ G4) THE LAKE ALSO HAS A BED. The kind is flagged as
 # water, so the bake carves it: the mirror is the median height along the rim
 # — flat 0 here — and the default depth is 2 m, reached 3 m inside the shore,
-# so the walk DESCENDS 2 m on its way in and the climb penalty
-# (SLOPE_COST_S_PER_M = 4 s/m, [14]) is paid for it:
-#     45 s  +  4 s/m · 2.0 m  =  53 s
-# The descent is monotone (the shore profile only falls), so the sum of |Δh|
-# along the polyline is exactly the 2 m of depth and nothing more.
+# so the walk DESCENDS into it and the climb penalty (SLOPE_COST_S_PER_M =
+# 4 s/m, [14]) is paid for it.
+#
+# AND SINCE THE BANK CLAMP (heightfield v4, 2026-08-24) IT ALSO HAS A BANK.
+# The ground in the 3 m band OUTSIDE the rim is held at at least the mirror
+# plus WATER_BANK_LIP_M = 0.1 m, fading linearly to nothing at the band's outer
+# edge — so the walk first climbs a hand's width onto the shore and then drops
+# into the bed. THIS FIXTURE IS THE WORST CASE FOR IT ON PURPOSE: the mirror is
+# the rim median, i.e. exactly the flat ground around it, so the whole lip is
+# ridge that was not there before. That is the intended shape (a bed has to be
+# contained by something) and the route layer feels it like any other relief.
+#
+# THE COST, HAND-DERIVED. `_segment_cost` reads the height at the ENDS of its
+# fifteen 2 m parts, i.e. at x = 870, 872, … 900, and `height_at` is the stored
+# 2 m tile raster, which carries millimetres. With d = 890.5 - x and the clamp
+# target = 0.1·(1 - d/3) on flat ground:
+#     x = 886   d = 4.5 > 3   -> 0
+#     x = 888   d = 2.5       -> 0.1/6 = 0.016666… -> 0.017 on the raster
+#     x = 890   d = 0.5       -> 0.1·5/6 = 0.08333… -> 0.083
+#     x = 892   inside, d_in = 1.5, smoothstep(0.5) = 0.5 -> -1.0
+#     x = 894   inside, d_in = 3.5 >= 3                   -> -2.0  (and on)
+# so the sum of |Δh| is 0.017 + 0.066 + 1.083 + 1.000 = 2.166 m and
+#     45 s  +  4 s/m · 2.166 m  =  53.664 s
+# (v3 read 45 + 4·2.0 = 53.0 exactly: no bank, no climb.)
 _lake_bed = hf_core.world_model()
 approx("the lake's mirror is the rim median, 0.0",
        _lake_bed.water_profile_by_area[
@@ -1257,16 +1283,34 @@ approx("...and its bed at the goal is 2 m under it",
        _lake_bed.final(900.0, 0.0), -2.0, 1e-9)
 approx("...while the approach on grass is still flat",
        _lake_bed.final(870.0, 0.0), 0.0)
-approx("30 m into the village cost 20 s of grass + 25 s of wading + 8 s of "
-       "descending into the bed",
+approx("...and its bank half a metre out is 0.1·(1 - 0.5/3)",
+       _lake_bed.final(890.0, 0.0),
+       hf_core.WATER_BANK_LIP_M * (1.0 - 0.5 / 3.0), 1e-9)
+_STRAIGHT = 45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.166
+approx("30 m into the village cost 20 s of grass + 25 s of wading + 8.664 s of "
+       "climbing the bank and descending into the bed",
        nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)),
-       45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
+       _STRAIGHT, 1e-9)
 r = nav_grid.route((870, 0), (900, 0))
-check("the route is still the straight line into the village", r,
-      [(870.0, 0.0), (900.0, 0.0)])
-approx("...and the journey pays the water AND the bed for it",
-       sum(nav_grid.segment_costs(r)),
-       45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
+# THE ROUTE STILL WALKS IN, head-on. It no longer does it on the exact airline:
+# the bank is an 8 cm ridge along the whole shore and the search crosses it a
+# metre north, where the 2 m cost sampling reads a shallower climb. What the
+# check is FOR is unchanged and asserted directly — the route does not go round
+# the lake (every way to a goal 10 m deep in it crosses the same water), it
+# stays inside a one-metre corridor and it never turns back on itself. The cost
+# bound is the smoothing rule's own invariant: `_smooth` keeps a bend only when
+# the straight shortcut measures more expensive, so the route it returns can
+# never cost more than the straight line does.
+check("the route walks straight in — no detour around the lake",
+      [p[0] for p in r] == sorted(p[0] for p in r)
+      and max(abs(p[1]) for p in r) <= 1.0, True)
+check("...from the start to the goal", (r[0], r[-1]),
+      ((870.0, 0.0), (900.0, 0.0)))
+check("...and the journey pays the water AND the bed for it, no more than the "
+      "airline does", sum(nav_grid.segment_costs(r)) <= _STRAIGHT + 1e-9, True)
+check("...and still WADES: more than the 30 s + 8 s a dry walk over the same "
+      "bed would cost", sum(nav_grid.segment_costs(r))
+      > 30.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0, True)
 # RED COUNTER-PROBE 1 (round 2): the SAME lake under a BUILDING. Nothing
 # changes but the area flag, and the five wet midpoints go back to the
 # neutral 1.0 -> 15 parts of 2 m at 1.0 = 30 s. That is the reach decision,
@@ -1277,17 +1321,17 @@ check_true("flipping the flag really hands out a new context",
            built_ctx is not lake_ctx, "")
 check("the same point is BUILT now",
       nav_grid._region_scope(900.0, 0.0, built_ctx.regions), "built")
-# …dry, but not level: the bed is a property of the painted WATER, not of the
-# place standing on it, so the 8 s of descent stay.
+# …dry, but not level: the bed AND its bank are properties of the painted
+# WATER, not of the place standing on it, so the 8.664 s of relief stay.
 approx("RED COUNTER-PROBE: a HALL on the same lake is walked dry in 30 s "
-       "(+ the same 8 s of bed)",
+       "(+ the same 8.664 s of bank and bed)",
        nav_grid._segment_cost(built_ctx, (870.0, 0.0), (900.0, 0.0)),
-       30.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
+       30.0 + nav_grid.SLOPE_COST_S_PER_M * 2.166, 1e-9)
 set_area_model(LAKE_ID, True)
 lake_ctx = nav_grid.build_nav_context()
 approx("...and the village wades again",
        nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)),
-       45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
+       _STRAIGHT, 1e-9)
 # RED COUNTER-PROBE 2: the rule BEFORE finding 3, where every footprint
 # neutralised its ground — the same 30 s, from the other direction.
 _rule = nav_grid.effective_speed_factor
@@ -1295,13 +1339,13 @@ nav_grid.effective_speed_factor = (
     lambda factor, scope: 1.0 if scope != "wilderness"
     else max(factor, terrain_query.MIN_SPEED_FACTOR))
 approx("RED COUNTER-PROBE: the old place-neutral rule walks it dry in 30 s "
-       "(+ the bed's 8 s)",
+       "(+ the bank and bed's 8.664 s)",
        nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)),
-       30.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
+       30.0 + nav_grid.SLOPE_COST_S_PER_M * 2.166, 1e-9)
 nav_grid.effective_speed_factor = _rule
 approx("...and the real rule is back",
        nav_grid._segment_cost(lake_ctx, (870.0, 0.0), (900.0, 0.0)),
-       45.0 + nav_grid.SLOPE_COST_S_PER_M * 2.0)
+       _STRAIGHT, 1e-9)
 # The wilderness half: sand out in the open, no footprint anywhere near it.
 terrain.save_area({"kind": "sand",
                    "polygon": [[1200, -20], [1240, -20], [1240, 20],

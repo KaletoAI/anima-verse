@@ -36,6 +36,7 @@ a lattice::
     areas (strongest deflection)      the authored height polygons, |max| rule
       → micro-relief (ADDITIVE)       the painted kinds' own small hills
       → STAMPS: water carve           every water polygon sinks its bed
+      → STAMPS: bank clamp            …and holds the ground OUTSIDE it up
       → STAMPS: location plateaus     every BUILT location stamps its plot
 
 That is the whole point of the rewrite. The old bake had two steps that
@@ -47,7 +48,7 @@ point). With every parameter in metres, ANY lattice — the 2 m tile, the
 overview, any mip level — evaluates the same function and the answers agree at
 shared lattice points BY CONSTRUCTION, not by luck.
 
-**THE STAMPS.** Two of them, in this order:
+**THE STAMPS.** Three of them, in this order:
 
 * **Water carve** (§ A16.3): a painted area of a WATER kind carries a mirror
   PROFILE (:class:`WaterProfile`), a ``water_depth_m`` and a ``shore_ramp_m``.
@@ -63,6 +64,14 @@ shared lattice points BY CONSTRUCTION, not by luck.
   that buys — deeper than the shore ramp the ground is at least ``ε`` below the
   mirror AT THAT POINT, in EVERY raster — is what makes "distant terrain pokes
   through the water" impossible in the data instead of impossible in a shader.
+* **The bank clamp** (v4, 2026-08-24): the OTHER half of that shore. In the band
+  of ``shore_ramp_m`` metres OUTSIDE the polygon the ground is held at at least
+  the mirror of the nearest outline point plus :data:`WATER_BANK_LIP_M` — a lerp
+  whose minimum fades to nothing at the outer edge of the band, so the band
+  closes without a wall. Micro-relief that would dip below the mirror right at
+  the rim is swallowed; ground already higher is untouched. Without it the water
+  plane stood on nothing wherever the meadow next door happened to dip, which
+  reads as water floating in the air.
 * **Location plateaus** (§ G5): every location that draws a BUILT floor
   stamps its plot flat. Not a flag any more —
   ``models.heightfield.placed_footprints`` hands out every location with a
@@ -128,7 +137,13 @@ logger = get_logger("heightfield")
 #: mirror follows the ground it runs over and its carve stops digging a canyon
 #: on the way to a cliff. Same stroke, same clicks, different bed — the counter
 #: is what makes every client refetch and every stored raster rebuild.
-HEIGHT_BAKE_VERSION = 3
+#:
+#: v4 (2026-08-24): THE BANK CLAMP. The ground in the ``shore_ramp_m`` band
+#: OUTSIDE a water polygon is guaranteed to reach the mirror plus
+#: :data:`WATER_BANK_LIP_M`, so a micro-relief dip beside a river can no longer
+#: undercut the mirror and leave the water standing in the air. Not one authored
+#: byte changes; every shore of every existing world comes out different.
+HEIGHT_BAKE_VERSION = 4
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -213,6 +228,25 @@ WATER_DEPTH_MAX_M = 20.0
 WATER_SHORE_RAMP_DEFAULT_M = 3.0
 WATER_SHORE_RAMP_MIN_M = 0.0
 WATER_SHORE_RAMP_MAX_M = 20.0
+
+#: How far ABOVE the mirror the ground at the water's edge is guaranteed to
+#: sit, in metres — the lip of the bank that contains the bed
+#: (:meth:`HeightModel._bank_clamp`, v4).
+#:
+#: TEN CENTIMETRES IS A HAND'S WIDTH OF BANK OVER THE MIRROR. It has to be
+#: strictly positive, because at exactly the mirror the water plane and the
+#: ground are coplanar and z-fighting decides pixel by pixel which of the two a
+#: viewer sees. It has to stay SMALL, because it is applied at the outline
+#: itself: anything a walker would notice as a step would turn every shoreline
+#: into a kerb, and the walking gate reads the same ``h_final``. A hand's width
+#: is under the noise of the micro-relief it exists to swallow and an order of
+#: magnitude under the shallowest legal bed (:data:`WATER_DEPTH_MIN_M` = 0.2),
+#: so the bank never rises above the water it borders.
+#:
+#: IT NEEDS NO SIGNATURE OF ITS OWN. Like every constant of this module it
+#: rides :data:`HEIGHT_BAKE_VERSION`, which IS the hashed input for "the rule
+#: changed while the data did not" (``models.heightfield.height_sig``).
+WATER_BANK_LIP_M = 0.1
 
 #: The mip levels a tile reports an error bound for, in metres (§ G2). Each is
 #: a multiple of :data:`TILE_STEP_M` AND divides the tile edge, so the coarse
@@ -1431,10 +1465,27 @@ def _inside_ring(x: float, z: float, ring: List[Tuple[float, float]]) -> bool:
     return inside
 
 
-def _ring_edge_distance(x: float, z: float,
-                        ring: List[Tuple[float, float]]) -> float:
-    """:func:`edge_distance` on a PARSED ring — distance to the OUTLINE."""
+def _ring_nearest_point(x: float, z: float,
+                        ring: List[Tuple[float, float]]
+                        ) -> Tuple[float, float, float]:
+    """THE distance-to-the-outline measure of this module, once — as
+    ``(distance, nearest x, nearest z)``.
+
+    It answers WHERE as well as HOW FAR because the bank clamp
+    (:meth:`HeightModel._bank_clamp`) needs the mirror at the nearest point ON
+    the outline, not the mirror extrapolated to where the walker stands: past
+    the ends of a river's axis ``water_level_at`` clamps to the end level, and a
+    band point beside the upstream tip would otherwise be clamped against a
+    level the water does not have there.
+
+    :func:`_ring_edge_distance` is this function with the position dropped.
+    There is deliberately no second loop for the distance-only case: the outside
+    band and the inside carve must measure the shore with the SAME arithmetic,
+    or the two would disagree about where the ramp begins by a rounding.
+    """
     best = math.inf
+    best_x = 0.0
+    best_z = 0.0
     j = len(ring) - 1
     for i in range(len(ring)):
         ax, az = ring[j]
@@ -1442,18 +1493,27 @@ def _ring_edge_distance(x: float, z: float,
         dx, dz = bx - ax, bz - az
         len2 = dx * dx + dz * dz
         if len2 < 1e-18:
-            d = math.hypot(x - ax, z - az)
+            px, pz = ax, az
         else:
             t = ((x - ax) * dx + (z - az) * dz) / len2
             if t < 0.0:
                 t = 0.0
             elif t > 1.0:
                 t = 1.0
-            d = math.hypot(x - (ax + t * dx), z - (az + t * dz))
+            px, pz = ax + t * dx, az + t * dz
+        d = math.hypot(x - px, z - pz)
         if d < best:
             best = d
+            best_x = px
+            best_z = pz
         j = i
-    return best
+    return best, best_x, best_z
+
+
+def _ring_edge_distance(x: float, z: float,
+                        ring: List[Tuple[float, float]]) -> float:
+    """:func:`edge_distance` on a PARSED ring — distance to the OUTLINE."""
+    return _ring_nearest_point(x, z, ring)[0]
 
 
 def _ring_centroid(ring: Sequence[Tuple[float, float]]) -> Tuple[float, float]:
@@ -1567,7 +1627,15 @@ class HeightModel:
         self.water_depth_by_area: Dict[str, float] = {}
         self.water: List[WaterStamp] = self._build_water(terrain_areas,
                                                          terrain_catalog)
-        self._water_index = _BoxIndex([w[1] for w in self.water])
+        # THE INDEX IS OVER THE BANK BOX, not over the outline's (v4): since
+        # the bank clamp a water polygon writes ``shore_ramp_m`` metres OUTSIDE
+        # its rim as well, and an index that only knew the outline would drop
+        # the bank of every water whose rim lies in another bucket — the same
+        # bug the plateau index carries its ramp box for. The carve is
+        # unaffected: it asks ``_inside_ring`` of every candidate anyway, so the
+        # wider box only ever costs it a handful of rejected candidates.
+        self._water_index = _BoxIndex(
+            [self.water_bank_box(i) for i in range(len(self.water))])
         self._water_fast = [(_ring(w[0]) or [], w[2], w[3], w[4])
                             for w in self.water]
         self.plateaus: List[PlateauStamp] = self._build_plateaus(footprints)
@@ -1985,17 +2053,45 @@ class HeightModel:
         _cx, _cz, _yaw, _pts, box, _h0, width = self.plateaus[index]
         return _grown(box, width)
 
+    def water_bank_box(self, index: int) -> Tuple[float, float, float, float]:
+        """The world box a water stamp can write into — its outline PLUS the
+        bank band outside it (v4).
+
+        The same relation :meth:`plateau_ramp_box` has to a plot: since the bank
+        clamp, a water reaches ``shore_ramp_m`` metres beyond its own rim, and
+        both the index and :meth:`shaped_boxes` have to know it. A world whose
+        grid stopped at the outline would answer the flat 0 exactly where the
+        bank is supposed to rise.
+        """
+        _polygon, box, _profile, _depth, ramp = self.water[index]
+        return _grown(box, max(0.0, ramp))
+
     # ── h_final ─────────────────────────────────────────────────────────
 
     def final(self, x: float, z: float) -> float:
         """``h_final`` at one point — the whole pipeline, in order.
 
-        areas → micro-relief → water carve → plateaus. Every step is metre
-        parametrised, so this answer does not know and cannot know which lattice
-        (if any) it is being sampled on.
+        areas → micro-relief → water carve → BANK CLAMP → plateaus. Every step
+        is metre parametrised, so this answer does not know and cannot know
+        which lattice (if any) it is being sampled on.
+
+        WHY THE CLAMP SITS EXACTLY THERE (v4). It is a statement about the
+        GROUND beside the water, so it has to run after everything that shapes
+        that ground — the height areas and the micro-relief both live in
+        :meth:`natural`, and a clamp before them would be overwritten by the
+        very dip it exists to swallow. It runs after :meth:`_carve` because the
+        carve is the only authority on the bed and the clamp must be able to see
+        that it is standing outside the polygon. And it runs BEFORE
+        :meth:`_stamp`, because a plateau is an ASSIGNMENT: a built floor is
+        flat by decree (§ A16.4), and a bank poking up through a plot's floor
+        would be exactly the defect the planing exists to prevent. A location
+        built over a shore therefore keeps its level floor, and the shoreline it
+        cuts through is that plot's problem to author, not the bake's to
+        override.
         """
         h = self.natural(x, z)
         h = self._carve(h, x, z)
+        h = self._bank_clamp(h, x, z)
         return self._stamp(h, x, z)
 
     def _carve(self, h: float, x: float, z: float) -> float:
@@ -2032,6 +2128,74 @@ class HeightModel:
                 h = bed
         return h
 
+    def _bank_clamp(self, h: float, x: float, z: float) -> float:
+        """THE BANK holds the mirror in (v4, 2026-08-24 finding).
+
+        AT THE WATER'S EDGE THE GROUND BESIDE IT IS ALWAYS THE HIGHEST THING —
+        that is what a bed IS. The carve only ever pushes ground DOWN and only
+        INSIDE the polygon, so nothing used to stop the micro-relief of the
+        meadow next door from dipping below the mirror right at the rim: the
+        water plane then stands on nothing for a stretch and reads as floating
+        in the air. The clamp is the missing half of the shore, and it is a
+        guarantee about the ground, not a shader trick.
+
+        THE BAND is the ``shore_ramp_m`` metres OUTSIDE the outline — the same
+        width the bed uses inside it, so a water carries ONE shore number and
+        the two halves of it are symmetric. Within the band::
+
+            d      = distance to the nearest point N on the outline
+            floor  = water_level_at(N) + WATER_BANK_LIP_M
+            h      = max(h, floor + (h − floor) · (d / shore_ramp_m))
+
+        i.e. the clamp MINIMUM ITSELF FADES, linearly, from the full lip at the
+        outline to the untouched ground at the band's outer edge. That is the
+        whole reason it is a lerp and not a plain ``max(h, floor)``: a constant
+        minimum over a 3 m band would end in a vertical wall wherever the ground
+        outside the band still lies below the mirror — one defect traded for
+        another, and the walking gate would read the wall. At ``d = ramp`` the
+        target IS ``h``, so the band closes without a seam by construction.
+
+        GROUND THAT IS ALREADY HIGHER IS NEVER TOUCHED: the target is a convex
+        combination of ``floor`` and ``h``, so for ``h ≥ floor`` it can never
+        exceed ``h`` and the ``max`` keeps the hillside exactly as authored.
+        The clamp raises, it never levels.
+
+        THE LEVEL COMES FROM THE OUTLINE, not from the walker's own (x, z)
+        (:func:`_ring_nearest_point`): beside the upstream tip of a river the
+        axis parameter is already clamped to the end of the profile, and asking
+        the mirror where the bank stands would carry the end level sideways
+        across the landscape instead of holding the bank at the water it
+        actually borders.
+
+        INSIDE ANY WATER THE BED STAYS THE CARVE'S. A point inside a polygon is
+        answered unchanged — including a point in the bank band of a lake that
+        lies inside the river feeding it, where raising the ground would be the
+        clamp fighting the carve over the same square metre. Where two BANDS
+        overlap, every candidate is measured against the SAME incoming ``h`` and
+        the largest wins; accumulating them in sequence would make the answer
+        depend on the order the areas were painted in.
+        """
+        if not self.water:
+            return h
+        fast = self._water_fast
+        raised = h
+        for idx in self._water_index.at(x, z):
+            ring, water_profile, _depth, ramp = fast[idx]
+            if not ring:
+                continue
+            if _inside_ring(x, z, ring):
+                return h
+            if ramp <= 0.0:
+                continue
+            d, nx, nz = _ring_nearest_point(x, z, ring)
+            if d >= ramp:
+                continue
+            floor = water_level_at(water_profile, nx, nz) + WATER_BANK_LIP_M
+            target = floor + (h - floor) * (d / ramp)
+            if target > raised:
+                raised = target
+        return raised
+
     def _stamp(self, h: float, x: float, z: float) -> float:
         """The plateau stamps, in their order (largest area first).
 
@@ -2065,8 +2229,8 @@ class HeightModel:
         """The union box of everything that can move a height away from 0 —
         or None for a world that shapes nothing.
 
-        Height areas, relief-CARRYING painted areas, water polygons and every
-        plateau's outline plus its ramp. It is a SUPERSET of
+        Height areas, relief-CARRYING painted areas, water polygons plus their
+        bank band and every plateau's outline plus its ramp. It is a SUPERSET of
         "where the ground is not flat", which is the property the tile index and
         the grid growth both hang on: outside it the world is answered 0 without
         rastering anything.
@@ -2080,7 +2244,7 @@ class HeightModel:
         whole rectangle between."""
         boxes = [b for _a, b in self.boxes]
         boxes += [e[2] for e in self.relief if e[1] is not None]
-        boxes += [w[1] for w in self.water]
+        boxes += [self.water_bank_box(i) for i in range(len(self.water))]
         boxes += [self.plateau_ramp_box(i) for i in range(len(self.plateaus))]
         return boxes
 

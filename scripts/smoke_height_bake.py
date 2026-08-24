@@ -82,6 +82,24 @@ the clicks are bends, and they are never dropped.
 
 Section [9] is the deletion proof of the fifth stage.
 
+Section [10] is THE BANK CLAMP (v4, finding 2026-08-24: "beside the river the
+water floats in the air"). The carve only ever pushes ground DOWN and only
+INSIDE the polygon, so nothing stopped the ground right OUTSIDE the rim from
+lying below the mirror — and there the water plane ends on nothing. The rule,
+binding: at the water's edge the adjacent ground is always the highest thing,
+because that is what contains the bed. In the ``shore_ramp_m`` band OUTSIDE the
+outline::
+
+    d      = distance to the nearest point N on the OUTLINE
+    floor  = water_level_at(N) + WATER_BANK_LIP_M      (lip = 0.10 m)
+    h      = max(h, floor + (h - floor) · d/shore_ramp_m)
+
+The clamp MINIMUM itself fades: full lip at the outline, nothing at the band's
+outer edge, so no wall appears where the band ends. It runs AFTER the areas and
+the micro-relief (it is a guarantee about the FINAL ground) and BEFORE the
+plateaus (a built floor is flat by decree), and INSIDE any water polygon it does
+not run at all — there the bed belongs to the carve.
+
 [1] THE WATER CARVE (§ G4).  Inside a water polygon
 
         h = min(h, water_level - depth · smoothstep(min(d_in/shore_ramp, 1)))
@@ -491,8 +509,15 @@ near("…so its centre bed is 6.0 - 2.0", MODEL.final(140.0, 140.0), 4.0)
 near("…and its west rim (120,140) keeps NATURAL 8.0 (already under 6.0? no)",
      MODEL.final(120.0, 140.0), 6.0)
 # (120,140) is ON the outline: profile 0, bed = 6.0, NATURAL = 8.0 -> 6.0.
-near("…while (160,140) on the east rim is already at 4.0 and stands",
-     MODEL.final(160.0, 140.0), 4.0)
+# (160,140) is on the EAST edge, and by the same ray-cast rule that is OUTSIDE
+# the ring — so it is not a carve probe at all but a BANK probe (v4, section
+# [10]). Its natural height is 4.0, two metres UNDER the mirror 6.0: the lake's
+# east bank was the float the finding describes, written down here since E1 and
+# read as "and stands". At d = 0 the clamp lifts it to level + lip.
+near("…while (160,140) on the east rim was 2 m UNDER the mirror — the bank "
+     "clamp lifts it to 6.0 + 0.1", MODEL.final(160.0, 140.0), 6.1)
+near("…and that is exactly the lip over the mirror",
+     MODEL.final(160.0, 140.0) - 6.0, hf.WATER_BANK_LIP_M, 1e-12)
 
 print("\n[2b] the EFFECTIVE level is reported additively (E1b)")
 from app.core import terrain_types  # noqa: E402
@@ -1696,6 +1721,162 @@ _dry = WO._sanitize_room_layout({"x": 0, "y": 0, "w": 4, "d": 4,
                             "surfaces": {"floor": "sand"}})
 check("...while a dry floor kind is untouched", _dry.get("surfaces"),
       {"floor": "sand"})
+
+
+# ── [10] THE BANK CLAMP: the ground holds the mirror in (v4) ────────────
+print("\n[10] the bank clamp — at the water's edge the ground is the highest")
+# THE FIXTURE, again on its own model, and deliberately made of EXACT numbers:
+# a height area with falloff 0 is a step, so the ground beside the water is one
+# literal and every expectation below is arithmetic on it rather than on noise.
+#
+#   BANK_WATER  square (0,0)-(40,40), kind "lake", water_level 1.0,
+#               water_depth_m 2.0, shore_ramp_m 3.0
+#   DIP         height area (40,0)-(60,20), height_m -0.4, falloff_m 0
+#               -> the ground EAST of the water's south half is exactly -0.4
+#   RISE        height area (40,20)-(60,40), height_m  2.0, falloff_m 0
+#               -> the ground EAST of the water's north half is exactly  2.0
+#
+# THE MIRROR is authored, so the lake is the one-knot profile and
+# water_level_at answers the constant 1.0 anywhere on the plane. With the lip
+#
+#     floor = 1.0 + WATER_BANK_LIP_M = 1.0 + 0.1 = 1.1
+#
+# THE PROBES all sit on the EAST edge (x >= 40), where a point at x = 40 is
+# OUTSIDE the ring by the ray-cast rule — the east edge's own crossing needs
+# x < 40 — so d = 0 is reachable from outside and "at the outline" is a probe
+# and not a limit.
+#
+#     target(d) = floor + (h - floor) · d/3 ,  h_final = max(h, target)
+#
+#   (40.0, 10) d = 0.0  t = 0    -> target 1.1                    -> 1.1
+#   (40.5, 10) d = 0.5  t = 1/6  -> 1.1 + (-1.5)/6 = 1.1 - 0.25   -> 0.85
+#   (41.5, 10) d = 1.5  t = 1/2  -> 1.1 + (-1.5)/2 = 1.1 - 0.75   -> 0.35
+#   (43.0, 10) d = 3.0  t = 1    -> target = h = -0.4             -> -0.4
+#              i.e. the band CLOSES on the untouched ground — no seam, which
+#              is the whole reason the minimum fades instead of being flat
+#   (43.5, 10) d = 3.5 > ramp    -> outside the band entirely     -> -0.4
+#   (40.5, 30) h = 2.0 already:  target = 1.1 + 0.9/6 = 1.25 < 2.0 -> 2.0
+#              (the target is a convex combination of floor and h, so ground
+#               above the floor can never be pulled DOWN by the clamp)
+#
+# INSIDE the polygon the bed stays the carve's, untouched:
+#   (20, 20) d_in = 20 >= 3 -> bed = 1.0 - 2.0            = -1.0 ; NATURAL 0
+#   (39, 20) d_in = 1, t = 1/3, smoothstep(1/3) = (1/9)·(3 - 2/3) = 7/27
+#            -> bed = 1.0 - 2.0·7/27 = 13/27 = 0.481481…, and the MIN keeps
+#            the NATURAL 0.0 there (the ground already lies under the mirror).
+#            A clamp WITHOUT the inside guard would read d = 1 outside-style
+#            and raise that 0.0 to 1.1 + (0 - 1.1)/3 = 11/15 = 0.733333… —
+#            a wall standing IN the lake. Asserted absent.
+BANK_WATER = {"id": "ta_bank_lake", "kind": "lake", "z_order": 0,
+              "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]],
+              "meta": {"water_level": 1.0, "water_depth_m": 2.0,
+                       "shore_ramp_m": 3.0}}
+DIP = {"id": "ha_dip", "polygon": [[40, 0], [60, 0], [60, 20], [40, 20]],
+       "height_m": -0.4, "falloff_m": 0.0, "meta": {}}
+RISE = {"id": "ha_rise", "polygon": [[40, 20], [60, 20], [60, 40], [40, 40]],
+        "height_m": 2.0, "falloff_m": 0.0, "meta": {}}
+
+BMODEL = hf.build_model([DIP, RISE], [], [BANK_WATER], CATALOG)
+LIP = hf.WATER_BANK_LIP_M
+FLOOR = 1.0 + LIP
+
+
+def unclamped(model, x, z):
+    """``h_final`` with the bank clamp taken out — the RED counterfactual.
+
+    The pipeline of v3, spelled out: natural -> carve -> plateaus. It is the
+    landscape the finding was reported on, and nothing but the missing middle
+    step separates it from what the model answers now.
+    """
+    return model._stamp(model._carve(model.natural(x, z), x, z), x, z)
+
+
+print("\n[10a] the rule change is versioned — v3 -> v4")
+check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 4)
+near("the lip is a hand's width of bank over the mirror", LIP, 0.1, 1e-12)
+check("...and it is under the shallowest legal bed",
+      LIP < hf.WATER_DEPTH_MIN_M, True)
+
+print("\n[10b] the exact fade, probe by probe (ground -0.4, mirror 1.0)")
+near("NATURAL east of the water is the authored step", BMODEL.natural(40.5,
+                                                                     10.0),
+     -0.4, 1e-12)
+near("d = 0.0 AT THE OUTLINE -> level + lip exactly", BMODEL.final(40.0, 10.0),
+     1.1, 1e-12)
+near("d = 0.5 -> 1.1 - 0.25", BMODEL.final(40.5, 10.0), 0.85, 1e-12)
+near("d = 1.5 -> 1.1 - 0.75", BMODEL.final(41.5, 10.0), 0.35, 1e-12)
+near("d = 3.0 -> the band closes ON the untouched ground",
+     BMODEL.final(43.0, 10.0), -0.4, 1e-12)
+near("d = 3.5 -> outside the band, untouched", BMODEL.final(43.5, 10.0), -0.4,
+     1e-12)
+near("ground already at 2.0 STAYS 2.0", BMODEL.final(40.5, 30.0), 2.0, 1e-12)
+check_not("...and is NOT pulled down to the fading target",
+          round(BMODEL.final(40.5, 30.0), 9), 1.25)
+
+print("\n[10c] no seam at either end of the band")
+# The clamp is continuous by construction: at d = ramp the target IS h. Two
+# probes a millimetre apart across that edge differ by less than a millimetre.
+near("|h(2.999) - h(3.001)| is a rounding, not a step",
+     abs(BMODEL.final(42.999, 10.0) - BMODEL.final(43.001, 10.0)), 0.0, 1e-3)
+near("...and the target at d = ramp is the ground itself",
+     BMODEL.final(43.0, 10.0) - BMODEL.natural(43.0, 10.0), 0.0, 1e-12)
+
+print("\n[10d] INSIDE the polygon the bed is the carve's, untouched")
+near("deep water: level - depth", BMODEL.final(20.0, 20.0), -1.0, 1e-12)
+near("a metre inside the rim: the MIN keeps the natural 0.0",
+     BMODEL.final(39.0, 20.0), 0.0, 1e-12)
+check_not("...and NOT the 11/15 a clamp without the inside guard would build",
+          round(BMODEL.final(39.0, 20.0), 9), round(11.0 / 15.0, 9))
+near("the carve depth itself is what it always was",
+     unclamped(BMODEL, 20.0, 20.0), -1.0, 1e-12)
+
+print("\n[10e] RED: with the clamp gone the water stands in the air")
+near("v3 ground at the water's own edge", unclamped(BMODEL, 40.0, 10.0), -0.4,
+     1e-12)
+near("...i.e. the mirror hangs 1.4 m above it",
+     1.0 - unclamped(BMODEL, 40.0, 10.0), 1.4, 1e-12)
+check("v4 puts that same edge ABOVE the mirror",
+      BMODEL.final(40.0, 10.0) > 1.0, True)
+
+print("\n[10f] the bank band is part of what the world SHAPES")
+# A grid that stopped at the outline would answer the flat 0 exactly where the
+# bank rises, so the box the index and the tile list read has to carry the ramp.
+check("water_bank_box = outline grown by shore_ramp_m",
+      BMODEL.water_bank_box(0), (-3.0, -3.0, 43.0, 43.0))
+_sb = BMODEL.shaped_bounds()
+check("...and shaped_bounds contains it", _sb[0] <= -3.0 and _sb[2] >= 43.0,
+      True)
+
+print("\n[10g] the finding itself: a MICRO-RELIEF dip at the rim")
+# The configuration that produced it: a meadow with its own hills painted OVER
+# the water, so `_kind_at` answers "grass" inside the polygon too and the
+# relief's edge rule never fires at the rim. Amplitude 1.0 on flat ground, so
+# the un-clamped ground on the rim is somewhere in (-1, 1) — BELOW the mirror
+# 1.0 at every one of the 39 probes, which is the water floating in the air.
+MEADOW = {"id": "ta_meadow", "kind": "g", "z_order": 1,
+          "polygon": [[-20, -20], [80, -20], [80, 80], [-20, 80]],
+          "meta": {"relief_amplitude_m": 1.0, "relief_wave_m": 16.0}}
+GMODEL = hf.build_model([], [], [BANK_WATER, MEADOW], CATALOG)
+RIM = [(40.0, float(z)) for z in range(1, 40)]
+_floated = [p for p in RIM if unclamped(GMODEL, *p) < 1.0]
+_held = [p for p in RIM if abs(GMODEL.final(*p) - FLOOR) > 1e-12]
+_deepest = min(unclamped(GMODEL, *p) for p in RIM)
+check("every rim probe floated before the clamp", len(_floated), len(RIM))
+check(f"the deepest lay {round(1.0 - _deepest, 3)} m UNDER the mirror — more "
+      "than the half metre claimed", _deepest < 0.5, True)
+check("every rim probe now sits at exactly level + lip", _held, [])
+near("...which is 1.1", GMODEL.final(40.0, 20.0), 1.1, 1e-12)
+near("and one wave away from the water the ground is the relief again — "
+     "final minus natural", GMODEL.final(60.0, 20.0)
+     - GMODEL.natural(60.0, 20.0), 0.0, 1e-12)
+
+print("\n[10h] the lip needs no signature of its own — it rides the version")
+from app.models import heightfield as store2  # noqa: E402
+import inspect as _inspect  # noqa: E402
+_basis_src = _inspect.getsource(store2.water_basis).lower()
+check("water_basis names no lip", "lip" in _basis_src, False)
+check("height_sig hashes the code version",
+      "code_version" in _inspect.getsource(store2.height_sig), True)
 
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
