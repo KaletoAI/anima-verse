@@ -5,6 +5,21 @@
  * order, same corner rotation, same rounding — change both or neither.
  */
 
+/** The three real edges in metres, in the order the forms show them. */
+export type DimKey = 'width_m' | 'depth_m' | 'height_m'
+
+/** …as a list, for the loops that have to touch all three. */
+export const DIM_KEYS: DimKey[] = ['width_m', 'depth_m', 'height_m']
+
+/**
+ * The window a stored edge lives in — `props._coerce_dim_m` keeps `(0, 100]`
+ * rounded to three decimals, so 0.001 m is the smallest number that survives
+ * the trip: anything under it rounds to zero there, and a zero CLEARS the key
+ * instead of storing a size.
+ */
+export const DIM_MIN_M = 0.001
+export const DIM_MAX_M = 100
+
 /**
  * `[width(x), height(y), depth(z)]` = the AABB extents of the raw mesh box
  * AFTER the orientation fix: the 8 corners are rotated by Rx·Ry·Rz (degrees,
@@ -47,4 +62,57 @@ export function orientedDims(bbox: [number, number, number],
   }
   const r5 = (v: number) => Math.round(v * 100000) / 100000
   return [r5(hi[0] - lo[0]), r5(hi[1] - lo[1]), r5(hi[2] - lo[2])]
+}
+
+const round3 = (v: number) => Math.round(v * 1000) / 1000
+const clampM = (v: number) => Math.min(Math.max(v, DIM_MIN_M), DIM_MAX_M)
+
+/**
+ * ONE edited edge, three answers — the size trio rescaled along a fixed
+ * aspect (user decision 2026-08-24: "change the height of variant 2 and the
+ * width and the depth follow").
+ *
+ * WHY ALL THREE MOVE. A prop is never squeezed on one axis: `place()` in
+ * `@anima/scene-render` scales the mesh UNIFORMLY so that its largest oriented
+ * edge becomes `max(width, depth, height)`. The trio therefore has exactly one
+ * degree of freedom — it says how BIG the object is, and its ratios say what
+ * SHAPE it is. Moving one number alone would not resize the object, it would
+ * only rewrite what the other two claim about a shape that never changed.
+ *
+ * `ratios` is any triple with the variant's proportions — a measured mesh box
+ * (via `orientedDims`) or the dims it already renders at; only the quotients
+ * matter, never the unit. The edited value is clamped and rounded to what the
+ * server really keeps (`DIM_MIN_M`…`DIM_MAX_M`, three decimals) BEFORE the
+ * factor is taken, so the stored trio is exactly proportional — no drift
+ * between what was sent and what comes back.
+ *
+ * Returns `null` when the redistribution has no meaning: a value that is not a
+ * positive number, or a ratio source with a non-positive edge (a flat mesh
+ * box). The caller then writes the edited field alone rather than a zero.
+ *
+ * A follower that would leave the window is clamped, and the aspect no longer
+ * holds exactly — a visible number the admin can correct, which beats silently
+ * storing a 400 m edge.
+ */
+export function variantRedistribute(
+  editedKey: DimKey,
+  value: number,
+  ratios: Record<DimKey, number>,
+): Record<DimKey, number> | null {
+  if (!Number.isFinite(value) || value <= 0) return null
+  const base = Number(ratios?.[editedKey])
+  if (!Number.isFinite(base) || base <= 0) return null
+  const edited = round3(clampM(value))
+  const factor = edited / base
+  const out = {} as Record<DimKey, number>
+  for (const key of DIM_KEYS) {
+    if (key === editedKey) {
+      out[key] = edited
+      continue
+    }
+    const r = Number(ratios[key])
+    if (!Number.isFinite(r) || r <= 0) return null
+    out[key] = round3(clampM(r * factor))
+  }
+  return out
 }

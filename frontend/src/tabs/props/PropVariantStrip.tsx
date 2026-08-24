@@ -31,14 +31,24 @@
  * sapling beside the grown pine), clearing the field gives the inherited value
  * back. The server stores exactly that: a number when there is one, no key at
  * all otherwise.
+ *
+ * THE THREE MOVE TOGETHER (2026-08-24, user decision): editing one of them
+ * pulls the other two along the variant's proportions, exactly like the prop
+ * form above — and all three go out in ONE call. The reason is not symmetry
+ * with that form, it is the renderer: `place()` scales a prop UNIFORMLY to
+ * `max(W, D, H)`, so the trio has one degree of freedom (how big) plus a fixed
+ * aspect (what shape). Editing one number alone would resize nothing and only
+ * make the other two lie about the mesh. For the same reason clearing ANY of
+ * the three clears ALL THREE: two thirds of an override match no aspect ratio,
+ * so "back to the prop's size" is the only honest reading of a cleared field.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { DIM_KEYS, DIM_MAX_M, DIM_MIN_M, orientedDims, variantRedistribute,
+  type DimKey } from './dims'
 import type { PropDims, PropVariant } from './propTypes'
-
-type DimKey = 'width_m' | 'depth_m' | 'height_m'
 
 /** The three overridable dims in the prop form's own order. `label` is the
  *  short caption on the input, `title` the sentence behind it. */
@@ -49,7 +59,8 @@ const DIM_FIELDS: Array<{ key: DimKey; label: string; title: string }> = [
 ]
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
-  onChanged, generating = [], worldSeasons = [], currentSeason = '' }: {
+  onChanged, generating = [], worldSeasons = [], currentSeason = '',
+  shownBbox = null, rotation }: {
   propId: string
   /** Every variant, active or not, in order (from PropDetail's load). */
   variants: PropVariant[]
@@ -74,6 +85,14 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   worldSeasons?: string[]
   /** The season the world is in right now, for the "renders now" hint. */
   currentSeason?: string
+  /** RAW bounding box of the mesh the 3D preview currently has open — i.e. of
+   *  the SELECTED variant, measured on load (`PropDetail.shownBbox`). The one
+   *  true statement about that variant's proportions the client holds; `null`
+   *  while nothing is loaded, and then the stored dims stand in. */
+  shownBbox?: [number, number, number] | null
+  /** The prop's orientation fix, applied to `shownBbox` before it is read as
+   *  width/height/depth — the same turn every renderer makes. */
+  rotation?: { x?: number; y?: number; z?: number }
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -144,27 +163,80 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       next.length ? t('Seasons saved') : t('Season tag cleared'))
   }, [enc, run, t])
 
-  // Commit ONE size field of ONE variant. An empty or unusable input is not a
-  // size: it clears the override and the variant inherits the prop's value
-  // again — the same law the server stores by, so the field echoes back what
-  // was really kept. Nothing is sent when the value did not move.
+  // WHERE THE PROPORTIONS COME FROM — never the prop's box.
+  //
+  // The variant the preview has open is MEASURED: `shownBbox` is its raw mesh
+  // box, and the prop's orientation fix turns it into [width, height, depth]
+  // exactly as the prop form does it. That is the only true statement about
+  // THIS mesh the client holds, and it is the one that matters — a sapling's
+  // GLB is not a small pine, so redistributing a chip's height along the
+  // PROP's aspect would give it the grown tree's footprint.
+  //
+  // Every other chip has no mesh loaded, and the payload carries no per-variant
+  // box (`GET …/variants` sends dims, not geometry). Its `effective_dims` are
+  // the ratio source instead, and they ARE that variant's declared aspect: its
+  // own override where it has one, the prop's measured trio otherwise. Since
+  // every renderer sizes a variant by exactly those three numbers, rescaling
+  // along them keeps the object the shape it is rendered at — and the first
+  // edit of an inheriting variant is made against the mesh anyway, because the
+  // chip you are typing into is normally the one you are looking at.
+  const ratiosFor = useCallback((v: PropVariant): Record<DimKey, number> => {
+    if (v.index === selected && shownBbox) {
+      const [w, h, d] = orientedDims(shownBbox, rotation)
+      return { width_m: w, depth_m: d, height_m: h }
+    }
+    return {
+      width_m: v.effective_dims.width_m,
+      depth_m: v.effective_dims.depth_m,
+      height_m: v.effective_dims.height_m,
+    }
+  }, [rotation, selected, shownBbox])
+
+  // Commit ONE edited size field of ONE variant — and with it the other two.
+  //
+  // The trio is a resize of a known mesh, not three free numbers (see the
+  // module header), so the edited value drives and the other two follow the
+  // variant's proportions. All three are written in ONE call; the route takes
+  // the whole patch, so the round trip is a single 200 and the preview reads
+  // the answer as it already does.
+  //
+  // An empty or unusable input is not a size, and it clears ALL THREE at once:
+  // a partial override matches no aspect ratio any more, so the field means
+  // "as big as the prop again", nothing else. Nothing is sent when the trio
+  // did not move, nor when a cleared field had nothing stored to clear.
   const commitDim = useCallback((v: PropVariant, key: DimKey, raw: string) => {
     setDimDraft((d) => {
       const next = { ...d }
-      delete next[`${v.index}:${key}`]
+      // The whole row is rewritten by this commit, so no field of it keeps a
+      // draft — a stale one would show a number the server never got.
+      for (const k of DIM_KEYS) delete next[`${v.index}:${k}`]
       return next
     })
+    const stored = v.dims as PropDims
     const n = parseFloat(raw)
-    const value = Number.isFinite(n) && n > 0
-      ? Math.round(Math.min(n, 100) * 1000) / 1000
-      : null
-    const stored = (v.dims as PropDims)[key] ?? null
-    if (value === stored) return
+    if (!Number.isFinite(n) || n <= 0) {
+      if (!DIM_KEYS.some((k) => stored[k] !== undefined)) return
+      void run(
+        () => apiPost(`/world/props/${enc}/variants/${v.index}/dims`,
+          { width_m: null, depth_m: null, height_m: null }),
+        t('Size override cleared'))
+      return
+    }
+    // A ratio source with a flat edge (a mesh box measuring zero on one axis)
+    // redistributes to nothing usable — then the edited field goes out alone
+    // rather than a zero, and the other two stay where they are. Clamped and
+    // rounded to the same window the helper keeps, so this path cannot store a
+    // number the server would round away into a cleared key either.
+    const next: PropDims = variantRedistribute(key, n, ratiosFor(v))
+      ?? {
+        ...stored,
+        [key]: Math.round(Math.min(Math.max(n, DIM_MIN_M), DIM_MAX_M) * 1000) / 1000,
+      }
+    if (DIM_KEYS.every((k) => next[k] === stored[k])) return
     void run(
-      () => apiPost(`/world/props/${enc}/variants/${v.index}/dims`,
-        { [key]: value }),
-      value === null ? t('Size override cleared') : t('Variant size saved'))
-  }, [enc, run, t])
+      () => apiPost(`/world/props/${enc}/variants/${v.index}/dims`, next),
+      t('Variant size saved'))
+  }, [enc, ratiosFor, run, t])
 
   // Commit ONE variant's generation subject. Blank clears the override and
   // the variant renders from the prop's description again — the same law the
@@ -262,7 +334,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                     <label
                       key={f.key}
                       style={{ display: 'flex', alignItems: 'center', gap: 2 }}
-                      title={`${t(f.title)} — ${t('this variant only. Empty = as big as the prop itself ({n} m).').replace('{n}', String(v.effective_dims[f.key]))}`}
+                      title={`${t(f.title)} — ${t('this variant only. Empty = as big as the prop itself ({n} m).').replace('{n}', String(v.effective_dims[f.key]))} ${t('Edit one of the three and the other two follow this variant’s proportions — a prop is always scaled uniformly, so the trio says how big it is, its ratios say what shape. Clear any one of them and all three go back to inheriting.')}`}
                     >
                       <span className="ga-hint">{t(f.label)}</span>
                       <input
@@ -403,7 +475,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       <span className="ga-hint">
         {t('Several meshes of the SAME object — scattered copies pick one of them, so a wood is not one tree twenty times. ★ marks the primary variant, which is what anything that does not ask for a variant gets. The selected chip decides which variant the preview and the mesh gallery below show.')}
         {' '}
-        {t('W/D/H are that variant’s own size in metres. Leave them empty and the variant is as big as the prop above; fill one in and this version alone gets that measurement — a sapling beside the grown tree.')}
+        {t('W/D/H are that variant’s own size in metres. Leave them empty and the variant is as big as the prop above; fill one in and this version alone gets that measurement — a sapling beside the grown tree. The other two are pulled along its proportions, taken from the mesh in the preview for the selected chip and from its current size for the rest; clearing any one of the three drops all three back to the prop’s size.')}
         {' '}
         {t('The text field is what THIS variant’s next source image is rendered from. A new variant copies the prop’s description, so a version is an EDIT of it; clear the field and the variant renders from the prop’s text again.')}
         {worldSeasons.length ? (

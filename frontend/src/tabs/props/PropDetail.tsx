@@ -26,11 +26,9 @@ import { Model3DViewer } from '../characters/Model3DViewer'
 import { GroundOffsetGauge } from './GroundOffsetGauge'
 import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
-import { orientedDims } from './dims'
+import { orientedDims, type DimKey } from './dims'
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { PropFull, PropMarker, PropSourceImage, PropVariant } from './propTypes'
-
-type DimKey = 'width_m' | 'depth_m' | 'height_m'
 
 /**
  * The scale kit of the 3D preview — the 1.70 m reference figure beside the
@@ -1069,6 +1067,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             generating={generatingVariants}
             worldSeasons={worldSeasons}
             currentSeason={currentSeason}
+            // The proportions a variant's W/D/H redistribute along: the box of
+            // the mesh ON SCREEN, which belongs to the SELECTED chip. Every
+            // other chip falls back to its own stored dims inside the strip —
+            // what it must never use is the PROP's box.
+            shownBbox={shownBbox}
+            rotation={prop.rotation}
           />
 
           {/* The SELECTED variant's mesh gallery: every stored run, one active
