@@ -20,21 +20,23 @@
  * ============================================================================
  * [1] THE ID RANGE
  * ============================================================================
- * The panel has 21 switches, numbered 1..21 with no gaps. So:
- *   valid   : 1, 2, 20, 21
- *   invalid : 0, 22, -1, 3.5, NaN
- * Out-of-range ids are DROPPED, never clamped: a `22` in a shared link is
- * either a typo or a link from another client, and honouring it as `21` would
+ * The panel has 22 switches, numbered 1..22 with no gaps. So:
+ *   valid   : 1, 2, 21, 22
+ *   invalid : 0, 23, -1, 3.5, NaN
+ * Out-of-range ids are DROPPED, never clamped: a `23` in a shared link is
+ * either a typo or a link from another client, and honouring it as `22` would
  * be a state nobody chose.
  *
  * THE RANGE IS THE ONE THING THAT MOVES when a switch is added or retired, and
  * it moves in two places that have to agree: `ISO_MAX_ID` and the number of
- * entries in `ISOLATION_TOGGLES`. 21 here is hand-counted from that list. The
+ * entries in `ISOLATION_TOGGLES`. 22 here is hand-counted from that list. The
  * id 20 has been two different switches: "Terrain culling off" for one day
  * (2026-08-22, retired with the cull it switched off) and, since 2026-08-24,
  * "Fog off" for the exploration veil — the numbers are a suspect list, not a
- * register of everything this client has ever had. 21 is the newest of them
- * ("Impostor billboards hidden", the far half of the scatter on its own).
+ * register of everything this client has ever had. 21 is "Impostor billboards
+ * hidden" (the far half of the scatter on its own) and 22 is the newest,
+ * "Water lift off" — the terrain's max(h, w_level) vertex lift of Wasser v2
+ * K-A E3.
  *
  * ============================================================================
  * [2] `encodeIsolation` — ascending, deduplicated, comma-separated
@@ -48,8 +50,8 @@
  *   {3, 6, 3}       -> "3,6"         (a Set cannot hold 3 twice anyway)
  *   {2, 10, 1}      -> "1,2,10"      (numeric, not lexicographic: a string
  *                                     sort would give "1,10,2")
- *   {2, 21, 1}      -> "1,2,21"      (21 is the last switch, so it survives)
- *   {0, 3, 22}      -> "3"           (the invalid ids never reach the string)
+ *   {2, 22, 1}      -> "1,2,22"      (22 is the last switch, so it survives)
+ *   {0, 3, 23}      -> "3"           (the invalid ids never reach the string)
  *
  * ============================================================================
  * [3] `decodeIsolation` — strictly digits per token
@@ -67,11 +69,11 @@
  *   "+3"            -> []            (Number("+3") = 3 — same trap)
  *   "-3"            -> []
  *   "3px"           -> []
- *   "0,22,abc,,7"   -> [7]           (every other token fails a rule above)
+ *   "0,23,abc,,7"   -> [7]           (every other token fails a rule above)
  *   "1e1"           -> []            (Number("1e1") = 10; not digits)
  *
  * ROUND TRIP: decode(encode(S)) is S sorted ascending, for every S of valid
- * ids. Checked exhaustively below over all 2^21 = 2 097 152 subsets? No — over
+ * ids. Checked exhaustively below over all 2^22 = 4 194 304 subsets? No — over
  * a hand-picked spread plus 2 000 pseudo-random subsets, which is the same
  * statement at a five-hundredth of the cost.
  *
@@ -120,7 +122,7 @@
  */
 
 const MIN_ID = 1;
-const MAX_ID = 21;
+const MAX_ID = 22;
 const HASH_KEY = 'iso';
 
 // ── the reimplementation the checks are made against ────────────────────────
@@ -190,19 +192,20 @@ function eq(label, got, want) {
 
 // ── [1] the id range ────────────────────────────────────────────────────────
 
-console.log('[1] the id range 1..21, dropped and never clamped');
+console.log('[1] the id range 1..22, dropped and never clamped');
 eq('(a) 1 is an id', isId(1), true);
 eq('…19 is an id (Wireframe terrain)', isId(19), true);
 eq('…20 is an id (Fog off)', isId(20), true);
-eq('…21 is an id (Impostor billboards hidden, the last one)', isId(21), true);
+eq('…21 is an id (Impostor billboards hidden)', isId(21), true);
+eq('…22 is an id (Water lift off, the last one)', isId(22), true);
 eq('…0 is not', isId(0), false);
-eq('…22 is not', isId(22), false);
+eq('…23 is not', isId(23), false);
 eq('…-1 is not', isId(-1), false);
 eq('…3.5 is not', isId(3.5), false);
 eq('…NaN is not', isId(NaN), false);
-eq('(b) 22 is DROPPED by encode, not clamped to 21', encode([22]), '');
-eq('…and by decode', decode('22'), []);
-eq('…while 21 passes both', decode(encode([21])), [21]);
+eq('(b) 23 is DROPPED by encode, not clamped to 22', encode([23]), '');
+eq('…and by decode', decode('23'), []);
+eq('…while 22 passes both', decode(encode([22])), [22]);
 
 // ── [2] encode ──────────────────────────────────────────────────────────────
 
@@ -212,8 +215,8 @@ eq('…one id', encode([3]), '3');
 eq('…sorted ascending', encode([6, 3]), '3,6');
 eq('…deduplicated', encode([3, 6, 3]), '3,6');
 eq('(d) NUMERIC order, not lexicographic', encode([2, 10, 1]), '1,2,10');
-eq('…and 21 sorts last, not between 1 and 2', encode([2, 21, 1]), '1,2,21');
-eq('(e) invalid ids never reach the string', encode([0, 3, 22]), '3');
+eq('…and 22 sorts last, not between 1 and 2', encode([2, 22, 1]), '1,2,22');
+eq('(e) invalid ids never reach the string', encode([0, 3, 23]), '3');
 
 // ── [3] decode ──────────────────────────────────────────────────────────────
 
@@ -231,12 +234,12 @@ eq('…RED: "+3" is dropped', decode('+3'), []);
 eq('…RED: "-3" is dropped', decode('-3'), []);
 eq('…RED: "3px" is dropped', decode('3px'), []);
 eq('…RED: "1e1" is dropped', decode('1e1'), []);
-eq('(h) a mixed line keeps only what is legal', decode('0,22,abc,,7'), [7]);
+eq('(h) a mixed line keeps only what is legal', decode('0,23,abc,,7'), [7]);
 
 console.log('\n…and the round trip decode(encode(S)) = sort(S)');
 const spread = [
-  [], [1], [20], [21], [1, 21], [3, 6], [6, 3], [2, 10, 1],
-  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+  [], [1], [21], [22], [1, 22], [3, 6], [6, 3], [2, 10, 1],
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
 ];
 let tripBad = 0;
 for (const s of spread) {

@@ -5784,9 +5784,55 @@ AUF dem Sprung, was das Beste ist, was eine Fläche kann.)
     Jede andere Regel („Wasser, wenn EINES der vier", „…wenn ALLE vier") wäre
     ein zweites Buch darüber, wo das Wasser steht.
 - `wlevelAt(pyr, x, z, k)` ist der CPU-Zwilling des GLSL, das E3 neben
-  `tlodHeight` stellen wird; die Uniformen `uTlodWater`, `uTlodWaterGeom`,
-  `uTlodWaterLevel` sind gebunden und aktuell, **werden aber von keinem Shader
-  gelesen**. Es gibt **keinen FERN-Zwilling** (Punkt 7 oben).
+  `tlodHeight` gestellt hat (`tlodWaterAt`); die Uniformen `uTlodWater`,
+  `uTlodWaterGeom`, `uTlodWaterLevel` sind gebunden und aktuell und werden seit
+  E3 **von der Wasser-Variante des Terrain-Programms gelesen** (Punkt 7a). Es
+  gibt **keinen FERN-Zwilling** (Punkt 7 oben).
+
+### 7a. Client (E3) — der Vertex-Hub, als ZWEITE Materialvariante
+
+Der Terrain-Vertex landet auf `y = max(h, w_level)`, wo das Raster einen Pegel
+hat. Vier Entscheidungen, alle in `client3d/src/scene/terrainLod.ts`:
+
+- **Zwei Programme, nicht eines.** Die Risiko-Regel aus `recherche-wasser-v2.md`
+  § 4 K-A ist bindend: trockener Boden darf für das Wasser nichts zahlen. Der
+  Besitzer baut deshalb ZWEI Materialien durch dieselbe Kette
+  (`ground.rebuildBase`), `patchTerrainLod(mat, water)` hängt den Hub nur an
+  eines davon, und der `customProgramCacheKey` des trockenen bleibt Zeichen für
+  Zeichen `…+terrain-lod` — three gibt ihm damit dasselbe `WebGLProgram` wie
+  vorher. Gezeichnet wird als zweiter Draw-Call aus einem zweiten
+  Instanz-Puffer, dessen Mesh KIND des trockenen ist (Sichtbarkeit und Lebens-
+  dauer bleiben „das Terrain", ganz).
+- **Das Tor ist die Kachelliste des Wasser-Rasters** (`nodeHasWater`): ein Stück
+  bekommt die Hub-Variante, wenn sein GESCHLOSSENES Rechteck eine Kachel mit
+  `water`-Feld berührt — `floor((x + size) / tile_m)`, ohne das `− 1e-6` von
+  `nodeBounds`. Damit gehört ein von zwei Stücken geteilter Vertex zu BEIDEN
+  Kachelspannen, beide laufen durch dasselbe Programm, und ein Riss an der Naht
+  ist konstruktiv unmöglich. (Der Server garantiert die andere Hälfte: eine
+  Kachel ohne `water`-Schlüssel hat in ihrem ganzen Fenster inklusive Rändern
+  keinen nassen Stützpunkt — `water_raster` antwortet sonst nicht None.)
+- **Der max wird PRO STUFE genommen, der Morph über das Paar**:
+  `y = mix( max(h₁,w₁), max(h₂,w₂), f )`, jede Lesung an ihrem eigenen
+  `nodeStep · 2^k`. Die andere Reihenfolge (erst die Spiegel mischen, dann ein
+  max) springt am Ufer um `level − h`, sobald `f` die 0 verlässt, weil die
+  maskierte Mischung eines nassen mit einem trockenen Texel für jedes Gewicht
+  > 0 trocken ist — gemessen 0,25 m auf der Ufer-Fixture.
+- **λ wird NIE gehoben.** `tlodMorphAt` misst weiter gegen `tlodHeight(p, 0.0)`,
+  also lesen beide Varianten dieselbe Morph-Koordinate und setzen einen
+  geteilten Vertex auf denselben Punkt.
+- **Trockentest ist `( w > h ) ? w : h`, nie `max()`**: das Sentinel ist das
+  `NaN` aus der Textur, und GLSL legt nicht fest, welchen Operanden `max` bei
+  einem NaN liefert.
+- **Statistik unangetastet.** `min`/`max`/`err` bleiben höhenrein (Punkt 5). Der
+  gehobene Spiegel kann über die Box eines Knotens ragen (höchstens um die
+  Wassertiefe dort) — das kostet nur LOD-DISTANZ, seit der Frustum-Cull weg ist,
+  und `|max(a,b) − max(c,d)| ≤ max(|a−c|,|b−d|)` hält den Stufenfehler unter
+  `max(err_h, err_w)`; der Carve schreibt die Spiegel-Variation ohnehin in das
+  Bett, ein gehobener Spiegel ist also FLACHER als das Bett, das er deckt.
+- **Noch keine Wasser-Schattierung** (E4): ein gehobenes Pixel wird als der
+  Boden gemalt, den es ersetzt. Die Polygon-Spiegel zeichnen in dieser Etappe
+  weiter (E5 löscht sie). Isolationsschalter **22 „Water lift off"**
+  (`uTlodNoWater`, Uniform statt Define) nimmt den Hub live heraus.
 
 ### 8. Die Beweise (§ B5a)
 
@@ -5799,3 +5845,5 @@ AUF dem Sprung, was das Beste ist, was eine Fläche kann.)
 | Statistik ist höhenrein | [12f] |
 | Client liest die Server-Tabellen zurück, maskierte Mischung | `client3d/scripts/smoke_world_height.mjs` [W1]–[W4] |
 | Pyramide: Teilmenge, Sentinel, Ringverlust je Stufe, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [15] |
+| Hub `max(h, w)`, Ring-Sonden, Reihenfolge des Morphs, Tor | `client3d/scripts/smoke_terrain_lod.mjs` [16] |
+| Zweite Variante: GLSL-Pins, Cache-Key, `uTlodNoWater` | `client3d/scripts/smoke_terrain_lod.mjs` [17] |

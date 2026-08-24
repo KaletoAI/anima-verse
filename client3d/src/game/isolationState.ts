@@ -20,8 +20,8 @@
  */
 
 /** Lowest and highest id the panel knows. Anything outside is dropped on
- *  decode rather than clamped — a `22` in a shared link is a typo or a link
- *  from another client, and honouring it as `21` would isolate the wrong
+ *  decode rather than clamped — a `23` in a shared link is a typo or a link
+ *  from another client, and honouring it as `22` would isolate the wrong
  *  suspect without saying so.
  *
  *  20 WAS "Terrain culling off" for one day (2026-08-22). It did its job: with
@@ -33,7 +33,7 @@
  *  numbers are a suspect list, not a register of everything this client has
  *  ever had, and the retired switch left no state a link could still carry. */
 export const ISO_MIN_ID = 1;
-export const ISO_MAX_ID = 21;
+export const ISO_MAX_ID = 22;
 
 /** Where a chosen set is kept between reloads. */
 export const ISO_STORAGE_KEY = 'av3d.debug.isolation.v1';
@@ -171,6 +171,14 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
       + 'billboards beyond the cull distance. The prop meshes inside it keep '
       + 'drawing. Re-asserted per frame, because the 1 Hz LOD tick writes '
       + 'those flags itself.',
+    cost: 'none' },
+  { id: 22, label: 'Water lift off',
+    note: 'uTlodNoWater = 1 — the terrain\'s WATER variant stops lifting its '
+      + 'vertices to max(h, w_level) and draws the bed the height field '
+      + 'really holds (Wasser v2, K-A E3). It is a uniform and not a define, '
+      + 'so the same program keeps drawing and the same pieces keep going '
+      + 'through it: what the toggle removes is the lift alone, never the '
+      + 'second draw call.',
     cost: 'none' },
 ];
 

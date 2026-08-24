@@ -34,9 +34,10 @@ import type { Ground } from './scene/ground';
 import type { Tile } from './scene/tiles';
 import { setLayerCompositorFlat, setLayerSurfaceFiltering } from './scene/layerGround';
 import { setFogVeilDebugOff, setFogVeilSky } from './scene/fogVeil';
+import { IMPOSTOR_MESH_NAME } from './scene/impostors';
 import { setNaturalGroundDebugOff } from './scene/naturalGround';
 import { setTerrainLodDebug } from './scene/terrainLod';
-import { newFpsMeter, pushFrame } from './game/perfstats';
+import { newFpsMeter, pushFrame, scatterCosts } from './game/perfstats';
 import { yawToCompassDeg } from './game/minimap';
 import {
   decodeIsolation, encodeIsolation, ISO_STORAGE_KEY, ISOLATION_TOGGLES,
@@ -349,15 +350,19 @@ export function initIsolation(deps: IsolationDeps): void {
       savedFog = null;
       bumpMaterials(engine.scene);
     }
-    setTerrainLodDebug({ flatNormal: on(6), noMorph: on(9) });
+    setTerrainLodDebug({ flatNormal: on(6), noMorph: on(9), noWater: on(22) });
     setLayerCompositorFlat(on(7));
     setNaturalGroundDebugOff(on(8));
     setFogVeilDebugOff(on(20));
     ground.setTerrainFrozen(on(10));
     setLayerSurfaceFiltering(on(18));
     if (!on(19)) {
-      const mat = ground.terrainMaterial() as THREE.MeshStandardMaterial | null;
-      if (mat) mat.wireframe = false;
+      // BOTH terrain variants (K-A E3): the water-lifting program draws the
+      // same ground and a wireframe that skipped it would show solid patches
+      // wherever there is water.
+      for (const m of ground.terrainMaterials()) {
+        (m as THREE.MeshStandardMaterial).wireframe = false;
+      }
     }
     // Everything the world clock owns — sky colour, fog colour, the three light
     // intensities, the water mirror's sky — is restored by asking the clock
@@ -393,15 +398,23 @@ export function initIsolation(deps: IsolationDeps): void {
     }
     if (on(5)) engine.sun.intensity = 0;
     if (on(19)) {
-      const mat = ground.terrainMaterial() as THREE.MeshStandardMaterial | null;
-      if (mat) mat.wireframe = true;
+      for (const m of ground.terrainMaterials()) {
+        (m as THREE.MeshStandardMaterial).wireframe = true;
+      }
     }
-    if (on(11) || on(12) || on(13) || on(17)) {
+    if (on(11) || on(12) || on(13) || on(17) || on(21)) {
       const parts = ground.debugParts();
       if (on(11)) for (const o of parts.water) force(o);
       if (on(12)) for (const o of parts.undergrowth) force(o);
       if (on(13)) for (const o of parts.scatter) force(o);
       if (on(17)) for (const o of parts.terrain) force(o);
+      // …and 21, the FAR half of that same list on its own: the billboards
+      // mark themselves (`IMPOSTOR_MESH_NAME`) and nothing else in the scatter
+      // does, so the split needs no second accessor on the ground. Harmless
+      // beside 13 — an object already forced keeps its recorded value.
+      if (on(21)) {
+        for (const o of parts.scatter) if (o.name === IMPOSTOR_MESH_NAME) force(o);
+      }
     }
     if (on(14)) force(deps.backdrop);
     if (on(15)) force(deps.figures);
@@ -422,6 +435,7 @@ export function initIsolation(deps: IsolationDeps): void {
     const hh = Math.floor(((hour % 24) + 24) % 24);
     const mm = Math.floor((((hour % 1) + 1) % 1) * 60);
     const r1 = (v: number) => (Math.round(v * 10) / 10).toFixed(1);
+    const scatter = scatterCosts(ground.debugParts().scatter, IMPOSTOR_MESH_NAME);
     readout.textContent =
       `yaw ${r1(yawToCompassDeg(engine.yaw))}°   dist ${r1(engine.dist)} m\n`
       + `game ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}   `
@@ -431,10 +445,27 @@ export function initIsolation(deps: IsolationDeps): void {
       // MAX_NODES and must stay equal: a cap below the capacity would mean
       // three froze its own number at the first bind and the tail of every
       // larger selection is silently missing.
-      + `nodes ${ground.terrainNodeCount()}   cap ${ground.terrainInstanceCap().cap}`
+      // `wet` is how many of those pieces run the WATER variant of the terrain
+      // program (Wasser v2, K-A E3) — the number the risk rule is about: it
+      // has to be 0 in a world without water, and a fraction of the frame in
+      // one with it. Everything else is drawn by the program dry ground has
+      // always had.
+      + `nodes ${ground.terrainNodeCount()} (wet ${ground.terrainWaterNodeCount()})`
+      + `   cap ${ground.terrainInstanceCap().cap}`
       + `/${ground.terrainInstanceCap().capacity}   ground tri `
       + `${Math.round(ground.terrainTriangleCount() / 1000)}k   `
       + `height tiles ${ground.heightTileCount()}\n`
+      // THE SCATTER, SPLIT INTO ITS TWO STAGES (perf finding 2026-08-24). It
+      // stands beside the ground's own triangles because that is the
+      // comparison the finding needs: the whole terrain is 6 ms and the
+      // scatter ~11, and only this line says whether those 11 are prop
+      // TRIANGLES (the near meshes) or billboard PIXELS (the far half, which
+      // submits almost no triangles at all). Read on the panel's own 250 ms
+      // beat, so it follows a camera move while the switches are being tried.
+      + `scatter mesh ${scatter.mesh.instances}i `
+      + `${Math.round(scatter.mesh.triangles / 1000)}k tri   `
+      + `imp ${scatter.impostor.instances}i `
+      + `${Math.round(scatter.impostor.triangles / 1000)}k tri\n`
       + `fps ${r1(fpsNow)}   off: ${encodeIsolation(active) || '-'}`;
   }
 

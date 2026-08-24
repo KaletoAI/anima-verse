@@ -908,6 +908,10 @@ export interface Ground {
   tickTerrain(camera: THREE.Camera, viewportPx: number): void;
   /** How many quadtree pieces the terrain drew in the last frame. */
   terrainNodeCount(): number;
+  /** …and how many of those carried water and were therefore drawn by the
+   *  LIFTING variant of the terrain program (Wasser v2, K-A E3). 0 in a world
+   *  without water — which is the whole point of the second variant. */
+  terrainWaterNodeCount(): number;
   /** DIAGNOSTIC: three.js' frozen instance cap vs the buffer capacity. */
   terrainInstanceCap(): { cap: number; capacity: number };
   /** How many NON-DEGENERATE triangles those pieces cost
@@ -915,9 +919,12 @@ export interface Ground {
   terrainTriangleCount(): number;
   /** How many FINE height tiles (§ A16.3) are held right now. */
   heightTileCount(): number;
-  /** The CDLOD terrain's own material, for the isolation panel's wireframe
-   *  test — `null` while the placeholder is still standing. */
-  terrainMaterial(): THREE.Material | null;
+  /** The CDLOD terrain's own materials, for the isolation panel's wireframe
+   *  test — EMPTY while the placeholder is still standing, and TWO of them
+   *  since Wasser v2 K-A E3 (the dry variant and the water-lifting one, both
+   *  drawing the one ground). A diagnostic that acts on one has to act on
+   *  both, or half the ground would answer it. */
+  terrainMaterials(): THREE.Material[];
   /** Freeze the terrain's quadtree selection (`TerrainLod.setFrozen`). */
   setTerrainFrozen(on: boolean): void;
   /**
@@ -1431,27 +1438,42 @@ export function createGround(): Ground {
     if (key === baseKey) return;
     baseKey = key;
     drain(baseOwned);
-    // NO MAP, NO COLOUR OF ITS OWN. The albedo is composited from the layer
-    // array (`scene/layerGround.ts`); a `map` beside it would switch on the
-    // anti-tile stage of `applyNaturalGround`, which would blend the DEFAULT
-    // kind's wide sample over every forest in the world. White is the neutral
-    // multiplier the compositor writes into.
-    const mat = surfaceMaterial(THREE, { material: null, map: null,
-                                         color: 0xffffff });
-    patchHole(mat);
-    // The veil (plan-fog-schleier-v2 § 3) — the ONE ground of the open world is
-    // what it is really for. Its anchor is `opaque_fragment`, so it stands
-    // outside the ordering question of the note below and its place in the
-    // chain says nothing: it hazes the finished lit colour, whoever wrote it.
-    applyFogVeil(mat);
-    applyNaturalGround(mat);
-    // LAST IN THE CHAIN AND THEREFORE FIRST IN THE SHADER: every ground patch
-    // inserts its body directly after `#include <map_fragment>`, so the one
-    // applied last runs first. The compositor writes the albedo, the natural
-    // stages then work on what it wrote — the order plan § G3 asks for.
-    applyTerrainLayers(mat);
-    baseOwned.push(mat);
-    terrain.setMaterial(mat);
+    /**
+     * ONE ground material, built the same way TWICE (Wasser v2, K-A E3).
+     *
+     * The terrain needs two variants — one that lifts its vertices onto the
+     * water raster and one that does not — and the ONLY difference between
+     * them may be that lift, which `TerrainLod.setMaterial` adds. So the
+     * recipe lives in one function and is run twice, rather than the second
+     * material being cloned from the first: a `clone()` does not carry
+     * `onBeforeCompile`, and re-patching a copy that already has a patched
+     * chain would apply every stage below twice (each of them guards on a
+     * WeakSet of the material OBJECT, which a clone is not).
+     */
+    const build = (): THREE.Material => {
+      // NO MAP, NO COLOUR OF ITS OWN. The albedo is composited from the layer
+      // array (`scene/layerGround.ts`); a `map` beside it would switch on the
+      // anti-tile stage of `applyNaturalGround`, which would blend the DEFAULT
+      // kind's wide sample over every forest in the world. White is the neutral
+      // multiplier the compositor writes into.
+      const mat = surfaceMaterial(THREE, { material: null, map: null,
+                                           color: 0xffffff });
+      patchHole(mat);
+      // The veil (plan-fog-schleier-v2 § 3) — the ONE ground of the open world
+      // is what it is really for. Its anchor is `opaque_fragment`, so it stands
+      // outside the ordering question of the note below and its place in the
+      // chain says nothing: it hazes the finished lit colour, whoever wrote it.
+      applyFogVeil(mat);
+      applyNaturalGround(mat);
+      // LAST IN THE CHAIN AND THEREFORE FIRST IN THE SHADER: every ground patch
+      // inserts its body directly after `#include <map_fragment>`, so the one
+      // applied last runs first. The compositor writes the albedo, the natural
+      // stages then work on what it wrote — the order plan § G3 asks for.
+      applyTerrainLayers(mat);
+      baseOwned.push(mat);
+      return mat;
+    };
+    terrain.setMaterial(build(), build());
   }
 
   /**
@@ -3279,13 +3301,11 @@ export function createGround(): Ground {
     revision: () => rev,
     tickTerrain: (camera, viewportPx) => terrain.update(camera, viewportPx),
     terrainNodeCount: () => terrain.nodeCount(),
+    terrainWaterNodeCount: () => terrain.waterNodeCount(),
     terrainInstanceCap: () => terrain.instanceCap(),
     terrainTriangleCount: () => terrain.triangleCount(),
     heightTileCount: () => relief.tiles.size,
-    // The terrain is ONE mesh with ONE material by construction (`terrainLod`),
-    // so the array case cannot occur — it is narrowed rather than handled.
-    terrainMaterial: () => (Array.isArray(terrain.mesh.material)
-      ? terrain.mesh.material[0] ?? null : terrain.mesh.material ?? null),
+    terrainMaterials: () => terrain.materials(),
     setTerrainFrozen: (on) => terrain.setFrozen(on),
     debugParts() {
       const scatter: THREE.Object3D[] = [];

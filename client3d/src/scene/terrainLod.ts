@@ -120,6 +120,43 @@
  * in its `onBeforeCompile` slot. This module CHAINS one more patch onto it —
  * the vertex displacement — and never assigns, the rule of every shader patch
  * in this client.
+ *
+ * TWO MATERIAL VARIANTS SINCE K-A E3, AND DRY GROUND PAYS NOTHING FOR THE WET
+ * (`recherche-wasser-v2.md` § 4 K-A "Risiken", the binding risk rule). The
+ * water mirror is no longer a mesh of its own: the terrain vertex is lifted to
+ * `max(h, w_level)` wherever the water raster has a value. That branch is four
+ * more `texelFetch` and a comparison per VERTEX, and the whole point of K-A is
+ * that a water pixel gets CHEAPER — so the branch may not ride along on the
+ * ground of a world without a drop of water in it. Hence:
+ *
+ *  - the owner hands in TWO materials (`setMaterial`), built by the same
+ *    chain, and this module patches one of them with the lift and one without.
+ *    The dry one keeps the exact program and the exact `customProgramCacheKey`
+ *    it had before this stage, so three hands it the very same
+ *    `WebGLProgram` — asserted in `smoke_terrain_lod.mjs` [16];
+ *  - the selection is PARTITIONED per frame: a piece whose closed rectangle
+ *    touches a tile of the water raster goes into the wet instance buffer, and
+ *    everything else into the dry one (`nodeHasWater`). Two draw calls where
+ *    there is water, one where there is not.
+ *
+ * WHY THE PARTITION CANNOT CRACK THE GROUND, which is the only thing it could
+ * do wrong. A vertex can only lift where the water pyramid answers a level,
+ * and the pyramid is filled from `rasterLevelAt` — which answers out of ONE
+ * tile, the tile the point lies in (`tileKeyAt`). A tile the server shipped no
+ * `water` key for has no wet texel anywhere in its window, borders included
+ * (`HeightModel.water_raster` answers None only when EVERY point of the window
+ * is dry). So: if a point lifts, its tile is in the raster; a shared vertex of
+ * two neighbouring pieces lies in BOTH pieces' closed rectangles, hence its
+ * tile touches both, hence BOTH pieces are wet-gated and run the lifting
+ * program. Two pieces can therefore never disagree about a vertex they share.
+ * That is why the gate scans the CLOSED rectangle — `floor((x + size) / tileM)`
+ * with no epsilon, unlike `nodeBounds`.
+ *
+ * NO WATER SHADING YET. E3 lifts the geometry and nothing else: a lifted pixel
+ * is painted as the ground it replaces, which is the "visibly flat intermediate
+ * state" the research asks for — the SHAPE of the mirror is judgeable before
+ * its look exists (E4). The old polygon mirrors keep rendering this stage and
+ * will cover most of the flat patch; E5 deletes them.
  */
 import * as THREE from 'three';
 import { finestStep, heightAt, latticeSample } from '@anima/scene-render';
@@ -683,6 +720,26 @@ export interface LevelErrorStat {
  * `scene/ground.ts` fetches the remainder (`GET /play/heightfield/stats`) and
  * calls `refreshStats`.
  *
+ * AND THE LIFTED MIRROR STAYS INSIDE IT (Wasser v2, K-A E3). The drawn surface
+ * of the water variant is `y_k = max(h_k, w_k)` per level, and for any four
+ * numbers `|max(a,b) − max(c,d)| ≤ max(|a−c|, |b−d|)`, so the lifted level-k
+ * error is bounded by `max(err_h[k], err_w[k])` — the height's own bound and
+ * the MIRROR's decimation error, whichever is larger. The mirror's is the
+ * smaller of the two wherever the two are comparable, and the reason is the
+ * carve: `h = min(h, level_at − depth·smoothstep(…))` writes the mirror's own
+ * variation INTO the bed and then adds the shore ramp on top of it, so under a
+ * water the coarse lattice loses at least as much of the bed as it loses of
+ * the mirror. A LIFTED MIRROR IS FLATTER THAN THE BED IT COVERS, which is why
+ * the statistics are left as the server bakes them (height-only) rather than
+ * re-derived over a second field.
+ *
+ * WHERE THAT ARGUMENT IS NOT A PROOF, stated: the ramp could in principle
+ * cancel a mirror step over one coarse cell, and then `err_w[k]` would exceed
+ * `err_h[k]`. The consequence is bounded and benign — `lodRanges` would put a
+ * ring boundary slightly nearer than the mirror deserves, i.e. a far mirror
+ * drawn one level too coarse. It cannot crack anything (see `MAX_PIXEL_ERROR`:
+ * the rule moves rings for the whole world, never single nodes).
+ *
  * EXTRACTED FROM THE RENDERER so the check measures the shipped rule rather
  * than a copy of it — the reason `nodeBounds` stands up here too.
  */
@@ -732,6 +789,21 @@ const STAT_TILE_SCAN_MAX = 64;
  * very same numbers (and every coarser mip is a SUBSET of them,
  * `buildPyramid`), so no vertex can leave the span.
  *
+ * THE WATER LIFT IS NOT REBUILT INTO IT (Wasser v2, K-A E3), and the argument
+ * is worth writing down rather than re-deriving. A tile's `min`/`max` are read
+ * off `heights` alone — the server says so explicitly (§ "Signatur und
+ * Statistik": the mirror does not move `h`) — so a node whose ground is lifted
+ * to `max(h, w)` can stand ABOVE its own box, by at most the water's depth
+ * there (inside a lake the carve puts every `h` under the mirror, so the whole
+ * tile can be one bed and its `max` a metre or two below the level). What that
+ * costs is stated in the paragraph above and nothing more: the box is the LOD
+ * DISTANCE and the distance alone since the frustum cull was deleted, so a box
+ * a metre too low means a node measured a metre too far away — against ring
+ * boundaries of 128 m and up, a level that is occasionally one ring late at the
+ * outer edge of its ring. It cannot open a seam: the morph argument does not
+ * mention the box at all, and `lodRanges` moves the rings for the WHOLE world
+ * at once, so two neighbours always measure against the same ladder.
+ *
  * EXTRACTED FROM THE RENDERER (2026-08-21) so the checks measure the shipped
  * rule rather than a copy of it.
  */
@@ -766,6 +838,62 @@ export function nodeBounds(stats: ReadonlyMap<string, NodeStatSpan> | null | und
   if (!seen) return globalRange;
   if (seen < covered) { min = Math.min(min, 0); max = Math.max(max, 0); }
   return { min, max };
+}
+
+/**
+ * How many tiles a node's CLOSED rectangle may be probed over before the water
+ * gate answers "wet" without looking.
+ *
+ * A root node is 2 048 m (`PATCH_N · baseStep · 2^5` at the live 2 m step) and
+ * the live world's `tile_m` is 256 m, so the largest node this quadtree emits
+ * spans 9 × 9 = 81 tiles once the closed rectangle is counted — the cap is that
+ * number, so the shortcut never fires for a node the tree really has. For a
+ * world with smaller tiles it fires on the biggest nodes and puts them on the
+ * lifting program without a scan, which is the SAFE direction: over-marking a
+ * piece costs it four `texelFetch` per vertex and draws the identical ground,
+ * while under-marking one is the only thing that could crack the seam.
+ */
+const WATER_TILE_SCAN_MAX = 81;
+
+/**
+ * DOES THIS PIECE OF TERRAIN NEED THE LIFTING PROGRAM? — the gate of the
+ * second material variant (Wasser v2, K-A E3).
+ *
+ * `tiles` is the key set of the WATER raster, i.e. exactly the tiles the
+ * server shipped a `water` field for (`HeightModel.water_raster` answers None
+ * for a window without a single wet or dilated point, and `scene/ground.ts`
+ * files nothing under that key then). So "this tile is in the set" is the
+ * cheapest complete statement of "somewhere in this tile a vertex could lift",
+ * and it costs a `Set.has` per tile a piece touches — a leaf touches one or
+ * two.
+ *
+ * THE RECTANGLE IS CLOSED: `floor((x + size) / tileM)` and NOT the `− 1e-6` of
+ * `nodeBounds`. A node's last row of vertices sits exactly ON `x + size`, and
+ * `tileKeyAt` files that coordinate under the NEXT tile — so the water a
+ * vertex there could read lives in a tile the epsilon would have dropped. With
+ * the closed rectangle a vertex shared by two pieces is covered by both, which
+ * is the whole crack-freeness argument of the partition (file header).
+ *
+ * IT IS A PURE RULE and exported for the same reason `nodeBounds` is: the
+ * check measures the shipped gate rather than a copy of it.
+ */
+export function nodeHasWater(tiles: ReadonlySet<string> | null | undefined,
+                             tileM: number,
+                             x: number, z: number, size: number): boolean {
+  if (!tiles?.size || !(tileM > 0)) return false;
+  // `Math.floor` and never `Math.trunc`, for the reason `nodeBounds` gives:
+  // the world reaches west and north of the origin.
+  const tx0 = Math.floor(x / tileM);
+  const tx1 = Math.floor((x + size) / tileM);
+  const tz0 = Math.floor(z / tileM);
+  const tz1 = Math.floor((z + size) / tileM);
+  if ((tx1 - tx0 + 1) * (tz1 - tz0 + 1) > WATER_TILE_SCAN_MAX) return true;
+  for (let tz = tz0; tz <= tz1; tz += 1) {
+    for (let tx = tx0; tx <= tx1; tx += 1) {
+      if (tiles.has(`${tx},${tz}`)) return true;
+    }
+  }
+  return false;
 }
 
 /** Distance from a point to an axis-aligned box, metres — 0 inside it. */
@@ -1076,6 +1204,120 @@ float tlodHeight( vec2 p, float nodeStep ) {
 }
 
 /**
+ * THE WATER SAMPLER AND THE LIFT, as GLSL — the second material variant's
+ * whole cost, and it exists in no other program (Wasser v2, K-A E3).
+ *
+ * It rides on `terrainLodSampleGlsl()` and borrows two things from it:
+ * `tlodLevel`, so the mirror is read at exactly the mip the height is read at,
+ * and `uTlodNearRect`, so it is read in exactly the window the height comes
+ * out of the NEAR pyramid in.
+ *
+ * ── THE MIP IS THE HEIGHT'S MIP, AND THAT IS THE WHOLE MORPH ARGUMENT ───────
+ * The water pyramid is built over the NEAR pyramid's own geometry — same
+ * origin, same base step, same base extent (`createTerrainLod.buildWater`) —
+ * so `tlodLevel(uTlodWaterGeom.z, …, nodeStep)` and
+ * `tlodLevel(uTlodNearGeom.z, …, nodeStep)` are the same integer for the same
+ * `nodeStep`. `tlodCompute` then calls the lift ONCE PER TAP of the height's
+ * morph pair, with that tap's own footprint:
+ *
+ *     y = mix( max( h(p, s·2^k),   w(p, s·2^k)   ),
+ *              max( h(p, s·2^(k+1)), w(p, s·2^(k+1)) ),  f )
+ *
+ * Read what that is NOT: it is not `max(mix(h₁,h₂,f), mix(w₁,w₂,f))`. The
+ * difference shows at a shore where the coarse level has already lost the
+ * mirror (the dilation ring halves per level, `buildWaterPyramid`): mixing the
+ * two mirrors first would answer "dry" for the whole pair the moment the
+ * coarse one is dry, so the shoreline would JUMP as f crosses 0 — the mirror
+ * swimming against the ground between LOD levels, which is the one thing this
+ * shape has to rule out. Taking the max per LEVEL and morphing the two lifted
+ * surfaces is continuous in f by construction, and it also gives
+ * `y ≥ mix(h₁, h₂, f)` for free: each term dominates its own height, so the
+ * lifted ground can never sink below the bed it was drawn from.
+ *
+ * λ IS NEVER LIFTED, deliberately. `tlodMorphAt` keeps measuring its distance
+ * against the unlifted `tlodHeight(p, 0.0)`, so the morph coordinate is the
+ * same number in BOTH variants — a dry piece and a wet piece beside it read
+ * the same λ at the vertex they share, snap to the same point and pick the
+ * same mip pair. A lifted λ would have made the two programs disagree about
+ * WHERE the shared vertex is, which is a crack that no gate could close.
+ *
+ * ── THE DRY TEST IS `>` AND NEVER `max()` ───────────────────────────────────
+ * The dry sentinel is the wire's `null`, carried as NaN through
+ * `waterRaster.ts` into the Float32Array the texture is made of. IEEE says
+ * every comparison against a NaN is false, so `( w > h ) ? w : h` falls
+ * through to the ground for a dry texel — while `max(h, w)` is free to return
+ * either operand for a NaN and GLSL does not say which. Where this chunk has
+ * to PRODUCE a dry answer itself (no pyramid, outside the near window) it
+ * returns `TLOD_DRY`, a number every compiler agrees about that fails the same
+ * comparison for every world height there is.
+ *
+ * The masked mix is `waterRaster.waterBilinear`, line for line: a corner with
+ * weight 0 is NOT READ. Plain floating point would carry its NaN through
+ * `NaN · 0 = NaN`, and since the pyramid is filled AT the lattice points that
+ * would erode the dilation ring by a full texel along a grid of lines through
+ * every water — the finding is spelled out in `waterRaster.ts`.
+ *
+ * NO FAR TWIN. Outside `uTlodNearRect` the HEIGHT comes from the overview
+ * pyramid, and the overview carries no water at all (§ A16.5). Reading a level
+ * there would put the two halves of the max on two different lattices, so the
+ * answer out there is dry — which is also what "no water known here" has to
+ * draw.
+ */
+export function terrainLodWaterGlsl(): string {
+  return `
+uniform sampler2D uTlodWater;
+uniform vec4 uTlodWaterGeom;
+uniform vec4 uTlodWaterLevel[ ${MAX_LOD_LEVELS} ];
+uniform float uTlodNoWater;
+
+const float TLOD_DRY = -1e30;
+
+float tlodWaterGrid( vec4 lv, vec2 p ) {
+  float cols = lv.x;
+  float rows = lv.y;
+  float step = lv.z;
+  if ( cols < 2.0 || rows < 2.0 || step <= 0.0 ) return TLOD_DRY;
+  float fx = clamp( ( p.x - uTlodWaterGeom.x ) / step, 0.0, cols - 1.0 );
+  float fz = clamp( ( p.y - uTlodWaterGeom.y ) / step, 0.0, rows - 1.0 );
+  float fi = min( floor( fx ), cols - 2.0 );
+  float fj = min( floor( fz ), rows - 2.0 );
+  float tx = fx - fi;
+  float tz = fz - fj;
+  int i = int( fi );
+  int j = int( fj + lv.w );
+  float w00 = ( 1.0 - tx ) * ( 1.0 - tz );
+  float w10 = tx * ( 1.0 - tz );
+  float w01 = ( 1.0 - tx ) * tz;
+  float w11 = tx * tz;
+  float sum = 0.0;
+  if ( w00 != 0.0 ) sum += texelFetch( uTlodWater, ivec2( i, j ), 0 ).r * w00;
+  if ( w10 != 0.0 ) sum += texelFetch( uTlodWater, ivec2( i + 1, j ), 0 ).r * w10;
+  if ( w01 != 0.0 ) sum += texelFetch( uTlodWater, ivec2( i, j + 1 ), 0 ).r * w01;
+  if ( w11 != 0.0 ) sum += texelFetch( uTlodWater, ivec2( i + 1, j + 1 ), 0 ).r * w11;
+  return sum;
+}
+
+float tlodWaterAt( vec2 p, float nodeStep ) {
+  if ( uTlodWaterGeom.w <= 0.0
+       || p.x < uTlodNearRect.x || p.x > uTlodNearRect.z
+       || p.y < uTlodNearRect.y || p.y > uTlodNearRect.w ) return TLOD_DRY;
+  int k = tlodLevel( uTlodWaterGeom.z, uTlodWaterGeom.w, nodeStep );
+  return tlodWaterGrid( uTlodWaterLevel[ k ], p );
+}
+
+// THE LIFT of ONE tap of the morph pair. The isolation panel's toggle 21 takes
+// it out as a UNIFORM and not as a define, so the frame after the click is
+// drawn by the very same program and what is left is exactly the dry variant's
+// answer — the pattern of toggles 6 and 9.
+float tlodLift( float h, vec2 p, float nodeStep ) {
+  if ( uTlodNoWater > 0.5 ) return h;
+  float w = tlodWaterAt( p, nodeStep );
+  return ( w > h ) ? w : h;
+}
+`;
+}
+
+/**
  * The VERTEX side: the patch attribute and the whole of `tlodCompute`, on top
  * of the sampler chunk above.
  *
@@ -1123,9 +1365,21 @@ float tlodHeight( vec2 p, float nodeStep ) {
  * λ is fed the FINEST height (`tlodHeight(p, 0.0)`) rather than the piece's own
  * level, for the last part of the same argument: a level-dependent distance
  * would make λ level-dependent again, and with it the surface.
+ *
+ * `water` = the SECOND VARIANT (K-A E3): every height tap of the morph pair
+ * goes through `tlodLift`, so the vertex lands on `max(h, w_level)` where the
+ * water raster has a value. `terrainLodGlsl(false)` declares no water uniform,
+ * calls no water function and fetches no water texel — its four `texelFetch`
+ * and its `mix` of two `tlodHeight` are the same statements as before the
+ * stage, so the dry ground compiles to the program it always did.
  */
-export function terrainLodGlsl(): string {
-  return `${terrainLodSampleGlsl()}
+export function terrainLodGlsl(water = false): string {
+  /** ONE tap of the morph pair, lifted or not. The dry spelling is left
+   *  exactly as it was so the dry program is unchanged. */
+  const tap = (m: string): string => (water
+    ? `tlodLift( tlodHeight( p, nodeStep * ${m} ), p, nodeStep * ${m} )`
+    : `tlodHeight( p, nodeStep * ${m} )`);
+  return `${terrainLodSampleGlsl()}${water ? terrainLodWaterGlsl() : ''}
 uniform float uTlodRange[ ${MAX_LOD_LEVELS} ];
 uniform float uTlodNoMorph;
 uniform float uTlodBaseStep;
@@ -1203,7 +1457,10 @@ void tlodCompute() {
   // (every 2^(k+1)-th index) and blends there from the finer one.
   vec2 gm = mix( gi - mod( gi, m1 ), gi - mod( gi, m2 ), f );
   vec2 p = clamp( iNode.xy + gm * nodeStep, uTlodExtent.xy, uTlodExtent.zw );
-  float h = mix( tlodHeight( p, nodeStep * m1 ), tlodHeight( p, nodeStep * m2 ), f );
+  // THE MAX PER LEVEL, THE MORPH OVER THE PAIR (K-A E3, water variant only):
+  // each tap is lifted at its OWN footprint before the two are blended, so the
+  // mirror morphs in step with the ground it sits in. See terrainLodWaterGlsl.
+  float h = mix( ${tap('m1')}, ${tap('m2')}, f );
   tlodWorld = vec3( p.x, h, p.y );
   // The one thing the fragment stage needs of this: WHERE the point is. The
   // shading normal is taken there, from this position alone (tlodNormalAt) —
@@ -1290,6 +1547,37 @@ export function gpuHeightAt(near: HeightPyramid | null, nearRect: readonly numbe
 }
 
 /**
+ * The TypeScript twin of `tlodWaterAt` — the water level the GPU really reads
+ * at a point, NaN where there is none (Wasser v2, K-A E3).
+ *
+ * `nearRect` is the HEIGHT window and that is not an oversight: the water
+ * pyramid is built over the near pyramid's own geometry, so the rectangle is
+ * the same one, and gating on it is what makes "the height came from the near
+ * pyramid" and "the mirror is known here" the same statement. Outside it the
+ * height is the overview's and the overview carries no water.
+ */
+export function gpuWaterAt(water: HeightPyramid | null,
+                           nearRect: readonly number[] | null,
+                           x: number, z: number, nodeStep: number): number {
+  if (!water || !nearRect) return NaN;
+  if (x < nearRect[0] || x > nearRect[2] || z < nearRect[1] || z > nearRect[3]) return NaN;
+  return wlevelAt(water, x, z, pyramidLevelFor(water, nodeStep));
+}
+
+/**
+ * ONE TAP LIFTED — the arithmetic of the shader's `tlodLift`, and the reason
+ * it is a function rather than a call to `Math.max`.
+ *
+ * `Math.max(h, NaN)` is NaN; the whole dry half of the world would come back
+ * as a hole. `w > h ? w : h` answers `h` for every dry sentinel, which is what
+ * the GLSL `( w > h ) ? w : h` does for the same reason — see
+ * `terrainLodWaterGlsl`.
+ */
+export function liftedHeight(h: number, w: number): number {
+  return w > h ? w : h;
+}
+
+/**
  * The TypeScript twin of `tlodNormalAt` — the SHADING normal the fragment
  * shader really computes at a world point, as a unit vector.
  *
@@ -1324,6 +1612,13 @@ export function fragmentNormal(near: HeightPyramid | null,
  * shader clamps against, `null` for "no frame"; `t` is the morph coordinate
  * λ − level (`node.morph` by default, the value at the piece's nearest point).
  *
+ * `water` is the water pyramid of the SECOND material variant (K-A E3), `null`
+ * for the dry one — and `null` is what every caller before that stage passes,
+ * so the answer is unchanged for them: `gpuWaterAt` returns NaN and
+ * `liftedHeight` falls through to the height. With a pyramid the two taps of
+ * the morph pair are lifted SEPARATELY, each at its own footprint, and blended
+ * afterwards; the argument for that order is in `terrainLodWaterGlsl`.
+ *
  * `t` MAY RUN PAST 1, and that is the property the whole seam argument rests
  * on. With k = ⌊t⌋ and f = t − k the vertex snaps to every 2^k-th index and
  * blends to every 2^(k+1)-th, i.e. onto the WORLD lattice of step
@@ -1340,7 +1635,8 @@ export function morphedVertex(node: LodNode, gx: number, gz: number,
                               nearRect: readonly number[] | null,
                               far: HeightPyramid | null,
                               extent: readonly number[] | null = null,
-                              t: number = node.morph
+                              t: number = node.morph,
+                              water: HeightPyramid | null = null
 ): { x: number; z: number; y: number } {
   const nodeStep = node.size / node.cells;
   const k = Math.min(Math.floor(Math.max(t, 0)), MAX_LOD_LEVELS - 1);
@@ -1357,8 +1653,10 @@ export function morphedVertex(node: LodNode, gx: number, gz: number,
     x = Math.min(Math.max(x, extent[0]), extent[2]);
     z = Math.min(Math.max(z, extent[1]), extent[3]);
   }
-  const own = gpuHeightAt(near, nearRect, far, x, z, nodeStep * m1);
-  const parent = gpuHeightAt(near, nearRect, far, x, z, nodeStep * m2);
+  const own = liftedHeight(gpuHeightAt(near, nearRect, far, x, z, nodeStep * m1),
+                           gpuWaterAt(water, nearRect, x, z, nodeStep * m1));
+  const parent = liftedHeight(gpuHeightAt(near, nearRect, far, x, z, nodeStep * m2),
+                              gpuWaterAt(water, nearRect, x, z, nodeStep * m2));
   return { x, z, y: own * (1 - f) + parent * f };
 }
 
@@ -1401,7 +1699,8 @@ export function lodVertex(node: LodNode, gx: number, gz: number,
                           nearRect: readonly number[] | null,
                           far: HeightPyramid | null,
                           extent: readonly number[] | null,
-                          cam: LodCamera, ranges: readonly number[]
+                          cam: LodCamera, ranges: readonly number[],
+                          water: HeightPyramid | null = null
 ): { x: number; z: number; y: number; t: number } {
   const nodeStep = node.size / node.cells;
   /** The morph coordinate at the lattice point (ix, iz) of this piece. */
@@ -1412,6 +1711,10 @@ export function lodVertex(node: LodNode, gx: number, gz: number,
       x = Math.min(Math.max(x, extent[0]), extent[2]);
       z = Math.min(Math.max(z, extent[1]), extent[3]);
     }
+    // THE UNLIFTED GROUND, even in the water variant (K-A E3): λ has to be the
+    // same number in both programs or a dry piece and the wet piece beside it
+    // would place the vertex they share at two different points — a crack no
+    // gate can close. See `terrainLodWaterGlsl`.
     const y = gpuHeightAt(near, nearRect, far, x, z, 0);
     const d = Math.hypot(x - cam.x, y - cam.y, z - cam.z);
     return Math.max(lodLambda(d, ranges) - node.level, 0);
@@ -1426,7 +1729,7 @@ export function lodVertex(node: LodNode, gx: number, gz: number,
     if (Math.floor(tj) >= j) { k = j; t = tj; break; }
   }
   return { ...morphedVertex(node, gx, gz, near, nearRect, far, extent,
-                            k + Math.min(Math.max(t - k, 0), 1)), t };
+                            k + Math.min(Math.max(t - k, 0), 1), water), t };
 }
 
 // ── The renderer ───────────────────────────────────────────────────────────
@@ -1440,6 +1743,11 @@ const lodPatched = new WeakSet<THREE.Material>();
 /** The cache key this patch contributes, exported so the smoke can pin the
  *  combined key without carrying a copy of the string. */
 export const TERRAIN_LOD_CACHE_KEY = 'terrain-lod';
+
+/** What the WATER VARIANT appends to it (K-A E3). It is an ADDITION and the
+ *  dry key is left untouched, so the dry ground's combined key — and with it
+ *  three's program cache entry — is the same string it was before the stage. */
+export const TERRAIN_LOD_WATER_CACHE_KEY = 'water';
 
 /** The one texel of nothing every empty state falls back to — a driver handed
  *  an unbound sampler is a warning at best and a black ground at worst. Built
@@ -1521,11 +1829,21 @@ const uNormalSpan = { value: FALLBACK_BASE_STEP_M };
  */
 const uFlatNormal = { value: 0 };
 const uNoMorph = { value: 0 };
+/**
+ * …AND THE THIRD (toggle 21, K-A E3). `uNoWater` = 1 makes `tlodLift` hand its
+ * height straight back, so the water variant draws exactly what the dry one
+ * would — the lift can be bisected against everything else in the frame
+ * without a recompile and without changing which pieces are drawn by which
+ * program. Only the water variant's program declares it.
+ */
+const uNoWater = { value: 0 };
 
-/** Flip the two switches above. Only the ISOLATION panel calls this. */
-export function setTerrainLodDebug(o: { flatNormal?: boolean; noMorph?: boolean }): void {
+/** Flip the three switches above. Only the ISOLATION panel calls this. */
+export function setTerrainLodDebug(o: { flatNormal?: boolean; noMorph?: boolean;
+                                        noWater?: boolean }): void {
   if (o.flatNormal !== undefined) uFlatNormal.value = o.flatNormal ? 1 : 0;
   if (o.noMorph !== undefined) uNoMorph.value = o.noMorph ? 1 : 0;
+  if (o.noWater !== undefined) uNoWater.value = o.noWater ? 1 : 0;
 }
 
 /**
@@ -1585,8 +1903,15 @@ export function bindTerrainLodUniforms(uniforms: Record<string, unknown>): void 
  * world space — the same arrangement the old base plate had, and what lets one
  * sampled height serve the ground, the areas and the figures without a
  * transform in between.
+ *
+ * `water` PICKS THE SECOND VARIANT (K-A E3): the water sampler is declared,
+ * every height tap goes through `tlodLift`, `uTlodNoWater` is bound and the
+ * cache key gains `+water`. Called with `false` — which is how the dry ground
+ * is patched — this function is what it was before the stage, down to the
+ * cache key, so three keeps handing the dry material the program it already
+ * has.
  */
-export function patchTerrainLod(mat: THREE.Material): void {
+export function patchTerrainLod(mat: THREE.Material, water = false): void {
   if (lodPatched.has(mat)) return;
   lodPatched.add(mat);
   const prev = mat.onBeforeCompile;
@@ -1602,8 +1927,11 @@ export function patchTerrainLod(mat: THREE.Material): void {
     (shader.uniforms as unknown as Record<string, unknown>).uTlodNormalSpan = uNormalSpan;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodNoMorph = uNoMorph;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodFlatNormal = uFlatNormal;
+    if (water) {
+      (shader.uniforms as unknown as Record<string, unknown>).uTlodNoWater = uNoWater;
+    }
     if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
-    shader.vertexShader = terrainLodGlsl() + shader.vertexShader
+    shader.vertexShader = terrainLodGlsl(water) + shader.vertexShader
       .replace('#include <uv_vertex>', `\ttlodCompute();
 #include <uv_vertex>
 \t#ifdef USE_MAP
@@ -1620,9 +1948,10 @@ export function patchTerrainLod(mat: THREE.Material): void {
 \tnormal = normalize( ( viewMatrix * vec4( tlodNormalAt( vTlodXZ ), 0.0 ) ).xyz );
 \tnonPerturbedNormal = normal;`);
   };
-  mat.customProgramCacheKey = () => (prevKey
-    ? `${prevKey}+${TERRAIN_LOD_CACHE_KEY}`
-    : TERRAIN_LOD_CACHE_KEY);
+  const own = water
+    ? `${TERRAIN_LOD_CACHE_KEY}+${TERRAIN_LOD_WATER_CACHE_KEY}`
+    : TERRAIN_LOD_CACHE_KEY;
+  mat.customProgramCacheKey = () => (prevKey ? `${prevKey}+${own}` : own);
 }
 
 /** The one patch geometry — `PATCH_N`² cells in [0, 1]², every cell split from
@@ -1674,7 +2003,17 @@ function pyramidTexture(pyr: HeightPyramid): THREE.DataTexture {
 
 /** What the terrain renderer offers its owner (`scene/ground.ts`). */
 export interface TerrainLod {
-  /** The mesh, to be hung into the ground group once. */
+  /**
+   * The mesh, to be hung into the ground group once.
+   *
+   * SINCE K-A E3 IT CARRIES THE WET MESH AS ITS CHILD. The water variant is a
+   * second program and therefore a second draw call, and a second draw call is
+   * a second `THREE.Mesh` — there is no way to give two instances of one mesh
+   * two programs. It is hung UNDER this one rather than beside it so the
+   * owner's `group.add` / `group.remove` and the isolation panel's
+   * `visible = false` keep meaning "the terrain", whole. Both sit at the
+   * origin with an identity matrix, so nothing is transformed by the nesting.
+   */
   readonly mesh: THREE.Mesh;
   /**
    * SELECT THE FRAME'S PIECES AND WRITE THEM INTO THE INSTANCE BUFFER — called
@@ -1718,18 +2057,41 @@ export interface TerrainLod {
   refreshStats(): void;
   /** The world rectangle to cover, `[minX, minZ, maxX, maxZ]`. */
   setExtent(rect: readonly [number, number, number, number]): void;
-  /** The ground material — built by the owner (kind, textures, hole patch,
-   *  natural-ground stages) and patched here. */
-  setMaterial(mat: THREE.Material): void;
-  /** How many pieces the last selection drew, for the performance readout. */
+  /**
+   * The ground material — built by the owner (kind, textures, hole patch,
+   * natural-ground stages) and patched here.
+   *
+   * TWO OF THEM SINCE K-A E3, and they must come out of the SAME builder: `dry`
+   * is patched exactly as before, `water` gains the `max(h, w_level)` lift.
+   * Anything the owner does to one it has to do to the other, or a piece of
+   * ground would change its look at the shore for no reason — which is why the
+   * owner builds them in one function and this takes both at once rather than
+   * offering a second entry point that could be forgotten.
+   */
+  setMaterial(dry: THREE.Material, water: THREE.Material): void;
+  /** Both ground materials, dry first — what a diagnostic that wants to act on
+   *  "the terrain's material" (the isolation panel's wireframe) has to reach.
+   *  Empty until `setMaterial`. */
+  materials(): THREE.Material[];
+  /** How many pieces the last selection drew, for the performance readout —
+   *  BOTH variants, since the split is a partition of one selection. */
   nodeCount(): number;
+  /** How many of those pieces carry water and are therefore drawn by the
+   *  lifting program (K-A E3). 0 in a world without a drop, which is the case
+   *  the risk rule is about — the second draw call is then skipped entirely. */
+  waterNodeCount(): number;
   /** DIAGNOSTIC: the instance cap three.js draws against
    *  (`geometry._maxInstanceCount`) and the attribute's capacity. Both are
    *  `MAX_NODES` and stay there — the buffer is allocated once and never
    *  replaced, and the cap is set by hand because three freezes it at the first
    *  bind of a plain Mesh over an InstancedBufferGeometry and never raises it
    *  again (three issues #19595, #26363, #32099). `cap < nodeCount()` would
-   *  mean the renderer silently drops the tail of the selection every frame. */
+   *  mean the renderer silently drops the tail of the selection every frame.
+   *
+   *  THE TIGHTER OF THE TWO GEOMETRIES since K-A E3 — both are allocated at
+   *  `MAX_NODES` and the split is a PARTITION of one selection, so either one
+   *  alone already holds every piece there can be; reporting the minimum means
+   *  a readout that would notice if that ever stopped being true. */
   instanceCap(): { cap: number; capacity: number };
   /** How many NON-DEGENERATE triangles those pieces draw — `Σ cells² · 2`. The
    *  patch always submits `PATCH_N² · 2` per instance; the ones past a piece's
@@ -1771,31 +2133,56 @@ export interface TerrainLod {
  */
 export function createTerrainLod(): TerrainLod {
   const patch = patchGeometry();
-  const geo = new THREE.InstancedBufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(patch.pos, 3));
-  geo.setAttribute('uv', new THREE.Float32BufferAttribute(patch.uv, 2));
-  geo.setIndex(new THREE.BufferAttribute(patch.index, 1));
-  // The bounding sphere is never used for culling (the mesh is not culled as a
-  // whole — its nodes are), but three computes one on demand and would do it
-  // from the UNDISPLACED patch, i.e. a sphere of radius 1 at the origin. A
-  // world-sized one is the honest answer for geometry that is placed in the
-  // vertex shader.
-  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+  // ONE patch, TWO geometries — the attributes are SHARED objects and not
+  // copies, so the vertex data, the UVs and the index live once on the card
+  // (three's `WebGLAttributes` caches per BufferAttribute). Only `iNode`
+  // differs, because that is the list of pieces each program draws.
+  const patchPos = new THREE.Float32BufferAttribute(patch.pos, 3);
+  const patchUv = new THREE.Float32BufferAttribute(patch.uv, 2);
+  const patchIndex = new THREE.BufferAttribute(patch.index, 1);
 
-  // THE INSTANCE BUFFER IS ALLOCATED ONCE, AT THE CEILING, AND NEVER REPLACED
-  // (2026-08-22). three.js freezes `geometry._maxInstanceCount` at the FIRST
-  // bind of a plain Mesh over an InstancedBufferGeometry
-  // (`WebGLBindingStates.setupVertexAttributes`, guarded by `=== undefined`)
-  // and never raises it again, so a buffer that grew later kept drawing against
-  // the capacity it happened to have when the first frame was submitted — the
-  // tail of every larger selection silently missing. Setting the cap by hand to
-  // the ceiling the selection is clamped to (`MAX_NODES`) makes the two one
-  // number. 4 096 instances × 4 floats is 64 kB, held for the session.
-  const nodeAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NODES * 4), 4);
-  nodeAttr.setUsage(THREE.DynamicDrawUsage);
-  geo.setAttribute('iNode', nodeAttr);
-  geo.instanceCount = 0;
-  (geo as unknown as { _maxInstanceCount: number })._maxInstanceCount = MAX_NODES;
+  /**
+   * One instanced patch geometry and its node list.
+   *
+   * THE INSTANCE BUFFER IS ALLOCATED ONCE, AT THE CEILING, AND NEVER REPLACED
+   * (2026-08-22). three.js freezes `geometry._maxInstanceCount` at the FIRST
+   * bind of a plain Mesh over an InstancedBufferGeometry
+   * (`WebGLBindingStates.setupVertexAttributes`, guarded by `=== undefined`)
+   * and never raises it again, so a buffer that grew later kept drawing
+   * against the capacity it happened to have when the first frame was
+   * submitted — the tail of every larger selection silently missing. Setting
+   * the cap by hand to the ceiling the selection is clamped to (`MAX_NODES`)
+   * makes the two one number. 4 096 instances × 4 floats is 64 kB, held for
+   * the session; the water variant's second buffer is another 64 kB and is
+   * allocated at the same ceiling because the split is a PARTITION — a world
+   * that is all water puts every piece into it.
+   */
+  function makePatchGeo(): { geo: THREE.InstancedBufferGeometry;
+                             attr: THREE.InstancedBufferAttribute } {
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute('position', patchPos);
+    g.setAttribute('uv', patchUv);
+    g.setIndex(patchIndex);
+    // The bounding sphere is never used for culling (the mesh is not culled as
+    // a whole — its nodes are), but three computes one on demand and would do
+    // it from the UNDISPLACED patch, i.e. a sphere of radius 1 at the origin. A
+    // world-sized one is the honest answer for geometry that is placed in the
+    // vertex shader.
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+    const a = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NODES * 4), 4);
+    a.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('iNode', a);
+    g.instanceCount = 0;
+    (g as unknown as { _maxInstanceCount: number })._maxInstanceCount = MAX_NODES;
+    return { geo: g, attr: a };
+  }
+
+  const dryGeo = makePatchGeo();
+  const wetGeo = makePatchGeo();
+  const geo = dryGeo.geo;
+  const nodeAttr = dryGeo.attr;
+  const waterGeo = wetGeo.geo;
+  const waterAttr = wetGeo.attr;
 
   /** The placeholder until the owner hands the real ground material in — it
    *  draws nothing, so a client whose terrain payload has not arrived shows an
@@ -1806,6 +2193,16 @@ export function createTerrainLod(): TerrainLod {
   mesh.receiveShadow = true;
   mesh.renderOrder = 0;
   mesh.matrixAutoUpdate = false;
+  // THE WET HALF, as a CHILD of the dry one (K-A E3). Same origin, same
+  // identity matrix, same flags — the nesting is a lifetime and visibility
+  // arrangement and never a transform. See `TerrainLod.mesh`.
+  const waterMesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material>
+    = new THREE.Mesh(waterGeo, placeholder);
+  waterMesh.frustumCulled = false;
+  waterMesh.receiveShadow = true;
+  waterMesh.renderOrder = 0;
+  waterMesh.matrixAutoUpdate = false;
+  mesh.add(waterMesh);
 
   let relief: WorldHeightTiles | null = null;
   let baseStep = 0;
@@ -1819,7 +2216,23 @@ export function createTerrainLod(): TerrainLod {
   let extent: [number, number, number, number] = [-100, -100, 100, 100];
   let leafM = 0;
   let nodes = 0;
+  let waterNodes = 0;
   let triangles = 0;
+  /**
+   * WHICH TILES CARRY WATER — the gate of the second material variant, taken
+   * as a SNAPSHOT in `setField` beside the pyramid it belongs to.
+   *
+   * A snapshot and not the live `WaterRaster`, although holding the reference
+   * would be one word less: the water PYRAMID is rebuilt in `setField` and
+   * nowhere else, so a gate that walked ahead of it would mark pieces wet that
+   * the pyramid still says nothing about (harmless, they draw the same ground)
+   * or — the other way round, when a tile is dropped — leave a piece whose
+   * pyramid still holds water on the dry program, which is the one direction
+   * that cracks. One Set of a few hundred short strings per field change buys
+   * "the gate and the pyramid are the same raster" outright.
+   */
+  let waterTileKeys: Set<string> | null = null;
+  let waterTileM = 0;
   /** The height span of everything held — the fallback box of a node the tile
    *  statistics say nothing about. */
   let globalRange = { min: 0, max: 0 };
@@ -1977,7 +2390,9 @@ export function createTerrainLod(): TerrainLod {
   function update(camera: THREE.Camera, viewportPx: number): void {
     if (!leafM) {
       geo.instanceCount = 0;
+      waterGeo.instanceCount = 0;
       nodes = 0;
+      waterNodes = 0;
       triangles = 0;
       return;
     }
@@ -2007,24 +2422,37 @@ export function createTerrainLod(): TerrainLod {
     const picked = sel.nodes;
     for (let i = 0; i < MAX_LOD_LEVELS; i += 1) uRange.value[i] = sel.ranges[i] ?? 0;
     const arr = nodeAttr.array as Float32Array;
+    const warr = waterAttr.array as Float32Array;
     triangles = 0;
+    // THE PARTITION (K-A E3). One selection, two lists: a piece whose closed
+    // rectangle touches a tile of the water raster is drawn by the lifting
+    // program, everything else by the program the dry world has always used.
+    // The two counts sum to the selection, so neither buffer can overrun.
+    let dry = 0;
+    let wet = 0;
     for (let i = 0; i < picked.length; i += 1) {
       const n = picked[i];
-      arr[i * 4] = n.x;
-      arr[i * 4 + 1] = n.z;
-      arr[i * 4 + 2] = n.size;
+      const carries = nodeHasWater(waterTileKeys, waterTileM, n.x, n.z, n.size);
+      const dst = carries ? warr : arr;
+      const at = (carries ? wet++ : dry++) * 4;
+      dst[at] = n.x;
+      dst[at + 1] = n.z;
+      dst[at + 2] = n.size;
       // THE LEVEL, not the morph: every vertex reads its own λ and subtracts
       // this (`lodLambda`, `tlodCompute`). One morph per node is what stood two
       // neighbouring patches 0.61 m apart along the edge they share. The level
       // also FIXES THE VERTEX SPACING (`uTlodBaseStep · 2^level`), which is how
       // a parent quadrant draws a child-sized square at the parent's density —
       // `cells` is `size / spacing` and needs no attribute of its own.
-      arr[i * 4 + 3] = n.level;
+      dst[at + 3] = n.level;
       triangles += n.cells * n.cells * 2;
     }
     nodeAttr.needsUpdate = true;
-    geo.instanceCount = picked.length;
+    waterAttr.needsUpdate = true;
+    geo.instanceCount = dry;
+    waterGeo.instanceCount = wet;
     nodes = picked.length;
+    waterNodes = wet;
   }
 
   /** The isolation panel's LOD freeze — see `TerrainLod.setFrozen`. */
@@ -2078,6 +2506,12 @@ export function createTerrainLod(): TerrainLod {
       // AFTER the near pyramid, because it is built over the near pyramid's own
       // window — and never over the far one, which has no water in it.
       waterPyr = buildWater(water ?? null);
+      // …and the GATE is snapshotted from the same raster in the same breath
+      // (K-A E3). A pyramid without tiles behind it can lift nothing, so the
+      // gate is emptied with it and every piece goes back to the dry program.
+      waterTileM = waterPyr ? (water?.tileM ?? 0) : 0;
+      waterTileKeys = waterPyr && water?.tiles?.size
+        ? new Set(water.tiles.keys()) : null;
       uploadPyramids();
     },
     refreshStats() {
@@ -2087,15 +2521,26 @@ export function createTerrainLod(): TerrainLod {
       extent = [rect[0], rect[1], rect[2], rect[3]];
       uExtent.value.set(rect[0], rect[1], rect[2], rect[3]);
     },
-    setMaterial(mat) {
-      patchTerrainLod(mat);
-      mesh.material = mat;
+    setMaterial(dryMat, waterMat) {
+      patchTerrainLod(dryMat);
+      patchTerrainLod(waterMat, true);
+      mesh.material = dryMat;
+      waterMesh.material = waterMat;
     },
+    materials: () => (mesh.material === placeholder
+      ? [] : [mesh.material, waterMesh.material]),
     nodeCount: () => nodes,
-    instanceCap: () => ({
-      cap: (geo as unknown as { _maxInstanceCount?: number })._maxInstanceCount ?? -1,
-      capacity: (geo.getAttribute('iNode') as THREE.InstancedBufferAttribute | undefined)?.count ?? 0,
-    }),
+    waterNodeCount: () => waterNodes,
+    instanceCap: () => {
+      const capOf = (g: THREE.InstancedBufferGeometry): number =>
+        (g as unknown as { _maxInstanceCount?: number })._maxInstanceCount ?? -1;
+      const capacityOf = (g: THREE.InstancedBufferGeometry): number =>
+        (g.getAttribute('iNode') as THREE.InstancedBufferAttribute | undefined)?.count ?? 0;
+      return {
+        cap: Math.min(capOf(geo), capOf(waterGeo)),
+        capacity: Math.min(capacityOf(geo), capacityOf(waterGeo)),
+      };
+    },
     triangleCount: () => triangles,
     setFrozen(on) {
       frozen = on;
@@ -2103,6 +2548,7 @@ export function createTerrainLod(): TerrainLod {
     },
     dispose() {
       geo.dispose();
+      waterGeo.dispose();
       placeholder.dispose();
       nearTex?.dispose();
       farTex?.dispose();

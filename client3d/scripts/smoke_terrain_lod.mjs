@@ -869,7 +869,9 @@ const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX
   morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl, selectLodFitted,
   levelErrorsFrom,
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt,
-  buildWaterPyramid, wlevelAt, bindTerrainLodUniforms } = lod;
+  buildWaterPyramid, wlevelAt, bindTerrainLodUniforms,
+  terrainLodWaterGlsl, nodeHasWater, liftedHeight, gpuWaterAt, patchTerrainLod,
+  TERRAIN_LOD_CACHE_KEY, TERRAIN_LOD_WATER_CACHE_KEY } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
 const { emptyWaterRaster, rasterLevelAt, waterTileFrom } = water;
 
@@ -2907,9 +2909,9 @@ check('the outermost written x at level 0', lastWritten(0), 14);
 check('…at level 1', lastWritten(1), 12);
 check('…at level 2', lastWritten(2), 8);
 check('…at level 3', lastWritten(3), 0);
-// AND THE UPLOAD IS WIRED, ready for E3: the three water uniforms are bound
-// beside the height ones, by the same one function every patched material goes
-// through. Nothing READS them yet — that is E3's line of GLSL.
+// AND THE UPLOAD IS WIRED: the three water uniforms are bound beside the height
+// ones, by the same one function every patched material goes through — and
+// since E3 the WATER VARIANT of the program is what reads them (section [16]).
 const bound = {};
 bindTerrainLodUniforms(bound);
 checkEq('the water TEXTURE is bound', bound.uTlodWater !== undefined, true);
@@ -2917,12 +2919,365 @@ checkEq('…its geometry', bound.uTlodWaterGeom !== undefined, true);
 checkEq('…and its per-level lattice', bound.uTlodWaterLevel !== undefined, true);
 checkEq('…and the height ones are still there',
   bound.uTlodNear !== undefined && bound.uTlodFar !== undefined, true);
-checkEq('no shader reads the water yet — E2 ships the field, E3 the GLSL',
-  terrainLodGlsl().includes('uTlodWater'), false);
 // NO FAR TWIN, and there will not be one: the overview grid carries no water at
 // all (§ A16.5), so a point outside the near window is "no water known here"
 // rather than a mirror invented from a coarse raster.
 checkEq('there is no far water pyramid', bound.uTlodWaterFar === undefined, true);
+
+// ── [16] THE VERTEX LIFT (Wasser v2, K-A E3) ────────────────────────────────
+//
+// THE FIXTURE — one shore, hand-built from the shape the server's bake really
+// leaves behind, on one 9 x 9 window at the 2 m base step (x = 0 … 16, and
+// everything is constant in z so the row IS the world).
+//
+// The authored water is a lake whose OUTLINE runs at x = 10, level 1.0 (one
+// knot, so the mirror is 1.0 everywhere), depth 2.0 m, shore ramp 4.0 m.
+//
+// EVERY NUMBER BELOW IS EXACT IN BINARY32, on purpose: the pyramids are
+// Float32Arrays, so a fixture built out of tenths would be checked against
+// values the arithmetic never produces (1.4 comes back as 1.3999999762) and
+// the tolerances would hide the very drift they are there to catch.
+//
+//   THE MIRROR ROW, i.e. what `HeightModel.water_raster` writes. The raster is
+//   dilated `WATER_RASTER_DILATION_STEPS` = 2 steps = 4 m past the outline
+//   (`heightfield.py`), so it is written out to x = 14 and x = 16 is the dry
+//   sentinel:
+//
+//       x     0    2    4    6    8   10   12   14   16
+//       w   1.0  1.0  1.0  1.0  1.0  1.0  1.0  1.0  null
+//
+//   THE GROUND ROW, `h_final`, one number per bake stage:
+//
+//       x = 0 … 6   the CARVE at full depth:  level − depth = 1 − 2 = −1
+//       x = 8       the shore ramp on its way up out of the bed:       0.0
+//       x = 10      the outline, where the ramp has reached the mirror: 1.0
+//       x = 12      the BANK CLAMP band, 2 m outside the outline. The rule
+//                   (`HeightModel._bank_clamp`) is
+//                       floor  = level + WATER_BANK_LIP_M = 1.0 + 0.1 = 1.1
+//                       target = floor + (h − floor) · (d / shore_ramp)
+//                   and for a natural bank of 1.5 at d = 2, ramp 4:
+//                       target = 1.1 + (1.5 − 1.1) · 0.5 = 1.3
+//                       h      = max(1.5, 1.3) = 1.5          → 1.5
+//       x = 14      4 m outside, i.e. d = ramp, where the clamp's minimum has
+//                   faded to `h` itself ("the band closes without a seam by
+//                   construction", `_bank_clamp`) — so untouched meadow, and
+//                   this stretch of it lies under the mirror:           0.75
+//       x = 16      dry land:                                          3.0
+//
+//       x     0    2    4    6    8   10   12   14   16
+//       h  −1.0 −1.0 −1.0 −1.0  0.0  1.0  1.5 0.75  3.0
+//
+// THE TWO PYRAMIDS DECIMATE AS SUBSETS (section [15]), so level 1 keeps the
+// base points 0, 4, 8, 12, 16:
+//
+//       level 1   x:    0     4     8    12    16
+//                 w:  1.0   1.0   1.0   1.0   null
+//                 h: −1.0  −1.0   0.0   1.5   3.0
+//
+// (a) THE LIFT ITSELF: y = max(h, w), with the DRY SENTINEL falling through to
+//     the ground. Derived from the rows above:
+//
+//       x = 4    h = −1.0, w = 1.0    → 1.0   (the bed lifts by 2 m)
+//       x = 9    h = mix(0.0, 1.0, ½) = 0.5, w = 1.0 → 1.0
+//       x = 10   h = 1.0, w = 1.0     → 1.0   (AT THE OUTLINE THE TWO HALVES
+//                                              OF THE MAX MEET: the ramp has
+//                                              arrived, so it does not matter
+//                                              which branch wins)
+//       x = 12   h = 1.5, w = 1.0     → 1.5   THE RING PROBE — the dilation
+//                                              ring HAS a level here and the
+//                                              terrain does NOT lift, because
+//                                              the bank clamp put the ground
+//                                              0.5 m over its own mirror
+//       x = 14   h = 0.75, w = 1.0    → 1.0   …and here it DOES, by 0.25 m
+//       x = 15   h = mix(0.75, 3.0, ½) = 1.875, w = mix(1.0, null, ½) = dry
+//                                     → 1.875 (a WEIGHTED dry corner is dry)
+//       x = 16   h = 3.0, w = dry     → 3.0
+//
+//     THE RING RULE, and it is not the one-liner it looks like. "A vertex in
+//     the dilation ring lifts only where the mirror stands over the ground,
+//     which the bank clamp rules out" is true AT THE OUTLINE and only there:
+//     the clamp's minimum FADES linearly to the untouched ground over
+//     `shore_ramp_m` and is exactly `h` again at `d = ramp`, while the ring is
+//     a fixed `WATER_RASTER_DILATION_M` = 4 m whatever the ramp is. Solve the
+//     clamp for the general case: a vertex at distance `d` outside the outline
+//     is guaranteed not to lift iff
+//         d / ramp  ≤  LIP / (LIP + level − h_natural)
+//     — so for a bank 0.75 m under the mirror (LIP 0.1) that is the innermost
+//     0.1/0.35 = 28.6 % of the band, and x = 14 (d = ramp, the outer edge) is
+//     never covered for any ramp at all. With the DEFAULT 3 m ramp the ring is
+//     a metre wider than the clamp band on top of that, so its outermost metre
+//     has no clamp behind it whatsoever.
+//     THIS IS NOT A DEFECT AND MUST NOT BE "FIXED" HERE: land lying
+//     under the mirror beside its own water IS failure class F1
+//     (`recherche-wasser-v2.md` § 2), and K-A answers it by raising the land
+//     instead of floating the water. The lift is bounded twice over — by
+//     `level − h` in height and by the 4 m dilation in width — and it is
+//     exactly why the plan puts the bank clamp and the 16 m relief fade up for
+//     removal in E6.
+//
+// (b) THE MIP IS THE HEIGHT'S MIP, AND THE MAX IS TAKEN PER LEVEL. At x = 14
+//     the level-1 lattice has already lost the ring (its next support point,
+//     x = 16, is the dry sentinel), so:
+//
+//       level 0:  h = 0.75,                    w = 1.0  → max = 1.0
+//       level 1:  h = mix(1.5, 3.0, ½) = 2.25, w = dry  → max = 2.25
+//
+//     The shipped shape blends those two: y(f) = mix(1.0, 2.25, f), continuous,
+//     y(0) = 1.0, y(0.001) = 1.00125. The OTHER order — blend the mirrors
+//     first, then take one max — answers max(mix(0.75, 2.25, f),
+//     maskedMix(1.0, dry, f)), and `maskedMix(1.0, dry, f)` is 1.0 at f = 0 and
+//     dry for every f > 0, so it drops to 0.75 + 1.5·f the instant f leaves 0
+//     (0.7515 at f = 0.001): a step of
+//         1.0 − 0.75 = 0.25 m
+//     in the drawn ground, AT the morph front, i.e. a shoreline that swims
+//     against its own bed as the camera moves. That is the number this section
+//     pins, and the reason for the order.
+//
+// (c) THE GATE. `nodeHasWater` decides which pieces get the lifting program.
+//     Over a world of 256 m tiles with water in tile "1,0" alone:
+//       - a 64 m piece at x = 0 touches tile 0 only              → dry
+//       - a 64 m piece at x = 256 touches tile 1                 → wet
+//       - a 64 m piece at x = 192 REACHES x = 256, and the vertex it puts
+//         there is filed under tile 1 by `tileKeyAt`             → wet
+//     The third is the whole crack argument: the closed rectangle
+//     (`floor((x + size) / tileM)`, no epsilon) is what makes a vertex shared
+//     by two pieces belong to BOTH of their tile spans, so both pieces run the
+//     same program and cannot disagree about where it sits. The RED probe
+//     below re-derives the same span with `nodeBounds`' `− 1e-6` and shows it
+//     answering "one tile" for the piece at 192 — the crack the epsilon opens.
+console.log('\n[16] the vertex lift — max(h, w_level), and who pays for it');
+
+const SHORE_H = [-1, -1, -1, -1, 0, 1, 1.5, 0.75, 3];
+const SHORE_W = [1, 1, 1, 1, 1, 1, 1, 1, null];
+const shoreH = (x) => SHORE_H[Math.max(0, Math.min(8, Math.round(x / 2)))];
+const shoreNear = buildPyramid((x) => shoreH(x), 0, 0, 2, 9, 9, MAX_LOD_LEVELS);
+const shoreRaster = emptyWaterRaster();
+shoreRaster.tileM = 256;
+shoreRaster.tiles.set('0,0', waterTileFrom(0, 0, 2, {
+  level: Array.from({ length: 9 }, () => SHORE_W.slice()),
+}));
+const shoreWater = buildWaterPyramid((x, z) => rasterLevelAt(shoreRaster, x, z),
+  0, 0, 2, 9, 9, MAX_LOD_LEVELS);
+const SHORE_RECT = [0, 0, 16, 16];
+/** The drawn height of ONE tap: the two shipped twins composed exactly as
+ *  `tlodCompute` composes them for one member of the morph pair. */
+const liftAt = (x, nodeStep) => liftedHeight(
+  gpuHeightAt(shoreNear, SHORE_RECT, null, x, 0, nodeStep),
+  gpuWaterAt(shoreWater, SHORE_RECT, x, 0, nodeStep));
+const wrow16 = (pyr, k, n) => {
+  const lv = pyr.levels[k];
+  return Array.from({ length: n }, (_, i) => pyr.data[lv.row0 * pyr.texW + i]);
+};
+
+// The fixture is what the docstring says it is, before anything is read off it.
+checkEq('(a) the level-1 mirror keeps every second base value',
+  wrow16(shoreWater, 1, 5).map((v) => (Number.isNaN(v) ? 'dry' : v)),
+  [1, 1, 1, 1, 'dry']);
+checkEq('…and the level-1 ground does too', wrow16(shoreNear, 1, 5),
+  [-1, -1, 0, 1.5, 3]);
+
+// (a) the lift, probe by probe
+check('the bed at x = 4 (−1) lifts onto its mirror', liftAt(4, 2), 1);
+check('…and so does the shore ramp at x = 9 (0.5)', liftAt(9, 2), 1);
+check('AT THE OUTLINE x = 10 the two halves meet — 1.0 either way',
+  liftAt(10, 2), 1);
+check('THE RING PROBE x = 12: the level is there, the bank is over it',
+  liftAt(12, 2), 1.5);
+checkEq('…so what is drawn is the GROUND and not the mirror',
+  liftAt(12, 2) === shoreH(12), true);
+check('THE OUTER RING x = 14, where the clamp has faded: it DOES lift',
+  liftAt(14, 2), 1);
+check('…by exactly level − h', liftAt(14, 2) - shoreH(14), 0.25);
+check('a WEIGHTED dry corner is dry — x = 15 draws the ground', liftAt(15, 2), 1.875);
+check('…and so does the dry probe x = 16', liftAt(16, 2), 3);
+// RED: `Math.max` is not the rule, and this is why `liftedHeight` exists.
+checkEq('RED: Math.max(h, NaN) would answer NaN at the dry probe',
+  Number.isNaN(Math.max(3, gpuWaterAt(shoreWater, SHORE_RECT, 16, 0, 2))), true);
+check('…while the shipped rule answers the ground', liftedHeight(3, NaN), 3);
+// The near rectangle is the gate: outside it the height is the OVERVIEW's and
+// the overview carries no water, so the mirror is not known there either.
+checkEq('past the near window there is no mirror to read',
+  Number.isNaN(gpuWaterAt(shoreWater, SHORE_RECT, 20, 0, 2)), true);
+checkEq('…and no pyramid at all is dry as well',
+  Number.isNaN(gpuWaterAt(null, SHORE_RECT, 4, 0, 2)), true);
+
+// (b) the morph reads BOTH taps at their own footprint
+check('at x = 14 the level-0 tap lifts to the mirror', liftAt(14, 2), 1);
+check('…while the level-1 tap has lost the ring and stays ground',
+  liftAt(14, 4), 2.25);
+const blend16 = (f) => liftAt(14, 2) * (1 - f) + liftAt(14, 4) * f;
+check('the shipped order is continuous at f = 0', blend16(0), 1);
+check('…and one thousandth in it has moved one thousandth of the way',
+  blend16(0.001), 1.00125, 1e-12);
+// RED COUNTER-PROBE: mirrors blended first, then one max. A masked mix of a wet
+// and a dry corner is dry for every weight above 0, so the lift vanishes the
+// moment f leaves 0.
+const wrongOrder = (f) => {
+  const h = gpuHeightAt(shoreNear, SHORE_RECT, null, 14, 0, 2) * (1 - f)
+    + gpuHeightAt(shoreNear, SHORE_RECT, null, 14, 0, 4) * f;
+  const w = f === 0 ? gpuWaterAt(shoreWater, SHORE_RECT, 14, 0, 2) : NaN;
+  return liftedHeight(h, w);
+};
+check('RED: the wrong order stands at 1.0 while f is exactly 0', wrongOrder(0), 1);
+check('…and drops to the bed one thousandth later', wrongOrder(0.001), 0.7515, 1e-12);
+check('…a step in the drawn ground of', wrongOrder(0) - wrongOrder(0.001),
+  0.2485, 1e-12);
+
+// …and the SHIPPED vertex function does it, not just the arithmetic above.
+const SHORE_NODE = { x: 0, z: 0, size: 64, level: 0, cells: 32, morph: 0 };
+check('morphedVertex at x = 14, morph 0, lifts to the mirror',
+  morphedVertex(SHORE_NODE, 7, 0, shoreNear, SHORE_RECT, null, null, 0,
+    shoreWater).y, 1);
+check('…and without a water pyramid it is the bed, unchanged',
+  morphedVertex(SHORE_NODE, 7, 0, shoreNear, SHORE_RECT, null, null, 0,
+    null).y, 0.75);
+// x = 12 is a support point of levels 0, 1 AND 2, so the decimation gives every
+// tap the same lifted height and the morph moves NOTHING — the mirror cannot
+// swim at a point every lattice agrees on.
+for (const t of [0, 0.5, 1]) {
+  check(`…and at x = 12 the morph t = ${t} draws the same 1.5`,
+    morphedVertex(SHORE_NODE, 6, 0, shoreNear, SHORE_RECT, null, null, t,
+      shoreWater).y, 1.5);
+}
+
+// (c) the gate
+console.log('\n…and the gate: which pieces get the lifting program at all');
+const WET_TILES = new Set(['1,0']);
+checkEq('a piece west of the water is dry',
+  nodeHasWater(WET_TILES, 256, 0, 0, 64), false);
+checkEq('…a piece inside the wet tile is wet',
+  nodeHasWater(WET_TILES, 256, 256, 0, 64), true);
+checkEq('THE SEAM: a piece whose EAST EDGE is the tile border is wet too',
+  nodeHasWater(WET_TILES, 256, 192, 0, 64), true);
+// RED: the same span with `nodeBounds`' epsilon drops the tile the shared
+// vertex reads its water out of — the piece at 192 would run the dry program
+// while its neighbour at 256 lifts, and the edge they share would tear.
+const epsSpan = (x, size, tileM) =>
+  Math.floor((x + size - 1e-6) / tileM) - Math.floor(x / tileM) + 1;
+check('RED: with the −1e-6 span that piece covers only', epsSpan(192, 64, 256), 1);
+check('…while the closed rectangle covers',
+  Math.floor((192 + 64) / 256) - Math.floor(192 / 256) + 1, 2);
+checkEq('…and the tile the epsilon keeps holds no water',
+  WET_TILES.has('0,0'), false);
+checkEq('an empty raster leaves every piece on the dry program',
+  nodeHasWater(new Set(), 256, 0, 0, 64), false);
+checkEq('…and so does a raster with no tile size',
+  nodeHasWater(WET_TILES, 0, 0, 0, 64), false);
+// The scan cap: a 2 048 m root over 256 m tiles spans 9 x 9 = 81 closed, which
+// is the cap itself, so the real quadtree is always scanned. Smaller tiles blow
+// past it and the answer is the SAFE one — wet, i.e. it pays four texelFetch
+// per vertex and draws the identical ground.
+check('a root over 256 m tiles spans exactly the cap', (2048 / 256 + 1) ** 2, 81);
+checkEq('…and is really scanned: no water near it, no lifting program',
+  nodeHasWater(WET_TILES, 256, -4096, 0, 2048), false);
+check('…while over 128 m tiles the same root spans', (2048 / 128 + 1) ** 2, 289);
+checkEq('…which is past the cap, so it is marked wet without looking',
+  nodeHasWater(new Set(['99,99']), 128, -4096, 0, 2048), true);
+
+// ── [17] THE SECOND MATERIAL VARIANT — and what the dry one pays ────────────
+//
+// THE BINDING RISK RULE of `recherche-wasser-v2.md` § 4 K-A: the water branch
+// exists only for nodes that carry water, so dry ground must keep the program
+// it had before this stage — the same GLSL statements and, since three caches
+// programs by `customProgramCacheKey`, literally the same `WebGLProgram`.
+//
+// String pins, hand-derived from what the lift has to be:
+//   - the dry variant declares NO uTlodWater*, calls NO tlodLift, and keeps
+//     its four texelFetch (the height's bilinear corners);
+//   - the water variant has EIGHT — four for the ground, four for the mirror;
+//   - the lift is `( w > h ) ? w : h` and NOT `max( h, w )`: the dry sentinel
+//     is a NaN out of the texture, IEEE says every comparison against it is
+//     false so `>` falls through to the ground, while GLSL leaves it open
+//     which operand `max` returns for a NaN;
+//   - each tap passes the SAME `nodeStep * m1` (and `* m2`) to the height and
+//     to the lift. That one repeated expression IS the "same footprint, same
+//     mip" property of section [16](b), written where it cannot drift.
+console.log('\n[17] the water variant, and the dry program that is untouched');
+const dryGlsl = terrainLodGlsl();
+const wetGlsl = terrainLodGlsl(true);
+checkEq('the dry variant knows no water uniform', dryGlsl.includes('uTlodWater'), false);
+checkEq('…nor the lift', dryGlsl.includes('tlodLift'), false);
+check('…and still fetches exactly the height\'s four texels',
+  dryGlsl.split('texelFetch(').length - 1, 4);
+checkEq('…its height line is the one it always had',
+  dryGlsl.includes(
+    'float h = mix( tlodHeight( p, nodeStep * m1 ), tlodHeight( p, nodeStep * m2 ), f );'),
+  true);
+checkEq('the water variant declares the sampler',
+  wetGlsl.includes('uniform sampler2D uTlodWater;'), true);
+checkEq('…and the isolation uniform',
+  wetGlsl.includes('uniform float uTlodNoWater;'), true);
+check('…and fetches eight texels, four ground and four mirror',
+  wetGlsl.split('texelFetch(').length - 1, 8);
+checkEq('THE LIFT IS A COMPARISON', wetGlsl.includes('return ( w > h ) ? w : h;'), true);
+checkEq('RED: and never max(), which GLSL does not pin down for a NaN',
+  /max\(\s*h,\s*w\s*\)/.test(wetGlsl), false);
+checkEq('EACH TAP IS LIFTED AT ITS OWN FOOTPRINT — the m1 half',
+  wetGlsl.includes('tlodLift( tlodHeight( p, nodeStep * m1 ), p, nodeStep * m1 )'), true);
+checkEq('…and the m2 half',
+  wetGlsl.includes('tlodLift( tlodHeight( p, nodeStep * m2 ), p, nodeStep * m2 )'), true);
+checkEq('…so the max is taken per LEVEL and one mix wraps both',
+  wetGlsl.includes('float h = mix( tlodLift( tlodHeight( p, nodeStep * m1 ), p,'
+    + ' nodeStep * m1 ), tlodLift( tlodHeight( p, nodeStep * m2 ), p,'
+    + ' nodeStep * m2 ), f );'), true);
+// The masked mix, in GLSL this time: four corners, four weight guards.
+check('the mirror\'s bilinear guards every one of its four corners',
+  terrainLodWaterGlsl().split('!= 0.0').length - 1, 4);
+checkEq('…and it is read in the NEAR window alone, where the height is',
+  terrainLodWaterGlsl().includes('p.x < uTlodNearRect.x'), true);
+// λ IS NEVER LIFTED: both variants measure the morph distance against the
+// unlifted ground, so a dry piece and the wet piece beside it place the vertex
+// they share at the same point.
+checkEq('the morph distance is the UNLIFTED ground, in both variants',
+  dryGlsl.includes('tlodHeight( p, 0.0 )') && wetGlsl.includes('tlodHeight( p, 0.0 )'),
+  true);
+checkEq('RED: nothing lifts inside tlodMorphAt',
+  /float tlodMorphAt[\s\S]*?\n}/.exec(wetGlsl)[0].includes('tlodLift'), false);
+
+// The cache key, on a stand-in material: the dry one is the string it was, the
+// water one appends and never replaces.
+const fakeMat = (prevKey) => {
+  const m = { onBeforeCompile: () => {} };
+  if (prevKey) m.customProgramCacheKey = () => prevKey;
+  return m;
+};
+const dryMat = fakeMat('');
+patchTerrainLod(dryMat);
+const wetMat = fakeMat('');
+patchTerrainLod(wetMat, true);
+checkEq('the dry cache key', dryMat.customProgramCacheKey(), TERRAIN_LOD_CACHE_KEY);
+checkEq('…is the string it always was', TERRAIN_LOD_CACHE_KEY, 'terrain-lod');
+checkEq('the water cache key appends', wetMat.customProgramCacheKey(),
+  `${TERRAIN_LOD_CACHE_KEY}+${TERRAIN_LOD_WATER_CACHE_KEY}`);
+const chainedDry = fakeMat('ground+layers');
+patchTerrainLod(chainedDry);
+const chainedWet = fakeMat('ground+layers');
+patchTerrainLod(chainedWet, true);
+checkEq('…and both still chain onto what the owner built',
+  [chainedDry.customProgramCacheKey(), chainedWet.customProgramCacheKey()],
+  ['ground+layers+terrain-lod', 'ground+layers+terrain-lod+water']);
+// …and the uniform that only the water variant may carry.
+const compile = (mat) => {
+  const shader = {
+    uniforms: {},
+    vertexShader: '#include <uv_vertex>\n#include <beginnormal_vertex>\n'
+      + '#include <begin_vertex>',
+    fragmentShader: '#include <normal_fragment_begin>',
+  };
+  mat.onBeforeCompile(shader, null);
+  return shader;
+};
+const dryShader = compile(dryMat);
+const wetShader = compile(wetMat);
+checkEq('the dry program is handed no uTlodNoWater',
+  dryShader.uniforms.uTlodNoWater === undefined, true);
+checkEq('…the water program is', wetShader.uniforms.uTlodNoWater !== undefined, true);
+checkEq('…both get the water TEXTURE bound (an unread uniform has no location)',
+  dryShader.uniforms.uTlodWater !== undefined
+  && wetShader.uniforms.uTlodWater !== undefined, true);
+checkEq('the dry vertex shader carries no lift',
+  dryShader.vertexShader.includes('tlodLift'), false);
+checkEq('…the water one does', wetShader.vertexShader.includes('tlodLift'), true);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);
