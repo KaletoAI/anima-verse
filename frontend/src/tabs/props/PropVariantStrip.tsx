@@ -491,15 +491,11 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
           + {t('Add variant')}
         </button>
       </div>
+      {/* One short line — the details live in the field tooltips (user
+          2026-08-24: the footer paragraph was long and half-translated). */}
       <span className="ga-hint">
         {t('Variants of one object — scatter mixes them, ★ is the default, the selected chip drives the preview.')}
-        {' '}
-        {t('W/D/H are that variant’s own size in metres. Leave them empty and the variant is as big as the prop above; fill one in and this version alone gets that measurement — a sapling beside the grown tree. The other two are pulled along its proportions, taken from the mesh in the preview for the selected chip and from its current size for the rest; clearing any one of the three drops all three back to the prop’s size.')}
-        {' '}
-        {t('The text field is what THIS variant’s next source image is rendered from. A new variant copies the prop’s description, so a version is an EDIT of it; clear the field and the variant renders from the prop’s text again.')}
-        {worldSeasons.length ? (
-          ' ' + t('A variant with no season chip lit renders all year; light one up and it renders only then. If EVERY variant is out of season the prop keeps rendering its primary one — a placement never becomes a hole.')
-        ) : null}
+        {worldSeasons.length ? ' ' + t('Season chips limit when a variant renders.') : null}
         {' '}
         {`${t('Active:')} ${activeCount}/${max}`}
       </span>

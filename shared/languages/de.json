@@ -1965,7 +1965,6 @@
     "this variant only. Empty = as big as the prop itself ({n} m).": "nur diese Variante. Leer = so groß wie das Prop selbst ({n} m).",
     "Variant size saved": "Variantengröße gespeichert",
     "Size override cleared": "Eigene Größe entfernt",
-    "W/D/H are that variant’s own size in metres. Leave them empty and the variant is as big as the prop above; fill one in and this version alone gets that measurement — a sapling beside the grown tree.": "B/T/H sind die eigene Größe dieser Variante in Metern. Leer gelassen ist die Variante so groß wie das Prop oben; trägst Du etwas ein, bekommt nur diese Version das Maß — ein Setzling neben dem ausgewachsenen Baum.",
     "Reference figure (1.70 m)": "Referenzfigur (1,70 m)",
     "Puts a FIXED 1.70 m person beside the model, on its own ground plane, over a one-metre grid — the preview’s scale. It never scales with the prop: if the figure looks wrong, the W/D/H above are wrong.": "Stellt eine FESTE 1,70-m-Person neben das Modell, auf dessen eigene Bodenebene, über ein Ein-Meter-Raster — der Maßstab der Vorschau. Sie skaliert nie mit dem Prop: Wirkt die Figur falsch, sind die B/T/H oben falsch.",
     "Variant {n} has a size of its own — the preview measures that one ({w} × {d} × {h} m).": "Variante {n} hat eine eigene Größe — die Vorschau misst diese ({w} × {d} × {h} m).",
@@ -1973,7 +1972,6 @@
     "What THIS variant’s source image is rendered from — the subject of its prompt. Empty = the prop’s own description (shown greyed). A new variant starts as a copy of it, so a version differs by an edit: “…as a sapling”, “…broken”, “…covered in snow”.": "Woraus das Quellbild DIESER Variante gerendert wird — das Motiv ihres Prompts. Leer = die Beschreibung des Props selbst (grau angezeigt). Eine neue Variante startet als Kopie davon, eine Version unterscheidet sich also durch eine Bearbeitung: „…als Setzling“, „…zerbrochen“, „…verschneit“.",
     "Variant description saved": "Variantenbeschreibung gespeichert",
     "Variant description cleared": "Variantenbeschreibung entfernt",
-    "The text field is what THIS variant’s next source image is rendered from. A new variant copies the prop’s description, so a version is an EDIT of it; clear the field and the variant renders from the prop’s text again.": "Das Textfeld ist die Vorlage für das nächste Quellbild DIESER Variante. Eine neue Variante kopiert die Beschreibung des Props, eine Version ist also eine BEARBEITUNG davon; leerst Du das Feld, rendert die Variante wieder aus dem Text des Props.",
     "The full prompt sent to the render — composed from the backend style and THIS variant’s description (the prop’s where the variant has none, the name as the last fallback). Empty = the server composes the same thing.": "Der vollständige Prompt, der an das Rendern geht — zusammengesetzt aus dem Backend-Stil und der Beschreibung DIESER Variante (der des Props, wenn die Variante keine hat, der Name als letzter Rückfall). Leer = der Server setzt dasselbe zusammen.",
     "mesh missing": "ohne Mesh",
     "image missing": "ohne Bild",
@@ -2141,7 +2139,8 @@
     "Pool": "In den Pool",
     "Take out of the world, keep the profile for a later spawn": "Aus der Welt nehmen, das Profil für einen späteren Auftritt behalten",
     "Delete this profile for good": "Dieses Profil endgültig löschen",
-    "W/D/H are that variant’s own size in metres. Leave them empty and the variant is as big as the prop above; fill one in and this version alone gets that measurement — a sapling beside the grown tree. The other two are pulled along its proportions, taken from the mesh in the preview for the selected chip and from its current size for the rest; clearing any one of the three drops all three back to the prop’s size.": "B/T/H sind die eigene Größe dieser Variante in Metern. Leer = die Variante ist so groß wie das Prop darüber; ein Wert macht nur diese Version so groß — der Schössling neben dem ausgewachsenen Baum. Die anderen beiden ziehen proportional nach (Maßstab aus dem Mesh der Vorschau beim gewählten Chip, sonst aus der aktuellen Größe); das Leeren eines der drei setzt alle drei auf die Prop-Größe zurück.",
-    "Variants of one object — scatter mixes them, ★ is the default, the selected chip drives the preview.": "Varianten eines Objekts — die Streuung mischt sie, ★ ist der Standard, der gewählte Chip bestimmt die Vorschau."
+    "Variants of one object — scatter mixes them, ★ is the default, the selected chip drives the preview.": "Varianten eines Objekts — die Streuung mischt sie, ★ ist der Standard, der gewählte Chip bestimmt die Vorschau.",
+    "Season chips limit when a variant renders.": "Saison-Chips begrenzen, wann eine Variante rendert.",
+    "Active:": "Aktiv:"
   }
 }
