@@ -35,7 +35,8 @@ async function loadCharacters() {
   const r = await fetch('/characters/list');
   if (!r.ok) return;
   const d = await r.json();
-  const chars = d.characters || [];
+  // /characters/list ships {name, template, temporary} rows — names only here.
+  const chars = (d.characters || []).map(c => c.name);
   const av = document.getElementById('sel-avatar');
   const ag = document.getElementById('sel-agent');
   av.innerHTML = '<option value="">(none)</option>';

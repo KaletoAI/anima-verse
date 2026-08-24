@@ -27,6 +27,7 @@ import { SkillsTab } from './SkillsTab'
 import { WardrobeTab } from './WardrobeTab'
 import { KnownLocationsEditor } from './KnownLocationsEditor'
 import { NewCharacterDialog } from './NewCharacterDialog'
+import { NewNpcDialog } from './NewNpcDialog'
 import { FieldSet } from './FieldSet'
 import { PlacementEditor } from './PlacementEditor'
 import { ActivityHomeTab } from './ActivityHomeTab'
@@ -150,6 +151,8 @@ export function CharactersTab() {
   const [homeLoading, setHomeLoading] = useState(false)
   // "New character" dialog — open state only; the dialog manages its own form.
   const [creating, setCreating] = useState(false)
+  // "New NPC" dialog — same deal; it runs the temporary-NPC pipeline itself.
+  const [creatingNpc, setCreatingNpc] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [confirmWipe, setConfirmWipe] = useState(false)
@@ -520,6 +523,7 @@ export function CharactersTab() {
         selected={selected}
         onSelect={onSelect}
         onNew={() => setCreating(true)}
+        onNewNpc={() => setCreatingNpc(true)}
         onImported={() => {
           loadCharacters().then(setCharacters).catch(() => {})
         }}
@@ -687,6 +691,22 @@ export function CharactersTab() {
           onClose={() => setCreating(false)}
           onCreated={(name) => {
             setCreating(false)
+            loadCharacters()
+              .then((list) => {
+                setCharacters(list)
+                onSelect(name)
+              })
+              .catch(() => onSelect(name))
+          }}
+        />
+      )}
+      {creatingNpc && (
+        <NewNpcDialog
+          locations={locations}
+          defaultLocationId={draft?.locationId || ''}
+          onClose={() => setCreatingNpc(false)}
+          onCreated={(name) => {
+            setCreatingNpc(false)
             loadCharacters()
               .then((list) => {
                 setCharacters(list)

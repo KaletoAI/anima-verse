@@ -313,6 +313,60 @@ def is_feature_enabled(character_name: str, feature: str) -> bool:
         return True
 
 
+def template_feature(character_name: str, feature: str,
+                     default: bool = False) -> bool:
+    """Template-only feature lookup that fails CLOSED.
+
+    ``is_feature_enabled`` is deliberately fail-open: a template that omits a
+    key grants the feature. That is right for capabilities that older templates
+    predate, and wrong for a POSITIVE marker — a marker that every template
+    silently carries marks nothing. This variant reads the template features
+    only, ignores the per-character config override (a marker is a property of
+    the KIND of character, not a per-character toggle) and returns ``default``
+    (False) whenever the key, the template or the profile is missing.
+    """
+    try:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+        tmpl = get_template(profile.get("template") or "human-default")
+        if not tmpl:
+            return default
+        return bool((tmpl.get("features") or {}).get(feature, default))
+    except Exception:
+        return default
+
+
+def feature_disabled(character_name: str, feature: str) -> bool:
+    """True only when this character EXPLICITLY disables ``feature``.
+
+    The mirror image of :func:`is_feature_enabled`, for WRITE gates.
+    ``is_feature_enabled`` falls back to the ``human-default`` template when the
+    profile names none — and that template disables everything. Using it to gate
+    a write therefore turns a missing ``template`` field into silent data loss
+    (a character that quietly stops remembering). A write gate must only fire on
+    an explicit "off", never on an absent answer, so:
+
+      * per-character config override wins, as always;
+      * a profile without a template is never disabled;
+      * an unknown template is never disabled;
+      * a template that omits the key is never disabled (fail-open, as above).
+    """
+    try:
+        from app.models.character import get_character_profile, get_character_config
+        cfg = get_character_config(character_name) or {}
+        if feature in cfg:
+            val = cfg[feature]
+            if isinstance(val, str):
+                return val.strip().lower() not in ("true", "1", "yes", "ja")
+            return not bool(val)
+        profile = get_character_profile(character_name) or {}
+        if not str(profile.get("template") or "").strip():
+            return False
+        return not template_feature(character_name, feature, default=True)
+    except Exception:
+        return False
+
+
 def save_template(name: str, template: Dict[str, Any]) -> bool:
     """Save a template by name."""
     get_templates_dir().mkdir(parents=True, exist_ok=True)

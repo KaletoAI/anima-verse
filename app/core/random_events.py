@@ -843,11 +843,16 @@ def try_resolve_events():
 
         # Characters an dieser Location (player-controlled ausgeschlossen
         # damit wir nicht dem User seine Chat-Antwort vorwegnehmen)
+        from app.models.character_template import is_feature_enabled as _feat
         actors = []
         for c in list_available_characters():
             if get_character_current_location(c) != location_id:
                 continue
             if is_character_sleeping(c):
+                continue
+            # Same feature gate as the generation path: a character that does
+            # not take part in random events does not solve them either.
+            if not _feat(c, "random_events_enabled"):
                 continue
             try:
                 if is_player_controlled(c):

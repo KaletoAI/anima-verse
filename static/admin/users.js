@@ -15,7 +15,9 @@ async function loadAll() {
             return;
         }
         USERS = (await uResp.json()).users || [];
-        CHARS = (await cResp.json()).characters || [];
+        // /characters/list ships {name, template, temporary} rows — this page
+        // only ever needs the names.
+        CHARS = ((await cResp.json()).characters || []).map(c => c.name);
         renderTable();
     } catch (e) {
         toast('Error loading: ' + e.message, 'error');

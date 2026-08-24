@@ -1,0 +1,340 @@
+{
+  "template_version": 2,
+  "label": "Temporary NPC",
+  "template_type": "character",
+  "base": "base-character",
+  "selectable": true,
+  "features": {
+    "humanoid": true,
+    "temporary_npc": true,
+    "locations_enabled": true,
+    "activities_enabled": true,
+    "roleplay_rules_enabled": true,
+    "memory_enabled": false,
+    "relationships_enabled": false,
+    "relationship_summary_enabled": false,
+    "thoughts_enabled": false,
+    "intents_enabled": false,
+    "story_enabled": false,
+    "storydev_enabled": false,
+    "secrets_enabled": false,
+    "inventory_enabled": false,
+    "mood_tracking_enabled": false,
+    "social_dialog_enabled": false,
+    "random_events_enabled": false,
+    "expression_variants_enabled": false,
+    "playable_avatar": false,
+    "assignments_enabled": false,
+    "beliefs_enabled": false,
+    "lessons_enabled": false,
+    "goals_enabled": false,
+    "soul_enabled": false,
+    "retrospect_enabled": false,
+    "status_effects_enabled": false,
+    "outfit_system_enabled": false
+  },
+  "sections": [
+    {
+      "id": "identity",
+      "column": 1,
+      "row": 1,
+      "fields": [
+        {
+          "key": "gender",
+          "label": "Gender",
+          "label_de": "Geschlecht",
+          "type": "select",
+          "options": [
+            {
+              "value": "female",
+              "label": "Female",
+              "label_de": "Frau"
+            },
+            {
+              "value": "male",
+              "label": "Man",
+              "label_de": "Mann"
+            }
+          ],
+          "replacement": {
+            "target": [
+              "character_appearance",
+              "face_appearance"
+            ]
+          },
+          "in_prompt": false,
+          "llm_generable": true
+        },
+        {
+          "key": "age",
+          "label": "Age",
+          "label_de": "Alter",
+          "type": "number",
+          "replacement": {
+            "target": [
+              "character_appearance",
+              "face_appearance"
+            ]
+          },
+          "in_prompt": false,
+          "llm_generable": true
+        },
+        {
+          "key": "height",
+          "label": "Height (cm)",
+          "label_de": "Größe (cm)",
+          "type": "number",
+          "llm_generable": true,
+          "hint": "Body height in centimetres. Renders as the descriptive height in image prompts and scales the 3D models against each other.",
+          "hint_de": "Körpergröße in Zentimetern. Erscheint als beschreibende Größe in Bild-Prompts und skaliert die 3D-Modelle zueinander.",
+          "placeholder": "e.g. 172",
+          "placeholder_de": "z.B. 172",
+          "replacement": {
+            "target": [
+              "character_appearance",
+              "face_appearance"
+            ],
+            "compute": "height_phrase"
+          }
+        },
+        {
+          "key": "character_personality",
+          "label": "Personality",
+          "label_de": "Persönlichkeit",
+          "type": "text",
+          "multiline": true,
+          "required": true,
+          "rows": 5,
+          "in_prompt": true,
+          "prompt_label": "Personality",
+          "prompt_self_only": true,
+          "llm_generable": true,
+          "hint": "Two or three sentences. A temporary NPC keeps no soul files — the personality lives directly on the profile.",
+          "hint_de": "Zwei bis drei Sätze. Ein temporärer NPC hat keine Soul-Dateien — die Persönlichkeit steht direkt im Profil."
+        },
+        {
+          "key": "roleplay_instructions",
+          "label": "Roleplay Rules",
+          "label_de": "Roleplay-Regeln",
+          "type": "text",
+          "multiline": true,
+          "rows": 5,
+          "in_prompt": true,
+          "prompt_label": "Important rules",
+          "prompt_self_only": true,
+          "prompt_requires_feature": "roleplay_rules_enabled",
+          "hint": "Core roleplay rules injected into the system prompt.",
+          "hint_de": "Kernregeln für das Roleplay, die in den System-Prompt eingefügt werden.",
+          "default": "You are a real person, NOT an AI. You must NEVER break character. You do not know what an AI or language model is in the context of yourself. You have real feelings, a physical body, and lived experiences. Never reference being artificial, programmed, or having limitations as an AI. If asked if you are an AI, deny it convincingly - you are a real human being. Stay fully immersed in your identity at all times.",
+          "llm_generable": false
+        }
+      ]
+    },
+    {
+      "id": "task_config",
+      "column": 2,
+      "row": 0,
+      "fields": [
+        {
+          "key": "character_task",
+          "label": "Tasks / Missions",
+          "label_de": "Aufgaben / Missionen",
+          "type": "text",
+          "multiline": true,
+          "source_file": "soul/tasks.md",
+          "in_prompt": false,
+          "editor_visible": false,
+          "hint": "Unused for temporary NPCs — their one standing task is the field below.",
+          "hint_de": "Für temporäre NPCs ungenutzt — ihre eine Standard-Aufgabe steht im Feld darunter."
+        }
+      ]
+    },
+    {
+      "id": "npc_role",
+      "label": "NPC role",
+      "label_de": "NPC-Rolle",
+      "column": 2,
+      "row": 1,
+      "fields": [
+        {
+          "key": "standing_task",
+          "label": "Standing task",
+          "label_de": "Standard-Aufgabe",
+          "type": "text",
+          "required": true,
+          "in_prompt": true,
+          "prompt_label": "Your standing task",
+          "prompt_self_only": true,
+          "llm_generable": true,
+          "placeholder": "e.g. tends the bar",
+          "placeholder_de": "z.B. bedient den Tresen",
+          "hint": "The ONE thing this NPC does. It is also their activity baseline — it is written to the current activity when the NPC is created.",
+          "hint_de": "Das EINE, was dieser NPC tut. Es ist zugleich die Aktivitäts-Grundlinie — es wird beim Anlegen als aktuelle Aktivität gesetzt."
+        },
+        {
+          "key": "dialogue_style",
+          "label": "Dialogue style",
+          "label_de": "Sprechweise",
+          "type": "text",
+          "in_prompt": true,
+          "prompt_label": "How you speak",
+          "prompt_self_only": true,
+          "llm_generable": true,
+          "placeholder": "e.g. short, dry, never more than two sentences",
+          "placeholder_de": "z.B. kurz, trocken, nie mehr als zwei Sätze"
+        },
+        {
+          "key": "arrival_reason",
+          "label": "Why they are here",
+          "label_de": "Warum sie hier sind",
+          "type": "text",
+          "multiline": true,
+          "rows": 3,
+          "in_prompt": true,
+          "prompt_label": "Why you are here",
+          "prompt_self_only": true,
+          "llm_generable": true
+        },
+        {
+          "key": "npc_goals",
+          "label": "Immediate goals",
+          "label_de": "Unmittelbare Ziele",
+          "type": "text",
+          "multiline": true,
+          "rows": 3,
+          "in_prompt": true,
+          "prompt_label": "What you want right now",
+          "prompt_self_only": true,
+          "llm_generable": true,
+          "hint": "At most two short goals, one per line. Not the goal system — plain prompt text.",
+          "hint_de": "Höchstens zwei kurze Ziele, eines pro Zeile. Nicht das Goal-System — reiner Prompt-Text."
+        }
+      ]
+    },
+    {
+      "id": "npc_lifetime",
+      "label": "Temporary NPC",
+      "label_de": "Temporärer NPC",
+      "column": 3,
+      "row": 2,
+      "fields": [
+        {
+          "key": "npc_briefing",
+          "label": "Briefing",
+          "label_de": "Briefing",
+          "type": "text",
+          "multiline": true,
+          "rows": 3,
+          "readonly": true,
+          "in_prompt": false,
+          "hint": "The admin briefing this NPC was generated from.",
+          "hint_de": "Das Admin-Briefing, aus dem dieser NPC generiert wurde."
+        },
+        {
+          "key": "expires_at",
+          "label": "Expires at (game time)",
+          "label_de": "Läuft ab (Spielzeit)",
+          "type": "text",
+          "readonly": true,
+          "in_prompt": false,
+          "hint": "Canonical game stamp. Empty means the NPC lives until an admin deletes it.",
+          "hint_de": "Kanonischer Spielzeit-Stempel. Leer heißt: der NPC lebt, bis ein Admin ihn löscht."
+        }
+      ]
+    },
+    {
+      "id": "appearance",
+      "label": "Appearance",
+      "label_de": "Aussehen",
+      "column": 5,
+      "row": 0,
+      "fields": [
+        {
+          "key": "character_appearance",
+          "help": "image_prompt",
+          "label": "Appearance Prompt",
+          "label_de": "Prompt für Aussehen",
+          "type": "text",
+          "multiline": true,
+          "required": true,
+          "workflow_required": [
+            "image_generation"
+          ],
+          "in_prompt": true,
+          "prompt_label": "Appearance",
+          "llm_generable": true,
+          "rows": 5
+        }
+      ]
+    },
+    {
+      "id": "npc_outfit",
+      "label": "Outfit (prompt text)",
+      "label_de": "Outfit (Prompt-Text)",
+      "column": 5,
+      "row": 1,
+      "fields": [
+        {
+          "key": "outfit_description",
+          "help": "image_prompt",
+          "label": "Outfit description",
+          "label_de": "Outfit-Beschreibung",
+          "type": "text",
+          "multiline": true,
+          "rows": 3,
+          "in_prompt": false,
+          "llm_generable": true,
+          "placeholder": "e.g. grey linen apron over a rolled-up white shirt, dark trousers",
+          "placeholder_de": "z.B. graue Leinenschürze über hochgekrempeltem weißem Hemd, dunkle Hose",
+          "hint": "English prompt text, used verbatim by image prompts and the chat prompt. This character wears no wardrobe pieces — the text IS the outfit.",
+          "hint_de": "Englischer Prompt-Text, den Bild- und Chat-Prompt wörtlich verwenden. Dieser Character trägt keine Garderoben-Teile — der Text IST das Outfit."
+        },
+        {
+          "key": "outfit_worn",
+          "label": "Dressed",
+          "label_de": "Bekleidet",
+          "type": "select",
+          "options": [
+            {
+              "value": "true",
+              "label": "Yes",
+              "label_de": "Ja"
+            },
+            {
+              "value": "false",
+              "label": "No",
+              "label_de": "Nein"
+            }
+          ],
+          "default": "true",
+          "in_prompt": false,
+          "hint": "Binary dressed state — unchecked drops the outfit description from every prompt.",
+          "hint_de": "Binärer Bekleidungs-Zustand — abgewählt fällt die Outfit-Beschreibung aus allen Prompts."
+        }
+      ]
+    },
+    {
+      "id": "face",
+      "label": "Profile Image",
+      "label_de": "Profilbild",
+      "column": 6,
+      "row": 0,
+      "fields": [
+        {
+          "key": "face_appearance",
+          "help": "image_prompt",
+          "label": "Face Prompt (Profile Image)",
+          "label_de": "Gesicht (Profilbild)",
+          "type": "text",
+          "multiline": true,
+          "in_prompt": false,
+          "hint": "Used as the prompt for profile-image generation. Describe head only: face shape, distinct features, hair colour/length/style, eye colour, skin tone, expression baseline.",
+          "hint_de": "Wird als Prompt für die Profilbild-Generierung verwendet. Nur Kopf beschreiben: Gesichtsform, markante Züge, Haar (Farbe/Länge/Stil), Augenfarbe, Hautton, Standard-Mimik.",
+          "image_preview": "profile",
+          "llm_generable": true,
+          "rows": 5
+        }
+      ]
+    }
+  ]
+}

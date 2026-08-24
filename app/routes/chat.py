@@ -2475,8 +2475,10 @@ def _build_full_system_prompt(character_name: str,
 
     # ---- Intent tracking flag (vereinheitlichte Vorhaben & Aufgaben) ---
     # Ein Block lehrt die [INTENT:]-Marker-Syntax (plan-intents-unified.md).
-    # Nur wenn der Chat-LLM selbst Marker setzen darf (kein separates Tool-LLM).
-    intent_tracking_enabled = bool(tools_enabled and not has_tool_llm)
+    # Nur wenn der Chat-LLM selbst Marker setzen darf (kein separates Tool-LLM)
+    # UND der Character ueberhaupt Vorhaben fuehrt (intents_enabled).
+    intent_tracking_enabled = bool(
+        tools_enabled and not has_tool_llm and _has("intents_enabled"))
 
     # ---- Tool instructions block (built externally — complex) ---------
     tool_instructions = ""

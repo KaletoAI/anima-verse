@@ -725,15 +725,48 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
         logger.debug("ensure/populate soul files failed for %s: %s", character_name, _se)
 
 
+def is_temporary_npc(character_name: str) -> bool:
+    """True when this character's TEMPLATE marks it as a temporary NPC.
+
+    The template is the single source of truth (feature ``temporary_npc``), so
+    a second NPC kind is another template JSON and not another code path. The
+    lookup fails CLOSED — see ``character_template.template_feature``.
+    """
+    if not character_name:
+        return False
+    from app.models.character_template import template_feature
+    return template_feature(character_name, "temporary_npc")
+
+
+def list_temporary_npcs() -> List[str]:
+    """All characters whose template marks them as temporary NPCs."""
+    return [n for n in list_available_characters() if is_temporary_npc(n)]
+
+
 def delete_character(character_name: str) -> bool:
     """Entfernt einen Character vollstaendig: DB-Zeilen + Storage-Verzeichnis.
 
     Sweept alle Tabellen mit einer character_name-Spalte sowie die
     Sonderfaelle (relationships.from_char/to_char, llm_call_stats.agent_name,
     chat_messages.partner). Loescht anschliessend characters/<name>/.
+
+    For a temporary NPC the OTHER characters' traces of it go too — a
+    disposable NPC must not leave memory rows behind in the characters that
+    met it. Own rows are covered by the sweep below; foreign ones are not,
+    which is why the trace cleanup runs first (it needs the name to still
+    resolve to a profile).
     """
     if not character_name or character_name.lower() in _RESERVED_NAMES:
         return False
+
+    # 0) Foreign traces — only for temporary NPCs (template-gated)
+    try:
+        if is_temporary_npc(character_name):
+            from app.core.memory_service import cleanup_npc_traces
+            cleanup_npc_traces(character_name)
+    except Exception as e:
+        logger.warning("delete_character: trace cleanup for %s failed: %s",
+                       character_name, e)
 
     # 1) DB sweep
     try:

@@ -61,8 +61,8 @@ export function MindTab() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    apiGet<{ characters?: string[] }>('/characters/list')
-      .then((d) => setCharacters(d.characters || []))
+    apiGet<{ characters?: { name: string }[] }>('/characters/list')
+      .then((d) => setCharacters((d.characters || []).map((c) => c.name)))
       .catch((e) => toast(t('Failed to load') + ': ' + (e as Error).message, 'error'))
   }, [t, toast])
 

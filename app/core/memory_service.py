@@ -467,6 +467,75 @@ def _create_intent_from_commitment(character_name: str, content: str,
 
 
 # ---------------------------------------------------------------------------
+# Trace cleanup for disposable characters
+# ---------------------------------------------------------------------------
+
+def cleanup_npc_traces(npc_name: str) -> Dict[str, int]:
+    """Delete what OTHER characters remember ABOUT a disposable character.
+
+    ``delete_character`` sweeps every table keyed by ``character_name``, i.e.
+    the NPC's own rows. What it cannot reach are the rows that belong to
+    someone else and merely talk about the NPC — those are what this removes:
+
+    * ``memories`` rows whose ``meta.related_character`` is the NPC, and rows
+      whose ``content`` names it as a whole word. Both are entries ABOUT the
+      NPC, so they go with it.
+    * ``summaries`` rows whose ``partner`` is the NPC — a per-partner summary
+      has no meaning once the partner is gone.
+
+    Deliberately NOT touched: daily/weekly/season summaries and diary entries
+    that merely *mention* the name. Those are about the DAY, not about the NPC;
+    dropping them would destroy unrelated history. The decision is deletion
+    without substitution — no "a stranger" rewriting.
+
+    Returns ``{"memories": n, "summaries": n}``.
+    """
+    from app.core.db import transaction
+
+    removed = {"memories": 0, "summaries": 0}
+    name = (npc_name or "").strip()
+    if not name:
+        return removed
+
+    # Whole-word match: "Mara" must not hit "Maranta". Applied in Python so
+    # the SQL stays a plain LIKE pre-filter on any SQLite build.
+    word_re = re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)", re.IGNORECASE)
+
+    try:
+        with transaction() as conn:
+            rows = conn.execute(
+                "SELECT id, character_name, content, meta FROM memories "
+                "WHERE character_name <> ?", (name,)).fetchall()
+            doomed = []
+            for row in rows:
+                related = ""
+                try:
+                    related = str((json.loads(row[3] or "{}") or {}).get(
+                        "related_character") or "")
+                except Exception:
+                    related = ""
+                if related.strip().lower() == name.lower():
+                    doomed.append(row[0])
+                elif word_re.search(row[2] or ""):
+                    doomed.append(row[0])
+            for mid in doomed:
+                # memory_embeddings cascades on the FK (PRAGMA foreign_keys=ON)
+                conn.execute("DELETE FROM memories WHERE id=?", (mid,))
+            removed["memories"] = len(doomed)
+
+            cur = conn.execute("DELETE FROM summaries WHERE partner=?", (name,))
+            removed["summaries"] = int(cur.rowcount or 0)
+    except Exception as e:
+        logger.error("cleanup_npc_traces failed for %s: %s", name, e)
+        return removed
+
+    if removed["memories"] or removed["summaries"]:
+        logger.info("NPC trace cleanup '%s': %d memories, %d partner summaries",
+                    name, removed["memories"], removed["summaries"])
+    return removed
+
+
+# ---------------------------------------------------------------------------
 # Consolidation (Background-Worker)
 # ---------------------------------------------------------------------------
 

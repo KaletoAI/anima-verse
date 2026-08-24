@@ -261,10 +261,26 @@ def add_memory(character_name: str,
     ``timestamp`` is the SYSTEM stamp, ``game_ts`` the canonical GAME stamp;
     both default to "now" on their own clock. A caller that back-dates one
     should back-date the other too — they describe the same instant.
+
+    A character whose template turns ``memory_enabled`` off remembers nothing.
+    The gate sits HERE, on the single write point, so no caller — scene
+    consolidation, extraction, intro memory, a skill — has to know about it.
+    ``feature_disabled`` and not ``is_feature_enabled``: the latter answers
+    "human-default" (everything off) for a profile without a template, which
+    on a write path would be silent data loss.
     """
     content = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', content).strip()
     if not content:
         return {}
+
+    try:
+        from app.models.character_template import feature_disabled
+        if feature_disabled(character_name, "memory_enabled"):
+            logger.debug("memory skipped for %s (memory_enabled=false)",
+                         character_name)
+            return {}
+    except Exception:
+        pass
 
     entry = {
         "id": _new_id(),

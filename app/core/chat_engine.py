@@ -898,10 +898,12 @@ def post_process_response(
     # [INTENT_PROGRESS:…]. Ersetzt die alten Assignment-Marker UND den toten
     # intent_engine-Pfad — eine vereinheitlichte Quelle (plan-intents-unified.md).
     try:
-        from app.models.intents import parse_and_apply_intent_markers
-        _ni = parse_and_apply_intent_markers(character_name, full_response)
-        if _ni:
-            result["intent_markers"] = _ni
+        from app.models.character_template import feature_disabled as _off
+        if not _off(character_name, "intents_enabled"):
+            from app.models.intents import parse_and_apply_intent_markers
+            _ni = parse_and_apply_intent_markers(character_name, full_response)
+            if _ni:
+                result["intent_markers"] = _ni
     except Exception as e:
         logger.error("Intent marker extraction error: %s", e)
 
@@ -933,7 +935,13 @@ def post_process_response(
         # Per-Turn-Extraktion war redundant zu den Szenen UND die Müll-Quelle
         # (z.B. „X will use Y to steal…") — sie ist für Gespräche raus.
         # (plan-history-consolidation-cleanup.md, Phase 2)
-        if _is_thought:
+        from app.models.character_template import feature_disabled as _off
+        # Feature gates. They sit BEFORE the LLM calls, not just before the
+        # writes: a character that remembers nothing must not pay for an
+        # extraction turn, and one without relationships must not pay for the
+        # sentiment turn. `feature_disabled`, not `is_feature_enabled` — a
+        # profile without a template must keep working, not fall silent.
+        if _is_thought and not _off(character_name, "memory_enabled"):
             try:
                 from app.core.memory_service import extract_memories_from_exchange, apply_extracted_memories
                 extracted = extract_memories_from_exchange(
@@ -950,6 +958,8 @@ def post_process_response(
         # Interaktion mit dem User sind (sonst falsche Closeness-Increments
         # und ein zweiter LLM-Call mit synthetischem User-Input).
         if _is_thought:
+            return
+        if _off(character_name, "relationships_enabled"):
             return
         # Relationship-Update braucht echte Charakternamen — Sentinel
         # ("user"/"Player") sind keine validen Speaker-Namen.

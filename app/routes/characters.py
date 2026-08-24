@@ -75,10 +75,24 @@ def get_available_models() -> Dict[str, Any]:
 def list_characters() -> Dict[str, Any]:
     """Listet alle verfuegbaren Characters (NPCs im System — nicht gefiltert).
 
+    Jeder Eintrag ist ``{name, template, temporary}``. Das Template faehrt mit,
+    damit Oberflaechen nach der ART des Characters filtern koennen, ohne pro
+    Zeile ein /profile nachzuladen — temporaere NPCs fahren in dieser Antwort
+    mit und werden im Frontend ueber ``temporary`` getrennt dargestellt.
+
     Avatar-Auswahl (wer der User spielen KANN) laeuft ueber /account/characters
-    und ist dort nach allowed_characters gefiltert.
+    und ist dort nach allowed_characters + playable_avatar gefiltert.
     """
-    return {"characters": list_available_characters()}
+    from app.models.character import get_character_profile, is_temporary_npc
+    out = []
+    for name in list_available_characters():
+        profile = get_character_profile(name) or {}
+        out.append({
+            "name": name,
+            "template": profile.get("template") or "",
+            "temporary": is_temporary_npc(name),
+        })
+    return {"characters": out}
 
 
 @router.get("/at-location")

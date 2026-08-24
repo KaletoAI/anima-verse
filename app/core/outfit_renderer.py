@@ -265,6 +265,20 @@ def render_outfit(
             full_parts.append(items_text)
         full = ". ".join(full_parts)
 
+    # 5) Free-text wardrobe: a character whose profile carries an
+    #    `outfit_description` wears exactly that — no slots, no pieces, no
+    #    inventory. `outfit_worn` is the binary dressed state (default: yes).
+    #    Only used when nothing structured is equipped, so it can never fight
+    #    a real wardrobe. Every consumer of `full` (chat "You are wearing",
+    #    image prompts, 3D) inherits it from this one place.
+    if not full:
+        described = str(profile.get("outfit_description") or "").strip()
+        worn = profile.get("outfit_worn", True)
+        if isinstance(worn, str):
+            worn = worn.strip().lower() not in ("false", "0", "no", "nein", "")
+        if described and worn:
+            full = "wearing: " + described
+
     return {
         "pieces": pieces_text,
         "items": items_text,

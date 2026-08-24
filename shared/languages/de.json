@@ -2072,6 +2072,22 @@
     "How high the random small hills of this area stand, in metres. It is baked into the world heightfield, so figures walk over it. Empty = flat ground.": "Wie hoch die zufälligen kleinen Hügel dieser Fläche stehen, in Metern. Sie sind ins Welt-Höhenfeld eingebacken, Figuren laufen also darüber. Leer = ebener Boden.",
     "How wide ONE swell of those hills is, in metres — small values make a choppy field, large ones a gentle roll. Empty = the server’s {n} m.": "Wie breit EINE Welle dieser Hügel ist, in Metern — kleine Werte ergeben ein kabbeliges Feld, große eine sanfte Dünung. Leer = die {n} m des Servers.",
     "Above ~{max} m the random hills get steeper than walkers can climb — spots of this area become impassable.": "Über ~{max} m werden die zufälligen Hügel steiler, als Laufende steigen können — Stellen dieser Fläche werden unpassierbar.",
-    "The water LEVEL, the flow direction, the bed under the water and the ground’s micro-relief belong to the painted area, not to the kind — select an area on the map to set them. Two lakes of one kind stand at two heights, and one grass can roll here and lie flat there, so a kind could never answer for both.": "Der Wasser-SPIEGEL, die Fließrichtung, das Bett unter dem Wasser und das Mikro-Relief des Bodens gehören der gemalten Fläche, nicht der Art — wähle eine Fläche auf der Karte, um sie zu setzen. Zwei Seen einer Art stehen auf zwei Höhen, und ein Gras kann hier wellen und dort eben liegen; eine Art könnte für beides nie antworten."
+    "The water LEVEL, the flow direction, the bed under the water and the ground’s micro-relief belong to the painted area, not to the kind — select an area on the map to set them. Two lakes of one kind stand at two heights, and one grass can roll here and lie flat there, so a kind could never answer for both.": "Der Wasser-SPIEGEL, die Fließrichtung, das Bett unter dem Wasser und das Mikro-Relief des Bodens gehören der gemalten Fläche, nicht der Art — wähle eine Fläche auf der Karte, um sie zu setzen. Zwei Seen einer Art stehen auf zwei Höhen, und ein Gras kann hier wellen und dort eben liegen; eine Art könnte für beides nie antworten.",
+    "Temporary NPCs": "Temporäre NPCs",
+    "New NPC": "Neuer NPC",
+    "No temporary NPCs": "Keine temporären NPCs",
+    "New temporary NPC": "Neuer temporärer NPC",
+    "A temporary NPC has no memory, no relationships and no autonomous thoughts. It stands where you put it, does its one standing task and answers when spoken to.": "Ein temporärer NPC hat kein Gedächtnis, keine Beziehungen und keine autonomen Gedanken. Er steht, wo du ihn hinsetzt, erledigt seine eine Standard-Aufgabe und antwortet, wenn man ihn anspricht.",
+    "Briefing": "Briefing",
+    "e.g. a weary barkeeper who has run this place for thirty years": "z.B. ein müder Wirt, der diesen Laden seit dreißig Jahren führt",
+    "Pick a location": "Ort wählen",
+    "(any room)": "(beliebiger Raum)",
+    "TTL (game hours)": "TTL (Spielstunden)",
+    "Validator model": "Validator-Modell",
+    "same as model": "wie das Modell",
+    "Validate": "Prüfen",
+    "Repair": "Korrigieren",
+    "Validator findings ({n})": "Validator-Befunde ({n})",
+    "Create NPC": "NPC anlegen"
   }
 }

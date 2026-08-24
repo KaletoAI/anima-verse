@@ -306,9 +306,16 @@ def _sub_day_consolidation():
     try:
         from app.core import day_consolidation as dc
         from app.models.character import list_available_characters
+        from app.models.character_template import feature_disabled
         total = 0
         for name in list_available_characters():
             try:
+                # A character that remembers nothing has no day to fold up —
+                # and the fold is an LLM call, so the gate belongs here, not
+                # at the write. Explicit "off" only: a profile without a
+                # template must keep consolidating.
+                if feature_disabled(name, "memory_enabled"):
+                    continue
                 total += dc.maybe_consolidate(name)
             except Exception as e:
                 logger.debug("day_consolidation(%s) error: %s", name, e)
@@ -328,6 +335,23 @@ def _sub_lora_library_sync():
         sync_lora_library()  # logs its own summary when something changed
     except Exception as e:
         logger.debug("lora_library_sync sub error: %s", e)
+
+
+def _sub_npc_ttl_sweep():
+    """Remove temporary NPCs whose GAME-time TTL has run out.
+
+    Game time, so a frozen world freezes the NPCs' lifetime with it; the tick
+    loop is already paused while the world is frozen, which makes that
+    automatic. An NPC without an ``expires_at`` stamp lives until an admin
+    deletes it.
+    """
+    try:
+        from app.core.npc_ops import sweep_expired_npcs
+        removed = sweep_expired_npcs()
+        if removed:
+            logger.info("npc_ttl_sweep: %d expired NPC(s) removed", removed)
+    except Exception as e:
+        logger.debug("npc_ttl_sweep sub error: %s", e)
 
 
 # Sub-Task-Tabelle: (callable, min_interval_seconds, label).
@@ -352,6 +376,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_day_consolidation,         600,                   "day_consolidation"),
     (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),
     (_sub_lora_library_sync,         3600,                  "lora_library_sync"),
+    (_sub_npc_ttl_sweep,             3600,                  "npc_ttl_sweep"),
 ]
 
 

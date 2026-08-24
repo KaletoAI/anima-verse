@@ -27,6 +27,11 @@ export interface LocationRef {
 export interface CharacterRef {
   name: string
   display_name?: string
+  /** Character template id (e.g. `human-roleplay`, `npc-temporary`). */
+  template?: string
+  /** True for a temporary NPC — its template carries the `temporary_npc`
+   *  feature. Surfaces that must not offer NPCs filter on this. */
+  temporary?: boolean
 }
 
 export async function loadLocations(): Promise<LocationRef[]> {
