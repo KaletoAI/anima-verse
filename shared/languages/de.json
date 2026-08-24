@@ -2088,6 +2088,22 @@
     "Validate": "Prüfen",
     "Repair": "Korrigieren",
     "Validator findings ({n})": "Validator-Befunde ({n})",
-    "Create NPC": "NPC anlegen"
+    "Create NPC": "NPC anlegen",
+    "Save ({n})": "Speichern ({n})",
+    "Really discard {n}": "Wirklich {n} verwerfen",
+    "Write every change of this map in ONE go — one bake instead of one per edit": "Alle Änderungen dieser Karte in EINEM Zug schreiben — ein Bake statt eines pro Bearbeitung",
+    "Throw the unsaved changes away and take what the server has": "Die ungespeicherten Änderungen wegwerfen und den Stand des Servers übernehmen",
+    "{n} changes were refused — somebody else saved them meanwhile. Reload takes the server’s version.": "{n} Änderungen wurden abgelehnt — jemand anderes hat sie inzwischen gespeichert. Neu laden übernimmt den Stand des Servers.",
+    "{n} changes were refused — they changed on the server meanwhile. They are still marked here; Reload takes the server’s version.": "{n} Änderungen wurden abgelehnt — sie haben sich inzwischen auf dem Server geändert. Sie sind hier weiter markiert; Neu laden übernimmt den Stand des Servers.",
+    "Could not save the map": "Karte konnte nicht gespeichert werden",
+    "Map saved": "Karte gespeichert",
+    "At most {n} world props per world": "Höchstens {n} Welt-Props pro Welt",
+    "Remove this placement from the draft": "Diese Platzierung aus dem Entwurf entfernen",
+    "Erase this painted area from the draft — Save writes it, Discard brings it back": "Diese gemalte Fläche aus dem Entwurf löschen — Speichern schreibt es, Verwerfen holt sie zurück",
+    "Remove this height area from the draft — the ground here goes flat again": "Diese Höhenfläche aus dem Entwurf entfernen — der Boden hier wird wieder flach",
+    "Unsaved changes": "Ungespeicherte Änderungen",
+    "This tab holds changes that were never saved. Leaving it discards them.": "Dieser Tab enthält Änderungen, die nie gespeichert wurden. Wer ihn verlässt, verwirft sie.",
+    "Stay": "Hier bleiben",
+    "Leave and discard": "Verlassen und verwerfen"
   }
 }

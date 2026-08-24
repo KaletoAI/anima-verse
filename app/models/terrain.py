@@ -742,11 +742,25 @@ def settle_water_level(area: Dict[str, Any]) -> Dict[str, Any]:
     return area
 
 
+def _edit_stamp() -> str:
+    """``updated_at`` for an area — to the MICROSECOND, deliberately.
+
+    The stamp is not decoration: it is the version token the batch save checks
+    an editor's change against (:func:`area_stamps`, ``core.bulk_edit``). At
+    the default second resolution two saves inside one second are the same
+    string, and a stale write would slip through the concurrency check
+    unnoticed — exactly during the burst of edits a batch save produces. The
+    same resolution is used by the height areas and the world props for the
+    same reason.
+    """
+    return utc_now_iso("microseconds")
+
+
 def save_area(raw: Any) -> Dict[str, Any]:
     """Create (no ``id``) or replace (with ``id``) one area; returns the
     sanitized entry. Raises ValueError when the area is not usable."""
     area = settle_water_level(sanitize_area(raw))
-    now = utc_now_iso()
+    now = _edit_stamp()
     with transaction() as conn:
         conn.execute(
             "INSERT INTO terrain_areas (id, kind, polygon, z_order, meta, "
@@ -770,6 +784,75 @@ def delete_area(area_id: str) -> bool:
     if deleted:
         _note_relief_write()
     return deleted
+
+
+def area_stamps() -> Dict[str, str]:
+    """``{id: updated_at}`` of every stored area — the VERSION TOKENS the batch
+    save checks against (``core.bulk_edit``).
+
+    Deliberately not part of :func:`list_areas`, and therefore not part of
+    :func:`terrain_sig`: a re-save that changes nothing about the painted world
+    moves this stamp, and a signature that moved with it would re-bake every
+    client's ground for a shape that is exactly where it was.
+    """
+    conn = get_connection()
+    return {r[0]: str(r[1] or "")
+            for r in conn.execute(
+                "SELECT id, updated_at FROM terrain_areas").fetchall()}
+
+
+def save_areas_bulk(upserts: Any, deletes: Any) -> Dict[str, Any]:
+    """Write a WHOLE map edit — many areas, one transaction, one invalidation.
+
+    This is the batch half of :func:`save_area` and :func:`delete_area`, and
+    everything it does differently is about the three costs those two pay PER
+    OBJECT (plan ``plan-map-save-batch.md``):
+
+    * ONE TRANSACTION for every upsert and every delete, so a batch either
+      lands or does not.
+    * ONE ``_note_relief_write`` at the end instead of one per area — that hook
+      re-rasters the world heightfield and moves the signature every client
+      polls, which is the whole reason painting used to stutter.
+    * ONE WARM WATER MODEL: :func:`settle_water_level` borrows
+      ``heightfield.cached_model()``, and nothing here invalidates it until the
+      writes are through — so five painted lakes settle against one model
+      instead of building five.
+
+    The sanitizer is the singular one, called verbatim; refusals are per object
+    and never fail the request (see ``core.bulk_edit``). Returns
+    ``{"saved": [{"temp_id", "area"}], "deleted": [id], "rejected": [...]}``.
+    """
+    from app.core.bulk_edit import plan_batch
+    prepared, delete_ids, rejected = plan_batch(
+        upserts, deletes, area_stamps(),
+        lambda raw: settle_water_level(sanitize_area(raw)))
+    now = _edit_stamp()
+    saved: List[Dict[str, Any]] = []
+    changed = 0
+    with transaction() as conn:
+        for area_id in delete_ids:
+            cur = conn.execute("DELETE FROM terrain_areas WHERE id=?",
+                               (area_id,))
+            changed += int(cur.rowcount or 0)
+        for entry in prepared:
+            area = entry["obj"]
+            conn.execute(
+                "INSERT INTO terrain_areas (id, kind, polygon, z_order, meta, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, "
+                "polygon=excluded.polygon, z_order=excluded.z_order, "
+                "meta=excluded.meta, updated_at=excluded.updated_at",
+                (area["id"], area["kind"],
+                 json.dumps(area["polygon"], ensure_ascii=False),
+                 area["z_order"],
+                 json.dumps(area["meta"], ensure_ascii=False), now, now))
+            changed += 1
+            saved.append({"temp_id": entry["temp_id"], "area": area})
+    # An empty batch — or one whose deletes were all already gone — moves
+    # nothing, and then the signature must not move either.
+    if changed:
+        _note_relief_write()
+    return {"saved": saved, "deleted": delete_ids, "rejected": rejected}
 
 
 def terrain_sig() -> str:

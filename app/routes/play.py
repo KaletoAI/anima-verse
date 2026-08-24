@@ -2769,6 +2769,16 @@ def get_terrain_route(user=Depends(get_current_user)):
         # clients with the next refetch, like the scatter enrichment above.
         "prop_boxes": prop_boxes(),
         "sig": terrain.terrain_sig(),
+        # ``{id: updated_at}`` — the VERSION TOKEN of every area. This is the
+        # payload the MAP EDITOR reads its ground from (it needs the scatter
+        # enrichment above, which the /world route does not do), and since the
+        # editor writes a local draft in one batch, every buffered change has
+        # to carry the stamp it was loaded with — that is what lets the batch
+        # refuse exactly the areas somebody else painted over in the meantime
+        # (``core.bulk_edit``). Game clients ignore it. It rides beside the
+        # areas and not inside them so ``terrain_sig`` never sees it: a re-save
+        # that changes no shape must not re-bake every client's ground.
+        "stamps": terrain.area_stamps(),
     }
 
 

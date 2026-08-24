@@ -148,7 +148,9 @@ def save_height_area(raw: Any) -> Dict[str, Any]:
     """Create (no ``id``) or replace (with ``id``) one height area; returns the
     sanitized entry. Raises ValueError when it is not usable."""
     area = sanitize_height_area(raw)
-    now = utc_now_iso()
+    # Microsecond resolution, because this stamp is the batch save's version
+    # token (:func:`height_area_stamps`) — see ``terrain._edit_stamp``.
+    now = utc_now_iso("microseconds")
     with transaction() as conn:
         conn.execute(
             "INSERT INTO height_areas (id, polygon, height_m, falloff_m, "
@@ -172,6 +174,62 @@ def delete_height_area(area_id: str) -> bool:
     if deleted:
         _invalidate()
     return deleted
+
+
+def height_area_stamps() -> Dict[str, str]:
+    """``{id: updated_at}`` of every stored height area — the version tokens
+    the batch save checks against (``core.bulk_edit``).
+
+    Kept out of :func:`list_height_areas` for the reason its terrain twin is
+    (``terrain.area_stamps``): the list is what :func:`height_sig` hashes, and a
+    re-save that changes no ground must not move the signature.
+    """
+    conn = get_connection()
+    return {r[0]: str(r[1] or "")
+            for r in conn.execute(
+                "SELECT id, updated_at FROM height_areas").fetchall()}
+
+
+def save_height_areas_bulk(upserts: Any, deletes: Any) -> Dict[str, Any]:
+    """Write a whole relief edit — many areas, one transaction, ONE re-raster.
+
+    The batch half of :func:`save_height_area` / :func:`delete_height_area`.
+    :func:`_invalidate` is what makes it worth having: every singular write
+    re-rasters the entire world grid synchronously (hundreds of milliseconds
+    for a full-budget area), so drawing five hills used to pay for five
+    rasters of the same world. Here it runs once, after the last write.
+
+    Refusals are per object and never fail the request (``core.bulk_edit``).
+    Returns ``{"saved": [{"temp_id", "area"}], "deleted": [id],
+    "rejected": [...]}``.
+    """
+    from app.core.bulk_edit import plan_batch
+    prepared, delete_ids, rejected = plan_batch(
+        upserts, deletes, height_area_stamps(), sanitize_height_area)
+    now = utc_now_iso("microseconds")
+    saved: List[Dict[str, Any]] = []
+    changed = 0
+    with transaction() as conn:
+        for area_id in delete_ids:
+            cur = conn.execute("DELETE FROM height_areas WHERE id=?",
+                               (area_id,))
+            changed += int(cur.rowcount or 0)
+        for entry in prepared:
+            area = entry["obj"]
+            conn.execute(
+                "INSERT INTO height_areas (id, polygon, height_m, falloff_m, "
+                "meta, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET polygon=excluded.polygon, "
+                "height_m=excluded.height_m, falloff_m=excluded.falloff_m, "
+                "meta=excluded.meta, updated_at=excluded.updated_at",
+                (area["id"], json.dumps(area["polygon"], ensure_ascii=False),
+                 area["height_m"], area["falloff_m"],
+                 json.dumps(area["meta"], ensure_ascii=False), now, now))
+            changed += 1
+            saved.append({"temp_id": entry["temp_id"], "area": area})
+    if changed:
+        _invalidate()
+    return {"saved": saved, "deleted": delete_ids, "rejected": rejected}
 
 
 def _invalidate() -> None:

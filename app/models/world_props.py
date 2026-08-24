@@ -190,7 +190,9 @@ def save_world_prop(raw: Any) -> Dict[str, Any]:
     placement must stay possible in a world that is already at the ceiling.
     """
     entry = sanitize_world_prop(raw)
-    now = utc_now_iso()
+    # Microsecond resolution, because this stamp is the batch save's version
+    # token (:func:`world_prop_stamps`) — see ``terrain._edit_stamp``.
+    now = utc_now_iso("microseconds")
     with transaction() as conn:
         row = conn.execute("SELECT 1 FROM world_props WHERE id=?",
                            (entry["id"],)).fetchone()
@@ -217,6 +219,69 @@ def delete_world_prop(placement_id: str) -> bool:
         cur = conn.execute("DELETE FROM world_props WHERE id=?",
                            ((placement_id or "").strip(),))
         return cur.rowcount > 0
+
+
+def world_prop_stamps() -> Dict[str, str]:
+    """``{id: updated_at}`` of every stored placement — the version tokens the
+    batch save checks against (``core.bulk_edit``).
+
+    Kept out of :func:`list_world_props` like its two twins
+    (``terrain.area_stamps``): the rows are what :func:`world_props_sig`
+    hashes, and a re-save that moves no prop must not move the signature.
+    """
+    conn = get_connection()
+    return {r[0]: str(r[1] or "")
+            for r in conn.execute(
+                "SELECT id, updated_at FROM world_props").fetchall()}
+
+
+def save_world_props_bulk(upserts: Any, deletes: Any) -> Dict[str, Any]:
+    """Write a whole placement edit — many props, one transaction.
+
+    The batch half of :func:`save_world_prop` / :func:`delete_world_prop`.
+    Nothing is invalidated here (a placement changes no relief), but the CAP
+    is: it is checked against the world the batch LEAVES BEHIND, so a batch
+    that deletes ten props and places ten new ones fits even at the ceiling —
+    which the per-object route could never do, since its deletes and its
+    creates were separate requests in an order nobody controlled.
+
+    Refusals are per object and never fail the request (``core.bulk_edit``).
+    Returns ``{"saved": [{"temp_id", "world_prop"}], "deleted": [id],
+    "rejected": [...]}``.
+    """
+    from app.core.bulk_edit import plan_batch
+    prepared, delete_ids, rejected = plan_batch(
+        upserts, deletes, world_prop_stamps(), sanitize_world_prop)
+    now = utc_now_iso("microseconds")
+    saved: List[Dict[str, Any]] = []
+    with transaction() as conn:
+        for placement_id in delete_ids:
+            conn.execute("DELETE FROM world_props WHERE id=?", (placement_id,))
+        room = MAX_WORLD_PROPS - int(
+            conn.execute("SELECT COUNT(*) FROM world_props").fetchone()[0])
+        for entry in prepared:
+            if entry["is_new"]:
+                if room <= 0:
+                    rejected.append(
+                        {"op": "upsert", "id": "",
+                         "temp_id": entry["temp_id"],
+                         "reason": f"at most {MAX_WORLD_PROPS} world props "
+                                   "per world"})
+                    continue
+                room -= 1
+            prop = entry["obj"]
+            conn.execute(
+                "INSERT INTO world_props (id, prop_id, x, z, yaw_deg, "
+                "offset_y, variant, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET prop_id=excluded.prop_id, "
+                "x=excluded.x, z=excluded.z, yaw_deg=excluded.yaw_deg, "
+                "offset_y=excluded.offset_y, variant=excluded.variant, "
+                "updated_at=excluded.updated_at",
+                (prop["id"], prop["prop_id"], prop["x"], prop["z"],
+                 prop["yaw_deg"], prop["offset_y"], prop["variant"], now, now))
+            saved.append({"temp_id": entry["temp_id"], "world_prop": prop})
+    return {"saved": saved, "deleted": delete_ids, "rejected": rejected}
 
 
 def delete_world_props_of(prop_id: str) -> int:

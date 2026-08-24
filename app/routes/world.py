@@ -476,6 +476,45 @@ async def post_terrain_area_route(request: Request) -> Dict[str, Any]:
     return await asyncio.to_thread(_save_terrain_area, data)
 
 
+def _bulk_body(data: Any) -> Dict[str, Any]:
+    """The two lists of a bulk body, checked once for all three routes."""
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    return data
+
+
+# DECLARED BEFORE THE ``/{area_id}`` ROUTE BELOW, and that is not cosmetic:
+# FastAPI matches in declaration order, so a later "/bulk" would be swallowed
+# by the singular PUT as an area with the id "bulk". The same holds for the
+# height and prop batches further down.
+@router.put("/terrain-areas/bulk")
+async def put_terrain_areas_bulk_route(request: Request) -> Dict[str, Any]:
+    """Save a WHOLE map edit at once (plan ``plan-map-save-batch.md``).
+
+    Body ``{upserts: [...], deletes: [{id, updated_at}]}``. An upsert is the
+    same object the singular PUT/POST takes, plus two transport keys: the
+    ``updated_at`` the editor loaded (optimistic concurrency) and, for an
+    object that does not exist yet, a client-side ``temp_id`` instead of an
+    ``id`` — the server mints the real one and names both in the answer.
+
+    ALWAYS 200, even when parts were refused: the request as a whole succeeded
+    and ``rejected`` says per object why (``core.bulk_edit``). The editor keeps
+    exactly those in its buffer and adopts the rest.
+
+    One transaction, one water model, one signature move — see
+    ``terrain.save_areas_bulk`` for why each of the three matters.
+    """
+    data = _bulk_body(await request.json())
+    return await asyncio.to_thread(_put_terrain_areas_bulk_sync, data)
+
+
+def _put_terrain_areas_bulk_sync(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``put_terrain_areas_bulk_route``."""
+    from app.models import terrain
+    result = terrain.save_areas_bulk(data.get("upserts"), data.get("deletes"))
+    return {"status": "success", **result}
+
+
 def _put_terrain_area(area_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     """The existence check plus the write of ``put_terrain_area_route``."""
     from app.models import terrain
@@ -551,6 +590,9 @@ def get_world_props_route() -> Dict[str, Any]:
         row["variant_count"] = facts[pid]["variants"]
         row["missing"] = not facts[pid]["name"]
     return {"world_props": rows, "count": len(rows),
+            # ``{id: updated_at}`` — the batch save's version tokens, beside
+            # the rows for the reason the height route states.
+            "stamps": world_props.world_prop_stamps(),
             "prop_boxes": world_props.prop_boxes(),
             "max": world_props.MAX_WORLD_PROPS,
             "warn_at": world_props.WARN_WORLD_PROPS,
@@ -576,6 +618,27 @@ def _post_world_prop_route_sync(data: Any) -> Dict[str, Any]:
                 "world_prop": world_props.save_world_prop(data)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/world-props/bulk")
+async def put_world_props_bulk_route(request: Request) -> Dict[str, Any]:
+    """Save a whole placement edit at once — the world-prop twin of
+    ``PUT /world/terrain-areas/bulk``; same body, same per-object refusals,
+    same "always 200".
+
+    The CAP is met against the world the batch leaves behind, so swapping ten
+    props for ten others fits even at the ceiling.
+    """
+    data = _bulk_body(await request.json())
+    return await asyncio.to_thread(_put_world_props_bulk_sync, data)
+
+
+def _put_world_props_bulk_sync(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``put_world_props_bulk_route``."""
+    from app.models import world_props
+    result = world_props.save_world_props_bulk(data.get("upserts"),
+                                               data.get("deletes"))
+    return {"status": "success", **result}
 
 
 @router.put("/world-props/{placement_id}")
@@ -654,6 +717,15 @@ def get_height_areas_route() -> Dict[str, Any]:
     from app.models import heightfield
     return {"areas": heightfield.list_height_areas(),
             "sig": heightfield.height_sig(),
+            # The VERSION TOKEN of every area, ``{id: updated_at}``. The map
+            # editor writes a local draft and saves it in one batch, and each
+            # buffered change carries the stamp it was loaded with — that is
+            # what lets the batch refuse exactly the objects somebody else
+            # moved in the meantime instead of overwriting them
+            # (``core.bulk_edit``). It rides beside the areas rather than
+            # inside them so ``height_sig`` never sees it: a re-save that
+            # changes no ground must not re-raster every client's relief.
+            "stamps": heightfield.height_area_stamps(),
             "step_m": current_step_m(),
             # The finest the OVERVIEW gets, so the editor can say "coarser than
             # normal" without a constant of its own.
@@ -699,6 +771,30 @@ def _post_height_area_route_sync(data: Any) -> Dict[str, Any]:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "success", "area": area, "step_m": current_step_m()}
+
+
+@router.put("/height-areas/bulk")
+async def put_height_areas_bulk_route(request: Request) -> Dict[str, Any]:
+    """Save a whole relief edit at once — the height twin of
+    ``PUT /world/terrain-areas/bulk``; same body, same per-object refusals,
+    same "always 200".
+
+    Answers ``step_m`` like the singular writes do: the batch re-rasters ONCE
+    at its end, so this is the step the world really has afterwards — and the
+    one warning about a coarsened grid the editor now shows per save instead
+    of per brush stroke.
+    """
+    data = _bulk_body(await request.json())
+    return await asyncio.to_thread(_put_height_areas_bulk_sync, data)
+
+
+def _put_height_areas_bulk_sync(data: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``put_height_areas_bulk_route``."""
+    from app.core.heightfield import current_step_m
+    from app.models import heightfield
+    result = heightfield.save_height_areas_bulk(data.get("upserts"),
+                                                data.get("deletes"))
+    return {"status": "success", "step_m": current_step_m(), **result}
 
 
 @router.put("/height-areas/{area_id}")

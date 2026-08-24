@@ -695,6 +695,32 @@ export interface TerrainPayload {
   types: TerrainType[]
   areas: TerrainArea[]
   sig: string
+  /** `{id: updated_at}` — the VERSION TOKEN of every area, for the map
+   *  editor's batch save. A buffered change carries the stamp its area was
+   *  loaded with, and the bulk route refuses exactly the objects somebody else
+   *  saved in the meantime (`pendingBuffer`, `app/core/bulk_edit.py`). Game
+   *  clients ignore it; it is deliberately not part of `sig`, or a re-save
+   *  that changes no shape would re-bake every client's ground. */
+  stamps?: Record<string, string>
+}
+
+/**
+ * What a bulk save answers (`PUT /world/{terrain-areas,height-areas,
+ * world-props}/bulk`), one shape for all three.
+ *
+ * ALWAYS HTTP 200, even when parts were refused: the request as a whole
+ * succeeded, and `rejected` says per object why. `saved` names the client's
+ * `temp_id` next to the object the server stored, which is how a locally drawn
+ * shape gets its real, server-minted id.
+ */
+export interface BulkSaveResp<T> {
+  status?: string
+  saved?: Array<{ temp_id?: string, area?: T, world_prop?: T }>
+  deleted?: string[]
+  rejected?: Array<{ op: 'upsert' | 'delete', id: string, temp_id: string,
+    reason: string }>
+  /** Height batch only: the grid step the world has AFTERWARDS. */
+  step_m?: number
 }
 
 /**
@@ -723,6 +749,9 @@ export interface HeightArea {
 export interface HeightAreasResp {
   areas: HeightArea[]
   sig: string
+  /** `{id: updated_at}` — the batch save's version tokens, see
+   *  `TerrainPayload.stamps`. */
+  stamps?: Record<string, string>
   /** The grid step the world relief is rastered at RIGHT NOW, in metres
    *  (finding 14). Nobody sets it: the server doubles it until the grid over
    *  the whole painted extent fits its point budget, so an area drawn far out
@@ -787,6 +816,9 @@ export interface WorldProp {
 export interface WorldPropsResp {
   world_props: WorldProp[]
   count: number
+  /** `{id: updated_at}` — the batch save's version tokens, see
+   *  `TerrainPayload.stamps`. */
+  stamps?: Record<string, string>
   /**
    * The GROUND BOX of every placement the scatter has to stay out of (§ A9b),
    * the same block `GET /play/terrain` serves the 3D client — centre, turn and

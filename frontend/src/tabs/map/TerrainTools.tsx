@@ -1386,9 +1386,11 @@ export interface TerrainAreaChipProps {
 
 /**
  * The selected area, floating over the canvas — the same chip pattern the
- * location selection uses. Deleting arms an inline confirmation row (no
- * `window.confirm`); the state is local because the chip is remounted per area
- * (`key`), so a fresh selection is never half-armed.
+ * location selection uses. Deleting needs no confirmation of its own: it
+ * changes the local draft, and the toolbar's Discard is the one way back from
+ * every unsaved change at once (plan-map-save-batch.md). Converting a line to
+ * an area still arms one: it drops the recipe that made the shape, and once
+ * that is saved there is no way back to the line.
  *
  * An area whose kind the catalog no longer knows can only do ONE thing: get a
  * kind. Every other write is a full replace whose unknown `kind` the server
@@ -1412,7 +1414,6 @@ export function TerrainAreaChip({
   onClose,
 }: TerrainAreaChipProps) {
   const { t } = useI18n()
-  const [armed, setArmed] = useState(false)
   const [convArmed, setConvArmed] = useState(false)
   const [scatterOpen, setScatterOpen] = useState(false)
   const known = types[area.kind]
@@ -1554,24 +1555,14 @@ export function TerrainAreaChip({
             </button>
           )
         ) : null}
-        {armed ? (
-          <>
-            <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => { setArmed(false); onDelete() }}>
-              {t('Really delete')}
-            </button>
-            <button type="button" className="ga-btn ga-btn-sm"
-              onClick={() => setArmed(false)}>
-              {t('Cancel')}
-            </button>
-          </>
-        ) : (
-          <button type="button" className="ga-btn ga-btn-sm"
-            title={t('Erase this painted area')}
-            onClick={() => setArmed(true)}>
-            {t('Delete area')}
-          </button>
-        )}
+        {/* ONE click, no confirmation: deleting is a change of the local
+            draft like every other, and Discard in the toolbar is the way back
+            from it — together with everything else that is unsaved. */}
+        <button type="button" className="ga-btn ga-btn-sm"
+          title={t('Erase this painted area from the draft — Save writes it, Discard brings it back')}
+          onClick={onDelete}>
+          {t('Delete area')}
+        </button>
       </div>
       <div className={'ga-map-chip-row ' + (known ? 'ga-map-chip-label' : 'ga-map-chip-warn')}>
         {known
@@ -1869,14 +1860,14 @@ export interface HeightAreaChipProps {
  * server's classification, so that is said once as a side note and never
  * counted on as a plateau the editor can predict.
  *
- * Deleting arms an inline confirmation (no `window.confirm`); the state is
- * local because the chip is remounted per area (`key`).
+ * Deleting needs no confirmation: it changes the local draft, and the
+ * toolbar's Discard is the way back from every unsaved change at once
+ * (plan-map-save-batch.md).
  */
 export function HeightAreaChip({
   area, maxSlopeDeg, maxStepM, onHeight, onFalloff, onDelete, onClose,
 }: HeightAreaChipProps) {
   const { t } = useI18n()
-  const [armed, setArmed] = useState(false)
   const need = minFalloffFor(area.height_m, maxSlopeDeg, maxStepM)
   const steep = tooSteep(area.height_m, area.falloff_m, maxSlopeDeg, maxStepM)
   return (
@@ -1921,24 +1912,13 @@ export function HeightAreaChip({
         {t('Ground is levelled automatically under built locations.')}
       </div>
       <div className="ga-map-chip-actions">
-        {armed ? (
-          <>
-            <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => { setArmed(false); onDelete() }}>
-              {t('Really delete')}
-            </button>
-            <button type="button" className="ga-btn ga-btn-sm"
-              onClick={() => setArmed(false)}>
-              {t('Cancel')}
-            </button>
-          </>
-        ) : (
-          <button type="button" className="ga-btn ga-btn-sm"
-            title={t('Remove this height area — the ground here goes flat again')}
-            onClick={() => setArmed(true)}>
-            {t('Delete height area')}
-          </button>
-        )}
+        {/* ONE click, no confirmation — a draft change like every other,
+            undone by Discard in the toolbar. */}
+        <button type="button" className="ga-btn ga-btn-sm"
+          title={t('Remove this height area from the draft — the ground here goes flat again')}
+          onClick={onDelete}>
+          {t('Delete height area')}
+        </button>
       </div>
       <div className="ga-map-chip-row ga-map-chip-label">
         {t('Drag a point to move it · double-click removes it · click an edge to add one')}

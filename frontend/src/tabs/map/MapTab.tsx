@@ -41,10 +41,16 @@ import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
 import { readRelief, readScatter, readWater, readWaterProfile } from './mapTypes'
 import {
+  applyPending, dropConflicts, emptyBuffer, hasConflicts, keepRejected,
+  pendingCount, queueDelete, queueUpsert, toBulkBody, type PendingMap,
+} from './pendingBuffer'
+import { setUnsavedGuard } from '../../lib/unsavedGuard'
+import {
   DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M, reliefWarnAmpM,
 } from './heightMath'
 import type {
-  EditorLocation, HeightArea, HeightAreaWriteResp, HeightAreasResp,
+  BulkSaveResp,
+  EditorLocation, HeightArea, HeightAreasResp,
   TerrainArea, TerrainMeta, TerrainRelief, TerrainWater,
   TerrainPayload, TerrainScatterEntry, TerrainStroke, TerrainType,
   TerrainTypesResp, WorldProp, WorldPropsResp, WorldmapPayload,
@@ -113,10 +119,35 @@ import type {
  *     `sig` is carried along and logged into the state, never polled: it is
  *     the signal a WATCHING client uses, and the hand that paints already
  *     knows when it changed something.
- *   - `POST/PUT/DELETE /world/terrain-areas` — one refetch after each write.
- *     An area also declares what GROWS on it (`meta.scatter`, finding B17);
- *     the "Scatter preview" switch draws those points as dots through the ONE
- *     shared sampler the 3D client plants them with.
+ *   - `PUT /world/terrain-areas/bulk` — ONE write for the whole edit, when the
+ *     author presses Save (see THE DRAFT below). An area also declares what
+ *     GROWS on it (`meta.scatter`, finding B17); the "Scatter preview" switch
+ *     draws those points as dots through the ONE shared sampler the 3D client
+ *     plants them with.
+ *
+ * THE DRAFT AND THE ONE SAVE (plan-map-save-batch.md). Painting, dragging a
+ * vertex, moving a prop and deleting a shape all change LOCAL state only and
+ * are remembered in three change buffers (`pendingBuffer`: terrain areas,
+ * height areas, world props). "Save (n)" writes them through the three bulk
+ * routes, one request each; "Discard" throws the draft away and reloads. Every
+ * single one of those edits used to be its own PUT, and every PUT settled
+ * water, re-rastered the world relief, moved a signature and made every client
+ * refetch — a map drawn in twenty strokes paid for twenty bakes to reach one
+ * result. Nothing about the PREVIEW changed for it: this canvas has always
+ * rendered from local state.
+ *
+ * A newly drawn object gets a client-side temp id (`tmp_…`) so selection, hit
+ * test and the layers can treat it like any other; the SERVER mints the real
+ * id when the batch is saved and the answer names both. Each buffered change
+ * carries the `updated_at` its object was loaded with, so a batch refuses
+ * exactly the objects somebody else saved in the meantime ("changed on the
+ * server") and lands the rest — those stay in the buffer, marked, and an
+ * explicit Reload is what takes the server's version.
+ *
+ * WHAT IS NOT BUFFERED, deliberately: the terrain-TYPE catalog (a catalog, not
+ * the map), the map-LLM apply (it brings its own snapshot/restore) and
+ * everything about LOCATIONS — those are their own routes with their own
+ * server consequences.
  *
  * BUILDING ROOFS is a session switch, not a setting: with it on, every placed
  * location in the visible rectangle gets its building model rendered from
@@ -157,7 +188,8 @@ import type {
  * records.
  *
  * THE WORLD RELIEF is the fourth mode (`heights`, § A16) and reads its own
- * endpoint: `GET /world/height-areas` plus `POST/PUT/DELETE` on the same path.
+ * endpoint: `GET /world/height-areas`, written back through
+ * `PUT /world/height-areas/bulk` with the rest of the draft.
  * A height area is a polygon with a height and a ramp width — no kind, no
  * layer — so it is a second data set next to the painted ground, not a flag on
  * it, and it is drawn in its own layer, only in its own mode. Inside the mode
@@ -194,6 +226,36 @@ import type {
 interface GalleryResp {
   images?: string[]
   image_types?: Record<string, string>
+}
+
+/** What the id of a locally drawn object starts with — see the module
+ *  docstring. The server's ids begin `ta_`/`ha_`/`wp_`, so nothing can be
+ *  mistaken for the other, and a temp id never reaches a route: the bulk body
+ *  sends it as `temp_id` and the answer hands back the real one. */
+const TEMP_PREFIX = 'tmp_'
+
+/** Painted areas bottom-to-top, the order the server lists them in: `z_order`
+ *  first, paint order within one layer. `sort` is stable, so a list that came
+ *  from the server keeps its second criterion for free — and re-sorting after
+ *  every local edit is what makes "bring forward" work in the draft, where no
+ *  refetch re-orders anything. */
+function byZ(areas: TerrainArea[]): TerrainArea[] {
+  return [...areas].sort((a, b) => (a.z_order || 0) - (b.z_order || 0))
+}
+
+/** `{temp id: the id the server minted}` out of one bulk answer — everything
+ *  that was drawn locally and now exists. The selection is the one thing that
+ *  has to follow it by hand: the lists themselves are replaced by the reload
+ *  a moment later, but a selection still naming `tmp_3` would silently point
+ *  at nothing. */
+function mintedIds<T extends { id: string }>(
+  resp?: BulkSaveResp<T> | null): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const entry of resp?.saved || []) {
+    const obj = entry.area || entry.world_prop
+    if (entry.temp_id && obj?.id) out.set(entry.temp_id, obj.id)
+  }
+  return out
 }
 
 /** Yaw controls: the fine step and the quarter turn. */
@@ -613,7 +675,6 @@ export function MapTab() {
   const [wpCap, setWpCap] = useState({ max: 0, warnAt: 0 })
   const [wpYawDraft, setWpYawDraft] = useState('')
   const [wpOffsetDraft, setWpOffsetDraft] = useState('')
-  const [wpDelArmed, setWpDelArmed] = useState('')
   /** The placement raster of the props tool — remembered per browser, so the
    *  way somebody builds survives a reload. */
   const [propGrid, setPropGrid] = useState<PropGridPref>(loadPropGrid)
@@ -696,6 +757,93 @@ export function MapTab() {
     paneObsRef.current = ro
   }, [])
 
+  // ── The draft: three change buffers, one Save ────────────────────────────
+  //
+  // See the module docstring for WHY. What lives here is the mechanics: the
+  // buffers themselves, the version tokens the server judges them by, and the
+  // counter behind the Save button.
+  //
+  // Each buffer is mirrored into a ref, and every change goes through the
+  // `updPend*` helpers below, so ref and state never disagree: the loaders and
+  // the save routine run outside the render that produced them and would
+  // otherwise read a buffer one edit old.
+  const [pendTerrain, setPendTerrain] = useState<PendingMap<TerrainArea>>(emptyBuffer)
+  const [pendHeight, setPendHeight] = useState<PendingMap<HeightArea>>(emptyBuffer)
+  const [pendProps, setPendProps] = useState<PendingMap<WorldProp>>(emptyBuffer)
+  const pendTerrainRef = useRef<PendingMap<TerrainArea>>(pendTerrain)
+  pendTerrainRef.current = pendTerrain
+  const pendHeightRef = useRef<PendingMap<HeightArea>>(pendHeight)
+  pendHeightRef.current = pendHeight
+  const pendPropsRef = useRef<PendingMap<WorldProp>>(pendProps)
+  pendPropsRef.current = pendProps
+
+  const updPendTerrain = useCallback((fn: (b: PendingMap<TerrainArea>) => PendingMap<TerrainArea>) => {
+    pendTerrainRef.current = fn(pendTerrainRef.current)
+    setPendTerrain(pendTerrainRef.current)
+  }, [])
+  const updPendHeight = useCallback((fn: (b: PendingMap<HeightArea>) => PendingMap<HeightArea>) => {
+    pendHeightRef.current = fn(pendHeightRef.current)
+    setPendHeight(pendHeightRef.current)
+  }, [])
+  const updPendProps = useCallback((fn: (b: PendingMap<WorldProp>) => PendingMap<WorldProp>) => {
+    pendPropsRef.current = fn(pendPropsRef.current)
+    setPendProps(pendPropsRef.current)
+  }, [])
+
+  /** `{id: updated_at}` of everything currently loaded, per object kind. A
+   *  buffered change carries the stamp its object was LOADED with — that, and
+   *  not the one it has now, is what the server checks it against. */
+  const stampsTerrainRef = useRef<Record<string, string>>({})
+  const stampsHeightRef = useRef<Record<string, string>>({})
+  const stampsPropsRef = useRef<Record<string, string>>({})
+
+  /** Ids of things that exist only in the draft. The prefix is what tells a
+   *  locally drawn object from a stored one everywhere in this tab — the
+   *  server's ids are `ta_`/`ha_`/`wp_` and never begin like this. */
+  const tempSeqRef = useRef(0)
+  const nextTempId = useCallback(() => {
+    tempSeqRef.current += 1
+    return `${TEMP_PREFIX}${tempSeqRef.current}`
+  }, [])
+
+  const dirtyCount = pendingCount(pendTerrain) + pendingCount(pendHeight)
+    + pendingCount(pendProps)
+  /** How many of them the last Save refused. They stay in the buffer, marked,
+   *  and Reload is what takes the server's version instead. */
+  const conflictCount = useMemo(() => {
+    let n = 0
+    for (const buf of [pendTerrain, pendHeight, pendProps]) {
+      for (const entry of buf.values()) if (entry.reason) n += 1
+    }
+    return n
+  }, [pendHeight, pendProps, pendTerrain])
+  const dirtyRef = useRef(0)
+  dirtyRef.current = dirtyCount
+  const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
+  savingRef.current = saving
+  /** The Discard button's second click (no `window.confirm` in this UI). */
+  const [discardArmed, setDiscardArmed] = useState(false)
+  useEffect(() => { if (!dirtyCount) setDiscardArmed(false) }, [dirtyCount])
+
+  // Leaving with a full buffer must not happen silently — the browser's own
+  // question for a reload or a closed tab, the shell's for a tab switch.
+  useEffect(() => {
+    if (!dirtyCount) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // The browser shows its own generic wording; the value only needs to be
+      // non-null for legacy engines.
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirtyCount])
+  useEffect(() => {
+    setUnsavedGuard(() => dirtyRef.current > 0)
+    return () => setUnsavedGuard(null)
+  }, [])
+
   /** The four loaders return whether they got what they came for. Only the
    *  Reload button reads it — a silent success reads as a dead button, and a
    *  "reloaded" toast on top of a "failed to load" one would be a lie. */
@@ -731,17 +879,38 @@ export function MapTab() {
     return true
   }, [t, toast])
 
-  /** The painted ground. Called on mount, by the reload button and after every
-   *  terrain write — never on a timer. */
-  const reloadTerrain = useCallback(async () => {
+  /**
+   * The painted ground. Called on mount, by the reload button and after a
+   * Save — never on a timer.
+   *
+   * THE DRAFT SURVIVES IT. What was loaded is the server's truth, and the
+   * change buffer is laid back on top of it, so pressing Reload with unsaved
+   * work never eats that work.
+   *
+   * `resolveConflicts` is what the RELOAD BUTTON adds: it drops the changes
+   * the last Save refused, because taking the server's version is exactly what
+   * resolving such a conflict means — and there is no other gesture for it.
+   * The reload that follows a Save must not do that: it would throw the
+   * refusals away in the same breath they were reported.
+   */
+  const reloadTerrain = useCallback(async (resolveConflicts = false) => {
+    let payload: TerrainPayload
     try {
-      setTerrain(await apiGet<TerrainPayload>('/play/terrain'))
+      payload = await apiGet<TerrainPayload>('/play/terrain')
     } catch (e) {
       toast(t('Failed to load terrain') + ': ' + (e as Error).message, 'error')
       return false
     }
+    stampsTerrainRef.current = payload.stamps || {}
+    if (resolveConflicts && hasConflicts(pendTerrainRef.current)) {
+      updPendTerrain(dropConflicts)
+    }
+    setTerrain({
+      ...payload,
+      areas: byZ(applyPending(payload.areas || [], pendTerrainRef.current)),
+    })
     return true
-  }, [t, toast])
+  }, [t, toast, updPendTerrain])
 
   /**
    * The GRID STEP the server just reported — shown, and said out loud when it
@@ -778,11 +947,16 @@ export function MapTab() {
   }, [t, toast])
 
   /** The authored relief. Same discipline as the terrain: on mount, on the
-   *  reload button, after every write — never on a timer. */
-  const reloadHeights = useCallback(async () => {
+   *  reload button, after a Save — never on a timer, and the draft is laid
+   *  back on top of what arrives. */
+  const reloadHeights = useCallback(async (resolveConflicts = false) => {
     try {
       const r = await apiGet<HeightAreasResp>('/world/height-areas')
-      setHeightAreas(r.areas || [])
+      stampsHeightRef.current = r.stamps || {}
+      if (resolveConflicts && hasConflicts(pendHeightRef.current)) {
+        updPendHeight(dropConflicts)
+      }
+      setHeightAreas(applyPending(r.areas || [], pendHeightRef.current))
       noteHeightStep(r.step_m)
       const def = Number(r.default_step_m)
       if (Number.isFinite(def) && def > 0) setHeightStepDefaultM(def)
@@ -796,19 +970,24 @@ export function MapTab() {
       return false
     }
     return true
-  }, [noteHeightStep, t, toast])
+  }, [noteHeightStep, t, toast, updPendHeight])
 
   /** The authored world props (§ A9a). Same discipline as the terrain: on
    *  mount, on the reload button, after every write — never on a timer. The
    *  two cap numbers come with the answer, so the badge and the refusal are
    *  always the SERVER's limits. */
-  const reloadWorldProps = useCallback(async () => {
+  const reloadWorldProps = useCallback(async (resolveConflicts = false) => {
     try {
       const r = await apiGet<WorldPropsResp>('/world/world-props')
-      setWorldProps(r.world_props || [])
-      // …and with them the ground they occupy (§ A9b): this fetch runs after
-      // every prop write, so the scatter preview follows a moved bench in the
-      // same breath the bench moves.
+      stampsPropsRef.current = r.stamps || {}
+      if (resolveConflicts && hasConflicts(pendPropsRef.current)) {
+        updPendProps(dropConflicts)
+      }
+      setWorldProps(applyPending(r.world_props || [], pendPropsRef.current))
+      // …and with them the ground they occupy (§ A9b). Since the props are
+      // written in one batch, this follows a moved bench at the SAVE and not
+      // at the drag: the preview around a prop that is still only in the draft
+      // is the one thing here the server cannot know about yet.
       setWpBoxes(r.prop_boxes || [])
       setWpCap({ max: Number(r.max) || 0, warnAt: Number(r.warn_at) || 0 })
     } catch (e) {
@@ -816,7 +995,7 @@ export function MapTab() {
       return false
     }
     return true
-  }, [t, toast])
+  }, [t, toast, updPendProps])
 
   useEffect(() => { void reload() }, [reload])
   useEffect(() => { void reloadTerrain() }, [reloadTerrain])
@@ -848,11 +1027,99 @@ export function MapTab() {
    *  failed one has already said so itself, which is why the success line only
    *  appears when nothing did. */
   const reloadAll = useCallback(async () => {
-    const ok = await Promise.all([reload(), reloadTerrain(), reloadTypes(),
-      reloadHeights(), reloadWorldProps()])
+    const ok = await Promise.all([reload(), reloadTerrain(true), reloadTypes(),
+      reloadHeights(true), reloadWorldProps(true)])
     if (ok.every(Boolean)) toast(t('Map reloaded'), 'success')
   }, [reload, reloadHeights, reloadTerrain, reloadTypes, reloadWorldProps,
     t, toast])
+
+  /**
+   * Save the whole draft — ONE bulk request per object kind, three at most.
+   *
+   * THE ORDER IS THE POINT OF DOING IT HERE and not in three buttons: the
+   * relief goes first, then the painted ground, then the props. A water area
+   * FREEZES its mirror against the world's heights while it is being stored
+   * (`terrain.settle_water_level`), so a lake painted onto a hill drawn in the
+   * same session must find that hill already stored — the other order would
+   * settle the lake at the height of the old ground and keep that number.
+   *
+   * A refusal is not a failure: the routes answer 200 with a per-object
+   * `rejected` list, and exactly those objects stay in the buffer, marked with
+   * their reason. Everything else is on the server, which is why the three
+   * loaders run afterwards — they bring back the settled water levels, the
+   * server-minted ids and the enrichment no client computes.
+   *
+   * A request that really fails (network, 500) leaves its buffer untouched:
+   * nothing was written, so nothing may be forgotten.
+   */
+  const saveDraft = useCallback(async () => {
+    if (!dirtyRef.current || savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    let refused = 0
+    try {
+      const hBuf = pendHeightRef.current
+      if (pendingCount(hBuf)) {
+        const r = await apiPut<BulkSaveResp<HeightArea>>(
+          '/world/height-areas/bulk', toBulkBody(hBuf))
+        // The step the world has AFTER the whole batch — the coarsening
+        // warning is now one sentence per save instead of one per stroke.
+        noteHeightStep(r?.step_m)
+        const minted = mintedIds(r)
+        if (minted.size) setSelHeight((cur) => minted.get(cur) || cur)
+        updPendHeight(() => keepRejected(hBuf, r?.rejected || []))
+        refused += (r?.rejected || []).length
+      }
+      const tBuf = pendTerrainRef.current
+      if (pendingCount(tBuf)) {
+        const r = await apiPut<BulkSaveResp<TerrainArea>>(
+          '/world/terrain-areas/bulk', toBulkBody(tBuf))
+        const minted = mintedIds(r)
+        if (minted.size) setSelArea((cur) => minted.get(cur) || cur)
+        updPendTerrain(() => keepRejected(tBuf, r?.rejected || []))
+        refused += (r?.rejected || []).length
+      }
+      const pBuf = pendPropsRef.current
+      if (pendingCount(pBuf)) {
+        const r = await apiPut<BulkSaveResp<WorldProp>>(
+          '/world/world-props/bulk', toBulkBody(pBuf))
+        const minted = mintedIds(r)
+        if (minted.size) setSelWp((cur) => minted.get(cur) || cur)
+        updPendProps(() => keepRejected(pBuf, r?.rejected || []))
+        refused += (r?.rejected || []).length
+      }
+    } catch (e) {
+      toast(t('Could not save the map') + ': ' + (e as Error).message, 'error')
+      savingRef.current = false
+      setSaving(false)
+      return
+    }
+    await Promise.all([reloadTerrain(), reloadHeights(), reloadWorldProps()])
+    savingRef.current = false
+    setSaving(false)
+    if (refused) {
+      toast(t('{n} changes were refused — they changed on the server meanwhile. They are still marked here; Reload takes the server’s version.')
+        .replace('{n}', String(refused)), 'error')
+    } else {
+      toast(t('Map saved'), 'success')
+    }
+  }, [noteHeightStep, reloadHeights, reloadTerrain, reloadWorldProps, t, toast,
+    updPendHeight, updPendProps, updPendTerrain])
+
+  /** Throw the whole draft away and take what the server has — the second
+   *  half of the toolbar's two-click Discard (no `window.confirm` in this UI).
+   *
+   *  It is also why deleting an area needs no dialog of its own any more:
+   *  every delete is a draft change like every other, and this is the one way
+   *  back from all of them at once. */
+  const discardDraft = useCallback(() => {
+    updPendTerrain(emptyBuffer)
+    updPendHeight(emptyBuffer)
+    updPendProps(emptyBuffer)
+    setDiscardArmed(false)
+    void Promise.all([reloadTerrain(), reloadHeights(), reloadWorldProps()])
+  }, [reloadHeights, reloadTerrain, reloadWorldProps, updPendHeight,
+    updPendProps, updPendTerrain])
 
   /** Why a write has no usable kind. A catalog that never arrived is not the
    *  user picking the wrong thing, and "pick a type first" is unactionable
@@ -908,6 +1175,13 @@ export function MapTab() {
   armedPropRef.current = armedProp
   const propGridRef = useRef(0)
   propGridRef.current = propGridM
+  // The placements and the server's cap as the click handlers see them: they
+  // run long after the render that armed them, so they must not read a
+  // captured copy (the placements grow with every click of a row of posts).
+  const worldPropsRef = useRef<WorldProp[]>([])
+  worldPropsRef.current = worldProps
+  const wpCapRef = useRef({ max: 0, warnAt: 0 })
+  wpCapRef.current = wpCap
   // Is a modal covering the canvas? The handler is bound once, so this cannot
   // be read from the state directly.
   const modalRef = useRef(false)
@@ -1452,29 +1726,42 @@ export function MapTab() {
    *
    *  Yaw and lift start at 0 and the variant starts unset (the placement id
    *  decides, § A9a) — everything the chip can change afterwards. */
-  const placeWorldProp = useCallback(async (wx: number, wz: number,
-                                            free = false) => {
+  const placeWorldProp = useCallback((wx: number, wz: number,
+                                      free = false) => {
     const p = armedPropRef.current
     if (!p) return
-    const step = free ? 0 : propGridRef.current
-    try {
-      const r = await apiPost<{ world_prop?: WorldProp }>('/world/world-props', {
-        prop_id: p.id,
-        x: snapToGrid(wx, step),
-        z: snapToGrid(wz, step),
-        yaw_deg: 0, offset_y: 0,
-      })
-      await reloadWorldProps()
-      if (r?.world_prop?.id) setSelWp(r.world_prop.id)
-    } catch (e) {
-      // The 500-cap answers 400 with its own sentence — showing it verbatim
-      // is the only place the number appears twice, and the badge next to it
-      // has been amber since 200.
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    // The cap is and stays the SERVER's — the batch checks it against the
+    // world it leaves behind. This is only the draft refusing to grow past
+    // what could ever be stored, said at the click instead of at the Save.
+    const cap = wpCapRef.current.max
+    if (cap > 0 && worldPropsRef.current.length >= cap) {
+      toast(t('At most {n} world props per world').replace('{n}', String(cap)),
+        'error')
       setArmedProp(null)
       setGhostPt(null)
+      return
     }
-  }, [reloadWorldProps, t, toast])
+    const step = free ? 0 : propGridRef.current
+    const id = nextTempId()
+    const prop: WorldProp = {
+      id,
+      prop_id: p.id,
+      x: snapToGrid(wx, step),
+      z: snapToGrid(wz, step),
+      yaw_deg: 0,
+      offset_y: 0,
+      variant: null,
+      // What the SERVER would have answered about the prop behind it — the
+      // chip reads these, and a placement that is still only in the draft
+      // would otherwise read as "missing" until the next Save.
+      name: p.name,
+      variant_count: 0,
+      missing: false,
+    }
+    setWorldProps((list) => [...list, prop])
+    updPendProps((buf) => queueUpsert(buf, id, prop, '', id))
+    setSelWp(id)
+  }, [nextTempId, t, toast, updPendProps])
 
   /** Patch one placement — the ONE write path behind the drag, the yaw chip,
    *  the lift field and the variant picker.
@@ -1482,33 +1769,25 @@ export function MapTab() {
    *  Optimistic locally, then PUT: dragging a prop must not wait for a round
    *  trip, and the refetch on failure is what puts the truth back. The route
    *  is a full replace, so the current row is spread under the patch. */
-  const commitWorldProp = useCallback(async (id: string,
-                                             patch: Partial<WorldProp>) => {
+  const commitWorldProp = useCallback((id: string,
+                                       patch: Partial<WorldProp>) => {
     const cur = worldProps.find((p) => p.id === id)
     if (!cur) return
     const next = { ...cur, ...patch }
     setWorldProps((list) => list.map((p) => (p.id === id ? next : p)))
-    try {
-      await apiPut(`/world/world-props/${encodeURIComponent(id)}`, {
-        prop_id: next.prop_id, x: next.x, z: next.z,
-        yaw_deg: next.yaw_deg, offset_y: next.offset_y,
-        variant: next.variant,
-      })
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-      await reloadWorldProps()
-    }
-  }, [reloadWorldProps, t, toast, worldProps])
+    updPendProps((buf) => queueUpsert(buf, id, next,
+      stampsPropsRef.current[id] || '',
+      id.startsWith(TEMP_PREFIX) ? id : ''))
+  }, [updPendProps, worldProps])
 
-  const removeWorldProp = useCallback(async (id: string) => {
-    try {
-      await apiDelete(`/world/world-props/${encodeURIComponent(id)}`)
-      setSelWp('')
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-    await reloadWorldProps()
-  }, [reloadWorldProps, t, toast])
+  const removeWorldProp = useCallback((id: string) => {
+    const cur = worldPropsRef.current.find((p) => p.id === id)
+    if (!cur) return
+    setSelWp('')
+    setWorldProps((list) => list.filter((p) => p.id !== id))
+    updPendProps((buf) => queueDelete(buf, id, cur,
+      stampsPropsRef.current[id] || ''))
+  }, [updPendProps])
 
   /** Arming a palette card is a PROP gesture — it takes the canvas into the
    *  props mode, so the next click cannot land as something else. */
@@ -1536,7 +1815,6 @@ export function MapTab() {
   useEffect(() => {
     setWpYawDraft(selectedWp ? String(normYaw(selectedWp.yaw_deg || 0)) : '')
     setWpOffsetDraft(selectedWp ? String(selectedWp.offset_y || 0) : '')
-    setWpDelArmed('')
   }, [selectedWp])
 
   // ── Terrain writes ───────────────────────────────────────────────────────
@@ -1687,44 +1965,90 @@ export function MapTab() {
     return heightAreas.filter((a) => areaInRect(a.polygon, rect)).reverse()
   }, [heightAreas, pane, view])
 
-  /** Optimistic patch of one area, so an edited outline does not snap back to
-   *  its old shape for the length of the round trip. */
+  /** Patch one area in the DRAFT — the local list is what this canvas renders,
+   *  and re-sorting by layer is what makes "bring forward" visible without a
+   *  refetch. */
   const patchAreaLocal = useCallback((id: string, fields: Partial<TerrainArea>) => {
     setTerrain((tp) => (tp
-      ? { ...tp, areas: tp.areas.map((a) => (a.id === id ? { ...a, ...fields } : a)) }
+      ? { ...tp, areas: byZ(tp.areas.map((a) => (a.id === id ? { ...a, ...fields } : a))) }
       : tp))
   }, [])
 
-  /** Replace one existing area. The route is a FULL replace (kind, polygon,
-   *  z_order, meta), so every field travels along — a body carrying only the
-   *  changed one would blank the rest. The refetch afterwards runs whether the
-   *  write worked or not: on 404 (someone else erased it) it is the repair.
+  /** Change one area: patch the draft, remember the whole object for the next
+   *  Save. THE ONE write path for every existing area — the ten handlers below
+   *  differ only in which field they hand it.
+   *
+   *  The buffered body is a FULL replace (kind, polygon, z_order, meta), like
+   *  the route it ends up in, so every field travels along; one carrying only
+   *  the changed field would blank the rest.
    *
    *  That full body is why an area whose kind the catalog no longer knows
    *  cannot be reshaped: the server sanitizer checks `kind` FIRST and rejects
    *  the whole body before it ever looks at the polygon
-   *  (`terrain.sanitize_area`). Every write therefore carries a KNOWN kind or
-   *  does not leave. The surfaces disable themselves as well — this is the net
-   *  under them, not the only guard, and it says what to do instead of
-   *  letting a 400 come back as a stack trace. Changing the kind is exactly
-   *  the write that rescues such an area, so the patch's kind wins. */
-  const putArea = useCallback(async (area: TerrainArea, patch: Partial<TerrainArea>) => {
-    const body = {
+   *  (`terrain.sanitize_area`), so a batch carrying it would come back with
+   *  one refused object and no explanation the author can act on. It is caught
+   *  here instead, at the gesture. The surfaces disable themselves as well —
+   *  this is the net under them, not the only guard. Changing the kind is
+   *  exactly the edit that rescues such an area, so the patch's kind wins. */
+  const stageArea = useCallback((area: TerrainArea, patch: Partial<TerrainArea>) => {
+    const next: TerrainArea = {
       kind: area.kind, polygon: area.polygon, z_order: area.z_order,
-      meta: area.meta || {}, ...patch,
+      meta: area.meta || {}, ...patch, id: area.id,
     }
-    if (!typeMap[body.kind]) {
+    if (!typeMap[next.kind]) {
       toast(noKindMsg(), 'error')
-      await reloadTerrain()
       return
     }
-    try {
-      await apiPut(`/world/terrain-areas/${encodeURIComponent(area.id)}`, body)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    patchAreaLocal(area.id, next)
+    updPendTerrain((buf) => queueUpsert(buf, area.id, next,
+      stampsTerrainRef.current[area.id] || '',
+      area.id.startsWith(TEMP_PREFIX) ? area.id : ''))
+  }, [noKindMsg, patchAreaLocal, toast, typeMap, updPendTerrain])
+
+  /** Draw a NEW area into the draft and select it. It carries a temp id until
+   *  the next Save mints the real one (see the module docstring). */
+  const stageNewArea = useCallback((kind: string,
+    polygon: Array<[number, number]>, meta?: TerrainMeta) => {
+    const id = nextTempId()
+    const area: TerrainArea = { id, kind, polygon, z_order: 0, meta: meta || {} }
+    setTerrain((tp) => (tp ? { ...tp, areas: byZ([...tp.areas, area]) } : tp))
+    updPendTerrain((buf) => queueUpsert(buf, id, area, '', id))
+    return id
+  }, [nextTempId, updPendTerrain])
+
+  // ── Height writes (§ A16) ────────────────────────────────────────────────
+  // The very same three functions for the relief, and they stand here rather
+  // than next to the height chip because the DRAW gesture below needs them.
+
+  /** Patch one height area in the draft. */
+  const patchHeightLocal = useCallback((id: string, fields: Partial<HeightArea>) => {
+    setHeightAreas((as) => as.map((a) => (a.id === id ? { ...a, ...fields } : a)))
+  }, [])
+
+  /** Change one height area: patch the draft, remember the whole object. A
+   *  FULL replace like its terrain twin, for the same reason. */
+  const stageHeight = useCallback((area: HeightArea, patch: Partial<HeightArea>) => {
+    const next: HeightArea = {
+      polygon: area.polygon, height_m: area.height_m,
+      falloff_m: area.falloff_m, meta: area.meta || {}, ...patch, id: area.id,
     }
-    await reloadTerrain()
-  }, [noKindMsg, reloadTerrain, t, toast, typeMap])
+    patchHeightLocal(area.id, next)
+    updPendHeight((buf) => queueUpsert(buf, area.id, next,
+      stampsHeightRef.current[area.id] || '',
+      area.id.startsWith(TEMP_PREFIX) ? area.id : ''))
+  }, [patchHeightLocal, updPendHeight])
+
+  /** Draw a NEW height area into the draft; the id is minted at the Save. */
+  const stageNewHeightArea = useCallback((polygon: Array<[number, number]>,
+    heightM: number, falloffM: number) => {
+    const id = nextTempId()
+    const area: HeightArea = {
+      id, polygon, height_m: heightM, falloff_m: falloffM, meta: {},
+    }
+    setHeightAreas((as) => [...as, area])
+    updPendHeight((buf) => queueUpsert(buf, id, area, '', id))
+    return id
+  }, [nextTempId, updPendHeight])
 
   /**
    * A centre line plus a width becomes the polygon that will be stored — or
@@ -1770,71 +2094,49 @@ export function MapTab() {
   }, [t, toast])
 
   /**
-   * Close the running ring into a new area.
+   * Close the running ring into a new area of the DRAFT.
    *
-   * The draft is dropped only once the server has it. A polygon is a dozen
-   * deliberate clicks; a connection blip or an expired session must not cost
-   * them, so on failure the ring stays standing and `Close` can simply be
-   * pressed again. The in-flight flag is what makes that safe: with the draft
-   * still on screen a second close-click would otherwise post the same area
-   * twice.
+   * Nothing leaves the browser here any more, so the ring is simply dropped:
+   * there is no round trip a connection blip could interrupt, no in-flight
+   * flag keeping a second click from posting the same area twice, and no way
+   * to lose a dozen deliberate clicks to an expired session. The area exists
+   * from this moment on and goes out with the next Save.
    */
-  const draftBusyRef = useRef(false)
-  const commitDraft = useCallback(async (pts: Array<[number, number]>) => {
-    if (draftBusyRef.current) return
+  const commitDraft = useCallback((pts: Array<[number, number]>) => {
     if (pts.length < MIN_POINTS) {
       toast(t('An area needs at least {n} points').replace('{n}', String(MIN_POINTS)), 'error')
       return
     }
-    draftBusyRef.current = true
-    try {
-      await apiPost('/world/terrain-areas', { kind: paintKind, polygon: pts })
-      setDraft([])
-      setDraftCursor(null)
-      await reloadTerrain()
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      draftBusyRef.current = false
-    }
-  }, [paintKind, reloadTerrain, t, toast])
+    if (!paintKind) { toast(noKindMsg(), 'error'); return }
+    stageNewArea(paintKind, pts)
+    setDraft([])
+    setDraftCursor(null)
+  }, [noKindMsg, paintKind, stageNewArea, t, toast])
 
   /**
    * Close the running ring into a new HEIGHT area (§ A16).
    *
-   * The same rules the terrain draft follows — the draft survives a failed
-   * write, the in-flight flag keeps a second click from posting it twice —
-   * with the two numbers of the toolbar instead of a kind. The new area is
-   * SELECTED afterwards and the mode switches to picking: the height and the
-   * ramp are what one edits next, and the chip is where they live.
+   * The same rules the terrain draft follows — nothing leaves the browser, the
+   * ring simply becomes an area — with the two numbers of the toolbar instead
+   * of a kind. The new area is SELECTED afterwards and the mode switches to
+   * picking: the height and the ramp are what one edits next, and the chip is
+   * where they live.
+   *
+   * WHAT THE GRID STEP DOES is only reported at the Save now (the batch
+   * re-rasters once, and answers the step the world has afterwards): a ring
+   * drawn far out coarsens the relief everywhere, and that sentence is worth
+   * one toast per save rather than one per drawn ring.
    */
-  const commitHeightDraft = useCallback(async (pts: Array<[number, number]>) => {
-    if (draftBusyRef.current) return
+  const commitHeightDraft = useCallback((pts: Array<[number, number]>) => {
     if (pts.length < MIN_POINTS) {
       toast(t('An area needs at least {n} points').replace('{n}', String(MIN_POINTS)), 'error')
       return
     }
-    draftBusyRef.current = true
-    try {
-      const r = await apiPost<HeightAreaWriteResp>('/world/height-areas',
-        { polygon: pts, height_m: newHeightM, falloff_m: newFalloffM })
-      setDraft([])
-      setDraftCursor(null)
-      // The step the world has AFTER this drawing — a ring drawn far out
-      // coarsens the grid everywhere, and this is where that is noticed.
-      noteHeightStep(r?.step_m)
-      await reloadHeights()
-      const id = r?.area?.id || ''
-      if (id) {
-        setSelHeight(id)
-        setHeightTool('select')
-      }
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      draftBusyRef.current = false
-    }
-  }, [newFalloffM, newHeightM, noteHeightStep, reloadHeights, t, toast])
+    setDraft([])
+    setDraftCursor(null)
+    setSelHeight(stageNewHeightArea(pts, newHeightM, newFalloffM))
+    setHeightTool('select')
+  }, [newFalloffM, newHeightM, stageNewHeightArea, t, toast])
 
   /** The recipe the toolbar currently arms — the clicked line plus everything
    *  set next to the Line button. ONE place builds it, so the three ways of
@@ -1845,13 +2147,11 @@ export function MapTab() {
     spacing_m: strokeSpacingM, amplitude_m: strokeAmplitudeM,
   }), [strokeAmplitudeM, strokeSpacingM, strokeStyle, strokeWidthM])
 
-  /** Finish the running centre line into a new area. Same rules as
-   *  `commitDraft` — the draft survives a failed write — plus the recipe: the
-   *  clicked line, its width and its style travel along in `meta.stroke`, so
-   *  the area can be dragged back into shape later and regenerates the very
-   *  same outline when it is. */
-  const commitStroke = useCallback(async (recipe: TerrainStroke) => {
-    if (draftBusyRef.current) return
+  /** Finish the running centre line into a new area — same rules as
+   *  `commitDraft`, plus the recipe: the clicked line, its width and its style
+   *  travel along in `meta.stroke`, so the area can be dragged back into shape
+   *  later and regenerates the very same outline when it is. */
+  const commitStroke = useCallback((recipe: TerrainStroke) => {
     if (recipe.points.length < MIN_STROKE_POINTS) {
       toast(t('A line needs at least {n} points')
         .replace('{n}', String(MIN_STROKE_POINTS)), 'error')
@@ -1859,28 +2159,18 @@ export function MapTab() {
     }
     const poly = strokePolygon(strokeLine(recipe), recipe.width_m)
     if (!poly) return
-    draftBusyRef.current = true
-    try {
-      await apiPost('/world/terrain-areas', {
-        kind: paintKind, polygon: poly,
-        meta: { stroke: storedStroke(recipe) },
-      })
-      setDraft([])
-      setDraftCursor(null)
-      await reloadTerrain()
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      draftBusyRef.current = false
-    }
-  }, [paintKind, reloadTerrain, strokePolygon, t, toast])
+    if (!paintKind) { toast(noKindMsg(), 'error'); return }
+    stageNewArea(paintKind, poly, { stroke: storedStroke(recipe) })
+    setDraft([])
+    setDraftCursor(null)
+  }, [noKindMsg, paintKind, stageNewArea, strokePolygon, t, toast])
 
   /** What the Close/Finish button does — which depends on what is being drawn
    *  and on nothing else. */
   const closeDraft = useCallback(() => {
-    if (mode === 'heights') void commitHeightDraft(draft)
-    else if (paintShape === 'line') void commitStroke(draftStroke(draft))
-    else void commitDraft(draft)
+    if (mode === 'heights') commitHeightDraft(draft)
+    else if (paintShape === 'line') commitStroke(draftStroke(draft))
+    else commitDraft(draft)
   }, [commitDraft, commitHeightDraft, commitStroke, draft, draftStroke, mode,
     paintShape])
 
@@ -1890,9 +2180,6 @@ export function MapTab() {
    *  the same clicks, the same close tolerance and the same limits; only what
    *  the closed ring BECOMES differs. */
   const addDraftPoint = useCallback((wx: number, wz: number) => {
-    // While the ring is being saved the draft still stands (it is only dropped
-    // once the server has it) — a vertex added now would be dropped with it.
-    if (draftBusyRef.current) return
     const heights = modeRef.current === 'heights'
     if (!heights && !paintKind) { toast(noKindMsg(), 'error'); return }
     const x = r2(wx)
@@ -1912,8 +2199,8 @@ export function MapTab() {
     if (!line && cur.length >= MIN_POINTS) {
       const tolM = CLOSE_TOL_PX / view.pxPerM
       if (Math.hypot(x - cur[0][0], z - cur[0][1]) <= tolM) {
-        if (heights) void commitHeightDraft(cur)
-        else void commitDraft(cur)
+        if (heights) commitHeightDraft(cur)
+        else commitDraft(cur)
         return
       }
     }
@@ -1937,9 +2224,8 @@ export function MapTab() {
     const poly = strokePolygon(strokeLine(recipe), recipe.width_m)
     if (!poly) return
     const meta: TerrainMeta = { ...a.meta, stroke: storedStroke(recipe) }
-    patchAreaLocal(a.id, { polygon: poly, meta })
-    void putArea(a, { polygon: poly, meta })
-  }, [patchAreaLocal, putArea, strokePolygon])
+    stageArea(a, { polygon: poly, meta })
+  }, [stageArea, strokePolygon])
 
   // The three point handlers below work on the CENTRE LINE of a stroke area
   // and on the POLYGON of every other one — same gestures, same indices, two
@@ -1962,7 +2248,7 @@ export function MapTab() {
       const tag = document.activeElement?.tagName || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       e.preventDefault()
-      void commitStroke(draftStroke(draft))
+      commitStroke(draftStroke(draft))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -1988,7 +2274,7 @@ export function MapTab() {
       const [bx, bz] = pts[pts.length - 1]
       if (Math.hypot(ax - bx, az - bz) * view.pxPerM <= DBLCLICK_MERGE_PX) pts.pop()
     }
-    void commitStroke(draftStroke(pts))
+    commitStroke(draftStroke(pts))
   }, [commitStroke, draftStroke, paintShape, view.pxPerM])
 
   const moveVertex = useCallback((i: number, x: number, z: number) => {
@@ -2009,9 +2295,8 @@ export function MapTab() {
     }
     if (i < 0 || i >= a.polygon.length) return
     const poly = a.polygon.map((p, k) => (k === i ? [x, z] as [number, number] : p))
-    patchAreaLocal(a.id, { polygon: poly })
-    void putArea(a, { polygon: poly })
-  }, [patchAreaLocal, putArea, putStroke, selStroke, selectedArea, t, toast])
+    stageArea(a, { polygon: poly })
+  }, [putStroke, selStroke, selectedArea, stageArea, t, toast])
 
   const deleteVertex = useCallback((i: number) => {
     const a = selectedArea
@@ -2032,9 +2317,8 @@ export function MapTab() {
       return
     }
     const poly = a.polygon.filter((_, k) => k !== i)
-    patchAreaLocal(a.id, { polygon: poly })
-    void putArea(a, { polygon: poly })
-  }, [patchAreaLocal, putArea, putStroke, selStroke, selectedArea, t, toast])
+    stageArea(a, { polygon: poly })
+  }, [putStroke, selStroke, selectedArea, stageArea, t, toast])
 
   const insertVertex = useCallback((i: number, x: number, z: number) => {
     const a = selectedArea
@@ -2056,9 +2340,8 @@ export function MapTab() {
     }
     const poly = [...a.polygon]
     poly.splice(i, 0, [x, z])
-    patchAreaLocal(a.id, { polygon: poly })
-    void putArea(a, { polygon: poly })
-  }, [patchAreaLocal, putArea, putStroke, selStroke, selectedArea, t, toast])
+    stageArea(a, { polygon: poly })
+  }, [putStroke, selStroke, selectedArea, stageArea, t, toast])
 
   /** A new width for the selected stroke — same line, wider ribbon. */
   const setStrokeAreaWidth = useCallback((widthM: number) => {
@@ -2076,9 +2359,8 @@ export function MapTab() {
     if (!a || !selStroke) return
     const meta: TerrainMeta = { ...a.meta }
     delete meta.stroke
-    patchAreaLocal(a.id, { meta })
-    void putArea(a, { meta })
-  }, [patchAreaLocal, putArea, selStroke, selectedArea])
+    stageArea(a, { meta })
+  }, [selStroke, selectedArea, stageArea])
 
   /** What this area grows (finding B17). `meta` is a full replace like every
    *  other area write, so the rest of it travels along — and an empty list
@@ -2089,9 +2371,8 @@ export function MapTab() {
     const meta: TerrainMeta = { ...a.meta }
     if (entries.length) meta.scatter = entries
     else delete meta.scatter
-    patchAreaLocal(a.id, { meta })
-    void putArea(a, { meta })
-  }, [patchAreaLocal, putArea, selectedArea])
+    stageArea(a, { meta })
+  }, [selectedArea, stageArea])
 
   /**
    * The NUMBERS an area authors about its own ground — one writer for two
@@ -2120,16 +2401,14 @@ export function MapTab() {
       if (value === undefined) delete meta[key]
       else meta[key] = value
     }
-    patchAreaLocal(a.id, { meta })
-    void putArea(a, { meta })
-  }, [patchAreaLocal, putArea, selectedArea])
+    stageArea(a, { meta })
+  }, [selectedArea, stageArea])
 
   const setAreaKind = useCallback((kind: string) => {
     const a = selectedArea
     if (!a || a.kind === kind) return
-    patchAreaLocal(a.id, { kind })
-    void putArea(a, { kind })
-  }, [patchAreaLocal, putArea, selectedArea])
+    stageArea(a, { kind })
+  }, [selectedArea, stageArea])
 
   /** "Bring forward" / "send back" is one layer, not a jump to the top: the
    *  areas around it keep their order relative to each other. */
@@ -2138,68 +2417,44 @@ export function MapTab() {
     if (!a) return
     const z = Math.min(MAX_Z_ORDER, Math.max(-MAX_Z_ORDER, (a.z_order || 0) + delta))
     if (z === a.z_order) return
-    void putArea(a, { z_order: z })
-  }, [putArea, selectedArea])
+    stageArea(a, { z_order: z })
+  }, [selectedArea, stageArea])
 
-  const deleteArea = useCallback(async () => {
+  /** Erase the selected area — a DRAFT change like every other one, which is
+   *  why it needs no confirmation dialog of its own any more: Discard is the
+   *  way back from it, together with everything else that is unsaved. An area
+   *  that was only ever local simply leaves the buffer again
+   *  (`pendingBuffer.queueDelete`). */
+  const deleteArea = useCallback(() => {
     const a = selectedArea
     if (!a) return
     setSelArea('')
-    try {
-      await apiDelete(`/world/terrain-areas/${encodeURIComponent(a.id)}`)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-    await reloadTerrain()
-  }, [reloadTerrain, selectedArea, t, toast])
+    setTerrain((tp) => (tp
+      ? { ...tp, areas: tp.areas.filter((x) => x.id !== a.id) } : tp))
+    updPendTerrain((buf) => queueDelete(buf, a.id, a,
+      stampsTerrainRef.current[a.id] || ''))
+  }, [selectedArea, updPendTerrain])
 
-  // ── Height writes (§ A16) ────────────────────────────────────────────────
+  // ── The relief chip's handlers (§ A16) ──────────────────────────────────
+  // The three writers themselves live further up, next to the terrain ones —
+  // the draw gesture needs them before this point.
 
   const selectedHeight = useMemo(
     () => heightAreas.find((a) => a.id === selHeight) || null,
     [heightAreas, selHeight],
   )
 
-  /** Optimistic patch of one height area, so an edited outline does not snap
-   *  back to its old shape for the length of the round trip. */
-  const patchHeightLocal = useCallback((id: string, fields: Partial<HeightArea>) => {
-    setHeightAreas((as) => as.map((a) => (a.id === id ? { ...a, ...fields } : a)))
-  }, [])
-
-  /** Replace one height area. A FULL replace like every other write here, so
-   *  every field travels along; the refetch afterwards runs whether the write
-   *  worked or not, which on a 404 (someone else erased it) is the repair. */
-  const putHeightArea = useCallback(async (area: HeightArea,
-    patch: Partial<HeightArea>) => {
-    const body = {
-      polygon: area.polygon, height_m: area.height_m,
-      falloff_m: area.falloff_m, meta: area.meta || {}, ...patch,
-    }
-    try {
-      const r = await apiPut<HeightAreaWriteResp>(
-        `/world/height-areas/${encodeURIComponent(area.id)}`, body)
-      // Dragging one vertex 8 km east coarsens the grid exactly as drawing a
-      // new area out there would — same answer, same notice.
-      noteHeightStep(r?.step_m)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-    await reloadHeights()
-  }, [noteHeightStep, reloadHeights, t, toast])
-
   const setHeightValue = useCallback((m: number) => {
     const a = selectedHeight
     if (!a || a.height_m === m) return
-    patchHeightLocal(a.id, { height_m: m })
-    void putHeightArea(a, { height_m: m })
-  }, [patchHeightLocal, putHeightArea, selectedHeight])
+    stageHeight(a, { height_m: m })
+  }, [selectedHeight, stageHeight])
 
   const setFalloffValue = useCallback((m: number) => {
     const a = selectedHeight
     if (!a || a.falloff_m === m) return
-    patchHeightLocal(a.id, { falloff_m: m })
-    void putHeightArea(a, { falloff_m: m })
-  }, [patchHeightLocal, putHeightArea, selectedHeight])
+    stageHeight(a, { falloff_m: m })
+  }, [selectedHeight, stageHeight])
 
   const moveHeightVertex = useCallback((i: number, x: number, z: number) => {
     const a = selectedHeight
@@ -2211,9 +2466,8 @@ export function MapTab() {
       return
     }
     const poly = a.polygon.map((p, k) => (k === i ? [x, z] as [number, number] : p))
-    patchHeightLocal(a.id, { polygon: poly })
-    void putHeightArea(a, { polygon: poly })
-  }, [patchHeightLocal, putHeightArea, selectedHeight, t, toast])
+    stageHeight(a, { polygon: poly })
+  }, [selectedHeight, stageHeight, t, toast])
 
   const deleteHeightVertex = useCallback((i: number) => {
     const a = selectedHeight
@@ -2223,9 +2477,8 @@ export function MapTab() {
       return
     }
     const poly = a.polygon.filter((_, k) => k !== i)
-    patchHeightLocal(a.id, { polygon: poly })
-    void putHeightArea(a, { polygon: poly })
-  }, [patchHeightLocal, putHeightArea, selectedHeight, t, toast])
+    stageHeight(a, { polygon: poly })
+  }, [selectedHeight, stageHeight, t, toast])
 
   const insertHeightVertex = useCallback((i: number, x: number, z: number) => {
     const a = selectedHeight
@@ -2236,28 +2489,25 @@ export function MapTab() {
     }
     const poly = [...a.polygon]
     poly.splice(i, 0, [x, z])
-    patchHeightLocal(a.id, { polygon: poly })
-    void putHeightArea(a, { polygon: poly })
-  }, [patchHeightLocal, putHeightArea, selectedHeight, t, toast])
+    stageHeight(a, { polygon: poly })
+  }, [selectedHeight, stageHeight, t, toast])
 
-  const deleteHeightArea = useCallback(async () => {
+  /** Erase the selected height area — a draft change, undone by Discard. */
+  const deleteHeightArea = useCallback(() => {
     const a = selectedHeight
     if (!a) return
     setSelHeight('')
-    try {
-      await apiDelete(`/world/height-areas/${encodeURIComponent(a.id)}`)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-    await reloadHeights()
-  }, [reloadHeights, selectedHeight, t, toast])
+    setHeightAreas((as) => as.filter((x) => x.id !== a.id))
+    updPendHeight((buf) => queueDelete(buf, a.id, a,
+      stampsHeightRef.current[a.id] || ''))
+  }, [selectedHeight, updPendHeight])
 
   const onBackgroundClick = useCallback((wx: number, wz: number,
                                          e?: { shiftKey: boolean }) => {
     if (ghostRef.current) { void placeGhost(wx, wz); return }
     // Shift = free-hand, the tab's universal modifier (`PolygonHandles`).
     if (armedPropRef.current) {
-      void placeWorldProp(wx, wz, !!e?.shiftKey)
+      placeWorldProp(wx, wz, !!e?.shiftKey)
       return
     }
     const m = modeRef.current
@@ -2496,7 +2746,7 @@ export function MapTab() {
     ? (typeMap[terrain.default_kind]?.name || terrain.default_kind)
     : ''
   // An area the catalog cannot name is selectable but not reshapeable — see
-  // `putArea`. The chip says so; here the handles simply stay away.
+  // `stageArea`. The chip says so; here the handles simply stay away.
   const selAreaEditable = !!(selectedArea && typeMap[selectedArea.kind])
   // Will the next click close the ring? The same pixel tolerance the click
   // handler uses — the highlight must not promise a close that will not happen,
@@ -2681,6 +2931,47 @@ export function MapTab() {
             disabled={!bounds}>
             {t('Fit view')}
           </button>
+          {/* THE DRAFT. Both buttons exist only while there IS one: a Save
+              that is permanently greyed out teaches nothing about when it
+              would do something, and a Discard with nothing to discard is a
+              trap. The number is the whole point of the label — it is the
+              only place the size of the unsaved work is visible. */}
+          {dirtyCount > 0 ? (
+            <>
+              <button type="button" className="ga-btn ga-btn-sm ga-btn-primary"
+                disabled={saving}
+                title={t('Write every change of this map in ONE go — one bake instead of one per edit')}
+                onClick={() => { void saveDraft() }}>
+                {saving
+                  ? t('Saving…')
+                  : t('Save ({n})').replace('{n}', String(dirtyCount))}
+              </button>
+              <button type="button"
+                className={'ga-btn ga-btn-sm' + (discardArmed ? ' ga-btn-danger' : '')}
+                disabled={saving}
+                title={t('Throw the unsaved changes away and take what the server has')}
+                onClick={() => {
+                  if (discardArmed) discardDraft()
+                  else setDiscardArmed(true)
+                }}>
+                {discardArmed
+                  ? t('Really discard {n}').replace('{n}', String(dirtyCount))
+                  : t('Discard')}
+              </button>
+              {discardArmed ? (
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => setDiscardArmed(false)}>
+                  {t('Cancel')}
+                </button>
+              ) : null}
+              {conflictCount > 0 ? (
+                <span className="ga-map-arm warn">
+                  {t('{n} changes were refused — somebody else saved them meanwhile. Reload takes the server’s version.')
+                    .replace('{n}', String(conflictCount))}
+                </span>
+              ) : null}
+            </>
+          ) : null}
           <TerrainToolbar
             mode={mode}
             onPrimary={switchPrimary}
@@ -2874,7 +3165,7 @@ export function MapTab() {
                 worldProps={worldProps}
                 selectedId={selWp}
                 onSelect={setSelWp}
-                onMove={(id, x, z) => { void commitWorldProp(id, { x, z }) }}
+                onMove={(id, x, z) => { commitWorldProp(id, { x, z }) }}
                 // The props' OWN raster (never the 10 m location grid), and 0
                 // outside the props tool — the layer draws exactly the grid it
                 // snaps to, so what is shown and what happens cannot drift.
@@ -2906,7 +3197,7 @@ export function MapTab() {
               onWidth={setStrokeAreaWidth}
               onScatter={setAreaScatter}
               onConvert={convertToArea}
-              onDelete={() => { void deleteArea() }}
+              onDelete={() => { deleteArea() }}
               onClose={() => setSelArea('')}
             />
           ) : null}
@@ -2919,7 +3210,7 @@ export function MapTab() {
               maxStepM={maxStepM}
               onHeight={setHeightValue}
               onFalloff={setFalloffValue}
-              onDelete={() => { void deleteHeightArea() }}
+              onDelete={() => { deleteHeightArea() }}
               onClose={() => setSelHeight('')}
             />
           ) : null}
@@ -2951,18 +3242,18 @@ export function MapTab() {
                 <span className="ga-map-chip-label">{t('Rotation')}</span>
                 <button type="button" className="ga-btn ga-btn-sm"
                   title={t('Turn left {n}°').replace('{n}', String(YAW_FINE))}
-                  onClick={() => { void commitWorldProp(selectedWp.id,
+                  onClick={() => { commitWorldProp(selectedWp.id,
                     { yaw_deg: gridYaw((selectedWp.yaw_deg || 0) - YAW_FINE) }) }}>
                   ⟲{YAW_FINE}°
                 </button>
                 <button type="button" className="ga-btn ga-btn-sm"
                   title={t('Turn right {n}°').replace('{n}', String(YAW_FINE))}
-                  onClick={() => { void commitWorldProp(selectedWp.id,
+                  onClick={() => { commitWorldProp(selectedWp.id,
                     { yaw_deg: gridYaw((selectedWp.yaw_deg || 0) + YAW_FINE) }) }}>
                   ⟳{YAW_FINE}°
                 </button>
                 <button type="button" className="ga-btn ga-btn-sm"
-                  onClick={() => { void commitWorldProp(selectedWp.id,
+                  onClick={() => { commitWorldProp(selectedWp.id,
                     { yaw_deg: gridYaw((selectedWp.yaw_deg || 0) + YAW_QUARTER) }) }}>
                   +{YAW_QUARTER}°
                 </button>
@@ -2972,7 +3263,7 @@ export function MapTab() {
                   onBlur={() => {
                     const v = parseFloat(wpYawDraft)
                     if (Number.isFinite(v)) {
-                      void commitWorldProp(selectedWp.id, { yaw_deg: gridYaw(v) })
+                      commitWorldProp(selectedWp.id, { yaw_deg: gridYaw(v) })
                     } else setWpYawDraft(String(normYaw(selectedWp.yaw_deg || 0)))
                   }}
                   onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
@@ -2990,7 +3281,7 @@ export function MapTab() {
                   onBlur={() => {
                     const v = parseFloat(wpOffsetDraft)
                     if (Number.isFinite(v)) {
-                      void commitWorldProp(selectedWp.id, { offset_y: v })
+                      commitWorldProp(selectedWp.id, { offset_y: v })
                     } else setWpOffsetDraft(String(selectedWp.offset_y || 0))
                   }}
                   onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
@@ -3010,7 +3301,7 @@ export function MapTab() {
                   value={selectedWp.variant == null ? '' : String(selectedWp.variant)}
                   onChange={(e) => {
                     const raw = e.target.value
-                    void commitWorldProp(selectedWp.id,
+                    commitWorldProp(selectedWp.id,
                       { variant: raw === '' ? null : Number(raw) })
                   }}>
                   <option value="">{t('Auto')}</option>
@@ -3020,18 +3311,13 @@ export function MapTab() {
               </div>
               ) : null}
               <div className="ga-map-chip-actions">
-                {wpDelArmed === selectedWp.id ? (
-                  <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-                    onClick={() => { void removeWorldProp(selectedWp.id) }}>
-                    {t('Really delete')}
-                  </button>
-                ) : (
-                  <button type="button" className="ga-btn ga-btn-sm"
-                    title={t('Remove this placement')}
-                    onClick={() => setWpDelArmed(selectedWp.id)}>
-                    {t('Delete')}
-                  </button>
-                )}
+                {/* ONE click, no confirmation — a draft change like every
+                    other, undone by Discard in the toolbar. */}
+                <button type="button" className="ga-btn ga-btn-sm"
+                  title={t('Remove this placement from the draft')}
+                  onClick={() => { removeWorldProp(selectedWp.id) }}>
+                  {t('Delete')}
+                </button>
               </div>
             </div>
           ) : null}

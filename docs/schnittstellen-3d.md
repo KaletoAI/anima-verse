@@ -858,6 +858,7 @@ immer sichtbar, nur Locations verstecken sich.
 { default_kind: str,          # Boden der unbemalten Welt
   types:  [ {kind, name, color, passable, speed_factor, surface?, meta}, … ],
   areas:  [ {id, kind, polygon, z_order, meta}, … ],
+  stamps: { <area-id>: <updated_at>, … },   # nur für den Karten-Editor
   sig:    str }               # identisch mit worldmap.terrain_sig
 ```
 
@@ -868,6 +869,15 @@ immer sichtbar, nur Locations verstecken sich.
   Punkte, automatisch geschlossen. Die Obergrenze setzt das LINIENWERKZEUG:
   eine `wavy`-Linie wird alle 3 m abgetastet, ein Kilometer Fluss sind 335
   Mittellinien-Punkte und das gehrte Band darum ist doppelt so breit.
+- `stamps` ist der **Versionsstempel** jeder Fläche (`{id: updated_at}`) und
+  geht nur den Karten-Editor an: er schreibt seine Bearbeitungen als lokalen
+  Entwurf und speichert sie in EINEM Batch
+  (`PUT /world/terrain-areas/bulk`, Plan `plan-map-save-batch.md`), wobei jede
+  gepufferte Änderung den Stempel mitführt, mit dem sie geladen wurde — daran
+  lehnt der Batch genau die Objekte ab, die inzwischen jemand anders
+  gespeichert hat. Renderer ignorieren den Block. Er fährt NEBEN den Flächen
+  und geht bewusst NICHT in `sig` ein: sonst würde ein erneutes Speichern ohne
+  Formänderung jeden Client neu backen lassen.
 - `sig` ist dieselbe Signatur wie `terrain_sig` in der Weltkarte: einmal
   holen, bei Signaturwechsel neu holen. Sie deckt die Flächen **und den
   WIRKSAMEN Katalog** ab (Grundstock + Welt-Zeilen, Runde 2 der
