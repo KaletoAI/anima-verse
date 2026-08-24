@@ -58,6 +58,16 @@ const DIM_FIELDS: Array<{ key: DimKey; label: string; title: string }> = [
   { key: 'height_m', label: 'H', title: 'Height (m)' },
 ]
 
+/** One chip's width in pixels — wide enough for the W/D/H row, which is the
+ *  widest thing in it. Fixed on purpose (see the chip's own comment): the
+ *  strip may only ever grow DOWNWARDS, never re-flow sideways. */
+const CHIP_W = 250
+
+/** Rows of the per-variant description field: readable at rest, a real
+ *  editor while it is written in. */
+const DESC_ROWS_REST = 3
+const DESC_ROWS_OPEN = 8
+
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   onChanged, generating = [], worldSeasons = [], currentSeason = '',
   shownBbox = null, rotation }: {
@@ -110,8 +120,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   useEffect(() => { setDimDraft({}) }, [propId])
   // The same law for the description field, keyed by store index: a draft
   // exists only while the field is edited. `descOpen` is the ONE variant whose
-  // field is expanded — a row of full textareas would push the chips apart,
-  // and only the field under the cursor needs the room.
+  // field is expanded to writing size — every field is readable at rest, only
+  // the one under the cursor gets the room of a real editor.
   const [descDraft, setDescDraft] = useState<Record<number, string>>({})
   const [descOpen, setDescOpen] = useState<number | null>(null)
   useEffect(() => { setDescDraft({}); setDescOpen(null) }, [propId])
@@ -271,7 +281,12 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
             <div
               key={v.index}
               style={{
-                display: 'flex', flexDirection: 'column', gap: 4,
+                // FIXED WIDTH, not content width: the description field below
+                // grows when it is focused, and a chip whose width depended on
+                // its content would re-flow the whole strip while typing. With
+                // every chip the same width the line-up never changes — only
+                // the focused chip gets taller, in place.
+                display: 'flex', flexDirection: 'column', gap: 4, width: CHIP_W,
                 padding: '4px 6px', borderRadius: 6,
                 border: `1px solid ${isSelected
                   ? 'var(--accent, #58a6ff)' : 'var(--border, #30363d)'}`,
@@ -324,7 +339,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   prop's value, and the placeholder is that very number — so
                   an untouched row reads as "as big as the prop" without a
                   second label saying so. */}
-              <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 3, alignItems: 'center',
+                flexWrap: 'wrap' }}>
                 {DIM_FIELDS.map((f) => {
                   const draftKey = `${v.index}:${f.key}`
                   const stored = (v.dims as PropDims)[f.key]
@@ -364,13 +380,14 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   variant starts with a COPY of the prop's text, so the field
                   opens filled and is EDITED ("…as a sapling") instead of
                   written from nothing. Cleared = back to inheriting, which is
-                  what the placeholder then shows. One line at rest, four while
-                  it is being written — a strip of textareas would push the
-                  chips apart for a field nobody is editing. */}
+                  what the placeholder then shows. Three lines at rest — enough
+                  to READ the sentence without opening it — and eight while it
+                  is being written; the chip keeps its width either way, so the
+                  strip grows downwards instead of re-flowing. */}
               <textarea
                 className="ga-textarea"
-                rows={descOpen === v.index ? 4 : 1}
-                style={{ width: 200, fontSize: '0.85em', resize: 'vertical' }}
+                rows={descOpen === v.index ? DESC_ROWS_OPEN : DESC_ROWS_REST}
+                style={{ width: '100%', fontSize: '0.85em', resize: 'vertical' }}
                 disabled={busy}
                 value={descDraft[v.index] ?? (v.description || '')}
                 placeholder={v.effective_description

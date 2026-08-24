@@ -10,11 +10,23 @@
  * Manual edits stick; picking another backend recomposes an untouched
  * prompt. The mesh is untouched — re-meshing from the new image is the
  * separate "3D from this image" step.
+ *
+ * IT DOES NOT CLOSE ON AN OUTSIDE CLICK (2026-08-24). The prompt in here is
+ * written, not confirmed, and the Prompt Help panel it is meant to be written
+ * with sits OUTSIDE the dialog — a backdrop that closes on any stray click
+ * throws the text away mid-edit. Cancel, the × and Escape close it.
+ *
+ * The prompt field is a declared PROMPT field (`data-prompt-context`), so the
+ * Prompt Help picks it up on focus and can write its improved version back —
+ * the same recognition the surface-texture and ImageGenDialog prompts get.
+ * The context tells the assistant this is img2mesh input, not a scene.
  */
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useHelp } from '../../help/HelpContext'
 import { useI18n } from '../../i18n/I18nProvider'
-import type { ImageBackendInfo, PropFull, PropSourceImage } from './propTypes'
+import { PROP_PROMPT_CONTEXT, type ImageBackendInfo, type PropFull,
+  type PropSourceImage } from './propTypes'
 
 /** Same composition rule as the create form: style + subject. The subject is
  *  the TARGET VARIANT's text (its own description, else the prop's — the
@@ -45,6 +57,7 @@ export function PropImageDialog({ prop, variant, subject, image, backends,
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const { setTopic } = useHelp()
   const [picked, setPicked] = useState('')
   const [prompt, setPrompt] = useState('')
   const [touched, setTouched] = useState(false)
@@ -65,14 +78,24 @@ export function PropImageDialog({ prop, variant, subject, image, backends,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prop?.id, variant])
 
+  // Escape closes — the keyboard half of "no backdrop close": the dialog is
+  // still dismissable without aiming at the ×, just not by accident.
+  useEffect(() => {
+    if (!prop) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [prop, onClose])
+
   if (!prop) return null
 
   return createPortal(
-    <div className="ga-modal-backdrop" onClick={onClose}>
+    // No onClick on the backdrop: an outside click must NOT discard a prompt
+    // that is being written (see the module header).
+    <div className="ga-modal-backdrop">
       <div className="ga-modal" role="dialog"
         aria-label={t('Regenerate source image')}
-        style={{ maxWidth: 520 }}
-        onClick={(e) => e.stopPropagation()}>
+        style={{ maxWidth: 520 }}>
         <div className="ga-modal-header">
           <span>
             {t('Regenerate source image')} — {prop.name}
@@ -102,12 +125,24 @@ export function PropImageDialog({ prop, variant, subject, image, backends,
                   <option key={b.name} value={b.name}>{b.name}</option>
                 ))}
               </select>
-              <label className="ga-hint"
-                title={t('The full prompt sent to the render — composed from the backend style and THIS variant’s description (the prop’s where the variant has none, the name as the last fallback). Empty = the server composes the same thing.')}>
-                {t('Final prompt (sent to the render)')}
-              </label>
-              <textarea className="ga-textarea" rows={4} value={prompt}
-                onChange={(e) => { setPrompt(e.target.value); setTouched(true) }} />
+              {/* The prompt field, declared as a PROMPT field for the Prompt
+                  Help panel: `data-prompt-context` is what makes the panel
+                  take the text over on focus and write its improved version
+                  back, and it carries the rules a prop render must not lose
+                  (img2mesh input, not a scene). `display: contents` keeps the
+                  form's own spacing — the wrapper exists for the DOM lookup
+                  (`el.closest(...)` in HelpContext), not for the layout. */}
+              <div style={{ display: 'contents' }}
+                data-help="image_prompt"
+                data-prompt-context={PROP_PROMPT_CONTEXT}
+                onFocusCapture={() => setTopic('image_prompt')}>
+                <label className="ga-hint"
+                  title={`${t('The full prompt sent to the render — composed from the backend style and THIS variant’s description (the prop’s where the variant has none, the name as the last fallback). Empty = the server composes the same thing.')} ${t('Click into the field and the Prompt Help panel on the right takes it over — it improves it as an img2mesh product shot and writes the result back.')}`}>
+                  {t('Final prompt (sent to the render)')}
+                </label>
+                <textarea className="ga-textarea" rows={4} value={prompt}
+                  onChange={(e) => { setPrompt(e.target.value); setTouched(true) }} />
+              </div>
               {backends.find((b) => b.name === picked)?.supports_negative_prompt === false ? (
                 <span className="ga-hint">
                   {t('This backend has no negative input — negations are part of the prompt above.')}

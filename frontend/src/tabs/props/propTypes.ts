@@ -191,3 +191,18 @@ export interface MeshBackendInfo {
 
 /** id of the shared category <datalist> — rendered once by PropsTab. */
 export const CATEGORY_DATALIST_ID = 'prop-category-options'
+
+/** What the Prompt Help must know before it "improves" a prop prompt (the
+ *  `promptContext` of the render dialog's prompt field). This image is not a
+ *  picture, it is the INPUT of the img2mesh pass: a scene, a cast shadow or a
+ *  dramatic angle bakes into the geometry, so an assistant that adds the
+ *  usual image-prompt garnish makes the mesh worse, not the picture better.
+ *  Same wording rules as the "prop" use case in app/core/config.py. */
+export const PROP_PROMPT_CONTEXT =
+  'This prompt renders the SOURCE IMAGE of ONE furnishing prop (chair, table, '
+  + 'plant …), which is then converted into a 3D mesh by an img2mesh backend. '
+  + 'A single object, isolated and centred on a plain neutral studio '
+  + 'background with a generous margin, flat even lighting, the whole object '
+  + 'in frame. No scene, no environment, no people or hands, no cast shadows, '
+  + 'no dramatic perspective, no text — all of that bakes into the mesh. Keep '
+  + 'it a product shot of the object, not a picture of a place.'
