@@ -119,10 +119,18 @@ export function waterTintRgb(hex: unknown): [number, number, number] {
  * `depthM` is the AREA's effective bed depth (`meta.water_depth_effective`),
  * the same number the mirror mesh turned into its `aWaterOpaque` attribute —
  * the kind's default with the area's override already applied. Under K-A it
- * can only be carried per KIND (the fragment learns which kind it stands in
- * from the layer mask, which speaks kinds), so a kind painted twice with two
- * different depth overrides collapses to one of them; the per-AREA number
- * would have to ride in the water raster itself, which is a server matter.
+ * is carried per KIND (the fragment learns which kind it stands in from the
+ * layer mask, which speaks kinds), so a kind painted twice with two different
+ * depth overrides collapses to one of them.
+ *
+ * THAT IS THE STANDING RULE, decided in K-A E6 and not a gap waiting to be
+ * closed. Every other field of `WaterLook` comes from the kind's surface
+ * material and could not be per area anyway; carrying this one per texel would
+ * need the level's MASKED mix (a plain channel mixes toward 0 at a dry corner,
+ * which drives `opaqueDepthM` to 0 and the absorption to 1 exactly at the
+ * waterline), i.e. a fourth channel on the level pyramid or four more
+ * `texelFetch` per vertex, plus about a third more payload on every wet tile.
+ * A world that wants two visibly different opacities paints two KINDS.
  */
 export function waterLookFrom(spec: SurfaceMaterialSpec | null | undefined,
                               depthM: unknown): WaterLook {

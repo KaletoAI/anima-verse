@@ -3000,17 +3000,13 @@ checkEq('there is no far water pyramid', bound.uTlodWaterFar === undefined, true
 //       x = 0 … 6   the CARVE at full depth:  level − depth = 1 − 2 = −1
 //       x = 8       the shore ramp on its way up out of the bed:       0.0
 //       x = 10      the outline, where the ramp has reached the mirror: 1.0
-//       x = 12      the BANK CLAMP band, 2 m outside the outline. The rule
-//                   (`HeightModel._bank_clamp`) is
-//                       floor  = level + WATER_BANK_LIP_M = 1.0 + 0.1 = 1.1
-//                       target = floor + (h − floor) · (d / shore_ramp)
-//                   and for a natural bank of 1.5 at d = 2, ramp 4:
-//                       target = 1.1 + (1.5 − 1.1) · 0.5 = 1.3
-//                       h      = max(1.5, 1.3) = 1.5          → 1.5
-//       x = 14      4 m outside, i.e. d = ramp, where the clamp's minimum has
-//                   faded to `h` itself ("the band closes without a seam by
-//                   construction", `_bank_clamp`) — so untouched meadow, and
-//                   this stretch of it lies under the mirror:           0.75
+//       x = 12      2 m outside the outline: authored meadow standing 0.5 m
+//                   OVER its own mirror — a bank, and nothing in the bake
+//                   touches it (the shore guards are gone since v8, K-A E6,
+//                   and while they existed this was the clamp's band):  1.5
+//       x = 14      4 m outside: authored meadow lying UNDER the mirror,
+//                   which is the normal legal case since v8 — the bake leaves
+//                   it and the LIFT below is what covers it:            0.75
 //       x = 16      dry land:                                          3.0
 //
 //       x     0    2    4    6    8   10   12   14   16
@@ -3035,34 +3031,23 @@ checkEq('there is no far water pyramid', bound.uTlodWaterFar === undefined, true
 //       x = 12   h = 1.5, w = 1.0     → 1.5   THE RING PROBE — the dilation
 //                                              ring HAS a level here and the
 //                                              terrain does NOT lift, because
-//                                              the bank clamp put the ground
-//                                              0.5 m over its own mirror
+//                                              the authored ground already
+//                                              stands 0.5 m over its mirror
 //       x = 14   h = 0.75, w = 1.0    → 1.0   …and here it DOES, by 0.25 m
 //       x = 15   h = mix(0.75, 3.0, ½) = 1.875, w = mix(1.0, null, ½) = dry
 //                                     → 1.875 (a WEIGHTED dry corner is dry)
 //       x = 16   h = 3.0, w = dry     → 3.0
 //
-//     THE RING RULE, and it is not the one-liner it looks like. "A vertex in
-//     the dilation ring lifts only where the mirror stands over the ground,
-//     which the bank clamp rules out" is true AT THE OUTLINE and only there:
-//     the clamp's minimum FADES linearly to the untouched ground over
-//     `shore_ramp_m` and is exactly `h` again at `d = ramp`, while the ring is
-//     a fixed `WATER_RASTER_DILATION_M` = 4 m whatever the ramp is. Solve the
-//     clamp for the general case: a vertex at distance `d` outside the outline
-//     is guaranteed not to lift iff
-//         d / ramp  ≤  LIP / (LIP + level − h_natural)
-//     — so for a bank 0.75 m under the mirror (LIP 0.1) that is the innermost
-//     0.1/0.35 = 28.6 % of the band, and x = 14 (d = ramp, the outer edge) is
-//     never covered for any ramp at all. With the DEFAULT 3 m ramp the ring is
-//     a metre wider than the clamp band on top of that, so its outermost metre
-//     has no clamp behind it whatsoever.
-//     THIS IS NOT A DEFECT AND MUST NOT BE "FIXED" HERE: land lying
-//     under the mirror beside its own water IS failure class F1
-//     (`recherche-wasser-v2.md` § 2), and K-A answers it by raising the land
-//     instead of floating the water. The lift is bounded twice over — by
-//     `level − h` in height and by the 4 m dilation in width — and it is
-//     exactly why the plan puts the bank clamp and the 16 m relief fade up for
-//     removal in E6.
+//     THE RING RULE, and it is the point of the whole stage. A vertex in the
+//     dilation ring lifts wherever the mirror stands over the ground, and
+//     since v8 (K-A E6) the bake no longer holds that ground up: the bank
+//     clamp and the 16 m relief fade are deleted, precisely because THIS is
+//     the answer to land lying under the mirror beside its own water (failure
+//     class F1, `recherche-wasser-v2.md` § 2) — K-A raises the land instead of
+//     floating the water. The lift is bounded twice over: by `level − h` in
+//     height and by the 4 m dilation in width, which is why x = 15 (a weighted
+//     dry corner) is already dry again and the lake cannot creep into the
+//     meadow past the ring.
 //
 // (b) THE MIP IS THE HEIGHT'S MIP, AND THE MAX IS TAKEN PER LEVEL. At x = 14
 //     the level-1 lattice has already lost the ring (its next support point,

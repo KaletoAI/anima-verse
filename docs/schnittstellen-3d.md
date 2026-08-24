@@ -5452,12 +5452,16 @@ Tiefe 2 m bei (2, 3), `keep` 0,5:
 
 ## Nachtrag 2026-08-24 (§ A16.3 / § G4): Kein Relief am Wasserrand, und der Spiegel folgt seiner Achse überall — W5d
 
-> **Der Client-Teil (Abschnitt 2, `subdivideRibbonByAxis`) ist mit Wasser v2
-> K-A E5 gelöscht** — es gibt kein Spiegel-Mesh mehr, das man in Streifen
-> schneiden könnte; das Terrain tastet den Pegel pro Vertex aus dem Raster ab
-> und braucht dafür keine Schnittkante. Der SERVER-Teil (Abschnitt 1, das
-> reliefreie Band am Wasserrand) gilt weiter, bis E6 ihn zur Entscheidung
-> stellt.
+> **ÜBERHOLT — beide Hälften.** Der Client-Teil (Abschnitt 2,
+> `subdivideRibbonByAxis`) ist mit Wasser v2 K-A E5 gelöscht: es gibt kein
+> Spiegel-Mesh mehr, das man in Streifen schneiden könnte; das Terrain tastet
+> den Pegel pro Vertex aus dem Raster ab. Der SERVER-Teil (Abschnitt 1, das
+> reliefreie Band am Wasserrand) ist mit **K-A E6** zurückgebaut
+> (`HEIGHT_BAKE_VERSION` 8, Nachtrag „Der Rückbau der Ufer-Wächter" am Ende
+> dieses Dokuments): das Relief läuft wieder bis an die Wasserlinie, und die
+> Rand-Hälfte von § G4 ist dort neu geschrieben. Was hier steht, ist der
+> BEFUND, der zum Kragen führte — er gilt als Beschreibung des alten Defekts
+> weiter, die Regel nicht mehr.
 
 *Befund des Users nach Bake v4 + W5c: „Es sind noch immer Löcher zwischen
 Wasser und Land." Zwei getrennte Ursachen, beide numerisch überführt, beide an
@@ -5531,6 +5535,13 @@ gegraben hat. Kosten: ein Stück je Knoten (255 Stücke für einen 256-Knoten-
 Mäander, 15 ms), Deckel `WATER_STRIP_MAX` = 1024.
 
 ## Nachtrag 2026-08-24 (§ A16.3 / § G4): Das reliefreie Band bekommt sein eigenes Maß — W5e (Server)
+
+> **ÜBERHOLT durch Wasser v2 K-A E6** (`HEIGHT_BAKE_VERSION` 8, Nachtrag „Der
+> Rückbau der Ufer-Wächter" am Ende dieses Dokuments): das reliefreie Band UND
+> die Bankklemme sind gelöscht, weil der Terrain-Vertex auf `max(h, w_level)`
+> gehoben wird und beide Defekte damit im Renderer beantwortet sind. Die Zahlen
+> unten bleiben als Beleg dafür lesbar, warum ein 1-m-Band nichts ausrichtete;
+> die Regel und die Konstante gibt es nicht mehr.
 
 *Befund des Users nach Bake v5: „die Wellen des angrenzenden Geländes am Rand
 des Wassers" sind KOMPLETT unverändert. Der Nachtrag **ersetzt** die Breiten-
@@ -5931,8 +5942,12 @@ zeichnet und nicht den Ton einer Wiese.
 **Die Deckkraft-Tiefe ist damit pro ART und nicht mehr pro FLÄCHE** — eine echte
 Verengung gegenüber W4b, weil die Maske Arten kennt und keine Flächen. Die
 zuletzt gemalte Fläche einer Art gewinnt (die Regel, die der Server bei
-überlappenden Gewässern selbst benutzt). Pro Fläche zurückzuholen hieße, die
-Zahl im Wasser-Raster mitzuliefern — Serversache, vorgemerkt für E6.
+überlappenden Gewässern selbst benutzt). **E6 hat entschieden, dass das so
+bleibt** (Begründung im Nachtrag „Der Rückbau der Ufer-Wächter": der Look ist
+ein Art-Datensatz, ein billiger Rasterkanal mischte am Ufer gegen 0 und deckte
+die Wasserlinie zu, und der Gewinn wäre eine Art, die zweimal mit
+verschiedenen Tiefen gemalt wurde) — wer eine andere Deckkraft braucht, malt
+eine eigene ART.
 
 **Der Fließvektor** fährt als zweites Datenfeld neben dem Pegel mit
 (`uTlodFlow`, RG32F, **nur Stufe 0** derselben Lattice) und wird **im Vertex**
@@ -6010,3 +6025,149 @@ Per-Vertex-Fließvektor; der Server prüft die Regel jetzt in
 Streifen). `smoke_waterfall.mjs` prüft die neue Herkunft der Wellennormalen,
 `smoke_layer_cut.mjs`, `smoke_natural_ground.mjs`, `smoke_surface_patch.mjs` und
 `smoke_fog_veil.mjs` prüfen die eine verbliebene Material-Kette.
+
+---
+
+## Nachtrag 2026-08-24 (§ A16.3 / § G4): Der Rückbau der Ufer-Wächter — Wasser v2, K-A E6 (Server)
+
+*Letzte Etappe des K-A-Umbaus. `HEIGHT_BAKE_VERSION` **7 → 8**: die Höhen
+kommen für unveränderte Daten anders heraus, jede laufende Welt bäckt neu.*
+
+### Was gelöscht ist
+
+Zwei Bake-Stempel haben zwischen v4 und v7 den Rand jedes Gewässers geformt.
+Beide waren gegen **ein** Symptom der Mesh-Ära geschrieben — der Spiegel war
+eine eigene, durchsichtige FLÄCHE, und der Boden daneben wusste nichts von ihr:
+
+| Weg | Was er tat | Warum er sterben kann |
+|---|---|---|
+| **Bankklemme** (v4): `_bank_clamp`, `WATER_BANK_LIP_M`, `water_bank_box`, `_ring_nearest_point` | hielt den Boden im `shore_ramp_m`-Band AUSSERHALB des Umrisses auf mindestens `water_level_at(nächster Umrisspunkt) + 0,1 m`, mit linear ausblendendem Minimum | Boden unter dem Spiegel ist kein Loch mehr, sondern **Bett**: der Terrain-Vertex wird auf `max(h, w_level)` gehoben (E3), der Spiegel steht also nirgends mehr in der Luft |
+| **Relief-Fade** (v5/v6): `_relief_weight`, `_relief_fade_width`, `RELIEF_SHORE_FADE_M` | nahm das Mikro-Relief über einen Kragen von `max(shore_ramp_m, 16 m)` auf 0 zurück, innerhalb des Polygons ganz | Boden ÜBER dem Spiegel am Rand ist kein Loch mehr, sondern ein **Fels im See** — es gibt keine Platte, in die er ein Loch schneiden könnte |
+
+`h_final` hat damit wieder **drei** Stufen (`natural → carve → plateaus`), und
+ein Gewässer schreibt nur noch INNERHALB seines eigenen Umrisses. Kein
+Rückfall-Leser, kein Alias, keine Konfiguration: die Namen sind weg und werden
+namentlich als ROTE Proben geführt (`scripts/smoke_height_bake.py` **[10a]**).
+
+**Die Box, die eine Wasserfläche noch beansprucht** (`shaped_boxes`, Kachel-
+Index, Gitterwachstum), ist der Umriss **plus `WATER_RASTER_DILATION_M` = 4 m**
+statt plus `shore_ramp_m`. Das ist keine Kosmetik: was ein Gewässer außerhalb
+seines Umrisses noch schreibt, ist der **Dilatationsring** des Rasters, und eine
+Kachel, in die der Ring hineinreicht, muss indiziert sein — sonst endet der Ring
+an einer Kachelgrenze, also genau der bilineare Defekt, gegen den die Dilatation
+existiert. Die alte, mit `shore_ramp_m` gewachsene Box deckte ihn nie (ein
+legales `shore_ramp_m = 0` wuchs gar nicht).
+
+### § G4, Rand-Hälfte — neu, und konstruktiv statt gemessen
+
+> **Die Rand-Hälfte von § G4 ist keine Schranke mehr, sondern eine Aussage über
+> den Vertexshader.** Was ein Renderer über Wasser zeichnet, ist
+> `y = max(h, w_level)` pro Morph-Abgriff (K-A E3) — **auf jeder gezeichneten
+> Stufe ist die Oberfläche eines Wasser-Texels also der Spiegel**, und der
+> existiert überall dort, wo die Basismaske Wasser sagt: die Wasser-Pyramide
+> DEZIMIERT als **Teilmenge** eines stückweise linearen Feldes und ein grobes
+> Texel ist genau dann Wasser, wenn sein eigenes Basis-Texel es ist (K-A E2,
+> `buildWaterPyramid`) — kein Mittelwert, kein `min`, keine zweite Maske. Daraus
+> folgt beides ohne Messung: Boden UNTER dem Spiegel kann nicht gezeichnet
+> werden (der `max` gibt den Spiegel zurück, es entsteht keine Lücke zwischen
+> Wasser und Land), und Boden ÜBER dem Spiegel wird als das gezeichnet, was er
+> ist — Fels im Wasser, kein Loch in einer Platte. Der Preis dieser Aussage ist
+> benannt: der Ring ist auf Stufe 0 zwei Texel breit, auf Stufe 1 eines und
+> darüber keines, die Garantie gilt also auf dem BASIS-Gitter; was eine grobe
+> Stufe am Ufer verfehlt, deckt die Fragment-MASKE (K-A E4), nie das Gelände.
+>
+> **Die Tiefen-Hälfte (Invariante 2) bleibt wörtlich stehen:** jenseits der
+> Ufer-Rampe liegt der Boden punktweise mindestens `ε` unter
+> `water_level_at(x, z)`, in JEDEM Raster. Sie ist die Aussage über den CARVE
+> und der Carve ist unverändert.
+>
+> **Die Dilatationsregel** (unverändert seit E1, hier als Teil von § G4
+> festgeschrieben): Pegel- und Fließraster müssen mindestens
+> `WATER_RASTER_DILATION_STEPS` = 2 Gitterschritte über jeden Umriss hinaus
+> fortgeschrieben sein, weil eine Zellecke eines nassen Punktes höchstens eine
+> Zell-DIAGONALE (√2 Schritte) außerhalb liegt; ein Schritt deckt das nicht,
+> zwei decken es strikt.
+
+Geprüft in `scripts/smoke_height_bake.py` **[10e]**: das 4-/8-/16-m-Gitter des
+Wasserrasters ist Texel für Texel jedes 2./4./8. Basis-Texel (Pegel wie
+Trocken-Sentinel), und über 7 857 nasse Proben ist `min(max(h, w) − w)` exakt
+**0,0** — nichts wird unter seinem eigenen Spiegel gezeichnet, obwohl 7 497
+dieser Proben im BAKE darunter liegen.
+
+### Was zurückkommt — und was es kostet
+
+**Das Relief läuft wieder bis an die Wasserlinie** ([11a]–[11d], Fixture See
+(0,0)–(40,40) + Wiese Amplitude 1,0 / Welle 16):
+
+| | v6 (Kragen) | v8 (Rückbau) |
+|---|---|---|
+| Boden 1 m außerhalb des Umrisses | 1,1 % der Welle | **100 %** |
+| Schlimmste Welle im 4-m-Kragen | 0,1206 m | **0,772 m** |
+| Abgeleiteter Spiegel (Rand-Median) | exakt 0,0 (relieffreier Rand) | **0,1504 m**, Spannweite des Randes **1,344 m** |
+| Höchster Randpunkt über seinem Spiegel | 0,0 m | **0,466 m** — und das ist jetzt ein Fels, kein Loch |
+
+**Der Preis, als Zahl statt als Überraschung** ([10g]): ein Ufer, das unter dem
+Spiegel liegt, wird als Wasser gezeichnet, solange das Raster dort einen Pegel
+hat — also **bis zu 4 m über den autorierten Umriss hinaus**, und dort hört die
+Wasserfläche mit einer Stufe in Höhe der getragenen Tiefe auf (Fixture: 1,4 m).
+Die Bankklemme hat das nie verhindert (ihr Band ist `shore_ramp_m`, in der
+Vorgabe 3 m < 4 m, und darf 0 sein); sie hat nur den Boden, den sie deckte, hoch
+genug gemacht, dass er nicht hob. Wer die Wasserlinie exakt am gezeichneten
+Umriss haben will, malt das Ufer nicht unter den Spiegel — das ist eine
+Autoren-Aussage und keine Bake-Regel mehr.
+
+### Begehung und Navigation
+
+`world_height` liefert am Ufer jetzt Boden, der unter dem Spiegel liegen darf.
+Das ist für die Gates folgenlos und geprüft: **Waten/Schwimmen** liest das
+PROFIL (`water_level_at`, exakt, nicht das Raster) und nicht `h`, **Steigung
+und Stufe** lesen `h` — und `h` ist am Ufer jetzt glatter als vorher, weil die
+0,1-m-Lippe entlang jeder Uferlinie weg ist. Gemessen in
+`scripts/smoke_nav_grid.py`: der 30-m-Weg ins Seedorf kostet wieder
+**53,0 s** = 20 s Gras + 25 s Waten + 4 s/m · 2,0 m Abstieg ins Bett (v4–v7:
+53,664 s, weil die Lippe 0,166 m Auf und Ab dazugab). `smoke_slope_gate.py`
+ist unberührt — es misst Plateau-Rampen.
+
+### Die Deckkraft-Tiefe bleibt PRO ART — Entscheidung, nicht Vertagung
+
+E4 hatte vorgemerkt, `water_depth_effective` pro FLÄCHE im Wasserraster
+mitzuliefern, weil die id-Maske nur Arten kennt. **Entschieden: sie bleibt pro
+Art**, und das ist ab hier die stehende Regel, kein offener Punkt.
+
+Gründe, in dieser Reihenfolge:
+
+1. **Der Wasser-Look IST ein Art-Datensatz.** Tint, `sky_mix`, `wave_m`,
+   `speed`, `flow_speed`, Rauheit und Metallizität kommen alle aus der
+   Surface-Bibliothek und können gar nicht pro Fläche sein. Ein Texel-Kanal für
+   das achte Feld machte EINEN Wert flächenscharf, während der Farbton, in den
+   er hineinblendet, artscharf bleibt.
+2. **Der billige Kanal wäre falsch.** Der Fließvektor fährt plain-bilinear
+   (der Server schreibt (0, 0) auf trockenen Punkten); eine Tiefe, die an
+   trockenen Ecken gegen 0 mischt, ergäbe `opaque_depth → 0` und damit
+   Absorption **1** genau an der Wasserlinie — ein deckender Saum am Ufer, also
+   die Defektklasse, gegen die die Stufe angetreten ist. Korrekt getragen
+   bräuchte sie die MASKIERTE Mischung des Pegels: entweder einen vierten Kanal
+   auf der R32F-Pegelpyramide (4× Texturspeicher auf JEDER Stufe) oder vier
+   zusätzliche `texelFetch` je Vertex. Beides ist nicht „billig".
+3. **Nutzlast.** Ein viertes Feld je nassem Texel ist rund +33 % auf jede nasse
+   Kachel, dauerhaft, für eine Zahl, die je Fläche konstant ist.
+4. **Der Gewinn ist eine Art, die ZWEIMAL mit verschiedenen Tiefen gemalt
+   wurde.** Dann gewinnt die zuletzt gemalte Fläche (die Regel, die der Server
+   bei überlappenden Gewässern selbst benutzt), und der Unterschied ist, wie
+   schnell das Bett verschwindet — nicht, wo Wasser ist und wie tief man watet
+   (beides liest das exakte Profil).
+
+Wer eine erkennbar andere Deckkraft braucht, malt eine eigene ART — das ist im
+Autorenmodell der vorgesehene Weg und kostet nichts.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Namen weg, `final` dreistufig, Version 8 | `scripts/smoke_height_bake.py` **[10a]**, **[10c]** |
+| Band außerhalb des Umrisses = autorierter Boden, Bett unverändert | ebenda **[10b]**, **[10d]** |
+| § G4-Rand-Hälfte: Teilmengen-Dezimierung + `min(max(h,w) − w) = 0` | ebenda **[10e]** |
+| Ring-Box, Dilatationsbreite, der 4-m-Preis mit seiner Stufe | ebenda **[10f]**, **[10g]** |
+| Relief bis an die Wasserlinie, wobbelnder Rand-Median, Kragen zurück | ebenda **[11a]**–**[11d]** |
+| 0-Rampen-Becken unverändert, Signatur erreicht die laufende Welt | ebenda **[11e]**, **[11f]** |
+| Wegkosten am See: 53,0 s statt 53,664 s, von Hand hergeleitet | `scripts/smoke_nav_grid.py` |

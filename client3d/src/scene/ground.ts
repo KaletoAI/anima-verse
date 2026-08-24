@@ -1454,8 +1454,9 @@ export function createGround(): Ground {
    * knows kinds. The LAST painted area of a kind wins — the tie-break the
    * server itself uses when two waters overlap — so a kind painted with one
    * depth (every world so far) is exact and a kind painted with two collapses
-   * to the later one. Carrying it per area again means shipping it in the water
-   * raster, which is a server matter (E6).
+   * to the later one. K-A E6 DECIDED THIS STAYS: the reasoning is in
+   * `waterShade.waterLookFrom`, and a world that needs two opacities paints
+   * two kinds.
    */
   function refreshWaterLook(): void {
     const table = layerTable();
