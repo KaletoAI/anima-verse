@@ -47,6 +47,14 @@ export interface PerfStats {
   textures: number;
   /** how many mounted models stand on which resolution tier */
   tiers: TierCounts;
+  /** what the ground scatter submits per frame, split into its two render
+   *  stages (`scatterCosts`) — the figure that says WHICH half of the scatter
+   *  a frame is spent in */
+  scatter: ScatterCounts;
+  /** how long the last 1 Hz scatter/undergrowth LOD pass took, in
+   *  milliseconds — the CPU half of the same question (0 while nothing has
+   *  been measured yet) */
+  scatterLodMs: number;
 }
 
 // --- FPS ------------------------------------------------------------------
@@ -169,4 +177,100 @@ export function tierCounts(items: Iterable<TierSample>): TierCounts {
     else counts.full += 1;
   }
   return counts;
+}
+
+// --- What the ground scatter submits --------------------------------------
+//
+// WHY A SPLIT AND NOT ONE NUMBER (perf finding 2026-08-24). Measured on an
+// Intel iGPU, hiding the scatter alone (isolation switch 13) moved the picture
+// from 34 fps to 46-64 — the scatter is ~11 ms of a 29 ms frame and the single
+// dominant cost, while the whole terrain is 6 ms and the shadows 1.6. That
+// number says nothing about WHICH of the scatter's two stages spends it: the
+// near half draws real prop meshes (thousands of triangles per instance, cheap
+// per pixel), the far half draws one alpha-tested billboard per instance (two
+// triangles, expensive per pixel). The two are fixed in opposite directions,
+// so a readout that adds them up cannot drive a fix.
+
+/** One drawable of the scatter as the counter reads it — structural, so the
+ *  smoke check can build one out of a plain object and no `three` import
+ *  appears in this module. A real `InstancedMesh` satisfies it as it is. */
+export interface DrawableNode {
+  visible: boolean;
+  /** `InstancedMesh.count` — how many instances the last binning left in the
+   *  buffer. Absent on a plain mesh, which draws itself once. */
+  count?: number;
+  /** `Object3D.name`; the impostor stage marks its meshes with
+   *  `IMPOSTOR_MESH_NAME` (`scene/impostors.ts`) and nothing else does. */
+  name?: string;
+  geometry?: {
+    index?: { count?: number } | null;
+    attributes?: { position?: { count?: number } | null } | null;
+  } | null;
+}
+
+/** What ONE render stage costs a frame. */
+export interface ScatterCost {
+  /** draw calls — one per drawable that really submits something */
+  calls: number;
+  /** instances submitted, summed over those drawables */
+  instances: number;
+  /** triangles submitted: per-instance triangles times the instance count */
+  triangles: number;
+}
+
+/** The scatter's two stages side by side — near meshes against far billboards. */
+export interface ScatterCounts {
+  mesh: ScatterCost;
+  impostor: ScatterCost;
+}
+
+/** An empty reading — what the display shows before the first measurement. */
+export function emptyScatterCounts(): ScatterCounts {
+  return {
+    mesh: { calls: 0, instances: 0, triangles: 0 },
+    impostor: { calls: 0, instances: 0, triangles: 0 },
+  };
+}
+
+/**
+ * What the ground scatter submits this frame, per stage.
+ *
+ * THE RULES, all three of them readable off a drawable and nothing else:
+ *  - a drawable that is invisible or holds no instance costs NOTHING, not even
+ *    a draw call. That is the honest reading: the binning parks an empty entry
+ *    at `count = 0, visible = false`, and a stage whose entries are all parked
+ *    has to read zero or the display would blame it for a frame it sat out.
+ *  - triangles per instance come from the INDEX where there is one and from
+ *    the position count otherwise — the same rule the renderer draws by
+ *    (`drawElements` vs `drawArrays`), so this counts what is really submitted
+ *    and not what the file happens to hold.
+ *  - the stage is the NAME: `impostorName` (the billboards mark themselves,
+ *    see `DrawableNode.name`), everything else is the mesh half. A marker
+ *    rather than a geometry test, because a prop whose mesh happens to be two
+ *    triangles is still a mesh.
+ *
+ * WHAT IT DELIBERATELY DOES NOT KNOW is the frustum: it counts what the scene
+ * offers, not what survives culling. For this layer the two are the same
+ * number — every scatter mesh carries the bounding sphere of its whole entry
+ * (`ScatterProp.sphere`), which spans the entire camera window, so the frustum
+ * test never rejects one. Reading it as "what is offered" is also what makes
+ * the figure comparable between two camera positions.
+ */
+export function scatterCosts(nodes: Iterable<DrawableNode> | null | undefined,
+                             impostorName: string): ScatterCounts {
+  const out = emptyScatterCounts();
+  for (const node of nodes ?? []) {
+    if (!node || !node.visible) continue;
+    // `count` is absent on a plain mesh, which draws itself once; an explicit
+    // 0 is an entry the binning parked and is not a draw call.
+    const instances = node.count === undefined ? 1 : node.count;
+    if (!(instances > 0)) continue;
+    const verts = node.geometry?.index?.count
+      ?? node.geometry?.attributes?.position?.count ?? 0;
+    const bucket = node.name === impostorName ? out.impostor : out.mesh;
+    bucket.calls += 1;
+    bucket.instances += instances;
+    bucket.triangles += Math.floor(verts / 3) * instances;
+  }
+  return out;
 }

@@ -3126,7 +3126,8 @@ async function main() {
   // All frame times below are exact binary fractions (1/16 = 0.0625), so the
   // sums are exact and the expected values are plain division.
   console.log('perfstats — the fps window');
-  const { newFpsMeter, pushFrame, fpsOf, visibleVertices, tierCounts } = perfstats;
+  const { newFpsMeter, pushFrame, fpsOf, visibleVertices, tierCounts,
+    scatterCosts, emptyScatterCounts } = perfstats;
 
   const m0 = newFpsMeter();
   check('an empty meter reads 0', fpsOf(m0), 0);
@@ -3213,6 +3214,71 @@ async function main() {
     { variants: both, url: 'a.glb' }, { variants: { full: 'c.glb' }, url: 'c.glb' },
     { variants: both, url: '' },
   ]), { full: 2, low: 2 });
+
+  // --- scatterCosts -------------------------------------------------------
+  //
+  // Rules, straight from the docstring and worked out by hand here:
+  //   - a drawable that is invisible, or whose instance count is 0, costs
+  //     nothing at all — not even a draw call;
+  //   - triangles per instance = floor(verts / 3), verts read off the INDEX
+  //     where there is one and off position.count otherwise;
+  //   - the stage is the NAME: the impostor marker or the mesh half.
+  // The indexed cube below has 36 index entries = 12 triangles per instance;
+  // the unindexed billboard quad has 6 positions = 2 triangles per instance.
+  console.log('perfstats — what the scatter submits');
+  const IMP = 'scatter-impostor';
+  const inst = (count, verts, opts = {}) => ({
+    visible: opts.visible !== false,
+    count,
+    name: opts.name,
+    geometry: opts.indexed === false
+      ? { attributes: { position: { count: verts } } }
+      : { index: { count: verts }, attributes: { position: { count: 999 } } },
+  });
+
+  check('nothing at all is an empty reading',
+    scatterCosts(null, IMP), emptyScatterCounts());
+  //   one prop entry, 100 instances of a 36-index cube:
+  //   calls 1, instances 100, triangles 12 * 100 = 1200
+  check('one mesh entry: 100 x 12 triangles = 1200',
+    scatterCosts([inst(100, 36)], IMP),
+    { mesh: { calls: 1, instances: 100, triangles: 1200 },
+      impostor: { calls: 0, instances: 0, triangles: 0 } });
+  //   the INDEX wins over the position count where both exist (999 above would
+  //   read 333 triangles per instance and is not what the renderer draws)
+  check('an indexed geometry counts by its index',
+    scatterCosts([inst(1, 36)], IMP).mesh.triangles, 12);
+  //   …and an unindexed quad by its positions: 6 / 3 = 2 per instance
+  check('an unindexed quad is 2 triangles per instance',
+    scatterCosts([inst(500, 6, { indexed: false, name: IMP })], IMP),
+    { mesh: { calls: 0, instances: 0, triangles: 0 },
+      impostor: { calls: 1, instances: 500, triangles: 1000 } });
+  //   a parked entry (the binning leaves count 0 AND visible false) and an
+  //   invisible one both cost nothing — neither a call nor an instance
+  check('a parked entry costs nothing',
+    scatterCosts([inst(0, 36, { visible: false })], IMP), emptyScatterCounts());
+  check('a visible entry with 0 instances is not a draw call',
+    scatterCosts([inst(0, 36)], IMP), emptyScatterCounts());
+  check('an invisible entry with instances costs nothing',
+    scatterCosts([inst(100, 36, { visible: false })], IMP), emptyScatterCounts());
+  //   a plain (non-instanced) mesh draws itself once
+  check('a mesh without a count draws once',
+    scatterCosts([{ visible: true, geometry: { index: { count: 36 } } }], IMP).mesh,
+    { calls: 1, instances: 1, triangles: 12 });
+  //   the mixed reading a forest gives: two prop entries (100 x 12 and
+  //   50 x 12 = 1200 + 600) against one billboard layer (800 x 2 = 1600)
+  check('a wood adds up per stage', scatterCosts([
+    inst(100, 36), inst(50, 36),
+    inst(800, 6, { indexed: false, name: IMP }),
+    inst(0, 36, { visible: false }),
+  ], IMP), {
+    mesh: { calls: 2, instances: 150, triangles: 1800 },
+    impostor: { calls: 1, instances: 800, triangles: 1600 },
+  });
+  //   a prop whose own mesh IS two triangles still counts as a mesh: the stage
+  //   is the marker, never the geometry
+  check('a two-triangle prop is still a mesh',
+    scatterCosts([inst(10, 6, { indexed: false })], IMP).impostor.calls, 0);
 
   // --- Speech bubbles (stage 6; client3d/src/game/bubble.ts) ---------------
   //

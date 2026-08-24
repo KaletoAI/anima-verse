@@ -348,6 +348,19 @@ function render(gl: THREE.WebGLRenderer, obj: THREE.Object3D): CacheEntry | null
 const QUAD = new THREE.PlaneGeometry(1, 1);
 
 /**
+ * What every billboard mesh of this stage is called — the ONE mark that tells
+ * the far half of the scatter apart from the near one.
+ *
+ * The performance readout counts the two stages separately (`scatterCosts` in
+ * `game/perfstats.ts`), and it is handed a flat list of drawables
+ * (`ground.debugParts().scatter`) in which a billboard and a prop mesh are both
+ * an `InstancedMesh`. A NAME rather than a geometry test: a prop whose low mesh
+ * happens to be two triangles is still a prop, and a marker that can be read
+ * off the object costs the counter nothing.
+ */
+export const IMPOSTOR_MESH_NAME = 'scatter-impostor';
+
+/**
  * The instanced mesh one scatter entry draws its billboards through.
  *
  * `count` is the entry's FULL instance count: the buffer is allocated once at
@@ -380,6 +393,8 @@ export function createImpostorMesh(bake: ImpostorBake, count: number,
   });
   const mesh: THREE.InstancedMesh<THREE.BufferGeometry, THREE.Material>
     = new THREE.InstancedMesh(QUAD, material, count);
+  // The stage's own mark — see `IMPOSTOR_MESH_NAME`.
+  mesh.name = IMPOSTOR_MESH_NAME;
   mesh.castShadow = false;
   mesh.receiveShadow = false;
   mesh.frustumCulled = true;

@@ -20,8 +20,8 @@
  */
 
 /** Lowest and highest id the panel knows. Anything outside is dropped on
- *  decode rather than clamped — a `21` in a shared link is a typo or a link
- *  from another client, and honouring it as `20` would isolate the wrong
+ *  decode rather than clamped — a `22` in a shared link is a typo or a link
+ *  from another client, and honouring it as `21` would isolate the wrong
  *  suspect without saying so.
  *
  *  20 WAS "Terrain culling off" for one day (2026-08-22). It did its job: with
@@ -33,7 +33,7 @@
  *  numbers are a suspect list, not a register of everything this client has
  *  ever had, and the retired switch left no state a link could still carry. */
 export const ISO_MIN_ID = 1;
-export const ISO_MAX_ID = 20;
+export const ISO_MAX_ID = 21;
 
 /** Where a chosen set is kept between reloads. */
 export const ISO_STORAGE_KEY = 'av3d.debug.isolation.v1';
@@ -158,6 +158,19 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
       + 'mixes nothing into the ground colour. Switching it back on restores '
       + 'whatever the camera height says NOW, not what it said when the toggle '
       + 'was flipped.',
+    cost: 'none' },
+  // 13 SWITCHES OFF BOTH HALVES OF THE SCATTER AND THIS ONE ONLY THE FAR ONE,
+  // which is what makes the pair a measurement instead of a verdict (perf
+  // finding 2026-08-24: the scatter alone is ~11 ms of a 29 ms frame on an
+  // Intel iGPU, and nothing said which half spends it). The two halves are
+  // made cheaper in opposite ways — the near meshes by drawing fewer or
+  // coarser trees, the far billboards by drawing fewer or smaller quads — so
+  // 13 minus 21 is the mesh half and 21 alone is the billboard half.
+  { id: 21, label: 'Impostor billboards hidden',
+    note: 'visible = false on the FAR half of the scatter only — the baked '
+      + 'billboards beyond the cull distance. The prop meshes inside it keep '
+      + 'drawing. Re-asserted per frame, because the 1 Hz LOD tick writes '
+      + 'those flags itself.',
     cost: 'none' },
 ];
 

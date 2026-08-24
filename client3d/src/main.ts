@@ -21,8 +21,9 @@ import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/d
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
 import { getAudio } from './game/audio';
 import {
-  newFpsMeter, pushFrame, tierCounts, visibleVertices,
-  type TierCounts, type TierSample,
+  emptyScatterCounts, newFpsMeter, pushFrame, scatterCosts, tierCounts,
+  visibleVertices,
+  type ScatterCounts, type TierCounts, type TierSample,
 } from './game/perfstats';
 import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
   SCATTER_PREFS_KEY } from './game/prefs';
@@ -41,7 +42,7 @@ import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, 
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
-import { setImpostorRenderer } from './scene/impostors';
+import { IMPOSTOR_MESH_NAME, setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, reliftScene, SceneLibrary, setSceneModelTier,
@@ -881,7 +882,17 @@ async function startApp(username: string, role: string) {
     // there and not here because that is the module the hysteresis and the
     // budget are TESTED in — a threshold that decides a swap belongs next to
     // the function that swaps on it. This tick stays the driver.
+    //
+    // TIMED WHILE THE READOUT IS ON (perf finding 2026-08-24). This one call
+    // walks every instance of every scatter entry TWICE (the mesh binning and
+    // the billboard binning) and re-fills their instance buffers, so it is the
+    // one place the scatter can cost a whole frame at once — a 1 Hz pass is
+    // invisible in an average and plainly visible as a stutter. Two timestamps
+    // a second, and only when somebody is looking (`perfEnabled`): a display
+    // nobody reads may not cost a frame, which is this readout's own rule.
+    const lodT0 = perfEnabled() ? performance.now() : 0;
     terrainGround.tickScatterLod(engine.camera.position);
+    if (lodT0) scatterLodMs = performance.now() - lodT0;
     // …and on the same beat the AUTHORED world props (§ A9a): the same three
     // distance classes with the same hysteresis, only scaled up — a landmark
     // that vanishes at the tuft's cull line is not a landmark. The relief is
@@ -925,7 +936,13 @@ async function startApp(username: string, role: string) {
     if (fpsMeter.samples.length) { fpsMeter = newFpsMeter(); fpsNow = 0; }
   });
   /** Last heavy measurement, refreshed on the LOD tick. */
-  let perfHeavy = { vertices: 0, tiers: { full: 0, low: 0 } as TierCounts };
+  let perfHeavy = {
+    vertices: 0,
+    tiers: { full: 0, low: 0 } as TierCounts,
+    scatter: emptyScatterCounts() as ScatterCounts,
+  };
+  /** How long the last LOD pass took (ms) — written beside the tick above. */
+  let scatterLodMs = 0;
   function measurePerfHeavy() {
     const placed: TierSample[] = [];
     for (const tile of tiles.values()) {
@@ -937,7 +954,17 @@ async function startApp(username: string, role: string) {
     // what is on screen is still the expensive mesh?"), and a wood of full-tier
     // trees is exactly the load this readout exists to make visible.
     placed.push(...terrainGround.scatterTiers());
-    perfHeavy = { vertices: visibleVertices(engine.scene), tiers: tierCounts(placed) };
+    // …and WHAT THE SCATTER SUBMITS, split into its two stages. The tier line
+    // above says which resolution a prop stands on; it cannot say whether a
+    // frame is spent on prop TRIANGLES or on billboard PIXELS, and those two
+    // are fixed in opposite directions (`scatterCosts`). `debugParts` hands out
+    // the flat list of every drawable the scatter owns — it is rebuilt per call
+    // and therefore asked on this 1 Hz beat, never per frame.
+    perfHeavy = {
+      vertices: visibleVertices(engine.scene),
+      tiers: tierCounts(placed),
+      scatter: scatterCosts(terrainGround.debugParts().scatter, IMPOSTOR_MESH_NAME),
+    };
   }
   // The publisher is faster than the measurement on purpose: the tier numbers
   // may stand for a second (they change about that often), but an FPS reading
@@ -955,6 +982,8 @@ async function startApp(username: string, role: string) {
       geometries: info.memory.geometries,
       textures: info.memory.textures,
       tiers: perfHeavy.tiers,
+      scatter: perfHeavy.scatter,
+      scatterLodMs,
     });
   }, PERF_UI_MS);
 

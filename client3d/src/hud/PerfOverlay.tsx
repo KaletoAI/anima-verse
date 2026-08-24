@@ -52,6 +52,25 @@ export function PerfOverlay() {
         value={stats ? `${num(stats.geometries)} / ${num(stats.textures)}` : dash} wide />
       <Row label={t('Models full / low')}
         value={stats ? `${num(stats.tiers.full)} / ${num(stats.tiers.low)}` : dash} wide />
+      {/* The scatter's two stages, side by side — the near prop MESHES against
+          the far BILLBOARDS. One line each for what they submit, because the
+          two are made cheaper in opposite ways: the meshes by drawing fewer or
+          coarser trees (triangles), the billboards by drawing fewer or smaller
+          quads (pixels). A single scatter figure cannot tell the two apart,
+          and hiding the whole layer only says that it is expensive. */}
+      <Row label={t('Scatter inst. mesh / imp.')}
+        value={stats
+          ? `${num(stats.scatter.mesh.instances)} / ${num(stats.scatter.impostor.instances)}`
+          : dash} wide />
+      <Row label={t('Scatter tri mesh / imp.')}
+        value={stats
+          ? `${num(stats.scatter.mesh.triangles)} / ${num(stats.scatter.impostor.triangles)}`
+          : dash} wide />
+      <Row label={t('Scatter calls / LOD pass')}
+        value={stats
+          ? `${num(stats.scatter.mesh.calls + stats.scatter.impostor.calls)}`
+            + ` / ${stats.scatterLodMs.toFixed(1)} ms`
+          : dash} wide />
     </div>
   );
 }
