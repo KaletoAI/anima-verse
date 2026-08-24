@@ -65,8 +65,10 @@ const CHIP_W = 250
 
 /** Rows of the per-variant description field: readable at rest, a real
  *  editor while it is written in. */
-const DESC_ROWS_REST = 3
-const DESC_ROWS_OPEN = 8
+// 5/12 (was 3/8, before that 1/4): the user twice asked for more room —
+// prompts for a variant are whole sentences, not tags (2026-08-24).
+const DESC_ROWS_REST = 5
+const DESC_ROWS_OPEN = 12
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   onChanged, generating = [], worldSeasons = [], currentSeason = '',
@@ -490,7 +492,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
         </button>
       </div>
       <span className="ga-hint">
-        {t('Several meshes of the SAME object — scattered copies pick one of them, so a wood is not one tree twenty times. ★ marks the primary variant, which is what anything that does not ask for a variant gets. The selected chip decides which variant the preview and the mesh gallery below show.')}
+        {t('Variants of one object — scatter mixes them, ★ is the default, the selected chip drives the preview.')}
         {' '}
         {t('W/D/H are that variant’s own size in metres. Leave them empty and the variant is as big as the prop above; fill one in and this version alone gets that measurement — a sapling beside the grown tree. The other two are pulled along its proportions, taken from the mesh in the preview for the selected chip and from its current size for the rest; clearing any one of the three drops all three back to the prop’s size.')}
         {' '}
