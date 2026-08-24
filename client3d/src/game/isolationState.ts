@@ -120,8 +120,9 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
       + 'viewpoint — not a frozen list re-morphed against a live camera, which '
       + 'would open cracks of its own.',
     cost: 'none' },
-  { id: 11, label: 'Water planes hidden',
-    note: 'visible = false on every water mirror of the painted areas.',
+  { id: 11, label: 'Waterfalls hidden',
+    note: 'visible = false on every waterfall curtain and foam disc. The water '
+      + 'SURFACE is the terrain itself (Wasser v2 K-A) — toggle 22 drops that.',
     cost: 'none' },
   { id: 12, label: 'Undergrowth hidden',
     note: 'visible = false on the terrain-undergrowth group.',

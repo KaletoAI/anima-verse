@@ -32,8 +32,9 @@
  * WATER WEARS ITS BED, AND THE SERVER SAYS WHICH (W1 § 5). A water layer stays
  * a full layer — the mask has to answer "here is water" for the undergrowth
  * gate and every point query — but what it PAINTS is the ground underneath:
- * the mirror is a separate surface drawn over it (`scene/waterPlane.ts`), and
- * painting the lake twice made the two fight each other. Until W1 this file
+ * the water itself is a SHADING of the same pixel (`scene/waterShade.ts`, and
+ * a separate mirror mesh until Wasser v2 K-A E5), and painting the lake twice
+ * made the two fight each other. Until W1 this file
  * decided that itself, substituting layer 0's image for every water layer; now
  * `surface` already IS the bed's (`meta.bed_kind`, defaulting to the bare
  * world) and `bed_kind` names the kind it came from. So there is nothing to

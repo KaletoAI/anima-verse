@@ -184,21 +184,3 @@ export function ngFieldUv(x: number, z: number, field: NgFieldSpec
 // half a metre of push over a two-metre wavelength — moved there unchanged
 // (`LC_EDGE_NOISE_M` / `LC_EDGE_WAVE_M`); they now push the LINE instead of the
 // alpha, which costs one add and no transparency at all.
-
-/**
- * Does this surface class carry its own shader already?
- *
- * Water and ice are ONE surface in `@anima/scene-render/materials.ts` (ice is
- * water that stands still), and that surface is a full shader of its own:
- * scrolling normal maps, a sky fresnel, a roughness mask. Blending a second
- * sample of a water texture into it and then shading it by the ground's relief
- * would fight every one of those — the ripples are the surface, not the
- * texture under them.
- *
- * The predicate is here rather than beside the patch so the smoke can ask it
- * directly instead of reading a regular expression out of `ground.ts`.
- */
-export function isWaterClass(cls: string | null | undefined): boolean {
-  const c = (cls || '').toLowerCase();
-  return c === 'water' || c === 'ice';
-}

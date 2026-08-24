@@ -3,40 +3,42 @@
  * ("Ein Wasser-Gesetz" W5).
  *
  * WHERE IT COMES FROM. Nowhere new: `waterfallsFrom` (`@anima/scene-render`)
- * reads the very axis the mirror is built on (`meta.water_profile.axis`, W4a)
- * and answers which of its segments drops faster than water runs. This file
- * only turns each answer into two meshes — no author places a fall, no payload
- * field carries one, and an area whose axis has no steep segment builds
- * nothing at all. Since W5b that axis carries knots wherever the mirror BENDS
- * (the bake samples the drawn line every 2 m and simplifies back), which is why
- * a cliff an author simply drew straight across now has a segment to be found
- * on at all.
+ * reads the water's own flow axis (`meta.water_profile.axis`, W4a) and answers
+ * which of its segments drops faster than water runs. This file only turns each
+ * answer into two meshes — no author places a fall, no payload field carries
+ * one, and an area whose axis has no steep segment builds nothing at all. Since
+ * W5b that axis carries knots wherever the water level BENDS (the bake samples
+ * the drawn line every 2 m and simplifies back), which is why a cliff an author
+ * simply drew straight across has a segment to be found on at all.
  *
  * WHY A CURTAIN AND NOT PARTICLES (W5 decision). A fall is a SHEET of water
- * seen from tens of metres away, and a sheet is what the ruled mirror already
- * fails to be at that one place: between two knots the water plane is a
- * straight ramp, so a five-metre drop over three metres of run is drawn as a
- * 60° pane of glass with the bed showing through it. One quad with the water's
- * own normal map scrolling down it puts falling water there for two triangles.
- * Particles would need a system, a budget and a per-frame update; the plan
- * parks them, and so does this.
+ * seen from tens of metres away, and a sheet is what the ground itself cannot
+ * be at that one place: the water surface is a shading of the terrain (Wasser
+ * v2 K-A, `scene/waterShade.ts`), so a five-metre drop over three metres of run
+ * is a very steep piece of wet ground and nothing more. One quad with the
+ * water's own normal map scrolling down it puts falling water there for two
+ * triangles. Particles would need a system, a budget and a per-frame update;
+ * the plan parks them, and so does this.
  *
  * WHAT IT REUSES, DELIBERATELY. The wave normal map is not built here — it is
- * taken off the MIRROR's own material (`surfaceMaterial` set it, `materials.ts`
- * built it once for the whole app), so a fall carries the same water structure
- * as the river above it and costs no second texture. The clock is
- * `surfaceTimeUniform`, the one the ripple already advances per frame, so this
- * module has NO per-frame work and allocates nothing after the build. And the
- * foam at the foot is the shore's own whitening constant
+ * THE one procedural map of the process (`surfaceWaveNormal`, `materials.ts`),
+ * the very texture the terrain's own water pixels scroll (K-A E4), so a fall
+ * carries the same water structure as the river above it and costs no second
+ * texture. Until E5 it was read off the water MIRROR's material instead; the
+ * mirror is gone and the source moved one step up, to where the map always
+ * lived. The clock is `surfaceTimeUniform`, the one the ripple already advances
+ * per frame, so this module has NO per-frame work and allocates nothing after
+ * the build. And the foam at the foot is the shore's own whitening constant
  * (`WATER_FOAM_STRENGTH`), so broken water is the same white everywhere in the
  * world.
  *
- * LIFETIME. The meshes go into the caller's water list and the materials into
- * its disposal bag, i.e. a fall lives exactly as long as the mirror it belongs
- * to and dies with it on the next terrain payload (`ground.clearAreas`).
+ * LIFETIME. The meshes go into the caller's waterfall list and the materials
+ * into its disposal bag, i.e. a fall lives exactly as long as the painted areas
+ * it was derived from and dies with them on the next terrain payload
+ * (`ground.clearAreas`).
  */
 import * as THREE from 'three';
-import { surfaceTimeUniform } from '@anima/scene-render';
+import { surfaceTimeUniform, surfaceWaveNormal } from '@anima/scene-render';
 import type { Waterfall } from '@anima/scene-render';
 import { WATER_FOAM_STRENGTH } from './waterPlaneMath';
 
@@ -60,8 +62,8 @@ const WATERFALL_LEAN = 0.3;
 /**
  * How many metres one tile of the wave normal map spans on the curtain.
  *
- * 2.5 m against the mirror's own 1.6 m (`wave_m`): a falling sheet is stretched
- * by the very acceleration that drives it — the water at the foot moves faster
+ * 2.5 m against the water surface's own 1.6 m (`wave_m`): a falling sheet is
+ * stretched by the acceleration that drives it — the water at the foot is faster
  * than the water at the lip, so the structure between them is pulled long. One
  * number rather than a per-fall stretch, because the eye reads the SPEED of a
  * fall off the scroll, not off the crest spacing.
@@ -86,7 +88,7 @@ const WATERFALL_WHITE_TOP = 0.35;
 const WATERFALL_OPACITY = 0.8;
 
 /** The water the sheet is made of, before it whitens: the pale blue of aerated
- *  water rather than the mirror's own tint, which is a REFLECTION colour and
+ *  water rather than the surface's own tint, which is a REFLECTION colour and
  *  belongs to a surface seen from above. */
 const WATERFALL_TINT = 0xc2dcea;
 
@@ -99,9 +101,9 @@ const WATERFALL_TINT = 0xc2dcea;
  */
 const WATERFALL_FOAM_RADIUS_PER_M = 0.5;
 
-/** How far the foam disc floats over the mirror it lies on, in metres. The
- *  mirror writes no depth, so this is not a z-fight fix but a stacking one: 5 cm
- *  is the same hand's width the shore's own rim fade spends
+/** How far the foam disc floats over the water it lies on, in metres. The water
+ *  is the ground surface itself now, so this IS a z-fight fix as well as a
+ *  stacking one: 5 cm is the same hand's width the shore's own rim fade spends
  *  (`WATER_EDGE_FADE_M`) and is invisible at any camera distance. */
 const WATERFALL_FOAM_LIFT_M = 0.05;
 
@@ -113,20 +115,6 @@ const WATERFALL_FOAM_SEGMENTS = 24;
 /** The cache key of the curtain patch — every curtain material carries the same
  *  source, so three compiles ONE program for all the falls in a world. */
 const WATERFALL_CACHE_KEY = 'waterfall-curtain';
-
-/**
- * The wave normal map the mirror of this kind is drawn with, or `null`.
- *
- * Taken off the MATERIAL rather than rebuilt: `surfaceMaterial` puts the one
- * procedural map there for every rippled surface in the app, so this is the
- * same texture object and costs nothing. A kind whose surface class is not
- * water carries none — but then it has no mirror either, so this is only ever
- * asked of a material that has one.
- */
-function waveNormalOf(mat: THREE.Material): THREE.Texture | null {
-  const std = mat as THREE.MeshStandardMaterial;
-  return std.normalMap ?? null;
-}
 
 /**
  * The mean speed of the falling water, in metres per second.
@@ -161,7 +149,7 @@ function foamRadius(fall: Waterfall, heightM: number): number {
  * THE SCROLL IS AN ADDITION TO A SAMPLE COORDINATE, which slides the picture
  * the OTHER way — `uv + vec2(0, t)` carries the crests toward SMALLER v, and v
  * is 0 at the foot. That is the downward drift, and it is the same sign trick
- * the mirror's own ripple documents (`materials.ts`, "wFlowSign").
+ * the terrain's own water ripple documents (`materials.ts`, "wFlowSign").
  *
  * TWO LAYERS, at different scales and rates, for the reason the lake has two:
  * one sheet of a tiling map reads as a tiling map. The second is half the
@@ -203,7 +191,7 @@ function patchCurtain(mat: THREE.Material, speedTilesS: number,
     diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 1.0 ), wfWhite );
     // A sheet with two hard vertical borders is a poster of a waterfall: the
     // outer eighth of the width fades, and so does the last of the lip, where
-    // the mirror above is still drawing the same water.
+    // the ground above is still shaded as the same water.
     // (Both edge pairs ASCENDING: smoothstep with edge0 >= edge1 is undefined
     // in GLSL, so the lip fade is written as one minus the rising ramp.)
     float wfEdge = smoothstep( 0.0, 0.12, vWfUv.x )
@@ -219,27 +207,28 @@ function patchCurtain(mat: THREE.Material, speedTilesS: number,
 /**
  * The two meshes of ONE fall: the curtain and the white water at its foot.
  *
- * `waterMat` is the MIRROR's material — read for its wave normal map and
- * nothing else. `sink` takes the two materials this builds; the geometries
- * belong to the returned meshes and are freed by whoever disposes them
- * (`ground.clearAreas` does, with the mirrors).
+ * `sink` takes the two materials this builds; the geometries belong to the
+ * returned meshes and are freed by whoever disposes them (`ground.clearAreas`
+ * does, with the areas the falls were derived from).
  *
  * THE GEOMETRY IS FOUR VERTICES IN WORLD COORDINATES, mesh at the origin —
- * the arrangement the mirror already uses, and for the same reason: the levels
- * in the payload are absolute, and a mesh position under them would be a second
- * place a height could be wrong. `across` is the horizontal perpendicular of
- * the flow, so the strip spans the river; the lean puts the lip edge upstream
- * of the fall's point and the foot downstream of it.
+ * for the reason every water height here is absolute: the levels in the payload
+ * are, and a mesh position under them would be a second place a height could be
+ * wrong. `across` is the horizontal perpendicular of the flow, so the strip
+ * spans the river; the lean puts the lip edge upstream of the fall's point and
+ * the foot downstream of it.
  *
  * An empty list comes back for a fall of no height — the detection cannot
  * produce one (it needs a drop over a metre), so this only ever fires on a
  * hand-made call.
  */
-export function buildWaterfall(fall: Waterfall, waterMat: THREE.Material,
+export function buildWaterfall(fall: Waterfall,
                                sink: { dispose(): void }[]): THREE.Mesh[] {
   const height = fall.topY - fall.bottomY;
-  const map = waveNormalOf(waterMat);
-  if (!(height > 0) || !(fall.width > 0) || !map) return [];
+  if (!(height > 0) || !(fall.width > 0)) return [];
+  // THE one wave normal map of the process, built on first ask and shared with
+  // every water pixel the terrain shades (K-A E4).
+  const map = surfaceWaveNormal(THREE) as THREE.Texture;
 
   // ── the curtain ──────────────────────────────────────────────────────────
   const acrossX = fall.dirZ;
@@ -271,7 +260,7 @@ export function buildWaterfall(fall: Waterfall, waterMat: THREE.Material,
     opacity: WATERFALL_OPACITY,
     // A sheet of water is seen from both banks and from behind the fall.
     side: THREE.DoubleSide,
-    // Like the mirror: the world behind a curtain of water stays visible, and
+    // The world behind a curtain of water stays visible, and
     // nothing sorts itself against a thing that writes no depth.
     depthWrite: false,
   });

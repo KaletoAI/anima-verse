@@ -11,7 +11,7 @@
  * WHY THIS FILE EXISTS
  * ===========================================================================
  * A painted water area never moved. The chain was right up to the last line:
- * `materialFor` (client3d/src/scene/ground.ts) builds the material through
+ * the ground's material builder (client3d/src/scene/ground.ts) built it through
  * `surfaceMaterial` (@anima/scene-render `materials.ts`), which for class
  * `water`/`ice` installs the ripple/tint/roughness/fresnel patch in
  * `mat.onBeforeCompile` and claims the cache key 'anima-water' — and the very
@@ -45,8 +45,8 @@
  * ---------------------------------------------------------------------------
  * [1] A PAINTED WATER AREA — both patch families in ONE composed shader
  * ---------------------------------------------------------------------------
- * Built exactly as `materialFor` builds it: `surfaceMaterial(class water)` and
- * then `patchHole`. Hand expectations, each one a line the patches write:
+ * Built exactly as a ground material is built: `surfaceMaterial(class water)`
+ * and then `patchHole`. Hand expectations, each one a line the patches write:
  *   water   vertex   `varying vec2 vWaterWorld;` + the assignment after
  *                    `begin_vertex`
  *           fragment `wSpeed` (still vs. flowing, 2026-08-23) and `wDriftA`
@@ -119,13 +119,21 @@
  * present in the truth.
  *
  * ---------------------------------------------------------------------------
- * [7] THE COMPOSITION IN `materialFor`, pinned by reading the source
+ * [7] THE COMPOSITION IN `rebuildBase`, pinned by reading the source
  * ---------------------------------------------------------------------------
- * `materialFor` builds inside a closure over a fetched payload and cannot be
- * called here, so the one thing this file assumes about it — `surfaceMaterial`
- * first, `patchHole` on the very material it returned — is pinned against the
- * source text. Without it the checks above would keep passing while the ground
- * quietly stopped patching at all.
+ * The ground material is built inside a closure over a fetched payload and
+ * cannot be called here, so the one thing this file assumes about it —
+ * `surfaceMaterial` first, `patchHole` on the very material it returned — is
+ * pinned against the source text. Without it the checks above would keep
+ * passing while the ground quietly stopped patching at all.
+ *
+ * SINCE WASSER v2 K-A E5 THERE IS ONE SUCH SITE. The second was the water
+ * mirror's own material (`materialFor`), and the mirror is deleted: a water
+ * pixel is a pixel of the terrain, shaded as water in the same pass
+ * (`scene/waterShade.ts`). The composition of sections [1]–[6] is still the one
+ * a WATER SURFACE is built with — the room floors of `scene/sceneRecipe.ts` and
+ * the admin previews build exactly this — and it is still the chaining
+ * `patchHole` must survive.
  *
  * ===========================================================================
  * THE SECOND SUBJECT: THE WIND (terrain animations, task 2)
@@ -243,11 +251,14 @@
  * the library holds, and a fallback to `kind` would answer 'grass' here.
  *
  * The rest of the chain lives in the closure and is pinned against the source
- * the way [7] pins the composition: `materialFor` resolves `surfaceOf(kind)`
- * first and asks the library about THAT id (texture and material class), the
- * fringe question does the same, the preload loads the named surfaces — and
- * NO library call in the module names a terrain kind any more, which is the
- * one assertion that catches a half-migrated caller.
+ * the way [7] pins the composition: every library question in `ground.ts` is
+ * asked about `surfaceOf(kind)` and never about the kind itself — the material
+ * class of a water layer and the tile size of a layer row are the two that are
+ * left — and NO library call in the module names a terrain kind any more, which
+ * is the one assertion that catches a half-migrated caller. The textures
+ * themselves are loaded by the layer compositor now
+ * (`layerGround.setLayerTable`); the preload that stood in the area stage was
+ * the water mirror's, and went with it (K-A E5).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -469,7 +480,7 @@ async function main() {
   const { patchHole, HOLE_CACHE_KEY, applySway, swayCacheKey, surfaceOfType,
     updateSurfaceMaterials: tickSurfaces, surfaceTimeUniform } = await loadGround();
 
-  /** One painted area's material, built the way `materialFor` builds it. */
+  /** One water surface's material, built the way every caller builds one. */
   function groundMaterial(spec, patch = patchHole) {
     const mat = surfaceMaterial(THREE, { material: spec, color: 0x336699 });
     patch(mat);
@@ -575,12 +586,16 @@ async function main() {
   check('…and does NOT lose the water lines',
     marksIn(water.shader, WATER_MARKS).length, WATER_MARKS.length);
 
-  console.log('\n[7] the composition in materialFor, pinned by reading the source');
+  console.log('\n[7] the composition in rebuildBase, pinned by reading the source');
   const groundSrc = await readFile(GROUND_SRC, 'utf8');
-  check('materialFor builds through surfaceMaterial…',
-    /const mat = surfaceMaterial\(THREE, \{ material: spec,/.test(groundSrc), true);
+  check('the ground material is built through surfaceMaterial…',
+    /const mat = surfaceMaterial\(THREE, \{ material: null, map: null,/
+      .test(groundSrc), true);
   check('…and hands that very material to patchHole',
     /\n\s*patchHole\(mat\);\n/.test(groundSrc), true);
+  check('RED: and it is the ONLY material builder left — the mirror\'s is gone',
+    /function materialFor\(|surfaceMaterial\(THREE, \{ material: spec,/
+      .test(groundSrc), false);
 
   // ── THE WIND ─────────────────────────────────────────────────────────────
   /** One scatter material of a swaying kind: a plain standard material, the
@@ -766,27 +781,31 @@ async function main() {
   check('a kind the catalog does not know at all answers nothing',
     surfaceOfType(undefined), '');
   check('…and neither does a null entry', surfaceOfType(null), '');
-  // The chain in `materialFor` reads the SURFACE, so both library questions —
-  // the texture and the material class — are asked about the named entry and
-  // not about the terrain kind. Pinned against the source, like [7].
-  check('materialFor resolves the kind to its surface first',
-    /const surface = surfaceOf\(kind\);/.test(groundSrc), true);
-  check('…asks the library for THAT id (texture)',
-    /const lib = surfaceFor\(surface, 'wall'\);/.test(groundSrc), true);
-  check('…and for THAT id (material class)',
-    /surfaceMaterialSpec\(surface\);/.test(groundSrc), true);
+  // Every library question reads the SURFACE, never the terrain kind — the
+  // material class of a water layer and the tile size of a layer row are the
+  // two that are left. Pinned against the source, like [7].
+  check('the library is asked about the resolved surface (material class)',
+    /surfaceMaterialSpec\(surfaceOf\(layer\.kind\)\)/.test(groundSrc), true);
+  check('…and about THAT id for the texture as well',
+    /surfaceFor\(surfaceOf\(kind\), 'wall'\)/.test(groundSrc), true);
   // RED, since "Ein Wasser-Gesetz" W1/W2: the library is no longer asked
   // WHETHER a painted area is water. The class says what water LOOKS like
   // (ripple or matte) and was a second book about what water IS beside the
   // server's one predicate; the mirror is built on `meta.water_profile` alone,
   // so this question does not exist any more.
-  check('the mirror asks the PROFILE, never the material class',
+  check('the water test is the PROFILE, never the material class',
     /const profile = waterProfileOf\(area\.meta\);/.test(groundSrc), true);
   check('…and no library question decides water any more',
-    /isWaterClass\(surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\?\.class\)/
-      .test(groundSrc), false);
-  check('the preload loads the named SURFACES, not the kinds',
-    /preloadSurfaceTexture\(s\)/.test(groundSrc), true);
+    /isWaterClass/.test(groundSrc), false);
+  // The area stage loads NO texture any more: the only mesh that carried a map
+  // was the water mirror (K-A E5), and the images the ground is really drawn
+  // with are the layer compositor's, which loads them itself.
+  check('RED: the area stage preloads no surface texture at all',
+    /preloadSurfaceTexture/.test(groundSrc), false);
+  const layerSrc = await readFile(
+    join(ROOT, 'client3d/src/scene/layerGround.ts'), 'utf8');
+  check('…the compositor does, by the SURFACE the row names',
+    /preloadSurfaceTexture\(l\.surface\)/.test(layerSrc), true);
   // …and nowhere in this module does a terrain kind still reach the library.
   check('no library question is asked about a terrain kind any more',
     /surfaceFor\(kind,|surfaceMaterialSpec\(kind\)|surfaceMaterialSpec\(area\.kind\)|preloadSurfaceTexture\(k\)/

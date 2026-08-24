@@ -1143,14 +1143,14 @@ export function selectLodFitted(o: LodSelectOpts): LodSelection {
  * weights in its own way, which is exactly the "nearly the same" this whole
  * stage exists to end.
  *
- * IT IS SPLIT OFF FROM `terrainLodGlsl` FOR THE WATER (E4). The mirror plane
- * of `scene/waterPlane.ts` needs the very same height, but in its FRAGMENT
- * shader — the depth of the lake under a pixel is `plane y − h(x, z)` — and a
- * fragment shader may not declare `attribute vec4 iNode`. So the sampler is
- * one chunk that both stages include and the vertex-only half (`iNode`,
- * `tlodCompute`) hangs off it. Copying the four `texelFetch` into the water
- * shader would have been the second implementation of the one height, which is
- * the thing this whole stage exists to prevent.
+ * IT IS SPLIT OFF FROM `terrainLodGlsl` FOR THE WATER (E4). The water shading
+ * needs the very same height, but in the FRAGMENT shader — the depth of the
+ * lake under a pixel is `water level − h(x, z)` — and a fragment shader may not
+ * declare `attribute vec4 iNode`. So the sampler is one chunk that both stages
+ * include and the vertex-only half (`iNode`, `tlodCompute`) hangs off it.
+ * Copying the four `texelFetch` into the water half would have been the second
+ * implementation of the one height, which is the thing this whole stage exists
+ * to prevent.
  *
  * The smoke does not read this string. It reimplements the arithmetic
  * independently and checks it against `heightAt` on hand-derived fixtures — a
@@ -1981,10 +1981,11 @@ export function setTerrainLodDebug(o: { flatNormal?: boolean; noMorph?: boolean;
  * Hang the shared height uniforms — and, since K-A E2, the water ones — into a
  * shader that includes `terrainLodSampleGlsl()`.
  *
- * Exported for the water mirror (E4, `scene/waterPlane.ts`): it reads the same
- * pyramids from its FRAGMENT shader and must read them through the same
- * objects, or a pyramid swap would reach the terrain and leave the lake
- * measuring its depth against yesterday's ground.
+ * Exported so that any patch chained onto a terrain material reads the same
+ * pyramids through the SAME objects: a pyramid swap has to reach every reader
+ * at once, or one of them measures its depth against yesterday's ground. It was
+ * the water mirror's own material until Wasser v2 K-A E5; today the one caller
+ * outside this file is `patchTerrainLod` itself.
  *
  * The three `uTlodWater*` entries are bound and kept current but read by NO
  * shader yet — K-A E2 ships the field and the upload, E3 writes the GLSL that

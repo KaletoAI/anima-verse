@@ -3686,6 +3686,19 @@ Terrain **1 Draw-Call** statt einem Mesh je gemalter Fläche plus Platten.
 
 ### A16.8 Der Wasserspiegel — eine Platte, ein Ufer, ein Schwimmer
 
+> **TOT, soweit es die PLATTE und ihr UFER-GLSL betrifft — Wasser v2 K-A
+> (E3/E4/E5, Nachtrag „Das Wasser-Raster", Punkte 7a/9/10).** Es gibt kein
+> Wasser-Mesh mehr: das Terrain hebt seine eigenen Vertices auf
+> `max(h, w_level)` (E3) und schattiert dieselben Pixel als Wasser (E4); der
+> Bauer `addMirror`, `scene/waterPlane.ts`, die Attribute `aWaterFlow` /
+> `aWaterOpaque`, die Streifen-Schnitte, der Ufer-`discard` und die
+> Transparenz-Sortierung sind mit E5 gelöscht. Was von diesem Abschnitt WEITER
+> GILT: die Zahlen der Uferkurven (Tabelle unten, ohne `WATER_SHORE_BAND_M` und
+> `WATER_FOAM_ALPHA`), die Tiefen-Definition `Pegel − h(x, z)`, und der ganze
+> SCHWIMMER-Teil (`floatRootY`, `groundWaterLevel`, `typeAt`) — der liest den
+> Spiegel exakt aus `meta.water_profile` und ist von allem Render-Umbau
+> unberührt. Der Rest steht hier als Geschichte.
+
 **Die Fläche ist eben, und ihre Höhe IST die Geometrie.** Pro Wasserfläche —
 gemalte Karten-Fläche wie Zonen-Wasser, **derselbe Bauer** (`scene/ground.ts`
 `addMirror`) — eine **flache Earcut-Platte** auf `y = water_level_effective`,
@@ -3739,13 +3752,15 @@ am Tiefentest teilnimmt, flimmert, wie klein sein Alpha auch ist.
 
 | Größe | Wert | Woher |
 |---|---|---|
-| `WATER_SHORE_BAND_M` | **1,5 m TIEFE** | Alpha = `smoothstep(0, 1.5, Tiefe)`. Beim Default-See (`water_depth_m` 2,0 über `shore_ramp_m` 3,0) ist das `smoothstep = 0,75`, also `t ≈ 0,6736` → volle Deckung **2,02 m** innerhalb des Umrisses. Ein 0,6-m-Tümpel erreicht nie 1 (Alpha 0,352) — genau so sieht ein Tümpel aus |
+| `waterOpaqueDepthM(Tiefe)` | **¾ der eigenen Bett-Tiefe** (Default-See: 1,5 m) | Deckung = `smoothstep(0, Band, Tiefe)`. Beim Default-See (`water_depth_m` 2,0 über `shore_ramp_m` 3,0) ist ¾ genau `smoothstep = 0,75`, also `t ≈ 0,6736` → volle Deckung **2,02 m** innerhalb des Umrisses. Ein 0,6-m-Tümpel erreicht gegen die Band-Zahl des SEES nie 1 (0,352) — gegen sein eigenes Band schon (W4b; die feste Konstante `WATER_SHORE_BAND_M` ist mit dem Mesh gelöscht) |
 | `WATER_FOAM_BAND_M` | 0,6 m | `1 − smoothstep(0, 0,6, Tiefe)`; endet ungefähr dort, wo das Waten ins Schwimmen kippt |
 | `WATER_FOAM_STRENGTH` | 0,6 | wie weit die Gischt das Licht Richtung Weiß zieht |
-| `WATER_FOAM_ALPHA` | 0,15 | wie viel Alpha sie am Rand zurückgibt, damit die Uferlinie eine Spitze behält |
+| `WATER_EDGE_FADE_M` | 0,05 m TIEFE | die Randrampe, die an der Wasserlinie exakt 0 erreicht — beim Mesh gegen den `discard`, seit K-A gegen die trockene Nachbarschaft |
 
-Alpha-Stützstellen (Rampe + Gischt): Tiefe 0 → 0,15 · 0,3 → 0,179 · 0,6 →
-0,352 · 0,75 → 0,5 · 1,125 → 0,84375 · 1,5 → 1.
+Deckungs-Stützstellen (Default-Band 1,5 m): Tiefe 0,15 → 0,028 · 0,3 → 0,104 ·
+0,75 → 0,5 · 1,125 → 0,84375 · 1,5 → 1. Das zusätzliche Rand-Alpha der Gischt
+(`WATER_FOAM_ALPHA` 0,15) war eine Eigenschaft der TRANSPARENTEN Platte und ist
+mit ihr gelöscht: ein Wasserpixel ist heute opaker Boden.
 
 **Schwimmen liest den Spiegel** — eine exportierte Funktion für Avatar, NPCs und
 Reisende (`walk.floatRootY`):
@@ -5163,6 +5178,14 @@ nicht.
 
 ## Nachtrag 2026-08-21 (§ A16.3 / § A16.7 / § A19 Nr. 5 / § G4): Ein Wasser-Gesetz — W2 (Client)
 
+> **Der MESH-Teil dieses Nachtrags ist mit Wasser v2 K-A E5 tot**
+> (`liftToWaterProfile`, die Regelfläche, der Ufer-Shader `vWaterPlane`): das
+> Terrain hebt und schattiert seine eigenen Wasserpixel (Nachtrag „Das
+> Wasser-Raster", 7a/9/10). Was bleibt, ist die LESUNG — `waterProfileOf`,
+> `waterLevelAt` und das Verbot, `water_level_effective` zu lesen —, und die
+> gilt unverändert für Spielmechanik, Wasserfall-Erkennung und die
+> Raster-Quelle des Servers.
+
 *Etappe W2 aus `development_instructions/plan-fliessgewaesser.md`, die
 Lese-Seite des W1-Nachtrags oben. Er **ersetzt** dessen Satz „bis W2 zeichnet
 der Client weiter EINE flache Platte", **streicht** die Zonen-Wasser-Aussagen
@@ -5429,6 +5452,13 @@ Tiefe 2 m bei (2, 3), `keep` 0,5:
 
 ## Nachtrag 2026-08-24 (§ A16.3 / § G4): Kein Relief am Wasserrand, und der Spiegel folgt seiner Achse überall — W5d
 
+> **Der Client-Teil (Abschnitt 2, `subdivideRibbonByAxis`) ist mit Wasser v2
+> K-A E5 gelöscht** — es gibt kein Spiegel-Mesh mehr, das man in Streifen
+> schneiden könnte; das Terrain tastet den Pegel pro Vertex aus dem Raster ab
+> und braucht dafür keine Schnittkante. Der SERVER-Teil (Abschnitt 1, das
+> reliefreie Band am Wasserrand) gilt weiter, bis E6 ihn zur Entscheidung
+> stellt.
+
 *Befund des Users nach Bake v4 + W5c: „Es sind noch immer Löcher zwischen
 Wasser und Land." Zwei getrennte Ursachen, beide numerisch überführt, beide an
 ihrer eigenen Stelle behoben. Screenshot-frei gemessen (§ B5a).*
@@ -5694,8 +5724,9 @@ Fragment-MASKE (E4), nie ein Loch im Boden.
 über ein Fenster `min(halbe Vorstrecke, halbe Folgestrecke, 4 m)` kosinus-
 geblendet, am Knoten selbst exakt die normierte Winkelhalbierende. Die Regel
 wandert mit dem Mesh, das sie pro Vertex auswertete; die Zahlen bleiben
-identisch (Zwillingsprüfung: `scripts/smoke_height_bake.py` [12c] gegen
-`client3d/scripts/smoke_water_plane.mjs` [4d-flow]).
+identisch (Zwillingsprüfung: `scripts/smoke_height_bake.py` [12c] — der Client
+hat mit K-A E5 keinen zweiten Leser mehr, die Handrechnung steht seither
+vollständig in dessen Docstring).
 
 **Die LÄNGE ist der Fließ-Faktor** — die eigene Geschwindigkeit der Fläche geteilt
 durch den `flow_speed`-Regler ihrer ART (`heightfield.water_flow_factor`, der
@@ -5840,7 +5871,7 @@ hat. Vier Entscheidungen, alle in `client3d/src/scene/terrainLod.ts`:
 | Was | Wo |
 |---|---|
 | Raster = `water_level_at` auf dem Gitter, Dilatation, Diagonale | `scripts/smoke_height_bake.py` [12a]/[12b] |
-| Fließvektor = die Zahlen des Clients, Faktor | [12c] gegen `client3d/scripts/smoke_water_plane.mjs` [4d-flow] |
+| Fließvektor = die Zahlen, die der Client vor K-A trug, Faktor | [12c] (Handrechnung dort; der Client-Zwilling ist mit E5 gelöscht) |
 | Kurveninnenseite: 2 m gegen 1 m gegen 0,5 m | [12d] |
 | Payload additiv, Flussfelder optional | [12e] |
 | Statistik ist höhenrein | [12f] |
@@ -5929,3 +5960,53 @@ trockene Programm mitverändern.
 | GLSL-Pins: Reihenfolge, Konstanten, `textureGrad`, Maskenpaar | ebenda [6] |
 | Trockenes Programm unverändert, drei Einfügepunkte, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [18] |
 | Tiefen-Varying, Flow-Varying, `liftedDepth` | ebenda [17] |
+
+### 10. Der Rückbau des Spiegels (K-A E5)
+
+**Es gibt kein Wasser-Mesh mehr.** E3 hebt den Terrain-Vertex auf
+`max(h, w_level)`, E4 schattiert dasselbe Pixel als Wasser — die zweite,
+transparente Fläche darüber war seither ein Doppel, und E5 löscht sie samt
+allem, was nur sie gebraucht hat:
+
+| Was | Wo es stand |
+|---|---|
+| `buildWaterPlane`, `earcutStrips`, `patchWaterShore`, `WATER_SHORE_CACHE_KEY` | `client3d/src/scene/waterPlane.ts` (Datei gelöscht) |
+| `addMirror`, die Material-Karte je Wasser-Art, die Wasser-Mesh-Liste, der Textur-Preload der Flächen-Stufe, `materialFor` | `client3d/src/scene/ground.ts` |
+| `liftToWaterProfile`, `subdivideRibbonByAxis` (+ `crossNormalAt`, `clipHalfPlane`, `ringSignedArea`, `WATER_STRIP_MAX`, `WaterPoint2`), `waterFlowAt` (+ Blend-Fenster), `waterShoreGlsl`, `waterShoreBody`, `waterAlpha`, `WATER_SHORE_BAND_M`, `WATER_FOAM_ALPHA` | `client3d/src/scene/waterPlaneMath.ts` |
+| `isWaterClass` — die Ausnahme, mit der Natur-Boden und Schleier dem Wasser-Material auswichen | `client3d/src/scene/naturalGroundMath.ts` |
+| Attribute `aWaterFlow` / `aWaterOpaque`, der Ufer-`discard`, `depthWrite: false` und die Transparenz-Sortierung des Wassers | ebenda, mit den Meshes |
+
+**Was bleibt und WARUM:** `waterProfileOf` / `waterLevelAt` (Spielmechanik:
+`floatRootY`, `typeAt`, Waten/Schwimmen — dort muss der Pegel exakt sein, nicht
+gerastert; dazu die Wasserfall-Erkennung und die Look-Tabelle), die Uferkurven
+`waterOpaqueDepthM` / `waterShoreAlpha` / `waterFoam` / `waterEdgeFade` samt
+ihren Konstanten (das Terrain-Fragment schattiert mit genau diesen Zahlen), und
+der Fließ-FAKTOR `waterFlowFactor` im geteilten Paket — er ist jetzt die
+Kodierung, die der Server in das Raster bäckt und die der Terrain-Shader als
+Länge zurückliest.
+
+**Der Wasserfall bleibt, und hängt jetzt am Raster-Material statt am Spiegel.**
+`waterfallsFrom(profile, strokeWidthM(meta))` liest weiter die Achse aus der
+Nutzlast — die Erkennung ist unberührt. Neu ist nur die Herkunft der
+Wellennormalen des Vorhangs: `buildWaterfall(fall, sink)` holt sie mit
+`surfaceWaveNormal(THREE)` direkt aus `@anima/scene-render materials.ts`, also
+genau die Textur, die auch das Terrain-Fragment scrollt (Punkt 9), statt sie vom
+Material des Spiegels abzulesen. Die Vorhänge und Schaumscheiben sind damit die
+EINZIGEN Meshes, die eine gemalte Wasserfläche noch erzeugt — ein Blatt in der
+Luft ist das eine, was ein Höhenfeld nicht sein kann. Sie leben und sterben mit
+den Flächen (`ground.clearAreas`).
+
+**Isolationsschalter 11** heißt darum nicht mehr „Water planes hidden", sondern
+„Waterfalls hidden": die Wasser-OBERFLÄCHE ist Teil des Terrains und wird mit
+Schalter 22 (`noWater`) abgeschaltet.
+
+**Die Beweise (§ B5a):** `smoke_water_plane.mjs` behält die Abschnitte mit
+Lesern — Profil [1], Uferkurven [2]/[2a]/[2b]/[2d], Carve-Invariante [3], die
+Fixtures [4]/[4b]/[4d]/[4e], Waten/Schwimmen [6], Uferneigung [7] — und zählt
+in [8] die gelöschten Namen als ROTE Proben mit. Gestrichen sind die
+Mesh-Abschnitte [2c] (Ufer-GLSL), [4c]/[4d-flow]/[4e-flow]/[4f] (der
+Per-Vertex-Fließvektor; der Server prüft die Regel jetzt in
+`scripts/smoke_height_bake.py` [12c]), [5]/[5b] (der Lift) und [5c]/[5d] (die
+Streifen). `smoke_waterfall.mjs` prüft die neue Herkunft der Wellennormalen,
+`smoke_layer_cut.mjs`, `smoke_natural_ground.mjs`, `smoke_surface_patch.mjs` und
+`smoke_fog_veil.mjs` prüfen die eine verbliebene Material-Kette.

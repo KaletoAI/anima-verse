@@ -38,10 +38,10 @@
  *    material (`patchHole` is already in the slot). An ASSIGNMENT would throw
  *    the basement hole away — the rule this repo learned the hard way with the
  *    water shader (`smoke_surface_patch.mjs`), measured by the mutant of [8a].
- *  - WATER must not get it. A painted lake carries a full shader of its own
- *    (scrolling normals, sky fresnel, roughness mask); a second sample of its
- *    texture blended in and a relief shading on top would fight every part of
- *    it. Section [6] counts the anchors on a real water material.
+ *  - WATER is not a case any more. It used to be a mesh with a shader of its
+ *    own, which this patch stepped aside for; since Wasser v2 K-A E5 a water
+ *    pixel IS a pixel of this very ground and is shaded as water after it
+ *    (`scene/waterShade.ts`). Section [6] is the RED probe on that.
  *  - a FLAT world must be EXACTLY neutral, not almost. The switch is the
  *    shared `uNgStrength` uniform at 0 plus the shader's own guard — the same
  *    shape the view corridor uses for an unembodied client.
@@ -121,26 +121,31 @@
  * The second UV: (1, 1) -> (0.73, 0.73), (0, 0) -> (0.5, 0.5).
  *
  * ---------------------------------------------------------------------------
- * [6] WATER KEEPS ITS OWN SHADER — the anchor count
+ * [6] THE PATCH GOES ON THE ONE GROUND MATERIAL, AND WATER IS NO EXCEPTION
  * ---------------------------------------------------------------------------
- * A real water material out of `@anima/scene-render` `surfaceMaterial`, put
- * through the very decision `materialFor` makes (`isWaterClass`): the hole is
- * patched, the natural ground is NOT, and every water line survives. The same
- * decision on a matte material patches it. Counted on the composed shader,
- * because "we did not call it" is a claim about the code and "there is not one
- * `ngNoise` in the water's shader" is a claim about the picture.
+ * Until Wasser v2 K-A E5 a painted lake was a MESH with a rippled material of
+ * its own, and this patch had to step aside for it (`isWaterClass`, applied in
+ * the deleted `materialFor`): a second sample of the water texture and a relief
+ * shading on top would have fought the ripple, the fresnel and the roughness
+ * mask. There is no such material any more — the one ground material this
+ * client builds is the terrain's, made WITHOUT a surface spec at all
+ * (`material: null`, so it can never be a water surface), and a water pixel is
+ * a pixel of that very ground, shaded as water afterwards
+ * (`scene/waterShade.ts`). The section is therefore a RED one: the guard is
+ * gone from the tree, the composition it guarded exists nowhere, and the patch
+ * still lands on a plain ground material exactly as it did.
  *
  * ---------------------------------------------------------------------------
  * [7] THE WIRING, pinned by reading the source
  * ---------------------------------------------------------------------------
- * A patch is worth nothing where nobody applies it. `materialFor` is a closure
+ * A patch is worth nothing where nobody applies it. `rebuildBase` is a closure
  * over fetched payloads and cannot be called from here, so its lines are pinned
- * against the source text: the hole first, the natural ground guarded by the
- * water class, the field handed over in `reloadHeight` and given back in
- * `dispose`. It is applied TWICE in the file since E3 — once through
- * `materialFor` for the water drape, once by hand in `rebuildBase` for the
- * terrain — and nowhere else: the admin preview and the shared package must not
- * import any of this (view polish is not geometry, § B2).
+ * against the source text: the hole first, then the veil and the natural
+ * ground, the field handed over in `reloadHeight` and given back in `dispose`.
+ * It is applied EXACTLY ONCE in the file since Wasser v2 K-A E5 — the terrain's
+ * material is the only ground material left — and nowhere else: the admin
+ * preview and the shared package must not import any of this (view polish is
+ * not geometry, § B2).
  *
  * ---------------------------------------------------------------------------
  * [8] THE RED COUNTER-CHECKS — five mutants, five losses
@@ -232,7 +237,6 @@ async function loadClient(mutate) {
       + '  ngLit, ngHeightTex, ngField, ngFieldSize, ngStrength }\n'
       + `  from '${NG_SRC}';\n`
       + `export { patchHole, HOLE_CACHE_KEY } from '${GROUND_SRC}';\n`
-      + `export { isWaterClass } from '${MATH_SRC}';\n`
       + "export { surfaceMaterial } from '@anima/scene-render';\n";
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: dir, loader: 'ts' },
@@ -441,8 +445,7 @@ async function main() {
   const THREE = await import('three');
   const { applyNaturalGround, setNaturalGroundField, NG_CACHE_KEY, ngLit,
     ngHeightTex, ngField, ngFieldSize, ngStrength,
-    patchHole, HOLE_CACHE_KEY,
-    isWaterClass, surfaceMaterial } = await loadClient();
+    patchHole, HOLE_CACHE_KEY, surfaceMaterial } = await loadClient();
   const M = await loadMath();
 
   /** One material through the patch(es), with its composed shader. */
@@ -647,53 +650,51 @@ async function main() {
     [M.ngTintFactors(0.5, 0.5).brightness, M.ngTintFactors(0.5, 0.5).saturation], [1, 1]);
   check('the second sample is 0.23x the scale, half a UV across',
     [M.ngDetailUv(1, 1), M.ngDetailUv(0, 0)], [[0.73, 0.73], [0.5, 0.5]]);
-  check('water and ice carry their own shader', [isWaterClass('water'), isWaterClass('ice')],
-    [true, true]);
-  check('…and nothing else does',
-    ['matte', 'gloss', 'glow', '', null, undefined].map(isWaterClass),
-    [false, false, false, false, false, false]);
 
-  console.log('\n[6] water keeps its own shader — the anchor count');
-  /** `materialFor`'s decision, reproduced: hole always, natural ground only
-   *  where the class does not bring a shader of its own. */
+  console.log('\n[6] the one ground material — and water is no exception now');
+  /** A ground material as `rebuildBase` builds it: NO surface spec at all, so
+   *  the shared package can never turn it into a water surface. */
   function groundMaterial(spec) {
     const mat = surfaceMaterial(THREE, { material: spec, color: 0x3f7fb8 });
     patchHole(mat);
-    if (!isWaterClass(spec?.class)) applyNaturalGround(mat);
+    applyNaturalGround(mat);
     const shader = stubShader();
     mat.onBeforeCompile(shader, null);
     return { mat, shader };
   }
-  const lake = groundMaterial({ class: 'water', tint: '#3f7fb8' });
-  check('a painted lake gets NOT ONE natural-ground line',
-    marksIn(lake.shader, NG_MARKS), []);
-  check('…nor one of its uniforms',
-    NG_UNIFORMS.filter((u) => lake.shader.uniforms[u] !== undefined), []);
-  check('…while every water line is there', marksIn(lake.shader, WATER_MARKS),
-    allOf(WATER_MARKS));
-  check('…and the hole still cuts through it (a cellar under a lake)',
-    marksIn(lake.shader, HOLE_MARKS), allOf(HOLE_MARKS));
-  check('…which the key says: water, hole, and no third stage',
-    lake.mat.customProgramCacheKey(), `anima-water+${HOLE_CACHE_KEY}`);
-  const ice = groundMaterial({ class: 'ice', tint: '#cfe8f5' });
-  check('ice is water that stands still, and is spared just the same',
-    marksIn(ice.shader, NG_MARKS), []);
-  const meadowSpec = groundMaterial({ class: 'matte' });
-  check('the very same decision patches a matte ground',
-    marksIn(meadowSpec.shader, NG_MARKS), allOf(NG_MARKS));
-  check('…and one with no declaration at all', marksIn(groundMaterial(null).shader, NG_MARKS),
+  const terrainLike = groundMaterial(null);
+  check('the ground material carries every natural-ground line',
+    marksIn(terrainLike.shader, NG_MARKS), allOf(NG_MARKS));
+  check('…and the hole still cuts through it (a cellar under a meadow)',
+    marksIn(terrainLike.shader, HOLE_MARKS), allOf(HOLE_MARKS));
+  check('…which the key says: hole and natural ground, nothing else',
+    terrainLike.mat.customProgramCacheKey(), `${HOLE_CACHE_KEY}+${NG_CACHE_KEY}`);
+  check('a declared MATTE ground is the same thing',
+    marksIn(groundMaterial({ class: 'matte' }).shader, NG_MARKS),
     allOf(NG_MARKS));
+  // RED: the water exception is gone from the tree — the guard, its predicate,
+  // and the material builder it stood in.
+  const mathSrc = await readFile(MATH_SRC, 'utf8');
+  const groundText = await readFile(GROUND_SRC, 'utf8');
+  check('RED: the water-class predicate is deleted',
+    /isWaterClass/.test(mathSrc + groundText), false);
+  check('RED: …and so is the painted-area material builder it guarded',
+    /function materialFor\(/.test(groundText), false);
+  check('the ONE material this client still builds carries no surface spec',
+    /surfaceMaterial\(THREE, \{ material: null, map: null,/.test(groundText),
+    true);
 
   console.log('\n[7] the wiring, pinned by reading the source');
   const groundSrc = await readFile(GROUND_SRC, 'utf8');
-  check('materialFor patches the hole first',
-    /patchHole\(mat\);\n(\s*\/\/[^\n]*\n)*\s*if \(!isWaterClass\(spec\?\.class\)\) applyNaturalGround\(mat\);/
+  check('rebuildBase patches the hole first',
+    /patchHole\(mat\);\n(\s*\/\/[^\n]*\n)*\s*applyFogVeil\(mat\);\n\s*applyNaturalGround\(mat\);/
       .test(groundSrc), true);
-  // TWICE since E3: once for the water drape through `materialFor`, once for
-  // the TERRAIN in `rebuildBase`, which builds its material by hand because it
-  // must carry no `map` (see `smoke_layer_cut.mjs` section [D]).
-  check('…and in exactly the two places E3 leaves',
-    groundSrc.split('applyNaturalGround(').length - 1, 2);
+  // ONCE since Wasser v2 K-A E5: the TERRAIN's material in `rebuildBase`, which
+  // builds it by hand because it must carry no `map` (see `smoke_layer_cut.mjs`
+  // section [D]). The second site was the water mirror's, and the mirror is
+  // gone.
+  check('…and in exactly the one place that is left',
+    groundSrc.split('applyNaturalGround(').length - 1, 1);
   check('the overview reaches the shader when height_sig moves',
     /heightRev \+= 1;[\s\S]{0,600}?setNaturalGroundField\(payload\);/.test(groundSrc), true);
   check('…and is handed back on teardown',

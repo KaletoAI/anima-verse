@@ -1,12 +1,25 @@
 #!/usr/bin/env node
 /**
- * Smoke check for the WATER MIRROR ("Ein Boden" E4, § G4; tilted by "Ein
- * Wasser-Gesetz" W2) — the ruled surface over a painted water, the shore that
- * comes out of the height data, the E1 carve invariant measured from the CLIENT
- * side, and the wade/swim crossover against the LOCAL level.
+ * Smoke check for the WATER PROFILE and the SHORE ("Ein Boden" E4, § G4;
+ * tilted by "Ein Wasser-Gesetz" W2) — the level of a painted water at a point,
+ * the shore curves that come out of the height data, the E1 carve invariant
+ * measured from the CLIENT side, and the wade/swim crossover against the LOCAL
+ * level.
  *
  * Usage:  node client3d/scripts/smoke_water_plane.mjs
  *         (transpiles `scene/waterPlaneMath.ts` and `game/walk.ts`; needs esbuild)
+ *
+ * WHAT LEFT WITH WASSER v2 K-A E5. The water used to be a MESH of its own — a
+ * ruled surface over the outline, cut at the axis knots, every vertex lifted
+ * onto the profile, with a shore shader chained onto its material. The terrain
+ * lifts and shades its own water pixels now (E3/E4), so the sections that
+ * checked the mesh are gone with it: [4c]/[4d-flow]/[4e-flow]/[4f] (the
+ * per-vertex flow — the server bakes the flow into the raster), [5]/[5b] (the
+ * lift), [5c]/[5d] (the strip subdivision and the arrangement) and [2c] (the
+ * shore GLSL). What stayed is what still has a reader: the profile itself, the
+ * shore CURVES (`scene/waterShade.ts` shades the terrain with them,
+ * `smoke_water_shade.mjs` checks that half), the carve invariant, and the
+ * gameplay. [8] now also counts the deleted names as RED probes.
  *
  * The server halves are `scripts/smoke_height_bake.py` [8] (the profile and the
  * carve, on the bake) and `scripts/smoke_heightfield.py`. This is the READING:
@@ -15,11 +28,13 @@
  * recording of current output.
  *
  * ===========================================================================
- * [1] THE MIRROR IS A PROFILE, and it comes from the payload alone
+ * [1] THE WATER IS A PROFILE, and it comes from the payload alone
  * ===========================================================================
  * `waterProfileOf(meta)` reads `meta.water_profile` — the numbers the bake
  * carved the bed against (W1 § 4, polyline since W4a). Reading it is the WHOLE
  * water test: only an area the server's one predicate called water carries one.
+ * Its readers today are the gameplay (`floatRootY`, `typeAt`), the waterfall
+ * detection and the look table — never a mesh.
  *
  *     { water_profile: {…nine + axis…} }  -> a profile      water
  *     { water_level_effective: 3.25 }     -> null           the MID level of a
@@ -29,20 +44,21 @@
  *
  * The second one is new in W2 and load-bearing. `water_level_effective` is the
  * one plane a FLAT consumer draws, i.e. the mid level; a client that still read
- * it would put a river's mirror 2.4 m over its bed at one end and 2.4 m under
- * it at the other (see [6] for that arithmetic, in full).
+ * it would put a river's water line 2.4 m over its bed at one end and 2.4 m
+ * under it at the other (see [6] for that arithmetic, in full).
  *
  * A profile with one unreadable number is NO profile: one NaN in a vertex
  * position and the whole mesh leaves the frustum. `flow_dir_deg: null` is the
  * one exception — that is the shape of still water. THE `axis` IS CHECKED THE
  * SAME WAY (W4a) and it is the part that is actually evaluated: a list of at
- * least one `[x, z, s, level]` of finite numbers, or there is no mirror.
+ * least one `[x, z, s, level]` of finite numbers, or there is no water.
  *
  * ===========================================================================
- * [2] THE SHORE — alpha out of the DEPTH, hand-derived
+ * [2] THE SHORE — how much of the bed is hidden, out of the DEPTH
  * ===========================================================================
- * `depth(x, z) = plane y − h(x, z)`, with h out of the SAME R32F pyramids the
- * terrain's vertices are placed by. The alpha ramps over the AREA's OWN opaque
+ * `depth(x, z) = water level − h(x, z)`, both out of the SAME R32F pyramids the
+ * terrain's vertices are placed by (the height one and, since K-A E1/E2, the
+ * water one). The alpha ramps over the AREA's OWN opaque
  * depth (W4b) — ¾ of its bed depth, `waterOpaqueDepthM` — by `smoothstep`,
  * i.e. `t = depth/band` and `3t² − 2t³`. For the DEFAULT LAKE (`water_depth_m`
  * 2.0, band 1.5):
@@ -83,18 +99,19 @@
  * does, which is what a pond with a visible bottom actually looks like.
  *
  * The FOAM is `1 − smoothstep(0, 0.6, depth)` — full at the rim, gone at
- * 0.6 m — and it does two things: it whitens the outgoing light by
- * `foam · 0.6` and it adds `foam · 0.15` back to the alpha, so the very
- * shoreline keeps a faint lace instead of fading to invisible:
+ * 0.6 m — and it whitens the outgoing light by `foam · 0.6`:
  *
- *     depth 0.0  foam 1        alpha 0     + 0.15    = 0.15
- *     depth 0.15 foam 0.84375  alpha 0.028 + 0.1266  = 0.1546
- *     depth 0.3  foam 0.5      alpha 0.104 + 0.075   = 0.179
- *     depth 0.45 foam 0.15625  alpha 0.216 + 0.0234  = 0.2394
- *     depth 0.6  foam 0        alpha 0.352 + 0       = 0.352
- *     depth 1.5  foam 0        alpha 1     + 0       = 1
+ *     depth 0.0  foam 1        ramp 0
+ *     depth 0.15 foam 0.84375  ramp 0.028
+ *     depth 0.3  foam 0.5      ramp 0.104
+ *     depth 0.45 foam 0.15625  ramp 0.216
+ *     depth 0.6  foam 0        ramp 0.352
+ *     depth 1.5  foam 0        ramp 1
  *
  * (`waterShoreAlpha(0.45)`: t = 0.3, 3·0.09 − 2·0.027 = 0.27 − 0.054 = 0.216.)
+ * The 0.15 of alpha the foam used to hand back at the very rim was the MIRROR's
+ * (a transparent sheet had to stay visible at its own edge); the terrain's
+ * water is opaque ground, so it went with the mesh in K-A E5.
  *
  * ===========================================================================
  * [3] THE E1 INVARIANT, measured on THIS side — and its red counter-probe
@@ -111,7 +128,7 @@
  * the ramp `smoothstep(1) = 1` exactly, so the second argument of the `min` is
  * `level_at(x, z) − depth_m` — whatever the natural ground does there. A bump
  * of +40 m in the middle of the lake therefore comes out at that number all the
- * same: a terrain texel above the mirror inside the deep zone is not unlikely,
+ * same: a terrain texel above the water inside the deep zone is not unlikely,
  * it is arithmetically impossible. Sampling could only ever have said "not in
  * these 4 489 probes"; this says "never".
  *
@@ -126,8 +143,8 @@
  *
  * ε = min(2.0, 0.25) = 0.25, and 3.0 − 1.0 = 2.0 ≥ 0.25 holds with 1.75 m to
  * spare. AT THE RIM (d_in = 0) the carve is `min(h_nat, level)`, which is the
- * plane meeting the terrain — that IS the shoreline, and it is why the shader
- * discards at `depth ≤ 0` rather than drawing a zero-alpha fragment there.
+ * water meeting the terrain — that IS the shoreline, and it is why the shore
+ * curves all answer "not water" at `depth ≤ 0`.
  *
  * ===========================================================================
  * [4] THE FIXTURE RIVER — the profile arithmetic, hand-derived end to end
@@ -261,30 +278,12 @@
  * i.e. PAST the downstream end, where the clamp answers `level_down` = 6.0. The
  * bend of a hairpin has no place on its own chord — that is the whole finding.
  *
- * THE FLOW IS THE TANGENT OF THE NEAREST LEG, and it is per VERTEX:
- *
- *     leg 1: (99, −20)/101 = ( 0.980198019801…, −0.198019801980…)
- *     leg 2: (−48, −20)/52 = (−12/13, −5/13)
- *                          = (−0.923076923077…, −0.384615384615…)
- *
- * and they really do point different ways — that is the whole reason one vector
- * per area was not enough:
- *
- *     cos = (99·(−48) + (−20)·(−20)) / (101·52) = −4352/5252 = −0.828636…
- *         -> 145.959°, a line doubling back on itself
- *
- * At the middle knot the UPSTREAM leg answers, by the same strict `<` that
- * decided `s` there; upstream of A the first leg answers, because the loop's
- * starting candidate is the first knot and its segment is segment 0. A ONE-KNOT
- * axis has no segment at all and answers (0, 0) — still water, the lake's own
- * crossing drift.
- *
  * ===========================================================================
  * [4e] THE CLIFF — knots where the GROUND bends, not where the author clicked
  * ===========================================================================
  * THE REPORTED BUG (2026-08-24) and the server's answer to it, W5b: a river
  * drawn with TWO clicks over a 3 m plateau edge used to get exactly two knots,
- * one per click, so its mirror was ONE straight ramp between them. It ramped
+ * one per click, so its water line was ONE straight ramp between them. It ramped
  * down long BEFORE the edge (the water sank into a slot with its own banks
  * towering over it — "the water is almost gone") and was still too high long
  * AFTER it (a slab standing in the air over the low ground — "a mound of
@@ -315,147 +314,6 @@
  * Both are the symptom, in metres, on the client's own reader.
  *
  * ===========================================================================
- * [5] THE SLOPED MESH — one y per vertex, and a lake still comes out flat
- * ===========================================================================
- * `liftToWaterProfile` writes `waterLevelAt(profile, x, z)` into the `y` of
- * every `(x, y, z)` triplet of the earcut. On the fixture rectangle's four
- * corners that is
- *
- *     (20, ?, −40) -> 2.6      (80, ?, −40) -> 7.4
- *     (80, ?, −20) -> 7.4      (20, ?, −20) -> 2.6
- *
- * — a plane of slope 0.08 in x and constant in z, spanning 4.8 m of height over
- * the river's 60 m of length.
- *
- * NO SUBDIVISION IS NEEDED, and that is arithmetic, not taste: the profile is
- * LINEAR in the plane wherever the clamp is not active, and the clamp is only
- * active OUTSIDE `[s_min, s_max]` — which are the polygon's own extremes, so no
- * interior point reaches it. A ruled surface through the outline therefore
- * reproduces the function exactly. Checked at the midpoint and the quarter
- * point of the long edge:
- *
- *     ½ of the way from 2.6 to 7.4 = 5.0     = level(50)   ✓
- *     ¼ of the way                  = 3.8     = level(35)   ✓
- *
- * A LAKE IS BIT-IDENTICAL TO THE FLAT PLANE OF BEFORE. A still profile has
- * `flow_dir_deg = null`, `s_min = s_max = 0` and both ends equal, so every
- * vertex gets literally `level_up` — the same float, by `Object.is`, at every
- * corner. And the world y is the same float the old arrangement produced:
- * the mesh sat at `position.y = level` over vertices at 0, and `level + 0` and
- * `0 + level` are one number.
- *
- * ===========================================================================
- * [5c] THE MESH FOLLOWS THE KNOTS — the cliff, cut into strips (W5c)
- * ===========================================================================
- * [5] holds while the profile between two outline vertices is ONE straight
- * ramp. Over the [4e] cliff it does not: the ribbon has four corners over
- * 100 m, the profile has four knots, and the ruled surface between the corners
- * is the very two-knot ramp [4e] prints as the RED counter-probe. The reader
- * was right and the DRAWING was wrong — a mirror floating before the lip and
- * diving after it.
- *
- * `subdivideRibbonByAxis(ring, axis)` cuts the outline at the INTERIOR knots
- * before the earcut runs. The rule is the ARRANGEMENT of the cross-lines (the
- * running remainder of the first cut is what [5d] convicts): every piece a
- * cross-line properly crosses is replaced by its two halves, every piece it
- * misses or grazes is kept whole. The pieces tile the outline exactly —
- * splitting one polygon by one line gives back that polygon, whatever the other
- * lines do.
- *
- * THE CLIFF RIBBON is the 6 m wide, 100 m long band of the [4e] stroke:
- *
- *     ring = (0,−3) (100,−3) (100,3) (0,3)          area 6 · 100 = 600 m²
- *     axis = [0,0,0,3] [40,0,40,3] [42,0,42,0] [100,0,100,0]
- *
- * Both interior knots sit on a straight axis, so both cross-lines are the plain
- * perpendicular — x = 40 and x = 42. Sutherland–Hodgman on the first, keeping
- * x ≤ 40, walks the ring edge by edge:
- *
- *     (0,−3) f=+40 kept · edge to (100,−3) f=−60 crosses at t = 40/100 = 0.4
- *                                                      -> (40,−3)
- *     (100,−3) dropped · (100,3) dropped, no crossing between them
- *     edge (100,3) -> (0,3) crosses at t = 0.6         -> (40,3)
- *     (0,3) f=+40 kept
- *
- * i.e. exactly the rectangle (0,−3) (40,−3) (40,3) (0,3), and the other side is
- * its complement. The second cut splits THAT remainder at x = 42. Three strips:
- *
- *     x ∈ [0, 40]    6 · 40 = 240 m²      corners all at level 3.0
- *     x ∈ [40, 42]   6 ·  2 =  12 m²      3.0 upstream, 0.0 downstream
- *     x ∈ [42, 100]  6 · 58 = 348 m²      corners all at level 0.0
- *                            ---------
- *                             600 m²      = the ribbon, to the last bit
- *
- * FOUR VERTICES AND TWO TRIANGLES BECOME TWELVE AND SIX. The strips are earcut
- * separately (each is its own `THREE.Shape`), so the rows at x = 40 and x = 42
- * are doubled — which is what makes the surface bend there at all.
- *
- * WHAT THE DRAWN SURFACE NOW READS, against the two-knot ramp it used to be
- * (`3 − 0.03·x`, [4e]'s red probe, and here it is the MESH's error and not the
- * reader's):
- *
- *     x      waterLevelAt   drawn now   drawn before   the old error
- *     31     3.0            3.0         2.07           0.93 m under the plateau
- *     39     3.0            3.0         1.83           1.17 m under it
- *     41     1.5            1.5         1.77           the lip itself
- *     43     0.0            0.0         1.71           1.71 m of water in the air
- *     51     0.0            0.0         1.47           1.47 m in the air
- *
- * The new column is `waterLevelAt` itself, everywhere and not only at the five
- * probes: inside a strip the level is affine in x (one straight piece of the
- * profile) and the strip's four lifted corners are coplanar, so the ruled
- * surface over them IS that piece. The old column's worst place is x = 42, the
- * foot of the step: `3 − 1.26 = 1.74` m of mirror standing on ground at 0.
- *
- * THE STRIP INTERPOLATION IS READ BY A FAN here, from each strip's first
- * corner, and that is not a shortcut around the real earcut: with four coplanar
- * corners every triangulation of the quad interpolates the same plane, so the
- * diagonal `THREE.ShapeGeometry` picks cannot change a number above. What the
- * fan does NOT stand in for is a concave strip — that is why the builder runs
- * the same `buildAreaGeometry` earcut the whole painted world runs, checked
- * below as a source claim rather than guessed at.
- *
- * A BENT AXIS IS THE PARTITION'S OWN TEST. Square (−30,−10) (40,−10) (40,40)
- * (−30,40), 70 · 50 = 3500 m², under the L-shaped axis (−20,0) (20,0) (20,20)
- * (−20,20): the knot at (20,0) bends from +x to +z, so its cross-line normal is
- * the BISECTOR (0.7071, 0.7071) and its line is `x + z = 20`; the one at
- * (20,20) bends from +z to −x, normal (−0.7071, 0.7071), line `z = x`. The two
- * lines CROSS INSIDE the square, at (10,10), and the arrangement cuts both
- * sides of each: FOUR pieces, and their corners are all hand-writable. `x+z=20`
- * meets the square at (30,−10) and (−20,40); `z=x` at (−10,−10) and at the
- * corner (40,40):
- *
- *     z ≤ x and x+z ≤ 20   triangle (−10,−10) (30,−10) (10,10)
- *                          ½ · 40 · 20                        =  400 m²
- *     z ≥ x and x+z ≤ 20   (−30,−10) (−10,−10) (10,10) (−20,40) (−30,40)
- *                          shoelace 2700/2                    = 1350 m²
- *     z ≤ x and x+z ≥ 20   (30,−10) (40,−10) (40,40) (10,10)
- *                          shoelace 1700/2                    =  850 m²
- *     z ≥ x and x+z ≥ 20   triangle (10,10) (40,40) (−20,40)
- *                          ½ · 60 · 30                        =  900 m²
- *                                                             ---------
- *                                                              3500 m²
- *
- * THE RUNNING REMAINDER answered three pieces here — the whole 1750 m²
- * upstream of `x+z=20`, then 850 and 900 out of the remainder — and that is
- * where its T-VERTICES came from: the 1750 piece carried the entire chord of
- * `x+z=20` from (30,−10) to (−20,40) as ONE edge, while the two pieces on the
- * other side of it split that same chord at (10,10). Along that edge one side
- * drew the straight line between the two ends' levels and the other the level
- * of the split point — a crack as wide as the two disagree.
- *
- * ONE AND TWO KNOTS ARE UNTOUCHED, and provably the same buffers: the function
- * returns the ARRAY IT WAS GIVEN, the caller sees a single strip and keeps the
- * geometry `buildAreaGeometry` already made. A lake and a polygon river draw
- * what they drew before W5c, bit for bit.
- *
- * AND A CROSS-LINE THAT MISSES THE MASK COSTS NOTHING. An axis that runs on
- * past its outline (knots at x = −20 … −5, or at x = 150) puts every interior
- * knot outside: one side of each cut is empty, empty pieces are dropped, and
- * the single surviving piece is again "keep what you have". No empty earcut,
- * no NaN, no crash.
- *
- * ===========================================================================
  * [6] THE WADE/SWIM CROSSOVER, at the LOCAL level
  * ===========================================================================
  * `root = max(groundY + sink, waterLevel)`; the body reference is always
@@ -463,7 +321,7 @@
  * meet where `groundY + sink = waterLevel`, i.e. at a DEPTH of exactly `sink`.
  * `floatRootY` is unchanged by W2 — what changed is what is fed into it.
  *
- * With the swim depth `sink = 0.6` and a mirror at `L = 3.0`:
+ * With the swim depth `sink = 0.6` and a water line at `L = 3.0`:
  *
  *     depth  groundY  root                       body
  *     0.0    3.0      max(3.6, 3.0) = 3.6        3.0    wading at the rim
@@ -493,24 +351,24 @@
  * line, because the depth never changes.
  *
  * ===========================================================================
- * [7] THE SHORE ON A SLOPE — why the shader needed no change
+ * [7] THE SHORE ON A SLOPE — why the shore arithmetic needed no change
  * ===========================================================================
- * `wsDepth = vWaterPlane.y − tlodHeight(vWaterPlane.xz)`. `vWaterPlane` is the
- * fragment's WORLD position, so its `y` is the interpolated ruled surface — and
- * the interpolation of a linear function over a triangle IS that function.
- * The shore therefore measures against the LOCAL level for free, and on the
- * fixture river it answers the same alpha at every x:
+ * The depth is `level(x, z) − h(x, z)`, i.e. the LOCAL level minus the ground,
+ * at every point — the profile for the gameplay, the raster the server baked
+ * out of that very profile for the render. The shore therefore measures against
+ * the local level for free, and on the fixture river it answers the same
+ * absorption at every x:
  *
  *     depth 1.0 everywhere -> t = 1/1.5 = 2/3
  *                          -> 3·(4/9) − 2·(8/27) = 4/3 − 16/27 = 20/27
  *                          = 0.7407407407407407
  *
  * THE RED COUNTER-PROBE, again the flat plane at 5.0: its depth is
- * `5.0 − 0.08·x`, which reaches 0 at `x = 62.5` and is NEGATIVE above it. The
- * shader discards at `depth ≤ 0`, so a flat mirror over this river would simply
- * stop existing over its upper 17.5 m — the bed poking through the plane —
- * while below x = 62.5 it would be drawn at up to 2.92 m of false depth
- * (`waterShoreAlpha(2.92) = 1`, opaque) over a bed 1 m under the real line.
+ * `5.0 − 0.08·x`, which reaches 0 at `x = 62.5` and is NEGATIVE above it. A
+ * flat reading would therefore see no water at all over the river's upper
+ * 17.5 m — the bed standing above its own level — while below x = 62.5 it would
+ * hide the bed under up to 2.92 m of false depth (`waterShoreAlpha(2.92) = 1`,
+ * fully absorbed) over ground 1 m under the real line.
  *
  * ===========================================================================
  * [9] THE RIPPLE SCROLLS DOWNSTREAM (W2 no. 2)
@@ -715,14 +573,13 @@ function checkIs(label, actual, expected) {
 const [W, walk, mats] = await loadPure('client3d/src/scene/waterPlaneMath.ts',
                                        'client3d/src/game/walk.ts',
                                        'packages/scene-render/src/materials.ts');
-const { WATER_EDGE_FADE_M, WATER_FOAM_ALPHA, WATER_FOAM_BAND_M,
-  WATER_FOAM_STRENGTH, WATER_SHORE_BAND_M, liftToWaterProfile, waterAlpha,
-  waterEdgeFade, waterFlowAt, waterFoam, waterLevelAt, waterOpaqueDepthM,
-  waterProfileOf, waterShoreAlpha, waterShoreBody, waterShoreGlsl,
-  subdivideRibbonByAxis } = W;
+const { WATER_EDGE_FADE_M, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
+  waterEdgeFade, waterFoam, waterLevelAt, waterOpaqueDepthM,
+  waterProfileOf, waterShoreAlpha } = W;
 const { floatRootY, groundWaterLevel } = walk;
-// The shared package's own half of the flow attribute — the factor its LENGTH
-// carries. `materials.ts` imports nothing but types, so it loads the same way.
+// The shared package's own half of the flow encoding — the factor the length of
+// the flow vector carries, which the SERVER bakes into the water raster since
+// K-A E1. `materials.ts` imports nothing but types, so it loads the same way.
 const { waterFlowFactor, WATER_FLOW_FACTOR_MIN,
   WATER_FLOW_SPEED_DEFAULT_M_S } = mats;
 
@@ -764,7 +621,7 @@ const CLIFF_META = { water_depth_effective: 1.0,
       [42.0, 0.0, 42.0, 0.0], [100.0, 0.0, 100.0, 0.0]] } };
 
 // ── [1] the profile comes from the payload ─────────────────────────────────
-console.log('[1] the mirror is a PROFILE, and only the payload names it');
+console.log('[1] the water is a PROFILE, and only the payload names it');
 const RIVER = waterProfileOf(RIVER_META);
 const LAKE = waterProfileOf(LAKE_META);
 checkEq('the nine numbers arrive verbatim', RIVER, RIVER_META.water_profile);
@@ -793,7 +650,7 @@ check('a sea at world zero is still a profile',
 console.log('\n[1b] the AXIS is checked like every other number (W4a)');
 checkEq('the hairpin arrives with three knots, verbatim',
   waterProfileOf(HAIRPIN_META).axis, HAIRPIN_META.water_profile.axis);
-checkEq('no axis at all is no mirror — it is what the level is read from',
+checkEq('no axis at all is no water — it is what the level is read from',
   waterProfileOf({ water_profile: { ...LAKE_META.water_profile,
     axis: undefined } }), null);
 checkEq('an EMPTY axis names no place either',
@@ -811,17 +668,13 @@ checkEq('junk in the axis slot is not an axis',
 
 // ── [2] the shore ──────────────────────────────────────────────────────────
 console.log('\n[2] the shore ramp, out of the water DEPTH');
-/** The default lake's band, i.e. the number the constant used to hold. */
+/** The default lake's band — what an area without a shipped depth falls back
+ *  to, and the number every table below is derived against. */
 const LAKE_BAND = waterOpaqueDepthM(2.0);
 check('the band of the DEFAULT lake is ¾ of its 2.0 m bed', LAKE_BAND, 1.5);
-check('…which is what the fallback constant still holds', WATER_SHORE_BAND_M,
-  1.5);
-checkIs('…and it IS that call, not a second number beside it',
-  WATER_SHORE_BAND_M, LAKE_BAND);
 check('the foam reaches 0.6 m', WATER_FOAM_BAND_M, 0.6);
 check('the foam whitens by 0.6', WATER_FOAM_STRENGTH, 0.6);
-check('the foam gives 0.15 of alpha back', WATER_FOAM_ALPHA, 0.15);
-check('alpha at depth 0 — not water, the shader discards there',
+check('alpha at depth 0 — not water, the pixel stays the dry ground it is',
   waterShoreAlpha(0, LAKE_BAND), 0);
 check('alpha at depth 0.15', waterShoreAlpha(0.15, LAKE_BAND), 0.028);
 check('alpha at depth 0.30', waterShoreAlpha(0.30, LAKE_BAND), 0.104);
@@ -837,7 +690,8 @@ check('alpha at depth 4.0 — clamped, a deep lake is not deeper drawn',
   waterShoreAlpha(4, LAKE_BAND), 1);
 check('a shallow pond (0.6 m bed) never reaches full opacity against the '
   + 'LAKE\'s band', waterShoreAlpha(0.6, LAKE_BAND), 0.352);
-check('a bed ABOVE the mirror is not water', waterShoreAlpha(-0.5, LAKE_BAND),
+check('a bed ABOVE the water line is not water',
+  waterShoreAlpha(-0.5, LAKE_BAND),
   0);
 
 console.log('\n[2a] W4b: the band is the AREA\'s own ¾, not one constant');
@@ -876,101 +730,46 @@ check('…which is the "see-through in the middle of the river" finding, in one 
 check('the pond IS fully drawn against its OWN band',
   waterShoreAlpha(0.45, waterOpaqueDepthM(0.6)), 1);
 
-console.log('\n[2b] the foam, and the alpha it hands back at the rim');
+console.log('\n[2b] the foam band');
 check('foam at depth 0', waterFoam(0), 1);
 check('foam at depth 0.15', waterFoam(0.15), 0.84375);
 check('foam at depth 0.3', waterFoam(0.3), 0.5);
 check('foam at depth 0.45', waterFoam(0.45), 0.15625);
 check('foam at depth 0.6 — gone', waterFoam(0.6), 0);
 check('foam at depth 2 — long gone', waterFoam(2), 0);
-check('total alpha at depth 0 — a lace, not nothing', waterAlpha(0, LAKE_BAND),
-  0.15);
-check('total alpha at depth 0.15', waterAlpha(0.15, LAKE_BAND),
-  0.028 + 0.84375 * 0.15);
-check('total alpha at depth 0.3', waterAlpha(0.3, LAKE_BAND),
-  0.104 + 0.5 * 0.15);
-check('total alpha at depth 0.45', waterAlpha(0.45, LAKE_BAND),
-  0.216 + 0.15625 * 0.15);
-check('total alpha at depth 0.6 — the foam is out, the ramp alone answers',
-  waterAlpha(0.6, LAKE_BAND), 0.352);
-check('total alpha at depth 1.5 — clamped at one', waterAlpha(1.5, LAKE_BAND),
-  1);
-// The FOAM does not scale with the band: half a metre of broken water is half a
-// metre of broken water, in a pond and in a lake.
-check('the river\'s rim carries the same lace as the lake\'s',
-  waterAlpha(0, RIVER_BAND), 0.15);
-check('…and at 0.3 m the river is further along its ramp, the foam unchanged',
-  waterAlpha(0.3, RIVER_BAND), waterShoreAlpha(0.3, RIVER_BAND) + 0.5 * 0.15);
-
-// The GLSL twin: the smoke does not read the string for its numbers (that
-// would only prove the string equals itself), but the two things that make it
-// a SHADER rather than a comment are structural and are read.
-console.log('\n[2c] the GLSL says the same thing, structurally');
-const glsl = waterShoreGlsl();
-const body = waterShoreBody();
-check('the fragment reads the plane\'s own world y as the level',
-  /vWaterPlane\.y - tlodHeight\( vWaterPlane\.xz, 0\.0 \)/.test(body) ? 1 : 0, 1);
-check('…asking the FINEST mip (nodeStep 0 clamps to level 0)',
-  /tlodHeight\( vWaterPlane\.xz, 0\.0 \)/.test(body) ? 1 : 0, 1);
-check('the rim is discarded, not drawn at zero alpha',
-  /if \( wsDepth <= 0\.0 \) discard;/.test(body) ? 1 : 0, 1);
-check('the alpha is MULTIPLIED into diffuseColor.a, never assigned',
-  /diffuseColor\.a \*=/.test(body) ? 1 : 0, 1);
-check('the easing is the same smoothstep the arithmetic above uses',
-  /return c \* c \* \( 3\.0 - 2\.0 \* c \);/.test(glsl) ? 1 : 0, 1);
-check('no screen-space depth texture is sampled anywhere',
-  /depthTexture|tDepth|viewZ/.test(glsl + body) ? 1 : 0, 0);
-// W2: the shore was NOT touched, and that is the finding — it never knew the
-// level as a number, so a level that varies over the mesh reaches it for free.
-check('RED: no level uniform crept into the shore for the slope',
-  /uWaterLevel|uLevel|uMirror/.test(glsl + body) ? 1 : 0, 0);
-// W4b: the band left the uniforms and became the geometry's, like the level and
-// the flow before it — one material still serves every water of its kind.
-const planeSrc = await readFile(
-  join(ROOT, 'client3d/src/scene/waterPlane.ts'), 'utf8');
-check('the opaque depth is a VARYING the fragment reads',
-  /varying float vWaterOpaque;/.test(glsl) ? 1 : 0, 1);
-check('…and the alpha ramp measures against it',
-  /wsSmooth\( wsDepth \/ vWaterOpaque \)/.test(body) ? 1 : 0, 1);
-check('RED: the constant band uniform is gone from the shader',
-  /uShoreBandM/.test(glsl + body) ? 1 : 0, 0);
-check('RED: …and nothing binds it any more either',
-  /shader\.uniforms\.uShoreBandM/.test(planeSrc) ? 1 : 0, 0);
-check('the vertex half declares the attribute',
-  /attribute float aWaterOpaque;/.test(planeSrc) ? 1 : 0, 1);
-check('…and hands it straight to the fragment',
-  /vWaterOpaque = aWaterOpaque;/.test(planeSrc) ? 1 : 0, 1);
-// `geo` and not `geometry` since W5c: the builder draws the CUT geometry where
-// the axis has interior knots (see [5c]) and the one it was handed otherwise.
-check('the mesh builder writes it per vertex',
-  /geo\.setAttribute\('aWaterOpaque'/.test(planeSrc) ? 1 : 0, 1);
-check('RED: and the flow is no longer one vector for a whole area',
-  /waterFlowVector/.test(planeSrc) ? 1 : 0, 0);
-check('…it is the tangent AT THE VERTEX',
-  /waterFlowAt\(profile, pos\.getX\(i\), pos\.getZ\(i\), flowFactor\)/
-    .test(planeSrc) ? 1 : 0, 1);
+// The FOAM does not scale with the band (W4b): half a metre of broken water is
+// half a metre of broken water, in a pond and in a lake — while the ramp under
+// it is the area's own.
+check('the river\'s rim carries the same foam as the lake\'s',
+  waterFoam(0), 1);
+check('…and at 0.3 m the foam is the same half-gone lace over both',
+  waterFoam(0.3), 0.5);
+// 0.3 m over the river's 0.9 m band is t = 1/3 -> 3·(1/9) − 2·(1/27) = 7/27 =
+// 0.259259…, against the lake's t = 0.2 -> 0.104.
+check('…while the ramp under it is already further along on the river',
+  waterShoreAlpha(0.3, RIVER_BAND), 7 / 27, 1e-15);
+check('…which is this much more of the bed hidden than over the lake',
+  waterShoreAlpha(0.3, RIVER_BAND) - waterShoreAlpha(0.3, LAKE_BAND),
+  7 / 27 - 0.104, 1e-15);
 
 // ── [2d] the rim is faded, not merely discarded ────────────────────────────
-// `waterAlpha(0)` is 0.15 BY DESIGN — the foam gives it back so the last hand's
-// width of water can be seen. The discard then cut that 0.15 off at a boundary
-// with no width, and a step with no width crawls sub-pixel as the camera moves.
-// The fade is the one factor that reaches 0 exactly where the discard begins.
-console.log('\n[2d] the rim fades to the discard instead of stepping to it');
+// The foam is FULL at depth 0 and whitens the light by 0.6 there, so without a
+// ramp the waterline would step from that white lace to dry ground across a
+// boundary with no width — and a boundary with no width crawls sub-pixel as the
+// camera moves. The fade is the one factor that reaches 0 exactly there. The
+// GLSL that spends it is the terrain's (`smoke_water_shade.mjs` [3]).
+console.log('\n[2d] the rim fades to the waterline instead of stepping to it');
 check('the fade floor is 5 cm of depth', WATER_EDGE_FADE_M, 0.05);
-check('RED: without it the rim was drawn at', waterAlpha(0, LAKE_BAND), 0.15);
-check('…with it the rim is drawn at',
-  waterAlpha(0, LAKE_BAND) * waterEdgeFade(0, 0.05), 0);
+check('RED: without it the rim carried the foam\'s full whitening',
+  waterFoam(0) * WATER_FOAM_STRENGTH, 0.6);
+check('…with it the rim carries nothing at all',
+  waterFoam(0) * WATER_FOAM_STRENGTH * waterEdgeFade(0, 0.05), 0);
 check('half a pixel in, half the fade', waterEdgeFade(0.025, 0.05), 0.5);
 check('one pixel in, the fade is done', waterEdgeFade(0.05, 0.05), 1);
 check('a pixel narrower than the floor still spends the floor',
   waterEdgeFade(0.025, 0.001), 0.5);
 check('a metre-wide pixel far away spends the metre',
   waterEdgeFade(0.5, 1), 0.5);
-check('the shader multiplies the fade in',
-  /\* clamp\( wsDepth \/ wsEdge, 0\.0, 1\.0 \)/.test(body) ? 1 : 0, 1);
-check('…and takes its derivative BEFORE the discard',
-  body.indexOf('fwidth( wsDepth )')
-    < body.indexOf('if ( wsDepth <= 0.0 ) discard;') ? 1 : 0, 1);
 
 // ── [3] the E1 invariant, and the red counter-probe ────────────────────────
 console.log('\n[3] the E1 carve invariant, re-derived on the client side');
@@ -1005,10 +804,10 @@ for (const dIn of [3.0, 3.5, 5, 12, 40, 400]) {
 }
 check('at the rim the plane MEETS the terrain — that is the shoreline',
   carve(LEVEL, 0, LEVEL, DEPTH_M, RAMP_M), LEVEL);
-check('…and a bank already below the mirror is left where it is (min, never =)',
+check('…and a bank already below the water is left where it is (min, never =)',
   carve(1.2, 0, LEVEL, DEPTH_M, RAMP_M), 1.2);
 
-console.log('\n[3b] the RED counter-probe — a bump above the mirror is impossible');
+console.log('\n[3b] the RED counter-probe — a bump above the water is impossible');
 // Not "we did not find one in N samples": beyond the ramp the smoothstep is
 // exactly 1, so the second argument of the min is a CONSTANT below the level.
 for (const bump of [3.5, 10, 40, 1e9]) {
@@ -1043,35 +842,15 @@ for (const [x, z] of [[0, 0], [12, -4], [-300, 900], [1e6, -1e6]]) {
   checkIs(`level(${x}, ${z}) is the lake's one float`, waterLevelAt(LAKE, x, z),
     3.25);
 }
-console.log('\n[4c] the flow vector the ripple scrolls along');
-checkEq('the two-knot axis runs (80,−30) -> (20,−30), i.e. toward −x',
-  waterFlowAt(RIVER, 50, -30), [-1, 0]);
-checkEq('…and it says so at every point of the river, near or past its ends',
-  [waterFlowAt(RIVER, 20, -40), waterFlowAt(RIVER, 999, 999)],
-  [[-1, 0], [-1, 0]]);
-checkEq('a lake has ONE knot, no segment, and (0, 0) is what the shader reads '
-  + 'as "still"', waterFlowAt(LAKE, 0, 0), [0, 0]);
-checkEq('no profile at all is still water too', waterFlowAt(null, 0, 0),
-  [0, 0]);
-checkEq('a segment of zero length cannot name a direction',
-  waterFlowAt({ ...LAKE, axis: [[12, -4, 0, 3.25], [12, -4, 0, 3.25]] }, 0, 0),
-  [0, 0]);
-checkEq('the tangent is a UNIT vector, whatever the knots are apart',
-  waterFlowAt({ ...RIVER, axis: [[0, 0, 0, 1], [0, 400, 400, 1]] }, 5, 5),
-  [0, 1]);
-// The bearing is not consulted any more — the knots carry the direction, and
-// the server has already turned them round for `flow_along: "reverse"`.
-checkEq('RED: a wrong nine-number bearing cannot mislead the ripple',
-  waterFlowAt({ ...RIVER, flow_dir_deg: 90, dir_x: 1, dir_z: 0 }, 50, -30),
-  [-1, 0]);
-checkEq('RED: the ONE-vector-per-area reader is gone from the module',
-  typeof W.waterFlowVector, 'undefined');
-
+// A degenerate span must not divide by zero even with a bearing set — the
+// server ships s_min == s_max == 0 for still water and the guard is the same.
+checkIs('an empty span with a bearing set still answers level_up, never NaN',
+  waterLevelAt({ ...RIVER, s_min: 0, s_max: 0 }, 999, 999), 7.4);
 // ── [4d] the hairpin: a river follows its own line ─────────────────────────
 console.log('\n[4d] the HAIRPIN — the axis is a polyline (W4a)');
 const U = waterProfileOf(HAIRPIN_META);
 const uLevel = (x, z) => waterLevelAt(U, x, z);
-checkIs('AT the middle knot the mirror is that knot\'s level', uLevel(249, 280),
+checkIs('AT the middle knot the level is that knot\'s own', uLevel(249, 280),
   8.0);
 check('halfway along the first leg, the mean of its two knots',
   uLevel(199.5, 290), 9.0, 1e-12);
@@ -1092,57 +871,17 @@ check('…i.e. the bend projects onto it at u = 1.392, past its own end',
   (99 * 51 + -20 * -40) / 4201, 1.3923, 1e-4);
 check('…and the hairpin reading is 2.0 m higher there',
   uLevel(249, 280) - waterLevelAt(STRAIGHT, 249, 280), 2.0, 1e-12);
-console.log('\n[4d-flow] the ripple turns with the river');
-const LEG1 = [99 / 101, -20 / 101];
-const LEG2 = [-12 / 13, -5 / 13];
-checkVec('halfway along leg 1 the flow is that leg\'s tangent',
-  waterFlowAt(U, 199.5, 290), LEG1);
-checkVec('…and halfway along leg 2, the other one',
-  waterFlowAt(U, 225, 270), LEG2);
-// cos = (99·(−48) + (−20)·(−20)) / (101·52) = −4352/5252 = −0.828636…
-// -> 145.959°, i.e. the line really does double back on itself.
-check('the two legs point 145.959° apart — it is a HAIRPIN',
-  (Math.acos(LEG1[0] * LEG2[0] + LEG1[1] * LEG2[1]) * 180) / Math.PI, 145.959,
-  1e-3);
-// AT THE KNOT the two legs meet, and since W5c-flow the tangent is their eased
-// mix at b = 0.5, i.e. exactly the normalised bisector — the direction the strip
-// cut runs along (`crossNormalAt`), and the only one that treats both legs
-// alike. |LEG1 + LEG2| = 2·cos(145.959°/2) = 0.585429, so
-//   (0.0571211, −0.5826352) / 0.5854285 = (0.0975714, −0.9952285).
-const HAIRPIN_BISECTOR = [0.09757142403137047, -0.9952285251199801];
-checkVec('at the middle knot the two legs meet in their bisector',
-  waterFlowAt(U, 249, 280), HAIRPIN_BISECTOR, 1e-15);
-check('…which is 2·cos(θ/2) long before the re-normalisation',
-  Math.hypot(LEG1[0] + LEG2[0], LEG1[1] + LEG2[1]),
-  2 * Math.cos(Math.acos(LEG1[0] * LEG2[0] + LEG1[1] * LEG2[1]) / 2), 1e-15);
-check('…and bisects: it leans on neither leg', (() => {
-  const t = waterFlowAt(U, 249, 280);
-  return (t[0] * LEG1[0] + t[1] * LEG1[1]) - (t[0] * LEG2[0] + t[1] * LEG2[1]);
-})(), 0, 1e-15);
-check('RED: the old nearest-segment rule answered LEG1 at the knot, i.e. half '
-  + 'the bend away from the bisector — the step the strips showed', (() => {
-    const t = waterFlowAt(U, 249, 280);
-    return (Math.acos(t[0] * LEG1[0] + t[1] * LEG1[1]) * 180) / Math.PI;
-  })(), 145.959 / 2, 1e-3);
-checkVec('upstream of the first knot it is leg 1 as well',
-  waterFlowAt(U, 150, 400), LEG1);
-checkVec('…and downstream of the last, leg 2', waterFlowAt(U, 201, 160), LEG2);
-check('every tangent is a unit vector',
-  Math.max(...[[199.5, 290], [225, 270], [249, 280], [150, 400]]
-    .map(([x, z]) => Math.abs(Math.hypot(...waterFlowAt(U, x, z)) - 1))),
-  0, 1e-12);
-
 // ── [4e] the cliff: the axis has knots where the GROUND bends (W5b) ────────
-console.log('\n[4e] the CLIFF — the mirror follows the step, not the chord');
+console.log('\n[4e] the CLIFF — the level follows the step, not the chord');
 const CLIFF = waterProfileOf(CLIFF_META);
 const cLevel = (x, z = 0) => waterLevelAt(CLIFF, x, z);
-checkIs('upstream, 10 m before the lip, the mirror is the plateau\'s 3.0',
+checkIs('upstream, 10 m before the lip, the water is the plateau\'s 3.0',
   cLevel(31), 3.0);
 checkIs('…and 20 m before it as well — no ramp starts early', cLevel(21), 3.0);
 checkIs('at the last knot before the lip it is still 3.0', cLevel(40), 3.0);
 check('at the lip itself, halfway between the two knots', cLevel(41), 1.5,
   1e-12);
-checkIs('two metres past it the mirror is the low ground\'s 0.0', cLevel(42),
+checkIs('two metres past it the water is the low ground\'s 0.0', cLevel(42),
   0.0);
 checkIs('…and 10 m past the lip, still 0.0', cLevel(51), 0.0);
 checkIs('…and at the mouth', cLevel(100), 0.0);
@@ -1160,548 +899,12 @@ check('…i.e. 1.47 m of water standing on ground that is at 0 — the mound',
   waterLevelAt(RAMP, 51, 0) - 0, 1.47, 1e-12);
 // The shore reads the DEPTH under the pixel, so the same two probes decide how
 // opaque the surface is (docstring [2], `waterOpaqueDepthM` = ¾ of the bed
-// depth). Upstream the bed is 1.0 m under a mirror at 3.0, i.e. the full depth.
+// depth). Upstream the bed is 1.0 m under a level of 3.0, i.e. the full depth.
 check('the opaque depth of this river is ¾ of its 1.0 m bed',
   waterOpaqueDepthM(CLIFF_META.water_depth_effective), 0.75, 1e-12);
 check('upstream the water is its full 1.0 m deep, i.e. fully opaque',
   waterShoreAlpha(3.0 - 2.0,
     waterOpaqueDepthM(CLIFF_META.water_depth_effective)), 1, 1e-12);
-console.log('\n[4e-flow] and the ripple still runs straight down the line');
-checkVec('the tangent is the one leg\'s, on both sides of the lip',
-  waterFlowAt(CLIFF, 31, 0), [1, 0]);
-checkVec('…and past it', waterFlowAt(CLIFF, 51, 0), [1, 0]);
-// THE REGRESSION OF W5c-flow: this axis has FOUR knots and two of them are
-// interior, so the blend windows are entered — half = min(40, 2)/2 = 1 m around
-// s = 40 and min(2, 58)/2 = 1 m around s = 42. Both mix a tangent with ITSELF
-// (the line is straight; the knots are where the LEVEL bends, not the line), and
-// `(1−b)·1 + b·1 = 1` for every b: the answer is (1, 0) to the bit, inside the
-// windows and outside them. A straight river's ripple may not move by one ulp
-// because its bed found a cliff.
-for (const x of [0, 10, 31, 39, 39.5, 40, 40.5, 41, 41.5, 42, 42.5, 51, 100]) {
-  const [fx, fz] = waterFlowAt(CLIFF, x, 0);
-  checkIs(`x = ${x}: exactly 1 downstream`, fx, 1);
-  checkIs(`x = ${x}: and exactly 0 across`, fz, 0);
-}
-// …and the two windows do not overlap, which is what "half the SHORTER leg"
-// buys: they meet at s = 41 and the comparison is strict, so no sample is ever
-// claimed by two knots.
-check('the two cliff windows touch at the midpoint of the 2 m step',
-  40 + Math.min(40 / 2, 2 / 2, 4), 42 - Math.min(2 / 2, 58 / 2, 4), 1e-15);
-
-// ── [4f] the flow field is CONTINUOUS along the axis (W5c-flow) ────────────
-// THE FINDING (2026-08-24): "the river is uneven — it flows in places, then
-// stands still or is striped, and it always changes at a knot". The tangent was
-// the NEAREST SEGMENT's, i.e. a step function of the place: every vertex of a
-// W5c strip carried the same constant pair, so each strip was one stripe of
-// ripple, and a mesh whose two vertex rows disagree by the whole bend angle
-// interpolates through the middle of nowhere — where that mix passes near zero
-// the shader's `wStill = wLen < 1e-4` branch draws the LAKE pattern instead of
-// the river's, which is the "standing" the finding names.
-//
-// THE FIXTURE, hand-derived: a right-angle bend, three knots, unit segments of
-// exactly ten metres each.
-//
-//     A (0, 0)  s = 0        B (10, 0)  s = 10        C (10, 10)  s = 20
-//     ├──────── leg 1 (1, 0) ─────────┤
-//                                     └──── leg 2 (0, 1) ─────────┘
-//
-// THE WINDOW RULE: half = min( s(B) − s(A), s(C) − s(B) ) / 2, capped at
-// WATER_FLOW_BLEND_MAX_M = 4 -> min(5, 5, 4) = 4 m, i.e. the blend runs over
-// s ∈ (6, 14) and nowhere else.
-console.log('\n[4f] the tangent turns THROUGH the knot, it does not step at it');
-const BEND_META = { water_depth_effective: 1.2,
-  water_profile: { level_up: 5.0, level_down: 3.0, flow_dir_deg: 90.0,
-    axis_x: 0.0, axis_z: 0.0, dir_x: 1.0, dir_z: 0.0,
-    s_min: 0.0, s_max: 20.0,
-    axis: [[0, 0, 0, 5.0], [10, 0, 10, 4.0], [10, 10, 20, 3.0]] } };
-const BEND = waterProfileOf(BEND_META);
-/** The point at arc length `s` ON the axis: the first leg runs along +x to
- *  (10, 0), the second along +z from there. */
-const bendAt = (s) => (s <= 10 ? [s, 0] : [10, s - 10]);
-/** The tangent at arc length `s`, at length `factor` (default 1). */
-const bendFlow = (s, factor = 1) => waterFlowAt(BEND, ...bendAt(s), factor);
-checkVec('at s = 6, the window\'s upstream rim, it is still leg 1',
-  bendFlow(6), [1, 0], 0);
-checkVec('…and everywhere upstream of that', bendFlow(2), [1, 0], 0);
-checkVec('at s = 10, the knot, it is EXACTLY the normalised bisector',
-  bendFlow(10), [Math.SQRT1_2, Math.SQRT1_2], 1e-15);
-check('…which is a unit vector after the re-normalisation',
-  Math.hypot(...bendFlow(10)), 1, 1e-15);
-check('…and 0.7071 long BEFORE it — cos(90°/2), the bound the 1e-3 floor is '
-  + 'measured against', Math.hypot(0.5, 0.5), Math.SQRT1_2, 0);
-checkVec('at s = 14, the downstream rim, it is leg 2', bendFlow(14), [0, 1], 0);
-checkVec('…and everywhere downstream of that', bendFlow(18), [0, 1], 0);
-// MONOTONE, AND NO OVERSHOOT: the angle walks from 0° to 90° and never leaves
-// that interval — an eased normalised lerp of two unit vectors turns the short
-// way and cannot swing past either end.
-const bendAngle = (s) => {
-  const [fx, fz] = bendFlow(s);
-  return (Math.atan2(fz, fx) * 180) / Math.PI;
-};
-let bendMono = 1;
-let bendStep = 0;
-let bendMin = 1e9;
-let bendMax = -1e9;
-let bendPrev = bendAngle(0);
-for (let s = 0.01; s <= 20 + 1e-9; s += 0.01) {
-  const a = bendAngle(s);
-  if (a < bendPrev - 1e-12) bendMono = 0;
-  bendStep = Math.max(bendStep, Math.abs(a - bendPrev));
-  bendMin = Math.min(bendMin, a);
-  bendMax = Math.max(bendMax, a);
-  bendPrev = a;
-}
-check('the angle never turns back on itself, over the whole axis', bendMono, 1);
-check('…it starts at 0°', bendAngle(0), 0, 0);
-check('…ends at 90°', bendAngle(20), 90, 1e-13);
-check('…never dips below 0°', bendMin, 0, 1e-13);
-check('…and never overshoots 90°', bendMax, 90, 1e-13);
-check('the biggest step between two samples 1 cm apart is a fifth of a degree',
-  bendStep, 0.225, 5e-3);
-check('RED: the nearest-segment rule stepped 90° between two such samples — '
-  + 'one cross-line, the whole bend',
-  (Math.atan2(1, 0) - Math.atan2(0, 1)) * 180 / Math.PI, 90, 1e-13);
-// THE LENGTH IS THE FLOW FACTOR, everywhere — the bend may not slow the river
-// down. `waterFlowAt` re-normalises the mix and THEN scales, so a vertex in the
-// middle of the turn carries the same metres per second as one on the straight.
-const BEND_FACTOR = 1.4;
-let bendLenErr = 0;
-for (let s = 0; s <= 20 + 1e-9; s += 0.1) {
-  bendLenErr = Math.max(bendLenErr,
-    Math.abs(Math.hypot(...bendFlow(s, BEND_FACTOR)) - BEND_FACTOR));
-}
-check(`every emitted vector is ${BEND_FACTOR} long, on the straight and in the `
-  + 'bend', bendLenErr, 0, 1e-15);
-check('RED: scaling the mix WITHOUT re-normalising would have lost 29 % of the '
-  + 'speed at the knot', Math.hypot(0.5, 0.5) * BEND_FACTOR / BEND_FACTOR,
-  Math.SQRT1_2, 0);
-// THE SEAM: W5c cuts the outline at the knot's cross-line, so the two strips
-// have their own copies of the vertices ON that line. The flow is a function of
-// the PLACE and of nothing else — no strip index, no segment carried over — so
-// the two copies get the same bits and the cut is invisible in the attribute.
-const BEND_RING = [[-2, -3], [13, -3], [13, 13], [-2, 13]];
-const bendStrips = subdivideRibbonByAxis(BEND_RING, BEND.axis);
-checkEq('the bend ring is cut in two at the knot', bendStrips.length, 2);
-const shared = [];
-for (const a of bendStrips[0]) {
-  for (const b of bendStrips[1]) {
-    if (Object.is(a[0], b[0]) && Object.is(a[1], b[1])) shared.push([a, b]);
-  }
-}
-check('…and the two strips share the two ends of the cut line', shared.length,
-  2);
-for (const [a, b] of shared) {
-  const up = waterFlowAt(BEND, a[0], a[1], BEND_FACTOR);
-  const down = waterFlowAt(BEND, b[0], b[1], BEND_FACTOR);
-  checkIs(`the cut vertex (${a[0].toFixed(3)}, ${a[1].toFixed(3)}) reads the `
-    + 'same x from the upstream strip and from the downstream one', up[0],
-  down[0]);
-  checkIs('…and the same z', up[1], down[1]);
-  check('…at the full flow length', Math.hypot(up[0], up[1]), BEND_FACTOR,
-    1e-15);
-}
-// The cut runs along `x + z = 10`, so its OUTER end is the ring corner
-// (13, −3) — 4.24 m from the knot and equidistant from both legs, i.e. in the
-// wedge no segment owns. That vertex reads the bisector, scaled: the strip the
-// shader interpolates from starts at the corner of the turn, not on one leg.
-checkVec('the outer end of the cut carries the bisector, at flow length',
-  waterFlowAt(BEND, 13, -3, BEND_FACTOR),
-  [Math.SQRT1_2 * BEND_FACTOR, Math.SQRT1_2 * BEND_FACTOR], 1e-15);
-
-// ── [5] the sloped mesh ────────────────────────────────────────────────────
-console.log('\n[5] the mirror mesh is a RULED surface — one y per vertex');
-/** The earcut as three.js hands it over: (x, y, z) triplets with a meaningless
- *  y (whatever `rotateX(-π/2)` left of a zero — never exactly 0, which is why
- *  the lift WRITES it instead of adding to it). */
-const CORNERS = [20, 6.1e-15, -40, 80, 6.1e-15, -40, 80, 6.1e-15, -20,
-  20, 6.1e-15, -20];
-const riverMesh = Float64Array.from(CORNERS);
-liftToWaterProfile(riverMesh, RIVER);
-checkEq('the four corners span 2.6 … 7.4',
-  [riverMesh[1], riverMesh[4], riverMesh[7], riverMesh[10]],
-  [2.6, 7.4, 7.4, 2.6]);
-check('…i.e. 4.8 m of fall over the river\'s 60 m', riverMesh[4] - riverMesh[1],
-  4.8, 1e-12);
-check('the x of every vertex is untouched',
-  riverMesh[0] + riverMesh[3] + riverMesh[6] + riverMesh[9], 200);
-check('…and the z too',
-  riverMesh[2] + riverMesh[5] + riverMesh[8] + riverMesh[11], -120);
-// LINEARITY: no subdivision is needed because the ruled surface IS the
-// function between the outline's vertices.
-check('half way along the edge, the ruling agrees with the profile',
-  (riverMesh[1] + riverMesh[4]) / 2, level(50), 1e-12);
-check('…and a quarter of the way too',
-  riverMesh[1] + (riverMesh[4] - riverMesh[1]) * 0.25, level(35), 1e-12);
-check('…and seven eighths of the way',
-  riverMesh[1] + (riverMesh[4] - riverMesh[1]) * 0.875, level(72.5), 1e-12);
-
-console.log('\n[5b] a lake comes out FLAT, and bit-identically so');
-const lakeMesh = Float64Array.from([0, 6.1e-15, 0, 40, 6.1e-15, 0,
-  40, 6.1e-15, 40, 0, 6.1e-15, 40]);
-liftToWaterProfile(lakeMesh, LAKE);
-for (let i = 1; i < lakeMesh.length; i += 3) {
-  checkIs(`vertex ${(i - 1) / 3} sits on the lake's one float`, lakeMesh[i],
-    3.25);
-}
-checkIs('the OLD arrangement gave the same world y: level + 0 …', 3.25 + 0, 3.25);
-checkIs('…and 0 + level are one number', 0 + 3.25, 3.25);
-// A degenerate span must not divide by zero even with a bearing set — the
-// server ships s_min == s_max == 0 for still water and the guard is the same.
-checkIs('an empty span with a bearing set still answers level_up, never NaN',
-  waterLevelAt({ ...RIVER, s_min: 0, s_max: 0 }, 999, 999), 7.4);
-check('an odd tail of numbers is left alone rather than half-written',
-  (() => { const a = [1, 9, 2, 5]; liftToWaterProfile(a, LAKE); return a[3]; })(),
-  5);
-
-// ── [5c] the mesh follows the knots: the cliff, cut into strips (W5c) ──────
-console.log('\n[5c] the mirror MESH is cut at the axis knots (W5c)');
-/** The [4e] stroke as its ribbon: 6 m wide, 100 m long, four corners. */
-const RIBBON = [[0, -3], [100, -3], [100, 3], [0, 3]];
-/** Shoelace, unsigned — the ring's own area in m². */
-const ringArea = (r) => Math.abs(r.reduce((sum, [x0, z0], i) => {
-  const [x1, z1] = r[(i + 1) % r.length];
-  return sum + x0 * z1 - x1 * z0;
-}, 0)) / 2;
-/** A ring as a FAN from its first corner — see the docstring for why that
- *  stands in for the real earcut here and where it stops standing in. */
-const fan = (r) => {
-  const out = [];
-  for (let i = 1; i + 1 < r.length; i += 1) out.push([r[0], r[i], r[i + 1]]);
-  return out;
-};
-const triArea = ([a, b, c]) => Math.abs((b[0] - a[0]) * (c[1] - a[1])
-  - (c[0] - a[0]) * (b[1] - a[1])) / 2;
-/** The height the DRAWN surface carries at (x, z): the containing triangle's
- *  three corners lifted by `waterLevelAt`, read barycentrically — i.e. exactly
- *  what the rasteriser interpolates across `liftToWaterProfile`'s output. */
-function drawnAt(strips, profile, x, z) {
-  for (const strip of strips) {
-    for (const [a, b, c] of fan(strip)) {
-      const d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
-      if (Math.abs(d) < 1e-12) continue;
-      const l1 = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (z - c[1])) / d;
-      const l2 = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (z - c[1])) / d;
-      const l3 = 1 - l1 - l2;
-      if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
-      return l1 * waterLevelAt(profile, a[0], a[1])
-        + l2 * waterLevelAt(profile, b[0], b[1])
-        + l3 * waterLevelAt(profile, c[0], c[1]);
-    }
-  }
-  return null;
-}
-/** A ring against hand-written corners, to the ninth decimal: a clip's
- *  crossing point is `a + (b − a)·t` and `40 + 60·(2/60)` is not required to
- *  be the integer 42 in binary. */
-const checkRing = (label, actual, expected) => checkEq(label,
-  actual.map((p) => p.map((v) => Number(v.toFixed(9)))), expected);
-
-const cliffStrips = subdivideRibbonByAxis(RIBBON, CLIFF.axis);
-check('the four knots cut the ribbon into three strips', cliffStrips.length, 3);
-checkRing('the first strip is the plateau, up to the last knot before the lip',
-  cliffStrips[0], [[0, -3], [40, -3], [40, 3], [0, 3]]);
-checkRing('the second is the two metres of the step itself', cliffStrips[1],
-  [[40, -3], [42, -3], [42, 3], [40, 3]]);
-checkRing('the third is the low ground, from the foot to the mouth',
-  cliffStrips[2], [[42, -3], [100, -3], [100, 3], [42, 3]]);
-check('…240 m² of plateau', ringArea(cliffStrips[0]), 240, 1e-6);
-check('…12 m² of step', ringArea(cliffStrips[1]), 12, 1e-6);
-check('…348 m² below it', ringArea(cliffStrips[2]), 348, 1e-6);
-check('and the three tile the ribbon exactly: 6 · 100 = 600 m²',
-  cliffStrips.reduce((s, r) => s + ringArea(r), 0), 600, 1e-6);
-const cliffTris = cliffStrips.flatMap(fan);
-check('two triangles become six', cliffTris.length, 6);
-check('…whose areas sum to the ribbon as well',
-  cliffTris.reduce((s, t) => s + triArea(t), 0), 600, 1e-6);
-check('four vertices become twelve',
-  cliffStrips.reduce((s, r) => s + r.length, 0), 12);
-// THE DRAWN SURFACE, probe by probe, against the reader every other water
-// mechanic already uses. The row at x = 40 and the row at x = 42 are what make
-// these agree — before W5c the mesh was the single quad below.
-const OLD_MESH = [RIBBON];
-for (const [x, drawn, before] of [[31, 3.0, 2.07], [39, 3.0, 1.83],
-  [41, 1.5, 1.77], [43, 0.0, 1.71], [51, 0.0, 1.47]]) {
-  check(`at x = ${x} the mesh draws ${drawn}, the profile's own number`,
-    drawnAt(cliffStrips, CLIFF, x, 0), drawn, 1e-9);
-  check(`…and it IS waterLevelAt there`, drawnAt(cliffStrips, CLIFF, x, 0),
-    waterLevelAt(CLIFF, x, 0), 1e-12);
-  check(`RED: the undivided quad drew ${before} at x = ${x}`,
-    drawnAt(OLD_MESH, CLIFF, x, 0), before, 1e-9);
-}
-check('off the centre line too — the strips are cut across the full width',
-  drawnAt(cliffStrips, CLIFF, 39, 2.5), 3.0, 1e-9);
-check('…and at the far bank', drawnAt(cliffStrips, CLIFF, 43, -2.5), 0.0, 1e-9);
-// The whole length, not only the five probes: the surface IS the profile now,
-// and the worst place of the old one was the foot of the step.
-let worstNew = 0;
-let worstOld = 0;
-for (let x = 0; x <= 100; x += 0.25) {
-  const exact = waterLevelAt(CLIFF, x, 0);
-  worstNew = Math.max(worstNew,
-    Math.abs(drawnAt(cliffStrips, CLIFF, x, 0) - exact));
-  worstOld = Math.max(worstOld, Math.abs(drawnAt(OLD_MESH, CLIFF, x, 0) - exact));
-}
-check('the cut mesh is the profile over the whole 100 m', worstNew, 0, 1e-12);
-check('RED: the undivided one stood 1.74 m out at the foot of the step',
-  worstOld, 1.74, 1e-9);
-// A BENT AXIS: two cross-lines that cross INSIDE the mask, which is where a
-// naive "clip against both half-planes" loses a wedge and draws another twice.
-const BENT = waterProfileOf({ water_profile: { ...LAKE_META.water_profile,
-  axis: [[-20, 0, 0, 9], [20, 0, 40, 6], [20, 20, 60, 3], [-20, 20, 100, 0]] } });
-const SQUARE = [[-30, -10], [40, -10], [40, 40], [-30, 40]];
-const bentStrips = subdivideRibbonByAxis(SQUARE, BENT.axis);
-check('two crossing cross-lines cut the mask into FOUR pieces',
-  bentStrips.length, 4);
-checkEq('…and every one of them is the hand-derived area',
-  bentStrips.map((r) => Number(ringArea(r).toFixed(6))),
-  [400, 1350, 850, 900]);
-check('…and they still tile it: 70 · 50 = 3500 m²',
-  bentStrips.reduce((s, r) => s + ringArea(r), 0), ringArea(SQUARE), 1e-6);
-check('…which is the square the clips started from', ringArea(SQUARE), 3500,
-  1e-9);
-// ONE AND TWO KNOTS: the array itself comes back, so the caller keeps the
-// geometry `buildAreaGeometry` already built — the same buffers, not equal ones.
-checkIs('a lake is handed back the very ring it gave',
-  subdivideRibbonByAxis(RIBBON, LAKE.axis)[0], RIBBON);
-check('…as ONE strip, which the builder reads as "nothing to cut"',
-  subdivideRibbonByAxis(RIBBON, LAKE.axis).length, 1);
-checkIs('…and so is a two-knot polygon river',
-  subdivideRibbonByAxis(RIBBON, RIVER.axis)[0], RIBBON);
-check('…also one strip', subdivideRibbonByAxis(RIBBON, RIVER.axis).length, 1);
-checkIs('a ring with no axis at all is untouched as well',
-  subdivideRibbonByAxis(RIBBON, undefined)[0], RIBBON);
-// CROSS-LINES THAT MISS: an axis running on past its own mask.
-const BEFORE_AXIS = [[-20, 0, 0, 3], [-10, 0, 10, 3], [-5, 0, 15, 0],
-  [0, 0, 20, 0]];
-const AFTER_AXIS = [[0, 0, 0, 3], [150, 0, 150, 3], [160, 0, 160, 0],
-  [200, 0, 200, 0]];
-const missedBefore = subdivideRibbonByAxis(RIBBON, BEFORE_AXIS);
-const missedAfter = subdivideRibbonByAxis(RIBBON, AFTER_AXIS);
-check('knots entirely upstream of the mask leave one piece',
-  missedBefore.length, 1);
-check('…of the mask\'s own area, undivided', ringArea(missedBefore[0]), 600,
-  1e-6);
-check('knots entirely downstream leave one piece as well',
-  missedAfter.length, 1);
-check('…and it is the whole ribbon too', ringArea(missedAfter[0]), 600, 1e-6);
-check('a ring too small to enclose anything is handed straight back',
-  subdivideRibbonByAxis([[0, 0], [1, 0]], CLIFF.axis).length, 1);
-// …and the BUILDER is what carries this into the mesh — the claims the fan
-// above cannot make, read off the source.
-check('the builder cuts the outline before it lifts anything',
-  /const strips = subdivideRibbonByAxis\(ring, profile\.axis\);/.test(planeSrc)
-    ? 1 : 0, 1);
-check('…and a single strip touches no buffer at all',
-  /strips\.length > 1 \? earcutStrips\(strips\) : null/.test(planeSrc) ? 1 : 0, 1);
-check('…the pieces go through the SAME earcut every painted area goes through',
-  /buildAreaGeometry\(THREE, s\)/.test(planeSrc) ? 1 : 0, 1);
-check('…and the outline\'s own earcut is freed, never leaked',
-  /geometry\.dispose\(\);/.test(planeSrc) ? 1 : 0, 1);
-
-// ── [5d] the bend: the arrangement against the running remainder ───────────
-console.log('\n[5d] a river with a BEND — the strips must not reach past it');
-/**
- * THE FIXTURE, and it is the shape the finding of 2026-08-24 was reported on:
- * a river drawn (0,0) → (60,0) → (60,60), 8 m wide, mitred at the corner —
- *
- *     ring = (0,−4) (64,−4) (64,60) (56,60) (56,4) (0,4)
- *            60·8 + 4·8 (the outer mitre) + 8·56 (the northern arm) = 960 m²
- *
- * — with the axis W5b ships for it: a knot every 2 m of arc, 61 of them, and a
- * level that BENDS at every one of them (`10 − 0.01·s − 0.3·sin(s/15)`, then
- * the bake's running minimum). The bend is not decoration: W5b's own
- * Douglas–Peucker throws away every knot that lies on a straight (s, level)
- * line, so an axis that reaches this code AT ALL is one whose level bends.
- *
- * THE METRIC IS TRIANGULATION-INDEPENDENT, which the fan of [5c] is not. A
- * piece is drawn correctly by EVERY earcut of it exactly when its lifted
- * corners are COPLANAR and that plane is `waterLevelAt` — then any
- * triangulation interpolates the same plane. So: fit the plane through three of
- * a piece's lifted corners, and measure it against `waterLevelAt` at every
- * other corner and at every 0.25 m probe inside the piece.
- *
- * WHAT THE TWO RULES MEASURE (15 360 interior probes):
- *
- *     running remainder   worst corner off its plane 0.1168 m
- *                         worst surface error 0.3229 m at (56, 20)
- *     arrangement         worst corner off its plane 0.0322 m
- *                         worst surface error 0.0322 m at (54, 2)
- *
- * and the 0.0322 m that remains is not the mesh's: (54,2) is the INSIDE of the
- * bend, where `waterLevelAt` itself steps — a point a hair to one side of the
- * angle bisector projects onto the eastward leg, a hair to the other onto the
- * northward one, and the two legs' arc coordinates differ by twice the ribbon's
- * half-width. No surface can follow a step; the cut lands ON it, which is the
- * best a mesh can do, and it is the same step the bake carved the bed with.
- *
- * THE RED PIECE, by name. The remainder rule's strip for the knot at s = 58 —
- * the piece between the cross-lines x = 56 and x = 58 — is
- *
- *     (56,−4) (58,−4) (58,60) (56,60) (56,4)     2·8 + 2·56 = 128 m²
- *
- * — a 2 m slice of the eastward arm that reaches z = 60, i.e. 56 metres up the
- * NORTHWARD arm, because the cross-line x = 58 is infinite and the mask bends
- * back through it. Its ruled surface carries the level of the eastward arm into
- * ground the northward arm's own knots describe, which is the 0.3229 m above.
- * The arrangement cuts that same slice with every northward cross-line it
- * crosses, so no piece of it is longer than the 2 m between two knots.
- */
-const CORNER_RING = [[0, -4], [64, -4], [64, 60], [56, 60], [56, 4], [0, 4]];
-const CORNER_AXIS = (() => {
-  const out = [];
-  let s = 0;
-  const level = (arc) => 10 - 0.01 * arc - 0.3 * Math.sin(arc / 15);
-  for (let x = 0; x <= 60; x += 2) { out.push([x, 0, s, level(s)]); s += 2; }
-  for (let z = 2; z <= 60; z += 2) { s += 2; out.push([60, z, s, level(s)]); }
-  // the bake's running minimum: water never runs uphill
-  for (let i = 1; i < out.length; i += 1) {
-    if (out[i][3] > out[i - 1][3]) out[i][3] = out[i - 1][3];
-  }
-  return out;
-})();
-const CORNER = { ...LAKE_META.water_profile, axis: CORNER_AXIS };
-/** Is (x, z) inside this ring? The ray cast, spelled out for the probe loop. */
-const ringHolds = (ring, x, z) => {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
-    const [xi, zi] = ring[i];
-    const [xj, zj] = ring[j];
-    if ((zi > z) !== (zj > z)
-        && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
-  }
-  return inside;
-};
-/** The plane through the first three non-collinear LIFTED corners of a piece,
- *  as `(x, z) => y`, or null where the piece names no plane. */
-function pieceP1ane(piece, profile) {
-  const lift = (p) => [p[0], p[1], waterLevelAt(profile, p[0], p[1])];
-  const a = lift(piece[0]);
-  for (let i = 1; i < piece.length; i += 1) {
-    for (let j = i + 1; j < piece.length; j += 1) {
-      const b = lift(piece[i]);
-      const c = lift(piece[j]);
-      const ux = b[0] - a[0]; const uz = b[1] - a[1]; const uy = b[2] - a[2];
-      const vx = c[0] - a[0]; const vz = c[1] - a[1]; const vy = c[2] - a[2];
-      const det = ux * vz - uz * vx;
-      if (Math.abs(det) < 1e-9) continue;
-      const A = (uy * vz - vy * uz) / det;
-      const B = (ux * vy - vx * uy) / det;
-      return (x, z) => a[2] + A * (x - a[0]) + B * (z - a[1]);
-    }
-  }
-  return null;
-}
-/** `[worst corner off its own piece's plane, worst surface error]`, metres. */
-function planeError(pieces, profile) {
-  let corner = 0;
-  let surface = 0;
-  for (const piece of pieces) {
-    const plane = pieceP1ane(piece, profile);
-    if (!plane) continue;
-    for (const [x, z] of piece) {
-      corner = Math.max(corner,
-        Math.abs(plane(x, z) - waterLevelAt(profile, x, z)));
-    }
-    for (let x = -1; x <= 65; x += 0.25) {
-      for (let z = -5; z <= 61; z += 0.25) {
-        if (!ringHolds(piece, x, z)) continue;
-        surface = Math.max(surface,
-          Math.abs(plane(x, z) - waterLevelAt(profile, x, z)));
-      }
-    }
-  }
-  return [corner, surface];
-}
-/** RED: the running remainder of the first W5c cut, reimplemented here so the
- *  numbers it produced are measured and not remembered. Same cross-line normal
- *  and same Sutherland–Hodgman rule; only the bookkeeping differs. */
-function remainderStrips(ring, axis) {
-  const strips = [];
-  let rest = ring;
-  for (let i = 1; i < axis.length - 1; i += 1) {
-    const [px, pz] = axis[i - 1];
-    const [cx, cz] = axis[i];
-    const [qx, qz] = axis[i + 1];
-    const inLen = Math.hypot(cx - px, cz - pz);
-    const outLen = Math.hypot(qx - cx, qz - cz);
-    let nx = 0;
-    let nz = 0;
-    if (inLen > 1e-9) { nx += (cx - px) / inLen; nz += (cz - pz) / inLen; }
-    if (outLen > 1e-9) { nx += (qx - cx) / outLen; nz += (qz - cz) / outLen; }
-    const len = Math.hypot(nx, nz);
-    if (!(len > 1e-9)) continue;
-    const n = [nx / len, nz / len];
-    const half = (sign) => {
-      const out = [];
-      const at = (p) => {
-        const f = ((p[0] - cx) * n[0] + (p[1] - cz) * n[1]) * sign;
-        return Math.abs(f) < 1e-9 ? 0 : f;
-      };
-      for (let k = 0; k < rest.length; k += 1) {
-        const a = rest[k];
-        const b = rest[(k + 1) % rest.length];
-        const fa = at(a);
-        const fb = at(b);
-        if (fa >= 0) out.push([a[0], a[1]]);
-        if ((fa > 0 && fb < 0) || (fa < 0 && fb > 0)) {
-          const t = fa / (fa - fb);
-          out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
-        }
-      }
-      return out;
-    };
-    const upstream = half(-1);
-    const downstream = half(1);
-    if (ringArea(upstream) >= 1e-9) strips.push(upstream);
-    if (ringArea(downstream) < 1e-9) { rest = []; break; }
-    rest = downstream;
-  }
-  if (ringArea(rest) >= 1e-9) strips.push(rest);
-  return strips.length ? strips : [ring];
-}
-const bendNew = subdivideRibbonByAxis(CORNER_RING, CORNER_AXIS);
-const bendOld = remainderStrips(CORNER_RING, CORNER_AXIS);
-check('the ribbon is 960 m² — 60·8 + 4·8 + 8·56', ringArea(CORNER_RING), 960,
-  1e-9);
-check('the bake ships 61 knots for it', CORNER_AXIS.length, 61);
-check('the arrangement makes 118 pieces of it', bendNew.length, 118);
-check('…which tile the mask exactly',
-  bendNew.reduce((s, r) => s + ringArea(r), 0), 960, 1e-9);
-check('RED: the running remainder made 60', bendOld.length, 60);
-check('…and those tile it too — the defect was never a missing piece',
-  bendOld.reduce((s, r) => s + ringArea(r), 0), 960, 1e-9);
-checkEq('RED: its strip for the knot at s = 58 reaches 56 m up the other arm',
-  bendOld.find((r) => Math.abs(ringArea(r) - 128) < 1e-9)
-    ?.map((p) => p.map((v) => Number(v.toFixed(9)))),
-  [[56, -4], [58, -4], [58, 60], [56, 60], [56, 4]]);
-check('…and no piece of the arrangement is anywhere near that big',
-  Math.max(...bendNew.map(ringArea)) <= 18 ? 1 : 0, 1);
-const [newCorner, newSurface] = planeError(bendNew, CORNER);
-const [oldCorner, oldSurface] = planeError(bendOld, CORNER);
-check('RED: the remainder rule drew the mirror 0.3229 m off at (56, 20)',
-  oldSurface, 0.3229, 5e-5);
-check('RED: …with corners 0.1168 m off their own piece\'s plane', oldCorner,
-  0.1168, 5e-5);
-check('the arrangement is down to 0.0322 m', newSurface, 0.0322, 5e-5);
-check('…and that is the inside of the bend, where waterLevelAt itself steps',
-  newCorner, newSurface, 1e-12);
-check('…i.e. a tenth of what the remainder rule drew',
-  oldSurface / newSurface > 10 ? 1 : 0, 1);
-// THE T-VERTEX ARITHMETIC, by hand and without either algorithm: it is why a
-// piece that keeps an edge whole while its neighbour splits it CANNOT close.
-// Edge A→B with A lifted 3.0 and B lifted 0.0, split at 40 % of its length:
-//   the whole edge draws 3.0 + (0.0 − 3.0)·0.4 = 1.8
-//   the split point carries its own waterLevelAt, 3.0 on the [5c] cliff
-//   the crack is 3.0 − 1.8 = 1.2 m
-check('a chord over a split edge reads 1.8 where the split point says 3.0',
-  3.0 + (0.0 - 3.0) * 0.4, 1.8, 1e-12);
-check('…a 1.2 m crack, from one vertex the neighbour does not have',
-  3.0 - (3.0 + (0.0 - 3.0) * 0.4), 1.2, 1e-12);
-const mathSrc = await readFile(
-  join(ROOT, 'client3d/src/scene/waterPlaneMath.ts'), 'utf8');
-check('the cap on the pieces is 1024', /WATER_STRIP_MAX = 1024/.test(mathSrc)
-  ? 1 : 0, 1);
-
 // ── [6] the wade/swim crossover ────────────────────────────────────────────
 console.log('\n[6] the figure floats on the LEVEL, not in the bed');
 const SINK = 0.6;
@@ -1739,7 +942,7 @@ for (const [x, bedY, lvl, root, ref] of [
 ]) {
   check(`x = ${x}: the bed`, bed(x), bedY, 1e-12);
   check(`x = ${x}: the local level`, level(x), lvl, 1e-12);
-  check(`x = ${x}: the root rides the local mirror`,
+  check(`x = ${x}: the root rides the local water line`,
     floatRootY(bed(x), level(x), SINK), root, 1e-12);
   check(`x = ${x}: the body hangs 0.6 m under it`,
     floatRootY(bed(x), level(x), SINK) - SINK, ref, 1e-12);
@@ -1764,7 +967,7 @@ check('…while the local reading has none: the depth never changes',
   (level(55) - bed(55)) - (level(20) - bed(20)), 0, 1e-12);
 
 console.log('\n[6d] out of the water nothing changed');
-check('no mirror: the root is the ground, as it always was',
+check('no water: the root is the ground, as it always was',
   floatRootY(7.25, null, SINK), 7.25);
 check('…and the body still sinks into a bog by its own depth',
   floatRootY(7.25, null, 0.2) - 0.2, 7.05);
@@ -1772,7 +975,7 @@ check('a NaN level is no level', floatRootY(7.25, NaN, SINK), 7.25);
 check('a junk sink is no sink', floatRootY(7.25, LEVEL, NaN), Math.max(7.25, LEVEL));
 check('a negative sink is no sink either', floatRootY(2.0, LEVEL, -1), LEVEL);
 
-console.log('\n[6e] how far the mirror\'s word reaches (the twin of groundSink)');
+console.log('\n[6e] how far the water\'s word reaches (the twin of groundSink)');
 checkEq('wilderness: the lake counts', groundWaterLevel(LEVEL, 'wilderness'), LEVEL);
 checkEq('an OPEN place: it counts there too — the terrace of a house',
   groundWaterLevel(LEVEL, 'open'), LEVEL);
@@ -1782,9 +985,11 @@ checkEq('no lake, no level', groundWaterLevel(null, 'open'), null);
 
 // ── [7] the shore on a slope ───────────────────────────────────────────────
 console.log('\n[7] the shore measures the LOCAL level, and needed no change');
-// `vWaterPlane.y` is the interpolated ruled surface, i.e. the profile itself.
-// The fixture river's own band: 1.0 m of bed -> fully drawn at 0.75 m, so its
-// constant 1.0 m of depth is OPAQUE — under the old lake band it was 20/27.
+// The depth is `level(x, z) − h(x, z)` at every point — the LOCAL level, from
+// the profile (gameplay) or from the raster the server baked out of it
+// (render). The fixture river's own band: 1.0 m of bed -> fully drawn at
+// 0.75 m, so its constant 1.0 m of depth is OPAQUE — under the old lake band it
+// was 20/27.
 const FIX_BAND = waterOpaqueDepthM(RIVER_META.water_depth_effective);
 check('the fixture river is 1.0 m deep, so it is drawn fully at 0.75 m',
   FIX_BAND, 0.75);
@@ -1799,18 +1004,18 @@ check('…the same number at every x, which is why the finding was not local',
     (x) => Math.abs(waterShoreAlpha(level(x) - bed(x), LAKE_BAND) - 20 / 27))),
   0, 1e-12);
 console.log('\n[7b] the RED counter-probe — the flat plane over the same river');
-check('a flat mirror at 5.0 has NEGATIVE depth upstream of x = 62.5',
+check('a flat plane at 5.0 has NEGATIVE depth upstream of x = 62.5',
   MID - bed(74), -0.92, 1e-12);
-check('…so the shader discards it: nothing is drawn there at all',
+check('…so no water is drawn there at all — the bed stands above the level',
   waterShoreAlpha(MID - bed(74), FIX_BAND), 0);
 check('the waterline of the flat plane lies at x =', (MID - 0) / 0.08, 62.5, 1e-12);
-check('…and downstream it is drawn fully opaque over a false 2.92 m of depth',
+check('…and downstream it would be fully opaque over a false 2.92 m of depth',
   waterShoreAlpha(MID - bed(26), FIX_BAND), 1);
 
 // ── [8] the RED counter-probes: the zone water is GONE ─────────────────────
 console.log('\n[8] the RED counter-probes — the second water source is deleted');
 const SOURCES = ['client3d/src/scene/waterPlaneMath.ts',
-  'client3d/src/scene/waterPlane.ts', 'client3d/src/scene/ground.ts',
+  'client3d/src/scene/ground.ts', 'client3d/src/scene/waterShade.ts',
   'client3d/src/scene/layerGround.ts', 'client3d/src/scene/sceneRecipe.ts',
   'packages/scene-render/src/layerCut.ts',
   'packages/scene-render/src/index.ts'];
@@ -1833,8 +1038,16 @@ function liveMentions(name) {
 for (const dead of ['zoneWaterAt', 'zoneWaterMirrors', 'zoneWaters',
   'ZoneMirror', 'TerrainLayerWater', 'index.waters',
   // …and the flat reading itself: the client stopped having a use for the mid
-  // level the moment its mirror learned to tilt.
-  'waterLevelOf', 'water_level_effective']) {
+  // level the moment its water learned to tilt.
+  'waterLevelOf', 'water_level_effective',
+  // …AND THE MIRROR MESH ITSELF (Wasser v2 K-A E5). The water surface is the
+  // terrain, so every piece of the second surface is gone: the builder, the
+  // shader chunk, the two attributes, the strip cut, the lift, and the
+  // per-vertex flow the server now bakes into the raster.
+  'buildWaterPlane', 'patchWaterShore', 'addMirror', 'earcutStrips',
+  'waterShoreGlsl', 'waterShoreBody', 'aWaterOpaque', 'vWaterOpaque',
+  'subdivideRibbonByAxis', 'liftToWaterProfile', 'waterFlowAt',
+  'WATER_STRIP_MAX', 'WATER_SHORE_BAND_M', 'WATER_FOAM_ALPHA', 'waterAlpha']) {
   checkEq(`\`${dead}\` is gone from the code`, liveMentions(dead), []);
 }
 // …and `SceneFloor` no longer declares the field at all: the payload stopped
@@ -1856,15 +1069,30 @@ check('RED: the compositor substitutes no bare-ground image for water any more',
   /layer\.water \? bare : layer/.test(lg) ? 1 : 0, 0);
 check('…and asks the BED kind where a row names one',
   /const kind = layer\.bed_kind \|\| layer\.kind;/.test(lg) ? 1 : 0, 1);
-// And the mirror builder: one condition, and it is the profile.
+// And what still asks the profile in the ground builder: the falls, and the
+// point query. One condition, and it is the profile.
 const gr = texts.get('client3d/src/scene/ground.ts');
-check('the mirror is built on the PROFILE alone',
+check('the water test is the PROFILE alone',
   /const profile = waterProfileOf\(area\.meta\);/.test(gr) ? 1 : 0, 1);
 check('…and typeAt reads the level AT THE POINT',
   /level = profile \? waterLevelAt\(profile, x, z\) : null;/.test(gr) ? 1 : 0, 1);
+check('…while the falls are the only meshes it still builds',
+  /nextFalls\.push\(\.\.\.buildWaterfall\(fall, nextOwned\)\);/.test(gr)
+    ? 1 : 0, 1);
 
 // ── [9] the ripple scrolls downstream ──────────────────────────────────────
 // See the docstring section [9] for the derivation of every vector below.
+//
+// WHOSE SHADER THIS IS. `@anima/scene-render materials.applyWaterShader` — the
+// rippled surface the room floors of `scene/sceneRecipe.ts` and the admin
+// previews are drawn with. The 3D MAP's own water is the terrain's fragment
+// since Wasser v2 K-A E4 and is checked in `smoke_water_shade.mjs` [5]; the two
+// carry the same arithmetic on purpose, which is why both are pinned by hand.
+//
+// THE FLOW VECTOR IS TYPED OUT HERE, not read from a helper: the mesh that used
+// to hand it over per vertex is gone with K-A E5, and the fixture river's axis
+// runs (80,−30) -> (20,−30), i.e. exactly toward −x (docstring [4]).
+const RIVER_FLOW = [-1, 0];
 console.log('\n[9] the ripple scroll direction follows the flow');
 /** The shader's frame arithmetic, written out INDEPENDENTLY (the GLSL is
  *  checked structurally below). `flow` is `vWaterFlow`; (0, 0) is still. */
@@ -1890,7 +1118,7 @@ const STILL = rippleDirs([0, 0]);
 checkEq('still water: layer A is the constant that stood here before',
   STILL[0], [1, 0.6]);
 checkEq('…and layer B is its counter-scrolling one', STILL[1], [-0.8, -1.3]);
-const DOWN = rippleDirs(waterFlowAt(RIVER, 50, -30));   // the axis: (−1, 0)
+const DOWN = rippleDirs(RIVER_FLOW);
 checkEq('the fixture river (270°, toward −x): layer A', DOWN[0], [-1, -0.15]);
 checkEq('…and layer B', DOWN[1], [-0.8, 0.3]);
 check('BOTH layers travel downstream — A along the flow',
@@ -1947,7 +1175,7 @@ function squash(frame, [x, z], k) {
   return [ax[0] * al + ay[0] * cr, ax[1] * al + ay[1] * cr];
 }
 const STILL_FRAME = waterFrame([0, 0]);
-const FLOW_FRAME = waterFrame(waterFlowAt(RIVER, 50, -30));
+const FLOW_FRAME = waterFrame(RIVER_FLOW);
 checkEq('still water squeezes by 1 in the world frame, i.e. not at all',
   squash(STILL_FRAME, [12, -4], 1), [12, -4]);
 // The ripple is 3× as long as it is wide: on wave_m 1.6 that is 1.6 m across
@@ -2061,20 +1289,21 @@ check('RED: the streak tap is unconditional (derivatives need it)',
 //   0.45 m/s over 0.15     -> length 3        -> 0.15 · 3    = 0.45 m/s
 //   0.03 m/s over 0.15     -> length 0.2      -> 0.15 · 0.2  = 0.03 m/s
 //   0 m/s over 0.15        -> length 1e-3     -> 0.15 · 1e-3 = 0.15 mm/s
-console.log('\n[9e] the flow attribute carries the AREA\'s speed as its length');
-const TANGENT = waterFlowAt(RIVER, 50, -30);
+console.log('\n[9e] the flow vector carries the AREA\'s speed as its length');
+const TANGENT = RIVER_FLOW;
 checkVec('the fixture river\'s tangent is the unit vector it always was',
   TANGENT, [-1, 0]);
-/** What `buildWaterPlane` writes into `aWaterFlow` for one vertex — the very
- *  call the builder makes, factor and all: since the blend of W5c-flow the
- *  scaling happens INSIDE `waterFlowAt`, after its re-normalisation. */
-const encode = (profile, [x, z], factor) => waterFlowAt(profile, x, z, factor);
+/** The encoding itself: a UNIT tangent scaled by the area's factor. It was the
+ *  mirror's `aWaterFlow` attribute until K-A E5 and is the server's baked flow
+ *  raster now (`heightfield.water_flow_factor`) — the same two floats, read by
+ *  the same expression `uFlowSpeed · length`. */
+const encode = ([x, z], factor) => [x * factor, z * factor];
 for (const [areaSpeed, factor] of [[undefined, 1], [0.45, 3], [0.03, 0.2],
   [0.15, 1]]) {
   const f = waterFlowFactor(areaSpeed, WATER_FLOW_SPEED_DEFAULT_M_S);
   check(`${areaSpeed ?? 'no'} m/s over the kind's 0.15 is a factor of`,
     f, factor, 1e-12);
-  const a = encode(RIVER, [50, -30], f);
+  const a = encode(TANGENT, f);
   check('…so the attribute comes out that long',
     Math.hypot(a[0], a[1]), factor, 1e-12);
   // AND POINTING WHERE IT DID: the shader divides by that same length, so the
@@ -2090,7 +1319,7 @@ for (const [areaSpeed, factor] of [[undefined, 1], [0.45, 3], [0.03, 0.2],
 // and a still surface drifts at uSpeed (0.25 m/s) — FASTER than the standstill
 // an author asking for 0 m/s wants, and in a lake's crossing pattern instead of
 // the river's streaks. The factor is floored at 1e-3, ten times that threshold.
-const stopped = encode(RIVER, [50, -30],
+const stopped = encode(TANGENT,
   waterFlowFactor(0, WATER_FLOW_SPEED_DEFAULT_M_S));
 check('a river dialled to 0 m/s keeps a length above the still threshold',
   Math.hypot(stopped[0], stopped[1]), WATER_FLOW_FACTOR_MIN, 1e-15);
@@ -2101,35 +1330,15 @@ check('RED: an unfloored 0 would have been shorter than the threshold',
 check('…and it still moves, at 0.15 mm/s',
   WATER_FLOW_SPEED_DEFAULT_M_S * Math.hypot(stopped[0], stopped[1]),
   0.00015, 1e-12);
-// STILL WATER IS UNTOUCHED BY ALL OF IT: `waterFlowAt` answers (0, 0) on a lake
-// and 0 × anything is 0, so the attribute stays the exact pair the shader reads
-// as "still" whatever an author dialled.
-const lakeTangent = waterFlowAt(LAKE, 12, -4);
-checkVec('a lake hands over (0, 0)', lakeTangent, [0, 0]);
+// STILL WATER IS UNTOUCHED BY ALL OF IT: a lake's flow is exactly (0, 0) and
+// 0 × anything is 0, so it stays the exact pair the shader reads as "still"
+// whatever an author dialled.
 for (const f of [1, 3, 0.2, WATER_FLOW_FACTOR_MIN]) {
-  checkEq(`…and stays (0, 0) at factor ${f}`, encode(LAKE, [12, -4], f),
+  checkEq(`…and a lake stays (0, 0) at factor ${f}`, encode([0, 0], f),
     [0, 0]);
 }
-// The builder is what writes it, and the ratio is computed against the KIND's
-// own dial in `ground.ts` — not against the module default, or a world that
-// slowed all its rivers down would speed this one back up.
-check('the mesh builder asks for the tangent AT that length',
-  /waterFlowAt\(profile, pos\.getX\(i\), pos\.getZ\(i\), flowFactor\)/
-    .test(planeSrc)
-  && /flow\[i \* 2\] = fx;/.test(planeSrc)
-  && /flow\[i \* 2 \+ 1\] = fz;/.test(planeSrc) ? 1 : 0, 1);
-check('RED: …and does NOT scale a blended tangent afterwards — a mix of two '
-  + 'unit vectors is short, and that would slow the river in its own bends',
-  /fx \* flowFactor|fz \* flowFactor/.test(planeSrc) ? 1 : 0, 0);
-check('RED: and no second attribute was added for it',
-  /aWaterSpeed|aFlowSpeed/.test(planeSrc + matSrc) ? 1 : 0, 0);
-const groundSrc = await readFile(
-  join(ROOT, 'client3d/src/scene/ground.ts'), 'utf8');
-check('the area\'s number is read straight off its meta',
-  /waterFlowFactor\(area\.meta\?\.flow_speed_m_s,/.test(groundSrc) ? 1 : 0, 1);
-check('…and measured against THIS KIND\'s dial',
-  /surfaceMaterialSpec\(surfaceOf\(area\.kind\)\)\s*\n?\s*\?\.flow_speed \?\? WATER_FLOW_SPEED_DEFAULT_M_S/
-    .test(groundSrc) ? 1 : 0, 1);
+check('RED: and no second attribute was ever added for the speed',
+  /aWaterSpeed|aFlowSpeed/.test(matSrc) ? 1 : 0, 0);
 
 console.log(`\n${passed} ok, ${failed} failed`);
 process.exit(failed ? 1 : 0);

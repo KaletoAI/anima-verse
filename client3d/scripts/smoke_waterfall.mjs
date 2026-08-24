@@ -6,9 +6,9 @@
  * Usage:  node client3d/scripts/smoke_waterfall.mjs
  *         (transpiles `packages/scene-render/src/waterfall.ts`; needs esbuild)
  *
- * The mirror the axis belongs to is checked next door
- * (`client3d/scripts/smoke_water_plane.mjs`, the polyline profile of W4a); this
- * is the ONE question W5 adds to it. Every expected value below is derived BY
+ * The profile the axis belongs to is checked next door
+ * (`client3d/scripts/smoke_water_plane.mjs`, the polyline of W4a); this is the
+ * ONE question W5 adds to it. Every expected value below is derived BY
  * HAND in this docstring (§ B5a) — nothing here records current output.
  *
  * ===========================================================================
@@ -17,7 +17,7 @@
  * Per consecutive pair of knots `a -> b` of `meta.water_profile.axis` (in flow
  * order, levels already made non-increasing by the bake):
  *
- *     drop = a.level − b.level        metres of mirror lost
+ *     drop = a.level − b.level        metres of water level lost
  *     run  = b.s − a.s                metres of axis spent
  *     fall <=> drop > 1.0  AND  drop/run > 0.5
  *
@@ -26,7 +26,8 @@
  *   - the DROP alone calls a valley a waterfall — a river losing 4 m over 200 m
  *     of its length passes it and is a slope one walks down beside;
  *   - the SLOPE alone calls a stone in the stream one — 0.2 m over 0.3 m of run
- *     is a 1-in-1.5 step and the mirror already draws it as the short ramp it is.
+ *     is a 1-in-1.5 step and the ground already draws it as the short ramp it
+ *     is.
  *
  * 1.0 m is `swim_from_m`'s default (W4c): the least water this world already
  * treats as more than a step. 0.5 is 1-in-2, i.e. 26.6°, past where loose
@@ -250,11 +251,15 @@
  *       and travels 1.5 · 1.0874129 = 1.6311194 m while it does, i.e.
  *       1.6311194 / 5.8 = 0.2812275 of its own height.
  *
- * …and the arrangement: the curtain reuses the mirror's normal map (no second
- * texture), rides the shared surface clock (no per-frame work of its own), the
- * foam is the shore's own `WATER_FOAM_STRENGTH`, and no particle system was
- * built. In `ground.ts` the falls join `nextWater` and their materials the
- * area's disposal bag, which is what makes them die with the mirrors.
+ * …and the arrangement: the curtain takes THE one wave normal map of the
+ * process straight from `materials.surfaceWaveNormal` — the very texture the
+ * terrain's own water pixels scroll (K-A E4), and no second one — rides the
+ * shared surface clock (no per-frame work of its own), the foam is the shore's
+ * own `WATER_FOAM_STRENGTH`, and no particle system was built. In `ground.ts`
+ * the falls join `nextFalls` and their materials the area's disposal bag, which
+ * is what makes them die with the areas they were derived from. Since K-A E5
+ * they are the ONLY meshes a painted water still produces: the surface itself
+ * is the terrain (`scene/waterShade.ts`).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -545,6 +550,8 @@ const fallSrc = await readFile(
   join(ROOT, 'client3d/src/scene/waterfall.ts'), 'utf8');
 const groundSrc = await readFile(
   join(ROOT, 'client3d/src/scene/ground.ts'), 'utf8');
+const lodSrc = await readFile(
+  join(ROOT, 'client3d/src/scene/terrainLod.ts'), 'utf8');
 check('the sheet drifts at the MEAN speed of falling water, √(g·h/2)',
   /Math\.sqrt\(WATERFALL_G \* Math\.max\(heightM, 0\) \* 0\.5\)/.test(fallSrc)
     ? 1 : 0, 1);
@@ -562,10 +569,14 @@ check('…and is never narrower than the stream itself',
   /Math\.max\(fall\.width \* 0\.5,/.test(fallSrc) ? 1 : 0, 1);
 check('the foam is the SHORE\'s own white, not a second one',
   /WATER_FOAM_STRENGTH/.test(fallSrc) ? 1 : 0, 1);
-check('the curtain reuses the MIRROR\'s normal map',
-  /std\.normalMap \?\? null/.test(fallSrc) ? 1 : 0, 1);
+check('the curtain takes THE wave normal map of the process, by name',
+  /const map = surfaceWaveNormal\(THREE\)/.test(fallSrc) ? 1 : 0, 1);
+check('…the same one the terrain\'s water pixels scroll (K-A E4)',
+  /uWave\.value = surfaceWaveNormal\(THREE\)/.test(lodSrc) ? 1 : 0, 1);
 check('RED: no second wave texture is built here',
   /makeWaveNormal|createCanvas|CanvasTexture/.test(fallSrc) ? 1 : 0, 0);
+check('RED: …and it is not read off some other material any more',
+  /normalMap|waterMat/.test(fallSrc) ? 1 : 0, 0);
 check('it rides the shared surface clock',
   /shader\.uniforms\.uTime = surfaceTimeUniform;/.test(fallSrc) ? 1 : 0, 1);
 check('RED: …so it has no per-frame work and no loop of its own',
@@ -578,11 +589,12 @@ check('…and is drawn from both banks',
   /side: THREE\.DoubleSide/.test(fallSrc) ? 1 : 0, 1);
 check('the drift is ADDED to the sample coordinate, which carries the crests '
   + 'DOWN', /wfUv \+ vec2\( 0\.0, wfT \)/.test(fallSrc) ? 1 : 0, 1);
-console.log('\n[8b] and it lives exactly as long as the mirror does');
-check('the falls are read off the very profile the mirror is built on',
-  /waterfallsFrom\(profile, strokeWidthM\(meta\)\)/.test(groundSrc) ? 1 : 0, 1);
-check('their meshes join the water list, which `clearAreas` empties',
-  /nextWater\.push\(\.\.\.buildWaterfall\(fall, mat, nextOwned\)\)/
+console.log('\n[8b] and it lives exactly as long as its painted area does');
+check('the falls are read off the very profile the water level comes from',
+  /waterfallsFrom\(profile, strokeWidthM\(area\.meta\)\)/.test(groundSrc)
+    ? 1 : 0, 1);
+check('their meshes join the waterfall list, which `clearAreas` empties',
+  /nextFalls\.push\(\.\.\.buildWaterfall\(fall, nextOwned\)\)/
     .test(groundSrc) ? 1 : 0, 1);
 check('…and their materials the area\'s disposal bag',
   /sink\.push\(curtainMat\);/.test(fallSrc)

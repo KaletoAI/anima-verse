@@ -20,12 +20,18 @@
  * previous callback is captured and called FIRST, the cache keys are combined,
  * and a WeakSet keeps a second application from declaring the varyings twice.
  *
- * WHAT IS PATCHED, and the list is deliberately short: the base plate and the
- * painted area drapes of `scene/ground.ts`, and nothing else. NOT the water
- * and ice areas (they carry their own shader — `isWaterClass`), not the
- * building shells or the location tiles, and not the interiors
- * of the detail scenes: those are floors of a room, and a room floor shaded by
- * the world's relief would darken because the house stands in a dip.
+ * WHAT IS PATCHED, and the list is one entry long: the ONE ground material of
+ * `scene/ground.ts` — the CDLOD terrain's, which is every open-world surface
+ * there is since E3 and, since Wasser v2 K-A, the water too. NOT the building
+ * shells or the location tiles, and not the interiors of the detail scenes:
+ * those are floors of a room, and a room floor shaded by the world's relief
+ * would darken because the house stands in a dip.
+ *
+ * WATER USED TO BE THE EXCEPTION and is not one any more. A painted lake was a
+ * mesh with a rippled material of its own, which this patch had to step aside
+ * for (`isWaterClass`, deleted with the mirror in K-A E5); a water pixel is now
+ * a pixel of the very ground this patch is on, shaded as water AFTER it
+ * (`scene/waterShade.ts`).
  *
  * THE ADMIN PREVIEWS STAY UNTOUCHED. This is view polish, not geometry, so it
  * does not belong in `@anima/scene-render` — the shared package is for what

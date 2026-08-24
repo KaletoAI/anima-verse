@@ -137,17 +137,19 @@
  * And the scene-graph builder must not stack: `rebuildAreas` may set no
  * `renderOrder`, no `polygonOffset` and — since E4 — no `position.y` at all.
  * The last one it had was `WATER_DRAPE_LIFT_M`, the two centimetres that kept
- * the water drape off its own bed; the drape is a MIRROR now
- * (`scene/waterPlane.ts`) which carries its height in its own vertices, and the
- * constant is checked to be gone from the code like the ladders are.
+ * the water drape off its own bed; the drape became a mirror MESH in E4 and the
+ * terrain's own water shading in Wasser v2 K-A, so `rebuildAreas` builds no
+ * ground surface at all any more — the constant is checked to be gone from
+ * the code like the ladders are.
  *
  * ===========================================================================
  * [7b] WATER WEARS ITS BED, AND THE SERVER SAYS WHICH (W1 § 5)
  * ===========================================================================
  * A water layer is a full layer — the mask has to answer "here is water" for
  * the undergrowth gate and every point query — but what it PAINTS is the ground
- * underneath, because the mirror is a second surface drawn over it and painting
- * the lake twice made the two fight each other.
+ * underneath, because the water is a SHADING of that very pixel
+ * (`scene/waterShade.ts`) and painting the lake twice made the two fight each
+ * other.
  *
  * WHO DECIDES THAT MOVED. Until W1 this client decided it: `setLayerTable`
  * substituted layer 0's image (`layer.water ? bare : layer`) for every water
@@ -530,26 +532,28 @@ check('the area builder sets no renderOrder at all',
 check('…and no polygonOffset',
   build.includes('polygonOffset') ? 1 : 0, 0);
 const lifts = build.match(/\.position\.y = [^\n;]+;/g) ?? [];
-checkEq('…and no height at all any more: the mirror stands at its own level',
+checkEq('…and no height at all any more: no ground mesh is placed at all',
   lifts, []);
-check('only WATER still gets a mesh at all — and the PROFILE is what says so',
+// SINCE WASSER v2 K-A E5 NOT EVEN WATER GETS A SURFACE MESH. The mirror plane,
+// its strip subdivision and its shore shader are deleted: the terrain lifts its
+// own vertices onto the water raster and shades them (E3/E4). What the builder
+// still reads the PROFILE for is the waterfalls — a sheet in mid-air is the one
+// thing a heightfield cannot draw.
+check('the area builder builds no water surface any more',
+  /buildWaterPlane|addMirror|patchWaterShore/.test(build) ? 1 : 0, 0);
+check('…and frees the earcut it only needed for the ring',
+  /built\.geometry\.dispose\(\);/.test(build) ? 1 : 0, 1);
+check('the PROFILE is what still says "this is water"',
   /const profile = waterProfileOf\(area\.meta\);/.test(build) ? 1 : 0, 1);
-// ONE MIRROR BUILDER, and since W1 exactly ONE feeder: the painted areas. The
-// room water that used to feed it a second time is deleted with its bake stage
-// (W1 § 6), which is what makes "one water source" a countable claim.
-check('the mirror builder exists exactly once',
-  (build.match(/const addMirror = \(/g) ?? []).length, 1);
-// (The argument list grew twice since W4b — the flow factor and the meta of the
-// falls, then the RING the mirror mesh is cut along at the axis knots, W5c —
-// so the claim is pinned to its head and to the opaque depth, not to the tail.)
-check('…the painted area feeds it — with its own opaque depth beside the '
-  + 'profile since W4b, and its ring since W5c',
-  /addMirror\(built\.geometry, built\.ring, area\.kind, profile,\n\s*waterOpaqueDepthM\(area\.meta\?\.water_depth_effective\),/
+// ONE FALL BUILDER, and since W1 exactly ONE feeder: the painted areas. The
+// room water that used to feed the water stage a second time is deleted with
+// its bake stage (W1 § 6), which is what makes "one water source" a countable
+// claim.
+check('…and the falls of that profile are the only meshes left',
+  /for \(const fall of waterfallsFrom\(profile, strokeWidthM\(area\.meta\)\)\) \{\n\s*nextFalls\.push\(\.\.\.buildWaterfall\(fall, nextOwned\)\);/
     .test(build) ? 1 : 0, 1);
-check('RED: and nothing else does — the zone-water loop is gone',
+check('RED: and nothing else feeds them — the zone-water loop is gone',
   /zoneWater/.test(build) ? 1 : 0, 0);
-check('…with exactly one buildWaterPlane call in the whole builder',
-  (build.match(/buildWaterPlane\(/g) ?? []).length, 1);
 
 console.log('\n[7] the wiring, pinned by reading the source');
 check('the terrain material carries no map — or the anti-tile would blend the '

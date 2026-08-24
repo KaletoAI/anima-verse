@@ -9,8 +9,10 @@
  * being N transparent drape meshes stacked on it. What went with the drapes:
  * the `renderOrder` ladder at −10000 + i, the `polygonOffset` ladder down to
  * −32, the hairline y ladder of 0.4 mm per level, the alpha fringe and its
- * refined edge band. The only drape left in the world is WATER's, until E4
- * gives it a level mirror.
+ * refined edge band. The last drape of all was WATER's; E4 replaced it with a
+ * mirror mesh and Wasser v2 K-A dissolved that one into the terrain itself
+ * (`scene/waterShade.ts`), so no ground in this world is a mesh over the
+ * relief any more.
  *
  * WHAT LIVES WHERE
  *  - the polygon geometry is SHARED (`@anima/scene-render/groundAreas`), because
@@ -70,10 +72,10 @@ import { buildAreaGeometry,
   SCATTER_CELL_M,
   strokeWidthM,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
-  waterFlowFactor, waterfallsFrom, WATER_FLOW_SPEED_DEFAULT_M_S,
+  waterfallsFrom,
   worldHeightRange } from '@anima/scene-render';
 import type { Point2, ScatterFootprint, ScatterInstance,
-  SurfaceMaterialSpec, TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
+  TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
   TerrainLayerIndex, TerrainLayerTile, WorldHeightField,
   WorldHeightTileStats,
   WorldHeightTiles } from '@anima/scene-render';
@@ -87,12 +89,12 @@ import { sanitizePolygon } from '../game/polygon';
 // The swim threshold's ONE reader (W4c) — `typeAt` hands the number on, the
 // rule that uses it lives in `walk.wadeGate`.
 import { SWIM_FROM_DEFAULT_M, swimFrom } from '../game/walk';
-import type { MapLocation, TerrainArea, TerrainMeta, TerrainPayload,
+import type { MapLocation, TerrainArea, TerrainPayload,
   TerrainScatterEntry, TerrainType,
   WorldBounds } from '../types';
 import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
-import { hasSurfaceTexture, preloadSurfaceTexture, setWorldGround, surfaceFor,
+import { hasSurfaceTexture, setWorldGround, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
   releaseImpostor } from './impostors';
@@ -101,7 +103,6 @@ import { applyTerrainLayers, disposeLayerGround, layerIndexOfKind, layerTable,
   topLayerIndexAt } from './layerGround';
 import { applyFogVeil } from './fogVeil';
 import { applyNaturalGround, setNaturalGroundField } from './naturalGround';
-import { isWaterClass } from './naturalGroundMath';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { horizontalFovRad, IMPOSTOR_FAR_M, impostorQuad, impostorVisible,
@@ -114,10 +115,7 @@ import { markInstanceUpload } from './instanceUpload';
 import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterfall } from './waterfall';
-import { buildWaterPlane, patchWaterShore } from './waterPlane';
-import { waterLevelAt, waterOpaqueDepthM,
-  waterProfileOf } from './waterPlaneMath';
-import type { WaterProfile } from './waterPlaneMath';
+import { waterLevelAt, waterProfileOf } from './waterPlaneMath';
 import { WATER_LOOK_DEFAULT, waterLookFrom } from './waterShade';
 import type { WaterLook } from './waterShade';
 import type { UndergrowthArea } from './undergrowth';
@@ -147,11 +145,11 @@ const BASE_FALLBACK_M = 200;
  * level — because the painted grounds became a CUT in the one terrain surface
  * (`scene/layerGround.ts`) and nothing coplanar was left to separate. It left
  * `WATER_DRAPE_LIFT_M = 0.02` standing for the one drape it could not yet
- * replace. E4 replaced it: a water is a MIRROR of its own
- * (`scene/waterPlane.ts`) — flat then, a ruled surface over its profile since
- * W2 — which is not coplanar with the bed under it by construction, because
- * the bed is carved to `h ≤ water_level_at(x, z) − ε`.
- * There is no lift left in this file, and no drape.
+ * replace. E4 replaced it with a MIRROR mesh, and Wasser v2 K-A deleted that
+ * one too: a water is the GROUND now, lifted onto the water raster in the
+ * terrain's own vertex shader and shaded as water in its fragment
+ * (`scene/waterShade.ts`). There is no lift left in this file, no drape and no
+ * second surface over the bed.
  */
 
 /** Mask tiles asked for in ONE request — the server's own
@@ -483,9 +481,9 @@ function spreadOf(urls: readonly string[]): number | null {
 
 /** One built area: what the scatter LOD needs of it. A painted ground has NO
  *  mesh of its own — since E3 it is a CUT in the one terrain surface
- *  (`scene/layerGround.ts`), and since E5b the one thing that still gets a mesh,
- *  the water mirror, is kept in `waterMeshes` because a mirror is not only ever
- *  a painted area: a room's water FLOOR is one too (§ A19 no. 5). */
+ *  (`scene/layerGround.ts`), and since Wasser v2 K-A E5 not even a water does:
+ *  the only meshes an area still produces are the WATERFALL curtains its own
+ *  flow axis asks for, and those are kept in `waterfallMeshes`. */
 interface AreaMesh {
   /** one scatter entry per authored row AND model variant — empty when nothing
    *  grows here (finding B17: the list hangs on the AREA, not on the terrain
@@ -689,13 +687,13 @@ export interface TerrainPoint {
    *  threshold is a metre, not "swim in a puddle". */
   swim_from_m: number;
   /**
-   * The MIRROR HEIGHT over THIS POINT in world metres, or `null` where the
+   * The WATER LEVEL over THIS POINT in world metres, or `null` where the
    * point is not water (E4, § G4; local since W2).
    *
    * It is the AREA's own PROFILE evaluated here (`waterLevelAt` on
    * `meta.water_profile`), not the kind's number and not the area's mid level:
    * two lakes in one world stand at two heights, the same `water` kind paints
-   * both, and a river's mirror is a different height at every metre of its
+   * both, and a river's line is a different height at every metre of its
    * length. A swimmer's float height reads this, so reading the mid level
    * would put him 2.4 m over his own bed at one end of the river and 2.4 m
    * under it at the other.
@@ -949,6 +947,8 @@ export interface Ground {
    */
   debugParts(): {
     terrain: THREE.Object3D[];
+    /** the WATERFALL curtains — since Wasser v2 K-A the only water meshes
+     *  there are; the surface itself is part of `terrain` */
     water: THREE.Object3D[];
     undergrowth: THREE.Object3D[];
     scatter: THREE.Object3D[];
@@ -1239,11 +1239,13 @@ export function createGround(): Ground {
   let layerKey = '';
   let layersBusy = false;
   const areaMeshes: AreaMesh[] = [];
-  /** THE MIRRORS OF THE WORLD (E4; ruled since W2) — one per PAINTED water
-   *  area, and there is no second source: a room does not define water any
-   *  more (W1 § 6, the zone-water stage is deleted), it merely lies in a
-   *  painted one. One list, one builder, one material cache. */
-  const waterMeshes: THREE.Mesh[] = [];
+  /** THE WATERFALLS OF THE WORLD (W5) — the curtain and the foam disc of every
+   *  segment of a painted water's flow axis that drops faster than water runs.
+   *  The ONLY meshes a painted ground still makes: the water SURFACE is the
+   *  terrain itself since Wasser v2 K-A, and a sheet in mid-air is the one
+   *  thing a heightfield cannot be. They live and die with the areas
+   *  (`clearAreas`). */
+  const waterfallMeshes: THREE.Mesh[] = [];
   /** Where the camera stood at the last `tickScatterLod` — the scatter LOD's
    *  only piece of view state. A REBUILD needs it too (an area has to come
    *  into the world binned, not with every instance at full detail), and that
@@ -1343,79 +1345,6 @@ export function createGround(): Ground {
     return named || (key && hasSurfaceTexture(key) ? key : '');
   }
 
-  /**
-   * Material of one ground kind.
-   *
-   * Texture first (the surface-texture library the tiles already feed), the
-   * catalog colour second. WHICH library entry is asked for is the TYPE's
-   * answer, never the kind's spelling (`surfaceOf`) — a kind that names no
-   * surface gets no texture and keeps its colour. The lookup goes through the
-   * `'wall'` chain: `surfaceFor(id, 'floor')` would fall back to the global
-   * indoor `floor` kind, which is the wrong ground for a painted meadow — the
-   * `'wall'` chain asks for the named entry and nothing else (`tiles.ts`).
-   *
-   * `uvScaleM` is how many metres one UV unit spans: the shape geometry's UVs
-   * ARE the world coordinates (1 unit = 1 m), the base plane's run 0..1 over
-   * its whole edge.
-   *
-   * IT BUILDS TWO KINDS OF THING, and only one of them still carries a
-   * texture: the WATER MIRROR (its own shader, its own image, `waterPlane.ts`)
-   * and the TERRAIN (`rebuildBase`), which gets NO map at all — its albedo
-   * comes out of the layer compositor's texture array. See `applyTerrainLayers`.
-   *
-   * `draw` is how the surface takes part in the depth buffer, and only the
-   * mirror sets it: a lake is TRANSPARENT (the bed shows through its shore
-   * ramp) and writes NO depth (it is a sheet over a world that has to stay
-   * visible through it). The terrain leaves both alone and stays opaque.
-   */
-  function materialFor(kind: string, uvScaleM: number,
-                       sink: { dispose(): void }[],
-                       draw?: { transparent?: boolean; depthWrite?: boolean }
-  ): THREE.Material {
-    const surface = surfaceOf(kind);
-    const lib = surfaceFor(surface, 'wall');
-    const spec: SurfaceMaterialSpec | null = surfaceMaterialSpec(surface);
-    let map: THREE.Texture | null = null;
-    if (lib) {
-      // Every piece gets its OWN clone: `repeat` is per mesh, and the cached
-      // texture is shared with the tiles.
-      map = lib.texture.clone();
-      map.needsUpdate = true;
-      map.wrapS = THREE.RepeatWrapping;
-      map.wrapT = THREE.RepeatWrapping;
-      map.repeat.set(uvScaleM / lib.sizeM, uvScaleM / lib.sizeM);
-      sink.push(map);
-    }
-    const mat = surfaceMaterial(THREE, { material: spec, map, color: kindColor(kind),
-      transparent: draw?.transparent, depthWrite: draw?.depthWrite });
-    // EVERY ground material carries the basement hole — base plane and painted
-    // areas alike. Patching only the plane would leave a painted meadow lying
-    // over the open cellar.
-    patchHole(mat);
-    // …and then, on everything that is not water, the natural-ground stages
-    // (`scene/naturalGround.ts`): anti-tile, colour patches, height AO. CHAINED
-    // after the hole, so the key of an open-world ground reads
-    // `ground-hole+natural-ground`.
-    //
-    // WATER AND ICE STEP ASIDE. Those two arrive from `surfaceMaterial` with a
-    // full shader of their own — scrolling normal maps, sky fresnel, roughness
-    // mask — and a second sample of the water texture blended into it would
-    // fight every one of them. It is the CLASS that decides, never the colour
-    // or the kind's name (`isWaterClass`). It also means a painted lake keeps
-    // a HARD shore: the soft edge rides on this patch, and water is out of it
-    // — a shoreline that dissolved into the meadow behind it would be a bank
-    // nobody could see, and the water shader is where a shore would belong.
-    if (!isWaterClass(spec?.class)) applyNaturalGround(mat);
-    // …and the VEIL on top of both (plan-fog-schleier-v2 § 3): haze over the
-    // cells the avatar has never walked. It writes `outgoingLight` several
-    // chunks after everything above, so it neither depends on the order of the
-    // patches before it nor changes it. Water steps aside here for the same
-    // reason it steps aside above: its own shader owns that anchor.
-    if (!isWaterClass(spec?.class)) applyFogVeil(mat);
-    sink.push(mat);
-    return mat;
-  }
-
   /** What the base plate has to cover, as `[minX, minZ, maxX, maxZ]`: the
    *  world frame grown by the ground margin, or the fallback square when
    *  nothing is placed at all. */
@@ -1509,9 +1438,8 @@ export function createGround(): Ground {
    * the compositor's id mask — which speaks LAYER INDICES. So the look has to
    * arrive as a table indexed the same way, and this is the one place that
    * knows all three halves of it: the layer table says which layers are water,
-   * the surface library says what those kinds look like (`surfaceMaterialSpec`,
-   * exactly as `materialFor` reaches it for the mirrors) and the painted areas
-   * say how deep their beds are carved.
+   * the surface library says what those kinds look like (`surfaceMaterialSpec`)
+   * and the painted areas say how deep their beds are carved.
    *
    * A LAYER THAT IS NOT WATER STILL GETS A WATER LOOK — the first water layer's.
    * A pixel is shaded as water because it was LIFTED, not because of what the
@@ -1521,7 +1449,8 @@ export function createGround(): Ground {
    * wrong water", a fringe nobody can measure.
    *
    * THE DEPTH IS PER KIND HERE, NOT PER AREA, and that is a real narrowing
-   * against the mirror (W4b): the fragment can only ask the mask, and the mask
+   * against the mirror mesh it replaced (W4b, whose `aWaterOpaque` was an
+   * attribute): the fragment can only ask the mask, and the mask
    * knows kinds. The LAST painted area of a kind wins — the tie-break the
    * server itself uses when two waters overlap — so a kind painted with one
    * depth (every world so far) is exact and a kind painted with two collapses
@@ -2364,11 +2293,11 @@ export function createGround(): Ground {
       drain(a.scatterOwned);
     }
     areaMeshes.length = 0;
-    for (const mesh of waterMeshes) {
+    for (const mesh of waterfallMeshes) {
       group.remove(mesh);
       mesh.geometry.dispose();
     }
-    waterMeshes.length = 0;
+    waterfallMeshes.length = 0;
     drain(areaOwned);
   }
 
@@ -2481,15 +2410,11 @@ export function createGround(): Ground {
     // a build that happens before the first `setHeightAnchor` samples the
     // cells around the origin instead of an empty window.
     moveScatterWindow(anchorX, anchorZ);
-    // Textures first, ALL of them: `surfaceFor` only hands out fully loaded
-    // images (a clone of a loading texture stays blank), so the whole ground
-    // is built once the library has what it needs. What is loaded are the
-    // SURFACES the types name, not the kinds themselves — the kind is a
-    // catalog id and has not been a texture id since the assignment became
-    // explicit.
-    const surfaces = new Set<string>([surfaceOf(payload?.default_kind || ''),
-      ...areas.map((a) => surfaceOf(a.kind))]);
-    await Promise.all([...surfaces].map((s) => preloadSurfaceTexture(s)));
+    // NO TEXTURE IS LOADED HERE ANY MORE. This stage used to preload the
+    // surface image of every painted kind, for the one mesh that still carried
+    // a map: the water mirror. The mirror is gone (Wasser v2 K-A E5) and the
+    // images every ground is really drawn with are the layer compositor's,
+    // which loads them itself (`layerGround.setLayerTable`).
 
     const next: AreaMesh[] = [];
     const nextOwned: { dispose(): void }[] = [];
@@ -2502,106 +2427,43 @@ export function createGround(): Ground {
     // `null` = a ring that encloses nothing: it draws nothing and covers
     // nothing. Each area is still built exactly once.
     const builtAreas = areas.map((area) => buildAreaGeometry(THREE, area.polygon));
-    /** ONE mirror material per water KIND, for the whole world (E4). Both the
-     *  things that differ per AREA ride on the GEOMETRY — the level in each
-     *  vertex's y, the flow in the `aWaterFlow` attribute — and never in a
-     *  uniform, so a lake, a second lake at another height and a tilted river
-     *  share one shader and cost three draw calls instead of three programs.
-     *  Filled lazily: a world without water builds none. */
-    const waterMats = new Map<string, THREE.Material>();
-    /** THE ONE MIRROR BUILDER. `geometry` is the earcut of the outline in the
-     *  XZ plane; `buildWaterPlane` lifts every vertex onto the area's own
-     *  profile and hangs the flow direction and the opaque depth on it as
-     *  attributes. `opaqueDepthM` is ¾ of the area's own bed depth (W4b), so a
-     *  shallow river is drawn opaque where a deep lake still fades.
-     *
-     *  `flowFactor` is the third thing that belongs to the AREA and rides on
-     *  the geometry (finding 2026-08-23 no. 2): how fast this one water runs
-     *  against its kind's dial, carried as the LENGTH of the flow attribute. It
-     *  is 1 for every area that authors no speed — the unit tangent of W4a.
-     *
-     *  AND THE FALLS COME OUT OF THE SAME PROFILE (W5). Where the axis drops
-     *  faster than water runs, the ruled mirror would draw a five-metre cliff
-     *  as a pane of glass; `waterfallsFrom` names those segments and
-     *  `buildWaterfall` hangs a curtain and a foam disc there. They join the
-     *  mirrors in `nextWater`, so they live and die with them — a fall is not a
-     *  thing of its own, it is a place a river is steep. */
-    const nextWater: THREE.Mesh[] = [];
-    const addMirror = (geometry: THREE.BufferGeometry, ring: Point2[],
-                       kind: string,
-                       profile: WaterProfile, opaqueDepthM: number,
-                       flowFactor: number, meta: TerrainMeta | undefined
-    ): void => {
-      let mat = waterMats.get(kind);
-      if (!mat) {
-        // 1 m per UV unit: the shape geometry's UVs are the world
-        // coordinates, so the texture runs seamlessly across area borders.
-        // Transparent and depth-write-free — the shore ramp is an alpha, and
-        // a sheet of water must not hide the world behind it.
-        mat = materialFor(kind, 1, nextOwned,
-                          { transparent: true, depthWrite: false });
-        // …and LAST in the chain, after the ripple and the basement hole:
-        // the shore reads the height pyramids and writes the alpha
-        // (`waterPlane.ts`).
-        patchWaterShore(mat);
-        waterMats.set(kind, mat);
-      }
-      // The RING goes in beside the earcut (W5c): where the axis has interior
-      // knots, `buildWaterPlane` cuts the outline at their cross-lines and
-      // builds its own pieces, so the mirror bends where the level bends
-      // instead of ramping straight across a cliff. A lake and a polygon river
-      // keep the geometry built above, unchanged.
-      nextWater.push(buildWaterPlane(geometry, profile, mat, opaqueDepthM,
-                                     flowFactor, ring));
-      // …and the FALLS of that very axis (W5). The width is the drawn ribbon's
-      // own (`meta.stroke.width_m`) — a polygon water has none, and has no
-      // interior knots either, so both halves of the question answer "no fall"
-      // for the same shape.
-      for (const fall of waterfallsFrom(profile, strokeWidthM(meta))) {
-        nextWater.push(...buildWaterfall(fall, mat, nextOwned));
-      }
-    };
+    /** THE FALLS OF THE WORLD (W5) — where a painted water's own flow axis
+     *  drops faster than water runs, `waterfallsFrom` names the segment and
+     *  `buildWaterfall` hangs a curtain and a foam disc there. The water
+     *  SURFACE is the terrain itself (Wasser v2 K-A E3/E4), which can carry no
+     *  sheet standing in the air: a fall is the one place the ground and the
+     *  water part company, and the only mesh a painted area still builds. They
+     *  are swapped in with the areas below and die with them (`clearAreas`). */
+    const nextFalls: THREE.Mesh[] = [];
     areas.forEach((area, index) => {
       const built = builtAreas[index];
       if (!built) return;   // a ring that encloses nothing has nothing to draw
-      // WHO STILL GETS A MESH: water, and nothing else. Every other painted
-      // ground is a CUT in the terrain surface since E3 — the compositor reads
-      // the server's baked masks and paints it into the one material
-      // (`scene/layerGround.ts`), which is why the whole ladder of renderOrder,
-      // depth bias and hairline lifts that used to stand here is gone.
-      //
-      // ONE CONDITION SINCE W1, and it is data: `meta.water_profile`. The
-      // server owns the single water predicate (`terrain_types.is_water_kind`)
-      // and only an area that really carved a bed carries a profile, so asking
-      // for the profile IS asking "is this water, and against which mirror".
-      // The surface CLASS is not consulted here any more — it says what water
-      // LOOKS like (ripple or matte) and was a second book about what water IS,
-      // which is exactly the pair W1 collapsed into one.
+      // NO PAINTED AREA GETS A SURFACE MESH ANY MORE. Every ground is a CUT in
+      // the one terrain surface since E3 — the compositor reads the server's
+      // baked masks and paints it into the one material
+      // (`scene/layerGround.ts`) — and since Wasser v2 K-A that includes the
+      // water: the terrain lifts its own vertices onto the water raster (E3)
+      // and shades those pixels as water (E4), so the mirror mesh that stood
+      // here, its strip subdivision, its per-vertex flow and its shore shader
+      // are gone. The earcut is therefore built for the RING alone and freed
+      // right here — a buffer nobody holds is a buffer nobody frees.
+      built.geometry.dispose();
+      // WHAT IS LEFT IS THE FALLS (W5), and the one condition is data:
+      // `meta.water_profile`. The server owns the single water predicate
+      // (`terrain_types.is_water_kind`) and only an area that really carved a
+      // bed carries a profile, so asking for the profile IS asking "is this
+      // water, and along which line does it run". The width is the drawn
+      // ribbon's own (`meta.stroke.width_m`) — a polygon water has none, and
+      // has no interior knots either, so both halves of the question answer
+      // "no fall" for the same shape.
       const profile = waterProfileOf(area.meta);
       if (profile) {
-        // …and HOW DEEP this water is, the second number the bake reports
-        // (W4b): `meta.water_depth_effective` is the kind's default with this
-        // area's override already applied, so the ¾ that make it opaque are
-        // taken from the area's own bed and not from the default lake's.
-        // …and HOW FAST it runs, the one water number the bake has no opinion
-        // about: `meta.flow_speed_m_s` is a pure look, so it is read straight
-        // off the area's meta and turned into a factor against the KIND's own
-        // `flow_speed` dial — the uniform the shader multiplies. An area
-        // without the key answers exactly 1, i.e. the unit tangent of W4a.
-        addMirror(built.geometry, built.ring, area.kind, profile,
-                  waterOpaqueDepthM(area.meta?.water_depth_effective),
-                  waterFlowFactor(area.meta?.flow_speed_m_s,
-                                  surfaceMaterialSpec(surfaceOf(area.kind))
-                                    ?.flow_speed ?? WATER_FLOW_SPEED_DEFAULT_M_S),
-                  area.meta);
-      } else {
-        // Not a mirror, so the earcut is not drawn — and a geometry nobody
-        // holds is a buffer nobody frees. Only the RING lives on (below); the
-        // triangles were only ever needed by the drape this stage deleted.
-        built.geometry.dispose();
+        for (const fall of waterfallsFrom(profile, strokeWidthM(area.meta))) {
+          nextFalls.push(...buildWaterfall(fall, nextOwned));
+        }
       }
 
-      // The CLEANED ring, the one the mesh was built from — see `ringBounds`.
+      // The CLEANED ring, the one the earcut was built from — see `ringBounds`.
       const [minX, minZ, maxX, maxZ] = ringBounds(built.ring);
       // Everything painted OVER this area hides the ground it grows on.
       const occluders = builtAreas.slice(index + 1)
@@ -2639,18 +2501,18 @@ export function createGround(): Ground {
 
     // THERE IS NO SECOND SOURCE OF WATER (W1 § 6). Until W1 a room whose floor
     // kind was a water surface carved its own bed (`heightfield`'s fifth stage)
-    // and got a mirror of its own out of the layer index's `waters` list. That
-    // stage, that list and the room water fields are deleted: water is an ART
-    // on the MAP, and a room that lies in one merely says so in its floor plan
-    // (`map_water`, a derived reference). The loop that stood here is gone with
-    // them.
+    // and got a water surface of its own out of the layer index's `waters`
+    // list. That stage, that list and the room water fields are deleted: water
+    // is an ART on the MAP, and a room that lies in one merely says so in its
+    // floor plan (`map_water`, a derived reference). The loop that stood here
+    // is gone with them.
 
     // THE SWAP. Nothing above touched the scene, so the old ground stood until
     // this line and the new one is in place before the frame after it.
     clearAreas();
-    for (const mesh of nextWater) {
+    for (const mesh of nextFalls) {
       group.add(mesh);
-      waterMeshes.push(mesh);
+      waterfallMeshes.push(mesh);
     }
     for (const a of next) {
       for (const prop of a.scatter) {
@@ -3444,7 +3306,7 @@ export function createGround(): Ground {
       }
       return {
         terrain: [terrain.mesh],
-        water: [...waterMeshes],
+        water: [...waterfallMeshes],
         undergrowth: [undergrowth.group],
         scatter,
       };

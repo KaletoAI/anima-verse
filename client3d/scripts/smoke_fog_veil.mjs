@@ -219,9 +219,16 @@
  * [10] THE WIRING — the veil is on the open world's ground
  * ============================================================================
  * A string check on `scene/ground.ts`: `applyFogVeil` is imported and applied
- * at BOTH ground material sites (the CDLOD terrain's own material and the
- * non-water ground pieces) — the very list `applyNaturalGround` is on. Props,
- * scatter and location tiles are deliberately NOT on it (plan § 4).
+ * at THE ground material site — the CDLOD terrain's own material, which since
+ * Wasser v2 K-A E5 is the only one this file builds (the water mirror was the
+ * second, and the water is the terrain itself now). It is the very list
+ * `applyNaturalGround` is on. Props, scatter and location tiles are
+ * deliberately NOT on it (plan § 4).
+ *
+ * THE WATER-CLASS EXCEPTION WENT WITH THE MIRROR. It existed because a painted
+ * lake got a rippled material of its own here and the veil would have fought
+ * that shader for the `opaque_fragment` anchor; the terrain's one material is
+ * never a water material, so the check below is that no such branch is left.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -634,11 +641,10 @@ console.log('\n[10] the veil is on the open world’s ground, and on nothing els
   const ground = await readFile(GROUND_SRC, 'utf8');
   eq('(av) ground.ts imports the patch',
      /import \{ applyFogVeil \} from '\.\/fogVeil';/.test(ground), true);
-  eq('(aw) …and applies it at BOTH ground material sites',
-     (ground.match(/applyFogVeil\(mat\);/g) || []).length, 2);
-  eq('(ax) the water class steps aside there, exactly as it does for the '
-     + 'natural-ground stages',
-     ground.includes('if (!isWaterClass(spec?.class)) applyFogVeil(mat);'), true);
+  eq('(aw) …and applies it at THE ground material site — the one that is left',
+     (ground.match(/applyFogVeil\(mat\);/g) || []).length, 1);
+  eq('(ax) RED: and no water-class branch stands beside it any more',
+     /isWaterClass/.test(ground), false);
 }
 
 console.log(`\n${passed + failed} checks, ${failed} failure(s)`);

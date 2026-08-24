@@ -2400,10 +2400,11 @@ check("a straight river flows along itself, length 1",
       [round(v, 6) for v in CMODEL_W5.water_at(50.0, 0.0)[1:]], [1.0, 0.0])
 check("...at a knot too, where the two legs are the same direction",
       [round(v, 6) for v in CMODEL_W5.water_at(40.0, 0.0)[1:]], [1.0, 0.0])
-# THE HAIRPIN, and these are the numbers `client3d/scripts/smoke_water_plane.mjs`
-# [4d-flow] pins for `waterFlowAt` — the rule moved to the server, the answers
-# did not. Leg 1 is (99, -20)/101, leg 2 is (-48, -20)/52 = (-12, -5)/13, and AT
-# the middle knot the tangent is their normalised bisector.
+# THE HAIRPIN, and these are the numbers the client's own `waterFlowAt` used to
+# pin before Wasser v2 K-A E5 deleted it with the water mesh — the rule moved to
+# the server, the answers did not, and this docstring is now the only place they
+# are derived. Leg 1 is (99, -20)/101, leg 2 is (-48, -20)/52 = (-12, -5)/13,
+# and AT the middle knot the tangent is their normalised bisector.
 near("halfway along leg 1: the leg's own tangent, x",
      hf.water_flow_at(U, 199.5, 290.0)[0], 99.0 / 101.0, 1e-15)
 near("...and z", hf.water_flow_at(U, 199.5, 290.0)[1], -20.0 / 101.0, 1e-15)
