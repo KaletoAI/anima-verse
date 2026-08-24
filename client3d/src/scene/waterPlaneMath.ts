@@ -412,8 +412,50 @@ export function waterLevelAt(profile: WaterProfile, x: number, z: number
 }
 
 /**
- * The DOWNSTREAM unit vector AT ONE POINT — the tangent of the nearest segment,
- * or (0, 0) for still water. The one piece of the profile the SHADER needs.
+ * How far to either side of a KNOT the tangent is blended from the incoming
+ * segment's to the outgoing one's, in metres of arc length, at the most.
+ *
+ * The window is `min(half the incoming segment, half the outgoing segment,
+ * this)`, so two neighbouring knots can never fight over the same stretch of
+ * line — the very clipping rule `decorateStroke`'s `normalAt` uses for the side
+ * normal of a drawn stroke (`frontend/src/tabs/map/mapMath.ts`,
+ * `CORNER_BLEND_SPACINGS`). The cap is what that rule cannot supply here: a
+ * stroke blends over a fraction of its own deflection SPACING, and a flow axis
+ * has no such length — its knots sit wherever the ground bends, and two 400 m
+ * legs would otherwise turn the ripple over 200 m of river and never show a
+ * straight stretch at all. Four metres is a little over one figure's height and
+ * about the width of the seeded river: the bend is read as a bend and not as a
+ * slow spiral.
+ */
+const WATER_FLOW_BLEND_MAX_M = 4;
+
+/** Cosine ease over `[0, 1]` — 0 at 0, 1 at 1, FLAT at both ends, the twin of
+ *  `mapMath.ease`. The flat ends are the point: the blend meets the segment's
+ *  own constant tangent at the window's rim with slope 0, so the window's edge
+ *  is not a crease in the rotation rate the way a straight ramp's would be. */
+function blendEase(t: number): number {
+  return (1 - Math.cos(Math.PI * t)) / 2;
+}
+
+/** The unit tangent of segment `i` (knot `i` -> knot `i + 1`) and the arc
+ *  length it spans, or `null` where it is too short to name a direction. The
+ *  span is read off the knots' own `s`, the coordinate `nearestOnAxis` answers
+ *  in, so the window below is measured in the units it compares against. */
+function segmentOf(axis: WaterKnot[], i: number
+): { ux: number; uz: number; span: number } | null {
+  if (i < 0 || i + 1 >= axis.length) return null;
+  const dx = axis[i + 1][0] - axis[i][0];
+  const dz = axis[i + 1][1] - axis[i][1];
+  const len = Math.hypot(dx, dz);
+  if (!(len > 1e-9)) return null;
+  const span = axis[i + 1][2] - axis[i][2];
+  return { ux: dx / len, uz: dz / len, span: span > 0 ? span : len };
+}
+
+/**
+ * The DOWNSTREAM vector AT ONE POINT, of length `factor` — the tangent of the
+ * axis, BLENDED THROUGH EVERY KNOT, or (0, 0) for still water. The one piece of
+ * the profile the SHADER needs.
  *
  * IT IS LOCAL SINCE W4a, and that is the whole of the finding: a river bends,
  * so its ripples have to bend with it. `waterFlowAt` is evaluated per VERTEX
@@ -421,23 +463,82 @@ export function waterLevelAt(profile: WaterProfile, x: number, z: number
  * triangles, and the drift turns through the meander instead of pointing one
  * way over a whole hairpin.
  *
+ * AND IT IS CONTINUOUS ALONG THE AXIS SINCE W5c-flow (finding 2026-08-24: "the
+ * river is uneven — it flows in places, then stands still or is striped, and it
+ * changes at a knot"). The nearest SEGMENT's tangent is a step function: every
+ * vertex of a W5c strip read the same constant pair and the value JUMPED at the
+ * cross-line through each knot. The ripple is anisotropic — stretched along the
+ * flow, scrolled along it, streaked along it — so a strip whose whole surface
+ * shares one direction reads as a stripe, the next strip as another stripe, and
+ * a mesh whose two rows disagree by the full bend angle interpolates through the
+ * middle of nowhere: where that interpolation passes near zero the shader's own
+ * `wStill = wLen < 1e-4` branch flips those fragments to the LAKE pattern, which
+ * is the "standing" the finding names.
+ *
+ * THE WINDOW RULE, and it is `decorateStroke`'s corner-normal rule with a cap:
+ * around every INTERIOR knot `c`, over the arc-length window
+ *
+ *     half = min( s(c) − s(c−1), s(c+1) − s(c) ) / 2, capped at
+ *            WATER_FLOW_BLEND_MAX_M
+ *     b    = ease( (s − s(c) + half) / (2·half) )        (cosine, see above)
+ *     t    = normalize( (1 − b)·t(c−1) + b·t(c) )
+ *
+ * the tangent is the eased mix of the two adjacent segments' tangents; outside
+ * every window it is the segment's own, unchanged. Half of the SHORTER leg is
+ * what keeps two windows from overlapping (they can at most touch, and the
+ * comparison is strict), so no sample is ever claimed by two knots — which is
+ * why this can be a plain loop over the two knots bounding the winning segment
+ * and needs no ordering.
+ *
+ * AT THE KNOT ITSELF `b = 0.5`, i.e. exactly the normalised angle bisector —
+ * the same direction `crossNormalAt` cuts the strip along, which is what makes
+ * the cut line the axis of symmetry of the turn and not a step in it.
+ *
+ * THE LENGTH IS `factor`, and it is applied AFTER the re-normalisation, so the
+ * area's own speed encoding (W4b, `@anima/scene-render waterFlowFactor`, the
+ * ratio the shader reads back as metres per second) is untouched by the bend:
+ * the mix of two UNIT vectors is shorter than either of them, and handing that
+ * to the shader would have made a river slow down in its own curves. The mix
+ * cannot vanish either — `|(1−b)·u + b·v| ≥ cos(θ/2)` for two unit vectors θ
+ * apart, which is 0.707 at a right angle and still 0.292 at the fixture
+ * hairpin's 146°, so a bend would have to exceed 179.885° before the length
+ * even reached the 1e-3 floor the speed factor is floored at. Two legs that do
+ * double back exactly (θ = 180°) have no "between": the guard below keeps the
+ * segment's own tangent there, as `mapMath.normalAt` does for the same case.
+ *
  * The knots are already in FLOW order — the server reverses them for
  * `flow_along: "reverse"` — so `b − a` is downstream and no bearing is read.
  * A ONE-KNOT axis has no segment and answers (0, 0), which the ripple shader
  * spells "no flow, keep the lake's own crossing drift": today's look for every
- * still water, unchanged. So does a zero-length segment, which cannot name a
- * direction at all.
+ * still water, unchanged, `factor` or no `factor` (it multiplies nothing). So
+ * does a zero-length segment, which cannot name a direction at all.
  */
 export function waterFlowAt(profile: WaterProfile | null | undefined,
-                            x: number, z: number): [number, number] {
+                            x: number, z: number,
+                            factor: number = 1): [number, number] {
   const axis = profile?.axis;
   if (!axis || axis.length < 2) return [0, 0];
-  const seg = nearestOnAxis(axis, x, z)[1];
-  const dx = axis[seg + 1][0] - axis[seg][0];
-  const dz = axis[seg + 1][1] - axis[seg][1];
-  const len = Math.hypot(dx, dz);
-  if (!(len > 1e-9)) return [0, 0];
-  return [dx / len, dz / len];
+  const [s, seg] = nearestOnAxis(axis, x, z);
+  const own = segmentOf(axis, seg);
+  if (!own) return [0, 0];
+  // The two knots that bound the winning segment; the arc coordinate can only
+  // fall inside one of their windows, so the first hit is the answer.
+  for (const c of [seg, seg + 1]) {
+    if (c < 1 || c > axis.length - 2) continue;
+    const inSeg = segmentOf(axis, c - 1);
+    const outSeg = segmentOf(axis, c);
+    if (!inSeg || !outSeg) continue;
+    const half = Math.min(inSeg.span / 2, outSeg.span / 2,
+                          WATER_FLOW_BLEND_MAX_M);
+    const dd = s - axis[c][2];
+    if (!(half > 1e-9) || Math.abs(dd) >= half) continue;
+    const b = blendEase((dd + half) / (2 * half));
+    const mx = (1 - b) * inSeg.ux + b * outSeg.ux;
+    const mz = (1 - b) * inSeg.uz + b * outSeg.uz;
+    const ml = Math.hypot(mx, mz);
+    if (ml > 1e-9) return [(mx / ml) * factor, (mz / ml) * factor];
+  }
+  return [own.ux * factor, own.uz * factor];
 }
 
 /**

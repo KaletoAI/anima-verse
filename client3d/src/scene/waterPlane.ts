@@ -258,11 +258,21 @@ export function buildWaterPlane(geometry: THREE.BufferGeometry,
   // straight river every vertex still gets the same pair, which is what the
   // area-wide vector used to write.
   //
+  // AND IT IS CONTINUOUS ALONG THE AXIS, which is what the W5c strips made
+  // visible: the nearest SEGMENT's tangent is constant over a whole strip and
+  // steps at every cross-line, so the river flowed in stripes that changed at a
+  // knot. `waterFlowAt` blends the two adjacent tangents through a window around
+  // each knot (its docstring carries the rule); nothing here had to change for
+  // it, because the field was always sampled per vertex.
+  //
   // `flowFactor` is the LENGTH that tangent is scaled to — 1 unless this area
   // authors a flow speed of its own (`@anima/scene-render waterFlowFactor`, and
-  // the file header for why the speed rides on the length). Still water is
-  // untouched by it: `waterFlowAt` answers (0, 0) there, and 0 × anything is
-  // still exactly (0, 0), which is the state the shader reads as a lake.
+  // the file header for why the speed rides on the length). It is applied
+  // INSIDE `waterFlowAt`, after the re-normalisation of the blend: a mix of two
+  // unit vectors is shorter than either, and scaling that would have slowed the
+  // river down in its own bends. Still water is untouched by all of it —
+  // `waterFlowAt` answers exactly (0, 0) there whatever the factor, which is
+  // the state the shader reads as a lake.
   //
   // …and THE OPAQUE DEPTH beside it, one float per vertex (W4b): the metres of
   // water this area needs before it is fully drawn. Constant over the mesh, and
@@ -271,9 +281,9 @@ export function buildWaterPlane(geometry: THREE.BufferGeometry,
   const flow = new Float32Array(pos.count * 2);
   const opaque = new Float32Array(pos.count);
   for (let i = 0; i < pos.count; i += 1) {
-    const [fx, fz] = waterFlowAt(profile, pos.getX(i), pos.getZ(i));
-    flow[i * 2] = fx * flowFactor;
-    flow[i * 2 + 1] = fz * flowFactor;
+    const [fx, fz] = waterFlowAt(profile, pos.getX(i), pos.getZ(i), flowFactor);
+    flow[i * 2] = fx;
+    flow[i * 2 + 1] = fz;
     opaque[i] = opaqueDepthM;
   }
   geo.setAttribute('aWaterFlow', new THREE.BufferAttribute(flow, 2));

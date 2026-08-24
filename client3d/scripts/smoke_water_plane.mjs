@@ -927,8 +927,8 @@ check('the mesh builder writes it per vertex',
 check('RED: and the flow is no longer one vector for a whole area',
   /waterFlowVector/.test(planeSrc) ? 1 : 0, 0);
 check('…it is the tangent AT THE VERTEX',
-  /waterFlowAt\(profile, pos\.getX\(i\), pos\.getZ\(i\)\)/.test(planeSrc)
-    ? 1 : 0, 1);
+  /waterFlowAt\(profile, pos\.getX\(i\), pos\.getZ\(i\), flowFactor\)/
+    .test(planeSrc) ? 1 : 0, 1);
 
 // ── [2d] the rim is faded, not merely discarded ────────────────────────────
 // `waterAlpha(0)` is 0.15 BY DESIGN — the foam gives it back so the last hand's
@@ -1084,8 +1084,26 @@ checkVec('…and halfway along leg 2, the other one',
 check('the two legs point 145.959° apart — it is a HAIRPIN',
   (Math.acos(LEG1[0] * LEG2[0] + LEG1[1] * LEG2[1]) * 180) / Math.PI, 145.959,
   1e-3);
-checkVec('at the middle knot the UPSTREAM leg answers (the strict tie rule)',
-  waterFlowAt(U, 249, 280), LEG1);
+// AT THE KNOT the two legs meet, and since W5c-flow the tangent is their eased
+// mix at b = 0.5, i.e. exactly the normalised bisector — the direction the strip
+// cut runs along (`crossNormalAt`), and the only one that treats both legs
+// alike. |LEG1 + LEG2| = 2·cos(145.959°/2) = 0.585429, so
+//   (0.0571211, −0.5826352) / 0.5854285 = (0.0975714, −0.9952285).
+const HAIRPIN_BISECTOR = [0.09757142403137047, -0.9952285251199801];
+checkVec('at the middle knot the two legs meet in their bisector',
+  waterFlowAt(U, 249, 280), HAIRPIN_BISECTOR, 1e-15);
+check('…which is 2·cos(θ/2) long before the re-normalisation',
+  Math.hypot(LEG1[0] + LEG2[0], LEG1[1] + LEG2[1]),
+  2 * Math.cos(Math.acos(LEG1[0] * LEG2[0] + LEG1[1] * LEG2[1]) / 2), 1e-15);
+check('…and bisects: it leans on neither leg', (() => {
+  const t = waterFlowAt(U, 249, 280);
+  return (t[0] * LEG1[0] + t[1] * LEG1[1]) - (t[0] * LEG2[0] + t[1] * LEG2[1]);
+})(), 0, 1e-15);
+check('RED: the old nearest-segment rule answered LEG1 at the knot, i.e. half '
+  + 'the bend away from the bisector — the step the strips showed', (() => {
+    const t = waterFlowAt(U, 249, 280);
+    return (Math.acos(t[0] * LEG1[0] + t[1] * LEG1[1]) * 180) / Math.PI;
+  })(), 145.959 / 2, 1e-3);
 checkVec('upstream of the first knot it is leg 1 as well',
   waterFlowAt(U, 150, 400), LEG1);
 checkVec('…and downstream of the last, leg 2', waterFlowAt(U, 201, 160), LEG2);
@@ -1132,6 +1150,143 @@ console.log('\n[4e-flow] and the ripple still runs straight down the line');
 checkVec('the tangent is the one leg\'s, on both sides of the lip',
   waterFlowAt(CLIFF, 31, 0), [1, 0]);
 checkVec('…and past it', waterFlowAt(CLIFF, 51, 0), [1, 0]);
+// THE REGRESSION OF W5c-flow: this axis has FOUR knots and two of them are
+// interior, so the blend windows are entered — half = min(40, 2)/2 = 1 m around
+// s = 40 and min(2, 58)/2 = 1 m around s = 42. Both mix a tangent with ITSELF
+// (the line is straight; the knots are where the LEVEL bends, not the line), and
+// `(1−b)·1 + b·1 = 1` for every b: the answer is (1, 0) to the bit, inside the
+// windows and outside them. A straight river's ripple may not move by one ulp
+// because its bed found a cliff.
+for (const x of [0, 10, 31, 39, 39.5, 40, 40.5, 41, 41.5, 42, 42.5, 51, 100]) {
+  const [fx, fz] = waterFlowAt(CLIFF, x, 0);
+  checkIs(`x = ${x}: exactly 1 downstream`, fx, 1);
+  checkIs(`x = ${x}: and exactly 0 across`, fz, 0);
+}
+// …and the two windows do not overlap, which is what "half the SHORTER leg"
+// buys: they meet at s = 41 and the comparison is strict, so no sample is ever
+// claimed by two knots.
+check('the two cliff windows touch at the midpoint of the 2 m step',
+  40 + Math.min(40 / 2, 2 / 2, 4), 42 - Math.min(2 / 2, 58 / 2, 4), 1e-15);
+
+// ── [4f] the flow field is CONTINUOUS along the axis (W5c-flow) ────────────
+// THE FINDING (2026-08-24): "the river is uneven — it flows in places, then
+// stands still or is striped, and it always changes at a knot". The tangent was
+// the NEAREST SEGMENT's, i.e. a step function of the place: every vertex of a
+// W5c strip carried the same constant pair, so each strip was one stripe of
+// ripple, and a mesh whose two vertex rows disagree by the whole bend angle
+// interpolates through the middle of nowhere — where that mix passes near zero
+// the shader's `wStill = wLen < 1e-4` branch draws the LAKE pattern instead of
+// the river's, which is the "standing" the finding names.
+//
+// THE FIXTURE, hand-derived: a right-angle bend, three knots, unit segments of
+// exactly ten metres each.
+//
+//     A (0, 0)  s = 0        B (10, 0)  s = 10        C (10, 10)  s = 20
+//     ├──────── leg 1 (1, 0) ─────────┤
+//                                     └──── leg 2 (0, 1) ─────────┘
+//
+// THE WINDOW RULE: half = min( s(B) − s(A), s(C) − s(B) ) / 2, capped at
+// WATER_FLOW_BLEND_MAX_M = 4 -> min(5, 5, 4) = 4 m, i.e. the blend runs over
+// s ∈ (6, 14) and nowhere else.
+console.log('\n[4f] the tangent turns THROUGH the knot, it does not step at it');
+const BEND_META = { water_depth_effective: 1.2,
+  water_profile: { level_up: 5.0, level_down: 3.0, flow_dir_deg: 90.0,
+    axis_x: 0.0, axis_z: 0.0, dir_x: 1.0, dir_z: 0.0,
+    s_min: 0.0, s_max: 20.0,
+    axis: [[0, 0, 0, 5.0], [10, 0, 10, 4.0], [10, 10, 20, 3.0]] } };
+const BEND = waterProfileOf(BEND_META);
+/** The point at arc length `s` ON the axis: the first leg runs along +x to
+ *  (10, 0), the second along +z from there. */
+const bendAt = (s) => (s <= 10 ? [s, 0] : [10, s - 10]);
+/** The tangent at arc length `s`, at length `factor` (default 1). */
+const bendFlow = (s, factor = 1) => waterFlowAt(BEND, ...bendAt(s), factor);
+checkVec('at s = 6, the window\'s upstream rim, it is still leg 1',
+  bendFlow(6), [1, 0], 0);
+checkVec('…and everywhere upstream of that', bendFlow(2), [1, 0], 0);
+checkVec('at s = 10, the knot, it is EXACTLY the normalised bisector',
+  bendFlow(10), [Math.SQRT1_2, Math.SQRT1_2], 1e-15);
+check('…which is a unit vector after the re-normalisation',
+  Math.hypot(...bendFlow(10)), 1, 1e-15);
+check('…and 0.7071 long BEFORE it — cos(90°/2), the bound the 1e-3 floor is '
+  + 'measured against', Math.hypot(0.5, 0.5), Math.SQRT1_2, 0);
+checkVec('at s = 14, the downstream rim, it is leg 2', bendFlow(14), [0, 1], 0);
+checkVec('…and everywhere downstream of that', bendFlow(18), [0, 1], 0);
+// MONOTONE, AND NO OVERSHOOT: the angle walks from 0° to 90° and never leaves
+// that interval — an eased normalised lerp of two unit vectors turns the short
+// way and cannot swing past either end.
+const bendAngle = (s) => {
+  const [fx, fz] = bendFlow(s);
+  return (Math.atan2(fz, fx) * 180) / Math.PI;
+};
+let bendMono = 1;
+let bendStep = 0;
+let bendMin = 1e9;
+let bendMax = -1e9;
+let bendPrev = bendAngle(0);
+for (let s = 0.01; s <= 20 + 1e-9; s += 0.01) {
+  const a = bendAngle(s);
+  if (a < bendPrev - 1e-12) bendMono = 0;
+  bendStep = Math.max(bendStep, Math.abs(a - bendPrev));
+  bendMin = Math.min(bendMin, a);
+  bendMax = Math.max(bendMax, a);
+  bendPrev = a;
+}
+check('the angle never turns back on itself, over the whole axis', bendMono, 1);
+check('…it starts at 0°', bendAngle(0), 0, 0);
+check('…ends at 90°', bendAngle(20), 90, 1e-13);
+check('…never dips below 0°', bendMin, 0, 1e-13);
+check('…and never overshoots 90°', bendMax, 90, 1e-13);
+check('the biggest step between two samples 1 cm apart is a fifth of a degree',
+  bendStep, 0.225, 5e-3);
+check('RED: the nearest-segment rule stepped 90° between two such samples — '
+  + 'one cross-line, the whole bend',
+  (Math.atan2(1, 0) - Math.atan2(0, 1)) * 180 / Math.PI, 90, 1e-13);
+// THE LENGTH IS THE FLOW FACTOR, everywhere — the bend may not slow the river
+// down. `waterFlowAt` re-normalises the mix and THEN scales, so a vertex in the
+// middle of the turn carries the same metres per second as one on the straight.
+const BEND_FACTOR = 1.4;
+let bendLenErr = 0;
+for (let s = 0; s <= 20 + 1e-9; s += 0.1) {
+  bendLenErr = Math.max(bendLenErr,
+    Math.abs(Math.hypot(...bendFlow(s, BEND_FACTOR)) - BEND_FACTOR));
+}
+check(`every emitted vector is ${BEND_FACTOR} long, on the straight and in the `
+  + 'bend', bendLenErr, 0, 1e-15);
+check('RED: scaling the mix WITHOUT re-normalising would have lost 29 % of the '
+  + 'speed at the knot', Math.hypot(0.5, 0.5) * BEND_FACTOR / BEND_FACTOR,
+  Math.SQRT1_2, 0);
+// THE SEAM: W5c cuts the outline at the knot's cross-line, so the two strips
+// have their own copies of the vertices ON that line. The flow is a function of
+// the PLACE and of nothing else — no strip index, no segment carried over — so
+// the two copies get the same bits and the cut is invisible in the attribute.
+const BEND_RING = [[-2, -3], [13, -3], [13, 13], [-2, 13]];
+const bendStrips = subdivideRibbonByAxis(BEND_RING, BEND.axis);
+checkEq('the bend ring is cut in two at the knot', bendStrips.length, 2);
+const shared = [];
+for (const a of bendStrips[0]) {
+  for (const b of bendStrips[1]) {
+    if (Object.is(a[0], b[0]) && Object.is(a[1], b[1])) shared.push([a, b]);
+  }
+}
+check('…and the two strips share the two ends of the cut line', shared.length,
+  2);
+for (const [a, b] of shared) {
+  const up = waterFlowAt(BEND, a[0], a[1], BEND_FACTOR);
+  const down = waterFlowAt(BEND, b[0], b[1], BEND_FACTOR);
+  checkIs(`the cut vertex (${a[0].toFixed(3)}, ${a[1].toFixed(3)}) reads the `
+    + 'same x from the upstream strip and from the downstream one', up[0],
+  down[0]);
+  checkIs('…and the same z', up[1], down[1]);
+  check('…at the full flow length', Math.hypot(up[0], up[1]), BEND_FACTOR,
+    1e-15);
+}
+// The cut runs along `x + z = 10`, so its OUTER end is the ring corner
+// (13, −3) — 4.24 m from the knot and equidistant from both legs, i.e. in the
+// wedge no segment owns. That vertex reads the bisector, scaled: the strip the
+// shader interpolates from starts at the corner of the turn, not on one leg.
+checkVec('the outer end of the cut carries the bisector, at flow length',
+  waterFlowAt(BEND, 13, -3, BEND_FACTOR),
+  [Math.SQRT1_2 * BEND_FACTOR, Math.SQRT1_2 * BEND_FACTOR], 1e-15);
 
 // ── [5] the sloped mesh ────────────────────────────────────────────────────
 console.log('\n[5] the mirror mesh is a RULED surface — one y per vertex');
@@ -1683,14 +1838,16 @@ console.log('\n[9e] the flow attribute carries the AREA\'s speed as its length')
 const TANGENT = waterFlowAt(RIVER, 50, -30);
 checkVec('the fixture river\'s tangent is the unit vector it always was',
   TANGENT, [-1, 0]);
-/** What `buildWaterPlane` writes into `aWaterFlow` for one vertex. */
-const encode = ([fx, fz], factor) => [fx * factor, fz * factor];
+/** What `buildWaterPlane` writes into `aWaterFlow` for one vertex — the very
+ *  call the builder makes, factor and all: since the blend of W5c-flow the
+ *  scaling happens INSIDE `waterFlowAt`, after its re-normalisation. */
+const encode = (profile, [x, z], factor) => waterFlowAt(profile, x, z, factor);
 for (const [areaSpeed, factor] of [[undefined, 1], [0.45, 3], [0.03, 0.2],
   [0.15, 1]]) {
   const f = waterFlowFactor(areaSpeed, WATER_FLOW_SPEED_DEFAULT_M_S);
   check(`${areaSpeed ?? 'no'} m/s over the kind's 0.15 is a factor of`,
     f, factor, 1e-12);
-  const a = encode(TANGENT, f);
+  const a = encode(RIVER, [50, -30], f);
   check('…so the attribute comes out that long',
     Math.hypot(a[0], a[1]), factor, 1e-12);
   // AND POINTING WHERE IT DID: the shader divides by that same length, so the
@@ -1706,7 +1863,7 @@ for (const [areaSpeed, factor] of [[undefined, 1], [0.45, 3], [0.03, 0.2],
 // and a still surface drifts at uSpeed (0.25 m/s) — FASTER than the standstill
 // an author asking for 0 m/s wants, and in a lake's crossing pattern instead of
 // the river's streaks. The factor is floored at 1e-3, ten times that threshold.
-const stopped = encode(TANGENT,
+const stopped = encode(RIVER, [50, -30],
   waterFlowFactor(0, WATER_FLOW_SPEED_DEFAULT_M_S));
 check('a river dialled to 0 m/s keeps a length above the still threshold',
   Math.hypot(stopped[0], stopped[1]), WATER_FLOW_FACTOR_MIN, 1e-15);
@@ -1723,14 +1880,20 @@ check('…and it still moves, at 0.15 mm/s',
 const lakeTangent = waterFlowAt(LAKE, 12, -4);
 checkVec('a lake hands over (0, 0)', lakeTangent, [0, 0]);
 for (const f of [1, 3, 0.2, WATER_FLOW_FACTOR_MIN]) {
-  checkEq(`…and stays (0, 0) at factor ${f}`, encode(lakeTangent, f), [0, 0]);
+  checkEq(`…and stays (0, 0) at factor ${f}`, encode(LAKE, [12, -4], f),
+    [0, 0]);
 }
 // The builder is what writes it, and the ratio is computed against the KIND's
 // own dial in `ground.ts` — not against the module default, or a world that
 // slowed all its rivers down would speed this one back up.
-check('the mesh builder scales the tangent by the factor',
-  /flow\[i \* 2\] = fx \* flowFactor;/.test(planeSrc)
-  && /flow\[i \* 2 \+ 1\] = fz \* flowFactor;/.test(planeSrc) ? 1 : 0, 1);
+check('the mesh builder asks for the tangent AT that length',
+  /waterFlowAt\(profile, pos\.getX\(i\), pos\.getZ\(i\), flowFactor\)/
+    .test(planeSrc)
+  && /flow\[i \* 2\] = fx;/.test(planeSrc)
+  && /flow\[i \* 2 \+ 1\] = fz;/.test(planeSrc) ? 1 : 0, 1);
+check('RED: …and does NOT scale a blended tangent afterwards — a mix of two '
+  + 'unit vectors is short, and that would slow the river in its own bends',
+  /fx \* flowFactor|fz \* flowFactor/.test(planeSrc) ? 1 : 0, 0);
 check('RED: and no second attribute was added for it',
   /aWaterSpeed|aFlowSpeed/.test(planeSrc + matSrc) ? 1 : 0, 0);
 const groundSrc = await readFile(
