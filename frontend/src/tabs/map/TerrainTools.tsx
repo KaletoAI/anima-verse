@@ -21,7 +21,8 @@
  * user has clicked 257 times. They are a copy, not a second opinion: the
  * server still validates, and any change there must land here too.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { SliderInput } from '../../components/SliderInput'
 import type { PropRef } from '../../lib/refs'
@@ -146,6 +147,15 @@ export const SCATTER_SPACING_MAX_M = 100
  *  so a client on another host resolves it against its own API origin. */
 export function propModelUrl(id: string): string {
   return `/assets/props/${encodeURIComponent(id)}/model`
+}
+
+/** The library picture of a prop: the product shot its mesh was made from
+ *  (`GET /assets/props/{id}/source`) — the very image the Props tab shows in
+ *  its list, so both surfaces mean the same picture. Site-relative like
+ *  `propModelUrl`. A prop that was uploaded without a source answers 404,
+ *  which is the normal "no image" state and not an error. */
+function propImageUrl(id: string): string {
+  return `/assets/props/${encodeURIComponent(id)}/source`
 }
 
 /** A line needs two points to have a direction at all. */
@@ -288,6 +298,145 @@ function ScatterNum({ label, title, value, step, placeholder, onCommit }: {
   )
 }
 
+/** How wide the hover preview's picture is, in CSS pixels: small enough to sit
+ *  beside a row without covering the fields next to it, large enough to tell a
+ *  fir from an oak. */
+const PREVIEW_IMG_PX = 128
+
+/** Padding around the picture and the gap the card keeps from the swatch and
+ *  from the window edge. The card's own size is derived from both, because the
+ *  flip has to know how much room it needs BEFORE the card is on screen. */
+const PREVIEW_PAD_PX = 8
+const PREVIEW_CARD_W = PREVIEW_IMG_PX + 2 * PREVIEW_PAD_PX
+/** …plus the name line under the picture. */
+const PREVIEW_CARD_H = PREVIEW_IMG_PX + 2 * PREVIEW_PAD_PX + 22
+
+/**
+ * The colour icon of a scatter row — and, on hover or keyboard focus, WHAT
+ * THAT ROW PLANTS (user request 2026-08-25).
+ *
+ * The colour alone only says which dots on the scatter preview belong to this
+ * row; the name in the picker says what the model is CALLED. Neither shows the
+ * thing, and picking `oak_2` over `oak_3` from two names is guesswork. The
+ * picture is the prop library's own product shot, so the editor shows the same
+ * image the Props tab does instead of inventing a second thumbnail.
+ *
+ * It is a BUTTON, not a decorated span: a preview reachable by mouse alone is
+ * one half of the room's authors locked out, and focus opens exactly what
+ * hover opens. It commits nothing, so the click does nothing either.
+ *
+ * The picture is fetched on the FIRST hover and never before — a chip with
+ * eight rows would otherwise pull eight full-size renders for a panel the user
+ * opened to change one density. The `<img>` is unmounted with the card, and the
+ * browser cache makes every hover after the first one instant.
+ *
+ * The card is a PORTAL on document.body: the chip it sits in is a scrolling
+ * tray with its own overflow, and a preview drawn inside it would be clipped to
+ * a sliver at the row's edge (the ModelPicker lesson, 2026-08-24). It is
+ * `pointerEvents: none` so it can never eat the click meant for the row under
+ * it, and it flips to the other side of the swatch resp. up the window when the
+ * side it prefers has no room.
+ */
+function ScatterSwatch({ color, name, imageUrl }: {
+  color: string
+  /** What the preview calls this row — the prop's name, or the reason there is
+   *  no prop (a tuft, an unknown model URL). Always shown, even without a
+   *  picture. */
+  name: string
+  /** The prop's library picture, or '' when this row has no prop at all. */
+  imageUrl: string
+}) {
+  const { t } = useI18n()
+  const ref = useRef<HTMLButtonElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  // The picture 404s (a prop uploaded without a source) — remembered per URL so
+  // a second hover shows the hint straight away instead of a broken image.
+  const [failed, setFailed] = useState(false)
+  useEffect(() => { setFailed(false) }, [imageUrl])
+
+  const place = () => {
+    const r = ref.current?.getBoundingClientRect()
+    if (!r) return
+    const g = PREVIEW_PAD_PX
+    let left = r.right + g
+    if (left + PREVIEW_CARD_W > window.innerWidth - g) {
+      left = r.left - g - PREVIEW_CARD_W
+    }
+    left = Math.max(g, left)
+    let top = r.top
+    if (top + PREVIEW_CARD_H > window.innerHeight - g) {
+      top = window.innerHeight - g - PREVIEW_CARD_H
+    }
+    top = Math.max(g, top)
+    setPos({ left, top })
+  }
+  const show = () => { setOpen(true); place() }
+  const hide = () => { setOpen(false); setPos(null) }
+  useEffect(() => {
+    if (!open) return
+    const onMove = () => place()
+    window.addEventListener('resize', onMove)
+    // capture: the tray scrolls in its own container and fires no window scroll.
+    window.addEventListener('scroll', onMove, true)
+    return () => {
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
+    }
+  }, [open])
+
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        className="ga-terrain-swatch"
+        style={{ background: color, padding: 0, cursor: 'default' }}
+        aria-label={t('Show what this scatter plants: {name}').replace('{name}', name)}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+      />
+      {open && pos && createPortal(
+        <div role="tooltip" style={{
+          position: 'fixed', left: pos.left, top: pos.top,
+          width: PREVIEW_CARD_W, pointerEvents: 'none', zIndex: 2000,
+          padding: PREVIEW_PAD_PX, boxSizing: 'border-box',
+          background: 'var(--panel, #161b22)',
+          border: '1px solid var(--border, #30363d)', borderRadius: 6,
+          boxShadow: '0 6px 20px rgba(0,0,0,0.4)', fontSize: '0.85em',
+        }}>
+          {imageUrl && !failed ? (
+            <img
+              src={imageUrl}
+              alt=""
+              width={PREVIEW_IMG_PX}
+              height={PREVIEW_IMG_PX}
+              style={{ display: 'block', width: PREVIEW_IMG_PX,
+                height: PREVIEW_IMG_PX, objectFit: 'contain' }}
+              onError={() => setFailed(true)}
+            />
+          ) : (
+            <div style={{
+              width: PREVIEW_IMG_PX, height: PREVIEW_IMG_PX,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              opacity: 0.6,
+            }}>
+              {t('no image')}
+            </div>
+          )}
+          <div style={{
+            marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>{name}</div>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
 /**
  * What an area GROWS — the list editor of finding B17.
  *
@@ -335,7 +484,16 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
           ? Number(prop.height_m) : SCATTER_FALLBACK_HEIGHT_M
         return (
           <div className="ga-terrain-scatter-row" key={i}>
-            <span className="ga-terrain-swatch" style={{ background: colorOf(i) }} />
+            {/* The row's colour — and, on hover/focus, the thing it plants.
+                A row without a prop still has a preview: it says what it is
+                (a tuft, or a model URL the library does not know) instead of
+                showing nothing at all. */}
+            <ScatterSwatch
+              color={colorOf(i)}
+              name={prop ? (prop.name || prop.id)
+                : (model || t('Tuft (no model)'))}
+              imageUrl={prop ? propImageUrl(prop.id) : ''}
+            />
             <label className="ga-terrain-scatter-model">
               <select
                 className="ga-input"
