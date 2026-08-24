@@ -171,7 +171,18 @@ logger = get_logger("heightfield")
 #: from the water. The band is now :data:`RELIEF_SHORE_FADE_M` wide (a wider
 #: ``shore_ramp_m`` still wins), i.e. at least one FLANK of the relief it
 #: suppresses, and it no longer has an off switch.
-HEIGHT_BAKE_VERSION = 6
+#:
+#: v7 (2026-08-24, Wasser v2 K-A E1): THE TILE CARRIES A SECOND FIELD. Beside
+#: ``heights`` a tile now bakes the WATER RASTER — per lattice point the local
+#: mirror (:func:`water_level_at` of the topmost water covering it) and the
+#: flow vector, dilated :data:`WATER_RASTER_DILATION_STEPS` steps past every
+#: outline (:meth:`HeightModel.water_raster`). ``h_final`` does NOT move: the
+#: mirror was always an input of the carve and is now shipped as well, not
+#: computed differently. The counter still has to turn, because the tile
+#: PAYLOAD is a function of the code and a client holding a v6 tile has no
+#: water field at all — and because the signature is the one thing that makes
+#: a running world refetch.
+HEIGHT_BAKE_VERSION = 7
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -319,6 +330,77 @@ WATER_SHORE_RAMP_MAX_M = 20.0
 #: rides :data:`HEIGHT_BAKE_VERSION`, which IS the hashed input for "the rule
 #: changed while the data did not" (``models.heightfield.height_sig``).
 WATER_BANK_LIP_M = 0.1
+
+#: How far the WATER RASTER is written PAST the outline it belongs to, in
+#: lattice steps (Wasser v2 K-A E1, recherche-wasser-v2.md § 3.8/§ 6).
+#:
+#: A field that is only valid INSIDE a mask must not be read bilinearly at its
+#: rim: the filter mixes valid texels with invalid ones. The standard
+#: counter-measure is DILATION — the values are written outward before the
+#: texture is used — and for this raster it is a construction rule, not a
+#: residual risk: without it the shore comes back as a filter artefact.
+#:
+#: TWO STEPS, AND THE NUMBER IS A DIAGONAL. Let P be any point INSIDE an
+#: outline. A bilinear read at P mixes the four corners of the lattice cell P
+#: falls in. If such a corner C lies outside the outline, then the segment
+#: P→C crosses the outline at some Q, so
+#:
+#:     d(C, outline) <= |CQ| <= |CP| <= one cell diagonal = sqrt(2) steps
+#:
+#: i.e. **a corner of a wet sample's cell is at most 1.415 steps outside**.
+#: One step of dilation does NOT cover that (a diagonal corner may sit 2.83 m
+#: out at :data:`TILE_STEP_M`); two do, strictly. So every point inside every
+#: water polygon reads four defined corners on the BASE lattice, and that is
+#: the guarantee this constant states.
+#:
+#: THE GUARANTEE IS THE BASE LATTICE'S ALONE, deliberately. A client's mip
+#: pyramid decimates the raster, so the ring is 2 texels wide on level 0, one
+#: on level 1 and gone above it, while the same diagonal argument asks for
+#: sqrt(2) TEXELS at every level — 46 base steps (92 m) at the 64 m level.
+#: Painting a mirror 92 m into the land would make "the topmost water covering
+#: this point" a statement about ground nobody would call a shore, for a level
+#: at which a 6 m river has no support point of its own anyway. The coarse
+#: shore is the fragment MASK's business (K-A E4), not the raster's.
+WATER_RASTER_DILATION_STEPS = 2
+
+#: The dilation above in METRES — what :meth:`HeightModel.water_at` measures
+#: against the outline. It is tied to :data:`TILE_STEP_M` because the tiles are
+#: the only lattice the water raster is ever baked on.
+WATER_RASTER_DILATION_M = WATER_RASTER_DILATION_STEPS * TILE_STEP_M
+
+#: How far to either side of a KNOT the flow tangent is blended from the
+#: incoming segment's to the outgoing one's, in metres of arc length, at the
+#: most (:func:`water_flow_at`).
+#:
+#: THE SERVER IS THE SOURCE OF THIS SINCE K-A E1. The rule was written in
+#: ``client3d/src/scene/waterPlaneMath.waterFlowAt`` and evaluated per VERTEX
+#: of the mirror mesh; the raster evaluates the same rule per lattice point, so
+#: the number moves here with it. The window is ``min(half the incoming
+#: segment, half the outgoing segment, this)``, which is what keeps two
+#: neighbouring knots from fighting over the same stretch of line; the cap is
+#: what that rule cannot supply on its own, because a flow axis has no
+#: deflection spacing and two 400 m legs would otherwise turn the ripple over
+#: 200 m of river and never show a straight stretch at all. Four metres is a
+#: little over one figure's height and about the width of the seeded river.
+WATER_FLOW_BLEND_MAX_M = 4.0
+
+#: What a water KIND flows at when it declares no ``flow_speed``, in m/s — the
+#: mirror of ``core.surface_textures._MATERIAL_RANGES['flow_speed']`` and of
+#: ``@anima/scene-render`` ``WATER_FLOW_SPEED_DEFAULT_M_S``.
+WATER_FLOW_SPEED_DEFAULT_M_S = 0.15
+
+#: The fastest a water may be dialled to, in m/s — the same ceiling the kind's
+#: own dial has, so an AREA can ask for nothing a kind could not have asked for.
+WATER_FLOW_SPEED_MAX_M_S = 2.0
+
+#: The smallest factor a FLOWING water may carry, and it is a hard floor rather
+#: than a rounding: the factor rides on the LENGTH of the flow vector and a
+#: renderer reads a length under ``1e-4`` as STILL — which drifts FASTER (a
+#: lake's own ``speed``). An authored 0 m/s must therefore not reach the raster
+#: as a zero-length vector; floored here it is 0.15 mm/s on the default kind,
+#: one wavelength in about three hours: a river standing still while keeping
+#: every flowing trait "still" would drop.
+WATER_FLOW_FACTOR_MIN = 1e-3
 
 #: The mip levels a tile reports an error bound for, in metres (§ G2). Each is
 #: a multiple of :data:`TILE_STEP_M` AND divides the tile edge, so the coarse
@@ -971,17 +1053,28 @@ class WaterProfile(NamedTuple):
     axis: Tuple[WaterKnot, ...]
 
 
-def _axis_s_at(axis: Tuple[WaterKnot, ...], x: float, z: float) -> float:
-    """The arc coordinate of the point on ``axis`` NEAREST to ``(x, z)``.
+def _axis_nearest(axis: Tuple[WaterKnot, ...], x: float,
+                  z: float) -> Tuple[float, int]:
+    """The point on ``axis`` NEAREST to ``(x, z)`` — ``(arc coordinate, segment)``.
 
     Every segment is projected onto with a clamp to its own ends, and the
     shortest distance wins; the answer is that segment's ``s`` interpolated by
     the projection. The candidate the loop starts from is the FIRST KNOT, which
     is the whole answer for a one-knot (still) axis and is dominated by the
     first segment for every longer one.
+
+    THE WINNING SEGMENT RIDES ALONG because :func:`water_flow_at` needs the same
+    projection the level is read from — two loops would be two chances for the
+    tangent and the level to disagree about which leg of a bend a point is on.
+
+    THE COMPARISON IS STRICT (``<``), and that decides the ties: a point sitting
+    ON a knot is at distance 0 from both of its legs, and the earlier — the
+    UPSTREAM — leg keeps it. The level is the same number either way; the flow
+    tangent is not, and this is where that choice is made.
     """
     best_x, best_z, best_s, _ = axis[0]
     best_d2 = (x - best_x) * (x - best_x) + (z - best_z) * (z - best_z)
+    best_seg = 0
     i = 1
     while i < len(axis):
         ax, az, a_s, _ = axis[i - 1]
@@ -995,8 +1088,14 @@ def _axis_s_at(axis: Tuple[WaterKnot, ...], x: float, z: float) -> float:
         if d2 < best_d2:
             best_d2 = d2
             best_s = a_s + (b_s - a_s) * u
+            best_seg = i - 1
         i += 1
-    return best_s
+    return best_s, best_seg
+
+
+def _axis_s_at(axis: Tuple[WaterKnot, ...], x: float, z: float) -> float:
+    """The arc coordinate of the point on ``axis`` NEAREST to ``(x, z)``."""
+    return _axis_nearest(axis, x, z)[0]
 
 
 def _axis_level_at(axis: Tuple[WaterKnot, ...], s: float) -> float:
@@ -1072,6 +1171,168 @@ def flow_direction(flow_dir_deg: Optional[float]) -> Tuple[float, float]:
                  for v in (round(math.sin(rad), 12), round(math.cos(rad), 12)))
 
 
+def _blend_ease(t: float) -> float:
+    """Cosine ease over [0, 1] — 0 at 0, 1 at 1, FLAT at both ends.
+
+    The flat ends are the point: the blend meets a segment's own constant
+    tangent at the window's rim with slope 0, so the window's edge is not a
+    crease in the rotation rate the way a straight ramp's would be.
+    """
+    return (1.0 - math.cos(math.pi * t)) * 0.5
+
+
+def _axis_segment(axis: Tuple[WaterKnot, ...], i: int
+                  ) -> Optional[Tuple[float, float, float]]:
+    """The unit tangent of segment ``i`` (knot ``i`` → ``i + 1``) and the arc
+    length it spans — ``(ux, uz, span)``, or None where it is too short to name
+    a direction.
+
+    The span is read off the knots' own ``s``, the coordinate
+    :func:`_axis_nearest` answers in, so the blend window below is measured in
+    the units it is compared against.
+    """
+    if i < 0 or i + 1 >= len(axis):
+        return None
+    dx = axis[i + 1][0] - axis[i][0]
+    dz = axis[i + 1][1] - axis[i][1]
+    length = math.hypot(dx, dz)
+    if not length > 1e-9:
+        return None
+    span = axis[i + 1][2] - axis[i][2]
+    return (dx / length, dz / length, span if span > 0 else length)
+
+
+def water_flow_at(profile: WaterProfile, x: float, z: float,
+                  factor: float = 1.0) -> Tuple[float, float]:
+    """The DOWNSTREAM vector at one point, of length ``factor`` — the axis
+    tangent BLENDED THROUGH EVERY KNOT, or (0, 0) for still water.
+
+    THE SERVER OWNS THIS RULE SINCE K-A E1. It was written in
+    ``client3d/src/scene/waterPlaneMath.waterFlowAt`` and evaluated per vertex
+    of a mirror MESH; the mesh is going away, the rule is not, and it is
+    reproduced here line for line so the raster carries exactly the vectors the
+    mirror used to interpolate.
+
+    IT IS LOCAL: a river bends, so its ripples bend with it. Reading only the
+    nearest SEGMENT's tangent is a step function — every point on one side of a
+    knot's cross line shares one constant direction and the value JUMPS there,
+    which reads as a striped river that changes at a knot.
+
+    THE WINDOW RULE. Around every INTERIOR knot ``c``, over the arc-length
+    window::
+
+        half = min( s(c) − s(c−1), s(c+1) − s(c) ) / 2, capped at
+               WATER_FLOW_BLEND_MAX_M
+        b    = ease( (s − s(c) + half) / (2·half) )      (cosine, _blend_ease)
+        t    = normalize( (1 − b)·t(c−1) + b·t(c) )
+
+    the tangent is the eased mix of the two adjacent segments' tangents;
+    outside every window it is the segment's own, unchanged. Half of the
+    SHORTER leg is what keeps two windows from overlapping (they can at most
+    touch, and the comparison is strict), so no point is ever claimed by two
+    knots — which is why this is a plain loop over the two knots bounding the
+    winning segment and needs no ordering. AT THE KNOT ITSELF ``b`` = 0.5, i.e.
+    exactly the normalised angle bisector of the turn.
+
+    THE LENGTH IS ``factor``, applied AFTER the re-normalisation: the mix of
+    two unit vectors is shorter than either of them, and scaling the mix would
+    have made a river slow down in its own curves. The mix cannot vanish either
+    — ``|(1−b)·u + b·v| ≥ cos(θ/2)`` for two unit vectors θ apart, which is
+    0.707 at a right angle — so a bend would have to exceed 179.885° before the
+    length even reached :data:`WATER_FLOW_FACTOR_MIN`. Two legs that double back
+    exactly (θ = 180°) have no "between": the guard below keeps the segment's
+    own tangent there.
+
+    The knots are already in FLOW order — a stroke flowed ``reverse`` is
+    reversed when the axis is built — so ``b − a`` is downstream and no bearing
+    is read. A ONE-KNOT axis has no segment and answers (0, 0), which is every
+    still water: no flow, and ``factor`` multiplies nothing.
+    """
+    axis = profile.axis
+    if not axis or len(axis) < 2:
+        return (0.0, 0.0)
+    return _flow_from(axis, *_axis_nearest(axis, x, z), factor)
+
+
+def _flow_from(axis: Tuple[WaterKnot, ...], s: float, seg: int,
+               factor: float) -> Tuple[float, float]:
+    """:func:`water_flow_at` from a projection that has ALREADY been made.
+
+    The raster asks both questions about the same point — the level and the
+    flow — and both start from the nearest point on the axis. Split out so
+    :meth:`HeightModel.water_at` pays for that search once: on a meandering
+    60-knot river it is half the cost of a tile's water field, and the two
+    answers must come from the SAME projection anyway or the tangent and the
+    level could disagree about which leg of a bend a point is on.
+    """
+    own = _axis_segment(axis, seg)
+    if own is None:
+        return (0.0, 0.0)
+    # The two knots that bound the winning segment; the arc coordinate can only
+    # fall inside one of their windows, so the first hit is the answer.
+    for c in (seg, seg + 1):
+        if c < 1 or c > len(axis) - 2:
+            continue
+        in_seg = _axis_segment(axis, c - 1)
+        out_seg = _axis_segment(axis, c)
+        if in_seg is None or out_seg is None:
+            continue
+        half = min(in_seg[2] * 0.5, out_seg[2] * 0.5, WATER_FLOW_BLEND_MAX_M)
+        dd = s - axis[c][2]
+        if not half > 1e-9 or abs(dd) >= half:
+            continue
+        b = _blend_ease((dd + half) / (2.0 * half))
+        mx = (1.0 - b) * in_seg[0] + b * out_seg[0]
+        mz = (1.0 - b) * in_seg[1] + b * out_seg[1]
+        ml = math.hypot(mx, mz)
+        if ml > 1e-9:
+            return ((mx / ml) * factor, (mz / ml) * factor)
+    return (own[0] * factor, own[1] * factor)
+
+
+def _water_sample(profile: WaterProfile, x: float, z: float,
+                  factor: float) -> Tuple[float, float, float]:
+    """``(level, flow_x, flow_z)`` of ONE water at one point, ONE projection.
+
+    The pair :func:`water_level_at` / :func:`water_flow_at` would answer exactly
+    this — and each would search the polyline for the nearest point again. The
+    raster asks for both at every lattice point of every tile, so the search
+    happens once here and both readers take their answer from it.
+    """
+    s, seg = _axis_nearest(profile.axis, x, z)
+    return (_axis_level_at(profile.axis, s),
+            *(_flow_from(profile.axis, s, seg, factor)
+              if len(profile.axis) >= 2 else (0.0, 0.0)))
+
+
+def water_flow_factor(area_speed_ms: Optional[float],
+                      kind_speed_ms: Optional[float]) -> float:
+    """How much faster (or slower) ONE painted area runs than its KIND — the
+    length the flow vector of :func:`water_flow_at` carries.
+
+    ``area_speed_ms`` is the area's own ``meta.flow_speed_m_s`` (None where it
+    authors none), ``kind_speed_ms`` the kind's ``flow_speed`` dial out of the
+    surface library. The answer is EXACTLY 1 wherever the area authors nothing
+    readable, which keeps the raster the plain unit tangent for every water in
+    every world that has not touched the dial.
+
+    WHY A RATIO AND NOT THE ABSOLUTE SPEED: the kind's speed is a MATERIAL
+    number — one material serves every area of that kind — and the area may
+    only scale what the material already carries. A kind that does not flow at
+    all (``flow_speed`` 0, e.g. ice) therefore cannot be made to flow by an
+    area: ``0 × anything`` is 0, and 1 is returned so nothing pretends
+    otherwise. It is the twin of ``@anima/scene-render`` ``waterFlowFactor``.
+    """
+    if area_speed_ms is None or not math.isfinite(area_speed_ms):
+        return 1.0
+    kind = (kind_speed_ms if kind_speed_ms is not None
+            and math.isfinite(kind_speed_ms) else WATER_FLOW_SPEED_DEFAULT_M_S)
+    if kind <= 0:
+        return 1.0
+    speed = min(max(float(area_speed_ms), 0.0), WATER_FLOW_SPEED_MAX_M_S)
+    return max(speed / kind, WATER_FLOW_FACTOR_MIN)
+
+
 def sanitize_flow_dir(raw: Any) -> Optional[float]:
     """One authored flow bearing, 0…360 — or None for "still".
 
@@ -1093,9 +1354,11 @@ def sanitize_flow_dir(raw: Any) -> Optional[float]:
 
 
 #: One water stamp: the polygon in WORLD metres, its box, the mirror PROFILE,
-#: the depth under it and the width of the shore ramp — all in metres.
+#: the depth under it, the width of the shore ramp — all in metres — and the
+#: FLOW FACTOR the water raster gives its flow vector as a length
+#: (:func:`water_flow_factor`; 1 for every water that authors no speed).
 WaterStamp = Tuple[List[List[float]], Tuple[float, float, float, float],
-                   WaterProfile, float, float]
+                   WaterProfile, float, float, float]
 
 #: One plateau stamp: pin x/z, yaw, the outline in LOCAL metres, its world box,
 #: the target height and the ramp width in metres.
@@ -1173,6 +1436,12 @@ class WaterMeta(NamedTuple):
     flow axis when the author flows the area along it. They are read here, and
     not from the polygon, because the polygon is the ribbon AROUND the line and
     has no direction of its own.
+
+    ``flow_speed_m_s`` is the area's own SPEED override and is None where it
+    authors none — the one water number that used to be pure look and became a
+    bake input with the water raster (K-A E1): the raster's flow vector carries
+    it as its LENGTH (:func:`water_flow_factor`), so it is hashed into
+    ``height_sig`` like every other number the tiles are a function of.
     """
     level: Optional[float]
     level_up: Optional[float]
@@ -1184,6 +1453,7 @@ class WaterMeta(NamedTuple):
     flow_along: Optional[str]
     stroke_points: Tuple[Tuple[float, float], ...]
     stroke_width_m: float
+    flow_speed_m_s: Optional[float]
 
 
 def is_flowing(meta: WaterMeta) -> bool:
@@ -1255,6 +1525,12 @@ def water_meta(area: Dict[str, Any],
         flow_along=along if along in FLOW_ALONG_VALUES else None,
         stroke_points=points,
         stroke_width_m=width,
+        # NOT clamped here: ``models.terrain._sanitize_water`` already clamps
+        # the authored key into [0, WATER_FLOW_SPEED_MAX_M_S] and rounds it, and
+        # a second clamp would be a second opinion about what an author may ask
+        # for. Unreadable — including the key being absent — answers None, which
+        # is "this area says nothing, the kind decides".
+        flow_speed_m_s=_level("flow_speed_m_s"),
     )
 
 
@@ -1683,7 +1959,17 @@ class HeightModel:
     def __init__(self, areas: Sequence[Dict[str, Any]] = (),
                  terrain_areas: Sequence[Dict[str, Any]] = (),
                  terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
-                 footprints: Sequence["Footprint"] = ()):
+                 footprints: Sequence["Footprint"] = (),
+                 water_flow_speeds: Optional[Dict[str, float]] = None):
+        #: kind -> that kind's ``flow_speed`` dial in m/s, the DENOMINATOR of
+        #: the raster's flow factor (:func:`water_flow_factor`). It comes from
+        #: the SURFACE library, not from the terrain catalog, so it is handed in
+        #: like every other impure input — ``models.heightfield.water_flow_speeds``
+        #: reads it once per generation and hashes it into ``height_sig``. An
+        #: empty map means every kind answers
+        #: :data:`WATER_FLOW_SPEED_DEFAULT_M_S`.
+        self._water_flow_speeds: Dict[str, float] = dict(water_flow_speeds
+                                                         or {})
         self.boxes: List[AreaBox] = area_boxes(areas)
         self._area_index = _BoxIndex([b for _a, b in self.boxes])
         # (ring, height_m, falloff_m) per height area, parsed ONCE.
@@ -1740,8 +2026,16 @@ class HeightModel:
         # wider box only ever costs it a handful of rejected candidates.
         self._water_index = _BoxIndex(
             [self.water_bank_box(i) for i in range(len(self.water))])
-        self._water_fast = [(_ring(w[0]) or [], w[2], w[3], w[4])
+        self._water_fast = [(_ring(w[0]) or [], w[2], w[3], w[4], w[5])
                             for w in self.water]
+        # THE WATER RASTER HAS ITS OWN INDEX (K-A E1), grown by the DILATION and
+        # not by the shore ramp: the raster writes :data:`WATER_RASTER_DILATION_M`
+        # past every outline whatever the ramp is, and a ramp of 0 (a basin with
+        # a step for a bank, a legal shape) would otherwise index nothing outside
+        # the rim at all — the ring would then be missing exactly where a bucket
+        # boundary happens to fall, which is the class of defect that hides.
+        self._water_raster_index = _BoxIndex(
+            [_grown(w[1], WATER_RASTER_DILATION_M) for w in self.water])
         self.plateaus: List[PlateauStamp] = self._build_plateaus(footprints)
         # THE INDEX IS OVER THE RAMP BOX, not over the outline's: a stamp
         # writes as far as its ramp reaches, and an index that only knew the
@@ -1995,8 +2289,16 @@ class HeightModel:
         for area, box, meta in self._water_input:
             polygon = area.get("polygon")
             profile = self.water_profile_for(polygon, meta)
+            # THE FLOW FACTOR IS RESOLVED ONCE, HERE (K-A E1) — the area's own
+            # speed against its KIND's dial, exactly as the mirror mesh resolved
+            # it per area before the raster existed. It is a property of the
+            # WORLD like the profile beside it, never of whatever window is
+            # being rastered.
             out.append((polygon, box, profile, meta.depth_m,
-                        meta.shore_ramp_m))
+                        meta.shore_ramp_m,
+                        water_flow_factor(meta.flow_speed_m_s,
+                                          self._water_flow_speeds.get(
+                                              str(area.get("kind") or "")))))
             # THE EFFECTIVE PROFILE, keyed by area id (E1b): the admin panel
             # offers "auto (rim)" and still wants to show the numbers the carve
             # actually used. It is server-computed OUTPUT — it is never written
@@ -2257,7 +2559,7 @@ class HeightModel:
         grid stopped at the outline would answer the flat 0 exactly where the
         bank is supposed to rise.
         """
-        _polygon, box, _profile, _depth, ramp = self.water[index]
+        _polygon, box, _profile, _depth, ramp, _factor = self.water[index]
         return _grown(box, max(0.0, ramp))
 
     # ── h_final ─────────────────────────────────────────────────────────
@@ -2309,7 +2611,7 @@ class HeightModel:
             return h
         fast = self._water_fast
         for idx in self._water_index.at(x, z):
-            ring, water_profile, depth, ramp = fast[idx]
+            ring, water_profile, depth, ramp, _factor = fast[idx]
             if not ring or not _inside_ring(x, z, ring):
                 continue
             if ramp <= 0.0:
@@ -2374,7 +2676,7 @@ class HeightModel:
         fast = self._water_fast
         raised = h
         for idx in self._water_index.at(x, z):
-            ring, water_profile, _depth, ramp = fast[idx]
+            ring, water_profile, _depth, ramp, _factor = fast[idx]
             if not ring:
                 continue
             if _inside_ring(x, z, ring):
@@ -2462,19 +2764,130 @@ class HeightModel:
                         for i in range(cols)])
         return out
 
+    # ── the water raster (K-A E1) ───────────────────────────────────────
+
+    def water_at(self, x: float, z: float
+                 ) -> Optional[Tuple[float, float, float]]:
+        """THE WATER AT ONE POINT — ``(level, flow_x, flow_z)``, or None for dry
+        ground. The second pure function of this model.
+
+        ``level`` is :func:`water_level_at` of the winning water's profile,
+        evaluated AT THIS POINT; ``flow`` is :func:`water_flow_at` of the same
+        profile, scaled by that water's flow factor. Both are the very
+        expressions the mirror mesh evaluated per vertex — the raster is that
+        surface SAMPLED instead of triangulated, which is the whole of K-A.
+
+        WHICH WATER WINS, in two passes and in this order:
+
+        1. the TOPMOST water whose OUTLINE CONTAINS the point — "the last
+           painted area wins", the rule :meth:`_kind_at` resolves the ground
+           with, so two overlapping lakes answer the same way here as their
+           kinds do there;
+        2. failing that, the topmost water whose outline lies within
+           :data:`WATER_RASTER_DILATION_M` — the DILATION.
+
+        AUTHORSHIP BEATS DILATION, which is why it is two passes and not one:
+        the ring outside a river is a filter fix, and a point that really lies
+        in a lake must read the lake even when a river painted later reaches
+        past it. Inside the ring alone the same top-most rule then decides.
+
+        THE DILATED VALUE IS THE FUNCTION CONTINUED, not the rim value carried
+        outward. ``water_level_at`` is defined everywhere (it is a projection
+        onto a polyline plus a clamp), so a ring point gets the mirror the
+        profile would have there — which is exactly what makes the bilinear mix
+        inside the outline reproduce the profile instead of bending toward a
+        border value. It is deliberately NOT the bank clamp's rule
+        (:meth:`_bank_clamp` reads the level at the NEAREST OUTLINE POINT): the
+        clamp is a statement about the GROUND beside the water and must not
+        carry an end level sideways across the landscape, while this is the
+        analytic continuation of one field and has no landscape in it at all.
+        """
+        if not self.water:
+            return None
+        fast = self._water_fast
+        candidates = self._water_raster_index.at(x, z)
+        for idx in reversed(candidates):
+            ring, profile, _depth, _ramp, factor = fast[idx]
+            if ring and _inside_ring(x, z, ring):
+                return _water_sample(profile, x, z, factor)
+        for idx in reversed(candidates):
+            ring, profile, _depth, _ramp, factor = fast[idx]
+            if not ring:
+                continue
+            if _ring_edge_distance(x, z, ring) <= WATER_RASTER_DILATION_M:
+                return _water_sample(profile, x, z, factor)
+        return None
+
+    def water_raster(self, origin_x: float, origin_z: float, step: float,
+                     cols: int, rows: int
+                     ) -> Optional[Tuple[List[List[Optional[float]]],
+                                         List[List[float]],
+                                         List[List[float]]]]:
+        """:meth:`water_at` over one window — ``(level, flow_x, flow_z)``, or
+        None when the window carries no water at all.
+
+        The water twin of :meth:`grid`, and the same statement about windows:
+        the origin, the step and the size are all there is, so a tile is a
+        WINDOW of the one water field rather than a raster of its own.
+
+        ``level[j][i]`` is None where the point is neither inside a water nor in
+        its dilation ring — the DRY SENTINEL, and the only mask this raster has.
+        ``flow`` is (0, 0) there, which is what "still" already means to every
+        reader of a flow vector, so the two arrays need no second sentinel
+        between them.
+
+        NONE FOR A DRY WINDOW, not three arrays of sentinels: most tiles of most
+        worlds carry no water, and a tile that says nothing about water is the
+        same statement as an unindexed tile saying nothing about height.
+        """
+        if not self.water or cols < 1 or rows < 1 or step <= 0:
+            return None
+        water_at = self.water_at
+        level: List[List[Optional[float]]] = []
+        flow_x: List[List[float]] = []
+        flow_z: List[List[float]] = []
+        wet = False
+        for j in range(rows):
+            pz = origin_z + j * step
+            lrow: List[Optional[float]] = []
+            xrow: List[float] = []
+            zrow: List[float] = []
+            for i in range(cols):
+                found = water_at(origin_x + i * step, pz)
+                if found is None:
+                    lrow.append(None)
+                    xrow.append(0.0)
+                    zrow.append(0.0)
+                    continue
+                wet = True
+                lrow.append(found[0])
+                xrow.append(found[1])
+                zrow.append(found[2])
+            level.append(lrow)
+            flow_x.append(xrow)
+            flow_z.append(zrow)
+        return (level, flow_x, flow_z) if wet else None
+
 
 def build_model(areas: Sequence[Dict[str, Any]] = (),
                 footprints: Sequence["Footprint"] = (),
                 terrain_areas: Sequence[Dict[str, Any]] = (),
                 terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
+                water_flow_speeds: Optional[Dict[str, float]] = None,
                 ) -> HeightModel:
-    """A :class:`HeightModel` from the four raster inputs — pure, no DB.
+    """A :class:`HeightModel` from the raster inputs — pure, no DB.
 
     The argument order of :func:`rasterize`, so a smoke run can build a world
-    out of literals and ask it anything.
+    out of literals and ask it anything. ``water_flow_speeds`` is the fifth
+    input the water raster added (K-A E1): kind -> that kind's ``flow_speed``
+    dial in m/s, out of the SURFACE library. Nothing about the HEIGHTS depends
+    on it — it only scales the raster's flow vectors — and leaving it out is
+    the default kind speed for every water, which is what every world that has
+    not touched the dial gets anyway.
     """
     return HeightModel(areas=areas, terrain_areas=terrain_areas,
-                       terrain_catalog=terrain_catalog, footprints=footprints)
+                       terrain_catalog=terrain_catalog, footprints=footprints,
+                       water_flow_speeds=water_flow_speeds)
 
 
 def rasterize(areas: Sequence[Dict[str, Any]],
@@ -2642,6 +3055,7 @@ def rasterize_tile(
         terrain_areas: Sequence[Dict[str, Any]] = (),
         terrain_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
         model: Optional[HeightModel] = None,
+        water_flow_speeds: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """ONE 256 m tile of the world ground as a grid — pure, no DB.
 
@@ -2661,17 +3075,63 @@ def rasterize_tile(
     next door still ramps into this one, and the ORDER of the stamps decides on
     overlap — dropping a member of that chain would let a wide plateau show
     through where a narrow one flattened it.
+
+    SINCE K-A E1 IT CARRIES A SECOND FIELD, on the same lattice and in the same
+    window: ``water`` = ``{"level", "flow_x", "flow_z"}``, out of
+    :meth:`HeightModel.water_raster`. The key is ABSENT for a tile without a
+    drop of water in it, which is most tiles of most worlds — the additive
+    shape § A16.5 asks for, and a client that only reads ``heights`` sees the
+    payload it always saw.
     """
     if model is None:
-        model = build_model(areas, footprints, terrain_areas, terrain_catalog)
+        model = build_model(areas, footprints, terrain_areas, terrain_catalog,
+                            water_flow_speeds)
     origin_x = tx * TILE_M
     origin_z = tz * TILE_M
     heights = model.grid(origin_x, origin_z, TILE_STEP_M,
                          TILE_POINTS, TILE_POINTS)
-    return {"origin_x": origin_x, "origin_z": origin_z,
-            "step_m": TILE_STEP_M,
-            "rows": TILE_POINTS, "cols": TILE_POINTS,
-            "heights": [[round(v, 3) for v in row] for row in heights]}
+    tile: Dict[str, Any] = {
+        "origin_x": origin_x, "origin_z": origin_z,
+        "step_m": TILE_STEP_M,
+        "rows": TILE_POINTS, "cols": TILE_POINTS,
+        "heights": [[round(v, 3) for v in row] for row in heights]}
+    water = water_raster_payload(model.water_raster(
+        origin_x, origin_z, TILE_STEP_M, TILE_POINTS, TILE_POINTS))
+    if water is not None:
+        tile["water"] = water
+    return tile
+
+
+def water_raster_payload(raster: Optional[Tuple[List[List[Optional[float]]],
+                                                List[List[float]],
+                                                List[List[float]]]]
+                         ) -> Optional[Dict[str, Any]]:
+    """One :meth:`HeightModel.water_raster` answer as the numbers a client
+    reads — or None for a window without water.
+
+    ``level`` is rounded like ``heights`` (a millimetre, which is two orders
+    under the shallowest legal bed) and keeps ``null`` for dry. The flow
+    components are rounded like the profile's ``dir_x``/``dir_z`` (1e-6), which
+    is a micrometre per metre of direction — far under what a ripple can show.
+
+    THE FLOW ARRAYS ARE OMITTED WHERE THERE IS NO FLOW, and that is not a
+    micro-optimisation: every STILL water — every lake, every ice sheet — has
+    a one-knot axis and therefore an exactly zero flow everywhere
+    (:func:`water_flow_at`), so a lake tile would otherwise ship two full
+    lattices of zeros, doubling its payload to say nothing. Their absence reads
+    as "(0, 0) everywhere", which is the same statement the zeros made.
+    """
+    if raster is None:
+        return None
+    level, flow_x, flow_z = raster
+    out: Dict[str, Any] = {
+        "level": [[None if v is None else round(v, 3) for v in row]
+                  for row in level]}
+    if any(v for row in flow_x for v in row) or any(v for row in flow_z
+                                                    for v in row):
+        out["flow_x"] = [[round(v, 6) for v in row] for row in flow_x]
+        out["flow_z"] = [[round(v, 6) for v in row] for row in flow_z]
+    return out
 
 
 # ── The pyramid: what a coarser lattice costs (§ G2) ────────────────────
@@ -2776,7 +3236,8 @@ _TILE_INPUTS: Optional[Tuple[int, Tuple[List[Dict[str, Any]],
                                         List[Tuple[float, float, float,
                                                    float]],
                                         List[Dict[str, Any]],
-                                        Dict[str, Dict[str, Any]]]]] = None
+                                        Dict[str, Dict[str, Any]],
+                                        Dict[str, float]]]] = None
 
 #: (generation, keys) of the tile index.
 _TILE_INDEX: Optional[Tuple[int, frozenset]] = None
@@ -2993,14 +3454,17 @@ def current_sig() -> str:
 def _tile_inputs() -> Tuple[List[Dict[str, Any]],
                             List[Tuple[float, float, float, float]],
                             List[Dict[str, Any]],
-                            Dict[str, Dict[str, Any]]]:
-    """The four raster inputs, read ONCE per generation.
+                            Dict[str, Dict[str, Any]],
+                            Dict[str, float]]:
+    """The raster inputs, read ONCE per generation.
 
-    The same four :func:`get_field` reads and ``height_sig`` hashes — height
-    areas, levelling placements, painted terrain and the type catalog — kept
-    here because the tiles are built ON DEMAND: without it a tile miss would be
-    four DB reads, and those misses happen in the middle of a route, of a walk
-    report, of an A* expansion. With it a miss is arithmetic.
+    The same ones :func:`get_field` reads and ``height_sig`` hashes — height
+    areas, levelling placements, painted terrain, the type catalog and (since
+    the water raster, K-A E1) the per-kind flow speed out of the surface
+    library — kept here because the tiles are built ON DEMAND: without it a tile
+    miss would be a handful of DB reads, and those misses happen in the middle
+    of a route, of a walk report, of an A* expansion. With it a miss is
+    arithmetic.
     """
     global _TILE_INPUTS
     cached = _TILE_INPUTS
@@ -3011,7 +3475,7 @@ def _tile_inputs() -> Tuple[List[Dict[str, Any]],
     from app.models import heightfield as store
     from app.models.terrain import list_areas
     data = (store.list_height_areas(), store.placed_footprints(),
-            list_areas(), effective_catalog())
+            list_areas(), effective_catalog(), store.water_flow_speeds())
     _TILE_INPUTS = (generation, data)
     return data
 
@@ -3034,8 +3498,10 @@ def world_model() -> HeightModel:
         if cached is not None and cached[0] == _GENERATION:
             return cached[1]
         generation = _GENERATION
-        areas, footprints, terrain_areas, catalog = _tile_inputs()
-        model = build_model(areas, footprints, terrain_areas, catalog)
+        (areas, footprints, terrain_areas, catalog,
+         flow_speeds) = _tile_inputs()
+        model = build_model(areas, footprints, terrain_areas, catalog,
+                            flow_speeds)
         _MODEL = (generation, model)
         return model
 
@@ -3398,7 +3864,7 @@ def tiles_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
         tile = get_tile(tx, tz)
         # The tile's own fields, minus its ``step_m``: every tile in a batch
         # has the same one and it stands at the top level.
-        tiles[format_tile_key(tx, tz)] = {
+        entry = {
             "origin_x": tile["origin_x"], "origin_z": tile["origin_z"],
             "rows": tile["rows"], "cols": tile["cols"],
             "heights": tile["heights"],
@@ -3407,6 +3873,12 @@ def tiles_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
             # the statistics of a tile nobody loaded is what costs.
             "stats": stats[(tx, tz)],
         }
+        # …and the WATER field of the same window (K-A E1), where there is one.
+        # Absent means "not a drop in this tile", which is what most tiles of
+        # most worlds are — the key is never an empty raster.
+        if tile.get("water") is not None:
+            entry["water"] = tile["water"]
+        tiles[format_tile_key(tx, tz)] = entry
     return {"sig": sig, "tile_m": TILE_M, "step_m": TILE_STEP_M,
             "mip_levels_m": list(MIP_LEVELS_M), "tiles": tiles}
 

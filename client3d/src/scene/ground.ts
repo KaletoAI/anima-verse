@@ -80,6 +80,7 @@ import type { Point2, ScatterFootprint, ScatterInstance,
 import { fetchHeightfield, fetchHeightTiles, fetchHeightTileStats, fetchTerrain,
   fetchTerrainLayers } from '../api';
 import type { HeightTileBatch, HeightTileStatsBatch } from '../api';
+import { emptyWaterRaster, waterTileFrom } from './waterRaster';
 import { localToWorld } from '../game/enterLocation';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import { sanitizePolygon } from '../game/polygon';
@@ -1059,6 +1060,21 @@ export function createGround(): Ground {
     tileM: 0, overview: null, tiles: new Map(),
     stats: new Map<string, WorldHeightTileStats>(), mipLevelsM: [],
   };
+  /**
+   * The WORLD'S WATER, tile by tile (Wasser v2, K-A E2) — the second field the
+   * height tiles carry since `HEIGHT_BAKE_VERSION` 7.
+   *
+   * A MAP OF ITS OWN, beside `relief.tiles` and never inside it: a tile may
+   * exist without a drop of water in it (most do), the wire leaves the key out
+   * there, and folding an optional field into `WorldHeightField` would make
+   * every reader of the ground carry a question about water. The two maps are
+   * filled, evicted and cleared in the same breath (`takeTiles`, `evictTiles`,
+   * `reloadHeight`), so a key in one is a key in the other or in neither.
+   *
+   * MUTATED IN PLACE for the reason `relief` is: it is sampled per texel of the
+   * water pyramid.
+   */
+  const waterRaster = emptyWaterRaster();
   /** The server's FINE step in metres (`tile_step_m`) — the lattice every rule
    *  reads and the one the terrain's leaf node is sized from. Held apart from
    *  the overview's own `step_m`, which coarsens with the world. */
@@ -2595,7 +2611,9 @@ export function createGround(): Ground {
       // the overview that replaced it — and the sampler prefers the tile.
       relief.tiles.clear();
       relief.stats?.clear();
+      waterRaster.tiles.clear();
       relief.tileM = Number(payload.tile_m) || 0;
+      waterRaster.tileM = relief.tileM;
       tileStepM = Number(payload.tile_step_m) || 0;
       // The quadtree half of the payload (E1 addendum § 4). `tile_stats` is
       // capped at the server's `TILE_STATS_MAX`; whatever is missing rides in
@@ -2623,7 +2641,7 @@ export function createGround(): Ground {
       // pyramid, the (now empty) tile set its near one. Mip levels are derived
       // by decimation on the client, which is exact because every coarse
       // lattice is a subset of the fine one (§ G2).
-      terrain.setField(relief, tileStepM, anchorX, anchorZ);
+      terrain.setField(relief, tileStepM, anchorX, anchorZ, waterRaster);
       // …and the statistics the cap kept back are fetched BEHIND the picture
       // (§ G2). Deliberately not awaited: the ground is already draped, and
       // what the remainder buys is a level, not a surface.
@@ -2771,6 +2789,15 @@ export function createGround(): Ground {
         origin_x: grid.origin_x, origin_z: grid.origin_z, step_m: step,
         rows: grid.rows, cols: grid.cols, heights: grid.heights,
       });
+      // …and the WATER of the same window (K-A E2), on the same lattice: the
+      // wire ships the three arrays inside the tile and the geometry is the
+      // tile's own, so it is merged in here exactly as `step_m` is. A tile
+      // WITHOUT the key drops whatever stood under that name — a re-fetched
+      // tile whose water was drained must not keep yesterday's lake.
+      const water = waterTileFrom(grid.origin_x, grid.origin_z, step,
+                                  grid.water);
+      if (water) waterRaster.tiles.set(key, water);
+      else waterRaster.tiles.delete(key);
       // The tile carries its own quadtree statistics since E1 (§ G2). It may
       // already be in the map from `GET /play/heightfield`; the tile's own copy
       // is the same arithmetic on the same raster, so overwriting is a no-op
@@ -2855,7 +2882,7 @@ export function createGround(): Ground {
         // does. Its window is the loaded tiles plus a margin, and out in that
         // margin near and far agree, which is what makes the switch between
         // them invisible.
-        terrain.setField(relief, tileStepM, anchorX, anchorZ);
+        terrain.setField(relief, tileStepM, anchorX, anchorZ, waterRaster);
         await rebuildAreas();
         rebuildBase(lastBounds);
       }
@@ -2964,6 +2991,7 @@ export function createGround(): Ground {
       if (relief.tiles.size <= HEIGHT_TILE_CACHE_MAX) break;
       if (keep.has(key)) continue;
       relief.tiles.delete(key);
+      waterRaster.tiles.delete(key);
     }
   }
 

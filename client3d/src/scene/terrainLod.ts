@@ -124,6 +124,8 @@
 import * as THREE from 'three';
 import { finestStep, heightAt, latticeSample } from '@anima/scene-render';
 import type { WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
+import { rasterLevelAt, waterBilinear } from './waterRaster';
+import type { WaterRaster } from './waterRaster';
 
 /**
  * Cells per axis of the one patch — 32, and the number is derived rather than
@@ -434,6 +436,81 @@ export function pyramidHeight(pyr: HeightPyramid | null, x: number, z: number,
   return latticeSample(
     (i, j) => pyr.data[(lv.row0 + j) * pyr.texW + i] ?? 0,
     lv.cols, lv.rows, pyr.originX, pyr.originZ, lv.step, x, z);
+}
+
+/**
+ * The WATER pyramid — the same construction as the height one, and the same
+ * decimation (Wasser v2, K-A E2).
+ *
+ * IT IS `buildPyramid`, deliberately and without a rule of its own. Two things
+ * had to be decided and both come out the same way as for the heights:
+ *
+ * **THE DECIMATION IS A SUBSET, not an average.** The mirror is PIECEWISE
+ * LINEAR — `water_level_at` interpolates linearly between two knots along the
+ * axis — so taking every second support point IS the mirror on the coarse
+ * lattice, exactly as decimating a height field is the height function on it.
+ * A box filter would produce a surface no profile describes, and would smear
+ * the shore: at a rim texel it would mix the level with its dilated neighbour
+ * and move the mirror by a fraction of the ring, i.e. invent water. `min` was
+ * the other candidate (it would guarantee "never above the ground next door")
+ * and is wrong for the same reason — it is a different surface, and under K-A
+ * the ground is lifted to `max(h, level)`, so nothing needs the mirror to be
+ * pessimistic.
+ *
+ * **A COARSE TEXEL IS WATER EXACTLY WHEN ITS OWN BASE TEXEL IS.** The mask
+ * decimates WITH the level because it IS the level: NaN is the sentinel, and a
+ * NaN copied by the decimation is the same statement one level up. Any other
+ * rule ("water if ANY of the four base texels is water", "…if all four are")
+ * would be a second book about where the water is, kept beside the first one
+ * and free to disagree with it.
+ *
+ * THE PRICE, stated: the dilation ring is two texels wide on level 0, one on
+ * level 1 and gone above it, while a bilinear read needs sqrt(2) TEXELS at
+ * every level. So the server's guarantee — every point inside a water polygon
+ * reads four wet corners — holds on the BASE lattice and is not claimed above
+ * it. That is a deliberate server-side choice (`WATER_RASTER_DILATION_STEPS`):
+ * covering level 5 would mean painting the mirror 92 m into the land. What a
+ * coarse level gets wrong at a shore is a fringe the fragment MASK covers
+ * (K-A E4), never a hole in the ground — the ground is the height pyramid's.
+ */
+export function buildWaterPyramid(at: (x: number, z: number) => number,
+                                  originX: number, originZ: number,
+                                  step: number, cols: number, rows: number,
+                                  levelCount: number): HeightPyramid {
+  return buildPyramid(at, originX, originZ, step, cols, rows, levelCount);
+}
+
+/**
+ * `wlevelAt` — the water level a pyramid answers at (x, z) on level `k`, NaN
+ * where there is none. The CPU twin of the GLSL of the same name that K-A E3
+ * will put beside `tlodHeight`.
+ *
+ * It does NOT go through `latticeSample`: that one mixes all four corners
+ * unconditionally, and here a corner with weight 0 must not be read at all —
+ * see `waterRaster.waterBilinear` for the finding (a sample on a lattice line
+ * would otherwise be dragged to NaN by a dry texel that contributes nothing,
+ * eroding the dilation ring along a grid of lines through every water). The
+ * cell arithmetic above it is the same three lines, clamp for clamp, so the
+ * water and the height of one point are read out of the same cell.
+ */
+export function wlevelAt(pyr: HeightPyramid | null, x: number, z: number,
+                         k: number): number {
+  if (!pyr) return NaN;
+  const lv = pyr.levels[Math.max(0, Math.min(k, pyr.levels.length - 1))];
+  if (!lv || lv.cols < 2 || lv.rows < 2 || !(lv.step > 0)) return NaN;
+  const frac = (v: number, n: number): [number, number] => {
+    const c = v < 0 ? 0 : v > n - 1 ? n - 1 : v;
+    const i = Math.min(Math.floor(c), n - 2);
+    return [i, c - i];
+  };
+  const [i, tx] = frac((x - pyr.originX) / lv.step, lv.cols);
+  const [j, tz] = frac((z - pyr.originZ) / lv.step, lv.rows);
+  const at = (a: number, b: number): number => {
+    const v = pyr.data[(lv.row0 + b) * pyr.texW + a];
+    return typeof v === 'number' ? v : NaN;
+  };
+  return waterBilinear(at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1),
+                       tx, tz);
 }
 
 /** Which level of the pyramid draws a node whose vertices are `stepM` apart —
@@ -1395,6 +1472,23 @@ const uNearLevel = { value: makeLevelArray() };
 const uFarLevel = { value: makeLevelArray() };
 const uNearRect = { value: new THREE.Vector4(0, 0, -1, -1) };
 const uExtent = { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) };
+/**
+ * THE WATER PYRAMID, uploaded and bound but NOT YET READ (Wasser v2, K-A E2).
+ *
+ * Same three objects the height pyramids carry — the packed R32F texture, the
+ * `(originX, originZ, step, levelCount)` geometry and the per-level lattice
+ * array — so K-A E3 only has to write the GLSL that reads them. There is no
+ * FAR twin and there will not be one: the overview grid carries no water at
+ * all (§ A16.5), so a point outside the near window is "no water known here",
+ * which is what a renderer must draw rather than invent.
+ *
+ * A shader that does not declare these uniforms simply never looks them up —
+ * three.js resolves uniforms by location and skips what the program has none
+ * for — so binding them now costs a property assignment and no recompile.
+ */
+const uWater: { value: THREE.Texture } = { value: neutralTex };
+const uWaterGeom = { value: new THREE.Vector4(0, 0, 1, 0) };
+const uWaterLevel = { value: makeLevelArray() };
 /** The LOD ring boundaries in metres, the input of the per-vertex λ
  *  (`lodLambda`). VERTEX-ONLY: the water mirror reads the height pyramids from
  *  its fragment shader but has no vertices to morph, so this one is bound in
@@ -1435,13 +1529,17 @@ export function setTerrainLodDebug(o: { flatNormal?: boolean; noMorph?: boolean 
 }
 
 /**
- * Hang the eight shared height uniforms into a shader that includes
- * `terrainLodSampleGlsl()`.
+ * Hang the shared height uniforms — and, since K-A E2, the water ones — into a
+ * shader that includes `terrainLodSampleGlsl()`.
  *
  * Exported for the water mirror (E4, `scene/waterPlane.ts`): it reads the same
  * pyramids from its FRAGMENT shader and must read them through the same
  * objects, or a pyramid swap would reach the terrain and leave the lake
  * measuring its depth against yesterday's ground.
+ *
+ * The three `uTlodWater*` entries are bound and kept current but read by NO
+ * shader yet — K-A E2 ships the field and the upload, E3 writes the GLSL that
+ * lifts a vertex onto it. An unread uniform has no location and is skipped.
  */
 export function bindTerrainLodUniforms(uniforms: Record<string, unknown>): void {
   uniforms.uTlodNear = uNear;
@@ -1452,6 +1550,9 @@ export function bindTerrainLodUniforms(uniforms: Record<string, unknown>): void 
   uniforms.uTlodFarLevel = uFarLevel;
   uniforms.uTlodNearRect = uNearRect;
   uniforms.uTlodExtent = uExtent;
+  uniforms.uTlodWater = uWater;
+  uniforms.uTlodWaterGeom = uWaterGeom;
+  uniforms.uTlodWaterLevel = uWaterLevel;
 }
 
 /**
@@ -1595,9 +1696,16 @@ export interface TerrainLod {
   update(camera: THREE.Camera, viewportPx: number): void;
   /** Take over the relief. `baseStepM` is the server's FINE step
    *  (`tile_step_m`), which fixes the leaf size for good — a lattice that
-   *  changed size when a tile arrived would re-anchor the whole quadtree. */
+   *  changed size when a tile arrived would re-anchor the whole quadtree.
+   *
+   *  `water` is the second field of the same tiles (Wasser v2, K-A E2). It
+   *  rides in HERE and not in a call of its own because it is built over the
+   *  SAME near window: two entry points would be two chances for the two
+   *  pyramids to describe different rectangles, and the shader reads them at
+   *  one world position. */
   setField(relief: WorldHeightTiles | null, baseStepM: number,
-           anchorX: number, anchorZ: number): void;
+           anchorX: number, anchorZ: number,
+           water?: WaterRaster | null): void;
   /** The relief's STATISTICS grew without its heights changing — re-derive the
    *  per-level errors and nothing else.
    *
@@ -1703,8 +1811,10 @@ export function createTerrainLod(): TerrainLod {
   let baseStep = 0;
   let nearPyr: HeightPyramid | null = null;
   let farPyr: HeightPyramid | null = null;
+  let waterPyr: HeightPyramid | null = null;
   let nearTex: THREE.DataTexture | null = null;
   let farTex: THREE.DataTexture | null = null;
+  let waterTex: THREE.DataTexture | null = null;
   let nearRect: [number, number, number, number] | null = null;
   let extent: [number, number, number, number] = [-100, -100, 100, 100];
   let leafM = 0;
@@ -1791,13 +1901,38 @@ export function createTerrainLod(): TerrainLod {
     return pyr;
   }
 
+  /**
+   * The WATER window — the same rectangle, the same lattice, filled from
+   * `rasterLevelAt` (K-A E2).
+   *
+   * It is built over `nearPyr`'s own geometry rather than over the tiles' own
+   * boxes, and that is the whole point: the shader reads a height and a water
+   * level at ONE world position, so the two textures have to be the same
+   * lattice or the mask would sit a fraction of a texel beside the ground it
+   * masks. Where the raster has no tile the sampler answers NaN, which is the
+   * dry sentinel all the way through to the texture.
+   */
+  function buildWater(raster: WaterRaster | null): HeightPyramid | null {
+    const base = nearPyr?.levels[0];
+    if (!nearPyr || !base || !raster?.tiles?.size) return null;
+    return buildWaterPyramid((x, z) => rasterLevelAt(raster, x, z),
+                             nearPyr.originX, nearPyr.originZ, nearPyr.step,
+                             base.cols, base.rows, MAX_LOD_LEVELS);
+  }
+
   function uploadPyramids(): void {
     nearTex?.dispose();
     farTex?.dispose();
+    waterTex?.dispose();
     nearTex = nearPyr ? pyramidTexture(nearPyr) : null;
     farTex = farPyr ? pyramidTexture(farPyr) : null;
+    waterTex = waterPyr ? pyramidTexture(waterPyr) : null;
     uNear.value = nearTex ?? neutralTex;
     uFar.value = farTex ?? neutralTex;
+    uWater.value = waterTex ?? neutralTex;
+    uWaterGeom.value.set(waterPyr?.originX ?? 0, waterPyr?.originZ ?? 0,
+                         waterPyr?.step ?? 1, waterPyr?.levels.length ?? 0);
+    setLevels(uWaterLevel.value, waterPyr);
     uNearGeom.value.set(nearPyr?.originX ?? 0, nearPyr?.originZ ?? 0,
                         nearPyr?.step ?? 1, nearPyr?.levels.length ?? 0);
     uFarGeom.value.set(farPyr?.originX ?? 0, farPyr?.originZ ?? 0,
@@ -1909,7 +2044,7 @@ export function createTerrainLod(): TerrainLod {
       uFreeze.value.set(camera.position.x, camera.position.y, camera.position.z,
                         uFreeze.value.w);
     },
-    setField(next, baseStepM, anchorX, anchorZ) {
+    setField(next, baseStepM, anchorX, anchorZ, water) {
       relief = next;
       baseStep = baseStepM > 0 ? baseStepM : finestStep(next) || FALLBACK_BASE_STEP_M;
       leafM = PATCH_N * baseStep;
@@ -1940,6 +2075,9 @@ export function createTerrainLod(): TerrainLod {
       }
       globalRange = { min, max };
       levelErrorM = computeLevelError();
+      // AFTER the near pyramid, because it is built over the near pyramid's own
+      // window — and never over the far one, which has no water in it.
+      waterPyr = buildWater(water ?? null);
       uploadPyramids();
     },
     refreshStats() {
@@ -1968,13 +2106,16 @@ export function createTerrainLod(): TerrainLod {
       placeholder.dispose();
       nearTex?.dispose();
       farTex?.dispose();
+      waterTex?.dispose();
       nearTex = null;
       farTex = null;
+      waterTex = null;
       // The pyramids are module-shared uniforms and outlive this closure, so
       // they are handed back explicitly — the rule `setNaturalGroundField(null)`
       // follows for the same reason.
       uNear.value = neutralTex;
       uFar.value = neutralTex;
+      uWater.value = neutralTex;
       uNearRect.value.set(0, 0, -1, -1);
     },
   };

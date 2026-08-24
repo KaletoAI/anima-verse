@@ -3347,7 +3347,13 @@ Downsampling.
   "mip_levels_m": [4.0, 8.0, 16.0, 32.0, 64.0],
   "tiles": { "1,0": { "origin_x": 256.0, "origin_z": 0.0,
                       "rows": 129, "cols": 129, "heights": [[…], …],
-                      "stats": { "min": …, "max": …, "err": […] } } } }
+                      "stats": { "min": …, "max": …, "err": […] },
+                      // ADDITIV seit HEIGHT_BAKE_VERSION 7 (Wasser v2 K-A E1):
+                      // das WASSER-RASTER derselben Kachel, auf demselben
+                      // Gitter. FEHLT, wenn die Kachel kein Wasser trägt.
+                      "water": { "level": [[float|null, …], …],
+                                 "flow_x": [[float, …], …],   // optional
+                                 "flow_z": [[float, …], …] } } } }
 
 // GET /play/heightfield/stats?keys=tx:tz,tx:tz   (höchstens 64 Schlüssel)
 { "sig": "…",                     // wie oben ZUERST gelesen, vor jeder Rasterung
@@ -5584,3 +5590,212 @@ durch den Versionssprung; `get_field()` nimmt die gespeicherte Rasterzeile aus
 zeichnet, werden per Konstruktion nie persistiert (`get_tile`), und der Client
 holt Übersicht wie Kacheln neu, sobald `height_sig` im Worldmap-Payload springt.
 Es gibt kein zwischengespeichertes Artefakt, das den Neustart überlebt.
+
+---
+
+## Nachtrag 2026-08-24 (§ A16.5 / § G2 / § G4): Das Wasser-Raster — Wasser v2, K-A E1/E2
+
+**Entschieden (User 2026-08-24):** `recherche-wasser-v2.md` § 4 **K-A** —
+„Wasser wird eine Bodenart". Der Umbau läuft in sechs Etappen
+(`plan-wasser-v2-ka.md`); **hier stehen E1 (Server) und E2 (Client)**. Der
+Wasserspiegel wird damit vom **gebauten Mesh** zum **abgetasteten Feld**. Was in
+diesem Nachtrag steht, ist additiv: die Polygon-Meshes von § A16.8 zeichnen
+unverändert weiter, der Terrain-Shader ist nicht angefasst, und `h_final`
+bewegt sich um keinen Millimeter.
+
+`HEIGHT_BAKE_VERSION` **6 → 7**. Nicht weil die Höhen anders herauskämen — der
+Spiegel war immer schon Eingabe des Carve und wird jetzt zusätzlich
+ausgeliefert — sondern weil die Kachel-NUTZLAST eine Funktion des Codes ist und
+eine v6-Kachel gar kein Wasserfeld hat. Der Sprung ist das Einzige, was eine
+laufende Welt zum Nachladen bringt (§ „Erreicht die Änderung eine laufende
+Welt?").
+
+### 1. Die Auslieferung — zweites Feld derselben Kachel
+
+Kachelindex, Signatur, Cache, Stapelgröße und die Statistik-Persistenz sind
+**unverändert wiederverwendet**. Eine Kachel trägt zusätzlich:
+
+```jsonc
+"water": {
+  "level":  [[float|null, …], …],   // 129 × 129, Weltmeter; null = trocken
+  "flow_x": [[float, …], …],        // optional, siehe unten
+  "flow_z": [[float, …], …]
+}
+```
+
+- **Der Schlüssel FEHLT**, wenn die Kachel keinen Tropfen Wasser trägt — was
+  die meisten Kacheln der meisten Welten sind. Kein leeres Raster, keine Zeile
+  Nullen: dieselbe Aussage, die eine nicht indizierte Kachel über die Höhe
+  macht.
+- **`null` ist die einzige Maske.** `level[j][i]` ist der lokale Spiegel am
+  selben Stützpunkt, den `heights[j][i]` beschreibt — oder `null`, wenn dort
+  kein Wasser steht. Es ist NICHT der Umriss (siehe Dilatation).
+- **`flow_x`/`flow_z` fehlen GEMEINSAM**, wenn die ganze Kachel keinen Fluss
+  hat. Ein stehendes Gewässer hat eine Ein-Knoten-Achse und damit exakt (0, 0)
+  überall; zwei Gitter Nullen würden die Kachel verdoppeln, um nichts zu sagen.
+  Abwesenheit liest sich als „(0, 0) überall".
+- Rundung: `level` auf 3 Nachkommastellen wie `heights`, die Fließkomponenten
+  auf 6 wie `dir_x`/`dir_z` des Profils.
+
+### 2. Die drei Regeln des Rasters (`HeightModel.water_at`)
+
+```
+level(p) = water_level_at(profile, p)     des OBERSTEN Wassers über p
+flow(p)  = water_flow_at(profile, p) · Faktor            desselben Wassers
+bedeckt  = INNERHALB des Umrisses ODER innerhalb WATER_RASTER_DILATION_M
+```
+
+**„Oberstes" ist die Regel des Bodens** — die zuletzt gemalte Fläche gewinnt,
+dieselbe, mit der `_kind_at` die Bodenart auflöst. **Innen schlägt dilatiert**,
+in zwei Durchgängen: der Ring außerhalb eines Flusses ist eine Filter-Reparatur
+und keine Autorenschaft, also muss ein Punkt, der wirklich in einem See liegt,
+den See lesen, auch wenn ein später gemalter Fluss dorthin reicht.
+
+**Der Wert im Ring ist die FORTGESETZTE Funktion**, nicht der nach außen
+getragene Randwert. `water_level_at` ist überall definiert (Projektion auf eine
+Polylinie plus Klemme), also bekommt ein Ringpunkt den Spiegel, den das Profil
+dort hätte — und genau das macht die bilineare Mischung INNERHALB des Umrisses
+exakt. Bewusst NICHT die Regel der Bankklemme (die liest den Pegel am NÄCHSTEN
+UMRISSPUNKT): die Klemme ist eine Aussage über den BODEN neben dem Wasser und
+darf kein Endniveau seitwärts über die Landschaft tragen, dies ist die
+analytische Fortsetzung eines Feldes.
+
+### 3. Die Dilatationsregel — zwei Gitterschritte, und die Zahl ist eine Diagonale
+
+`WATER_RASTER_DILATION_STEPS = 2`, also **4 m** bei `TILE_STEP_M` = 2 m.
+
+Sei `P` ein Punkt INNERHALB eines Umrisses. Ein bilinearer Lookup bei `P` mischt
+die vier Ecken der Gitterzelle, in der `P` liegt. Liegt eine Ecke `C` außerhalb
+des Umrisses, dann schneidet die Strecke `P→C` den Umriss in einem `Q`, also
+
+```
+d(C, Umriss) ≤ |CQ| ≤ |CP| ≤ eine Zelldiagonale = √2 Schritte = 2,8284 m
+```
+
+**Ein Schritt deckt das nicht** (eine diagonale Ecke kann 2,83 m draußen
+liegen), **zwei decken es strikt**. Damit gilt konstruktiv: *jeder Punkt
+innerhalb jeder Wasserfläche liest vier definierte Ecken auf dem Basisgitter.*
+Ein `NaN`/`null` bedeutet **trockener Boden**, nie eine Lücke in den Daten.
+
+**Die Garantie gilt dem Basisgitter allein**, und das ist bewusst so. Die
+Mip-Pyramide des Clients dezimiert das Raster, der Ring ist also 2 Texel breit
+auf Stufe 0, eines auf Stufe 1 und darüber keines mehr — während dasselbe
+Diagonalargument auf jeder Stufe √2 **Texel** verlangt, d. h. 46 Basisschritte
+(92 m) auf der 64-m-Stufe. Einen Spiegel 92 m ins Land zu malen würde „das
+oberste Wasser über diesem Punkt" zu einer Aussage über Boden machen, den
+niemand Ufer nennt — für eine Stufe, auf der ein 6-m-Fluss ohnehin keine eigene
+Stützstelle mehr hat. Was eine grobe Stufe am Ufer falsch macht, deckt die
+Fragment-MASKE (E4), nie ein Loch im Boden.
+
+### 4. Die Fließregel — der Server ist jetzt die Quelle
+
+`water_flow_at(profile, x, z, faktor)` ist die Zeile-für-Zeile-Übernahme von
+`client3d/src/scene/waterPlaneMath.waterFlowAt`: Achsentangente, an jedem Knoten
+über ein Fenster `min(halbe Vorstrecke, halbe Folgestrecke, 4 m)` kosinus-
+geblendet, am Knoten selbst exakt die normierte Winkelhalbierende. Die Regel
+wandert mit dem Mesh, das sie pro Vertex auswertete; die Zahlen bleiben
+identisch (Zwillingsprüfung: `scripts/smoke_height_bake.py` [12c] gegen
+`client3d/scripts/smoke_water_plane.mjs` [4d-flow]).
+
+**Die LÄNGE ist der Fließ-Faktor** — die eigene Geschwindigkeit der Fläche geteilt
+durch den `flow_speed`-Regler ihrer ART (`heightfield.water_flow_factor`, der
+Zwilling von `@anima/scene-render waterFlowFactor`). Eine Fläche ohne eigenen
+Wert antwortet exakt 1, das Raster trägt dann die reine Einheitstangente.
+Warum ein Verhältnis und nicht die absolute Geschwindigkeit: der Regler der ART
+ist eine MATERIAL-Zahl, und eine Fläche darf nur skalieren, was das Material
+schon trägt.
+
+### 5. Signatur und Statistik
+
+- **`height_sig` deckte die Wasser-Eingaben bereits** (`water_basis`: Polygon,
+  Pegel, Endniveaus, Bearing, `flow_along`, Linie, Breite, Tiefe, Uferrampe) —
+  **mit zwei Lücken, die dieser Umbau geschlossen hat**: `meta.flow_speed_m_s`
+  der Fläche und der `flow_speed`-Regler ihrer Art waren bis hierher reine
+  Optik, von niemandem gehasht. Jetzt SCHIFFT die Kachel den Fließvektor, also
+  sind beide Bake-Eingaben und stehen in `water_basis`. Sie sind die einzigen
+  Einträge dieser Signatur, die `h_final` um keinen Millimeter bewegen.
+- **`world_height_tile_stats` bleibt gültig.** `min`/`max`/`err` werden
+  ausschließlich von `heights` abgelesen (`tile_stats_from`), und der Pegel
+  ändert `h` nicht — die Zeilen bleiben also wahre Aussagen über ihr Raster.
+  Sie werden trotzdem neu berechnet, weil die Signatur (ihr Schlüssel) sich mit
+  `HEIGHT_BAKE_VERSION` bewegt; das ist der normale Weg und keine Migration.
+
+### 6. Die gemessene Zahl: muss das Wasser-Raster feiner als 2 m sein?
+
+**Nein.** Gemessen auf der Haarnadel-Fixture (`smoke_height_bake.py` [8k]/[12d];
+drei Klicks A(150,300) → B(249,280) → C(201,260), 6 m breit, Maske
+(140,250)-(300,315)), bilinear gelesen gegen `water_level_at` an 321 × 321
+Proben innerhalb der Maske:
+
+| Gitter | größte Abweichung | davon auf „glatten" Zellen |
+|---|---|---|
+| **2 m** | **3,4347 m** | **0,0177 m** |
+| 1 m | 3,3638 m | 0,0088 m |
+| 0,5 m | 3,5273 m | 0,0015 m |
+
+„Glatt" heißt: alle vier Zellecken UND die Probe projizieren auf dasselbe
+Achsensegment, es läuft also keine Mittelachse durch die Zelle.
+
+**Die Lesart, und sie ist eindeutig:**
+
+1. Auf ihrem eigenen Gitter ist das Raster nicht „nah an" der Funktion, es IST
+   sie — Abweichung exakt 0 an jedem Stützpunkt.
+2. Die 3,4 m sind ein **Sprung von `water_level_at` selbst**. An der Innenseite
+   einer Haarnadel projiziert ein Punkt eine Haaresbreite links auf Schenkel 1
+   und rechts auf Schenkel 2; die Bogenkoordinaten unterscheiden sich um fast
+   die ganze Kehre. Gemessen fällt der Pegel bei z = 277,727 zwischen
+   x = 225,80 und x = 225,90 von 8,4414 auf 7,1463 — **1,2951 m über zehn
+   Zentimeter**. Halbieren und Vierteln des Gitters ändert die Zahl nicht
+   (3,36 / 3,53): *keine Auflösung löst einen Sprung auf.*
+3. Fern der Mittelachse ist das 2-m-Raster **auf 1,8 cm genau** und verhält
+   sich wie eine bilineare Lesung muss — zweiter Ordnung im Schritt
+   (0,0177 → 0,0088 → 0,0015).
+
+Ein feineres Wasser-Raster kauft also nichts. Der Rest ist eine Unstetigkeit
+des autorierten Spiegels und Sache der Fragment-Maske (E4), nicht der
+Payload-Auflösung. (Der W5d-Wert 0,0322 m stammt von der Bogen-Fixture von
+`smoke_water_plane.mjs` [5d] und beschreibt dieselbe Klasse: die Kante landet
+AUF dem Sprung, was das Beste ist, was eine Fläche kann.)
+
+### 7. Client (E2) — Pyramide, Zwilling, Dezimierung
+
+- `client3d/src/scene/waterRaster.ts` hält das Feld je Kachel
+  (`WaterRaster`), wandelt `null` an der Wire-Grenze EINMAL in `NaN` und liefert
+  `rasterLevelAt` / `rasterFlowAt`. Die Leiter hat **keine Übersichts-Sprosse**:
+  das Übersichtsgitter trägt kein Wasser, also ist ein Punkt außerhalb der
+  geladenen Kacheln „hier ist kein Wasser bekannt".
+- **Die maskierte Mischung** (`waterBilinear`): eine Ecke mit Gewicht 0 wird
+  NICHT gelesen. Reines Fließkomma würde ihr `NaN` über `NaN · 0 = NaN`
+  weitertragen — und das ist kein Rundungsdetail: die Pyramide wird AN den
+  Gitterpunkten gefüllt (`tx = 0`), der Ring verlöre also sein äußerstes Texel,
+  die Dilatation fiele von 2 auf 1 Schritt und damit unter das √2, das die
+  Garantie oben braucht. Ergebnis: Löcher im Wasser entlang eines Gitters von
+  Linien.
+- **Die Wasser-Pyramide ist `buildPyramid`**, ohne eigene Regel:
+  - **Dezimierung = TEILMENGE, kein Mittelwert.** Der Spiegel ist stückweise
+    LINEAR, also IST jeder zweite Stützpunkt der Spiegel auf dem groben Gitter
+    — dasselbe Argument, das § G2 für die Höhen führt. Ein Boxfilter erzeugte
+    eine Fläche, die kein Profil beschreibt, und verschmierte das Ufer (er
+    mischte am Randtexel den Pegel mit seinem dilatierten Nachbarn). `min` wäre
+    ebenso eine andere Fläche und ist unnötig: unter K-A wird der Boden auf
+    `max(h, level)` gehoben, der Spiegel muss nicht pessimistisch sein.
+  - **Ein grobes Texel ist genau dann Wasser, wenn sein eigenes Basistexel es
+    ist.** Die Maske dezimiert MIT dem Pegel, weil sie der Pegel IST (`NaN`).
+    Jede andere Regel („Wasser, wenn EINES der vier", „…wenn ALLE vier") wäre
+    ein zweites Buch darüber, wo das Wasser steht.
+- `wlevelAt(pyr, x, z, k)` ist der CPU-Zwilling des GLSL, das E3 neben
+  `tlodHeight` stellen wird; die Uniformen `uTlodWater`, `uTlodWaterGeom`,
+  `uTlodWaterLevel` sind gebunden und aktuell, **werden aber von keinem Shader
+  gelesen**. Es gibt **keinen FERN-Zwilling** (Punkt 7 oben).
+
+### 8. Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Raster = `water_level_at` auf dem Gitter, Dilatation, Diagonale | `scripts/smoke_height_bake.py` [12a]/[12b] |
+| Fließvektor = die Zahlen des Clients, Faktor | [12c] gegen `client3d/scripts/smoke_water_plane.mjs` [4d-flow] |
+| Kurveninnenseite: 2 m gegen 1 m gegen 0,5 m | [12d] |
+| Payload additiv, Flussfelder optional | [12e] |
+| Statistik ist höhenrein | [12f] |
+| Client liest die Server-Tabellen zurück, maskierte Mischung | `client3d/scripts/smoke_world_height.mjs` [W1]–[W4] |
+| Pyramide: Teilmenge, Sentinel, Ringverlust je Stufe, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [15] |

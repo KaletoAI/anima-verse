@@ -783,6 +783,10 @@ export const ClampToEdgeWrapping = 1001;
  * resolved to local files. The scene-render entry is `worldHeight.ts` itself:
  * that is the only thing `terrainLod.ts` takes from the package, and pointing
  * at the real barrel would drag three back in through the front door.
+ *
+ * `waterRaster.ts` comes along as a local sibling since K-A E2 — it is pure
+ * arithmetic over the wire shape and takes `tileKeyAt` from the same
+ * `worldHeight.ts`, so it loads under exactly the same rules.
  */
 async function loadLod() {
   const esbuild = await import('esbuild');
@@ -791,18 +795,23 @@ async function loadLod() {
     const ts = async (src, name) => {
       const code = await readFile(src, 'utf8');
       await writeFile(join(dir, `${name}.mjs`),
-        esbuild.transformSync(code, { loader: 'ts', format: 'esm' }).code, 'utf8');
+        esbuild.transformSync(code, { loader: 'ts', format: 'esm' }).code
+          .replace(/from\s*["']@anima\/scene-render["']/g, "from './worldHeight.mjs'"),
+        'utf8');
     };
     await writeFile(join(dir, 'three.mjs'), THREE_STUB, 'utf8');
     await ts(join(ROOT, 'packages/scene-render/src/worldHeight.ts'), 'worldHeight');
+    await ts(join(ROOT, 'client3d/src/scene/waterRaster.ts'), 'waterRaster');
     const src = await readFile(join(ROOT, 'client3d/src/scene/terrainLod.ts'), 'utf8');
     const out = esbuild.transformSync(src, { loader: 'ts', format: 'esm' }).code
       .replace(/from\s*["']three["']/g, "from './three.mjs'")
+      .replace(/from\s*["']\.\/waterRaster["']/g, "from './waterRaster.mjs'")
       .replace(/from\s*["']@anima\/scene-render["']/g, "from './worldHeight.mjs'");
     await writeFile(join(dir, 'terrainLod.mjs'), out, 'utf8');
     return {
       lod: await import(`file://${join(dir, 'terrainLod.mjs')}`),
       height: await import(`file://${join(dir, 'worldHeight.mjs')}`),
+      water: await import(`file://${join(dir, 'waterRaster.mjs')}`),
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -853,14 +862,16 @@ function checkEq(label, actual, expected) {
   }
 }
 
-const { lod, height } = await loadLod();
+const { lod, height, water } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX_PIXEL_ERROR,
   MAX_RANGE_WIDENING,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
   morphedVertex, lodLambda, lodVertex, nodeBounds, terrainLodGlsl, selectLodFitted,
   levelErrorsFrom,
-  terrainLodNormalGlsl, fragmentNormal, gpuHeightAt } = lod;
+  terrainLodNormalGlsl, fragmentNormal, gpuHeightAt,
+  buildWaterPyramid, wlevelAt, bindTerrainLodUniforms } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
+const { emptyWaterRaster, rasterLevelAt, waterTileFrom } = water;
 
 // ── [1] the constants ───────────────────────────────────────────────────────
 console.log('[1] the constants are derived from the server\'s own pyramid');
@@ -2801,6 +2812,117 @@ const compassOpts = {
 const compassFit = selectLodFitted(compassOpts);
 check('…the compass world: coarsenings', compassFit.coarsenings, 0);
 check('…and its list too', compassFit.nodes.length, selectLodNodes(compassOpts).length);
+
+// ── [15] THE WATER PYRAMID (Wasser v2, K-A E2) ──────────────────────────────
+//
+// The second field of the tiles gets a pyramid of its own, beside the height
+// ones and over the SAME near window. This section pins the two decisions of
+// that pyramid — the decimation rule and what happens to the dry sentinel —
+// and the CPU twin `wlevelAt` the shader of K-A E3 will mirror.
+//
+// THE FIXTURE, a ramp with a dry tail, so every number is readable at a glance:
+// one tile, origin (0,0), step 2, 9 x 9 support points at x, z in {0…16}, and
+//
+//     level[j][i] = i        for i <= 7      (i.e. the mirror is x/2)
+//     level[j][8] = null                     (x = 16 carries no water)
+//
+// A LINEAR mirror is not a convenience here, it is the case the rule is chosen
+// for: `water_level_at` interpolates LINEARLY between two knots, so a coarse
+// lattice that is a SUBSET of the fine one carries the same surface — and that
+// is exactly what the checks below measure.
+console.log('\n[15] the water pyramid — decimation, the sentinel, and wlevelAt');
+const WROW = [0, 1, 2, 3, 4, 5, 6, 7, null];
+const WRASTER = emptyWaterRaster();
+WRASTER.tileM = 256;
+WRASTER.tiles.set('0,0', waterTileFrom(0, 0, 2, {
+  level: Array.from({ length: 9 }, () => WROW.slice()),
+}));
+const WPYR = buildWaterPyramid((x, z) => rasterLevelAt(WRASTER, x, z),
+  0, 0, 2, 9, 9, MAX_LOD_LEVELS);
+// The chain: 9 -> 5 -> 3 -> 2 -> (1, too small to carry a surface), so FOUR
+// levels at steps 2, 4, 8, 16 — the same `floor((n−1)/2)+1` the height pyramid
+// walks, because it IS `buildPyramid`.
+check('the chain ends where a level has under two points per axis',
+  WPYR.levels.length, 4);
+check('level 0 is the raster itself', WPYR.levels[0].step, 2);
+check('…level 1 is twice as coarse', WPYR.levels[1].step, 4);
+check('…level 3 is eight times', WPYR.levels[3].step, 16);
+check('level 1 has 5 points per axis', WPYR.levels[1].cols, 5);
+check('…level 2 has 3', WPYR.levels[2].cols, 3);
+check('…level 3 has 2', WPYR.levels[3].cols, 2);
+// DECIMATION IS A SUBSET. Level 1 keeps the base points 0, 2, 4, 6, 8, so its
+// row is [0, 2, 4, 6, NaN] — every value is a base value, none is an average.
+const wrow = (k) => {
+  const lv = WPYR.levels[k];
+  return Array.from({ length: lv.cols },
+    (_, i) => WPYR.data[lv.row0 * WPYR.texW + i]);
+};
+check('level 1 keeps every SECOND base value, at index 1', wrow(1)[1], 2);
+check('…at index 2', wrow(1)[2], 4);
+check('…at index 3', wrow(1)[3], 6);
+check('level 2 keeps every fourth', wrow(2)[1], 4);
+// RED COUNTER-PROBE: a MEAN (box) filter would answer 6.5 at that same level-1
+// texel — the average of the base pair (6, 7) — a mirror no profile describes
+// and half a metre of invented water at the shore.
+check('RED: a box filter would have put 6.5 there', (6 + 7) / 2, 6.5);
+checkEq('…and the pyramid does not carry it', wrow(1)[3] === 6.5, false);
+// THE SUBSET IS EXACT FOR A LINEAR MIRROR, which is the justification: level 1
+// and level 2 answer the SAME number as level 0 between the support points.
+check('level 0 at (6, 0)', wlevelAt(WPYR, 6, 0, 0), 3);
+check('…level 1 answers the same', wlevelAt(WPYR, 6, 0, 1), 3);
+check('…and level 2 as well', wlevelAt(WPYR, 6, 0, 2), 3);
+check('…between two base points too, at (7, 0)', wlevelAt(WPYR, 7, 0, 0), 3.5);
+// THE SENTINEL DECIMATES WITH THE LEVEL: a coarse texel is water exactly when
+// its own base texel is. Base index 8 is dry, so level 1's index 4 is, and so
+// on up the chain — one number, one book about where the water is.
+checkEq('the dry base point is NaN', Number.isNaN(wrow(0)[8]), true);
+checkEq('…and so is the level-1 texel that IS it', Number.isNaN(wrow(1)[4]), true);
+checkEq('…and the level-2 one', Number.isNaN(wrow(2)[2]), true);
+checkEq('a read on the dry point answers NaN',
+  Number.isNaN(wlevelAt(WPYR, 16, 0, 0)), true);
+checkEq('…on every level', Number.isNaN(wlevelAt(WPYR, 16, 0, 1)), true);
+// THE MASKED MIX, at the pyramid this time. (14, 0) is the OUTERMOST written
+// point; its eastern neighbour is dry and carries weight 0 there. Plain
+// bilinear would answer NaN and the ring would lose its outer texel — which is
+// the erosion finding of `waterRaster.waterBilinear`.
+check('the outermost written point keeps its value', wlevelAt(WPYR, 14, 0, 0), 7);
+checkEq('RED: the same mix without the mask is NaN',
+  Number.isNaN(7 * 1 + NaN * 0), true);
+checkEq('…and a WEIGHTED dry corner still answers NaN',
+  Number.isNaN(wlevelAt(WPYR, 15, 0, 0)), true);
+// THE PRICE, stated as the number it is: the ring loses half its texels per
+// level, because the decimation keeps every second one. The outermost WRITTEN
+// support point walks inward 14 -> 12 -> 8 -> 0 as the level coarsens, which is
+// why the server's dilation guarantee (`WATER_RASTER_DILATION_STEPS`) is
+// claimed for the BASE lattice and deliberately not above it.
+const lastWritten = (k) => {
+  const lv = WPYR.levels[k];
+  let last = -1;
+  for (let i = 0; i < lv.cols; i += 1) {
+    if (!Number.isNaN(wrow(k)[i])) last = i * lv.step;
+  }
+  return last;
+};
+check('the outermost written x at level 0', lastWritten(0), 14);
+check('…at level 1', lastWritten(1), 12);
+check('…at level 2', lastWritten(2), 8);
+check('…at level 3', lastWritten(3), 0);
+// AND THE UPLOAD IS WIRED, ready for E3: the three water uniforms are bound
+// beside the height ones, by the same one function every patched material goes
+// through. Nothing READS them yet — that is E3's line of GLSL.
+const bound = {};
+bindTerrainLodUniforms(bound);
+checkEq('the water TEXTURE is bound', bound.uTlodWater !== undefined, true);
+checkEq('…its geometry', bound.uTlodWaterGeom !== undefined, true);
+checkEq('…and its per-level lattice', bound.uTlodWaterLevel !== undefined, true);
+checkEq('…and the height ones are still there',
+  bound.uTlodNear !== undefined && bound.uTlodFar !== undefined, true);
+checkEq('no shader reads the water yet — E2 ships the field, E3 the GLSL',
+  terrainLodGlsl().includes('uTlodWater'), false);
+// NO FAR TWIN, and there will not be one: the overview grid carries no water at
+// all (§ A16.5), so a point outside the near window is "no water known here"
+// rather than a mirror invented from a coarse raster.
+checkEq('there is no far water pyramid', bound.uTlodWaterFar === undefined, true);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

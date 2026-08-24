@@ -334,6 +334,35 @@ export interface HeightTileGrid {
    *  the reason `GET /play/heightfield` may cap its `tile_stats`: whatever the
    *  overview could not carry rides in here. */
   stats?: HeightTileStats;
+  /** The WATER field of the same window (Wasser v2 K-A E1, § A16.5). ABSENT
+   *  for a tile without a drop of water in it, which is most tiles of most
+   *  worlds — the key is never an empty raster. */
+  water?: WaterTileGrid;
+}
+
+/**
+ * The second field of a height tile: the world's water, on the tile's own
+ * lattice (Wasser v2 K-A E1).
+ *
+ * `level[j][i]` is the local mirror in metres at the same support point
+ * `heights[j][i]` describes — or `null` where the point carries no water. That
+ * null is the ONLY mask this raster has, and it is not the outline: the server
+ * writes the level two lattice steps PAST every outline (its dilation), so a
+ * bilinear read anywhere INSIDE a water polygon meets four defined corners. A
+ * `null` therefore means "far enough from any water that no reading needs this
+ * texel", never "the shore is here".
+ *
+ * `flow_x`/`flow_z` are the downstream vector at that point: the axis tangent,
+ * blended through the knots, times the area's speed factor. They are OMITTED
+ * TOGETHER where the whole tile has no flow — every lake, every ice sheet —
+ * because a still water's vector is exactly (0, 0) everywhere and two lattices
+ * of zeros would double the tile's payload to say nothing. Absent reads as
+ * "(0, 0) everywhere".
+ */
+export interface WaterTileGrid {
+  level: (number | null)[][];
+  flow_x?: number[][];
+  flow_z?: number[][];
 }
 
 /** The answer of `GET /play/heightfield/tiles`. `tiles` holds only what the

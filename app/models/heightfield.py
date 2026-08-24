@@ -390,6 +390,46 @@ def relief_basis() -> List[Dict[str, Any]]:
     return out
 
 
+def water_flow_speeds() -> Dict[str, float]:
+    """Terrain kind -> the ``flow_speed`` dial of the SURFACE it wears, in m/s
+    (K-A E1) — the denominator of the water raster's flow factor.
+
+    THE CHAIN IS THE ONE THE RENDERER WALKED. A terrain type names a surface
+    (``types[].surface``, § A1.5), the surface library entry carries the
+    material declaration, and ``material.flow_speed`` is the kind's own speed.
+    That was resolved in ``scene/ground.ts`` per painted area until the water
+    raster took the flow over; it is resolved here now, once per generation, so
+    exactly one place answers "how fast does this kind run".
+
+    ONLY WATER KINDS ARE IN IT. Everything else contributes nothing to the water
+    raster, and a map of the whole catalog would put every texture edit of the
+    world into ``height_sig`` for nothing. A kind whose surface declares no
+    ``flow_speed`` — which is every entry shipped before the dial existed —
+    answers the module default, i.e. exactly the number the renderer fell back
+    to.
+    """
+    from app.core.heightfield import WATER_FLOW_SPEED_DEFAULT_M_S
+    from app.core.surface_textures import get_kind_meta
+    from app.core.terrain_types import effective_catalog, is_water_kind
+    catalog = effective_catalog()
+    library = get_kind_meta()
+    out: Dict[str, float] = {}
+    for kind, entry in catalog.items():
+        if not is_water_kind(kind, catalog):
+            continue
+        surface = str((entry or {}).get("surface") or "").strip().lower()
+        material = (library.get(surface) or {}).get("material")
+        speed = None
+        if isinstance(material, dict):
+            try:
+                speed = float(material.get("flow_speed"))
+            except (TypeError, ValueError):
+                speed = None
+        out[kind] = (WATER_FLOW_SPEED_DEFAULT_M_S
+                     if speed is None or not math.isfinite(speed) else speed)
+    return out
+
+
 def water_basis() -> List[Dict[str, Any]]:
     """The WATER inputs of the bake, in hashable form (E1, § A16.3).
 
@@ -416,16 +456,28 @@ def water_basis() -> List[Dict[str, Any]]:
     from app.core.terrain_types import effective_catalog, water_kind_defaults
     from app.models.terrain import list_areas
     catalog = effective_catalog()
+    speeds = water_flow_speeds()
     out: List[Dict[str, Any]] = []
     for area, _box in water_areas(list_areas(), catalog):
-        meta = water_meta(area, water_kind_defaults(
-            str(area.get("kind") or ""), catalog))
+        kind = str(area.get("kind") or "")
+        meta = water_meta(area, water_kind_defaults(kind, catalog))
         out.append({"id": area.get("id"), "polygon": area.get("polygon"),
                     "level": meta.level, "up": meta.level_up,
                     "down": meta.level_down, "flow": meta.flow_dir_deg,
                     "along": meta.flow_along, "line": meta.stroke_points,
                     "width": meta.stroke_width_m,
-                    "depth": meta.depth_m, "ramp": meta.shore_ramp_m})
+                    "depth": meta.depth_m, "ramp": meta.shore_ramp_m,
+                    # THE TWO SPEED NUMBERS ARE NEW WITH THE WATER RASTER
+                    # (K-A E1) and they had to be: the tile now SHIPS the flow
+                    # vector, whose length is the area's speed over its kind's
+                    # (``heightfield.water_flow_factor``). Until the raster
+                    # existed both were pure look — read straight off the meta
+                    # by the renderer, hashed by nobody — and a world that
+                    # re-dialled a river's speed would have kept serving the
+                    # tiles it had. They are the only inputs of this signature
+                    # that do not move ``h_final`` by a millimetre.
+                    "speed": meta.flow_speed_m_s,
+                    "kind_speed": speeds.get(kind)})
     return out
 
 

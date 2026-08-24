@@ -324,6 +324,30 @@ async function loadModule(path, name, deps = []) {
   }
 }
 
+/** `client3d/src/scene/waterRaster.ts` with `@anima/scene-render` resolved to
+ *  `worldHeight.ts` itself — the only thing it takes from the package is
+ *  `tileKeyAt`, and pointing at the real barrel would drag `three` in. Same
+ *  alarm as `loadModule`: an import of anything else fails loudly here. */
+async function loadWaterRaster() {
+  const esbuild = await import('esbuild');
+  const dir = await mkdtemp(join(tmpdir(), 'waterraster-'));
+  try {
+    const ts = async (src, name, fix = (c) => c) => {
+      const code = await readFile(src, 'utf8');
+      await writeFile(join(dir, `${name}.mjs`),
+        fix(esbuild.transformSync(code, { loader: 'ts', format: 'esm' }).code),
+        'utf8');
+    };
+    await ts(SRC, 'worldHeight');
+    await ts(join(ROOT, 'client3d/src/scene/waterRaster.ts'), 'waterRaster',
+      (code) => code.replace(/from\s*["']@anima\/scene-render["']/g,
+                             "from './worldHeight.mjs'"));
+    return await import(`file://${join(dir, 'waterRaster.mjs')}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 let failed = 0;
 let passed = 0;
 function check(label, actual, expected, eps = 1e-9) {
@@ -738,6 +762,183 @@ check('(41) inside the loaded tile the FINE raster answers',
   heightAt(FINE, 1, 1), 4.0625);
 check('...while a point in an unloaded tile takes the overview',
   heightAt(FINE, -1, -1), 3.90625);
+
+// ============================================================================
+// [W] THE WATER RASTER — `client3d/src/scene/waterRaster.ts` (K-A E1/E2)
+// ============================================================================
+// TWIN DISCIPLINE, and this time against a THIRD implementation: the tables
+// below are what `app/core/heightfield.HeightModel.water_raster` really writes
+// for the two fixtures of `scripts/smoke_height_bake.py` section [12], derived
+// here from the same three rules the server derives them from:
+//
+//   level(p) = water_level_at(profile, p)   of the topmost water covering p
+//   covered  = inside the outline, OR within 2 lattice steps (4 m) of it
+//   flow(p)  = the axis tangent, blended through the knots, times the factor
+//
+// THE LAKE (server [12a]/[12b]): the square (20,20)-(60,60) with an authored
+// level of 3.0 — one knot, so 3.0 everywhere and no flow at all.
+//
+// WINDOW A, its NORTH-WEST corner: origin (12,12), step 2, 7 x 7 points, so
+// x and z run 12, 14, 16, 18, 20, 22, 24. A point west of the rim is
+// `20 − x` from the outline, one north of it `20 − z`, and one north-WEST of
+// the corner is `hypot(20−x, 20−z)` from the corner point (20,20):
+//
+//     (14, 20) -> 6.000  dry        (16, 20) -> 4.000  wet, the band exactly
+//     (16, 16) -> 5.657  dry        (18, 18) -> 2.828  wet  (the DIAGONAL)
+//     (16, 18) -> 4.472  dry        (18, 16) -> 4.472  dry
+//
+// so the mask is a staircase and it is the one the server prints:
+const LAKE_NW = {
+  origin_x: 12, origin_z: 12, step_m: 2, rows: 7, cols: 7,
+  level: [
+    [null, null, null, null, null, null, null],   // z = 12
+    [null, null, null, null, null, null, null],   // z = 14
+    [null, null, null, null, 3.0, 3.0, 3.0],      // z = 16
+    [null, null, null, 3.0, 3.0, 3.0, 3.0],       // z = 18
+    [null, null, 3.0, 3.0, 3.0, 3.0, 3.0],        // z = 20
+    [null, null, 3.0, 3.0, 3.0, 3.0, 3.0],        // z = 22
+    [null, null, 3.0, 3.0, 3.0, 3.0, 3.0],        // z = 24
+  ],
+};
+// WINDOW B, its EAST rim: origin (56,30), step 2, 7 x 3 points, x = 56 … 68.
+// Inside up to 60, then 62 (2 m out) and 64 (4 m out) are the dilation ring,
+// and 66/68 are dry. This is the window the masked mix is FOR — see below.
+const LAKE_E = {
+  origin_x: 56, origin_z: 30, step_m: 2, rows: 3, cols: 7,
+  level: [
+    [3.0, 3.0, 3.0, 3.0, 3.0, null, null],
+    [3.0, 3.0, 3.0, 3.0, 3.0, null, null],
+    [3.0, 3.0, 3.0, 3.0, 3.0, null, null],
+  ],
+};
+// THE CLIFF RIVER (server [8l]/[12c]): drawn (0,0) -> (100,0), 6 m wide, over a
+// hard 3 m step at x = 41. Its axis is [(0,3), (40,3), (42,0), (100,0)], so the
+// WHOLE drop sits between two lattice points and the raster carries it exactly.
+// WINDOW: origin (36,-8), step 2, 6 x 5 points, x = 36 … 46, z = −8 … 0. The
+// mask is z in [−3, 3], so z = −8 is 5 m out (dry) and −6 is 3 m out (wet).
+const CLIFF_W = {
+  origin_x: 36, origin_z: -8, step_m: 2, rows: 5, cols: 6,
+  level: [
+    [null, null, null, null, null, null],       // z = −8
+    [3.0, 3.0, 3.0, 0.0, 0.0, 0.0],             // z = −6
+    [3.0, 3.0, 3.0, 0.0, 0.0, 0.0],             // z = −4
+    [3.0, 3.0, 3.0, 0.0, 0.0, 0.0],             // z = −2
+    [3.0, 3.0, 3.0, 0.0, 0.0, 0.0],             // z =  0
+  ],
+  flow_x: [[0, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1],
+           [1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]],
+  flow_z: [[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]],
+};
+
+const wr = await loadWaterRaster();
+const { emptyWaterRaster, rasterFlowAt, rasterLevelAt, waterBilinear,
+        waterTileFrom } = wr;
+
+function rasterOf(tileM, entries) {
+  const r = emptyWaterRaster();
+  r.tileM = tileM;
+  for (const [key, wire] of entries) {
+    r.tiles.set(key, waterTileFrom(wire.origin_x, wire.origin_z, wire.step_m,
+                                   wire));
+  }
+  return r;
+}
+function checkNaN(label, actual) {
+  const ok = typeof actual === 'number' && Number.isNaN(actual);
+  if (ok) {
+    passed += 1;
+    console.log(`  ok   ${label} = NaN (dry)`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       expected NaN\n       actual   ${actual}`);
+  }
+}
+
+console.log('\n[W1] the lake: the server\'s own table, read back');
+// The two windows sit in tile "0,0" of a 256 m world; only one may be filed
+// under that key at a time, so each gets its own raster.
+const NW = rasterOf(256, [['0,0', LAKE_NW]]);
+check('a support point inside the lake is the mirror', rasterLevelAt(NW, 22, 22), 3);
+check('…so is the rim point (20, 20) itself', rasterLevelAt(NW, 20, 20), 3);
+check('4 m outside the rim the DILATION still answers',
+  rasterLevelAt(NW, 16, 20), 3);
+check('…and halfway into the ring, between two written points',
+  rasterLevelAt(NW, 17, 20), 3);
+checkNaN('6 m out there is nothing to read', rasterLevelAt(NW, 14, 20));
+checkNaN('…nor 5 m out, where the mix meets one dry corner',
+  rasterLevelAt(NW, 15, 20));
+checkNaN('…nor diagonally past the corner, 4.472 m away',
+  rasterLevelAt(NW, 16, 18));
+check('the DIAGONAL point (18, 18) is written — 2.828 m out, under the 4 m band',
+  rasterLevelAt(NW, 18, 18), 3);
+checkNaN('a point in a tile that has not arrived is dry',
+  rasterLevelAt(NW, 900, 900));
+checkNaN('…and so is every point of an empty raster',
+  rasterLevelAt(emptyWaterRaster(), 22, 22));
+checkNaN('…and of none at all', rasterLevelAt(null, 22, 22));
+check('a still water has no flow — the wire omits both arrays',
+  rasterFlowAt(NW, 22, 22)[0], 0);
+check('…in both components', rasterFlowAt(NW, 22, 22)[1], 0);
+checkBool('no raster at all is still water too, not a crash',
+  rasterFlowAt(null, 22, 22).join() === '0,0', true);
+checkBool('…and an empty one',
+  rasterFlowAt(emptyWaterRaster(), 22, 22).join() === '0,0', true);
+
+console.log('\n[W2] THE MASKED MIX — a corner with weight 0 is not read');
+// (64, 32) is the OUTERMOST written point of the east ring: its own weight is
+// 1 and its eastern neighbour (66, 32) is dry with weight 0. Plain bilinear
+// would answer NaN there (`NaN · 0 = NaN`), and that is not cosmetic: the near
+// pyramid is filled AT the lattice points, so the ring would lose its outer
+// texel — 2 steps of dilation would become 1, which is under the sqrt(2) a
+// bilinear read of an interior point needs, and a water would show holes.
+const EAST = rasterOf(256, [['0,0', LAKE_E]]);
+check('the outermost ring point keeps its value', rasterLevelAt(EAST, 64, 32), 3);
+check('RED COUNTER-PROBE: the same four corners mixed WITHOUT the mask',
+  Number.isNaN(3 * 1 + NaN * 0 + 3 * 0 + NaN * 0) ? 1 : 0, 1);
+check('…while the masked mix answers the wet corner',
+  waterBilinear(3, NaN, 3, NaN, 0, 0), 3);
+check('…and it still answers NaN when a WEIGHTED corner is dry',
+  Number.isNaN(waterBilinear(3, NaN, 3, NaN, 0.5, 0)) ? 1 : 0, 1);
+checkNaN('…which is what a point past the ring reads', rasterLevelAt(EAST, 65, 32));
+check('inside the lake nothing changes', rasterLevelAt(EAST, 59, 32), 3);
+
+console.log('\n[W3] the cliff river: the drop, and the flow');
+// The window straddles z = 0, i.e. the seam between tiles "0,-1" and "0,0",
+// and the server ships those support points in BOTH of them — a tile carries
+// its own borders (§ A16.5). So the same hand table is filed under both keys,
+// which is what the two real tiles would agree on there.
+const CLIFF_R = rasterOf(256, [['0,-1', CLIFF_W], ['0,0', CLIFF_W]]);
+check('upstream of the lip the mirror is the plateau\'s 3.0',
+  rasterLevelAt(CLIFF_R, 38, 0), 3);
+check('downstream of it, the low ground\'s 0.0', rasterLevelAt(CLIFF_R, 44, 0), 0);
+// x = 41 is the middle of the ONE cell the drop sits in: (3 + 0)/2. The server
+// says 1.5 there too (`smoke_height_bake.py` [8l]) — the raster reproduces the
+// step exactly because the axis knots at 40 and 42 ARE lattice points.
+check('…and halfway between them the mirror is halfway down, 1.5',
+  rasterLevelAt(CLIFF_R, 41, 0), 1.5);
+check('…a quarter of the way, a quarter down', rasterLevelAt(CLIFF_R, 40.5, 0), 2.25);
+check('the flow is the unit tangent of a river running east, x',
+  rasterFlowAt(CLIFF_R, 41, 0)[0], 1);
+check('…and z', rasterFlowAt(CLIFF_R, 41, 0)[1], 0);
+check('…and it is a unit vector', Math.hypot(...rasterFlowAt(CLIFF_R, 41, 0)), 1);
+checkNaN('5 m off the bank there is no water', rasterLevelAt(CLIFF_R, 41, -8));
+check('the rim of the mask reads the mirror, not a fade',
+  rasterLevelAt(CLIFF_R, 38, -3), 3);
+
+console.log('\n[W4] the wire shape — the sentinel is converted once, at the edge');
+check('a tile without a level array is no water field',
+  waterTileFrom(0, 0, 2, { }) === null ? 1 : 0, 1);
+check('…nor is a missing one', waterTileFrom(0, 0, 2, null) === null ? 1 : 0, 1);
+check('…nor one row (a lattice under 2 x 2 carries no surface)',
+  waterTileFrom(0, 0, 2, { level: [[1, 2]] }) === null ? 1 : 0, 1);
+check('…nor a field without a step', waterTileFrom(0, 0, 0,
+  { level: [[1, 2], [3, 4]] }) === null ? 1 : 0, 1);
+const CONV = waterTileFrom(0, 0, 2, { level: [[1, null], [null, 4]] });
+check('null becomes NaN', Number.isNaN(CONV.level[0][1]) ? 1 : 0, 1);
+check('…and a number stays itself', CONV.level[1][1], 4);
+check('a tile without flow arrays holds null, not zeros',
+  CONV.flowX === null && CONV.flowZ === null ? 1 : 0, 1);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

@@ -82,6 +82,19 @@ the clicks are bends, and they are never dropped.
 
 Section [9] is the deletion proof of the fifth stage.
 
+Section [12] is THE WATER RASTER (Wasser v2, K-A E1). The tile grew a SECOND
+field beside ``heights``: per lattice point the local mirror and the flow
+vector of the topmost water covering it, written two lattice steps PAST every
+outline. ``h_final`` does not move by a millimetre — the mirror was always an
+input of the carve and is now shipped as well — so every number above this
+section is unchanged. The dilation width is a DIAGONAL argument (a corner of a
+wet sample's cell lies at most sqrt(2) steps outside the outline, so one step
+is not enough and two are), and [12d] is the measurement the research asked
+for: on the inside of the hairpin the 2 m raster is off by 3.43 m, the same
+sweep at 1 m and 0.5 m is off by just as much, and away from the medial axis
+the 2 m raster is already within 1.8 cm — i.e. the error is a STEP in
+``water_level_at`` itself and a finer water raster would buy nothing.
+
 Section [10] is THE BANK CLAMP (v4, finding 2026-08-24: "beside the river the
 water floats in the air"). The carve only ever pushes ground DOWN and only
 INSIDE the polygon, so nothing stopped the ground right OUTSIDE the rim from
@@ -1792,8 +1805,8 @@ def unclamped(model, x, z):
 
 
 print("\n[10a] the rule change is versioned — v3 -> v4, and v4 -> v5 -> v6 "
-      "in [11]")
-check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 6)
+      "in [11], v6 -> v7 in [12]")
+check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 7)
 near("the lip is a hand's width of bank over the mirror", LIP, 0.1, 1e-12)
 check("...and it is under the shallowest legal bed",
       LIP < hf.WATER_DEPTH_MIN_M, True)
@@ -2291,7 +2304,7 @@ check_not("moving ONLY the code version moves the signature", _after, _before)
 near("…and it is exactly 10 characters, like the other one", len(_after), 10,
      0)
 check("the restored version is the one this bake ships",
-      hf.HEIGHT_BAKE_VERSION, 6)
+      hf.HEIGHT_BAKE_VERSION, 7)
 # `get_field` uses the stored row ONLY on a signature match — the line that
 # makes the bump reach a running world.
 _get_field_src = _inspect.getsource(hf.get_field)
@@ -2300,6 +2313,278 @@ check_true("get_field rejects a stored raster whose sig differs",
 check_true("…and there is no second, unversioned store: the tiles the client "
            "renders are never persisted",
            "NOTHING IS STORED IN THE DB" in _inspect.getsource(hf.get_tile))
+
+# ── [12] THE WATER RASTER (Wasser v2, K-A E1) ───────────────────────────
+#
+# The tile carries a SECOND field: per lattice point the local mirror and the
+# flow vector, written N steps PAST every outline. `h_final` does not move — the
+# mirror was always an input of the carve — so everything above this section is
+# unchanged and this one only asks what the new field says.
+#
+# THE THREE RULES, and every number below follows from them:
+#
+#   level(p) = water_level_at(profile, p)      of the TOPMOST water covering p
+#   flow(p)  = water_flow_at(profile, p) · factor          of that same water
+#   covered  = inside the outline, OR within WATER_RASTER_DILATION_M of it
+#
+# "Topmost" is the ground's own rule (the LAST painted area wins), and inside
+# beats dilated: the ring is a filter fix, not authorship.
+print("\n[12a] the raster IS the mirror, sampled — the still lake")
+# WATER_SET is the square (20,20)-(60,60) with an AUTHORED level of 3.0, so its
+# profile is one knot at the centroid (40,40) carrying 3.0 and `water_level_at`
+# answers 3.0 at every point of the plane. A one-knot axis has no segment, so
+# the flow is exactly (0, 0) — every still water, by construction.
+check("inside: the authored mirror and no flow at all",
+      [round(v, 6) for v in MODEL.water_at(40.0, 40.0)], [3.0, 0.0, 0.0])
+check("ON the outline the point is covered (distance 0)",
+      [round(v, 6) for v in MODEL.water_at(20.0, 40.0)], [3.0, 0.0, 0.0])
+near("dry ground far from any water answers nothing at all",
+     1.0 if MODEL.water_at(-50.0, -50.0) is None else 0.0, 1.0)
+
+print("\n[12b] the DILATION — two lattice steps, and the number is a diagonal")
+near("the band is WATER_RASTER_DILATION_STEPS · TILE_STEP_M",
+     hf.WATER_RASTER_DILATION_M,
+     hf.WATER_RASTER_DILATION_STEPS * hf.TILE_STEP_M, 1e-12)
+near("...which is 2 steps = 4 m", hf.WATER_RASTER_DILATION_M, 4.0, 1e-12)
+# West of the lake's rim at x = 20, on the lattice (even metres): the distance
+# to the OUTLINE is 20 - x.
+check("4 m out — exactly the band — is still written",
+      [round(v, 6) for v in MODEL.water_at(16.0, 40.0)], [3.0, 0.0, 0.0])
+check_true("...and 6 m out is dry", MODEL.water_at(14.0, 40.0) is None)
+# THE VALUE IN THE RING IS THE FUNCTION CONTINUED, not the rim value carried
+# outward — which is what makes the bilinear mix inside the outline reproduce
+# the profile. For the still lake both readings are 3.0, so the CLIFF river
+# says it instead: its axis lies on z = 0 and its mask is (0,-3)-(100,3), so a
+# ring point at (50, 6) is 3 m outside the rim and `water_level_at` there is
+# the level at s = 50, i.e. the low ground's 0.0 — not the 0.0 + something a
+# nearest-outline-point rule would have produced. Both happen to be 0.0 here;
+# the point that CAN differ is the level at x = 41 (see [8l]).
+near("the ring carries water_level_at OF THE RING POINT",
+     CMODEL_W5.water_at(41.0, 5.0)[0],
+     hf.water_level_at(CLIFF, 41.0, 5.0), 1e-12)
+near("...which is the mid-drop 1.5, the same number the axis gives",
+     CMODEL_W5.water_at(41.0, 5.0)[0], 1.5, 1e-12)
+# THE DIAGONAL, which is why the band is TWO steps and not one. Let P be any
+# point INSIDE an outline. A bilinear read at P mixes the four corners of P's
+# lattice cell; if a corner C lies outside, the segment P->C crosses the
+# outline at some Q, so d(C, outline) <= |CQ| <= |CP| <= one cell diagonal =
+# sqrt(2) steps = 2.8284 m. One step does not cover that. THE FIXTURE: a lake
+# whose south-west corner sits at (1.99, 1.99), a hair inside the lattice cell
+# [0,2]^2. The point (1.995, 1.995) is inside it and reads the corner (0, 0),
+# which is hypot(1.99, 1.99) = 2.8143 m outside the outline.
+CORNER_LAKE = {"id": "ta_corner", "kind": "lake", "z_order": 0,
+               "polygon": [[1.99, 1.99], [40, 1.99], [40, 40], [1.99, 40]],
+               "meta": {"water_level": 1.0}}
+CORNER_MODEL = hf.build_model([], [], [CORNER_LAKE], CATALOG)
+near("the worst corner of a wet cell is one cell DIAGONAL out",
+     math.hypot(1.99, 1.99), 1.99 * math.sqrt(2.0), 1e-12)
+near("...and a full diagonal is sqrt(2) steps = 2.8284 m",
+     hf.TILE_STEP_M * math.sqrt(2.0), 2.8284271, 1e-6)
+check_true("...more than ONE step (2 m), so a 1-step band would leave it dry",
+           math.hypot(1.99, 1.99) > hf.TILE_STEP_M)
+check_true("...and under TWO (4 m), which is why the band covers it",
+           math.hypot(1.99, 1.99) < hf.WATER_RASTER_DILATION_M)
+check_true("the corner (0,0) really is written", CORNER_MODEL.water_at(0.0, 0.0)
+           is not None)
+check_true("...and the point (1.995, 1.995) really is INSIDE the lake",
+           hf._inside_ring(1.995, 1.995, [(1.99, 1.99), (40.0, 1.99),
+                                          (40.0, 40.0), (1.99, 40.0)]))
+check_true("RED: at one step of dilation that same corner would be dry",
+           math.hypot(1.99, 1.99) > 1 * hf.TILE_STEP_M)
+
+print("\n[12c] the FLOW — the server owns the blended tangent now")
+# The cliff river's axis is four knots on z = 0 running east, so every segment
+# tangent is (1, 0) and the blend at a knot mixes (1, 0) with (1, 0): the flow
+# is the unit east vector everywhere, at every knot included.
+check("a straight river flows along itself, length 1",
+      [round(v, 6) for v in CMODEL_W5.water_at(50.0, 0.0)[1:]], [1.0, 0.0])
+check("...at a knot too, where the two legs are the same direction",
+      [round(v, 6) for v in CMODEL_W5.water_at(40.0, 0.0)[1:]], [1.0, 0.0])
+# THE HAIRPIN, and these are the numbers `client3d/scripts/smoke_water_plane.mjs`
+# [4d-flow] pins for `waterFlowAt` — the rule moved to the server, the answers
+# did not. Leg 1 is (99, -20)/101, leg 2 is (-48, -20)/52 = (-12, -5)/13, and AT
+# the middle knot the tangent is their normalised bisector.
+near("halfway along leg 1: the leg's own tangent, x",
+     hf.water_flow_at(U, 199.5, 290.0)[0], 99.0 / 101.0, 1e-15)
+near("...and z", hf.water_flow_at(U, 199.5, 290.0)[1], -20.0 / 101.0, 1e-15)
+near("halfway along leg 2: x", hf.water_flow_at(U, 225.0, 270.0)[0],
+     -12.0 / 13.0, 1e-15)
+near("...and z", hf.water_flow_at(U, 225.0, 270.0)[1], -5.0 / 13.0, 1e-15)
+near("AT the hairpin knot: the bisector the client pins, x",
+     hf.water_flow_at(U, 249.0, 280.0)[0], 0.09757142403137047, 1e-12)
+near("...and z", hf.water_flow_at(U, 249.0, 280.0)[1], -0.9952285251199801,
+     1e-12)
+near("...and it is a UNIT vector — the factor is applied after the mix",
+     math.hypot(*hf.water_flow_at(U, 249.0, 280.0)), 1.0, 1e-12)
+# THE SPEED FACTOR is the area's own speed over its KIND's dial, the twin of
+# `@anima/scene-render waterFlowFactor`. An area that authors nothing is
+# exactly 1, which is what keeps every existing water the plain unit tangent.
+near("no authored speed -> factor exactly 1",
+     hf.water_flow_factor(None, 0.15), 1.0, 1e-15)
+near("half the kind's speed -> half the length",
+     hf.water_flow_factor(0.075, 0.15), 0.5, 1e-15)
+near("the kind's own number cancels", hf.water_flow_factor(0.3, 0.3), 1.0,
+     1e-15)
+near("an authored 0 is FLOORED, never a zero-length vector",
+     hf.water_flow_factor(0.0, 0.15), hf.WATER_FLOW_FACTOR_MIN, 1e-18)
+near("a kind that cannot flow cannot be made to", hf.water_flow_factor(1.0,
+                                                                       0.0),
+     1.0, 1e-15)
+near("...and the area is clamped to the ceiling the kind's dial has",
+     hf.water_flow_factor(99.0, 0.15),
+     hf.WATER_FLOW_SPEED_MAX_M_S / 0.15, 1e-12)
+# …and it reaches the raster: the same hairpin at half its kind's speed.
+U_SLOW = u_river("ta_u_slow", {"flow_along": "forward",
+                               "flow_speed_m_s": 0.075})
+USMODEL = hf.build_model([BOWL], [], [U_SLOW], CATALOG_R,
+                         {"river": 0.15})
+near("the raster carries the factor as the vector's LENGTH",
+     math.hypot(*USMODEL.water_at(199.5, 290.0)[1:]), 0.5, 1e-12)
+
+print("\n[12d] THE CURVE-INSIDE MEASUREMENT — does 2 m have to get finer?")
+# THE QUESTION (recherche-wasser-v2.md § 7 no. 2): a raster is read BILINEARLY,
+# so between its support points it is not the function. How far off is it on the
+# inside of a tight curve, where `water_level_at` changes fastest?
+#
+# STEP 1: ON its own lattice the raster is not "close to" the function, it IS
+# the function — `water_at` returns `water_level_at` unrounded.
+_lattice_worst = 0.0
+for _i in range(70, 151):
+    for _j in range(125, 158):
+        _w = UMODEL.water_at(_i * 2.0, _j * 2.0)
+        if _w is None:
+            continue
+        _lattice_worst = max(_lattice_worst,
+                             abs(_w[0] - hf.water_level_at(U, _i * 2.0,
+                                                           _j * 2.0)))
+near("on the 2 m lattice the deviation is EXACTLY zero", _lattice_worst, 0.0,
+     0.0)
+
+
+def _raster_deviation(step, n=321):
+    """(worst, worst on cells that do NOT straddle a kink) over the U mask.
+
+    The raster is built on the world-anchored lattice of `step`, read
+    bilinearly, and compared against `water_level_at` at n x n probes inside
+    the mask. A cell is "smooth" when its four corners AND the probe all
+    project onto the same axis SEGMENT — i.e. no medial axis runs through it.
+    """
+    cache = {}
+
+    def lat(i, j):
+        key = (i, j)
+        if key not in cache:
+            found = UMODEL.water_at(i * step, j * step)
+            cache[key] = None if found is None else found[0]
+        return cache[key]
+
+    ring = [(140.0, 250.0), (300.0, 250.0), (300.0, 315.0), (140.0, 315.0)]
+    worst = 0.0
+    smooth = 0.0
+    for a in range(n):
+        x = 140.0 + 160.0 * a / (n - 1)
+        for b in range(n):
+            z = 250.0 + 65.0 * b / (n - 1)
+            if not hf._inside_ring(x, z, ring):
+                continue
+            fi, fj = x / step, z / step
+            i, j = math.floor(fi), math.floor(fj)
+            tx, tz = fi - i, fj - j
+            corners = (lat(i, j), lat(i + 1, j), lat(i, j + 1),
+                       lat(i + 1, j + 1))
+            weights = ((1 - tx) * (1 - tz), tx * (1 - tz), (1 - tx) * tz,
+                       tx * tz)
+            value = 0.0
+            usable = True
+            for corner, weight in zip(corners, weights):
+                if weight == 0.0:
+                    continue
+                if corner is None:
+                    usable = False
+                    break
+                value += corner * weight
+            if not usable:
+                continue
+            err = abs(value - hf.water_level_at(U, x, z))
+            worst = max(worst, err)
+            segs = {hf._axis_nearest(U.axis, i * step, j * step)[1],
+                    hf._axis_nearest(U.axis, (i + 1) * step, j * step)[1],
+                    hf._axis_nearest(U.axis, i * step, (j + 1) * step)[1],
+                    hf._axis_nearest(U.axis, (i + 1) * step,
+                                     (j + 1) * step)[1],
+                    hf._axis_nearest(U.axis, x, z)[1]}
+            if len(segs) == 1:
+                smooth = max(smooth, err)
+    return worst, smooth
+
+
+_dev2, _smooth2 = _raster_deviation(2.0)
+_dev1, _smooth1 = _raster_deviation(1.0)
+_dev05, _smooth05 = _raster_deviation(0.5)
+print(f"    measured: 2 m -> worst {_dev2:.4f} m (smooth {_smooth2:.4f} m); "
+      f"1 m -> {_dev1:.4f} (smooth {_smooth1:.4f}); "
+      f"0.5 m -> {_dev05:.4f} (smooth {_smooth05:.4f})")
+# STEP 2: WHERE THE THE WORST NUMBER COMES FROM — a STEP in the function
+# itself. A hairpin's two legs both run near the inside of the bend, and a point
+# a hair to one side projects onto leg 1 while a hair to the other projects onto
+# leg 2; the two arc coordinates differ by most of the bend, so the level JUMPS.
+# On the fixture at z = 277.727 the level falls from 8.44 to 7.15 between
+# x = 225.8 and x = 225.9 — over one tenth of a metre.
+_jump = abs(hf.water_level_at(U, 225.8, 277.727)
+            - hf.water_level_at(U, 225.9, 277.727))
+check_true("`water_level_at` STEPS across the hairpin's medial axis "
+           f"({_jump:.4f} m over 0.1 m)", _jump > 1.0)
+check_true("...and no lattice resolves a step: halving it does not halve the "
+           "error", _dev1 > 0.9 * _dev2 and _dev05 > 0.9 * _dev2)
+check_true("...nor does quartering it", _dev05 > 0.9 * _dev2)
+# STEP 3: AWAY FROM THE STEP the 2 m raster is already exact to the centimetre,
+# and there it behaves as a bilinear reading must — second order in the step.
+check_true(f"the smooth part is under 5 cm at 2 m ({_smooth2:.4f} m)",
+           _smooth2 < 0.05)
+check_true("...and it really is second order: halving the step at least "
+           "halves it", _smooth1 < 0.6 * _smooth2)
+check_true("...quartering it takes it under a fifth", _smooth05 < 0.2 * _smooth2)
+# THE VERDICT, stated as the check it is: the water raster does NOT need a step
+# finer than the height field's. What limits it is a discontinuity of the
+# authored mirror, which a finer lattice cannot touch and which the client's
+# fragment MASK (K-A E4) is what will hide.
+check_true("VERDICT: 2 m stands — the error is the mirror's own step, not the "
+           "lattice's", _dev2 > 10 * _smooth2)
+
+print("\n[12e] the payload — additive, and absent where there is no water")
+_wet_tile = hf.rasterize_tile(0, 0, [SLOPE], [PLOT], TERRAIN, CATALOG)
+_dry_tile = hf.rasterize_tile(3, 3, [SLOPE], [PLOT], TERRAIN, CATALOG)
+check("the wet tile carries the second field", "water" in _wet_tile, True)
+check("a tile without a drop of water carries no key at all",
+      "water" in _dry_tile, False)
+check("the water field is on the tile's OWN lattice",
+      [len(_wet_tile["water"]["level"]),
+       len(_wet_tile["water"]["level"][0])],
+      [hf.TILE_POINTS, hf.TILE_POINTS])
+check("dry lattice points are the null sentinel",
+      _wet_tile["water"]["level"][0][0], None)
+# (40, 40) is the lake's middle: lattice index 20, 20.
+check("...and wet ones the mirror, rounded like the heights",
+      _wet_tile["water"]["level"][20][20], 3.0)
+check("STILL water ships no flow arrays — they would be lattices of zeros",
+      [k for k in sorted(_wet_tile["water"])], ["level"])
+_cliff_tile = hf.rasterize_tile(0, 0, [STEP_AREA], [], [CLIFF_RIVER],
+                                CATALOG_R)
+check("a FLOWING water ships all three",
+      sorted(_cliff_tile["water"]), ["flow_x", "flow_z", "level"])
+check("...and the flow is the unit tangent at (50, 0), lattice (25, 0)",
+      [_cliff_tile["water"]["flow_x"][0][25],
+       _cliff_tile["water"]["flow_z"][0][25]], [1.0, 0.0])
+
+print("\n[12f] the tile STATISTICS are heights-only — water changes none")
+_stats_with = hf.tile_stats_from(_wet_tile)
+_stats_without = hf.tile_stats_from({k: v for k, v in _wet_tile.items()
+                                     if k != "water"})
+check("min/max/err are read off `heights` and nothing else",
+      _stats_with, _stats_without)
+check_true("...so a stored `world_height_tile_stats` row stays a true "
+           "statement about its raster",
+           _stats_with["err"] == _stats_without["err"])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 for name in FAILURES:
