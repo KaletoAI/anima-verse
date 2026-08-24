@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 
 /**
@@ -31,17 +32,54 @@ export function ModelPicker({
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const popupRef = useRef<HTMLDivElement | null>(null)
+  /** Where the list renders, in VIEWPORT coordinates (the list is a portal on
+   *  document.body — a picker at the bottom of a dialog used to open into the
+   *  window edge and show a sliver; user finding 2026-08-24). `up` flips the
+   *  list above the field when the space below is smaller than the space
+   *  above; `maxH` is whatever the chosen side really offers, capped at the
+   *  old 320 px. */
+  const [pos, setPos] = useState<{ left: number; width: number; top?: number;
+    bottom?: number; maxH: number } | null>(null)
+
+  const place = () => {
+    const r = inputRef.current?.getBoundingClientRect()
+    if (!r) return
+    const below = window.innerHeight - r.bottom - 8
+    const above = r.top - 8
+    const up = below < 240 && above > below
+    const maxH = Math.min(320, Math.max(120, up ? above : below))
+    setPos(up
+      ? { left: r.left, width: r.width, bottom: window.innerHeight - r.top + 2, maxH }
+      : { left: r.left, width: r.width, top: r.bottom + 2, maxH })
+  }
+  useLayoutEffect(() => { if (open) place() }, [open])
+  useEffect(() => {
+    if (!open) return
+    const onMove = () => place()
+    window.addEventListener('resize', onMove)
+    // capture: the dialog's own scroll container fires no window scroll.
+    window.addEventListener('scroll', onMove, true)
+    return () => {
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
+    }
+  }, [open])
 
   const selected = useMemo(
     () => options.find((o) => o.value === value) || null,
     [options, value],
   )
 
-  // Close on outside click.
+  // Close on outside click — the list lives in a portal, so "outside" means
+  // outside the field AND outside the list.
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+      const n = e.target as Node
+      if (rootRef.current?.contains(n)) return
+      if (popupRef.current?.contains(n)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
@@ -91,10 +129,11 @@ export function ModelPicker({
           if (e.key === 'Enter' && filtered.length > 0) { e.preventDefault(); pick(filtered[0].value) }
         }}
       />
-      {open && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-          maxHeight: 320, overflowY: 'auto', marginTop: 2,
+      {open && pos && createPortal(
+        <div ref={popupRef} style={{
+          position: 'fixed', left: pos.left, width: pos.width,
+          top: pos.top, bottom: pos.bottom, zIndex: 2000,
+          maxHeight: pos.maxH, overflowY: 'auto',
           background: 'var(--panel, #161b22)',
           border: '1px solid var(--border, #30363d)', borderRadius: 6,
           boxShadow: '0 6px 20px rgba(0,0,0,0.4)', fontSize: '0.9em',
@@ -135,7 +174,8 @@ export function ModelPicker({
               ))}
             </div>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
