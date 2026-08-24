@@ -173,7 +173,25 @@ logger = get_logger("heightfield")
 #: height area may undercut the mirror at the bank (the lift covers it). Not
 #: one authored byte changes and every shore of every existing world comes out
 #: different — precisely the case this counter exists for.
-HEIGHT_BAKE_VERSION = 8
+#:
+#: v9 (2026-08-24, Wasser v2 K-A, findings F-A/F-C): THE WATER FIELD GAINS AN
+#: ``sd`` CHANNEL, and its FLOW is smoothed at bake time. ``sd[j][i]`` is the
+#: SIGNED distance to the authored outline of the very water ``level[j][i]``
+#: comes from — positive inside, negative in the dilation ring, ``null`` on
+#: exactly the texels ``level`` is null on. It exists because "does this pixel
+#: stand inside the painted water" was, until here, a question the CLIENT tried
+#: to answer out of the ground compositor's MATERIAL mask; under a lake with a
+#: ``bed_kind`` the topmost painted kind there is the BED, so that mask answered
+#: "not water" over the whole lake and the mirror faded out (finding F-A, "the
+#: lake is only a sand surface"). The distance to the water's OWN outline is the
+#: only field that answers it, and only the bake knows that outline.
+#: ``flow_x``/``flow_z`` are additionally run through a separable box of
+#: :data:`WATER_FLOW_BLUR_M` radius before they ship, which takes the
+#: medial-axis TANGENT JUMP out of the shipped field (finding F-C, "the water
+#: does not flow and is structured differently every few metres").
+#: ``h_final`` does not move by a millimetre; the counter turns because the tile
+#: PAYLOAD is a function of the code, and a v8 tile carries no ``sd`` at all.
+HEIGHT_BAKE_VERSION = 9
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -295,6 +313,48 @@ WATER_RASTER_DILATION_STEPS = 2
 #: against the outline. It is tied to :data:`TILE_STEP_M` because the tiles are
 #: the only lattice the water raster is ever baked on.
 WATER_RASTER_DILATION_M = WATER_RASTER_DILATION_STEPS * TILE_STEP_M
+
+#: RADIUS of the box that smooths the shipped FLOW field, in metres — and it is
+#: :data:`WATER_RASTER_DILATION_M` on purpose, not a number of its own (v9,
+#: finding F-C).
+#:
+#: THE DEFECT. ``water_flow_at`` reads the tangent at the NEAREST point of the
+#: flow axis, and "nearest" flips across a MEDIAL AXIS: on the inside of a bend
+#: a point a hair to one side projects onto one leg and a hair to the other side
+#: onto another, so the arc coordinate — and with it the tangent — JUMPS. The
+#: level jumps there too and that was measured (1,2951 m over ten centimetres on
+#: the hairpin fixture, § A16.5 point 6, and no lattice resolves a jump). For
+#: the LEVEL the jump is a metre of water and the fragment mask covers it; for
+#: the TANGENT it is the frame the ripple is drawn in, so two neighbouring
+#: lattice points hand the shader two very different frames and the surface
+#: breaks into triangle-sized patches that move against each other. That is the
+#: user's "the water does not flow and is structured differently every few
+#: metres".
+#:
+#: WHY THE DILATION IS THE RIGHT RADIUS, and not a taste: the raster is written
+#: exactly :data:`WATER_RASTER_DILATION_M` past every outline, so a box of THIS
+#: radius around any point INSIDE an outline still lies wholly inside the
+#: written footprint. The blur therefore never mixes an authored flow vector
+#: with the (0, 0) of true dry ground — the vectors it averages are all the same
+#: water's. One metre more and a river's own current would be diluted by the
+#: nothing beyond its ring; one metre less buys less smoothing for no reason.
+#: At :data:`TILE_STEP_M` = 2 m that is a radius of 2 texels, i.e. a 5 × 5 box
+#: spanning 8 m.
+#:
+#: NOT RE-NORMALISED afterwards, deliberately: where two directions really do
+#: disagree the average is SHORTER, and the length of the flow vector is the
+#: speed factor the client reads (``twRipple``). A shortened vector is a graceful
+#: slowdown exactly where the field is ambiguous, which is the honest picture of
+#: a bend's inside; re-normalising would restore full speed to a direction
+#: nobody can defend. The still-water floor (length < 1e-4) is far below
+#: anything this average can produce out of unit tangents.
+WATER_FLOW_BLUR_M = WATER_RASTER_DILATION_M
+
+#: The blur radius in TEXELS is capped here, because it also sizes the sampling
+#: MARGIN of every window and the cost of that margin is quadratic. Eight texels
+#: is already a 17 × 17 box; only a lattice four times finer than the tile's
+#: could ask for more, and no bake uses one.
+_WATER_FLOW_BLUR_MAX_STEPS = 8
 
 #: How far to either side of a KNOT the flow tangent is blended from the
 #: incoming segment's to the outgoing one's, in metres of arc length, at the
@@ -1813,6 +1873,53 @@ def _ring_distance(x: float, z: float,
     return _ring_edge_distance(x, z, ring)
 
 
+def _crop(grid: Sequence[Sequence[Any]], pad: int, cols: int,
+          rows: int) -> List[List[Any]]:
+    """The inner window of a grid sampled with a ``pad``-texel margin.
+
+    The margin exists for the blur alone (:func:`_box_blur`); every field that
+    is NOT blurred is the same number it would have been without a margin, so
+    this is a slice and never an approximation.
+    """
+    return [list(row[pad:pad + cols]) for row in grid[pad:pad + rows]]
+
+
+def _box_blur(grid: Sequence[Sequence[float]], pad: int, radius: int,
+              cols: int, rows: int) -> List[List[float]]:
+    """A separable ``(2·radius + 1)²`` box over a padded grid — the cropped
+    window, and NOTHING clamped.
+
+    SEPARABLE AND NOT A SINGLE 2D PASS: the same answer for ``2·(2r+1)``
+    additions per texel instead of ``(2r+1)²`` — 10 against 25 at r = 2 — and a
+    box is separable exactly because every weight is the same.
+
+    THE MARGIN IS WHY NO INDEX IS CLAMPED. The caller sampled ``pad = radius``
+    texels beyond the window on every side, so the x pass reads columns
+    ``i ± radius`` for ``i`` in ``[pad, pad + cols)`` — inside the padded array
+    by construction — and the z pass reads x-passed rows ``j ± radius`` for
+    ``j`` in ``[pad, pad + rows)``, which is why the x pass runs over ALL padded
+    rows and not only the cropped ones. A clamped edge would be a different
+    answer at a tile border than in the middle of the neighbouring tile, and
+    § G1 says a window is a window of ONE field.
+    """
+    if radius <= 0:
+        return _crop(grid, pad, cols, rows)
+    n = float(2 * radius + 1)
+    # x pass: every padded row, cropped to the window's columns.
+    xp = [[sum(row[i - radius:i + radius + 1]) / n
+           for i in range(pad, pad + cols)] for row in grid]
+    # z pass: the window's rows, each the mean of 2·radius + 1 x-passed rows.
+    out: List[List[float]] = []
+    for j in range(pad, pad + rows):
+        acc = [0.0] * cols
+        for k in range(j - radius, j + radius + 1):
+            src = xp[k]
+            for i in range(cols):
+                acc[i] += src[i]
+        out.append([v / n for v in acc])
+    return out
+
+
 class HeightModel:
     """The whole authored world as ONE pure function of (x, z) — ``h_final``.
 
@@ -2502,9 +2609,9 @@ class HeightModel:
     # ── the water raster (K-A E1) ───────────────────────────────────────
 
     def water_at(self, x: float, z: float
-                 ) -> Optional[Tuple[float, float, float]]:
-        """THE WATER AT ONE POINT — ``(level, flow_x, flow_z)``, or None for dry
-        ground. The second pure function of this model.
+                 ) -> Optional[Tuple[float, float, float, float]]:
+        """THE WATER AT ONE POINT — ``(level, flow_x, flow_z, sd)``, or None for
+        dry ground. The second pure function of this model.
 
         ``level`` is :func:`water_level_at` of the winning water's profile,
         evaluated AT THIS POINT; ``flow`` is :func:`water_flow_at` of the same
@@ -2536,6 +2643,24 @@ class HeightModel:
         was a statement about the GROUND beside the water and had to hold an
         end level from running sideways across the landscape. This is the
         analytic continuation of one field and has no landscape in it at all.
+
+        ``sd`` IS THE FOURTH NUMBER SINCE v9 (finding F-A): the SIGNED distance
+        to the outline of the very water the other three come from — ``+d``
+        inside it, ``−d`` in its dilation ring, and the zero level set is the
+        authored outline itself. It is the winning water's own distance and not
+        a maximum over all of them, for the same reason the level is the winning
+        water's: "the topmost painted area wins" is ONE decision, taken once
+        above, and every channel of this tuple is that water's. Two overlapping
+        lakes therefore answer the top one's distance to ITS outline, which is
+        ``> 0`` wherever the point is inside it — and a point inside the lower
+        one only is never reached by the upper one's pass at all.
+
+        IT COSTS ONE MORE RING WALK on the inside branch, and nothing on the
+        ring branch (there the distance is already measured to decide the
+        branch). That is the price of the only field that can say "inside the
+        painted water" without asking the ground compositor, whose mask names
+        the topmost painted KIND — the BED under a lake with a ``bed_kind``, not
+        the water — and therefore answered "no water here" over whole lakes.
         """
         if not self.water:
             return None
@@ -2544,22 +2669,25 @@ class HeightModel:
         for idx in reversed(candidates):
             ring, profile, _depth, _ramp, factor = fast[idx]
             if ring and _inside_ring(x, z, ring):
-                return _water_sample(profile, x, z, factor)
+                return (*_water_sample(profile, x, z, factor),
+                        _ring_edge_distance(x, z, ring))
         for idx in reversed(candidates):
             ring, profile, _depth, _ramp, factor = fast[idx]
             if not ring:
                 continue
-            if _ring_edge_distance(x, z, ring) <= WATER_RASTER_DILATION_M:
-                return _water_sample(profile, x, z, factor)
+            edge = _ring_edge_distance(x, z, ring)
+            if edge <= WATER_RASTER_DILATION_M:
+                return (*_water_sample(profile, x, z, factor), -edge)
         return None
 
     def water_raster(self, origin_x: float, origin_z: float, step: float,
                      cols: int, rows: int
                      ) -> Optional[Tuple[List[List[Optional[float]]],
                                          List[List[float]],
-                                         List[List[float]]]]:
-        """:meth:`water_at` over one window — ``(level, flow_x, flow_z)``, or
-        None when the window carries no water at all.
+                                         List[List[float]],
+                                         List[List[Optional[float]]]]]:
+        """:meth:`water_at` over one window — ``(level, flow_x, flow_z, sd)``,
+        or None when the window carries no water at all.
 
         The water twin of :meth:`grid`, and the same statement about windows:
         the origin, the step and the size are all there is, so a tile is a
@@ -2567,41 +2695,82 @@ class HeightModel:
 
         ``level[j][i]`` is None where the point is neither inside a water nor in
         its dilation ring — the DRY SENTINEL, and the only mask this raster has.
-        ``flow`` is (0, 0) there, which is what "still" already means to every
-        reader of a flow vector, so the two arrays need no second sentinel
+        ``sd[j][i]`` is None on exactly those texels and carries the signed
+        distance to the authored outline everywhere else (v9). ``flow`` is
+        (0, 0) where the level is None, which is what "still" already means to
+        every reader of a flow vector, so the arrays need no second sentinel
         between them.
 
-        NONE FOR A DRY WINDOW, not three arrays of sentinels: most tiles of most
+        NONE FOR A DRY WINDOW, not four arrays of sentinels: most tiles of most
         worlds carry no water, and a tile that says nothing about water is the
         same statement as an unindexed tile saying nothing about height.
+
+        ── THE FLOW IS BLURRED, AND THE WINDOW IS SAMPLED WITH A MARGIN (v9) ──
+        The shipped flow is a separable box of radius :data:`WATER_FLOW_BLUR_M`
+        over the raw field — the medial-axis fix of finding F-C, argued at that
+        constant. A box needs its neighbours, so the raw field is sampled over a
+        window GROWN by the blur radius and cropped back afterwards: blurring a
+        tile against its own clamped edge would make the answer depend on which
+        tile a point is read from, and the whole point of § G1 is that it cannot.
+        The margin costs (129 + 2r)² instead of 129² samples per tile — 6,3 % at
+        r = 2 — and it buys a field that is seamless across tile borders by
+        construction rather than by inspection.
+
+        THE LEVEL AND THE sd ARE NOT BLURRED. Both are read for a THRESHOLD (the
+        lift fires at ``sd ≥ 0``, the vertex lands on ``max(h, level)``), and a
+        blur would move the waterline off the authored outline and pull the
+        mirror toward the ring's continued values. Only the flow is read as a
+        DIRECTION, and only a direction has a frame to be jumpy in.
         """
         if not self.water or cols < 1 or rows < 1 or step <= 0:
             return None
+        # The blur radius in TEXELS of this window's own step. Metre-anchored,
+        # so a finer or coarser lattice smooths the same 8 m of world; floored,
+        # because a texel is the unit a box can be written in, and 0 for a step
+        # so coarse that one texel already spans the whole blur.
+        radius = min(int(WATER_FLOW_BLUR_M // step), _WATER_FLOW_BLUR_MAX_STEPS)
+        pad = max(radius, 0)
         water_at = self.water_at
+        pcols = cols + 2 * pad
+        prows = rows + 2 * pad
+        px0 = origin_x - pad * step
+        pz0 = origin_z - pad * step
         level: List[List[Optional[float]]] = []
-        flow_x: List[List[float]] = []
-        flow_z: List[List[float]] = []
+        sd: List[List[Optional[float]]] = []
+        raw_x: List[List[float]] = []
+        raw_z: List[List[float]] = []
         wet = False
-        for j in range(rows):
-            pz = origin_z + j * step
+        for j in range(prows):
+            pz = pz0 + j * step
             lrow: List[Optional[float]] = []
+            srow: List[Optional[float]] = []
             xrow: List[float] = []
             zrow: List[float] = []
-            for i in range(cols):
-                found = water_at(origin_x + i * step, pz)
+            inner_row = pad <= j < pad + rows
+            for i in range(pcols):
+                found = water_at(px0 + i * step, pz)
                 if found is None:
                     lrow.append(None)
+                    srow.append(None)
                     xrow.append(0.0)
                     zrow.append(0.0)
                     continue
-                wet = True
+                if inner_row and pad <= i < pad + cols:
+                    wet = True
                 lrow.append(found[0])
                 xrow.append(found[1])
                 zrow.append(found[2])
+                srow.append(found[3])
             level.append(lrow)
-            flow_x.append(xrow)
-            flow_z.append(zrow)
-        return (level, flow_x, flow_z) if wet else None
+            sd.append(srow)
+            raw_x.append(xrow)
+            raw_z.append(zrow)
+        if not wet:
+            return None
+        return (_crop(level, pad, cols, rows),
+                _box_blur(raw_x, pad, radius, cols, rows),
+                _box_blur(raw_z, pad, radius, cols, rows),
+                _crop(sd, pad, cols, rows))
 
 
 def build_model(areas: Sequence[Dict[str, Any]] = (),
@@ -2812,11 +2981,11 @@ def rasterize_tile(
     through where a narrow one flattened it.
 
     SINCE K-A E1 IT CARRIES A SECOND FIELD, on the same lattice and in the same
-    window: ``water`` = ``{"level", "flow_x", "flow_z"}``, out of
-    :meth:`HeightModel.water_raster`. The key is ABSENT for a tile without a
-    drop of water in it, which is most tiles of most worlds — the additive
-    shape § A16.5 asks for, and a client that only reads ``heights`` sees the
-    payload it always saw.
+    window: ``water`` = ``{"level", "sd", "flow_x", "flow_z"}``, out of
+    :meth:`HeightModel.water_raster` (``sd`` since v9). The key is ABSENT for a
+    tile without a drop of water in it, which is most tiles of most worlds — the
+    additive shape § A16.5 asks for, and a client that only reads ``heights``
+    sees the payload it always saw.
     """
     if model is None:
         model = build_model(areas, footprints, terrain_areas, terrain_catalog,
@@ -2839,7 +3008,8 @@ def rasterize_tile(
 
 def water_raster_payload(raster: Optional[Tuple[List[List[Optional[float]]],
                                                 List[List[float]],
-                                                List[List[float]]]]
+                                                List[List[float]],
+                                                List[List[Optional[float]]]]]
                          ) -> Optional[Dict[str, Any]]:
     """One :meth:`HeightModel.water_raster` answer as the numbers a client
     reads — or None for a window without water.
@@ -2849,19 +3019,29 @@ def water_raster_payload(raster: Optional[Tuple[List[List[Optional[float]]],
     components are rounded like the profile's ``dir_x``/``dir_z`` (1e-6), which
     is a micrometre per metre of direction — far under what a ripple can show.
 
+    ``sd`` IS ROUNDED AND MASKED LIKE ``level`` (v9) and is always shipped where
+    the raster exists: it is the field the renderer's LIFT and its water SHADING
+    both gate on, so a wet tile without it is a tile that cannot be drawn. A
+    millimetre of distance is three orders under the half-metre band the shading
+    feathers the waterline over.
+
     THE FLOW ARRAYS ARE OMITTED WHERE THERE IS NO FLOW, and that is not a
     micro-optimisation: every STILL water — every lake, every ice sheet — has
     a one-knot axis and therefore an exactly zero flow everywhere
     (:func:`water_flow_at`), so a lake tile would otherwise ship two full
     lattices of zeros, doubling its payload to say nothing. Their absence reads
-    as "(0, 0) everywhere", which is the same statement the zeros made.
+    as "(0, 0) everywhere", which is the same statement the zeros made. The
+    BLUR cannot turn a still water into a flowing one — a box over zeros is
+    zero — so the test still answers exactly "does this window flow".
     """
     if raster is None:
         return None
-    level, flow_x, flow_z = raster
+    level, flow_x, flow_z, sd = raster
     out: Dict[str, Any] = {
         "level": [[None if v is None else round(v, 3) for v in row]
-                  for row in level]}
+                  for row in level],
+        "sd": [[None if v is None else round(v, 3) for v in row]
+               for row in sd]}
     if any(v for row in flow_x for v in row) or any(v for row in flow_z
                                                     for v in row):
         out["flow_x"] = [[round(v, 6) for v in row] for row in flow_x]

@@ -48,6 +48,10 @@ export interface WaterTileField {
   level: number[][];
   flowX: number[][] | null;
   flowZ: number[][] | null;
+  /** `sd[j][i]` in metres — the SIGNED distance to the authored outline of the
+   *  water this texel's level comes from, positive inside it, negative in its
+   *  dilation ring, and {@link WATER_SD_DRY} where the level is NaN. */
+  sd: number[][];
 }
 
 /** The water field as a client holds it — the twin of `WorldHeightTiles`, and
@@ -72,6 +76,31 @@ function cell(v: unknown): number {
 }
 
 /**
+ * WHAT "OUTSIDE EVERY WATER" IS WORTH, in metres of signed distance — the sd
+ * field's dry answer, and deliberately a NUMBER rather than the level's NaN.
+ *
+ * The level's sentinel has to be NaN because every finite number is a legal
+ * water level, and because the lift compares against it (`w > h` must be false
+ * for dry, which only NaN gives for free). The sd field is under neither
+ * constraint: it is read for a SIGN, so any value far enough below zero says
+ * "outside" and says it through a plain bilinear mix as well — no masked
+ * corner-skipping, no NaN travelling through a texture into a shader that has
+ * no way to test for one.
+ *
+ * −10 000 m and not −1: a bilinear mix of this with a real ring value must stay
+ * negative even at a weight of 1e−3, and the far edge of a dilation ring is
+ * −4 m. It is also finite, so `mix()` never produces a NaN out of it.
+ */
+export const WATER_SD_DRY = -1e4;
+
+/** The wire's `null` as the dry sd sentinel. Same boundary conversion the level
+ *  gets, and the same reason: one place, once, so nothing downstream carries a
+ *  memory of what the wire looked like. */
+function sdCell(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : WATER_SD_DRY;
+}
+
+/**
  * ONE tile's water field out of the wire shape, on the tile's own lattice.
  *
  * `level` is copied cell by cell so the sentinel is converted ONCE, at the
@@ -80,11 +109,13 @@ function cell(v: unknown): number {
  */
 export function waterTileFrom(originX: number, originZ: number, step: number,
                               wire: { level?: (number | null)[][];
+                                      sd?: (number | null)[][];
                                       flow_x?: number[][];
                                       flow_z?: number[][] } | null | undefined
 ): WaterTileField | null {
   const rows = wire?.level;
   if (!rows || rows.length < 2 || !(step > 0)) return null;
+  const sdRows = wire?.sd;
   return {
     originX,
     originZ,
@@ -92,6 +123,12 @@ export function waterTileFrom(originX: number, originZ: number, step: number,
     level: rows.map((row) => (row ?? []).map(cell)),
     flowX: wire?.flow_x ? wire.flow_x.map((row) => (row ?? []).map(cell)) : null,
     flowZ: wire?.flow_z ? wire.flow_z.map((row) => (row ?? []).map(cell)) : null,
+    // A tile whose wire carries no `sd` at all is a tile from a bake older than
+    // this client (`HEIGHT_BAKE_VERSION` 9) and cannot be drawn as water: every
+    // row reads DRY, so the lift never fires there and the ground stands. The
+    // signature bump is what makes that state last exactly one refetch.
+    sd: rows.map((row, j) => (row ?? []).map(
+      (_v, i) => sdCell(sdRows?.[j]?.[i]))),
   };
 }
 
@@ -167,6 +204,42 @@ export function rasterLevelAt(raster: WaterRaster | null | undefined,
   if (!raster) return NaN;
   return sampleWaterTile(raster.tiles?.get(tileKeyAt(raster.tileM, x, z)),
                          x, z);
+}
+
+/**
+ * THE SIGNED DISTANCE TO THE PAINTED OUTLINE AT (x, z) — positive inside the
+ * water, negative outside it, {@link WATER_SD_DRY} where no tile knows.
+ *
+ * THE ONE FIELD THAT ANSWERS "IS THIS INSIDE THE AUTHORED WATER". The level
+ * cannot: it is DILATED, so it is defined 4 m past every outline and reading it
+ * as a mask floods the bank. The ground compositor's material mask cannot
+ * either, and that is finding F-A: it names the topmost painted KIND, so a lake
+ * whose bed is painted (a sand shape inside the outline — what `bed_kind`
+ * describes and what a generated map draws) reads "sand meets sand" over its
+ * whole interior and every gate keyed on it answers "not water" there. Measured
+ * on that fixture the pair mid-lake is (sand, sand) and the gate returned 0 —
+ * the lake drawn as a sand surface, which is exactly what the user saw.
+ *
+ * PLAIN BILINEAR, unlike the level's masked mix, and that is the whole point of
+ * the finite sentinel (see {@link WATER_SD_DRY}): there is no NaN to keep out,
+ * and a corner that is dry drags the answer NEGATIVE, which is the correct
+ * direction. It cannot drag a point INSIDE an outline negative, because the
+ * server's dilation guarantees all four corners of such a point's cell carry a
+ * real distance (§ A16.5 point 3).
+ */
+export function rasterSdAt(raster: WaterRaster | null | undefined,
+                           x: number, z: number): number {
+  const field = raster?.tiles?.get(tileKeyAt(raster.tileM, x, z));
+  const rows = field?.sd;
+  if (!field || !rows || rows.length < 2) return WATER_SD_DRY;
+  const cols = rows[0]?.length ?? 0;
+  if (cols < 2) return WATER_SD_DRY;
+  const [i, tx] = cellAt((x - field.originX) / field.step, cols);
+  const [j, tz] = cellAt((z - field.originZ) / field.step, rows.length);
+  const at = (a: number, b: number): number => sdCell(rows[b]?.[a]);
+  const north = at(i, j) * (1 - tx) + at(i + 1, j) * tx;
+  const south = at(i, j + 1) * (1 - tx) + at(i + 1, j + 1) * tx;
+  return north * (1 - tz) + south * tz;
 }
 
 /**

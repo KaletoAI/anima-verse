@@ -361,6 +361,16 @@ export interface HeightTileGrid {
  */
 export interface WaterTileGrid {
   level: (number | null)[][];
+  /** The SIGNED distance to the authored outline of the water `level` comes
+   *  from, in metres — positive inside it, negative in its dilation ring,
+   *  `null` on exactly the texels `level` is null on (bake v9).
+   *
+   *  IT IS THE MASK `level` IS NOT. The level is written 4 m past every
+   *  outline so a bilinear read inside a polygon always meets four defined
+   *  corners; that dilation is what floods the bank if the level is read as
+   *  "here is water". Only this field says where the author drew the water, and
+   *  the renderer gates BOTH the vertex lift and the water shading on it. */
+  sd?: (number | null)[][];
   flow_x?: number[][];
   flow_z?: number[][];
 }

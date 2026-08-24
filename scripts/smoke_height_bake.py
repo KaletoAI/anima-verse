@@ -1817,7 +1817,7 @@ for _name in ("_bank_clamp", "_relief_weight", "water_bank_box",
     check(f"red: HeightModel.{_name} is gone", hasattr(BMODEL, _name), False)
 check("red: `final` names three stages, not four",
       "_bank_clamp" in inspect.getsource(hf.HeightModel.final), False)
-check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 8)
+check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 9)
 
 print("\n[10b] the band outside the outline is the authored step, probe by "
       "probe")
@@ -2081,7 +2081,7 @@ check_not("moving ONLY the code version moves the signature", _after, _before)
 near("…and it is exactly 10 characters, like the other one", len(_after), 10,
      0)
 check("the restored version is the one this bake ships",
-      hf.HEIGHT_BAKE_VERSION, 8)
+      hf.HEIGHT_BAKE_VERSION, 9)
 _get_field_src = inspect.getsource(hf.get_field)
 check_true("get_field rejects a stored raster whose sig differs",
            'stored.get("sig") == sig' in _get_field_src)
@@ -2114,10 +2114,12 @@ print("\n[12a] the raster IS the mirror, sampled — the still lake")
 # profile is one knot at the centroid (40,40) carrying 3.0 and `water_level_at`
 # answers 3.0 at every point of the plane. A one-knot axis has no segment, so
 # the flow is exactly (0, 0) — every still water, by construction.
-check("inside: the authored mirror and no flow at all",
-      [round(v, 6) for v in MODEL.water_at(40.0, 40.0)], [3.0, 0.0, 0.0])
-check("ON the outline the point is covered (distance 0)",
-      [round(v, 6) for v in MODEL.water_at(20.0, 40.0)], [3.0, 0.0, 0.0])
+check("inside: the authored mirror, no flow at all, and 20 m of sd",
+      [round(v, 6) for v in MODEL.water_at(40.0, 40.0)],
+      [3.0, 0.0, 0.0, 20.0])
+check("ON the outline the point is covered, and its sd is exactly 0",
+      [round(v, 6) for v in MODEL.water_at(20.0, 40.0)],
+      [3.0, 0.0, 0.0, 0.0])
 near("dry ground far from any water answers nothing at all",
      1.0 if MODEL.water_at(-50.0, -50.0) is None else 0.0, 1.0)
 
@@ -2128,8 +2130,9 @@ near("the band is WATER_RASTER_DILATION_STEPS · TILE_STEP_M",
 near("...which is 2 steps = 4 m", hf.WATER_RASTER_DILATION_M, 4.0, 1e-12)
 # West of the lake's rim at x = 20, on the lattice (even metres): the distance
 # to the OUTLINE is 20 - x.
-check("4 m out — exactly the band — is still written",
-      [round(v, 6) for v in MODEL.water_at(16.0, 40.0)], [3.0, 0.0, 0.0])
+check("4 m out — exactly the band — is still written, sd NEGATIVE",
+      [round(v, 6) for v in MODEL.water_at(16.0, 40.0)],
+      [3.0, 0.0, 0.0, -4.0])
 check_true("...and 6 m out is dry", MODEL.water_at(14.0, 40.0) is None)
 # THE VALUE IN THE RING IS THE FUNCTION CONTINUED, not the rim value carried
 # outward — which is what makes the bilinear mix inside the outline reproduce
@@ -2177,9 +2180,9 @@ print("\n[12c] the FLOW — the server owns the blended tangent now")
 # tangent is (1, 0) and the blend at a knot mixes (1, 0) with (1, 0): the flow
 # is the unit east vector everywhere, at every knot included.
 check("a straight river flows along itself, length 1",
-      [round(v, 6) for v in CMODEL_W5.water_at(50.0, 0.0)[1:]], [1.0, 0.0])
+      [round(v, 6) for v in CMODEL_W5.water_at(50.0, 0.0)[1:3]], [1.0, 0.0])
 check("...at a knot too, where the two legs are the same direction",
-      [round(v, 6) for v in CMODEL_W5.water_at(40.0, 0.0)[1:]], [1.0, 0.0])
+      [round(v, 6) for v in CMODEL_W5.water_at(40.0, 0.0)[1:3]], [1.0, 0.0])
 # THE HAIRPIN, and these are the numbers the client's own `waterFlowAt` used to
 # pin before Wasser v2 K-A E5 deleted it with the water mesh — the rule moved to
 # the server, the answers did not, and this docstring is now the only place they
@@ -2220,7 +2223,7 @@ U_SLOW = u_river("ta_u_slow", {"flow_along": "forward",
 USMODEL = hf.build_model([BOWL], [], [U_SLOW], CATALOG_R,
                          {"river": 0.15})
 near("the raster carries the factor as the vector's LENGTH",
-     math.hypot(*USMODEL.water_at(199.5, 290.0)[1:]), 0.5, 1e-12)
+     math.hypot(*USMODEL.water_at(199.5, 290.0)[1:3]), 0.5, 1e-12)
 
 print("\n[12d] THE CURVE-INSIDE MEASUREMENT — does 2 m have to get finer?")
 # THE QUESTION (recherche-wasser-v2.md § 7 no. 2): a raster is read BILINEARLY,
@@ -2348,11 +2351,11 @@ check("dry lattice points are the null sentinel",
 check("...and wet ones the mirror, rounded like the heights",
       _wet_tile["water"]["level"][20][20], 3.0)
 check("STILL water ships no flow arrays — they would be lattices of zeros",
-      [k for k in sorted(_wet_tile["water"])], ["level"])
+      [k for k in sorted(_wet_tile["water"])], ["level", "sd"])
 _cliff_tile = hf.rasterize_tile(0, 0, [STEP_AREA], [], [CLIFF_RIVER],
                                 CATALOG_R)
-check("a FLOWING water ships all three",
-      sorted(_cliff_tile["water"]), ["flow_x", "flow_z", "level"])
+check("a FLOWING water ships all four",
+      sorted(_cliff_tile["water"]), ["flow_x", "flow_z", "level", "sd"])
 check("...and the flow is the unit tangent at (50, 0), lattice (25, 0)",
       [_cliff_tile["water"]["flow_x"][0][25],
        _cliff_tile["water"]["flow_z"][0][25]], [1.0, 0.0])
@@ -2366,6 +2369,213 @@ check("min/max/err are read off `heights` and nothing else",
 check_true("...so a stored `world_height_tile_stats` row stays a true "
            "statement about its raster",
            _stats_with["err"] == _stats_without["err"])
+
+print("\n[12g] the sd CHANNEL — where the author drew the water (bake v9)")
+# THE FINDING IT ANSWERS (F-A, "the lake is only a sand surface"). Until v9 the
+# renderer asked the GROUND COMPOSITOR's material mask whether a pixel stands
+# inside a water: that mask names the topmost painted KIND and the one under it,
+# so a lake whose BED is painted — a sand shape inside the outline, which is
+# what `bed_kind` describes and what a generated map draws — reads (sand, sand)
+# over its whole interior and the gate answered "no water" for the whole lake.
+# The red probe for that is in `app.core.terrain_layers` and is measured below;
+# the fix is this channel, which is a statement about the WATER's own outline
+# and knows nothing about what is painted over it.
+#
+# THE RULE: sd = +d(p, outline) inside, -d(p, outline) in the dilation ring,
+# None where the level is None. The winning water's own outline — the same
+# "topmost painted wins" that picks the level, one decision for all four
+# channels.
+check("mid-lake: 20 m from the square (20,20)-(60,60)",
+      round(MODEL.water_at(40.0, 40.0)[3], 6), 20.0)
+check("...on the outline it is exactly 0 — the zero level set IS the outline",
+      round(MODEL.water_at(20.0, 40.0)[3], 6), 0.0)
+check("...4 m out (the dilation's own width) it is -4",
+      round(MODEL.water_at(16.0, 40.0)[3], 6), -4.0)
+check("...a corner probe: (24, 24) is 4 m from BOTH edges, so 4",
+      round(MODEL.water_at(24.0, 24.0)[3], 6), 4.0)
+check_true("...and outside the ring there is no tuple to read at all",
+           MODEL.water_at(14.0, 40.0) is None)
+# THE PAINTED BED CHANGES NOTHING HERE, which is the whole point: the water
+# raster is built from the WATER stamps, and a sand area painted inside the lake
+# is not one. Same lake, same numbers, with a bed area drawn over it.
+_BED = {"id": "ta_bed", "kind": "meadow", "z_order": 5,
+        "polygon": [[24, 24], [56, 24], [56, 56], [24, 56]], "meta": {}}
+_BEDMODEL = hf.build_model([SLOPE], [PLOT], list(TERRAIN) + [_BED], CATALOG)
+check("a lake with a PAINTED BED answers the same sd mid-lake",
+      round(_BEDMODEL.water_at(40.0, 40.0)[3], 6), 20.0)
+check("...and the same level",
+      round(_BEDMODEL.water_at(40.0, 40.0)[0], 6),
+      round(MODEL.water_at(40.0, 40.0)[0], 6))
+# THE GUARANTEE THE GATE RESTS ON: every point INSIDE an outline reads four
+# corners that all carry a real distance, so a bilinear sd can never be dragged
+# negative there by a dry corner. It is the dilation argument of [12b], read
+# once more for the new channel.
+_sd_worst = 0.0
+for _a in range(0, 81):
+    _x = 20.0 + 40.0 * _a / 80.0
+    for _b in range(0, 81):
+        _z = 20.0 + 40.0 * _b / 80.0
+        _fi, _fj = math.floor(_x / 2.0), math.floor(_z / 2.0)
+        _tx, _tz = _x / 2.0 - _fi, _z / 2.0 - _fj
+        _c = [MODEL.water_at(_i * 2.0, _j * 2.0)
+              for _i, _j in ((_fi, _fj), (_fi + 1, _fj), (_fi, _fj + 1),
+                             (_fi + 1, _fj + 1))]
+        _w = ((1 - _tx) * (1 - _tz), _tx * (1 - _tz), (1 - _tx) * _tz,
+              _tx * _tz)
+        _v = 0.0
+        for _corner, _weight in zip(_c, _w):
+            if _weight == 0.0:
+                continue
+            if _corner is None:
+                _v = -1e9
+                break
+            _v += _corner[3] * _weight
+        _sd_worst = min(_sd_worst, _v)
+check_true("the bilinear sd is >= 0 at all 6561 probes inside the outline "
+           f"(worst {_sd_worst:.4f} m)", _sd_worst >= 0.0)
+# …and the payload carries it, masked exactly like the level.
+check("the tile ships `sd` on the tile's own lattice",
+      [len(_wet_tile["water"]["sd"]), len(_wet_tile["water"]["sd"][0])],
+      [hf.TILE_POINTS, hf.TILE_POINTS])
+check("dry lattice points are null in BOTH arrays",
+      [_wet_tile["water"]["level"][0][0], _wet_tile["water"]["sd"][0][0]],
+      [None, None])
+check("...and (40, 40) = lattice (20, 20) carries the 20 m",
+      _wet_tile["water"]["sd"][20][20], 20.0)
+_mask_same = all((_wet_tile["water"]["level"][_j][_i] is None)
+                 == (_wet_tile["water"]["sd"][_j][_i] is None)
+                 for _j in range(hf.TILE_POINTS)
+                 for _i in range(hf.TILE_POINTS))
+check_true("the two masks are the SAME mask, texel for texel", _mask_same)
+
+print("\n[12h] the FLOW BLUR — the medial-axis tangent jump, measured")
+# THE FINDING (F-C, "the water does not flow and is structured differently every
+# few metres"). `water_flow_at` reads the tangent at the NEAREST point of the
+# axis, and "nearest" FLIPS across a medial axis, so the tangent jumps there —
+# the same discontinuity [12d] measured on the level (1.2951 m over 0.1 m). The
+# client draws its ripple in the frame that tangent spans, so two neighbouring
+# lattice points hand it two very different frames.
+near("the blur radius IS the dilation, so the kernel of any point inside an "
+     "outline stays inside the written footprint",
+     hf.WATER_FLOW_BLUR_M, hf.WATER_RASTER_DILATION_M, 1e-12)
+near("...which is 2 texels at TILE_STEP_M, i.e. a 5 x 5 box spanning 8 m",
+     hf.WATER_FLOW_BLUR_M / hf.TILE_STEP_M, 2.0, 1e-12)
+
+
+def _flow_angles(model, i0, j0, cols, rows, step=2.0):
+    """(worst, p99, mean) angle in degrees between the flow of two ADJACENT
+    lattice points that are both INSIDE an outline — raw and as shipped.
+
+    The raw field is `water_at` on the same lattice, i.e. exactly what the
+    payload carried before v9; the shipped one is `water_raster`, blur and all.
+    """
+    lvl, fx, fz, sd = model.water_raster(i0 * step, j0 * step, step, cols, rows)
+    raw = {}
+    for j in range(rows):
+        for i in range(cols):
+            found = model.water_at((i + i0) * step, (j + j0) * step)
+            raw[(i, j)] = (0.0, 0.0) if found is None else (found[1], found[2])
+    inside = {(i, j) for j in range(rows) for i in range(cols)
+              if sd[j][i] is not None and sd[j][i] >= 0}
+    out = []
+    for field in (raw, {(i, j): (fx[j][i], fz[j][i])
+                        for j in range(rows) for i in range(cols)}):
+        vals = []
+        for (i, j) in inside:
+            for di, dj in ((1, 0), (0, 1)):
+                if (i + di, j + dj) not in inside:
+                    continue
+                a = field[(i, j)]
+                b = field[(i + di, j + dj)]
+                la, lb = math.hypot(*a), math.hypot(*b)
+                if la < 1e-9 or lb < 1e-9:
+                    continue
+                dot = max(-1.0, min(1.0, (a[0] * b[0] + a[1] * b[1]) / (la * lb)))
+                vals.append(math.degrees(math.acos(dot)))
+        vals.sort()
+        out.append((vals[-1], vals[int(len(vals) * 0.99)],
+                    sum(vals) / len(vals)) if vals else (0.0, 0.0, 0.0))
+    lens = [math.hypot(fx[j][i], fz[j][i]) for (i, j) in inside]
+    return out[0], out[1], (min(lens), max(lens))
+
+
+# FIXTURE 1 — A RIVER DRAWN AS A RIVER: the meander's polygon is its own line
+# offset by half the width, which is how every authored river looks. The medial
+# axis of the LINE lies outside such a ribbon for every bend gentler than the
+# half-width, so there is no jump inside it at all — and this is the measurement
+# that says how much of F-C the blur can be responsible for.
+_MW = 8.0
+_MPTS = [(60.0 + _t * 4.0, 60.0 + 18.0 * math.sin(_t * 4.0 * math.pi / 120.0))
+         for _t in range(31)]
+
+
+def _offset(points, d):
+    out = []
+    for i, (x, z) in enumerate(points):
+        ax, az = points[max(i - 1, 0)]
+        bx, bz = points[min(i + 1, len(points) - 1)]
+        tx, tz = bx - ax, bz - az
+        length = math.hypot(tx, tz) or 1.0
+        out.append((x - tz / length * d, z + tx / length * d))
+    return out
+
+
+_MEANDER = {"id": "ta_meander", "kind": "river", "z_order": 0,
+            "polygon": ([list(p) for p in _offset(_MPTS, _MW / 2)]
+                        + [list(p) for p in reversed(_offset(_MPTS, -_MW / 2))]),
+            "meta": {"flow_along": "forward",
+                     "stroke": {"points": [list(p) for p in _MPTS],
+                                "width_m": _MW}}}
+_MBOWL = {"id": "ha_mb", "polygon": [[0, 0], [300, 0], [300, 200], [0, 200]],
+          "height_m": 20.0, "falloff_m": 300.0, "meta": {}}
+_MMODEL = hf.build_model([_MBOWL], [], [_MEANDER], CATALOG_R)
+_m_raw, _m_ship, _m_len = _flow_angles(_MMODEL, 25, 15, 71, 41)
+print(f"    meander: raw worst {_m_raw[0]:.2f} deg (p99 {_m_raw[1]:.2f}, mean "
+      f"{_m_raw[2]:.2f}) -> shipped worst {_m_ship[0]:.2f} deg "
+      f"(p99 {_m_ship[1]:.2f}, mean {_m_ship[2]:.2f}); "
+      f"|flow| {_m_len[0]:.4f}..{_m_len[1]:.4f}")
+check_true("an authored river's tangent field has NO jump to begin with — the "
+           f"worst adjacent pair is under 2 deg ({_m_raw[0]:.2f})",
+           _m_raw[0] < 2.0)
+check_true("...and the blur leaves it smoother still, never rougher",
+           _m_ship[0] <= _m_raw[0])
+check_true("...well under the 10 deg the frame needs", _m_ship[0] < 10.0)
+# FIXTURE 2 — THE HAIRPIN, where the axis doubles back INSIDE one wide polygon:
+# the medial axis really does run through the water, and this is the case the
+# blur exists for. The two legs are 146 deg apart where they meet.
+_u_raw, _u_ship, _u_len = _flow_angles(UMODEL, 70, 125, 81, 34)
+print(f"    hairpin: raw worst {_u_raw[0]:.2f} deg (p99 {_u_raw[1]:.2f}, mean "
+      f"{_u_raw[2]:.2f}) -> shipped worst {_u_ship[0]:.2f} deg "
+      f"(p99 {_u_ship[1]:.2f}, mean {_u_ship[2]:.2f}); "
+      f"|flow| {_u_len[0]:.4f}..{_u_len[1]:.4f}")
+check_true("the hairpin's RAW field really does jump — over 100 deg between "
+           f"two lattice points 2 m apart ({_u_raw[0]:.2f})", _u_raw[0] > 100.0)
+check_true("...and the blur more than halves it "
+           f"({_u_raw[0]:.2f} -> {_u_ship[0]:.2f} deg)",
+           _u_ship[0] < 0.55 * _u_raw[0])
+check_true("...the mean falls with it", _u_ship[2] < _u_raw[2])
+# NOT RE-NORMALISED: the shortening IS the answer where two directions really
+# disagree, and it never reaches the still-water floor (1e-4) that would turn a
+# river into a lake.
+check_true(f"the shortest shipped vector is {_u_len[0]:.4f}, far above the "
+           "1e-4 still floor", _u_len[0] > 1e-3)
+check_true("...and no vector was lengthened past 1", _u_len[1] <= 1.0 + 1e-12)
+# STILL WATER STAYS EXACTLY STILL — a box over zeros is zero, which is what
+# keeps `water_raster_payload` able to drop the flow arrays entirely.
+check("a still lake's blurred flow is exactly (0, 0)",
+      [_wet_tile["water"].get("flow_x"), _wet_tile["water"].get("flow_z")],
+      [None, None])
+# SEAMLESS ACROSS TILE BORDERS: the window is sampled with a margin and cropped,
+# so one lattice point read from two different windows is ONE number (§ G1).
+# The probe is ON the meander's axis (x = 136, z = 76, a wet lattice point) and
+# lands on the LAST column of one window and the FIRST of the next.
+_wa = _MMODEL.water_raster(98.0, 58.0, 2.0, 20, 20)
+_wb = _MMODEL.water_raster(136.0, 58.0, 2.0, 20, 20)
+check_true("...and the probe really is wet", _wa[0][9][19] is not None)
+check_true("...and really flowing", math.hypot(_wa[1][9][19], _wa[2][9][19]) > 0.5)
+check("the same point read from two WINDOWS is the same blurred vector",
+      [round(_wa[1][9][19], 9), round(_wa[2][9][19], 9)],
+      [round(_wb[1][9][0], 9), round(_wb[2][9][0], 9)])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 for name in FAILURES:

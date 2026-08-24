@@ -258,24 +258,20 @@ function applySurfaceFiltering(): void {
  * mutates `.value` in place, so the borrowing program follows every update
  * without a second book to keep.
  *
- * THE SD HALF RIDES ALONG SINCE THE RIM SEAM (2026-08-24). The pair alone says
- * WHICH two kinds meet under a pixel and never which side of them it is on —
- * that is what the signed distance is for, and the water shading needs it to
- * tell the authored mirror from the flooded dilation ring around it. It is the
- * same three objects `lcCompose` reads (`uNearSd`, its window and the byte's
- * quantisation), so the borrowing program reconstructs the very same distance;
- * the names are optional because a caller that only wants the kind still only
- * pays for the kind.
+ * THE PAIR AND NOTHING ELSE. The compositor's SIGNED DISTANCE rode along here
+ * for one day (the rim seam of 2026-08-24), so the water shading could tell the
+ * authored mirror from the flooded dilation ring. That was the wrong field:
+ * this distance is measured against a MATERIAL boundary between the topmost
+ * painted kind and the one under it, and a lake whose bed is painted reads
+ * "sand meets sand" over its whole interior — the gate then answered "no water"
+ * for the whole lake (finding F-A). The water raster ships its own signed
+ * distance to the authored WATER outline since bake v9, and that is what the
+ * terrain's water variant reads; nothing borrows this one.
  */
 export function bindLayerIdUniforms(uniforms: Record<string, unknown>,
-                                    idName: string, geomName: string,
-                                    sdName?: string, sdGeomName?: string,
-                                    sdCodeName?: string): void {
+                                    idName: string, geomName: string): void {
   uniforms[idName] = uNearId;
   uniforms[geomName] = uNear;
-  if (sdName) uniforms[sdName] = uNearSd;
-  if (sdGeomName) uniforms[sdGeomName] = uNearSdGeom;
-  if (sdCodeName) uniforms[sdCodeName] = uSdCode;
 }
 
 /** The layer table in force — read by the undergrowth gate, which has to turn a

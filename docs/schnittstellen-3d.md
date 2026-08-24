@@ -3352,6 +3352,13 @@ Downsampling.
                       // das WASSER-RASTER derselben Kachel, auf demselben
                       // Gitter. FEHLT, wenn die Kachel kein Wasser trägt.
                       "water": { "level": [[float|null, …], …],
+                                 // ADDITIV seit v9: die vorzeichenbehaftete
+                                 // Distanz zum GEMALTEN Umriss (+ innen,
+                                 // − im Dilatationsring, null wie `level`) —
+                                 // das einzige Feld, das sagt, wo der Autor
+                                 // das Wasser gezogen hat. Der Fluss ist seit
+                                 // v9 zusätzlich geglättet (Box, 8 m).
+                                 "sd": [[float|null, …], …],
                                  "flow_x": [[float, …], …],   // optional
                                  "flow_z": [[float, …], …] } } } }
 
@@ -6297,3 +6304,135 @@ also ist `h_k ≥ w_k` und der Lift greift nicht. Das Mesh-Mirror hatte dieses
 Problem nicht — er war ein Polygon in voller Auflösung. Die drei ehrlichen
 Optionen (Level-Deckel für wasserführende Knoten, feineres Wasserraster, oder
 akzeptieren) sind eine Entscheidung, keine Fehlerbehebung.
+
+---
+
+## Nachtrag 2026-08-25 (§ A16.5 / § B5a): Die vier Befunde am K-A-Wasser — der `sd`-Kanal, das gehobene Ringband und der Fließ-Rahmen
+
+*Ein Server-Umbau (`HEIGHT_BAKE_VERSION` **8 → 9**, additive Kachel-Nutzlast)
+und drei Client-Korrekturen, die alle vier auf dieselbe Wurzel zurückgehen:
+**der Renderer hatte kein Feld, das sagt, wo der Autor das Wasser gemalt hat.**
+Der Pegel ist DILATIERT (4 m über jeden Umriss hinaus), also ist er keine Maske;
+die Material-Maske des Boden-Kompositors nennt die OBERSTE GEMALTE ART, also ist
+sie es auch nicht. Der Bake liefert die Antwort jetzt selbst.*
+
+### 1. Die Befunde und ihre Zahlen
+
+| Befund | Ursache, gemessen |
+|---|---|
+| **F-A** „der See ist nur noch eine Sandfläche" | Das Tor von `95ea0ca0` las das ID-Paar der Material-Maske. Fixture (lake + gemalter Sand-Bett-Fläche, `app/core/terrain_layers.py`): das Paar in der Seemitte ist **(1, 1) = (sand, sand)** — keine Hälfte ist Wasser, also gab `twInside` **0** über die ganze Seefläche zurück und der gehobene Spiegel wurde als sein eigenes Bett gemalt. (Ein `bed_kind` OHNE gemalte Fläche allein tut das nicht: die Wasser-Ebene trägt weiter `water: true` und nur die SURFACE des Betts — auch gemessen.) |
+| **F-B** graue Randflecken, Treppen-Silhouette, „Avatar steht im Boden" | Das Dilatationsband wurde GEOMETRISCH gehoben. Fixture (flacher Boden 0, Spiegel 1,0, Umriss bei x = 10): jeder Vertex des 4-m-Bandes stieg **1,00 m** auf den Spiegel, gezeichnet als Boden, mit dem echten Boden 1 m darunter — dort steht die Figur (`waterPlaneMath.waterLevelAt` kennt die Dilatation nicht). Der äußere Rand des Bandes ist eine Gitter-Treppe. |
+| **F-C** „fließt nicht, alle paar Meter anders strukturiert" | Der Ripple-Rahmen ist die Achsentangente pro Vertex, und die springt an der MITTELACHSE — dieselbe Unstetigkeit, die § A16.5 Punkt 6 am Pegel mit 1,2951 m auf 10 cm gemessen hat. Hairpin-Fixture: **145,96°** zwischen zwei Gitterpunkten 2 m auseinander. |
+| **F1-Deckel** | Der Deckel maß die UNGETORTE Hebung, also die Breite von Körper **plus Ring**. Fixture (6-m-Fluss, Bank unter dem Spiegel): Deckel **2** statt **1** — für einen Fluss, dessen eigener Körper auf Stufe 2 schon zerfallen ist. |
+
+### 2. Server (Bake v9): der vierte Kanal und der geglättete Fluss
+
+```jsonc
+"water": {
+  "level":  [[float|null, …], …],   // unverändert
+  "sd":     [[float|null, …], …],   // NEU: Meter, + innen, − im Ring, gleiche Maske
+  "flow_x": [[float, …], …],        // jetzt GEGLÄTTET
+  "flow_z": [[float, …], …]
+}
+```
+
+- **`sd` ist die vorzeichenbehaftete Distanz zum Umriss DESSELBEN Wassers**, aus
+  dem `level` stammt — die Nullmenge IST der gemalte Umriss. Ein Punkt innerhalb
+  zweier überlappender Seen liest die Distanz des OBERSTEN zu SEINEM Umriss;
+  „zuletzt gemalt gewinnt" ist EINE Entscheidung für alle vier Kanäle. Maske und
+  Rundung wie `level` (Millimeter, `null` auf genau denselben Texeln).
+  Kosten: ein zusätzlicher Ring-Durchlauf auf dem Innen-Zweig (der Ring-Zweig
+  misst die Distanz ohnehin, um sich zu entscheiden).
+- **`flow` läuft durch eine separable Box vom Radius
+  `WATER_FLOW_BLUR_M`** — und das ist `WATER_RASTER_DILATION_M`, nicht aus
+  Geschmack: das Raster ist genau so weit über jeden Umriss hinaus geschrieben,
+  also liegt die Box um jeden Punkt INNERHALB eines Umrisses noch ganz im
+  geschriebenen Bereich. Die Glättung mischt damit nie einen autorierten
+  Fließvektor mit dem (0, 0) echten Trockenbodens. Bei `TILE_STEP_M` = 2 m sind
+  das 2 Texel Radius, also eine 5 × 5-Box über 8 m.
+- **NICHT re-normalisiert.** Wo zwei Richtungen wirklich uneins sind, ist der
+  Mittelwert KÜRZER, und die Länge ist der Geschwindigkeits-Faktor: eine
+  anmutige Verlangsamung genau dort, wo das Feld mehrdeutig ist. Der
+  Stillwasser-Boden (1e-4) wird nie erreicht (kürzester gemessener Vektor
+  0,2952).
+- **Das Fenster wird mit RAND abgetastet und danach beschnitten** (`(129 + 2r)²`
+  statt `129²`, +6,3 %). Eine an der eigenen Kante geklemmte Box hinge davon ab,
+  aus welcher Kachel man einen Punkt liest — § G1 sagt, dass sie das nicht darf.
+  Geprüft: derselbe Punkt aus zwei Fenstern gibt bitgleich denselben Vektor.
+- **Pegel und `sd` werden NICHT geglättet.** Beide werden gegen eine SCHWELLE
+  gelesen; eine Glättung verschöbe die Wasserlinie vom autorierten Umriss weg.
+
+### 3. Client: EIN Feld, ZWEI Stufen, dasselbe Sampler-Textstück
+
+`waterShade.waterSdGlsl()` ist ein einziger GLSL-Text, den beide Stufen der
+Wasser-Variante einbinden — Vertex und Fragment können keine Funktion teilen,
+also teilen sie diesen String. Das Gitter ist `uTlodWaterLevel[0]` über
+`uTlodWaterGeom.xy`, die Ausdehnung ist per `textureSize` das Nahfenster; außen
+antwortet er `TW_SD_DRY` (−10 000 m) statt ein Randtexel nach außen zu klemmen.
+Das Trocken-Sentinel ist eine ZAHL und nicht das `NaN` des Pegels: `sd` wird auf
+ein VORZEICHEN gelesen, also zieht eine trockene Ecke die einfache bilineare
+Mischung ins Negative — die richtige Richtung — und kann keine Mischung
+vergiften. Innerhalb eines Umrisses kann sie das nie tun (Dilatationsargument,
+§ A16.5 Punkt 3; nachgemessen an 6561 bzw. 1681 Proben).
+
+- **Der LIFT tort auf `sd ≥ 0`** (`tlodLift(h, p, nodeStep, sd)`). Die Distanz
+  wird EINMAL pro Vertex genommen, vor beiden Taps des Morph-Paares: sie ist
+  eine Funktion der Position allein, also tragen beide Terme dieselbe Zahl und
+  das Paar bleibt in `f` stetig — und zwei Stücke verschiedener Stufen, die sich
+  einen Vertex teilen, heben ihn beide oder keines.
+- **Der Ring behält seine Werte** und muss es: sie sind es, die die bilineare
+  Mischung INNERHALB des Umrisses das Profil reproduzieren lassen. Er ist
+  bilineare STÜTZE, nie eine Fläche.
+- **Das Fragment-Tor liest dasselbe `sd`**, mit einem weichen Band von
+  `max(ein Bildschirmpixel, 0,5 m)`. Die ID-Maske behält genau eine Aufgabe:
+  zu sagen, WELCHE Wasserart hier steht (`layer = twIsWater(a) ? a : b`). Die
+  `sd`-Hälfte von `bindLayerIdUniforms` ist wieder gelöscht — kein totes
+  Mechanismus-Paar.
+- **Der F1-Deckel misst die GETORTE Hebung**: `waterTileCaps` nimmt das
+  `sd`-Feld und zählt ein Texel nur, wenn es wirklich steigt. Sonst beschriebe
+  die Zahl nichts.
+
+### 4. Der Fließ-Rahmen (F-C) — was die Glättung kauft, und was NICHT
+
+Gemessen als größter Winkel zwischen den Fließvektoren zweier BENACHBARTER
+Gitterpunkte innerhalb des Umrisses (`smoke_height_bake.py` [12h]):
+
+| Fixture | roh | ausgeliefert (Box r = 2) |
+|---|---|---|
+| **Mäander** — Fluss als Band um seine eigene Linie, 8 m breit | **1,80°** (p99 1,71, Mittel 0,52) | **1,49°** |
+| **Haarnadel** — Achse kehrt INNERHALB eines 160 × 65 m-Polygons um | **145,96°** | **66,32°** |
+
+**Die Lesart, und sie entscheidet gegen ein zusätzliches gröberes Abtasten:**
+ein autorierter Fluss hat den Sprung gar nicht — die Mittelachse seiner Linie
+liegt für jede Biegung sanfter als die halbe Breite AUSSERHALB des Bandes. Die
+146° gehören der Fixture, in der ein 6-m-Strich in einer seeförmigen Fläche
+umkehrt. Ein gröberes Rahmen-Sampling brächte dort 66° → 41° und kostete jedem
+schmalen Fluss die Fließrichtung an seinen Ufern; die Box ist die richtige,
+billige Versicherung, und mehr ist an dieser Stelle nicht zu holen.
+
+**Was danach übrig bleibt und NICHT behoben ist** (Messung, keine Vermutung):
+`twFrame` staucht die WELTKOORDINATE um die Fließachse, also verstärkt sich
+jede Rahmen-Änderung mit dem Abstand vom Weltursprung. Für eine Rahmen-Drehung
+`dθ` ist die zusätzliche uv-Verzerrung ≈ `(1 − 1/aniso) · |p| · dθ / λ`
+Wellenlängen. Auf der Mäander-Fixture (|p| ≈ 150 m, λ = 1,6 m, aniso = 3):
+Mittel 0,52°/2 m → Faktor 0,45, schlimmster Punkt 1,49°/2 m → 1,30 — also eine
+lokale Stauchung von 1,5× bis 2,3×, die `textureGrad` nicht kennt. Dazu kommt
+der DRIFT-Term: er wächst mit `uTlodTime` (Wrap bei 3600 s), und bei
+`sp` = 0,15 m/s sind das am Ende der Stunde 337 Wellenlängen Versatz — zwei
+Nachbarvertizes 0,52° auseinander liegen dann **3,06 Wellenlängen** auseinander,
+d. h. das Muster dekorreliert im Lauf von Minuten. Das ist die verbleibende
+Hälfte von „alle paar Meter anders strukturiert", und es ist ein
+Entwurfs-Thema (Flow-Map-Advektion mit periodischem Reset, oder die Anisotropie
+fallen lassen), keine Panne — deshalb steht es hier und nicht im Code.
+
+### 5. Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| `sd` innen/auf dem Umriss/im Ring, bed_kind unberührt, 6561 Innen-Proben ≥ 0 | `scripts/smoke_height_bake.py` **[12g]** |
+| Nutzlast: gleiche Maske wie `level`, Rundung, Lattice | ebenda **[12g]** |
+| Blur-Radius = Dilatation, Winkel-Tabelle roh/ausgeliefert, keine Re-Normierung, Stillwasser bleibt still, Fenster-Naht | ebenda **[12h]** |
+| Client-Zwilling `rasterSdAt`: bilinear, Sentinel, 1681 Innen-Proben ≥ 0 | `client3d/scripts/smoke_world_height.mjs` **[W4a]** |
+| Lift-Tor: Ring hebt nicht mehr, „Figur neben dem Wasser", GLSL-Pins | `client3d/scripts/smoke_terrain_lod.mjs` **[16]**, **[17]** |
+| Deckel misst die getorte Hebung (2 → 1) | ebenda **[18] (e)** |
+| Fragment-Tor: eine Smoothstep, Band, ID-Maske nur noch für den Look | `client3d/scripts/smoke_water_shade.mjs` **[7]** |

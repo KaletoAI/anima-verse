@@ -919,11 +919,26 @@ const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt,
   buildWaterPyramid, wlevelAt, bindTerrainLodUniforms,
   terrainLodWaterGlsl, nodeHasWater, liftedHeight, liftedDepth, gpuWaterAt,
+  gpuWaterSdAt,
   patchTerrainLod, LOD_CAP_NONE, waterTileCaps, buildLodCapGrid, lodCapAt,
   lodCapOverSquare,
   TERRAIN_LOD_CACHE_KEY, TERRAIN_LOD_WATER_CACHE_KEY } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
-const { emptyWaterRaster, rasterLevelAt, waterTileFrom } = water;
+const { emptyWaterRaster, rasterLevelAt, rasterSdAt, waterTileFrom,
+        WATER_SD_DRY } = water;
+
+/** An `SdField` over a lattice, from a per-x function — the shape `buildSd`
+ *  produces in the renderer, built here by hand so the twin is fed the very
+ *  numbers the shader fetches. */
+function sdFieldFrom(at, originX, originZ, step, cols, rows) {
+  const data = new Float32Array(cols * rows);
+  for (let j = 0; j < rows; j += 1) {
+    for (let i = 0; i < cols; i += 1) {
+      data[j * cols + i] = at(originX + i * step, originZ + j * step);
+    }
+  }
+  return { originX, originZ, step, cols, rows, data };
+}
 
 // ── [1] the constants ───────────────────────────────────────────────────────
 console.log('[1] the constants are derived from the server\'s own pyramid');
@@ -3097,11 +3112,23 @@ shoreRaster.tiles.set('0,0', waterTileFrom(0, 0, 2, {
 const shoreWater = buildWaterPyramid((x, z) => rasterLevelAt(shoreRaster, x, z),
   0, 0, 2, 9, 9, MAX_LOD_LEVELS);
 const SHORE_RECT = [0, 0, 16, 16];
-/** The drawn height of ONE tap: the two shipped twins composed exactly as
- *  `tlodCompute` composes them for one member of the morph pair. */
-const liftAt = (x, nodeStep) => liftedHeight(
+// THE OUTLINE IS AT x = 10, and the raster's two dilation steps are what put a
+// level at x = 12 and x = 14 (`WATER_RASTER_DILATION_STEPS` = 2). The sd field
+// says so: +(10 − x) inside, −(x − 10) in the ring, dry past it — exactly what
+// the server bakes (bake v9) and what `buildSd` uploads.
+const SHORE_SD = sdFieldFrom((x) => (x <= 15 ? 10 - x : WATER_SD_DRY),
+  0, 0, 2, 9, 9);
+/** The drawn height of ONE tap: the three shipped twins composed exactly as
+ *  `tlodCompute` composes them for one member of the morph pair. `sd` is taken
+ *  ONCE per vertex there, so it is a parameter here and not a third lookup. */
+const liftAt = (x, nodeStep, sd = gpuWaterSdAt(SHORE_SD, x, 0)) => liftedHeight(
   gpuHeightAt(shoreNear, SHORE_RECT, null, x, 0, nodeStep),
-  gpuWaterAt(shoreWater, SHORE_RECT, x, 0, nodeStep));
+  gpuWaterAt(shoreWater, SHORE_RECT, x, 0, nodeStep), sd);
+/** The same tap with NO gate — what the renderer drew until finding F-B, kept
+ *  as the red probe every ring check below is measured against. */
+const liftUngated = (x, nodeStep) => liftedHeight(
+  gpuHeightAt(shoreNear, SHORE_RECT, null, x, 0, nodeStep),
+  gpuWaterAt(shoreWater, SHORE_RECT, x, 0, nodeStep), 0);
 const wrow16 = (pyr, k, n) => {
   const lv = pyr.levels[k];
   return Array.from({ length: n }, (_, i) => pyr.data[lv.row0 * pyr.texW + i]);
@@ -3121,17 +3148,28 @@ check('AT THE OUTLINE x = 10 the two halves meet — 1.0 either way',
   liftAt(10, 2), 1);
 check('THE RING PROBE x = 12: the level is there, the bank is over it',
   liftAt(12, 2), 1.5);
+check('…and its sd is negative too', gpuWaterSdAt(SHORE_SD, 12, 0), -2);
 checkEq('…so what is drawn is the GROUND and not the mirror',
   liftAt(12, 2) === shoreH(12), true);
-check('THE OUTER RING x = 14, where the clamp has faded: it DOES lift',
-  liftAt(14, 2), 1);
-check('…by exactly level − h', liftAt(14, 2) - shoreH(14), 0.25);
+// THE RING NO LONGER LIFTS (finding F-B). x = 14 is 4 m outside the authored
+// outline; the raster has a level there (the dilation), the bank under it is
+// 0.75, and until this round the vertex rose the 0.25 m onto the mirror — a
+// lifted band all round every shore whose outer edge is a LATTICE STAIRCASE,
+// drawn as ground, with the real ground a quarter of a metre UNDER it.
+check('RED: ungated, the outer ring x = 14 lifts onto the mirror',
+  liftUngated(14, 2), 1);
+check('RED: …by exactly level − h', liftUngated(14, 2) - shoreH(14), 0.25);
+check('the sd at x = 14 is −4 — the dilation\'s own width, negative',
+  gpuWaterSdAt(SHORE_SD, 14, 0), -4);
+check('…so the GATED tap draws the bank, not the mirror', liftAt(14, 2),
+  shoreH(14));
+check('…and the lift there is exactly 0', liftAt(14, 2) - shoreH(14), 0);
 check('a WEIGHTED dry corner is dry — x = 15 draws the ground', liftAt(15, 2), 1.875);
 check('…and so does the dry probe x = 16', liftAt(16, 2), 3);
 // RED: `Math.max` is not the rule, and this is why `liftedHeight` exists.
 checkEq('RED: Math.max(h, NaN) would answer NaN at the dry probe',
   Number.isNaN(Math.max(3, gpuWaterAt(shoreWater, SHORE_RECT, 16, 0, 2))), true);
-check('…while the shipped rule answers the ground', liftedHeight(3, NaN), 3);
+check('…while the shipped rule answers the ground', liftedHeight(3, NaN, 0), 3);
 // The near rectangle is the gate: outside it the height is the OVERVIEW's and
 // the overview carries no water, so the mirror is not known there either.
 checkEq('past the near window there is no mirror to read',
@@ -3139,14 +3177,67 @@ checkEq('past the near window there is no mirror to read',
 checkEq('…and no pyramid at all is dry as well',
   Number.isNaN(gpuWaterAt(null, SHORE_RECT, 4, 0, 2)), true);
 
+// ── THE FIGURE BESIDE THE WATER (finding F-B) ──────────────────────────────
+// The shore fixture's own bank happens to stand ABOVE the mirror in most of the
+// ring, which hides the symptom. This one does not: flat ground at 0, a mirror
+// at 1.0 over a wet mask that reaches 4 m past an outline at x = 10. Ungated,
+// every vertex of that 4 m band rises a WHOLE METRE onto the mirror, so the
+// drawn ground beside the lake hangs 1 m over the real ground a figure stands
+// on (`waterPlaneMath.waterLevelAt` is what a figure reads, and it never knew
+// about the dilation) — "the avatar is standing in the ground". The band's
+// outer edge is a lattice staircase, and the band itself is drawn as ground:
+// the grey rim patch and the step silhouette, both.
+const FLAT_H = buildPyramid(() => 0, 0, 0, 2, 11, 3, MAX_LOD_LEVELS);
+const FLAT_W = buildWaterPyramid((x) => (x <= 15 ? 1 : NaN), 0, 0, 2, 11, 3,
+  MAX_LOD_LEVELS);
+const FLAT_SD = sdFieldFrom((x) => (x <= 15 ? 10 - x : WATER_SD_DRY),
+  0, 0, 2, 11, 3);
+const FLAT_RECT = [0, 0, 20, 4];
+const flatAt = (x, sd) => liftedHeight(
+  gpuHeightAt(FLAT_H, FLAT_RECT, null, x, 0, 2),
+  gpuWaterAt(FLAT_W, FLAT_RECT, x, 0, 2), sd);
+check('inside the lake the ground IS the mirror', flatAt(8, gpuWaterSdAt(FLAT_SD, 8, 0)), 1);
+check('RED: ungated, a probe 1 m OUTSIDE the outline rises a whole metre',
+  flatAt(11, 0), 1);
+check('RED: …and 2 m outside just as much', flatAt(12, 0), 1);
+check('the sd 1 m out is −1', gpuWaterSdAt(FLAT_SD, 11, 0), -1);
+check('…so the gated vertex draws the TRUE ground there', flatAt(11, gpuWaterSdAt(FLAT_SD, 11, 0)), 0);
+check('…which is exactly the h a figure stands on', flatAt(11, gpuWaterSdAt(FLAT_SD, 11, 0)),
+  gpuHeightAt(FLAT_H, FLAT_RECT, null, 11, 0, 2));
+check('…and the phantom lift the figure sank into was', flatAt(11, 0)
+  - flatAt(11, gpuWaterSdAt(FLAT_SD, 11, 0)), 1);
+check('ON the outline the two agree — the water still reaches its own edge',
+  flatAt(10, gpuWaterSdAt(FLAT_SD, 10, 0)), 1);
+// x = 15 is left out on purpose: its cell already meets the dry texel at 16, so
+// the masked mix answers NaN there and the ring ends of its own accord.
+checkEq('…and the whole 4 m ring is back on the ground, texel by texel',
+  [11, 12, 13, 14].map((x) => flatAt(x, gpuWaterSdAt(FLAT_SD, x, 0))),
+  [0, 0, 0, 0]);
+checkEq('RED: …every one of which used to hang a metre up',
+  [11, 12, 13, 14].map((x) => flatAt(x, 0)), [1, 1, 1, 1]);
+
 // (b) the morph reads BOTH taps at their own footprint
-check('at x = 14 the level-0 tap lifts to the mirror', liftAt(14, 2), 1);
+// Measured on the UNGATED taps, because the argument is about the ORDER of the
+// max and the mix and not about the gate — and x = 14 is the only probe of this
+// fixture whose two taps disagree. With the gate both taps are the ground and
+// the blend is trivially continuous, which is checked right after.
+check('at x = 14 the level-0 tap lifts to the mirror', liftUngated(14, 2), 1);
 check('…while the level-1 tap has lost the ring and stays ground',
-  liftAt(14, 4), 2.25);
-const blend16 = (f) => liftAt(14, 2) * (1 - f) + liftAt(14, 4) * f;
+  liftUngated(14, 4), 2.25);
+const blend16 = (f) => liftUngated(14, 2) * (1 - f) + liftUngated(14, 4) * f;
 check('the shipped order is continuous at f = 0', blend16(0), 1);
 check('…and one thousandth in it has moved one thousandth of the way',
   blend16(0.001), 1.00125, 1e-12);
+// …and the GATE is taken once for both taps, so the pair is continuous in f at
+// the outline for the same reason: one number, both terms.
+const gated16 = (f) => liftAt(14, 2) * (1 - f) + liftAt(14, 4) * f;
+const ground16 = (f) => gpuHeightAt(shoreNear, SHORE_RECT, null, 14, 0, 2) * (1 - f)
+  + gpuHeightAt(shoreNear, SHORE_RECT, null, 14, 0, 4) * f;
+check('gated, BOTH taps are the bare ground — no mirror enters at all',
+  gated16(0) - ground16(0), 0);
+check('…at the other end of the morph too', gated16(1) - ground16(1), 0);
+check('…and in the middle, so the whole pair is the dry surface',
+  gated16(0.5) - ground16(0.5), 0);
 // RED COUNTER-PROBE: mirrors blended first, then one max. A masked mix of a wet
 // and a dry corner is dry for every weight above 0, so the lift vanishes the
 // moment f leaves 0.
@@ -3154,7 +3245,7 @@ const wrongOrder = (f) => {
   const h = gpuHeightAt(shoreNear, SHORE_RECT, null, 14, 0, 2) * (1 - f)
     + gpuHeightAt(shoreNear, SHORE_RECT, null, 14, 0, 4) * f;
   const w = f === 0 ? gpuWaterAt(shoreWater, SHORE_RECT, 14, 0, 2) : NaN;
-  return liftedHeight(h, w);
+  return liftedHeight(h, w, 0);
 };
 check('RED: the wrong order stands at 1.0 while f is exactly 0', wrongOrder(0), 1);
 check('…and drops to the bed one thousandth later', wrongOrder(0.001), 0.7515, 1e-12);
@@ -3163,9 +3254,12 @@ check('…a step in the drawn ground of', wrongOrder(0) - wrongOrder(0.001),
 
 // …and the SHIPPED vertex function does it, not just the arithmetic above.
 const SHORE_NODE = { x: 0, z: 0, size: 64, level: 0, cells: 32, morph: 0 };
-check('morphedVertex at x = 14, morph 0, lifts to the mirror',
+check('morphedVertex at x = 14, ungated, lifts to the mirror',
   morphedVertex(SHORE_NODE, 7, 0, shoreNear, SHORE_RECT, null, null, 0,
     shoreWater).y, 1);
+check('…and with the sd field it stays on the bank',
+  morphedVertex(SHORE_NODE, 7, 0, shoreNear, SHORE_RECT, null, null, 0,
+    shoreWater, SHORE_SD).y, 0.75);
 check('…and without a water pyramid it is the bed, unchanged',
   morphedVertex(SHORE_NODE, 7, 0, shoreNear, SHORE_RECT, null, null, 0,
     null).y, 0.75);
@@ -3175,7 +3269,7 @@ check('…and without a water pyramid it is the bed, unchanged',
 for (const t of [0, 0.5, 1]) {
   check(`…and at x = 12 the morph t = ${t} draws the same 1.5`,
     morphedVertex(SHORE_NODE, 6, 0, shoreNear, SHORE_RECT, null, null, t,
-      shoreWater).y, 1.5);
+      shoreWater, SHORE_SD).y, 1.5);
 }
 
 // (c) the gate
@@ -3245,15 +3339,23 @@ checkEq('the water variant declares the sampler',
   wetGlsl.includes('uniform sampler2D uTlodWater;'), true);
 checkEq('…and the isolation uniform',
   wetGlsl.includes('uniform float uTlodNoWater;'), true);
-check('…and fetches sixteen texels: four ground, mirror, flow and mip cap',
-  wetGlsl.split('texelFetch(').length - 1, 16);
+check('…and fetches twenty: four ground, mirror, flow, mip cap and SD',
+  wetGlsl.split('texelFetch(').length - 1, 20);
 checkEq('THE LIFT IS A COMPARISON', wetGlsl.includes('return ( w > h ) ? w : h;'), true);
 checkEq('RED: and never max(), which GLSL does not pin down for a NaN',
   /max\(\s*h,\s*w\s*\)/.test(wetGlsl), false);
 checkEq('EACH TAP IS LIFTED AT ITS OWN FOOTPRINT — the m1 half',
-  wetGlsl.includes('float l1 = tlodLift( h1, p, nodeStep * m1 );'), true);
+  wetGlsl.includes('float l1 = tlodLift( h1, p, nodeStep * m1, sdw );'), true);
 checkEq('…and the m2 half',
-  wetGlsl.includes('float l2 = tlodLift( h2, p, nodeStep * m2 );'), true);
+  wetGlsl.includes('float l2 = tlodLift( h2, p, nodeStep * m2, sdw );'), true);
+// …AND THE GATE IS TAKEN ONCE, before either tap: it is a function of the
+// position alone, so both taps carry the same number and the pair stays
+// continuous in f at the outline (finding F-B).
+checkEq('the sd is read ONCE per vertex, before the taps',
+  wetGlsl.includes('float sdw = twSdAt( p );'), true);
+check('…exactly once', wetGlsl.split('twSdAt( p )').length - 1, 1);
+checkEq('THE GATE IS THE SIGN', wetGlsl.includes('uTlodNoWater > 0.5 || sd < 0.0'),
+  true);
 checkEq('…so the max is taken per LEVEL and one mix wraps both',
   wetGlsl.includes('float h = mix( l1, l2, f );'), true);
 // ── K-A E4: the DEPTH the fragment shades from is a varying, not a lookup ──
@@ -3271,12 +3373,15 @@ checkEq('…on the water lattice\'s LEVEL 0 and no pyramid',
   /vec2 tlodFlowAt[\s\S]*?\n}/.exec(wetGlsl)[0].includes('uTlodWaterLevel[ 0 ]'), true);
 checkEq('…and never in the dry one', dryGlsl.includes('tlodFlowAt'), false);
 // The TS twin of `l - h`, and the identity that makes it one statement.
-check('liftedDepth: a mirror 1.2 m over the bed', liftedDepth(3, 4.2), 1.2);
-check('…a mirror UNDER the bed is dry', liftedDepth(5, 4.2), 0);
-check('…and the dry sentinel is dry', liftedDepth(5, NaN), 0);
+check('liftedDepth: a mirror 1.2 m over the bed', liftedDepth(3, 4.2, 0), 1.2);
+check('…a mirror UNDER the bed is dry', liftedDepth(5, 4.2, 0), 0);
+check('…and the dry sentinel is dry', liftedDepth(5, NaN, 0), 0);
+check('…and so is a mirror OUTSIDE the outline, however deep',
+  liftedDepth(3, 4.2, -0.001), 0);
 checkEq('RED: depth 0 is exactly where the lift did nothing',
-  [liftedHeight(5, NaN) - 5, liftedDepth(5, NaN),
-   liftedHeight(3, 4.2) - 3 - liftedDepth(3, 4.2)], [0, 0, 0]);
+  [liftedHeight(5, NaN, 0) - 5, liftedDepth(5, NaN, 0),
+   liftedHeight(3, 4.2, 0) - 3 - liftedDepth(3, 4.2, 0),
+   liftedHeight(3, 4.2, -1) - 3 - liftedDepth(3, 4.2, -1)], [0, 0, 0, 0]);
 // The masked mix, in GLSL this time: four corners, four weight guards.
 check('the mirror\'s bilinear guards every one of its four corners',
   terrainLodWaterGlsl().split('!= 0.0').length - 1, 4);
@@ -3372,9 +3477,14 @@ check('the composition order is albedo -> normal -> light',
     .every((v, i, a) => v > 0 && (i === 0 || v > a[i - 1])) ? 1 : 0, 1);
 checkEq('the water program is handed the look table, the wave map and the mask',
   ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodTime', 'uTlodSky',
-   'uTlodWaterMask', 'uTlodWaterMaskGeom', 'uTlodWaterSd', 'uTlodWaterSdGeom',
-   'uTlodWaterSdCode']
+   'uTlodWaterMask', 'uTlodWaterMaskGeom', 'uTlodWaterSd']
     .every((k) => wetShader.uniforms[k] !== undefined), true);
+// RED: the compositor's own sd is NOT borrowed any anymore (finding F-A) — the
+// water gate reads the WATER raster's distance, and `uTlodWaterSd` is that
+// field. A lake with a painted bed answers (sand, sand) on the material mask.
+checkEq('RED: the compositor\'s sd window and byte code are gone',
+  ['uTlodWaterSdGeom', 'uTlodWaterSdCode']
+    .some((k) => wetShader.uniforms[k] !== undefined), false);
 checkEq('RED: and the dry program is handed none of them',
   ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodWaterMask', 'uTlodWaterSd']
     .some((k) => dryShader.uniforms[k] !== undefined), false);
@@ -3465,11 +3575,11 @@ checkEq('(a) the straight reach, lifted points per level',
 // The cap the renderer derives from the MASK alone — 64 m tiles over the
 // fixture, so tiles 0…3 hold the reach and tile 4 is the one column at the
 // window's edge, where a block cannot close and the cap honestly reads 0.
-const R_CAPS = waterTileCaps(R.wp, R.hp, 64, MAX_LOD_LEVELS);
+const R_CAPS = waterTileCaps(R.wp, R.hp, 64, null, MAX_LOD_LEVELS);
 checkEq('(b) …and the cap the mask gives those tiles',
   [0, 1, 2, 3].map((t) => R_CAPS.get(`${t},0`)), [1, 1, 1, 1]);
 const LAKE = f1Field(() => 32, 30);
-const LAKE_CAPS = waterTileCaps(LAKE.wp, LAKE.hp, 64, MAX_LOD_LEVELS);
+const LAKE_CAPS = waterTileCaps(LAKE.wp, LAKE.hp, 64, null, MAX_LOD_LEVELS);
 checkEq('…a lake 31 texels across keeps level 4',
   [0, 1, 2, 3].map((t) => LAKE_CAPS.get(`${t},0`)), [4, 4, 4, 4]);
 checkEq('(c) the meander is whole at levels 0 and 1…',
@@ -3485,7 +3595,35 @@ checkEq('…the aligned points split 12 in-band / 4 out',
   [M_IN.length, M_OUT.length], [12, 4]);
 checkEq('…and level 2 lifts exactly the in-band twelve',
   [f1Lifted(M, M_IN, 2), f1Lifted(M, M_OUT, 2)], [12, 0]);
-const M_CAPS = waterTileCaps(M.wp, M.hp, 64, MAX_LOD_LEVELS);
+const M_CAPS = waterTileCaps(M.wp, M.hp, 64, null, MAX_LOD_LEVELS);
+// (e) THE CAP MEASURES THE GATED LIFT (finding F-B). The fixtures above carve
+//     their bank ABOVE the mirror, so `w > h` alone already stops at the bed's
+//     own 3 texels. A bank that lies BELOW the mirror is the ordinary case, and
+//     there the raster's 4 m dilation ring lifts too. The wet mask |z − 4| ≤ 11
+//     covers rows j = 0…7 of this window (z = 0…14; the ring below z = 0 falls
+//     outside it), so a block of radius r = 1 << (k − 1) closes for k = 2
+//     (r = 2, rows 2…5) and not for k = 3 (r = 4, nine rows needed): cap 2, for
+//     a river whose own body has already broken up at level 2. With the sd gate
+//     the lifting band is the authored 6 m again — rows 1, 2, 3 — and only
+//     r = 1 closes: cap 1, exactly the number the width rule gives the body.
+const F1_SUNK = {
+  hp: buildPyramid((x, z) => (Math.abs(z - 4) <= 3 ? -3 : -1),
+    0, 0, F1_BASE, F1_COLS, F1_ROWS, MAX_LOD_LEVELS),
+  wp: buildWaterPyramid((x, z) => (Math.abs(z - 4) <= 11 ? -0.5 : NaN),
+    0, 0, F1_BASE, F1_COLS, F1_ROWS, MAX_LOD_LEVELS),
+};
+const F1_SD = sdFieldFrom((x, z) => 3 - Math.abs(z - 4),
+  0, 0, F1_BASE, F1_COLS, F1_ROWS);
+const SUNK_OPEN = waterTileCaps(F1_SUNK.wp, F1_SUNK.hp, 64, null, MAX_LOD_LEVELS);
+const SUNK_GATED = waterTileCaps(F1_SUNK.wp, F1_SUNK.hp, 64, F1_SD, MAX_LOD_LEVELS);
+checkEq('RED: ungated, the flooded ring makes a 6 m river carry level 2',
+  [0, 1, 2, 3].map((t) => SUNK_OPEN.get(`${t},0`)), [2, 2, 2, 2]);
+checkEq('…and the sd gate hands back the authored width\'s cap',
+  [0, 1, 2, 3].map((t) => SUNK_GATED.get(`${t},0`)), [1, 1, 1, 1]);
+check('…the ring really is 4 m of it: sd at |z − 4| = 5 is', 
+  gpuWaterSdAt(F1_SD, 0, 9), -2);
+check('…and 0 exactly on the outline', gpuWaterSdAt(F1_SD, 0, 7), 0);
+
 checkEq('…so the meander caps at 1 too, and its whole axis comes back',
   [0, 1, 2, 3].map((t) => M_CAPS.get(`${t},0`)), [1, 1, 1, 1]);
 // (d) the rejected rule, rebuilt from its own arithmetic.

@@ -162,9 +162,10 @@ import * as THREE from 'three';
 import { finestStep, heightAt, latticeSample, surfaceSkyUniform,
   surfaceTimeUniform, surfaceWaveNormal, tileKeyAt } from '@anima/scene-render';
 import type { WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
-import { rasterFlowAt, rasterLevelAt, waterBilinear } from './waterRaster';
+import { rasterFlowAt, rasterLevelAt, rasterSdAt, waterBilinear,
+  WATER_SD_DRY } from './waterRaster';
 import type { WaterRaster } from './waterRaster';
-import { packWaterLook, terrainWaterFragmentGlsl,
+import { packWaterLook, terrainWaterFragmentGlsl, waterSdGlsl,
   WATER_LOOK_TEXELS } from './waterShade';
 import type { WaterLook } from './waterShade';
 import { bindLayerIdUniforms } from './layerGround';
@@ -409,6 +410,33 @@ export interface HeightPyramid {
 }
 
 /**
+ * The water's SIGNED DISTANCE over the near window — one flat lattice, no
+ * pyramid (finding F-A/F-B).
+ *
+ * ONE LEVEL, and the argument is the flow field's: this is read to answer a
+ * yes/no about a POSITION ("is this point inside the painted water"), and the
+ * honest answer to that is always the finest lattice's, whatever level the
+ * vertex asking it happens to be drawn at. It is also what keeps the gate a
+ * pure function of (x, z): a pyramid would make it depend on the tap's
+ * footprint, and then a coarse piece and a fine piece would disagree about a
+ * vertex they share.
+ *
+ * The lattice is the water pyramid's own level 0 — the same origin, step and
+ * size — which is what lets the shader read the geometry out of
+ * `uTlodWaterGeom` and the extent out of `textureSize` instead of carrying a
+ * second window of its own.
+ */
+export interface SdField {
+  originX: number;
+  originZ: number;
+  step: number;
+  cols: number;
+  rows: number;
+  /** `data[j · cols + i]` in metres, {@link WATER_SD_DRY} where no water. */
+  data: Float32Array;
+}
+
+/**
  * Build a pyramid by sampling `at` on the base lattice and DECIMATING upwards.
  *
  * `levelCount` is a wish: a level with fewer than two support points per axis
@@ -608,6 +636,7 @@ export const LOD_CAP_NONE = MAX_LOD_LEVELS;
 export function waterTileCaps(water: HeightPyramid | null | undefined,
                               height: HeightPyramid | null | undefined,
                               tileM: number,
+                              sd: SdField | null | undefined,
                               levelCount = MAX_LOD_LEVELS): Map<string, number> {
   const out = new Map<string, number>();
   const wl = water?.levels[0];
@@ -626,14 +655,24 @@ export function waterTileCaps(water: HeightPyramid | null | undefined,
   // 33² times per texel. `Int32` because the count is a texel count.
   const w1 = cols + 1;
   const sat = new Int32Array(w1 * (rows + 1));
+  // THE MASK IS THE GATED LIFT, sd included (finding F-B). The cap is a width
+  // rule over the texels that really rise onto the mirror, and with the
+  // dilation ring no longer lifting, a 6 m river is 3 texels wide here instead
+  // of 7. Counting the ring would hand a narrow river the cap of a body twice
+  // its width and it would break into puddles at exactly the distance F1
+  // exists to prevent — the mask and the vertex shader have to be the same
+  // statement or the number describes nothing.
+  const sdOk = sd && sd.cols === cols && sd.rows === rows;
   for (let j = 0; j < rows; j += 1) {
     const wrow = (wl.row0 + j) * water.texW;
     const hrow = (hl.row0 + j) * height.texW;
+    const srow = j * cols;
     let run = 0;
     for (let i = 0; i < cols; i += 1) {
       // The dry sentinel is NaN and every comparison with it is false, so this
       // is the same NaN-safe statement `tlodLift` makes, and nothing else.
-      if (water.data[wrow + i] > height.data[hrow + i]) run += 1;
+      if (water.data[wrow + i] > height.data[hrow + i]
+          && (!sdOk || (sd.data[srow + i] ?? WATER_SD_DRY) >= 0)) run += 1;
       sat[(j + 1) * w1 + i + 1] = sat[j * w1 + i + 1] + run;
     }
   }
@@ -1604,7 +1643,7 @@ uniform vec4 uTlodWaterLevel[ ${MAX_LOD_LEVELS} ];
 uniform float uTlodNoWater;
 varying float vTlodWet;
 varying vec2 vTlodFlow;
-
+${waterSdGlsl()}
 const float TLOD_DRY = -1e30;
 
 float tlodWaterGrid( vec4 lv, vec2 p ) {
@@ -1644,8 +1683,27 @@ float tlodWaterAt( vec2 p, float nodeStep ) {
 // it out as a UNIFORM and not as a define, so the frame after the click is
 // drawn by the very same program and what is left is exactly the dry variant's
 // answer — the pattern of toggles 6 and 9.
-float tlodLift( float h, vec2 p, float nodeStep ) {
-  if ( uTlodNoWater > 0.5 ) return h;
+//
+// ── AND IT ONLY FIRES INSIDE THE AUTHORED OUTLINE (finding F-B) ─────────────
+// \`sd\` is the raster's signed distance, taken ONCE per vertex by the caller
+// (it is a function of the position alone, not of the tap's footprint, so both
+// taps of the morph pair share it and the pair stays continuous in f).
+//
+// THE RING WAS BEING LIFTED GEOMETRICALLY, and that is three of the user's
+// findings in one: the raster is written 4 m past every outline, so the ground
+// out there rose onto the mirror too. Its outer edge is a LATTICE staircase, so
+// the lifted band ended in a visible flight of steps; the band itself was drawn
+// as ground (the shading gate already excluded it), so it read as a grey rim
+// patch; and a figure standing on that band stands on the REAL ground h while
+// the drawn surface hangs above it — "the avatar is standing in the ground".
+//
+// THE RING KEEPS ITS VALUES, and it must: they are what makes the bilinear mix
+// INSIDE the outline reproduce the profile instead of bending toward a border
+// value (§ A16.5 point 3). It is bilinear SUPPORT, never a surface. Nothing in
+// the figure code changes — \`waterPlaneMath.waterLevelAt\` was always the
+// gameplay's answer and it never knew about the dilation at all.
+float tlodLift( float h, vec2 p, float nodeStep, float sd ) {
+  if ( uTlodNoWater > 0.5 || sd < 0.0 ) return h;
   float w = tlodWaterAt( p, nodeStep );
   return ( w > h ) ? w : h;
 }
@@ -1755,6 +1813,13 @@ export function terrainLodGlsl(water = false): string {
    * The DRY spelling is one statement and is left exactly as it was, so the dry
    * program is unchanged down to the whitespace.
    *
+   * `sdw` IS TAKEN ONCE, before either tap. The gate is a function of the
+   * world position alone — not of the tap's footprint — so both taps of the
+   * morph pair are gated identically and `mix(l1, l2, f)` stays continuous in f
+   * at the outline exactly as it is everywhere else. It is also what makes the
+   * gate LEVEL-INDEPENDENT: a coarse piece and a fine piece meeting at a vertex
+   * read the same distance there and either both lift it or neither does.
+   *
    * The WET one takes each tap apart into its bed and its lifted surface,
    * because K-A E4 needs BOTH: the drawn y is `mix(l1, l2, f)` as before, and
    * the depth the fragment shades from is `mix(l1 − h1, l2 − h2, f)`. That is
@@ -1770,10 +1835,11 @@ export function terrainLodGlsl(water = false): string {
    * takes its dry branch. The lift and the shading are ONE switch.
    */
   const heightBlock = water
-    ? `float h1 = tlodHeight( p, nodeStep * m1 );
+    ? `float sdw = twSdAt( p );
+  float h1 = tlodHeight( p, nodeStep * m1 );
   float h2 = tlodHeight( p, nodeStep * m2 );
-  float l1 = tlodLift( h1, p, nodeStep * m1 );
-  float l2 = tlodLift( h2, p, nodeStep * m2 );
+  float l1 = tlodLift( h1, p, nodeStep * m1, sdw );
+  float l2 = tlodLift( h2, p, nodeStep * m2, sdw );
   float h = mix( l1, l2, f );
   vTlodWet = mix( l1 - h1, l2 - h2, f );
   vTlodFlow = uTlodNoWater > 0.5 ? vec2( 0.0 ) : tlodFlowAt( p );`
@@ -2021,6 +2087,30 @@ export function gpuWaterAt(water: HeightPyramid | null,
 }
 
 /**
+ * The TypeScript twin of the shader's `twSdAt` — the signed distance to the
+ * painted outline the GPU really reads at a point, {@link WATER_SD_DRY} outside
+ * the window (finding F-A/F-B).
+ *
+ * `null` for "this renderer holds no sd field" answers DRY, which is what a
+ * caller with no water field has to see: no field, no gate, no lift.
+ */
+export function gpuWaterSdAt(sd: SdField | null, x: number,
+                             z: number): number {
+  if (!sd || sd.cols < 2 || sd.rows < 2 || !(sd.step > 0)) return WATER_SD_DRY;
+  const fx = (x - sd.originX) / sd.step;
+  const fz = (z - sd.originZ) / sd.step;
+  if (fx < 0 || fz < 0 || fx > sd.cols - 1 || fz > sd.rows - 1) return WATER_SD_DRY;
+  const i = Math.min(Math.floor(fx), sd.cols - 2);
+  const j = Math.min(Math.floor(fz), sd.rows - 2);
+  const tx = fx - i;
+  const tz = fz - j;
+  const at = (a: number, b: number): number => sd.data[b * sd.cols + a] ?? WATER_SD_DRY;
+  const north = at(i, j) * (1 - tx) + at(i + 1, j) * tx;
+  const south = at(i, j + 1) * (1 - tx) + at(i + 1, j + 1) * tx;
+  return north * (1 - tz) + south * tz;
+}
+
+/**
  * ONE TAP LIFTED — the arithmetic of the shader's `tlodLift`, and the reason
  * it is a function rather than a call to `Math.max`.
  *
@@ -2028,22 +2118,29 @@ export function gpuWaterAt(water: HeightPyramid | null,
  * as a hole. `w > h ? w : h` answers `h` for every dry sentinel, which is what
  * the GLSL `( w > h ) ? w : h` does for the same reason — see
  * `terrainLodWaterGlsl`.
+ *
+ * `sd` IS THE GATE (finding F-B): a negative distance is a point OUTSIDE the
+ * authored outline, i.e. the raster's dilation ring, and the ring is bilinear
+ * support and not a surface — it never lifts. A caller with no sd field hands
+ * in {@link WATER_SD_DRY} and gets the ground, which is the same "no water
+ * known here" a NaN level gives.
  */
-export function liftedHeight(h: number, w: number): number {
-  return w > h ? w : h;
+export function liftedHeight(h: number, w: number, sd: number): number {
+  return sd >= 0 && w > h ? w : h;
 }
 
 /**
  * HOW DEEP the lift was at one tap — the twin of the water variant's
  * `l - h`, and the number the fragment shades from (K-A E4).
  *
- * It is `liftedHeight(h, w) - h` by construction and is written as its own
- * function only so the smoke can pin that identity: a dry sentinel (NaN) or a
- * mirror below the bed both answer exactly 0, which is what "this pixel is not
- * water" has to be — the fragment's every branch keys on `> 0`.
+ * It is `liftedHeight(h, w, sd) - h` by construction and is written as its own
+ * function only so the smoke can pin that identity: a dry sentinel (NaN), a
+ * mirror below the bed and a point outside the outline all answer exactly 0,
+ * which is what "this pixel is not water" has to be — the fragment's every
+ * branch keys on `> 0`.
  */
-export function liftedDepth(h: number, w: number): number {
-  return w > h ? w - h : 0;
+export function liftedDepth(h: number, w: number, sd: number): number {
+  return sd >= 0 && w > h ? w - h : 0;
 }
 
 /**
@@ -2084,7 +2181,10 @@ export function fragmentNormal(near: HeightPyramid | null,
  * `water` is the water pyramid of the SECOND material variant (K-A E3), `null`
  * for the dry one — and `null` is what every caller before that stage passes,
  * so the answer is unchanged for them: `gpuWaterAt` returns NaN and
- * `liftedHeight` falls through to the height. With a pyramid the two taps of
+ * `liftedHeight` falls through to the height. `sd` is the gate that came with
+ * finding F-B and follows the same rule: no field, no gate (0, i.e. "inside"),
+ * so a caller that hands in a water pyramid and no distance measures the
+ * ungated lift and can therefore pin the difference the gate makes. With a pyramid the two taps of
  * the morph pair are lifted SEPARATELY, each at its own footprint, and blended
  * afterwards; the argument for that order is in `terrainLodWaterGlsl`.
  *
@@ -2105,7 +2205,8 @@ export function morphedVertex(node: LodNode, gx: number, gz: number,
                               far: HeightPyramid | null,
                               extent: readonly number[] | null = null,
                               t: number = node.morph,
-                              water: HeightPyramid | null = null
+                              water: HeightPyramid | null = null,
+                              sd: SdField | null = null
 ): { x: number; z: number; y: number } {
   const nodeStep = node.size / node.cells;
   const k = Math.min(Math.floor(Math.max(t, 0)), MAX_LOD_LEVELS - 1);
@@ -2122,10 +2223,13 @@ export function morphedVertex(node: LodNode, gx: number, gz: number,
     x = Math.min(Math.max(x, extent[0]), extent[2]);
     z = Math.min(Math.max(z, extent[1]), extent[3]);
   }
+  // ONE distance for both taps — the shader takes `sdw` once, before either
+  // (`terrainLodGlsl`), because the gate is a function of the position alone.
+  const sdw = sd ? gpuWaterSdAt(sd, x, z) : 0;
   const own = liftedHeight(gpuHeightAt(near, nearRect, far, x, z, nodeStep * m1),
-                           gpuWaterAt(water, nearRect, x, z, nodeStep * m1));
+                           gpuWaterAt(water, nearRect, x, z, nodeStep * m1), sdw);
   const parent = liftedHeight(gpuHeightAt(near, nearRect, far, x, z, nodeStep * m2),
-                              gpuWaterAt(water, nearRect, x, z, nodeStep * m2));
+                              gpuWaterAt(water, nearRect, x, z, nodeStep * m2), sdw);
   return { x, z, y: own * (1 - f) + parent * f };
 }
 
@@ -2170,7 +2274,8 @@ export function lodVertex(node: LodNode, gx: number, gz: number,
                           extent: readonly number[] | null,
                           cam: LodCamera, ranges: readonly number[],
                           water: HeightPyramid | null = null,
-                          capAt: ((x: number, z: number) => number) | null = null
+                          capAt: ((x: number, z: number) => number) | null = null,
+                          sd: SdField | null = null
 ): { x: number; z: number; y: number; t: number } {
   const nodeStep = node.size / node.cells;
   /** The morph coordinate at the lattice point (ix, iz) of this piece. */
@@ -2203,7 +2308,7 @@ export function lodVertex(node: LodNode, gx: number, gz: number,
     if (Math.floor(tj) >= j) { k = j; t = tj; break; }
   }
   return { ...morphedVertex(node, gx, gz, near, nearRect, far, extent,
-                            k + Math.min(Math.max(t - k, 0), 1), water), t };
+                            k + Math.min(Math.max(t - k, 0), 1), water, sd), t };
 }
 
 // ── The renderer ───────────────────────────────────────────────────────────
@@ -2297,6 +2402,21 @@ const uWaterLevel = { value: makeLevelArray() };
  * height pyramid. Level 0 only, and the reason is in `tlodFlowAt`.
  */
 const uFlow: { value: THREE.Texture } = { value: neutralTex };
+/**
+ * THE SIGNED DISTANCE TO THE PAINTED OUTLINE, R32F on the water pyramid's BASE
+ * lattice — read by BOTH stages of the water program (findings F-A/F-B).
+ *
+ * It carries no geometry of its own for the same reason the flow does not: the
+ * lattice IS `uTlodWaterLevel[0]` over `uTlodWaterGeom.xy`, and its extent is
+ * the near rectangle, so `waterSdGlsl` reads the origin and the step out of
+ * that vec4 and the size out of `textureSize`.
+ *
+ * The name was the ground compositor's sd until this round, when the water gate
+ * stopped asking the MATERIAL mask where the water is (a lake with a painted
+ * bed answered "sand" over its whole interior — finding F-A) and started asking
+ * the water's own field. Nothing borrows the compositor's distance any more.
+ */
+const uSd: { value: THREE.Texture } = { value: neutralTex };
 /**
  * THE WATER'S MIP LIMIT AS A FIELD (F1) — the corner grid of `LodCapGrid` as an
  * R32F texture, its geometry, and the budget's relaxation.
@@ -2477,6 +2597,7 @@ export function patchTerrainLod(mat: THREE.Material, water = false): void {
       const u = shader.uniforms as unknown as Record<string, unknown>;
       u.uTlodNoWater = uNoWater;
       u.uTlodFlow = uFlow;
+      u.uTlodWaterSd = uSd;
       u.uTlodWaterLook = uLook;
       // The wave map is built on first ask, i.e. when a world really has water
       // — never at module load, where it would cost a 256² canvas in every
@@ -2493,11 +2614,13 @@ export function patchTerrainLod(mat: THREE.Material, water = false): void {
       // and its window, bound a second time under this program's names. See
       // `twLayerAt`: that chunk is declared below this one in the finished
       // shader, so its uniforms cannot be reached from here by name.
-      // …and, since the rim seam of 2026-08-24, the SIGNED DISTANCE beside it:
-      // the pair says which two kinds meet, only the distance says whether this
-      // pixel is inside the authored water or on the flooded ring around it.
-      bindLayerIdUniforms(u, 'uTlodWaterMask', 'uTlodWaterMaskGeom',
-                          'uTlodWaterSd', 'uTlodWaterSdGeom', 'uTlodWaterSdCode');
+      //
+      // THE ID PAIR AND NOTHING ELSE. It borrowed the compositor's signed
+      // distance too for one day, to tell the authored mirror from the flooded
+      // ring; that gate is gone (finding F-A — the material mask answers about
+      // the topmost painted KIND, so a lake with a painted bed reads "sand" over
+      // its whole interior) and the water's own `uTlodWaterSd` answers instead.
+      bindLayerIdUniforms(u, 'uTlodWaterMask', 'uTlodWaterMaskGeom');
     }
     if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
     shader.vertexShader = terrainLodGlsl(water) + shader.vertexShader
@@ -2810,6 +2933,11 @@ export function createTerrainLod(): TerrainLod {
   let farTex: THREE.DataTexture | null = null;
   let waterTex: THREE.DataTexture | null = null;
   let flowTex: THREE.DataTexture | null = null;
+  /** The signed distance over the same window — held as the FIELD as well as
+   *  the texture, because the CPU twins (`morphedVertex`, `waterTileCaps`) read
+   *  the very numbers the shader fetches. */
+  let sdField: SdField | null = null;
+  let sdTex: THREE.DataTexture | null = null;
   /** The look table this renderer owns and frees — the module's `uLook` only
    *  points at it. Replaced whole by `setWaterLook`. */
   let lookTex: THREE.DataTexture | null = null;
@@ -2974,6 +3102,46 @@ export function createTerrainLod(): TerrainLod {
     return tex;
   }
 
+  /**
+   * The SIGNED DISTANCE over the water pyramid's base lattice (findings
+   * F-A/F-B) — the field, so the CPU twins can read it, and the texture is made
+   * from the same `Float32Array` right after.
+   *
+   * Filled from `rasterSdAt`, i.e. from the tiles themselves and not from the
+   * pyramid: the sd is not decimated and has no levels, so there is nothing for
+   * a pyramid to be. Where no tile covers a lattice point the sampler answers
+   * `WATER_SD_DRY`, which is what the shader's own out-of-window branch answers
+   * too.
+   */
+  function buildSd(raster: WaterRaster | null): SdField | null {
+    const base = waterPyr?.levels[0];
+    if (!waterPyr || !base || !raster?.tiles?.size) return null;
+    const data = new Float32Array(base.cols * base.rows);
+    for (let j = 0; j < base.rows; j += 1) {
+      const z = waterPyr.originZ + j * waterPyr.step;
+      const row = j * base.cols;
+      for (let i = 0; i < base.cols; i += 1) {
+        data[row + i] = rasterSdAt(raster, waterPyr.originX + i * waterPyr.step, z);
+      }
+    }
+    return { originX: waterPyr.originX, originZ: waterPyr.originZ,
+             step: waterPyr.step, cols: base.cols, rows: base.rows, data };
+  }
+
+  function sdTexture(field: SdField | null): THREE.DataTexture | null {
+    if (!field) return null;
+    const tex = new THREE.DataTexture(field.data, field.cols, field.rows,
+                                      THREE.RedFormat, THREE.FloatType);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = false;
+    tex.unpackAlignment = 1;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   /** The cap grid as the texture `tlodCapAt` fetches — R32F and NEAREST like
    *  every other field here, because the mix is done by hand in the shader and
    *  that is what makes it the CPU's arithmetic. `null` when nothing is capped,
@@ -2997,6 +3165,7 @@ export function createTerrainLod(): TerrainLod {
     farTex?.dispose();
     waterTex?.dispose();
     flowTex?.dispose();
+    sdTex?.dispose();
     capTex?.dispose();
     capTex = capTexture(capGrid);
     uCap.value = capTex ?? neutralTex;
@@ -3007,10 +3176,12 @@ export function createTerrainLod(): TerrainLod {
     farTex = farPyr ? pyramidTexture(farPyr) : null;
     waterTex = waterPyr ? pyramidTexture(waterPyr) : null;
     flowTex = buildFlow(raster);
+    sdTex = sdTexture(sdField);
     uNear.value = nearTex ?? neutralTex;
     uFar.value = farTex ?? neutralTex;
     uWater.value = waterTex ?? neutralTex;
     uFlow.value = flowTex ?? neutralTex;
+    uSd.value = sdTex ?? neutralTex;
     uWaterGeom.value.set(waterPyr?.originX ?? 0, waterPyr?.originZ ?? 0,
                          waterPyr?.step ?? 1, waterPyr?.levels.length ?? 0);
     setLevels(uWaterLevel.value, waterPyr);
@@ -3189,6 +3360,10 @@ export function createTerrainLod(): TerrainLod {
       // AFTER the near pyramid, because it is built over the near pyramid's own
       // window — and never over the far one, which has no water in it.
       waterPyr = buildWater(water ?? null);
+      // …and the DISTANCE over the same window, which is what decides where the
+      // lift may fire at all (finding F-B). Before the gate, so the cap below
+      // measures the lift the vertex shader really performs.
+      sdField = buildSd(water ?? null);
       // …and the GATE is snapshotted from the same raster in the same breath
       // (K-A E3). A pyramid without tiles behind it can lift nothing, so the
       // gate is emptied with it and every piece goes back to the dry program.
@@ -3200,7 +3375,8 @@ export function createTerrainLod(): TerrainLod {
       // coarsest level that keeps one such texel is what the tile may be drawn
       // at. Both pyramids are the same lattice by construction (`buildWater`).
       capGrid = buildLodCapGrid(
-        waterTileCaps(waterPyr, nearPyr, waterTileM, MAX_LOD_LEVELS), waterTileM);
+        waterTileCaps(waterPyr, nearPyr, waterTileM, sdField, MAX_LOD_LEVELS),
+        waterTileM);
       uploadPyramids(water ?? null);
     },
     setWaterLook(looks) {
@@ -3248,12 +3424,15 @@ export function createTerrainLod(): TerrainLod {
       farTex?.dispose();
       waterTex?.dispose();
       flowTex?.dispose();
+      sdTex?.dispose();
       capTex?.dispose();
       lookTex?.dispose();
       nearTex = null;
       farTex = null;
       waterTex = null;
       flowTex = null;
+      sdTex = null;
+      sdField = null;
       capTex = null;
       capGrid = null;
       lookTex = null;
@@ -3264,6 +3443,7 @@ export function createTerrainLod(): TerrainLod {
       uFar.value = neutralTex;
       uWater.value = neutralTex;
       uFlow.value = neutralTex;
+      uSd.value = neutralTex;
       uCap.value = neutralTex;
       uCapGeom.value.set(0, 0, 1, 0);
       uCapFit.value.set(0, 0, 0, 0);

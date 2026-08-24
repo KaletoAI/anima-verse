@@ -799,6 +799,25 @@ const LAKE_NW = {
     [null, null, 3.0, 3.0, 3.0, 3.0, 3.0],        // z = 22
     [null, null, 3.0, 3.0, 3.0, 3.0, 3.0],        // z = 24
   ],
+  // …and its sd, the SIGNED distance to that same outline (bake v9). The lake
+  // is the square (20,20)-(60,60), so inside the north-west corner the nearest
+  // edge is the north one or the west one, whichever is nearer, and outside it
+  // the distance to the corner or to the nearest edge. Every value below is
+  // that distance, by hand, on the window's own lattice x = 12…24, z = 12…24:
+  //   (22, 22) -> min(2, 2) = 2 inside            (20, 20) -> 0 ON the corner
+  //   (18, 20) -> −2  (2 m west of the west edge, z ON the south edge)
+  //   (16, 20) -> −4  (the dilation's own width)
+  //   (18, 18) -> −hypot(2, 2) = −2.8284 (diagonally past the CORNER, so the
+  //                nearest point of the outline is the corner itself)
+  sd: [
+    [null, null, null, null, null, null, null],
+    [null, null, null, null, null, null, null],
+    [null, null, null, null, -4, -4, -4],
+    [null, null, null, -Math.hypot(2, 2), -2, -2, -2],
+    [null, null, -4, -2, 0, 0, 0],
+    [null, null, -4, -2, 0, 2, 2],
+    [null, null, -4, -2, 0, 2, 4],
+  ],
 };
 // WINDOW B, its EAST rim: origin (56,30), step 2, 7 x 3 points, x = 56 … 68.
 // Inside up to 60, then 62 (2 m out) and 64 (4 m out) are the dilation ring,
@@ -832,8 +851,8 @@ const CLIFF_W = {
 };
 
 const wr = await loadWaterRaster();
-const { emptyWaterRaster, rasterFlowAt, rasterLevelAt, waterBilinear,
-        waterTileFrom } = wr;
+const { emptyWaterRaster, rasterFlowAt, rasterLevelAt, rasterSdAt,
+        waterBilinear, waterTileFrom, WATER_SD_DRY } = wr;
 
 function rasterOf(tileM, entries) {
   const r = emptyWaterRaster();
@@ -959,6 +978,52 @@ check('null becomes NaN', Number.isNaN(CONV.level[0][1]) ? 1 : 0, 1);
 check('…and a number stays itself', CONV.level[1][1], 4);
 check('a tile without flow arrays holds null, not zeros',
   CONV.flowX === null && CONV.flowZ === null ? 1 : 0, 1);
+check('a tile whose wire carries NO sd reads dry everywhere — an older bake '
+  + 'cannot be drawn as water, and the signature bump ends that in one refetch',
+  CONV.sd[0][0], WATER_SD_DRY);
+check('…and the null of a v9 tile is the same sentinel',
+  waterTileFrom(0, 0, 2, { level: [[1, 2], [3, 4]],
+                           sd: [[1, null], [null, 4]] }).sd[0][1], WATER_SD_DRY);
+
+console.log('\n[W4a] the sd twin — the field that says where the water was PAINTED');
+// WHY IT EXISTS (finding F-A). The level is DILATED, so it is defined 4 m past
+// every outline and cannot be read as "here is water"; the ground compositor's
+// material mask names the topmost painted KIND, so a lake whose bed is painted
+// reads (sand, sand) over its whole interior and answers "no water" for the
+// whole lake. Only the distance to the WATER's own outline answers it, and only
+// the bake knows that outline.
+check('inside the lake it is the distance to the nearest edge',
+  rasterSdAt(NW, 22, 22), 2);
+check('…ON the outline it is exactly 0 — the zero level set IS the outline',
+  rasterSdAt(NW, 20, 20), 0);
+check('…and 2 m out on the ring it is negative', rasterSdAt(NW, 18, 20), -2);
+check('…4 m out, the dilation\'s own width', rasterSdAt(NW, 16, 20), -4);
+// PLAIN BILINEAR, not the level's masked mix: the dry sentinel is a NUMBER, so
+// a dry corner pulls the answer NEGATIVE — the right direction — instead of
+// poisoning it the way NaN would. Halfway between a written −4 and an unwritten
+// corner the answer is far below zero and the point reads "outside", which it is.
+check('halfway into the ring, between two written points',
+  rasterSdAt(NW, 17, 20), -3);
+checkBelow('past the ring the plain mix is dragged far negative, never NaN',
+  rasterSdAt(NW, 15, 20), -100);
+checkBool('…and it is a finite number, so no mix can turn into a NaN',
+  Number.isFinite(rasterSdAt(NW, 15, 20)), true);
+check('a point in a tile that has not arrived is DRY, not 0',
+  rasterSdAt(NW, 900, 900), WATER_SD_DRY);
+check('…and so is every point of an empty raster',
+  rasterSdAt(emptyWaterRaster(), 22, 22), WATER_SD_DRY);
+check('…and of none at all', rasterSdAt(null, 22, 22), WATER_SD_DRY);
+// THE GUARANTEE THE LIFT GATE RESTS ON: a point INSIDE the outline can never be
+// dragged negative by a dry corner, because the server's dilation puts a real
+// distance on all four corners of its cell (§ A16.5 point 3).
+let sdWorst = Infinity;
+for (let a = 0; a <= 40; a += 1) {
+  for (let b = 0; b <= 40; b += 1) {
+    sdWorst = Math.min(sdWorst, rasterSdAt(NW, 20 + a * 0.1, 20 + b * 0.1));
+  }
+}
+checkBool(`the bilinear sd is >= 0 at all 1681 probes inside the outline `
+  + `(worst ${sdWorst})`, sdWorst >= 0, true);
 
 // ============================================================================
 // [W5] THE MIP LIMIT IS A PROPERTY OF THE FIELD, not of a renderer (F1)

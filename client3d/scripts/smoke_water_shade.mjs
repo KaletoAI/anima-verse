@@ -219,7 +219,8 @@ function checkNear(label, actual, expected, eps) {
 
 const { shade, plane, mat } = await load();
 const { waterAbsorb, waterFoamAt, waterTintBlend, waterLookFrom, waterTintRgb,
-  packWaterLook, terrainWaterFragmentGlsl, waterInside, WATER_FOAM_MIN_COVER,
+  packWaterLook, terrainWaterFragmentGlsl, waterInside, waterSdGlsl,
+  WATER_FOAM_MIN_COVER, WATER_SD_BAND_MIN_M,
   WATER_LOOK_DEFAULT, WATER_LOOK_TEXELS } = shade;
 const { WATER_EDGE_FADE_M, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
   waterOpaqueDepthM } = plane;
@@ -433,7 +434,7 @@ checkEq('…and a length below 1e-4 is a lake', glsl.includes('bool still = len 
 // The mask names a PAIR and not a layer, and the is_water flag picks the half.
 checkEq('the water half of the mask\'s pair is picked by the is_water flag',
   glsl.includes('return texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 ).z > 0.5;')
-  && glsl.includes('layer = aw ? a : b;'), true);
+  && glsl.includes('layer = twIsWater( a ) ? a : b;'), true);
 // The one place K-A gives GPU work back.
 checkEq('a FULLY absorbed pixel does not read the bed\'s normal at all',
   /if \( twA >= 1\.0 \) return wn;/.test(glsl), true);
@@ -441,60 +442,62 @@ checkEq('…and a dry one reads only the bed\'s',
   glsl.includes('if ( twA <= 0.0 ) {'), true);
 
 // ============================================================================
-// [7] THE GREY RIM SEAM — the water is shaded where it is PAINTED, not where
-//     it happens to have been lifted (finding 2026-08-24)
+// [7] THE SHADING GATE — the water is shaded where it is PAINTED, and the field
+//     that says so is the WATER's, not the ground compositor's (findings F-A/F-B)
 // ============================================================================
-// THE DEFECT. The water raster is dilated: the server writes a level up to 4 m
-// past the authored outline so that every point INSIDE a polygon reads four wet
-// corners on the base lattice. Where the bank under that ring lies below the
-// mirror the terrain is lifted there too, and the shading keyed on the lift
-// alone — so every shore wore a band of centimetre-shallow water, a grey wash
-// (and, until the cover fix of the same day, a white foam lace).
+// THE DEFECT THAT STARTED IT. The water raster is dilated: the server writes a
+// level up to 4 m past the authored outline so that every point INSIDE a
+// polygon reads four wet corners on the base lattice. The shading keyed on the
+// lift alone, so every shore wore a band of centimetre-shallow water — a grey
+// wash, and a white foam lace before the cover fix of the same day.
 //
-// THE GATE. The compositor's mask already answers "which side of the water's
-// own outline is this pixel on", sub-texel and with the same signed distance
-// every other material boundary in the world is cut on. `waterInside` is that
-// question, and its band is the wider of one screen pixel and one sd texel —
-// the payload's `id_step = 2 · sd_step` makes the sd texel half a metre, so a
-// near pixel gets a 0.5 m band and a distant one gets its own footprint.
+// THE FIRST GATE WAS THE WRONG FIELD (finding F-A, "the lake is only a sand
+// surface"). It asked the ground compositor's id mask: which two KINDS meet
+// under this pixel, and which side of them am I on. That mask names the topmost
+// PAINTED kind, so a lake whose bed is painted — a sand shape inside the
+// outline, which is what `bed_kind` describes and what a generated map draws —
+// reads (sand, sand) over its whole interior. Neither half is water, the gate
+// answered 0, and the lake was drawn as its own bed. Measured on that fixture
+// (`app.core.terrain_layers`, lake + painted bed): the pair mid-lake is
+// (1, 1) = (sand, sand).
 //
-// THE HAND TABLE, at pixelM = 0.1 m and texelM = 0.5 m, hence band = 0.5, with
+// THE GATE NOW is the water raster's OWN signed distance — the same field, read
+// by the same sampler, that the vertex stage gates its LIFT on. One question,
+// one field, both stages: a pixel is shaded as water exactly where the ground
+// under it was lifted onto the mirror.
+//
+// THE HAND TABLE, at pixelM = 0.1 m, hence band = max(0.1, 0.5) = 0.5, with
 // t = sd/0.5 + 0.5 and w = t²(3 − 2t):
 //   sd = −2     -> t = −3.5 -> 0        (the ring, 2 m outside: GROUND)
 //   sd = −0.125 -> t = 0.25 -> 0.15625
 //   sd =  0     -> t = 0.5  -> 0.5      (the waterline itself, half and half)
 //   sd = +0.125 -> t = 0.75 -> 0.84375
 //   sd = +0.5   -> t = 1.5  -> 1        (half a metre in: FULL water)
-// and with the water on the B half of the pair every row is 1 − w, because the
-// sign of the distance is what the two halves disagree about and nothing else.
 console.log('\n[7] the shading gate: painted water, not lifted ground');
 const BAND_PIX = 0.1;
-const BAND_TEX = 0.5;
-const insideA = (sd) => waterInside(sd, true, false, BAND_PIX, BAND_TEX);
-const insideB = (sd) => waterInside(sd, false, true, BAND_PIX, BAND_TEX);
-check('2 m out on the flooded ring the pixel is GROUND', insideA(-2), 0);
-check('…an eighth of a metre out, nearly ground', insideA(-0.125), 0.15625);
-check('…on the waterline, half and half', insideA(0), 0.5);
-check('…an eighth in, nearly water', insideA(0.125), 0.84375);
-check('half a metre inside the outline it is FULL water', insideA(0.5), 1);
-check('…and stays full however far in — a lake is unchanged', insideA(20), 1);
-checkEq('the B half is the same table mirrored in the sign',
-  [insideB(2), insideB(0.125), insideB(0), insideB(-0.125), insideB(-0.5)],
-  [0, 0.15625, 0.5, 0.84375, 1]);
-check('two waters meeting are water throughout',
-  waterInside(-3, true, true, BAND_PIX, BAND_TEX), 1);
-check('a pair with no water in it is never water',
-  waterInside(3, false, false, BAND_PIX, BAND_TEX), 0);
+const inside = (sd) => waterInside(sd, BAND_PIX);
+check('2 m out on the flooded ring the pixel is GROUND', inside(-2), 0);
+check('…an eighth of a metre out, nearly ground', inside(-0.125), 0.15625);
+check('…on the waterline, half and half', inside(0), 0.5);
+check('…an eighth in, nearly water', inside(0.125), 0.84375);
+check('half a metre inside the outline it is FULL water', inside(0.5), 1);
+check('…and stays full however far in — a lake is unchanged', inside(20), 1);
+// THE LAKE WITH A PAINTED BED, which is the whole of finding F-A. Mid-lake the
+// distance is the lake's half-width; nothing about what is painted over it
+// enters this function at all.
+check('mid-lake, 20 m from its own outline: FULL water, bed or no bed',
+  inside(20), 1);
+check('…and 10 cm in from the rim it is already', inside(0.1), 0.784);
 // A DISTANT pixel widens the band to its own footprint and no further — the
 // ring stays ground, the interior stays water.
-check('a 2 m pixel still reads the ring as ground',
-  waterInside(-2, true, false, 2, BAND_TEX), 0);
-check('…and half a metre in as 0.84375 of water',
-  waterInside(0.5, true, false, 2, BAND_TEX), 0.84375);
+check('a 2 m pixel still reads the ring as ground', waterInside(-2, 2), 0);
+check('…and half a metre in as 0.84375 of water', waterInside(0.5, 2), 0.84375);
+check('…the band never falls under half a metre, however small the pixel',
+  waterInside(0.125, 1e-6), 0.84375);
 // THE FALL FACE is inside the river's own outline — the steep wet wall between
 // lip and plunge pool is water the author painted, not dilation — so it keeps
 // the waterfall look whole.
-check('the fall face, well inside the outline, is full water', insideA(1.5), 1);
+check('the fall face, well inside the outline, is full water', inside(1.5), 1);
 // RED: the ring pixel really did shade as water before the gate. The lift there
 // is a few centimetres, and the absorption of a few centimetres is small but
 // not zero — which is exactly what a grey wash is.
@@ -503,36 +506,56 @@ const ringAbsorb = waterAbsorb(RING_DEPTH, waterOpaqueDepthM(1.5),
                                WATER_EDGE_FADE_M);
 checkAbove('RED: without the gate the ring pixel carries water absorption',
   ringAbsorb, 0);
-check('…and with it, none at all', ringAbsorb * insideA(-2), 0);
+check('…and with it, none at all', ringAbsorb * inside(-2), 0);
 const ringFoam = waterFoamAt(RING_DEPTH, waterOpaqueDepthM(1.5), WATER_EDGE_FADE_M);
 checkAbove('RED: …and foam', ringFoam, 0);
-check('…which the gate takes with it', ringFoam * insideA(-2), 0);
-// The GLSL says the same three cases and the same band.
-checkEq('the shader spells the two degenerate cases first',
-  glsl.includes('if ( aw && bw ) return 1.0;')
-  && glsl.includes('if ( !aw && !bw ) return 0.0;'), true);
-checkEq('…the band is a pixel or an sd texel, whichever is wider',
-  glsl.includes('float band = max( max( pixelM, uTlodWaterSdGeom.z ), 1e-6 );'), true);
-checkEq('…the easing is the file\'s own smoothstep, not a second curve',
-  glsl.includes('float w = twSmooth( sd / band + 0.5 );'), true);
-checkEq('…and the water half decides the sign', glsl.includes('return aw ? w : 1.0 - w;'),
-  true);
+check('…which the gate takes with it', ringFoam * inside(-2), 0);
+// The GLSL says the same line and the same band.
+checkEq('the shader gate is ONE smoothstep and no cases at all',
+  glsl.includes('float twInside( float sd, float pixelM ) {')
+  && glsl.includes('return twSmooth( sd / band + 0.5 );'), true);
+checkEq('…the band is a pixel or the half-metre floor, whichever is wider',
+  glsl.includes('float band = max( max( pixelM, 0.5 ), 1e-6 );'), true);
+checkEq('RED: the layer pair no longer decides anything about water',
+  /aw\s*\?\s*w\s*:\s*1\.0\s*-\s*w/.test(glsl), false);
 checkEq('the gate multiplies the RIM, so absorption AND foam ride it',
   glsl.includes('float rim = clamp( d / edge, 0.0, 1.0 ) * inside;')
   && glsl.includes('if ( rim <= 0.0 ) return;'), true);
-checkEq('the distance IS read now, from this pixel\'s own id texel',
-  glsl.includes('inside = twInside( twSdAt( vTlodXZ, idIdx ), aw, bw,'), true);
+checkEq('the distance is read from the WATER raster, at this pixel\'s position',
+  glsl.includes('float inside = twInside( twSdAt( vTlodXZ ), '
+    + 'max( length( gx ), length( gy ) ) );'), true);
 checkEq('…by texel fetch and never by a filtered sampler',
   /texture(2D)?\(\s*uTlodWaterSd/.test(glsl), false);
 checkEq('…and the pixel width comes from the world position, not from fwidth(sd)',
-  glsl.includes('max( length( gx ), length( gy ) ) );')
-  && /fwidth\(\s*sd/.test(glsl) === false, true);
-checkEq('outside the mask window there is no gate at all',
-  glsl.includes('float inside = 1.0;'), true);
+  /fwidth\(\s*sd/.test(glsl), false);
+// RED: the compositor's own signed distance is GONE from this program — its
+// window and its byte quantisation are not declared any more.
+checkEq('RED: no uTlodWaterSdGeom, no uTlodWaterSdCode',
+  glsl.includes('uTlodWaterSdGeom') || glsl.includes('uTlodWaterSdCode'), false);
+checkEq('…and the id mask is asked for the LOOK alone',
+  glsl.includes('layer = twIsWater( a ) ? a : b;'), true);
+// THE SAMPLER IS ONE TEXT, included by both stages, so the lift and the shading
+// cannot read the field two ways (`waterSdGlsl`).
+const sdGlsl = waterSdGlsl();
+checkEq('the sd sampler declares only its own texture',
+  sdGlsl.includes('uniform sampler2D uTlodWaterSd;')
+  && sdGlsl.includes('uniform vec4 uTlodWaterGeom') === false, true);
+checkEq('…answers DRY where there is no water field at all',
+  sdGlsl.includes('if ( uTlodWaterGeom.w <= 0.0 ) return TW_SD_DRY;'), true);
+checkEq('…and DRY outside the window instead of clamping an edge texel outward',
+  sdGlsl.includes('if ( fx < 0.0 || fz < 0.0 || fx > cols - 1.0 '
+    + '|| fz > rows - 1.0 ) return TW_SD_DRY;'), true);
+checkEq('…it is bilinear over four PLAIN texels — the sentinel is a number',
+  sdGlsl.split('texelFetch(').length - 1, 4);
+checkEq('…and the fragment includes that one text', glsl.includes(sdGlsl.trim()),
+  true);
+check('the band floor is the half metre the gate was cut on',
+  WATER_SD_BAND_MIN_M, 0.5);
 // Isolation toggle 22 is untouched: it kills the LIFT, so `d` is 0 and the
 // function returns before the gate is ever reached.
 checkEq('toggle 22 still leaves before any of this',
-  glsl.indexOf('if ( d <= 0.0 ) return;') < glsl.indexOf('float inside = 1.0;'), true);
+  glsl.indexOf('if ( d <= 0.0 ) return;')
+    < glsl.indexOf('float inside = twInside('), true);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);
