@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
+import { setFogVeilSky } from './fogVeil';
 import { SHADOW_HALF_M, SHADOW_MAP_PX, snapShadowCentre } from './shadowSnap';
 
 /**
@@ -205,6 +206,10 @@ export class Engine {
     // Water surfaces mirror the sky (Fresnel in the shared material) — that
     // alone turns the lake orange in the evening and dark at night.
     setSurfaceSky(sky.getHex());
+    // …and so does the exploration veil: haze is the air between the eye and
+    // the ground, so it takes the colour of that air rather than a grey of its
+    // own that would be wrong twice a day (`scene/fogVeil.ts`).
+    setFogVeilSky(sky.getHex());
 
     this.nightFactor = THREE.MathUtils.clamp(1 - day * 3, 0, 1);
     this.onDayNight?.(this.nightFactor);

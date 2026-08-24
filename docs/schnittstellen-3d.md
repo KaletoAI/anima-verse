@@ -152,11 +152,12 @@
 >    wird an einem **garantiert inneren, deterministischen Punkt** gelesen
 >    (nicht am Zentroid — der liegt bei konkaven Formen ggf. außerhalb).
 >    `height_sig` hasht die Polygonpunkte.
-> 8. **Fog of War ist DEAKTIVIERT** (E1.3): der Client zeichnet keinen
->    Schleier mehr, § A12/§ A1.6 ruhen bis zu einer eigenen Fog-Runde.
->    **Die Wissens-Filterung bleibt**: was der Server wegen
->    `known_locations` nicht ausliefert, existiert für den Client weiterhin
->    nicht — nur die VISUALISIERUNG des Unbekannten entfällt.
+> 8. **Fog of War war DEAKTIVIERT** (E1.3) und ist seit 2026-08-24 als
+>    **Dunst** zurück (`plan-fog-schleier-v2.md`, § A12): halbtransparent
+>    über unerkundeten Zellen, zoomabhängig, und der Server filtert die
+>    Figuren darunter weg. **Die Wissens-Filterung galt durchgehend**: was
+>    der Server wegen `known_locations` nicht ausliefert, existiert für den
+>    Client nicht.
 > 9. **`problems[]` neu: `room_outside_boundary`** — ein Raum, dessen
 >    Grundriss über den Location-Umriss ragt (Warnung, kein Fehler).
 >    Der Grundriss-Editor zeichnet im Viewport der Boundary-Bounding-Box
@@ -1091,7 +1092,10 @@ Vollständig in § A12. Für die Kartengeometrie zählt:
 - `world_bounds` wird **vor** dem Filter gerechnet: der Kartenrahmen darf
   nicht springen, sobald der Avatar etwas entdeckt.
 - **Gelände wird nie gefoggt** — `GET /play/terrain` kennt keinen
-  Fog-Modus.
+  Fog-Modus. Der Dunst (seit 2026-08-24) ändert daran nichts: er liegt als
+  Sicht-Effekt ÜBER der Landschaft, die Geometrie kommt vollständig.
+- **Figuren dagegen schon**: seit 2026-08-24 filtert der Server jede Figur
+  weg, die in einer unerkundeten Zelle steht (§ A12, Zeile `characters[]`).
 
 ### A1.7 Editor-CRUD (Game-Admin, E2)
 
@@ -2399,7 +2403,7 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | Feld | Gefiltert? | Regel |
 |---|---|---|
 | `locations[]` | ja | **platzierte** Orte (beide `pos_x`/`pos_z` gesetzt) nur wenn sichtbar. Orte OHNE Meterposition passieren immer — sie stehen nicht auf der Karte und verraten nichts (Template-Stellvertreter) |
-| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): seit **E6** die Sichtweiten-Regel unten — nur wer nah genug am Avatar steht, ist da; Reisende bleiben (§ A11), solange ein Avatar aktiv ist |
+| `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): seit **E6** die Sichtweiten-Regel unten — nur wer nah genug am Avatar steht, ist da; Reisende bleiben (§ A11), solange ein Avatar aktiv ist. **Seit 2026-08-24 zusätzlich der DUNST-Filter** (`plan-fog-schleier-v2.md`, unten): wessen Punkt in einer vom Avatar **unerkundeten** 64-m-Zelle liegt, fehlt ebenfalls — Ausnahmen sind nur der Avatar selbst, wer im **selben Ort** wie der Avatar steht, und wer gar keinen Punkt hat. Diese Regel gilt auch für **Reisende**: eine Figur, die über gezeichneten Dunst läuft, darf nicht sichtbar sein |
 | `characters[].movement_target_id` | nein | das Reiseziel bleibt — der Client zeichnet die Richtung |
 | `characters[].movement_target_name` | ja | `""`, wenn das Ziel nicht sichtbar ist. Ohne diese Regel leckten Ortsnamen über die Figurenliste |
 | `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber bei **jedem außer dem Avatar** sind ALLE acht Zahlen/Listen `null`: `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`. Es bleibt `target_id` — opak, wie `movement_target_id`. Begründung und Feldliste: § A11 („Die ROUTE ist Avatar-Wissen — und ihre ZAHLEN auch") |
@@ -2453,15 +2457,28 @@ einer leeren Fläche.
 
 ### Der Schleier hat ein Gedächtnis — neu 2026-08-16
 
-> **Stand seit 2026-08-19 (v6 Nr. 8 / E1.3): der Client zeichnet KEINEN
-> Schleier mehr** — `game/fog.ts`, die Wolken und der Client-Speicher dieses
-> Payloads sind gelöscht, die Fog-Neukonzeption bekommt eine eigene Runde. Das
-> **Gedächtnis selbst bleibt Server-Wahrheit und wird weiter geschrieben und
-> ausgeliefert**: `explored_cells`, `explored_sig` und `GET /play/explored`
-> gelten unverändert wie unten beschrieben, damit eine Welt, die heute gespielt
-> wird, ihre erkundeten Zellen nicht erst ab dem Tag der neuen Fog-Runde kennt.
-> Der Rest dieses Abschnitts beschreibt also den Vertrag, nicht das aktuelle
-> Bild auf dem Schirm.
+> **Stand seit 2026-08-24 (`plan-fog-schleier-v2.md`): der Schleier ist
+> zurück — als DUNST, nicht als Decke.** Zwischen 2026-08-19 (v6 Nr. 8 /
+> E1.3) und diesem Tag zeichnete der Client gar nichts; das Gedächtnis lief
+> ohne Leser weiter, damit eine Welt, die in der Zwischenzeit gespielt wurde,
+> ihre erkundeten Zellen nicht erst ab dem Tag der Neukonzeption kennt. Neu
+> sind zwei Hälften, und die erste ist die tragende:
+>
+> 1. **Der Server filtert FIGUREN** (siehe Zeile `characters[]` oben): wer in
+>    einer für den Avatar unerkundeten Zelle steht, verlässt den
+>    Spieler-Payload. Der Dunst ist kein Vorhang, den ein Client wegziehen
+>    könnte — was darunter liegt, verlässt den Server nicht.
+> 2. **Der Client zeichnet Dunst** (`client3d/src/scene/fogVeil.ts`): ein
+>    halbtransparenter Schleier über unerkundeten Zellen, dessen Deckkraft mit
+>    der Kamerahöhe wächst (0 in Bodennähe, voll in der Übersicht). Die
+>    Geländeform bleibt lesbar, Props und Bewuchs bleiben gezeichnet — nur die
+>    Figuren fehlen, und die fehlen schon im Payload.
+>
+> Der v2-Dunst spart **nur die erkundeten Zellen** aus, nicht mehr zusätzlich
+> die Grundflächen bekannter Orte: ein bekannter Ort steht mit seinem Gebäude
+> und seiner Bodenplatte ohnehin sichtbar auf der Karte (die stehen ÜBER dem
+> Gelände und tragen den Dunst nicht), und eine zweite Aussparungsregel wäre
+> eine zweite Wahrheit darüber, was der Avatar gesehen hat.
 
 Der **Übersichts-Schleier** (nur `client3d`, nur die Übersichts-Kamera; im
 verkörperten Nahmodus gab es ohnehin nie einen Schleier) spart seit

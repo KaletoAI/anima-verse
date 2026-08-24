@@ -351,10 +351,17 @@ export interface WorldMap {
   /** `true` = this is the filtered view, so unknown places stay hidden.
    *  `false` = the admin's unfiltered view (`?all=1`).
    *
-   *  NOTHING DRAWS ON IT any more (contract v6 Nr. 8, decision E1.3): the veil
-   *  is gone, and what the server withholds simply has no row here. The field
-   *  stays because it is the payload's own shape. */
+   *  THE VEIL DRAWS ON IT AGAIN (plan-fog-schleier-v2, 2026-08-24): a view in
+   *  which nothing is withheld gets no haze either — hazing it would be the
+   *  picture of a rule that is not running. What the server DOES withhold
+   *  still simply has no row here. */
   fogged: boolean;
+  /** Signature of the avatar's EXPLORATION MEMORY (§ A12) — the same trigger
+   *  shape as `terrain_sig`: when it moves, `GET /play/explored` is refetched
+   *  and the veil opens over the newly walked cells. `""` without a taken-over
+   *  character, and missing on an older server (which is the same state: no
+   *  memory to draw on). */
+  explored_sig?: string;
   /** The two WALK LIMITS the server judges every reported point with
    *  (`game.max_step_height_m` / `game.max_slope_deg`, § A12/§ A15). The
    *  client mirrors the height gate with them so the figure never walks into

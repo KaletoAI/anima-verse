@@ -33,6 +33,7 @@ import { isTypingTarget, type Engine } from './scene/engine';
 import type { Ground } from './scene/ground';
 import type { Tile } from './scene/tiles';
 import { setLayerCompositorFlat, setLayerSurfaceFiltering } from './scene/layerGround';
+import { setFogVeilDebugOff, setFogVeilSky } from './scene/fogVeil';
 import { setNaturalGroundDebugOff } from './scene/naturalGround';
 import { setTerrainLodDebug } from './scene/terrainLod';
 import { newFpsMeter, pushFrame } from './game/perfstats';
@@ -351,6 +352,7 @@ export function initIsolation(deps: IsolationDeps): void {
     setTerrainLodDebug({ flatNormal: on(6), noMorph: on(9) });
     setLayerCompositorFlat(on(7));
     setNaturalGroundDebugOff(on(8));
+    setFogVeilDebugOff(on(20));
     ground.setTerrainFrozen(on(10));
     setLayerSurfaceFiltering(on(18));
     if (!on(19)) {
@@ -380,6 +382,10 @@ export function initIsolation(deps: IsolationDeps): void {
       // …and the water: its mirror is a Fresnel blend towards the sky colour,
       // so a lake that stays blue under a magenta sky is a finding of its own.
       setSurfaceSky(ISO_MAGENTA);
+      // …and the exploration veil, which takes the sky colour for the same
+      // reason the water does: haze that stayed blue under a magenta sky would
+      // read as ground rather than as air.
+      setFogVeilSky(ISO_MAGENTA);
     }
     if (on(4)) {
       engine.hemi.intensity = 0;

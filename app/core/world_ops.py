@@ -191,7 +191,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     Fog of war (§ A12): with ``show_all=False`` the payload only carries what
     the avatar knows — placed locations pass through
     ``location_visible_to_character``, characters and events follow their
-    location. ``show_all=True`` is the unfiltered admin view. ``world_bounds``
+    location, and a character standing on ground the avatar has never
+    EXPLORED (``core/exploration``, the 64 m cells the 3D client draws its
+    haze over) is dropped as well unless it shares the avatar's location.
+    ``show_all=True`` is the unfiltered admin view. ``world_bounds``
     is always computed BEFORE that filter, so the map keeps its extent no
     matter how much of it is still dark — and it is not boundaries alone: a
     placed location contributes the world-space box of its DRAWN boundary
@@ -207,7 +210,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         get_character_current_room, get_character_current_feeling,
     )
     from app.core.discovery import get_discovery_range_m
-    from app.core.exploration import explored_sig
+    from app.core.exploration import explored_sig, point_explored, seen_cells
     from app.core.backdrop import get_backdrop
     from app.core.relief import get_max_slope_deg, get_max_step_height_m
     from app.core.expression_pose_maps import resolve_pose_animation
@@ -394,16 +397,52 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # second one beside it; 0 switches sight off. Read once per request, like
     # the avatar's own point the distance is measured from.
     _sight_m = get_discovery_range_m() if (fogged and avatar) else 0.0
-    _avatar_pos = get_character_pos(avatar) if _sight_m > 0 else None
+    # The avatar's own point — read whenever there IS an avatar and a filter,
+    # because the veil gate below needs it too (its near view), not only the
+    # sight rule. `_in_sight` therefore says out loud that a range of 0 is no
+    # sight line instead of leaning on a `None` point to mean it.
+    _avatar_pos = get_character_pos(avatar) if (fogged and avatar) else None
 
     def _in_sight(p: Optional[Dict[str, float]]) -> bool:
         """Is a metre point within the avatar's sight range? False without a
         range (0 = off), without the avatar's own point, and for a character
         the map does not place — none of the three is a sight line."""
-        if not (_avatar_pos and p):
+        if _sight_m <= 0 or not (_avatar_pos and p):
             return False
         return math.hypot(float(p["x"]) - float(_avatar_pos["x"]),
                           float(p["z"]) - float(_avatar_pos["z"])) <= _sight_m
+
+    # THE VEIL HIDES FIGURES, TOO (plan-fog-schleier-v2.md § 2). The 3D client
+    # hazes over every 64 m cell the avatar has not explored — and a figure
+    # drawn crisply on hazed ground would be exactly the leak the haze is
+    # there to prevent, so the SERVER decides it: a character standing in an
+    # unexplored cell does not reach the player payload at all. It is the
+    # same knowledge filter as the rest of § A12, one step finer — where
+    # `known_locations` says which PLACES the avatar knows, the exploration
+    # memory says which GROUND it has seen.
+    #
+    # Three exceptions, and there are no others:
+    #   * the avatar itself (it is never hidden from itself),
+    #   * anybody in the avatar's own location — a room-mate is not seen
+    #     across the map but stood next to, and the veil is a map effect,
+    #   * a character the map does not place (no point): nothing to haze.
+    # The near view rides in through `seen_cells` — see there for why the
+    # stored memory alone would blink.
+    _seen: Optional[set] = None
+    _avatar_loc = ""
+    if fogged and avatar:
+        _seen = seen_cells(avatar, _avatar_pos)
+        _avatar_loc = get_character_current_location(avatar) or ""
+
+    def _under_veil(loc_id: str, p: Optional[Dict[str, float]]) -> bool:
+        """Is this character's ground still unexplored — and is it therefore
+        under the haze? Always False without a filter or without an avatar;
+        those two views have no veil to be under."""
+        if _seen is None:
+            return False
+        if loc_id and loc_id == _avatar_loc:
+            return False
+        return not point_explored(_seen, p)
 
     characters = []
     for name in list_available_characters():
@@ -449,6 +488,15 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # The avatar always sees itself; everyone else only where the avatar
         # can look. Standing in an unknown place hides a character entirely.
         elif fogged and name != avatar and loc_id not in visible_ids:
+            continue
+        # …and whatever the two gates above let through still has to stand on
+        # ground the avatar has seen (see `_under_veil`). This is deliberately
+        # the LAST word and applies to a traveller as well: § A11 keeps a
+        # traveller's row so it does not blink out mid-trip under the SIGHT
+        # rule, but a figure crossing ground that is drawn as haze is not a
+        # figure the player may see — the veil would be a curtain with a hole
+        # in it.
+        if name != avatar and _under_veil(loc_id, pos):
             continue
         mt = get_movement_target(name) or ""
         prof = get_character_profile_image(name) or ""

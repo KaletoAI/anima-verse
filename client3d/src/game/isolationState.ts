@@ -20,17 +20,20 @@
  */
 
 /** Lowest and highest id the panel knows. Anything outside is dropped on
- *  decode rather than clamped — a `20` in a shared link is a typo or a link
- *  from another client, and honouring it as `19` would isolate the wrong
+ *  decode rather than clamped — a `21` in a shared link is a typo or a link
+ *  from another client, and honouring it as `20` would isolate the wrong
  *  suspect without saying so.
  *
  *  20 WAS "Terrain culling off" for one day (2026-08-22). It did its job: with
  *  it on the ground stopped vanishing, which is what identified the terrain's
- *  per-piece frustum cull as the cause. The cull is deleted, so the switch has
- *  nothing left to switch and the id is retired rather than kept as a no-op —
- *  a suspect list whose entries do nothing is worse than a shorter one. */
+ *  per-piece frustum cull as the cause. The cull is deleted, so that switch
+ *  had nothing left to switch — and the id was retired rather than kept as a
+ *  no-op, because a suspect list whose entries do nothing is worse than a
+ *  shorter one. It is REUSED here for the exploration veil (2026-08-24): the
+ *  numbers are a suspect list, not a register of everything this client has
+ *  ever had, and the retired switch left no state a link could still carry. */
 export const ISO_MIN_ID = 1;
-export const ISO_MAX_ID = 19;
+export const ISO_MAX_ID = 20;
 
 /** Where a chosen set is kept between reloads. */
 export const ISO_STORAGE_KEY = 'av3d.debug.isolation.v1';
@@ -149,6 +152,12 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
     cost: 'upload' },
   { id: 19, label: 'Wireframe terrain',
     note: 'material.wireframe on the terrain material — the crack/hole test.',
+    cost: 'none' },
+  { id: 20, label: 'Fog off',
+    note: 'uFogAlpha = 0 — the exploration veil reads no cells texture and '
+      + 'mixes nothing into the ground colour. Switching it back on restores '
+      + 'whatever the camera height says NOW, not what it said when the toggle '
+      + 'was flipped.',
     cost: 'none' },
 ];
 

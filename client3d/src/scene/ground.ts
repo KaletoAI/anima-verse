@@ -98,6 +98,7 @@ import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
 import { applyTerrainLayers, disposeLayerGround, layerIndexOfKind,
   setLayerOverview, setLayerTable, setLayerTiles,
   topLayerIndexAt } from './layerGround';
+import { applyFogVeil } from './fogVeil';
 import { applyNaturalGround, setNaturalGroundField } from './naturalGround';
 import { isWaterClass } from './naturalGroundMath';
 import { applyOcclusionFade } from './occlusion';
@@ -1352,6 +1353,12 @@ export function createGround(): Ground {
     // — a shoreline that dissolved into the meadow behind it would be a bank
     // nobody could see, and the water shader is where a shore would belong.
     if (!isWaterClass(spec?.class)) applyNaturalGround(mat);
+    // …and the VEIL on top of both (plan-fog-schleier-v2 § 3): haze over the
+    // cells the avatar has never walked. It writes `outgoingLight` several
+    // chunks after everything above, so it neither depends on the order of the
+    // patches before it nor changes it. Water steps aside here for the same
+    // reason it steps aside above: its own shader owns that anchor.
+    if (!isWaterClass(spec?.class)) applyFogVeil(mat);
     sink.push(mat);
     return mat;
   }
@@ -1409,6 +1416,11 @@ export function createGround(): Ground {
     const mat = surfaceMaterial(THREE, { material: null, map: null,
                                          color: 0xffffff });
     patchHole(mat);
+    // The veil (plan-fog-schleier-v2 § 3) — the ONE ground of the open world is
+    // what it is really for. Its anchor is `opaque_fragment`, so it stands
+    // outside the ordering question of the note below and its place in the
+    // chain says nothing: it hazes the finished lit colour, whoever wrote it.
+    applyFogVeil(mat);
     applyNaturalGround(mat);
     // LAST IN THE CHAIN AND THEREFORE FIRST IN THE SHADER: every ground patch
     // inserts its body directly after `#include <map_fragment>`, so the one

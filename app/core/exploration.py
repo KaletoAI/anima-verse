@@ -6,12 +6,19 @@ forever, however often one walked through it (finding B14). This module is the
 memory that was missing — the server's record of where somebody has actually
 stood, so the veil can spare that ground too.
 
-**THE VEIL ITSELF IS GONE FOR NOW** (2026-08-19, contract v6 Nr. 8 / decision
-E1.3: ``client3d/src/game/fog.ts`` and its client-side store are deleted, the
-fog gets a round of its own). The MEMORY stays and keeps being written and
-served — a world played today must not start remembering only on the day the
-new veil arrives. So this module has no consumer at the moment; that is
-deliberate, not a leftover (see ``docs/schnittstellen-3d.md`` § A12).
+**THE VEIL IS BACK, AND IT IS TWO CONSUMERS** (2026-08-24,
+``plan-fog-schleier-v2.md``; between 2026-08-19 and that day the memory ran
+without a single reader, decision E1.3, and kept being written so that a world
+played in the meantime would not start remembering only on the day the new
+veil arrived):
+
+  * the PICTURE — ``client3d/src/scene/fogVeil.ts`` hazes over every cell the
+    avatar has not explored, fetched through ``GET /play/explored`` whenever
+    ``explored_sig`` moves;
+  * the FILTER — :func:`seen_cells` / :func:`point_explored` drop the FIGURES
+    standing on that ground out of the player's worldmap payload
+    (``core/world_ops.build_worldmap_payload``). The haze is not a curtain a
+    client could pull aside: what is under it never leaves the server.
 
 **THE UNIT IS A 64 m CELL, ANCHORED AT THE WORLD ORIGIN.** The same edge length
 and the same anchor as the veil's own tiling (``FOG_TILE_M``) and the automatic
@@ -51,7 +58,7 @@ order of magnitude the payload of ``GET /play/explored`` was measured against
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 
@@ -163,6 +170,83 @@ def explored_cells(character_name: str) -> List[str]:
         "SELECT cx, cz FROM explored_cells WHERE character_id=? "
         "ORDER BY cx, cz", (character_name,)).fetchall()
     return [cell_key(r[0], r[1]) for r in rows]
+
+
+def seen_cells(character_name: str,
+               pos: Optional[Dict[str, float]] = None) -> Set[Tuple[int, int]]:
+    """Every cell that counts as SEEN for the veil — the memory PLUS the near
+    view of the point the character stands on right now.
+
+    The union is the point of this function, and it is not a convenience: the
+    memory is written by the two callers that persist a position
+    (:func:`mark_explored`), so between "the avatar moved" and "the report was
+    accepted" there is a window in which the ground under its own feet is not
+    yet in the table. A filter that read the table alone would hide the
+    neighbour standing next to the avatar for that window — a figure that
+    blinks. The near view is exactly what :func:`mark_explored` will write, so
+    the union anticipates it rather than inventing a second rule.
+
+    ``pos`` is the character's own metre point or ``None`` (off the map, or a
+    character with no point at all); without it the answer is the stored
+    memory unchanged.
+
+    WHAT IT COSTS, said out loud: ONE read of the whole memory per worldmap
+    payload — i.e. per client per three-second poll. On the worlds this runs on
+    that is well under a millisecond; the 17 ms measured in
+    :func:`explored_cells` belongs to a synthetic 60 000-cell world (245 km² of
+    walked ground) and is still smaller than the per-character profile loads
+    the same payload does anyway. If such a world ever appears, the cheap fix
+    is a memo keyed by :func:`explored_sig` — the signature IS the revision
+    number of this table — and not a second, smaller filter beside this one.
+    """
+    cells = explored_cell_set(character_name)
+    if pos:
+        try:
+            x, z = float(pos["x"]), float(pos["z"])
+        except (KeyError, TypeError, ValueError):
+            return cells
+        if math.isfinite(x) and math.isfinite(z):
+            cells.update(cells_around(x, z))
+    return cells
+
+
+def explored_cell_set(character_name: str) -> Set[Tuple[int, int]]:
+    """The same rows as :func:`explored_cells`, as a lookup set of index pairs.
+
+    The wire form is a string because the client builds a ``Set`` of strings
+    out of it; the SERVER's own filter asks "is this point in an explored
+    cell?" thousands of times per payload and would have to format a key per
+    question. Same query, one representation each — never a parse of the
+    other's.
+    """
+    if not character_name:
+        return set()
+    from app.core.db import get_connection
+    rows = get_connection().execute(
+        "SELECT cx, cz FROM explored_cells WHERE character_id=?",
+        (character_name,)).fetchall()
+    return {(r[0], r[1]) for r in rows}
+
+
+def point_explored(cells: Set[Tuple[int, int]],
+                   pos: Optional[Dict[str, float]]) -> bool:
+    """Does ``pos`` lie in one of ``cells``?
+
+    A point that does not exist is NOT hidden ground: a character the map does
+    not place (an unplaced location's inhabitant) has no cell to be judged in,
+    and answering ``False`` would make the veil's figure filter swallow it for
+    a reason that has nothing to do with the veil. Same for a non-finite
+    coordinate.
+    """
+    if not pos:
+        return True
+    try:
+        x, z = float(pos["x"]), float(pos["z"])
+    except (KeyError, TypeError, ValueError):
+        return True
+    if not (math.isfinite(x) and math.isfinite(z)):
+        return True
+    return (cell_of(x), cell_of(z)) in cells
 
 
 def explored_sig(character_name: str) -> str:

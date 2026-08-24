@@ -38,6 +38,8 @@ import {
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
 import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
+import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
+  tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
@@ -1196,18 +1198,68 @@ async function startApp(username: string, role: string) {
   for (const loc of placeable) addTile(loc);
   engine.setPickables([...tiles.values()].map((t) => t.group));
 
-  // --- NO VEIL (contract v6 Nr. 8, decision E1.3) ---------------------------
+  // --- THE VEIL (plan-fog-schleier-v2.md, § A12) -----------------------------
   //
-  // The client draws no fog of war any more: § A12/§ A1.6 rest until a round of
-  // their own. What went with it is only the PICTURE — the cloud quads
-  // (`game/fogClouds.ts`), the veil geometry (`game/fog.ts`) and the avatar's
-  // exploration memory that cut holes into it (`GET /play/explored`) are all
-  // deleted rather than switched off.
+  // Haze over the 64 m cells the avatar has never walked. The PICTURE is four
+  // uniforms in the ground shader (`scene/fogVeil.ts`); what lives here is the
+  // wiring — where the cells come from and when they are asked for.
   //
-  // THE KNOWLEDGE FILTER STAYS, and it was always the load-bearing half: what
-  // the server withholds because of `known_locations` never reaches this file,
-  // so an undiscovered place has no row, no tile and no dot on the minimap. It
-  // simply is not drawn instead of being drawn under a cover.
+  // THE KNOWLEDGE FILTER IS STILL THE LOAD-BEARING HALF, and now it has a
+  // second floor: what the server withholds because of `known_locations` never
+  // reaches this file, and since 2026-08-24 neither does a FIGURE standing on
+  // ground this avatar has not explored (§ A12). So the veil never has to hide
+  // anybody — it only has to look like the reason.
+  //
+  // ONE SIGNATURE, ONE REFETCH — the pattern of `terrain_sig`/`height_sig`:
+  // the flat, complete cell list is far too big for the three-second poll, so
+  // the poll carries nothing but `explored_sig` and this asks for the list only
+  // when that moved. An empty signature (no avatar, or an older server) is a
+  // memory of nothing, which is a fully veiled world and the honest picture of
+  // knowing nothing.
+  let exploredSig: string | null = null;
+  let exploredBusy = false;
+
+  async function syncExplored(map: WorldMap): Promise<void> {
+    // The admin's unfiltered view has no veil at all, so it needs no memory
+    // either — and asking for one would be asking whose.
+    setFogVeilFogged(map.fogged !== false);
+    const sig = map.explored_sig ?? '';
+    if (sig === exploredSig || exploredBusy) return;
+    if (!sig) {
+      exploredSig = sig;
+      setFogVeilCells([]);
+      return;
+    }
+    exploredBusy = true;
+    try {
+      const payload = await api.fetchExplored();
+      // The SERVER's signature, not the one the poll carried: between poll and
+      // answer the avatar may have walked into another cell, and storing the
+      // older number would refetch the same list once more for nothing.
+      exploredSig = payload.sig ?? sig;
+      setFogVeilCells(payload.cells ?? []);
+    } catch (e) {
+      // A veil that still covers walked ground is last week's picture, not a
+      // wrong one — and the figures on it are filtered by the server whatever
+      // this client believes. So: keep what stands, try again next poll.
+      console.warn('[fog] explored cells could not be fetched', e);
+    } finally {
+      exploredBusy = false;
+    }
+  }
+  void syncExplored(firstMap);
+
+  // The veil's STRENGTH is a camera question and therefore a per-frame one:
+  // how high the eye stands above the point it looks at. `engine.target` rides
+  // on the ground (the camera orbits a point on the terrain), so the
+  // difference is the height above the ground being looked at — no height
+  // sample, no ray, two subtractions. `fogVeilMath` turns it into an opacity;
+  // both ends of that ramp are this file's own zoom tiers (see there).
+  // The tick beside it advances the crossfade of a memory that has just grown.
+  engine.addFrameHook((dt) => {
+    tickFogVeil(dt);
+    setFogVeilCameraHeight(engine.camera.position.y - engine.target.y);
+  });
 
   /**
    * The two WALK LIMITS of the world (§ A12): how high a step the figure
@@ -1736,6 +1788,9 @@ async function startApp(username: string, role: string) {
     // of its own — `terrain_sig` does not move when a location does.
     void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations,
                             map.height_sig ?? '');
+    // The avatar's exploration memory travels the same way — on its own
+    // signature, never in the poll (see `syncExplored`).
+    void syncExplored(map);
     // The world props (§ A9a) ride IN this payload rather than behind their
     // signature — `world_props_sig` only decides whether anything is rebuilt.
     worldPropsLayer.sync(map.world_props, map.world_props_sig ?? '');
@@ -2747,6 +2802,10 @@ async function startApp(username: string, role: string) {
       // areas stood in the frame of the view one had just left.
       void terrainGround.sync(map.terrain_sig, worldBounds, mapLocations,
                               map.height_sig ?? '');
+      // …and with it the veil: the switch into the admin's unfiltered view
+      // takes the haze away in the same frame as the tiles it reveals, instead
+      // of leaving a hazed world standing over a map that hides nothing.
+      void syncExplored(map);
       worldPropsLayer.sync(map.world_props, map.world_props_sig ?? '');
       takeWalkLimits(map);
       takeBackdrop(map);
