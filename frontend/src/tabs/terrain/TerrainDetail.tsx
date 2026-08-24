@@ -35,9 +35,11 @@
  * area chip of the map itself — said out loud in the Vegetation section,
  * because that is where it used to be typed.
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
+import { ModelPicker } from '../../components/ModelPicker'
+import type { PickerOption } from '../../components/ModelPicker'
 import { useI18n } from '../../i18n/I18nProvider'
 import {
   SHORE_RAMP_DEFAULT_M, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
@@ -304,6 +306,37 @@ function shoreRampHint(t: (s: string) => string): string {
     .replace('{def}', String(SHORE_RAMP_DEFAULT_M))
 }
 
+/** The options of one animation picker: every kind the clip library holds,
+ *  plus the CURRENT value whenever the library does not hold it.
+ *
+ *  Same rule as the surface texture above, and for the same reason (finding
+ *  2026-08-24): a list can only ever offer what exists TODAY, so a clip kind
+ *  imported tomorrow must stay nameable today. The unknown value therefore
+ *  stays selected and selectable instead of being refused — it is only MARKED
+ *  "(missing)", and only when the library actually answered: with an empty
+ *  list "not in the list" is no evidence at all.
+ */
+function clipOptions(kinds: string[], value: string,
+                     t: (s: string) => string): PickerOption[] {
+  const opts: PickerOption[] = kinds.map((k) => ({ value: k, label: k }))
+  const clean = value.trim()
+  if (clean && !kinds.includes(clean)) {
+    opts.unshift({
+      value: clean,
+      label: clean,
+      sublabel: kinds.length > 0 ? t('(missing)') : undefined,
+    })
+  }
+  return opts
+}
+
+/** Whether a stored clip kind is one the ANSWERED library does not know — the
+ *  condition for both the "(missing)" mark and the warning line under it. */
+function clipMissing(kinds: string[], value: string): boolean {
+  const clean = value.trim()
+  return !!clean && kinds.length > 0 && !kinds.includes(clean)
+}
+
 export interface TerrainDetailProps {
   /** The entry being edited, or `null` for the create form. */
   type: TerrainType | null
@@ -318,6 +351,11 @@ export interface TerrainDetailProps {
    *  "no list" are not the same statement. A stored id is still offered and
    *  still selected in that case, just without a verdict on it. */
   surfaces: SurfaceKind[]
+  /** The clip kinds the shared animation library holds (`kinds` of `GET
+   *  /assets/animation-clips`), for the two animation pickers. Empty while it
+   *  loads or after a failed fetch — and then nothing is marked missing, the
+   *  same reading as `surfaces`. */
+  clipKinds: string[]
   busy: boolean
   /** Write the entry; answers the SANITIZED row the server stored, or `null`
    *  when the write failed (the caller has already said so). */
@@ -331,7 +369,7 @@ export interface TerrainDetailProps {
 }
 
 export function TerrainDetail({
-  type, source, existingKinds, surfaces, busy,
+  type, source, existingKinds, surfaces, clipKinds, busy,
   onSave, onReset, onCancel,
 }: TerrainDetailProps) {
   const { t } = useI18n()
@@ -375,6 +413,16 @@ export function TerrainDetail({
   // that actually answered can make it: with an empty list "not in the list"
   // is no evidence at all, so nothing gets marked.
   const surfaceMissing = surfaceUnlisted && surfaces.length > 0
+
+  // The two clip pickers. Their vocabulary is OPEN (`animation_clips`: a kind
+  // is just a file name), so both are free-typing pickers over the library
+  // rather than a closed list.
+  const moveAnimOptions = useMemo(
+    () => clipOptions(clipKinds, moveAnim, t), [clipKinds, moveAnim, t])
+  const idleAnimOptions = useMemo(
+    () => clipOptions(clipKinds, idleAnim, t), [clipKinds, idleAnim, t])
+  const moveAnimMissing = clipMissing(clipKinds, moveAnim)
+  const idleAnimMissing = clipMissing(clipKinds, idleAnim)
 
   // A field the user cannot fix by typing further is not "dirty", it is
   // wrong — but it still has to enable `Save` so the marking is reachable.
@@ -644,27 +692,48 @@ export function TerrainDetail({
               label={t('Move animation')}
               hint={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
             >
-              <input
-                className="ga-input"
-                maxLength={ANIM_MAX}
+              {/* The clip LIBRARY as the list, typing still allowed: the clip
+                  vocabulary is open (a kind is a file name), so a ground may
+                  name a clip that is imported next week. */}
+              <ModelPicker
+                options={moveAnimOptions}
                 value={moveAnim}
+                onChange={setMoveAnim}
+                allowFree
+                maxLength={ANIM_MAX}
+                emptyLabel={t('none (walk / run)')}
                 placeholder={t('walk / run')}
-                onChange={(e) => setMoveAnim(e.target.value)}
+                title={t('A clip kind of the shared animation library — or any name typed here.')}
               />
             </Field>
             <Field
               label={t('Idle animation')}
               hint={t('Animation clip a figure STANDING on this ground plays instead of its own — e.g. “treading-water” on water. Empty = the activity or idle clip as usual.')}
             >
-              <input
-                className="ga-input"
-                maxLength={ANIM_MAX}
+              <ModelPicker
+                options={idleAnimOptions}
                 value={idleAnim}
+                onChange={setIdleAnim}
+                allowFree
+                maxLength={ANIM_MAX}
+                emptyLabel={t('none (idle / activity)')}
                 placeholder={t('idle / activity')}
-                onChange={(e) => setIdleAnim(e.target.value)}
+                title={t('A clip kind of the shared animation library — or any name typed here.')}
               />
             </Field>
           </div>
+          {/* Marked, never refused — the surface texture's rule one section
+              up. A kind the library does not hold is still stored and still
+              shown; only an ANSWERED library gets to call it missing. */}
+          {[moveAnimMissing ? moveAnim.trim() : '',
+            idleAnimMissing ? idleAnim.trim() : '']
+            .filter((k, i, all) => k && all.indexOf(k) === i)
+            .map((k) => (
+              <div className="ga-field-hint ga-field-warn" key={k}>
+                {t('“{kind}” is not in the clip library — figures here play their usual clips until a clip of that kind is imported.')
+                  .replace('{kind}', k)}
+              </div>
+            ))}
           <div className="ga-form-row">
             <Field label={t('Sink move (m)')} compact hint={moveSinkHint(t)}>
               <input

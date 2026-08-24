@@ -19,6 +19,10 @@
  *   - `GET /assets/surface-textures` — the library the Surface picker offers.
  *     A failed fetch leaves the picker with "none" alone and marks NOTHING as
  *     missing: an empty list is not evidence that a stored id is gone.
+ *   - `GET /assets/animation-clips` — its `kinds`, the vocabulary the two
+ *     animation pickers of "Movement & water" offer. Same rule as the surface
+ *     library, and for the same reason: the list is what exists TODAY, so an
+ *     unknown kind stays typeable and an empty answer marks nothing.
  *
  * IT NO LONGER FETCHES `GET /world/height-areas` (2026-08-23). That fetch
  * existed for `tile_step_m` + `max_slope_deg`, the two numbers the micro-relief
@@ -41,6 +45,7 @@ export function TerrainTab() {
   const [types, setTypes] = useState<TerrainType[]>([])
   const [sources, setSources] = useState<Record<string, 'shared' | 'world'>>({})
   const [surfaces, setSurfaces] = useState<SurfaceKind[]>([])
+  const [clipKinds, setClipKinds] = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
   const [selected, setSelected] = useState('')
   const [creating, setCreating] = useState(false)
@@ -74,6 +79,16 @@ export function TerrainTab() {
                          url: e.url || '' }))
           .sort((a, b) => a.name.localeCompare(b.name))))
       .catch(() => setSurfaces([]))
+  }, [])
+
+  // The clip vocabulary, once — the OPEN one (`kinds` of the clip listing, one
+  // entry per kind across all sets). The same reading `RoomLayoutEditor` and
+  // `PropDetail` do; a failed fetch leaves the pickers empty, and an empty
+  // list is no verdict on a stored kind.
+  useEffect(() => {
+    apiGet<{ kinds?: string[] }>('/assets/animation-clips')
+      .then((d) => setClipKinds(Array.isArray(d.kinds) ? d.kinds : []))
+      .catch(() => setClipKinds([]))
   }, [])
 
   /** Write one entry. Answers the SANITIZED row so the form can refill from
@@ -193,6 +208,7 @@ export function TerrainTab() {
             source="world"
             existingKinds={kinds}
             surfaces={surfaces}
+            clipKinds={clipKinds}
             busy={busy}
             onSave={putType}
             onCancel={() => setCreating(false)}
@@ -210,6 +226,7 @@ export function TerrainTab() {
             source={selectedSource}
             existingKinds={kinds}
             surfaces={surfaces}
+            clipKinds={clipKinds}
             busy={busy}
             onSave={putType}
             onReset={selectedSource === 'world'

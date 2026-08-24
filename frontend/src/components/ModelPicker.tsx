@@ -7,6 +7,10 @@ import { useI18n } from '../i18n/I18nProvider'
  * lists (World Dev model/validator, Animate suggest-LLM, …). Type to filter;
  * options are grouped (by provider) and may carry a sublabel (e.g. pricing).
  * Generic: each call site maps its models to `PickerOption[]`.
+ *
+ * With `allowFree` it is an OPEN list: what is typed can be committed even
+ * when no option holds it (the animation-clip kinds of the terrain editor —
+ * a clip imported tomorrow must be nameable today).
  */
 export interface PickerOption {
   value: string
@@ -17,6 +21,7 @@ export interface PickerOption {
 
 export function ModelPicker({
   options, value, onChange, placeholder, emptyLabel, title, className,
+  allowFree, maxLength,
 }: {
   options: PickerOption[]
   value: string
@@ -26,6 +31,16 @@ export function ModelPicker({
   emptyLabel?: string
   title?: string
   className?: string
+  /** Let a value the option list does NOT hold be committed by typing it: the
+   *  typed text is offered as its own entry at the top of the list and is what
+   *  Enter takes when nothing matches. This is the house rule of the surface
+   *  texture / LoRA libraries — a list can only ever show what exists TODAY,
+   *  so it offers the known values, still accepts an unknown one, and leaves
+   *  it to the call site to mark it "(missing)". Without the flag the picker
+   *  stays a closed list. */
+  allowFree?: boolean
+  /** Cap for the typed text, where the server caps the field too. */
+  maxLength?: number
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -113,20 +128,35 @@ export function ModelPicker({
     setQuery('')
   }
 
+  // The FREE entry: what is typed right now, when it is something the list
+  // does not already hold. Only rendered under `allowFree`.
+  const freeValue = allowFree ? query.trim() : ''
+  const showFree = !!freeValue && !options.some((o) => o.value === freeValue)
+
   return (
     <div ref={rootRef} className={className} style={{ position: 'relative' }}>
       <input
         ref={inputRef}
         className="ga-input"
         title={title}
+        maxLength={maxLength}
         style={{ width: '100%', cursor: 'text' }}
-        value={open ? query : (selected?.label ?? '')}
-        placeholder={selected ? undefined : (placeholder || t('Pick model'))}
+        // A free value has no option to take a label from — it shows itself,
+        // so the closed field never goes blank over a value that IS stored.
+        value={open ? query : (selected?.label ?? (allowFree ? value : ''))}
+        placeholder={selected || (allowFree && value)
+          ? undefined : (placeholder || t('Pick model'))}
         onFocus={() => { setOpen(true); setQuery('') }}
         onChange={(e) => { setQuery(e.target.value); if (!open) setOpen(true) }}
         onKeyDown={(e) => {
           if (e.key === 'Escape') { setOpen(false); inputRef.current?.blur() }
-          if (e.key === 'Enter' && filtered.length > 0) { e.preventDefault(); pick(filtered[0].value) }
+          if (e.key === 'Enter') {
+            // Enter takes the best MATCH; only when nothing matches does it
+            // take what was typed — so a list entry is never shadowed by a
+            // half-typed name of it.
+            if (filtered.length > 0) { e.preventDefault(); pick(filtered[0].value) }
+            else if (showFree) { e.preventDefault(); pick(freeValue) }
+          }
         }}
       />
       {open && pos && createPortal(
@@ -145,7 +175,20 @@ export function ModelPicker({
               <span style={{ opacity: 0.7 }}>— {emptyLabel} —</span>
             </button>
           )}
-          {groups.length === 0 && (
+          {showFree && (
+            <button type="button" className="ga-mp-opt"
+              style={optStyle(freeValue === value)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(freeValue)}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {t('Use “{q}”').replace('{q}', freeValue)}
+              </span>
+              <span style={{ flex: '0 0 auto', opacity: 0.55, marginLeft: 8, fontSize: '0.85em' }}>
+                {t('not in the list')}
+              </span>
+            </button>
+          )}
+          {groups.length === 0 && !showFree && (
             <div style={{ padding: '6px 10px', opacity: 0.6 }}>{t('No matches')}</div>
           )}
           {groups.map(([g, opts]) => (
