@@ -155,6 +155,13 @@ const BASE_FALLBACK_M = 200;
  *  asks twice, which is what this loop does. */
 const LAYER_BATCH_MAX = 16;
 
+/** How long the background statistics fill waits before it asks again whether
+ *  the ground is done building (`groundBusy`). Long enough that the check is
+ *  free next to what it guards (a batch of 64 cold tiles is seconds of server
+ *  arithmetic), short enough that the fill resumes within one frame budget of
+ *  the picture standing still. */
+const STATS_FILL_IDLE_MS = 250;
+
 /** Fallback tuft size when a scatter entry names no model — HIP-HIGH next to a
  *  1.70 m figure, not knee-high (finding 2 of the E8 acceptance round: the old
  *  0.55 m / 0.16 m tuft read as moss from eye level). ONE place for the two
@@ -2634,6 +2641,27 @@ export function createGround(): Ground {
   let statsFillSig: string | null = null;
 
   /**
+   * Is the GROUND ITSELF still being built? Then a background fill waits.
+   *
+   * Three states, and every one of them means somebody is waiting for a
+   * picture: a tile batch or a rebuild is running (`tilesBusy`), a `sync` is
+   * re-cutting the areas (`inFlight`), a mask batch is in flight
+   * (`layersBusy`) — or the anchor wants fine tiles it does not hold yet, which
+   * is the state right after a relief lands and BEFORE the tile loader's next
+   * tick has picked them up. Without that last one the fill would slip through
+   * the gap between the two and race the very tiles the player is standing on.
+   *
+   * The want set is the tile loader's own (`wantedTiles`, ~28 keys), so this
+   * costs a set lookup per key at the poll interval below and nothing else.
+   */
+  function groundBusy(): boolean {
+    if (tilesBusy || layersBusy || inFlight) return true;
+    if (!(relief.tileM > 0) || !tileIndex.size) return false;
+    return wantedTiles(tileIndex, relief.tileM, anchorX, anchorZ,
+                       HEIGHT_TILE_RADIUS_M).some((k) => !relief.tiles.has(k));
+  }
+
+  /**
    * Fetch the tile statistics the overview's cap kept back, in the background.
    *
    * `GET /play/heightfield` carries at most `TILE_STATS_MAX` = 64 of them and
@@ -2660,6 +2688,15 @@ export function createGround(): Ground {
    * The want list is taken ONCE, before the first request, so the loop
    * terminates whatever the answers are: a key the index has and the server
    * declines to answer is asked for exactly once.
+   *
+   * AND IT STEPS ASIDE FOR THE PICTURE (`groundBusy`, 2026-08-24). A statistic
+   * is read off a rastered tile, so a batch of 64 unknown ones is up to six
+   * seconds of server arithmetic — measured on a 1077-tile world: seventeen
+   * batches, 102 s, during which the 3-second worldmap poll answered every
+   * 6-8 s and the visible ground arrived piece by piece. The fill is the one
+   * request here nobody is waiting for, so it waits instead: while the tile
+   * loader, the layer loader or a `sync` is working, or while the anchor still
+   * wants tiles it does not hold, no batch goes out.
    */
   async function fillMissingStats(sig: string | null): Promise<void> {
     if (!sig || statsFillSig === sig) return;
@@ -2668,6 +2705,10 @@ export function createGround(): Ground {
       const missing = [...tileIndex].filter((k) => !relief.stats?.has(k));
       for (const batch of tileBatches(missing)) {
         if (loadedHeightSig !== sig) return;
+        while (groundBusy()) {
+          await new Promise((done) => setTimeout(done, STATS_FILL_IDLE_MS));
+          if (loadedHeightSig !== sig) return;
+        }
         const want = batch.filter((k) => !relief.stats?.has(k));
         if (!want.length) continue;
         let payload: HeightTileStatsBatch;

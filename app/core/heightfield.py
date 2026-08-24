@@ -2789,11 +2789,14 @@ _TILE_INDEX: Optional[Tuple[int, frozenset]] = None
 #: geometry — a plateau median is a few thousand height evaluations.
 _MODEL: Optional[Tuple[int, "HeightModel"]] = None
 
-#: (generation, {(tx, tz): stats}) — the pyramid statistics per tile (§ G2).
-#: Kept apart from :data:`_TILES` because they outlive the tile they describe:
-#: the LRU may evict a 129² array long before a client stops asking what its
-#: mip error was.
-_TILE_STATS: Optional[Tuple[int, Dict[Tuple[int, int], Dict[str, Any]]]] = None
+#: (generation, sig, {(tx, tz): stats}) — the pyramid statistics per tile
+#: (§ G2). Kept apart from :data:`_TILES` because they outlive the tile they
+#: describe: the LRU may evict a 129² array long before a client stops asking
+#: what its mip error was. THE SIGNATURE RIDES ALONG because the map is
+#: preloaded from — and written back to — ``world_height_tile_stats``, which is
+#: keyed by it (:func:`_stats_cache`).
+_TILE_STATS: Optional[Tuple[int, str,
+                            Dict[Tuple[int, int], Dict[str, Any]]]] = None
 
 #: The tiles this process holds, keyed ``(generation, tx, tz)`` and ordered
 #: least-recently-used FIRST. A plain OrderedDict rather than
@@ -3091,6 +3094,14 @@ def get_tile(tx: int, tz: int) -> Dict[str, Any]:
     while a stored one would need its own validity token, its own migration
     and its own way of going stale.
 
+    ITS STATISTICS ARE STORED, and that is not a contradiction (2026-08-24,
+    :func:`_stats_cache`). The GRID is 129² floats — 67 kB per tile, 72 MB for
+    a thousand-tile world — and only the handful of tiles somebody is standing
+    near is ever asked for. The statistic read off it is under a hundred bytes,
+    and a CDLOD client asks for EVERY tile's, because it takes its worst error
+    per level over all of them. Same raster, opposite bargain: fifty kilobytes
+    of table against a hundred seconds of arithmetic per process.
+
     **The returned dict is SHARED — treat it as read-only**, exactly like
     :func:`get_field`'s.
 
@@ -3377,6 +3388,9 @@ def tiles_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
     """
     sig = current_sig()
     index = tile_index()
+    # The statistics of the whole batch first, so the ones this request has to
+    # compute are written back in ONE transaction rather than one per tile.
+    stats = tile_stats_many(keys)
     tiles: Dict[str, Any] = {}
     for tx, tz in keys:
         if (tx, tz) not in index:
@@ -3391,7 +3405,7 @@ def tiles_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
             # …and what a CDLOD renderer needs to pick a level for it (§ G2).
             # It rides HERE because the tile is already rastered: asking for
             # the statistics of a tile nobody loaded is what costs.
-            "stats": tile_stats(tx, tz),
+            "stats": stats[(tx, tz)],
         }
     return {"sig": sig, "tile_m": TILE_M, "step_m": TILE_STEP_M,
             "mip_levels_m": list(MIP_LEVELS_M), "tiles": tiles}
@@ -3419,10 +3433,10 @@ def stats_payload(keys: Sequence[Tuple[int, int]]) -> Dict[str, Any]:
     the tile's own request afterwards is a cache hit and the bill is paid once.
     """
     sig = current_sig()
-    index = tile_index()
     return {"sig": sig,
-            "tile_stats": {format_tile_key(tx, tz): tile_stats(tx, tz)
-                           for tx, tz in keys if (tx, tz) in index}}
+            "tile_stats": {format_tile_key(tx, tz): stats
+                           for (tx, tz), stats
+                           in tile_stats_many(keys).items()}}
 
 
 #: How many tiles the OVERVIEW payload carries statistics for. Every one of
@@ -3542,7 +3556,8 @@ def index_stats_payload() -> Dict[str, Any]:
     capped = keys[:TILE_STATS_MAX]
     return {
         "mip_levels_m": list(MIP_LEVELS_M),
-        "tile_stats": {format_tile_key(tx, tz): tile_stats(tx, tz)
-                       for tx, tz in capped},
+        "tile_stats": {format_tile_key(tx, tz): stats
+                       for (tx, tz), stats
+                       in tile_stats_many(capped).items()},
         "tile_stats_complete": len(capped) == len(keys),
     }

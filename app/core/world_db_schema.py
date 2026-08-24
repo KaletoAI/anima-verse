@@ -762,6 +762,25 @@ SCHEMA_STATEMENTS = [
         updated_at TEXT NOT NULL
     )""",
 
+    # The PYRAMID STATISTICS of the fine height tiles (§ G2) — min, max and one
+    # vertical error per mip level, derived from the very same raster the grid
+    # above comes from. They are stored for ONE reason: reading them off a tile
+    # means rastering that tile (~90 ms of pure arithmetic), and a client that
+    # draws the world from a quadtree asks for ALL of them — on a 1000-tile
+    # world that is a minute and a half of CPU, paid again by every fresh
+    # process. `sig` is the same `height_sig` the grid carries, so a stale row
+    # is one whose signature no longer matches and the writer drops every row of
+    # another signature: the table holds one generation of the world and stays
+    # around a hundred bytes per tile. See app/core/heightfield.tile_stats.
+    """CREATE TABLE IF NOT EXISTS world_height_tile_stats (
+        sig        TEXT    NOT NULL,
+        tx         INTEGER NOT NULL,
+        tz         INTEGER NOT NULL,
+        stats      TEXT    NOT NULL,
+        updated_at TEXT    NOT NULL,
+        PRIMARY KEY (sig, tx, tz)
+    )""",
+
     # ── The EXPLORATION MEMORY (Fog-Gedaechtnis, 2026-08-16) ─────────────────
     # Where a character has actually stood, as 64 m cells anchored at the world
     # origin: cell (cx, cz) covers [cx*64, (cx+1)*64) on both axes. The overview

@@ -544,6 +544,72 @@ def store_grid(field: Dict[str, Any]) -> None:
              field["sig"], utc_now_iso()))
 
 
+def load_tile_stats(sig: str) -> Dict[Tuple[int, int], Dict[str, Any]]:
+    """Every stored tile statistic of THIS signature, keyed ``(tx, tz)``.
+
+    The tile-level twin of :func:`load_grid`, and it exists for a bigger
+    reason than the grid does. A statistic is read off a FINISHED 129² raster,
+    so asking for the statistics of the whole world means rastering the whole
+    world — measured 2026-08-24 on a 1077-tile world: 102 seconds of pure
+    Python, and every fresh process paid it again because the cache lived in
+    the process. Stored, that bill is paid once per signature and a restart
+    costs one SELECT.
+
+    ROWS OF ANOTHER SIGNATURE ARE NOT READ. They describe a world that has been
+    edited since and are dropped by the next writer (:func:`store_tile_stats`);
+    a mismatch means "raster it again", exactly as it does for the grid.
+
+    An unreadable row is skipped rather than failing the read — the statistics
+    are a derived cache and the tile behind one is still rasterable.
+    """
+    if not sig:
+        return {}
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT tx, tz, stats FROM world_height_tile_stats WHERE sig=?",
+        (str(sig),)).fetchall()
+    out: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for tx, tz, raw in rows:
+        try:
+            stats = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(stats, dict):
+            out[(int(tx), int(tz))] = stats
+    return out
+
+
+def store_tile_stats(sig: str,
+                     stats_by_key: Dict[Tuple[int, int], Dict[str, Any]]
+                     ) -> None:
+    """Persist freshly computed tile statistics under ``sig``, in ONE write.
+
+    Called with whatever a single request just had to compute, so the batch is
+    at most a client batch (64) and usually far less.
+
+    EVERY ROW OF ANOTHER SIGNATURE GOES IN THE SAME TRANSACTION. The table is a
+    cache of the CURRENT world, and keeping the old generations would grow it
+    without bound over a world's editing life for rows nobody may read. That
+    also makes the invalidation trivial: there is never more than one
+    signature's worth of rows in there, and a row of the current one is by
+    definition current.
+    """
+    if not sig or not stats_by_key:
+        return
+    now = utc_now_iso()
+    with transaction() as conn:
+        conn.execute("DELETE FROM world_height_tile_stats WHERE sig<>?",
+                     (str(sig),))
+        conn.executemany(
+            "INSERT INTO world_height_tile_stats (sig, tx, tz, stats, "
+            "updated_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(sig, tx, tz) DO UPDATE SET stats=excluded.stats, "
+            "updated_at=excluded.updated_at",
+            [(str(sig), int(tx), int(tz),
+              json.dumps(stats, ensure_ascii=False), now)
+             for (tx, tz), stats in stats_by_key.items()])
+
+
 def polygon_bounds(polygon: Any) -> Optional[Tuple[float, float, float, float]]:
     """(min_x, min_z, max_x, max_z) over an outline, or None when it has no
     usable points. Unreadable vertices are skipped, never counted — the same
