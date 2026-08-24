@@ -55,9 +55,12 @@ export function PropsTab() {
   // VARIANT travels with it: the source image belongs to the variant, so the
   // render targets exactly the one the detail has open, and `image` is that
   // variant's current record — the dialog opens on the backend THIS picture
-  // was made with, not on the primary variant's.
+  // was made with, not on the primary variant's. `subject` is the text THAT
+  // variant renders from (its own description, else the prop's) — the dialog
+  // composes the final prompt, so it must compose from the variant's sentence.
   const [imgRegen, setImgRegen] = useState<
-    { prop: PropFull; variant: number; image?: PropSourceImage } | null>(null)
+    { prop: PropFull; variant: number; image?: PropSourceImage
+      subject?: string } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
 
@@ -259,8 +262,8 @@ export function PropsTab() {
             onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
             onRegenerateMesh={(variant) =>
               setRegen({ id: selectedProp.id, meshOnly: true, variant })}
-            onRegenerateImage={(variant, image) =>
-              setImgRegen({ prop: selectedProp, variant, image })}
+            onRegenerateImage={(variant, image, subject) =>
+              setImgRegen({ prop: selectedProp, variant, image, subject })}
             onGenerating={startPoll}
             onRefresh={() => {
               setCacheBump((b) => b + 1)
@@ -317,6 +320,7 @@ export function PropsTab() {
         <PropImageDialog
           prop={imgRegen?.prop || null}
           variant={imgRegen?.variant || 0}
+          subject={imgRegen?.subject}
           image={imgRegen?.image}
           backends={imageBackends}
           onGenerate={(imageBackend, prompt, negative) => {

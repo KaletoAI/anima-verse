@@ -14,6 +14,7 @@
  * box), so they travel with the prop into any room.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FIGURE_HEIGHT_M } from '@anima/scene-render'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
@@ -30,6 +31,28 @@ import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { PropFull, PropMarker, PropSourceImage, PropVariant } from './propTypes'
 
 type DimKey = 'width_m' | 'depth_m' | 'height_m'
+
+/**
+ * The scale kit of the 3D preview — the 1.70 m reference figure beside the
+ * prop plus the metre grid under both (rule "Kein Maß ohne Maßstab").
+ * Remembered per browser, ON until it is switched off: a mesh alone says
+ * nothing about its size, so the first look should already carry the scale.
+ */
+const SCALE_FIGURE_KEY = 'ga.props.scaleFigure'
+
+/** Storage can throw (private mode, site data off) and can hold anything —
+ *  every path ends at the default rather than at a broken panel. */
+function loadScaleFigure(): boolean {
+  try {
+    const raw = window.localStorage.getItem(SCALE_FIGURE_KEY)
+    return raw === null ? true : raw !== '0'
+  } catch { return true }
+}
+
+function saveScaleFigure(on: boolean): void {
+  try { window.localStorage.setItem(SCALE_FIGURE_KEY, on ? '1' : '0') }
+  catch { /* a browser that refuses storage still gets its figure */ }
+}
 
 /** The three real dims in display order; `axis` indexes orientedDims(),
  *  which returns [width(x), height(y), depth(z)]. */
@@ -80,7 +103,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
    *  until re-meshed, and no other variant's image is touched. The variant's
    *  current image record travels along so the dialog opens on the backend
    *  THIS picture was made with. */
-  onRegenerateImage: (variant: number, image?: PropSourceImage) => void
+  onRegenerateImage: (variant: number, image?: PropSourceImage,
+    subject?: string) => void
   /** Reload the prop + bust the image cache — generations run in the
    *  background, this fetches the current state on demand. */
   onRefresh: () => void
@@ -243,6 +267,15 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     width_m: false, depth_m: false, height_m: false,
   })
   const [liveBbox, setLiveBbox] = useState<[number, number, number] | null>(null)
+  // The RAW box of the mesh the viewer has OPEN — of EVERY variant, unlike
+  // `liveBbox`, which may only ever be the primary variant's because it
+  // re-proportions the PROP. What the overlays scale by is the mesh on
+  // screen: a variant's own GLB has its own proportions, and measuring the
+  // primary one's box would size the figure beside a stranger.
+  const [shownBbox, setShownBbox] = useState<[number, number, number] | null>(null)
+  // The scale kit of the viewer (figure + metre grid) — a VIEW, so it is
+  // remembered in the browser and never on the prop.
+  const [scaleFigure, setScaleFigure] = useState(loadScaleFigure)
   // Source image beside the model (left pane of the split preview) — the
   // server says whether THIS variant has one; the flag only catches a 404 that
   // races the list (a delete between load and render).
@@ -251,6 +284,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     setPinned({ width_m: false, depth_m: false, height_m: false })
     setLiveBbox(null)
   }, [prop.id])
+  // Another variant (or another file of it) means another mesh — its box is
+  // measured when it has loaded, never inherited from the one before.
+  useEffect(() => { setShownBbox(null) }, [prop.id, variant, previewFile])
   useEffect(() => { setSrcOk(true) }, [prop.id, variant, reloadKey])
 
   // How far the ground-offset SLIDER may travel: the prop's own height, at
@@ -265,6 +301,31 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   // the viewer's measured box wins over the stored one.
   const bbox = liveBbox ?? prop.bbox
   const ratios = bbox ? orientedDims(bbox, prop.rotation) : null
+
+  // How big the DISPLAYED variant really is — the one resolution rule the
+  // server stores by (`props.variant_dims`): the variant's own override where
+  // it has one, the prop's value everywhere else. The prop's side is read
+  // from the LIVE form draft above, so typing there still moves the preview
+  // of an inheriting variant.
+  //
+  // Everything the viewer measures with hangs on this. Before it, the
+  // overlays read the PROP for every chip, so a per-variant size was
+  // invisible in 3D — the finding of 2026-08-24 ("15 m typed on variant 4,
+  // nothing moves"): the value WAS saved (POST .../variants/3/dims → 200),
+  // only nothing on screen was reading it.
+  const shownDims = useMemo(() => {
+    const own = (key: DimKey) => parseFloat(dims[key]) || prop[key]
+    const ov = shownVariant?.dims
+    return {
+      width_m: ov?.width_m ?? own('width_m'),
+      depth_m: ov?.depth_m ?? own('depth_m'),
+      height_m: ov?.height_m ?? own('height_m'),
+    }
+  }, [shownVariant, dims, prop])
+  /** Does the shown variant carry a size of its own? Then the form above and
+   *  the preview legitimately say different numbers, and that is worth one
+   *  sentence instead of looking like a bug. */
+  const variantSized = !!shownVariant && Object.keys(shownVariant.dims).length > 0
 
   const editDim = (field: typeof DIM_FIELDS[number], raw: string) => {
     setPinned((p) => ({ ...p, [field.key]: true }))
@@ -842,7 +903,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               <button type="button" className="ga-btn ga-btn-sm"
                 style={{ flex: 1 }}
                 disabled={variantBusy}
-                onClick={() => onRegenerateImage(variant, shownImage || undefined)}
+                // The SUBJECT travels with it: the dialog composes the final
+                // prompt itself, so it has to compose from the text this
+                // VARIANT renders from — its own where it has one, the prop's
+                // otherwise (the server resolves it the same way for an empty
+                // prompt, `props.variant_description`).
+                onClick={() => onRegenerateImage(variant, shownImage || undefined,
+                  shownVariant?.effective_description)}
                 title={variantBusy
                   ? t('This variant is generating right now.')
                   : t('Render a NEW source image FOR THIS VARIANT (backend and prompt in the dialog). Its 3D model stays until you re-mesh from the new image; the other variants keep their own images.')}>
@@ -892,27 +959,30 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               format="glb"
               height={340}
               rotation={prop.rotation}
-              onBounds={(b) => { if (primaryShown) setLiveBbox(b.size) }}
+              onBounds={(b) => {
+                setShownBbox(b.size)
+                // Only the primary variant may re-proportion the PROP.
+                if (primaryShown) setLiveBbox(b.size)
+              }}
               markers={markers.map((m) => ({
                 at: m.at, animation: m.animation, facing: m.facing,
               }))}
-              dimsOverlay={{
-                width_m: parseFloat(dims.width_m) || prop.width_m,
-                depth_m: parseFloat(dims.depth_m) || prop.depth_m,
-                height_m: parseFloat(dims.height_m) || prop.height_m,
-              }}
-              // 1.7 m in MESH units — real prop scale = max dim over the raw
-              // box's largest edge; the preview figure sizes itself to that.
+              // The DISPLAYED variant's resolved size — its own override where
+              // it has one, the prop's live draft otherwise.
+              dimsOverlay={shownDims}
+              // 1.7 m in MESH units — real scale = the displayed mesh's own
+              // largest raw edge over its largest real dim; every figure in
+              // the viewer (the marker poses and the standing reference)
+              // sizes itself to that.
               figureHeight={(() => {
-                const bb = liveBbox ?? prop.bbox
+                const bb = shownBbox ?? (primaryShown ? (liveBbox ?? prop.bbox) : null)
                 if (!bb) return 0
                 const maxExtent = Math.max(bb[0], bb[1], bb[2])
-                const maxDim = Math.max(
-                  parseFloat(dims.width_m) || prop.width_m,
-                  parseFloat(dims.depth_m) || prop.depth_m,
-                  parseFloat(dims.height_m) || prop.height_m) || 1
-                return 1.7 * (maxExtent / maxDim)
+                const maxDim = Math.max(shownDims.width_m, shownDims.depth_m,
+                  shownDims.height_m) || 1
+                return FIGURE_HEIGHT_M * (maxExtent / maxDim)
               })()}
+              scaleFigure={scaleFigure}
               picking={placing !== null}
               onPickPoint={onPickPoint}
             />
@@ -923,6 +993,39 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 : t('No model yet — generate it or upload a GLB below.')}
             </div>
           )}
+          {/* The scale of the preview. A mesh fills its frame whatever it
+              measures, so "is this 40 cm or 4 m" is unanswerable without a
+              human beside it — the figure IS the answer, and it never scales
+              with the model. */}
+          {shownHasMesh || previewFile ? (
+            <label
+              className="ga-hint"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                marginTop: 4, cursor: 'pointer' }}
+              title={t('Puts a FIXED 1.70 m person beside the model, on its own ground plane, over a one-metre grid — the preview’s scale. It never scales with the prop: if the figure looks wrong, the W/D/H above are wrong.')}
+            >
+              <input
+                type="checkbox"
+                checked={scaleFigure}
+                onChange={(e) => {
+                  setScaleFigure(e.target.checked)
+                  saveScaleFigure(e.target.checked)
+                }}
+              />
+              {t('Reference figure (1.70 m)')}
+            </label>
+          ) : null}
+          {/* Which numbers the preview is measuring. Without this line the
+              overlay and the form above read as contradicting each other. */}
+          {variantSized ? (
+            <span className="ga-hint" style={{ display: 'block' }}>
+              {t('Variant {n} has a size of its own — the preview measures that one ({w} × {d} × {h} m).')
+                .replace('{n}', String(variant + 1))
+                .replace('{w}', shownDims.width_m.toFixed(2))
+                .replace('{d}', shownDims.depth_m.toFixed(2))
+                .replace('{h}', shownDims.height_m.toFixed(2))}
+            </span>
+          ) : null}
           </div>
           </div>
 

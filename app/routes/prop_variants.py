@@ -55,7 +55,10 @@ def prop_variants(prop_id: str) -> Dict[str, Any]:
     ``dims`` are the per-variant size OVERRIDES that are stored (a missing key
     = inherited from the prop), ``effective_dims`` what the variant really
     renders at — the strip edits the first and shows the second as the
-    placeholder of an empty field.
+    placeholder of an empty field. ``description`` /
+    ``effective_description`` are the same pair for the generation subject:
+    the variant's own text (``""`` = inherited) and the one a render of this
+    variant would really use.
 
     ``max`` is the configured ceiling on ACTIVE variants
     (``image_generation.prop_variant_max``) — the strip greys its "add" action
@@ -164,6 +167,35 @@ async def prop_variant_dims(prop_id: str, index: int,
     entry = list_variants(prop_id)[index]
     return {"status": "ok", "index": index, "dims": entry["dims"],
             "effective_dims": entry["effective_dims"]}
+
+
+@router.post("/props/{prop_id}/variants/{index}/description")
+async def prop_variant_description(prop_id: str, index: int,
+                                   request: Request) -> Dict[str, Any]:
+    """Give one variant its OWN generation subject (body:
+    ``{description: str}``; blank clears it and the variant renders from the
+    prop's description again).
+
+    A sibling verb rather than a field of the ``/dims`` patch, for the same
+    reason ``/seasons`` is one: that route's whole contract is "numbers,
+    clamped to (0, 100], every key optional", and a free-text field with its
+    own sanitation and its own clearing rule inside it would make the body
+    shape a union nobody can read off the path. One verb, one kind of value.
+
+    Never refused for a running generation: the text is read when a render
+    starts, so changing it now touches nothing in flight.
+
+    The answer carries the stored override and the EFFECTIVE text, so the
+    strip shows what was kept and what a render would really use."""
+    from app.core.props import list_variants, set_variant_description
+    _variant(prop_id, index)
+    body = await _body(request)
+    if not set_variant_description(prop_id, index, body.get("description")):
+        raise HTTPException(status_code=404, detail="Variant not found")
+    entry = list_variants(prop_id)[index]
+    return {"status": "ok", "index": index,
+            "description": entry["description"],
+            "effective_description": entry["effective_description"]}
 
 
 @router.delete("/props/{prop_id}/variants/{index}")

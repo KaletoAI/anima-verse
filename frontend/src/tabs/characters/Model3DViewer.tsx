@@ -10,11 +10,12 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
-import { anchorFigureBind, figureRootY } from '@anima/scene-render'
+import { FIGURE_HEIGHT_M, anchorFigureBind, figureRootY } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
-import { buildMeasureAids, disposeAids, type MeasureKey } from '../world/measureKit'
+import { buildMeasureAids, disposeAids, referenceFigure,
+  type MeasureKey } from '../world/measureKit'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
 
@@ -127,7 +128,7 @@ export interface TilePlacement {
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   groundTextureUrl, placement, onBounds, markers, dimsOverlay,
-  figureHeight = 0, picking = false, onPickPoint }:
+  figureHeight = 0, scaleFigure = false, picking = false, onPickPoint }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
@@ -158,6 +159,13 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  it from bbox ÷ dims). > 0 shows a posed test figure at every marker
      *  — a sit marker is only judgeable with someone sitting there. */
     figureHeight?: number
+    /** Put the STANDING 1.70 m reference beside the model, on the model's own
+     *  ground plane, plus a one-metre ground grid under both (model mode
+     *  only, needs `figureHeight` > 0). "Kein Maß ohne Maßstab": a mesh alone
+     *  says nothing about its size — a stool and a gate look identical when
+     *  both fill the frame. The figure never scales; the declared dims scale
+     *  it, so a wrong Width/Depth/Height is visible instead of invisible. */
+    scaleFigure?: boolean
     /** Draw the oriented bounding box with W/D/H edges + labels (real
      *  metres) around the model — makes the three dims readable in 3D.
      *  Model mode only; follows the orientation fix live. */
@@ -199,6 +207,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   dimsOverlayRef.current = dimsOverlay
   const figureHeightRef = useRef(figureHeight)
   figureHeightRef.current = figureHeight
+  const scaleFigureRef = useRef(scaleFigure)
+  scaleFigureRef.current = scaleFigure
   // Stale-guard for the async figure loads of an overlay rebuild.
   const figTokenRef = useRef(0)
   const pickingRef = useRef(picking)
@@ -206,10 +216,15 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const onPickPointRef = useRef(onPickPoint)
   onPickPointRef.current = onPickPoint
   const overlayFnRef = useRef<(() => void) | null>(null)
+  /** Re-frames the model-mode camera (model + scale kit). */
+  const refitFnRef = useRef<(() => void) | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   // Live overlay refresh (markers moved/added, dims typed) without reload.
-  useEffect(() => { overlayFnRef.current?.() }, [markers, dimsOverlay, figureHeight])
+  useEffect(() => { overlayFnRef.current?.() },
+    [markers, dimsOverlay, figureHeight, scaleFigure])
+  // Switching the scale kit on widens what has to be in view.
+  useEffect(() => { refitFnRef.current?.() }, [scaleFigure])
   // The armed pick tool reads as a crosshair on the canvas.
   useEffect(() => {
     if (canvasRef.current) canvasRef.current.style.cursor = picking ? 'crosshair' : ''
@@ -653,14 +668,34 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           const center = box.getCenter(new THREE.Vector3())
           pivot.position.sub(center)
 
-          const maxDim = Math.max(size.x, size.y, size.z) || 1
-          const dist = (maxDim / 2) / Math.tan((Math.PI * camera.fov) / 360)
-          camera.position.set(0, 0, dist * 1.6)
-          camera.near = dist / 100
-          camera.far = dist * 100
-          camera.updateProjectionMatrix()
-          controls.target.set(0, 0, 0)
-          controls.update()
+          // The framing has to hold the SCALE KIT too, or a footstool fills
+          // the frame and the 1.70 m figure beside it is off-screen — which
+          // is exactly the comparison the kit exists for.
+          const fitView = () => {
+            let maxDim = Math.max(size.x, size.y, size.z) || 1
+            const kitH = scaleFigureRef.current ? figureHeightRef.current : 0
+            if (kitH > 0) {
+              const metre = kitH / FIGURE_HEIGHT_M
+              // The figure sits on ONE side, the camera looks at the model's
+              // centre: the visible width is twice the reach to the figure
+              // (0.40 m margin + its ~0.16 m half-width).
+              maxDim = Math.max(maxDim, size.x + 1.12 * metre, kitH * 1.3)
+            }
+            const dist = (maxDim / 2) / Math.tan((Math.PI * camera.fov) / 360)
+            camera.position.set(0, 0, dist * 1.6)
+            camera.near = dist / 100
+            camera.far = dist * 100
+            camera.updateProjectionMatrix()
+            controls.target.set(0, 0, 0)
+            controls.update()
+          }
+          fitView()
+          // Only the kit switch refits — a marker edit or a typed dim must
+          // never yank a camera the user has orbited into place.
+          refitFnRef.current = fitView
+          disposers.push(() => {
+            if (refitFnRef.current === fitView) refitFnRef.current = null
+          })
 
           // ── Marker + dims overlay (model mode) ──
           // Markers live in the pivot frame (raw-box fractions → local
@@ -677,6 +712,12 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           // the marker point rides the object through the orientation fix).
           const figGroup = new THREE.Group()
           scene.add(figGroup)
+          // The scale kit — standing 1.70 m reference + metre grid. Its own
+          // group so it lives and dies with one switch, untouched by the
+          // marker figures above (those are POSED, at a marker; this one
+          // stands beside the model and answers "how big is this thing").
+          const refGroup = new THREE.Group()
+          scene.add(refGroup)
           const clearGroup = (g: Object3D) => {
             for (const c of [...g.children]) {
               g.remove(c)
@@ -716,7 +757,53 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             clearGroup(markerGroup)
             clearGroup(dimsGroup)
             clearGroup(figGroup)
+            clearGroup(refGroup)
             const figToken = ++figTokenRef.current
+            // The model's box in WORLD space, after the orientation fix —
+            // both the scale kit and the dims overlay below measure from it,
+            // so the figure stands on the same lower edge the H label marks.
+            const ob = new THREE.Box3().setFromObject(object)
+
+            // ── Scale kit: the 1.70 m reference beside the model ──
+            // `figureHeight` IS the conversion: it is what 1.70 m measures in
+            // this mesh's units, so every metre here is figH / 1.70.
+            const scaleH = figureHeightRef.current
+            if (scaleFigureRef.current && scaleH > 0) {
+              const metre = scaleH / FIGURE_HEIGHT_M
+              // Beside, never inside: half the model's width plus a fixed
+              // 0.40 m margin, so a wide mesh pushes the figure out instead
+              // of swallowing it. The figure itself is ~0.31 m across.
+              const offX = (ob.max.x - ob.min.x) / 2 + 0.4 * metre
+              const cx = (ob.min.x + ob.max.x) / 2
+              const cz = (ob.min.z + ob.max.z) / 2
+              // Same neutral mannequin as every other metre dial in the admin
+              // (measureKit) — it must read as "the reference", not as a
+              // character, and it NEVER scales with the model.
+              const fig = referenceFigure(THREE, scaleH)
+              // Soles on the model's own ground plane, facing +Z — where the
+              // default camera of this mode stands.
+              fig.position.set(cx + offX, ob.min.y, cz)
+              refGroup.add(fig)
+              // Unit label, not UI copy: "1.70 m" reads the same in every
+              // language the admin speaks, like the dims labels below.
+              const tag = textSprite('1.70 m', '#f0f6fc', scaleH * 0.14)
+              tag.position.set(cx + offX, ob.min.y + scaleH * 1.12, cz)
+              refGroup.add(tag)
+              // One-metre ground grid under both — a metre stated once is a
+              // claim, a metre repeated is a ruler. Whole cells, wide enough
+              // to reach past the figure and around the model.
+              const reach = Math.max(offX + metre, (ob.max.z - ob.min.z) / 2 + metre)
+              const cells = Math.max(2, Math.ceil((2 * reach) / metre))
+              const grid = new THREE.GridHelper(cells * metre, cells,
+                0x8b949e, 0x8b949e)
+              grid.position.set(cx, ob.min.y, cz)
+              const gm = grid.material as Material & { opacity: number
+                transparent: boolean; depthWrite: boolean }
+              gm.transparent = true
+              gm.opacity = 0.22
+              gm.depthWrite = false
+              refGroup.add(grid)
+            }
             // Numbered marker dots at their raw-box fractions.
             const r = rawMaxDim * 0.025
             ;(markersRef.current || []).forEach((m, i) => {
@@ -809,7 +896,6 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             // metre values — which field means which direction.
             const dims = dimsOverlayRef.current
             if (!dims) return
-            const ob = new THREE.Box3().setFromObject(object)
             dimsGroup.add(new THREE.Box3Helper(ob, 0x6e7681))
             const edge = (a: [number, number, number],
                           b: [number, number, number], color: number) => {
@@ -848,6 +934,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             clearGroup(markerGroup)
             clearGroup(dimsGroup)
             clearGroup(figGroup)
+            clearGroup(refGroup)
           })
 
           // ── Pick mode: a plain click (no orbit drag) on the mesh reports

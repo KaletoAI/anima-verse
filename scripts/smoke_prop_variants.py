@@ -116,6 +116,13 @@ prop's; no variant in hand answers for the primary one. The hand derivation of
 section [18] — sanitizer, resolution, payload scale and the stacking rule —
 stands in `dims_section`'s own docstring, next to the checks it explains.
 
+DESCRIPTION PER VARIANT (2026-08-24). The GENERATION SUBJECT follows the same
+two laws: a new variant COPIES the prop's description into its own field, and
+a variant without one renders from the prop's text. One rule,
+`props.variant_description`, and the render call site (`_render_source`) reads
+it — the hand derivation, the sanitizer table and the red probe stand in
+`description_section`'s own docstring.
+
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
 import io
@@ -417,6 +424,165 @@ def dims_section() -> None:
           store.placement_stack_offset_y(
               [{"prop_id": crate, "at": [0.0, 0.0]},
                {"prop_id": crate, "at": [0.0, 0.0]}], 1) == 1.0)
+
+    # ── STORE INDEX vs DISPLAY POSITION (finding 2026-08-24) ──
+    # The user typed a size on "Variant 4" and nothing on screen moved. The
+    # store was never the culprit — the value was saved and read back — but
+    # the two index spaces are the standing trap of this feature, so the
+    # difference gets a check of its own: switching a variant OFF makes the
+    # store index and the position in the strip part company.
+    #
+    #     store index   0    1(off)   2
+    #     position      0             1     <- "Variant 3" is store index 2
+    #
+    # Sizing store index 2 must answer on 2 and NOT on 1. RED PROBE: a reader
+    # that took the display position would hand back the prop's 1.0 here.
+    third = store.add_variant(crate)
+    put_mesh(crate, third)
+    check("a third variant is store index 2", third == 2, str(third))
+    store.set_variant_active(crate, 1, False)
+    positions = [v["index"] for v in store.list_variants(crate) if v["active"]]
+    check("...and with variant 1 off it sits at POSITION 1",
+          positions == [0, 2], str(positions))
+    store.set_variant_dims(crate, 2, {"width_m": 3.0})
+    meta = store.read_sidecar(crate)
+    check("the size lands on STORE index 2 — red probe: by position it "
+          "would be 1.0",
+          store.variant_dims(meta, 2)["width_m"] == 3.0,
+          str(store.variant_dims(meta, 2)))
+    check("...and store index 1, the one that is switched off, is untouched",
+          store.variant_dims(meta, 1)["width_m"] == 1.0,
+          str(store.variant_dims(meta, 1)))
+    check("...and the list echoes the override straight back — what the strip "
+          "re-renders from after a save",
+          store.list_variants(crate)[2]["dims"] == {"width_m": 3.0}
+          and store.list_variants(crate)[2]["effective_dims"]
+          == {"width_m": 3.0, "depth_m": 1.0, "height_m": 1.0},
+          str(store.list_variants(crate)[2]))
+    store.set_variant_active(crate, 1, True)
+    store.set_variant_dims(crate, 2, {"width_m": None})
+
+
+def description_section() -> None:
+    """[19] DESCRIPTION PER VARIANT (2026-08-24). Hand-derived throughout.
+
+    A variant is a whole version of the object, so the sentence its product
+    shot is rendered from belongs to it — "…as a sapling", "…broken", "…in
+    snow". One rule, `props.variant_description`: the variant's own text, else
+    the prop's; no variant in hand answers for the PRIMARY one — character for
+    character the law the dims follow.
+
+    THE SEED: a prop "Pine" described as `a tall pine tree`, plus a second
+    variant added afterwards. From the two laws — COPY ON CREATE and ABSENCE
+    IS INHERITANCE — every expectation follows:
+
+        variant 0   created with the prop, no key   -> inherits
+        variant 1   added later, COPIED key         -> "a tall pine tree"
+
+    and after editing variant 1 to `a pine sapling` and the PROP to
+    `a snow-covered pine`:
+
+        variant 0   still no key   -> "a snow-covered pine"   (follows)
+        variant 1   own key        -> "a pine sapling"        (stays)
+
+    The copy is a copy and not a link — that difference IS the feature: an
+    authored version must not be rewritten by a later edit of the prop.
+
+    THE SANITIZER, the same "absence is the statement" law as `seasons`:
+
+        "  a pine sapling  "  -> stripped
+        ""  /  None  /  "   " -> no key, the variant inherits again
+        3000 characters       -> cut to DESCRIPTION_MAX (2000)
+
+    THE CALL SITE is what the feature is for: a render of variant 1 has to
+    compose from `a pine sapling`. RED PROBE — the pre-2026-08-24 code read
+    `meta["description"]`, so it would have sent `a snow-covered pine` here,
+    and the check below fails the moment anyone puts that read back.
+    """
+    print("\n[19] description per variant (2026-08-24)")
+    pine = store.create_prop(name="Pine", description="a tall pine tree")["id"]
+    meta = store.read_sidecar(pine)
+    check("the prop's own variant stores NO description of its own",
+          store.list_variants(pine)[0]["description"] == "",
+          str(store.list_variants(pine)[0]["description"]))
+    check("...so it INHERITS the prop's text",
+          store.variant_description(meta, 0) == "a tall pine tree",
+          store.variant_description(meta, 0))
+    check("...which is what the list reports as effective",
+          store.list_variants(pine)[0]["effective_description"]
+          == "a tall pine tree")
+
+    v1 = store.add_variant(pine)
+    check("a new variant is added as index 1", v1 == 1, str(v1))
+    check("...and starts as a COPY of the prop's description",
+          store.list_variants(pine)[1]["description"] == "a tall pine tree",
+          str(store.list_variants(pine)[1]["description"]))
+
+    # ── the sanitizer ──
+    store.set_variant_description(pine, 1, "  a pine sapling  ")
+    check("the stored text is stripped",
+          store.list_variants(pine)[1]["description"] == "a pine sapling",
+          str(store.list_variants(pine)[1]["description"]))
+    store.set_variant_description(pine, 1, "   ")
+    check("blank clears the key — the variant inherits again",
+          store.list_variants(pine)[1]["description"] == "")
+    store.set_variant_description(pine, 1, "a pine sapling")
+    store.set_variant_description(pine, 1, None)
+    check("...and so does None", store.list_variants(pine)[1]["description"] == "")
+    store.set_variant_description(pine, 1, "x" * 3000)
+    check("an essay is cut to the 2000-character guard",
+          len(store.list_variants(pine)[1]["description"]) == 2000,
+          str(len(store.list_variants(pine)[1]["description"])))
+    check("an index this prop has no variant for is refused",
+          not store.set_variant_description(pine, 7, "nope"))
+    store.set_variant_description(pine, 1, "a pine sapling")
+
+    # ── the resolution rule ──
+    store.update_prop(pine, {"description": "a snow-covered pine"})
+    meta = store.read_sidecar(pine)
+    check("variant 0 FOLLOWS the prop's edit",
+          store.variant_description(meta, 0) == "a snow-covered pine",
+          store.variant_description(meta, 0))
+    check("...while variant 1 keeps its own — a copy, not a link",
+          store.variant_description(meta, 1) == "a pine sapling",
+          store.variant_description(meta, 1))
+    check("an unqualified read answers for the PRIMARY variant",
+          store.variant_description(meta) == "a snow-covered pine",
+          store.variant_description(meta))
+    check("...and so does an index this prop has no variant for",
+          store.variant_description(meta, 9) == "a snow-covered pine",
+          store.variant_description(meta, 9))
+
+    # ── the call site: which sentence a render is composed from ──
+    subjects: list = []
+    real_compose = store.compose_prompt
+
+    def recording_compose(subject, backend):
+        subjects.append(subject)
+        return {"style": "", "prompt": f"studio shot, {subject}",
+                "negative": ""}
+
+    store.compose_prompt = recording_compose
+    try:
+        store._render_source(pine, "", "", "", 1)
+        check("a render of variant 1 composes from ITS text — red probe: the "
+              "prop-level read would say 'a snow-covered pine'",
+              subjects[-1:] == ["a pine sapling"], str(subjects))
+        check("...and the recorded prompt of that variant is the composed one",
+              store.list_variants(pine)[1]["image"]["prompt"]
+              == "studio shot, a pine sapling",
+              str(store.list_variants(pine)[1]["image"]["prompt"]))
+        store._render_source(pine, "", "", "", 0)
+        check("a render of the INHERITING variant 0 composes from the prop's",
+              subjects[-1:] == ["a snow-covered pine"], str(subjects))
+        # A prop with nothing written anywhere: the NAME is still the last
+        # fallback — the rule that predates the feature and must survive it.
+        rock = store.create_prop(name="Grey Rock")["id"]
+        store._render_source(rock, "", "", "", 0)
+        check("a prop with no description at all falls back to its NAME",
+              subjects[-1:] == ["Grey Rock"], str(subjects))
+    finally:
+        store.compose_prompt = real_compose
 
 
 def season_section() -> None:
@@ -982,6 +1148,7 @@ def main() -> int:
           str(store.pending_variants()))
 
     dims_section()
+    description_section()
     season_section()
 
     print()

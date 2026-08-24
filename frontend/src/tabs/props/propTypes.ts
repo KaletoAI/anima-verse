@@ -155,6 +155,14 @@ export interface PropVariant {
   /** What the variant really renders at (override or inherited): the value
    *  behind an empty input's placeholder. All three keys are always set. */
   effective_dims: Required<PropDims>
+  /** The variant's OWN generation subject ('' = inherited from the prop).
+   *  A new variant starts with a COPY of the prop's text, so this is usually
+   *  filled — and editing it is how a version of the object gets its own
+   *  product shot ("…as a sapling"). */
+  description: string
+  /** The text a render of THIS variant really uses (own or inherited) — the
+   *  placeholder of an empty field, and what the image dialog composes with. */
+  effective_description: string
 }
 
 export interface ImageBackendInfo {

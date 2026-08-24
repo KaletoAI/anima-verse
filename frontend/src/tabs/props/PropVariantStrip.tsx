@@ -89,6 +89,13 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // never stomp what is under the cursor and no sync effect is needed.
   const [dimDraft, setDimDraft] = useState<Record<string, string>>({})
   useEffect(() => { setDimDraft({}) }, [propId])
+  // The same law for the description field, keyed by store index: a draft
+  // exists only while the field is edited. `descOpen` is the ONE variant whose
+  // field is expanded — a row of full textareas would push the chips apart,
+  // and only the field under the cursor needs the room.
+  const [descDraft, setDescDraft] = useState<Record<number, string>>({})
+  const [descOpen, setDescOpen] = useState<number | null>(null)
+  useEffect(() => { setDescDraft({}); setDescOpen(null) }, [propId])
   // Arming is bound to an INDEX, and a delete renumbers everything behind it —
   // so any change of the list disarms rather than pointing at another variant.
   useEffect(() => { setArmedDel(null) }, [propId, variants.length])
@@ -157,6 +164,23 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       () => apiPost(`/world/props/${enc}/variants/${v.index}/dims`,
         { [key]: value }),
       value === null ? t('Size override cleared') : t('Variant size saved'))
+  }, [enc, run, t])
+
+  // Commit ONE variant's generation subject. Blank clears the override and
+  // the variant renders from the prop's description again — the same law the
+  // server stores by, so the field echoes back what was really kept.
+  const commitDesc = useCallback((v: PropVariant, raw: string) => {
+    setDescDraft((d) => {
+      const next = { ...d }
+      delete next[v.index]
+      return next
+    })
+    const value = raw.trim()
+    if (value === (v.description || '')) return
+    void run(
+      () => apiPost(`/world/props/${enc}/variants/${v.index}/description`,
+        { description: value }),
+      value ? t('Variant description saved') : t('Variant description cleared'))
   }, [enc, run, t])
 
   const remove = useCallback((index: number) => {
@@ -264,6 +288,32 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   )
                 })}
               </div>
+              {/* The variant's own generation subject (2026-08-24). A new
+                  variant starts with a COPY of the prop's text, so the field
+                  opens filled and is EDITED ("…as a sapling") instead of
+                  written from nothing. Cleared = back to inheriting, which is
+                  what the placeholder then shows. One line at rest, four while
+                  it is being written — a strip of textareas would push the
+                  chips apart for a field nobody is editing. */}
+              <textarea
+                className="ga-textarea"
+                rows={descOpen === v.index ? 4 : 1}
+                style={{ width: 200, fontSize: '0.85em', resize: 'vertical' }}
+                disabled={busy}
+                value={descDraft[v.index] ?? (v.description || '')}
+                placeholder={v.effective_description
+                  || t('Description (generation subject)')}
+                title={t('What THIS variant’s source image is rendered from — the subject of its prompt. Empty = the prop’s own description (shown greyed). A new variant starts as a copy of it, so a version differs by an edit: “…as a sapling”, “…broken”, “…covered in snow”.')}
+                onFocus={() => setDescOpen(v.index)}
+                onChange={(e) => {
+                  const value = e.target.value
+                  setDescDraft((d) => ({ ...d, [v.index]: value }))
+                }}
+                onBlur={(e) => {
+                  setDescOpen((i) => (i === v.index ? null : i))
+                  commitDesc(v, e.target.value)
+                }}
+              />
               {/* Season chips (E2c). A set, not a single choice: a variant may
                   depict two seasons. No chip lit = every season, which is why
                   the row needs no "always" chip of its own. */}
@@ -354,6 +404,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
         {t('Several meshes of the SAME object — scattered copies pick one of them, so a wood is not one tree twenty times. ★ marks the primary variant, which is what anything that does not ask for a variant gets. The selected chip decides which variant the preview and the mesh gallery below show.')}
         {' '}
         {t('W/D/H are that variant’s own size in metres. Leave them empty and the variant is as big as the prop above; fill one in and this version alone gets that measurement — a sapling beside the grown tree.')}
+        {' '}
+        {t('The text field is what THIS variant’s next source image is rendered from. A new variant copies the prop’s description, so a version is an EDIT of it; clear the field and the variant renders from the prop’s text again.')}
         {worldSeasons.length ? (
           ' ' + t('A variant with no season chip lit renders all year; light one up and it renders only then. If EVERY variant is out of season the prop keeps rendering its primary one — a placement never becomes a hole.')
         ) : null}

@@ -2,10 +2,11 @@
  * PropImageDialog — render a NEW source image for an existing prop
  * (plan-area-detail-scenes.md follow-up: images used to be regenerable only
  * as part of the whole source→mesh chain). The dialog shows the COMPLETE
- * final prompt (final-prompt rule), composed FRESH from the prop's current
- * description (name as fallback) + the picked backend's use-case style —
- * exactly like the create form, so an edited description flows into the
- * next render (the OLD image's prompt stays readable in the panel caption).
+ * final prompt (final-prompt rule), composed FRESH from the TARGET VARIANT's
+ * current description (the prop's where the variant has none of its own, the
+ * name as the last fallback) + the picked backend's use-case style — exactly
+ * like the create form, so an edited description flows into the next render
+ * (the OLD image's prompt stays readable in the panel caption).
  * Manual edits stick; picking another backend recomposes an untouched
  * prompt. The mesh is untouched — re-meshing from the new image is the
  * separate "3D from this image" step.
@@ -15,20 +16,28 @@ import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import type { ImageBackendInfo, PropFull, PropSourceImage } from './propTypes'
 
-/** Same composition rule as the create form: style + subject. */
-const composePrompt = (prop: PropFull, backend?: ImageBackendInfo): string => {
-  const subject = (prop.description || prop.name || '').trim()
+/** Same composition rule as the create form: style + subject. The subject is
+ *  the TARGET VARIANT's text (its own description, else the prop's — the
+ *  server resolves an empty prompt the same way, `props.variant_description`);
+ *  the prop's own description stands in until the strip has loaded, and the
+ *  name is the last fallback. */
+const composePrompt = (prop: PropFull, backend?: ImageBackendInfo,
+                       variantSubject?: string): string => {
+  const subject = (variantSubject || prop.description || prop.name || '').trim()
   const style = (backend?.prompt_style || '').trim()
   return style ? (subject ? `${style}, ${subject}` : style) : subject
 }
 
-export function PropImageDialog({ prop, variant, image, backends, onGenerate,
-  onClose }: {
+export function PropImageDialog({ prop, variant, subject, image, backends,
+  onGenerate, onClose }: {
   /** null = closed. */
   prop: PropFull | null
   /** Model variant the render targets — the image belongs to the variant, so
    *  this is also whose current picture the defaults come from. */
   variant: number
+  /** What THIS variant renders from: its own description where it has one,
+   *  the prop's otherwise. Absent = the prop's text stands in. */
+  subject?: string
   /** That variant's current image record (absent = it has none yet). */
   image?: PropSourceImage
   backends: ImageBackendInfo[]
@@ -50,7 +59,7 @@ export function PropImageDialog({ prop, variant, image, backends, onGenerate,
     const known = backends.find((b) => b.name === image?.backend)
     const initial = known || backends[0]
     setPicked(initial?.name || '')
-    setPrompt(composePrompt(prop, initial))
+    setPrompt(composePrompt(prop, initial, subject))
     setTouched(false)
     setNegative(image?.negative || initial?.prompt_negative || '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -86,7 +95,7 @@ export function PropImageDialog({ prop, variant, image, backends, onGenerate,
                   // Another backend has another style — recompose an
                   // UNTOUCHED prompt; manual edits stick. Same for the
                   // negative default.
-                  if (!touched) setPrompt(composePrompt(prop, b))
+                  if (!touched) setPrompt(composePrompt(prop, b, subject))
                   if (!negative.trim()) setNegative(b?.prompt_negative || '')
                 }}>
                 {backends.map((b) => (
@@ -94,7 +103,7 @@ export function PropImageDialog({ prop, variant, image, backends, onGenerate,
                 ))}
               </select>
               <label className="ga-hint"
-                title={t('The full prompt sent to the render — composed from the backend style and the prop description (name as fallback). Empty = the server composes the same thing.')}>
+                title={t('The full prompt sent to the render — composed from the backend style and THIS variant’s description (the prop’s where the variant has none, the name as the last fallback). Empty = the server composes the same thing.')}>
                 {t('Final prompt (sent to the render)')}
               </label>
               <textarea className="ga-textarea" rows={4} value={prompt}

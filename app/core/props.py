@@ -187,6 +187,19 @@ _IMAGE_META_MASTER = {"backend": "backend_image", "prompt": "prompt",
 #: key would be the same fact in two shapes. See ``_effective_indices``.
 SEASONS_KEY = "seasons"
 
+#: The GENERATION SUBJECT of a variant (2026-08-24). A variant is a whole
+#: version of the object — a sapling beside the grown pine — so the sentence
+#: its product shot is rendered from belongs to it and not to the prop. Same
+#: "absence is the statement" law as ``seasons`` and the dim overrides: stored
+#: only when it says something, and a variant without the key renders from the
+#: PROP's description. See :func:`variant_description` for the resolution rule
+#: and :func:`add_variant`, which COPIES the prop's text into a new slot so
+#: the admin edits a filled field instead of an empty one.
+DESCRIPTION_KEY = "description"
+#: Runaway guard on that text — it is a prompt subject, not an essay, and it
+#: rides in every sidecar read.
+DESCRIPTION_MAX = 2000
+
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
 #: A variant may OVERRIDE any of the three dims (2026-08-24). Same key names
@@ -373,7 +386,10 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     every writer stores the sanitized list back, so it has to survive here.
 
     ``seasons`` (E2c) survives by the same law: kept when it names seasons,
-    dropped when it is empty — no dependency is stored as ABSENCE.
+    dropped when it is empty — no dependency is stored as ABSENCE. So does the
+    variant's own ``description`` (2026-08-24): kept when it says something,
+    dropped when it is blank, because a variant without one renders from the
+    prop's text.
 
     So do the per-variant DIM OVERRIDES (2026-08-24): each of the three keys
     survives only as a usable number, clamped exactly like the prop-level field
@@ -399,6 +415,9 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             seasons = sanitize_season_tags(entry.get(SEASONS_KEY))
             if seasons:
                 rec[SEASONS_KEY] = seasons
+            desc = _coerce_description(entry.get(DESCRIPTION_KEY))
+            if desc:
+                rec[DESCRIPTION_KEY] = desc
             for key in DIM_KEYS:
                 dim = _coerce_dim_m(entry.get(key), 0.0)
                 if dim > 0:
@@ -524,6 +543,15 @@ def _coerce_dim_m(value: Any, fallback: float = DEFAULT_DIM_M) -> float:
     if v <= 0:
         return fallback
     return round(min(v, 100.0), 3)
+
+
+def _coerce_description(value: Any) -> str:
+    """A variant's generation subject as it is STORED: stripped free text,
+    capped at :data:`DESCRIPTION_MAX`. ``""`` means "write no key at all" —
+    a blank line is not an authoring statement, it is the sentence "this
+    variant renders from the prop's description"."""
+    text = str(value or "").strip()
+    return text[:DESCRIPTION_MAX]
 
 
 def _coerce_sway_factor(value: Any) -> Optional[float]:
@@ -719,6 +747,30 @@ def variant_dims(meta: Dict[str, Any], variant: Any = None) -> Dict[str, float]:
         if key in entry:
             dims[key] = float(entry[key])
     return dims
+
+
+def variant_description(meta: Dict[str, Any], variant: Any = None) -> str:
+    """THE RESOLUTION RULE for the per-variant generation subject
+    (2026-08-24), in one place: **the variant's own description where it has
+    one, the prop's otherwise**.
+
+    ``variant`` is the STORE index, read exactly like :func:`variant_dims`
+    reads it — ``None``, a negative index or one this prop has no variant for
+    answers for the PRIMARY variant. Every render of a variant's product shot
+    goes through here, so "which sentence was this picture made from" has one
+    answer and not one per call site.
+    """
+    entries = _variant_list(meta)
+    try:
+        i = -1 if variant is None else int(variant)
+    except (TypeError, ValueError):
+        i = -1
+    if not 0 <= i < len(entries):
+        i = _effective_indices(entries)[0]
+    own = _coerce_description(entries[i].get(DESCRIPTION_KEY))
+    if own:
+        return own
+    return str((meta or {}).get("description") or "").strip()
 
 
 def _coerce_tags(raw: Any) -> List[str]:
@@ -1027,7 +1079,9 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     ``effective_dims`` is what the variant really renders at, which is what
     their placeholders show. Two fields for two questions — "what did I
     author here" and "how big is this thing" — and never one of them faked as
-    the other.
+    the other. ``description`` / ``effective_description`` are the same pair
+    for the generation subject (2026-08-24): the stored override (``""`` =
+    inherited) and the text a render of this variant would really use.
 
     ``seasons`` are the season names this variant is tagged for (E2c; empty =
     no dependency, the default) and ``in_season`` says whether that tag matches
@@ -1070,6 +1124,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "image": _image_meta(meta, entry["stem"]),
             "dims": {k: entry[k] for k in DIM_KEYS if k in entry},
             "effective_dims": variant_dims(meta, i),
+            "description": entry.get(DESCRIPTION_KEY, ""),
+            "effective_description": variant_description(meta, i),
         })
     return out
 
@@ -1094,7 +1150,16 @@ def add_variant(prop_id: str) -> int:
     stem = _free_stem(entries)
     if not stem:
         return -1
-    entries.append({"stem": stem, "active": True})
+    entry: Dict[str, Any] = {"stem": stem, "active": True}
+    # The new slot starts from the prop's CURRENT subject (2026-08-24): the
+    # admin authors a version of THIS object, so the field opens filled and is
+    # edited into "…as a sapling" instead of being written from nothing. It is
+    # a copy, not a link — a later edit of the prop text leaves an authored
+    # variant alone, which is the whole point of an own description.
+    desc = _coerce_description(meta.get("description"))
+    if desc:
+        entry[DESCRIPTION_KEY] = desc
+    entries.append(entry)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return len(entries) - 1
@@ -1198,6 +1263,37 @@ def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
             entries[i][key] = value
         else:
             entries[i].pop(key, None)
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return True
+
+
+def set_variant_description(prop_id: str, variant: int, text: Any) -> bool:
+    """Give ONE variant its own generation subject, or clear it (2026-08-24).
+
+    Blank, ``None`` and junk all CLEAR the key, because "this variant renders
+    from the prop's description" is stored as absence and nothing else — the
+    same law the dim overrides and the season tags follow.
+
+    Deliberately NOT refused for a generating variant: the text is read when a
+    render STARTS, so changing it mid-run changes nothing that is in flight,
+    moves no file and renames no stem."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return False
+    entries = _variant_list(meta)
+    try:
+        i = int(variant)
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= i < len(entries):
+        return False
+    desc = _coerce_description(text)
+    if desc:
+        entries[i][DESCRIPTION_KEY] = desc
+    else:
+        entries[i].pop(DESCRIPTION_KEY, None)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
@@ -2454,10 +2550,14 @@ def _render_source(prop_id: str, backend_glob: str,
 
     if not prompt.strip():
         # The stored description is the generation subject; the name is only
-        # the display fallback when no description was written.
+        # the display fallback when no description was written. It is THIS
+        # VARIANT's description (2026-08-24) — a version of the object is
+        # rendered from its own sentence where it has one, and only a variant
+        # without one falls back to the prop's.
         meta0 = read_sidecar(prop_id)
         composed = compose_prompt(
-            meta0.get("description") or meta0.get("name", ""), backend)
+            variant_description(meta0, variant) or meta0.get("name", ""),
+            backend)
         prompt = composed["prompt"]
         if not negative.strip():
             negative = composed["negative"]
