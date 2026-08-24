@@ -1175,6 +1175,15 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # always (see app/core/exploration.py).
     from app.core.exploration import mark_explored
     mark_explored(avatar, x, z)
+    # NPC SLOTS BY APPROACH (plan-npc-auto-spawn.md § 2), at the same place
+    # and for the same reason: an accepted point is where the avatar really
+    # is, and coming near a place is what makes it fill its NPC slots. What
+    # runs HERE is only the cheap half — distance against the `_locs` snapshot
+    # this report already read, plus a per-location GAME-time cooldown; the
+    # counting and every LLM turn happen in the queued job it submits. It
+    # swallows its own errors: no walker is ever refused over an NPC.
+    from app.core.npc_spawn import consider_point
+    consider_point(avatar, x, z, locations=_locs)
     # Walking is player-driven movement, and that is the clearest wake signal
     # there is — the same rule ``/play/enter-room`` and ``/play/travel`` apply
     # (a sleeping avatar must not walk a road in its sleep). It sits AFTER the

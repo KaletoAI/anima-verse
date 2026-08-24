@@ -799,6 +799,51 @@ SECTIONS = {
             "resolved_image_linger_minutes": {"type": "int", "label": "Resolved-Image Linger (min)", "default": 30, "min": 0, "max": 240, "description": "How long the 'after' illustration of a resolved disruption/danger event keeps overriding the normal location background before reverting. SYSTEM time (real minutes)."},
         },
     },
+    # Temporary NPCs — the automatic half (plan-npc-auto-spawn.md). The manual
+    # "+ New NPC" dialog needs none of this; these are the limits the world
+    # fills itself within.
+    "npc": {
+        "label": "NPCs (automatic)",
+        "icon": "🧑‍🌾",
+        "fields": {
+            "auto_spawn_enabled": {
+                "type": "bool", "label": "Automatic NPCs", "default": True,
+                "description": "Fill a location's NPC slots when the avatar comes near, "
+                               "and keep wanderers on the roads. Off = temporary NPCs are "
+                               "created by hand only."},
+            "max_alive": {
+                "type": "int", "label": "Max living NPCs", "default": 10,
+                "min": 0, "max": 100,
+                "description": "Hard cap on temporary NPCs that are in the world at once. "
+                               "Reached = no spawn until the TTL sweep pools one. The "
+                               "recycling pool has the same size."},
+            "wanderer_quota": {
+                "type": "int", "label": "Wanderer quota", "default": 3,
+                "min": 0, "max": 50,
+                "description": "How many travelling NPCs are kept walking between known "
+                               "places. They count towards the cap above."},
+            "spawn_radius_m": {
+                "type": "int", "label": "Approach radius (m)", "default": 150,
+                "min": 5, "max": 5000,
+                "description": "How close the avatar has to come to a place for its NPC "
+                               "slots to be filled. World metres."},
+            "spawn_cooldown_game_minutes": {
+                "type": "int", "label": "Per-place cooldown (game min)", "default": 10,
+                "min": 0, "max": 1440,
+                "description": "Minimum GAME time between two spawn checks of the same "
+                               "place — walking in and out again does not re-trigger it."},
+            "slot_ttl_game_hours": {
+                "type": "int", "label": "Slot NPC lifetime (game h)", "default": 12,
+                "min": 0, "max": 2400,
+                "description": "GAME hours a slot NPC stays before the sweep pools it. "
+                               "0 = it stays until an admin removes it."},
+            "wanderer_ttl_game_hours": {
+                "type": "int", "label": "Wanderer lifetime (game h)", "default": 24,
+                "min": 0, "max": 2400,
+                "description": "GAME hours a wanderer stays alive even if it never "
+                               "arrives anywhere. 0 = no lifetime."},
+        },
+    },
     "story_engine": {
         "label": "Story Engine",
         "icon": "📖",

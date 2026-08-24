@@ -505,6 +505,11 @@ def get_character_language_instruction(character_name: str) -> str:
 _RESERVED_NAMES = {"user", "admin", "system", "default", "player", "",
                    "undefined", "null", "none", "nan"}
 
+#: ``characters.status`` of a recycled temporary NPC — kept as a profile,
+#: standing nowhere (plan-npc-auto-spawn.md § 3). Everything else runs with an
+#: empty status; there is deliberately no third value.
+POOLED_STATUS = "pooled"
+
 
 def _is_real_character(name: str) -> bool:
     """The ONE roster rule: is this name a playable character?
@@ -739,8 +744,59 @@ def is_temporary_npc(character_name: str) -> bool:
 
 
 def list_temporary_npcs() -> List[str]:
-    """All characters whose template marks them as temporary NPCs."""
+    """All LIVING characters whose template marks them as temporary NPCs.
+
+    Pooled NPCs are not in the world (see ``list_available_characters``), so
+    they are not here either — the TTL sweep, the slot count and the hard cap
+    all ask this question about the living.
+    """
     return [n for n in list_available_characters() if is_temporary_npc(n)]
+
+
+def get_character_status(character_name: str) -> str:
+    """Lifecycle status of the character row: '' (in the world) or 'pooled'."""
+    if not character_name:
+        return ""
+    try:
+        row = get_connection().execute(
+            "SELECT COALESCE(status,'') FROM characters WHERE name=?",
+            (character_name,)).fetchone()
+        return (row[0] or "") if row else ""
+    except Exception as e:
+        logger.debug("get_character_status(%s): %s", character_name, e)
+        return ""
+
+
+def set_character_status(character_name: str, status: str) -> bool:
+    """Set the row's lifecycle status. '' puts a character back in the world."""
+    if not character_name:
+        return False
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                "UPDATE characters SET status=?, updated_at=? WHERE name=?",
+                ((status or "").strip(), utc_now_iso(), character_name))
+        return bool(cur.rowcount)
+    except Exception as e:
+        logger.error("set_character_status(%s, %r): %s", character_name, status, e)
+        return False
+
+
+def list_pooled_characters() -> List[str]:
+    """Every pooled character row, oldest ``updated_at`` first.
+
+    The order IS the recycling order: the pool is a FIFO, so the NPC that has
+    been out of the world longest is the one a spawn re-uses and the one the
+    pool cap drops.
+    """
+    try:
+        rows = get_connection().execute(
+            "SELECT name FROM characters WHERE COALESCE(status,'')=? "
+            "ORDER BY updated_at ASC, name ASC", (POOLED_STATUS,)).fetchall()
+        return [r[0] for r in rows if _is_real_character(r[0])]
+    except Exception as e:
+        logger.debug("list_pooled_characters: %s", e)
+        return []
 
 
 def delete_character(character_name: str) -> bool:
@@ -2941,7 +2997,7 @@ def character_exists(name: str) -> bool:
         return False
 
 
-def list_available_characters() -> List[str]:
+def list_available_characters(include_pooled: bool = False) -> List[str]:
     """Listet alle verfuegbaren Characters aus der DB (Fallback: Dateisystem).
 
     Filterung:
@@ -2952,14 +3008,24 @@ def list_available_characters() -> List[str]:
         oder Sentinels und sollen niemals in Galerie/Roster/Chat-Auswahl
         auftauchen, auch wenn sie versehentlich als Row in der ``characters``
         Tabelle landen
+      - POOLED temporary NPCs (``status='pooled'``, plan-npc-auto-spawn.md
+        § 3) stand nowhere in the world: their profile is only kept so a later
+        spawn can re-use it. This is THE roster gate, so filtering here is what
+        keeps them out of the worldmap payload, the earshot lists, the agent
+        loop and every character picker at once. ``include_pooled=True`` is for
+        the pool's own bookkeeping and for the name-collision check — a pooled
+        name is still taken.
     """
     try:
         conn = get_connection()
         rows = conn.execute(
-            "SELECT name FROM characters ORDER BY name ASC"
+            "SELECT name, COALESCE(status,'') FROM characters ORDER BY name ASC"
         ).fetchall()
+        # The FS fallback below is for a world with NO rows at all — a world
+        # whose every row is pooled has a roster, and that roster is empty.
         if rows:
-            return [r[0] for r in rows if _is_real_character(r[0])]
+            return [r[0] for r in rows if _is_real_character(r[0])
+                    and (include_pooled or r[1] != POOLED_STATUS)]
     except Exception as e:
         logger.debug("list_available_characters DB-Fehler: %s", e)
 

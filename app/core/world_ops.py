@@ -1589,6 +1589,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     indoor = data.get("indoor")
     terrain = data.get("terrain")
     map3d = data.get("map3d")
+    npc_slots = data.get("npc_slots")
     if not location_name:
         raise HTTPException(status_code=400, detail="Name missing")
     if not isinstance(rooms, list):
@@ -1614,7 +1615,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
-                  or map3d is not None)
+                  or map3d is not None or npc_slots is not None)
     if _has_extra and location:
         from app.models.world import _load_world_data, _save_world_data
         wdata = _load_world_data()
@@ -1655,6 +1656,17 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         _l["map3d"] = _m3
                     else:
                         _l.pop("map3d", None)
+                if npc_slots is not None:
+                    # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
+                    # Sanitized by the one function the spawn logic reads them
+                    # with, so what the editor saves and what the trigger
+                    # counts can never be two different shapes.
+                    from app.core.npc_spawn import normalize_slots
+                    _slots = normalize_slots(npc_slots)
+                    if _slots:
+                        _l["npc_slots"] = _slots
+                    else:
+                        _l.pop("npc_slots", None)
                 break
         _save_world_data(wdata)
         location = get_location_by_id(location["id"])
@@ -1687,6 +1699,7 @@ def update_location_with_extras(location_id: str,
     indoor = data.get("indoor")
     terrain = data.get("terrain")
     map3d = data.get("map3d")
+    npc_slots = data.get("npc_slots")
 
     loc = get_location_by_id(location_id)
     if not loc:
@@ -1720,7 +1733,7 @@ def update_location_with_extras(location_id: str,
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
-                  or map3d is not None)
+                  or map3d is not None or npc_slots is not None)
     if _has_extra:
         from app.models.world import _load_world_data, _save_world_data
         wdata = _load_world_data()
@@ -1761,6 +1774,17 @@ def update_location_with_extras(location_id: str,
                         _l["map3d"] = _m3
                     else:
                         _l.pop("map3d", None)
+                if npc_slots is not None:
+                    # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
+                    # Sanitized by the one function the spawn logic reads them
+                    # with, so what the editor saves and what the trigger
+                    # counts can never be two different shapes.
+                    from app.core.npc_spawn import normalize_slots
+                    _slots = normalize_slots(npc_slots)
+                    if _slots:
+                        _l["npc_slots"] = _slots
+                    else:
+                        _l.pop("npc_slots", None)
                 break
         _save_world_data(wdata)
 

@@ -923,6 +923,14 @@ ALTER_MIGRATIONS = [
     # (app/core/terrain_surface_migration.py), so a world that relied on the
     # name keeps exactly the ground it had.
     ("terrain_types", "surface", "TEXT DEFAULT ''"),
+    # characters: lifecycle status of the row. '' = an ordinary character of
+    # this world, 'pooled' = a recycled temporary NPC (plan-npc-auto-spawn.md
+    # § 3) whose profile is kept for re-use while it stands nowhere. The
+    # column exists so ``list_available_characters`` can filter the pool out
+    # inside the SAME single SELECT every roster path already runs — deciding
+    # it from the profile blob would put a per-character read on the worldmap
+    # payload, the earshot lists and the agent loop.
+    ("characters", "status", "TEXT DEFAULT ''"),
 ]
 
 

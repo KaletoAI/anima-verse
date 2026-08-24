@@ -354,6 +354,22 @@ def _sub_npc_ttl_sweep():
         logger.debug("npc_ttl_sweep sub error: %s", e)
 
 
+def _sub_npc_wanderers():
+    """Keep up to ``npc.wanderer_quota`` travelling NPCs on the roads.
+
+    Settles arrivals (pool or turn around) and queues at most ONE top-up per
+    run — the generation itself is a queue job, so a slow LLM turn never holds
+    up this tick. Paused with everything else while the world is frozen.
+    """
+    try:
+        from app.core.npc_spawn import wanderer_tick
+        result = wanderer_tick()
+        if result.get("arrived") or result.get("queued"):
+            logger.info("npc_wanderers: %s", result)
+    except Exception as e:
+        logger.debug("npc_wanderers sub error: %s", e)
+
+
 # Sub-Task-Tabelle: (callable, min_interval_seconds, label).
 # min_interval_seconds = wie oft soll dieser Sub-Task LAUFEN. Der Tick
 # selbst feuert haeufiger; jeder Sub-Task wird nur ausgefuehrt wenn seit
@@ -377,6 +393,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),
     (_sub_lora_library_sync,         3600,                  "lora_library_sync"),
     (_sub_npc_ttl_sweep,             3600,                  "npc_ttl_sweep"),
+    (_sub_npc_wanderers,             300,                   "npc_wanderers"),
 ]
 
 

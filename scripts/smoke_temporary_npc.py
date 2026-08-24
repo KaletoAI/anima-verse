@@ -52,10 +52,13 @@ Sections:
       now — 7200 game seconds, checked as a number, not as a formatted string.
       No TTL yields "" (lives forever), a negative TTL yields "" as well.
 
-  [7] The sweep removes exactly the expired NPC. Three characters: an expired
-      NPC, an NPC whose TTL is still in the future, and a normal character
-      whose profile carries an expired stamp (it is not an NPC, so the stamp is
-      meaningless). Exactly one row may disappear from `characters`.
+  [7] The sweep takes exactly the expired NPC out of the world. Three
+      characters: an expired NPC, an NPC whose TTL is still in the future, and
+      a normal character whose profile carries an expired stamp (it is not an
+      NPC, so the stamp is meaningless). Exactly one name may disappear from
+      the roster. WHERE it goes is the pool's business (§ 3 of
+      plan-npc-auto-spawn.md, checked in scripts/smoke_npc_spawn.py) — from
+      here it is gone either way.
 
   [8] The sweep's trace cleanup. `cleanup_npc_traces` deletes what OTHER
       characters remember ABOUT the NPC: the memory whose meta names it as
@@ -319,7 +322,7 @@ check("empty stamp is never expired", is_expired(""), False)
 check("garbage stamp is never expired", is_expired("whenever"), False)
 
 # ---------------------------------------------------------------------------
-print("\n[7] The sweep removes exactly the expired NPC")
+print("\n[7] The sweep takes exactly the expired NPC out of the world")
 from app.core.npc_ops import sweep_expired_npcs  # noqa: E402
 
 expired = (game_time() - GameDuration.of(hours=1)).canonical()

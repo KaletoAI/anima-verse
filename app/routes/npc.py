@@ -21,18 +21,60 @@ logger = get_logger("npc_routes")
 
 @router.get("/list")
 def list_npcs_route() -> Dict[str, Any]:
-    """All temporary NPCs with the fields the admin list shows."""
+    """Temporary NPCs — the living ones, plus the recycling pool.
+
+    Pooled NPCs are out of every roster (``list_available_characters``), so
+    this endpoint is the ONE place the admin can see them at all. Deleting one
+    for good is the ordinary ``DELETE /characters/{name}``.
+    """
     from app.core.npc_ops import list_npcs
-    return {"npcs": list_npcs()}
+    from app.core.npc_pool import list_pool, max_pool_size
+    from app.core.npc_spawn import alive_npc_count, max_alive, wanderer_quota
+    return {"npcs": list_npcs(), "pooled": list_pool(),
+            "limits": {"alive": alive_npc_count(), "max_alive": max_alive(),
+                       "wanderer_quota": wanderer_quota(),
+                       "pool_size": max_pool_size()}}
 
 
 @router.post("/sweep")
 async def sweep_route() -> Dict[str, Any]:
-    """Run the TTL sweep now (the periodic job does the same hourly)."""
+    """Run the TTL sweep now (the periodic job does the same hourly).
+
+    "Removed" means moved to the pool since plan-npc-auto-spawn.md § 3 — the
+    NPC is out of the world, its profile is kept for the next spawn.
+    """
     import asyncio
     from app.core.npc_ops import sweep_expired_npcs
     removed = await asyncio.to_thread(sweep_expired_npcs)
     return {"removed": removed}
+
+
+@router.post("/{character_name}/pool")
+async def pool_npc_route(character_name: str) -> Dict[str, Any]:
+    """Retire a living temporary NPC into the recycling pool by hand."""
+    import asyncio
+    from app.core.npc_pool import pool_npc
+    ok = await asyncio.to_thread(pool_npc, character_name, "admin")
+    if not ok:
+        raise HTTPException(status_code=404,
+                            detail="not a living temporary NPC")
+    return {"status": "success", "pooled": character_name}
+
+
+@router.post("/slots/{location_id}/fill")
+def fill_slots_route(location_id: str) -> Dict[str, Any]:
+    """Queue the slot check for one location — the editor's "Fill now".
+
+    Submits the very same job the avatar's approach submits, so the manual
+    button and the automatic trigger cannot drift apart. It also clears the
+    location's cooldown: an admin who presses the button means it.
+    """
+    from app.core.npc_spawn import reset_cooldowns, submit_spawn_job
+    reset_cooldowns()
+    task_id = submit_spawn_job(location_id=location_id, reason="slot",
+                               triggered_by="admin")
+    return {"status": "success", "task_id": task_id,
+            "queued": bool(task_id)}
 
 
 @router.post("/generate")

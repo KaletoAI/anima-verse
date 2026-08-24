@@ -8,6 +8,7 @@ import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { type ItemRef } from '../../lib/refs'
 import { DANGER_LEVELS, GROUND_ROOM_ID, MAP3D_STYLES, TERRAIN_TYPES, groundRoomLabel, type Location, type Map3D, type SurfaceKind } from './worldTypes'
 import { RandomEventsEditor } from './RandomEventsEditor'
+import { NpcSlotsEditor } from './NpcSlotsEditor'
 import { LocationGallery } from './LocationGallery'
 import { BuildingModelPanel } from './BuildingModelPanel'
 import { RoomLayoutEditor } from './RoomLayoutEditor'
@@ -153,6 +154,9 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         image_prompt_map_2d: draft.image_prompt_map_2d,
         image_prompt_building: draft.image_prompt_building,
         event_settings: draft.event_settings,
+        // Always sent, even as an empty list: that is how the last slot of a
+        // place can be removed (the server drops the key on an empty list).
+        npc_slots: draft.npc_slots || [],
       })
       toast(t('Saved'))
       onChanged()
@@ -316,6 +320,14 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           />
         </Field>
       </div>
+
+      <div className="ga-form-section-label">{t('NPC slots')}</div>
+      <NpcSlotsEditor
+        locationId={location.id}
+        rooms={draft.rooms || []}
+        value={draft.npc_slots}
+        onChange={(slots) => upd('npc_slots', slots)}
+      />
 
       <div className="ga-form-section-label">{t('Random events')}</div>
       <RandomEventsEditor

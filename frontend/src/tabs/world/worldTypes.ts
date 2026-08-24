@@ -296,6 +296,23 @@ export interface EventSettings {
   event_blacklist?: string[]
 }
 
+/** One NPC role a place wants staffed (plan-npc-auto-spawn.md § 1).
+ *  The server fills it automatically when the avatar comes near: it counts the
+ *  living NPCs tagged with this ROLE at this place and generates (or recycles)
+ *  what is missing. `role` is the identity — it is the tag on the NPC and the
+ *  key a recycled NPC is matched on, so a slot without one is dropped on save. */
+export interface NpcSlot {
+  role: string
+  /** Character template of the generated NPC. Empty = `npc-temporary`. */
+  template?: string
+  count_min?: number
+  count_max?: number
+  /** Free text the generator gets — who this person is at this place. */
+  briefing?: string
+  /** Room the NPC is placed in. Empty = the location's arrival room. */
+  room?: string
+}
+
 export interface Location {
   id: string
   name: string
@@ -325,6 +342,7 @@ export interface Location {
   map_image_2d?: string
   map_rotation_2d?: number
   event_settings?: EventSettings
+  npc_slots?: NpcSlot[]
   terrain?: string
   map3d?: Map3D
   /** Server verdict: does this location carry any boundary pass-through?

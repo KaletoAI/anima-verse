@@ -344,6 +344,14 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
             logger.debug("resolve_llm(%s): no routing, falling back to 'intent'",
                          task)
             return resolve_llm("intent", agent_name=agent_name)
+        # npc_* is character WRITING — the same class of work as the chat
+        # stream, and its anchor. Without this an admin who never opened the
+        # routing tab would find the automatic NPC spawn silently doing
+        # nothing, which looks like a broken feature rather than a setting.
+        if task.startswith("npc_"):
+            logger.debug("resolve_llm(%s): no routing, falling back to "
+                         "'chat_stream'", task)
+            return resolve_llm("chat_stream", agent_name=agent_name)
         return None
 
     candidates.sort(key=lambda x: x[0])

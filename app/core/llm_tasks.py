@@ -79,6 +79,13 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # so an unrouted task is not a broken feature — it is the default gable.
     "roof_design":        {"label": "Roof Design (Blender)",       "priority": Priority.LOW,    "category": "tool"},
 
+    # Temporary NPCs, generated without a human in the loop
+    # (plan-npc-auto-spawn.md): the same character sheet the manual dialog
+    # produces, but the model comes from the routing table because an
+    # automatic spawn has nobody to ask. Creative prose in a JSON fence, so it
+    # is chat class; unrouted it falls back to `chat_stream` (resolve_llm).
+    "npc_generate":       {"label": "NPC Generation (automatic)", "priority": Priority.LOW, "category": "chat"},
+
     # Summaries
     "consolidation":         {"label": "Consolidation (3-Tier)",   "priority": Priority.LOW, "category": "helper"},
     "relationship_summary":  {"label": "Relationship Summary",     "priority": Priority.LOW, "category": "helper", "gate": "relationships.summary_enabled"},

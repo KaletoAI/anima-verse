@@ -49,7 +49,30 @@ MAX_GAP_LINES = 30
 # Prompt assembly
 # ---------------------------------------------------------------------------
 
-def npc_generable_fields() -> str:
+def npc_template_name(template: str = "") -> str:
+    """Resolve a requested NPC template to a usable one.
+
+    A location slot may name its OWN template (plan-npc-auto-spawn.md § 1) —
+    that is how a second NPC kind stays a JSON file instead of a code path.
+    The only condition is that the template actually marks its characters as
+    temporary NPCs; anything else would put a full character with memories,
+    relationships and thoughts on a disposable slot, so it falls back to the
+    canonical one and says so.
+    """
+    from app.models.character_template import get_template
+
+    wanted = (template or "").strip()
+    if not wanted or wanted == NPC_TEMPLATE:
+        return NPC_TEMPLATE
+    tmpl = get_template(wanted)
+    if tmpl and (tmpl.get("features") or {}).get("temporary_npc") is True:
+        return wanted
+    logger.warning("NPC template %r is not a temporary-NPC template — using %s",
+                   wanted, NPC_TEMPLATE)
+    return NPC_TEMPLATE
+
+
+def npc_generable_fields(template: str = "") -> str:
     """Markdown field list for the schema's ``{generable_fields}`` slot.
 
     Derived from the NPC template, so adding a field to the template JSON adds
@@ -58,7 +81,7 @@ def npc_generable_fields() -> str:
     """
     from app.models.character_template import get_template
 
-    tmpl = get_template(NPC_TEMPLATE) or {}
+    tmpl = get_template(npc_template_name(template)) or {}
     lines: List[str] = []
     for section in tmpl.get("sections", []):
         for field in section.get("fields", []):
@@ -84,7 +107,7 @@ def npc_generable_fields() -> str:
     if not lines:
         # A template without generable fields cannot produce an NPC; say so
         # loudly in the prompt rather than sending an empty section.
-        return "(no generable fields — the npc-temporary template is broken)"
+        return "(no generable fields — the NPC template is broken)"
     return "\n".join(lines)
 
 
@@ -116,7 +139,8 @@ def _location_labels(location_id: str, room_id: str = "") -> Tuple[str, str]:
     return loc_name, (room_name or room_id or "(any room)")
 
 
-def build_npc_schema_text(location_id: str, room_id: str = "") -> str:
+def build_npc_schema_text(location_id: str, room_id: str = "",
+                          template: str = "") -> str:
     """The NPC schema markdown with every placeholder filled."""
     from app.models.character import list_available_characters
     from app.models.world_setup import get_world_setup_text
@@ -124,13 +148,15 @@ def build_npc_schema_text(location_id: str, room_id: str = "") -> str:
 
     setup = (get_world_setup_text() or "").strip()
     setup_block = f"## World setup\n\n{setup}\n\n" if setup else ""
-    existing = ", ".join(list_available_characters()) or "(none yet)"
+    # Pooled NPCs count as existing names here: their profile is still there
+    # and a generated twin would collide with it on apply.
+    existing = ", ".join(list_available_characters(include_pooled=True)) or "(none yet)"
     loc_name, room_name = _location_labels(location_id, room_id)
 
     return sanitize_injected_markdown(_load_schema(
         NPC_SCHEMA,
         world_setup_block=setup_block,
-        generable_fields=npc_generable_fields(),
+        generable_fields=npc_generable_fields(template),
         existing_characters=existing,
         location_name=loc_name,
         room_name=room_name,
@@ -141,7 +167,7 @@ def build_npc_schema_text(location_id: str, room_id: str = "") -> str:
 # Local validation (no LLM) — the cheap half of the validate stage
 # ---------------------------------------------------------------------------
 
-def validate_npc_fields(data: Dict[str, Any]) -> List[str]:
+def validate_npc_fields(data: Dict[str, Any], template: str = "") -> List[str]:
     """Missing/empty required fields, as `key — reason` lines.
 
     Required = the template's own ``required`` flags plus the name. Unlike the
@@ -155,7 +181,7 @@ def validate_npc_fields(data: Dict[str, Any]) -> List[str]:
     if not name:
         gaps.append("character_name — missing, every NPC needs an in-world name")
 
-    tmpl = get_template(NPC_TEMPLATE) or {}
+    tmpl = get_template(npc_template_name(template)) or {}
     for section in tmpl.get("sections", []):
         for field in section.get("fields", []):
             key = field.get("key", "")
@@ -186,13 +212,18 @@ def validate_npc_fields(data: Dict[str, Any]) -> List[str]:
 
 
 def name_is_taken(name: str) -> bool:
-    """True when a character of that name already exists (case-insensitive)."""
+    """True when a character of that name already exists (case-insensitive).
+
+    Pooled NPCs count: their profile, their storage directory and their row
+    are all still there, so the name is not free even though nobody in the
+    world carries it right now.
+    """
     from app.models.character import list_available_characters
     wanted = (name or "").strip().lower()
     if not wanted:
         return True
     return any(wanted == (c or "").strip().lower()
-               for c in list_available_characters())
+               for c in list_available_characters(include_pooled=True))
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +247,8 @@ def expiry_stamp(ttl_hours: Optional[float]) -> str:
 
 def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
               briefing: str = "", ttl_hours: Optional[float] = None,
-              created_by: str = "") -> Dict[str, Any]:
+              created_by: str = "", template: str = "",
+              slot_role: str = "", wanderer: bool = False) -> Dict[str, Any]:
     """Create the character, then stamp the NPC-only bookkeeping onto it.
 
     The heavy lifting is ``_apply_character_internal`` — the very same call the
@@ -230,14 +262,15 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
                                       save_character_profile)
     from app.routes.world_dev import _apply_character_internal
 
+    tmpl_name = npc_template_name(template)
     payload = dict(data)
     payload.pop("outfits", None)          # never a wardrobe (see validate)
-    payload["template"] = NPC_TEMPLATE    # fixed, never LLM-chosen
+    payload["template"] = tmpl_name       # fixed, never LLM-chosen
     name = str(payload.get("character_name") or "").strip()
     if not name:
         raise ValueError("character_name missing")
 
-    result = _apply_character_internal(payload, selected_template=NPC_TEMPLATE,
+    result = _apply_character_internal(payload, selected_template=tmpl_name,
                                        created_by=created_by or "npc_generator")
 
     # Bookkeeping the generator is not allowed to set.
@@ -245,6 +278,13 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     profile["npc_briefing"] = (briefing or "").strip()
     profile["expires_at"] = expiry_stamp(ttl_hours)
     profile["outfit_worn"] = True
+    # THE SLOT TAG. What makes an NPC count towards a location's slot is this
+    # pair on its profile — never its name, never its role text in prose
+    # (feedback_no_name_resolution). An NPC without a slot (manual, wanderer)
+    # simply carries empty ones.
+    profile["npc_slot_role"] = (slot_role or "").strip()
+    profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
+    profile["npc_wanderer"] = bool(wanderer)
     # The standing task IS the activity baseline — one field, two consumers:
     # the chat prompt renders it (in_prompt), the world shows it as what the
     # NPC is doing.
@@ -296,6 +336,9 @@ def npc_summary(name: str) -> Dict[str, Any]:
         "goals": profile.get("npc_goals") or "",
         "briefing": profile.get("npc_briefing") or "",
         "outfit_description": profile.get("outfit_description") or "",
+        "slot_role": profile.get("npc_slot_role") or "",
+        "slot_location": profile.get("npc_slot_location") or "",
+        "wanderer": bool(profile.get("npc_wanderer")),
         "location_id": location_id,
         "location_name": get_location_name(location_id) if location_id else "",
         "room_id": get_character_current_room(name) or "",
@@ -327,15 +370,18 @@ def list_npcs() -> List[Dict[str, Any]]:
 
 
 def sweep_expired_npcs() -> int:
-    """Delete every temporary NPC whose game-time TTL has run out.
+    """POOL every temporary NPC whose game-time TTL has run out.
 
-    ``delete_character`` sweeps the NPC's own rows and — because the template
-    marks it temporary — also what the other characters remembered about it.
-    An NPC without ``expires_at`` is never swept; it lives until an admin
-    deletes it.
+    Since plan-npc-auto-spawn.md § 3 the sweep no longer deletes: the profile
+    is kept and the row is marked pooled, so the next spawn of that role can
+    re-use a finished character sheet instead of paying for three LLM turns.
+    What the other characters remembered about the NPC still goes — pooling
+    changes the NPC's fate, not the memory decision (§ 10.4 of the temp-NPC
+    plan). An NPC without ``expires_at`` is never swept; it lives until an
+    admin deletes it.
     """
-    from app.models.character import delete_character, get_character_profile
-    from app.models.character import list_temporary_npcs
+    from app.core.npc_pool import pool_npc
+    from app.models.character import get_character_profile, list_temporary_npcs
 
     removed = 0
     for name in list_temporary_npcs():
@@ -343,12 +389,112 @@ def sweep_expired_npcs() -> int:
             profile = get_character_profile(name) or {}
             if not is_expired(str(profile.get("expires_at") or "")):
                 continue
-            if delete_character(name):
+            if pool_npc(name, reason="ttl"):
                 removed += 1
-                logger.info("Temporary NPC '%s' expired and was removed", name)
         except Exception as e:  # noqa: BLE001
             logger.debug("npc sweep(%s) error: %s", name, e)
     return removed
+
+
+# ---------------------------------------------------------------------------
+# The blocking pipeline — the one the automatic spawns use
+# ---------------------------------------------------------------------------
+
+#: The routed LLM task of an automatic NPC generation. The manual dialog picks
+#: a model by hand (there is a human at the browser); an automatic spawn has
+#: nobody to ask, so it goes through the ordinary routing table like every
+#: other background LLM job (/admin/settings → LLM Routing).
+NPC_TASK = "npc_generate"
+
+#: Completion cap for one generation turn. An NPC sheet is a small flat JSON
+#: object; a model that runs past this is looping, not writing.
+NPC_MAX_TOKENS = 2500
+
+
+def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
+                          ttl_hours: Optional[float] = None,
+                          template: str = "", slot_role: str = "",
+                          wanderer: bool = False,
+                          created_by: str = "npc_auto") -> Dict[str, Any]:
+    """generate → validate → repair → apply, synchronously. For queue workers.
+
+    Same four stages and the same helpers as the SSE pipeline, with two
+    deliberate differences, both of which come from there being no human at
+    the other end:
+
+    * the LLM goes through ``llm_call`` (routing table + provider queue)
+      instead of a model picked in a dialog — an automatic spawn cannot ask
+      anyone which model to use;
+    * the LLM VALIDATOR stage is skipped. Its value is a second opinion for a
+      person watching the stream; here it would double the cost of every
+      spawn, and the local field check is what the apply stage enforces
+      anyway. So: one generate turn, and one repair turn only when the local
+      check found gaps.
+
+    Returns ``{"ok": bool, "character": str, "error": str, "gaps": [...]}``.
+    """
+    import json as _json
+
+    from app.core.llm_router import llm_call
+    from app.core.prompt_templates import render_task
+    from app.routes.world_dev import _extract_json_block
+
+    if not briefing.strip():
+        return {"ok": False, "error": "briefing required"}
+
+    tmpl = npc_template_name(template)
+    schema_text = build_npc_schema_text(location_id, room_id, tmpl)
+
+    def _turn(task_template: str, **vars_: Any) -> Optional[Dict[str, Any]]:
+        system_prompt, user_prompt = render_task(task_template, **vars_)
+        response = llm_call(NPC_TASK, system_prompt, user_prompt,
+                            agent_name="NpcGenerator",
+                            label=f"NPC spawn ({slot_role or 'wanderer'})",
+                            max_tokens=NPC_MAX_TOKENS)
+        return _extract_json_block(getattr(response, "content", "") or "",
+                                   NPC_FENCE)
+
+    try:
+        data = _turn("npc_generate", schema_text=schema_text,
+                     briefing=briefing.strip())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("NPC auto-generate failed: %s", e)
+        return {"ok": False, "error": str(e)}
+    if not data:
+        return {"ok": False, "error": "no ```json:npc block in the answer"}
+
+    gaps = validate_npc_fields(data, tmpl)
+    name = str(data.get("character_name") or "").strip()
+    if name and name_is_taken(name):
+        gaps.append(f"character_name — '{name}' already exists in this world, "
+                    "pick a different in-world name")
+    if gaps:
+        try:
+            repaired = _turn("npc_repair", schema_text=schema_text,
+                             draft_json=_json.dumps(data, ensure_ascii=False,
+                                                    indent=2),
+                             gaps="\n".join(f"- {g}" for g in gaps[:MAX_GAP_LINES]))
+            if repaired:
+                data = repaired
+        except Exception as e:  # noqa: BLE001
+            logger.warning("NPC auto-repair failed, keeping the draft: %s", e)
+
+    blocking = validate_npc_fields(data, tmpl)
+    if blocking:
+        return {"ok": False, "error": "still incomplete after repair",
+                "gaps": blocking}
+    name = str(data.get("character_name") or "").strip()
+    if name_is_taken(name):
+        return {"ok": False, "error": f"a character named '{name}' already exists"}
+    try:
+        applied = apply_npc(data, location_id, room_id, briefing, ttl_hours,
+                            created_by, template=tmpl, slot_role=slot_role,
+                            wanderer=wanderer)
+    except Exception as e:  # noqa: BLE001
+        logger.error("NPC auto-apply failed: %s", e)
+        return {"ok": False, "error": f"apply failed: {e}"}
+    return {"ok": True, "character": applied.get("character") or name,
+            "expires_at": applied.get("expires_at", "")}
 
 
 # ---------------------------------------------------------------------------

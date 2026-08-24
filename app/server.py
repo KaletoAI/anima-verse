@@ -397,6 +397,8 @@ async def lifespan(app: FastAPI):
     register_migration_handler()
     from app.core.outfit_batch import register_outfit_batch_handler
     register_outfit_batch_handler()
+    from app.core.npc_spawn import register_npc_spawn_handler
+    register_npc_spawn_handler()
 
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
