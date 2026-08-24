@@ -772,6 +772,10 @@ export class Vector4 {
   constructor(x = 0, y = 0, z = 0, w = 0) { this.set(x, y, z, w); }
   set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; return this; }
 }
+export class CanvasTexture {
+  constructor(image) { this.image = image; }
+  dispose() {}
+}
 export const RedFormat = 1022;
 export const FloatType = 1015;
 export const NearestFilter = 1003;
@@ -779,14 +783,47 @@ export const ClampToEdgeWrapping = 1001;
 `;
 
 /**
+ * The one piece of DOM the water variant touches: the shared wave normal map
+ * is drawn onto a 256² canvas (`@anima/scene-render materials.makeWaveNormal`)
+ * the first time a water program is compiled, and [16] compiles one. The stub
+ * takes the pixels and throws them away — what is checked here is the SHADER,
+ * never the map.
+ */
+if (typeof globalThis.document === 'undefined') {
+  globalThis.document = {
+    createElement: () => ({
+      width: 0,
+      height: 0,
+      getContext: () => ({
+        fillStyle: '',
+        fillRect() {},
+        putImageData() {},
+        createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+      }),
+    }),
+  };
+}
+
+/**
  * Transpile a module and import it, with `three` and `@anima/scene-render`
- * resolved to local files. The scene-render entry is `worldHeight.ts` itself:
- * that is the only thing `terrainLod.ts` takes from the package, and pointing
- * at the real barrel would drag three back in through the front door.
+ * resolved to local files.
  *
- * `waterRaster.ts` comes along as a local sibling since K-A E2 — it is pure
- * arithmetic over the wire shape and takes `tileKeyAt` from the same
- * `worldHeight.ts`, so it loads under exactly the same rules.
+ * The package entry is a two-line BARREL over the two files `terrainLod.ts`
+ * really takes something from — `worldHeight.ts` (the lattice sampler) and,
+ * since K-A E4, `materials.ts` (the shared wave map, the shared sky and the
+ * shared clock). Both are three-free at RUNTIME: materials.ts imports three
+ * only as a TYPE, which esbuild erases, so no stub is needed and the constants
+ * the water look falls back to are the REAL ones. Pointing at the real barrel
+ * instead would drag three back in through the front door.
+ *
+ * `waterRaster.ts`, `waterPlaneMath.ts` and `waterShade.ts` come along as local
+ * siblings: all three are pure arithmetic over the wire shape and over the
+ * shore curves, so they load under exactly the same rules.
+ *
+ * `layerGround.ts` is STUBBED and not transpiled. `terrainLod.ts` takes exactly
+ * one function from it (the borrowed id-mask uniforms, K-A E4) and that file
+ * pulls in three, the texture library and the DOM — a wiring line, checked by
+ * `npm run build -w client3d` and by nothing that could be derived by hand.
  */
 async function loadLod() {
   const esbuild = await import('esbuild');
@@ -796,22 +833,33 @@ async function loadLod() {
       const code = await readFile(src, 'utf8');
       await writeFile(join(dir, `${name}.mjs`),
         esbuild.transformSync(code, { loader: 'ts', format: 'esm' }).code
-          .replace(/from\s*["']@anima\/scene-render["']/g, "from './worldHeight.mjs'"),
+          .replace(/from\s*["']@anima\/scene-render["']/g, "from './sceneRender.mjs'")
+          .replace(/from\s*["']\.\/([A-Za-z]+)["']/g, "from './$1.mjs'"),
         'utf8');
     };
     await writeFile(join(dir, 'three.mjs'), THREE_STUB, 'utf8');
+    await writeFile(join(dir, 'sceneRender.mjs'),
+      "export * from './worldHeight.mjs';\nexport * from './materials.mjs';\n", 'utf8');
+    await writeFile(join(dir, 'layerGround.mjs'),
+      'export function bindLayerIdUniforms(u, idName, geomName) {\n'
+      + '  u[idName] = { value: null };\n  u[geomName] = { value: null };\n}\n', 'utf8');
     await ts(join(ROOT, 'packages/scene-render/src/worldHeight.ts'), 'worldHeight');
+    await ts(join(ROOT, 'packages/scene-render/src/materials.ts'), 'materials');
     await ts(join(ROOT, 'client3d/src/scene/waterRaster.ts'), 'waterRaster');
+    await ts(join(ROOT, 'client3d/src/scene/waterPlaneMath.ts'), 'waterPlaneMath');
+    await ts(join(ROOT, 'client3d/src/scene/waterShade.ts'), 'waterShade');
     const src = await readFile(join(ROOT, 'client3d/src/scene/terrainLod.ts'), 'utf8');
     const out = esbuild.transformSync(src, { loader: 'ts', format: 'esm' }).code
       .replace(/from\s*["']three["']/g, "from './three.mjs'")
-      .replace(/from\s*["']\.\/waterRaster["']/g, "from './waterRaster.mjs'")
-      .replace(/from\s*["']@anima\/scene-render["']/g, "from './worldHeight.mjs'");
+      .replace(/from\s*["']\.\/(waterRaster|waterShade|layerGround)["']/g,
+               "from './$1.mjs'")
+      .replace(/from\s*["']@anima\/scene-render["']/g, "from './sceneRender.mjs'");
     await writeFile(join(dir, 'terrainLod.mjs'), out, 'utf8');
     return {
       lod: await import(`file://${join(dir, 'terrainLod.mjs')}`),
       height: await import(`file://${join(dir, 'worldHeight.mjs')}`),
       water: await import(`file://${join(dir, 'waterRaster.mjs')}`),
+      shade: await import(`file://${join(dir, 'waterShade.mjs')}`),
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -862,7 +910,7 @@ function checkEq(label, actual, expected) {
   }
 }
 
-const { lod, height, water } = await loadLod();
+const { lod, height, water, shade } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX_PIXEL_ERROR,
   MAX_RANGE_WIDENING,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
@@ -870,7 +918,8 @@ const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX
   levelErrorsFrom,
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt,
   buildWaterPyramid, wlevelAt, bindTerrainLodUniforms,
-  terrainLodWaterGlsl, nodeHasWater, liftedHeight, gpuWaterAt, patchTerrainLod,
+  terrainLodWaterGlsl, nodeHasWater, liftedHeight, liftedDepth, gpuWaterAt,
+  patchTerrainLod,
   TERRAIN_LOD_CACHE_KEY, TERRAIN_LOD_WATER_CACHE_KEY } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
 const { emptyWaterRaster, rasterLevelAt, waterTileFrom } = water;
@@ -3207,19 +3256,38 @@ checkEq('the water variant declares the sampler',
   wetGlsl.includes('uniform sampler2D uTlodWater;'), true);
 checkEq('…and the isolation uniform',
   wetGlsl.includes('uniform float uTlodNoWater;'), true);
-check('…and fetches eight texels, four ground and four mirror',
-  wetGlsl.split('texelFetch(').length - 1, 8);
+check('…and fetches twelve texels: four ground, four mirror, four flow',
+  wetGlsl.split('texelFetch(').length - 1, 12);
 checkEq('THE LIFT IS A COMPARISON', wetGlsl.includes('return ( w > h ) ? w : h;'), true);
 checkEq('RED: and never max(), which GLSL does not pin down for a NaN',
   /max\(\s*h,\s*w\s*\)/.test(wetGlsl), false);
 checkEq('EACH TAP IS LIFTED AT ITS OWN FOOTPRINT — the m1 half',
-  wetGlsl.includes('tlodLift( tlodHeight( p, nodeStep * m1 ), p, nodeStep * m1 )'), true);
+  wetGlsl.includes('float l1 = tlodLift( h1, p, nodeStep * m1 );'), true);
 checkEq('…and the m2 half',
-  wetGlsl.includes('tlodLift( tlodHeight( p, nodeStep * m2 ), p, nodeStep * m2 )'), true);
+  wetGlsl.includes('float l2 = tlodLift( h2, p, nodeStep * m2 );'), true);
 checkEq('…so the max is taken per LEVEL and one mix wraps both',
-  wetGlsl.includes('float h = mix( tlodLift( tlodHeight( p, nodeStep * m1 ), p,'
-    + ' nodeStep * m1 ), tlodLift( tlodHeight( p, nodeStep * m2 ), p,'
-    + ' nodeStep * m2 ), f );'), true);
+  wetGlsl.includes('float h = mix( l1, l2, f );'), true);
+// ── K-A E4: the DEPTH the fragment shades from is a varying, not a lookup ──
+// The drawn surface is mix(l1, l2, f) and the drawn bed is mix(h1, h2, f), so
+// their difference is mix(l1 − h1, l2 − h2, f): exact for the triangle that is
+// really drawn, ≥ 0 term by term, and 0 wherever nothing was lifted. That is
+// what buys the fragment its shoreline WITHOUT the mirror's four texelFetch
+// per pixel.
+checkEq('THE LIFTED DEPTH RIDES ALONG as a varying',
+  wetGlsl.includes('vTlodWet = mix( l1 - h1, l2 - h2, f );'), true);
+checkEq('…declared in the water variant', wetGlsl.includes('varying float vTlodWet;'), true);
+checkEq('…and in NO dry program', dryGlsl.includes('vTlodWet'), false);
+checkEq('the flow rides along too', wetGlsl.includes('vTlodFlow = uTlodNoWater > 0.5'), true);
+checkEq('…on the water lattice\'s LEVEL 0 and no pyramid',
+  /vec2 tlodFlowAt[\s\S]*?\n}/.exec(wetGlsl)[0].includes('uTlodWaterLevel[ 0 ]'), true);
+checkEq('…and never in the dry one', dryGlsl.includes('tlodFlowAt'), false);
+// The TS twin of `l - h`, and the identity that makes it one statement.
+check('liftedDepth: a mirror 1.2 m over the bed', liftedDepth(3, 4.2), 1.2);
+check('…a mirror UNDER the bed is dry', liftedDepth(5, 4.2), 0);
+check('…and the dry sentinel is dry', liftedDepth(5, NaN), 0);
+checkEq('RED: depth 0 is exactly where the lift did nothing',
+  [liftedHeight(5, NaN) - 5, liftedDepth(5, NaN),
+   liftedHeight(3, 4.2) - 3 - liftedDepth(3, 4.2)], [0, 0, 0]);
 // The masked mix, in GLSL this time: four corners, four weight guards.
 check('the mirror\'s bilinear guards every one of its four corners',
   terrainLodWaterGlsl().split('!= 0.0').length - 1, 4);
@@ -3262,7 +3330,9 @@ const compile = (mat) => {
     uniforms: {},
     vertexShader: '#include <uv_vertex>\n#include <beginnormal_vertex>\n'
       + '#include <begin_vertex>',
-    fragmentShader: '#include <normal_fragment_begin>',
+    // The four chunks the two variants insert at, in three's own order.
+    fragmentShader: '#include <metalnessmap_fragment>\n'
+      + '#include <normal_fragment_begin>\n#include <opaque_fragment>',
   };
   mat.onBeforeCompile(shader, null);
   return shader;
@@ -3278,6 +3348,52 @@ checkEq('…both get the water TEXTURE bound (an unread uniform has no location)
 checkEq('the dry vertex shader carries no lift',
   dryShader.vertexShader.includes('tlodLift'), false);
 checkEq('…the water one does', wetShader.vertexShader.includes('tlodLift'), true);
+
+// ── [18] K-A E4: THE WATER SHADING IS THE WATER PROGRAM'S ALONE ─────────────
+// The dry fragment must be, statement for statement, what it was before the
+// stage — one replacement at `normal_fragment_begin` and nothing else. The
+// arithmetic the shading itself runs on is checked, against hand tables, in
+// `client3d/scripts/smoke_water_shade.mjs`; what belongs HERE is only that the
+// two programs stay two programs.
+console.log('\n[18] the water shading lives in the water program only (K-A E4)');
+checkEq('THE DRY FRAGMENT IS THE ONE IT ALWAYS WAS',
+  dryShader.fragmentShader.includes(`#include <normal_fragment_begin>
+\tnormal = normalize( ( viewMatrix * vec4( tlodNormalAt( vTlodXZ ), 0.0 ) ).xyz );
+\tnonPerturbedNormal = normal;`), true);
+checkEq('…and gains nothing at metalnessmap or opaque_fragment',
+  /#include <metalnessmap_fragment>\n#include <normal/.test(dryShader.fragmentShader)
+  && /nonPerturbedNormal = normal;\n#include <opaque_fragment>/
+    .test(dryShader.fragmentShader), true);
+checkEq('RED: no water word reaches the dry fragment',
+  /tlodWater|vTlodWet|uTlodWave|twA/.test(dryShader.fragmentShader), false);
+// …and the water one composes in exactly three places, in shader order.
+const wetFrag = wetShader.fragmentShader;
+checkEq('the ALBEDO stage sits after the metalness chunk',
+  wetFrag.includes('#include <metalnessmap_fragment>\n'
+    + '\ttlodWaterSurface( diffuseColor, roughnessFactor, metalnessFactor );'), true);
+checkEq('…the NORMAL stage replaces the dry expression',
+  wetFrag.includes('\tnormal = tlodWaterNormal();'), true);
+checkEq('…and the LIGHT stage runs before opaque_fragment',
+  wetFrag.includes('\ttlodWaterOut( outgoingLight, normal, vViewPosition );\n'
+    + '#include <opaque_fragment>'), true);
+check('the composition order is albedo -> normal -> light',
+  [wetFrag.indexOf('tlodWaterSurface( diffuseColor'),
+   wetFrag.indexOf('normal = tlodWaterNormal();'),
+   wetFrag.indexOf('tlodWaterOut( outgoingLight')]
+    .every((v, i, a) => v > 0 && (i === 0 || v > a[i - 1])) ? 1 : 0, 1);
+checkEq('the water program is handed the look table, the wave map and the mask',
+  ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodTime', 'uTlodSky',
+   'uTlodWaterMask', 'uTlodWaterMaskGeom']
+    .every((k) => wetShader.uniforms[k] !== undefined), true);
+checkEq('RED: and the dry program is handed none of them',
+  ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodWaterMask']
+    .some((k) => dryShader.uniforms[k] !== undefined), false);
+// The absorption a fragment reads is the mirror's own shore curve — the twin
+// is checked against hand tables in `smoke_water_shade.mjs`; here only that
+// BOTH sides spell the same easing.
+checkEq('the GLSL easing is the TS easing',
+  shade.terrainWaterFragmentGlsl()
+    .includes('return c * c * ( 3.0 - 2.0 * c );'), true);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

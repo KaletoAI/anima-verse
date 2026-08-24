@@ -241,6 +241,28 @@ function applySurfaceFiltering(): void {
   tex.needsUpdate = true;
 }
 
+/**
+ * Hang the NEAR id mask and its window into a shader that is not this patch —
+ * under names of that shader's own choosing (Wasser v2, K-A E4).
+ *
+ * ITS ONE CALLER is the terrain's WATER variant (`scene/terrainLod.ts`), which
+ * has to know which KIND a water pixel stands in to pick its tint, and the id
+ * mask is the one thing in this client that answers that per fragment. It
+ * cannot use `uLcNearId`/`uLcNear`: the compositor's chunk is declared BELOW
+ * the terrain's in the finished shader, so those names are not in scope there
+ * — a second sampler bound to the SAME texture object is one texture unit and
+ * no second upload.
+ *
+ * The objects themselves are handed over, never their values: a window swap
+ * mutates `.value` in place, so the borrowing program follows every update
+ * without a second book to keep.
+ */
+export function bindLayerIdUniforms(uniforms: Record<string, unknown>,
+                                    idName: string, geomName: string): void {
+  uniforms[idName] = uNearId;
+  uniforms[geomName] = uNear;
+}
+
 /** The layer table in force — read by the undergrowth gate, which has to turn a
  *  painted kind into the index the mask speaks. */
 export function layerTable(): readonly TerrainLayer[] {

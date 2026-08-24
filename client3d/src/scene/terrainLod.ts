@@ -159,10 +159,15 @@
  * will cover most of the flat patch; E5 deletes them.
  */
 import * as THREE from 'three';
-import { finestStep, heightAt, latticeSample } from '@anima/scene-render';
+import { finestStep, heightAt, latticeSample, surfaceSkyUniform,
+  surfaceTimeUniform, surfaceWaveNormal } from '@anima/scene-render';
 import type { WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
-import { rasterLevelAt, waterBilinear } from './waterRaster';
+import { rasterFlowAt, rasterLevelAt, waterBilinear } from './waterRaster';
 import type { WaterRaster } from './waterRaster';
+import { packWaterLook, terrainWaterFragmentGlsl,
+  WATER_LOOK_TEXELS } from './waterShade';
+import type { WaterLook } from './waterShade';
+import { bindLayerIdUniforms } from './layerGround';
 
 /**
  * Cells per axis of the one patch — 32, and the number is derived rather than
@@ -1266,9 +1271,12 @@ float tlodHeight( vec2 p, float nodeStep ) {
 export function terrainLodWaterGlsl(): string {
   return `
 uniform sampler2D uTlodWater;
+uniform sampler2D uTlodFlow;
 uniform vec4 uTlodWaterGeom;
 uniform vec4 uTlodWaterLevel[ ${MAX_LOD_LEVELS} ];
 uniform float uTlodNoWater;
+varying float vTlodWet;
+varying vec2 vTlodFlow;
 
 const float TLOD_DRY = -1e30;
 
@@ -1313,6 +1321,45 @@ float tlodLift( float h, vec2 p, float nodeStep ) {
   if ( uTlodNoWater > 0.5 ) return h;
   float w = tlodWaterAt( p, nodeStep );
   return ( w > h ) ? w : h;
+}
+
+// THE FLOW at one point, on the water pyramid's BASE lattice (K-A E4).
+//
+// ONE LEVEL AND NEVER A PYRAMID, deliberately: the flow is a DIRECTION, and a
+// direction read at the finest lattice is the honest answer wherever the vertex
+// stands — a coarse vertex 64 m out point-samples a field that turns over tens
+// of metres, and nothing in the picture can tell. It is the same argument that
+// feeds \`tlodMorphAt\` the finest height.
+//
+// PLAIN BILINEAR, unlike the level's masked mix: the server writes (0, 0) at
+// every dry lattice point rather than a sentinel (\`heightfield.water_raster\`),
+// so there is no NaN to keep out — and skipping a corner of weight 0 would give
+// the identical sum anyway. Outside the near window, or with no raster at all,
+// the answer is (0, 0), which is what "still" already means to a ripple.
+vec2 tlodFlowAt( vec2 p ) {
+  if ( uTlodWaterGeom.w <= 0.0
+       || p.x < uTlodNearRect.x || p.x > uTlodNearRect.z
+       || p.y < uTlodNearRect.y || p.y > uTlodNearRect.w ) return vec2( 0.0 );
+  vec4 lv = uTlodWaterLevel[ 0 ];
+  float cols = lv.x;
+  float rows = lv.y;
+  float step = lv.z;
+  if ( cols < 2.0 || rows < 2.0 || step <= 0.0 ) return vec2( 0.0 );
+  float fx = clamp( ( p.x - uTlodWaterGeom.x ) / step, 0.0, cols - 1.0 );
+  float fz = clamp( ( p.y - uTlodWaterGeom.y ) / step, 0.0, rows - 1.0 );
+  float fi = min( floor( fx ), cols - 2.0 );
+  float fj = min( floor( fz ), rows - 2.0 );
+  float tx = fx - fi;
+  float tz = fz - fj;
+  int i = int( fi );
+  int j = int( fj );
+  vec2 f00 = texelFetch( uTlodFlow, ivec2( i, j ), 0 ).rg;
+  vec2 f10 = texelFetch( uTlodFlow, ivec2( i + 1, j ), 0 ).rg;
+  vec2 f01 = texelFetch( uTlodFlow, ivec2( i, j + 1 ), 0 ).rg;
+  vec2 f11 = texelFetch( uTlodFlow, ivec2( i + 1, j + 1 ), 0 ).rg;
+  vec2 north = f00 * ( 1.0 - tx ) + f10 * tx;
+  vec2 south = f01 * ( 1.0 - tx ) + f11 * tx;
+  return north * ( 1.0 - tz ) + south * tz;
 }
 `;
 }
@@ -1374,11 +1421,36 @@ float tlodLift( float h, vec2 p, float nodeStep ) {
  * stage, so the dry ground compiles to the program it always did.
  */
 export function terrainLodGlsl(water = false): string {
-  /** ONE tap of the morph pair, lifted or not. The dry spelling is left
-   *  exactly as it was so the dry program is unchanged. */
-  const tap = (m: string): string => (water
-    ? `tlodLift( tlodHeight( p, nodeStep * ${m} ), p, nodeStep * ${m} )`
-    : `tlodHeight( p, nodeStep * ${m} )`);
+  /**
+   * THE HEIGHT OF THE VERTEX, and — in the water variant — how deep the water
+   * over it stands.
+   *
+   * The DRY spelling is one statement and is left exactly as it was, so the dry
+   * program is unchanged down to the whitespace.
+   *
+   * The WET one takes each tap apart into its bed and its lifted surface,
+   * because K-A E4 needs BOTH: the drawn y is `mix(l1, l2, f)` as before, and
+   * the depth the fragment shades from is `mix(l1 − h1, l2 − h2, f)`. That is
+   * not an approximation of anything — it is the difference of the two linear
+   * interpolants the triangle really draws, so `vTlodWet` crosses 0 exactly
+   * where the drawn mirror leaves the drawn bed and the shoreline needs no
+   * height lookup of its own in the fragment (the 4 texelFetch the mirror's
+   * shore spent per pixel, given back). Each term is ≥ 0 (`tlodLift` never
+   * returns below its own height), so the mix is ≥ 0 and "0 = dry" holds.
+   *
+   * WITH THE ISOLATION TOGGLE 22 (`uTlodNoWater`) `tlodLift` hands its height
+   * straight back, so `l − h` is 0 at every tap and the whole fragment stage
+   * takes its dry branch. The lift and the shading are ONE switch.
+   */
+  const heightBlock = water
+    ? `float h1 = tlodHeight( p, nodeStep * m1 );
+  float h2 = tlodHeight( p, nodeStep * m2 );
+  float l1 = tlodLift( h1, p, nodeStep * m1 );
+  float l2 = tlodLift( h2, p, nodeStep * m2 );
+  float h = mix( l1, l2, f );
+  vTlodWet = mix( l1 - h1, l2 - h2, f );
+  vTlodFlow = uTlodNoWater > 0.5 ? vec2( 0.0 ) : tlodFlowAt( p );`
+    : 'float h = mix( tlodHeight( p, nodeStep * m1 ), tlodHeight( p, nodeStep * m2 ), f );';
   return `${terrainLodSampleGlsl()}${water ? terrainLodWaterGlsl() : ''}
 uniform float uTlodRange[ ${MAX_LOD_LEVELS} ];
 uniform float uTlodNoMorph;
@@ -1460,7 +1532,7 @@ void tlodCompute() {
   // THE MAX PER LEVEL, THE MORPH OVER THE PAIR (K-A E3, water variant only):
   // each tap is lifted at its OWN footprint before the two are blended, so the
   // mirror morphs in step with the ground it sits in. See terrainLodWaterGlsl.
-  float h = mix( ${tap('m1')}, ${tap('m2')}, f );
+  ${heightBlock}
   tlodWorld = vec3( p.x, h, p.y );
   // The one thing the fragment stage needs of this: WHERE the point is. The
   // shading normal is taken there, from this position alone (tlodNormalAt) —
@@ -1575,6 +1647,19 @@ export function gpuWaterAt(water: HeightPyramid | null,
  */
 export function liftedHeight(h: number, w: number): number {
   return w > h ? w : h;
+}
+
+/**
+ * HOW DEEP the lift was at one tap — the twin of the water variant's
+ * `l - h`, and the number the fragment shades from (K-A E4).
+ *
+ * It is `liftedHeight(h, w) - h` by construction and is written as its own
+ * function only so the smoke can pin that identity: a dry sentinel (NaN) or a
+ * mirror below the bed both answer exactly 0, which is what "this pixel is not
+ * water" has to be — the fragment's every branch keys on `> 0`.
+ */
+export function liftedDepth(h: number, w: number): number {
+  return w > h ? w - h : 0;
 }
 
 /**
@@ -1769,6 +1854,23 @@ function makeLevelArray(): THREE.Vector4[] {
   return out;
 }
 
+/** The water-look table as a texture — `WATER_LOOK_TEXELS` wide, one row per
+ *  layer, NEAREST and unfiltered because every fetch is a `texelFetch` of a
+ *  whole record and a blend of two records would be a water nobody authored.
+ *  An empty table becomes ONE row of the library default, so the fragment's
+ *  `textureSize` clamp always has a row to land on. */
+function makeLookTexture(looks: readonly WaterLook[]): THREE.DataTexture {
+  const rows = Math.max(1, looks.length);
+  const tex = new THREE.DataTexture(packWaterLook(looks), WATER_LOOK_TEXELS, rows,
+                                    THREE.RGBAFormat, THREE.FloatType);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.unpackAlignment = 1;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /** The shared uniform objects — ONE per value for every patched material, the
  *  pattern of `naturalGround.ts`. Swapping a pyramid is therefore one
  *  assignment and nothing recompiles. */
@@ -1797,6 +1899,35 @@ const uExtent = { value: new THREE.Vector4(-1e6, -1e6, 1e6, 1e6) };
 const uWater: { value: THREE.Texture } = { value: neutralTex };
 const uWaterGeom = { value: new THREE.Vector4(0, 0, 1, 0) };
 const uWaterLevel = { value: makeLevelArray() };
+/**
+ * THE FLOW FIELD, RG32F on the water pyramid's BASE lattice (K-A E4).
+ *
+ * It carries no geometry of its own: the lattice IS `uTlodWaterLevel[0]` over
+ * `uTlodWaterGeom.xy`, so the level and the flow of one point are read out of
+ * the same cell — the rule the water pyramid already follows against the
+ * height pyramid. Level 0 only, and the reason is in `tlodFlowAt`.
+ */
+const uFlow: { value: THREE.Texture } = { value: neutralTex };
+/**
+ * WHAT EACH LAYER'S WATER LOOKS LIKE — a `WATER_LOOK_TEXELS` × n RGBA32F
+ * table, one ROW per layer index of the compositor's mask (K-A E4).
+ *
+ * The world has ONE water shading program, and the areas painted into it may
+ * be several kinds at once — a pale river and an almost black lake are two
+ * rows of the same table, and the fragment picks its row from the very id mask
+ * `lcCompose` composites the ground from. Every row carries a WATER look, the
+ * primary water's where a layer is not water at all, so a pixel that reads a
+ * dry layer at a fringe still draws water rather than a kind's ground tint.
+ *
+ * Rebuilt by `setWaterLook`, from `scene/ground.ts`, whenever the layer table
+ * or the painted areas move. Until then it is one row of the library default.
+ */
+const neutralLook = makeLookTexture([]);
+const uLook: { value: THREE.Texture } = { value: neutralLook };
+/** The wave normal map — the SAME procedural texture the mirrors scroll
+ *  (`@anima/scene-render materials.surfaceWaveNormal`), built on first use so
+ *  a world without water never makes one. */
+const uWave: { value: THREE.Texture | null } = { value: null };
 /** The LOD ring boundaries in metres, the input of the per-vertex λ
  *  (`lodLambda`). VERTEX-ONLY: the water mirror reads the height pyramids from
  *  its fragment shader but has no vertices to morph, so this one is bound in
@@ -1928,7 +2059,26 @@ export function patchTerrainLod(mat: THREE.Material, water = false): void {
     (shader.uniforms as unknown as Record<string, unknown>).uTlodNoMorph = uNoMorph;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodFlatNormal = uFlatNormal;
     if (water) {
-      (shader.uniforms as unknown as Record<string, unknown>).uTlodNoWater = uNoWater;
+      const u = shader.uniforms as unknown as Record<string, unknown>;
+      u.uTlodNoWater = uNoWater;
+      u.uTlodFlow = uFlow;
+      u.uTlodWaterLook = uLook;
+      // The wave map is built on first ask, i.e. when a world really has water
+      // — never at module load, where it would cost a 256² canvas in every
+      // client that never sees a drop.
+      if (!uWave.value) uWave.value = surfaceWaveNormal(THREE) as THREE.Texture;
+      u.uTlodWave = uWave;
+      // …and THE SAME clock and THE SAME sky the mirrors of both renderers
+      // read (`@anima/scene-render materials.ts`): one object each, advanced
+      // once per frame by the engine, so the terrain's water can never drift
+      // into a second time of day.
+      u.uTlodTime = surfaceTimeUniform;
+      u.uTlodSky = surfaceSkyUniform;
+      // WHICH KIND a water pixel stands in — the compositor's own near id mask
+      // and its window, bound a second time under this program's names. See
+      // `twLayerAt`: that chunk is declared below this one in the finished
+      // shader, so its uniforms cannot be reached from here by name.
+      bindLayerIdUniforms(u, 'uTlodWaterMask', 'uTlodWaterMaskGeom');
     }
     if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
     shader.vertexShader = terrainLodGlsl(water) + shader.vertexShader
@@ -1942,11 +2092,28 @@ export function patchTerrainLod(mat: THREE.Material, water = false): void {
       .replace('#include <begin_vertex>',
         '#include <begin_vertex>\n\ttransformed = tlodWorld;');
     if (!shader.fragmentShader.includes('#include <normal_fragment_begin>')) return;
-    shader.fragmentShader = terrainLodSampleGlsl() + terrainLodNormalGlsl()
-      + shader.fragmentShader.replace('#include <normal_fragment_begin>',
+    // THE WATER VARIANT'S FRAGMENT (K-A E4). Three more insertions, and the
+    // shading normal is taken by a function of its own instead of the dry
+    // expression — see `terrainWaterFragmentGlsl` for the order and the why.
+    // The dry branch is the statement it has been since 2026-08-21.
+    const body = water
+      ? shader.fragmentShader
+        .replace('#include <metalnessmap_fragment>',
+          '#include <metalnessmap_fragment>\n'
+          + '\ttlodWaterSurface( diffuseColor, roughnessFactor, metalnessFactor );')
+        .replace('#include <normal_fragment_begin>',
+          `#include <normal_fragment_begin>
+\tnormal = tlodWaterNormal();
+\tnonPerturbedNormal = normal;`)
+        .replace('#include <opaque_fragment>',
+          '\ttlodWaterOut( outgoingLight, normal, vViewPosition );\n'
+          + '#include <opaque_fragment>')
+      : shader.fragmentShader.replace('#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>
 \tnormal = normalize( ( viewMatrix * vec4( tlodNormalAt( vTlodXZ ), 0.0 ) ).xyz );
 \tnonPerturbedNormal = normal;`);
+    shader.fragmentShader = terrainLodSampleGlsl() + terrainLodNormalGlsl()
+      + (water ? terrainWaterFragmentGlsl() : '') + body;
   };
   const own = water
     ? `${TERRAIN_LOD_CACHE_KEY}+${TERRAIN_LOD_WATER_CACHE_KEY}`
@@ -2069,6 +2236,17 @@ export interface TerrainLod {
    * offering a second entry point that could be forgotten.
    */
   setMaterial(dry: THREE.Material, water: THREE.Material): void;
+  /**
+   * HOW EACH LAYER'S WATER LOOKS (K-A E4) — one entry per layer index of the
+   * compositor's mask, in index order.
+   *
+   * The owner resolves it: the layer table says which kinds are water, the
+   * surface library says what those kinds look like and the painted areas say
+   * how deep they are. This side only packs the table into the texture the
+   * fragment fetches its row out of. An entry for a layer that is NOT water is
+   * expected to carry the world's primary water look — see `uLook` for why.
+   */
+  setWaterLook(looks: readonly WaterLook[]): void;
   /** Both ground materials, dry first — what a diagnostic that wants to act on
    *  "the terrain's material" (the isolation panel's wireframe) has to reach.
    *  Empty until `setMaterial`. */
@@ -2212,6 +2390,10 @@ export function createTerrainLod(): TerrainLod {
   let nearTex: THREE.DataTexture | null = null;
   let farTex: THREE.DataTexture | null = null;
   let waterTex: THREE.DataTexture | null = null;
+  let flowTex: THREE.DataTexture | null = null;
+  /** The look table this renderer owns and frees — the module's `uLook` only
+   *  points at it. Replaced whole by `setWaterLook`. */
+  let lookTex: THREE.DataTexture | null = null;
   let nearRect: [number, number, number, number] | null = null;
   let extent: [number, number, number, number] = [-100, -100, 100, 100];
   let leafM = 0;
@@ -2333,16 +2515,54 @@ export function createTerrainLod(): TerrainLod {
                              base.cols, base.rows, MAX_LOD_LEVELS);
   }
 
-  function uploadPyramids(): void {
+  /**
+   * The FLOW field over the water pyramid's BASE lattice, as RG floats
+   * (K-A E4).
+   *
+   * ONE LEVEL, not a pyramid: the vertex reads the flow at the finest lattice
+   * whatever it is drawn at (`tlodFlowAt`), so the coarse levels would be
+   * memory nobody fetches. The geometry is `waterPyr.levels[0]` — the same
+   * origin, step and size the level texture's own level 0 has, which is what
+   * lets the two share `uTlodWaterGeom` and `uTlodWaterLevel[0]`.
+   */
+  function buildFlow(raster: WaterRaster | null): THREE.DataTexture | null {
+    const base = waterPyr?.levels[0];
+    if (!waterPyr || !base || !raster?.tiles?.size) return null;
+    const data = new Float32Array(base.cols * base.rows * 2);
+    for (let j = 0; j < base.rows; j += 1) {
+      const z = waterPyr.originZ + j * waterPyr.step;
+      for (let i = 0; i < base.cols; i += 1) {
+        const [fx, fz] = rasterFlowAt(raster, waterPyr.originX + i * waterPyr.step, z);
+        const at = (j * base.cols + i) * 2;
+        data[at] = fx;
+        data[at + 1] = fz;
+      }
+    }
+    const tex = new THREE.DataTexture(data, base.cols, base.rows,
+                                      THREE.RGFormat, THREE.FloatType);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = false;
+    tex.unpackAlignment = 1;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  function uploadPyramids(raster: WaterRaster | null): void {
     nearTex?.dispose();
     farTex?.dispose();
     waterTex?.dispose();
+    flowTex?.dispose();
     nearTex = nearPyr ? pyramidTexture(nearPyr) : null;
     farTex = farPyr ? pyramidTexture(farPyr) : null;
     waterTex = waterPyr ? pyramidTexture(waterPyr) : null;
+    flowTex = buildFlow(raster);
     uNear.value = nearTex ?? neutralTex;
     uFar.value = farTex ?? neutralTex;
     uWater.value = waterTex ?? neutralTex;
+    uFlow.value = flowTex ?? neutralTex;
     uWaterGeom.value.set(waterPyr?.originX ?? 0, waterPyr?.originZ ?? 0,
                          waterPyr?.step ?? 1, waterPyr?.levels.length ?? 0);
     setLevels(uWaterLevel.value, waterPyr);
@@ -2512,7 +2732,12 @@ export function createTerrainLod(): TerrainLod {
       waterTileM = waterPyr ? (water?.tileM ?? 0) : 0;
       waterTileKeys = waterPyr && water?.tiles?.size
         ? new Set(water.tiles.keys()) : null;
-      uploadPyramids();
+      uploadPyramids(water ?? null);
+    },
+    setWaterLook(looks) {
+      lookTex?.dispose();
+      lookTex = makeLookTexture(looks);
+      uLook.value = lookTex;
     },
     refreshStats() {
       levelErrorM = computeLevelError();
@@ -2553,15 +2778,21 @@ export function createTerrainLod(): TerrainLod {
       nearTex?.dispose();
       farTex?.dispose();
       waterTex?.dispose();
+      flowTex?.dispose();
+      lookTex?.dispose();
       nearTex = null;
       farTex = null;
       waterTex = null;
+      flowTex = null;
+      lookTex = null;
       // The pyramids are module-shared uniforms and outlive this closure, so
       // they are handed back explicitly — the rule `setNaturalGroundField(null)`
       // follows for the same reason.
       uNear.value = neutralTex;
       uFar.value = neutralTex;
       uWater.value = neutralTex;
+      uFlow.value = neutralTex;
+      uLook.value = neutralLook;
       uNearRect.value.set(0, 0, -1, -1);
     },
   };

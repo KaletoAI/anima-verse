@@ -172,13 +172,16 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
       + 'drawing. Re-asserted per frame, because the 1 Hz LOD tick writes '
       + 'those flags itself.',
     cost: 'none' },
-  { id: 22, label: 'Water lift off',
+  { id: 22, label: 'Water off (lift and shading)',
     note: 'uTlodNoWater = 1 — the terrain\'s WATER variant stops lifting its '
       + 'vertices to max(h, w_level) and draws the bed the height field '
-      + 'really holds (Wasser v2, K-A E3). It is a uniform and not a define, '
-      + 'so the same program keeps drawing and the same pieces keep going '
-      + 'through it: what the toggle removes is the lift alone, never the '
-      + 'second draw call.',
+      + 'really holds (Wasser v2, K-A E3). Since E4 that ALSO takes the water '
+      + 'shading with it, through the same uniform and not a second one: the '
+      + 'lift is what the fragment measures its depth from, so no lift means '
+      + 'depth 0 means the plain ground look. It is a uniform and not a '
+      + 'define, so the same program keeps drawing and the same pieces keep '
+      + 'going through it: what the toggle removes is the water alone, never '
+      + 'the second draw call.',
     cost: 'none' },
 ];
 

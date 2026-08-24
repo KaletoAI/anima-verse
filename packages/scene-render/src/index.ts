@@ -88,7 +88,8 @@ export {
 } from './figure'
 
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
-  surfaceTimeUniform, waterFlowFactor, WATER_FLOW_FACTOR_MIN,
+  surfaceTimeUniform, surfaceSkyUniform, surfaceWaveNormal,
+  waterFlowFactor, WATER_FLOW_FACTOR_MIN,
   WATER_FLOW_SPEED_DEFAULT_M_S, WATER_FLOW_SPEED_MAX_M_S } from './materials'
 export type { SurfaceMaterialSpec, SurfaceMaterialOptions } from './materials'
 

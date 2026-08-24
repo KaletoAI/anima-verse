@@ -5829,10 +5829,11 @@ hat. Vier Entscheidungen, alle in `client3d/src/scene/terrainLod.ts`:
   und `|max(a,b) − max(c,d)| ≤ max(|a−c|,|b−d|)` hält den Stufenfehler unter
   `max(err_h, err_w)`; der Carve schreibt die Spiegel-Variation ohnehin in das
   Bett, ein gehobener Spiegel ist also FLACHER als das Bett, das er deckt.
-- **Noch keine Wasser-Schattierung** (E4): ein gehobenes Pixel wird als der
-  Boden gemalt, den es ersetzt. Die Polygon-Spiegel zeichnen in dieser Etappe
-  weiter (E5 löscht sie). Isolationsschalter **22 „Water lift off"**
-  (`uTlodNoWater`, Uniform statt Define) nimmt den Hub live heraus.
+- **Die Wasser-Schattierung kam in E4** (siehe Abschnitt 9): in E3 wurde ein
+  gehobenes Pixel noch als der Boden gemalt, den es ersetzt. Die Polygon-Spiegel
+  zeichnen bis E5 weiter. Isolationsschalter **22** (`uTlodNoWater`, Uniform
+  statt Define) nimmt den Hub live heraus — und seit E4 die Schattierung mit
+  ihm, über dasselbe Uniform.
 
 ### 8. Die Beweise (§ B5a)
 
@@ -5847,3 +5848,84 @@ hat. Vier Entscheidungen, alle in `client3d/src/scene/terrainLod.ts`:
 | Pyramide: Teilmenge, Sentinel, Ringverlust je Stufe, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [15] |
 | Hub `max(h, w)`, Ring-Sonden, Reihenfolge des Morphs, Tor | `client3d/scripts/smoke_terrain_lod.mjs` [16] |
 | Zweite Variante: GLSL-Pins, Cache-Key, `uTlodNoWater` | `client3d/scripts/smoke_terrain_lod.mjs` [17] |
+
+### 9. Die Wasser-Schattierung im Terrain-Fragment (K-A E4)
+
+**Kein Payload ändert sich.** E4 ist reine Client-Darstellung: derselbe Bake,
+dieselben Kacheln, dieselbe zweite Materialvariante. Was dazukommt, ist die
+Antwort auf „wie sieht ein gehobenes Pixel aus" — bisher: wie der Boden, den es
+ersetzt.
+
+**Single-Layer-Water (Recherche § 3.3).** Ein Wasserpixel wird nicht mehr
+gemischt, sondern **im selben opaken Durchgang** schattiert: der Shader, der das
+Bett gerade texturiert hat, mischt das Wasser selbst dazu. Die Reihenfolge im
+Fragment, in Shader-Reihenfolge:
+
+1. nach `#include <metalnessmap_fragment>` — `tlodWaterSurface()`: Absorption
+   über die Tiefe auf die **Albedo** (nicht auf das fertige Licht: sonst wäre
+   tiefes Wasser ein flacher, unbeleuchteter Fleck, der nachts hell bliebe),
+   dazu Rauheit und Metallizität des Wassers, alles über **einen** Faktor `twA`;
+2. in `#include <normal_fragment_begin>` — `tlodWaterNormal()`: die
+   Ripple-Normale statt der Bodennormale, über denselben Faktor geblendet;
+3. vor `#include <opaque_fragment>` — `tlodWaterOut()`: Fresnel-Himmelsanteil
+   und Schaumband, die beiden Dinge, die keine Albedo sind.
+
+**Die Tiefe ist ein Varying, keine Textur-Lesung.** Der Vertex kennt Bett und
+Spiegel bereits (`h1/h2` gegen `l1/l2`), also fährt
+`vTlodWet = mix(l1 − h1, l2 − h2, f)` mit. Das ist exakt die Differenz der
+beiden linearen Interpolanten, die das Dreieck wirklich zeichnet — die
+Uferlinie liegt also genau dort, wo der gezeichnete Spiegel das gezeichnete
+Bett verlässt, und die 4 `texelFetch`, die der Mesh-Shader je Pixel für
+`tlodHeight` ausgab, entfallen ersatzlos.
+
+**Die Kurven sind die des Spiegels**, Konstante für Konstante:
+`waterShoreAlpha` (¾ der eigenen Bettiefe, W4b) ist jetzt die Absorption,
+`waterFoam`/`WATER_FOAM_BAND_M`/`_STRENGTH` das Schaumband,
+`waterEdgeFade` die Randrampe (ohne sie stünde der weiße Schaum als Stufe an
+der Wasserlinie, weil `waterFoam(0) = 1` ist). Ripple, Anisotropie, die zwei
+Geschwindigkeiten und die Wellen-Normalmap kommen unverändert aus
+`@anima/scene-render materials.ts` — die Textur wird **geteilt**, nicht
+nachgebaut.
+
+**Welche Wasserart ein Pixel ist**, beantwortet die **id-Maske des
+Layer-Compositors**: sie nennt je Texel das Paar (oben, darunter) und sagt
+nichts darüber, auf welcher Seite man steht — was hier reicht, weil ein Pixel,
+das gehoben wurde, definitionsgemäß im Wasser steht: die **Wasserhälfte** des
+Paars ist seine Art. Je Layer-Index liegt eine Zeile in einer kleinen
+`3 × n`-RGBA32F-Tabelle (Tint/`sky_mix`, `wave_m`/`speed`/`flow_speed`/
+Deckkraft-Tiefe, Rauheit/Metallizität/`is_water`). Zeilen, die kein Wasser sind,
+tragen den Look des **ersten** Wassers der Welt, damit ein Randpixel Wasser
+zeichnet und nicht den Ton einer Wiese.
+
+**Die Deckkraft-Tiefe ist damit pro ART und nicht mehr pro FLÄCHE** — eine echte
+Verengung gegenüber W4b, weil die Maske Arten kennt und keine Flächen. Die
+zuletzt gemalte Fläche einer Art gewinnt (die Regel, die der Server bei
+überlappenden Gewässern selbst benutzt). Pro Fläche zurückzuholen hieße, die
+Zahl im Wasser-Raster mitzuliefern — Serversache, vorgemerkt für E6.
+
+**Der Fließvektor** fährt als zweites Datenfeld neben dem Pegel mit
+(`uTlodFlow`, RG32F, **nur Stufe 0** derselben Lattice) und wird **im Vertex**
+gelesen — die Richtung ist glatt, das Varying ist der Zwilling des alten
+`aWaterFlow`-Attributs, und seine LÄNGE ist wie dort der Geschwindigkeitsfaktor
+der Fläche.
+
+**Was das trockene Programm kostet: nichts.** Die dry-Variante bekommt weder
+Chunk noch Uniform noch Anker dazu; ihr Fragment ist Zeichen für Zeichen das
+von vorher (Beweis: `smoke_terrain_lod.mjs` [18]). Innerhalb der nassen
+Variante zahlt ein trockenes Pixel zwei Ableitungen und einen Vergleich.
+
+**Zurückgegebene Arbeit:** wo `twA == 1` (ab der Deckkraft-Tiefe) ist die
+Bodennormale unsichtbar und wird **nicht berechnet** — `tlodNormalAt` sind 16
+`texelFetch`, die dort entfallen. Die zweite Hälfte der Recherche-Erwartung
+(ein Slice statt vier in `lcSurface`) ist **nicht** umgesetzt: sie säße in
+`@anima/scene-render layerCut.ts`, also im geteilten Compositor, und würde das
+trockene Programm mitverändern.
+
+| Was | Wo |
+|---|---|
+| Absorption, Schaumband, Randrampe, Tint-Mix (Handtabellen) | `client3d/scripts/smoke_water_shade.mjs` [1]–[3] |
+| Look-Tabelle = die Defaults des Spiegels, Packung | ebenda [4] |
+| Flow-Frame: Identität bei Stille, 3:1 stromauf | ebenda [5] |
+| GLSL-Pins: Reihenfolge, Konstanten, `textureGrad`, Maskenpaar | ebenda [6] |
+| Trockenes Programm unverändert, drei Einfügepunkte, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [18] |
+| Tiefen-Varying, Flow-Varying, `liftedDepth` | ebenda [17] |

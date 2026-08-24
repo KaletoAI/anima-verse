@@ -150,7 +150,18 @@ export interface SurfaceMaterialOptions {
  *  frame advances both and a swaying meadow costs no second uniform. Bind it
  *  under whatever name the shader wants; here it is `uTime`. */
 export const surfaceTimeUniform = { value: 0 }
-const uSky = { value: { r: 0.62, g: 0.78, b: 0.91 } }
+/**
+ * THE SKY COLOUR every water reflects, as a bindable uniform object.
+ *
+ * Exported for the same reason `surfaceTimeUniform` is: water is no longer
+ * painted by this file alone. The 3D client's terrain shades its own water
+ * pixels in ONE opaque pass (Wasser v2, K-A E4, `client3d scene/waterShade.ts`)
+ * and has to reflect the very sky the mirrors reflect — one object, one
+ * `setSurfaceSky` call per frame, and the two can never drift into two skies.
+ * Bind it under whatever name the shader wants; here it is `uSky`.
+ */
+export const surfaceSkyUniform = { value: { r: 0.62, g: 0.78, b: 0.91 } }
+const uSky = surfaceSkyUniform
 
 /** Advance the time — once per frame, from the app's render loop. */
 export function updateSurfaceMaterials(dt: number): void {
@@ -241,6 +252,21 @@ function makeWaveNormal(T: THREE): Texture {
   tex.anisotropy = 4
   tex.needsUpdate = true
   return tex
+}
+
+/**
+ * THE ONE WAVE NORMAL MAP of this process, built on first ask.
+ *
+ * Exported because the ripple outgrew the mirror mesh: the 3D client's terrain
+ * shades its water pixels in its own program (Wasser v2, K-A E4) and must
+ * scroll THE SAME map — a second procedural map would be a second sea beside
+ * the first, drifting the moment anybody edits a frequency. The texture is
+ * cached here for the lifetime of the process, so the second caller pays
+ * nothing and both hold the identical object.
+ */
+export function surfaceWaveNormal(T: THREE): Texture {
+  if (!waveNormal) waveNormal = makeWaveNormal(T)
+  return waveNormal
 }
 
 // ── Shader patch ────────────────────────────────────────────────────────

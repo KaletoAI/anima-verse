@@ -96,7 +96,7 @@ import { hasSurfaceTexture, preloadSurfaceTexture, setWorldGround, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
   releaseImpostor } from './impostors';
-import { applyTerrainLayers, disposeLayerGround, layerIndexOfKind,
+import { applyTerrainLayers, disposeLayerGround, layerIndexOfKind, layerTable,
   setLayerOverview, setLayerTable, setLayerTiles,
   topLayerIndexAt } from './layerGround';
 import { applyFogVeil } from './fogVeil';
@@ -118,6 +118,8 @@ import { buildWaterPlane, patchWaterShore } from './waterPlane';
 import { waterLevelAt, waterOpaqueDepthM,
   waterProfileOf } from './waterPlaneMath';
 import type { WaterProfile } from './waterPlaneMath';
+import { WATER_LOOK_DEFAULT, waterLookFrom } from './waterShade';
+import type { WaterLook } from './waterShade';
 import type { UndergrowthArea } from './undergrowth';
 
 /** The world's ground height WITHOUT a relief — the flat world of § A1.2, and
@@ -1498,6 +1500,65 @@ export function createGround(): Ground {
   }
 
   /**
+   * WHAT EACH LAYER'S WATER LOOKS LIKE — the table the terrain's water variant
+   * picks its tint, its ripple and its opaque depth out of, per fragment
+   * (Wasser v2, K-A E4, `scene/waterShade.ts`).
+   *
+   * Under K-A there is no material per water KIND any more: ONE program shades
+   * every water pixel of the world, and it learns which kind it stands in from
+   * the compositor's id mask — which speaks LAYER INDICES. So the look has to
+   * arrive as a table indexed the same way, and this is the one place that
+   * knows all three halves of it: the layer table says which layers are water,
+   * the surface library says what those kinds look like (`surfaceMaterialSpec`,
+   * exactly as `materialFor` reaches it for the mirrors) and the painted areas
+   * say how deep their beds are carved.
+   *
+   * A LAYER THAT IS NOT WATER STILL GETS A WATER LOOK — the first water layer's.
+   * A pixel is shaded as water because it was LIFTED, not because of what the
+   * mask says, and the two disagree by a texel at the rim of the raster's
+   * dilation; a bare-ground row there would draw a lake in the colour of a
+   * meadow. Falling back to the world's primary water makes the worst case "the
+   * wrong water", a fringe nobody can measure.
+   *
+   * THE DEPTH IS PER KIND HERE, NOT PER AREA, and that is a real narrowing
+   * against the mirror (W4b): the fragment can only ask the mask, and the mask
+   * knows kinds. The LAST painted area of a kind wins — the tie-break the
+   * server itself uses when two waters overlap — so a kind painted with one
+   * depth (every world so far) is exact and a kind painted with two collapses
+   * to the later one. Carrying it per area again means shipping it in the water
+   * raster, which is a server matter (E6).
+   */
+  function refreshWaterLook(): void {
+    const table = layerTable();
+    const depthOf = new Map<string, unknown>();
+    for (const area of payload?.areas ?? []) {
+      // The same predicate `rebuildAreas` uses: only an area that really carved
+      // a bed carries a profile, so asking for the profile IS asking "is this
+      // water" (W1).
+      if (!waterProfileOf(area.meta)) continue;
+      depthOf.set((area.kind || '').toLowerCase(), area.meta?.water_depth_effective);
+    }
+    let primary: WaterLook | null = null;
+    const own = new Map<number, WaterLook>();
+    for (const layer of table) {
+      if (!layer.water) continue;
+      const kind = (layer.kind || '').toLowerCase();
+      const look = waterLookFrom(surfaceMaterialSpec(surfaceOf(layer.kind)),
+                                 depthOf.get(kind));
+      own.set(layer.index, look);
+      if (!primary) primary = look;
+    }
+    // …and a row that is only STANDING IN for a water says so, or it would win
+    // the pick of `twLayerOf` against the real water beside it.
+    const fallback: WaterLook = { ...(primary ?? WATER_LOOK_DEFAULT), isWater: false };
+    let rows = 0;
+    for (const layer of table) rows = Math.max(rows, layer.index + 1);
+    const looks: WaterLook[] = [];
+    for (let i = 0; i < rows; i += 1) looks.push(own.get(i) ?? fallback);
+    terrain.setWaterLook(looks);
+  }
+
+  /**
    * Deterministic prop scatter of one area — up to TWO InstancedMeshes per
    * entry AND VARIANT (the cheap one from the start, the full one when it is
    * deserved).
@@ -2606,6 +2667,10 @@ export function createGround(): Ground {
     // breath: it rebuilds the cells it holds, which is what puts the
     // undergrowth on a freshly draped relief instead of on the old one.
     undergrowth.setAreas(undergrowthAreas, footprints);
+    // …and the terrain's own water shading learns the new bed depths (K-A E4).
+    // The areas and the layer table arrive from two fetches in no fixed order,
+    // so BOTH of them refresh the table and the later one wins.
+    refreshWaterLook();
     rev += 1;
   }
 
@@ -2998,6 +3063,9 @@ export function createGround(): Ground {
       const lib = surfaceFor(surfaceOf(kind), 'wall');
       return lib?.sizeM ?? 3;
     });
+    // The table the terrain's water variant indexes by layer (K-A E4) — the
+    // mask's indices just moved, so the look table has to move with them.
+    refreshWaterLook();
     // The masks moved, so the tiles under the player have to come with them.
     await refreshLayerTiles();
   }
