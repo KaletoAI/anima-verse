@@ -160,7 +160,7 @@
  */
 import * as THREE from 'three';
 import { finestStep, heightAt, latticeSample, surfaceSkyUniform,
-  surfaceTimeUniform, surfaceWaveNormal } from '@anima/scene-render';
+  surfaceTimeUniform, surfaceWaveNormal, tileKeyAt } from '@anima/scene-render';
 import type { WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
 import { rasterFlowAt, rasterLevelAt, waterBilinear } from './waterRaster';
 import type { WaterRaster } from './waterRaster';
@@ -555,6 +555,279 @@ export function wlevelAt(pyr: HeightPyramid | null, x: number, z: number,
                        tx, tz);
 }
 
+// ── The mip resolution limit of the water (F1) ─────────────────────────────
+
+/**
+ * "NO CAP" — what the LOD cap field answers where no water constrains it.
+ *
+ * `MAX_LOD_LEVELS` and not `Infinity`: λ is a sum of `MAX_LOD_LEVELS` terms in
+ * [0, 1] and can therefore never exceed it, so `min(λ, LOD_CAP_NONE)` is the
+ * IDENTITY on dry ground — the dry world keeps the surface it had, arithmetic
+ * for arithmetic. An infinity would also poison every bilinear mix it took part
+ * in (`Infinity · 0` is NaN), and the cap field is read by mixing.
+ */
+export const LOD_CAP_NONE = MAX_LOD_LEVELS;
+
+/**
+ * THE COARSEST LEVEL THAT STILL CARRIES A TILE'S WATER — one number per tile of
+ * the water raster, derived once while the pyramid stands and never per frame.
+ *
+ * THE PROBLEM, in one sentence: a 6 m river bed on an 8 m lattice has no
+ * support point left inside itself, so `h_k ≥ w_k` there and the lift never
+ * fires — the river breaks into lens-shaped puddles at level 2 and is gone at
+ * level 3 (measured, `docs/schnittstellen-3d.md` § "Offen und NICHT gefixt":
+ * 123/123, 123/123, 44/123, 0/123 lifted points along one meander).
+ *
+ * THE CAP IS A WIDTH, and that is the whole rule: a lattice of stride s has a
+ * support point inside every body that is at least s wide, and none guaranteed
+ * inside one that is narrower. Written on the base mask — `2^k + 1` consecutive
+ * indices contain a multiple of `2^k` in each axis — a level k survives at a
+ * texel exactly while a FULLY LIFTING block of `(2^k + 1)²` texels sits around
+ * it. So a body that is N texels wide carries levels up to
+ * `floor(log2(N − 1))`: a 6 m river on the 2 m lattice is 3 texels, hence
+ * level 1 and no more; a lake 31 texels across keeps level 4.
+ *
+ * WHAT THE TILE TAKES IS THE MAXIMUM over its texels — the widest water in the
+ * tile decides. A tile holding both a lake and a brook is therefore drawn for
+ * the lake and the brook still breaks up in it; the alternative (the minimum)
+ * would be decided by the narrowest FRINGE of every shore instead, i.e. by one
+ * texel of dilation ring, and would refine the world around every pond down to
+ * level 0. The fringe is what the fragment mask covers (K-A E4); the body is
+ * what this number is about.
+ *
+ * IT IS NOT "ONE SURVIVING TEXEL", and that was measured before it was
+ * rejected: the obvious rule — the coarsest level whose own lattice still holds
+ * a lifting texel of this tile, `max min(ctz i, ctz j)` — answers 2 for the
+ * meander fixture, at which level 44 of its 123 axis points are already dark.
+ * One surviving point is not a river.
+ *
+ * A tile with no lifting texel at all gets NO entry and reads as
+ * `LOD_CAP_NONE`: water below its own bed is water nobody can see, and refining
+ * for it would be paying for an invisible surface.
+ */
+export function waterTileCaps(water: HeightPyramid | null | undefined,
+                              height: HeightPyramid | null | undefined,
+                              tileM: number,
+                              levelCount = MAX_LOD_LEVELS): Map<string, number> {
+  const out = new Map<string, number>();
+  const wl = water?.levels[0];
+  const hl = height?.levels[0];
+  if (!water || !height || !wl || !hl || !(tileM > 0)) return out;
+  // The two pyramids are built over ONE window (`buildWater`), so this is a
+  // guard and never a case: a water field on a different lattice from the
+  // ground it is compared with would answer about the wrong texel.
+  if (wl.cols !== hl.cols || wl.rows !== hl.rows) return out;
+  const top = Math.min(levelCount, water.levels.length) - 1;
+  if (top < 0) return out;
+  const cols = wl.cols;
+  const rows = wl.rows;
+  // THE LIFT MASK AS A SUMMED-AREA TABLE, so "is this whole block lifting" is
+  // four lookups whatever the block's size — a lake would otherwise be walked
+  // 33² times per texel. `Int32` because the count is a texel count.
+  const w1 = cols + 1;
+  const sat = new Int32Array(w1 * (rows + 1));
+  for (let j = 0; j < rows; j += 1) {
+    const wrow = (wl.row0 + j) * water.texW;
+    const hrow = (hl.row0 + j) * height.texW;
+    let run = 0;
+    for (let i = 0; i < cols; i += 1) {
+      // The dry sentinel is NaN and every comparison with it is false, so this
+      // is the same NaN-safe statement `tlodLift` makes, and nothing else.
+      if (water.data[wrow + i] > height.data[hrow + i]) run += 1;
+      sat[(j + 1) * w1 + i + 1] = sat[j * w1 + i + 1] + run;
+    }
+  }
+  /** Does EVERY texel of the closed block lift? A block reaching past the
+   *  window answers no — outside the window nothing is known to lift, and
+   *  over-capping is the direction that loses water. */
+  const solid = (i0: number, j0: number, i1: number, j1: number): boolean => {
+    if (i0 < 0 || j0 < 0 || i1 >= cols || j1 >= rows) return false;
+    const sum = sat[(j1 + 1) * w1 + i1 + 1] - sat[j0 * w1 + i1 + 1]
+      - sat[(j1 + 1) * w1 + i0] + sat[j0 * w1 + i0];
+    return sum === (i1 - i0 + 1) * (j1 - j0 + 1);
+  };
+  for (let j = 0; j < rows; j += 1) {
+    const z = water.originZ + j * water.step;
+    for (let i = 0; i < cols; i += 1) {
+      // The texel itself has to lift — level 0 is what every lifting texel
+      // carries, and a dry texel says nothing about any level.
+      if (!solid(i, j, i, j)) continue;
+      const key = tileKeyAt(tileM, water.originX + i * water.step, z);
+      const prev = out.get(key) ?? -1;
+      if (prev >= top) continue;
+      let k = top;
+      while (k > 0) {
+        const r = 1 << (k - 1);
+        if (solid(i - r, j - r, i + r, j + r)) break;
+        k -= 1;
+      }
+      if (k > prev) out.set(key, k);
+    }
+  }
+  return out;
+}
+
+/**
+ * THE CAP AS A FIELD — the per-tile numbers on the tile CORNER lattice, which
+ * is what makes them a continuous function of the world position.
+ *
+ * WHY A CORNER LATTICE AND NOT THE TILES THEMSELVES. The cap has to enter the
+ * morph (`tlodMorphAt`: λ_eff = min(λ, cap)), and the whole crack-freeness of
+ * this renderer rests on the drawn surface being a function of the world point
+ * alone — two pieces at different levels agree because they evaluate the SAME
+ * function at the same point. A per-tile step function is such a function, but
+ * a DISCONTINUOUS one: λ would jump by whole levels across a tile border, the
+ * fine side's extra vertices would stop collapsing onto the coarse side's edge
+ * and every tile border would be a T-junction. Sampled at the corners and mixed
+ * bilinearly the field is continuous, and a continuous λ is exactly what CDLOD
+ * asks for.
+ *
+ * A CORNER TAKES THE MINIMUM OF THE FOUR TILES THAT MEET THERE. That is what
+ * makes the field an UPPER bound of every tile's own cap inside it: all four
+ * corners of tile t are ≤ cap[t], so the mix of them is too, so water in t is
+ * drawn at a level no coarser than t's cap. The same minimum is what lets the
+ * selection bound the field from below by scanning corners (`lodCapOverSquare`).
+ *
+ * THE GRID IS RINGED WITH `LOD_CAP_NONE`: it spans the wet tiles' box grown by
+ * one tile on every side, so its outermost corners touch no wet tile and read
+ * "no cap". Outside the grid the answer is `LOD_CAP_NONE` as well, and the two
+ * agree at the border — the rectangle test in `lodCapAt` is therefore a
+ * shortcut, not a second rule.
+ */
+export interface LodCapGrid {
+  /** World position of corner (0, 0). */
+  x0: number;
+  z0: number;
+  /** Metres between corners — the water raster's own tile size. */
+  step: number;
+  cols: number;
+  rows: number;
+  /** `caps[j · cols + i]`, in LEVELS. */
+  caps: Float32Array;
+  /** The smallest entry — the honest answer for a square that swallows the
+   *  whole grid, and the fallback when a scan would be too long. */
+  min: number;
+}
+
+/** Build the corner field out of the per-tile caps. `null` when no tile carries
+ *  a liftable drop, which is the dry world's answer and costs it nothing:
+ *  no texture is allocated and the shader's rectangle test never passes. */
+export function buildLodCapGrid(caps: ReadonlyMap<string, number>,
+                                tileM: number): LodCapGrid | null {
+  if (!caps.size || !(tileM > 0)) return null;
+  let tx0 = Infinity;
+  let tz0 = Infinity;
+  let tx1 = -Infinity;
+  let tz1 = -Infinity;
+  for (const key of caps.keys()) {
+    const [tx, tz] = key.split(',').map(Number);
+    if (!Number.isFinite(tx) || !Number.isFinite(tz)) continue;
+    tx0 = Math.min(tx0, tx);
+    tz0 = Math.min(tz0, tz);
+    tx1 = Math.max(tx1, tx);
+    tz1 = Math.max(tz1, tz);
+  }
+  if (!Number.isFinite(tx0)) return null;
+  // Corner a sits on the border between tiles (tx0 − 2 + a) and (tx0 − 1 + a),
+  // so a = 0 and a = cols − 1 touch nothing wet and carry LOD_CAP_NONE.
+  const cols = tx1 - tx0 + 4;
+  const rows = tz1 - tz0 + 4;
+  const grid = new Float32Array(cols * rows);
+  const capOf = (tx: number, tz: number): number =>
+    caps.get(`${tx},${tz}`) ?? LOD_CAP_NONE;
+  let min = LOD_CAP_NONE;
+  for (let b = 0; b < rows; b += 1) {
+    for (let a = 0; a < cols; a += 1) {
+      const tx = tx0 - 2 + a;
+      const tz = tz0 - 2 + b;
+      const v = Math.min(capOf(tx, tz), capOf(tx + 1, tz),
+                         capOf(tx, tz + 1), capOf(tx + 1, tz + 1));
+      grid[b * cols + a] = v;
+      if (v < min) min = v;
+    }
+  }
+  return { x0: (tx0 - 1) * tileM, z0: (tz0 - 1) * tileM, step: tileM,
+           cols, rows, caps: grid, min };
+}
+
+/**
+ * THE CAP AT ONE WORLD POINT — the CPU mirror of the shader's `tlodCapAt`,
+ * arithmetic for arithmetic.
+ *
+ * PLAIN bilinear and not the water field's masked mix: every entry is a finite
+ * level, there is no sentinel to keep out, and a corner of weight 0 contributes
+ * the same 0 either way.
+ */
+export function lodCapAt(grid: LodCapGrid | null | undefined,
+                         x: number, z: number): number {
+  if (!grid || grid.cols < 2 || grid.rows < 2 || !(grid.step > 0)) {
+    return LOD_CAP_NONE;
+  }
+  const fx = (x - grid.x0) / grid.step;
+  const fz = (z - grid.z0) / grid.step;
+  if (fx <= 0 || fz <= 0 || fx >= grid.cols - 1 || fz >= grid.rows - 1) {
+    return LOD_CAP_NONE;
+  }
+  const i = Math.floor(fx);
+  const j = Math.floor(fz);
+  const tx = fx - i;
+  const tz = fz - j;
+  const at = (a: number, b: number): number => grid.caps[b * grid.cols + a];
+  const north = at(i, j) * (1 - tx) + at(i + 1, j) * tx;
+  const south = at(i, j + 1) * (1 - tx) + at(i + 1, j + 1) * tx;
+  return north * (1 - tz) + south * tz;
+}
+
+/** How many corner samples a square may be scanned over before the cap answers
+ *  the grid's global minimum without looking. Over-refining is the SAFE
+ *  direction — it costs pieces and draws the same ground — while under-refining
+ *  would put a node below its own cap. 289 is a 16 × 16 tile square, i.e. the
+ *  largest node this quadtree emits (2 048 m) over the live world's 256 m
+ *  tiles, so the shortcut never fires on a node the tree really has. */
+const LOD_CAP_SCAN_MAX = 289;
+
+/**
+ * THE SMALLEST CAP ANYWHERE ON A SQUARE — what the node selection splits
+ * against.
+ *
+ * It scans the CORNERS the square's bilinear field can reach, i.e. one index
+ * past it on each side, because a point at the square's edge is mixed from
+ * corners outside it. A bilinear mix is never below the minimum of its four
+ * corners, so the scan's minimum is a lower bound of the field over the whole
+ * square — which is the direction that matters: the selection must not leave a
+ * node coarser than the cap the shader will apply inside it.
+ */
+export function lodCapOverSquare(grid: LodCapGrid | null | undefined,
+                                 x: number, z: number, size: number): number {
+  if (!grid || grid.cols < 2 || grid.rows < 2 || !(grid.step > 0)) {
+    return LOD_CAP_NONE;
+  }
+  const lo = (v: number, n: number): number =>
+    Math.max(0, Math.min(Math.floor(v) - 1, n - 1));
+  const hi = (v: number, n: number): number =>
+    Math.max(0, Math.min(Math.floor(v) + 1, n - 1));
+  const fx0 = (x - grid.x0) / grid.step;
+  const fz0 = (z - grid.z0) / grid.step;
+  const fx1 = fx0 + size / grid.step;
+  const fz1 = fz0 + size / grid.step;
+  if (fx1 <= 0 || fz1 <= 0 || fx0 >= grid.cols - 1 || fz0 >= grid.rows - 1) {
+    return LOD_CAP_NONE;
+  }
+  const i0 = lo(fx0, grid.cols);
+  const i1 = hi(fx1, grid.cols);
+  const j0 = lo(fz0, grid.rows);
+  const j1 = hi(fz1, grid.rows);
+  if ((i1 - i0 + 1) * (j1 - j0 + 1) > LOD_CAP_SCAN_MAX) return grid.min;
+  let min = LOD_CAP_NONE;
+  for (let b = j0; b <= j1; b += 1) {
+    for (let a = i0; a <= i1; a += 1) {
+      const v = grid.caps[b * grid.cols + a];
+      if (v < min) min = v;
+    }
+  }
+  return min;
+}
+
 /** Which level of the pyramid draws a node whose vertices are `stepM` apart —
  *  `round(log2(stepM / baseStep))`, clamped into the chain. The same three
  *  lines run in the shader (`tlodLevel`). */
@@ -639,6 +912,18 @@ export interface LodSelectOpts {
    * handed BACK to the caller and handed IN here, one array for both.
    */
   ranges?: readonly number[];
+  /**
+   * THE WATER'S MIP LIMIT over a square, in levels (F1) — normally
+   * `lodCapOverSquare` bound to the renderer's cap grid, and left out entirely
+   * by every caller that has no water.
+   *
+   * A node is SPLIT while its level is above this, whatever the rings say, so
+   * that the piece has the vertices λ_eff will place. It is the selection half
+   * of one rule whose other half is in the shader (`tlodCapAt`), and the two
+   * MUST be the same ladder — see `selectLodFitted` for the relaxation that
+   * keeps them so when the budget bites.
+   */
+  lodCapOf?: (x: number, z: number, size: number) => number;
 }
 
 /**
@@ -995,22 +1280,45 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
                        x, b.min, z, x + size, b.max, z + size);
   };
 
+  /** The water's mip limit over a square — `LOD_CAP_NONE` for every world
+   *  without water, which makes every test below a comparison against a
+   *  constant the branch predictor never misses. */
+  const capOf = o.lodCapOf ?? (() => LOD_CAP_NONE);
+
   const emit = (x: number, z: number, size: number, level: number,
-                cells: number, d: number): void => {
+                cells: number, d: number, cap: number): void => {
     // The morph at the piece's NEAREST point. For every piece but a root it is
     // in [0, 1] by construction — `lodRange[level−1] ≤ d < lodRange[level]`
     // holds after the out-of-range rule, and λ(lodRange[i]) = i + 1 exactly
     // (`lodLambda`). A root has no coarser level to be pushed up to and simply
     // keeps counting past 1 out there. `smoke_terrain_lod.mjs` [12] asserts it.
+    //
+    // THE CAP ENTERS IT THE WAY IT ENTERS THE SHADER (F1): λ_eff = min(λ, cap),
+    // so a piece the cap pulled INTO a finer level reports the morph the shader
+    // will really use — 0 there, and not the λ − level of a ring it was never
+    // chosen against.
+    //
+    // A CAP-DRIVEN SPLIT CAN STILL PUT A QUADRANT PAST 1, and that is sound
+    // rather than an exception: when a node is split because its square carries
+    // a narrow water, the quadrants that do NOT are drawn at their parent's
+    // level inside a coarser ring, so their t runs past 1 — the case
+    // `morphedVertex` is built for ("t MAY run past 1"). Their vertices snap
+    // onto the coarse lattice of ⌊λ⌋ and meet the coarse neighbour exactly;
+    // what it costs is triangles, in the neighbourhood of the water alone.
     out.push({ x, z, size, level, cells,
-               morph: Math.max(lodLambda(d, ranges) - level, 0) });
+               morph: Math.max(Math.min(lodLambda(d, ranges), cap) - level, 0) });
   };
 
   const visit = (x: number, z: number, level: number, d: number): void => {
     if (out.length >= MAX_NODES) return;
     const size = leaf * (1 << level);
     const inner = level > 0 ? ranges[level - 1] : 0;
-    if (inner > 0 && d < inner) {
+    const cap = capOf(x, z, size);
+    // TWO REASONS TO SPLIT, and the second one does not look at the camera at
+    // all: a piece whose water needs a finer lattice than this level offers is
+    // refined wherever it stands (F1). Level 0 is the floor of both — a cap is
+    // never below 0, so the recursion always terminates.
+    if (level > 0 && ((inner > 0 && d < inner) || level > cap)) {
       const half = size / 2;
       for (let q = 0; q < 4; q += 1) {
         const cx = x + ((q & 1) ? half : 0);
@@ -1018,14 +1326,17 @@ export function selectLodNodes(o: LodSelectOpts): LodNode[] {
         const cd = probe(cx, cz, half);
         if (cd === null) continue;
         // THE OUT-OF-RANGE RULE: a child past `lodRange[level − 1]` is not a
-        // level-(level − 1) node. Its quadrant is drawn by THIS node instead.
-        if (cd < inner) visit(cx, cz, level - 1, cd);
-        else emit(cx, cz, half, level, PATCH_N / 2, cd);
+        // level-(level − 1) node. Its quadrant is drawn by THIS node instead —
+        // unless the quadrant's own water cannot survive this level, in which
+        // case the child is visited after all and the quadrant is never drawn.
+        const ccap = capOf(cx, cz, half);
+        if (cd < inner || level > ccap) visit(cx, cz, level - 1, cd);
+        else emit(cx, cz, half, level, PATCH_N / 2, cd, ccap);
         if (out.length >= MAX_NODES) return;
       }
       return;
     }
-    emit(x, z, size, level, PATCH_N, d);
+    emit(x, z, size, level, PATCH_N, d, cap);
   };
 
   const rootSize = leaf * (1 << top);
@@ -1051,6 +1362,10 @@ export interface LodSelection {
   ranges: number[];
   /** 0 = the honest rings fitted. n > 0 = they were halved n times. */
   coarsenings: number;
+  /** How many levels the water's mip cap was RELAXED to fit — the same n, and
+   *  what the shader must ADD to its own cap so selection and morph read one
+   *  ladder (`tlodCapAt`, `uTlodCapFit.y`). */
+  capRelax: number;
 }
 
 /**
@@ -1116,7 +1431,19 @@ export function selectLodFitted(o: LodSelectOpts): LodSelection {
   while (nodes.length >= MAX_NODES && step < MAX_FIT_STEPS) {
     step += 1;
     ranges = ranges.map((r) => r / 2);
-    nodes = selectLodNodes({ ...o, ranges });
+    // …AND THE WATER'S CAP IS RAISED BY ONE LEVEL PER STEP (F1). Halving the
+    // rings alone would no longer converge: a capped node splits because of its
+    // water and not because of the camera, so the rings could fall to zero with
+    // the piece count untouched — and past `MAX_FIT_STEPS` the depth-first walk
+    // would simply stop at the ceiling and leave holes in the ground, which is
+    // the one thing this function exists to prevent. Eight steps take the cap
+    // past `LOD_CAP_NONE`, i.e. back to the picture this renderer drew before
+    // F1: the river breaks up again, which is a visible loss and never a crash.
+    const relax = step;
+    const capped = o.lodCapOf;
+    nodes = selectLodNodes({ ...o,
+      ranges,
+      lodCapOf: capped ? (x, z, s) => capped(x, z, s) + relax : undefined });
   }
   if (step > 0 && !fitWarned) {
     fitWarned = true;
@@ -1126,7 +1453,7 @@ export function selectLodFitted(o: LodSelectOpts): LodSelection {
       + `${MAX_NODES} pieces — ${nodes.length} selected, rings now `
       + `${ranges.map((r) => Math.round(r)).join('/')} m`);
   }
-  return { nodes, ranges, coarsenings: step };
+  return { nodes, ranges, coarsenings: step, capRelax: step };
 }
 
 // ── The GLSL twin ──────────────────────────────────────────────────────────
@@ -1456,6 +1783,14 @@ uniform float uTlodRange[ ${MAX_LOD_LEVELS} ];
 uniform float uTlodNoMorph;
 uniform float uTlodBaseStep;
 uniform vec4 uTlodFreeze;
+// THE WATER'S MIP LIMIT (F1) — a tiny R32F field over the water raster's tile
+// CORNERS, declared by BOTH programs and not only the wet one. A dry piece and
+// the wet piece beside it share vertices, so they have to agree about λ down to
+// the bit; a cap only one of them knew would open the seam the partition was
+// built to keep shut. Geometry is (x0, z0, step, cols) and (rows, relax, 0, 0).
+uniform sampler2D uTlodCap;
+uniform vec4 uTlodCapGeom;
+uniform vec4 uTlodCapFit;
 attribute vec4 iNode;
 varying vec2 vTlodXZ;
 
@@ -1475,6 +1810,42 @@ float tlodLambda( float d ) {
   return lam;
 }
 
+// THE COARSEST LEVEL THE WATER UNDER ONE WORLD POINT SURVIVES (F1), plus
+// whatever the budget had to relax (uTlodCapFit.y). The CPU twin is lodCapAt.
+//
+// THE RECTANGLE TEST IS THE DRY WORLD'S WHOLE BILL. Without water there is no
+// grid (cols = 0) and the function returns on its first compare; with water the
+// grid spans the wet tiles' box grown by one tile, so every vertex outside that
+// box also leaves on a compare and only the neighbourhood of a mirror pays four
+// texelFetch. Outside the grid the answer is LOD_CAP_NONE, which is what the
+// grid's own border ring carries — the test is a shortcut, not a second rule.
+//
+// PLAIN bilinear, unlike the water level's masked mix: every entry is a finite
+// level, there is no sentinel to keep out of the sum.
+float tlodCapAt( vec2 p ) {
+  float cols = uTlodCapGeom.w;
+  float rows = uTlodCapFit.x;
+  float step = uTlodCapGeom.z;
+  if ( cols < 2.0 || rows < 2.0 || step <= 0.0 ) return ${LOD_CAP_NONE}.0;
+  float fx = ( p.x - uTlodCapGeom.x ) / step;
+  float fz = ( p.y - uTlodCapGeom.y ) / step;
+  if ( fx <= 0.0 || fz <= 0.0 || fx >= cols - 1.0 || fz >= rows - 1.0 )
+    return ${LOD_CAP_NONE}.0;
+  float fi = floor( fx );
+  float fj = floor( fz );
+  float tx = fx - fi;
+  float tz = fz - fj;
+  int i = int( fi );
+  int j = int( fj );
+  float c00 = texelFetch( uTlodCap, ivec2( i, j ), 0 ).r;
+  float c10 = texelFetch( uTlodCap, ivec2( i + 1, j ), 0 ).r;
+  float c01 = texelFetch( uTlodCap, ivec2( i, j + 1 ), 0 ).r;
+  float c11 = texelFetch( uTlodCap, ivec2( i + 1, j + 1 ), 0 ).r;
+  float north = c00 * ( 1.0 - tx ) + c10 * tx;
+  float south = c01 * ( 1.0 - tx ) + c11 * tx;
+  return north * ( 1.0 - tz ) + south * tz + uTlodCapFit.y;
+}
+
 // The morph coordinate at one lattice point of this piece: λ there, minus the
 // piece's own level. nodeStep and eye are passed in so the two calls in
 // tlodCompute cannot drift apart.
@@ -1489,7 +1860,20 @@ float tlodMorphAt( vec2 gi, float nodeStep, vec3 eye ) {
   // The distance is taken to the FINEST ground under the point — one number per
   // world point, so every piece that owns this point reads the same λ.
   float d = distance( vec3( p.x, tlodHeight( p, 0.0 ), p.y ), eye );
-  return max( tlodLambda( d ) - iNode.w, 0.0 );
+  // λ_eff = min(λ, cap) — THE MIP LIMIT OF THE WATER (F1). Everything the
+  // vertex does with the morph is a function of λ and p (see the header: "the
+  // level CANCELS"), so THIS is where a cap has to bite; splitting the node
+  // alone changes nothing but the number of vertices that collapse onto the
+  // same point. The clamp is continuous — cap is a bilinear field and λ a
+  // continuous function of the distance — so the surface stays a continuous
+  // function of the world point and two pieces still meet exactly.
+  //
+  // WHAT IT BUYS AT THE CAP: once λ has run past it, f = frac(λ_eff) is 0 and
+  // the morph pair is (cap, cap+1) with all the weight on the first — the tap
+  // that still carries water. The (1−f) fade of the E4 depth mix therefore
+  // never runs at the cap; below it both taps are wet, because the level masks
+  // are nested.
+  return max( min( tlodLambda( d ), tlodCapAt( p ) ) - iNode.w, 0.0 );
 }
 
 void tlodCompute() {
@@ -1785,7 +2169,8 @@ export function lodVertex(node: LodNode, gx: number, gz: number,
                           far: HeightPyramid | null,
                           extent: readonly number[] | null,
                           cam: LodCamera, ranges: readonly number[],
-                          water: HeightPyramid | null = null
+                          water: HeightPyramid | null = null,
+                          capAt: ((x: number, z: number) => number) | null = null
 ): { x: number; z: number; y: number; t: number } {
   const nodeStep = node.size / node.cells;
   /** The morph coordinate at the lattice point (ix, iz) of this piece. */
@@ -1802,7 +2187,11 @@ export function lodVertex(node: LodNode, gx: number, gz: number,
     // gate can close. See `terrainLodWaterGlsl`.
     const y = gpuHeightAt(near, nearRect, far, x, z, 0);
     const d = Math.hypot(x - cam.x, y - cam.y, z - cam.z);
-    return Math.max(lodLambda(d, ranges) - node.level, 0);
+    // λ_eff = min(λ, cap): the water's mip limit (F1), read at the SAME world
+    // point λ is — see `tlodMorphAt` for why the cap has to enter here and not
+    // at the node.
+    const cap = capAt ? capAt(x, z) : LOD_CAP_NONE;
+    return Math.max(Math.min(lodLambda(d, ranges), cap) - node.level, 0);
   };
   const gi = Math.min(gx, node.cells);
   const gj = Math.min(gz, node.cells);
@@ -1908,6 +2297,25 @@ const uWaterLevel = { value: makeLevelArray() };
  * height pyramid. Level 0 only, and the reason is in `tlodFlowAt`.
  */
 const uFlow: { value: THREE.Texture } = { value: neutralTex };
+/**
+ * THE WATER'S MIP LIMIT AS A FIELD (F1) — the corner grid of `LodCapGrid` as an
+ * R32F texture, its geometry, and the budget's relaxation.
+ *
+ * BOUND ON BOTH PROGRAMS, unlike every other `uTlodWater*` object: it enters λ
+ * (`tlodMorphAt`), and λ has to be one number for the dry piece and the wet
+ * piece that share a vertex. `uCapGeom.w` = 0 is "no grid" and is what a world
+ * without a liftable drop keeps — no texture is ever allocated for it and the
+ * shader leaves `tlodCapAt` on its first compare.
+ *
+ * `uCapFit` is (rows, relax, 0, 0). The relax is written per frame from
+ * `selectLodFitted`, so the morph and the selection climb the same ladder when
+ * the instance budget forces the cap open — and the isolation panel's toggle 22
+ * pushes it past `LOD_CAP_NONE`, which takes the cap out of BOTH programs at
+ * once (see `update`).
+ */
+const uCap: { value: THREE.Texture } = { value: neutralTex };
+const uCapGeom = { value: new THREE.Vector4(0, 0, 1, 0) };
+const uCapFit = { value: new THREE.Vector4(0, 0, 0, 0) };
 /**
  * WHAT EACH LAYER'S WATER LOOKS LIKE — a `WATER_LOOK_TEXELS` × n RGBA32F
  * table, one ROW per layer index of the compositor's mask (K-A E4).
@@ -2056,6 +2464,12 @@ export function patchTerrainLod(mat: THREE.Material, water = false): void {
     (shader.uniforms as unknown as Record<string, unknown>).uTlodRange = uRange;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodBaseStep = uBaseStep;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodFreeze = uFreeze;
+    // THE CAP RIDES WITH THE MORPH'S OWN UNIFORMS AND NOT WITH THE WATER'S
+    // (F1): both programs read it, because both compute λ and a vertex they
+    // share must come out at one point. See `uCap`.
+    (shader.uniforms as unknown as Record<string, unknown>).uTlodCap = uCap;
+    (shader.uniforms as unknown as Record<string, unknown>).uTlodCapGeom = uCapGeom;
+    (shader.uniforms as unknown as Record<string, unknown>).uTlodCapFit = uCapFit;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodNormalSpan = uNormalSpan;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodNoMorph = uNoMorph;
     (shader.uniforms as unknown as Record<string, unknown>).uTlodFlatNormal = uFlatNormal;
@@ -2079,7 +2493,11 @@ export function patchTerrainLod(mat: THREE.Material, water = false): void {
       // and its window, bound a second time under this program's names. See
       // `twLayerAt`: that chunk is declared below this one in the finished
       // shader, so its uniforms cannot be reached from here by name.
-      bindLayerIdUniforms(u, 'uTlodWaterMask', 'uTlodWaterMaskGeom');
+      // …and, since the rim seam of 2026-08-24, the SIGNED DISTANCE beside it:
+      // the pair says which two kinds meet, only the distance says whether this
+      // pixel is inside the authored water or on the flooded ring around it.
+      bindLayerIdUniforms(u, 'uTlodWaterMask', 'uTlodWaterMaskGeom',
+                          'uTlodWaterSd', 'uTlodWaterSdGeom', 'uTlodWaterSdCode');
     }
     if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
     shader.vertexShader = terrainLodGlsl(water) + shader.vertexShader
@@ -2416,6 +2834,11 @@ export function createTerrainLod(): TerrainLod {
    */
   let waterTileKeys: Set<string> | null = null;
   let waterTileM = 0;
+  /** THE WATER'S MIP LIMIT (F1), taken in the same breath as the pyramid and
+   *  the gate, for the reason the gate gives: three books about where the water
+   *  is, all written at once, can disagree only if they are written apart. */
+  let capGrid: LodCapGrid | null = null;
+  let capTex: THREE.DataTexture | null = null;
   /** The height span of everything held — the fallback box of a node the tile
    *  statistics say nothing about. */
   let globalRange = { min: 0, max: 0 };
@@ -2551,11 +2974,35 @@ export function createTerrainLod(): TerrainLod {
     return tex;
   }
 
+  /** The cap grid as the texture `tlodCapAt` fetches — R32F and NEAREST like
+   *  every other field here, because the mix is done by hand in the shader and
+   *  that is what makes it the CPU's arithmetic. `null` when nothing is capped,
+   *  and then no texture exists at all: a world without water pays nothing. */
+  function capTexture(grid: LodCapGrid | null): THREE.DataTexture | null {
+    if (!grid) return null;
+    const tex = new THREE.DataTexture(grid.caps, grid.cols, grid.rows,
+                                      THREE.RedFormat, THREE.FloatType);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = false;
+    tex.unpackAlignment = 1;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   function uploadPyramids(raster: WaterRaster | null): void {
     nearTex?.dispose();
     farTex?.dispose();
     waterTex?.dispose();
     flowTex?.dispose();
+    capTex?.dispose();
+    capTex = capTexture(capGrid);
+    uCap.value = capTex ?? neutralTex;
+    uCapGeom.value.set(capGrid?.x0 ?? 0, capGrid?.z0 ?? 0,
+                       capGrid?.step ?? 1, capGrid?.cols ?? 0);
+    uCapFit.value.set(capGrid?.rows ?? 0, uCapFit.value.y, 0, 0);
     nearTex = nearPyr ? pyramidTexture(nearPyr) : null;
     farTex = farPyr ? pyramidTexture(farPyr) : null;
     waterTex = waterPyr ? pyramidTexture(waterPyr) : null;
@@ -2630,6 +3077,14 @@ export function createTerrainLod(): TerrainLod {
     // may halve the rings to stay under `MAX_NODES`, and the shader has to
     // morph against the rings the selection really used or every piece would
     // measure its λ on a ladder it was not picked from.
+    // THE WATER'S MIP LIMIT, and the ONE switch that takes it out (F1). Toggle
+    // 22 ("Water lift off") already makes `tlodLift` hand its height back; a cap
+    // still refining the ground for a lift that no longer happens would leave
+    // the toggle showing a picture nobody draws. Pushing the relaxation past
+    // `LOD_CAP_NONE` switches the cap off in the SELECTION and in BOTH programs
+    // through the one uniform the two share — no second switch, no recompile.
+    const capOff = uNoWater.value > 0.5 ? LOD_CAP_NONE : 0;
+    const grid = capGrid;
     const sel = selectLodFitted({
       x0: extent[0], z0: extent[1], x1: extent[2], z1: extent[3],
       leafM,
@@ -2639,9 +3094,16 @@ export function createTerrainLod(): TerrainLod {
       boundsOf,
       levelErrorM,
       pixelScale,
+      lodCapOf: grid
+        ? (x, z, size) => lodCapOverSquare(grid, x, z, size) + capOff
+        : undefined,
     });
     const picked = sel.nodes;
     for (let i = 0; i < MAX_LOD_LEVELS; i += 1) uRange.value[i] = sel.ranges[i] ?? 0;
+    // The shader adds this to its own sample, so the morph reads the very
+    // ladder the pieces were chosen against — the argument `LodSelectOpts.
+    // ranges` makes for the rings, made once more for the cap.
+    uCapFit.value.y = sel.capRelax + capOff;
     const arr = nodeAttr.array as Float32Array;
     const warr = waterAttr.array as Float32Array;
     triangles = 0;
@@ -2733,6 +3195,12 @@ export function createTerrainLod(): TerrainLod {
       waterTileM = waterPyr ? (water?.tileM ?? 0) : 0;
       waterTileKeys = waterPyr && water?.tiles?.size
         ? new Set(water.tiles.keys()) : null;
+      // …and the MIP LIMIT of that same raster (F1), against the near pyramid's
+      // ground: a texel lifts where its level stands above its own bed, and the
+      // coarsest level that keeps one such texel is what the tile may be drawn
+      // at. Both pyramids are the same lattice by construction (`buildWater`).
+      capGrid = buildLodCapGrid(
+        waterTileCaps(waterPyr, nearPyr, waterTileM, MAX_LOD_LEVELS), waterTileM);
       uploadPyramids(water ?? null);
     },
     setWaterLook(looks) {
@@ -2780,11 +3248,14 @@ export function createTerrainLod(): TerrainLod {
       farTex?.dispose();
       waterTex?.dispose();
       flowTex?.dispose();
+      capTex?.dispose();
       lookTex?.dispose();
       nearTex = null;
       farTex = null;
       waterTex = null;
       flowTex = null;
+      capTex = null;
+      capGrid = null;
       lookTex = null;
       // The pyramids are module-shared uniforms and outlive this closure, so
       // they are handed back explicitly — the rule `setNaturalGroundField(null)`
@@ -2793,6 +3264,9 @@ export function createTerrainLod(): TerrainLod {
       uFar.value = neutralTex;
       uWater.value = neutralTex;
       uFlow.value = neutralTex;
+      uCap.value = neutralTex;
+      uCapGeom.value.set(0, 0, 1, 0);
+      uCapFit.value.set(0, 0, 0, 0);
       uLook.value = neutralLook;
       uNearRect.value.set(0, 0, -1, -1);
     },

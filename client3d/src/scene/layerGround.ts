@@ -257,11 +257,25 @@ function applySurfaceFiltering(): void {
  * The objects themselves are handed over, never their values: a window swap
  * mutates `.value` in place, so the borrowing program follows every update
  * without a second book to keep.
+ *
+ * THE SD HALF RIDES ALONG SINCE THE RIM SEAM (2026-08-24). The pair alone says
+ * WHICH two kinds meet under a pixel and never which side of them it is on —
+ * that is what the signed distance is for, and the water shading needs it to
+ * tell the authored mirror from the flooded dilation ring around it. It is the
+ * same three objects `lcCompose` reads (`uNearSd`, its window and the byte's
+ * quantisation), so the borrowing program reconstructs the very same distance;
+ * the names are optional because a caller that only wants the kind still only
+ * pays for the kind.
  */
 export function bindLayerIdUniforms(uniforms: Record<string, unknown>,
-                                    idName: string, geomName: string): void {
+                                    idName: string, geomName: string,
+                                    sdName?: string, sdGeomName?: string,
+                                    sdCodeName?: string): void {
   uniforms[idName] = uNearId;
   uniforms[geomName] = uNear;
+  if (sdName) uniforms[sdName] = uNearSd;
+  if (sdGeomName) uniforms[sdGeomName] = uNearSdGeom;
+  if (sdCodeName) uniforms[sdCodeName] = uSdCode;
 }
 
 /** The layer table in force — read by the undergrowth gate, which has to turn a

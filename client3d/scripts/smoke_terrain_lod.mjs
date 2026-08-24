@@ -841,8 +841,8 @@ async function loadLod() {
     await writeFile(join(dir, 'sceneRender.mjs'),
       "export * from './worldHeight.mjs';\nexport * from './materials.mjs';\n", 'utf8');
     await writeFile(join(dir, 'layerGround.mjs'),
-      'export function bindLayerIdUniforms(u, idName, geomName) {\n'
-      + '  u[idName] = { value: null };\n  u[geomName] = { value: null };\n}\n', 'utf8');
+      'export function bindLayerIdUniforms(u, ...names) {\n'
+      + '  for (const n of names) if (n) u[n] = { value: null };\n}\n', 'utf8');
     await ts(join(ROOT, 'packages/scene-render/src/worldHeight.ts'), 'worldHeight');
     await ts(join(ROOT, 'packages/scene-render/src/materials.ts'), 'materials');
     await ts(join(ROOT, 'client3d/src/scene/waterRaster.ts'), 'waterRaster');
@@ -919,7 +919,8 @@ const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt,
   buildWaterPyramid, wlevelAt, bindTerrainLodUniforms,
   terrainLodWaterGlsl, nodeHasWater, liftedHeight, liftedDepth, gpuWaterAt,
-  patchTerrainLod,
+  patchTerrainLod, LOD_CAP_NONE, waterTileCaps, buildLodCapGrid, lodCapAt,
+  lodCapOverSquare,
   TERRAIN_LOD_CACHE_KEY, TERRAIN_LOD_WATER_CACHE_KEY } = lod;
 const { heightAt, rayGroundHit, sampleWorldHeight } = height;
 const { emptyWaterRaster, rasterLevelAt, waterTileFrom } = water;
@@ -947,7 +948,10 @@ check('…index entries', PATCH_N * PATCH_N * 6, 6144);
 // The shader fetches, it does not filter: R32F is not filterable in core
 // WebGL2, and a driver that DID filter it would round the weights its own way.
 const glsl = terrainLodGlsl();
-check('the shader fetches texels', glsl.split('texelFetch(').length - 1, 4);
+// EIGHT since F1: the height's four, and the four corners of the water's mip
+// cap that the morph clamps λ against (`tlodCapAt`, [18]). Both are hand mixes
+// for the same reason.
+check('the shader fetches texels', glsl.split('texelFetch(').length - 1, 8);
 checkEq('…and never asks a sampler to filter', glsl.includes('texture2D('), false);
 checkEq('…nor the GLSL3 spelling of it', /\btexture\s*\(/.test(glsl), false);
 
@@ -3231,8 +3235,8 @@ const dryGlsl = terrainLodGlsl();
 const wetGlsl = terrainLodGlsl(true);
 checkEq('the dry variant knows no water uniform', dryGlsl.includes('uTlodWater'), false);
 checkEq('…nor the lift', dryGlsl.includes('tlodLift'), false);
-check('…and still fetches exactly the height\'s four texels',
-  dryGlsl.split('texelFetch(').length - 1, 4);
+check('…and still fetches exactly the height\'s four texels, plus the cap\'s four',
+  dryGlsl.split('texelFetch(').length - 1, 8);
 checkEq('…its height line is the one it always had',
   dryGlsl.includes(
     'float h = mix( tlodHeight( p, nodeStep * m1 ), tlodHeight( p, nodeStep * m2 ), f );'),
@@ -3241,8 +3245,8 @@ checkEq('the water variant declares the sampler',
   wetGlsl.includes('uniform sampler2D uTlodWater;'), true);
 checkEq('…and the isolation uniform',
   wetGlsl.includes('uniform float uTlodNoWater;'), true);
-check('…and fetches twelve texels: four ground, four mirror, four flow',
-  wetGlsl.split('texelFetch(').length - 1, 12);
+check('…and fetches sixteen texels: four ground, mirror, flow and mip cap',
+  wetGlsl.split('texelFetch(').length - 1, 16);
 checkEq('THE LIFT IS A COMPARISON', wetGlsl.includes('return ( w > h ) ? w : h;'), true);
 checkEq('RED: and never max(), which GLSL does not pin down for a NaN',
   /max\(\s*h,\s*w\s*\)/.test(wetGlsl), false);
@@ -3368,10 +3372,11 @@ check('the composition order is albedo -> normal -> light',
     .every((v, i, a) => v > 0 && (i === 0 || v > a[i - 1])) ? 1 : 0, 1);
 checkEq('the water program is handed the look table, the wave map and the mask',
   ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodTime', 'uTlodSky',
-   'uTlodWaterMask', 'uTlodWaterMaskGeom']
+   'uTlodWaterMask', 'uTlodWaterMaskGeom', 'uTlodWaterSd', 'uTlodWaterSdGeom',
+   'uTlodWaterSdCode']
     .every((k) => wetShader.uniforms[k] !== undefined), true);
 checkEq('RED: and the dry program is handed none of them',
-  ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodWaterMask']
+  ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodWaterMask', 'uTlodWaterSd']
     .some((k) => dryShader.uniforms[k] !== undefined), false);
 // The absorption a fragment reads is the mirror's own shore curve — the twin
 // is checked against hand tables in `smoke_water_shade.mjs`; here only that
@@ -3379,6 +3384,338 @@ checkEq('RED: and the dry program is handed none of them',
 checkEq('the GLSL easing is the TS easing',
   shade.terrainWaterFragmentGlsl()
     .includes('return c * c * ( 3.0 - 2.0 * c );'), true);
+
+// ============================================================================
+// [18] THE WATER'S MIP RESOLUTION LIMIT — F1
+// ============================================================================
+// THE DEFECT (`docs/schnittstellen-3d.md` § "Offen und NICHT gefixt"): a 6 m
+// river bed carved into the ground has no support point of its own left on an
+// 8 m lattice, so `h_k ≥ w_k` there, the lift does not fire and the river falls
+// apart into lens-shaped puddles at level 2 and is gone at level 3.
+//
+// TWO FIXTURES, both on the 2 m base lattice over [0, 256] × [0, 64], a bed
+// 6 m wide (|z − zc| ≤ 3) carved 3 m deep, a mirror at −0.5 m and a dilated
+// wet mask 22 m wide, so that the mask never limits anything and what is
+// measured is the LIFT alone:
+//   R: a straight reach, zc = 4 — every number below is derived by hand from
+//      "which multiples of 2·2^k lie inside the bed [1, 7]";
+//   M: a meander, zc = 8 + 4·sin(2πx/128) — bed inside [1, 15] everywhere.
+//
+// (a) THE TABLE ON R, along its axis at (x, 4) for x = 0, 2 … 244 (123 points).
+//     level 0, step 2: rows 2, 4, 6 lie in [1, 7]; the axis sits ON row 4, so
+//                      tz = 0 and h = −3 < −0.5 -> lifted, 123/123.
+//     level 1, step 4: rows 0, 4, 8 — row 4 is in the bed and again carries the
+//                      whole weight -> 123/123.
+//     level 2, step 8: rows 0 and 8, NEITHER in [1, 7]; the axis sits halfway
+//                      between them, h = 0 > −0.5 -> 0/123.
+//     level 3, step 16: rows 0 and 16, same -> 0/123.
+// (b) THE CAP THAT FOLLOWS. `waterTileCaps` never looks at the axis: a level k
+//     survives at a texel while a FULLY lifting block of (2^k + 1)² texels sits
+//     around it, because 2^k + 1 consecutive indices always contain a multiple
+//     of 2^k. R's bed is 3 texels wide (rows 2, 4, 6), so 2^k + 1 ≤ 3 -> k ≤ 1:
+//     cap 1, which is exactly where the table above stops. A LAKE 31 texels
+//     across (|z − 32| ≤ 30, rows 1…31) gives 2^k + 1 ≤ 31 -> k ≤ 4: cap 4, and
+//     nothing is refined for it.
+// (c) THE TABLE ON M is 123/123 and 123/123 at levels 0 and 1 for a reason that
+//     no longer mentions the fixture: with a step s ≤ 6 one of the two rows
+//     bracketing the axis is always inside a 6 m bed and carries at least half
+//     the weight, so h ≤ −1.5 < −0.5. At level 3 it is 0/123 because the bed
+//     never leaves [1, 15] and the only multiples of 16 in reach are 0 and 16.
+//     Level 2 is the interesting one — PARTIAL, the puddles — and its exact
+//     count depends on the mix in x, so what is pinned is the subset where
+//     there is none: at the 16 aligned points x = 0, 16 … 240 the axis reads
+//     |4·sin| ≤ 3 at 12 of them (sin ≠ ±1) and > 3 at 4 (x = 32, 96, 160, 224),
+//     and level 2 lifts at exactly those 12 and none of the 4.
+// (d) RED — "ONE SURVIVING TEXEL" IS NOT A RIVER. The obvious rule (the
+//     coarsest level whose own lattice still holds a lifting texel of the tile,
+//     `max min(ctz i, ctz j)`) answers 2 for M, and the table says level 2 has
+//     already lost a third of the axis. The cap is a WIDTH, not a count.
+console.log('\n[18] the water\'s mip limit — the cap is a width');
+const F1_BASE = 2;
+const F1_COLS = 129;
+const F1_ROWS = 33;
+function f1Field(zcOf, half = 3) {
+  const h = (x, z) => (Math.abs(z - zcOf(x)) <= half ? -3 : 0);
+  // The wet mask is the bed plus the server's dilation ring, so it never limits
+  // anything: what is measured here is the LIFT (`w > h`) and nothing else.
+  const w = (x, z) => (Math.abs(z - zcOf(x)) <= half + 8 ? -0.5 : NaN);
+  return {
+    hp: buildPyramid(h, 0, 0, F1_BASE, F1_COLS, F1_ROWS, MAX_LOD_LEVELS),
+    wp: buildWaterPyramid(w, 0, 0, F1_BASE, F1_COLS, F1_ROWS, MAX_LOD_LEVELS),
+  };
+}
+/** How many of the axis points are LIFTED when the ground is drawn at level k
+ *  — the lift is `w > h` on the interpolated pair, `tlodLift` itself. */
+function f1Lifted(field, pts, k) {
+  let n = 0;
+  for (const [x, z] of pts) {
+    if (wlevelAt(field.wp, x, z, k) > pyramidHeight(field.hp, x, z, k)) n += 1;
+  }
+  return n;
+}
+const RIVER_ZC = () => 4;
+const MEANDER_ZC = (x) => 8 + 4 * Math.sin((2 * Math.PI * x) / 128);
+const axis = (zc) => Array.from({ length: 123 }, (_, m) => [2 * m, zc(2 * m)]);
+const R = f1Field(RIVER_ZC);
+const M = f1Field(MEANDER_ZC);
+const R_AXIS = axis(RIVER_ZC);
+const M_AXIS = axis(MEANDER_ZC);
+checkEq('(a) the straight reach, lifted points per level',
+  [0, 1, 2, 3].map((k) => f1Lifted(R, R_AXIS, k)), [123, 123, 0, 0]);
+// The cap the renderer derives from the MASK alone — 64 m tiles over the
+// fixture, so tiles 0…3 hold the reach and tile 4 is the one column at the
+// window's edge, where a block cannot close and the cap honestly reads 0.
+const R_CAPS = waterTileCaps(R.wp, R.hp, 64, MAX_LOD_LEVELS);
+checkEq('(b) …and the cap the mask gives those tiles',
+  [0, 1, 2, 3].map((t) => R_CAPS.get(`${t},0`)), [1, 1, 1, 1]);
+const LAKE = f1Field(() => 32, 30);
+const LAKE_CAPS = waterTileCaps(LAKE.wp, LAKE.hp, 64, MAX_LOD_LEVELS);
+checkEq('…a lake 31 texels across keeps level 4',
+  [0, 1, 2, 3].map((t) => LAKE_CAPS.get(`${t},0`)), [4, 4, 4, 4]);
+checkEq('(c) the meander is whole at levels 0 and 1…',
+  [0, 1].map((k) => f1Lifted(M, M_AXIS, k)), [123, 123]);
+check('…gone at level 3', f1Lifted(M, M_AXIS, 3), 0);
+const M2 = f1Lifted(M, M_AXIS, 2);
+checkAbove('…and BROKEN at level 2 — some of it survives', M2, 0);
+checkBelow('…but not all of it: the lens-shaped puddles', M2, 123);
+const M_ALIGNED = M_AXIS.filter(([x]) => x % 16 === 0);
+const M_IN = M_ALIGNED.filter(([x]) => Math.abs(MEANDER_ZC(x) - 8) <= 3);
+const M_OUT = M_ALIGNED.filter(([x]) => Math.abs(MEANDER_ZC(x) - 8) > 3);
+checkEq('…the aligned points split 12 in-band / 4 out',
+  [M_IN.length, M_OUT.length], [12, 4]);
+checkEq('…and level 2 lifts exactly the in-band twelve',
+  [f1Lifted(M, M_IN, 2), f1Lifted(M, M_OUT, 2)], [12, 0]);
+const M_CAPS = waterTileCaps(M.wp, M.hp, 64, MAX_LOD_LEVELS);
+checkEq('…so the meander caps at 1 too, and its whole axis comes back',
+  [0, 1, 2, 3].map((t) => M_CAPS.get(`${t},0`)), [1, 1, 1, 1]);
+// (d) the rejected rule, rebuilt from its own arithmetic.
+function ctzCap(field, tileM) {
+  const wl = field.wp.levels[0];
+  const top = MAX_LOD_LEVELS - 1;
+  const ctz = (v) => { if (v === 0) return top;
+    let k = 0; while (k < top && (v & (1 << k)) === 0) k += 1; return k; };
+  const out = new Map();
+  for (let j = 0; j < wl.rows; j += 1) {
+    for (let i = 0; i < wl.cols; i += 1) {
+      const w = field.wp.data[(wl.row0 + j) * field.wp.texW + i];
+      const h = field.hp.data[(field.hp.levels[0].row0 + j) * field.hp.texW + i];
+      if (!(w > h)) continue;
+      const key = `${Math.floor((i * F1_BASE) / tileM)},${Math.floor((j * F1_BASE) / tileM)}`;
+      out.set(key, Math.max(out.get(key) ?? -1, Math.min(ctz(i), ctz(j))));
+    }
+  }
+  return out;
+}
+check('(d) RED: the "one surviving texel" rule answers 2 for the meander',
+  ctzCap(M, 64).get('1,0'), 2);
+checkAbove('…at a level whose axis has already lost points', 123 - M2, 0);
+
+// ============================================================================
+// [19] THE CAP AS A FIELD — continuous, an upper bound inside, none outside
+// ============================================================================
+// The cap enters λ (`tlodMorphAt`), and the whole crack-freeness of this
+// renderer is that the drawn surface is a function of the WORLD POINT alone. A
+// per-tile step function is such a function but a discontinuous one, and a
+// discontinuous λ stops the fine side's extra vertices collapsing onto the
+// coarse side's edge — a T-junction at every tile border. So the caps are
+// sampled at the tile CORNERS, each corner taking the MINIMUM of the four tiles
+// that meet there, and mixed bilinearly.
+//
+// THE FIXTURE is one row of 64 m tiles, tx = 0…31 at tz = 0, all capped at 1.
+// Corner b sits between tiles (tz0 − 2 + b) and (tz0 − 1 + b), so with tz0 = 0
+// the grid runs z = −64, 0, 64, 128 — four rows — and its outer two touch no
+// wet tile and read LOD_CAP_NONE = 6.
+// (e) the corner values are 6, 1, 1, 6 and the field between them is the ramp.
+// (f) INSIDE a wet tile the field never exceeds that tile's own cap, which is
+//     what makes the cap a promise: every corner of the tile is a minimum over
+//     four tiles including this one.
+// (g) OUTSIDE the grid it is LOD_CAP_NONE, so a world with a pond in one corner
+//     pays nothing anywhere else — and a world with no water has NO GRID AT
+//     ALL: `buildLodCapGrid` answers null and no texture is ever allocated.
+console.log('\n[19] the cap is a continuous field over the tile corners');
+const CAP_TILE = 64;
+const CAP_ROW = new Map();
+for (let tx = 0; tx < 32; tx += 1) CAP_ROW.set(`${tx},0`, 1);
+const GRID = buildLodCapGrid(CAP_ROW, CAP_TILE);
+checkEq('(e) the grid spans the wet box grown by one tile',
+  [GRID.x0, GRID.z0, GRID.step, GRID.cols, GRID.rows], [-64, -64, 64, 35, 4]);
+checkEq('…and its corner column reads 6, 1, 1, 6',
+  [0, 1, 2, 3].map((b) => GRID.caps[b * GRID.cols + 4]),
+  [LOD_CAP_NONE, 1, 1, LOD_CAP_NONE]);
+check('(f) inside the wet tile the field is the tile\'s own cap',
+  lodCapAt(GRID, 1000, 32), 1);
+check('…and at its far corner line still 1', lodCapAt(GRID, 1000, 64), 1);
+check('…while a tile out it has ramped half way to "no cap"',
+  lodCapAt(GRID, 1000, 96), (1 + LOD_CAP_NONE) / 2);
+check('…the ramp is CONTINUOUS, not a step (a quarter of the way)',
+  lodCapAt(GRID, 1000, 80), 1 + (LOD_CAP_NONE - 1) / 4);
+check('(g) past the grid there is no cap', lodCapAt(GRID, 1000, 200), LOD_CAP_NONE);
+check('…nor before it', lodCapAt(GRID, 1000, -100), LOD_CAP_NONE);
+check('…nor without a grid at all', lodCapAt(null, 0, 0), LOD_CAP_NONE);
+checkEq('…and a world without a drop has no grid to allocate',
+  buildLodCapGrid(new Map(), 256), null);
+// The selection reads the same field through a square, and must never answer
+// ABOVE it — a node coarser than the cap the shader applies inside it would be
+// a node without the vertices λ_eff places.
+let capBoundOk = 1;
+for (let z = -80; z <= 200; z += 7) {
+  const square = lodCapOverSquare(GRID, 500, z, 128);
+  for (let s = 0; s <= 128; s += 4) {
+    if (lodCapAt(GRID, 500 + s, z + s) < square - 1e-9) capBoundOk = 0;
+  }
+}
+check('the square answer never exceeds the field inside it', capBoundOk, 1);
+
+// ============================================================================
+// [20] THE SELECTION SPLITS TO THE CAP — and the budget takes it back
+// ============================================================================
+// The same [5] world — extent [0, 2048]², leaf 64 m, six levels,
+// `minLodDistance` 128 — with the camera in the MIDDLE (1024, 200, 1024) so the
+// tile row along the south edge is far enough to be drawn coarse, and the cap
+// row of [19] under it.
+// (h) a node is never emitted above the cap of the square it covers;
+// (i) the price is 36 extra pieces, and every one of them stands over the
+//     water's own tile row — the cost lands on the water, which is the whole
+//     decision;
+// (j) RELAXING THE CAP PAST `LOD_CAP_NONE` REPRODUCES THE OLD SELECTION
+//     EXACTLY, piece for piece. That is one statement doing two jobs: the
+//     budget ladder of `selectLodFitted` (eight halvings, +8 on the cap) ends
+//     at the picture this renderer drew before F1 — the river breaks up again,
+//     which is a loss and never a crash — and the isolation panel's toggle 22
+//     ("Water lift off") is the same addition, which is why it needs no switch
+//     of its own.
+console.log('\n[20] the selection splits down to the cap, and can be forced back');
+const F1_OPTS = {
+  x0: 0, z0: 0, x1: 2048, z1: 2048, leafM: 64, levels: MAX_LOD_LEVELS,
+  minLodDistance: 128, camX: 1024, camY: 200, camZ: 1024,
+  boundsOf: () => ({ min: 0, max: 0 }),
+};
+const capOfSquare = (x, z, s) => lodCapOverSquare(GRID, x, z, s);
+const PLAIN = selectLodNodes(F1_OPTS);
+const CAPPED = selectLodNodes({ ...F1_OPTS, lodCapOf: capOfSquare });
+const byLevel = (ns) => {
+  const c = new Array(MAX_LOD_LEVELS).fill(0);
+  ns.forEach((n) => { c[n.level] += 1; });
+  return c;
+};
+checkEq('(h) no piece is coarser than the cap over its own square',
+  CAPPED.filter((n) => n.level > capOfSquare(n.x, n.z, n.size) + 1e-9).length, 0);
+checkEq('(i) the uncapped selection, by level', byLevel(PLAIN), [0, 12, 16, 12, 0, 0]);
+checkEq('…and the capped one — 36 pieces more, all of them over the water',
+  byLevel(CAPPED), [0, 28, 32, 16, 0, 0]);
+check('…which is the whole extra cost', CAPPED.length - PLAIN.length, 36);
+// …and it is CONFINED. The capped band is the grid, z ∈ [−64, 128]; the
+// coarsest square that meets it is a 512 m node at z = 0, so nothing the cap
+// touches can reach past z + size = 512 — a quarter of the world's depth, and
+// the other three quarters are selected exactly as before.
+const ADDED = CAPPED.filter((n) => !PLAIN.some((p) => p.x === n.x && p.z === n.z
+  && p.size === n.size && p.level === n.level));
+checkEq('…and every added piece stands over the water\'s own row of nodes',
+  [ADDED.length, ADDED.filter((n) => n.z + n.size > 512).length], [40, 0]);
+const RELAXED = selectLodNodes({ ...F1_OPTS,
+  lodCapOf: (x, z, s) => capOfSquare(x, z, s) + LOD_CAP_NONE });
+checkEq('(j) the cap relaxed past LOD_CAP_NONE is the old selection, piece for piece',
+  RELAXED.length === PLAIN.length && RELAXED.every((n, i) => n.x === PLAIN[i].x
+    && n.z === PLAIN[i].z && n.size === PLAIN[i].size && n.level === PLAIN[i].level
+    && Math.abs(n.morph - PLAIN[i].morph) < 1e-12), true);
+const FIT = selectLodFitted({ ...F1_OPTS, lodCapOf: capOfSquare });
+checkEq('…and the fitted selection reports the ladder both halves climb',
+  [FIT.nodes.length, FIT.coarsenings, FIT.capRelax], [76, 0, 0]);
+checkEq('a selection without a cap is what it always was',
+  selectLodNodes(F1_OPTS).length, PLAIN.length);
+
+// ============================================================================
+// [21] THE CAP DOES NOT CRACK THE GROUND — shared vertices, bit for bit
+// ============================================================================
+// THE FINDING THAT MADE THE CAP NECESSARY, first. The drawn surface is a
+// function of λ and the world point: a vertex snaps onto the world lattice of
+// `baseStep · 2^⌊λ⌋` and reads the mip pair (⌊λ⌋, ⌊λ⌋+1), and the piece's own
+// level cancels out of both (`morphedVertex`). So SPLITTING A NODE DOWN CHANGES
+// NOTHING: the vertices it adds collapse onto the ones the coarse piece already
+// had. (kk) measures that on the rugged fixture — which is why the cap had to
+// go into λ and not into the node level.
+//
+// And because it goes into λ, the same probe is what proves it safe: two pieces
+// of DIFFERENT levels must still answer the same point and the same height at a
+// vertex they share, with the cap on, and on the cap grid's own corner line
+// where the field's derivative jumps.
+console.log('\n[21] the cap enters λ — and two pieces still meet exactly');
+const RUG = (x, z) => Math.sin(x * 0.37) * 3 + Math.cos(z * 0.53) * 2
+  + ((x / 2 + z / 2) % 7);
+const RUG_N = 513;
+const RUG_PYR = buildPyramid(RUG, 0, 0, 2, RUG_N, RUG_N, MAX_LOD_LEVELS);
+const RUG_RECT = [0, 0, (RUG_N - 1) * 2, (RUG_N - 1) * 2];
+const RUG_RANGES = lodRanges(128, MAX_LOD_LEVELS);
+const RUG_CAM = { x: -600, y: 200, z: 512 };
+const capField = (x, z) => lodCapAt(GRID, x, z);
+// (kk) the same world point, from a level-3 piece and from a level-1 piece.
+const P3 = { x: 256, z: 256, size: 512, level: 3, cells: PATCH_N, morph: 0 };
+const P1 = { x: 448, z: 448, size: 128, level: 1, cells: PATCH_N, morph: 0 };
+const V3 = lodVertex(P3, 16, 16, RUG_PYR, RUG_RECT, null, RUG_RECT, RUG_CAM,
+                     RUG_RANGES, null, null);
+const V1 = lodVertex(P1, 16, 16, RUG_PYR, RUG_RECT, null, RUG_RECT, RUG_CAM,
+                     RUG_RANGES, null, null);
+checkEq('(kk) a level-1 piece answers the level-3 piece\'s point and height',
+  [V1.x === V3.x, V1.z === V3.z, V1.y === V3.y], [true, true, true]);
+const V1B = lodVertex(P1, 17, 16, RUG_PYR, RUG_RECT, null, RUG_RECT, RUG_CAM,
+                      RUG_RANGES, null, null);
+checkEq('…and the vertex it ADDS collapses onto that same point — the split is inert',
+  [V1B.x === V3.x, V1B.z === V3.z, V1B.y === V3.y], [true, true, true]);
+// (ll) with the cap on, over its own band, the two still meet.
+const C3 = { x: 256, z: -256, size: 512, level: 3, cells: PATCH_N, morph: 0 };
+const C1 = { x: 448, z: 0, size: 128, level: 1, cells: PATCH_N, morph: 0 };
+const W3 = lodVertex(C3, 16, 20, RUG_PYR, RUG_RECT, null, RUG_RECT, RUG_CAM,
+                     RUG_RANGES, null, capField);
+const W1 = lodVertex(C1, 16, 16, RUG_PYR, RUG_RECT, null, RUG_RECT, RUG_CAM,
+                     RUG_RANGES, null, capField);
+checkEq('(ll) ON the cap grid\'s corner line z = 64 the two pieces agree bit for bit',
+  [W1.x === W3.x, W1.z === W3.z, W1.y === W3.y], [true, true, true]);
+// (mm) and the cap really bites: a far camera, a vertex inside the band.
+const FAR_CAM = { x: -1400, y: 300, z: 32 };
+const IN = lodVertex(C1, 16, 8, RUG_PYR, RUG_RECT, null, RUG_RECT, FAR_CAM,
+                     RUG_RANGES, null, capField);
+const OUT = lodVertex(C1, 16, 8, RUG_PYR, RUG_RECT, null, RUG_RECT, FAR_CAM,
+                      RUG_RANGES, null, null);
+checkEq('(mm) capped, the vertex stays on its own 4 m lattice at (512, 32)',
+  [IN.x, IN.z, IN.t], [512, 32, 0]);
+checkAbove('…uncapped it is dragged off it by metres', Math.abs(OUT.z - 32), 20);
+checkAbove('…because λ had climbed past 3 there', OUT.t, 3);
+check('…and the cap at that point is 1', lodCapAt(GRID, 512, 32), 1);
+// (nn) a dry world is untouched: no grid, no cap, the same vertex as before F1.
+const DRY = lodVertex(P3, 16, 16, RUG_PYR, RUG_RECT, null, RUG_RECT, RUG_CAM,
+                      RUG_RANGES, null, () => LOD_CAP_NONE);
+checkEq('(nn) "no cap" is the identity on λ — the dry world keeps its surface',
+  [DRY.x === V3.x, DRY.z === V3.z, DRY.y === V3.y, DRY.t === V3.t],
+  [true, true, true, true]);
+
+// ============================================================================
+// [22] THE GLSL SIDE OF THE CAP
+// ============================================================================
+// BOTH programs declare it, and that is the point: a dry piece and the wet
+// piece beside it share vertices, so a cap only one of them knew would open the
+// seam the partition exists to keep shut.
+console.log('\n[22] the cap in the shader — both programs, one early-out');
+for (const [name, src] of [['dry', dryGlsl], ['wet', wetGlsl]]) {
+  checkEq(`the ${name} program declares the cap sampler`,
+    src.includes('uniform sampler2D uTlodCap;'), true);
+  checkEq(`…and clamps λ with it`,
+    src.includes('return max( min( tlodLambda( d ), tlodCapAt( p ) ) - iNode.w, 0.0 );'),
+    true);
+  checkEq(`…and leaves on the first compare without a grid`,
+    src.includes(`if ( cols < 2.0 || rows < 2.0 || step <= 0.0 ) return ${LOD_CAP_NONE}.0;`),
+    true);
+  checkEq(`…and on the rectangle test outside it`,
+    src.includes('if ( fx <= 0.0 || fz <= 0.0 || fx >= cols - 1.0 || fz >= rows - 1.0 )'),
+    true);
+}
+checkEq('the cap is bound on the dry program too',
+  ['uTlodCap', 'uTlodCapGeom', 'uTlodCapFit']
+    .every((k) => dryShader.uniforms[k] !== undefined), true);
+checkEq('…and on the wet one',
+  ['uTlodCap', 'uTlodCapGeom', 'uTlodCapFit']
+    .every((k) => wetShader.uniforms[k] !== undefined), true);
+checkEq('RED: and no cap word reaches the dry FRAGMENT shader',
+  /tlodCap|uTlodCapFit/.test(dryShader.fragmentShader), false);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

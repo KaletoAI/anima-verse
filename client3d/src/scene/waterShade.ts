@@ -269,6 +269,50 @@ export function waterFoamAt(depthM: number, opaqueDepthM: number,
   return foam * cover * waterEdgeFade(depthM, edgeM);
 }
 
+/**
+ * IS THIS PIXEL INSIDE THE AUTHORED WATER? — the gate that closes the grey rim
+ * seam (finding 2026-08-24), and the CPU twin of the shader's `twInside`.
+ *
+ * THE SEAM. The water raster is DILATED: the server writes a level up to
+ * `WATER_RASTER_DILATION_STEPS` (4 m) past the authored outline, so that every
+ * point inside a water polygon reads four wet corners on the base lattice
+ * (`waterRaster.waterBilinear`). Where the bank there lies below the mirror the
+ * terrain is lifted on it too — a few centimetres of water standing on dry land
+ * — and until now the shading keyed on that lift alone: a band of cm-shallow
+ * water all round every shore, i.e. the grey wash the user saw (and, before the
+ * cover fix of the same day, the white foam rim).
+ *
+ * THE FIX IS NOT TO MOVE THE LIFT. A few centimetres of lifted ground drawn as
+ * GROUND is invisible, and taking the lift back would mean a second, narrower
+ * water raster and a vertex path that no longer matches the one the gameplay
+ * profile answers. What moves is the SHADING GATE: from "this pixel was lifted"
+ * to "this pixel was lifted AND stands inside the painted water", and the
+ * second half is a question the compositor's own mask pair already answers
+ * exactly, sub-texel, with the same signed distance every other material
+ * boundary in this world is cut on (`@anima/scene-render` `layerWeight`).
+ *
+ * THE RULE. `a` and `b` are the layer pair of the fragment's id texel, `sd` the
+ * signed distance to the boundary between them, positive on A's side:
+ *   both water          -> 1 (two waters meet; the pixel is in one of them)
+ *   neither water       -> 0 (the pair names no mirror at all — the ring)
+ *   otherwise           -> smoothstep(−band/2, +band/2, ±sd)
+ * with the sign taken so that the WATER half wins, and `band` the wider of one
+ * screen pixel and one sd texel. One pixel is the anti-aliasing width every
+ * hard cut in this world uses (`layerWeight`'s hard branch); one texel is the
+ * floor under it, because the distance itself is only written per half metre
+ * and a band narrower than its own quantisation would draw the staircase of
+ * the byte rather than the line.
+ */
+export function waterInside(sd: number, aIsWater: boolean, bIsWater: boolean,
+                            pixelM: number, texelM: number): number {
+  if (aIsWater && bIsWater) return 1;
+  if (!aIsWater && !bIsWater) return 0;
+  const band = Math.max(pixelM, texelM, 1e-6);
+  const t = Math.min(Math.max(sd / band + 0.5, 0), 1);
+  const w = t * t * (3 - 2 * t);
+  return aIsWater ? w : 1 - w;
+}
+
 /** The albedo a water pixel carries: the bed blended toward the tint by the
  *  absorption. `mix(bed, tint, a)` — the one line the fragment writes into
  *  `diffuseColor`, spelled here so the smoke can check it. */
@@ -319,6 +363,9 @@ uniform sampler2D uTlodWave;
 uniform sampler2D uTlodWaterLook;
 uniform highp usampler2D uTlodWaterMask;
 uniform vec4 uTlodWaterMaskGeom;
+uniform sampler2D uTlodWaterSd;
+uniform vec4 uTlodWaterSdGeom;
+uniform vec2 uTlodWaterSdCode;
 uniform vec3 uTlodSky;
 uniform float uTlodTime;
 
@@ -335,38 +382,67 @@ float twSmooth( float t ) {
   return c * c * ( 3.0 - 2.0 * c );
 }
 
-// WHICH TWO GROUND KINDS meet under this pixel, as the layer index PAIR the
-// compositor's id mask names (\`scene/layerGround.ts\`). It is the SAME texture
-// and the same window \`lcCompose\` reads — bound a second time under a name of
-// this program's own, because that chunk is declared BELOW this one in the
-// final shader and its uniforms cannot be reached from here.
+// WHICH TWO GROUND KINDS meet under this pixel is the layer index PAIR the
+// compositor's id mask names (\`scene/layerGround.ts\`), and WHICH SIDE of them
+// the pixel is on is the sign of the signed distance beside it. Both textures
+// are the SAME ones \`lcCompose\` reads, bound a second time under names of this
+// program's own, because that chunk is declared BELOW this one in the final
+// shader and its uniforms cannot be reached from here.
 //
 // Only the NEAR window is asked: water is lifted only inside the height
 // pyramid's near rectangle (\`tlodWaterAt\`), and the two windows cover the same
-// loaded tiles. Outside it the answer is layer 0 — and every row of the lookup
-// texture carries a WATER look (the primary water's, where the layer is not a
-// water layer), so a fringe pixel reads water rather than a kind's ground tint.
-uvec2 twPairAt( vec2 p ) {
-  float n = uTlodWaterMaskGeom.w;
-  if ( n < 1.5 ) return uvec2( 0u );
-  vec2 idx = floor( ( p - uTlodWaterMaskGeom.xy ) / uTlodWaterMaskGeom.z );
-  if ( idx.x < 0.0 || idx.y < 0.0 || idx.x >= n || idx.y >= n ) return uvec2( 0u );
-  return texelFetch( uTlodWaterMask, ivec2( idx ), 0 ).rg;
+// loaded tiles.
+//
+// IS THIS LAYER A WATER? — \`is_water\`, the third component of the look's last
+// texel. It is false on the rows that only carry the primary water's look as a
+// fallback, which is what makes the flag usable as a gate and not merely as a
+// tie-break: two waters meeting take the upper one, which is the rule the mask
+// itself follows for the ground.
+bool twIsWater( int layer ) {
+  return texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 ).z > 0.5;
 }
 
-// …AND WHICH HALF OF THE PAIR THIS PIXEL IS. The mask's pair is the same on
-// BOTH sides of the boundary it names — the sign of the signed distance says
-// which side a fragment is on, and this program does not read the distance.
-// It does not have to: a pixel that gets here was LIFTED onto a mirror, so it
-// stands in water, so the WATER half of the pair is its kind. \`is_water\` (the
-// third component of the look's last texel) is exactly that flag, and it is
-// false on the rows that only carry the primary water's look as a fallback.
-// Two waters meeting take the upper one, which is the rule the mask itself
-// follows for the ground.
-int twLayerOf( uvec2 pair, int rows ) {
-  int a = clamp( int( pair.x ), 0, rows - 1 );
-  int b = clamp( int( pair.y ), 0, rows - 1 );
-  return texelFetch( uTlodWaterLook, ivec2( 2, a ), 0 ).z > 0.5 ? a : b;
+// ONE sd TEXEL of the near window, in metres — the byte the server wrote,
+// decoded by the payload's own quantisation. A TEXEL FETCH and never a filtered
+// read: the four sd texels under one id texel are the ones the bake signed
+// against ONE pair, and a sampler that blended across the id texel's rim would
+// mix in a neighbour's sign. Same statement as \`layerCut.lcSdTexel\`, under this
+// program's own names — that chunk is declared BELOW this one in the finished
+// shader and its uniforms cannot be reached from here.
+float twSdTexel( ivec2 t ) {
+  int last = int( uTlodWaterSdGeom.w ) - 1;
+  return ( texelFetch( uTlodWaterSd, clamp( t, ivec2( 0 ), ivec2( last ) ), 0 ).r * 255.0
+           - uTlodWaterSdCode.x ) / uTlodWaterSdCode.y;
+}
+
+// THE SIGNED DISTANCE, reconstructed from the sd texels of the fragment's OWN
+// id texel — bilinear and EXTRAPOLATED past their centres rather than clamped,
+// exactly as \`lcSdAt\` does it, so the shading edge of the water and the
+// material edge of the ground under it are the same line and not two lines a
+// quarter of a metre apart.
+float twSdAt( vec2 p, vec2 idIdx ) {
+  float ratio = max( floor( uTlodWaterMaskGeom.z / uTlodWaterSdGeom.z + 0.5 ), 1.0 );
+  vec2 t0 = idIdx * ratio;
+  vec2 t1 = t0 + ( ratio - 1.0 );
+  vec2 c0 = uTlodWaterSdGeom.xy + ( t0 + 0.5 ) * uTlodWaterSdGeom.z;
+  float spanM = ( ratio - 1.0 ) * uTlodWaterSdGeom.z;
+  vec2 f = spanM > 0.0 ? ( p - c0 ) / spanM : vec2( 0.0 );
+  float s00 = twSdTexel( ivec2( t0 ) );
+  float s10 = twSdTexel( ivec2( t1.x, t0.y ) );
+  float s01 = twSdTexel( ivec2( t0.x, t1.y ) );
+  float s11 = twSdTexel( ivec2( t1 ) );
+  return mix( mix( s00, s10, f.x ), mix( s01, s11, f.x ), f.y );
+}
+
+// HOW MUCH OF THE PAINTED WATER STANDS UNDER THIS PIXEL — the gate that closes
+// the grey rim seam (2026-08-24). The TS twin and the whole argument are in
+// \`waterInside\`; here it is the same three cases and the same band.
+float twInside( float sd, bool aw, bool bw, float pixelM ) {
+  if ( aw && bw ) return 1.0;
+  if ( !aw && !bw ) return 0.0;
+  float band = max( max( pixelM, uTlodWaterSdGeom.z ), 1e-6 );
+  float w = twSmooth( sd / band + 0.5 );
+  return aw ? w : 1.0 - w;
 }
 
 // The FLOW FRAME, and the one place the anisotropy lives: squeeze the
@@ -445,10 +521,41 @@ void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
   vec2 gx = dFdx( vTlodXZ );
   vec2 gy = dFdy( vTlodXZ );
   if ( d <= 0.0 ) return;
-  // The rim ramp: 0 exactly where the water ends, 1 one pixel of depth in.
-  float rim = clamp( d / edge, 0.0, 1.0 );
   int rows = textureSize( uTlodWaterLook, 0 ).y;
-  int layer = twLayerOf( twPairAt( vTlodXZ ), rows );
+  // WHICH KIND, AND WHETHER THIS IS THE PAINTED WATER AT ALL. Both come out of
+  // the one id texel, so the pair is fetched HERE rather than through
+  // twPairAt — the signed distance has to be reconstructed from that same
+  // texel's own sd block (twSdAt) and cannot be handed an index it did not see.
+  //
+  // OUTSIDE THE MASK WINDOW THERE IS NO GATE, and that is deliberate: the water
+  // is lifted only inside the height pyramid's near rectangle, the two windows
+  // cover the same loaded tiles, and a pixel the mask cannot speak about keeps
+  // the fallback water look it has had since K-A E4 rather than turning to
+  // ground on the strength of a texel nobody read.
+  int layer = 0;
+  float inside = 1.0;
+  float maskN = uTlodWaterMaskGeom.w;
+  vec2 maskIdx = ( vTlodXZ - uTlodWaterMaskGeom.xy ) / uTlodWaterMaskGeom.z;
+  if ( maskN > 1.5 && maskIdx.x >= 0.0 && maskIdx.y >= 0.0
+       && maskIdx.x < maskN && maskIdx.y < maskN ) {
+    vec2 idIdx = floor( maskIdx );
+    uvec2 pair = texelFetch( uTlodWaterMask, ivec2( idIdx ), 0 ).rg;
+    int a = clamp( int( pair.x ), 0, rows - 1 );
+    int b = clamp( int( pair.y ), 0, rows - 1 );
+    bool aw = twIsWater( a );
+    bool bw = twIsWater( b );
+    layer = aw ? a : b;
+    // ONE PIXEL IN WORLD METRES, from the world position's own derivatives and
+    // never from fwidth of the sampled distance — see \`layerWeight\`.
+    inside = twInside( twSdAt( vTlodXZ, idIdx ), aw, bw,
+                       max( length( gx ), length( gy ) ) );
+  }
+  // The rim ramp: 0 exactly where the water ends, 1 one pixel of depth in —
+  // and 0 on the flooded dilation ring, where the lift is real and the water is
+  // not. A ring pixel therefore leaves here having paid two derivatives, one
+  // mask fetch and four sd fetches, and keeps the ground the compositor painted.
+  float rim = clamp( d / edge, 0.0, 1.0 ) * inside;
+  if ( rim <= 0.0 ) return;
   vec4 look0 = texelFetch( uTlodWaterLook, ivec2( 0, layer ), 0 );
   vec4 look1 = texelFetch( uTlodWaterLook, ivec2( 1, layer ), 0 );
   vec4 look2 = texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 );

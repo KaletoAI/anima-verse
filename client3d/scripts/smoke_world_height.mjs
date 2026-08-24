@@ -844,6 +844,26 @@ function rasterOf(tileM, entries) {
   }
   return r;
 }
+function checkAbove(label, actual, floor) {
+  const ok = typeof actual === 'number' && actual > floor;
+  if (ok) {
+    passed += 1;
+    console.log(`  ok   ${label} = ${actual} (> ${floor})`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       expected > ${floor}\n       actual   ${actual}`);
+  }
+}
+function checkBelow(label, actual, ceiling) {
+  const ok = typeof actual === 'number' && actual < ceiling;
+  if (ok) {
+    passed += 1;
+    console.log(`  ok   ${label} = ${actual} (< ${ceiling})`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       expected < ${ceiling}\n       actual   ${actual}`);
+  }
+}
 function checkNaN(label, actual) {
   const ok = typeof actual === 'number' && Number.isNaN(actual);
   if (ok) {
@@ -939,6 +959,94 @@ check('null becomes NaN', Number.isNaN(CONV.level[0][1]) ? 1 : 0, 1);
 check('…and a number stays itself', CONV.level[1][1], 4);
 check('a tile without flow arrays holds null, not zeros',
   CONV.flowX === null && CONV.flowZ === null ? 1 : 0, 1);
+
+// ============================================================================
+// [W5] THE MIP LIMIT IS A PROPERTY OF THE FIELD, not of a renderer (F1)
+// ============================================================================
+// The 3D client draws the ground from a pyramid whose coarse levels are the
+// base lattice at STRIDE 2^k (decimation, not filtering — § G2), and lifts a
+// vertex onto the mirror wherever the water level of the same support point
+// stands above the ground there. Everything that costs is therefore decided
+// HERE, in the raster: a support point that is not inside the bed cannot lift,
+// and a stride that steps over a narrow bed has no support point inside it.
+//
+// THE FIXTURE is the meander of `docs/schnittstellen-3d.md` § "Offen und NICHT
+// gefixt", rebuilt on one 256 m tile at the server's 2 m step: a bed 6 m wide
+// (|z − zc| ≤ 3) carved 3 m into a flat ground, a mirror at −0.5 m, the wet
+// mask dilated to 11 m so that it never limits anything, and
+// zc(x) = 8 + 4·sin(2πx/128) — so the bed stays inside z ∈ [1, 15] everywhere.
+// The axis is sampled at (x, zc(x)) for x = 0, 2 … 244: 123 points.
+//
+// THE COUNT is "does the stride-s lattice hold a lifting support point inside
+// the bed at this x" — the same question the pyramid asks, reimplemented here
+// out of the raster's own arrays and the stride rule, so that it is a statement
+// about the DATA and not about `terrainLod.ts`.
+//   s = 2 m: the bed spans 3 lattice rows at every x -> 123/123.
+//   s = 4 m: any interval 6 m long contains a multiple of 4 -> 123/123.
+//   s = 8 m: the only multiple of 8 the bed can reach is z = 8, and it lies
+//            inside only while |zc − 8| ≤ 3, i.e. |4·sin| ≤ 3 -> PARTIAL.
+//   s = 16 m: the multiples in reach are 0 and 16, and the bed never leaves
+//            [1, 15] -> 0/123.
+// A body N metres wide therefore carries the strides up to N, which is where
+// the client's per-tile cap comes from — 6 m of river = 4 m of lattice = the
+// level-1 cap, and nothing coarser.
+console.log('\n[W5] the mip limit of a 6 m river, out of the raster itself');
+const MEANDER_ZC = (x) => 8 + 4 * Math.sin((2 * Math.PI * x) / 128);
+const MEANDER_STEP = 2;
+const MEANDER_N = 129;                       // [0, 256] at 2 m
+const MEANDER_ROWS = 17;                     // [0, 32] at 2 m
+const MEANDER_W = {
+  origin_x: 0,
+  origin_z: 0,
+  step_m: MEANDER_STEP,
+  level: Array.from({ length: MEANDER_ROWS }, (_, j) =>
+    Array.from({ length: MEANDER_N }, (_, i) =>
+      (Math.abs(j * MEANDER_STEP - MEANDER_ZC(i * MEANDER_STEP)) <= 11
+        ? -0.5 : null))),
+};
+const MEANDER_R = rasterOf(256, [['0,0', MEANDER_W]]);
+/** The ground of the same lattice: the bed, 3 m deep and 6 m wide. */
+const bedAt = (x, z) => (Math.abs(z - MEANDER_ZC(x)) <= 3 ? -3 : 0);
+/** Does the stride-`s` lattice hold a support point that LIFTS, in the bed
+ *  under this x? The stride rule is written out here — index i survives to a
+ *  lattice of stride s while `i mod (s / step) == 0` — so the check does not
+ *  borrow the pyramid's own arithmetic. */
+function liftsAt(x, s) {
+  const stride = s / MEANDER_STEP;
+  const col = Math.round(x / MEANDER_STEP);
+  if (col % stride !== 0) return false;       // the axis point's own column is
+  for (let j = 0; j < MEANDER_ROWS; j += 1) { // gone from this lattice entirely
+    if (j % stride !== 0) continue;
+    const z = j * MEANDER_STEP;
+    if (Math.abs(z - MEANDER_ZC(x)) > 3) continue;
+    if (rasterLevelAt(MEANDER_R, x, z) > bedAt(x, z)) return true;
+  }
+  return false;
+}
+/** …asked at every axis point, but only where the point's own column is on the
+ *  lattice: between two columns the drawn ground is a mix of the two, and this
+ *  section is about the DATA. The columns that survive stride s are every
+ *  (s/2)-th of the 123, so the counts below are out of 123, 62, 31 and 16. */
+const AXIS = Array.from({ length: 123 }, (_, m) => m * 2);
+function liftedCount(s) {
+  return AXIS.filter((x) => (x % s === 0) && liftsAt(x, s)).length;
+}
+function onLattice(s) { return AXIS.filter((x) => x % s === 0).length; }
+check('every 2 m column of the axis carries the bed', liftedCount(2), onLattice(2));
+check('…123 of them', onLattice(2), 123);
+check('every 4 m column does too — a 6 m bed always spans a multiple of 4',
+  liftedCount(4), onLattice(4));
+check('…62 of them', onLattice(4), 62);
+const S8 = liftedCount(8);
+const N8 = onLattice(8);
+check('…31 columns survive the 8 m lattice', N8, 31);
+checkAbove('…and only SOME of them still reach the bed', S8, 0);
+checkBelow('…never all: the lens-shaped puddles', S8, N8);
+check('…exactly the columns whose axis runs within 3 m of z = 8',
+  AXIS.filter((x) => x % 8 === 0 && Math.abs(MEANDER_ZC(x) - 8) <= 3).length, S8);
+check('the 16 m lattice reaches the bed nowhere — 0 and 16 are outside [1, 15]',
+  liftedCount(16), 0);
+check('…though 16 of its columns are still there', onLattice(16), 16);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);
