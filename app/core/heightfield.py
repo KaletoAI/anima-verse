@@ -34,7 +34,8 @@ point, and every raster in this module is nothing but that function sampled on
 a lattice::
 
     areas (strongest deflection)      the authored height polygons, |max| rule
-      → micro-relief (ADDITIVE)       the painted kinds' own small hills
+      → micro-relief (ADDITIVE)       the painted kinds' own small hills,
+                                      FADED TO NOTHING at every water's edge
       → STAMPS: water carve           every water polygon sinks its bed
       → STAMPS: bank clamp            …and holds the ground OUTSIDE it up
       → STAMPS: location plateaus     every BUILT location stamps its plot
@@ -64,6 +65,13 @@ shared lattice points BY CONSTRUCTION, not by luck.
   that buys — deeper than the shore ramp the ground is at least ``ε`` below the
   mirror AT THAT POINT, in EVERY raster — is what makes "distant terrain pokes
   through the water" impossible in the data instead of impossible in a shader.
+* **No relief at the waterline** (v5, 2026-08-24): the micro-relief is
+  multiplied by a weight that is 0 inside every water polygon and on its
+  outline and smoothsteps back to 1 over the ``shore_ramp_m`` band outside it
+  (:meth:`HeightModel._relief_weight`). The mirror of a lake is the MEDIAN of
+  the natural heights along its rim, so a rim that wobbles by ±1 m has half its
+  perimeter standing over its own water — the measured cause of "holes between
+  water and land", and one no clamp could repair, because a clamp only raises.
 * **The bank clamp** (v4, 2026-08-24): the OTHER half of that shore. In the band
   of ``shore_ramp_m`` metres OUTSIDE the polygon the ground is held at at least
   the mirror of the nearest outline point plus :data:`WATER_BANK_LIP_M` — a lerp
@@ -143,7 +151,14 @@ logger = get_logger("heightfield")
 #: :data:`WATER_BANK_LIP_M`, so a micro-relief dip beside a river can no longer
 #: undercut the mirror and leave the water standing in the air. Not one authored
 #: byte changes; every shore of every existing world comes out different.
-HEIGHT_BAKE_VERSION = 4
+#:
+#: v5 (2026-08-24): NO RELIEF AT THE WATER'S EDGE. The micro-relief is faded to
+#: zero over the ``shore_ramp_m`` band outside every water polygon and is gone
+#: inside it (:meth:`HeightModel._relief_weight`). It is the other half of the
+#: v4 finding and the bigger one: the mirror is the MEDIAN of the rim heights,
+#: so a rim that wobbles has half its perimeter standing above its own water —
+#: which the bank clamp could not fix, because the clamp only ever raises.
+HEIGHT_BAKE_VERSION = 5
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -1625,8 +1640,20 @@ class HeightModel:
         #: as ``meta.water_depth_effective`` so a renderer never has to repeat
         #: that resolution to know how deep this water is.
         self.water_depth_by_area: Dict[str, float] = {}
-        self.water: List[WaterStamp] = self._build_water(terrain_areas,
-                                                         terrain_catalog)
+        # THE WATER GEOMETRY FIRST, THE MIRRORS AFTER (v5). The relief fade
+        # below needs every water OUTLINE and its shore ramp; the mirrors need
+        # :meth:`natural`, i.e. the faded relief. Both halves come out of the
+        # same read of the authored areas, so the outline a fade uses and the
+        # outline its carve uses cannot part company.
+        self._water_input = self._read_water(terrain_areas, terrain_catalog)
+        #: (ring, shore_ramp_m) per water area — the relief fade's own input.
+        self._relief_fade: List[Tuple[List[Tuple[float, float]], float]] = [
+            (_ring(area.get("polygon")) or [], meta.shore_ramp_m)
+            for area, _box, meta in self._water_input]
+        self._relief_fade_index = _BoxIndex(
+            [_grown(box, max(0.0, meta.shore_ramp_m))
+             for _area, box, meta in self._water_input])
+        self.water: List[WaterStamp] = self._build_water()
         # THE INDEX IS OVER THE BANK BOX, not over the outline's (v4): since
         # the bank clamp a water polygon writes ``shore_ramp_m`` metres OUTSIDE
         # its rim as well, and an index that only knew the outline would drop
@@ -1664,6 +1691,10 @@ class HeightModel:
         what is there — and then the painted kind's own hills ADDED on top.
         Additive and after, because the relief is a variation OF the authored
         landscape and not a competitor of it.
+
+        AND THE RELIEF IS FADED OUT AT EVERY WATER'S EDGE (v5,
+        :meth:`_relief_weight`): there is no micro-relief in the shore band,
+        because there is no relief at a waterline in the world either.
         """
         h = 0.0
         fast = self._area_fast
@@ -1677,8 +1708,61 @@ class HeightModel:
             if abs(value) > abs(h) or (abs(value) == abs(h) and value > h):
                 h = value
         if self.relief:
-            h += self._micro(x, z)
+            noise = self._micro(x, z)
+            if noise:
+                h += noise * self._relief_weight(x, z)
         return h
+
+    def _relief_weight(self, x: float, z: float) -> float:
+        """How much of the micro-relief survives at (x, z) — 0…1 (v5).
+
+        THE USER'S RULE, VERBATIM: "there must be NO relief at the water's
+        edge" (2026-08-24). It is the finding behind the shore holes, measured:
+        a lake takes its mirror from the MEDIAN of the natural heights along
+        its own rim, so a rim that wobbles by ±1 m of micro-relief has half its
+        perimeter standing ABOVE that median — and ground above the mirror
+        inside the outline is ground the water plane cannot be seen through.
+        On the fixture of ``scripts/smoke_height_bake.py`` [11] that was 0.71 m
+        of meadow standing over the lake it borders, at the FINEST lattice, in
+        every LOD.
+
+        THE BAND is the water's own ``shore_ramp_m``, the very width the bed
+        ramp uses INSIDE the rim, and the curve is the same
+        :func:`smoothstep` — so the two halves of one shore number are mirror
+        images of each other::
+
+            d = 0 (the outline)      -> 0        no relief at the waterline
+            d = ramp/2               -> 0.5      half of it
+            d ≥ ramp                 -> 1        the meadow, untouched
+
+        INSIDE THE POLYGON IT IS 0 OUTRIGHT. The carve owns that ground, a
+        bumpy bed under a mirror is nothing anybody can see, and a relief that
+        ran up to the rim from the inside would put the very bump back that
+        this exists to remove.
+
+        The SMALLEST weight wins where two shore bands overlap — a strip
+        between two lakes is as relief-free as either of them asks for — and a
+        water with ``shore_ramp_m = 0`` (a basin with a step for a bank) fades
+        nothing outside its own outline, which is what a step IS.
+        """
+        if not self._relief_fade:
+            return 1.0
+        weight = 1.0
+        for idx in self._relief_fade_index.at(x, z):
+            ring, ramp = self._relief_fade[idx]
+            if not ring:
+                continue
+            if _inside_ring(x, z, ring):
+                return 0.0
+            if ramp <= 0.0:
+                continue
+            d = _ring_edge_distance(x, z, ring)
+            if d >= ramp:
+                continue
+            value = smoothstep(d / ramp)
+            if value < weight:
+                weight = value
+        return weight
 
     def _kind_at(self, x: float, z: float
                  ) -> Optional[Tuple[int, float, float]]:
@@ -1760,9 +1844,30 @@ class HeightModel:
 
     # ── the stamps ──────────────────────────────────────────────────────
 
-    def _build_water(self, terrain_areas: Sequence[Dict[str, Any]],
-                     catalog: Optional[Dict[str, Dict[str, Any]]]
-                     ) -> List[WaterStamp]:
+    def _read_water(self, terrain_areas: Sequence[Dict[str, Any]],
+                    catalog: Optional[Dict[str, Dict[str, Any]]]
+                    ) -> List[Tuple[Dict[str, Any],
+                                    Tuple[float, float, float, float],
+                                    WaterMeta]]:
+        """Every painted water with its box and its resolved meta — READ ONCE.
+
+        Split out of :meth:`_build_water` in v5 because the relief fade
+        (:meth:`_relief_weight`) has to know every water OUTLINE and its shore
+        ramp BEFORE a single height is evaluated, while the mirror levels of
+        :meth:`_build_water` are evaluated FROM those heights. Two reads would
+        be two chances for the fade and the carve to disagree about where a
+        water is.
+        """
+        from app.core.terrain_types import water_kind_defaults
+        out = []
+        for area, box in water_areas(terrain_areas, catalog):
+            kind = str(area.get("kind") or "")
+            out.append((area, box,
+                        water_meta(area, water_kind_defaults(kind,
+                                                             catalog or {}))))
+        return out
+
+    def _build_water(self) -> List[WaterStamp]:
         """Every water polygon with its mirror PROFILE settled (§ A16.3, W1).
 
         THE DEFAULT MIRROR IS A MEDIAN OF THE NATURAL HEIGHTS ALONG THE RIM,
@@ -1794,12 +1899,9 @@ class HeightModel:
         come through here at all: its axis is the line, its levels are one
         median per KNOT, and the rule is in :meth:`_stroke_profile`.
         """
-        from app.core.terrain_types import water_kind_defaults
         out: List[WaterStamp] = []
-        for area, box in water_areas(terrain_areas, catalog):
+        for area, box, meta in self._water_input:
             polygon = area.get("polygon")
-            kind = str(area.get("kind") or "")
-            meta = water_meta(area, water_kind_defaults(kind, catalog or {}))
             profile = self.water_profile_for(polygon, meta)
             out.append((polygon, box, profile, meta.depth_m,
                         meta.shore_ramp_m))

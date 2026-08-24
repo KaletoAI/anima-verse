@@ -1791,8 +1791,8 @@ def unclamped(model, x, z):
     return model._stamp(model._carve(model.natural(x, z), x, z), x, z)
 
 
-print("\n[10a] the rule change is versioned — v3 -> v4")
-check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 4)
+print("\n[10a] the rule change is versioned — v3 -> v4, and v4 -> v5 in [11]")
+check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 5)
 near("the lip is a hand's width of bank over the mirror", LIP, 0.1, 1e-12)
 check("...and it is under the shallowest legal bed",
       LIP < hf.WATER_DEPTH_MIN_M, True)
@@ -1853,6 +1853,11 @@ print("\n[10g] the finding itself: a MICRO-RELIEF dip at the rim")
 # relief's edge rule never fires at the rim. Amplitude 1.0 on flat ground, so
 # the un-clamped ground on the rim is somewhere in (-1, 1) — BELOW the mirror
 # 1.0 at every one of the 39 probes, which is the water floating in the air.
+#
+# SINCE v5 THE RELIEF IS GONE THERE ANYWAY ([11]): every probe sits on the
+# outline, the fade weight is 0, and the un-clamped ground is the flat 0.0 —
+# still a metre under the authored mirror 1.0, so the clamp is still what
+# holds this bank up, and now against the AREA height alone.
 MEADOW = {"id": "ta_meadow", "kind": "g", "z_order": 1,
           "polygon": [[-20, -20], [80, -20], [80, 80], [-20, 80]],
           "meta": {"relief_amplitude_m": 1.0, "relief_wave_m": 16.0}}
@@ -1877,6 +1882,240 @@ _basis_src = _inspect.getsource(store2.water_basis).lower()
 check("water_basis names no lip", "lip" in _basis_src, False)
 check("height_sig hashes the code version",
       "code_version" in _inspect.getsource(store2.height_sig), True)
+
+
+# ── [11] NO RELIEF AT THE WATER'S EDGE (v5) ────────────────────────────
+print("\n[11] the micro-relief is faded out at every water's edge (v5)")
+# THE USER'S RULE: "there must be NO relief at the water's edge" (2026-08-24).
+# THE MEASURED REASON, and it is the one the shore holes came out of: a lake
+# without an authored level takes its mirror from the MEDIAN of the natural
+# heights along its own rim. A rim that wobbles by ±1 m of micro-relief
+# therefore has HALF ITS PERIMETER ABOVE that median — ground standing over the
+# water it borders, which no bank clamp can repair because a clamp only raises.
+#
+# THE FIXTURE, all literals, no height area at all, so `natural` IS the relief:
+#
+#   FADE_LAKE    square (0,0)-(40,40), kind "lake", NO water_level,
+#                water_depth_m 2.0, shore_ramp_m 4.0
+#   FADE_MEADOW  kind "g" over (-40,-40)-(80,80), amplitude 1.0, wave 16,
+#                painted AFTER the lake, so `_kind_at` answers "g" inside the
+#                polygon too — exactly the configuration of [10g]
+#
+# THE WEIGHT is `smoothstep(d / shore_ramp_m)` on the distance to the OUTLINE,
+# and 0 inside the polygon. With a 4 m ramp the quarter points are whole
+# metres, so every number below is the smoothstep table by hand:
+#
+#   d = 0 m   (on the outline)  t = 0     -> 0
+#   d = 1 m                     t = 0.25  -> 3·0.0625 − 2·0.015625 = 0.15625
+#   d = 2 m                     t = 0.5   -> 3·0.25   − 2·0.125    = 0.5
+#   d = 3 m                     t = 0.75  -> 3·0.5625 − 2·0.421875 = 0.84375
+#   d = 4 m   (the band's end)  t = 1     -> 1
+#   d = 5 m   (past it)                   -> 1
+#   inside the polygon                    -> 0
+#
+# …and the ground follows it exactly: `natural = hand_noise · weight`.
+#
+# THE CONSEQUENCE IS AN EXACT NUMBER. Every rim sample sits ON the outline
+# (`_rim_samples`), so every one of them carries weight 0 and, with no height
+# area under this fixture, the natural height 0.0 — the median of a list of
+# zeros is 0.0, so THE MIRROR IS EXACTLY 0.0 and not one rim point stands over
+# it. The bank clamp then lifts the whole rim to 0.0 + 0.1 = 0.1, the lip and
+# nothing else.
+#
+# THE RED COUNTER-PROBE is v4's own arithmetic: the same 80 rim probes at FULL
+# relief weight. Their spread is over a metre, their median is what the mirror
+# would have been, and the highest of them stands hundreds of millimetres ABOVE
+# that mirror — the hole, in metres, before a pixel is drawn.
+FADE_LAKE = {"id": "ta_fade_lake", "kind": "lake", "z_order": 0,
+             "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]],
+             "meta": {"water_depth_m": 2.0, "shore_ramp_m": 4.0}}
+FADE_MEADOW = {"id": "ta_fade_meadow", "kind": "g", "z_order": 1,
+               "polygon": [[-40, -40], [80, -40], [80, 80], [-40, 80]],
+               "meta": {"relief_amplitude_m": 1.0, "relief_wave_m": 16.0}}
+FMODEL = hf.build_model([], [], [FADE_LAKE, FADE_MEADOW], CATALOG)
+
+
+def v5_weight(d):
+    """The documented curve, re-derived here: smoothstep(d / 4)."""
+    t = min(max(d / 4.0, 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def v4_natural(model, x, z):
+    """``h_natural`` as v4 computed it — the relief at FULL weight (RED)."""
+    return model.natural(x, z) \
+        + model._micro(x, z) * (1.0 - model._relief_weight(x, z))
+
+
+print("  [11a] the weight curve, by hand")
+for d, want in ((0.0, 0.0), (1.0, 0.15625), (2.0, 0.5), (3.0, 0.84375),
+                (4.0, 1.0), (5.0, 1.0)):
+    near(f"weight at d = {d} m east of the outline",
+         FMODEL._relief_weight(40.0 + d, 10.0), want, 1e-12)
+near("inside the polygon the carve owns the ground: weight 0",
+     FMODEL._relief_weight(20.0, 20.0), 0.0, 1e-12)
+near("…and deep inside it too", FMODEL._relief_weight(5.0, 35.0), 0.0, 1e-12)
+
+print("  [11b] the ground IS the noise times that weight")
+for d in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0):
+    x = 40.0 + d
+    near(f"natural at d = {d} m = hand_noise · {v5_weight(d)}",
+         FMODEL.natural(x, 10.0),
+         hand_noise(x, 10.0, SEED_G) * v5_weight(d), 1e-12)
+near("…and inside the polygon the relief is gone outright",
+     FMODEL.natural(20.0, 20.0), 0.0, 1e-12)
+check_not("…which is NOT what v4 answered there",
+          round(v4_natural(FMODEL, 20.0, 20.0), 12), 0.0)
+
+print("  [11c] the mirror of a relief-free rim is the area height, exactly")
+FPROF = FMODEL.water_profile_by_area["ta_fade_lake"]
+near("the derived level is 0.0 to the bit", FPROF.level_up, 0.0, 0.0)
+FRIM = hf._rim_samples(FADE_LAKE["polygon"])
+check("…over 80 rim samples", len(FRIM), 80)
+near("every one of them carries the flat 0.0",
+     max(abs(FMODEL.natural(px, pz)) for px, pz in FRIM), 0.0, 0.0)
+near("…so NOT ONE of them stands over its own water",
+     max(FMODEL.natural(px, pz) - FPROF.level_up for px, pz in FRIM), 0.0, 0.0)
+# A rim sample lies ON the outline, and the ray-cast rule counts the west and
+# north edges of a square as INSIDE and the east and south ones as OUTSIDE. So
+# half the rim is answered by the carve (bed = level − depth·smoothstep(0) =
+# 0.0, and the MIN keeps the natural 0.0) and half by the clamp (0.0 + lip).
+# Both are AT OR UNDER the mirror plus the lip, which is the whole claim.
+near("the clamp lifts the outside half of the rim to the lip, 0.0 + 0.1",
+     max(FMODEL.final(px, pz) for px, pz in FRIM), 0.1, 1e-12)
+near("…and the inside half stays exactly at the mirror",
+     min(FMODEL.final(px, pz) for px, pz in FRIM), 0.0, 1e-12)
+
+print("  [11d] RED COUNTER-PROBE: what v4 drew at that same rim")
+_v4 = [v4_natural(FMODEL, px, pz) for px, pz in FRIM]
+_v4_mirror = sorted(_v4)[len(_v4) // 2 - 1:len(_v4) // 2 + 1]
+_v4_mirror = sum(_v4_mirror) / 2.0
+_v4_over = max(_v4) - _v4_mirror
+check_true(f"the v4 rim spread {round(max(_v4) - min(_v4), 3)} m over a "
+           "single lake", max(_v4) - min(_v4) > 1.0)
+check_true(f"…and its highest point stood {round(_v4_over, 3)} m ABOVE the "
+           "mirror it borders — the hole", _v4_over > 0.4)
+check_true("…while v5's worst rim point is exactly level",
+           max(FMODEL.natural(px, pz) for px, pz in FRIM)
+           - FPROF.level_up == 0.0)
+
+print("  [11g] …and the COARSE lattices keep the rim guarantee with it")
+# WHAT § G4 ASKS OF THE DRAWN GROUND, at the rim rather than in the deep: a
+# renderer draws the terrain from a DECIMATED lattice (mip 4/8/16/32/64 m,
+# every one of them a subset of the 2 m base) and interpolates between its
+# points. Where that interpolation stands ABOVE the mirror INSIDE the polygon,
+# the ground is drawn in front of the water and the water is not seen — a hole
+# with straight lattice edges. The carve alone cannot prevent it: it guarantees
+# `h ≤ level − depth·smoothstep(d/ramp)`, and at the rim that second term is 0.
+#
+# THE BOUND IS HAND-DERIVED, and the relief fade is what makes it derivable.
+# A probe inside the polygon is drawn from the four corners of ITS OWN lattice
+# cell, and those lie at most `step` metres away from it — so for
+#
+#     step ≤ shore_ramp_m
+#
+# every corner of that cell is either INSIDE the polygon (the carve: h ≤ the
+# mirror) or in the relief-free band outside it, where the ground is the AREA
+# height raised by the clamp — and this fixture has no height area at all, so
+# that is exactly `mirror + WATER_BANK_LIP_M`. The drawn value is a convex
+# combination of the four, hence AT MOST the lip over the mirror. With a 4 m
+# ramp that covers the 2 m and 4 m lattices by construction; at 8 m a cell may
+# reach a corner outside the band and the construction says nothing, so that
+# one is a measurement and is labelled as one.
+#
+# THE RED PROBE IS v4 AT THE SAME LATTICES, mirror and all: the relief at full
+# weight, the mirror the median of those wobbling rim heights. It stands over
+# its own water at every lattice INCLUDING THE FINEST — which is the whole
+# verdict on "is this a coarse-mip defect": it is not, and never was.
+V4_MIRROR = _v4_mirror
+V4_DEPTH, V4_RAMP = 2.0, 4.0
+
+
+def v4_final(model, x, z):
+    """``h_final`` as v4 built it — the relief at full weight, and the mirror
+    the MEDIAN of those wobbling rim heights (RED). Carve and bank clamp are
+    the v4 rules, spelled out against that mirror."""
+    h = v4_natural(model, x, z)
+    ring = hf._ring(FADE_LAKE["polygon"])
+    if hf._inside_ring(x, z, ring):
+        bed = V4_MIRROR - V4_DEPTH * ss(
+            hf._ring_edge_distance(x, z, ring) / V4_RAMP)
+        return min(h, bed)
+    d = hf._ring_edge_distance(x, z, ring)
+    if d >= V4_RAMP:
+        return h
+    floor = V4_MIRROR + hf.WATER_BANK_LIP_M
+    return max(h, floor + (h - floor) * (d / V4_RAMP))
+
+
+def drawn_over_mirror(height_at, mirror, step):
+    """The worst (drawn − mirror) INSIDE the polygon, metres. ``height_at`` is
+    sampled on the lattice of ``step`` and read bilinearly between its points,
+    which is exactly what a terrain patch at that mip draws."""
+    worst = -1e9
+    x = 0.25
+    while x < 40.0:
+        z = 0.25
+        while z < 40.0:
+            if point_in_polygon(x, z, FADE_LAKE["polygon"]):
+                i0 = math.floor(x / step) * step
+                j0 = math.floor(z / step) * step
+                tx = (x - i0) / step
+                tz = (z - j0) / step
+                n = height_at(i0, j0) * (1 - tx) + height_at(i0 + step, j0) * tx
+                s = height_at(i0, j0 + step) * (1 - tx) \
+                    + height_at(i0 + step, j0 + step) * tx
+                worst = max(worst, n * (1 - tz) + s * tz - mirror)
+            z += 0.25
+        x += 0.25
+    return worst
+
+
+def _v4_drawn(step):
+    return drawn_over_mirror(lambda px, pz: v4_final(FMODEL, px, pz),
+                             V4_MIRROR, step)
+
+
+for _step in (2.0, 4.0):
+    _v5 = drawn_over_mirror(FMODEL.final, 0.0, _step)
+    check_true(f"v5 at the {_step} m lattice (≤ the 4 m ramp) cannot exceed "
+               f"the lip — it draws {round(_v5, 4)}",
+               _v5 <= hf.WATER_BANK_LIP_M + 1e-12)
+_v5_8 = drawn_over_mirror(FMODEL.final, 0.0, 8.0)
+check_true(f"at 8 m the construction says nothing and the fixture draws "
+           f"{round(_v5_8, 4)} — still inside the lip",
+           _v5_8 <= hf.WATER_BANK_LIP_M + 1e-12)
+for _step in (2.0, 4.0, 8.0):
+    _v4 = _v4_drawn(_step)
+    check_true(f"RED: v4 at the {_step} m lattice stood {round(_v4, 4)} m over "
+               "its own water — past the lip", _v4 > hf.WATER_BANK_LIP_M)
+check_true(f"…the FINEST lattice included ({round(_v4_drawn(2.0), 4)} m), so "
+           "this was never a mip defect at all",
+           _v4_drawn(2.0) > 3.0 * hf.WATER_BANK_LIP_M)
+
+print("  [11e] a ramp of 0 fades nothing OUTSIDE its own outline")
+STEP_LAKE = {"id": "ta_step_lake", "kind": "lake", "z_order": 0,
+             "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]],
+             "meta": {"water_depth_m": 2.0, "shore_ramp_m": 0.0}}
+SMODEL = hf.build_model([], [], [STEP_LAKE, FADE_MEADOW], CATALOG)
+near("a basin with a step for a bank keeps the meadow at its very rim",
+     SMODEL._relief_weight(40.5, 10.0), 1.0, 1e-12)
+near("…and still has no relief INSIDE itself",
+     SMODEL._relief_weight(20.0, 20.0), 0.0, 1e-12)
+
+print("  [11f] two shore bands overlapping: the SMALLEST weight wins")
+NEAR_LAKE = {"id": "ta_near_lake", "kind": "lake", "z_order": 0,
+             "polygon": [[44, 0], [84, 0], [84, 40], [44, 40]],
+             "meta": {"water_depth_m": 2.0, "shore_ramp_m": 4.0}}
+NMODEL = hf.build_model([], [], [FADE_LAKE, NEAR_LAKE, FADE_MEADOW], CATALOG)
+# The 4 m strip between the two lakes: at x = 41 the west lake is 1 m away
+# (weight 0.15625) and the east one 3 m (0.84375) — the west one decides.
+near("at x = 41 the nearer rim decides", NMODEL._relief_weight(41.0, 10.0),
+     0.15625, 1e-12)
+near("at x = 43 the other one does", NMODEL._relief_weight(43.0, 10.0),
+     0.15625, 1e-12)
+near("and in the middle both say the same 0.5",
+     NMODEL._relief_weight(42.0, 10.0), 0.5, 1e-12)
 
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")

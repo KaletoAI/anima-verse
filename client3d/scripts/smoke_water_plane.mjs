@@ -355,11 +355,12 @@
  * diving after it.
  *
  * `subdivideRibbonByAxis(ring, axis)` cuts the outline at the INTERIOR knots
- * before the earcut runs. The rule is a running REMAINDER: at each interior
- * knot the remainder is split by that knot's cross-line into the piece upstream
- * (a strip) and the piece downstream (the new remainder), so the pieces tile
- * the outline exactly — splitting one polygon by one line gives back that
- * polygon, whatever the next line does.
+ * before the earcut runs. The rule is the ARRANGEMENT of the cross-lines (the
+ * running remainder of the first cut is what [5d] convicts): every piece a
+ * cross-line properly crosses is replaced by its two halves, every piece it
+ * misses or grazes is kept whole. The pieces tile the outline exactly —
+ * splitting one polygon by one line gives back that polygon, whatever the other
+ * lines do.
  *
  * THE CLIFF RIBBON is the 6 m wide, 100 m long band of the [4e] stroke:
  *
@@ -414,15 +415,34 @@
  * the same `buildAreaGeometry` earcut the whole painted world runs, checked
  * below as a source claim rather than guessed at.
  *
- * A BENT AXIS IS THE PARTITION'S OWN TEST. Two cross-lines that cross INSIDE
- * the mask would double-count a wedge and drop another if each strip were
- * clipped from the full outline; the running remainder cannot. Square
- * (−30,−10) (40,−10) (40,40) (−30,40), 70 · 50 = 3500 m², under the L-shaped
- * axis (−20,0) (20,0) (20,20) (−20,20): the knot at (20,0) bends from +x to
- * +z, so its cross-line normal is the BISECTOR (0.7071, 0.7071), and the one at
- * (20,20) bends from +z to −x, normal (−0.7071, 0.7071). The two lines meet at
- * (20,20) — the second knot itself, inside the square — and the three strips
- * still sum to 3500.
+ * A BENT AXIS IS THE PARTITION'S OWN TEST. Square (−30,−10) (40,−10) (40,40)
+ * (−30,40), 70 · 50 = 3500 m², under the L-shaped axis (−20,0) (20,0) (20,20)
+ * (−20,20): the knot at (20,0) bends from +x to +z, so its cross-line normal is
+ * the BISECTOR (0.7071, 0.7071) and its line is `x + z = 20`; the one at
+ * (20,20) bends from +z to −x, normal (−0.7071, 0.7071), line `z = x`. The two
+ * lines CROSS INSIDE the square, at (10,10), and the arrangement cuts both
+ * sides of each: FOUR pieces, and their corners are all hand-writable. `x+z=20`
+ * meets the square at (30,−10) and (−20,40); `z=x` at (−10,−10) and at the
+ * corner (40,40):
+ *
+ *     z ≤ x and x+z ≤ 20   triangle (−10,−10) (30,−10) (10,10)
+ *                          ½ · 40 · 20                        =  400 m²
+ *     z ≥ x and x+z ≤ 20   (−30,−10) (−10,−10) (10,10) (−20,40) (−30,40)
+ *                          shoelace 2700/2                    = 1350 m²
+ *     z ≤ x and x+z ≥ 20   (30,−10) (40,−10) (40,40) (10,10)
+ *                          shoelace 1700/2                    =  850 m²
+ *     z ≥ x and x+z ≥ 20   triangle (10,10) (40,40) (−20,40)
+ *                          ½ · 60 · 30                        =  900 m²
+ *                                                             ---------
+ *                                                              3500 m²
+ *
+ * THE RUNNING REMAINDER answered three pieces here — the whole 1750 m²
+ * upstream of `x+z=20`, then 850 and 900 out of the remainder — and that is
+ * where its T-VERTICES came from: the 1750 piece carried the entire chord of
+ * `x+z=20` from (30,−10) to (−20,40) as ONE edge, while the two pieces on the
+ * other side of it split that same chord at (10,10). Along that edge one side
+ * drew the straight line between the two ends' levels and the other the level
+ * of the split point — a crack as wide as the two disagree.
  *
  * ONE AND TWO KNOTS ARE UNTOUCHED, and provably the same buffers: the function
  * returns the ARRAY IT WAS GIVEN, the caller sees a single strip and keeps the
@@ -1430,8 +1450,11 @@ const BENT = waterProfileOf({ water_profile: { ...LAKE_META.water_profile,
   axis: [[-20, 0, 0, 9], [20, 0, 40, 6], [20, 20, 60, 3], [-20, 20, 100, 0]] } });
 const SQUARE = [[-30, -10], [40, -10], [40, 40], [-30, 40]];
 const bentStrips = subdivideRibbonByAxis(SQUARE, BENT.axis);
-check('an L-shaped axis cuts its mask into three strips too',
-  bentStrips.length, 3);
+check('two crossing cross-lines cut the mask into FOUR pieces',
+  bentStrips.length, 4);
+checkEq('…and every one of them is the hand-derived area',
+  bentStrips.map((r) => Number(ringArea(r).toFixed(6))),
+  [400, 1350, 850, 900]);
 check('…and they still tile it: 70 · 50 = 3500 m²',
   bentStrips.reduce((s, r) => s + ringArea(r), 0), ringArea(SQUARE), 1e-6);
 check('…which is the square the clips started from', ringArea(SQUARE), 3500,
@@ -1474,6 +1497,210 @@ check('…the pieces go through the SAME earcut every painted area goes through'
   /buildAreaGeometry\(THREE, s\)/.test(planeSrc) ? 1 : 0, 1);
 check('…and the outline\'s own earcut is freed, never leaked',
   /geometry\.dispose\(\);/.test(planeSrc) ? 1 : 0, 1);
+
+// ── [5d] the bend: the arrangement against the running remainder ───────────
+console.log('\n[5d] a river with a BEND — the strips must not reach past it');
+/**
+ * THE FIXTURE, and it is the shape the finding of 2026-08-24 was reported on:
+ * a river drawn (0,0) → (60,0) → (60,60), 8 m wide, mitred at the corner —
+ *
+ *     ring = (0,−4) (64,−4) (64,60) (56,60) (56,4) (0,4)
+ *            60·8 + 4·8 (the outer mitre) + 8·56 (the northern arm) = 960 m²
+ *
+ * — with the axis W5b ships for it: a knot every 2 m of arc, 61 of them, and a
+ * level that BENDS at every one of them (`10 − 0.01·s − 0.3·sin(s/15)`, then
+ * the bake's running minimum). The bend is not decoration: W5b's own
+ * Douglas–Peucker throws away every knot that lies on a straight (s, level)
+ * line, so an axis that reaches this code AT ALL is one whose level bends.
+ *
+ * THE METRIC IS TRIANGULATION-INDEPENDENT, which the fan of [5c] is not. A
+ * piece is drawn correctly by EVERY earcut of it exactly when its lifted
+ * corners are COPLANAR and that plane is `waterLevelAt` — then any
+ * triangulation interpolates the same plane. So: fit the plane through three of
+ * a piece's lifted corners, and measure it against `waterLevelAt` at every
+ * other corner and at every 0.25 m probe inside the piece.
+ *
+ * WHAT THE TWO RULES MEASURE (15 360 interior probes):
+ *
+ *     running remainder   worst corner off its plane 0.1168 m
+ *                         worst surface error 0.3229 m at (56, 20)
+ *     arrangement         worst corner off its plane 0.0322 m
+ *                         worst surface error 0.0322 m at (54, 2)
+ *
+ * and the 0.0322 m that remains is not the mesh's: (54,2) is the INSIDE of the
+ * bend, where `waterLevelAt` itself steps — a point a hair to one side of the
+ * angle bisector projects onto the eastward leg, a hair to the other onto the
+ * northward one, and the two legs' arc coordinates differ by twice the ribbon's
+ * half-width. No surface can follow a step; the cut lands ON it, which is the
+ * best a mesh can do, and it is the same step the bake carved the bed with.
+ *
+ * THE RED PIECE, by name. The remainder rule's strip for the knot at s = 58 —
+ * the piece between the cross-lines x = 56 and x = 58 — is
+ *
+ *     (56,−4) (58,−4) (58,60) (56,60) (56,4)     2·8 + 2·56 = 128 m²
+ *
+ * — a 2 m slice of the eastward arm that reaches z = 60, i.e. 56 metres up the
+ * NORTHWARD arm, because the cross-line x = 58 is infinite and the mask bends
+ * back through it. Its ruled surface carries the level of the eastward arm into
+ * ground the northward arm's own knots describe, which is the 0.3229 m above.
+ * The arrangement cuts that same slice with every northward cross-line it
+ * crosses, so no piece of it is longer than the 2 m between two knots.
+ */
+const CORNER_RING = [[0, -4], [64, -4], [64, 60], [56, 60], [56, 4], [0, 4]];
+const CORNER_AXIS = (() => {
+  const out = [];
+  let s = 0;
+  const level = (arc) => 10 - 0.01 * arc - 0.3 * Math.sin(arc / 15);
+  for (let x = 0; x <= 60; x += 2) { out.push([x, 0, s, level(s)]); s += 2; }
+  for (let z = 2; z <= 60; z += 2) { s += 2; out.push([60, z, s, level(s)]); }
+  // the bake's running minimum: water never runs uphill
+  for (let i = 1; i < out.length; i += 1) {
+    if (out[i][3] > out[i - 1][3]) out[i][3] = out[i - 1][3];
+  }
+  return out;
+})();
+const CORNER = { ...LAKE_META.water_profile, axis: CORNER_AXIS };
+/** Is (x, z) inside this ring? The ray cast, spelled out for the probe loop. */
+const ringHolds = (ring, x, z) => {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const [xi, zi] = ring[i];
+    const [xj, zj] = ring[j];
+    if ((zi > z) !== (zj > z)
+        && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+};
+/** The plane through the first three non-collinear LIFTED corners of a piece,
+ *  as `(x, z) => y`, or null where the piece names no plane. */
+function pieceP1ane(piece, profile) {
+  const lift = (p) => [p[0], p[1], waterLevelAt(profile, p[0], p[1])];
+  const a = lift(piece[0]);
+  for (let i = 1; i < piece.length; i += 1) {
+    for (let j = i + 1; j < piece.length; j += 1) {
+      const b = lift(piece[i]);
+      const c = lift(piece[j]);
+      const ux = b[0] - a[0]; const uz = b[1] - a[1]; const uy = b[2] - a[2];
+      const vx = c[0] - a[0]; const vz = c[1] - a[1]; const vy = c[2] - a[2];
+      const det = ux * vz - uz * vx;
+      if (Math.abs(det) < 1e-9) continue;
+      const A = (uy * vz - vy * uz) / det;
+      const B = (ux * vy - vx * uy) / det;
+      return (x, z) => a[2] + A * (x - a[0]) + B * (z - a[1]);
+    }
+  }
+  return null;
+}
+/** `[worst corner off its own piece's plane, worst surface error]`, metres. */
+function planeError(pieces, profile) {
+  let corner = 0;
+  let surface = 0;
+  for (const piece of pieces) {
+    const plane = pieceP1ane(piece, profile);
+    if (!plane) continue;
+    for (const [x, z] of piece) {
+      corner = Math.max(corner,
+        Math.abs(plane(x, z) - waterLevelAt(profile, x, z)));
+    }
+    for (let x = -1; x <= 65; x += 0.25) {
+      for (let z = -5; z <= 61; z += 0.25) {
+        if (!ringHolds(piece, x, z)) continue;
+        surface = Math.max(surface,
+          Math.abs(plane(x, z) - waterLevelAt(profile, x, z)));
+      }
+    }
+  }
+  return [corner, surface];
+}
+/** RED: the running remainder of the first W5c cut, reimplemented here so the
+ *  numbers it produced are measured and not remembered. Same cross-line normal
+ *  and same Sutherland–Hodgman rule; only the bookkeeping differs. */
+function remainderStrips(ring, axis) {
+  const strips = [];
+  let rest = ring;
+  for (let i = 1; i < axis.length - 1; i += 1) {
+    const [px, pz] = axis[i - 1];
+    const [cx, cz] = axis[i];
+    const [qx, qz] = axis[i + 1];
+    const inLen = Math.hypot(cx - px, cz - pz);
+    const outLen = Math.hypot(qx - cx, qz - cz);
+    let nx = 0;
+    let nz = 0;
+    if (inLen > 1e-9) { nx += (cx - px) / inLen; nz += (cz - pz) / inLen; }
+    if (outLen > 1e-9) { nx += (qx - cx) / outLen; nz += (qz - cz) / outLen; }
+    const len = Math.hypot(nx, nz);
+    if (!(len > 1e-9)) continue;
+    const n = [nx / len, nz / len];
+    const half = (sign) => {
+      const out = [];
+      const at = (p) => {
+        const f = ((p[0] - cx) * n[0] + (p[1] - cz) * n[1]) * sign;
+        return Math.abs(f) < 1e-9 ? 0 : f;
+      };
+      for (let k = 0; k < rest.length; k += 1) {
+        const a = rest[k];
+        const b = rest[(k + 1) % rest.length];
+        const fa = at(a);
+        const fb = at(b);
+        if (fa >= 0) out.push([a[0], a[1]]);
+        if ((fa > 0 && fb < 0) || (fa < 0 && fb > 0)) {
+          const t = fa / (fa - fb);
+          out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+        }
+      }
+      return out;
+    };
+    const upstream = half(-1);
+    const downstream = half(1);
+    if (ringArea(upstream) >= 1e-9) strips.push(upstream);
+    if (ringArea(downstream) < 1e-9) { rest = []; break; }
+    rest = downstream;
+  }
+  if (ringArea(rest) >= 1e-9) strips.push(rest);
+  return strips.length ? strips : [ring];
+}
+const bendNew = subdivideRibbonByAxis(CORNER_RING, CORNER_AXIS);
+const bendOld = remainderStrips(CORNER_RING, CORNER_AXIS);
+check('the ribbon is 960 m² — 60·8 + 4·8 + 8·56', ringArea(CORNER_RING), 960,
+  1e-9);
+check('the bake ships 61 knots for it', CORNER_AXIS.length, 61);
+check('the arrangement makes 118 pieces of it', bendNew.length, 118);
+check('…which tile the mask exactly',
+  bendNew.reduce((s, r) => s + ringArea(r), 0), 960, 1e-9);
+check('RED: the running remainder made 60', bendOld.length, 60);
+check('…and those tile it too — the defect was never a missing piece',
+  bendOld.reduce((s, r) => s + ringArea(r), 0), 960, 1e-9);
+checkEq('RED: its strip for the knot at s = 58 reaches 56 m up the other arm',
+  bendOld.find((r) => Math.abs(ringArea(r) - 128) < 1e-9)
+    ?.map((p) => p.map((v) => Number(v.toFixed(9)))),
+  [[56, -4], [58, -4], [58, 60], [56, 60], [56, 4]]);
+check('…and no piece of the arrangement is anywhere near that big',
+  Math.max(...bendNew.map(ringArea)) <= 18 ? 1 : 0, 1);
+const [newCorner, newSurface] = planeError(bendNew, CORNER);
+const [oldCorner, oldSurface] = planeError(bendOld, CORNER);
+check('RED: the remainder rule drew the mirror 0.3229 m off at (56, 20)',
+  oldSurface, 0.3229, 5e-5);
+check('RED: …with corners 0.1168 m off their own piece\'s plane', oldCorner,
+  0.1168, 5e-5);
+check('the arrangement is down to 0.0322 m', newSurface, 0.0322, 5e-5);
+check('…and that is the inside of the bend, where waterLevelAt itself steps',
+  newCorner, newSurface, 1e-12);
+check('…i.e. a tenth of what the remainder rule drew',
+  oldSurface / newSurface > 10 ? 1 : 0, 1);
+// THE T-VERTEX ARITHMETIC, by hand and without either algorithm: it is why a
+// piece that keeps an edge whole while its neighbour splits it CANNOT close.
+// Edge A→B with A lifted 3.0 and B lifted 0.0, split at 40 % of its length:
+//   the whole edge draws 3.0 + (0.0 − 3.0)·0.4 = 1.8
+//   the split point carries its own waterLevelAt, 3.0 on the [5c] cliff
+//   the crack is 3.0 − 1.8 = 1.2 m
+check('a chord over a split edge reads 1.8 where the split point says 3.0',
+  3.0 + (0.0 - 3.0) * 0.4, 1.8, 1e-12);
+check('…a 1.2 m crack, from one vertex the neighbour does not have',
+  3.0 - (3.0 + (0.0 - 3.0) * 0.4), 1.2, 1e-12);
+const mathSrc = await readFile(
+  join(ROOT, 'client3d/src/scene/waterPlaneMath.ts'), 'utf8');
+check('the cap on the pieces is 1024', /WATER_STRIP_MAX = 1024/.test(mathSrc)
+  ? 1 : 0, 1);
 
 // ── [6] the wade/swim crossover ────────────────────────────────────────────
 console.log('\n[6] the figure floats on the LEVEL, not in the bed');

@@ -5420,3 +5420,76 @@ Tiefe 2 m bei (2, 3), `keep` 0,5:
 | back, Yaw 0°, keep 0,25 | `z_cut = 0.5`, `n = (0, 0, 1)`, `c = −3.5` |
 | keep 1,0 | **keine Ebene** |
 | Payload: Tisch (Tiefe 0,8) bei Welt (−2,0, −2,5), back, keep 0,5 | `n = (0, 0, 1)`, `c = 2.5` |
+
+## Nachtrag 2026-08-24 (§ A16.3 / § G4): Kein Relief am Wasserrand, und der Spiegel folgt seiner Achse überall — W5d
+
+*Befund des Users nach Bake v4 + W5c: „Es sind noch immer Löcher zwischen
+Wasser und Land." Zwei getrennte Ursachen, beide numerisch überführt, beide an
+ihrer eigenen Stelle behoben. Screenshot-frei gemessen (§ B5a).*
+
+### 1. Server: das Mikro-Relief endet am Wasser (`HEIGHT_BAKE_VERSION` 4 → 5)
+
+Der Spiegel einer Fläche ohne autorierten Pegel ist der **Median der
+Naturhöhen am eigenen Umriss**. Ein Umriss, der um ±1 m Mikro-Relief
+schwankt, hat damit die HÄLFTE seines Umfangs ÜBER dem eigenen Wasser — und
+die Bankklemme (v4) kann das nicht reparieren, weil sie nur hebt. Gemessen auf
+der Fixture von `scripts/smoke_height_bake.py` **[11]**: 1,344 m Spannweite
+über einen einzigen See, der höchste Randpunkt **0,466 m über seinem eigenen
+Spiegel**, und das gezeichnete Gelände stand schon auf dem **feinsten** Gitter
+(2 m) 0,389 m über dem Spiegel INNERHALB des Polygons.
+
+Neu (`HeightModel._relief_weight`): das Mikro-Relief wird mit einem Gewicht
+multipliziert, das **0 innerhalb des Polygons und auf dem Umriss** ist und über
+das `shore_ramp_m`-Band nach außen per `smoothstep` auf 1 zurückkommt — dieselbe
+Kurve und dieselbe Breite, die das Bett INNEN benutzt. Bei überlappenden Bändern
+gewinnt das kleinste Gewicht; `shore_ramp_m = 0` (das Becken) verblasst außerhalb
+nichts.
+
+> **DIE RAND-SCHRANKE, konstruktiv.** Eine Probe im Polygon wird aus den vier
+> Ecken IHRER Gitterzelle gezeichnet, die höchstens `step` Meter entfernt
+> liegen. Für `step ≤ shore_ramp_m` liegt jede dieser Ecken damit entweder im
+> Polygon (Carve: `h ≤` Spiegel) oder im reliefreien Band, wo der Boden die
+> Flächenhöhe plus Klemme ist — das gezeichnete Bild ist eine Konvexkombination
+> davon und steht also höchstens um `WATER_BANK_LIP_M` (0,1 m) über dem
+> Spiegel. Das ist die Rand-Hälfte von § G4; Invariante 2 oben bleibt die
+> Tiefen-Hälfte.
+
+**Die Bankklemme bleibt** — sie fängt jetzt genau das, was das Relief nicht
+mehr macht: HÖHENFLÄCHEN, die den Spiegel unterlaufen (Fixture [10]: Ufer bei
+−0,4 unter einem Spiegel bei 1,0, Hub 1,5 m). Ohne Relief am Rand ist sie kein
+zweites Buch mehr, sondern der einzige.
+
+### 2. Client: die Streifen des Spiegel-Meshes sind eine ARRANGEMENT, kein Rest
+
+W5c teilte die Maske mit einem laufenden REST: der stromaufwärtige Teil jeder
+Querlinie war ein fertiger Streifen, nur der stromabwärtige wurde weiter
+geschnitten. Eine Halbebene ist UNENDLICH — bei jeder Maske, die sich zurück
+biegt (jeder Fluss mit einer Kurve), enthält der „stromauf"-Teil einer frühen
+Querlinie deshalb auch die Scheibe des fernen Arms, die zufällig auf dieser
+Seite liegt, und die Regelfläche darüber trägt ein Niveau vom falschen Ende des
+Flusses hinein. Dieselbe Asymmetrie erzeugte **T-Vertices**: eine spätere
+Querlinie teilt nur noch die Reste, während der schon fertige Streifen dieselbe
+Sehne ganz behält — eine Seite zeichnet die Sehne, die andere den Teilungspunkt.
+
+Neu (`waterPlaneMath.subdivideRibbonByAxis`): jede Querlinie wird JEDEM Stück
+angeboten; ein Stück, das sie sauber schneidet, wird durch seine beiden Hälften
+ersetzt, ein Stück, das sie verfehlt oder nur streift, bleibt ganz. Die Stücke
+kacheln die Maske weiterhin exakt, es geht keines verloren, und es gibt keinen
+T-Vertex mehr, weil jede Linie beide Seiten jeder Sehne teilt.
+
+Gemessen (`client3d/scripts/smoke_water_plane.mjs` **[5d]**, 8-m-Fluss mit
+90°-Knick, 61 Knoten, 15 360 Proben; Metrik ist triangulierungs-UNABHÄNGIG: die
+Ebene durch drei gehobene Ecken eines Stücks gegen `waterLevelAt`):
+
+| Regel | Ecke von der eigenen Ebene | Fläche gegen `waterLevelAt` |
+|---|---|---|
+| laufender Rest (W5c) | 0,1168 m | **0,3229 m** bei (56, 20) |
+| Arrangement (W5d) | 0,0322 m | **0,0322 m** bei (54, 2) |
+
+Der Rest von 0,0322 m ist nicht das Mesh: (54, 2) ist die INNENSEITE der Kurve,
+wo `waterLevelAt` selbst springt (eine Haaresbreite links projiziert auf den
+Ost-Schenkel, rechts auf den Nord-Schenkel, und deren Bogenkoordinaten liegen
+zwei halbe Bandbreiten auseinander). Der Schnitt landet AUF dem Sprung — mehr
+kann eine Fläche nicht, und es ist derselbe Sprung, mit dem die Bake das Bett
+gegraben hat. Kosten: ein Stück je Knoten (255 Stücke für einen 256-Knoten-
+Mäander, 15 ms), Deckel `WATER_STRIP_MAX` = 1024.

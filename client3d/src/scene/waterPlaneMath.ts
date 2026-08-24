@@ -689,6 +689,22 @@ function clipHalfPlane(ring: readonly WaterPoint2[], n: WaterPoint2,
 }
 
 /**
+ * How many pieces one mask may be cut into, at the most.
+ *
+ * A CUT IS ONLY EVER MADE WHERE A CROSS-LINE REALLY CROSSES A PIECE, so a
+ * ribbon pays about one piece per knot: the 256-knot meander of the smoke comes
+ * out at 255 pieces, the 61-knot right-angle river at 118. The cap is for the
+ * shape that has no such bound — a WIDE mask with a long axis coiled inside it,
+ * where every cross-line reaches every piece and the count grows with the
+ * SQUARE of the knots (a 200 m square under a 256-knot spiral: 31 790 pieces,
+ * 0.7 s of clipping, measured). Four times the bake's own knot ceiling
+ * (`heightfield.WATER_AXIS_MAX_KNOTS` = 256) is past every real ribbon and two
+ * orders of magnitude under that; a mask that hits it keeps the pieces it has,
+ * which is a coarser mirror and never a hole.
+ */
+const WATER_STRIP_MAX = 1024;
+
+/**
  * THE OUTLINE, CUT INTO STRIPS AT THE AXIS KNOTS (W5c) — the mesh's answer to
  * the cliff.
  *
@@ -702,25 +718,51 @@ function clipHalfPlane(ring: readonly WaterPoint2[], n: WaterPoint2,
  * before the lip and the drawn mesh reads 2.07 there; ten metres after it the
  * reader says 0.0 and the mesh stands 1.47 m in the air.
  *
- * THE RULE, and it is a partition and not a set of overlapping clips: walk the
- * INTERIOR knots in flow order carrying a REMAINDER, which starts as the whole
- * outline. At each knot, split the remainder by that knot's cross-line
- * (`crossNormalAt`) into the piece upstream of it — emitted as a strip — and
- * the piece downstream, which becomes the new remainder. What is left after the
- * last interior knot is the last strip. Splitting one polygon by one line
- * always gives back exactly that polygon, so the strips tile the outline
- * whatever the lines do to each other: no gap on the outside of a bend, no
- * double-drawn wedge on the inside, and the areas sum.
+ * THE RULE IS THE FULL ARRANGEMENT OF THE CROSS-LINES (fixed 2026-08-24, see
+ * below for what it replaces): carry a LIST of pieces, starting as the whole
+ * outline, and walk the interior knots in flow order. Each knot's cross-line
+ * (`crossNormalAt`) is offered to EVERY piece: a piece the line properly cuts
+ * — both halves worth an earcut — is replaced by its two halves, and a piece
+ * the line misses or merely grazes (one half under `STRIP_EPS_M2`) is kept
+ * whole. Splitting one polygon by one line always gives back exactly that
+ * polygon, so the pieces tile the mask however the lines cross each other, and
+ * no piece is ever dropped: the areas sum to the mask, to the last bit.
  *
- * Empty and sliver pieces (< `STRIP_EPS_M2`) are dropped, so a cross-line that
- * misses the polygon altogether — an axis that runs on past its mask — costs a
- * comparison and nothing else.
+ * WHAT IT REPLACES, and why the running remainder was wrong. W5c walked the
+ * knots carrying ONE remainder: the piece upstream of each cross-line was
+ * emitted as a finished strip and only the downstream piece was cut again. A
+ * half-plane is INFINITE, so on a mask that bends back on itself — every river
+ * with a corner in it — the "upstream" piece of an early knot also contains the
+ * slice of the far arm that happens to lie on that side, tens of metres
+ * downstream, and the ruled surface over it carries a level from the wrong end
+ * of the river into it. The same asymmetry produced T-VERTICES: a later
+ * cross-line splits the two pieces that still are remainders at the point where
+ * it crosses their shared chord, while the already-emitted strip keeps that
+ * chord whole — so along one edge one side draws the chord and the other the
+ * split, and the mesh cracks by the level difference between them.
+ *
+ * MEASURED, on the 61-knot right-angle river of `smoke_water_plane.mjs` [5d]
+ * (8 m wide, 1 % fall): the remainder rule drew the mirror 0.347 m away from
+ * `waterLevelAt` at its worst point and left 60 T-vertices, the worst of them a
+ * 0.347 m crack; the arrangement draws it EXACTLY (0.000 m over 15 360 probes)
+ * with no T-vertex at all. On a sharper fixture the same defect measured 1.15 m.
+ * Since the mirror's alpha is a function of `mirror − ground` and the bed at the
+ * rim is only centimetres under the mirror, every centimetre of that error is a
+ * hand's width of shoreline that disappears — the "holes between water and land"
+ * finding of 2026-08-24.
+ *
+ * AND IT COSTS ALMOST NOTHING. A cut is only made where a line really crosses a
+ * piece, so a ribbon pays one piece per knot and no more (255 for a 256-knot
+ * meander, 15 ms); `WATER_STRIP_MAX` is the ceiling for the mask that has no
+ * such bound.
  *
  * FEWER THAN THREE KNOTS RETURNS THE OUTLINE ITSELF, the very array that came
  * in. A lake (one knot) and a polygon river (two) are the cases the ruled
  * surface already reproduced exactly, and the caller reads a single strip as
  * "keep the geometry you already have" — so those two draw the identical
- * buffers they drew before this function existed, not merely equal ones.
+ * buffers they drew before this function existed, not merely equal ones. So
+ * does a mask no cross-line reaches: an uncut piece is pushed on UNCHANGED, so
+ * the single element of the answer is the identical array.
  */
 export function subdivideRibbonByAxis(ring: readonly WaterPoint2[],
                                       axis: readonly WaterKnot[] | null
@@ -730,28 +772,34 @@ export function subdivideRibbonByAxis(ring: readonly WaterPoint2[],
   if (!Array.isArray(ring) || ring.length < 3) return [inRing];
   if (!Array.isArray(axis) || axis.length < 3) return [inRing];
   const knots = axis as WaterKnot[];
-  const strips: WaterPoint2[][] = [];
-  let rest: WaterPoint2[] = inRing as WaterPoint2[];
+  let pieces: WaterPoint2[][] = [inRing];
   for (let i = 1; i < knots.length - 1; i += 1) {
     const n = crossNormalAt(knots, i);
     if (!n) continue;
     const [cx, cz] = knots[i];
-    const upstream = clipHalfPlane(rest, n, cx, cz, -1);
-    const downstream = clipHalfPlane(rest, n, cx, cz, 1);
-    if (Math.abs(ringSignedArea(upstream)) >= STRIP_EPS_M2) {
-      strips.push(upstream);
+    const next: WaterPoint2[][] = [];
+    for (const piece of pieces) {
+      if (next.length >= WATER_STRIP_MAX) {
+        next.push(piece);
+        continue;
+      }
+      const upstream = clipHalfPlane(piece, n, cx, cz, -1);
+      const downstream = clipHalfPlane(piece, n, cx, cz, 1);
+      // BOTH halves have to be worth an earcut, or this line does not cut THIS
+      // piece: it misses it, or it only grazes a corner of it. Keeping the
+      // piece whole there is what makes the answer lose no area — a dropped
+      // sliver would be a hole, however small.
+      if (Math.abs(ringSignedArea(upstream)) >= STRIP_EPS_M2
+          && Math.abs(ringSignedArea(downstream)) >= STRIP_EPS_M2) {
+        next.push(upstream);
+        next.push(downstream);
+      } else {
+        next.push(piece);
+      }
     }
-    if (Math.abs(ringSignedArea(downstream)) < STRIP_EPS_M2) {
-      rest = [];
-      break;
-    }
-    rest = downstream;
+    pieces = next;
   }
-  if (Math.abs(ringSignedArea(rest)) >= STRIP_EPS_M2) strips.push(rest);
-  // Nothing survived the clips — a ring so thin that every piece is a sliver.
-  // The untouched outline is what it drew before, and the caller's own earcut
-  // is the one thing that gets to call it empty.
-  return strips.length ? strips : [inRing];
+  return pieces;
 }
 
 /**

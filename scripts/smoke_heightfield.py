@@ -986,9 +986,12 @@ check("the edit landed", store.list_height_areas()[0]["height_m"], 7.0)
 # of one fetch instead of pulling the whole worldmap for one float. Pinned by
 # KEY, not by value: the numbers are admin dials.
 areas_payload = get_height_areas_route()
+# `stamps` rides along since the map batch save (02aa059a): per-area
+# updated_at for the optimistic bulk concurrency check, deliberately BESIDE
+# the areas so the signatures never see it.
 check("area-list keys", sorted(areas_payload.keys()),
       ["areas", "default_step_m", "max_slope_deg", "max_step_height_m", "sig",
-       "step_m", "tile_step_m"])
+       "stamps", "step_m", "tile_step_m"])
 check("...and the limits are the same ones the walk gate reads",
      (areas_payload["max_slope_deg"], areas_payload["max_step_height_m"]),
      (relief.get_max_slope_deg(), relief.get_max_step_height_m()))
