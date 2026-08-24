@@ -88,12 +88,33 @@ function reliftPlacement(tile: Tile, rec: PlacedSceneModel): number {
  *
  * Nothing else in the scene is touched: plates, walls and the building/ground
  * model are not lifted by this law in the first place (§ A16.9).
+ *
+ * `datumDelta` IS THE FRAME'S OWN MOVE (user finding 2026-08-24, the floating
+ * "Haus von Kai"): `redatumTile` ran right before this and put the tile back on
+ * the ground under its pin. Everything hanging in the group came along for that
+ * ride, so the re-lift below simply takes it back off again — but the scene
+ * composed three things in WORLD coordinates that the group does not parent,
+ * and those are carried here: the room doors, the elevator stops and the
+ * `fixed` prop markers. A moved datum also re-derives every room, because a
+ * room whose floor is DECLARED measures from that very datum.
  */
-export function reliftScene(tile: Tile): void {
+export function reliftScene(tile: Tile, datumDelta = 0): void {
   const placements = tile.placedModels;
   if (!placements) return;
+  if (datumDelta) {
+    for (const p of tile.roomDoors.values()) p.y += datumDelta;
+    for (const p of tile.elevatorStops?.values() ?? []) p.y += datumDelta;
+    const carried = new Set<object>();
+    for (const byKind of tile.roomMarkers.values()) {
+      if (carried.has(byKind)) continue;   // one map hangs under id AND name
+      carried.add(byKind);
+      for (const entries of byKind.values()) {
+        for (const e of entries) if (e.fixed) e.p.y += datumDelta;
+      }
+    }
+  }
   const walkY = new Map<string, number>();
-  let moved = false;
+  let moved = datumDelta !== 0;
   for (const rec of placements) {
     const before = rec.lift;
     const lift = reliftPlacement(tile, rec);

@@ -128,6 +128,72 @@ export function storeyGroundRelift(applied: number,
                                    worldX: number, worldZ: number,
                                    datumY: number,
                                    sampler?: GroundSampler | null): StoreyGroundStep {
+  return reliftAgainst(applied, level, worldX, worldZ, datumY, sampler)
+}
+
+/** What `tileDatumStep` answers: the datum the height field says NOW, and the
+ *  y-distance the whole scene frame has to move to get there from the datum it
+ *  is standing on. */
+export interface TileDatumStep {
+  /** the world height under the anchor pin as the field stands NOW */
+  datum: number
+  /** `datum − applied` — the move, 0 when nothing changed */
+  delta: number
+}
+
+/**
+ * AND THE DATUM ITSELF IS A HEIGHT SAMPLE (user finding 2026-08-24, the
+ * floating "Haus von Kai").
+ *
+ * THE DEFECT THIS CLOSES. Everything above lifts a placement OVER the datum,
+ * and the datum — the ground under the location's anchor pin, `tile.center.y`
+ * in the 3D client — is itself read from the very field that arrives late and
+ * moves again on every re-bake. It is read ONCE, when the tile is built. For
+ * anything that carries a lift that does not matter: the lift is
+ * `ground − datum`, so the datum cancels out of `datum + bottom_y + lift` and
+ * a stale one is invisible. For the one thing the law deliberately does NOT
+ * lift — the BUILDING/ground model, which IS the plot — the datum is the whole
+ * answer, and a stale datum is exactly how far the building hangs in the air.
+ *
+ * The client used to have this probe: `main.relevelTiles` re-read
+ * `footprintCentre(loc).y` every frame and rebuilt the tile when it moved by
+ * more than a millimetre. It was deleted with the ground plate ("Ein Boden"
+ * E3) because its SECOND clause watched the plate's drape — its first clause
+ * was this, and it had nothing to do with plates.
+ *
+ * THE RULE, and it is literally the rule above with the world's own zero as
+ * the datum: the tile carries the datum it stands on, and every time the
+ * height field moves it is moved by the DIFFERENCE to the height the field now
+ * reports under its pin. "Nothing to say" (no sampler, NaN) keeps the datum —
+ * a tile evicted from the cache must not drop a location to zero.
+ *
+ * THE FRAME MOVES AS A WHOLE, which is what makes this safe: every lifted
+ * placement is a CHILD of that frame, so it travels with it and its re-lift
+ * (`storeyGroundRelift`, same beat, right after) takes exactly the same amount
+ * back off — the two moves cancel to the millimetre and only the building, the
+ * plates, the walls and the labels actually end up somewhere new. What a caller
+ * has to carry along by `delta` itself is whatever it composed in WORLD
+ * coordinates without hanging it in that frame (in the 3D client: the room
+ * doors, the elevator stops and the `fixed` prop markers).
+ *
+ * Hand-derived in `client3d/scripts/smoke_walk_math.mjs` § S3 (§ B5a).
+ *
+ * @param applied the datum the tile currently stands on
+ */
+export function tileDatumStep(applied: number,
+                              worldX: number, worldZ: number,
+                              sampler?: GroundSampler | null): TileDatumStep {
+  const step = reliftAgainst(applied, 0, worldX, worldZ, 0, sampler)
+  return { datum: step.lift, delta: step.delta }
+}
+
+/** The one implementation both of the above are: the lift/datum the field says
+ *  now, and the move to it from the one that is applied. */
+function reliftAgainst(applied: number,
+                       level: number | undefined,
+                       worldX: number, worldZ: number,
+                       datumY: number,
+                       sampler?: GroundSampler | null): StoreyGroundStep {
   const have = Number.isFinite(applied) ? applied : 0
   // A declared storey stands on a plate: its lift is 0 as a STATEMENT, not as
   // a missing answer, so anything applied comes back off.

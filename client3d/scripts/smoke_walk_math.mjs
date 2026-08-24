@@ -4085,6 +4085,162 @@ async function main() {
   check('the seat mark keeps its 0.45 m over the hut base, before and after',
     [seatCoarse, seat.y - hut.y], [0.45, 0.45], 1e-9);
 
+  // ── § S3  THE DATUM ITSELF IS A LATE SAMPLE (user finding 2026-08-24) ────
+  //
+  // THE DEFECT, and it is the OTHER HALF of § S2: everything above lifts a
+  // placement OVER the datum, and the datum — the ground under the location's
+  // anchor pin, `tile.center.y` — is read from the very same field, ONCE, when
+  // `buildTile` runs. § S2 made every lifted placement immune to that, because
+  // `lift = ground − datum` cancels the datum out of `datum + bottom_y + lift`.
+  // The BUILDING model is not lifted (§ A16.9: it IS the plot, not something
+  // standing on it), so for it the datum is the entire answer — and a stale
+  // datum is exactly how far the house hangs in the air. `main.relevelTiles`
+  // used to re-read it every frame; it was deleted with the ground plate whose
+  // drape its second clause watched ("Ein Boden" E3, 9062dbf9).
+  //
+  // THE FIXTURE, measured on the server's own shore-plot fixture (the lake +
+  // meadow of `scripts/smoke_height_bake.py` [11], relief amplitude 1.0 m /
+  // wave 16 m, with a 10 × 10 m plot pinned 7 m off the east bank):
+  //
+  //   PLATEAU_V8  -0.4549   what the bake stamps under the plot TODAY, i.e.
+  //                         `final()` at the pin (a plateau is flat, so the
+  //                         pin's ground IS the plot's height)
+  //   PLATEAU_V7  -0.1269   what bake v7 stamped there — the median of the
+  //                         SAME noise faded to nothing at the waterline, the
+  //                         guard K-A E6 retired. The ground under the plot
+  //                         legitimately MOVED by -0.3280 m.
+  //   COARSE      -0.2712   what the coarse overview answers at that pin on a
+  //                         16 m lattice: the 10 m plateau is invisible to it.
+  //
+  // THE TWO WAYS THE TILE ENDS UP STALE, and both are one move:
+  //
+  //   fresh load   built on COARSE, tiles land   -> delta = -0.4549 + 0.2712
+  //                                                       = -0.1837
+  //   re-bake      built on PLATEAU_V7, v8 lands -> delta = -0.4549 + 0.1269
+  //                                                       = -0.3280
+  //
+  // and in both the building was standing that far ABOVE its own plateau.
+  console.log('\nthe tile DATUM arrives late too — the building hangs on it');
+  const { tileDatumStep } =
+    await loadSharedModule('packages/scene-render/src/storeyGround.ts');
+  const PLATEAU_V8 = -0.4549, PLATEAU_V7 = -0.1269, COARSE = -0.2712;
+  const PIN_X = 47, PIN_Z = 30;
+  // A prop of the yard, 5 m off the pin on the ramp, where the v8 field
+  // answers its own height — the terrain under a scene is not one number.
+  const PROP_X = 52, PROP_Z = 30, PROP_G = -0.40;
+  const fine = (x) => (x === PROP_X ? PROP_G : PLATEAU_V8);   // the 2 m tiles
+  const overview = () => COARSE;          // the coarse field, before them
+  /** One tile's bookkeeping, exactly the fields `redatumTile` + `reliftScene`
+   *  move: the datum, the building hanging in the frame, a lifted yard prop,
+   *  and a `fixed` prop marker that is composed in WORLD space and is
+   *  therefore the one thing the frame does not carry by itself. */
+  const BUILDING_BOTTOM = -0.05;          // the author's own sink dial
+  const PROP_BOTTOM = 0.02;               // the prop's composed bottom_y
+  const MARKER_OVER_PROP = 0.45;          // its seat mark
+  const tileOn = (datum) => ({
+    datum,
+    // a group child: its world y is `datum + local`
+    buildingLocal: BUILDING_BOTTOM,
+    propLocal: PROP_BOTTOM, propLift: 0,
+    // a world-space record that is NOT parented by the frame
+    markerY: datum + PROP_BOTTOM + MARKER_OVER_PROP, markerLift: 0,
+  });
+  const buildingY = (t) => t.datum + t.buildingLocal;
+  const propY = (t) => t.datum + t.propLocal;
+  /** `redatumTile` + the `reliftScene(tile, datumDelta)` that follows it on the
+   *  same beat — the second is handed the first's move, because the world-space
+   *  records of a mounted scene (room doors, elevator stops, `fixed` markers)
+   *  are not parented by the frame and have to be carried by hand. */
+  const redatum = (t, sampler) => {
+    const step = tileDatumStep(t.datum, PIN_X, PIN_Z, sampler);
+    t.datum = step.datum;
+    t.markerY += step.delta;              // reliftScene's `datumDelta` pass
+    const back = storeyGroundRelift(t.propLift, 0, PROP_X, PROP_Z, t.datum,
+                                    sampler);
+    t.propLocal += back.delta;
+    t.propLift = back.lift;
+    const mark = storeyGroundRelift(t.markerLift, 0, PROP_X, PROP_Z, t.datum,
+                                    sampler);
+    t.markerY += mark.delta;
+    t.markerLift = mark.lift;
+    return step;
+  };
+  // PHASE 1 — the tile is built before the 2 m tiles are there.
+  const kai = tileOn(COARSE);
+  check('RED: on the coarse datum the house hangs 0.1837 m too high',
+    Number((buildingY(kai) - (PLATEAU_V8 + BUILDING_BOTTOM)).toFixed(4)),
+    0.1837);
+  // PHASE 2 — the tiles land.
+  check('the tiles land: the frame moves by -0.1837',
+    redatum(kai, fine).delta, -0.1837, 1e-9);
+  check('...the house stands on its plateau, minus its own dialled 0.05',
+    Number((buildingY(kai) - PLATEAU_V8).toFixed(4)), BUILDING_BOTTOM);
+  // ORDER INDEPENDENCE — the whole point, as in § S2.
+  const oneShotTile = tileOn(PLATEAU_V8);
+  check('a tile built WITH the field lands on the same house y',
+    buildingY(oneShotTile), buildingY(kai), 1e-12);
+  check('...and on the same datum', kai.datum, PLATEAU_V8, 1e-12);
+  // THE RE-BAKE, the user's actual regression: the tile was built when the
+  // ground under the plot was v7's, and the water rebuild moved it.
+  const rebaked = tileOn(PLATEAU_V7);
+  check('RED: after bake v8 the v7 tile leaves the house 0.3280 m in the air',
+    Number((buildingY(rebaked) - (PLATEAU_V8 + BUILDING_BOTTOM)).toFixed(4)),
+    0.3280);
+  check('the new height revision moves the frame by -0.3280',
+    redatum(rebaked, fine).delta, -0.3280, 1e-9);
+  check('...and the house is back on the ground', buildingY(rebaked),
+    PLATEAU_V8 + BUILDING_BOTTOM, 1e-9);
+  // NO DOUBLE MOVE: a revision that does not move the ground under the pin
+  // may not move the tile.
+  check('a second re-datum on the same field is a no-op',
+    redatum(kai, fine).delta, 0, 1e-12);
+  // "NOTHING TO SAY" IS NOT "COME BACK DOWN" — the same rule the lift has: a
+  // tile evicted from the cache keeps the datum it is standing on and must
+  // never be dropped to the world zero.
+  check('a sampler that vanishes leaves the tile where it is',
+    redatum(kai, null).delta, 0, 1e-12);
+  check('...and a NaN answer is the same "nothing to say"',
+    redatum(kai, () => NaN).delta, 0, 1e-12);
+  check('...the house is still on its plateau', buildingY(kai),
+    PLATEAU_V8 + BUILDING_BOTTOM, 1e-9);
+  // AND NOW THE PROPERTY THAT MAKES MOVING THE FRAME SAFE — NO DOUBLE MOVE.
+  // A lifted placement is a CHILD of the frame, so the datum correction moves
+  // it too; its re-lift on the same beat takes exactly that much back off. So
+  // what the yard prop ends up moving by is the ground under ITS OWN anchor
+  // and nothing else, by hand:
+  //
+  //   phase 1  coarse:  lift  = -0.2712 - (-0.2712)      =  0
+  //                     world = -0.2712 + 0.02           = -0.2512
+  //   phase 2  fine:    the frame moves -0.1837 with everything in it,
+  //                     lift  = -0.400 - (-0.4549)       = +0.0549
+  //                     world = -0.4549 + 0.02 + 0.0549  = -0.3800
+  //   the prop moved -0.1288 = -0.400 - (-0.2712), the move of ITS ground —
+  //   not the -0.1837 of the frame, and not the -0.3125 of both.
+  const stable = tileOn(COARSE);
+  redatum(stable, overview);              // mounted and lifted on the coarse
+  check('phase 1 — the yard prop hangs on the coarse ground',
+    propY(stable), -0.2512, 1e-9);
+  const propBefore = propY(stable);
+  const markerBefore = stable.markerY;
+  check('the datum correction itself is -0.1837',
+    redatum(stable, fine).delta, -0.1837, 1e-9);
+  check('...and the prop stands on ITS OWN ground, not on the frame move',
+    propY(stable), PROP_G + PROP_BOTTOM, 1e-9);
+  check('RED: which is a move of -0.1288, never the -0.3125 of a double move',
+    Number((propY(stable) - propBefore).toFixed(4)), -0.1288);
+  check('...and the seat mark moved by exactly the same -0.1288',
+    Number((stable.markerY - markerBefore).toFixed(4)), -0.1288);
+  check('...so it still sits 0.45 m over the prop it belongs to',
+    stable.markerY - propY(stable), MARKER_OVER_PROP, 1e-9);
+  // ORDER INDEPENDENCE for the yard as well: a tile built and mounted with the
+  // fine field in place lands the prop on the very same y.
+  const oneShotYard = tileOn(PLATEAU_V8);
+  oneShotYard.propLift = storeyGroundRelift(0, 0, PROP_X, PROP_Z,
+                                            PLATEAU_V8, fine).lift;
+  oneShotYard.propLocal += oneShotYard.propLift;
+  check('a tile mounted WITH the field puts the prop on the same y',
+    propY(oneShotYard), propY(stable), 1e-12);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

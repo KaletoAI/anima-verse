@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { worldToLocalXZ } from '@anima/scene-render';
+import { tileDatumStep, worldToLocalXZ } from '@anima/scene-render';
 import type { CutoutHandle, SceneModelSpec, SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
@@ -123,6 +123,45 @@ export function footprintCentre(
   if (typeof z !== 'number' || !Number.isFinite(z)) return null;
   const y = worldGroundAt ? worldGroundAt(x, z) : 0;
   return new THREE.Vector3(x, Number.isFinite(y) ? y : 0, z);
+}
+
+/**
+ * THE TILE'S DATUM ARRIVED LATE, OR MOVED — put the whole frame back on the
+ * ground under its own pin (user finding 2026-08-24, the floating "Haus von
+ * Kai"; the law is `@anima/scene-render` `tileDatumStep`).
+ *
+ * `buildTile` reads the pin's ground ONCE (`footprintCentre`) and freezes it
+ * into `tile.center.y` and the group's position — but on a fresh load a tile is
+ * built before the 2 m height tiles under it land, and after a re-bake the
+ * ground under a plot moves while the tile keeps standing on the old number.
+ * A placement that carries a LIFT does not care (`lift = ground − datum`, so
+ * the datum cancels), which is why `reliftScene` alone made the interior look
+ * right and left the BUILDING — the one thing § A16.9 does not lift, because it
+ * IS the plot — hanging in the air by exactly the datum's error.
+ *
+ * The probe existed until "Ein Boden" E3: `main.relevelTiles` compared
+ * `footprintCentre(loc).y` against `tile.center.y` every frame and rebuilt the
+ * tile when it moved. It was deleted with the ground plate whose drape its
+ * SECOND clause watched. This is its first clause, without the rebuild.
+ *
+ * WHAT MOVES HERE: the frame and nothing else — so every mesh hanging in the
+ * group travels with it, and the re-lift that runs right after takes the same
+ * amount straight back off every lifted placement (they end up at
+ * `ground(anchor) + bottom_y`, the very number they had). What a mounted SCENE
+ * composed in world coordinates instead of hanging in the group is the scene's
+ * own bookkeeping and rides along in `sceneRecipe.reliftScene`, which is handed
+ * this return value for exactly that reason.
+ *
+ * Returns the move, 0 when the field has nothing new (or nothing at all) to
+ * say — a tile evicted from the cache keeps the datum it stands on.
+ */
+export function redatumTile(tile: Tile): number {
+  const step = tileDatumStep(tile.center.y, tile.center.x, tile.center.z,
+                             worldGroundAt);
+  if (!step.delta) return 0;
+  tile.center.y = step.datum;
+  tile.group.position.y = step.datum;
+  return step.delta;
 }
 
 /** Footprint rotation in RADIANS, the world-map convention of § A1.1 — the

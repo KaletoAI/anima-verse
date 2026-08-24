@@ -38,7 +38,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, redatumTile, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -877,11 +877,24 @@ async function startApp(username: string, role: string) {
     // that answer until the next remount. `heightRevision` counts up when the
     // overview lands and again with every batch of tiles; on a change the
     // scene is put back on the ground exactly as the world props below are.
+    //
+    // AND THE TILE'S OWN DATUM WITH IT (user finding 2026-08-24, the floating
+    // "Haus von Kai"). `tile.center.y` is the same kind of one-shot height
+    // sample, read when the tile was BUILT, and it is what the building model
+    // hangs on: § A16.9 does not lift it, because it IS the plot. So the datum
+    // is re-read first (`redatumTile` — the frame moves), the placements are
+    // re-lifted after it (`reliftScene` — they take the frame's move straight
+    // back off), and the two together are the state a tile built with the
+    // finished field would have had. Every tile, not only the mounted ones:
+    // the label, the figure ladder and the entry offer read the same datum.
     const heightRev = terrainGround.heightRevision();
     const heightMoved = heightRev !== groundDrapedRev;
     for (const tile of tiles.values()) {
+      if (heightMoved) {
+        const datumMove = redatumTile(tile);
+        if (tile.placedModels) reliftScene(tile, datumMove);
+      }
       if (!tile.placedModels) continue;   // no mounted scene, nothing to swap
-      if (heightMoved) reliftScene(tile);
       const b = wantedBuildingTier(tile);
       if (buildingTierByLoc.get(tile.loc.id) !== b) {
         buildingTierByLoc.set(tile.loc.id, b);

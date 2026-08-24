@@ -20,8 +20,10 @@
 export { placeModelSpec } from './place'
 export type { PlaceOptions } from './place'
 
-export { flatGround, storeyGroundLift, storeyGroundRelift } from './storeyGround'
-export type { GroundSampler, StoreyGroundStep } from './storeyGround'
+export { flatGround, storeyGroundLift, storeyGroundRelift,
+  tileDatumStep } from './storeyGround'
+export type { GroundSampler, StoreyGroundStep,
+  TileDatumStep } from './storeyGround'
 
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 

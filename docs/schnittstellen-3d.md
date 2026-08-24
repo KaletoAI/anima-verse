@@ -3939,6 +3939,31 @@ also antwortet dieselbe Formel dort 0. Keine zweite Regel, keine Ausnahme.
   das Prop ans Ufer und die Sitzmarke nicht, säße die Figur in der Luft, wo der
   Stuhl einmal stand. Er wird an seinem EIGENEN Punkt gehoben.
 
+**Und das DATUM selbst ist auch nur eine Höhen-Abtastung** (Befundrunde
+2026-08-24, „Haus von Kai" schwebt). `datum` ist der Boden unter dem Anker-Pin,
+im 3D-Client `tile.center.y` — gelesen aus genau dem Feld, das spät eintrifft
+und bei jedem neuen Bake wieder wandert, und gelesen **einmal**, beim Bau der
+Kachel. Für alles mit einem `lift` ist das folgenlos: `lift = ground − datum`
+kürzt das Datum aus `datum + bottom_y + lift` heraus. Für das eine, das die
+Regel bewusst NICHT hebt — das Gebäudemodell, das ja das Grundstück IST —, ist
+das Datum die ganze Antwort, und ein veraltetes Datum ist exakt die Höhe, in der
+das Haus in der Luft hängt.
+
+Also trägt die Kachel ihr Datum genauso nach wie eine Platzierung ihren Lift
+(`tileDatumStep` in derselben Datei, `redatumTile` im Client, auf demselben
+`heightRevision`-Takt): **der RAHMEN wird bewegt, und die Nachhebung der
+Platzierungen zieht denselben Betrag sofort wieder ab** — jedes gehobene Objekt
+hängt IM Rahmen, wandert also mit und landet wieder auf `ground(anker) +
+bottom_y`. Nur Gebäude, Platten, Wände und Labels stehen danach woanders, und
+zwar dort, wo eine mit fertigem Feld gebaute Kachel sie hingestellt hätte. Die
+`fixed`-Marker sind das einzige, was der Rahmen nicht trägt (sie sind in
+WELT-Koordinaten komponiert) — die werden von `redatumTile` mitgeführt. „Nichts
+zu sagen" (kein Sampler, NaN) hält auch hier das Datum fest: eine aus dem Cache
+gefallene Kachel darf nicht auf die Welt-Null durchsacken. Der Vorgänger dieser
+Prüfung war `main.relevelTiles`; sie ging mit der Bodenplatte („Ein Boden" E3),
+deren Drapierung ihre zweite Klausel überwachte. Handzahlen:
+`client3d/scripts/smoke_walk_math.mjs` § S3.
+
 `offset_y` je Platzierung, `ground_offset_m` je Prop und `model_offset_y` je
 Diorama wirken **unverändert** weiter (Entscheidung 4 des Plans) — nur messen
 sie jetzt überall von derselben Null, und diese Null ist seit der Befundrunde
