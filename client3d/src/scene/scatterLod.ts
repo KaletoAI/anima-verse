@@ -342,6 +342,131 @@ export function instanceVisible(
 }
 
 /* ==========================================================================
+ * (V) THE VIEW CONE — what is BEHIND the player costs nothing (2026-08-24)
+ *
+ * THE FINDING. The binning had no view test at all: every instance inside the
+ * cull distance got a tier, a thinning roll and a place in an instance buffer,
+ * whether it stood in front of the camera or behind it. Measured on the
+ * reporting iGPU that is ~80 % waste — only about a fifth of the submitted
+ * mesh instances and 6…17 % of the billboards fall inside the horizontal
+ * field of view, and the rest is written into a buffer, uploaded and clipped.
+ * The scatter was ~11 ms of a 29 ms frame.
+ *
+ * WHY THE TEST IS A CONE AND NOT THE FRUSTUM. Three.js culls per OBJECT, and
+ * one scatter entry is ONE `InstancedMesh` spanning a whole wood — the frustum
+ * never rejects it. Testing the real frustum per instance would mean a
+ * projection per instance; a horizontal cone is two multiplications and a
+ * square root, and it is the axis that matters: the camera looks DOWN at the
+ * world, so the vertical half of a frustum test would reject almost nothing.
+ *
+ * WHY IT IS WIDENED AND WHY THE NEAR RING IS ALWAYS KEPT — both because a
+ * horizontal cone is a LIE about a camera that looks down:
+ *  - the margin (`SCATTER_CONE_MARGIN_RAD`) covers the LOD pass being at most
+ *    a ~10 Hz affair (`main.ts`): the picture may turn between two passes, and
+ *    a cone cut exactly at the frustum edge would open a bare wedge on every
+ *    turn. Shadows are NOT among the reasons — no stage of the scatter casts
+ *    one (`castShadow = false` on both meshes and on the billboards), which is
+ *    exactly what makes a horizontal test safe here in the first place.
+ *  - inside `SCATTER_CONE_NEAR_M` NOTHING is ever rejected. Under a steep
+ *    look-down the camera's forward direction projects to a short XZ vector
+ *    that points far past the ground the player is actually looking at, so
+ *    near instances can be "behind" the cone while being dead centre in the
+ *    picture. Keeping the near ring whole costs a handful of instances and
+ *    removes the whole class of error.
+ * ========================================================================== */
+
+/** How far the view cone is opened BEYOND half the horizontal field of view,
+ *  in radians (30°). See the section header for the two reasons. */
+export const SCATTER_CONE_MARGIN_RAD = (30 * Math.PI) / 180;
+
+/** Inside this distance the cone never rejects anything (metres). 40 m is
+ *  comfortably past the full-mesh band (35 m) and past the undergrowth's own
+ *  cull (60 m is that layer's, and it is not cone-tested at all), so the ring
+ *  the player can actually look down into is always complete. */
+export const SCATTER_CONE_NEAR_M = 40;
+
+/** The camera's horizontal view direction plus the cosine that opens the cone
+ *  — computed ONCE per LOD pass (`viewCone`) and handed to the per-instance
+ *  test, because a normalisation per instance is exactly the cost this test
+ *  exists to save. */
+export interface ScatterViewCone {
+  /** unit XZ forward, x component */
+  fwdX: number;
+  /** unit XZ forward, z component */
+  fwdZ: number;
+  /** cos of the half-angle; -1 accepts everything */
+  cosHalf: number;
+}
+
+/**
+ * The HORIZONTAL field of view of a perspective camera, in radians.
+ *
+ * Three.js states the VERTICAL one (`camera.fov`, in degrees) and the width
+ * follows from the aspect ratio: `tan(h/2) = tan(v/2) · aspect`. On a wide
+ * window that is a much bigger angle than the vertical one — which is why the
+ * cone is cut horizontally and the number may not be guessed.
+ *
+ * Junk in (a non-finite or non-positive fov or aspect) gives NaN out, which
+ * `viewCone` turns into a cone that accepts everything: a broken camera must
+ * draw too much, never too little.
+ */
+export function horizontalFovRad(vFovDeg: number, aspect: number): number {
+  if (!(vFovDeg > 0) || !(vFovDeg < 180) || !(aspect > 0)
+      || !Number.isFinite(aspect)) {
+    return NaN;
+  }
+  return 2 * Math.atan(Math.tan((vFovDeg * Math.PI) / 360) * aspect);
+}
+
+/**
+ * The cone of one LOD pass: the camera's forward direction flattened onto XZ
+ * and normalised, and the cosine of `hfov/2 + SCATTER_CONE_MARGIN_RAD`.
+ *
+ * THREE DEGENERATE CASES, all of them answered with "accept everything"
+ * (`cosHalf = -1`) rather than with an empty world:
+ *  - a forward vector with no horizontal component at all (a camera looking
+ *    straight down): there is no direction to test against.
+ *  - a non-finite `hfovRad` — see `horizontalFovRad`.
+ *  - a half-angle that has reached or passed 180°: the cone is the whole
+ *    plane, and `Math.cos` of anything past π would start CLOSING it again.
+ */
+export function viewCone(fwdX: number, fwdZ: number,
+                         hfovRad: number): ScatterViewCone {
+  const len = Math.sqrt(fwdX * fwdX + fwdZ * fwdZ);
+  if (!(len > 0) || !Number.isFinite(hfovRad) || !(hfovRad > 0)) {
+    return { fwdX: 0, fwdZ: 1, cosHalf: -1 };
+  }
+  const half = hfovRad / 2 + SCATTER_CONE_MARGIN_RAD;
+  if (half >= Math.PI) return { fwdX: fwdX / len, fwdZ: fwdZ / len, cosHalf: -1 };
+  return { fwdX: fwdX / len, fwdZ: fwdZ / len, cosHalf: Math.cos(half) };
+}
+
+/**
+ * Whether ONE instance at the horizontal offset (`dx`, `dz`) from the camera
+ * is worth binning — the per-instance half of the test, and the only part of
+ * it that runs in the inner loop.
+ *
+ * `fwdX`/`fwdZ` must be a UNIT XZ vector and `cosHalf` the cosine of the
+ * half-angle; both come from `viewCone`, once per pass. The comparison is
+ * written `dot ≥ cosHalf · len` rather than `dot / len ≥ cosHalf` to save a
+ * division — `len` is greater than `SCATTER_CONE_NEAR_M` by the time it is
+ * reached, so the sign of the inequality cannot flip.
+ *
+ * A NaN offset is KEPT, deliberately the opposite of the distance tests
+ * around it: those already refuse a degenerate instance, and a view test that
+ * silently dropped things would be the harder bug to find of the two.
+ */
+export function inViewCone(dx: number, dz: number,
+                           fwdX: number, fwdZ: number,
+                           cosHalf: number): boolean {
+  const d2 = dx * dx + dz * dz;
+  // The near ring, whole and unconditional — see the section header.
+  if (!(d2 > SCATTER_CONE_NEAR_M * SCATTER_CONE_NEAR_M)) return true;
+  const len = Math.sqrt(d2);
+  return dx * fwdX + dz * fwdZ >= cosHalf * len;
+}
+
+/* ==========================================================================
  * THE FAR IMPOSTORS (2026-08-15) — what stands BEYOND the cull line
  *
  * The cull distance ends the MESHES, and it used to end the wood with them: a

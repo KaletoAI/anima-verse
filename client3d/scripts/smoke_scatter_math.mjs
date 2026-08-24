@@ -999,6 +999,94 @@
  *        and not the rest of that table is what chose the hash.
  *
  * ============================================================================
+ * (V) THE VIEW CONE — what is behind the player is not binned (2026-08-24)
+ * ============================================================================
+ * The binning had no view test at all: every instance inside the cull distance
+ * got a tier, a thinning roll and a slot in an instance buffer, whether it
+ * stood in front of the camera or behind it. Measured on the reporting iGPU
+ * only ~20 % of the submitted mesh instances and 6…17 % of the billboards were
+ * inside the horizontal field of view; the rest was written, uploaded and
+ * clipped. Three functions, all pure, all in `scene/scatterLod.ts`.
+ *
+ * THE CLOSED FORM THIS SECTION DERIVES ITS THRESHOLDS FROM, so the expectation
+ * does NOT retrace the module's own `atan`/`cos` chain. With
+ *
+ *     u = tan(hfov/2) = tan(vfov/2) · aspect        (the horizontal fov)
+ *     a = hfov/2,  so  cos a = 1/√(1+u²),  sin a = u/√(1+u²)
+ *
+ * and the margin exactly 30° (cos 30° = √3/2, sin 30° = 1/2):
+ *
+ *     cosHalf = cos(a + 30°) = cos a · √3/2 − sin a · 1/2
+ *             = (√3 − u) / (2·√(1+u²))
+ *
+ * (V1) horizontalFovRad — the aspect is really read.
+ *      - (90°, 1): tan 45° = 1, ·1 = 1, atan 1 = 45° ⇒ hfov = 90° = π/2.
+ *      - (2·atan(0.5) = 53.13010235415598°, 2): tan of the half is 0.5, ·2 = 1
+ *        ⇒ hfov = π/2 again. The same answer from another pair, so a function
+ *        ignoring `aspect` cannot pass both.
+ *      - (90°, 2): 1·2 = 2 ⇒ hfov = 2·atan 2 = 2.214297435588181 rad
+ *        (126.86989764584402°).
+ *      - JUNK IS NaN, not a guess: fov 0 / 180 / negative / NaN, aspect 0 /
+ *        negative / NaN / Infinity. `viewCone` turns that into a cone that
+ *        accepts everything — a broken camera draws too much, never too little.
+ *
+ * (V2) viewCone — the direction is normalised once, the cosine comes from the
+ *      formula above.
+ *      - (0, −2) at hfov π/2 ⇒ fwd (0, −1) exactly (a length of 2 divided out),
+ *        cosHalf = (√3 − 1)/(2√2) = 0.7320508075688772 / 2.8284271247461903
+ *        = 0.25881904510252074 — which is cos 75° = (√6 − √2)/4, i.e. 45° of
+ *        half-fov plus the 30° margin. Both spellings are asserted.
+ *      - (3, 4) ⇒ (0.6, 0.8): the 3-4-5 triangle, so the normalisation is
+ *        checked on a vector no rounding can hide.
+ *      - THE CLIENT'S OWN CAMERA: `new THREE.PerspectiveCamera(45, …)`
+ *        (`scene/engine.ts`) on a 16:9 window. tan 22.5° = √2 − 1 (half-angle
+ *        formula), so u = 16(√2 − 1)/9 = 0.7363796664410581 and
+ *        cosHalf = (√3 − u)/(2√(1+u²)) ≈ 0.4008. The half-angle that belongs
+ *        to it lies between 66° and 67° (cos 66° = 0.40674 is inside,
+ *        cos 67° = 0.39073 is not) — checked as such, so the number stays a
+ *        statement about an ANGLE rather than a recorded decimal.
+ *      - THE THREE DEGENERATE CASES, all "accept everything" (cosHalf = −1):
+ *        a forward vector of length 0 (a camera looking straight down), a
+ *        non-finite or non-positive hfov, and a half-angle at or past 180°
+ *        (hfov 320° ⇒ half 190°, where `Math.cos` would start CLOSING the cone
+ *        again: cos 190° = −0.985 would reject the 175° direction that the
+ *        360°-wide cone plainly contains).
+ *
+ * (V3) inViewCone — THE 40 m NEAR KEEP, on fwd (0, 1) and cos 75°.
+ *      - (0, −39): dead behind, 39 m ⇒ kept. (0, −40): kept, the line is
+ *        inclusive. (0, −40.001): dropped — dot = −40.001 against
+ *        cos 75° · 40.001 = 10.353.
+ *      - (40, 0) dead sideways: kept. (41, 0): dot = 0 against 10.61 ⇒ dropped.
+ *      - A NaN offset is KEPT: `!(NaN > 1600)` is true, and the distance tests
+ *        around the call already refuse a degenerate instance.
+ *
+ * (V4) inViewCone — THE ANGLE, both sides of the line and both sides of the
+ *      axis. A point at 100 m and θ off the forward axis is
+ *      (100 sin θ, 100 cos θ), so `dot/len` is exactly cos θ and the test is
+ *      `cos θ ≥ cos 75°`:
+ *        θ = 0 ⇒ in, θ = ±74.9° ⇒ in, θ = ±75.1° ⇒ out, θ = 180° ⇒ out.
+ *      A tenth of a degree either side and not the line itself: at exactly 75°
+ *      the two sides of the comparison are the same real number reached by two
+ *      different float paths, so which way it falls is a matter of one ulp and
+ *      pinning it would pin the rounding, not the rule. THE `≥` ITSELF is
+ *      pinned exactly where floats are exact instead — with cosHalf = 0 (a
+ *      90° half-cone) the point (100, 0) gives dot = 0 ≥ 0 and is IN, while
+ *      (100, −0.001) gives −0.001 and is OUT.
+ *
+ * (V5) THE MARGIN IS REAL — the red counter-check for it. On the 90° fixture
+ *      the frustum edge is 45°; a tree at 50° off-axis is inside the cone
+ *      (cos 50° = 0.6428 ≥ 0.2588) and would be dropped by a mutant whose
+ *      margin is 0 (0.6428 ≥ cos 45° = 0.7071 is false). That wedge is what a
+ *      turn between two LOD passes would show as bare ground. Shadows play no
+ *      part in the margin: no stage of the scatter casts one.
+ *
+ * (V6) THE NEAR KEEP IS REAL — the second mutant, with its line deleted. A
+ *      tuft 5 m dead behind the camera (0, −5): the real rule keeps it, the
+ *      mutant drops it (dot = −5 against cos 75° · 5 = 1.294). Under a steep
+ *      look-down the XZ forward points far past the ground actually in the
+ *      picture, which is the whole reason the near ring is never cut.
+ *
+ * ============================================================================
  * (J) THE DETAIL DISTANCES AS A SETTING — `client3d/src/game/prefs.ts`
  * ============================================================================
  * The three distances are a LOCAL view setting (localStorage), so the same
@@ -1190,6 +1278,24 @@ function axisAlignedPropBox(source) {
   return source.replace(
     '  const cos = Math.cos(yawRad)\n  const sin = Math.sin(yawRad)\n',
     '  const cos = 1\n  const sin = 0\n');
+}
+
+/** Section (V5)'s mutant: the view cone is cut exactly at the frustum edge.
+ *  The LOD pass runs at most ten times a second, so a camera that turns
+ *  between two passes would show a bare wedge along the edge of the picture
+ *  until the next one. */
+function noConeMargin(source) {
+  return source.replace('(30 * Math.PI) / 180', '0');
+}
+
+/** Section (V6)'s mutant: the 40 m near keep is deleted, so the horizontal
+ *  cone alone decides for every instance. Under a steep look-down the XZ
+ *  forward direction points far past the ground the player is looking at, and
+ *  the wood at their feet is culled. */
+function noConeNearKeep(source) {
+  return source.replace(
+    '  if (!(d2 > SCATTER_CONE_NEAR_M * SCATTER_CONE_NEAR_M)) return true;\n',
+    '');
 }
 
 /** Section (M6)'s mutant: the clearance is thrown away and the old "is its
@@ -2408,6 +2514,113 @@ async function main() {
     Math.abs(sinAt120 - 250) > 12.5, true);
   check('I5 …while at share 0.4 it would have passed unnoticed',
     Math.abs(drawn(sinHash.instanceVisible, 105, DEF).length - 400) <= 20, true);
+
+  console.log('\n(V) the view cone — what is behind the player is not binned');
+  const {
+    SCATTER_CONE_MARGIN_RAD, SCATTER_CONE_NEAR_M,
+    horizontalFovRad, viewCone, inViewCone,
+  } = await loadTs(LOD_SRC);
+  const DEG = Math.PI / 180;
+  /** The closed form of the header — cos(atan(u) + 30°) without an atan. */
+  const coneCos = (u) => (Math.sqrt(3) - u) / (2 * Math.sqrt(1 + u * u));
+  /** The 90° fixture: half-fov 45°, cone half-angle 75°. */
+  const COS75 = coneCos(1);
+  /** A point 100 m out, θ degrees off the +Z axis (positive θ towards +X). */
+  const at100 = (thetaDeg) => [100 * Math.sin(thetaDeg * DEG),
+    100 * Math.cos(thetaDeg * DEG)];
+  /** The test on the 90° fixture, looking down +Z. */
+  const seen = (dx, dz, cosHalf = COS75) => inViewCone(dx, dz, 0, 1, cosHalf);
+
+  check('V the margin is 30 degrees', SCATTER_CONE_MARGIN_RAD, Math.PI / 6);
+  check('V the near keep is 40 m', SCATTER_CONE_NEAR_M, 40);
+
+  // (V1) the horizontal fov, and the aspect is really read
+  check('V1 45 deg half-fov on a square window -> 90 deg',
+    horizontalFovRad(90, 1), Math.PI / 2);
+  check('V1 …and the same 90 deg from a narrow fov on a 2:1 window',
+    horizontalFovRad(2 * Math.atan(0.5) / DEG, 2), Math.PI / 2);
+  check('V1 90 deg on a 2:1 window is 2*atan(2), not 90',
+    horizontalFovRad(90, 2), 2 * Math.atan(2));
+  check('V1 …which is 126.86989764584402 deg',
+    horizontalFovRad(90, 2) / DEG, 126.86989764584402, 1e-9);
+  for (const [fov, aspect, label] of [
+    [0, 1, 'a fov of 0'], [180, 1, 'a fov of 180'], [-45, 1, 'a negative fov'],
+    [NaN, 1, 'a NaN fov'], [45, 0, 'an aspect of 0'],
+    [45, -2, 'a negative aspect'], [45, NaN, 'a NaN aspect'],
+    [45, Infinity, 'an infinite aspect'],
+  ]) {
+    check(`V1 ${label} is NaN, not a guess`,
+      Number.isNaN(horizontalFovRad(fov, aspect)), true);
+  }
+
+  // (V2) the cone of one pass
+  check('V2 a forward of length 2 is normalised',
+    viewCone(0, -2, Math.PI / 2), { fwdX: 0, fwdZ: -1, cosHalf: COS75 });
+  check('V2 …and the 3-4-5 triangle too',
+    [viewCone(3, 4, Math.PI / 2).fwdX, viewCone(3, 4, Math.PI / 2).fwdZ],
+    [0.6, 0.8]);
+  check('V2 the closed form IS cos 75 deg',
+    COS75, (Math.sqrt(6) - Math.sqrt(2)) / 4);
+  check('V2 …i.e. 45 deg of half-fov plus the 30 deg margin',
+    viewCone(0, 1, Math.PI / 2).cosHalf, Math.cos(75 * DEG));
+  // the client's own camera: fov 45 on 16:9, tan 22.5 deg = sqrt(2) - 1
+  const U_CLIENT = (16 * (Math.SQRT2 - 1)) / 9;
+  const clientCone = viewCone(0, 1, horizontalFovRad(45, 16 / 9));
+  check('V2 the client camera (45 deg, 16:9) matches the closed form',
+    clientCone.cosHalf, coneCos(U_CLIENT));
+  check('V2 …and its half-angle lies between 66 and 67 deg',
+    [Math.cos(66 * DEG) >= clientCone.cosHalf,
+      Math.cos(67 * DEG) >= clientCone.cosHalf],
+    [true, false]);
+  check('V2 a camera looking straight down accepts everything',
+    viewCone(0, 0, Math.PI / 2), { fwdX: 0, fwdZ: 1, cosHalf: -1 });
+  for (const hfov of [NaN, Infinity, 0, -1]) {
+    check(`V2 an hfov of ${hfov} accepts everything`,
+      viewCone(0, 1, hfov).cosHalf, -1);
+  }
+  check('V2 a 320 deg fov opens the cone fully instead of closing it again',
+    viewCone(1, 0, 320 * DEG), { fwdX: 1, fwdZ: 0, cosHalf: -1 });
+  check('V2 …where cos(190 deg) would have rejected a direction 175 deg off',
+    Math.cos(175 * DEG) >= Math.cos(190 * DEG), false);
+
+  // (V3) the 40 m near keep
+  check('V3 39 m dead behind is kept', seen(0, -39), true);
+  check('V3 …40 m too, the line is inclusive', seen(0, -40), true);
+  check('V3 …40.001 m is not', seen(0, -40.001), false);
+  check('V3 40 m dead sideways is kept', seen(40, 0), true);
+  check('V3 …41 m is not', seen(41, 0), false);
+  check('V3 a NaN offset is kept, not silently dropped',
+    [seen(NaN, 0), seen(0, NaN)], [true, true]);
+
+  // (V4) the angle, both sides of the line and both sides of the axis
+  check('V4 dead ahead at 100 m is in', seen(...at100(0)), true);
+  check('V4 74.9 deg off is in, either way',
+    [seen(...at100(74.9)), seen(...at100(-74.9))], [true, true]);
+  check('V4 75.1 deg off is out, either way',
+    [seen(...at100(75.1)), seen(...at100(-75.1))], [false, false]);
+  check('V4 dead behind at 100 m is out', seen(...at100(180)), false);
+  check('V4 the >= is inclusive, pinned where floats are exact',
+    [seen(100, 0, 0), seen(100, -0.001, 0)], [true, false]);
+
+  // (V5) the margin, against a mutant that cuts at the frustum edge
+  const tightCone = await loadTs(LOD_SRC, noConeMargin);
+  const tightCos = tightCone.viewCone(0, 1, Math.PI / 2).cosHalf;
+  check('V5 the "no margin" mutant cuts at cos 45 deg', tightCos, Math.SQRT1_2);
+  check('V5 …and drops a tree 50 deg off the axis',
+    tightCone.inViewCone(...at100(50), 0, 1, tightCos), false);
+  checkNot('V5 …which is NOT what the real cone answers there',
+    seen(...at100(50)), false);
+
+  // (V6) the near keep, against a mutant with the line deleted
+  const noKeep = await loadTs(LOD_SRC, noConeNearKeep);
+  check('V6 the "no near keep" mutant culls a tuft 5 m behind the camera',
+    noKeep.inViewCone(0, -5, 0, 1, COS75), false);
+  checkNot('V6 …which is NOT what the real rule answers there',
+    seen(0, -5), false);
+  check('V6 …and beyond 40 m the two agree again',
+    [noKeep.inViewCone(0, -50, 0, 1, COS75), seen(0, -50),
+      noKeep.inViewCone(...at100(10), 0, 1, COS75), seen(...at100(10))],
+    [false, false, true, true]);
 
   console.log('\n(J) the detail distances as a local setting — prefs.ts');
   const {

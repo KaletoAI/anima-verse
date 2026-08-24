@@ -136,6 +136,26 @@ const FIGURE_TIER_FAR = 35;
 /** Tier re-evaluation cadence — second-scale like the talk target: a swap
  *  loads a GLB anyway, per-frame checks would buy nothing. */
 const LOD_TICK_MS = 1000;
+/**
+ * …but the SCATTER re-bins on movement too (perf finding 2026-08-24).
+ *
+ * Its LOD pass is not a mesh swap: since the view cone it also decides which
+ * instances are in front of the camera at all (`scene/scatterLod.ts`, section
+ * V), and that answer goes stale the moment the picture turns. On the plain
+ * 1 Hz beat a 45° turn would leave a bare wedge standing for up to a second.
+ * The 30° margin the cone is widened by covers a turn of that size, so these
+ * two thresholds and that margin are one decision:
+ *  - `SCATTER_LOD_YAW_RAD` 10°: well inside the margin, and coarse enough that
+ *    the soft yaw lerp of a single 45° step re-bins about four times.
+ *  - `SCATTER_LOD_MOVE_M` 8 m: a fifth of the 40 m near ring the cone never
+ *    culls inside of, so nothing can walk out of that ring between two passes.
+ *  - `SCATTER_LOD_MIN_MS` 100: the pass costs a whole frame at once (that is
+ *    the finding it comes from), so it may run at most ten times a second
+ *    however wildly the camera is thrown about.
+ */
+const SCATTER_LOD_YAW_RAD = (10 * Math.PI) / 180;
+const SCATTER_LOD_MOVE_M = 8;
+const SCATTER_LOD_MIN_MS = 100;
 /** How often the performance readout is refreshed (Etappe 5). Three to four
  *  updates a second: fast enough that a stutter shows up while it is felt,
  *  slow enough that the digits stay readable instead of blurring. */
@@ -881,18 +901,13 @@ async function startApp(username: string, role: string) {
     // from the area's distance in `scene/scatterLod.ts`. The numbers live
     // there and not here because that is the module the hysteresis and the
     // budget are TESTED in — a threshold that decides a swap belongs next to
-    // the function that swaps on it. This tick stays the driver.
+    // the function that swaps on it.
     //
-    // TIMED WHILE THE READOUT IS ON (perf finding 2026-08-24). This one call
-    // walks every instance of every scatter entry TWICE (the mesh binning and
-    // the billboard binning) and re-fills their instance buffers, so it is the
-    // one place the scatter can cost a whole frame at once — a 1 Hz pass is
-    // invisible in an average and plainly visible as a stutter. Two timestamps
-    // a second, and only when somebody is looking (`perfEnabled`): a display
-    // nobody reads may not cost a frame, which is this readout's own rule.
-    const lodT0 = perfEnabled() ? performance.now() : 0;
-    terrainGround.tickScatterLod(engine.camera.position);
-    if (lodT0) scatterLodMs = performance.now() - lodT0;
+    // …but this tick is only its SLOWEST driver since the view cone: it also
+    // runs on a turn or a walk of the camera (`runScatterLod`, the frame hook
+    // below), and this beat is the floor that re-bins a camera which has not
+    // moved at all — heights that landed, entries that were rebuilt.
+    runScatterLod();
     // …and on the same beat the AUTHORED world props (§ A9a): the same three
     // distance classes with the same hysteresis, only scaled up — a landmark
     // that vanishes at the tuft's cull line is not a landmark. The relief is
@@ -941,8 +956,55 @@ async function startApp(username: string, role: string) {
     tiers: { full: 0, low: 0 } as TierCounts,
     scatter: emptyScatterCounts() as ScatterCounts,
   };
-  /** How long the last LOD pass took (ms) — written beside the tick above. */
+  /** How long the last scatter LOD pass took (ms) — written by
+   *  `runScatterLod`, whichever of its two drivers called it. */
   let scatterLodMs = 0;
+  /** The camera of the last pass: when it ran, where it stood, which way it
+   *  looked. The pair the movement driver measures against — see the
+   *  `SCATTER_LOD_*` constants for why those two quantities and no others. */
+  let scatterLodAt = 0;
+  let scatterLodYaw = Number.NaN;
+  const scatterLodPos = new THREE.Vector3(NaN, NaN, NaN);
+  /**
+   * Re-bin the ground scatter against the camera as it stands NOW.
+   *
+   * TIMED WHILE THE READOUT IS ON (perf finding 2026-08-24). This one call
+   * walks every instance of every scatter entry TWICE (the mesh binning and
+   * the billboard binning) and re-fills their instance buffers, so it is the
+   * one place the scatter can cost a whole frame at once — a pass is invisible
+   * in an average and plainly visible as a stutter. Only when somebody is
+   * looking (`perfEnabled`): a display nobody reads may not cost a frame,
+   * which is this readout's own rule.
+   */
+  function runScatterLod(): void {
+    const t0 = perfEnabled() ? performance.now() : 0;
+    terrainGround.tickScatterLod(engine.camera);
+    // …the closing stamp is taken either way: the throttle of the movement
+    // driver needs it, and only the SUBTRACTION is the readout's.
+    const t1 = performance.now();
+    if (t0) scatterLodMs = t1 - t0;
+    scatterLodAt = t1;
+    scatterLodYaw = engine.yaw;
+    scatterLodPos.copy(engine.camera.position);
+  }
+  // THE MOVEMENT DRIVER (perf finding 2026-08-24). In a frame hook and not on
+  // a timer of its own, because the question is about the camera of THIS frame
+  // and the hooks run after the camera update and before the render — the same
+  // placement the terrain selection uses. Everything it decides is in the
+  // three `SCATTER_LOD_*` constants; the first frame runs unconditionally
+  // (nothing has been binned yet), and after that it is a turn, a walk, or the
+  // 1 Hz floor above.
+  engine.addFrameHook(() => {
+    const now = performance.now();
+    if (now - scatterLodAt < SCATTER_LOD_MIN_MS) return;
+    if (Number.isFinite(scatterLodYaw)
+        && !(Math.abs(engine.yaw - scatterLodYaw) > SCATTER_LOD_YAW_RAD)
+        && !(engine.camera.position.distanceTo(scatterLodPos)
+             > SCATTER_LOD_MOVE_M)) {
+      return;
+    }
+    runScatterLod();
+  });
   function measurePerfHeavy() {
     const placed: TierSample[] = [];
     for (const tile of tiles.values()) {

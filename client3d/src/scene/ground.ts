@@ -104,10 +104,13 @@ import { applyNaturalGround, setNaturalGroundField } from './naturalGround';
 import { isWaterClass } from './naturalGroundMath';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
-import { IMPOSTOR_FAR_M, impostorQuad, impostorVisible, impostorYaw,
-  instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS, scatterGroundOffset,
-  scatterSway, scatterTargetH } from './scatterLod';
-import type { ImpostorQuad, InstanceTier, ScatterLodCfg } from './scatterLod';
+import { horizontalFovRad, IMPOSTOR_FAR_M, impostorQuad, impostorVisible,
+  impostorYaw, instanceTier, instanceVisible, inViewCone,
+  SCATTER_LOD_DEFAULTS, scatterGroundOffset, scatterSway, scatterTargetH,
+  viewCone } from './scatterLod';
+import type { ImpostorQuad, InstanceTier, ScatterLodCfg,
+  ScatterViewCone } from './scatterLod';
+import { markInstanceUpload } from './instanceUpload';
 import { createTerrainLod } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterfall } from './waterfall';
@@ -835,8 +838,15 @@ export interface Ground {
    * on the very positions its meshes stand on. That stage is asked FIRST in
    * `binProp`, because the entry-wide early-out that switches a distant wood
    * off is exactly the case its billboards exist for.
+   *
+   * AND SINCE 2026-08-24 IT IS ALSO A VIEW TEST. The whole camera comes in
+   * rather than only its position: an instance outside the horizontal view
+   * cone and farther than 40 m is not binned at all (`scatterLod.inViewCone`,
+   * section (V) there). About four fifths of what this pass used to write into
+   * instance buffers was clipped by the rasteriser a moment later, and the
+   * buffers had to be uploaded first.
    */
-  tickScatterLod(cameraPos: THREE.Vector3): void;
+  tickScatterLod(camera: THREE.PerspectiveCamera): void;
   /**
    * The three detail distances the player set (`game/prefs.ts`, localStorage).
    *
@@ -1237,6 +1247,17 @@ export function createGround(): Ground {
    *  into the world binned, not with every instance at full detail), and that
    *  runs on the terrain refetch, not on the tick. `null` = no tick yet. */
   let lodCam: THREE.Vector3 | null = null;
+  /** Which way the camera LOOKED at that same tick, plus the cosine that opens
+   *  the view cone (`scatterLod.viewCone`, perf finding 2026-08-24). It travels
+   *  exactly as `lodCam` does — computed once per pass, read again by a rebuild
+   *  and by `setScatterLod` — for the same reason: an instance binned against
+   *  another camera's direction is binned wrong. The starting value accepts
+   *  EVERYTHING, so a ground built before the first tick draws a whole world
+   *  rather than a wedge of one. */
+  let lodCone: ScatterViewCone = viewCone(0, 1, NaN);
+  /** Scratch for the camera's forward direction — `getWorldDirection` writes
+   *  into it once per pass rather than allocating a vector per pass. */
+  const lodFwd = new THREE.Vector3();
   /** The three detail distances in force. The module's DEFAULTS until the HUD
    *  hands the player's own in (`setScatterLod`) — this file must draw a
    *  ground before anything has read `localStorage`, and 35/45/120 is what a
@@ -1965,7 +1986,9 @@ export function createGround(): Ground {
     for (let i = 0; i < prop.baseCount; i += 1) copyMatrix(prop.srcMatrix, i, buf, i);
     prop.low.count = prop.baseCount;
     prop.low.visible = prop.baseCount > 0;
-    prop.low.instanceMatrix.needsUpdate = true;
+    // The whole buffer here, and stated as such rather than left to the
+    // default: this is the one pass that really fills every slot.
+    markInstanceUpload(prop.low.instanceMatrix, prop.baseCount, 16);
     mountUrl(prop, prop.loUrl, false);
   }
 
@@ -2061,6 +2084,13 @@ export function createGround(): Ground {
       // discipline of `binProp` and `instanceTier`, and the reason a
       // degenerate instance costs no NaN matrix.
       if (!(d2 > cull2 && d2 <= far2)) continue;
+      // THE VIEW CONE, before the thinning hash and before the matrix: every
+      // billboard of this stage is past the 40 m near ring by definition, so
+      // this is where the test pays most — 6…17 % of the billboards were
+      // inside the horizontal field of view when it was measured.
+      if (!inViewCone(dx, dz, lodCone.fwdX, lodCone.fwdZ, lodCone.cosHalf)) {
+        continue;
+      }
       const d = Math.sqrt(d2);
       if (!impostorVisible(i, d, cfg)) continue;
       impQ.setFromAxisAngle(impUp, impostorYaw(px, pz, cam.x, cam.z));
@@ -2075,7 +2105,11 @@ export function createGround(): Ground {
     // ALWAYS uploaded when anything is drawn, unlike the mesh buffers: every
     // billboard turns with the camera, so a tick that drew something wrote
     // something new. See `ImpostorLayer` for why there is no ledger.
-    if (n > 0) layer.mesh.instanceMatrix.needsUpdate = true;
+    // …but only the PREFIX that was written (perf finding 2026-08-24): the
+    // buffer is sized for the entry's whole instance count and the binning
+    // fills the first `n` slots of it, so uploading the rest is bus traffic
+    // for matrices nothing draws. See `markInstanceUpload`.
+    if (n > 0) markInstanceUpload(layer.mesh.instanceMatrix, n, 16);
   }
 
   /**
@@ -2101,7 +2135,12 @@ export function createGround(): Ground {
    *  - the buffers are always refilled, the UPLOAD is not: `needsUpdate` is
    *    set per mesh and only when that mesh's set of instances really changed
    *    (an instance entering or leaving its slot). A camera standing still
-   *    costs no vertex-buffer traffic at all.
+   *    costs no vertex-buffer traffic at all — and an upload that does happen
+   *    sends only the prefix that was written (`markInstanceUpload`).
+   *  - AND SINCE 2026-08-24 A FOURTH QUESTION, asked last because it is the
+   *    cheapest to skip: is the instance in front of the camera at all
+   *    (`inViewCone`)? About four fifths of the instances this loop used to
+   *    write were outside the horizontal field of view.
    */
   function binProp(prop: ScatterProp, cam: THREE.Vector3): void {
     const cfg = lodCfg;
@@ -2160,7 +2199,15 @@ export function createGround(): Ground {
         if (d < minD) minD = d;
         const prev = prop.tiers[i] as InstanceTier;
         tier = instanceTier(d, hasFarHalf && prev === 2 ? 1 : prev, cfg);
-        if (tier !== 2 && instanceVisible(i, d, cfg)) {
+        // THE VIEW CONE LAST, and it decides the SLOT and never the TIER
+        // (perf finding 2026-08-24). The tier is what this instance deserves
+        // at its distance and is remembered across ticks by the hysteresis;
+        // making a turned-away instance "hidden" would send it through the
+        // 0.92·cull unhide band on the way back and open a gap the moment the
+        // player turns round. Not drawn is a view state, and view states are
+        // recomputed from scratch every pass.
+        if (tier !== 2 && instanceVisible(i, d, cfg)
+            && inViewCone(dx, dz, lodCone.fwdX, lodCone.fwdZ, lodCone.cosHalf)) {
           // An instance that deserves the full mesh is drawn on the cheap one
           // as long as the full one is not there yet — a gap would be worse
           // than a coarse tree, and the tick after the arrival moves it over.
@@ -2184,11 +2231,15 @@ export function createGround(): Ground {
     }
     prop.low.count = loN;
     prop.low.visible = loN > 0;
-    if (loDirty) prop.low.instanceMatrix.needsUpdate = true;
+    // The written PREFIX and not the whole array (`markInstanceUpload`): the
+    // buffer holds a slot for every instance of the entry, the binning fills
+    // the drawn ones at the front, and with the view cone in place that front
+    // is a small fraction of it.
+    if (loDirty) markInstanceUpload(prop.low.instanceMatrix, loN, 16);
     if (prop.high) {
       prop.high.count = hiN;
       prop.high.visible = hiN > 0;
-      if (hiDirty) prop.high.instanceMatrix.needsUpdate = true;
+      if (hiDirty) markInstanceUpload(prop.high.instanceMatrix, hiN, 16);
     }
     // WHAT TO LOAD hangs on the NEAREST instance of the entry, not on where
     // the area's edge lies: the cheap mesh as soon as anything of the entry is
@@ -3245,7 +3296,8 @@ export function createGround(): Ground {
       holeOn.value = rect ? 1 : 0;
       if (rect) holeRect.value.set(rect[0], rect[1], rect[2], rect[3]);
     },
-    tickScatterLod(cameraPos) {
+    tickScatterLod(camera) {
+      const cameraPos = camera.position;
       // Remembered for the next REBUILD, which happens outside this tick and
       // has to bin its fresh entries against a camera (see `buildScatter`).
       // A copy, not the live vector: it is read a second later from another
@@ -3253,6 +3305,12 @@ export function createGround(): Ground {
       // camera by then.
       if (!lodCam) lodCam = new THREE.Vector3();
       lodCam.copy(cameraPos);
+      // …and the DIRECTION, on the same terms and for the same reason. Both
+      // numbers are read off the camera here and nowhere else, so the cone the
+      // binning uses is always the cone of the pass that set the position.
+      camera.getWorldDirection(lodFwd);
+      lodCone = viewCone(lodFwd.x, lodFwd.z,
+                         horizontalFovRad(camera.fov, camera.aspect));
       for (const a of areaMeshes) {
         for (const prop of a.scatter) binProp(prop, cameraPos);
       }

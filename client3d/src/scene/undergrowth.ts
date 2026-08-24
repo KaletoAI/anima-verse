@@ -80,6 +80,7 @@
 import * as THREE from 'three';
 import { pointInRing, scatterInstances } from '@anima/scene-render';
 import type { Point2, ScatterFootprint } from '@anima/scene-render';
+import { markInstanceUpload } from './instanceUpload';
 import { applyOcclusionFade } from './occlusion';
 import { instanceHash, UNDERGROWTH_CELL_M, UNDERGROWTH_CELL_RADIUS_M,
   undergrowthCellCount, UNDERGROWTH_CULL_M, undergrowthDensityPer100m2,
@@ -1276,8 +1277,13 @@ export function createUndergrowthField(opts: {
     layer.mesh.count = n;
     layer.mesh.visible = n > 0;
     if (dirty) {
-      layer.mesh.instanceMatrix.needsUpdate = true;
-      if (layer.mesh.instanceColor) layer.mesh.instanceColor.needsUpdate = true;
+      // Only the PREFIX the loop above wrote (`markInstanceUpload`, perf
+      // finding 2026-08-24): a cell holds up to 8 000 tufts and the binning
+      // compacts the drawn ones to the front, so uploading the whole array
+      // sent matrices for tufts that are 60 m away and not drawn. Sixteen
+      // floats per matrix, three per colour — the range is in ARRAY ELEMENTS.
+      markInstanceUpload(layer.mesh.instanceMatrix, n, 16);
+      markInstanceUpload(layer.mesh.instanceColor, n, 3);
     }
   }
 
