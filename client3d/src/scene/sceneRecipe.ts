@@ -21,7 +21,7 @@ import {
   deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld, worldGroundSampler,
   worldWaterSampler,
-  type PlacedSceneModel, type RoomFloor, type Tile,
+  type PlacedSceneModel, type RoomFloor, type StairWorldLink, type Tile,
 } from './tiles';
 import { SubmergedGhost } from './submergedGhost';
 import { ghostCutY } from '../game/walk';
@@ -153,8 +153,8 @@ function dropPlacementGhost(rec: PlacedSceneModel): void {
  * the ground under its pin. Everything hanging in the group came along for that
  * ride, so the re-lift below simply takes it back off again — but the scene
  * composed three things in WORLD coordinates that the group does not parent,
- * and those are carried here: the room doors, the elevator stops and the
- * `fixed` prop markers. A moved datum also re-derives every room, because a
+ * and those are carried here: the room doors, the elevator stops, the stair
+ * landings and the `fixed` prop markers. A moved datum also re-derives every room, because a
  * room whose floor is DECLARED measures from that very datum.
  */
 export function reliftScene(tile: Tile, datumDelta = 0): void {
@@ -163,6 +163,7 @@ export function reliftScene(tile: Tile, datumDelta = 0): void {
   if (datumDelta) {
     for (const p of tile.roomDoors.values()) p.y += datumDelta;
     for (const p of tile.elevatorStops?.values() ?? []) p.y += datumDelta;
+    for (const s of tile.stairs ?? []) { s.foot.pos.y += datumDelta; s.head.pos.y += datumDelta; }
     const carried = new Set<object>();
     for (const byKind of tile.roomMarkers.values()) {
       if (carried.has(byKind)) continue;   // one map hangs under id AND name
@@ -501,6 +502,13 @@ function plateMaterial(plate: ScenePlate,
  *  fallback for a payload composed before the field existed. */
 const DOOR_COLOR_FALLBACK = '#4a3a2e';
 
+/** Colour of a staircase (`stair_step`, `stair_pad`) when the payload carries
+ *  no `style.stair_color` — the server's own constant (`scene_recipe.STYLE`),
+ *  repeated here ONLY as the fallback for a payload composed before the field
+ *  existed. Without it a staircase would wear the elevator's grey and the two
+ *  vertical connections would look like the same thing. */
+const STAIR_COLOR_FALLBACK = '#8a7a66';
+
 /** Material of a wall segment: a PANE from its own vocabulary — a window's
  *  translucent glass or a door's opaque dark leaf — else the tiled wall
  *  texture or the wall colour.
@@ -541,9 +549,11 @@ function extraMaterial(extra: SceneExtra,
                        style: ScenePayload['style']): THREE.MeshStandardMaterial {
   const glass = extra.kind.endsWith('_glass');
   const cabin = extra.kind === 'elevator_cabin';
+  const stair = extra.kind === 'stair_step' || extra.kind === 'stair_pad';
   const color = glass ? style.glass_color
-    : extra.kind === 'elevator_pad' ? style.elevator_pad_color
-      : cabin ? style.elevator_cabin_color : style.elevator_frame_color;
+    : stair ? (style.stair_color ?? STAIR_COLOR_FALLBACK)
+      : extra.kind === 'elevator_pad' ? style.elevator_pad_color
+        : cabin ? style.elevator_cabin_color : style.elevator_frame_color;
   const opacity = glass ? (style.elevator_glass_opacity ?? style.glass_opacity ?? 0.22)
     : cabin ? (style.elevator_cabin_opacity ?? 1) : 1;
   return std({ color: hex(color), transparent: opacity < 1, opacity,
@@ -607,7 +617,7 @@ function roomProps(placements: readonly PlacedSceneModel[], roomId: string
  *
  * Füllt die Tile-Felder der Innenansicht
  * (roomGroups/-Centers/-Exits/-Levels/-Rects/-Slots/-Markers, outlineWalls,
- * levelSlabs, levelWallMats, elevatorStops, alwaysVisibleRooms, interior,
+ * levelSlabs, levelWallMats, elevatorStops, stairs, alwaysVisibleRooms, interior,
  * interiorLabels) — der ganze Sicht- und Interaktionscode
  * darüber (LOD, Crossfade, Fokus, Culling, NPCs) bleibt unberührt.
  *
@@ -866,20 +876,47 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     walls: scene.walls.length,
   })) buildFarShell(tile, builtPlates, builtWalls);
 
-  // ── Extras (elevator) ───────────────────────────────────────────────────
+  // ── Extras (elevator, stairs) ───────────────────────────────────────────
   // Typed boxes, centre + size, straight from the payload — one entry per
-  // part. The pads double as the stops for the level routing.
+  // part. The pads double as the stops for the level routing: the elevator's
+  // one per storey, a staircase's two per flight (foot and head).
   let elevatorXZ: THREE.Vector2 | null = null;
+  // Landings collected per staircase. `extra.stair` groups the pieces WITHIN
+  // this payload — it is a list position on the server, not a saved identity,
+  // so it lives no longer than this loop.
+  const stairEnds = new Map<number, { foot?: { level: number; pos: THREE.Vector3 };
+                                      head?: { level: number; pos: THREE.Vector3 } }>();
   for (const extra of scene.extras) {
     g.add(buildExtra(THREE, extra, extraMaterial(extra, style)));
-    elevatorXZ = elevatorXZ ?? new THREE.Vector2(extra.center[0], extra.center[2]);
-    if (extra.kind === 'elevator_pad' && extra.level !== undefined) {
+    // Only the ELEVATOR anchors the storey switch (finding 2026-08-25): the
+    // first extra of a scene with stairs but no lift is a step, and the widget
+    // would hang on it.
+    if (extra.kind.startsWith('elevator_')) {
+      elevatorXZ = elevatorXZ ?? new THREE.Vector2(extra.center[0], extra.center[2]);
+    }
+    if (extra.level === undefined) continue;
+    // Top face of the pad + 1 cm: that is the storey's floor, and a figure
+    // standing there stands ON the landing rather than in it.
+    const stopY = extra.center[1] + extra.size[1] / 2 + 0.01;
+    if (extra.kind === 'elevator_pad') {
       tile.elevatorStops = tile.elevatorStops ?? new Map();
       tile.elevatorStops.set(extra.level, tileToWorld(tile,
-        extra.center[0], extra.center[2],
-        extra.center[1] + extra.size[1] / 2 + 0.01));
+        extra.center[0], extra.center[2], stopY));
+    } else if (extra.kind === 'stair_pad' && extra.stair !== undefined && extra.end) {
+      let ends = stairEnds.get(extra.stair);
+      if (!ends) stairEnds.set(extra.stair, ends = {});
+      ends[extra.end] = { level: extra.level,
+                          pos: tileToWorld(tile, extra.center[0], extra.center[2], stopY) };
     }
   }
+  // A staircase is a LINK, so only a complete pair is one. A half pair — a
+  // payload carrying just a foot or just a head — is skipped in silence: it
+  // would be a route to nowhere.
+  const stairs: StairWorldLink[] = [];
+  for (const ends of stairEnds.values()) {
+    if (ends.foot && ends.head) stairs.push({ foot: ends.foot, head: ends.head });
+  }
+  if (stairs.length) tile.stairs = stairs;
 
   // ── Türen & Marker: fertig in Weltkoordinaten ───────────────────────────
   // THE door of each room, for the floor sampling's reference ray: the one
@@ -1613,6 +1650,7 @@ export function unmountScene(tile: Tile): void {
   tile.levelSlabs.clear();
   tile.levelWallMats.clear();
   tile.elevatorStops = undefined;
+  tile.stairs = undefined;
   // The old scene's switch is gone with its DOM — its refresh function would
   // otherwise write to a widget that is no longer there.
   tile.levelSwitch = undefined;

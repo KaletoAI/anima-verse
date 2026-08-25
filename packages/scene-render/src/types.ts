@@ -110,6 +110,16 @@ export interface SceneExtra {
   size: [number, number, number]
   side?: string
   level?: number
+  /** Index of the staircase this piece belongs to (`stair_step`, `stair_pad`),
+   *  i.e. its position in the location's `map3d.stairs` list. It GROUPS the
+   *  pieces of ONE payload — foot pad, head pad and the steps between them —
+   *  and nothing more: the index is not stable across saves, so it must never
+   *  be kept as an identity beyond the payload it arrived in. */
+  stair?: number
+  /** Which end of a staircase a `stair_pad` marks: `foot` = lower landing on
+   *  `level`, `head` = upper landing on `level`. The pad's TOP face is the
+   *  floor of that storey. */
+  end?: 'foot' | 'head'
 }
 
 /** Auflösungsstufen eines Meshes, in FALLBACK-Reihenfolge (§ B1 variants).

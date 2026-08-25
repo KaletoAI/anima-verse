@@ -360,6 +360,16 @@ export interface RoomFloor {
   declared?: number;
 }
 
+/** ONE staircase of a scene, reduced to what a route needs: the two landings
+ *  it connects, in WORLD coordinates, standing on the pad's top face (= the
+ *  floor of that storey) exactly like an elevator stop. `foot.level + 1 ===
+ *  head.level` always holds — a staircase spans a single storey. Only complete
+ *  pairs exist here; a payload carrying just one end contributes nothing. */
+export interface StairWorldLink {
+  foot: { level: number; pos: THREE.Vector3 };
+  head: { level: number; pos: THREE.Vector3 };
+}
+
 export interface Tile {
   loc: WorldLocation;
   /** Fassaden mit Fensterraster — leuchten nachts (emissive) */
@@ -469,6 +479,10 @@ export interface Tile {
   alwaysVisibleRooms: Set<string>;
   /** Fahrstuhl-Haltepunkte je Etage (Welt-Koordinaten), AV3D-12 */
   elevatorStops?: Map<number, THREE.Vector3>;
+  /** Staircases of this scene, one entry per COMPLETE foot/head pair of the
+   *  payload (world coordinates). The second vertical connection next to the
+   *  elevator: where a staircase links the two storeys, a route prefers it. */
+  stairs?: StairWorldLink[];
   /** Grundriss-Wandstücke mit Außennormale (Welt-XZ) — fürs Blickrichtungs-Culling */
   outlineWalls: { mesh: THREE.Mesh; level: number; mid: THREE.Vector2; normal: THREE.Vector2 }[];
   /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
