@@ -592,7 +592,7 @@
     "Generate 3D building model": "3D-Gebäudemodell generieren",
     "Generate 3D model": "3D-Modell generieren",
     "Generate 3D room model": "3D-Raummodell generieren",
-    "Generate a full image set (location and/or all rooms, day + night) with one chosen backend/model — runs as sequential background jobs.": "Erzeugt ein komplettes Bilder-Set (Location und/oder alle Räume, Tag + Nacht) mit einem gewählten Backend/Model — läuft als sequenzielle Hintergrund-Jobs.",
+    "Generate a full image set (location and/or all rooms, day + night) with one chosen backend — runs as sequential background jobs.": "Erzeugt ein komplettes Bilder-Set (Location und/oder alle Räume, Tag + Nacht) mit einem gewählten Backend — läuft als sequenzielle Hintergrund-Jobs.",
     "Generate a new map image for this location": "Ein neues Kartenbild für diesen Ort erzeugen",
     "Generate a night variant from this image": "Nacht-Variante aus diesem Bild erzeugen",
     "Generate building": "Gebäude erzeugen",

@@ -547,7 +547,7 @@ export function LocationGallery({
               className="ga-btn ga-btn-sm"
               disabled={!!busy}
               onClick={() => setImageSetOpen(true)}
-              title={t('Generate a full image set (location and/or all rooms, day + night) with one chosen backend/model — runs as sequential background jobs.')}
+              title={t('Generate a full image set (location and/or all rooms, day + night) with one chosen backend — runs as sequential background jobs.')}
             >
               🖼 {t('Image set…')}
             </button>

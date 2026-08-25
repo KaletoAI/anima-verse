@@ -7,17 +7,22 @@ import { type Location } from './worldTypes'
 
 /**
  * ImageSetDialog — generates a whole image SET for one location with ONE
- * chosen backend/model: the location itself and/or every room, each as
+ * chosen backend: the location itself and/or every room, each as
  * day + night. Uses the existing batch endpoint
  * POST /world/locations/{id}/gallery/batch (sequential background jobs,
  * visible as tracks in the task panel).
+ *
+ * The backend is the ONLY render choice here: since the server composes every
+ * gallery prompt itself (use-case style + negative resolved for the backend's
+ * configured model, app/core/prompt_compose.py), a per-run model pick would
+ * swap the model AFTER the prompt was composed for a different one. A backend
+ * entry carries its model; to render with another model, configure another
+ * backend entry for it.
  */
 interface BackendOpt {
   name: string
   label: string
   category?: string
-  models?: string[]
-  default_model?: string
 }
 
 export function ImageSetDialog({ location, onClose }: {
@@ -28,7 +33,6 @@ export function ImageSetDialog({ location, onClose }: {
   const { toast } = useToast()
   const [options, setOptions] = useState<BackendOpt[] | null>(null)
   const [backend, setBackend] = useState('')
-  const [model, setModel] = useState('')
   const [incLocation, setIncLocation] = useState(true)
   const [incRooms, setIncRooms] = useState(true)
   const [incDay, setIncDay] = useState(true)
@@ -45,11 +49,6 @@ export function ImageSetDialog({ location, onClose }: {
       })
       .catch(() => setOptions([]))
   }, [])
-
-  const selected = useMemo(
-    () => (options || []).find((o) => o.name === backend),
-    [options, backend],
-  )
 
   const rooms = location.rooms || []
   const jobs = useMemo(() => {
@@ -78,7 +77,6 @@ export function ImageSetDialog({ location, onClose }: {
     try {
       const body: Record<string, unknown> = { jobs }
       if (backend) body.backend = backend
-      if (model) body.model_override = model
       await apiPost(`/world/locations/${encodeURIComponent(location.id)}/gallery/batch`, body)
       toast(t('{n} image jobs started — watch the task panel').replace('{n}', String(jobs.length)))
       onClose()
@@ -112,21 +110,11 @@ export function ImageSetDialog({ location, onClose }: {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <label className="ga-imagegen-label">{t('Backend')}</label>
               <select className="ga-input" value={backend} disabled={submitting}
-                onChange={(e) => { setBackend(e.target.value); setModel('') }}>
+                onChange={(e) => setBackend(e.target.value)}>
                 {options.map((o) => (
                   <option key={o.name} value={o.name}>{o.label}</option>
                 ))}
               </select>
-              {selected?.models?.length ? (
-                <>
-                  <label className="ga-imagegen-label">{t('Model')}</label>
-                  <select className="ga-input" value={model} disabled={submitting}
-                    onChange={(e) => setModel(e.target.value)}>
-                    <option value="">— {t('backend default')} —</option>
-                    {selected.models.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                </>
-              ) : null}
               <label className="ga-imagegen-label">{t('Targets')}</label>
               <div>
                 {check(t('Location'), incLocation, setIncLocation)}
