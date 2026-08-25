@@ -462,6 +462,50 @@ export function floatRootY(groundY: number, waterLevel: number | null,
   return Math.max(groundY + s, waterLevel);
 }
 
+/**
+ * FROM HOW MUCH WATER a figure gets its underwater ghost, in metres — the
+ * depth at which the water look itself stands at its full rim ramp
+ * (`scene/waterPlaneMath.WATER_EDGE_FADE_M`, 0.05 m).
+ *
+ * The two numbers are the same one on purpose: below it the water surface is
+ * still fading in and cuts nothing off a figure, so a ghost there would be a
+ * second body drawn for no visible reason — and, right at the waterline, one
+ * that flickers on and off with every centimetre of the walk.
+ */
+export const WATER_GHOST_FROM_M = 0.05;
+
+/**
+ * IS THIS FIGURE STANDING IN WATER — the gate of the underwater ghost
+ * (`figures.Figure.setSubmerged`, finding H3, 2026-08-25).
+ *
+ * `bedY` is the terrain height UNDER the figure and `waterLevel` the mirror
+ * over the same point, already cut to its scope by {@link groundWaterLevel} —
+ * i.e. the very two numbers the walk loop asks for every frame anyway. It is
+ * deliberately NOT {@link wadeGate}'s answer: that gate nulls the water below
+ * the kind's `swim_from_m` because a wader keeps its own clips and stands on
+ * the bed — and a WADER is exactly the figure this ghost exists for. A
+ * swimmer's body is at the surface; a wader's legs are the part the opaque
+ * water surface cuts away.
+ *
+ * Hand values, threshold 0.05 m:
+ *
+ *     bed 12.00, water null   -> false   (dry ground: no water at all)
+ *     bed 12.00, water 11.90  -> false   (the mirror is UNDER the bed)
+ *     bed 12.00, water 12.00  -> false   (exactly at the waterline)
+ *     bed 12.00, water 12.04  -> false   (4 cm: the look has not faded in)
+ *     bed 12.00, water 12.05  -> true    (5 cm: the rim ramp is up)
+ *     bed 12.00, water 12.60  -> true    (a ford, knee deep — the wader)
+ *     bed 12.00, water 13.50  -> true    (a swimmer, cut at the chest)
+ */
+export function submergedInWater(bedY: number,
+                                 waterLevel: number | null): boolean {
+  if (waterLevel === null || !Number.isFinite(waterLevel)
+      || !Number.isFinite(bedY)) {
+    return false;
+  }
+  return waterLevel - bedY >= WATER_GHOST_FROM_M;
+}
+
 /** The reach rule BOTH ground clips share, in one place: outside a built
  *  place the ground may name a clip, inside it never does, and a blank name
  *  is no name. Two copies of this is how one of them starts reaching further

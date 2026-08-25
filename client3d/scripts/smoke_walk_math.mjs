@@ -909,6 +909,7 @@ async function main() {
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
     groundScope, wadeGate, swimFrom, SWIM_FROM_DEFAULT_M, MIN_PACE,
+    submergedInWater, WATER_GHOST_FROM_M,
     MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
@@ -1361,6 +1362,76 @@ async function main() {
       'walk');
     check('...and in real water the two agree', at(1.6, 1.0, true).clip,
       moveClip(ungated({ ...RIVER }).anim, false, 'wilderness'));
+  }
+
+  // --- submergedInWater: the underwater ghost's gate (finding H3) -----------
+  // WHAT IT IS FOR. Since Wasser v2 K-A the water surface IS the terrain, and
+  // the terrain is opaque: a figure standing in a river is cut off at the
+  // waterline and reads as buried. `figures.Figure.setSubmerged` draws it a
+  // second time with depthFunc GreaterDepth — only where the normal pass LOST
+  // the depth test, i.e. only the submerged part — and this predicate is the
+  // whole decision about who gets that draw.
+  //
+  // IT IS DELIBERATELY NOT `wadeGate`'s ANSWER. That gate nulls the mirror
+  // below the kind's swim depth, because a wader keeps its own clips and
+  // stands on the bed — and a WADER is exactly the figure the opaque surface
+  // cuts in half. So the ghost reads the UNGATED level: `groundWaterLevel`
+  // (scope only), never `wadeGate`.
+  //
+  // THE THRESHOLD is 0.05 m, the depth from which the water LOOK stands at its
+  // full rim ramp (`waterPlaneMath.WATER_EDGE_FADE_M`). Below it the surface is
+  // still fading in and cuts nothing off, so a ghost there would be a second
+  // body drawn for nothing — and one that flickers with every centimetre of
+  // the walk. Hand table, bed at 12.00 m:
+  //
+  //     water null   -> false   (dry ground)
+  //     water 11.90  -> false   (mirror UNDER the bed)
+  //     water 12.00  -> false   (exactly the waterline: 0.00 < 0.05)
+  //     water 12.04  -> false   (4 cm)
+  //     water 12.05  -> true    (5 cm: the rim ramp is up)
+  //     water 12.60  -> true    (a ford, knee deep — the wader)
+  //     water 13.50  -> true    (a swimmer, cut at the chest)
+  console.log('submergedInWater — who gets the underwater ghost (H3)');
+  {
+    const BED = 12.0;
+    check('the threshold is the water look\'s own rim depth',
+      WATER_GHOST_FROM_M, 0.05);
+    check('dry ground carries no mirror at all',
+      submergedInWater(BED, null), false);
+    check('...nor does a scope-cut one (groundWaterLevel already said null)',
+      submergedInWater(BED, groundWaterLevel(13.5, 'built')), false);
+    check('a mirror UNDER the bed is not water over the figure',
+      submergedInWater(BED, 11.9), false);
+    check('exactly at the waterline: nothing is cut off yet',
+      submergedInWater(BED, 12.0), false);
+    check('...4 cm, still under the rim ramp', submergedInWater(BED, 12.04),
+      false);
+    check('5 cm: the surface stands at full and the ghost comes on',
+      submergedInWater(BED, 12.05), true);
+    check('a knee-deep ford — the WADER, and the whole point of the ghost',
+      submergedInWater(BED, 12.6), true);
+    check('...and a swimmer, cut at the chest', submergedInWater(BED, 13.5),
+      true);
+    check('a NaN bed decides nothing', submergedInWater(NaN, 13.5), false);
+    check('...and neither does a NaN mirror', submergedInWater(BED, NaN),
+      false);
+    // RED: the WADE gate is the wrong question — it hands back null for the
+    // very ford this ghost exists for, so a figure gated that way would be cut
+    // in half exactly where the finding was reported.
+    const L = 12.6;
+    const FORD = { anim: 'swim', idle: 'treading-water',
+      sink: { move: 0.35, idle: 1.3 }, water: L };
+    check('RED: the wade gate calls a 0.6 m ford no water at all',
+      wadeGate({ ...FORD }, BED, 1.0).water, null);
+    check('RED: ...so gating the ghost on IT would leave the wader cut',
+      submergedInWater(BED, wadeGate({ ...FORD }, BED, 1.0).water), false);
+    check('...while the ungated level gives the wader its body back',
+      submergedInWater(BED, groundWaterLevel(L, 'wilderness')), true);
+    // …and the deep case agrees either way, which is what makes the difference
+    // a WADING one and not a change of rule.
+    check('a swimmer is submerged through both readings',
+      submergedInWater(BED, wadeGate({ ...FORD, water: 13.5 }, BED, 1.0).water)
+        && submergedInWater(BED, groundWaterLevel(13.5, 'wilderness')), true);
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

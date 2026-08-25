@@ -35,6 +35,7 @@ import type { Tile } from './scene/tiles';
 import { setLayerCompositorFlat, setLayerSurfaceFiltering } from './scene/layerGround';
 import { setFogVeilDebugOff, setFogVeilSky } from './scene/fogVeil';
 import { IMPOSTOR_MESH_NAME } from './scene/impostors';
+import { setWaterGhostOff } from './scene/figures';
 import { setNaturalGroundDebugOff } from './scene/naturalGround';
 import { setTerrainLodDebug } from './scene/terrainLod';
 import { newFpsMeter, pushFrame, scatterCosts } from './game/perfstats';
@@ -351,6 +352,10 @@ export function initIsolation(deps: IsolationDeps): void {
       bumpMaterials(engine.scene);
     }
     setTerrainLodDebug({ flatNormal: on(6), noMorph: on(9), noWater: on(22) });
+    // …and 22 takes the figures' underwater ghost with it (finding H3): with
+    // no water surface there is nothing for a second draw to be BEHIND, and a
+    // ghost left standing would show a blue body through the nearest hill.
+    setWaterGhostOff(on(22));
     setLayerCompositorFlat(on(7));
     setNaturalGroundDebugOff(on(8));
     setFogVeilDebugOff(on(20));

@@ -229,6 +229,7 @@ function checkNear(label, actual, expected, eps) {
 
 const { shade, plane, mat } = await load();
 const { waterAbsorb, waterFoamAt, waterTintBlend, waterLookFrom, waterTintRgb,
+  waterSurface, waterShadeNormal,
   packWaterLook, terrainWaterFragmentGlsl, waterGateGlsl, waterInside,
   waterSdGlsl, WATER_FOAM_MIN_COVER, WATER_SD_BAND_M,
   WATER_LOOK_DEFAULT, WATER_LOOK_TEXELS } = shade;
@@ -390,9 +391,12 @@ checkEq('the easing is the TS smoothstep',
   glsl.includes('return c * c * ( 3.0 - 2.0 * c );'), true);
 checkEq('the ABSORPTION writes the ALBEDO, so the lighting model shades water',
   glsl.includes('diffuseColor.rgb = mix( diffuseColor.rgb, look0.rgb, twA );'), true);
-checkEq('…and the roughness and metalness ride the same factor',
+checkEq('…while the roughness and metalness ride the SURFACE share (H2)',
+  glsl.includes('roughnessFactor = mix( roughnessFactor, look2.x, twS );')
+  && glsl.includes('metalnessFactor = mix( metalnessFactor, look2.y, twS );'), true);
+checkEq('RED: …and never the depth curve again (the land-coloured shallows)',
   glsl.includes('roughnessFactor = mix( roughnessFactor, look2.x, twA );')
-  && glsl.includes('metalnessFactor = mix( metalnessFactor, look2.y, twA );'), true);
+  || glsl.includes('metalnessFactor = mix( metalnessFactor, look2.y, twA );'), false);
 checkEq('RED: the tint never touches the finished light',
   /outgoingLight[^;]*look0/.test(glsl), false);
 checkEq('the foam band is the shared constant',
@@ -449,9 +453,10 @@ checkEq('the water half of the mask\'s pair is picked by the is_water flag',
   && glsl.includes('layer = twIsWater( a ) ? a : b;'), true);
 // The one place K-A gives GPU work back.
 checkEq('a FULLY absorbed pixel does not read the bed\'s normal at all',
-  /if \( twA >= 1\.0 \) return wn;/.test(glsl), true);
-checkEq('…and a dry one reads only the bed\'s',
-  glsl.includes('if ( twA <= 0.0 ) {'), true);
+  /if \( twA >= 1\.0 \) \{\n\s*return normalize\( \( viewMatrix \* vec4\( twN/
+    .test(glsl), true);
+checkEq('…and a pixel with no water SURFACE over it reads only the bed\'s',
+  glsl.includes('if ( twS <= 0.0 ) {'), true);
 
 // ============================================================================
 // [7] THE SHADING GATE — the water is shaded where it is PAINTED, and the field
@@ -814,6 +819,294 @@ check('…sheet B\'s', Math.hypot(...dirB), 0.85440037, 1e-8);
 check('at auto that is metres per second for sheet A',
   WATER_FLOW_SPEED_DEFAULT_M_S * Math.hypot(...dirA), 0.50559371, 1e-8);
 check('…and at an authored 1 m/s', 1 * Math.hypot(...dirA), 1.01118742, 1e-8);
+
+// ============================================================================
+// [9] WHICH WAY THE PATTERN TRAVELS — the drift sign, DERIVED (finding H1)
+// ============================================================================
+// THE COMPLAINT, 2026-08-25: "Wasser fliesst nicht in Fliessrichtung". The flow
+// FIELD is right — the bake's in-river tangent spread is <= 0.9 deg — and the
+// surface still did not read as moving downstream. The mirror carried exactly
+// this bug once (commit 09f2b29f): adding a drift to a SAMPLE coordinate
+// slides the picture the OTHER way. So the sign is the first suspect, and it
+// is settled here by algebra rather than by a screenshot.
+//
+// EACH SHEET'S SAMPLE COORDINATE is
+//
+//     uv(p, t) = F( p / lam + dir * ( t * sp * sgn / lam ) )
+//
+// with F the flow frame's squeeze (`twFrame`), a LINEAR and invertible map (it
+// scales the along-flow axis by 1/aniso and leaves the cross one). A FIXED
+// FEATURE of the wave map sits at a fixed uv0; the world point showing it
+// follows from uv(p, t) = uv0:
+//
+//     F(p) / lam = uv0 - F(dir) * t * sp * sgn / lam
+//     F(p)       = lam * uv0 - F(dir) * t * sp * sgn
+//     d F(p)/dt  = -F(dir) * sp * sgn          (F is linear)
+//     dp/dt      = -dir * sp * sgn             (apply F^-1)
+//
+// sgn = -1 therefore carries the crest along +dir (DOWNSTREAM) and sgn = +1
+// along -dir (upstream). The shipped shader has `sgn = still ? 1.0 : -1.0`,
+// i.e. the mirror's accepted convention, and it is CORRECT: H1's absent motion
+// is not this sign but the depth coupling section [10] takes apart — over a
+// shore there was no water normal left to carry a moving crest.
+//
+// THE SHARPEST FORM of the statement is an exact identity: a world point
+// carried along with the crest must keep showing the same texel forever.
+//
+//     uv( p0 + dir * sp * t, t ) == uv( p0, 0 )   for every t
+//
+// Substituting, with sgn = -1:
+//     F( (p0 + dir*sp*t)/lam + dir*(-t*sp/lam) ) = F( p0/lam ).  QED — exact,
+// so the check below asserts it to 1e-12 and not to a tolerance.
+//
+// NUMBERS for a river running toward +x at sp = 0.5 m/s (the shipped auto
+// default), lam = 1.6 m, aniso 3: after t = 2 s the crest that stood at the
+// origin sits at dir * (sp * t) = dir * 1.0 m —
+//
+//     sheet A  dir = (1, 0.15)   -> (1.0,  0.15)  |d| = 1.01118742 m
+//     sheet B  dir = (0.8, -0.3) -> (0.8, -0.30)  |d| = 0.85440037 m
+//     sheet C  dir = (1, 0)      -> (1.0,  0.00)  |d| = 1.00000000 m
+//
+// — every one with a POSITIVE x component, i.e. downstream. With the sign
+// flipped all three are negative: that is the red probe.
+console.log('\n[9] the drift sign: the crests travel DOWNSTREAM (H1)');
+const RIVER_AX = [1, 0];
+const RIVER_AY = [-RIVER_AX[1], RIVER_AX[0]];   // = (0, 1), as the shader builds it
+const SP = mat.WATER_FLOW_SPEED_DEFAULT_M_S;    // 0.5 m/s
+const LAM_A = 1.6;
+const LAM_B = 1.6 * 0.63;
+const LAM_C = 1.6 * 2;
+const ANISO = 3;
+// The three sample coordinates, re-implemented from the arithmetic (as [5] is)
+// and NOT read out of the GLSL string.
+const uvSheet = (p, t, dir, lam, sgn, ax, ay, aniso) => twFrame(
+  [p[0] / lam + dir[0] * (t * SP * sgn / lam),
+    p[1] / lam + dir[1] * (t * SP * sgn / lam)], ax, ay, aniso);
+const uvStreak = (p, t, sgn, ax, ay) => twFrame(
+  [(p[0] + ax[0] * (t * SP * sgn)) / LAM_C,
+    (p[1] + ax[1] * (t * SP * sgn)) / LAM_C], ax, ay, 8);
+const DIR_A = [RIVER_AX[0] + RIVER_AY[0] * 0.15, RIVER_AX[1] + RIVER_AY[1] * 0.15];
+const DIR_B = [RIVER_AX[0] * 0.8 - RIVER_AY[0] * 0.3,
+  RIVER_AX[1] * 0.8 - RIVER_AY[1] * 0.3];
+checkNear('sheet A\'s direction is ax + 0.15 ay', DIR_A, [1, 0.15], 1e-12);
+checkNear('…sheet B\'s is 0.8 ax − 0.3 ay', DIR_B, [0.8, -0.3], 1e-12);
+// THE IDENTITY, on an off-origin start point and at four times, per sheet.
+const P0 = [7.25, -3.5];
+const ride = (dir, t) => [P0[0] + dir[0] * SP * t, P0[1] + dir[1] * SP * t];
+for (const t of [0.5, 2, 7.5, 60]) {
+  checkNear(`sheet A: the point riding at dir·sp still shows uv0 at t = ${t}`,
+    uvSheet(ride(DIR_A, t), t, DIR_A, LAM_A, -1, RIVER_AX, RIVER_AY, ANISO),
+    uvSheet(P0, 0, DIR_A, LAM_A, -1, RIVER_AX, RIVER_AY, ANISO), 1e-12);
+  checkNear(`…sheet B at t = ${t}`,
+    uvSheet(ride(DIR_B, t), t, DIR_B, LAM_B, -1, RIVER_AX, RIVER_AY, ANISO),
+    uvSheet(P0, 0, DIR_B, LAM_B, -1, RIVER_AX, RIVER_AY, ANISO), 1e-12);
+  checkNear(`…and the streak ribbon at t = ${t}`,
+    uvStreak(ride(RIVER_AX, t), t, -1, RIVER_AX, RIVER_AY),
+    uvStreak(P0, 0, -1, RIVER_AX, RIVER_AY), 1e-12);
+}
+// A DIAGONAL CURRENT, so the answer is not an axis accident: flow (1,1)/√2.
+const DAX = [Math.SQRT1_2, Math.SQRT1_2];
+const DAY = [-DAX[1], DAX[0]];
+const DDIR_A = [DAX[0] + DAY[0] * 0.15, DAX[1] + DAY[1] * 0.15];
+checkNear('a DIAGONAL current: the same identity holds',
+  uvSheet([P0[0] + DDIR_A[0] * SP * 3, P0[1] + DDIR_A[1] * SP * 3], 3,
+    DDIR_A, LAM_A, -1, DAX, DAY, ANISO),
+  uvSheet(P0, 0, DDIR_A, LAM_A, -1, DAX, DAY, ANISO), 1e-12);
+// WHERE THE CREST IS after two seconds — dp/dt = −dir·sp·sgn, so p(t) − p0 is
+// −dir·sp·t·sgn, which for sgn = −1 is +dir·1.0 m at t = 2 s.
+const crestStep = (dir, t, sgn) => [-dir[0] * SP * t * sgn, -dir[1] * SP * t * sgn];
+checkNear('after 2 s sheet A\'s crest has moved', crestStep(DIR_A, 2, -1),
+  [1, 0.15], 1e-12);
+checkNear('…sheet B\'s', crestStep(DIR_B, 2, -1), [0.8, -0.3], 1e-12);
+checkNear('…and the ribbon\'s', crestStep(RIVER_AX, 2, -1), [1, 0], 1e-12);
+checkAbove('all three carry a POSITIVE downstream component',
+  Math.min(crestStep(DIR_A, 2, -1)[0], crestStep(DIR_B, 2, -1)[0],
+    crestStep(RIVER_AX, 2, -1)[0]), 0);
+check('sheet A\'s crest speed is sp·|dir|', SP * Math.hypot(...DIR_A),
+  0.50559371, 1e-8);
+// RED: the flipped sign — the bug the mirror had until 09f2b29f.
+checkBelow('RED: with sgn = +1 sheet A\'s crest runs UPSTREAM',
+  crestStep(DIR_A, 2, 1)[0], 0);
+checkBelow('RED: …and so does sheet B\'s', crestStep(DIR_B, 2, 1)[0], 0);
+checkBelow('RED: …and the ribbon\'s', crestStep(RIVER_AX, 2, 1)[0], 0);
+checkEq('RED: …and the riding point no longer shows uv0',
+  Math.abs(uvSheet(ride(DIR_A, 2), 2, DIR_A, LAM_A, 1, RIVER_AX, RIVER_AY,
+    ANISO)[0]
+    - uvSheet(P0, 0, DIR_A, LAM_A, 1, RIVER_AX, RIVER_AY, ANISO)[0]) > 0.1,
+  true);
+// STILL WATER keeps the +1 on purpose: a lake has no reference direction, and
+// its two sheets are sent into OPPOSITE half-planes so no drift reads as one.
+const STILL_DIR_A = [1, 0.6];
+const STILL_DIR_B = [-0.8, -1.3];
+checkBelow('a lake\'s two sheets point into opposite half-planes',
+  STILL_DIR_A[0] * STILL_DIR_B[0] + STILL_DIR_A[1] * STILL_DIR_B[1], 0);
+checkEq('…so the shader keeps the mirror\'s +1 for them',
+  glsl.includes('float sgn = still ? 1.0 : -1.0;'), true);
+// And the GLSL really spells the drift the derivation was made on.
+checkEq('the drift is added to the SAMPLE coordinate, divided by each λ',
+  glsl.includes('vec2 uvA = twFrame( p / lamA + dirA * ( uTlodTime * sp * sgn '
+    + '/ lamA ), ax, ay, aniso );')
+  && glsl.includes('vec2 uvB = twFrame( p / lamB + dirB * ( uTlodTime * sp * sgn '
+    + '/ lamB ), ax, ay, aniso );'), true);
+checkEq('…and the ribbon drifts along ax before its own division',
+  glsl.includes('vec2 uvC = twFrame( ( p + ax * ( uTlodTime * sp * sgn ) ) '
+    + '/ lamC, ax, ay, 8.0 );'), true);
+
+// ============================================================================
+// [10] SHALLOW WATER READS AS WATER — the two shares (finding H2)
+// ============================================================================
+// THE COMPLAINT, 2026-08-25: "warum kann es nicht halbtransparent sein?" —
+// centimetre-deep water was drawn as land. It was, exactly: every water term
+// rode ONE factor, the absorption `twA`, and the absorption is a DEPTH curve.
+// At 5 cm over the default lake's 1.5 m opaque band it is 0.00325926, so the
+// pixel got 99.7 % bed albedo (right, that IS see-through water) AND 0.3 % of
+// its roughness, 0.3 % of its ripple and 0.3 % of its sky reflection (wrong:
+// that is dry sand). The same coupling is why the correct downstream drift of
+// section [9] was invisible over a shore.
+//
+// THE SPLIT. `twA` keeps the colour — `mix(bed, tint, twA)` IS the
+// semi-transparent look. `twS`, the SURFACE share, carries the roughness, the
+// metalness, the ripple tilt and the fresnel sky share, and it is the rim ramp
+// times the shore gate with NO depth in it: `waterEdgeFade(d, edge) * inside`.
+//
+// THE HAND TABLE — default lake (bed 2.0 m, opaque band 1.5 m), rim ramp at its
+// 0.05 m floor, well inside the outline so `inside` = 1. shore = t²(3 − 2t):
+//
+//   d = 0.025 m  ramp 0.5  ->  twS = 0.5
+//                t = 1/60  ->  shore = (1/3600)(3 − 1/30) = 89/108000
+//                          ->  twA = 89/108000 · 0.5 = 0.00041204
+//   d = 0.05 m   ramp 1    ->  twS = 1
+//                t = 1/30  ->  shore = (1/900)(3 − 1/15) = 44/13500 = 0.00325926
+//                          ->  twA = 0.00325926
+//   d = 0.30 m   ramp 1    ->  twS = 1
+//                t = 0.2   ->  shore = 3(0.04) − 2(0.008) = 0.104
+//                          ->  twA = 0.104
+//   d = 1.50 m   ramp 1    ->  twS = 1,  t = 1  ->  twA = 1
+//
+// WHAT EACH TERM BECOMES, over a sand bed (0.76, 0.70, 0.50), the library tint
+// #3f7fb8 = (0.24705882, 0.49803922, 0.72156863), a ground roughness of 0.85,
+// the water's 0.08, sky_mix 0.55 and a fresnel of 0.5 (a mid-angle look):
+//
+//                       d = 0.05 m        d = 0.30 m        d = 1.50 m
+//   albedo (twA, kept) (0.75832822,      (0.70665412,      the tint,
+//                       0.69934176,       0.67899608,       exactly
+//                       0.50072216)       0.52304314)
+//   roughness  NEW      0.08              0.08              0.08
+//              OLD      0.84749037        0.76992           0.08
+//   sky share  NEW      0.275             0.275             0.275
+//              OLD      0.00089630        0.02860000        0.275
+//
+// The OLD row at 0.05 m is the red probe the finding names: a sky share of
+// 0.0009 is no sky share, and a roughness of 0.847 out of a dry 0.85 is sand.
+console.log('\n[10] the two shares: colour by depth, surface by presence (H2)');
+const LAKE_BED = 1.5;                    // the default lake's opaque band
+check('the surface share ignores the depth once the rim ramp is up',
+  waterSurface(0.05, EDGE, 1), 1);
+check('…at 30 cm', waterSurface(0.3, EDGE, 1), 1);
+check('…and at a metre and a half', waterSurface(1.5, EDGE, 1), 1);
+check('…while the rim ramp itself still fades it in',
+  waterSurface(0.025, EDGE, 1), 0.5);
+check('…and the shore gate still cuts the dilation ring',
+  waterSurface(0.05, EDGE, waterInside(-2)), 0);
+check('…and a dry pixel is no surface at all', waterSurface(0, EDGE, 1), 0);
+check('the ABSORPTION is unchanged — the colour still follows the depth',
+  waterAbsorb(0.05, LAKE_BED, EDGE), 44 / 13500, 1e-12);
+check('…at 30 cm', waterAbsorb(0.3, LAKE_BED, EDGE), 0.104, 1e-12);
+check('…and at the opaque depth', waterAbsorb(1.5, LAKE_BED, EDGE), 1);
+check('…and at a quarter of a floor-pixel it is the ramp times the curve',
+  waterAbsorb(0.025, LAKE_BED, EDGE), (89 / 108000) * 0.5, 1e-12);
+checkAbove('the surface share is never below the absorption',
+  Math.min(...[0.01, 0.05, 0.2, 0.75, 1.5, 3].map(
+    (d) => waterSurface(d, EDGE, 1) - waterAbsorb(d, LAKE_BED, EDGE))), -1e-15);
+// THE COLOUR — unchanged by H2, and it IS the semi-transparency asked for.
+const SAND = [0.76, 0.70, 0.50];
+const TINT = waterTintRgb(undefined);
+checkNear('5 cm of water is 99.7 % sand',
+  waterTintBlend(SAND, TINT, waterAbsorb(0.05, LAKE_BED, EDGE)),
+  [0.75832822, 0.69934176, 0.50072216], 1e-7);
+checkNear('…30 cm is a tenth of the way to the tint',
+  waterTintBlend(SAND, TINT, waterAbsorb(0.3, LAKE_BED, EDGE)),
+  [0.70665412, 0.67899608, 0.52304314], 1e-7);
+checkNear('…and at the opaque depth the bed is gone',
+  waterTintBlend(SAND, TINT, waterAbsorb(1.5, LAKE_BED, EDGE)), TINT, 1e-12);
+// THE ROUGHNESS — the term that used to make shallow water dry sand.
+const rough = (share) => 0.85 + (0.08 - 0.85) * share;
+check('NEW: 5 cm of water is as smooth as a lake',
+  rough(waterSurface(0.05, EDGE, 1)), 0.08, 1e-12);
+check('…and so is 30 cm', rough(waterSurface(0.3, EDGE, 1)), 0.08, 1e-12);
+check('RED: the OLD coupling left 5 cm at the roughness of dry ground',
+  rough(waterAbsorb(0.05, LAKE_BED, EDGE)), 0.84749037, 1e-8);
+check('RED: …and 30 cm barely better', rough(waterAbsorb(0.3, LAKE_BED, EDGE)),
+  0.76992, 1e-12);
+// THE SKY SHARE — the fresnel term, at a mid-angle fresnel of 0.5.
+const skyShare = (fres, share) => Math.min(Math.max(fres * 0.55, 0), 1) * share;
+check('NEW: 5 cm of water reflects its full share of sky',
+  skyShare(0.5, waterSurface(0.05, EDGE, 1)), 0.275, 1e-12);
+check('…the same share a metre and a half does',
+  skyShare(0.5, waterSurface(1.5, EDGE, 1)), 0.275, 1e-12);
+check('RED: the OLD coupling reflected all but nothing at 5 cm',
+  skyShare(0.5, waterAbsorb(0.05, LAKE_BED, EDGE)), 0.00089630, 1e-8);
+checkBelow('RED: …i.e. under a third of a percent of the sky',
+  skyShare(0.5, waterAbsorb(0.05, LAKE_BED, EDGE)) / 0.275, 0.004);
+check('RED: …and 2.9 % at 30 cm',
+  skyShare(0.5, waterAbsorb(0.3, LAKE_BED, EDGE)), 0.0286, 1e-12);
+// THE SHADING NORMAL — macro by depth, ripple tilt by presence.
+const GROUND_N = [0.4472136, 0.89442719, 0];        // a bank tilted 26.5651°
+const RIPPLE_N = [0.28734789, 0.95782629, 0];       // a crest tilted 16.6992°
+const angleDeg = (a, b) => Math.acos(Math.min(1,
+  a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) * 180 / Math.PI;
+const nShallow = waterShadeNormal(GROUND_N, RIPPLE_N,
+  waterAbsorb(0.05, LAKE_BED, EDGE), waterSurface(0.05, EDGE, 1));
+checkNear('NEW: over 5 cm the ripple tilts the bank in full',
+  nShallow, [0.65197280, 0.75824235, 0], 1e-7);
+check('…which is this many degrees off the bare bank',
+  angleDeg(nShallow, GROUND_N), 14.1255, 1e-4);
+const nOld = (() => {
+  const a = waterAbsorb(0.05, LAKE_BED, EDGE);
+  const v = [GROUND_N[0] + (RIPPLE_N[0] - GROUND_N[0]) * a,
+    GROUND_N[1] + (RIPPLE_N[1] - GROUND_N[1]) * a, 0];
+  const l = Math.hypot(...v);
+  return [v[0] / l, v[1] / l, v[2] / l];
+})();
+checkBelow('RED: the OLD mix(ground, ripple, twA) moved it by a thirtieth of a '
+  + 'degree — no ripple, and nothing for the drift of [9] to move',
+  angleDeg(nOld, GROUND_N), 0.04);
+// (the two probe vectors are written to 8 places above, so the identity is
+//  asserted to that many — the arithmetic itself is exact.)
+checkNear('the deep-water answer is untouched: absorb 1 gives the ripple exactly',
+  waterShadeNormal(GROUND_N, RIPPLE_N, 1, 1), RIPPLE_N, 1e-8);
+checkNear('…and no surface at all gives the ground exactly',
+  waterShadeNormal(GROUND_N, RIPPLE_N, 0, 0), GROUND_N, 1e-8);
+checkNear('…a half-lit rim: macro half-flat, ripple half-strength',
+  waterShadeNormal([0, 1, 0], RIPPLE_N, 0.5, 0.5),
+  (() => {
+    const v = [0.5 * RIPPLE_N[0], 1 + 0.5 * (RIPPLE_N[1] - 1), 0];
+    const l = Math.hypot(...v);
+    return [v[0] / l, v[1] / l, v[2] / l];
+  })(), 1e-12);
+// THE GLSL SAYS THE SAME SPLIT.
+checkEq('the shader carries BOTH shares', glsl.includes('float twA;')
+  && glsl.includes('float twS;'), true);
+checkEq('…the surface share IS the rim', glsl.includes('twS = rim;')
+  && glsl.includes('twA = shore * rim;'), true);
+checkEq('…the albedo keeps the depth curve',
+  glsl.includes('diffuseColor.rgb = mix( diffuseColor.rgb, look0.rgb, twA );'),
+  true);
+checkEq('…the fresnel share of sky rides the SURFACE share',
+  glsl.includes('clamp( fres * twSkyMix, 0.0, 1.0 ) * twS );'), true);
+checkEq('RED: …and never the absorption again',
+  glsl.includes('clamp( fres * twSkyMix, 0.0, 1.0 ) * twA );'), false);
+checkEq('…the out stage leaves only where there is neither surface nor foam',
+  glsl.includes('if ( twS <= 0.0 && twFoam <= 0.0 ) return;'), true);
+checkEq('…the shading normal is macro-by-depth plus tilt-by-presence',
+  glsl.includes('vec3 macro = mix( tlodNormalAt( vTlodXZ ), up, twA );')
+  && glsl.includes('vec3 nw = normalize( macro + ( twN - up ) * twS );'), true);
+checkEq('RED: …and not the old single blend',
+  glsl.includes('normalize( mix( gn, wn, twA ) )'), false);
+checkEq('the FOAM is untouched — it was never coupled wrongly',
+  glsl.includes(
+    `twFoam = rawFoam * min( shore + rawFoam * ${WATER_FOAM_MIN_COVER}, 1.0 ) * rim;`),
+  true);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

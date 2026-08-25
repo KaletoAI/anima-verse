@@ -26,14 +26,27 @@
  * and carries a real specular highlight. Only the two things that are NOT
  * albedo stay at the end of the shader: the fresnel share of sky and the foam.
  *
- * ── ONE NUMBER SAYS "HOW MUCH WATER" ────────────────────────────────────────
- * `twA`, the absorption, drives the albedo, the roughness, the metalness, the
- * normal and the sky share alike. It is the OLD shore alpha
- * (`waterPlaneMath.waterShoreAlpha`, ¾ of the water's own bed depth) — the
- * curve that already decided how see-through the mirror was, re-read as "how
- * much of this pixel is water rather than bed". One factor means the surface
- * cannot half-change: where the bed shows through, it is shaded as the wet
- * ground it is; where it is gone, the pixel is a mirror.
+ * ── TWO NUMBERS SAY "HOW MUCH WATER", AND THEY ASK DIFFERENT QUESTIONS ──────
+ * (finding H2, 2026-08-25 — "warum kann es nicht halbtransparent sein?")
+ *
+ * `twA`, the ABSORPTION, is the OLD shore alpha (`waterPlaneMath.
+ * waterShoreAlpha`, ¾ of the water's own bed depth) and answers HOW MUCH OF
+ * THE BED IS GONE. It drives the albedo, and only the albedo:
+ * `mix(bed, tint, twA)` IS the semi-transparent look — a centimetre of water
+ * shows its sand, a metre and a half of it does not.
+ *
+ * `twS`, the SURFACE share, answers IS THERE A WATER SURFACE OVER THIS PIXEL —
+ * the rim ramp times the shore gate, with no depth in it at all. It drives
+ * everything that belongs to the interface rather than to the water column:
+ * the roughness, the metalness, the ripple's tilt and the fresnel share of sky.
+ *
+ * THEY USED TO BE ONE NUMBER, and that was the defect. Coupling the surface
+ * terms to the depth curve made shallow water 100 % bed albedo AND 0 % water
+ * signal at once: no sheen, no sky, no ripple, ground roughness — sand with a
+ * blue-ish cast, i.e. land. It also swallowed the flow (finding H1): the drift
+ * runs downstream correctly, but over a shore there was no water normal left
+ * to carry a moving crest. Now the colour follows the depth and the surface is
+ * a surface wherever the pixel is water.
  *
  * ── THE RIM IS A RAMP, NOT AN EDGE ──────────────────────────────────────────
  * The old mirror `discard`ed at depth 0 and faded its alpha over the last
@@ -219,6 +232,56 @@ export function waterAbsorb(depthM: number, opaqueDepthM: number,
 }
 
 /**
+ * HOW MUCH OF THIS PIXEL IS A WATER SURFACE, 0…1 — the CPU twin of the
+ * shader's `twS`, and the SECOND of the two shares a water pixel carries
+ * (finding H2, 2026-08-25).
+ *
+ * ── WHY TWO SHARES AND NOT ONE ──────────────────────────────────────────────
+ * Until H2 every water term rode {@link waterAbsorb}: the colour, the
+ * roughness, the metalness, the ripple normal and the fresnel share of sky
+ * alike. That reading is right for exactly one of them. Absorption answers
+ * "how much of the BED is gone", which is a question about DEPTH — and the
+ * whole point of shallow water is that the bed is NOT gone. Every other term
+ * answers "is there a water SURFACE over this pixel", which has nothing to do
+ * with depth: a centimetre of water over sand is still a mirror-smooth film
+ * that reflects the sky and carries ripples. Coupling the two made a
+ * hand's-width of water 100 % bed albedo AND 0 % water signal — sand, with no
+ * sheen, no sky and no ripple. That is the user's finding ("warum kann es
+ * nicht halbtransparent sein?"): shallow water read as land.
+ *
+ * So the depth curve keeps the ALBEDO — `mix(bed, tint, twA)` IS the
+ * semi-transparent look, the bed showing through in proportion to how little
+ * water stands over it — and this number carries everything that belongs to
+ * the surface itself.
+ *
+ * ── WHAT IT IS ──────────────────────────────────────────────────────────────
+ * The shader's `rim`, and nothing else: the edge ramp that keeps the waterline
+ * from stepping ({@link waterEdgeFade}, one pixel of depth) times the shore
+ * gate that says the pixel is inside the authored outline
+ * ({@link waterInside}). Both factors are 0 at the waterline and 1 a finger's
+ * width in, so the surface fades in over the same band the geometry lifts over
+ * (finding G1) — no line, no step, and no depth anywhere in it.
+ *
+ * Hand values for a rim ramp at its floor (`edgeM` = 0.05 m) well inside the
+ * outline (`inside` = 1):
+ *
+ *     depth 0.025 -> 0.5   (half a floor-pixel: the ramp, not the depth)
+ *     depth 0.05  -> 1
+ *     depth 0.30  -> 1
+ *     depth 1.50  -> 1
+ *
+ * — i.e. from 5 cm of water on, the pixel is a water surface in FULL, however
+ * shallow it is. Compare {@link waterAbsorb} on the default lake at the same
+ * three depths: 0.00325926, 0.104, 1.
+ */
+export function waterSurface(depthM: number, edgeM: number,
+                             inside: number): number {
+  if (!(depthM > 0)) return 0;
+  const g = !Number.isFinite(inside) ? 0 : inside <= 0 ? 0 : inside >= 1 ? 1 : inside;
+  return waterEdgeFade(depthM, edgeM) * g;
+}
+
+/**
  * How much of a pixel the foam may whiten where the WATER itself covers almost
  * nothing (0…1) — the lace at the very waterline.
  *
@@ -378,6 +441,69 @@ export function waterTintBlend(bed: readonly [number, number, number],
 }
 
 /**
+ * THE SHADING NORMAL of a water pixel, in WORLD space — the CPU twin of the
+ * shader's `tlodWaterNormal`, and the one term of finding H2 that needs both
+ * shares at once.
+ *
+ * ── THE COMPOSITION, IN TWO HALVES ──────────────────────────────────────────
+ * A MACRO normal and a PERTURBATION, and each rides its own share:
+ *
+ *   macro = mix(ground, up, absorb)      — the surface the water lies on
+ *   n     = normalize(macro + (ripple − up) · surface)
+ *
+ * The MACRO half is a depth question, so it rides the absorption: where the
+ * bed is fully gone the surface IS a flat mirror (`up`), and where it shows
+ * through, the bank's own tilt is still the shape the light falls on. The
+ * PERTURBATION — the ripple's tilt off flat, which is all `twRipple` ever
+ * produces — is a surface question, so it rides the surface share and is there
+ * in FULL over a centimetre of water.
+ *
+ * ── WHY NOT THE OLD `mix(ground, ripple, absorb)` ───────────────────────────
+ * Because it made the ripple invisible exactly where it matters. On the
+ * default lake at 5 cm of depth the absorption is 0.00325926, so the ripple got
+ * 0.33 % of its say: the shading normal was the bank's, the specular lobe was
+ * the ground's roughness, and NOTHING on that surface moved. That is the other
+ * half of "the water does not flow" (finding H1) — the drift is correct, the
+ * pattern travels downstream (see `twRipple`), but over most of a shore there
+ * was no water normal left to carry it.
+ *
+ * ── THE TWO EARLY-OUTS SURVIVE UNCHANGED ────────────────────────────────────
+ * `surface = 0` (dry, or outside the outline) gives `macro + 0 = ground`.
+ * `absorb = 1` gives `macro = up` and `up + (ripple − up)·1 = ripple`, which is
+ * the deep-water answer the shader returns without reading the bed's normal at
+ * all — sixteen `texelFetch` still skipped, bit for bit the old picture below
+ * the opaque depth.
+ *
+ * Hand check on a bank tilted 26.565° (`ground = normalize(0.5, 1, 0)` =
+ * (0.4472136, 0.89442719, 0)) under a ripple tilted 16.699°
+ * (`ripple = normalize(0.3, 1, 0)` = (0.28734789, 0.95782629, 0)), i.e.
+ * `ripple − up` = (0.28734789, −0.04217371, 0):
+ *
+ *   absorb 0.00325926, surface 1 (5 cm of lake)
+ *     macro = (0.44575601, 0.89477128, 0)
+ *     sum   = (0.73310390, 0.85259757, 0), |sum| = 1.12443939
+ *     n     = (0.65197280, 0.75824235, 0)  — 14.1255° off the bare bank
+ *     (the OLD `mix(ground, ripple, absorb)` gave 0.031998° — the ripple had
+ *      0.33 % of its say, which is why nothing on a shore ever moved)
+ *   absorb 1, surface 1 (1.5 m of lake)
+ *     n     = ripple, exactly
+ *   surface 0
+ *     n     = ground, exactly
+ */
+export function waterShadeNormal(ground: readonly [number, number, number],
+                                 ripple: readonly [number, number, number],
+                                 absorb: number, surface: number):
+                                 [number, number, number] {
+  const a = absorb <= 0 ? 0 : absorb >= 1 ? 1 : absorb;
+  const s = surface <= 0 ? 0 : surface >= 1 ? 1 : surface;
+  const x = ground[0] + (0 - ground[0]) * a + (ripple[0] - 0) * s;
+  const y = ground[1] + (1 - ground[1]) * a + (ripple[1] - 1) * s;
+  const z = ground[2] + (0 - ground[2]) * a + (ripple[2] - 0) * s;
+  const len = Math.hypot(x, y, z);
+  return len > 0 ? [x / len, y / len, z / len] : [0, 1, 0];
+}
+
+/**
  * THE SIGNED DISTANCE SAMPLER, as GLSL — ONE text, included by BOTH stages of
  * the water variant (finding F-A/F-B).
  *
@@ -502,7 +628,7 @@ float twInside( float sd ) {
  *     (`map_fragment` + the compositor + the natural-ground stages), the
  *     roughness and the metalness are all written and all still writable.
  *     `tlodWaterSurface` does the whole measurement here and leaves its answer
- *     in the four globals below.
+ *     in the five globals below.
  *  2. inside `#include <normal_fragment_begin>` — `tlodWaterNormal` replaces
  *     the ground normal the dry variant takes.
  *  3. before `#include <opaque_fragment>` — the two things that are not albedo:
@@ -524,7 +650,16 @@ ${waterSdGlsl()}${waterGateGlsl()}
 // What tlodWaterSurface() measures and the two stages after it read. Globals
 // and not a struct passed along: the three insertion points are three separate
 // chunks of three's own shader and cannot hand each other a value.
+//
+// TWO SHARES, NOT ONE (finding H2, 2026-08-25). \`twA\` is HOW MUCH OF THE BED
+// IS GONE — the depth curve — and it drives the COLOUR alone. \`twS\` is HOW
+// MUCH OF THIS PIXEL IS A WATER SURFACE — the rim ramp times the shore gate,
+// with no depth in it at all — and it drives everything that belongs to the
+// surface: the roughness, the metalness, the ripple's tilt and the fresnel
+// share of sky. \`twS >= twA\` everywhere by construction (twA = shore · twS,
+// shore in 0…1). The TS twins are \`waterAbsorb\` and \`waterSurface\`.
 float twA;
+float twS;
 float twFoam;
 float twSkyMix;
 vec3 twN;
@@ -574,6 +709,32 @@ vec2 twFrame( vec2 v, vec2 ax, vec2 ay, float aniso ) {
 // pair is 1.49 deg after the blur (1.80 before); on a hairpin drawn inside a
 // lake-sized polygon, 66 deg after 146. Nothing here changed for it — the
 // varying is simply continuous now.
+//
+// WHICH WAY THE PATTERN REALLY TRAVELS — the sign, derived rather than
+// asserted (finding H1, 2026-08-25). Each sheet's sample coordinate is
+//
+//     uv(p, t) = F( p / lam + dir * ( t * sp * sgn / lam ) )
+//
+// with F the flow frame's linear squeeze (\`twFrame\`), which is invertible. A
+// FIXED FEATURE of the normal map sits at a fixed uv0; the world point that
+// shows it is found by solving uv(p, t) = uv0:
+//
+//     F(p) = lam * uv0 − F(dir) * t * sp * sgn
+//     d F(p) / dt = −F(dir) * sp * sgn        and F is linear, so
+//     dp / dt = −dir * sp * sgn.
+//
+// Adding the drift to a SAMPLE coordinate therefore slides the picture the
+// OTHER way — the classic leftward scroll of \`uv + vec2(t, 0)\`, and the exact
+// bug the mirror carried until commit 09f2b29f. With \`sgn = −1\` on flowing
+// water the feature travels at \`+dir * sp\`, i.e. DOWNSTREAM at sp·|dir| m/s;
+// with \`sgn = +1\` it would travel upstream. The identity the smoke pins is the
+// sharpest form of the same statement:
+//
+//     uv( p0 + dir * sp * t, t ) == uv( p0, 0 )   for every t, exactly
+//
+// — the crest rides the world at velocity \`dir · sp\`. Still water keeps the
+// +1 it always had (a lake has no reference direction, and its two sheets
+// counter-scroll either way), which is the mirror's accepted convention.
 //
 // TEXTUREGRAD AND NOT TEXTURE. Every fetch here sits under \`if ( d > 0.0 )\`,
 // which differs across a quad at every shoreline, so an implicit derivative
@@ -627,6 +788,7 @@ vec3 twRipple( vec2 p, vec2 gx, vec2 gy, float waveM, float speed, float flowSpe
 void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
                        inout float metalnessFactor ) {
   twA = 0.0;
+  twS = 0.0;
   twFoam = 0.0;
   twSkyMix = 0.0;
   twN = vec3( 0.0, 1.0, 0.0 );
@@ -669,6 +831,11 @@ void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
   vec4 look1 = texelFetch( uTlodWaterLook, ivec2( 1, layer ), 0 );
   vec4 look2 = texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 );
   float shore = twSmooth( d / max( look1.w, 1e-3 ) );
+  // THE SURFACE SHARE is the rim itself: a pixel inside the outline with water
+  // over it IS a water surface, however thin the film (finding H2). The
+  // ABSORPTION is that share narrowed by the depth curve — how much of the bed
+  // has gone. Everything below picks one of the two on purpose.
+  twS = rim;
   twA = shore * rim;
   // THE FOAM, and the COVER it is multiplied by — the mirror's own alpha, which
   // an opaque ground has nowhere else to put. See waterFoamAt: without it a
@@ -682,40 +849,68 @@ void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
   // compositor painted is blended toward the water's tint here, so the lighting
   // model shades the water itself — with the water's roughness and the water's
   // normal — instead of a flat patch of colour laid over a lit ground.
+  //
+  // AND THE COLOUR IS THE ONE TERM THE DEPTH KEEPS. That mix IS the
+  // semi-transparent look the finding asks for: over a centimetre of water the
+  // bed shows through almost whole, over a metre and a half it is gone.
   diffuseColor.rgb = mix( diffuseColor.rgb, look0.rgb, twA );
-  roughnessFactor = mix( roughnessFactor, look2.x, twA );
-  metalnessFactor = mix( metalnessFactor, look2.y, twA );
+  // …while the two MATERIAL constants ride the SURFACE share. A film of water
+  // over sand is a smooth, faintly metallic surface at any depth; giving these
+  // the depth curve is what left shallow water with the roughness of dry
+  // ground (0.847 of 0.85 at 5 cm) and no sheen at all (finding H2).
+  roughnessFactor = mix( roughnessFactor, look2.x, twS );
+  metalnessFactor = mix( metalnessFactor, look2.y, twS );
 }
 
-// THE SHADING NORMAL of a water pixel — and the one place K-A gives GPU work
+// THE SHADING NORMAL of a water pixel — a MACRO normal and a PERTURBATION,
+// each on its own share (finding H2), and the one place K-A gives GPU work
 // back rather than taking it.
 //
-// Where the bed is fully absorbed (twA == 1, i.e. from the water's own opaque
-// depth down) the ground normal is INVISIBLE, so it is not computed:
-// \`tlodNormalAt\` is four \`tlodHeight\` calls, i.e. SIXTEEN texelFetch, and they
-// are simply skipped. Under the opaque depth the two normals are blended by
-// the same absorption the albedo used, so the swing from the bank's tilt to
-// the flat mirror is spread over the whole shore ramp instead of standing as a
-// line at the waterline.
+// MACRO = mix( ground, up, twA ). "What shape does the light fall on" is a
+// DEPTH question: where the bed is fully absorbed the surface is a flat
+// mirror, and where the bed shows through, its own tilt is still the shape.
+//
+// PERTURBATION = ( twN − up ) · twS. The ripple's tilt off flat is all
+// \`twRipple\` ever makes, and whether a surface ripples is not a depth
+// question at all. Riding it on twA is what left a shore with 0.33 % of its
+// ripple at 5 cm of water — a mirror-still, ground-rough bank, which is the
+// other half of "the water does not flow" (finding H1: the DRIFT is correct,
+// there was simply no water normal left to carry it).
+//
+// BOTH EARLY-OUTS SURVIVE, arithmetically identical to before:
+//  * twS == 0 (dry, or outside the outline) -> macro + 0 == ground.
+//  * twA == 1 -> macro == up and up + ( twN − up ) == twN, so the bed's normal
+//    is not computed at all: \`tlodNormalAt\` is four \`tlodHeight\` calls, i.e.
+//    SIXTEEN texelFetch, still skipped for every pixel below the opaque depth.
+// The TS twin of the whole composition is \`waterShadeNormal\`.
 vec3 tlodWaterNormal() {
-  if ( twA <= 0.0 ) {
+  if ( twS <= 0.0 ) {
     return normalize( ( viewMatrix * vec4( tlodNormalAt( vTlodXZ ), 0.0 ) ).xyz );
   }
-  vec3 wn = normalize( ( viewMatrix * vec4( twN, 0.0 ) ).xyz );
-  if ( twA >= 1.0 ) return wn;
-  vec3 gn = normalize( ( viewMatrix * vec4( tlodNormalAt( vTlodXZ ), 0.0 ) ).xyz );
-  return normalize( mix( gn, wn, twA ) );
+  if ( twA >= 1.0 ) {
+    return normalize( ( viewMatrix * vec4( twN, 0.0 ) ).xyz );
+  }
+  vec3 up = vec3( 0.0, 1.0, 0.0 );
+  vec3 macro = mix( tlodNormalAt( vTlodXZ ), up, twA );
+  vec3 nw = normalize( macro + ( twN - up ) * twS );
+  return normalize( ( viewMatrix * vec4( nw, 0.0 ) ).xyz );
 }
 
 // The two things that are not albedo, written on the finished light: the
 // fresnel share of sky (the reflection this renderer can afford, § 3.4) and
 // the foam lace at the rim. Same order as the mirror's shader — the foam is
 // broken water lying ON the reflection, not under it.
+//
+// THE SKY SHARE RIDES twS AND NOT twA (finding H2). A wet road mirrors the
+// sky, and it is a millimetre deep; the reflection off a water surface is a
+// property of the INTERFACE, not of what stands under it. On the default lake
+// at 5 cm the old coupling gave a sky share of 0.00089630 against 0.275 — i.e.
+// none, which is precisely how shallow water came to read as land.
 void tlodWaterOut( inout vec3 outgoingLight, vec3 n, vec3 viewPos ) {
-  if ( twA <= 0.0 && twFoam <= 0.0 ) return;
+  if ( twS <= 0.0 && twFoam <= 0.0 ) return;
   float fres = pow( 1.0 - clamp( dot( normalize( viewPos ), n ), 0.0, 1.0 ), 3.0 );
   outgoingLight = mix( outgoingLight, uTlodSky,
-                       clamp( fres * twSkyMix, 0.0, 1.0 ) * twA );
+                       clamp( fres * twSkyMix, 0.0, 1.0 ) * twS );
   outgoingLight = mix( outgoingLight, vec3( 1.0 ), twFoam * ${WATER_FOAM_STRENGTH} );
 }
 `;

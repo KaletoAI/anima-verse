@@ -182,7 +182,10 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
       + 'depth 0 means the plain ground look. It is a uniform and not a '
       + 'define, so the same program keeps drawing and the same pieces keep '
       + 'going through it: what the toggle removes is the water alone, never '
-      + 'the second draw call.',
+      + 'the second draw call. Since H3 it also hides the figures\' underwater '
+      + 'ghost (the second, GreaterDepth draw that gives a wading figure a '
+      + 'body below the waterline) — with no water surface there is nothing '
+      + 'for that draw to be behind.',
     cost: 'none' },
 ];
 

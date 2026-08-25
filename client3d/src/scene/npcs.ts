@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
-  groundWaterLevel, idleClip, moveClip, sinkForState, wadeGate,
+  groundWaterLevel, idleClip, moveClip, sinkForState, submergedInWater, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
@@ -958,6 +958,13 @@ export class NpcManager {
         const gm = wadeGate({ anim: raw.anim, idle: raw.idle, sink: raw.sink,
           water: groundWaterLevel(raw.water, raw.scope) },
         goalPos.y, raw.swimFrom);
+        // THE UNDERWATER GHOST, for a traveller as for anybody else (finding
+        // H3) — and on the UNGATED water level, because a wader is exactly the
+        // figure the opaque surface cuts in half. `goalPos.y` is still the raw
+        // BED here, three lines before it becomes the float height.
+        const ghostLevel = groundWaterLevel(raw.water, raw.scope);
+        npc.figure?.setSubmerged(submergedInWater(goalPos.y, ghostLevel)
+          ? ghostLevel : null);
         const groundIdle = idleClip(gm.idle, raw.scope);
         const sinkM = groundSink(sinkForState(travelling, groundIdle, gm.sink),
                                  raw.scope);
@@ -1040,6 +1047,15 @@ export class NpcManager {
         sink: standRaw.sink,
         water: groundWaterLevel(standRaw.water, standRaw.scope) },
       standBedY, standRaw.swimFrom);
+      // …and the UNDERWATER GHOST rides the same two numbers, but the UNGATED
+      // water level (finding H3): `wadeGate` nulls the mirror below the kind's
+      // swim depth because a wader keeps its own clips — and a wader is exactly
+      // the figure the opaque water surface cuts in half. `submergedInWater`
+      // is the whole decision; `Figure.setSubmerged` only owns the meshes, and
+      // takes the LEVEL because the ghost cuts itself off at the waterline.
+      const standGhostLevel = groundWaterLevel(standRaw.water, standRaw.scope);
+      npc.figure?.setSubmerged(
+        submergedInWater(standBedY, standGhostLevel) ? standGhostLevel : null);
       const standIdle = idleClip(standGm.idle, standRaw.scope);
       const standSink = groundSink(
         sinkForState(moving, standIdle, standGm.sink), standRaw.scope);
