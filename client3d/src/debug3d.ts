@@ -553,6 +553,26 @@ export function initIsolation(deps: IsolationDeps): void {
       + 'border:1px solid #2b343d;border-radius:4px;color:#9fe0a8;'
       + 'white-space:pre;font:11px/1.45 ui-monospace,monospace;';
 
+    // COPY BUTTON (user 2026-08-25): the readout refreshes four times a
+    // second, so a text selection dies before it can be copied and the panel
+    // is too narrow to read long lines anyway. One click puts the CURRENT
+    // snapshot on the clipboard; the label flashes as the receipt.
+    const copy = document.createElement('button');
+    copy.textContent = '⧉ copy readout';
+    copy.style.cssText = 'margin:0 0 8px;padding:2px 8px;background:#1d242c;'
+      + 'border:1px solid #2b343d;border-radius:4px;color:#c9d4de;'
+      + 'cursor:pointer;font:11px ui-monospace,monospace;';
+    copy.addEventListener('click', () => {
+      const text = readout?.textContent ?? '';
+      void navigator.clipboard?.writeText(text).then(() => {
+        copy.textContent = '✓ copied';
+        setTimeout(() => { copy.textContent = '⧉ copy readout'; }, 1200);
+      }).catch(() => {
+        copy.textContent = '✗ clipboard blocked';
+        setTimeout(() => { copy.textContent = '⧉ copy readout'; }, 1800);
+      });
+    });
+
     const list = document.createElement('div');
     for (const t of ISOLATION_TOGGLES) {
       const row = document.createElement('label');
@@ -599,7 +619,7 @@ export function initIsolation(deps: IsolationDeps): void {
       + '* = rebuild/upload, one hitch per flip · the state rides in the URL '
       + '(#iso=…) and in localStorage.';
 
-    el.append(head, readout, list, foot);
+    el.append(head, readout, copy, list, foot);
     document.body.appendChild(el);
     return el;
   }
