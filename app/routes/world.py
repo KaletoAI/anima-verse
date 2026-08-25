@@ -1152,6 +1152,46 @@ def _location_roof_generate_sync(location_id: str,
     return {"status": "generating", "description": desc}
 
 
+# ── The EXTERIOR RENDER (plan-blender-aussenansicht.md) ──
+# ONE step, unlike the roof: nothing is decided here that the user would want
+# to edit first — the volume IS the location's own geometry and the roof form
+# follows a stated heuristic. What comes out is an ordinary gallery image of
+# type "building", so the existing img2mesh path takes it from there.
+
+@router.post("/locations/{location_id}/exterior/render")
+async def location_exterior_render(location_id: str) -> Dict[str, Any]:
+    """Render the location's exterior with Blender into its gallery.
+
+    Background job — poll ``model3d/status`` for ``pending``. 409 = the
+    location has no exterior to render (no wall, no plate, no footprint)."""
+    return await asyncio.to_thread(_location_exterior_render_sync, location_id)
+
+
+def _location_exterior_render_sync(location_id: str) -> Dict[str, Any]:
+    """The blocking body of ``location_exterior_render`` — runs in the
+    threadpool (the geometry extraction composes the whole scene)."""
+    from app.blender import runner
+    from app.core.exterior_render import build_job, trigger_exterior_render
+    location = get_location_by_id(location_id)
+    if not location:
+        raise HTTPException(status_code=404, detail="Location not found")
+    if not runner.is_available():
+        raise HTTPException(status_code=503,
+                            detail="Blender is not available — the exterior "
+                                   "is rendered locally, not on a backend.")
+    # Ask BEFORE starting a thread, so an empty location gets a reason instead
+    # of a job that fails silently in the background.
+    job = build_job(location_id, location)
+    if not job.get("ok"):
+        raise HTTPException(
+            status_code=409,
+            detail="This location has nothing to render — draw a building "
+                   "outline, a boundary, or give it a room with a floor plan.")
+    if not trigger_exterior_render(location_id):
+        return {"status": "already_running", "expect": job["expect"]}
+    return {"status": "generating", "expect": job["expect"]}
+
+
 @router.delete("/locations/{location_id}/model3d")
 def location_model3d_delete(location_id: str, file: str = "") -> Dict[str, Any]:
     """Remove ONE stored building model (?file=<name>) or all of them (no

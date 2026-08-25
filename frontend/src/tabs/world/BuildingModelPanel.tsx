@@ -463,15 +463,24 @@ export function BuildingModelPanel({
     </>
   )
 
-  // The parametric way to a building model — buildings only: a room has no
-  // outline of its own to roof, its walls ARE the building's.
-  const roofBuilder = roomId ? null : (
-    <RoofBuilder
-      apiBase={enc}
-      blender={model3d?.blender}
-      pending={!!model3d?.pending}
-      onStarted={startPoll}
-    />
+  // The two LOCAL ways to a building model — buildings only: a room has no
+  // outline of its own to roof or to photograph, its walls ARE the building's.
+  // Both run in Blender on this machine instead of on an image backend.
+  const blenderTools = roomId ? null : (
+    <>
+      <ExteriorRenderButton
+        apiBase={enc}
+        blender={model3d?.blender}
+        pending={!!model3d?.pending}
+        onStarted={startPoll}
+      />
+      <RoofBuilder
+        apiBase={enc}
+        blender={model3d?.blender}
+        pending={!!model3d?.pending}
+        onStarted={startPoll}
+      />
+    </>
   )
 
   const picker = (
@@ -525,7 +534,7 @@ export function BuildingModelPanel({
             {uploadButton}
           </div>
         )}
-        {model3d?.pending ? null : roofBuilder}
+        {model3d?.pending ? null : blenderTools}
       </div>
     )
   }
@@ -737,7 +746,65 @@ export function BuildingModelPanel({
           {t('Generate more models via 🧊 on a gallery tile — new ones become the active model of their target tier.')}
         </span>
       </div>
-      {roofBuilder}
+      {blenderTools}
+    </div>
+  )
+}
+
+/**
+ * THE EXTERIOR RENDER (plan-blender-aussenansicht.md) — Blender photographs
+ * the location's OWN geometry, so a place that never got a building image can
+ * still be meshed.
+ *
+ * ONE step, unlike the roof next to it: there is nothing to propose. The
+ * volume is the scene recipe's walls and storeys, and the roof form follows a
+ * stated heuristic over the footprint — no dialog, no numbers to edit. What
+ * comes out is an ordinary gallery image of type "building", which is exactly
+ * what the existing image-to-3D path already eats.
+ */
+function ExteriorRenderButton({ apiBase, blender, pending, onStarted }: {
+  apiBase: string
+  blender?: BlenderStatus
+  pending: boolean
+  onStarted: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+
+  // Blender renders locally — without it the button would only ever produce a
+  // 503, so it is not offered (the roof builder is gated the same way).
+  if (!blender?.usable) return null
+
+  const render = async () => {
+    setBusy(true)
+    try {
+      const d = await apiPost<{ status?: string }>(
+        `/world/locations/${apiBase}/exterior/render`, {})
+      toast(d?.status === 'already_running'
+        ? t('An exterior is already being rendered for this location.')
+        : t('Rendering the exterior…'))
+      onStarted()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <button
+        className="ga-btn ga-btn-sm"
+        disabled={busy || pending}
+        onClick={() => { void render() }}
+        title={t('Render the location’s own geometry — walls, storeys and a roof from the footprint — as a three-quarter exterior view. No image backend is used.')}
+      >
+        📷 {t('Render exterior (Blender)')}
+      </button>
+      <span className="ga-hint">
+        {t('The render is filed as a building image in the gallery below, so 🧊 can mesh it straight away — or use it as the reference for a styled building image first.')}
+      </span>
     </div>
   )
 }
