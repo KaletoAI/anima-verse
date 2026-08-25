@@ -54,7 +54,8 @@
         "spazieren",
         "spaziergang"
       ],
-      "animation": "walk"
+      "animation": "walk-cmu",
+      "solo": true
     },
     "running": {
       "prompt": "dynamic running pose, one foot forward, arms pumping, leaning forward",
