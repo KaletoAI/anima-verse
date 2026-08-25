@@ -302,8 +302,12 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
   const dangerLabel = DANGER_LEVELS.find((d) => d.value === danger)?.label || ''
   // Sort the entry room to the top of the list.
   const eid = entryRoomId(location)
-  const rooms = [...(location.rooms || [])].sort(
-    (a, b) => (a.id === eid ? -1 : 0) - (b.id === eid ? -1 : 0))
+  // Sort: the GROUND ("Außenbereich") always first (user 2026-08-25 — it is
+  // the location's own frame, not one room among rooms), then the entry room,
+  // then the rest in their stored order.
+  const rank = (r: { id?: string }) =>
+    r.id === GROUND_ROOM_ID ? -2 : r.id === eid ? -1 : 0
+  const rooms = [...(location.rooms || [])].sort((a, b) => rank(a) - rank(b))
 
   return (
     <li>
