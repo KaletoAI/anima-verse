@@ -88,6 +88,31 @@ THE DRAFT — hand-built as an LLM would emit it, and the hand expectations:
       have -> dropped, one `boundary_opening_dropped`. Counted from the ONE
       list: 2 sent, 1 kept, so exactly 1 lost.
 
+ [7b] STAIRCASES ride the very same whitelist — one flight per STOREY JUMP,
+      and the plan hands them to `world_ops._sanitize_map3d` exactly as it
+      hands over the boundary openings, so there is no second rule set to
+      disagree with.
+      {"at": [-5, -3], "from_level": 0, "dir_deg": 90} is legal on all three
+      counts — two finite metres, an integer storey, and a direction that IS
+      one of the four quarter turns — so it survives verbatim, with `at` at
+      the centimetre every plan coordinate is stored at: [-5.0, -3.0].
+      Where that puts it, by hand: the plot's big hall is x in [-6, 6],
+      y in [-4, 4]; dir 90 climbs east (+x). The seed's storey_height_m is
+      3.0, so the climb is 1*3.0 + 0.08 = 3.08 m (the upper floor datum,
+      `scene_recipe.storey_floor_y`), 3.08 / 0.20 = 15.4 -> 15 steps, and
+      15 * 0.26 = 3.90 m of run. The flight therefore covers x in
+      [-5, -1.1] and, 1.2 m wide across the climb, y in [-3.6, -2.4]:
+      inside the hall and clear of every room of this draft (the Taproom
+      starts at y = 1, the Pantry at y = 1, the Kitchen at y = 2).
+      {"at": [0, 0], "from_level": 0, "dir_deg": 45} is NOT one of the four
+      turns -> DROPPED, not turned to the nearest one, and reported once as
+      `stair_dropped`. Counted from the ONE list, like the boundary
+      openings: 2 sent, 1 kept, so exactly 1 lost.
+      `layout_counts` therefore says stairs 1 — a dialog that does not name
+      them would let a storey connection through unread — the apply writes
+      the surviving flight into `map3d.stairs`, and the restore takes it
+      away again with the rest of the plan.
+
   [8] entry_room. "Taproom" is given by NAME; it resolves to the Taproom's id.
       A draft naming "nowhere" instead keeps the location's entry room as it
       was and raises `unknown_entry_room`.
@@ -225,6 +250,10 @@ DRAFT = {
         {"edge": 0, "at": 0.5, "width_m": 3, "room": TAPROOM},
         {"edge": 9, "at": 0.5, "width_m": 3},
     ],
+    "stairs": [
+        {"at": [-5, -3], "from_level": 0, "dir_deg": 90},
+        {"at": [0, 0], "from_level": 0, "dir_deg": 45},
+    ],
 }
 # The "Cellar Store" of the hand derivation IS the Kitchen entry above — the
 # seed's second room, moved to (3, 2) so it sticks out. Naming it in the plan
@@ -312,6 +341,14 @@ check("one survives, unclamped", NORM["boundary_openings"],
 check("the other is reported",
       code_count(WARN, "boundary_opening_dropped"), 1)
 
+print("[7b] staircases ride the same whitelist")
+check("the legal flight survives verbatim", NORM["stairs"],
+      [{"at": [-5.0, -3.0], "from_level": 0, "dir_deg": 90}])
+check("dir_deg 45 is dropped, not turned to the nearest quarter",
+      code_count(WARN, "stair_dropped"), 1)
+check("the location's storey height rides along, so a preview can draw the "
+      "flight at its true 3.90 m", NORM["storey_height_m"], 3.0)
+
 print("[8] entry room by name")
 check("resolved to the id", NORM["entry_room"], TAPROOM)
 _N2, _W2 = la.sanitize_layout({**DRAFT, "entry_room": "nowhere"},
@@ -322,10 +359,11 @@ check("an unknown one is dropped and reported",
 print("[8b] the whole warning vocabulary of this draft")
 check("codes", codes(WARN),
       ["boundary_opening_dropped", "opening_dropped", "room_outside_boundary",
-       "room_overlap", "unknown_opening_target", "unknown_room",
-       "unknown_room", "unknown_surface"])
+       "room_overlap", "stair_dropped", "unknown_opening_target",
+       "unknown_room", "unknown_room", "unknown_surface"])
 check("counts", la.layout_counts(NORM),
-      {"rooms": 3, "new_rooms": 1, "openings": 2, "boundary_openings": 1})
+      {"rooms": 3, "new_rooms": 1, "openings": 2, "boundary_openings": 1,
+       "stairs": 1})
 
 print("[9] the apply writes through the editor's own save path")
 SNAP = la.layout_snapshot(LOC_ID)
@@ -350,8 +388,15 @@ check("entry_room points at the Taproom", after.get("entry_room"), TAPROOM)
 check("the boundary opening landed", after["map3d"].get("boundary_openings"),
       [{"edge": 0, "at": 0.5, "width_m": 3.0, "type": "passage",
         "room": TAPROOM}])
+# Both plan-authored map3d keys in ONE write: written separately, the second
+# copy of the stored map3d would drop the first one's field.
+check("and so did the flight, beside it",
+      after["map3d"].get("stairs"),
+      [{"at": [-5.0, -3.0], "from_level": 0, "dir_deg": 90}])
 check("the plot outline is untouched", after["map3d"]["boundary"],
       loc["map3d"]["boundary"])
+check("the storey height the seed set is untouched too",
+      after["map3d"].get("storey_height_m"), 3.0)
 
 print("[9b] a room the plan never mentioned keeps everything")
 loc2 = world.add_location("Barn", "A barn.",
@@ -383,6 +428,7 @@ check("the Taproom has no plan again",
 check("entry_room is empty again", back.get("entry_room", ""), "")
 check("map3d carries no boundary openings again",
       back["map3d"].get("boundary_openings"), None)
+check("and no staircase again", back["map3d"].get("stairs"), None)
 check("the plot outline survived the round trip", back["map3d"]["boundary"],
       loc["map3d"]["boundary"])
 check("the snapshot list names the location",
