@@ -242,37 +242,20 @@ function applySurfaceFiltering(): void {
   tex.needsUpdate = true;
 }
 
-/**
- * Hang the NEAR id mask and its window into a shader that is not this patch —
- * under names of that shader's own choosing (Wasser v2, K-A E4).
- *
- * ITS ONE CALLER is the terrain's WATER variant (`scene/terrainLod.ts`), which
- * has to know which KIND a water pixel stands in to pick its tint, and the id
- * mask is the one thing in this client that answers that per fragment. It
- * cannot use `uLcNearId`/`uLcNear`: the compositor's chunk is declared BELOW
- * the terrain's in the finished shader, so those names are not in scope there
- * — a second sampler bound to the SAME texture object is one texture unit and
- * no second upload.
- *
- * The objects themselves are handed over, never their values: a window swap
- * mutates `.value` in place, so the borrowing program follows every update
- * without a second book to keep.
- *
- * THE PAIR AND NOTHING ELSE. The compositor's SIGNED DISTANCE rode along here
- * for one day (the rim seam of 2026-08-24), so the water shading could tell the
- * authored mirror from the flooded dilation ring. That was the wrong field:
- * this distance is measured against a MATERIAL boundary between the topmost
- * painted kind and the one under it, and a lake whose bed is painted reads
- * "sand meets sand" over its whole interior — the gate then answered "no water"
- * for the whole lake (finding F-A). The water raster ships its own signed
- * distance to the authored WATER outline since bake v9, and that is what the
- * terrain's water variant reads; nothing borrows this one.
- */
-export function bindLayerIdUniforms(uniforms: Record<string, unknown>,
-                                    idName: string, geomName: string): void {
-  uniforms[idName] = uNearId;
-  uniforms[geomName] = uNear;
-}
+// NOTHING OUTSIDE THIS FILE BORROWS THE ID MASK ANY MORE (finding F-A, both
+// halves). `bindLayerIdUniforms` used to hang the near id mask and its window
+// into the terrain's WATER variant, first so the water shading could tell the
+// authored mirror from the flooded dilation ring (the rim seam of 2026-08-24),
+// then — after that gate moved to the water raster's own `sd` at bake v9 — so
+// the fragment could learn WHICH KIND of water it stood in.
+//
+// Both were the wrong field, and for one reason: this mask is a statement about
+// the GROUND. Its pair names the topmost PAINTED kind and the one under it, so
+// a lake whose bed is painted reads "sand meets sand" over its whole interior,
+// and a river running under a forest area reads "forest, forest" down its whole
+// length. The water raster ships its own signed distance (v9) and its own kind
+// palette (v10), and the terrain's water variant reads those. The binding, its
+// second sampler and its `is_water` flag are deleted rather than left standing.
 
 /** The layer table in force — read by the undergrowth gate, which has to turn a
  *  painted kind into the index the mask speaks. */

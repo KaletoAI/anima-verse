@@ -91,24 +91,6 @@ export interface WaterLook {
   opaqueDepthM: number;
   roughness: number;
   metalness: number;
-  /**
-   * Whether the LAYER this row belongs to is itself a water layer.
-   *
-   * It is not part of the look — it is how the fragment reads the mask. The id
-   * mask names a PAIR of layers per texel (the one painted on top at the
-   * nearest boundary and the one under it) and says nothing about which side of
-   * that boundary a pixel is on. It does not have to: a pixel that reaches the
-   * water shading was LIFTED and stands inside the painted outline — the water
-   * raster's own signed distance said so, twice, once per shader stage — so the
-   * water half of the pair is its kind. This flag is what picks that half, and
-   * picking the half is ALL the id mask is asked for. Asking it whether there
-   * is water at all is finding F-A: it names the topmost PAINTED kind, so a
-   * lake whose bed is painted answers (sand, sand) over its whole interior.
-   *
-   * Rows that merely carry the primary water's look as a fallback (a layer that
-   * is not water at all) say `false`, or they would win the pick.
-   */
-  isWater: boolean;
 }
 
 /** How many RGBA texels one look occupies in the lookup texture. The layout is
@@ -136,8 +118,8 @@ export function waterTintRgb(hex: unknown): [number, number, number] {
  * the same number the mirror mesh turned into its `aWaterOpaque` attribute —
  * the kind's default with the area's override already applied. Under K-A it
  * is carried per KIND (the fragment learns which kind it stands in from the
- * layer mask, which speaks kinds), so a kind painted twice with two different
- * depth overrides collapses to one of them.
+ * water raster's own per-texel palette since bake v10), so a kind painted twice
+ * with two different depth overrides collapses to one of them.
  *
  * THAT IS THE STANDING RULE, decided in K-A E6 and not a gap waiting to be
  * closed. Every other field of `WaterLook` comes from the kind's surface
@@ -159,7 +141,6 @@ export function waterLookFrom(spec: SurfaceMaterialSpec | null | undefined,
     opaqueDepthM: waterOpaqueDepthM(depthM),
     roughness: num(spec?.roughness, 0.08),
     metalness: num(spec?.metalness, 0.15),
-    isWater: true,
   };
 }
 
@@ -171,17 +152,24 @@ export const WATER_LOOK_DEFAULT: WaterLook = waterLookFrom(null, null);
 
 /**
  * The lookup texture's payload: `WATER_LOOK_TEXELS` RGBA texels per look, one
- * ROW per layer index.
+ * ROW per water KIND.
  *
  *   texel 0 — tint.r, tint.g, tint.b, sky_mix
  *   texel 1 — wave_m, speed, flow_speed, opaque_depth_m
- *   texel 2 — roughness, metalness, is_water, 0     (one spare, reserved)
+ *   texel 2 — roughness, metalness, 0, 0            (two spare, reserved)
  *
- * A TEXTURE AND NOT A UNIFORM ARRAY. The fragment indexes it by the LAYER the
- * mask names, and a `vec4[64]` array per component would spend most of a
- * GLES3 implementation's guaranteed fragment uniform budget (224 vectors) on a
- * table of at most a handful of distinct waters. Three `texelFetch` out of a
- * 3 × n float texture are always in cache and cost nothing next to that.
+ * ONE ROW PER KIND, AND EVERY ROW A REAL WATER (bake v10). The table used to be
+ * indexed by the ground compositor's LAYER index, which meant most of its rows
+ * belonged to grounds that are not water at all and had to carry a stand-in look
+ * plus an `is_water` flag for the fragment to skip them. That whole apparatus is
+ * gone with the mask: the row index now comes from the water raster's own kind
+ * palette, which only ever names waters.
+ *
+ * A TEXTURE AND NOT A UNIFORM ARRAY. A `vec4[64]` array per component would
+ * spend most of a GLES3 implementation's guaranteed fragment uniform budget
+ * (224 vectors) on a table of at most a handful of distinct waters. Three
+ * `texelFetch` out of a 3 × n float texture are always in cache and cost
+ * nothing next to that.
  */
 export function packWaterLook(looks: readonly WaterLook[]): Float32Array {
   const rows = Math.max(1, looks.length);
@@ -199,7 +187,6 @@ export function packWaterLook(looks: readonly WaterLook[]): Float32Array {
     out[base + 7] = l.opaqueDepthM;
     out[base + 8] = l.roughness;
     out[base + 9] = l.metalness;
-    out[base + 10] = l.isWater ? 1 : 0;
   }
   return out;
 }
@@ -589,6 +576,60 @@ float twSdAt( vec2 p ) {
  * NO UNIFORM OF ITS OWN, and no derivative: the band is a world constant
  * ({@link WATER_SD_BAND_M}) precisely so a vertex shader can evaluate it.
  */
+/**
+ * THE KIND SAMPLER, as GLSL — the FRAGMENT stage's alone (bake v10).
+ *
+ * The vertex stage never needs it: a lift is `max(h, level)` and knows nothing
+ * about what the water looks like. So unlike {@link waterSdGlsl} and
+ * {@link waterGateGlsl}, which both stages include because both must evaluate
+ * the same curve, this text is declared once, in
+ * {@link terrainWaterFragmentGlsl}.
+ *
+ * IT DECLARES ONLY ITS OWN SAMPLER. The lattice geometry is `uTlodWaterGeom`,
+ * declared by the chunk that includes this one — the same arrangement the sd
+ * sampler follows, and for the same reason: declaring a uniform twice in one
+ * shader stage is a compile error.
+ */
+export function waterKindGlsl(): string {
+  return `
+uniform sampler2D uTlodWaterKind;
+
+// WHICH ROW OF THE LOOK TABLE this water pixel reads — the water raster's own
+// kind, resolved to a row on the CPU (\`terrainLod.buildKindRows\`) and shipped
+// on the water pyramid's BASE lattice, exactly like the flow and the sd.
+//
+// THE ID MASK IS GONE FROM THIS PATH (finding F-A, second half). It named the
+// topmost PAINTED kind and the one under it, which is a statement about the
+// GROUND: a river running under a forest area, a lake with a painted bed, any
+// z-order in which the water is not the top layer handed back a pair with no
+// water in it, and the pixel fell to the world's PRIMARY water — the wrong
+// tint, the wrong opaque depth (the rim transparency that worked in some spots
+// and not in others) and the wrong \`flow_speed\` (a river drifting at a lake's
+// dial, or not at all). The kind of a water is the water field's business.
+//
+// NEAREST, NOT BILINEAR, and that is not an approximation: a look is per KIND,
+// and the mean of two row indices is a third row nobody authored. At a border
+// between two water kinds the nearest texel IS which of the two a pixel is in.
+// The TS twin is \`waterRaster.nearestIndex\` / \`rasterKindAt\`.
+int twKindRow( vec2 p ) {
+  if ( uTlodWaterGeom.w <= 0.0 ) return 0;
+  ivec2 sz = textureSize( uTlodWaterKind, 0 );
+  float kcols = float( sz.x );
+  float krows = float( sz.y );
+  float stepM = uTlodWaterGeom.z;
+  if ( kcols < 1.0 || krows < 1.0 || stepM <= 0.0 ) return 0;
+  float fx = ( p.x - uTlodWaterGeom.x ) / stepM;
+  float fz = ( p.y - uTlodWaterGeom.y ) / stepM;
+  int i = int( clamp( floor( fx + 0.5 ), 0.0, kcols - 1.0 ) );
+  int j = int( clamp( floor( fz + 0.5 ), 0.0, krows - 1.0 ) );
+  // The row is written as a float and read back with a half-step round: the
+  // field is R32F like every other field here, and an exact small integer
+  // survives a float32 round trip bit for bit.
+  return int( texelFetch( uTlodWaterKind, ivec2( i, j ), 0 ).r + 0.5 );
+}
+`;
+}
+
 export function waterGateGlsl(): string {
   return `
 float twSmooth( float t ) {
@@ -640,12 +681,10 @@ varying float vTlodWet;
 varying vec2 vTlodFlow;
 uniform sampler2D uTlodWave;
 uniform sampler2D uTlodWaterLook;
-uniform highp usampler2D uTlodWaterMask;
-uniform vec4 uTlodWaterMaskGeom;
 uniform vec4 uTlodWaterGeom;
 uniform vec3 uTlodSky;
 uniform float uTlodTime;
-${waterSdGlsl()}${waterGateGlsl()}
+${waterSdGlsl()}${waterGateGlsl()}${waterKindGlsl()}
 
 // What tlodWaterSurface() measures and the two stages after it read. Globals
 // and not a struct passed along: the three insertion points are three separate
@@ -663,26 +702,6 @@ float twS;
 float twFoam;
 float twSkyMix;
 vec3 twN;
-
-// WHICH TWO GROUND KINDS meet under this pixel is the layer index PAIR the
-// compositor's id mask names (\`scene/layerGround.ts\`), and WHICH SIDE of them
-// the pixel is on is the sign of the signed distance beside it. Both textures
-// are the SAME ones \`lcCompose\` reads, bound a second time under names of this
-// program's own, because that chunk is declared BELOW this one in the final
-// shader and its uniforms cannot be reached from here.
-//
-// Only the NEAR window is asked: water is lifted only inside the height
-// pyramid's near rectangle (\`tlodWaterAt\`), and the two windows cover the same
-// loaded tiles.
-//
-// IS THIS LAYER A WATER? — \`is_water\`, the third component of the look's last
-// texel. It is false on the rows that only carry the primary water's look as a
-// fallback, which is what makes the flag usable as a gate and not merely as a
-// tie-break: two waters meeting take the upper one, which is the rule the mask
-// itself follows for the ground.
-bool twIsWater( int layer ) {
-  return texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 ).z > 0.5;
-}
 
 // The FLOW FRAME, and the one place the anisotropy lives: squeeze the
 // along-flow component of a vector, leave the cross one. Still water hands in
@@ -804,25 +823,15 @@ void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
   // stages share both texts is what keeps the drawn surface and the drawn look
   // on the same shore ramp (finding G1).
   float inside = twInside( twSdAt( vTlodXZ ) );
-  // WHICH KIND'S LOOK — and this is ALL the id mask is asked for now. It names
-  // the topmost painted layer and the one under it, which is the right question
-  // for "what does the water here look like" and the wrong one for "is there
-  // water here" (finding F-A: a lake with a painted bed answers (sand, sand)).
+  // WHICH KIND'S LOOK — the water raster's OWN kind, read nearest off the same
+  // lattice the level, the flow and the sd ride on (\`twKindRow\`). The ground
+  // compositor's id mask answered this until bake v10 and answered it wrong
+  // wherever the water was not the topmost PAINTED kind; see \`waterKindGlsl\`.
   //
-  // OUTSIDE THE MASK WINDOW the fallback row 0 stands, exactly as before: every
-  // row of the look table carries a water look, the world's primary one where a
-  // layer is not water at all, so the worst case out there is the wrong water
-  // and never a ground-coloured lake.
-  int layer = 0;
-  float maskN = uTlodWaterMaskGeom.w;
-  vec2 maskIdx = ( vTlodXZ - uTlodWaterMaskGeom.xy ) / uTlodWaterMaskGeom.z;
-  if ( maskN > 1.5 && maskIdx.x >= 0.0 && maskIdx.y >= 0.0
-       && maskIdx.x < maskN && maskIdx.y < maskN ) {
-    uvec2 pair = texelFetch( uTlodWaterMask, ivec2( floor( maskIdx ) ), 0 ).rg;
-    int a = clamp( int( pair.x ), 0, rows - 1 );
-    int b = clamp( int( pair.y ), 0, rows - 1 );
-    layer = twIsWater( a ) ? a : b;
-  }
+  // OUTSIDE THE WATER WINDOW row 0 stands, which is the world's primary water:
+  // the worst case out there is the wrong water and never a ground-coloured
+  // lake — and a pixel out there was not lifted, so it never gets this far.
+  int layer = clamp( twKindRow( vTlodXZ ), 0, rows - 1 );
   // The rim ramp: 0 exactly where the water ends, 1 one pixel of depth in —
   // and 0 outside the authored outline, where the lift no longer fires either.
   float rim = clamp( d / edge, 0.0, 1.0 ) * inside;

@@ -52,6 +52,19 @@ export interface WaterTileField {
    *  water this texel's level comes from, positive inside it, negative in its
    *  dilation ring, and {@link WATER_SD_DRY} where the level is NaN. */
   sd: number[][];
+  /**
+   * THIS TILE'S OWN PALETTE of painted water kinds (bake v10) — never the
+   * world's whole list, and never empty on a tile that exists.
+   *
+   * A tile carries one or two waters, so a name per texel would be a hundred
+   * kilobytes of the same handful of words; the wire ships the palette and an
+   * index grid, and an index is what a renderer's look table wants anyway.
+   */
+  kinds: string[];
+  /** `kindIdx[j][i]` — which entry of {@link kinds} the water at this texel was
+   *  painted with, and MEANINGLESS where `level` is NaN (0 there, not a
+   *  sentinel: nothing reads it on a dry texel — see `rasterKindAt`). */
+  kindIdx: number[][];
 }
 
 /** The water field as a client holds it — the twin of `WorldHeightTiles`, and
@@ -110,12 +123,23 @@ function sdCell(v: unknown): number {
 export function waterTileFrom(originX: number, originZ: number, step: number,
                               wire: { level?: (number | null)[][];
                                       sd?: (number | null)[][];
+                                      kinds?: string[];
+                                      kind_idx?: number[][];
                                       flow_x?: number[][];
                                       flow_z?: number[][] } | null | undefined
 ): WaterTileField | null {
   const rows = wire?.level;
   if (!rows || rows.length < 2 || !(step > 0)) return null;
   const sdRows = wire?.sd;
+  const idxRows = wire?.kind_idx;
+  // A tile whose wire carries no palette is a tile from a bake older than this
+  // client (`HEIGHT_BAKE_VERSION` 10). One entry of the empty name then stands
+  // for every texel, which resolves to the world's primary water in the look
+  // table — the same worst case a kind outside the table has, and never a
+  // ground-coloured lake. The signature bump makes that state last one refetch.
+  const kinds = Array.isArray(wire?.kinds) && wire.kinds.length
+    ? wire.kinds.map((v) => (typeof v === 'string' ? v : ''))
+    : [''];
   return {
     originX,
     originZ,
@@ -129,6 +153,12 @@ export function waterTileFrom(originX: number, originZ: number, step: number,
     // signature bump is what makes that state last exactly one refetch.
     sd: rows.map((row, j) => (row ?? []).map(
       (_v, i) => sdCell(sdRows?.[j]?.[i]))),
+    kinds,
+    kindIdx: rows.map((row, j) => (row ?? []).map((_v, i) => {
+      const raw = idxRows?.[j]?.[i];
+      return typeof raw === 'number' && raw >= 0 && raw < kinds.length
+        ? Math.floor(raw) : 0;
+    })),
   };
 }
 
@@ -240,6 +270,56 @@ export function rasterSdAt(raster: WaterRaster | null | undefined,
   const north = at(i, j) * (1 - tx) + at(i + 1, j) * tx;
   const south = at(i, j + 1) * (1 - tx) + at(i + 1, j + 1) * tx;
   return north * (1 - tz) + south * tz;
+}
+
+/**
+ * THE NEAREST LATTICE INDEX to a grid fraction — the rule every KIND read
+ * follows, on the CPU and in the shader alike.
+ *
+ * NOT {@link cellAt}'s `floor` + fraction: that pair exists so a bilinear mix
+ * can weigh two neighbours, and a kind cannot be mixed. `round` picks the texel
+ * whose CENTRE the point is nearest, which is the only reading of "which kind is
+ * here" that stays inside the two kinds actually present at a border.
+ */
+export function nearestIndex(f: number, n: number): number {
+  if (!(n > 0)) return 0;
+  const i = Math.round(f);
+  return i < 0 ? 0 : i > n - 1 ? n - 1 : i;
+}
+
+/**
+ * WHICH KIND OF WATER stands at (x, z) — the painted kind of the topmost water
+ * the bake found there, or `''` where no loaded tile knows (bake v10).
+ *
+ * ── WHY THIS FIELD EXISTS AT ALL (finding F-A, second half) ─────────────────
+ * Everything about how a water LOOKS is a property of its KIND: the tint, the
+ * ripple wavelength, the still and the flowing speed, the depth at which the bed
+ * is gone. Until v10 the renderer asked the ground compositor's id mask which
+ * kind a water pixel stood in — and that mask answers a different question. It
+ * names the topmost PAINTED kind and the one under it, so a river running under
+ * a forest area, a lake with a painted bed, or any z-order in which the water is
+ * not the top layer hands back a NON-water pair. The look row then picked was
+ * the world's primary water instead of this one: the wrong tint, the wrong
+ * opaque depth (rim transparency that worked in some spots and not in others)
+ * and the wrong `flow_speed` (a river drifting at a lake's dial, or standing
+ * still — "die Fließrichtung stimmt nicht"). Only the water raster knows which
+ * water it wrote a texel from, and since v10 it says so.
+ *
+ * NEAREST, NEVER MIXED ({@link nearestIndex}). A look is per area-kind; the mean
+ * of two palette indices is a third row nobody authored. Where a river of one
+ * kind meets a lake of another INSIDE one connected water the row therefore
+ * switches at the texel edge rather than fading — accepted, and visible only as
+ * a two-metre step in tint between two waters an author drew as two waters.
+ */
+export function rasterKindAt(raster: WaterRaster | null | undefined,
+                             x: number, z: number): string {
+  const field = raster?.tiles?.get(tileKeyAt(raster.tileM, x, z));
+  const rows = field?.kindIdx;
+  if (!field || !rows || !rows.length) return '';
+  const j = nearestIndex((z - field.originZ) / field.step, rows.length);
+  const row = rows[j] ?? [];
+  const i = nearestIndex((x - field.originX) / field.step, row.length);
+  return field.kinds[row[i] ?? 0] ?? '';
 }
 
 /**

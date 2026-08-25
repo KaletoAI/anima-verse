@@ -191,7 +191,24 @@ logger = get_logger("heightfield")
 #: does not flow and is structured differently every few metres").
 #: ``h_final`` does not move by a millimetre; the counter turns because the tile
 #: PAYLOAD is a function of the code, and a v8 tile carries no ``sd`` at all.
-HEIGHT_BAKE_VERSION = 9
+#:
+#: v10 (2026-08-25, finding F-A second half): THE WATER RASTER NAMES ITS KIND
+#: PER TEXEL. v9 answered "is there water here" out of the water's own field but
+#: still left "WHICH water is here" to the ground compositor's material mask —
+#: the id PAIR of the topmost painted kind and the one under it. That pair is
+#: not a statement about water at all: a river running through a forest area
+#: painted over it, a lake with a ``bed_kind``, any z-order in which the water is
+#: not the top layer, and the pixel picks a NON-water row of the renderer's look
+#: table. It then draws with the wrong tint, the wrong ``flow_speed`` (a river
+#: standing still, or drifting at a lake's dial) and the wrong opaque depth (the
+#: rim transparency working in some spots and not in others — the user's
+#: evidence of 2026-08-25). So the water block gains a per-tile palette
+#: ``kinds`` — the kinds of the water areas the window really touches — and a
+#: ``kind_idx`` grid of indices into it, the TOPMOST water's kind exactly as the
+#: level and the ``sd`` are the topmost water's. ``h_final`` does not move; the
+#: counter turns because a v9 tile carries no palette and the renderer has
+#: nothing to index its look table by.
+HEIGHT_BAKE_VERSION = 10
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -1345,11 +1362,17 @@ def sanitize_flow_dir(raw: Any) -> Optional[float]:
 
 
 #: One water stamp: the polygon in WORLD metres, its box, the mirror PROFILE,
-#: the depth under it, the width of the shore ramp — all in metres — and the
+#: the depth under it, the width of the shore ramp — all in metres —, the
 #: FLOW FACTOR the water raster gives its flow vector as a length
-#: (:func:`water_flow_factor`; 1 for every water that authors no speed).
+#: (:func:`water_flow_factor`; 1 for every water that authors no speed) and the
+#: painted KIND this water was drawn with (v10). The kind rides along because
+#: the raster ships it per texel: everything a renderer knows about how ONE
+#: water LOOKS — its tint, its wavelength, its speed dials, its bed depth — is a
+#: property of the kind, and the water field is the only field that can say
+#: which kind a water pixel belongs to (the ground compositor's mask names the
+#: topmost PAINTED kind, which is a different question — finding F-A).
 WaterStamp = Tuple[List[List[float]], Tuple[float, float, float, float],
-                   WaterProfile, float, float, float]
+                   WaterProfile, float, float, float, str]
 
 #: One plateau stamp: pin x/z, yaw, the outline in LOCAL metres, its world box,
 #: the target height and the ramp width in metres.
@@ -2018,7 +2041,7 @@ class HeightModel:
         # nothing outside the ring — a grown box would only hand it candidates
         # it rejects.
         self._water_index = _BoxIndex([w[1] for w in self.water])
-        self._water_fast = [(_ring(w[0]) or [], w[2], w[3], w[4], w[5])
+        self._water_fast = [(_ring(w[0]) or [], w[2], w[3], w[4], w[5], w[6])
                             for w in self.water]
         # THE WATER RASTER HAS ITS OWN INDEX (K-A E1), grown by the DILATION and
         # not by the shore ramp: the raster writes :data:`WATER_RASTER_DILATION_M`
@@ -2218,11 +2241,12 @@ class HeightModel:
             # it per area before the raster existed. It is a property of the
             # WORLD like the profile beside it, never of whatever window is
             # being rastered.
+            kind = str(area.get("kind") or "")
             out.append((polygon, box, profile, meta.depth_m,
                         meta.shore_ramp_m,
                         water_flow_factor(meta.flow_speed_m_s,
-                                          self._water_flow_speeds.get(
-                                              str(area.get("kind") or "")))))
+                                          self._water_flow_speeds.get(kind)),
+                        kind))
             # THE EFFECTIVE PROFILE, keyed by area id (E1b): the admin panel
             # offers "auto (rim)" and still wants to show the numbers the carve
             # actually used. It is server-computed OUTPUT — it is never written
@@ -2515,7 +2539,7 @@ class HeightModel:
             return h
         fast = self._water_fast
         for idx in self._water_index.at(x, z):
-            ring, water_profile, depth, ramp, _factor = fast[idx]
+            ring, water_profile, depth, ramp, _factor, _kind = fast[idx]
             if not ring or not _inside_ring(x, z, ring):
                 continue
             if ramp <= 0.0:
@@ -2612,9 +2636,9 @@ class HeightModel:
     # ── the water raster (K-A E1) ───────────────────────────────────────
 
     def water_at(self, x: float, z: float
-                 ) -> Optional[Tuple[float, float, float, float]]:
-        """THE WATER AT ONE POINT — ``(level, flow_x, flow_z, sd)``, or None for
-        dry ground. The second pure function of this model.
+                 ) -> Optional[Tuple[float, float, float, float, str]]:
+        """THE WATER AT ONE POINT — ``(level, flow_x, flow_z, sd, kind)``, or
+        None for dry ground. The second pure function of this model.
 
         ``level`` is :func:`water_level_at` of the winning water's profile,
         evaluated AT THIS POINT; ``flow`` is :func:`water_flow_at` of the same
@@ -2664,23 +2688,33 @@ class HeightModel:
         painted water" without asking the ground compositor, whose mask names
         the topmost painted KIND — the BED under a lake with a ``bed_kind``, not
         the water — and therefore answered "no water here" over whole lakes.
+
+        ``kind`` IS THE FIFTH ANSWER SINCE v10 (the second half of F-A): the
+        painted kind of the very water the other four come from. It is the
+        winning water's for exactly the reason the level and the ``sd`` are —
+        "the topmost painted water wins" is ONE decision, taken once above, and
+        every channel of this tuple is that water's. The renderer's whole LOOK
+        table (tint, wavelength, still and flowing speed, opaque depth) is keyed
+        by kind, and the ground compositor's mask cannot supply that key: it
+        names the topmost painted kind of the GROUND, which over a river running
+        through a forest area painted above it is the forest.
         """
         if not self.water:
             return None
         fast = self._water_fast
         candidates = self._water_raster_index.at(x, z)
         for idx in reversed(candidates):
-            ring, profile, _depth, _ramp, factor = fast[idx]
+            ring, profile, _depth, _ramp, factor, kind = fast[idx]
             if ring and _inside_ring(x, z, ring):
                 return (*_water_sample(profile, x, z, factor),
-                        _ring_edge_distance(x, z, ring))
+                        _ring_edge_distance(x, z, ring), kind)
         for idx in reversed(candidates):
-            ring, profile, _depth, _ramp, factor = fast[idx]
+            ring, profile, _depth, _ramp, factor, kind = fast[idx]
             if not ring:
                 continue
             edge = _ring_edge_distance(x, z, ring)
             if edge <= WATER_RASTER_DILATION_M:
-                return (*_water_sample(profile, x, z, factor), -edge)
+                return (*_water_sample(profile, x, z, factor), -edge, kind)
         return None
 
     def water_raster(self, origin_x: float, origin_z: float, step: float,
@@ -2688,9 +2722,11 @@ class HeightModel:
                      ) -> Optional[Tuple[List[List[Optional[float]]],
                                          List[List[float]],
                                          List[List[float]],
-                                         List[List[Optional[float]]]]]:
-        """:meth:`water_at` over one window — ``(level, flow_x, flow_z, sd)``,
-        or None when the window carries no water at all.
+                                         List[List[Optional[float]]],
+                                         List[str],
+                                         List[List[int]]]]:
+        """:meth:`water_at` over one window — ``(level, flow_x, flow_z, sd,
+        kinds, kind_idx)``, or None when the window carries no water at all.
 
         The water twin of :meth:`grid`, and the same statement about windows:
         the origin, the step and the size are all there is, so a tile is a
@@ -2704,7 +2740,26 @@ class HeightModel:
         every reader of a flow vector, so the arrays need no second sentinel
         between them.
 
-        NONE FOR A DRY WINDOW, not four arrays of sentinels: most tiles of most
+        ── THE KIND, AS A PALETTE AND AN INDEX GRID (v10) ─────────────────────
+        ``kinds`` is this WINDOW's own palette — every painted water kind the
+        window really touches, in the order it was first met, and never the
+        world's whole list. ``kind_idx[j][i]`` indexes it and names the kind of
+        the very water ``level[j][i]`` comes from.
+
+        A PALETTE AND NOT A STRING PER TEXEL, because a 129 × 129 lattice of
+        repeated kind names is a hundred kilobytes of the same handful of words:
+        a tile carries one or two waters, so the palette is one or two entries
+        and the grid is small integers. It is also exactly what a renderer needs
+        — an INDEX is what indexes a look table.
+
+        ``kind_idx`` IS 0 WHERE ``level`` IS None and means nothing there. Not a
+        null sentinel: the grid is read as an integer and it is only ever read
+        where the level says there is water, so a second sentinel would be a
+        second mask saying what the first one already says — and would force
+        every reader to carry a nullable integer through a texture that has no
+        room for one.
+
+        NONE FOR A DRY WINDOW, not six arrays of sentinels: most tiles of most
         worlds carry no water, and a tile that says nothing about water is the
         same statement as an unindexed tile saying nothing about height.
 
@@ -2742,6 +2797,10 @@ class HeightModel:
         sd: List[List[Optional[float]]] = []
         raw_x: List[List[float]] = []
         raw_z: List[List[float]] = []
+        # The KIND per PADDED texel, as the raw name — cropped and turned into a
+        # palette below. It rides the padded pass because it is read off the same
+        # `water_at` answer as the other four; nothing blurs it (see the crop).
+        raw_kind: List[List[str]] = []
         wet = False
         for j in range(prows):
             pz = pz0 + j * step
@@ -2749,6 +2808,7 @@ class HeightModel:
             srow: List[Optional[float]] = []
             xrow: List[float] = []
             zrow: List[float] = []
+            krow: List[str] = []
             inner_row = pad <= j < pad + rows
             for i in range(pcols):
                 found = water_at(px0 + i * step, pz)
@@ -2757,6 +2817,7 @@ class HeightModel:
                     srow.append(None)
                     xrow.append(0.0)
                     zrow.append(0.0)
+                    krow.append("")
                     continue
                 if inner_row and pad <= i < pad + cols:
                     wet = True
@@ -2764,16 +2825,47 @@ class HeightModel:
                 xrow.append(found[1])
                 zrow.append(found[2])
                 srow.append(found[3])
+                krow.append(found[4])
             level.append(lrow)
             sd.append(srow)
             raw_x.append(xrow)
             raw_z.append(zrow)
+            raw_kind.append(krow)
         if not wet:
             return None
+        # THE KIND IS NEVER BLURRED AND NEVER MIXED — it is a NAME, and the mean
+        # of two names is not a name. It is cropped exactly as the level and the
+        # sd are, and the client reads it with a NEAREST tap for the same reason:
+        # at the border between two waters of different kinds the answer has to
+        # be one of the two, and nearest is which of the two the texel is.
+        kinds: List[str] = []
+        index: Dict[str, int] = {}
+        kind_idx: List[List[int]] = []
+        for krow in _crop(raw_kind, pad, cols, rows):
+            row: List[int] = []
+            for name in krow:
+                # A dry texel indexes 0 and means nothing: `level` is None there
+                # and no reader looks. See the docstring.
+                if not name:
+                    row.append(0)
+                    continue
+                at = index.get(name)
+                if at is None:
+                    at = len(kinds)
+                    index[name] = at
+                    kinds.append(name)
+                row.append(at)
+            kind_idx.append(row)
+        # A window whose every wet texel carries an unnamed kind (a water area
+        # painted with no kind at all) still needs a palette to index, so the
+        # empty name gets the one entry rather than the grid pointing nowhere.
+        if not kinds:
+            kinds = [""]
         return (_crop(level, pad, cols, rows),
                 _box_blur(raw_x, pad, radius, cols, rows),
                 _box_blur(raw_z, pad, radius, cols, rows),
-                _crop(sd, pad, cols, rows))
+                _crop(sd, pad, cols, rows),
+                kinds, kind_idx)
 
 
 def build_model(areas: Sequence[Dict[str, Any]] = (),
@@ -2984,8 +3076,9 @@ def rasterize_tile(
     through where a narrow one flattened it.
 
     SINCE K-A E1 IT CARRIES A SECOND FIELD, on the same lattice and in the same
-    window: ``water`` = ``{"level", "sd", "flow_x", "flow_z"}``, out of
-    :meth:`HeightModel.water_raster` (``sd`` since v9). The key is ABSENT for a
+    window: ``water`` = ``{"level", "sd", "kinds", "kind_idx", "flow_x",
+    "flow_z"}``, out of :meth:`HeightModel.water_raster` (``sd`` since v9, the
+    kind palette since v10). The key is ABSENT for a
     tile without a drop of water in it, which is most tiles of most worlds — the
     additive shape § A16.5 asks for, and a client that only reads ``heights``
     sees the payload it always saw.
@@ -3012,7 +3105,9 @@ def rasterize_tile(
 def water_raster_payload(raster: Optional[Tuple[List[List[Optional[float]]],
                                                 List[List[float]],
                                                 List[List[float]],
-                                                List[List[Optional[float]]]]]
+                                                List[List[Optional[float]]],
+                                                List[str],
+                                                List[List[int]]]]
                          ) -> Optional[Dict[str, Any]]:
     """One :meth:`HeightModel.water_raster` answer as the numbers a client
     reads — or None for a window without water.
@@ -3036,15 +3131,24 @@ def water_raster_payload(raster: Optional[Tuple[List[List[Optional[float]]],
     as "(0, 0) everywhere", which is the same statement the zeros made. The
     BLUR cannot turn a still water into a flowing one — a box over zeros is
     zero — so the test still answers exactly "does this window flow".
+
+    ``kinds`` + ``kind_idx`` ARE ALWAYS SHIPPED where the raster exists (v10),
+    and neither is rounded or masked: the palette is a list of names and the
+    grid is small integers. They are what a renderer indexes its per-kind LOOK
+    table by — the tint, the wavelength, the two speed dials, the opaque depth —
+    so a wet tile without them is a tile whose water can be lifted but not
+    drawn, exactly as one without ``sd`` is.
     """
     if raster is None:
         return None
-    level, flow_x, flow_z, sd = raster
+    level, flow_x, flow_z, sd, kinds, kind_idx = raster
     out: Dict[str, Any] = {
         "level": [[None if v is None else round(v, 3) for v in row]
                   for row in level],
         "sd": [[None if v is None else round(v, 3) for v in row]
-               for row in sd]}
+               for row in sd],
+        "kinds": list(kinds),
+        "kind_idx": [list(row) for row in kind_idx]}
     if any(v for row in flow_x for v in row) or any(v for row in flow_z
                                                     for v in row):
         out["flow_x"] = [[round(v, 6) for v in row] for row in flow_x]

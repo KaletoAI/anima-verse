@@ -851,8 +851,9 @@ const CLIFF_W = {
 };
 
 const wr = await loadWaterRaster();
-const { emptyWaterRaster, rasterFlowAt, rasterLevelAt, rasterSdAt,
-        waterBilinear, waterTileFrom, WATER_SD_DRY } = wr;
+const { emptyWaterRaster, nearestIndex, rasterFlowAt, rasterKindAt,
+        rasterLevelAt, rasterSdAt, waterBilinear, waterTileFrom,
+        WATER_SD_DRY } = wr;
 
 function rasterOf(tileM, entries) {
   const r = emptyWaterRaster();
@@ -1024,6 +1025,73 @@ for (let a = 0; a <= 40; a += 1) {
 }
 checkBool(`the bilinear sd is >= 0 at all 1681 probes inside the outline `
   + `(worst ${sdWorst})`, sdWorst >= 0, true);
+
+
+console.log('\n[W4b] the KIND twin — which water this is (bake v10)');
+// WHY IT EXISTS (finding F-A, second half). The `sd` above says WHETHER a pixel
+// stands in painted water. WHICH water it is was still asked of the ground
+// compositor's id mask, and that mask answers about the GROUND: a river running
+// under a forest area painted over it reads (forest, forest) down its whole
+// length, so the fragment picked a non-water row and drew the river with the
+// world's PRIMARY water — a lake's tint, a lake's opaque depth and a lake's
+// flow speed. `smoke_water_shade.mjs` [11] carries the numbers; this is the
+// wire that ends it.
+//
+// THE FIXTURE is the client twin of `smoke_height_bake.py` [12i]: a palette of
+// two kinds and a grid of indices into it, on a 3 x 3 lattice of step 2 from
+// the origin. The kinds run lake -> river across the diagonal.
+const KIND_W = {
+  origin_x: 0, origin_z: 0, step_m: 2, rows: 3, cols: 3,
+  level: [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+  sd: [[2, 2, 2], [2, 2, 2], [2, 2, 2]],
+  kinds: ['lake', 'river'],
+  kind_idx: [[0, 0, 1], [0, 1, 1], [1, 1, 1]],
+};
+const KIND_R = rasterOf(256, [['0,0', KIND_W]]);
+const KIND_T = KIND_R.tiles.get('0,0');
+check('the palette survives the wire as it stands',
+  KIND_T.kinds.join('|') === 'lake|river' ? 1 : 0, 1);
+check('…and so does the grid', KIND_T.kindIdx[0].join('') === '001' ? 1 : 0, 1);
+// NEAREST, AND THAT IS THE WHOLE RULE — a look is per KIND, and the mean of two
+// palette indices is a third row nobody authored. `nearestIndex` is `round`,
+// clamped: texel i owns the metre either side of its support point.
+check('the support point itself', nearestIndex(0, 3), 0);
+check('…just under half a step still belongs to it', nearestIndex(0.45, 3), 0);
+check('…just over half a step is the next texel', nearestIndex(0.55, 3), 1);
+check('…and an exact half rounds up, the one tie there is',
+  nearestIndex(1.5, 3), 2);
+check('below the lattice it clamps to the first texel', nearestIndex(-9, 3), 0);
+check('…and above it to the last', nearestIndex(99, 3), 2);
+// THE SWITCH IS AT THE TEXEL EDGE, i.e. halfway between two support points —
+// x = 3 between the lake at x = 2 and the river at x = 4. Accepted and noted:
+// two waters of different kinds meeting inside one connected surface change
+// tint over one metre rather than fading, which is what a per-KIND look means.
+check('mid-lake reads the lake', rasterKindAt(KIND_R, 0, 0) === 'lake' ? 1 : 0, 1);
+check('…1.9 m along, still the lake',
+  rasterKindAt(KIND_R, 1.9, 0) === 'lake' ? 1 : 0, 1);
+check('…2.9 m along, still the lake — the texel owns a metre either side',
+  rasterKindAt(KIND_R, 2.9, 0) === 'lake' ? 1 : 0, 1);
+check('…and at 3 m, half a step out, the river takes over',
+  rasterKindAt(KIND_R, 3, 0) === 'river' ? 1 : 0, 1);
+check('the far corner is the river', rasterKindAt(KIND_R, 4, 4) === 'river' ? 1 : 0, 1);
+// A TILE FROM AN OLDER BAKE, and a point no tile covers, both read the empty
+// name — which resolves to row 0 of the look table, the world's primary water.
+// The worst case is the wrong water, never a ground-coloured lake.
+const OLDBAKE = waterTileFrom(0, 0, 2, { level: [[1, 1], [1, 1]] });
+check('a v9 tile carries a one-entry palette of the empty name',
+  OLDBAKE.kinds.length === 1 && OLDBAKE.kinds[0] === '' ? 1 : 0, 1);
+check('…and every texel indexes it', OLDBAKE.kindIdx[1][1], 0);
+check('a point in a tile that has not arrived names no kind',
+  rasterKindAt(KIND_R, 900, 900) === '' ? 1 : 0, 1);
+check('…and so does an empty raster',
+  rasterKindAt(emptyWaterRaster(), 0, 0) === '' ? 1 : 0, 1);
+check('…and none at all', rasterKindAt(null, 0, 0) === '' ? 1 : 0, 1);
+// AN INDEX OUTSIDE THE PALETTE is not a crash and not a guess: it falls to 0,
+// the primary water, at the ONE boundary conversion, exactly as the level's
+// null falls to NaN there.
+check('an out-of-range index is clamped at the wire boundary',
+  waterTileFrom(0, 0, 2, { level: [[1, 1], [1, 1]], kinds: ['lake'],
+                           kind_idx: [[0, 7], [-1, 0]] }).kindIdx[0][1], 0);
 
 // ============================================================================
 // [W5] THE MIP LIMIT IS A PROPERTY OF THE FIELD, not of a renderer (F1)

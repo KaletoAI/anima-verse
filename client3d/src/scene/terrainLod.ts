@@ -162,13 +162,12 @@ import * as THREE from 'three';
 import { finestStep, heightAt, latticeSample, surfaceSkyUniform,
   surfaceTimeUniform, surfaceWaveNormal, tileKeyAt } from '@anima/scene-render';
 import type { WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
-import { rasterFlowAt, rasterLevelAt, rasterSdAt, waterBilinear,
+import { rasterFlowAt, rasterKindAt, rasterLevelAt, rasterSdAt, waterBilinear,
   WATER_SD_DRY } from './waterRaster';
 import type { WaterRaster } from './waterRaster';
 import { packWaterLook, terrainWaterFragmentGlsl, waterGateGlsl, waterInside,
   waterSdGlsl, WATER_LOOK_TEXELS, WATER_SD_BAND_M } from './waterShade';
 import type { WaterLook } from './waterShade';
-import { bindLayerIdUniforms } from './layerGround';
 
 /**
  * Cells per axis of the one patch — 32, and the number is derived rather than
@@ -2457,6 +2456,22 @@ const uFlow: { value: THREE.Texture } = { value: neutralTex };
  */
 const uSd: { value: THREE.Texture } = { value: neutralTex };
 /**
+ * WHICH ROW OF THE LOOK TABLE each water texel reads — R32F on the water
+ * pyramid's BASE lattice, beside the flow and the signed distance (bake v10,
+ * finding F-A second half).
+ *
+ * The bake names a KIND per texel; this field is that name resolved through the
+ * look table's own kind -> row map (`buildKindRows`), so the fragment does one
+ * NEAREST `texelFetch` and has its row. Resolving on the CPU and not in the
+ * shader is what keeps the table free to be re-ordered whenever `setWaterLook`
+ * runs, without the bake knowing anything about a renderer's row numbers.
+ *
+ * NEAREST AND NEVER MIXED: a row index is a name, not a quantity. It carries no
+ * geometry of its own for the same reason the flow does not — the lattice IS
+ * `uTlodWaterLevel[0]` over `uTlodWaterGeom.xy`.
+ */
+const uKind: { value: THREE.Texture } = { value: neutralTex };
+/**
  * THE WATER'S MIP LIMIT AS A FIELD (F1) — the corner grid of `LodCapGrid` as an
  * R32F texture, its geometry, and the budget's relaxation.
  *
@@ -2476,15 +2491,18 @@ const uCap: { value: THREE.Texture } = { value: neutralTex };
 const uCapGeom = { value: new THREE.Vector4(0, 0, 1, 0) };
 const uCapFit = { value: new THREE.Vector4(0, 0, 0, 0) };
 /**
- * WHAT EACH LAYER'S WATER LOOKS LIKE — a `WATER_LOOK_TEXELS` × n RGBA32F
- * table, one ROW per layer index of the compositor's mask (K-A E4).
+ * WHAT EACH WATER KIND LOOKS LIKE — a `WATER_LOOK_TEXELS` × n RGBA32F table,
+ * one ROW per painted water KIND (K-A E4; re-keyed from layer to kind at bake
+ * v10).
  *
  * The world has ONE water shading program, and the areas painted into it may
  * be several kinds at once — a pale river and an almost black lake are two
- * rows of the same table, and the fragment picks its row from the very id mask
- * `lcCompose` composites the ground from. Every row carries a WATER look, the
- * primary water's where a layer is not water at all, so a pixel that reads a
- * dry layer at a fringe still draws water rather than a kind's ground tint.
+ * rows of the same table, and the fragment picks its row from the WATER
+ * raster's own per-texel kind. It used to pick it from the ground compositor's
+ * id mask, which names the topmost PAINTED kind: a river under a forest area
+ * then read a row that is not water at all and fell back to the world's primary
+ * water (finding F-A). Every row is a real water now, so there is no fallback
+ * row and no `is_water` flag left to test.
  *
  * Rebuilt by `setWaterLook`, from `scene/ground.ts`, whenever the layer table
  * or the painted areas move. Until then it is one row of the library default.
@@ -2649,17 +2667,17 @@ export function patchTerrainLod(mat: THREE.Material, water = false): void {
       // into a second time of day.
       u.uTlodTime = surfaceTimeUniform;
       u.uTlodSky = surfaceSkyUniform;
-      // WHICH KIND a water pixel stands in — the compositor's own near id mask
-      // and its window, bound a second time under this program's names. See
-      // `twLayerAt`: that chunk is declared below this one in the finished
-      // shader, so its uniforms cannot be reached from here by name.
+      // WHICH KIND a water pixel stands in — the water raster's own per-texel
+      // kind, resolved to a LOOK ROW on the CPU (`buildKindRows`) and shipped on
+      // the water pyramid's base lattice beside the flow and the sd.
       //
-      // THE ID PAIR AND NOTHING ELSE. It borrowed the compositor's signed
-      // distance too for one day, to tell the authored mirror from the flooded
-      // ring; that gate is gone (finding F-A — the material mask answers about
-      // the topmost painted KIND, so a lake with a painted bed reads "sand" over
-      // its whole interior) and the water's own `uTlodWaterSd` answers instead.
-      bindLayerIdUniforms(u, 'uTlodWaterMask', 'uTlodWaterMaskGeom');
+      // NOTHING IS BORROWED FROM THE GROUND COMPOSITOR ANY MORE. Its id mask
+      // was bound here to answer this question and answered it wrong wherever
+      // the water is not the topmost PAINTED kind — a river under a forest area,
+      // a lake with a painted bed, any z-order change (finding F-A). Its signed
+      // distance rode along for one day before that; both are gone, and
+      // `bindLayerIdUniforms` with them.
+      u.uTlodWaterKind = uKind;
     }
     if (!shader.vertexShader.includes('#include <begin_vertex>')) return;
     shader.vertexShader = terrainLodGlsl(water) + shader.vertexShader
@@ -2818,16 +2836,22 @@ export interface TerrainLod {
    */
   setMaterial(dry: THREE.Material, water: THREE.Material): void;
   /**
-   * HOW EACH LAYER'S WATER LOOKS (K-A E4) — one entry per layer index of the
-   * compositor's mask, in index order.
+   * HOW EACH WATER KIND LOOKS (K-A E4, re-keyed at bake v10) — one entry per
+   * painted water KIND, plus the map from the bake's kind NAME to its row.
    *
-   * The owner resolves it: the layer table says which kinds are water, the
-   * surface library says what those kinds look like and the painted areas say
-   * how deep they are. This side only packs the table into the texture the
-   * fragment fetches its row out of. An entry for a layer that is NOT water is
-   * expected to carry the world's primary water look — see `uLook` for why.
+   * The owner resolves the looks: the layer table says which kinds are water,
+   * the surface library says what those kinds look like and the painted areas
+   * say how deep they are. This side packs the table into the texture the
+   * fragment fetches its row out of AND turns the water raster's per-texel kind
+   * names into row numbers over the water lattice (`buildKindRows`).
+   *
+   * `rowOfKind` is keyed by the LOWERCASED kind, which is the form the bake
+   * ships and the form the layer table is read in. A kind the map does not hold
+   * — and every texel of a pre-v10 tile — reads row 0, the world's primary
+   * water: the worst case is the wrong water, never a ground-coloured lake.
    */
-  setWaterLook(looks: readonly WaterLook[]): void;
+  setWaterLook(looks: readonly WaterLook[],
+               rowOfKind: ReadonlyMap<string, number>): void;
   /** Both ground materials, dry first — what a diagnostic that wants to act on
    *  "the terrain's material" (the isolation panel's wireframe) has to reach.
    *  Empty until `setMaterial`. */
@@ -2980,6 +3004,13 @@ export function createTerrainLod(): TerrainLod {
   /** The look table this renderer owns and frees — the module's `uLook` only
    *  points at it. Replaced whole by `setWaterLook`. */
   let lookTex: THREE.DataTexture | null = null;
+  /** The per-texel LOOK ROW over the water lattice (bake v10) and the map it was
+   *  built through. Both inputs can arrive in either order — the raster with
+   *  `setField`, the table with `setWaterLook` — so each is kept and the field
+   *  is rebuilt from whichever pair is current. */
+  let kindTex: THREE.DataTexture | null = null;
+  let rowOfKind: ReadonlyMap<string, number> = new Map<string, number>();
+  let lastWater: WaterRaster | null = null;
   let nearRect: [number, number, number, number] | null = null;
   let extent: [number, number, number, number] = [-100, -100, 100, 100];
   let leafM = 0;
@@ -3167,6 +3198,52 @@ export function createTerrainLod(): TerrainLod {
              step: waterPyr.step, cols: base.cols, rows: base.rows, data };
   }
 
+  /**
+   * THE LOOK ROW PER TEXEL over the water pyramid's base lattice (bake v10) —
+   * the water raster's own kind NAME, resolved through the current table's
+   * `rowOfKind`.
+   *
+   * ONE LEVEL, like the flow and the sd, and for the same reason: the fragment
+   * reads it at the finest lattice whatever the piece is drawn at. It is filled
+   * with a NEAREST tap (`rasterKindAt`), never a mix — a row index is a name.
+   *
+   * A kind the table does not hold, and every texel of a tile from a bake older
+   * than v10 (whose palette is one empty name), lands on row 0. Row 0 is the
+   * world's primary water, so the worst case is the wrong water rather than a
+   * ground-coloured lake.
+   */
+  function buildKindRows(raster: WaterRaster | null): THREE.DataTexture | null {
+    const base = waterPyr?.levels[0];
+    if (!waterPyr || !base || !raster?.tiles?.size) return null;
+    const data = new Float32Array(base.cols * base.rows);
+    for (let j = 0; j < base.rows; j += 1) {
+      const z = waterPyr.originZ + j * waterPyr.step;
+      const row = j * base.cols;
+      for (let i = 0; i < base.cols; i += 1) {
+        const kind = rasterKindAt(raster, waterPyr.originX + i * waterPyr.step, z);
+        data[row + i] = rowOfKind.get(kind.toLowerCase()) ?? 0;
+      }
+    }
+    const tex = new THREE.DataTexture(data, base.cols, base.rows,
+                                      THREE.RedFormat, THREE.FloatType);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = false;
+    tex.unpackAlignment = 1;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /** Re-resolve the per-texel look rows and hand them to the shader — called
+   *  whenever EITHER input moves (a new raster, a new look table). */
+  function refreshKindRows(): void {
+    kindTex?.dispose();
+    kindTex = buildKindRows(lastWater);
+    uKind.value = kindTex ?? neutralTex;
+  }
+
   function sdTexture(field: SdField | null): THREE.DataTexture | null {
     if (!field) return null;
     const tex = new THREE.DataTexture(field.data, field.cols, field.rows,
@@ -3200,6 +3277,7 @@ export function createTerrainLod(): TerrainLod {
   }
 
   function uploadPyramids(raster: WaterRaster | null): void {
+    lastWater = raster;
     nearTex?.dispose();
     farTex?.dispose();
     waterTex?.dispose();
@@ -3216,6 +3294,7 @@ export function createTerrainLod(): TerrainLod {
     waterTex = waterPyr ? pyramidTexture(waterPyr) : null;
     flowTex = buildFlow(raster);
     sdTex = sdTexture(sdField);
+    refreshKindRows();
     uNear.value = nearTex ?? neutralTex;
     uFar.value = farTex ?? neutralTex;
     uWater.value = waterTex ?? neutralTex;
@@ -3418,10 +3497,14 @@ export function createTerrainLod(): TerrainLod {
         waterTileM);
       uploadPyramids(water ?? null);
     },
-    setWaterLook(looks) {
+    setWaterLook(looks, rows) {
       lookTex?.dispose();
       lookTex = makeLookTexture(looks);
       uLook.value = lookTex;
+      // The row numbers moved with the table, so the per-texel field that names
+      // them is stale by definition — rebuild it from the raster in hand.
+      rowOfKind = rows;
+      refreshKindRows();
     },
     refreshStats() {
       levelErrorM = computeLevelError();
@@ -3466,6 +3549,7 @@ export function createTerrainLod(): TerrainLod {
       sdTex?.dispose();
       capTex?.dispose();
       lookTex?.dispose();
+      kindTex?.dispose();
       nearTex = null;
       farTex = null;
       waterTex = null;
@@ -3475,6 +3559,8 @@ export function createTerrainLod(): TerrainLod {
       capTex = null;
       capGrid = null;
       lookTex = null;
+      kindTex = null;
+      lastWater = null;
       // The pyramids are module-shared uniforms and outlive this closure, so
       // they are handed back explicitly — the rule `setNaturalGroundField(null)`
       // follows for the same reason.
@@ -3483,6 +3569,7 @@ export function createTerrainLod(): TerrainLod {
       uWater.value = neutralTex;
       uFlow.value = neutralTex;
       uSd.value = neutralTex;
+      uKind.value = neutralTex;
       uCap.value = neutralTex;
       uCapGeom.value.set(0, 0, 1, 0);
       uCapFit.value.set(0, 0, 0, 0);

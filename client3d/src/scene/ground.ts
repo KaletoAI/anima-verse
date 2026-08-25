@@ -1429,29 +1429,36 @@ export function createGround(): Ground {
   }
 
   /**
-   * WHAT EACH LAYER'S WATER LOOKS LIKE — the table the terrain's water variant
+   * WHAT EACH WATER KIND LOOKS LIKE — the table the terrain's water variant
    * picks its tint, its ripple and its opaque depth out of, per fragment
    * (Wasser v2, K-A E4, `scene/waterShade.ts`).
    *
    * Under K-A there is no material per water KIND any more: ONE program shades
    * every water pixel of the world, and it learns which kind it stands in from
-   * the compositor's id mask — which speaks LAYER INDICES. So the look has to
-   * arrive as a table indexed the same way, and this is the one place that
-   * knows all three halves of it: the layer table says which layers are water,
-   * the surface library says what those kinds look like (`surfaceMaterialSpec`)
-   * and the painted areas say how deep their beds are carved.
+   * the WATER RASTER's own per-texel kind palette (bake v10). So the look
+   * arrives as a table of one row PER KIND, plus the map from the bake's kind
+   * name to its row, and this is the one place that knows all three halves of
+   * it: the layer table says which kinds are water, the surface library says
+   * what those kinds look like (`surfaceMaterialSpec`) and the painted areas
+   * say how deep their beds are carved.
    *
-   * A LAYER THAT IS NOT WATER STILL GETS A WATER LOOK — the first water layer's.
-   * A pixel is shaded as water because it was LIFTED, not because of what the
-   * mask says, and the two disagree by a texel at the rim of the raster's
-   * dilation; a bare-ground row there would draw a lake in the colour of a
-   * meadow. Falling back to the world's primary water makes the worst case "the
-   * wrong water", a fringe nobody can measure.
+   * ONE ROW PER KIND, AND EVERY ROW A REAL WATER. The table used to be indexed
+   * by LAYER, so most of its rows belonged to grounds — each carrying the
+   * primary water's look as a stand-in, with an `is_water` flag for the
+   * fragment to reject it by. That apparatus existed because the id mask speaks
+   * layers and answers about the GROUND: a river under a forest area read
+   * (forest, forest), rejected both halves and fell back to the primary water's
+   * tint, opaque depth and flow speed (finding F-A). The raster names the
+   * water's own kind now, so there are no stand-in rows left to reject.
+   *
+   * ROW 0 IS THE PRIMARY WATER, and it is what an unknown kind reads: a kind
+   * the layer table does not hold, and every texel of a tile from a bake older
+   * than v10. The worst case out there is the wrong water, never a ground tint.
    *
    * THE DEPTH IS PER KIND HERE, NOT PER AREA, and that is a real narrowing
    * against the mirror mesh it replaced (W4b, whose `aWaterOpaque` was an
-   * attribute): the fragment can only ask the mask, and the mask
-   * knows kinds. The LAST painted area of a kind wins — the tie-break the
+   * attribute): the raster names a KIND, not an area. The LAST painted area of
+   * a kind wins — the tie-break the
    * server itself uses when two waters overlap — so a kind painted with one
    * depth (every world so far) is exact and a kind painted with two collapses
    * to the later one. K-A E6 DECIDED THIS STAYS: the reasoning is in
@@ -1468,24 +1475,20 @@ export function createGround(): Ground {
       if (!waterProfileOf(area.meta)) continue;
       depthOf.set((area.kind || '').toLowerCase(), area.meta?.water_depth_effective);
     }
-    let primary: WaterLook | null = null;
-    const own = new Map<number, WaterLook>();
+    const looks: WaterLook[] = [];
+    const rowOfKind = new Map<string, number>();
     for (const layer of table) {
       if (!layer.water) continue;
       const kind = (layer.kind || '').toLowerCase();
-      const look = waterLookFrom(surfaceMaterialSpec(surfaceOf(layer.kind)),
-                                 depthOf.get(kind));
-      own.set(layer.index, look);
-      if (!primary) primary = look;
+      if (rowOfKind.has(kind)) continue;
+      rowOfKind.set(kind, looks.length);
+      looks.push(waterLookFrom(surfaceMaterialSpec(surfaceOf(layer.kind)),
+                               depthOf.get(kind)));
     }
-    // …and a row that is only STANDING IN for a water says so, or it would win
-    // the pick of `twLayerOf` against the real water beside it.
-    const fallback: WaterLook = { ...(primary ?? WATER_LOOK_DEFAULT), isWater: false };
-    let rows = 0;
-    for (const layer of table) rows = Math.max(rows, layer.index + 1);
-    const looks: WaterLook[] = [];
-    for (let i = 0; i < rows; i += 1) looks.push(own.get(i) ?? fallback);
-    terrain.setWaterLook(looks);
+    // A world without a single water layer still ships ONE row, so no fetch is
+    // ever out of range — nothing draws it, because nothing is ever lifted.
+    if (!looks.length) looks.push(WATER_LOOK_DEFAULT);
+    terrain.setWaterLook(looks, rowOfKind);
   }
 
   /**

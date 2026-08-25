@@ -344,11 +344,16 @@ checkNear('row 0, texel 0 — tint and sky_mix',
 // texel further on is metalness and did not move.
 checkNear('row 0, texel 1 — wave, speed, flow, opaque depth',
   [...packed.slice(4, 8)], [1.6, 0.05, 0.5, 1.5], 1e-7);
-checkNear('row 0, texel 2 — roughness, metalness, the water flag, one spare',
-  [...packed.slice(8, 12)], [0.08, 0.15, 1, 0], 1e-7);
-checkNear('…and a STAND-IN row says it is not water',
-  [...packWaterLook([{ ...bare, isWater: false }]).slice(8, 12)],
-  [0.08, 0.15, 0, 0], 1e-7);
+// SINCE BAKE v10 the third slot is SPARE. It carried `is_water`, the flag the
+// fragment used to pick the water half out of the id mask's layer pair — and
+// with it the stand-in rows the table needed for every ground layer. The table
+// is keyed by KIND now and every row is a real water, so there is nothing left
+// to flag. See [10] for the conviction that killed the mask.
+checkNear('row 0, texel 2 — roughness, metalness, two spare',
+  [...packed.slice(8, 12)], [0.08, 0.15, 0, 0], 1e-7);
+checkEq('RED: no row writes an is_water flag any more — the packer never sets '
+  + 'the third slot', packWaterLook([bare, deep]).some((v, i) => i % 12 === 10 && v !== 0),
+  false);
 checkNear('row 1 is the SECOND water and no blend of the two',
   [...packed.slice(12, 16)], [...deep.tint, 0.55], 1e-7);
 check('…with its own opaque depth', packed[19], 0.9, 1e-7);
@@ -447,10 +452,11 @@ checkEq('the area\'s speed factor is the LENGTH of the flow vector',
   glsl.includes('float sp = still ? speed : flowSpeed * len;'), true);
 checkEq('…and a length below 1e-4 is a lake', glsl.includes('bool still = len < 1e-4;'),
   true);
-// The mask names a PAIR and not a layer, and the is_water flag picks the half.
-checkEq('the water half of the mask\'s pair is picked by the is_water flag',
-  glsl.includes('return texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 ).z > 0.5;')
-  && glsl.includes('layer = twIsWater( a ) ? a : b;'), true);
+// WHICH ROW — the water raster's own kind, NEAREST, off the water lattice.
+checkEq('the look row comes from the water raster and is clamped to the table',
+  glsl.includes('int layer = clamp( twKindRow( vTlodXZ ), 0, rows - 1 );'), true);
+checkEq('RED: …and never from the ground compositor\'s id mask again',
+  /twIsWater|uTlodWaterMask/.test(glsl), false);
 // The one place K-A gives GPU work back.
 checkEq('a FULLY absorbed pixel does not read the bed\'s normal at all',
   /if \( twA >= 1\.0 \) \{\n\s*return normalize\( \( viewMatrix \* vec4\( twN/
@@ -566,8 +572,10 @@ checkEq('…and the pixel width comes from the world position, not from fwidth(s
 // window and its byte quantisation are not declared any more.
 checkEq('RED: no uTlodWaterSdGeom, no uTlodWaterSdCode',
   glsl.includes('uTlodWaterSdGeom') || glsl.includes('uTlodWaterSdCode'), false);
-checkEq('…and the id mask is asked for the LOOK alone',
-  glsl.includes('layer = twIsWater( a ) ? a : b;'), true);
+// RED: the id mask is gone from this program ALTOGETHER (bake v10). It answered
+// "which kind" out of the topmost PAINTED layer — see [10] for the numbers.
+checkEq('RED: no uTlodWaterMask, no uTlodWaterMaskGeom, no pair fetch',
+  /uTlodWaterMask|uvec2 pair/.test(glsl), false);
 // THE SAMPLER IS ONE TEXT, included by both stages, so the lift and the shading
 // cannot read the field two ways (`waterSdGlsl`).
 const sdGlsl = waterSdGlsl();
@@ -1107,6 +1115,128 @@ checkEq('the FOAM is untouched — it was never coupled wrongly',
   glsl.includes(
     `twFoam = rawFoam * min( shore + rawFoam * ${WATER_FOAM_MIN_COVER}, 1.0 ) * rim;`),
   true);
+
+
+// ── [11] the conviction: which row a river through a forest picked ─────────
+//
+// THE USER'S EVIDENCE, 2026-08-25: "lake AND river show patches that look like
+// forest floor, partly transparent and partly not; at the river the flow
+// direction reads wrong; the rim transparency works in SOME lake spots."
+//
+// THE MECHANISM, and it is entirely in which ROW the fragment fetched. Until
+// bake v10 the row came from the ground compositor's id mask — the PAIR
+// (topmost painted layer, the one under it) — through
+//
+//     layer = twIsWater( a ) ? a : b;
+//
+// `scripts/smoke_height_bake.py` [12j] measures that pair on the very fixture
+// the user describes: a river drawn into a forest area painted over it. At
+// EVERY wet texel of the window the pair is (forest, forest) — layer 1 of that
+// world's table, `water: false`. Neither half is water, so the pick fell
+// through to `b`, a NON-water row, and every such row carried the world's
+// PRIMARY water as a stand-in. The pixel therefore drew with a LAKE's numbers.
+//
+// THE TWO TABLES, spelled out. The world paints three kinds; the layer table is
+// index 0 bare ground, then the painted kinds sorted by kind:
+//
+//     OLD, one row per LAYER:  0 bare -> stand-in (lake, is_water 0)
+//                              1 g    -> stand-in (lake, is_water 0)
+//                              2 lake -> the lake
+//                              3 river-> the river
+//     NEW, one row per KIND:   0 lake  1 river          (and nothing else)
+//
+// The bake names "river" at that texel, so the new pick is row 1, whatever the
+// forest above it does.
+console.log('\n[11] THE CONVICTION — the row a river under a forest picked (F-A II)');
+// A deep, near-still lake and a shallow, fast river — two kinds a world really
+// paints. `opaqueDepthM` is ¾ of the bed (W4b): 3.0 m and 0.9 m.
+const CONV_LAKE = waterLookFrom({ class: 'water', tint: '#002e57', wave_m: 2.0,
+  speed: 0.05, flow_speed: 0, sky_mix: 0.55, roughness: 0.08 }, 4.0);
+const CONV_RIVER = waterLookFrom({ class: 'water', tint: '#3f7fb8', wave_m: 1.2,
+  speed: 0.05, flow_speed: 1.0, sky_mix: 0.55, roughness: 0.08 }, 1.2);
+check('the lake\'s opaque depth is ¾ of its 4 m bed', CONV_LAKE.opaqueDepthM, 3.0);
+check('…and the river\'s ¾ of its 1.2 m one', CONV_RIVER.opaqueDepthM, 0.9);
+check('…the lake does not flow', CONV_LAKE.flowSpeed, 0);
+check('…and the river runs at 1 m/s', CONV_RIVER.flowSpeed, 1.0);
+// THE OLD PICK, reimplemented from the shader line it was: the stand-in rows
+// are the primary water with the flag cleared, and the pair is (1, 1).
+const OLD_ROWS = [CONV_LAKE, CONV_LAKE, CONV_LAKE, CONV_RIVER];
+const OLD_IS_WATER = [false, false, true, true];
+const oldPick = (a, b) => (OLD_IS_WATER[a] ? a : b);
+const OLD_ROW = OLD_ROWS[oldPick(1, 1)];
+// THE NEW PICK: the raster's own kind, straight into the per-kind table.
+const NEW_ROWS = [CONV_LAKE, CONV_RIVER];
+const NEW_ROW = NEW_ROWS[1];
+check('RED: the old rule picked row 1 out of the pair (forest, forest)',
+  oldPick(1, 1), 1);
+check('RED: …which carried the LAKE\'s opaque depth on a river pixel',
+  OLD_ROW.opaqueDepthM, 3.0);
+check('the new rule reads the river\'s own', NEW_ROW.opaqueDepthM, 0.9);
+checkNear('RED: …and the LAKE\'s tint', OLD_ROW.tint,
+  [0, 46 / 255, 87 / 255], 1e-12);
+checkNear('the new rule reads the river\'s', NEW_ROW.tint,
+  [63 / 255, 127 / 255, 184 / 255], 1e-12);
+// ── HOW MUCH OF THE FOREST FLOOR SHOWED THROUGH ───────────────────────────
+// The absorption is `3t² − 2t³` with `t = d / opaque` (the rim ramp saturated,
+// i.e. every depth from 0.05 m on). At 0.60 m of water — a river with a 1.2 m
+// bed, half-filled:
+//
+//     NEW, opaque 0.9:  t = 2/3 -> 3(4/9)  − 2(8/27)  = 4/3 − 16/27 = 20/27
+//                                                     = 0.7407407407…
+//     OLD, opaque 3.0:  t = 0.2 -> 3(0.04) − 2(0.008) = 0.12 − 0.016 = 0.104
+//
+// `diffuseColor = mix(bed, tint, absorb)`, so what is left of the BED is
+// `1 − absorb`: 7/27 = 0.259259… against 0.896. The forest floor under that
+// river was drawn at 3.456× the share it should have had —
+//
+//     0.896 / (7/27) = 0.896 · 27 / 7 = 24.192 / 7 = 3.456
+//
+// — which is the "patches that look like forest floor" of the finding, and the
+// "partly transparent, partly not" is the SAME pixel at another depth.
+const CONV_D = 0.60;
+check('NEW: at 0.6 m the river absorbs 20/27 of its bed',
+  waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE), 20 / 27, 1e-12);
+check('RED: with the lake\'s depth it absorbed 0.104',
+  waterAbsorb(CONV_D, OLD_ROW.opaqueDepthM, EDGE), 0.104, 1e-12);
+check('NEW: so 7/27 of the forest floor shows through',
+  1 - waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE), 7 / 27, 1e-12);
+check('RED: …where 0.896 of it did',
+  1 - waterAbsorb(CONV_D, OLD_ROW.opaqueDepthM, EDGE), 0.896, 1e-12);
+check('RED: …i.e. 3.456× as much forest as the water should have shown',
+  (1 - waterAbsorb(CONV_D, OLD_ROW.opaqueDepthM, EDGE))
+  / (1 - waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE)), 3.456, 1e-12);
+// AND THE SAME MISS AT THE RIM, which is the other half of the evidence: the
+// waterline of a lake reads right wherever the lake IS the topmost paint and
+// wrong wherever it is not, on one and the same shore.
+//     NEW, opaque 0.9: t = 0.25  -> 3(0.0625)   − 2(0.015625)  = 0.15625
+//     OLD, opaque 3.0: t = 0.075 -> 3(0.005625) − 2(0.000421875)
+//                                 = 0.016875 − 0.00084375 = 0.01603125
+check('NEW: 0.225 m of river is a sixth absorbed',
+  waterAbsorb(0.225, NEW_ROW.opaqueDepthM, EDGE), 0.15625, 1e-12);
+check('RED: with a 3 m opaque depth it was a sixtieth',
+  waterAbsorb(0.225, OLD_ROW.opaqueDepthM, EDGE), 0.01603125, 1e-12);
+// ── AND THE RIPPLE STOOD STILL ────────────────────────────────────────────
+// `sp = still ? speed : flowSpeed * len` — the FRAME comes from the raster's
+// flow vector and was always right, the SPEED comes from the row. A straight
+// river's flow is the unit tangent (|flow| = 1, `heightfield` [12c]), so the
+// crest travels at `flowSpeed · 1` metres per second downstream:
+//
+//     NEW: 1.0 m/s        OLD: the lake's 0 m/s — nothing moved at all.
+//
+// That is "die Fließrichtung stimmt nicht": the direction was never wrong, the
+// pattern simply did not travel, and a surface that does not travel has no
+// direction to read.
+const CONV_LEN = 1.0;
+check('NEW: the crest rides the river at 1 m/s', NEW_ROW.flowSpeed * CONV_LEN, 1.0);
+check('RED: with the lake\'s dial it rode at nothing',
+  OLD_ROW.flowSpeed * CONV_LEN, 0);
+// A lake that DOES author a speed is the same defect with a softer number: the
+// library default is 0.5 m/s, i.e. the river ran at half speed.
+check('RED: …or at half speed where the primary water uses the shared default',
+  WATER_LOOK_DEFAULT.flowSpeed * CONV_LEN / (NEW_ROW.flowSpeed * CONV_LEN), 0.5);
+// THE WAVELENGTH WENT WITH IT — a river's 1.2 m ripple drawn at a lake's 2.0 m.
+check('RED: and the ripple was a lake\'s 2.0 m wavelength', OLD_ROW.waveM, 2.0);
+check('NEW: the river\'s own 1.2 m', NEW_ROW.waveM, 1.2);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

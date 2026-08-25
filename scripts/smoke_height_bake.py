@@ -1817,7 +1817,7 @@ for _name in ("_bank_clamp", "_relief_weight", "water_bank_box",
     check(f"red: HeightModel.{_name} is gone", hasattr(BMODEL, _name), False)
 check("red: `final` names three stages, not four",
       "_bank_clamp" in inspect.getsource(hf.HeightModel.final), False)
-check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 9)
+check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 10)
 
 print("\n[10b] the band outside the outline is the authored step, probe by "
       "probe")
@@ -2081,7 +2081,7 @@ check_not("moving ONLY the code version moves the signature", _after, _before)
 near("…and it is exactly 10 characters, like the other one", len(_after), 10,
      0)
 check("the restored version is the one this bake ships",
-      hf.HEIGHT_BAKE_VERSION, 9)
+      hf.HEIGHT_BAKE_VERSION, 10)
 _get_field_src = inspect.getsource(hf.get_field)
 check_true("get_field rejects a stored raster whose sig differs",
            'stored.get("sig") == sig' in _get_field_src)
@@ -2115,10 +2115,12 @@ print("\n[12a] the raster IS the mirror, sampled — the still lake")
 # answers 3.0 at every point of the plane. A one-knot axis has no segment, so
 # the flow is exactly (0, 0) — every still water, by construction.
 check("inside: the authored mirror, no flow at all, and 20 m of sd",
-      [round(v, 6) for v in MODEL.water_at(40.0, 40.0)],
+      [round(v, 6) for v in MODEL.water_at(40.0, 40.0)[:4]],
       [3.0, 0.0, 0.0, 20.0])
+check("...and the fifth answer is the painted KIND (v10)",
+      MODEL.water_at(40.0, 40.0)[4], "lake")
 check("ON the outline the point is covered, and its sd is exactly 0",
-      [round(v, 6) for v in MODEL.water_at(20.0, 40.0)],
+      [round(v, 6) for v in MODEL.water_at(20.0, 40.0)[:4]],
       [3.0, 0.0, 0.0, 0.0])
 near("dry ground far from any water answers nothing at all",
      1.0 if MODEL.water_at(-50.0, -50.0) is None else 0.0, 1.0)
@@ -2131,8 +2133,10 @@ near("...which is 2 steps = 4 m", hf.WATER_RASTER_DILATION_M, 4.0, 1e-12)
 # West of the lake's rim at x = 20, on the lattice (even metres): the distance
 # to the OUTLINE is 20 - x.
 check("4 m out — exactly the band — is still written, sd NEGATIVE",
-      [round(v, 6) for v in MODEL.water_at(16.0, 40.0)],
+      [round(v, 6) for v in MODEL.water_at(16.0, 40.0)[:4]],
       [3.0, 0.0, 0.0, -4.0])
+check("...and the ring carries the same KIND — one decision, all five channels",
+      MODEL.water_at(16.0, 40.0)[4], "lake")
 check_true("...and 6 m out is dry", MODEL.water_at(14.0, 40.0) is None)
 # THE VALUE IN THE RING IS THE FUNCTION CONTINUED, not the rim value carried
 # outward — which is what makes the bilinear mix inside the outline reproduce
@@ -2354,11 +2358,13 @@ check("dry lattice points are the null sentinel",
 check("...and wet ones the mirror, rounded like the heights",
       _wet_tile["water"]["level"][20][20], 3.0)
 check("STILL water ships no flow arrays — they would be lattices of zeros",
-      [k for k in sorted(_wet_tile["water"])], ["level", "sd"])
+      [k for k in sorted(_wet_tile["water"])],
+      ["kind_idx", "kinds", "level", "sd"])
 _cliff_tile = hf.rasterize_tile(0, 0, [STEP_AREA], [], [CLIFF_RIVER],
                                 CATALOG_R)
 check("a FLOWING water ships all four",
-      sorted(_cliff_tile["water"]), ["flow_x", "flow_z", "level", "sd"])
+      sorted(_cliff_tile["water"]),
+      ["flow_x", "flow_z", "kind_idx", "kinds", "level", "sd"])
 check("...and the flow is the unit tangent at (50, 0), lattice (25, 0)",
       [_cliff_tile["water"]["flow_x"][0][25],
        _cliff_tile["water"]["flow_z"][0][25]], [1.0, 0.0])
@@ -2472,7 +2478,8 @@ def _flow_angles(model, i0, j0, cols, rows, step=2.0):
     The raw field is `water_at` on the same lattice, i.e. exactly what the
     payload carried before v9; the shipped one is `water_raster`, blur and all.
     """
-    lvl, fx, fz, sd = model.water_raster(i0 * step, j0 * step, step, cols, rows)
+    lvl, fx, fz, sd, _kinds, _kidx = model.water_raster(
+        i0 * step, j0 * step, step, cols, rows)
     raw = {}
     for j in range(rows):
         for i in range(cols):
@@ -2583,7 +2590,8 @@ check("a still lake's blurred flow is exactly (0, 0)",
 # not, and a 4 m blur over a ribbon 8 m wide is what keeps that under a degree.
 def _flow_spread(model, i0, j0, cols, rows, step=2.0):
     """Worst angle in degrees between ANY two in-river texels of one window."""
-    lvl, fx, fz, sd = model.water_raster(i0 * step, j0 * step, step, cols, rows)
+    lvl, fx, fz, sd, _kinds, _kidx = model.water_raster(
+        i0 * step, j0 * step, step, cols, rows)
     vecs = [(fx[j][i], fz[j][i]) for j in range(rows) for i in range(cols)
             if sd[j][i] is not None and sd[j][i] >= 0
             and math.hypot(fx[j][i], fz[j][i]) > 1e-9]
@@ -2600,7 +2608,8 @@ def _flow_spread(model, i0, j0, cols, rows, step=2.0):
 def _cross_spread(model, i0, j0, cols, rows, columns, step=2.0):
     """Worst angle across the ribbon at each of `columns` — the same measure
     taken along ONE cross-section, where a river may not turn at all."""
-    lvl, fx, fz, sd = model.water_raster(i0 * step, j0 * step, step, cols, rows)
+    lvl, fx, fz, sd, _kinds, _kidx = model.water_raster(
+        i0 * step, j0 * step, step, cols, rows)
     worst = 0.0
     for i in columns:
         col = [(fx[j][i], fz[j][i]) for j in range(rows)
@@ -2665,6 +2674,151 @@ check_true("...and really flowing", math.hypot(_wa[1][9][19], _wa[2][9][19]) > 0
 check("the same point read from two WINDOWS is the same blurred vector",
       [round(_wa[1][9][19], 9), round(_wa[2][9][19], 9)],
       [round(_wb[1][9][0], 9), round(_wb[2][9][0], 9)])
+
+
+# ── [12i] THE KIND CHANNEL (bake v10, finding F-A second half) ──────────
+#
+# WHAT IT ANSWERS. v9 gave the renderer a field that says WHETHER a pixel is
+# inside painted water (`sd`). It still left WHICH water to the ground
+# compositor's id mask — a pair (topmost painted kind, the one under it). That
+# pair is a statement about the GROUND, and every look a water has (tint,
+# wave_m, speed, flow_speed, opaque depth) is a property of its KIND. Wherever
+# the water is not the topmost PAINTED kind the pair names no water at all and
+# the pixel drew with somebody else's numbers: the wrong tint, the wrong opaque
+# depth (rim transparency working in some spots and not in others) and the wrong
+# flow_speed (a river drifting at a lake's dial, or standing still).
+#
+# THE RULE, and every number below follows from it:
+#
+#   kind(p) = the painted kind of the TOPMOST water covering p — the same
+#             "topmost water wins" that already picks `level` and `sd`, so all
+#             five channels of one texel come from ONE water.
+#   kinds   = that window's own palette, in the order the kinds are first met
+#             scanning the CROPPED window row by row (z ascending, then x).
+#   kind_idx[j][i] = the index into it; 0 and MEANINGLESS where `level` is None.
+print("\n[12i] the raster names its own KIND per texel (bake v10)")
+
+# THE TWO-KIND FIXTURE. A lake and a river that OVERLAP, with the river painted
+# later, so the "topmost wins" tie-break is exercised inside one window.
+#
+#   lake  : the square (-1,-1)-(21,21), kind "lake",  painted first
+#   river : the box   (15,9)-(59,13),   kind "river", painted second
+#
+# Both outlines are deliberately at ODD coordinates so no even lattice point of
+# the window ever lands ON an outline and no answer depends on the ray-cast
+# tie-break at a boundary.
+_K_LAKE = {"id": "ta_k_lake", "kind": "lake", "z_order": 0,
+           "polygon": [[-1, -1], [21, -1], [21, 21], [-1, 21]],
+           "meta": {"water_level": 1.0}}
+_K_RIVER = {"id": "ta_k_river", "kind": "river", "z_order": 1,
+            "polygon": [[15, 9], [59, 9], [59, 13], [15, 13]],
+            "meta": {"water_level": 1.0}}
+_KMODEL = hf.build_model([], [], [_K_LAKE, _K_RIVER], CATALOG_R)
+# WINDOW: origin (0,0), step 2, 31 x 11 points — x = 0,2,…,60 and z = 0,2,…,20.
+_KW = _KMODEL.water_raster(0.0, 0.0, 2.0, 31, 11)
+_k_level, _k_fx, _k_fz, _k_sd, _k_kinds, _k_idx = _KW
+# BY HAND, the palette. Scanning j = 0 (z = 0) first: x = 0…20 lie inside the
+# lake (its outline runs to 21), so the FIRST kind met is "lake". The river is
+# first met at j = 5 (z = 10), i = 8 (x = 16) — the first lattice point inside
+# its outline, and inside the lake's as well, where the later paint wins.
+check("the window's palette is its own two kinds, in first-met order",
+      _k_kinds, ["lake", "river"])
+check("mid-lake (10, 10) — lattice (5, 5) — is the lake",
+      _k_kinds[_k_idx[5][5]], "lake")
+check("mid-river (40, 10) — lattice (20, 5) — is the river",
+      _k_kinds[_k_idx[5][20]], "river")
+# THE OVERLAP, and it is the same tie-break the level takes: (16, 10) lies
+# inside BOTH outlines and the river was painted later.
+check_true("(16, 10) really is inside both outlines",
+           hf._inside_ring(16.0, 10.0, [(-1.0, -1.0), (21.0, -1.0),
+                                        (21.0, 21.0), (-1.0, 21.0)])
+           and hf._inside_ring(16.0, 10.0, [(15.0, 9.0), (59.0, 9.0),
+                                            (59.0, 13.0), (15.0, 13.0)]))
+check("...and the TOPMOST water wins the kind, exactly as it wins the level",
+      _k_kinds[_k_idx[5][8]], "river")
+# THE WHOLE ROW z = 10, by hand: x = 0…14 are lake only (8 texels, i = 0…7),
+# x = 16…58 are river (inside), and x = 60 is 1 m past the river's east rim,
+# i.e. in its DILATION ring, which carries the ring water's kind like every
+# other channel. 8 zeros, then 23 ones.
+check("the row z = 10 is 8 lake texels and then 23 river ones",
+      _k_idx[5], [0] * 8 + [1] * 23)
+# THE RING BELONGS TO THE WATER THAT WROTE IT. At (22, 14) neither outline
+# contains the point: it is 1 m outside the lake's east rim AND 1 m outside the
+# river's north rim, and the second pass walks the candidates topmost-first.
+check_true("(22, 14) is inside neither outline",
+           _KMODEL.water_at(22.0, 14.0) is not None
+           and _KMODEL.water_at(22.0, 14.0)[3] < 0)
+check("...so its ring texel carries the topmost water's kind — the river",
+      _k_kinds[_k_idx[7][11]], "river")
+# DRY TEXELS INDEX 0 AND MEAN NOTHING — the level is the mask, and it is the
+# only mask this raster has. (26, 0) is 5 m past the lake and 9 m from the
+# river: outside both dilations.
+check("a dry texel is null in `level`", _k_level[0][13], None)
+check("...and its kind index is a plain 0, not a second sentinel",
+      _k_idx[0][13], 0)
+# THE PALETTE IS THE WINDOW'S, NOT THE WORLD'S: a window over the lake alone
+# names one kind, however many waters the world holds.
+_KW_LAKE = _KMODEL.water_raster(0.0, 0.0, 2.0, 5, 4)
+check("a window that only touches the lake ships a ONE-entry palette",
+      _KW_LAKE[4], ["lake"])
+check("...and its grid indexes that one entry", _KW_LAKE[5][0], [0] * 5)
+
+print("\n[12j] THE CONVICTION — a river through a forest painted over it")
+# THE USER'S CASE, 2026-08-25: "lake AND river show patches that look like
+# forest floor, and at the river the flow direction reads wrong". A generated
+# map paints a wood over the whole valley and draws the river into it; whichever
+# was painted LAST is the topmost PAINTED kind, and that is the only thing the
+# id mask could report.
+#
+#   forest : the box (-1,-1)-(121,81), kind "g", painted LAST (topmost)
+#   river  : the box (15,37)-(105,43), kind "river", painted first
+_FA_RIVER = {"id": "ta_fa_river", "kind": "river", "z_order": 0,
+             "polygon": [[15, 37], [105, 37], [105, 43], [15, 43]],
+             "meta": {"water_level": 1.0, "flow_dir_deg": 90.0}}
+_FA_FOREST = {"id": "ta_fa_forest", "kind": "g", "z_order": 9,
+              "polygon": [[-1, -1], [121, -1], [121, 81], [-1, 81]],
+              "meta": {}}
+_FA_AREAS = [_FA_RIVER, _FA_FOREST]
+_FAMODEL = hf.build_model([], [], _FA_AREAS, CATALOG_R)
+# THE RED PROBE, measured on the very mechanism that was asked: the ground
+# compositor's own model. At mid-river the TOPMOST PAINTED kind is the forest,
+# and the forest layer is not water — so the id pair the fragment fetched there
+# was (forest, forest), both halves failed `is_water`, and the pick fell to the
+# stand-in row: the world's PRIMARY water, with a lake's tint, a lake's opaque
+# depth and a lake's flow_speed.
+_FA_LM = TL2.LayerModel(_FA_AREAS, CATALOG_R, "meadow")
+_FA_TOP = _FA_LM.layer_at(60.0, 40.0)
+_FA_TOP_ROW = _FA_LM.layers[_FA_TOP]
+_FA_RIVER_ROW = next(e for e in _FA_LM.layers if e["kind"] == "river")
+print(f"    mid-river (60, 40): id pair ({_FA_TOP}, {_FA_TOP}) = "
+      f"({_FA_TOP_ROW['kind']}, {_FA_TOP_ROW['kind']}); the river's own layer "
+      f"is {_FA_RIVER_ROW['index']}")
+check("RED: the topmost PAINTED kind at mid-river is the forest, not the water",
+      _FA_TOP_ROW["kind"], "g")
+check("RED: ...and that layer is not water, so BOTH halves of the id pair fail "
+      "the `is_water` test the fragment picked its row with",
+      _FA_TOP_ROW["water"], False)
+check_true("RED: ...while the river's own layer exists and IS water — the mask "
+           "simply never names it here",
+           _FA_RIVER_ROW["water"] is True
+           and _FA_RIVER_ROW["index"] != _FA_TOP_ROW["index"])
+# THE FIX, on the same point: the water field names the river, because the water
+# field is built from the WATER stamps and a forest is not one.
+check("the water raster names the RIVER at mid-river, whatever is painted over "
+      "it", _FAMODEL.water_at(60.0, 40.0)[4], "river")
+_FAW = _FAMODEL.water_raster(0.0, 30.0, 2.0, 61, 11)
+check("...the window's palette holds exactly that one water", _FAW[4], ["river"])
+check("...and every WET texel of the window indexes it",
+      sorted({_FAW[5][_j][_i] for _j in range(11) for _i in range(61)
+              if _FAW[0][_j][_i] is not None}), [0])
+# The forest is painted over the whole window, so the id mask names it at EVERY
+# one of those texels — which is the measure of how much of the river the old
+# rule got wrong: all of it.
+check("RED: the id mask names the forest at every wet texel of that window — "
+      "the whole river drew with the wrong water",
+      sorted({_FA_LM.layer_at(_i * 2.0, 30.0 + _j * 2.0)
+              for _j in range(11) for _i in range(61)
+              if _FAW[0][_j][_i] is not None}), [_FA_TOP])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 for name in FAILURES:

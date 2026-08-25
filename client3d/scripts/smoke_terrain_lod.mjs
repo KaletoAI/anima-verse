@@ -840,9 +840,6 @@ async function loadLod() {
     await writeFile(join(dir, 'three.mjs'), THREE_STUB, 'utf8');
     await writeFile(join(dir, 'sceneRender.mjs'),
       "export * from './worldHeight.mjs';\nexport * from './materials.mjs';\n", 'utf8');
-    await writeFile(join(dir, 'layerGround.mjs'),
-      'export function bindLayerIdUniforms(u, ...names) {\n'
-      + '  for (const n of names) if (n) u[n] = { value: null };\n}\n', 'utf8');
     await ts(join(ROOT, 'packages/scene-render/src/worldHeight.ts'), 'worldHeight');
     await ts(join(ROOT, 'packages/scene-render/src/materials.ts'), 'materials');
     await ts(join(ROOT, 'client3d/src/scene/waterRaster.ts'), 'waterRaster');
@@ -851,7 +848,11 @@ async function loadLod() {
     const src = await readFile(join(ROOT, 'client3d/src/scene/terrainLod.ts'), 'utf8');
     const out = esbuild.transformSync(src, { loader: 'ts', format: 'esm' }).code
       .replace(/from\s*["']three["']/g, "from './three.mjs'")
-      .replace(/from\s*["']\.\/(waterRaster|waterShade|layerGround)["']/g,
+      // NO `layerGround` STUB ANY MORE (bake v10): the terrain's water variant
+      // stopped borrowing the ground compositor's id mask when the water raster
+      // started naming its own kind per texel, so this module has no import of
+      // it left to satisfy.
+      .replace(/from\s*["']\.\/(waterRaster|waterShade)["']/g,
                "from './$1.mjs'")
       .replace(/from\s*["']@anima\/scene-render["']/g, "from './sceneRender.mjs'");
     await writeFile(join(dir, 'terrainLod.mjs'), out, 'utf8');
@@ -3555,18 +3556,24 @@ check('the composition order is albedo -> normal -> light',
    wetFrag.indexOf('normal = tlodWaterNormal();'),
    wetFrag.indexOf('tlodWaterOut( outgoingLight')]
     .every((v, i, a) => v > 0 && (i === 0 || v > a[i - 1])) ? 1 : 0, 1);
-checkEq('the water program is handed the look table, the wave map and the mask',
+checkEq('the water program is handed the look table, the wave map, the flow, '
+  + 'the distance and the KIND field',
   ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodTime', 'uTlodSky',
-   'uTlodWaterMask', 'uTlodWaterMaskGeom', 'uTlodWaterSd']
+   'uTlodWaterSd', 'uTlodWaterKind']
     .every((k) => wetShader.uniforms[k] !== undefined), true);
-// RED: the compositor's own sd is NOT borrowed any anymore (finding F-A) — the
-// water gate reads the WATER raster's distance, and `uTlodWaterSd` is that
-// field. A lake with a painted bed answers (sand, sand) on the material mask.
+// RED: NOTHING of the ground compositor is borrowed any more (finding F-A, both
+// halves). Its signed distance went first — a lake with a painted bed answers
+// (sand, sand) on the material mask — and its id PAIR went with bake v10, when
+// the water raster started naming its own kind per texel. A river under a
+// forest area read (forest, forest) and drew as the world's primary water.
 checkEq('RED: the compositor\'s sd window and byte code are gone',
   ['uTlodWaterSdGeom', 'uTlodWaterSdCode']
     .some((k) => wetShader.uniforms[k] !== undefined), false);
-checkEq('RED: and the dry program is handed none of them',
-  ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodWaterMask', 'uTlodWaterSd']
+checkEq('RED: …and so are its id mask and that mask\'s window',
+  ['uTlodWaterMask', 'uTlodWaterMaskGeom']
+    .some((k) => wetShader.uniforms[k] !== undefined), false);
+checkEq('RED: …and no water word reaches the dry program either',
+  ['uTlodWaterLook', 'uTlodWave', 'uTlodFlow', 'uTlodWaterKind', 'uTlodWaterSd']
     .some((k) => dryShader.uniforms[k] !== undefined), false);
 // The absorption a fragment reads is the mirror's own shore curve — the twin
 // is checked against hand tables in `smoke_water_shade.mjs`; here only that

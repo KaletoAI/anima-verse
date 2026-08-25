@@ -6388,6 +6388,10 @@ vergiften. Innerhalb eines Umrisses kann sie das nie tun (Dilatationsargument,
   zu sagen, WELCHE Wasserart hier steht (`layer = twIsWater(a) ? a : b`). Die
   `sd`-Hälfte von `bindLayerIdUniforms` ist wieder gelöscht — kein totes
   Mechanismus-Paar.
+  **ÜBERHOLT am 2026-08-25 (Bake v10, siehe letzter Nachtrag):** auch diese
+  letzte Aufgabe war falsch besetzt — die Maske nennt die oberste GEMALTE Art,
+  nicht die Wasserart. Das Raster nennt seine Art seit v10 selbst
+  (`kinds` + `kind_idx`), und `bindLayerIdUniforms` ist ganz gelöscht.
 - **Der F1-Deckel misst die GETORTE Hebung**: `waterTileCaps` nimmt das
   `sd`-Feld und zählt ein Texel nur, wenn es wirklich steigt. Sonst beschriebe
   die Zahl nichts.
@@ -6436,3 +6440,136 @@ fallen lassen), keine Panne — deshalb steht es hier und nicht im Code.
 | Lift-Tor: Ring hebt nicht mehr, „Figur neben dem Wasser", GLSL-Pins | `client3d/scripts/smoke_terrain_lod.mjs` **[16]**, **[17]** |
 | Deckel misst die getorte Hebung (2 → 1) | ebenda **[18] (e)** |
 | Fragment-Tor: eine Smoothstep, Band, ID-Maske nur noch für den Look | `client3d/scripts/smoke_water_shade.mjs` **[7]** |
+
+---
+
+## Nachtrag 2026-08-25 (§ A16.5): Das Wasser-Raster nennt seine ART pro Texel — die zweite Hälfte von F-A
+
+*Ein Server-Umbau (`HEIGHT_BAKE_VERSION` **9 → 10**, additive Kachel-Nutzlast)
+und ein Client-Schnitt. v9 gab dem Renderer ein Feld, das sagt, **OB** ein Pixel
+in gemaltem Wasser steht (`sd`). **WELCHES** Wasser es ist, blieb bei der
+ID-Maske des Boden-Kompositors — und die beantwortet eine andere Frage.*
+
+### 1. Der Befund
+
+Nutzer-Beleg vom 2026-08-25: „See UND Fluss zeigen Flecken, die wie
+**Waldboden** aussehen, teils durchscheinend, teils nicht; beim Fluss stimmt die
+**Fließrichtung** nicht; die gewünschte Rand-Transparenz funktioniert an
+**manchen** Seestellen."
+
+Alles davon steht in EINER Zeile des Fragments, die es bis v9 gab:
+
+```glsl
+layer = twIsWater( a ) ? a : b;     // (a, b) = das ID-Paar der Material-Maske
+```
+
+Das Paar nennt die **oberste GEMALTE Art** und die darunter. Das ist eine
+Aussage über den BODEN. Überall dort, wo das Wasser nicht die oberste gemalte
+Art ist — ein Fluss unter einer darüber gemalten Waldfläche, ein See mit
+`bed_kind`, jede Z-Order-Änderung — nennt das Paar **gar kein Wasser**, beide
+Hälften fallen durch `twIsWater`, und die Wahl landet auf einer
+Platzhalter-Zeile: dem **primären Wasser der Welt**.
+
+Gemessen auf der Fixture „Fluss durch darüber gemalten Wald"
+(`scripts/smoke_height_bake.py` **[12j]**, `terrain_layers.LayerModel`):
+
+| Größe | gemessen |
+|---|---|
+| ID-Paar in der Flussmitte (60, 40) | **(1, 1) = (g, g)** — der Wald |
+| dessen Ebene `water` | **false** — beide Hälften fallen durch |
+| eigene Ebene des Flusses | **2**, `water: true` — die Maske nennt sie hier nie |
+| Anteil der nassen Texel des Fensters mit falschem Paar | **alle** (Menge der Ebenen über alle nassen Texel = `{1}`) |
+
+Und was die falsche Zeile kostet, in Zahlen
+(`client3d/scripts/smoke_water_shade.mjs` **[11]**; tiefer See 4 m Bett →
+`opaque` 3,0 m, `flow_speed` 0; Fluss 1,2 m Bett → `opaque` 0,9 m,
+`flow_speed` 1,0 m/s):
+
+| bei 0,60 m Wassertiefe | richtige Zeile (Fluss) | gewählte Zeile (See) |
+|---|---|---|
+| Absorption `3t²−2t³` | `t = 2/3` → **20/27 = 0,740741** | `t = 0,2` → **0,104** |
+| Rest des BETTS im Bild | **7/27 = 0,259259** | **0,896** |
+| — Faktor | | **3,456× so viel Waldboden** |
+| Drift der Kämme (`flow_speed · |flow|`) | **1,0 m/s** | **0 m/s — nichts bewegt sich** |
+| Ripple-Wellenlänge | **1,2 m** | **2,0 m** |
+
+Das ist die ganze Beobachtung: „wie Waldboden" ist `1 − Absorption` mit der
+falschen `opaque`-Tiefe, „teils durchscheinend, teils nicht" ist derselbe Pixel
+bei anderer Tiefe, „Fließrichtung stimmt nicht" ist ein Muster, das gar nicht
+wandert (der RAHMEN kam immer aus dem Raster und war nie falsch), und „an
+manchen Seestellen richtig" sind genau die Stellen, an denen das Wasser zufällig
+doch die oberste gemalte Art ist.
+
+### 2. Server (Bake v10): Palette + Index-Gitter
+
+```jsonc
+"water": {
+  "level":    [[float|null, …], …],   // unverändert
+  "sd":       [[float|null, …], …],   // unverändert (v9)
+  "kinds":    ["water", "river"],      // NEU: die Palette DIESES Fensters
+  "kind_idx": [[int, …], …],           // NEU: Index hinein, pro Texel
+  "flow_x":   [[float, …], …],         // unverändert, weiterhin optional
+  "flow_z":   [[float, …], …]
+}
+```
+
+- **`kind_idx[j][i]` nennt die Art des OBERSTEN Wassers** an diesem Texel —
+  dieselbe Entscheidung, die schon `level` und `sd` wählt. „Zuletzt gemaltes
+  Wasser gewinnt" ist EINE Entscheidung, und alle fünf Kanäle eines Texels
+  stammen aus demselben Wasser. `HeightModel.water_at` gibt die Art als fünften
+  Rückgabewert.
+- **Eine PALETTE statt eines Namens pro Texel.** Eine Kachel trägt ein oder zwei
+  Wasser; 129 × 129 Wiederholungen derselben Handvoll Wörter wären hunderte
+  Kilobyte. Und ein INDEX ist ohnehin genau das, was eine Look-Tabelle
+  indiziert. Die Reihenfolge ist „zuerst angetroffen" beim zeilenweisen Lauf
+  über das BESCHNITTENE Fenster; die Palette ist nie leer, solange die Kachel
+  existiert.
+- **`kind_idx` ist 0, wo `level` `null` ist, und bedeutet dort NICHTS.** Kein
+  zweites Sentinel: `level` IST die Maske dieses Rasters, und ein zweites würde
+  nur wiederholen, was das erste sagt — und jeden Leser zwingen, eine nullable
+  Ganzzahl durch eine Textur zu tragen, die keinen Platz dafür hat.
+- **Nichts wird geglättet oder gemischt.** Eine Art ist ein NAME; der Mittelwert
+  zweier Namen ist keiner. Das Gitter wird beschnitten wie `level` und `sd`.
+- `h_final` bewegt sich um keinen Millimeter. Der Zähler dreht sich, weil eine
+  v9-Kachel keine Palette trägt und der Renderer dann nichts hat, womit er seine
+  Look-Tabelle indizieren könnte.
+
+### 3. Client: die Look-Tabelle ist nach ART geschlüsselt, die ID-Maske ist raus
+
+- **`WaterLook`-Tabelle: eine Zeile pro WASSERART** statt einer pro Ebene. Damit
+  fallen die Platzhalter-Zeilen weg (jede Bodenebene trug das primäre Wasser als
+  Attrappe) und mit ihnen das `is_water`-Flag im dritten Slot von Texel 2 — es
+  war nur dazu da, diese Attrappen wieder auszusortieren. Der Slot ist jetzt
+  Reserve. **Zeile 0 ist das primäre Wasser** und das, was eine unbekannte Art
+  liest (und jede v9-Kachel): schlimmster Fall „das falsche Wasser", nie ein
+  bodenfarbener See.
+- **`uTlodWaterKind`** — R32F auf dem BASIS-Gitter der Wasser-Pyramide, neben
+  `uTlodFlow` und `uTlodWaterSd` und ohne eigene Geometrie (das Gitter IST
+  `uTlodWaterLevel[0]` über `uTlodWaterGeom.xy`). Der Client löst den NAMEN aus
+  dem Raster über die aktuelle `rowOfKind`-Abbildung in eine ZEILE auf
+  (`terrainLod.buildKindRows`), damit die Tabelle jederzeit neu geordnet werden
+  darf, ohne dass der Bake je eine Zeilennummer eines Renderers kennt.
+- **NEAREST, nie bilinear** (`waterRaster.nearestIndex` / `rasterKindAt`, GLSL
+  `twKindRow`): eine Look-Zeile ist ein Name. Wo zwei Wasserarten INNERHALB
+  einer zusammenhängenden Fläche aneinanderstoßen, wechselt die Zeile an der
+  Texelkante statt zu blenden — **angenommen und hier notiert**: es ist ein
+  Meter-Sprung im Farbton zwischen zwei Wassern, die der Autor als zwei Wasser
+  gezeichnet hat.
+- **Was gestorben ist:** `bindLayerIdUniforms` (ganz, samt der zweiten
+  Sampler-Bindung), `uTlodWaterMask` / `uTlodWaterMaskGeom` im Wasser-Programm,
+  `twIsWater`, `WaterLook.isWater` und die Attrappen-Zeilen. Der Boden-Kompositor
+  behält seine Maske unverändert für den BODEN; geborgt wird nichts mehr.
+- **Die H2-Oberflächenterme reiten dieselbe Zeile**: Rauheit, Metalness,
+  Himmelsanteil und Ripple lesen `look1`/`look2` derselben Zeile — sie werden
+  mit demselben Schnitt richtig, ohne eigene Änderung.
+
+### 4. Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Palette + `kind_idx` von Hand auf einer Zwei-Arten-Fixture (Überlappung, Ring, trockene Texel, Ein-Eintrag-Fenster) | `scripts/smoke_height_bake.py` **[12i]** |
+| Verurteilung „Fluss durch Wald": ID-Paar `(g, g)`, Ebene nicht Wasser, alle nassen Texel betroffen; Raster nennt `river` | ebenda **[12j]** |
+| Client-Zwilling: Draht → Palette/Gitter, `nearestIndex`-Regel, Wechsel an der Texelkante, v9-Kachel, Index außerhalb der Palette | `client3d/scripts/smoke_world_height.mjs` **[W4b]** |
+| Die Zahlen der falschen Zeile (3,456× Bett, 0 statt 1 m/s, 2,0 statt 1,2 m) | `client3d/scripts/smoke_water_shade.mjs` **[11]** |
+| GLSL: Zeile aus `twKindRow`, kein `twIsWater`, kein `uTlodWaterMask` | ebenda **[6]**, **[7]** |
+| Uniform-Bindung: `uTlodWaterKind` am Wasser-Programm, Maske an keinem | `client3d/scripts/smoke_terrain_lod.mjs` **[18]** ("the water shading lives in the water program only") |
