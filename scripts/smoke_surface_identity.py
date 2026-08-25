@@ -176,12 +176,17 @@ def main() -> int:
     # downstream (the same number reads several times faster). `speed` is the
     # still-water metres per second, `flow_speed` the flowing one.
     check("still water keeps its 0.25 m/s", (water or {}).get("speed"), 0.25)
-    # 0.15, not 0.08: the first round pointed the ripple downstream and then had
-    # to slow it down, and 0.08 m/s read as a standing river (follow-up finding
-    # 2026-08-23, "the river now moves too slowly"). Still slower than the lake,
-    # because a river's two layers add up instead of cancelling.
-    check("...and flowing water is still slower than the lake",
-          (water or {}).get("flow_speed"), 0.15)
+    # 0.5, not 0.15: the dial climbed 0.08 → 0.15 → 0.5. The first two steps
+    # kept the flowing number BELOW the lake's 0.25, on the argument that a
+    # river's two layers add up while a lake's cancel, so the same number reads
+    # several times faster on a river. That premise no longer decides the dial:
+    # by user decision (2026-08-25) the default flow is 0.5 m/s, so the ordering
+    # is now inverted on purpose — flowing water is dialled FASTER than the lake
+    # (0.5 > 0.25), and the layer-addition on top of it is wanted, not a reason
+    # to compensate. 0.5 is a quarter of the 2.0 m/s ceiling, so an area still
+    # has room to dial both up and down.
+    check("...and flowing water is now dialled faster than the lake",
+          (water or {}).get("flow_speed"), 0.5)
     clamped = st.sanitize_material({"class": "water", "wave_m": 999,
                                     "speed": -5, "flow_speed": 99, "sky_mix": 2,
                                     "roughness": -1, "map_strength": 7,

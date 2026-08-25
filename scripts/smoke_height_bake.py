@@ -2203,6 +2203,9 @@ near("...and it is a UNIT vector — the factor is applied after the mix",
 # THE SPEED FACTOR is the area's own speed over its KIND's dial, the twin of
 # `@anima/scene-render waterFlowFactor`. An area that authors nothing is
 # exactly 1, which is what keeps every existing water the plain unit tangent.
+# The 0.15 below is this river kind's AUTHORED dial (the `{"river": 0.15}` the
+# model is built with), not `WATER_FLOW_SPEED_DEFAULT_M_S` — the ratio is what
+# is being derived, so the numbers stand whatever the default is dialled to.
 near("no authored speed -> factor exactly 1",
      hf.water_flow_factor(None, 0.15), 1.0, 1e-15)
 near("half the kind's speed -> half the length",

@@ -423,8 +423,10 @@
  * ===========================================================================
  * ONE SPEED COULD NOT SERVE BOTH. A lake counter-scrolls its layers, so they
  * cancel and 0.25 m/s reads slow; a river sends both downstream, where the
- * same 0.25 reads several times faster. So `speed` stays the still number and
- * `flow_speed` (default 0.15 m/s since [9e], `uFlowSpeed`) is the flowing one;
+ * same 0.25 reads several times faster. That is why there are two dials — it
+ * is no longer why the flowing one is the smaller: since 2026-08-25 the flow
+ * default is 0.5 m/s, twice the lake's, by user decision. So `speed` stays the
+ * still number and `flow_speed` (default 0.5 m/s, `uFlowSpeed`) is the flowing one;
  * the shader picks per pixel, `wSpeed = wStill ? uSpeed : uFlowSpeed · wLen`,
  * where the length is the AREA's own factor ([9e]) and 1 unless it says
  * otherwise.
@@ -468,17 +470,18 @@
  * [9e] ONE AREA MAY RUN FASTER THAN ITS KIND (finding 2026-08-23 no. 2)
  * ===========================================================================
  * `flow_speed` is the KIND's dial, raised to 0.15 m/s in the same round ("the
- * river now moves too slowly"). A single painted area may override it with
+ * river now moves too slowly") and to 0.5 m/s by user decision on 2026-08-25.
+ * A single painted area may override it with
  * `meta.flow_speed_m_s`, and that override travels as the LENGTH of
  * `aWaterFlow`: the attribute has been a UNIT tangent since W4a, so the shader
  * reads `wSpeed = uFlowSpeed · wLen` and nothing already built changes by one
  * bit. The encoder is `waterFlowFactor` (`@anima/scene-render`), the ratio
  * `area m/s ÷ kind m/s`, on the fixture river whose tangent is exactly (−1, 0):
  *
- *     no override -> 1      -> 0.15 · 1     = 0.15 m/s   (the unit tangent)
- *     0.45 m/s    -> 3      -> 0.15 · 3     = 0.45 m/s
- *     0.03 m/s    -> 0.2    -> 0.15 · 0.2   = 0.03 m/s
- *     0 m/s       -> 1e-3   -> 0.15 · 1e-3  = 0.15 mm/s
+ *     no override -> 1      -> 0.5 · 1      = 0.5 m/s    (the unit tangent)
+ *     0.45 m/s    -> 0.9    -> 0.5 · 0.9    = 0.45 m/s
+ *     0.03 m/s    -> 0.06   -> 0.5 · 0.06   = 0.03 m/s
+ *     0 m/s       -> 1e-3   -> 0.5 · 1e-3   = 0.5 mm/s
  *
  * WHY THE LENGTH AND NOT A FLOAT OF ITS OWN: a geometry that carries no such
  * attribute reads its generic value, and for a float that is 0 — which would
@@ -487,10 +490,12 @@
  * the one encoding that needs no migration is the one that costs no attribute.
  *
  * AND WHY THE FLOOR: `wStill` is `wLen < 1e-4`, so a zero-length vector is a
- * LAKE — and a lake drifts at `uSpeed` = 0.25 m/s, three times faster than the
- * river was, in a crossing pattern instead of streaks. An authored 0 m/s is
- * therefore floored to 1e-3, ten times the threshold: 0.15 mm/s, one 1.6 m
- * wavelength in about three hours, a river that stands still and stays a river.
+ * LAKE — and a lake drifts at `uSpeed` = 0.25 m/s, which is not a standstill
+ * either way (it used to be three times the river's dial, since 2026-08-25 it
+ * is half of it), in a crossing pattern instead of streaks. An authored 0 m/s
+ * is therefore floored to 1e-3, ten times the threshold: 0.5 mm/s, one 1.6 m
+ * wavelength in 1.6/0.0005 = 3200 s, a river that stands still and stays a
+ * river.
  * The direction survives all of it untouched — the shader divides by the very
  * length it multiplies by.
  */
@@ -1159,14 +1164,14 @@ for (const [deg, flow, a, b] of [
 console.log('\n[9c] two speeds, a ripple stretched along the flow, a streak');
 const LAMBDA = 1.6;          // wave_m default
 const S_STILL = 0.25;        // speed default        (lake)
-const S_FLOW = 0.15;         // flow_speed default   (river)
+const S_FLOW = 0.5;          // flow_speed default   (river, 0.5 since 2026-08-25)
 check('a lake drifts at its own dial', S_STILL, 0.25);
-check('…a current at the new one, still slower than the lake', S_FLOW, 0.15);
+check('…a current at the raised one, now twice the lake\'s', S_FLOW, 0.5);
 // A's along component is exactly 1.0, so flow_speed IS the downstream m/s.
 check('…and layer A of that current makes exactly that downstream',
-  (DOWN[0][0] * -1 + DOWN[0][1] * 0) * S_FLOW, 0.15, 1e-15);
+  (DOWN[0][0] * -1 + DOWN[0][1] * 0) * S_FLOW, 0.5, 1e-15);
 check('…layer B trails it at 0.8 of that',
-  (DOWN[1][0] * -1 + DOWN[1][1] * 0) * S_FLOW, 0.12, 1e-15);
+  (DOWN[1][0] * -1 + DOWN[1][1] * 0) * S_FLOW, 0.4, 1e-15);
 /** The squeeze: project into the flow frame, divide the ALONG part by `k`. */
 function squash(frame, [x, z], k) {
   const { ax, ay } = frame;
@@ -1255,8 +1260,8 @@ check('…declared in the fragment source',
 check('…and defaulted to the kind default, by name not by copy',
   /uFlowSpeed = \{ value: spec\.flow_speed \?\? WATER_FLOW_SPEED_DEFAULT_M_S \}/
     .test(matSrc) ? 1 : 0, 1);
-check('…which is 0.15 m/s since the follow-up finding',
-  /export const WATER_FLOW_SPEED_DEFAULT_M_S = 0\.15/.test(matSrc) ? 1 : 0, 1);
+check('…which is 0.5 m/s since the user decision of 2026-08-25',
+  /export const WATER_FLOW_SPEED_DEFAULT_M_S = 0\.5/.test(matSrc) ? 1 : 0, 1);
 // STILL WATER IS UNCHANGED, and these are the constants that say so: every new
 // branch is a ternary whose still side carries the old number.
 check('the cross factors keep 0.6 / 1.3 when still',
@@ -1285,10 +1290,12 @@ check('RED: the streak tap is unconditional (derivatives need it)',
 // second to its KIND's dial, and the fragment multiplies `uFlowSpeed` by that
 // length. Hand-derived on the fixture river, whose tangent at (50, −30) is
 // exactly (−1, 0):
-//   no override            -> length 1        -> 0.15 · 1    = 0.15 m/s
-//   0.45 m/s over 0.15     -> length 3        -> 0.15 · 3    = 0.45 m/s
-//   0.03 m/s over 0.15     -> length 0.2      -> 0.15 · 0.2  = 0.03 m/s
-//   0 m/s over 0.15        -> length 1e-3     -> 0.15 · 1e-3 = 0.15 mm/s
+//   no override           -> length 1        -> 0.5 · 1     = 0.5 m/s
+//   0.45 m/s over 0.5     -> length 0.9      -> 0.5 · 0.9   = 0.45 m/s
+//   0.03 m/s over 0.5     -> length 0.06     -> 0.5 · 0.06  = 0.03 m/s
+//   0 m/s over 0.5        -> length 1e-3     -> 0.5 · 1e-3  = 0.5 mm/s
+// (the ratios all shrank when the dial rose to 0.5: an area now has to author
+//  MORE than half a metre per second before it stretches the unit tangent.)
 console.log('\n[9e] the flow vector carries the AREA\'s speed as its length');
 const TANGENT = RIVER_FLOW;
 checkVec('the fixture river\'s tangent is the unit vector it always was',
@@ -1298,10 +1305,10 @@ checkVec('the fixture river\'s tangent is the unit vector it always was',
  *  raster now (`heightfield.water_flow_factor`) — the same two floats, read by
  *  the same expression `uFlowSpeed · length`. */
 const encode = ([x, z], factor) => [x * factor, z * factor];
-for (const [areaSpeed, factor] of [[undefined, 1], [0.45, 3], [0.03, 0.2],
-  [0.15, 1]]) {
+for (const [areaSpeed, factor] of [[undefined, 1], [0.45, 0.9], [0.03, 0.06],
+  [0.5, 1]]) {
   const f = waterFlowFactor(areaSpeed, WATER_FLOW_SPEED_DEFAULT_M_S);
-  check(`${areaSpeed ?? 'no'} m/s over the kind's 0.15 is a factor of`,
+  check(`${areaSpeed ?? 'no'} m/s over the kind's 0.5 is a factor of`,
     f, factor, 1e-12);
   const a = encode(TANGENT, f);
   check('…so the attribute comes out that long',
@@ -1327,9 +1334,9 @@ check('…which is ten times the shader\'s own 1e-4',
   Math.hypot(stopped[0], stopped[1]) / 1e-4, 10, 1e-9);
 check('RED: an unfloored 0 would have been shorter than the threshold',
   0 < 1e-4 ? 1 : 0, 1);
-check('…and it still moves, at 0.15 mm/s',
+check('…and it still moves, at 0.5 mm/s',
   WATER_FLOW_SPEED_DEFAULT_M_S * Math.hypot(stopped[0], stopped[1]),
-  0.00015, 1e-12);
+  0.0005, 1e-12);
 // STILL WATER IS UNTOUCHED BY ALL OF IT: a lake's flow is exactly (0, 0) and
 // 0 × anything is 0, so it stays the exact pair the shader reads as "still"
 // whatever an author dialled.

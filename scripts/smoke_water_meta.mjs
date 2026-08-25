@@ -584,8 +584,11 @@ check('the speed field takes the kind dial’s own range',
   [FLOW_SPEED_MIN_M_S, FLOW_SPEED_MAX_M_S], [0, 2]);
 check('...and the panel quotes the kind default the renderer uses',
   FLOW_SPEED_DEFAULT_M_S, WATER_FLOW_SPEED_DEFAULT_M_S);
-check('the raised default is 0.15 m/s, not the 0.08 that read as standing',
-  WATER_FLOW_SPEED_DEFAULT_M_S, 0.15);
+// The dial has been raised twice: 0.08 -> 0.15 (2026-08-23, "the river now
+// moves too slowly") -> 0.5 (user decision 2026-08-25). It is now ABOVE the
+// still-water 0.25 m/s, which the earlier steps had deliberately stayed under.
+check('the raised default is 0.5 m/s, not the 0.08 that read as standing',
+  WATER_FLOW_SPEED_DEFAULT_M_S, 0.5);
 check('a plain speed is read', readWater({ flow_speed_m_s: 0.4 }),
   { flow_speed_m_s: 0.4 });
 check('0 m/s is an authored standstill, not "unset"',
@@ -605,17 +608,22 @@ for (const junk of [null, '', '   ', NaN, Infinity, [], {}, 'fast']) {
 // the LENGTH of the flow attribute, so the length an area sends is
 // `area m/s ÷ kind m/s` — and the product is the area's own metres per second
 // again, whatever the kind is dialled to:
-//   0.30 over the default 0.15 -> 2      -> 0.15 · 2    = 0.30 m/s
-//   0.03 over the default 0.15 -> 0.2    -> 0.15 · 0.2  = 0.03 m/s
-//   0.60 over a kind at 0.40   -> 1.5    -> 0.40 · 1.5  = 0.60 m/s
+//   1.00 over the default 0.5 -> 2      -> 0.5 · 2     = 1.00 m/s
+//   0.45 over the default 0.5 -> 0.9    -> 0.5 · 0.9   = 0.45 m/s
+//   0.03 over the default 0.5 -> 0.06   -> 0.5 · 0.06  = 0.03 m/s
+//   0.60 over a kind at 0.40  -> 1.5    -> 0.40 · 1.5  = 0.60 m/s
 check('twice the kind’s speed is a factor of 2',
-  waterFlowFactor(0.3, WATER_FLOW_SPEED_DEFAULT_M_S), 2);
-check('...a fifth of it a factor of 0.2',
+  waterFlowFactor(1, WATER_FLOW_SPEED_DEFAULT_M_S), 2);
+check('...a shade under it a factor just under 1',
+  Math.round(waterFlowFactor(0.45, WATER_FLOW_SPEED_DEFAULT_M_S) * 1e12) / 1e12,
+  0.9);
+check('...and a 3 cm/s trickle a factor of 0.06',
   Math.round(waterFlowFactor(0.03, WATER_FLOW_SPEED_DEFAULT_M_S) * 1e12) / 1e12,
-  0.2);
+  0.06);
 near('...and the kind it is measured against is the kind, not the default',
   waterFlowFactor(0.6, 0.4), 1.5, 1e-12);
-for (const [area, kind] of [[0.3, 0.15], [0.03, 0.15], [0.6, 0.4], [2, 0.15]]) {
+for (const [area, kind] of [[1, 0.5], [0.45, 0.5], [0.03, 0.5], [0.6, 0.4],
+  [2, 0.5]]) {
   near(`kind ${kind} m/s × factor = the authored ${area} m/s`,
     kind * waterFlowFactor(area, kind), area, 1e-12);
 }
@@ -633,20 +641,21 @@ for (const junk of [null, '', '   ', NaN, Infinity, [], {}, 'fast', true]) {
 check('a kind standing at 0 m/s answers 1, not infinity',
   waterFlowFactor(0.5, 0), 1);
 check('...and a missing kind speed falls back to the default',
-  waterFlowFactor(0.3, undefined), 2);
+  waterFlowFactor(1, undefined), 2);
 // THE FLOOR. The shader reads a flow shorter than 1e-4 as STILL — a lake, which
 // drifts at `uSpeed` (0.25 m/s), i.e. FASTER. An authored 0 must therefore not
 // arrive as a zero-length vector: it is floored to 1e-3, ten times that
-// threshold, which on the default kind is 0.15 mm/s — one 1.6 m wavelength in
-// about three hours, a river standing still while staying a river.
+// threshold, which on the default kind is 0.5 mm/s (0.5 · 1e-3) — one 1.6 m
+// wavelength in 1.6/0.0005 = 3200 s, under an hour where the older 0.15 default
+// took about three; still a river standing still while staying a river.
 check('a river dialled to 0 is floored above the still threshold',
   waterFlowFactor(0, WATER_FLOW_SPEED_DEFAULT_M_S), WATER_FLOW_FACTOR_MIN);
 check('...and that floor is ten times the shader’s 1e-4', WATER_FLOW_FACTOR_MIN,
   1e-3);
 check('RED: an unfloored 0 would have been read as a lake at 0.25 m/s',
   0 < 1e-4, true);
-near('the floored current is 0.15 mm/s',
-  WATER_FLOW_SPEED_DEFAULT_M_S * WATER_FLOW_FACTOR_MIN, 0.00015, 1e-9);
+near('the floored current is 0.5 mm/s',
+  WATER_FLOW_SPEED_DEFAULT_M_S * WATER_FLOW_FACTOR_MIN, 0.0005, 1e-9);
 check('the render ceiling is the panel’s ceiling',
   WATER_FLOW_SPEED_MAX_M_S, FLOW_SPEED_MAX_M_S);
 check('...so a hand-written 99 m/s cannot outrun the dial',

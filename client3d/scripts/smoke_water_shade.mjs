@@ -112,7 +112,7 @@
  * `@anima/scene-render materials.applyWaterShader` would have fed its uniforms
  * for a kind that declares nothing:
  *     tint #3f7fb8 -> (63, 127, 184)/255 = (0.24705882, 0.49803922, 0.72156863)
- *     sky_mix 0.55 · wave_m 1.6 · speed 0.05 · flow_speed 0.15 (the shared
+ *     sky_mix 0.55 · wave_m 1.6 · speed 0.05 · flow_speed 0.5 (the shared
  *     `WATER_FLOW_SPEED_DEFAULT_M_S`, imported here rather than typed out)
  *     roughness 0.08 · metalness 0.15
  *     opaque depth = ¾ · 2.0 = 1.5
@@ -321,7 +321,7 @@ check('…wave_m', bare.waveM, 1.6);
 check('…speed', bare.speed, 0.05);
 check('…flow_speed is the SHARED default', bare.flowSpeed,
   mat.WATER_FLOW_SPEED_DEFAULT_M_S);
-check('…which is 0.15 m/s', mat.WATER_FLOW_SPEED_DEFAULT_M_S, 0.15);
+check('…which is 0.5 m/s', mat.WATER_FLOW_SPEED_DEFAULT_M_S, 0.5);
 check('…roughness', bare.roughness, 0.08);
 check('…metalness', bare.metalness, 0.15);
 check('…and the default lake\'s opaque depth', bare.opaqueDepthM, 1.5);
@@ -339,8 +339,10 @@ const packed = packWaterLook([bare, deep]);
 check('two looks are 2 · 3 · 4 floats', packed.length, 24);
 checkNear('row 0, texel 0 — tint and sky_mix',
   [...packed.slice(0, 4)], [...bare.tint, 0.55], 1e-7);
+// …the flow slot is the shared default (0.5 since 2026-08-25), the 0.15 one
+// texel further on is metalness and did not move.
 checkNear('row 0, texel 1 — wave, speed, flow, opaque depth',
-  [...packed.slice(4, 8)], [1.6, 0.05, 0.15, 1.5], 1e-7);
+  [...packed.slice(4, 8)], [1.6, 0.05, 0.5, 1.5], 1e-7);
 checkNear('row 0, texel 2 — roughness, metalness, the water flag, one spare',
   [...packed.slice(8, 12)], [0.08, 0.15, 1, 0], 1e-7);
 checkNear('…and a STAND-IN row says it is not water',
@@ -725,7 +727,9 @@ checkNear('so the seam colour is the bed, to better than a percent',
 // THE CHAIN, in the order the metres travel:
 //
 //   1. the KIND's dial      `material.flow_speed` m/s, default
-//                           `WATER_FLOW_SPEED_DEFAULT_M_S` = 0.15
+//                           `WATER_FLOW_SPEED_DEFAULT_M_S` = 0.5 (0.08 -> 0.15
+//                           on 2026-08-23, -> 0.5 by user decision 2026-08-25;
+//                           the flowing default now sits ABOVE the still 0.25)
 //   2. the AREA's override  `meta.flow_speed_m_s`, or none = "auto"
 //   3. the server bakes a FACTOR into the flow vector's LENGTH:
 //      `waterFlowFactor(area, kind)` = 1 for auto, else `area / kind`
@@ -735,14 +739,14 @@ checkNear('so the seam colour is the bed, to better than a percent',
 // So the metres per second at the surface are `kind · factor`, which is the
 // KIND's dial for auto and the AREA's number when one is authored:
 //
-//   auto,       kind 0.15  ->  factor 1        ->  sp = 0.15 · 1     = 0.15 m/s
-//   1.0 m/s,    kind 0.15  ->  factor 6.6667   ->  sp = 0.15 · 6.667 = 1.0 m/s
-//   0.5 m/s,    kind 0.15  ->  factor 3.3333   ->  sp = 0.15 · 3.333 = 0.5 m/s
+//   auto,       kind 0.5   ->  factor 1        ->  sp = 0.5  · 1     = 0.5 m/s
 //   1.0 m/s,    kind 0.5   ->  factor 2        ->  sp = 0.5  · 2     = 1.0 m/s
+//   0.25 m/s,   kind 0.5   ->  factor 0.5      ->  sp = 0.5  · 0.5   = 0.25 m/s
+//   1.0 m/s,    kind 0.15  ->  factor 6.6667   ->  sp = 0.15 · 6.667 = 1.0 m/s
 //
 // — i.e. an authored value is metres per second whatever the kind's dial is,
 // exactly as the retired mirror's `uFlowSpeed · wLen` was. There is no zero
-// anywhere in the chain: "auto shows no motion" is 0.15 m/s, not 0.
+// anywhere in the chain: "auto shows no motion" is 0.5 m/s, not 0.
 //
 // AND HOW FAST A CREST REALLY TRAVELS. The drift is `dir · (t · sp · sgn / λ)`
 // on a coordinate that is `p / λ`, so the pattern moves at `sp · |dir|` m/s
@@ -755,27 +759,29 @@ checkNear('so the seam colour is the bed, to better than a percent',
 // A and B are 29.08682° apart — deliberately (materials.ts: "still of opposite
 // sign and of different magnitude, so the two sheets go on beating against each
 // other"), and that beat is what a fast river shows as two drifts. The constants
-// are the mirror's own accepted pair (0.15 / 0.3 flowing, 0.6 / 1.3 still).
+// are the mirror's own accepted pair (0.15 / 0.3 flowing, 0.6 / 1.3 still) —
+// cross-mix ratios of the two sheets, nothing to do with the flow DIAL that
+// happens to have carried 0.15 until 2026-08-25.
 console.log('\n[8] the flow speed, kind dial -> factor -> metres per second');
 const { waterFlowFactor, WATER_FLOW_SPEED_DEFAULT_M_S } = mat;
-check('the kind default is the shared 0.15 m/s', WATER_FLOW_SPEED_DEFAULT_M_S, 0.15);
+check('the kind default is the shared 0.5 m/s', WATER_FLOW_SPEED_DEFAULT_M_S, 0.5);
 check('a kind that declares nothing carries it into the look',
-  waterLookFrom(null, null).flowSpeed, 0.15);
-check('…and a kind that declares 0.5 carries that',
-  waterLookFrom({ class: 'water', flow_speed: 0.5 }, null).flowSpeed, 0.5);
+  waterLookFrom(null, null).flowSpeed, 0.5);
+check('…and a kind that declares 0.15 carries that',
+  waterLookFrom({ class: 'water', flow_speed: 0.15 }, null).flowSpeed, 0.15);
 // AUTO — no override, factor exactly 1, so the surface runs at the kind's dial.
-check('AUTO is factor 1', waterFlowFactor(undefined, 0.15), 1);
-check('…and null is too', waterFlowFactor(null, 0.15), 1);
+check('AUTO is factor 1', waterFlowFactor(undefined, 0.5), 1);
+check('…and null is too', waterFlowFactor(null, 0.5), 1);
 check('…so auto runs at the kind\'s own metres per second',
-  waterLookFrom(null, null).flowSpeed * waterFlowFactor(undefined, 0.15), 0.15);
+  waterLookFrom(null, null).flowSpeed * waterFlowFactor(undefined, 0.5), 0.5);
 // AUTHORED — the factor is the ratio, so `flowSpeed · len` is the authored m/s.
-check('1.0 m/s over a 0.15 dial is factor', waterFlowFactor(1, 0.15),
-  6.666666666666667, 1e-12);
+check('1.0 m/s over a 0.5 dial is factor', waterFlowFactor(1, 0.5), 2, 1e-12);
 check('…and the surface then runs at exactly 1 m/s',
-  waterLookFrom(null, null).flowSpeed * waterFlowFactor(1, 0.15), 1, 1e-12);
-check('0.5 m/s over the same dial', 0.15 * waterFlowFactor(0.5, 0.15), 0.5, 1e-12);
-check('1.0 m/s over a 0.5 dial is still 1 m/s',
-  0.5 * waterFlowFactor(1, 0.5), 1, 1e-12);
+  waterLookFrom(null, null).flowSpeed * waterFlowFactor(1, 0.5), 1, 1e-12);
+check('0.25 m/s over the same dial', 0.5 * waterFlowFactor(0.25, 0.5), 0.25,
+  1e-12);
+check('1.0 m/s over the OLD 0.15 dial is still 1 m/s',
+  0.15 * waterFlowFactor(1, 0.15), 1, 1e-12);
 checkEq('RED: the shader does NOT ignore the look\'s flow_speed',
   glsl.includes('float sp = still ? speed : flowSpeed * len;')
   && glsl.includes('twN = twRipple( vTlodXZ, gx, gy, max( look1.x, 0.05 ), '
@@ -803,8 +809,10 @@ check('…so the two beat 29.08682° apart', deg(dirA) - deg(dirB), 29.08681083,
 check('sheet A\'s crests travel this multiple of sp', Math.hypot(...dirA),
   1.01118742, 1e-8);
 check('…sheet B\'s', Math.hypot(...dirB), 0.85440037, 1e-8);
+// At auto the surface runs at the 0.5 m/s default, so sheet A's crests make
+// 0.5 · 1.01118742 = 0.50559371 m/s (they ran 0.15167811 m/s under the old 0.15).
 check('at auto that is metres per second for sheet A',
-  0.15 * Math.hypot(...dirA), 0.15167811, 1e-8);
+  WATER_FLOW_SPEED_DEFAULT_M_S * Math.hypot(...dirA), 0.50559371, 1e-8);
 check('…and at an authored 1 m/s', 1 * Math.hypot(...dirA), 1.01118742, 1e-8);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);

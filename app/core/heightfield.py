@@ -374,8 +374,10 @@ WATER_FLOW_BLEND_MAX_M = 4.0
 
 #: What a water KIND flows at when it declares no ``flow_speed``, in m/s — the
 #: mirror of ``core.surface_textures._MATERIAL_RANGES['flow_speed']`` and of
-#: ``@anima/scene-render`` ``WATER_FLOW_SPEED_DEFAULT_M_S``.
-WATER_FLOW_SPEED_DEFAULT_M_S = 0.15
+#: ``@anima/scene-render`` ``WATER_FLOW_SPEED_DEFAULT_M_S``. 0.08 -> 0.15
+#: (2026-08-23) -> 0.5 by user decision on 2026-08-25, which puts the FLOWING
+#: default above a lake's still 0.25 m/s instead of under it.
+WATER_FLOW_SPEED_DEFAULT_M_S = 0.5
 
 #: The fastest a water may be dialled to, in m/s — the same ceiling the kind's
 #: own dial has, so an AREA can ask for nothing a kind could not have asked for.
@@ -385,8 +387,9 @@ WATER_FLOW_SPEED_MAX_M_S = 2.0
 #: than a rounding: the factor rides on the LENGTH of the flow vector and a
 #: renderer reads a length under ``1e-4`` as STILL — which drifts FASTER (a
 #: lake's own ``speed``). An authored 0 m/s must therefore not reach the raster
-#: as a zero-length vector; floored here it is 0.15 mm/s on the default kind,
-#: one wavelength in about three hours: a river standing still while keeping
+#: as a zero-length vector; floored here it is 0.5 mm/s on the default kind
+#: (0.5 m/s * 1e-3), one 1.6 m wavelength in 3200 s — under an hour, where the
+#: older 0.15 default took about three: a river standing still while keeping
 #: every flowing trait "still" would drop.
 WATER_FLOW_FACTOR_MIN = 1e-3
 

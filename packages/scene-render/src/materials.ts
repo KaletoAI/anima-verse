@@ -38,7 +38,10 @@ export interface SurfaceMaterialSpec {
    *  is non-zero (a river). One number could not serve both: a lake
    *  counter-scrolls its two ripple layers, so the net motion reads slow,
    *  while a river sends both downstream and the very same number reads
-   *  fast (user finding 2026-08-23). A single AREA may run faster or slower
+   *  fast (user finding 2026-08-23). That is why the two dials differ; it is no
+   *  longer why the flowing one is the SMALLER of them — since 2026-08-25 the
+   *  default here (0.5) is above the still one (0.25) by user decision. A single
+   *  AREA may run faster or slower
    *  than its kind — that override rides on the LENGTH of the flow attribute
    *  and multiplies this number (`waterFlowFactor`). */
   flow_speed?: number
@@ -52,8 +55,14 @@ export interface SurfaceMaterialSpec {
 /** What a water KIND flows at when it declares no `flow_speed`, in m/s — the
  *  mirror of `core.surface_textures._MATERIAL_RANGES['flow_speed']`. Raised
  *  from 0.08 to 0.15 on 2026-08-23 ("the river now moves too slowly"): once the
- *  ripple ran downstream instead of upstream, 0.08 read as a standing river. */
-export const WATER_FLOW_SPEED_DEFAULT_M_S = 0.15
+ *  ripple ran downstream instead of upstream, 0.08 read as a standing river.
+ *  Raised again from 0.15 to 0.5 by user decision on 2026-08-25 — that puts the
+ *  flowing default ABOVE the still `speed` of 0.25 m/s, which earlier rounds had
+ *  deliberately kept it under (see `speed`/`flow_speed` below); the two layers
+ *  running downstream now add to a fast number instead of compensating for one.
+ *  0.5 is a quarter of `WATER_FLOW_SPEED_MAX_M_S`, so an area can still dial
+ *  both ways. */
+export const WATER_FLOW_SPEED_DEFAULT_M_S = 0.5
 
 /** The fastest a water may be dialled to, in m/s — the same ceiling the kind's
  *  own dial has, so an AREA can ask for nothing a kind could not have asked
@@ -68,8 +77,10 @@ export const WATER_FLOW_SPEED_MAX_M_S = 2
  * length below `1e-4` as STILL — the state of a lake, which drifts at `uSpeed`
  * (0.25 m/s), i.e. FASTER. An authored 0 m/s therefore must not reach the
  * shader as a zero-length vector: it is floored to `1e-3`, ten times the still
- * threshold, which on the default kind is 0.15 mm/s — one wavelength in about
- * three hours, a river standing still while keeping every flowing trait
+ * threshold, which on the default kind is 0.5 mm/s (0.5 m/s · 1e-3) — one 1.6 m
+ * wavelength in 3200 s, i.e. under an hour; the raised default shortened that
+ * from about three hours, and it is still a river standing still, keeping every
+ * flowing trait
  * (streaks, anisotropy, the downstream sign) that "still" would drop.
  */
 export const WATER_FLOW_FACTOR_MIN = 1e-3

@@ -675,7 +675,7 @@ export const FLOW_SPEED_MAX_M_S = 2
  *  area's speed field quotes it: the terrain panel does not hold the surface
  *  catalog, so it names the number in force for an untouched kind rather than
  *  guessing at a kind that was edited. */
-export const FLOW_SPEED_DEFAULT_M_S = 0.15
+export const FLOW_SPEED_DEFAULT_M_S = 0.5
 
 /** Server mirrors — `models.terrain.RELIEF_*`. The amplitude's upper end is a
  *  WALKABILITY limit (two neighbouring support points may differ by at most
