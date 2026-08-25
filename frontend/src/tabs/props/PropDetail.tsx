@@ -921,6 +921,14 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               // The DISPLAYED variant's own size — the three numbers the strip
               // edits for exactly this chip.
               dimsOverlay={shownDims}
+              // HOW DEEP IT STANDS, on the same draft the gauge above reads:
+              // the viewer's ground plane goes where the scene's floor would
+              // be (`bottom_y = floor + ground_offset_m`), so the buried part
+              // disappears under it while the mesh, its W/D/H box and its
+              // markers stay exactly where they are. Typing in the chip's
+              // sink field moves the ground immediately — `variants` is the
+              // draft, not the server's answer.
+              groundOffsetM={shownVariant?.ground_offset_m ?? 0}
               // 1.7 m in MESH units — real scale = the displayed mesh's own
               // largest raw edge over its largest real dim; every figure in
               // the viewer (the marker poses and the standing reference)
@@ -953,7 +961,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               className="ga-hint"
               style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
                 marginTop: 4, cursor: 'pointer' }}
-              title={t('Puts a FIXED 1.70 m person beside the model, on its own ground plane, over a one-metre grid — the preview’s scale. It never scales with the prop: if the figure looks wrong, the W/D/H of this variant are wrong.')}
+              title={t('Puts a FIXED 1.70 m person beside the model, on the ground the model stands IN, over a one-metre grid — the preview’s scale. The ground is solid, so whatever the sink buries really disappears under it. The figure never scales with the prop: if it looks wrong, the W/D/H of this variant are wrong.')}
             >
               <input
                 type="checkbox"

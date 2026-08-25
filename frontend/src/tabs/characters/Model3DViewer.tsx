@@ -128,7 +128,8 @@ export interface TilePlacement {
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   groundTextureUrl, placement, onBounds, markers, dimsOverlay,
-  figureHeight = 0, scaleFigure = false, picking = false, onPickPoint }:
+  figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
+  picking = false, onPickPoint }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
@@ -166,6 +167,24 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  both fill the frame. The figure never scales; the declared dims scale
      *  it, so a wrong Width/Depth/Height is visible instead of invisible. */
     scaleFigure?: boolean
+    /** How deep the SHOWN mesh stands in the ground, in real metres — the
+     *  prop variant's `ground_offset_m` (§ B2 addendum 2026-08-20). SIGN as
+     *  the scene composes it: `bottom_y = floor + ground_offset_m`, so a
+     *  NEGATIVE value sinks the mesh and a positive one lifts it off the
+     *  ground.
+     *
+     *  The mesh itself never moves here — the GROUND does. Everything else in
+     *  this mode is measured off the mesh (the dims box, the markers, the
+     *  camera framing), so moving the model would drag all of that with it and
+     *  claim the object had changed size or that a marker had moved. Instead
+     *  the kit's plane sits where the scene's floor would be
+     *  (`floor = mesh bottom − offset`): at −0.20 m the plane rides 20 cm
+     *  above the mesh's lower edge, and exactly those 20 cm are under ground.
+     *
+     *  Needs the scale kit (`scaleFigure` + `figureHeight`): without a plane
+     *  and a person on it there is nothing for a sink to be relative to.
+     *  Model mode only; opt-in, so every other caller renders as before. */
+    groundOffsetM?: number
     /** Draw the oriented bounding box with W/D/H edges + labels (real
      *  metres) around the model — makes the three dims readable in 3D.
      *  Model mode only; follows the orientation fix live. */
@@ -209,6 +228,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   figureHeightRef.current = figureHeight
   const scaleFigureRef = useRef(scaleFigure)
   scaleFigureRef.current = scaleFigure
+  const groundOffsetRef = useRef(groundOffsetM)
+  groundOffsetRef.current = groundOffsetM
   // Stale-guard for the async figure loads of an overlay rebuild.
   const figTokenRef = useRef(0)
   const pickingRef = useRef(picking)
@@ -220,9 +241,10 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const refitFnRef = useRef<(() => void) | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
-  // Live overlay refresh (markers moved/added, dims typed) without reload.
+  // Live overlay refresh (markers moved/added, dims typed, a sink dialled)
+  // without reload — a typed number must show up while it is being typed.
   useEffect(() => { overlayFnRef.current?.() },
-    [markers, dimsOverlay, figureHeight, scaleFigure])
+    [markers, dimsOverlay, figureHeight, scaleFigure, groundOffsetM])
   // Switching the scale kit on widens what has to be in view.
   useEffect(() => { refitFnRef.current?.() }, [scaleFigure])
   // The armed pick tool reads as a crosshair on the canvas.
@@ -679,7 +701,11 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               // The figure sits on ONE side, the camera looks at the model's
               // centre: the visible width is twice the reach to the figure
               // (0.40 m margin + its ~0.16 m half-width).
-              maxDim = Math.max(maxDim, size.x + 1.12 * metre, kitH * 1.3)
+              // A SINK raises the ground plane above the mesh's lower edge, so
+              // the vertical span to hold is the figure PLUS what was buried —
+              // otherwise a deeply sunk trunk frames its person off-screen.
+              maxDim = Math.max(maxDim, size.x + 1.12 * metre, kitH * 1.3,
+                kitH - (groundOffsetRef.current || 0) * metre)
             }
             const dist = (maxDim / 2) / Math.tan((Math.PI * camera.fov) / 360)
             camera.position.set(0, 0, dist * 1.6)
@@ -770,6 +796,14 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             const scaleH = figureHeightRef.current
             if (scaleFigureRef.current && scaleH > 0) {
               const metre = scaleH / FIGURE_HEIGHT_M
+              // WHERE THE GROUND IS. The scene composes
+              // `bottom_y = floor + ground_offset_m`, so the floor this mesh
+              // was dialled for is its lower edge MINUS the offset: at
+              // −0.20 m the plane rides 20 cm above the mesh's bottom, and
+              // that much of it is buried. The mesh does not move — the
+              // dims box, the markers and the framing all hang on it.
+              const sinkM = groundOffsetRef.current || 0
+              const groundY = ob.min.y - sinkM * metre
               // Beside, never inside: half the model's width plus a fixed
               // 0.40 m margin, so a wide mesh pushes the figure out instead
               // of swallowing it. The figure itself is ~0.31 m across.
@@ -780,23 +814,41 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               // (measureKit) — it must read as "the reference", not as a
               // character, and it NEVER scales with the model.
               const fig = referenceFigure(THREE, scaleH)
-              // Soles on the model's own ground plane, facing +Z — where the
-              // default camera of this mode stands.
-              fig.position.set(cx + offX, ob.min.y, cz)
+              // Soles on the GROUND, never on the mesh's lower edge: the
+              // person stands on the plane the object is sunk into, which is
+              // what makes the sink readable at all.
+              fig.position.set(cx + offX, groundY, cz)
               refGroup.add(fig)
               // Unit label, not UI copy: "1.70 m" reads the same in every
               // language the admin speaks, like the dims labels below.
               const tag = textSprite('1.70 m', '#f0f6fc', scaleH * 0.14)
-              tag.position.set(cx + offX, ob.min.y + scaleH * 1.12, cz)
+              tag.position.set(cx + offX, groundY + scaleH * 1.12, cz)
               refGroup.add(tag)
               // One-metre ground grid under both — a metre stated once is a
               // claim, a metre repeated is a ruler. Whole cells, wide enough
               // to reach past the figure and around the model.
               const reach = Math.max(offX + metre, (ob.max.z - ob.min.z) / 2 + metre)
               const cells = Math.max(2, Math.ceil((2 * reach) / metre))
+              // THE GROUND ITSELF, under the ruler. The grid is a LINE helper
+              // and hides nothing, so a sunk mesh would keep showing its
+              // buried half straight through the "ground" and the dial would
+              // read as no dial at all. The disc is the opaque part: solid,
+              // depth-writing, the same slate the stage ground of tile mode
+              // uses, and wide enough (2 × the grid's reach) that its rim
+              // never reads as the edge of a table. It lives and dies with
+              // the reference figure, because a ground without the person and
+              // the ruler on it is a floor nobody can measure against — and
+              // switching the kit off is how one looks at a bare mesh.
+              const disc = new THREE.Mesh(
+                new THREE.CircleGeometry(reach * 2, 64),
+                new THREE.MeshBasicMaterial({ color: 0x2e3742 }))
+              disc.rotation.x = -Math.PI / 2
+              disc.position.set(cx, groundY, cz)
+              refGroup.add(disc)
               const grid = new THREE.GridHelper(cells * metre, cells,
                 0x8b949e, 0x8b949e)
-              grid.position.set(cx, ob.min.y, cz)
+              // A hair above the disc, or the two z-fight over the same plane.
+              grid.position.set(cx, groundY + metre * 0.002, cz)
               const gm = grid.material as Material & { opacity: number
                 transparent: boolean; depthWrite: boolean }
               gm.transparent = true
