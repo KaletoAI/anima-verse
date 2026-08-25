@@ -33,9 +33,9 @@ three layers, same vocabulary, same undo:
 
 THE SANITIZER IS THE JUDGE. Every room layout goes through
 ``world_ops._sanitize_room_layout`` — the very function ``PUT
-/world/locations/{id}`` calls — and every boundary opening through
-``world_ops._sanitize_map3d``. This module only decides what to hand them and
-what to say about the result.
+/world/locations/{id}`` calls — and every boundary opening and staircase
+through ``world_ops._sanitize_map3d``. This module only decides what to hand
+them and what to say about the result.
 """
 
 import json
@@ -77,6 +77,7 @@ WARNING_CODES = (
     "opening_dropped",         # an opening the sanitizer refused — dropped
     "unknown_opening_target",  # `to` names no room here — opening KEPT
     "boundary_opening_dropped",  # bad edge index / no boundary — dropped
+    "stair_dropped",           # a flight the map3d sanitizer refused — dropped
     "room_outside_boundary",   # plan reaches over the plot outline — KEPT
     "room_overlap",            # two rooms share floor on one level — KEPT
     "unknown_entry_room",      # entry_room proposal names nothing — dropped
@@ -234,15 +235,16 @@ def sanitize_layout(data: Any, *,
     Returns ``(normalized, warnings)``:
 
     ``normalized`` = ``{summary, location_id, entry_room, rooms[],
-    boundary_openings}``. Each ``rooms[]`` entry is
+    boundary_openings, stairs}``. Each ``rooms[]`` entry is
     ``{room_id, name, description, is_new, layout}`` — ``room_id`` is set for
     every entry (new rooms get theirs up front, so ``entry_room`` can point at
     a room this very plan creates; that id is minted PER PASS, so the preview
     and the apply give a new room different ids — which is harmless, since a
     room that does not exist yet has nothing to reference it), and ``layout``
     is already through
-    ``world_ops._sanitize_room_layout``. ``boundary_openings`` is ``None`` when
-    the draft did not mention them at all, which means "leave what is there".
+    ``world_ops._sanitize_room_layout``. ``boundary_openings`` and ``stairs``
+    are ``None`` when the draft did not mention them at all, which means "leave
+    what is there".
 
     Raises ValueError only when the draft is not an object or names no room at
     all; everything else is a warning, because a plan in progress is a normal
@@ -437,6 +439,24 @@ def sanitize_layout(data: Any, *,
                   f"{lost} boundary opening(s) were refused — an edge index "
                   f"the plot outline does not have, or an unreadable entry.")
 
+    # ── staircases ─────────────────────────────────────────────────────────
+    # Same principle as the boundary openings: THE MAP3D SANITIZER IS THE
+    # JUDGE. A flight is dropped for a direction that is not one of the four
+    # quarter turns, an unreadable foot or a missing storey — and the count
+    # difference is the whole warning, because a plan that names eight flights
+    # and gets six back has lost something the author has to see.
+    raw_st = data.get("stairs")
+    stairs: Optional[List[Dict[str, Any]]] = None
+    if isinstance(raw_st, list):
+        probe = _sanitize_map3d({**map3d, "stairs": raw_st})
+        stairs = list(probe.get("stairs") or [])
+        lost = len(raw_st) - len(stairs)
+        if lost > 0:
+            _warn(warnings, "stair_dropped", str(location.get("id") or ""),
+                  f"{lost} staircase(s) were refused — `dir_deg` must be one "
+                  f"of 0, 90, 180, 270, `at` two metre values and "
+                  f"`from_level` a storey number (at most 8 per location).")
+
     normalized = {
         "summary": str(data.get("summary") or "").strip(),
         "location_id": str(location.get("id") or ""),
@@ -445,6 +465,7 @@ def sanitize_layout(data: Any, *,
         "entry_room": entry_room,
         "rooms": entries,
         "boundary_openings": boundary_openings,
+        "stairs": stairs,
     }
     return normalized, warnings
 
@@ -478,7 +499,8 @@ def apply_layout(normalized: Dict[str, Any]) -> Dict[str, Any]:
     vanished between preview and apply must leave the location exactly as it
     was, not half-planned.
 
-    Returns ``{location_id, updated[], created[], entry_room, boundary_openings}``.
+    Returns ``{location_id, updated[], created[], entry_room,
+    boundary_openings, stairs}``.
     """
     from app.core.world_ops import update_location_with_extras
     from app.models.world import get_location_by_id
@@ -518,9 +540,19 @@ def apply_layout(normalized: Dict[str, Any]) -> Dict[str, Any]:
             updated.append(room_id)
 
     body: Dict[str, Any] = {"rooms": rooms}
+    # ONE map3d dict for every plan-authored key — two separate copies of
+    # ``loc["map3d"]`` would let the second overwrite the first's field.
+    # ``None`` means the draft never mentioned the key, which is "leave what is
+    # there"; an empty list means the plan deliberately cleared it.
+    map3d = dict(loc.get("map3d") or {})
+    touched = False
     if normalized.get("boundary_openings") is not None:
-        map3d = dict(loc.get("map3d") or {})
         map3d["boundary_openings"] = normalized["boundary_openings"]
+        touched = True
+    if normalized.get("stairs") is not None:
+        map3d["stairs"] = normalized["stairs"]
+        touched = True
+    if touched:
         body["map3d"] = map3d
     entry_room = str(normalized.get("entry_room") or "").strip()
     if entry_room:
@@ -533,6 +565,7 @@ def apply_layout(normalized: Dict[str, Any]) -> Dict[str, Any]:
         "created": created,
         "entry_room": entry_room,
         "boundary_openings": len(normalized.get("boundary_openings") or []),
+        "stairs": len(normalized.get("stairs") or []),
     }
     logger.info("layout applied to %s: %s", location_id, result)
     return result

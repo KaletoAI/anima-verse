@@ -302,6 +302,12 @@ export interface SceneStyle {
   elevator_cabin_color?: string
   elevator_cabin_opacity?: number
   elevator_glass_opacity?: number
+  /** Colour of the steps and the trigger pads of a staircase (`stair_step`,
+   *  `stair_pad`). A staircase is masonry, not machinery — warm stone rather
+   *  than the elevator's cold grey, so the two vertical connections read
+   *  apart at a glance. Callers keep a fallback: an older payload does not
+   *  carry it. */
+  stair_color?: string
 }
 
 /** Öffnung einer Raumkante, im Payload bereits auf Kanten-INDIZES normalisiert

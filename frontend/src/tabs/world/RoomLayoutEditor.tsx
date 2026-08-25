@@ -45,7 +45,8 @@
  * (spots a figure with a matching animation snaps to —
  * kinds from the OPEN clip vocabulary, nothing hardcoded) with one click
  * inside the room, and draws the building outline / places the elevator
- * (AV3D-12). Everything edits the LOCATION draft (rooms[].layout) and is
+ * (AV3D-12) and the staircases (one flight per storey jump). Everything edits
+ * the LOCATION draft (rooms[].layout, map3d) and is
  * persisted by the location's Save button — the external 3D client reads the
  * layout from /world/locations; rooms without a layout fall back to its
  * auto-grid.
@@ -198,6 +199,35 @@ interface RoomLayoutEditorProps {
  *  it used to nudge it by whatever the hand did (user finding 2026-07-28). */
 const MOVE_START_PX = 4
 
+/**
+ * A STAIRCASE ON THE PLAN — the same mirroring the elevator's 1.8 m footprint
+ * does: the numbers below are the server's (`STAIR_WIDTH_M`, `STAIR_TREAD_M`,
+ * `STAIR_RISE_M`, `LEVEL_PLATE_TOP` in `app/core/scene_recipe.py`), repeated
+ * here so the plan can show HOW MUCH FLOOR a flight really eats before the
+ * author decides where it fits. Nothing geometric is decided here — the scene
+ * keeps composing the steps and the pads; this draws a symbol over authored
+ * data, the way the door swing arcs do.
+ */
+const STAIR_WIDTH_M = 1.2
+const STAIR_TREAD_M = 0.26
+const STAIR_RISE_M = 0.2
+const LEVEL_PLATE_TOP = 0.08
+/** Unit climb direction per `dir_deg`, in plan metres (x, y=south). */
+const STAIR_DIRS: Record<number, [number, number]> = {
+  0: [0, 1], 90: [1, 0], 180: [0, -1], 270: [-1, 0],
+}
+/** The floor datum of a storey — storey 0 IS the terrain, every declared one
+ *  sits on its level plate (scene_recipe.storey_floor_y). */
+const storeyFloorY = (level: number, storey: number) =>
+  level * storey + (level === 0 ? 0 : LEVEL_PLATE_TOP)
+/** Steps and floor RUN of one flight, by the server's formula: the climb
+ *  divided by the nominal rise, at least two steps, one tread each. */
+function stairRunM(fromLevel: number, storey: number): { steps: number; run: number } {
+  const climb = storeyFloorY(fromLevel + 1, storey) - storeyFloorY(fromLevel, storey)
+  const steps = Math.max(2, Math.round(climb / STAIR_RISE_M))
+  return { steps, run: steps * STAIR_TREAD_M }
+}
+
 type DragState =
   // `mPerPx` is FROZEN at drag start on purpose: the drawing window is derived
   // from the placed rooms, so a room dragged towards the edge widens the
@@ -289,6 +319,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     setOpeningSel(null)
     setPropSel(null)
     setElevatorSel(false)
+    setStairSel(null)
     onSelectRoom?.(id)
   }, [onSelectRoom])
   // Click-to-place modes: the next click inside the room drops an animation
@@ -356,6 +387,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const [markerSel, setMarkerSel] = useState<number | null>(null)
   // Elevator selected on the plan → the slider row below fine-tunes it.
   const [elevatorSel, setElevatorSel] = useState(false)
+  // Selected staircase — the INDEX in map3d.stairs, which is the flight's
+  // identity here. The `stair` number a scene payload carries is NOT: it
+  // counts the flights the server accepted, so a refused entry shifts it.
+  const [stairSel, setStairSel] = useState<number | null>(null)
   // Selected boundary pass-through (index into map3d.boundary_openings) —
   // highlights its bar on the frame and its edit row below the plan.
   const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null)
@@ -2085,6 +2120,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         hasBoundary={hasBoundary}
         outlineDraftLen={outlineDraft.length}
         hasElevator={!!map3d?.elevator}
+        stairCount={map3d?.stairs?.length || 0}
+        stairLevel={level}
         building={!!onMap3d}
         canSuggest={placedHere.length > 0}
         canFitToModel={!groundSel && !!(selectedRoom?.id
@@ -2149,7 +2186,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           // also when the click lands inside a room — capture phase keeps
           // the room handlers out of the way.
           if (clickMode !== 'outline' && clickMode !== 'draw-room'
-              && clickMode !== 'elevator' && clickMode !== 'boundary-door') {
+              && clickMode !== 'elevator' && clickMode !== 'boundary-door'
+              && clickMode !== 'stairs') {
             planLog('canvas click ignored: no drawing/placement mode armed',
               { clickMode, target: (e.target as HTMLElement).tagName })
             return
@@ -2196,6 +2234,27 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 type: 'passage' as const,
               }])
               setSelectedBoundary(cur.length)
+            }
+            setClickMode('')
+          } else if (clickMode === 'stairs') {
+            // ONE FLIGHT PER STOREY JUMP: the click sets the FOOT, the storey
+            // being edited is where it starts, and it always arrives one level
+            // up — so a climb over two storeys is two clicks, one per level.
+            // A fresh flight climbs south (0° = +y); the ↻ button in the row
+            // below turns it in quarter steps.
+            const [sx, sz] = pointerM(e.clientX, e.clientY)
+            const cur = map3d?.stairs || []
+            if (cur.length >= 8) {
+              toast(t('At most 8 staircases per location.'), 'error')
+            } else {
+              onMap3d?.('stairs', [...cur, {
+                at: [rM(e.shiftKey ? sx : snapToGrid(sx, gridStep)),
+                  rM(e.shiftKey ? sz : snapToGrid(sz, gridStep))] as [number, number],
+                from_level: level,
+                dir_deg: 0,
+              }])
+              setStairSel(cur.length)
+              setElevatorSel(false)
             }
             setClickMode('')
           } else {
@@ -2857,6 +2916,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 if (clickMode) return
                 e.stopPropagation()
                 setElevatorSel(true)
+                setStairSel(null)
                 setMarkerSel(null)
               }}
               style={{
@@ -2872,6 +2932,86 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             />
           )
         })() : null}
+        {/* THE STAIRCASES — true size from above, like the elevator square:
+            a 1.2 m wide rectangle running `run` metres in the climb direction,
+            a line per tread, and an arrowhead at the head end that says which
+            way is UP. Its own overlay ABOVE the room divs, so a flight inside
+            a room stays visible and clickable; the SVG itself takes no pointer
+            events, only the flights do.
+            WHICH ONES: the flights that START on the level being edited, plus
+            the ones ARRIVING here from the storey below — drawn faint, because
+            they belong to that storey's plan and are only shown so the author
+            sees where one steps out. */}
+        {map3d?.stairs?.length ? (
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+            {map3d.stairs.map((st, i) => {
+              const arriving = st.from_level + 1 === level
+              if (st.from_level !== level && !arriving) return null
+              const dir = STAIR_DIRS[((st.dir_deg % 360) + 360) % 360]
+              if (!dir) return null
+              const storey = map3d.storey_height_m || 3
+              const { steps, run } = stairRunM(st.from_level, storey)
+              const [dx, dz] = dir
+              // Across the climb: the plan's own perpendicular, so a flight
+              // pointing east is as wide north–south as one pointing north is
+              // east–west.
+              const px = -dz
+              const pz = dx
+              const half = STAIR_WIDTH_M / 2
+              const [ax, az] = st.at
+              const pt = (along: number, across: number): [number, number] =>
+                [ax + dx * along + px * across, az + dz * along + pz * across]
+              const poly = [pt(0, half), pt(run, half), pt(run, -half), pt(0, -half)]
+              const sel = stairSel === i
+              const col = sel ? '#f0c088' : '#8a7a66'
+              // Arrowhead: a chevron just past the head end — the flight ends
+              // at `run`, the tip sits 0.45 m further on.
+              const tip = pt(run + 0.45, 0)
+              const wingA = pt(run, half * 0.8)
+              const wingB = pt(run, -half * 0.8)
+              return (
+                <g key={`stair-${i}`}
+                  opacity={arriving ? 0.35 : 1}
+                  style={{ pointerEvents: clickMode ? 'none' : 'auto', cursor: 'pointer' }}
+                  onClick={(ev) => {
+                    ev.stopPropagation()
+                    setStairSel(i)
+                    setElevatorSel(false)
+                    setMarkerSel(null)
+                    // Picking an ARRIVING flight takes the plan down to the
+                    // storey it starts on — that is where it is edited, and
+                    // the numbers in the row below belong to that storey.
+                    if (st.from_level !== level) setLevel(st.from_level)
+                  }}
+                >
+                  <title>{t('Staircase: level {a} → {b}, {n} steps, {run} m of floor')
+                    .replace('{a}', String(st.from_level))
+                    .replace('{b}', String(st.from_level + 1))
+                    .replace('{n}', String(steps))
+                    .replace('{run}', fmtM(run))}</title>
+                  <polygon
+                    points={poly.map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
+                    fill="rgba(138,122,102,0.28)" stroke={col}
+                    strokeWidth={sel ? 0.7 : 0.45}
+                  />
+                  {Array.from({ length: steps - 1 }, (_, s) => {
+                    const a = pt((s + 1) * STAIR_TREAD_M, half)
+                    const b = pt((s + 1) * STAIR_TREAD_M, -half)
+                    return (
+                      <line key={s} x1={svgX(a[0])} y1={svgZ(a[1])}
+                        x2={svgX(b[0])} y2={svgZ(b[1])}
+                        stroke={col} strokeWidth={0.25} opacity={0.8} />
+                    )
+                  })}
+                  <polyline
+                    points={[wingA, tip, wingB].map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
+                    fill="none" stroke={col} strokeWidth={0.6} />
+                </g>
+              )
+            })}
+          </svg>
+        ) : null}
         {/* Empty plan: say where the pen is, not just that there is nothing.
             "Below" used to mean a chip row past the scale bar and three other
             blocks; the ⬠ buttons in the banner sit right above the canvas.
@@ -3798,6 +3938,94 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
 
         </div>
       ) : null}
+
+      {/* THE SELECTED FLIGHT. A staircase has exactly three things one does to
+          it: turn it, move its foot, take it away — and the two numbers that
+          decide whether it fits (its steps and the floor it eats) are stated
+          rather than left to be measured on the plan. */}
+      {stairSel !== null && map3d?.stairs?.[stairSel] ? (() => {
+        const st = map3d.stairs![stairSel]
+        const list = map3d.stairs || []
+        const { steps, run } = stairRunM(st.from_level, map3d.storey_height_m || 3)
+        const patch = (next: typeof st | null) => {
+          const rest = list.filter((_, i) => i !== stairSel)
+          if (!next) {
+            onMap3d?.('stairs', rest.length ? rest : undefined)
+            setStairSel(null)
+            return
+          }
+          onMap3d?.('stairs', list.map((s, i) => (i === stairSel ? next : s)))
+        }
+        return (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="ga-hint" style={{ fontWeight: 600 }}>
+              🪜 {t('Staircase')} {stairSel + 1}:
+            </span>
+            <span className="ga-hint">
+              {t('Level {a} → {b} · {n} steps · {run} m of floor · {deg}°')
+                .replace('{a}', String(st.from_level))
+                .replace('{b}', String(st.from_level + 1))
+                .replace('{n}', String(steps))
+                .replace('{run}', fmtM(run))
+                .replace('{deg}', String(st.dir_deg))}
+            </span>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              onClick={() => patch({ ...st, dir_deg: (st.dir_deg + 90) % 360 })}
+              title={t('Turn the climb direction by a quarter — 0° climbs south (+y), 90° east (+x), 180° north (−y), 270° west (−x). The foot stays where it is.')}
+            >
+              ↻ {t('Rotate 90°')}
+            </button>
+            <button
+              type="button"
+              className={`ga-btn ga-btn-sm${clickMode === 'stairs' ? ' ga-btn-primary' : ''}`}
+              onClick={() => setClickMode((m) => (m === 'stairs' ? '' : 'stairs'))}
+              title={t('Then click on the plan to place ANOTHER flight on this level.')}
+            >
+              + {clickMode === 'stairs' ? t('Click on the plan…') : t('Add')}
+            </button>
+            {/* Metres from the anchor pin, the frame the whole plan is drawn
+                in — the foot is what the flight is anchored by. */}
+            <SliderInput
+              label="X"
+              ariaLabel={t('Staircase foot X (m)')}
+              title={t('Fine-tune the foot of the flight: metres east of the anchor pin (negative = west).')}
+              min={view.x0}
+              max={view.x0 + view.size}
+              step={0.05}
+              fineStep={0.01}
+              value={st.at[0]}
+              onChange={(v) => patch({ ...st, at: [rM(v), st.at[1]] })}
+              unit="m"
+              sliderWidth={100}
+              readback={<span style={{ minWidth: 56 }}>{fmtM(st.at[0])} m</span>}
+            />
+            <SliderInput
+              label="Y"
+              ariaLabel={t('Staircase foot Y (m)')}
+              title={t('Fine-tune the foot of the flight: metres south of the anchor pin (negative = north).')}
+              min={view.z0}
+              max={view.z0 + view.size}
+              step={0.05}
+              fineStep={0.01}
+              value={st.at[1]}
+              onChange={(v) => patch({ ...st, at: [st.at[0], rM(v)] })}
+              unit="m"
+              sliderWidth={100}
+              readback={<span style={{ minWidth: 56 }}>{fmtM(st.at[1])} m</span>}
+            />
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-danger"
+              onClick={() => patch(null)}
+              title={t('Remove this staircase — the storeys it connected fall back to the elevator, if there is one.')}
+            >
+              × {t('Remove')}
+            </button>
+          </div>
+        )
+      })() : null}
 
       {/* Pick a room WITHOUT touching the plan — small, overlapping or
           stacked rooms are hard to hit, and hitting them used to move them.

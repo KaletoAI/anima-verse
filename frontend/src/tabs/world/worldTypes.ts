@@ -255,6 +255,15 @@ export interface Map3D {
   /** Elevator position in LOCAL METRES around the pin (v6 Nr. 2) — placed
    *  once, valid for all levels (client builds the shaft). */
   elevator?: [number, number]
+  /** Staircases, one entry per FLIGHT — per storey jump, so a climb from the
+   *  ground floor to the second is two of them. `at` is the FOOT (where the
+   *  first tread begins) in LOCAL METRES like `elevator`, `from_level` the
+   *  storey it starts on (a cellar flight is −1, it always leads to
+   *  `from_level + 1`) and `dir_deg` the climb direction, one of the four
+   *  quarter turns: 0 = +z, 90 = +x, 180 = −z, 270 = −x. The server composes
+   *  the steps and the two trigger pads from it (`stair_step`/`stair_pad`
+   *  extras); at most 8 per location. */
+  stairs?: Array<{ at: [number, number]; from_level: number; dir_deg: number }>
 }
 
 // ── Scene recipe (docs/schnittstellen-3d.md part B) ──

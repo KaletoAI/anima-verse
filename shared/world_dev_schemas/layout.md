@@ -70,6 +70,9 @@ Think in real rooms. The reference is a person **1.70 m** tall:
   ],
   "boundary_openings": [
     {"edge": 0, "at": 0.5, "width_m": 3, "room": "r1a2b3c4"}
+  ],
+  "stairs": [
+    {"at": [2, -2], "from_level": 0, "dir_deg": 90}
   ]
 }
 ```
@@ -122,6 +125,34 @@ street, the gap in the hedge. One entry per crossing (a road crossing the plot e
 - `at` — `0`…`1` along that edge. `width_m` — metres, at most the plot's own width.
 - `room` — optional: which room one arrives in.
 
+### `stairs` — how one gets from storey to storey
+
+One entry per **flight**, i.e. per storey jump. A flight always leads from `from_level` to the
+storey directly above it, so a climb from the ground floor to the second floor is **two** entries
+— one with `from_level: 0`, one with `from_level: 1`, each starting where the one below arrives.
+
+- `at` — the **foot** of the flight, where the first step begins: `[x, y]` in plot metres, the same
+  frame the rooms stand in.
+- `from_level` — the storey the flight starts on. `0` = ground floor, `-1` = cellar (a cellar
+  stair is `from_level: -1`, because it leads UP into the ground floor).
+- `dir_deg` — the direction one climbs, one of exactly four values: `0` = towards +y (south),
+  `90` = towards +x (east), `180` = towards −y (north), `270` = towards −x (west). Any other
+  number is refused and the flight is thrown away.
+
+A flight is about 1.2 m wide and needs roughly **3.9 m of floor** in the climbing direction (at a
+3 m storey height) — put its foot where that run fits, along a wall or in a hallway, and not
+through the middle of a room.
+
+**Set stairs as soon as any room has a `level` other than 0.** Two examples:
+
+- A tavern with two guest rooms upstairs gets one entry: the flight in the taproom or the hallway,
+  `from_level: 0`, pointing along the wall it stands at.
+- A workshop with a cellar store gets `{"at": [x, y], "from_level": -1, "dir_deg": …}` — the foot
+  sits in the cellar, the flight arrives on the ground floor.
+
+Only leave `stairs` out when the building has an elevator instead, or when every room is on
+level 0. At most 8 flights per location.
+
 ### `entry_room`
 
 The one room characters enter and leave the location through. Name an existing room `id`, or the
@@ -139,6 +170,8 @@ outside — a hallway, a taproom, a yard — never an inner chamber.
   where it is unless the user asks you to move it. Output it unchanged in that case — the plan is
   written as a whole, so a room you omit simply keeps what it had.
 - **Every room needs a way in.** A closed room with no opening at all is a sealed box.
+- **Every storey needs a way up.** A plan with a room on `level` 1 or −1 and no `stairs` entry
+  reaching it leaves that storey unreachable.
 - **Do not exceed the plot.** The plot's outline and its size stand under **The location**; a plan
   much larger than the plot is wrong, not ambitious.
 - Reply to the user in their language; `summary` and any `description` are for them.

@@ -1153,22 +1153,46 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       }
     }
 
-    // Extras (elevator shaft/glass/pads/cabin): typed boxes, centre + size,
-    // straight from the payload. The shaft spans all levels, so it only
-    // shows in the all-levels view.
-    if (sc && solo === null) {
+    // Extras (elevator shaft/glass/pads/cabin, staircases): typed boxes,
+    // centre + size, straight from the payload.
+    //
+    // WHAT A SOLO VIEW SHOWS. The elevator shaft spans every level at once, so
+    // it has nothing to say in a single-storey view and stays out of it. A
+    // STAIRCASE is the opposite: it belongs to exactly two storeys and is the
+    // thing one checks a storey plan for — does the flight land where the
+    // upper floor expects it? Soloing a level used to hide it completely,
+    // because the whole extras loop hung on `solo === null`. A flight is drawn
+    // whenever it TOUCHES the soloed storey: a step spans from its own level
+    // to the one above, a pad sits on the level it is stamped with.
+    if (sc) {
       for (const extra of sc.extras) {
+        const stair = extra.kind === 'stair_step' || extra.kind === 'stair_pad'
+        if (solo !== null) {
+          if (!stair) continue
+          const lv = extra.level ?? 0
+          const touches = extra.kind === 'stair_step'
+            ? (lv === solo || lv + 1 === solo) : lv === solo
+          if (!touches) continue
+        }
         const glass = extra.kind.endsWith('_glass')
         const mat = glass
           ? new THREE.MeshStandardMaterial({
               color: glassColor, transparent: true,
               opacity: sc.style.elevator_glass_opacity })
           : new THREE.MeshStandardMaterial({
-              color: hex(extra.kind === 'elevator_pad'
-                ? sc.style.elevator_pad_color
-                : extra.kind === 'elevator_cabin'
-                  ? sc.style.elevator_cabin_color
-                  : sc.style.elevator_frame_color, 0x6d7681),
+              // Masonry, not machinery: a staircase takes the payload's own
+              // stair colour, so it never reads as part of the elevator.
+              color: hex(stair
+                ? sc.style.stair_color
+                : extra.kind === 'elevator_pad'
+                  ? sc.style.elevator_pad_color
+                  : extra.kind === 'elevator_cabin'
+                    ? sc.style.elevator_cabin_color
+                    : sc.style.elevator_frame_color,
+                stair ? 0x8a7a66 : 0x6d7681),
+              // 1.0 is the MeshStandardMaterial default — the elevator boxes
+              // keep exactly the look they had.
+              roughness: stair ? 0.9 : 1,
               transparent: extra.kind === 'elevator_cabin',
               opacity: extra.kind === 'elevator_cabin'
                 ? sc.style.elevator_cabin_opacity : 1 })

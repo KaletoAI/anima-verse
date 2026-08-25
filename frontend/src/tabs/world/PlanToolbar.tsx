@@ -16,8 +16,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 
 /** Click-to-place modes of the floor-plan editor ('' = plain selection). */
 export type PlanMode = '' | 'marker' | 'marker-move' | 'outline'
-  | 'elevator' | 'door' | 'window' | 'draw-room' | 'curve' | 'boundary-door'
-  | 'boundary'
+  | 'elevator' | 'stairs' | 'door' | 'window' | 'draw-room' | 'curve'
+  | 'boundary-door' | 'boundary'
 
 function Tool({ icon, title, onClick, active = false, danger = false,
   disabled = false, small = false }: {
@@ -60,6 +60,12 @@ interface PlanToolbarProps {
   /** Points collected in the running draft (room hull or building outline). */
   outlineDraftLen: number
   hasElevator: boolean
+  /** How many staircases the location has at all — the tooltip of the stair
+   *  tool would otherwise be the only place the 8-flight cap shows up. */
+  stairCount: number
+  /** The storey the editor is on: a new flight starts THERE and ends one
+   *  above, so the tool says which two levels the click connects. */
+  stairLevel: number
   /** Show the building group at all (the editor got an onMap3d writer). */
   building: boolean
   canSuggest: boolean
@@ -95,7 +101,7 @@ interface PlanToolbarProps {
 
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasOutline, hasBoundary,
-  outlineDraftLen, hasElevator, building, canSuggest,
+  outlineDraftLen, hasElevator, stairCount, stairLevel, building, canSuggest,
   canFitToModel, canCurve, ground, groundHint, noSelectionHint, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
@@ -174,6 +180,19 @@ export function PlanToolbar({
             <Tool icon="🗑" danger onClick={onRemoveElevator}
               title={t('Remove the elevator')} />
           ) : null}
+          {/* A staircase is placed per STOREY JUMP, unlike the elevator: the
+              click drops a flight that starts on the level being edited and
+              arrives one storey up. Turning and removing happen on the
+              selected flight, in the row below the plan. */}
+          <Tool
+            icon="🪜"
+            active={mode === 'stairs'}
+            onClick={() => onMode('stairs')}
+            title={t('Place a staircase with one click — it starts at the level you are editing and leads ONE storey up (a climb over two storeys needs two flights). Click the symbol on the plan to turn or remove it. Now: level {level} → {up}, {n} of 8 flights placed.')
+              .replace('{level}', String(stairLevel))
+              .replace('{up}', String(stairLevel + 1))
+              .replace('{n}', String(stairCount))}
+          />
           <Tool
             icon="⇥"
             active={mode === 'boundary-door'}
