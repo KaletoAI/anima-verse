@@ -166,7 +166,8 @@ import { rasterFlowAt, rasterKindAt, rasterLevelAt, rasterSdAt, waterBilinear,
   WATER_SD_DRY } from './waterRaster';
 import type { WaterRaster } from './waterRaster';
 import { packWaterLook, terrainWaterFragmentGlsl, waterGateGlsl, waterInside,
-  waterSdGlsl, WATER_LOOK_TEXELS, WATER_SD_BAND_M } from './waterShade';
+  waterSdGlsl, WATER_LOOK_DEFAULT, WATER_LOOK_TEXELS,
+  WATER_SD_BAND_M } from './waterShade';
 import type { WaterLook } from './waterShade';
 
 /**
@@ -432,6 +433,27 @@ export interface SdField {
   cols: number;
   rows: number;
   /** `data[j · cols + i]` in metres, {@link WATER_SD_DRY} where no water. */
+  data: Float32Array;
+}
+
+/**
+ * THE FLOW FIELD over the very same lattice — the downstream vector the VERTEX
+ * stage reads (`tlodFlowAt`), kept as a field beside its texture for exactly the
+ * reason {@link SdField} is: a CPU reader has to be able to ask what the GPU
+ * fetched, at a point, without a frame buffer.
+ *
+ * Two components per lattice point, interleaved, in the RG order the RGFormat
+ * texture is uploaded in. (0, 0) is STILL water and is also what a dry point
+ * carries — the server writes it there rather than a sentinel, so there is
+ * nothing to keep out of a mix (see `tlodFlowAt`).
+ */
+export interface FlowField {
+  originX: number;
+  originZ: number;
+  step: number;
+  cols: number;
+  rows: number;
+  /** `[data[2·(j·cols + i)], data[2·(j·cols + i) + 1]]` — the (x, z) pair. */
   data: Float32Array;
 }
 
@@ -2109,6 +2131,45 @@ export function gpuWaterAt(water: HeightPyramid | null,
 }
 
 /**
+ * The TypeScript twin of the vertex shader's `tlodFlowAt` — the downstream
+ * vector the GPU really reads at a point, on the water pyramid's BASE lattice
+ * and by plain bilinear.
+ *
+ * WHY IT EXISTS AS A TWIN AT ALL (finding H1's parked suspect, 2026-08-25).
+ * `vTlodFlow` is sampled per VERTEX and INTERPOLATED across the triangle, so
+ * what a fragment reads is not this number but an affine blend of three of
+ * them. Whether that blend can fall to "still" (`|flow| < 1e-4`) or merely
+ * limp anywhere a river draws is a question about the raster and the vertex
+ * spacing, and it is answered by measuring — `client3d/scripts/
+ * smoke_terrain_lod.mjs` § [23] builds this twin's answers at the capped levels
+ * and interpolates them exactly as the rasterizer does.
+ *
+ * OUT-OF-WINDOW IS (0, 0), like the shader's own first branch: `nearRect` is
+ * the HEIGHT window, and the water pyramid is built over it — the same
+ * rectangle `gpuWaterAt` gates on, for the same reason.
+ */
+export function gpuWaterFlowAt(flow: FlowField | null,
+                               nearRect: readonly number[] | null,
+                               x: number, z: number): [number, number] {
+  if (!flow || flow.cols < 2 || flow.rows < 2 || !(flow.step > 0)) return [0, 0];
+  if (nearRect && (x < nearRect[0] || x > nearRect[2]
+                   || z < nearRect[1] || z > nearRect[3])) return [0, 0];
+  const cl = (v: number, n: number): number => (v < 0 ? 0 : v > n - 1 ? n - 1 : v);
+  const fx = cl((x - flow.originX) / flow.step, flow.cols);
+  const fz = cl((z - flow.originZ) / flow.step, flow.rows);
+  const i = Math.min(Math.floor(fx), flow.cols - 2);
+  const j = Math.min(Math.floor(fz), flow.rows - 2);
+  const tx = fx - i;
+  const tz = fz - j;
+  const at = (a: number, b: number, c: number): number =>
+    flow.data[(b * flow.cols + a) * 2 + c] ?? 0;
+  const mix = (c: number): number =>
+    (at(i, j, c) * (1 - tx) + at(i + 1, j, c) * tx) * (1 - tz)
+    + (at(i, j + 1, c) * (1 - tx) + at(i + 1, j + 1, c) * tx) * tz;
+  return [mix(0), mix(1)];
+}
+
+/**
  * The TypeScript twin of the shader's `twSdAt` — the signed distance to the
  * painted outline the GPU really reads at a point, {@link WATER_SD_DRY} outside
  * the window (finding F-A/F-B).
@@ -2768,6 +2829,47 @@ function pyramidTexture(pyr: HeightPyramid): THREE.DataTexture {
 }
 
 /** What the terrain renderer offers its owner (`scene/ground.ts`). */
+/**
+ * WHAT THE WATER SHADER READS AT ONE WORLD POINT — the diagnostic answer of
+ * {@link TerrainLod.waterProbe}, and the numbers a remote finding about water
+ * has to travel with (§ B5a, "Prüfe am Verbraucher").
+ *
+ * EVERY FIELD IS A GPU READ, not a re-derivation: the level comes out of the
+ * water pyramid through `gpuWaterAt`, the distance out of the sd field through
+ * `gpuWaterSdAt`, the flow out of the flow field through `gpuWaterFlowAt`, and
+ * the speed off the very look row `twKindRow` would fetch. The one thing it
+ * cannot reproduce is the triangle INTERPOLATION of the flow varying — it
+ * answers the vertex sampler at the point itself, which is the same number
+ * wherever a vertex lands on it and the corners of the blend everywhere else.
+ */
+export interface WaterProbe {
+  /** The mirror the raster carries here, NaN where there is none. */
+  level: number;
+  /** The ground under it, at the finest lattice. */
+  ground: number;
+  /** `vTlodWet` at this point — the GATED lift (`(level − ground) · twInside`),
+   *  0 wherever the fragment stage takes its dry branch. */
+  depth: number;
+  /** The signed distance to the authored outline, `WATER_SD_DRY` outside every
+   *  window. Negative = the raster's dilation ring, i.e. drawn as ground. */
+  sd: number;
+  /** The downstream vector the VERTEX stage samples, and its length — the
+   *  area's own speed factor (`heightfield.water_flow_factor`). */
+  flow: [number, number];
+  flowLen: number;
+  /** Does the ripple take its STILL branch? `flowLen < 1e-4`, the shader's own
+   *  test — the one bit that says "this water cannot drift downstream". */
+  still: boolean;
+  /** Metres per second the crests really travel: `still ? speed
+   *  : flow_speed · flowLen`, the shader's `sp`. */
+  speed: number;
+  /** Which row of the look table this point fetches, and the two numbers off it
+   *  a reader of a water finding wants: the opaque depth and the wavelength. */
+  lookRow: number;
+  opaqueDepthM: number;
+  waveM: number;
+}
+
 export interface TerrainLod {
   /**
    * The mesh, to be hung into the ground group once.
@@ -2863,6 +2965,18 @@ export interface TerrainLod {
    *  lifting program (K-A E3). 0 in a world without a drop, which is the case
    *  the risk rule is about — the second draw call is then skipped entirely. */
   waterNodeCount(): number;
+  /**
+   * DIAGNOSTIC: what the water shader reads at ONE world point
+   * (`debug3d.ts`, the WATER line) — see {@link WaterProbe}.
+   *
+   * "PRÜFE AM VERBRAUCHER". Every number in it is read out of the very field
+   * the GPU samples, through the twin of the very sampler it uses, so a report
+   * that says "the water does not flow HERE" can carry the level, the depth,
+   * the flow and the speed of exactly that spot instead of a screenshot. It is
+   * a handful of bilinear taps and is called twice a second by the debug
+   * overlay alone — nothing in the game asks it.
+   */
+  waterProbe(x: number, z: number): WaterProbe;
   /** DIAGNOSTIC: the instance cap three.js draws against
    *  (`geometry._maxInstanceCount`) and the attribute's capacity. Both are
    *  `MAX_NODES` and stay there — the buffer is allocated once and never
@@ -2996,6 +3110,10 @@ export function createTerrainLod(): TerrainLod {
   let farTex: THREE.DataTexture | null = null;
   let waterTex: THREE.DataTexture | null = null;
   let flowTex: THREE.DataTexture | null = null;
+  /** The FLOW over the same window — held as the FIELD as well as the texture,
+   *  for the reason the sd is: the diagnostic readout asks the very numbers the
+   *  vertex stage fetched (`waterProbe`). */
+  let flowField: FlowField | null = null;
   /** The signed distance over the same window — held as the FIELD as well as
    *  the texture, because the CPU twins (`morphedVertex`, `waterTileCaps`) read
    *  the very numbers the shader fetches. */
@@ -3010,6 +3128,10 @@ export function createTerrainLod(): TerrainLod {
    *  is rebuilt from whichever pair is current. */
   let kindTex: THREE.DataTexture | null = null;
   let rowOfKind: ReadonlyMap<string, number> = new Map<string, number>();
+  /** The look table itself, kept beside its texture for the same reason the sd
+   *  and the flow fields are: `waterProbe` answers what the FRAGMENT would
+   *  fetch, and a fragment fetches this table. */
+  let lookRows: readonly WaterLook[] = [];
   let lastWater: WaterRaster | null = null;
   let nearRect: [number, number, number, number] | null = null;
   let extent: [number, number, number, number] = [-100, -100, 100, 100];
@@ -3146,8 +3268,13 @@ export function createTerrainLod(): TerrainLod {
    * memory nobody fetches. The geometry is `waterPyr.levels[0]` — the same
    * origin, step and size the level texture's own level 0 has, which is what
    * lets the two share `uTlodWaterGeom` and `uTlodWaterLevel[0]`.
+   *
+   * THE FIELD AND THE TEXTURE ARE ONE ARRAY, exactly as the sd's are: the
+   * diagnostic readout has to be able to ask what the vertex stage fetched at a
+   * point (`waterProbe`, "Prüfe am Verbraucher"), and a second copy sampled a
+   * second way would be a second field free to disagree with the drawn one.
    */
-  function buildFlow(raster: WaterRaster | null): THREE.DataTexture | null {
+  function buildFlow(raster: WaterRaster | null): FlowField | null {
     const base = waterPyr?.levels[0];
     if (!waterPyr || !base || !raster?.tiles?.size) return null;
     const data = new Float32Array(base.cols * base.rows * 2);
@@ -3160,7 +3287,13 @@ export function createTerrainLod(): TerrainLod {
         data[at + 1] = fz;
       }
     }
-    const tex = new THREE.DataTexture(data, base.cols, base.rows,
+    return { originX: waterPyr.originX, originZ: waterPyr.originZ,
+             step: waterPyr.step, cols: base.cols, rows: base.rows, data };
+  }
+
+  function flowTexture(field: FlowField | null): THREE.DataTexture | null {
+    if (!field) return null;
+    const tex = new THREE.DataTexture(field.data, field.cols, field.rows,
                                       THREE.RGFormat, THREE.FloatType);
     tex.minFilter = THREE.NearestFilter;
     tex.magFilter = THREE.NearestFilter;
@@ -3292,7 +3425,8 @@ export function createTerrainLod(): TerrainLod {
     nearTex = nearPyr ? pyramidTexture(nearPyr) : null;
     farTex = farPyr ? pyramidTexture(farPyr) : null;
     waterTex = waterPyr ? pyramidTexture(waterPyr) : null;
-    flowTex = buildFlow(raster);
+    flowField = buildFlow(raster);
+    flowTex = flowTexture(flowField);
     sdTex = sdTexture(sdField);
     refreshKindRows();
     uNear.value = nearTex ?? neutralTex;
@@ -3499,6 +3633,7 @@ export function createTerrainLod(): TerrainLod {
     },
     setWaterLook(looks, rows) {
       lookTex?.dispose();
+      lookRows = looks;
       lookTex = makeLookTexture(looks);
       uLook.value = lookTex;
       // The row numbers moved with the table, so the per-texel field that names
@@ -3523,6 +3658,29 @@ export function createTerrainLod(): TerrainLod {
       ? [] : [mesh.material, waterMesh.material]),
     nodeCount: () => nodes,
     waterNodeCount: () => waterNodes,
+    waterProbe(x, z) {
+      // The FINEST tap of everything, which is what a point probe means: the
+      // level, the flow and the sd have no level of their own to pick anyway
+      // (`tlodFlowAt`, `twSdAt`), and the height is asked at `nodeStep` 0 — the
+      // same tap λ itself is measured from (`lodVertex.tAt`).
+      const level = gpuWaterAt(waterPyr, nearRect, x, z, 0);
+      const ground = gpuHeightAt(nearPyr, nearRect, farPyr, x, z, 0);
+      const sd = gpuWaterSdAt(sdField, x, z);
+      // `liftedHeight` IS `tlodLift`, gate included, so this is `vTlodWet`
+      // rather than a second opinion about it.
+      const depth = uNoWater.value > 0.5
+        ? 0 : liftedHeight(ground, level, sd) - ground;
+      const flow = gpuWaterFlowAt(flowField, nearRect, x, z);
+      const flowLen = Math.hypot(flow[0], flow[1]);
+      const still = flowLen < 1e-4;
+      const kind = rasterKindAt(lastWater, x, z).toLowerCase();
+      const lookRow = Math.min(Math.max(rowOfKind.get(kind) ?? 0, 0),
+                               Math.max(lookRows.length - 1, 0));
+      const look = lookRows[lookRow] ?? WATER_LOOK_DEFAULT;
+      return { level, ground, depth, sd, flow, flowLen, still,
+               speed: still ? look.speed : look.flowSpeed * flowLen,
+               lookRow, opaqueDepthM: look.opaqueDepthM, waveM: look.waveM };
+    },
     instanceCap: () => {
       const capOf = (g: THREE.InstancedBufferGeometry): number =>
         (g as unknown as { _maxInstanceCount?: number })._maxInstanceCount ?? -1;
@@ -3556,10 +3714,12 @@ export function createTerrainLod(): TerrainLod {
       flowTex = null;
       sdTex = null;
       sdField = null;
+      flowField = null;
       capTex = null;
       capGrid = null;
       lookTex = null;
       kindTex = null;
+      lookRows = [];
       lastWater = null;
       // The pyramids are module-shared uniforms and outlive this closure, so
       // they are handed back explicitly — the rule `setNaturalGroundField(null)`

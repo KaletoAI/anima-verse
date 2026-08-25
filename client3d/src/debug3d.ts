@@ -471,7 +471,50 @@ export function initIsolation(deps: IsolationDeps): void {
       + `${Math.round(scatter.mesh.triangles / 1000)}k tri   `
       + `imp ${scatter.impostor.instances}i `
       + `${Math.round(scatter.impostor.triangles / 1000)}k tri\n`
+      + waterLine()
       + `fps ${r1(fpsNow)}   off: ${encodeIsolation(active) || '-'}`;
+  }
+
+  /**
+   * THE WATER AT THE CAMERA TARGET — one line, and the reason it exists is
+   * "Prüfe am Verbraucher": every water finding so far has travelled as a
+   * sentence ("the river does not flow"), and the numbers that would settle it
+   * live in three rasters nobody can read from a screenshot.
+   *
+   * THE PROBE POINT IS `engine.target`, the point the camera orbits — i.e. the
+   * middle of the picture, which is the spot a report is about. The reader
+   * points the camera at the water that looks wrong and copies this line.
+   *
+   *   x/z        where it was measured
+   *   lvl        the mirror the raster carries (`-` = none: this is dry ground,
+   *              and every water term below it is 0 by construction)
+   *   d          `vTlodWet`, the GATED lift the fragment shades from
+   *   sd         the signed distance to the AUTHORED outline; negative is the
+   *              raster's 4 m dilation ring, which is drawn as ground
+   *   flow       the downstream vector and its length — the area's speed factor
+   *   STILL      the shader's own branch: `|flow| < 1e-4` means the ripple
+   *              counter-scrolls at the kind's still speed and can NEVER drift
+   *              downstream, whatever the flow dial says
+   *   sp         metres per second the crests really travel
+   *   row        which row of the look table `twKindRow` fetched — a river
+   *              reading a lake's row is finding F-A all over again
+   *   opq/wave   that row's opaque depth and ripple wavelength: how deep the
+   *              bed goes invisible, and how big the crests are
+   *
+   * Rounded to millimetres and to four decimals of flow, because a flow of
+   * 1e-4 is exactly the threshold this line exists to compare against.
+   */
+  function waterLine(): string {
+    const p = ground.terrainWaterProbe(engine.target.x, engine.target.z);
+    const m3 = (v: number) => (Math.round(v * 1000) / 1000).toFixed(3);
+    const f4 = (v: number) => (Math.round(v * 10000) / 10000).toFixed(4);
+    const lvl = Number.isFinite(p.level) ? m3(p.level) : '-';
+    return `water @${m3(engine.target.x)},${m3(engine.target.z)}  `
+      + `lvl ${lvl}  gnd ${m3(p.ground)}  d ${m3(p.depth)} m  `
+      + `sd ${p.sd <= -1e3 ? 'dry' : m3(p.sd)}\n`
+      + `      flow ${f4(p.flow[0])},${f4(p.flow[1])} |${f4(p.flowLen)}|`
+      + `${p.still ? ' STILL' : ''}  sp ${m3(p.speed)} m/s  `
+      + `row ${p.lookRow} opq ${m3(p.opaqueDepthM)} wave ${m3(p.waveM)}\n`;
   }
 
   // ── the DOM ─────────────────────────────────────────────────────────────

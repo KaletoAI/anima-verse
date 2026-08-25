@@ -113,6 +113,7 @@ import type { ImpostorQuad, InstanceTier, ScatterLodCfg,
   ScatterViewCone } from './scatterLod';
 import { markInstanceUpload } from './instanceUpload';
 import { createTerrainLod } from './terrainLod';
+import type { WaterProbe } from './terrainLod';
 import { createUndergrowthField } from './undergrowth';
 import { buildWaterfall } from './waterfall';
 import { waterLevelAt, waterProfileOf } from './waterPlaneMath';
@@ -922,6 +923,10 @@ export interface Ground {
    *  LIFTING variant of the terrain program (Wasser v2, K-A E3). 0 in a world
    *  without water — which is the whole point of the second variant. */
   terrainWaterNodeCount(): number;
+  /** DIAGNOSTIC: what the water shader reads at one world point — the numbers
+   *  a report about water has to travel with instead of a screenshot
+   *  (`TerrainLod.waterProbe`, read by the isolation panel's WATER line). */
+  terrainWaterProbe(x: number, z: number): WaterProbe;
   /** DIAGNOSTIC: three.js' frozen instance cap vs the buffer capacity. */
   terrainInstanceCap(): { cap: number; capacity: number };
   /** How many NON-DEGENERATE triangles those pieces cost
@@ -3294,6 +3299,7 @@ export function createGround(): Ground {
     tickTerrain: (camera, viewportPx) => terrain.update(camera, viewportPx),
     terrainNodeCount: () => terrain.nodeCount(),
     terrainWaterNodeCount: () => terrain.waterNodeCount(),
+    terrainWaterProbe: (x, z) => terrain.waterProbe(x, z),
     terrainInstanceCap: () => terrain.instanceCap(),
     terrainTriangleCount: () => terrain.triangleCount(),
     heightTileCount: () => relief.tiles.size,

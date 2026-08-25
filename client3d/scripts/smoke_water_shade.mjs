@@ -21,8 +21,9 @@
  * ============================================================================
  * `waterAbsorb(d, band, edge)` = `waterShoreAlpha(d, band) · waterEdgeFade(d,
  * edge)`, i.e. `3t² − 2t³` with `t = d / band`, times the rim ramp. `band` is
- * ¾ of the water's own bed depth (W4b, `waterOpaqueDepthM`): 1.5 m for the
- * default lake (2.0 m), 0.9 m for the seeded river (1.2 m).
+ * `max(1 m, ¾ · bed)` (W4b plus the see-through FLOOR of 2026-08-25,
+ * `waterOpaqueDepthM`): 1.5 m for the default lake (2.0 m), and 1.0 m for the
+ * seeded river (1.2 m), whose bare ¾ would have been 0.9 m.
  *
  * With the rim ramp saturated (`edge` = its floor 0.05 m, so every depth from
  * 0.05 m on multiplies by 1), the lake:
@@ -35,9 +36,12 @@
  *     d = 1.5   -> t = 1                                   = 1
  *     d = 2.0   -> clamped                                 = 1
  *
- * …and the river answers the SAME six numbers at 0.6 times the depth (0.09,
- * 0.18, 0.225, 0.45, 0.675, 0.9), which is the whole of W4b: the fraction is
- * the law, the metres are the water's.
+ * …and the river answers the SAME six numbers over its own floored band (0.1,
+ * 0.2, 0.25, 0.5, 0.75, 1.0). The fraction is the law, the metres are the
+ * water's — and under a metre the FLOOR is the law: the bed of a water has to
+ * stay readable down to at least a metre of depth, so a 1.2 m river no longer
+ * goes opaque at the 0.9 m a figure wades in, and a 0.6 m pond never goes
+ * opaque at all (0.648 at its deepest, i.e. 35.2 % of its bed still showing).
  *
  * THE RIM RAMP, where it is not saturated. At d = 0.025 m and edge 0.05 m it is
  * 0.5, and the curve under it is `t = 0.025/1.5 = 1/60`:
@@ -229,20 +233,21 @@ function checkNear(label, actual, expected, eps) {
 
 const { shade, plane, mat } = await load();
 const { waterAbsorb, waterFoamAt, waterTintBlend, waterLookFrom, waterTintRgb,
-  waterSurface, waterShadeNormal,
+  waterSurface, waterShadeNormal, waterShallowRamp, WATER_SHALLOW_SURFACE_MIN,
   packWaterLook, terrainWaterFragmentGlsl, waterGateGlsl, waterInside,
   waterSdGlsl, WATER_FOAM_MIN_COVER, WATER_SD_BAND_M,
   WATER_LOOK_DEFAULT, WATER_LOOK_TEXELS } = shade;
 const { WATER_EDGE_FADE_M, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
-  waterOpaqueDepthM } = plane;
+  WATER_MIN_SEE_DEPTH_M, waterOpaqueDepthM } = plane;
 
 // ── [1] the absorption ──────────────────────────────────────────────────────
 console.log('[1] the absorption is the mirror\'s own shore curve (W4b)');
 const EDGE = WATER_EDGE_FADE_M;          // 0.05 m — the floor, i.e. rim ramp 1
 const LAKE = waterOpaqueDepthM(2.0);     // 1.5 m
-const RIVER = waterOpaqueDepthM(1.2);    // 0.9 m
+// 1.0 m — ¾ of 1.2 is 0.9, and the see-through FLOOR of 2026-08-25 lifts it.
+const RIVER = waterOpaqueDepthM(1.2);
 check('the lake\'s opaque depth is ¾ of its bed', LAKE, 1.5);
-check('…and the river\'s', RIVER, 0.9);
+check('…and the river\'s is the 1 m floor, not its own 0.9', RIVER, 1.0);
 check('lake, depth 0.15', waterAbsorb(0.15, LAKE, EDGE), 0.028);
 check('lake, depth 0.30', waterAbsorb(0.30, LAKE, EDGE), 0.104);
 check('lake, depth 0.375', waterAbsorb(0.375, LAKE, EDGE), 0.15625);
@@ -250,13 +255,23 @@ check('lake, depth 0.75', waterAbsorb(0.75, LAKE, EDGE), 0.5);
 check('lake, depth 1.125', waterAbsorb(1.125, LAKE, EDGE), 0.84375);
 check('lake, depth 1.5 — the bed is gone', waterAbsorb(1.5, LAKE, EDGE), 1);
 check('lake, depth 2.0 — and stays gone', waterAbsorb(2.0, LAKE, EDGE), 1);
-check('river, depth 0.09', waterAbsorb(0.09, RIVER, EDGE), 0.028);
-check('river, depth 0.18', waterAbsorb(0.18, RIVER, EDGE), 0.104);
-check('river, depth 0.225', waterAbsorb(0.225, RIVER, EDGE), 0.15625);
-check('river, depth 0.45', waterAbsorb(0.45, RIVER, EDGE), 0.5);
-check('river, depth 0.675', waterAbsorb(0.675, RIVER, EDGE), 0.84375);
-check('river, depth 0.9 — the same six answers, 0.6 as deep',
-  waterAbsorb(0.9, RIVER, EDGE), 1);
+check('river, depth 0.1', waterAbsorb(0.1, RIVER, EDGE), 0.028);
+check('river, depth 0.2', waterAbsorb(0.2, RIVER, EDGE), 0.104);
+check('river, depth 0.25', waterAbsorb(0.25, RIVER, EDGE), 0.15625);
+check('river, depth 0.5', waterAbsorb(0.5, RIVER, EDGE), 0.5);
+check('river, depth 0.75', waterAbsorb(0.75, RIVER, EDGE), 0.84375);
+check('river, depth 1.0 — the same six answers, over the floored band',
+  waterAbsorb(1.0, RIVER, EDGE), 1);
+// THE FLOOR'S OWN RED PROBE: what the ¾ rule hid at the depth a figure wades
+// in. 0.5 m over the bare 0.9 m band is t = 5/9 -> 3·(25/81) − 2·(125/729) =
+// 0.58299040; over the floored 1.0 m band it is exactly a half.
+check('RED: at 0.5 m the ¾ band had hidden 0.58299 of the river bed',
+  waterAbsorb(0.5, 0.9, EDGE), 0.5829903978052126, 1e-15);
+check('…and the floor leaves half of it readable',
+  waterAbsorb(0.5, RIVER, EDGE), 0.5);
+check('…i.e. this much more bed shows at a wading depth',
+  waterAbsorb(0.5, 0.9, EDGE) - waterAbsorb(0.5, RIVER, EDGE),
+  0.0829903978052126, 1e-15);
 // THE RIM RAMP under its floor.
 check('the rim ramp halves the curve at half a floor-pixel',
   waterAbsorb(0.025, LAKE, EDGE), 4.1203703703e-4, 1e-12);
@@ -287,10 +302,10 @@ check('RED: …and it was 6.47× as white at 0.15',
   0.84375 / waterFoamAt(0.15, LAKE, EDGE), 1 / 0.1545625, 1e-9);
 // The BAND still does not follow the bed — only the COVER does, and it is the
 // same factor the absorption already rides.
-// The river's band is 0.9 m, so at 0.3 m the shore curve stands at
-// t = 1/3 -> 3/9 − 2/27 = 7/27, and the cover is 7/27 + 0.5·0.15.
+// The river's band is the floored 1.0 m, so at 0.3 m the shore curve stands at
+// t = 0.3 -> 3(0.09) − 2(0.027) = 0.216, and the cover is 0.216 + 0.5·0.15.
 check('a SHALLOWER bed foams the same band, only better covered',
-  waterFoamAt(0.3, RIVER, EDGE), 0.5 * (7 / 27 + 0.075), 1e-12);
+  waterFoamAt(0.3, RIVER, EDGE), 0.5 * (0.216 + 0.075), 1e-12);
 
 // ── [3] the blend, and the red probe ────────────────────────────────────────
 console.log('\n[3] the blend — and what a DRY pixel must come out as');
@@ -331,7 +346,8 @@ const deep = waterLookFrom({ class: 'water', tint: '#002e57', map_strength: 0.75
   wave_m: 1.6, speed: 0.25, sky_mix: 0.55, roughness: 0.08 }, 1.2);
 checkNear('deep_water\'s tint', deep.tint, [0, 46 / 255, 87 / 255], 1e-12);
 check('…its speed', deep.speed, 0.25);
-check('…and its opaque depth follows the AREA\'s bed', deep.opaqueDepthM, 0.9);
+check('…and its opaque depth follows the AREA\'s bed, floored at a metre',
+  deep.opaqueDepthM, 1.0);
 check('a wavelength below the floor is lifted to it',
   waterLookFrom({ class: 'water', wave_m: 0 }, null).waveM, 0.05);
 // The packing — the layout `tlodWaterSurface` fetches its three texels from.
@@ -356,7 +372,7 @@ checkEq('RED: no row writes an is_water flag any more — the packer never sets 
   false);
 checkNear('row 1 is the SECOND water and no blend of the two',
   [...packed.slice(12, 16)], [...deep.tint, 0.55], 1e-7);
-check('…with its own opaque depth', packed[19], 0.9, 1e-7);
+check('…with its own opaque depth', packed[19], 1.0, 1e-7);
 check('an EMPTY table is still one row, so no fetch is out of range',
   packWaterLook([]).length, 12);
 checkNear('…and that row is the library default',
@@ -803,7 +819,7 @@ checkEq('RED: the shader does NOT ignore the look\'s flow_speed',
 // (wave_m, speed, flow_speed, opaque_depth_m).
 checkNear('the look table\'s texel 1 is (wave, speed, flow_speed, opaque)',
   [...packWaterLook([waterLookFrom({ class: 'water', wave_m: 2, speed: 0.25,
-    flow_speed: 0.4 }, 1.2)]).slice(4, 8)], [2, 0.25, 0.4, 0.9], 1e-7);
+    flow_speed: 0.4 }, 1.2)]).slice(4, 8)], [2, 0.25, 0.4, 1.0], 1e-7);
 // THE CROSS CONSTANTS are the mirror's accepted pair, per branch.
 checkEq('flowing water keeps the SMALL cross factors (0.15 / 0.3)',
   glsl.includes('float crossA = still ? 0.6 : 0.15;')
@@ -974,58 +990,97 @@ checkEq('…and the ribbon drifts along ax before its own division',
 //
 // THE SPLIT. `twA` keeps the colour — `mix(bed, tint, twA)` IS the
 // semi-transparent look. `twS`, the SURFACE share, carries the roughness, the
-// metalness, the ripple tilt and the fresnel sky share, and it is the rim ramp
-// times the shore gate with NO depth in it: `waterEdgeFade(d, edge) * inside`.
+// metalness, the ripple tilt and the fresnel sky share.
+//
+// AND SINCE THE BED RULE OF 2026-08-25 IT CARRIES A SHALLOW RAMP (`waterShallow
+// Ramp`): `twS = rim · inside · mix(0.35, 1, shore)`. H2 as first written gave
+// those four terms their FULL say at every depth, and a full sky wash plus a
+// full ripple tilt over a bed the absorption has barely touched is a surface the
+// bed cannot be read through — the user's second report, "the bed is not visible
+// down to a metre". The floor of 0.35 is what keeps H2's own answer: a film of
+// water is still a surface, at a third of one, and never sand.
 //
 // THE HAND TABLE — default lake (bed 2.0 m, opaque band 1.5 m), rim ramp at its
-// 0.05 m floor, well inside the outline so `inside` = 1. shore = t²(3 − 2t):
+// 0.05 m floor, well inside the outline so `inside` = 1. shore = t²(3 − 2t),
+// ramp = 0.35 + 0.65·shore:
 //
-//   d = 0.025 m  ramp 0.5  ->  twS = 0.5
-//                t = 1/60  ->  shore = (1/3600)(3 − 1/30) = 89/108000
-//                          ->  twA = 89/108000 · 0.5 = 0.00041204
-//   d = 0.05 m   ramp 1    ->  twS = 1
-//                t = 1/30  ->  shore = (1/900)(3 − 1/15) = 44/13500 = 0.00325926
-//                          ->  twA = 0.00325926
-//   d = 0.30 m   ramp 1    ->  twS = 1
-//                t = 0.2   ->  shore = 3(0.04) − 2(0.008) = 0.104
-//                          ->  twA = 0.104
-//   d = 1.50 m   ramp 1    ->  twS = 1,  t = 1  ->  twA = 1
+//   d = 0.025 m  rim 0.5  t = 1/60  shore = (1/3600)(3 − 1/30) = 89/108000
+//                                         = 0.00082407
+//                         ramp  = 0.35 + 0.65·0.00082407 = 0.35053565
+//                         twS   = 0.5 · 0.35053565       = 0.17526782
+//                         twA   = 89/108000 · 0.5        = 0.00041204
+//   d = 0.05 m   rim 1    t = 1/30  shore = (1/900)(3 − 1/15) = 44/13500
+//                                         = 0.00325926
+//                         ramp  = twS = 0.35 + 0.00211852 = 0.35211852
+//                         twA   = 0.00325926
+//   d = 0.30 m   rim 1    t = 0.2   shore = 3(0.04) − 2(0.008) = 0.104
+//                         ramp  = twS = 0.35 + 0.0676      = 0.4176
+//                         twA   = 0.104
+//   d = 1.50 m   rim 1    t = 1     shore = 1
+//                         ramp  = twS = 1,  twA = 1
 //
 // WHAT EACH TERM BECOMES, over a sand bed (0.76, 0.70, 0.50), the library tint
 // #3f7fb8 = (0.24705882, 0.49803922, 0.72156863), a ground roughness of 0.85,
-// the water's 0.08, sky_mix 0.55 and a fresnel of 0.5 (a mid-angle look):
+// the water's 0.08, sky_mix 0.55 and a fresnel of 0.5 (a mid-angle look). Three
+// rows now: what the picture does, what H2 alone did (surface at FULL), and
+// what the coupling before H2 did (surface = absorption):
 //
 //                       d = 0.05 m        d = 0.30 m        d = 1.50 m
 //   albedo (twA, kept) (0.75832822,      (0.70665412,      the tint,
 //                       0.69934176,       0.67899608,       exactly
 //                       0.50072216)       0.52304314)
-//   roughness  NEW      0.08              0.08              0.08
+//   roughness  NEW      0.57886874        0.52844800        0.08
+//              H2       0.08              0.08              0.08
 //              OLD      0.84749037        0.76992           0.08
-//   sky share  NEW      0.275             0.275             0.275
+//   sky share  NEW      0.09683259        0.11484000        0.275
+//              H2       0.275             0.275             0.275
 //              OLD      0.00089630        0.02860000        0.275
 //
-// The OLD row at 0.05 m is the red probe the finding names: a sky share of
-// 0.0009 is no sky share, and a roughness of 0.847 out of a dry 0.85 is sand.
+// The OLD row at 0.05 m is the red probe H2 named: a sky share of 0.0009 is no
+// sky share, and a roughness of 0.847 out of a dry 0.85 is sand. The H2 row is
+// the red probe of the NEW rule: a quarter of the pixel washed to sky colour
+// over five centimetres of water is a surface the sand under it cannot be seen
+// through — 2.84× the sky the picture now paints there.
 console.log('\n[10] the two shares: colour by depth, surface by presence (H2)');
 const LAKE_BED = 1.5;                    // the default lake's opaque band
-check('the surface share ignores the depth once the rim ramp is up',
-  waterSurface(0.05, EDGE, 1), 1);
-check('…at 30 cm', waterSurface(0.3, EDGE, 1), 1);
-check('…and at a metre and a half', waterSurface(1.5, EDGE, 1), 1);
+/** The surface share of the default lake at one depth, rim ramp saturated and
+ *  well inside the outline — the shape every check below reads. */
+const surf = (d) => waterSurface(d, EDGE, 1, LAKE_BED);
+check('the shallow ramp floor', WATER_SHALLOW_SURFACE_MIN, 0.35);
+check('the surface share at 5 cm is a THIRD of one, not a whole one',
+  surf(0.05), 0.35 + 0.65 * (44 / 13500), 1e-12);
+check('…at 30 cm', surf(0.3), 0.35 + 0.65 * 0.104, 1e-12);
+check('…and a whole one at the opaque depth', surf(1.5), 1);
 check('…while the rim ramp itself still fades it in',
-  waterSurface(0.025, EDGE, 1), 0.5);
+  surf(0.025), 0.5 * (0.35 + 0.65 * (89 / 108000)), 1e-12);
 check('…and the shore gate still cuts the dilation ring',
-  waterSurface(0.05, EDGE, waterInside(-2)), 0);
-check('…and a dry pixel is no surface at all', waterSurface(0, EDGE, 1), 0);
+  waterSurface(0.05, EDGE, waterInside(-2), LAKE_BED), 0);
+check('…and a dry pixel is no surface at all',
+  waterSurface(0, EDGE, 1, LAKE_BED), 0);
+check('RED: H2 alone gave that 5 cm a WHOLE surface', 1, 1);
+check('…i.e. this many times the sky wash the bed now shows through',
+  1 / surf(0.05), 2.83995288, 1e-8);
+// THE RAMP IS THE SHORE CURVE ITSELF — no second curve to keep in step.
+check('the ramp is mix(0.35, 1, shore) and nothing else',
+  waterShallowRamp(0.3, LAKE_BED),
+  0.35 + 0.65 * waterAbsorb(0.3, LAKE_BED, EDGE), 1e-12);
+check('…so at the opaque depth it is 1 exactly',
+  waterShallowRamp(1.5, LAKE_BED), 1);
+check('…and a water shallower than the floor never gets there: a 0.6 m pond',
+  waterShallowRamp(0.6, waterOpaqueDepthM(0.6)), 0.35 + 0.65 * 0.648, 1e-15);
 check('the ABSORPTION is unchanged — the colour still follows the depth',
   waterAbsorb(0.05, LAKE_BED, EDGE), 44 / 13500, 1e-12);
 check('…at 30 cm', waterAbsorb(0.3, LAKE_BED, EDGE), 0.104, 1e-12);
 check('…and at the opaque depth', waterAbsorb(1.5, LAKE_BED, EDGE), 1);
 check('…and at a quarter of a floor-pixel it is the ramp times the curve',
   waterAbsorb(0.025, LAKE_BED, EDGE), (89 / 108000) * 0.5, 1e-12);
+// `twS >= twA` still holds, and that is arithmetic and not luck:
+// `0.35 + 0.65·s >= s` for every s in 0…1, with equality only at s = 1.
 checkAbove('the surface share is never below the absorption',
   Math.min(...[0.01, 0.05, 0.2, 0.75, 1.5, 3].map(
-    (d) => waterSurface(d, EDGE, 1) - waterAbsorb(d, LAKE_BED, EDGE))), -1e-15);
+    (d) => surf(d) - waterAbsorb(d, LAKE_BED, EDGE))), -1e-15);
+check('…and they meet exactly at the opaque depth',
+  surf(1.5) - waterAbsorb(1.5, LAKE_BED, EDGE), 0);
 // THE COLOUR — unchanged by H2, and it IS the semi-transparency asked for.
 const SAND = [0.76, 0.70, 0.50];
 const TINT = waterTintRgb(undefined);
@@ -1039,19 +1094,23 @@ checkNear('…and at the opaque depth the bed is gone',
   waterTintBlend(SAND, TINT, waterAbsorb(1.5, LAKE_BED, EDGE)), TINT, 1e-12);
 // THE ROUGHNESS — the term that used to make shallow water dry sand.
 const rough = (share) => 0.85 + (0.08 - 0.85) * share;
-check('NEW: 5 cm of water is as smooth as a lake',
-  rough(waterSurface(0.05, EDGE, 1)), 0.08, 1e-12);
-check('…and so is 30 cm', rough(waterSurface(0.3, EDGE, 1)), 0.08, 1e-12);
+check('NEW: 5 cm of water is well smoother than sand, not a lake',
+  rough(surf(0.05)), 0.57886874, 1e-8);
+check('…and 30 cm smoother again', rough(surf(0.3)), 0.528448, 1e-12);
+check('RED: H2 alone made that 5 cm as smooth as open water', rough(1), 0.08,
+  1e-12);
 check('RED: the OLD coupling left 5 cm at the roughness of dry ground',
   rough(waterAbsorb(0.05, LAKE_BED, EDGE)), 0.84749037, 1e-8);
 check('RED: …and 30 cm barely better', rough(waterAbsorb(0.3, LAKE_BED, EDGE)),
   0.76992, 1e-12);
 // THE SKY SHARE — the fresnel term, at a mid-angle fresnel of 0.5.
 const skyShare = (fres, share) => Math.min(Math.max(fres * 0.55, 0), 1) * share;
-check('NEW: 5 cm of water reflects its full share of sky',
-  skyShare(0.5, waterSurface(0.05, EDGE, 1)), 0.275, 1e-12);
-check('…the same share a metre and a half does',
-  skyShare(0.5, waterSurface(1.5, EDGE, 1)), 0.275, 1e-12);
+check('NEW: 5 cm of water reflects a THIRD of the sky share',
+  skyShare(0.5, surf(0.05)), 0.09683259, 1e-8);
+check('…and a metre and a half reflects all of it',
+  skyShare(0.5, surf(1.5)), 0.275, 1e-12);
+check('RED: H2 alone washed that 5 cm with the FULL quarter',
+  skyShare(0.5, 1), 0.275, 1e-12);
 check('RED: the OLD coupling reflected all but nothing at 5 cm',
   skyShare(0.5, waterAbsorb(0.05, LAKE_BED, EDGE)), 0.00089630, 1e-8);
 checkBelow('RED: …i.e. under a third of a percent of the sky',
@@ -1064,11 +1123,17 @@ const RIPPLE_N = [0.28734789, 0.95782629, 0];       // a crest tilted 16.6992°
 const angleDeg = (a, b) => Math.acos(Math.min(1,
   a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) * 180 / Math.PI;
 const nShallow = waterShadeNormal(GROUND_N, RIPPLE_N,
-  waterAbsorb(0.05, LAKE_BED, EDGE), waterSurface(0.05, EDGE, 1));
-checkNear('NEW: over 5 cm the ripple tilts the bank in full',
-  nShallow, [0.65197280, 0.75824235, 0], 1e-7);
+  waterAbsorb(0.05, LAKE_BED, EDGE), surf(0.05));
+checkNear('NEW: over 5 cm the ripple tilts the bank by its third',
+  nShallow, [0.52790525, 0.84930327, 0], 1e-7);
 check('…which is this many degrees off the bare bank',
-  angleDeg(nShallow, GROUND_N), 14.1255, 1e-4);
+  angleDeg(nShallow, GROUND_N), 5.298978, 1e-5);
+const nH2 = waterShadeNormal(GROUND_N, RIPPLE_N,
+  waterAbsorb(0.05, LAKE_BED, EDGE), 1);
+checkNear('RED: H2 alone tilted it in FULL — the bank\'s own shape gone',
+  nH2, [0.65197280, 0.75824235, 0], 1e-7);
+check('…2.67× as far off the bank as the picture now goes',
+  angleDeg(nH2, GROUND_N), 14.125457, 1e-5);
 const nOld = (() => {
   const a = waterAbsorb(0.05, LAKE_BED, EDGE);
   const v = [GROUND_N[0] + (RIPPLE_N[0] - GROUND_N[0]) * a,
@@ -1095,8 +1160,11 @@ checkNear('…a half-lit rim: macro half-flat, ripple half-strength',
 // THE GLSL SAYS THE SAME SPLIT.
 checkEq('the shader carries BOTH shares', glsl.includes('float twA;')
   && glsl.includes('float twS;'), true);
-checkEq('…the surface share IS the rim', glsl.includes('twS = rim;')
+checkEq('…the surface share is the rim TIMES THE SHALLOW RAMP',
+  glsl.includes('twS = rim * mix( 0.35, 1.0, shore );')
   && glsl.includes('twA = shore * rim;'), true);
+checkEq('RED: …and it is no longer the bare rim, which is what hid the bed',
+  glsl.includes('twS = rim;'), false);
 checkEq('…the albedo keeps the depth curve',
   glsl.includes('diffuseColor.rgb = mix( diffuseColor.rgb, look0.rgb, twA );'),
   true);
@@ -1149,13 +1217,15 @@ checkEq('the FOAM is untouched — it was never coupled wrongly',
 // forest above it does.
 console.log('\n[11] THE CONVICTION — the row a river under a forest picked (F-A II)');
 // A deep, near-still lake and a shallow, fast river — two kinds a world really
-// paints. `opaqueDepthM` is ¾ of the bed (W4b): 3.0 m and 0.9 m.
+// paints. `opaqueDepthM` is `max(1 m, ¾ · bed)`: 3.0 m and — the river's 0.9 m
+// floored by the see-through rule of 2026-08-25 — 1.0 m.
 const CONV_LAKE = waterLookFrom({ class: 'water', tint: '#002e57', wave_m: 2.0,
   speed: 0.05, flow_speed: 0, sky_mix: 0.55, roughness: 0.08 }, 4.0);
 const CONV_RIVER = waterLookFrom({ class: 'water', tint: '#3f7fb8', wave_m: 1.2,
   speed: 0.05, flow_speed: 1.0, sky_mix: 0.55, roughness: 0.08 }, 1.2);
 check('the lake\'s opaque depth is ¾ of its 4 m bed', CONV_LAKE.opaqueDepthM, 3.0);
-check('…and the river\'s ¾ of its 1.2 m one', CONV_RIVER.opaqueDepthM, 0.9);
+check('…and the river\'s is the floor over its 1.2 m one',
+  CONV_RIVER.opaqueDepthM, 1.0);
 check('…the lake does not flow', CONV_LAKE.flowSpeed, 0);
 check('…and the river runs at 1 m/s', CONV_RIVER.flowSpeed, 1.0);
 // THE OLD PICK, reimplemented from the shader line it was: the stand-in rows
@@ -1171,7 +1241,7 @@ check('RED: the old rule picked row 1 out of the pair (forest, forest)',
   oldPick(1, 1), 1);
 check('RED: …which carried the LAKE\'s opaque depth on a river pixel',
   OLD_ROW.opaqueDepthM, 3.0);
-check('the new rule reads the river\'s own', NEW_ROW.opaqueDepthM, 0.9);
+check('the new rule reads the river\'s own', NEW_ROW.opaqueDepthM, 1.0);
 checkNear('RED: …and the LAKE\'s tint', OLD_ROW.tint,
   [0, 46 / 255, 87 / 255], 1e-12);
 checkNear('the new rule reads the river\'s', NEW_ROW.tint,
@@ -1181,38 +1251,41 @@ checkNear('the new rule reads the river\'s', NEW_ROW.tint,
 // i.e. every depth from 0.05 m on). At 0.60 m of water — a river with a 1.2 m
 // bed, half-filled:
 //
-//     NEW, opaque 0.9:  t = 2/3 -> 3(4/9)  − 2(8/27)  = 4/3 − 16/27 = 20/27
-//                                                     = 0.7407407407…
+//     NEW, opaque 1.0:  t = 0.6 -> 3(0.36) − 2(0.216) = 1.08 − 0.432 = 0.648
 //     OLD, opaque 3.0:  t = 0.2 -> 3(0.04) − 2(0.008) = 0.12 − 0.016 = 0.104
 //
 // `diffuseColor = mix(bed, tint, absorb)`, so what is left of the BED is
-// `1 − absorb`: 7/27 = 0.259259… against 0.896. The forest floor under that
-// river was drawn at 3.456× the share it should have had —
+// `1 − absorb`: 0.352 against 0.896. The forest floor under that river was
+// drawn at 2.5454… × the share it should have had —
 //
-//     0.896 / (7/27) = 0.896 · 27 / 7 = 24.192 / 7 = 3.456
+//     0.896 / 0.352 = 896 / 352 = 28 / 11 = 2.5454545454…
 //
 // — which is the "patches that look like forest floor" of the finding, and the
-// "partly transparent, partly not" is the SAME pixel at another depth.
+// "partly transparent, partly not" is the SAME pixel at another depth. (The
+// ratio was 3.456 while the river's band was its bare ¾ of 0.9 m; the metre
+// floor of the bed rule leaves more of the bed showing on BOTH sides of the
+// comparison, and the row is still the whole defect.)
 const CONV_D = 0.60;
-check('NEW: at 0.6 m the river absorbs 20/27 of its bed',
-  waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE), 20 / 27, 1e-12);
+check('NEW: at 0.6 m the river absorbs 0.648 of its bed',
+  waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE), 0.648, 1e-12);
 check('RED: with the lake\'s depth it absorbed 0.104',
   waterAbsorb(CONV_D, OLD_ROW.opaqueDepthM, EDGE), 0.104, 1e-12);
-check('NEW: so 7/27 of the forest floor shows through',
-  1 - waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE), 7 / 27, 1e-12);
+check('NEW: so 0.352 of the forest floor shows through',
+  1 - waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE), 0.352, 1e-12);
 check('RED: …where 0.896 of it did',
   1 - waterAbsorb(CONV_D, OLD_ROW.opaqueDepthM, EDGE), 0.896, 1e-12);
-check('RED: …i.e. 3.456× as much forest as the water should have shown',
+check('RED: …i.e. 28/11 as much forest as the water should have shown',
   (1 - waterAbsorb(CONV_D, OLD_ROW.opaqueDepthM, EDGE))
-  / (1 - waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE)), 3.456, 1e-12);
+  / (1 - waterAbsorb(CONV_D, NEW_ROW.opaqueDepthM, EDGE)), 28 / 11, 1e-12);
 // AND THE SAME MISS AT THE RIM, which is the other half of the evidence: the
 // waterline of a lake reads right wherever the lake IS the topmost paint and
 // wrong wherever it is not, on one and the same shore.
-//     NEW, opaque 0.9: t = 0.25  -> 3(0.0625)   − 2(0.015625)  = 0.15625
+//     NEW, opaque 1.0: t = 0.225 -> 3(0.050625) − 2(0.011390625)
+//                                 = 0.151875 − 0.02278125 = 0.12909375
 //     OLD, opaque 3.0: t = 0.075 -> 3(0.005625) − 2(0.000421875)
 //                                 = 0.016875 − 0.00084375 = 0.01603125
-check('NEW: 0.225 m of river is a sixth absorbed',
-  waterAbsorb(0.225, NEW_ROW.opaqueDepthM, EDGE), 0.15625, 1e-12);
+check('NEW: 0.225 m of river is an eighth absorbed',
+  waterAbsorb(0.225, NEW_ROW.opaqueDepthM, EDGE), 0.12909375, 1e-12);
 check('RED: with a 3 m opaque depth it was a sixtieth',
   waterAbsorb(0.225, OLD_ROW.opaqueDepthM, EDGE), 0.01603125, 1e-12);
 // ── AND THE RIPPLE STOOD STILL ────────────────────────────────────────────

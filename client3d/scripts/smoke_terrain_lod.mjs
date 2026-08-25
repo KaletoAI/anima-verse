@@ -861,6 +861,7 @@ async function loadLod() {
       height: await import(`file://${join(dir, 'worldHeight.mjs')}`),
       water: await import(`file://${join(dir, 'waterRaster.mjs')}`),
       shade: await import(`file://${join(dir, 'waterShade.mjs')}`),
+      mats: await import(`file://${join(dir, 'materials.mjs')}`),
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -911,7 +912,7 @@ function checkEq(label, actual, expected) {
   }
 }
 
-const { lod, height, water, shade } = await loadLod();
+const { lod, height, water, shade, mats } = await loadLod();
 const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX_PIXEL_ERROR,
   MAX_RANGE_WIDENING,
   buildPyramid, pyramidHeight, pyramidLevelFor, lodRanges, selectLodNodes,
@@ -920,7 +921,7 @@ const { PATCH_N, MAX_LOD_LEVELS, MIN_LOD_DISTANCE_M, MAX_NODES, MORPH_START, MAX
   terrainLodNormalGlsl, fragmentNormal, gpuHeightAt,
   buildWaterPyramid, wlevelAt, bindTerrainLodUniforms,
   terrainLodWaterGlsl, nodeHasWater, liftedHeight, liftedDepth, gpuWaterAt,
-  gpuWaterSdAt,
+  gpuWaterSdAt, gpuWaterFlowAt,
   patchTerrainLod, LOD_CAP_NONE, waterTileCaps, buildLodCapGrid, lodCapAt,
   lodCapOverSquare,
   TERRAIN_LOD_CACHE_KEY, TERRAIN_LOD_WATER_CACHE_KEY } = lod;
@@ -3941,6 +3942,264 @@ checkEq('…and on the wet one',
     .every((k) => wetShader.uniforms[k] !== undefined), true);
 checkEq('RED: and no cap word reaches the dry FRAGMENT shader',
   /tlodCap|uTlodCapFit/.test(dryShader.fragmentShader), false);
+
+// ============================================================================
+// [23] THE FLOW A FRAGMENT REALLY READS — H1's parked suspect, measured
+// ============================================================================
+// THE SUSPICION, parked by the H1 report and taken up here: `vTlodFlow` is
+// sampled ONCE PER VERTEX (`tlodFlowAt`) and INTERPOLATED across the triangle,
+// so a fragment in the middle of a river reads an affine blend of three vertex
+// samples and not the field. If that blend collapses — below the shader's own
+// still threshold (`|flow| < 1e-4`, at which the ripple counter-scrolls at the
+// kind's STILL speed and can never drift downstream) or merely below about a
+// half, at which the crest speed `flowSpeed · |flow|` is halved — then the flow
+// is invisible because the varying ate it, and the fix would be to sample the
+// flow in the FRAGMENT like the sd and the kind.
+//
+// ── THE FIELD, BUILT AS THE SERVER BUILDS IT ────────────────────────────────
+// `HeightModel.water_raster` writes the unit axis tangent (times the area's
+// speed factor, 1 here) at every lattice point of the polygon GROWN by
+// `WATER_RASTER_DILATION_M` = 4 m, (0, 0) everywhere else, and then runs the
+// two components through a separable box of `WATER_FLOW_BLUR_M` = 4 m radius —
+// two texels on the 2 m lattice, i.e. a 5 × 5 box (`_box_blur`, over a padded
+// window so no index is clamped).
+//
+// ── THE HAND TABLE, on the straight 6 m reach of [18] (bed |z − 4| ≤ 3) ─────
+// The tangent is (1, 0) everywhere it is written, so the x pass is the
+// identity and the z pass alone decides the LENGTH. The written rows are
+// |z − 4| ≤ 7, i.e. z = −2, 0, 2, 4, 6, 8, 10; the box at a row z averages the
+// five rows z − 4 … z + 4, so |flow| is (how many of those five are written)/5:
+//
+//     z =  0 -> rows −4… 4 : 4 of 5  -> 0.8
+//     z =  2 -> rows −2… 6 : 5 of 5  -> 1
+//     z =  4 -> rows  0… 8 : 5 of 5  -> 1
+//     z =  6 -> rows  2…10 : 5 of 5  -> 1
+//     z =  8 -> rows  4…12 : 4 of 5  -> 0.8
+//     z = 10 -> rows  6…14 : 3 of 5  -> 0.6
+//     z = 12 -> rows  8…16 : 2 of 5  -> 0.4   (outside, the blur still reaches)
+//     z = 14 -> rows 10…18 : 1 of 5  -> 0.2
+//
+// — symmetric about the axis at z = 4 (z = −2 would read 0.6 and z = −4 0.4,
+// off the bottom of this window, which starts at z = 0).
+//
+// ── WHAT THE TRIANGLE THEN DELIVERS ─────────────────────────────────────────
+// The field is constant in x, and barycentric interpolation of three vertices
+// is affine, so the drawn value at a point is the LINEAR interpolation in z
+// between the two vertex ROWS bracketing it — the triangulation drops out. The
+// vertex rows are multiples of `baseStep · 2^level` = 2 m (level 0) and 4 m
+// (level 1); those are the only two levels a 6 m river is ever drawn at, because
+// the F1 cap is a WIDTH and answers 1 for it ([18](b)).
+//
+//   level 0, rows 0 (0.8), 2 (1), 4 (1), 6 (1), 8 (0.8):
+//       the drawn band is z in (1, 7) — `twInside(sd)` is 0 ON the outline —
+//       and the interpolant is 0.9 at z = 1, 1 from z = 2 to 6, 0.9 at z = 7.
+//       MINIMUM over the band: 0.9.
+//   level 1, rows 0 (0.8), 4 (1), 8 (0.8):
+//       z = 1 -> 0.8 + 0.2·(1/4) = 0.85 ;  z = 7 -> 1 − 0.2·(3/4) = 0.85.
+//       MINIMUM over the band: 0.85.
+//
+// ── THE VERDICT ─────────────────────────────────────────────────────────────
+// 0.85 is 8 500 times the still threshold and well above the half the crest
+// speed would need to be visibly slowed. THE SUSPECT IS ACQUITTED: the
+// interpolation of the flow varying is not why the water does not appear to
+// flow, and nothing is moved into the fragment for it.
+//
+// ── AND THE CHECK IS NOT VACUOUS ────────────────────────────────────────────
+// The reason the blend survives is the server's DILATION: the box of radius 4 m
+// around a point inside the outline still lies inside the written footprint, so
+// the vectors it averages are all the same water's (`WATER_FLOW_BLUR_M`'s own
+// argument). Build the same field WITHOUT the ring and the same measurement
+// convicts at once — rows 2, 4, 6 written, so z = 4 averages 3 of 5 = 0.6,
+// z = 0 and z = 8 average 2 of 5 = 0.4, and level 1 reads
+// 0.4 + 0.2·(1/4) = 0.45 at z = 1, under the half. That is the RED probe below:
+// the threshold is one this fixture can really fail.
+console.log('\n[23] the flow varying survives the triangle (H1, acquitted)');
+const FLOW_DIL = 4;            // WATER_RASTER_DILATION_M
+const FLOW_BLUR = 2;           // WATER_FLOW_BLUR_M / TILE_STEP_M, in texels
+
+/** The server's flow raster over the [18] window: the unit axis tangent inside
+ *  the grown outline, (0, 0) outside, then a separable 5 × 5 box over a padded
+ *  sample — `heightfield._box_blur`, line for line, margin included. */
+function flowFieldOf(zcOf, dzOf, half, ring = FLOW_DIL) {
+  const pad = FLOW_BLUR;
+  const pc = F1_COLS + 2 * pad;
+  const pr = F1_ROWS + 2 * pad;
+  const raw = [];
+  for (let j = 0; j < pr; j += 1) {
+    const z = (j - pad) * F1_BASE;
+    const row = [];
+    for (let i = 0; i < pc; i += 1) {
+      const x = (i - pad) * F1_BASE;
+      // The nearest point of the axis, by scan — the twin of `_axis_nearest`
+      // on a curve rather than on its polyline, which is the same answer for a
+      // line sampled every 2 m and a curvature radius of 100 m.
+      let bestD2 = Infinity;
+      let bestX = x;
+      for (let t = x - 40; t <= x + 40; t += 0.05) {
+        const d2 = (x - t) ** 2 + (z - zcOf(t)) ** 2;
+        if (d2 < bestD2) { bestD2 = d2; bestX = t; }
+      }
+      if (Math.sqrt(bestD2) > half + ring) { row.push(0, 0); continue; }
+      const m = dzOf(bestX);
+      const len = Math.hypot(1, m);
+      row.push(1 / len, m / len);
+    }
+    raw.push(row);
+  }
+  const n = 2 * FLOW_BLUR + 1;
+  const data = new Float32Array(F1_COLS * F1_ROWS * 2);
+  for (let c = 0; c < 2; c += 1) {
+    // x pass over EVERY padded row, cropped to the window's columns…
+    const xp = raw.map((row) => {
+      const out = [];
+      for (let i = pad; i < pad + F1_COLS; i += 1) {
+        let acc = 0;
+        for (let k = i - FLOW_BLUR; k <= i + FLOW_BLUR; k += 1) acc += row[k * 2 + c];
+        out.push(acc / n);
+      }
+      return out;
+    });
+    // …then the z pass over the window's rows.
+    for (let j = pad; j < pad + F1_ROWS; j += 1) {
+      for (let i = 0; i < F1_COLS; i += 1) {
+        let acc = 0;
+        for (let k = j - FLOW_BLUR; k <= j + FLOW_BLUR; k += 1) acc += xp[k][i];
+        data[(((j - pad) * F1_COLS) + i) * 2 + c] = acc / n;
+      }
+    }
+  }
+  return { originX: 0, originZ: 0, step: F1_BASE,
+           cols: F1_COLS, rows: F1_ROWS, data };
+}
+
+/** |flow| as the RASTERIZER delivers it at (x, z) when the ground is drawn at
+ *  `level`: the vertex sampler at the three corners of the triangle the point
+ *  falls in (`patchGeometry`'s split: (i,j),(i,j+1),(i+1,j+1) and
+ *  (i,j),(i+1,j+1),(i+1,j)), blended barycentrically. */
+function drawnFlow(field, x, z, level) {
+  const e = F1_BASE * (1 << level);
+  const i = Math.floor(x / e);
+  const j = Math.floor(z / e);
+  const u = x / e - i;
+  const v = z / e - j;
+  const P = (a, b) => gpuWaterFlowAt(field, null, (i + a) * e, (j + b) * e);
+  const [A, B, C, wb, wc] = u <= v
+    ? [P(0, 0), P(0, 1), P(1, 1), v - u, u]
+    : [P(0, 0), P(1, 1), P(1, 0), v, u - v];
+  const wa = 1 - wb - wc;
+  return Math.hypot(A[0] * wa + B[0] * wb + C[0] * wc,
+                    A[1] * wa + B[1] * wb + C[1] * wc);
+}
+
+/** The smallest |flow| anywhere the water DRAWS — inside the authored outline,
+ *  where `twInside(sd) > 0` — sampled every 25 cm along and across. */
+function drawnFlowMin(field, zcOf, half, level, x0 = 20, x1 = 240) {
+  let min = Infinity;
+  for (let x = x0; x <= x1; x += 0.25) {
+    for (let d = -half; d <= half; d += 0.25) {
+      const z = zcOf(x) + d;
+      if (z < 0 || z > (F1_ROWS - 1) * F1_BASE) continue;
+      min = Math.min(min, drawnFlow(field, x, z, level));
+    }
+  }
+  return min;
+}
+
+const R_FLOW = flowFieldOf(RIVER_ZC, () => 0, 3);
+// (a) the blurred lattice profile — the eight numbers of the hand table.
+checkEq('(a) the blurred |flow| on the lattice rows of the straight reach',
+  [0, 2, 4, 6, 8, 10, 12, 14].map((z) => Math.round(
+    Math.hypot(...gpuWaterFlowAt(R_FLOW, null, 100, z)) * 1e6) / 1e6),
+  [0.8, 1, 1, 1, 0.8, 0.6, 0.4, 0.2]);
+// (b) what the drawn triangle hands the fragment, at both capped levels.
+check('(b) level 0: the bank of the drawn band reads',
+  drawnFlow(R_FLOW, 100, 1, 0), 0.9, 1e-6);
+check('…and its middle reads the unit tangent', drawnFlow(R_FLOW, 100, 4, 0), 1,
+  1e-6);
+check('…the far bank, symmetrically', drawnFlow(R_FLOW, 100, 7, 0), 0.9, 1e-6);
+check('level 1 (the F1 cap): the bank reads', drawnFlow(R_FLOW, 100, 1, 1),
+  0.85, 1e-6);
+check('…and the middle still the unit tangent',
+  drawnFlow(R_FLOW, 100, 4, 1), 1, 1e-6);
+check('…the far bank', drawnFlow(R_FLOW, 100, 7, 1), 0.85, 1e-6);
+checkAbove('…so nothing the reach draws is below a half at level 0',
+  drawnFlowMin(R_FLOW, RIVER_ZC, 3, 0), 0.5);
+checkAbove('…nor at level 1', drawnFlowMin(R_FLOW, RIVER_ZC, 3, 1), 0.5);
+// (c) THE MEANDER of [18], where the tangent really turns and the medial axis
+//     of a bend is the thing the bake's blur exists for.
+const M_FLOW = flowFieldOf(MEANDER_ZC,
+  (x) => 4 * ((2 * Math.PI) / 128) * Math.cos((2 * Math.PI * x) / 128), 3);
+const M_MIN0 = drawnFlowMin(M_FLOW, MEANDER_ZC, 3, 0);
+const M_MIN1 = drawnFlowMin(M_FLOW, MEANDER_ZC, 3, 1);
+checkAbove('(c) the meander at level 0 never falls below a half', M_MIN0, 0.5);
+checkAbove('…nor at level 1', M_MIN1, 0.5);
+checkAbove('…and both are four orders above the shader\'s still threshold',
+  Math.min(M_MIN0, M_MIN1) / 1e-4, 1000);
+checkAbove('…the reach\'s minimum too', drawnFlowMin(R_FLOW, RIVER_ZC, 3, 1) / 1e-4,
+  1000);
+// (d) RED — the same measurement WITHOUT the server's dilation ring, which is
+//     what a convicting field would look like. Rows 2, 4, 6 written only.
+const NAKED = flowFieldOf(RIVER_ZC, () => 0, 3, 0);
+checkEq('(d) RED: with no dilation ring the lattice profile collapses',
+  [0, 2, 4, 6, 8].map((z) => Math.round(
+    Math.hypot(...gpuWaterFlowAt(NAKED, null, 100, z)) * 1e6) / 1e6),
+  [0.4, 0.6, 0.6, 0.6, 0.4]);
+checkBelow('RED: …and the drawn bank falls under the half at level 1',
+  drawnFlow(NAKED, 100, 1, 1), 0.5);
+checkBelow('RED: …i.e. the threshold IS one this fixture can fail',
+  drawnFlowMin(NAKED, RIVER_ZC, 3, 1), 0.5);
+
+// ============================================================================
+// [24] THE DRIFT REACHES THE COMPILED FRAGMENT — the chain, end to end
+// ============================================================================
+// The numeric twins of `smoke_water_shade.mjs` [9] prove the drift arithmetic
+// carries a crest downstream. What no twin can see is a break in the CHAIN
+// between that arithmetic and the program the card runs: a `textureGrad` fed
+// some other coordinate, a `uTlodTime` bound to a second clock, an insertion
+// that stopped matching three's chunk name. So the whole path is pinned here as
+// TEXT, on `wetShader.fragmentShader` — the source three would compile — and
+// not on the generator's return value.
+console.log('\n[24] the drift chain reaches the compiled fragment');
+checkEq('the wet fragment declares the shared clock',
+  wetFrag.includes('uniform float uTlodTime;'), true);
+checkEq('…and it is bound to the ONE object the engine advances per frame',
+  wetShader.uniforms.uTlodTime === mats.surfaceTimeUniform, true);
+checkEq('the flowing branch takes sgn = −1 (downstream) and the still one +1',
+  wetFrag.includes('float sgn = still ? 1.0 : -1.0;'), true);
+checkEq('…and its speed is the kind\'s flow dial times the raster\'s factor',
+  wetFrag.includes('float sp = still ? speed : flowSpeed * len;'), true);
+checkEq('sheet A\'s sample coordinate carries the uTlodTime drift',
+  wetFrag.includes('vec2 uvA = twFrame( p / lamA + dirA * ( uTlodTime * sp '
+    + '* sgn / lamA ), ax, ay, aniso );'), true);
+checkEq('…sheet B\'s',
+  wetFrag.includes('vec2 uvB = twFrame( p / lamB + dirB * ( uTlodTime * sp '
+    + '* sgn / lamB ), ax, ay, aniso );'), true);
+checkEq('…and the streak ribbon\'s',
+  wetFrag.includes('vec2 uvC = twFrame( ( p + ax * ( uTlodTime * sp * sgn ) ) '
+    + '/ lamC, ax, ay, 8.0 );'), true);
+// …AND THOSE VERY COORDINATES ARE WHAT IS SAMPLED. A drift computed into a
+// variable nothing reads would pass every check above.
+checkEq('the wave map is fetched AT uvA, uvB and uvC',
+  wetFrag.includes('vec3 nA = textureGrad( uTlodWave, uvA,')
+  && wetFrag.includes('vec3 nB = textureGrad( uTlodWave, uvB,')
+  && wetFrag.includes('vec3 nC = textureGrad( uTlodWave, uvC,'), true);
+checkEq('…the three sheets become the ripple normal',
+  wetFrag.includes('vec3 n = normalize( nA + nB + nC * ( still ? 0.0 : 0.35 ) );'),
+  true);
+checkEq('…which the measurement stage stores in twN',
+  wetFrag.includes('twN = twRipple( vTlodXZ, gx, gy, max( look1.x, 0.05 ), '
+    + 'look1.y, look1.z );'), true);
+checkEq('…and the shading normal really carries twN into the lighting',
+  wetFrag.includes('vec3 nw = normalize( macro + ( twN - up ) * twS );')
+  && wetFrag.includes('normal = tlodWaterNormal();'), true);
+// The still branch is what a flow of (0, 0) falls into — the one state in which
+// nothing can drift downstream however fast the kind's dial is set. Pinned so a
+// report that reads STILL off the debug line knows what it is naming.
+checkEq('the still test is the 1e-4 the WATER line reports against',
+  wetFrag.includes('bool still = len < 1e-4;')
+  && wetFrag.includes('float len = length( vTlodFlow );'), true);
+checkEq('RED: and none of it reaches the dry program',
+  /uvA|twRipple|uTlodTime/.test(dryShader.fragmentShader), false);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

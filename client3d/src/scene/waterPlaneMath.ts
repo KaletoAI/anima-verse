@@ -63,22 +63,64 @@ const WATER_DEPTH_DEFAULT_M = 2.0;
  * the ¾ of the default lake, frozen — and a 6 m wide river with two 1 m banks
  * never reached it, so it stayed see-through to its own middle while the lake
  * next to it looked right. The fraction is the law; the metres are the area's.
+ *
+ * SINCE 2026-08-25 THE FRACTION HAS A FLOOR UNDER IT
+ * ({@link WATER_MIN_SEE_DEPTH_M}): the answer is `max(1 m, ¾ · depth)`, so a
+ * water shallower than 4/3 m keeps a readable bed to the metre mark whatever
+ * its own ramp does. The fraction still decides every water deeper than that.
  */
 const WATER_OPAQUE_FRACTION = 0.75;
 
 /**
- * How deep THIS water has to be before it is fully drawn, in metres (W4b).
+ * HOW DEEP A WATER HAS TO BE BEFORE IT MAY HIDE ITS BED AT ALL, in metres —
+ * the FLOOR under the fraction above (user rule, 2026-08-25: "the bed must stay
+ * visible down to at least a metre of depth").
+ *
+ * ── WHY A FLOOR AND NOT A SMALLER FRACTION ──────────────────────────────────
+ * The fraction is a statement about the SHORE RAMP: ¾ of the bed is reached at
+ * the same fraction of whatever ramp the author drew, which is what makes a
+ * pond and a lake fade in over the same share of their own bank (see
+ * {@link WATER_OPAQUE_FRACTION}). Lowering it would move that ramp for EVERY
+ * water, deep ones included, and the deep ones are not the complaint — a lake
+ * that goes opaque at 1.5 m reads right. What is wrong is the SHALLOW end: a
+ * river 1.2 m deep went opaque at 0.9 m, i.e. its bed was gone before a wading
+ * figure's waist, and its whole navigable middle was flat tint. A floor fixes
+ * exactly that case and leaves every water deeper than 4/3 m untouched.
+ *
+ * ── WHAT IT MOVES, AND WHAT IT DOES NOT ─────────────────────────────────────
+ *     bed  1.2 m (the seeded river)  ->  ¾ = 0.9   -> FLOORED to 1.0
+ *     bed  1.0 m                     ->  ¾ = 0.75  -> FLOORED to 1.0
+ *     bed  0.6 m (a pond)            ->  ¾ = 0.45  -> FLOORED to 1.0
+ *     bed  4/3 m (the break-even)    ->  ¾ = 1.0   -> 1.0, either rule
+ *     bed  2.0 m (the default lake)  ->  ¾ = 1.5   -> unchanged
+ *     bed  4.0 m                     ->  ¾ = 3.0   -> unchanged
+ *
+ * A water shallower than the floor therefore NEVER reaches full absorption: a
+ * 0.6 m pond tops out at `smoothstep(0.6 / 1.0)` = 0.648, so 35.2 % of its bed
+ * is still readable at its deepest point. That is the rule as decided — a
+ * shallow water is one you can see the bottom of — and not an oversight.
+ */
+export const WATER_MIN_SEE_DEPTH_M = 1.0;
+
+/**
+ * How deep THIS water has to be before it is fully drawn, in metres (W4b, with
+ * the see-through floor of 2026-08-25).
  *
  * `depthM` is the area's effective bed depth as the payload ships it
  * (`meta.water_depth_effective`, § A16.3 — the kind's default with the area's
  * override already applied, so this side never repeats that resolution). A
  * value that is not a positive finite number is not a depth: the default lake
  * answers instead, which is what every water looked like before W4b.
+ *
+ * `max(WATER_MIN_SEE_DEPTH_M, ¾ · depth)` — ONE home for the number, read by
+ * the look table (`waterShade.waterLookFrom`, which packs it into the lookup
+ * texture the fragment fetches) and by every smoke. Nothing else may spell the
+ * fraction or the floor.
  */
 export function waterOpaqueDepthM(depthM: unknown): number {
   const raw = Number(depthM);
   const depth = Number.isFinite(raw) && raw > 0 ? raw : WATER_DEPTH_DEFAULT_M;
-  return depth * WATER_OPAQUE_FRACTION;
+  return Math.max(WATER_MIN_SEE_DEPTH_M, depth * WATER_OPAQUE_FRACTION);
 }
 
 /** How deep the foam reaches, in metres. Half a metre is roughly where a
@@ -121,15 +163,19 @@ function smoothstep01(t: number): number {
  *     1.5   -> t = 1        -> 1
  *     2.0   -> clamped      -> 1
  *
- * …and for the seeded river (depth 1.2 -> band 0.9), the same six fractions of
- * the band, i.e. the same six answers 0.6 times as deep:
+ * …and for the seeded river (depth 1.2 -> ¾ = 0.9, FLOORED to the 1.0 m of
+ * {@link WATER_MIN_SEE_DEPTH_M}), the same six fractions of that band:
  *
- *     0.09  -> t = 0.1      -> 0.028
- *     0.18  -> t = 0.2      -> 0.104
- *     0.225 -> t = 0.25     -> 0.15625
- *     0.45  -> t = 0.5      -> 0.5
- *     0.675 -> t = 0.75     -> 0.84375
- *     0.9   -> t = 1        -> 1
+ *     0.1   -> t = 0.1      -> 0.028
+ *     0.2   -> t = 0.2      -> 0.104
+ *     0.25  -> t = 0.25     -> 0.15625
+ *     0.5   -> t = 0.5      -> 0.5
+ *     0.75  -> t = 0.75     -> 0.84375
+ *     1.0   -> t = 1        -> 1
+ *
+ * — the floor is worth 1/9 of a metre of readable bed at the deep end and, at
+ * the 0.5 m a wading figure stands in, 0.5 against the 0.58299 the ¾ rule gave:
+ * half the bed instead of 41.7 % of it.
  */
 export function waterShoreAlpha(depthM: number, opaqueDepthM: number): number {
   if (!Number.isFinite(depthM) || depthM <= 0) return 0;

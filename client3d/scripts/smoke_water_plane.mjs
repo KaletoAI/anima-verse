@@ -71,15 +71,23 @@
  *     depth 1.5   -> t = 1                             = 1
  *     depth 4.0   -> clamped                           = 1
  *
- * …and for the SEEDED RIVER (`water_depth_m` 1.2, band 0.9) the same six
- * fractions of the band, i.e. the same six answers at 0.6 times the depth:
+ * …and for the SEEDED RIVER (`water_depth_m` 1.2, so ¾ = 0.9 — FLOORED to the
+ * 1.0 m of `WATER_MIN_SEE_DEPTH_M`, the user's bed rule of 2026-08-25) the same
+ * six fractions of THAT band:
  *
- *     depth 0.09  -> t = 0.1                           = 0.028
- *     depth 0.18  -> t = 0.2                           = 0.104
- *     depth 0.225 -> t = 0.25                          = 0.15625
- *     depth 0.45  -> t = 0.5                           = 0.5
- *     depth 0.675 -> t = 0.75                          = 0.84375
- *     depth 0.9   -> t = 1                             = 1
+ *     depth 0.1   -> t = 0.1                           = 0.028
+ *     depth 0.2   -> t = 0.2                           = 0.104
+ *     depth 0.25  -> t = 0.25                          = 0.15625
+ *     depth 0.5   -> t = 0.5                           = 0.5
+ *     depth 0.75  -> t = 0.75                          = 0.84375
+ *     depth 1.0   -> t = 1                             = 1
+ *
+ * THE FLOOR IS A RULE, NOT A TWEAK: `max(1 m, ¾ · depth)`. The bed of a water
+ * has to stay readable down to at least a metre of depth, so every water
+ * shallower than 4/3 m opens its band to that metre and a water shallower than
+ * the metre — a 0.6 m pond — NEVER reaches full absorption at all
+ * (`3·0.36 − 2·0.216` = 0.648, so 35.2 % of its bed still shows at its
+ * deepest). Every water deeper than 4/3 m is untouched: the lake's 1.5 m stands.
  *
  * WHY ¾. The E1 carve reaches `water_depth_m` over a `shore_ramp_m` ramp by the
  * very same smoothstep, so ¾ of the depth is `smoothstep = 0.75`, i.e.
@@ -579,6 +587,7 @@ const [W, walk, mats] = await loadPure('client3d/src/scene/waterPlaneMath.ts',
                                        'client3d/src/game/walk.ts',
                                        'packages/scene-render/src/materials.ts');
 const { WATER_EDGE_FADE_M, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
+  WATER_MIN_SEE_DEPTH_M,
   waterEdgeFade, waterFoam, waterLevelAt, waterOpaqueDepthM,
   waterProfileOf, waterShoreAlpha } = W;
 const { floatRootY, groundWaterLevel } = walk;
@@ -702,8 +711,15 @@ check('a bed ABOVE the water line is not water',
 console.log('\n[2a] W4b: the band is the AREA\'s own ¾, not one constant');
 /** The seeded river kind: 1.2 m of bed, so 0.9 m of it are opaque. */
 const RIVER_BAND = waterOpaqueDepthM(1.2);
-check('a 1.2 m river is fully drawn at 0.9 m', RIVER_BAND, 0.9);
-check('a 0.6 m pond at 0.45 m', waterOpaqueDepthM(0.6), 0.45);
+check('a 1.2 m river is fully drawn at 1.0 m — ¾ is 0.9, the FLOOR wins',
+  RIVER_BAND, 1.0);
+check('a 0.6 m pond at the same floor, not at its own 0.45 m',
+  waterOpaqueDepthM(0.6), 1.0);
+check('4/3 m is the break-even — ¾ of it IS the floor',
+  waterOpaqueDepthM(4 / 3), 1.0, 1e-15);
+check('…and a hair deeper the fraction takes over again',
+  waterOpaqueDepthM(1.4), 1.05, 1e-15);
+check('the floor itself', WATER_MIN_SEE_DEPTH_M, 1.0);
 check('the deepest lake the bake allows (20 m) at 15 m',
   waterOpaqueDepthM(20), 15);
 check('a payload without the field falls back to the default lake',
@@ -712,28 +728,39 @@ check('…and so does junk in it', waterOpaqueDepthM('deep'), 1.5);
 check('…and a depth of zero, which is no water at all',
   waterOpaqueDepthM(0), 1.5);
 check('a numeric STRING is a number — the payload is JSON either way',
-  waterOpaqueDepthM('1.2'), 0.9);
-// The same six fractions of the band as the lake's table above, at 0.6 times
-// the depth — the law is the fraction, the metres are the area's.
-check('river alpha at depth 0.09', waterShoreAlpha(0.09, RIVER_BAND), 0.028);
-check('river alpha at depth 0.18', waterShoreAlpha(0.18, RIVER_BAND), 0.104);
-check('river alpha at depth 0.225', waterShoreAlpha(0.225, RIVER_BAND),
+  waterOpaqueDepthM('1.2'), 1.0);
+// The same six fractions of the band as the lake's table above — the law is
+// the fraction (with the metre floor under it), the metres are the area's.
+check('river alpha at depth 0.1', waterShoreAlpha(0.1, RIVER_BAND), 0.028);
+check('river alpha at depth 0.2', waterShoreAlpha(0.2, RIVER_BAND), 0.104);
+check('river alpha at depth 0.25', waterShoreAlpha(0.25, RIVER_BAND),
   0.15625);
-check('river alpha at depth 0.45 — half, exactly',
-  waterShoreAlpha(0.45, RIVER_BAND), 0.5);
-check('river alpha at depth 0.675', waterShoreAlpha(0.675, RIVER_BAND),
+check('river alpha at depth 0.5 — half, exactly',
+  waterShoreAlpha(0.5, RIVER_BAND), 0.5);
+check('river alpha at depth 0.75', waterShoreAlpha(0.75, RIVER_BAND),
   0.84375);
-check('river alpha at depth 0.9 — the band is through',
-  waterShoreAlpha(0.9, RIVER_BAND), 1);
+check('river alpha at depth 1.0 — the band is through',
+  waterShoreAlpha(1.0, RIVER_BAND), 1);
 check('river alpha at its full 1.2 m — clamped',
   waterShoreAlpha(1.2, RIVER_BAND), 1);
 check('RED: the OLD constant band drew that same deepest water at only',
   waterShoreAlpha(0.9, 1.5), 0.648);
 check('…which is the "see-through in the middle of the river" finding, in one '
   + 'number: the river gains this much opacity',
-  waterShoreAlpha(0.9, RIVER_BAND) - waterShoreAlpha(0.9, 1.5), 0.352);
-check('the pond IS fully drawn against its OWN band',
-  waterShoreAlpha(0.45, waterOpaqueDepthM(0.6)), 1);
+  waterShoreAlpha(0.9, RIVER_BAND) - waterShoreAlpha(0.9, 1.5), 0.324,
+  1e-15);
+// THE FLOOR'S OWN RED PROBE (the bed rule, 2026-08-25). Under the bare ¾ rule
+// the river went opaque at 0.9 m, i.e. its bed was gone at the depth a wading
+// figure stands waist-deep in; with the floor 0.5 m of it still shows half the
+// bed. The two numbers at 0.5 m of depth:
+check('RED: at half a metre the ¾ rule had already hidden 0.58299 of the bed',
+  waterShoreAlpha(0.5, 0.9), 0.5829903978052126, 1e-15);
+check('…and the floored band hides exactly half of it',
+  waterShoreAlpha(0.5, RIVER_BAND), 0.5);
+check('a 0.6 m pond NEVER reaches full absorption — its own deepest point',
+  waterShoreAlpha(0.6, waterOpaqueDepthM(0.6)), 0.648, 1e-15);
+check('…i.e. this much of its bed is readable everywhere in it',
+  1 - waterShoreAlpha(0.6, waterOpaqueDepthM(0.6)), 0.352, 1e-15);
 
 console.log('\n[2b] the foam band');
 check('foam at depth 0', waterFoam(0), 1);
@@ -749,13 +776,13 @@ check('the river\'s rim carries the same foam as the lake\'s',
   waterFoam(0), 1);
 check('…and at 0.3 m the foam is the same half-gone lace over both',
   waterFoam(0.3), 0.5);
-// 0.3 m over the river's 0.9 m band is t = 1/3 -> 3·(1/9) − 2·(1/27) = 7/27 =
-// 0.259259…, against the lake's t = 0.2 -> 0.104.
+// 0.3 m over the river's 1.0 m band is t = 0.3 -> 3·0.09 − 2·0.027 = 0.216,
+// against the lake's t = 0.2 -> 0.104.
 check('…while the ramp under it is already further along on the river',
-  waterShoreAlpha(0.3, RIVER_BAND), 7 / 27, 1e-15);
+  waterShoreAlpha(0.3, RIVER_BAND), 0.216, 1e-15);
 check('…which is this much more of the bed hidden than over the lake',
   waterShoreAlpha(0.3, RIVER_BAND) - waterShoreAlpha(0.3, LAKE_BAND),
-  7 / 27 - 0.104, 1e-15);
+  0.112, 1e-15);
 
 // ── [2d] the rim is faded, not merely discarded ────────────────────────────
 // The foam is FULL at depth 0 and whitens the light by 0.6 there, so without a
@@ -905,8 +932,8 @@ check('…i.e. 1.47 m of water standing on ground that is at 0 — the mound',
 // The shore reads the DEPTH under the pixel, so the same two probes decide how
 // opaque the surface is (docstring [2], `waterOpaqueDepthM` = ¾ of the bed
 // depth). Upstream the bed is 1.0 m under a level of 3.0, i.e. the full depth.
-check('the opaque depth of this river is ¾ of its 1.0 m bed',
-  waterOpaqueDepthM(CLIFF_META.water_depth_effective), 0.75, 1e-12);
+check('the opaque depth of this river is the 1 m floor, not ¾ of its 1.0 m bed',
+  waterOpaqueDepthM(CLIFF_META.water_depth_effective), 1.0, 1e-12);
 check('upstream the water is its full 1.0 m deep, i.e. fully opaque',
   waterShoreAlpha(3.0 - 2.0,
     waterOpaqueDepthM(CLIFF_META.water_depth_effective)), 1, 1e-12);
@@ -992,12 +1019,12 @@ checkEq('no lake, no level', groundWaterLevel(null, 'open'), null);
 console.log('\n[7] the shore measures the LOCAL level, and needed no change');
 // The depth is `level(x, z) − h(x, z)` at every point — the LOCAL level, from
 // the profile (gameplay) or from the raster the server baked out of it
-// (render). The fixture river's own band: 1.0 m of bed -> fully drawn at
-// 0.75 m, so its constant 1.0 m of depth is OPAQUE — under the old lake band it
-// was 20/27.
+// (render). The fixture river's own band: 1.0 m of bed -> ¾ is 0.75 m, floored
+// to the 1.0 m of `WATER_MIN_SEE_DEPTH_M`, so its constant 1.0 m of depth is
+// OPAQUE at exactly its deepest point — under the old lake band it was 20/27.
 const FIX_BAND = waterOpaqueDepthM(RIVER_META.water_depth_effective);
-check('the fixture river is 1.0 m deep, so it is drawn fully at 0.75 m',
-  FIX_BAND, 0.75);
+check('the fixture river is 1.0 m deep, and the floor draws it fully at 1.0 m',
+  FIX_BAND, 1.0);
 check('the alpha over the river is 1 at every x — it is deeper than its band',
   Math.min(...[20, 26, 50, 74, 80].map(
     (x) => waterShoreAlpha(level(x) - bed(x), FIX_BAND))),

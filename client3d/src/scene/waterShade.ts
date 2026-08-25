@@ -36,9 +36,17 @@
  * shows its sand, a metre and a half of it does not.
  *
  * `twS`, the SURFACE share, answers IS THERE A WATER SURFACE OVER THIS PIXEL —
- * the rim ramp times the shore gate, with no depth in it at all. It drives
+ * the rim ramp times the shore gate, times the shallow ramp. It drives
  * everything that belongs to the interface rather than to the water column:
  * the roughness, the metalness, the ripple's tilt and the fresnel share of sky.
+ *
+ * THE SHALLOW RAMP IS THE CORRECTION OF 2026-08-25 (`waterShallowRamp`). H2 as
+ * first written gave the surface terms their FULL say at every depth, and a
+ * full sky wash plus a full ripple tilt over a bed the absorption has barely
+ * touched is a surface the bed cannot be read through — "the bed is not
+ * visible down to a metre". The ramp floors the shallow end at
+ * `WATER_SHALLOW_SURFACE_MIN` instead of at 0, so a film of water keeps a third
+ * of its sheen (H2's point) and the bed texture wins underneath (the new one).
  *
  * THEY USED TO BE ONE NUMBER, and that was the defect. Coupling the surface
  * terms to the depth curve made shallow water 100 % bed albedo AND 0 % water
@@ -242,30 +250,68 @@ export function waterAbsorb(depthM: number, opaqueDepthM: number,
  * the surface itself.
  *
  * ── WHAT IT IS ──────────────────────────────────────────────────────────────
- * The shader's `rim`, and nothing else: the edge ramp that keeps the waterline
- * from stepping ({@link waterEdgeFade}, one pixel of depth) times the shore
- * gate that says the pixel is inside the authored outline
- * ({@link waterInside}). Both factors are 0 at the waterline and 1 a finger's
- * width in, so the surface fades in over the same band the geometry lifts over
- * (finding G1) — no line, no step, and no depth anywhere in it.
+ * The shader's `rim` — the edge ramp that keeps the waterline from stepping
+ * ({@link waterEdgeFade}, one pixel of depth) times the shore gate that says
+ * the pixel is inside the authored outline ({@link waterInside}) — TIMES the
+ * shallow ramp ({@link waterShallowRamp}). Rim and gate are both 0 at the
+ * waterline and 1 a finger's width in, so the surface fades in over the same
+ * band the geometry lifts over (finding G1); the shallow ramp is what keeps a
+ * centimetre of water from being painted with a whole surface over a bed that
+ * is arithmetically still there (the bed rule of 2026-08-25).
  *
  * Hand values for a rim ramp at its floor (`edgeM` = 0.05 m) well inside the
- * outline (`inside` = 1):
+ * outline (`inside` = 1), on the DEFAULT LAKE (opaque depth 1.5 m), with
+ * `shore = 3t² − 2t³` at `t = depth/1.5` and `ramp = 0.35 + 0.65·shore`:
  *
- *     depth 0.025 -> 0.5   (half a floor-pixel: the ramp, not the depth)
- *     depth 0.05  -> 1
- *     depth 0.30  -> 1
- *     depth 1.50  -> 1
+ *     depth 0.025 -> rim 0.5 · ramp 0.35053565 = 0.17526782
+ *     depth 0.1   -> rim 1   · ramp 0.35828148 = 0.35828148
+ *     depth 0.5   -> rim 1   · ramp 0.51851852 = 0.51851852
+ *     depth 1.0   -> rim 1   · ramp 0.83148148 = 0.83148148
+ *     depth 1.5   -> rim 1   · ramp 1          = 1
  *
- * — i.e. from 5 cm of water on, the pixel is a water surface in FULL, however
- * shallow it is. Compare {@link waterAbsorb} on the default lake at the same
- * three depths: 0.00325926, 0.104, 1.
+ * — the pixel is still a water SURFACE at every depth, but a third of one where
+ * the bed shows through almost whole. Compare {@link waterAbsorb} on the same
+ * lake at the same depths: 4.1204e-4, 0.0127407, 0.2592593, 0.7407407, 1.
  */
-export function waterSurface(depthM: number, edgeM: number,
-                             inside: number): number {
+export function waterSurface(depthM: number, edgeM: number, inside: number,
+                             opaqueDepthM: number): number {
   if (!(depthM > 0)) return 0;
   const g = !Number.isFinite(inside) ? 0 : inside <= 0 ? 0 : inside >= 1 ? 1 : inside;
-  return waterEdgeFade(depthM, edgeM) * g;
+  return waterEdgeFade(depthM, edgeM) * g
+    * waterShallowRamp(depthM, opaqueDepthM);
+}
+
+/**
+ * HOW MUCH SURFACE A SHALLOW PIXEL KEEPS, {@link WATER_SHALLOW_SURFACE_MIN}…1 —
+ * the ramp the user's bed rule of 2026-08-25 puts under every term of
+ * {@link waterSurface}.
+ *
+ * ── THE DEFECT IT ANSWERS ───────────────────────────────────────────────────
+ * H2 was right that the surface terms must not ride the DEPTH curve — a film of
+ * water is still a mirror — and it went to the other extreme: since f6671aec
+ * the sky share (0.55 · fresnel) and the full ripple tilt ride `twS` at EVERY
+ * depth, so a centimetre of water over a painted bed was drawn with a whole
+ * water surface on top of it. The bed is then arithmetically there (the
+ * absorption is near 0) and optically not: the sky wash and the ripple's own
+ * shading normal carry the pixel. That is "the bed is not visible" — the
+ * complaint is about the SURFACE terms, not about the tint.
+ *
+ * ── THE CURVE, AND WHY IT IS THE SHORE CURVE AGAIN ──────────────────────────
+ * `mix(MIN, 1, smoothstep(0, opaqueDepth, depth))`, i.e. the very
+ * `waterShoreAlpha` the absorption uses — no second curve and no second
+ * constant to keep in step. It is worth restating what that does NOT do: the
+ * shallow end is floored at {@link WATER_SHALLOW_SURFACE_MIN} rather than
+ * running to 0, so H2's finding survives — a hand's width of water still has a
+ * third of its sheen, a third of its sky and a third of its ripple tilt, which
+ * is enough to read as water and far from the 0.33 % that read as sand.
+ *
+ * `twS >= twA` STILL HOLDS, which the shader relies on (`twA = shore · rim`,
+ * `twS = ramp · rim`): `0.35 + 0.65·s >= s` for every `s` in 0…1, with equality
+ * only at s = 1 — where the bed is gone and both are the rim.
+ */
+export function waterShallowRamp(depthM: number, opaqueDepthM: number): number {
+  const s = waterShoreAlpha(depthM, Math.max(opaqueDepthM, 1e-3));
+  return WATER_SHALLOW_SURFACE_MIN + (1 - WATER_SHALLOW_SURFACE_MIN) * s;
 }
 
 /**
@@ -279,6 +325,35 @@ export function waterSurface(depthM: number, edgeM: number,
  * 0.15 appears here, as the floor of the cover the whitening is multiplied by.
  */
 export const WATER_FOAM_MIN_COVER = 0.15;
+
+/**
+ * HOW MUCH SURFACE THE THINNEST FILM OF WATER KEEPS, 0…1 — the floor of
+ * {@link waterShallowRamp} and the one number the bed rule of 2026-08-25 adds
+ * to this file.
+ *
+ * IT IS A COMPROMISE BETWEEN TWO MEASURED FINDINGS and is written down as such:
+ *
+ *  * H2 (2026-08-25, "warum kann es nicht halbtransparent sein?") — at 0 the
+ *    shallow end is EXACTLY the picture H2 deleted: a centimetre of water with
+ *    ground roughness, no sky and no ripple, i.e. sand with a blue cast.
+ *  * The bed rule (2026-08-25, same day, second report) — at 1 the surface
+ *    terms are full at every depth, and a sky share of 0.275 plus the whole
+ *    ripple tilt over a bed the absorption has barely touched is a surface the
+ *    bed cannot be read through. That is where the picture stands today.
+ *
+ * A THIRD is the smallest share that still reads as a surface at a glance and
+ * the largest that still lets a textured bed win under it. At 10 cm of the
+ * default lake the ramp is 0.35828148, so a fresnel of 0.5 washes the pixel
+ * `0.275 · 0.35828148` = 0.09852741 of the way to the sky colour instead of
+ * 0.275 — under a tenth — while the ripple keeps a tilt of the same third,
+ * which is enough for the crests to travel visibly (H1's other half).
+ *
+ * IT IS NOT A DEPTH IN METRES, deliberately: the curve it floors is the
+ * water's OWN shore curve, so a deep water reaches full surface at its own
+ * opaque depth and a shallow one never quite does — the same law the
+ * absorption follows, and one constant instead of two.
+ */
+export const WATER_SHALLOW_SURFACE_MIN = 0.35;
 
 /**
  * HOW MUCH FOAM whitens the pixel, 0…1 — full at the waterline, gone at
@@ -466,13 +541,14 @@ export function waterTintBlend(bed: readonly [number, number, number],
  * (`ripple = normalize(0.3, 1, 0)` = (0.28734789, 0.95782629, 0)), i.e.
  * `ripple − up` = (0.28734789, −0.04217371, 0):
  *
- *   absorb 0.00325926, surface 1 (5 cm of lake)
+ *   absorb 0.00325926, surface 1 (5 cm of lake's absorption, surface at full —
+ *   the shallow ramp scales the SECOND argument, never this arithmetic)
  *     macro = (0.44575601, 0.89477128, 0)
  *     sum   = (0.73310390, 0.85259757, 0), |sum| = 1.12443939
  *     n     = (0.65197280, 0.75824235, 0)  — 14.1255° off the bare bank
  *     (the OLD `mix(ground, ripple, absorb)` gave 0.031998° — the ripple had
  *      0.33 % of its say, which is why nothing on a shore ever moved)
- *   absorb 1, surface 1 (1.5 m of lake)
+ *   absorb 1, surface 1 (1.5 m of lake — where the ramp is 1 too)
  *     n     = ripple, exactly
  *   surface 0
  *     n     = ground, exactly
@@ -693,10 +769,13 @@ ${waterSdGlsl()}${waterGateGlsl()}${waterKindGlsl()}
 // TWO SHARES, NOT ONE (finding H2, 2026-08-25). \`twA\` is HOW MUCH OF THE BED
 // IS GONE — the depth curve — and it drives the COLOUR alone. \`twS\` is HOW
 // MUCH OF THIS PIXEL IS A WATER SURFACE — the rim ramp times the shore gate,
-// with no depth in it at all — and it drives everything that belongs to the
-// surface: the roughness, the metalness, the ripple's tilt and the fresnel
-// share of sky. \`twS >= twA\` everywhere by construction (twA = shore · twS,
-// shore in 0…1). The TS twins are \`waterAbsorb\` and \`waterSurface\`.
+// times the SHALLOW RAMP (the bed rule of the same day) — and it drives
+// everything that belongs to the surface: the roughness, the metalness, the
+// ripple's tilt and the fresnel share of sky. The shallow ramp never falls
+// below \`WATER_SHALLOW_SURFACE_MIN\`, so H2's answer survives: a film of water
+// is still a surface, at a third of one. \`twS >= twA\` everywhere by
+// construction (twA = shore·rim, twS = (0.35 + 0.65·shore)·rim). The TS twins
+// are \`waterAbsorb\` and \`waterSurface\`.
 float twA;
 float twS;
 float twFoam;
@@ -840,11 +919,19 @@ void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
   vec4 look1 = texelFetch( uTlodWaterLook, ivec2( 1, layer ), 0 );
   vec4 look2 = texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 );
   float shore = twSmooth( d / max( look1.w, 1e-3 ) );
-  // THE SURFACE SHARE is the rim itself: a pixel inside the outline with water
-  // over it IS a water surface, however thin the film (finding H2). The
-  // ABSORPTION is that share narrowed by the depth curve — how much of the bed
-  // has gone. Everything below picks one of the two on purpose.
-  twS = rim;
+  // THE SURFACE SHARE is the rim, RAMPED BY THE SHALLOW CURVE (the bed rule of
+  // 2026-08-25): a pixel inside the outline with water over it IS a water
+  // surface however thin the film (finding H2), but a film gets a THIRD of one,
+  // not a whole one — with the whole one, the sky wash and the ripple's tilt
+  // carry a pixel whose bed the absorption has barely touched, and the bed
+  // cannot be read through them. The curve is \`shore\` itself, so there is no
+  // second curve and no second constant to keep in step; the TS twin is
+  // \`waterShallowRamp\`.
+  //
+  // THE ABSORPTION is the rim narrowed by that same depth curve — how much of
+  // the bed has gone. Everything below picks one of the two on purpose, and
+  // \`twS >= twA\` still holds (0.35 + 0.65·s >= s for s in 0…1).
+  twS = rim * mix( ${WATER_SHALLOW_SURFACE_MIN}, 1.0, shore );
   twA = shore * rim;
   // THE FOAM, and the COVER it is multiplied by — the mirror's own alpha, which
   // an opaque ground has nowhere else to put. See waterFoamAt: without it a
@@ -915,6 +1002,11 @@ vec3 tlodWaterNormal() {
 // property of the INTERFACE, not of what stands under it. On the default lake
 // at 5 cm the old coupling gave a sky share of 0.00089630 against 0.275 — i.e.
 // none, which is precisely how shallow water came to read as land.
+//
+// …AND twS CARRIES THE SHALLOW RAMP, which is the other half of the same
+// balance (the bed rule of 2026-08-25). At 10 cm of that lake the share is
+// 0.275 · 0.35828148 = 0.09852741: a tenth of the way to the sky, not a
+// quarter, so the bed's own texture is still what the eye reads there.
 void tlodWaterOut( inout vec3 outgoingLight, vec3 n, vec3 viewPos ) {
   if ( twS <= 0.0 && twFoam <= 0.0 ) return;
   float fres = pow( 1.0 - clamp( dot( normalize( viewPos ), n ), 0.0, 1.0 ), 3.0 );
