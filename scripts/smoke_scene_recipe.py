@@ -106,14 +106,20 @@ def walls_of(sc: dict, room_id: str) -> list:
 
 
 def is_full(w: dict) -> bool:
-    """Does this piece run the WHOLE height of its wall?
+    """Is this a SOLID piece that runs the whole height of its wall?
 
     Two forms, both derived by hand from § A16.9: on storey 0 a wall foot is
     skirted, so a full piece is WALL_H + SINK tall; on a declared storey the
     plate is still under the foot and it is WALL_H. Everything else is a band
-    in the wall — a window's sill or head, its glass, or the LINTEL over a
-    door (finding 2026-08-25).
+    in the wall — a window's sill or head, its glass, the LINTEL over a door
+    or the door's own LEAF (findings 2026-08-25).
+
+    The FLAGS come first, because a band can be as tall as the wall: a door
+    whose height nobody authored reaches the top, so its leaf measures exactly
+    WALL_H and would otherwise pass for a solid run.
     """
+    if w.get("glass") or w.get("leaf") or w.get("lintel"):
+        return False
     return near(w["height"], WALL_H + SINK) or near(w["height"], WALL_H)
 
 
@@ -331,10 +337,13 @@ def test_room_walls() -> None:
     check("wall top = max(0.6, storey − 0.15) over the storey floor",
           all(near(w["base_y"] + w["height"], WALL_H) or w.get("glass")
               or w["base_y"] + w["height"] < WALL_H for w in a))
+    # A PANE is not a wall: a window's glass and a door's leaf are both
+    # 0.07 × 0.6 = 0.042 thick and carry no texture kind (§ B1).
+    panes = [w for w in a if w.get("glass") or w.get("leaf")]
     check("thickness 0.07 on solid walls",
-          all(near(w["thickness"], 0.07) for w in a if not w.get("glass")))
+          all(near(w["thickness"], 0.07) for w in a if w not in panes))
     check("the wall texture kind rides along",
-          all(w.get("texture_kind") == "plaster" for w in a if not w.get("glass")))
+          all(w.get("texture_kind") == "plaster" for w in a if w not in panes))
     # THE FOOT OF A STOREY-0 WALL IS THE TERRAIN (Ein Boden E5a) — and since
     # the finding round of 2026-08-21 it reaches SINK metres INTO it (§ A16.9).
     # The old room plate (0.10) it used to stand on is gone with every other
@@ -389,18 +398,22 @@ def test_room_walls() -> None:
 
     # THE DOOR, edge 2 of room "a" — (0, −1) → (−4, −1), u = (−1, 0), 4 m
     # long. Door at 0.5, width_m 1.0 → span [1.5, 2.5] → world x −1.5 … −2.5.
-    # Since the lintel (finding 2026-08-25) that edge carries THREE pieces,
-    # derived exactly like a window's:
+    # Since the lintel and the leaf (findings 2026-08-25) that edge carries
+    # FOUR pieces, derived exactly like a window's:
     #   solid   x  0.0 … −1.5   foot −SINK, height WALL_H + SINK
     #   solid   x −2.5 … −4.0   foot −SINK, height WALL_H + SINK
     #   LINTEL  x −1.5 … −2.5   foot height_m 2.1, height 2.85 − 2.1 = 0.75
-    # and NO glass — a door is a hole, not a pane.
+    #   LEAF    x −1.5 … −2.5   foot 0.00 (the floor line, NO skirt),
+    #                           height 2.1 = the clear opening, 0.042 thick
+    # and NO glass — a door's pane is its leaf, not a window band.
     south = [w for w in a if near(w["from"][1], -1.0) and near(w["to"][1], -1.0)]
     solid_s = sorted([w for w in south if is_full(w)],
                      key=lambda w: -w["from"][0])
-    lintel_s = [w for w in south if not is_full(w)]
-    check("a door is 2 solids + its lintel, no glass",
-          len(south) == 3 and len(solid_s) == 2 and len(lintel_s) == 1
+    lintel_s = [w for w in south if w.get("lintel")]
+    leaf_s = [w for w in south if w.get("leaf")]
+    check("a door is 2 solids + its lintel + its leaf, no glass",
+          len(south) == 4 and len(solid_s) == 2 and len(lintel_s) == 1
+          and len(leaf_s) == 1
           and not [w for w in south if w.get("glass")],
           str([(w["from"], w["to"], w["base_y"], w["height"])
                for w in south]))
@@ -427,14 +440,53 @@ def test_room_walls() -> None:
     check("...the window's head and pane stay unflagged",
           all(not w.get("lintel") for w in north),
           str([(w["base_y"], w.get("lintel")) for w in north]))
+    # THE DOOR LEAF (user decision 2026-08-25) — the door's own pane, derived
+    # the way the glass band is: it fills the CLEAR opening from the floor
+    # line (0.00, NOT the skirted −0.14: the leaf is the door, not a wall
+    # standing in the terrain) to the door's height 2.1, and it is as thin as
+    # the glass — WALL_THICKNESS 0.07 × PANE_THICKNESS_FACTOR 0.6 = 0.042.
+    check("the leaf fills the gap, x −1.5 … −2.5",
+          len(leaf_s) == 1 and near(leaf_s[0]["from"][0], -1.5)
+          and near(leaf_s[0]["to"][0], -2.5),
+          str([[leaf_s[0]["from"], leaf_s[0]["to"]]] if leaf_s else None))
+    check("...from the FLOOR LINE 0.00 to the door's head 2.1 — no skirt",
+          len(leaf_s) == 1 and near(leaf_s[0]["base_y"], 0.0)
+          and near(leaf_s[0]["height"], 2.1),
+          str([leaf_s[0]["base_y"], leaf_s[0]["height"]] if leaf_s else None))
+    check("...as thin as a glass pane (0.07 × 0.6) and untextured",
+          len(leaf_s) == 1 and near(leaf_s[0]["thickness"], 0.042)
+          and "texture_kind" not in leaf_s[0], str(leaf_s))
+    check("RED: the leaf is NOT skirted — no foot at −0.14 and no 2.24 height",
+          len(leaf_s) == 1 and not near(leaf_s[0]["base_y"], -SINK)
+          and not near(leaf_s[0]["height"], 2.1 + SINK), str(leaf_s))
+    check("the leaf says it is one; nothing else does",
+          len(leaf_s) == 1 and leaf_s[0].get("leaf") is True
+          and [w for w in a if w.get("leaf")] == leaf_s,
+          str([(w["base_y"], w.get("leaf")) for w in a if w.get("leaf")]))
+    check("...and it is no lintel, and the lintel is no leaf",
+          not lintel_s[0].get("leaf") and not leaf_s[0].get("lintel"),
+          str([lintel_s[0].get("leaf"), leaf_s[0].get("lintel")]))
+    # A PASSAGE is an authored opening WITHOUT a door: same hole, same lintel,
+    # but nothing in it — a leaf there would state a door nobody drew.
+    passage = scene_recipe.compose_scene(door_fixture(a_openings=[
+        {"edge": 2, "at": 0.5, "type": "passage", "width_m": 1.0,
+         "height_m": 2.1, "to": "outside"}]), plan_width_m=PLAN_W)
+    p_south = [w for w in walls_of(passage, "a")
+               if near(w["from"][1], -1.0) and near(w["to"][1], -1.0)]
+    check("a PASSAGE keeps its lintel and stays empty — 3 pieces, no leaf",
+          len(p_south) == 3
+          and len([w for w in p_south if w.get("lintel")]) == 1
+          and not [w for w in passage["walls"] if w.get("leaf")],
+          f"{len(p_south)} pieces, "
+          f"{len([w for w in passage['walls'] if w.get('leaf')])} leaves")
     check("RED: no door gap reaches the top of the wall any more",
           not [w for w in a if is_full(w)
                and near(w["from"][1], -1.0) and near(w["to"][1], -1.0)
                and near(abs(w["to"][0] - w["from"][0]), 1.0)],
           str([[w["from"], w["to"]] for w in south]))
-    # 4 edges: north 2 solids + sill + head + glass = 5, south 2 + lintel = 3,
-    # east 1, west 1 → 10.
-    check("10 wall segments in total for the room", len(a) == 10, str(len(a)))
+    # 4 edges: north 2 solids + sill + head + glass = 5, south 2 + lintel +
+    # leaf = 4, east 1, west 1 → 11.
+    check("11 wall segments in total for the room", len(a) == 11, str(len(a)))
     check("outward normals point away from the room (north edge → −z)",
           all(near(w["outward_normal"][1], -1.0) for w in north),
           str(north[0]["outward_normal"]))
@@ -447,16 +499,23 @@ def contour_pieces(sc: dict, level: int = 0) -> list:
 
 
 def edge_pieces(sc: dict, *, z: float = None, x: float = None,
-                level: int = 0, lintels: bool = False) -> list:
+                level: int = 0, lintels: bool = False,
+                leaves: bool = False) -> list:
     """The contour pieces lying on ONE straight contour line, sorted along the
     edge direction (the south edge runs −x, the east edge +z).
 
     By default only the pieces that run the WHOLE height of the shell, i.e.
     the runs a door's projection splits the line into. ``lintels=True`` gives
-    the pieces hanging OVER those holes instead (finding 2026-08-25).
+    the pieces hanging OVER those holes instead, ``leaves=True`` the DOOR
+    LEAVES filling them (findings 2026-08-25) — by their flags, never by a
+    height, so a full-height leaf cannot be mistaken for a run.
     """
     def want(w: dict) -> bool:
-        return is_full(w) is not lintels
+        if lintels:
+            return bool(w.get("lintel"))
+        if leaves:
+            return bool(w.get("leaf"))
+        return is_full(w)
     if z is not None:
         out = [w for w in contour_pieces(sc, level)
                if near(w["from"][1], z) and near(w["to"][1], z) and want(w)]
@@ -498,11 +557,12 @@ def test_contour_walls() -> None:
     # runs (5, 5) → (−5, 5), so that spot is t = 7 along it and the hole is
     # t 6.5 … 7.5 → world x −1.5 … −2.5.
     # THE HOLE ENDS AT THE DOOR (finding 2026-08-25): over it the contour
-    # carries on as a lintel, so the south line has 2 full runs + 1 lintel and
-    # the shell counts 3 + 3 = 6 pieces, not 5.
+    # carries on as a lintel, and since the user decision of the same day the
+    # hole itself carries the door's LEAF — so the south line has 2 full runs
+    # + 1 lintel + 1 leaf and the shell counts 3 + 4 = 7 pieces.
     sc = scene()
-    check("4 edges, the south one split by the door's projection + a lintel",
-          len(contour_pieces(sc)) == 6, str(len(contour_pieces(sc))))
+    check("4 edges, the south one split by the projection + lintel + leaf",
+          len(contour_pieces(sc)) == 7, str(len(contour_pieces(sc))))
     south = edge_pieces(sc, z=5.0)
     check("the projection opens the south line in TWO pieces", len(south) == 2,
           str([[w["from"], w["to"]] for w in south]))
@@ -541,6 +601,26 @@ def test_contour_walls() -> None:
           len(heads) == 1 and heads[0].get("lintel") is True
           and all(not w.get("lintel") for w in edge_pieces(sc, z=5.0)),
           str([w.get("lintel") for w in heads]))
+    # THE LEAF IN THAT SAME HOLE (user decision 2026-08-25) — this is what
+    # makes the door VISIBLE from outside: same x span as the lintel, from the
+    # shell's floor line 0.00 (no skirt) up to the door's head 2.1, 0.042
+    # thick and untextured, so the shell's `wall_kind` cannot paint over it.
+    door_leaves = edge_pieces(sc, z=5.0, leaves=True)
+    check("the contour carries the DOOR LEAF in the hole",
+          len(door_leaves) == 1 and near(door_leaves[0]["from"][0], -1.5)
+          and near(door_leaves[0]["to"][0], -2.5),
+          str([[w["from"], w["to"]] for w in door_leaves]))
+    check("...from 0.00 to 2.1, 0.042 thick, no texture kind",
+          len(door_leaves) == 1 and near(door_leaves[0]["base_y"], 0.0)
+          and near(door_leaves[0]["height"], 2.1)
+          and near(door_leaves[0]["thickness"], 0.042)
+          and "texture_kind" not in door_leaves[0], str(door_leaves))
+    check("RED: the hole is no longer empty — leaf top meets the lintel foot",
+          len(door_leaves) == 1 and len(heads) == 1
+          and near(door_leaves[0]["base_y"] + door_leaves[0]["height"],
+                   heads[0]["base_y"]),
+          f"{door_leaves[0]['base_y'] + door_leaves[0]['height']} vs "
+          f"{heads[0]['base_y']}" if door_leaves and heads else "—")
     # A door as TALL as the wall leaves nothing over it — the old picture,
     # and the proof that the lintel is the door's number and not a constant.
     tall = scene_recipe.compose_scene(door_fixture(a_openings=[
@@ -550,6 +630,12 @@ def test_contour_walls() -> None:
           not edge_pieces(tall, z=5.0, lintels=True)
           and len(edge_pieces(tall, z=5.0)) == 2,
           str(len(edge_pieces(tall, z=5.0, lintels=True))))
+    # …but it still gets its LEAF, and that one is as tall as the wall: the
+    # hole is the door, so the door fills it — 0.00 … 2.85.
+    tall_leaf = edge_pieces(tall, z=5.0, leaves=True)
+    check("...but the hole is still filled, 0.00 … WALL_H",
+          len(tall_leaf) == 1 and near(tall_leaf[0]["base_y"], 0.0)
+          and near(tall_leaf[0]["height"], WALL_H), str(tall_leaf))
 
     # The same door on the EAST wall (edge 1: (0, −4) → (0, −1), u = (0, 1),
     # normal +x): clear middle (0, −2.5), ray east → east contour line x = 5
@@ -593,12 +679,24 @@ def test_contour_walls() -> None:
     # stretch, so there is no contour piece over the door either.
     room_head = [w for w in on_line["walls"] if w.get("room_id") == "c"
                  and near(w["from"][1], 5.0) and near(w["to"][1], 5.0)
-                 and not is_full(w)]
+                 and w.get("lintel")]
     check("the yielding contour leaves the lintel to the room wall too",
           len(room_head) == 1 and near(room_head[0]["base_y"], 2.1)
           and not edge_pieces(on_line, z=5.0, lintels=True),
           f"{len(room_head)} room heads, "
           f"{len(edge_pieces(on_line, z=5.0, lintels=True))} contour heads")
+    # ...and the LEAF follows the same owner. THIS is the answer to "who
+    # carries the door where contour and room overlap": exactly one wall does,
+    # the one that was not clipped away — no two leaves in one hole.
+    room_leaf = [w for w in on_line["walls"] if w.get("room_id") == "c"
+                 and w.get("leaf")]
+    check("...and the LEAF as well — ONE leaf in that hole, on the room wall",
+          len(room_leaf) == 1 and near(room_leaf[0]["base_y"], 0.0)
+          and near(room_leaf[0]["height"], 2.1)
+          and not edge_pieces(on_line, z=5.0, leaves=True)
+          and len([w for w in on_line["walls"] if w.get("leaf")]) == 1,
+          f"{len(room_leaf)} room leaves, "
+          f"{len(edge_pieces(on_line, z=5.0, leaves=True))} contour leaves")
 
     # A CONCAVE room: the outward side of a wall follows the hull's clockwise
     # winding (interior to the RIGHT of every edge), NOT the room's average
@@ -858,8 +956,10 @@ def test_wall_skirt() -> None:
                  if not w.get("room_id") and w["level"] == 0 and is_full(w)]
     u_contour = [w for w in sc["walls"]
                  if not w.get("room_id") and w["level"] == 1 and is_full(w)]
-    g_heads = [w for w in sc["walls"]
-               if not w.get("room_id") and w["level"] == 0 and not is_full(w)]
+    g_heads = [w for w in sc["walls"] if not w.get("room_id")
+               and w["level"] == 0 and w.get("lintel")]
+    g_leaves = [w for w in sc["walls"] if not w.get("room_id")
+                and w["level"] == 0 and w.get("leaf")]
     check("storey-0 contour pieces sink to −0.14 and top out on 2.85",
           g_contour and all(near(w["base_y"], -SINK)
                             and near(w["base_y"] + w["height"], WALL_H)
@@ -872,6 +972,14 @@ def test_wall_skirt() -> None:
           len(g_heads) == 1 and near(g_heads[0]["base_y"], 2.1)
           and near(g_heads[0]["height"], WALL_H - 2.1),
           str(sorted({(w["base_y"], w["height"]) for w in g_heads})))
+    # …and neither is the LEAF (user decision 2026-08-25): it stands ON the
+    # floor line, so the y <= 0 rule would have skirted it — 0.00 / 2.10 is
+    # the proof it is exempt, because it fills the CLEAR opening and the
+    # threshold lies at its foot.
+    check("a door leaf stands at 0.00 / 2.10 and is NOT skirted either",
+          len(g_leaves) == 1 and near(g_leaves[0]["base_y"], 0.0)
+          and near(g_leaves[0]["height"], 2.1),
+          str(sorted({(w["base_y"], w["height"]) for w in g_leaves})))
     # A DECLARED STOREY DID NOT MOVE BY A MILLIMETRE (§ A16.9).
     check("storey-1 contour keeps 3.08 / 2.85 — no skirt on a plate",
           u_contour and all(near(w["base_y"], 1 * STOREY + 0.08)
@@ -882,7 +990,8 @@ def test_wall_skirt() -> None:
     check("storey-1 room walls keep 3.10 / 2.85 either",
           up_room and all(near(w["base_y"], 1 * STOREY + 0.10)
                           and near(w["height"], WALL_H)
-                          for w in up_room if not w.get("glass")),
+                          for w in up_room
+                          if not (w.get("glass") or w.get("leaf"))),
           str(sorted({(w["base_y"], w["height"]) for w in up_room})))
     # THE CEILING OF THE MARGIN, hand-checked: sunk by the skirt, a storey-1
     # contour foot would land exactly on the level plate's underside (3.08 −
@@ -921,21 +1030,24 @@ def test_contour_wall_texture() -> None:
     loc["map3d"]["wall_kind"] = "brick"
     sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
     contour = [w for w in sc["walls"] if not w.get("room_id")]
-    # 6 = the 3 whole edges + the 2 runs of the split south line + the lintel
-    # over the door hole; the lintel is a shell piece like any other and wears
-    # the shell kind too.
+    # 7 = the 3 whole edges + the 2 runs of the split south line + the lintel
+    # over the door hole + the door's LEAF in it. The lintel is a shell piece
+    # like any other and wears the shell kind too; the leaf is a PANE and
+    # wears none, exactly like a window's glass.
+    shell = [w for w in contour if not w.get("leaf")]
     check("every contour piece carries the shell kind",
-          len(contour) == 6 and all(w.get("texture_kind") == "brick"
-                                    for w in contour),
+          len(contour) == 7 and len(shell) == 6
+          and all(w.get("texture_kind") == "brick" for w in shell),
           f"{len(contour)} pieces, "
-          f"{sorted({w.get('texture_kind') for w in contour})}")
+          f"{sorted(str(w.get('texture_kind')) for w in contour)}")
     check("room walls keep their own surfaces.wall kind",
           all(w.get("texture_kind") == "plaster" for w in walls_of(sc, "a")
-              if not w.get("glass")),
-          str(sorted({w.get("texture_kind") for w in walls_of(sc, "a")
-                      if not w.get("glass")})))
-    check("glass panes stay untextured",
-          all("texture_kind" not in w for w in sc["walls"] if w.get("glass")))
+              if not (w.get("glass") or w.get("leaf"))),
+          str(sorted(str(w.get("texture_kind")) for w in walls_of(sc, "a")
+                     if not (w.get("glass") or w.get("leaf")))))
+    check("panes stay untextured — glass and door leaf alike",
+          all("texture_kind" not in w for w in sc["walls"]
+              if w.get("glass") or w.get("leaf")))
     check("plates are untouched by a WALL kind",
           [p.get("texture_kind") for p in sc["plates"]]
           == [p.get("texture_kind") for p in plain["plates"]])
@@ -1189,16 +1301,16 @@ def test_no_walls() -> None:
                    if r["room_id"] == "a"][0].get("openings") or [])))
 
     # A room without a shell has no wall, hence no door — and the hull takes
-    # its holes from the doors. So the contour closes here (6 pieces before:
-    # 3 runs on the split south line, one of them the door's lintel, plus the
-    # 3 whole edges — 4 whole edges now) instead of keeping the door's gap.
+    # its holes from the doors. So the contour closes here (7 pieces before:
+    # 4 on the split south line — 2 runs, the door's lintel and its leaf —
+    # plus the 3 whole edges; 4 whole edges now) instead of keeping the gap.
     # `no_building_entrance` has nothing to report: no walled room is left on
     # level 0, and an outdoor zone is not a building one puts a door into.
     # The lost openings are what `openings_without_walls` says instead ([4h]).
     contour_before = [w for w in base["walls"] if not w.get("room_id")]
     contour = [w for w in sc["walls"] if not w.get("room_id")]
     check("the shell-less room takes its hull hole with it",
-          len(contour_before) == 6 and len(contour) == 4,
+          len(contour_before) == 7 and len(contour) == 4,
           f"{len(contour)} vs {len(contour_before)}")
     check("a neighbouring room keeps its walls",
           not walls_of(base, "garden") and not walls_of(sc, "garden"))
@@ -1329,11 +1441,19 @@ def test_doorways() -> None:
           and near(both["doorways"][0]["width_m"], 1.6)
           and both["doorways"][0]["rooms"] == ["a", "b"], str(both["doorways"]))
     # The party wall runs at world x = 0 from z −4 to −1; the gap [0.7, 2.3]
-    # leaves exactly two solid pieces in room a's east wall.
-    east_a = [w for w in walls_of(both, "a")
-              if near(w["from"][0], 0.0) and near(w["to"][0], 0.0)]
+    # leaves exactly two solid pieces in room a's east wall — plus the door's
+    # own LEAF in the gap, which is a pane and not a piece of wall. Nothing
+    # else: the door names no height, so it reaches the top and gets no
+    # lintel (the leaf then measures the full WALL_H).
+    east_line = [w for w in walls_of(both, "a")
+                 if near(w["from"][0], 0.0) and near(w["to"][0], 0.0)]
+    east_a = [w for w in east_line if is_full(w)]
     check("...and the wall really has ONE gap there (2 pieces)",
           len(east_a) == 2, str([[w["from"], w["to"]] for w in east_a]))
+    check("...with the door's leaf in it, and nothing else",
+          len(east_line) == 3
+          and len([w for w in east_line if w.get("leaf")]) == 1,
+          str([(w["base_y"], w["height"], w.get("leaf")) for w in east_line]))
     # Same rule inside ONE room: the identical opening entered twice.
     twice = doors(door_fixture(a_openings=[
         {"edge": 2, "at": 0.5, "type": "door", "width_m": 1.0, "to": "outside"},
@@ -1600,6 +1720,13 @@ def test_style() -> None:
           and near(st["upper_floor_opacity"], 0.4), str(st))
     check("8 room palette colours", len(st["room_palette"]) == 8,
           str(len(st["room_palette"])))
+    # The DOOR LEAF's colour is part of the shared vocabulary too (user
+    # decision 2026-08-25) — opaque and dark, and NOT the wall colour, or a
+    # door would disappear into the facade it sits in.
+    check("the door leaf has its own colour in the style block",
+          st["door_color"] == "#4a3a2e"
+          and st["door_color"] != st["wall_color"],
+          str(st.get("door_color")))
 
 
 # ── M2: placement specs, markers, figures, signature ────────────────────
@@ -3390,9 +3517,11 @@ def test_room_rotation() -> None:
     edge0 = [w for w in sc["walls"] if w.get("room_id") == "t"
              and near(w["from"][0], 1.0) and near(w["to"][0], 1.0)]
     check("the shell walls stand on the turned edge (x = 1)",
-          # 2 runs beside the door plus its lintel — the turn does not change
-          # how an opening is cut, only where the edge lies.
-          len(edge0) == 3 and len([w for w in edge0 if is_full(w)]) == 2
+          # 2 runs beside the door plus its lintel and its leaf — the turn
+          # does not change how an opening is cut, only where the edge lies.
+          len(edge0) == 4 and len([w for w in edge0 if is_full(w)]) == 2
+          and len([w for w in edge0 if w.get("lintel")]) == 1
+          and len([w for w in edge0 if w.get("leaf")]) == 1
           and all(near(w["outward_normal"][0], -1.0)
                   and near(w["outward_normal"][1], 0.0)
                   for w in edge0),

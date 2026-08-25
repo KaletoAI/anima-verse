@@ -2128,15 +2128,16 @@ async function main() {
   //
   // Source of the geometry: the SCENE PAYLOAD, docs/schnittstellen-3d.md § B1.
   // `walls: [{ level, from:[x,z], to:[x,z], base_y, height, thickness, glass?,
-  // room_id?, outward_normal }]` — finished primitives in WORLD METRES, and
-  // the server has ALREADY split every wall around its openings
+  // leaf?, room_id?, outward_normal }]` — finished primitives in WORLD METRES,
+  // and the server has ALREADY split every wall around its openings
   // (`app/core/scene_recipe.py::_room_walls`): a door or passage leaves a GAP
   // with only its LINTEL over it — one entry flagged `lintel`, because one
-  // walks UNDER it — while a window keeps a sill piece below, a head piece
-  // above and a glass pane in between, three entries that all span the
-  // opening. So "doors pass, windows block" needs no opening lookup at all:
-  // whatever is left in `walls` blocks EXCEPT a `lintel`, and the gaps are
-  // the doors.
+  // walks UNDER it — plus, for a door, the LEAF filling the hole, flagged
+  // `leaf`, because one walks THROUGH it; while a window keeps a sill piece
+  // below, a head piece above and a glass pane in between, three entries that
+  // all span the opening. So "doors pass, windows block" needs no opening
+  // lookup at all: whatever is left in `walls` blocks EXCEPT a `lintel` and a
+  // `leaf`, and the gaps are the doors.
   //
   // Hand-derived mini payload — a 4x4 m square room, k = 1, clockwise hull
   //   (0,0) -> (4,0) -> (4,4) -> (0,4) -> close
@@ -2164,6 +2165,11 @@ async function main() {
       // The wall ABOVE the door (height_m 2.1 -> 2.85): drawn, never a
       // barrier. Last of the level-0 entries so the indices above stand.
       { level: 0, from: [0, 2.5], to: [0, 1.5], base_y: 2.1, lintel: true },
+      // …and the DOOR LEAF in the hole itself (0.00 -> 2.10, 0.042 thick):
+      // drawn so the door reads as a door, and just as little of a barrier —
+      // one walks THROUGH a door. Appended after the lintel for the same
+      // reason: the indices above must not move.
+      { level: 0, from: [0, 2.5], to: [0, 1.5], base_y: 0, leaf: true },
       { level: 1, from: [0, 0], to: [0, 4] },                     // upper storey
     ],
   };
@@ -2184,11 +2190,11 @@ async function main() {
   check('bodyRadius scales with k (Willowbrook k = 0.21)', bodyRadius(0.21), 0.0525);
   check('bodyRadius(1) = BODY_RADIUS_M', bodyRadius(1), 0.25);
   const segs0 = wallSegments(room, 0);
-  check('the payload carries ten level-0 pieces',
-    room.walls.filter((w) => w.level === 0).length, 10);
-  check('...nine of them block — the door lintel is not a barrier',
+  check('the payload carries eleven level-0 pieces',
+    room.walls.filter((w) => w.level === 0).length, 11);
+  check('...nine of them block — neither lintel nor leaf is a barrier',
     segs0.length, 9);
-  check('the skipped one is exactly the flagged lintel',
+  check('the skipped two are exactly the flagged lintel and leaf',
     segs0.filter((s) => s.ax === 0 && s.bx === 0
       && Math.min(s.az, s.bz) >= 1.5 && Math.max(s.az, s.bz) <= 2.5).length, 0);
   check('upper storey is ONE segment', wallSegments(room, 1).length, 1);
@@ -2262,6 +2268,14 @@ async function main() {
   check('RED: an unflagged lintel would block the doorway',
     clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 },
       wallSegments(unflagged, 0), R), { x: 2, z: 2 });
+  //  RED, the same for the LEAF: the door leaf spans the very same z
+  //  [1.5, 2.5]. A leaf that counted as a wall would brick up every door in
+  //  the world — it is a picture of a door, not a door that shuts.
+  const solidLeaf = { ...room,
+    walls: room.walls.map((w) => (w.leaf ? { ...w, leaf: false } : w)) };
+  check('RED: a blocking leaf would brick up the doorway',
+    clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 },
+      wallSegments(solidLeaf, 0), R), { x: 2, z: 2 });
   //  Through the WINDOW on edge 1 (same z, opposite side): the sill/head/glass
   //  entries span it, the move is projected onto their direction (0,1) and
   //  dot((4,0),(0,1)) = 0 -> stands still.

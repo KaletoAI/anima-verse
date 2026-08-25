@@ -1141,9 +1141,12 @@ async function startApp(username: string, role: string) {
     for (const { level } of scene.levels) {
       const marks = doorMarkers(scene, level);
       if (!marks.length) continue;
-      // Wall thickness of this storey — the floor is the same for every wall of
-      // a recipe, so the first one answers for all of them.
-      const thickness = scene.walls.find((w) => w.level === level)?.thickness ?? 0;
+      // Wall thickness of this storey — the same for every wall of a recipe,
+      // so the first one answers for all of them. PANES DO NOT: a window's
+      // glass and a door's leaf are deliberately thinner (§ B1), and a door
+      // mark as deep as a door leaf would sink into its own threshold.
+      const thickness = scene.walls.find(
+        (w) => w.level === level && !w.glass && !w.leaf)?.thickness ?? 0;
       const storey = new THREE.Group();
       storey.userData.level = level;
       for (const m of marks) {

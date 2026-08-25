@@ -32,9 +32,9 @@ in, so nothing is denormalized here):
 - ``walls``   — the building contour with its door gaps and the room shell
                 walls already split around every opening. EVERY opening is
                 cut the same way: a piece below it (a window's sill band), a
-                LINTEL above it up to the top of the wall, and — for a window
-                only — a glass segment in the hole itself. A door is a hole,
-                not a slot up to the ceiling,
+                LINTEL above it up to the top of the wall, and a PANE in the
+                hole itself — glass for a window, a dark DOOR LEAF for a door.
+                A door is a hole, not a slot up to the ceiling,
 - ``extras``  — the elevator primitives,
 - ``style``   — the colours/opacities both renderers used to keep as copies,
 - ``models``  — ONE spec form for building, room diorama and prop; the client
@@ -72,7 +72,10 @@ logger = get_logger(__name__)
 #: 2 (2026-08-25): every opening keeps a LINTEL over it — a door no longer
 #: reaches the top of the wall, and the hole it projects into the building
 #: contour ends at the door's own height too.
-SCENE_RECIPE_VERSION = 2
+#: 3 (2026-08-25): a door hole is filled by a DOOR LEAF — a thin dark plate
+#: over its clear opening, the door's answer to a window's glass pane, so an
+#: exterior door is visible as a door from outside.
+SCENE_RECIPE_VERSION = 3
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -180,7 +183,11 @@ WALL_THICKNESS = 0.07
 WALL_SINK_M = LEVEL_PLATE_THICKNESS
 WALL_MIN_HEIGHT = 0.6
 WALL_HEAD_ROOM = 0.15
-GLASS_THICKNESS_FACTOR = 0.6
+# A PANE — the thing that fills a hole rather than framing it — is this
+# fraction of the wall's thickness. Two of them exist: a window's glass band
+# and a door's LEAF (2026-08-25). Both sit in the hole the splitter left, so
+# both are thinner than the reveal around them and neither is a wall.
+PANE_THICKNESS_FACTOR = 0.6
 # Two wall faces count as ONE wall line when their directions are (anti)parallel
 # within ~1° — the same slack ``room_recipe._mirrored_openings`` uses.
 _WALL_PARALLEL = 0.98
@@ -189,6 +196,12 @@ _WALL_PARALLEL = 0.98
 MIN_WALL_PIECE_M = 0.06
 # Anything shorter/lower than this is not worth a primitive.
 MIN_SEGMENT_M = 0.02
+# Two openings whose CLAMPED spans agree this closely on the same wall edge are
+# the same hole (a mirrored party-wall door beside the room's own, the same
+# opening entered twice). A centimetre is orders of magnitude above the 4
+# decimals a mirrored ``at`` is rounded to and orders of magnitude below any
+# gap an author can mean.
+_SAME_SPAN_M = 0.01
 # Elevator (§ A6) — metres.
 ELEVATOR_SHAFT_M = 1.8
 ELEVATOR_COLUMN_M = 0.14
@@ -233,6 +246,10 @@ STYLE: Dict[str, Any] = {
     "floor_color": "#d8d0c2",
     "glass_color": "#9fc2d8",
     "glass_opacity": 0.25,
+    # The DOOR LEAF (2026-08-25): opaque, dark, neutral wood — a door has to
+    # read as a door against ``wall_color`` from a hundred metres away, and it
+    # is the ONE colour both renderers take for a ``leaf`` piece.
+    "door_color": "#4a3a2e",
     "upper_wall_opacity": 0.45,
     "upper_floor_opacity": 0.4,
     "room_palette": ["#58a6ff", "#3fb950", "#d29922", "#f778ba",
@@ -736,6 +753,16 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     to a room hull the lintel yields with it: no wall there, no lintel there,
     and the room's own wall carries both.
 
+    AND THE HOLE ITSELF CARRIES A DOOR LEAF (user decision 2026-08-25): a thin
+    dark plate from the wall's foot to ``top_y``, flagged ``leaf`` — the door's
+    counterpart to a window's glass pane, and the reason an exterior door is
+    visible AS a door instead of as a dark rectangle of interior. It follows
+    the lintel in everything: same span, clipped against the stretches that
+    yielded to a room hull (there the ROOM wall's own leaf is the only one),
+    and it is emitted only for a ``door``. A ``passage`` is an authored opening
+    WITHOUT a door — a leaf there would state a door nobody drew — so its
+    entry arrives with ``leaf`` False and the hole stays empty.
+
     ONE wall, one owner (finding 2026-07-27, "Haus von Kai": 27 colinear
     pairs, 16.5 m doubled → z-fighting the moment a wall texture landed on
     the room side): wherever an INDOOR room hull runs on the contour line,
@@ -758,9 +785,9 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         area2 += x1 * z2 - x2 * z1
     ccw = area2 > 0
 
-    # (level, edge index) → the (span, head height) the doors of that storey
-    # cut out of it.
-    cuts: Dict[Tuple[int, int], List[Tuple[float, float, float]]] = {}
+    # (level, edge index) → the (span, head height, has a leaf) the doors of
+    # that storey cut out of it.
+    cuts: Dict[Tuple[int, int], List[Tuple[float, float, float, bool]]] = {}
     for door in doors:
         hit = _contour_hit(pts, door["at"], door["normal"])
         if not hit:
@@ -768,7 +795,8 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         i, t = hit
         half = _num(door.get("width")) / 2
         cuts.setdefault((int(door.get("level") or 0), i), []).append(
-            (t - half, t + half, _num(door.get("top_y"))))
+            (t - half, t + half, _num(door.get("top_y")),
+             bool(door.get("leaf"))))
 
     height = _wall_height(storey)
     wall_kind = str((map3d or {}).get("wall_kind") or "").strip()
@@ -795,28 +823,32 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
             holes = sorted(yielded + [(c[0], c[1]) for c in door_cuts])
             sink = WALL_SINK_M if level == 0 else 0.0
             foot = storey_floor_y(level, storey)
-            # (span, foot, height, is lintel) of every piece of this edge on
-            # this storey: the full-height runs between the holes first, then
-            # one LINTEL over each door hole — clipped against the stretches
-            # that yielded to a room hull, because there is no contour wall
-            # there to carry it. A door as tall as the wall leaves no lintel
-            # and drops out.
-            pieces: List[Tuple[float, float, float, float, bool]] = [
-                (s0, s1, foot - sink, height + sink, False)
+            # (span, foot, height, kind) of every piece of this edge on this
+            # storey: the full-height runs between the holes first, then one
+            # LINTEL over each door hole and one LEAF in it — both clipped
+            # against the stretches that yielded to a room hull, because there
+            # is no contour wall there to carry either. A door as tall as the
+            # wall leaves no lintel and drops out; a passage carries no leaf.
+            pieces: List[Tuple[float, float, float, float, str]] = [
+                (s0, s1, foot - sink, height + sink, "")
                 for s0, s1 in _subtract([(0.0, length)], holes,
                                         MIN_WALL_PIECE_M)]
-            for t0, t1, top_y in door_cuts:
-                lintel = foot + height - top_y
-                if lintel < MIN_WALL_PIECE_M or lintel > height:
-                    continue
+            for t0, t1, top_y, has_leaf in door_cuts:
                 span = (max(t0, 0.0), min(t1, length))
                 if span[1] - span[0] < MIN_WALL_PIECE_M:
                     continue
-                pieces.extend(
-                    (s0, s1, top_y, lintel, True)
-                    for s0, s1 in _subtract([span], sorted(yielded),
-                                            MIN_WALL_PIECE_M))
-            for s0, s1, base_y, piece_h, is_lintel in pieces:
+                clipped = _subtract([span], sorted(yielded), MIN_WALL_PIECE_M)
+                lintel = foot + height - top_y
+                if MIN_WALL_PIECE_M <= lintel <= height:
+                    pieces.extend((s0, s1, top_y, lintel, "lintel")
+                                  for s0, s1 in clipped)
+                # THE LEAF fills the CLEAR opening: from the wall's own foot
+                # (never skirted — it is the door, not a wall standing in the
+                # terrain) up to the door's head.
+                if has_leaf and top_y - foot >= MIN_WALL_PIECE_M:
+                    pieces.extend((s0, s1, foot, top_y - foot, "leaf")
+                                  for s0, s1 in clipped)
+            for s0, s1, base_y, piece_h, kind in pieces:
                 start, end = _segment_points(a, ux, uz, s0, s1)
                 entry: Dict[str, Any] = {
                     "level": level,
@@ -829,17 +861,24 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                     # ground, and the height grows by the same amount: the TOP
                     # edge is untouched and no relief under the wall can open a
                     # gap between it and the terrain (§ A16.9). A LINTEL over a
-                    # door hangs in the wall instead: it starts at the door's
-                    # head and is never skirted.
+                    # door and the LEAF in it hang in the wall instead: they
+                    # start at the door's head / at the floor line and are
+                    # never skirted.
                     "base_y": _r(base_y),
                     "height": _r(piece_h),
-                    "thickness": WALL_THICKNESS,
+                    "thickness": _r(WALL_THICKNESS * PANE_THICKNESS_FACTOR, 3)
+                    if kind == "leaf" else WALL_THICKNESS,
                     "opacity_role": _opacity_role(level, min(levels)),
                     "outward_normal": [_r(nx), _r(nz)],
                 }
-                if wall_kind:
+                if kind == "leaf":
+                    # The door itself (§ B1 ``leaf``): drawn dark and opaque,
+                    # excluded from the facade culling like a glass pane, and
+                    # no barrier — one walks THROUGH a door.
+                    entry["leaf"] = True
+                elif wall_kind:
                     entry["texture_kind"] = wall_kind
-                if is_lintel:
+                if kind == "lintel":
                     # Over the door one WALKS — the piece is drawn, it does not
                     # block (§ B1 ``lintel``).
                     entry["lintel"] = True
@@ -910,19 +949,25 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
     EVERY opening is cut the same way (finding 2026-08-25): the wall below it
     (a window's sill band, nothing under a door — one walks THROUGH a door,
     so its sill is ignored), the LINTEL above it up to the top of the wall,
-    and, for a window only, a glass segment filling the hole. A door used to
-    be the exception — a gap all the way to the ceiling, its authored
-    ``height_m`` unused — which is what left doorways open to the ceiling and
-    made an outer wall look as if it had lost a whole segment.
+    and a PANE filling the hole. A door used to be the exception — a gap all
+    the way to the ceiling, its authored ``height_m`` unused — which is what
+    left doorways open to the ceiling and made an outer wall look as if it had
+    lost a whole segment.
     Mirrored openings (the neighbour's door in the shared wall) arrive
     pre-translated in the recipe and are treated exactly like own ones.
     Outdoor rooms have no shell at all (§ A5).
 
+    THE PANE IN THE HOLE has two forms (user decision 2026-08-25): a window's
+    translucent GLASS band, and a door's opaque dark LEAF from the floor to its
+    head. Same mechanism, same thinness, one flag each — which is why the
+    renderers needed almost no new code for the leaf. A ``passage`` gets
+    neither: it is an authored opening WITHOUT a door, so its hole stays empty.
+
     ``no_walls`` is the per-room opt-out (open zone, pavilion, an area inside
     an area model): NOTHING is emitted — no segments, no window sill or head,
-    no glass. Everything else about the room stays: its plate, its openings
-    in the ``rooms`` block (the 2D editor keeps drawing them), its markers
-    and its diorama. The BUILDING's contour walls are untouched.
+    no glass, no leaf. Everything else about the room stays: its plate, its
+    openings in the ``rooms`` block (the 2D editor keeps drawing them), its
+    markers and its diorama. The BUILDING's contour walls are untouched.
     """
     level = int(recipe.get("level") or 0)
     # Room shell walls stand on the ROOM's own floor (``_plate_top``): the
@@ -940,15 +985,19 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
 
         def _emit(s0: float, s1: float, y: float, h: float,
                   thickness: float, glass: bool = False,
-                  lintel: bool = False) -> None:
+                  lintel: bool = False, leaf: bool = False) -> None:
             if s1 - s0 < MIN_SEGMENT_M or h < MIN_SEGMENT_M:
                 return
             # Only a piece that STANDS ON THE FLOOR gets the skirt (§ A16.9):
             # the full-height segments and a window's sill, never its head and
             # never its glass band — those start further up the wall. On a
             # declared storey the plate under the foot is still there and the
-            # skirt is 0.
-            sink = WALL_SINK_M if (level == 0 and y <= 0.0) else 0.0
+            # skirt is 0. A DOOR LEAF stands on the floor line and is NOT
+            # skirted for it: it fills the CLEAR opening exactly, the threshold
+            # primitive lies at its foot, and the jambs either side carry the
+            # skirt that keeps the light out under the wall.
+            sink = (WALL_SINK_M if (level == 0 and y <= 0.0 and not leaf)
+                    else 0.0)
             start, end = _segment_points(a, ux, uz, s0, s1)
             entry: Dict[str, Any] = {
                 "level": level,
@@ -963,6 +1012,11 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
             }
             if glass:
                 entry["glass"] = True
+            elif leaf:
+                # The door itself (§ B1 ``leaf``): opaque and dark, drawn like
+                # a pane, out of the facade culling like a pane, and no
+                # barrier — one walks THROUGH a door.
+                entry["leaf"] = True
             elif kind:
                 entry["texture_kind"] = kind
             if lintel:
@@ -975,8 +1029,22 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
                                 [(sp[0], sp[1]) for sp in spans],
                                 MIN_SEGMENT_M):
             _emit(s0, s1, 0.0, height, WALL_THICKNESS)
+        # ONE HOLE, ONE SET OF PIECES. Two entries can describe the same hole:
+        # the neighbour's MIRRORED copy of a party-wall door next to the door
+        # this room authored itself, or the same opening entered twice. The
+        # solid runs never showed it (``_subtract`` merges overlapping holes),
+        # but every band did — two lintels, two panes, two leaves in one gap,
+        # z-fighting each other. ``_doorways`` collapses exactly these cases
+        # for the threshold (``_same_gap``); this is the same rule on the wall
+        # itself, and the FIRST entry wins, as it does there.
+        seen: List[Tuple[float, float]] = []
         for s0, s1, op in spans:
-            window = str(op.get("type") or "").lower() == "window"
+            if any(abs(s0 - p0) <= _SAME_SPAN_M
+                   and abs(s1 - p1) <= _SAME_SPAN_M for p0, p1 in seen):
+                continue
+            seen.append((s0, s1))
+            op_type = str(op.get("type") or "door").lower()
+            window = op_type == "window"
             # A door/passage starts on the floor whatever a sill says: it is
             # walked through, and the threshold primitive lies at its foot.
             sill = min(_num(op.get("sill_m")), height) if window else 0.0
@@ -986,11 +1054,14 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
             # it, so it must not become a barrier in anyone's floor plan. A
             # window's head needs no flag — its own sill blocks that span.
             _emit(s0, s1, top, height - top, WALL_THICKNESS,
-                  lintel=str(op.get("type") or "door").lower()
-                  in _WALKABLE_TYPES)
+                  lintel=op_type in _WALKABLE_TYPES)
+            # The pane in the hole: glass for a window, the LEAF for a door.
             if window:
                 _emit(s0, s1, sill, top - sill,
-                      WALL_THICKNESS * GLASS_THICKNESS_FACTOR, glass=True)
+                      WALL_THICKNESS * PANE_THICKNESS_FACTOR, glass=True)
+            elif op_type == "door":
+                _emit(s0, s1, 0.0, top,
+                      WALL_THICKNESS * PANE_THICKNESS_FACTOR, leaf=True)
     return walls
 
 
@@ -1072,6 +1143,11 @@ def _doorways(recipes: List[Dict[str, Any]],
                     "at_world": [_r(a[0] + ux * (s0 + s1) / 2),
                                  _r(a[1] + uz * (s0 + s1) / 2)],
                     "along": [_r(ux), _r(uz)],
+                    # WHICH KIND of walkable opening this is. A ``door`` has a
+                    # leaf in its hole, a ``passage`` is an open gap (§ B1
+                    # ``leaf``) — the contour reads it from here instead of
+                    # looking the opening up a second time.
+                    "type": str(op.get("type") or "door").lower(),
                     "width_m": _r(s1 - s0),
                     # CLEAR height of the gap, clamped to the wall exactly as
                     # the splitter clamps it: the wall over the door is a
@@ -1261,7 +1337,8 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
     ``openings_without_walls`` — at least one room carries openings in its
     layout while its walls are switched off (``no_walls``, or the outdoor
     ``always_visible``). ``_room_wall_edges`` yields nothing for such a room,
-    so door, window, glass and threshold all silently cease to exist in 3D —
+    so door, window, glass, door leaf and threshold all silently cease to
+    exist in 3D —
     while the 2D floor plan keeps drawing the very openings the author
     authored. A wall-less room WITHOUT openings is perfectly legal (open
     zone, pavilion) and stays quiet; only the combination is the trap. Fires
@@ -2432,7 +2509,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # own foot, which is what the wall it pierces is built from.
     outside_doors = [{"level": d["level"], "at": d["at_world"],
                       "width": d["width_m"], "normal": _door_outward(d),
-                      "top_y": _num(d["base_y"]) + _num(d["height_m"])}
+                      "top_y": _num(d["base_y"]) + _num(d["height_m"]),
+                      # …and whether the hull's hole gets a LEAF: a door has
+                      # one, an open passage has not.
+                      "leaf": str(d.get("type") or "door") == "door"}
                      for d in doorways if d.get("outside")]
 
     walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey,

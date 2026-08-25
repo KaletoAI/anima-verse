@@ -84,25 +84,35 @@ no contour piece yields to a room wall).
    i.e. world x 4.5 … 3.5 with its middle at (4,5) and its outward normal +z.
    That ray meets the south contour edge (10,8) -> (0,8) at x = 4, i.e. t = 6
    on a 10 m edge, so the hull opens over t 5.5…6.5 — the SAME world x
-   4.5 … 3.5. Both walls are cut the same way and BOTH keep a lintel:
+   4.5 … 3.5. Both walls are cut the same way, BOTH keep a lintel and — since
+   the user decision of 2026-08-25 — BOTH carry a DOOR LEAF in the hole:
 
        wall              pieces                              base_y  height
        room edge 2       x 6.0 … 4.5   (solid)                -0.14   2.99
                          x 3.5 … 2.0   (solid)                -0.14   2.99
                          x 4.5 … 3.5   LINTEL                  2.10   0.75
+                         x 4.5 … 3.5   LEAF                    0.00   2.10
        contour edge 2    x 10.0 … 4.5  (solid)                -0.14   2.99
                          x 3.5 … 0.0   (solid)                -0.14   2.99
                          x 4.5 … 3.5   LINTEL                  2.10   0.75
+                         x 4.5 … 3.5   LEAF                    0.00   2.10
 
    The lintel's foot is the door's own height_m over the wall's floor (0.00 on
-   storey 0) and its top is the shell's 2.85 — 2.85 - 2.10 = 0.75. So the same
-   house WITHOUT the door has 4 + 4 = 8 wall pieces, with it 12:
+   storey 0) and its top is the shell's 2.85 — 2.85 - 2.10 = 0.75. The leaf
+   fills what is left of the hole: the CLEAR opening, floor line to head, and
+   NOT skirted (it is the door, not a wall standing in the terrain). So the
+   same house WITHOUT the door has 4 + 4 = 8 wall pieces, with it 14 (12 wall
+   + 2 leaf) — and a leaf is a prism like any other:
        PLAIN ROOM: 8x8 + 8 + 6            =  78 vertices
                    8x6 + 6 + 5            =  59 faces
-       ONE DOOR:  12x8 + 8 + 6            = 110 vertices
-                  12x6 + 6 + 5            =  83 faces
+       ONE DOOR:  14x8 + 8 + 6            = 126 vertices
+                  14x6 + 6 + 5            =  95 faces
    and the BOUNDS do not move by a millimetre: a lintel hangs inside the wall
-   it belongs to.
+   it belongs to, and a leaf is thinner than the wall it fills (0.042 against
+   0.07) and never reaches above its head.
+
+   THE LEAF'S OWN MATERIAL is the fourth tone (MATERIAL_DOOR): in WALL_TONE a
+   door would be a wall, and the mesher would rebuild a facade without doors.
 
 7. THE BODY'S BOUNDS, BARE, in the scene frame:
        x  -0.4 .. 10.4   (the roof overhang past both gable ends)
@@ -435,16 +445,17 @@ def part_door():
     shut = sr.compose_scene(fixture(PLAIN_ROOM), plan_width_m=10.0)
     open_ = sr.compose_scene(fixture(DOOR_ROOM), plan_width_m=10.0)
     check("shut house: 4 contour + 4 room walls", len(shut["walls"]), 8)
-    check("with a door: both cut walls become 2 runs + a lintel",
-          len(open_["walls"]), 12)
+    check("with a door: both cut walls become 2 runs + a lintel + a leaf",
+          len(open_["walls"]), 14)
 
     # The two pieces the door leaves in the CONTOUR (§ 6b of the docstring).
     contour = [w for w in open_["walls"] if not w.get("room_id")
                and abs(w["from"][1] - 8.0) < 1e-9
                and abs(w["to"][1] - 8.0) < 1e-9]
     runs = sorted([w for w in contour if w["base_y"] < 0], key=lambda w: -w["from"][0])
-    heads = [w for w in contour if w["base_y"] > 0]
-    check("the south facade is 2 runs + 1 lintel", len(contour), 3)
+    heads = [w for w in contour if w.get("lintel")]
+    leaves = [w for w in contour if w.get("leaf")]
+    check("the south facade is 2 runs + 1 lintel + 1 leaf", len(contour), 4)
     check_vec("run A ends at the door, x 10.0 -> 4.5",
               [runs[0]["from"][0], runs[0]["to"][0]], [10.0, 4.5], 1e-9)
     check_vec("run B starts after it, x 3.5 -> 0.0",
@@ -455,31 +466,58 @@ def part_door():
     check("...standing on the door's own height", heads[0]["base_y"], 2.10, 1e-9)
     check("...and reaching the top of the shell, 2.85 - 2.10",
           heads[0]["height"], 0.75, 1e-9)
+    # THE LEAF fills what the lintel leaves: the clear opening, 0.00 -> 2.10,
+    # in the pane's own thickness (0.07 x 0.6). This is what makes the door
+    # visible in the picture at all.
+    check("exactly one leaf in the hole", len(leaves), 1)
+    check_vec("it spans the hole, x 4.5 -> 3.5",
+              [leaves[0]["from"][0], leaves[0]["to"][0]], [4.5, 3.5], 1e-9)
+    check("...standing on the floor line, not on the skirt",
+          leaves[0]["base_y"], 0.0, 1e-9)
+    check("...and reaching the door's own head",
+          leaves[0]["height"], 2.10, 1e-9)
+    check("...as thin as a pane", leaves[0]["thickness"], 0.042, 1e-9)
 
     # The ROOM wall the door was drawn into is cut identically — same x, same
-    # lintel — so the hole goes right through the building.
+    # lintel, same leaf — so the hole goes right through the building.
     room = [w for w in open_["walls"] if w.get("room_id") == "r0"
             and abs(w["from"][1] - 5.0) < 1e-9 and abs(w["to"][1] - 5.0) < 1e-9]
-    room_head = [w for w in room if w["base_y"] > 0]
-    check("the room wall is 2 runs + 1 lintel too", len(room), 3)
+    room_head = [w for w in room if w.get("lintel")]
+    check("the room wall is 2 runs + 1 lintel + 1 leaf too", len(room), 4)
     check_vec("its lintel sits over the same x 4.5 -> 3.5",
               [room_head[0]["from"][0], room_head[0]["to"][0]], [4.5, 3.5], 1e-9)
     check("...at the same head height", room_head[0]["base_y"], 2.10, 1e-9)
+    check("...and it has its own leaf",
+          len([w for w in room if w.get("leaf")]), 1)
     # RED: the old picture was a slot from the ground to the eaves. If any
-    # piece of these two walls were still missing above 2.10, this fails.
+    # piece of these two walls were still missing above 2.10, this fails —
+    # the two leaves top out at the door's head by construction.
     check_vec("RED: no wall of the door line is open to the eaves",
-              [w["base_y"] + w["height"] for w in contour + room],
+              [w["base_y"] + w["height"]
+               for w in contour + room if not w.get("leaf")],
               [2.85] * 6, 1e-9)
+    check_vec("...and the leaves stop at the lintel's foot",
+              [w["base_y"] + w["height"]
+               for w in contour + room if w.get("leaf")],
+              [2.10] * 2, 1e-9)
 
     print("\n    …and the Blender volume gets it for free")
     g_shut = ex.extract_geometry(fixture(PLAIN_ROOM), "exterior-demo")
     g = ex.extract_geometry(fixture(DOOR_ROOM), "exterior-demo")
     check("shut: vertices = 8x8 + 8 + 6", len(g_shut["vertices"]), 78)
     check("shut: faces = 8x6 + 6 + 5", len(g_shut["faces"]), 59)
-    check("door: walls", g["parts"]["walls"], 12)
-    check("door: vertices = 12x8 + 8 + 6", len(g["vertices"]), 110)
-    check("door: faces = 12x6 + 6 + 5", len(g["faces"]), 83)
-    check("one material index per face", len(g["face_material"]), 83)
+    check("shut: no door leaves", g_shut["parts"]["doors"], 0)
+    check("door: walls", g["parts"]["walls"], 14)
+    check("door: two of them are leaves", g["parts"]["doors"], 2)
+    check("door: vertices = 14x8 + 8 + 6", len(g["vertices"]), 126)
+    check("door: faces = 14x6 + 6 + 5", len(g["faces"]), 95)
+    check("one material index per face", len(g["face_material"]), 95)
+    # …and the leaves are the ONLY faces painted in the door tone: 2 prisms
+    # x 6 faces = 12.
+    check("12 faces wear MATERIAL_DOOR (2 leaves x 6)",
+          len([m for m in g["face_material"] if m == ex.MATERIAL_DOOR]), 12)
+    check("a house without a door has none",
+          [m for m in g_shut["face_material"] if m == ex.MATERIAL_DOOR], [])
     check_vec("the body's box does not move (a lintel is inside the wall)",
               g["bounds"]["min"] + g["bounds"]["max"],
               g_shut["bounds"]["min"] + g_shut["bounds"]["max"], 1e-9)
@@ -509,13 +547,20 @@ def part_job():
     check_vec("scene -> blender frame", blender_ridge,
               [scene_ridge[0], -scene_ridge[2], scene_ridge[1]], 1e-6)
 
-    check("three materials", len(job["materials"]), 3)
+    check("four materials", len(job["materials"]), 4)
     check("wall material first", job["materials"][ex.MATERIAL_WALL]["tone"],
           ex.WALL_TONE)
     check("roof material second", job["materials"][ex.MATERIAL_ROOF]["tone"],
           ex.ROOF_TONE)
     check("plate material third", job["materials"][ex.MATERIAL_PLATE]["tone"],
           ex.PLATE_TONE)
+    check("door material fourth", job["materials"][ex.MATERIAL_DOOR]["tone"],
+          ex.DOOR_TONE)
+    # The point of the fourth tone: a door must not be its wall.
+    check_true("...and it is DARKER than the wall it sits in",
+               sum(tone_to_linear(ex.DOOR_TONE))
+               < sum(tone_to_linear(ex.WALL_TONE)),
+               f"{ex.DOOR_TONE} vs {ex.WALL_TONE}")
     # A tone is named in sRGB and fed to Blender in linear light.
     check_vec("wall tone -> linear",
               job["materials"][ex.MATERIAL_WALL]["color"],
@@ -602,7 +647,7 @@ def part_blender():
         data = res.get("data") or {}
         check("built vertices", data.get("vertices"), 46)
         check("built faces", data.get("faces"), 35)
-        check("built materials", data.get("materials"), 3)
+        check("built materials", data.get("materials"), 4)
         check("render size", data.get("size"), 256)
         # The bbox comes back in the BLENDER frame: (x, -z, y) of the scene.
         check_vec("built bbox (blender frame)", data.get("bbox") or [],

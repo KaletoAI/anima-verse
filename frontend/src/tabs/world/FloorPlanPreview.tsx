@@ -980,6 +980,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     const floorColor = hex(sc?.style.floor_color, 0xffffff)
     const glassColor = hex(sc?.style.glass_color, 0xffffff)
     const glassOpacity = sc?.style.glass_opacity ?? 1
+    // The DOOR LEAF (2026-08-25) — the second pane kind, opaque and dark.
+    const doorColor = hex(sc?.style.door_color, 0x4a3a2e)
     const upperWall = sc?.style.upper_wall_opacity ?? 1
     const upperFloor = sc?.style.upper_floor_opacity ?? 1
 
@@ -1093,7 +1095,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       }
 
       // Wall segments. Doors/passages are already gaps, a window arrives as
-      // sill + head + its own glass entry — one box each.
+      // sill + head + its own glass entry, a door as its two cheeks + lintel +
+      // its own LEAF entry — one box each.
       for (const wall of sc.walls) {
         if (!visibleLevel(wall.level)) continue
         const len = wallLength(wall)
@@ -1109,6 +1112,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         if (wall.glass) {
           mat = new THREE.MeshStandardMaterial({
             color: glassColor, transparent: true, opacity: glassOpacity,
+          })
+        } else if (wall.leaf) {
+          mat = new THREE.MeshStandardMaterial({
+            color: doorColor, roughness: 0.75,
           })
         } else {
           const info = wall.texture_kind ? ensureSurfaceTex(wall.texture_kind) : null
@@ -1130,8 +1137,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         const box = buildWall(THREE, wall, mat, tileM)
         boxes.add(box)
         // Camera culling with the DELIVERED normal — a wall whose outside
-        // faces the camera hides so the interior stays visible.
-        if (!wall.glass) {
+        // faces the camera hides so the interior stays visible. A PANE is not
+        // part of that facade: a window's glass and a door's leaf fill a hole
+        // instead of enclosing a room, so their normals decide nothing.
+        if (!wall.glass && !wall.leaf) {
           wallCullRef.current.push({ mesh: box,
             mx: (wall.from[0] + wall.to[0]) / 2,
             mz: (wall.from[1] + wall.to[1]) / 2,

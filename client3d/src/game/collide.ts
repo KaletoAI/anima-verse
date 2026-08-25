@@ -19,18 +19,23 @@
  *
  *   - a DOOR or PASSAGE leaves a GAP one walks through: over its span the
  *     payload carries only the LINTEL, the piece of wall above the door, and
- *     that entry is flagged `lintel` (§ B1, 2026-08-25);
+ *     that entry is flagged `lintel` (§ B1, 2026-08-25) — plus, for a door,
+ *     the LEAF in the hole itself, flagged `leaf` (§ B1, 2026-08-25);
  *   - a WINDOW keeps a sill piece below it, a head piece above it and fills
  *     the hole with a glass pane — three entries that all span the opening;
  *   - the building CONTOUR is walls too, with the same hole punched where an
  *     outside doorway projects onto it, so
  *     "out of the building only through the door" needs no extra rule either.
  *
- * So: everything left in `walls` blocks, EXCEPT a `lintel` — the gaps are the
- * doors. That one flag is also the whole vertical model: `base_y`/`height` are
- * ignored, because the only other entries hanging above head height are window
- * heads, and a window blocks anyway through its own sill and pane. The flag is
- * the SERVER's word, not a height measured back out of the payload here.
+ * So: everything left in `walls` blocks, EXCEPT a `lintel` and a `leaf` — the
+ * gaps are the doors. Those two flags are also the whole vertical model:
+ * `base_y`/`height` are ignored, because the only other entries hanging above
+ * head height are window heads, and a window blocks anyway through its own
+ * sill and pane. THE LEAF IS A PICTURE, NOT A DOOR THAT SHUTS: it is drawn so
+ * a door reads as a door, and walking through it is precisely what a doorway
+ * is for — a leaf that blocked would brick up every door in the world. Both
+ * flags are the SERVER's word, not a height measured back out of the payload
+ * here.
  *
  * Collision applies INSIDE the interior view only. Outdoors the figure walks
  * freely over the metre plane (E4 task 5): `walk.slideBlocked` holds it out of
@@ -113,8 +118,9 @@ export function bodyRadius(k: number): number {
  * end by end — which is precisely why it cannot be done here, where only one
  * point at a time is in hand.
  *
- * A `lintel` entry never becomes a segment (see the header): it hangs over a
- * walkable gap, so it is not one of the ends the ease looks at either.
+ * A `lintel` and a `leaf` entry never become a segment (see the header): they
+ * hang over / in a walkable gap, so neither is one of the ends the ease looks
+ * at either — the door cheeks stay free ends and keep their 0.12 m.
  *
  * Apart from the offset the only work done here is the ease: a wall end that
  * no OTHER wall end meets is pulled back by `DOOR_EASE_M * k`. That is a
@@ -131,7 +137,8 @@ export function wallSegments(payload: ScenePayload | null | undefined,
   for (const w of walls) {
     if (!w || w.level !== level) continue;
     // The wall OVER a door is not a wall in a floor plan: one walks under it.
-    if (w.lintel) continue;
+    // Neither is the door's own LEAF: one walks through it.
+    if (w.lintel || w.leaf) continue;
     const seg = { ax: origin.x + w.from[0], az: origin.z + w.from[1],
                   bx: origin.x + w.to[0], bz: origin.z + w.to[1] };
     if (!Number.isFinite(seg.ax) || !Number.isFinite(seg.az)

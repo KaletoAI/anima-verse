@@ -86,6 +86,13 @@ export interface SceneWall {
   thickness: number
   texture_kind?: string
   glass?: boolean
+  /** The DOOR LEAF filling a door's clear opening (2026-08-25) — the door's
+   *  counterpart to a window's glass pane: same thin body in the same hole,
+   *  but opaque and dark (`style.door_color`). It is drawn, it is EXCLUDED
+   *  from the facade culling exactly like a pane (a facade that hides must
+   *  not leave its doors hanging in the air), and it bars nothing — one walks
+   *  THROUGH a door, so 2D colliders skip it like a `lintel`. */
+  leaf?: boolean
   /** This piece hangs over a WALKABLE gap (a door or passage). It is drawn
    *  like any other wall, but it bars nothing in a floor plan — whoever
    *  derives 2D colliders from `walls` skips it. */
@@ -281,6 +288,10 @@ export interface SceneStyle {
   floor_color: string
   glass_color: string
   glass_opacity: number
+  /** Colour of a `leaf` piece — the door itself. Opaque and dark, so a door
+   *  reads as a door against `wall_color`. Callers keep a fallback: an older
+   *  payload does not carry it. */
+  door_color?: string
   upper_wall_opacity: number
   upper_floor_opacity: number
   room_palette: string[]
@@ -349,6 +360,9 @@ export interface SceneDoorway {
   at_world: [number, number]
   /** Unit direction of the wall — the threshold runs ALONG it. */
   along: [number, number]
+  /** Which walkable opening this is: a `door` has a LEAF in its hole, a
+   *  `passage` is an open gap (2026-08-25). */
+  type?: 'door' | 'passage'
   /** Clear width, already clamped to the wall edge. */
   width_m: number
   /** Clear height, already clamped to the wall — `base_y + height_m` is where

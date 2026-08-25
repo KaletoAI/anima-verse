@@ -95,14 +95,20 @@ ROOF_RIDGE_AXIS = "auto"
 # The render is MESH INPUT (the ``building`` use case's rules: isolated, plain
 # neutral background, flat shadowless light). Textures on the volume would bake
 # into the generated mesh as invented detail, so the body is painted in three
-# flat tones that differ only enough to separate wall from roof from base.
+# flat tones that differ only enough to separate wall from roof from base from
+# door.
 WALL_TONE = "#d8d2c8"          # light warm grey — the wall surface
 ROOF_TONE = "#6b5f57"          # darker — roof_model's own shingle default
 PLATE_TONE = "#a8a29a"         # mid grey — floor plates and the ground plate
+# The DOOR LEAF (§ B1 ``leaf``, 2026-08-25) is the FOURTH tone, and it is the
+# reason a fourth exists at all: a door painted in WALL_TONE is a wall, and
+# the mesher would rebuild a facade without doors from it. Same neutral,
+# clearly darker — enough to read as a door, still no texture.
+DOOR_TONE = "#5a4a3c"
 #: One roughness for everything: a matte body has no highlights to bake in.
 SURFACE_ROUGHNESS = 0.9
 
-MATERIAL_WALL, MATERIAL_ROOF, MATERIAL_PLATE = 0, 1, 2
+MATERIAL_WALL, MATERIAL_ROOF, MATERIAL_PLATE, MATERIAL_DOOR = 0, 1, 2, 3
 
 # ── The camera (mesh-input rules, cf. app/core/model_refs.py) ───────────
 #
@@ -268,10 +274,11 @@ def extract_geometry(location: Dict[str, Any], location_id: str = "",
     dict.
 
     Returns ``{ok, vertices, faces, face_material, parts, roof, rect,
-    bounds}``. ``parts`` counts what went in — walls, plates, whether a ground
-    plate and a roof were added — so a caller can say WHY a body looks the way
-    it does without re-deriving it. ``ok`` False means the location has no
-    exterior at all (no wall, no plate, no footprint).
+    bounds}``. ``parts`` counts what went in — walls (``doors`` says how many
+    of them are door leaves), plates, whether a ground plate and a roof were
+    added — so a caller can say WHY a body looks the way it does without
+    re-deriving it. ``ok`` False means the location has no exterior at all
+    (no wall, no plate, no footprint).
     """
     from app.core import roof_model as rm
     from app.core.location_model3d import derive_plan_width_m
@@ -298,7 +305,13 @@ def extract_geometry(location: Dict[str, Any], location_id: str = "",
     # contour piece YIELDS to the room wall (§ B1, "one wall, one owner"), so
     # dropping the room walls would punch holes in the outer shell. The purely
     # interior ones are hidden by the roof from every angle this camera uses.
+    #
+    # A DOOR LEAF rides in as one of them — it is a `walls` entry like any
+    # other, in the composer's own thin body — and only its MATERIAL differs
+    # (§ B1 ``leaf``): dark, so the door is a door in the picture the mesher
+    # gets. Nothing is filtered here and no leaf is derived here.
     wall_count = 0
+    door_count = 0
     for wall in scene.get("walls") or []:
         rect_pts = wall_rect(wall)
         if not rect_pts:
@@ -307,8 +320,10 @@ def extract_geometry(location: Dict[str, Any], location_id: str = "",
         body = prism(rect_pts, base_y, base_y + _num(wall.get("height")),
                      base=len(verts))
         if body[1]:
-            add(body[0], body[1], MATERIAL_WALL)
+            leaf = bool(wall.get("leaf"))
+            add(body[0], body[1], MATERIAL_DOOR if leaf else MATERIAL_WALL)
             wall_count += 1
+            door_count += int(leaf)
 
     # PLATES — the floors of the DECLARED storeys (upper floors, basements).
     # A zero-thickness plate is a texture surface on the level below (§ B1,
@@ -356,8 +371,8 @@ def extract_geometry(location: Dict[str, Any], location_id: str = "",
     if not faces:
         return {"ok": False, "error": "no_geometry", "location_id": loc_id,
                 "vertices": [], "faces": [], "face_material": [],
-                "parts": {"walls": 0, "plates": 0, "ground_plate": False,
-                          "roof": False}}
+                "parts": {"walls": 0, "doors": 0, "plates": 0,
+                          "ground_plate": False, "roof": False}}
 
     return {
         "ok": True,
@@ -365,7 +380,8 @@ def extract_geometry(location: Dict[str, Any], location_id: str = "",
         "vertices": verts,
         "faces": faces,
         "face_material": face_material,
-        "parts": {"walls": wall_count, "plates": plate_count,
+        "parts": {"walls": wall_count, "doors": door_count,
+                  "plates": plate_count,
                   "ground_plate": has_ground, "roof": bool(roof)},
         "roof": roof,
         "rect": facts.get("rect") or {},
@@ -403,6 +419,8 @@ def build_job(location_id: str,
          "roughness": SURFACE_ROUGHNESS},
         {"name": "plate", "tone": PLATE_TONE,
          "color": tone_to_linear(PLATE_TONE), "roughness": SURFACE_ROUGHNESS},
+        {"name": "door", "tone": DOOR_TONE, "color": tone_to_linear(DOOR_TONE),
+         "roughness": SURFACE_ROUGHNESS},
     ]
     return {
         "ok": True,

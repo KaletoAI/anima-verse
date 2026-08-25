@@ -4244,7 +4244,7 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                              # gespeicherter Wert sich bewegt
   k, storey_m,               # abgeleitete Skalare (Welt-Einheiten)
   levels: [ { level, floor_y } ],
-  style: { wall_color, floor_color, glass_color, glass_opacity,
+  style: { wall_color, floor_color, glass_color, glass_opacity, door_color,
            upper_wall_opacity, upper_floor_opacity, room_palette: [...],
            elevator_frame_color, elevator_pad_color, elevator_cabin_color,
            elevator_cabin_opacity, elevator_glass_opacity },
@@ -4256,7 +4256,7 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                texture_kind?, opacity_role: "ground"|"upper",
                room_id? } ],
   walls:   [ { level, from: [x,z], to: [x,z], base_y, height, thickness,
-               texture_kind?, glass?, lintel?, opacity_role, room_id?,
+               texture_kind?, glass?, leaf?, lintel?, opacity_role, room_id?,
                outward_normal: [nx,nz] } ],
                                            # lintel = das Stück ÜBER einer
                                            # begehbaren Öffnung (Nachtrag
@@ -4264,6 +4264,13 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # jede Wand, sperrt aber NICHTS im
                                            # Grundriss — wer 2D-Kollider aus
                                            # `walls` ableitet, überspringt es
+                                           # leaf = das TÜRBLATT IN der
+                                           # Öffnung (Nachtrag 2026-08-25):
+                                           # dünn wie ein Glasband, opak in
+                                           # `style.door_color`, aus dem
+                                           # Fassaden-Culling ausgenommen wie
+                                           # eine Scheibe — und ebenfalls kein
+                                           # Kollider
   extras:  [ { kind: "elevator_shaft"|"elevator_pad"|"elevator_cabin"|…,
                … je Kind eine feste Primitiv-Form … } ],
 
@@ -4347,13 +4354,16 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                source: "room"|"prop" } ],  # ALLE fertig in Welt-Koordinaten
 
   # --- Türschwellen & Befunde (2026-08-05) ---
-  doorways: [ { level, at_world: [x,z], along: [ux,uz], width_m, height_m,
-                base_y, rooms: [room_id, …], outside } ],
+  doorways: [ { level, at_world: [x,z], along: [ux,uz], type, width_m,
+                height_m, base_y, rooms: [room_id, …], outside } ],
                                            # IMMER da, leer = keine Tür
                                            # base_y = STEH-Höhe der Raumseite
                                            # height_m = lichte Höhe; darüber
                                            # steht der Sturz als eigener
                                            # `walls`-Eintrag mit `lintel`
+                                           # type = "door" | "passage"; eine
+                                           # `door` hat ein Blatt im Loch
+                                           # (`walls`-Eintrag mit `leaf`)
   problems: [ { kind, location_id?, room_id?, message } ],
                                            # IMMER da, leer = alles sauber
   outdoor_rooms: [ room_id, … ]
@@ -6703,5 +6713,75 @@ alte Geometrie bis jemand die Location zufällig speichert.
 | Kontur: Sturz über dem projizierten Loch, gleiche x-Spanne, Tür so hoch wie die Wand → gar kein Sturz; weichende Kontur überlässt auch den Sturz der Raumwand | ebenda **[4]** |
 | `doorways[].height_m`: geklemmt gegen die Wand (9,0 → 2,85), fehlende Autorierung → Wandhöhe, also kein Sturz | ebenda **[3d]** |
 | Sturz bekommt keinen Schürzen-Anteil (§ A16.9) | ebenda **[4a]** |
-| Blender-Volumen: 10 × 8-Haus, ein Raum, eine 1 × 2,1-m-Tür → 12 Wandprismen, 110 Vertices, 83 Faces (ohne Tür 8 / 78 / 59), Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]** |
+| Blender-Volumen: 10 × 8-Haus, ein Raum, eine 1 × 2,1-m-Tür → 14 Wandprismen (12 Wand + 2 Türblatt), 126 Vertices, 95 Faces (ohne Tür 8 / 78 / 59), Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]** |
 | Kollision: das geflaggte Stück wird kein Segment, ROTE PROBE „ohne Flag wäre die Tür zugemauert" | `client3d/scripts/smoke_walk_math.mjs` |
+
+## Nachtrag 2026-08-25 (§ B1): Das TÜRBLATT — eine Tür ist von außen SICHTBAR
+
+Der Sturz (Nachtrag oben) hat die Tür zum Loch gemacht, aber ein Loch ist noch
+keine Tür: von außen blieb eine Außentür ein dunkles Rechteck Innenraum, im
+Blender-Außenbild ein Schatten in der Fassade. **User-Entscheidung (a) vom
+2026-08-25: die Öffnung bekommt ein TÜRBLATT** — dieselbe Mechanik, die das
+Fenster seit jeher hat, nur opak statt durchsichtig.
+
+**Eine Öffnung, drei Stücke — und das dritte ist die SCHEIBE IM LOCH:**
+
+| Stück | Fenster | Tür | Durchgang |
+|---|---|---|---|
+| unter der Öffnung | Brüstung 0 … `sill_m` | entfällt | entfällt |
+| **in der Öffnung** | **Glasband**, Eintrag mit `glass` | **Türblatt**, Eintrag mit `leaf` | Lücke |
+| über der Öffnung | Sturz | Sturz, Eintrag mit `lintel` | Sturz, Eintrag mit `lintel` |
+
+Ein `passage` ist eine autorierte Öffnung OHNE Tür — ein Blatt darin behauptete
+eine Tür, die niemand gezeichnet hat —, also bleibt sein Loch leer.
+
+**Die Drahtform ändert sich wieder nicht.** Additiv sind zwei Felder:
+
+- `walls[].leaf` (bool, fehlt = normal): dieses Stück IST die Tür. Es füllt die
+  LICHTE Öffnung — vom Wandfuß (`base_y` der Wand ohne Schürze, § A16.9: das
+  Blatt steht nicht im Gelände, die Schwelle liegt an seinem Fuß) bis zur
+  Türhöhe — und ist so dünn wie ein Glasband: `WALL_THICKNESS ×
+  PANE_THICKNESS_FACTOR` = 0,07 × 0,6 = **0,042 m**. Es trägt KEIN
+  `texture_kind`; seine Farbe ist `style.door_color`, opak.
+  Beide Renderer behandeln es wie eine Scheibe: gezeichnet, aber **aus dem
+  Fassaden-Culling ausgenommen** (`wallCullRef` / `tile.outlineWalls`) — die
+  Culling-Liste ist die Fassade, und eine Scheibe füllt ein Loch, statt einen
+  Raum zu schließen. Und es SPERRT NICHTS: wer 2D-Kollider aus `walls`
+  ableitet, überspringt `leaf` wie `lintel`, sonst wäre jede Tür der Welt
+  zugemauert.
+- `doorways[].type` (`"door"` | `"passage"`): welche begehbare Öffnung das ist.
+  Daraus — und nicht aus einer zweiten Öffnungssuche — entscheidet die Kontur,
+  ob ihr projiziertes Loch ein Blatt bekommt.
+- `style.door_color` (`#4a3a2e`): die eine Farbe, die beide Renderer für ein
+  `leaf`-Stück nehmen.
+
+**Wer trägt das Blatt bei Kontur/Raum-Überlappung?** Dieselbe Regel wie beim
+Sturz, keine zweite: das Blatt der Kontur wird gegen die Strecken geklemmt, die
+einer Raumhülle gewichen sind („eine Wand, ein Besitzer"). Steht die Raumwand
+auf der Konturlinie, trägt sie Wand, Sturz UND Blatt allein; steht der Raum
+zurückgesetzt im Haus, sind es zwei verschiedene Löcher in zwei verschiedenen
+Wänden — beide bekommen ihr eigenes Blatt, genau wie beide ihren eigenen Sturz
+bekommen.
+
+Handrechnung, dieselbe 1,00 × 2,10-m-Tür an der 3,00-m-Etage wie oben:
+
+| Wand | Stück | `base_y` | `height` | `thickness` |
+|---|---|---|---|---|
+| Raumkante | Blatt x 4,5 … 3,5 | 0,00 | 2,10 | 0,042 |
+| Konturkante | Blatt x 4,5 … 3,5 | 0,00 | 2,10 | 0,042 |
+
+Also **kein Schürzen-Anteil** (der Sturz hat auch keinen) und keine
+Wandstärke: `base_y` ist der Fuß der Wand OHNE die 0,14 m, die deren
+volle Stücke ins Gelände reichen.
+
+`SCENE_RECIPE_VERSION` 2 → **3**: gleiche Daten, andere Wände.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Raumwand: Blatt 0,00 / 2,10 / 0,042, ohne `texture_kind`, ROTE PROBE „das Blatt trägt keine Schürze"; ein `passage` bekommt keines | `scripts/smoke_scene_recipe.py` **[3]** |
+| Kontur: Blatt über dem projizierten Loch, gleiche x-Spanne wie der Sturz; weichende Kontur überlässt auch das Blatt der Raumwand | ebenda **[4]** |
+| `style.door_color` liegt im Stil-Vokabular | ebenda **[9]** |
+| Blender-Volumen: 14 Wandprismen (2 davon Türblatt), 126 Vertices, 95 Faces, vier Materialien, Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]/[5]** |
+| Kollision: das Blatt wird kein Segment, ROTE PROBE „ein sperrendes Blatt mauert die Tür zu" | `client3d/scripts/smoke_walk_math.mjs` |

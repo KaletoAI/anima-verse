@@ -432,8 +432,14 @@ function plateMaterial(plate: ScenePlate,
   }) as THREE.MeshStandardMaterial;
 }
 
-/** Material of a wall segment: a glass band from the glass vocabulary, else
- *  the tiled wall texture or the wall colour.
+/** Colour of a door leaf when the payload carries no `style.door_color` —
+ *  the server's own constant (`scene_recipe.STYLE`), repeated here ONLY as the
+ *  fallback for a payload composed before the field existed. */
+const DOOR_COLOR_FALLBACK = '#4a3a2e';
+
+/** Material of a wall segment: a PANE from its own vocabulary — a window's
+ *  translucent glass or a door's opaque dark leaf — else the tiled wall
+ *  texture or the wall colour.
  *
  *  Returns the tile size ALONGSIDE the material because the tiling of a wall
  *  lives in the box's uvs (buildWall/applyWorldScaleWallUVs), not on the
@@ -444,6 +450,13 @@ function wallMaterial(wall: SceneWall, style: ScenePayload['style']):
   if (wall.glass) {
     return { mat: std({ color: hex(style.glass_color), transparent: true,
                         opacity: style.glass_opacity ?? 0.25, roughness: 0.3 }),
+             tileM: 0 };
+  }
+  // The DOOR LEAF: opaque, dark, matte — the one thing that makes an exterior
+  // door read as a door rather than as a hole into the dark.
+  if (wall.leaf) {
+    return { mat: std({ color: hex(style.door_color ?? DOOR_COLOR_FALLBACK),
+                        roughness: 0.75 }),
              tileM: 0 };
   }
   const upper = wall.opacity_role === 'upper';
@@ -733,9 +746,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     tile.roomFloors.set(id, entry);
   }
 
-  // ── Wände ───────────────────────────────────────────────────────────────
-  // Bereits um jede Öffnung geteilt; das Glasband eines Fensters ist ein
-  // eigener Eintrag. `outward_normal` kommt mit und speist das Culling.
+  // ── Walls ───────────────────────────────────────────────────────────────
+  // Already split around every opening; the PANE in a hole is its own entry —
+  // a window's glass band, a door's leaf. `outward_normal` comes with it and
+  // feeds the culling.
   for (const wall of scene.walls) {
     const len = wallLength(wall);
     if (len < 1e-4) continue;
@@ -743,7 +757,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     const mesh = buildWall(THREE, wall, wallMat, tileM);
     parentFor(wall.room_id).add(mesh);
     builtWalls.push({ mesh, wall });
-    if (!wall.glass) {
+    // A PANE never joins the facade culling — glass since it existed, the
+    // door LEAF for the same reason (2026-08-25): the culling list is what a
+    // FACADE is made of, and a pane fills a hole instead of enclosing a room.
+    // Its own normal must not decide what the camera may see, and it keeps
+    // the storey filter off itself too (`applyWallCulling`).
+    if (!wall.glass && !wall.leaf) {
       const mid = tileToWorld(tile, (wall.from[0] + wall.to[0]) / 2,
                               (wall.from[1] + wall.to[1]) / 2);
       // The outward normal is a DIRECTION: it turns with the footprint but is
@@ -1116,7 +1135,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
  * WHAT IS COPIED, and nothing else: the LEVEL plates (the storey contours,
  * `plate.room_id` absent) and every non-glass wall — contour and room alike,
  * with their window and door gaps, because the payload delivers walls already
- * split around every opening (§ B1). No models, no props, no markers, no
+ * split around every opening (§ B1). The DOOR LEAVES ride along (2026-08-25):
+ * they are opaque wall-like pieces, and a far view that shows the doors is
+ * exactly what the leaf was added for. No models, no props, no markers, no
  * labels, no room interiors: this is a SHAPE, not a second scene.
  *
  * THE GEOMETRY IS SHARED, ONLY THE MATERIAL IS A CLONE. `Mesh.clone()` keeps

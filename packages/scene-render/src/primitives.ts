@@ -125,9 +125,10 @@ export function applyWorldScaleWallUVs(geometry: BufferGeometry, len: number,
 
 /**
  * Wall segment from a finished primitive: doors and passages are already
- * gaps, a window arrives as sill + head plus its own glass entry — one box
- * each, nothing is split here. Length and angle come from `from`/`to`, the
- * centre from their midpoint.
+ * gaps, a window arrives as sill + head plus its own glass entry, a door as
+ * its cheeks + lintel plus its own LEAF entry — one box each, nothing is
+ * split here. Length and angle come from `from`/`to`, the centre from their
+ * midpoint.
  *
  * `tileM` is the world size of one texture tile in metres. Passing it moves
  * the tiling into the uvs (see `applyWorldScaleWallUVs`); the caller then
