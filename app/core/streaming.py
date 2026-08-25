@@ -504,6 +504,54 @@ class _StreamState:
 
 
 # ---------------------------------------------------------------------------
+# Mid-stream loop detection
+# ---------------------------------------------------------------------------
+
+class StreamLoopDetector:
+    """Cancels a runaway stream: the same SUBSTANTIAL line (>= MIN_LINE_LEN
+    chars after strip) appearing MAX_REPEAT+ times within the last WINDOW
+    completed lines means the LLM is stuck and would keep emitting until
+    max_tokens (the tool-LLM pattern: same <tool>...</tool> back-to-back).
+
+    EVERY completed line fills the window; short lines are spacers that are
+    never counted as offender candidates. Structured JSON legitimately
+    repeats identical field lines once per array element — and when the
+    VARIABLE lines of an element are short ('"at": 0.2779,' is 14 chars),
+    skipping them would collapse the window onto the constant lines and a
+    legitimate 4-window layout would read as a back-to-back loop (that cut
+    the world-dev layout JSON mid-stream, 2026-08-25). A stuck LLM repeats
+    the same line densely and still trips through any spacers it emits.
+
+    Feed the full accumulated response after each chunk; only completed
+    lines (up to the last newline) are consumed, each exactly once.
+    """
+    MAX_REPEAT = 4
+    MIN_LINE_LEN = 16
+    WINDOW = 12
+
+    def __init__(self) -> None:
+        from collections import deque
+        self._recent = deque(maxlen=self.WINDOW)
+        self._pos = 0
+        self.offender: Optional[str] = None
+
+    def feed(self, accumulated: str) -> bool:
+        """True as soon as a loop is detected (then stop feeding)."""
+        last_nl = accumulated.rfind('\n')
+        if last_nl > self._pos:
+            segment = accumulated[self._pos:last_nl]
+            for line in segment.split('\n'):
+                key = line.strip()
+                if (len(key) >= self.MIN_LINE_LEN
+                        and list(self._recent).count(key) >= self.MAX_REPEAT):
+                    self.offender = key
+                    return True
+                self._recent.append(key)  # short lines act as spacers
+            self._pos = last_nl + 1
+        return False
+
+
+# ---------------------------------------------------------------------------
 # StreamingAgent
 # ---------------------------------------------------------------------------
 
@@ -1049,18 +1097,8 @@ class StreamingAgent:
         _EMPTY_RETRIES = 8
         _RETRY_WAIT = 30  # Sekunden zwischen Retries
         _TOOL_BUFFER_SIZE = 60
-        # Mid-stream loop detect: cancel the stream when the same substantial
-        # line repeats _LOOP_MAX_REPEAT+ times WITHIN the last _LOOP_WINDOW
-        # substantial lines (dense repetition = the tool-LLM loop pattern:
-        # same <tool>...</tool> back-to-back until max_tokens). The window is
-        # essential: structured JSON legitimately repeats identical field
-        # lines ("decency": "public",) once per array element — a location
-        # with 5 rooms tripped the old TOTAL count and got cut mid-JSON at
-        # the 5th room. Field repeats sit ~8+ lines apart and never get
-        # dense enough; a stuck LLM repeats back-to-back and still trips.
-        _LOOP_MAX_REPEAT = 4
-        _LOOP_MIN_LINE_LEN = 16
-        _LOOP_WINDOW = 12
+        # Mid-stream loop detect: see StreamLoopDetector (module level) for
+        # the semantics and the two regressions its rules encode.
 
         iteration_response = ""
         chunk_count = 0
@@ -1089,10 +1127,7 @@ class StreamingAgent:
             tool_call_end_pos = -1
             count_sent = 0
             unsent_buffer = ""
-            from collections import deque as _deque
-            _loop_recent = _deque(maxlen=_LOOP_WINDOW)
-            _loop_processed_pos = 0
-            _loop_break = False
+            _loop_det = StreamLoopDetector()
 
             # Stream-Init. Hinweis: astream() ist ein Async-Generator — der
             # eigentliche create(stream=True)-Call (und damit z.B. ein Gateway-
@@ -1176,29 +1211,13 @@ class StreamingAgent:
 
                 iteration_response += chunk.content
 
-                # --- Mid-stream loop detection ---
-                # Walk the newly completed lines (since last newline we scanned)
-                # and count substantial duplicates. Bail when any line repeats
-                # more than _LOOP_MAX_REPEAT times — the LLM is stuck and
-                # will otherwise keep emitting until max_tokens.
-                _last_nl = iteration_response.rfind('\n')
-                if _last_nl > _loop_processed_pos:
-                    _segment = iteration_response[_loop_processed_pos:_last_nl]
-                    for _line in _segment.split('\n'):
-                        _key = _line.strip()
-                        if len(_key) < _LOOP_MIN_LINE_LEN:
-                            continue
-                        if list(_loop_recent).count(_key) >= _LOOP_MAX_REPEAT:
-                            _loop_break = True
-                            _loop_offender = _key
-                            break
-                        _loop_recent.append(_key)
-                    _loop_processed_pos = _last_nl + 1
-                if _loop_break:
+                # --- Mid-stream loop detection (see StreamLoopDetector) ---
+                if _loop_det.feed(iteration_response):
                     logger.warning(
                         "Mid-stream loop detected (line repeated %d+ times within "
                         "the last %d lines: %r) — cancelling stream",
-                        _LOOP_MAX_REPEAT, _LOOP_WINDOW, _loop_offender[:80])
+                        StreamLoopDetector.MAX_REPEAT, StreamLoopDetector.WINDOW,
+                        (_loop_det.offender or "")[:80])
                     _stream_done = True
                     break
 
