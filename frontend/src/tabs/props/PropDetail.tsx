@@ -1,17 +1,27 @@
 /**
- * PropDetail — detail panel of one prop: 3D viewer + persisted orientation
- * fix + the editable sidecar fields + object-local markers + the armed
- * two-step delete.
+ * PropDetail — detail panel of one prop.
+ *
+ * TWO COLUMNS, and since 2026-08-25 the split says what a prop IS:
+ *
+ *   left   the PROP's general fields (name, category, tags, sway) — and below
+ *          them the MODEL VARIANTS, which carry everything about how the
+ *          object looks: size, generation subject, ground offset, seasons and
+ *          markers. The marker editor of the SELECTED variant sits under the
+ *          strip, because it is dialled against the viewer opposite.
+ *   right  the preview: the selected variant's source image, its mesh in the
+ *          3D viewer with the 1.70 m reference figure, the persisted
+ *          orientation fix and the mesh gallery.
  *
  * The prop's meshes are a GALLERY (`PropModelPanel`, one active file per
  * resolution tier) — upload and tier assignment live there, and clicking a
  * row previews that file in the viewer here. Since E2.3 a prop carries
  * SEVERAL such galleries, one per MODEL VARIANT (`PropVariantStrip`): the
  * selected variant decides which mesh the viewer shows, which gallery the
- * panel edits and which slot a re-mesh writes into.
+ * panel edits, which slot a re-mesh writes into — and which markers, which
+ * size and which sink are being edited.
  *
- * Markers are OBJECT-LOCAL (`at` = [u, v, w] fractions of the model bounding
- * box), so they travel with the prop into any room.
+ * Markers are OBJECT-LOCAL (`at` = [u, v, w] fractions of THAT variant's model
+ * bounding box), so they travel with the mesh into any room.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FIGURE_HEIGHT_M } from '@anima/scene-render'
@@ -26,8 +36,8 @@ import { Model3DViewer } from '../characters/Model3DViewer'
 import { GroundOffsetGauge } from './GroundOffsetGauge'
 import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
-import { orientedDims, type DimKey } from './dims'
 import { CATEGORY_DATALIST_ID } from './propTypes'
+import type { DimKey } from './dims'
 import type { PropFull, PropMarker, PropSourceImage, PropVariant } from './propTypes'
 
 /**
@@ -51,14 +61,6 @@ function saveScaleFigure(on: boolean): void {
   try { window.localStorage.setItem(SCALE_FIGURE_KEY, on ? '1' : '0') }
   catch { /* a browser that refuses storage still gets its figure */ }
 }
-
-/** The three real dims in display order; `axis` indexes orientedDims(),
- *  which returns [width(x), height(y), depth(z)]. */
-const DIM_FIELDS: Array<{ key: DimKey; label: string; axis: number }> = [
-  { key: 'width_m', label: 'Width (m)', axis: 0 },
-  { key: 'depth_m', label: 'Depth (m)', axis: 2 },
-  { key: 'height_m', label: 'Height (m)', axis: 1 },
-]
 
 // Marker `at` = fractions of the RAW box in the order [X, Y, Z] — mirrors
 // props.MARKER_AT_MIN/MAX: half a box of slack per axis, because seats and
@@ -186,90 +188,33 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       ? { backend: prop.backend_image || '', prompt: prop.prompt || '',
         negative: prop.negative || '', generated_at: prop.source_generated_at || '' }
       : null)
-  // The bbox/dims belong to the PROP, and the stored one was measured on the
-  // primary variant — so only that one may re-measure them live. Otherwise
-  // looking at a second variant would silently re-proportion the object.
-  const primaryShown = !!shownVariant?.primary
 
   const [nameDraft, setNameDraft] = useState(prop.name)
-  const [descDraft, setDescDraft] = useState(prop.description || '')
   const [categoryDraft, setCategoryDraft] = useState(prop.category)
   const [tagsDraft, setTagsDraft] = useState(prop.tags.join(', '))
-  // The three real dims as string drafts — committed on blur/Enter, reverted
-  // to the server value when the input is not a positive number.
-  const [dims, setDims] = useState({
-    width_m: String(prop.width_m), depth_m: String(prop.depth_m),
-    height_m: String(prop.height_m),
-  })
-  // The wind factor as a string draft — committed on blur/Enter like the
-  // dims. Its own sync effect (below) is enough: the deps are the primitive
-  // value, so a background poll that changes nothing re-renders without
-  // touching what the admin is typing.
+  // The wind factor as a string draft — committed on blur/Enter. Its own sync
+  // effect (below) is enough: the deps are the primitive value, so a
+  // background poll that changes nothing re-renders without touching what the
+  // admin is typing.
   const [swayDraft, setSwayDraft] = useState(String(prop.sway_factor ?? 1))
   useEffect(() => {
     setSwayDraft(String(prop.sway_factor ?? 1))
   }, [prop.id, prop.sway_factor])
-  // The ground offset is a SLIDER, so the value moves per drag step while the
-  // server may only be written now and then — the local number drives the
-  // gauge, a timer writes it, and the incoming poll is ignored as long as a
-  // write of our own is still on its way (otherwise the echo of an older
-  // value snaps the slider back under the cursor).
-  const [sinkM, setSinkM] = useState(prop.ground_offset_m ?? 0)
-  const sinkTimer = useRef<number | null>(null)
-  const sinkPending = useRef(false)
-  useEffect(() => {
-    if (sinkPending.current) return
-    setSinkM(prop.ground_offset_m ?? 0)
-  }, [prop.id, prop.ground_offset_m])
-  useEffect(() => () => {
-    if (sinkTimer.current !== null) window.clearTimeout(sinkTimer.current)
-  }, [])
   // Drafts re-arm on PROP CHANGE only — the background poll reloads the
   // list every few seconds while a generation runs, and resetting on every
   // fresh object identity overwrote whatever the admin was typing (user
   // finding 2026-08-02: the description reverted mid-edit).
   useEffect(() => {
     setNameDraft(prop.name)
-    setDescDraft(prop.description || '')
     setCategoryDraft(prop.category)
     setTagsDraft(prop.tags.join(', '))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prop.id])
-  // The dims drafts sync separately WITH guards: after a commit the server
-  // echoes the values back through onChanged(), and blindly resetting here
-  // stomped whatever the admin was already typing in the next field (fast
-  // edits scrambled the trio). Skip the reset while a dims input is focused
-  // and when the incoming values are just our own commit coming back.
-  const dimsEditingRef = useRef(false)
-  const sentDimsRef = useRef('')
-  const propIdRef = useRef(prop.id)
-  useEffect(() => {
-    const incoming = {
-      width_m: String(prop.width_m), depth_m: String(prop.depth_m),
-      height_m: String(prop.height_m),
-    }
-    const idChanged = propIdRef.current !== prop.id
-    propIdRef.current = prop.id
-    if (!idChanged) {
-      if (dimsEditingRef.current) return
-      if (JSON.stringify(incoming) === sentDimsRef.current) return
-    }
-    sentDimsRef.current = ''
-    setDims(incoming)
-  }, [prop.id, prop.width_m, prop.depth_m, prop.height_m])
 
-  // Proportional assist: editing one dim pulls the OTHER two along the model's
-  // proportions — unless they were edited too ("pinned"). Pins and the live
-  // box reset only when another prop is selected.
-  const [pinned, setPinned] = useState<Record<DimKey, boolean>>({
-    width_m: false, depth_m: false, height_m: false,
-  })
-  const [liveBbox, setLiveBbox] = useState<[number, number, number] | null>(null)
-  // The RAW box of the mesh the viewer has OPEN — of EVERY variant, unlike
-  // `liveBbox`, which may only ever be the primary variant's because it
-  // re-proportions the PROP. What the overlays scale by is the mesh on
-  // screen: a variant's own GLB has its own proportions, and measuring the
-  // primary one's box would size the figure beside a stranger.
+  // The RAW box of the mesh the viewer has OPEN, i.e. the SELECTED variant's,
+  // measured on load. What the overlays scale by is the mesh on screen: a
+  // variant's own GLB has its own proportions, and measuring another one's box
+  // would size the figure beside a stranger.
   const [shownBbox, setShownBbox] = useState<[number, number, number] | null>(null)
   // The scale kit of the viewer (figure + metre grid) — a VIEW, so it is
   // remembered in the browser and never on the prop.
@@ -278,70 +223,20 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   // server says whether THIS variant has one; the flag only catches a 404 that
   // races the list (a delete between load and render).
   const [srcOk, setSrcOk] = useState(true)
-  useEffect(() => {
-    setPinned({ width_m: false, depth_m: false, height_m: false })
-    setLiveBbox(null)
-  }, [prop.id])
   // Another variant (or another file of it) means another mesh — its box is
   // measured when it has loaded, never inherited from the one before.
   useEffect(() => { setShownBbox(null) }, [prop.id, variant, previewFile])
   useEffect(() => { setSrcOk(true) }, [prop.id, variant, reloadKey])
 
-  // How far the ground-offset SLIDER may travel: the prop's own height, at
-  // least half a metre and at most the stored limit (props.GROUND_OFFSET_MAX).
-  // A dial that sweeps ±5 m for a footstool cannot hit its 3 cm, and one that
-  // sweeps ±0.3 m for a fir cannot bury its trunk — the range is the first
-  // half of the reference the value is read against.
-  const sinkRange = Math.min(5, Math.max(0.5, Math.ceil(
-    (parseFloat(dims.height_m) || prop.height_m || 1) * 10) / 10))
-
-  // Per render, so turning the orientation fix updates the suggestions live —
-  // the viewer's measured box wins over the stored one.
-  const bbox = liveBbox ?? prop.bbox
-  const ratios = bbox ? orientedDims(bbox, prop.rotation) : null
-
-  // How big the DISPLAYED variant really is — the one resolution rule the
-  // server stores by (`props.variant_dims`): the variant's own override where
-  // it has one, the prop's value everywhere else. The prop's side is read
-  // from the LIVE form draft above, so typing there still moves the preview
-  // of an inheriting variant.
-  //
-  // Everything the viewer measures with hangs on this. Before it, the
-  // overlays read the PROP for every chip, so a per-variant size was
-  // invisible in 3D — the finding of 2026-08-24 ("15 m typed on variant 4,
-  // nothing moves"): the value WAS saved (POST .../variants/3/dims → 200),
-  // only nothing on screen was reading it.
-  const shownDims = useMemo(() => {
-    const own = (key: DimKey) => parseFloat(dims[key]) || prop[key]
-    const ov = shownVariant?.dims
-    return {
-      width_m: ov?.width_m ?? own('width_m'),
-      depth_m: ov?.depth_m ?? own('depth_m'),
-      height_m: ov?.height_m ?? own('height_m'),
-    }
-  }, [shownVariant, dims, prop])
-  /** Does the shown variant carry a size of its own? Then the form above and
-   *  the preview legitimately say different numbers, and that is worth one
-   *  sentence instead of looking like a bug. */
-  const variantSized = !!shownVariant && Object.keys(shownVariant.dims).length > 0
-
-  const editDim = (field: typeof DIM_FIELDS[number], raw: string) => {
-    setPinned((p) => ({ ...p, [field.key]: true }))
-    setDims((d) => {
-      const next = { ...d, [field.key]: raw }
-      const n = parseFloat(raw)
-      if (ratios && Number.isFinite(n) && n > 0 && ratios[field.axis] > 0) {
-        for (const other of DIM_FIELDS) {
-          if (other.key === field.key || pinned[other.key]) continue
-          const v = (n * ratios[other.axis]) / ratios[field.axis]
-          // Suggestions round to 2 decimals — centimetre precision reads
-          // honestly; the admin may still type finer values.
-          next[other.key] = String(Math.round(v * 100) / 100)
-        }
-      }
-      return next
-    })
-  }
+  // How big the DISPLAYED variant really is — the size belongs to the VARIANT
+  // (2026-08-25), so this is a plain read of the chip that is open. Everything
+  // the viewer measures with hangs on it: the reference figure, the dims
+  // overlay and the metres the marker sliders read back. Until the variant
+  // list has arrived the prop record answers, and its dims ARE the primary
+  // variant's.
+  const shownDims = useMemo(() => (shownVariant ? shownVariant.dims : {
+    width_m: prop.width_m, depth_m: prop.depth_m, height_m: prop.height_m,
+  }), [shownVariant, prop.width_m, prop.depth_m, prop.height_m])
 
   const patch = useCallback(async (body: Record<string, unknown>) => {
     try {
@@ -372,31 +267,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     }
   }, [enc, variant, meshesChanged, t, toast])
 
-  // Commit all three at once: an invalid field falls back to the server value,
-  // and nothing is sent when the trio is unchanged.
-  const commitDims = useCallback(() => {
-    const next: Record<string, number> = {}
-    let changed = false
-    for (const { key } of DIM_FIELDS) {
-      const n = parseFloat(dims[key])
-      if (Number.isFinite(n) && n > 0) {
-        next[key] = n
-        if (n !== prop[key]) changed = true
-      } else {
-        next[key] = prop[key]
-        setDims((d) => ({ ...d, [key]: String(prop[key]) }))
-      }
-    }
-    if (changed) {
-      sentDimsRef.current = JSON.stringify({
-        width_m: String(next.width_m), depth_m: String(next.depth_m),
-        height_m: String(next.height_m),
-      })
-      void patch(next)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dims, prop.width_m, prop.depth_m, prop.height_m, patch])
-
   // An empty or unreadable field is not a factor: it commits the default 1,
   // and the server answers by dropping the key. Clamped here as well so the
   // input echoes back what was actually stored.
@@ -409,20 +279,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     }
     void patch({ sway_factor: next })
   }, [swayDraft, prop.sway_factor, patch])
-
-  // Clamped and rounded to centimetres exactly as the server stores it, so
-  // the gauge shows what will really be written; 0 clears the key.
-  const commitSink = useCallback((v: number) => {
-    const next = Math.round(Math.min(Math.max(v, -5), 5) * 100) / 100
-    setSinkM(next)
-    sinkPending.current = true
-    if (sinkTimer.current !== null) window.clearTimeout(sinkTimer.current)
-    sinkTimer.current = window.setTimeout(() => {
-      sinkTimer.current = null
-      void patch({ ground_offset_m: next })
-        .finally(() => { sinkPending.current = false })
-    }, 350)
-  }, [patch])
 
   const rotate = useCallback(async (axis: 'x' | 'y' | 'z') => {
     const cur = prop.rotation || {}
@@ -453,20 +309,50 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   }, [prop.rotation, enc, onChanged, t, toast])
 
   // Object-local markers (A4) — same vocabulary as room markers, but the
-  // frame is the object's own bounding box: `at` = [u, v, w] fractions,
+  // frame is the MESH's own bounding box: `at` = [u, v, w] fractions,
   // `facing` = degrees. The fractions may leave the box by half a box per
   // axis (seats sit ON the hull, see props.sanitize_markers). The clip
   // vocabulary is the open one.
+  //
+  // They belong to the VARIANT since 2026-08-25: a fraction of one mesh's box
+  // means nothing on another bake, so the editor below always edits the chip
+  // the viewer has open, and the write goes to that variant's route.
   const [clipKinds, setClipKinds] = useState<string[]>([])
   useEffect(() => {
     apiGet<{ kinds?: string[] }>('/assets/animation-clips')
       .then((d) => setClipKinds(d.kinds || []))
       .catch(() => setClipKinds([]))
   }, [])
-  // Local draft, reset only on prop switch — a server reload after save must
-  // not clobber an in-progress field edit.
+  // Local draft, re-armed when the EDITED VARIANT changes — a server reload
+  // after a save must not clobber an in-progress field edit, but switching the
+  // chip has to bring the other variant's list.
   const [markers, setMarkers] = useState<PropMarker[]>(prop.markers || [])
-  useEffect(() => { setMarkers(prop.markers || []) }, [prop.id])  // eslint-disable-line react-hooks/exhaustive-deps
+  // The variant the draft belongs to, so the flush below can never post one
+  // chip's markers to another's route (a switch mid-debounce).
+  const markerVariantRef = useRef(variant)
+  // WHICH (prop, variant) the draft is armed for. The list reloads every few
+  // seconds while a generation runs, and re-seeding on every fresh array
+  // identity would stomp what the admin is dragging — so the draft is seeded
+  // exactly once per pair and left alone afterwards.
+  const markerKeyRef = useRef('')
+  useEffect(() => {
+    const key = `${prop.id}:${variant}`
+    if (!shownVariant) {
+      // The record has not arrived yet (the prop was just switched): show
+      // nothing rather than the previous prop's markers, and re-arm when it
+      // lands. The functional update keeps the identity when it is already
+      // empty — a fresh [] every render would loop.
+      if (markerKeyRef.current !== key) {
+        markerKeyRef.current = ''
+        setMarkers((m) => (m.length ? [] : m))
+      }
+      return
+    }
+    if (markerKeyRef.current === key) return
+    markerKeyRef.current = key
+    markerVariantRef.current = variant
+    setMarkers(shownVariant.markers)
+  }, [prop.id, variant, shownVariant])
 
   // Saving is DEBOUNCED (trailing): dragging a slider changes the state on
   // every frame, and one POST per frame would flood the route. The UI (and
@@ -484,20 +370,26 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     markerPending.current = null
     if (!next) return
     try {
-      await apiPost(`/world/props/${enc}/markers`, { markers: next })
-      await onChanged()
+      // The variant the DRAFT belongs to, not the one that happens to be
+      // selected now: a chip switch during the debounce must not send this
+      // list to another version's route.
+      await apiPost(
+        `/world/props/${enc}/variants/${markerVariantRef.current}/markers`,
+        { markers: next })
+      await meshesChanged()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, onChanged, t, toast])
+  }, [enc, meshesChanged, t, toast])
   const flushRef = useRef(flushMarkers)
   flushRef.current = flushMarkers
-  // Unmount or a prop switch flushes what is still pending — with the flush
-  // captured at SETUP time, so it posts to the prop the markers belong to.
+  // Unmount, a prop switch or a chip switch flushes what is still pending —
+  // with the flush captured at SETUP time, so it posts to the variant the
+  // markers belong to.
   useEffect(() => {
     const flush = flushRef.current
     return () => { void flush() }
-  }, [prop.id])
+  }, [prop.id, variant])
 
   const saveMarkers = useCallback((next: PropMarker[], immediate = false) => {
     setMarkers(next)
@@ -531,7 +423,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   // Floor-plan-style placement: arm ('add' or a marker index), then click the
   // mesh in the viewer — the hit lands as raw-box fractions. Esc disarms.
   const [placing, setPlacing] = useState<'add' | number | null>(null)
-  useEffect(() => { setPlacing(null) }, [prop.id])
+  useEffect(() => { setPlacing(null) }, [prop.id, variant])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlacing(null) }
     window.addEventListener('keydown', onKey)
@@ -573,7 +465,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               onClick={onRegenerate}
               title={pending
                 ? t('A generation of this prop is already running — it picks the variant it appends to, so only one at a time.')
-                : `${t('Re-render the source image from the stored description (name as fallback) and mesh it as ANOTHER model variant of this prop — the existing variants stay, dims and markers too. At the limit the run lands in the last variant.')} ${t('Maximum active variants:')} ${variantMax}`}>
+                : `${t('Re-render the source image from the target variant’s description (the prop’s name as fallback) and mesh it as ANOTHER model variant of this prop — the existing variants stay untouched. At the limit the run lands in the last variant.')} ${t('Maximum active variants:')} ${variantMax}`}>
               🧊 {pending ? t('Generating…') : t('Regenerate')}
             </button>
             {/* The whole props/<id>/ folder travels: sidecar, meshes,
@@ -617,31 +509,10 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             </Field>
           </div>
 
-          <Field label={t('Description (generation subject)')}
-            hint={t('Feeds the render prompt when (re)generating — materials, colour, style. Empty = the name is used.')}>
-            <textarea className="ga-textarea" rows={2} value={descDraft}
-              onChange={(e) => setDescDraft(e.target.value)}
-              onBlur={() => {
-                if (descDraft.trim() !== (prop.description || ''))
-                  void patch({ description: descDraft })
-              }} />
-          </Field>
-
-          {/* Real size in metres — the mesh loses its scale, so the client sizes
-              the object by these three values (after the orientation fix). */}
+          {/* The one number that describes the WHOLE object rather than one
+              of its versions: how hard it bends in the wind. Size, subject,
+              sink and markers moved into the variants (2026-08-25). */}
           <div className="ga-form-row">
-            {DIM_FIELDS.map((field) => (
-              <Field key={field.key} label={t(field.label)} compact>
-                <input className="ga-input" type="number" min={0.01} step={0.05}
-                  style={{ width: 90 }} value={dims[field.key]}
-                  onFocus={() => { dimsEditingRef.current = true }}
-                  onChange={(e) => editDim(field, e.target.value)}
-                  onBlur={() => { dimsEditingRef.current = false; commitDims() }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
-              </Field>
-            ))}
-            {/* Not a dim — it takes no part in the proportional assist, which
-                is why it stands beside the three instead of among them. */}
             <Field label={t('Sway factor')} compact>
               <input className="ga-input" type="number" min={0} max={1} step={0.05}
                 style={{ width: 90 }} value={swayDraft}
@@ -651,51 +522,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
             </Field>
           </div>
-          <span className="ga-hint">
-            {ratios
-              ? t('Linked to the model’s proportions — edit one value, the other two follow; a field you edited stays pinned until you switch props.')
-              : t('No model box yet — enter all three by hand.')}
-          </span>
-          {prop.dims_estimated ? (
-            <span className="ga-hint">
-              {t('Estimated — refined automatically when the model arrives.')}
-            </span>
-          ) : null}
-
-          {/* HOW DEEP THE OBJECT STANDS IN THE GROUND — a property of the
-              PROP, so it applies wherever the prop stands: every manual
-              placement, every scattered copy in a room or yard, every
-              instance of a painted terrain scatter and every world prop. The
-              per-placement `offset_y` in the room editor stays the trim of
-              ONE instance on top of it. */}
-          <Field label={t('Ground offset (m)')}
-            hint={t('Negative sinks the prop into the ground, positive lifts it off — the same amount everywhere it stands: rooms, yard, painted scatter, world props. Use it for a mesh that carries no root ball or base plate. 0 = the prop stands on the ground; a single placement can still be trimmed with its own offset in the room editor.')}>
-            <SliderInput
-              ariaLabel={t('Ground offset (m)')}
-              unit="m"
-              min={-sinkRange}
-              max={sinkRange}
-              step={0.01}
-              value={sinkM}
-              onChange={commitSink}
-              sliderWidth={150}
-              readback={<span className="ga-hint">
-                {sinkM === 0
-                  ? t('on the ground')
-                  : `${Math.round(Math.abs(sinkM) * 100)} cm ${sinkM < 0 ? t('into the ground') : t('above the ground')}`}
-              </span>}
-            />
-            {/* The visible reference (Maße brauchen Bezug): the value is only
-                judgeable against the prop's own box and a person. The
-                SLIDER's range follows the prop too — a footstool is dialled
-                in its own centimetres, a tree in its own metres — while the
-                stored limit stays ±5 m. */}
-            <GroundOffsetGauge offsetM={sinkM}
-              widthM={parseFloat(dims.width_m) || prop.width_m}
-              heightM={parseFloat(dims.height_m) || prop.height_m} />
-          </Field>
           {/* Measured in the mesh itself — the cost of placing this prop
-              many times, which the box above does not say anything about. */}
+              many times, which the sizes below say nothing about. */}
           {prop.measured?.tris ? (
             <span className="ga-hint">
               {`${prop.measured.tris.toLocaleString()} ${t('tris')}`}
@@ -712,12 +540,45 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             </span>
           ) : null}
 
-          {/* Object-local markers — a figure with a matching activity snaps to the
-              spot in the object's own frame, so the marker travels with the prop
-              into any room. `at` = [u, v, w] fractions of the model bounding box. */}
-          <div className="ga-form-section-label">{t('Markers')}</div>
+          {/* THE VARIANTS — several meshes of the same object, each with its
+              own size, subject, sink, seasons and markers. The selected chip
+              decides what the viewer opposite shows and what the gallery and
+              the marker editor below act on. */}
+          <PropVariantStrip
+            propId={prop.id}
+            variants={variants}
+            max={variantMax}
+            selected={variant}
+            onSelect={setVariant}
+            onChanged={meshesChanged}
+            generating={generatingVariants}
+            worldSeasons={worldSeasons}
+            currentSeason={currentSeason}
+            // The proportions a variant's W/D/H redistribute along: the box of
+            // the mesh ON SCREEN, which belongs to the SELECTED chip. Every
+            // other chip falls back to its own stored dims inside the strip.
+            shownBbox={shownBbox}
+            rotation={prop.rotation}
+          />
+
+          {/* THE SELECTED VARIANT, dialled against the viewer opposite: the
+              1.70 m figure that makes its ground offset judgeable, and its
+              object-local markers. Both are the variant's, and both need the
+              mesh beside them — which is why they stand here and not inside
+              the chip. */}
+          <div className="ga-form-section-label">
+            {t('Variant')} {variant + 1} · {t('Markers')}
+          </div>
+          {/* The visible reference (Maße brauchen Bezug): the sink is only
+              judgeable against this variant's own box and a person. The
+              SLIDER in the chip follows the variant's height too — a footstool
+              is dialled in its own centimetres, a tree in its own metres —
+              while the stored limit stays ±5 m. */}
+          <GroundOffsetGauge offsetM={shownVariant?.ground_offset_m ?? 0}
+            widthM={shownDims.width_m}
+            heightM={shownDims.height_m} />
           <span className="ga-hint">
-            {t('Object-local spots a figure with a matching animation snaps to — they travel with the prop into any room. at = fraction of the model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 1.5, because seats and lying surfaces sit on the hull or just outside it. Place roughly with ✥, fine-tune with the sliders — the figure in the preview follows live.')}
+            {t('Object-local spots a figure with a matching animation snaps to — they belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 1.5, because seats and lying surfaces sit on the hull or just outside it. Place roughly with ✥, fine-tune with the sliders — the figure in the preview follows live.')}
           </span>
           {markers.length === 0 ? (
             <div className="ga-empty" style={{ fontSize: '0.85em' }}>{t('No markers yet.')}</div>
@@ -753,9 +614,10 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   </button>
                 </div>
                 {AT_AXES.map((axis, ax) => {
-                  // Metres = fraction × the TYPED dim, so the seat height is
-                  // directly dialable in real units.
-                  const dimM = parseFloat(dims[axis.dim]) || prop[axis.dim]
+                  // Metres = fraction × the dim of the VARIANT this marker
+                  // belongs to, so the seat height is directly dialable in
+                  // real units.
+                  const dimM = shownDims[axis.dim]
                   return (
                     <SliderInput
                       key={axis.label}
@@ -778,7 +640,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                       inputWidth={72}
                       readback={(
                         <span className="ga-hint" style={{ width: 58, flex: '0 0 auto', textAlign: 'right' }}
-                          title={t('Fraction × the dimension typed above.')}>
+                          title={t('Fraction × this variant’s dimension.')}>
                           {(m.at[ax] * dimM).toFixed(2)} m
                         </span>
                       )}
@@ -903,11 +765,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 disabled={variantBusy}
                 // The SUBJECT travels with it: the dialog composes the final
                 // prompt itself, so it has to compose from the text this
-                // VARIANT renders from — its own where it has one, the prop's
-                // otherwise (the server resolves it the same way for an empty
+                // VARIANT renders from — its own, and the prop's NAME when it
+                // has none (the server resolves it the same way for an empty
                 // prompt, `props.variant_description`).
                 onClick={() => onRegenerateImage(variant, shownImage || undefined,
-                  shownVariant?.effective_description)}
+                  shownVariant?.description || prop.name)}
                 title={variantBusy
                   ? t('This variant is generating right now.')
                   : t('Render a NEW source image FOR THIS VARIANT (backend and prompt in the dialog). Its 3D model stays until you re-mesh from the new image; the other variants keep their own images.')}>
@@ -957,23 +819,19 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               format="glb"
               height={340}
               rotation={prop.rotation}
-              onBounds={(b) => {
-                setShownBbox(b.size)
-                // Only the primary variant may re-proportion the PROP.
-                if (primaryShown) setLiveBbox(b.size)
-              }}
+              onBounds={(b) => setShownBbox(b.size)}
               markers={markers.map((m) => ({
                 at: m.at, animation: m.animation, facing: m.facing,
               }))}
-              // The DISPLAYED variant's resolved size — its own override where
-              // it has one, the prop's live draft otherwise.
+              // The DISPLAYED variant's own size — the three numbers the strip
+              // edits for exactly this chip.
               dimsOverlay={shownDims}
               // 1.7 m in MESH units — real scale = the displayed mesh's own
               // largest raw edge over its largest real dim; every figure in
               // the viewer (the marker poses and the standing reference)
               // sizes itself to that.
               figureHeight={(() => {
-                const bb = shownBbox ?? (primaryShown ? (liveBbox ?? prop.bbox) : null)
+                const bb = shownBbox ?? (shownVariant?.primary ? prop.bbox : null)
                 if (!bb) return 0
                 const maxExtent = Math.max(bb[0], bb[1], bb[2])
                 const maxDim = Math.max(shownDims.width_m, shownDims.depth_m,
@@ -1000,7 +858,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               className="ga-hint"
               style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
                 marginTop: 4, cursor: 'pointer' }}
-              title={t('Puts a FIXED 1.70 m person beside the model, on its own ground plane, over a one-metre grid — the preview’s scale. It never scales with the prop: if the figure looks wrong, the W/D/H above are wrong.')}
+              title={t('Puts a FIXED 1.70 m person beside the model, on its own ground plane, over a one-metre grid — the preview’s scale. It never scales with the prop: if the figure looks wrong, the W/D/H of this variant are wrong.')}
             >
               <input
                 type="checkbox"
@@ -1013,17 +871,16 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               {t('Reference figure (1.70 m)')}
             </label>
           ) : null}
-          {/* Which numbers the preview is measuring. Without this line the
-              overlay and the form above read as contradicting each other. */}
-          {variantSized ? (
-            <span className="ga-hint" style={{ display: 'block' }}>
-              {t('Variant {n} has a size of its own — the preview measures that one ({w} × {d} × {h} m).')
-                .replace('{n}', String(variant + 1))
-                .replace('{w}', shownDims.width_m.toFixed(2))
-                .replace('{d}', shownDims.depth_m.toFixed(2))
-                .replace('{h}', shownDims.height_m.toFixed(2))}
-            </span>
-          ) : null}
+          {/* WHICH numbers the preview is measuring — the chip's, always. Said
+              once here, so the viewer and the strip opposite never read as
+              contradicting each other. */}
+          <span className="ga-hint" style={{ display: 'block' }}>
+            {t('Measured against variant {n}: {w} × {d} × {h} m.')
+              .replace('{n}', String(variant + 1))
+              .replace('{w}', shownDims.width_m.toFixed(2))
+              .replace('{d}', shownDims.depth_m.toFixed(2))
+              .replace('{h}', shownDims.height_m.toFixed(2))}
+          </span>
           </div>
           </div>
 
@@ -1053,27 +910,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               <span className="ga-hint">{t('Orientation fix — persisted; the 3D client applies it on load.')}</span>
             </>
           ) : null}
-
-          {/* The prop's model variants — several meshes of the same object.
-              The selected chip decides what the viewer above and the gallery
-              below show and act on. */}
-          <PropVariantStrip
-            propId={prop.id}
-            variants={variants}
-            max={variantMax}
-            selected={variant}
-            onSelect={setVariant}
-            onChanged={meshesChanged}
-            generating={generatingVariants}
-            worldSeasons={worldSeasons}
-            currentSeason={currentSeason}
-            // The proportions a variant's W/D/H redistribute along: the box of
-            // the mesh ON SCREEN, which belongs to the SELECTED chip. Every
-            // other chip falls back to its own stored dims inside the strip —
-            // what it must never use is the PROP's box.
-            shownBbox={shownBbox}
-            rotation={prop.rotation}
-          />
 
           {/* The SELECTED variant's mesh gallery: every stored run, one active
               file per resolution tier, upload and delete. */}

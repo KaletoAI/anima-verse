@@ -137,7 +137,7 @@ export function PropImageDialog({ prop, variant, subject, image, backends,
                 data-prompt-context={PROP_PROMPT_CONTEXT}
                 onFocusCapture={() => setTopic('image_prompt')}>
                 <label className="ga-hint"
-                  title={`${t('The full prompt sent to the render — composed from the backend style and THIS variant’s description (the prop’s where the variant has none, the name as the last fallback). Empty = the server composes the same thing.')} ${t('Click into the field and the Prompt Help panel on the right takes it over — it improves it as an img2mesh product shot and writes the result back.')}`}>
+                  title={`${t('The full prompt sent to the render — composed from the backend style and THIS variant’s description (the prop’s name as the fallback). Empty = the server composes the same thing.')} ${t('Click into the field and the Prompt Help panel on the right takes it over — it improves it as an img2mesh product shot and writes the result back.')}`}>
                   {t('Final prompt (sent to the render)')}
                 </label>
                 <textarea className="ga-textarea" rows={4} value={prompt}

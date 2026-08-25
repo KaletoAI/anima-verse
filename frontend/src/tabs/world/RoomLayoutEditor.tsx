@@ -217,11 +217,12 @@ type DragState =
 
 /** Real prop dims for true-size footprints — lean mirror of /world/props.
  *
- *  The PROP's own dims, deliberately: a model variant may carry its own size
- *  since 2026-08-24, and the 2D plan draws the object, not one of its
- *  versions. The 3D preview beside it reads the scene payload, which IS
- *  resolved per variant (`props.variant_dims`), so the finished scene is
- *  always right — only this schematic footprint stays the prop's. */
+ *  The PRIMARY variant's dims, deliberately: the size belongs to the model
+ *  variant (2026-08-25) and the 2D plan draws the object, not one of its
+ *  versions — so it uses the same answer every unqualified read gives. The 3D
+ *  preview beside it reads the scene payload, which IS resolved per variant
+ *  (`props.variant_dims`), so the finished scene is always right — only this
+ *  schematic footprint stays the primary variant's. */
 interface PropDims { name: string; width_m: number; depth_m: number; height_m: number }
 
 /** One shape the plan DRAWS: a room with its rectangle, or the yard with the

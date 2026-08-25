@@ -1811,7 +1811,9 @@ async def prop_generate(request: Request) -> Dict[str, Any]:
     """Create a prop from a prompt and kick off the source→mesh chain (body:
     {name, category?, width_m?, depth_m?, height_m?, prompt?, negative?,
     image_backend?, mesh_backend?}). Missing dims become the largest given one;
-    they are refined from the mesh proportions once the model exists.
+    they are refined from the mesh proportions once the model exists. Size and
+    description land on the prop's FIRST MODEL VARIANT, where both live
+    (2026-08-25); every further variant gets its own in the variant strip.
     Background job — poll /world/props for pending."""
     data = await request.json()
     return await asyncio.to_thread(_prop_generate_sync, data)
@@ -1846,8 +1848,10 @@ def _prop_generate_sync(data: Any) -> Dict[str, Any]:
 @router.post("/props")
 async def prop_create(request: Request) -> Dict[str, Any]:
     """Create a prop record (body: {name, category?, width_m?, depth_m?,
-    height_m?, tags?}). Missing dims become the largest given one. The
-    model/source files follow via upload or the generation chain."""
+    height_m?, description?, tags?}). Missing dims become the largest given
+    one; size and description land on the prop's FIRST MODEL VARIANT, where
+    both live (2026-08-25). The model/source files follow via upload or the
+    generation chain."""
     data = await request.json()
     return await asyncio.to_thread(_prop_create_sync, data)
 
@@ -1953,13 +1957,15 @@ def prop_detail(prop_id: str) -> Dict[str, Any]:
 
 @router.post("/props/{prop_id}")
 async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
-    """Update the editable sidecar fields (body: {name?, description?,
-    category?, width_m?, depth_m?, height_m?, tags?, sway_factor?,
-    ground_offset_m?}). Patching a
-    dim marks the prop's dims as admin-set — they are never redistributed from
-    the mesh again. `sway_factor` at its default 1.0 (and any junk) clears the
-    key rather than storing it, and `ground_offset_m` does the same at its
-    default 0.0 — the prop then simply stands on the ground."""
+    """Update the PROP's own fields (body: {name?, category?, tags?,
+    sway_factor?}). `sway_factor` at its default 1.0 (and any junk) clears the
+    key rather than storing it.
+
+    Size, description, ground offset and markers are NOT here any more
+    (2026-08-25): they belong to the model VARIANT and are written through
+    `/world/props/{id}/variants/{i}/…`. A body that still names one of them is
+    a 400 that says which route owns it — a silently ignored key would report
+    "Saved" over a value that reached nothing."""
     data = await request.json()
     return await asyncio.to_thread(_prop_update_sync, prop_id, data)
 
@@ -1969,7 +1975,10 @@ def _prop_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
     from app.core.props import update_prop
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    prop = update_prop(prop_id, data)
+    try:
+        prop = update_prop(prop_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not prop:
         raise HTTPException(status_code=404, detail="Prop not found")
     return {"status": "ok", "prop": prop}
@@ -2024,25 +2033,6 @@ def _prop_rotation_sync(prop_id: str, data: Any) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     prop = set_rotation(prop_id, data)
-    if not prop:
-        raise HTTPException(status_code=404, detail="Prop not found")
-    return {"status": "ok", "prop": prop}
-
-
-@router.post("/props/{prop_id}/markers")
-async def prop_markers(prop_id: str, request: Request) -> Dict[str, Any]:
-    """Replace the object-local marker list (body: {markers: [{animation, at:
-    [u,v,w], facing?}]}) — same vocabulary as room markers, object-local frame."""
-    data = await request.json()
-    return await asyncio.to_thread(_prop_markers_sync, prop_id, data)
-
-
-def _prop_markers_sync(prop_id: str, data: Any) -> Dict[str, Any]:
-    """The blocking body of ``prop_markers`` — runs in the threadpool."""
-    from app.core.props import set_markers
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Body must be an object")
-    prop = set_markers(prop_id, data.get("markers"))
     if not prop:
         raise HTTPException(status_code=404, detail="Prop not found")
     return {"status": "ok", "prop": prop}

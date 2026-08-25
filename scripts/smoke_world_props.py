@@ -72,12 +72,16 @@ HAND-DERIVED EXPECTATIONS
         - `max_m` = 3.0 (largest real edge) and `measure` = "xyz"
         - `fix_euler` of "Fence" = {x: 0, y: 90, z: 0}
         - a placement of "Ghost" (no mesh) is DROPPED from the block
-        - `ground_offset_m` (the PROP's own sink, 2026-08-20) rides the row
-          ONLY when it is not 0.0 — the client seats a world prop itself, so
-          the bottom is `heightAt(x, z) + offset_y + ground_offset_m`. It is
-          derived per poll like `max_m`: setting the prop to −0.2 changes the
-          rows and the signature without a single placement being rewritten,
-          and the placement's own `offset_y` stays what it was.
+        - `ground_offset_m` (the sink of the VARIANT the row draws — the
+          prop's own until 2026-08-25) rides the row ONLY when it is not 0.0 —
+          the client seats a world prop itself, so the bottom is
+          `heightAt(x, z) + offset_y + ground_offset_m`. It is derived per poll
+          like `max_m`: setting variant 0 to −0.2 changes the rows and the
+          signature without a single placement being rewritten, and the
+          placement's own `offset_y` stays what it was. A row that draws
+          ANOTHER variant reads THAT variant's sink: the "Fence" placement
+          resolves to variant 1, so setting variant 1 to −0.4 and variant 0 to
+          −0.2 must put −0.4 on it, never −0.2.
         - nothing is fogged away: the block is identical for the avatar view
           and for the admin view of `build_worldmap_payload`
 
@@ -408,12 +412,12 @@ check("resolved variant", r2["variant"], 1)
 check("fix_euler", r2["fix_euler"], {"x": 0.0, "y": 90.0, "z": 0.0})
 check("point and yaw", (r1["x"], r1["z"], r1["yaw_deg"]), (1.0, 2.0, 45.0))
 
-# THE PROP'S OWN SINK rides the row, and only when it is not 0.0 — the client
-# seats a world prop itself, so the value has to travel or a sunk boulder
-# stands on the grass out here while it is buried in every room.
+# THE SINK OF THE VARIANT THE ROW DRAWS rides along, and only when it is not
+# 0.0 — the client seats a world prop itself, so the value has to travel or a
+# sunk boulder stands on the grass out here while it is buried in every room.
 check("a prop on the ground sends no key", "ground_offset_m" in r1, False)
 sig_before = wp.world_props_sig()
-prop_store.update_prop(BOULDER, {"ground_offset_m": -0.2})
+prop_store.set_variant_ground_offset(BOULDER, 0, -0.2)
 sunk = {r["id"]: r for r in wp.payload_rows()}[one["id"]]
 check("the sink reaches the row", sunk["ground_offset_m"], -0.2)
 check("…without touching the placement's own trim", sunk["offset_y"], 0.0)
@@ -421,7 +425,19 @@ check("it is derived per poll, not stored on the placement row",
       "ground_offset_m" in next(r for r in wp.list_world_props()
                                 if r["id"] == one["id"]), False)
 check("the signature moves with it", wp.world_props_sig() == sig_before, False)
-prop_store.update_prop(BOULDER, {"ground_offset_m": 0})
+# A row that draws variant 1 reads VARIANT 1's sink (2026-08-25). The "Fence"
+# placement resolved to variant 1 above, so −0.4 there and −0.2 on variant 0
+# must come out as −0.4: the size and the sink of a row belong to the same
+# mesh, or the fence floats at the other version's depth.
+prop_store.set_variant_ground_offset(FENCE, 0, -0.2)
+prop_store.set_variant_ground_offset(FENCE, 1, -0.4)
+fence_row = {r["id"]: r for r in wp.payload_rows()}[two["id"]]
+check("the row draws variant 1", fence_row["variant"], 1)
+check("…so it carries variant 1's sink, not variant 0's",
+      fence_row["ground_offset_m"], -0.4)
+prop_store.set_variant_ground_offset(FENCE, 0, 0)
+prop_store.set_variant_ground_offset(FENCE, 1, 0)
+prop_store.set_variant_ground_offset(BOULDER, 0, 0)
 check("cleared again, the key is gone once more",
       "ground_offset_m" in {r["id"]: r for r in wp.payload_rows()}[one["id"]],
       False)
@@ -587,9 +603,10 @@ for row in wp.list_world_props():
 # the grown tree — 4.0 m wide and 6.0 m tall, depth inherited.
 PINE = seed_prop("Pine", variants=2)
 prop_store.set_variant_dims(PINE, 1, {"width_m": 4.0, "height_m": 6.0})
-check("the override is stored on variant 1 alone",
+check("the size is stored on variant 1 alone",
       [v["dims"] for v in prop_store.list_variants(PINE)],
-      [{}, {"width_m": 4.0, "height_m": 6.0}])
+      [{"width_m": 2.0, "depth_m": 1.0, "height_m": 3.0},
+       {"width_m": 4.0, "depth_m": 1.0, "height_m": 6.0}])
 small = wp.save_world_prop({"prop_id": PINE, "x": 200.0, "z": 0.0,
                             "variant": 0})
 big = wp.save_world_prop({"prop_id": PINE, "x": 210.0, "z": 0.0,

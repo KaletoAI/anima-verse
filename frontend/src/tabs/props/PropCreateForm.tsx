@@ -129,7 +129,7 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
               onChange={(e) => setCategory(e.target.value)} />
           </Field>
           <Field label={t('Approx. size (m)')} compact
-            hint={t('Largest edge — width/depth/height refine automatically from the model’s proportions once it exists.')}>
+            hint={t('Largest edge of the FIRST model variant — width/depth/height land on it and refine automatically from the model’s proportions once it exists. Every further variant gets its own size in the variant strip.')}>
             <input className="ga-input" type="number" min={0.05} step={0.05}
               style={{ width: 90 }}
               value={sizeM} onChange={(e) => setSizeM(e.target.value)} />
@@ -137,7 +137,7 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
         </div>
 
         <Field label={t('Object description (subject)')}
-          hint={t('Defaults to the name — describe materials, colour, style.')}>
+          hint={t('Lands on the first model variant and feeds its render prompt — describe materials, colour, style. Empty = the name is used.')}>
           <input className="ga-input" value={description}
             onChange={(e) => setDescription(e.target.value)} />
         </Field>

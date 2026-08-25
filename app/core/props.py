@@ -15,9 +15,9 @@ Storage: ``worlds/<world>/props/<prop_id>/``:
     selection.json   — {"model": {"<tier>": "<filename>"}}
     source.png       — the product-shot render THIS variant's meshes were made
                        from (one per variant, see the source-image law below)
-    sidecar.json     — the prop MASTER record: {name, category, width_m,
-                       depth_m, height_m, dims_estimated, rotation{x,y,z},
-                       tags[], markers[], bbox[3], created_at, source, prompt}
+    sidecar.json     — the prop MASTER record: {name, category, tags[],
+                       rotation{x,y,z}, bbox[3], sway_factor, created_at,
+                       source, prompt, model_variants[…]}
 
 The mesh files are a GALLERY like the location/room models — same mechanics,
 same module (``app/core/model_store.py``): several files per prop, one active
@@ -85,45 +85,77 @@ exactly what it rendered before.
 
 ``prop_id`` = slug of the name + a short hash (stable, file-safe).
 
-REAL SIZE. The mesh normalization destroys the real scale (the height_m /
-width_m lesson), so the object's real extent is stored explicitly in metres —
-as THREE dims after the orientation fix: ``width_m`` (x), ``height_m`` (y),
-``depth_m`` (z), each in (0, 100]. ``dims_estimated`` marks a placeholder
-cube that the model's proportions have not informed yet: it is True on
-creation, and False as soon as a dim is edited or the mesh arrives and the
-dims are redistributed over its proportions (largest edge kept).
+THE VARIANT OWNS WHAT IT LOOKS LIKE (2026-08-25, user decision). Five fields
+that used to sit on the PROP with an optional per-variant override are now
+stored ON THE VARIANT and nowhere else — there is no prop-level copy and no
+fallback reader:
 
-DIMS PER VARIANT (2026-08-24). A variant is a whole version of the object, and
-versions are not all the same size — a sapling beside the grown pine, a low
-wall beside the tall one. So a variant entry may carry its OWN
-``width_m`` / ``depth_m`` / ``height_m``, each an OVERRIDE of the prop value
-and stored by the same law as every other optional key: only when it says
-something, never as a copy of the inherited number::
+===================  ========================================================
+``width_m``          real extent in metres after the orientation fix (x),
+``depth_m``          … (z), ``height_m`` … (y), each in (0, 100]
+``dims_estimated``   True while the three are still a placeholder cube that
+                     the mesh proportions have not informed
+``description``      the GENERATION SUBJECT this variant's product shot is
+                     rendered from (absent = fall back to the prop's NAME)
+``ground_offset_m``  how deep THIS version stands in the ground (absent = 0)
+``markers``          the OBJECT-LOCAL animation markers of THIS mesh
+===================  ========================================================
 
-    "model_variants": [{"stem": "model", "active": true},
-                       {"stem": "model-v2", "active": true, "height_m": 2.4}]
+so one entry reads::
 
-The resolution rule lives in ONE function, :func:`variant_dims`: the named
-variant's override where it has one, the prop's value otherwise. The prop
-record keeps the PROP-level dims — that is what the admin form edits and what
-the mesh proportions are redistributed over — and everything that knows WHICH
-variant it is drawing (a placement, a scattered copy, a world prop, the
-stacking rule) resolves through that one function. A reader with no variant in
-hand answers for the PRIMARY variant, exactly like every other unqualified
-read here.
+    "model_variants": [{"stem": "model", "active": true,
+                        "width_m": 0.6, "depth_m": 0.6, "height_m": 4.0,
+                        "dims_estimated": false,
+                        "description": "a tall pine tree",
+                        "ground_offset_m": -0.1,
+                        "markers": [{"animation": "sit", "at": [.5, .4, .5]}]},
+                       {"stem": "model-v2", "active": true,
+                        "width_m": 0.3, "depth_m": 0.3, "height_m": 1.4,
+                        "dims_estimated": false,
+                        "description": "a pine sapling"}]
+
+WHY. A variant is a whole VERSION of the object — a sapling beside the grown
+pine, a broken chair beside the whole one — and those differ in exactly these
+five ways. The mesh normalization destroys the real scale (the height_m /
+width_m lesson), so the size has to be authored; it belongs to the mesh it
+describes, and so do the seat markers, the sink into the ground and the
+sentence the picture was rendered from.
+
+THE DIMS ARE MANDATORY, the other three follow the "absence is the statement"
+law. Every variant answers with three usable metres (:func:`variant_dims`) —
+there is nothing left to inherit, so a missing key is not a statement but a
+hand-edit, and the reader falls back to the ``DEFAULT_DIM_M`` cube.
+``description`` / ``ground_offset_m`` / ``markers`` are stored only when they
+say something, because their default (no subject / on the ground / no marker)
+is a real answer that must exist in ONE shape.
+
+A reader with no variant in hand answers for the PRIMARY variant — the first
+effectively active one — exactly like every other unqualified read here
+(``/model`` without a parameter, the payload's single ``variants`` map). That
+is what ``prop_scatter_facts``, the lean prop record and every admin listing
+resolve to.
+
+A NEW VARIANT COPIES the whole set from the variant the admin has open (the
+PRIMARY one when none is named): the admin authors a version of THIS object,
+so every field opens filled and is EDITED ("…as a sapling") instead of being
+written from nothing. It is a copy, not a link.
 
 ``bbox`` = ``[bx, by, bz]``, the AABB edge lengths of model.glb in MESH units
 on the RAW mesh axes (before the orientation fix), rounded to 5 decimals. It
-is measured once when the model arrives (generation or upload) and lazily
-backfilled for older props on the first listing; together with ``rotation``
-it is what turns one real-world size into proportional dims
-(``oriented_dims`` / ``_dims_from_size``).
+stays on the PROP: it is measured on the PRIMARY variant's mesh when that
+model arrives (generation or upload) and lazily backfilled for older props on
+the first listing. Together with ``rotation`` it is what turns one real-world
+size into proportional dims (``oriented_dims`` / ``_dims_from_size``), and the
+redistribution it feeds writes into the PRIMARY variant's three numbers.
 
 ``markers[].at`` is an OBJECT-LOCAL ``[u, v, w]`` (fractions of the model
 bounding box, which MAY exceed 0..1 by half a box for seats and poses that
 sit on or outside the hull — range ``[-0.5, 1.5]``); the vocabulary is
 identical to ``layout.markers`` (animation + facing), only the frame is the
 object instead of the room rectangle.
+
+The one-time move of the five fields out of the prop record lives in
+``app/core/prop_field_migration.py`` (boot, guarded by ``world_kv``).
 """
 
 import hashlib
@@ -187,14 +219,14 @@ _IMAGE_META_MASTER = {"backend": "backend_image", "prompt": "prompt",
 #: key would be the same fact in two shapes. See ``_effective_indices``.
 SEASONS_KEY = "seasons"
 
-#: The GENERATION SUBJECT of a variant (2026-08-24). A variant is a whole
-#: version of the object — a sapling beside the grown pine — so the sentence
-#: its product shot is rendered from belongs to it and not to the prop. Same
-#: "absence is the statement" law as ``seasons`` and the dim overrides: stored
-#: only when it says something, and a variant without the key renders from the
-#: PROP's description. See :func:`variant_description` for the resolution rule
-#: and :func:`add_variant`, which COPIES the prop's text into a new slot so
-#: the admin edits a filled field instead of an empty one.
+#: The GENERATION SUBJECT of a variant (2026-08-24, variant-only since
+#: 2026-08-25). A variant is a whole version of the object — a sapling beside
+#: the grown pine — so the sentence its product shot is rendered from belongs
+#: to it and to nothing else. Same "absence is the statement" law as
+#: ``seasons``: stored only when it says something, and a variant without the
+#: key renders from the prop's NAME (the fallback that predates the field).
+#: See :func:`variant_description` and :func:`add_variant`, which COPIES the
+#: source variant's text into a new slot so the admin edits a filled field.
 DESCRIPTION_KEY = "description"
 #: Runaway guard on that text — it is a prompt subject, not an essay, and it
 #: rides in every sidecar read.
@@ -202,11 +234,22 @@ DESCRIPTION_MAX = 2000
 
 DEFAULT_DIM_M = 1.0
 DIM_KEYS = ("width_m", "depth_m", "height_m")
-#: A variant may OVERRIDE any of the three dims (2026-08-24). Same key names
-#: as on the master record, same coercion, and the same "absence is the
-#: statement" law as ``seasons``: an override that equals the inherited value
-#: would be the same fact in two places, so only a real override is stored.
-#: See :func:`variant_dims` for the one resolution rule.
+#: The three dims live ON THE VARIANT and are MANDATORY there (2026-08-25):
+#: every entry answers with three usable metres, because there is no prop-level
+#: value left to inherit. A missing key is a hand-edit, not a statement, and
+#: reads back as the ``DEFAULT_DIM_M`` cube. See :func:`variant_dims`.
+#: Companion flag of exactly those three numbers — True while they are still a
+#: placeholder cube the mesh proportions have not informed. Per variant for the
+#: same reason the dims are: it is a statement ABOUT them.
+DIMS_ESTIMATED_KEY = "dims_estimated"
+#: How deep ONE VERSION of the object stands in the ground, on its own entry
+#: (2026-08-25). Absence is the statement "on the ground" — see
+#: :data:`GROUND_OFFSET_DEFAULT` and :func:`variant_ground_offset`.
+GROUND_OFFSET_KEY = "ground_offset_m"
+#: The OBJECT-LOCAL animation markers of ONE variant's mesh (2026-08-25).
+#: Absence is the statement "no markers"; the fractions are of THAT mesh's
+#: bounding box, which is why they cannot be shared with another version.
+MARKERS_KEY = "markers"
 
 #: How hard THIS prop bends in the wind — a multiplier on the sway of the
 #: ground it grows on (§ A9), not a length. How far a meadow waves is the
@@ -216,12 +259,14 @@ DIM_KEYS = ("width_m", "depth_m", "height_m")
 SWAY_FACTOR_DEFAULT = 1.0
 SWAY_FACTOR_MIN, SWAY_FACTOR_MAX = 0.0, 1.0
 
-#: How deep THIS prop stands in the ground, in metres, WHEREVER it stands —
-#: negative sinks it, positive lifts it. A property of the OBJECT, not of one
+#: How deep THIS VARIANT stands in the ground, in metres, WHEREVER it stands —
+#: negative sinks it, positive lifts it. A property of the MESH, not of one
 #: placement: a tree whose mesh carries no root ball has to sink by the same
 #: few centimetres in every room, every yard, every painted wood and at every
 #: hand-set spot on the world plane, and dialling that per instance is the
-#: same number typed a hundred times.
+#: same number typed a hundred times. It sits on the VARIANT (2026-08-25)
+#: because it is a fact about one bake: the sapling's trunk and the grown
+#: tree's are not buried by the same amount.
 #:
 #: The per-PLACEMENT ``offset_y`` stays what it is — the additive trim of ONE
 #: instance ("this one stone a bit deeper"). Effective base of an instance =
@@ -385,17 +430,17 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     ``image`` (the base stem keeps its four master-record keys instead) —
     every writer stores the sanitized list back, so it has to survive here.
 
-    ``seasons`` (E2c) survives by the same law: kept when it names seasons,
-    dropped when it is empty — no dependency is stored as ABSENCE. So does the
-    variant's own ``description`` (2026-08-24): kept when it says something,
-    dropped when it is blank, because a variant without one renders from the
-    prop's text.
+    ``seasons`` (E2c) survives by the same law as ``description``,
+    ``ground_offset_m`` and ``markers`` (2026-08-25): kept when it says
+    something, dropped when it is empty/blank/zero — the default is stored as
+    ABSENCE and in no other shape.
 
-    So do the per-variant DIM OVERRIDES (2026-08-24): each of the three keys
-    survives only as a usable number, clamped exactly like the prop-level field
-    (:func:`_coerce_dim_m`, (0, 100]). Junk, zero and a negative value are no
-    authoring statement and lose the key, which is precisely the sentence
-    "this variant is as big as its prop"."""
+    THE THREE DIMS ARE DIFFERENT: they are MANDATORY, because nothing is left
+    to inherit. Every entry comes out with three usable metres, clamped exactly
+    as the field is written (:func:`_coerce_dim_m`, (0, 100]); junk, zero, a
+    negative value or a missing key are hand-edits, not statements, and read
+    back as the ``DEFAULT_DIM_M`` cube rather than as "no size".
+    """
     raw = meta.get(VARIANTS_KEY) if isinstance(meta, dict) else None
     out: List[Dict[str, Any]] = []
     seen: set = set()
@@ -419,11 +464,28 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             if desc:
                 rec[DESCRIPTION_KEY] = desc
             for key in DIM_KEYS:
-                dim = _coerce_dim_m(entry.get(key), 0.0)
-                if dim > 0:
-                    rec[key] = dim
+                rec[key] = _coerce_dim_m(entry.get(key))
+            rec[DIMS_ESTIMATED_KEY] = bool(entry.get(DIMS_ESTIMATED_KEY))
+            off = _coerce_ground_offset_m(entry.get(GROUND_OFFSET_KEY))
+            if off is not None:
+                rec[GROUND_OFFSET_KEY] = off
+            markers = sanitize_markers(entry.get(MARKERS_KEY))
+            if markers:
+                rec[MARKERS_KEY] = markers
             out.append(rec)
-    return out or [{"stem": MODEL_STEM, "active": True}]
+    return out or [_new_variant_entry(MODEL_STEM)]
+
+
+def _new_variant_entry(stem: str) -> Dict[str, Any]:
+    """A variant record with nothing authored on it: the placeholder cube,
+    still estimated, no subject, on the ground, no markers.
+
+    This is what a record WITHOUT the variants key answers with — a prop whose
+    sidecar was hand-emptied — and the seed :func:`add_variant` copies over.
+    """
+    return {"stem": stem, "active": True,
+            **{k: DEFAULT_DIM_M for k in DIM_KEYS},
+            DIMS_ESTIMATED_KEY: True}
 
 
 def _free_stem(entries: List[Dict[str, Any]]) -> str:
@@ -592,7 +654,7 @@ def sway_factor_of(meta: Dict[str, Any]) -> float:
 
 
 def _coerce_ground_offset_m(value: Any) -> Optional[float]:
-    """The prop's vertical ground offset as it is STORED: ±5 m in CENTIMETRE
+    """A variant's vertical ground offset as it is STORED: ±5 m in CENTIMETRE
     steps, or ``None`` for "write no key at all".
 
     The same one-representation rule as :func:`_coerce_sway_factor`, with the
@@ -619,16 +681,30 @@ def _coerce_ground_offset_m(value: Any) -> Optional[float]:
     return None if v == GROUND_OFFSET_DEFAULT else v
 
 
-def ground_offset_of(meta: Dict[str, Any]) -> float:
-    """The EFFECTIVE ground offset of one sidecar — ``GROUND_OFFSET_DEFAULT``
-    whenever the key is absent or unusable.
+def _variant_entry(meta: Dict[str, Any], variant: Any = None) -> Dict[str, Any]:
+    """ONE sanitized variant record — THE index resolution every per-variant
+    read shares (2026-08-25).
 
-    Reading is as forgiving as writing is strict: a hand-edited sidecar puts
-    its prop on the ground instead of at NaN, which would take a whole scene
-    payload down with it.
+    ``variant`` is the STORE index (the position in ``model_variants``, the
+    same number every variant-scoped route and every serving URL uses).
+    ``None``, a negative index or one this prop has no variant for answers for
+    the PRIMARY variant — the first effectively active one, exactly like every
+    other unqualified read in this module (``/model`` without a parameter, the
+    bbox measurement, the payload's single ``variants`` map).
+
+    Written once and called by :func:`variant_dims`,
+    :func:`variant_description`, :func:`variant_ground_offset` and
+    :func:`variant_markers`, so "which variant is this" cannot drift between
+    the four fields the variant owns.
     """
-    v = _coerce_ground_offset_m(meta.get("ground_offset_m"))
-    return GROUND_OFFSET_DEFAULT if v is None else v
+    entries = _variant_list(meta)
+    try:
+        i = -1 if variant is None else int(variant)
+    except (TypeError, ValueError):
+        i = -1
+    if not 0 <= i < len(entries):
+        i = _effective_indices(entries)[0]
+    return entries[i]
 
 
 def oriented_dims(bbox: Any, rotation: Any = None) -> List[float]:
@@ -696,81 +772,55 @@ def _dims_from_size(size_m: Any, bbox: Any = None,
     return {"width_m": size, "depth_m": size, "height_m": size}
 
 
-def _has_dims(meta: Dict[str, Any]) -> bool:
-    """True when all three dims are stored and usable."""
-    for key in DIM_KEYS:
-        try:
-            if float(meta.get(key)) <= 0:
-                return False
-        except (TypeError, ValueError):
-            return False
-    return True
-
-
-def _effective_dims(meta: Dict[str, Any]) -> Dict[str, float]:
-    """The dims to report: the stored ones, or — for a sidecar still carrying
-    the legacy single ``size_m`` — derived in memory (not persisted here;
-    ``_materialize_dims`` does that on the next write)."""
-    if _has_dims(meta):
-        return {key: _coerce_dim_m(meta.get(key)) for key in DIM_KEYS}
-    return _dims_from_size(meta.get("size_m", DEFAULT_DIM_M),
-                           meta.get("bbox"), meta.get("rotation"))
-
-
 def variant_dims(meta: Dict[str, Any], variant: Any = None) -> Dict[str, float]:
-    """THE RESOLUTION RULE for the per-variant dims (2026-08-24), in one place:
-    **the variant's own override where it has one, the prop's value
-    otherwise** — ``{"width_m", "depth_m", "height_m"}`` in metres.
+    """The three real metres ONE variant renders at —
+    ``{"width_m", "depth_m", "height_m"}``.
 
-    ``variant`` is the STORE index (the position in ``model_variants``, the
-    same number every variant-scoped route and every serving URL uses).
-    ``None``, a negative index or one this prop has no variant for answers for
-    the PRIMARY variant — the first effectively active one, exactly like every
-    other unqualified read in this module (``/model`` without a parameter, the
-    bbox measurement, the payload's single ``variants`` map).
-
-    An override is never a copy of the inherited number: a variant with no key
-    of its own answers character for character what :func:`_effective_dims`
-    answers, so a prop whose variants are all the same size costs the feature
-    nothing.
+    Variant-only since 2026-08-25: there is no prop-level size to fall back to,
+    so this is a plain read of the entry :func:`_variant_entry` resolves, with
+    the same clamp the field is written under. A hand-emptied entry reads back
+    as the ``DEFAULT_DIM_M`` cube — a prop that renders at nothing is not a
+    state a payload may carry.
     """
-    dims = _effective_dims(meta)
-    entries = _variant_list(meta)
-    try:
-        i = -1 if variant is None else int(variant)
-    except (TypeError, ValueError):
-        i = -1
-    if not 0 <= i < len(entries):
-        i = _effective_indices(entries)[0]
-    entry = entries[i]
-    for key in DIM_KEYS:
-        if key in entry:
-            dims[key] = float(entry[key])
-    return dims
+    entry = _variant_entry(meta, variant)
+    return {key: _coerce_dim_m(entry.get(key)) for key in DIM_KEYS}
+
+
+def variant_dims_estimated(meta: Dict[str, Any], variant: Any = None) -> bool:
+    """Are this variant's three dims still the placeholder cube? True until an
+    admin types a size or the mesh proportions redistribute them."""
+    return bool(_variant_entry(meta, variant).get(DIMS_ESTIMATED_KEY))
 
 
 def variant_description(meta: Dict[str, Any], variant: Any = None) -> str:
-    """THE RESOLUTION RULE for the per-variant generation subject
-    (2026-08-24), in one place: **the variant's own description where it has
-    one, the prop's otherwise**.
+    """The GENERATION SUBJECT one variant's product shot is rendered from —
+    ``""`` when it authors none, and then the caller falls back to the prop's
+    NAME (``_render_source``), which is the rule that predates the field.
 
-    ``variant`` is the STORE index, read exactly like :func:`variant_dims`
-    reads it — ``None``, a negative index or one this prop has no variant for
-    answers for the PRIMARY variant. Every render of a variant's product shot
-    goes through here, so "which sentence was this picture made from" has one
-    answer and not one per call site.
+    Variant-only since 2026-08-25: every render of a product shot goes through
+    here, so "which sentence was this picture made from" has one answer and not
+    one per call site.
     """
-    entries = _variant_list(meta)
-    try:
-        i = -1 if variant is None else int(variant)
-    except (TypeError, ValueError):
-        i = -1
-    if not 0 <= i < len(entries):
-        i = _effective_indices(entries)[0]
-    own = _coerce_description(entries[i].get(DESCRIPTION_KEY))
-    if own:
-        return own
-    return str((meta or {}).get("description") or "").strip()
+    return _coerce_description(_variant_entry(meta, variant).get(DESCRIPTION_KEY))
+
+
+def variant_ground_offset(meta: Dict[str, Any], variant: Any = None) -> float:
+    """How deep ONE variant stands in the ground — ``GROUND_OFFSET_DEFAULT``
+    whenever the key is absent or unusable.
+
+    Reading is as forgiving as writing is strict: a hand-edited sidecar puts
+    its prop on the ground instead of at NaN, which would take a whole scene
+    payload down with it.
+    """
+    v = _coerce_ground_offset_m(_variant_entry(meta, variant).get(GROUND_OFFSET_KEY))
+    return GROUND_OFFSET_DEFAULT if v is None else v
+
+
+def variant_markers(meta: Dict[str, Any], variant: Any = None) -> List[Dict[str, Any]]:
+    """The OBJECT-LOCAL animation markers of ONE variant (``[]`` when it has
+    none). The fractions are of THAT mesh's bounding box, which is why they
+    are the variant's and never the prop's (2026-08-25)."""
+    return sanitize_markers(_variant_entry(meta, variant).get(MARKERS_KEY))
 
 
 def _coerce_tags(raw: Any) -> List[str]:
@@ -863,8 +913,11 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     added by upload or the generation chain). Returns ``{id, **sidecar}``.
 
     Dims: whatever is given is taken, every missing one becomes the LARGEST
-    given value (a rough cube); nothing given = 1 m per dim. The record starts
-    ``dims_estimated`` — the mesh's proportions refine it when the model
+    given value (a rough cube); nothing given = 1 m per dim. They land on the
+    prop's FIRST VARIANT together with the generation subject, because that is
+    where both live (2026-08-25) — the create form still asks for one size and
+    one sentence, and this is the variant they describe. The entry starts
+    ``dims_estimated``: the mesh's proportions refine it when the model
     arrives."""
     name = (name or "").strip() or "Prop"
     prop_id = _new_prop_id(name)
@@ -879,16 +932,15 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     base = max(dims.values()) if dims else DEFAULT_DIM_M
     for key in DIM_KEYS:
         dims.setdefault(key, base)
+    variant: Dict[str, Any] = {"stem": MODEL_STEM, "active": True,
+                               **dims, DIMS_ESTIMATED_KEY: True}
+    subject = _coerce_description(description)
+    if subject:
+        variant[DESCRIPTION_KEY] = subject
     meta = {
         "name": name,
-        # Generation subject — the name stays free display text, the
-        # description feeds the render prompt (surface-texture lesson).
-        "description": (description or "").strip(),
         "category": (category or "").strip(),
-        "width_m": dims["width_m"],
-        "depth_m": dims["depth_m"],
-        "height_m": dims["height_m"],
-        "dims_estimated": True,
+        VARIANTS_KEY: [variant],
         "rotation": {"x": 0, "y": 0, "z": 0},
         # NEW props do not sway (user order 2026-08-20): the 1.0 default is
         # the VEGETATION-era reading of an ABSENT key, kept so existing
@@ -897,7 +949,6 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         # dial; legacy sidecars without the key stay at the old default.
         "sway_factor": 0.0,
         "tags": _coerce_tags(tags),
-        "markers": [],
         "created_at": utc_now_iso(),
         "source": (source or "manual").strip(),
         "prompt": (prompt or "").strip(),
@@ -907,32 +958,52 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     return {"id": prop_id, **meta}
 
 
+#: What the PROP record itself still carries — the fields the general section
+#: of the admin form edits. Everything about how the object LOOKS moved onto
+#: the variants (2026-08-25), and :data:`MOVED_TO_VARIANT` names those so a
+#: stale client is REFUSED instead of silently writing a key nobody reads.
+PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor")
+#: The five fields that are variant-only now. A prop-level patch naming one of
+#: them is a 400 with the route that owns it — never a no-op: an editor that
+#: still sends ``height_m`` here would report "Saved" over a value that never
+#: reached anything.
+MOVED_TO_VARIANT = {
+    "width_m": "POST /world/props/{id}/variants/{i}/dims",
+    "depth_m": "POST /world/props/{id}/variants/{i}/dims",
+    "height_m": "POST /world/props/{id}/variants/{i}/dims",
+    "dims_estimated": "POST /world/props/{id}/variants/{i}/dims",
+    "description": "POST /world/props/{id}/variants/{i}/description",
+    "ground_offset_m": "POST /world/props/{id}/variants/{i}/ground-offset",
+    "markers": "POST /world/props/{id}/variants/{i}/markers",
+}
+
+
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Update the editable sidecar fields (name / category / width_m / depth_m
-    / height_m / tags / sway_factor / ground_offset_m). Patching any dim clears
-    ``dims_estimated`` — a value the admin set is never redistributed again.
-    None when the prop does not exist."""
+    """Update the PROP's own fields (name / category / tags / sway_factor).
+    None when the prop does not exist.
+
+    Raises ``ValueError`` when the patch names one of the five fields that
+    moved onto the variants (:data:`MOVED_TO_VARIANT`) — the route maps that to
+    a 400. Ignoring them would be worse than refusing: the admin would get a
+    green "Saved" for a size that was never stored anywhere.
+    """
     pid = safe_prop_id(prop_id)
-    meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
+    meta = read_sidecar(pid) if pid else {}
     if not meta:
         return None
     if not isinstance(patch, dict):
         patch = {}
+    moved = [k for k in patch if k in MOVED_TO_VARIANT]
+    if moved:
+        raise ValueError(
+            "these fields belong to the model variant now: "
+            + "; ".join(f"{k} -> {MOVED_TO_VARIANT[k]}" for k in sorted(moved)))
     if "name" in patch:
         nm = str(patch.get("name") or "").strip()
         if nm:
             meta["name"] = nm
     if "category" in patch:
         meta["category"] = str(patch.get("category") or "").strip()
-    if "description" in patch:
-        meta["description"] = str(patch.get("description") or "").strip()
-    touched = False
-    for key in DIM_KEYS:
-        if key in patch:
-            meta[key] = _coerce_dim_m(patch.get(key), _coerce_dim_m(meta.get(key)))
-            touched = True
-    if touched:
-        meta["dims_estimated"] = False
     if "tags" in patch:
         meta["tags"] = _coerce_tags(patch.get("tags"))
     if "sway_factor" in patch:
@@ -944,14 +1015,6 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
             meta.pop("sway_factor", None)
         else:
             meta["sway_factor"] = factor
-    if "ground_offset_m" in patch:
-        # Same law once more, and here the cleared field is the NORMAL case:
-        # a prop that stands on the ground stores no key at all.
-        offset = _coerce_ground_offset_m(patch.get("ground_offset_m"))
-        if offset is None:
-            meta.pop("ground_offset_m", None)
-        else:
-            meta["ground_offset_m"] = offset
     _write_sidecar(pid, meta)
     return {"id": pid, **meta}
 
@@ -963,21 +1026,10 @@ def set_rotation(prop_id: str, rotation: Any) -> Optional[Dict[str, Any]]:
     rewrite numbers the admin can see — the editor recomputes its proportional
     suggestions live instead."""
     pid = safe_prop_id(prop_id)
-    meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
+    meta = read_sidecar(pid) if pid else {}
     if not meta:
         return None
     meta["rotation"] = _sanitize_rotation(rotation, meta.get("rotation"))
-    _write_sidecar(pid, meta)
-    return {"id": pid, **meta}
-
-
-def set_markers(prop_id: str, markers: Any) -> Optional[Dict[str, Any]]:
-    """Replace the object-local marker list. None when the prop does not exist."""
-    pid = safe_prop_id(prop_id)
-    meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
-    if not meta:
-        return None
-    meta["markers"] = sanitize_markers(markers)
     _write_sidecar(pid, meta)
     return {"id": pid, **meta}
 
@@ -1031,13 +1083,42 @@ def model_tiers(prop_id: str, variant: Any = None) -> List[str]:
     return tiers
 
 
+def _published_entry(meta: Dict[str, Any], index: int,
+                     tiers: List[str], *, markers: bool) -> Dict[str, Any]:
+    """ONE entry of the published variant list: ``{variant, tiers, dims,
+    ground_offset_m?, markers?}``.
+
+    Written once, because it is the ONE shape a consumer resolves a placement's
+    variant POSITION in — the world-prop payload, the ground boxes, the room
+    recipe and the terrain scatter all index into it, and the four fields a
+    variant owns have to travel together or a placement gets one version's size
+    with another one's sink.
+
+    ``ground_offset_m`` follows the storage law (absent = on the ground) so the
+    payload does not carry a 0.0 for every prop in every world. ``markers`` are
+    ADMIN detail and ride only where the full record does: the lean client
+    library gets ``marker_count`` and nothing else, exactly as before.
+    """
+    entry: Dict[str, Any] = {"variant": index, "tiers": tiers,
+                             "dims": variant_dims(meta, index)}
+    off = variant_ground_offset(meta, index)
+    if off:
+        entry[GROUND_OFFSET_KEY] = off
+    if markers:
+        own = variant_markers(meta, index)
+        if own:
+            entry[MARKERS_KEY] = own
+    return entry
+
+
 def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
     """Every EFFECTIVELY ACTIVE variant that HAS a mesh, in payload order:
-    ``[{"variant": <store index>, "tiers": [...], "dims": {…}}, …]``.
+    ``[{"variant": <store index>, "tiers": [...], "dims": {…},
+    "ground_offset_m"?}, …]``.
 
-    ``dims`` are the three real metres THIS variant renders at — its own
-    override where it has one, the prop's value otherwise
-    (:func:`variant_dims`). It rides along because the consumers of this list
+    ``dims`` are the three real metres THIS variant renders at and
+    ``ground_offset_m`` how deep it stands (:func:`variant_dims`,
+    :func:`variant_ground_offset`). They ride along because the consumers of this list
     (the world-prop payload, the ground boxes, the terrain scatter) resolve a
     POSITION in it into one placement, and asking the library a second time per
     position would be the same sidecar read once per variant.
@@ -1063,25 +1144,23 @@ def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
     for i in _effective_indices(entries):
         tiers = model_tiers(prop_id, i)
         if tiers:
-            out.append({"variant": i, "tiers": tiers,
-                        "dims": variant_dims(meta, i)})
+            out.append(_published_entry(meta, i, tiers, markers=False))
     return out
 
 
 def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
     seasons, in_season, tiers, has_model, model_file, model_url, signature,
-    has_source, source_url, image, dims, effective_dims}]`` — every variant,
-    active or not, in order.
+    has_source, source_url, image, dims, dims_estimated, description,
+    ground_offset_m, markers}]`` — every variant, active or not, in order.
 
-    ``dims`` are the OVERRIDES this variant stores and nothing else (a missing
-    key = inherited), because that is what the three inputs of the strip edit;
-    ``effective_dims`` is what the variant really renders at, which is what
-    their placeholders show. Two fields for two questions — "what did I
-    author here" and "how big is this thing" — and never one of them faked as
-    the other. ``description`` / ``effective_description`` are the same pair
-    for the generation subject (2026-08-24): the stored override (``""`` =
-    inherited) and the text a render of this variant would really use.
+    Since 2026-08-25 there is ONE number per field and no pair of them: the
+    variant owns its size, its subject, its sink and its markers, so ``dims``
+    are the three metres it really renders at (always complete),
+    ``description`` the sentence its product shot is rendered from (``""`` =
+    none, and the render falls back to the prop's NAME), ``ground_offset_m``
+    its sink (0 = on the ground) and ``markers`` its object-local spots. The
+    old ``effective_*`` twins are gone with the inheritance they described.
 
     ``seasons`` are the season names this variant is tagged for (E2c; empty =
     no dependency, the default) and ``in_season`` says whether that tag matches
@@ -1122,20 +1201,37 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "source_url": ((src_base if i == primary else f"{src_base}?variant={i}")
                            if has_source else ""),
             "image": _image_meta(meta, entry["stem"]),
-            "dims": {k: entry[k] for k in DIM_KEYS if k in entry},
-            "effective_dims": variant_dims(meta, i),
+            "dims": {k: entry[k] for k in DIM_KEYS},
+            "dims_estimated": bool(entry.get(DIMS_ESTIMATED_KEY)),
             "description": entry.get(DESCRIPTION_KEY, ""),
-            "effective_description": variant_description(meta, i),
+            "ground_offset_m": entry.get(GROUND_OFFSET_KEY, GROUND_OFFSET_DEFAULT),
+            "markers": entry.get(MARKERS_KEY, []),
         })
     return out
 
 
-def add_variant(prop_id: str) -> int:
-    """Append an EMPTY variant slot and return its index; ``-1`` when the prop
-    does not exist or the active cap is already reached.
+#: What a NEW variant copies from its source (2026-08-25) — everything the
+#: variant owns except its own files. The stem, the mesh gallery, the source
+#: image and its provenance are what makes the new slot a new VERSION; the
+#: fields below are what makes it a version OF THIS OBJECT.
+_COPIED_ON_ADD = (*DIM_KEYS, DIMS_ESTIMATED_KEY, DESCRIPTION_KEY,
+                  GROUND_OFFSET_KEY, MARKERS_KEY)
+
+
+def add_variant(prop_id: str, source: Any = None) -> int:
+    """Append a variant slot and return its index; ``-1`` when the prop does
+    not exist or the active cap is already reached.
 
     The slot carries no mesh yet — a generation targeted at it fills it. This
     is what "generating appends instead of replacing" runs on.
+
+    THE COPY SOURCE is the variant the admin currently has open (``source``, a
+    STORE index) and the PRIMARY variant when none is named — the same
+    resolution every other unqualified read uses (:func:`_variant_entry`). Size,
+    ``dims_estimated``, subject, ground offset and markers come over as a COPY,
+    not a link: the admin authors a version of THIS object, so every field
+    opens filled and is EDITED ("…as a sapling") instead of written from
+    nothing, and a later edit of the source leaves the new slot alone.
 
     Deliberately NOT gated on a running generation: appending a slot is a
     sidecar edit at the END of the list, it renumbers nothing and touches no
@@ -1150,15 +1246,11 @@ def add_variant(prop_id: str) -> int:
     stem = _free_stem(entries)
     if not stem:
         return -1
+    src = _variant_entry(meta, source)
     entry: Dict[str, Any] = {"stem": stem, "active": True}
-    # The new slot starts from the prop's CURRENT subject (2026-08-24): the
-    # admin authors a version of THIS object, so the field opens filled and is
-    # edited into "…as a sapling" instead of being written from nothing. It is
-    # a copy, not a link — a later edit of the prop text leaves an authored
-    # variant alone, which is the whole point of an own description.
-    desc = _coerce_description(meta.get("description"))
-    if desc:
-        entry[DESCRIPTION_KEY] = desc
+    for key in _COPIED_ON_ADD:
+        if key in src:
+            entry[key] = json.loads(json.dumps(src[key]))
     entries.append(entry)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
@@ -1228,41 +1320,102 @@ def set_variant_seasons(prop_id: str, variant: int, seasons: Any) -> bool:
     return True
 
 
-def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
-    """Override this variant's real size, or clear the override (2026-08-24).
-
-    ``dims`` is a patch: only the keys it names are touched, so setting the
-    height alone leaves an existing width override where it is. A usable number
-    is stored (clamped to (0, 100] like the prop-level field), and EVERYTHING
-    else — ``None``, an empty string, zero, junk — clears the key, because
-    "this variant is as big as its prop" is stored as ABSENCE and nothing else.
-
-    Deliberately NOT refused for a generating variant, exactly like the season
-    tag: a size moves no file and renames no stem. Nor does it touch
-    ``dims_estimated``, which is a statement about the PROP's dims — a variant
-    override neither confirms nor invalidates the mesh proportions the prop was
-    measured from.
-    """
+def _edit_variant(prop_id: str, variant: int,
+                  ) -> Optional[Tuple[str, Dict[str, Any],
+                                      List[Dict[str, Any]], int]]:
+    """``(pid, meta, entries, index)`` for a variant write, or ``None`` when
+    the prop or the index does not exist. The four setters below share it so
+    they validate the index in exactly one way."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
-        return False
+        return None
     entries = _variant_list(meta)
     try:
         i = int(variant)
     except (TypeError, ValueError):
-        return False
+        return None
     if not 0 <= i < len(entries):
+        return None
+    return pid, meta, entries, i
+
+
+def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
+    """Set this variant's real size (2026-08-24, variant-only since
+    2026-08-25).
+
+    ``dims`` is a patch: only the keys it names are touched, so the height can
+    be committed on its own. A usable number is stored (clamped to (0, 100]);
+    EVERYTHING else — ``None``, an empty string, zero, junk — LEAVES THE
+    CURRENT VALUE STANDING, because there is nothing to inherit any more and a
+    variant with no size is not a state a payload may carry. A typing slip
+    costs the edit, never the record.
+
+    Storing a size CLEARS ``dims_estimated`` on that entry: a number the admin
+    typed is never redistributed from the mesh proportions again.
+
+    Deliberately NOT refused for a generating variant, exactly like the season
+    tag: a size moves no file and renames no stem.
+    """
+    ctx = _edit_variant(prop_id, variant)
+    if not ctx:
         return False
+    pid, meta, entries, i = ctx
     patch = dims if isinstance(dims, dict) else {}
+    touched = False
     for key in DIM_KEYS:
         if key not in patch:
             continue
         value = _coerce_dim_m(patch.get(key), 0.0)
         if value > 0:
             entries[i][key] = value
-        else:
-            entries[i].pop(key, None)
+            touched = True
+    if touched:
+        entries[i][DIMS_ESTIMATED_KEY] = False
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return True
+
+
+def set_variant_ground_offset(prop_id: str, variant: int, offset: Any) -> bool:
+    """How deep THIS variant stands in the ground, ± 5 m in centimetre steps
+    (2026-08-25).
+
+    The default 0.0 — and every junk value — REMOVES the key: "stands on the
+    ground" is stored as absence and in no other shape, so a payload never
+    carries a zero for it. Not refused for a generating variant: a sink moves
+    no file and renames no stem.
+    """
+    ctx = _edit_variant(prop_id, variant)
+    if not ctx:
+        return False
+    pid, meta, entries, i = ctx
+    value = _coerce_ground_offset_m(offset)
+    if value is None:
+        entries[i].pop(GROUND_OFFSET_KEY, None)
+    else:
+        entries[i][GROUND_OFFSET_KEY] = value
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return True
+
+
+def set_variant_markers(prop_id: str, variant: int, markers: Any) -> bool:
+    """Replace THIS variant's object-local marker list (2026-08-25).
+
+    The markers are fractions of THIS mesh's bounding box, so they belong to
+    the variant and to no other: a seat that sits right on the grown chair sits
+    somewhere else on the broken one. An empty list removes the key.
+    """
+    ctx = _edit_variant(prop_id, variant)
+    if not ctx:
+        return False
+    pid, meta, entries, i = ctx
+    clean = sanitize_markers(markers)
+    if clean:
+        entries[i][MARKERS_KEY] = clean
+    else:
+        entries[i].pop(MARKERS_KEY, None)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
@@ -1271,24 +1424,17 @@ def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
 def set_variant_description(prop_id: str, variant: int, text: Any) -> bool:
     """Give ONE variant its own generation subject, or clear it (2026-08-24).
 
-    Blank, ``None`` and junk all CLEAR the key, because "this variant renders
-    from the prop's description" is stored as absence and nothing else — the
-    same law the dim overrides and the season tags follow.
+    Blank, ``None`` and junk all CLEAR the key: "this variant has no subject of
+    its own" is stored as absence and nothing else, and a render then composes
+    from the prop's NAME — the same law the season tags follow.
 
     Deliberately NOT refused for a generating variant: the text is read when a
     render STARTS, so changing it mid-run changes nothing that is in flight,
     moves no file and renames no stem."""
-    pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    if not meta:
+    ctx = _edit_variant(prop_id, variant)
+    if not ctx:
         return False
-    entries = _variant_list(meta)
-    try:
-        i = int(variant)
-    except (TypeError, ValueError):
-        return False
-    if not 0 <= i < len(entries):
-        return False
+    pid, meta, entries, i = ctx
     desc = _coerce_description(text)
     if desc:
         entries[i][DESCRIPTION_KEY] = desc
@@ -1360,24 +1506,26 @@ def prop_scatter_facts(prop_id: str) -> Dict[str, float]:
     * ``sway_factor`` — how much of its ground's wind this prop takes part in
       (see :data:`SWAY_FACTOR_DEFAULT`).
     * ``ground_offset_m`` — how deep this prop stands in the ground, wherever
-      it stands (see :data:`GROUND_OFFSET_DEFAULT`). A scattered copy is
-      seated by the CLIENT on its own height sampler, so the number has to
-      travel with the entry the same way the wind factor does.
+      it stands (see :data:`GROUND_OFFSET_DEFAULT`). Of the PRIMARY variant for
+      the same reason the height is (2026-08-25, when the sink moved onto the
+      variants): the instances are sampled client-side, so there is no variant
+      to resolve here. A scattered copy is seated by the CLIENT on its own
+      height sampler, so the number has to travel with the entry the same way
+      the wind factor does.
 
-    The lean read: the master sidecar and the same ``_effective_dims`` every
+    The lean read: the master sidecar and the same :func:`variant_dims` every
     listing goes through, without the gallery, bbox-backfill and per-run detail
     :func:`get_prop` collects.
 
-    A record always answers with a usable height — a prop created without dims
-    stores the ``DEFAULT_DIM_M`` cube, and a legacy sidecar with only ``size_m``
-    is derived in memory. So an EMPTY dict means "no such prop", never "nothing
-    authored"."""
+    A record always answers with a usable height — a variant that authors no
+    size reads back the ``DEFAULT_DIM_M`` cube. So an EMPTY dict means "no such
+    prop", never "nothing authored"."""
     meta = read_sidecar(prop_id)
     if not meta:
         return {}
     return {"height_m": variant_dims(meta)["height_m"],
             "sway_factor": sway_factor_of(meta),
-            "ground_offset_m": ground_offset_of(meta)}
+            "ground_offset_m": variant_ground_offset(meta)}
 
 
 def prop_ground_extent(prop_id: str, variant: Any = None) -> Dict[str, float]:
@@ -1419,7 +1567,9 @@ def prop_stack_facts(prop_id: str, variant: Any = None) -> Dict[str, float]:
     ``variant`` is the STORE index of the variant standing there (``None`` =
     the primary one). Both ends of the stacking rule need it: a teapot on the
     TALL variant of a table lands higher than on the low one, and the height it
-    lands at is the support's own.
+    lands at is the support's own. Since 2026-08-25 the SINK is resolved per
+    variant too — a support that sits 10 cm deeper carries its top 10 cm lower,
+    and that is the very number the rule subtracts.
     """
     meta = read_sidecar(prop_id)
     if not meta:
@@ -1427,7 +1577,7 @@ def prop_stack_facts(prop_id: str, variant: Any = None) -> Dict[str, float]:
     dims = variant_dims(meta, variant)
     return {"width_m": dims["width_m"], "depth_m": dims["depth_m"],
             "height_m": dims["height_m"],
-            "ground_offset_m": ground_offset_of(meta)}
+            "ground_offset_m": variant_ground_offset(meta, variant)}
 
 
 def placement_variant(prop_id: str, position: Any) -> Optional[int]:
@@ -1795,7 +1945,7 @@ def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
     if max(img.size) > 1024:
         img.thumbnail((1024, 1024))
     img.save(target, "PNG")
-    meta = _materialize_dims(prop_id, read_sidecar(prop_id))
+    meta = read_sidecar(prop_id)
     _set_image_meta(meta, _stem_of(prop_id, variant), backend=backend,
                     prompt=prompt, negative=negative)
     _write_sidecar(prop_id, meta)
@@ -2110,7 +2260,7 @@ def _store_bbox(prop_id: str, variant: Any = None) -> None:
     if not bbox:
         return
     pid = safe_prop_id(prop_id)
-    meta = _materialize_dims(pid, read_sidecar(pid)) if pid else {}
+    meta = read_sidecar(pid) if pid else {}
     if not meta:
         return
     meta["bbox"] = bbox
@@ -2157,36 +2307,28 @@ def _ensure_bbox(prop_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
     return meta
 
 
-# ── Dims migration / redistribution ─────────────────────────────────────
-
-def _materialize_dims(prop_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
-    """Turn a legacy sidecar's single ``size_m`` into the three dims, in place.
-    Called at the START of every write path that begins with ``read_sidecar``,
-    so a legacy record migrates on its first write instead of needing a
-    migration pass. With a measurable model the dims come out proportional
-    (and count as informed), without one they are a cube (still estimated)."""
-    if not meta or _has_dims(meta):
-        meta.pop("size_m", None)
-        return meta
-    meta = _ensure_bbox(prop_id, meta)
-    bbox = meta.get("bbox")
-    meta.update(_dims_from_size(meta.get("size_m", DEFAULT_DIM_M), bbox,
-                                meta.get("rotation")))
-    meta["dims_estimated"] = not bool(bbox)
-    meta.pop("size_m", None)
-    return meta
-
+# ── Dims redistribution ─────────────────────────────────────────────────
 
 def _redistribute_dims(meta: Dict[str, Any]) -> None:
-    """Re-derive the dims from the model's proportions, keeping the largest
-    edge — ONLY for a still-estimated placeholder cube. Dims the admin set
-    (``dims_estimated`` False) are never touched."""
-    if not meta.get("dims_estimated") or not meta.get("bbox"):
+    """Re-derive the PRIMARY variant's dims from the model's proportions,
+    keeping the largest edge — ONLY while they are a still-estimated
+    placeholder cube. A size the admin typed (``dims_estimated`` False) is
+    never touched.
+
+    The primary variant and no other: ``bbox`` is measured on ITS mesh
+    (``_extract_bbox``), so it is the only entry whose proportions this box
+    describes. A second variant's own bake refines nothing here — its size is
+    authored in the strip.
+    """
+    entries = _variant_list(meta)
+    i = _effective_indices(entries)[0]
+    if not entries[i].get(DIMS_ESTIMATED_KEY) or not meta.get("bbox"):
         return
-    dims = _effective_dims(meta)
-    meta.update(_dims_from_size(max(dims.values()), meta["bbox"],
-                                meta.get("rotation")))
-    meta["dims_estimated"] = False
+    dims = {key: _coerce_dim_m(entries[i].get(key)) for key in DIM_KEYS}
+    entries[i].update(_dims_from_size(max(dims.values()), meta["bbox"],
+                                      meta.get("rotation")))
+    entries[i][DIMS_ESTIMATED_KEY] = False
+    meta[VARIANTS_KEY] = entries
 
 
 # ── Listing ─────────────────────────────────────────────────────────────
@@ -2227,17 +2369,19 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         _demand_low(prop_id, i, vt)
     gallery = galleries[0]
     tiers = tier_lists[0]
-    # …plus the three real metres each of them renders at (2026-08-24): a
-    # variant may override the prop's dims, and a placement reads its size off
-    # the entry it draws (`room_recipe._placement_dims`) instead of off the
-    # record, which stays the PROP's own size.
-    variant_tiers = [{"variant": i, "tiers": vt, "dims": variant_dims(meta, i)}
+    # …plus everything the VARIANT owns (2026-08-25): the three real metres it
+    # renders at, how deep it stands and — on a full record — its markers. A
+    # placement reads all three off the entry it draws
+    # (`room_recipe._placement_dims` and friends) instead of off the record,
+    # which answers for the PRIMARY variant.
+    variant_tiers = [_published_entry(meta, i, vt, markers=full)
                      for i, vt in zip(active_idx, tier_lists) if vt]
     has_model = bool(tiers)
-    # The PROP-level dims, never a variant's override: this is what the admin
-    # form edits, what the mesh proportions are redistributed over, and the
-    # value every variant inherits that authors none.
-    dims = _effective_dims(meta)
+    # The PRIMARY variant's values — the answer to every question asked without
+    # a variant in hand (the lean client library, the floor plan's schematic
+    # footprint, the admin list row).
+    primary = active_idx[0]
+    dims = variant_dims(meta, primary)
     rec: Dict[str, Any] = {
         "id": prop_id,
         "name": meta.get("name") or prop_id,
@@ -2249,15 +2393,16 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         # same role as the room-model meta rotation.
         "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
         "tags": meta.get("tags") or [],
-        "marker_count": len(meta.get("markers") or []),
+        "marker_count": len(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
         # Every active variant that has a mesh, in payload order:
-        # `[{variant: <store index>, tiers: [...], dims: {…}}, …]`, element 0
-        # being the primary one (its `tiers` IS `model_tiers`; its `dims` are
-        # the record's own unless it overrides them). The store index is not
-        # the position — a switched-off variant leaves a gap — and it is what
-        # the serving URL names. Turns into `model_variants` on a spec.
+        # `[{variant: <store index>, tiers: [...], dims: {…},
+        # ground_offset_m?, markers?}, …]`, element 0 being the primary one
+        # (its `tiers` IS `model_tiers`, its `dims` the record's own). The
+        # store index is not the position — a switched-off variant leaves a
+        # gap — and it is what the serving URL names. Turns into
+        # `model_variants` on a spec.
         "variant_tiers": variant_tiers,
     }
     if full:
@@ -2287,9 +2432,12 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         active_file = gallery.find() if gallery else None
         run = read_model_sidecar(active_file) if active_file else {}
         rec.update({
-            "description": meta.get("description") or "",
+            # The PRIMARY variant's subject and markers — the record has no
+            # variant in hand, and this is the same answer every other
+            # unqualified read gives (2026-08-25).
+            "description": variant_description(meta, primary),
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
-            "markers": meta.get("markers") or [],
+            "markers": variant_markers(meta, primary),
             "has_source": has_source,
             "created_at": meta.get("created_at") or "",
             "source": meta.get("source") or "",
@@ -2322,21 +2470,24 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # Always the EFFECTIVE factor, never the raw key: the admin field
             # shows what applies, and "absent" is not a state a form can edit.
             "sway_factor": sway_factor_of(meta),
-            # …and the same for the ground offset: 0.0 is what a prop that
-            # stands ON the ground reads back, whether the key exists or not.
-            "ground_offset_m": ground_offset_of(meta),
+            # …and the same for the ground offset, of the PRIMARY variant:
+            # 0.0 is what a prop that stands ON the ground reads back, whether
+            # the key exists or not.
+            "ground_offset_m": variant_ground_offset(meta, primary),
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]
-        rec["dims_estimated"] = (bool(meta.get("dims_estimated"))
-                                 if _has_dims(meta) else not bool(meta.get("bbox")))
+        rec["dims_estimated"] = variant_dims_estimated(meta, primary)
     return rec
 
 
 def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
     """All props. ``full`` adds the sidecar detail + file urls (admin);
     otherwise the lean client shape (id, name, category, width_m, depth_m,
-    height_m, tags, marker_count, has_model)."""
+    height_m, tags, marker_count, has_model).
+
+    The marker LISTS ride only on the full record — the lean client library
+    gets the count, exactly as before the markers became per-variant."""
     out = []
     for pid in _all_prop_ids():
         meta = read_sidecar(pid)
@@ -2361,6 +2512,11 @@ def migrate_marker_surface_once() -> Dict[str, int]:
     can now be corrected against the preview figure instead of by feel.
 
     Idempotent via a world_kv flag. Returns stats for the boot log.
+
+    RUNS BEFORE ``prop_field_migration`` and reads the PRE-MOVE shape on
+    purpose (prop-level ``markers`` + prop-level dims): both are one-time
+    repairs, and a world that still needs this one still has its props in that
+    shape. Once the field migration has run there is nothing here left to find.
     """
     from app.core.scene_recipe import FIGURE_HEIGHT_M, FIGURE_ROOT_DROP
     from app.models.world import get_world_setting, set_world_setting
@@ -2729,7 +2885,7 @@ def _generate(prop_id: str, prompt: str, negative: str,
             logger.info("Prop %s: LOD stage %s selected as low variant",
                         prop_id, low)
 
-        meta = _materialize_dims(prop_id, read_sidecar(prop_id))
+        meta = read_sidecar(prop_id)
         meta["source"] = "generated"
         # Only the PRIMARY variant informs the object's proportions — a second
         # chair mesh must not redistribute the dims the admin sees.

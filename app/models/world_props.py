@@ -341,13 +341,15 @@ def delete_world_props_of(prop_id: str) -> int:
 
 def _prop_facts(prop_id: str) -> Dict[str, Any]:
     """What ONE prop contributes to every placement of it (§ A9a) — out of one
-    library read: the scale number OF EACH ACTIVE VARIANT, the orientation fix
-    and their tier maps.
+    library read: the scale number and the ground sink OF EACH ACTIVE VARIANT,
+    the orientation fix and their tier maps.
 
-    ``max_list[i]`` is the largest REAL edge in metres of the variant at
-    payload position ``i``, and the row's ``max_m`` is the entry of the variant
-    that row shows — a variant may override the prop's dims (2026-08-24), so
-    the scale belongs to the mesh, not to the record. ``measure`` is ``xyz``,
+    ``max_list[i]`` / ``sink_list[i]`` belong to the variant at payload
+    position ``i``, and the row's ``max_m`` / ``ground_offset_m`` are the
+    entries of the variant that row shows — the size and the sink are the
+    VARIANT's since 2026-08-25, so both belong to the mesh, not to the record.
+    Two lists in one order, because a row that took its scale from one variant
+    and its sink from another would float. ``measure`` is ``xyz``,
     the very scale law the scene props run on (§ B2, ``place()``), so a bench
     outside a house is the same size as the same bench inside it. The mesh's
     own extent says nothing: normalisation destroyed it.
@@ -380,15 +382,19 @@ def _prop_facts(prop_id: str) -> Dict[str, Any]:
     max_list = [round(max(_finite(entry.get("dims", {}).get(k)) or 0.0
                           for k in ("width_m", "height_m", "depth_m")) or 1.0, 3)
                 for entry in entries]
+    # …and ONE sink per published variant, in the same order (2026-08-25): how
+    # deep the VARIANT stands in the ground, wherever it stands. The client
+    # seats a world prop itself (`heightAt(x, z) + offset_y`), so this is the
+    # third term of that sum and travels with the row — of the variant the row
+    # really draws, exactly like its scale.
+    sink_list = [_finite(entry.get("ground_offset_m")) or 0.0
+                 for entry in entries]
     return {
         "name": str(meta.get("name") or prop_id),
         "max_list": max_list,
         "fix_euler": {a: _finite(rot.get(a)) or 0.0 for a in ("x", "y", "z")},
         "variant_maps": maps,
-        # How deep the OBJECT stands in the ground, wherever it stands — the
-        # client seats a world prop itself (`heightAt(x, z) + offset_y`), so
-        # this is the third term of that sum and travels with the row.
-        "ground_offset_m": prop_store.ground_offset_of(meta),
+        "sink_list": sink_list,
     }
 
 
@@ -445,11 +451,12 @@ def payload_rows() -> List[Dict[str, Any]]:
         if len(maps) > 1:
             spec["model_variants"] = maps
             spec["variant"] = idx
-        # The prop's own sink, and only when it is not the default 0.0 (the
-        # payload law of the scatter entries next door): absent = stands on the
-        # ground. `offset_y` above stays the per-placement trim.
-        if facts["ground_offset_m"]:
-            spec["ground_offset_m"] = facts["ground_offset_m"]
+        # The sink of the variant THIS row shows, and only when it is not the
+        # default 0.0 (the payload law of the scatter entries next door):
+        # absent = stands on the ground. `offset_y` above stays the
+        # per-placement trim.
+        if facts["sink_list"][idx]:
+            spec["ground_offset_m"] = facts["sink_list"][idx]
         out.append(spec)
     return out
 

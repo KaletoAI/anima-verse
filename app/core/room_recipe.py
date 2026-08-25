@@ -475,14 +475,41 @@ def _square(cx: float, cy: float, half: float) -> List[List[float]]:
             [cx + half, cy + half], [cx - half, cy + half]]
 
 
-def _carry_ground_offset(entry: Dict[str, Any], prop: Dict[str, Any]) -> None:
-    """Put the PROP's own ground offset on one placement entry — and only when
-    it is not zero (``props.GROUND_OFFSET_DEFAULT``).
+def _variant_entry(prop: Dict[str, Any], variant: Any) -> Optional[Dict[str, Any]]:
+    """The published variant entry a placement DRAWS, or ``None`` when the prop
+    publishes none (no mesh anywhere).
 
-    A fact about the OBJECT, carried on the placement because that is where
-    every consumer of the recipe already stands: the scene spec adds it to the
-    ``bottom_y`` it composes (``scene_recipe._prop_models``) and the prop
-    markers of the same placement ride it down with the mesh.
+    ``variant`` is a POSITION in ``variant_tiers`` (the published list), never
+    a store index — the same number ``scene_recipe._variant_index`` resolves
+    against ``model_variants``, and it wraps the same way, so a placement whose
+    stored index outlived a deleted mesh keeps its size instead of vanishing.
+
+    ONE lookup for all three of the variant's facts (size, sink, markers): a
+    placement that took its dims from one entry and its sink from another would
+    be a bench of one version floating at another version's height.
+    """
+    entries = prop.get("variant_tiers") or []
+    if not entries:
+        return None
+    try:
+        pos = max(0, int(variant or 0)) % len(entries)
+    except (TypeError, ValueError):
+        pos = 0
+    entry = entries[pos]
+    return entry if isinstance(entry, dict) else None
+
+
+def _carry_ground_offset(entry: Dict[str, Any], prop: Dict[str, Any],
+                         variant: Any) -> None:
+    """Put the ground offset of the VARIANT this placement draws onto the
+    placement entry — and only when it is not zero
+    (``props.GROUND_OFFSET_DEFAULT``).
+
+    A fact about the MESH (variant-owned since 2026-08-25), carried on the
+    placement because that is where every consumer of the recipe already
+    stands: the scene spec adds it to the ``bottom_y`` it composes
+    (``scene_recipe._prop_models``) and the prop markers of the same placement
+    ride it down with the mesh.
 
     ABSENT = 0.0, exactly as the sidecar stores it: sending a 0.0 would make
     "stands on the ground" two payload shapes for one behaviour, and it would
@@ -491,7 +518,9 @@ def _carry_ground_offset(entry: Dict[str, Any], prop: Dict[str, Any]) -> None:
     the two into one number would make the editor's dial read back a value
     nobody typed there.
     """
-    off = float(prop.get("ground_offset_m") or 0.0)
+    published = _variant_entry(prop, variant)
+    source = published if published is not None else prop
+    off = float(source.get("ground_offset_m") or 0.0)
     if off:
         entry["ground_offset_m"] = _r(off, 2)
 
@@ -499,28 +528,33 @@ def _carry_ground_offset(entry: Dict[str, Any], prop: Dict[str, Any]) -> None:
 def _placement_dims(prop: Dict[str, Any], variant: Any) -> Dict[str, float]:
     """The three real metres THIS placement renders at (2026-08-24).
 
-    A model variant may override the prop's dims — a sapling beside the grown
-    pine — so the size comes from the VARIANT the placement shows, and only
-    from the prop record when it shows none. The library resolved both when it
-    built the record (``props.variant_dims``); all that happens here is the
-    index lookup.
-
-    ``variant`` is a POSITION in ``variant_tiers`` (the published list), never
-    a store index — the same number ``scene_recipe._variant_index`` resolves
-    against ``model_variants``, and it wraps the same way, so a placement whose
-    stored index outlived a deleted mesh keeps a size instead of vanishing.
+    The size belongs to the VARIANT the placement shows — a sapling beside the
+    grown pine — and the library resolved it when it built the record
+    (``props.variant_dims``); all that happens here is the index lookup. A prop
+    that publishes no variant at all (no mesh anywhere) falls back to the
+    record, which answers for its PRIMARY variant.
     """
-    entries = prop.get("variant_tiers") or []
-    if entries:
-        try:
-            pos = max(0, int(variant or 0)) % len(entries)
-        except (TypeError, ValueError):
-            pos = 0
-        dims = entries[pos].get("dims")
-        if isinstance(dims, dict) and dims:
-            return {k: float(dims.get(k) or prop[k])
-                    for k in ("width_m", "depth_m", "height_m")}
+    published = _variant_entry(prop, variant)
+    dims = (published or {}).get("dims")
+    if isinstance(dims, dict) and dims:
+        return {k: float(dims.get(k) or prop[k])
+                for k in ("width_m", "depth_m", "height_m")}
     return {k: float(prop[k]) for k in ("width_m", "depth_m", "height_m")}
+
+
+def _placement_markers(prop: Dict[str, Any], variant: Any) -> List[Dict[str, Any]]:
+    """The OBJECT-LOCAL markers of the VARIANT this placement draws
+    (2026-08-25).
+
+    The fractions are of THAT mesh's bounding box, so a seat authored on the
+    grown chair has no business on the broken one. A prop that publishes no
+    variant falls back to the record's list, which is its PRIMARY variant's.
+    """
+    published = _variant_entry(prop, variant)
+    if published is not None:
+        markers = published.get("markers")
+        return markers if isinstance(markers, list) else []
+    return prop.get("markers") or []
 
 
 def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
@@ -593,7 +627,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         # (2026-08-24) — the scene spec turns it into `max_m`, the depth cut
         # and the placeholder box, and the markers below scale with it.
         entry["dims"] = _placement_dims(prop, entry.get("variant"))
-        _carry_ground_offset(entry, prop)
+        _carry_ground_offset(entry, prop, entry.get("variant"))
         entry["has_model"] = bool(prop.get("has_model"))
         if prop.get("has_model"):
             # Which resolution tiers the prop has, plus the change key of its
@@ -613,7 +647,10 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             continue  # no measurable mesh — markers stay object data only
         dims = [entry["dims"]["width_m"], entry["dims"]["depth_m"],
                 entry["dims"]["height_m"]]
-        for marker in (prop.get("markers") or []):
+        # The markers of the VARIANT this placement draws (2026-08-25) — the
+        # same entry its dims came from, so the seat sits on the mesh that is
+        # really there.
+        for marker in _placement_markers(prop, entry.get("variant")):
             composed = compose_prop_marker(
                 bbox=bbox, rotation=prop.get("rotation"), dims=dims,
                 frac=[float(v) for v in marker.get("at") or [0.5, 0, 0.5]],
@@ -690,10 +727,10 @@ def _scatter_into(placements: List[Dict[str, Any]],
                     entry["variant"] = prop_store.scatter_variant_index(
                         seed, i, variant_count)
                 entry["dims"] = _placement_dims(prop, entry.get("variant"))
-                # A scattered copy is the SAME object, so it sinks by the same
-                # amount as the anchor it was thrown from — the offset belongs
-                # to the prop, not to the placement.
-                _carry_ground_offset(entry, prop)
+                # A scattered copy is the SAME mesh as the variant it shows, so
+                # it sinks by that variant's amount — the offset belongs to the
+                # object version, not to the placement.
+                _carry_ground_offset(entry, prop, entry.get("variant"))
                 entry["has_model"] = bool(prop.get("has_model"))
                 if prop.get("has_model"):
                     entry["model_tiers"] = prop.get("model_tiers") or []

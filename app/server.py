@@ -204,6 +204,21 @@ async def lifespan(app: FastAPI):
     except Exception as _pme:
         logger.warning("prop marker migration failed: %s", _pme)
 
+    # Size, generation subject, ground offset and markers belong to the MODEL
+    # VARIANT now, not to the prop (2026-08-25): a variant is a whole version
+    # of the object, and all four differ per version. The master record lost
+    # the keys without a fallback reader, so the value the old rule would have
+    # used is copied onto every variant that authors none — otherwise every
+    # existing prop would come back as a 1 m cube without markers on this boot.
+    # AFTER the marker-surface repair above, which reads the pre-move shape.
+    try:
+        from app.core.prop_field_migration import migrate_prop_fields_once
+        _pf = migrate_prop_fields_once()
+        if _pf and _pf.get("moved"):
+            logger.info("Prop fields moved onto the variants: %s", _pf)
+    except Exception as _pfe:
+        logger.warning("prop field migration failed: %s", _pfe)
+
     # Vereinheitlichte Intents (plan-intents-unified.md, Phase 1): bestehende
     # Assignments idempotent in die intents-Tabelle spiegeln. Kein Verhaltens-
     # wechsel — assignments bleiben in Phase 1 die treibende Quelle.

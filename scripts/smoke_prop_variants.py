@@ -109,19 +109,20 @@ so day-of-year 5/35/65/95 is day 5 of spring/summer/autumn/winter):
   - the SCENE signature carries the season, so a season change reaches a
     polling client even where nothing stored has moved.
 
-DIMS PER VARIANT (2026-08-24). A variant may carry its own `width_m` /
-`depth_m` / `height_m` as an OVERRIDE of the prop's — a sapling beside the
-grown tree. One rule, `props.variant_dims`: the variant's own number, else the
-prop's; no variant in hand answers for the primary one. The hand derivation of
-section [18] — sanitizer, resolution, payload scale and the stacking rule —
-stands in `dims_section`'s own docstring, next to the checks it explains.
+THE VARIANT OWNS WHAT IT LOOKS LIKE (2026-08-25, user decision). Size,
+generation subject, ground offset and markers used to sit on the PROP with an
+optional per-variant override; they are the VARIANT's now and the prop record
+carries none of them. Three sections derive that by hand:
 
-DESCRIPTION PER VARIANT (2026-08-24). The GENERATION SUBJECT follows the same
-two laws: a new variant COPIES the prop's description into its own field, and
-a variant without one renders from the prop's text. One rule,
-`props.variant_description`, and the render call site (`_render_source`) reads
-it — the hand derivation, the sanitizer table and the red probe stand in
-`description_section`'s own docstring.
+  [18] `dims_section` — the three dims are MANDATORY per variant (there is
+       nothing to inherit), the sanitizer, the payload scale, the stacking
+       rule, and the RED PROBE that a prop-level `height_m` is ignored;
+  [19] `description_section` — subject per variant, the copy-on-add law and
+       the render call site, with the prop's NAME as the last fallback;
+  [20] `variant_fields_section` — ground offset and markers per variant, the
+       payload they reach (scatter facts, stack facts, world-prop rows, the
+       room recipe) and the one-time MIGRATION: values copied down, prop keys
+       gone, an authored variant value kept.
 
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
@@ -301,23 +302,30 @@ def set_no_seasons() -> None:
 
 
 def dims_section() -> None:
-    """[18] DIMS PER VARIANT (2026-08-24). Hand-derived throughout.
+    """[18] DIMS PER VARIANT (2026-08-24; variant-ONLY since 2026-08-25).
+    Hand-derived throughout.
 
-    THE SEED: a prop "Crate" of 1.0 x 1.0 x 1.0 m with TWO meshed, active
-    variants; variant 1 overrides ONLY its height, to 2.0 m.
+    THE SEED: a prop "Crate" created at 1.0 x 1.0 x 1.0 m — which lands on its
+    FIRST VARIANT, because that is where a size lives — with a second meshed,
+    active variant added from it; variant 1 is then set to 2.0 m high.
 
-        variant 0   no override            -> 1.0 x 1.0 x 1.0
-        variant 1   height_m 2.0           -> 1.0 x 1.0 x 2.0
+        variant 0   1.0 x 1.0 x 1.0
+        variant 1   1.0 x 1.0 x 2.0
 
-    From the one resolution rule ("the variant's own number, else the prop's")
-    every expectation below follows:
+    From "the size is the variant's, and only the variant's" every expectation
+    below follows:
 
-      - `variant_dims(meta, 0)` = the prop's cube, `variant_dims(meta, 1)`
-        carries the 2.0 and NOTHING else — an override is per key, not per
-        record;
+      - `variant_dims(meta, 0)` = the cube, `variant_dims(meta, 1)` = the tall
+        one, and both are COMPLETE: there is nothing left to inherit, so a
+        variant always answers with three metres;
       - an unqualified read (`None`, a negative index, an index this prop has
         no variant for) answers for the PRIMARY variant, which is variant 0
-        here, so it stays the cube;
+        here, so it stays the cube — and so does the prop RECORD's own
+        `width_m/depth_m/height_m`, which is what the lean client library and
+        the floor plan read;
+      - RED PROBE: a `height_m` hand-written onto the MASTER record is ignored
+        — before 2026-08-25 it would have been the inherited value and moved
+        variant 0 to 9 m;
       - the payload scale is `max_m` = the largest edge of the VARIANT the
         placement shows: 1.0 for a placement of variant 0, 2.0 for one of
         variant 1 — one prop, two sizes, and both from the same record;
@@ -327,16 +335,18 @@ def dims_section() -> None:
         i.e. 2.0 on variant 1 and 1.0 on variant 0. The support's mesh IS its
         height, and that is the whole point of the feature.
 
-    THE SANITIZER, same clamp as the prop-level field (`(0, 100]`, 3 decimals)
-    and the same "absence is the statement" law as `seasons`:
+    THE SANITIZER, `(0, 100]` with 3 decimals, and NO clearing rule any more:
 
-        2.5      -> 2.5          a real override
+        2.5      -> 2.5          stored
         150      -> 100.0        clamped, never refused (a typo costs the limit)
-        0 / -3   -> no key       not a size
-        "junk"   -> no key       no authoring statement either
-        cleared  -> no key       the variant inherits again
+        0 / -3   -> unchanged    not a size, so the stored one stands
+        "junk"   -> unchanged    no authoring statement either
+        None     -> unchanged    there is nothing to fall back to
+
+    …and storing a size clears that variant's `dims_estimated`, because a
+    number the admin typed is never redistributed from the mesh again.
     """
-    print("\n[18] dims per variant (2026-08-24)")
+    print("\n[18] dims per variant (2026-08-25: variant-only)")
     from app.core.room_recipe import _placement_dims
 
     crate = store.create_prop(name="Crate", width_m=1.0, depth_m=1.0,
@@ -347,46 +357,66 @@ def dims_section() -> None:
           [e["variant"] for e in store.active_variant_tiers(crate)] == [0, 1],
           str(store.active_variant_tiers(crate)))
     check("...and variant 0 is the primary one", store.primary_variant(crate) == 0)
+    check("the created size landed on variant 0, not on the record",
+          store.list_variants(crate)[0]["dims"]
+          == {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
+          and not any(k in store.read_sidecar(crate)
+                      for k in ("width_m", "depth_m", "height_m")),
+          str(store.read_sidecar(crate).keys()))
+    check("...and the added variant COPIED it", store.list_variants(crate)[1]["dims"]
+          == {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0},
+          str(store.list_variants(crate)[1]["dims"]))
 
     # ── the sanitizer ──
     store.set_variant_dims(crate, 1, {"height_m": 150})
     check("150 m is clamped to the 100 m limit, not refused",
-          store.list_variants(crate)[1]["dims"] == {"height_m": 100.0},
+          store.list_variants(crate)[1]["dims"]["height_m"] == 100.0,
           str(store.list_variants(crate)[1]["dims"]))
     store.set_variant_dims(crate, 1, {"height_m": "junk", "width_m": -3,
                                       "depth_m": 0})
-    check("junk, a negative and a zero all lose their key",
-          store.list_variants(crate)[1]["dims"] == {},
+    check("junk, a negative and a zero leave the stored numbers standing",
+          store.list_variants(crate)[1]["dims"]
+          == {"width_m": 1.0, "depth_m": 1.0, "height_m": 100.0},
           str(store.list_variants(crate)[1]["dims"]))
     store.set_variant_dims(crate, 1, {"height_m": 2.5})
-    check("a real number is stored", store.list_variants(crate)[1]["dims"]
-          == {"height_m": 2.5}, str(store.list_variants(crate)[1]["dims"]))
+    check("a real number is stored",
+          store.list_variants(crate)[1]["dims"]["height_m"] == 2.5,
+          str(store.list_variants(crate)[1]["dims"]))
     store.set_variant_dims(crate, 1, {"width_m": 1.5})
     check("...and a second key joins it instead of replacing it",
           store.list_variants(crate)[1]["dims"]
-          == {"height_m": 2.5, "width_m": 1.5},
+          == {"width_m": 1.5, "depth_m": 1.0, "height_m": 2.5},
           str(store.list_variants(crate)[1]["dims"]))
     store.set_variant_dims(crate, 1, {"width_m": None})
-    check("clearing ONE key leaves the other standing",
-          store.list_variants(crate)[1]["dims"] == {"height_m": 2.5},
+    check("None leaves it where it is — nothing to inherit, nothing to clear",
+          store.list_variants(crate)[1]["dims"]["width_m"] == 1.5,
           str(store.list_variants(crate)[1]["dims"]))
+    check("...and a stored size is no longer an estimate",
+          store.list_variants(crate)[1]["dims_estimated"] is False)
     check("an index this prop has no variant for is refused",
           not store.set_variant_dims(crate, 7, {"height_m": 2.0}))
 
     # ── the resolution rule ──
-    store.set_variant_dims(crate, 1, {"height_m": 2.0})
+    store.set_variant_dims(crate, 1, {"width_m": 1.0, "depth_m": 1.0,
+                                      "height_m": 2.0})
     meta = store.read_sidecar(crate)
     cube = {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
     tall = {"width_m": 1.0, "depth_m": 1.0, "height_m": 2.0}
-    check("variant 0 inherits the prop's cube",
+    check("variant 0 answers with its own cube",
           store.variant_dims(meta, 0) == cube, str(store.variant_dims(meta, 0)))
-    check("variant 1 carries its own height and inherits the rest",
+    check("variant 1 answers with its own 2 m height",
           store.variant_dims(meta, 1) == tall, str(store.variant_dims(meta, 1)))
     check("an unqualified read answers for the PRIMARY variant",
           store.variant_dims(meta) == cube, str(store.variant_dims(meta)))
     check("...and so does an index this prop has no variant for",
           store.variant_dims(meta, 9) == cube, str(store.variant_dims(meta, 9)))
-    check("the prop record keeps the PROP's own dims",
+    # RED PROBE: the master record is not a fallback any more.
+    poisoned = dict(meta, height_m=9.0)
+    check("red: a height_m on the MASTER record is ignored — it would have "
+          "been the inherited value before 2026-08-25",
+          store.variant_dims(poisoned, 0) == cube,
+          str(store.variant_dims(poisoned, 0)))
+    check("the prop record answers for the PRIMARY variant",
           [(store.get_prop(crate) or {}).get(k) for k in
            ("width_m", "depth_m", "height_m")] == [1.0, 1.0, 1.0],
           str(store.get_prop(crate)))
@@ -436,8 +466,9 @@ def dims_section() -> None:
     #     position      0             1     <- "Variant 3" is store index 2
     #
     # Sizing store index 2 must answer on 2 and NOT on 1. RED PROBE: a reader
-    # that took the display position would hand back the prop's 1.0 here.
-    third = store.add_variant(crate)
+    # that took the display position would hand back variant 0's 1.0 here.
+    # The third variant is added FROM variant 0, so it starts as its cube.
+    third = store.add_variant(crate, 0)
     put_mesh(crate, third)
     check("a third variant is store index 2", third == 2, str(third))
     store.set_variant_active(crate, 1, False)
@@ -453,68 +484,67 @@ def dims_section() -> None:
     check("...and store index 1, the one that is switched off, is untouched",
           store.variant_dims(meta, 1)["width_m"] == 1.0,
           str(store.variant_dims(meta, 1)))
-    check("...and the list echoes the override straight back — what the strip "
-          "re-renders from after a save",
-          store.list_variants(crate)[2]["dims"] == {"width_m": 3.0}
-          and store.list_variants(crate)[2]["effective_dims"]
+    check("...and the list echoes the stored trio straight back — what the "
+          "strip re-renders from after a save",
+          store.list_variants(crate)[2]["dims"]
           == {"width_m": 3.0, "depth_m": 1.0, "height_m": 1.0},
           str(store.list_variants(crate)[2]))
     store.set_variant_active(crate, 1, True)
-    store.set_variant_dims(crate, 2, {"width_m": None})
+    store.set_variant_dims(crate, 2, {"width_m": 1.0})
 
 
 def description_section() -> None:
-    """[19] DESCRIPTION PER VARIANT (2026-08-24). Hand-derived throughout.
+    """[19] DESCRIPTION PER VARIANT (2026-08-24; variant-ONLY since
+    2026-08-25). Hand-derived throughout.
 
     A variant is a whole version of the object, so the sentence its product
     shot is rendered from belongs to it — "…as a sapling", "…broken", "…in
-    snow". One rule, `props.variant_description`: the variant's own text, else
-    the prop's; no variant in hand answers for the PRIMARY one — character for
-    character the law the dims follow.
+    snow". One rule, `props.variant_description`: the variant's own text, and
+    nothing else; a variant without one renders from the PROP'S NAME, the
+    fallback that predates the field. No variant in hand answers for the
+    PRIMARY one — character for character the law the dims follow.
 
-    THE SEED: a prop "Pine" described as `a tall pine tree`, plus a second
-    variant added afterwards. From the two laws — COPY ON CREATE and ABSENCE
-    IS INHERITANCE — every expectation follows:
+    THE SEED: a prop "Pine" created with the subject `a tall pine tree`, which
+    lands on its FIRST variant, plus a second variant added from it. From the
+    COPY-ON-ADD law every expectation follows:
 
-        variant 0   created with the prop, no key   -> inherits
-        variant 1   added later, COPIED key         -> "a tall pine tree"
+        variant 0   created with the prop   -> "a tall pine tree"
+        variant 1   added from variant 0    -> "a tall pine tree" (a COPY)
 
-    and after editing variant 1 to `a pine sapling` and the PROP to
+    and after editing variant 1 to `a pine sapling` and variant 0 to
     `a snow-covered pine`:
 
-        variant 0   still no key   -> "a snow-covered pine"   (follows)
-        variant 1   own key        -> "a pine sapling"        (stays)
+        variant 0   "a snow-covered pine"
+        variant 1   "a pine sapling"        (untouched — a copy, not a link)
 
-    The copy is a copy and not a link — that difference IS the feature: an
-    authored version must not be rewritten by a later edit of the prop.
+    That difference IS the feature: an authored version must not be rewritten
+    by a later edit of its neighbour.
 
     THE SANITIZER, the same "absence is the statement" law as `seasons`:
 
         "  a pine sapling  "  -> stripped
-        ""  /  None  /  "   " -> no key, the variant inherits again
+        ""  /  None  /  "   " -> no key, the render falls back to the name
         3000 characters       -> cut to DESCRIPTION_MAX (2000)
 
     THE CALL SITE is what the feature is for: a render of variant 1 has to
     compose from `a pine sapling`. RED PROBE — the pre-2026-08-24 code read
-    `meta["description"]`, so it would have sent `a snow-covered pine` here,
-    and the check below fails the moment anyone puts that read back.
+    `meta["description"]`, so it would have sent variant 0's sentence here, and
+    the check below fails the moment anyone puts that read back.
     """
-    print("\n[19] description per variant (2026-08-24)")
+    print("\n[19] description per variant (2026-08-25: variant-only)")
     pine = store.create_prop(name="Pine", description="a tall pine tree")["id"]
     meta = store.read_sidecar(pine)
-    check("the prop's own variant stores NO description of its own",
-          store.list_variants(pine)[0]["description"] == "",
-          str(store.list_variants(pine)[0]["description"]))
-    check("...so it INHERITS the prop's text",
+    check("the created subject landed on variant 0, not on the record",
+          store.list_variants(pine)[0]["description"] == "a tall pine tree"
+          and "description" not in store.read_sidecar(pine),
+          str(sorted(store.read_sidecar(pine).keys())))
+    check("...and that is what the resolution rule answers",
           store.variant_description(meta, 0) == "a tall pine tree",
           store.variant_description(meta, 0))
-    check("...which is what the list reports as effective",
-          store.list_variants(pine)[0]["effective_description"]
-          == "a tall pine tree")
 
     v1 = store.add_variant(pine)
     check("a new variant is added as index 1", v1 == 1, str(v1))
-    check("...and starts as a COPY of the prop's description",
+    check("...and starts as a COPY of the variant it was added from",
           store.list_variants(pine)[1]["description"] == "a tall pine tree",
           str(store.list_variants(pine)[1]["description"]))
 
@@ -524,8 +554,7 @@ def description_section() -> None:
           store.list_variants(pine)[1]["description"] == "a pine sapling",
           str(store.list_variants(pine)[1]["description"]))
     store.set_variant_description(pine, 1, "   ")
-    check("blank clears the key — the variant inherits again",
-          store.list_variants(pine)[1]["description"] == "")
+    check("blank clears the key", store.list_variants(pine)[1]["description"] == "")
     store.set_variant_description(pine, 1, "a pine sapling")
     store.set_variant_description(pine, 1, None)
     check("...and so does None", store.list_variants(pine)[1]["description"] == "")
@@ -538,9 +567,9 @@ def description_section() -> None:
     store.set_variant_description(pine, 1, "a pine sapling")
 
     # ── the resolution rule ──
-    store.update_prop(pine, {"description": "a snow-covered pine"})
+    store.set_variant_description(pine, 0, "a snow-covered pine")
     meta = store.read_sidecar(pine)
-    check("variant 0 FOLLOWS the prop's edit",
+    check("variant 0 carries the edit",
           store.variant_description(meta, 0) == "a snow-covered pine",
           store.variant_description(meta, 0))
     check("...while variant 1 keeps its own — a copy, not a link",
@@ -552,6 +581,31 @@ def description_section() -> None:
     check("...and so does an index this prop has no variant for",
           store.variant_description(meta, 9) == "a snow-covered pine",
           store.variant_description(meta, 9))
+    # RED PROBE: the master record is not a fallback any more.
+    check("red: a description on the MASTER record is ignored",
+          store.variant_description(dict(meta, description="a birch"), 1)
+          == "a pine sapling")
+    check("the prop record reports the PRIMARY variant's subject",
+          (store.get_prop(pine) or {}).get("description") == "a snow-covered pine",
+          str((store.get_prop(pine) or {}).get("description")))
+
+    # ── the prop-level route REFUSES the moved field ──
+    refused = False
+    try:
+        store.update_prop(pine, {"description": "nope"})
+    except ValueError:
+        refused = True
+    check("red: update_prop refuses `description` — a silently ignored key "
+          "would report 'Saved' over a value nothing reads",
+          refused and store.variant_description(store.read_sidecar(pine), 0)
+          == "a snow-covered pine")
+    for field, value in (("height_m", 4.0), ("ground_offset_m", -0.3),
+                         ("markers", [])):
+        try:
+            store.update_prop(pine, {field: value})
+            check(f"...and `{field}` as well", False, "not refused")
+        except ValueError:
+            check(f"...and `{field}` as well", True)
 
     # ── the call site: which sentence a render is composed from ──
     subjects: list = []
@@ -573,7 +627,7 @@ def description_section() -> None:
               == "studio shot, a pine sapling",
               str(store.list_variants(pine)[1]["image"]["prompt"]))
         store._render_source(pine, "", "", "", 0)
-        check("a render of the INHERITING variant 0 composes from the prop's",
+        check("a render of variant 0 composes from ITS text",
               subjects[-1:] == ["a snow-covered pine"], str(subjects))
         # A prop with nothing written anywhere: the NAME is still the last
         # fallback — the rule that predates the feature and must survive it.
@@ -583,6 +637,221 @@ def description_section() -> None:
               subjects[-1:] == ["Grey Rock"], str(subjects))
     finally:
         store.compose_prompt = real_compose
+
+
+def variant_fields_section() -> None:
+    """[20] GROUND OFFSET AND MARKERS PER VARIANT + THE ONE-TIME MIGRATION
+    (2026-08-25). Hand-derived throughout.
+
+    THE SEED: a prop "Bench" with two meshed variants, 2.0 x 0.5 x 0.9 m each.
+    Variant 0 sinks 0.10 m and carries a seat marker; variant 1 sinks 0.25 m
+    and carries none.
+
+    STORAGE, the "absence is the statement" law once more:
+
+        ground_offset_m 0      -> no key      "stands on the ground"
+        ground_offset_m -0.1   -> -0.1        stored, centimetre-rounded
+        ground_offset_m -9     -> -5.0        clamped, never refused
+        ground_offset_m "junk" -> no key      no authoring statement
+        markers []             -> no key      "no markers"
+
+    WHAT THE PAYLOAD MUST SAY, derived from the base ladder of § B2:
+
+      - `prop_stack_facts(pid, 0).ground_offset_m` = -0.1 and
+        `(pid, 1)` = -0.25 — the SUPPORT's own sink, both ends of the rule;
+      - THE STACKING RULE with a support on variant 1 and a target on variant 0
+        (same spot, no per-placement offsets):
+            top(support)  = -0.25 + 0 + 0.9  = 0.65
+            offset_y      = 0.65 − (−0.10)   = 0.75
+        and with support and target swapped:
+            top(support)  = -0.10 + 0 + 0.9  = 0.80
+            offset_y      = 0.80 − (−0.25)   = 1.05
+        Before the move both props sank by the same amount and the difference
+        cancelled: the old answers would have been 0.9 in both directions.
+      - `prop_scatter_facts` answers for the PRIMARY variant, so -0.1;
+      - `active_variant_tiers` carries one sink per entry, and 0.0 is ABSENT.
+
+    THE MARKERS reach the room recipe per variant, which is the whole point: a
+    placement of variant 0 composes ONE prop marker, a placement of variant 1
+    composes NONE, and the same list must not leak from one to the other.
+
+    THE MIGRATION (`prop_field_migration.move_fields_to_variants`) is checked
+    on a HAND-BUILT pre-move sidecar, because no such record can be created by
+    the store any more:
+
+        prop:      width 2, depth 0.5, height 0.9, dims_estimated True,
+                   description "a bench", ground_offset_m -0.1,
+                   markers [sit]
+        variant 0: nothing of its own
+        variant 1: height_m 1.4 and description "a tall bench"
+
+        =>  variant 0  2 / 0.5 / 0.9, estimated True, "a bench", -0.1, [sit]
+            variant 1  2 / 0.5 / 1.4, estimated FALSE (it authored a size),
+                       "a tall bench", -0.1, [sit]
+            prop       none of the six keys left
+    """
+    print("\n[20] ground offset + markers per variant, and the migration")
+    from app.core.prop_field_migration import move_fields_to_variants
+    from app.core.room_recipe import _join_placements
+
+    bench = store.create_prop(name="Bench", width_m=2.0, depth_m=0.5,
+                              height_m=0.9)["id"]
+    put_mesh(bench, 0)
+    put_mesh(bench, store.add_variant(bench))
+    seat = [{"animation": "sit", "at": [0.5, 0.5, 0.5]}]
+
+    # ── storage ──
+    check("a variant on the ground stores NO key",
+          "ground_offset_m" not in store.read_sidecar(bench)["model_variants"][0],
+          str(store.read_sidecar(bench)["model_variants"][0]))
+    store.set_variant_ground_offset(bench, 0, -0.1)
+    store.set_variant_ground_offset(bench, 1, -0.25)
+    check("both sinks are stored",
+          [v["ground_offset_m"] for v in store.list_variants(bench)]
+          == [-0.1, -0.25],
+          str([v["ground_offset_m"] for v in store.list_variants(bench)]))
+    store.set_variant_ground_offset(bench, 1, -9)
+    check("-9 m is clamped to the -5 m limit, not refused",
+          store.list_variants(bench)[1]["ground_offset_m"] == -5.0,
+          str(store.list_variants(bench)[1]["ground_offset_m"]))
+    store.set_variant_ground_offset(bench, 1, "junk")
+    check("junk clears the key — absence IS 'on the ground'",
+          "ground_offset_m" not in store.read_sidecar(bench)["model_variants"][1])
+    store.set_variant_ground_offset(bench, 1, -0.25)
+    check("an index this prop has no variant for is refused",
+          not store.set_variant_ground_offset(bench, 7, -0.2))
+
+    store.set_variant_markers(bench, 0, seat)
+    check("the marker is stored on variant 0 alone",
+          [len(v["markers"]) for v in store.list_variants(bench)] == [1, 0],
+          str([v["markers"] for v in store.list_variants(bench)]))
+    check("...and an empty list stores no key at all",
+          "markers" not in store.read_sidecar(bench)["model_variants"][1])
+    check("the prop record reports the PRIMARY variant's markers",
+          (store.get_prop(bench) or {}).get("marker_count") == 1)
+    check("an index this prop has no variant for is refused",
+          not store.set_variant_markers(bench, 7, seat))
+
+    # ── the facts every consumer reads ──
+    check("stack facts of variant 0 carry ITS sink",
+          store.prop_stack_facts(bench, 0)["ground_offset_m"] == -0.1,
+          str(store.prop_stack_facts(bench, 0)))
+    check("...and of variant 1 ITS own",
+          store.prop_stack_facts(bench, 1)["ground_offset_m"] == -0.25,
+          str(store.prop_stack_facts(bench, 1)))
+    check("scatter facts answer for the PRIMARY variant",
+          store.prop_scatter_facts(bench)["ground_offset_m"] == -0.1,
+          str(store.prop_scatter_facts(bench)))
+    published = store.active_variant_tiers(bench)
+    check("the published entries carry one sink each",
+          [e.get("ground_offset_m") for e in published] == [-0.1, -0.25],
+          str(published))
+    check("...and never a stored 0.0 — absence is the payload law too",
+          (store.set_variant_ground_offset(bench, 1, 0)
+           and "ground_offset_m" not in store.active_variant_tiers(bench)[1]))
+    store.set_variant_ground_offset(bench, 1, -0.25)
+
+    # ── the stacking rule, both directions (hand derivation above) ──
+    def stack(support_variant: int, target_variant: int):
+        return store.placement_stack_offset_y(
+            [{"prop_id": bench, "at": [0.0, 0.0], "variant": support_variant},
+             {"prop_id": bench, "at": [0.0, 0.0], "variant": target_variant}], 1)
+
+    check("bench(v0) on bench(v1): 0.65 − (−0.10) = 0.75",
+          stack(1, 0) == 0.75, str(stack(1, 0)))
+    check("bench(v1) on bench(v0): 0.80 − (−0.25) = 1.05 — red probe: one "
+          "shared sink would answer 0.9 both ways",
+          stack(0, 1) == 1.05, str(stack(0, 1)))
+
+    # ── the room recipe: sink and markers of the variant it DRAWS ──
+    prop = store.get_prop(bench) or {}
+    check("the full record carries the markers per published variant",
+          [len(e.get("markers") or []) for e in prop["variant_tiers"]] == [1, 0],
+          str(prop["variant_tiers"]))
+    lean = {p["id"]: p for p in store.list_props()}[bench]
+    check("...while the lean client library carries none of them",
+          not any("markers" in e for e in lean["variant_tiers"]),
+          str(lean["variant_tiers"]))
+
+    # A marker is only composed for a prop with a MEASURED mesh box, and the
+    # stubs here carry none — so the box is written by hand. It is a fixture,
+    # not the thing under test: what is checked is WHICH variant's marker list
+    # the recipe reads.
+    _meta = store.read_sidecar(bench)
+    _meta["bbox"] = [1.0, 1.0, 1.0]
+    store._write_sidecar(bench, _meta)
+
+    def recipe_for(variant: int):
+        lay = {"props": [{"prop_id": bench, "at": [1.0, 1.0],
+                          "variant": variant}]}
+        return _join_placements(lay, lambda u, v: (u, v), 0.0, 0.0, 0.0)
+
+    p0, m0 = recipe_for(0)
+    p1, m1 = recipe_for(1)
+    check("a placement of variant 0 carries its −0.1 sink",
+          p0[0]["ground_offset_m"] == -0.1, str(p0[0]))
+    check("...and one of variant 1 its −0.25",
+          p1[0]["ground_offset_m"] == -0.25, str(p1[0]))
+    check("variant 0's placement composes ONE prop marker",
+          len(m0) == 1 and m0[0]["animation"] == "sit", str(m0))
+    check("...and variant 1's composes none — markers do not leak between "
+          "versions", m1 == [], str(m1))
+
+    # ── the one-time migration, on a hand-built pre-move sidecar ──
+    legacy = {
+        "name": "Old Bench",
+        "width_m": 2.0, "depth_m": 0.5, "height_m": 0.9,
+        "dims_estimated": True,
+        "description": "a bench",
+        "ground_offset_m": -0.1,
+        "markers": seat,
+        "model_variants": [
+            {"stem": "model", "active": True},
+            {"stem": "model-v2", "active": True, "height_m": 1.4,
+             "description": "a tall bench"},
+        ],
+    }
+    check("the migration reports a change", move_fields_to_variants(legacy))
+    v0, v1 = legacy["model_variants"]
+    check("variant 0 took the prop's whole size",
+          [v0[k] for k in ("width_m", "depth_m", "height_m")] == [2.0, 0.5, 0.9],
+          str(v0))
+    check("...and stayed an estimate, because it authored no size",
+          v0["dims_estimated"] is True, str(v0["dims_estimated"]))
+    check("variant 1 KEPT its own height and filled the other two",
+          [v1[k] for k in ("width_m", "depth_m", "height_m")] == [2.0, 0.5, 1.4],
+          str(v1))
+    check("...and is NOT an estimate — a typed size is never redistributed",
+          v1["dims_estimated"] is False, str(v1["dims_estimated"]))
+    check("variant 0 inherited the prop's description",
+          v0["description"] == "a bench", str(v0.get("description")))
+    check("...while variant 1 kept its own", v1["description"] == "a tall bench",
+          str(v1.get("description")))
+    check("both took the prop's sink",
+          (v0["ground_offset_m"], v1["ground_offset_m"]) == (-0.1, -0.1),
+          str((v0.get("ground_offset_m"), v1.get("ground_offset_m"))))
+    check("both took the prop's markers, each its own copy",
+          v0["markers"] == seat and v1["markers"] == seat
+          and v0["markers"] is not v1["markers"], str(v0["markers"]))
+    check("and the MASTER record lost every one of the six keys",
+          not any(k in legacy for k in
+                  ("width_m", "depth_m", "height_m", "dims_estimated",
+                   "description", "ground_offset_m", "markers", "size_m")),
+          str(sorted(legacy.keys())))
+    check("a second run changes nothing — the migration is idempotent",
+          not move_fields_to_variants(legacy))
+
+    # A record with only the LEGACY single `size_m` and no variant list at all:
+    # 1.2 m spread over a cube, on the one variant such a prop has.
+    ancient = {"name": "Ancient", "size_m": 1.2}
+    check("a legacy size_m record migrates too", move_fields_to_variants(ancient))
+    only = ancient["model_variants"][0]
+    check("...to one variant on the historic stem, a 1.2 m cube",
+          only["stem"] == "model"
+          and [only[k] for k in ("width_m", "depth_m", "height_m")]
+          == [1.2, 1.2, 1.2],
+          str(only))
+    check("...and size_m is gone", "size_m" not in ancient, str(sorted(ancient)))
 
 
 def season_section() -> None:
@@ -1149,6 +1418,7 @@ def main() -> int:
 
     dims_section()
     description_section()
+    variant_fields_section()
     season_section()
 
     print()

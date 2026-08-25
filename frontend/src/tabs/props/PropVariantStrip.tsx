@@ -24,27 +24,31 @@
  * season comes round, which the chip row says in as many words. A world
  * without seasons gets no chips at all: the tags would be inert.
  *
- * SIZE PER VARIANT (2026-08-24): three small number inputs per chip, the same
- * width/depth/height the prop itself carries above — as an OVERRIDE. Empty is
- * the normal state and means "as big as the prop", which is what the greyed
- * placeholder shows; typing a number makes this one version its own size (a
- * sapling beside the grown pine), clearing the field gives the inherited value
- * back. The server stores exactly that: a number when there is one, no key at
- * all otherwise.
+ * THE VARIANT OWNS WHAT IT LOOKS LIKE (2026-08-25, user decision). Size,
+ * generation subject, ground offset and markers used to sit on the PROP with
+ * an optional per-variant override; they live on the variant now and nowhere
+ * else, so this strip is where a prop is actually authored. Each chip carries:
  *
- * THE THREE MOVE TOGETHER (2026-08-24, user decision): editing one of them
- * pulls the other two along the variant's proportions, exactly like the prop
- * form above — and all three go out in ONE call. The reason is not symmetry
- * with that form, it is the renderer: `place()` scales a prop UNIFORMLY to
- * `max(W, D, H)`, so the trio has one degree of freedom (how big) plus a fixed
- * aspect (what shape). Editing one number alone would resize nothing and only
- * make the other two lie about the mesh. For the same reason clearing ANY of
- * the three clears ALL THREE: two thirds of an override match no aspect ratio,
- * so "back to the prop's size" is the only honest reading of a cleared field.
+ *   - W / D / H in metres (mandatory — there is nothing left to inherit),
+ *   - the subject its product shot is rendered from,
+ *   - how deep it stands in the ground,
+ *   - the season chips,
+ *   - how many object-local markers it has (the editor itself is below the
+ *     strip, on the SELECTED chip: it needs the 3D viewer beside it).
+ *
+ * THE THREE DIMS MOVE TOGETHER (2026-08-24, user decision): editing one of
+ * them pulls the other two along the variant's proportions — and all three go
+ * out in ONE call. The reason is the renderer: `place()` scales a prop
+ * UNIFORMLY to `max(W, D, H)`, so the trio has one degree of freedom (how big)
+ * plus a fixed aspect (what shape). Editing one number alone would resize
+ * nothing and only make the other two lie about the mesh. An empty or
+ * unusable field is therefore not a size at all: it snaps back to what is
+ * stored, because a variant without a size is not a state that may exist.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
+import { SliderInput } from '../../components/SliderInput'
 import { useToast } from '../../lib/Toast'
 import { DIM_KEYS, DIM_MAX_M, DIM_MIN_M, orientedDims, variantRedistribute,
   type DimKey } from './dims'
@@ -58,10 +62,22 @@ const DIM_FIELDS: Array<{ key: DimKey; label: string; title: string }> = [
   { key: 'height_m', label: 'H', title: 'Height (m)' },
 ]
 
-/** One chip's width in pixels — wide enough for the W/D/H row, which is the
- *  widest thing in it. Fixed on purpose (see the chip's own comment): the
- *  strip may only ever grow DOWNWARDS, never re-flow sideways. */
-const CHIP_W = 250
+/** One chip's width in pixels — wide enough for the ground-offset slider with
+ *  its read-back, which is the widest thing in it. Fixed on purpose (see the
+ *  chip's own comment): the strip may only ever grow DOWNWARDS, never re-flow
+ *  sideways. */
+const CHIP_W = 290
+
+/** How far a chip's ground-offset SLIDER may travel: the variant's own height,
+ *  at least half a metre and at most the stored limit
+ *  (`props.GROUND_OFFSET_MAX`). A dial that sweeps ±5 m for a footstool cannot
+ *  hit its 3 cm, and one that sweeps ±0.3 m for a fir cannot bury its trunk —
+ *  the range is the first half of the reference the value is read against
+ *  (memory: "Maße brauchen Bezug"; the figure gauge below the strip is the
+ *  second half). */
+function sinkRange(heightM: number): number {
+  return Math.min(5, Math.max(0.5, Math.ceil((heightM || 1) * 10) / 10))
+}
 
 /** Rows of the per-variant description field: readable at rest, a real
  *  editor while it is written in. */
@@ -127,6 +143,11 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   const [descDraft, setDescDraft] = useState<Record<number, string>>({})
   const [descOpen, setDescOpen] = useState<number | null>(null)
   useEffect(() => { setDescDraft({}); setDescOpen(null) }, [propId])
+  // …and for the ground-offset slider, which moves per drag step while the
+  // write is debounced: the local number drives the dial until the reload
+  // echoes it back (see `commitSink`).
+  const [sinkDraft, setSinkDraft] = useState<Record<number, number>>({})
+  useEffect(() => { setSinkDraft({}) }, [propId])
   // Arming is bound to an INDEX, and a delete renumbers everything behind it —
   // so any change of the list disarms rather than pointing at another variant.
   useEffect(() => { setArmedDel(null) }, [propId, variants.length])
@@ -147,14 +168,18 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     }
   }, [onChanged, t, toast])
 
-  // The new slot is EMPTY — it is filled by the next generation targeted at
-  // it, so selecting it right away is what the admin wants to do next.
+  // The new slot carries no mesh — it is filled by the next generation
+  // targeted at it, so selecting it right away is what the admin wants to do
+  // next. Its FIELDS come from the chip that is open (`from`): a version of an
+  // object is authored by editing the one beside it, not by re-typing size,
+  // subject, sink and markers.
   const add = useCallback(() => {
     void run(async () => {
-      const d = await apiPost<{ index?: number }>(`/world/props/${enc}/variants`, {})
+      const d = await apiPost<{ index?: number }>(
+        `/world/props/${enc}/variants`, { from: selected })
       if (typeof d?.index === 'number') onSelect(d.index)
     }, t('Variant added'))
-  }, [enc, onSelect, run, t])
+  }, [enc, onSelect, run, selected, t])
 
   const toggle = useCallback((v: PropVariant) => {
     void run(
@@ -185,22 +210,21 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // PROP's aspect would give it the grown tree's footprint.
   //
   // Every other chip has no mesh loaded, and the payload carries no per-variant
-  // box (`GET …/variants` sends dims, not geometry). Its `effective_dims` are
-  // the ratio source instead, and they ARE that variant's declared aspect: its
-  // own override where it has one, the prop's measured trio otherwise. Since
+  // box (`GET …/variants` sends dims, not geometry). Its stored `dims` are the
+  // ratio source instead, and they ARE that variant's declared aspect. Since
   // every renderer sizes a variant by exactly those three numbers, rescaling
   // along them keeps the object the shape it is rendered at — and the first
-  // edit of an inheriting variant is made against the mesh anyway, because the
-  // chip you are typing into is normally the one you are looking at.
+  // edit is made against the mesh anyway, because the chip you are typing into
+  // is normally the one you are looking at.
   const ratiosFor = useCallback((v: PropVariant): Record<DimKey, number> => {
     if (v.index === selected && shownBbox) {
       const [w, h, d] = orientedDims(shownBbox, rotation)
       return { width_m: w, depth_m: d, height_m: h }
     }
     return {
-      width_m: v.effective_dims.width_m,
-      depth_m: v.effective_dims.depth_m,
-      height_m: v.effective_dims.height_m,
+      width_m: v.dims.width_m,
+      depth_m: v.dims.depth_m,
+      height_m: v.dims.height_m,
     }
   }, [rotation, selected, shownBbox])
 
@@ -212,10 +236,10 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // the whole patch, so the round trip is a single 200 and the preview reads
   // the answer as it already does.
   //
-  // An empty or unusable input is not a size, and it clears ALL THREE at once:
-  // a partial override matches no aspect ratio any more, so the field means
-  // "as big as the prop again", nothing else. Nothing is sent when the trio
-  // did not move, nor when a cleared field had nothing stored to clear.
+  // An empty or unusable input is not a size at all: the draft is dropped and
+  // the field snaps back to what is stored. There is nothing to inherit since
+  // 2026-08-25, so "cleared" is not a state a variant may be in — a typing
+  // slip costs the edit, never the size.
   const commitDim = useCallback((v: PropVariant, key: DimKey, raw: string) => {
     setDimDraft((d) => {
       const next = { ...d }
@@ -226,14 +250,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     })
     const stored = v.dims as PropDims
     const n = parseFloat(raw)
-    if (!Number.isFinite(n) || n <= 0) {
-      if (!DIM_KEYS.some((k) => stored[k] !== undefined)) return
-      void run(
-        () => apiPost(`/world/props/${enc}/variants/${v.index}/dims`,
-          { width_m: null, depth_m: null, height_m: null }),
-        t('Size override cleared'))
-      return
-    }
+    if (!Number.isFinite(n) || n <= 0) return
     // A ratio source with a flat edge (a mesh box measuring zero on one axis)
     // redistributes to nothing usable — then the edited field goes out alone
     // rather than a zero, and the other two stay where they are. Clamped and
@@ -250,9 +267,42 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       t('Variant size saved'))
   }, [enc, ratiosFor, run, t])
 
-  // Commit ONE variant's generation subject. Blank clears the override and
-  // the variant renders from the prop's description again — the same law the
-  // server stores by, so the field echoes back what was really kept.
+  // How deep ONE variant stands in the ground. The slider moves per drag step
+  // while the server may only be written now and then, so the write is
+  // DEBOUNCED and the local number drives the dial until it lands; 0 clears
+  // the key, which is the normal state.
+  const sinkTimers = useRef<Record<number, number>>({})
+  useEffect(() => {
+    const timers = sinkTimers.current
+    return () => {
+      for (const id of Object.values(timers)) window.clearTimeout(id)
+    }
+  }, [])
+  const commitSink = useCallback((v: PropVariant, value: number) => {
+    const next = Math.round(Math.min(Math.max(value, -5), 5) * 100) / 100
+    setSinkDraft((d) => ({ ...d, [v.index]: next }))
+    const pending = sinkTimers.current[v.index]
+    if (pending !== undefined) window.clearTimeout(pending)
+    sinkTimers.current[v.index] = window.setTimeout(() => {
+      delete sinkTimers.current[v.index]
+      void apiPost(`/world/props/${enc}/variants/${v.index}/ground-offset`,
+        { ground_offset_m: next })
+        .then(() => onChanged())
+        .then(() => setSinkDraft((d) => {
+          // The server has echoed the value back through the reload — the
+          // draft has done its job and must not outlive it, or a later delete
+          // would leave a number pointing at a renumbered variant.
+          const out = { ...d }
+          delete out[v.index]
+          return out
+        }))
+        .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+    }, 350)
+  }, [enc, onChanged, t, toast])
+
+  // Commit ONE variant's generation subject. Blank clears the key and a render
+  // of this variant composes from the prop's NAME — the same law the server
+  // stores by, so the field echoes back what was really kept.
   const commitDesc = useCallback((v: PropVariant, raw: string) => {
     setDescDraft((d) => {
       const next = { ...d }
@@ -337,22 +387,18 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   </span>
                 )}
               </div>
-              {/* The variant's own size (2026-08-24). Empty inherits the
-                  prop's value, and the placeholder is that very number — so
-                  an untouched row reads as "as big as the prop" without a
-                  second label saying so. */}
+              {/* The variant's size (2026-08-25: its own, not an override —
+                  the three numbers every renderer scales this mesh by). */}
               <div style={{ display: 'flex', gap: 3, alignItems: 'center',
                 flexWrap: 'wrap' }}>
                 {DIM_FIELDS.map((f) => {
                   const draftKey = `${v.index}:${f.key}`
-                  const stored = (v.dims as PropDims)[f.key]
-                  const shown = dimDraft[draftKey]
-                    ?? (stored === undefined ? '' : String(stored))
+                  const shown = dimDraft[draftKey] ?? String(v.dims[f.key])
                   return (
                     <label
                       key={f.key}
                       style={{ display: 'flex', alignItems: 'center', gap: 2 }}
-                      title={`${t(f.title)} — ${t('this variant only. Empty = as big as the prop itself ({n} m).').replace('{n}', String(v.effective_dims[f.key]))} ${t('Edit one of the three and the other two follow this variant’s proportions — a prop is always scaled uniformly, so the trio says how big it is, its ratios say what shape. Clear any one of them and all three go back to inheriting.')}`}
+                      title={`${t(f.title)} — ${t('the real extent of THIS variant’s mesh after the orientation fix.')} ${t('Edit one of the three and the other two follow this variant’s proportions — a prop is always scaled uniformly, so the trio says how big it is, its ratios say what shape.')}`}
                     >
                       <span className="ga-hint">{t(f.label)}</span>
                       <input
@@ -364,7 +410,6 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                         style={{ width: 62, padding: '1px 3px' }}
                         disabled={busy}
                         value={shown}
-                        placeholder={String(v.effective_dims[f.key])}
                         onChange={(e) => {
                           const value = e.target.value
                           setDimDraft((d) => ({ ...d, [draftKey]: value }))
@@ -378,6 +423,51 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   )
                 })}
               </div>
+              {v.dims_estimated ? (
+                <span className="ga-hint" style={{ fontSize: '0.8em' }}>
+                  {t('Estimated — refined automatically when the model arrives.')}
+                </span>
+              ) : null}
+              {/* HOW DEEP THIS VERSION STANDS IN THE GROUND — it applies
+                  wherever this variant is drawn: every manual placement, every
+                  scattered copy in a room or yard, every instance of a painted
+                  terrain scatter and every world prop. The per-placement
+                  `offset_y` in the room editor stays the trim of ONE instance
+                  on top of it. The slider's range follows the variant's own
+                  height; the 1.70 m figure that makes the number judgeable
+                  stands below the strip, on the selected chip. */}
+              <SliderInput
+                ariaLabel={t('Ground offset (m)')}
+                label={<span className="ga-hint"
+                  style={{ width: 44, flex: '0 0 auto' }}
+                  title={t('Negative sinks this variant into the ground, positive lifts it off — the same amount everywhere it stands: rooms, yard, painted scatter, world props. Use it for a mesh that carries no root ball or base plate. 0 = it stands on the ground.')}>
+                  ⤓ {t('Sink')}
+                </span>}
+                style={{ display: 'flex', fontSize: '0.8em' }}
+                unit="m"
+                min={-sinkRange(v.dims.height_m)}
+                max={sinkRange(v.dims.height_m)}
+                step={0.01}
+                value={sinkDraft[v.index] ?? v.ground_offset_m}
+                onChange={(value) => commitSink(v, value)}
+                sliderWidth="auto"
+                sliderStyle={{ flex: 1, minWidth: 60 }}
+                inputWidth={70}
+              />
+              {/* The markers are the variant's too (2026-08-25) — the chip
+                  says how many, the editor sits below the strip because it
+                  needs the 3D viewer beside it. */}
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                style={{ textAlign: 'left', padding: '0 4px',
+                  fontSize: '0.85em' }}
+                onClick={() => onSelect(v.index)}
+                title={t('Object-local spots a figure with a matching animation snaps to. They are fractions of THIS variant’s mesh box, so every version has its own — select the chip to edit them under the strip, with the model beside you.')}
+              >
+                🎯 {v.markers.length} {t('markers')}
+                {isSelected ? '' : ` · ${t('select to edit')}`}
+              </button>
               {/* The variant's own generation subject (2026-08-24). A new
                   variant starts with a COPY of the prop's text, so the field
                   opens filled and is EDITED ("…as a sapling") instead of
@@ -392,9 +482,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 style={{ width: '100%', fontSize: '0.85em', resize: 'vertical' }}
                 disabled={busy}
                 value={descDraft[v.index] ?? (v.description || '')}
-                placeholder={v.effective_description
-                  || t('Description (generation subject)')}
-                title={t('What THIS variant’s source image is rendered from — the subject of its prompt. Empty = the prop’s own description (shown greyed). A new variant starts as a copy of it, so a version differs by an edit: “…as a sapling”, “…broken”, “…covered in snow”.')}
+                placeholder={t('Description (generation subject)')}
+                title={t('What THIS variant’s source image is rendered from — the subject of its prompt. Empty = the render composes from the prop’s name. A new variant starts as a copy of the one it was added from, so a version differs by an edit: “…as a sapling”, “…broken”, “…covered in snow”.')}
                 onFocus={() => setDescOpen(v.index)}
                 onChange={(e) => {
                   const value = e.target.value
@@ -486,7 +575,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
           onClick={add}
           title={capReached
             ? t('The limit of active variants is reached — switch one off or delete it first.')
-            : t('Add an empty variant slot — the next generation fills it, or you upload a GLB into it.')}
+            : t('Add a variant slot — size, description, sink and markers are copied from the selected chip; the next generation fills its mesh, or you upload a GLB into it.')}
         >
           + {t('Add variant')}
         </button>

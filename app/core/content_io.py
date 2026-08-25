@@ -974,6 +974,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     # Bundled props are a DEPENDENCY, not content of their own: an existing
     # prop is never overwritten (other locations place the same id), a missing
     # one is installed, and a placement whose prop is neither is reported.
+    from app.core.prop_field_migration import normalize_prop_sidecar
     from app.core.props import _prop_dir, safe_prop_id
     # An id the prop store would refuse is NOT a dependency this ZIP satisfies:
     # it is filtered out BEFORE the props_missing subtraction below, so a
@@ -1000,6 +1001,12 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
             target = dest / safe
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(zf.read(member))
+        # A pack authored before 2026-08-25 carries the size, subject, ground
+        # offset and markers on the PROP record, which nothing reads any more.
+        # The boot migration ran long before this import, so the sidecar is
+        # brought into the current shape here — the same one-way transform,
+        # applied where the file lands.
+        normalize_prop_sidecar(pid)
         props_imported.append(pid)
 
     # Read from the SANITIZED location: a placement the sanitizer already threw
@@ -1111,6 +1118,7 @@ def import_prop_from_zip(
     BEFORE the first byte on disk changes — a broken ZIP never costs the
     prop that is already there.
     """
+    from app.core.prop_field_migration import normalize_prop_sidecar
     from app.core.props import _prop_dir, read_sidecar, safe_prop_id
 
     try:
@@ -1166,6 +1174,10 @@ def import_prop_from_zip(
     finally:
         zf.close()
 
+    # A ZIP authored before 2026-08-25 puts size, subject, ground offset and
+    # markers on the master record, which nothing reads any more — the same
+    # one-way transform the boot migration runs, applied where the file lands.
+    normalize_prop_sidecar(pid)
     name = read_sidecar(pid).get("name") or manifest.get("prop_name") or pid
     logger.info("Prop import: %s (%s, files=%d)", pid, name, count)
     return {

@@ -552,8 +552,12 @@ g1 = model_gallery(OAK, 1)
 g1.select("model-v2_1.glb", "full")
 OAK_SELECTION = {"model": {"full": "model_1.glb", "low": SEL_NONE},
                  "model-v2": {"full": "model-v2_1.glb"}}
-OAK_VARIANTS = [{"stem": "model", "active": True},
-                {"stem": "model-v2", "active": True}]
+# Size and `dims_estimated` live on the VARIANT since 2026-08-25 — the create
+# call above put them on variant 0, and `add_variant` copied them over.
+OAK_DIMS = {"width_m": 2.0, "depth_m": 2.0, "height_m": 6.0,
+            "dims_estimated": True}
+OAK_VARIANTS = [{"stem": "model", "active": True, **OAK_DIMS},
+                {"stem": "model-v2", "active": True, **OAK_DIMS}]
 check("Selection wie erwartet",
       read_json(odir / "selection.json"), OAK_SELECTION)
 check("Variantenliste wie erwartet",

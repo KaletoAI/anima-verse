@@ -1707,8 +1707,8 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     and the height ladder has exactly one rung there (E5a).
 
     GROUND OFFSET (§ B2 addendum 2026-08-20): the PROP may declare how deep it
-    stands in the ground (``props.ground_offset_m``, ± 5 m, carried onto the
-    recipe placement by ``room_recipe._carry_ground_offset``). It is added to
+    stands in the ground (the VARIANT's ``ground_offset_m``, ± 5 m, carried
+    onto the recipe placement by ``room_recipe._carry_ground_offset``). It is added to
     the automatic base HERE and nowhere else on this path, and the placement's
     own ``offset_y`` stays what it always was — the per-instance trim on top.
 

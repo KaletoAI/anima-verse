@@ -640,7 +640,8 @@ def _phase_select(room_id: str) -> None:
 # ── Phase 2: generating ─────────────────────────────────────────────────
 
 def _phase_generate(room_id: str) -> None:
-    from app.core.props import create_prop, set_markers, trigger_generation
+    from app.core.props import (create_prop, set_variant_markers,
+                                trigger_generation)
 
     row = _get_row(room_id)
     proposal = (row or {}).get("proposal") or {}
@@ -656,7 +657,10 @@ def _phase_generate(room_id: str) -> None:
                 description=item.get("description") or "", source="generated")
             item["prop_id"] = prop["id"]
             if item.get("marker"):
-                set_markers(prop["id"], [item["marker"]])
+                # Onto the freshly created prop's FIRST variant — the marker
+                # describes the mesh this run is about to bake, and markers
+                # belong to the variant since 2026-08-25.
+                set_variant_markers(prop["id"], 0, [item["marker"]])
             # Persist the id BEFORE the long generation — a restart must not
             # create the same prop twice.
             if not _update_row(room_id, proposal=proposal):

@@ -112,9 +112,10 @@ Throwaway storage. Hand-derived expectations:
                                                            -> tiers [full]
         smoke-ghost no dims given, a prop record without any mesh -> tiers []
       DEFAULT_DIM_M IS THE REALITY, and the test pins it: `create_prop` writes
-      the 1 m placeholder cube when no dim is given, and `_effective_dims`
-      derives one for a legacy `size_m` sidecar — so EVERY prop record answers
-      with a height > 0. There is no "prop without a height"; a missing
+      the 1 m placeholder cube onto the first variant when no dim is given, and
+      `variant_dims` answers with it even for a hand-emptied entry — so EVERY
+      prop record answers with a height > 0. There is no "prop without a
+      height"; a missing
       `prop_height_m` means "no prop record behind that URL", full stop.
       Hand-derived expectations per scatter entry:
         model /assets/props/<tree>/model  -> variants with EXACTLY two URLs,
@@ -217,8 +218,11 @@ Throwaway storage. Hand-derived expectations:
          0         -> NO key;  -0.004 -> rounds to 0 -> no key either
         "junk", "" -> no key (junk is no statement; the emptied field clears)
         a patch without the key -> the stored -0.2 survives untouched
-      Reading is forgiving where writing is strict: `ground_offset_of({NaN})`
-      is 0.0 and `get_prop` always reports the EFFECTIVE offset.
+      Reading is forgiving where writing is strict: `variant_ground_offset` of
+      a hand-edited NaN is 0.0 and `get_prop` always reports the EFFECTIVE
+      offset. RED PROBE for the 2026-08-25 move: a `ground_offset_m` on the
+      MASTER record is ignored — the variant owns it now, and there is no
+      fallback reader left.
       (15b) The payload, same enrichment as [12]/[13] and equally PAYLOAD ONLY.
       With the fir at −0.2 and the tree untouched:
         fir entry     -> ground_offset_m −0.2  (the client seats every instance
@@ -1210,49 +1214,60 @@ check("the recipe survives the save/read round trip",
 for _a in terrain.list_areas():
     terrain.delete_area(_a["id"])
 
-print("[15] ground_offset_m — the prop's own sink, stored and shipped")
-# (15a) The sanitizer, again through the real update path and read back out of
+print("[15] ground_offset_m — the VARIANT's own sink, stored and shipped")
+# (15a) The sanitizer, again through the real write path and read back out of
 # the sidecar FILE. Same one-representation law as [13], with the default at
 # the OTHER end of the range: here 0.0 is what says nothing, so 0.0 is the
-# value that must NOT be stored.
+# value that must NOT be stored. The sink belongs to the VARIANT since
+# 2026-08-25, so it is written and read on variant 0 — which is also the
+# variant a scatter entry publishes (the instances are sampled client-side, so
+# there is no other one to resolve).
 SINKER = make_prop("smoke fir", ["full"], height_m=8.0)
 
 
 def stored_sink(pid):
-    meta = props.read_sidecar(pid)
-    return meta["ground_offset_m"] if "ground_offset_m" in meta else "absent"
+    entry = props.read_sidecar(pid)["model_variants"][0]
+    return entry["ground_offset_m"] if "ground_offset_m" in entry else "absent"
 
 
 check("a fresh prop stores no offset at all", stored_sink(SINKER), "absent")
-props.update_prop(SINKER, {"ground_offset_m": -0.2})
+props.set_variant_ground_offset(SINKER, 0, -0.2)
 check("a real sink is stored as it was typed", stored_sink(SINKER), -0.2)
-props.update_prop(SINKER, {"ground_offset_m": -0.207})
+props.set_variant_ground_offset(SINKER, 0, -0.207)
 check("three decimals round to centimetres", stored_sink(SINKER), -0.21)
-props.update_prop(SINKER, {"ground_offset_m": 0.354})
+props.set_variant_ground_offset(SINKER, 0, 0.354)
 check("…and a lift the same way", stored_sink(SINKER), 0.35)
-props.update_prop(SINKER, {"ground_offset_m": -99})
+props.set_variant_ground_offset(SINKER, 0, -99)
 check("below the range clamps to the limit, never refuses the record",
       stored_sink(SINKER), -5.0)
-props.update_prop(SINKER, {"ground_offset_m": 99})
+props.set_variant_ground_offset(SINKER, 0, 99)
 check("above the range clamps too", stored_sink(SINKER), 5.0)
-props.update_prop(SINKER, {"ground_offset_m": 0})
+props.set_variant_ground_offset(SINKER, 0, 0)
 check("an exact 0.0 is never stored — absence IS the statement",
       stored_sink(SINKER), "absent")
-props.update_prop(SINKER, {"ground_offset_m": -0.004})
+props.set_variant_ground_offset(SINKER, 0, -0.004)
 check("a value that rounds to zero is zero, and zero is absence",
       stored_sink(SINKER), "absent")
-props.update_prop(SINKER, {"ground_offset_m": -0.2})
-props.update_prop(SINKER, {"ground_offset_m": "junk"})
+props.set_variant_ground_offset(SINKER, 0, -0.2)
+props.set_variant_ground_offset(SINKER, 0, "junk")
 check("junk clears the key instead of storing NaN", stored_sink(SINKER), "absent")
-props.update_prop(SINKER, {"ground_offset_m": -0.2})
-props.update_prop(SINKER, {"ground_offset_m": ""})
+props.set_variant_ground_offset(SINKER, 0, -0.2)
+props.set_variant_ground_offset(SINKER, 0, "")
 check("the emptied admin field clears the key too", stored_sink(SINKER), "absent")
-props.update_prop(SINKER, {"ground_offset_m": -0.2})
+props.set_variant_ground_offset(SINKER, 0, -0.2)
 props.update_prop(SINKER, {"name": "smoke fir"})
 check("a patch that does not name the field leaves it alone",
       stored_sink(SINKER), -0.2)
 check("a hand-edited NaN stands ON the ground, not at NaN",
-      props.ground_offset_of({"ground_offset_m": float("nan")}),
+      props.variant_ground_offset(
+          {"model_variants": [{"stem": "model", "active": True,
+                               "ground_offset_m": float("nan")}]}),
+      props.GROUND_OFFSET_DEFAULT)
+# RED PROBE for the move: a sink written onto the MASTER record is not a
+# fallback any more — before 2026-08-25 it was the only place it could live.
+check("a ground_offset_m on the prop record is ignored",
+      props.variant_ground_offset(
+          dict(props.read_sidecar(TREE), ground_offset_m=-3.0)),
       props.GROUND_OFFSET_DEFAULT)
 check("the effective read answers the stored value",
       props.prop_scatter_facts(SINKER).get("ground_offset_m"), -0.2)
@@ -1289,7 +1304,7 @@ check("nothing of it is stored on the area",
       [sorted(e) for e in _stored_sink],
       [["density_per_100m2", "model"], ["density_per_100m2", "model"],
        ["density_per_100m2"], ["density_per_100m2", "model"]])
-props.update_prop(SINKER, {"ground_offset_m": -0.35})
+props.set_variant_ground_offset(SINKER, 0, -0.35)
 _sink_again = next(
     a["meta"]["scatter"] for a in terrain.with_scatter_props(terrain.list_areas())
     if a["id"] == _gs["id"])
@@ -1307,7 +1322,7 @@ def mutant_sway_rule(value):
     return "absent" if v == 1.0 else v
 
 
-props.update_prop(SINKER, {"ground_offset_m": 1.0})
+props.set_variant_ground_offset(SINKER, 0, 1.0)
 differs("mutant 'the default is 1.0' throws away a real one-metre lift",
         mutant_sway_rule(1.0), stored_sink(SINKER))
 check("the mutant would really leave no key", mutant_sway_rule(1.0), "absent")

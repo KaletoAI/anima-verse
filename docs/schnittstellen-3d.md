@@ -6573,3 +6573,55 @@ doch die oberste gemalte Art ist.
 | Die Zahlen der falschen Zeile (3,456× Bett, 0 statt 1 m/s, 2,0 statt 1,2 m) | `client3d/scripts/smoke_water_shade.mjs` **[11]** |
 | GLSL: Zeile aus `twKindRow`, kein `twIsWater`, kein `uTlodWaterMask` | ebenda **[6]**, **[7]** |
 | Uniform-Bindung: `uTlodWaterKind` am Wasser-Programm, Maske an keinem | `client3d/scripts/smoke_terrain_lod.mjs` **[18]** ("the water shading lives in the water program only") |
+
+---
+
+## Nachtrag 2026-08-25 (§ B2/§ A9/§ A9a): Maß, Motiv, Einsinken und Marker gehören der VARIANTE — die Nutzlast bleibt Zeichen für Zeichen gleich
+
+**Für die Renderer ändert sich nichts.** Dieser Nachtrag steht hier, weil die
+Sätze weiter oben („`ground_offset_m` je Prop", „die Maße des Props") die
+Quelle falsch benennen, nicht weil ein Feld gewandert wäre.
+
+Ein Prop trug bis heute EIN Maß, EIN Bildmotiv, EIN `ground_offset_m` und EINE
+Markerliste; eine Modellvariante durfte die ersten beiden überschreiben. Eine
+Variante ist aber eine ganze VERSION des Objekts — der Setzling neben der
+gewachsenen Kiefer, der zerbrochene Stuhl neben dem heilen —, und genau diese
+vier Angaben unterscheiden sich je Version. Sie liegen deshalb seit heute auf
+dem Varianteneintrag und nirgendwo sonst (`app/core/props.py`, Feldtabelle im
+Modulkopf); der Master-Datensatz hat die Schlüssel verloren, ohne Fallback-Leser.
+
+| Payload-Feld | vorher gelesen aus | jetzt gelesen aus | Form |
+|---|---|---|---|
+| `max_m` / `placeholder_dims` / `dims` | Prop, Variante überschreibt | die gezeichnete VARIANTE (`props.variant_dims`) | unverändert |
+| `ground_offset_m` (Szene, Welt-Props, Streu) | Prop | die gezeichnete VARIANTE (`props.variant_ground_offset`) | unverändert, Abwesenheit = 0.0 |
+| `prop_markers[]` | Prop | die gezeichnete VARIANTE (`props.variant_markers`) | unverändert |
+| `prop_height_m` der Streu | Prop | PRIMÄRvariante (die Instanzen werden clientseitig gesampelt) | unverändert |
+
+Wo kein Variantenkontext existiert — die schlanke Prop-Bibliothek
+`GET /assets/props`, die Zeile der Bibliotheksliste, der schematische Grundriss —
+antwortet die **PRIMÄRvariante**, also dieselbe wie bei jeder anderen
+unqualifizierten Frage (`/model` ohne Parameter, `variants` als Element 0 von
+`model_variants`).
+
+Der interne Rezept-Zwischenschritt `variant_tiers` trägt die Angaben jetzt pro
+Eintrag mit: `{variant, tiers, dims, ground_offset_m?, markers?}` — `markers`
+nur auf dem VOLLEN Datensatz, die schlanke Client-Bibliothek bekommt weiterhin
+nur `marker_count`. Das ist die eine Liste, in der eine Platzierung ihre
+POSITION auflöst, damit eine Zeile nie die Größe der einen und das Einsinken
+einer anderen Version bekommt.
+
+**Einmal-Migration** beim Start (`app/core/prop_field_migration.py`, `world_kv`-
+gesichert): jedes Prop reicht seine Werte an jede Variante durch, die keinen
+eigenen hat; ein selbst gesetzter Variantenwert bleibt stehen; danach fallen die
+Schlüssel vom Master-Datensatz. Content-Pakete aus der Zeit davor werden beim
+Import durch dieselbe Transformation geschickt.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Maß je Variante: Sanitizer, Auflösung, `max_m`, Stapelregel, ROTE PROBE „`height_m` auf dem Master-Datensatz wird ignoriert" | `scripts/smoke_prop_variants.py` **[18]** |
+| Motiv je Variante: Kopie-beim-Anlegen, Rückfall auf den PROP-NAMEN, Aufrufstelle des Renderns, 400 auf den Prop-Route-Feldern | ebenda **[19]** |
+| Einsinken + Marker je Variante, die Stapelregel in beide Richtungen (0,75 / 1,05 statt 0,9 / 0,9) und die Migration auf einem handgebauten Vor-Umzug-Sidecar | ebenda **[20]** |
+| Zeile eines Welt-Props liest das Einsinken der Variante, die sie zeichnet (−0.4 statt −0.2) | `scripts/smoke_world_props.py` **[3]** |
+| Streu-Eintrag: Sanitizer über die echte Schreibroute, ROTE PROBE auf dem Master-Datensatz | `scripts/smoke_terrain_areas.py` **[15]** |
