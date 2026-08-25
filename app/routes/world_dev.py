@@ -1149,11 +1149,13 @@ def _apply_world_data_sync(data: Any):
         image_prompt_day=image_prompt_day,
         image_prompt_night=image_prompt_night,
         image_prompt_map_2d=image_prompt_map_2d,
+        image_prompt_building=location_data.get("image_prompt_building"),
         decency=location_data.get("decency"),
         style_hint=location_data.get("style_hint"),
         swim_allowed=location_data.get("swim_allowed"),
         indoor=location_data.get("indoor"),
-        activity_hint=location_data.get("activity_hint"))
+        activity_hint=location_data.get("activity_hint"),
+        danger_level=location_data.get("danger_level"))
 
     logger.info("WorldDev: Location '%s' applied for user %s", name, user_id)
     return {"status": "success", "location": result}
@@ -2423,11 +2425,13 @@ def _apply_json_sync(data: Any):
             image_prompt_day=payload.get("image_prompt_day"),
             image_prompt_night=payload.get("image_prompt_night"),
             image_prompt_map_2d=payload.get("image_prompt_map_2d"),
+            image_prompt_building=payload.get("image_prompt_building"),
             decency=payload.get("decency"),
             style_hint=payload.get("style_hint"),
             swim_allowed=payload.get("swim_allowed"),
             indoor=payload.get("indoor"),
-            activity_hint=payload.get("activity_hint"))
+            activity_hint=payload.get("activity_hint"),
+            danger_level=payload.get("danger_level"))
         return {"status": "success", "type": "location", "name": payload["name"],
                 "warnings": [], "location": result}
 

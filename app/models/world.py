@@ -1421,22 +1421,25 @@ def add_location(name: str, description: str,
                   swim_allowed: bool = None,
                   indoor: str = None,
                   activity_hint: str = None,
+                  danger_level: int = None,
                   location_id: str = None,
                   create_new: bool = False) -> Dict[str, Any]:
-    """Fuegt einen neuen Ort hinzu oder aktualisiert einen bestehenden.
+    """Adds a new location or updates an existing one.
 
     Args:
-        rooms: Liste von {id, name, description, activities} Objekten
-        activities: Legacy — wird ignoriert wenn rooms angegeben
-        image_prompt_day: Prompt fuer Hintergrundbild bei Tag (6-18 Uhr)
-        image_prompt_night: Prompt fuer Hintergrundbild bei Nacht (18-6 Uhr)
-        image_prompt_map: Prompt fuer isometrisches Kartenbild (Legacy)
-        image_prompt_map_2d: Prompt fuer flaches 2D-Kartenicon
-        image_prompt_building: Prompt fuer die Gebaeude-Aussenansicht
-            (Quellbild fuer das 3D-Gebaeudemodell der Location)
-        decency/style_hint/swim_allowed/indoor/activity_hint: Location-Level
-            Semantik-Felder (nur gesetzt wenn nicht None) — analog zu den
-            Feldern die der LocationEditor per PUT schreibt.
+        rooms: list of {id, name, description, activities} objects
+        activities: legacy — ignored when rooms is given
+        image_prompt_day: prompt for the daytime background image (6-18h)
+        image_prompt_night: prompt for the nighttime background image (18-6h)
+        image_prompt_map: prompt for the isometric map image (legacy)
+        image_prompt_map_2d: prompt for the flat 2D map icon
+        image_prompt_building: prompt for the building exterior view
+            (source image for the location's 3D building model)
+        decency/style_hint/swim_allowed/indoor/activity_hint: location-level
+            semantic fields (only set when not None) — mirrors the fields the
+            LocationEditor writes via PUT.
+        danger_level: 0-5, clamped; only written when given (same rule as the
+            LocationEditor PUT path in world_ops).
         location_id: Wenn gesetzt, wird der zu aktualisierende Ort per ID
             gefunden (eindeutig) statt per Name. NOETIG bei doppelten Namen —
             sonst trifft die Name-Suche den falschen Ort (z.B. einen Klon).
@@ -1514,7 +1517,7 @@ def add_location(name: str, description: str,
                 location["image_prompt_map_2d"] = image_prompt_map_2d
             if image_prompt_building is not None:
                 location["image_prompt_building"] = image_prompt_building
-            # Location-Level Semantik-Felder — nur wenn mitgegeben.
+            # Location-level semantic fields — only when given.
             if decency is not None:
                 location["decency"] = decency
             if style_hint is not None:
@@ -1525,7 +1528,12 @@ def add_location(name: str, description: str,
                 location["indoor"] = indoor
             if activity_hint is not None:
                 location["activity_hint"] = activity_hint
-            # ID nachrüsten falls fehlend
+            if danger_level is not None:
+                try:
+                    location["danger_level"] = max(0, min(5, int(danger_level)))
+                except (TypeError, ValueError):
+                    pass
+            # Backfill a missing ID
             if not location.get("id"):
                 location["id"] = _generate_location_id()
             _save_world_data(data)
@@ -1556,6 +1564,11 @@ def add_location(name: str, description: str,
         "indoor": indoor or "",
         "activity_hint": activity_hint or "",
     }
+    if danger_level is not None:
+        try:
+            new_location["danger_level"] = max(0, min(5, int(danger_level)))
+        except (TypeError, ValueError):
+            pass
     if image_prompt_day or image_prompt_night:
         new_location["prompt_changed"] = True
     locations.append(new_location)
