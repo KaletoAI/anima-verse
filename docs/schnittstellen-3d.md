@@ -4256,8 +4256,14 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                texture_kind?, opacity_role: "ground"|"upper",
                room_id? } ],
   walls:   [ { level, from: [x,z], to: [x,z], base_y, height, thickness,
-               texture_kind?, glass?, opacity_role, room_id?,
+               texture_kind?, glass?, lintel?, opacity_role, room_id?,
                outward_normal: [nx,nz] } ],
+                                           # lintel = das Stück ÜBER einer
+                                           # begehbaren Öffnung (Nachtrag
+                                           # 2026-08-25): wird gezeichnet wie
+                                           # jede Wand, sperrt aber NICHTS im
+                                           # Grundriss — wer 2D-Kollider aus
+                                           # `walls` ableitet, überspringt es
   extras:  [ { kind: "elevator_shaft"|"elevator_pad"|"elevator_cabin"|…,
                … je Kind eine feste Primitiv-Form … } ],
 
@@ -4341,10 +4347,13 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                source: "room"|"prop" } ],  # ALLE fertig in Welt-Koordinaten
 
   # --- Türschwellen & Befunde (2026-08-05) ---
-  doorways: [ { level, at_world: [x,z], along: [ux,uz], width_m,
+  doorways: [ { level, at_world: [x,z], along: [ux,uz], width_m, height_m,
                 base_y, rooms: [room_id, …], outside } ],
                                            # IMMER da, leer = keine Tür
                                            # base_y = STEH-Höhe der Raumseite
+                                           # height_m = lichte Höhe; darüber
+                                           # steht der Sturz als eigener
+                                           # `walls`-Eintrag mit `lintel`
   problems: [ { kind, location_id?, room_id?, message } ],
                                            # IMMER da, leer = alles sauber
   outdoor_rooms: [ room_id, … ]
@@ -4361,6 +4370,9 @@ zweite Ableitung.
   in Welt-Metern NACH der Kantenklemmung — nicht die autorierte `width_m`,
   die noch jemand klemmen müsste; `at_world` ist die Mitte dieser lichten Lücke,
   `along` die Einheitsrichtung der Wand (die Schwelle läuft ENTLANG davon).
+  `height_m` ist genauso die LICHTE Höhe nach derselben Klemmung gegen die
+  Wand (Nachtrag 2026-08-25): `base_y + height_m` ist die Unterkante des
+  Sturzes, den der Composer als eigenen `walls`-Eintrag mit `lintel` liefert.
 - **`base_y` IST die Steh-Höhe der Raumseite** (Befund 2026-08-16,
   schwebende Schwellen). Der Server rechnet sie: wo das Diorama eines
   angrenzenden Raums seine begehbare Fläche DEKLARIERT (Admin-Dial `walk_y`,
@@ -4431,7 +4443,8 @@ Satz als Ganzes übersetzt wird). Heute gibt es drei:
   `room_count` der betroffenen Räume.
 
 **Damit wandern in den Server:** Wand-Splitting um Öffnungen inkl.
-Fenster-Brüstung/-Sturz/Glas als eigene `walls`-Einträge, Türlücken der
+Fenster-Brüstung/-Sturz/Glas UND Tür-Sturz als eigene `walls`-Einträge
+(Nachtrag 2026-08-25), Türlücken der
 Außenkontur (aus den Schwellen projiziert, § A6), Spiegelungen,
 Fahrstuhl-Primitive, Etagenplatten, Raum-Platten, alle Konstanten
 (0,07 / 0,14 / 0,96 / 0,92 / 0,12 / < 0,06 /
@@ -6625,3 +6638,70 @@ Import durch dieselbe Transformation geschickt.
 | Einsinken + Marker je Variante, die Stapelregel in beide Richtungen (0,75 / 1,05 statt 0,9 / 0,9) und die Migration auf einem handgebauten Vor-Umzug-Sidecar | ebenda **[20]** |
 | Zeile eines Welt-Props liest das Einsinken der Variante, die sie zeichnet (−0.4 statt −0.2) | `scripts/smoke_world_props.py` **[3]** |
 | Streu-Eintrag: Sanitizer über die echte Schreibroute, ROTE PROBE auf dem Master-Datensatz | `scripts/smoke_terrain_areas.py` **[15]** |
+
+## Nachtrag 2026-08-25 (§ B1): Eine Tür ist ein LOCH, kein Schlitz — der Sturz
+
+Zwei Befunde aus der Vorschau und aus dem Blender-Außenbild, ein und dieselbe
+Ursache: **die Öffnungen wurden nicht gleich behandelt.** Ein Fenster bekam
+Brüstung, Sturz und Glasband, eine Tür bekam eine Lücke — und zwar über die
+GANZE Wandhöhe, obwohl ihre `height_m` seit jeher autoriert ist (`world_ops.
+_sanitize_opening` verlangt 0,4…10 m). Von innen reichte jede Türöffnung bis
+an die Decke; von außen las sich das gleiche Loch in der Kontur wie ein
+fehlendes Wandstück, weshalb im Blender-Außenbild „gar keine Türen" zu sehen
+waren: ein Schlitz vom Boden bis zur Traufe ist keine Tür.
+
+**Die Regel, ab jetzt eine einzige für alle Öffnungen** (`scene_recipe.
+_room_walls` und `_contour_walls`):
+
+| Stück | Fenster | Tür / Durchgang |
+|---|---|---|
+| unter der Öffnung | Brüstung 0 … `sill_m` | entfällt (man geht hindurch) |
+| die Öffnung selbst | Glasband, eigener Eintrag mit `glass` | Lücke |
+| über der Öffnung | Sturz `sill_m + height_m` … Wandkopf | **Sturz** `height_m` … Wandkopf, Eintrag mit `lintel` |
+
+Handrechnung an der 3,00-m-Etage (Wandhöhe `max(0,6; 3,00−0,15)` = 2,85) für
+eine 1,00 × 2,10 m Tür in der Südwand eines Raums, der 4 m breit ist und
+mittig auf der Kontur eines 10 × 8-m-Hauses steht:
+
+| Wand | Stücke | `base_y` | `height` |
+|---|---|---|---|
+| Raumkante | x 6,0 … 4,5 und x 3,5 … 2,0 | −0,14 | 2,99 |
+| Raumkante | x 4,5 … 3,5 (Sturz) | 2,10 | 0,75 |
+| Konturkante | x 10,0 … 4,5 und x 3,5 … 0,0 | −0,14 | 2,99 |
+| Konturkante | x 4,5 … 3,5 (Sturz) | 2,10 | 0,75 |
+
+Also: **das Loch wird in JEDE Wand geschnitten, die die Tür durchstößt** —
+die Kontur eingeschlossen, wie bisher über die Projektion der Außenschwelle
+(§ A6/§ 4.2) — und es endet in JEDER dieser Wände auf der Türhöhe. Wo die
+Kontur ohnehin einer Raumhülle weicht („eine Wand, ein Besitzer"), weicht auch
+der Sturz mit: kein Wandstück dort, kein Sturz dort, die Raumwand trägt beides.
+Eine Tür so hoch wie die Wand bekommt keinen Sturz (0 m ist kein Primitiv).
+
+**Die Drahtform ändert sich nicht** — ein `walls`-Eintrag beschrieb schon
+immer mit `base_y` + `height` ein beliebiges Band in der Wand, genau wie der
+Fenstersturz. Additiv sind nur zwei Felder:
+
+- `walls[].lintel` (bool, fehlt = normal): dieses Stück hängt über einer
+  BEGEHBAREN Öffnung. Gezeichnet wird es wie jede Wand — beide Renderer
+  brauchten dafür keine Zeile —, aber es sperrt nichts im Grundriss. Wer aus
+  `walls` 2D-Kollider ableitet (`client3d/src/game/collide.ts`), überspringt
+  es; ohne das Feld wäre jede Tür zugemauert. Der Fenstersturz trägt das Flag
+  NICHT: unter ihm liegt die eigene Brüstung, die dort ohnehin sperrt.
+- `doorways[].height_m`: die lichte Höhe, geklemmt wie `width_m` geklemmt ist.
+  `base_y + height_m` ist die Unterkante des Sturzes — dieselbe Zahl, aus der
+  die Kontur ihren Sturz stellt, nie eine zweite Ableitung.
+
+`SCENE_RECIPE_VERSION` 1 → **2**: dieselben Daten liefern andere Wände, also
+muss jede Szenensignatur sich bewegen, sonst behalten Client und Cache die
+alte Geometrie bis jemand die Location zufällig speichert.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Raumwand: 2 Stücke + Sturz, Sturz auf 2,10 / 0,75, ROTE PROBE „keine Türlücke reicht mehr an die Wandkrone" | `scripts/smoke_scene_recipe.py` **[3]** |
+| Kontur: Sturz über dem projizierten Loch, gleiche x-Spanne, Tür so hoch wie die Wand → gar kein Sturz; weichende Kontur überlässt auch den Sturz der Raumwand | ebenda **[4]** |
+| `doorways[].height_m`: geklemmt gegen die Wand (9,0 → 2,85), fehlende Autorierung → Wandhöhe, also kein Sturz | ebenda **[3d]** |
+| Sturz bekommt keinen Schürzen-Anteil (§ A16.9) | ebenda **[4a]** |
+| Blender-Volumen: 10 × 8-Haus, ein Raum, eine 1 × 2,1-m-Tür → 12 Wandprismen, 110 Vertices, 83 Faces (ohne Tür 8 / 78 / 59), Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]** |
+| Kollision: das geflaggte Stück wird kein Segment, ROTE PROBE „ohne Flag wäre die Tür zugemauert" | `client3d/scripts/smoke_walk_math.mjs` |

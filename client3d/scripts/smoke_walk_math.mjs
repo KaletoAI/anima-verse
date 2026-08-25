@@ -2130,11 +2130,13 @@ async function main() {
   // `walls: [{ level, from:[x,z], to:[x,z], base_y, height, thickness, glass?,
   // room_id?, outward_normal }]` — finished primitives in WORLD METRES, and
   // the server has ALREADY split every wall around its openings
-  // (`app/core/scene_recipe.py::_room_walls`): a door or passage leaves a
-  // full-height GAP (no entry at all), a window keeps a sill piece below, a
-  // head piece above and a glass pane in between — three entries that all
-  // span the opening. So "doors pass, windows block" needs no opening lookup
-  // at all: whatever is left in `walls` blocks, the gaps are the doors.
+  // (`app/core/scene_recipe.py::_room_walls`): a door or passage leaves a GAP
+  // with only its LINTEL over it — one entry flagged `lintel`, because one
+  // walks UNDER it — while a window keeps a sill piece below, a head piece
+  // above and a glass pane in between, three entries that all span the
+  // opening. So "doors pass, windows block" needs no opening lookup at all:
+  // whatever is left in `walls` blocks EXCEPT a `lintel`, and the gaps are
+  // the doors.
   //
   // Hand-derived mini payload — a 4x4 m square room, k = 1, clockwise hull
   //   (0,0) -> (4,0) -> (4,4) -> (0,4) -> close
@@ -2159,6 +2161,9 @@ async function main() {
       { level: 0, from: [4, 4], to: [0, 4] },                     // edge 2
       { level: 0, from: [0, 4], to: [0, 2.5] },                   // edge 3 solid
       { level: 0, from: [0, 1.5], to: [0, 0] },                   // edge 3 solid
+      // The wall ABOVE the door (height_m 2.1 -> 2.85): drawn, never a
+      // barrier. Last of the level-0 entries so the indices above stand.
+      { level: 0, from: [0, 2.5], to: [0, 1.5], base_y: 2.1, lintel: true },
       { level: 1, from: [0, 0], to: [0, 4] },                     // upper storey
     ],
   };
@@ -2179,7 +2184,13 @@ async function main() {
   check('bodyRadius scales with k (Willowbrook k = 0.21)', bodyRadius(0.21), 0.0525);
   check('bodyRadius(1) = BODY_RADIUS_M', bodyRadius(1), 0.25);
   const segs0 = wallSegments(room, 0);
-  check('ground floor keeps all nine level-0 entries', segs0.length, 9);
+  check('the payload carries ten level-0 pieces',
+    room.walls.filter((w) => w.level === 0).length, 10);
+  check('...nine of them block — the door lintel is not a barrier',
+    segs0.length, 9);
+  check('the skipped one is exactly the flagged lintel',
+    segs0.filter((s) => s.ax === 0 && s.bx === 0
+      && Math.min(s.az, s.bz) >= 1.5 && Math.max(s.az, s.bz) <= 2.5).length, 0);
   check('upper storey is ONE segment', wallSegments(room, 1).length, 1);
   // It stands ALONE on its storey, so BOTH of its ends count as free and both
   // are pulled back by the ease — the rule has no notion of "this end is a
@@ -2242,6 +2253,15 @@ async function main() {
   //  |(-2,2)-(0,2.62)| = sqrt(4 + 0.3844) = 2.094 >= 0.25.
   check('the avatar walks out through the door',
     clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 }, segs0, R), { x: -2, z: 2 });
+  //  RED: the same payload with the flag dropped walls the door up — the
+  //  lintel spans z in [1.5, 2.5], so the walk west at z = 2 crosses it and
+  //  the move collapses onto the wall direction. That is the regression the
+  //  flag exists for; without it the door is a picture, not a way through.
+  const unflagged = { ...room,
+    walls: room.walls.map((w) => (w.lintel ? { ...w, lintel: false } : w)) };
+  check('RED: an unflagged lintel would block the doorway',
+    clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 },
+      wallSegments(unflagged, 0), R), { x: 2, z: 2 });
   //  Through the WINDOW on edge 1 (same z, opposite side): the sill/head/glass
   //  entries span it, the move is projected onto their direction (0,1) and
   //  dot((4,0),(0,1)) = 0 -> stands still.

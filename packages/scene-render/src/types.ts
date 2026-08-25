@@ -70,9 +70,13 @@ export interface SceneFloor {
   map_water?: { area_id: string; kind: string }
 }
 
-/** Ein Wandstück — um Türen/Fenster bereits geteilt; das Glasband eines
- *  Fensters kommt als eigener Eintrag mit `glass`. `outward_normal` zeigt vom
- *  umschlossenen Raum weg (Blickrichtungs-Culling). */
+/** One wall piece — already split around every door and window. A piece is
+ *  NOT necessarily a full-height run: `base_y` + `height` describe it on their
+ *  own, and a band hanging in the wall is the normal case — a window's sill
+ *  below and head above, its glass band as its own entry with `glass`, and
+ *  since 2026-08-25 the LINTEL over a door, which starts at the doorway's
+ *  `base_y + height_m`. `outward_normal` points away from the enclosed room
+ *  (view-direction culling). */
 export interface SceneWall {
   level: number
   from: [number, number]
@@ -82,6 +86,10 @@ export interface SceneWall {
   thickness: number
   texture_kind?: string
   glass?: boolean
+  /** This piece hangs over a WALKABLE gap (a door or passage). It is drawn
+   *  like any other wall, but it bars nothing in a floor plan — whoever
+   *  derives 2D colliders from `walls` skips it. */
+  lintel?: boolean
   opacity_role: 'ground' | 'upper'
   room_id?: string
   outward_normal: [number, number]
@@ -343,6 +351,9 @@ export interface SceneDoorway {
   along: [number, number]
   /** Clear width, already clamped to the wall edge. */
   width_m: number
+  /** Clear height, already clamped to the wall — `base_y + height_m` is where
+   *  the LINTEL over this gap starts (its own `walls` entry). */
+  height_m: number
   /** Foot of the wall the gap belongs to. */
   base_y: number
   /** The rooms it connects: 2 = party wall, 1 = door to the outside.

@@ -30,8 +30,11 @@ in, so nothing is denormalized here):
                 can place room spots and NPC stands without a plate to raycast
                 against (E5a),
 - ``walls``   — the building contour with its door gaps and the room shell
-                walls already split around every opening (window = sill +
-                head + glass segment),
+                walls already split around every opening. EVERY opening is
+                cut the same way: a piece below it (a window's sill band), a
+                LINTEL above it up to the top of the wall, and — for a window
+                only — a glass segment in the hole itself. A door is a hole,
+                not a slot up to the ceiling,
 - ``extras``  — the elevator primitives,
 - ``style``   — the colours/opacities both renderers used to keep as copies,
 - ``models``  — ONE spec form for building, room diorama and prop; the client
@@ -66,7 +69,10 @@ logger = get_logger(__name__)
 #: unchanged data — otherwise the signature stays put after a pure code change
 #: and every client keeps serving the old geometry until someone happens to
 #: save the location.
-SCENE_RECIPE_VERSION = 1
+#: 2 (2026-08-25): every opening keeps a LINTEL over it — a door no longer
+#: reaches the top of the wall, and the hole it projects into the building
+#: contour ends at the door's own height too.
+SCENE_RECIPE_VERSION = 2
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -708,17 +714,27 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     every outside doorway is projected forward onto the contour and opens it
     there, in the DOOR's clear width. ``doors`` carries one dict per outside
     doorway — ``level``, ``at`` (middle of the clear opening), ``normal`` (the
-    door's outward unit normal) and ``width`` — all of it derived from the
-    ``doorways`` block the payload itself ships, never a second time from the
-    openings. The hole lands on the door's OWN storey: a hull opens where a
-    door is, and a building without one stays shut and is reported instead
-    (``_problems``). The old fallback — one 0.8 m door mid in the southernmost
-    piece whenever no door projected close enough — is gone.
+    door's outward unit normal), ``width`` and ``top_y`` (the world height the
+    door's head reaches) — all of it derived from the ``doorways`` block the
+    payload itself ships, never a second time from the openings. The hole
+    lands on the door's OWN storey: a hull opens where a door is, and a
+    building without one stays shut and is reported instead (``_problems``).
+    The old fallback — one 0.8 m door mid in the southernmost piece whenever
+    no door projected close enough — is gone.
 
     The hole is the door's CLEAR width measured along the contour edge: a door
     meeting the hull at an angle keeps its own width there instead of being
     stretched, and one clamped against a corner loses the part that runs past
     the edge rather than wrapping onto the next one.
+
+    AND IT IS THE DOOR'S CLEAR HEIGHT (finding 2026-08-25): above ``top_y``
+    the contour carries on as a LINTEL piece over the opening, exactly like
+    the head a window has always had on a room wall. The projected hole used
+    to run from the foot to the top of the shell, so a door in an outer wall
+    read as a missing wall segment rather than as a door — from outside and in
+    the Blender exterior render alike. Where the contour has already yielded
+    to a room hull the lintel yields with it: no wall there, no lintel there,
+    and the room's own wall carries both.
 
     ONE wall, one owner (finding 2026-07-27, "Haus von Kai": 27 colinear
     pairs, 16.5 m doubled → z-fighting the moment a wall texture landed on
@@ -742,8 +758,9 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         area2 += x1 * z2 - x2 * z1
     ccw = area2 > 0
 
-    # (level, edge index) → the spans the doors of that storey cut out of it.
-    cuts: Dict[Tuple[int, int], List[Tuple[float, float]]] = {}
+    # (level, edge index) → the (span, head height) the doors of that storey
+    # cut out of it.
+    cuts: Dict[Tuple[int, int], List[Tuple[float, float, float]]] = {}
     for door in doors:
         hit = _contour_hit(pts, door["at"], door["normal"])
         if not hit:
@@ -751,7 +768,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         i, t = hit
         half = _num(door.get("width")) / 2
         cuts.setdefault((int(door.get("level") or 0), i), []).append(
-            (t - half, t + half))
+            (t - half, t + half, _num(door.get("top_y"))))
 
     height = _wall_height(storey)
     wall_kind = str((map3d or {}).get("wall_kind") or "").strip()
@@ -765,19 +782,41 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         nx = (uz if ccw else -uz)
         nz = (-ux if ccw else ux)
         for level in levels:
-            lvl_holes = list(cuts.get((level, i), []))
+            door_cuts = list(cuts.get((level, i), []))
             # Room-hull spans on this contour edge: colinear within roughly
             # a wall thickness → the room wall owns that stretch.
+            yielded: List[Tuple[float, float]] = []
             for hull in (room_hulls or {}).get(level, []):
                 for j, ha in enumerate(hull):
                     hb = hull[(j + 1) % len(hull)]
                     span = _colinear_span(a, ux, uz, length, ha, hb)
                     if span:
-                        lvl_holes.append(span)
-            segs = _subtract([(0.0, length)], sorted(lvl_holes),
-                             MIN_WALL_PIECE_M)
+                        yielded.append(span)
+            holes = sorted(yielded + [(c[0], c[1]) for c in door_cuts])
             sink = WALL_SINK_M if level == 0 else 0.0
-            for s0, s1 in segs:
+            foot = storey_floor_y(level, storey)
+            # (span, foot, height, is lintel) of every piece of this edge on
+            # this storey: the full-height runs between the holes first, then
+            # one LINTEL over each door hole — clipped against the stretches
+            # that yielded to a room hull, because there is no contour wall
+            # there to carry it. A door as tall as the wall leaves no lintel
+            # and drops out.
+            pieces: List[Tuple[float, float, float, float, bool]] = [
+                (s0, s1, foot - sink, height + sink, False)
+                for s0, s1 in _subtract([(0.0, length)], holes,
+                                        MIN_WALL_PIECE_M)]
+            for t0, t1, top_y in door_cuts:
+                lintel = foot + height - top_y
+                if lintel < MIN_WALL_PIECE_M or lintel > height:
+                    continue
+                span = (max(t0, 0.0), min(t1, length))
+                if span[1] - span[0] < MIN_WALL_PIECE_M:
+                    continue
+                pieces.extend(
+                    (s0, s1, top_y, lintel, True)
+                    for s0, s1 in _subtract([span], sorted(yielded),
+                                            MIN_WALL_PIECE_M))
+            for s0, s1, base_y, piece_h, is_lintel in pieces:
                 start, end = _segment_points(a, ux, uz, s0, s1)
                 entry: Dict[str, Any] = {
                     "level": level,
@@ -789,15 +828,21 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                     # storey 0 it goes ``WALL_SINK_M`` further down, into the
                     # ground, and the height grows by the same amount: the TOP
                     # edge is untouched and no relief under the wall can open a
-                    # gap between it and the terrain (§ A16.9).
-                    "base_y": _r(storey_floor_y(level, storey) - sink),
-                    "height": _r(height + sink),
+                    # gap between it and the terrain (§ A16.9). A LINTEL over a
+                    # door hangs in the wall instead: it starts at the door's
+                    # head and is never skirted.
+                    "base_y": _r(base_y),
+                    "height": _r(piece_h),
                     "thickness": WALL_THICKNESS,
                     "opacity_role": _opacity_role(level, min(levels)),
                     "outward_normal": [_r(nx), _r(nz)],
                 }
                 if wall_kind:
                     entry["texture_kind"] = wall_kind
+                if is_lintel:
+                    # Over the door one WALKS — the piece is drawn, it does not
+                    # block (§ B1 ``lintel``).
+                    entry["lintel"] = True
                 walls.append(entry)
     return walls
 
@@ -844,12 +889,31 @@ def _room_wall_edges(recipe: Dict[str, Any]
         yield i, a, ux, uz, length, spans
 
 
+def _opening_height(op: Dict[str, Any], wall_height: float) -> float:
+    """CLEAR height of one opening in metres — its authored ``height_m``.
+
+    Every stored opening carries the field (``world_ops._sanitize_opening``
+    demands 0.4…10 m and drops the entry otherwise). A dict that does not — a
+    hand-written fixture, a draft coming out of a generator — keeps the
+    behaviour a missing number always had: the hole reaches the top of the
+    wall, so no lintel is built over it. A height taller than the wall is
+    clamped by the caller, which is the only place that knows the wall.
+    """
+    height = _num(op.get("height_m"))
+    return height if height > 0 else wall_height
+
+
 def _room_walls(recipe: Dict[str, Any], storey: float,
                 ground_level: int) -> List[Dict[str, Any]]:
     """One room's shell walls, split around its openings (§ A4).
 
-    Doors and passages leave a full-height gap; a window keeps a sill segment
-    below and a head segment above and fills the hole with a glass segment.
+    EVERY opening is cut the same way (finding 2026-08-25): the wall below it
+    (a window's sill band, nothing under a door — one walks THROUGH a door,
+    so its sill is ignored), the LINTEL above it up to the top of the wall,
+    and, for a window only, a glass segment filling the hole. A door used to
+    be the exception — a gap all the way to the ceiling, its authored
+    ``height_m`` unused — which is what left doorways open to the ceiling and
+    made an outer wall look as if it had lost a whole segment.
     Mirrored openings (the neighbour's door in the shared wall) arrive
     pre-translated in the recipe and are treated exactly like own ones.
     Outdoor rooms have no shell at all (§ A5).
@@ -875,7 +939,8 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
         normal = [_r(uz), _r(-ux)]
 
         def _emit(s0: float, s1: float, y: float, h: float,
-                  thickness: float, glass: bool = False) -> None:
+                  thickness: float, glass: bool = False,
+                  lintel: bool = False) -> None:
             if s1 - s0 < MIN_SEGMENT_M or h < MIN_SEGMENT_M:
                 return
             # Only a piece that STANDS ON THE FLOOR gets the skirt (§ A16.9):
@@ -900,6 +965,10 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
                 entry["glass"] = True
             elif kind:
                 entry["texture_kind"] = kind
+            if lintel:
+                # It hangs over a WALKABLE gap: drawn like any wall, but it
+                # bars nothing in a floor plan (§ B1 ``lintel``).
+                entry["lintel"] = True
             walls.append(entry)
 
         for s0, s1 in _subtract([(0.0, length)],
@@ -907,15 +976,21 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
                                 MIN_SEGMENT_M):
             _emit(s0, s1, 0.0, height, WALL_THICKNESS)
         for s0, s1, op in spans:
-            if str(op.get("type") or "").lower() != "window":
-                continue
-            sill = min(_num(op.get("sill_m")), height)
-            top = min(_num(op.get("sill_m")) + _num(op.get("height_m")),
-                      height)
+            window = str(op.get("type") or "").lower() == "window"
+            # A door/passage starts on the floor whatever a sill says: it is
+            # walked through, and the threshold primitive lies at its foot.
+            sill = min(_num(op.get("sill_m")), height) if window else 0.0
+            top = min(sill + _opening_height(op, height), height)
             _emit(s0, s1, 0.0, sill, WALL_THICKNESS)
-            _emit(s0, s1, top, height - top, WALL_THICKNESS)
-            _emit(s0, s1, sill, top - sill,
-                  WALL_THICKNESS * GLASS_THICKNESS_FACTOR, glass=True)
+            # The head. Over a WALKABLE opening it is flagged: one walks under
+            # it, so it must not become a barrier in anyone's floor plan. A
+            # window's head needs no flag — its own sill blocks that span.
+            _emit(s0, s1, top, height - top, WALL_THICKNESS,
+                  lintel=str(op.get("type") or "door").lower()
+                  in _WALKABLE_TYPES)
+            if window:
+                _emit(s0, s1, sill, top - sill,
+                      WALL_THICKNESS * GLASS_THICKNESS_FACTOR, glass=True)
     return walls
 
 
@@ -929,7 +1004,9 @@ def _doorways(recipes: List[Dict[str, Any]],
     A doorway is EXACTLY the gap an opening cuts out of a wall — same source,
     same clamp (``_room_wall_edges``), no second derivation. Hence ``width_m``
     is the CLEAR width after the edge clamp, not the authored width for
-    anyone to re-clamp. The consumer rule is: nothing is recalculated.
+    anyone to re-clamp, and ``height_m`` is the clear height after the same
+    clamp against the wall — the number the lintel above the gap starts at.
+    The consumer rule is: nothing is recalculated.
 
     ``base_y`` LEAVES this function as the foot of the wall the gap belongs to
     and is the finished number only after :func:`compose_scene` has run
@@ -971,6 +1048,7 @@ def _doorways(recipes: List[Dict[str, Any]],
         return out
 
     tol = SHARE_TOL_M + 1e-4
+    wall_h = _wall_height(storey)
     # (entry, unclamped centre) of the openings on their OWN room's wall, and
     # the neighbours' mirrored copies. Own ones are deduped FIRST, so an entry
     # is based on a room that owns its wall stretch wherever one exists.
@@ -995,6 +1073,11 @@ def _doorways(recipes: List[Dict[str, Any]],
                                  _r(a[1] + uz * (s0 + s1) / 2)],
                     "along": [_r(ux), _r(uz)],
                     "width_m": _r(s1 - s0),
+                    # CLEAR height of the gap, clamped to the wall exactly as
+                    # the splitter clamps it: the wall over the door is a
+                    # lintel, and this is where that lintel begins. Consumers
+                    # do not re-derive it either — same rule as ``width_m``.
+                    "height_m": _r(min(_opening_height(op, wall_h), wall_h)),
                     "base_y": base,
                     "rooms": _rooms_of(room_id, to),
                 }
@@ -2341,11 +2424,15 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             room_hulls.setdefault(level, []).append(hull)
             shell_levels.add(level)
 
-    # Every OUTSIDE door as a hole for the hull: middle, outward normal and
-    # clear width, straight off the doorway — the contour projects them, it
-    # does not measure a door of its own (§ 4.2).
+    # Every OUTSIDE door as a hole for the hull: middle, outward normal, clear
+    # width and the world height of its head, straight off the doorway — the
+    # contour projects them, it does not measure a door of its own (§ 4.2).
+    # ``top_y`` is read HERE, before :func:`threshold_base_y` lifts ``base_y``
+    # onto a declared walking surface: the door's head stands over the wall's
+    # own foot, which is what the wall it pierces is built from.
     outside_doors = [{"level": d["level"], "at": d["at_world"],
-                      "width": d["width_m"], "normal": _door_outward(d)}
+                      "width": d["width_m"], "normal": _door_outward(d),
+                      "top_y": _num(d["base_y"]) + _num(d["height_m"])}
                      for d in doorways if d.get("outside")]
 
     walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey,

@@ -77,6 +77,33 @@ no contour piece yields to a room wall).
        TWO-STOREY: 16x8 + 2x8 + 8 + 6     = 158 vertices
                    16x6 + 2x6 + 6 + 5     = 119 faces
 
+6b. A DOOR (finding 2026-08-25 — the render had none). Third shape of the
+   fixture: ONE room on level 0, 4 x 3 m at (2,2), with a 1.0 x 2.1 m door in
+   its south wall leading outside. Its hull is wound clockwise, so edge 2 runs
+   (6,5) -> (2,5), u = (-1,0), 4 m long; the door at 0.5 spans t 1.5…2.5,
+   i.e. world x 4.5 … 3.5 with its middle at (4,5) and its outward normal +z.
+   That ray meets the south contour edge (10,8) -> (0,8) at x = 4, i.e. t = 6
+   on a 10 m edge, so the hull opens over t 5.5…6.5 — the SAME world x
+   4.5 … 3.5. Both walls are cut the same way and BOTH keep a lintel:
+
+       wall              pieces                              base_y  height
+       room edge 2       x 6.0 … 4.5   (solid)                -0.14   2.99
+                         x 3.5 … 2.0   (solid)                -0.14   2.99
+                         x 4.5 … 3.5   LINTEL                  2.10   0.75
+       contour edge 2    x 10.0 … 4.5  (solid)                -0.14   2.99
+                         x 3.5 … 0.0   (solid)                -0.14   2.99
+                         x 4.5 … 3.5   LINTEL                  2.10   0.75
+
+   The lintel's foot is the door's own height_m over the wall's floor (0.00 on
+   storey 0) and its top is the shell's 2.85 — 2.85 - 2.10 = 0.75. So the same
+   house WITHOUT the door has 4 + 4 = 8 wall pieces, with it 12:
+       PLAIN ROOM: 8x8 + 8 + 6            =  78 vertices
+                   8x6 + 6 + 5            =  59 faces
+       ONE DOOR:  12x8 + 8 + 6            = 110 vertices
+                  12x6 + 6 + 5            =  83 faces
+   and the BOUNDS do not move by a millimetre: a lintel hangs inside the wall
+   it belongs to.
+
 7. THE BODY'S BOUNDS, BARE, in the scene frame:
        x  -0.4 .. 10.4   (the roof overhang past both gable ends)
        y  -0.14 .. 5.700830   (the sunk wall foot .. the ridge)
@@ -167,6 +194,15 @@ ROOMS = [{"id": "r0", "name": "Ground",
           "layout": {"x": 2, "y": 2, "w": 4, "d": 3, "level": 0}},
          {"id": "r1", "name": "Upper",
           "layout": {"x": 2, "y": 2, "w": 4, "d": 3, "level": 1}}]
+#: The same ground-floor room alone — once shut, once with the 1 x 2.1 m
+#: outside door of the docstring's § 6b.
+PLAIN_ROOM = [{"id": "r0", "name": "Ground",
+               "layout": {"x": 2, "y": 2, "w": 4, "d": 3, "level": 0}}]
+DOOR_ROOM = [{"id": "r0", "name": "Ground",
+              "layout": {"x": 2, "y": 2, "w": 4, "d": 3, "level": 0,
+                         "openings": [{"edge": 2, "at": 0.5, "type": "door",
+                                       "width_m": 1.0, "height_m": 2.1,
+                                       "to": "outside"}]}}]
 
 
 def fixture(rooms=()):
@@ -392,6 +428,68 @@ def part_extract():
     check("…and why", empty["error"], "no_geometry")
 
 
+# ── [4b] The door — a hole with a lintel over it, in BOTH walls ─────────
+
+def part_door():
+    print("\n[4b] A door — the hull opens where it is, and closes above it")
+    shut = sr.compose_scene(fixture(PLAIN_ROOM), plan_width_m=10.0)
+    open_ = sr.compose_scene(fixture(DOOR_ROOM), plan_width_m=10.0)
+    check("shut house: 4 contour + 4 room walls", len(shut["walls"]), 8)
+    check("with a door: both cut walls become 2 runs + a lintel",
+          len(open_["walls"]), 12)
+
+    # The two pieces the door leaves in the CONTOUR (§ 6b of the docstring).
+    contour = [w for w in open_["walls"] if not w.get("room_id")
+               and abs(w["from"][1] - 8.0) < 1e-9
+               and abs(w["to"][1] - 8.0) < 1e-9]
+    runs = sorted([w for w in contour if w["base_y"] < 0], key=lambda w: -w["from"][0])
+    heads = [w for w in contour if w["base_y"] > 0]
+    check("the south facade is 2 runs + 1 lintel", len(contour), 3)
+    check_vec("run A ends at the door, x 10.0 -> 4.5",
+              [runs[0]["from"][0], runs[0]["to"][0]], [10.0, 4.5], 1e-9)
+    check_vec("run B starts after it, x 3.5 -> 0.0",
+              [runs[1]["from"][0], runs[1]["to"][0]], [3.5, 0.0], 1e-9)
+    check("exactly one lintel over the hole", len(heads), 1)
+    check_vec("the lintel spans the hole, x 4.5 -> 3.5",
+              [heads[0]["from"][0], heads[0]["to"][0]], [4.5, 3.5], 1e-9)
+    check("...standing on the door's own height", heads[0]["base_y"], 2.10, 1e-9)
+    check("...and reaching the top of the shell, 2.85 - 2.10",
+          heads[0]["height"], 0.75, 1e-9)
+
+    # The ROOM wall the door was drawn into is cut identically — same x, same
+    # lintel — so the hole goes right through the building.
+    room = [w for w in open_["walls"] if w.get("room_id") == "r0"
+            and abs(w["from"][1] - 5.0) < 1e-9 and abs(w["to"][1] - 5.0) < 1e-9]
+    room_head = [w for w in room if w["base_y"] > 0]
+    check("the room wall is 2 runs + 1 lintel too", len(room), 3)
+    check_vec("its lintel sits over the same x 4.5 -> 3.5",
+              [room_head[0]["from"][0], room_head[0]["to"][0]], [4.5, 3.5], 1e-9)
+    check("...at the same head height", room_head[0]["base_y"], 2.10, 1e-9)
+    # RED: the old picture was a slot from the ground to the eaves. If any
+    # piece of these two walls were still missing above 2.10, this fails.
+    check_vec("RED: no wall of the door line is open to the eaves",
+              [w["base_y"] + w["height"] for w in contour + room],
+              [2.85] * 6, 1e-9)
+
+    print("\n    …and the Blender volume gets it for free")
+    g_shut = ex.extract_geometry(fixture(PLAIN_ROOM), "exterior-demo")
+    g = ex.extract_geometry(fixture(DOOR_ROOM), "exterior-demo")
+    check("shut: vertices = 8x8 + 8 + 6", len(g_shut["vertices"]), 78)
+    check("shut: faces = 8x6 + 6 + 5", len(g_shut["faces"]), 59)
+    check("door: walls", g["parts"]["walls"], 12)
+    check("door: vertices = 12x8 + 8 + 6", len(g["vertices"]), 110)
+    check("door: faces = 12x6 + 6 + 5", len(g["faces"]), 83)
+    check("one material index per face", len(g["face_material"]), 83)
+    check_vec("the body's box does not move (a lintel is inside the wall)",
+              g["bounds"]["min"] + g["bounds"]["max"],
+              g_shut["bounds"]["min"] + g_shut["bounds"]["max"], 1e-9)
+    # The mesh has to be sound with the extra bodies in it.
+    n = len(g["vertices"])
+    check_true("face indices in range",
+               all(0 <= i < n for f in g["faces"] for i in f))
+    check("every vertex used", len({i for f in g["faces"] for i in f}), n)
+
+
 # ── [5] The Blender job ─────────────────────────────────────────────────
 
 def part_job():
@@ -533,6 +631,7 @@ def main():
     part_heuristic()
     part_scene_numbers()
     part_extract()
+    part_door()
     part_job()
     part_framing()
     part_blender()
