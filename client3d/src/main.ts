@@ -16,6 +16,7 @@ import {
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
+import { stairChain, type StairLink } from './game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
@@ -2214,9 +2215,16 @@ async function startApp(username: string, role: string) {
         // ONE doorway naming both, and that is the whole route. Otherwise the
         // figure leaves through its room's own door and enters through the
         // other's — which is also the case for room ↔ ground, where the ground
-        // has no doorway of its own and the room's OUTSIDE door is the way. A
-        // storey change adds the lift (AV3D-12); rooms joined by a doorway are
-        // on one storey by construction, so only the two-door route can need it.
+        // has no doorway of its own and the room's OUTSIDE door is the way.
+        //
+        // A storey change adds the climb, and the order is STAIRS FIRST, lift
+        // second (plan-treppen § 0, "Routing-Regel"): where a chain of flights
+        // connects the two storeys the figure walks it, one flight per storey
+        // step, and `tile.elevatorStops` (AV3D-12) stays the fallback for
+        // everything the stairs do not connect — a missing link gives no chain
+        // at all rather than a route that ends in mid-air. Rooms joined by a
+        // doorway are on one storey by construction, so only the two-door
+        // route can need either.
         //
         // A VISIBILITY change is not a room change (finding B5): opening or
         // closing the detail view moves nobody, it only decides whether the
@@ -2249,7 +2257,19 @@ async function startApp(username: string, role: string) {
           } else {
             const leave = from ? roomDoor(scene, from) : null;
             if (leave) stops.push(doorStop(tile, leave));            // alten Raum verlassen
-            if (lf !== lt && tile.elevatorStops) {
+            // The flights arrive as world points already (`tile.stairs`); the
+            // chain module is pure, so they go in as plain numbers.
+            const chain = lf !== lt && tile.stairs?.length
+              ? stairChain(tile.stairs.map((s): StairLink => ({
+                foot: { level: s.foot.level, x: s.foot.pos.x, y: s.foot.pos.y, z: s.foot.pos.z },
+                head: { level: s.head.level, x: s.head.pos.x, y: s.head.pos.y, z: s.head.pos.z },
+              })), lf, lt)
+              : null;
+            if (chain) {
+              // Foot then head per flight — the waypoint machine turns that
+              // pair into the climb all by itself (scene/npcs.ts).
+              chain.forEach((e) => stops.push(new THREE.Vector3(e.x, e.y, e.z)));
+            } else if (lf !== lt && tile.elevatorStops) {
               const a = tile.elevatorStops.get(lf) ?? tile.elevatorStops.get(0);
               const b = tile.elevatorStops.get(lt) ?? tile.elevatorStops.get(0);
               if (a) stops.push(a.clone());                          // Fahrstuhl einsteigen

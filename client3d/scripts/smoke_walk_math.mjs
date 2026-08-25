@@ -810,7 +810,7 @@ const SRC_DIR = join(ROOT, 'client3d/src/game');
  *  DOM. */
 const MODULES = ['walk', 'clickmove', 'proximity', 'roomwalk', 'elevator', 'collide',
   'doors', 'prefs', 'boot', 'soundtrack', 'voiceover', 'polygon', 'enterLocation',
-  'perfstats', 'bubble', 'minimap', 'locks', 'placement', 'ground'];
+  'perfstats', 'bubble', 'minimap', 'locks', 'placement', 'ground', 'stairs'];
 
 /**
  * Both files are TypeScript and deliberately free of any runtime dependency
@@ -905,7 +905,7 @@ const SQRT_HALF = Math.SQRT1_2;   // 0.7071067811865476
 async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
-    bubble, minimap, locks, placement, ground } = await loadGameModules();
+    bubble, minimap, locks, placement, ground, stairs } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
     groundScope, wadeGate, swimFrom, SWIM_FROM_DEFAULT_M, MIN_PACE,
@@ -932,6 +932,7 @@ async function main() {
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
     locationsSignature, footprintSignature, MINIMAP_PREF_KEY } = minimap;
   const { placementOf, figureTransition } = placement;
+  const { stairChain } = stairs;
   // The defaults are spelled out here BY HAND, never read from the module —
   // that is the whole point of pinning them (see the header).
   const DEFAULTS = {
@@ -2051,6 +2052,80 @@ async function main() {
       honourCooldown: false, frames: 60 });
     check('without the gate every press runs into the same refusal',
       hammered.requests.length, 1);
+  }
+
+  // --- stairs: the chain routes per storey (Treppen task 4) ----------------
+  // A staircase spans exactly ONE storey (`foot.level + 1 === head.level`), so
+  // a storey change over stairs is a CHAIN: one flight per step of the storey
+  // difference, and each flight contributes its NEAR end first, then its FAR
+  // end. Missing a single link means there is no stair route at all — the
+  // caller falls back to the lift, which is why the answer is `null` and not a
+  // short chain that ends in mid-air.
+  //
+  // The two flights below are the § 0 hand calculation of the spec, house
+  // storey 3.0, `dir_deg` 90 (climb along +X), and their endpoints are the
+  // PAD TOP FACES + the 1 cm walk clearance that `tile.stairs` carries:
+  //
+  //   A: at = [2, −2], from_level 0 → base = 0.0, target = 1·3.0 + 0.08 = 3.08
+  //      foot pad centre [2 − (0.9/2 + 0.05), −0.025, −2] = [1.5, −0.025, −2]
+  //        → top face −0.025 + 0.05/2 = 0.0, walk Y = 0.0 + 0.01 = 0.01
+  //      run = 15 · 0.26 = 3.9, head pad centre [2 + 3.9 + 0.5, 3.055, −2]
+  //        = [6.4, 3.055, −2] → top 3.055 + 0.025 = 3.08, walk Y = 3.09
+  //   B: at = [2, +2], from_level 1 → base = 3.08, target = 2·3.0 + 0.08 = 6.08
+  //      foot [1.5, 3.09, 2] (top 3.08), head [6.4, 6.09, 2] (top 6.08)
+  console.log('stairChain — one flight per storey step, near end then far end');
+  {
+    const A = {
+      foot: { level: 0, x: 1.5, y: 0.01, z: -2 },
+      head: { level: 1, x: 6.4, y: 3.09, z: -2 },
+    };
+    const B = {
+      foot: { level: 1, x: 1.5, y: 3.09, z: 2 },
+      head: { level: 2, x: 6.4, y: 6.09, z: 2 },
+    };
+
+    // (a) one flight, upwards: the foot is where you get on, the head where
+    //     you get off.
+    check('0 → 1 walks foot then head', stairChain([A], 0, 1), [A.foot, A.head]);
+    // (b) the same flight downwards is the same two points, mirrored.
+    check('1 → 0 walks head then foot', stairChain([A], 1, 0), [A.head, A.foot]);
+    // (c) two flights, 0 → 1 → 2: four points, and the middle pair is the
+    //     landing — head of A at [6.4, 3.09, −2], foot of B at [1.5, 3.09, 2],
+    //     both on the storey-1 floor 3.08 + 0.01.
+    const up2 = stairChain([A, B], 0, 2);
+    check('0 → 2 chains both flights', up2, [A.foot, A.head, B.foot, B.head]);
+    check('...the landing pair sits on the storey-1 floor',
+      [up2[1].y, up2[2].y], [3.09, 3.09]);
+    check('2 → 0 chains them in reverse', stairChain([A, B], 2, 0),
+      [B.head, B.foot, A.head, A.foot]);
+    // The list is UNORDERED — the payload order must not decide the route.
+    check('an unordered list routes the same', stairChain([B, A], 0, 2),
+      [A.foot, A.head, B.foot, B.head]);
+    // Two flights between the SAME storeys: the FIRST match wins, always.
+    const A2 = {
+      foot: { level: 0, x: -1.5, y: 0.01, z: 4 },
+      head: { level: 1, x: -6.4, y: 3.09, z: 4 },
+    };
+    check('two flights between the same storeys: the first one wins',
+      stairChain([A, A2], 0, 1), [A.foot, A.head]);
+    check('...and "first" is the list order, not the geometry',
+      stairChain([A2, A], 0, 1), [A2.foot, A2.head]);
+    // (d) a gap: only 0 → 1 exists, so 0 → 2 has no stair route at all.
+    check('a missing link gives no chain at all', stairChain([A], 0, 2), null);
+    check('...downwards just the same', stairChain([B], 2, 0), null);
+    check('no stairs at all', stairChain([], 0, 1), null);
+    // (e) no storey change = no waypoints, and that is NOT "no route".
+    const same = stairChain([A], 1, 1);
+    check('same storey walks nowhere', Array.isArray(same) && same.length === 0, true);
+    check('...even without any stairs',
+      Array.isArray(stairChain([], 0, 0)) && stairChain([], 0, 0).length === 0, true);
+    // A basement counts like any other storey.
+    const C = {
+      foot: { level: -1, x: 1.5, y: -2.91, z: 0 },
+      head: { level: 0, x: 6.4, y: 0.01, z: 0 },
+    };
+    check('the basement is a storey like any other', stairChain([C, A], -1, 1),
+      [C.foot, C.head, A.foot, A.head]);
   }
 
   // --- walking indoors: the floor, not the shell (E3 acceptance) -----------
