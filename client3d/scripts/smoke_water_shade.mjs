@@ -462,8 +462,16 @@ checkEq('the streak ribbon is 2 λ across and 8× that along, at weight 0.35',
   && glsl.includes('ax, ay, 8.0 )') && glsl.includes('still ? 0.0 : 0.35'), true);
 checkEq('a river\'s crests run DOWNSTREAM (the sign is negative)',
   glsl.includes('float sgn = still ? 1.0 : -1.0;'), true);
-checkEq('…and a still surface keeps the +1 it always had',
-  glsl.includes('float aniso = still ? 1.0 : 3.0;'), true);
+// Sheets A/B are ISOTROPIC since 2026-08-25 (user finding, readout-measured:
+// the 3:1 along-flow squeeze hid the downstream motion — a streak sliding
+// along its own length shows nothing, so only the cross beat stayed visible
+// and the river read as drifting SIDEWAYS). RED half: the old squeeze line
+// must be gone; the direction-cue squeeze survives only in sheet C (8x).
+checkEq('sheets A/B are isotropic — the squeeze line is gone',
+  glsl.includes('float aniso = 1.0;')
+  && !glsl.includes('float aniso = still ? 1.0 : 3.0;'), true);
+checkEq('…sheet C keeps its 8x streak squeeze as the direction cue',
+  glsl.includes('ax, ay, 8.0'), true);
 checkEq('the area\'s speed factor is the LENGTH of the flow vector',
   glsl.includes('float sp = still ? speed : flowSpeed * len;'), true);
 checkEq('…and a length below 1e-4 is a lake', glsl.includes('bool still = len < 1e-4;'),

@@ -854,7 +854,16 @@ vec3 twRipple( vec2 p, vec2 gx, vec2 gy, float waveM, float speed, float flowSpe
   vec2 ay = vec2( -ax.y, ax.x );
   float sp = still ? speed : flowSpeed * len;
   float sgn = still ? 1.0 : -1.0;
-  float aniso = still ? 1.0 : 3.0;
+  // ISOTROPIC on purpose since 2026-08-25 (user finding, twice measured with
+  // the readout: the drift chain runs at ~1 m/s downstream, yet the visible
+  // motion read SIDEWAYS). The 3:1 along-flow squeeze hid exactly the motion
+  // it should have shown — a streak sliding along its own length displays
+  // nothing, so only the small CROSS components of sheets A/B stayed
+  // readable and the water appeared to drift sideways (or, where the squeeze
+  // smeared the pattern, "voellig diffus"). With aniso 1 the crest shapes
+  // keep their form and visibly travel downstream; the direction cue from
+  // stretched STREAKS survives in sheet C, which keeps its own 8x squeeze.
+  float aniso = 1.0;
   float crossA = still ? 0.6 : 0.15;
   float crossB = still ? 1.3 : 0.3;
   vec2 dirA = ax + ay * crossA;
