@@ -103,6 +103,9 @@ async function main() {
     await import('../src/scene/scatterLod.ts')
   const { WORLD_PROP_LOD_SCALE, worldPropLodCfg, worldPropSceneSpec,
     worldPropBottom } = await import('../src/scene/worldProps.ts')
+  const { SubmergedGhost, setWaterGhostOff, waterGhostOff,
+    WATER_GHOST_OPACITY } = await import('../src/scene/submergedGhost.ts')
+  const { ghostCutY } = await import('../src/game/walk.ts')
 
   const FAILED = []
   const r3 = (v) => Math.round(v * 1000) / 1000
@@ -216,6 +219,115 @@ async function main() {
   const sS = new THREE.Box3().setFromObject(straight).getSize(new THREE.Vector3())
   check('turning does not resize', [r3(sS.x) + r3(sS.z), r3(sS.y)],
     [r3(sB.x) + r3(sB.z), r3(sB.y)])
+
+  console.log('\n[4] the underwater ghost of a PLACED object')
+  // WHAT IS BEING CHECKED. Since Wasser v2 K-A the water surface IS the opaque
+  // terrain, so anything whose base stands under a water level is cut clean off
+  // at the waterline — a crate on a lake bed is simply not there. The fix is
+  // the FIGURES' fix, one module for both (`scene/submergedGhost.ts`): a second
+  // draw of the very same geometry with `depthFunc: GreaterDepth`, which paints
+  // only where the normal pass LOST the depth test, tinted at
+  // WATER_GHOST_OPACITY = 0.4, writing no depth, discarding every fragment
+  // above `uGhostCutY`.
+  //
+  // THE GATE IS `walk.ghostCutY(base, level)` and it runs at PLACEMENT time —
+  // the mount and every beat that re-seats a placement — never per frame. Hand
+  // case for a world prop, § A9a: ground 2.50 m, offset_y 0.5 -> bottom 3.00.
+  //   a lake at 3.40  ->  0.40 m of water  ->  cut at 3.40
+  //   a lake at 3.02  ->  0.02 m           ->  under the 0.05 m rim ramp: none
+  const DRY_ROW = { ...row }
+  const BOTTOM = worldPropBottom(DRY_ROW, 2.5)
+  check('the prop bottom this section works from', BOTTOM, 3.0)
+  check('a lake 0.40 m over it cuts at its own level',
+    ghostCutY(BOTTOM, 3.4), 3.4)
+  check('2 cm of water is under the rim ramp', ghostCutY(BOTTOM, 3.02), null)
+  check('a dry raster (NaN) is dry', ghostCutY(BOTTOM, NaN), null)
+
+  // --- RED: a DRY prop builds nothing at all -------------------------------
+  // The whole cheapness of the mechanism rests on this: a world of dry props
+  // must not carry one extra mesh, one extra material or one extra draw call.
+  const dryMesh = boxOf(1, 1, 1)
+  const dryGhost = new SubmergedGhost(dryMesh)
+  dryGhost.set(ghostCutY(BOTTOM, 3.02))
+  check('RED: a dry prop builds no ghost mesh', dryGhost.count, 0)
+  check('RED: …and nothing of it is visible', dryGhost.visible, false)
+  check('RED: …and it hangs nothing under the object',
+    dryMesh.children.length, 0)
+  dryGhost.dispose()
+
+  // --- the SUBMERGED prop, and what its second draw is ---------------------
+  const wetMesh = boxOf(1, 1, 1)
+  wetMesh.material.map = null
+  const wetGhost = new SubmergedGhost(wetMesh)
+  wetGhost.set(ghostCutY(BOTTOM, 3.4))
+  check('one ghost per mesh', wetGhost.count, 1)
+  check('…visible', wetGhost.visible, true)
+  check('…cut at the water level, not at the base', wetGhost.cutY, 3.4)
+  const twin = wetGhost.parts[0]
+  check('the ghost hangs UNDER the mesh it doubles (same world matrix)',
+    twin.parent === wetMesh, true)
+  check('it SHARES the geometry — no second upload',
+    twin.geometry === wetMesh.geometry, true)
+  check('it is a second draw of the object, not a new object',
+    twin.material === wetMesh.material, false)
+  check('GreaterDepth: it draws only where the normal pass LOST',
+    twin.material.depthFunc, THREE.GreaterDepth)
+  check('it writes no depth and can occlude nothing',
+    twin.material.depthWrite, false)
+  check('water-tinted, transparent at 0.4',
+    [twin.material.transparent, twin.material.opacity],
+    [true, WATER_GHOST_OPACITY])
+  check('after the opaque terrain AND after the object itself',
+    twin.renderOrder, 2)
+  check('it casts no shadow', [twin.castShadow, twin.receiveShadow],
+    [false, false])
+
+  // A rising lake moves the CUT and rebuilds nothing.
+  wetGhost.set(ghostCutY(BOTTOM, 3.9))
+  check('a rising lake moves the cut', wetGhost.cutY, 3.9)
+  check('…and builds no second ghost', wetGhost.count, 1)
+  // A drained lake hides it and KEEPS it: a prop the water leaves and covers
+  // again must not rebuild geometry (the same rule a figure wading through a
+  // ford lives by).
+  wetGhost.set(ghostCutY(BOTTOM, 3.02))
+  check('a drained lake hides the ghost', wetGhost.visible, false)
+  check('…without destroying it', wetGhost.count, 1)
+  check('…and the mesh under the object stays hidden',
+    wetGhost.parts[0].visible, false)
+  wetGhost.set(ghostCutY(BOTTOM, 3.4))
+  check('and it comes back on with the water', wetGhost.visible, true)
+
+  // --- isolation toggle 22 covers the object ghosts too --------------------
+  // ONE FAMILY: with the water surface switched off there is nothing for a
+  // second draw to be BEHIND, so a ghost left standing would show a blue crate
+  // through the nearest hill. The switch is world-wide and reaches ghosts that
+  // are ALREADY standing — a prop is gated once at placement time and would
+  // otherwise keep the ghost the switch has just turned off.
+  check('the switch starts off', waterGhostOff(), false)
+  setWaterGhostOff(true)
+  check('toggle 22 hides a standing object ghost', wetGhost.visible, false)
+  check('…the mesh with it', wetGhost.parts[0].visible, false)
+  // …and something placed WHILE it is on comes up ghost-less.
+  const duringMesh = boxOf(1, 1, 1)
+  const duringGhost = new SubmergedGhost(duringMesh)
+  duringGhost.set(ghostCutY(BOTTOM, 3.4))
+  check('RED: a prop placed while 22 is on builds nothing',
+    duringGhost.count, 0)
+  setWaterGhostOff(false)
+  check('turning 22 off gives the standing ghost back', wetGhost.visible, true)
+  check('…and builds the one that was placed meanwhile',
+    [duringGhost.count, duringGhost.visible], [1, true])
+
+  // --- disposal ------------------------------------------------------------
+  // A dropped prop takes its ghost with it: the materials are the ghost's own,
+  // and the registration is what the toggle above walks.
+  duringGhost.dispose()
+  check('dispose unhooks the ghost from the object',
+    duringMesh.children.length, 0)
+  check('…and empties the set', duringGhost.count, 0)
+  wetGhost.dispose()
+  check('the geometry it SHARED is untouched by that',
+    wetMesh.geometry.attributes.position.count > 0, true)
 
   console.log(FAILED.length
     ? `\nFAILED (${FAILED.length}): ${FAILED.join(', ')}`

@@ -506,6 +506,35 @@ export function submergedInWater(bedY: number,
   return waterLevel - bedY >= WATER_GHOST_FROM_M;
 }
 
+/**
+ * THE GATE AND ITS ANSWER IN ONE — the whole decision behind every underwater
+ * ghost there is (`scene/submergedGhost.ts`).
+ *
+ * `baseY` is the world Y the thing STANDS ON — a figure's bed
+ * (`scene/npcs.ts`), a world prop's `worldPropBottom`, a scene placement's
+ * `tile.center.y + bottom_y + lift` — and `waterLevel` the mirror over the very
+ * same point, `null` where the point is dry. The answer is what the ghost cuts
+ * itself off at: the LEVEL where there is water over the base, `null` where
+ * there is not.
+ *
+ * It exists because the pair "is it submerged" + "at which line" was written
+ * out at every gate site, and a second copy of `x ? level : null` is how one of
+ * them ends up handing in the gated level, or a boolean, or the bed.
+ *
+ * Hand values (threshold {@link WATER_GHOST_FROM_M} = 0.05 m):
+ *
+ *     base 12.00, water null   -> null    (dry ground: no water at all)
+ *     base 12.00, water 11.90  -> null    (the mirror is UNDER the base)
+ *     base 12.00, water 12.04  -> null    (4 cm: the look has not faded in)
+ *     base 12.00, water 12.05  -> 12.05   (5 cm: the rim ramp is up)
+ *     base 12.00, water 12.60  -> 12.60   (a crate on a knee-deep ford's bed)
+ *     base 12.00, water NaN    -> null    (a raster that knows nothing is dry)
+ */
+export function ghostCutY(baseY: number,
+                          waterLevel: number | null): number | null {
+  return submergedInWater(baseY, waterLevel) ? waterLevel : null;
+}
+
 /** The reach rule BOTH ground clips share, in one place: outside a built
  *  place the ground may name a clip, inside it never does, and a blank name
  *  is no name. Two copies of this is how one of them starts reaching further

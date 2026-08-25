@@ -82,7 +82,7 @@ import type { Point2, ScatterFootprint, ScatterInstance,
 import { fetchHeightfield, fetchHeightTiles, fetchHeightTileStats, fetchTerrain,
   fetchTerrainLayers } from '../api';
 import type { HeightTileBatch, HeightTileStatsBatch } from '../api';
-import { emptyWaterRaster, waterTileFrom } from './waterRaster';
+import { emptyWaterRaster, rasterLevelAt, waterTileFrom } from './waterRaster';
 import { localToWorld } from '../game/enterLocation';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import { sanitizePolygon } from '../game/polygon';
@@ -94,7 +94,7 @@ import type { MapLocation, TerrainArea, TerrainPayload,
   WorldBounds } from '../types';
 import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
-import { hasSurfaceTexture, setWorldGround, surfaceFor,
+import { hasSurfaceTexture, setWorldGround, setWorldWater, surfaceFor,
   surfaceMaterialSpec } from './tiles';
 import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
   releaseImpostor } from './impostors';
@@ -775,6 +775,22 @@ export interface Ground {
    * level.
    */
   heightAt(x: number, z: number): number;
+  /**
+   * The DRAWN water surface over a point in world metres, or `NaN` where this
+   * point carries no water — the mirror twin of {@link heightAt}, and read the
+   * same way by everything that has to know where the waterline is.
+   *
+   * It is `waterRaster.rasterLevelAt` and nothing else: the very lattice the
+   * terrain's water variant lifts its vertices onto (K-A E2/E3), so the line
+   * this answers is the line the player sees. A point in a tile that has not
+   * arrived is dry, which is what a renderer must draw — a mirror invented from
+   * a coarse raster would be a surface no lattice of the model describes.
+   *
+   * Its readers are the underwater ghosts (`scene/submergedGhost.ts`): the
+   * world props gate their own placements on it and the scene recipe gets it
+   * through the tiles' water hook.
+   */
+  waterLevelAt(x: number, z: number): number;
   // `maxHeightIn` and `heightRangeIn` — the highest ground inside a world
   // rectangle and how much it moves there — went with the veil (contract v6
   // Nr. 8): they existed to hang the fog quads and to decide which of them was
@@ -1162,6 +1178,21 @@ export function createGround(): Ground {
   // sampler is a closure over `relief`, so it stays correct across every
   // refetch without anyone re-registering it.
   setWorldGround(heightAt);
+
+  /** THE DRAWN WATER over a point (K-A E2) — the twin of `heightAt` and the
+   *  ONE water level anything standing in the world is gated against. A closure
+   *  over `waterRaster`, so it stays correct across every tile arrival and
+   *  eviction without anyone re-registering it. */
+  //  Named `waterAt` and exposed as `waterLevelAt`: the module already imports
+  //  a `waterLevelAt` from `waterPlaneMath` (an area PROFILE evaluated at a
+  //  point, which is what `typeAt` reads), and shadowing that inside this
+  //  closure would silently hand `typeAt` the wrong function.
+  const waterAt = (x: number, z: number): number =>
+    rasterLevelAt(waterRaster, x, z);
+
+  // …and the same hook for the SCENE placements (`scene/sceneRecipe.ts`), which
+  // reach the ground through `tiles.ts` rather than through this object.
+  setWorldWater(waterAt);
 
   /**
    * THE TERRAIN ITSELF — one instanced patch, a quadtree, and the height taken
@@ -3223,6 +3254,7 @@ export function createGround(): Ground {
                                { minY: fieldRange.min, maxY: fieldRange.max });
       return hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
     },
+    waterLevelAt: waterAt,
     heightRevision: () => heightRev,
     // THE OVERVIEW FIELD ITSELF, for the readers that draw the relief instead
     // of standing on it (the minimap's hillshade). The overview and nothing

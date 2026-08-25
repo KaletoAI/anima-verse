@@ -7,7 +7,7 @@ import {
   resolveClipName,
 } from './clipCoverage';
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
-import { waterTintRgb } from './waterShade';
+import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
 
@@ -25,64 +25,6 @@ import { getAnimationClips, getCharacterModel } from '../api';
  *  scales a figure at all. Do NOT put it back to 1.75: the admin preview and
  *  the prop/diorama scales are all worked out against 1.70. */
 export const BASE_FIGURE_HEIGHT_M = 1.70;
-
-/**
- * THE UNDERWATER GHOST — the second draw that gives a wading figure a body
- * below the waterline (finding H3, 2026-08-25).
- *
- * ── THE DEFECT ──────────────────────────────────────────────────────────────
- * Since Wasser v2 K-A the water surface IS the terrain, and the terrain is
- * OPAQUE. A figure standing in a river is therefore cut clean off at the
- * waterline: everything below it lost the depth test against the ground and
- * was never drawn. The body does not read as "standing IN water", it reads as
- * buried — legs simply gone, the torso sprouting from a flat blue plane.
- *
- * ── THE FIX, AND WHY IT IS A SECOND DRAW AND NOT TRANSPARENCY ───────────────
- * Making the water itself transparent would mean sorting it against every
- * figure, every prop and every other water pixel in the world — a second,
- * blended pass over the whole terrain, which is exactly what K-A deleted. The
- * cheap and local answer is to draw the FIGURE twice: once normally, and once
- * more with `depthFunc: GreaterDepth`, which draws ONLY where the normal pass
- * LOST the depth test — i.e. only the part hidden behind something, which for
- * a figure in water is the submerged part. The ghost writes no depth, carries
- * the water's own tint at {@link WATER_GHOST_OPACITY}, and being `transparent`
- * it renders after every opaque object, the terrain included.
- *
- * ── WHAT IT COSTS, AND WHO PAYS ─────────────────────────────────────────────
- * The ghost meshes SHARE the original geometry and — for a rigged figure —
- * the original `THREE.Skeleton`, so the animation drives both without a second
- * mixer, a second clone or a second bone texture; only the material is new.
- * They are built lazily on the first submersion and hidden, never destroyed,
- * afterwards. A figure on dry land costs one boolean per frame.
- *
- * ── THE ONE ARTEFACT, NAMED ─────────────────────────────────────────────────
- * "Behind something" is not "behind water": a gated figure that walks behind a
- * building would show its ghost through the wall. The gate is what keeps that
- * rare — only a figure whose bed really stands under a water level gets a
- * ghost at all (`walk.submergedInWater`), and such a figure is in the open by
- * definition. Isolation toggle 22 ("Water off") takes the ghost with it, for
- * the same reason it takes the lift and the shading: without a water surface
- * there is nothing for the ghost to be behind.
- */
-export const WATER_GHOST_OPACITY = 0.4;
-
-/** Toggle 22's reach into the figures (`debug3d.ts`). Module state and not a
- *  per-figure flag: the switch is world-wide, and a figure created while it is
- *  on must come up ghost-less too. */
-let waterGhostOff = false;
-
-/** Isolation toggle 22 — hide every underwater ghost. */
-export function setWaterGhostOff(off: boolean): void {
-  waterGhostOff = off;
-}
-
-let ghostAnchorWarned = false;
-function warnGhostAnchor(): void {
-  if (ghostAnchorWarned) return;
-  ghostAnchorWarned = true;
-  console.warn('[figures] the underwater ghost found no shader anchor — the '
-    + 'waterline cut is not compiled in (three chunk renamed?)');
-}
 
 interface ManifestModel {
   name: string;
@@ -1260,15 +1202,11 @@ export class Figure {
    *  but this number, and the figure still has to sink — and so does stopping
    *  in the same lake, where the swimmer's depth gives way to the treader's. */
   private sink = 0;
-  /** The second draw of every mesh of this figure, or an empty list while the
-   *  figure has never been in water. See {@link WATER_GHOST_OPACITY}. */
-  private ghosts: THREE.Mesh[] = [];
-  private ghostsBuilt = false;
-  private submerged = false;
-  /** The world Y the ghost cuts itself off at — ONE object shared by every
-   *  ghost material of this figure, so `setSubmerged` writes the waterline
-   *  once per frame instead of once per mesh. */
-  private ghostCutY = { value: 0 };
+  /** The figure's underwater ghost (`scene/submergedGhost.ts`) — the SAME
+   *  mechanism a submerged prop gets, which is why it is not built here any
+   *  more. It builds nothing until the first submersion, so a figure that never
+   *  gets its feet wet costs one object. */
+  private readonly ghost = new SubmergedGhost(this.root);
 
   constructor(model: LoadedModel) {
     this.height = model.height;
@@ -1416,127 +1354,25 @@ export class Figure {
   }
 
   /**
-   * WHERE THE WATER STANDS OVER THIS FIGURE — the one call that switches the
-   * underwater ghost on and off (finding H3). `null` means dry; a number is the
-   * WORLD Y of the water surface at the figure's own feet.
+   * WHERE THE WATER STANDS OVER THIS FIGURE — `null` means dry; a number is the
+   * WORLD Y of the water surface at the figure's own feet (finding H3).
    *
-   * The DECISION is the caller's (`walk.submergedInWater` over the ground word
-   * `npcs.ts` already asks for every figure every frame); this method only owns
-   * the meshes. The level itself is needed as well, and not merely a boolean —
-   * see {@link buildGhosts} for what the ghost cuts itself off at.
-   *
-   * Cheap on the dry path on purpose: a figure that has never been in water
-   * builds nothing, and one that has keeps its ghosts hidden rather than
-   * losing them — wading in and out of a ford must not rebuild geometry.
+   * Both halves are somebody else's: the DECISION is the caller's
+   * (`walk.ghostCutY` over the bed and the mirror `npcs.ts` asks for every
+   * figure every frame), and the MESHES are `scene/submergedGhost.ts`, which
+   * builds the same second draw for a submerged prop. What is left here is the
+   * name the walk loop calls.
    */
   setSubmerged(waterLevel: number | null) {
-    const want = waterLevel !== null && Number.isFinite(waterLevel)
-      && !waterGhostOff;
-    if (want) this.ghostCutY.value = waterLevel as number;
-    if (want === this.submerged) return;
-    this.submerged = want;
-    if (want && !this.ghostsBuilt) this.buildGhosts();
-    for (const g of this.ghosts) g.visible = want;
+    this.ghost.set(waterLevel);
   }
 
-  /**
-   * One ghost per mesh, sharing its geometry and (rigged) its skeleton. Runs at
-   * most once per figure, the first time it steps into water.
-   *
-   * ── AND WHY THE GHOST CUTS ITSELF OFF AT THE WATERLINE ──────────────────────
-   * `GreaterDepth` alone says "draw where the normal pass lost the depth test",
-   * and a figure loses that test against more than the water: it loses it
-   * against ITSELF. At a pixel where an arm stands in front of the torso the
-   * depth buffer holds the arm, so the torso's own front-facing surface behind
-   * it is GREATER and the ghost paints a blue patch onto the arm — on the DRY
-   * half of a wading figure, which is precisely the half that must look normal.
-   *
-   * So the fragment discards everything above `uGhostCutY`, the world Y of the
-   * water surface handed in by {@link setSubmerged}. Below that line the figure
-   * is hidden by the opaque water anyway, so a self-overlap there is ghost over
-   * ghost and invisible; above it there is now no second draw at all. The two
-   * conditions compose exactly right at the shore, where the drawn surface
-   * ramps BELOW the nominal level (finding G1): a shin standing in front of the
-   * ramp still fails GreaterDepth and keeps its ordinary look.
-   */
-  private buildGhosts() {
-    this.ghostsBuilt = true;
-    const tint = waterTintRgb(undefined);
-    const cut = this.ghostCutY;
-    const source: THREE.Mesh[] = [];
-    this.root.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) source.push(m);
-    });
-    for (const src of source) {
-      const mats = Array.isArray(src.material) ? src.material : [src.material];
-      const first = mats[0] as THREE.MeshStandardMaterial | undefined;
-      const mat = new THREE.MeshBasicMaterial({
-        // The figure's own texture, MULTIPLIED by the water tint — a silhouette
-        // alone reads as a shadow, the tinted texture reads as a body seen
-        // through water. setRGB and not setHex: these are the very numbers the
-        // water shader writes into `look0.rgb`, i.e. already working-space.
-        map: first?.map ?? null,
-        color: new THREE.Color().setRGB(tint[0], tint[1], tint[2]),
-        transparent: true,
-        opacity: WATER_GHOST_OPACITY,
-        // DRAW ONLY WHERE THE NORMAL PASS LOST — the whole trick. And write no
-        // depth, so the ghost can never occlude anything itself.
-        depthFunc: THREE.GreaterDepth,
-        depthWrite: false,
-        side: first?.side ?? THREE.FrontSide,
-      });
-      mat.onBeforeCompile = (shader) => {
-        shader.uniforms.uGhostCutY = cut;
-        // A three upgrade that renames either chunk would leave the cut out
-        // and the ghost would bleed over the dry half of a wader — say so
-        // rather than shipping the artefact silently.
-        if (!shader.vertexShader.includes('#include <fog_vertex>')
-            || !shader.fragmentShader.includes('#include <clipping_planes_fragment>')) {
-          warnGhostAnchor();
-        }
-        // The world Y of the SKINNED vertex: `transformed` carries the pose by
-        // the time <fog_vertex> runs (skinning writes it), and modelMatrix
-        // takes it to world space — the very two lines three's own
-        // <worldpos_vertex> uses, spelled here because that chunk is compiled
-        // out unless an envmap or a shadow asks for it.
-        shader.vertexShader = `varying float vGhostY;\n${shader.vertexShader}`
-          .replace('#include <fog_vertex>',
-            '#include <fog_vertex>\n\tvGhostY = ( modelMatrix * vec4( transformed, 1.0 ) ).y;');
-        shader.fragmentShader = `varying float vGhostY;\nuniform float uGhostCutY;\n${shader.fragmentShader}`
-          .replace('#include <clipping_planes_fragment>',
-            '#include <clipping_planes_fragment>\n\tif ( vGhostY > uGhostCutY ) discard;');
-      };
-      // One program for every ghost in the world, however many figures wade.
-      mat.customProgramCacheKey = () => 'av-water-ghost';
-      const skin = src as THREE.SkinnedMesh;
-      let ghost: THREE.Mesh;
-      if (skin.isSkinnedMesh) {
-        const s = new THREE.SkinnedMesh(skin.geometry, mat);
-        s.bindMode = skin.bindMode;
-        // The SAME skeleton object: the mixer that poses the original poses
-        // this one in the same breath, and no second bone texture is uploaded.
-        s.bind(skin.skeleton, skin.bindMatrix);
-        ghost = s;
-      } else {
-        ghost = new THREE.Mesh(src.geometry, mat);
-      }
-      ghost.castShadow = false;
-      ghost.receiveShadow = false;
-      // The original carries frustumCulled = false for the skinned-bounds
-      // reason; the ghost shares its geometry and must share that too.
-      ghost.frustumCulled = false;
-      // After the terrain by virtue of being transparent, and after the
-      // figure's own draw by virtue of this — the ghost is a correction on top
-      // of the normal pass, never a thing that stands on its own.
-      ghost.renderOrder = 2;
-      ghost.visible = false;
-      // A CHILD of the mesh it doubles, with no transform of its own: the
-      // world matrix is then the original's, bit for bit, which is what the
-      // shared bind matrix assumes.
-      src.add(ghost);
-      this.ghosts.push(ghost);
-    }
+  /** Give this figure's underwater ghost up — called where the figure leaves
+   *  the scene (`NpcLayer`). Everything else the figure owns is shared with the
+   *  model template and outlives it; the ghost's materials are its own, and its
+   *  registration is what toggle 22 walks. */
+  dispose() {
+    this.ghost.dispose();
   }
 
   faceTowards(dir: THREE.Vector3) {

@@ -31,6 +31,8 @@ import type { SceneModelSpec } from '@anima/scene-render';
 import { loadGlb } from './propAssets';
 import { instanceTier, SCATTER_LOD_DEFAULTS } from './scatterLod';
 import type { InstanceTier, ScatterLodCfg } from './scatterLod';
+import { SubmergedGhost } from './submergedGhost';
+import { ghostCutY } from '../game/walk';
 import type { WorldPropSpec } from '../types';
 
 /**
@@ -84,6 +86,10 @@ interface PropRecord {
   shownUrl: string;
   wantedUrl: string;
   tier: InstanceTier;
+  /** Der Unterwasser-Geist dieses Props (`scene/submergedGhost.ts`), oder null
+   *  solange nichts steht. Er gehört dem NODE: ein Tier-Wechsel wirft das Mesh
+   *  weg und damit den Geist, der nächste Mount baut ihn neu. */
+  ghost: SubmergedGhost | null;
 }
 
 export interface WorldPropsLayer {
@@ -134,8 +140,19 @@ function shapeKey(wp: WorldPropSpec): string {
     wp.variant ?? '', JSON.stringify(wp.variants || {})].join('|');
 }
 
+/**
+ * @param heightAt the world ground under a point, in metres
+ * @param waterAt  the DRAWN water surface over that point (`NaN` = dry) — the
+ *                 raster twin of `heightAt` (`ground.waterLevelAt`). It decides
+ *                 nothing but the underwater ghost: a prop whose base stands
+ *                 under the local water level is redrawn tinted below the
+ *                 waterline, so a sunken crate or a jetty post is visible
+ *                 through the opaque surface. A layer built without it simply
+ *                 has no ghosts.
+ */
 export function createWorldProps(
   heightAt: (x: number, z: number) => number,
+  waterAt?: (x: number, z: number) => number,
 ): WorldPropsLayer {
   const group = new THREE.Group();
   group.name = 'world-props';
@@ -144,9 +161,23 @@ export function createWorldProps(
   let loadedSig = '';
   let disposed = false;
 
+  /** The water over ONE prop's base, or null where it stands dry — the one
+   *  gate of the underwater ghost (`walk.ghostCutY`, `scene/submergedGhost`).
+   *  It is asked at PLACEMENT time and on every beat that re-seats a placement,
+   *  never per frame: a world prop does not move, and what moves under it (the
+   *  height field and the water raster) arrives exactly on those beats. */
+  function ghostLevelOf(rec: PropRecord, bottom: number): number | null {
+    return waterAt ? ghostCutY(bottom, waterAt(rec.spec.x, rec.spec.z)) : null;
+  }
+
   function drop(rec: PropRecord): void {
     if (!rec.node) return;
     group.remove(rec.node);
+    // The ghost first: its materials are its own, and its registration is what
+    // isolation toggle 22 walks. Its GEOMETRY is the node's and is disposed
+    // with the node below.
+    rec.ghost?.dispose();
+    rec.ghost = null;
     // Die Quelle kommt aus dem GLB-Cache und wird von `placeModelSpec`
     // geklont — hier hängt also eine eigene Kopie, deren Geometrien und
     // Materialien niemand sonst benutzt.
@@ -186,6 +217,12 @@ export function createWorldProps(
       rec.node = node;
       rec.placedBottom = bottom;
       rec.shownUrl = url;
+      // …and here is where a SUNKEN prop gets its second draw. Right after the
+      // seat, on the very bottom that was just computed: a crate on a lake bed
+      // is invisible without it, because the water surface IS the opaque
+      // terrain since K-A. Dry ground builds nothing at all.
+      rec.ghost = new SubmergedGhost(node);
+      rec.ghost.set(ghostLevelOf(rec, bottom));
       node.visible = rec.tier !== 2;
       group.add(node);
     });
@@ -207,6 +244,7 @@ export function createWorldProps(
       if (!cur) {
         records.set(wp.id, {
           spec: wp, node: null, placedBottom: 0, shownUrl: '', wantedUrl: '',
+          ghost: null,
           // Als „low" hereinkommen und vom LOD-Takt einsortieren lassen: der
           // Takt weiß, wo die Kamera steht, dieser Poll nicht.
           tier: 1,
@@ -243,6 +281,11 @@ export function createWorldProps(
     rec.node.userData.anchorX = rec.spec.x;
     rec.node.userData.anchorZ = rec.spec.z;
     rec.placedBottom = bottom;
+    // The prop moved (a new relief, a moved row), so the water over its base is
+    // a new question — this is the second of the two beats the ghost is gated
+    // on. A prop lifted out of a lake loses its ghost here; one the rising
+    // relief pushed under keeps the same meshes and only the cut moves.
+    rec.ghost?.set(ghostLevelOf(rec, bottom));
   }
 
   function redrape(): void {

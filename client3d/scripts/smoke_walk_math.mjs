@@ -909,7 +909,7 @@ async function main() {
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
     groundScope, wadeGate, swimFrom, SWIM_FROM_DEFAULT_M, MIN_PACE,
-    submergedInWater, WATER_GHOST_FROM_M,
+    submergedInWater, ghostCutY, WATER_GHOST_FROM_M,
     MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
@@ -1432,6 +1432,68 @@ async function main() {
     check('a swimmer is submerged through both readings',
       submergedInWater(BED, wadeGate({ ...FORD, water: 13.5 }, BED, 1.0).water)
         && submergedInWater(BED, groundWaterLevel(13.5, 'wilderness')), true);
+  }
+
+  // --- ghostCutY: the same gate, and the LINE it answers --------------------
+  // WHY IT EXISTS. Every ghost site needs the pair "is it submerged" AND "at
+  // which world Y does the second draw stop" — the ghost discards everything
+  // above `uGhostCutY`, so a boolean is not enough. That pair used to be
+  // written out as `submergedInWater(b, l) ? l : null` at each site, and since
+  // the user decision of 2026-08-25 there are four of them and not two: the two
+  // figure sites in `scene/npcs.ts`, the world props (`scene/worldProps.ts`,
+  // mount + redrape) and the scene placements (`scene/sceneRecipe.ts`, mount +
+  // reliftScene + tier swap). One function, so none of them can hand in the
+  // GATED level, a boolean, or the bed.
+  //
+  // The table is the one above, read as a cut line — no new threshold, no new
+  // rule. `base` is what the thing STANDS ON: a figure's bed, a world prop's
+  // `worldPropBottom`, a scene placement's `tile.center.y + bottom_y + lift`.
+  //
+  //     base 12.00, water null   -> null    (dry ground)
+  //     base 12.00, water 11.90  -> null    (mirror UNDER the base)
+  //     base 12.00, water 12.00  -> null    (exactly the waterline)
+  //     base 12.00, water 12.04  -> null    (4 cm)
+  //     base 12.00, water 12.05  -> 12.05   (5 cm: the rim ramp is up)
+  //     base 12.00, water 12.60  -> 12.60   (a crate on a knee-deep ford's bed)
+  //     base 12.00, water NaN    -> null    (a raster that knows nothing)
+  console.log('ghostCutY — the gate and the waterline it cuts at');
+  {
+    const BASE = 12.0;
+    check('dry ground: no cut and no ghost', ghostCutY(BASE, null), null);
+    check('a mirror UNDER the base is not water over the object',
+      ghostCutY(BASE, 11.9), null);
+    check('exactly at the waterline: nothing is cut off yet',
+      ghostCutY(BASE, 12.0), null);
+    check('4 cm, still under the rim ramp', ghostCutY(BASE, 12.04), null);
+    check('5 cm: the cut is the water level itself',
+      ghostCutY(BASE, 12.05), 12.05);
+    check('a crate on the bed of a 0.6 m ford cuts at 12.60',
+      ghostCutY(BASE, 12.6), 12.6);
+    check('a jetty post whose base lies 1.5 m down cuts at 13.50',
+      ghostCutY(BASE, 13.5), 13.5);
+    check('a raster with nothing to say is dry', ghostCutY(BASE, NaN), null);
+    check('...and so is a base nobody could measure',
+      ghostCutY(NaN, 13.5), null);
+    // The cut is the LEVEL and never the base: a ghost cut at its own base
+    // would discard the whole submerged half — i.e. exactly the half it exists
+    // to draw — and show only the dry part it must not touch.
+    check('RED: the cut is not the base', ghostCutY(BASE, 12.6) === BASE,
+      false);
+    // A PROP is gated on the very same numbers a figure is. Hand case, § A9a:
+    // ground 2.50 m, offset_y 0.5 -> bottom 3.00; a lake standing at 3.40 m
+    // over it is 0.40 m of water, so the cut is 3.40. Lower the lake to 3.02
+    // and the 2 cm left are under the rim ramp: no ghost.
+    check('a world prop on a 2.5 m bed, lake at 3.40 -> cut 3.40',
+      ghostCutY(2.5 + 0.5, 3.4), 3.4);
+    check('...the same prop with 2 cm of water over it -> none',
+      ghostCutY(2.5 + 0.5, 3.02), null);
+    // A SCENE placement's base is `tile.center.y + bottom_y + lift` (§ A16.9):
+    // datum -2.00, bottom_y -0.28, lift +2.335 -> 0.055. A lake at 0.30 stands
+    // 0.245 m over it, so the cut is 0.30; at 0.09 it is 0.035 m and dry.
+    check('a scene placement at 0.055 under a lake at 0.30 -> cut 0.30',
+      ghostCutY(-2.0 + -0.28 + 2.335, 0.3), 0.3);
+    check('...and 3.5 cm of water over the same placement -> none',
+      ghostCutY(-2.0 + -0.28 + 2.335, 0.09), null);
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

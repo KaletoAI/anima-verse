@@ -20,8 +20,11 @@ import { wantsRecipeShell } from './shellPlan';
 import {
   deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld, worldGroundSampler,
+  worldWaterSampler,
   type PlacedSceneModel, type RoomFloor, type Tile,
 } from './tiles';
+import { SubmergedGhost } from './submergedGhost';
+import { ghostCutY } from '../game/walk';
 
 /** Which resolution tier a mount loads, per model group. `building` = the
  *  far-view shell/area model, `interior` = everything else (dioramas, props).
@@ -62,6 +65,62 @@ function reliftPlacement(tile: Tile, rec: PlacedSceneModel): number {
   if (rec.object && step.delta) rec.object.position.y += step.delta;
   rec.lift = step.lift;
   return step.lift;
+}
+
+/**
+ * IS THIS PLACEMENT STANDING IN WATER — the gate of its underwater ghost
+ * (`scene/submergedGhost.ts`, user decision 2026-08-25).
+ *
+ * The occasion is the same defect the figures had: since Wasser v2 K-A the
+ * water surface IS the opaque terrain, so a crate on a lake bed, a jetty post
+ * or a fish prop is cut clean off at the waterline and mostly simply gone. The
+ * fix is the FIGURES' fix, one module for both — a tinted `GreaterDepth`
+ * redraw below the line.
+ *
+ * TWO NUMBERS, and both are already computed elsewhere:
+ *  - the BASE. `bottom_y` is where `place()` seats the object's lowest point,
+ *    and `lift` is what § A16.9 then moved it by; both are TILE-LOCAL, so
+ *    `tileToWorld` turns the anchor by the footprint yaw and adds the datum.
+ *    That is the very y the object is standing at, not a second measurement of
+ *    its bounding box.
+ *  - the WATER. `worldWaterSampler()` is the raster the terrain draws its own
+ *    surface from (K-A E2/E3), so the line the ghost cuts at is the line the
+ *    player sees. `NaN` where nothing knows of water, which the gate reads as
+ *    dry.
+ *
+ * IT IS CALLED AT PLACEMENT TIME, NOT PER FRAME. A prop does not move; what
+ * moves under it is the height field and the water raster, and those arrive on
+ * exactly the beats that already re-seat a placement — the mount, `reliftScene`
+ * on the height revision, and the tier swap. Per-frame gating would be one
+ * raster read per prop per frame for an answer that changes twice a session.
+ *
+ * A BUILDING/GROUND MODEL IS NOT GATED, for the same reason § A16.9 does not
+ * lift it: it IS the plot rather than something standing on it, so "the water
+ * over its base" is not a question about it, and a ghost spanning a whole
+ * footprint would be a blue slab under the lake.
+ */
+function refreshPlacementGhost(tile: Tile, rec: PlacedSceneModel): void {
+  if (rec.spec.role === 'building' || !rec.object) return;
+  const water = worldWaterSampler();
+  if (!water) return;
+  const w = tileToWorld(tile, rec.spec.anchor[0], rec.spec.anchor[1],
+                        rec.spec.bottom_y + rec.lift);
+  const level = ghostCutY(w.y, water(w.x, w.z));
+  if (!rec.ghost) {
+    // Nothing is built for a dry placement — no object, no meshes, no
+    // registration. That is the red probe of the smoke.
+    if (level === null) return;
+    rec.ghost = new SubmergedGhost(rec.object);
+  }
+  rec.ghost.set(level);
+}
+
+/** Give a placement's ghost up — wherever its OBJECT goes (an unmount, a tier
+ *  swap). The materials are the ghost's own and its registration is what
+ *  isolation toggle 22 walks. */
+function dropPlacementGhost(rec: PlacedSceneModel): void {
+  rec.ghost?.dispose();
+  rec.ghost = undefined;
 }
 
 /**
@@ -119,6 +178,11 @@ export function reliftScene(tile: Tile, datumDelta = 0): void {
     const before = rec.lift;
     const lift = reliftPlacement(tile, rec);
     if (lift !== before) moved = true;
+    // …and the WATER over the seat this placement now has. Same beat, same
+    // reason: the height tiles and the water raster arrive together (they ride
+    // in one tile payload), so the height revision that re-lifts an object is
+    // also the moment its waterline first becomes knowable.
+    refreshPlacementGhost(tile, rec);
     if (rec.spec.role === 'room' && rec.spec.walk_y_world !== undefined
         && rec.spec.room_id) {
       walkY.set(rec.spec.room_id, rec.spec.walk_y_world + lift);
@@ -1053,6 +1117,13 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   }));
   if (stale()) return null;
 
+  // THE UNDERWATER GHOSTS of this mount, once the whole ledger stands (user
+  // decision 2026-08-25). One pass instead of a call inside each of the three
+  // placement branches above: the gate needs nothing but the record, and a
+  // placeholder box standing in a lake has to be redrawn exactly like the mesh
+  // it stands in for.
+  for (const rec of placements) refreshPlacementGhost(tile, rec);
+
   // …and the second occasion for the far-view shell: a payload that DECLARED a
   // building model whose mesh never loaded (and brought no placeholder either).
   // The place would otherwise be exactly as shapeless as one with no model at
@@ -1320,6 +1391,10 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       // its composed `bottom_y`, so a tier swap that happens after a height
       // tile arrived lands on the height that is now known instead of the one
       // that was.
+      // The ghost belongs to the MESH that is going away, so it goes with it —
+      // and the new one is gated below, on the same seat the re-lift just gave
+      // this record.
+      dropPlacementGhost(rec);
       rec.object = placed;
       rec.lift = 0;
       reliftPlacement(tile, rec);
@@ -1328,6 +1403,10 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       // …and the cut survives the tier swap, for the same reason the clip
       // does: it belongs to the PLACEMENT, not to the mesh that fills it.
       applyDepthCut(THREE, placed, rec.spec.cut_plane);
+      // …and so does the underwater ghost. LAST, after the clip and the cut,
+      // exactly as in the mount: those two rewrite the materials of everything
+      // they traverse, and the ghost's own material is not theirs to touch.
+      refreshPlacementGhost(tile, rec);
       if (old) {
         old.parent?.remove(old);
         disposeClipMaterials(old);
@@ -1493,6 +1572,11 @@ export function unmountScene(tile: Tile): void {
   // Cutout-Material-Klone der vorigen Szene freigeben (Muster
   // disposeClipMaterials — die Texturen sind mit dem Cache geteilt).
   tile.cutouts?.dispose();
+  // The underwater ghosts of this scene die with it: their materials are their
+  // own, and their registration is what isolation toggle 22 walks — a ghost
+  // left registered would keep a whole unmounted scene alive for the switch's
+  // sake.
+  for (const rec of tile.placedModels ?? []) dropPlacementGhost(rec);
   // Placement ledger of the old mount: gone with the scene — an in-flight
   // tier swap compares against this list and drops its answer.
   tile.placedModels = undefined;

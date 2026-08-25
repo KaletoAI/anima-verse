@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
-  groundWaterLevel, idleClip, moveClip, sinkForState, submergedInWater, wadeGate,
+  ghostCutY, groundWaterLevel, idleClip, moveClip, sinkForState, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
@@ -504,6 +504,9 @@ export class NpcManager {
     if (!npc) return;
     this.group.remove(npc.root);
     this.dropTravelLine(npc);
+    // …and the figure's own underwater ghost, whose materials are per figure
+    // and whose registration is what isolation toggle 22 walks.
+    npc.figure?.dispose();
     npc.label.element.remove();
     this.npcs.delete(charName);
   }
@@ -668,6 +671,7 @@ export class NpcManager {
       if (!seen.has(name) && name !== this.playerDriven) {
         this.group.remove(npc.root);
         this.dropTravelLine(npc);
+        npc.figure?.dispose();
         npc.label.element.remove();
         this.npcs.delete(name);
       }
@@ -962,9 +966,8 @@ export class NpcManager {
         // H3) — and on the UNGATED water level, because a wader is exactly the
         // figure the opaque surface cuts in half. `goalPos.y` is still the raw
         // BED here, three lines before it becomes the float height.
-        const ghostLevel = groundWaterLevel(raw.water, raw.scope);
-        npc.figure?.setSubmerged(submergedInWater(goalPos.y, ghostLevel)
-          ? ghostLevel : null);
+        npc.figure?.setSubmerged(
+          ghostCutY(goalPos.y, groundWaterLevel(raw.water, raw.scope)));
         const groundIdle = idleClip(gm.idle, raw.scope);
         const sinkM = groundSink(sinkForState(travelling, groundIdle, gm.sink),
                                  raw.scope);
@@ -1050,12 +1053,11 @@ export class NpcManager {
       // …and the UNDERWATER GHOST rides the same two numbers, but the UNGATED
       // water level (finding H3): `wadeGate` nulls the mirror below the kind's
       // swim depth because a wader keeps its own clips — and a wader is exactly
-      // the figure the opaque water surface cuts in half. `submergedInWater`
-      // is the whole decision; `Figure.setSubmerged` only owns the meshes, and
-      // takes the LEVEL because the ghost cuts itself off at the waterline.
-      const standGhostLevel = groundWaterLevel(standRaw.water, standRaw.scope);
-      npc.figure?.setSubmerged(
-        submergedInWater(standBedY, standGhostLevel) ? standGhostLevel : null);
+      // the figure the opaque water surface cuts in half. `ghostCutY` is the
+      // whole decision — the SAME one a submerged prop is gated by — and it
+      // answers the LEVEL, because the ghost cuts itself off at the waterline.
+      npc.figure?.setSubmerged(ghostCutY(standBedY,
+        groundWaterLevel(standRaw.water, standRaw.scope)));
       const standIdle = idleClip(standGm.idle, standRaw.scope);
       const standSink = groundSink(
         sinkForState(moving, standIdle, standGm.sink), standRaw.scope);

@@ -7,6 +7,7 @@ import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
   recipeFloorAt, roomSpotGrid, SPOT_FLAT_M, standY, WALK_CLEARANCE_M,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
+import type { SubmergedGhost } from './submergedGhost';
 
 // --- The FOOTPRINT of a location (contract v6 "Gebiete", § A1.1) -------------
 //
@@ -60,6 +61,35 @@ export function setWorldGround(sampler: (x: number, z: number) => number): void 
  *  which the lift reads as "no lift". */
 export function worldGroundSampler(): ((x: number, z: number) => number) | null {
   return worldGroundAt;
+}
+
+/** The world's WATER level over a point, or `null` while nothing has been taken
+ *  over — see `setWorldWater`. */
+let worldWaterAt: ((x: number, z: number) => number) | null = null;
+
+/**
+ * Take over the world's water sampler — the mirror twin of the ground hook.
+ *
+ * It answers the DRAWN water surface: `waterRaster.rasterLevelAt`, the very
+ * lattice the terrain's water variant lifts its vertices onto (K-A E2/E3), and
+ * `NaN` where no tile knows of water. Nothing else may be used for it — a
+ * placement gated against the painted area's profile while the picture is drawn
+ * from the raster would put a ghost's waterline somewhere the eye does not see
+ * one.
+ *
+ * Set by `scene/ground.ts`, which owns the raster. Read by `sceneRecipe.ts` to
+ * decide whether a placement stands under water (`walk.ghostCutY`,
+ * `scene/submergedGhost.ts`); a world with no water never registers anything
+ * interesting and every placement comes out dry, which is right.
+ */
+export function setWorldWater(sampler: (x: number, z: number) => number): void {
+  worldWaterAt = sampler;
+}
+
+/** The same sampler for consumers outside this module. `null` while none has
+ *  arrived, which every gate reads as "dry". */
+export function worldWaterSampler(): ((x: number, z: number) => number) | null {
+  return worldWaterAt;
 }
 
 /**
@@ -298,6 +328,13 @@ export interface PlacedSceneModel {
    *  difference needs the old value. 0 = no lift applied (a building model, a
    *  declared storey, a field that had nothing to say). */
   lift: number;
+  /** THE UNDERWATER GHOST of this placement (`scene/submergedGhost.ts`), or
+   *  absent while the object has never been gated. A prop whose base stands
+   *  under the local water level is redrawn tinted below the waterline, so a
+   *  crate on a lake bed or a jetty post is visible through the opaque water.
+   *  It belongs to the OBJECT: a tier swap replaces the mesh and the ghost with
+   *  it. */
+  ghost?: SubmergedGhost;
 }
 
 /**

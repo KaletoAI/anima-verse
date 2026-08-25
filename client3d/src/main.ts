@@ -693,8 +693,13 @@ async function startApp(username: string, role: string) {
   // nothing. The ground under each one is sampled with the SAME height sampler
   // the scatter stands on, which is why the layer is handed `heightAt` rather
   // than a `y` from the payload.
+  // …and the WATER over each one, from the raster the terrain draws its own
+  // surface from: a prop whose base stands under that level gets the underwater
+  // ghost (`scene/submergedGhost.ts`), so a sunken crate or a jetty post is
+  // visible through the opaque water instead of being cut off at the line.
   const worldPropsLayer = createWorldProps(
-    (x, z) => terrainGround.heightAt(x, z));
+    (x, z) => terrainGround.heightAt(x, z),
+    (x, z) => terrainGround.waterLevelAt(x, z));
   engine.scene.add(worldPropsLayer.group);
   gameActions.applyScatterPrefs = (p) => {
     const cfg = scatterLodCfgOf(p);
