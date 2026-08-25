@@ -64,7 +64,7 @@ export function ObserverTab() {
       if (mode === 'room') {
         if (!locId) { setLines([]); return }
         const q = new URLSearchParams({ location_id: locId, room_id: roomId })
-        const data = await apiGet<{ utterances: any[] }>(`/admin/observer/room?${q}`)
+        const data = await apiGet<{ utterances: Array<Omit<SceneLine, 'kind'>> }>(`/admin/observer/room?${q}`)
         setLines((data.utterances || []).map((u): SceneLine => ({
           ts: u.ts, speaker: u.speaker, content: u.content,
           addressees: u.addressees, volume: u.volume, kind: 'utterance',
@@ -72,7 +72,7 @@ export function ObserverTab() {
         })))
       } else {
         if (!charName) { setLines([]); return }
-        const data = await apiGet<{ perceptions: any[] }>(
+        const data = await apiGet<{ perceptions: Array<Pick<SceneLine, 'ts' | 'content' | 'kind' | 'meta'>> }>(
           `/admin/observer/character/${encodeURIComponent(charName)}/stream`)
         setLines((data.perceptions || []).map((p): SceneLine => ({
           ts: p.ts, content: p.content, kind: p.kind, meta: p.meta,

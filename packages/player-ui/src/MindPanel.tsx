@@ -26,7 +26,7 @@ interface DiaryEntry {
   timestamp: string
   end_timestamp?: string
   repeat_count?: number
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 }
 interface DiaryResponse {
   entries: DiaryEntry[]; types: Record<string, string>; icons: Record<string, string>
@@ -90,6 +90,8 @@ type HistoryKind = 'daily' | 'weekly' | 'monthly' | 'history' | 'evolution'
 // a calendar itself.
 interface HistoryDailyItem { date: string; label?: string; partner: string; content: string }
 interface HistoryPeriodItem { week?: string; month?: string; label?: string; content: string }
+type HistoryItem = HistoryDailyItem | HistoryPeriodItem | EvolutionItem
+interface HistoryResponse { total?: number; content?: string; items?: HistoryItem[] }
 interface EvolutionItem {
   ts: string; trigger: string; beliefs: string; lessons: string; goals: string
   diff: null | Record<'beliefs' | 'lessons' | 'goals', { removed: string[]; added: string[] }>
@@ -257,8 +259,8 @@ function LaneBand({ icon, label, lane, startMs, endMs }: {
 function Lanes24h({ lanes, nowIso }: { lanes?: Lanes24h; nowIso: string }) {
   const { t } = useI18n()
   if (!lanes) return null
-  const hasData = ['activity', 'location', 'mood', 'effects']
-    .some((k) => ((lanes as any)[k]?.points || []).length > 0)
+  const hasData = (['activity', 'location', 'mood', 'effects'] as const)
+    .some((k) => (lanes[k]?.points || []).length > 0)
   if (!hasData) return null
   const endMs = Date.parse(nowIso) || Date.now()
   const startMs = endMs - 24 * 3600 * 1000
@@ -458,8 +460,8 @@ function DiaryView({ character }: { character: string }) {
     setGenState('generating')
     try {
       await apiPost(`/diary/me/${enc}/summary`, date ? { date } : {})
-    } catch (err: any) {
-      const msg = String(err?.message || err)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
       if (msg.includes('409')) setGenState('exists')
       else if (msg.includes('404')) setGenState('empty')
       else setGenState('error')
@@ -729,14 +731,14 @@ function HistoryView({ character }: { character: string }) {
   const enc = encodeURIComponent(character)
   const LIMIT = 30
   const [kind, setKind] = useState<HistoryKind>('daily')
-  const [resp, setResp] = useState<any>(null)
-  const [items, setItems] = useState<any[]>([])
+  const [resp, setResp] = useState<HistoryResponse | null>(null)
+  const [items, setItems] = useState<HistoryItem[]>([])
   const [offset, setOffset] = useState(0)
 
   const load = async (newOffset: number, append: boolean) => {
     const params = new URLSearchParams({ kind, limit: String(LIMIT), offset: String(newOffset), lang })
     try {
-      const d = await apiGet<any>(`/characters/${enc}/memory/history?${params.toString()}`)
+      const d = await apiGet<HistoryResponse>(`/characters/${enc}/memory/history?${params.toString()}`)
       setResp(d)
       setItems((prev) => append ? [...prev, ...(d.items || [])] : (d.items || []))
       setOffset(newOffset)
@@ -820,7 +822,7 @@ function HistoryView({ character }: { character: string }) {
           ))
         ) : (
           <>
-            {items.map((it: HistoryDailyItem & HistoryPeriodItem, i: number) => (
+            {(items as Array<HistoryDailyItem & HistoryPeriodItem>).map((it, i) => (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2,
                                     padding: '4px 6px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
                 <div style={{ display: 'flex', gap: 8, fontSize: '0.74em', opacity: 0.55 }}>
