@@ -1984,6 +1984,49 @@ def _prop_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
     return {"status": "ok", "prop": prop}
 
 
+@router.post("/props/{prop_id}/bulk")
+async def prop_bulk_update(prop_id: str, request: Request) -> Dict[str, Any]:
+    """THE BATCH SAVE of the prop detail (body: ``{general?: {name?, category?,
+    tags?, sway_factor?}, variants?: {"<store index>": {dims?, description?,
+    ground_offset_m?, markers?, seasons?}}}``) — every field edit of one prop in
+    ONE request and ONE sidecar write.
+
+    The detail panel collects its field edits in a local draft and writes them
+    with one explicit Save, exactly as the map editor does (`core/bulk_edit.py`,
+    plan-map-save-batch.md). The single-value routes stay: they are the readable
+    API — one path, one kind of value — and this is the batch of the very same
+    sanitizers, never a second, laxer way in.
+
+    NOT in the batch, deliberately: everything that moves a FILE. Image render
+    and upload, mesh generation, gallery selection, the orientation fix and the
+    variant verbs (add / on-off / delete) stay immediate operations, because
+    they change what the mesh signature, the store indices and the running jobs
+    address — a draft of those would be a promise about files that do not exist
+    yet.
+
+    Answers with the saved record plus its variants, so the client adopts what
+    was really stored instead of believing its own draft. An unknown field, a
+    field that belongs to the variants or an index this prop has no variant for
+    is a 400 and NOTHING is written."""
+    data = await request.json()
+    return await asyncio.to_thread(_prop_bulk_update_sync, prop_id, data)
+
+
+def _prop_bulk_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_bulk_update`` — runs in the threadpool."""
+    from app.core.props import bulk_update, list_variants
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    try:
+        prop = bulk_update(prop_id, data.get("general"), data.get("variants"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not prop:
+        raise HTTPException(status_code=404, detail="Prop not found")
+    return {"status": "ok", "prop": prop,
+            "variants": list_variants(prop["id"])}
+
+
 @router.post("/props/{prop_id}/generate")
 async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     """Re-run the source→mesh chain for an EXISTING prop (body:

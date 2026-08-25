@@ -44,8 +44,18 @@
  * nothing and only make the other two lie about the mesh. An empty or
  * unusable field is therefore not a size at all: it snaps back to what is
  * stored, because a variant without a size is not a state that may exist.
+ *
+ * THE FIELDS ARE DRAFTED, THE VERBS ARE IMMEDIATE (2026-08-25). Size, subject,
+ * sink, seasons and markers go into the detail's change buffer
+ * (`pendingFields`) and reach the server when Save is pressed — which is why
+ * this strip posts none of them any more; it hands them up. Add, on/off and
+ * delete stay immediate: they change the store indices, the mesh signature and
+ * what a running generation addresses, and every file action beside them (mesh
+ * gallery, source image) speaks to the server about a variant that has to
+ * exist there. The `variants` this strip renders are the DRAFT list, so a
+ * typed number is on screen and in the 3D preview long before it is stored.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
 import { SliderInput } from '../../components/SliderInput'
@@ -82,10 +92,12 @@ const DESC_ROWS_REST = 5
 const DESC_ROWS_OPEN = 12
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
-  onChanged, generating = [], worldSeasons = [], currentSeason = '',
-  shownBbox = null, rotation }: {
+  onChanged, onEditVariant, onDeleted, generating = [], worldSeasons = [],
+  currentSeason = '', shownBbox = null, rotation }: {
   propId: string
-  /** Every variant, active or not, in order (from PropDetail's load). */
+  /** Every variant, active or not, in order — the DRAFT list (PropDetail's
+   *  load with the change buffer laid on top), so a field edit shows here and
+   *  in the preview at once. */
   variants: PropVariant[]
   /** Ceiling on ACTIVE variants — the "add" action's gate. */
   max: number
@@ -96,6 +108,14 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   /** Reload the variant list and the prop record (a variant changes both the
    *  strip and the prop's mesh signature). */
   onChanged: () => Promise<unknown>
+  /** Put one variant's field edit into the detail's change buffer — nothing is
+   *  written until Save. `patch` is a fragment of the batch body: `{dims}`,
+   *  `{description}`, `{ground_offset_m}` or `{seasons}`. */
+  onEditVariant: (index: number, patch: Record<string, unknown>) => void
+  /** A variant was really deleted on the server (STORE index). The detail
+   *  drops its pending fields and renumbers the ones behind it, exactly as the
+   *  server renumbered the list. */
+  onDeleted: (index: number) => void
   /** STORE indices with a generation in flight. Matched against a chip's own
    *  `index`, NOT against its position in this list: a switched-off variant
    *  keeps its index, so the two part company as soon as one is toggled off.
@@ -138,10 +158,6 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   const [descDraft, setDescDraft] = useState<Record<number, string>>({})
   const [descOpen, setDescOpen] = useState<number | null>(null)
   useEffect(() => { setDescDraft({}); setDescOpen(null) }, [propId])
-  // …and for the ground offset, whose write is debounced: the local number
-  // drives the field until the reload echoes it back (see `commitSink`).
-  const [sinkDraft, setSinkDraft] = useState<Record<number, number>>({})
-  useEffect(() => { setSinkDraft({}) }, [propId])
   // Arming is bound to an INDEX, and a delete renumbers everything behind it —
   // so any change of the list disarms rather than pointing at another variant.
   useEffect(() => { setArmedDel(null) }, [propId, variants.length])
@@ -182,17 +198,14 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   }, [enc, run, t])
 
   // Toggling ONE season on a variant: the chips are a set, and the server
-  // stores what it is sent — so the new set is computed here and posted whole.
+  // stores what it is sent — so the new set is computed here and drafted whole.
   const toggleSeason = useCallback((v: PropVariant, season: string) => {
     const has = v.seasons.some((s) => s.toLowerCase() === season.toLowerCase())
     const next = has
       ? v.seasons.filter((s) => s.toLowerCase() !== season.toLowerCase())
       : [...v.seasons, season]
-    void run(
-      () => apiPost(`/world/props/${enc}/variants/${v.index}/seasons`,
-        { seasons: next }),
-      next.length ? t('Seasons saved') : t('Season tag cleared'))
-  }, [enc, run, t])
+    onEditVariant(v.index, { seasons: next })
+  }, [onEditVariant])
 
   // WHERE THE PROPORTIONS COME FROM — never the prop's box.
   //
@@ -226,9 +239,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   //
   // The trio is a resize of a known mesh, not three free numbers (see the
   // module header), so the edited value drives and the other two follow the
-  // variant's proportions. All three are written in ONE call; the route takes
-  // the whole patch, so the round trip is a single 200 and the preview reads
-  // the answer as it already does.
+  // variant's proportions. All three travel as ONE `dims` object into the
+  // draft, so the preview follows immediately and Save writes one field.
   //
   // An empty or unusable input is not a size at all: the draft is dropped and
   // the field snaps back to what is stored. There is nothing to inherit since
@@ -256,49 +268,24 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
         [key]: Math.round(Math.min(Math.max(n, DIM_MIN_M), DIM_MAX_M) * 1000) / 1000,
       }
     if (DIM_KEYS.every((k) => next[k] === stored[k])) return
-    void run(
-      () => apiPost(`/world/props/${enc}/variants/${v.index}/dims`, next),
-      t('Variant size saved'))
-  }, [enc, ratiosFor, run, t])
+    onEditVariant(v.index, { dims: next })
+  }, [onEditVariant, ratiosFor])
 
-  // How deep ONE variant stands in the ground. The write stays DEBOUNCED even
-  // though the field is typed: a commit fires on every Enter and on every
-  // blur, and a chip that is corrected twice must not queue two round trips.
-  // The local number drives the field until the reload echoes it back; 0
-  // clears the key, which is the normal state.
-  const sinkTimers = useRef<Record<number, number>>({})
-  useEffect(() => {
-    const timers = sinkTimers.current
-    return () => {
-      for (const id of Object.values(timers)) window.clearTimeout(id)
-    }
-  }, [])
+  // How deep ONE variant stands in the ground. No debounce any more and no
+  // local echo: the number goes straight into the draft, the draft IS what the
+  // field and the 1.70 m gauge below the strip read, and Save writes it once
+  // however often it was corrected. 0 clears the key, which is the normal
+  // state.
   const commitSink = useCallback((v: PropVariant, value: number) => {
     const next = Math.round(
       Math.min(Math.max(value, -SINK_LIMIT_M), SINK_LIMIT_M) * 100) / 100
-    setSinkDraft((d) => ({ ...d, [v.index]: next }))
-    const pending = sinkTimers.current[v.index]
-    if (pending !== undefined) window.clearTimeout(pending)
-    sinkTimers.current[v.index] = window.setTimeout(() => {
-      delete sinkTimers.current[v.index]
-      void apiPost(`/world/props/${enc}/variants/${v.index}/ground-offset`,
-        { ground_offset_m: next })
-        .then(() => onChanged())
-        .then(() => setSinkDraft((d) => {
-          // The server has echoed the value back through the reload — the
-          // draft has done its job and must not outlive it, or a later delete
-          // would leave a number pointing at a renumbered variant.
-          const out = { ...d }
-          delete out[v.index]
-          return out
-        }))
-        .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
-    }, 350)
-  }, [enc, onChanged, t, toast])
+    if (next === v.ground_offset_m) return
+    onEditVariant(v.index, { ground_offset_m: next })
+  }, [onEditVariant])
 
   // Commit ONE variant's generation subject. Blank clears the key and a render
   // of this variant composes from the prop's NAME — the same law the server
-  // stores by, so the field echoes back what was really kept.
+  // stores by, so the draft says exactly what will be kept.
   const commitDesc = useCallback((v: PropVariant, raw: string) => {
     setDescDraft((d) => {
       const next = { ...d }
@@ -307,16 +294,19 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     })
     const value = raw.trim()
     if (value === (v.description || '')) return
-    void run(
-      () => apiPost(`/world/props/${enc}/variants/${v.index}/description`,
-        { description: value }),
-      value ? t('Variant description saved') : t('Variant description cleared'))
-  }, [enc, run, t])
+    onEditVariant(v.index, { description: value })
+  }, [onEditVariant])
 
+  // Deleting a variant is IMMEDIATE (it takes its meshes and its source image
+  // with it and renumbers everything behind it) — so the detail is told which
+  // index went, and it renumbers its pending fields the same way.
   const remove = useCallback((index: number) => {
     setArmedDel(null)
-    void run(() => apiDelete(`/world/props/${enc}/variants/${index}`), t('Variant deleted'))
-  }, [enc, run, t])
+    void run(async () => {
+      await apiDelete(`/world/props/${enc}/variants/${index}`)
+      onDeleted(index)
+    }, t('Variant deleted'))
+  }, [enc, onDeleted, run, t])
 
   return (
     <>
@@ -325,6 +315,15 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
         {variants.map((v) => {
           const isSelected = v.index === selected
           const isBusy = generating.includes(v.index)
+          // Does this variant render right now? Computed HERE, not read off
+          // the record: the chips may hold an unsaved tag, and a badge that
+          // still answered from the last load would contradict the chip the
+          // admin just lit. Mirrors `props.season_tags_active` on the names
+          // this row offers — untagged is always in season, and so is every
+          // variant in a world without seasons.
+          const inSeason = !v.seasons.length || !currentSeason
+            || v.seasons.some(
+              (s) => s.toLowerCase() === currentSeason.toLowerCase())
           return (
             <div
               key={v.index}
@@ -448,7 +447,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 min={-SINK_LIMIT_M}
                 max={SINK_LIMIT_M}
                 step={0.01}
-                value={sinkDraft[v.index] ?? v.ground_offset_m}
+                value={v.ground_offset_m}
                 onChange={(value) => commitSink(v, value)}
                 inputWidth={70}
               />
@@ -520,7 +519,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   })}
                 </div>
               ) : null}
-              {v.seasons.length && !v.in_season ? (
+              {v.seasons.length && !inSeason ? (
                 <span className="ga-tag ga-tag-missing"
                   title={t('Out of season — this variant is not rendered while the world is in {season}.')
                     .replace('{season}', currentSeason || '—')}>
@@ -573,7 +572,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
           onClick={add}
           title={capReached
             ? t('The limit of active variants is reached — switch one off or delete it first.')
-            : t('Add a variant slot — size, description, sink and markers are copied from the selected chip; the next generation fills its mesh, or you upload a GLB into it.')}
+            : t('Add a variant slot — size, description, sink and markers are copied from the selected chip AS IT IS SAVED (unsaved edits stay behind, so save them first if they should travel); the next generation fills its mesh, or you upload a GLB into it.')}
         >
           + {t('Add variant')}
         </button>

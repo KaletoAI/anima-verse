@@ -63,6 +63,28 @@ export function PropsTab() {
       subject?: string } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
+  // How many unsaved FIELD edits the open detail holds (its change buffer,
+  // `pendingFields`). A tab switch is asked about by the shell
+  // (`lib/unsavedGuard`), but switching to another prop never leaves this tab —
+  // so that question is ours, and it is asked with real UI: no
+  // window.confirm in this admin.
+  const [dirty, setDirty] = useState(0)
+  const [leaveTo, setLeaveTo] = useState<{ id: string; creating: boolean } | null>(null)
+  const goTo = useCallback((id: string, creating: boolean) => {
+    setLeaveTo(null)
+    setCreating(creating)
+    setSelected(id)
+  }, [])
+  /** Open another prop (or the create form) — asking first when the detail
+   *  still holds a draft. Selecting the prop that is already open is not a
+   *  navigation and never asks. */
+  const navigate = useCallback((id: string, creating = false) => {
+    if (dirty > 0 && (creating || id !== selected)) {
+      setLeaveTo({ id, creating })
+      return
+    }
+    goTo(id, creating)
+  }, [dirty, goTo, selected])
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -147,7 +169,7 @@ export function PropsTab() {
       <aside className="ga-twocol-left">
         <ListHeader
           title={t('Props')}
-          onNew={() => { setCreating(true); setSelected('') }}
+          onNew={() => navigate('', true)}
           extra={
             <ImportButton
               endpoint="/world/props/import"
@@ -188,7 +210,7 @@ export function PropsTab() {
                   <button
                     type="button"
                     className={`ga-list-row${isActive ? ' is-active' : ''}`}
-                    onClick={() => { setCreating(false); setSelected(p.id) }}
+                    onClick={() => navigate(p.id)}
                   >
                     <span className="ga-list-row-main">
                       {p.has_source ? (
@@ -265,6 +287,7 @@ export function PropsTab() {
             onRegenerateImage={(variant, image, subject) =>
               setImgRegen({ prop: selectedProp, variant, image, subject })}
             onGenerating={startPoll}
+            onDirtyChange={setDirty}
             onRefresh={() => {
               setCacheBump((b) => b + 1)
               void load()
@@ -343,6 +366,32 @@ export function PropsTab() {
           }}
           onClose={() => setImgRegen(null)}
         />
+        {/* The prop-switch guard. The same question the shell asks before a
+            tab switch, asked here because a prop switch stays inside the tab
+            — and asked as UI, never as window.confirm. */}
+        {leaveTo ? (
+          <div className="ga-modal-backdrop" role="presentation">
+            <div className="ga-modal" role="dialog" aria-modal="true"
+              aria-label={t('Unsaved changes')} style={{ maxWidth: 460 }}>
+              <div className="ga-modal-header">
+                <h3>{t('Unsaved changes')}</h3>
+              </div>
+              <div className="ga-modal-body">
+                {t('This prop holds {n} field changes that were never saved. Opening another prop discards them.')
+                  .replace('{n}', String(dirty))}
+              </div>
+              <div className="ga-modal-footer">
+                <button className="ga-btn" onClick={() => setLeaveTo(null)}>
+                  {t('Stay')}
+                </button>
+                <button className="ga-btn ga-btn-danger"
+                  onClick={() => goTo(leaveTo.id, leaveTo.creating)}>
+                  {t('Leave and discard')}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
       {/* One shared category vocabulary for the create form and the detail —
           the categories the EXISTING props use (same source as the list

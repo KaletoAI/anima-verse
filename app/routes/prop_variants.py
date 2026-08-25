@@ -14,6 +14,13 @@ the VARIANT owns (2026-08-25): ``/dims``, ``/description``,
 so the body shape can be read off the path. The gallery bodies and the HTTP
 mapping are shared with the unqualified routes — the helpers are imported, not
 copied, so a change to one answers for both.
+
+THE ADMIN PANEL DOES NOT USE THE FIVE FIELD ROUTES ANY MORE (2026-08-25): it
+keeps a local draft and writes it through ``POST /world/props/{id}/bulk``
+(``props.bulk_update``), one request and one sidecar write for the whole prop.
+They stay because they are the readable API — one path, one kind of value —
+and because the batch runs their sanitizers verbatim (the appliers in
+``core/props.py`` ARE their bodies), so neither can drift into a laxer way in.
 """
 from typing import Any, Dict
 

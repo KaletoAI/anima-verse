@@ -22,6 +22,21 @@
  *
  * Markers are OBJECT-LOCAL (`at` = [u, v, w] fractions of THAT variant's model
  * bounding box), so they travel with the mesh into any room.
+ *
+ * ONE DRAFT, ONE SAVE (2026-08-25). Every FIELD on this panel — the prop's
+ * general ones and the five each variant owns — collects in a change buffer
+ * (`pendingFields`) and reaches the server when "Save (n)" is pressed, in ONE
+ * request and ONE sidecar write. Nothing here writes on blur any more, so the
+ * three metres, the subject, the sink, a season and a marker of one variant
+ * are one save instead of seven, and "Discard" is a real way back.
+ *
+ * What stays IMMEDIATE, and why: everything that moves a FILE or changes the
+ * variant LIST — image render and upload, meshing, the mesh gallery, the
+ * orientation fix, and add / on-off / delete of a variant. Those change what
+ * the store indices, the mesh signature and a running generation address; a
+ * draft of them would be a promise about files that do not exist yet. Their
+ * reloads land UNDER the draft (`applyVariantDraft` puts it back on top), so
+ * an unsaved size survives a mesh that finishes in the background.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FIGURE_HEIGHT_M } from '@anima/scene-render'
@@ -32,6 +47,12 @@ import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { setUnsavedGuard } from '../../lib/unsavedGuard'
+import {
+  applyVariantDraft, draftValue, dropDeletedVariant, emptyFields,
+  GENERAL_TARGET, pendingFieldCount, queueFields, toBulkFieldBody,
+  variantTarget, type PendingFields,
+} from './pendingFields'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { GroundOffsetGauge } from './GroundOffsetGauge'
 import { PropModelPanel } from './PropModelPanel'
@@ -74,11 +95,10 @@ const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
   { label: 'Y (height)', dim: 'height_m', min: -1 },
   { label: 'Z (depth)', dim: 'depth_m', min: AT_MIN },
 ]
-const MARKER_SAVE_DEBOUNCE_MS = 400
 
 export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   onChanged, onDelete, armedDelete, onRegenerate, onRegenerateMesh,
-  onRegenerateImage, onRefresh, onGenerating }: {
+  onRegenerateImage, onRefresh, onGenerating, onDirtyChange }: {
   prop: PropFull
   /** ANY variant of this prop is generating — the aggregate. Only the two
    *  prop-level actions read it; everything variant-scoped asks
@@ -111,6 +131,10 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   /** Start the container's pending poll — a background job was just kicked
    *  off from inside the detail (the mesh gallery's low variant). */
   onGenerating: () => void
+  /** How many FIELD edits are waiting in the draft (0 = clean). The container
+   *  asks before it lets the selection leave this prop — a tab switch is the
+   *  shell's question, a prop switch has to be this tab's own. */
+  onDirtyChange: (count: number) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -133,7 +157,26 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     return onChanged()
   }, [onChanged])
 
-  const [variants, setVariants] = useState<PropVariant[]>([])
+  // ── THE DRAFT (2026-08-25) ─────────────────────────────────────────────
+  // Every field edit of this prop, waiting for one explicit Save. It is keyed
+  // by target ("general" / "v:<store index>") and merges field by field, so
+  // editing the size and then the subject of one variant is one entry with two
+  // fields — see `pendingFields` for the rules.
+  const [buf, setBuf] = useState<PendingFields>(emptyFields)
+  const [saving, setSaving] = useState(false)
+  /** The Discard button's second click (no `window.confirm` in this UI). */
+  const [discardArmed, setDiscardArmed] = useState(false)
+  const dirtyCount = pendingFieldCount(buf)
+  useEffect(() => { if (!dirtyCount) setDiscardArmed(false) }, [dirtyCount])
+  const queueGeneral = useCallback((patch: Record<string, unknown>) => {
+    setBuf((b) => queueFields(b, GENERAL_TARGET, patch))
+  }, [])
+  const queueVariant = useCallback((index: number,
+    patch: Record<string, unknown>) => {
+    setBuf((b) => queueFields(b, variantTarget(index), patch))
+  }, [])
+
+  const [serverVariants, setServerVariants] = useState<PropVariant[]>([])
   const [variantMax, setVariantMax] = useState(1)
   // The world's season names + the one it is in now (E2c) — the season chips
   // are a pick from this list, and an empty list (a world without seasons)
@@ -145,7 +188,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const [variant, setVariant] = useState(0)
   // Dropping the list with the selection matters: a record of the PREVIOUS
   // prop would otherwise answer for the same index until the reload lands.
-  useEffect(() => { setVariant(0); setVariants([]) }, [prop.id])
+  // The draft goes with it — it belongs to the prop that was open, and the
+  // container has already asked whether it may be lost.
+  useEffect(() => {
+    setVariant(0)
+    setServerVariants([])
+    setBuf(emptyFields())
+  }, [prop.id])
   useEffect(() => { setPreviewFile('') }, [prop.id, variant])
   const loadVariants = useCallback(async () => {
     try {
@@ -153,7 +202,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
         world_seasons?: string[]; current_season?: string }>(
         `/world/props/${enc}/variants`)
       const list = d.variants || []
-      setVariants(list)
+      setServerVariants(list)
       setVariantMax(d.max || 1)
       setWorldSeasons(d.world_seasons || [])
       setCurrentSeason(d.current_season || '')
@@ -162,10 +211,16 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       // selects the freshly added slot before its record has arrived.
       setVariant((i) => (list.length ? Math.min(i, list.length - 1) : 0))
     } catch {
-      setVariants([])
+      setServerVariants([])
     }
   }, [enc])
   useEffect(() => { void loadVariants() }, [loadVariants, reloadKey])
+  // WHAT EVERYTHING BELOW READS: the server's list with the draft laid on top.
+  // A background reload (a finished mesh, an added variant) therefore cannot
+  // eat an unsaved number, and the 3D preview, the reference figure and the
+  // marker read-backs all measure against what is on screen.
+  const variants = useMemo(() => applyVariantDraft(serverVariants, buf),
+    [serverVariants, buf])
   const shownVariant = variants.find((v) => v.index === variant) || null
   // Is the variant the detail has OPEN the one that is generating? Every
   // variant-scoped action below reads this instead of the prop-level flag —
@@ -210,6 +265,17 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     setTagsDraft(prop.tags.join(', '))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prop.id])
+  // What the four general fields SAY right now: the buffered value once they
+  // were edited, the stored one before that. Every commit compares against
+  // these, never against the prop record — a field typed away and back must
+  // end up with what is on screen, not with a stale entry in the buffer. The
+  // tags travel as the raw comma text; splitting them is the server's
+  // (`props._coerce_tags`), and has been since long before the draft.
+  const nameNow = draftValue(buf, GENERAL_TARGET, 'name', prop.name)
+  const categoryNow = draftValue(buf, GENERAL_TARGET, 'category', prop.category)
+  const tagsNow = draftValue(buf, GENERAL_TARGET, 'tags', prop.tags.join(', '))
+  const swayNow = draftValue<number>(buf, GENERAL_TARGET, 'sway_factor',
+    prop.sway_factor ?? 1)
 
   // The RAW box of the mesh the viewer has OPEN, i.e. the SELECTED variant's,
   // measured on load. What the overlays scale by is the mesh on screen: a
@@ -238,14 +304,70 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     width_m: prop.width_m, depth_m: prop.depth_m, height_m: prop.height_m,
   }), [shownVariant, prop.width_m, prop.depth_m, prop.height_m])
 
-  const patch = useCallback(async (body: Record<string, unknown>) => {
+  // ── Save / Discard ─────────────────────────────────────────────────────
+  // ONE request for the whole panel: the general fields and every variant
+  // patch travel in the batch body, the answer is what was really stored, and
+  // the client adopts THAT rather than believing its own draft.
+  const save = useCallback(async () => {
+    const body = toBulkFieldBody(buf)
+    setSaving(true)
     try {
-      await apiPost(`/world/props/${enc}`, body)
+      const d = await apiPost<{ variants?: PropVariant[] }>(
+        `/world/props/${enc}/bulk`, body)
+      setBuf(emptyFields())
+      if (d?.variants) setServerVariants(d.variants)
+      // The prop record (name, category, the library row) is the container's —
+      // it reloads the list, which is also what the marker/mesh counts hang on.
       await onChanged()
+      toast(t('Saved'))
     } catch (e) {
+      // Nothing was written (the batch validates before it stores), so the
+      // draft stays exactly as it is and Save can simply be pressed again.
       toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setSaving(false)
     }
-  }, [enc, onChanged, t, toast])
+  }, [buf, enc, onChanged, t, toast])
+
+  /** Throw the draft away and show what the server has. The four text inputs
+   *  hold their own typing state, so they are re-armed here as well — a
+   *  Discard that left the old text standing in the boxes would look like it
+   *  had done nothing. */
+  const discard = useCallback(() => {
+    setBuf(emptyFields())
+    setDiscardArmed(false)
+    setNameDraft(prop.name)
+    setCategoryDraft(prop.category)
+    setTagsDraft(prop.tags.join(', '))
+    setSwayDraft(String(prop.sway_factor ?? 1))
+  }, [prop.name, prop.category, prop.tags, prop.sway_factor])
+
+  // Leaving with a full buffer must not happen silently: the browser's own
+  // question for a reload or a closed tab, the shell's for a tab switch (the
+  // tab is unmounted then, and the draft would die with it), the container's
+  // for a switch to another prop.
+  const dirtyRef = useRef(0)
+  dirtyRef.current = dirtyCount
+  useEffect(() => {
+    if (!dirtyCount) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // The browser shows its own generic wording; the value only needs to be
+      // non-null for legacy engines.
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirtyCount])
+  useEffect(() => {
+    setUnsavedGuard(() => dirtyRef.current > 0)
+    return () => setUnsavedGuard(null)
+  }, [])
+  useEffect(() => { onDirtyChange(dirtyCount) }, [dirtyCount, onDirtyChange])
+  // The panel is gone (the prop was deleted, the create form opened): nothing
+  // is unsaved any more, and a container that still believed otherwise would
+  // ask about a draft nobody can see.
+  useEffect(() => () => onDirtyChange(0), [onDirtyChange])
 
   // Upload a picture as THIS variant's source image — the same act as
   // uploading a GLB into its gallery, one step earlier in the chain: what the
@@ -269,16 +391,14 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
 
   // An empty or unreadable field is not a factor: it commits the default 1,
   // and the server answers by dropping the key. Clamped here as well so the
-  // input echoes back what was actually stored.
+  // input echoes back what will actually be stored.
   const commitSway = useCallback(() => {
     const n = parseFloat(swayDraft)
     const next = Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 1
-    if (next === (prop.sway_factor ?? 1)) {
-      setSwayDraft(String(prop.sway_factor ?? 1))
-      return
-    }
-    void patch({ sway_factor: next })
-  }, [swayDraft, prop.sway_factor, patch])
+    setSwayDraft(String(next))
+    if (next === swayNow) return
+    queueGeneral({ sway_factor: next })
+  }, [swayDraft, swayNow, queueGeneral])
 
   const rotate = useCallback(async (axis: 'x' | 'y' | 'z') => {
     const cur = prop.rotation || {}
@@ -323,89 +443,23 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       .then((d) => setClipKinds(d.kinds || []))
       .catch(() => setClipKinds([]))
   }, [])
-  // Local draft, re-armed when the EDITED VARIANT changes — a server reload
-  // after a save must not clobber an in-progress field edit, but switching the
-  // chip has to bring the other variant's list.
-  const [markers, setMarkers] = useState<PropMarker[]>(prop.markers || [])
-  // The variant the draft belongs to, so the flush below can never post one
-  // chip's markers to another's route (a switch mid-debounce).
-  const markerVariantRef = useRef(variant)
-  // WHICH (prop, variant) the draft is armed for. The list reloads every few
-  // seconds while a generation runs, and re-seeding on every fresh array
-  // identity would stomp what the admin is dragging — so the draft is seeded
-  // exactly once per pair and left alone afterwards.
-  const markerKeyRef = useRef('')
-  useEffect(() => {
-    const key = `${prop.id}:${variant}`
-    if (!shownVariant) {
-      // The record has not arrived yet (the prop was just switched): show
-      // nothing rather than the previous prop's markers, and re-arm when it
-      // lands. The functional update keeps the identity when it is already
-      // empty — a fresh [] every render would loop.
-      if (markerKeyRef.current !== key) {
-        markerKeyRef.current = ''
-        setMarkers((m) => (m.length ? [] : m))
-      }
-      return
-    }
-    if (markerKeyRef.current === key) return
-    markerKeyRef.current = key
-    markerVariantRef.current = variant
-    setMarkers(shownVariant.markers)
-  }, [prop.id, variant, shownVariant])
+  // THE MARKER LIST IS THE DRAFT'S. It needs no local state of its own any
+  // more and no debounce: an edit goes into the change buffer, the buffer is
+  // what `variants` above is drawn from, and the viewer beside it reads the
+  // very same array — so dragging a slider is immediate on screen and costs
+  // exactly one field of one save. Until the variant record has arrived the
+  // prop record answers for the primary variant, as everywhere else here.
+  const markers: PropMarker[] = useMemo(() => (
+    shownVariant ? shownVariant.markers
+      : (variant === 0 ? prop.markers || [] : [])
+  ), [shownVariant, variant, prop.markers])
 
-  // Saving is DEBOUNCED (trailing): dragging a slider changes the state on
-  // every frame, and one POST per frame would flood the route. The UI (and
-  // the viewer, which reads `markers` live) stays immediate; the write
-  // follows once the drag rests. Discrete edits (add/remove/click placement)
-  // skip the wait.
-  const markerTimer = useRef<number | null>(null)
-  const markerPending = useRef<PropMarker[] | null>(null)
-  const flushMarkers = useCallback(async () => {
-    if (markerTimer.current !== null) {
-      window.clearTimeout(markerTimer.current)
-      markerTimer.current = null
-    }
-    const next = markerPending.current
-    markerPending.current = null
-    if (!next) return
-    try {
-      // The variant the DRAFT belongs to, not the one that happens to be
-      // selected now: a chip switch during the debounce must not send this
-      // list to another version's route.
-      await apiPost(
-        `/world/props/${enc}/variants/${markerVariantRef.current}/markers`,
-        { markers: next })
-      await meshesChanged()
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [enc, meshesChanged, t, toast])
-  const flushRef = useRef(flushMarkers)
-  flushRef.current = flushMarkers
-  // Unmount, a prop switch or a chip switch flushes what is still pending —
-  // with the flush captured at SETUP time, so it posts to the variant the
-  // markers belong to.
-  useEffect(() => {
-    const flush = flushRef.current
-    return () => { void flush() }
-  }, [prop.id, variant])
+  const saveMarkers = useCallback((next: PropMarker[]) => {
+    queueVariant(variant, { markers: next })
+  }, [queueVariant, variant])
 
-  const saveMarkers = useCallback((next: PropMarker[], immediate = false) => {
-    setMarkers(next)
-    markerPending.current = next
-    if (immediate) {
-      void flushMarkers()
-      return
-    }
-    if (markerTimer.current !== null) window.clearTimeout(markerTimer.current)
-    markerTimer.current = window.setTimeout(() => { void flushMarkers() },
-                                            MARKER_SAVE_DEBOUNCE_MS)
-  }, [flushMarkers])
-
-  const patchMarker = (i: number, patch: Partial<PropMarker>, immediate = false) =>
-    saveMarkers(markers.map((m, idx) => (idx === i ? { ...m, ...patch } : m)),
-                immediate)
+  const patchMarker = (i: number, patch: Partial<PropMarker>) =>
+    saveMarkers(markers.map((m, idx) => (idx === i ? { ...m, ...patch } : m)))
   const setMarkerAt = (i: number, axis: 0 | 1 | 2, raw: number | string) => {
     const n = typeof raw === 'number' ? raw : parseFloat(raw)
     const lo = AT_AXES[axis].min
@@ -415,10 +469,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     patchMarker(i, { at })
   }
   const addMarker = () =>
-    saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at: [0.5, 0, 0.5] }],
-                true)
+    saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at: [0.5, 0, 0.5] }])
   const removeMarker = (i: number) =>
-    saveMarkers(markers.filter((_, idx) => idx !== i), true)
+    saveMarkers(markers.filter((_, idx) => idx !== i))
 
   // Floor-plan-style placement: arm ('add' or a marker index), then click the
   // mesh in the viewer — the hit lands as raw-box fractions. Esc disarms.
@@ -432,9 +485,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const onPickPoint = useCallback((at: [number, number, number]) => {
     setPlacing((cur) => {
       if (cur === 'add') {
-        saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at }], true)
+        saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at }])
       } else if (cur !== null && markers[cur]) {
-        saveMarkers(markers.map((m, idx) => (idx === cur ? { ...m, at } : m)), true)
+        saveMarkers(markers.map((m, idx) => (idx === cur ? { ...m, at } : m)))
       }
       return null
     })
@@ -453,8 +506,39 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
         title={prop.name}
         onDelete={onDelete}
         deleteLabel={armedDelete ? t('Really delete?') : t('Delete prop')}
+        // THE DRAFT. Save exists only while there IS one — a permanently
+        // greyed-out button teaches nothing about when it would do something —
+        // and its number is the only place the size of the unsaved work is
+        // visible. `disabled` gates the whole bar while the batch is in flight.
+        onSave={dirtyCount > 0 ? () => { void save() } : undefined}
+        saveLabel={saving
+          ? t('Saving…')
+          : t('Save ({n})').replace('{n}', String(dirtyCount))}
+        disabled={saving}
         extra={
           <>
+            {dirtyCount > 0 ? (
+              <>
+                <button type="button"
+                  className={'ga-btn ga-btn-sm' + (discardArmed ? ' ga-btn-danger' : '')}
+                  disabled={saving}
+                  title={t('Throw the unsaved field changes away and take what the server has')}
+                  onClick={() => {
+                    if (discardArmed) discard()
+                    else setDiscardArmed(true)
+                  }}>
+                  {discardArmed
+                    ? t('Really discard {n}').replace('{n}', String(dirtyCount))
+                    : t('Discard')}
+                </button>
+                {discardArmed ? (
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    onClick={() => setDiscardArmed(false)}>
+                    {t('Cancel')}
+                  </button>
+                ) : null}
+              </>
+            ) : null}
             {/* The one PROP-level action: it does not name a variant, the
                 server picks the target (an empty slot, a fresh one, or the
                 last one at the cap). Two of those at once would race for the
@@ -489,22 +573,28 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               <input className="ga-input" value={nameDraft}
                 onChange={(e) => setNameDraft(e.target.value)}
                 onBlur={() => {
+                  // A prop without a name is not a state the server stores, so
+                  // an emptied field snaps back to the current one.
                   const nm = nameDraft.trim()
-                  if (nm && nm !== prop.name) void patch({ name: nm })
-                  else setNameDraft(prop.name)
+                  if (nm && nm !== nameNow) queueGeneral({ name: nm })
+                  else setNameDraft(nameNow)
                 }}
                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
             </Field>
             <Field label={t('Category')}>
               <input className="ga-input" list={CATEGORY_DATALIST_ID} value={categoryDraft}
                 onChange={(e) => setCategoryDraft(e.target.value)}
-                onBlur={() => { if (categoryDraft !== prop.category) void patch({ category: categoryDraft }) }} />
+                onBlur={() => {
+                  if (categoryDraft !== categoryNow) {
+                    queueGeneral({ category: categoryDraft })
+                  }
+                }} />
             </Field>
             <Field label={t('Tags (comma-separated)')}>
               <input className="ga-input" value={tagsDraft}
                 onChange={(e) => setTagsDraft(e.target.value)}
                 onBlur={() => {
-                  if (tagsDraft !== prop.tags.join(', ')) void patch({ tags: tagsDraft })
+                  if (tagsDraft !== tagsNow) queueGeneral({ tags: tagsDraft })
                 }} />
             </Field>
           </div>
@@ -551,6 +641,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             selected={variant}
             onSelect={setVariant}
             onChanged={meshesChanged}
+            onEditVariant={queueVariant}
+            // A deleted variant renumbers the list, so the draft is renumbered
+            // with it — an unsaved size must never land on the neighbour that
+            // moved into the gap.
+            onDeleted={(index) => setBuf((b) => dropDeletedVariant(b, index))}
             generating={generatingVariants}
             worldSeasons={worldSeasons}
             currentSeason={currentSeason}
@@ -592,7 +687,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     style={{ flex: 1, minWidth: 0 }}
                     value={m.animation}
                     title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
-                    onChange={(e) => patchMarker(i, { animation: e.target.value }, true)}
+                    onChange={(e) => patchMarker(i, { animation: e.target.value })}
                   >
                     {kindOptions.map((k) => <option key={k} value={k}>{k}</option>)}
                   </select>
@@ -672,7 +767,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     className="ga-btn ga-btn-sm"
                     style={{ width: 58, flex: '0 0 auto' }}
                     disabled={m.facing === undefined}
-                    onClick={() => patchMarker(i, { facing: undefined }, true)}
+                    onClick={() => patchMarker(i, { facing: undefined })}
                     title={t('Unset the facing — the client decides.')}
                   >
                     ✕

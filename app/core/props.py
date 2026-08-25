@@ -978,26 +978,34 @@ MOVED_TO_VARIANT = {
 }
 
 
-def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Update the PROP's own fields (name / category / tags / sway_factor).
-    None when the prop does not exist.
+def _check_prop_patch(patch: Dict[str, Any]) -> None:
+    """Refuse a prop patch that names a field this record does not own.
 
-    Raises ``ValueError`` when the patch names one of the five fields that
-    moved onto the variants (:data:`MOVED_TO_VARIANT`) — the route maps that to
-    a 400. Ignoring them would be worse than refusing: the admin would get a
-    green "Saved" for a size that was never stored anywhere.
+    A key that MOVED onto the variants gets the route that owns it now
+    (:data:`MOVED_TO_VARIANT`); anything else unknown is named with the list of
+    fields that do exist. Both are ``ValueError`` and both are 400s, for the one
+    reason: a silently ignored key would report "Saved" over a value that
+    reached nothing.
     """
-    pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    if not meta:
-        return None
-    if not isinstance(patch, dict):
-        patch = {}
     moved = [k for k in patch if k in MOVED_TO_VARIANT]
     if moved:
         raise ValueError(
             "these fields belong to the model variant now: "
             + "; ".join(f"{k} -> {MOVED_TO_VARIANT[k]}" for k in sorted(moved)))
+    unknown = [k for k in patch if k not in PROP_PATCH_KEYS]
+    if unknown:
+        raise ValueError("unknown prop field(s): " + ", ".join(sorted(unknown))
+                         + " (the prop record has: "
+                         + ", ".join(PROP_PATCH_KEYS) + ")")
+
+
+def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
+    """Write the PROP's own fields into ``meta`` — the sanitation of
+    :func:`update_prop`, called verbatim by the batch save as well so a bulk
+    body can never be a second, laxer way into the same record.
+
+    The caller has already run :func:`_check_prop_patch`; this only stores.
+    """
     if "name" in patch:
         nm = str(patch.get("name") or "").strip()
         if nm:
@@ -1015,6 +1023,25 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
             meta.pop("sway_factor", None)
         else:
             meta["sway_factor"] = factor
+
+
+def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update the PROP's own fields (name / category / tags / sway_factor).
+    None when the prop does not exist.
+
+    Raises ``ValueError`` when the patch names one of the five fields that
+    moved onto the variants (:data:`MOVED_TO_VARIANT`) — the route maps that to
+    a 400. Ignoring them would be worse than refusing: the admin would get a
+    green "Saved" for a size that was never stored anywhere.
+    """
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return None
+    if not isinstance(patch, dict):
+        patch = {}
+    _check_prop_patch(patch)
+    _apply_prop_fields(meta, patch)
     _write_sidecar(pid, meta)
     return {"id": pid, **meta}
 
@@ -1299,22 +1326,11 @@ def set_variant_seasons(prop_id: str, variant: int, seasons: Any) -> bool:
     variant, which is a payload fact and not a job's business — the run writes
     into the store index it was started with, and that number does not change.
     """
-    pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    if not meta:
+    ctx = _edit_variant(prop_id, variant)
+    if not ctx:
         return False
-    entries = _variant_list(meta)
-    try:
-        i = int(variant)
-    except (TypeError, ValueError):
-        return False
-    if not 0 <= i < len(entries):
-        return False
-    clean = sanitize_season_tags(seasons)
-    if clean:
-        entries[i][SEASONS_KEY] = clean
-    else:
-        entries[i].pop(SEASONS_KEY, None)
+    pid, meta, entries, i = ctx
+    _apply_variant_seasons(entries[i], seasons)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
@@ -1340,6 +1356,79 @@ def _edit_variant(prop_id: str, variant: int,
     return pid, meta, entries, i
 
 
+# ── The five variant fields: sanitize + store, once ─────────────────────
+# Each applier is the BODY of the setter below it, lifted out so the batch save
+# (:func:`bulk_update`) runs the very same sanitation instead of a second,
+# laxer one. They mutate ONE entry and write nothing — the caller owns the
+# sidecar write, which is what lets a batch do five fields of three variants in
+# a single one.
+
+def _apply_variant_dims(entry: Dict[str, Any], dims: Any) -> None:
+    """Store this variant's size — a PATCH, key by key (see
+    :func:`set_variant_dims` for the rules)."""
+    patch = dims if isinstance(dims, dict) else {}
+    touched = False
+    for key in DIM_KEYS:
+        if key not in patch:
+            continue
+        value = _coerce_dim_m(patch.get(key), 0.0)
+        if value > 0:
+            entry[key] = value
+            touched = True
+    if touched:
+        entry[DIMS_ESTIMATED_KEY] = False
+
+
+def _apply_variant_ground_offset(entry: Dict[str, Any], offset: Any) -> None:
+    """Store the sink, or clear it (0 and junk are ABSENCE)."""
+    value = _coerce_ground_offset_m(offset)
+    if value is None:
+        entry.pop(GROUND_OFFSET_KEY, None)
+    else:
+        entry[GROUND_OFFSET_KEY] = value
+
+
+def _apply_variant_markers(entry: Dict[str, Any], markers: Any) -> None:
+    """Replace the object-local marker list (an empty one clears the key)."""
+    clean = sanitize_markers(markers)
+    if clean:
+        entry[MARKERS_KEY] = clean
+    else:
+        entry.pop(MARKERS_KEY, None)
+
+
+def _apply_variant_description(entry: Dict[str, Any], text: Any) -> None:
+    """Store the generation subject, or clear it (blank and junk are ABSENCE)."""
+    desc = _coerce_description(text)
+    if desc:
+        entry[DESCRIPTION_KEY] = desc
+    else:
+        entry.pop(DESCRIPTION_KEY, None)
+
+
+def _apply_variant_seasons(entry: Dict[str, Any], seasons: Any) -> None:
+    """Store the season tags, or clear them (an empty list is ABSENCE)."""
+    clean = sanitize_season_tags(seasons)
+    if clean:
+        entry[SEASONS_KEY] = clean
+    else:
+        entry.pop(SEASONS_KEY, None)
+
+
+#: The five fields a variant owns, by the name a batch body calls them — the
+#: dims travel as ONE `dims` object because the trio is one statement (a prop
+#: is scaled uniformly, so the three numbers say how big AND what shape).
+VARIANT_PATCH_APPLIERS = {
+    "dims": _apply_variant_dims,
+    "description": _apply_variant_description,
+    "ground_offset_m": _apply_variant_ground_offset,
+    "markers": _apply_variant_markers,
+    "seasons": _apply_variant_seasons,
+}
+#: The same names as a tuple, for the refusal message.
+VARIANT_PATCH_KEYS = tuple(VARIANT_PATCH_APPLIERS)
+
+
 def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
     """Set this variant's real size (2026-08-24, variant-only since
     2026-08-25).
@@ -1361,17 +1450,7 @@ def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
     if not ctx:
         return False
     pid, meta, entries, i = ctx
-    patch = dims if isinstance(dims, dict) else {}
-    touched = False
-    for key in DIM_KEYS:
-        if key not in patch:
-            continue
-        value = _coerce_dim_m(patch.get(key), 0.0)
-        if value > 0:
-            entries[i][key] = value
-            touched = True
-    if touched:
-        entries[i][DIMS_ESTIMATED_KEY] = False
+    _apply_variant_dims(entries[i], dims)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
@@ -1390,11 +1469,7 @@ def set_variant_ground_offset(prop_id: str, variant: int, offset: Any) -> bool:
     if not ctx:
         return False
     pid, meta, entries, i = ctx
-    value = _coerce_ground_offset_m(offset)
-    if value is None:
-        entries[i].pop(GROUND_OFFSET_KEY, None)
-    else:
-        entries[i][GROUND_OFFSET_KEY] = value
+    _apply_variant_ground_offset(entries[i], offset)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
@@ -1411,11 +1486,7 @@ def set_variant_markers(prop_id: str, variant: int, markers: Any) -> bool:
     if not ctx:
         return False
     pid, meta, entries, i = ctx
-    clean = sanitize_markers(markers)
-    if clean:
-        entries[i][MARKERS_KEY] = clean
-    else:
-        entries[i].pop(MARKERS_KEY, None)
+    _apply_variant_markers(entries[i], markers)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
@@ -1435,14 +1506,99 @@ def set_variant_description(prop_id: str, variant: int, text: Any) -> bool:
     if not ctx:
         return False
     pid, meta, entries, i = ctx
-    desc = _coerce_description(text)
-    if desc:
-        entries[i][DESCRIPTION_KEY] = desc
-    else:
-        entries[i].pop(DESCRIPTION_KEY, None)
+    _apply_variant_description(entries[i], text)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
+
+
+def bulk_update(prop_id: str, general: Any = None,
+                variants: Any = None) -> Optional[Dict[str, Any]]:
+    """THE BATCH SAVE of the prop detail: the prop's own fields and any number
+    of variant field patches, in ONE sidecar write. ``None`` when the prop does
+    not exist.
+
+    The detail panel keeps a LOCAL DRAFT and writes it with one explicit Save
+    (the map editor's law, ``core/bulk_edit.py`` / ``tabs/props/pendingFields``).
+    Every field used to go out on its own route the moment it lost focus, so
+    authoring one variant — three metres, a subject, a sink, a season, a marker
+    — was seven requests and seven sidecar writes for one thought.
+
+    ``general`` is the prop patch :func:`update_prop` takes; ``variants`` maps a
+    STORE INDEX (as a string or an int, the way JSON object keys arrive) to a
+    patch of the five fields the variant owns
+    (:data:`VARIANT_PATCH_APPLIERS`)::
+
+        {"general": {"name": "Bench"},
+         "variants": {"0": {"dims": {"width_m": 2.0}, "markers": []},
+                      "2": {"seasons": ["Winter"]}}}
+
+    EVERYTHING IS CHECKED BEFORE ANYTHING IS WRITTEN (``plan_batch``'s law): an
+    unknown field, a moved field or an index this prop has no variant for raises
+    ``ValueError`` and the sidecar is left exactly as it was. A body that is
+    half junk must not leave a half-saved prop behind — the admin would have no
+    way of telling which half arrived.
+
+    Unknown keys are REFUSED rather than ignored, for the same reason the prop
+    patch refuses the moved ones: a green "Saved" over a value that reached
+    nothing is the worst of the three possible answers.
+
+    NO VERSION STAMP, unlike the map's batch (``bulk_edit.plan_batch``), and
+    that is a decision rather than an omission:
+
+    * The map's stamps are a column of a SQLite row and its other writers are
+      other EDITORS. A prop sidecar has no stamp, and its other writers are
+      BACKGROUND JOBS — a finished render stores the image provenance, a
+      finished mesh stores the bbox, a gallery selection writes too. A stamp
+      would be bumped by all of them, so the honest single-editor case ("type a
+      size while your own mesh bakes") would come back "changed on the server".
+    * This batch merges FIELD BY FIELD into the sidecar as it is right now
+      (read → apply the named fields → write), never a whole-record replace, so
+      whatever a job wrote into OTHER keys survives it.
+    * What is left is the write that lands between this read and this write —
+      a race the single-value routes have had since they existed, which a
+      stamp would report rather than prevent, and which needs one editor per
+      prop to even occur.
+
+    Nothing to do writes nothing — an empty body is a read.
+    """
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return None
+    prop_patch = general if isinstance(general, dict) else {}
+    _check_prop_patch(prop_patch)
+
+    raw = variants if isinstance(variants, dict) else {}
+    entries = _variant_list(meta)
+    plan: List[Tuple[int, Dict[str, Any]]] = []
+    for key, patch in raw.items():
+        try:
+            i = int(key)
+        except (TypeError, ValueError):
+            raise ValueError(f"variant key must be a store index: {key!r}")
+        if not 0 <= i < len(entries):
+            raise ValueError(f"this prop has no variant {i}")
+        if not isinstance(patch, dict):
+            raise ValueError(f"variant {i}: patch must be an object")
+        unknown = [k for k in patch if k not in VARIANT_PATCH_APPLIERS]
+        if unknown:
+            raise ValueError(
+                f"variant {i}: unknown field(s) "
+                + ", ".join(sorted(unknown))
+                + " (a variant owns: " + ", ".join(VARIANT_PATCH_KEYS) + ")")
+        plan.append((i, patch))
+
+    if not prop_patch and not plan:
+        return _prop_record(pid, meta, full=True)
+    _apply_prop_fields(meta, prop_patch)
+    for i, patch in plan:
+        for field, value in patch.items():
+            VARIANT_PATCH_APPLIERS[field](entries[i], value)
+    if plan:
+        meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return _prop_record(pid, meta, full=True)
 
 
 def delete_variant(prop_id: str, variant: int) -> bool:
