@@ -1492,8 +1492,14 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
 - `map3d.elevator`: `[x, y]`-Fraktion, gilt für alle Etagen. Rezept:
   Schacht 1,8 m², Ecksäulen 0,14, Glas 3 Seiten (offene Seite Richtung
   Gebäudemitte), Pads 1,6 m², Kabine 1,4 m² × 0,6 storey — alles echte
-  Meter. Figuren-Routing: Türschwelle → Fahrstuhl → vertikal → weiter.
-  Treppen gibt es nicht.
+  Meter. Figuren-Routing: Türschwelle → Treppe (wo eine steht) oder
+  Fahrstuhl → vertikal → weiter.
+- `map3d.stairs`: eine Liste von Treppenläufen, je Eintrag
+  `{at:[x,z], from_level, dir_deg}` in lokalen Metern — EIN Lauf je
+  Etagensprung, max. 8 je Location. Rezept: Stufen 1,20 breit × 0,26 tief,
+  Steigung teilt den Etagenabstand gleichmäßig, Pad 0,9 m² an jedem Ende.
+  Wo ein Lauf steht, gewinnt er gegen den Fahrstuhl; der bleibt Fallback.
+  Zahlen und Handrechnung: Nachtrag „Treppen (v4)" am Dateiende.
 - Legacy: prozedurale Innen-Wände + Auto-Grid NUR, wenn kein Raum der
   Location ein Layout hat.
 
@@ -4273,6 +4279,17 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # Kollider
   extras:  [ { kind: "elevator_shaft"|"elevator_pad"|"elevator_cabin"|…,
                … je Kind eine feste Primitiv-Form … } ],
+                                           # stair_step (Nachtrag 2026-08-25):
+                                           # eine MASSIVE Stufe, center+size
+                                           # wie jeder extras-Kasten, dazu
+                                           # `level` (die untere Etage) und
+                                           # `stair` (Index des Laufs)
+                                           # stair_pad: der Trigger am Fuß und
+                                           # am Kopf des Laufs, `end`:
+                                           # "foot"|"head", `level` = die
+                                           # Etage, auf der er liegt — Oberkante
+                                           # ist deren Boden, wie beim
+                                           # elevator_pad
 
   # --- Modell-Platzierungen (eine Spec-Form für ALLES) ---
   models:  [ { role: "building"|"room"|"prop",
@@ -6785,3 +6802,128 @@ volle Stücke ins Gelände reichen.
 | `style.door_color` liegt im Stil-Vokabular | ebenda **[9]** |
 | Blender-Volumen: 14 Wandprismen (2 davon Türblatt), 126 Vertices, 95 Faces, vier Materialien, Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]/[5]** |
 | Kollision: das Blatt wird kein Segment, ROTE PROBE „ein sperrendes Blatt mauert die Tür zu" | `client3d/scripts/smoke_walk_math.mjs` |
+
+## Nachtrag 2026-08-25 (§ A6/B1): TREPPEN — man geht in den ersten Stock
+
+Bis hierher gab es genau EINE senkrechte Verbindung: den Fahrstuhl. Der Satz
+„Treppen gibt es nicht" ist gestrichen. **Eine Treppe ist kein neuer
+Subsystem-Zweig, sondern dieselbe Mechanik wie der Fahrstuhl** — der Server
+rechnet sie in `extras`-Kästen aus, die Renderer stellen sie hin.
+
+### Die Drahtform (Autorenformat)
+
+```json
+"stairs": [ { "at": [2.0, -2.0], "from_level": 0, "dir_deg": 90 } ]
+```
+
+- `at` = der FUSSPUNKT, wo die erste Stufe beginnt, in lokalen Metern wie
+  `map3d.elevator` und jede andere Plankoordinate.
+- `from_level` = die untere Etage (ein Kellerlauf ist `-1`). **Ein Lauf endet
+  IMMER auf `from_level + 1`.** Wer vom Erdgeschoss in den zweiten Stock will,
+  autoriert ZWEI Läufe — das ist die Kette, und fehlt ihr ein Glied, bleibt für
+  diesen Sprung der Fahrstuhl.
+- `dir_deg` ∈ {0, 90, 180, 270} = Aufstiegsrichtung. Die Vektoren stehen fest,
+  niemand rechnet sie zurück: `{0: (0,+1), 90: (+1,0), 180: (0,−1),
+  270: (−1,0)}` in (x, z).
+- Maximal **8** Läufe je Location; der Sanitizer kappt die Liste und wirft
+  jeden Eintrag weg, dem `at`, `from_level` oder ein gültiges `dir_deg` fehlt
+  (nicht repariert — eine Treppe, deren Richtung niemand aufgeschrieben hat,
+  zeigt sonst irgendwohin).
+
+### Das Rezept (Server-Konstanten, echte Meter)
+
+| Konstante | Wert | Was |
+|---|---|---|
+| `STAIR_WIDTH_M` | 1,20 | Stufenbreite QUER zur Steigrichtung |
+| `STAIR_TREAD_M` | 0,26 | Auftritt je Stufe ENTLANG der Steigrichtung |
+| `STAIR_RISE_M` | 0,20 | NOMINELLE Steigung — nur der Teiler |
+| `STAIR_PAD_M` | 0,90 | Kante des Trigger-Pads (Marker, wie `ELEVATOR_PAD_M`) |
+| `STAIR_PAD_THICKNESS` | 0,05 | Dicke des Pads |
+| `STAIR_PAD_GAP_M` | 0,05 | Luft zwischen Pad-Kante und erster/letzter Stufe |
+
+```
+base   = storey_floor_y(from_level, storey)
+target = storey_floor_y(from_level + 1, storey)
+climb  = target − base
+steps  = max(2, round(climb / STAIR_RISE_M))
+rise   = climb / steps          # teilt den Etagenabstand GLEICHMÄSSIG
+run    = steps · STAIR_TREAD_M
+```
+
+Die nominelle Steigung ist nur der Teiler: gerechnet wird mit `rise`, damit die
+letzte Stufe EXAKT auf dem oberen Boden landet statt eine Handbreit darunter.
+**Stufe *i* ist ein MASSIVER Kasten** vom unteren Boden bis zu ihrem eigenen
+Auftritt — eine Treppe, auf der man überall steht, kein Satz schwebender
+Platten:
+
+```
+center = at + dir·(i+0.5)·TREAD ,  y = base + (i+1)·rise/2
+size   = TREAD entlang der Richtung, (i+1)·rise hoch, WIDTH quer
+```
+
+Die **Pad-OBERKANTE ist der Etagenboden** — dasselbe Gesetz wie beim
+`elevator_pad`, also `center_y = Boden − THICKNESS/2`:
+
+```
+foot = at − dir·(STAIR_PAD_M/2 + STAIR_PAD_GAP_M) , level = from_level
+head = at + dir·(run + STAIR_PAD_M/2 + STAIR_PAD_GAP_M) , level = from_level+1
+```
+
+### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
+
+| Größe | Rechnung | Wert |
+|---|---|---|
+| `base` | `storey_floor_y(0, 3)` — Etage 0 IST das Terrain | 0,00 |
+| `target` | `storey_floor_y(1, 3)` = 1·3 + 0,08 | **3,08** |
+| `climb` | 3,08 − 0,00 | 3,08 |
+| `steps` | `round(3,08 / 0,20)` = `round(15,4)` | **15** |
+| `rise` | 3,08 / 15 | **0,205333…** |
+| `run` | 15 · 0,26 | **3,90** |
+
+| Primitiv | `center` | `size` | `level` |
+|---|---|---|---|
+| `stair_step` i = 0 | [2,13 / 0,102667 / −2] | [0,26 / 0,205333 / 1,20] | 0 |
+| `stair_step` i = 14 | [5,77 / 1,54 / −2] | [0,26 / 3,08 / 1,20] | 0 |
+| `stair_pad` `foot` | [1,50 / −0,025 / −2] | [0,90 / 0,05 / 0,90] | 0 |
+| `stair_pad` `head` | [6,40 / 3,055 / −2] | [0,90 / 0,05 / 0,90] | 1 |
+
+Bei `dir_deg` 0/180 läuft der Auftritt in z: `size` tauscht x ↔ z und das
+Zentrum wandert entlang z — sonst ändert sich keine Zahl.
+
+### Handrechnung Keller → EG (`from_level` −1)
+
+| Größe | Rechnung | Wert |
+|---|---|---|
+| `base` | `storey_floor_y(−1, 3)` = −3 + 0,08 | **−2,92** |
+| `target` | `storey_floor_y(0, 3)` | 0,00 |
+| `climb` / `steps` / `rise` / `run` | 2,92 · `round(14,6)` = 15 | 2,92 / 15 / **0,194667** / 3,90 |
+
+Stufe 0 sitzt bei y = −2,822667, Stufe 14 ist 2,92 hoch (Mitte −1,46); das
+Fuß-Pad liegt bei −2,945 auf `level` −1, das Kopf-Pad bei −0,025 auf `level` 0.
+Der Keller ist damit KEIN Sonderfall, sondern dieselbe Formel.
+
+### Payload — additiv, zwei neue `extras`-Kinds
+
+- `{kind:"stair_step", center, size, level: from_level, stair: idx}`
+- `{kind:"stair_pad", center, size, level, stair: idx, end:"foot"|"head"}`
+
+`stair` ist der Index des Laufs in `map3d.stairs` — zwei Läufe einer Kette
+bleiben unterscheidbar. Dazu `style.stair_color` = **`#8a7a66`**: eine Treppe
+ist Mauerwerk, kein Maschinenteil, und muss sich vom Grau des Fahrstuhls
+unterscheiden.
+
+**Routing-Regel:** Verbindet eine Treppenkette zwei Etagen, gewinnt sie; der
+Fahrstuhl bleibt Fallback.
+
+`SCENE_RECIPE_VERSION` 3 → **4**: dieselben Daten liefern andere `extras`,
+also muss jede Szenensignatur sich bewegen.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| EG → OG: 15 Stufen + 2 Pads, Stufe 0 und Stufe 14 nach center/size, beide Pads nach center/size/level/end | `scripts/smoke_scene_recipe.py` **[5s]** |
+| `dir_deg` 0: `size` x ↔ z getauscht, Zentrum und Pads wandern in z | ebenda **[5s]** |
+| Keller → EG: 15 Stufen, erste bei −2,822667, letzte 2,92 hoch, Pads −2,945 / −0,025 auf `level` −1 / 0 | ebenda **[5s]** |
+| Kette aus zwei Läufen behält ihre `stair`-Indizes | ebenda **[5s]** |
+| ROTE PROBE: ohne `map3d.stairs` entsteht kein einziges `stair_*`-Primitiv (die Fahrstuhl-Zählung misst also keine Treppe) | ebenda **[5s]** |

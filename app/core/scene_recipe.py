@@ -75,7 +75,10 @@ logger = get_logger(__name__)
 #: 3 (2026-08-25): a door hole is filled by a DOOR LEAF — a thin dark plate
 #: over its clear opening, the door's answer to a window's glass pane, so an
 #: exterior door is visible as a door from outside.
-SCENE_RECIPE_VERSION = 3
+#: 4 (2026-08-25): STAIRS — ``map3d.stairs`` becomes a flight of solid
+#: ``stair_step`` boxes plus a ``stair_pad`` at each end, so a storey can be
+#: reached on foot and the elevator is only the fallback.
+SCENE_RECIPE_VERSION = 4
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -211,6 +214,28 @@ ELEVATOR_CABIN_STOREY_FRAC = 0.6
 ELEVATOR_ROOF_THICKNESS = 0.05
 ELEVATOR_PAD_THICKNESS = 0.05
 ELEVATOR_GLASS_THICKNESS = 0.03
+# Stairs (§ A6) — metres. A flight connects ONE storey to the one above it;
+# where a flight exists it wins over the elevator, which stays the fallback.
+STAIR_WIDTH_M = 1.2      # step width across the climb direction
+STAIR_TREAD_M = 0.26     # run per step along the climb direction
+STAIR_RISE_M = 0.20      # nominal rise; the real rise divides the climb evenly
+STAIR_PAD_M = 0.9        # trigger pad edge (marker only, like ELEVATOR_PAD_M)
+STAIR_PAD_THICKNESS = 0.05
+# Clearance between a pad's edge and the first/last tread, so the marker never
+# overlaps the flight it belongs to.
+STAIR_PAD_GAP_M = 0.05
+# How many flights one location may carry. Beyond this an author is drawing
+# something other than a building; the sanitizer caps the stored list at the
+# same number.
+STAIR_MAX = 8
+# The four legal climb directions as (x, z) unit vectors — an author names the
+# ANGLE, the vector is fixed here so no consumer trigonometries it back out.
+_STAIR_DIRS: Dict[int, Tuple[float, float]] = {
+    0: (0.0, 1.0), 90: (1.0, 0.0), 180: (0.0, -1.0), 270: (-1.0, 0.0),
+}
+#: The legal angles as data, for whoever validates an author's entry — the
+#: sanitizer reads THIS instead of writing the four numbers down a second time.
+STAIR_DIRS_DEG: Tuple[int, ...] = tuple(sorted(_STAIR_DIRS))
 # A building SHELL is anchored at its WALKABLE SURFACE, exactly like a GROUND
 # model — the surface lands on the storey-0 floor (``LEVEL_PLATE_TOP``) and the
 # mesh hangs below it. The old free-standing socle clearance (0.06 over the
@@ -259,6 +284,10 @@ STYLE: Dict[str, Any] = {
     "elevator_cabin_color": "#3d4650",
     "elevator_cabin_opacity": 0.85,
     "elevator_glass_opacity": 0.22,
+    # A staircase is masonry, not machinery: warm stone rather than the
+    # elevator's cold grey, so the two vertical connections read apart at a
+    # glance.
+    "stair_color": "#8a7a66",
 }
 
 
@@ -1432,7 +1461,7 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
     return out
 
 
-# ── Extras (elevator) ───────────────────────────────────────────────────
+# ── Extras (elevator, stairs) ───────────────────────────────────────────
 
 def _box(kind: str, cx: float, cy: float, cz: float,
          w: float, h: float, d: float, **extra: Any) -> Dict[str, Any]:
@@ -1508,6 +1537,90 @@ def _elevator(map3d: Dict[str, Any], levels: List[int],
     out.append(_box("elevator_cabin", ex,
                     storey_floor_y(0, storey) + cabin_h / 2, ez,
                     cabin, cabin_h, cabin, level=0))
+    return out
+
+
+def _stairs(map3d: Dict[str, Any], levels: List[int],
+            storey: float) -> List[Dict[str, Any]]:
+    """The staircases of a location: a flight of solid steps per entry, with a
+    trigger pad at each end (§ A6, Nachtrag "Treppen (v4)").
+
+    ``map3d.stairs`` is a list of ``{"at": [x, z], "from_level": int,
+    "dir_deg": 0|90|180|270}`` in LOCAL METRES, like ``map3d.elevator``. ``at``
+    is the FOOT — where the first tread begins — and a flight ALWAYS ends one
+    storey up, at ``from_level + 1``; that is what makes a multi-storey climb a
+    CHAIN of flights rather than one authored ramp.
+
+    Every number falls out of :func:`storey_floor_y`, so a basement flight
+    (``from_level`` −1) is the same formula and not a special case:
+
+    * ``climb`` = the two floor datums apart; ``steps`` = the climb divided by
+      the NOMINAL rise and rounded, at least two — the real ``rise`` then
+      divides the climb evenly, so the last tread lands EXACTLY on the upper
+      floor instead of a hand's breadth under or over it;
+    * step *i* is a SOLID box from the lower floor up to its own tread — a
+      staircase one can stand on anywhere, not a set of floating slabs;
+    * a pad's TOP is its storey's floor, the same law ``elevator_pad`` follows,
+      and it sits one pad-half plus a gap clear of the flight.
+
+    ``levels`` is the storey census of the layout and deliberately NOT read: a
+    flight is anchored by its own ``from_level``, whereas the elevator needs
+    the census because it puts a pad on every storey that exists.
+    """
+    raw = (map3d or {}).get("stairs")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: List[Dict[str, Any]] = []
+    for idx, item in enumerate(list(raw)[:STAIR_MAX]):
+        if not isinstance(item, dict):
+            continue
+        at = item.get("at")
+        if not isinstance(at, (list, tuple)) or len(at) != 2:
+            continue
+        # STRICTLY parsed, never repaired: a flight whose direction or foot
+        # nobody wrote down is not silently turned north or dropped onto the
+        # anchor pin — it does not exist.
+        try:
+            deg = int(float(item.get("dir_deg"))) % 360
+            from_level = int(float(item.get("from_level")))
+            ax, az = float(at[0]), float(at[1])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not (math.isfinite(ax) and math.isfinite(az)):
+            continue
+        step_dir = _STAIR_DIRS.get(deg)
+        if step_dir is None:
+            continue
+        dx, dz = step_dir
+        base = storey_floor_y(from_level, storey)
+        target = storey_floor_y(from_level + 1, storey)
+        climb = target - base
+        if climb <= 0:
+            continue
+        steps = max(2, int(round(climb / STAIR_RISE_M)))
+        rise = climb / steps
+        run = steps * STAIR_TREAD_M
+        # The tread runs ALONG the climb, the width ACROSS it — which of the
+        # two is the x size therefore depends on the direction, and nothing
+        # else does.
+        size_x = STAIR_TREAD_M if dx else STAIR_WIDTH_M
+        size_z = STAIR_TREAD_M if dz else STAIR_WIDTH_M
+        for i in range(steps):
+            along = (i + 0.5) * STAIR_TREAD_M
+            height = (i + 1) * rise
+            out.append(_box("stair_step", ax + dx * along, base + height / 2,
+                            az + dz * along, size_x, height, size_z,
+                            level=from_level, stair=idx))
+        gap = STAIR_PAD_M / 2 + STAIR_PAD_GAP_M
+        out.append(_box("stair_pad", ax - dx * gap,
+                        base - STAIR_PAD_THICKNESS / 2, az - dz * gap,
+                        STAIR_PAD_M, STAIR_PAD_THICKNESS, STAIR_PAD_M,
+                        level=from_level, stair=idx, end="foot"))
+        head = run + gap
+        out.append(_box("stair_pad", ax + dx * head,
+                        target - STAIR_PAD_THICKNESS / 2, az + dz * head,
+                        STAIR_PAD_M, STAIR_PAD_THICKNESS, STAIR_PAD_M,
+                        level=from_level + 1, stair=idx, end="head"))
     return out
 
 
@@ -2683,7 +2796,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # the height sampler, at the point the consumer actually asks about.
         "floor_plan": _floor_plan(location, recipes),
         "walls": walls,
-        "extras": _elevator(map3d, levels, storey),
+        # The vertical connections of the building, one flat list: the
+        # elevator's shaft primitives and every staircase's steps and pads.
+        "extras": (_elevator(map3d, levels, storey)
+                   + _stairs(map3d, levels, storey)),
         "models": models,
         "figures": _figures(),
         "markers": markers,

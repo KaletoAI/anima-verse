@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from app.core.log import get_logger
+from app.core import scene_recipe
 from app.core.scatter_curves import curve_map, tessellate
 from app.core.world_geometry import polygon_plan_width_m, polygon_signed_area
 from app.imagegen.base import BackendBusyError
@@ -876,6 +877,37 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
         ex, ez = _metre(ev[0]), _metre(ev[1])
         if ex is not None and ez is not None:
             out["elevator"] = [ex, ez]
+    # Staircases (Nachtrag "Treppen (v4)"): one entry per FLIGHT, i.e. per
+    # storey jump — a climb from the ground floor to the second is two of
+    # them. ``at`` is the foot in LOCAL METRES like every other plan
+    # coordinate, ``from_level`` the storey it starts on (a basement flight is
+    # −1) and ``dir_deg`` the climb direction, one of the four quarter turns.
+    # An entry that misses any of the three is DROPPED rather than repaired:
+    # a flight whose direction nobody wrote down would point somewhere the
+    # author never chose.
+    st = raw.get("stairs")
+    if isinstance(st, list):
+        flights = []
+        for item in st[:scene_recipe.STAIR_MAX]:
+            if not isinstance(item, dict):
+                continue
+            at = item.get("at")
+            if not isinstance(at, (list, tuple)) or len(at) != 2:
+                continue
+            sx, sz = _metre(at[0]), _metre(at[1])
+            if sx is None or sz is None:
+                continue
+            try:
+                lvl = int(float(item.get("from_level")))
+                deg = int(float(item.get("dir_deg"))) % 360
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if deg not in scene_recipe.STAIR_DIRS_DEG:
+                continue
+            flights.append({"at": [sx, sz], "from_level": lvl,
+                            "dir_deg": deg})
+        if flights:
+            out["stairs"] = flights
     # Floor texture per LEVEL: surface-texture kind for each storey's floor
     # plate ({"0": "parquet", "-1": "stone"}). A room's own surfaces.floor
     # overrides it for the room area only — this fills the REST of the plate

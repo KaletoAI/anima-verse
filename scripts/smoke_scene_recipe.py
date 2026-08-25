@@ -1710,6 +1710,136 @@ def test_elevator() -> None:
           not scene_recipe.compose_scene({"map3d": {}, "rooms": []})["extras"])
 
 
+def stair_fixture(stairs) -> dict:
+    """The [1] fixture PLUS ``map3d.stairs`` — a variant on purpose.
+
+    The base fixture must stay stair-less: every expectation above (the
+    elevator's ``extras`` census in particular) is derived against it, and a
+    staircase in it would silently move those numbers.
+    """
+    loc = fixture()
+    loc["map3d"] = {**loc["map3d"], "stairs": list(stairs)}
+    return loc
+
+
+def stair_scene(stairs) -> dict:
+    return scene_recipe.compose_scene(stair_fixture(stairs),
+                                      plan_width_m=PLAN_W)
+
+
+def test_stairs() -> None:
+    print("\n[5s] stairs — a flight of solid steps between two storeys")
+    # THE WHOLE DERIVATION BY HAND (spec § 0), never read off the output.
+    # Constants: width 1.20 across the climb, tread 0.26 along it, nominal
+    # rise 0.20, pad edge 0.90 × 0.05 thick.
+    #
+    # EG → OG, storey 3.00, at = (2, −2), dir 90 → +X:
+    #   base   = storey_floor_y(0, 3) = 0.00          (storey 0 IS the terrain)
+    #   target = storey_floor_y(1, 3) = 1·3 + 0.08 = 3.08
+    #   climb  = 3.08          steps = round(3.08 / 0.20) = round(15.4) = 15
+    #   rise   = 3.08 / 15 = 0.2053333…               run = 15 · 0.26 = 3.90
+    # Step i is a SOLID box from the floor up to base + (i+1)·rise:
+    #   centre = [2 + (i+0.5)·0.26,  base + (i+1)·rise/2,  −2]
+    #   size   = [0.26, (i+1)·rise, 1.20]
+    #   i = 0  → centre [2.13, 0.1026667, −2]  size [0.26, 0.2053333, 1.2]
+    #   i = 14 → centre [2 + 3.77, 3.08/2, −2] = [5.77, 1.54, −2]
+    #            size [0.26, 3.08, 1.2]
+    # The pads are markers, one per end, and their TOP is the storey floor
+    # (elevator_pad's law): centre_y = floor − 0.05/2.
+    #   foot: at − dir·(0.90/2 + 0.05) = (2 − 0.5, −2) → [1.5, −0.025, −2]
+    #   head: at + dir·(run + 0.90/2 + 0.05) = (2 + 3.9 + 0.5, −2)
+    #         → [6.4, 3.08 − 0.025, −2] = [6.4, 3.055, −2]
+    sc = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90}])
+    kinds = {}
+    for e in sc["extras"]:
+        kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
+    check("15 steps and 2 pads next to the elevator's own primitives",
+          kinds.get("stair_step") == 15 and kinds.get("stair_pad") == 2,
+          str(kinds))
+    steps = [e for e in sc["extras"] if e["kind"] == "stair_step"]
+    first, last = steps[0], steps[-1]
+    check("step 0: centre [2.13, 0.10267, −2], size [0.26, 0.20533, 1.2]",
+          near(first["center"][0], 2.13) and near(first["center"][1], 0.102667)
+          and near(first["center"][2], -2.0)
+          and near(first["size"][0], 0.26) and near(first["size"][1], 0.205333)
+          and near(first["size"][2], 1.2),
+          f"{first['center']} {first['size']}")
+    check("step 14: centre [5.77, 1.54, −2], size [0.26, 3.08, 1.2] — the "
+          "last step reaches the upper floor",
+          near(last["center"][0], 5.77) and near(last["center"][1], 1.54)
+          and near(last["center"][2], -2.0)
+          and near(last["size"][0], 0.26) and near(last["size"][1], 3.08)
+          and near(last["size"][2], 1.2),
+          f"{last['center']} {last['size']}")
+    check("every step carries its lower level and the stair index",
+          all(s.get("level") == 0 and s.get("stair") == 0 for s in steps),
+          str({(s.get("level"), s.get("stair")) for s in steps}))
+    pads = {e.get("end"): e for e in sc["extras"] if e["kind"] == "stair_pad"}
+    check("foot pad: centre [1.5, −0.025, −2], size 0.9 × 0.05, level 0",
+          near(pads["foot"]["center"][0], 1.5)
+          and near(pads["foot"]["center"][1], -0.025)
+          and near(pads["foot"]["center"][2], -2.0)
+          and near(pads["foot"]["size"][0], 0.9)
+          and near(pads["foot"]["size"][1], 0.05)
+          and near(pads["foot"]["size"][2], 0.9)
+          and pads["foot"].get("level") == 0, str(pads.get("foot")))
+    check("head pad: centre [6.4, 3.055, −2], level 1 — one run plus half a "
+          "pad beyond the last step",
+          near(pads["head"]["center"][0], 6.4)
+          and near(pads["head"]["center"][1], 3.055)
+          and near(pads["head"]["center"][2], -2.0)
+          and pads["head"].get("level") == 1, str(pads.get("head")))
+    # The climb direction decides which axis carries the tread — the width
+    # stays ACROSS it. dir 0 = (0, +1): step 0 centre z = −2 + 0.13 = −1.87,
+    # size [1.2, 0.2053333, 0.26]; foot pad z = −2 − 0.5 = −2.5, head pad
+    # z = −2 + 3.9 + 0.5 = 2.4, both on x = 2.
+    sc0 = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 0}])
+    s0 = [e for e in sc0["extras"] if e["kind"] == "stair_step"][0]
+    check("dir 0 climbs along +z: size x↔z swapped, centre moves in z",
+          near(s0["center"][0], 2.0) and near(s0["center"][2], -1.87)
+          and near(s0["size"][0], 1.2) and near(s0["size"][2], 0.26),
+          f"{s0['center']} {s0['size']}")
+    p0 = {e.get("end"): e for e in sc0["extras"] if e["kind"] == "stair_pad"}
+    check("dir 0 pads sit at z −2.5 and z 2.4, both on x 2",
+          near(p0["foot"]["center"][2], -2.5) and near(p0["head"]["center"][2], 2.4)
+          and near(p0["foot"]["center"][0], 2.0)
+          and near(p0["head"]["center"][0], 2.0),
+          f"{p0['foot']['center']} {p0['head']['center']}")
+    # BASEMENT → EG (§ 0's second hand calculation): base =
+    # storey_floor_y(−1, 3) = −3 + 0.08 = −2.92, target = 0.00, climb 2.92,
+    # steps = round(14.6) = 15, rise = 2.92 / 15 = 0.1946667, run 3.90.
+    #   step 0  centre_y = −2.92 + 0.0973333 = −2.8226667
+    #   step 14 centre_y = −2.92 + 1.46 = −1.46, size_y = 2.92
+    #   foot pad −2.92 − 0.025 = −2.945 (level −1), head pad −0.025 (level 0)
+    scb = stair_scene([{"at": [2.0, -2.0], "from_level": -1, "dir_deg": 90}])
+    bsteps = [e for e in scb["extras"] if e["kind"] == "stair_step"]
+    bpads = {e.get("end"): e for e in scb["extras"] if e["kind"] == "stair_pad"}
+    check("basement flight: 15 steps, first at −2.82267, last 2.92 tall",
+          len(bsteps) == 15 and near(bsteps[0]["center"][1], -2.822667)
+          and near(bsteps[0]["size"][1], 0.194667)
+          and near(bsteps[-1]["size"][1], 2.92)
+          and near(bsteps[-1]["center"][1], -1.46),
+          f"{bsteps[0]['center']} {bsteps[-1]['size']}")
+    check("basement pads: −2.945 on level −1, −0.025 on level 0",
+          near(bpads["foot"]["center"][1], -2.945)
+          and bpads["foot"].get("level") == -1
+          and near(bpads["head"]["center"][1], -0.025)
+          and bpads["head"].get("level") == 0,
+          f"{bpads['foot']['center'][1]} {bpads['head']['center'][1]}")
+    # Two flights = two indices; the second one is untouched by the first.
+    sc2 = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90},
+                       {"at": [-2.0, 2.0], "from_level": 1, "dir_deg": 270}])
+    idx = {e.get("stair") for e in sc2["extras"]
+           if str(e["kind"]).startswith("stair_")}
+    check("a chain of two flights keeps its own indices", idx == {0, 1},
+          str(idx))
+    # RED PROBE: the base fixture has no stairs, so it must produce none —
+    # otherwise the elevator census above would be measuring a staircase.
+    check("red: no stair primitive without map3d.stairs",
+          not [e for e in scene()["extras"]
+               if str(e["kind"]).startswith("stair_")])
+
+
 def test_style() -> None:
     print("\n[6] style block")
     st = scene()["style"]
@@ -3740,6 +3870,7 @@ def main() -> int:
     test_boundary_only_datum()
     test_area_room_walk_height()
     test_elevator()
+    test_stairs()
     test_style()
     test_building_spec()
     test_floor_relation()
