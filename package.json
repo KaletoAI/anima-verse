@@ -16,8 +16,8 @@
     "build": "npm run build -w frontend && npm run build -w client3d"
   },
   "overrides": {
-    "js-yaml@4": "4.3.0",
+    "js-yaml@4": "4.3.1",
     "brace-expansion@1": "1.1.16",
-    "brace-expansion@5": "5.0.8"
+    "brace-expansion@5": "5.0.9"
   }
 }
