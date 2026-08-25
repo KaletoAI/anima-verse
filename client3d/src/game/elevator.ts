@@ -11,9 +11,12 @@
  * player's way in.
  *
  * Pure like `walk.ts`, `proximity.ts` and `roomwalk.ts`: plain numbers, no
- * Three, no DOM, no module state and no import — that is what lets
- * `client3d/scripts/smoke_walk_math.mjs` check the numbers with a transpile.
+ * Three, no DOM, no module state and no import BUT one to its own kind —
+ * `stairs.ts` is as pure as this file, and the transpile of
+ * `client3d/scripts/smoke_walk_math.mjs` follows a `./x` import between the
+ * modules it loads, exactly as it does for `clickmove.ts` → `walk.ts`.
  */
+import { nearestRoomAt } from './stairs';
 
 /** How close to the holding point the avatar has to stand, in FIGURE metres —
  *  multiplied by the figure scale exactly like the talk range. Indoors a world
@@ -95,6 +98,11 @@ export function elevatorOptions(state: ElevatorState): number[] {
  * storey's holding point — stepping out of the lift puts you in the room it
  * opens into. Ties fall to the lower id, so the destination of a symmetric
  * floor cannot flicker between two rooms.
+ *
+ * Which is `nearestRoomAt` measured from the holding point, and that is where
+ * the rule lives — the stairs ask the very same question from a landing, and
+ * two copies of a tie-break are two chances to drift apart. All this function
+ * still owns is finding the stop.
  */
 export function elevatorTargetRoom(
   level: number,
@@ -103,15 +111,5 @@ export function elevatorTargetRoom(
 ): string | null {
   const stop = stops.find((s) => s.level === level);
   if (!stop) return null;
-  let best: string | null = null;
-  let bestDist = Infinity;
-  for (const r of rooms) {
-    if (r.level !== level) continue;
-    const dist = Math.hypot(r.center.x - stop.pos.x, r.center.z - stop.pos.z);
-    if (dist < bestDist || (dist === bestDist && best !== null && r.id < best)) {
-      best = r.id;
-      bestDist = dist;
-    }
-  }
-  return best;
+  return nearestRoomAt(level, stop.pos, rooms);
 }

@@ -2258,12 +2258,10 @@ async function startApp(username: string, role: string) {
             const leave = from ? roomDoor(scene, from) : null;
             if (leave) stops.push(doorStop(tile, leave));            // leave the old room
             // The flights arrive as world points already (`tile.stairs`); the
-            // chain module is pure, so they go in as plain numbers.
+            // chain module is pure, so `stairLinksOf` hands them in as plain
+            // numbers — the same conversion the avatar's own climb uses.
             const chain = lf !== lt && tile.stairs?.length
-              ? stairChain(tile.stairs.map((s): StairLink => ({
-                foot: { level: s.foot.level, x: s.foot.pos.x, y: s.foot.pos.y, z: s.foot.pos.z },
-                head: { level: s.head.level, x: s.head.pos.x, y: s.head.pos.y, z: s.head.pos.z },
-              })), lf, lt)
+              ? stairChain(stairLinksOf(tile), lf, lt)
               : null;
             if (chain) {
               // Foot then head per flight — the waypoint machine turns that

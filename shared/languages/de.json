@@ -1504,6 +1504,8 @@
     "T-pose": "T-Pose",
     "Take control": "Übernehmen",
     "Take it off the map — it keeps all its data": "Nimmt ihn von der Karte — alle Daten bleiben erhalten",
+    "Take the stairs down": "Die Treppe hinuntergehen",
+    "Take the stairs up": "Die Treppe hinaufgehen",
     "Talk": "Ansprechen",
     "Target": "Ziel",
     "Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the prop’s own height from the Props tab ({h} m).": "Zielhöhe: Das Modell wird skaliert, bis es so hoch ist, und steht immer AUF dem Boden. Leer = die eigene Höhe des Props aus dem Props-Tab ({h} m).",
