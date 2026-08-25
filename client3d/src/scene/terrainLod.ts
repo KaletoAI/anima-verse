@@ -165,8 +165,8 @@ import type { WorldHeightField, WorldHeightTiles } from '@anima/scene-render';
 import { rasterFlowAt, rasterLevelAt, rasterSdAt, waterBilinear,
   WATER_SD_DRY } from './waterRaster';
 import type { WaterRaster } from './waterRaster';
-import { packWaterLook, terrainWaterFragmentGlsl, waterSdGlsl,
-  WATER_LOOK_TEXELS } from './waterShade';
+import { packWaterLook, terrainWaterFragmentGlsl, waterGateGlsl, waterInside,
+  waterSdGlsl, WATER_LOOK_TEXELS, WATER_SD_BAND_M } from './waterShade';
 import type { WaterLook } from './waterShade';
 import { bindLayerIdUniforms } from './layerGround';
 
@@ -662,6 +662,13 @@ export function waterTileCaps(water: HeightPyramid | null | undefined,
   // its width and it would break into puddles at exactly the distance F1
   // exists to prevent — the mask and the vertex shader have to be the same
   // statement or the number describes nothing.
+  //
+  // `sd > 0` AND NOT `>= 0` SINCE FINDING G1: the lift is now scaled by
+  // `waterInside(sd)`, which is 0 ON the outline and rises from there, so a
+  // texel at exactly distance 0 does not lift and must not be counted. Nothing
+  // else moves — the ramp scales HOW MUCH a texel rises, never WHETHER it does,
+  // so the set of lifting texels, and with it every cap this function has ever
+  // answered, is unchanged away from that measure-zero line.
   const sdOk = sd && sd.cols === cols && sd.rows === rows;
   for (let j = 0; j < rows; j += 1) {
     const wrow = (wl.row0 + j) * water.texW;
@@ -672,7 +679,7 @@ export function waterTileCaps(water: HeightPyramid | null | undefined,
       // The dry sentinel is NaN and every comparison with it is false, so this
       // is the same NaN-safe statement `tlodLift` makes, and nothing else.
       if (water.data[wrow + i] > height.data[hrow + i]
-          && (!sdOk || (sd.data[srow + i] ?? WATER_SD_DRY) >= 0)) run += 1;
+          && (!sdOk || (sd.data[srow + i] ?? WATER_SD_DRY) > 0)) run += 1;
       sat[(j + 1) * w1 + i + 1] = sat[j * w1 + i + 1] + run;
     }
   }
@@ -1643,7 +1650,7 @@ uniform vec4 uTlodWaterLevel[ ${MAX_LOD_LEVELS} ];
 uniform float uTlodNoWater;
 varying float vTlodWet;
 varying vec2 vTlodFlow;
-${waterSdGlsl()}
+${waterSdGlsl()}${waterGateGlsl()}
 const float TLOD_DRY = -1e30;
 
 float tlodWaterGrid( vec4 lv, vec2 p ) {
@@ -1702,10 +1709,26 @@ float tlodWaterAt( vec2 p, float nodeStep ) {
 // value (§ A16.5 point 3). It is bilinear SUPPORT, never a surface. Nothing in
 // the figure code changes — \`waterPlaneMath.waterLevelAt\` was always the
 // gameplay's answer and it never knew about the dilation at all.
+//
+// ── AND THE GATE IS THE FRAGMENT'S OWN CURVE, NOT A STEP (finding G1) ───────
+// It used to be binary — \`sd < 0\` no lift, \`sd >= 0\` the whole lift — while the
+// fragment faded the water LOOK in over a smooth band around the same line. So
+// the first half-metre inside the outline stood fully on the mirror (level − h,
+// centimetres to decimetres wherever the water is lifted over its surroundings)
+// and shaded as ground: a figure standing on the true height there was drawn
+// sunk into the ground. The lift now rides \`twInside\`, the very text the
+// fragment reads (\`waterShade.waterGateGlsl\`), so the shore is ONE ramp —
+// ground at the outline, mirror half a metre in, geometry and look together.
+//
+// \`sd\` IS A FUNCTION OF p ALONE, so both taps of the morph pair are scaled by
+// the same factor and \`mix(l1, l2, f)\` stays continuous in f exactly as before;
+// and \`l − h = max(0, w − h) · g\` is still ≥ 0, so "vTlodWet 0 = dry" holds.
 float tlodLift( float h, vec2 p, float nodeStep, float sd ) {
-  if ( uTlodNoWater > 0.5 || sd < 0.0 ) return h;
+  if ( uTlodNoWater > 0.5 ) return h;
+  float g = twInside( sd );
+  if ( g <= 0.0 ) return h;
   float w = tlodWaterAt( p, nodeStep );
-  return ( w > h ) ? w : h;
+  return ( w > h ) ? h + ( w - h ) * g : h;
 }
 
 // THE FLOW at one point, on the water pyramid's BASE lattice (K-A E4).
@@ -2124,9 +2147,17 @@ export function gpuWaterSdAt(sd: SdField | null, x: number,
  * support and not a surface — it never lifts. A caller with no sd field hands
  * in {@link WATER_SD_DRY} and gets the ground, which is the same "no water
  * known here" a NaN level gives.
+ *
+ * AND THE GATE IS A RAMP (finding G1): the lift is scaled by `waterInside(sd)`,
+ * the same curve over the same band the FRAGMENT fades the water look in with
+ * (`waterShade.waterGateGlsl`, one GLSL text for both stages). Ground at the
+ * authored outline, the full mirror `WATER_SD_BAND_M` inside it — geometry and
+ * look on one shore ramp, so no strip is lifted while it still shades as
+ * ground.
  */
 export function liftedHeight(h: number, w: number, sd: number): number {
-  return sd >= 0 && w > h ? w : h;
+  const g = waterInside(sd);
+  return g > 0 && w > h ? h + (w - h) * g : h;
 }
 
 /**
@@ -2137,10 +2168,12 @@ export function liftedHeight(h: number, w: number, sd: number): number {
  * function only so the smoke can pin that identity: a dry sentinel (NaN), a
  * mirror below the bed and a point outside the outline all answer exactly 0,
  * which is what "this pixel is not water" has to be — the fragment's every
- * branch keys on `> 0`.
+ * branch keys on `> 0`. On the outline itself the ramp of finding G1 answers 0
+ * too, and that is the same statement: no lift there, and no water look either.
  */
 export function liftedDepth(h: number, w: number, sd: number): number {
-  return sd >= 0 && w > h ? w - h : 0;
+  const g = waterInside(sd);
+  return g > 0 && w > h ? (w - h) * g : 0;
 }
 
 /**
@@ -2182,9 +2215,10 @@ export function fragmentNormal(near: HeightPyramid | null,
  * for the dry one — and `null` is what every caller before that stage passes,
  * so the answer is unchanged for them: `gpuWaterAt` returns NaN and
  * `liftedHeight` falls through to the height. `sd` is the gate that came with
- * finding F-B and follows the same rule: no field, no gate (0, i.e. "inside"),
- * so a caller that hands in a water pyramid and no distance measures the
- * ungated lift and can therefore pin the difference the gate makes. With a pyramid the two taps of
+ * finding F-B and follows the same rule: no field, no gate (`WATER_SD_BAND_M`,
+ * i.e. "fully inside"), so a caller that hands in a water pyramid and no
+ * distance measures the ungated lift and can therefore pin the difference the
+ * gate makes. With a pyramid the two taps of
  * the morph pair are lifted SEPARATELY, each at its own footprint, and blended
  * afterwards; the argument for that order is in `terrainLodWaterGlsl`.
  *
@@ -2225,7 +2259,12 @@ export function morphedVertex(node: LodNode, gx: number, gz: number,
   }
   // ONE distance for both taps — the shader takes `sdw` once, before either
   // (`terrainLodGlsl`), because the gate is a function of the position alone.
-  const sdw = sd ? gpuWaterSdAt(sd, x, z) : 0;
+  //
+  // NO FIELD MEANS "FULLY INSIDE" and is therefore `WATER_SD_BAND_M`, not 0:
+  // since finding G1 the gate is a RAMP that starts at 0 on the outline, so a
+  // caller that wants to measure the ungated lift has to hand in a distance
+  // past the band's far end, not one on its near end.
+  const sdw = sd ? gpuWaterSdAt(sd, x, z) : WATER_SD_BAND_M;
   const own = liftedHeight(gpuHeightAt(near, nearRect, far, x, z, nodeStep * m1),
                            gpuWaterAt(water, nearRect, x, z, nodeStep * m1), sdw);
   const parent = liftedHeight(gpuHeightAt(near, nearRect, far, x, z, nodeStep * m2),

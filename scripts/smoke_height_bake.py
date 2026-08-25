@@ -2565,6 +2565,92 @@ check_true("...and no vector was lengthened past 1", _u_len[1] <= 1.0 + 1e-12)
 check("a still lake's blurred flow is exactly (0, 0)",
       [_wet_tile["water"].get("flow_x"), _wet_tile["water"].get("flow_z")],
       [None, None])
+# THE FIELD DOES NOT DIVERGE ACROSS A RIVER (finding G2, 2026-08-25: "the
+# authored 1 m/s moves, but in different directions within the river"). The
+# adjacent-pair numbers above bound the ROUGHNESS of the field; this bounds its
+# SPREAD — the worst angle between ANY two in-river texels of one window, which
+# is what a viewer sees at a glance.
+#
+# BY HAND: a straight stroke has ONE segment, `_flow_from` finds no interior
+# knot window to ease in, and every point of the ribbon takes that segment's own
+# unit tangent — so the raw field is one constant vector and the box blur of a
+# constant is that constant. The spread is EXACTLY 0 deg, axis-aligned or not.
+# The meander's spread is its own shape: the sine turns +-31 deg over the drawn
+# line, so the field must turn with it; ACROSS the ribbon at one station it must
+# not, and a 4 m blur over a ribbon 8 m wide is what keeps that under a degree.
+def _flow_spread(model, i0, j0, cols, rows, step=2.0):
+    """Worst angle in degrees between ANY two in-river texels of one window."""
+    lvl, fx, fz, sd = model.water_raster(i0 * step, j0 * step, step, cols, rows)
+    vecs = [(fx[j][i], fz[j][i]) for j in range(rows) for i in range(cols)
+            if sd[j][i] is not None and sd[j][i] >= 0
+            and math.hypot(fx[j][i], fz[j][i]) > 1e-9]
+    worst = 0.0
+    for a in range(len(vecs)):
+        for b in range(a + 1, len(vecs)):
+            u, v = vecs[a], vecs[b]
+            dot = ((u[0] * v[0] + u[1] * v[1])
+                   / (math.hypot(*u) * math.hypot(*v)))
+            worst = max(worst, math.degrees(math.acos(max(-1.0, min(1.0, dot)))))
+    return worst, len(vecs)
+
+
+def _cross_spread(model, i0, j0, cols, rows, columns, step=2.0):
+    """Worst angle across the ribbon at each of `columns` — the same measure
+    taken along ONE cross-section, where a river may not turn at all."""
+    lvl, fx, fz, sd = model.water_raster(i0 * step, j0 * step, step, cols, rows)
+    worst = 0.0
+    for i in columns:
+        col = [(fx[j][i], fz[j][i]) for j in range(rows)
+               if sd[j][i] is not None and sd[j][i] >= 0
+               and math.hypot(fx[j][i], fz[j][i]) > 1e-9]
+        for a in range(len(col)):
+            for b in range(a + 1, len(col)):
+                u, v = col[a], col[b]
+                dot = ((u[0] * v[0] + u[1] * v[1])
+                       / (math.hypot(*u) * math.hypot(*v)))
+                worst = max(worst,
+                            math.degrees(math.acos(max(-1.0, min(1.0, dot)))))
+    return worst
+
+
+_STRAIGHT = {"id": "ta_straight", "kind": "river", "z_order": 0,
+             "polygon": [[20, 96], [180, 96], [180, 104], [20, 104]],
+             "meta": {"flow_along": "forward",
+                      "stroke": {"points": [[20, 100], [180, 100]],
+                                 "width_m": 8.0}}}
+_SMODEL = hf.build_model([_MBOWL], [], [_STRAIGHT], CATALOG_R)
+_s_spread, _s_n = _flow_spread(_SMODEL, 10, 42, 81, 17)
+print(f"    straight river: {_s_n} in-river texels, worst pair {_s_spread:.3f} deg")
+check("a STRAIGHT river's shipped flow points ONE way over its whole length",
+      round(_s_spread, 9), 0.0)
+check_true("...measured over a real number of texels", _s_n > 300)
+_DIAG = {"id": "ta_diag", "kind": "river", "z_order": 0,
+         "polygon": ([list(p) for p in _offset([(30.0, 30.0), (170.0, 170.0)], 4.0)]
+                     + [list(p) for p in reversed(
+                         _offset([(30.0, 30.0), (170.0, 170.0)], -4.0))]),
+         "meta": {"flow_along": "forward",
+                  "stroke": {"points": [[30, 30], [170, 170]], "width_m": 8.0}}}
+_DMODEL = hf.build_model([_MBOWL], [], [_DIAG], CATALOG_R)
+_d_spread, _d_n = _flow_spread(_DMODEL, 10, 10, 81, 81)
+print(f"    diagonal river: {_d_n} in-river texels, worst pair {_d_spread:.3f} deg")
+# A MILLIONTH OF A DEGREE, and it is float noise and not a bend: the diagonal
+# ribbon is built by offsetting the line numerically, so its two tangents differ
+# in the last bits. Anything a viewer could see would be orders of magnitude up.
+check_true("...and a DIAGONAL one too — the blur cannot bend a constant field "
+           f"({_d_spread:.2e} deg)", _d_spread < 1e-5)
+# ACROSS the meander's own width the field is coherent; ALONG it, it turns with
+# the drawn line, which is the river and not a defect.
+_m_cross = _cross_spread(_MMODEL, 25, 15, 71, 41, (30, 40, 50))
+_m_spread, _m_n = _flow_spread(_MMODEL, 25, 15, 71, 41)
+print(f"    meander: worst pair {_m_spread:.3f} deg over the whole window, "
+      f"{_m_cross:.3f} deg ACROSS the ribbon")
+check_true("the meander's flow turns only ALONG its own line — across the "
+           f"ribbon the spread is under a degree ({_m_cross:.3f})",
+           _m_cross < 1.0)
+check_true("...while along it the field follows the drawn sine, +-31 deg, so "
+           f"the window spread is the river's own shape ({_m_spread:.2f})",
+           30.0 < _m_spread < 70.0)
+
 # SEAMLESS ACROSS TILE BORDERS: the window is sampled with a margin and cropped,
 # so one lattice point read from two different windows is ONE number (§ G1).
 # The probe is ON the meander's axis (x = 136, z = 76, a wet lattice point) and

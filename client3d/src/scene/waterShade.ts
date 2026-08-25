@@ -273,23 +273,52 @@ export function waterFoamAt(depthM: number, opaqueDepthM: number,
 }
 
 /**
- * The narrowest the waterline may be feathered, in metres — the floor under one
- * screen pixel in {@link waterInside}.
+ * HOW FAR INSIDE THE AUTHORED OUTLINE the ground finishes turning into water,
+ * in metres — the shore RAMP of the gate, and since finding G1/G3 a fixed
+ * number of world metres rather than a screen-pixel width.
  *
- * Half a metre is what the gate was cut on while it read the ground
- * compositor's byte-quantised sd (that field's own texel), and the line looked
- * right there; the raster's sd is a smooth bilinear field with no quantisation
- * staircase to hide, so the band no longer HAS to be a texel wide — but a hard
- * cut at a distance the eye can resolve crawls, and this is the width at which
- * it stops. Above it one screen pixel wins, which is the anti-aliasing rule
- * every other hard material cut in this world uses (`layerWeight`).
+ * ── WHY IT IS A WORLD CONSTANT AND NOT A PIXEL (finding G1, 2026-08-25) ─────
+ * The gate is read TWICE per water pixel: the vertex stage scales its LIFT by
+ * it (`terrainLod.tlodLift`) and the fragment stage scales its LOOK by it. The
+ * two must be the SAME curve, or a strip of ground stands lifted onto the
+ * mirror while it still shades as ground — a figure standing on the true height
+ * there is drawn sunk into the surface, which is exactly the finding. A vertex
+ * shader has no pixel footprint, so the one curve both stages can evaluate has
+ * to be a function of the world position alone.
+ *
+ * ── AND THE PIXEL FLOOR WAS ALSO A SEAM (finding G3 point 2) ────────────────
+ * The old rule was `max(pixelM, 0.5 m)`, i.e. one screen pixel measured in
+ * world metres with a half-metre floor. That term GROWS without bound: one
+ * pixel of a 45° camera over 900 rows is 8.727e-4 rad, so its ground footprint
+ * at slant distance D and grazing angle θ is `D · 8.727e-4 / sin θ` —
+ *
+ *     D = 50 m,  θ = 40°  ->  0.068 m   (the floor wins, band 0.5 m)
+ *     D = 150 m, θ = 40°  ->  0.204 m   (the floor wins, band 0.5 m)
+ *     D = 400 m, θ = 40°  ->  0.543 m   (the pixel wins, band 0.543 m)
+ *     D = 400 m, θ = 10°  ->  2.011 m   (band 2.0 m)
+ *     D = 400 m, θ =  5°  ->  4.001 m   (band 4.0 m)
+ *
+ * — and a band metres wide is metres of shore painted as half-ground, i.e. the
+ * fat sand seam the finding names, worst exactly where a shore is seen most
+ * often: far away and nearly edge-on. Half a metre is half a metre at every
+ * distance.
+ *
+ * WHAT THE PIXEL TERM WAS FOR is anti-aliasing a HARD material cut
+ * (`layerWeight`). This cut is not hard any more: the same band now ramps the
+ * SURFACE HEIGHT with it, so the waterline is a geometric ramp and not a step
+ * in albedo alone, and the curve leaves 0 with zero slope. What is left is the
+ * ordinary edge aliasing every distant silhouette in this world has.
  */
-export const WATER_SD_BAND_MIN_M = 0.5;
+export const WATER_SD_BAND_M = 0.5;
 
 /**
- * IS THIS PIXEL INSIDE THE AUTHORED WATER? — the CPU twin of the shader's
- * `twInside`, and since finding F-A a reading of the water raster's OWN signed
- * distance rather than of the ground compositor's material mask.
+ * HOW MUCH WATER THIS POINT IS, 0…1 — the CPU twin of the shader's `twInside`,
+ * read by the fragment stage as "how much of the water LOOK" and by the vertex
+ * stage as "how much of the LIFT" (`terrainLod.tlodLift`). One curve, one band,
+ * both stages: that identity is the whole of finding G1.
+ *
+ * Since finding F-A it reads the water raster's OWN signed distance rather than
+ * the ground compositor's material mask.
  *
  * THE SEAM IT CLOSES. The water raster is DILATED: the server writes a level up
  * to `WATER_RASTER_DILATION_STEPS` (4 m) past the authored outline, so that
@@ -307,15 +336,32 @@ export const WATER_SD_BAND_MIN_M = 0.5;
  * drawn as the sand it stands on: "the lake is only a sand surface". The
  * question is about the WATER's outline, and only the water field knows it.
  *
- * THE RULE, now one line: `smoothstep(−band/2, +band/2, sd)` over the raster's
- * bilinear signed distance, with `band` the wider of one screen pixel and
- * {@link WATER_SD_BAND_MIN_M}. No layer pair, no cases — outside is outside for
- * every kind painted over the water, and the id mask is left with the one job
- * it does correctly: saying which water's LOOK to use.
+ * THE RULE, one line: `smoothstep(0, WATER_SD_BAND_M, sd)`.
+ *
+ * ONE-SIDED, AND THAT IS THE SECOND HALF OF G1. The band used to straddle the
+ * outline (`smoothstep(−band/2, +band/2, sd)`), which said two things this
+ * renderer does not mean: that water reaches a quarter of a metre PAST the line
+ * the author drew, and that the line itself is half water. The outer half was
+ * dead anyway — outside the outline the lift never fired, so the fragment
+ * returned on `d <= 0` before the gate was reached — while the inner half is
+ * where the sinking lived. Starting at 0 makes the authored outline exactly the
+ * edge of the water, in the geometry and in the look alike, and the curve's
+ * slope is 0 there, so nothing steps.
+ *
+ * Hand values (band 0.5 m), `t = sd/0.5`, `3t² − 2t³`:
+ *
+ *     sd = −0.25 -> 0                      (the dilation ring: ground)
+ *     sd =  0    -> 0                      (the authored waterline)
+ *     sd =  0.05 -> t=0.1  -> 0.028
+ *     sd =  0.1  -> t=0.2  -> 0.104
+ *     sd =  0.125-> t=0.25 -> 0.15625
+ *     sd =  0.25 -> t=0.5  -> 0.5
+ *     sd =  0.375-> t=0.75 -> 0.84375
+ *     sd =  0.5  -> t=1    -> 1            (full water from here in)
+ *     sd =  1    -> 1
  */
-export function waterInside(sd: number, pixelM: number): number {
-  const band = Math.max(pixelM, WATER_SD_BAND_MIN_M, 1e-6);
-  const t = Math.min(Math.max(sd / band + 0.5, 0), 1);
+export function waterInside(sd: number): number {
+  const t = Math.min(Math.max(sd / WATER_SD_BAND_M, 0), 1);
   return t * t * (3 - 2 * t);
 }
 
@@ -402,6 +448,37 @@ float twSdAt( vec2 p ) {
 }
 
 /**
+ * THE GATE, as GLSL — the second text BOTH stages of the water variant include
+ * (finding G1), beside {@link waterSdGlsl}.
+ *
+ * The vertex stage scales its LIFT by `twInside`, the fragment stage its LOOK.
+ * They are two programs and cannot share a function through the shader, so —
+ * exactly as with the sd sampler — they share this string. A curve that existed
+ * twice would drift, and the drift is the finding: ground standing on the
+ * mirror while it shades as ground.
+ *
+ * `twSmooth` lives here rather than in the fragment chunk for the same reason:
+ * it is the curve, and the curve has one home.
+ *
+ * NO UNIFORM OF ITS OWN, and no derivative: the band is a world constant
+ * ({@link WATER_SD_BAND_M}) precisely so a vertex shader can evaluate it.
+ */
+export function waterGateGlsl(): string {
+  return `
+float twSmooth( float t ) {
+  float c = clamp( t, 0.0, 1.0 );
+  return c * c * ( 3.0 - 2.0 * c );
+}
+
+// HOW MUCH WATER THIS POINT IS, 0…1 — the lift in the vertex stage, the look in
+// the fragment stage. The TS twin and the whole argument are in \`waterInside\`.
+float twInside( float sd ) {
+  return twSmooth( sd / ${WATER_SD_BAND_M} );
+}
+`;
+}
+
+/**
  * THE FRAGMENT SIDE, as GLSL — declared ONLY in the water variant's program
  * (`terrainLod.patchTerrainLod(mat, true)`), so a dry ground pixel does not
  * gain a single instruction from this stage.
@@ -442,7 +519,7 @@ uniform vec4 uTlodWaterMaskGeom;
 uniform vec4 uTlodWaterGeom;
 uniform vec3 uTlodSky;
 uniform float uTlodTime;
-${waterSdGlsl()}
+${waterSdGlsl()}${waterGateGlsl()}
 
 // What tlodWaterSurface() measures and the two stages after it read. Globals
 // and not a struct passed along: the three insertion points are three separate
@@ -451,11 +528,6 @@ float twA;
 float twFoam;
 float twSkyMix;
 vec3 twN;
-
-float twSmooth( float t ) {
-  float c = clamp( t, 0.0, 1.0 );
-  return c * c * ( 3.0 - 2.0 * c );
-}
 
 // WHICH TWO GROUND KINDS meet under this pixel is the layer index PAIR the
 // compositor's id mask names (\`scene/layerGround.ts\`), and WHICH SIDE of them
@@ -475,15 +547,6 @@ float twSmooth( float t ) {
 // itself follows for the ground.
 bool twIsWater( int layer ) {
   return texelFetch( uTlodWaterLook, ivec2( 2, layer ), 0 ).z > 0.5;
-}
-
-// HOW MUCH OF THE PAINTED WATER STANDS UNDER THIS PIXEL — the gate that closes
-// the grey rim seam and, since finding F-A, the gate that stops a painted bed
-// from turning its own lake into sand. The TS twin and the whole argument are
-// in \`waterInside\`; here it is the same one line and the same band.
-float twInside( float sd, float pixelM ) {
-  float band = max( max( pixelM, ${WATER_SD_BAND_MIN_M} ), 1e-6 );
-  return twSmooth( sd / band + 0.5 );
 }
 
 // The FLOW FRAME, and the one place the anisotropy lives: squeeze the
@@ -573,12 +636,12 @@ void tlodWaterSurface( inout vec4 diffuseColor, inout float roughnessFactor,
   vec2 gy = dFdy( vTlodXZ );
   if ( d <= 0.0 ) return;
   int rows = textureSize( uTlodWaterLook, 0 ).y;
-  // WHETHER THIS PIXEL STANDS INSIDE THE PAINTED WATER — the water raster's own
-  // signed distance, the SAME field and the same sampler the vertex stage gated
-  // its lift on (\`waterSdGlsl\`). ONE PIXEL IN WORLD METRES for the band, from
-  // the world position's own derivatives and never from fwidth of the sampled
-  // distance — see \`layerWeight\`.
-  float inside = twInside( twSdAt( vTlodXZ ), max( length( gx ), length( gy ) ) );
+  // HOW MUCH WATER THIS PIXEL IS — the water raster's own signed distance, the
+  // SAME field through the same sampler (\`waterSdGlsl\`) and through the SAME
+  // curve (\`waterGateGlsl\`) the vertex stage scaled its lift by. That the two
+  // stages share both texts is what keeps the drawn surface and the drawn look
+  // on the same shore ramp (finding G1).
+  float inside = twInside( twSdAt( vTlodXZ ) );
   // WHICH KIND'S LOOK — and this is ALL the id mask is asked for now. It names
   // the topmost painted layer and the one under it, which is the right question
   // for "what does the water here look like" and the wrong one for "is there

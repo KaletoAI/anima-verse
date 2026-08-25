@@ -204,6 +204,16 @@ function checkAbove(label, actual, floor) {
     console.log(`  FAIL ${label}\n       expected > ${floor}\n       actual   ${actual}`);
   }
 }
+function checkBelow(label, actual, ceiling) {
+  const ok = typeof actual === 'number' && actual < ceiling;
+  if (ok) {
+    passed += 1;
+    console.log(`  ok   ${label} = ${actual} (< ${ceiling})`);
+  } else {
+    failed += 1;
+    console.log(`  FAIL ${label}\n       expected < ${ceiling}\n       actual   ${actual}`);
+  }
+}
 function checkNear(label, actual, expected, eps) {
   const ok = Array.isArray(actual) && actual.length === expected.length
     && actual.every((v, i) => Math.abs(v - expected[i]) <= eps);
@@ -219,8 +229,8 @@ function checkNear(label, actual, expected, eps) {
 
 const { shade, plane, mat } = await load();
 const { waterAbsorb, waterFoamAt, waterTintBlend, waterLookFrom, waterTintRgb,
-  packWaterLook, terrainWaterFragmentGlsl, waterInside, waterSdGlsl,
-  WATER_FOAM_MIN_COVER, WATER_SD_BAND_MIN_M,
+  packWaterLook, terrainWaterFragmentGlsl, waterGateGlsl, waterInside,
+  waterSdGlsl, WATER_FOAM_MIN_COVER, WATER_SD_BAND_M,
   WATER_LOOK_DEFAULT, WATER_LOOK_TEXELS } = shade;
 const { WATER_EDGE_FADE_M, WATER_FOAM_BAND_M, WATER_FOAM_STRENGTH,
   waterOpaqueDepthM } = plane;
@@ -466,20 +476,41 @@ checkEq('…and a dry one reads only the bed\'s',
 // one field, both stages: a pixel is shaded as water exactly where the ground
 // under it was lifted onto the mirror.
 //
-// THE HAND TABLE, at pixelM = 0.1 m, hence band = max(0.1, 0.5) = 0.5, with
-// t = sd/0.5 + 0.5 and w = t²(3 − 2t):
-//   sd = −2     -> t = −3.5 -> 0        (the ring, 2 m outside: GROUND)
-//   sd = −0.125 -> t = 0.25 -> 0.15625
-//   sd =  0     -> t = 0.5  -> 0.5      (the waterline itself, half and half)
-//   sd = +0.125 -> t = 0.75 -> 0.84375
-//   sd = +0.5   -> t = 1.5  -> 1        (half a metre in: FULL water)
+// THE BAND IS ONE-SIDED AND A WORLD CONSTANT SINCE FINDING G1/G3 (2026-08-25).
+// Two changes, one reason each:
+//
+//   * ONE-SIDED. It used to straddle the outline, `smoothstep(−b/2, +b/2, sd)`,
+//     which claimed water a quarter-metre PAST the line the author drew and
+//     called the line itself half water. The outer half was dead — outside the
+//     outline the lift never fired, so the fragment left on `d <= 0` before the
+//     gate was read — and the inner half is where a figure stood sunk (see [7b]).
+//     `smoothstep(0, 0.5, sd)`: the outline IS the edge of the water.
+//   * A WORLD CONSTANT. The old width was `max(pixelM, 0.5)`, and the pixel term
+//     grows without bound with distance and with grazing angle — see [7c]. The
+//     vertex stage has no pixel footprint either, and since G1 it reads this very
+//     curve, so the band has to be a function of the world position alone.
+//
+// THE HAND TABLE, band 0.5 m, t = sd/0.5, w = t²(3 − 2t):
+//   sd = −2     -> t clamps to 0 -> 0        (the ring, 2 m outside: GROUND)
+//   sd = −0.25  -> t clamps to 0 -> 0        (the old band's outer half: GROUND)
+//   sd =  0     -> t = 0     -> 0            (the authored waterline)
+//   sd = +0.05  -> t = 0.1   -> 3(0.01)    − 2(0.001)    = 0.028
+//   sd = +0.1   -> t = 0.2   -> 3(0.04)    − 2(0.008)    = 0.104
+//   sd = +0.125 -> t = 0.25  -> 3(0.0625)  − 2(0.015625) = 0.15625
+//   sd = +0.25  -> t = 0.5   -> 3(0.25)    − 2(0.125)    = 0.5
+//   sd = +0.375 -> t = 0.75  -> 3(0.5625)  − 2(0.421875) = 0.84375
+//   sd = +0.5   -> t = 1     -> 1            (half a metre in: FULL water)
 console.log('\n[7] the shading gate: painted water, not lifted ground');
-const BAND_PIX = 0.1;
-const inside = (sd) => waterInside(sd, BAND_PIX);
+const inside = (sd) => waterInside(sd);
 check('2 m out on the flooded ring the pixel is GROUND', inside(-2), 0);
-check('…an eighth of a metre out, nearly ground', inside(-0.125), 0.15625);
-check('…on the waterline, half and half', inside(0), 0.5);
-check('…an eighth in, nearly water', inside(0.125), 0.84375);
+check('…a quarter metre out — the old band\'s outer half — GROUND too',
+  inside(-0.25), 0);
+check('…on the authored waterline itself, still ground', inside(0), 0);
+check('…5 cm in', inside(0.05), 0.028);
+check('…10 cm in', inside(0.1), 0.104);
+check('…an eighth of a metre in', inside(0.125), 0.15625);
+check('…a quarter metre in, half and half', inside(0.25), 0.5);
+check('…three eighths in, nearly water', inside(0.375), 0.84375);
 check('half a metre inside the outline it is FULL water', inside(0.5), 1);
 check('…and stays full however far in — a lake is unchanged', inside(20), 1);
 // THE LAKE WITH A PAINTED BED, which is the whole of finding F-A. Mid-lake the
@@ -487,13 +518,9 @@ check('…and stays full however far in — a lake is unchanged', inside(20), 1)
 // enters this function at all.
 check('mid-lake, 20 m from its own outline: FULL water, bed or no bed',
   inside(20), 1);
-check('…and 10 cm in from the rim it is already', inside(0.1), 0.784);
-// A DISTANT pixel widens the band to its own footprint and no further — the
-// ring stays ground, the interior stays water.
-check('a 2 m pixel still reads the ring as ground', waterInside(-2, 2), 0);
-check('…and half a metre in as 0.84375 of water', waterInside(0.5, 2), 0.84375);
-check('…the band never falls under half a metre, however small the pixel',
-  waterInside(0.125, 1e-6), 0.84375);
+// THE BAND NO LONGER DEPENDS ON ANYTHING BUT sd — one argument, no pixel.
+checkEq('the gate takes the distance and nothing else', waterInside.length, 1);
+check('the band is the fixed half metre', WATER_SD_BAND_M, 0.5);
 // THE FALL FACE is inside the river's own outline — the steep wet wall between
 // lip and plunge pool is water the author painted, not dilation — so it keeps
 // the waterfall look whole.
@@ -511,19 +538,19 @@ const ringFoam = waterFoamAt(RING_DEPTH, waterOpaqueDepthM(1.5), WATER_EDGE_FADE
 checkAbove('RED: …and foam', ringFoam, 0);
 check('…which the gate takes with it', ringFoam * inside(-2), 0);
 // The GLSL says the same line and the same band.
+const gateGlsl = waterGateGlsl();
 checkEq('the shader gate is ONE smoothstep and no cases at all',
-  glsl.includes('float twInside( float sd, float pixelM ) {')
-  && glsl.includes('return twSmooth( sd / band + 0.5 );'), true);
-checkEq('…the band is a pixel or the half-metre floor, whichever is wider',
-  glsl.includes('float band = max( max( pixelM, 0.5 ), 1e-6 );'), true);
+  gateGlsl.includes('float twInside( float sd ) {')
+  && gateGlsl.includes('return twSmooth( sd / 0.5 );'), true);
+checkEq('…and it carries no pixel, no band variable and no fwidth at all',
+  /pixelM|float band|fwidth/.test(gateGlsl), false);
 checkEq('RED: the layer pair no longer decides anything about water',
   /aw\s*\?\s*w\s*:\s*1\.0\s*-\s*w/.test(glsl), false);
 checkEq('the gate multiplies the RIM, so absorption AND foam ride it',
   glsl.includes('float rim = clamp( d / edge, 0.0, 1.0 ) * inside;')
   && glsl.includes('if ( rim <= 0.0 ) return;'), true);
 checkEq('the distance is read from the WATER raster, at this pixel\'s position',
-  glsl.includes('float inside = twInside( twSdAt( vTlodXZ ), '
-    + 'max( length( gx ), length( gy ) ) );'), true);
+  glsl.includes('float inside = twInside( twSdAt( vTlodXZ ) );'), true);
 checkEq('…by texel fetch and never by a filtered sampler',
   /texture(2D)?\(\s*uTlodWaterSd/.test(glsl), false);
 checkEq('…and the pixel width comes from the world position, not from fwidth(sd)',
@@ -549,13 +576,236 @@ checkEq('…it is bilinear over four PLAIN texels — the sentinel is a number',
   sdGlsl.split('texelFetch(').length - 1, 4);
 checkEq('…and the fragment includes that one text', glsl.includes(sdGlsl.trim()),
   true);
-check('the band floor is the half metre the gate was cut on',
-  WATER_SD_BAND_MIN_M, 0.5);
+// THE GATE IS THE SECOND SHARED TEXT (finding G1) — the fragment declares it
+// exactly once, and `terrainLod.terrainLodWaterGlsl` includes the same string.
+checkEq('the fragment includes the gate text whole',
+  glsl.includes(gateGlsl.trim()), true);
+checkEq('…and declares twSmooth exactly once', glsl.split('float twSmooth(').length - 1,
+  1);
 // Isolation toggle 22 is untouched: it kills the LIFT, so `d` is 0 and the
 // function returns before the gate is ever reached.
 checkEq('toggle 22 still leaves before any of this',
   glsl.indexOf('if ( d <= 0.0 ) return;')
     < glsl.indexOf('float inside = twInside('), true);
+
+// ============================================================================
+// [7b] THE LIFT RIDES THE SAME CURVE — the figure no longer sinks (finding G1)
+// ============================================================================
+// THE DEFECT. The fragment faded the water LOOK in over the band; the vertex
+// stage lifted BINARY, `sd >= 0` -> the whole lift. So between the outline and
+// the band's far end the surface stood on the mirror while it was still shaded
+// as ground, and a figure — which stands on the true terrain height `h`, never
+// on the mirror — was drawn sunk by exactly that lift.
+//
+// THE NUMBER. Take a shore where the mirror stands 0.40 m over the bed at the
+// probe (a "lifted spot": a river crossing a slope, a lake whose level is above
+// its own rim). With the old gate the drawn surface at sd = +0.1 m stood
+// h + 0.40 while the look was 0.784 ground; the figure at h was 40 cm under it.
+// With the ramp the lift is 0.40 · twInside(0.1) = 0.40 · 0.104 = 0.0416 m —
+// 4.2 cm, and the look there is 10.4 % water, i.e. the two now say the same
+// thing about the same point. Hand table, LIFT = 0.40 m:
+//
+//   sd = −0.25 -> 0.40 · 0       = 0        (ring: ground, as before)
+//   sd =  0    -> 0.40 · 0       = 0        (the waterline: ground)
+//   sd = +0.05 -> 0.40 · 0.028   = 0.0112 m (1.1 cm)
+//   sd = +0.1  -> 0.40 · 0.104   = 0.0416 m (4.2 cm)
+//   sd = +0.25 -> 0.40 · 0.5     = 0.20 m
+//   sd = +0.5  -> 0.40 · 1       = 0.40 m   (full mirror from here in)
+//   sd = +1    -> 0.40 · 1       = 0.40 m
+//
+// The probe the finding asks for — "just inside the edge, the drawn surface
+// within ~1 cm of h" — is sd = +0.05: 1.12 cm at a 40 cm lift, and under 1 cm
+// for every lift under 0.357 m.
+console.log('\n[7b] the LIFT rides the gate\'s own curve (G1)');
+const LIFT = 0.40;
+const liftAt = (sd) => LIFT * waterInside(sd);
+check('the dilation ring is not lifted at all', liftAt(-0.25), 0);
+check('…nor is the authored waterline itself', liftAt(0), 0);
+check('5 cm in the ground has risen 1.12 cm', liftAt(0.05), 0.0112);
+check('…10 cm in, 4.16 cm', liftAt(0.1), 0.0416);
+check('…a quarter metre in, half the lift', liftAt(0.25), 0.2);
+check('…half a metre in, the whole mirror', liftAt(0.5), 0.4);
+check('…and it stays there', liftAt(1), 0.4);
+// RED: the old binary gate really did stand the full lift under a ground look.
+const oldLift = (sd) => (sd >= 0 ? LIFT : 0);
+checkAbove('RED: the old gate lifted 5 cm inside the edge by the FULL',
+  oldLift(0.05), 0.39);
+checkAbove('RED: …while the look there was only this much water',
+  1 - waterInside(0.05), 0.97);
+check('the ramp closes that gap to under a centimetre', liftAt(0.05), 0.0112);
+checkEq('…so drawn surface and shaded look never disagree by more than the '
+  + 'lift itself times the curve', Math.abs(liftAt(0.05) - LIFT * 0.028) < 1e-12,
+  true);
+// THE MORPH PAIR STAYS CONSISTENT: `sd` is a function of the world point alone,
+// so both taps are scaled by the SAME factor and the blend is unchanged in
+// shape. Pinned as an identity over the pair (h1, w1) / (h2, w2).
+const mix2 = (a, b, f) => a * (1 - f) + b * f;
+const gatedPair = (sd, f) => mix2(mix2(2, 2 + LIFT * waterInside(sd), 1),
+                                  mix2(3, 3 + LIFT * waterInside(sd), 1), f);
+check('both taps carry the same factor, so the pair blends as one ramp',
+  gatedPair(0.1, 0.5) - mix2(2, 3, 0.5), LIFT * 0.104);
+// AND `vTlodWet` IS STILL >= 0 EVERYWHERE — the fragment's every branch keys on
+// `> 0`, so a negative depth would paint water on dry ground. `l − h` is
+// `max(0, w − h) · g` with `g` in [0, 1], and both factors are non-negative.
+// (The shipped `terrainLod.liftedDepth` is pinned on the same probes in
+// `smoke_terrain_lod.mjs` [w] — here the identity itself.)
+let worstWet = 0;
+for (let s = -1; s <= 2.0001; s += 0.001) {
+  for (const w of [-3, 0, 0.4, 5]) {
+    const d = w > 0 ? w * waterInside(s) : 0;
+    if (d < worstWet) worstWet = d;
+  }
+}
+check('the depth never goes negative over 3001 x 4 probes', worstWet, 0);
+
+// ============================================================================
+// [7c] THE BAND USED TO GROW WITH DISTANCE — the fat sand seam (finding G3.2)
+// ============================================================================
+// The old width was `max(pixelM, 0.5 m)` with `pixelM` = the ground footprint of
+// one screen pixel, `max(|dFdx(vTlodXZ)|, |dFdy(vTlodXZ)|)`. For this client's
+// camera (`scene/engine.ts`: PerspectiveCamera(45, …)) over a 900-row viewport
+// one pixel subtends
+//
+//     α = (45° / 900) · π/180 = 0.05° = 8.726646e-4 rad
+//
+// and on the ground at slant distance D, seen at grazing angle θ, its longer
+// footprint is `D · α / sin θ` — which is what the `max` of the two derivatives
+// takes. The band was that number, floored at half a metre:
+//
+//     D = 50 m,  θ = 40°  ->  50·8.726646e-4/0.6427876 = 0.06788 m -> band 0.5
+//     D = 150 m, θ = 40°  ->                              0.20364 m -> band 0.5
+//     D = 400 m, θ = 40°  ->                              0.54305 m -> band 0.54305
+//     D = 400 m, θ = 10°  ->  400·8.726646e-4/0.1736482 = 2.01019 m -> band 2.01019
+//     D = 400 m, θ =  5°  ->  400·8.726646e-4/0.0871557 = 4.00508 m -> band 4.00508
+//
+// A band 4 m wide is 4 m of shore drawn as half-ground: the sand seam, and it is
+// widest exactly where a shore is normally seen — far off and nearly edge-on.
+// The fixed band is 0.5 m at every one of those five viewpoints.
+console.log('\n[7c] the band no longer grows with the camera (G3.2)');
+const PIX_RAD = (45 / 900) * Math.PI / 180;
+const footprint = (d, degrees) =>
+  d * PIX_RAD / Math.sin(degrees * Math.PI / 180);
+const oldBand = (d, degrees) => Math.max(footprint(d, degrees), 0.5);
+checkNear('one pixel on the ground at 50/150/400 m, 40° down',
+  [footprint(50, 40), footprint(150, 40), footprint(400, 40)],
+  [0.06788, 0.20364, 0.54305], 5e-5);
+checkNear('…and at 400 m seen at 10° and 5°',
+  [footprint(400, 10), footprint(400, 5)], [2.01019, 4.00508], 5e-5);
+checkNear('RED: the OLD band at those five viewpoints',
+  [oldBand(50, 40), oldBand(150, 40), oldBand(400, 40),
+   oldBand(400, 10), oldBand(400, 5)],
+  [0.5, 0.5, 0.54305, 2.01019, 4.00508], 5e-5);
+checkAbove('RED: …so a distant, edge-on shore wore a band this many metres wide',
+  oldBand(400, 5), 4);
+checkNear('the shipped band is the same half metre at all five',
+  [WATER_SD_BAND_M, WATER_SD_BAND_M, WATER_SD_BAND_M,
+   WATER_SD_BAND_M, WATER_SD_BAND_M],
+  [0.5, 0.5, 0.5, 0.5, 0.5], 0);
+// G3.3 — WHAT THE SEAM IS MADE OF. At sd = +0.1 the pixel is 10.4 % water at
+// most: `twA = shore · rim · inside`, and `inside` alone caps it at 0.104. The
+// albedo is `mix(bed, tint, twA)`, so at least 89.6 % of the colour there is the
+// BED the compositor painted — sand, if the author painted sand — and none of it
+// is a residual water term. With the shore ramp taken into account it is far
+// less still: a bed carved 1.0 m deep over a 3 m ramp stands 0.033 m under the
+// mirror at that point (0.1/3 of the way in, times the 0.4 m lift used above is
+// not the number here — the depth IS the lift), and `shore(0.0416, 0.75)` = 0.009.
+const seamInside = waterInside(0.1);
+check('at 10 cm inside the outline the water share is at most', seamInside, 0.104);
+const seamA = waterAbsorb(LIFT * seamInside, waterOpaqueDepthM(1.0),
+                          WATER_EDGE_FADE_M) * seamInside;
+checkBelow('…and with the shore curve on top of it, under 1 % of the pixel',
+  seamA, 0.01);
+checkNear('so the seam colour is the bed, to better than a percent',
+  waterTintBlend([0.76, 0.70, 0.50], [0.247, 0.498, 0.722], seamA),
+  [0.76, 0.70, 0.50], 0.01);
+
+// ============================================================================
+// [8] THE FLOW SPEED, END TO END — what "auto" really is (finding G2)
+// ============================================================================
+// THE CHAIN, in the order the metres travel:
+//
+//   1. the KIND's dial      `material.flow_speed` m/s, default
+//                           `WATER_FLOW_SPEED_DEFAULT_M_S` = 0.15
+//   2. the AREA's override  `meta.flow_speed_m_s`, or none = "auto"
+//   3. the server bakes a FACTOR into the flow vector's LENGTH:
+//      `waterFlowFactor(area, kind)` = 1 for auto, else `area / kind`
+//   4. the fragment reads that length back and multiplies:
+//      `sp = still ? speed : flowSpeed * len`
+//
+// So the metres per second at the surface are `kind · factor`, which is the
+// KIND's dial for auto and the AREA's number when one is authored:
+//
+//   auto,       kind 0.15  ->  factor 1        ->  sp = 0.15 · 1     = 0.15 m/s
+//   1.0 m/s,    kind 0.15  ->  factor 6.6667   ->  sp = 0.15 · 6.667 = 1.0 m/s
+//   0.5 m/s,    kind 0.15  ->  factor 3.3333   ->  sp = 0.15 · 3.333 = 0.5 m/s
+//   1.0 m/s,    kind 0.5   ->  factor 2        ->  sp = 0.5  · 2     = 1.0 m/s
+//
+// — i.e. an authored value is metres per second whatever the kind's dial is,
+// exactly as the retired mirror's `uFlowSpeed · wLen` was. There is no zero
+// anywhere in the chain: "auto shows no motion" is 0.15 m/s, not 0.
+//
+// AND HOW FAST A CREST REALLY TRAVELS. The drift is `dir · (t · sp · sgn / λ)`
+// on a coordinate that is `p / λ`, so the pattern moves at `sp · |dir|` m/s
+// along `dir`. The three sheets of flowing water:
+//
+//   A  dir = ax + 0.15·ay   |dir| = √1.0225 = 1.01118742   at  +8.53077°
+//   B  dir = 0.8·ax − 0.3·ay |dir| = √0.73  = 0.85440037   at −20.55605°
+//   C  dir = ax              |dir| = 1                     at   0°
+//
+// A and B are 29.08682° apart — deliberately (materials.ts: "still of opposite
+// sign and of different magnitude, so the two sheets go on beating against each
+// other"), and that beat is what a fast river shows as two drifts. The constants
+// are the mirror's own accepted pair (0.15 / 0.3 flowing, 0.6 / 1.3 still).
+console.log('\n[8] the flow speed, kind dial -> factor -> metres per second');
+const { waterFlowFactor, WATER_FLOW_SPEED_DEFAULT_M_S } = mat;
+check('the kind default is the shared 0.15 m/s', WATER_FLOW_SPEED_DEFAULT_M_S, 0.15);
+check('a kind that declares nothing carries it into the look',
+  waterLookFrom(null, null).flowSpeed, 0.15);
+check('…and a kind that declares 0.5 carries that',
+  waterLookFrom({ class: 'water', flow_speed: 0.5 }, null).flowSpeed, 0.5);
+// AUTO — no override, factor exactly 1, so the surface runs at the kind's dial.
+check('AUTO is factor 1', waterFlowFactor(undefined, 0.15), 1);
+check('…and null is too', waterFlowFactor(null, 0.15), 1);
+check('…so auto runs at the kind\'s own metres per second',
+  waterLookFrom(null, null).flowSpeed * waterFlowFactor(undefined, 0.15), 0.15);
+// AUTHORED — the factor is the ratio, so `flowSpeed · len` is the authored m/s.
+check('1.0 m/s over a 0.15 dial is factor', waterFlowFactor(1, 0.15),
+  6.666666666666667, 1e-12);
+check('…and the surface then runs at exactly 1 m/s',
+  waterLookFrom(null, null).flowSpeed * waterFlowFactor(1, 0.15), 1, 1e-12);
+check('0.5 m/s over the same dial', 0.15 * waterFlowFactor(0.5, 0.15), 0.5, 1e-12);
+check('1.0 m/s over a 0.5 dial is still 1 m/s',
+  0.5 * waterFlowFactor(1, 0.5), 1, 1e-12);
+checkEq('RED: the shader does NOT ignore the look\'s flow_speed',
+  glsl.includes('float sp = still ? speed : flowSpeed * len;')
+  && glsl.includes('twN = twRipple( vTlodXZ, gx, gy, max( look1.x, 0.05 ), '
+    + 'look1.y, look1.z );'), true);
+// …and `look1.z` really is the flow speed: texel 1 of the packed row is
+// (wave_m, speed, flow_speed, opaque_depth_m).
+checkNear('the look table\'s texel 1 is (wave, speed, flow_speed, opaque)',
+  [...packWaterLook([waterLookFrom({ class: 'water', wave_m: 2, speed: 0.25,
+    flow_speed: 0.4 }, 1.2)]).slice(4, 8)], [2, 0.25, 0.4, 0.9], 1e-7);
+// THE CROSS CONSTANTS are the mirror's accepted pair, per branch.
+checkEq('flowing water keeps the SMALL cross factors (0.15 / 0.3)',
+  glsl.includes('float crossA = still ? 0.6 : 0.15;')
+  && glsl.includes('float crossB = still ? 1.3 : 0.3;'), true);
+checkEq('…and both sheets are sent downstream, not counter-scrolled',
+  glsl.includes('vec2 dirB = still ? -( ax * 0.8 + ay * crossB ) '
+    + ': ax * 0.8 - ay * crossB;'), true);
+// The three sheets' bearings and crest speeds, hand-derived above.
+const deg = (v) => Math.atan2(v[1], v[0]) * 180 / Math.PI;
+const dirA = [1, 0.15];
+const dirB = [0.8, -0.3];
+check('sheet A runs 8.53077° off the current', deg(dirA), 8.53076561, 1e-8);
+check('…sheet B, 20.55605° the other way', deg(dirB), -20.55604522, 1e-8);
+check('…so the two beat 29.08682° apart', deg(dirA) - deg(dirB), 29.08681083,
+  1e-8);
+check('sheet A\'s crests travel this multiple of sp', Math.hypot(...dirA),
+  1.01118742, 1e-8);
+check('…sheet B\'s', Math.hypot(...dirB), 0.85440037, 1e-8);
+check('at auto that is metres per second for sheet A',
+  0.15 * Math.hypot(...dirA), 0.15167811, 1e-8);
+check('…and at an authored 1 m/s', 1 * Math.hypot(...dirA), 1.01118742, 1e-8);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);
