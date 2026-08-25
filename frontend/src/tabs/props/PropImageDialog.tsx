@@ -25,20 +25,21 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useHelp } from '../../help/HelpContext'
 import { useI18n } from '../../i18n/I18nProvider'
-import { PROP_PROMPT_CONTEXT, type ImageBackendInfo, type PropFull,
-  type PropSourceImage } from './propTypes'
+import { composePropPrompt, PROP_PROMPT_CONTEXT, type ImageBackendInfo,
+  type PropFull, type PropSourceImage } from './propTypes'
 
-/** Same composition rule as the create form: style + subject. The subject is
- *  the TARGET VARIANT's text (its own description, else the prop's — the
- *  server resolves an empty prompt the same way, `props.variant_description`);
- *  the prop's own description stands in until the strip has loaded, and the
- *  name is the last fallback. */
+/** Same composition rule as the create form — one shared weaver
+ *  (`composePropPrompt`), so the text this dialog SENDS is the text the server
+ *  would have composed for the same style and subject. The 3D-asset framing
+ *  belongs to the use-case style, not to this file. The subject is the TARGET
+ *  VARIANT's text (its own description, else the prop's — the server resolves
+ *  an empty prompt the same way, `props.variant_description`); the prop's own
+ *  description stands in until the strip has loaded, and the name is the last
+ *  fallback. */
 const composePrompt = (prop: PropFull, backend?: ImageBackendInfo,
-                       variantSubject?: string): string => {
-  const subject = (variantSubject || prop.description || prop.name || '').trim()
-  const style = (backend?.prompt_style || '').trim()
-  return style ? (subject ? `${style}, ${subject}` : style) : subject
-}
+                       variantSubject?: string): string =>
+  composePropPrompt(backend?.prompt_style || '',
+                    variantSubject || prop.description || prop.name || '')
 
 export function PropImageDialog({ prop, variant, subject, image, backends,
   onGenerate, onClose }: {

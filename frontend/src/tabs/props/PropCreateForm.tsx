@@ -4,7 +4,11 @@
  * the bare record and upload a GLB later.
  *
  * The final render prompt is assembled here and shown in full (final-prompt
- * rule): use-case style + object subject, both editable.
+ * rule): use-case style + object subject, both editable. The weaving itself is
+ * the shared `composePropPrompt`, so this form and the render dialog send the
+ * same text the server would compose — and the 3D-asset framing ("A
+ * high-quality 3D model of …, designed for 3D asset generation, 8k
+ * resolution") stays where it lives, in the "prop" use-case style.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
@@ -12,7 +16,7 @@ import { Field } from '../../components/Field'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { CATEGORY_DATALIST_ID } from './propTypes'
+import { CATEGORY_DATALIST_ID, composePropPrompt } from './propTypes'
 import type { ImageBackendInfo, MeshBackendInfo, PropFull } from './propTypes'
 
 export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGenerating, onCancel }: {
@@ -54,10 +58,12 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
     setNegative(imageBackendInfo?.prompt_negative || '')
   }, [imageBackendInfo, styleTouched])
 
+  // The shared weaver, the same one the render dialog uses: the style owns the
+  // wording (including the 3D-asset framing and its {subject} slot), this form
+  // only supplies the object. Nothing about the framing is written here — it
+  // would end up in the final prompt twice.
   const subject = (description.trim() || name.trim())
-  const finalPrompt = style.trim()
-    ? (subject ? `${style.trim()}, ${subject}` : style.trim())
-    : subject
+  const finalPrompt = composePropPrompt(style, subject)
 
   // One approximate size creates a placeholder cube — the three dims refine
   // themselves from the mesh proportions as soon as the model exists.
@@ -186,7 +192,8 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
           </Field>
         </div>
 
-        <Field label={t('Style (use-case)')}>
+        <Field label={t('Style (use-case)')}
+          hint={t('The “prop” use-case style of this backend. {subject} is where the object description is woven in — it carries the 3D-asset framing, so leave the placeholder in place. Without it the subject is appended at the end.')}>
           <textarea className="ga-textarea" rows={2} value={style}
             onChange={(e) => { setStyle(e.target.value); setStyleTouched(true) }} />
         </Field>

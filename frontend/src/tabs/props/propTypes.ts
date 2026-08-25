@@ -218,4 +218,38 @@ export const PROP_PROMPT_CONTEXT =
   + 'background with a generous margin, flat even lighting, the whole object '
   + 'in frame. No scene, no environment, no people or hands, no cast shadows, '
   + 'no dramatic perspective, no text — all of that bakes into the mesh. Keep '
-  + 'it a product shot of the object, not a picture of a place.'
+  + 'it a product shot of the object, not a picture of a place. The prompt is '
+  + 'framed as 3D-ASSET creation on purpose — it opens with "A high-quality '
+  + '3D model of …" and carries "designed for 3D asset generation, 8k '
+  + 'resolution". Keep that framing word for word, and never state it twice.'
+
+/** The subject slot a use-case style may carry — the server's weaving rule
+ *  (`prompt_compose.weave_subject`) spelled the same way on this side. */
+const SUBJECT_SLOT = '{subject}'
+
+/** The FINAL prop render prompt from the backend's use-case style + this
+ *  variant's subject — the client half of `props.compose_prompt`.
+ *
+ *  The style owns the wording, including the 3D-asset framing ("A high-quality
+ *  3D model of {subject}, designed for 3D asset generation, 8k resolution"),
+ *  and this only puts the subject where the style asks for it. That is why
+ *  both prop dialogs call THIS and neither writes a phrase of its own: the
+ *  framing has one home (the "prop" use case in `app/core/config.py`), and a
+ *  second copy here would land in the final prompt twice.
+ *
+ *  Mirrors `weave_subject`: the slot is filled once, a leading article is
+ *  lower-cased mid-sentence ("… model of A pine" reads wrong), a trailing full
+ *  stop of the subject would cut the sentence in half, and a style WITHOUT a
+ *  slot keeps the historic append. */
+export function composePropPrompt(style: string, subject: string): string {
+  const s = (style || '').trim()
+  const woven = (subject || '').trim().replace(/[\s.]+$/, '')
+  if (!s.includes(SUBJECT_SLOT)) return s ? (woven ? `${s}, ${woven}` : s) : woven
+  const at = s.indexOf(SUBJECT_SLOT)
+  const article = ['a', 'an', 'the'].includes(woven.split(' ')[0].toLowerCase())
+  const fill = at > 0 && article ? woven[0].toLowerCase() + woven.slice(1) : woven
+  // Only the FIRST slot is filled, any further one is dropped — the server
+  // warns about that style and composes the same text. The replacer is a
+  // FUNCTION so a `$` in the subject stays a dollar sign.
+  return s.replace(SUBJECT_SLOT, () => fill).split(SUBJECT_SLOT).join('')
+}

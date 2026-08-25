@@ -62,22 +62,17 @@ const DIM_FIELDS: Array<{ key: DimKey; label: string; title: string }> = [
   { key: 'height_m', label: 'H', title: 'Height (m)' },
 ]
 
-/** One chip's width in pixels — wide enough for the ground-offset slider with
- *  its read-back, which is the widest thing in it. Fixed on purpose (see the
- *  chip's own comment): the strip may only ever grow DOWNWARDS, never re-flow
- *  sideways. */
+/** One chip's width in pixels — wide enough for the three size fields, which
+ *  are the widest row in it. Fixed on purpose (see the chip's own comment):
+ *  the strip may only ever grow DOWNWARDS, never re-flow sideways. */
 const CHIP_W = 290
 
-/** How far a chip's ground-offset SLIDER may travel: the variant's own height,
- *  at least half a metre and at most the stored limit
- *  (`props.GROUND_OFFSET_MAX`). A dial that sweeps ±5 m for a footstool cannot
- *  hit its 3 cm, and one that sweeps ±0.3 m for a fir cannot bury its trunk —
- *  the range is the first half of the reference the value is read against
- *  (memory: "Maße brauchen Bezug"; the figure gauge below the strip is the
- *  second half). */
-function sinkRange(heightM: number): number {
-  return Math.min(5, Math.max(0.5, Math.ceil((heightM || 1) * 10) / 10))
-}
+/** Clamp of the ground offset, the stored limit itself
+ *  (`props.GROUND_OFFSET_MIN/MAX`). The field is TYPED, not swept (user
+ *  2026-08-25), so there is no dial to fit to the object any more — the value
+ *  is judged against the 1.70 m figure gauge below the strip, and the clamp
+ *  only has to agree with what the server accepts. */
+const SINK_LIMIT_M = 5
 
 /** Rows of the per-variant description field: readable at rest, a real
  *  editor while it is written in. */
@@ -143,9 +138,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   const [descDraft, setDescDraft] = useState<Record<number, string>>({})
   const [descOpen, setDescOpen] = useState<number | null>(null)
   useEffect(() => { setDescDraft({}); setDescOpen(null) }, [propId])
-  // …and for the ground-offset slider, which moves per drag step while the
-  // write is debounced: the local number drives the dial until the reload
-  // echoes it back (see `commitSink`).
+  // …and for the ground offset, whose write is debounced: the local number
+  // drives the field until the reload echoes it back (see `commitSink`).
   const [sinkDraft, setSinkDraft] = useState<Record<number, number>>({})
   useEffect(() => { setSinkDraft({}) }, [propId])
   // Arming is bound to an INDEX, and a delete renumbers everything behind it —
@@ -267,10 +261,11 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       t('Variant size saved'))
   }, [enc, ratiosFor, run, t])
 
-  // How deep ONE variant stands in the ground. The slider moves per drag step
-  // while the server may only be written now and then, so the write is
-  // DEBOUNCED and the local number drives the dial until it lands; 0 clears
-  // the key, which is the normal state.
+  // How deep ONE variant stands in the ground. The write stays DEBOUNCED even
+  // though the field is typed: a commit fires on every Enter and on every
+  // blur, and a chip that is corrected twice must not queue two round trips.
+  // The local number drives the field until the reload echoes it back; 0
+  // clears the key, which is the normal state.
   const sinkTimers = useRef<Record<number, number>>({})
   useEffect(() => {
     const timers = sinkTimers.current
@@ -279,7 +274,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     }
   }, [])
   const commitSink = useCallback((v: PropVariant, value: number) => {
-    const next = Math.round(Math.min(Math.max(value, -5), 5) * 100) / 100
+    const next = Math.round(
+      Math.min(Math.max(value, -SINK_LIMIT_M), SINK_LIMIT_M) * 100) / 100
     setSinkDraft((d) => ({ ...d, [v.index]: next }))
     const pending = sinkTimers.current[v.index]
     if (pending !== undefined) window.clearTimeout(pending)
@@ -433,9 +429,12 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   scattered copy in a room or yard, every instance of a painted
                   terrain scatter and every world prop. The per-placement
                   `offset_y` in the room editor stays the trim of ONE instance
-                  on top of it. The slider's range follows the variant's own
-                  height; the 1.70 m figure that makes the number judgeable
-                  stands below the strip, on the selected chip. */}
+                  on top of it. A TYPED number, no dial (user 2026-08-25):
+                  sinking is a value you know — 0.05 for a mesh with a base
+                  plate, 0.4 to bury a root ball — and a slider that has to
+                  sweep the whole ±5 m range cannot hit either. The 1.70 m
+                  figure that makes the number judgeable stands below the
+                  strip, on the selected chip. */}
               <SliderInput
                 ariaLabel={t('Ground offset (m)')}
                 label={<span className="ga-hint"
@@ -445,13 +444,12 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 </span>}
                 style={{ display: 'flex', fontSize: '0.8em' }}
                 unit="m"
-                min={-sinkRange(v.dims.height_m)}
-                max={sinkRange(v.dims.height_m)}
+                slider={false}
+                min={-SINK_LIMIT_M}
+                max={SINK_LIMIT_M}
                 step={0.01}
                 value={sinkDraft[v.index] ?? v.ground_offset_m}
                 onChange={(value) => commitSink(v, value)}
-                sliderWidth="auto"
-                sliderStyle={{ flex: 1, minWidth: 60 }}
                 inputWidth={70}
               />
               {/* The markers are the variant's too (2026-08-25) — the chip

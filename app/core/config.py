@@ -263,14 +263,25 @@ _DEFAULT_IMAGE_USE_CASES = {
     # into the mesh and confuse the object mesher). Flux lesson: everything
     # positive, no negation keywords in the style; the negative stays for CFG
     # backends (SD/Z-Image) which alone use it effectively.
+    #
+    # THE 3D-ASSET FRAMING LIVES HERE, AND ONLY HERE (2026-08-25, user
+    # wording): the style opens with "A high-quality 3D model of {subject},
+    # designed for 3D asset generation, 8k resolution" so the render is asked
+    # for an ASSET, not a photograph that happens to show an object — image
+    # models answer that framing with the clean, evenly lit, fully readable
+    # geometry the mesher needs. It is DATA, not code: the admin can retune it
+    # in /admin/settings, the composer weaves the subject into the {subject}
+    # slot (`prompt_compose.weave_subject`) and both prop dialogs read the very
+    # same string off the backend list — so the sentence exists once and can
+    # never be duplicated into the final prompt.
     "prop": {
         "keywords": {
-            "prompt_style": "single object, isolated, centered, plain light gray background, product photography, soft studio lighting, full view, no scene",
+            "prompt_style": "A high-quality 3D model of {subject}, designed for 3D asset generation, 8k resolution, single object, isolated, centered, plain light gray background, product photography, soft studio lighting, full view, no scene",
             "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark",
             "prompt_instruction": "Write comma-separated keywords for the single object only, isolated on a plain light gray background. No people, no scene.",
         },
         "natural": {
-            "prompt_style": "a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
+            "prompt_style": "A high-quality 3D model of {subject}, designed for 3D asset generation, 8k resolution, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
             "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark",
             "prompt_instruction": "Describe the single object only, isolated on a plain light gray background. No people, no scene.",
         },

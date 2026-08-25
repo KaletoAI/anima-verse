@@ -118,7 +118,9 @@ carries none of them. Three sections derive that by hand:
        nothing to inherit), the sanitizer, the payload scale, the stacking
        rule, and the RED PROBE that a prop-level `height_m` is ignored;
   [19] `description_section` — subject per variant, the copy-on-add law and
-       the render call site, with the prop's NAME as the last fallback;
+       the render call site, with the prop's NAME as the last fallback, plus
+       the 3D-ASSET framing that subject is composed into (one home, the "prop"
+       use-case style; each phrase exactly once in the final prompt);
   [20] `variant_fields_section` — ground offset and markers per variant, the
        payload they reach (scatter facts, stack facts, world-prop rows, the
        room recipe) and the one-time MIGRATION: values copied down, prop keys
@@ -530,6 +532,19 @@ def description_section() -> None:
     compose from `a pine sapling`. RED PROBE — the pre-2026-08-24 code read
     `meta["description"]`, so it would have sent variant 0's sentence here, and
     the check below fails the moment anyone puts that read back.
+
+    THE FRAMING (2026-08-25, user wording): what that sentence is composed INTO
+    asks for a 3D ASSET, not for a photograph that happens to show an object —
+
+        A high-quality 3D model of a pine sapling, designed for 3D asset
+        generation, 8k resolution, single object, isolated, …
+
+    and it has ONE home, the "prop" use-case style in app/core/config.py, whose
+    `{subject}` slot the composer fills. Hand-derived checks: the composed
+    prompt OPENS with that sentence (so the subject is woven, not appended),
+    each half of the framing appears exactly ONCE (a second home would double
+    it), the style handed to the UI still carries the raw slot, and a real
+    render records the same text.
     """
     print("\n[19] description per variant (2026-08-25: variant-only)")
     pine = store.create_prop(name="Pine", description="a tall pine tree")["id"]
@@ -637,6 +652,62 @@ def description_section() -> None:
               subjects[-1:] == ["Grey Rock"], str(subjects))
     finally:
         store.compose_prompt = real_compose
+
+    # ── the FRAMING: the prompt asks for a 3D ASSET, and says so ONCE ──
+    #
+    # The wording lives in exactly one place — the "prop" use-case style in
+    # app/core/config.py — and the composer only weaves the subject into its
+    # {subject} slot. Both halves are checked here, per style family, hand-
+    # derived from that style:
+    #
+    #   style    "A high-quality 3D model of {subject}, designed for 3D asset
+    #             generation, 8k resolution, single object, isolated, …"
+    #   subject  "a pine sapling"
+    #   →        "A high-quality 3D model of a pine sapling, designed for 3D
+    #             asset generation, 8k resolution, single object, isolated, …"
+    #
+    # RED PROBE, twice over: the pre-2026-08-25 style carried none of the
+    # framing and the composer APPENDED the subject at the end ("…, no scene,
+    # a pine sapling"), so the opening check fails against the old
+    # composition; and a second home for the sentence (in `compose_prompt`, in
+    # a dialog, in the style a second time) would push a count to 2.
+    class StyledBackend(FakeBackend):
+        def __init__(self, family: str) -> None:
+            self.image_family = family
+
+    head = ("A high-quality 3D model of a pine sapling, "
+            "designed for 3D asset generation, 8k resolution")
+    for family in ("keywords", "natural"):
+        composed = store.compose_prompt("a pine sapling",
+                                        StyledBackend(family))
+        prompt = composed["prompt"]
+        check(f"[{family}] the composed prompt opens with the 3D-asset "
+              f"framing around THIS subject", prompt.startswith(head + ","),
+              prompt[:110])
+        check(f"[{family}] ...\"designed for 3D asset generation\" exactly once",
+              prompt.count("designed for 3D asset generation") == 1,
+              str(prompt.count("designed for 3D asset generation")))
+        check(f"[{family}] ...\"8k resolution\" exactly once",
+              prompt.count("8k resolution") == 1,
+              str(prompt.count("8k resolution")))
+        check(f"[{family}] ...and the subject sits in the slot, not appended",
+              prompt.count("a pine sapling") == 1
+              and not prompt.rstrip().endswith("a pine sapling"),
+              prompt[-60:])
+        # The UI recomposes from this raw style, so the slot must survive the
+        # trip: a style handed out already-woven would let the dialog weave a
+        # second subject into a sentence that has one.
+        check(f"[{family}] the style handed to the UI keeps its {{subject}} slot",
+              composed["style"].count("{subject}") == 1
+              and composed["style"].startswith("A high-quality 3D model of "),
+              composed["style"][:60])
+
+    # …and the same text end to end: a real render of variant 1 records it.
+    store._render_source(pine, "", "", "", 1)
+    recorded = store.list_variants(pine)[1]["image"]["prompt"]
+    check("the prompt a render actually stores carries the framing",
+          recorded.startswith(head + ",")
+          and recorded.count("8k resolution") == 1, recorded[:110])
 
 
 def variant_fields_section() -> None:

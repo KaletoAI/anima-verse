@@ -2655,10 +2655,16 @@ def variant_generating(prop_id: str, variant: Any) -> bool:
 
 def compose_prompt(subject: str, backend) -> Dict[str, str]:
     """Final source-render prompt + negative for a prop on a backend — the
-    ``prop`` use-case style (per image family) plus the object subject
-    (usually the prop name). The dialog shows exactly this and may edit it
-    (final-prompt rule); ``style`` is returned separately so the UI can
-    recompose it per object."""
+    ``prop`` use-case style (per image family) with the object subject woven
+    into its ``{subject}`` slot. The dialog shows exactly this and may edit it
+    (final-prompt rule); ``style`` is returned RAW (slot included) so the UI
+    can recompose it per object with the same weaving rule.
+
+    The 3D-ASSET FRAMING ("A high-quality 3D model of …, designed for 3D asset
+    generation, 8k resolution") is part of that style and of nothing else —
+    see ``_DEFAULT_IMAGE_USE_CASES["prop"]`` in ``app.core.config``. Nothing
+    here adds a phrase of its own, so the framing cannot land in a prompt
+    twice."""
     from app.core import config as _cfg
     from app.core.prompt_compose import compose as _compose
     ucp = _cfg.resolve_use_case_style(
