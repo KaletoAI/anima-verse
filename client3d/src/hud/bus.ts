@@ -12,7 +12,7 @@
  * Deliberately dependency-free: no React import here, so scene code may import
  * it without pulling the HUD bundle in. Game state has three writers, each
  * owning a disjoint set of fields: `main.ts` with its mode helper
- * `game/embody.ts` (mode, selection, talk target, elevator), `CharacterPlaque.tsx` (one
+ * `game/embody.ts` (mode, selection, talk target, elevator, stairs), `CharacterPlaque.tsx` (one
  * field — clearing the selection) and `Hud.tsx` (what the `/play/scene` poll
  * says: `movementLocked` + `partyLeader` (E3-T3), `groundRoomId` and the two
  * lock maps of task C2).
@@ -21,6 +21,7 @@ import type { ElevatorState } from '../game/elevator';
 import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
 import type { Prefs, ScatterPrefs } from '../game/prefs';
+import type { StairPrompt } from '../game/stairs';
 import type { MapCharacter } from '../types';
 
 export type GameMode = 'overview' | 'embodied';
@@ -64,6 +65,13 @@ export interface HudGameState {
   elevator: ElevatorState | null;
   /** the storey choice is unfolded (F opens and closes it, Esc closes it) */
   elevatorOpen: boolean;
+  /** flight of stairs the avatar is standing at (embodied mode), or null. Like
+   *  the lift this is one storey change on foot, but there is nothing to
+   *  choose: a flight leads exactly one storey up or down, so the offer IS the
+   *  button. The ELEVATOR prompt wins over it — standing at both, the avatar
+   *  gets the lift's storey choice and no stair button, so the bottom row
+   *  never carries two offers at once. */
+  stairs: StairPrompt | null;
   /** adjacent location the avatar could enter (standing near a boundary
    *  opening, or next to a location without authored openings) — the
    *  "Betreten" offer of Etappe 3. Talk and elevator prompts win over it. */
@@ -87,6 +95,10 @@ export interface HudGameActions {
   /** ride to that storey: enter its room on the server, then walk the figure
    *  to the holding point of the target storey */
   rideElevator?: (level: number) => void;
+  /** take the flight the avatar is standing at: enter the room the far landing
+   *  lies in on the server, then walk the figure up (or down) it. No argument
+   *  — the offer already names the one destination. */
+  rideStairs?: () => void;
   /** perform the offered location entry (the real server step + walk-in) */
   enterLocation?: () => void;
   /** sign out and return to the title screen — the game menu's "Back to
@@ -132,7 +144,7 @@ const state: HudGameState = {
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '', groundRoomId: '',
   lockedRooms: {}, lockedLocations: {}, lockedLoc: '',
-  elevator: null, elevatorOpen: false, enterOffer: null,
+  elevator: null, elevatorOpen: false, stairs: null, enterOffer: null,
 };
 const listeners = new Set<() => void>();
 let snapshot: HudGameState = { ...state };

@@ -932,7 +932,7 @@ async function main() {
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
     locationsSignature, footprintSignature, MINIMAP_PREF_KEY } = minimap;
   const { placementOf, figureTransition } = placement;
-  const { stairChain } = stairs;
+  const { stairChain, stairsAt, nearestRoomAt, STAIR_RANGE } = stairs;
   // The defaults are spelled out here BY HAND, never read from the module —
   // that is the whole point of pinning them (see the header).
   const DEFAULTS = {
@@ -1925,8 +1925,8 @@ async function main() {
   // A copy of the ORDER in main.ts (ride start -> walk hook -> tick() -> room
   // walk), never an import. Cell boundaries play no part: a ride happens
   // inside ONE interior, which is one cell.
-  const RIDE_MS = 4000;        // main.ts ELEVATOR_RIDE_MS
-  const RIDE_ARRIVE = 0.2;     // main.ts ELEVATOR_ARRIVE
+  const RIDE_MS = 4000;        // main.ts VERTICAL_RIDE_MS
+  const RIDE_ARRIVE = 0.2;     // main.ts VERTICAL_ARRIVE
   const ROOM_HOLD = 1.5;       // main.ts ROOM_HOLD_SECONDS
   /**
    * @param opts.rideOwnsFigure  finding 1: steering is ignored while the ride runs
@@ -2054,7 +2054,7 @@ async function main() {
       hammered.requests.length, 1);
   }
 
-  // --- stairs: the chain routes per storey (Treppen task 4) ----------------
+  // --- stairs: the chain routes per storey (stairs task 4) -----------------
   // A staircase spans exactly ONE storey (`foot.level + 1 === head.level`), so
   // a storey change over stairs is a CHAIN: one flight per step of the storey
   // difference, and each flight contributes its NEAR end first, then its FAR
@@ -2126,6 +2126,104 @@ async function main() {
     };
     check('the basement is a storey like any other', stairChain([C, A], -1, 1),
       [C.foot, C.head, A.foot, A.head]);
+  }
+
+  // --- stairs: the avatar's trigger and its target room (stairs task 5) -----
+  // The player's way onto a flight is the same shape as the lift's
+  // (`elevatorAt`): standing within reach of a landing OF ONE'S OWN STOREY
+  // offers the ride, and the reach is FIGURE metres — `STAIR_RANGE * scale`,
+  // because indoors a world metre is not a figure metre (at scale 0.3 the
+  // 1.5 m reach is 0.45 world metres, and unscaled the offer would cover half
+  // the room). The comparison is `dist < range`, exactly as `elevatorAt` has
+  // it, so a figure standing ON the range circle is not yet at the stairs.
+  //
+  // The flight below is the § 0 hand calculation again (house storey 3.0,
+  // `at = [2, −2]`, `dir_deg` 90): foot landing [1.5, 0.01, −2] on storey 0,
+  // head landing [6.4, 3.09, −2] on storey 1.
+  console.log('stairsAt — the nearest landing of one\'s own storey, in reach');
+  {
+    check('the reach is the lift\'s, in figure metres', STAIR_RANGE, 1.5);
+    const A = {
+      foot: { level: 0, x: 1.5, y: 0.01, z: -2 },
+      head: { level: 1, x: 6.4, y: 3.09, z: -2 },
+    };
+
+    // (a) 1.0 m from the foot landing, scale 1 → reach 1.5, and 1.0 < 1.5.
+    //     Standing at a FOOT means going UP, and the destination is the other
+    //     end of that flight — the head.
+    check('1.0 m from the foot offers the way up',
+      stairsAt({ x: 2.5, z: -2 }, 0, [A], 1), { dir: 'up', dest: A.head });
+    // (b) 3.1 − 1.5 = 1.6 m away, still scale 1: 1.6 ≥ 1.5, no offer.
+    check('1.6 m away is out of reach',
+      stairsAt({ x: 3.1, z: -2 }, 0, [A], 1), null);
+    // (c) scale 0.3 → reach 1.5 · 0.3 = 0.45 world metres. 2.0 − 1.5 = 0.5 m
+    //     is outside it, 1.9 − 1.5 = 0.4 m inside — the same half metre that
+    //     would be well within reach at scale 1.
+    check('at scale 0.3 half a metre is already too far',
+      stairsAt({ x: 2.0, z: -2 }, 0, [A], 0.3), null);
+    check('...while 0.4 m is inside the 0.45 m reach',
+      stairsAt({ x: 1.9, z: -2 }, 0, [A], 0.3), { dir: 'up', dest: A.head });
+    // (d) standing ON the head landing, on storey 1: the same flight read from
+    //     the other end — the way DOWN, destination the foot.
+    check('at the head landing the offer goes down',
+      stairsAt({ x: 6.4, z: -2 }, 1, [A], 1), { dir: 'down', dest: A.foot });
+    // Only landings of ONE'S OWN storey count: standing on the foot landing
+    // while the server has the avatar upstairs is not a stair offer (the head
+    // is 4.9 m away, far outside the reach).
+    check('a landing of another storey is not in reach at all',
+      stairsAt({ x: 1.5, z: -2 }, 1, [A], 1), null);
+    check('no stairs at all, no offer', stairsAt({ x: 1.5, z: -2 }, 0, [], 1), null);
+
+    // Several flights: the NEAREST landing wins. D's foot sits at x = 3.5, so
+    // from x = 2.6 it is 0.9 m away and A's foot 1.1 m — both in reach, D is
+    // closer, and its head is the destination.
+    const D = {
+      foot: { level: 0, x: 3.5, y: 0.01, z: -2 },
+      head: { level: 1, x: 8.4, y: 3.09, z: -2 },
+    };
+    check('the nearest of two landings wins',
+      stairsAt({ x: 2.6, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: D.head });
+    check('...and that does not depend on the list order',
+      stairsAt({ x: 2.6, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head });
+    // A tie (x = 2.5 is 1.0 m from either foot) falls to the FIRST listed —
+    // the payload order is arbitrary, but the pick must not flicker.
+    check('a tie falls to the first flight listed',
+      stairsAt({ x: 2.5, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: A.head });
+    check('...literally the first, not the geometric one',
+      stairsAt({ x: 2.5, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head });
+  }
+
+  // --- nearestRoomAt: where the climb ends up ------------------------------
+  // The ride needs a ROOM to ask the server for, and stepping off a flight
+  // puts you in the room the landing lies in — or, failing a hit, the nearest
+  // one on that storey. The rule is `elevatorTargetRoom`'s, only measured from
+  // the landing instead of a lift stop: smallest centre distance on the
+  // storey, ties to the LOWER id so a symmetric floor cannot flicker.
+  console.log('nearestRoomAt — nearest room centre of that storey, tie to the lower id');
+  {
+    const rooms = [
+      { id: 'hall',    level: 0, center: { x: 0, z: 0 } },
+      { id: 'kitchen', level: 0, center: { x: 6, z: 0 } },
+      { id: 'landing', level: 1, center: { x: 5, z: 0 } },
+      { id: 'bedroom', level: 1, center: { x: -5, z: 0 } },
+    ];
+    // The head landing of the § 0 flight, [6.4, −2]: on storey 1 that is
+    // hypot(1.4, 2) = 2.44… to `landing` and hypot(11.4, 2) = 11.57… to
+    // `bedroom`.
+    check('the head landing ends on the landing', nearestRoomAt(1, { x: 6.4, z: -2 }, rooms),
+      'landing');
+    // The same point judged on storey 0: hypot(6.4, 2) = 6.70… to `hall`,
+    // hypot(0.4, 2) = 2.03… to `kitchen`.
+    check('...and the same point on storey 0 is the kitchen',
+      nearestRoomAt(0, { x: 6.4, z: -2 }, rooms), 'kitchen');
+    check('a storey without rooms has no target', nearestRoomAt(2, { x: 0, z: 0 }, rooms),
+      null);
+    check('no rooms at all, no target', nearestRoomAt(0, { x: 0, z: 0 }, []), null);
+    // (e) The tie: x = 3 is 3 m from `hall` (0) and 3 m from `kitchen` (6).
+    //     'hall' < 'kitchen', so the lower id wins — in EITHER list order.
+    check('a tie falls to the lower id', nearestRoomAt(0, { x: 3, z: 0 }, rooms), 'hall');
+    check('...regardless of the list order',
+      nearestRoomAt(0, { x: 3, z: 0 }, [...rooms].reverse()), 'hall');
   }
 
   // --- walking indoors: the floor, not the shell (E3 acceptance) -----------

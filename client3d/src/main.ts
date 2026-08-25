@@ -16,7 +16,7 @@ import {
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
-import { stairChain, type StairLink } from './game/stairs';
+import { nearestRoomAt, stairChain, stairsAt, type StairLink } from './game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
@@ -2256,7 +2256,7 @@ async function startApp(username: string, role: string) {
             stops.push(doorStop(tile, shared));
           } else {
             const leave = from ? roomDoor(scene, from) : null;
-            if (leave) stops.push(doorStop(tile, leave));            // alten Raum verlassen
+            if (leave) stops.push(doorStop(tile, leave));            // leave the old room
             // The flights arrive as world points already (`tile.stairs`); the
             // chain module is pure, so they go in as plain numbers.
             const chain = lf !== lt && tile.stairs?.length
@@ -2272,11 +2272,11 @@ async function startApp(username: string, role: string) {
             } else if (lf !== lt && tile.elevatorStops) {
               const a = tile.elevatorStops.get(lf) ?? tile.elevatorStops.get(0);
               const b = tile.elevatorStops.get(lt) ?? tile.elevatorStops.get(0);
-              if (a) stops.push(a.clone());                          // Fahrstuhl einsteigen
-              if (b) stops.push(b.clone());                          // Fahrt zur Ziel-Etage
+              if (a) stops.push(a.clone());                          // board the lift
+              if (b) stops.push(b.clone());                          // ride to the target storey
             }
             const enter = to ? roomDoor(scene, to) : null;
-            if (enter) stops.push(doorStop(tile, enter));            // neuen Raum betreten
+            if (enter) stops.push(doorStop(tile, enter));            // enter the new room
           }
           if (stops.length) via = stops;
         }
@@ -2335,6 +2335,7 @@ async function startApp(username: string, role: string) {
     // down.
     updateTalkTarget();
     updateElevator();   // standing at the lift is a second-scale event too
+    updateStairs();     // …and so is standing at a flight of stairs
     updateEnterOffer(); // …and so is standing at a location entry (Etappe 3)
   }, 1000);
   npcs.update(computeNpcStates(firstMap));
@@ -3042,21 +3043,24 @@ async function startApp(username: string, role: string) {
    *  what is left is the room walk's own guard: only ONE `/play/enter-room`
    *  may be in flight. The T6 section further down owns the writes. */
   let roomRequestInFlight = false;
-  /** How long a lift ride may take before the figure is handed back even
+  /** How long a storey change may take before the figure is handed back even
    *  without arriving. A safety net only: the figure can be held up (a model
    *  reload throws its group away mid-ride), and a ride that never ends would
    *  leave the player unable to steer at all. */
-  const ELEVATOR_RIDE_MS = 4000;
+  const VERTICAL_RIDE_MS = 4000;
   /** Distance that counts as "arrived at the holding point" — in XZ AND in
    *  height, so the vertical part of the ride has to be over as well. */
-  const ELEVATOR_ARRIVE = 0.2;
-  /** The running lift ride. It INTERLOCKS with the walking hook: while it is
-   *  set the hook does not steer at all — the goal belongs to the lift, and
-   *  one steering frame would overwrite it, walking the figure out of the
-   *  shaft while its height still blends to the other storey (through the
-   *  ceiling) into a room nobody chose, which the room walk then pays for with
-   *  a second `/play/enter-room`. The elevator section owns the writes. */
-  let elevatorRide: { goal: THREE.Vector3; until: number } | null = null;
+  const VERTICAL_ARRIVE = 0.2;
+  /** The running storey change — a lift ride or a stair climb, one lock for
+   *  both because the figure is guided the same way either time and only ever
+   *  one of them can run. It INTERLOCKS with the walking hook: while it is set
+   *  the hook does not steer at all — the goal belongs to the ride, and one
+   *  steering frame would overwrite it, walking the figure out of the shaft
+   *  (or off the flight) while its height still blends to the other storey
+   *  (through the ceiling) into a room nobody chose, which the room walk then
+   *  pays for with a second `/play/enter-room`. The elevator and stair
+   *  sections own the writes. */
+  let verticalRide: { goal: THREE.Vector3; until: number } | null = null;
   /** Deadline of a walk-in (E3 acceptance, "walking on the roof"). Same
    *  safety net as the ride's, and generous for the same reason: the pace the
    *  figure keeps during it is whatever it walked in with. */
@@ -3337,7 +3341,7 @@ async function startApp(username: string, role: string) {
     // those either — a goal planned from the old position would walk the
     // figure back out of the opening it just came through.
     if (state.mode !== 'embodied' || state.movementLocked
-      || elevatorRide || walkIn) return false;
+      || verticalRide || walkIn) return false;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return false;
     // OUT IN THE OPEN the click is read against the DRAPED GROUND itself
@@ -3404,7 +3408,7 @@ async function startApp(username: string, role: string) {
     const state = getGameState();
     if (state.mode !== 'embodied') {
       cancelRoute();                      // leaving the mode drops the route
-      elevatorRide = null;   // ditto for a ride nobody is in any more
+      verticalRide = null;   // ditto for a ride nobody is in any more
       walkIn = null;         // …and for a walk-in nobody is walking
       correction = null;     // …and for a correction of a figure nobody steers
       return;
@@ -3418,18 +3422,19 @@ async function startApp(username: string, role: string) {
     }
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;                     // no figure on the map (yet) — nothing to steer
-    // A running lift ride owns the figure: its goal is the holding point of
-    // the target storey, and steering would overwrite it in the very next
-    // frame. The ride is short, so the keys and click orders are ignored for
-    // its duration instead of cancelling it half-way — a ride abandoned in
-    // mid-air would leave the figure between two storeys. It ends when the
-    // figure stands at the point (XZ and height), or on the safety deadline.
-    if (elevatorRide) {
-      const arrived = Math.hypot(elevatorRide.goal.x - pos.x, elevatorRide.goal.z - pos.z)
-          < ELEVATOR_ARRIVE
-        && Math.abs(elevatorRide.goal.y - pos.y) < ELEVATOR_ARRIVE;
-      if (!arrived && performance.now() <= elevatorRide.until) return;
-      elevatorRide = null;
+    // A running storey change owns the figure: its goal is the holding point
+    // of the target storey (the lift) or the far landing of a flight (the
+    // stairs), and steering would overwrite it in the very next frame. The
+    // ride is short, so the keys and click orders are ignored for its duration
+    // instead of cancelling it half-way — a ride abandoned in mid-air would
+    // leave the figure between two storeys. It ends when the figure stands at
+    // the point (XZ and height), or on the safety deadline.
+    if (verticalRide) {
+      const arrived = Math.hypot(verticalRide.goal.x - pos.x, verticalRide.goal.z - pos.z)
+          < VERTICAL_ARRIVE
+        && Math.abs(verticalRide.goal.y - pos.y) < VERTICAL_ARRIVE;
+      if (!arrived && performance.now() <= verticalRide.until) return;
+      verticalRide = null;
     }
     // A walk-in owns the figure the same way: the offer was accepted and the
     // figure walks THROUGH the boundary opening, which is what makes the next
@@ -3588,7 +3593,7 @@ async function startApp(username: string, role: string) {
   function reconcileAvatarPos(map: WorldMap) {
     if (getGameState().mode !== 'embodied') return;
     // A report in flight would be compared against a payload that predates it.
-    if (posInFlight || walkIn || elevatorRide || correction) return;
+    if (posInFlight || walkIn || verticalRide || correction) return;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
     const me = map.characters.find((c) => c.name === avatarName);
@@ -4073,7 +4078,7 @@ async function startApp(username: string, role: string) {
     roomOf.set(avatarName, target);
     npcs.setPlayerTarget(avatarName, stop.clone());
     // From here the lift owns the figure until it stands at that point.
-    elevatorRide = { goal: stop.clone(), until: performance.now() + ELEVATOR_RIDE_MS };
+    verticalRide = { goal: stop.clone(), until: performance.now() + VERTICAL_RIDE_MS };
     // The view follows the ride. `levelFilter` is the in-world storey button,
     // pure view state — the same switch a click on it would throw, widget
     // marking included.
@@ -4081,6 +4086,112 @@ async function startApp(username: string, role: string) {
     tile.levelSwitch?.();
     roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
     setGameState({ elevator: { levels: state.elevator.levels, current: level } });
+  }
+
+  // --- Taking the stairs (stairs task 5) ------------------------------------
+  // The same machinery as the lift, one level simpler: a flight leads exactly
+  // one storey, so there is nothing to choose — the offer IS the ride. The
+  // rule of WHEN it stands is pure (`game/stairs.ts`, numbers in
+  // client3d/scripts/smoke_walk_math.mjs); everything here looks up its
+  // arguments and rides the ONE room-request machine of the room walk.
+  //
+  // `tile.stairs` carries the landings as WORLD points already (`mountScene`),
+  // so the far landing goes straight to `setPlayerTarget` and the walk hook
+  // blends the height towards it — which is exactly the climb the NPC chain
+  // walks over the same two points (task 4).
+  function stairLinksOf(tile: Tile): StairLink[] {
+    return (tile.stairs ?? []).map((s): StairLink => ({
+      foot: { level: s.foot.level, x: s.foot.pos.x, y: s.foot.pos.y, z: s.foot.pos.z },
+      head: { level: s.head.level, x: s.head.pos.x, y: s.head.pos.y, z: s.head.pos.z },
+    }));
+  }
+
+  /** Same 1 Hz tick as the talk target and the lift, and for the same reason:
+   *  walking up to a flight is a second-scale event, not a per-frame one. */
+  function updateStairs() {
+    const state = getGameState();
+    const clear = () => { if (state.stairs) setGameState({ stairs: null }); };
+    // A party follower is carried by its leader and the server refuses the
+    // room change anyway — no offer it could not honour.
+    if (state.mode !== 'embodied' || state.movementLocked) return clear();
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return clear();
+    // Only inside the OPEN interior of the tile the figure stands on, exactly
+    // as the lift judges it: from the outside there are no stairs to use.
+    const tile = tileAt(pos.x, pos.z);
+    if (!tile || tile.fadeTarget !== 1 || !tile.stairs?.length) return clear();
+    const room = avatarRoomId(tile);
+    if (!room) return clear();
+    const found = stairsAt({ x: pos.x, z: pos.z }, tile.roomLevels.get(room) ?? 0,
+      stairLinksOf(tile), npcs.scaleOf(avatarName) ?? 1);
+    if (!found) return clear();
+    // A storey with no room is a storey `/play/enter-room` cannot move the
+    // avatar to, so the flight leads nowhere — the offer is not made at all,
+    // the same way `elevatorLevels` drops such a storey from the lift's
+    // choice. Better no button than one that mutely does nothing.
+    if (!nearestRoomAt(found.dest.level, found.dest, interiorRooms(tile))) return clear();
+    // Unchanged offer: no bus write, or React re-renders the chip every second
+    // for nothing.
+    const now = state.stairs;
+    if (now && now.dir === found.dir && now.dest.level === found.dest.level
+      && now.dest.x === found.dest.x && now.dest.z === found.dest.z) return;
+    setGameState({ stairs: found });
+  }
+  // Leaving the mode drops the offer in the same tick the mode changes,
+  // instead of leaving it standing for up to a second.
+  subscribeGameState(() => {
+    if (getGameState().mode !== 'embodied') updateStairs();
+  });
+
+  gameActions.rideStairs = () => { void rideStairs(); };
+
+  /**
+   * The climb: the server moves the avatar into the room the far landing lies
+   * in, then the figure walks to that landing — its world point carries the
+   * target storey's height, and `tick()` blends the height towards its goal,
+   * which is the same vertical ride the lift and the NPC stair chain take.
+   * The guard is the LIFT's (`verticalRide`), deliberately: only one storey
+   * change can run, whichever way it was started.
+   */
+  async function rideStairs() {
+    const state = getGameState();
+    if (state.mode !== 'embodied' || !state.stairs || state.movementLocked) return;
+    const dest = state.stairs.dest;
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;
+    const tile = tileAt(pos.x, pos.z);
+    if (!tile) return;
+    const target = nearestRoomAt(dest.level, dest, interiorRooms(tile));
+    if (!target) return;
+    // The ONE room-request machine of the room walk — a climb while another
+    // room change is in flight would let the network order decide which room
+    // the avatar ends up in. No second enter-room path, and the SAME cooldown:
+    // a room the server just refused stays refused for the climb as well, or
+    // every press would run into the same 403.
+    if (roomRequestInFlight
+      || (roomRejectedUntil.get(target) ?? 0) > performance.now()) return;
+    // A click order would fight the climb from the next frame on — and it was
+    // made for the storey the player is leaving.
+    cancelRoute();
+    if (!await enterRoomOnFoot(target, true)) return;
+    // The server accepted the room, so that IS the avatar's room now — the
+    // same word the step answer gives (`moved.room_id`), up to three seconds
+    // before the poll repeats it. Without it the room walk would judge the
+    // climb against the storey just left and ask the avatar back down.
+    roomOf.set(avatarName, target);
+    const goal = new THREE.Vector3(dest.x, dest.y, dest.z);
+    npcs.setPlayerTarget(avatarName, goal.clone());
+    // From here the climb owns the figure until it stands at that point.
+    verticalRide = { goal: goal.clone(), until: performance.now() + VERTICAL_RIDE_MS };
+    // The view follows the climb. `levelFilter` is the in-world storey button,
+    // pure view state — the same switch a click on it would throw, widget
+    // marking included.
+    tile.levelFilter = dest.level;
+    tile.levelSwitch?.();
+    roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
+    // The offer is gone the moment the climb starts: the landing behind the
+    // figure would otherwise stand as an offer for the whole ride.
+    setGameState({ stairs: null });
   }
 
   // --- Entering a location (Etappe 3, "Betreten"; metres since E4 task 5) ---
@@ -4198,7 +4309,7 @@ async function startApp(username: string, role: string) {
     }
     // Nothing may overlap a guided movement or a room request — the same
     // interlocks the walking hook honours.
-    if (roomRequestInFlight || elevatorRide || walkIn) return;
+    if (roomRequestInFlight || verticalRide || walkIn) return;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
     if (!tiles.get(offer.locId)) return;
@@ -4284,11 +4395,12 @@ async function startApp(username: string, role: string) {
     if (getGameState().mode !== 'embodied') updateTalkTarget();
   });
 
-  // F is the ONE action key: talk to whoever is in range, use the lift one is
-  // standing at, and — as the keyboard counterpart of the plaque's "Take
-  // control" — enter the mode when the avatar is selected in the overview.
-  // That is also the PRIORITY, and the HUD shows only the offer that wins:
-  // a character in range beats the lift, so one press is never two offers.
+  // F is the ONE action key: talk to whoever is in range, use the lift or the
+  // stairs one is standing at, and — as the keyboard counterpart of the
+  // plaque's "Take control" — enter the mode when the avatar is selected in
+  // the overview. That is also the PRIORITY, and the HUD shows only the offer
+  // that wins: a character in range beats the lift, the lift beats the
+  // stairs, so one press is never two offers.
   // Guarded like Esc: while the focus sits in the chat composer, F types an f.
   // Modifier combinations belong to the browser (Ctrl+F is the page search).
   window.addEventListener('keydown', (e) => {
@@ -4302,6 +4414,13 @@ async function startApp(username: string, role: string) {
     if (state.elevator) {
       // Pressing again closes the storey choice — the same key, both ways.
       setGameState({ elevatorOpen: !state.elevatorOpen });
+      return;
+    }
+    // The stairs sit between the lift and the location entry, exactly where
+    // the HUD draws them. There is nothing to unfold: a flight leads one
+    // storey, so the press IS the ride.
+    if (state.stairs) {
+      gameActions.rideStairs?.();
       return;
     }
     // Entering an adjacent location (Etappe 3) — last in the F priority,

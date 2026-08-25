@@ -919,12 +919,28 @@ export function Hud({ avatar, username, role }: {
             <div className="hud-talk">{t('Press F to use the elevator')}</div>
           )
         )}
+        {/* Stairs (stairs task 5): the storey change on foot, and unlike the
+            lift there is nothing to choose — a flight leads exactly one storey
+            up or down, so the offer IS the button. Behind the talk chip AND
+            behind the lift for the same reason both of those are ordered:
+            never two offers at once. The vanilla side only publishes the offer
+            when the destination storey really has a room to enter, so a press
+            can always be honoured. */}
+        {!game.talkTarget && !game.elevator && game.stairs && (
+          <div className="hud-elevator">
+            <button className="hud-elevator-floor"
+              onClick={() => gameActions.rideStairs?.()}>
+              {game.stairs.dir === 'up'
+                ? t('Take the stairs up') : t('Take the stairs down')}
+            </button>
+          </div>
+        )}
         {/* Entering an adjacent location (Etappe 3): same prompt shape, and
-            deliberately LAST in the priority — talk and elevator win, so one
-            F press is never two offers. The vanilla side owns the rule of
-            WHEN the offer stands (opening proximity / adjacent cell) and
+            deliberately LAST in the priority — talk, elevator and stairs win,
+            so one F press is never two offers. The vanilla side owns the rule
+            of WHEN the offer stands (opening proximity / adjacent cell) and
             performs the real server entry on F. */}
-        {!game.talkTarget && !game.elevator && game.enterOffer && (
+        {!game.talkTarget && !game.elevator && !game.stairs && game.enterOffer && (
           <div className="hud-talk">
             {t('Press F to enter {name}').replace('{name}', game.enterOffer.name)}
           </div>
