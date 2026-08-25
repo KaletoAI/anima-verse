@@ -235,7 +235,7 @@ def sanitize_layout(data: Any, *,
     Returns ``(normalized, warnings)``:
 
     ``normalized`` = ``{summary, location_id, entry_room, rooms[],
-    boundary_openings, stairs}``. Each ``rooms[]`` entry is
+    boundary_openings, stairs, storey_height_m}``. Each ``rooms[]`` entry is
     ``{room_id, name, description, is_new, layout}`` — ``room_id`` is set for
     every entry (new rooms get theirs up front, so ``entry_room`` can point at
     a room this very plan creates; that id is minted PER PASS, so the preview
@@ -462,6 +462,11 @@ def sanitize_layout(data: Any, *,
         "location_id": str(location.get("id") or ""),
         "location_name": str(location.get("name") or ""),
         "boundary": list(boundary) if boundary else [],
+        # The location's OWN storey height, carried along so the draft preview
+        # can draw a flight at the size it will really have: how much floor a
+        # staircase eats follows from the climb, and the climb is this number
+        # (absent = 3, the same default the scene composes with).
+        "storey_height_m": float(map3d.get("storey_height_m") or 3.0),
         "entry_room": entry_room,
         "rooms": entries,
         "boundary_openings": boundary_openings,
@@ -471,8 +476,10 @@ def sanitize_layout(data: Any, *,
 
 
 def layout_counts(normalized: Dict[str, Any]) -> Dict[str, int]:
-    """``{rooms, new_rooms, openings, boundary_openings}`` of a normalized
-    draft — the numbers the confirmation dialog states before it writes."""
+    """``{rooms, new_rooms, openings, boundary_openings, stairs}`` of a
+    normalized draft — the numbers the confirmation dialog states before it
+    writes. A plan may lay down up to eight staircases, and a dialog that does
+    not name them lets a storey connection through unread."""
     rooms = normalized.get("rooms") or []
     return {
         "rooms": len(rooms),
@@ -480,6 +487,7 @@ def layout_counts(normalized: Dict[str, Any]) -> Dict[str, int]:
         "openings": sum(len(r.get("layout", {}).get("openings") or [])
                         for r in rooms),
         "boundary_openings": len(normalized.get("boundary_openings") or []),
+        "stairs": len(normalized.get("stairs") or []),
     }
 
 

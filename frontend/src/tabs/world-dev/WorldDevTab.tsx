@@ -1346,11 +1346,12 @@ function ConfirmLayoutAction({
           ) : (
             <>
               <div>
-                {t('This writes {r} room plans ({n} of them new rooms), {o} openings and {b} plot entrances into the location.')
+                {t('This writes {r} room plans ({n} of them new rooms), {o} openings, {b} plot entrances and {s} staircases into the location.')
                   .replace('{r}', String(counts?.rooms ?? 0))
                   .replace('{n}', String(counts?.new_rooms ?? 0))
                   .replace('{o}', String(counts?.openings ?? 0))
-                  .replace('{b}', String(counts?.boundary_openings ?? 0))}
+                  .replace('{b}', String(counts?.boundary_openings ?? 0))
+                  .replace('{s}', String(counts?.stairs ?? 0))}
               </div>
               <div className="ga-form-hint">
                 {t('Rooms the plan does not mention keep the plan they have.')}

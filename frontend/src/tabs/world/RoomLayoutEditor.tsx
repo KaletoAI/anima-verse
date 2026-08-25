@@ -62,7 +62,8 @@ import {
   edgePointOnEdge, edgeSegment, exteriorEdges, fmtM, localToRoom,
   nearestPolygonEdge, normalizeOpeningEdge, outlineOf, planMapView, r4, rM,
   rotateAbout,
-  sharedEdges, snapDrawPoint, snapMoveOffset, snapToGrid, viewFx, viewFz,
+  sharedEdges, snapDrawPoint, snapMoveOffset, snapToGrid, stairRunM,
+  stairSymbol, STAIR_MAX, viewFx, viewFz,
   viewMx, viewMz, viewportFor,
 } from './planGeometry'
 import type { PlanView, PolyRoom, Pt, SnapResult } from './planGeometry'
@@ -198,35 +199,6 @@ interface RoomLayoutEditorProps {
  *  move. Below it the press is only a selection — clicking a room to work on
  *  it used to nudge it by whatever the hand did (user finding 2026-07-28). */
 const MOVE_START_PX = 4
-
-/**
- * A STAIRCASE ON THE PLAN — the same mirroring the elevator's 1.8 m footprint
- * does: the numbers below are the server's (`STAIR_WIDTH_M`, `STAIR_TREAD_M`,
- * `STAIR_RISE_M`, `LEVEL_PLATE_TOP` in `app/core/scene_recipe.py`), repeated
- * here so the plan can show HOW MUCH FLOOR a flight really eats before the
- * author decides where it fits. Nothing geometric is decided here — the scene
- * keeps composing the steps and the pads; this draws a symbol over authored
- * data, the way the door swing arcs do.
- */
-const STAIR_WIDTH_M = 1.2
-const STAIR_TREAD_M = 0.26
-const STAIR_RISE_M = 0.2
-const LEVEL_PLATE_TOP = 0.08
-/** Unit climb direction per `dir_deg`, in plan metres (x, y=south). */
-const STAIR_DIRS: Record<number, [number, number]> = {
-  0: [0, 1], 90: [1, 0], 180: [0, -1], 270: [-1, 0],
-}
-/** The floor datum of a storey — storey 0 IS the terrain, every declared one
- *  sits on its level plate (scene_recipe.storey_floor_y). */
-const storeyFloorY = (level: number, storey: number) =>
-  level * storey + (level === 0 ? 0 : LEVEL_PLATE_TOP)
-/** Steps and floor RUN of one flight, by the server's formula: the climb
- *  divided by the nominal rise, at least two steps, one tread each. */
-function stairRunM(fromLevel: number, storey: number): { steps: number; run: number } {
-  const climb = storeyFloorY(fromLevel + 1, storey) - storeyFloorY(fromLevel, storey)
-  const steps = Math.max(2, Math.round(climb / STAIR_RISE_M))
-  return { steps, run: steps * STAIR_TREAD_M }
-}
 
 type DragState =
   // `mPerPx` is FROZEN at drag start on purpose: the drawing window is derived
@@ -2244,8 +2216,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             // below turns it in quarter steps.
             const [sx, sz] = pointerM(e.clientX, e.clientY)
             const cur = map3d?.stairs || []
-            if (cur.length >= 8) {
-              toast(t('At most 8 staircases per location.'), 'error')
+            if (cur.length >= STAIR_MAX) {
+              toast(t('At most {n} staircases per location.')
+                .replace('{n}', String(STAIR_MAX)), 'error')
             } else {
               onMap3d?.('stairs', [...cur, {
                 at: [rM(e.shiftKey ? sx : snapToGrid(sx, gridStep)),
@@ -2948,28 +2921,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             {map3d.stairs.map((st, i) => {
               const arriving = st.from_level + 1 === level
               if (st.from_level !== level && !arriving) return null
-              const dir = STAIR_DIRS[((st.dir_deg % 360) + 360) % 360]
-              if (!dir) return null
-              const storey = map3d.storey_height_m || 3
-              const { steps, run } = stairRunM(st.from_level, storey)
-              const [dx, dz] = dir
-              // Across the climb: the plan's own perpendicular, so a flight
-              // pointing east is as wide north–south as one pointing north is
-              // east–west.
-              const px = -dz
-              const pz = dx
-              const half = STAIR_WIDTH_M / 2
-              const [ax, az] = st.at
-              const pt = (along: number, across: number): [number, number] =>
-                [ax + dx * along + px * across, az + dz * along + pz * across]
-              const poly = [pt(0, half), pt(run, half), pt(run, -half), pt(0, -half)]
+              // ONE symbol routine for both plan surfaces (planGeometry) — the
+              // draft preview next to the world-dev chat draws the very same
+              // points, so an author sees the flight identically before and
+              // after the apply.
+              const sym = stairSymbol(st, map3d.storey_height_m || 3)
+              if (!sym) return null
+              const { steps, run, outline, treads, arrow } = sym
               const sel = stairSel === i
               const col = sel ? '#f0c088' : '#8a7a66'
-              // Arrowhead: a chevron just past the head end — the flight ends
-              // at `run`, the tip sits 0.45 m further on.
-              const tip = pt(run + 0.45, 0)
-              const wingA = pt(run, half * 0.8)
-              const wingB = pt(run, -half * 0.8)
               return (
                 <g key={`stair-${i}`}
                   opacity={arriving ? 0.35 : 1}
@@ -2991,21 +2951,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                     .replace('{n}', String(steps))
                     .replace('{run}', fmtM(run))}</title>
                   <polygon
-                    points={poly.map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
+                    points={outline.map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
                     fill="rgba(138,122,102,0.28)" stroke={col}
                     strokeWidth={sel ? 0.7 : 0.45}
                   />
-                  {Array.from({ length: steps - 1 }, (_, s) => {
-                    const a = pt((s + 1) * STAIR_TREAD_M, half)
-                    const b = pt((s + 1) * STAIR_TREAD_M, -half)
-                    return (
-                      <line key={s} x1={svgX(a[0])} y1={svgZ(a[1])}
-                        x2={svgX(b[0])} y2={svgZ(b[1])}
-                        stroke={col} strokeWidth={0.25} opacity={0.8} />
-                    )
-                  })}
+                  {treads.map(([a, b], s) => (
+                    <line key={s} x1={svgX(a[0])} y1={svgZ(a[1])}
+                      x2={svgX(b[0])} y2={svgZ(b[1])}
+                      stroke={col} strokeWidth={0.25} opacity={0.8} />
+                  ))}
                   <polyline
-                    points={[wingA, tip, wingB].map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
+                    points={arrow.map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
                     fill="none" stroke={col} strokeWidth={0.6} />
                 </g>
               )
@@ -3943,7 +3899,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           it: turn it, move its foot, take it away — and the two numbers that
           decide whether it fits (its steps and the floor it eats) are stated
           rather than left to be measured on the plan. */}
-      {stairSel !== null && map3d?.stairs?.[stairSel] ? (() => {
+      {/* THE FLIGHT AND THE STOREY BELONG TOGETHER. Every path that changes
+          the level clears the selection (they all run through `setSelected`),
+          and picking a flight pulls the plan to its own storey — so this
+          guard has nothing to hide today. It is the invariant written down:
+          the row never states the steps and the run of a flight the plan above
+          it is not showing. */}
+      {stairSel !== null && map3d?.stairs?.[stairSel]
+        && map3d.stairs[stairSel].from_level === level ? (() => {
         const st = map3d.stairs![stairSel]
         const list = map3d.stairs || []
         const { steps, run } = stairRunM(st.from_level, map3d.storey_height_m || 3)

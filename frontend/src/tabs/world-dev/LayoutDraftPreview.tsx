@@ -22,6 +22,11 @@
  */
 import { useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+// The staircase symbol comes from the plan geometry the floor-plan EDITOR
+// draws with — one routine, so a flight looks the same before and after the
+// apply, and the run is never computed a second way.
+import { stairSymbol } from '../world/planGeometry'
+import type { StairSpec } from '../world/planGeometry'
 
 /* ------------------------------------------------------------------ types */
 
@@ -82,6 +87,13 @@ export interface LayoutDraftNormalized {
   entry_room?: string
   rooms: LayoutRoomEntry[]
   boundary_openings?: LayoutBoundaryOpening[] | null
+  /** One entry per FLIGHT — per storey jump (`map3d.stairs`), already through
+   *  the map3d sanitizer, so every `dir_deg` here is one of the four quarter
+   *  turns. `null` = the draft never mentioned stairs. */
+  stairs?: StairSpec[] | null
+  /** The location's storey height in metres — how much floor a flight eats
+   *  follows from it. Absent = 3, the scene's own default. */
+  storey_height_m?: number
 }
 
 export interface LayoutDraftCounts {
@@ -89,6 +101,7 @@ export interface LayoutDraftCounts {
   new_rooms: number
   openings: number
   boundary_openings: number
+  stairs: number
 }
 
 /** `POST /world-dev/preview-layout`. */
@@ -111,6 +124,9 @@ const COL_PLOT = '#8b949e'
 const COL_ROOM = '#3fb950'
 const COL_ROOM_NEW = '#58a6ff'
 const COL_OPENING = '#d29922'
+/** Masonry, not machinery — the warm stone the scene gives a staircase
+ *  (`STYLE["stair_color"]`), so the plan and the 3D view agree. */
+const COL_STAIR = '#8a7a66'
 const COL_GRID = 'rgba(139,148,158,0.18)'
 
 type Pt = [number, number]
@@ -182,6 +198,10 @@ export function LayoutDraftPreview({
   const rooms = useMemo(() => normalized.rooms || [], [normalized.rooms])
   const boundary = useMemo(
     () => (normalized.boundary || []) as Pt[], [normalized.boundary])
+  const stairs = useMemo(() => normalized.stairs || [], [normalized.stairs])
+  /** How much floor a flight eats follows from the storey height; the scene
+   *  composes with 3 m when a location declares none. */
+  const storeyM = normalized.storey_height_m || 3
 
   const levels = useMemo(() => {
     const set = new Set<number>()
@@ -192,14 +212,19 @@ export function LayoutDraftPreview({
   const shownLevel = level !== null && levels.includes(level) ? level
     : (levels.includes(0) ? 0 : levels[0] ?? 0)
 
-  /** Fit everything — plot AND rooms, so a room outside the plot stays
-   *  visible; hiding the very thing a warning is about would be perverse. */
+  /** Fit everything — plot, rooms AND staircases, so a room outside the plot
+   *  (or a flight that overshoots it) stays visible; hiding the very thing a
+   *  warning is about would be perverse. */
   const view = useMemo(() => {
     const xs: number[] = []
     const ys: number[] = []
     for (const p of boundary) { xs.push(p[0]); ys.push(p[1]) }
     for (const r of rooms) {
       for (const p of roomShell(r)) { xs.push(p[0]); ys.push(p[1]) }
+    }
+    for (const st of stairs) {
+      const sym = stairSymbol(st, storeyM)
+      for (const p of sym?.outline || []) { xs.push(p[0]); ys.push(p[1]) }
     }
     if (!xs.length) return null
     const minX = Math.min(...xs) - PAD_M
@@ -211,7 +236,7 @@ export function LayoutDraftPreview({
     const scale = Math.min(PANE_PX / spanX, PANE_PX / spanY)
     return { minX, minY, spanX, spanY, scale,
              w: spanX * scale, h: spanY * scale }
-  }, [boundary, rooms])
+  }, [boundary, rooms, stairs, storeyM])
 
   const toPx = (p: Pt): [number, number] => [
     (p[0] - (view?.minX ?? 0)) * (view?.scale ?? 1),
@@ -334,6 +359,37 @@ export function LayoutDraftPreview({
             )
           })}
 
+          {/* STAIRCASES — the true footprint a flight covers, not a glyph:
+              1.2 m across, the run its climb really needs, a line per tread
+              and an arrowhead pointing UP the flight. Drawn over the rooms,
+              because whether a flight cuts through one is exactly what an
+              author has to see here. A flight belongs to two storeys: full
+              strength on the one it starts from, faint on the one it arrives
+              at, and as faint as an off-level room everywhere else. */}
+          {stairs.map((st, i) => {
+            const sym = stairSymbol(st, storeyM)
+            if (!sym) return null
+            const onLevel = st.from_level === shownLevel
+            const arriving = st.from_level + 1 === shownLevel
+            return (
+              <g key={`stair${i}`}
+                opacity={onLevel ? 1 : arriving ? 0.35 : 0.22}>
+                <path d={path(sym.outline)} fill="rgba(138,122,102,0.28)"
+                  stroke={COL_STAIR} strokeWidth={1.5} />
+                {sym.treads.map(([a, b], s) => {
+                  const [pa, pb] = [toPx(a), toPx(b)]
+                  return (
+                    <line key={s} x1={pa[0]} y1={pa[1]} x2={pb[0]} y2={pb[1]}
+                      stroke={COL_STAIR} strokeWidth={0.8} opacity={0.8} />
+                  )
+                })}
+                <polyline
+                  points={sym.arrow.map((p) => toPx(p).map((v) => v.toFixed(1)).join(' ')).join(', ')}
+                  fill="none" stroke={COL_STAIR} strokeWidth={2} />
+              </g>
+            )
+          })}
+
           {/* Scale aids — no measurement without a yardstick. */}
           <g transform={`translate(8 ${view.h - 10})`}>
             <line x1={0} y1={0} x2={barPx} y2={0} stroke="#e6edf3"
@@ -352,11 +408,12 @@ export function LayoutDraftPreview({
 
       <div className="ga-form-hint">
         {counts
-          ? t('{r} rooms ({n} new) · {o} openings · {b} plot entrances')
+          ? t('{r} rooms ({n} new) · {o} openings · {b} plot entrances · {s} staircases')
             .replace('{r}', String(counts.rooms))
             .replace('{n}', String(counts.new_rooms))
             .replace('{o}', String(counts.openings))
             .replace('{b}', String(counts.boundary_openings))
+            .replace('{s}', String(counts.stairs ?? 0))
           : ''}
         {normalized.entry_room
           ? ` · ${t('entry room')}: ${rooms.find((r) => r.room_id === normalized.entry_room)?.name || normalized.entry_room}`

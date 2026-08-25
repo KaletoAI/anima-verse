@@ -66,16 +66,26 @@ Think in real rooms. The reference is a person **1.70 m** tall:
       "x": 2, "y": -4, "w": 3, "d": 6,
       "level": 0,
       "outline": [[0, 0], [3, 0], [3, 6], [1, 6], [1, 2], [0, 2]]
+    },
+    {
+      "name": "Guest room",
+      "description": "A low chamber over the taproom, with a window to the north.",
+      "x": -6, "y": -4, "w": 5, "d": 6,
+      "level": 1
     }
   ],
   "boundary_openings": [
     {"edge": 0, "at": 0.5, "width_m": 3, "room": "r1a2b3c4"}
   ],
   "stairs": [
-    {"at": [2, -2], "from_level": 0, "dir_deg": 90}
+    {"at": [-5.4, -3.5], "from_level": 0, "dir_deg": 0}
   ]
 }
 ```
+
+The flight in that example runs along the **west wall of the taproom**: its foot is at
+`x −5.4, y −3.5`, it climbs south (`dir_deg: 0`) and so covers x −6.0 … −4.8 and y −3.5 … 0.4 —
+floor no room needs for anything else, and it arrives inside the guest room one storey up.
 
 ### `rooms` — one entry per room
 

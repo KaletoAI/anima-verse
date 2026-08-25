@@ -1379,9 +1379,11 @@ async def preview_layout(request: Request):
                "location_id": "<id>"}
     Returns:  {"status": "ok",
                "normalized": {summary, location_id, location_name, boundary,
-                              entry_room, rooms[], boundary_openings},
+                              entry_room, rooms[], boundary_openings, stairs,
+                              storey_height_m},
                "warnings": [{code, ref, message}, ...],
-               "counts": {rooms, new_rooms, openings, boundary_openings}}
+               "counts": {rooms, new_rooms, openings, boundary_openings,
+                          stairs}}
 
     The normalized plan is exactly what an apply would write, so the drawn
     preview and the applied floor plan are the same geometry by construction.
@@ -1407,7 +1409,7 @@ async def apply_layout_route(request: Request):
     Body:     {"layout_data": {...}, "location_id": "<id>", "snapshot": true}
     Returns:  {"status": "success",
                "applied": {location_id, updated[], created[], entry_room,
-                           boundary_openings},
+                           boundary_openings, stairs},
                "warnings": [{code, ref, message}, ...],
                "snapshot_id": "<id>"|null}
 
