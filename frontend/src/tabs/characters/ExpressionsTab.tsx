@@ -55,8 +55,20 @@ const POLL_LIMIT = 45
  * generate. `override=1` pins both axes to empty; the equipped state it
  * implies (no pieces, no items) is this NPC's real one, since its template has
  * no outfit system, so the key resolves to the very file the finishing job
- * wrote. `fallback=default` only matters while a render is running: it hands
- * back the nearest existing variant instead of a 202.
+ * wrote.
+ *
+ * WHY NO `fallback=default`: it would make this view LIE. While a render runs,
+ * the route answers the fallback chain instead of 202
+ * (`routes/characters.py:1022-1024`), and step 1 of that chain is
+ * `find_nearest_expression` — which scores sidecars by outfit similarity, and
+ * "empty vs empty is 1.0" (`outfit_match.outfit_similarity`). A temporary NPC
+ * has an EMPTY equipped state in every sidecar it ever wrote, so every
+ * leftover variant ties at the top and the newest one is served with 200. That
+ * is exactly the picture of the OLD outfit, orphaned by the very edit that
+ * queued this render and still on disk until `outfit_cache_gc` reaps it — and
+ * a 200 fires `onLoad`, which stops the polling and presents it as the result.
+ * Without the parameter a cache miss is 202 or 404, both of which keep the
+ * "Rendering…" overlay up and the poll running until the real file lands.
  *
  * The button adds `trigger=1&force=1`: `force` deletes the cached file, and
  * `trigger` is what makes the route pass `ignore_feature_gate=True` — the one
@@ -72,7 +84,7 @@ function DefaultExpressionOnly({ character }: { character: string }) {
   const [ready, setReady] = useState<boolean | null>(null)
 
   const base = `/characters/${encodeURIComponent(character)}/outfit-expression`
-  const src = `${base}?override=1&fallback=default&_=${nonce}`
+  const src = `${base}?override=1&_=${nonce}`
 
   useEffect(() => {
     setRendering(false)
