@@ -315,7 +315,12 @@ export function WorldDevTab() {
           max_tokens: maxTokens.trim() ? parseInt(maxTokens, 10) : undefined,
           message: userMsg,
           schema,
-          character_template: schema === 'character' ? template : '',
+          // Only NEW sends the picked template — the dropdown exists only in
+          // new mode, and sending the invisible persisted value on EDIT
+          // overrode the profile's own template (an NPC came back as
+          // human-roleplay). On edit the server derives the template from
+          // the existing profile.
+          character_template: schema === 'character' && mode === 'new' ? template : '',
           // The map has exactly one instance, so it takes the mode itself
           // ("new" = draw from scratch, "edit" = the server injects the
           // existing map) and never an edit target.
