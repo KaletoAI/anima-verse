@@ -372,6 +372,7 @@
     },
     {
       "id": "secrets_panel",
+      "visible_when": { "feature": "secrets_enabled" },
       "label": "Secrets",
       "label_de": "Geheimnisse",
       "column": 14,
@@ -394,6 +395,7 @@
     },
     {
       "id": "secrets_form",
+      "visible_when": { "feature": "secrets_enabled" },
       "label": "Edit Secret",
       "label_de": "Geheimnis bearbeiten",
       "column": 15,
@@ -472,6 +474,7 @@
     },
     {
       "id": "outfit_imagegen",
+      "visible_when": { "feature": "outfit_system_enabled" },
       "label": "Outfit Image Generator (Override)",
       "label_de": "Outfit-Bild Generator (Override)",
       "column": 20,
@@ -575,6 +578,7 @@
     },
     {
       "id": "telegram_config",
+      "visible_when": { "feature": "telegram_enabled" },
       "label": "Telegram",
       "label_de": "Telegram",
       "column": 9,
@@ -602,6 +606,7 @@
     },
     {
       "id": "thoughts_config",
+      "visible_when": { "feature": "thoughts_enabled" },
       "label": "Thoughts",
       "label_de": "Gedanken",
       "column": 9,
@@ -820,6 +825,7 @@
     },
     {
       "id": "memory_config",
+      "visible_when": { "feature": "memory_enabled" },
       "label": "Memory",
       "label_de": "Memory",
       "column": 8,

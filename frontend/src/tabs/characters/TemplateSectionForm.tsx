@@ -26,7 +26,11 @@ export interface TmplSection {
   label?: string
   label_de?: string
   fields?: TmplFieldDef[]
-  visible_when?: { field: string; values: unknown[] }
+  // Field form ({field, values}) is evaluated live against the stores;
+  // the feature form ({feature}) gates a whole section against the
+  // TEMPLATE's features and is filtered centrally in CharactersTab —
+  // a template that disables a feature hides its config section.
+  visible_when?: { field?: string; values?: unknown[]; feature?: string }
 }
 
 export function TemplateSectionForm({

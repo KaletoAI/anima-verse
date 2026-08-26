@@ -134,7 +134,7 @@ export function CharactersTab() {
   const [subTab, setSubTab] = useState<string>('general')
   // Aufgelöstes Template des gewählten Characters — Quelle der generischen
   // Feld-Sektionen (Identity/Appearance/Behavior/…).
-  const [template, setTemplate] = useState<{ sections?: TmplSectionRaw[]; tabs?: TmplTabRaw[] } | null>(null)
+  const [template, setTemplate] = useState<{ sections?: TmplSectionRaw[]; tabs?: TmplTabRaw[]; features?: Record<string, boolean> } | null>(null)
   const [templateId, setTemplateId] = useState<string>('')
   // Dynamic TTS option lists (Others tab) — loaded once on mount.
   const [ttsVoices, setTtsVoices] = useState<Array<{ value: string; label: string }>>([])
@@ -233,7 +233,7 @@ export function CharactersTab() {
         const tmplId = String(profResp.profile?.template || '')
         setTemplateId(tmplId)
         if (tmplId) {
-          apiGet<{ sections?: TmplSectionRaw[]; tabs?: TmplTabRaw[] }>(`/templates/${encodeURIComponent(tmplId)}`)
+          apiGet<{ sections?: TmplSectionRaw[]; tabs?: TmplTabRaw[]; features?: Record<string, boolean> }>(`/templates/${encodeURIComponent(tmplId)}`)
             .then((tmpl) => setTemplate(tmpl))
             .catch(() => setTemplate(null))
         }
@@ -409,27 +409,51 @@ export function CharactersTab() {
   // (`columns`); ein Tab erscheint, wenn er KEIN Spezial-Tab ist und in seinen
   // Spalten mindestens eine generisch renderbare Section liegt. Reihenfolge =
   // Tab-Reihenfolge im Template.
+  // Template features are the truth about what a character KIND has —
+  // npc-temporary switches memory/thoughts/telegram/… off. A section whose
+  // `visible_when.feature` names a disabled feature is dropped here, ONCE,
+  // before tabs and forms ever see it; a tab left without sections vanishes.
+  const visibleSections = useMemo(() => {
+    const features = (template?.features || {}) as Record<string, boolean>
+    return (template?.sections || []).filter((s) => {
+      const f = (s.visible_when as { feature?: string } | undefined)?.feature
+      return !f || features[f] !== false
+    })
+  }, [template])
+
   const fieldTabs = useMemo(() => {
     const tabs = template?.tabs || []
-    const secs = template?.sections || []
     return tabs
       .filter((tb) => !tb.special && Array.isArray(tb.columns) && tb.columns.length > 0)
       .filter((tb) =>
-        secs.some((s) => sectionIsRenderable(s) && (tb.columns || []).includes(s.column || 1)),
+        visibleSections.some((s) => sectionIsRenderable(s) && (tb.columns || []).includes(s.column || 1)),
       )
       .map((tb) => ({ id: `tab:${tb.id}`, label: tmplText(tb, 'label', lang) || tb.id, tab: tb }))
-  }, [template, lang])
+  }, [template, visibleSections, lang])
 
   // Reihenfolge: Feld-Tabs (General/Aussehen), dann direkt Image · Wardrobe ·
   // Secrets, dann die restlichen Feld-Tabs (Configuration) und Spezial-Tabs.
   // Wunsch: Bild hinter Aussehen, Garderobe+Secrets zwischen Bild und Config.
   const subTabs = useMemo(() => {
+    // Special tabs whose whole subject a template can switch off — same
+    // truth as the section gates above. No entry = always visible.
+    const specialGate: Record<string, string> = {
+      soul: 'soul_enabled',
+      wardrobe: 'outfit_system_enabled',
+      secrets: 'secrets_enabled',
+      expressions: 'expression_variants_enabled',
+    }
+    const features = (template?.features || {}) as Record<string, boolean>
+    const gateOk = (id: string) => {
+      const f = specialGate[id]
+      return !f || features[f] !== false
+    }
     const afterAussehen = [
       { id: 'image', label: 'Image' },
       { id: 'wardrobe', label: 'Wardrobe' },
       { id: 'secrets', label: 'Secrets' },
-    ]
-    const placed = new Set(afterAussehen.map((t) => t.id))
+    ].filter((s) => gateOk(s.id))
+    const placed = new Set(['image', 'wardrobe', 'secrets'])
     const out: Array<{ id: string; label: string }> = []
     let inserted = false
     for (const ft of fieldTabs) {
@@ -440,9 +464,9 @@ export function CharactersTab() {
       }
     }
     if (!inserted) out.push(...afterAussehen)
-    out.push(...SPECIAL_TABS.filter((s) => !placed.has(s.id)))
+    out.push(...SPECIAL_TABS.filter((s) => !placed.has(s.id) && gateOk(s.id)))
     return out
-  }, [fieldTabs])
+  }, [fieldTabs, template])
 
   // Den gewählten Reiter beim Character-Wechsel BEHALTEN. Nur dann auf den
   // ersten Feld-Tab springen, wenn der aktuelle Reiter für diesen Character
@@ -630,7 +654,7 @@ export function CharactersTab() {
                   <TemplateTab
                     character={selected}
                     tab={ft.tab}
-                    sections={template?.sections || []}
+                    sections={visibleSections}
                     dynamicData={dynamicData}
                     specialSlots={{
                       placement: placementUI,
