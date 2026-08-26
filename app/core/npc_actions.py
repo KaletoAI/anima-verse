@@ -133,6 +133,15 @@ def candidates() -> List[str]:
             profile = get_character_profile(name) or {}
             if profile.get("is_sleeping"):
                 continue
+            if profile.get("journey"):
+                # ON THE ROAD. During a journey `current_location` is whatever
+                # transit cell the travel ticker last wrote, so this NPC would
+                # be asked to pick a room of a place it is only passing
+                # through — and the write would land on a character the ticker
+                # is still moving. Same guard the wanderer tick uses
+                # (`npc_spawn._settle_wanderer`: "still walking = nothing to
+                # do"); arriving makes it a candidate again.
+                continue
             if _is_busy(name, profile):
                 continue
         except Exception as e:  # noqa: BLE001
@@ -152,6 +161,10 @@ def prompt_vars(name: str) -> Dict[str, Any]:
 
     Public because the smoke renders the template with exactly this set — a
     placeholder the module forgets is a StrictUndefined crash in production.
+
+    ``location_id`` rides along as bookkeeping the template ignores: it is the
+    place the room list was taken from, and :func:`run_action_for` compares it
+    against the character's location again before it writes anything.
     """
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
@@ -178,6 +191,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
     profile = get_character_profile(name) or {}
     current_room = get_character_current_room(name) or ""
     return {
+        "location_id": location_id,
         "npc_name": name,
         "npc_role": str(profile.get("npc_slot_role") or "").strip(),
         "standing_task": str(profile.get("standing_task") or "").strip(),
@@ -282,6 +296,20 @@ def run_action_for(name: str, *,
         logger.info("npc_action(%s): no usable answer", name)
         return None
 
+    # THE PLACE MUST STILL BE THE PLACE. A turn takes seconds and the world
+    # keeps running through it — a journey settling, an admin move, a party
+    # pulling the NPC along. The room list came from ONE location; writing an
+    # id from it into a location that does not have that room would leave an
+    # invalid `room_id` behind for perception and the 3D client. The next tick
+    # asks again, with the new place's rooms.
+    from app.models.character import get_character_current_location
+    location_id = variables["location_id"]
+    location_now = get_character_current_location(name) or ""
+    if location_now != location_id:
+        logger.info("npc_action(%s): moved from %s to %s during the turn — "
+                    "answer discarded", name, location_id, location_now)
+        return None
+
     rooms = variables["rooms"]
     room = _resolve_room(answer.get("room"), rooms)
     if not room:
@@ -294,9 +322,7 @@ def run_action_for(name: str, *,
     moved = room != current_room
 
     if moved:
-        from app.models.character import get_character_current_location
         from app.models.rules import check_access
-        location_id = get_character_current_location(name) or ""
         allowed, reason = check_access(name, location_id, room_id=room)
         if not allowed:
             logger.info("npc_action(%s): move to %s blocked (%s)",

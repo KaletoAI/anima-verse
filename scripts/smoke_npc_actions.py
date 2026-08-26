@@ -46,7 +46,10 @@ Hand-derived expectations, case by case:
   (d) BROKEN JSON GETS EXACTLY ONE REPAIR. Prose instead of an object → a
       second call asking for valid JSON. Repaired on that second try, the
       answer applies as usual (2 calls, NPC moved). Broken twice → None, no
-      third call, nothing written.
+      third call, nothing written — but the COOLDOWN IS STAMPED ALL THE SAME.
+      That is the module's cost guarantee: the stamp is written before the
+      call, so a model that babbles buys one interval of quiet instead of a
+      fresh pair of calls on every 60 s check.
 
   (e) THE COOLDOWN IS GAME TIME. One tick acts; a second tick right after it
       calls no LLM at all, because the per-NPC cooldown has not elapsed in
@@ -56,24 +59,36 @@ Hand-derived expectations, case by case:
       clock is moved with `set_game_time`, exactly as a freeze or a jump
       would move it.)
 
-  (f) POOLED, SLEEPING, BUSY AND PLACELESS NPCs ARE NEVER CANDIDATES. Pooled
-      (`status` 'pooled') is already out of `list_temporary_npcs`; sleeping
-      (`is_sleeping`), holding a running `interaction`, and standing in no
-      location at all are the three the filter adds. A plain living, placed
-      NPC IS a candidate — without that contrast the four above prove
-      nothing.
+  (f) POOLED, SLEEPING, BUSY, TRAVELLING AND PLACELESS NPCs ARE NEVER
+      CANDIDATES. Pooled (`status` 'pooled') is already out of
+      `list_temporary_npcs`; sleeping (`is_sleeping`), holding a running
+      `interaction`, carrying a `journey`, and standing in no location at all
+      are the four the filter adds. The journey one matters most: mid-walk
+      `current_location` is whatever transit cell the travel ticker last
+      wrote, so this NPC would be asked to pick a room of a place it is only
+      passing through. A plain living, placed NPC IS a candidate, and both
+      the released and the arrived one become candidates again — without
+      those contrasts the five above prove nothing.
 
   (g) THE BLOCK RULES STILL RULE. A `block`/`enter` rule on the target room
       with condition `always` denies the move: None, nothing written. Only
       MOVES are gated — the rule is about entering.
 
-  (h) THE BATCH CAPS THE COST. Three eligible NPCs, `action_batch` 2 → one
+  (h) THE PLACE MUST STILL BE THE PLACE. The room list is taken from ONE
+      location before the turn; if the character is somewhere else by the
+      time the answer arrives, the answer is discarded whole. Otherwise a
+      room id valid in the old place is written into the new one, where it
+      does not exist — an invalid `room_id` for perception and the 3D
+      client. Simulated by an injected LLM that relocates the NPC while it
+      "thinks": None, and no Roadhouse room ends up on an NPC now at the Mill.
+
+  (i) THE BATCH CAPS THE COST. Three eligible NPCs, `action_batch` 2 → one
       tick makes exactly two LLM calls.
 
-  (i) THE TICK IS SWITCHABLE. `npc.action_tick_enabled` false → no
+  (j) THE TICK IS SWITCHABLE. `npc.action_tick_enabled` false → no
       candidates at all, whatever else is true.
 
-  (j) THE TEMPLATE RENDERS. `render_task("npc_action", …)` under
+  (k) THE TEMPLATE RENDERS. `render_task("npc_action", …)` under
       StrictUndefined returns a non-empty system AND user part for the very
       variable set the module passes — a placeholder the module forgets is a
       crash in production, not a warning.
@@ -104,6 +119,7 @@ from app.core.prompt_templates import render_task  # noqa: E402
 from app.core.timeutils import game_time, set_game_time  # noqa: E402
 from app.models import rules as rules_model, world  # noqa: E402
 from app.models.character import (force_set_status,  # noqa: E402
+                                  get_character_current_location,
                                   get_character_current_room,
                                   get_character_profile,
                                   get_effective_activity,
@@ -270,6 +286,12 @@ check("the second call is the repair turn",
 check("nothing was written", (get_character_current_room(A),
                               get_effective_activity(A)),
       ("taproom", "Sie wischt den Tresen."))
+# The module's central cost guarantee: an unusable answer still SPENDS the
+# turn. `isolate` popped the stamp, so a stamp here can only come from this
+# run — a babbling model buys one interval of quiet, not a retry per check.
+check("but the turn was spent all the same", A in npc_actions._last_action,
+      True)
+check("so the NPC is not due again", npc_actions.candidates(), [])
 
 isolate(A)
 LLM = FakeLLM("Sure! Here you go.",
@@ -301,7 +323,8 @@ npc_actions._sub_npc_actions()
 check("and the tick acts again", len(TICK_LLM.calls), 2)
 
 # ── (f) who is never a candidate ───────────────────────────────────────────
-print("(f) pooled, sleeping, busy and placeless NPCs are never candidates")
+print("(f) pooled, sleeping, busy, travelling and placeless NPCs are never "
+      "candidates")
 C = make_npc("Ingeborg", room_id="taproom")
 isolate(C)
 check("a plain living, placed NPC is one", npc_actions.candidates(), [C])
@@ -327,6 +350,18 @@ _p["interaction"] = None
 save_character_profile(D, _p)
 isolate(D)
 check("released, it is one again", npc_actions.candidates(), [D])
+
+_p = get_character_profile(D)
+_p["journey"] = {"target": LOC2_ID, "path": [], "seconds_per_cell": 10,
+                 "started_at_game": game_time().canonical()}
+save_character_profile(D, _p)
+check("on the road is not", npc_actions.candidates(), [])
+_p = get_character_profile(D)
+_p["journey"] = None
+save_character_profile(D, _p)
+isolate(D)
+check("arrived, it is one again", npc_actions.candidates(), [D])
+
 save_character_current_location(D, "")
 check("standing nowhere is not", npc_actions.candidates(), [])
 
@@ -349,8 +384,37 @@ check("and nothing was written", (get_character_current_room(E),
       ("taproom", "Er wartet auf die Kutsche."))
 rules_model.delete_rule("smoke_block_kitchen")
 
-# ── (h) the batch caps the cost ────────────────────────────────────────────
-print("(h) one tick acts on at most npc.action_batch NPCs")
+# ── (h) the place must still be the place ──────────────────────────────────
+print("(h) a location change during the turn discards the answer")
+
+
+class MovingLLM(FakeLLM):
+    """An LLM turn that relocates the NPC while it 'thinks' — the TOCTOU
+    window between assembling the room list and writing the answer."""
+
+    def __init__(self, name, target_location, *answers):
+        super().__init__(*answers)
+        self.name = name
+        self.target_location = target_location
+
+    def __call__(self, task, system_prompt, user_prompt, **kwargs):
+        save_character_current_location(self.name, self.target_location)
+        return super().__call__(task, system_prompt, user_prompt, **kwargs)
+
+
+H = make_npc("Vigdis", room_id="taproom")
+isolate(H)
+LLM = MovingLLM(H, LOC2_ID,
+                '{"room": "kitchen", "activity": "Sie holt Mehl."}')
+check("the answer is discarded", npc_actions.run_action_for(H, llm=LLM), None)
+check("the NPC really did leave mid-turn",
+      get_character_current_location(H), LOC2_ID)
+_MILL_ROOMS = [r["id"] for r in world.get_location_by_id(LOC2_ID)["rooms"]]
+check("and its room is one of the Mill's, never a Roadhouse room",
+      get_character_current_room(H) in _MILL_ROOMS + [""], True)
+
+# ── (i) the batch caps the cost ────────────────────────────────────────────
+print("(i) one tick acts on at most npc.action_batch NPCs")
 F = make_npc("Aslaug", room_id="taproom")
 G = make_npc("Bergljot", room_id="taproom")
 isolate(E, F, G)
@@ -360,16 +424,16 @@ llm_router.llm_call = BATCH_LLM
 npc_actions._sub_npc_actions()
 check("but only two turns are spent", len(BATCH_LLM.calls), 2)
 
-# ── (i) the tick is switchable ─────────────────────────────────────────────
-print("(i) npc.action_tick_enabled false = no candidates")
+# ── (j) the tick is switchable ─────────────────────────────────────────────
+print("(j) npc.action_tick_enabled false = no candidates")
 isolate(E, F, G)
 set_npc_config(action_tick_enabled=False)
 check("switched off, nobody is a candidate", npc_actions.candidates(), [])
 set_npc_config(action_tick_enabled=True)
 check("switched on again, they are", len(npc_actions.candidates()), 2)
 
-# ── (j) the template renders under StrictUndefined ─────────────────────────
-print("(j) the template renders with the variable set the module passes")
+# ── (k) the template renders under StrictUndefined ─────────────────────────
+print("(k) the template renders with the variable set the module passes")
 _vars = npc_actions.prompt_vars(A)
 _system, _user = render_task("npc_action", **_vars)
 check("system part is non-empty", bool(_system.strip()), True)
