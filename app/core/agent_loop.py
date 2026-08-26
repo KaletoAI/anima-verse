@@ -625,6 +625,7 @@ class AgentLoop:
                     c, speaker=speaker, content=content, volume=volume,
                     obligatory=True, hint=_hints.get(c, "")):
                 out["obligatory"].append(c)
+                _halt_addressed_wanderer(c)
 
         # 2) Chime opportunities for the remaining characters present (not on whisper)
         if volume != "whisper":
@@ -1580,6 +1581,46 @@ def _is_agent_eligible(character_name: str) -> bool:
     except Exception:
         return False
     return True
+
+
+def _halt_addressed_wanderer(character_name: str) -> bool:
+    """A WANDERER that was just addressed stops walking. True when it did.
+
+    Being spoken to is the one thing a passer-by reacts to by standing still.
+    Without this the answer goes out while the travel ticker keeps carrying
+    the NPC down the road, and two exchanges later it is out of earshot in the
+    middle of its own sentence — the "wanderer walks away mid-conversation"
+    symptom.
+
+    Only the JOURNEY is cancelled, never the road: ``wander_target`` stays on
+    the profile, so ``npc_spawn._settle_wanderer`` picks the trip back up
+    through its ordinary retry branch once the conversation has cooled (that
+    branch is gated on the same HOT window as this one is triggered by an
+    utterance). The cancel path is the one ``/play/travel/cancel`` uses, and
+    it is idempotent — a wanderer already standing still has nothing to drop.
+
+    Narrow on purpose: a temporary NPC carrying ``npc_wanderer``. An ordinary
+    character on its way somewhere has its own reason to be travelling and
+    keeps it (a rule cannot tell an errand from a stroll), and a wanderer that
+    merely OVERHEARS a line was not addressed at all.
+    """
+    if not character_name:
+        return False
+    try:
+        from app.models.character import (get_character_profile,
+                                          is_temporary_npc)
+        if not is_temporary_npc(character_name):
+            return False
+        profile = get_character_profile(character_name) or {}
+        if not profile.get("npc_wanderer") or not profile.get("journey"):
+            return False
+        from app.core.travel_engine import cancel_journey
+        cancel_journey(character_name)
+        logger.info("Wanderer %s stops: it was addressed", character_name)
+        return True
+    except Exception as e:  # noqa: BLE001 — an answer is never blocked by this
+        logger.debug("halt check for %s failed: %s", character_name, e)
+        return False
 
 
 def _is_respond_eligible(character_name: str) -> bool:

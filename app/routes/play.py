@@ -1754,27 +1754,31 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     addressees = [str(a) for a in raw_addr] if isinstance(raw_addr, list) else []
     volume = str(body.get("volume") or VOLUME_NORMAL).strip()
 
-    # Aktuellen Ort/Raum + Anwesende einmal auflösen (für Adressaten-Filter,
-    # Reaktions-Dispatch und Storyteller-Fallback).
+    # Resolve the current place/room + who is reachable once (for the addressee
+    # filter, the reaction dispatch and the storyteller fallback).
     loc = room = ""
     present: set = set()
     try:
-        from app.core.room_entry import _list_characters_in_room
+        from app.core.perception import addressable_for
         from app.models.character import (get_character_current_location,
                                            get_character_current_room)
         loc = get_character_current_location(avatar) or ""
         room = get_character_current_room(avatar) or ""
-        present = set(_list_characters_in_room(loc, room)) if loc else set()
+        # THE one addressability rule: the room when there is one, plus
+        # whoever stands within earshot out in the open. Without the second
+        # half an avatar on the road could address nobody at all.
+        present = set(addressable_for(avatar))
     except Exception as e:  # noqa: BLE001
         logger.debug("play_say location/presence lookup failed: %s", e)
 
-    # Adressaten auf TATSÄCHLICH ANWESENDE beschränken: nach einem Orts-/Raum-
-    # wechsel kann die UI noch alte Auswahl mitschicken (z.B. Rosi/Thalion vom
-    # Dorfplatz, während der Avatar längst im Wald ist). Abwesende zu adressieren
-    # ist sinnlos (dafür gibt es Phone/TalkTo) und erzeugt falsche Daten.
+    # Restrict addressees to who is ACTUALLY reachable: after a location/room
+    # change the UI may still send an old selection (characters from the
+    # village square while the avatar is long gone into the forest).
+    # Addressing the absent is pointless (that is what Phone/TalkTo are for)
+    # and produces wrong data.
     _dropped = [a for a in addressees if a and a != avatar and a not in present]
     if _dropped:
-        logger.info("play_say: abwesende Adressaten verworfen: %s", _dropped)
+        logger.info("play_say: out-of-reach addressees dropped: %s", _dropped)
     addressees = [a for a in addressees if a in present and a != avatar]
 
     # 0) Bild-Anhang auflösen + (nur dann) synchron analysieren. Die Beschreibung
@@ -2011,32 +2015,30 @@ def _state_block(name: str) -> dict:
 
 
 def _present_characters(avatar: str) -> list:
-    """Names of the OTHER characters standing in the avatar's current room.
+    """Names of the OTHER characters the avatar can reach right now.
 
     The ONE presence source of the player surface: /play/others lists them,
-    and the give/cast target gate accepts exactly these names."""
+    and the give/cast target gate accepts exactly these names. It is
+    ``perception.addressable_for`` and nothing else — the room when the avatar
+    is inside a location, plus everybody within earshot out in the open, so an
+    avatar on the road has a roster instead of an empty panel."""
     if not avatar:
         return []
-    from app.core.room_entry import _list_characters_in_room
-    from app.models.character import (get_character_current_location,
-                                      get_character_current_room)
-    loc = get_character_current_location(avatar) or ""
-    if not loc:
-        return []
-    room = get_character_current_room(avatar) or ""
-    return [c for c in _list_characters_in_room(loc, room) if c and c != avatar]
+    from app.core.perception import addressable_for
+    return addressable_for(avatar)
 
 
 def _require_present_target(avatar: str, raw_target) -> str:
     """Gate for every targeted player action: the target must be a character
-    standing in the avatar's room. Exact name match only — no first-/last-name
-    resolution (house rule)."""
+    the avatar can reach — in its room, or standing within earshot out in the
+    open. Exact name match only — no first-/last-name resolution (house
+    rule)."""
     target = str(raw_target or "").strip()
     if not target:
         raise HTTPException(status_code=400, detail="target required")
     present = _present_characters(avatar)
     if target not in present:
-        detail = (f"{target} is not here. You can only reach characters in this room"
+        detail = (f"{target} is not here. You can only reach characters within reach"
                   + (f": {', '.join(present)}." if present else " — and nobody else is here."))
         raise HTTPException(status_code=400, detail=detail)
     return target

@@ -998,11 +998,17 @@ def build_characters_at_location(location: str, room: str = "") -> Dict[str, Any
     - `room` (optional): when set, characters get a `same_room` flag (true
       when they are in exactly this room). No filtering happens -- the
       frontend can grey out who is in a different room of the same location.
+
+    The roster is ``perception.addressable_at_location``, THE addressability
+    rule -- everybody inside the location plus whoever stands within earshot
+    of its map anchor out in the open. Somebody waiting in front of the gate
+    belongs on the list of people one can speak to here; they carry
+    ``same_room`` False and an empty ``room``, because they are in none.
     """
+    from app.core.perception import addressable_at_location
     from app.models.world import resolve_location, get_room_by_id
     from app.models.character import get_character_current_room
-    from app.models.character import (list_available_characters,
-                                      get_character_current_location,
+    from app.models.character import (get_character_current_location,
                                       get_character_profile_image)
     loc = resolve_location(location)
     loc_id = loc.get("id", "") if loc else ""
@@ -1028,17 +1034,20 @@ def build_characters_at_location(location: str, room: str = "") -> Dict[str, Any
                 avatar_room_name = room_norm
                 avatar_room_id = room_norm
 
-    all_chars = list_available_characters()
     result = []
-    for name in all_chars:
-        char_loc = get_character_current_location(name)
-        if not (char_loc and (char_loc == loc_id or char_loc == location)):
-            continue
+    for name in addressable_at_location(loc_id or location):
+        char_loc = get_character_current_location(name) or ""
         char_room = (get_character_current_room(name) or "").strip()
-        # Default same_room=True; only when the avatar is in a room AND the
-        # character is explicitly in ANOTHER room does it count as "elsewhere".
-        # A character without a room is present everywhere in the location.
-        if room_norm and char_room:
+        if not char_loc:
+            # Within earshot but inside no wall of this location: never in
+            # "the" room, and its stored room (if any) belongs elsewhere.
+            same_room = False
+            char_room = ""
+        elif room_norm and char_room:
+            # Default same_room=True; only when the avatar is in a room AND
+            # the character is explicitly in ANOTHER room does it count as
+            # "elsewhere". A character without a room is present everywhere
+            # in the location.
             same_room = char_room in (avatar_room_id, avatar_room_name)
         else:
             same_room = True

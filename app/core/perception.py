@@ -299,6 +299,96 @@ def nearby_in_the_open(character_name: str,
     return _nearby_in_the_open(character_name, pos)
 
 
+def _addressable(location_id: str, room_id: str,
+                 pos: Optional[Dict[str, float]], exclude: str) -> List[str]:
+    """The shared body of the two addressability queries below.
+
+    Room list FIRST (when there is a location at all), then the earshot circle
+    around ``pos`` — one list, deduplicated, order preserved. Both halves are
+    the EXISTING rosters: ``room_entry._list_characters_in_room`` and
+    ``_nearby_in_the_open``; nothing here invents a second distance rule or a
+    second room rule.
+
+    The roster filter of the room path (``list_available_characters``, which
+    drops pooled NPCs and every system row) is applied to the WHOLE result, so
+    the open half cannot answer with somebody the room half would have hidden
+    — a pooled NPC has no metre point at all today, but the two lists must not
+    be allowed to drift apart on that.
+    """
+    from app.core.room_entry import _list_characters_in_room
+    from app.models.character import list_available_characters
+
+    names: List[str] = []
+    if location_id:
+        names.extend(_list_characters_in_room(location_id, room_id))
+    names.extend(_nearby_in_the_open(exclude or "", pos))
+
+    roster = set(list_available_characters())
+    out: List[str] = []
+    seen = set()
+    for name in names:
+        if not name or name == exclude or name in seen or name not in roster:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def addressable_for(character_name: str) -> List[str]:
+    """Everyone this character can ADDRESS right now — THE one rule.
+
+    Three gates used to ask this question and all three answered it with the
+    room alone: an avatar out on the road, or standing at a gate with somebody
+    right in front of it, could hear that somebody (the wilderness branch of
+    ``record_utterance`` has always worked) but could not speak to them,
+    because "no location" meant "nobody present".
+
+    The answer is the union of the two rosters that already exist:
+
+    * the ROOM, when the character is inside a location — same rule, same
+      helper, same room-id/room-name tolerance as every other room path;
+    * the EARSHOT CIRCLE around the character's own metre point: everybody
+      location-less within ``game.hearing_radius_m``. That half applies
+      INSIDE a location too — the point is the truth, and somebody standing
+      in front of the gate is within shouting distance of the taproom.
+
+    Never contains the character itself. A character the map does not place
+    anywhere and that stands in no location addresses nobody.
+    """
+    if not character_name:
+        return []
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room,
+                                      get_character_pos)
+    loc = get_character_current_location(character_name) or ""
+    room = (get_character_current_room(character_name) or "") if loc else ""
+    return _addressable(loc, room, get_character_pos(character_name),
+                        character_name)
+
+
+def addressable_at_location(location: str, room_id: str = "") -> List[str]:
+    """The same rule asked for a PLACE instead of for a character.
+
+    ``build_characters_at_location`` answers "who is at this location" without
+    an avatar to measure from, so the circle is measured from the LOCATION's
+    own map anchor. A location that was never placed on the map has no anchor
+    and therefore no circle — its answer is the room list alone.
+
+    Nobody is excluded here: the caller asks about a place, not about what it
+    can reach from where it stands.
+    """
+    from app.models.world import resolve_location
+    loc = resolve_location(location) or {}
+    loc_id = str(loc.get("id") or "") or str(location or "")
+    pos = None
+    try:
+        if loc.get("pos_x") is not None and loc.get("pos_z") is not None:
+            pos = {"x": float(loc["pos_x"]), "z": float(loc["pos_z"])}
+    except (TypeError, ValueError):
+        pos = None
+    return _addressable(loc_id, room_id, pos, "")
+
+
 def open_world_cell_key(x: float, z: float) -> str:
     """Bucket name of the open-world cell a metre point falls into.
 

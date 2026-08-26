@@ -682,6 +682,7 @@ def spawn_for_slot(place: Dict[str, Any], slot: Dict[str, Any],
     from app.core.npc_home import area_home
     from app.core.npc_ops import generate_npc_blocking
     from app.core.npc_pool import revive_from_pool, take_from_pool
+    from app.models.world import get_arrival_room_id
 
     role = slot["role"]
     ttl = slot_ttl_hours()
@@ -693,7 +694,12 @@ def spawn_for_slot(place: Dict[str, Any], slot: Dict[str, Any],
         labels = _area_place_labels(place)
     else:
         where = location_id = str(place.get("id") or "")
-        room = slot.get("room") or ""
+        # A slot without an authored room does NOT mean "roomless": since the
+        # ground migration everybody standing in a location stands in one of
+        # its rooms, and an NPC written without one is invisible to every
+        # room-based gate (presence, addressees, room entry). The fallback is
+        # THE arrival rule every other arrival path uses.
+        room = slot.get("room") or get_arrival_room_id(place)
         radius_m = int(slot.get("radius_m") or 0)
         home = None
         briefing = _slot_briefing(place, slot)
@@ -798,13 +804,25 @@ def _settle_wanderer(name: str) -> bool:
 
     Still walking = nothing to do. The journey itself belongs to the travel
     engine; this only reacts to it being over.
+
+    An NPC an avatar is TALKING TO right now is left standing, whatever the
+    arrival would otherwise decide — the same rule the action tick and the
+    window sweep use (``npc_actions._in_chat``, the AgentLoop's HOT window).
+    Without it the tick ends the arrival on the spot: it either turns the
+    wanderer around and sends it off mid-sentence, or pools it, which deletes
+    the very character the player is writing to. It settles on a later tick,
+    once the conversation has cooled.
     """
+    from app.core.npc_actions import _in_chat
     from app.models.character import (get_character_current_location,
                                       get_character_profile,
                                       save_character_profile)
     profile = get_character_profile(name) or {}
     if profile.get("journey"):
         return False                      # still on the road
+    if _in_chat(name):
+        logger.info("Wanderer '%s' stays: an avatar is talking to it", name)
+        return False
     target = str(profile.get("wander_target") or "").strip()
     here = (get_character_current_location(name) or "").strip()
     if target and here != target:

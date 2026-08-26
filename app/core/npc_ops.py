@@ -548,7 +548,13 @@ def sweep_expired_npcs() -> int:
     changes the NPC's fate, not the memory decision (§ 10.4 of the temp-NPC
     plan). An NPC without ``expires_at`` is never swept; it lives until an
     admin deletes it.
+
+    ONE NPC IS LEFT ALONE: the one an avatar is talking to right now — the
+    same rule ``sweep_closed_windows`` uses (``npc_actions._in_chat``, the
+    AgentLoop's HOT window), so a lifetime never runs out mid-sentence. It
+    goes on the next sweep, once the conversation has cooled.
     """
+    from app.core.npc_actions import _in_chat
     from app.core.npc_pool import pool_npc
     from app.models.character import get_character_profile, list_temporary_npcs
 
@@ -557,6 +563,8 @@ def sweep_expired_npcs() -> int:
         try:
             profile = get_character_profile(name) or {}
             if not is_expired(str(profile.get("expires_at") or "")):
+                continue
+            if _in_chat(name):
                 continue
             if pool_npc(name, reason="ttl"):
                 removed += 1
