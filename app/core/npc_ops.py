@@ -515,6 +515,11 @@ def sweep_closed_windows() -> int:
 
     A pooled NPC is not in ``list_temporary_npcs`` at all, so an NPC the
     finish gate still holds back is nothing this has to skip.
+
+    Called by the ``npc_windows`` tick (``periodic_jobs._sub_npc_windows``,
+    every 120 real seconds) — deliberately NOT by the hourly TTL sweep: a
+    window closes at a named minute of the game day, and an hourly cadence
+    would leave the night NPCs standing around all morning.
     """
     from app.core.npc_pool import pool_npc
     from app.core.npc_spawn import normalize_slots

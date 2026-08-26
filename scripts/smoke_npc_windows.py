@@ -63,6 +63,15 @@ minute below is exact.
         * a WANDERER carrying a slot stamp → never. It does not live at that
           place, it travels through; its lifetime is the TTL sweep's business.
 
+  (c2) THE SWEEP HAS ITS OWN TICK ROW. A window closes at a named minute of
+      the game day, so it cannot ride along with the hourly TTL sweep — at a
+      game factor of 6 an hourly cadence leaves the night NPCs standing
+      around for up to six GAME hours. ``_SUB_TASKS`` therefore carries
+      ``(_sub_npc_windows, 120, "npc_windows")`` next to the unchanged
+      ``(_sub_npc_ttl_sweep, 3600, "npc_ttl_sweep")``, and each sweep runs in
+      exactly one row: with ``sweep_closed_windows`` counted, the TTL tick
+      calls it 0 times and the window tick 1 time.
+
   (d) THE NIGHT/DAY EXTRACTION IS BEHAVIOUR-PRESERVING. The rule condition
       ``night``/``day`` (``activity_engine.evaluate_condition``) now asks the
       SAME ``npc_windows.is_night`` — the ± minute offset stays in
@@ -326,6 +335,31 @@ set_game_time(at(23))     # robber slot open again, woodcutter shut
 check("at 23:00 it is the woodcutter's turn",
       (npc_ops.sweep_closed_windows(), get_character_status(WOODIE)),
       (1, "pooled"))
+
+# ---------------------------------------------------------------------------
+print("\n(c2) the sweep has its OWN tick row")
+
+from app.core import periodic_jobs  # noqa: E402
+
+check("the tick table carries npc_windows at 120 real seconds",
+      [(row[1], row[2]) for row in periodic_jobs._SUB_TASKS
+       if row[0] is periodic_jobs._sub_npc_windows],
+      [(120, "npc_windows")])
+check("the TTL sweep keeps its hourly row",
+      [(row[1], row[2]) for row in periodic_jobs._SUB_TASKS
+       if row[0] is periodic_jobs._sub_npc_ttl_sweep],
+      [(3600, "npc_ttl_sweep")])
+
+# Each sweep runs in exactly ONE row: the TTL tick must not carry the window
+# sweep as a passenger any more, or the window would inherit the 3600 s.
+_WINDOW_CALLS = []
+_real_sweep = npc_ops.sweep_closed_windows
+npc_ops.sweep_closed_windows = lambda: (_WINDOW_CALLS.append(1), 0)[1]
+periodic_jobs._sub_npc_ttl_sweep()
+check("the TTL tick does not sweep windows", len(_WINDOW_CALLS), 0)
+periodic_jobs._sub_npc_windows()
+check("the window tick does, exactly once", len(_WINDOW_CALLS), 1)
+npc_ops.sweep_closed_windows = _real_sweep
 
 # ---------------------------------------------------------------------------
 print("\n(d) the night/day rule condition is unchanged")

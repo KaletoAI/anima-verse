@@ -338,26 +338,44 @@ def _sub_lora_library_sync():
 
 
 def _sub_npc_ttl_sweep():
-    """Pool the temporary NPCs whose time is up — by TTL or by time of day.
+    """Remove temporary NPCs whose GAME-time TTL has run out.
 
-    Two sweeps, one tick, both on the GAME clock: the ``expires_at`` stamp
-    (an NPC without one lives until an admin deletes it) and the slot's time
-    window (spec-npc-heimat-zeitfenster § E2 — the forest's robbers go back
-    into the pool at dawn). Game time, so a frozen world freezes both with it;
-    the tick loop is already paused while the world is frozen, which makes
-    that automatic.
+    Game time, so a frozen world freezes the NPCs' lifetime with it; the tick
+    loop is already paused while the world is frozen, which makes that
+    automatic. An NPC without an ``expires_at`` stamp lives until an admin
+    deletes it.
+
+    The slot TIME WINDOW is a separate row (``_sub_npc_windows``): a TTL is
+    hours long and an hourly sweep is plenty for it, a window closes at a
+    named minute of the game day.
     """
     try:
-        from app.core.npc_ops import sweep_closed_windows, sweep_expired_npcs
+        from app.core.npc_ops import sweep_expired_npcs
         removed = sweep_expired_npcs()
         if removed:
             logger.info("npc_ttl_sweep: %d expired NPC(s) removed", removed)
-        closed = sweep_closed_windows()
-        if closed:
-            logger.info("npc_ttl_sweep: %d NPC(s) pooled, window closed",
-                        closed)
     except Exception as e:
         logger.debug("npc_ttl_sweep sub error: %s", e)
+
+
+def _sub_npc_windows():
+    """Pool the slot NPCs whose time window has closed.
+
+    Its OWN row, not a passenger of the TTL sweep, because the two measure
+    different things: the TTL is an hours-long lifetime, a window closes at a
+    named minute of the game day (spec-npc-heimat-zeitfenster § E2 — "the
+    robbers are gone by daylight"). The interval is REAL seconds, so a fast
+    game clock makes the lag in GAME minutes larger, not smaller: at 120 s and
+    a factor of 6 the robbers linger at most 12 game minutes past sunrise,
+    where the TTL sweep's 3600 s would have left them standing all morning.
+    """
+    try:
+        from app.core.npc_ops import sweep_closed_windows
+        closed = sweep_closed_windows()
+        if closed:
+            logger.info("npc_windows: %d NPC(s) pooled, window closed", closed)
+    except Exception as e:
+        logger.debug("npc_windows sub error: %s", e)
 
 
 def _sub_npc_wanderers():
@@ -406,6 +424,9 @@ _SUB_TASKS: List[tuple] = [
     (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),
     (_sub_lora_library_sync,         3600,                  "lora_library_sync"),
     (_sub_npc_ttl_sweep,             3600,                  "npc_ttl_sweep"),
+    # 120s — a slot window closes at a named minute of the GAME day, so it
+    # cannot ride along with the hourly TTL sweep (see _sub_npc_windows).
+    (_sub_npc_windows,               120,                   "npc_windows"),
     (_sub_npc_wanderers,             300,                   "npc_wanderers"),
     (_sub_npc_actions,               60,                    "npc_actions"),
 ]
