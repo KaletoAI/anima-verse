@@ -170,9 +170,16 @@ export function CharactersTab() {
       .catch(() => setTtsSpeakers([]))
   }, [])
 
+  // A template can switch the whole activity/home subject off — the same
+  // truth the sub-tab gate below uses. Kept here as well because `subTab`
+  // survives a character switch: selecting a temporary NPC while the tab was
+  // open would otherwise fetch its home/schedule for one commit, before the
+  // reset effect moves the selection to an existing tab.
+  const homeGateOk = (template?.features || {}).activity_home_enabled !== false
+
   // Load home location + daily rhythm when the Activity & Home tab opens.
   useEffect(() => {
-    if (subTab !== 'home' || !selected) return
+    if (subTab !== 'home' || !selected || !homeGateOk) return
     let cancelled = false
     setHomeLoading(true)
     ;(async () => {
@@ -208,7 +215,7 @@ export function CharactersTab() {
     return () => {
       cancelled = true
     }
-  }, [selected, subTab, t, toast])
+  }, [selected, subTab, homeGateOk, t, toast])
 
   const reloadCurrent = useCallback(
     async (name: string) => {
@@ -446,6 +453,7 @@ export function CharactersTab() {
       wardrobe: 'outfit_system_enabled',
       secrets: 'secrets_enabled',
       expressions: 'expression_variants_enabled',
+      home: 'activity_home_enabled',
     }
     const features = (template?.features || {}) as Record<string, boolean>
     const gateOk = (id: string) => {

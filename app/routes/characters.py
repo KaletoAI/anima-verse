@@ -379,7 +379,10 @@ def _switch_template_route_sync(character_name: str,
 @router.get("/{character_name}/home-location")
 def get_home_location_route(
                             character_name: str) -> Dict[str, Any]:
-    """Gibt Home-Location und Home-Room eines Characters zurueck."""
+    """Returns the home location and home room of a character.
+
+    Deliberately NOT gated by ``activity_home_enabled``: a value that is
+    already stored must stay readable, whatever the template says today."""
     if not character_name:
         return {"home_location": "", "home_room": ""}
     from app.models.character import get_character_config
@@ -392,7 +395,7 @@ def get_home_location_route(
 
 @router.post("/{character_name}/home-location")
 async def save_home_location_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Speichert Home-Location und Home-Room eines Characters."""
+    """Stores the home location and home room of a character."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_save_home_location_route_sync,
@@ -402,11 +405,21 @@ async def save_home_location_route(character_name: str, request: Request) -> Dic
 def _save_home_location_route_sync(character_name: str,
                                    data: Any) -> Dict[str, Any]:
     """The blocking body of ``save_home_location_route`` — runs in the
-    threadpool."""
+    threadpool.
+
+    A template can switch the whole activity/home subject off
+    (``activity_home_enabled: false`` — a temporary NPC lives in the slot it
+    was spawned for, it has no home to walk back to). The UI hides the sub-tab
+    for it; this is the API-side backstop. Fail-open: only an explicit
+    ``false`` refuses."""
     try:
-        user_id = data.get("user_id", "").strip()
         if not character_name:
-            raise HTTPException(status_code=400, detail="user_id und character_name fehlen")
+            raise HTTPException(status_code=400, detail="character_name is missing")
+        from app.models.character_template import is_feature_enabled
+        if not is_feature_enabled(character_name, "activity_home_enabled"):
+            raise HTTPException(status_code=409, detail=(
+                f"'{character_name}' has no activity/home configuration — its "
+                "template disables activity_home_enabled"))
         from app.models.character import get_character_config, save_character_config
         config = get_character_config(character_name)
         config["home_location"] = data.get("home_location", "")

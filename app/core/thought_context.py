@@ -1172,8 +1172,16 @@ def _build_daily_schedule_block(character_name: str) -> str:
     Hours without a slot are intentionally left blank — the agent is free
     to choose. Sleep stays a hint; the energy-based rule decides whether
     it actually triggers. Returns '' if there is no usable hint.
+
+    A template can switch the whole subject off (``activity_home_enabled:
+    false`` — a temporary NPC takes its rhythm from the slot window it was
+    spawned for, not from a per-character daily plan). Fail-open: only an
+    explicit ``false`` silences the block.
     """
     try:
+        from app.models.character_template import is_feature_enabled
+        if not is_feature_enabled(character_name, "activity_home_enabled"):
+            return ""
         from app.models.character import get_character_daily_schedule
         schedule = get_character_daily_schedule(character_name) or {}
         if not schedule.get("enabled"):

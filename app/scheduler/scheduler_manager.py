@@ -1116,8 +1116,21 @@ class SchedulerManager:
         (``daily_schedule_block`` in ``thought_context.py``). All that happens
         here is slot validation and resolving locations to IDs.
 
+        A template can switch the whole subject off (``activity_home_enabled:
+        false`` — a temporary NPC takes its rhythm from the slot window it was
+        spawned for). Then nothing is written at all: the refusal comes before
+        the legacy cleanup below, so a gated call cannot delete rows either.
+        Fail-open, as everywhere: only an explicit ``false`` refuses.
+
         Returns: 1 when the schedule is active, otherwise 0.
         """
+        from app.models.character_template import is_feature_enabled
+        if not is_feature_enabled(character, "activity_home_enabled"):
+            logger.info("Daily schedule refused for %s: the character's "
+                        "template has no activity/home subject "
+                        "(activity_home_enabled=false)", character)
+            return 0
+
         # 1. Remove legacy per-character daily jobs (they ran in parallel -> race)
         daily_jobs = [
             j for j in list(self.jobs_data["jobs"])

@@ -32,7 +32,8 @@
     "soul_enabled": false,
     "retrospect_enabled": false,
     "status_effects_enabled": false,
-    "outfit_system_enabled": false
+    "outfit_system_enabled": false,
+    "activity_home_enabled": false
   },
   "default_skills": [
     "allow_exposed",
