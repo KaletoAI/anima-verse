@@ -32,6 +32,23 @@ Hand-derived expectations:
       the pool, so 0 of 10 seats are taken. A pool of 2 does not shrink the
       world to 2 living NPCs.
 
+  [4] A PERMANENT sheet is invisible to the cap, in both directions
+      (plan-npc-leben-bugs task 2). ``take_from_pool`` skips ``npc_permanent``
+      sheets, so no spawn will ever claim one again — and since the pool is
+      oldest-first, an untouched permanent sheet would sit at the very FRONT
+      of the deletion queue and be the first thing an overflow deletes for
+      good. The cap counts MORTAL sheets only:
+
+        starting from [2]'s pool [demo_pool_b, demo_pool_c] and cap 2,
+        pooling the permanent demo_pool_keep gives THREE rows and deletes
+        nothing — there are still only two mortal sheets;
+        pooling the mortal demo_pool_d then makes three mortal ones, so the
+        oldest MORTAL (demo_pool_b) goes and demo_pool_keep stays.
+
+      Result: the pool is {demo_pool_c, demo_pool_d, demo_pool_keep} and
+      demo_pool_keep is still on the Game-Admin pool list (``list_pool``),
+      which is where an admin finds it at all.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_pool_size.py
 """
 import os
@@ -51,7 +68,8 @@ config.load(STORAGE / "config.json")
 db.init_schema()
 
 from app.core import npc_spawn  # noqa: E402
-from app.core.npc_pool import max_pool_size, pool_npc  # noqa: E402
+from app.core.npc_pool import (list_pool, max_pool_size,  # noqa: E402
+                               pool_npc, take_from_pool)
 from app.core.task_queue import get_task_queue  # noqa: E402
 from app.models.character import (list_available_characters,  # noqa: E402
                                   list_pooled_characters,
@@ -81,7 +99,7 @@ def set_npc_config(**values) -> None:
     config.save(cfg, STORAGE / "config.json")
 
 
-def make_npc(name: str) -> str:
+def make_npc(name: str, permanent: bool = False) -> str:
     """A living temporary NPC, the way the apply path leaves one."""
     save_character_profile(name, {
         "character_name": name, "template": "npc-temporary",
@@ -89,6 +107,7 @@ def make_npc(name: str) -> str:
         "standing_task": "tends the bar",
         "outfit_description": "grey linen apron",
         "expires_at": "",
+        "npc_permanent": permanent,
     }, create_new=True)
     return name
 
@@ -121,6 +140,24 @@ print("\n[3] The living cap is unaffected")
 check("max_alive is still 10", npc_spawn.max_alive(), 10)
 check("nothing living, so the cap is not reached", npc_spawn.cap_reached(), False)
 check("…and the count agrees", npc_spawn.alive_npc_count(), 0)
+
+# ---------------------------------------------------------------------------
+print("\n[4] A permanent sheet neither counts nor gets deleted")
+
+KEEP = make_npc("demo_pool_keep", permanent=True)
+check("the permanent sheet goes in", pool_npc(KEEP, reason="smoke"), True)
+check("three rows, and nothing was dropped for a cap of 2",
+      sorted(list_pooled_characters()), [B, C, KEEP])
+
+D = make_npc("demo_pool_d")
+check("a third MORTAL sheet goes in", pool_npc(D, reason="smoke"), True)
+check("the oldest MORTAL went, the permanent one stayed",
+      sorted(list_pooled_characters()), [C, D, KEEP])
+check("and it really is gone from the world",
+      sorted(list_available_characters(include_pooled=True)), [C, D, KEEP])
+check("the Game-Admin pool list still shows the kept sheet",
+      KEEP in [r["name"] for r in list_pool()], True)
+check("but no spawn can claim it", take_from_pool(""), C)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

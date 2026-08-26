@@ -162,10 +162,21 @@ def _end_interaction(name: str) -> None:
 
 
 def _enforce_pool_cap() -> int:
-    """Delete the oldest pooled NPCs beyond the cap. Returns how many went."""
-    from app.models.character import delete_character, list_pooled_characters
+    """Delete the oldest pooled NPCs beyond the cap. Returns how many went.
+
+    A PERMANENT sheet (``npc_permanent``) is invisible to the cap in both
+    directions: it is never deleted, and it never counts towards the overflow.
+    The cap exists to stop recycled stock from piling up, and a permanent sheet
+    is not stock — since ``take_from_pool`` skips it, no spawn will ever touch
+    it again, so it would otherwise sit at the FRONT of the deletion queue
+    (``list_pooled_characters`` is oldest-first) and the one character an admin
+    explicitly marked as kept would be the first one deleted for good.
+    """
+    from app.models.character import (delete_character, get_character_profile,
+                                      list_pooled_characters)
     cap = max(0, max_pool_size())
-    pooled = list_pooled_characters()
+    pooled = [n for n in list_pooled_characters()
+              if not (get_character_profile(n) or {}).get("npc_permanent")]
     dropped = 0
     for name in pooled[:max(0, len(pooled) - cap)]:
         # delete_character sweeps the row, the storage dir and (temp NPC) the
@@ -200,9 +211,10 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
 
     A PERMANENT sheet (``npc_permanent``) is not stock either. An admin took
     that character's lifetime away on purpose, and an automatic spawn grabbing
-    it would drop somebody's kept NPC into the next inn as its barkeeper. Only
-    an explicit slot binding or an admin action brings such a sheet back into
-    the world.
+    it would drop somebody's kept NPC into the next inn as its barkeeper. Its
+    way out of the pool is a SLOT BINDING — a bound slot revives exactly that
+    sheet; there is no other exit today. It is invisible to the pool cap in
+    exchange (see ``_enforce_pool_cap``), so waiting there costs it nothing.
     """
     from app.core.npc_assets import is_awaiting_assets
     from app.models.character import get_character_profile, is_temporary_npc
