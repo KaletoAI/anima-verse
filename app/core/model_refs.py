@@ -214,23 +214,57 @@ def neutral_signature(signature: str) -> str:
     return (signature or "").split(STATE_SIG_SEP, 1)[0]
 
 
+def outfit_signature(equipped_pieces: Optional[Dict[str, str]],
+                     equipped_items: Optional[list],
+                     character_name: str = "") -> str:
+    """The 12-hex outfit key of the per-outfit render caches — the ONE rule
+    both caches (``model_refs/``, ``model3d/``) and the cache GC judge an
+    entry by.
+
+    md5[:12] of the stably sorted equipped state
+    (``expression_regen._equipped_signature``). When NOTHING structured is
+    worn the character can still be dressed: a template without an outfit
+    system (a temporary NPC) renders the profile's free-text
+    ``outfit_description``, so that text has to key the cache too — otherwise
+    every such character in the world shares one signature and the first
+    one's T-pose render and mesh get served to all of them.
+
+    The hashed string is then ``render_outfit(...)["full"]``, EXACTLY what
+    the image prompt is built from: "" for an undressed character
+    (``outfit_worn`` false) and "" when no text is set, so the bare case
+    keeps its historical md5("") key and no cache entry of a wardrobe
+    character moves.
+    """
+    import hashlib
+    from app.core.expression_regen import _equipped_signature
+    raw = _equipped_signature(equipped_pieces, equipped_items)
+    if not raw and character_name:
+        try:
+            from app.core.outfit_renderer import render_outfit
+            raw = render_outfit(character_name=character_name,
+                                equipped_pieces={},
+                                equipped_items=[]).get("full", "") or ""
+        except Exception:  # noqa: BLE001 — an unreadable profile must not
+            raw = ""       # break signing; the bare key still renders
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
 def current_outfit_state(character_name: str) -> tuple:
     """(equipped_pieces, equipped_items, signature) of the CURRENT worn
-    state. The signature reuses the expression cache's equipped-signature
-    (pieces + items, stably sorted) so both caches agree on what counts as
-    "the same outfit combination". Public: the per-outfit mesh store
-    (app/core/model3d.py) keys on the same signature.
+    state. The signature comes from ``outfit_signature`` — the equipped
+    state, or the free-text outfit when nothing structured is worn — so both
+    caches agree on what counts as "the same outfit combination". Public:
+    the per-outfit mesh store (app/core/model3d.py) keys on the same
+    signature.
 
     With active image-modifier states the signature carries a state suffix
     (``<base>-s<fp>``); the neutral state keeps the bare base hash, so
     existing cache entries and the outfit batch's pre-warmed (always
     neutral) combinations stay valid."""
-    import hashlib
     from app.models.inventory import get_equipped_pieces, get_equipped_items
-    from app.core.expression_regen import _equipped_signature
     pieces = get_equipped_pieces(character_name)
     items = get_equipped_items(character_name)
-    sig = hashlib.md5(_equipped_signature(pieces, items).encode()).hexdigest()[:12]
+    sig = outfit_signature(pieces, items, character_name)
     state = state_fingerprint(character_name)
     if state:
         sig = f"{sig}{STATE_SIG_SEP}{state}"

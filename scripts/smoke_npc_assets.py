@@ -33,12 +33,16 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
       Pointing `profile_image` at "face.png" WITHOUT writing the file leaves
       the same two entries — criterion 1 is a file check, not a field check.
       Writing the file drops it to ["model3d"].
-      The worn signature of an NPC with no equipment is derivable by hand:
-      `current_outfit_state` hashes the equipped signature of ({}, []) — the
-      empty string — so it is md5("")[:12] = "d41d8cd98f00" (md5 of the empty
-      string is d41d8cd98f00b204e9800998ecf8427e). A `<sig>.glb` under that
-      name in `<char>/model3d/` empties the list; a mesh stored beside it
-      under a DIFFERENT signature does not count.
+      The worn signature of this NPC is derivable by hand: it owns no
+      wardrobe piece, so `current_outfit_state` hashes what dresses it
+      instead — the free-text outfit line `render_outfit(…)["full"]`, which
+      for the `give_outfit` text above reads "wearing: a grey linen apron".
+      md5 of that is 3bdb2ee2463ced85c866bb4320b425ad, so the signature is
+      "3bdb2ee2463c" — and NOT the md5("")[:12] = "d41d8cd98f00" of an NPC
+      with neither pieces nor outfit text (which is what every temporary NPC
+      used to share, one undressed T-pose and mesh for all of them). A
+      `<sig>.glb` under that name in `<char>/model3d/` empties the list; a
+      mesh stored beside it under a DIFFERENT signature does not count.
 
   [2] The gate is CONFIGURED and TEMPLATE-BOUND. `npc.require_assets` false =
       the old behaviour (never held back), true = hold an unfinished NPC back.
@@ -354,8 +358,8 @@ check("a profile_image field pointing at nothing is still missing",
       na.npc_assets_complete(A), ["profile_image", "model3d"])
 give_profile_image(A)
 check("the file on disk satisfies it", na.npc_assets_complete(A), ["model3d"])
-check("the worn signature of an unequipped NPC is md5('')[:12]",
-      model_refs.current_outfit_state(A)[2], "d41d8cd98f00")
+check("the worn signature of a piece-less NPC is md5 of its outfit line",
+      model_refs.current_outfit_state(A)[2], "3bdb2ee2463c")
 give_mesh(A, "deadbeefcafe")
 check("a mesh under a foreign signature does not count",
       na.npc_assets_complete(A), ["model3d"])

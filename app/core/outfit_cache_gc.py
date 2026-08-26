@@ -17,7 +17,11 @@ So there are two ways to judge a cache entry, in this order:
    checked EXACTLY: every referenced item must still be in the inventory, and
    re-signing those pieces (which applies today's visibility normalisation)
    must reproduce the file name. This also covers entries with carried items,
-   which the reachable set below can never contain.
+   which the reachable set below can never contain. A sidecar that records
+   NOTHING equipped belongs to a character dressed by free text
+   (``outfit_description``, a temporary NPC) and re-signs against that text —
+   an edited outfit line therefore leaves a detectable entry behind instead of
+   a permanently "valid" one.
 2. **Reachability.** Without a manifest, the only usable question is whether
    the signature is one that could still be produced at all — i.e. whether it
    lies in the set of signatures over the character's inventory
@@ -28,7 +32,6 @@ So there are two ways to judge a cache entry, in this order:
 The worn combination is never reported stale, whatever the rules say.
 """
 
-import hashlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -70,12 +73,19 @@ def reachable_signatures(character_name: str) -> Set[str]:
     return {_signature(pieces) for pieces in _iter_combos(choices)}
 
 
-def _sign(pieces: Dict[str, str], items: Optional[List[str]]) -> str:
+def _sign(pieces: Dict[str, str], items: Optional[List[str]],
+          character_name: str = "") -> str:
     """Re-sign a manifest with TODAY's rule (visibility normalisation
-    included — that is what makes normalisation orphans detectable)."""
-    from app.core.expression_regen import _equipped_signature
-    return hashlib.md5(
-        _equipped_signature(pieces, items or []).encode()).hexdigest()[:12]
+    included — that is what makes normalisation orphans detectable).
+
+    ``character_name`` matters for a manifest that records NOTHING equipped:
+    such an entry belongs to a character dressed by the free-text
+    ``outfit_description`` (a temporary NPC), and the rule hashes that text
+    (``model_refs.outfit_signature``). Without the name every empty manifest
+    would re-sign to md5("") and the entries left behind by an edited outfit
+    text would count as valid forever."""
+    from app.core.model_refs import outfit_signature
+    return outfit_signature(pieces, items or [], character_name)
 
 
 def read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
@@ -118,7 +128,8 @@ def _inventory_ids(character_name: str) -> Set[str]:
 
 
 def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
-                 owned: Set[str], reachable: Set[str]) -> bool:
+                 owned: Set[str], reachable: Set[str],
+                 character_name: str = "") -> bool:
     """The rule of this module, for one cache entry.
 
     State variants (``<base>-s<fp>``, model_refs.STATE_SIG_SEP) are judged
@@ -131,7 +142,8 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
         used = set(manifest["pieces"].values()) | set(manifest["items"])
         if not used.issubset(owned):
             return False
-        return _sign(manifest["pieces"], manifest["items"]) == base
+        return _sign(manifest["pieces"], manifest["items"],
+                     character_name) == base
     return base in reachable
 
 
@@ -219,7 +231,8 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
                 valid += 1
                 continue
             manifest = read_manifest(_sidecar_of(files) or Path("/nonexistent"))
-            if _entry_valid(signature, manifest, owned, reachable):
+            if _entry_valid(signature, manifest, owned, reachable,
+                            character_name):
                 valid += 1
                 continue
             stale_bytes += _bytes_of(files)

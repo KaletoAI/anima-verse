@@ -48,6 +48,27 @@ Sections:
       pieces must be unaffected — the free text may never outrank a real
       wardrobe.
 
+  [5a] …and it reaches the COMPOSED IMAGE PROMPT. Measured at the consumer:
+      the string `generate_model_ref_images(kinds=("tpose",))` hands to the
+      image service. `render_outfit` being right is not enough — the T-pose
+      render (and therefore the 3D mesh built from it) read only the
+      `pieces`/`items`/`fallback` keys and left the free text, which lives in
+      `full` alone, on the floor. The prompt must contain
+      "<name> is wearing <outfit_description>" verbatim, `outfit_worn=false`
+      must take the clause out again, and a wardrobe character must still be
+      dressed from its pieces.
+
+  [5b] …and it keys the RENDER CACHE. `current_outfit_state`'s signature is
+      the file name of both per-outfit caches (`model_refs/<kind>_<sig>.png`,
+      `model3d/<sig>.*`). Hashing only the equipped state gave every
+      temporary NPC in the world the same key, so the first NPC's render was
+      served to all of them and no edit of `outfit_description` could
+      invalidate anything. The signature is md5(<raw>)[:12] of the equipped
+      state, or — when nothing structured is worn — of `render_outfit(…)
+      ["full"]`. Checked with the hashes derived by hand at the section, and
+      with the regression that matters: a character with a structured outfit
+      keeps EXACTLY its pre-change signature.
+
   [6] TTL is GAME time. `expiry_stamp(2)` must land exactly 2 game hours after
       now — 7200 game seconds, checked as a number, not as a formatted string.
       No TTL yields "" (lives forever), a negative TTL yields "" as well.
@@ -307,6 +328,142 @@ check("pieces beat the free text",
       "white silk blouse" in render_outfit(character_name=RP).get("full", ""), True)
 check("free text stays out when pieces exist",
       "a sack" in render_outfit(character_name=RP).get("full", ""), False)
+
+# ---------------------------------------------------------------------------
+print("\n[5a] The free text reaches the COMPOSED image prompt (T-pose)")
+# Measured at the consumer: the string handed to the image service, not at
+# render_outfit. The gap this closes was exactly that render_outfit was right
+# while the render still asked for an undressed figure.
+#
+# Hand-derived from the two composition sites:
+#   model_refs.generate_model_ref_images  — for kind "tpose" the pose text
+#     leads as `prompt_prefix` and the pose layer is empty, so the prompt is
+#     "<tpose prompt>, <actor>, <appearance>, <outfit>, <expression>";
+#   expression_regen.generate_expression_image — the outfit layer of a
+#     character with no carried items is `f"{actor_label} is wearing {text}"`,
+#     and `actor_label` is the character name (PromptBuilder
+#     ._assign_actor_labels sets `person.actor_label = person.name`).
+# So the T-pose prompt of this NPC must contain, verbatim:
+#     "demo_npc is wearing grey linen apron, rolled-up white shirt"
+# and `outfit_worn = "false"` must take the whole "is wearing" clause out
+# again — the same binary state section [5] checks on the text itself.
+from types import SimpleNamespace  # noqa: E402
+
+import app.imagegen.service as imagegen_service  # noqa: E402
+from app.core.model_refs import generate_model_ref_images  # noqa: E402
+
+PROMPTS = []
+
+
+class _FakeImageService:
+    """Captures the composed prompt and answers with a string that carries no
+    ``/images/<file>`` — the renderer then returns None without touching the
+    filesystem, which is all this check needs."""
+
+    enabled = True
+    last_image_meta: dict = {}
+
+    def match_backend(self, glob, has_input_image=False):
+        return SimpleNamespace(name="fake-backend")
+
+    def resolve_imagegen_target(self, spec):
+        return SimpleNamespace(name="fake-backend")
+
+    def _wait_for_backend(self, character_name, has_input_image=False):
+        return SimpleNamespace(name="fake-backend")
+
+    def generate_from_input(self, input_data):
+        PROMPTS.append(json.loads(input_data).get("prompt", ""))
+        return "no image (smoke stub)"
+
+
+imagegen_service.get_image_service = lambda: _FakeImageService()
+
+generate_model_ref_images(NPC, kinds=("tpose",))
+check("the T-pose render asked for exactly one image", len(PROMPTS), 1)
+check("the T-pose prompt dresses the NPC",
+      f"{NPC} is wearing grey linen apron, rolled-up white shirt" in PROMPTS[-1],
+      True)
+
+npc_profile = get_character_profile(NPC)
+npc_profile["outfit_worn"] = "false"
+save_character_profile(NPC, npc_profile)
+PROMPTS.clear()
+generate_model_ref_images(NPC, kinds=("tpose",))
+check("an undressed NPC still renders", len(PROMPTS), 1)
+check("...and its prompt carries no outfit clause",
+      "is wearing" in PROMPTS[-1], False)
+npc_profile["outfit_worn"] = "true"
+save_character_profile(NPC, npc_profile)
+
+# A character WITH pieces is untouched by the new branch — its wardrobe text
+# is what the prompt says.
+PROMPTS.clear()
+generate_model_ref_images(RP, kinds=("tpose",))
+check("a wardrobe character is dressed from its pieces",
+      f"{RP} is wearing white silk blouse" in PROMPTS[-1], True)
+check("and its free text stays out of the prompt",
+      "a sack" in PROMPTS[-1], False)
+
+# ---------------------------------------------------------------------------
+print("\n[5b] The render-cache signature follows the free text")
+# `current_outfit_state`'s signature is the cache key of BOTH per-outfit
+# caches (model_refs/<kind>_<sig>.png and model3d/<sig>.*). Without the free
+# text in it, every temporary NPC in the world shares one key, so the first
+# NPC's undressed T-pose and mesh would be served to all of them and no
+# change of `outfit_description` could ever invalidate them.
+#
+# THE RULE, by hand: the signature is md5(<raw>)[:12], where <raw> is
+#   * the stably sorted equipped state ("<slot>=<item_id>", "|"-joined,
+#     `expression_regen._equipped_signature`) whenever anything structured is
+#     worn — unchanged, so no existing model of any wardrobe character moves;
+#   * otherwise `render_outfit(...)["full"]`, i.e. exactly the string the
+#     prompt above is built from ("wearing: <outfit_description>", and ""
+#     when `outfit_worn` is false or no text is set).
+# Derived values (md5 hex, first 12):
+#   md5("")                                             = d41d8cd98f00
+#   md5("wearing: grey linen apron, rolled-up white shirt")
+#                                                       = 7fb02bc56061
+#   md5("wearing: a patched brown cloak")               = e6c864211db0
+import hashlib  # noqa: E402
+
+from app.core.model_refs import current_outfit_state  # noqa: E402
+
+EMPTY_SIG = hashlib.md5(b"").hexdigest()[:12]
+check("md5('') is the historical empty signature", EMPTY_SIG, "d41d8cd98f00")
+
+sig_apron = current_outfit_state(NPC)[2]
+check("the dressed NPC hashes its outfit line", sig_apron,
+      hashlib.md5(b"wearing: grey linen apron, rolled-up white shirt"
+                  ).hexdigest()[:12])
+check("...which is not the empty signature", sig_apron == EMPTY_SIG, False)
+
+npc_profile["outfit_description"] = "a patched brown cloak"
+save_character_profile(NPC, npc_profile)
+sig_cloak = current_outfit_state(NPC)[2]
+check("a different outfit text gives a different signature",
+      sig_cloak, hashlib.md5(b"wearing: a patched brown cloak").hexdigest()[:12])
+check("...and the two really differ", sig_apron == sig_cloak, False)
+
+npc_profile["outfit_worn"] = "false"
+save_character_profile(NPC, npc_profile)
+check("an undressed NPC falls back on the empty signature — its prompt has "
+      "no outfit either", current_outfit_state(NPC)[2], EMPTY_SIG)
+npc_profile["outfit_worn"] = "true"
+npc_profile["outfit_description"] = "grey linen apron, rolled-up white shirt"
+save_character_profile(NPC, npc_profile)
+
+# A character with NO wardrobe and NO free text keeps the historical key.
+check("a bare character keeps md5('')",
+      current_outfit_state("demo_no_template")[2], EMPTY_SIG)
+
+# REGRESSION: a character with a structured outfit must keep EXACTLY the
+# signature it had before this change — otherwise every 3D model in every
+# world loses its cache. Pre-change value, by hand: md5 of the equipped
+# signature "top=<item_id>" (one filled slot, no items).
+rp_sig_expected = hashlib.md5(f"top={item_id}".encode()).hexdigest()[:12]
+check("a wardrobe character's signature is untouched by the free text",
+      current_outfit_state(RP)[2], rp_sig_expected)
 
 # ---------------------------------------------------------------------------
 print("\n[6] TTL is measured in GAME seconds")

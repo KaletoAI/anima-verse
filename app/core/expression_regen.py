@@ -854,6 +854,18 @@ def generate_expression_image(character_name: str,
     outfit_desc = _rendered.get("pieces", "")
     items_desc = _rendered.get("items", "")
     _fallback_text = _rendered.get("fallback", "")
+    # Free-text wardrobe: a template without an outfit system (a temporary
+    # NPC) is dressed by the profile's `outfit_description` alone, and
+    # render_outfit puts that text into `full` ONLY — the three keys above
+    # are empty. Without this the T-pose reference render, and therefore the
+    # 3D mesh built from it, would show an undressed figure. Taken only when
+    # nothing is equipped, so a real wardrobe can never be overridden; the
+    # `wearing: ` prefix is stripped because the outfit layer below supplies
+    # its own "is wearing".
+    if not outfit_desc and not items_desc and not (equipped_pieces or equipped_items):
+        _free_text = _rendered.get("full", "") or ""
+        if _free_text.startswith("wearing: "):
+            outfit_desc = _free_text[len("wearing: "):].strip()
 
     # One state snapshot for key AND sidecar — the render below uses the
     # same trigger state, so key, image and manifest describe one moment.

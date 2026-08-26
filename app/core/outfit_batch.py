@@ -185,7 +185,13 @@ def _iter_combos(choices: Dict[str, List[Optional[str]]],
 def _signature(pieces: Dict[str, str]) -> str:
     """Cache signature of a combination — identical to what
     ``model_refs.current_outfit_state`` produces for the worn state (colors
-    and other meta are not part of it)."""
+    and other meta are not part of it).
+
+    The batch enumerates WARDROBE combinations, so it stays on the equipped
+    half of ``model_refs.outfit_signature``. Only the empty combination of a
+    character who also carries a free-text ``outfit_description`` differs:
+    worn, that text keys the entry, and the pre-warmed naked render (which
+    does not show it) is correctly not reused."""
     from app.core.expression_regen import _equipped_signature
     return hashlib.md5(_equipped_signature(pieces, []).encode()).hexdigest()[:12]
 

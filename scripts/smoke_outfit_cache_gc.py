@@ -4,7 +4,8 @@
 Runs against a THROWAWAY storage directory with a stubbed inventory and FAKE
 cache files — no renderer, no GPU. What is checked is the judging rule:
 reachable vs manifest, deleted pieces, normalisation orphans, the protected
-worn combination, and that purge removes exactly the right files.
+worn combination, the free-text outfit of a character without a wardrobe, and
+that purge removes exactly the right files.
 
 Usage:  ./.venv/bin/python scripts/smoke_outfit_cache_gc.py
 """
@@ -168,7 +169,39 @@ def main() -> int:
           gc.verify_cache(CHAR)["stale_signatures"] == [],
           str(gc.verify_cache(CHAR)["stale_signatures"]))
 
-    print("\n[5] the guard")
+    print("\n[5] a free-text outfit keys the entry too")
+    # A character without a wardrobe (a temporary NPC, dressed by the profile's
+    # `outfit_description` alone) writes a manifest that records NOTHING — and
+    # an empty manifest re-signs to md5("") for every one of them. What tells
+    # two such entries apart is the free-text outfit line the render was built
+    # from, so the GC has to re-sign with the very rule the cache key uses
+    # (`model_refs.outfit_signature`). Without that, the T-pose and the mesh an
+    # edited `outfit_description` leaves behind would count as valid forever.
+    from app.models.character import save_character_profile
+    NPC = "demo_npc"
+    save_character_profile(NPC, {"character_name": NPC, "template": "npc-temporary",
+                                 "outfit_description": "a patched brown cloak"},
+                           create_new=True)
+    npc_refs = get_character_dir(NPC) / "model_refs"
+    npc_meshes = get_character_dir(NPC) / "model3d"
+    npc_refs.mkdir(parents=True, exist_ok=True)
+    npc_meshes.mkdir(parents=True, exist_ok=True)
+    # By hand: md5("wearing: a patched brown cloak")[:12] = e6c864211db0,
+    # md5("")[:12] = d41d8cd98f00 — the key every temporary NPC used to share.
+    cloak_sig = "e6c864211db0"
+    check("the free-text signature is md5 of the outfit line",
+          gc._sign({}, [], NPC) == cloak_sig, gc._sign({}, [], NPC))
+    write_entry(npc_refs, npc_meshes, cloak_sig, manifest=({}, []))
+    write_entry(npc_refs, npc_meshes, "d41d8cd98f00", manifest=({}, []))
+    gc._worn_signature = lambda name: ""      # nothing protected: the rule decides
+    npc_rep = gc.verify_cache(NPC)
+    npc_stale = set(npc_rep["stale_signatures"])
+    check("the entry of the CURRENT outfit text is valid",
+          cloak_sig not in npc_stale, str(npc_stale))
+    check("the entry the old outfit text left behind is stale",
+          "d41d8cd98f00" in npc_stale, str(npc_stale))
+
+    print("\n[6] the guard")
     big = {"inventory": [
         {"item_id": f"{slot}{i}", "item_name": f"{slot} {i}",
          "item_category": "outfit_piece", "outfit_piece": {"slots": [slot]}}
