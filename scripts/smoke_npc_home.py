@@ -54,6 +54,18 @@ types.json``): grass is passable, deep_water is not.
            own floor, so its 6 m footprint stays legal even where the
            painted water reaches into it (x −3…0).
 
+      EVERY test runs on the ROUNDED point, ``contains`` included — the
+      rounded point is what the function returns and what the world stores.
+      A draw near the rim rounds OUTWARD often enough to matter: at 45° on
+      the 25 m rim the raw point is 25·cos45° = 17.6776695… on both axes,
+      which rounds to 17.68/17.68 and is |p| = 17.68·√2 = 25.00331… m from
+      the centre — outside the circle ``contains`` describes. A stub rng
+      that draws exactly that pair (u = 1.0 → r = 25·√1 = 25, v = 0.125 →
+      θ = 45°) must therefore be rejected on every one of its 40 attempts,
+      so the answer is None and never a point two functions of this module
+      disagree about. The 200-draw loops run on SEEDED rngs and must hold
+      for any seed.
+
       ``min_dist_from=(0, 0)`` additionally rejects everything closer than
       ``MIN_ROAM_DIST_M`` (3.0 m) to that point — the guard that keeps the
       action tick from starting a one-step journey to where the NPC already
@@ -84,6 +96,14 @@ types.json``): grass is passable, deep_water is not.
       ``radius_m=0`` is the old behaviour unchanged: location + room are
       written, and NO ``npc_home`` is stamped.
 
+  (b2) A FAILED PLACEMENT IS NOT A FINISHED JOB. ``npc_home.place_npc``
+      answers "" instead of raising (its other two callers turn that into
+      their own False), but for the assets job the placement IS the job and
+      nothing else will ever place this NPC. So ``_place`` raises on "",
+      after putting the status back to POOLED — the NPC waits in the pool
+      exactly as it did before the attempt, the queue retries, and the panel
+      shows the reason. Proven with a ``set_character_pos`` that throws.
+
   (c) POOLING FORGETS THE HOME. ``pool_npc`` pops ``npc_home`` with the
       other slot stamps — a recycled sheet must not carry yesterday's forest
       into the next town.
@@ -112,6 +132,10 @@ types.json``): grass is passable, deep_water is not.
   (f) NOTHING ELSE CHANGED. An NPC with neither a location nor a home still
       yields ``prompt_vars`` == {} (there is nothing to ask it), and the
       slot schema carries ``radius_m`` as an int ≥ 0 with default 0.
+      ``normalize_slot`` runs inside the LOCATION SAVE, so no authored value
+      may raise out of it: "inf" and "1e400" reach ``int()`` as infinity
+      (``OverflowError``, which is NOT a ValueError) and "nan" as NaN, and
+      all three have to come back as 0 with a warning.
 
   (g) THE TEMPLATE RENDERS UNDER StrictUndefined — BOTH branches, with
       exactly the variable sets the module passes. A placeholder one branch
@@ -121,6 +145,7 @@ Usage:  ./.venv/bin/python scripts/smoke_npc_home.py
 """
 import math
 import os
+import random
 import sys
 import tempfile
 from pathlib import Path
@@ -139,14 +164,16 @@ from app.core.task_queue import get_task_queue  # noqa: E402
 get_task_queue()._started = True
 
 from app.core import embedding, npc_actions, npc_home, npc_spawn  # noqa: E402
+from app.core import npc_assets as na  # noqa: E402
 from app.core.npc_ops import apply_npc  # noqa: E402
 from app.core.npc_pool import pool_npc, revive_from_pool  # noqa: E402
 from app.core.party_engine import add_to_party  # noqa: E402
 from app.core.prompt_templates import render_task  # noqa: E402
 from app.core.terrain_query import passability_at  # noqa: E402
 from app.core.world_geometry import boundary_contains, location_at_point  # noqa: E402
-from app.models import terrain, world  # noqa: E402
-from app.models.character import (get_character_current_location,  # noqa: E402
+from app.models import character as character_model, terrain, world  # noqa: E402
+from app.models.character import (POOLED_STATUS,  # noqa: E402
+                                  get_character_current_location,
                                   get_character_current_room,
                                   get_character_pos,
                                   get_character_profile,
@@ -172,6 +199,29 @@ def check(label, actual, expected):
           + ("" if ok else f" — expected {expected!r}"))
     if not ok:
         FAILURES.append(label)
+
+
+def raises(label, exc_type, fn, contains=""):
+    """``fn`` must raise ``exc_type``; with ``contains`` the message must also
+    carry that text (copied from ``smoke_npc_assets``)."""
+    global CHECKED
+    CHECKED += 1
+    try:
+        fn()
+    except exc_type as e:
+        if contains and contains not in str(e):
+            print(f"  FAIL {label}: {str(e)[:160]!r} does not carry "
+                  f"{contains!r}")
+            FAILURES.append(label)
+            return
+        print(f"  OK  {label}: {exc_type.__name__}({str(e)[:120]!r})")
+        return
+    except Exception as e:  # noqa: BLE001 — anything else is the defect
+        print(f"  FAIL {label}: {type(e).__name__}({e})")
+        FAILURES.append(label)
+        return
+    print(f"  FAIL {label}: no exception")
+    FAILURES.append(label)
 
 
 def check_true(label, cond, detail=""):
@@ -314,28 +364,71 @@ class FakeLLM:
 
 
 # ── (a) random_point stays inside, on walkable ground, out of the shed ──────
-print("(a) random_point: 200 draws in the Old Mill circle")
+print("(a) random_point: 200 seeded draws in the Old Mill circle, per seed")
 LOCS = list_locations()
 SHED_LOC = [loc for loc in LOCS if loc.get("id") == SHED][0]
 MILL_LOC = [loc for loc in LOCS if loc.get("id") == MILL][0]
 
-points = [npc_home.random_point(MILL_HOME) for _ in range(200)]
-check("every draw delivered a point", sum(p is None for p in points), 0)
-good = [p for p in points if p is not None]
-check("all inside the 25 m circle",
-      sum(1 for x, z in good if math.hypot(x, z) > 25.0), 0)
-check("none inside the neighbour's shed",
-      sum(1 for x, z in good if boundary_contains(SHED_LOC, x, z)), 0)
-check("none on the lake (x < 0 is water unless the mill's floor covers it)",
-      sum(1 for x, z in good
-          if x < 0 and not boundary_contains(MILL_LOC, x, z)), 0)
-check("and every point out in the open really is passable terrain",
-      sum(1 for x, z in good
-          if not boundary_contains(MILL_LOC, x, z)
-          and not passability_at(x, z)[0]), 0)
+# SEEDED, and checked for SEVERAL seeds: the rules below must hold for every
+# draw, not for a lucky one. An unseeded loop would only fail this run in
+# about one run of forty (2.25 % of 200-draw loops hit the rim rounding).
+for seed in (1, 7, 12345, 2026):
+    rng = random.Random(seed)
+    points = [npc_home.random_point(MILL_HOME, rng=rng) for _ in range(200)]
+    good = [p for p in points if p is not None]
+    check(f"seed {seed}: every draw delivered a point",
+          sum(p is None for p in points), 0)
+    check(f"seed {seed}: all inside the 25 m circle",
+          sum(1 for x, z in good if math.hypot(x, z) > 25.0), 0)
+    check(f"seed {seed}: … and contains() agrees about every one of them",
+          sum(1 for x, z in good if not npc_home.contains(MILL_HOME, x, z)), 0)
+    check(f"seed {seed}: none inside the neighbour's shed",
+          sum(1 for x, z in good if boundary_contains(SHED_LOC, x, z)), 0)
+    check(f"seed {seed}: none on the lake (x < 0 is water unless the mill's "
+          f"floor covers it)",
+          sum(1 for x, z in good
+              if x < 0 and not boundary_contains(MILL_LOC, x, z)), 0)
+    check(f"seed {seed}: and every point out in the open is passable terrain",
+          sum(1 for x, z in good
+              if not boundary_contains(MILL_LOC, x, z)
+              and not passability_at(x, z)[0]), 0)
+
+
+class RimRng:
+    """Draws the ONE pair whose point rounds OUT of the circle, every time.
+
+    ``u`` = 1.0 → r = 25·√1 = 25.0 (the rim itself); ``v`` = 0.125 → θ = 45°.
+    Raw point 25·cos45° = 17.6776695… on both axes → rounded 17.68/17.68 →
+    |p| = 25.00331… m. Inside the shed? No (z = 17.68 is outside its −4…4).
+    On water? No (x > 0). So the ONLY thing that may reject it is the shape
+    test on the rounded point.
+    """
+
+    def __init__(self):
+        self.values = [1.0, 0.125]
+        self.calls = 0
+
+    def random(self):
+        value = self.values[self.calls % 2]
+        self.calls += 1
+        return value
+
+
+print("(a) a draw that ROUNDS out of the circle is rejected, not returned")
+_rim_x = round(25.0 * math.cos(math.pi / 4), 2)
+check("the constructed rim point really rounds outward",
+      (_rim_x, math.hypot(_rim_x, _rim_x) > 25.0), (17.68, True))
+check("it is not rejected for any other reason",
+      (boundary_contains(SHED_LOC, _rim_x, _rim_x),
+       passability_at(_rim_x, _rim_x)[0]), (False, True))
+_rim_rng = RimRng()
+check("random_point refuses it", npc_home.random_point(MILL_HOME,
+                                                       rng=_rim_rng), None)
+check("and it really tried the full 40 attempts", _rim_rng.calls, 80)
 
 print("(a) min_dist_from keeps the tick from walking on the spot")
-near = [npc_home.random_point(MILL_HOME, min_dist_from=(0.0, 0.0))
+_rng = random.Random(99)
+near = [npc_home.random_point(MILL_HOME, rng=_rng, min_dist_from=(0.0, 0.0))
         for _ in range(200)]
 check("every draw delivered a point", sum(p is None for p in near), 0)
 check(f"all at least {npc_home.MIN_ROAM_DIST_M} m away",
@@ -395,6 +488,33 @@ check("location", get_character_current_location(B4), MILL)
 check("room", get_character_current_room(B4), "millroom")
 check("and NO home was stamped",
       (get_character_profile(B4) or {}).get("npc_home"), None)
+
+# ── (b2) a failed placement fails the JOB ───────────────────────────────────
+print("(b2) a placement that cannot be written fails the assets job")
+B5 = pooled_npc("Radegund")
+_real_set_pos = character_model.set_character_pos
+_real_complete = na.npc_assets_complete
+
+
+def _broken_set_pos(*args, **kwargs):
+    raise RuntimeError("smoke: the position column is on fire")
+
+
+# The producers are not what this section is about — the job is told the NPC
+# is finished so it reaches the placement step at all.
+character_model.set_character_pos = _broken_set_pos
+na.npc_assets_complete = lambda name: []
+try:
+    raises("the job raises instead of reporting ok", RuntimeError,
+           lambda: na._handle_npc_assets({"name": B5, "location_id": MILL,
+                                          "room_id": "", "radius_m": 25}),
+           contains="could not be placed")
+    check("and the NPC waits in the pool, exactly as before the attempt",
+          get_character_status(B5), POOLED_STATUS)
+    check("it stands nowhere", get_character_pos(B5), None)
+finally:
+    character_model.set_character_pos = _real_set_pos
+    na.npc_assets_complete = _real_complete
 
 # ── (c) pooling forgets the home ────────────────────────────────────────────
 print("(c) pool_npc drops npc_home")
@@ -478,6 +598,17 @@ check("garbage falls back to 0",
 check("a negative radius is no radius",
       npc_spawn.normalize_slot({"role": "poacher", "radius_m": -5})["radius_m"],
       0)
+for _bad in ("inf", "-inf", "1e400", "nan"):
+    check(f"{_bad!r} does not escape the location save",
+          npc_spawn.normalize_slot({"role": "poacher",
+                                    "radius_m": _bad})["radius_m"], 0)
+check("and neither does a float infinity",
+      npc_spawn.normalize_slot({"role": "poacher",
+                                "radius_m": float("inf")})["radius_m"], 0)
+check("the whole list survives one poisoned slot",
+      [s["radius_m"] for s in npc_spawn.normalize_slots(
+          [{"role": "a", "radius_m": "inf"}, {"role": "b", "radius_m": 40}])],
+      [0, 40])
 
 # ── (g) both template branches render ───────────────────────────────────────
 print("(g) the template renders under StrictUndefined, both branches")

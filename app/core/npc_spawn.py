@@ -136,6 +136,8 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
     0 = the old room placement, anything above it means the NPC stands at a
     free point within that many metres of the place and roams there. It WINS
     over ``room`` — a slot cannot be both in the taproom and out in the woods.
+    An unusable value becomes 0 with a warning, for the same reason ``when``
+    does: this runs inside the location save, and a typo must not raise there.
     """
     if not isinstance(raw, dict):
         return None
@@ -156,10 +158,19 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
 
     count_min = _count("count_min", 1)
     count_max = max(count_min, _count("count_max", max(1, count_min)))
+    # `int(float("inf"))` raises OverflowError, not ValueError, and this runs
+    # inside the location SAVE — an authored "inf" must become 0 with a
+    # warning, never an exception escaping through `normalize_slots` into the
+    # save, `missing_slots` and `location_gap`. Same guard as `npc_home.
+    # circle_home`: only a finite number is a radius.
     try:
-        radius_m = max(0, int(float(raw.get("radius_m", 0) or 0)))
-    except (TypeError, ValueError):
+        raw_radius = float(raw.get("radius_m", 0) or 0)
+        radius_m = max(0, int(raw_radius)) if math.isfinite(raw_radius) else 0
+    except (TypeError, ValueError, OverflowError):
         radius_m = 0
+    if not radius_m and str(raw.get("radius_m", "") or "").strip() not in ("", "0"):
+        logger.warning("slot %r: unusable home radius %r — treated as none "
+                       "(rooms as before)", role, raw.get("radius_m"))
     return {
         "role": role,
         "template": str(raw.get("template") or "").strip(),

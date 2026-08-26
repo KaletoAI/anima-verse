@@ -395,6 +395,14 @@ def _place(name: str, location_id: str, room_id: str,
 
     ``radius_m`` is the slot's home area, carried in the payload: the same
     helper decides room-or-point for all three placement paths.
+
+    RAISES when the placement itself fails. ``place_npc`` reports that as ""
+    instead of an exception (its other two callers answer False to their own
+    caller), but here the job IS the placement: swallowing it would report
+    ``ok`` for an NPC that is in the roster and on no map, and this job is the
+    only thing that will ever place it. The status goes back to POOLED first,
+    so the NPC waits in the pool the way it did before the attempt and the
+    queue's retry re-enters exactly this path.
     """
     from app.core.npc_home import place_npc
     from app.models.character import (POOLED_STATUS, get_character_profile,
@@ -409,8 +417,12 @@ def _place(name: str, location_id: str, room_id: str,
     if profile.pop("npc_pooled_reason", None) is not None:
         save_character_profile(name, profile)   # it is not waiting any more
     set_character_status(name, "")
-    if location_id:
-        place_npc(name, location_id, room_id, radius_m)
+    if location_id and not place_npc(name, location_id, room_id, radius_m):
+        set_character_status(name, POOLED_STATUS)
+        raise RuntimeError(
+            f"NPC '{name}' could not be placed at {location_id}"
+            f"{f'/{room_id}' if room_id else ''} — see the npc_home warning "
+            f"for what failed")
 
 
 def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:

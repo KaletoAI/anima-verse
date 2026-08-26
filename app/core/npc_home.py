@@ -165,7 +165,8 @@ def random_point(home: Optional[Home], *, rng: Any = None,
     place wins; but only the own place), plus ``min_dist_from``: a point
     within :data:`MIN_ROAM_DIST_M` of that position is rejected, which is how
     the roaming tick avoids starting a journey to where the NPC already
-    stands.
+    stands. Every test runs on the ROUNDED point, :func:`contains` included —
+    what this function returns is what the world stores.
 
     ``None`` means "nowhere to go right now" — every attempt was rejected.
     The caller decides what that means: the placement falls back to the room,
@@ -196,6 +197,14 @@ def random_point(home: Optional[Home], *, rng: Any = None,
         if candidate is None:
             return None
         x, z = round(candidate[0], 2), round(candidate[1], 2)
+        # THE ROUNDED POINT IS THE ANSWER, so the rounded point is what has to
+        # pass. A draw near the rim rounds outward often enough to matter (a
+        # point at 45° on a 25 m rim lands on 17.68/17.68, i.e. 25.0033 m out),
+        # and then this function and :func:`contains` would disagree about
+        # their own circle — the caller stores the point and every later
+        # containment test says it is not in the home area.
+        if not contains(home, x, z):
+            continue
         if min_dist_from is not None:
             try:
                 if math.hypot(x - float(min_dist_from[0]),
