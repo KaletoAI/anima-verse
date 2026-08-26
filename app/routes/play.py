@@ -377,6 +377,7 @@ def _travel_block(name: str, lang: str = "en"):
     """
     try:
         from app.core.game_time import GameTime
+        from app.core.i18n import t
         from app.core.timeutils import game_time
         from app.core.travel_engine import get_journey, journey_state
         from app.models.world import get_location_name
@@ -384,11 +385,16 @@ def _travel_block(name: str, lang: str = "en"):
         if not j:
             return None
         st = journey_state(j["waypoints"], j["started_at_game"], game_time())
-        target_id = j["target"]
+        target_id = j.get("target") or ""
         eta = GameTime.parse(st["eta_game"])
+        # A POINT journey (E3-0) has no place to name — the panel prints
+        # `target_name` in bold, so an empty string would be a blank label
+        # instead of an honest one.
+        target_name = (get_location_name(target_id) or target_id if target_id
+                       else t("a spot out in the open", lang))
         return {
             "target_id": target_id,
-            "target_name": get_location_name(target_id) or target_id,
+            "target_name": target_name,
             "eta_game": st["eta_game"],
             "eta_hhmm": eta.time_hhmm(),
             "eta_label": eta.label(lang),

@@ -1069,6 +1069,7 @@
     "On match, the selected blocks are removed from the thought prompt, the modifier appears under effects_block, the icon shows in the character header and the image modifier is appended to the image prompt.": "Bei Match werden gewählte Blöcke aus dem Thought-Prompt entfernt, der Modifier-Text erscheint unter effects_block, das Icon im Character-Header und der Image-Modifier wird an den Bild-Prompt angehängt.",
     "On the road to": "Unterwegs nach",
     "On your way to": "Auf dem Weg nach",
+    "a spot out in the open": "einer Stelle im Freien",
     "once (one-shot)": "einmalig (one-shot)",
     "Once a day": "Einmal täglich",
     "Once the T-pose render of a NEW outfit combination has succeeded, the mesh is generated automatically on the cheapest matching backend — the T-pose is always awaited first.": "Sobald der T-Pose-Render einer NEUEN Outfit-Kombination erfolgreich war, wird das Mesh automatisch auf dem günstigsten passenden Backend generiert — auf die T-Pose wird immer zuerst gewartet.",

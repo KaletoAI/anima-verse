@@ -31,6 +31,26 @@ nothing is recomputed while walking, so a repainted meadow or a changed
 setting never re-times someone already on the road.
 ``movement_target`` stays the plain target-id field existing readers use.
 
+A journey knows TWO kinds of goal (E3-0). The one above walks to a LOCATION;
+the other walks to a FREE POINT in the open (``start_journey_to_point``, what
+an NPC roaming its home area needs):
+
+    profile["journey"] = {
+        "target": "",                        # no location id — a free point
+        "target_point": {"x": 30.0, "z": 0.0},
+        "waypoints": [[x, z, t_cum], ...],   # identical in every respect
+        "started_at_game": "Y0002-D109T14:00:00",
+        "speed_m_s": 1.4,
+        "entry_edge": None,                  # no boundary to enter through
+    }
+
+The two differ ONLY in where they end: no knowledge gate (nobody has to
+"know" a meadow), no ``movement_target`` (there is no id to stamp), no access
+gate at the goal, and the arrival is a plain position write whose derived
+location is whatever the point lies in — usually nothing at all. Everything
+else — ``journey_state``, the ticker, the party formation, the leave re-check
+— is the same code for both.
+
 There is no migration: a stored OLD journey (the one with a ``path`` of
 location ids) is discarded on read together with its movement target.
 """
@@ -268,9 +288,17 @@ def get_journey(character_name: str,
         profile.pop("journey", None)
         profile["movement_target"] = ""
         return None
-    if not (j.get("waypoints") and j.get("target") and j.get("started_at_game")):
+    if not (j.get("waypoints") and j.get("started_at_game")):
         return None
-    if (profile.get("movement_target") or "").strip() != j.get("target"):
+    target = j.get("target") or ""
+    if not target:
+        # A POINT journey (E3-0): its goal is a free (x, z), so there is no
+        # location id — neither to stamp as ``movement_target`` nor to compare
+        # against. The goal itself is what makes it a journey; a dict without
+        # one is neither kind and is treated as absent, exactly like a v1
+        # remnant.
+        return j if isinstance(j.get("target_point"), dict) else None
+    if (profile.get("movement_target") or "").strip() != target:
         return None
     return j
 
@@ -356,6 +384,94 @@ def _arrival_point(loc: Dict[str, Any],
     return None if rim_point is None else (None, rim_point)
 
 
+def _start_point(character_name: str, current_loc: Optional[Dict[str, Any]],
+                 current_id: str) -> Optional[Point]:
+    """Where a journey of ``character_name`` sets off from, or None.
+
+    The metre position is the truth; a character that has never been
+    positioned falls back to the anchor pin of the placed location it stands
+    in. Neither of the two — the character is nowhere on the map and no route
+    can start.
+    """
+    from app.core.world_geometry import effective_boundary
+    from app.models.character import get_character_pos
+
+    pos = get_character_pos(character_name)
+    if pos is not None:
+        return (float(pos["x"]), float(pos["z"]))
+    if current_loc is not None and effective_boundary(current_loc) is not None:
+        cx, cz, _yaw, _pts = effective_boundary(current_loc)
+        return (cx, cz)
+    logger.info("No start point for %s (pos None, location %r) — no journey",
+                character_name, current_id or "")
+    return None
+
+
+def _bake_route(start: Point, goal: Point,
+                current_loc: Optional[Dict[str, Any]]
+                ) -> Tuple[Optional[List[List[float]]], float]:
+    """``(waypoints, speed)`` for the walk ``start`` → ``goal``, or
+    ``(None, speed)`` when there is no walkable polyline.
+
+    The one route builder both journey kinds share — a LOCATION goal and a
+    free POINT goal differ in where the goal comes from, never in how it is
+    walked to. ``current_loc`` is the placed location the character is
+    standing IN (None out in the open): the route then leaves through ITS
+    opening first, exactly like every other way out. A location without an
+    opening gets no such waypoint — the character simply walks off its own
+    footprint, which the nav grid exempts for the start.
+
+    ``t_cum`` is baked here and only here: ``segment_costs`` answers game
+    seconds at 1 m/s (the terrain ``speed_factor`` is already inside), and
+    the world's travel speed — read ONCE, and returned so the caller can
+    write it onto the journey — turns that into the journey's own clock.
+    """
+    from app.core.nav_grid import build_nav_context, route, segment_costs
+
+    speed = get_travel_speed_m_s()
+    ctx = build_nav_context()               # ONE context for the whole start
+    legs: List[List[Point]] = []
+    own_opening = (_opening_point(current_loc, goal)
+                   if current_loc is not None else None)
+    exit_point = None if own_opening is None else own_opening[1]
+    if exit_point is not None and math.dist(exit_point, start) > 1e-9:
+        leg = route(start, exit_point, ctx)
+        if leg is None:
+            return None, speed
+        legs.append(leg)
+        legs.append(route(exit_point, goal, ctx) or [])
+        if not legs[-1]:
+            return None, speed
+    else:
+        leg = route(start, goal, ctx)
+        if leg is None:
+            return None, speed
+        legs.append(leg)
+
+    points: List[Point] = []
+    for leg in legs:
+        for pt in leg:
+            # The joint between two legs is the same point twice — drop it,
+            # a zero-length segment carries no information (journey_state
+            # tolerates one, but the payload should not invent it).
+            if points and math.dist(points[-1], pt) <= 1e-9:
+                continue
+            points.append((float(pt[0]), float(pt[1])))
+    if not points:
+        return None, speed
+
+    costs = segment_costs(points, ctx)      # game-seconds at 1 m/s
+    waypoints: List[List[float]] = [[points[0][0], points[0][1], 0.0]]
+    t_cum = 0.0
+    for i, cost in enumerate(costs):
+        # A cost of 0.0 is legal (two waypoints closer than a millimetre):
+        # the next waypoint then simply carries the same t_cum.
+        t_cum += max(cost, 0.0) / speed
+        waypoints.append([points[i + 1][0], points[i + 1][1],
+                          round(t_cum, 3)])
+    return waypoints, speed
+
+
 def start_journey(character_name: str,
                   target_id: str) -> Tuple[Dict[str, Any] | None, str]:
     """Begin a timed journey to ``target_id``.
@@ -377,10 +493,9 @@ def start_journey(character_name: str,
     out. Where the journey ARRIVES (which room) is decided at arrival time by
     the ticker, not here.
     """
-    from app.core.nav_grid import build_nav_context, route, segment_costs
     from app.core.world_geometry import effective_boundary
     from app.models.character import (get_character_current_location,
-                                      get_character_pos, get_character_profile,
+                                      get_character_profile,
                                       get_known_locations,
                                       save_character_profile)
     from app.models.world import get_location_by_id
@@ -403,20 +518,13 @@ def start_journey(character_name: str,
         # this is the belt, not the braces.
         return None, "no_route"
 
-    pos = get_character_pos(character_name)
     current_loc = get_location_by_id(current_id) if current_id else None
-    if pos is not None:
-        start: Optional[Point] = (float(pos["x"]), float(pos["z"]))
-    elif current_loc is not None and effective_boundary(current_loc) is not None:
-        cx, cz, _yaw, _pts = effective_boundary(current_loc)
-        start = (cx, cz)                    # never positioned: the anchor pin
-    else:
+    start = _start_point(character_name, current_loc, current_id)
+    if start is None:
         # No point and no placed location to derive one from: the character
         # is nowhere on the map, so no route can start. Not a knowledge or
         # placement problem of the TARGET — reported as no_route, the only
         # reason that describes "there is no walkable line".
-        logger.info("No start point for %s (pos None, location %r) — "
-                    "no journey", character_name, current_id or "")
         return None, "no_route"
 
     arrival = _arrival_point(target, start)
@@ -424,51 +532,9 @@ def start_journey(character_name: str,
         return None, "no_route"
     entry_edge, goal = arrival
 
-    ctx = build_nav_context()               # ONE context for the whole start
-    legs: List[List[Point]] = []
-    own_opening = (_opening_point(current_loc, goal)
-                   if current_loc is not None else None)
-    exit_point = None if own_opening is None else own_opening[1]
-    if exit_point is not None and math.dist(exit_point, start) > 1e-9:
-        # Leave through the own opening first. A location WITHOUT an opening
-        # gets no such waypoint — the character then simply walks off its own
-        # footprint (which the nav grid exempts for the start), same as one
-        # standing in the wilderness.
-        leg = route(start, exit_point, ctx)
-        if leg is None:
-            return None, "no_route"
-        legs.append(leg)
-        legs.append(route(exit_point, goal, ctx) or [])
-        if not legs[-1]:
-            return None, "no_route"
-    else:
-        leg = route(start, goal, ctx)
-        if leg is None:
-            return None, "no_route"
-        legs.append(leg)
-
-    points: List[Point] = []
-    for leg in legs:
-        for pt in leg:
-            # The joint between two legs is the same point twice — drop it,
-            # a zero-length segment carries no information (journey_state
-            # tolerates one, but the payload should not invent it).
-            if points and math.dist(points[-1], pt) <= 1e-9:
-                continue
-            points.append((float(pt[0]), float(pt[1])))
-    if not points:
+    waypoints, speed = _bake_route(start, goal, current_loc)
+    if waypoints is None:
         return None, "no_route"
-
-    speed = get_travel_speed_m_s()
-    costs = segment_costs(points, ctx)      # game-seconds at 1 m/s
-    waypoints: List[List[float]] = [[points[0][0], points[0][1], 0.0]]
-    t_cum = 0.0
-    for i, cost in enumerate(costs):
-        # A cost of 0.0 is legal (two waypoints closer than a millimetre):
-        # the next waypoint then simply carries the same t_cum.
-        t_cum += max(cost, 0.0) / speed
-        waypoints.append([points[i + 1][0], points[i + 1][1],
-                          round(t_cum, 3)])
 
     journey = {"target": target_id, "waypoints": waypoints,
                "started_at_game": game_time().canonical(), "speed_m_s": speed,
@@ -491,6 +557,92 @@ def start_journey(character_name: str,
     logger.info("Journey started: %s -> %s (%.1f m, %d waypoints, %.2f m/s)",
                 character_name, target_id, st["total_m"], len(waypoints), speed)
     return journey, ""
+
+
+def start_journey_to_point(character_name: str, x: float,
+                           z: float) -> Tuple[Dict[str, Any] | None, str]:
+    """Begin a timed journey to the FREE POINT ``(x, z)``.
+
+    The wilderness twin of :func:`start_journey` — same nav grid, same baked
+    polyline, same ticker; only the goal is a point instead of a place. What
+    that removes is everything a place brought with it: no knowledge gate
+    (nobody has to "know" a meadow), no boundary to aim at, no
+    ``movement_target`` (there is no id to stamp) and no access rule at the
+    goal. What an NPC roaming its home area walks on.
+
+    Returns ``(journey, reason)`` — exactly one of the two is filled:
+
+    ``ok``          the journey was stored and is running
+    ``unpassable``  the goal itself is ground nobody can stand on
+    ``no_route``    no walkable polyline (terrain, buildings, an unusable
+                    coordinate, or the character has no point to start from)
+
+    THE PLACE WINS at the goal, exactly as it does for the free walker in
+    ``POST /play/pos``: the terrain gate is asked only OUT IN THE OPEN,
+    because inside a placed footprint the place brings its own floor (a hall
+    on a rock plateau is a place one may stand in). A goal inside a footprint
+    is nothing this function forbids — but it also runs no entry gate, so
+    callers that mean "somewhere in the open" should pick a point there.
+    """
+    from app.core.world_geometry import location_at_point
+    from app.models.character import (get_character_current_location,
+                                      get_character_profile,
+                                      save_character_profile)
+    from app.models.world import get_location_by_id, list_locations
+
+    if not character_name:
+        return None, "no_route"
+    try:
+        gx, gz = round(float(x), 2), round(float(z), 2)
+    except (TypeError, ValueError):
+        gx = gz = float("nan")
+    if not (math.isfinite(gx) and math.isfinite(gz)):
+        logger.info("Unusable journey point for %s: %r/%r", character_name,
+                    x, z)
+        return None, "no_route"
+
+    at_goal_loc = location_at_point(gx, gz, list_locations())
+    if not ((at_goal_loc.get("id") or "") if at_goal_loc else ""):
+        from app.core.terrain_query import passability_at
+        if not passability_at(gx, gz)[0]:
+            return None, "unpassable"
+
+    current_id = (get_character_current_location(character_name) or "").strip()
+    current_loc = get_location_by_id(current_id) if current_id else None
+    start = _start_point(character_name, current_loc, current_id)
+    if start is None:
+        return None, "no_route"
+
+    waypoints, speed = _bake_route(start, (gx, gz), current_loc)
+    if waypoints is None:
+        return None, "no_route"
+
+    journey = {"target": "", "target_point": {"x": gx, "z": gz},
+               "waypoints": waypoints,
+               "started_at_game": game_time().canonical(), "speed_m_s": speed,
+               "entry_edge": None}
+    # Walking away ends a running pair interaction for BOTH participants.
+    from app.core.interaction_engine import end_interaction
+    end_interaction(character_name, reason="journey")
+    profile = get_character_profile(character_name)
+    profile["journey"] = journey
+    # A leftover target from an earlier trip would keep every reader pointing
+    # at a place this journey is not going to. Cleared in the SAME write —
+    # ``clear_movement_target`` would drop the journey dict with it.
+    profile["movement_target"] = ""
+    save_character_profile(character_name, profile)
+
+    st = journey_state(waypoints, journey["started_at_game"], game_time())
+    try:
+        from app.core.state_events import publish as _publish_state
+        _publish_state("travel_started", character_name, target_id="",
+                       total_m=st["total_m"], eta_game=st["eta_game"])
+    except Exception:
+        pass
+    logger.info("Journey started: %s -> (%.2f, %.2f) "
+                "(%.1f m, %d waypoints, %.2f m/s)", character_name, gx, gz,
+                st["total_m"], len(waypoints), speed)
+    return journey, "ok"
 
 
 def cancel_journey(character_name: str) -> None:
@@ -829,6 +981,41 @@ def _at_goal(journey: Dict[str, Any], st: Dict[str, Any]) -> bool:
     return remaining <= _TICK_SECONDS * factor * speed
 
 
+def _settle_point_arrival(name: str, journey: Dict[str, Any],
+                          st: Dict[str, Any]) -> None:
+    """A POINT journey reaches its goal — the whole settlement is one write.
+
+    There is no door to be refused at and no room to be routed into: the goal
+    is a free point, so ``set_character_pos`` is both the arrival and the end
+    of the journey. The PLAIN (non-preserving) write is deliberate — it is
+    what ends a journey (``_cancel_journey_for_manual_write``), and the
+    journey really is over here. ``current_location`` is then whatever the
+    point derives: '' out in the open, and on the rare occasion the goal does
+    lie inside a footprint the ordinary location-change cascade of
+    ``save_character_current_location`` runs — the same one a free walker's
+    step gets, pose reset and outfit compliance included.
+
+    The stored goal is preferred over ``st['pos']`` (they agree — the route's
+    last waypoint IS the real goal, ``nav_grid.route``) because it is the
+    thing the journey promised to reach; a malformed goal falls back to the
+    interpolated position rather than stranding the character mid-route.
+
+    Deliberately NOT done here, unlike the location arrival: no roll on entry
+    (there is no place to enter) and no agent-loop bump (a leg of a roam is
+    not an arrival worth a thought turn — it would hand a roaming NPC a turn
+    on every single leg).
+    """
+    from app.models.character import set_character_pos
+
+    point = journey.get("target_point") or {}
+    try:
+        gx, gz = float(point["x"]), float(point["z"])
+    except (KeyError, TypeError, ValueError):
+        gx, gz = float(st["pos"][0]), float(st["pos"][1])
+    set_character_pos(name, gx, gz)
+    logger.info("Journey arrived: %s @ (%.2f, %.2f)", name, gx, gz)
+
+
 def _settle_arrival(name: str, journey: Dict[str, Any],
                     st: Dict[str, Any]) -> None:
     """The journey reaches its target: entry gate, then the crossing.
@@ -839,7 +1026,14 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
     derived from ``st`` here: which room the arrival lands in (the opening's
     only when the walker really stands at that opening) and how far back the
     standoff of a refusal may step (only over the walked prefix).
+
+    A journey without a location target is a POINT journey (E3-0) and settles
+    somewhere else entirely — see :func:`_settle_point_arrival`.
     """
+    if not (journey.get("target") or ""):
+        _settle_point_arrival(name, journey, st)
+        return
+
     from app.core.boundary_entry import opening_entry_room
     from app.models.character import (clear_pose_intent, get_movement_target,
                                       record_access_denied,
@@ -1019,6 +1213,10 @@ def advance_all_journeys() -> None:
             if not j:
                 continue
             st = journey_state(j["waypoints"], j["started_at_game"], now)
+            # '' for a POINT journey (E3-0) — it has no location target, and
+            # every comparison below has to read that as "no target place",
+            # never as "the wilderness is the target".
+            target_id = j.get("target") or ""
             current_id = (get_character_current_location(name) or "").strip()
             # Leave re-check — ONLY while the character still stands in the
             # location it set off from. A leave rule forbids stepping OUT of a
@@ -1026,17 +1224,21 @@ def advance_all_journeys() -> None:
             # '', the wilderness that a journey spends most of its time in)
             # there is nothing left to leave, and asking again would strand
             # travellers halfway across the map whenever a rule flips.
-            if current_id and current_id != j["target"] \
+            if current_id and current_id != target_id \
                     and not _leave_still_allowed(name):
                 continue
             # Before the branch, so the ARRIVAL tick is covered too: a
             # follower that joined mid-journey must not walk on afterwards.
             _cancel_follower_journeys(name)
             if not st["arrived"]:
-                if current_id != j["target"]:
+                # …and only a journey that HAS a target place can cross into
+                # it early. For a point journey the derived location out in
+                # the open is '' — the same value its `target` carries — so
+                # an unguarded test would settle it on every single tick.
+                if target_id and current_id != target_id:
                     at = location_at_point(st["pos"][0], st["pos"][1],
                                            locations)
-                    if ((at.get("id") or "") if at else "") == j["target"]:
+                    if ((at.get("id") or "") if at else "") == target_id:
                         _settle_arrival(name, j, st)   # early, but gated
                         continue
                 set_character_pos(name, st["pos"][0], st["pos"][1],

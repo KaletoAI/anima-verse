@@ -1396,10 +1396,14 @@ def save_character_current_location(character_name: str = "", location: str = ""
     old_room = profile.get("current_room", "")
     target = (profile.get("movement_target") or "").strip()
     location_changed = bool(location) and location != old_location
-    if location_changed and target:
+    # A POINT journey (travel_engine.start_journey_to_point) walks to a free
+    # (x, z) and therefore stamps NO movement_target — the journey dict alone
+    # says a trip is running, so the abort below has to ask for both.
+    if location_changed and (target or isinstance(profile.get("journey"), dict)):
         # A manual teleport (no _preserve_movement_target) aborts the trip —
         # the caller just overrode the journey. A programmed travel step only
-        # clears target + journey on arrival.
+        # clears target + journey on arrival (a point journey has no target to
+        # arrive AT, so its in-flight crossing of a footprint keeps walking).
         if not _preserve_movement_target:
             profile["movement_target"] = ""
             profile.pop("journey", None)
@@ -1430,10 +1434,10 @@ def save_character_current_location(character_name: str = "", location: str = ""
     if location_changed:
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
-    # Intent.forbidden_slots zuruecksetzen bei echtem Location-Wechsel: die
-    # absichtlich-leeren Slots aus dem Chat ("zieht sich aus") galten fuer
-    # die alte Location. Am neuen Ort greift wieder die normale Decency-Regel.
-    # (Lebenszyklus gemaess plan-outfit-system-rethink.md §3)
+    # Reset intent.forbidden_slots on a real location change: the
+    # deliberately empty slots from the chat ("undresses") applied to the OLD
+    # location. At the new place the ordinary decency rule takes over again.
+    # (Lifecycle per plan-outfit-system-rethink.md § 3)
     save_character_profile(character_name, profile)
     # Seamless world (Aug 2026): the metre position is the truth for WHERE a
     # character stands, so a REAL location change drags it along — the
@@ -1483,8 +1487,8 @@ def save_character_current_location(character_name: str = "", location: str = ""
                             f"{character_name} betritt {_nl}.")
             _suggest_follow_after_move(character_name, old_location, old_room,
                                        location, "", _nl)
-            # at_location-Intents (plan-intents-unified.md): passende Vorhaben
-            # des Characters für den neuen Ort anstoßen.
+            # at_location intents (plan-intents-unified.md): fire the
+            # character's plans that match the new place.
             try:
                 from app.models.intents import fire_location_intents
                 fire_location_intents(character_name, location)
@@ -1498,22 +1502,22 @@ def save_character_current_location(character_name: str = "", location: str = ""
         except Exception as _e:
             from app.core.log import get_logger
             get_logger("character_model").debug(
-                "clear_forbidden_slots bei Location-Wechsel fehlgeschlagen: %s",
+                "clear_forbidden_slots on a location change failed: %s",
                 _e)
-    # Location-History aufzeichnen (nur bei echtem Wechsel)
+    # Record the location history (only on a real change)
     if location and location != old_location:
         _record_state_change(character_name, "location", location)
-        # Auto-Discovery: Wer einen Ort tatsaechlich betritt kennt ihn ab
-        # jetzt — sonst kann er nicht zurueck (visibility-restricted Travel
-        # wuerde den eigenen Standort als unbekannt sehen). Sicher idempotent;
-        # add_known_location legt das Feld an falls noch nicht vorhanden.
+        # Auto-discovery: whoever actually ENTERS a place knows it from now
+        # on — otherwise they could not go back (visibility-restricted travel
+        # would see their own position as unknown). Safely idempotent;
+        # add_known_location creates the field when it does not exist yet.
         try:
             add_known_location(character_name, location)
         except Exception:
             pass
-    # Decency-Compliance: liest decency/style_hint des aktuellen Raums
-    # (oder Location als Fallback) und gleicht equipped_pieces ab.
-    # Nur bei echtem Location-Wechsel und nicht _skip_compliance.
+    # Decency compliance: reads decency/style_hint of the current room (or
+    # the location as a fallback) and reconciles equipped_pieces with it.
+    # Only on a real location change and not with _skip_compliance.
     if not _skip_compliance and location and location != old_location:
         try:
             from app.core.outfit_compliance import apply_outfit_compliance
@@ -1521,9 +1525,9 @@ def save_character_current_location(character_name: str = "", location: str = ""
         except Exception as _e:
             from app.core.log import get_logger
             get_logger("character_model").debug(
-                "Outfit-Compliance bei Location-Wechsel fehlgeschlagen: %s", _e)
+                "outfit compliance on a location change failed: %s", _e)
 
-    # Hintergrund-Variant fuer den neuen Ort vorgenerieren
+    # Pre-generate the background variant for the new place
     if location and location != old_location:
         _schedule_background_variant(character_name)
 
@@ -1538,11 +1542,11 @@ def save_character_current_location(character_name: str = "", location: str = ""
             get_logger("character_model").debug(
                 "flag lifecycle on location change failed: %s", _e)
 
-    # Party-Mitziehen: ist der Bewegte Leader einer Party, ziehen alle Follower
-    # an denselben Ort mit. _party_drag=True am rekursiven Aufruf verhindert,
-    # dass ein gezogener Follower seinerseits ein Drag ausloest. Follower sind
-    # ohnehin keine Leader (party_followers liefert dann []), das kwarg ist die
-    # zusaetzliche sichere Bremse. Nur bei echtem Location-Wechsel.
+    # Party drag: if the moved character leads a party, every follower is
+    # pulled to the same place. _party_drag=True on the recursive call keeps a
+    # dragged follower from triggering a drag of its own. Followers are no
+    # leaders anyway (party_followers then answers []) — the kwarg is the extra
+    # safe brake. Only on a real location change.
     if location_changed and not _party_drag:
         _drag_party_followers_to_location(character_name, location)
 

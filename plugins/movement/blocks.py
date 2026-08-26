@@ -38,7 +38,13 @@ def travel_section(character_name: str) -> str:
         from app.models.world import get_location_name
         from app.core.game_time import GameTime
         from app.core.timeutils import game_time
-        target_name = get_location_name(j["target"]) or j["target"]
+        target_id = j.get("target") or ""
+        # A POINT journey (E3-0) walks to a free (x, z) instead of a place, so
+        # there is no name to look up — "a spot out in the open" is what the
+        # character would say about it, and the metres + ETA below stay true
+        # either way.
+        target_name = (get_location_name(target_id) or target_id
+                       if target_id else "a spot out in the open")
         now = game_time()
         st = journey_state(j["waypoints"], j["started_at_game"], now)
         if st["arrived"]:
