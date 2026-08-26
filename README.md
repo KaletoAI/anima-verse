@@ -411,6 +411,8 @@ The task queue can also be inspected **without the server** via `python queue_cl
 
 - **[`docs/getting-started-new-world.md`](docs/getting-started-new-world.md)** — full step-by-step
   walk-through for setting up a fresh world from zero.
+- **[`docs/npc-slots.md`](docs/npc-slots.md)** — authoring automatic NPCs: slots on locations and
+  painted areas, home areas, time windows, and the `npc.*` settings that bound them.
 - **[`docker/DEPLOYMENT.md`](docker/DEPLOYMENT.md)** — reproducible Docker deployment against a
   self-hosted LocalAI backend (single-GPU watchdog, GPU-label serialization, Proxmox-LXC note).
 - **`docs/`** — technical reference (config defaults, LLM task mapping/templates, movement model,
