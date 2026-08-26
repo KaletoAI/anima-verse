@@ -854,7 +854,7 @@ GEN_CALLS = []
 
 def fake_generate(briefing="", location_id="", room_id="", ttl_hours=None,
                   template="", slot_role="", wanderer=False, wander_target="",
-                  created_by="", radius_m=0):
+                  created_by="", radius_m=0, home=None, place_labels=None):
     """The pipeline stub — it creates the NPC through the REAL apply path."""
     GEN_CALLS.append(slot_role)
     name = f"Kettilfrid{len(GEN_CALLS)}"
@@ -863,7 +863,7 @@ def fake_generate(briefing="", location_id="", room_id="", ttl_hours=None,
                          "standing_task": "stirring the pot"},
                         location_id, room_id, template=template or "npc-temporary",
                         slot_role=slot_role, created_by="smoke_npc_assets",
-                        radius_m=radius_m)
+                        radius_m=radius_m, home=home)
     return {"ok": True, "character": name,
             "held_for_assets": bool(applied.get("held_for_assets"))}
 

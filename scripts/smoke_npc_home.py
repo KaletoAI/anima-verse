@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Smoke run for the temporary-NPC HOME AREA, stage 1 — the circle
-(spec-npc-heimat-zeitfenster § E3.1).
+"""Smoke run for the temporary-NPC HOME AREA — the circle (spec § E3.1) and
+the painted TERRAIN AREA (spec § E3.2).
 
 Throwaway storage, throwaway world DB — no server, no real world is touched
 and no LLM is called: the action turn is a fake that hands back a canned
@@ -140,6 +140,77 @@ types.json``): grass is passable, deep_water is not.
   (g) THE TEMPLATE RENDERS UNDER StrictUndefined — BOTH branches, with
       exactly the variable sets the module passes. A placeholder one branch
       forgets is a crash in production, not a warning.
+
+── stage 2: the painted TERRAIN AREA as a home (§ E3.2) ───────────────────
+
+Three more painted areas, all of kind ``grass`` and all inside the big grass
+rectangle above, so only the two lakes and the placed footprints can reject
+anything:
+
+  Hunting Ground  x 120…240, z  40…140   (label "Hunting Ground")
+                  → the second lake (170…230 × 70…130) lies WHOLLY inside it
+  Shed Yard       x   0…40,  z −40…40    (label "Shed Yard")
+                  → the Toolshed (11…19 × −4…4) lies wholly inside it, and
+                    the eastern half of the Old Mill (0…3 × −3…3) as well
+  Drowned Reach   x 175…225, z  75…125   (label "Drowned Reach")
+                  → wholly inside the second lake
+
+  (h) ``random_point`` ON A POLYGON obeys the SAME two rules as the circle,
+      only the shape differs — rejection sampling in ``polygon_bounds`` with
+      ``point_in_polygon`` instead of a radius:
+        · Hunting Ground, 200 draws per seed: every point is inside the
+          polygon, ``contains`` agrees, and NONE lies in the lake — the lake
+          is 60 × 60 m of the 120 × 100 m area, i.e. 30 % of the bounding
+          box, so a missing passability test would show up in every loop;
+        · Shed Yard, 200 draws: none lies inside ANY location footprint. For
+          an AREA home every location is foreign — the area is the home, not
+          the place, so there is no "own" location the way the circle has
+          one;
+        · Drowned Reach answers None: all of it is water, so all 40 attempts
+          are rejected;
+        · an area id nothing is painted under answers None as well, and
+          ``contains`` says False — a deleted area must not place anybody.
+      ``describe`` is the area's LABEL, which is what the roaming prompt
+      renders ("it roams Hunting Ground").
+
+  (i) THE SLOTS ARE AREA DATA, normalized by the very sanitizer every write
+      goes through (``terrain.sanitize_area``):
+        · the slot list runs through ``npc_spawn.normalize_slots``, and
+          ``room``/``radius_m`` are FORCED to ""/0 — the area IS the home, so
+          a room or a radius on such a slot is meaningless;
+        · an unknown key inside a slot does not survive;
+        · slots WITHOUT a label raise ValueError: the label is what the
+          generator's briefing and the roaming prompt name the place by, and
+          an area called "" is nothing anybody can be told about;
+        · an empty list drops the key instead of storing "wants nobody";
+        · ``save_area`` → ``get_area`` returns the stored slots unchanged,
+          and ``get_area`` of an unknown id is None.
+
+  (j) THE BAKE DOES NOT SEE THE SLOTS. ``meta.npc_slots`` is inert for the
+      ground: re-saving one and the same area with slots leaves
+      ``models.heightfield.height_sig()`` (the token that decides whether the
+      world raster is rebuilt) and ``terrain_layers.layer_table`` byte-for-
+      byte identical. Both are computed over PROJECTIONS of the areas
+      (``relief_basis`` takes kind/polygon/relief, the layer table takes kind
+      and the cut keys), which is why an authoring key may live in `meta`
+      at all.
+
+  (k) PLACEMENT FROM THE POOL WITH AN AREA HOME. ``revive_from_pool`` with
+      ``home=area_home(<Hunting Ground>)`` and no location at all:
+        · the NPC stands at a point of the polygon;
+        · ``npc_home`` is {"kind": "area", "area_id": …};
+        · the slot stamp is ``npc_slot_area`` — ``npc_slot_location`` stays
+          "" so a location's own count cannot pick it up;
+        · ``held_roles_at_area`` reports ["guard"] for that area and nothing
+          for the location;
+        · ``current_location`` is "" — the point lies in no footprint.
+      Pooling forgets the home again, exactly as it does for a circle.
+
+  (l) THE WINDOW SWEEP READS AREA SLOTS TOO. The Hunting Ground's guard slot
+      is authored ``22:00-05:00``; at game 12:00 that window is shut, so
+      ``npc_ops.sweep_closed_windows`` pools the area's NPC with the reason
+      "window closed" — the same mechanic that empties a location's night
+      slot, resolved over ``npc_slot_area`` instead of ``npc_slot_location``.
 
 Usage:  ./.venv/bin/python scripts/smoke_npc_home.py
 """
@@ -625,6 +696,182 @@ check("room: system part is non-empty", bool(_sys_room.strip()), True)
 check("room: user part is non-empty", bool(_user_room.strip()), True)
 check("room: the answer shape still names the room",
       '"room"' in _sys_room, True)
+
+# ═══ stage 2: the painted terrain area as a home (§ E3.2) ══════════════════
+
+# LAYER 0, like the base grass and BELOW the two lakes (z_order 1): the
+# topmost area at a point decides its kind, so a slot area painted over the
+# water would make the Drowned Reach walkable and take rule (h) with it.
+HUNT = terrain.save_area({"kind": "grass", "z_order": 0,
+                          "polygon": [[120, 40], [240, 40], [240, 140],
+                                      [120, 140]],
+                          "meta": {"label": "Hunting Ground"}})["id"]
+YARD = terrain.save_area({"kind": "grass", "z_order": 0,
+                          "polygon": [[0, -40], [40, -40], [40, 40], [0, 40]],
+                          "meta": {"label": "Shed Yard"}})["id"]
+DROWNED = terrain.save_area({"kind": "grass", "z_order": 0,
+                             "polygon": [[175, 75], [225, 75], [225, 125],
+                                         [175, 125]],
+                             "meta": {"label": "Drowned Reach"}})["id"]
+HUNT_HOME = npc_home.area_home(HUNT)
+YARD_HOME = npc_home.area_home(YARD)
+
+# ── (h) random_point on a polygon ───────────────────────────────────────────
+print("(h) random_point on a polygon: inside, passable, out of every place")
+from app.core.world_geometry import point_in_polygon  # noqa: E402
+HUNT_POLY = [[120, 40], [240, 40], [240, 140], [120, 140]]
+YARD_POLY = [[0, -40], [40, -40], [40, 40], [0, 40]]
+
+for seed in (3, 11, 4242):
+    rng = random.Random(seed)
+    points = [npc_home.random_point(HUNT_HOME, rng=rng) for _ in range(200)]
+    good = [p for p in points if p is not None]
+    check(f"seed {seed}: every draw delivered a point",
+          sum(p is None for p in points), 0)
+    check(f"seed {seed}: all inside the polygon",
+          sum(1 for x, z in good if not point_in_polygon(x, z, HUNT_POLY)), 0)
+    check(f"seed {seed}: … and contains() agrees",
+          sum(1 for x, z in good if not npc_home.contains(HUNT_HOME, x, z)), 0)
+    check(f"seed {seed}: none on the lake (170…230 × 70…130)",
+          sum(1 for x, z in good
+              if 170 <= x <= 230 and 70 <= z <= 130), 0)
+    check(f"seed {seed}: and every point is passable ground",
+          sum(1 for x, z in good if not passability_at(x, z)[0]), 0)
+
+print("(h) for an AREA home every placed location is foreign")
+_rng = random.Random(77)
+yard = [npc_home.random_point(YARD_HOME, rng=_rng) for _ in range(200)]
+_yard_good = [p for p in yard if p is not None]
+check("every draw delivered a point", sum(p is None for p in yard), 0)
+check("all inside the yard",
+      sum(1 for x, z in _yard_good if not point_in_polygon(x, z, YARD_POLY)), 0)
+check("none inside the Toolshed",
+      sum(1 for x, z in _yard_good if boundary_contains(SHED_LOC, x, z)), 0)
+check("none inside the Old Mill either",
+      sum(1 for x, z in _yard_good if boundary_contains(MILL_LOC, x, z)), 0)
+check("and location_at_point answers nothing for all of them",
+      sum(1 for x, z in _yard_good
+          if location_at_point(x, z, list_locations())), 0)
+
+print("(h) an area that is all water, and an area that is not there")
+check("the drowned reach", npc_home.random_point(npc_home.area_home(DROWNED)),
+      None)
+_ghost = npc_home.area_home("ta_does_not_exist")
+check("a deleted area places nobody", npc_home.random_point(_ghost), None)
+check("… and contains nothing", npc_home.contains(_ghost, 0.0, 0.0), False)
+check("describe is the label", npc_home.describe(HUNT_HOME), "Hunting Ground")
+check("contains inside", npc_home.contains(HUNT_HOME, 130.0, 50.0), True)
+check("contains outside", npc_home.contains(HUNT_HOME, 119.0, 50.0), False)
+check("the home dict is the two documented keys", HUNT_HOME,
+      {"kind": "area", "area_id": HUNT})
+
+# ── (i) slots are area data ─────────────────────────────────────────────────
+print("(i) sanitize_area normalizes meta.npc_slots")
+_raw = {"kind": "grass", "polygon": YARD_POLY,
+        "meta": {"label": "Shed Yard",
+                 "npc_slots": [{"role": " guard ", "count_min": 2,
+                                "room": "taproom", "radius_m": 50,
+                                "briefing": "watches the gate",
+                                "when": "22:00-05:00", "junk": 1},
+                               {"role": "guard"},
+                               {"count_min": 3}]}}
+_clean = terrain.sanitize_area(_raw)["meta"]["npc_slots"]
+check("one slot per role, sanitized", _clean,
+      [{"role": "guard", "template": "", "count_min": 2, "count_max": 2,
+        "briefing": "watches the gate", "room": "", "when": "22:00-05:00",
+        "radius_m": 0}])
+raises("slots without a label are refused", ValueError,
+       lambda: terrain.sanitize_area({"kind": "grass", "polygon": YARD_POLY,
+                                      "meta": {"npc_slots": [
+                                          {"role": "guard"}]}}),
+       contains="label")
+check("an empty list drops the key",
+      "npc_slots" in terrain.sanitize_area(
+          {"kind": "grass", "polygon": YARD_POLY,
+           "meta": {"label": "x", "npc_slots": []}})["meta"], False)
+check("a list of unusable slots drops it too",
+      "npc_slots" in terrain.sanitize_area(
+          {"kind": "grass", "polygon": YARD_POLY,
+           "meta": {"label": "x", "npc_slots": [{"count_min": 1}]}})["meta"],
+      False)
+
+print("(i) save_area → get_area keeps the slots")
+GUARD_SLOT = {"role": "guard", "count_min": 1, "count_max": 1,
+              "briefing": "watches the wood", "when": "22:00-05:00"}
+terrain.save_area({"id": HUNT, "kind": "grass", "z_order": 0,
+                   "polygon": HUNT_POLY,
+                   "meta": {"label": "Hunting Ground",
+                            "npc_slots": [GUARD_SLOT]}})
+_stored = terrain.get_area(HUNT) or {}
+check("the label survives", (_stored.get("meta") or {}).get("label"),
+      "Hunting Ground")
+check("and so does the slot",
+      [(s["role"], s["when"], s["room"], s["radius_m"])
+       for s in (_stored.get("meta") or {}).get("npc_slots") or []],
+      [("guard", "22:00-05:00", "", 0)])
+check("an unknown id is None", terrain.get_area("ta_nothing"), None)
+
+# ── (j) the bake does not see the slots ─────────────────────────────────────
+print("(j) meta.npc_slots is inert for the ground")
+from app.core.terrain_layers import layer_table  # noqa: E402
+from app.core.terrain_types import effective_catalog  # noqa: E402
+from app.models.heightfield import height_sig  # noqa: E402
+
+_bare = {"id": YARD, "kind": "grass", "z_order": 0, "polygon": YARD_POLY,
+         "meta": {"label": "Shed Yard"}}
+terrain.save_area(_bare)
+_sig_before = height_sig()
+_table_before = layer_table(terrain.list_areas(), effective_catalog(), "grass")
+terrain.save_area({**_bare, "meta": {"label": "Shed Yard",
+                                     "npc_slots": [{"role": "stablehand"}]}})
+check("the height signature does not move", height_sig(), _sig_before)
+check("and the layer table is the same list",
+      layer_table(terrain.list_areas(), effective_catalog(), "grass"),
+      _table_before)
+terrain.save_area(_bare)
+
+# ── (k) placement from the pool with an area home ───────────────────────────
+print("(k) revive_from_pool with an area home")
+K = pooled_npc("Wulfhild")
+check("the revive succeeded",
+      revive_from_pool(K, "", "", ttl_hours=1, slot_role="guard",
+                       home=HUNT_HOME), True)
+kpos = get_character_pos(K)
+check_true("it stands somewhere", kpos is not None, f"{kpos}")
+if kpos:
+    check("inside the polygon",
+          point_in_polygon(kpos["x"], kpos["z"], HUNT_POLY), True)
+kprof = get_character_profile(K) or {}
+check("npc_home names the area", kprof.get("npc_home"), HUNT_HOME)
+check("the slot stamp is the AREA one",
+      (kprof.get("npc_slot_area"), kprof.get("npc_slot_location"),
+       kprof.get("npc_slot_role")), (HUNT, "", "guard"))
+check("it is in the world", get_character_status(K), "")
+check("and stands in no location", get_character_current_location(K), "")
+check("held_roles_at_area sees it", npc_spawn.held_roles_at_area(HUNT),
+      ["guard"])
+# The mill still holds Gerlind's `miller` from (b) — what matters is that the
+# AREA's guard is not in that list: the two stamps never count each other.
+check("the location count does not", npc_spawn.held_roles_at(MILL), ["miller"])
+check("the roaming prompt names the area",
+      npc_actions.prompt_vars(K).get("home"), "Hunting Ground")
+
+# ── (l) the window sweep resolves area slots ────────────────────────────────
+print("(l) sweep_closed_windows pools an area NPC when its window shuts")
+from app.core.game_time import GameTime  # noqa: E402
+from app.core.npc_ops import sweep_closed_windows  # noqa: E402
+from app.core.timeutils import set_game_time  # noqa: E402
+
+set_game_time(GameTime.from_parts(1, 20, 12, 0, 0))     # midday: 22:00-05:00 is shut
+# Only K: no other living NPC's location authors slots at all, so every one
+# of them leaves the sweep at "this slot does not exist".
+check("exactly the area NPC goes back into the pool", sweep_closed_windows(), 1)
+check("it really is pooled", get_character_status(K), POOLED_STATUS)
+check("with the window reason",
+      (get_character_profile(K) or {}).get("npc_pooled_reason"),
+      "window closed")
+check("and the home is forgotten again",
+      (get_character_profile(K) or {}).get("npc_home"), None)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

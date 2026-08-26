@@ -60,6 +60,25 @@ Sections:
       wanderer is pooled; a turning wanderer (the other half of the 50/50)
       stays alive with its target and origin swapped. Both branches are
       forced, not rolled, so the check is deterministic.
+
+  [7] A PAINTED AREA HAS SLOTS OF ITS OWN (spec § E3.2). The same approach
+      trigger, over the polygon instead of the pin — `polygon_distance` is 0
+      anywhere inside, so "inside" and "within `npc.spawn_radius_m` of the
+      rim" are one comparison. The fixture is the Heath, x 1000…1100 ×
+      z 0…100, painted far away from both locations of section [2] so only
+      the area can answer. With `spawn_radius_m` = 100:
+
+        · (1050, 50) — inside            → distance 0    → one job
+        · a second report right after it → the per-area cooldown holds
+        · (950, 50)  — 50 m west of the rim              → one job
+        · (880, 50)  — 120 m west of the rim             → nothing
+        · standing INSIDE an area without slots (1050, 230) → nothing
+
+      The job carries `area_id`, never `location_id`, and the worker routes
+      it to `fill_area_slots`: with a pooled `guard` in stock the slot is
+      filled from the pool, the revived NPC stands at a point INSIDE the
+      polygon, carries `npc_slot_area` (not `npc_slot_location`) and shows up
+      in `held_roles_at_area`.
 """
 import os
 import sys
@@ -229,8 +248,8 @@ create_location_with_extras({
 print("\n[2] The approach trigger: geometry + one job per cooldown window")
 SUBMITS = []
 npc_spawn.submit_spawn_job = (
-    lambda location_id="", reason="slot", triggered_by="":
-    SUBMITS.append((location_id, reason)) or f"task_{len(SUBMITS)}")
+    lambda location_id="", reason="slot", triggered_by="", area_id="":
+    SUBMITS.append((location_id or area_id, reason)) or f"task_{len(SUBMITS)}")
 
 LOCS = [
     {"id": "tavern", "pos_x": 0.0, "pos_z": 0.0,
@@ -433,6 +452,74 @@ save_character_profile("demo_walk_c", {**get_character_profile("demo_walk_c"),
 result = npc_spawn.wanderer_tick()
 check("two wanderers = the quota", result["wanderers"], 2)
 check("nothing queued at quota", SUBMITS, [])
+
+# ---------------------------------------------------------------------------
+print("\n[7] A painted area carries slots of its own")
+from app.models import terrain  # noqa: E402
+
+HEATH_POLY = [[1000, 0], [1100, 0], [1100, 100], [1000, 100]]
+HEATH = terrain.save_area({
+    "kind": "grass", "polygon": HEATH_POLY, "z_order": 0,
+    "meta": {"label": "The Heath",
+             "npc_slots": [{"role": "guard", "count_min": 1, "count_max": 1,
+                            "briefing": "watches the heath"}]}})["id"]
+BARE = terrain.save_area({
+    "kind": "grass", "polygon": [[1000, 180], [1100, 180], [1100, 280],
+                                 [1000, 280]],
+    "z_order": 0, "meta": {"label": "The Fen"}})["id"]
+
+SUBMITS.clear()
+npc_spawn.reset_cooldowns()
+npc_spawn.consider_point("demo", 1050.0, 50.0, locations=LOCS)
+check("standing on the area submits for it", SUBMITS, [(HEATH, "slot")])
+npc_spawn.consider_point("demo", 1050.0, 50.0, locations=LOCS)
+check("and the per-area cooldown holds the second report", len(SUBMITS), 1)
+
+set_game_time(game_time() + GameDuration.of(minutes=11))
+SUBMITS.clear()
+npc_spawn.consider_point("demo", 950.0, 50.0, locations=LOCS)
+check("50 m from the rim is within the spawn radius", SUBMITS,
+      [(HEATH, "slot")])
+
+set_game_time(game_time() + GameDuration.of(minutes=11))
+SUBMITS.clear()
+npc_spawn.consider_point("demo", 880.0, 50.0, locations=LOCS)
+check("120 m from the rim is not", SUBMITS, [])
+# Standing INSIDE the Fen, which declares nothing: its own distance is 0 and
+# it is still skipped, while the Heath is 130 m away — out of range.
+npc_spawn.consider_point("demo", 1050.0, 230.0, locations=LOCS)
+check("and an area without slots never submits", SUBMITS, [])
+
+# The worker side: the job routes to the area, and the pool fills the slot.
+for name in list_temporary_npcs():
+    pool_npc(name, reason="smoke reset")
+make_npc("demo_heath_guard", role="guard", location=TAVERN_ID)
+pool_npc("demo_heath_guard", reason="smoke")
+check("the pool holds a guard", take_from_pool("guard"), "demo_heath_guard")
+
+PIPELINE.clear()
+result = npc_spawn._handle_npc_spawn({"reason": "slot", "area_id": HEATH,
+                                      "location_id": ""})
+check("the job filled the area's slot from the pool",
+      (result.get("filled"), result.get("area_id")), (1, HEATH))
+check("the pipeline was never asked", PIPELINE, [])
+guard = get_character_profile("demo_heath_guard") or {}
+check("the slot stamp is the area one",
+      (guard.get("npc_slot_area"), guard.get("npc_slot_location"),
+       guard.get("npc_slot_role")), (HEATH, "", "guard"))
+check("its home is the area",
+      guard.get("npc_home"), {"kind": "area", "area_id": HEATH})
+from app.core.world_geometry import point_in_polygon  # noqa: E402
+from app.models.character import get_character_pos  # noqa: E402
+gpos = get_character_pos("demo_heath_guard") or {}
+check("and it stands inside the polygon",
+      point_in_polygon(gpos.get("x"), gpos.get("z"), HEATH_POLY), True)
+check("held_roles_at_area sees it", npc_spawn.held_roles_at_area(HEATH),
+      ["guard"])
+check("so the area has no gap left",
+      npc_spawn.fill_area_slots(HEATH).get("filled"), 0)
+check("an unknown area is skipped, not crashed",
+      npc_spawn.fill_area_slots("ta_nothing").get("skipped"), "unknown area")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

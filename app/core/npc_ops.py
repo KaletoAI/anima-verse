@@ -140,8 +140,16 @@ def _location_labels(location_id: str, room_id: str = "") -> Tuple[str, str]:
 
 
 def build_npc_schema_text(location_id: str, room_id: str = "",
-                          template: str = "") -> str:
-    """The NPC schema markdown with every placeholder filled."""
+                          template: str = "",
+                          place_labels: Optional[Tuple[str, str]] = None) -> str:
+    """The NPC schema markdown with every placeholder filled.
+
+    ``place_labels`` overrides the two "where this NPC belongs" lines with a
+    ready (place, room) pair. That is what an NPC anchored on a painted AREA
+    needs (spec § E3.2): it has no location id and no room, and the header
+    must still say where it lives — the area's label and an explicit "no
+    room" (``npc_spawn._area_place_labels``).
+    """
     from app.models.character import list_available_characters
     from app.models.world_setup import get_world_setup_text
     from app.routes.world_dev import _load_schema
@@ -151,7 +159,8 @@ def build_npc_schema_text(location_id: str, room_id: str = "",
     # Pooled NPCs count as existing names here: their profile is still there
     # and a generated twin would collide with it on apply.
     existing = ", ".join(list_available_characters(include_pooled=True)) or "(none yet)"
-    loc_name, room_name = _location_labels(location_id, room_id)
+    loc_name, room_name = (place_labels if place_labels
+                           else _location_labels(location_id, room_id))
 
     return sanitize_injected_markdown(_load_schema(
         NPC_SCHEMA,
@@ -318,7 +327,8 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
               briefing: str = "", ttl_hours: Optional[float] = None,
               created_by: str = "", template: str = "",
               slot_role: str = "", wanderer: bool = False,
-              wander_target: str = "", radius_m: float = 0) -> Dict[str, Any]:
+              wander_target: str = "", radius_m: float = 0,
+              home: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Create the character, then stamp the NPC-only bookkeeping onto it.
 
     The heavy lifting is ``_apply_character_internal`` — the very same call the
@@ -326,8 +336,10 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     handful of fields the LLM must NOT write: where the NPC stands, what it was
     generated from, and when it dies.
 
-    ``radius_m`` is the slot's home area (spec § E3): above 0 the NPC is
+    ``radius_m`` is the slot's home area (spec § E3.1): above 0 the NPC is
     placed at a free point around the place instead of into ``room_id``.
+    ``home`` is the other home shape (§ E3.2) — a ready ``npc_home`` dict for
+    a slot authored on a painted area, which comes without a location at all.
     """
     from app.models.character import (get_character_profile,
                                       save_character_profile)
@@ -353,8 +365,14 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     # pair on its profile — never its name, never its role text in prose
     # (feedback_no_name_resolution). An NPC without a slot (manual, wanderer)
     # simply carries empty ones.
+    # A slot lives EITHER at a place or on a painted area (spec § E3.2), never
+    # at both — the two stamps are what the two counts read, and writing both
+    # (one of them empty) is what keeps them from ever describing one NPC
+    # twice.
     profile["npc_slot_role"] = (slot_role or "").strip()
     profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
+    profile["npc_slot_area"] = (str((home or {}).get("area_id") or "").strip()
+                                if slot_role else "")
     profile["npc_wanderer"] = bool(wanderer)
     # THE ROAD IS STAMPED BEFORE THE PLACEMENT. The finish gate may hold this
     # NPC back, and the job it queues is what sends the wanderer off later —
@@ -385,14 +403,15 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     # stands, not whether it exists.
     from app.core.npc_assets import gate_placement
     held = gate_placement(name, location_id, room_id, wanderer=wanderer,
-                          wander_target=wander_target, radius_m=radius_m)
+                          wander_target=wander_target, radius_m=radius_m,
+                          home=home)
 
     # Placement, not movement: the NPC is CREATED standing there. THE one
     # helper all three placement paths share (``npc_home.place_npc``): a slot
-    # with a radius stands at a free point, everything else in its room.
-    if location_id and not held:
+    # with a home area stands at a free point, everything else in its room.
+    if (location_id or home) and not held:
         from app.core.npc_home import place_npc
-        place_npc(name, location_id, room_id, radius_m)
+        place_npc(name, location_id, room_id, radius_m, home)
 
     result["expires_at"] = profile["expires_at"]
     result["default_skills"] = default_skills
@@ -500,8 +519,10 @@ def sweep_closed_windows() -> int:
 
     The SLOT TAG resolves the window, never a name (feedback_no_name_resolution):
     ``npc_slot_location`` + ``npc_slot_role`` on the profile point at the
-    location's slot list, and its ``when`` is the answer. Two NPCs are left
-    alone:
+    location's slot list, and its ``when`` is the answer. An NPC of a PAINTED
+    AREA (spec § E3.2) is resolved exactly the same way over
+    ``npc_slot_area`` + the area's ``meta.npc_slots`` — one mechanic, two
+    places a slot may be authored. Two NPCs are left alone:
 
     * one an avatar is talking to right now — the same rule the action tick
       uses (``npc_actions._in_chat``), so a window never closes mid-sentence.
@@ -518,9 +539,10 @@ def sweep_closed_windows() -> int:
     would leave the night NPCs standing around all morning.
     """
     from app.core.npc_pool import pool_npc
-    from app.core.npc_spawn import normalize_slots
+    from app.core.npc_spawn import area_slots, normalize_slots
     from app.core.npc_windows import slot_window_open
     from app.models.character import get_character_profile, list_temporary_npcs
+    from app.models.terrain import get_area
     from app.models.world import get_location_by_id
 
     now = game_time()
@@ -531,11 +553,15 @@ def sweep_closed_windows() -> int:
             if profile.get("npc_wanderer"):
                 continue
             location_id = str(profile.get("npc_slot_location") or "").strip()
+            area_id = str(profile.get("npc_slot_area") or "").strip()
             role = str(profile.get("npc_slot_role") or "").strip()
-            if not location_id or not role:
+            if not role or not (location_id or area_id):
                 continue
-            slots = normalize_slots(
-                (get_location_by_id(location_id) or {}).get("npc_slots"))
+            if area_id:
+                slots = area_slots(get_area(area_id) or {})
+            else:
+                slots = normalize_slots(
+                    (get_location_by_id(location_id) or {}).get("npc_slots"))
             slot = next((s for s in slots
                          if s["role"].lower() == role.lower()), None)
             if slot is None or slot_window_open(slot["when"], now):
@@ -570,7 +596,10 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
                           template: str = "", slot_role: str = "",
                           wanderer: bool = False, wander_target: str = "",
                           created_by: str = "npc_auto",
-                          radius_m: float = 0) -> Dict[str, Any]:
+                          radius_m: float = 0,
+                          home: Optional[Dict[str, Any]] = None,
+                          place_labels: Optional[Tuple[str, str]] = None
+                          ) -> Dict[str, Any]:
     """generate → validate → repair → apply, synchronously. For queue workers.
 
     Same four stages and the same helpers as the SSE pipeline, with two
@@ -586,6 +615,11 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
       anyway. So: one generate turn, and one repair turn only when the local
       check found gaps.
 
+    ``home`` + ``place_labels`` are the AREA-anchored spawn (spec § E3.2): no
+    location id, no room, the painted polygon as the NPC's home and its label
+    as what the schema header calls the place. Everything else — the two
+    turns, the local check, the apply — is identical, which is the point.
+
     Returns ``{"ok": bool, "character": str, "error": str, "gaps": [...],
     "held_for_assets": bool}`` — the last one says the NPC was created but is
     NOT in the world yet (the finish gate, see ``npc_assets``).
@@ -600,7 +634,8 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
         return {"ok": False, "error": "briefing required"}
 
     tmpl = npc_template_name(template)
-    schema_text = build_npc_schema_text(location_id, room_id, tmpl)
+    schema_text = build_npc_schema_text(location_id, room_id, tmpl,
+                                        place_labels=place_labels)
 
     def _turn(task_template: str, **vars_: Any) -> Optional[Dict[str, Any]]:
         system_prompt, user_prompt = render_task(task_template, **vars_)
@@ -647,7 +682,7 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
         applied = apply_npc(data, location_id, room_id, briefing, ttl_hours,
                             created_by, template=tmpl, slot_role=slot_role,
                             wanderer=wanderer, wander_target=wander_target,
-                            radius_m=radius_m)
+                            radius_m=radius_m, home=home)
     except Exception as e:  # noqa: BLE001
         logger.error("NPC auto-apply failed: %s", e)
         return {"ok": False, "error": f"apply failed: {e}"}

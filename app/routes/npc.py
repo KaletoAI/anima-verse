@@ -77,6 +77,23 @@ def fill_slots_route(location_id: str) -> Dict[str, Any]:
             "queued": bool(task_id)}
 
 
+@router.post("/areas/{area_id}/fill")
+def fill_area_slots_route(area_id: str) -> Dict[str, Any]:
+    """The same "Fill now", for the slots of a painted terrain area (§ E3.2).
+
+    One button, two surfaces: the map editor's area panel authors slots just
+    as the location editor does, so it gets the same manual trigger — and the
+    same job the avatar's approach submits, so neither can drift from the
+    other.
+    """
+    from app.core.npc_spawn import reset_cooldowns, submit_spawn_job
+    reset_cooldowns()
+    task_id = submit_spawn_job(area_id=area_id, reason="slot",
+                               triggered_by="admin")
+    return {"status": "success", "task_id": task_id,
+            "queued": bool(task_id)}
+
+
 @router.post("/generate")
 async def generate_npc_route(request: Request):
     """Run the generate → validate → repair → apply pipeline as an SSE stream.

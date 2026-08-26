@@ -137,16 +137,19 @@ def list_awaiting_assets() -> List[str]:
 
 def submit_assets_job(name: str, location_id: str, room_id: str = "",
                       wanderer: bool = False, wander_target: str = "",
-                      radius_m: float = 0) -> str:
+                      radius_m: float = 0,
+                      home: Optional[Dict[str, Any]] = None) -> str:
     """Queue the finishing job for one NPC. Returns the task id ("" = deduped).
 
     Deduplicated per character: a second placement attempt for an NPC that is
     already being finished must not start a second run of the same three
     generations.
 
-    ``radius_m`` rides along for the same reason the road does: the job is
-    what places this NPC, and whether it belongs into a room or somewhere
-    around the place is the SLOT's decision, made before the gate ran.
+    ``radius_m`` and ``home`` ride along for the same reason the road does:
+    the job is what places this NPC, and whether it belongs into a room,
+    somewhere around the place or into a painted area is the SLOT's decision,
+    made before the gate ran. ``home`` is a plain dict, so it survives the
+    JSON round trip through the queue as it is.
 
     ``max_retries`` is set EXPLICITLY, because the queue's own default is 0
     (``task_queue.MAX_RETRIES_DEFAULT``) and this job is the only thing that
@@ -160,7 +163,7 @@ def submit_assets_job(name: str, location_id: str, room_id: str = "",
         TASK_TYPE,
         {"name": name, "location_id": location_id, "room_id": room_id,
          "wanderer": bool(wanderer), "wander_target": wander_target or "",
-         "radius_m": float(radius_m or 0)},
+         "radius_m": float(radius_m or 0), "home": home or None},
         queue_name="background", agent_name=name, max_retries=ASSET_RETRIES,
         deduplicate=True)
 
@@ -221,7 +224,8 @@ def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str
 
 def gate_placement(name: str, location_id: str, room_id: str = "",
                    wanderer: bool = False, wander_target: str = "",
-                   radius_m: float = 0) -> bool:
+                   radius_m: float = 0,
+                   home: Optional[Dict[str, Any]] = None) -> bool:
     """True when the NPC must NOT be placed yet — pooled, and the job queued.
 
     False means "place it, exactly as before": the gate is off, the character
@@ -245,7 +249,7 @@ def gate_placement(name: str, location_id: str, room_id: str = "",
     save_character_profile(name, profile)
     set_character_status(name, POOLED_STATUS)
     task_id = submit_assets_job(name, location_id, room_id, wanderer,
-                                wander_target, radius_m)
+                                wander_target, radius_m, home)
     logger.info("NPC '%s' held back for %s — job %s", name,
                 ", ".join(missing), task_id or "(already queued)")
     return True
@@ -382,7 +386,8 @@ def _render_default_expression(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _place(name: str, location_id: str, room_id: str,
-           radius_m: float = 0) -> None:
+           radius_m: float = 0,
+           home: Optional[Dict[str, Any]] = None) -> None:
     """Put the finished NPC into the world — the order of ``revive_from_pool``.
 
     Back into the roster BEFORE the placement: the location setter runs the
@@ -393,8 +398,9 @@ def _place(name: str, location_id: str, room_id: str,
     world at the time — placing it again would drag it back to wherever the
     ORIGINAL job was headed, hours of world time later.
 
-    ``radius_m`` is the slot's home area, carried in the payload: the same
-    helper decides room-or-point for all three placement paths.
+    ``radius_m`` and ``home`` are the slot's home area, carried in the
+    payload: the same helper decides room-or-point for all three placement
+    paths, and an AREA home places without any location at all.
 
     RAISES when the placement itself fails. ``place_npc`` reports that as ""
     instead of an exception (its other two callers answer False to their own
@@ -417,10 +423,12 @@ def _place(name: str, location_id: str, room_id: str,
     if profile.pop("npc_pooled_reason", None) is not None:
         save_character_profile(name, profile)   # it is not waiting any more
     set_character_status(name, "")
-    if location_id and not place_npc(name, location_id, room_id, radius_m):
+    where = location_id or str((home or {}).get("area_id") or "")
+    if (location_id or home) and not place_npc(name, location_id, room_id,
+                                               radius_m, home):
         set_character_status(name, POOLED_STATUS)
         raise RuntimeError(
-            f"NPC '{name}' could not be placed at {location_id}"
+            f"NPC '{name}' could not be placed at {where}"
             f"{f'/{room_id}' if room_id else ''} — see the npc_home warning "
             f"for what failed")
 
@@ -450,6 +458,12 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
         radius_m = float(payload.get("radius_m") or 0)
     except (TypeError, ValueError):
         radius_m = 0.0
+    # The HOME AREA rides in the payload for the same reason (spec § E3.2) —
+    # an area-anchored NPC has no location at all, so without it the job would
+    # finish the assets and place nobody.
+    home = payload.get("home")
+    if not isinstance(home, dict) or not home:
+        home = None
 
     missing = npc_assets_complete(name)
     if "outfit_description" in missing:
@@ -497,7 +511,7 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"NPC '{name}' still incomplete after the attempt: "
             f"{', '.join(still_missing)}{detail}")
 
-    _place(name, location_id, room_id, radius_m)
+    _place(name, location_id, room_id, radius_m, home)
     sent = False
     if wanderer and wander_target:
         from app.core.npc_spawn import _send_wanderer

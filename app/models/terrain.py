@@ -34,7 +34,7 @@ import hashlib
 import json
 import math
 import secrets
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
 from app.core.timeutils import utc_now_iso
@@ -436,6 +436,38 @@ def _sanitize_relief(meta: Dict[str, Any]) -> None:
             meta[key] = value
 
 
+def _sanitize_npc_slots(meta: Dict[str, Any]) -> None:
+    """The NPC slots of a painted area, in place (spec § E3.2).
+
+    The list runs through the ONE slot sanitizer
+    (``npc_spawn.normalize_slots``) so an area slot and a location slot are
+    the same object; the two keys that only make sense at a PLACE are then
+    forced empty, because here the polygon is the home.
+
+    A LABEL IS MANDATORY as soon as an area wants staff, and this is the only
+    thing in the whole sanitizer that refuses rather than repairs: the label
+    is what the generator's briefing calls the place and what the roaming
+    prompt renders ("it roams the Hunting Ground"). An area named "" cannot be
+    described to an LLM at all, and silently spawning nameless NPCs into it is
+    worse than a 400 at the save.
+
+    An empty list drops the key: "wants nobody" is the absence of slots, not a
+    stored fact.
+    """
+    if "npc_slots" not in meta:
+        return
+    from app.core.npc_spawn import normalize_slots
+    slots = [{**slot, "room": "", "radius_m": 0}
+             for slot in normalize_slots(meta.get("npc_slots"))]
+    if not slots:
+        meta.pop("npc_slots", None)
+        return
+    if not str(meta.get("label") or "").strip():
+        raise ValueError("a terrain area with NPC slots needs a label — it is "
+                         "what the NPCs are told they are standing in")
+    meta["npc_slots"] = slots
+
+
 def sanitize_area(raw: Any) -> Dict[str, Any]:
     """Whitelist + coerce one area; raises ValueError on junk."""
     from app.core.terrain_types import effective_catalog
@@ -477,6 +509,14 @@ def sanitize_area(raw: Any) -> Dict[str, Any]:
     # what a shape says about its own ground is the author's, whatever kind it
     # happens to wear at the moment.
     _sanitize_relief(meta)
+    # …and the NPC SLOTS a painted area may want staffed (spec § E3.2). The
+    # area IS the home of such an NPC, which is why ``room`` and ``radius_m``
+    # are forced empty here instead of being offered: there are no rooms in a
+    # polygon, and a radius would describe a second shape beside the one the
+    # author painted. One sanitizer for both slot surfaces — the location's
+    # (``world_ops``) and this one — so a slot means the same thing wherever
+    # it is authored.
+    _sanitize_npc_slots(meta)
     return {"id": area_id, "kind": kind,
             "polygon": _sanitize_polygon(raw.get("polygon")),
             "z_order": z_order,
@@ -623,6 +663,35 @@ def list_areas() -> List[Dict[str, Any]]:
                     "z_order": int(r[3] or 0),
                     "meta": meta if isinstance(meta, dict) else {}})
     return out
+
+
+def get_area(area_id: str) -> Optional[Dict[str, Any]]:
+    """ONE painted area by id, or None — the same shape :func:`list_areas`
+    hands out.
+
+    The lookup the AREA HOME needs (spec § E3.2): a home is stored on the
+    profile as an id, and everything that asks about it later — the shape, the
+    label, the slots — starts here. Deliberately a single-row query rather
+    than a scan of :func:`list_areas`: an unknown id is the normal state after
+    an area was deleted, and the answer to it costs one index hit.
+    """
+    wanted = (area_id or "").strip()
+    if not wanted:
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id, kind, polygon, z_order, meta FROM terrain_areas WHERE id=?",
+        (wanted,)).fetchone()
+    if not row:
+        return None
+    try:
+        polygon = json.loads(row[2])
+        meta = json.loads(row[4] or "{}")
+    except (TypeError, ValueError):
+        return None
+    return {"id": row[0], "kind": row[1], "polygon": polygon,
+            "z_order": int(row[3] or 0),
+            "meta": meta if isinstance(meta, dict) else {}}
 
 
 def _note_relief_write() -> None:

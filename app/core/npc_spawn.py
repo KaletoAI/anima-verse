@@ -2,16 +2,21 @@
 
 plan-npc-auto-spawn.md. Three mechanics, one queue task:
 
-* **Slots** are location data (``npc_slots`` on the location): a role, how many
-  of them a place wants, and a briefing the generator gets. Whether a slot is
-  filled is a PURE function of the location and the slot TAGS of the living
-  NPCs (:func:`missing_slots`) — never a name match
-  (feedback_no_name_resolution).
+* **Slots** are AUTHORED ON TWO SURFACES: on a location (``npc_slots`` on the
+  location) and, since spec § E3.2, on a painted terrain area
+  (``meta.npc_slots``). Both carry the same slot object — a role, how many of
+  them the place wants, a time window and a briefing — and both count the same
+  way: whether a slot is filled is a PURE function of the declaring object and
+  the slot TAGS of the living NPCs (:func:`missing_slots`), never a name match
+  (feedback_no_name_resolution). What differs is where the NPC then STANDS: a
+  location slot puts it in a room (or a circle around the place), an area slot
+  makes the polygon itself its home (``npc_home`` kind ``area``).
 * **The approach trigger** runs inside the accepted position report. It is
   deliberately the cheapest check in this module: geometry against the
-  location snapshot the report already read, a per-location game-time cooldown
-  and a queue submit. It counts nothing, reads no profile and calls no LLM —
-  everything expensive happens later, in the worker.
+  location snapshot the report already read plus the painted areas that
+  declare slots, a per-object game-time cooldown and a queue submit. It counts
+  nothing, reads no profile and calls no LLM — everything expensive happens
+  later, in the worker.
 * **Wanderers** are ordinary temporary NPCs travelling between known places
   over the normal journey engine. A scheduler tick keeps up to
   ``npc.wanderer_quota`` of them alive; arriving pools them (or turns them
@@ -25,7 +30,7 @@ from __future__ import annotations
 import math
 import random
 import threading
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.game_time import GameDuration, GameTime
 from app.core.log import get_logger
@@ -242,6 +247,49 @@ def missing_slots(location: Dict[str, Any],
     return out
 
 
+def area_slots(area: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The authored slots of a PAINTED AREA (spec § E3.2), cleaned.
+
+    They live in ``meta.npc_slots`` and are written through the very same
+    sanitizer the location slots use (``terrain.sanitize_area``), so this is
+    only the read side of the same shape.
+    """
+    return normalize_slots(((area or {}).get("meta") or {}).get("npc_slots"))
+
+
+def _held_roles(stamp_key: str, wanted: str) -> List[str]:
+    """The slot tags of every NPC whose ``stamp_key`` points at ``wanted``.
+
+    One loop for both slot surfaces — see :func:`held_roles_at` for what the
+    tag means and why the NPCs the finish gate holds back are counted too.
+    """
+    from app.core.npc_assets import list_awaiting_assets
+    from app.models.character import get_character_profile, list_temporary_npcs
+    wanted = (wanted or "").strip()
+    if not wanted:
+        return []
+    roles: List[str] = []
+    for name in list_temporary_npcs() + list_awaiting_assets():
+        profile = get_character_profile(name) or {}
+        if str(profile.get(stamp_key) or "").strip() != wanted:
+            continue
+        role = str(profile.get("npc_slot_role") or "").strip()
+        if role:
+            roles.append(role)
+    return roles
+
+
+def held_roles_at_area(area_id: str) -> List[str]:
+    """The slot tags of every NPC that holds a slot of this painted AREA.
+
+    The area's counterpart of :func:`held_roles_at`, over the profile stamp
+    ``npc_slot_area``. The two stamps are exclusive — an NPC belongs either to
+    a place or to a painted shape — so neither count can ever pick up the
+    other's NPCs.
+    """
+    return _held_roles("npc_slot_area", area_id)
+
+
 def held_roles_at(location_id: str) -> List[str]:
     """The slot tags of every NPC that holds a slot of this location.
 
@@ -257,23 +305,18 @@ def held_roles_at(location_id: str) -> List[str]:
     spawn tick run the whole generation pipeline again for a slot that is
     already taken — once per cooldown, for as long as the render takes.
     """
-    from app.core.npc_assets import list_awaiting_assets
-    from app.models.character import get_character_profile, list_temporary_npcs
-    wanted = (location_id or "").strip()
-    roles: List[str] = []
-    for name in list_temporary_npcs() + list_awaiting_assets():
-        profile = get_character_profile(name) or {}
-        if str(profile.get("npc_slot_location") or "").strip() != wanted:
-            continue
-        role = str(profile.get("npc_slot_role") or "").strip()
-        if role:
-            roles.append(role)
-    return roles
+    return _held_roles("npc_slot_location", location_id)
 
 
 def location_gap(location: Dict[str, Any]) -> List[Dict[str, Any]]:
     """:func:`missing_slots` for a real location — the DB half of the pair."""
     return missing_slots(location, held_roles_at(location.get("id") or ""))
+
+
+def area_gap(area: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """:func:`missing_slots` for a painted area — its half of the same pair."""
+    return missing_slots({"npc_slots": area_slots(area)},
+                         held_roles_at_area(area.get("id") or ""))
 
 
 # ---------------------------------------------------------------------------
@@ -322,8 +365,15 @@ def consider_point(avatar: str, x: float, z: float,
     cooldown. Whether their slots are actually unfilled is NOT decided here —
     that needs a profile read per living NPC, which is the worker's job.
 
-    Returns the location ids a job was submitted for (for the log and the
-    smokes); never raises into the report path.
+    THE PAINTED AREAS ARE ASKED THE SAME QUESTION (spec § E3.2), only their
+    geometry differs: ``polygon_distance`` is 0 anywhere INSIDE the shape, so
+    "the avatar is standing in the wood" and "the avatar is within
+    ``npc.spawn_radius_m`` of its edge" are one comparison. They cost one
+    ``list_areas`` read, which is why it happens after the location loop and
+    only when some area actually declares slots.
+
+    Returns the ids a job was submitted for — location ids and area ids in one
+    list (for the log and the smokes); never raises into the report path.
     """
     if not spawn_enabled():
         return []
@@ -352,6 +402,7 @@ def consider_point(avatar: str, x: float, z: float,
             if submit_spawn_job(location_id=loc_id, reason="slot",
                                 triggered_by=avatar):
                 submitted.append(loc_id)
+        submitted.extend(_consider_areas(avatar, x, z, radius, now))
         if submitted:
             logger.info("npc spawn check queued for %s (avatar %s)",
                         ", ".join(submitted), avatar)
@@ -362,19 +413,55 @@ def consider_point(avatar: str, x: float, z: float,
         return []
 
 
+def _consider_areas(avatar: str, x: float, z: float, radius: float,
+                    now: GameTime) -> List[str]:
+    """The painted half of :func:`consider_point` — areas with slots.
+
+    The cooldown key is namespaced (``area:<id>``) so an area and a location
+    can never share a slot in ``_last_check``: both ids come from different
+    generators, and a collision would silently mute one of them.
+    """
+    from app.core.world_geometry import polygon_distance
+    from app.models.terrain import list_areas
+
+    submitted: List[str] = []
+    for area in list_areas():
+        area_id = str(area.get("id") or "")
+        if not area_id or not area_slots(area):
+            continue
+        # 0 anywhere inside the shape, so this one comparison covers both
+        # "standing in it" and "walking up to it".
+        dist = polygon_distance(x, z, area.get("polygon"))
+        if not math.isfinite(dist) or dist > radius:
+            continue
+        if not cooldown_ok(f"area:{area_id}", now):
+            continue
+        if submit_spawn_job(area_id=area_id, reason="slot",
+                            triggered_by=avatar):
+            submitted.append(area_id)
+    return submitted
+
+
 def submit_spawn_job(location_id: str = "", reason: str = "slot",
-                     triggered_by: str = "") -> str:
-    """Queue one spawn job. Returns the task id ('' when deduplicated)."""
+                     triggered_by: str = "", area_id: str = "") -> str:
+    """Queue one spawn job. Returns the task id ('' when deduplicated).
+
+    A job is anchored either at a LOCATION or at a painted AREA — never at
+    both, and a wanderer top-up at neither.
+    """
     from app.core.task_queue import get_task_queue
     return get_task_queue().submit(
         TASK_TYPE,
-        {"location_id": location_id, "reason": reason,
+        {"location_id": location_id, "area_id": area_id, "reason": reason,
          "triggered_by": triggered_by},
         queue_name="background", priority=30,
-        # One pending job per location (and one per wanderer top-up): the
-        # dedup key is the agent_name, so a second report while the first job
-        # still waits adds nothing.
-        agent_name=location_id or f"wanderer:{reason}", deduplicate=True)
+        # One pending job per location, per area (and one per wanderer
+        # top-up): the dedup key is the agent_name, so a second report while
+        # the first job still waits adds nothing. The area's key is
+        # namespaced for the same reason the cooldown's is.
+        agent_name=(location_id or (f"area:{area_id}" if area_id
+                                    else f"wanderer:{reason}")),
+        deduplicate=True)
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +486,9 @@ def _handle_npc_spawn(payload: Dict[str, Any]) -> Dict[str, Any]:
     reason = str(payload.get("reason") or "slot")
     if reason == "wanderer":
         return spawn_wanderer()
+    area_id = str(payload.get("area_id") or "")
+    if area_id:
+        return fill_area_slots(area_id)
     location_id = str(payload.get("location_id") or "")
     return fill_location_slots(location_id)
 
@@ -438,6 +528,36 @@ def fill_location_slots(location_id: str) -> Dict[str, Any]:
     return {"filled": len(filled), "spawned": filled, "location_id": location_id}
 
 
+def fill_area_slots(area_id: str) -> Dict[str, Any]:
+    """The area's half of :func:`fill_location_slots` (spec § E3.2).
+
+    Same rules, one origin further out: the painted shape is both what
+    declares the slot and where the NPC lives, so there is no room to place
+    into and no location id on the profile at all.
+    """
+    from app.models.terrain import get_area
+
+    area = get_area(area_id)
+    if not area:
+        return {"skipped": "unknown area", "area_id": area_id}
+    gaps = area_gap(area)
+    if not gaps:
+        return {"filled": 0, "area_id": area_id}
+
+    filled: List[str] = []
+    for slot in gaps:
+        for _ in range(int(slot.get("needed") or 0)):
+            if cap_reached():
+                logger.info("npc cap %d reached — no spawn in %s",
+                            max_alive(), area_id)
+                return {"filled": len(filled), "spawned": filled,
+                        "area_id": area_id, "capped": True}
+            name = spawn_for_slot(area, slot, kind="area")
+            if name:
+                filled.append(name)
+    return {"filled": len(filled), "spawned": filled, "area_id": area_id}
+
+
 def _slot_briefing(location: Dict[str, Any], slot: Dict[str, Any]) -> str:
     """The generator's briefing: the slot's own text plus where it stands."""
     parts = [slot.get("briefing") or f"a {slot['role']}"]
@@ -450,42 +570,95 @@ def _slot_briefing(location: Dict[str, Any], slot: Dict[str, Any]) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def spawn_for_slot(location: Dict[str, Any],
-                   slot: Dict[str, Any]) -> str:
+def _area_briefing(area: Dict[str, Any], slot: Dict[str, Any]) -> str:
+    """The same briefing for an AREA slot — the LABEL takes the place's role.
+
+    A painted area has no name and no description of its own beyond the two
+    things an author gave it: the label and the terrain kind it is painted in.
+    Both go into the briefing, because the generator has nothing else to build
+    a person out of — "the poacher of the Hunting Ground, open woodland".
+    """
+    label = str(((area or {}).get("meta") or {}).get("label") or "").strip()
+    parts = [slot.get("briefing") or f"a {slot['role']}"]
+    if label:
+        parts.append(f"They are the {slot['role']} of {label}, "
+                     f"out in the open — no house, no room.")
+    kind = str((area or {}).get("kind") or "").strip()
+    if kind:
+        parts.append(f"The ground there is {kind.replace('_', ' ')}.")
+    return "\n\n".join(p for p in parts if p)
+
+
+def _area_place_labels(area: Dict[str, Any]) -> Tuple[str, str]:
+    """What the NPC schema calls "Location" and "Room" for an AREA slot.
+
+    The schema header is two lines of prose the generator reads as "where this
+    NPC belongs" (``shared/world_dev_schemas/npc_character.md``). An area
+    fills them with the label and with an explicit "no room" — spelled out
+    rather than left blank, so the model does not invent an interior for an
+    NPC that lives on open ground.
+    """
+    label = str(((area or {}).get("meta") or {}).get("label") or "").strip()
+    kind = str((area or {}).get("kind") or "").strip().replace("_", " ")
+    place = f"{label} — open {kind} ground" if kind else label
+    return (place or "(an unnamed area)",
+            "(none — this NPC stands outdoors, not in a building)")
+
+
+def spawn_for_slot(place: Dict[str, Any], slot: Dict[str, Any],
+                   kind: str = "location") -> str:
     """POOL FIRST, pipeline second. Returns the NPC's name, or ''.
 
     The pool hit is what makes a recycled world cheap: a finished character
     sheet of the same role goes back on the map with no LLM turn at all. Only
     when the pool has nobody for this role does the three-stage pipeline run.
+
+    ``kind`` says what ``place`` is — a LOCATION (the default: room or circle
+    placement, ``npc_slot_location``) or a painted AREA (``npc_home`` of kind
+    ``area``, ``npc_slot_area``, no room at all). Everything that differs
+    between the two is decided right here, once, and handed on as ordinary
+    arguments; neither the pool return nor the generator learns a second rule.
     """
+    from app.core.npc_home import area_home
     from app.core.npc_ops import generate_npc_blocking
     from app.core.npc_pool import revive_from_pool, take_from_pool
 
-    location_id = str(location.get("id") or "")
     role = slot["role"]
-    room = slot.get("room") or ""
-    radius_m = int(slot.get("radius_m") or 0)
     ttl = slot_ttl_hours()
+    if kind == "area":
+        where = str(place.get("id") or "")
+        location_id, room, radius_m = "", "", 0
+        home = area_home(where)
+        briefing = _area_briefing(place, slot)
+        labels = _area_place_labels(place)
+    else:
+        where = location_id = str(place.get("id") or "")
+        room = slot.get("room") or ""
+        radius_m = int(slot.get("radius_m") or 0)
+        home = None
+        briefing = _slot_briefing(place, slot)
+        labels = None
 
     pooled = take_from_pool(role, template=slot.get("template") or "")
     if pooled and revive_from_pool(pooled, location_id, room, ttl_hours=ttl,
                                    slot_role=role,
                                    briefing=slot.get("briefing") or "",
-                                   radius_m=radius_m):
+                                   radius_m=radius_m, home=home):
         logger.info("Slot '%s' at %s filled from the pool: %s",
-                    role, location_id, pooled)
+                    role, where, pooled)
         return pooled
 
     result = generate_npc_blocking(
-        briefing=_slot_briefing(location, slot), location_id=location_id,
+        briefing=briefing, location_id=location_id,
         room_id=room, ttl_hours=ttl, template=slot.get("template") or "",
-        slot_role=role, created_by="npc_slot", radius_m=radius_m)
+        slot_role=role, created_by="npc_slot", radius_m=radius_m,
+        home=home, place_labels=labels)
     if not result.get("ok"):
-        logger.warning("Slot '%s' at %s not filled: %s", role, location_id,
+        logger.warning("Slot '%s' at %s not filled: %s", role, where,
                        result.get("error"))
         return ""
     logger.info("Slot '%s' at %s filled by the pipeline: %s", role,
-                location_id, result.get("character"))
+                where, result.get("character"))
     return str(result.get("character") or "")
 
 

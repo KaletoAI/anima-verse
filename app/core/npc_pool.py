@@ -219,7 +219,8 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
 def revive_from_pool(name: str, location_id: str, room_id: str = "",
                      ttl_hours: Optional[float] = None, slot_role: str = "",
                      briefing: str = "", wanderer: bool = False,
-                     wander_target: str = "", radius_m: float = 0) -> bool:
+                     wander_target: str = "", radius_m: float = 0,
+                     home: Optional[Dict[str, Any]] = None) -> bool:
     """Put a pooled NPC back into the world at a place. True on success.
 
     The same bookkeeping ``npc_ops.apply_npc`` stamps after a generated NPC —
@@ -228,9 +229,15 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     storage directory and rewriting every row keyed by its name, which is the
     opposite of the cheap re-use this path exists for (see the plan note).
 
-    ``radius_m`` is the slot's home area (spec § E3): above 0 the NPC is put
+    ``radius_m`` is the slot's home area (spec § E3.1): above 0 the NPC is put
     at a free point around the place instead of into ``room_id`` — see
     ``npc_home.place_npc``, the one helper all three placement paths share.
+
+    ``home`` is the OTHER home shape (§ E3.2): a ready ``npc_home`` dict, in
+    practice the painted area of an area slot. It comes with no location at
+    all, so the NPC's slot stamp is ``npc_slot_area`` and its
+    ``current_location`` is whatever the point turns out to lie in (usually
+    nothing).
     """
     from app.core.npc_ops import expiry_stamp
     from app.models.character import (get_character_profile, is_temporary_npc,
@@ -242,7 +249,13 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     profile = get_character_profile(name) or {}
     profile["expires_at"] = expiry_stamp(ttl_hours)
     profile["npc_slot_role"] = (slot_role or "").strip()
+    # BOTH slot stamps are written on every revive, one of them empty: a
+    # recycled sheet may carry yesterday's stamp of the OTHER kind (pooling
+    # keeps them, so `take_from_pool` can match on the role), and a stale
+    # `npc_slot_area` would keep counting towards a wood this NPC has left.
+    area_id = str((home or {}).get("area_id") or "").strip()
     profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
+    profile["npc_slot_area"] = area_id if slot_role else ""
     profile["npc_wanderer"] = bool(wanderer)
     # The road before the placement — the gate's job is what sends a
     # held-back wanderer off, so it must already know where to (see
@@ -276,7 +289,8 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     # would run the three-turn pipeline for an NPC that is already claimed.
     from app.core.npc_assets import gate_placement
     if gate_placement(name, location_id, room_id, wanderer=wanderer,
-                      wander_target=wander_target, radius_m=radius_m):
+                      wander_target=wander_target, radius_m=radius_m,
+                      home=home):
         logger.info("Pooled NPC '%s' claimed for %s (role %r) — placed once "
                     "its assets exist", name, location_id or "(nowhere)",
                     slot_role or "-")
@@ -285,13 +299,14 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     # Back into the roster BEFORE the placement: the location setter runs the
     # ordinary arrival side effects, and those read the roster.
     set_character_status(name, "")
-    if location_id:
+    if location_id or home:
         from app.core.npc_home import place_npc
-        if not place_npc(name, location_id, room_id, radius_m):
-            logger.warning("revive %s at %s failed", name, location_id)
+        if not place_npc(name, location_id, room_id, radius_m, home):
+            logger.warning("revive %s at %s failed", name,
+                           location_id or area_id)
             return False
     logger.info("Pooled NPC '%s' revived at %s (role %r)",
-                name, location_id or "(nowhere)", slot_role or "-")
+                name, location_id or area_id or "(nowhere)", slot_role or "-")
     return True
 
 
