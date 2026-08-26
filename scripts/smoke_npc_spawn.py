@@ -79,7 +79,48 @@ Sections:
       filled from the pool, the revived NPC stands at a point INSIDE the
       polygon, carries `npc_slot_area` (not `npc_slot_location`) and shows up
       in `held_roles_at_area`.
+
+  [8] A FAILED PLACEMENT ON THE POOL-RETURN PATH LEAVES NO GHOST.
+      `revive_from_pool` sets the row status to '' BEFORE it places, because
+      the location setter's arrival side effects read the roster. When the
+      placement then fails, "" means: living, positionless, slot-stamped —
+      counting against `npc.max_alive`, holding the slot through
+      `held_roles_at_area`, standing nowhere at all. And its caller reads
+      False as "the pool did not deliver" and runs the LLM pipeline for the
+      very same slot, so one failure buys a ghost AND a generation.
+      The failing placement is a home naming a painted area that does not
+      exist: `npc_home.random_point` has no polygon, so every draw answers
+      None and `place_npc` yields "" for real — nothing is stubbed.
+      Expected: `revive_from_pool` False, status back to POOLED_STATUS, the
+      NPC not in `list_temporary_npcs`, `held_roles_at_area` empty, and
+      `take_from_pool` hands the same sheet out again. Through
+      `spawn_for_slot` the whole pass then produces "" with the pipeline
+      called EXACTLY ONCE and still nobody holding the role.
+
+  [9] THE APPROACH CHECK DOES NOT RE-READ THE PAINTED WORLD. A position
+      report arrives up to four times a second per walker, and the area half
+      of `consider_point` used to read and JSON-parse every painted area on
+      each of them. Two ways out, both checked by COUNTING the calls to
+      `terrain.list_areas` (a monkeypatched counter, measured as a delta per
+      report because `save_area` reads the areas itself):
+
+        · a caller that already holds the areas hands them over
+          (`areas=`, which `routes/play.py` does on the wilderness branch)
+                                                            → 0 reads
+        · without them, the stamp-keyed cache of the slot-bearing areas
+          answers: first report 1 read, the next four 0
+        · editing an area moves `terrain.area_stamps()` → the next report
+          rebuilds (1 read), the one after it does not (0)
+        · `reset_cooldowns()` drops the cache too         → 1 read
+
+ [10] AN AUTHORED Infinity NEVER ESCAPES THE LOCATION SAVE. `json.loads`
+      accepts the literal `Infinity`, and `int(float("inf"))` raises
+      OverflowError — not ValueError — which `normalize_slots` would let
+      through into the location save, `missing_slots` and `location_gap`.
+      A slot with `count_min`, `count_max` and `radius_m` all Infinity comes
+      out as the plain fallbacks (1, 1, 0) with a warning, and nothing raises.
 """
+import json
 import os
 import sys
 import tempfile
@@ -122,6 +163,7 @@ config._CONFIG["npc"] = {
 }
 
 import app.core.npc_ops as npc_ops  # noqa: E402
+import app.core.npc_pool as npc_pool  # noqa: E402
 import app.core.npc_spawn as npc_spawn  # noqa: E402
 from app.core.npc_pool import list_pool, pool_npc, take_from_pool  # noqa: E402
 from app.models.character import (  # noqa: E402
@@ -520,6 +562,109 @@ check("so the area has no gap left",
       npc_spawn.fill_area_slots(HEATH).get("filled"), 0)
 check("an unknown area is skipped, not crashed",
       npc_spawn.fill_area_slots("ta_nothing").get("skipped"), "unknown area")
+
+# ---------------------------------------------------------------------------
+print("\n[8] A failed placement on the pool-return path leaves no ghost")
+# The home is a painted area that does not exist, so `npc_home.random_point`
+# has no polygon and answers None for every draw — the shortest way to a
+# placement that fails for real, without stubbing the placement itself.
+GHOST_AREA = "ta_nowhere"
+RANGER_SLOT = {"role": "ranger", "count_min": 1, "count_max": 1,
+               "briefing": "walks the lost wood"}
+make_npc("demo_ranger", role="ranger", location=TAVERN_ID)
+pool_npc("demo_ranger", reason="smoke")
+check("the pool holds a ranger", get_character_status("demo_ranger"),
+      POOLED_STATUS)
+
+check("reviving it into the vanished area fails",
+      npc_pool.revive_from_pool("demo_ranger", "", "", ttl_hours=12,
+                                slot_role="ranger",
+                                home={"kind": "area",
+                                      "area_id": GHOST_AREA}), False)
+check("…and the sheet is still POOLED, not a living positionless ghost",
+      (get_character_status("demo_ranger"),
+       "demo_ranger" in list_temporary_npcs()), (POOLED_STATUS, False))
+check("…so it holds no slot of that area",
+      npc_spawn.held_roles_at_area(GHOST_AREA), [])
+check("…and it is ordinary pool stock again",
+      take_from_pool("ranger"), "demo_ranger")
+
+# THE WHOLE PASS: the same failure through `spawn_for_slot`. The pool hit
+# fails, the pipeline runs ONCE, and no second NPC ends up holding the role.
+PIPELINE.clear()
+check("the slot is not filled",
+      npc_spawn.spawn_for_slot({"id": GHOST_AREA,
+                                "meta": {"label": "The Lost Wood"}},
+                               RANGER_SLOT, kind="area"), "")
+check("…the pipeline was asked exactly once", PIPELINE, ["ranger"])
+check("…and still nobody holds the ranger role",
+      npc_spawn.held_roles_at_area(GHOST_AREA), [])
+
+# ---------------------------------------------------------------------------
+print("\n[9] The approach check does not re-read the painted world")
+AREA_READS = []
+_real_list_areas = terrain.list_areas
+
+
+def _counting_list_areas():
+    AREA_READS.append(1)
+    return _real_list_areas()
+
+
+terrain.list_areas = _counting_list_areas
+
+
+def report(**kwargs) -> int:
+    """One position report, 11 game minutes after the last one (so the
+    per-area cooldown never masks a read). Returns the number of area reads
+    THIS report cost — measured as a delta, because `save_area` reads the
+    areas itself and its bookkeeping is not what is under test here.
+    """
+    before = len(AREA_READS)
+    set_game_time(game_time() + GameDuration.of(minutes=11))
+    npc_spawn.consider_point("demo", 1050.0, 50.0, locations=LOCS, **kwargs)
+    return len(AREA_READS) - before
+
+
+try:
+    HEATH_AREA = [a for a in _real_list_areas() if a["id"] == HEATH]
+    npc_spawn.reset_cooldowns()
+    SUBMITS.clear()
+    check("a caller that hands its areas over pays for no read",
+          (report(areas=HEATH_AREA), SUBMITS), (0, [(HEATH, "slot")]))
+
+    # Without them: ONE read, then the stamp-keyed cache answers.
+    check("the first report without them costs one read", report(), 1)
+    check("…and four further reports cost none",
+          [report() for _ in range(4)], [0, 0, 0, 0])
+
+    # An EDIT moves `area_stamps()`, so the very next report rebuilds.
+    terrain.save_area({"id": HEATH, "kind": "grass", "polygon": HEATH_POLY,
+                       "z_order": 0,
+                       "meta": {"label": "The Heath",
+                                "npc_slots": [
+                                    {"role": "guard", "count_min": 1,
+                                     "count_max": 1,
+                                     "briefing": "watches the heath"}]}})
+    check("an edited area invalidates the cache", report(), 1)
+    check("…once, not per report", report(), 0)
+
+    # …and so does the admin's manual sweep.
+    npc_spawn.reset_cooldowns()
+    check("reset_cooldowns clears it too", report(), 1)
+finally:
+    terrain.list_areas = _real_list_areas
+
+# ---------------------------------------------------------------------------
+print("\n[10] An authored Infinity never escapes the location save")
+INF_SLOT = json.loads('{"role": "ferryman", "count_min": Infinity, '
+                      '"count_max": Infinity, "radius_m": Infinity}')
+check("count_min is Infinity as JSON reads it",
+      INF_SLOT["count_min"] == float("inf"), True)
+NORMALIZED = npc_spawn.normalize_slots([INF_SLOT])
+check("normalize_slots survives it and falls back",
+      [(s["role"], s["count_min"], s["count_max"], s["radius_m"])
+       for s in NORMALIZED], [("ferryman", 1, 1, 0)])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

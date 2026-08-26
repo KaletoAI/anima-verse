@@ -240,7 +240,8 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     nothing).
     """
     from app.core.npc_ops import expiry_stamp
-    from app.models.character import (get_character_profile, is_temporary_npc,
+    from app.models.character import (POOLED_STATUS, get_character_profile,
+                                      is_temporary_npc,
                                       save_character_profile,
                                       set_character_status)
     if not name or not is_temporary_npc(name):
@@ -302,8 +303,16 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     if location_id or home:
         from app.core.npc_home import place_npc
         if not place_npc(name, location_id, room_id, radius_m, home):
-            logger.warning("revive %s at %s failed", name,
-                           location_id or area_id)
+            # BACK INTO THE POOL, exactly as ``npc_assets._place`` does it. On
+            # "" the sheet is LIVING and positionless: it counts against
+            # ``max_alive``, it holds its slot through the stamps written
+            # above, and it stands nowhere at all. The caller
+            # (``npc_spawn.spawn_for_slot``) reads False as "the pool did not
+            # deliver" and runs the generation pipeline for the same slot, so
+            # the ghost would come with an LLM bill attached.
+            set_character_status(name, POOLED_STATUS)
+            logger.warning("revive %s at %s failed — the sheet stays pooled",
+                           name, location_id or area_id)
             return False
     logger.info("Pooled NPC '%s' revived at %s (role %r)",
                 name, location_id or area_id or "(nowhere)", slot_role or "-")

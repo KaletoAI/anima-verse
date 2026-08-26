@@ -28,9 +28,10 @@ Y0002-D100T10:00, so "the current hour" is exactly 10 and the next one 11.
           config override (step 1, which wins over the template) flips the
           same temp NPC back to True.
 
-  (b) THE PROMPT CONSUMER. Both characters get the IDENTICAL schedule saved
-      through the model API (``save_character_daily_schedule``), enabled, two
-      slots:
+  (b) THE PROMPT CONSUMER. Both characters get the IDENTICAL schedule rows,
+      enabled, two slots — the full character through the model API, the temp
+      NPC through a direct row write (``force_schedule``), because the model
+      API refuses it since (c) and this section is about the READING side:
 
           {"hour": 10, "location": <Crossroads Inn id>, "role": "sweeping"}
           {"hour": 11, "sleep": True}
@@ -50,7 +51,18 @@ Y0002-D100T10:00, so "the current hour" is exactly 10 and the next one 11.
       saving the same fixture twice. With the config override on, the temp
       NPC renders the full character's block, character for character.
 
-  (c) THE WRITE SIDE. ``sync_daily_schedule`` persists a marker job per
+  (c) THE WRITE SIDE, and the gate sits in the MODEL FUNCTION —
+      ``save_character_daily_schedule`` itself, not in a route. That closes
+      every surface at once: the POST route (which used to persist the rows
+      before the refused sync), the DELETE asymmetry, and the ``schedule:``
+      rule condition that reads these rows (``activity_engine``). For a temp
+      NPC the call answers False and writes nothing — asked at the TABLE
+      (``SELECT COUNT(*) FROM daily_schedules``, 0 rows), because
+      ``get_character_daily_schedule`` reports a missing row as
+      ``{"enabled": False, "slots": []}`` and would hide the difference. For
+      a full character it answers True and leaves the rows exactly as before.
+
+      ``sync_daily_schedule`` persists a marker job per
       character (``daily_schedule_<name>``, source ``daily_schedule``) and
       answers 1 for an active schedule. For the temp NPC it answers 0 and
       writes NOTHING — asked at the consumer, i.e. the ``scheduler_jobs``
@@ -180,7 +192,29 @@ check("a full character keeps it (template omits the key)",
 # ---------------------------------------------------------------------------
 print("\n(b) the prompt consumer")
 
-save_character_daily_schedule(NPC, dict(SCHEDULE))
+
+def force_schedule(name, schedule):
+    """Write a schedule row PAST the gate — the fixture for (b).
+
+    Section (b) is about the READING side: both characters must carry the
+    identical rows so an empty block can only be the gate talking and never
+    missing data. Since the write side is gated (see (c)), the temp NPC's
+    fixture has to be written the way a pre-gate world's row got there.
+    """
+    import json as _json
+
+    from app.core.db import transaction
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO daily_schedules (character_name, enabled, slots, meta)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT(character_name) DO UPDATE SET"
+            " enabled=excluded.enabled, slots=excluded.slots,"
+            " meta=excluded.meta",
+            (name, 1 if schedule.get("enabled") else 0,
+             _json.dumps(schedule.get("slots", [])), _json.dumps(schedule)))
+
+
+force_schedule(NPC, dict(SCHEDULE))
 save_character_daily_schedule(FULL, dict(SCHEDULE))
 check("both characters really carry the same schedule rows",
       (get_character_daily_schedule(NPC)["slots"]
@@ -194,6 +228,23 @@ check("the temp NPC's block is empty despite the saved schedule",
 
 # ---------------------------------------------------------------------------
 print("\n(c) the daily-schedule write side")
+
+NPC2 = "Smoke Temp Two"
+save_character_profile(NPC2, {"character_name": NPC2,
+                             "template": "npc-temporary",
+                             "outfit_description": "a canvas smock",
+                             "standing_task": "carrying water"},
+                       create_new=True)
+check("the model function refuses to write for a temp NPC",
+      save_character_daily_schedule(NPC2, dict(SCHEDULE)), False)
+check("… and the table is untouched — no row at all, asked at the table",
+      db.get_connection().execute(
+          "SELECT COUNT(*) FROM daily_schedules WHERE character_name=?",
+          (NPC2,)).fetchone()[0], 0)
+check("… while the same call for a full character answers True",
+      save_character_daily_schedule(FULL, dict(SCHEDULE)), True)
+check("… and the full character's rows are unchanged",
+      get_character_daily_schedule(FULL)["slots"], SCHEDULE["slots"])
 
 MANAGER = SchedulerManager()
 try:

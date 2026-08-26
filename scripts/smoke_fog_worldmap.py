@@ -105,6 +105,21 @@ Hand-derived expectations:
                                    seven fields present)
           show_all, npc_trav    -> full block, nothing thinned
 
+  [6b] …and the exception is a TRIP BETWEEN PLACES, not any journey at all
+        npc_roam is location-less at (110, 0), 110 m from the avatar, on a
+        POINT journey — no `target`, a `target_point` instead
+        (`travel_engine.get_journey`, E3-0). That is what a roaming NPC of
+        spec-npc-heimat-zeitfenster § E3 walks inside its home area, and it
+        is walking most of the time; if any journey lifted the sight rule,
+        every circle/area NPC in the world would be visible across the whole
+        map. § A11 keeps a figure from blinking out mid-TRIP, and a wanderer
+        inside its own patch of wood is not that figure.
+          fogged, range  50 -> npc_roam gone, npc_trav (target C) still there
+          show_all          -> both there, nothing filtered
+          fogged, range 200 -> 110 <= 200, so npc_roam is back by the
+                               ordinary sight rule, like any figure in the
+                               open
+
   [7] no avatar (avatar None, show_all=False) — deliberately the LAST of the
       wilderness cases, because it is only worth anything WITH that seed in
       place: a logged-in user without an active character gets this view
@@ -318,6 +333,26 @@ def give_journey(name: str, target: str, start_x: float) -> None:
     save_character_profile(name, prof)
 
 
+def give_point_journey(name: str, start_x: float) -> None:
+    """A POINT journey — the kind a roaming NPC walks inside its home area.
+
+    No ``target`` (there is no location to go to) and therefore no
+    ``movement_target`` either: the goal is the free point in ``target_point``
+    (``travel_engine.get_journey``, E3-0). Same 4000 m first leg as
+    :func:`give_journey`, so it is still walking for the whole run.
+    """
+    prof = get_character_profile(name)
+    prof["journey"] = {
+        "target": "",
+        "target_point": {"x": start_x + 4000.0, "z": 4000.0},
+        "waypoints": [[start_x, 0.0, 0.0], [start_x + 4000.0, 0.0, 4000.0]],
+        "started_at_game": game_time().canonical(),
+        "speed_m_s": 1.0,
+        "entry_edge": "",
+    }
+    save_character_profile(name, prof)
+
+
 def main() -> int:
     print("\n[1] fogged view — the avatar knows only A")
     fog = build_worldmap_payload("demo_avatar", show_all=False)
@@ -412,6 +447,34 @@ def main() -> int:
     check("the admin view thins nothing",
           [f for f in THIN_FIELDS if atr.get(f) is None]
           + ([] if atr.get("waypoints") else ["waypoints"]), [])
+
+    print("\n[6b] the exception is a TRIP between places, not any journey")
+    # A roaming NPC (spec-npc-heimat-zeitfenster § E3) crosses its home area
+    # on POINT journeys and is therefore walking most of the time. If any
+    # journey lifted the sight rule, every circle/area NPC in the world would
+    # be permanently visible — § A11 is about a figure that would blink out
+    # mid-TRIP, not about a wanderer inside its own patch of wood.
+    put_in_the_open("npc_roam", 110.0, 0.0)
+    give_point_journey("npc_roam", 110.0)
+    sight_range(50.0)          # npc_roam is 110 m away — outside it
+    fog = build_worldmap_payload("demo_avatar", show_all=False)
+    check("its journey has no target — that is what makes it a point journey",
+          (get_character_profile("npc_roam")["journey"]["target"],
+           bool(get_character_profile("npc_roam")["journey"]["target_point"])),
+          ("", True))
+    check("110 m away, range 50 → the roamer is hidden",
+          "npc_roam" in names(fog), False)
+    check("…while the traveller to a LOCATION is still the exception",
+          "npc_trav" in names(fog), True)
+    check("…and the admin sees both",
+          ["npc_roam" in names(build_worldmap_payload("demo_avatar",
+                                                      show_all=True)),
+           "npc_trav" in names(build_worldmap_payload("demo_avatar",
+                                                      show_all=True))],
+          [True, True])
+    sight_range(200.0)         # now 110 m is within sight
+    check("in sight it is on the map like any other figure in the open",
+          "npc_roam" in names(build_worldmap_payload("demo_avatar")), True)
 
     print("\n[7] no avatar — that view knows nothing at all, traveller or not")
     sight_range(50.0)

@@ -9,7 +9,7 @@ Die gebaute Shell liegt (wie game-admin) unter ``static/game_admin/play.html``
 """
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -961,6 +961,10 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     _locs = list_locations()
     derived = location_at_point(x, z, _locs)
     derived_id = (derived.get("id") or "") if derived else ""
+    # The painted areas, IF this report reads them anyway (wilderness branch
+    # below). `consider_point` at the end of the report wants the same list,
+    # and None there means "use your own cache" — see `npc_spawn._slot_areas`.
+    _areas: Optional[List[Dict[str, Any]]] = None
 
     # TERRAIN — AND ONLY OUT IN THE WILDERNESS (decision 2026-08-13,
     # "footprint wins"). The location is derived FIRST on purpose: painted
@@ -1189,7 +1193,7 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # counting and every LLM turn happen in the queued job it submits. It
     # swallows its own errors: no walker is ever refused over an NPC.
     from app.core.npc_spawn import consider_point
-    consider_point(avatar, x, z, locations=_locs)
+    consider_point(avatar, x, z, locations=_locs, areas=_areas)
     # Walking is player-driven movement, and that is the clearest wake signal
     # there is — the same rule ``/play/enter-room`` and ``/play/travel`` apply
     # (a sleeping avatar must not walk a road in its sleep). It sits AFTER the

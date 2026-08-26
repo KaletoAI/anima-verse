@@ -247,6 +247,45 @@ criterion of spec-npc-heimat-zeitfenster § E0:
       old value the hook reads equals the new one and the ONE job in the queue
       is the gate's, never a second one from the hook.
 
+ [16] THE RE-RENDER JOB NEVER PLACES. [14]'s guard distinguishes living from
+      pooled and nothing else, and "pooled" is not one state: an NPC is
+      pooled by the finish gate, by `sweep_closed_windows` when its window
+      shuts, by the TTL sweep, by a wanderer arrival or by the admin's Pool
+      button. Only the FIRST of those is waiting for a placement. The repro,
+      step by step:
+
+        a living, complete NPC standing at the inn
+        → `give_outfit` queues the re-render job (payload `place: False`,
+          location = the inn)
+        → `pool_npc(reason="window closed")` takes it off the map
+        → the worker runs that job
+
+      Before the fix the job placed it: status '', standing at the inn,
+      `expires_at` gone, `npc_pooled_reason` gone — a night NPC back in
+      daylight, and for a circle/area NPC a positionless ghost counting
+      against `npc.max_alive`. Expected now, and each half is asserted
+      separately because they are two independent guards:
+
+        * THE FLAG. `submit_assets_job(..., place=False)` is what the hook
+          queues, so the ROW carries `place: False` while the gate's row
+          (V, from [15]) carries `place: True`. The handler still renders —
+          `ok: True`, `npc_assets_complete` empty under the NEW outfit text —
+          and reports `placed: False`; status stays 'pooled',
+          `current_location` stays "" and the sweep's reason is untouched, so
+          the sweep still owns this NPC.
+        * THE REASON. `_place` called DIRECTLY (what a job row written before
+          the flag existed would do) refuses the same NPC and leaves the
+          reason alone. Stamping the gate's own reason
+          (`GATE_REASON_PREFIX + "profile_image"`) onto the very same NPC and
+          calling the very same `_place` DOES place it — status '', at the
+          inn — and clears the reason. The pair is what proves the guard
+          reads the reason and nothing else.
+
+      Every fixture in this file that pools an NPC by hand therefore goes
+      through `pool_by_gate`, which writes the gate's reason with the status;
+      a bare `set_character_status(name, "pooled")` describes a state the
+      production code never produces.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_assets.py
 """
 import json
@@ -366,6 +405,23 @@ def retries_for(name: str):
     finally:
         conn.close()
     return [r[0] for r in rows]
+
+
+def pool_by_gate(name: str) -> None:
+    """Pool an NPC exactly the way :func:`gate_placement` pools one.
+
+    NOT just the row status: the gate also stamps ``npc_pooled_reason``, and
+    since section [16] that reason is what tells the gate's own hold-back
+    apart from every other route into the pool (the window sweep, the TTL, a
+    wanderer arrival, the admin's button) — only the former is an invitation
+    to place. A fixture that sets the bare status describes a state the
+    production code never produces.
+    """
+    profile = get_character_profile(name)
+    profile["npc_pooled_reason"] = na.GATE_REASON_PREFIX + ", ".join(
+        na.npc_assets_complete(name) or ["nothing"])
+    save_character_profile(name, profile)
+    set_character_status(name, "pooled")
 
 
 def finish_tasks_for(name: str) -> None:
@@ -651,7 +707,7 @@ E = make_npc("Yrsa", outfit="a patched brown cloak")
 give_profile_image(E)
 give_mesh(E)
 give_expression(E)
-set_character_status(E, "pooled")
+pool_by_gate(E)
 set_require_assets(True)
 res = na._handle_npc_assets({"name": E, "location_id": LOC_ID,
                              "room_id": TAPROOM})
@@ -697,7 +753,7 @@ check("and it is no longer waiting for anything",
 install_stubs()
 G = make_npc("Sunniva", outfit="a blue shawl")
 give_profile_image(G)
-set_character_status(G, "pooled")
+pool_by_gate(G)
 res = na._handle_npc_assets({"name": G, "location_id": LOC_ID})
 check("the existing face is not rendered again",
       (CALLS["image"], CALLS["tpose"], CALLS["mesh"], CALLS["expression"]),
@@ -708,7 +764,7 @@ check("placed", get_character_current_location(G), LOC_ID)
 print("[7] a missing outfit_description stops the handler cold")
 install_stubs()
 H = make_npc("Kettil")
-set_character_status(H, "pooled")
+pool_by_gate(H)
 res = na._handle_npc_assets({"name": H, "location_id": LOC_ID})
 check("not ok", res.get("ok"), False)
 check("and nothing was produced",
@@ -720,7 +776,7 @@ check("still pooled", get_character_status(H), "pooled")
 print("[8] an unfinished attempt raises into the queue retry")
 install_stubs(mesh_ok=False)
 I_ = make_npc("Ragna", outfit="a felted hat")
-set_character_status(I_, "pooled")
+pool_by_gate(I_)
 raises("the handler raises, carrying the mesh producer's own error",
        RuntimeError,
        lambda: na._handle_npc_assets({"name": I_, "location_id": LOC_ID}),
@@ -737,7 +793,7 @@ check("but the dead mesh did NOT take the NPC's only picture with it — "
 # and that string is the only thing that says why there is no portrait.
 install_stubs(image_ok=False)
 I2 = make_npc("Gunnhild", outfit="a felted hat")
-set_character_status(I2, "pooled")
+pool_by_gate(I2)
 raises("and the image service's error prose too", RuntimeError,
        lambda: na._handle_npc_assets({"name": I2, "location_id": LOC_ID}),
        contains="Fehler: kein Backend")
@@ -747,7 +803,7 @@ check("still pooled", get_character_status(I2), "pooled")
 # swallows everything and answers None, so the criterion has to name itself.
 install_stubs(expression_ok=False)
 I3 = make_npc("Steinunn", outfit="a felted hat")
-set_character_status(I3, "pooled")
+pool_by_gate(I3)
 raises("an expression that never appears names itself in the error",
        RuntimeError,
        lambda: na._handle_npc_assets({"name": I3, "location_id": LOC_ID}),
@@ -759,7 +815,7 @@ check("still nowhere", get_character_current_location(I3), "")
 print("[9] the wanderer leaves once its assets exist")
 install_stubs()
 J = make_npc("Vidar", outfit="a road-stained coat")
-set_character_status(J, "pooled")
+pool_by_gate(J)
 res = na._handle_npc_assets({"name": J, "location_id": LOC_ID,
                              "wanderer": True, "wander_target": LOC2_ID})
 check("ok", res.get("ok"), True)
@@ -771,14 +827,14 @@ _p = get_character_profile(L)
 _p["npc_wanderer"] = True
 _p["wander_target"] = LOC2_ID
 save_character_profile(L, _p)
-set_character_status(L, "pooled")
+pool_by_gate(L)
 na._handle_npc_assets({"name": L, "location_id": LOC_ID})
 check("a payload without a road sends nobody — the payload is the truth",
       SENT, [])
 
 install_stubs()
 K = make_npc("Gerd", outfit="an apron")
-set_character_status(K, "pooled")
+pool_by_gate(K)
 na._handle_npc_assets({"name": K, "location_id": LOC_ID})
 check("a non-wanderer is not sent anywhere", CALLS["send"], 0)
 
@@ -958,6 +1014,68 @@ apply_npc({"character_name": V, "character_appearance": "a tall drover",
           created_by="smoke_npc_assets")
 check("creating an NPC with an outfit still queues exactly ONE job — the "
       "gate's, and no second one from the hook", len(tasks_for(V)), 1)
+
+# ── [16] the re-render job never places ─────────────────────────────────────
+print("[16] a stale re-render job does not resurrect a pooled NPC")
+install_stubs()
+set_require_assets(False)
+
+# The re-render job carries `place: False` — that is what makes it a
+# different KIND of job from the gate's, and the flag is asserted on the
+# queued ROW, not on the call.
+W = make_npc("Halldora", outfit="a russet kirtle", location_id=LOC_ID)
+give_profile_image(W)
+give_mesh(W)
+give_expression(W)
+check("it is living, complete and standing at the inn",
+      (get_character_status(W), get_character_current_location(W),
+       na.npc_assets_complete(W)), ("", LOC_ID, []))
+give_outfit(W, "a night-black shawl")
+check("the wardrobe edit queued one job", len(tasks_for(W)), 1)
+JOB = tasks_for(W)[0]
+check("…and it says place: False", JOB.get("place"), False)
+check("while the GATE's job says place: True",
+      tasks_for(V)[0].get("place"), True)
+
+# THE RACE. Between the edit and the worker picking the job up, the window
+# sweep pools this NPC — a night NPC whose window just closed. Its payload
+# still names the inn, its expires_at is gone and the reason is the sweep's.
+pool_npc(W, reason="window closed")
+check("pooled by the sweep, not by the gate",
+      (get_character_status(W),
+       get_character_profile(W).get("npc_pooled_reason")),
+      ("pooled", "window closed"))
+RES = na._handle_npc_assets(JOB)
+check("the job still renders the new wardrobe",
+      (RES.get("ok"), na.npc_assets_complete(W)), (True, []))
+check("…and places nobody: the NPC stays pooled, out of the world",
+      (RES.get("placed"), get_character_status(W),
+       get_character_current_location(W)), (False, "pooled", ""))
+check("…with the sweep's reason untouched, so the sweep still owns it",
+      get_character_profile(W).get("npc_pooled_reason"), "window closed")
+
+# THE SECOND GUARD, on its own: even a payload that DOES say place is refused
+# for an NPC the gate did not pool. `_place` is called directly here, which is
+# what a job row written before the flag existed would do.
+na._place(W, LOC_ID, TAPROOM)
+check("_place refuses an NPC pooled for another reason",
+      (get_character_status(W), get_character_current_location(W)),
+      ("pooled", ""))
+check("…and left the reason alone",
+      get_character_profile(W).get("npc_pooled_reason"), "window closed")
+
+# …while the gate's own reason IS the invitation to place. Same NPC, same
+# call, only the reason differs — so this pair proves the guard reads the
+# reason and nothing else.
+_prof = get_character_profile(W)
+_prof["npc_pooled_reason"] = na.GATE_REASON_PREFIX + "profile_image"
+save_character_profile(W, _prof)
+na._place(W, LOC_ID, TAPROOM)
+check("_place puts a gate-pooled NPC into the world",
+      (get_character_status(W), get_character_current_location(W)),
+      ("", LOC_ID))
+check("…and clears the reason once it really stands there",
+      get_character_profile(W).get("npc_pooled_reason"), None)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

@@ -60,10 +60,17 @@ KIND_AREA = "area"
 #: How many points a draw tries before it gives up. A circle is sampled
 #: uniformly, so 40 rejections mean the walkable share is well under a
 #: percent — for the caller that is "nowhere to go right now", and the
-#: placement falls back to the room. A polygon is sampled in its BOUNDING
-#: BOX, so the same number buys less on a very thin shape — an acceptable
-#: price for one rule instead of a triangulation.
+#: placement falls back to the room.
 DEFAULT_ATTEMPTS = 40
+
+#: A polygon is sampled in its BOUNDING BOX, so a share of every draw is
+#: thrown away before any rule is even asked — a river strip covering 5 % of
+#: its box wastes 19 draws out of 20, and 40 attempts then fail outright about
+#: one time in eight. The budget is therefore scaled by box area ÷ polygon
+#: area, so a polygon gets the same number of IN-SHAPE candidates a circle
+#: gets, and capped here: a degenerate outline must not turn one placement
+#: into thousands of terrain reads.
+MAX_AREA_ATTEMPTS = 400
 
 #: The shortest walk the roaming tick will start, in metres. Without it a
 #: draw may land next to the NPC's own feet, and the journey would be one
@@ -254,6 +261,10 @@ def random_point(home: Optional[Home], *, rng: Any = None,
     The caller decides what that means: the placement falls back to the room,
     the action tick simply writes the activity and skips the walk.
 
+    ``attempts`` is the budget for a CIRCLE. A polygon is sampled in its
+    bounding box, so its budget is scaled by box ÷ shape and capped at
+    :data:`MAX_AREA_ATTEMPTS` — see there.
+
     The painted areas, the terrain catalog and the placed locations are read
     ONCE for the whole draw, not once per attempt.
     """
@@ -279,6 +290,7 @@ def random_point(home: Optional[Home], *, rng: Any = None,
               if kind == KIND_CIRCLE else "")
 
     if kind == KIND_AREA:
+        from app.core.world_geometry import polygon_area
         polygon = _polygon_of(home, areas)
         bounds = polygon_bounds(polygon) if polygon else None
         if bounds is None:
@@ -286,6 +298,14 @@ def random_point(home: Optional[Home], *, rng: Any = None,
                          home.get("area_id"))
             return None
         min_x, min_z, max_x, max_z = bounds
+        # THE BUDGET FOLLOWS THE SHAPE (see :data:`MAX_AREA_ATTEMPTS`): what
+        # the box wastes is bought back, so a thin strip gets as many
+        # candidates INSIDE the polygon as a circle gets inside its disc.
+        box = (max_x - min_x) * (max_z - min_z)
+        shape = polygon_area(polygon)
+        if shape > 0 and box > shape:
+            attempts = min(MAX_AREA_ATTEMPTS,
+                           int(math.ceil(attempts * box / shape)))
 
         def _draw() -> Optional[Tuple[float, float]]:
             # The BOUNDING BOX, filtered by ``point_in_polygon`` below — the

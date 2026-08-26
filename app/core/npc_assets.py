@@ -50,6 +50,12 @@ CRITERIA = ("profile_image", "model3d", "outfit_description", "expression")
 #: the only thing that ever places the NPC — see :func:`submit_assets_job`.
 ASSET_RETRIES = 2
 
+#: How every ``npc_pooled_reason`` THIS gate writes begins. It is what tells
+#: "pooled because its assets are still rendering" apart from every other way
+#: an NPC ends up in the pool (the window sweep, the TTL, a wanderer arrival,
+#: the admin's Pool button) — and :func:`_place` places only the former.
+GATE_REASON_PREFIX = "waiting for "
+
 
 def require_assets() -> bool:
     """Whether the gate is armed (config ``npc.require_assets``, default on)."""
@@ -138,7 +144,8 @@ def list_awaiting_assets() -> List[str]:
 def submit_assets_job(name: str, location_id: str, room_id: str = "",
                       wanderer: bool = False, wander_target: str = "",
                       radius_m: float = 0,
-                      home: Optional[Dict[str, Any]] = None) -> str:
+                      home: Optional[Dict[str, Any]] = None,
+                      place: bool = True) -> str:
     """Queue the finishing job for one NPC. Returns the task id ("" = deduped).
 
     Deduplicated per character: a second placement attempt for an NPC that is
@@ -150,6 +157,15 @@ def submit_assets_job(name: str, location_id: str, room_id: str = "",
     somewhere around the place or into a painted area is the SLOT's decision,
     made before the gate ran. ``home`` is a plain dict, so it survives the
     JSON round trip through the queue as it is.
+
+    ``place`` is what tells the two KINDS of this job apart. The gate's job
+    (True) is the only thing that will ever put its NPC on the map. The
+    RE-RENDER job of :func:`on_outfit_description_changed` (False) renders new
+    assets for an NPC that is already standing somewhere — it must never place
+    anybody, because between the edit and the worker picking the job up the
+    NPC may have been pooled by the window sweep, by the TTL or by a wanderer
+    arrival, and placing it would resurrect it at the edit-time location, with
+    the edit-time TTL and no home.
 
     ``max_retries`` is set EXPLICITLY, because the queue's own default is 0
     (``task_queue.MAX_RETRIES_DEFAULT``) and this job is the only thing that
@@ -163,7 +179,8 @@ def submit_assets_job(name: str, location_id: str, room_id: str = "",
         TASK_TYPE,
         {"name": name, "location_id": location_id, "room_id": room_id,
          "wanderer": bool(wanderer), "wander_target": wander_target or "",
-         "radius_m": float(radius_m or 0), "home": home or None},
+         "radius_m": float(radius_m or 0), "home": home or None,
+         "place": bool(place)},
         queue_name="background", agent_name=name, max_retries=ASSET_RETRIES,
         deduplicate=True)
 
@@ -197,8 +214,15 @@ def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str
 
     The NPC is deliberately NOT pooled: it keeps standing where it stands and
     wears the old mesh (``find_model3d_serving`` falls back to the nearest
-    outfit) until the new assets exist. That is what ``_place``'s pooled guard
-    is for. The orphans under the old signature are ``outfit_cache_gc``'s.
+    outfit) until the new assets exist. The orphans under the old signature
+    are ``outfit_cache_gc``'s.
+
+    THE JOB IS QUEUED WITH ``place=False``. It renders, it does not place —
+    and the location/room in its payload are only what the NPC's whereabouts
+    were when the edit happened. By the time a worker picks the job up the
+    window sweep, the TTL or a wanderer arrival may have pooled this NPC, and
+    a placement would resurrect it: back in daylight, back at the edit-time
+    location, with the pooling's TTL gone.
     """
     if not name:
         return None
@@ -216,7 +240,8 @@ def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str
                      "job", name)
         return None
     task_id = submit_assets_job(name, get_character_current_location(name) or "",
-                                get_character_current_room(name) or "")
+                                get_character_current_room(name) or "",
+                                place=False)
     logger.info("NPC '%s' was re-dressed — assets re-queued (job %s)", name,
                 task_id or "(already queued)")
     return task_id or None
@@ -245,7 +270,7 @@ def gate_placement(name: str, location_id: str, room_id: str = "",
     # The Game-Admin pool list renders this reason — without it a held-back
     # NPC would sit in the pool as a blank row nobody can explain.
     profile = get_character_profile(name) or {}
-    profile["npc_pooled_reason"] = "waiting for " + ", ".join(missing)
+    profile["npc_pooled_reason"] = GATE_REASON_PREFIX + ", ".join(missing)
     save_character_profile(name, profile)
     set_character_status(name, POOLED_STATUS)
     task_id = submit_assets_job(name, location_id, room_id, wanderer,
@@ -393,10 +418,21 @@ def _place(name: str, location_id: str, room_id: str,
     Back into the roster BEFORE the placement: the location setter runs the
     ordinary arrival side effects, and those read the roster.
 
-    A NO-OP for an NPC that is not pooled. The job is re-queued whenever a
-    temporary NPC's outfit text is edited, and that NPC is standing in the
-    world at the time — placing it again would drag it back to wherever the
-    ORIGINAL job was headed, hours of world time later.
+    TWO GUARDS, and they answer different questions.
+
+    * NOT POOLED — a no-op. The NPC is already standing in the world, and
+      placing it again would drag it back to wherever the payload was headed,
+      hours of world time later.
+    * POOLED BY SOMEBODY ELSE — also a no-op. "Pooled" alone does not mean
+      "waiting for this job": between the payload being written and a worker
+      picking it up, the window sweep, the TTL or a wanderer arrival may have
+      pooled this NPC for reasons of their own, and placing it would resurrect
+      a night NPC in daylight or an expired one immortal. Only the reason THIS
+      gate writes (:data:`GATE_REASON_PREFIX`) is an invitation to place.
+
+    The reason is popped only AFTER a successful placement, so a failed
+    attempt leaves the sheet exactly as the gate pooled it and the queue's
+    retry re-enters this path through the same guard.
 
     ``radius_m`` and ``home`` are the slot's home area, carried in the
     payload: the same helper decides room-or-point for all three placement
@@ -420,8 +456,11 @@ def _place(name: str, location_id: str, room_id: str,
                      name)
         return
     profile = get_character_profile(name) or {}
-    if profile.pop("npc_pooled_reason", None) is not None:
-        save_character_profile(name, profile)   # it is not waiting any more
+    reason = str(profile.get("npc_pooled_reason") or "")
+    if not reason.startswith(GATE_REASON_PREFIX):
+        logger.info("npc_assets(%s): pooled for another reason (%r) — this "
+                    "job does not place it", name, reason)
+        return
     set_character_status(name, "")
     where = location_id or str((home or {}).get("area_id") or "")
     if (location_id or home) and not place_npc(name, location_id, room_id,
@@ -431,10 +470,16 @@ def _place(name: str, location_id: str, room_id: str,
             f"NPC '{name}' could not be placed at {where}"
             f"{f'/{room_id}' if room_id else ''} — see the npc_home warning "
             f"for what failed")
+    # …and only now is it not waiting any more. Re-read, because `place_npc`
+    # writes the profile itself (the home stamp and the position).
+    profile = get_character_profile(name) or {}
+    if profile.pop("npc_pooled_reason", None) is not None:
+        save_character_profile(name, profile)
 
 
 def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Produce the missing assets of one NPC, then place it.
+    """Produce the missing assets of one NPC, and place it when it is the
+    GATE's job (``place``; see :func:`submit_assets_job`).
 
     Runs in a task-queue worker: blocking image/mesh generation belongs here,
     and an exception is the queue's own retry signal.
@@ -447,6 +492,10 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     location_id = str(payload.get("location_id") or "")
     room_id = str(payload.get("room_id") or "")
+    # Missing = an old row still in the queue when this deploy went live, and
+    # those are all gate jobs — the re-render job is the only one that says
+    # False, and it says it explicitly.
+    place = bool(payload.get("place", True))
     profile = get_character_profile(name) or {}
     wanderer = bool(payload.get("wanderer") or profile.get("npc_wanderer"))
     # The PAYLOAD carries the road. Both placement paths stamp the route onto
@@ -511,15 +560,20 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"NPC '{name}' still incomplete after the attempt: "
             f"{', '.join(still_missing)}{detail}")
 
-    _place(name, location_id, room_id, radius_m, home)
     sent = False
-    if wanderer and wander_target:
-        from app.core.npc_spawn import _send_wanderer
-        sent = _send_wanderer(name, wander_target)
-    logger.info("NPC '%s' finished and placed at %s%s", name,
-                location_id or "(nowhere)", " (walking)" if sent else "")
+    if place:
+        _place(name, location_id, room_id, radius_m, home)
+        if wanderer and wander_target:
+            from app.core.npc_spawn import _send_wanderer
+            sent = _send_wanderer(name, wander_target)
+        logger.info("NPC '%s' finished and placed at %s%s", name,
+                    location_id or "(nowhere)", " (walking)" if sent else "")
+    else:
+        logger.info("NPC '%s' re-rendered after a wardrobe edit — the job "
+                    "places nobody", name)
     return {"ok": True, "name": name, "location_id": location_id,
-            "room_id": room_id, "produced": missing, "walking": sent}
+            "room_id": room_id, "produced": missing, "walking": sent,
+            "placed": place}
 
 
 def register_npc_assets_handler() -> None:

@@ -96,13 +96,26 @@ types.json``): grass is passable, deep_water is not.
       ``radius_m=0`` is the old behaviour unchanged: location + room are
       written, and NO ``npc_home`` is stamped.
 
+  (b3) THE GAME-ADMIN ROW SAYS WHERE A ROAMING NPC LIVES. A circle or area
+      NPC stands out in the open, so ``npc_summary``'s ``location_id``,
+      ``location_name`` and ``room_id`` are all "" — without the home the row
+      would say nothing at all about where that NPC is. ``home`` is
+      ``npc_home.describe``: "within 20 m of Forest Clearing" for the circle,
+      the painted LABEL ("Hunting Ground", checked in (k)) for an area, and
+      "" for an NPC placed into a room. ``slot_area`` rides beside it — the
+      painted area whose slot the NPC holds, "" for a location slot — so the
+      list can tell the two wordings apart.
+
   (b2) A FAILED PLACEMENT IS NOT A FINISHED JOB. ``npc_home.place_npc``
       answers "" instead of raising (its other two callers turn that into
       their own False), but for the assets job the placement IS the job and
       nothing else will ever place this NPC. So ``_place`` raises on "",
       after putting the status back to POOLED — the NPC waits in the pool
       exactly as it did before the attempt, the queue retries, and the panel
-      shows the reason. Proven with a ``set_character_pos`` that throws.
+      shows the reason. Proven with a ``set_character_pos`` that throws — on
+      an NPC carrying the GATE's own ``npc_pooled_reason``, because since the
+      resurrection fix ``_place`` places only what the gate pooled (see
+      ``scripts/smoke_npc_assets.py`` [16]).
 
   (c) POOLING FORGETS THE HOME. ``pool_npc`` pops ``npc_home`` with the
       other slot stamps — a recycled sheet must not carry yesterday's forest
@@ -124,10 +137,16 @@ types.json``): grass is passable, deep_water is not.
       journey guard, proven with the cooldown stamp REMOVED so the journey
       is the only possible reason.
 
-  (e) A PARTY FOLLOWER DOES NOT ROAM. A follower is dragged along by its
-      leader and loses its own travel; the party engine cancels a follower's
-      journey at the join. So a roaming NPC that is a follower is no
-      candidate, while its leader — same place, same kind of home — is.
+  (e) NOBODY IN A PARTY ROAMS — NEITHER HALF. A FOLLOWER is dragged along by
+      its leader and loses its own travel; the party engine cancels a
+      follower's journey at the join, so a roaming turn could only produce a
+      journey somebody else deletes. A LEADER is the other half of the same
+      problem: followers are dragged along by a LOCATION change only, and a
+      roaming journey to a free point inside the home area moves the leader
+      and nobody else — the party would be stranded where it set out from.
+      The same two NPCs are candidates before the party is formed and again
+      after it is left, so what the check measures is the party and not their
+      cooldown, their journey or their home.
 
   (f) NOTHING ELSE CHANGED. An NPC with neither a location nor a home still
       yields ``prompt_vars`` == {} (there is nothing to ask it), and the
@@ -172,6 +191,22 @@ anything:
           ``contains`` says False — a deleted area must not place anybody.
       ``describe`` is the area's LABEL, which is what the roaming prompt
       renders ("it roams Hunting Ground").
+
+      THE BUDGET FOLLOWS THE SHAPE. Rejection sampling in the BOUNDING BOX
+      throws every draw outside the polygon away before a rule is even asked,
+      so a flat attempt count buys less the thinner the shape. The Long Ride
+      is the case: a 5 m wide parallelogram running diagonally from
+      (600, 600) to (700, 700), on nothing but grass.
+        bounding box   x 600…705 × z 600…700     = 105 × 100 = 10500 m²
+        shoelace area  base (5,0) × side (100,100)         =   500 m²
+        in-box hit rate                            500/10500 = 4.7619 %
+      With a flat 40 attempts a draw gives up with probability
+      (1 − 0.047619)^40 = 0.142 — one placement in seven fails on ground that
+      is entirely walkable, which on the pool-return path used to cost a
+      living ghost and an LLM generation. Scaled by box ÷ shape = 21 the
+      budget is 840, capped at ``MAX_AREA_ATTEMPTS`` = 400, and the failure
+      probability becomes 0.952381^400 = 3.3e-9. Checked as 200 draws per
+      seed on three seeds: not one None, and every point inside the strip.
 
   (i) THE SLOTS ARE AREA DATA, normalized by the very sanitizer every write
       goes through (``terrain.sanitize_area``):
@@ -238,7 +273,7 @@ from app.core import embedding, npc_actions, npc_home, npc_spawn  # noqa: E402
 from app.core import npc_assets as na  # noqa: E402
 from app.core.npc_ops import apply_npc  # noqa: E402
 from app.core.npc_pool import pool_npc, revive_from_pool  # noqa: E402
-from app.core.party_engine import add_to_party  # noqa: E402
+from app.core.party_engine import add_to_party, leave_party  # noqa: E402
 from app.core.prompt_templates import render_task  # noqa: E402
 from app.core.terrain_query import passability_at  # noqa: E402
 from app.core.world_geometry import boundary_contains, location_at_point  # noqa: E402
@@ -250,7 +285,8 @@ from app.models.character import (POOLED_STATUS,  # noqa: E402
                                   get_character_profile,
                                   get_character_status,
                                   get_effective_activity,
-                                  list_temporary_npcs)
+                                  list_temporary_npcs,
+                                  save_character_profile)
 from app.models.world import (_load_world_data, _save_world_data,  # noqa: E402
                               add_location, list_locations,
                               update_location_position)
@@ -560,9 +596,33 @@ check("room", get_character_current_room(B4), "millroom")
 check("and NO home was stamped",
       (get_character_profile(B4) or {}).get("npc_home"), None)
 
+# ── (b3) the Game-Admin row says where a roaming NPC lives ──────────────────
+print("(b3) npc_summary carries the home area")
+from app.core.npc_ops import npc_summary  # noqa: E402
+_row_b3 = npc_summary(B3)                 # Frida, the Clearing's 20 m circle
+check("a roaming NPC has no location, no name and no room to show",
+      (_row_b3["location_id"], _row_b3["location_name"], _row_b3["room_id"]),
+      ("", "", ""))
+check("…so the row carries its home instead", _row_b3["home"],
+      "within 20 m of Forest Clearing")
+check("…and the area stamp, empty for a location slot",
+      _row_b3["slot_area"], "")
+_row_b4 = npc_summary(B4)                 # Gerlind, plain room placement
+check("a room NPC shows its place and no home",
+      (_row_b4["location_id"], _row_b4["room_id"], _row_b4["home"]),
+      (MILL, "millroom", ""))
+
 # ── (b2) a failed placement fails the JOB ───────────────────────────────────
 print("(b2) a placement that cannot be written fails the assets job")
 B5 = pooled_npc("Radegund")
+# THE JOB PLACES ONLY WHAT THE GATE POOLED. `pooled_npc` uses the ordinary
+# `pool_npc`, whose reason is not the gate's — and since the resurrection fix
+# (smoke_npc_assets [16]) `_place` refuses those, because "pooled" alone does
+# not mean "waiting for this job". Stamping the gate's own reason is what
+# `gate_placement` does for a real held-back NPC.
+_b5 = get_character_profile(B5) or {}
+_b5["npc_pooled_reason"] = na.GATE_REASON_PREFIX + "profile_image"
+save_character_profile(B5, _b5)
 _real_set_pos = character_model.set_character_pos
 _real_complete = na.npc_assets_complete
 
@@ -633,8 +693,8 @@ print("(d) the journey guard keeps the next tick away")
 isolate(D)                   # cooldown removed — the journey is the only bar
 check("not a candidate while walking", D in npc_actions.candidates(), False)
 
-# ── (e) a party follower does not roam ──────────────────────────────────────
-print("(e) a follower is dragged along, so it is no roaming candidate")
+# ── (e) nobody in a party roams ─────────────────────────────────────────────
+print("(e) neither half of a party is a roaming candidate")
 E_LEAD = pooled_npc("Ortrun")
 revive_from_pool(E_LEAD, HALL, "nave", ttl_hours=1, slot_role="guard",
                  radius_m=5)
@@ -644,11 +704,23 @@ revive_from_pool(E_FOLLOW, HALL, "nave", ttl_hours=1, slot_role="guard",
 check("both stand in the hall",
       (get_character_current_location(E_LEAD),
        get_character_current_location(E_FOLLOW)), (HALL, HALL))
+isolate(E_LEAD, E_FOLLOW)
+check("both roam while there is no party",
+      (E_LEAD in npc_actions.candidates(),
+       E_FOLLOW in npc_actions.candidates()), (True, True))
 check_true("the party formed", add_to_party(E_LEAD, E_FOLLOW) is not None)
 isolate(E_LEAD, E_FOLLOW)
 cands = npc_actions.candidates()
-check("the leader acts", E_LEAD in cands, True)
-check("the follower does not", E_FOLLOW in cands, False)
+check("the follower does not roam — the leader's move carries it",
+      E_FOLLOW in cands, False)
+check("and neither does the LEADER: a roaming journey to a free point moves "
+      "nobody but itself, and would strand its followers", E_LEAD in cands,
+      False)
+leave_party(E_LEAD)
+isolate(E_LEAD, E_FOLLOW)
+check("once the party is gone both roam again",
+      (E_LEAD in npc_actions.candidates(),
+       E_FOLLOW in npc_actions.candidates()), (True, True))
 
 # ── (f) nothing else changed ────────────────────────────────────────────────
 print("(f) an NPC with neither a location nor a home is not asked at all")
@@ -753,6 +825,38 @@ check("and location_at_point answers nothing for all of them",
       sum(1 for x, z in _yard_good
           if location_at_point(x, z, list_locations())), 0)
 
+print("(h) a thin diagonal strip is sampled until it delivers")
+# THE BUDGET FOLLOWS THE SHAPE. A polygon is sampled in its BOUNDING BOX, so
+# a diagonal strip throws most draws away before any rule is asked. This one
+# is a parallelogram, 5 m wide, running from (600,600) to (700,700):
+#   bounding box   x 600…705 × z 600…700          = 105 × 100 = 10500 m²
+#   shoelace area  base (5,0) × side (100,100)    = 500 m²
+#   in-box hit rate                                 500/10500 = 4.7619 %
+# With a flat 40 attempts a draw fails outright with probability
+#   (1 − 0.047619)^40 = 0.14 — one placement in seven, on ground that is
+# entirely walkable. Scaled by box ÷ shape = 21 the budget would be 840,
+# capped at MAX_AREA_ATTEMPTS = 400, and the failure probability is
+#   0.952381^400 = 3.3e-9 — never, in 600 draws.
+STRIP_POLY = [[600, 600], [605, 600], [705, 700], [700, 700]]
+STRIP = terrain.save_area({"kind": "grass", "polygon": STRIP_POLY,
+                           "z_order": 0,
+                           "meta": {"label": "The Long Ride"}})["id"]
+STRIP_HOME = npc_home.area_home(STRIP)
+from app.core.world_geometry import polygon_area, polygon_bounds  # noqa: E402
+_b = polygon_bounds(STRIP_POLY)
+check("the box is 105 × 100 m",
+      ((_b[2] - _b[0]) * (_b[3] - _b[1])), 10500.0)
+check("the strip itself is 500 m²", polygon_area(STRIP_POLY), 500.0)
+for seed in (5, 23, 909):
+    rng = random.Random(seed)
+    strip = [npc_home.random_point(STRIP_HOME, rng=rng) for _ in range(200)]
+    check(f"seed {seed}: no draw gave up on the 4.8 % strip",
+          sum(p is None for p in strip), 0)
+    check(f"seed {seed}: … and every point really is in it",
+          sum(1 for p in strip
+              if p is not None
+              and not point_in_polygon(p[0], p[1], STRIP_POLY)), 0)
+
 print("(h) an area that is all water, and an area that is not there")
 check("the drowned reach", npc_home.random_point(npc_home.area_home(DROWNED)),
       None)
@@ -855,6 +959,10 @@ check("held_roles_at_area sees it", npc_spawn.held_roles_at_area(HUNT),
 check("the location count does not", npc_spawn.held_roles_at(MILL), ["miller"])
 check("the roaming prompt names the area",
       npc_actions.prompt_vars(K).get("home"), "Hunting Ground")
+_row_k = npc_summary(K)
+check("and so does the Game-Admin row, with the area stamp beside it",
+      (_row_k["home"], _row_k["slot_area"], _row_k["location_id"]),
+      ("Hunting Ground", HUNT, ""))
 
 # ── (l) the window sweep resolves area slots ────────────────────────────────
 print("(l) sweep_closed_windows pools an area NPC when its window shuts")

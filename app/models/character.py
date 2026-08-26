@@ -3657,8 +3657,35 @@ def get_character_daily_schedule(character_name: str) -> Dict[str, Any]:
     return schedule
 
 
-def save_character_daily_schedule(character_name: str, schedule: Dict[str, Any]):
-    """Speichert den Tagesablauf fuer einen Character in die DB."""
+def save_character_daily_schedule(character_name: str,
+                                  schedule: Dict[str, Any]) -> bool:
+    """Store one character's daily schedule. False = refused, nothing written.
+
+    THE ``activity_home_enabled`` FEATURE GATE LIVES HERE, not in the route
+    (spec-npc-heimat-zeitfenster § E2). A temporary NPC gets its timing from
+    its slot's window and its whereabouts from its home area; a per-character
+    daily schedule is a second, contradicting source of both. Gating the ONE
+    write function closes every surface at once — the POST route, the DELETE
+    asymmetry, and the ``schedule:`` rule condition that reads these rows
+    (``activity_engine``) — instead of one guard per caller.
+
+    Fail-open, like every other feature gate: an unreadable template or config
+    leaves the schedule writable, because the alternative is a character whose
+    daily plan silently stops being saved.
+    """
+    try:
+        from app.models.character_template import is_feature_enabled
+        allowed = is_feature_enabled(character_name, "activity_home_enabled")
+    except Exception as e:  # noqa: BLE001
+        get_logger("character").debug(
+            "activity_home_enabled check failed for %s: %s — writing anyway",
+            character_name, e)
+        allowed = True
+    if not allowed:
+        get_logger("character").info(
+            "daily schedule for '%s' refused — its template switches "
+            "'activity_home_enabled' off", character_name)
+        return False
     now = utc_now_iso()
     schedule["last_updated"] = now
     try:
@@ -3677,7 +3704,11 @@ def save_character_daily_schedule(character_name: str, schedule: Dict[str, Any])
                 json.dumps(schedule, ensure_ascii=False),
             ))
     except Exception as e:
-        get_logger("character").error("save_character_daily_schedule DB-Fehler fuer %s: %s", character_name, e)
+        get_logger("character").error(
+            "save_character_daily_schedule DB error for %s: %s",
+            character_name, e)
+        return False
+    return True
 
 
 OFFMAP_SLEEP_SENTINEL = "__offmap__"

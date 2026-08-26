@@ -148,17 +148,22 @@ def _in_chat(name: str) -> bool:
         return False
 
 
-def _is_follower(name: str) -> bool:
-    """True while this NPC is a party FOLLOWER — dragged along, not walking.
+def _in_party(name: str) -> bool:
+    """True while a party makes this NPC's roaming turn a bad idea — EITHER role.
 
-    A follower has lost SetLocation and Move, and the party engine cancels its
+    A FOLLOWER has lost SetLocation and Move, and the party engine cancels its
     journey at the join: the leader's move is what carries it. So a roaming
     turn for a follower can only produce a journey somebody else deletes —
     and, until it is deleted, one walking away from the party it just joined.
+
+    A LEADER is the other half of the same problem. Followers are dragged
+    along by a LOCATION change only; a roaming journey to a free point inside
+    the home area moves the leader and nobody else, so the party would be
+    stranded at the place it set out from while its leader wanders the wood.
     """
     try:
-        from app.core.party_engine import is_party_follower
-        return is_party_follower(name)
+        from app.core.party_engine import is_party_follower, is_party_leader
+        return is_party_follower(name) or is_party_leader(name)
     except Exception as e:  # noqa: BLE001 — a broken party row is not a bar
         logger.debug("party check for %s failed: %s", name, e)
         return False
@@ -210,7 +215,7 @@ def candidates() -> List[str]:
                 # (`npc_spawn._settle_wanderer`: "still walking = nothing to
                 # do"); arriving makes it a candidate again.
                 continue
-            if home and _is_follower(name):
+            if home and _in_party(name):
                 continue
             if _is_busy(name, profile):
                 continue

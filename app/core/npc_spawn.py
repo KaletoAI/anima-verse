@@ -156,9 +156,19 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
                        role, raw.get("when"))
 
     def _count(key: str, fallback: int) -> int:
+        # `json.loads` accepts `Infinity`, and `int(inf)` raises OverflowError
+        # — not ValueError. This runs inside the location SAVE (see the radius
+        # guard below), so an authored "Infinity" must become the fallback with
+        # a warning, never an exception escaping through `normalize_slots` into
+        # the save, `missing_slots` and `location_gap`.
         try:
-            return max(0, min(20, int(raw.get(key, fallback))))
-        except (TypeError, ValueError):
+            value = float(raw.get(key, fallback))
+            if not math.isfinite(value):
+                raise ValueError(f"{key} must be finite")
+            return max(0, min(20, int(value)))
+        except (TypeError, ValueError, OverflowError):
+            logger.warning("slot %r: unusable %s %r — using %d", role, key,
+                           raw.get(key), fallback)
             return fallback
 
     count_min = _count("count_min", 1)
@@ -349,14 +359,49 @@ def cooldown_ok(location_id: str, now: Optional[GameTime] = None) -> bool:
     return True
 
 
+#: The slot-bearing painted areas, reduced to what the approach check needs:
+#: ``(stamp, [(area_id, polygon)])``. Painted areas are NOT part of the
+#: location snapshot a position report already holds, so without this every
+#: report at up to 4 Hz per walker would read AND JSON-parse every area in the
+#: world just to find the handful that declare slots. The key is
+#: ``terrain.area_stamps()`` — one cheap id/updated_at query — so any edit to
+#: any area rebuilds it on the next report and a stale polygon is impossible.
+_slot_areas_cache: Optional[Tuple[Dict[str, str], List[Tuple[str, Any]]]] = None
+_slot_areas_lock = threading.Lock()
+
+
 def reset_cooldowns() -> None:
     """Forget every cooldown (tests, and the admin's manual sweep)."""
+    global _slot_areas_cache
     with _last_check_lock:
         _last_check.clear()
+    with _slot_areas_lock:
+        _slot_areas_cache = None
+
+
+def _slot_areas() -> List[Tuple[str, Any]]:
+    """``[(area_id, polygon)]`` of every painted area that declares NPC slots.
+
+    Cached against :func:`terrain.area_stamps` — see :data:`_slot_areas_cache`.
+    """
+    global _slot_areas_cache
+    from app.models.terrain import area_stamps, list_areas
+    stamps = area_stamps()
+    with _slot_areas_lock:
+        cached = _slot_areas_cache
+    if cached is not None and cached[0] == stamps:
+        return cached[1]
+    reduced = [(str(a.get("id") or ""), a.get("polygon"))
+               for a in list_areas()
+               if str(a.get("id") or "") and area_slots(a)]
+    with _slot_areas_lock:
+        _slot_areas_cache = (stamps, reduced)
+    return reduced
 
 
 def consider_point(avatar: str, x: float, z: float,
-                   locations: Optional[Sequence[Dict[str, Any]]] = None) -> List[str]:
+                   locations: Optional[Sequence[Dict[str, Any]]] = None,
+                   areas: Optional[Sequence[Dict[str, Any]]] = None) -> List[str]:
     """The cheap check behind an accepted position report.
 
     Everything here is arithmetic over the location snapshot the report has
@@ -368,11 +413,15 @@ def consider_point(avatar: str, x: float, z: float,
     THE PAINTED AREAS ARE ASKED THE SAME QUESTION (spec § E3.2), only their
     geometry differs: ``polygon_distance`` is 0 anywhere INSIDE the shape, so
     "the avatar is standing in the wood" and "the avatar is within
-    ``npc.spawn_radius_m`` of its edge" are one comparison. Unlike the
-    locations they are NOT in the snapshot the report already read, so this
-    half costs one ``list_areas`` per report — the one read in this function,
-    and the reason the area pass sits after the location loop rather than
-    before it.
+    ``npc.spawn_radius_m`` of its edge" are one comparison.
+
+    ``areas`` is the painted half of the same deal ``locations`` is: a caller
+    that has just read the areas for its own reasons (``routes/play.py`` does,
+    on the wilderness branch of every position report) hands them over instead
+    of paying for a second read. Without it the check falls back to
+    :func:`_slot_areas`, a stamp-keyed cache of the slot-bearing areas alone —
+    a position report arrives up to four times a second per walker, and
+    reading and JSON-parsing every painted area that often is what this fixes.
 
     Returns the ids a job was submitted for — location ids and area ids in one
     list (for the log and the smokes); never raises into the report path.
@@ -404,7 +453,7 @@ def consider_point(avatar: str, x: float, z: float,
             if submit_spawn_job(location_id=loc_id, reason="slot",
                                 triggered_by=avatar):
                 submitted.append(loc_id)
-        submitted.extend(_consider_areas(avatar, x, z, radius, now))
+        submitted.extend(_consider_areas(avatar, x, z, radius, now, areas))
         if submitted:
             logger.info("npc spawn check queued for %s (avatar %s)",
                         ", ".join(submitted), avatar)
@@ -416,24 +465,33 @@ def consider_point(avatar: str, x: float, z: float,
 
 
 def _consider_areas(avatar: str, x: float, z: float, radius: float,
-                    now: GameTime) -> List[str]:
+                    now: GameTime,
+                    areas: Optional[Sequence[Dict[str, Any]]] = None
+                    ) -> List[str]:
     """The painted half of :func:`consider_point` — areas with slots.
+
+    ``areas``: the caller's already-read area list, or None for the
+    stamp-keyed :func:`_slot_areas` cache. Either way what this loop walks is
+    ``(id, polygon)`` pairs of SLOT-BEARING areas only.
 
     The cooldown key is namespaced (``area:<id>``) so an area and a location
     can never share a slot in ``_last_check``: both ids come from different
     generators, and a collision would silently mute one of them.
     """
     from app.core.world_geometry import polygon_distance
-    from app.models.terrain import list_areas
+
+    if areas is None:
+        candidates = _slot_areas()
+    else:
+        candidates = [(str(a.get("id") or ""), a.get("polygon"))
+                      for a in areas if str(a.get("id") or "")
+                      and area_slots(a)]
 
     submitted: List[str] = []
-    for area in list_areas():
-        area_id = str(area.get("id") or "")
-        if not area_id or not area_slots(area):
-            continue
+    for area_id, polygon in candidates:
         # 0 anywhere inside the shape, so this one comparison covers both
         # "standing in it" and "walking up to it".
-        dist = polygon_distance(x, z, area.get("polygon"))
+        dist = polygon_distance(x, z, polygon)
         if not math.isfinite(dist) or dist > radius:
             continue
         if not cooldown_ok(f"area:{area_id}", now):

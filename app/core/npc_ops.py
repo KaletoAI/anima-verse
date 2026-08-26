@@ -430,7 +430,17 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
 # ---------------------------------------------------------------------------
 
 def npc_summary(name: str) -> Dict[str, Any]:
-    """One row for the Game-Admin NPC list."""
+    """One row for the Game-Admin NPC list.
+
+    ``home`` is the ONE field that makes a roaming NPC readable at all
+    (spec § E3): a circle or area NPC stands out in the open, so its
+    ``location_id``, ``location_name`` and ``room_id`` are all empty and the
+    row would otherwise say nothing about where that NPC is. It is
+    ``npc_home.describe`` — "within 60 m of Old Mill" for a circle, the
+    painted label for an area — and "" for an NPC that has no home area at
+    all (a room NPC, and every NPC before § E3).
+    """
+    from app.core.npc_home import describe
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
                                       get_character_profile)
@@ -439,6 +449,7 @@ def npc_summary(name: str) -> Dict[str, Any]:
     profile = get_character_profile(name) or {}
     expires_at = str(profile.get("expires_at") or "")
     location_id = get_character_current_location(name) or ""
+    home = profile.get("npc_home")
     return {
         "name": name,
         "template": profile.get("template") or NPC_TEMPLATE,
@@ -450,6 +461,8 @@ def npc_summary(name: str) -> Dict[str, Any]:
         "outfit_description": profile.get("outfit_description") or "",
         "slot_role": profile.get("npc_slot_role") or "",
         "slot_location": profile.get("npc_slot_location") or "",
+        "slot_area": profile.get("npc_slot_area") or "",
+        "home": describe(home) if isinstance(home, dict) else "",
         "wanderer": bool(profile.get("npc_wanderer")),
         "location_id": location_id,
         "location_name": get_location_name(location_id) if location_id else "",

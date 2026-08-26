@@ -483,7 +483,14 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # WITHOUT an active avatar there is no exception either: that view
             # knows nothing at all (no location passes the filter), so a
             # traveller must not be the one thing it does see.
-            if (fogged and name != avatar and not (avatar and _j)
+            # AND ONLY A JOURNEY TO A LOCATION counts (`target`). A POINT
+            # journey is how a roaming NPC crosses its home area — it is
+            # walking most of the time, so the exception would make every
+            # circle/area NPC permanently visible across the whole map. § A11
+            # is about a figure that would blink out mid-TRIP between places;
+            # a wanderer inside its own patch of wood is not that figure.
+            if (fogged and name != avatar
+                    and not (avatar and _j and _j.get("target"))
                     and not _in_sight(pos)):
                 continue
         # The avatar always sees itself; everyone else only where the avatar
