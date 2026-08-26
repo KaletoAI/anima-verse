@@ -242,7 +242,14 @@ export function WorldDevTab() {
       })
       .catch(() => setModels([]))
     apiGet<{ schemas?: SchemaInfo[] }>('/world-dev/schemas')
-      .then((d) => setSchemas(d.schemas || []))
+      .then((d) => {
+        const list = d.schemas || []
+        setSchemas(list)
+        // A persisted pick may name a schema the server no longer offers
+        // (e.g. npc_character, retired to the temp-NPC pipeline) — reset it,
+        // or the dropdown sits on an invalid empty value.
+        setSchema((prev) => (list.length && !list.some((s) => s.name === prev) ? 'location' : prev))
+      })
       .catch(() => setSchemas([]))
     apiGet<{ templates?: Array<{ name: string; label?: string }> }>('/world-dev/character-templates')
       .then((d) => {

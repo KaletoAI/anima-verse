@@ -683,12 +683,23 @@ def _extract_profile_patch_json(text: str) -> Dict[str, Any] | None:
     return _extract_json_block(text, "profile-patch")
 
 
+# Schemas that live in the schemas dir but are NOT world-dev chat types: they
+# are prompt templates of other pipelines and lack the chat path's placeholder
+# set. ``npc_character`` belongs to the temp-NPC pipeline (npc_ops.NPC_SCHEMA,
+# filled with {location_name}/{room_name}); offered in the chat it showed the
+# LOCATION picker on edit and would inject a location as "the NPC" — temp NPCs
+# are created and edited in the Game-Admin Characters tab instead.
+_INTERNAL_SCHEMAS = {"npc_character"}
+
+
 @router.get("/schemas")
 def get_available_schemas() -> Dict[str, Any]:
     """Lists available schema types for world development."""
     schemas = []
     if _get_schemas_dir().exists():
         for f in sorted(_get_schemas_dir().glob("*.md")):
+            if f.stem in _INTERNAL_SCHEMAS:
+                continue
             schemas.append({
                 "name": f.stem,
                 "label": f.stem.replace("_", " ").title(),
