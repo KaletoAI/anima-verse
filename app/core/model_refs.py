@@ -214,28 +214,31 @@ def neutral_signature(signature: str) -> str:
     return (signature or "").split(STATE_SIG_SEP, 1)[0]
 
 
-def outfit_signature(equipped_pieces: Optional[Dict[str, str]],
-                     equipped_items: Optional[list],
-                     character_name: str = "") -> str:
-    """The 12-hex outfit key of the per-outfit render caches — the ONE rule
-    both caches (``model_refs/``, ``model3d/``) and the cache GC judge an
-    entry by.
+def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
+                         equipped_items: Optional[list],
+                         character_name: str = "") -> str:
+    """The RAW string that identifies one worn outfit — what
+    :func:`outfit_signature` hashes, and the ONE description of "the same
+    outfit combination" in this codebase.
 
-    md5[:12] of the stably sorted equipped state
+    The stably sorted equipped state
     (``expression_regen._equipped_signature``). When NOTHING structured is
     worn the character can still be dressed: a template without an outfit
     system (a temporary NPC) renders the profile's free-text
-    ``outfit_description``, so that text has to key the cache too — otherwise
-    every such character in the world shares one signature and the first
-    one's T-pose render and mesh get served to all of them.
+    ``outfit_description``, so that text has to identify the outfit too —
+    otherwise every such character in the world shares one signature and the
+    first one's T-pose render and mesh get served to all of them.
 
-    The hashed string is then ``render_outfit(...)["full"]``, EXACTLY what
+    The free-text branch returns ``render_outfit(...)["full"]``, EXACTLY what
     the image prompt is built from: "" for an undressed character
     (``outfit_worn`` false) and "" when no text is set, so the bare case
-    keeps its historical md5("") key and no cache entry of a wardrobe
+    keeps its historical empty string and no cache entry of a wardrobe
     character moves.
+
+    Public because the expression-variant cache keys on the same rule
+    (``expression_regen._cache_key``) — it hashes this string TOGETHER with
+    its own two catalog axes, so it needs the string and not a hash of it.
     """
-    import hashlib
     from app.core.expression_regen import _equipped_signature
     raw = _equipped_signature(equipped_pieces, equipped_items)
     if not raw and character_name:
@@ -246,6 +249,21 @@ def outfit_signature(equipped_pieces: Optional[Dict[str, str]],
                                 equipped_items=[]).get("full", "") or ""
         except Exception:  # noqa: BLE001 — an unreadable profile must not
             raw = ""       # break signing; the bare key still renders
+    return raw
+
+
+def outfit_signature(equipped_pieces: Optional[Dict[str, str]],
+                     equipped_items: Optional[list],
+                     character_name: str = "") -> str:
+    """The 12-hex outfit key of the per-outfit render caches — the ONE rule
+    both caches (``model_refs/``, ``model3d/``) and the cache GC judge an
+    entry by.
+
+    md5[:12] of :func:`outfit_signature_raw`, and nothing else: the bare case
+    keeps its historical md5("") key.
+    """
+    import hashlib
+    raw = outfit_signature_raw(equipped_pieces, equipped_items, character_name)
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 

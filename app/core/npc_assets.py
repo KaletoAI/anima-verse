@@ -6,7 +6,7 @@ enough, no outfit text for the image prompts to work from. This module is the
 ONE place that decides whether an NPC is finished, plus the queue job that
 finishes it.
 
-Three criteria, and every one of them is checked at the CONSUMER (see
+Four criteria, and every one of them is checked at the CONSUMER (see
 feedback_pruefe_am_verbraucher — a profile field that says "face.png" proves
 nothing, the file behind it does):
 
@@ -15,7 +15,12 @@ nothing, the file behind it does):
   (``find_model3d(name, current_outfit_state(name)[2])``, never the serving
   lookup: that one falls back to other outfits and would call a foreign mesh
   "done");
-* ``outfit_description`` — the free text that IS this character's wardrobe.
+* ``outfit_description`` — the free text that IS this character's wardrobe;
+* ``expression`` — the DEFAULT expression variant (mood "", pose "") for the
+  worn outfit is in the variant cache. That single image is what the 2D
+  client shows for this NPC: its template sets
+  ``expression_variants_enabled: false``, so no other trigger will ever
+  render one, and the profile image is deliberately not a fallback.
 
 The flow: ``npc_ops.apply_npc`` and ``npc_pool.revive_from_pool`` ask
 :func:`gate_placement` before they place. When it holds the NPC back, the
@@ -39,7 +44,7 @@ logger = get_logger("npc_assets")
 TASK_TYPE = "npc_assets"
 
 #: The finish criteria, in the order :func:`npc_assets_complete` reports them.
-CRITERIA = ("profile_image", "model3d", "outfit_description")
+CRITERIA = ("profile_image", "model3d", "outfit_description", "expression")
 
 #: Retries of ONE finishing job. The queue's own default is 0, and this job is
 #: the only thing that ever places the NPC — see :func:`submit_assets_job`.
@@ -84,6 +89,20 @@ def npc_assets_complete(name: str) -> List[str]:
     profile = get_character_profile(name) or {}
     if not str(profile.get("outfit_description") or "").strip():
         missing.append("outfit_description")
+
+    try:
+        from app.core.expression_regen import peek_cached_expression
+        from app.core.model_refs import current_outfit_state
+        pieces, items, _sig = current_outfit_state(name)
+        # PEEK, not get: a gate check must not forge the variant's LRU
+        # bookkeeping (``get_cached_expression`` bumps last_used_at).
+        if peek_cached_expression(name, "", "", equipped_pieces=pieces,
+                                  equipped_items=items) is None:
+            missing.append("expression")
+    except Exception as e:  # noqa: BLE001 — an unreadable cache is "not done"
+        logger.debug("npc_assets_complete(%s): variant lookup failed: %s",
+                     name, e)
+        missing.append("expression")
 
     return missing
 
@@ -263,6 +282,40 @@ def _render_mesh(name: str) -> str:
     return "; ".join(notes)[:200]
 
 
+def _render_default_expression(name: str) -> str:
+    """Render the ONE expression variant this NPC is shown by. Blocking.
+
+    Returns what went WRONG ("" = the variant exists), same contract as the
+    other producers — ``generate_expression_image`` swallows every failure
+    and answers None, so the complaint has to be worded here.
+
+    The BLOCKING call, never ``trigger_expression_generation``: that one runs
+    a daemon thread (this is already a queue worker, so the job would report
+    success while nothing had been rendered) and, more importantly, it asks
+    the ``expression_variants_enabled`` feature gate — which this NPC's
+    template switches off. Going through the generator directly is what keeps
+    the gate closed for every OTHER trigger: no mood, no pose, no grid, one
+    picture.
+
+    Mood "" and pose "" are the DEFAULT coordinates: they resolve to the
+    catalog defaults for both axes and produce exactly the file the route's
+    default-variant fallback looks for
+    (``routes/characters.py`` → ``get_cached_expression(name, "", "", …)``).
+    """
+    from app.core.expression_regen import generate_expression_image
+    from app.core.model_refs import current_outfit_state
+
+    pieces, items, _sig = current_outfit_state(name)
+    path = generate_expression_image(name, "", "", equipped_pieces=pieces,
+                                     equipped_items=items)
+    if path is not None:
+        logger.debug("npc_assets(%s): default variant at %s", name, path)
+        return ""
+    logger.warning("npc_assets(%s): the default expression variant was not "
+                   "rendered", name)
+    return "the generator delivered no variant"
+
+
 # ---------------------------------------------------------------------------
 # The job
 # ---------------------------------------------------------------------------
@@ -272,12 +325,22 @@ def _place(name: str, location_id: str, room_id: str) -> None:
 
     Back into the roster BEFORE the placement: the location setter runs the
     ordinary arrival side effects, and those read the roster.
+
+    A NO-OP for an NPC that is not pooled. The job is re-queued whenever a
+    temporary NPC's outfit text is edited, and that NPC is standing in the
+    world at the time — placing it again would drag it back to wherever the
+    ORIGINAL job was headed, hours of world time later.
     """
-    from app.models.character import (get_character_profile,
+    from app.models.character import (POOLED_STATUS, get_character_profile,
+                                      get_character_status,
                                       save_character_current_location,
                                       save_character_current_room,
                                       save_character_profile,
                                       set_character_status)
+    if get_character_status(name) != POOLED_STATUS:
+        logger.debug("npc_assets(%s): already in the world — not placed again",
+                     name)
+        return
     profile = get_character_profile(name) or {}
     if profile.pop("npc_pooled_reason", None) is not None:
         save_character_profile(name, profile)   # it is not waiting any more
@@ -334,6 +397,16 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
         note = _render_mesh(name)
         if note:
             notes.append(note)
+    if "expression" in missing:
+        # LAST, although it needs only the outfit and never the mesh: run
+        # before the mesh, a dead mesh backend would take the NPC's only
+        # picture down with it. Every producer above runs off its own
+        # criterion and only COLLECTS its complaint, so a failure up there
+        # does not skip this one.
+        logger.info("NPC '%s': rendering the default expression variant", name)
+        note = _render_default_expression(name)
+        if note:
+            notes.append(f"expression: {note}")
 
     still_missing = npc_assets_complete(name)
     if still_missing:

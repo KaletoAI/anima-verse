@@ -69,6 +69,15 @@ Sections:
       with the regression that matters: a character with a structured outfit
       keeps EXACTLY its pre-change signature.
 
+  [5c] …and it keys the EXPRESSION VARIANT too. `expression_regen._cache_key`
+      hashed the equipped state alone, which is empty for every temporary NPC
+      — one file name for all of them, and no edit of `outfit_description`
+      invalidated anything. It now folds in the same raw string
+      `outfit_signature` hashes (`model_refs.outfit_signature_raw`, ONE rule,
+      no second hash). Two outfit texts give two keys; a character with a
+      structured outfit keeps EXACTLY its pre-change key, derived by hand
+      from the OLD formula.
+
   [6] TTL is GAME time. `expiry_stamp(2)` must land exactly 2 game hours after
       now — 7200 game seconds, checked as a number, not as a formatted string.
       No TTL yields "" (lives forever), a negative TTL yields "" as well.
@@ -464,6 +473,59 @@ check("a bare character keeps md5('')",
 rp_sig_expected = hashlib.md5(f"top={item_id}".encode()).hexdigest()[:12]
 check("a wardrobe character's signature is untouched by the free text",
       current_outfit_state(RP)[2], rp_sig_expected)
+
+# ---------------------------------------------------------------------------
+print("\n[5c] …and the EXPRESSION variant key follows the same rule")
+# The 2D client shows a temporary NPC through one cached expression variant,
+# and `expression_regen._cache_key` used to hash the equipped state ALONE
+# (`_equipped_signature`) — empty for every temporary NPC in the world. Every
+# one of them therefore pointed at the same file name, and editing
+# `outfit_description` invalidated nothing. The key now folds in exactly what
+# `outfit_signature` folds in: `model_refs.outfit_signature_raw`, the ONE raw
+# string both caches hash (no second hash anywhere).
+#
+# THE RULE, by hand (`expression_regen.py:172-184`): the key is
+#   md5(f"{expression_key}:{pose}:{eq}")[:12], prefixed "<safe_name>_"
+# with
+#   * expression_key = resolve_expression_key(mood); for "" the expression
+#     catalog's default entry answers → "neutral";
+#   * pose = _canonical_pose_key(pose_key); for "" the pose catalog's default
+#     → "standing";
+#   * eq = outfit_signature_raw(pieces, items, name) — the equipped state
+#     when anything structured is worn, otherwise render_outfit(…)["full"];
+#   * no ":state=…" suffix, because no image_modifier directive is active.
+from app.core.expression_regen import _cache_key  # noqa: E402
+
+npc_profile["outfit_description"] = "grey linen apron, rolled-up white shirt"
+save_character_profile(NPC, npc_profile)
+key_apron = _cache_key("", "", NPC, {}, [])
+check("the default variant of a piece-less NPC hashes its outfit line",
+      key_apron, f"{NPC}_" + hashlib.md5(
+          b"neutral:standing:wearing: grey linen apron, "
+          b"rolled-up white shirt").hexdigest()[:12])
+
+npc_profile["outfit_description"] = "a patched brown cloak"
+save_character_profile(NPC, npc_profile)
+key_cloak = _cache_key("", "", NPC, {}, [])
+check("a different outfit text gives a different variant key",
+      key_cloak, f"{NPC}_" + hashlib.md5(
+          b"neutral:standing:wearing: a patched brown cloak"
+          ).hexdigest()[:12])
+check("...and the two really differ", key_apron == key_cloak, False)
+npc_profile["outfit_description"] = "grey linen apron, rolled-up white shirt"
+save_character_profile(NPC, npc_profile)
+
+# REGRESSION: a character with a structured outfit keeps EXACTLY the variant
+# key it had before this change — the old formula was
+# md5(f"{expression_key}:{pose}:{_equipped_signature(pieces, items)}")[:12],
+# and for RP the equipped signature is the single filled slot "top=<item_id>".
+rp_key_expected = f"{RP}_" + hashlib.md5(
+    f"neutral:standing:top={item_id}".encode()).hexdigest()[:12]
+check("a wardrobe character's variant key is untouched by the free text",
+      _cache_key("", "", RP, {"top": item_id}, []), rp_key_expected)
+check("...and the free-text NPC does NOT share the bare-outfit key any more",
+      key_apron == f"{NPC}_" + hashlib.md5(
+          b"neutral:standing:").hexdigest()[:12], False)
 
 # ---------------------------------------------------------------------------
 print("\n[6] TTL is measured in GAME seconds")

@@ -150,15 +150,28 @@ def _cache_key(mood: str, pose_key: str,
     |pose catalog| x |expression catalog| x outfit x state — instead of
     growing with every phrasing an LLM invents.
 
+    The outfit axis is ``model_refs.outfit_signature_raw`` — the SAME rule
+    the per-outfit render caches use, and the raw string rather than its
+    hash, because this key hashes it together with the two catalog axes (ONE
+    signature rule, never a second hash). For a character with a structured
+    outfit that string IS ``_equipped_signature(...)``, so no existing
+    variant moves; for one whose template has no outfit system (a temporary
+    NPC) it is the free-text ``outfit_description`` the image is actually
+    rendered from. Without it every such character in the world shared one
+    key and editing the outfit text invalidated nothing.
+    ``equipped_pieces_meta`` is still accepted for existing callers and still
+    ignored (colour overrides were dropped in step 3, May 2026).
+
     ``state_fp``: fingerprint of the triggered image-modifier state
     (model_refs.state_fingerprint). ``None`` = look it up live for
     ``character_name`` — every caller passes the character's CURRENT
     mood/outfit anyway, the state belongs to that same snapshot. Pass ""
     explicitly for a deliberately neutral render.
     """
+    from app.core.model_refs import outfit_signature_raw
     expression_key = resolve_expression_key(mood)
     pose = _canonical_pose_key(pose_key)
-    eq = _equipped_signature(equipped_pieces, equipped_items, equipped_pieces_meta)
+    eq = outfit_signature_raw(equipped_pieces, equipped_items, character_name)
     if state_fp is None and character_name:
         from app.core.model_refs import state_fingerprint
         state_fp = state_fingerprint(character_name)

@@ -2,15 +2,16 @@
 """Smoke run for the temporary-NPC finish gate (plan-npc-leben, task 1).
 
 Throwaway storage, throwaway world DB, throwaway task queue — no server, no
-real world is touched. NOTHING is generated here: the three producers (profile
-image, T-pose render, mesh) are replaced by counting stubs that write the very
-files the gate looks for. The gate itself runs unstubbed against REAL files on
-disk, because "does the file exist" is the one thing this feature must not
-fake (feedback_pruefe_am_verbraucher).
+real world is touched. NOTHING is generated here: the four producers (profile
+image, T-pose render, mesh, default expression) are replaced by counting stubs
+that write the very files the gate looks for. The gate itself runs unstubbed
+against REAL files on disk, because "does the file exist" is the one thing this
+feature must not fake (feedback_pruefe_am_verbraucher).
 
-THE RULE, by hand — the gate matrix of the brief's § 0 A:
+THE RULE, by hand — the gate matrix of the brief's § 0 A, plus the fourth
+criterion of spec-npc-heimat-zeitfenster § E0:
 
-    A temporary NPC may be placed only when all three of these hold —
+    A temporary NPC may be placed only when all four of these hold —
 
       1. profile_image      `get_character_profile_image(name)` is not empty
                             AND `get_character_images_dir(name)/<that name>`
@@ -22,17 +23,27 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
                             other outfits and would call a foreign mesh "done".
       3. outfit_description `profile["outfit_description"].strip()` is not
                             empty.
+      4. expression         `peek_cached_expression(name, "", "",
+                            equipped_*=<the currently worn state>)` finds the
+                            DEFAULT variant — mood empty, pose empty. That is
+                            the one image `/play` shows for this NPC: its
+                            template has `expression_variants_enabled: false`,
+                            so no other trigger will ever render one, and the
+                            profile image is deliberately not a fallback.
+                            `peek_`, not `get_`, so a gate check does not
+                            forge the variant's LRU bookkeeping.
 
     `npc_assets_complete(name)` reports what is MISSING in exactly that order,
     so an empty list means "ready". Hand-derived expectations:
 
-  [1] A fresh NPC created by `apply_npc` with no image, no mesh and no outfit
-      text is missing all three, in the declared order:
-        ["profile_image", "model3d", "outfit_description"]
-      Filling `outfit_description` alone leaves ["profile_image", "model3d"].
+  [1] A fresh NPC created by `apply_npc` with no image, no mesh, no outfit
+      text and no variant is missing all four, in the declared order:
+        ["profile_image", "model3d", "outfit_description", "expression"]
+      Filling `outfit_description` alone leaves
+        ["profile_image", "model3d", "expression"].
       Pointing `profile_image` at "face.png" WITHOUT writing the file leaves
-      the same two entries — criterion 1 is a file check, not a field check.
-      Writing the file drops it to ["model3d"].
+      the same three entries — criterion 1 is a file check, not a field check.
+      Writing the file drops it to ["model3d", "expression"].
       The worn signature of this NPC is derivable by hand: it owns no
       wardrobe piece, so `current_outfit_state` hashes what dresses it
       instead — the free-text outfit line `render_outfit(…)["full"]`, which
@@ -41,8 +52,30 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
       "3bdb2ee2463c" — and NOT the md5("")[:12] = "d41d8cd98f00" of an NPC
       with neither pieces nor outfit text (which is what every temporary NPC
       used to share, one undressed T-pose and mesh for all of them). A
-      `<sig>.glb` under that name in `<char>/model3d/` empties the list; a
+      `<sig>.glb` under that name in `<char>/model3d/` empties that entry; a
       mesh stored beside it under a DIFFERENT signature does not count.
+
+      THE VARIANT FILE NAME, by hand. `expression_regen._cache_key` builds
+      `f"{expression_key}:{pose}:{eq}"` (`app/core/expression_regen.py:178`),
+      md5's it, takes 12 hex and — with a character name — prefixes
+      `f"{_safe_name(character_name)}_"`. For the default variant:
+        * `expression_key = resolve_expression_key("")`, and
+          `pose_catalog.resolve_to_catalog("", …)` answers the catalog
+          default for empty text → "neutral";
+        * `pose = _canonical_pose_key("")` → `get_default_key("pose")` →
+          "standing";
+        * `eq = outfit_signature_raw({}, [], name)` — the SAME raw string
+          `model_refs.outfit_signature` hashes, so a piece-less NPC folds in
+          its free text: "wearing: a grey linen apron";
+        * `state_fp` is "" — no `image_modifier` directive is active.
+      So the raw string is
+        "neutral:standing:wearing: a grey linen apron"
+      whose md5 is a8021c6b637b06982bcc4483fb5cabe7, i.e. "a8021c6b637b" at
+      12 hex, and the file the job writes is
+        <char>/outfits/Torvin_a8021c6b637b.png
+      Dropping that file (plus its sidecar) empties the missing list; the
+      same file under a name derived from a DIFFERENT outfit text does not
+      count, because the outfit text is part of the key.
 
   [2] The gate is CONFIGURED and TEMPLATE-BOUND. `npc.require_assets` false =
       the old behaviour (never held back), true = hold an unfinished NPC back.
@@ -92,17 +125,28 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
       already claimed. It stays pooled, it stands nowhere, one job is queued.
 
   [5] The handler places what is already complete WITHOUT generating: with all
-      three criteria satisfied up front, all three producer stubs stay at 0
+      four criteria satisfied up front, all four producer stubs stay at 0
       calls, the status goes back to '' and location + room are set.
 
-  [6] The handler produces ONLY what is missing (partial-failure resumption).
+  [6] The handler produces ONLY what is missing (partial-failure resumption),
+      in the order profile image → T-pose → mesh → default expression. The
+      expression comes LAST although it needs only the outfit, never the
+      mesh: run before the mesh, a dead mesh backend would take the NPC's
+      only picture down with it.
       Gate and handler end to end: an NPC with an outfit text but neither
-      image nor mesh is held back with the pool reason "waiting for
-      profile_image, model3d", and the handler then calls the image stub once,
-      the T-pose stub once and the mesh stub once, places it and clears the
-      reason. An NPC that only lacks the mesh calls the image stub NOT AT ALL
-      (0) and the other two once each — the T-pose is the mesh's input, so it
-      rides on the model3d criterion instead of having one of its own.
+      image nor mesh nor variant is held back with the pool reason "waiting
+      for profile_image, model3d, expression", and the handler then calls the
+      image stub once, the T-pose stub once, the mesh stub once and the
+      expression stub once — call counts (1, 1, 1, 1) — places it and clears
+      the reason. An NPC that only lacks the mesh and the variant calls the
+      image stub NOT AT ALL: (0, 1, 1, 1) — the T-pose is the mesh's input,
+      so it rides on the model3d criterion instead of having one of its own.
+      The expression stub is called with EXACTLY the default coordinates —
+      `mood=""`, `pose_key=""`, and the currently worn state
+      (`equipped_pieces={}`, `equipped_items=[]` for a piece-less NPC), so
+      the file it writes is the one the route's default-variant fallback
+      (`characters.py:985`, `get_cached_expression(name, "", "", equipped_*)`)
+      looks for.
 
   [7] A missing `outfit_description` is NOT generated. It is a text field the
       generation turn fills (`npc-temporary.json` marks it `required`), so the
@@ -118,7 +162,10 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
       EXCEPTION and nothing else, so a message that only says "still
       incomplete: model3d" makes a dead backend look like a mystery. Both
       texts therefore ride in the RuntimeError: the mesh stub's "stub" and
-      the image stub's "Fehler: kein Backend".
+      the image stub's "Fehler: kein Backend". The expression producer is the
+      same kind of liar — `generate_expression_image` swallows every failure
+      and answers None — so its criterion has to name itself: the error text
+      carries "expression".
 
   [9] A wanderer is sent on its way BY THE HANDLER: with `wanderer` true the
       placement is followed by exactly one `_send_wanderer` call for the
@@ -162,6 +209,15 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
       `+ len(list_awaiting_assets())` half of `alive_npc_count`: finishing its
       job drops the count by exactly one while nothing living changed.
 
+ [14] `_place` NEVER TOUCHES A LIVING NPC. The job is re-queued when a temp
+      NPC's outfit text is edited, and that NPC is standing in the world, not
+      in the pool — so the placement step has to be a no-op unless the
+      character is still `status == POOLED_STATUS`. Without the guard the
+      re-render job would drag a wandering NPC back to the location the
+      ORIGINAL job carried. Checked on an NPC with status '' standing in
+      LOC2/nowhere-room: `_place(name, LOC_ID, TAPROOM)` leaves status,
+      current_location and current_room exactly as they were.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_assets.py
 """
 import json
@@ -182,8 +238,8 @@ from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
 
-from app.core import (model3d, model_refs, npc_assets as na,  # noqa: E402
-                      npc_ops, npc_spawn)
+from app.core import (expression_regen, model3d, model_refs,  # noqa: E402
+                      npc_assets as na, npc_ops, npc_spawn)
 from app.core.npc_ops import apply_npc, validate_npc_fields  # noqa: E402
 from app.core.world_ops import update_location_with_extras  # noqa: E402
 from app.core.npc_pool import (list_pool, pool_npc,  # noqa: E402
@@ -195,6 +251,7 @@ from app.models.character import (get_character_current_location,  # noqa: E402
                                   get_character_current_room,
                                   get_character_dir,
                                   get_character_images_dir,
+                                  get_character_outfits_dir,
                                   get_character_profile,
                                   get_character_status,
                                   save_character_profile,
@@ -339,10 +396,31 @@ def give_outfit(name: str, text: str = "a grey linen apron") -> None:
     save_character_profile(name, profile)
 
 
+def default_variant_key(name: str) -> str:
+    """The cache key of the DEFAULT expression variant — mood "", pose "",
+    the currently worn state. The same call `npc_assets` makes."""
+    pieces, items, _sig = model_refs.current_outfit_state(name)
+    return expression_regen._cache_key("", "", name, pieces, items)
+
+
+def give_expression(name: str) -> Path:
+    """Drop the default variant on disk, image plus sidecar — what the real
+    generator leaves behind (`expression_regen.py:1133/1176`)."""
+    expr_dir = get_character_outfits_dir(name)
+    expr_dir.mkdir(parents=True, exist_ok=True)
+    path = expr_dir / f"{default_variant_key(name)}.png"
+    path.write_bytes(b"\x89PNG fake")
+    path.with_suffix(".json").write_text(
+        json.dumps({"mood": "", "pose_key": "", "expression_key": "neutral"}),
+        encoding="utf-8")
+    return path
+
+
 # ── the producer stubs ──────────────────────────────────────────────────────
 
-CALLS = {"image": 0, "tpose": 0, "mesh": 0, "send": 0}
+CALLS = {"image": 0, "tpose": 0, "mesh": 0, "expression": 0, "send": 0}
 SENT = []
+EXPR_ARGS = []
 
 
 class FakeImageService:
@@ -367,8 +445,8 @@ class FakeImageService:
 IMAGE_SERVICE = {"current": None}
 
 
-def install_stubs(*, image_ok=True, mesh_ok=True):
-    """Replace the three producers plus the wanderer dispatch."""
+def install_stubs(*, image_ok=True, mesh_ok=True, expression_ok=True):
+    """Replace the four producers plus the wanderer dispatch."""
     service = FakeImageService(image_ok)
     IMAGE_SERVICE["current"] = service
     imagegen_service.get_image_service = lambda: service
@@ -384,6 +462,16 @@ def install_stubs(*, image_ok=True, mesh_ok=True):
         give_mesh(name)
         return {"ok": True}
 
+    def fake_expression(name, mood, pose_key, equipped_pieces=None,
+                        equipped_items=None, **kwargs):
+        CALLS["expression"] += 1
+        EXPR_ARGS.append({"name": name, "mood": mood, "pose_key": pose_key,
+                          "equipped_pieces": equipped_pieces,
+                          "equipped_items": equipped_items})
+        if not expression_ok:
+            return None
+        return give_expression(name)
+
     def fake_send(name, target_id):
         CALLS["send"] += 1
         SENT.append((name, target_id))
@@ -391,33 +479,56 @@ def install_stubs(*, image_ok=True, mesh_ok=True):
 
     model_refs.generate_model_ref_images = fake_tpose
     model3d.generate_for_current_outfit = fake_mesh
+    expression_regen.generate_expression_image = fake_expression
     npc_spawn._send_wanderer = fake_send
     for k in CALLS:
         CALLS[k] = 0
     SENT.clear()
+    EXPR_ARGS.clear()
 
 
 # ── [1] the gate matrix, against real files ─────────────────────────────────
 print("[1] the gate matrix — real files, exact signature")
 A = make_npc("Torvin")
-check("a fresh NPC misses all three, in the declared order",
+check("a fresh NPC misses all four, in the declared order",
       na.npc_assets_complete(A),
-      ["profile_image", "model3d", "outfit_description"])
+      ["profile_image", "model3d", "outfit_description", "expression"])
 give_outfit(A)
-check("the outfit text alone leaves two", na.npc_assets_complete(A),
-      ["profile_image", "model3d"])
+check("the outfit text alone leaves three", na.npc_assets_complete(A),
+      ["profile_image", "model3d", "expression"])
 give_profile_image(A, write_file=False)
 check("a profile_image field pointing at nothing is still missing",
-      na.npc_assets_complete(A), ["profile_image", "model3d"])
+      na.npc_assets_complete(A), ["profile_image", "model3d", "expression"])
 give_profile_image(A)
-check("the file on disk satisfies it", na.npc_assets_complete(A), ["model3d"])
+check("the file on disk satisfies it", na.npc_assets_complete(A),
+      ["model3d", "expression"])
 check("the worn signature of a piece-less NPC is md5 of its outfit line",
       model_refs.current_outfit_state(A)[2], "3bdb2ee2463c")
 give_mesh(A, "deadbeefcafe")
 check("a mesh under a foreign signature does not count",
-      na.npc_assets_complete(A), ["model3d"])
+      na.npc_assets_complete(A), ["model3d", "expression"])
 give_mesh(A)
-check("the mesh of the WORN signature does", na.npc_assets_complete(A), [])
+check("the mesh of the WORN signature does",
+      na.npc_assets_complete(A), ["expression"])
+
+# The default variant's file name, against the hand-derived key of the
+# docstring — the route's fallback looks the file up under exactly this name.
+check("the default variant is keyed by name + md5('neutral:standing:<outfit>')",
+      default_variant_key(A), "Torvin_a8021c6b637b")
+_variant = give_expression(A)
+check("and the file the job drops there empties the list",
+      na.npc_assets_complete(A), [])
+check("it really is that file", _variant.name, "Torvin_a8021c6b637b.png")
+# The outfit text is PART of the key: re-dress the NPC and the variant that
+# was rendered for the old text no longer answers for the new one.
+give_outfit(A, "a patched brown cloak")
+check("a new outfit text orphans the old variant",
+      na.npc_assets_complete(A), ["model3d", "expression"])
+check("and asks for a new key", default_variant_key(A),
+      "Torvin_351e41d4e754")
+give_outfit(A)
+check("dressing it back restores both — nothing was re-rendered",
+      na.npc_assets_complete(A), [])
 
 # ── [2] the gate is configured and template-bound ───────────────────────────
 print("[2] configured + template-bound")
@@ -431,6 +542,7 @@ set_character_status(B, "")
 give_outfit(B)
 give_profile_image(B)
 give_mesh(B)
+give_expression(B)
 check("gate on + finished = not held back", na.gate_placement(B, LOC_ID), False)
 check("an unknown/non-NPC name is never gated",
       na.gate_placement("nobody-at-all", LOC_ID), False)
@@ -450,7 +562,7 @@ check("it stands nowhere", get_character_current_location(C), "")
 check("exactly one npc_assets task", len(tasks_for(C)), 1)
 check("the pool row says what it is waiting for",
       [r["reason"] for r in list_pool() if r["name"] == C],
-      ["waiting for profile_image, model3d, outfit_description"])
+      ["waiting for profile_image, model3d, outfit_description, expression"])
 check("the task carries the placement",
       {k: tasks_for(C)[0][k] for k in ("name", "location_id", "room_id")},
       {"name": C, "location_id": LOC_ID, "room_id": TAPROOM})
@@ -509,13 +621,15 @@ install_stubs()
 E = make_npc("Yrsa", outfit="a patched brown cloak")
 give_profile_image(E)
 give_mesh(E)
+give_expression(E)
 set_character_status(E, "pooled")
 set_require_assets(True)
 res = na._handle_npc_assets({"name": E, "location_id": LOC_ID,
                              "room_id": TAPROOM})
 check("ok", res.get("ok"), True)
 check("nothing was produced",
-      (CALLS["image"], CALLS["tpose"], CALLS["mesh"]), (0, 0, 0))
+      (CALLS["image"], CALLS["tpose"], CALLS["mesh"], CALLS["expression"]),
+      (0, 0, 0, 0))
 check("back in the world", get_character_status(E), "")
 check("placed", (get_character_current_location(E),
                  get_character_current_room(E)), (LOC_ID, TAPROOM))
@@ -528,11 +642,18 @@ set_require_assets(True)
 check("the gate holds it back", na.gate_placement(F, LOC_ID), True)
 check("and says so in the pool",
       [r["reason"] for r in list_pool() if r["name"] == F],
-      ["waiting for profile_image, model3d"])
+      ["waiting for profile_image, model3d, expression"])
 res = na._handle_npc_assets({"name": F, "location_id": LOC_ID})
 check("ok", res.get("ok"), True)
-check("image once, tpose once, mesh once",
-      (CALLS["image"], CALLS["tpose"], CALLS["mesh"]), (1, 1, 1))
+check("image once, tpose once, mesh once, expression once",
+      (CALLS["image"], CALLS["tpose"], CALLS["mesh"], CALLS["expression"]),
+      (1, 1, 1, 1))
+check("the expression stub was asked for the DEFAULT coordinates",
+      EXPR_ARGS, [{"name": F, "mood": "", "pose_key": "",
+                   "equipped_pieces": {}, "equipped_items": []}])
+check("and the variant it wrote is the one the route's fallback looks for",
+      (get_character_outfits_dir(F) / f"{default_variant_key(F)}.png").exists(),
+      True)
 check("the render is a set_profile render of the profile use-case",
       {k: IMAGE_SERVICE["current"].inputs[0][k]
        for k in ("agent_name", "set_profile", "image_use_case")},
@@ -550,7 +671,8 @@ give_profile_image(G)
 set_character_status(G, "pooled")
 res = na._handle_npc_assets({"name": G, "location_id": LOC_ID})
 check("the existing face is not rendered again",
-      (CALLS["image"], CALLS["tpose"], CALLS["mesh"]), (0, 1, 1))
+      (CALLS["image"], CALLS["tpose"], CALLS["mesh"], CALLS["expression"]),
+      (0, 1, 1, 1))
 check("placed", get_character_current_location(G), LOC_ID)
 
 # ── [7] a missing outfit text is never generated ────────────────────────────
@@ -561,7 +683,8 @@ set_character_status(H, "pooled")
 res = na._handle_npc_assets({"name": H, "location_id": LOC_ID})
 check("not ok", res.get("ok"), False)
 check("and nothing was produced",
-      (CALLS["image"], CALLS["tpose"], CALLS["mesh"]), (0, 0, 0))
+      (CALLS["image"], CALLS["tpose"], CALLS["mesh"], CALLS["expression"]),
+      (0, 0, 0, 0))
 check("still pooled", get_character_status(H), "pooled")
 
 # ── [8] a producer that fails leaves it pooled and raises ───────────────────
@@ -575,6 +698,11 @@ raises("the handler raises, carrying the mesh producer's own error",
        contains="stub")
 check("still pooled", get_character_status(I_), "pooled")
 check("still nowhere", get_character_current_location(I_), "")
+check("but the dead mesh did NOT take the NPC's only picture with it — "
+      "the expression ran anyway",
+      (CALLS["expression"],
+       (get_character_outfits_dir(I_) / f"{default_variant_key(I_)}.png"
+        ).exists()), (1, True))
 
 # The image service does not raise either — it hands back an error STRING,
 # and that string is the only thing that says why there is no portrait.
@@ -585,6 +713,18 @@ raises("and the image service's error prose too", RuntimeError,
        lambda: na._handle_npc_assets({"name": I2, "location_id": LOC_ID}),
        contains="Fehler: kein Backend")
 check("still pooled", get_character_status(I2), "pooled")
+
+# The expression producer lies the same way: generate_expression_image
+# swallows everything and answers None, so the criterion has to name itself.
+install_stubs(expression_ok=False)
+I3 = make_npc("Steinunn", outfit="a felted hat")
+set_character_status(I3, "pooled")
+raises("an expression that never appears names itself in the error",
+       RuntimeError,
+       lambda: na._handle_npc_assets({"name": I3, "location_id": LOC_ID}),
+       contains="expression")
+check("still pooled", get_character_status(I3), "pooled")
+check("still nowhere", get_character_current_location(I3), "")
 
 # ── [9] the wanderer is sent by the handler ─────────────────────────────────
 print("[9] the wanderer leaves once its assets exist")
@@ -718,6 +858,23 @@ check("the cap counts the held NPC", na.is_awaiting_assets(COOK), True)
 finish_tasks_for(COOK)
 check("and stops counting it when the job is gone",
       npc_spawn.alive_npc_count(), _before - 1)
+
+# ── [14] _place never touches a living NPC ──────────────────────────────────
+print("[14] _place is a no-op for an NPC that is not pooled")
+install_stubs()
+set_require_assets(False)
+R = make_npc("Alvhild", outfit="a russet kirtle", location_id=LOC2_ID)
+check("it is standing in the world",
+      (get_character_status(R), get_character_current_location(R)),
+      ("", LOC2_ID))
+_before_place = (get_character_status(R), get_character_current_location(R),
+                 get_character_current_room(R))
+na._place(R, LOC_ID, TAPROOM)
+check("_place left the living NPC exactly where it was",
+      (get_character_status(R), get_character_current_location(R),
+       get_character_current_room(R)), _before_place)
+check("and it was really somewhere else than the job's target",
+      _before_place[1] == LOC_ID, False)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:
