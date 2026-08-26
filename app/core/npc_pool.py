@@ -131,6 +131,10 @@ def pool_npc(name: str, reason: str = "") -> bool:
     profile["expires_at"] = ""           # a pooled NPC has no lifetime left
     profile["npc_wanderer"] = False
     profile.pop("wander_target", None)
+    # The HOME AREA goes with the slot stamps: a recycled sheet may come back
+    # as a barkeeper in another town, and yesterday's forest circle would send
+    # it walking into a place it has nothing to do with (spec § E3).
+    profile.pop("npc_home", None)
     profile["npc_pooled_reason"] = (reason or "").strip()
     save_character_profile(name, profile)
     set_character_status(name, POOLED_STATUS)
@@ -215,7 +219,7 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
 def revive_from_pool(name: str, location_id: str, room_id: str = "",
                      ttl_hours: Optional[float] = None, slot_role: str = "",
                      briefing: str = "", wanderer: bool = False,
-                     wander_target: str = "") -> bool:
+                     wander_target: str = "", radius_m: float = 0) -> bool:
     """Put a pooled NPC back into the world at a place. True on success.
 
     The same bookkeeping ``npc_ops.apply_npc`` stamps after a generated NPC —
@@ -223,11 +227,13 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     already there. NO name refresh: renaming a character means moving its
     storage directory and rewriting every row keyed by its name, which is the
     opposite of the cheap re-use this path exists for (see the plan note).
+
+    ``radius_m`` is the slot's home area (spec § E3): above 0 the NPC is put
+    at a free point around the place instead of into ``room_id`` — see
+    ``npc_home.place_npc``, the one helper all three placement paths share.
     """
     from app.core.npc_ops import expiry_stamp
     from app.models.character import (get_character_profile, is_temporary_npc,
-                                      save_character_current_location,
-                                      save_character_current_room,
                                       save_character_profile,
                                       set_character_status)
     if not name or not is_temporary_npc(name):
@@ -270,7 +276,7 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     # would run the three-turn pipeline for an NPC that is already claimed.
     from app.core.npc_assets import gate_placement
     if gate_placement(name, location_id, room_id, wanderer=wanderer,
-                      wander_target=wander_target):
+                      wander_target=wander_target, radius_m=radius_m):
         logger.info("Pooled NPC '%s' claimed for %s (role %r) — placed once "
                     "its assets exist", name, location_id or "(nowhere)",
                     slot_role or "-")
@@ -280,12 +286,9 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     # ordinary arrival side effects, and those read the roster.
     set_character_status(name, "")
     if location_id:
-        try:
-            save_character_current_location(name, location_id)
-            if room_id:
-                save_character_current_room(name, room_id)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("revive %s at %s failed: %s", name, location_id, e)
+        from app.core.npc_home import place_npc
+        if not place_npc(name, location_id, room_id, radius_m):
+            logger.warning("revive %s at %s failed", name, location_id)
             return False
     logger.info("Pooled NPC '%s' revived at %s (role %r)",
                 name, location_id or "(nowhere)", slot_role or "-")

@@ -318,17 +318,18 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
               briefing: str = "", ttl_hours: Optional[float] = None,
               created_by: str = "", template: str = "",
               slot_role: str = "", wanderer: bool = False,
-              wander_target: str = "") -> Dict[str, Any]:
+              wander_target: str = "", radius_m: float = 0) -> Dict[str, Any]:
     """Create the character, then stamp the NPC-only bookkeeping onto it.
 
     The heavy lifting is ``_apply_character_internal`` — the very same call the
     World-Dev apply uses, with the template pinned. Everything after it is the
     handful of fields the LLM must NOT write: where the NPC stands, what it was
     generated from, and when it dies.
+
+    ``radius_m`` is the slot's home area (spec § E3): above 0 the NPC is
+    placed at a free point around the place instead of into ``room_id``.
     """
     from app.models.character import (get_character_profile,
-                                      save_character_current_location,
-                                      save_character_current_room,
                                       save_character_profile)
     from app.routes.world_dev import _apply_character_internal
 
@@ -384,19 +385,14 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     # stands, not whether it exists.
     from app.core.npc_assets import gate_placement
     held = gate_placement(name, location_id, room_id, wanderer=wanderer,
-                          wander_target=wander_target)
+                          wander_target=wander_target, radius_m=radius_m)
 
-    # Placement, not movement: the NPC is CREATED standing there. This is the
-    # same structured setter the admin placement uses (it syncs the metre
-    # position), never a narrative "walks in".
+    # Placement, not movement: the NPC is CREATED standing there. THE one
+    # helper all three placement paths share (``npc_home.place_npc``): a slot
+    # with a radius stands at a free point, everything else in its room.
     if location_id and not held:
-        try:
-            save_character_current_location(name, location_id)
-            if room_id:
-                save_character_current_room(name, room_id)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("NPC %s could not be placed at %s: %s",
-                           name, location_id, e)
+        from app.core.npc_home import place_npc
+        place_npc(name, location_id, room_id, radius_m)
 
     result["expires_at"] = profile["expires_at"]
     result["default_skills"] = default_skills
@@ -573,7 +569,8 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
                           ttl_hours: Optional[float] = None,
                           template: str = "", slot_role: str = "",
                           wanderer: bool = False, wander_target: str = "",
-                          created_by: str = "npc_auto") -> Dict[str, Any]:
+                          created_by: str = "npc_auto",
+                          radius_m: float = 0) -> Dict[str, Any]:
     """generate → validate → repair → apply, synchronously. For queue workers.
 
     Same four stages and the same helpers as the SSE pipeline, with two
@@ -649,7 +646,8 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
     try:
         applied = apply_npc(data, location_id, room_id, briefing, ttl_hours,
                             created_by, template=tmpl, slot_role=slot_role,
-                            wanderer=wanderer, wander_target=wander_target)
+                            wanderer=wanderer, wander_target=wander_target,
+                            radius_m=radius_m)
     except Exception as e:  # noqa: BLE001
         logger.error("NPC auto-apply failed: %s", e)
         return {"ok": False, "error": f"apply failed: {e}"}

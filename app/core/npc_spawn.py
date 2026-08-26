@@ -131,6 +131,11 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
     "" = always, ``night``/``day`` = the season's sun, ``HH:MM-HH:MM`` = a
     literal span in GAME time. An unusable value becomes "" — a typo must not
     leave a slot shut forever without saying so, hence the warning.
+
+    ``radius_m`` is the slot's HOME AREA (spec § E3, :mod:`app.core.npc_home`):
+    0 = the old room placement, anything above it means the NPC stands at a
+    free point within that many metres of the place and roams there. It WINS
+    over ``room`` — a slot cannot be both in the taproom and out in the woods.
     """
     if not isinstance(raw, dict):
         return None
@@ -151,6 +156,10 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
 
     count_min = _count("count_min", 1)
     count_max = max(count_min, _count("count_max", max(1, count_min)))
+    try:
+        radius_m = max(0, int(float(raw.get("radius_m", 0) or 0)))
+    except (TypeError, ValueError):
+        radius_m = 0
     return {
         "role": role,
         "template": str(raw.get("template") or "").strip(),
@@ -159,6 +168,7 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
         "briefing": str(raw.get("briefing") or "").strip(),
         "room": str(raw.get("room") or "").strip(),
         "when": when,
+        "radius_m": radius_m,
     }
 
 
@@ -443,12 +453,14 @@ def spawn_for_slot(location: Dict[str, Any],
     location_id = str(location.get("id") or "")
     role = slot["role"]
     room = slot.get("room") or ""
+    radius_m = int(slot.get("radius_m") or 0)
     ttl = slot_ttl_hours()
 
     pooled = take_from_pool(role, template=slot.get("template") or "")
     if pooled and revive_from_pool(pooled, location_id, room, ttl_hours=ttl,
                                    slot_role=role,
-                                   briefing=slot.get("briefing") or ""):
+                                   briefing=slot.get("briefing") or "",
+                                   radius_m=radius_m):
         logger.info("Slot '%s' at %s filled from the pool: %s",
                     role, location_id, pooled)
         return pooled
@@ -456,7 +468,7 @@ def spawn_for_slot(location: Dict[str, Any],
     result = generate_npc_blocking(
         briefing=_slot_briefing(location, slot), location_id=location_id,
         room_id=room, ttl_hours=ttl, template=slot.get("template") or "",
-        slot_role=role, created_by="npc_slot")
+        slot_role=role, created_by="npc_slot", radius_m=radius_m)
     if not result.get("ok"):
         logger.warning("Slot '%s' at %s not filled: %s", role, location_id,
                        result.get("error"))

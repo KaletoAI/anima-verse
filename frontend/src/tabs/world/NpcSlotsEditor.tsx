@@ -17,6 +17,11 @@ import { groundRoomLabel, type NpcSlot, type Room } from './worldTypes'
 // — the forest's robbers are gone by daylight. It is stored in one field,
 // `when`: '' = always, 'night'/'day' follow the season's sunrise/sunset, and
 // a custom window is the literal 'HH:MM-HH:MM' the two clock inputs build.
+//
+// "Radius (m)" is the slot's HOME AREA (spec § E3): 0 places the NPC in a
+// room as before, anything above it puts it at a free point that many metres
+// around the place, where it roams instead of changing rooms. It WINS over
+// the room — which is why the room select goes dead as soon as it is set.
 
 const CUSTOM_DEFAULT = '20:00-06:00'
 
@@ -57,7 +62,15 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
   const add = () =>
     onChange([
       ...slots,
-      { role: '', count_min: 1, count_max: 1, briefing: '', room: '', when: '' },
+      {
+        role: '',
+        count_min: 1,
+        count_max: 1,
+        briefing: '',
+        room: '',
+        when: '',
+        radius_m: 0,
+      },
     ])
 
   const fillNow = async () => {
@@ -114,9 +127,18 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
               onChange={(e) => update(idx, { count_max: parseInt(e.target.value, 10) || 0 })}
             />
           </Field>
-          <Field label={t('Room')} compact>
+          <Field
+            label={t('Room')}
+            compact
+            hint={
+              (slot.radius_m || 0) > 0
+                ? t('Ignored — this slot has a home area instead of a room.')
+                : undefined
+            }
+          >
             <select
               className="ga-input"
+              disabled={(slot.radius_m || 0) > 0}
               value={slot.room || ''}
               onChange={(e) => update(idx, { room: e.target.value })}
             >
@@ -127,6 +149,31 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
                 </option>
               ))}
             </select>
+          </Field>
+          <Field
+            label={t('Radius (m)')}
+            compact
+            hint={t("0 = inside the location's rooms. Above 0 the NPC stands at a free point within this many metres of the place and roams there.")}
+          >
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="number"
+                className="ga-input"
+                min={0}
+                max={2000}
+                step={5}
+                style={{ width: 90 }}
+                value={slot.radius_m ?? 0}
+                onChange={(e) =>
+                  update(idx, { radius_m: Math.max(0, parseInt(e.target.value, 10) || 0) })
+                }
+              />
+              {(slot.radius_m || 0) > 0 && (
+                <span className="ga-muted" style={{ whiteSpace: 'nowrap' }}>
+                  {t('{n} m across').replace('{n}', String((slot.radius_m || 0) * 2))}
+                </span>
+              )}
+            </div>
           </Field>
           <Field
             label={t('Active')}

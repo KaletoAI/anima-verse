@@ -318,8 +318,14 @@ export interface NpcSlot {
   count_max?: number
   /** Free text the generator gets — who this person is at this place. */
   briefing?: string
-  /** Room the NPC is placed in. Empty = the location's arrival room. */
+  /** Room the NPC is placed in. Empty = the location's arrival room.
+   *  Ignored while `radius_m` is above 0 — a slot cannot be both indoors and
+   *  out in the open. */
   room?: string
+  /** Home area of the slot, in metres around the location (spec § E3).
+   *  0 = the ordinary room placement. Above 0 the NPC stands at a free point
+   *  within that radius and roams there instead of changing rooms. */
+  radius_m?: number
   /** When this slot is staffed, in GAME time. Empty = always; `night`/`day`
    *  follow the season's sunrise/sunset; `HH:MM-HH:MM` is a literal span that
    *  may wrap over midnight. Outside its window nobody spawns and the NPCs

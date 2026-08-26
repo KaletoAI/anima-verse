@@ -1,9 +1,22 @@
 """The action tick for temporary NPCs (plan-npc-leben § 0 B).
 
-A temporary NPC is placed once and would otherwise stand in that one room for
+A temporary NPC is placed once and would otherwise stand in that one spot for
 its whole life. This module gives it a cheap heartbeat: every so often a few
-of them get ONE small JSON turn that answers two questions — which room of
-their OWN location they are in now, and what they are doing there.
+of them get ONE small JSON turn about what happens next.
+
+THERE ARE TWO VARIANTS OF THAT TURN, and the NPC's own placement decides
+which one it gets (spec-npc-heimat-zeitfenster § E3):
+
+* **In a house** — the ordinary case. The turn answers two questions: which
+  room of its OWN location the NPC is in now, and what it is doing there.
+  Applied through ``force_set_status``.
+* **In a home area** — an NPC placed by a slot with a ``radius_m`` carries
+  ``npc_home`` and stands at a free metre point, usually outside every
+  location. There is no room to pick, so the turn answers ONE question: what
+  it is doing. The MOVEMENT is not asked at all — the tick draws the next
+  point of the home area itself (``npc_home.random_point``) and starts an
+  ordinary point journey to it. Asking a model for coordinates would only
+  invite hallucinated ones.
 
 Three properties make it cheap enough to run forever:
 
@@ -18,7 +31,8 @@ Three properties make it cheap enough to run forever:
   so the worst case per minute is a known number of small turns.
 * **Nothing crosses a location border.** Wandering between places is the
   wanderer tick's job (``npc_spawn.wanderer_tick``); this one only ever picks
-  a room of the location the NPC already stands in.
+  a room of the location the NPC already stands in — or a point of the home
+  area the NPC was placed in, which is bounded by its own radius.
 
 The answer is applied through ``force_set_status``, which is what makes this
 module short: the room change publishes the state event, writes the state
@@ -134,12 +148,29 @@ def _in_chat(name: str) -> bool:
         return False
 
 
+def _is_follower(name: str) -> bool:
+    """True while this NPC is a party FOLLOWER — dragged along, not walking.
+
+    A follower has lost SetLocation and Move, and the party engine cancels its
+    journey at the join: the leader's move is what carries it. So a roaming
+    turn for a follower can only produce a journey somebody else deletes —
+    and, until it is deleted, one walking away from the party it just joined.
+    """
+    try:
+        from app.core.party_engine import is_party_follower
+        return is_party_follower(name)
+    except Exception as e:  # noqa: BLE001 — a broken party row is not a bar
+        logger.debug("party check for %s failed: %s", name, e)
+        return False
+
+
 def candidates() -> List[str]:
     """The NPCs that get an action turn in THIS check, at most ``action_batch``.
 
     Living temporary NPCs (``list_temporary_npcs`` is living-only, so a pooled
-    NPC waiting for its assets is already out), standing somewhere, awake, not
-    mid-interaction, not mid-conversation with an avatar, cooldown elapsed.
+    NPC waiting for its assets is already out), standing somewhere OR carrying
+    a home area, awake, not mid-interaction, not mid-conversation with an
+    avatar, cooldown elapsed.
     """
     if not _enabled():
         return []
@@ -161,9 +192,13 @@ def candidates() -> List[str]:
             last = _last_action.get(name)
             if last is not None and (now - last) < interval:
                 continue
-            if not (get_character_current_location(name) or ""):
-                continue
             profile = get_character_profile(name) or {}
+            home = profile.get("npc_home")
+            if not (get_character_current_location(name) or "") and not home:
+                # NOWHERE AT ALL. An NPC with a home area is allowed to stand
+                # out in the open (that is the point of it); one without is
+                # simply not in the world.
+                continue
             if profile.get("is_sleeping"):
                 continue
             if profile.get("journey"):
@@ -174,6 +209,8 @@ def candidates() -> List[str]:
                 # is still moving. Same guard the wanderer tick uses
                 # (`npc_spawn._settle_wanderer`: "still walking = nothing to
                 # do"); arriving makes it a candidate again.
+                continue
+            if home and _is_follower(name):
                 continue
             if _is_busy(name, profile):
                 continue
@@ -192,14 +229,20 @@ def candidates() -> List[str]:
 
 def prompt_vars(name: str) -> Dict[str, Any]:
     """Every variable ``tasks/npc_action.md`` needs, or ``{}`` when this NPC
-    cannot be asked at all (no location, or a location without rooms).
+    cannot be asked at all (no home area AND no location, or a location
+    without rooms).
 
     Public because the smoke renders the template with exactly this set — a
     placeholder the module forgets is a StrictUndefined crash in production.
 
+    BOTH variants always fill the SAME key set, the unused half empty:
+    ``home`` is the switch the template branches on, and a key that exists in
+    only one branch is a crash waiting for the other one.
+
     ``location_id`` rides along as bookkeeping the template ignores: it is the
     place the room list was taken from, and :func:`run_action_for` compares it
-    against the character's location again before it writes anything.
+    against the character's location again before it writes anything. The home
+    variant leaves it empty — a roaming NPC has no room to invalidate.
     """
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
@@ -207,6 +250,28 @@ def prompt_vars(name: str) -> Dict[str, Any]:
                                       get_effective_activity)
     from app.models.world import (get_location_by_id, get_location_name,
                                   get_room_activity_hint, get_room_name)
+
+    profile = get_character_profile(name) or {}
+    home = profile.get("npc_home")
+    if isinstance(home, dict) and home:
+        from app.core.npc_home import describe
+        label = describe(home)
+        if label:
+            return {
+                "location_id": "",
+                "npc_name": name,
+                "npc_role": str(profile.get("npc_slot_role") or "").strip(),
+                "standing_task": str(profile.get("standing_task") or "").strip(),
+                "location_name": "",
+                "current_room_id": "",
+                "current_room_name": "",
+                "current_activity": get_effective_activity(name),
+                "game_time_label": game_time().label(),
+                "rooms": [],
+                "home": label,
+            }
+        logger.warning("npc_action(%s): unreadable npc_home %r — asked as an "
+                       "ordinary room NPC", name, home)
 
     location_id = get_character_current_location(name) or ""
     if not location_id:
@@ -223,7 +288,6 @@ def prompt_vars(name: str) -> Dict[str, Any]:
     if not rooms:
         return {}
 
-    profile = get_character_profile(name) or {}
     current_room = get_character_current_room(name) or ""
     return {
         "location_id": location_id,
@@ -237,6 +301,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
         "current_activity": get_effective_activity(name),
         "game_time_label": game_time().label(),
         "rooms": rooms,
+        "home": "",
     }
 
 
@@ -304,6 +369,56 @@ def _resolve_room(raw: Any, rooms: List[Dict[str, Any]]) -> str:
     return ""
 
 
+def _apply_home_answer(name: str,
+                       answer: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Apply the ROAMING variant's answer: the activity, then a walk.
+
+    The answer carries one field. The destination is drawn here, not asked:
+    ``npc_home.random_point`` knows the shape, the painted terrain and the
+    neighbouring places, and a model asked for coordinates would invent them.
+
+    THE ACTIVITY IS WRITTEN FIRST. ``set_pose_intent`` ends a running pair
+    interaction, and it must not do that to a journey this function has just
+    started; the other way round there is nothing to lose — the sentence
+    describes what the NPC does on its way, and a walk that cannot start
+    leaves an NPC that at least does something new where it stands.
+
+    ``None`` when the answer names no activity at all: it is the only field,
+    so an empty one is an unusable answer, not a silent walk.
+    """
+    from app.core.npc_home import random_point
+    from app.core.travel_engine import start_journey_to_point
+    from app.models.character import (force_set_status, get_character_pos,
+                                      get_character_profile)
+
+    activity = str(answer.get("activity") or "").strip()[:_MAX_ACTIVITY_CHARS]
+    if not activity:
+        logger.info("npc_action(%s): the roaming answer names no activity — "
+                    "discarded", name)
+        return None
+    profile = get_character_profile(name) or {}
+    home = profile.get("npc_home") or {}
+    if not force_set_status(name, activity=activity):
+        return None
+
+    pos = get_character_pos(name)
+    here = (pos["x"], pos["z"]) if pos else None
+    point = random_point(home, min_dist_from=here)
+    moved = False
+    if point is None:
+        logger.info("npc_action(%s): nowhere to walk in its home area right "
+                    "now — it stays where it is", name)
+    else:
+        _journey, reason = start_journey_to_point(name, point[0], point[1])
+        moved = reason == "ok"
+        if not moved:
+            logger.info("npc_action(%s): cannot walk to %s (%s)", name, point,
+                        reason)
+    logger.debug("npc_action(%s): %s%s", name, "roams " if moved else "",
+                 activity)
+    return {"name": name, "room": "", "activity": activity, "moved": moved}
+
+
 def run_action_for(name: str, *,
                    llm: Optional[Callable[..., Any]] = None
                    ) -> Optional[Dict[str, Any]]:
@@ -314,6 +429,10 @@ def run_action_for(name: str, *,
     location does not have, or a move the block rules deny. An unusable answer
     writes NOTHING, the activity included: it was composed for a room that
     does not exist or cannot be entered, so it describes nothing.
+
+    An NPC with a home area takes the roaming branch instead
+    (:func:`_apply_home_answer`): one field, no room, and the walk is drawn
+    rather than asked.
 
     ``llm`` is injectable for the smoke; it has ``llm_call``'s call shape.
     """
@@ -337,6 +456,12 @@ def run_action_for(name: str, *,
     if answer is None:
         logger.info("npc_action(%s): no usable answer", name)
         return None
+
+    if variables["home"]:
+        # THE ROAMING VARIANT. No room to validate and no location to compare:
+        # this NPC's place is its home area, and that cannot change during a
+        # turn (only pooling clears it, and a pooled NPC is no candidate).
+        return _apply_home_answer(name, answer)
 
     # THE PLACE MUST STILL BE THE PLACE. A turn takes seconds and the world
     # keeps running through it — a journey settling, an admin move, a party

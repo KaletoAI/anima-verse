@@ -136,12 +136,17 @@ def list_awaiting_assets() -> List[str]:
 
 
 def submit_assets_job(name: str, location_id: str, room_id: str = "",
-                      wanderer: bool = False, wander_target: str = "") -> str:
+                      wanderer: bool = False, wander_target: str = "",
+                      radius_m: float = 0) -> str:
     """Queue the finishing job for one NPC. Returns the task id ("" = deduped).
 
     Deduplicated per character: a second placement attempt for an NPC that is
     already being finished must not start a second run of the same three
     generations.
+
+    ``radius_m`` rides along for the same reason the road does: the job is
+    what places this NPC, and whether it belongs into a room or somewhere
+    around the place is the SLOT's decision, made before the gate ran.
 
     ``max_retries`` is set EXPLICITLY, because the queue's own default is 0
     (``task_queue.MAX_RETRIES_DEFAULT``) and this job is the only thing that
@@ -154,7 +159,8 @@ def submit_assets_job(name: str, location_id: str, room_id: str = "",
     return get_task_queue().submit(
         TASK_TYPE,
         {"name": name, "location_id": location_id, "room_id": room_id,
-         "wanderer": bool(wanderer), "wander_target": wander_target or ""},
+         "wanderer": bool(wanderer), "wander_target": wander_target or "",
+         "radius_m": float(radius_m or 0)},
         queue_name="background", agent_name=name, max_retries=ASSET_RETRIES,
         deduplicate=True)
 
@@ -214,7 +220,8 @@ def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str
 
 
 def gate_placement(name: str, location_id: str, room_id: str = "",
-                   wanderer: bool = False, wander_target: str = "") -> bool:
+                   wanderer: bool = False, wander_target: str = "",
+                   radius_m: float = 0) -> bool:
     """True when the NPC must NOT be placed yet — pooled, and the job queued.
 
     False means "place it, exactly as before": the gate is off, the character
@@ -238,7 +245,7 @@ def gate_placement(name: str, location_id: str, room_id: str = "",
     save_character_profile(name, profile)
     set_character_status(name, POOLED_STATUS)
     task_id = submit_assets_job(name, location_id, room_id, wanderer,
-                                wander_target)
+                                wander_target, radius_m)
     logger.info("NPC '%s' held back for %s — job %s", name,
                 ", ".join(missing), task_id or "(already queued)")
     return True
@@ -374,7 +381,8 @@ def _render_default_expression(name: str) -> str:
 # The job
 # ---------------------------------------------------------------------------
 
-def _place(name: str, location_id: str, room_id: str) -> None:
+def _place(name: str, location_id: str, room_id: str,
+           radius_m: float = 0) -> None:
     """Put the finished NPC into the world — the order of ``revive_from_pool``.
 
     Back into the roster BEFORE the placement: the location setter runs the
@@ -384,11 +392,13 @@ def _place(name: str, location_id: str, room_id: str) -> None:
     temporary NPC's outfit text is edited, and that NPC is standing in the
     world at the time — placing it again would drag it back to wherever the
     ORIGINAL job was headed, hours of world time later.
+
+    ``radius_m`` is the slot's home area, carried in the payload: the same
+    helper decides room-or-point for all three placement paths.
     """
+    from app.core.npc_home import place_npc
     from app.models.character import (POOLED_STATUS, get_character_profile,
                                       get_character_status,
-                                      save_character_current_location,
-                                      save_character_current_room,
                                       save_character_profile,
                                       set_character_status)
     if get_character_status(name) != POOLED_STATUS:
@@ -400,9 +410,7 @@ def _place(name: str, location_id: str, room_id: str) -> None:
         save_character_profile(name, profile)   # it is not waiting any more
     set_character_status(name, "")
     if location_id:
-        save_character_current_location(name, location_id)
-        if room_id:
-            save_character_current_room(name, room_id)
+        place_npc(name, location_id, room_id, radius_m)
 
 
 def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -426,6 +434,10 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
     # already knows where this wanderer was headed — no worker can pick it up
     # in a window where the target is not written yet.
     wander_target = str(payload.get("wander_target") or "").strip()
+    try:
+        radius_m = float(payload.get("radius_m") or 0)
+    except (TypeError, ValueError):
+        radius_m = 0.0
 
     missing = npc_assets_complete(name)
     if "outfit_description" in missing:
@@ -473,7 +485,7 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"NPC '{name}' still incomplete after the attempt: "
             f"{', '.join(still_missing)}{detail}")
 
-    _place(name, location_id, room_id)
+    _place(name, location_id, room_id, radius_m)
     sent = False
     if wanderer and wander_target:
         from app.core.npc_spawn import _send_wanderer
