@@ -560,6 +560,12 @@ async function startApp(username: string, role: string) {
       // (W4c): shallower is waded on the figure's own walk clip, feet on the
       // bed. `walk.wadeGate` in the manager applies it.
       swimFrom: type.swim_from_m,
+      // …and HOW FAST that ground is walked, raw (`walk.terrainPace` turns it
+      // into a pace, together with the scope below). It rides along on the
+      // same `typeAt` read the clips come from, so the figure that walks by
+      // its own reckoning — a traveller whose route the fog withheld — is
+      // slowed by the very ground the avatar is slowed by.
+      speed: type.speed_factor,
       scope: groundScopeAt(x, z) };
   });
   engine.scene.add(npcs.group);

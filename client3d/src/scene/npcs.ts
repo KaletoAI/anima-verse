@@ -3,12 +3,12 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
-  ghostCutY, groundWaterLevel, idleClip, moveClip, sinkForState, wadeGate,
+  ghostCutY, groundWaterLevel, idleClip, moveClip, sinkForState, terrainPace, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import { seededRandom } from './textures';
-import { advanceProgress, catchUpStep, clampProgress, densifyPolyline, pointAtDistance, remainingPoints, shouldSnap, trimBucket, type MetrePoint } from './travelPath';
+import { advanceProgress, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, shouldSnap, trimBucket, type MetrePoint } from './travelPath';
 
 /** Walking pace in METRES PER SECOND — and since E4 that is all it is: the
  *  metre world has one scale, so this number means the same thing on the map
@@ -27,6 +27,14 @@ export interface GroundMove {
   anim: string;
   idle: string;
   scope: GroundScope;
+  /** The terrain type's raw `speed_factor` at the point (1 = plain ground).
+   *  RAW: what it means for a walking figure is `walk.terrainPace`, which
+   *  needs the `scope` beside it — a built place replaces the ground with its
+   *  own floor whatever the catalog holds there. Only the figures that walk
+   *  by their own reckoning read it (a fogged traveller, see `deadReckonStep`);
+   *  the avatar's pace is read in `main.ts`, where the same lookup happens for
+   *  the same reason. */
+  speed: number;
   /** The ground's two depths in metres (`meta.move_sink_m` /
    *  `meta.idle_sink_m`, 0 = nothing sinks) — how deep the figure stands IN it
    *  while it moves and while it waits. Which one counts is `sinkForState`. */
@@ -144,6 +152,14 @@ interface Npc {
    *  `progressM` keeps running and only reconciles against a fresh poll; a new
    *  key is a new journey and is adopted whole. */
   route: (TravelRoute & { key: string }) | null;
+  /** the payload says this figure is on a JOURNEY (`char.travel`) — true for a
+   *  fogged traveller as well, which is the one that has no `route` (§ A12) */
+  travelling: boolean;
+  /** DEAD RECKONING of a traveller without a route (§ A12, decision
+   *  `77dbdb61`): the last POLLED point, the real second it was seen at, the
+   *  poll stamp it belonged to, and the rate measured against the point
+   *  before it. `null` for everyone who is not such a figure. */
+  reckon: { pos: MetrePoint; atS: number; stamp: number; rateMS: number | null } | null;
   /** running pair interaction (§ A8a) — placement AND clip come from it */
   interaction: PairPlay | null;
   activity: string;
@@ -267,7 +283,7 @@ export class NpcManager {
    * is the world without painted ground: walk, run and idle as always.
    */
   private groundMoveAt: (x: number, z: number) => GroundMove =
-    () => ({ anim: '', idle: '', scope: 'wilderness',
+    () => ({ anim: '', idle: '', scope: 'wilderness', speed: 1,
       sink: { move: 0, idle: 0 }, water: null,
       swimFrom: SWIM_FROM_DEFAULT_M });
 
@@ -559,6 +575,11 @@ export class NpcManager {
         npc.animation = st.char.activity_animation || undefined;
         npc.labelActivity.textContent = npc.activity;
         npc.labelName.textContent = st.char.name;
+        // …and for the same reason it carries no dead reckoning: a figure the
+        // player steers walks on the player's input, not on a rate measured
+        // between two polls of where the server thought it was.
+        npc.travelling = false;
+        npc.reckon = null;
         this.updateTravelLine(npc, null);
         continue;
       }
@@ -659,6 +680,38 @@ export class NpcManager {
       const travelling = !!st.char.travel;
       const eta = st.char.travel?.eta_hhmm ? ` ${st.char.travel.eta_hhmm}` : '';
       npc.labelName.textContent = (travelling ? `🚶${eta} ` : '') + st.char.name;
+      npc.travelling = travelling;
+      // DEAD RECKONING for a traveller the fog left without a route (§ A12,
+      // decision `77dbdb61`): the payload thins a foreign traveller's row down
+      // to its `pos` — neither the goal nor the speed of someone else's
+      // journey is the avatar's to know — and that decision stands, so the
+      // client does not ask for the missing rate. It MEASURES it instead, from
+      // the gap between the last two polled points over the real time between
+      // them (`deadReckonRate`).
+      //
+      // Gated on the STAMP, never on the call: `update()` runs at 1 Hz off the
+      // CACHED map while the poll is 3 s, so the same payload arrives three
+      // times and the last two of them would measure a gap of zero over the
+      // seconds in between — a figure braked to a standstill by its own
+      // bookkeeping.
+      if (travelling && !npc.route) {
+        const stamp = st.stamp ?? 0;
+        const cur: MetrePoint = [st.pos.x, st.pos.z];
+        const atS = performance.now() / 1000;
+        if (!npc.reckon) {
+          npc.reckon = { pos: cur, atS, stamp, rateMS: null };
+        } else if (npc.reckon.stamp !== stamp) {
+          // A refused measurement (`null`) KEEPS the rate the figure was
+          // walking at — it is a missing observation, not a report of standing
+          // still. A measured 0 is such a report and does replace it.
+          const rate = deadReckonRate(npc.reckon.pos, npc.reckon.atS, cur, atS);
+          npc.reckon = { pos: cur, atS, stamp, rateMS: rate ?? npc.reckon.rateMS };
+        }
+      } else {
+        // Arrived, or the route came out of the fog: the measurement belongs
+        // to a journey and must not survive it into the next one.
+        npc.reckon = null;
+      }
       this.updateTravelLine(npc, npc.route);
     }
     for (const [name, npc] of this.npcs) {
@@ -741,7 +794,8 @@ export class NpcManager {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
       labelBubble: bubbleEl, bubbleUntil: 0,
-      target: st.pos.clone(), pace: 1, face: st.face ?? null, waypoints: [], route: null, interaction: null, activity: st.char.activity || '',
+      target: st.pos.clone(), pace: 1, face: st.face ?? null, waypoints: [], route: null,
+      travelling: false, reckon: null, interaction: null, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
@@ -1014,7 +1068,7 @@ export class NpcManager {
         npc.label.visible = labelVisible;
         continue;   // travellers skip the normal goal/waypoint logic
       }
-      // Nächster Wegpunkt (falls ein Weg geplant ist), sonst direkt zum Ziel
+      // The next waypoint (when a way is planned), otherwise straight to the goal
       while (npc.waypoints.length && npc.root.position.distanceTo(npc.waypoints[0]) < 1.5) {
         npc.waypoints.shift();
       }
@@ -1022,16 +1076,45 @@ export class NpcManager {
       const delta = goal.clone().sub(npc.root.position);
       delta.y = 0;
       const distToGoal = delta.length();
-      const dist = npc.waypoints.length ? distToGoal + 10 : distToGoal;  // unterwegs = laufen
+      const dist = npc.waypoints.length ? distToGoal + 10 : distToGoal;  // on the way = running
       const moving = distToGoal > MOVE_EPS_M;
+      // A TRAVELLER WITHOUT A ROUTE WALKS BY ITS OWN RECKONING, and never in
+      // the run boost. Under fog the worldmap thins a foreign traveller's row
+      // down to `pos` (decision `77dbdb61`: neither the goal nor the speed of
+      // someone else's journey is revealed) — so this figure lands in the
+      // generic branch below with `route = null`, `target = pos` and `pace =
+      // 1`, and that branch would sprint it at `3.4 * 1.8 = 6.12 m/s` in a
+      // straight line: a wanderer's real pace is ~2 m/s, one 3 s poll gap is
+      // 6 m, and 6 m is exactly `RUN_DISTANCE`. Sprint, pause, sprint.
+      //
+      // The client does not ask the server for what the decision withholds. It
+      // MEASURES the rate between the last two polled points (`update()`,
+      // `deadReckonRate`) and walks it — scaled by the ground under the figure
+      // (`walk.terrainPace`, the very pace the avatar walks under) and capped
+      // by the distance to the polled point, which is the one position the
+      // server vouched for. Without a measurement yet (the first sighting) the
+      // old walk stands, minus the boost.
+      const reckoning = npc.travelling && npc.name !== this.playerDriven;
+      const reckonRate = reckoning ? npc.reckon?.rateMS ?? null : null;
       if (moving) {
         // ONE pace for every figure, the player's included: `WALK_SPEED` is
         // metres a second and a metre is a metre (E4). `npc.pace` is what the
         // GROUND allows on top of that (1 for everybody but the avatar) —
         // the step is where the terrain pace belongs, because the goal is a
         // fixed lead ahead and a paced lead would fall under `MOVE_EPS_M`.
-        const step = Math.min(distToGoal,
-          WALK_SPEED * dt * npc.pace * (dist > RUN_DISTANCE ? 1.8 : 1));
+        let step: number;
+        if (reckonRate !== null) {
+          // The reckoned figure reads its own ground here, BEFORE the step:
+          // the pace belongs to the metre the figure is standing on, and the
+          // sample below (`standRaw`) is taken after the move, for the clip
+          // and the height of where it arrives.
+          const paceRaw = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
+          step = deadReckonStep(reckonRate, terrainPace(paceRaw.speed, paceRaw.scope),
+                                dt, distToGoal);
+        } else {
+          step = Math.min(distToGoal,
+            WALK_SPEED * dt * npc.pace * (!reckoning && dist > RUN_DISTANCE ? 1.8 : 1));
+        }
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
@@ -1097,7 +1180,7 @@ export class NpcManager {
         // very number the root was raised with above, which is what makes the
         // pair meet: root − sink is the surface the body rests on.
         npc.figure.play(
-          moving ? moveClip(standGm.anim, dist > RUN_DISTANCE, standRaw.scope)
+          moving ? moveClip(standGm.anim, !reckoning && dist > RUN_DISTANCE, standRaw.scope)
             : (standIdle || standingClip), moving || !!standIdle, standSink);
         npc.figure.update(dt);
         // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben

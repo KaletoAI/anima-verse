@@ -273,6 +273,80 @@ export function catchUpStep(
 }
 
 /**
+ * DEAD RECKONING, part one: how fast a figure moved between two polled
+ * positions, in METRES PER REAL SECOND — or `null` when that cannot be said.
+ *
+ * This exists because of decision `77dbdb61`. Under fog the worldmap thins a
+ * FOREIGN traveller's row down to its `pos`: `waypoints`, `progress_m`,
+ * `total_m`, `speed_m_s_real` and `pace_m_s_real` are all withheld, because
+ * neither the goal nor the speed of someone else's journey is the avatar's to
+ * know. The client therefore may not ASK for the rate — it can only MEASURE
+ * it, from the one thing it does see: a fresh point every worldmap poll.
+ *
+ *     rate = |cur − prev| / (atS − prevAtS)
+ *
+ * `prevAtS`/`atS` are real seconds, taken when the payload STAMP changed —
+ * not on every call: `npcs.update()` runs at 1 Hz off the cached map and
+ * would otherwise measure the same poll three times, the last two of them
+ * over a gap of zero.
+ *
+ * `null` means "no measurement", and the caller keeps whatever rate it had:
+ * no previous point (the first sighting), a non-positive time difference (a
+ * duplicated poll — never `gap / 0 = Infinity`) or any non-finite input. A
+ * figure that genuinely did not move answers 0, which is a measurement and
+ * not a gap in one.
+ */
+export function deadReckonRate(
+  prev: MetrePoint | null | undefined, prevAtS: number,
+  cur: MetrePoint | null | undefined, atS: number
+): number | null {
+  if (!prev || !cur) return null;
+  // The coordinates are checked HERE and not left to `segLength`: that one
+  // answers 0 for a malformed pair (a length of zero draws nothing, which is
+  // the right answer for a polyline segment), and 0 would be a measurement —
+  // "the figure stood still" — for a payload that said nothing of the kind.
+  if (!isNum(prev[0]) || !isNum(prev[1]) || !isNum(cur[0]) || !isNum(cur[1])) return null;
+  if (!isNum(prevAtS) || !isNum(atS)) return null;
+  const dtS = atS - prevAtS;
+  if (dtS <= 0) return null;
+  const rate = segLength(prev, cur) / dtS;
+  return isNum(rate) ? rate : null;
+}
+
+/**
+ * DEAD RECKONING, part two: how far such a figure walks in ONE frame.
+ *
+ *     step = min(remainingM, rate × pace × dt)
+ *
+ * THERE IS NO RUN FACTOR IN IT, and that is the whole point. The generic
+ * catch-up branch of `npcs.ts` multiplies the walking speed by 1.8 as soon as
+ * the goal is more than `RUN_DISTANCE` = 6 m away — and 6 m is exactly what a
+ * 2 m/s wanderer covers between two 3 s polls, so a fogged traveller sprinted
+ * the whole gap in a second and stood for two. A measured rate needs no boost
+ * to keep up with itself.
+ *
+ * `pace` is the ground under the figure (`walk.terrainPace`, 1 = plain
+ * ground) — the same scaling the avatar walks under. Anything that is not a
+ * positive finite number counts as 1: a real pace is already clamped at
+ * `walk.MIN_PACE`, so a value outside that is a broken lookup and must not
+ * nail the figure to the spot.
+ *
+ * `remainingM` is the distance to the POLLED point and caps the step: the
+ * reckoning may never walk past the only position the server vouched for.
+ * A missing rate (`null` — nothing measured yet), a non-positive one, no time
+ * passed and nothing left to walk all give 0.
+ */
+export function deadReckonStep(
+  rateMS: number | null | undefined, pace: number | null | undefined,
+  dt: number, remainingM: number
+): number {
+  if (!isNum(rateMS) || rateMS <= 0 || !isNum(dt) || dt <= 0) return 0;
+  if (!isNum(remainingM) || remainingM <= 0) return 0;
+  const p = isNum(pace) && pace > 0 ? pace : 1;
+  return Math.min(remainingM, rateMS * p * dt);
+}
+
+/**
  * Does a freshly polled `progress_m` override the locally extrapolated one?
  *
  * Only past `TRAVEL_SNAP_M`. Both numbers are pre-clamped finite metres (the
