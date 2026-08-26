@@ -293,10 +293,18 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
         profile["current_activity"] = task
     save_character_profile(name, profile)
 
+    # THE FINISH GATE (plan-npc-leben § 0 A). An NPC with no portrait, no mesh
+    # and no outfit text is not put on the map at all: it stays pooled and one
+    # `npc_assets` job renders what is missing and places it afterwards. The
+    # character SHEET is written either way — the gate decides where the NPC
+    # stands, not whether it exists.
+    from app.core.npc_assets import gate_placement
+    held = gate_placement(name, location_id, room_id, wanderer=wanderer)
+
     # Placement, not movement: the NPC is CREATED standing there. This is the
     # same structured setter the admin placement uses (it syncs the metre
     # position), never a narrative "walks in".
-    if location_id:
+    if location_id and not held:
         try:
             save_character_current_location(name, location_id)
             if room_id:
@@ -306,10 +314,13 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
                            name, location_id, e)
 
     result["expires_at"] = profile["expires_at"]
+    result["held_for_assets"] = held
     result["location_id"] = location_id
     result["room_id"] = room_id
-    logger.info("Temporary NPC '%s' created at %s (expires %s)",
-                name, location_id or "(nowhere)", profile["expires_at"] or "never")
+    logger.info("Temporary NPC '%s' created at %s (expires %s)%s",
+                name, location_id or "(nowhere)",
+                profile["expires_at"] or "never",
+                " — held back until its assets exist" if held else "")
     return result
 
 

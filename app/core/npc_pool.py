@@ -234,6 +234,19 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
         profile["current_activity"] = task
     profile.pop("npc_pooled_reason", None)
     save_character_profile(name, profile)
+
+    # THE FINISH GATE (plan-npc-leben § 0 A), before the NPC is back in the
+    # roster: a pooled sheet may be missing its portrait or its mesh, and an
+    # unfinished NPC is not put on the map. TRUE for the caller all the same —
+    # `npc_spawn.spawn_for_slot` reads False as "the pool did not deliver" and
+    # would run the three-turn pipeline for an NPC that is already claimed.
+    from app.core.npc_assets import gate_placement
+    if gate_placement(name, location_id, room_id, wanderer=wanderer):
+        logger.info("Pooled NPC '%s' claimed for %s (role %r) — placed once "
+                    "its assets exist", name, location_id or "(nowhere)",
+                    slot_role or "-")
+        return True
+
     # Back into the roster BEFORE the placement: the location setter runs the
     # ordinary arrival side effects, and those read the roster.
     set_character_status(name, "")

@@ -842,6 +842,29 @@ SECTIONS = {
                 "min": 0, "max": 2400,
                 "description": "GAME hours a wanderer stays alive even if it never "
                                "arrives anywhere. 0 = no lifetime."},
+            "require_assets": {
+                "type": "bool", "label": "Only finished NPCs enter the world",
+                "default": True,
+                "description": "An NPC is placed only once it has a profile image, a "
+                               "3D model for its worn outfit and an outfit description. "
+                               "Until then it waits out of sight while a background job "
+                               "renders the missing pieces. Off = it appears at once, "
+                               "possibly without a face or a figure."},
+            "action_tick_enabled": {
+                "type": "bool", "label": "NPC action tick", "default": True,
+                "description": "Let living NPCs change room and activity on their own, "
+                               "guided by a small LLM turn. Off = they keep doing their "
+                               "standing task where they were placed."},
+            "action_interval_game_minutes": {
+                "type": "int", "label": "Action interval (game min)", "default": 30,
+                "min": 1, "max": 1440,
+                "description": "Minimum GAME time between two action turns of the SAME "
+                               "NPC. Lower = a livelier place and more LLM calls."},
+            "action_batch": {
+                "type": "int", "label": "NPCs per action tick", "default": 2,
+                "min": 1, "max": 20,
+                "description": "How many NPCs at most get an action turn in one check. "
+                               "The cap on how much the tick can cost per minute."},
         },
     },
     "story_engine": {

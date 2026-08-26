@@ -285,6 +285,7 @@
           "rows": 3,
           "in_prompt": false,
           "llm_generable": true,
+          "required": true,
           "placeholder": "e.g. grey linen apron over a rolled-up white shirt, dark trousers",
           "placeholder_de": "z.B. graue Leinenschürze über hochgekrempeltem weißem Hemd, dunkle Hose",
           "hint": "English prompt text, used verbatim by image prompts and the chat prompt. This character wears no wardrobe pieces — the text IS the outfit.",
