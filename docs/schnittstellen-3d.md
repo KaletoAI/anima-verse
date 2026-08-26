@@ -6022,15 +6022,37 @@ verschiedenen Tiefen gemalt wurde) — wer eine andere Deckkraft braucht, malt
 eine eigene ART.
 
 **Der Fließvektor** fährt als zweites Datenfeld neben dem Pegel mit
-(`uTlodFlow`, RG32F, **nur Stufe 0** derselben Lattice) und wird **im Vertex**
-gelesen — die Richtung ist glatt, das Varying ist der Zwilling des alten
-`aWaterFlow`-Attributs, und seine LÄNGE ist wie dort der Geschwindigkeitsfaktor
-der Fläche.
+(`uTlodFlow`, RG32F, **nur Stufe 0** derselben Lattice) und wird **im Fragment**
+gelesen (`waterShade.twFlowAt`, am eigenen XZ des Pixels, 4 `texelFetch`
+bilinear auf Stufe 0). Seine LÄNGE ist der Geschwindigkeitsfaktor der Fläche,
+`(0,0)` ist stilles Wasser.
+
+**Warum nicht im Vertex** (Nachtrag 2026-08-27, vorher stand hier genau das):
+Die Richtung ist glatt, ein Varying lag also nahe — nur ist das Feld es nicht.
+Der Server schreibt den Fluss ausschließlich ins Gewässer plus die 4 m
+Dilatation des Bakes, und die Vertices eines Terrain-Stücks stehen
+`baseStep · 2^level` Meter auseinander: 2 m auf Stufe 0, 16 m auf Stufe 3,
+64 m auf Stufe 5. Ein 6 m breiter Fluss ist mit Dilatation ein 14 m schmales
+Band — aus 16 m Abstand können **alle vier** Ecken einer Zelle daneben liegen,
+das Varying ist dann exakt `(0,0)`, und `twRipple` nimmt seinen STILL-Zweig:
+gezeichnetes stehendes Wasser, während die Punkt-Messung der Debug-Zeile am
+selben Ort 2 m/s meldet. Das ist kein Randfall, sondern die Mehrheit der
+Ausrichtungen ab Stufe 4. Der Fragment-Tap kennt die Stufe gar nicht und kann
+deshalb nicht kollabieren. `tlodFlowAt` und `vTlodFlow` sind ersatzlos
+gelöscht; der TS-Zwilling der GPU-Lesung heißt `terrainLod.gpuWaterFlowAt`.
+
+**Der Admin-Grundriss ist davon nicht betroffen.** Die Vorschau rendert das
+Wasser weiter als Spiegel-Mesh aus `packages/scene-render/materials.ts`, mit
+einem konstanten `aWaterFlow` je Fläche und ohne LOD — es gibt dort weder
+Lattice noch Stufen, an denen etwas ausfallen könnte.
 
 **Was das trockene Programm kostet: nichts.** Die dry-Variante bekommt weder
 Chunk noch Uniform noch Anker dazu; ihr Fragment ist Zeichen für Zeichen das
-von vorher (Beweis: `smoke_terrain_lod.mjs` [18]). Innerhalb der nassen
-Variante zahlt ein trockenes Pixel zwei Ableitungen und einen Vergleich.
+von vorher (Beweis: `smoke_terrain_lod.mjs` [18]). **Was das nasse Programm
+kostet:** ein trockenes Pixel innerhalb der nassen Variante zahlt zwei
+Ableitungen und einen Vergleich; ein Wasserpixel zahlt seit dem Umzug **+4
+`texelFetch` im Fragment**, dafür fallen im Vertex **−4** weg (das wet-Vertex-
+Programm sinkt von 20 auf 16 Fetches, das dry bleibt unberührt).
 
 **Zurückgegebene Arbeit:** wo `twA == 1` (ab der Deckkraft-Tiefe) ist die
 Bodennormale unsichtbar und wird **nicht berechnet** — `tlodNormalAt` sind 16
@@ -6045,8 +6067,9 @@ trockene Programm mitverändern.
 | Look-Tabelle = die Defaults des Spiegels, Packung | ebenda [4] |
 | Flow-Frame: Identität bei Stille, 3:1 stromauf | ebenda [5] |
 | GLSL-Pins: Reihenfolge, Konstanten, `textureGrad`, Maskenpaar | ebenda [6] |
+| Fließvektor im Fragment: `twFlowAt` = Punktmessung auf jeder Stufe, das zurückgebaute Vertex-Blend geht ab Stufe 3 still | `client3d/scripts/smoke_flow_lod.mjs` |
 | Trockenes Programm unverändert, drei Einfügepunkte, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [18] |
-| Tiefen-Varying, Flow-Varying, `liftedDepth` | ebenda [17] |
+| Tiefen-Varying, `liftedDepth`, und dass es KEIN Flow-Varying mehr gibt | ebenda [17] |
 
 ### 10. Der Rückbau des Spiegels (K-A E5)
 
