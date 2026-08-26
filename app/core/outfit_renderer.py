@@ -178,6 +178,20 @@ def render_outfit(
     items = equipped_items if equipped_items is not None else (
         profile.get("equipped_items") or [])
 
+    # A template without an outfit system (features.outfit_system_enabled:
+    # false — e.g. npc-temporary) dresses via ``outfit_description`` ONLY.
+    # Structured leftovers (pieces minted by a mis-templated edit and still
+    # equipped) must never override that text — the wardrobe UI is hidden
+    # for these templates, so stray pieces would be uncorrectable and the
+    # rendered image would contradict the description.
+    try:
+        from app.models.character_template import get_template
+        _tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
+        if _tmpl and (_tmpl.get("features") or {}).get("outfit_system_enabled") is False:
+            pieces, items = {}, []
+    except Exception:
+        pass
+
     covered = collect_covered_slots(pieces)
     partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS))
 
