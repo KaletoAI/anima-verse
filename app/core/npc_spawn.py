@@ -368,9 +368,11 @@ def consider_point(avatar: str, x: float, z: float,
     THE PAINTED AREAS ARE ASKED THE SAME QUESTION (spec § E3.2), only their
     geometry differs: ``polygon_distance`` is 0 anywhere INSIDE the shape, so
     "the avatar is standing in the wood" and "the avatar is within
-    ``npc.spawn_radius_m`` of its edge" are one comparison. They cost one
-    ``list_areas`` read, which is why it happens after the location loop and
-    only when some area actually declares slots.
+    ``npc.spawn_radius_m`` of its edge" are one comparison. Unlike the
+    locations they are NOT in the snapshot the report already read, so this
+    half costs one ``list_areas`` per report — the one read in this function,
+    and the reason the area pass sits after the location loop rather than
+    before it.
 
     Returns the ids a job was submitted for — location ids and area ids in one
     list (for the log and the smokes); never raises into the report path.
