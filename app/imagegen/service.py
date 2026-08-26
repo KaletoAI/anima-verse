@@ -1284,6 +1284,7 @@ class ImageService:
             "user_input": ctx.get("user_input", ""),
             "profile_only": ctx.get("profile_only", False),
             "to_avatar_gallery": ctx.get("to_avatar_gallery", False),
+            "gallery_character": ctx.get("gallery_character", ""),
             "image_use_case": ctx.get("image_use_case", ""),
         }
 
@@ -1293,6 +1294,76 @@ class ImageService:
             data["prompt"] = ""
 
         return data
+
+    def _resolve_gallery_character(self, character_name: str, prompt_text: str,
+                                   rp_context: str, input_data: Dict[str, Any],
+                                   *, skip_gallery: bool = False,
+                                   set_profile: bool = False) -> str:
+        """WHOSE gallery does this render belong to? Priority, high to low:
+
+          (a0) ``gallery_character`` names the owner outright — the caller
+               knows who the picture is FOR (a temporary NPC shooting for the
+               avatar it talks to). Validated against the living cast so a
+               stray name cannot mint a ghost directory.
+          (a)  ``to_avatar_gallery`` -> the avatar (e.g. the SendImage intent).
+          (b)  a recipient named in the prompt ("for Diego", "to Enzo") -> that
+               recipient's gallery. Works for background thoughts too.
+          (c)  the avatar is ACTIVELY chatting with the creating NPC -> the
+               avatar's gallery.
+          (d)  otherwise the creator keeps the picture (a background thought
+               with no clear recipient).
+
+        ``agent_name`` (= *character_name*) alone builds the prompt, so moving
+        the gallery never moves the subject of the photo. A profile render
+        stays with the agent — otherwise the portrait lands in the wrong
+        gallery.
+        """
+        if skip_gallery or set_profile:
+            return character_name
+        try:
+            from app.models.account import get_active_character
+            from app.models.character import list_available_characters
+            _avatar = (get_active_character() or "").strip()
+            _all_chars = [c for c in list_available_characters()
+                          if not c.startswith("_")]
+
+            _named = str(input_data.get("gallery_character") or "").strip()
+            if _named and _named in _all_chars:
+                logger.info("Image goes to the gallery of '%s' "
+                            "(agent=%s, source=named)", _named, character_name)
+                return _named
+            if (bool(input_data.get("to_avatar_gallery")) and _avatar
+                    and _avatar != character_name):
+                logger.info("Image goes to the avatar's gallery "
+                            "(agent=%s -> avatar=%s, source=explicit)",
+                            character_name, _avatar)
+                return _avatar
+            if rp_context:
+                recipient = self._detect_recipient_from_prompt(
+                    prompt_text, character_name, _all_chars)
+                if recipient:
+                    logger.info("Image routed to recipient '%s' (agent=%s, "
+                                "the prompt names it as the addressee)",
+                                recipient, character_name)
+                    return recipient
+                _is_active_chat = False
+                try:
+                    from app.routes.chat import _get_chat_partner
+                    _is_active_chat = (
+                        (_get_chat_partner() or "").strip() == character_name)
+                except Exception:
+                    pass
+                if _is_active_chat and _avatar and _avatar != character_name:
+                    logger.info("Image goes to the avatar's gallery "
+                                "(agent=%s -> avatar=%s, source=active_chat)",
+                                character_name, _avatar)
+                    return _avatar
+                logger.info("Image stays with its creator '%s' (rp_context=True, "
+                            "no recipient detected, no active chat with the avatar)",
+                            character_name)
+        except Exception as _gt_err:  # noqa: BLE001
+            logger.debug("Gallery target resolve failed: %s", _gt_err)
+        return character_name
 
     def generate_from_input(self, prompt: str) -> str:
         """Generates an image via the cheapest available instance.
@@ -1782,61 +1853,9 @@ class ImageService:
             # (mit dem finalen, trigger-injizierten Prompt) — via log_meta oben.
 
             # 1. Zuerst Bilder/Videos auf die Platte speichern.
-            # Gallery-Target-Routing (Prio von hoch nach niedrig):
-            #  (a) `to_avatar_gallery=True` explizit -> Avatar (z.B. SendImage-Intent)
-            #  (b) Empfaenger-Erkennung aus Prompt ("Fuer Diego", "An Enzo") ->
-            #      Empfaenger's Galerie. Funktioniert auch fuer Background-Thoughts.
-            #  (c) Avatar chattet AKTIV mit dem Erzeuger-NPC -> Avatar's Galerie.
-            #  (d) Sonst -> Erzeuger behaelt das Bild (Background-Thoughts ohne
-            #      klaren Empfaenger).
-            # set_profile bleibt beim Agent — sonst landet das Profilbild
-            # in der falschen Galerie.
-            _explicit_avatar = bool(input_data.get("to_avatar_gallery"))
-            gallery_character = character_name
-            if not skip_gallery and not set_profile:
-                try:
-                    from app.models.account import get_active_character
-                    from app.models.character import list_available_characters
-                    _avatar = (get_active_character() or "").strip()
-                    _all_chars = [c for c in list_available_characters() if not c.startswith("_")]
-
-                    # (a) explicit-avatar override wins
-                    if _explicit_avatar and _avatar and _avatar != character_name:
-                        gallery_character = _avatar
-                        logger.info(
-                            "Bild wird in Avatar-Galerie gespeichert "
-                            "(agent=%s -> avatar=%s, source=explicit)",
-                            character_name, _avatar)
-                    elif rp_context:
-                        # (b) Empfaenger aus Prompt-Text extrahieren
-                        recipient = self._detect_recipient_from_prompt(
-                            prompt_text, character_name, _all_chars)
-                        if recipient:
-                            gallery_character = recipient
-                            logger.info(
-                                "Bild routed zu Empfaenger '%s' (agent=%s, prompt enthaelt 'fuer/an %s')",
-                                recipient, character_name, recipient)
-                        else:
-                            # (c) avatar chattet aktiv mit creator?
-                            _is_active_chat = False
-                            try:
-                                from app.routes.chat import _get_chat_partner
-                                _is_active_chat = (_get_chat_partner() or "").strip() == character_name
-                            except Exception:
-                                pass
-                            if _is_active_chat and _avatar and _avatar != character_name:
-                                gallery_character = _avatar
-                                logger.info(
-                                    "Bild wird in Avatar-Galerie gespeichert "
-                                    "(agent=%s -> avatar=%s, source=active_chat)",
-                                    character_name, _avatar)
-                            else:
-                                logger.info(
-                                    "Bild bleibt bei Erzeuger '%s' "
-                                    "(rp_context=True, kein Empfaenger erkannt, kein aktiver Chat mit Avatar)",
-                                    character_name)
-                except Exception as _gt_err:
-                    logger.debug("Gallery-Target-Resolve fehlgeschlagen: %s", _gt_err)
+            gallery_character = self._resolve_gallery_character(
+                character_name, prompt_text, rp_context, input_data,
+                skip_gallery=skip_gallery, set_profile=set_profile)
 
             images_dir = get_character_images_dir(gallery_character)
             saved_files = []

@@ -34,6 +34,25 @@
     "status_effects_enabled": false,
     "outfit_system_enabled": false
   },
+  "default_skills": [
+    "allow_exposed",
+    "cancel_travel",
+    "consume_item",
+    "dry_off",
+    "end_intimate",
+    "enter_water",
+    "image_generation",
+    "instagram_comment",
+    "instagram_reply",
+    "interact",
+    "invite_to_party",
+    "join_party",
+    "leave_party",
+    "require_decency",
+    "set_pose",
+    "start_intimate",
+    "talk_to"
+  ],
   "sections": [
     {
       "id": "identity",

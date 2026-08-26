@@ -3271,7 +3271,8 @@ def sleep_world() -> Dict[str, Any]:
     game clock keeps moving (unlike freeze)."""
     import json as _json
     from app.models.character import (list_available_characters,
-                                      is_character_sleeping, set_is_sleeping)
+                                      is_character_sleeping, is_temporary_npc,
+                                      set_is_sleeping)
     from app.models.account import is_player_controlled
     from app.models.world import (set_world_sleeping, set_world_setting,
                                   WORLD_SLEEP_PRIOR_KEY)
@@ -3279,6 +3280,12 @@ def sleep_world() -> Dict[str, Any]:
     for name in list_available_characters():
         try:
             if is_player_controlled(name):
+                continue
+            # A temporary NPC has no RP layer to rest: no moods, no status
+            # effects — and no sleep/wakeup verbs in its standard skill set,
+            # so nothing it can do would ever get it up again. It stays awake
+            # at its standing task for the handful of hours it exists.
+            if is_temporary_npc(name):
                 continue
             if is_character_sleeping(name):
                 prior.append(name)

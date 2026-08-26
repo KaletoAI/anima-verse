@@ -230,6 +230,51 @@ def name_is_taken(name: str) -> bool:
 # Apply
 # ---------------------------------------------------------------------------
 
+def activate_default_skills(name: str, template: str = "") -> List[str]:
+    """Switch on the template's ``default_skills`` for a fresh NPC.
+
+    The set is TEMPLATE DATA, never a list in the core — which is what keeps
+    plugin rule R1 intact here: this function knows that a template may name
+    skills, not which ones. Two things are deliberate:
+
+    * an id the running skill manager does not know is skipped SILENTLY. The
+      list is written for a full installation, and packages that ship in a
+      separate repo (or one an admin removed) must not make an NPC spawn
+      fail — the NPC simply gets the verbs this installation has;
+    * nothing is switched OFF here. A skill the list does not name keeps
+      whatever the character-creation defaults gave it.
+
+    Returns the ids actually enabled — the apply result reports them.
+    """
+    from app.models.character import save_character_skill_config
+    from app.models.character_template import get_template
+
+    tmpl = get_template(npc_template_name(template)) or {}
+    wanted = [str(s).strip() for s in (tmpl.get("default_skills") or [])
+              if str(s).strip()]
+    if not wanted:
+        return []
+    try:
+        from app.core.dependencies import get_skill_manager
+        known = {getattr(s, "SKILL_ID", "") for s in get_skill_manager().skills}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("default skills for %s: no skill manager (%s)", name, e)
+        return []
+
+    enabled: List[str] = []
+    for sid in wanted:
+        if sid not in known:
+            continue
+        try:
+            save_character_skill_config(name, sid, {"enabled": True})
+            enabled.append(sid)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("default skill '%s' not set for %s: %s", sid, name, e)
+    logger.info("NPC '%s': %d of %d default skills enabled",
+                name, len(enabled), len(wanted))
+    return enabled
+
+
 def expiry_stamp(ttl_hours: Optional[float]) -> str:
     """Canonical GAME stamp ``ttl_hours`` of game time from now, or "".
 
@@ -301,6 +346,11 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
         profile["current_activity"] = task
     save_character_profile(name, profile)
 
+    # THE STANDARD SKILL SET, before the gate: a held-back NPC is a finished
+    # character sheet waiting for its pictures, and its verbs are part of that
+    # sheet — the asset job places it, it does not configure it.
+    default_skills = activate_default_skills(name, tmpl_name)
+
     # THE FINISH GATE (plan-npc-leben § 0 A). An NPC with no portrait, no mesh
     # and no outfit text is not put on the map at all: it stays pooled and one
     # `npc_assets` job renders what is missing and places it afterwards. The
@@ -323,6 +373,7 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
                            name, location_id, e)
 
     result["expires_at"] = profile["expires_at"]
+    result["default_skills"] = default_skills
     result["held_for_assets"] = held
     result["location_id"] = location_id
     result["room_id"] = room_id
