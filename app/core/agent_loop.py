@@ -532,6 +532,7 @@ class AgentLoop:
         # is on their way out — they gave their farewell beat in the triggering
         # turn and get NO further room reactions (otherwise "X leaves but keeps
         # talking"). On arrival the target is cleared → they are back in.
+        from app.models.character import get_character_current_location as _gcl
         from app.models.character import get_movement_target as _gmt
         def _leaving(c: str) -> bool:
             if not location_id:
@@ -540,16 +541,34 @@ class AgentLoop:
                 # exactly the chance encounters the wilderness branch exists
                 # for. Out there you meet people who are on their way.
                 return False
+            if not (_gcl(c) or ""):
+                # A radius neighbour standing OUTSIDE this location is not
+                # leaving it — it was never in it. Judging it by the room's
+                # own exit rule would silence every passer-by at the gate,
+                # because a passer-by always carries a travel target.
+                return False
             tgt = _gmt(c)
             return bool(tgt and tgt != location_id)
-        # Who is in earshot at all? The room decides inside a location, the
-        # hearing radius outside — the ONE roster every step below reads.
-        # The speaker is part of the room list and NOT of the radius list;
-        # every consumer filters it out anyway.
+        # Who is in earshot at all? The room AND the hearing radius — the ONE
+        # roster every step below reads, and the SAME union the fan-out
+        # (``perception._resolve_presence``) and the addressee gate
+        # (``perception.addressable_for``) answer with. Without the radius half
+        # inside a location, an NPC waiting in front of the gate could be
+        # addressed and would perceive the line, but nobody would ever bump it
+        # to answer. The radius list holds only location-less characters, so
+        # the two halves never overlap; the speaker is part of the room list
+        # and not of the radius list, and every consumer filters it out anyway.
+        #
+        # A WHISPER stays inside the walls (same rule as ``compute_earshot``):
+        # spoken from inside a location it reaches nobody out there.
+        from app.core.perception import VOLUME_WHISPER, nearby_in_the_open
         if location_id:
-            in_earshot = _list_characters_in_room(location_id, room_id)
+            in_earshot = list(_list_characters_in_room(location_id, room_id))
+            if volume != VOLUME_WHISPER:
+                _room = set(in_earshot)
+                in_earshot += [c for c in nearby_in_the_open(speaker)
+                               if c not in _room]
         else:
-            from app.core.perception import nearby_in_the_open
             in_earshot = nearby_in_the_open(speaker)
         # The bucket the SPEAKER acts in — outside that is its open-world
         # cell, so two conversations far apart keep separate budgets.
@@ -1490,57 +1509,80 @@ def _thought_llm_available() -> bool:
         return False
 
 
+def _last_chat_message_ts(character_name: str,
+                          avatars: Sequence[str]) -> Optional[str]:
+    """Timestamp of the newest ``chat_messages`` row between this character and
+    one of ``avatars`` — the DM/phone/TalkTo/Telegram half of the in-chat rule.
+
+    Both storage directions (A,B)/(B,A) are covered.
+    """
+    from app.core.db import get_connection
+    names = list(avatars)
+    if not names:
+        return None
+    marks = ",".join(["?"] * len(names))
+    params = (names + [character_name]     # char=avatar AND partner=this
+              + [character_name] + names)  # char=this AND partner=avatar
+    sql = (f"SELECT MAX(ts) FROM chat_messages WHERE "
+           f"(character_name IN ({marks}) AND partner=?) "
+           f"OR (character_name=? AND partner IN ({marks}))")
+    row = get_connection().execute(sql, params).fetchone()
+    return row[0] if row and row[0] else None
+
+
 def _minutes_since_last_chat_with_avatar(character_name: str) -> Optional[float]:
-    """Returns minutes since this character's last chat message **with an
-    avatar (player-controlled character)**, or None if there is no such
-    message.
+    """Minutes since this character last exchanged words **with an avatar
+    (player-controlled character)** — None when it never did.
 
-    Used to gate AgentLoop turns: if a chat is active right now, the
-    character should either skip or run a trimmed in-chat template instead
-    of pursuing unrelated initiatives.
+    THE in-chat rule of the whole app: the loop skips its own turns on it, and
+    ``npc_actions._in_chat`` hands it to the action tick, the wanderer arrival,
+    the TTL sweep and the window sweep. "Do not walk this character away, the
+    player is writing to it."
 
-    Important: TalkTo NPC↔NPC messages do NOT count as "in-chat" — the skip
-    should only apply to an active avatar↔char conversation. The function
-    used to blindly take the latest chat_messages row, which locked a
-    character out of thinking as soon as they talked to an NPC via TalkTo
-    (0.5min ago = "in chat" → skip).
+    TWO SOURCES, because the app has two ways of talking:
 
-    Implementation: collect all current avatars (see
-    ``account.get_all_avatars`` — multi-user, honours
-    users.settings.active_character) and count only messages where the
-    partner is an avatar.
+    * the PERCEPTION STREAM (``perception_store.last_shared_utterance_ts``) —
+      what ``/play`` produces. Room mode writes NO ``chat_messages`` rows at
+      all (``chat_engine`` skips every ``save_message`` when ``room_mode`` is
+      set, and every respond turn is room mode), so a whole conversation in
+      the player UI used to leave this function answering None: the guards
+      built on it were inert on the one path the player actually uses.
+    * ``chat_messages`` — still the truth for DM/phone, TalkTo and Telegram.
+
+    The newer of the two wins. Both are SYSTEM-time stamps (``utc_now_iso``),
+    which is the right clock here: this is a technical "how long ago", not an
+    in-world duration.
+
+    NPC↔NPC talk does not count in either source — only rows/utterances shared
+    with an AVATAR (``account.get_all_avatars``, multi-user, honours
+    ``users.settings.active_character``). Without that a character was locked
+    out of thinking the moment it used TalkTo.
     """
     try:
-        from app.core.db import get_connection
         from app.models.account import get_all_avatars
-        avatars = get_all_avatars() or set()
+        from app.models import perception_store
         # Drop the char itself (it is never its own avatar — and if it were,
         # the loop would already skip it as is_player_controlled)
-        avatars = {a for a in avatars if a and a != character_name}
+        avatars = sorted(a for a in (get_all_avatars() or set())
+                         if a and a != character_name)
         if not avatars:
             return None
-        # Latest message where character_name is in the chat AND the partner is
-        # an avatar — cover both storage directions (A,B)/(B,A).
-        placeholders = ",".join(["?"] * len(avatars))
-        params = (
-            list(avatars) + [character_name]   # condition 1: char=avatar AND partner=this
-            + [character_name] + list(avatars) # condition 2: char=this AND partner=avatar
-        )
-        sql = (
-            f"SELECT MAX(ts) FROM chat_messages WHERE "
-            f"(character_name IN ({placeholders}) AND partner=?) "
-            f"OR (character_name=? AND partner IN ({placeholders}))"
-        )
-        conn = get_connection()
-        row = conn.execute(sql, params).fetchone()
-        if not row or not row[0]:
+        stamps = [perception_store.last_shared_utterance_ts(character_name,
+                                                            avatars),
+                  _last_chat_message_ts(character_name, avatars)]
+        newest = None
+        for raw in stamps:
+            if not raw:
+                continue
+            try:
+                parsed = parse_iso(raw)
+            except (ValueError, TypeError):
+                continue
+            if newest is None or parsed > newest:
+                newest = parsed
+        if newest is None:
             return None
-        try:
-            last = parse_iso(row[0])
-        except (ValueError, TypeError):
-            return None
-        delta = utc_now() - last
-        return delta.total_seconds() / 60.0
+        return (utc_now() - newest).total_seconds() / 60.0
     except Exception as e:
         logger.debug("chat-age check failed for %s: %s", character_name, e)
         return None

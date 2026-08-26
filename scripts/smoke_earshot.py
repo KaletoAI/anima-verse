@@ -5,7 +5,9 @@ Runs against a THROWAWAY storage directory — never touches a real world.
 
 The wilderness is a room without walls: a location-less speaker is heard by
 every other location-less character within ``game.hearing_radius_m`` metres.
-Location speakers are unaffected — walls still stop everything.
+A speaker INSIDE a location is heard by its room AND by that same circle
+around its point (whoever waits in front of the gate); the way IN stays shut,
+and a whisper never leaves the walls — see the one-way note below.
 
 The inn sits INSIDE the hearing radius of the wilderness characters on purpose.
 A far-away location would let a wall case pass on distance alone: "D hears
@@ -27,8 +29,15 @@ Seed (all distances hand-derived, radius default 20 m):
          inside it (a: z=0, b: x=15, c: x=30, e: z=17), which case [0]
          asserts rather than assumes.
 
-Wall distances, all WITHIN the 20 m radius — so every wall check below fails
-if the walls stop mattering:
+Wall distances, all WITHIN the 20 m radius. THE WALL IS ONE-WAY (task 4 of
+plan-npc-leben-bugs): a line spoken OUTSIDE never reaches somebody inside a
+location — the room lists are the only way in, and ``_nearby_in_the_open``
+answers with location-less characters only. A line spoken INSIDE carries out
+to the circle around the speaker, because somebody waiting in front of the
+gate is within shouting distance and the player can address them
+(``perception.addressable_for``); the gate that offers an addressee and the
+fan-out that delivers the line have to answer with one roster. A WHISPER is
+the exception in that direction: it stays inside the walls.
   npc_d (0,12) ↔ npc_e (0,17)  = 5
   npc_d (0,12) ↔ npc_a (0,0)   = 12
   npc_d (0,12) ↔ npc_b (15,0)  = hypot(15, 12) = 19.21
@@ -46,10 +55,19 @@ if the walls stop mattering:
 [3] The utterance row of [1] carries pos_x = 0.0, pos_z = 0.0 and
     location_id = "" — the wilderness encoding is the empty location plus
     the two position columns.
-[4] D speaks in its location → E (5 m), A (12 m) and B (19.21 m) are all
-    inside the hearing radius and STILL get nothing; the utterance has
-    exactly one perception (D itself) and its row has pos_x/pos_z NULL —
-    rooms keep writing NULL.
+[4] D speaks NORMAL in its location → its earshot is its own room (nobody
+    else is in the inn) PLUS the circle around its point: E (5 m), A (12 m)
+    and B (19.21 m) are inside the 20 m radius and hear it as `nearby`,
+    C (32.31 m) does not. So exactly 4 perceptions, and the utterance row
+    still keeps pos_x/pos_z NULL: the stored point is a wilderness column,
+    the location/room pair already says where a located line was spoken (the
+    circle is a different question and reads the point directly).
+    The WHISPER half is checked on the pure ``compute_earshot`` instead of a
+    recorded line — a real utterance would land in the streams [8]/[9]
+    enumerate row by row. Inside a location a whisper yields the speaker
+    alone, not even its addressee out there; the same call with
+    ``inside_location`` False (the wilderness) yields speaker + addressee.
+    Otherwise the private volume would be the one that carries furthest.
 [5] game.hearing_radius_m = 10 → B (15) and E (17) fall out of A's earshot;
     only A itself perceives.
 [6] Garbage setting (-5) → the default 20.0 and EXACTLY one warning, however
@@ -153,7 +171,7 @@ from app.core.db import get_connection  # noqa: E402
 from app.core.perception import (  # noqa: E402
     KIND_NEARBY, KIND_SPOKEN_SELF, STORYTELLER_SPEAKER, UNKNOWN_LOCATION_LABEL,
     VOLUME_NORMAL, VOLUME_WHISPER, WILDERNESS_LOCATION_LABEL, announce_action,
-    get_hearing_radius_m, prompt_place, record_utterance)
+    compute_earshot, get_hearing_radius_m, prompt_place, record_utterance)
 from app.core.config_schema import SECTIONS  # noqa: E402
 from app.core.system_prompt_builder import (  # noqa: E402
     PRESENCE, _load_presence, load_prompt_data)
@@ -311,23 +329,46 @@ check("row of [1]", utterance_row(uid1),
 check("row of [2]", utterance_row(uid2),
       {"location_id": "", "room_id": "", "pos_x": 15.0, "pos_z": 0.0})
 
-# ── [4] walls still stop everything ─────────────────────────────────────
-print("[4] a location speaker is not heard outside — E at 5 m, A at 12 m and"
-      "\n    B at 19.21 m are all inside the radius and still hear nothing")
+# ── [4] the wall is one-way: out yes, in no; whisper neither ────────────
+print("[4] a location speaker IS heard outside — E at 5 m, A at 12 m and"
+      "\n    B at 19.21 m are inside the radius; C at 32.31 m is not")
 before = {n: len(stream(n)) for n in ("npc_a", "npc_b", "npc_c", "npc_e")}
 uid4 = record_utterance(speaker="npc_d", content="in the inn",
                         volume=VOLUME_NORMAL)
 check("D hears itself", stream("npc_d")[-1], (KIND_SPOKEN_SELF, "in the inn"))
-check("E unchanged at 5 m", len(stream("npc_e")), before["npc_e"])
-check("A unchanged at 12 m", len(stream("npc_a")), before["npc_a"])
-check("B unchanged at 19.21 m", len(stream("npc_b")), before["npc_b"])
-check("C unchanged", len(stream("npc_c")), before["npc_c"])
-check("the location branch computed no nearby at all", perceptions_of(uid4),
-      [("npc_d", KIND_SPOKEN_SELF, "in the inn")])
+check("E at 5 m hears it", len(stream("npc_e")), before["npc_e"] + 1)
+check("A at 12 m hears it", len(stream("npc_a")), before["npc_a"] + 1)
+check("B at 19.21 m hears it", len(stream("npc_b")), before["npc_b"] + 1)
+check("C at 32.31 m is out of the circle", len(stream("npc_c")),
+      before["npc_c"])
+check("the room list and the circle, one roster", sorted(perceptions_of(uid4)),
+      sorted([("npc_d", KIND_SPOKEN_SELF, "in the inn"),
+              ("npc_a", KIND_NEARBY, "in the inn"),
+              ("npc_b", KIND_NEARBY, "in the inn"),
+              ("npc_e", KIND_NEARBY, "in the inn")]))
 row4 = utterance_row(uid4)
 check("location row keeps NULL position",
       (row4["pos_x"], row4["pos_z"]), (None, None))
 check("location row carries the location", row4["location_id"], INN_ID)
+
+# The whisper half of the same rule, on the PURE function — a recorded
+# utterance would land in the streams the sections below enumerate, and
+# `compute_earshot` is where the rule actually lives.
+check("a whisper INSIDE the walls reaches nobody out there — not even its "
+      "addressee",
+      [(t.perceiver, t.kind) for t in compute_earshot(
+          speaker="npc_d", volume=VOLUME_WHISPER, addressees=["npc_a"],
+          room_members=["npc_d"], location_others=[],
+          nearby=["npc_a", "npc_b", "npc_e"], inside_location=True)],
+      [("npc_d", KIND_SPOKEN_SELF)])
+check("…while the same whisper in the OPEN still reaches its addressee",
+      [(t.perceiver, t.kind) for t in compute_earshot(
+          speaker="npc_d", volume=VOLUME_WHISPER, addressees=["npc_a"],
+          room_members=[], location_others=[],
+          nearby=["npc_a", "npc_b", "npc_e"], inside_location=False)],
+      [("npc_d", KIND_SPOKEN_SELF), ("npc_a", KIND_NEARBY)])
+# The way IN stays shut — proven by [1] above (D hears nothing although it
+# stands 12 m from A) and by the roster of this section's own line.
 
 # ── [5] the setting really is the radius ────────────────────────────────
 print("[5] radius 10 — B at 15 m and E at 17 m drop out")
@@ -634,7 +675,9 @@ _edge_in = record_utterance(speaker="npc_a", content="a minute young enough",
 _old_room = record_utterance(speaker="npc_d", content="ancient inn talk",
                              volume=VOLUME_NORMAL, ts=_at(-timedelta(days=8)))
 check("the old outdoor line was heard by A and E", len(perceptions_of(_old_wild)), 2)
-check("the old inn line was heard by D alone", len(perceptions_of(_old_room)), 1)
+check("the old inn line reached D and the two neighbours in the "
+      "circle (A 12 m, E 5 m; B is 100 m out since [9])",
+      len(perceptions_of(_old_room)), 3)
 
 # The prune hangs on the consolidation pass, NOT on there being a scene to
 # consolidate: with the scene query answering "nothing idle" (no LLM is
@@ -659,7 +702,7 @@ check("a minute past the edge falls too", _edge_out in _left, False)
 check("a minute short of it survives", _edge_in in _left, True)
 check("…with its perceptions", len(perceptions_of(_edge_in)), 2)
 check("the equally old ROOM line is untouched", _old_room in _left, True)
-check("…with its perception", len(perceptions_of(_old_room)), 1)
+check("…with its three perceptions", len(perceptions_of(_old_room)), 3)
 check("and today's outdoor lines are all still there",
       all(u in _left for u in (uid1, uid2, uid5, uid9)), True)
 # Idempotent: the second sweep finds nothing left to drop.

@@ -17,6 +17,14 @@ work on: the wilderness is an invisible room around the speaker with the radius
 inside that circle hears the line (kind ``nearby``); a whisper reaches its
 addressee alone — with no room to carry it, there is no bystander line.
 
+That circle is computed for a speaker INSIDE a location too, and added to the
+room lists: somebody waiting in front of the gate is within shouting distance
+of the taproom. It can only ever add location-less characters, so the room
+rules above are untouched. The one exception is the whisper: inside a location
+it stays inside the walls and reaches nobody out there. Who may be ADDRESSED
+follows the same union (``addressable_for``) — the gate and the fan-out must
+answer with one roster, or the player picks an addressee who never hears them.
+
 The speaker always gets a self-perception so its own stream contains what it
 said.
 
@@ -153,7 +161,8 @@ def compute_earshot(*, speaker: str, volume: str,
                     addressees: Sequence[str],
                     room_members: Sequence[str],
                     location_others: Sequence[str],
-                    nearby: Sequence[str] = ()) -> List[EarshotTarget]:
+                    nearby: Sequence[str] = (),
+                    inside_location: bool = False) -> List[EarshotTarget]:
     """Who perceives a speech act how? PURE — no DB.
 
     Args:
@@ -162,9 +171,17 @@ def compute_earshot(*, speaker: str, volume: str,
         addressees:       those spoken to directly (only whisper cares).
         room_members:     names in the same room (the speaker may be among them).
         location_others:  names in OTHER rooms of the same location.
-        nearby:           names within the hearing radius in the open — the
-                          wilderness case, mutually exclusive with the two
-                          room lists (a speaker is either in a location or not).
+        nearby:           names within the hearing radius in the open. These
+                          are always LOCATION-LESS characters, so the list
+                          never overlaps the two room lists — but it is filled
+                          for a speaker inside a location too: somebody
+                          standing in front of the gate is within shouting
+                          distance of the taproom, which is exactly what
+                          ``addressable_for`` lets the player act on.
+        inside_location:  True when the speaker stands inside a location, i.e.
+                          when there is a WALL between it and ``nearby``. It
+                          changes one thing: a WHISPER does not carry through
+                          the wall (see below).
     """
     vol = volume if volume in _VALID_VOLUMES else VOLUME_NORMAL
     addr = {a for a in (addressees or [])}
@@ -192,17 +209,24 @@ def compute_earshot(*, speaker: str, volume: str,
             add(m, KIND_DISTANT_SHOUT, True)
     # whisper/normal: the other rooms hear nothing
 
-    # The open world: everyone inside the radius hears the line in full. A
-    # whisper is the exception — without a room there is nobody to notice
-    # "they whispered something", so it reaches its addressee alone. There is
-    # deliberately no per-volume radius yet (v1): a shout carries exactly as
+    # The open world: everyone inside the radius hears the line in full. There
+    # is deliberately no per-volume radius yet (v1): a shout carries exactly as
     # far as normal speech.
-    for m in nearby:
-        if vol == VOLUME_WHISPER:
-            if m in addr:
+    #
+    # WHISPER, the one exception, and it has two shapes:
+    #   * out in the open there is no room to notice "they whispered
+    #     something", so the line reaches its addressee alone;
+    #   * INSIDE a location a whisper stays inside the walls, full stop — it
+    #     reaches nobody out there, not even an addressee. Leaning over a
+    #     table and being heard through a stone wall would be absurd, and it
+    #     would make the private volume the one that carries furthest.
+    if not (vol == VOLUME_WHISPER and inside_location):
+        for m in nearby:
+            if vol == VOLUME_WHISPER:
+                if m in addr:
+                    add(m, KIND_NEARBY, True)
+            else:
                 add(m, KIND_NEARBY, True)
-        else:
-            add(m, KIND_NEARBY, True)
 
     return targets
 
@@ -213,18 +237,22 @@ def _resolve_presence(location_id: str, room_id: str, *, speaker: str = "",
     """Members of the room + members of the other rooms of the same location
     + everyone within hearing radius in the open.
 
-    Exactly one of the two worlds answers: with a location the two room lists
-    are filled and ``nearby`` stays empty; without one it is the other way
-    round. Delegates to the existing earshot primitive in ``room_entry`` for
-    the room case.
+    The two worlds are NOT exclusive any more. Without a location only the
+    circle answers; WITH one, the room lists answer AND the circle is computed
+    on top of them — ``_nearby_in_the_open`` only ever returns location-less
+    characters, so the lists never overlap, and somebody standing in front of
+    the gate belongs in the earshot of the taproom. That is the same union
+    ``addressable_for`` offers the player: the gate that lets an addressee be
+    picked and the fan-out that delivers the line have to answer with one
+    roster, or a player addresses somebody who never hears them.
 
-    ``speaker``/``speaker_pos`` are only read in the wilderness case — the
-    circle needs a centre, and the speaker must not appear in its own
-    ``nearby`` list.
+    ``speaker``/``speaker_pos`` are the centre of that circle; the speaker
+    must not appear in its own ``nearby`` list.
     """
     from app.core.room_entry import _list_characters_in_room
+    nearby = _nearby_in_the_open(speaker, speaker_pos)
     if not location_id:
-        return [], [], _nearby_in_the_open(speaker, speaker_pos)
+        return [], [], nearby
     # No branch on an empty room any more: the ground is a room, so the room
     # query answers for it like for any other. The second call passes ""
     # deliberately — that IS the "everyone in the location" query, and the
@@ -233,7 +261,7 @@ def _resolve_presence(location_id: str, room_id: str, *, speaker: str = "",
     all_in_loc = _list_characters_in_room(location_id, "")
     rm = set(room_members)
     location_others = [c for c in all_in_loc if c not in rm]
-    return room_members, location_others, []
+    return room_members, location_others, nearby
 
 
 def _nearby_in_the_open(speaker: str,
@@ -506,8 +534,9 @@ def record_utterance(*, speaker: str, content: str,
     reach nobody, not even the character it was about. The anchor (a character
     name or an explicit point) supplies that centre, and the circle is then the
     same one the acting character's own words would have. It is read ONLY when
-    the speaker has no point of its own, never as an override, and inside a
-    location it is ignored altogether — there the room columns decide.
+    the speaker has no point of its own, never as an override; inside a
+    location the room columns still decide who is in the room, and the anchor
+    only supplies the centre of the earshot circle around it.
     """
     from app.core.timeutils import utc_now_iso
     from app.models import perception_store
@@ -536,13 +565,13 @@ def record_utterance(*, speaker: str, content: str,
         if room is None:
             room = get_character_current_room(speaker) or ""
 
-    # The speaker's point is read only in the wilderness — inside a location
-    # the room columns already say where the line was spoken. A speaker with
-    # no point of its own (the storyteller) falls back to the anchor.
-    speaker_pos: Optional[Dict[str, float]] = None
-    if not loc:
-        from app.models.character import get_character_pos
-        speaker_pos = get_character_pos(speaker) or anchor_pos(anchor)
+    # The speaker's point is read ALWAYS — it is the centre of the earshot
+    # circle, and that circle exists inside a location too (whoever waits in
+    # front of the gate). A speaker with no point of its own (the storyteller)
+    # falls back to the anchor.
+    from app.models.character import get_character_pos
+    speaker_pos: Optional[Dict[str, float]] = (get_character_pos(speaker)
+                                               or anchor_pos(anchor))
 
     try:
         room_members, location_others, nearby = _resolve_presence(
@@ -550,7 +579,8 @@ def record_utterance(*, speaker: str, content: str,
         targets = compute_earshot(speaker=speaker, volume=vol, addressees=addr,
                                   room_members=room_members,
                                   location_others=location_others,
-                                  nearby=nearby)
+                                  nearby=nearby,
+                                  inside_location=bool(loc))
 
         # Utterance meta: source + optional markers (e.g. event_verdict/reason),
         # so the objective observer view (which reads utterances) sees them too.
@@ -559,11 +589,15 @@ def record_utterance(*, speaker: str, content: str,
             _umeta["source"] = source
         if perception_meta:
             _umeta.update(perception_meta)
+        # The STORED point stays a wilderness column (see insert_utterance):
+        # inside a location the location/room pair already says where the line
+        # was spoken. The circle above needs the point regardless — the two
+        # are different questions and only look like one.
+        _stored_pos = (speaker_pos or {}) if not loc else {}
         uid = perception_store.insert_utterance(
             ts=stamp, speaker=speaker, location_id=loc, room_id=room,
             volume=vol, addressees=addr, content=content, meta=_umeta,
-            pos_x=(speaker_pos or {}).get("x"),
-            pos_z=(speaker_pos or {}).get("z"))
+            pos_x=_stored_pos.get("x"), pos_z=_stored_pos.get("z"))
 
         rows = []
         for t in targets:

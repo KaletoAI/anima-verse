@@ -133,6 +133,48 @@ def get_room_utterances_since(location_id: str, room_id: str,
     return [_row_to_dict(r) for r in rows]
 
 
+def last_shared_utterance_ts(character: str,
+                             partners: Sequence[str]) -> Optional[str]:
+    """Timestamp of the most recent speech act this character SHARED with one
+    of ``partners`` — ``None`` when there is none.
+
+    "Shared" means one of them spoke and the other perceived it:
+
+    * a partner spoke and ``character`` is among the perceivers, or
+    * ``character`` spoke and a partner is among the perceivers.
+
+    That is the room-mode equivalent of a chat row. Since the room-conversation
+    rework the player's words do not land in ``chat_messages`` at all
+    (``chat_engine`` skips every ``save_message`` in room mode), so anything
+    asking "is somebody talking to this character right now" has to ask the
+    perception stream — see ``agent_loop._minutes_since_last_chat_with_avatar``.
+
+    Every perception row counts, ``whisper_meta`` included: the bare fact that
+    a partner is speaking in this character's earshot is exactly the situation
+    in which the world must not walk the character away. It errs towards
+    "leave them standing", which is the harmless direction.
+
+    ONE query, both directions, served by ``idx_perceptions_perceiver_ts``.
+    The stamps are SYSTEM time (``utc_now_iso``), the same clock
+    ``chat_messages.ts`` uses — a caller may compare the two directly.
+    """
+    names = [p for p in (partners or []) if p and p != character]
+    if not character or not names:
+        return None
+    marks = ",".join(["?"] * len(names))
+    sql = (f"SELECT MAX(p.ts) FROM perceptions p "
+           f"JOIN utterances u ON u.id = p.utterance_id "
+           f"WHERE (p.perceiver = ? AND u.speaker IN ({marks})) "
+           f"   OR (p.perceiver IN ({marks}) AND u.speaker = ?)")
+    params = [character] + names + names + [character]
+    try:
+        row = get_connection().execute(sql, params).fetchone()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("last_shared_utterance_ts(%s) failed: %s", character, e)
+        return None
+    return row[0] if row and row[0] else None
+
+
 def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
                               limit: int = 100,
                               include_meta_lines: bool = False

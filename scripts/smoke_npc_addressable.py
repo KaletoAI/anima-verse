@@ -50,25 +50,50 @@ Hand-derived expectations:
       ``same_room`` False and an empty ``room``, Roon at
       |(10,200)−(0,0)| = 200.25 m does not.
 
+  (b2) AND THE LINE ACTUALLY ARRIVES — the gate and the fan-out are one rule.
+      An addressee that never hears the line is worse than no addressee: the
+      answer never comes and the storyteller narrates over the silence. So the
+      avatar SPEAKS in the taproom: ``record_utterance`` must produce perception
+      rows for the room (Mira, and the avatar's own self-line) AND for Tove at
+      the gate — three, not two — and ``dispatch_room_reactions`` with
+      ``location_id`` INN must bump Tove obligatorily (addressed) and Mira as a
+      chime. Osric in the cellar hears nothing either way (another room, and he
+      is not location-less).
+      A WHISPER is the one thing that does not cross the wall: the same line
+      whispered at Tove reaches Mira (``whisper_meta``, the bare fact) and the
+      avatar itself, never Tove, and bumps nobody. Otherwise the private volume
+      would be the one that carries furthest.
+
   (c) A WANDERER DOES NOT LEAVE MID-SENTENCE.
       ``_settle_wanderer`` runs on every wanderer tick and ends the arrival
       immediately — 50 % turn around, otherwise into the pool. Cass has
       ARRIVED at MARKET (target MARKET, standing there, no journey) and its
       origin is the INN, and ``random.random`` is pinned to 0.1 < 0.5, so the
-      turn-around branch would fire. With a chat_messages row between Cass and
-      the avatar stamped NOW — the AgentLoop's own HOT window,
-      ``_IN_CHAT_HOT_MIN`` = 10 minutes of SYSTEM time (the technical clock
-      ``_minutes_since_last_chat_with_avatar`` measures against, not game
-      time) — the tick has to answer False and leave every field alone:
-      wander_target stays MARKET, wander_origin stays the INN, no journey,
-      status still ''. Re-stamping the row 20 minutes back puts Cass outside
-      the window, and the tick then does exactly what it did before this task:
-      target ↔ origin swap to INN/MARKET and a fresh journey to the INN.
+      turn-around branch would fire.
+      THE IN-CHAT STATE IS PRODUCED THE WAY ``/play`` PRODUCES IT: one recorded
+      utterance from the avatar to the NPC, NOT a hand-written
+      ``chat_messages`` row. Room mode writes no chat rows at all (``chat_engine``
+      skips every ``save_message`` when ``room_mode`` is set, and every respond
+      turn is room mode), so a fixture that writes one would prove the guard on
+      a path the player never takes. The avatar therefore stands at (100, 0),
+      i.e. in MARKET's ground room next to Cass and Bede, and speaks.
+      The window is the AgentLoop's own: ``_IN_CHAT_HOT_MIN`` = 10 minutes of
+      SYSTEM time (the technical clock ``_minutes_since_last_chat_with_avatar``
+      measures against, not game time). Inside it the tick has to answer False
+      and leave every field alone: wander_target stays MARKET, wander_origin
+      stays the INN, no journey, status still ''. Stamping the utterance 20
+      minutes back puts Cass outside the window, and the tick then does exactly
+      what it did before this task: target ↔ origin swap to INN/MARKET and a
+      fresh journey to the INN.
       The TTL sweep gets the same guard: Bede is expired ("Y0001-D001T00:00:00"
       against a game clock pinned to Y0002-D100T12:00:00) and mid-conversation
       → ``sweep_expired_npcs()`` returns 0 and Bede is still alive; 20 minutes
       later the very same call returns 1 and pools it. Cass carries NO stamp
       at all, so it is invisible to both sweeps and cannot make the count lie.
+      The OTHER source is proven too: with the stream emptied, a single
+      ``chat_messages`` row (what DM/phone/TalkTo/Telegram still write) is
+      enough to hold Bede back — the perception stream is the new primary
+      source, not a replacement.
 
   (d) AN ADDRESSED WANDERER STOPS WALKING.
       Kestrel stands at (40, 0) — between the two squares, so location-less —
@@ -83,10 +108,10 @@ Hand-derived expectations:
       temporary NPC (Fenna, same road, no ``npc_wanderer``) addressed exactly
       the same way KEEPS its journey, and a wanderer merely OVERHEARING the
       line (not addressed → chime) keeps its journey too.
-      Afterwards the retry path picks the road back up: with a fresh chat row
-      ``_settle_wanderer`` refuses (still no journey), and once the row is 20
-      minutes old the same call starts a NEW journey to the OLD target
-      MARKET.
+      Afterwards the retry path picks the road back up: with a fresh utterance
+      from the avatar ``_settle_wanderer`` refuses (still no journey), and once
+      that line is 20 minutes old the same call starts a NEW journey to the OLD
+      target MARKET.
 
   (e) A SLOT WITHOUT A ROOM LANDS IN THE ARRIVAL ROOM, NOT NOWHERE.
       ``spawn_for_slot`` used to hand ``room = slot.get("room") or ""`` to the
@@ -121,7 +146,8 @@ db.init_schema()
 from app.core.task_queue import get_task_queue  # noqa: E402
 get_task_queue()._started = True
 
-from app.core import npc_ops, npc_spawn, travel_engine  # noqa: E402
+from app.core import (npc_actions, npc_ops, npc_spawn,  # noqa: E402
+                      perception, travel_engine)
 from app.core.agent_loop import AgentLoop  # noqa: E402
 from app.core.character_ops import build_characters_at_location  # noqa: E402
 from app.core.game_time import GameTime  # noqa: E402
@@ -258,21 +284,47 @@ def patch_profile(name: str, **fields) -> None:
     save_character_profile(name, profile)
 
 
-def chat_row(character: str, partner: str, minutes_ago: float) -> None:
-    """One chat_messages row, stamped in SYSTEM time — that is the clock the
-    AgentLoop's own helper measures the HOT window against (a technical
-    stamp, not game time)."""
-    ts = (utc_now() - timedelta(minutes=minutes_ago)).isoformat()
+def sys_stamp(minutes_ago: float) -> str:
+    """A SYSTEM-time ISO stamp N minutes back — the clock the HOT window is
+    measured against (a technical "how long ago", not an in-world duration)."""
+    return (utc_now() - timedelta(minutes=minutes_ago)).isoformat()
+
+
+def player_says(npc: str, minutes_ago: float = 0.0) -> None:
+    """What ``/play/say`` leaves behind: ONE recorded utterance from the avatar
+    to the NPC. NOT a ``chat_messages`` row — room mode writes none (see
+    ``chat_engine`` skipping ``save_message`` when ``room_mode`` is set), which
+    is exactly why the in-chat rule has to read the perception stream."""
+    perception.record_utterance(speaker=AVATAR, content="Wait a moment!",
+                                addressees=[npc], source="play",
+                                ts=sys_stamp(minutes_ago))
+
+
+def dm_row(character: str, partner: str, minutes_ago: float) -> None:
+    """One ``chat_messages`` row — the DM/phone/TalkTo/Telegram half of the
+    in-chat rule, which still writes that table."""
     with db.transaction() as conn:
         conn.execute(
             "INSERT INTO chat_messages (character_name, partner, ts, role, "
             "content, channel) VALUES (?, ?, ?, 'user', 'Wait!', 'web')",
-            (character, partner, ts))
+            (character, partner, sys_stamp(minutes_ago)))
 
 
 def clear_chat() -> None:
+    """Both sources of the in-chat rule, emptied."""
     with db.transaction() as conn:
         conn.execute("DELETE FROM chat_messages")
+        conn.execute("DELETE FROM perceptions")
+        conn.execute("DELETE FROM utterances")
+
+
+def perceivers_of(utterance_id) -> list:
+    """Who got a perception row for this speech act — the fan-out, read at the
+    consumer (the table), not at the earshot computation."""
+    rows = db.get_connection().execute(
+        "SELECT perceiver FROM perceptions WHERE utterance_id=?",
+        (utterance_id,)).fetchall()
+    return [r[0] for r in rows]
 
 
 # ── (a) out in the open the radius is the rule ──────────────────────────────
@@ -314,6 +366,33 @@ check("the room mate is in the room",
       [c["same_room"] for c in _at_loc["characters"] if c["name"] == "Mira"],
       [True])
 
+# ── (b2) the same union all the way through: gate → fan-out → dispatch ──────
+print("(b2) the line the avatar speaks in the taproom REACHES the gate")
+_uid = perception.record_utterance(speaker=AVATAR, content="Come in, Tove!",
+                                   addressees=["Tove"])
+check("the room and the one outside the gate perceived it, nobody else",
+      sorted(perceivers_of(_uid)), ["Mira", "Tove", "Wren"])
+_loop = AgentLoop()
+_res = _loop.dispatch_room_reactions(speaker=AVATAR, content="Come in, Tove!",
+                                     volume="normal", location_id=INN,
+                                     room_id="taproom", addressees=["Tove"],
+                                     is_avatar=True)
+check("the addressee at the gate is bumped for a mandatory answer",
+      _res["obligatory"], ["Tove"])
+check("and the room mate may chime in", _res["chime"], ["Mira"])
+
+_uid = perception.record_utterance(speaker=AVATAR, content="psst",
+                                   addressees=["Tove"], volume="whisper")
+check("a whisper stays inside the walls — the gate hears nothing",
+      sorted(perceivers_of(_uid)), ["Mira", "Wren"])
+_res = _loop.dispatch_room_reactions(speaker=AVATAR, content="psst",
+                                     volume="whisper", location_id=INN,
+                                     room_id="taproom", addressees=["Tove"],
+                                     is_avatar=True)
+check("and nobody out there is bumped for it", _res,
+      {"obligatory": [], "chime": []})
+clear_chat()
+
 # ── (c) the arrival tick and the TTL sweep leave a conversation alone ───────
 print("(c) a wanderer mid-conversation is neither turned around nor pooled")
 make_npc("Cass", wanderer=True, wander_target=MARKET)
@@ -322,16 +401,21 @@ patch_profile("Cass", wander_origin=INN, wander_target=MARKET, expires_at="")
 make_npc("Bede", wanderer=True, wander_target=MARKET)
 set_character_pos("Bede", 100.0, 0.0)
 patch_profile("Bede", wander_origin="", wander_target=MARKET, expires_at=PAST)
+set_character_pos(AVATAR, 100.0, 0.0)
 check("Cass has arrived at the market",
       get_character_current_location("Cass"), MARKET)
+check("and the avatar is standing there with it",
+      (get_character_current_location(AVATAR),
+       get_character_current_room(AVATAR)), (MARKET, GROUND_ROOM_ID))
 check("Bede's stamp is in the past",
       npc_ops.is_expired(get_character_profile("Bede")["expires_at"]), True)
 
 _real_random = npc_spawn.random.random
 npc_spawn.random.random = lambda: 0.1     # < 0.5 → the turn-around branch
 
-chat_row("Cass", AVATAR, 0.0)
-chat_row("Bede", AVATAR, 0.0)
+player_says("Cass", 0.0)
+check("the perception stream alone makes it 'in chat'",
+      npc_actions._in_chat("Cass"), True)
 check("the arrival tick stands down", npc_spawn._settle_wanderer("Cass"), False)
 check("the road is untouched",
       (get_character_profile("Cass").get("wander_target"),
@@ -341,9 +425,16 @@ check("Cass is still standing there", get_character_status("Cass"), "")
 check("the TTL sweep pools nobody", sweep_expired_npcs(), 0)
 check("Bede is still alive", get_character_status("Bede"), "")
 
+# The OTHER source still counts: DM/phone/TalkTo/Telegram write chat_messages,
+# and nothing else does since room mode stopped calling save_message.
 clear_chat()
-chat_row("Cass", AVATAR, 20.0)
-chat_row("Bede", AVATAR, 20.0)
+dm_row("Bede", AVATAR, 0.0)
+check("a DM row alone is 'in chat' too", npc_actions._in_chat("Bede"), True)
+check("so the TTL sweep still leaves Bede", sweep_expired_npcs(), 0)
+check("Bede is alive after the DM probe", get_character_status("Bede"), "")
+
+clear_chat()
+player_says("Cass", 20.0)
 check("20 minutes later the tick turns Cass around",
       npc_spawn._settle_wanderer("Cass"), True)
 check("target and origin have swapped",
@@ -398,12 +489,12 @@ check_true("the wanderer that only overheard keeps walking",
            isinstance(get_character_profile("Gwyn").get("journey"), dict))
 check("Gwyn was a chime, not an addressee", res["chime"], ["Gwyn"])
 
-chat_row("Kestrel", AVATAR, 0.0)
+player_says("Kestrel", 0.0)
 check("mid-conversation the tick does not send it off again",
       npc_spawn._settle_wanderer("Kestrel"), False)
 check("still standing", get_character_profile("Kestrel").get("journey"), None)
 clear_chat()
-chat_row("Kestrel", AVATAR, 20.0)
+player_says("Kestrel", 20.0)
 check("20 minutes later it walks on", npc_spawn._settle_wanderer("Kestrel"),
       False)
 check("towards the very target it had",
