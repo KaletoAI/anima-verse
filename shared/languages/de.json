@@ -2184,6 +2184,7 @@
     "Spawn check queued — the NPCs appear once the generator is done.": "Prüfung eingereiht — die NPCs erscheinen, sobald der Generator fertig ist.",
     "NPC pool": "NPC-Pool",
     "Pool is empty": "Pool ist leer",
+    "No automatic spawn takes this NPC and the pool size does not count it — bind a slot to its name to bring it back": "Kein automatischer Auftritt holt diesen NPC, und die Pool-Größe zählt ihn nicht mit — binde einen Platz an seinen Namen, um ihn zurückzuholen",
     "No description yet.": "Noch keine Beschreibung.",
     "Pool": "In den Pool",
     "Take out of the world, keep the profile for a later spawn": "Aus der Welt nehmen, das Profil für einen späteren Auftritt behalten",

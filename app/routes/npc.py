@@ -30,10 +30,20 @@ def list_npcs_route() -> Dict[str, Any]:
     from app.core.npc_ops import list_npcs
     from app.core.npc_pool import list_pool, max_pool_size
     from app.core.npc_spawn import alive_npc_count, max_alive, wanderer_quota
-    return {"npcs": list_npcs(), "pooled": list_pool(),
+    pooled = list_pool()
+    return {"npcs": list_npcs(), "pooled": pooled,
             "limits": {"alive": alive_npc_count(), "max_alive": max_alive(),
                        "wanderer_quota": wanderer_quota(),
-                       "pool_size": max_pool_size()}}
+                       "pool_size": max_pool_size(),
+                       # WHAT THE CAP ACTUALLY COUNTS. `_enforce_pool_cap`
+                       # counts and drops MORTAL sheets only — a permanent one
+                       # is invisible to it in both directions — so the
+                       # counter beside `pool_size` must skip them too, or a
+                       # pool of kept NPCs would read as full while there is
+                       # room for every one of them. Computed here, not in the
+                       # client: the cap's rule lives on the server.
+                       "pool_used": sum(1 for p in pooled
+                                        if not p.get("permanent"))}}
 
 
 @router.post("/sweep")

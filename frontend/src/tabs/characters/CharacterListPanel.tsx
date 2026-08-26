@@ -14,8 +14,21 @@ interface PooledNpc {
   image_url?: string
   /** role · standing task · appearance, empty halves skipped. */
   description?: string
+  /** An admin took this sheet's lifetime away (`npc_permanent`). No automatic
+   *  spawn draws it and the pool cap never drops it — so it neither leaves the
+   *  pool by itself nor counts towards `pool_size`. */
+  permanent?: boolean
 }
-interface NpcLimits { alive?: number; max_alive?: number; wanderer_quota?: number; pool_size?: number }
+interface NpcLimits {
+  alive?: number
+  max_alive?: number
+  wanderer_quota?: number
+  pool_size?: number
+  /** The MORTAL sheets in the pool — what `_enforce_pool_cap` measures against
+   *  `pool_size`. The server computes it; the client never re-derives the
+   *  cap's rule from the rows. */
+  pool_used?: number
+}
 
 /**
  * One LIVING temporary NPC, as `npc_ops.npc_summary` builds it. Only the few
@@ -265,8 +278,12 @@ export function CharacterListPanel({
       <div className="ga-twocol-header" style={{ marginTop: 12 }}>
         <h3>
           {t('NPC pool')}
+          {/* The counter is the CAP's own arithmetic: `pool_used` counts the
+              mortal sheets only, because those are the ones an overflow drops.
+              Counting the rows would show a pool of kept NPCs as permanently
+              over its size. */}
           {limits.pool_size !== undefined && (
-            <span className="ga-muted"> {pooled.length}/{limits.pool_size}</span>
+            <span className="ga-muted"> {limits.pool_used ?? pooled.length}/{limits.pool_size}</span>
           )}
         </h3>
       </div>
@@ -285,6 +302,18 @@ export function CharacterListPanel({
                 <span className="ga-list-row-main">
                   <strong>♺ {p.name}</strong>
                   {p.role ? <span className="ga-muted"> · {p.role}</span> : null}
+                  {/* A KEPT sheet. No automatic spawn draws it and the pool cap
+                      never drops it, so it sits here until a slot is bound to
+                      it by hand — without the marker it looks like every other
+                      row and silently never comes back. */}
+                  {p.permanent ? (
+                    <span
+                      className="ga-muted"
+                      title={t('No automatic spawn takes this NPC and the pool size does not count it — bind a slot to its name to bring it back')}
+                    >
+                      {' · ∞ '}{t('permanent')}
+                    </span>
+                  ) : null}
                   {/* Why this one is in the pool. For an automatic spawn held
                       back by the finish gate ("waiting for profile_image,
                       model3d") this is the only place the state is visible at

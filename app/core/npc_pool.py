@@ -395,6 +395,8 @@ def list_pool() -> List[Dict[str, Any]]:
     roster builds (``character_ops.build_present_characters``), percent-
     encoded per segment; "" when there is no portrait, so the UI never has to
     render a broken image.
+
+    ``permanent`` is the row's other invisible state — see the field below.
     """
     from urllib.parse import quote
 
@@ -412,6 +414,12 @@ def list_pool() -> List[Dict[str, Any]]:
             "role": profile.get("npc_slot_role") or "",
             "standing_task": profile.get("standing_task") or "",
             "reason": profile.get("npc_pooled_reason") or "",
+            # KEPT, not stock. `take_from_pool` skips a permanent sheet and
+            # `_enforce_pool_cap` never drops one — so it neither leaves the
+            # pool by itself nor counts against its size, and the row has to
+            # say both. Without it the list showed a sheet that looks like
+            # every other one and silently never comes back.
+            "permanent": bool(profile.get("npc_permanent")),
             "image_url": (f"/characters/{quote(name, safe='')}/images/"
                           f"{quote(image, safe='')}" if image else ""),
             "description": _pool_description(profile),

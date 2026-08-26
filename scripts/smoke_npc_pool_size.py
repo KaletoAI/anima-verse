@@ -49,6 +49,20 @@ Hand-derived expectations:
       demo_pool_keep is still on the Game-Admin pool list (``list_pool``),
       which is where an admin finds it at all.
 
+  [5] AND THE LIST SAYS SO. A pooled sheet that no spawn will ever draw and
+      that no cap will ever drop looks exactly like every other row unless the
+      payload carries the state, so ``list_pool`` ships ``permanent`` per row
+      and ``GET /npc/list`` ships ``limits.pool_used`` — the MORTAL count, the
+      only one the cap measures. Straight off [4]'s state, cap 2:
+
+        rows            demo_pool_c False, demo_pool_d False,
+                        demo_pool_keep True
+        limits.pool_used  2   (three rows, one of them permanent)
+        limits.pool_size  2
+
+      so the header reads "2/2" — full, and honestly so. Counting the rows
+      instead would say "3/2", a pool over its own cap that will never shrink.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_pool_size.py
 """
 import os
@@ -158,6 +172,18 @@ check("and it really is gone from the world",
 check("the Game-Admin pool list still shows the kept sheet",
       KEEP in [r["name"] for r in list_pool()], True)
 check("but no spawn can claim it", take_from_pool(""), C)
+
+# ---------------------------------------------------------------------------
+print("\n[5] The pool list says which sheet is kept, and counts the mortal ones")
+
+from app.routes.npc import list_npcs_route  # noqa: E402
+
+check("every row carries the state",
+      sorted((r["name"], r["permanent"]) for r in list_pool()),
+      [(C, False), (D, False), (KEEP, True)])
+_limits = list_npcs_route()["limits"]
+check("the counter beside the size skips the kept sheet",
+      (_limits["pool_used"], _limits["pool_size"]), (2, 2))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:
