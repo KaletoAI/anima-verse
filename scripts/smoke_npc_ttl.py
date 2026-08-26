@@ -74,6 +74,62 @@ and moves it only by whole, hand-counted spans.
       ``(None, "")`` and ``expired False`` — the same as no stamp, so a
       hand-edited profile cannot crash the list.
 
+THE LIFETIME EDIT, by hand (task 2). ``expires_at`` is a GAME stamp and only
+the server owns that clock, so the admin never types one: the config form
+sends ``lifetime`` (``default|permanent|custom``) plus ``lifetime_hours``, and
+``character_ops.apply_profile_update`` RECOMPUTES the stamp before it writes
+the profile. The rule, in full:
+
+    permanent → expires_at = ""            npc_permanent = True
+    custom    → expires_at = expiry_stamp(lifetime_hours)   npc_permanent = False
+                (lifetime_hours missing or <= 0 is no choice at all → default)
+    default   → expires_at = expiry_stamp(wanderer_ttl_hours() if the profile
+                is a wanderer else slot_ttl_hours())        npc_permanent = False
+
+The branch fires ONLY for a temporary NPC and ONLY when the save carries
+``lifetime`` or ``lifetime_hours``; every other save leaves the stamp alone.
+
+  [9] PERMANENT. An NPC stamped for 4 h (T0 + 14 400 s) is made permanent:
+        expires_at      ""            (the empty stamp means "never")
+        npc_permanent   True
+        remaining pair  (None, "")    — no TTL is not an expired TTL ([5])
+        npc_summary.permanent  True
+      and ``sweep_expired_npcs`` leaves it standing, because the sweep asks
+      ``is_expired("")`` → False (unchanged from task 1).
+
+ [10] CUSTOM. With the clock frozen at T0 = 907 200 s, ``lifetime custom``
+      + ``lifetime_hours 3`` writes T0 + 3·3 600 = 907 200 + 10 800
+      = 918 000 s = Year 1, Day 11, 15:00 → "Y0001-D011T15:00:00", and
+      ``remaining_span`` reads (3.0, "3h"). ``npc_permanent`` goes back to
+      False — making an NPC mortal again is the same one edit.
+      [10b] The HOURS alone are an edit too: a save carrying only
+      ``lifetime_hours 1`` on an NPC whose mode already is ``custom`` restamps
+      to T0 + 3 600 = 910 800 s = Day 11, 13:00.
+      [10c] ``lifetime_hours 0`` is not a lifetime → the default rule below.
+
+ [11] DEFAULT reads the WORLD's TTL config, not a constant. With
+      ``npc.slot_ttl_game_hours = 6`` a settled NPC restamps to T0 + 6·3 600
+      = 928 800 s = Day 11, 18:00; with ``npc.wanderer_ttl_game_hours = 9`` a
+      profile carrying ``npc_wanderer`` restamps to T0 + 9·3 600 = 939 600 s
+      = Day 11, 21:00. Two lifetimes, one dropdown entry — which one applies
+      is the NPC's own kind.
+
+ [12] THE FLAG SURVIVES THE POOL. ``pool_npc`` empties ``expires_at`` and
+      keeps every other key, so a permanent NPC comes back out of the pool
+      permanent: ``revive_from_pool(..., ttl_hours=5)`` leaves the stamp ""
+      instead of writing T0 + 5 h. A NON-permanent sheet is stamped as ever:
+      T0 + 5·3 600 = 925 200 s = Day 11, 17:00.
+
+ [13] NOT A TEMPORARY NPC, no branch. A full character (template
+      ``human-roleplay``) saved with ``lifetime: "permanent"`` keeps whatever
+      ``expires_at`` it had and gets NO ``npc_permanent`` — the recompute is
+      temp-NPC bookkeeping, and ``is_temporary_npc`` is the only gate (never
+      a name or a template string in code).
+
+ [14] AN UNRELATED SAVE NEVER RESTARTS A LIFETIME. Saving ``standing_task``
+      on a temporary NPC leaves the stamp from [12] byte for byte — otherwise
+      every edit in the config form would quietly give the NPC a fresh day.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_ttl.py
 """
 import os
@@ -93,12 +149,16 @@ config.load(STORAGE / "config.json")
 db.init_schema()
 
 from app.core import embedding, npc_ops  # noqa: E402
+from app.core.character_ops import apply_profile_update  # noqa: E402
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.npc_ops import (apply_npc, expiry_stamp,  # noqa: E402
-                              is_expired, npc_summary, remaining_span)
+                              is_expired, npc_summary, remaining_span,
+                              sweep_expired_npcs)
+from app.core.npc_pool import pool_npc, revive_from_pool  # noqa: E402
 from app.core.task_queue import get_task_queue  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.models.character import (get_character_profile,  # noqa: E402
+                                  list_temporary_npcs,
                                   save_character_profile)
 
 # Offline: no embedding model is downloaded for the pose catalog.
@@ -130,11 +190,16 @@ check("the frozen clock stands where the docstring says",
 set_game_time(T0)
 
 
+def set_npc_cfg(**values) -> None:
+    """Merge keys into this throwaway world's ``npc`` config section."""
+    cfg = config.get_all()
+    cfg.setdefault("npc", {}).update(values)
+    config.save(cfg, STORAGE / "config.json")
+
+
 def make_npc(name: str, *, ttl_hours=None) -> str:
     """A living temporary NPC through the real creation path, gate off."""
-    cfg = config.get_all()
-    cfg.setdefault("npc", {})["require_assets"] = False
-    config.save(cfg, STORAGE / "config.json")
+    set_npc_cfg(require_assets=False)
     apply_npc({"character_name": name,
                "character_appearance": "a lean figure in a patched coat",
                "face_appearance": "a narrow face, dark eyes",
@@ -233,6 +298,118 @@ junk = npc_summary("Brenna")
 check("a hand-edited profile cannot crash the list",
       (junk["remaining_hours"], junk["remaining_label"], junk["expired"]),
       (None, "", False))
+
+# ---------------------------------------------------------------------------
+print("\n[9] the lifetime edit: permanent")
+
+SABLE = make_npc("Sable", ttl_hours=4)
+check("stamped for four hours first",
+      (get_character_profile(SABLE) or {}).get("expires_at"),
+      "Y0001-D011T16:00:00")
+
+apply_profile_update(SABLE, {"fields": {"lifetime": "permanent"}})
+sable = get_character_profile(SABLE) or {}
+check("permanent empties the stamp", sable.get("expires_at"), "")
+check("and raises the flag", sable.get("npc_permanent"), True)
+check("the mode is stored as picked", sable.get("lifetime"), "permanent")
+row = npc_summary(SABLE)
+check("npc_summary says permanent", row["permanent"], True)
+check("with no span and no expiry",
+      (row["remaining_hours"], row["remaining_label"], row["expired"]),
+      (None, "", False))
+sweep_expired_npcs()
+check("the sweep leaves a permanent NPC standing",
+      SABLE in list_temporary_npcs(), True)
+
+# ---------------------------------------------------------------------------
+print("\n[10] the lifetime edit: custom hours")
+
+apply_profile_update(SABLE, {"fields": {"lifetime": "custom",
+                                        "lifetime_hours": 3}})
+sable = get_character_profile(SABLE) or {}
+check("three game hours from T0", sable.get("expires_at"),
+      "Y0001-D011T15:00:00")
+check("the stamp is T0 + 10800 s",
+      GameTime.parse(sable["expires_at"]).total_seconds, 918000)
+check("the flag comes back down", sable.get("npc_permanent"), False)
+check("the span reads three hours",
+      remaining_span(sable["expires_at"]), (3.0, "3h"))
+check("npc_summary is mortal again", npc_summary(SABLE)["permanent"], False)
+
+print("[10b] the hours alone are an edit too")
+apply_profile_update(SABLE, {"fields": {"lifetime_hours": 1}})
+check("one game hour from T0",
+      (get_character_profile(SABLE) or {}).get("expires_at"),
+      "Y0001-D011T13:00:00")
+
+print("[10c] zero hours is no lifetime — the default rule applies")
+set_npc_cfg(slot_ttl_game_hours=6, wanderer_ttl_game_hours=9)
+apply_profile_update(SABLE, {"fields": {"lifetime": "custom",
+                                        "lifetime_hours": 0}})
+sable = get_character_profile(SABLE) or {}
+check("it falls back to the slot TTL", sable.get("expires_at"),
+      "Y0001-D011T18:00:00")
+check("and says so in the mode", sable.get("lifetime"), "default")
+
+# ---------------------------------------------------------------------------
+print("\n[11] the lifetime edit: default reads the world's TTL config")
+
+apply_profile_update(SABLE, {"fields": {"lifetime": "default"}})
+check("slot TTL 6 h → Day 11, 18:00",
+      (get_character_profile(SABLE) or {}).get("expires_at"),
+      "Y0001-D011T18:00:00")
+
+sable = get_character_profile(SABLE) or {}
+sable["npc_wanderer"] = True
+save_character_profile(SABLE, sable)
+apply_profile_update(SABLE, {"fields": {"lifetime": "default"}})
+check("a WANDERER gets the wanderer TTL 9 h → Day 11, 21:00",
+      (get_character_profile(SABLE) or {}).get("expires_at"),
+      "Y0001-D011T21:00:00")
+sable = get_character_profile(SABLE) or {}
+sable["npc_wanderer"] = False
+save_character_profile(SABLE, sable)
+
+# ---------------------------------------------------------------------------
+print("\n[12] the flag survives the pool, the revive does not re-stamp")
+
+apply_profile_update(SABLE, {"fields": {"lifetime": "permanent"}})
+check("pooled", pool_npc(SABLE, reason="smoke"), True)
+pooled = get_character_profile(SABLE) or {}
+check("pooling keeps the flag", pooled.get("npc_permanent"), True)
+check("and empties the stamp as ever", pooled.get("expires_at"), "")
+check("revived", revive_from_pool(SABLE, "", ttl_hours=5), True)
+check("a permanent NPC comes back without a lifetime",
+      (get_character_profile(SABLE) or {}).get("expires_at"), "")
+
+ROOK = make_npc("Rook", ttl_hours=2)
+check("pooled", pool_npc(ROOK, reason="smoke"), True)
+check("revived", revive_from_pool(ROOK, "", ttl_hours=5), True)
+check("a mortal NPC is stamped exactly as before",
+      (get_character_profile(ROOK) or {}).get("expires_at"),
+      "Y0001-D011T17:00:00")
+
+# ---------------------------------------------------------------------------
+print("\n[13] a full character never enters the branch")
+
+save_character_profile("demo_full", {
+    "character_name": "demo_full", "template": "human-roleplay",
+    "expires_at": "Y0001-D011T13:00:00"}, create_new=True)
+apply_profile_update("demo_full", {"fields": {"lifetime": "permanent"}})
+full = get_character_profile("demo_full") or {}
+check("the stamp is untouched", full.get("expires_at"),
+      "Y0001-D011T13:00:00")
+check("and no NPC flag was invented", full.get("npc_permanent"), None)
+
+# ---------------------------------------------------------------------------
+print("\n[14] an unrelated save never restarts a lifetime")
+
+apply_profile_update(ROOK, {"fields": {"standing_task": "sweeping the yard"}})
+rook = get_character_profile(ROOK) or {}
+check("the stamp survives an ordinary edit", rook.get("expires_at"),
+      "Y0001-D011T17:00:00")
+check("and the edit itself landed", rook.get("standing_task"),
+      "sweeping the yard")
 
 # ---------------------------------------------------------------------------
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")

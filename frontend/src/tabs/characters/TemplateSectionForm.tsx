@@ -1,14 +1,15 @@
 /**
- * TemplateSectionForm — rendert EINE Template-Sektion generisch als Formular.
+ * TemplateSectionForm — renders ONE template section generically as a form.
  *
- * Lädt die drei Speicher des Characters und schreibt jedes Feld in den richtigen:
- *   - `store` fehlt        → profile_json            (GET/POST /characters/{n}/profile)
+ * Loads the character's three stores and writes every field back into the
+ * right one:
+ *   - no `store`           → profile_json            (GET/POST /characters/{n}/profile)
  *   - `store: config`      → config_json             (GET/POST /characters/{n}/config)
  *   - `store: status_effects` → profile.status_effects (GET /status-effects, POST /profile)
  *
- * Sichtbarkeit (`visible_when`) wird live über alle Speicher ausgewertet.
- * Soul-Felder (`source_file`) und unsichtbare Felder (`editor_visible:false`)
- * werden übersprungen. Kein Hardcoding — alles aus der Template-Definition.
+ * Visibility (`visible_when`) is evaluated live across all stores. Soul fields
+ * (`source_file`) and invisible ones (`editor_visible:false`) are skipped. No
+ * hardcoding — everything comes from the template definition.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -17,7 +18,7 @@ import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { TemplateField, tmplText, type TmplFieldDef, type DynamicData } from './TemplateField'
 
-// Identitäts-Schlüssel: nie editierbar (Rename würde den DB-Key brechen).
+// The identity key: never editable (a rename would break the DB key).
 const FORCE_READONLY = new Set(['character_name'])
 
 export interface TmplSection {
@@ -42,7 +43,7 @@ export function TemplateSectionForm({
   character: string
   section: TmplSection
   dynamicData: DynamicData
-  /** Policy-Ausschluss einzelner Felder (z.B. Social-Zahlen im /play). */
+  /** Policy exclusion of single fields (e.g. the social numbers in /play). */
   excludeKeys?: string[]
 }) {
   const { t, lang } = useI18n()
@@ -63,7 +64,7 @@ export function TemplateSectionForm({
       ])
       setProfile(pr.profile || {})
       setConfig(cf.config || {})
-      // status_effects nur laden, wenn die Sektion solche Felder hat.
+      // Only load status_effects when the section actually has such fields.
       const hasStat = (section.fields || []).some((f) => f.store === 'status_effects')
       if (hasStat) {
         try {
@@ -90,7 +91,7 @@ export function TemplateSectionForm({
 
   const storeOf = (f: TmplFieldDef) => f.store || 'profile'
 
-  // Rohwert aus dem richtigen Speicher (für visible_when-Lookups über alle Keys).
+  // The raw value from the right store (for visible_when lookups across all keys).
   const lookup = (key: string): unknown => {
     if (key in config) return config[key]
     if (key in status) return status[key]
@@ -130,6 +131,9 @@ export function TemplateSectionForm({
           setProfile((p) => ({ ...p, [f.key]: value }))
         }
         toast(t('Saved'))
+        // Server-derived siblings (see `reload_after_save`): re-read the
+        // stores, because this save wrote keys the form never sent.
+        if (f.reload_after_save) load()
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
         load()
@@ -144,7 +148,7 @@ export function TemplateSectionForm({
     return <div className="ga-loading">{t('Loading…')}</div>
   }
 
-  // Editierbare, sichtbare Felder (Soul + unsichtbare + Policy-Ausschlüsse raus).
+  // The editable, visible fields (soul, invisible and policy-excluded ones dropped).
   const ex = new Set(excludeKeys || [])
   const fields = (section.fields || []).filter(
     (f) => f.editor_visible !== false && !f.source_file && !ex.has(f.key) && visible(f.visible_when),

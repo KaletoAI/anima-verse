@@ -252,6 +252,52 @@
           "hint_de": "Das Admin-Briefing, aus dem dieser NPC generiert wurde."
         },
         {
+          "key": "lifetime",
+          "label": "Lifetime",
+          "label_de": "Lebensdauer",
+          "type": "select",
+          "default": "default",
+          "options": [
+            {
+              "value": "default",
+              "label": "Default (world TTL)",
+              "label_de": "Standard (Welt-TTL)"
+            },
+            {
+              "value": "permanent",
+              "label": "Permanent — never expires",
+              "label_de": "Permanent — läuft nie ab"
+            },
+            {
+              "value": "custom",
+              "label": "Custom number of game hours",
+              "label_de": "Eigene Anzahl Spielstunden"
+            }
+          ],
+          "in_prompt": false,
+          "llm_generable": false,
+          "reload_after_save": true,
+          "hint": "Saving recomputes the expiry stamp from the game clock. A permanent NPC keeps living through pooling and re-spawns until an admin deletes it.",
+          "hint_de": "Beim Speichern wird der Ablauf-Stempel aus der Spieluhr neu berechnet. Ein permanenter NPC überlebt Pool und Neu-Einsatz, bis ein Admin ihn löscht."
+        },
+        {
+          "key": "lifetime_hours",
+          "label": "Lifetime (game hours)",
+          "label_de": "Lebensdauer (Spielstunden)",
+          "type": "number",
+          "visible_when": {
+            "field": "lifetime",
+            "values": [
+              "custom"
+            ]
+          },
+          "in_prompt": false,
+          "llm_generable": false,
+          "reload_after_save": true,
+          "hint": "Counted from the moment you save, on the GAME clock. 0 or empty falls back to the world's default TTL.",
+          "hint_de": "Ab dem Speichern gezählt, auf der SPIEL-Uhr. 0 oder leer fällt auf die Standard-TTL der Welt zurück."
+        },
+        {
           "key": "expires_at",
           "label": "Expires at (game time)",
           "label_de": "Läuft ab (Spielzeit)",

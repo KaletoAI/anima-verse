@@ -478,6 +478,11 @@ def npc_summary(name: str) -> Dict[str, Any]:
         "remaining_hours": remaining[0],
         "remaining_label": remaining[1],
         "expired": is_expired(expires_at),
+        # PERMANENT is a decision, not a missing stamp. An NPC that never got
+        # a TTL and one an admin explicitly made permanent both carry
+        # ``expires_at ""`` — only this flag tells the list which of the two it
+        # is showing, and it is what keeps a revive from re-stamping the sheet.
+        "permanent": bool(profile.get("npc_permanent")),
     }
 
 

@@ -1,15 +1,16 @@
 /**
- * TemplateTab — rendert EINEN Template-Tab (z.B. „General", „Aussehen") generisch
- * als Spalten-Layout. Der Tab besitzt einen Spalten-Bereich (`tab.columns`); jede
- * Section mit `column ∈ tab.columns` landet in der passenden Spalte (sortiert nach
- * column, innerhalb nach row). Kein Hardcoding — alles aus dem Template.
+ * TemplateTab — renders ONE template tab (e.g. "General", "Appearance")
+ * generically as a column layout. The tab owns a range of columns
+ * (`tab.columns`); every section with `column ∈ tab.columns` lands in the
+ * matching column (sorted by column, then by row). No hardcoding —
+ * everything comes from the template.
  *
- * Lädt die drei Stores EINMAL (profile/config/status_effects) und speichert jedes
- * Feld in den richtigen (wie TemplateSectionForm, aber für den ganzen Tab).
+ * Loads the three stores ONCE (profile/config/status_effects) and saves every
+ * field into the right one (like TemplateSectionForm, but for a whole tab).
  *
- * Mehrzeilige Text-Felder mit {tokens} bekommen eine **Live-Vorschau der
- * Ersetzungen** über die Backend-Funktion (POST /characters/{name}/resolve-tokens)
- * — kein Frontend-Nachbau.
+ * Multiline text fields carrying {tokens} get a **live preview of the
+ * replacements** from the backend (POST /characters/{name}/resolve-tokens) —
+ * never a frontend re-implementation.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -44,9 +45,9 @@ interface TokenChip {
   label: string
 }
 
-// Sammelt die {token}-Platzhalter, die laut Template auf `targetKey` zielen
-// (replacement.target == targetKey, string oder Liste) — quer über ALLE
-// Sektionen, da z.B. {gender} aus einer anderen Spalte stammt.
+// Collects the {token} placeholders the template aims at `targetKey`
+// (replacement.target == targetKey, a string or a list) — across ALL sections,
+// because e.g. {gender} comes from another column.
 export function collectTokens(sections: TmplSectionRaw[], targetKey: string, lang: string): TokenChip[] {
   const out: TokenChip[] = []
   const seen = new Set<string>()
@@ -65,8 +66,8 @@ export function collectTokens(sections: TmplSectionRaw[], targetKey: string, lan
   return out
 }
 
-// Mehrzeiliges Text-Feld mit Live-Token-Vorschau (Backend-Resolver) und
-// klickbaren Token-Chips, die {placeholder} an der Cursor-Position einfügen.
+// A multiline text field with a live token preview (resolved by the backend)
+// and clickable token chips that insert {placeholder} at the caret.
 function PromptField({
   character,
   field,
@@ -92,9 +93,9 @@ function PromptField({
     setLocal(String(value ?? ''))
   }, [value])
 
-  // Text an der aktuellen Cursor-Position einfügen. Liest den LIVE-Wert aus dem
-  // DOM (ta.value) statt aus dem state-`local` — so funktioniert der Aufruf aus
-  // dem Help-Panel auch nach dem Tippen korrekt (kein stale-Closure).
+  // Insert text at the current caret. Reads the LIVE value from the DOM
+  // (ta.value) instead of the `local` state — that way a call from the help
+  // panel still works after typing (no stale closure).
   const insertText = (ins: string) => {
     const ta = taRef.current
     if (!ta) {
@@ -115,8 +116,9 @@ function PromptField({
     })
   }
 
-  // Tokens + Insert-Funktion ans Help-Panel melden (beim Fokus). Topic kommt aus
-  // dem Template-help-Key (z.B. image_prompt fuer appearance), sonst kein Topic.
+  // Announce tokens + the insert function to the help panel (on focus). The
+  // topic comes from the template's `help` key (e.g. image_prompt for the
+  // appearance), otherwise there is no topic.
   const announceHelp = () => setHelp(
     typeof field.help === 'string' ? field.help : null,
     {
@@ -125,7 +127,7 @@ function PromptField({
     },
   )
 
-  // Debounced Resolve über das Backend, wann immer der Text Tokens enthält.
+  // Debounced resolve through the backend, whenever the text carries tokens.
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current)
     if (!local.includes('{')) {
@@ -148,9 +150,9 @@ function PromptField({
     }
   }, [local, character, field.key])
 
-  // Eigener vertikaler Wrapper: .ga-field-control ist ein Flex-ROW, sonst
-  // landeten Textarea und Resolved-Preview NEBENeinander. So steht die Vorschau
-  // direkt UNTER dem Prompt. Insert-Tokens sind im Help-Panel (Fokus).
+  // Its own vertical wrapper: .ga-field-control is a flex ROW, so the textarea
+  // and the resolved preview would sit SIDE BY SIDE. This puts the preview
+  // directly UNDER the prompt. The insert tokens live in the help panel.
   return (
     <div className="ga-prompt-field">
       <textarea
@@ -188,12 +190,12 @@ export function TemplateTab({
   tab: TmplTabDef
   sections: TmplSectionRaw[]
   dynamicData: DynamicData
-  /** Render-Node je `section.special` (z.B. "placement" → Platzierungs-UI). */
+  /** A render node per `section.special` (e.g. "placement" → the placement UI). */
   specialSlots?: Record<string, React.ReactNode>
-  /** Policy-Ausschluss einzelner Felder (z.B. Social-Zahlen im /play). */
+  /** Policy exclusion of single fields (e.g. the social numbers in /play). */
   excludeKeys?: string[]
-  /** Prompt-Felder mit Bild zweispaltig rendern (Prompt links, Bild rechts)
-   *  statt Bild unter dem Prompt — genutzt vom /play-Avatar-Panel. */
+  /** Render prompt fields that have an image in two columns (prompt left,
+   *  image right) instead of the image below — used by the /play avatar panel. */
   imageBeside?: boolean
 }) {
   const { t, lang } = useI18n()
@@ -271,6 +273,9 @@ export function TemplateTab({
           setProfile((p) => ({ ...p, [f.key]: value }))
         }
         toast(t('Saved'))
+        // Server-derived siblings (see `reload_after_save`): re-read the
+        // stores, because this save wrote keys the form never sent.
+        if (f.reload_after_save) load()
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
         load()

@@ -35,6 +35,11 @@ interface LivingNpc {
   /** True once the game clock passed the stamp (the sweep runs on a tick, so
    *  such an NPC is still standing and still on this list). */
   expired?: boolean
+  /** An admin took this NPC's lifetime away for good (profile `npc_permanent`).
+   *  It has no stamp either, but that is a different state from an NPC that
+   *  simply never got one — and the flag is what keeps a revive out of the
+   *  pool from stamping it again. */
+  permanent?: boolean
 }
 
 /**
@@ -92,6 +97,17 @@ export function CharacterListPanel({
       loadPool()
     }
   }
+  // The one-click way out of a lifetime. The same edit the character's config
+  // form offers (Temporary NPC → Lifetime): the SERVER recomputes the game
+  // stamp, the client only names the decision.
+  const makePermanent = async (name: string) => {
+    try {
+      await apiPost(`/characters/${encodeURIComponent(name)}/profile`,
+        { fields: { lifetime: 'permanent' } })
+    } finally {
+      loadPool()
+    }
+  }
   const drop = async (name: string) => {
     try { await apiDelete(`/characters/${encodeURIComponent(name)}`) } finally {
       loadPool()
@@ -124,9 +140,13 @@ export function CharacterListPanel({
       : t('roams {where}').replace('{where}', home)
   }
 
-  /** "⌛ expires in 2h 30m", or "⌛ expired" in red. Nothing without a TTL. */
+  /** "⌛ expires in 2h 30m", "⌛ expired" in red, or "∞ permanent". Nothing at
+   *  all for an NPC that simply carries no TTL. */
   const ttl = (name: string) => {
     const n = living[name]
+    if (n?.permanent) {
+      return <span className="ga-muted">{' · ∞ '}{t('permanent')}</span>
+    }
     const label = (n?.remaining_label || '').trim()
     if (!label) return null
     if (n?.expired) {
@@ -220,6 +240,16 @@ export function CharacterListPanel({
                   {ttl(c.name)}
                 </span>
               </button>
+              {!living[c.name]?.permanent && (
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  title={t('Take this NPC\'s lifetime away — it stays until an admin deletes it')}
+                  onClick={() => makePermanent(c.name)}
+                >
+                  {t('Make permanent')}
+                </button>
+              )}
               <button
                 type="button"
                 className="ga-btn ga-btn-sm"

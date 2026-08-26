@@ -1183,6 +1183,47 @@ def build_profile_payload(character_name: str) -> Dict[str, Any]:
     return {"character": character_name, "profile": profile}
 
 
+def _lifetime_fields(profile: Dict[str, Any],
+                     fields: Dict[str, Any]) -> Dict[str, Any]:
+    """The profile keys a temporary NPC's lifetime edit really writes.
+
+    Three modes, one stamp (plan-npc-leben-bugs § Lifetime):
+
+    * ``permanent`` — no stamp at all (``""`` is what ``sweep_expired_npcs``
+      reads as "never") plus ``npc_permanent``, the flag that survives pooling
+      and stops ``npc_pool.revive_from_pool`` from handing the NPC a new TTL;
+    * ``custom`` — ``lifetime_hours`` GAME hours from now. A missing or
+      non-positive number is no lifetime at all and falls through to default;
+    * ``default`` — the world's own TTL for this kind of NPC: the wanderer TTL
+      for a wanderer, the slot TTL for everyone else.
+
+    Only the mode is read from ``fields`` first and from the stored profile
+    second, so a save that carries the HOURS alone still restamps a custom
+    lifetime.
+    """
+    from app.core.npc_ops import expiry_stamp
+    from app.core.npc_spawn import slot_ttl_hours, wanderer_ttl_hours
+
+    mode = str(fields.get("lifetime", profile.get("lifetime"))
+               or "default").strip().lower()
+    if mode == "permanent":
+        return {"lifetime": "permanent", "expires_at": "",
+                "npc_permanent": True}
+    if mode == "custom":
+        try:
+            hours = float(fields.get("lifetime_hours",
+                                     profile.get("lifetime_hours")))
+        except (TypeError, ValueError):
+            hours = 0.0
+        if hours > 0:
+            return {"lifetime": "custom", "lifetime_hours": hours,
+                    "expires_at": expiry_stamp(hours), "npc_permanent": False}
+    ttl = (wanderer_ttl_hours() if profile.get("npc_wanderer")
+           else slot_ttl_hours())
+    return {"lifetime": "default", "expires_at": expiry_stamp(ttl),
+            "npc_permanent": False}
+
+
 def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
     """Updates character profile fields (bulk update)."""
     from app.models.character import get_character_profile, save_character_profile
@@ -1219,6 +1260,16 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
     for k in list(fields.keys()):
         if k in _sf_keys:
             fields.pop(k, None)
+
+    # LIFETIME is derived, never typed. `expires_at` is a canonical GAME stamp
+    # and only the server owns that clock, so the temp-NPC form offers the
+    # DECISION (`lifetime` + `lifetime_hours`) and the stamp is recomputed
+    # here. Every other save leaves `expires_at` exactly as it was — otherwise
+    # editing a briefing would quietly hand the NPC a fresh day.
+    from app.models.character import is_temporary_npc
+    if ("lifetime" in fields or "lifetime_hours" in fields) \
+            and is_temporary_npc(character_name):
+        fields.update(_lifetime_fields(profile, fields))
 
     profile.update(fields)
     save_character_profile(character_name, profile)

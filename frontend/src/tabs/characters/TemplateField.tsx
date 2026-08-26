@@ -31,6 +31,11 @@ export interface TmplFieldDef {
   source_file?: string
   editor_visible?: boolean
   visible_when?: { field: string; values: unknown[] }
+  /** This field is an INPUT the server derives other fields from, so saving it
+   *  changes keys the form never sent (the temp-NPC lifetime recomputes
+   *  `expires_at`). The renderers re-read the stores after such a save, or the
+   *  readonly display right next to the control keeps showing the old value. */
+  reload_after_save?: boolean
 }
 
 export type DynamicData = Record<string, Array<{ value: string; label: string }>>

@@ -248,7 +248,13 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
         return False
 
     profile = get_character_profile(name) or {}
-    profile["expires_at"] = expiry_stamp(ttl_hours)
+    # A PERMANENT NPC keeps its empty stamp. `npc_permanent` is an admin's
+    # explicit decision (Character config → Temporary NPC → Lifetime), and
+    # pooling keeps every key but the stamp — so the sheet that comes back for
+    # a slot must not be handed the lifetime it was just relieved of. Everyone
+    # else is stamped exactly as `npc_ops.apply_npc` stamps a fresh NPC.
+    profile["expires_at"] = ("" if profile.get("npc_permanent")
+                             else expiry_stamp(ttl_hours))
     profile["npc_slot_role"] = (slot_role or "").strip()
     # BOTH slot stamps are written on every revive, one of them empty: a
     # recycled sheet may carry yesterday's stamp of the OTHER kind (pooling
