@@ -169,10 +169,14 @@ def _render_profile_image(name: str) -> None:
     The same request the profile-image route sends (``character_ops.
     generate_profile_image_core``): the FACE prompt, the ``profile`` use-case
     for the style, ``set_profile`` so the service files it as the portrait
-    itself, and ``auto_enhance`` off because the face prompt IS the finished
-    prompt. Blocking — this runs in a queue worker.
+    itself, ``auto_enhance`` off because the face prompt IS the finished
+    prompt, and the SAME render target — ``resolve_profile_imagegen`` is the
+    one chain both callers ask, so an NPC portrait lands on the configured
+    backend instead of whatever the pool happens to pick. Blocking — this runs
+    in a queue worker.
     """
-    from app.core.character_ops import _resolve_face_prompt
+    from app.core.character_ops import (_resolve_face_prompt,
+                                        resolve_profile_imagegen)
     from app.imagegen.service import get_image_service
     from app.models.character import get_character_profile
     from app.models.character_template import get_template
@@ -181,12 +185,15 @@ def _render_profile_image(name: str) -> None:
     template = profile.get("template") or ""
     prompt = _resolve_face_prompt(profile, name,
                                   get_template(template) if template else None)
+    target = resolve_profile_imagegen(profile)
     result = get_image_service().generate_from_input(json.dumps({
         "prompt": prompt,
         "agent_name": name,
         "auto_enhance": False,
         "set_profile": True,
         "image_use_case": "profile",
+        "workflow": target["workflow"],
+        "backend": target["backend"],
     }))
     logger.debug("npc_assets(%s): profile render said %s", name,
                  str(result)[:200])

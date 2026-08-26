@@ -282,6 +282,7 @@ SECTIONS = {
                     "enabled",
                     "postprocess_enabled",
                     "postprocess_trigger_url",
+                    "profile_imagegen_default",
                     "outfit_imagegen_default",
                     "expression_imagegen_default",
                     "location_imagegen_default",
@@ -390,6 +391,7 @@ SECTIONS = {
             "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Basis-URL, die nach der Erzeugung benachrichtigt wird. Das Programm haengt Parameter an (welt-relativer Bildpfad). Es werden KEINE Bild-Bytes gesendet. Beispiel: http://127.0.0.1:8005/trigger"},
 
             # --- Default backends ---
+            "profile_imagegen_default": {"type": "imagegen_select", "label": "Profile Image Default (Match)", "default": "", "description": "Backend-name glob for the character PORTRAIT — the profile-image button in the character editor and the portrait a temporary NPC gets on creation. Empty = cheapest available backend, which among several cost-0 backends is an arbitrary pick per render (one portrait photoreal, the next one comic)."},
             "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Preview Default (Match)", "description": "Backend-name glob (e.g. 'Flux*' or an exact name) — resolved by availability + cost, no fixed backend."},
             "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Backend-name glob for mood/activity variants — resolved by availability + cost."},
             "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Backend-name glob (e.g. 'Flux*') — resolved by availability + cost."},

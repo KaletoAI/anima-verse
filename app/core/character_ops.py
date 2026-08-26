@@ -2947,6 +2947,48 @@ def build_videogen_options(character_name: str) -> Dict[str, Any]:
 # Routes keep auth/parsing/HTTP-mapping + the thread-spawn scaffold; the
 # logic cores and worker bodies moved here 1:1.
 
+def resolve_profile_imagegen(profile: Optional[Dict[str, Any]],
+                             request_workflow: str = "",
+                             request_backend: str = "") -> Dict[str, str]:
+    """Resolves the render target of a PROFILE-IMAGE render.
+
+    ONE chain for every caller — the character editor's route
+    (`generate_profile_image_core`), the temporary-NPC asset job
+    (`npc_assets._render_profile_image`) and any headless portrait render.
+    Same order the T-pose/expression render uses (`expression_regen`):
+
+        explicit request pick
+        -> per-character override (`profile.outfit_imagegen.workflow`)
+        -> `PROFILE_IMAGEGEN_DEFAULT` (config
+           `image_generation.profile_imagegen_default`)
+        -> empty, i.e. the service picks the cheapest available backend — the
+           behaviour before this field existed.
+
+    Which FIELD carries the spec matters: `service.generate_from_input` reads
+    `workflow` as a SOFT backend glob (match by name, fall back to the ordinary
+    selection when nothing matches) and `backend` as a HARD pick that fails the
+    render when it does not resolve. A configured default must never fail a
+    render, so the chain writes globs into `workflow`; only an explicit request
+    pick reaches `backend`.
+
+    Returns the two payload fields ready to merge into the generate request.
+    """
+    import os
+    wf = (request_workflow or "").strip()
+    be = (request_backend or "").strip()
+    if wf or be:
+        return {"workflow": wf, "backend": be}
+
+    spec = ""
+    char_override = (profile or {}).get("outfit_imagegen") or {}
+    if isinstance(char_override, dict):
+        # Legacy field name "workflow" — a backend glob since ComfyUI was removed.
+        spec = (char_override.get("workflow") or "").strip()
+    if not spec:
+        spec = os.environ.get("PROFILE_IMAGEGEN_DEFAULT", "").strip()
+    return {"workflow": spec, "backend": ""}
+
+
 async def generate_profile_image_core(character_name: str, request) -> Dict[str, Any]:
     """Generates a new profile image via the core image service."""
     from app.core.dependencies import get_skill_manager
@@ -2972,9 +3014,9 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     if not image_skill.enabled:
         raise HTTPException(status_code=500, detail="Image service not available")
 
-    # Workflow/Backend/Modell aus Request
-    workflow_name = data.get("workflow", "").strip()
-    backend_name = data.get("backend", "").strip()
+    # Render target: request pick -> character override -> config default.
+    target = resolve_profile_imagegen(profile, data.get("workflow", ""),
+                                      data.get("backend", ""))
     loras_override = data.get("loras")
     model_override = data.get("model_override", "").strip()
 
@@ -2985,8 +3027,8 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
         "auto_enhance": False,
         "set_profile": True,
         "image_use_case": "profile",
-        "workflow": workflow_name,
-        "backend": backend_name,
+        "workflow": target["workflow"],
+        "backend": target["backend"],
     }
     if loras_override is not None:
         payload["loras"] = loras_override

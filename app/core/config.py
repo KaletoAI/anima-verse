@@ -878,6 +878,7 @@ def _strip_dead_config_fields(config: dict) -> bool:
 # The DB counterpart (per-character overrides) is
 # app/core/workflow_spec_migration.py.
 LEGACY_SPEC_FIELDS: tuple = (
+    "image_generation.profile_imagegen_default",
     "image_generation.outfit_imagegen_default",
     "image_generation.expression_imagegen_default",
     "image_generation.location_imagegen_default",
@@ -1379,6 +1380,7 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "OUTFIT_IMAGE_HEIGHT", ig.get("outfit_image_height", 1216))
     _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", 1280))
     _set(env, "LOCATION_IMAGE_HEIGHT", ig.get("location_image_height", 720))
+    _set(env, "PROFILE_IMAGEGEN_DEFAULT", ig.get("profile_imagegen_default", ""))
     _set(env, "OUTFIT_IMAGEGEN_DEFAULT", ig.get("outfit_imagegen_default", ""))
     _set(env, "EXPRESSION_IMAGEGEN_DEFAULT", ig.get("expression_imagegen_default", ""))
     _set(env, "LOCATION_IMAGEGEN_DEFAULT", ig.get("location_imagegen_default", ""))
