@@ -2111,6 +2111,8 @@
     "Temporary NPCs": "Temporäre NPCs",
     "New NPC": "Neuer NPC",
     "No temporary NPCs": "Keine temporären NPCs",
+    "roams the {area}": "streift durch {area}",
+    "roams {where}": "streift umher — {where}",
     "New temporary NPC": "Neuer temporärer NPC",
     "A temporary NPC has no memory, no relationships and no autonomous thoughts. It stands where you put it, does its one standing task and answers when spoken to.": "Ein temporärer NPC hat kein Gedächtnis, keine Beziehungen und keine autonomen Gedanken. Er steht, wo du ihn hinsetzt, erledigt seine eine Standard-Aufgabe und antwortet, wenn man ihn anspricht.",
     "Briefing": "Briefing",

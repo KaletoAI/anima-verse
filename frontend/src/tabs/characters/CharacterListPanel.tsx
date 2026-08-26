@@ -18,6 +18,19 @@ interface PooledNpc {
 interface NpcLimits { alive?: number; max_alive?: number; wanderer_quota?: number; pool_size?: number }
 
 /**
+ * One LIVING temporary NPC, as `npc_ops.npc_summary` builds it. Only the few
+ * fields this list renders are declared.
+ */
+interface LivingNpc {
+  name: string
+  /** The home area in words — "within 60 m of Old Mill", or the painted area's
+   *  label. "" for an NPC that lives in a room. */
+  home?: string
+  /** The painted area whose slot this NPC holds. "" for a location slot. */
+  slot_area?: string
+}
+
+/**
  * Left-hand character list: header + New/Import actions + the selectable
  * character rows. `characters` is expected pre-sorted by the parent.
  *
@@ -51,11 +64,16 @@ export function CharacterListPanel({
   const npcs = useMemo(() => characters.filter((c) => c.temporary), [characters])
   const [pooled, setPooled] = useState<PooledNpc[]>([])
   const [limits, setLimits] = useState<NpcLimits>({})
+  const [living, setLiving] = useState<Record<string, LivingNpc>>({})
 
   const loadPool = useCallback(() => {
-    apiGet<{ pooled?: PooledNpc[]; limits?: NpcLimits }>('/npc/list')
-      .then((r) => { setPooled(r.pooled || []); setLimits(r.limits || {}) })
-      .catch(() => { setPooled([]); setLimits({}) })
+    apiGet<{ npcs?: LivingNpc[]; pooled?: PooledNpc[]; limits?: NpcLimits }>('/npc/list')
+      .then((r) => {
+        setPooled(r.pooled || [])
+        setLimits(r.limits || {})
+        setLiving(Object.fromEntries((r.npcs || []).map((n) => [n.name, n])))
+      })
+      .catch(() => { setPooled([]); setLimits({}); setLiving({}) })
   }, [])
   // Re-read whenever the roster changed: a spawn takes an NPC out of the pool
   // and the TTL sweep puts one in, and both show up as a roster change.
@@ -87,6 +105,16 @@ export function CharacterListPanel({
       top: Math.max(8, Math.min(r.top, window.innerHeight - 160)),
       left: Math.min(r.right + 8, window.innerWidth - 340),
     })
+  }
+
+  /** "roams the Hunting Ground" / "roams within 60 m of Old Mill", or "". */
+  const roams = (name: string) => {
+    const n = living[name]
+    const home = (n?.home || '').trim()
+    if (!home) return ''
+    return n?.slot_area
+      ? t('roams the {area}').replace('{area}', home)
+      : t('roams {where}').replace('{where}', home)
   }
 
   const row = (c: CharacterRef, marker?: string) => {
@@ -155,6 +183,14 @@ export function CharacterListPanel({
               >
                 <span className="ga-list-row-main">
                   <strong>✦ {c.display_name || c.name}</strong>
+                  {/* WHERE this NPC lives, and the only place it is visible:
+                      an NPC with a home area stands out in the open, so it
+                      has no location, no room and no place on any room list
+                      (spec § E3). The server words the area itself; a painted
+                      area is named, a circle is a distance from a place. */}
+                  {roams(c.name)
+                    ? <span className="ga-muted"> · {roams(c.name)}</span>
+                    : null}
                 </span>
               </button>
               <button
