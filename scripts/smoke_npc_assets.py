@@ -113,6 +113,19 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
       ("") returns it. The state lives in the QUEUE, so it heals itself: with
       the job finished the very same query hands the sheet out again.
 
+ [13] A HELD-BACK SLOT NPC HOLDS ITS SLOT. This is the only section that runs
+      the slot loop the way a real world runs it — gate armed, cap out of the
+      way — because the older spawn smokes switch the gate off. A location
+      with one `cook` slot: the first `fill_location_slots` runs the pipeline
+      once and the NPC it makes is held back; `held_roles_at` reports `cook`
+      anyway (the gate bypasses `pool_npc`, so the slot tags survive on the
+      profile), `location_gap` is therefore empty, and the SECOND tick
+      generates nothing — without that the pipeline would run again once per
+      cooldown for the whole duration of the portrait+mesh render, and N NPCs
+      would arrive for a `count 1` slot. The same NPC proves the
+      `+ len(list_awaiting_assets())` half of `alive_npc_count`: finishing its
+      job drops the count by exactly one while nothing living changed.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_assets.py
 """
 import json
@@ -133,8 +146,10 @@ from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
 
-from app.core import model3d, model_refs, npc_assets as na, npc_spawn  # noqa: E402
+from app.core import (model3d, model_refs, npc_assets as na,  # noqa: E402
+                      npc_ops, npc_spawn)
 from app.core.npc_ops import apply_npc, validate_npc_fields  # noqa: E402
+from app.core.world_ops import update_location_with_extras  # noqa: E402
 from app.core.npc_pool import (list_pool, pool_npc,  # noqa: E402
                                revive_from_pool, take_from_pool)
 from app.core.task_queue import get_task_queue  # noqa: E402
@@ -188,10 +203,14 @@ def raises(label, exc_type, fn):
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
-def set_require_assets(value: bool) -> None:
+def set_npc_config(**values) -> None:
     cfg = config.get_all()
-    cfg.setdefault("npc", {})["require_assets"] = value
+    cfg.setdefault("npc", {}).update(values)
     config.save(cfg, STORAGE / "config.json")
+
+
+def set_require_assets(value: bool) -> None:
+    set_npc_config(require_assets=value)
 
 
 def tasks_for(name: str):
@@ -552,6 +571,60 @@ check("once the job is gone the queue owes it nothing",
       na.is_awaiting_assets(N), False)
 check("and the sheet is ordinary pool stock again",
       take_from_pool("smith"), N)
+
+# ── [13] a held-back slot NPC HOLDS its slot ────────────────────────────────
+print("[13] the slot loop under the production default (require_assets on)")
+install_stubs()
+# A cap high enough that this section is never refused for the wrong reason,
+# and the gate armed — this is the ONLY place that runs the slot loop the way
+# a real world runs it (the older spawn smokes switch the gate off).
+set_npc_config(require_assets=True, max_alive=50)
+
+LOC3 = world.add_location("Roadside Kitchen", "Smoke and a long bench.",
+                          rooms=[{"name": "Hearth", "description": "Soot."}])
+LOC3_ID = LOC3["id"]
+update_location_with_extras(LOC3_ID, {"npc_slots": [
+    {"role": "cook", "count_min": 1, "count_max": 1,
+     "briefing": "the cook of this kitchen"}]})
+
+GEN_CALLS = []
+
+
+def fake_generate(briefing="", location_id="", room_id="", ttl_hours=None,
+                  template="", slot_role="", wanderer=False, wander_target="",
+                  created_by=""):
+    """The pipeline stub — it creates the NPC through the REAL apply path."""
+    GEN_CALLS.append(slot_role)
+    name = f"Kettilfrid{len(GEN_CALLS)}"
+    applied = apply_npc({"character_name": name,
+                         "character_appearance": "a soot-streaked cook",
+                         "standing_task": "stirring the pot"},
+                        location_id, room_id, template=template or "npc-temporary",
+                        slot_role=slot_role, created_by="smoke_npc_assets")
+    return {"ok": True, "character": name,
+            "held_for_assets": bool(applied.get("held_for_assets"))}
+
+
+npc_ops.generate_npc_blocking = fake_generate
+
+npc_spawn.fill_location_slots(LOC3_ID)
+COOK = "Kettilfrid1"
+check("the first tick ran the pipeline once", GEN_CALLS, ["cook"])
+check("and the NPC it made is held back", get_character_status(COOK), "pooled")
+check("the slot is held all the same",
+      npc_spawn.held_roles_at(LOC3_ID), ["cook"])
+check("so the location has no gap left",
+      npc_spawn.location_gap(world.get_location_by_id(LOC3_ID)), [])
+
+_before = npc_spawn.alive_npc_count()
+res = npc_spawn.fill_location_slots(LOC3_ID)
+check("the second tick generates NOTHING", GEN_CALLS, ["cook"])
+check("and reports the slot as filled", res.get("filled"), 0)
+
+check("the cap counts the held NPC", na.is_awaiting_assets(COOK), True)
+finish_tasks_for(COOK)
+check("and stops counting it when the job is gone",
+      npc_spawn.alive_npc_count(), _before - 1)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

@@ -200,17 +200,25 @@ def missing_slots(location: Dict[str, Any],
 
 
 def held_roles_at(location_id: str) -> List[str]:
-    """The slot tags of every living NPC that holds a slot of this location.
+    """The slot tags of every NPC that holds a slot of this location.
 
     The TAG decides, not where the figure currently stands: an NPC that
     stepped into the next room still holds the bar's barkeeper slot. It stops
     holding it when it is deleted or pooled — both take it out of
     ``list_temporary_npcs``.
+
+    A slot NPC the finish gate holds back HOLDS ITS SLOT TOO. It never went
+    through ``pool_npc``, so its ``npc_slot_role``/``npc_slot_location`` are
+    still on the profile, and it will walk in by itself as soon as its
+    portrait and mesh exist. Counting only the living ones would let every
+    spawn tick run the whole generation pipeline again for a slot that is
+    already taken — once per cooldown, for as long as the render takes.
     """
+    from app.core.npc_assets import list_awaiting_assets
     from app.models.character import get_character_profile, list_temporary_npcs
     wanted = (location_id or "").strip()
     roles: List[str] = []
-    for name in list_temporary_npcs():
+    for name in list_temporary_npcs() + list_awaiting_assets():
         profile = get_character_profile(name) or {}
         if str(profile.get("npc_slot_location") or "").strip() != wanted:
             continue
