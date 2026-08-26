@@ -218,6 +218,35 @@ criterion of spec-npc-heimat-zeitfenster § E0:
       LOC2/nowhere-room: `_place(name, LOC_ID, TAPROOM)` leaves status,
       current_location and current_room exactly as they were.
 
+ [15] AN OUTFIT EDIT RE-QUEUES THE FINISHING JOB (spec § E0.4). The outfit
+      text IS this NPC's wardrobe: portrait, T-pose, mesh and default variant
+      are all keyed by it (see [1]), so editing it orphans every one of them
+      and the NPC has to be finished again. The hook sits at the ONE choke
+      point every editing path runs through — `save_character_profile` — and
+      its rule is four conditions, each of which is checked here:
+
+        * `is_temporary_npc(name)` — a full character's wardrobe is the
+          structured outfit system, not this text; it queues nothing.
+        * status `''` — a POOLED NPC is the finish gate's business. Queueing
+          for it here would race `gate_placement`, whose job carries the
+          placement the pool return decided on.
+        * `not is_awaiting_assets(name)` — while a job is still pending, the
+          NEXT edit rides along in it (the handler reads the current state,
+          not the payload), so a second job would render the same thing twice.
+        * `old.strip() != new.strip()` — a save that does not touch the text
+          is not an edit. Proven with the queue CLEARED, so it is the text
+          rule that refuses and not `deduplicate=True`.
+
+      The NPC keeps standing where it stands: status stays '', the location
+      stays, and the payload carries its CURRENT place (Task-1's `_place`
+      guard, [14], is what makes that safe) — for an NPC placed without a room
+      that is the location's ground room `__ground__`, which is where it
+      really is, not the empty string the creation was called with. Creation
+      is unaffected —
+      `apply_npc` writes the sheet with the outfit text already on it, so the
+      old value the hook reads equals the new one and the ONE job in the queue
+      is the gate's, never a second one from the hook.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_assets.py
 """
 import json
@@ -875,6 +904,59 @@ check("_place left the living NPC exactly where it was",
        get_character_current_room(R)), _before_place)
 check("and it was really somewhere else than the job's target",
       _before_place[1] == LOC_ID, False)
+
+# ── [15] an outfit edit re-queues the finishing job ─────────────────────────
+print("[15] editing the outfit text of a LIVING temp NPC re-queues the job")
+install_stubs()
+set_require_assets(False)
+S = make_npc("Ingrid", outfit="a russet kirtle", location_id=LOC_ID)
+check("it stands in the world and nothing was queued by the creation",
+      (get_character_status(S), get_character_current_location(S),
+       len(tasks_for(S))), ("", LOC_ID, 0))
+give_outfit(S, "a patched brown cloak")
+check("the edit queues exactly one job", len(tasks_for(S)), 1)
+check("carrying the NPC's CURRENT place",
+      {k: tasks_for(S)[0][k] for k in ("name", "location_id", "room_id")},
+      {"name": S, "location_id": LOC_ID,
+       "room_id": get_character_current_room(S)})
+check("which for this NPC is the location's ground, not an empty room",
+      get_character_current_room(S), "__ground__")
+check("and the NPC keeps standing where it stood",
+      (get_character_status(S), get_character_current_location(S)),
+      ("", LOC_ID))
+give_outfit(S, "a green riding cape")
+check("a further edit while the job is pending adds none",
+      len(tasks_for(S)), 1)
+finish_tasks_for(S)
+give_outfit(S, "a green riding cape")
+check("saving the SAME text is not an edit — no job even with the queue clear",
+      len(tasks_for(S)), 1)
+give_outfit(S, "a blue shawl")
+check("but the next real change queues again", len(tasks_for(S)), 2)
+
+T = make_npc("Runa", outfit="a felted hat", location_id=LOC_ID)
+pool_npc(T, reason="smoke")
+give_outfit(T, "a woollen scarf")
+check("a POOLED NPC's edit queues nothing — the gate owns its return",
+      (get_character_status(T), len(tasks_for(T))), ("pooled", 0))
+
+U = "Miriam"
+save_character_profile(U, {"template": "human-roleplay",
+                           "outfit_description": "a linen dress"},
+                       create_new=True)
+give_outfit(U, "a woollen cloak")
+check("a full character's outfit edit queues nothing",
+      len(tasks_for(U)), 0)
+
+set_require_assets(True)
+V = "Sigrun"
+apply_npc({"character_name": V, "character_appearance": "a tall drover",
+           "standing_task": "watching the road",
+           "outfit_description": "a canvas smock"},
+          LOC_ID, room_id=TAPROOM, template="npc-temporary",
+          created_by="smoke_npc_assets")
+check("creating an NPC with an outfit still queues exactly ONE job — the "
+      "gate's, and no second one from the hook", len(tasks_for(V)), 1)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

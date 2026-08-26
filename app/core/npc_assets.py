@@ -34,7 +34,7 @@ cast never passes through it.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 
@@ -157,6 +157,60 @@ def submit_assets_job(name: str, location_id: str, room_id: str = "",
          "wanderer": bool(wanderer), "wander_target": wander_target or ""},
         queue_name="background", agent_name=name, max_retries=ASSET_RETRIES,
         deduplicate=True)
+
+
+def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str]:
+    """Re-queue the finishing job after a temporary NPC was re-dressed.
+
+    The outfit text IS this NPC's wardrobe (its template has no outfit
+    system), and every asset the gate demands is keyed by it: the portrait
+    prompt, the T-pose render, the mesh signature
+    (``model_refs.outfit_signature``) and the default expression variant
+    (``expression_regen._cache_key``). So an edit orphans all of them at once
+    and the NPC has to be finished again — otherwise it keeps wearing the old
+    clothes in every picture until somebody pools and revives it.
+
+    Called from the ONE choke point every editing path runs through
+    (``character.save_character_profile``). Returns the task id, or None when
+    nothing was queued. Four conditions, and each of them says no for a
+    different reason:
+
+    * not a temporary NPC — a full character's wardrobe is the structured
+      outfit system; this text is not what dresses it;
+    * ``status != ''`` — a POOLED NPC belongs to :func:`gate_placement`,
+      whose job carries the placement the pool return decided on; a job
+      queued here would race it with a stale location;
+    * :func:`is_awaiting_assets` — a pending job renders the CURRENT state,
+      not the state its payload was written for, so the next edit rides along
+      in it instead of starting a second run of the same generations;
+    * the text did not really change — a profile save that leaves the
+      wardrobe alone is not a re-dressing.
+
+    The NPC is deliberately NOT pooled: it keeps standing where it stands and
+    wears the old mesh (``find_model3d_serving`` falls back to the nearest
+    outfit) until the new assets exist. That is what ``_place``'s pooled guard
+    is for. The orphans under the old signature are ``outfit_cache_gc``'s.
+    """
+    if not name:
+        return None
+    if (old or "").strip() == (new or "").strip():
+        return None
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room,
+                                      get_character_status, is_temporary_npc)
+    if not is_temporary_npc(name):
+        return None
+    if get_character_status(name) != "":
+        return None
+    if is_awaiting_assets(name):
+        logger.debug("npc_assets(%s): outfit edit rides along in the pending "
+                     "job", name)
+        return None
+    task_id = submit_assets_job(name, get_character_current_location(name) or "",
+                                get_character_current_room(name) or "")
+    logger.info("NPC '%s' was re-dressed — assets re-queued (job %s)", name,
+                task_id or "(already queued)")
+    return task_id or None
 
 
 def gate_placement(name: str, location_id: str, room_id: str = "",

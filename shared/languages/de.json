@@ -2163,6 +2163,13 @@
     "Delete this profile for good": "Dieses Profil endgültig löschen",
     "Variants of one object — scatter mixes them, ★ is the default, the selected chip drives the preview.": "Varianten eines Objekts — die Streuung mischt sie, ★ ist der Standard, der gewählte Chip bestimmt die Vorschau.",
     "Season chips limit when a variant renders.": "Saison-Chips begrenzen, wann eine Variante rendert.",
-    "Active:": "Aktiv:"
+    "Active:": "Aktiv:",
+    "This character kind has no mood or pose variants — it is shown by this one default expression.": "Diese Charakter-Art hat keine Stimmungs- oder Pose-Varianten — sie wird durch diesen einen Standard-Ausdruck dargestellt.",
+    "Default expression": "Standard-Ausdruck",
+    "No default expression yet": "Noch kein Standard-Ausdruck",
+    "Re-render default expression": "Standard-Ausdruck neu rendern",
+    "Rendering…": "Wird gerendert…",
+    "Rendering the default expression — this takes a moment.": "Der Standard-Ausdruck wird gerendert — das dauert einen Moment.",
+    "The picture appears here as soon as the backend delivers it.": "Das Bild erscheint hier, sobald das Backend es liefert."
   }
 }

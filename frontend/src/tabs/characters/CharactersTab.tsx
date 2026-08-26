@@ -413,6 +413,10 @@ export function CharactersTab() {
   // npc-temporary switches memory/thoughts/telegram/… off. A section whose
   // `visible_when.feature` names a disabled feature is dropped here, ONCE,
   // before tabs and forms ever see it; a tab left without sections vanishes.
+  // A temporary NPC is a different KIND of character sheet, not a stripped
+  // one — a few surfaces read differently for it (see the Expressions gate).
+  const isTempNpc = ((template?.features || {}) as Record<string, boolean>).temporary_npc === true
+
   const visibleSections = useMemo(() => {
     const features = (template?.features || {}) as Record<string, boolean>
     return (template?.sections || []).filter((s) => {
@@ -445,6 +449,12 @@ export function CharactersTab() {
     }
     const features = (template?.features || {}) as Record<string, boolean>
     const gateOk = (id: string) => {
+      // The ONE exception: a temporary NPC has `expression_variants_enabled`
+      // false — no moods, no poses, no grid — and yet exactly ONE variant,
+      // the default one the 2D client shows it by (npc_assets' fourth finish
+      // criterion). Hiding the tab hid the only picture the NPC has, with no
+      // way to look at it or ask for it again, so the tab stays — read-only.
+      if (id === 'expressions' && isTempNpc) return true
       const f = specialGate[id]
       return !f || features[f] !== false
     }
@@ -466,7 +476,7 @@ export function CharactersTab() {
     if (!inserted) out.push(...afterAussehen)
     out.push(...SPECIAL_TABS.filter((s) => !placed.has(s.id) && gateOk(s.id)))
     return out
-  }, [fieldTabs, template])
+  }, [fieldTabs, template, isTempNpc])
 
   // Den gewählten Reiter beim Character-Wechsel BEHALTEN. Nur dann auf den
   // ersten Feld-Tab springen, wenn der aktuelle Reiter für diesen Character
@@ -690,7 +700,7 @@ export function CharactersTab() {
             ) : subTab === 'gallery' ? (
               <GalleryTab character={selected} />
             ) : subTab === 'expressions' ? (
-              <ExpressionsTab character={selected} />
+              <ExpressionsTab character={selected} readOnly={isTempNpc} />
             ) : subTab === 'skills' ? (
               <SkillsTab character={selected} />
             ) : subTab === 'wardrobe' ? (

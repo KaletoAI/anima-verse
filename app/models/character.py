@@ -565,6 +565,20 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                 "anlegen.", character_name)
             return
 
+    # The outfit text a temporary NPC WEARS, read before it is overwritten —
+    # every asset of such an NPC (portrait, T-pose, mesh signature, default
+    # expression variant) is keyed by it, so a change has to re-queue the
+    # finishing job. Only for an EXISTING temporary NPC: a creation has no old
+    # value, and a full character's wardrobe is the structured outfit system.
+    _old_outfit: Optional[str] = None
+    try:
+        if not create_new and is_temporary_npc(character_name):
+            _old_outfit = str((get_character_profile(character_name) or {}).get(
+                "outfit_description") or "")
+    except Exception as _oe:  # noqa: BLE001 — a save must never fail for this
+        logger.debug("outfit-edit hook: reading the old outfit of %s failed: %s",
+                     character_name, _oe)
+
     character_dir = get_character_dir(character_name, create=True)
     profile_path = character_dir / "character_profile.json"
 
@@ -728,6 +742,20 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                         del profile[_key]
     except Exception as _se:
         logger.debug("ensure/populate soul files failed for %s: %s", character_name, _se)
+
+    # A re-dressed temporary NPC needs its pictures again — see
+    # npc_assets.on_outfit_description_changed for the rule (and for why the
+    # NPC is NOT pooled for it). Swallowed on purpose: no profile save may
+    # fail because a queue submit did.
+    if _old_outfit is not None:
+        try:
+            from app.core.npc_assets import on_outfit_description_changed
+            on_outfit_description_changed(
+                character_name, _old_outfit,
+                str(profile.get("outfit_description") or ""))
+        except Exception as _he:  # noqa: BLE001
+            logger.debug("outfit-edit hook failed for %s: %s",
+                         character_name, _he)
 
 
 def is_temporary_npc(character_name: str) -> bool:
