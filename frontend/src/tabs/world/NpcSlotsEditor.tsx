@@ -198,12 +198,17 @@ export function NpcSlotsEditor({
               )}
             </select>
           </Field>
-          <Field label={t('Min')} compact>
+          <Field
+            label={t('Min')}
+            compact
+            hint={slot.character ? t('A bound slot is exactly one NPC.') : undefined}
+          >
             <input
               type="number"
               className="ga-input"
               min={0}
               max={20}
+              disabled={!!slot.character}
               style={{ width: 70 }}
               value={slot.count_min ?? 1}
               onChange={(e) => update(idx, { count_min: parseInt(e.target.value, 10) || 0 })}
@@ -215,6 +220,7 @@ export function NpcSlotsEditor({
               className="ga-input"
               min={0}
               max={20}
+              disabled={!!slot.character}
               style={{ width: 70 }}
               value={slot.count_max ?? 1}
               onChange={(e) => update(idx, { count_max: parseInt(e.target.value, 10) || 0 })}

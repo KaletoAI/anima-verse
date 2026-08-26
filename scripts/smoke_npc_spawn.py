@@ -126,6 +126,9 @@ Sections:
       re-stamped and moved. Hand cases, each derived from the rule:
 
         · the sanitizer keeps the name (trimmed); an unbound slot has ""
+        · a bound slot's counts collapse to at most 1 — there is one of her,
+          and an authored 3 would report a gap that can never close; an
+          authored 0 ("wants nobody") survives as 0
         · the terrain sanitizer passes it through to an AREA slot
         · bound + POOLED, with an OLDER sheet of the same role in front of it
           in the FIFO → exactly the bound one comes back, the decoy stays
@@ -716,6 +719,19 @@ check("the sanitizer keeps the binding, trimmed",
       "demo_bound")
 check("an unbound slot carries an empty binding",
       npc_spawn.normalize_slots([{"role": "watch"}])[0]["character"], "")
+# There is only ONE of her: a bound slot's counts collapse to at most 1, or
+# `missing_slots` would report a gap that can never close and the fill job
+# would count the same NPC twice.
+check("a bound slot wants exactly one",
+      {k: v for k, v in npc_spawn.normalize_slots(
+          [{"role": "watch", "character": "demo_bound", "count_min": 3,
+            "count_max": 5}])[0].items() if k.startswith("count")},
+      {"count_min": 1, "count_max": 1})
+check("…and a bound slot that wants nobody still wants nobody",
+      {k: v for k, v in npc_spawn.normalize_slots(
+          [{"role": "watch", "character": "demo_bound", "count_min": 0,
+            "count_max": 0}])[0].items() if k.startswith("count")},
+      {"count_min": 0, "count_max": 0})
 BOUND_AREA = terrain.save_area({
     "kind": "grass", "polygon": [[2000, 0], [2100, 0], [2100, 100], [2000, 100]],
     "z_order": 0,

@@ -123,8 +123,11 @@ Everything else about the slot applies unchanged. Its **time window** closes
 over the bound NPC like over any other (`sweep_closed_windows` pools it at
 closing time and the next open window brings the very same sheet back), and its
 **home area** — `radius_m` or the polygon — is where the NPC is placed and
-roams. `count_min`/`count_max` still count NPCs by ROLE, so a bound slot is
-filled once its NPC stands there carrying the stamp.
+roams.
+
+The **counts** collapse: a bound slot is at most `1/1`, because there is only
+one of her. An authored `count_min: 3` would report a gap that can never close.
+`count_min: 0` survives — that is still "wants nobody right now".
 
 ## NPC settings (`/admin/settings → NPCs (automatic)`)
 

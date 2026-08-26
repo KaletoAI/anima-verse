@@ -2162,6 +2162,7 @@
     "Bind this slot to one existing NPC — only temporary NPCs. It is revived from the pool or moved here from wherever it stands, and nobody new is ever generated for this slot.": "Diesen Platz an einen vorhandenen NPC binden — nur temporäre NPCs. Er wird aus dem Pool zurückgeholt oder von dort hergebracht, wo er gerade steht; für diesen Platz wird nie jemand Neues erzeugt.",
     "generate new": "neu erzeugen",
     "Min": "Min",
+    "A bound slot is exactly one NPC.": "Ein gebundener Platz ist genau ein NPC.",
     "Max": "Max",
     "arrival room": "Ankunftsraum",
     "Ignored — this slot has a home area instead of a room.": "Wird ignoriert — dieser Platz hat ein Heimatgebiet statt eines Raums.",

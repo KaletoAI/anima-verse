@@ -145,7 +145,8 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
     does: this runs inside the location save, and a typo must not raise there.
 
     ``character`` BINDS the slot to one existing temporary NPC: that sheet, and
-    no other, staffs the slot, and nothing is ever generated for it. See
+    no other, staffs the slot, nothing is ever generated for it, and its counts
+    collapse to at most 1 — there is only one of her. See
     :func:`spawn_for_slot`.
     """
     if not isinstance(raw, dict):
@@ -177,6 +178,15 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
 
     count_min = _count("count_min", 1)
     count_max = max(count_min, _count("count_max", max(1, count_min)))
+    # A BOUND slot is ONE named person, so its counts can only be 0 or 1 — a
+    # slot that wants "three of her" is authoring nonsense with two visible
+    # consequences: `missing_slots` would report a gap that can never close
+    # (the second one never arrives) and `fill_location_slots` would call the
+    # spawn twice and count the same NPC twice. "Wants nobody" (0) survives.
+    character = str(raw.get("character") or "").strip()
+    if character:
+        count_min = min(count_min, 1)
+        count_max = min(count_max, 1)
     # `int(float("inf"))` raises OverflowError, not ValueError, and this runs
     # inside the location SAVE — an authored "inf" must become 0 with a
     # warning, never an exception escaping through `normalize_slots` into the
@@ -205,7 +215,7 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
         # it (feedback_no_name_resolution), and the sanitizer must not decide
         # that an unknown name is no name: the NPC may be pooled, awaiting its
         # assets, or simply created after the slot was written.
-        "character": str(raw.get("character") or "").strip(),
+        "character": character,
     }
 
 
