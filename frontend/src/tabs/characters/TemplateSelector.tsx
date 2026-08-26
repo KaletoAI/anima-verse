@@ -18,10 +18,16 @@ export function TemplateSelector({
   character,
   templateId,
   onSwitched,
+  locked = false,
 }: {
   character: string
   templateId: string
   onSwitched: () => void
+  /** A temporary NPC stays a temporary NPC — switching it to a full
+   *  template would grant it wardrobe/memory/… it structurally lacks
+   *  (and once did: pieces minted by a mis-templated edit). The server
+   *  refuses the switch too; this just removes the offer. */
+  locked?: boolean
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -81,6 +87,18 @@ export function TemplateSelector({
   )
 
   const fieldLabel = (f: DiffField) => f.label || f.key
+
+  if (locked) {
+    return (
+      <div className="ga-template-bar">
+        <label className="ga-template-bar-label">{t('Template')}</label>
+        <span className="ga-input" style={{ width: 'auto', minWidth: 200, opacity: 0.7 }}
+              title={t('Temporary NPCs keep their template — convert is not supported.')}>
+          {templates.find((tp) => tp.name === templateId)?.label || templateId}
+        </span>
+      </div>
+    )
+  }
 
   return (
     <div className="ga-template-bar">

@@ -1748,6 +1748,14 @@ def apply_template_switch(character_name: str, data: Dict[str, Any]) -> Dict[str
     old_template = get_template(old_template_name) if old_template_name else None
     new_template = get_template(new_template_name)
 
+    # A temporary NPC stays a temporary NPC: converting it to a full template
+    # would grant wardrobe/memory/… the throwaway design excludes (and the UI
+    # hides the selector for it — this is the API-side backstop).
+    if old_template and (old_template.get("features") or {}).get("temporary_npc"):
+        raise HTTPException(status_code=409, detail=(
+            f"'{character_name}' is a temporary NPC — template switching is "
+            "not supported for temporary NPCs"))
+
     if not new_template:
         raise HTTPException(status_code=404, detail=f"Template '{new_template_name}' nicht gefunden")
 

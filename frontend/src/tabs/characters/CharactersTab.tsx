@@ -633,6 +633,7 @@ export function CharactersTab() {
               character={selected}
               templateId={templateId}
               onSwitched={() => reloadCurrent(selected)}
+              locked={(template?.features || {}).temporary_npc === true}
             />
             <nav className="ga-subtabs">
               {subTabs.map((tab) => (
