@@ -786,7 +786,7 @@ async def world_dev_chat(request: Request):
                 or "Keine Characters ausgewaehlt — der Benutzer hat keine als Kontext markiert."
             generable_fields = _format_generable_fields_for_templates(character_template) if schema == "character" else ""
             if character_template:
-                selected_template_text = f"Der Benutzer hat das Template **`{character_template}`** gewaehlt. Verwende GENAU dieses Template und setze `\"template\": \"{character_template}\"` im JSON."
+                selected_template_text = _selected_template_note(character_template)
             else:
                 selected_template_text = (
                     "Verfuegbare Templates:\n"
@@ -864,7 +864,7 @@ async def world_dev_chat(request: Request):
                         character_template = existing_template
                         # Rebuild generable fields + template text for correct template
                         generable_fields = _format_generable_fields_for_templates(character_template)
-                        selected_template_text = f"Der Benutzer hat das Template **`{character_template}`** gewaehlt. Verwende GENAU dieses Template und setze `\"template\": \"{character_template}\"` im JSON."
+                        selected_template_text = _selected_template_note(character_template)
                         system_prompt = _load_schema(
                             schema,
                             existing_locations=existing_locations,
@@ -1669,12 +1669,21 @@ def _apply_character_internal(char_data: Dict[str, Any],
         save_character_config(char_name, config)
 
     outfits_applied = []
-    for outfit in char_data.get("outfits", []):
+    apply_warnings: List[str] = []
+    raw_outfits = char_data.get("outfits", []) or []
+    if raw_outfits and not _template_has_wardrobe(template):
+        apply_warnings.append(
+            f"Template '{template}' has no outfit system — {len(raw_outfits)} "
+            "outfit(s) dropped; clothing belongs in outfit_description.")
+        logger.info("WorldDev: dropped %d outfit(s) for '%s' — template %s "
+                    "has no outfit system", len(raw_outfits), char_name, template)
+        raw_outfits = []
+    for outfit in raw_outfits:
         outfits_applied.append(_apply_one_outfit(char_name, outfit))
 
     logger.info("WorldDev: Character '%s' (template=%s) applied", char_name, template)
     return {"status": "success", "character": char_name, "template": template,
-            "outfits": outfits_applied}
+            "outfits": outfits_applied, "warnings": apply_warnings}
 
 
 @router.post("/apply-character")
@@ -1699,6 +1708,31 @@ def _apply_character_data_sync(data: Any):
 # ---------------------------------------------------------------------------
 # Granulare Apply-Routes — kleinere Updates ohne komplettes Character-JSON
 # ---------------------------------------------------------------------------
+
+def _selected_template_note(character_template: str) -> str:
+    """The one line that pins the LLM to the chosen template — plus, for
+    templates without an outfit system, the rule that stops it from
+    inventing wardrobe pieces the apply would have to drop."""
+    text = (f"Der Benutzer hat das Template **`{character_template}`** gewaehlt. "
+            f"Verwende GENAU dieses Template und setze "
+            f"`\"template\": \"{character_template}\"` im JSON.")
+    if not _template_has_wardrobe(character_template):
+        text += (" Dieses Template hat KEIN Outfit-System: gib NIEMALS ein "
+                 "`outfits`-Feld aus — Kleidung gehoert ausschliesslich als "
+                 "englischer Prompt-Text in das Profilfeld `outfit_description`.")
+    return text
+
+
+def _template_has_wardrobe(template_name: str) -> bool:
+    """False when the character template disables the outfit system
+    (``outfit_system_enabled: false`` — e.g. ``npc-temporary``, whose clothing
+    is the ``outfit_description`` prompt text, never wardrobe pieces).
+    Applying wardrobe pieces for such a template would litter the global item
+    catalog with throwaway clothing, one heap per disposable NPC."""
+    from app.models.character_template import get_template
+    tmpl = get_template(template_name) or {}
+    return (tmpl.get("features") or {}).get("outfit_system_enabled") is not False
+
 
 def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
     """Legt EIN Outfit an (Pieces-Format mit Dedupe oder Freitext-Fallback).
@@ -1792,6 +1826,11 @@ def _apply_outfit_data_sync(data: Any):
     profile = get_character_profile(char_name)
     if not profile.get("character_name"):
         raise HTTPException(status_code=404, detail=f"Character '{char_name}' nicht gefunden")
+    if not _template_has_wardrobe(profile.get("template") or ""):
+        raise HTTPException(status_code=400, detail=(
+            f"Character '{char_name}' uses template '{profile.get('template')}' "
+            "without an outfit system — wardrobe pieces cannot be applied; put "
+            "clothing into outfit_description instead"))
     result = _apply_one_outfit(char_name, outfit)
     return {"status": "success", "character": char_name, **result}
 
@@ -2457,6 +2496,11 @@ def _apply_json_sync(data: Any):
         profile = get_character_profile(char_name)
         if not profile.get("character_name"):
             raise HTTPException(status_code=404, detail=f"Character '{char_name}' nicht gefunden")
+        if not _template_has_wardrobe(profile.get("template") or ""):
+            raise HTTPException(status_code=400, detail=(
+                f"Character '{char_name}' uses template '{profile.get('template')}' "
+                "without an outfit system — wardrobe pieces cannot be applied; put "
+                "clothing into outfit_description instead"))
         r = _apply_one_outfit(char_name, outfit)
         return {"status": "success", "type": "outfit", "name": r["name"],
                 "character": char_name, "warnings": [], **r}
