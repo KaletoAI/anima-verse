@@ -24,8 +24,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
+import { Field } from '../../components/Field'
 import { SliderInput } from '../../components/SliderInput'
 import type { PropRef } from '../../lib/refs'
+import { NpcSlotsEditor } from '../world/NpcSlotsEditor'
+import type { NpcSlot } from '../world/worldTypes'
 import { fmtHeight, heightColor } from './HeightLayer'
 import { minFalloffFor, reliefStepNotice, tooSteep } from './heightMath'
 import {
@@ -1535,6 +1538,14 @@ export interface TerrainAreaChipProps {
   /** The same for the two relief numbers — `undefined` DROPS the key, which is
    *  how "flat" and "the default wave" are written. */
   onRelief: (patch: Partial<TerrainRelief>) => void
+  /** What this area is CALLED (`meta.label`) — free text, and the only thing
+   *  an NPC living here is told about its home (spec § E3.2). */
+  label: string
+  /** Who should be standing around here, already CHECKED
+   *  (`mapTypes.readNpcSlots`). */
+  npcSlots: NpcSlot[]
+  onLabel: (label: string) => void
+  onNpcSlots: (slots: NpcSlot[]) => void
   /** Drop `meta.stroke` and keep the polygon: the area becomes an ordinary
    *  one, editable point by point. One way, hence the confirmation. */
   onConvert: () => void
@@ -1564,16 +1575,23 @@ export interface TerrainAreaChipProps {
  *
  * What the area GROWS is edited here too (finding B17), folded away until
  * asked for — see `ScatterEditor`.
+ *
+ * …and WHO LIVES HERE (spec § E3.2), folded away the same way: an area may
+ * carry NPC slots exactly as a location does, and the ones it spawns take the
+ * polygon itself as their home. That is what the LABEL is for — it is the one
+ * word those NPCs are told about where they are, which is why the server
+ * refuses to store slots on an unnamed area and the field says so here.
  */
 export function TerrainAreaChip({
   area, types, typeList, typesError, stroke, scatter, props, water,
-  waterProfile, relief, reliefWarnAmpM, scatterColor,
-  onKind, onZOrder, onWidth, onScatter, onWater, onRelief, onConvert, onDelete,
-  onClose,
+  waterProfile, relief, reliefWarnAmpM, scatterColor, label, npcSlots,
+  onKind, onZOrder, onWidth, onScatter, onWater, onRelief, onLabel,
+  onNpcSlots, onConvert, onDelete, onClose,
 }: TerrainAreaChipProps) {
   const { t } = useI18n()
   const [convArmed, setConvArmed] = useState(false)
   const [scatterOpen, setScatterOpen] = useState(false)
+  const [slotsOpen, setSlotsOpen] = useState(false)
   const known = types[area.kind]
   return (
     <div className="ga-map-chip">
@@ -1691,6 +1709,43 @@ export function TerrainAreaChip({
       {scatterOpen && known ? (
         <ScatterEditor entries={scatter} props={props} colorOf={scatterColor}
           onChange={onScatter} />
+      ) : null}
+      {/* WHO LIVES HERE (spec § E3.2) — folded away like the scatter, and for
+          the same reason: most areas are ground, not a home. The NAME comes
+          first and stays visible once slots exist, because the server refuses
+          to store them without it — an author must not have to discover that
+          from a rejected save. */}
+      <div className="ga-map-chip-row">
+        <button type="button"
+          className={'ga-btn ga-btn-sm' + (npcSlots.length ? ' ga-tt-scatter-on' : '')}
+          disabled={!known}
+          aria-expanded={slotsOpen}
+          title={t('Who should be standing around here — the area itself becomes their home')}
+          onClick={() => setSlotsOpen((o) => !o)}>
+          {t('NPC slots')}
+          {npcSlots.length ? ` (${npcSlots.length})` : ` — ${t('none')}`}
+          {slotsOpen ? ' ▾' : ' ▸'}
+        </button>
+      </div>
+      {(slotsOpen || npcSlots.length > 0) && known ? (
+        <div className="ga-map-chip-row">
+          <Field label={t('Name of this area')}
+            hint={t('What its NPCs are told they are standing in — required as soon as the area has slots.')}>
+            <input className="ga-input" value={label}
+              placeholder={t('e.g. the Hunting Ground')}
+              onChange={(e) => onLabel(e.target.value)} />
+          </Field>
+        </div>
+      ) : null}
+      {(slotsOpen || npcSlots.length > 0) && known && !label.trim()
+        && npcSlots.length > 0 ? (
+          <div className="ga-map-chip-row ga-map-chip-warn">
+            {t('Give the area a name — without one the slots cannot be saved.')}
+          </div>
+        ) : null}
+      {slotsOpen && known ? (
+        <NpcSlotsEditor variant="area" areaId={area.id} value={npcSlots}
+          onChange={onNpcSlots} />
       ) : null}
       <div className="ga-map-chip-actions">
         {stroke && known ? (

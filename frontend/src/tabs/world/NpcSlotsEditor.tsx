@@ -5,7 +5,7 @@ import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { groundRoomLabel, type NpcSlot, type Room } from './worldTypes'
 
-// ── NPC slots of a location ───────────────────────────────────────────────
+// ── NPC slots of a location or of a painted area ──────────────────────────
 // What a place wants staffed (plan-npc-auto-spawn.md § 1). The server fills a
 // slot on its own once the avatar walks near: it counts the living NPCs
 // tagged with the ROLE and generates — or recycles out of the pool — what is
@@ -18,10 +18,14 @@ import { groundRoomLabel, type NpcSlot, type Room } from './worldTypes'
 // `when`: '' = always, 'night'/'day' follow the season's sunrise/sunset, and
 // a custom window is the literal 'HH:MM-HH:MM' the two clock inputs build.
 //
-// "Radius (m)" is the slot's HOME AREA (spec § E3): 0 places the NPC in a
+// "Radius (m)" is the slot's HOME AREA (spec § E3.1): 0 places the NPC in a
 // room as before, anything above it puts it at a free point that many metres
 // around the place, where it roams instead of changing rooms. It WINS over
 // the room — which is why the room select goes dead as soon as it is set.
+//
+// The same editor authors the slots of a PAINTED TERRAIN AREA (§ E3.2,
+// `variant="area"`). There the polygon IS the home, so neither of those two
+// fields exists: no rooms to pick and no radius to draw a second shape with.
 
 const CUSTOM_DEFAULT = '20:00-06:00'
 
@@ -42,18 +46,35 @@ function whenSpan(when: string | undefined): [string, string] {
   return [parts[0].trim(), parts[1].trim()]
 }
 interface NpcSlotsEditorProps {
-  /** Persisted id — the "Fill now" button needs a saved location. */
-  locationId: string
-  rooms: Room[]
+  /** Persisted id — the "Fill now" button needs a saved location. Only the
+   *  `location` variant has one. */
+  locationId?: string
+  /** The painted area's id, for the `area` variant — same role as above. */
+  areaId?: string
+  rooms?: Room[]
   value: NpcSlot[] | undefined
   onChange: (next: NpcSlot[]) => void
+  /**
+   * WHAT DECLARES THESE SLOTS — a place or a painted terrain area
+   * (spec § E3.2). An AREA is itself the NPC's home, so the two fields that
+   * describe a place's inside are not offered at all: it has no rooms, and a
+   * radius would draw a second shape beside the polygon the author painted.
+   * The server forces both to empty on the way in (`terrain.sanitize_area`),
+   * so this is the surface half of one rule, not a second one.
+   */
+  variant?: 'location' | 'area'
 }
 
-export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsEditorProps) {
+export function NpcSlotsEditor({
+  locationId, areaId, rooms, value, onChange, variant = 'location',
+}: NpcSlotsEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [filling, setFilling] = useState(false)
   const slots = value || []
+  const isArea = variant === 'area'
+  const ownerId = (isArea ? areaId : locationId) || ''
+  const roomList = rooms || []
 
   const update = (idx: number, patch: Partial<NpcSlot>) => {
     onChange(slots.map((s, i) => (i === idx ? { ...s, ...patch } : s)))
@@ -62,21 +83,28 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
   const add = () =>
     onChange([
       ...slots,
-      {
-        role: '',
-        count_min: 1,
-        count_max: 1,
-        briefing: '',
-        room: '',
-        when: '',
-        radius_m: 0,
-      },
+      isArea
+        // No `room`/`radius_m` at all: the area is the home, and sending two
+        // keys the server forces empty would only make the stored slot and
+        // the drafted one look different.
+        ? { role: '', count_min: 1, count_max: 1, briefing: '', when: '' }
+        : {
+          role: '',
+          count_min: 1,
+          count_max: 1,
+          briefing: '',
+          room: '',
+          when: '',
+          radius_m: 0,
+        },
     ])
 
   const fillNow = async () => {
     setFilling(true)
     try {
-      await apiPost(`/npc/slots/${locationId}/fill`, {})
+      await apiPost(isArea
+        ? `/npc/areas/${ownerId}/fill`
+        : `/npc/slots/${ownerId}/fill`, {})
       toast(t('Spawn check queued — the NPCs appear once the generator is done.'))
     } catch (e) {
       toast(String(e), 'error')
@@ -90,6 +118,11 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
       {slots.length === 0 && (
         <div className="ga-muted" style={{ marginBottom: 8 }}>
           {t('No NPC slots — nobody is placed here automatically.')}
+        </div>
+      )}
+      {isArea && slots.length > 0 && (
+        <div className="ga-muted" style={{ marginBottom: 8 }}>
+          {t('The area itself is the home: its NPCs stand at a free point inside the outline and roam there. No rooms, no radius.')}
         </div>
       )}
       {slots.map((slot, idx) => (
@@ -127,6 +160,7 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
               onChange={(e) => update(idx, { count_max: parseInt(e.target.value, 10) || 0 })}
             />
           </Field>
+          {!isArea && (
           <Field
             label={t('Room')}
             compact
@@ -143,13 +177,15 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
               onChange={(e) => update(idx, { room: e.target.value })}
             >
               <option value="">— {t('arrival room')} —</option>
-              {rooms.filter((r) => !!r.id).map((r) => (
+              {roomList.filter((r) => !!r.id).map((r) => (
                 <option key={r.id} value={r.id || ''}>
                   {r.name?.trim() || groundRoomLabel(r, t)}
                 </option>
               ))}
             </select>
           </Field>
+          )}
+          {!isArea && (
           <Field
             label={t('Radius (m)')}
             compact
@@ -175,6 +211,7 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
               )}
             </div>
           </Field>
+          )}
           <Field
             label={t('Active')}
             compact
@@ -248,7 +285,7 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
         </button>
         <button
           className="ga-btn ga-btn-sm"
-          disabled={filling || !locationId || slots.length === 0}
+          disabled={filling || !ownerId || slots.length === 0}
           onClick={fillNow}
           title={t('Runs the same check the avatar triggers by walking near.')}
         >

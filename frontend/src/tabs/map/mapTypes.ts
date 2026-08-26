@@ -16,7 +16,7 @@
 import type { ScatterPropBox } from '@anima/scene-render'
 
 import type { MapBounds, StrokeStyle } from './mapMath'
-import type { Map3D, RoomLayout } from '../world/worldTypes'
+import type { Map3D, NpcSlot, RoomLayout } from '../world/worldTypes'
 
 export type { Map3D }
 
@@ -269,6 +269,14 @@ export interface TerrainStroke {
 export type TerrainMeta = {
   stroke?: TerrainStroke
   scatter?: TerrainScatterEntry[]
+  /** What this area is CALLED (spec § E3.2). Free text, and the one thing an
+   *  NPC living here is told about its home — which is why the server refuses
+   *  to store `npc_slots` on an area without it. */
+  label?: string
+  /** Who should be standing around here, in the same slot shape a location
+   *  authors (spec § E3.2). `room` and `radius_m` are always empty: the
+   *  polygon itself is the home. */
+  npc_slots?: NpcSlot[]
 } & TerrainWater & TerrainRelief & Record<string, unknown>
 
 /**
@@ -451,6 +459,45 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
     out.push(entry)
   }
   return out
+}
+
+/**
+ * The NPC slots of an area, read through a check (spec § E3.2) — the same
+ * contract `readScatter` states: `meta` is free-form JSON the server passes
+ * through, so a stored list is trusted for nothing but its shape.
+ *
+ * Only entries that name a ROLE survive, because the role is the slot's
+ * identity everywhere else (the tag on the NPC, the key a pool hit is matched
+ * on); the counts are coerced to numbers and the rest is copied as authored.
+ * `room`/`radius_m` are not read at all — an area is its own home, and the
+ * server stores them empty.
+ */
+export function readNpcSlots(meta: TerrainMeta | undefined): NpcSlot[] {
+  const raw = meta?.npc_slots
+  if (!Array.isArray(raw)) return []
+  const out: NpcSlot[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const e = item as unknown as Record<string, unknown>
+    const role = typeof e.role === 'string' ? e.role : ''
+    if (!role.trim()) continue
+    const min = metaNum(e.count_min)
+    const max = metaNum(e.count_max)
+    out.push({
+      role,
+      template: typeof e.template === 'string' ? e.template : '',
+      count_min: min === undefined ? 1 : min,
+      count_max: max === undefined ? 1 : max,
+      briefing: typeof e.briefing === 'string' ? e.briefing : '',
+      when: typeof e.when === 'string' ? e.when : '',
+    })
+  }
+  return out
+}
+
+/** What the area is called, or '' — `meta.label` read through a check. */
+export function readAreaLabel(meta: TerrainMeta | undefined): string {
+  return typeof meta?.label === 'string' ? meta.label : ''
 }
 
 /**

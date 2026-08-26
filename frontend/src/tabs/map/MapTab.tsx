@@ -38,7 +38,10 @@ import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { WorldPropLayer } from './WorldPropLayer'
 import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
-import { readRelief, readScatter, readWater, readWaterProfile } from './mapTypes'
+import {
+  readAreaLabel, readNpcSlots, readRelief, readScatter, readWater,
+  readWaterProfile,
+} from './mapTypes'
 import {
   applyPending, dropConflicts, emptyBuffer, hasConflicts, keepRejected,
   pendingCount, queueDelete, queueUpsert, toBulkBody, type PendingMap,
@@ -47,6 +50,7 @@ import { setUnsavedGuard } from '../../lib/unsavedGuard'
 import {
   DEFAULT_MAX_SLOPE_DEG, DEFAULT_MAX_STEP_M, reliefWarnAmpM,
 } from './heightMath'
+import type { NpcSlot } from '../world/worldTypes'
 import type {
   BulkSaveResp,
   EditorLocation, HeightArea, HeightAreasResp,
@@ -1944,6 +1948,13 @@ export function MapTab() {
   const selRelief = useMemo(
     () => readRelief(selectedArea?.meta), [selectedArea])
 
+  /** WHO LIVES on the selected area, and what it is CALLED (spec § E3.2).
+   *  Both read through the same checks every other `meta` key uses. */
+  const selNpcSlots = useMemo(
+    () => readNpcSlots(selectedArea?.meta), [selectedArea])
+  const selAreaLabel = useMemo(
+    () => readAreaLabel(selectedArea?.meta), [selectedArea])
+
   /** From which amplitude that relief outclimbs the walk gate, in metres —
    *  out of the SERVER's own two numbers, never a constant here (§ A16.2). */
   const reliefWarnM = useMemo(
@@ -2421,6 +2432,28 @@ export function MapTab() {
       if (value === undefined) delete meta[key]
       else meta[key] = value
     }
+    stageArea(a, { meta })
+  }, [selectedArea, stageArea])
+
+  /** WHO LIVES HERE and what the area is CALLED (spec § E3.2). Same rule as
+   *  the scatter: `meta` is a full replace, so the rest of it travels along,
+   *  and an empty list / an empty name DROPS its key instead of storing "" as
+   *  a fact — an area with neither is an ordinary painted shape again. */
+  const setAreaNpcSlots = useCallback((slots: NpcSlot[]) => {
+    const a = selectedArea
+    if (!a) return
+    const meta: TerrainMeta = { ...a.meta }
+    if (slots.length) meta.npc_slots = slots
+    else delete meta.npc_slots
+    stageArea(a, { meta })
+  }, [selectedArea, stageArea])
+
+  const setAreaLabel = useCallback((label: string) => {
+    const a = selectedArea
+    if (!a) return
+    const meta: TerrainMeta = { ...a.meta }
+    if (label) meta.label = label
+    else delete meta.label
     stageArea(a, { meta })
   }, [selectedArea, stageArea])
 
@@ -3219,6 +3252,10 @@ export function MapTab() {
               scatterColor={scatterColor}
               relief={selRelief}
               reliefWarnAmpM={reliefWarnM}
+              label={selAreaLabel}
+              npcSlots={selNpcSlots}
+              onLabel={setAreaLabel}
+              onNpcSlots={setAreaNpcSlots}
               onWater={setAreaMeta}
               onRelief={setAreaMeta}
               onKind={setAreaKind}
