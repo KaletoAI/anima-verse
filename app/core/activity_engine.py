@@ -10,6 +10,7 @@ on the game clock, never on system time.
 import re
 
 from app.core.game_time import GameTime
+from app.core.npc_windows import is_night
 from app.core.timeutils import game_time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -103,6 +104,12 @@ def _evaluate_single_condition_inner(
     # The window bounds are the SUNSET and SUNRISE of the current season
     # (world calendar, app/core/game_time.py) — with the default calendar those
     # are 18:00 / 06:00, so an unconfigured world behaves exactly as before.
+    #
+    # WITHOUT an offset this IS `npc_windows.is_night` — the app's one
+    # night/day decision, which a slot's `when="night"` asks as well. Only the
+    # offset arithmetic lives here, and it runs on the same basis: the very
+    # `now.sunrise_min` / `now.sunset_min` that decision compares against.
+    #
     # Examples (default calendar):
     #   night       — sunset (18:00) until sunrise (06:00)
     #   night-30    — starts 30 min EARLIER: 17:30 until sunrise
@@ -127,33 +134,40 @@ def _evaluate_single_condition_inner(
         sunset_min = now.sunset_min
         lbl_offset = f"{sign}{offset_min}" if offset_min else ""
         if base == "night":
-            start_min = sunset_min + shift
-            end_min = sunrise_min
-            # Normalise into [0, 1440)
-            start_min %= 24 * 60
-            # Wrap-around: night usually spans midnight.
-            if start_min < end_min:
-                # Start lies BEFORE end_min (e.g. a large negative shift that
-                # did not wrap) — unusual but possible.
-                in_window = start_min <= now_min < end_min
+            if not shift:
+                in_window = is_night(now)
             else:
-                # Normal case: the window spans midnight
-                in_window = (now_min >= start_min) or (now_min < end_min)
+                start_min = sunset_min + shift
+                end_min = sunrise_min
+                # Normalise into [0, 1440)
+                start_min %= 24 * 60
+                # Wrap-around: night usually spans midnight.
+                if start_min < end_min:
+                    # Start lies BEFORE end_min (e.g. a large negative shift
+                    # that did not wrap) — unusual but possible.
+                    in_window = start_min <= now_min < end_min
+                else:
+                    # Normal case: the window spans midnight
+                    in_window = (now_min >= start_min) or (now_min < end_min)
             if in_window:
                 return True, ""
             return False, f"Nur nachts verfuegbar (night{lbl_offset})"
         else:  # day
-            start_min = sunrise_min + shift
-            end_min = sunset_min
-            start_min_norm = start_min % (24 * 60)
-            if start_min < 0:
-                # A strongly negative offset pulls the start before midnight
-                in_window = (now_min >= start_min_norm) or (now_min < end_min)
-            elif start_min_norm >= end_min:
-                # Strongly positive offset or overflow — empty window
-                in_window = False
+            if not shift:
+                in_window = not is_night(now)
             else:
-                in_window = start_min_norm <= now_min < end_min
+                start_min = sunrise_min + shift
+                end_min = sunset_min
+                start_min_norm = start_min % (24 * 60)
+                if start_min < 0:
+                    # A strongly negative offset pulls the start before
+                    # midnight
+                    in_window = (now_min >= start_min_norm) or (now_min < end_min)
+                elif start_min_norm >= end_min:
+                    # Strongly positive offset or overflow — empty window
+                    in_window = False
+                else:
+                    in_window = start_min_norm <= now_min < end_min
             if in_window:
                 return True, ""
             return False, f"Nur tagsueber verfuegbar (day{lbl_offset})"

@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.core.game_time import GameDuration, GameTime
 from app.core.log import get_logger
+from app.core.npc_windows import normalize_when, slot_window_open
 from app.core.timeutils import game_time
 
 logger = get_logger("npc_spawn")
@@ -125,12 +126,22 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
     The role is the slot's identity: it is what the NPC is tagged with and
     what a pool hit is matched on, so a slot without one cannot be counted,
     filled or recycled.
+
+    ``when`` is the slot's time window (spec § E2, :mod:`app.core.npc_windows`):
+    "" = always, ``night``/``day`` = the season's sun, ``HH:MM-HH:MM`` = a
+    literal span in GAME time. An unusable value becomes "" — a typo must not
+    leave a slot shut forever without saying so, hence the warning.
     """
     if not isinstance(raw, dict):
         return None
     role = str(raw.get("role") or "").strip()
     if not role:
         return None
+
+    when = normalize_when(raw.get("when"))
+    if not when and str(raw.get("when") or "").strip():
+        logger.warning("slot %r: unusable time window %r — treated as always",
+                       role, raw.get("when"))
 
     def _count(key: str, fallback: int) -> int:
         try:
@@ -147,6 +158,7 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
         "count_max": count_max,
         "briefing": str(raw.get("briefing") or "").strip(),
         "room": str(raw.get("room") or "").strip(),
+        "when": when,
     }
 
 
@@ -167,7 +179,8 @@ def normalize_slots(raw: Any) -> List[Dict[str, Any]]:
 
 
 def missing_slots(location: Dict[str, Any],
-                  held_roles: Sequence[str]) -> List[Dict[str, Any]]:
+                  held_roles: Sequence[str],
+                  now: Optional[GameTime] = None) -> List[Dict[str, Any]]:
     """PURE: which slots of this location are unfilled, and by how many.
 
     ``held_roles`` is one entry per LIVING NPC that holds a slot of this
@@ -182,6 +195,12 @@ def missing_slots(location: Dict[str, Any],
     MINIMUM is the binding half of it (a place that says "at least three" gets
     three).
 
+    A slot whose TIME WINDOW is shut wants nobody, however empty it stands
+    (spec § E2) — the forest's robber slot is simply not a gap at noon. The
+    moment is the only impure input, so it is a parameter: ``now=None`` reads
+    the game clock, a caller that already holds one passes it in and keeps the
+    function pure.
+
     Returns the slot dicts with an added ``needed`` count, missing slots only.
     """
     held: Dict[str, int] = {}
@@ -190,8 +209,11 @@ def missing_slots(location: Dict[str, Any],
         if key:
             held[key] = held.get(key, 0) + 1
 
+    moment = now if now is not None else game_time()
     out: List[Dict[str, Any]] = []
     for slot in normalize_slots(location.get("npc_slots")):
+        if not slot_window_open(slot["when"], moment):
+            continue
         have = held.get(slot["role"].lower(), 0)
         needed = max(0, slot["count_min"] - have)
         if needed and have < slot["count_max"]:

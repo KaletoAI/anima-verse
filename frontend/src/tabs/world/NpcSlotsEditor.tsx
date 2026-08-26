@@ -11,6 +11,31 @@ import { groundRoomLabel, type NpcSlot, type Room } from './worldTypes'
 // tagged with the ROLE and generates — or recycles out of the pool — what is
 // missing. So everything here is authoring, not a live roster: who should be
 // here, how many, and what the generator should know about them.
+//
+// "Active" is the slot's time window in GAME time (spec § E2): outside it
+// nobody is generated and the NPCs standing in the slot go back into the pool
+// — the forest's robbers are gone by daylight. It is stored in one field,
+// `when`: '' = always, 'night'/'day' follow the season's sunrise/sunset, and
+// a custom window is the literal 'HH:MM-HH:MM' the two clock inputs build.
+
+const CUSTOM_DEFAULT = '20:00-06:00'
+
+type WhenMode = 'always' | 'night' | 'day' | 'custom'
+
+/** The select's value for a stored `when` — anything with a dash is custom. */
+function whenMode(when: string | undefined): WhenMode {
+  const v = (when || '').trim().toLowerCase()
+  if (!v) return 'always'
+  if (v === 'night' || v === 'day') return v
+  return 'custom'
+}
+
+/** The two halves of a custom window; the default for everything else. */
+function whenSpan(when: string | undefined): [string, string] {
+  const parts = (when || '').split('-')
+  if (parts.length !== 2) return CUSTOM_DEFAULT.split('-') as [string, string]
+  return [parts[0].trim(), parts[1].trim()]
+}
 interface NpcSlotsEditorProps {
   /** Persisted id — the "Fill now" button needs a saved location. */
   locationId: string
@@ -30,7 +55,10 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
   }
   const remove = (idx: number) => onChange(slots.filter((_, i) => i !== idx))
   const add = () =>
-    onChange([...slots, { role: '', count_min: 1, count_max: 1, briefing: '', room: '' }])
+    onChange([
+      ...slots,
+      { role: '', count_min: 1, count_max: 1, briefing: '', room: '', when: '' },
+    ])
 
   const fillNow = async () => {
     setFilling(true)
@@ -100,6 +128,57 @@ export function NpcSlotsEditor({ locationId, rooms, value, onChange }: NpcSlotsE
               ))}
             </select>
           </Field>
+          <Field
+            label={t('Active')}
+            compact
+            hint={t('Outside its window nobody is placed here and the NPCs of this slot go back into the pool.')}
+          >
+            <select
+              className="ga-input"
+              value={whenMode(slot.when)}
+              onChange={(e) => {
+                const mode = e.target.value as WhenMode
+                update(idx, {
+                  when:
+                    mode === 'always'
+                      ? ''
+                      : mode === 'custom'
+                        ? whenSpan(slot.when).join('-')
+                        : mode,
+                })
+              }}
+            >
+              <option value="always">{t('always')}</option>
+              <option value="night">{t('at night')}</option>
+              <option value="day">{t('by day')}</option>
+              <option value="custom">{t('time window…')}</option>
+            </select>
+          </Field>
+          {whenMode(slot.when) === 'custom' && (
+            <Field label={t('Game time')} compact hint={t('From (inclusive) — to (exclusive); a window may span midnight.')}>
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                <input
+                  type="time"
+                  className="ga-input"
+                  style={{ width: 110 }}
+                  value={whenSpan(slot.when)[0]}
+                  onChange={(e) =>
+                    update(idx, { when: `${e.target.value || '00:00'}-${whenSpan(slot.when)[1]}` })
+                  }
+                />
+                <span className="ga-muted">–</span>
+                <input
+                  type="time"
+                  className="ga-input"
+                  style={{ width: 110 }}
+                  value={whenSpan(slot.when)[1]}
+                  onChange={(e) =>
+                    update(idx, { when: `${whenSpan(slot.when)[0]}-${e.target.value || '00:00'}` })
+                  }
+                />
+              </div>
+            </Field>
+          )}
           <Field
             label={t('Briefing')}
             hint={t('What the generator should know about this person.')}

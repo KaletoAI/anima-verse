@@ -493,6 +493,62 @@ def sweep_expired_npcs() -> int:
     return removed
 
 
+def sweep_closed_windows() -> int:
+    """POOL every living slot NPC whose slot's TIME WINDOW has closed.
+
+    The counterpart of the spawn side (spec § E2): ``missing_slots`` stops
+    wanting a role once its window is shut, and this puts the ones already
+    standing there away again — the forest's robbers are gone by daylight and
+    the same character sheets come back at nightfall, because pooling keeps
+    them.
+
+    The SLOT TAG resolves the window, never a name (feedback_no_name_resolution):
+    ``npc_slot_location`` + ``npc_slot_role`` on the profile point at the
+    location's slot list, and its ``when`` is the answer. Two NPCs are left
+    alone:
+
+    * one an avatar is talking to right now — the same rule the action tick
+      uses (``npc_actions._in_chat``), so a window never closes mid-sentence.
+      It goes on the next sweep, once the conversation has cooled;
+    * a WANDERER. It carries a slot stamp from wherever it was generated, but
+      it does not live there — its lifetime is the TTL sweep's business.
+
+    A pooled NPC is not in ``list_temporary_npcs`` at all, so an NPC the
+    finish gate still holds back is nothing this has to skip.
+    """
+    from app.core.npc_pool import pool_npc
+    from app.core.npc_spawn import normalize_slots
+    from app.core.npc_windows import slot_window_open
+    from app.models.character import get_character_profile, list_temporary_npcs
+    from app.models.world import get_location_by_id
+
+    now = game_time()
+    pooled = 0
+    for name in list_temporary_npcs():
+        try:
+            profile = get_character_profile(name) or {}
+            if profile.get("npc_wanderer"):
+                continue
+            location_id = str(profile.get("npc_slot_location") or "").strip()
+            role = str(profile.get("npc_slot_role") or "").strip()
+            if not location_id or not role:
+                continue
+            slots = normalize_slots(
+                (get_location_by_id(location_id) or {}).get("npc_slots"))
+            slot = next((s for s in slots
+                         if s["role"].lower() == role.lower()), None)
+            if slot is None or slot_window_open(slot["when"], now):
+                continue
+            from app.core.npc_actions import _in_chat
+            if _in_chat(name):
+                continue
+            if pool_npc(name, reason="window closed"):
+                pooled += 1
+        except Exception as e:  # noqa: BLE001
+            logger.debug("npc window sweep(%s) error: %s", name, e)
+    return pooled
+
+
 # ---------------------------------------------------------------------------
 # The blocking pipeline — the one the automatic spawns use
 # ---------------------------------------------------------------------------

@@ -338,18 +338,24 @@ def _sub_lora_library_sync():
 
 
 def _sub_npc_ttl_sweep():
-    """Remove temporary NPCs whose GAME-time TTL has run out.
+    """Pool the temporary NPCs whose time is up — by TTL or by time of day.
 
-    Game time, so a frozen world freezes the NPCs' lifetime with it; the tick
-    loop is already paused while the world is frozen, which makes that
-    automatic. An NPC without an ``expires_at`` stamp lives until an admin
-    deletes it.
+    Two sweeps, one tick, both on the GAME clock: the ``expires_at`` stamp
+    (an NPC without one lives until an admin deletes it) and the slot's time
+    window (spec-npc-heimat-zeitfenster § E2 — the forest's robbers go back
+    into the pool at dawn). Game time, so a frozen world freezes both with it;
+    the tick loop is already paused while the world is frozen, which makes
+    that automatic.
     """
     try:
-        from app.core.npc_ops import sweep_expired_npcs
+        from app.core.npc_ops import sweep_closed_windows, sweep_expired_npcs
         removed = sweep_expired_npcs()
         if removed:
             logger.info("npc_ttl_sweep: %d expired NPC(s) removed", removed)
+        closed = sweep_closed_windows()
+        if closed:
+            logger.info("npc_ttl_sweep: %d NPC(s) pooled, window closed",
+                        closed)
     except Exception as e:
         logger.debug("npc_ttl_sweep sub error: %s", e)
 

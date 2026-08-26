@@ -320,6 +320,11 @@ export interface NpcSlot {
   briefing?: string
   /** Room the NPC is placed in. Empty = the location's arrival room. */
   room?: string
+  /** When this slot is staffed, in GAME time. Empty = always; `night`/`day`
+   *  follow the season's sunrise/sunset; `HH:MM-HH:MM` is a literal span that
+   *  may wrap over midnight. Outside its window nobody spawns and the NPCs
+   *  standing in the slot go back into the pool. */
+  when?: string
 }
 
 export interface Location {
