@@ -28,6 +28,13 @@ interface LivingNpc {
   home?: string
   /** The painted area whose slot this NPC holds. "" for a location slot. */
   slot_area?: string
+  /** How much GAME time is left on the TTL, worded by the SERVER — "2h 30m",
+   *  "18m", "expired". "" for an NPC without a TTL. The client never does
+   *  game-clock arithmetic; it has no game clock. */
+  remaining_label?: string
+  /** True once the game clock passed the stamp (the sweep runs on a tick, so
+   *  such an NPC is still standing and still on this list). */
+  expired?: boolean
 }
 
 /**
@@ -117,6 +124,21 @@ export function CharacterListPanel({
       : t('roams {where}').replace('{where}', home)
   }
 
+  /** "⌛ expires in 2h 30m", or "⌛ expired" in red. Nothing without a TTL. */
+  const ttl = (name: string) => {
+    const n = living[name]
+    const label = (n?.remaining_label || '').trim()
+    if (!label) return null
+    if (n?.expired) {
+      return <span className="ga-danger"> · ⌛ {t('expired')}</span>
+    }
+    return (
+      <span className="ga-muted">
+        {' · ⌛ '}{t('expires in {span}').replace('{span}', label)}
+      </span>
+    )
+  }
+
   const row = (c: CharacterRef, marker?: string) => {
     const isActive = c.name === selected
     return (
@@ -191,6 +213,11 @@ export function CharacterListPanel({
                   {roams(c.name)
                     ? <span className="ga-muted"> · {roams(c.name)}</span>
                     : null}
+                  {/* HOW LONG this NPC still lives. The raw stamp sat in the
+                      config form and answered a question nobody asks — the
+                      list needs the span, and the server words it (game
+                      clock, see `npc_ops.remaining_span`). */}
+                  {ttl(c.name)}
                 </span>
               </button>
               <button

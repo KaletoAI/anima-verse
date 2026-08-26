@@ -448,6 +448,7 @@ def npc_summary(name: str) -> Dict[str, Any]:
 
     profile = get_character_profile(name) or {}
     expires_at = str(profile.get("expires_at") or "")
+    remaining = remaining_span(expires_at)
     location_id = get_character_current_location(name) or ""
     home = profile.get("npc_home")
     return {
@@ -470,6 +471,12 @@ def npc_summary(name: str) -> Dict[str, Any]:
         "expires_at": expires_at,
         "expires_label": (GameTime.parse(expires_at).label()
                           if _is_stamp(expires_at) else ""),
+        # WHEN it ends is not HOW LONG is left. The stamp answers a question
+        # nobody asks about an NPC that was spawned for two hours — the list
+        # wants the span, and the span is game-clock arithmetic, which is the
+        # server's job alone (the client has no game clock to subtract from).
+        "remaining_hours": remaining[0],
+        "remaining_label": remaining[1],
         "expired": is_expired(expires_at),
     }
 
@@ -480,6 +487,38 @@ def _is_stamp(value: str) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+def remaining_span(expires_at: str) -> Tuple[Optional[float], str]:
+    """How much GAME time is left on a TTL stamp: ``(hours, label)``.
+
+    The SERVER computes the span, never the client: the remaining time is
+    ``stamp - game_time()``, and the game clock is the server's — a browser
+    subtracting its own wall clock from a world stamp would answer nonsense in
+    a frozen or fast-running world.
+
+    ``hours`` is the signed span rounded to two decimals, ``label`` the English
+    text the Game-Admin list renders behind the hourglass ("2h 30m", "18m",
+    "2h" — never "2h 0m"). No stamp at all answers ``(None, "")``: an NPC
+    without a TTL lives until an admin deletes it, which is not the same state
+    as an expired one.
+
+    A NEGATIVE span is a real state, not an error — the sweep runs on a tick,
+    so an NPC can be past its stamp and still standing; it reads "expired". The
+    boundary follows :func:`is_expired` (``>=``), so a span of exactly zero is
+    expired too and the label can never contradict the row's ``expired`` flag.
+    """
+    if not _is_stamp(expires_at):
+        return None, ""
+    left = GameTime.parse(expires_at) - game_time()
+    hours = round(left.total_seconds / 3600.0, 2)
+    if left.total_seconds <= 0:
+        return hours, "expired"
+    whole_hours, rest = divmod(left.total_seconds, 3600)
+    minutes = rest // 60
+    if whole_hours:
+        return hours, f"{whole_hours}h {minutes}m" if minutes else f"{whole_hours}h"
+    return hours, f"{minutes}m"
 
 
 def is_expired(expires_at: str) -> bool:

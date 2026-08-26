@@ -21,6 +21,11 @@ body {
   color: var(--text, #e6edf3);
 }
 
+/* Inline text that reports a bad state — an expired NPC's TTL, and anything
+   else that has to read as "wrong" inside a normal row. Colour only; the
+   filled-background danger is the button (.ga-btn-danger). */
+.ga-danger { color: var(--danger, #f85149); }
+
 /* Scrollbalken ans (dunkle) Design angleichen statt der weißen Standardleiste.
    Dünn, transparenter Track, dezenter Thumb der beim Hover heller wird.
    Themebar über --scrollbar-thumb / --scrollbar-thumb-hover. */
