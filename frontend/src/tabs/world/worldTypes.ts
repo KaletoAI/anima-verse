@@ -326,6 +326,11 @@ export interface NpcSlot {
    *  0 = the ordinary room placement. Above 0 the NPC stands at a free point
    *  within that radius and roams there instead of changing rooms. */
   radius_m?: number
+  /** BINDS the slot to one existing temporary NPC — that sheet, and no other,
+   *  staffs it. Empty = a new NPC is generated (or one recycled by role).
+   *  A bound slot never generates anybody: it revives its NPC out of the pool
+   *  or, if it is alive elsewhere, stamps and moves it here. */
+  character?: string
   /** When this slot is staffed, in GAME time. Empty = always; `night`/`day`
    *  follow the season's sunrise/sunset; `HH:MM-HH:MM` is a literal span that
    *  may wrap over midnight. Outside its window nobody spawns and the NPCs

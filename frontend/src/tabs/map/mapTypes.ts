@@ -490,6 +490,10 @@ export function readNpcSlots(meta: TerrainMeta | undefined): NpcSlot[] {
       count_max: max === undefined ? 1 : max,
       briefing: typeof e.briefing === 'string' ? e.briefing : '',
       when: typeof e.when === 'string' ? e.when : '',
+      // The BINDING to one existing NPC. Read like every other authored
+      // string: dropping it here would blank the select and un-bind the slot
+      // on the next save of the area.
+      character: typeof e.character === 'string' ? e.character : '',
     })
   }
   return out

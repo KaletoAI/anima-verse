@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiPost } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { groundRoomLabel, type NpcSlot, type Room } from './worldTypes'
@@ -23,11 +23,25 @@ import { groundRoomLabel, type NpcSlot, type Room } from './worldTypes'
 // around the place, where it roams instead of changing rooms. It WINS over
 // the room — which is why the room select goes dead as soon as it is set.
 //
+// "Character" BINDS the slot to one existing temporary NPC. A bound slot never
+// generates anybody: it revives exactly that sheet out of the recycling pool
+// or, when the NPC is alive somewhere else, stamps the slot on it and moves it
+// here — without pooling it, so it keeps everything the world remembers about
+// it. Only temporary NPCs can be bound; a full character has a place of its
+// own in this world.
+//
 // The same editor authors the slots of a PAINTED TERRAIN AREA (§ E3.2,
 // `variant="area"`). There the polygon IS the home, so neither of those two
 // fields exists: no rooms to pick and no radius to draw a second shape with.
 
 const CUSTOM_DEFAULT = '20:00-06:00'
+
+/** One NPC the slot may be bound to — living or waiting in the pool. */
+interface BindableNpc {
+  name: string
+  /** Its current slot role, only used to tell two invented names apart. */
+  role?: string
+}
 
 type WhenMode = 'always' | 'night' | 'day' | 'custom'
 
@@ -71,6 +85,28 @@ export function NpcSlotsEditor({
   const { t } = useI18n()
   const { toast } = useToast()
   const [filling, setFilling] = useState(false)
+  // Everything a slot may be bound to: the LIVING temporary NPCs and the
+  // pooled sheets, in one list — a pooled NPC is on no other roster, and it is
+  // the more interesting half (binding is what brings a kept sheet back).
+  const [bindable, setBindable] = useState<BindableNpc[]>([])
+  useEffect(() => {
+    apiGet<{ npcs?: { name: string; slot_role?: string }[]
+             pooled?: { name: string; role?: string }[] }>('/npc/list')
+      .then((r) => {
+        const seen = new Set<string>()
+        const out: BindableNpc[] = []
+        for (const n of [
+          ...(r.npcs || []).map((n) => ({ name: n.name, role: n.slot_role })),
+          ...(r.pooled || []).map((p) => ({ name: p.name, role: p.role })),
+        ]) {
+          if (!n.name || seen.has(n.name)) continue
+          seen.add(n.name)
+          out.push(n)
+        }
+        setBindable(out)
+      })
+      .catch(() => setBindable([]))
+  }, [])
   const slots = value || []
   const isArea = variant === 'area'
   const ownerId = (isArea ? areaId : locationId) || ''
@@ -87,9 +123,10 @@ export function NpcSlotsEditor({
         // No `room`/`radius_m` at all: the area is the home, and sending two
         // keys the server forces empty would only make the stored slot and
         // the drafted one look different.
-        ? { role: '', count_min: 1, count_max: 1, briefing: '', when: '' }
+        ? { role: '', character: '', count_min: 1, count_max: 1, briefing: '', when: '' }
         : {
           role: '',
+          character: '',
           count_min: 1,
           count_max: 1,
           briefing: '',
@@ -137,6 +174,29 @@ export function NpcSlotsEditor({
               placeholder={t('e.g. barkeeper')}
               onChange={(e) => update(idx, { role: e.target.value })}
             />
+          </Field>
+          <Field
+            label={t('Character')}
+            hint={t('Bind this slot to one existing NPC — only temporary NPCs. It is revived from the pool or moved here from wherever it stands, and nobody new is ever generated for this slot.')}
+          >
+            <select
+              className="ga-input"
+              value={slot.character || ''}
+              onChange={(e) => update(idx, { character: e.target.value })}
+            >
+              <option value="">— {t('generate new')} —</option>
+              {bindable.map((n) => (
+                <option key={n.name} value={n.name}>
+                  {n.role ? `${n.name} (${n.role})` : n.name}
+                </option>
+              ))}
+              {/* A bound name the list does not know any more — an NPC deleted
+                  since, or one the list has not loaded yet. Kept as an option
+                  so opening the editor cannot silently unbind the slot. */}
+              {!!slot.character && !bindable.some((n) => n.name === slot.character) && (
+                <option value={slot.character}>{slot.character}</option>
+              )}
+            </select>
           </Field>
           <Field label={t('Min')} compact>
             <input

@@ -2159,6 +2159,8 @@
     "Role": "Rolle",
     "The tag an NPC of this slot carries. Also what a recycled NPC is matched on.": "Die Markierung, die ein NPC dieses Platzes trägt. Danach wird auch ein wiederverwendeter NPC gesucht.",
     "e.g. barkeeper": "z.B. Wirt",
+    "Bind this slot to one existing NPC — only temporary NPCs. It is revived from the pool or moved here from wherever it stands, and nobody new is ever generated for this slot.": "Diesen Platz an einen vorhandenen NPC binden — nur temporäre NPCs. Er wird aus dem Pool zurückgeholt oder von dort hergebracht, wo er gerade steht; für diesen Platz wird nie jemand Neues erzeugt.",
+    "generate new": "neu erzeugen",
     "Min": "Min",
     "Max": "Max",
     "arrival room": "Ankunftsraum",
