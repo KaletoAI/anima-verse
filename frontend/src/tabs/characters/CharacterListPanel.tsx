@@ -161,6 +161,11 @@ export function CharacterListPanel({
                 <span className="ga-list-row-main">
                   <strong>♺ {p.name}</strong>
                   {p.role ? <span className="ga-muted"> · {p.role}</span> : null}
+                  {/* Why this one is in the pool. For an automatic spawn held
+                      back by the finish gate ("waiting for profile_image,
+                      model3d") this is the only place the state is visible at
+                      all — the reason text comes from the server. */}
+                  {p.reason ? <span className="ga-muted"> · {p.reason}</span> : null}
                 </span>
               </span>
               <button

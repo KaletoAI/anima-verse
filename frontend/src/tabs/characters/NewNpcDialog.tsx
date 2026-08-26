@@ -330,7 +330,7 @@ export function NewNpcDialog({
           {heldForAssets && (
             <p style={{ fontSize: '0.86em', opacity: 0.85 }}>
               {t(
-                'The NPC was created but is not in the world yet: it waits out of sight until its profile image and 3D model are rendered, then it takes its place by itself. Until then you find it in the NPC pool.',
+                'The NPC was created but is not in the world yet: it waits out of sight until its profile image and 3D model are rendered, then it takes its place by itself. Until then you find it in the NPC pool. If the render fails, the job retries by itself; you can also retry it by hand in the task queue panel.',
               )}
             </p>
           )}

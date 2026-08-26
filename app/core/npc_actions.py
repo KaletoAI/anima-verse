@@ -50,6 +50,11 @@ _DEFAULT_BATCH = 2
 # to 120 chars anyway; this only keeps a runaway answer out of the write.
 _MAX_ACTIVITY_CHARS = 200
 
+# Completion budget of one turn. The answer is two short fields (a room id and
+# one sentence) — roughly 40 tokens — so this is a generous cap and still an
+# upper bound on what a babbling model can cost per NPC per interval.
+_MAX_ANSWER_TOKENS = 200
+
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.S)
 
 
@@ -101,12 +106,40 @@ def _is_busy(name: str, profile: Dict[str, Any]) -> bool:
         return True
 
 
+def _in_chat(name: str) -> bool:
+    """True while an avatar is talking to this NPC right now.
+
+    THE SAME RULE the AgentLoop gates its own turns on, not a second
+    definition of "in chat": ``_minutes_since_last_chat_with_avatar`` against
+    its HOT window (``_IN_CHAT_HOT_MIN``). Every temporary NPC carries
+    ``talk_to``, so without this the tick could walk the innkeeper down to
+    the cellar and overwrite her activity while the player is still writing
+    to her.
+
+    The import is lazy because everything in this module is: ``agent_loop``
+    pulls in the perception layer at module load, and this module is reached
+    from the world tick.
+
+    An unreadable answer counts as "not in chat" — that is what the helper
+    itself does with a broken row (it returns None), and a chat check that
+    cannot be made must not silence the whole tick.
+    """
+    try:
+        from app.core.agent_loop import (_IN_CHAT_HOT_MIN,
+                                         _minutes_since_last_chat_with_avatar)
+        minutes = _minutes_since_last_chat_with_avatar(name)
+        return minutes is not None and minutes < _IN_CHAT_HOT_MIN
+    except Exception as e:  # noqa: BLE001
+        logger.debug("in-chat check for %s failed: %s", name, e)
+        return False
+
+
 def candidates() -> List[str]:
     """The NPCs that get an action turn in THIS check, at most ``action_batch``.
 
     Living temporary NPCs (``list_temporary_npcs`` is living-only, so a pooled
     NPC waiting for its assets is already out), standing somewhere, awake, not
-    mid-interaction, cooldown elapsed.
+    mid-interaction, not mid-conversation with an avatar, cooldown elapsed.
     """
     if not _enabled():
         return []
@@ -143,6 +176,8 @@ def candidates() -> List[str]:
                 # do"); arriving makes it a candidate again.
                 continue
             if _is_busy(name, profile):
+                continue
+            if _in_chat(name):
                 continue
         except Exception as e:  # noqa: BLE001
             logger.debug("candidate check for %s failed: %s", name, e)
@@ -225,10 +260,16 @@ def _parse_json(raw: str) -> Optional[Dict[str, Any]]:
 def _ask(llm: Callable[..., Any], name: str, system_prompt: str,
          user_prompt: str) -> Optional[Dict[str, Any]]:
     """One turn plus EXACTLY one repair attempt (the model gets its own broken
-    answer back and is asked for valid JSON). ``None`` after that."""
+    answer back and is asked for valid JSON). ``None`` after that.
+
+    Both turns are capped at ``_MAX_ANSWER_TOKENS``: the answer is two short
+    fields, and an uncapped budget is what lets a chatty model write an essay
+    per NPC per interval (feedback_validate_llm_guards).
+    """
     response = llm(task=TASK, system_prompt=system_prompt,
                    user_prompt=user_prompt, agent_name=name,
-                   label=f"NPC action ({name})")
+                   label=f"NPC action ({name})",
+                   max_tokens=_MAX_ANSWER_TOKENS)
     raw = str(getattr(response, "content", "") or "")
     obj = _parse_json(raw)
     if obj is not None:
@@ -238,7 +279,8 @@ def _ask(llm: Callable[..., Any], name: str, system_prompt: str,
               "That was not valid JSON. Return the SAME content as a single "
               "valid JSON object — no markdown, no code fence, no explanation.")
     response = llm(task=TASK, system_prompt=system_prompt, user_prompt=repair,
-                   agent_name=name, label=f"NPC action ({name}, repair)")
+                   agent_name=name, label=f"NPC action ({name}, repair)",
+                   max_tokens=_MAX_ANSWER_TOKENS)
     return _parse_json(str(getattr(response, "content", "") or ""))
 
 
@@ -356,7 +398,10 @@ def _sub_npc_actions() -> None:
                 if run_action_for(name):
                     acted += 1
             except Exception as e:  # noqa: BLE001 — one NPC must not stop the rest
-                logger.debug("npc_action(%s) failed: %s", name, e)
+                # WARNING, not debug: a provider that is down or a template
+                # that no longer renders makes every NPC stand still, and at
+                # debug level the world just looks lifeless for no reason.
+                logger.warning("npc_action(%s) failed: %s", name, e)
         if acted:
             logger.info("npc_actions: %d NPC(s) acted", acted)
     except Exception as e:  # noqa: BLE001

@@ -29,7 +29,10 @@ Hand-derived expectations, case by case:
       chars, as the flavor — the test sentence is one short sentence and
       carries no character name, so it survives verbatim). Exactly ONE LLM
       call. The user prompt really carries the assembled room list: both
-      room ids, both activity hints and the standing task are in it.
+      room ids, both activity hints and the standing task are in it. The
+      call carries `max_tokens=200`: the answer is two short fields, and an
+      uncapped budget is what lets a chatty model write an essay per NPC per
+      interval (feedback_validate_llm_guards).
 
   (b) A FOREIGN ROOM ID IS DISCARDED WHOLE. `"cellar"` is not a room of the
       NPC's location, so the answer is thrown away — return None, the room
@@ -59,16 +62,29 @@ Hand-derived expectations, case by case:
       clock is moved with `set_game_time`, exactly as a freeze or a jump
       would move it.)
 
-  (f) POOLED, SLEEPING, BUSY, TRAVELLING AND PLACELESS NPCs ARE NEVER
-      CANDIDATES. Pooled (`status` 'pooled') is already out of
+  (f) POOLED, SLEEPING, BUSY, TRAVELLING, IN-CHAT AND PLACELESS NPCs ARE
+      NEVER CANDIDATES. Pooled (`status` 'pooled') is already out of
       `list_temporary_npcs`; sleeping (`is_sleeping`), holding a running
-      `interaction`, carrying a `journey`, and standing in no location at all
-      are the four the filter adds. The journey one matters most: mid-walk
-      `current_location` is whatever transit cell the travel ticker last
-      wrote, so this NPC would be asked to pick a room of a place it is only
-      passing through. A plain living, placed NPC IS a candidate, and both
-      the released and the arrived one become candidates again — without
-      those contrasts the five above prove nothing.
+      `interaction`, carrying a `journey`, talking to an avatar right now,
+      and standing in no location at all are the five the filter adds. The
+      journey one matters most: mid-walk `current_location` is whatever
+      transit cell the travel ticker last wrote, so this NPC would be asked
+      to pick a room of a place it is only passing through. A plain living,
+      placed NPC IS a candidate, and both the released and the arrived one
+      become candidates again — without those contrasts the five above prove
+      nothing.
+
+      The IN-CHAT one is the same rule the AgentLoop gates its own turns on
+      (`agent_loop._minutes_since_last_chat_with_avatar` against its HOT
+      window `_IN_CHAT_HOT_MIN` = 10 minutes), not a second definition:
+      every temporary NPC carries `talk_to`, so without it the tick could
+      send the innkeeper down to the cellar and overwrite her activity
+      mid-sentence while the player is writing to her. Hand-derived: a
+      `chat_messages` row between the NPC and an AVATAR stamped NOW makes it
+      no candidate; the same row stamped 20 minutes back (outside the HOT
+      window) leaves it a candidate; and a row whose partner is an ordinary
+      character, not an avatar, never counted in the first place (TalkTo
+      NPC↔NPC is not "in chat" — the agent-loop helper's own rule).
 
   (g) THE BLOCK RULES STILL RULE. A `block`/`enter` rule on the target room
       with condition `always` denies the move: None, nothing written. Only
@@ -98,6 +114,7 @@ Usage:  ./.venv/bin/python scripts/smoke_npc_actions.py
 import os
 import sys
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -116,7 +133,8 @@ from app.core.game_time import GameDuration  # noqa: E402
 from app.core.npc_ops import apply_npc  # noqa: E402
 from app.core.npc_pool import pool_npc  # noqa: E402
 from app.core.prompt_templates import render_task  # noqa: E402
-from app.core.timeutils import game_time, set_game_time  # noqa: E402
+from app.core.timeutils import game_time, set_game_time, utc_now  # noqa: E402
+from app.core.users import create_user, update_user  # noqa: E402
 from app.models import rules as rules_model, world  # noqa: E402
 from app.models.character import (force_set_status,  # noqa: E402
                                   get_character_current_location,
@@ -243,6 +261,8 @@ check("and both activity hints",
       ("serving guests at the long table" in _user,
        "cooking and washing up" in _user), (True, True))
 check("and the standing task", "tends the bar" in _user, True)
+check("the completion budget is capped", LLM.calls[0]["kwargs"].get("max_tokens"),
+      200)
 
 # ── (b) a foreign room id is discarded whole ────────────────────────────────
 print("(b) a room the location does not have is discarded whole")
@@ -283,6 +303,8 @@ check("twice broken returns nothing", npc_actions.run_action_for(A, llm=LLM),
 check("and cost exactly two calls", len(LLM.calls), 2)
 check("the second call is the repair turn",
       "valid JSON" in LLM.calls[1]["user"], True)
+check("and it is capped just like the first",
+      LLM.calls[1]["kwargs"].get("max_tokens"), 200)
 check("nothing was written", (get_character_current_room(A),
                               get_effective_activity(A)),
       ("taproom", "Sie wischt den Tresen."))
@@ -364,6 +386,49 @@ check("arrived, it is one again", npc_actions.candidates(), [D])
 
 save_character_current_location(D, "")
 check("standing nowhere is not", npc_actions.candidates(), [])
+
+# The in-chat rule, borrowed whole from the AgentLoop: while an avatar is
+# writing to this NPC the tick must not walk it out of the room.
+AVATAR = "Player"
+save_character_profile(AVATAR, {"character_name": AVATAR,
+                                "template": "human-roleplay"}, create_new=True)
+_uid = create_user("demo", "smoke-password", allowed_characters=[AVATAR])
+update_user(_uid, settings={"active_character": AVATAR})
+NPC_IN_CHAT = make_npc("Ragnhild", room_id="taproom")
+isolate(NPC_IN_CHAT)
+check("before a word is spoken it is a candidate",
+      npc_actions.candidates(), [NPC_IN_CHAT])
+
+
+def chat_row(character: str, partner: str, minutes_ago: float) -> None:
+    """One chat_messages row, stamped in SYSTEM time — that is the clock the
+    agent loop's own helper measures against (technical stamp, not game time).
+    """
+    ts = (utc_now() - timedelta(minutes=minutes_ago)).isoformat()
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO chat_messages (character_name, partner, ts, role, "
+            "content, channel) VALUES (?, ?, ?, 'user', 'Hallo?', 'web')",
+            (character, partner, ts))
+
+
+chat_row(NPC_IN_CHAT, AVATAR, 0.0)
+check("mid-conversation with an avatar it is NOT", npc_actions.candidates(), [])
+with db.transaction() as _conn:
+    _conn.execute("DELETE FROM chat_messages")
+chat_row(NPC_IN_CHAT, AVATAR, 20.0)
+isolate(NPC_IN_CHAT)
+check("20 minutes later — outside the HOT window — it is one again",
+      npc_actions.candidates(), [NPC_IN_CHAT])
+with db.transaction() as _conn:
+    _conn.execute("DELETE FROM chat_messages")
+chat_row(NPC_IN_CHAT, B, 0.0)
+isolate(NPC_IN_CHAT)
+check("a fresh word with a NON-avatar partner is not 'in chat' at all",
+      npc_actions.candidates(), [NPC_IN_CHAT])
+with db.transaction() as _conn:
+    _conn.execute("DELETE FROM chat_messages")
+silence()
 
 # ── (g) the block rules still rule ─────────────────────────────────────────
 print("(g) a block rule on the target room denies the move")

@@ -41,6 +41,10 @@ TASK_TYPE = "npc_assets"
 #: The finish criteria, in the order :func:`npc_assets_complete` reports them.
 CRITERIA = ("profile_image", "model3d", "outfit_description")
 
+#: Retries of ONE finishing job. The queue's own default is 0, and this job is
+#: the only thing that ever places the NPC — see :func:`submit_assets_job`.
+ASSET_RETRIES = 2
+
 
 def require_assets() -> bool:
     """Whether the gate is armed (config ``npc.require_assets``, default on)."""
@@ -119,13 +123,21 @@ def submit_assets_job(name: str, location_id: str, room_id: str = "",
     Deduplicated per character: a second placement attempt for an NPC that is
     already being finished must not start a second run of the same three
     generations.
+
+    ``max_retries`` is set EXPLICITLY, because the queue's own default is 0
+    (``task_queue.MAX_RETRIES_DEFAULT``) and this job is the only thing that
+    will ever place the NPC. A `+ New NPC` NPC has no slot that would notice
+    and re-queue it: after one transient backend outage it would sit in the
+    pool until some wanderer spawn takes it as "any pooled NPC" and revives
+    it at a random origin — the admin's placement silently lost.
     """
     from app.core.task_queue import get_task_queue
     return get_task_queue().submit(
         TASK_TYPE,
         {"name": name, "location_id": location_id, "room_id": room_id,
          "wanderer": bool(wanderer), "wander_target": wander_target or ""},
-        queue_name="background", agent_name=name, deduplicate=True)
+        queue_name="background", agent_name=name, max_retries=ASSET_RETRIES,
+        deduplicate=True)
 
 
 def gate_placement(name: str, location_id: str, room_id: str = "",
@@ -163,8 +175,29 @@ def gate_placement(name: str, location_id: str, room_id: str = "",
 # The producers
 # ---------------------------------------------------------------------------
 
-def _render_profile_image(name: str) -> None:
+def _delivered_image(result: str) -> bool:
+    """Whether the image service's answer describes a picture that exists.
+
+    NEITHER PRODUCER RAISES. The service reports every failure as PROSE —
+    "Error: backend … not available", "Fehler: Keine Instanz … (Timeout)" —
+    and a cache hit as the ``NO_NEW_IMAGE`` sentinel; a delivered render
+    always names a file path. So a path-shaped answer is the only "yes", and
+    everything else is worth a WARNING with the text in it.
+    """
+    text = (result or "").strip()
+    if not text or "NO_NEW_IMAGE" in text:
+        return False
+    if text.lower().startswith(("error", "fehler")):
+        return False
+    return "/" in text
+
+
+def _render_profile_image(name: str) -> str:
     """Render the NPC's portrait through the ordinary image service.
+
+    Returns what went WRONG ("" = the service delivered), so the caller can
+    carry the service's own words into the job's error — the queue panel
+    shows the exception and nothing else.
 
     The same request the profile-image route sends (``character_ops.
     generate_profile_image_core``): the FACE prompt, the ``profile`` use-case
@@ -186,7 +219,7 @@ def _render_profile_image(name: str) -> None:
     prompt = _resolve_face_prompt(profile, name,
                                   get_template(template) if template else None)
     target = resolve_profile_imagegen(profile)
-    result = get_image_service().generate_from_input(json.dumps({
+    result = str(get_image_service().generate_from_input(json.dumps({
         "prompt": prompt,
         "agent_name": name,
         "auto_enhance": False,
@@ -194,18 +227,40 @@ def _render_profile_image(name: str) -> None:
         "image_use_case": "profile",
         "workflow": target["workflow"],
         "backend": target["backend"],
-    }))
-    logger.debug("npc_assets(%s): profile render said %s", name,
-                 str(result)[:200])
+    })) or "")
+    if _delivered_image(result):
+        logger.debug("npc_assets(%s): profile render said %s", name,
+                     result[:200])
+        return ""
+    logger.warning("npc_assets(%s): the profile render delivered no image: %s",
+                   name, result[:200] or "(nothing at all)")
+    return result[:200] or "the image service answered nothing"
 
 
-def _render_mesh(name: str) -> None:
-    """T-pose reference, then the mesh for the worn outfit. Blocking."""
+def _render_mesh(name: str) -> str:
+    """T-pose reference, then the mesh for the worn outfit. Blocking.
+
+    Returns what went WRONG ("" = both were happy). ``generate_for_current_
+    outfit`` reports a failure as ``{"ok": False, "error": …}`` instead of
+    raising, and that text is the only thing that says WHY there is no mesh —
+    discarding it leaves a job whose error reads "still incomplete: model3d"
+    and explains nothing.
+    """
     from app.core.model3d import generate_for_current_outfit
     from app.core.model_refs import generate_model_ref_images
 
-    generate_model_ref_images(name, kinds=("tpose",))
-    generate_for_current_outfit(name)
+    notes: List[str] = []
+    refs = generate_model_ref_images(name, kinds=("tpose",)) or {}
+    if not refs.get("tpose"):
+        logger.warning("npc_assets(%s): no T-pose reference was rendered — "
+                       "the mesh has no input", name)
+        notes.append("T-pose: no reference render")
+    result = generate_for_current_outfit(name) or {}
+    if not result.get("ok"):
+        error = str(result.get("error") or "mesh generation failed")
+        logger.warning("npc_assets(%s): the mesh producer said %s", name, error)
+        notes.append(f"mesh: {error}")
+    return "; ".join(notes)[:200]
 
 
 # ---------------------------------------------------------------------------
@@ -266,20 +321,30 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Only what is actually missing: a job that comes back after a partial
     # failure resumes instead of re-rendering what already exists.
+    # The producers' own complaints are COLLECTED, because neither of them
+    # raises — the error the queue panel shows is built from them below.
+    notes: List[str] = []
     if "profile_image" in missing:
         logger.info("NPC '%s': rendering the profile image", name)
-        _render_profile_image(name)
+        note = _render_profile_image(name)
+        if note:
+            notes.append(f"profile image: {note}")
     if "model3d" in missing:
         logger.info("NPC '%s': rendering the T-pose and the mesh", name)
-        _render_mesh(name)
+        note = _render_mesh(name)
+        if note:
+            notes.append(note)
 
     still_missing = npc_assets_complete(name)
     if still_missing:
         # Stays pooled. Raising is what hands the job back to the queue's own
-        # retry mechanism (max_retries default).
+        # retry mechanism (ASSET_RETRIES). The message carries the producers'
+        # own words: "still incomplete: model3d" alone makes a dead backend
+        # look like a mystery in the queue panel.
+        detail = f" — {'; '.join(notes)}" if notes else ""
         raise RuntimeError(
             f"NPC '{name}' still incomplete after the attempt: "
-            f"{', '.join(still_missing)}")
+            f"{', '.join(still_missing)}{detail}")
 
     _place(name, location_id, room_id)
     sent = False

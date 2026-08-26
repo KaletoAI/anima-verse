@@ -58,6 +58,13 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
       same NPC adds NO second task (`submit(deduplicate=True)` matches on
       task_type + agent_name), so the count stays 1. With `require_assets`
       false the same call places it: status '', location set, no task at all.
+      The stored `max_retries` is 2, NOT the queue's `MAX_RETRIES_DEFAULT`
+      of 0 (`app/core/task_queue.py:43`): a `+ New NPC` NPC carries the
+      admin's placement in that one job and has no slot that would re-queue
+      it, so a single transient backend outage would strand it in the pool
+      until some wanderer spawn takes it as "any pooled NPC" and revives it
+      somewhere else entirely. Read out of the queue DB, not off the submit
+      call.
 
   [4] `revive_from_pool` uses the very same gate — on an NPC that went into
       the pool the real way (`pool_npc`, which is what takes it off the map) —
@@ -87,6 +94,13 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
   [8] A producer that does not deliver leaves the NPC pooled and RAISES, which
       is what hands the task back to the queue's own retry mechanism. Nothing
       is placed: status stays 'pooled', current_location stays "".
+      THE PRODUCER'S OWN WORDS TRAVEL. Neither producer raises: the image
+      service reports a failure as PROSE ("Fehler: kein Backend") and the
+      mesh chain as `{"ok": False, "error": …}`. The queue panel shows the
+      EXCEPTION and nothing else, so a message that only says "still
+      incomplete: model3d" makes a dead backend look like a mystery. Both
+      texts therefore ride in the RuntimeError: the mesh stub's "stub" and
+      the image stub's "Fehler: kein Backend".
 
   [9] A wanderer is sent on its way BY THE HANDLER: with `wanderer` true the
       placement is followed by exactly one `_send_wanderer` call for the
@@ -189,13 +203,21 @@ def check(label, actual, expected):
         FAILURES.append(label)
 
 
-def raises(label, exc_type, fn):
+def raises(label, exc_type, fn, contains=""):
+    """``fn`` must raise ``exc_type``; with ``contains`` the message must also
+    carry that text — which is how the producer's own complaint is proven to
+    reach the queue panel (the panel shows the exception, nothing else)."""
     global CHECKED
     CHECKED += 1
     try:
         fn()
     except exc_type as e:
-        print(f"  OK  {label}: {exc_type.__name__}({str(e)[:60]!r})")
+        if contains and contains not in str(e):
+            print(f"  FAIL {label}: {str(e)[:160]!r} does not carry "
+                  f"{contains!r}")
+            FAILURES.append(label)
+            return
+        print(f"  OK  {label}: {exc_type.__name__}({str(e)[:120]!r})")
         return
     except Exception as e:  # noqa: BLE001 — anything else is the defect
         print(f"  FAIL {label}: {type(e).__name__}({e})")
@@ -227,6 +249,19 @@ def tasks_for(name: str):
     finally:
         conn.close()
     return [json.loads(r[0]) for r in rows]
+
+
+def retries_for(name: str):
+    """The ``max_retries`` the queue really stored for this NPC's jobs — asked
+    at the consumer (the queue DB), not at the submit call."""
+    conn = sqlite3.connect(f"file:{QUEUE_DB}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT max_retries FROM tasks WHERE task_type=? AND agent_name=?",
+            (na.TASK_TYPE, name)).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
 
 
 def finish_tasks_for(name: str) -> None:
@@ -401,6 +436,7 @@ check("the pool row says what it is waiting for",
 check("the task carries the placement",
       {k: tasks_for(C)[0][k] for k in ("name", "location_id", "room_id")},
       {"name": C, "location_id": LOC_ID, "room_id": TAPROOM})
+check("and it is allowed to retry twice", retries_for(C), [2])
 apply_npc({"character_name": C, "character_appearance": "a thin carter"},
           LOC_ID, room_id=TAPROOM, template="npc-temporary",
           created_by="smoke_npc_assets")
@@ -492,10 +528,22 @@ print("[8] an unfinished attempt raises into the queue retry")
 install_stubs(mesh_ok=False)
 I_ = make_npc("Ragna", outfit="a felted hat")
 set_character_status(I_, "pooled")
-raises("the handler raises", RuntimeError,
-       lambda: na._handle_npc_assets({"name": I_, "location_id": LOC_ID}))
+raises("the handler raises, carrying the mesh producer's own error",
+       RuntimeError,
+       lambda: na._handle_npc_assets({"name": I_, "location_id": LOC_ID}),
+       contains="stub")
 check("still pooled", get_character_status(I_), "pooled")
 check("still nowhere", get_character_current_location(I_), "")
+
+# The image service does not raise either — it hands back an error STRING,
+# and that string is the only thing that says why there is no portrait.
+install_stubs(image_ok=False)
+I2 = make_npc("Gunnhild", outfit="a felted hat")
+set_character_status(I2, "pooled")
+raises("and the image service's error prose too", RuntimeError,
+       lambda: na._handle_npc_assets({"name": I2, "location_id": LOC_ID}),
+       contains="Fehler: kein Backend")
+check("still pooled", get_character_status(I2), "pooled")
 
 # ── [9] the wanderer is sent by the handler ─────────────────────────────────
 print("[9] the wanderer leaves once its assets exist")
