@@ -153,8 +153,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     the event loop for the whole build, and this route is POLLED, so the
     watchdog saw it as a recurring stall (2026-08-23).
     """
-    from app.core.perception import nearby_in_the_open
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.perception import addressable_for
     from app.models import perception_store
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
@@ -172,14 +171,20 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
 
     loc = get_character_current_location(avatar) or ""
     room = get_character_current_room(avatar) or ""
-    # Out in the WILDERNESS there is no room to list — the neighbours are
-    # everyone within the hearing radius (E6), and that is ONE roster shared
-    # with the prompt builders and TalkTo, never a second distance rule here.
-    # It never contains the asker itself, so it needs no filter of its own.
-    # Without this the avatar stood alone outdoors while its own perception
-    # stream carried the very people it was told were not there.
-    present = ([c for c in _list_characters_in_room(loc, room) if c != avatar]
-               if loc else nearby_in_the_open(avatar))
+    # THE one addressability rule, and nothing else: the room when the avatar
+    # is inside a location, PLUS everybody within the hearing radius out in the
+    # open (E6). It never contains the asker itself, so it needs no filter of
+    # its own.
+    #
+    # This list is not decoration — the player UI builds the ADDRESSEE CHIPS
+    # from it and clips the selection to it, so anybody missing here cannot be
+    # spoken to at all. A room-only answer therefore made the mixed case
+    # unreachable: the avatar in the taproom could hear the NPC standing at the
+    # gate (``record_utterance`` has always crossed that wall), ``play_say``
+    # would have accepted it as an addressee, and ``/play/others`` listed it —
+    # but no chip ever offered it. One roster for all three
+    # (``perception.addressable_for``), never a second presence rule here.
+    present = addressable_for(avatar)
     scene = perception_store.get_character_room_stream(
         avatar, loc, room, limit, include_meta_lines=True)
 

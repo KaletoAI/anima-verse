@@ -43,7 +43,15 @@ Hand-derived expectations:
       so ``addressable_for("Wren")`` is sorted ["Mira", "Tove"] — the room
       list and the earshot circle, one rule, never the avatar itself.
       ``play._present_characters`` is that same list (it IS the /play/others
-      roster and the give/cast target gate), and
+      roster and the give/cast target gate), AND SO IS ``/play/scene.present``:
+      the player UI builds the ADDRESSEE CHIPS from that field and clips the
+      selection to it, so a room-only answer there made this whole mixed case
+      unreachable through the UI — the gate would have taken Tove, the fan-out
+      reached her (b2), and no chip ever offered her. ``present_detail`` is the
+      same names with a portrait each; a location-less NPC needs no location in
+      it. Out in the open (a) the field always did answer the circle, and it
+      still does — that arm is checked too, so the collapse into one rule
+      cannot quietly cost the wilderness roster.
       ``character_ops.build_characters_at_location(INN)`` — which is asked for
       a LOCATION, not for an avatar — measures its circle from the LOCATION's
       anchor (0, 0) instead: Tove at 12.0 m comes along with
@@ -174,7 +182,9 @@ from app.core.perception import addressable_for  # noqa: E402
 from app.core.timeutils import (set_game_factor, set_game_time,  # noqa: E402
                                 utc_now)
 from app.models import perception_store, terrain  # noqa: E402
-from app.core.users import create_user, update_user  # noqa: E402
+from app.core.auth_dependency import current_user_ctx  # noqa: E402
+from app.core.users import (create_user, get_user_by_id,  # noqa: E402
+                            update_user)
 from app.models.character import (  # noqa: E402
     get_character_current_location, get_character_current_room,
     get_character_profile, get_character_status, get_movement_target,
@@ -182,7 +192,7 @@ from app.models.character import (  # noqa: E402
 from app.models.world import (  # noqa: E402
     GROUND_ROOM_ID, _load_world_data, _save_world_data, add_location,
     get_location_by_id, update_location_position)
-from app.routes.play import _present_characters  # noqa: E402
+from app.routes.play import _present_characters, play_scene  # noqa: E402
 
 FAILURES = []
 CHECKED = 0
@@ -279,6 +289,12 @@ save_character_profile(AVATAR, {"character_name": AVATAR,
                        create_new=True)
 _uid = create_user("demo", "smoke-password", allowed_characters=[AVATAR])
 update_user(_uid, settings={"active_character": AVATAR})
+# ``/play/scene`` asks ``get_active_character()``, which reads the logged-in
+# user out of the request context var the auth middleware fills. There is no
+# request here, so the smoke fills it once — the same dict the middleware would
+# put there. Without it the route answers its empty payload and every check
+# below would pass against nothing.
+current_user_ctx.set(get_user_by_id(_uid))
 
 
 def make_npc(name: str, *, location_id: str = "", room_id: str = "",
@@ -361,6 +377,8 @@ check("the avatar stands nowhere in particular",
 check("only the neighbour 10 m away", addressable_for(AVATAR), ["Roon"])
 check("and the panel roster says the same", _present_characters(AVATAR),
       ["Roon"])
+check("/play/scene agrees out here as it always did",
+      play_scene()["present"], ["Roon"])
 
 # ── (b) inside a location: room list PLUS earshot ───────────────────────────
 print("(b) avatar in the taproom: the room and whoever stands outside the gate")
@@ -387,6 +405,13 @@ check("the one outside the gate is flagged as not in the room",
 check("the room mate is in the room",
       [c["same_room"] for c in _at_loc["characters"] if c["name"] == "Mira"],
       [True])
+_scene = play_scene()
+check("/play/scene — the roster the addressee chips are built from",
+      sorted(_scene["present"]), ["Mira", "Tove"])
+check("and every chip has its portrait row",
+      sorted(p["name"] for p in _scene["present_detail"]), ["Mira", "Tove"])
+check("the scene still knows where the avatar itself stands",
+      (_scene["location_id"], _scene["room_id"]), (INN, "taproom"))
 
 # ── (b2) the same union all the way through: gate → fan-out → dispatch ──────
 print("(b2) the line the avatar speaks in the taproom REACHES the gate")

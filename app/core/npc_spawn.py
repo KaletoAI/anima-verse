@@ -579,12 +579,44 @@ def register_npc_spawn_handler() -> None:
     get_task_queue().register_handler(TASK_TYPE, _handle_npc_spawn)
 
 
+def _slot_needs_capacity(slot: Dict[str, Any]) -> bool:
+    """Does filling this slot ADD a temporary NPC to the world?
+
+    The cap (``max_alive``) counts the NPCs the world is paying for, so only a
+    slot that brings a new figure in has to be measured against it:
+
+    * an UNBOUND slot always does — it draws from the pool or generates;
+    * a BOUND slot whose sheet is POOLED does too — the revive puts a figure
+      back on the map that ``alive_npc_count`` did not count before;
+    * a BOUND slot whose sheet is ALIVE somewhere else does NOT. Filling it is
+      a pure MOVE (``_fill_bound_slot`` re-stamps and places, never pools),
+      and the count is the same before and after. Blocking that on the cap
+      froze a named NPC wherever it happened to stand — the one thing binding
+      a slot to it exists to prevent.
+
+    A bound name that is not a temporary NPC at all (deleted, or a full
+    character) answers "no capacity needed": ``_fill_bound_slot`` refuses it
+    with a warning and spawns nothing, so there is nothing to charge.
+    """
+    from app.models.character import POOLED_STATUS, get_character_status
+    name = str(slot.get("character") or "").strip()
+    if not name:
+        return True
+    try:
+        return get_character_status(name) == POOLED_STATUS
+    except Exception as e:  # noqa: BLE001
+        logger.debug("slot capacity check for %s failed: %s", name, e)
+        return True
+
+
 def fill_location_slots(location_id: str) -> Dict[str, Any]:
     """Spawn what the location's slots are missing, one NPC per missing count.
 
     The hard cap is checked before EVERY single spawn, not once per job: one
     job may fill several slots, and the cap is about the world, not about this
-    location.
+    location. It is only asked about a slot that would ADD an NPC
+    (:func:`_slot_needs_capacity`), and a capped slot is SKIPPED rather than
+    ending the job — the next slot of this place may be a pure move.
     """
     from app.models.world import get_location_by_id
 
@@ -596,17 +628,22 @@ def fill_location_slots(location_id: str) -> Dict[str, Any]:
         return {"filled": 0, "location_id": location_id}
 
     filled: List[str] = []
+    capped = False
     for slot in gaps:
         for _ in range(int(slot.get("needed") or 0)):
-            if cap_reached():
+            if _slot_needs_capacity(slot) and cap_reached():
                 logger.info("npc cap %d reached — no spawn at %s",
                             max_alive(), location_id)
-                return {"filled": len(filled), "spawned": filled,
-                        "location_id": location_id, "capped": True}
+                capped = True
+                break        # this slot only; the next one may be a pure move
             name = spawn_for_slot(location, slot)
             if name:
                 filled.append(name)
-    return {"filled": len(filled), "spawned": filled, "location_id": location_id}
+    out: Dict[str, Any] = {"filled": len(filled), "spawned": filled,
+                           "location_id": location_id}
+    if capped:
+        out["capped"] = True
+    return out
 
 
 def fill_area_slots(area_id: str) -> Dict[str, Any]:
@@ -626,17 +663,22 @@ def fill_area_slots(area_id: str) -> Dict[str, Any]:
         return {"filled": 0, "area_id": area_id}
 
     filled: List[str] = []
+    capped = False
     for slot in gaps:
         for _ in range(int(slot.get("needed") or 0)):
-            if cap_reached():
+            if _slot_needs_capacity(slot) and cap_reached():
                 logger.info("npc cap %d reached — no spawn in %s",
                             max_alive(), area_id)
-                return {"filled": len(filled), "spawned": filled,
-                        "area_id": area_id, "capped": True}
+                capped = True
+                break        # this slot only; the next one may be a pure move
             name = spawn_for_slot(area, slot, kind="area")
             if name:
                 filled.append(name)
-    return {"filled": len(filled), "spawned": filled, "area_id": area_id}
+    out: Dict[str, Any] = {"filled": len(filled), "spawned": filled,
+                           "area_id": area_id}
+    if capped:
+        out["capped"] = True
+    return out
 
 
 def _slot_briefing(location: Dict[str, Any], slot: Dict[str, Any]) -> str:
@@ -950,6 +992,9 @@ def _settle_wanderer(name: str) -> bool:
     wanderer around and sends it off mid-sentence, or pools it, which deletes
     the very character the player is writing to. It settles on a later tick,
     once the conversation has cooled.
+
+    A PERMANENT wanderer (``npc_permanent``) is never pooled here — see the
+    branch below.
     """
     from app.core.npc_actions import _in_chat
     from app.models.character import (get_character_current_location,
@@ -972,7 +1017,16 @@ def _settle_wanderer(name: str) -> bool:
 
     from app.core.npc_pool import pool_npc
     origin = str(profile.get("wander_origin") or "").strip()
-    if origin and origin != here and random.random() < 0.5:
+    # A PERMANENT wanderer is NEVER pool stock. "Make permanent" is an admin's
+    # explicit decision (Character config → Temporary NPC → Lifetime), and
+    # pooling it would be a one-way door: `take_from_pool` deliberately skips a
+    # `npc_permanent` sheet, so no spawn would ever draw it back and the pool
+    # list offers no way out either. So the coin is only tossed for the MORTAL
+    # wanderers, whose other half is the pool — a permanent one always turns
+    # around, and if the road back cannot be started it simply stands here and
+    # tries again on the next tick.
+    permanent = bool(profile.get("npc_permanent"))
+    if origin and origin != here and (permanent or random.random() < 0.5):
         # Turn around instead of vanishing (§ 5, 50/50).
         profile["wander_target"] = origin
         profile["wander_origin"] = here
@@ -980,6 +1034,10 @@ def _settle_wanderer(name: str) -> bool:
         if _send_wanderer(name, origin):
             logger.info("Wanderer '%s' turns around towards %s", name, origin)
             return True
+    if permanent:
+        logger.info("Permanent wanderer '%s' arrived and stays standing — a "
+                    "kept sheet is never pooled", name)
+        return False
     pool_npc(name, reason="wanderer arrived")
     return True
 

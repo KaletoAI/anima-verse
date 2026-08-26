@@ -150,6 +150,49 @@ The branch fires ONLY for a temporary NPC and ONLY when the save carries
       sheet pooled both questions answer None; once a mortal sheet of the same
       role joins it, both answer that one.
 
+ [17] AND IT NEVER WALKS INTO THE POOL BY ITSELF EITHER. ``_settle_wanderer``
+      ends a wanderer's arrival with a 50/50 coin: turn around, or into the
+      pool. For a PERMANENT wanderer the pool half is a one-way door — [16]
+      just proved ``take_from_pool`` skips such a sheet — so the coin is not
+      tossed at all and the turn-around is unconditional.
+
+      A HAND-DRAWN WORLD for this section, the smallest one an arrival needs:
+      one grass rectangle from (−60, −60) to (300, 300) and two placed
+      locations, each a 10 m square around its anchor —
+
+          INN     anchor (0, 0)     footprint x,z ∈ [−5, 5]
+          MARKET  anchor (100, 0)   footprint x,z ∈ [95, 105]
+
+      Both wanderers stand at (100, 0), i.e. inside MARKET's footprint, so
+      ``current_location`` derives to MARKET; both carry ``wander_target``
+      MARKET and ``wander_origin`` INN and no journey — the exact "arrived"
+      state the tick reacts to. ``random.random`` is pinned to 0.9, which is
+      NOT < 0.5, so the coin says "pool" for anybody who is asked:
+
+        Yarrow  (permanent) → the coin is never tossed. Target and origin swap
+                              to INN/MARKET, a fresh journey to INN, status
+                              still "" (alive) and the tick answers True.
+        Thistle (mortal)    → the coin says pool: status "pooled", and the tick
+                              answers True as it always did.
+
+      A permanent wanderer with NO origin to turn back to is the third case:
+      Bramble, permanent, ``wander_origin`` "" — there is no road back, so the
+      tick answers FALSE (nothing settled, it stands and is asked again next
+      tick) and it is still alive. The mortal sheet in that same state is the
+      one that lands in the pool.
+
+ [18] A CUSTOM LIFETIME SURVIVES THE REVIVE. ``revive_from_pool`` stamps the
+      TTL its CALLER hands in (the slot's, the wanderer's), which overwrote the
+      hours an admin had typed: the dropdown kept saying "custom, 3 hours"
+      while the NPC actually died after the slot's TTL, on every single revive.
+      The sheet's own decision wins now, exactly as ``permanent`` does in [12]:
+        Marrow  lifetime custom + lifetime_hours 3, pooled, revived with
+                ``ttl_hours=5`` → T0 + 3·3 600 = 918 000 s = Day 11, 15:00,
+                NOT T0 + 5 h (Day 11, 17:00).
+        Sorrel  lifetime custom + lifetime_hours 0 — not a lifetime at all
+                ([10c]) → the caller's 5 h stand: Day 11, 17:00.
+      ``default`` is unchanged and stays proven by [12]'s Rook.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_ttl.py
 """
 import os
@@ -168,7 +211,7 @@ from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
 
-from app.core import embedding, npc_ops  # noqa: E402
+from app.core import embedding, npc_ops, npc_spawn  # noqa: E402
 from app.core.character_ops import apply_profile_update  # noqa: E402
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.npc_ops import (apply_npc, expiry_stamp,  # noqa: E402
@@ -178,9 +221,14 @@ from app.core.npc_pool import (pool_npc, revive_from_pool,  # noqa: E402
                                take_from_pool)
 from app.core.task_queue import get_task_queue  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
-from app.models.character import (get_character_profile,  # noqa: E402
+from app.models import terrain  # noqa: E402
+from app.models.character import (get_character_current_location,  # noqa: E402
+                                  get_character_profile,
+                                  get_character_status,
                                   list_temporary_npcs,
-                                  save_character_profile)
+                                  save_character_profile, set_character_pos)
+from app.models.world import (_load_world_data, _save_world_data,  # noqa: E402
+                              add_location, update_location_position)
 
 # Offline: no embedding model is downloaded for the pose catalog.
 embedding.embed = lambda text: None
@@ -471,6 +519,104 @@ check("pooled", pool_npc(HALDEN, reason="smoke"), True)
 check("the mortal sheet of the same role is handed out",
       take_from_pool("lamplighter"), HALDEN)
 check("and it is what the empty role finds too", take_from_pool(""), HALDEN)
+
+# ---------------------------------------------------------------------------
+print("\n[17] a permanent wanderer turns around, it is never pooled")
+
+# The hand-drawn world of the docstring: one ground rectangle and two placed
+# 10 m squares. `start_journey` needs passable ground between them, and
+# `current_location` is derived from the metre point, so this is the smallest
+# fixture an arrival can happen in at all.
+INN = add_location("Crossroads Inn", "A stone house at the fork.")["id"]
+update_location_position(INN, 0.0, 0.0)
+MARKET = add_location("Market Square", "Stalls and shouting.")["id"]
+update_location_position(MARKET, 100.0, 0.0)
+_world = _load_world_data()
+for _loc in _world.get("locations", []):
+    if _loc.get("id") in (INN, MARKET):
+        _loc["map3d"] = {"plan_width_m": 10.0,
+                         "boundary": [[-5.0, -5.0], [5.0, -5.0],
+                                      [5.0, 5.0], [-5.0, 5.0]],
+                         "boundary_openings": [{"edge": 2, "at": 0.5,
+                                                "width_m": 4.0,
+                                                "type": "passage"}]}
+_save_world_data(_world)
+terrain.save_area({"kind": "grass", "z_order": 0,
+                   "polygon": [[-60, -60], [300, -60], [300, 300], [-60, 300]]})
+config._CONFIG.setdefault("game", {})["travel_speed_m_s"] = 3.0
+
+
+def arrived_wanderer(name: str, *, origin: str) -> str:
+    """A wanderer STANDING at the market, its road behind it, no journey."""
+    make_npc(name, ttl_hours=2)
+    profile = get_character_profile(name) or {}
+    profile.update({"npc_wanderer": True, "wander_target": MARKET,
+                    "wander_origin": origin})
+    save_character_profile(name, profile)
+    set_character_pos(name, 100.0, 0.0)
+    return name
+
+
+_real_random = npc_spawn.random.random
+npc_spawn.random.random = lambda: 0.9      # NOT < 0.5 → the coin says "pool"
+
+YARROW = arrived_wanderer("Yarrow", origin=INN)
+apply_profile_update(YARROW, {"fields": {"lifetime": "permanent"}})
+check("Yarrow has arrived at the market",
+      get_character_current_location(YARROW), MARKET)
+check("the arrival settles", npc_spawn._settle_wanderer(YARROW), True)
+yarrow = get_character_profile(YARROW) or {}
+check("the permanent wanderer is NOT pooled",
+      get_character_status(YARROW), "")
+check("target and origin swapped",
+      (yarrow.get("wander_target"), yarrow.get("wander_origin")),
+      (INN, MARKET))
+check("and it is walking back to the inn",
+      (yarrow.get("journey") or {}).get("target"), INN)
+
+THISTLE = arrived_wanderer("Thistle", origin=INN)
+check("the mortal one settles too", npc_spawn._settle_wanderer(THISTLE), True)
+check("and the very same coin pools it",
+      get_character_status(THISTLE), "pooled")
+
+BRAMBLE = arrived_wanderer("Bramble", origin="")
+apply_profile_update(BRAMBLE, {"fields": {"lifetime": "permanent"}})
+check("with no road back the permanent one settles nothing",
+      npc_spawn._settle_wanderer(BRAMBLE), False)
+check("but it is still alive", get_character_status(BRAMBLE), "")
+
+CLOVER = arrived_wanderer("Clover", origin="")
+check("the mortal sheet in that same state settles",
+      npc_spawn._settle_wanderer(CLOVER), True)
+check("into the pool", get_character_status(CLOVER), "pooled")
+
+npc_spawn.random.random = _real_random
+
+# ---------------------------------------------------------------------------
+print("\n[18] a custom lifetime survives the revive")
+
+MARROW = make_npc("Marrow", ttl_hours=2)
+apply_profile_update(MARROW, {"fields": {"lifetime": "custom"}})
+apply_profile_update(MARROW, {"fields": {"lifetime_hours": 3}})
+check("pooled", pool_npc(MARROW, reason="smoke"), True)
+check("revived", revive_from_pool(MARROW, "", ttl_hours=5), True)
+check("the revive stamps the sheet's OWN hours, not the caller's TTL",
+      (get_character_profile(MARROW) or {}).get("expires_at"),
+      "Y0001-D011T15:00:00")
+check("and the dropdown still says custom",
+      ((get_character_profile(MARROW) or {}).get("lifetime"),
+       (get_character_profile(MARROW) or {}).get("lifetime_hours")),
+      ("custom", 3.0))
+
+SORREL = make_npc("Sorrel", ttl_hours=2)
+_sorrel = get_character_profile(SORREL) or {}
+_sorrel.update({"lifetime": "custom", "lifetime_hours": 0})
+save_character_profile(SORREL, _sorrel)
+check("pooled", pool_npc(SORREL, reason="smoke"), True)
+check("revived", revive_from_pool(SORREL, "", ttl_hours=5), True)
+check("zero hours are no lifetime — the caller's TTL stands",
+      (get_character_profile(SORREL) or {}).get("expires_at"),
+      "Y0001-D011T17:00:00")
 
 # ---------------------------------------------------------------------------
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")

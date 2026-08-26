@@ -154,6 +154,23 @@ Sections:
         · WINDOWS APPLY UNCHANGED: at 12:00 a 20:00-06:00 slot wants nobody,
           `sweep_closed_windows` pools the bound NPC, and at 22:00 the very
           same sheet comes back — again without a single pipeline call.
+        · AT THE CAP a bound LIVING sheet is still moved, and the job walks on
+          past the slot it could not fill. `alive_npc_count` counts that sheet
+          before and after (`_fill_bound_slot` re-stamps and places, it never
+          pools), so the move adds nobody and the cap has no business blocking
+          it. The Toll Gate is authored with the capped slot FIRST:
+            `npc.max_alive` 1, and exactly one temp NPC alive (demo_bound) →
+            `cap_reached()` True
+            slot 1 "toller"  unbound → needs capacity → skipped, `capped` True,
+                             the pipeline is not called
+            slot 2 "sentry"  bound to the LIVING demo_bound → needs none →
+                             filled
+          so the job answers `filled` 1, `spawned` ["demo_bound"], `capped`
+          True, demo_bound stands at the gate with `npc_slot_role` "sentry",
+          and `alive_npc_count()` is still 1. With the old `return` the second
+          slot was never even looked at.
+          `_slot_needs_capacity` itself answers the three cases directly:
+          bound+living False, unbound True, bound+pooled True.
 """
 import json
 import os
@@ -931,6 +948,53 @@ check("…alive at the night post",
        get_character_current_location("demo_bound")), ("", NIGHT_ID))
 check("…and the generator was never asked, once, in this whole section",
       PIPELINE, [])
+
+# --- AT THE CAP a pure MOVE still happens, and the job walks on.
+for name in list_temporary_npcs():
+    if name != "demo_bound":
+        pool_npc(name, reason="smoke reset")
+check("only the bound NPC is alive", list_temporary_npcs(), ["demo_bound"])
+config._CONFIG["npc"]["max_alive"] = 1
+check("the cap of 1 is reached", npc_spawn.cap_reached(), True)
+
+check("a slot bound to a LIVING sheet needs no capacity",
+      npc_spawn._slot_needs_capacity({"character": "demo_bound"}), False)
+check("an UNBOUND slot always needs it",
+      npc_spawn._slot_needs_capacity({"character": ""}), True)
+check("and a slot bound to a POOLED sheet needs it too",
+      npc_spawn._slot_needs_capacity({"character": "demo_decoy"}), True)
+
+create_location_with_extras({
+    "name": "The Toll Gate", "description": "A bar across the road.",
+    "rooms": [],
+    "npc_slots": [
+        # FIRST, and capped: with the old `return` the job ended right here.
+        {"role": "toller", "count_min": 1, "count_max": 1},
+        # SECOND, and a pure move: it must still be reached and filled.
+        {"role": "sentry", "count_min": 1, "count_max": 1,
+         "character": "demo_bound"},
+    ]})
+TOLL_ID = [l for l in __import__("app.models.world", fromlist=["x"]).list_locations()
+           if l.get("name") == "The Toll Gate"][0]["id"]
+check("both slots are gaps",
+      [g["role"] for g in npc_spawn.location_gap(get_location_by_id(TOLL_ID))],
+      ["toller", "sentry"])
+
+PIPELINE.clear()
+result = npc_spawn.fill_location_slots(TOLL_ID)
+check("the capped unbound slot is reported", result.get("capped"), True)
+check("…and never reached the pipeline", PIPELINE, [])
+check("but the bound slot BEHIND it was still filled",
+      (result.get("filled"), result.get("spawned")), (1, ["demo_bound"]))
+check("the named NPC really moved to the gate",
+      get_character_current_location("demo_bound"), TOLL_ID)
+check("…and carries that slot's stamp",
+      (get_character_profile("demo_bound") or {}).get("npc_slot_role"),
+      "sentry")
+check("…and the world is paying for exactly as many NPCs as before",
+      (npc_spawn.alive_npc_count(), npc_spawn.cap_reached()), (1, True))
+config._CONFIG["npc"]["max_alive"] = 3
+
 memory_service.cleanup_npc_traces = _real_cleanup
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")

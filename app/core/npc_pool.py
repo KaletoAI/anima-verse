@@ -268,13 +268,28 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
         return False
 
     profile = get_character_profile(name) or {}
-    # A PERMANENT NPC keeps its empty stamp. `npc_permanent` is an admin's
-    # explicit decision (Character config → Temporary NPC → Lifetime), and
-    # pooling keeps every key but the stamp — so the sheet that comes back for
-    # a slot must not be handed the lifetime it was just relieved of. Everyone
-    # else is stamped exactly as `npc_ops.apply_npc` stamps a fresh NPC.
-    profile["expires_at"] = ("" if profile.get("npc_permanent")
-                             else expiry_stamp(ttl_hours))
+    # THE SHEET'S OWN LIFETIME DECISION SURVIVES THE POOL, in both non-default
+    # modes. `lifetime` is what an admin picked in the config form (Character
+    # config → Temporary NPC → Lifetime); pooling keeps every key but the
+    # stamp, so a revive must not overwrite that decision with the slot's TTL:
+    #
+    # * `permanent` — no stamp at all. `npc_permanent` is what stops the sheet
+    #   being handed the lifetime it was just relieved of.
+    # * `custom` — its OWN hours. Stamping the slot TTL here left the dropdown
+    #   saying "3 hours" while the NPC actually died after the slot's 24, and
+    #   the disagreement came back on every single revive.
+    #
+    # Everyone else is stamped exactly as `npc_ops.apply_npc` stamps a fresh
+    # NPC: the TTL the caller (slot or wanderer) hands in.
+    own_hours = 0.0
+    if str(profile.get("lifetime") or "").strip().lower() == "custom":
+        try:
+            own_hours = float(profile.get("lifetime_hours") or 0)
+        except (TypeError, ValueError):
+            own_hours = 0.0
+    profile["expires_at"] = (
+        "" if profile.get("npc_permanent")
+        else expiry_stamp(own_hours if own_hours > 0 else ttl_hours))
     profile["npc_slot_role"] = (slot_role or "").strip()
     # BOTH slot stamps are written on every revive, one of them empty: a
     # recycled sheet may carry yesterday's stamp of the OTHER kind (pooling
