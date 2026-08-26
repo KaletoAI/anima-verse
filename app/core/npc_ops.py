@@ -231,18 +231,32 @@ def name_is_taken(name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def activate_default_skills(name: str, template: str = "") -> List[str]:
-    """Switch on the template's ``default_skills`` for a fresh NPC.
+    """Make the template's ``default_skills`` the NPC's WHOLE repertoire.
 
     The set is TEMPLATE DATA, never a list in the core — which is what keeps
     plugin rule R1 intact here: this function knows that a template may name
-    skills, not which ones. Two things are deliberate:
+    skills, not which ones.
+
+    It is a CLOSED list, not an addition, and that follows from how the skill
+    manager resolves a character's verbs (``_get_agent_skills``,
+    ``app/skills/skill_manager.py:173-179``): a per-character config decides
+    when it carries an ``enabled`` key, an ``ALWAYS_LOAD`` skill without one
+    is off, and every OTHER skill without one is **on**. Enabling the list
+    alone would therefore leave every unlisted ordinary verb switched on
+    (searx among them) — so the unlisted ones are written off explicitly.
+
+    Three deliberate details:
 
     * an id the running skill manager does not know is skipped SILENTLY. The
       list is written for a full installation, and packages that ship in a
       separate repo (or one an admin removed) must not make an NPC spawn
       fail — the NPC simply gets the verbs this installation has;
-    * nothing is switched OFF here. A skill the list does not name keeps
-      whatever the character-creation defaults gave it.
+    * ``ALWAYS_LOAD`` skills are not written at all, in either direction.
+      They are off by default already, their own lifecycles switch them on
+      (that is what keeps sleep/wakeup off a temporary NPC), and a config
+      file here would override that mechanism instead of using it;
+    * a template WITHOUT a ``default_skills`` key changes nothing — no list,
+      no opinion, the character-creation defaults stand.
 
     Returns the ids actually enabled — the apply result reports them.
     """
@@ -256,22 +270,32 @@ def activate_default_skills(name: str, template: str = "") -> List[str]:
         return []
     try:
         from app.core.dependencies import get_skill_manager
-        known = {getattr(s, "SKILL_ID", "") for s in get_skill_manager().skills}
+        installed: Dict[str, Any] = {}
+        for skill in get_skill_manager().skills:
+            sid = getattr(skill, "SKILL_ID", "")
+            if sid:
+                installed[sid] = skill
     except Exception as e:  # noqa: BLE001
         logger.warning("default skills for %s: no skill manager (%s)", name, e)
         return []
 
-    enabled: List[str] = []
-    for sid in wanted:
-        if sid not in known:
-            continue
+    def _write(sid: str, on: bool) -> bool:
         try:
-            save_character_skill_config(name, sid, {"enabled": True})
-            enabled.append(sid)
+            save_character_skill_config(name, sid, {"enabled": on})
+            return True
         except Exception as e:  # noqa: BLE001
             logger.warning("default skill '%s' not set for %s: %s", sid, name, e)
-    logger.info("NPC '%s': %d of %d default skills enabled",
-                name, len(enabled), len(wanted))
+            return False
+
+    enabled = [sid for sid in wanted
+               if sid in installed and _write(sid, True)]
+    disabled = [sid for sid, skill in installed.items()
+                if sid not in wanted
+                and not getattr(skill, "ALWAYS_LOAD", False)
+                and _write(sid, False)]
+    logger.info("NPC '%s': %d of %d default skills enabled, %d others "
+                "switched off (%s)", name, len(enabled), len(wanted),
+                len(disabled), ", ".join(sorted(disabled)) or "none")
     return enabled
 
 
@@ -348,7 +372,9 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
 
     # THE STANDARD SKILL SET, before the gate: a held-back NPC is a finished
     # character sheet waiting for its pictures, and its verbs are part of that
-    # sheet — the asset job places it, it does not configure it.
+    # sheet — the asset job places it, it does not configure it. The template's
+    # list is the WHOLE repertoire: unlisted ordinary verbs are switched off,
+    # because a skill without a per-character config counts as ON.
     default_skills = activate_default_skills(name, tmpl_name)
 
     # THE FINISH GATE (plan-npc-leben § 0 A). An NPC with no portrait, no mesh

@@ -3282,9 +3282,11 @@ def sleep_world() -> Dict[str, Any]:
             if is_player_controlled(name):
                 continue
             # A temporary NPC has no RP layer to rest: no moods, no status
-            # effects — and no sleep/wakeup verbs in its standard skill set,
-            # so nothing it can do would ever get it up again. It stays awake
-            # at its standing task for the handful of hours it exists.
+            # effects — and no way back up. Sleep/WakeUp are ALWAYS_LOAD
+            # verbs, i.e. off until a character's own skill config switches
+            # them on, and the standard set of a temporary NPC never does
+            # (plan-npc-leben task 3). It stays awake at its standing task
+            # for the handful of hours it exists.
             if is_temporary_npc(name):
                 continue
             if is_character_sleeping(name):
