@@ -248,6 +248,17 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     profile.pop("npc_pooled_reason", None)
     save_character_profile(name, profile)
 
+    # THE STANDARD SKILL SET, exactly as `apply_npc` writes it for a freshly
+    # generated NPC — this is the SECOND way an NPC enters the world, and
+    # every sheet pooled before the set existed still carries the old, open
+    # repertoire (`searx`/`setlocation`/`act` among them). It overwrites the
+    # per-skill configs of this NPC, which is the accepted price: a temporary
+    # NPC's repertoire is template data, not something an admin tunes per
+    # sheet. Before the gate, so a sheet held back for its portrait comes back
+    # with the same verbs as one that walks straight in.
+    from app.core.npc_ops import activate_default_skills
+    activate_default_skills(name, str(profile.get("template") or ""))
+
     # THE FINISH GATE (plan-npc-leben § 0 A), before the NPC is back in the
     # roster: a pooled sheet may be missing its portrait or its mesh, and an
     # unfinished NPC is not put on the map. TRUE for the caller all the same —

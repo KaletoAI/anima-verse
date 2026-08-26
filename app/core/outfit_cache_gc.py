@@ -70,7 +70,7 @@ def reachable_signatures(character_name: str) -> Set[str]:
             f"{total:,} combinations — too many to verify the cache against "
             f"(limit {MAX_REACHABLE_COMBOS:,}). Reduce the inventory or clean "
             f"up by hand.")
-    return {_signature(pieces) for pieces in _iter_combos(choices)}
+    return {_signature(pieces, character_name) for pieces in _iter_combos(choices)}
 
 
 def _sign(pieces: Dict[str, str], items: Optional[List[str]],

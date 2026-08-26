@@ -66,6 +66,16 @@ THE RULES, by hand — from the task brief:
            the unknown one. Run against a shorter list on its own NPC, it
            also shows both directions at once — the named verb stays on, an
            ordinary verb the list drops is written off.
+      [4b] A REVIVED NPC gets the set too. `revive_from_pool` is the second
+           way an NPC enters the world (every slot and wanderer spawn reuses
+           pool stock first), and every sheet pooled before this branch
+           carries the old, open repertoire — `searx` among them. Simulated
+           by writing `searx: enabled` onto a pooled sheet by hand: after
+           the revive it reads `{"enabled": false}` again and the listed
+           verbs are on. It runs BEFORE the finish gate, so a sheet the gate
+           holds back for its portrait comes back with the same repertoire
+           as one that walks straight in — otherwise the skills would depend
+           on whether a render happened to be needed.
 
   B) A temporary NPC's photo belongs to the AVATAR it is talking to.
 
@@ -119,15 +129,24 @@ db.init_schema()
 from app.core import npc_ops  # noqa: E402
 from app.core.dependencies import get_skill_manager  # noqa: E402
 from app.core.npc_ops import apply_npc  # noqa: E402
+from app.core.npc_pool import pool_npc, revive_from_pool  # noqa: E402
+from app.core.task_queue import get_task_queue  # noqa: E402
 from app.core.users import create_user, update_user  # noqa: E402
 from app.core.world_ops import sleep_world, wake_world  # noqa: E402
 from app.imagegen import service as imagegen_service  # noqa: E402
 from app.models import character_template, world  # noqa: E402
 from app.models.character import (get_character_skill_config,  # noqa: E402
+                                  get_character_status,
                                   is_character_sleeping,
                                   save_character_current_location,
                                   save_character_current_room,
-                                  save_character_profile)
+                                  save_character_profile,
+                                  save_character_skill_config)
+
+# No worker threads in a smoke: `submit` auto-starts the pool on the first
+# task, and the one task this run can queue (the finish gate's) has no handler
+# registered here anyway.
+get_task_queue()._started = True
 
 FAILURES = []
 CHECKED = 0
@@ -322,6 +341,37 @@ check("an ordinary verb the new list does not name is switched off",
       {"enabled": False})
 check("while the one it does name stays on",
       get_character_skill_config(LONER, "talk_to"), {"enabled": True})
+
+# ── [4b] the same set on the way back OUT of the pool ───────────────────────
+print("[4b] revive_from_pool applies the standard set as well")
+REVIVED = make_npc("Torkel")
+pool_npc(REVIVED, reason="smoke")
+# A sheet from before this branch: the open repertoire, searx included.
+save_character_skill_config(REVIVED, "searx", {"enabled": True})
+check("the pooled sheet carries the old, open repertoire",
+      get_character_skill_config(REVIVED, "searx"), {"enabled": True})
+check("the revive succeeds", revive_from_pool(REVIVED, LOC_ID, TAPROOM), True)
+check("and it comes back with the closed list — searx off",
+      get_character_skill_config(REVIVED, "searx"), {"enabled": False})
+check("while every listed verb this repo ships is on",
+      [sid for sid in IN_REPO_SET if sid not in enabled_ids(REVIVED)], [])
+
+# BEFORE the gate: a sheet held back for its portrait must come back with the
+# same repertoire as one that walks straight in.
+HELD = make_npc("Aslak")
+pool_npc(HELD, reason="smoke")
+save_character_skill_config(HELD, "searx", {"enabled": True})
+_cfg = config.get_all()
+_cfg.setdefault("npc", {})["require_assets"] = True
+config.save(_cfg, STORAGE / "config.json")
+check("the gate holds this one back", revive_from_pool(HELD, LOC_ID, TAPROOM),
+      True)
+check("it really stayed pooled", get_character_status(HELD), "pooled")
+check("and the skills were applied all the same",
+      get_character_skill_config(HELD, "searx"), {"enabled": False})
+_cfg = config.get_all()
+_cfg["npc"]["require_assets"] = False
+config.save(_cfg, STORAGE / "config.json")
 
 
 # ── the image-service stub ──────────────────────────────────────────────────

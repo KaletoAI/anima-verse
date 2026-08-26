@@ -7,8 +7,8 @@ and the auto-mesh hook turns it into a model. That means a 3D client sees a
 model pop in the first time each combination is worn.
 
 This job fills the caches up front, without dressing the character: the cache
-signature of a combination (``_equipped_signature``) is computable from its
-pieces alone, and both ``model_refs.generate_model_ref_images`` and
+signature of a combination (``model_refs.outfit_signature``) is computable
+from its pieces alone, and both ``model_refs.generate_model_ref_images`` and
 ``model3d.generate_for_current_outfit`` accept that signature as an override.
 Per combination, serially: T-pose reference (if missing) → mesh (if missing).
 
@@ -37,7 +37,6 @@ Deliberate scope:
 * The all-empty combination is skipped (nothing to dress).
 """
 
-import hashlib
 import itertools
 import sqlite3
 import threading
@@ -182,18 +181,20 @@ def _iter_combos(choices: Dict[str, List[Optional[str]]],
         yield pieces
 
 
-def _signature(pieces: Dict[str, str]) -> str:
-    """Cache signature of a combination — identical to what
-    ``model_refs.current_outfit_state`` produces for the worn state (colors
-    and other meta are not part of it).
+def _signature(pieces: Dict[str, str], character_name: str = "") -> str:
+    """Cache signature of a combination — THE SAME RULE
+    ``model_refs.current_outfit_state`` applies to the worn state (colors and
+    other meta are not part of it), asked through the same function.
 
-    The batch enumerates WARDROBE combinations, so it stays on the equipped
-    half of ``model_refs.outfit_signature``. Only the empty combination of a
-    character who also carries a free-text ``outfit_description`` differs:
-    worn, that text keys the entry, and the pre-warmed naked render (which
-    does not show it) is correctly not reused."""
-    from app.core.expression_regen import _equipped_signature
-    return hashlib.md5(_equipped_signature(pieces, []).encode()).hexdigest()[:12]
+    ``character_name`` only matters for the EMPTY combination: a character
+    dressed by prose alone (``outfit_description``, a temporary NPC) is not
+    naked, and the worn state keys that entry on the outfit LINE. Signing the
+    empty combination without the name would file the pre-warmed render under
+    md5("") while the world looks for md5("wearing: …") — a cache miss, a
+    second GPU render, and a GC that reports the batch's own entry stale on
+    every pass."""
+    from app.core.model_refs import outfit_signature
+    return outfit_signature(pieces, [], character_name)
 
 
 def _combo_label(pieces: Dict[str, str],
@@ -313,7 +314,7 @@ def combo_stats(character_name: str,
         signatures = set()
         missing_sigs = set()
         for pieces in _iter_combos(choices, coherent_only):
-            sig = _signature(pieces)
+            sig = _signature(pieces, character_name)
             signatures.add(sig)
             if sig not in have:
                 missing_sigs.add(sig)
@@ -459,7 +460,7 @@ def _handle_outfit_combos(payload: Dict[str, Any]) -> Dict[str, Any]:
                 logger.info("Outfit combos %s: cancelled after %d/%d",
                             character_name, done + skipped, total)
                 break
-            signature = _signature(pieces)
+            signature = _signature(pieces, character_name)
             if not force and signature in have:
                 skipped += 1
                 with _lock:

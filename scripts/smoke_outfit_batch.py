@@ -43,6 +43,18 @@ Hand-derived expectations
     Therefore: order-independent, and jeans+boxers signs IDENTICALLY to jeans
     alone, because jeans ``covers`` underwear_bottom and a piece nobody sees
     cannot change the render. That collapse is the whole point of the cache.
+    It is ONE rule with the worn state (``model_refs.outfit_signature``), and
+    the empty combination is where that matters: a character dressed by prose
+    only (``outfit_description``, a temporary NPC) is NOT naked, so its empty
+    combination must key on that text, not on md5(""). Hand-derived for the
+    line "a grey linen apron": ``render_outfit(...)["full"]`` reads
+    "wearing: a grey linen apron", md5 of which is
+    3bdb2ee2463ced85c866bb4320b425ad -> "3bdb2ee2463c", and that is exactly
+    what ``current_outfit_state`` reports for the worn state. Keyed the old
+    way the batch would file the pre-warmed render under md5("")[:12] =
+    "d41d8cd98f00" while the world looks for "3bdb2ee2463c" — cache miss,
+    second render, and the GC calls the batch's own entry stale. A character
+    with no outfit text at all keeps "d41d8cd98f00".
 
 [4] Coherence (visible pieces must share a tag; untagged = wildcard;
     underwear only judges itself when nothing else is visible):
@@ -110,11 +122,21 @@ from app.core import paths  # noqa: E402
 
 paths.init(STORAGE)
 
+from app.core import config, db  # noqa: E402
+
+config.load(STORAGE / "config.json")
+db.init_schema()
+
 from app.core import model3d, model_refs, outfit_batch, task_queue  # noqa: E402
 from app.core.outfit_coherence import is_coherent  # noqa: E402
 from app.models import inventory  # noqa: E402
+from app.models.character import save_character_profile  # noqa: E402
 
 CHAR = "demo"
+#: A second character, dressed by free text instead of by wardrobe pieces.
+DRESSED = "npc-in-prose"
+#: md5("")[:12] — the key of a character wearing nothing at all.
+EMPTY_MD5 = "d41d8cd98f00"
 FAILURES = []
 
 
@@ -222,8 +244,8 @@ def install_patches() -> None:
     task_queue.get_task_queue = lambda: QUEUE
 
 
-def sig(pieces: dict) -> str:
-    return outfit_batch._signature(pieces)
+def sig(pieces: dict, character_name: str = CHAR) -> str:
+    return outfit_batch._signature(pieces, character_name)
 
 
 ALL_EMPTY = {"bottom": [None], "feet": [None], "outer": [None],
@@ -319,6 +341,25 @@ def test_signature() -> None:
        sig({"bottom": "jeans"}))
     check("...but boxers on their own do not",
           sig({"underwear_bottom": "boxers"}) != sig({"bottom": "jeans"}))
+
+    print("  the empty combination of a free-text character:")
+    # A character dressed by prose only (a temporary NPC): the batch must key
+    # its empty combination the way the WORN state keys it, or the pre-warmed
+    # entry and the entry the world looks for are two different files —
+    # cache miss, second render, and a GC that reports the batch's own entry
+    # stale (warm/purge/warm, one GPU render per cycle).
+    save_character_profile(DRESSED, {"character_name": DRESSED,
+                                     "template": "npc-temporary",
+                                     "outfit_description": "a grey linen apron",
+                                     "outfit_worn": True}, create_new=True)
+    worn = model_refs.current_outfit_state(DRESSED)[2]
+    eq("the empty combination keys exactly like the worn state",
+       sig({}, DRESSED), worn)
+    # By hand: md5("wearing: a grey linen apron")[:12] — NOT md5("")[:12].
+    eq("and that key is the outfit LINE, not the naked default",
+       (worn, worn == EMPTY_MD5), ("3bdb2ee2463c", False))
+    eq("a character with no outfit text keeps the historical naked key",
+       sig({}, "nobody-at-all"), EMPTY_MD5)
 
 
 # ── 4. Coherence ────────────────────────────────────────────────────────
