@@ -18,9 +18,10 @@ the profile survives:
   perception stream would give a disposable NPC exactly the continuity the
   whole temp-NPC design switches off.
 
-The pool has the same size as the living cap (``npc.max_alive``): it is a
-FIFO, the longest-pooled entry is the one a spawn re-uses and the one that is
-deleted for good when the pool overflows.
+The pool has its own size (``npc.max_pool_size``, default 50) — how much
+finished work a world keeps in stock is a different question from how crowded
+it is (``npc.max_alive``). It is a FIFO: the longest-pooled entry is the one a
+spawn re-uses and the one that is deleted for good when the pool overflows.
 """
 from __future__ import annotations
 
@@ -32,9 +33,12 @@ logger = get_logger("npc_pool")
 
 
 def max_pool_size() -> int:
-    """Pool size = the living cap (§ 3, "Pool-Größe = Limit")."""
-    from app.core.npc_spawn import max_alive
-    return max_alive()
+    """How many pooled sheets are kept. Beyond it the oldest one is deleted."""
+    from app.core.npc_spawn import _cfg
+    try:
+        return max(0, int(_cfg("max_pool_size", 50)))
+    except (TypeError, ValueError):
+        return 50
 
 
 # ---------------------------------------------------------------------------

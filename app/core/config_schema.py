@@ -817,8 +817,13 @@ SECTIONS = {
                 "type": "int", "label": "Max living NPCs", "default": 10,
                 "min": 0, "max": 100,
                 "description": "Hard cap on temporary NPCs that are in the world at once. "
-                               "Reached = no spawn until the TTL sweep pools one. The "
-                               "recycling pool has the same size."},
+                               "Reached = no spawn until the TTL sweep pools one."},
+            "max_pool_size": {
+                "type": "int", "label": "Max pooled NPCs", "default": 50,
+                "min": 0, "max": 500,
+                "description": "Size of the recycling pool (FIFO). When it overflows, the "
+                               "longest-pooled sheet is deleted for good — with its images "
+                               "and 3D model."},
             "wanderer_quota": {
                 "type": "int", "label": "Wanderer quota", "default": 3,
                 "min": 0, "max": 50,
