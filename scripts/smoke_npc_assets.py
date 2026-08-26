@@ -86,14 +86,32 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
 
   [9] A wanderer is sent on its way BY THE HANDLER: with `wanderer` true the
       placement is followed by exactly one `_send_wanderer` call for the
-      target. The payload's target is a hint, the profile is the truth (the
-      wanderer path stamps `wander_target` only AFTER it asks for the
-      placement), so a payload without one falls back to the profile field.
-      A non-wanderer payload sends nobody.
+      payload's target. The PAYLOAD is the road — a profile that names a
+      target the job does not carry sends nobody, because the payload is
+      written by the gate and the gate runs after both placement paths have
+      stamped the route (see [11]). A non-wanderer payload sends nobody.
 
  [10] `npc-temporary.json` marks `outfit_description` required, so
       `validate_npc_fields` demands it in the generation/repair turn — the
       gate's third criterion is enforced at its source, not only here.
+
+ [11] THE ROAD IS STAMPED BEFORE THE PLACEMENT. `apply_npc(..., wanderer=True,
+      wander_target=X)` writes `wander_origin`/`wander_target` onto the
+      profile BEFORE it asks the gate, so the queued job carries the target
+      (`wanderer: True`, `wander_target: X`) and no worker can pick the job up
+      in a window where the road is not written yet. Nobody is sent while the
+      NPC is held — `_send_wanderer` on a pooled NPC standing nowhere can only
+      fail with "no route", which is why `spawn_wanderer` asks
+      `is_awaiting_assets` and leaves the journey to the job. The handler then
+      places it and sends it off in one go.
+
+ [12] A HELD-BACK NPC IS NOT FREE POOL STOCK. It sits in the pool, so
+      `take_from_pool` would otherwise hand the same sheet to a second slot
+      while the pending job still carries the FIRST claim's location — the
+      second claimer would count its slot filled and leave it empty. Neither
+      the role query ("smith") nor a wanderer's "any pooled NPC" query
+      ("") returns it. The state lives in the QUEUE, so it heals itself: with
+      the job finished the very same query hands the sheet out again.
 
 Usage:  ./.venv/bin/python scripts/smoke_npc_assets.py
 """
@@ -118,7 +136,7 @@ db.init_schema()
 from app.core import model3d, model_refs, npc_assets as na, npc_spawn  # noqa: E402
 from app.core.npc_ops import apply_npc, validate_npc_fields  # noqa: E402
 from app.core.npc_pool import (list_pool, pool_npc,  # noqa: E402
-                               revive_from_pool)
+                               revive_from_pool, take_from_pool)
 from app.core.task_queue import get_task_queue  # noqa: E402
 from app.imagegen import service as imagegen_service  # noqa: E402
 from app.models import world  # noqa: E402
@@ -177,7 +195,7 @@ def set_require_assets(value: bool) -> None:
 
 
 def tasks_for(name: str):
-    """The npc_assets rows of one NPC, read straight out of the queue DB."""
+    """The npc_assets payloads of one NPC, read straight out of the queue DB."""
     conn = sqlite3.connect(f"file:{QUEUE_DB}?mode=ro", uri=True)
     try:
         rows = conn.execute(
@@ -186,6 +204,17 @@ def tasks_for(name: str):
     finally:
         conn.close()
     return [json.loads(r[0]) for r in rows]
+
+
+def finish_tasks_for(name: str) -> None:
+    """Mark this NPC's jobs done — what a worker does when it succeeds."""
+    conn = sqlite3.connect(QUEUE_DB)
+    try:
+        conn.execute("UPDATE tasks SET status='done' WHERE task_type=? "
+                     "AND agent_name=?", (na.TASK_TYPE, name))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 LOC = world.add_location("Crossroads Inn", "A stone house at the fork.",
@@ -463,8 +492,8 @@ _p["wander_target"] = LOC2_ID
 save_character_profile(L, _p)
 set_character_status(L, "pooled")
 na._handle_npc_assets({"name": L, "location_id": LOC_ID})
-check("a payload without a target falls back to the profile", SENT,
-      [(L, LOC2_ID)])
+check("a payload without a road sends nobody — the payload is the truth",
+      SENT, [])
 
 install_stubs()
 K = make_npc("Gerd", outfit="an apron")
@@ -480,6 +509,49 @@ _gaps = validate_npc_fields({"character_name": "Nameless",
 check("a draft without outfit_description is reported as a gap",
       [g for g in _gaps if g.startswith("outfit_description")],
       ["outfit_description — missing, Outfit description is required"])
+
+# ── [11] the wanderer's road is stamped BEFORE the placement ────────────────
+print("[11] the road rides in the gate's payload, nobody is sent early")
+install_stubs()
+set_require_assets(True)
+M = "Torgny"
+apply_npc({"character_name": M, "character_appearance": "a lean pedlar",
+           "standing_task": "walking the road",
+           "outfit_description": "a dusty travelling coat"},
+          LOC_ID, template="npc-temporary", wanderer=True,
+          wander_target=LOC2_ID, created_by="smoke_npc_assets")
+check("held back", get_character_status(M), "pooled")
+check("the road is on the profile already",
+      (get_character_profile(M).get("wander_origin"),
+       get_character_profile(M).get("wander_target")), (LOC_ID, LOC2_ID))
+check("and in the job the gate queued",
+      {k: tasks_for(M)[0][k] for k in ("wanderer", "wander_target")},
+      {"wanderer": True, "wander_target": LOC2_ID})
+check("nobody was sent on a journey from nowhere", CALLS["send"], 0)
+check("the queue still owes it a placement — spawn_wanderer skips the send",
+      na.is_awaiting_assets(M), True)
+na._handle_npc_assets(tasks_for(M)[0])
+check("the job places it and sends it off", SENT, [(M, LOC2_ID)])
+
+# ── [12] a claimed NPC is not free pool stock ───────────────────────────────
+print("[12] a held-back NPC is not handed out a second time")
+install_stubs()
+N = "Brynja"
+apply_npc({"character_name": N, "character_appearance": "a broad smith",
+           "standing_task": "hammering"},
+          LOC_ID, template="npc-temporary", slot_role="smith",
+          created_by="smoke_npc_assets")
+check("held back and claimed for the smith slot",
+      (get_character_status(N), na.is_awaiting_assets(N)), ("pooled", True))
+check("a second claim for the same role gets nothing",
+      take_from_pool("smith"), None)
+check("and a wanderer asking for ANY pooled NPC does not get it either",
+      take_from_pool("") == N, False)
+finish_tasks_for(N)
+check("once the job is gone the queue owes it nothing",
+      na.is_awaiting_assets(N), False)
+check("and the sheet is ordinary pool stock again",
+      take_from_pool("smith"), N)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

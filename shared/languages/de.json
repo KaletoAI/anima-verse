@@ -2122,6 +2122,7 @@
     "Validate": "Prüfen",
     "Repair": "Korrigieren",
     "Validator findings ({n})": "Validator-Befunde ({n})",
+    "The NPC was created but is not in the world yet: it waits out of sight until its profile image and 3D model are rendered, then it takes its place by itself. Until then you find it in the NPC pool.": "Der NPC ist angelegt, steht aber noch nicht in der Welt: Er wartet unsichtbar, bis sein Profilbild und sein 3D-Modell fertig gerendert sind, und nimmt seinen Platz dann von selbst ein. Bis dahin findest du ihn im NPC-Pool.",
     "Create NPC": "NPC anlegen",
     "Save ({n})": "Speichern ({n})",
     "Really discard {n}": "Wirklich {n} verwerfen",

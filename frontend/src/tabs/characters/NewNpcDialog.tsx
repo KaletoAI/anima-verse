@@ -31,7 +31,7 @@ interface StageFrame {
   status?: 'running' | 'done' | 'skipped'
   error?: string
   gaps?: string[]
-  applied?: { character?: string }
+  applied?: { character?: string; held_for_assets?: boolean }
   done?: boolean
 }
 
@@ -60,6 +60,9 @@ export function NewNpcDialog({
   const [stages, setStages] = useState<Record<string, StageFrame>>({})
   const [gaps, setGaps] = useState<string[]>([])
   const [error, setError] = useState('')
+  // The finish gate: the NPC exists but is not in the world yet — it waits
+  // out of sight until its portrait and 3D model are rendered.
+  const [heldForAssets, setHeldForAssets] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -107,6 +110,7 @@ export function NewNpcDialog({
     setStages({})
     setGaps([])
     setError('')
+    setHeldForAssets(false)
     const controller = new AbortController()
     abortRef.current = controller
     let createdName = ''
@@ -158,6 +162,7 @@ export function NewNpcDialog({
             if (evt.gaps) setGaps(evt.gaps)
             if (evt.error) setError(evt.error)
             if (evt.applied?.character) createdName = evt.applied.character
+            if (evt.applied) setHeldForAssets(!!evt.applied.held_for_assets)
           }
         }
       }
@@ -320,6 +325,14 @@ export function NewNpcDialog({
                 ))}
               </ul>
             </details>
+          )}
+
+          {heldForAssets && (
+            <p style={{ fontSize: '0.86em', opacity: 0.85 }}>
+              {t(
+                'The NPC was created but is not in the world yet: it waits out of sight until its profile image and 3D model are rendered, then it takes its place by itself. Until then you find it in the NPC pool.',
+              )}
+            </p>
           )}
 
           {error && (

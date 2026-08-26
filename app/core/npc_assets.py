@@ -84,6 +84,34 @@ def npc_assets_complete(name: str) -> List[str]:
     return missing
 
 
+def is_awaiting_assets(name: str) -> bool:
+    """True while a queued ``npc_assets`` job still owes this NPC a placement.
+
+    A held-back NPC sits in the pool, so without this question every spawn
+    could claim it a SECOND time: the pending job carries the first claim's
+    location, `submit` deduplicates the second one away, and the second
+    claimer counts a slot filled that stays empty. The state lives in the
+    QUEUE, not on the profile, so it heals itself — once the job is gone (done
+    or finally failed) the NPC is ordinary pool stock again and the next claim
+    queues a fresh job.
+    """
+    from app.core.task_queue import get_task_queue
+    if not name:
+        return False
+    return get_task_queue().has_pending_task(TASK_TYPE, name)
+
+
+def list_awaiting_assets() -> List[str]:
+    """The pooled NPCs a queued job still owes a placement.
+
+    They are neither in the world nor free pool stock, which is exactly why
+    the spawn caps have to count them (``npc_spawn.alive_npc_count``): an NPC
+    whose portrait is still rendering is already paid for.
+    """
+    from app.models.character import list_pooled_characters
+    return [n for n in list_pooled_characters() if is_awaiting_assets(n)]
+
+
 def submit_assets_job(name: str, location_id: str, room_id: str = "",
                       wanderer: bool = False, wander_target: str = "") -> str:
     """Queue the finishing job for one NPC. Returns the task id ("" = deduped).
@@ -214,11 +242,11 @@ def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:
     room_id = str(payload.get("room_id") or "")
     profile = get_character_profile(name) or {}
     wanderer = bool(payload.get("wanderer") or profile.get("npc_wanderer"))
-    # The payload's target is the hint, the profile is the truth: the wanderer
-    # path stamps `wander_target` right AFTER it asks for the placement, so a
-    # job queued a moment earlier carries an empty one.
-    wander_target = (str(payload.get("wander_target") or "").strip()
-                     or str(profile.get("wander_target") or "").strip())
+    # The PAYLOAD carries the road. Both placement paths stamp the route onto
+    # the profile before they ask the gate, so the job that the gate queues
+    # already knows where this wanderer was headed — no worker can pick it up
+    # in a window where the target is not written yet.
+    wander_target = str(payload.get("wander_target") or "").strip()
 
     missing = npc_assets_complete(name)
     if "outfit_description" in missing:

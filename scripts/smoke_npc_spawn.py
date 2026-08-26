@@ -95,6 +95,11 @@ config._CONFIG["npc"] = {
     "spawn_cooldown_game_minutes": 10,
     "slot_ttl_game_hours": 12,
     "wanderer_ttl_game_hours": 24,
+    # The FINISH GATE is off here. This run is about slots, the pool and the
+    # roads; with the gate armed every NPC of this smoke — none of them has a
+    # portrait or a mesh — would be held back out of the world, which is what
+    # scripts/smoke_npc_assets.py checks instead.
+    "require_assets": False,
 }
 
 import app.core.npc_ops as npc_ops  # noqa: E402

@@ -248,7 +248,8 @@ def expiry_stamp(ttl_hours: Optional[float]) -> str:
 def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
               briefing: str = "", ttl_hours: Optional[float] = None,
               created_by: str = "", template: str = "",
-              slot_role: str = "", wanderer: bool = False) -> Dict[str, Any]:
+              slot_role: str = "", wanderer: bool = False,
+              wander_target: str = "") -> Dict[str, Any]:
     """Create the character, then stamp the NPC-only bookkeeping onto it.
 
     The heavy lifting is ``_apply_character_internal`` — the very same call the
@@ -285,6 +286,13 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     profile["npc_slot_role"] = (slot_role or "").strip()
     profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
     profile["npc_wanderer"] = bool(wanderer)
+    # THE ROAD IS STAMPED BEFORE THE PLACEMENT. The finish gate may hold this
+    # NPC back, and the job it queues is what sends the wanderer off later —
+    # so where it is going has to be on the profile (and in that payload)
+    # before anybody asks for a placement, not one line afterwards.
+    if wanderer and wander_target:
+        profile["wander_origin"] = location_id
+        profile["wander_target"] = wander_target
     # The standing task IS the activity baseline — one field, two consumers:
     # the chat prompt renders it (in_prompt), the world shows it as what the
     # NPC is doing.
@@ -299,7 +307,8 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
     # character SHEET is written either way — the gate decides where the NPC
     # stands, not whether it exists.
     from app.core.npc_assets import gate_placement
-    held = gate_placement(name, location_id, room_id, wanderer=wanderer)
+    held = gate_placement(name, location_id, room_id, wanderer=wanderer,
+                          wander_target=wander_target)
 
     # Placement, not movement: the NPC is CREATED standing there. This is the
     # same structured setter the admin placement uses (it syncs the metre
@@ -425,7 +434,7 @@ NPC_MAX_TOKENS = 2500
 def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
                           ttl_hours: Optional[float] = None,
                           template: str = "", slot_role: str = "",
-                          wanderer: bool = False,
+                          wanderer: bool = False, wander_target: str = "",
                           created_by: str = "npc_auto") -> Dict[str, Any]:
     """generate → validate → repair → apply, synchronously. For queue workers.
 
@@ -442,7 +451,9 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
       anyway. So: one generate turn, and one repair turn only when the local
       check found gaps.
 
-    Returns ``{"ok": bool, "character": str, "error": str, "gaps": [...]}``.
+    Returns ``{"ok": bool, "character": str, "error": str, "gaps": [...],
+    "held_for_assets": bool}`` — the last one says the NPC was created but is
+    NOT in the world yet (the finish gate, see ``npc_assets``).
     """
     import json as _json
 
@@ -500,12 +511,13 @@ def generate_npc_blocking(briefing: str, location_id: str, room_id: str = "",
     try:
         applied = apply_npc(data, location_id, room_id, briefing, ttl_hours,
                             created_by, template=tmpl, slot_role=slot_role,
-                            wanderer=wanderer)
+                            wanderer=wanderer, wander_target=wander_target)
     except Exception as e:  # noqa: BLE001
         logger.error("NPC auto-apply failed: %s", e)
         return {"ok": False, "error": f"apply failed: {e}"}
     return {"ok": True, "character": applied.get("character") or name,
-            "expires_at": applied.get("expires_at", "")}
+            "expires_at": applied.get("expires_at", ""),
+            "held_for_assets": bool(applied.get("held_for_assets"))}
 
 
 # ---------------------------------------------------------------------------

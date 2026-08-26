@@ -202,6 +202,36 @@ class TaskQueue:
         self._handlers[task_type] = handler
         logger.info("Handler registriert: %s", task_type)
 
+    @staticmethod
+    def _find_pending(conn, task_type: str, agent_name: str = "") -> str:
+        """task_id of a pending/running task of this type, or "".
+
+        With an agent_name the question is per character. Without it, ANY task
+        of the type answers — `submit_consolidation_for_all` would otherwise
+        discard every character after the first as a duplicate.
+        """
+        if agent_name:
+            row = conn.execute(
+                "SELECT task_id FROM tasks WHERE task_type=? AND agent_name=? "
+                "AND status IN ('pending','running') LIMIT 1",
+                (task_type, agent_name)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT task_id FROM tasks WHERE task_type=? "
+                "AND status IN ('pending','running') LIMIT 1",
+                (task_type,)).fetchone()
+        return row["task_id"] if row else ""
+
+    def has_pending_task(self, task_type: str, agent_name: str = "") -> bool:
+        """True while a task of this type (for this agent) is still owed.
+
+        The same question `submit(deduplicate=True)` asks — exposed because a
+        caller sometimes has to know that a job is still coming BEFORE it
+        decides to queue one (see ``npc_assets.is_awaiting_assets``).
+        """
+        with self._connect() as conn:
+            return bool(self._find_pending(conn, task_type, agent_name))
+
     def submit(
         self,
         task_type: str,
@@ -227,23 +257,14 @@ class TaskQueue:
         now = utc_now_iso()
 
         with self._write_lock, self._connect() as conn:
-            # Dedup check: skip if same task_type (+ same agent if specified)
-            # already pending/running. Ohne agent_name-Match wuerde z.B.
-            # `submit_consolidation_for_all` nach dem ersten Char-Submit alle
-            # weiteren Characters als Duplikat verwerfen.
+            # Dedup check: skip if the same task_type (+ the same agent if one
+            # is given) is already pending/running.
             if deduplicate:
-                if agent_name:
-                    existing = conn.execute(
-                        "SELECT task_id FROM tasks WHERE task_type=? AND agent_name=? AND status IN ('pending','running') LIMIT 1",
-                        (task_type, agent_name)).fetchone()
-                else:
-                    existing = conn.execute(
-                        "SELECT task_id FROM tasks WHERE task_type=? AND status IN ('pending','running') LIMIT 1",
-                        (task_type,)).fetchone()
+                existing = self._find_pending(conn, task_type, agent_name)
                 if existing:
                     logger.debug(
-                        "Dedupliziert: %s/%s laeuft bereits (%s), uebersprungen",
-                        task_type, agent_name or "*", existing["task_id"])
+                        "Deduplicated: %s/%s is already running (%s), skipped",
+                        task_type, agent_name or "*", existing)
                     return ""
 
             conn.execute(

@@ -184,13 +184,19 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
     on its own NPC kind (an animal, a guard variant) must not be handed a
     sheet built from the default template, while a default slot happily takes
     any temporary NPC back.
+
+    An NPC that a queued ``npc_assets`` job still owes a placement is NOT free
+    stock, even though it sits in the pool: that job carries the FIRST
+    claimant's location, so handing the same sheet out twice would place it
+    there and leave the second slot silently empty.
     """
+    from app.core.npc_assets import is_awaiting_assets
     from app.models.character import get_character_profile, is_temporary_npc
     from app.models.character import list_pooled_characters
     wanted = (role or "").strip().lower()
     wanted_tmpl = (template or "").strip()
     for name in list_pooled_characters():
-        if not is_temporary_npc(name):
+        if not is_temporary_npc(name) or is_awaiting_assets(name):
             continue
         profile = get_character_profile(name) or {}
         if wanted_tmpl and str(profile.get("template") or "") != wanted_tmpl:
@@ -204,7 +210,8 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
 
 def revive_from_pool(name: str, location_id: str, room_id: str = "",
                      ttl_hours: Optional[float] = None, slot_role: str = "",
-                     briefing: str = "", wanderer: bool = False) -> bool:
+                     briefing: str = "", wanderer: bool = False,
+                     wander_target: str = "") -> bool:
     """Put a pooled NPC back into the world at a place. True on success.
 
     The same bookkeeping ``npc_ops.apply_npc`` stamps after a generated NPC —
@@ -227,6 +234,12 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     profile["npc_slot_role"] = (slot_role or "").strip()
     profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
     profile["npc_wanderer"] = bool(wanderer)
+    # The road before the placement — the gate's job is what sends a
+    # held-back wanderer off, so it must already know where to (see
+    # ``npc_ops.apply_npc`` for the same three lines on the generated path).
+    if wanderer and wander_target:
+        profile["wander_origin"] = location_id
+        profile["wander_target"] = wander_target
     profile["npc_briefing"] = (briefing or "").strip() or profile.get("npc_briefing", "")
     profile["outfit_worn"] = True
     task = str(profile.get("standing_task") or "").strip()
@@ -241,7 +254,8 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     # `npc_spawn.spawn_for_slot` reads False as "the pool did not deliver" and
     # would run the three-turn pipeline for an NPC that is already claimed.
     from app.core.npc_assets import gate_placement
-    if gate_placement(name, location_id, room_id, wanderer=wanderer):
+    if gate_placement(name, location_id, room_id, wanderer=wanderer,
+                      wander_target=wander_target):
         logger.info("Pooled NPC '%s' claimed for %s (role %r) — placed once "
                     "its assets exist", name, location_id or "(nowhere)",
                     slot_role or "-")

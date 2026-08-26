@@ -99,8 +99,16 @@ def wanderer_ttl_hours() -> float:
 
 
 def alive_npc_count() -> int:
+    """Temporary NPCs the world is paying for right now.
+
+    Living ones PLUS the ones the finish gate holds back: an NPC whose
+    portrait and mesh are still rendering is already generated and will walk
+    in by itself, so counting only the visible ones would let every tick spawn
+    another one on top of it (``npc_assets.list_awaiting_assets``).
+    """
+    from app.core.npc_assets import list_awaiting_assets
     from app.models.character import list_temporary_npcs
-    return len(list_temporary_npcs())
+    return len(list_temporary_npcs()) + len(list_awaiting_assets())
 
 
 def cap_reached() -> bool:
@@ -450,9 +458,24 @@ def _placed_locations() -> List[Dict[str, Any]]:
 
 
 def list_wanderers() -> List[str]:
+    """The wanderers ON THE ROAD — living ones, the arrivals to settle."""
     from app.models.character import get_character_profile, list_temporary_npcs
     return [n for n in list_temporary_npcs()
             if (get_character_profile(n) or {}).get("npc_wanderer")]
+
+
+def wanderer_count() -> int:
+    """Wanderers against the quota: on the road plus waiting for their assets.
+
+    Deliberately not part of :func:`list_wanderers` — that list drives
+    ``_settle_wanderer``, and settling an NPC that has not set off yet would
+    pool it and throw its route away.
+    """
+    from app.core.npc_assets import list_awaiting_assets
+    from app.models.character import get_character_profile
+    held = [n for n in list_awaiting_assets()
+            if (get_character_profile(n) or {}).get("npc_wanderer")]
+    return len(list_wanderers()) + len(held)
 
 
 def wanderer_tick() -> Dict[str, Any]:
@@ -474,7 +497,7 @@ def wanderer_tick() -> Dict[str, Any]:
 
     alive = list_wanderers()
     queued = 0
-    if len(alive) < quota and not cap_reached():
+    if wanderer_count() < quota and not cap_reached():
         # ONE per tick. The quota is a target, not a burst: three pipeline
         # runs at once would occupy the chat provider for minutes, and the
         # tick comes back in five.
@@ -538,13 +561,13 @@ def _send_wanderer(name: str, target_id: str) -> bool:
 
 def spawn_wanderer() -> Dict[str, Any]:
     """Create (or recycle) one wanderer and send it on its way."""
+    from app.core.npc_assets import is_awaiting_assets
     from app.core.npc_ops import generate_npc_blocking
     from app.core.npc_pool import revive_from_pool, take_from_pool
-    from app.models.character import get_character_profile, save_character_profile
 
     if cap_reached():
         return {"skipped": "cap", "alive": alive_npc_count()}
-    if len(list_wanderers()) >= wanderer_quota():
+    if wanderer_count() >= wanderer_quota():
         return {"skipped": "quota"}
     places = _placed_locations()
     if len(places) < 2:
@@ -560,7 +583,7 @@ def spawn_wanderer() -> Dict[str, Any]:
     # again, in a different place.
     name = take_from_pool("")
     if name and not revive_from_pool(name, origin_id, "", ttl_hours=ttl,
-                                     wanderer=True):
+                                     wanderer=True, wander_target=target_id):
         name = None
     if not name:
         briefing = (
@@ -570,20 +593,27 @@ def spawn_wanderer() -> Dict[str, Any]:
             f"walking and a few words about the road.")
         result = generate_npc_blocking(briefing=briefing,
                                        location_id=origin_id, ttl_hours=ttl,
-                                       wanderer=True, created_by="npc_wanderer")
+                                       wanderer=True, wander_target=target_id,
+                                       created_by="npc_wanderer")
         if not result.get("ok"):
             return {"ok": False, "error": result.get("error")}
         name = str(result.get("character") or "")
     if not name:
         return {"ok": False, "error": "no wanderer"}
 
-    profile = get_character_profile(name) or {}
-    profile["npc_wanderer"] = True
-    profile["wander_origin"] = origin_id
-    profile["wander_target"] = target_id
-    save_character_profile(name, profile)
+    # THE ROAD IS ALREADY STAMPED — both paths above put origin and target on
+    # the profile before they asked for the placement, because the finish gate
+    # may have held this wanderer back. A held NPC stands nowhere, so starting
+    # its journey here would only fail with "no route"; the assets job places
+    # it AND sends it off once its portrait and mesh exist.
+    if is_awaiting_assets(name):
+        logger.info("Wanderer '%s' waits for its assets before setting off "
+                    "from %s to %s", name, origin_id, target_id)
+        return {"ok": True, "character": name, "from": origin_id,
+                "to": target_id, "walking": False, "held_for_assets": True}
+
     walking = _send_wanderer(name, target_id)
     logger.info("Wanderer '%s' set off from %s to %s (%s)", name, origin_id,
                 target_id, "walking" if walking else "stuck")
     return {"ok": True, "character": name, "from": origin_id, "to": target_id,
-            "walking": walking}
+            "walking": walking, "held_for_assets": False}

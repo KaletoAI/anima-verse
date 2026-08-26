@@ -112,6 +112,13 @@ paths.init(STORAGE)
 from app.core import db  # noqa: E402
 db.init_schema()
 
+from app.core import config  # noqa: E402
+# The FINISH GATE is off here. This run is about the template's feature gates,
+# the free-text outfit and the TTL sweep; with the gate armed the pipeline's
+# NPC — which has no portrait and no mesh — would be held out of the world,
+# which is what scripts/smoke_npc_assets.py checks instead.
+config._CONFIG.setdefault("npc", {})["require_assets"] = False
+
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import game_time, set_game_time  # noqa: E402
 
@@ -432,7 +439,11 @@ complete = {"character_name": "Maren Kolb",
             "language": "en",
             "character_personality": "Dry, economical with words.",
             "character_appearance": "woman, 50s, close-cropped grey hair",
-            "standing_task": "tends the bar"}
+            "standing_task": "tends the bar",
+            # REQUIRED since the finish gate (plan-npc-leben § 0 A): the free
+            # text IS this character's wardrobe, and every image prompt of a
+            # temporary NPC dresses it from here.
+            "outfit_description": "a rolled-up white shirt, dark apron"}
 check("a complete NPC has no gaps", validate_npc_fields(complete), [])
 check("a missing name is a gap",
       any("character_name" in g for g in validate_npc_fields({})), True)
