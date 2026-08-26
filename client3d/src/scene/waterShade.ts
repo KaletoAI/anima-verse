@@ -706,6 +706,83 @@ int twKindRow( vec2 p ) {
 `;
 }
 
+/**
+ * THE FLOW SAMPLER, as GLSL — the FRAGMENT stage's, and since 2026-08-27 the
+ * ONLY place the downstream vector is read (river finding, Task 7).
+ *
+ * ── WHY IT MOVED OUT OF THE VERTEX STAGE ────────────────────────────────────
+ * The flow used to be sampled once per VERTEX (`terrainLod.tlodFlowAt`) and
+ * handed to the fragment as the varying `vTlodFlow`. A varying is an affine
+ * blend of three vertex samples, and the vertices of a terrain piece are
+ * `uTlodBaseStep · 2^level` metres apart — 2 m at level 0 and 64 m at level 5.
+ * The flow raster is written only inside the water plus the bake's 4 m
+ * dilation, so a 6 m river is a band 14 m wide: from a 16 m vertex spacing on,
+ * ALL FOUR corners of the cell a river pixel falls in can be dry, the varying
+ * is exactly (0, 0), and `twRipple` takes its STILL branch — a river drawn as
+ * standing water. Measured over every lattice alignment of that fixture:
+ * still in 0/28 alignments at level 2, 7/56 at level 3, 63/112 at level 4 and
+ * 175/224 at level 5 (`client3d/scripts/smoke_flow_lod.mjs`).
+ *
+ * The diagnostic readout could not see it, and that is the second half of the
+ * finding: `debug3d`'s WATER line taps the FIELD at a point, so it reported
+ * |flow| ~ 2 m/s while the drawn surface stood still. Sampling here, at the
+ * fragment's own XZ, makes the two ONE number again — and makes the drift
+ * independent of the level the piece happens to be drawn at, whatever the LOD
+ * ring fit, the F1 cap relaxation or the camera zoom do.
+ *
+ * IT DECLARES ONLY ITS OWN SAMPLER, and the lattice comes out of
+ * `uTlodWaterGeom` + `textureSize` — the arrangement of {@link waterSdGlsl} and
+ * {@link waterKindGlsl}, and for their reason: the flow field is built over the
+ * water pyramid's BASE level (`terrainLod.buildFlow`), so `textureSize` IS that
+ * level's (cols, rows) and the step is `uTlodWaterGeom.z`.
+ *
+ * OUT OF THE WINDOW IS (0, 0) AND NOT CLAMPED, exactly like the sd's DRY: an
+ * edge texel carried outward would drag a strip of somebody else's current
+ * along the whole rim of the near window. (0, 0) is what "still" already means
+ * to a ripple, so there is no third state to invent.
+ *
+ * NO ISOLATION SWITCH OF ITS OWN. Toggle 22 (`uTlodNoWater`) zeroes the lift, so
+ * `vTlodWet` is 0, so `tlodWaterSurface` returns before the ripple is ever
+ * reached — the vertex stage used to zero the varying by hand and no longer has
+ * to.
+ */
+export function waterFlowGlsl(): string {
+  return `
+uniform sampler2D uTlodFlow;
+
+// THE DOWNSTREAM VECTOR AT ONE POINT, on the water pyramid's BASE lattice — the
+// axis tangent times the area's speed factor (\`heightfield.water_flow_factor\`),
+// which is why the LENGTH is what \`twRipple\` turns into metres per second.
+//
+// PLAIN BILINEAR, all four corners read: the server writes (0, 0) at every dry
+// lattice point rather than a sentinel, so there is no NaN to keep out and a dry
+// corner correctly drags the answer toward still. The TS twin is
+// \`terrainLod.gpuWaterFlowAt\`, arithmetic for arithmetic.
+vec2 twFlowAt( vec2 p ) {
+  if ( uTlodWaterGeom.w <= 0.0 ) return vec2( 0.0 );
+  ivec2 sz = textureSize( uTlodFlow, 0 );
+  float cols = float( sz.x );
+  float rows = float( sz.y );
+  float stepM = uTlodWaterGeom.z;
+  if ( cols < 2.0 || rows < 2.0 || stepM <= 0.0 ) return vec2( 0.0 );
+  float fx = ( p.x - uTlodWaterGeom.x ) / stepM;
+  float fz = ( p.y - uTlodWaterGeom.y ) / stepM;
+  if ( fx < 0.0 || fz < 0.0 || fx > cols - 1.0 || fz > rows - 1.0 ) return vec2( 0.0 );
+  float fi = min( floor( fx ), cols - 2.0 );
+  float fj = min( floor( fz ), rows - 2.0 );
+  float tx = fx - fi;
+  float tz = fz - fj;
+  int i = int( fi );
+  int j = int( fj );
+  vec2 f00 = texelFetch( uTlodFlow, ivec2( i, j ), 0 ).rg;
+  vec2 f10 = texelFetch( uTlodFlow, ivec2( i + 1, j ), 0 ).rg;
+  vec2 f01 = texelFetch( uTlodFlow, ivec2( i, j + 1 ), 0 ).rg;
+  vec2 f11 = texelFetch( uTlodFlow, ivec2( i + 1, j + 1 ), 0 ).rg;
+  return mix( mix( f00, f10, tx ), mix( f01, f11, tx ), tz );
+}
+`;
+}
+
 export function waterGateGlsl(): string {
   return `
 float twSmooth( float t ) {
@@ -727,11 +804,15 @@ float twInside( float sd ) {
  * gain a single instruction from this stage.
  *
  * It rides on `terrainLodSampleGlsl()` and `terrainLodNormalGlsl()` (it calls
- * `tlodNormalAt` and reads `vTlodXZ`) and on the two varyings the water
- * variant's vertex stage writes: `vTlodWet` — the metres of water over the bed,
- * 0 where the vertex was not lifted — and `vTlodFlow`, the downstream vector of
- * the water raster, whose LENGTH is the area's own speed factor exactly as the
- * mirror's `aWaterFlow` attribute carried it.
+ * `tlodNormalAt` and reads `vTlodXZ`) and on the ONE varying the water variant's
+ * vertex stage writes: `vTlodWet`, the metres of water over the bed, 0 where the
+ * vertex was not lifted.
+ *
+ * EVERY FIELD OF THE WATER IS SAMPLED HERE, AT THE PIXEL'S OWN XZ — the signed
+ * distance ({@link waterSdGlsl}), the kind row ({@link waterKindGlsl}) and,
+ * since 2026-08-27, the flow ({@link waterFlowGlsl}). The flow was the last one
+ * riding in as a per-vertex varying, and the vertex spacing of a coarse piece
+ * was eating it whole; the argument is in `waterFlowGlsl`.
  *
  * THE ISOLATION SWITCH NEEDS NO PATH OF ITS OWN. Toggle 22 sets
  * `uTlodNoWater = 1`, which makes `tlodLift` hand its height back unchanged —
@@ -754,13 +835,12 @@ float twInside( float sd ) {
 export function terrainWaterFragmentGlsl(): string {
   return `
 varying float vTlodWet;
-varying vec2 vTlodFlow;
 uniform sampler2D uTlodWave;
 uniform sampler2D uTlodWaterLook;
 uniform vec4 uTlodWaterGeom;
 uniform vec3 uTlodSky;
 uniform float uTlodTime;
-${waterSdGlsl()}${waterGateGlsl()}${waterKindGlsl()}
+${waterSdGlsl()}${waterGateGlsl()}${waterKindGlsl()}${waterFlowGlsl()}
 
 // What tlodWaterSurface() measures and the two stages after it read. Globals
 // and not a struct passed along: the three insertion points are three separate
@@ -798,7 +878,7 @@ vec2 twFrame( vec2 v, vec2 ax, vec2 ay, float aniso ) {
 // running DOWNSTREAM (the sign is negative on flowing water) and a 3:1 squeeze
 // along the flow so a current draws streaks instead of circles.
 //
-// THE FRAME ARRIVES SMOOTHED (finding F-C). \`vTlodFlow\` is the raster's flow,
+// THE FRAME ARRIVES SMOOTHED (finding F-C). \`twFlowAt\` reads the raster's flow,
 // and the bake now runs that field through a separable box of the dilation's own
 // radius before it ships (\`heightfield.WATER_FLOW_BLUR_M\`): the axis tangent
 // JUMPS across a medial axis, and two neighbouring lattice points handing this
@@ -806,7 +886,9 @@ vec2 twFrame( vec2 v, vec2 ax, vec2 ay, float aniso ) {
 // triangle-sized patches. Measured on an authored meander the worst adjacent
 // pair is 1.49 deg after the blur (1.80 before); on a hairpin drawn inside a
 // lake-sized polygon, 66 deg after 146. Nothing here changed for it — the
-// varying is simply continuous now.
+// FIELD is simply continuous now, and since the tap moved into the fragment
+// every pixel reads that continuous field directly instead of a blend of three
+// samples taken up to 64 m apart.
 //
 // WHICH WAY THE PATTERN REALLY TRAVELS — the sign, derived rather than
 // asserted (finding H1, 2026-08-25). Each sheet's sample coordinate is
@@ -845,12 +927,19 @@ vec3 twRipple( vec2 p, vec2 gx, vec2 gy, float waveM, float speed, float flowSpe
   // noise in a specular lobe narrow enough to turn every texel into a spark.
   float px = max( length( gx ), length( gy ) );
   float detail = clamp( 1.0 - px / waveM, 0.0, 1.0 );
+  // THE FLOW IS THIS PIXEL'S OWN TAP OF THE FIELD (Task 7, 2026-08-27), not a
+  // varying: \`p\` is \`vTlodXZ\`, so the current a fragment drifts at is the one
+  // the raster really carries under it, at every level the piece may be drawn
+  // at. The whole derivation — and the 175/224 alignments a 64 m vertex spacing
+  // used to turn into standing water — is in \`waterFlowGlsl\`.
+  //
   // The area's speed factor rides on the LENGTH of the flow vector (the server
   // bakes it there, \`heightfield.water_flow_factor\`), and a length below 1e-4
   // is STILL — a lake, which drifts at \`speed\` and counter-scrolls its sheets.
-  float len = length( vTlodFlow );
+  vec2 flow = twFlowAt( p );
+  float len = length( flow );
   bool still = len < 1e-4;
-  vec2 ax = still ? vec2( 1.0, 0.0 ) : vTlodFlow / max( len, 1e-4 );
+  vec2 ax = still ? vec2( 1.0, 0.0 ) : flow / max( len, 1e-4 );
   vec2 ay = vec2( -ax.y, ax.x );
   float sp = still ? speed : flowSpeed * len;
   float sgn = still ? 1.0 : -1.0;

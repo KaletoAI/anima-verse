@@ -125,6 +125,26 @@
  * 0.25) painted with a 1.2 m bed: opaque depth ¾ · 1.2 = 0.9.
  *
  * ============================================================================
+ * [4b] THE FLOW IS THE FRAGMENT'S OWN TAP (Task 7, 2026-08-27)
+ * ============================================================================
+ * The downstream vector used to arrive as the varying `vTlodFlow`, sampled once
+ * per VERTEX. The vertices of a terrain piece are `baseStep · 2^level` metres
+ * apart — 2 m at level 0, 16 m at level 3, 64 m at level 5 — while a 6 m river
+ * plus the bake's 4 m dilation on each bank is a band 14 m wide. From a 16 m
+ * spacing on, all four corners of the cell a river pixel falls in can be dry,
+ * the varying is EXACTLY (0, 0) and `twRipple` takes its STILL branch: a river
+ * drawn as standing water while the raster under it carries 2 m/s. (The counts
+ * per lattice alignment are hand-derived in `smoke_flow_lod.mjs`: 0/28 still at
+ * level 2, 7/56 at level 3, 63/112 at level 4, 175/224 at level 5.)
+ *
+ * So the tap moved into the fragment, beside the sd and the kind row, and this
+ * section pins the three statements that make that true of the SHIPPED source:
+ * the sampler is declared in the fragment chunk, the ripple's `len` is taken
+ * from `twFlowAt(p)` — the pixel's own XZ — and the word `vTlodFlow` does not
+ * appear in the fragment at all. The still branch is decided on that tap and on
+ * nothing else, which is the bit the WATER readout reports against.
+ *
+ * ============================================================================
  * [5] THE FLOW FRAME IS THE IDENTITY ON STILL WATER
  * ============================================================================
  * The mirror's shader had TWO spellings of every ripple coordinate — one for a
@@ -476,6 +496,27 @@ checkEq('the area\'s speed factor is the LENGTH of the flow vector',
   glsl.includes('float sp = still ? speed : flowSpeed * len;'), true);
 checkEq('…and a length below 1e-4 is a lake', glsl.includes('bool still = len < 1e-4;'),
   true);
+// [4b] THE FLOW IS SAMPLED HERE, PER PIXEL — not handed in as a varying.
+console.log('\n[4b] the flow is the fragment\'s own tap, at the pixel\'s XZ');
+checkEq('the fragment declares the flow sampler itself',
+  glsl.includes('uniform sampler2D uTlodFlow;')
+  && glsl.includes('vec2 twFlowAt( vec2 p ) {'), true);
+checkEq('…the ripple takes its vector from that tap at its own p',
+  glsl.includes('vec2 flow = twFlowAt( p );')
+  && glsl.includes('float len = length( flow );'), true);
+checkEq('…and the STILL decision hangs on it and on nothing else',
+  glsl.includes('bool still = len < 1e-4;')
+  && glsl.includes('vec2 ax = still ? vec2( 1.0, 0.0 ) : flow / max( len, 1e-4 );'), true);
+checkEq('RED: the varying vTlodFlow is gone from the fragment entirely',
+  glsl.includes('vTlodFlow'), false);
+checkEq('…and the lattice comes out of textureSize, like the sd\'s and the kind\'s',
+  /vec2 twFlowAt[\s\S]*?\n}/.exec(glsl)[0].includes('textureSize( uTlodFlow, 0 )'), true);
+checkEq('…with the window test, not a clamp, so no rim carries a stray current',
+  /vec2 twFlowAt[\s\S]*?\n}/.exec(glsl)[0]
+    .includes('if ( fx < 0.0 || fz < 0.0 || fx > cols - 1.0 || fz > rows - 1.0 ) return vec2( 0.0 );'),
+  true);
+check('…four texel fetches, the sd\'s count',
+  (/vec2 twFlowAt[\s\S]*?\n}/.exec(glsl)[0].match(/texelFetch\(/g) ?? []).length, 4);
 // WHICH ROW — the water raster's own kind, NEAREST, off the water lattice.
 checkEq('the look row comes from the water raster and is clamped to the table',
   glsl.includes('int layer = clamp( twKindRow( vTlodXZ ), 0, rows - 1 );'), true);

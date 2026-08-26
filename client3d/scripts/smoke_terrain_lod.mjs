@@ -3382,8 +3382,12 @@ checkEq('the water variant declares the sampler',
   wetGlsl.includes('uniform sampler2D uTlodWater;'), true);
 checkEq('…and the isolation uniform',
   wetGlsl.includes('uniform float uTlodNoWater;'), true);
-check('…and fetches twenty: four ground, mirror, flow, mip cap and SD',
-  wetGlsl.split('texelFetch(').length - 1, 20);
+// SIXTEEN since Task 7 (2026-08-27), not twenty: four ground, four mirror, four
+// mip cap and four SD. The FLOW's four left this stage with the varying —
+// they are now spent per water PIXEL instead (`waterShade.waterFlowGlsl`),
+// which is what makes the drift independent of the vertex spacing.
+check('…and fetches sixteen: four ground, mirror, mip cap and SD',
+  wetGlsl.split('texelFetch(').length - 1, 16);
 checkEq('THE LIFT IS A COMPARISON',
   wetGlsl.includes('return ( w > h ) ? h + ( w - h ) * g : h;'), true);
 checkEq('RED: and never max(), which GLSL does not pin down for a NaN',
@@ -3424,10 +3428,25 @@ checkEq('THE LIFTED DEPTH RIDES ALONG as a varying',
   wetGlsl.includes('vTlodWet = mix( l1 - h1, l2 - h2, f );'), true);
 checkEq('…declared in the water variant', wetGlsl.includes('varying float vTlodWet;'), true);
 checkEq('…and in NO dry program', dryGlsl.includes('vTlodWet'), false);
-checkEq('the flow rides along too', wetGlsl.includes('vTlodFlow = uTlodNoWater > 0.5'), true);
-checkEq('…on the water lattice\'s LEVEL 0 and no pyramid',
-  /vec2 tlodFlowAt[\s\S]*?\n}/.exec(wetGlsl)[0].includes('uTlodWaterLevel[ 0 ]'), true);
-checkEq('…and never in the dry one', dryGlsl.includes('tlodFlowAt'), false);
+// THE FLOW DOES NOT RIDE ALONG ANY MORE (Task 7, 2026-08-27). It was
+// `vTlodFlow`, sampled once per vertex, and a level-3 piece's 16 m spacing
+// straddles a 14 m river band whole — all four corners dry, the varying exactly
+// (0, 0), the fragment's STILL branch, a river drawn as standing water while the
+// field under it carried 2 m/s. The tap is the FRAGMENT's own now.
+// (The chunk still CARRIES a comment naming the retired path — that is the
+// record of why it is gone. The pins are on code: no varying, no function, no
+// fetch.)
+checkEq('RED: the vertex program declares no flow varying, function or fetch',
+  /varying vec2 vTlodFlow|vec2 tlodFlowAt\(|texelFetch\( uTlodFlow|uniform sampler2D uTlodFlow/
+    .test(wetGlsl), false);
+checkEq('RED: …and it assigns nothing to one either',
+  /vTlodFlow\s*=/.test(wetGlsl), false);
+checkEq('RED: …nor does the dry one',
+  /vTlodFlow|tlodFlowAt|uTlodFlow/.test(dryGlsl), false);
+checkEq('…and the FRAGMENT declares the sampler and taps it at the pixel\'s XZ',
+  terrainWaterFragmentGlsl().includes('uniform sampler2D uTlodFlow;')
+  && terrainWaterFragmentGlsl().includes('vec2 twFlowAt( vec2 p ) {')
+  && terrainWaterFragmentGlsl().includes('vec2 flow = twFlowAt( p );'), true);
 // The TS twin of `l - h`, and the identity that makes it one statement.
 check('liftedDepth: a mirror 1.2 m over the bed, well inside the outline',
   liftedDepth(3, 4.2, UNGATED), 1.2);
@@ -3956,6 +3975,17 @@ checkEq('RED: and no cap word reaches the dry FRAGMENT shader',
 // is invisible because the varying ate it, and the fix would be to sample the
 // flow in the FRAGMENT like the sd and the kind.
 //
+// ── AND THAT IS WHAT HAPPENED, AND WHAT THE FIX WAS (Task 7, 2026-08-27) ────
+// This section only ever measured levels 0 and 1, because the F1 cap held a
+// 6 m river there — and inside that cap the varying was fine, which is what
+// these numbers still say. It is OUTSIDE the cap that the varying dies: the
+// budget fit relaxes the cap by a level per halving step (`selectLodFitted`),
+// and at a 16 m vertex spacing a 14 m river band fits BETWEEN two vertices, so
+// the blend is exactly (0, 0). The tap therefore moved into the fragment
+// (`waterShade.waterFlowGlsl`), and `client3d/scripts/smoke_flow_lod.mjs` pins
+// that the flow a pixel drifts at no longer depends on the level at all.
+// `drawnFlow` below is the RETIRED path, kept as the baseline it fails against.
+//
 // ── THE FIELD, BUILT AS THE SERVER BUILDS IT ────────────────────────────────
 // `HeightModel.water_raster` writes the unit axis tangent (times the area's
 // speed factor, 1 here) at every lattice point of the polygon GROWN by
@@ -4082,7 +4112,7 @@ function drawnFlow(field, x, z, level) {
   const j = Math.floor(z / e);
   const u = x / e - i;
   const v = z / e - j;
-  const P = (a, b) => gpuWaterFlowAt(field, null, (i + a) * e, (j + b) * e);
+  const P = (a, b) => gpuWaterFlowAt(field, (i + a) * e, (j + b) * e);
   const [A, B, C, wb, wc] = u <= v
     ? [P(0, 0), P(0, 1), P(1, 1), v - u, u]
     : [P(0, 0), P(1, 1), P(1, 0), v, u - v];
@@ -4109,7 +4139,7 @@ const R_FLOW = flowFieldOf(RIVER_ZC, () => 0, 3);
 // (a) the blurred lattice profile — the eight numbers of the hand table.
 checkEq('(a) the blurred |flow| on the lattice rows of the straight reach',
   [0, 2, 4, 6, 8, 10, 12, 14].map((z) => Math.round(
-    Math.hypot(...gpuWaterFlowAt(R_FLOW, null, 100, z)) * 1e6) / 1e6),
+    Math.hypot(...gpuWaterFlowAt(R_FLOW, 100, z)) * 1e6) / 1e6),
   [0.8, 1, 1, 1, 0.8, 0.6, 0.4, 0.2]);
 // (b) what the drawn triangle hands the fragment, at both capped levels.
 check('(b) level 0: the bank of the drawn band reads',
@@ -4142,7 +4172,7 @@ checkAbove('…the reach\'s minimum too', drawnFlowMin(R_FLOW, RIVER_ZC, 3, 1) /
 const NAKED = flowFieldOf(RIVER_ZC, () => 0, 3, 0);
 checkEq('(d) RED: with no dilation ring the lattice profile collapses',
   [0, 2, 4, 6, 8].map((z) => Math.round(
-    Math.hypot(...gpuWaterFlowAt(NAKED, null, 100, z)) * 1e6) / 1e6),
+    Math.hypot(...gpuWaterFlowAt(NAKED, 100, z)) * 1e6) / 1e6),
   [0.4, 0.6, 0.6, 0.6, 0.4]);
 checkBelow('RED: …and the drawn bank falls under the half at level 1',
   drawnFlow(NAKED, 100, 1, 1), 0.5);
@@ -4197,7 +4227,10 @@ checkEq('…and the shading normal really carries twN into the lighting',
 // report that reads STILL off the debug line knows what it is naming.
 checkEq('the still test is the 1e-4 the WATER line reports against',
   wetFrag.includes('bool still = len < 1e-4;')
-  && wetFrag.includes('float len = length( vTlodFlow );'), true);
+  && wetFrag.includes('float len = length( flow );'), true);
+checkEq('…and it is decided on THIS PIXEL\'s tap, never on a varying',
+  wetFrag.includes('vec2 flow = twFlowAt( p );')
+  && !wetFrag.includes('vTlodFlow'), true);
 checkEq('RED: and none of it reaches the dry program',
   /uvA|twRipple|uTlodTime/.test(dryShader.fragmentShader), false);
 

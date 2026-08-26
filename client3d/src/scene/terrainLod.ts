@@ -437,15 +437,15 @@ export interface SdField {
 }
 
 /**
- * THE FLOW FIELD over the very same lattice — the downstream vector the VERTEX
- * stage reads (`tlodFlowAt`), kept as a field beside its texture for exactly the
- * reason {@link SdField} is: a CPU reader has to be able to ask what the GPU
- * fetched, at a point, without a frame buffer.
+ * THE FLOW FIELD over the very same lattice — the downstream vector the
+ * FRAGMENT stage reads (`waterShade.twFlowAt`), kept as a field beside its
+ * texture for exactly the reason {@link SdField} is: a CPU reader has to be able
+ * to ask what the GPU fetched, at a point, without a frame buffer.
  *
  * Two components per lattice point, interleaved, in the RG order the RGFormat
  * texture is uploaded in. (0, 0) is STILL water and is also what a dry point
  * carries — the server writes it there rather than a sentinel, so there is
- * nothing to keep out of a mix (see `tlodFlowAt`).
+ * nothing to keep out of a mix (see `waterShade.waterFlowGlsl`).
  */
 export interface FlowField {
   originX: number;
@@ -1665,12 +1665,10 @@ float tlodHeight( vec2 p, float nodeStep ) {
 export function terrainLodWaterGlsl(): string {
   return `
 uniform sampler2D uTlodWater;
-uniform sampler2D uTlodFlow;
 uniform vec4 uTlodWaterGeom;
 uniform vec4 uTlodWaterLevel[ ${MAX_LOD_LEVELS} ];
 uniform float uTlodNoWater;
 varying float vTlodWet;
-varying vec2 vTlodFlow;
 ${waterSdGlsl()}${waterGateGlsl()}
 const float TLOD_DRY = -1e30;
 
@@ -1752,44 +1750,16 @@ float tlodLift( float h, vec2 p, float nodeStep, float sd ) {
   return ( w > h ) ? h + ( w - h ) * g : h;
 }
 
-// THE FLOW at one point, on the water pyramid's BASE lattice (K-A E4).
-//
-// ONE LEVEL AND NEVER A PYRAMID, deliberately: the flow is a DIRECTION, and a
-// direction read at the finest lattice is the honest answer wherever the vertex
-// stands — a coarse vertex 64 m out point-samples a field that turns over tens
-// of metres, and nothing in the picture can tell. It is the same argument that
-// feeds \`tlodMorphAt\` the finest height.
-//
-// PLAIN BILINEAR, unlike the level's masked mix: the server writes (0, 0) at
-// every dry lattice point rather than a sentinel (\`heightfield.water_raster\`),
-// so there is no NaN to keep out — and skipping a corner of weight 0 would give
-// the identical sum anyway. Outside the near window, or with no raster at all,
-// the answer is (0, 0), which is what "still" already means to a ripple.
-vec2 tlodFlowAt( vec2 p ) {
-  if ( uTlodWaterGeom.w <= 0.0
-       || p.x < uTlodNearRect.x || p.x > uTlodNearRect.z
-       || p.y < uTlodNearRect.y || p.y > uTlodNearRect.w ) return vec2( 0.0 );
-  vec4 lv = uTlodWaterLevel[ 0 ];
-  float cols = lv.x;
-  float rows = lv.y;
-  float step = lv.z;
-  if ( cols < 2.0 || rows < 2.0 || step <= 0.0 ) return vec2( 0.0 );
-  float fx = clamp( ( p.x - uTlodWaterGeom.x ) / step, 0.0, cols - 1.0 );
-  float fz = clamp( ( p.y - uTlodWaterGeom.y ) / step, 0.0, rows - 1.0 );
-  float fi = min( floor( fx ), cols - 2.0 );
-  float fj = min( floor( fz ), rows - 2.0 );
-  float tx = fx - fi;
-  float tz = fz - fj;
-  int i = int( fi );
-  int j = int( fj );
-  vec2 f00 = texelFetch( uTlodFlow, ivec2( i, j ), 0 ).rg;
-  vec2 f10 = texelFetch( uTlodFlow, ivec2( i + 1, j ), 0 ).rg;
-  vec2 f01 = texelFetch( uTlodFlow, ivec2( i, j + 1 ), 0 ).rg;
-  vec2 f11 = texelFetch( uTlodFlow, ivec2( i + 1, j + 1 ), 0 ).rg;
-  vec2 north = f00 * ( 1.0 - tx ) + f10 * tx;
-  vec2 south = f01 * ( 1.0 - tx ) + f11 * tx;
-  return north * ( 1.0 - tz ) + south * tz;
-}
+// THE FLOW IS NOT READ HERE ANY MORE (Task 7, 2026-08-27). It used to be a
+// \`tlodFlowAt\` beside the level, sampled per VERTEX into the varying
+// \`vTlodFlow\`, and the vertex spacing of a coarse piece ate it: a river band
+// 14 m wide (6 m of water plus the bake's 4 m dilation on each bank) fits
+// between two vertices of a level-3 piece, the varying interpolates to exactly
+// (0, 0) and the fragment draws standing water while the field underneath
+// carries 2 m/s. The tap now lives in the FRAGMENT (\`waterShade.waterFlowGlsl\`,
+// \`twFlowAt\`), where it is a function of the pixel's own position and of
+// nothing else — the derivation and the measured alignment counts are there.
+// \`uTlodFlow\` is therefore declared by the fragment chunk alone.
 `;
 }
 
@@ -1885,8 +1855,7 @@ export function terrainLodGlsl(water = false): string {
   float l1 = tlodLift( h1, p, nodeStep * m1, sdw );
   float l2 = tlodLift( h2, p, nodeStep * m2, sdw );
   float h = mix( l1, l2, f );
-  vTlodWet = mix( l1 - h1, l2 - h2, f );
-  vTlodFlow = uTlodNoWater > 0.5 ? vec2( 0.0 ) : tlodFlowAt( p );`
+  vTlodWet = mix( l1 - h1, l2 - h2, f );`
     : 'float h = mix( tlodHeight( p, nodeStep * m1 ), tlodHeight( p, nodeStep * m2 ), f );';
   return `${terrainLodSampleGlsl()}${water ? terrainLodWaterGlsl() : ''}
 uniform float uTlodRange[ ${MAX_LOD_LEVELS} ];
@@ -2131,32 +2100,30 @@ export function gpuWaterAt(water: HeightPyramid | null,
 }
 
 /**
- * The TypeScript twin of the vertex shader's `tlodFlowAt` — the downstream
- * vector the GPU really reads at a point, on the water pyramid's BASE lattice
- * and by plain bilinear.
+ * The TypeScript twin of the FRAGMENT shader's `twFlowAt`
+ * (`waterShade.waterFlowGlsl`) — the downstream vector the GPU really reads at a
+ * point, on the water pyramid's BASE lattice and by plain bilinear.
  *
- * WHY IT EXISTS AS A TWIN AT ALL (finding H1's parked suspect, 2026-08-25).
- * `vTlodFlow` is sampled per VERTEX and INTERPOLATED across the triangle, so
- * what a fragment reads is not this number but an affine blend of three of
- * them. Whether that blend can fall to "still" (`|flow| < 1e-4`) or merely
- * limp anywhere a river draws is a question about the raster and the vertex
- * spacing, and it is answered by measuring — `client3d/scripts/
- * smoke_terrain_lod.mjs` § [23] builds this twin's answers at the capped levels
- * and interpolates them exactly as the rasterizer does.
+ * WHY IT EXISTS AS A TWIN AT ALL. The diagnostic readout has to be able to say
+ * what the drawn surface drifts at (`waterProbe`, "Prüfe am Verbraucher"), and
+ * since Task 7 (2026-08-27) that is exactly this number: the flow is tapped per
+ * FRAGMENT, so the readout and the picture cannot disagree any more. They could
+ * before — the flow was a per-VERTEX varying and the readout was this point tap,
+ * which is how a river drawn as standing water reported |flow| ~ 2 m/s on the
+ * WATER line. `waterProbe` keeps the old per-vertex answer beside this one, as a
+ * diagnostic (`vertexFlow`), and `client3d/scripts/smoke_flow_lod.mjs` pins that
+ * this one no longer depends on the level at all.
  *
- * OUT-OF-WINDOW IS (0, 0), like the shader's own first branch: `nearRect` is
- * the HEIGHT window, and the water pyramid is built over it — the same
- * rectangle `gpuWaterAt` gates on, for the same reason.
+ * OUT OF THE FIELD IT IS (0, 0) AND NOT CLAMPED — the shader's own branch, line
+ * for line: an edge texel carried outward would drag one water's current along
+ * the rim of the whole near window.
  */
 export function gpuWaterFlowAt(flow: FlowField | null,
-                               nearRect: readonly number[] | null,
                                x: number, z: number): [number, number] {
   if (!flow || flow.cols < 2 || flow.rows < 2 || !(flow.step > 0)) return [0, 0];
-  if (nearRect && (x < nearRect[0] || x > nearRect[2]
-                   || z < nearRect[1] || z > nearRect[3])) return [0, 0];
-  const cl = (v: number, n: number): number => (v < 0 ? 0 : v > n - 1 ? n - 1 : v);
-  const fx = cl((x - flow.originX) / flow.step, flow.cols);
-  const fz = cl((z - flow.originZ) / flow.step, flow.rows);
+  const fx = (x - flow.originX) / flow.step;
+  const fz = (z - flow.originZ) / flow.step;
+  if (fx < 0 || fz < 0 || fx > flow.cols - 1 || fz > flow.rows - 1) return [0, 0];
   const i = Math.min(Math.floor(fx), flow.cols - 2);
   const j = Math.min(Math.floor(fz), flow.rows - 2);
   const tx = fx - i;
@@ -2498,7 +2465,11 @@ const uWaterLevel = { value: makeLevelArray() };
  * It carries no geometry of its own: the lattice IS `uTlodWaterLevel[0]` over
  * `uTlodWaterGeom.xy`, so the level and the flow of one point are read out of
  * the same cell — the rule the water pyramid already follows against the
- * height pyramid. Level 0 only, and the reason is in `tlodFlowAt`.
+ * height pyramid. Level 0 only, and the reason is in `waterShade.waterFlowGlsl`.
+ *
+ * READ BY THE FRAGMENT ALONE since Task 7 (2026-08-27), which is why the sampler
+ * is declared in `waterShade.waterFlowGlsl` and nowhere else. The texture and
+ * the upload are unchanged — only who taps it, and how often.
  */
 const uFlow: { value: THREE.Texture } = { value: neutralTex };
 /**
@@ -2837,10 +2808,15 @@ function pyramidTexture(pyr: HeightPyramid): THREE.DataTexture {
  * EVERY FIELD IS A GPU READ, not a re-derivation: the level comes out of the
  * water pyramid through `gpuWaterAt`, the distance out of the sd field through
  * `gpuWaterSdAt`, the flow out of the flow field through `gpuWaterFlowAt`, and
- * the speed off the very look row `twKindRow` would fetch. The one thing it
- * cannot reproduce is the triangle INTERPOLATION of the flow varying — it
- * answers the vertex sampler at the point itself, which is the same number
- * wherever a vertex lands on it and the corners of the blend everywhere else.
+ * the speed off the very look row `twKindRow` would fetch.
+ *
+ * SINCE TASK 7 IT ALSO SAYS HOW COARSE THE GROUND UNDER IT IS DRAWN
+ * (`level`, `capRelax`) AND WHAT THE OLD PER-VERTEX PATH WOULD HAVE DELIVERED
+ * THERE (`vertexFlow`). Both are diagnostics and neither steers a pixel any
+ * more — but the finding this readout missed was exactly a `flow` of 2 m/s
+ * drawn as standing water, because the drawn surface sampled the field 16 to
+ * 64 m apart while this line sampled it at the point. A readout that cannot
+ * show the difference between the two is an alibi, so it shows both.
  */
 export interface WaterProbe {
   /** The mirror the raster carries here, NaN where there is none. */
@@ -2853,10 +2829,34 @@ export interface WaterProbe {
   /** The signed distance to the authored outline, `WATER_SD_DRY` outside every
    *  window. Negative = the raster's dilation ring, i.e. drawn as ground. */
   sd: number;
-  /** The downstream vector the VERTEX stage samples, and its length — the
-   *  area's own speed factor (`heightfield.water_flow_factor`). */
+  /** The downstream vector the FRAGMENT samples here, and its length — the
+   *  area's own speed factor (`heightfield.water_flow_factor`). Since Task 7
+   *  this IS what the drawn pixel drifts at, at any LOD level. */
   flow: [number, number];
   flowLen: number;
+  /** WHAT THE OLD PER-VERTEX PATH WOULD HAVE HANDED THIS PIXEL — the same field,
+   *  sampled at the four corners of the cell of the drawn piece's own vertex
+   *  spacing (`baseStep · 2^level`) and blended. A diagnostic only: it is the
+   *  number that used to reach the shader, and the gap between it and `flow` is
+   *  the bug Task 7 closed. (0, 0) where no piece is drawn over the point.
+   *
+   *  A LOWER BOUND ON HOW COARSE THE OLD SAMPLING REALLY WAS: the geomorph may
+   *  snap a vertex onto a still coarser world lattice (`lodVertex`), so the real
+   *  varying could be blunter than this, never sharper. */
+  vertexFlow: [number, number];
+  vertexFlowLen: number;
+  /** The LOD level of the terrain piece drawn over this point in the last
+   *  selection — `-1` when none is (nothing selected yet, or outside the
+   *  extent). NOT `level` above, which is the water's own surface height. */
+  drawnLevel: number;
+  /** …and that level in METRES — `baseStep · 2^drawnLevel`, the distance
+   *  between two vertices of the drawn piece, which is the resolution the flow
+   *  used to be sampled at. 0 where no piece is drawn. */
+  vertexSpacingM: number;
+  /** How many levels `selectLodFitted` had to RELAX the water's F1 mip cap to
+   *  stay under `MAX_NODES` in the last selection — 0 in a frame that fits.
+   *  Every step makes narrow water one level coarser than the cap wanted. */
+  capRelax: number;
   /** Does the ripple take its STILL branch? `flowLen < 1e-4`, the shader's own
    *  test — the one bit that says "this water cannot drift downstream". */
   still: boolean;
@@ -3140,6 +3140,18 @@ export function createTerrainLod(): TerrainLod {
   let waterNodes = 0;
   let triangles = 0;
   /**
+   * THE LAST SELECTION AND WHAT IT COST THE WATER — kept for the diagnostic
+   * readout alone (`waterProbe`), never read by the renderer.
+   *
+   * A finding about water travels as a WATER line (`debug3d.ts`), and until
+   * Task 7 that line could not say how coarse the surface under the probe was
+   * drawn — which is the one number that separated "the field has no current
+   * here" from "the drawn surface never sampled the current". The selection is
+   * already computed once per frame; remembering the array costs a reference.
+   */
+  let lastPicked: readonly LodNode[] = [];
+  let lastCapRelax = 0;
+  /**
    * WHICH TILES CARRY WATER — the gate of the second material variant, taken
    * as a SNAPSHOT in `setField` beside the pyramid it belongs to.
    *
@@ -3263,11 +3275,12 @@ export function createTerrainLod(): TerrainLod {
    * The FLOW field over the water pyramid's BASE lattice, as RG floats
    * (K-A E4).
    *
-   * ONE LEVEL, not a pyramid: the vertex reads the flow at the finest lattice
-   * whatever it is drawn at (`tlodFlowAt`), so the coarse levels would be
-   * memory nobody fetches. The geometry is `waterPyr.levels[0]` — the same
-   * origin, step and size the level texture's own level 0 has, which is what
-   * lets the two share `uTlodWaterGeom` and `uTlodWaterLevel[0]`.
+   * ONE LEVEL, not a pyramid: the FRAGMENT reads the flow at the finest lattice
+   * whatever the piece it sits on is drawn at (`waterShade.twFlowAt`), so the
+   * coarse levels would be memory nobody fetches. The geometry is
+   * `waterPyr.levels[0]` — the same origin, step and size the level texture's own
+   * level 0 has, which is what lets the two share `uTlodWaterGeom` and
+   * `uTlodWaterLevel[0]`; the shader takes the extent out of `textureSize`.
    *
    * THE FIELD AND THE TEXTURE ARE ONE ARRAY, exactly as the sd's are: the
    * diagnostic readout has to be able to ask what the vertex stage fetched at a
@@ -3559,6 +3572,56 @@ export function createTerrainLod(): TerrainLod {
     waterGeo.instanceCount = wet;
     nodes = picked.length;
     waterNodes = wet;
+    lastPicked = picked;
+    lastCapRelax = sel.capRelax;
+  }
+
+  /**
+   * THE PIECE DRAWN OVER A POINT in the last selection, or `null`.
+   *
+   * A linear scan over the few hundred pieces the selection holds. It is asked
+   * by the debug panel at its own 250 ms beat and by nothing else, so a spatial
+   * index would be a structure kept current every frame for four lookups a
+   * second. The selection is a PARTITION of the extent, so the first hit is the
+   * only hit.
+   */
+  function drawnPieceAt(x: number, z: number): LodNode | null {
+    for (const n of lastPicked) {
+      if (x >= n.x && x < n.x + n.size && z >= n.z && z < n.z + n.size) return n;
+    }
+    return null;
+  }
+
+  /**
+   * WHAT THE OLD PER-VERTEX FLOW PATH WOULD HAND THIS POINT — the same field,
+   * read at the four corners of the cell of the drawn piece's own vertex
+   * spacing and mixed bilinearly. See {@link WaterProbe.vertexFlow}.
+   *
+   * THE LATTICE IS ANCHORED AT THE PIECE ORIGIN, because that is where its
+   * vertices sit (`tlodCompute` walks `iNode.xy` in steps of
+   * `uTlodBaseStep · 2^level`). Bilinear and not the rasterizer's barycentric
+   * blend: the blend of a triangle is a convex combination of three of these
+   * four corners, so it is bounded by them, and the ONE verdict this number
+   * exists for — "all four corners are dry, so the varying was exactly (0, 0)"
+   * — is the same either way.
+   */
+  function vertexFlowAt(x: number, z: number): [number, number] {
+    const n = drawnPieceAt(x, z);
+    if (!n || !flowField) return [0, 0];
+    const e = baseStep * 2 ** n.level;
+    if (!(e > 0)) return [0, 0];
+    const gx = n.x + Math.floor((x - n.x) / e) * e;
+    const gz = n.z + Math.floor((z - n.z) / e) * e;
+    const tx = (x - gx) / e;
+    const tz = (z - gz) / e;
+    const c00 = gpuWaterFlowAt(flowField, gx, gz);
+    const c10 = gpuWaterFlowAt(flowField, gx + e, gz);
+    const c01 = gpuWaterFlowAt(flowField, gx, gz + e);
+    const c11 = gpuWaterFlowAt(flowField, gx + e, gz + e);
+    const mix = (k: 0 | 1): number =>
+      (c00[k] * (1 - tx) + c10[k] * tx) * (1 - tz)
+      + (c01[k] * (1 - tx) + c11[k] * tx) * tz;
+    return [mix(0), mix(1)];
   }
 
   /** The isolation panel's LOD freeze — see `TerrainLod.setFrozen`. */
@@ -3661,7 +3724,7 @@ export function createTerrainLod(): TerrainLod {
     waterProbe(x, z) {
       // The FINEST tap of everything, which is what a point probe means: the
       // level, the flow and the sd have no level of their own to pick anyway
-      // (`tlodFlowAt`, `twSdAt`), and the height is asked at `nodeStep` 0 — the
+      // (`twFlowAt`, `twSdAt`), and the height is asked at `nodeStep` 0 — the
       // same tap λ itself is measured from (`lodVertex.tAt`).
       const level = gpuWaterAt(waterPyr, nearRect, x, z, 0);
       const ground = gpuHeightAt(nearPyr, nearRect, farPyr, x, z, 0);
@@ -3670,14 +3733,24 @@ export function createTerrainLod(): TerrainLod {
       // rather than a second opinion about it.
       const depth = uNoWater.value > 0.5
         ? 0 : liftedHeight(ground, level, sd) - ground;
-      const flow = gpuWaterFlowAt(flowField, nearRect, x, z);
+      // THE FRAGMENT'S OWN TAP since Task 7 — the readout and the drawn pixel
+      // read one number now, which is the whole point of moving the tap.
+      const flow = gpuWaterFlowAt(flowField, x, z);
       const flowLen = Math.hypot(flow[0], flow[1]);
       const still = flowLen < 1e-4;
+      // …and what the retired per-vertex path would have delivered beside it.
+      const vertexFlow = vertexFlowAt(x, z);
+      const drawn = drawnPieceAt(x, z);
       const kind = rasterKindAt(lastWater, x, z).toLowerCase();
       const lookRow = Math.min(Math.max(rowOfKind.get(kind) ?? 0, 0),
                                Math.max(lookRows.length - 1, 0));
       const look = lookRows[lookRow] ?? WATER_LOOK_DEFAULT;
       return { level, ground, depth, sd, flow, flowLen, still,
+               vertexFlow,
+               vertexFlowLen: Math.hypot(vertexFlow[0], vertexFlow[1]),
+               drawnLevel: drawn ? drawn.level : -1,
+               vertexSpacingM: drawn ? baseStep * 2 ** drawn.level : 0,
+               capRelax: lastCapRelax,
                speed: still ? look.speed : look.flowSpeed * flowLen,
                lookRow, opaqueDepthM: look.opaqueDepthM, waveM: look.waveM };
     },

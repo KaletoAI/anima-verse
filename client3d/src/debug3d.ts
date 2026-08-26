@@ -493,10 +493,20 @@ export function initIsolation(deps: IsolationDeps): void {
    *   d          `vTlodWet`, the GATED lift the fragment shades from
    *   sd         the signed distance to the AUTHORED outline; negative is the
    *              raster's 4 m dilation ring, which is drawn as ground
-   *   flow       the downstream vector and its length — the area's speed factor
+   *   flow       the downstream vector and its length — the area's speed
+   *              factor, and since Task 7 the very number the FRAGMENT samples
    *   STILL      the shader's own branch: `|flow| < 1e-4` means the ripple
    *              counter-scrolls at the kind's still speed and can NEVER drift
    *              downstream, whatever the flow dial says
+   *   vtx        what the RETIRED per-vertex path would have handed this pixel
+   *              at the level the piece is drawn at — a diagnostic, and the one
+   *              number this line was missing on 2026-08-26: it read 0 (the
+   *              river drawn as standing water) while `flow` read 2 m/s
+   *   L / relax  the LOD level of the piece under the probe (vertex spacing is
+   *              `baseStep · 2^L`) and how many levels the node budget forced
+   *              `selectLodFitted` to relax the water's F1 mip cap by. `relax`
+   *              above 0 means narrow water is being drawn coarser than its own
+   *              cap asked for
    *   sp         metres per second the crests really travel
    *   row        which row of the look table `twKindRow` fetched — a river
    *              reading a lake's row is finding F-A all over again
@@ -516,7 +526,9 @@ export function initIsolation(deps: IsolationDeps): void {
       + `sd ${p.sd <= -1e3 ? 'dry' : m3(p.sd)}\n`
       + `      flow ${f4(p.flow[0])},${f4(p.flow[1])} |${f4(p.flowLen)}|`
       + `${p.still ? ' STILL' : ''}  sp ${m3(p.speed)} m/s  `
-      + `row ${p.lookRow} opq ${m3(p.opaqueDepthM)} wave ${m3(p.waveM)}\n`;
+      + `row ${p.lookRow} opq ${m3(p.opaqueDepthM)} wave ${m3(p.waveM)}\n`
+      + `      vtx |${f4(p.vertexFlowLen)}|  L${p.drawnLevel} `
+      + `(${m3(p.vertexSpacingM)} m/vertex)  relax ${p.capRelax}\n`;
   }
 
   // ── the DOM ─────────────────────────────────────────────────────────────
