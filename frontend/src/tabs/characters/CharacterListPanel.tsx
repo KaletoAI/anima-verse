@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ImportButton } from '../../components/ImportExport'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import type { CharacterRef } from '../../lib/refs'
 
-interface PooledNpc { name: string; role?: string; standing_task?: string; reason?: string }
+interface PooledNpc {
+  name: string
+  role?: string
+  standing_task?: string
+  reason?: string
+  /** Profile-image URL, the same path the living roster uses. "" = none. */
+  image_url?: string
+  /** role · standing task · appearance, empty halves skipped. */
+  description?: string
+}
 interface NpcLimits { alive?: number; max_alive?: number; wanderer_quota?: number; pool_size?: number }
 
 /**
@@ -61,6 +71,22 @@ export function CharacterListPanel({
     try { await apiDelete(`/characters/${encodeURIComponent(name)}`) } finally {
       loadPool()
     }
+  }
+
+  // Hover card of a pool row. A pooled NPC appears on no other surface, and
+  // an LLM-invented name alone says nothing about who it is — so the portrait
+  // and the one-line description are shown on mouse-over. Positioned from the
+  // row's own rect and rendered into document.body: the pool list scrolls
+  // (`overflow-y: auto`), so a card inside it would be clipped at the edge.
+  const [preview, setPreview] = useState<{ npc: PooledNpc; top: number; left: number } | null>(null)
+  const openPreview = (npc: PooledNpc, el: HTMLElement) => {
+    if (!npc.image_url && !npc.description) return
+    const r = el.getBoundingClientRect()
+    setPreview({
+      npc,
+      top: Math.max(8, Math.min(r.top, window.innerHeight - 160)),
+      left: Math.min(r.right + 8, window.innerWidth - 340),
+    })
   }
 
   const row = (c: CharacterRef, marker?: string) => {
@@ -156,7 +182,12 @@ export function CharacterListPanel({
           <li className="ga-list-empty">{t('Pool is empty')}</li>
         ) : (
           pooled.map((p) => (
-            <li key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <li
+              key={p.name}
+              style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+              onMouseEnter={(e) => openPreview(p, e.currentTarget)}
+              onMouseLeave={() => setPreview(null)}
+            >
               <span className="ga-list-row" style={{ flex: 1 }}>
                 <span className="ga-list-row-main">
                   <strong>♺ {p.name}</strong>
@@ -180,6 +211,20 @@ export function CharacterListPanel({
           ))
         )}
       </ul>
+      {preview && createPortal(
+        <div className="ga-pool-preview" style={{ top: preview.top, left: preview.left }}>
+          {preview.npc.image_url ? (
+            <img src={preview.npc.image_url} alt="" />
+          ) : null}
+          <div>
+            <strong>{preview.npc.name}</strong>
+            <p className="ga-muted">
+              {preview.npc.description || t('No description yet.')}
+            </p>
+          </div>
+        </div>,
+        document.body,
+      )}
     </aside>
   )
 }

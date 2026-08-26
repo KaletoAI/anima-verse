@@ -66,6 +66,24 @@ THE RULE, by hand — the gate matrix of the brief's § 0 A:
       somewhere else entirely. Read out of the queue DB, not off the submit
       call.
 
+ [3b] THE POOL ROW IS READABLE. A pooled NPC used to be a bare name in the
+      Game-Admin list, and a name an LLM invented says nothing about who
+      that is. `list_pool` therefore also delivers `image_url` — the same
+      `/characters/<name>/images/<file>` path the living roster builds
+      (`character_ops.build_present_characters`), "" when there is no
+      portrait, never a broken link — and `description`, the non-empty
+      halves of role · standing_task · character_appearance joined with
+      " · ". Hand-derived for an NPC created by this file's `make_npc`
+      (standing task "sweeping the yard", appearance "a weathered farmhand")
+      claimed for the `cook` slot with a portrait on disk:
+        image_url   "/characters/Ylva/images/face.png"
+        description "cook · sweeping the yard · a weathered farmhand"
+      and for `Brenna`, who has no role and no portrait:
+        image_url   ""
+        description "loading sacks · a thin carter"
+      Both fields come out of the profile `list_pool` already reads, so the
+      row costs no extra query.
+
   [4] `revive_from_pool` uses the very same gate — on an NPC that went into
       the pool the real way (`pool_npc`, which is what takes it off the map) —
       and, when the gate holds it back, still returns True: its caller
@@ -441,6 +459,29 @@ apply_npc({"character_name": C, "character_appearance": "a thin carter"},
           LOC_ID, room_id=TAPROOM, template="npc-temporary",
           created_by="smoke_npc_assets")
 check("a second apply adds no second task", len(tasks_for(C)), 1)
+
+# ── [3b] the pool row carries a face and a description ──────────────────────
+print("[3b] the pool row carries a face and a description")
+set_require_assets(True)
+P = "Ylva"
+apply_npc({"character_name": P,
+           "character_appearance": "a weathered farmhand",
+           "standing_task": "sweeping the yard"},
+          LOC_ID, room_id=TAPROOM, template="npc-temporary",
+          slot_role="cook", created_by="smoke_npc_assets")
+give_profile_image(P)
+check("held back", get_character_status(P), "pooled")
+_row = [r for r in list_pool() if r["name"] == P][0]
+check("the row points at the profile image the roster would use",
+      _row["image_url"], f"/characters/{P}/images/face.png")
+check("and the description carries role, task and appearance",
+      _row["description"],
+      "cook · sweeping the yard · a weathered farmhand")
+_bare = [r for r in list_pool() if r["name"] == C][0]
+check("an NPC with no profile image gets an empty url, never a broken one",
+      _bare["image_url"], "")
+check("and its description skips the empty halves",
+      _bare["description"], "loading sacks · a thin carter")
 
 set_require_assets(False)
 D = "Ansgar"

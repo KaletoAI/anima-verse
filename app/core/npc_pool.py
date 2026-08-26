@@ -292,8 +292,40 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
 # Listing (Game-Admin)
 # ---------------------------------------------------------------------------
 
+#: Longest ``description`` a pool row carries — it is a hover card, not a
+#: character sheet, and the appearance field can run to several paragraphs.
+POOL_DESCRIPTION_CHARS = 300
+
+
+def _pool_description(profile: Dict[str, Any]) -> str:
+    """Who this pooled NPC is, in one line: role · standing task · appearance.
+
+    Empty halves are skipped rather than rendered as gaps — a wanderer has no
+    slot role, and a sheet the generation turn never finished may carry only
+    an appearance.
+    """
+    parts = [str(profile.get(key) or "").strip()
+             for key in ("npc_slot_role", "standing_task",
+                         "character_appearance")]
+    return " · ".join(p for p in parts if p)[:POOL_DESCRIPTION_CHARS]
+
+
 def list_pool() -> List[Dict[str, Any]]:
-    """One row per pooled NPC for the Game-Admin NPC section."""
+    """One row per pooled NPC for the Game-Admin NPC section.
+
+    ``image_url`` and ``description`` are what make the row readable: a name
+    an LLM invented says nothing about who that NPC is, and the pool is the
+    only surface these profiles appear on at all. Both come out of the
+    profile this loop already reads (``profile_image`` is a profile field),
+    so a pooled row still costs exactly one profile lookup.
+
+    The URL is the same ``/characters/<name>/images/<file>`` shape the living
+    roster builds (``character_ops.build_present_characters``), percent-
+    encoded per segment; "" when there is no portrait, so the UI never has to
+    render a broken image.
+    """
+    from urllib.parse import quote
+
     from app.models.character import get_character_profile, is_temporary_npc
     from app.models.character import list_pooled_characters
     rows: List[Dict[str, Any]] = []
@@ -301,11 +333,15 @@ def list_pool() -> List[Dict[str, Any]]:
         if not is_temporary_npc(name):
             continue
         profile = get_character_profile(name) or {}
+        image = str(profile.get("profile_image") or "").strip()
         rows.append({
             "name": name,
             "template": profile.get("template") or "",
             "role": profile.get("npc_slot_role") or "",
             "standing_task": profile.get("standing_task") or "",
             "reason": profile.get("npc_pooled_reason") or "",
+            "image_url": (f"/characters/{quote(name, safe='')}/images/"
+                          f"{quote(image, safe='')}" if image else ""),
+            "description": _pool_description(profile),
         })
     return rows

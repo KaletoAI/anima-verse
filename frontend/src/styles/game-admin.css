@@ -625,6 +625,36 @@ a.ga-btn {
 .ga-list-row-sub { color: var(--text-muted, #8b949e); margin-left: 4px; }
 .ga-list-thumb { width: 28px; height: 28px; border-radius: 4px; object-fit: cover; flex: 0 0 auto; }
 
+/* Hover card of an NPC-pool row (CharacterListPanel). Rendered into
+   document.body and positioned `fixed` from the row's own rect — the pool
+   list scrolls, so a card living inside it would be clipped at the edge.
+   `pointer-events: none` keeps it from stealing the mouse-leave of the row
+   that opened it. */
+.ga-pool-preview {
+  position: fixed;
+  z-index: 300;
+  display: flex;
+  gap: 10px;
+  width: 320px;
+  padding: 10px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+  background: var(--bg-container, #161b22);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.ga-pool-preview img {
+  width: 72px;
+  height: 72px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.ga-pool-preview p { margin: 4px 0 0 0; line-height: 1.35; }
+
 .ga-source {
   font-size: 10px;
   padding: 1px 6px;
