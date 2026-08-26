@@ -64,6 +64,23 @@ Hand-derived expectations:
       avatar itself, never Tove, and bumps nobody. Otherwise the private volume
       would be the one that carries furthest.
 
+  (b3) AND THE ANSWER TRAVELS BACK THE WAY THE QUESTION CAME.
+      Half a round trip is no round trip: if the reply from the gate does not
+      reach the avatar behind the wall, the player sees their line go out and
+      nothing come back. Tove (12, 0), location-less, answers the avatar (0, 0)
+      inside the inn — 12.0 m <= 20, so the ADDRESSED line arrives regardless of
+      the wall, with kind ``addressed`` (not ``nearby``: it crossed a wall, and
+      the kind says why it was heard). Mira gets nothing — she is not addressed,
+      and an unaddressed line from outside does not reach into a room.
+      Checked at the CONSUMER as well, not only in the perceptions table: the
+      line shows up in ``get_character_room_stream(avatar, INN, "taproom")``,
+      which is what ``/play/scene`` renders. Without that arm the row exists and
+      the player still sees nothing.
+      Two counter-probes keep the rule narrow: the SAME speaker at the SAME spot
+      saying something UNADDRESSED reaches nobody but itself (the E6 wall rule
+      that ``smoke_earshot`` [1] pins is untouched), and an addressed WHISPER
+      does not cross the wall either.
+
   (c) A WANDERER DOES NOT LEAVE MID-SENTENCE.
       ``_settle_wanderer`` runs on every wanderer tick and ends the arrival
       immediately — 50 % turn around, otherwise into the pool. Cass has
@@ -156,7 +173,7 @@ from app.core.npc_pool import pool_npc  # noqa: E402
 from app.core.perception import addressable_for  # noqa: E402
 from app.core.timeutils import (set_game_factor, set_game_time,  # noqa: E402
                                 utc_now)
-from app.models import terrain  # noqa: E402
+from app.models import perception_store, terrain  # noqa: E402
 from app.core.users import create_user, update_user  # noqa: E402
 from app.models.character import (  # noqa: E402
     get_character_current_location, get_character_current_room,
@@ -321,10 +338,15 @@ def clear_chat() -> None:
 def perceivers_of(utterance_id) -> list:
     """Who got a perception row for this speech act — the fan-out, read at the
     consumer (the table), not at the earshot computation."""
+    return [n for n, _k in kinds_of(utterance_id)]
+
+
+def kinds_of(utterance_id) -> list:
+    """``[(perceiver, kind), …]`` of one speech act."""
     rows = db.get_connection().execute(
-        "SELECT perceiver FROM perceptions WHERE utterance_id=?",
+        "SELECT perceiver, kind FROM perceptions WHERE utterance_id=?",
         (utterance_id,)).fetchall()
-    return [r[0] for r in rows]
+    return [(r[0], r[1]) for r in rows]
 
 
 # ── (a) out in the open the radius is the rule ──────────────────────────────
@@ -391,6 +413,26 @@ _res = _loop.dispatch_room_reactions(speaker=AVATAR, content="psst",
                                      is_avatar=True)
 check("and nobody out there is bumped for it", _res,
       {"obligatory": [], "chime": []})
+
+# ── (b3) THE ANSWER TRAVELS BACK THE WAY THE QUESTION CAME ──────────────────
+print("(b3) the reply from the gate reaches the avatar behind the wall")
+clear_chat()
+_uid = perception.record_utterance(speaker="Tove", content="I am coming!",
+                                   addressees=[AVATAR])
+check("the avatar behind the wall perceives the addressed reply",
+      sorted(perceivers_of(_uid)), ["Tove", "Wren"])
+check("and it is marked as heard BECAUSE it was addressed",
+      [k for n, k in kinds_of(_uid) if n == AVATAR], ["addressed"])
+check("it also shows in the avatar's scene view, where /play reads it",
+      [r["content"] for r in perception_store.get_character_room_stream(
+          AVATAR, INN, "taproom", 20)], ["I am coming!"])
+_uid = perception.record_utterance(speaker="Tove", content="what a night")
+check("an UNADDRESSED line from the same spot does not cross the wall (E6)",
+      sorted(perceivers_of(_uid)), ["Tove"])
+_uid = perception.record_utterance(speaker="Tove", content="secret",
+                                   addressees=[AVATAR], volume="whisper")
+check("and an addressed WHISPER does not cross it either",
+      sorted(perceivers_of(_uid)), ["Tove"])
 clear_chat()
 
 # ── (c) the arrival tick and the TTL sweep leave a conversation alone ───────

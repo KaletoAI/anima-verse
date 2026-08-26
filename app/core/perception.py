@@ -25,6 +25,14 @@ it stays inside the walls and reaches nobody out there. Who may be ADDRESSED
 follows the same union (``addressable_for``) — the gate and the fan-out must
 answer with one roster, or the player picks an addressee who never hears them.
 
+AND THE ADDRESSED LINE ALWAYS ARRIVES: whoever is named as an addressee and
+stands within ``game.hearing_radius_m`` of the speaker perceives it (kind
+``addressed``), walls or not — "the answer travels back the way the question
+came". Only the ADDRESSED line does; ambient speech keeps the wall rule
+exactly, so an outdoor speaker still does not reach people indoors unless it
+speaks TO them. A whisper is again the exception: an addressed whisper does
+not cross a wall.
+
 The speaker always gets a self-perception so its own stream contains what it
 said.
 
@@ -53,6 +61,10 @@ KIND_WHISPER_META = "whisper_meta"
 KIND_DISTANT_SHOUT = "distant_shout"
 # Heard in the open: no room, no walls — just close enough (E6).
 KIND_NEARBY = "nearby"
+# Heard because it was spoken TO you, from the other side of a wall — the
+# addressed line always arrives within the hearing radius (see the module
+# docstring). Never a whisper.
+KIND_ADDRESSED = "addressed"
 
 DEFAULT_HEARING_RADIUS_M = 20.0
 _MIN_HEARING_RADIUS_M = 1.0
@@ -162,7 +174,8 @@ def compute_earshot(*, speaker: str, volume: str,
                     room_members: Sequence[str],
                     location_others: Sequence[str],
                     nearby: Sequence[str] = (),
-                    inside_location: bool = False) -> List[EarshotTarget]:
+                    inside_location: bool = False,
+                    addressed_far: Sequence[str] = ()) -> List[EarshotTarget]:
     """Who perceives a speech act how? PURE — no DB.
 
     Args:
@@ -182,6 +195,13 @@ def compute_earshot(*, speaker: str, volume: str,
                           when there is a WALL between it and ``nearby``. It
                           changes one thing: a WHISPER does not carry through
                           the wall (see below).
+        addressed_far:    explicit addressees within the hearing radius that
+                          neither room list nor circle contains — the other
+                          side of a wall, either way round. They perceive the
+                          line as ``addressed``: a line spoken TO somebody
+                          always arrives (never a whisper). Resolving WHO that
+                          is needs positions, so the caller does it; the RULE
+                          lives here.
     """
     vol = volume if volume in _VALID_VOLUMES else VOLUME_NORMAL
     addr = {a for a in (addressees or [])}
@@ -227,6 +247,20 @@ def compute_earshot(*, speaker: str, volume: str,
                     add(m, KIND_NEARBY, True)
             else:
                 add(m, KIND_NEARBY, True)
+
+    # THE ADDRESSED LINE ALWAYS ARRIVES. Whoever was spoken TO and stands
+    # within the hearing radius perceives it even through a wall — the answer
+    # travels back the way the question came, and an addressee that never
+    # hears the line is worse than no addressee (the answer never comes and
+    # the storyteller narrates over the silence). ``add`` keeps the kind
+    # somebody already has: this only ever REACHES further, it never
+    # downgrades a room member to "addressed".
+    # A whisper is exempt in both directions — leaning over a table must not
+    # be audible through stone, whoever it was meant for.
+    if vol != VOLUME_WHISPER:
+        for m in addressed_far:
+            if m in addr:
+                add(m, KIND_ADDRESSED, True)
 
     return targets
 
@@ -286,6 +320,69 @@ def _nearby_in_the_open(speaker: str,
         if not name or name == speaker:
             continue
         if math.hypot(entry["x"] - sx, entry["z"] - sz) <= radius:
+            out.append(name)
+    return out
+
+
+def _heard_at(name: str) -> Optional[Dict[str, float]]:
+    """The metre point a character is HEARD at — its own, or its location's.
+
+    A character inside a location usually has a point of its own, but not
+    always: an NPC placed straight into a room (``npc_home.place_npc`` without
+    a circle) has none at all. Then the location's map anchor stands in, the
+    same substitute ``addressable_at_location`` uses when it is asked about a
+    place instead of a person. None when neither exists — somebody the map
+    does not place is not within any radius.
+    """
+    from app.models.character import (get_character_current_location,
+                                      get_character_pos)
+    pos = get_character_pos(name)
+    if pos:
+        return pos
+    loc_id = get_character_current_location(name) or ""
+    if not loc_id:
+        return None
+    from app.models.world import get_location_by_id
+    loc = get_location_by_id(loc_id) or {}
+    try:
+        if loc.get("pos_x") is None or loc.get("pos_z") is None:
+            return None
+        return {"x": float(loc["pos_x"]), "z": float(loc["pos_z"])}
+    except (TypeError, ValueError):
+        return None
+
+
+def _addressees_in_earshot(speaker: str,
+                           speaker_pos: Optional[Dict[str, float]],
+                           addressees: Sequence[str],
+                           already: Sequence[str]) -> List[str]:
+    """The addressees the ordinary presence resolution did NOT reach, but who
+    stand within ``game.hearing_radius_m`` of the speaker anyway.
+
+    ONE distance rule, the same metres ``_nearby_in_the_open`` measures — this
+    only asks it about named people instead of about the open world, which is
+    why it can cross a wall. Reads at most one point per addressee, and only
+    for addressees that are not already in earshot, so an ordinary room line
+    to somebody in the same room costs nothing.
+    """
+    if not speaker_pos or not addressees:
+        return []
+    try:
+        sx = float(speaker_pos["x"])
+        sz = float(speaker_pos["z"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    radius = get_hearing_radius_m()
+    known = set(already) | {speaker}
+    out: List[str] = []
+    for name in addressees:
+        if not name or name in known:
+            continue
+        known.add(name)
+        point = _heard_at(name)
+        if not point:
+            continue
+        if math.hypot(point["x"] - sx, point["z"] - sz) <= radius:
             out.append(name)
     return out
 
@@ -576,11 +673,15 @@ def record_utterance(*, speaker: str, content: str,
     try:
         room_members, location_others, nearby = _resolve_presence(
             loc, room, speaker=speaker, speaker_pos=speaker_pos)
+        addressed_far = _addressees_in_earshot(
+            speaker, speaker_pos, addr,
+            list(room_members) + list(location_others) + list(nearby))
         targets = compute_earshot(speaker=speaker, volume=vol, addressees=addr,
                                   room_members=room_members,
                                   location_others=location_others,
                                   nearby=nearby,
-                                  inside_location=bool(loc))
+                                  inside_location=bool(loc),
+                                  addressed_far=addressed_far)
 
         # Utterance meta: source + optional markers (e.g. event_verdict/reason),
         # so the objective observer view (which reads utterances) sees them too.

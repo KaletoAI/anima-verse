@@ -203,6 +203,14 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
       erase itself. Heard is heard.
     * still a JOIN over ``perceptions``, so nothing reaches a character that
       it did not perceive; whispered content stays empty exactly as in a room.
+
+    A line SPOKEN TO this character comes along wherever it was spoken (kind
+    ``addressed``, written only for an addressee on the other side of a wall —
+    see ``perception.compute_earshot``). Without that the round trip breaks in
+    the middle: the avatar in the taproom reaches the NPC at the gate, the NPC
+    answers, and the answer never appears on the player's screen because its
+    utterance carries no location. It is the reply to something this character
+    said; it belongs in its scene.
     """
     conn = get_connection()
     # Include u.volume (whisper/normal/shout) — NOT secret content, just the
@@ -211,14 +219,15 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
         rows = conn.execute(
             "SELECT p.*, u.volume AS volume FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
-            "WHERE p.perceiver=? AND u.location_id=? AND u.room_id=? "
+            "WHERE p.perceiver=? AND (p.kind='addressed' "
+            "                         OR (u.location_id=? AND u.room_id=?)) "
             "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
             (perceiver, location_id, room_id, limit)).fetchall()
     else:
         rows = conn.execute(
             "SELECT p.*, u.volume AS volume FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
-            "WHERE p.perceiver=? AND u.location_id='' "
+            "WHERE p.perceiver=? AND (p.kind='addressed' OR u.location_id='') "
             "ORDER BY p.ts DESC, p.id DESC LIMIT ?",
             (perceiver, limit)).fetchall()
     out = [_row_to_dict(r) for r in reversed(rows)]
