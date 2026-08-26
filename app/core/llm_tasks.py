@@ -86,6 +86,12 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # is chat class; unrouted it falls back to `chat_stream` (resolve_llm).
     "npc_generate":       {"label": "NPC Generation (automatic)", "priority": Priority.LOW, "category": "chat"},
 
+    # The action tick (plan-npc-leben § 0 B): one room + one sentence per
+    # background NPC, a few times per game hour. The smallest recurring task
+    # in the catalog — route it at a SMALL model, or the `npc_*` fallback
+    # sends it to `chat_stream` and every idle NPC costs a chat turn.
+    "npc_action":         {"label": "NPC action tick", "priority": Priority.LOW, "category": "helper", "gate": "npc.action_tick_enabled"},
+
     # Summaries
     "consolidation":         {"label": "Consolidation (3-Tier)",   "priority": Priority.LOW, "category": "helper"},
     "relationship_summary":  {"label": "Relationship Summary",     "priority": Priority.LOW, "category": "helper", "gate": "relationships.summary_enabled"},
@@ -405,6 +411,18 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "small", "arch": "any", "hallucination_risk": "low",
         "creative": True, "language_de": False, "latency_sensitive": True,
+    },
+    "npc_action": {
+        # Two fields out, a room list and a standing task in. Nothing the
+        # model returns survives unchecked: an unknown room id is discarded
+        # whole and a move the block rules deny never happens, so
+        # hallucination_risk is low. language_de True — the activity sentence
+        # is written in the language of the NPC's standing task, which is the
+        # world's language. latency_sensitive False: nobody waits for it, it
+        # is a background tick.
+        "tools": False, "vision": False, "json": True, "min_context": 2048,
+        "model_class": "small", "arch": "any", "hallucination_risk": "low",
+        "creative": True, "language_de": True, "latency_sensitive": False,
     },
 
     # --- Summaries ----------------------------------------------------------

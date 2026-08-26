@@ -370,6 +370,13 @@ def _sub_npc_wanderers():
         logger.debug("npc_wanderers sub error: %s", e)
 
 
+# The action tick lives in its own module (candidate selection, prompt, LLM
+# turn, validation, application) and brings its own error handling — this file
+# only schedules it. The 60 s below are the CHECK frequency; the real rhythm is
+# the per-NPC GAME cooldown `npc.action_interval_game_minutes`.
+from app.core.npc_actions import _sub_npc_actions  # noqa: E402
+
+
 # Sub-Task-Tabelle: (callable, min_interval_seconds, label).
 # min_interval_seconds = wie oft soll dieser Sub-Task LAUFEN. Der Tick
 # selbst feuert haeufiger; jeder Sub-Task wird nur ausgefuehrt wenn seit
@@ -394,6 +401,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_lora_library_sync,         3600,                  "lora_library_sync"),
     (_sub_npc_ttl_sweep,             3600,                  "npc_ttl_sweep"),
     (_sub_npc_wanderers,             300,                   "npc_wanderers"),
+    (_sub_npc_actions,               60,                    "npc_actions"),
 ]
 
 
