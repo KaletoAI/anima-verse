@@ -1192,14 +1192,20 @@ def _lifetime_fields(profile: Dict[str, Any],
     * ``permanent`` — no stamp at all (``""`` is what ``sweep_expired_npcs``
       reads as "never") plus ``npc_permanent``, the flag that survives pooling
       and stops ``npc_pool.revive_from_pool`` from handing the NPC a new TTL;
-    * ``custom`` — ``lifetime_hours`` GAME hours from now. A missing or
-      non-positive number is no lifetime at all and falls through to default;
+    * ``custom`` — ``lifetime_hours`` GAME hours from now;
     * ``default`` — the world's own TTL for this kind of NPC: the wanderer TTL
       for a wanderer, the slot TTL for everyone else.
 
     Only the mode is read from ``fields`` first and from the stored profile
     second, so a save that carries the HOURS alone still restamps a custom
     lifetime.
+
+    THE MODE OUTLIVES A MISSING NUMBER. The config form saves ONE field per
+    request, so picking "custom" always arrives without any hours — the mode is
+    stored as picked and only the STAMP falls back to the default TTL until the
+    hours arrive in the next save. Writing ``default`` back here instead would
+    snap the dropdown shut, hide the hours field before it could be typed into,
+    and make the hours-only save that follows read the wrong stored mode.
     """
     from app.core.npc_ops import expiry_stamp
     from app.core.npc_spawn import slot_ttl_hours, wanderer_ttl_hours
@@ -1220,8 +1226,8 @@ def _lifetime_fields(profile: Dict[str, Any],
                     "expires_at": expiry_stamp(hours), "npc_permanent": False}
     ttl = (wanderer_ttl_hours() if profile.get("npc_wanderer")
            else slot_ttl_hours())
-    return {"lifetime": "default", "expires_at": expiry_stamp(ttl),
-            "npc_permanent": False}
+    return {"lifetime": "custom" if mode == "custom" else "default",
+            "expires_at": expiry_stamp(ttl), "npc_permanent": False}
 
 
 def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:

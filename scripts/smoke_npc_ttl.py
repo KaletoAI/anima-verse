@@ -82,7 +82,8 @@ the profile. The rule, in full:
 
     permanent → expires_at = ""            npc_permanent = True
     custom    → expires_at = expiry_stamp(lifetime_hours)   npc_permanent = False
-                (lifetime_hours missing or <= 0 is no choice at all → default)
+                (no usable number yet → the MODE is kept and only the stamp
+                 falls back to the default TTL, see [15])
     default   → expires_at = expiry_stamp(wanderer_ttl_hours() if the profile
                 is a wanderer else slot_ttl_hours())        npc_permanent = False
 
@@ -130,6 +131,25 @@ The branch fires ONLY for a temporary NPC and ONLY when the save carries
       on a temporary NPC leaves the stamp from [12] byte for byte — otherwise
       every edit in the config form would quietly give the NPC a fresh day.
 
+ [15] THE FORM SAVES ONE FIELD PER REQUEST (``TemplateField`` commits a select
+      the moment it changes; both renderers post ``{fields: {<key>: value}}``),
+      so picking "custom" ALWAYS arrives without any hours. Two calls, exactly
+      as the form makes them, with the slot TTL at 6 h from [10c]:
+        1) ``{"lifetime": "custom"}``      → mode stays "custom", and only the
+           STAMP falls back: T0 + 6·3 600 = 928 800 s = Day 11, 18:00
+        2) ``{"lifetime_hours": 3}``       → the stored mode is read back as
+           "custom" → T0 + 3·3 600 = 918 000 s = Day 11, 15:00
+      Writing "default" back in step 1 would shut the dropdown, hide the hours
+      field and make step 2 stamp the default TTL again — the custom lifetime
+      would be unreachable through the UI.
+
+ [16] A PERMANENT SHEET IS NOT POOL STOCK. ``take_from_pool`` hands automatic
+      spawns a recycled character sheet; a sheet an admin made permanent is a
+      kept character, not spare parts, so it is skipped — for a named role AND
+      for the empty role a wanderer spawn asks with. With ONLY a permanent
+      sheet pooled both questions answer None; once a mortal sheet of the same
+      role joins it, both answer that one.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_ttl.py
 """
 import os
@@ -154,7 +174,8 @@ from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.npc_ops import (apply_npc, expiry_stamp,  # noqa: E402
                               is_expired, npc_summary, remaining_span,
                               sweep_expired_npcs)
-from app.core.npc_pool import pool_npc, revive_from_pool  # noqa: E402
+from app.core.npc_pool import (pool_npc, revive_from_pool,  # noqa: E402
+                               take_from_pool)
 from app.core.task_queue import get_task_queue  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.models.character import (get_character_profile,  # noqa: E402
@@ -342,14 +363,14 @@ check("one game hour from T0",
       (get_character_profile(SABLE) or {}).get("expires_at"),
       "Y0001-D011T13:00:00")
 
-print("[10c] zero hours is no lifetime — the default rule applies")
+print("[10c] zero hours is no usable number — the stamp falls back")
 set_npc_cfg(slot_ttl_game_hours=6, wanderer_ttl_game_hours=9)
 apply_profile_update(SABLE, {"fields": {"lifetime": "custom",
                                         "lifetime_hours": 0}})
 sable = get_character_profile(SABLE) or {}
 check("it falls back to the slot TTL", sable.get("expires_at"),
       "Y0001-D011T18:00:00")
-check("and says so in the mode", sable.get("lifetime"), "default")
+check("but the picked mode is kept", sable.get("lifetime"), "custom")
 
 # ---------------------------------------------------------------------------
 print("\n[11] the lifetime edit: default reads the world's TTL config")
@@ -410,6 +431,46 @@ check("the stamp survives an ordinary edit", rook.get("expires_at"),
       "Y0001-D011T17:00:00")
 check("and the edit itself landed", rook.get("standing_task"),
       "sweeping the yard")
+
+# ---------------------------------------------------------------------------
+print("\n[15] the form saves ONE field per request — custom in two calls")
+
+WREN = make_npc("Wren", ttl_hours=1)
+apply_profile_update(WREN, {"fields": {"lifetime": "custom"}})
+wren = get_character_profile(WREN) or {}
+check("call 1 keeps the picked mode", wren.get("lifetime"), "custom")
+check("call 1 stamps the default TTL for now", wren.get("expires_at"),
+      "Y0001-D011T18:00:00")
+apply_profile_update(WREN, {"fields": {"lifetime_hours": 3}})
+wren = get_character_profile(WREN) or {}
+check("call 2 reads the stored mode and takes the hours",
+      wren.get("expires_at"), "Y0001-D011T15:00:00")
+check("and the hours are on the profile", wren.get("lifetime_hours"), 3.0)
+
+# ---------------------------------------------------------------------------
+print("\n[16] a permanent sheet is not pool stock")
+
+VESPER = make_npc("Vesper", ttl_hours=2)
+vesper = get_character_profile(VESPER) or {}
+vesper["npc_slot_role"] = "lamplighter"
+save_character_profile(VESPER, vesper)
+apply_profile_update(VESPER, {"fields": {"lifetime": "permanent"}})
+check("pooled", pool_npc(VESPER, reason="smoke"), True)
+check("the role stamp survives pooling",
+      (get_character_profile(VESPER) or {}).get("npc_slot_role"),
+      "lamplighter")
+check("a slot spawn does not get it", take_from_pool("lamplighter"), None)
+check("and the wanderer spawn's empty role does not either",
+      take_from_pool(""), None)
+
+HALDEN = make_npc("Halden", ttl_hours=2)
+halden = get_character_profile(HALDEN) or {}
+halden["npc_slot_role"] = "lamplighter"
+save_character_profile(HALDEN, halden)
+check("pooled", pool_npc(HALDEN, reason="smoke"), True)
+check("the mortal sheet of the same role is handed out",
+      take_from_pool("lamplighter"), HALDEN)
+check("and it is what the empty role finds too", take_from_pool(""), HALDEN)
 
 # ---------------------------------------------------------------------------
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")

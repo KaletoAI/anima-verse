@@ -197,6 +197,12 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
     stock, even though it sits in the pool: that job carries the FIRST
     claimant's location, so handing the same sheet out twice would place it
     there and leave the second slot silently empty.
+
+    A PERMANENT sheet (``npc_permanent``) is not stock either. An admin took
+    that character's lifetime away on purpose, and an automatic spawn grabbing
+    it would drop somebody's kept NPC into the next inn as its barkeeper. Only
+    an explicit slot binding or an admin action brings such a sheet back into
+    the world.
     """
     from app.core.npc_assets import is_awaiting_assets
     from app.models.character import get_character_profile, is_temporary_npc
@@ -207,6 +213,8 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
         if not is_temporary_npc(name) or is_awaiting_assets(name):
             continue
         profile = get_character_profile(name) or {}
+        if profile.get("npc_permanent"):
+            continue
         if wanted_tmpl and str(profile.get("template") or "") != wanted_tmpl:
             continue
         if not wanted:
