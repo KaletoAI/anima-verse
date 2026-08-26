@@ -25,6 +25,7 @@ The same object is authored on two surfaces (see below) and has these keys:
 | `room` | string | `""` | Which room of the location the NPC stands in. LOCATION slots only. |
 | `radius_m` | int ≥ 0 | `0` | The slot's HOME AREA. `0` = the room placement above; above 0 the NPC stands at a free point within that many metres of the place and roams there. Wins over `room`. LOCATION slots only. |
 | `when` | string | `""` | The slot's time window (see below). |
+| `character` | string | `""` | BINDS the slot to one existing temporary NPC (see below). `""` = the ordinary pool-or-generate path. |
 
 Nothing here raises. `normalize_slot` runs inside the location save, so every
 unusable value falls back with a warning in the log — an unreadable `when`
@@ -93,6 +94,37 @@ paid for and they will walk in by themselves. For each gap the job takes a
 **pool hit** of the same role first (a finished character sheet, no LLM turn at
 all) and only runs the three-stage generation pipeline when the pool has
 nobody.
+
+## Binding a slot to one NPC (`character`)
+
+A slot may name **one existing temporary NPC** instead of describing a kind of
+person (World tab or Map tab → the slot's "Character" select, which lists the
+living NPCs and the pooled sheets together). That slot then takes neither of
+the two roads above: it is staffed with that sheet and **never generates
+anybody**. Only temporary NPCs can be bound — a full character has a place of
+its own in this world and is not a sheet a slot may move around.
+
+What happens depends on where the NPC is when the spawn check runs:
+
+* **pooled** → it is revived directly, bypassing the role-matched pool draw.
+  That draw skips a `npc_permanent` sheet on purpose, so a binding is the one
+  documented way such a sheet comes back — and it keeps its empty lifetime;
+* **alive somewhere else** → the slot's stamps are written on it and it is
+  moved here. It is **not** pooled on the way, so nothing is erased: what the
+  other characters remember about it and its own conversation stay;
+* **already standing in this slot** → nothing happens at all;
+* **waiting for its assets** → this pass does nothing; the finish job places
+  it;
+* **not a temporary NPC any more** (deleted, or a full character) → the slot
+  stays empty, with a warning in the log. It never falls back to generating a
+  stand-in: the point of naming somebody is that nobody else will do.
+
+Everything else about the slot applies unchanged. Its **time window** closes
+over the bound NPC like over any other (`sweep_closed_windows` pools it at
+closing time and the next open window brings the very same sheet back), and its
+**home area** — `radius_m` or the polygon — is where the NPC is placed and
+roams. `count_min`/`count_max` still count NPCs by ROLE, so a bound slot is
+filled once its NPC stands there carrying the stamp.
 
 ## NPC settings (`/admin/settings → NPCs (automatic)`)
 

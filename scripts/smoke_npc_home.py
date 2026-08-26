@@ -883,7 +883,10 @@ _clean = terrain.sanitize_area(_raw)["meta"]["npc_slots"]
 check("one slot per role, sanitized", _clean,
       [{"role": "guard", "template": "", "count_min": 2, "count_max": 2,
         "briefing": "watches the gate", "room": "", "when": "22:00-05:00",
-        "radius_m": 0}])
+        # `character` (the slot binding) survives the area sanitizer untouched:
+        # binding an existing NPC works on a painted area exactly as it works
+        # on a location — only `room`/`radius_m` are forced empty here.
+        "radius_m": 0, "character": ""}])
 raises("slots without a label are refused", ValueError,
        lambda: terrain.sanitize_area({"kind": "grass", "polygon": YARD_POLY,
                                       "meta": {"npc_slots": [

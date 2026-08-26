@@ -143,6 +143,10 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
     over ``room`` — a slot cannot be both in the taproom and out in the woods.
     An unusable value becomes 0 with a warning, for the same reason ``when``
     does: this runs inside the location save, and a typo must not raise there.
+
+    ``character`` BINDS the slot to one existing temporary NPC: that sheet, and
+    no other, staffs the slot, and nothing is ever generated for it. See
+    :func:`spawn_for_slot`.
     """
     if not isinstance(raw, dict):
         return None
@@ -195,6 +199,13 @@ def normalize_slot(raw: Any) -> Optional[Dict[str, Any]]:
         "room": str(raw.get("room") or "").strip(),
         "when": when,
         "radius_m": radius_m,
+        # THE BINDING (see `spawn_for_slot`): the name of ONE existing
+        # temporary NPC this slot always uses. Kept as authored, only trimmed
+        # — a character name is looked up whole, never resolved from a part of
+        # it (feedback_no_name_resolution), and the sanitizer must not decide
+        # that an unknown name is no name: the NPC may be pooled, awaiting its
+        # assets, or simply created after the slot was written.
+        "character": str(raw.get("character") or "").strip(),
     }
 
 
@@ -665,6 +676,112 @@ def _area_place_labels(area: Dict[str, Any]) -> Tuple[str, str]:
             "(none — this NPC stands outdoors, not in a building)")
 
 
+def _fill_bound_slot(name: str, slot: Dict[str, Any], where: str,
+                     location_id: str, room: str, radius_m: int,
+                     home: Optional[Dict[str, Any]],
+                     ttl: Optional[float]) -> str:
+    """A slot BOUND to one existing NPC. Returns its name, or ''.
+
+    The binding is the answer to "this inn's landlady is HER, not whoever the
+    generator invents this time": the slot names a temporary NPC and that
+    sheet is the only one it will ever be staffed with. So the two roads of
+    :func:`spawn_for_slot` are both closed here — no pool draw by role, and
+    above all NO GENERATION. A bound slot that cannot be filled stays empty;
+    inventing a stand-in would defeat the whole point of naming somebody.
+
+    Four states, and the NPC's own status decides which:
+
+    * NOT A TEMPORARY NPC — a full character, or a name that has been deleted
+      since the slot was written. Skipped with a warning. Only temp NPCs may
+      be bound (they are the throwaway sheets a slot may move around at will);
+      a full character has a place in this world of its own.
+    * POOLED — revived DIRECTLY, without ``take_from_pool``: the draw picks by
+      role and deliberately skips a ``npc_permanent`` sheet, and this binding
+      is exactly the documented way such a sheet leaves the pool. A sheet
+      whose assets are still rendering is left alone for this pass — its
+      finish job carries the placement and will put it here by itself.
+    * ALIVE SOMEWHERE ELSE — re-stamped and MOVED, never pooled on the way.
+      Pooling would erase what the other characters remember about it and its
+      own conversation, which is precisely what an admin who binds a slot to a
+      named NPC does not want. It is the same three stamps ``revive_from_pool``
+      writes, plus the placement, and nothing else.
+    * ALREADY STANDING IN THIS SLOT — nothing at all. Re-placing would teleport
+      an NPC that had roamed a few metres back to its spawn point on every
+      spawn check.
+
+    Its TIME WINDOW governs it exactly as it governs a generated NPC: the
+    closed window is filtered out by ``missing_slots`` long before this,
+    ``sweep_closed_windows`` pools the bound NPC at closing time, and the next
+    open window brings this very sheet back through the pooled branch.
+    """
+    from app.core.npc_assets import is_awaiting_assets
+    from app.core.npc_home import place_npc
+    from app.core.npc_pool import revive_from_pool
+    from app.models.character import (POOLED_STATUS, get_character_profile,
+                                      get_character_status, is_temporary_npc,
+                                      save_character_profile)
+    role = slot["role"]
+    if not is_temporary_npc(name):
+        logger.warning("Slot '%s' at %s is bound to '%s', which is not a "
+                       "temporary NPC (a full character, or gone) — the slot "
+                       "stays empty; a bound slot never generates a stand-in",
+                       role, where, name)
+        return ""
+
+    area_id = str((home or {}).get("area_id") or "").strip()
+    if get_character_status(name) == POOLED_STATUS:
+        if is_awaiting_assets(name):
+            logger.info("Slot '%s' at %s: its NPC '%s' is still waiting for "
+                        "its assets — the finish job places it", role, where,
+                        name)
+            return ""
+        if revive_from_pool(name, location_id, room, ttl_hours=ttl,
+                            slot_role=role,
+                            briefing=slot.get("briefing") or "",
+                            radius_m=radius_m, home=home):
+            logger.info("Slot '%s' at %s revived the NPC it is bound to: %s",
+                        role, where, name)
+            return name
+        logger.warning("Slot '%s' at %s: its NPC '%s' could not be revived — "
+                       "the slot stays empty", role, where, name)
+        return ""
+
+    profile = get_character_profile(name) or {}
+    if (str(profile.get("npc_slot_role") or "").strip().lower() == role.lower()
+            and str(profile.get("npc_slot_location") or "").strip() == location_id
+            and str(profile.get("npc_slot_area") or "").strip() == area_id):
+        return name
+
+    # BOTH stamps, one of them empty — the same rule ``revive_from_pool``
+    # follows: a sheet that held a slot of the other kind yesterday would
+    # otherwise keep counting towards it.
+    profile["npc_slot_role"] = role
+    profile["npc_slot_location"] = location_id
+    profile["npc_slot_area"] = area_id
+    # A bound slot is a STANDING post. Whatever the sheet was doing as a
+    # traveller ends here, or the journey ticker would walk it straight out of
+    # the slot it was just put into.
+    profile["npc_wanderer"] = False
+    profile.pop("wander_target", None)
+    if home is None and radius_m <= 0:
+        # A room slot has no home area; a stale one from the NPC's last post
+        # would send the action tick roaming into a place it has left.
+        profile.pop("npc_home", None)
+    save_character_profile(name, profile)
+    try:
+        from app.core.travel_engine import cancel_journey
+        cancel_journey(name)
+    except Exception as e:  # noqa: BLE001 — the placement below is the point
+        logger.debug("bound slot: could not end %s's journey: %s", name, e)
+
+    if not place_npc(name, location_id, room, radius_m, home):
+        logger.warning("Slot '%s' at %s: its NPC '%s' could not be placed — "
+                       "it stays where it was", role, where, name)
+        return ""
+    logger.info("Slot '%s' at %s: its NPC '%s' moved in", role, where, name)
+    return name
+
+
 def spawn_for_slot(place: Dict[str, Any], slot: Dict[str, Any],
                    kind: str = "location") -> str:
     """POOL FIRST, pipeline second. Returns the NPC's name, or ''.
@@ -678,6 +795,11 @@ def spawn_for_slot(place: Dict[str, Any], slot: Dict[str, Any],
     ``area``, ``npc_slot_area``, no room at all). Everything that differs
     between the two is decided right here, once, and handed on as ordinary
     arguments; neither the pool return nor the generator learns a second rule.
+
+    A slot with a ``character`` is BOUND and takes neither road: it always
+    staffs itself with that one sheet (:func:`_fill_bound_slot`) and never
+    generates anybody — see there for what "always" means when the NPC is
+    pooled, alive elsewhere, or already standing in the slot.
     """
     from app.core.npc_home import area_home
     from app.core.npc_ops import generate_npc_blocking
@@ -704,6 +826,12 @@ def spawn_for_slot(place: Dict[str, Any], slot: Dict[str, Any],
         home = None
         briefing = _slot_briefing(place, slot)
         labels = None
+
+    bound = str(slot.get("character") or "").strip()
+    if bound:
+        return _fill_bound_slot(bound, slot, where=where,
+                                location_id=location_id, room=room,
+                                radius_m=radius_m, home=home, ttl=ttl)
 
     pooled = take_from_pool(role, template=slot.get("template") or "")
     if pooled and revive_from_pool(pooled, location_id, room, ttl_hours=ttl,

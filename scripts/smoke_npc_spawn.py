@@ -119,6 +119,38 @@ Sections:
       through into the location save, `missing_slots` and `location_gap`.
       A slot with `count_min`, `count_max` and `radius_m` all Infinity comes
       out as the plain fallbacks (1, 1, 0) with a warning, and nothing raises.
+
+ [11] A SLOT BOUND TO AN EXISTING NPC NEVER GENERATES ANYBODY. The `character`
+      key names one temporary NPC, and that sheet is what the slot gets —
+      revived out of the pool or, if it is already alive somewhere else,
+      re-stamped and moved. Hand cases, each derived from the rule:
+
+        · the sanitizer keeps the name (trimmed); an unbound slot has ""
+        · the terrain sanitizer passes it through to an AREA slot
+        · bound + POOLED, with an OLDER sheet of the same role in front of it
+          in the FIFO → exactly the bound one comes back, the decoy stays
+          pooled, the generator is asked 0 times, and the slot is stamped and
+          placed in the location's ARRIVAL room (the slot names no room)
+        · bound + LIVING somewhere else → stamps and position move, the sheet
+          never touches the pool (status stays ''), and what another character
+          remembers about it survives: `cleanup_npc_traces` is counted and
+          must be called 0 times, the memory row is still there
+        · bound + ALREADY standing in this slot → the profile is byte-identical
+          afterwards and the generator is not asked
+        · bound to a FULL character, and to a name that exists nowhere → the
+          slot stays empty with a warning, the generator is asked 0 times, and
+          the full character is not moved an inch
+        · bound + still WAITING FOR ITS ASSETS → this pass yields "" and the
+          sheet stays pooled; the finish job is what places it
+        · bound + PERMANENT pooled sheet → revived (`take_from_pool` skips a
+          permanent sheet, so the binding is its only way out of the pool) and
+          its empty lifetime stamp is NOT refreshed
+        · bound on a painted AREA → `npc_slot_area` instead of
+          `npc_slot_location`, `npc_home` of kind area, point inside the
+          polygon
+        · WINDOWS APPLY UNCHANGED: at 12:00 a 20:00-06:00 slot wants nobody,
+          `sweep_closed_windows` pools the bound NPC, and at 22:00 the very
+          same sheet comes back — again without a single pipeline call.
 """
 import json
 import os
@@ -665,6 +697,225 @@ NORMALIZED = npc_spawn.normalize_slots([INF_SLOT])
 check("normalize_slots survives it and falls back",
       [(s["role"], s["count_min"], s["count_max"], s["radius_m"])
        for s in NORMALIZED], [("ferryman", 1, 1, 0)])
+
+# ---------------------------------------------------------------------------
+print("\n[11] A slot bound to an existing NPC revives exactly that one")
+import app.core.memory_service as memory_service  # noqa: E402
+import app.core.npc_assets as npc_assets  # noqa: E402
+from app.models.character import get_character_current_room  # noqa: E402
+
+# A clean slate: everything still standing from the sections above goes into
+# the pool, so `held_roles_at` below answers about THIS section only.
+for name in list_temporary_npcs():
+    pool_npc(name, reason="smoke reset")
+PIPELINE.clear()
+
+check("the sanitizer keeps the binding, trimmed",
+      npc_spawn.normalize_slots(
+          [{"role": "watch", "character": "  demo_bound "}])[0]["character"],
+      "demo_bound")
+check("an unbound slot carries an empty binding",
+      npc_spawn.normalize_slots([{"role": "watch"}])[0]["character"], "")
+BOUND_AREA = terrain.save_area({
+    "kind": "grass", "polygon": [[2000, 0], [2100, 0], [2100, 100], [2000, 100]],
+    "z_order": 0,
+    "meta": {"label": "The Ridge",
+             "npc_slots": [{"role": "ranger", "count_min": 1, "count_max": 1,
+                            "character": "demo_bound"}]}})["id"]
+check("…and the area sanitizer passes it through",
+      [(s["role"], s["character"])
+       for s in (terrain.get_area(BOUND_AREA) or {})["meta"]["npc_slots"]],
+      [("ranger", "demo_bound")])
+
+# --- bound + pooled: exactly that sheet, never the older one of the same role
+TAVERN_LOC = get_location_by_id(TAVERN_ID)
+ARRIVAL_ROOM = __import__("app.models.world", fromlist=["x"]).get_arrival_room_id(
+    TAVERN_LOC)
+make_npc("demo_decoy", role="watch", location=TAVERN_ID)
+pool_npc("demo_decoy", reason="smoke")          # oldest of the role: the trap
+make_npc("demo_bound", role="guest", location=TAVERN_ID)
+pool_npc("demo_bound", reason="smoke")
+check("the FIFO would hand out the decoy", take_from_pool("watch"), "demo_decoy")
+
+WATCH_SLOT = {"role": "watch", "template": "", "count_min": 1, "count_max": 1,
+              "briefing": "keeps the night watch", "room": "", "when": "",
+              "radius_m": 0, "character": "demo_bound"}
+check("the bound sheet came back, not the decoy",
+      npc_spawn.spawn_for_slot(TAVERN_LOC, WATCH_SLOT), "demo_bound")
+check("the pipeline was never asked", PIPELINE, [])
+check("the decoy is still pooled", get_character_status("demo_decoy"),
+      POOLED_STATUS)
+check("the bound NPC stands at the location",
+      get_character_current_location("demo_bound"), TAVERN_ID)
+check("…in the arrival room, as an unroomed slot places anybody",
+      get_character_current_room("demo_bound"), ARRIVAL_ROOM)
+bound = get_character_profile("demo_bound") or {}
+check("…and carries this slot's stamps, the other one empty",
+      (bound.get("npc_slot_role"), bound.get("npc_slot_location"),
+       bound.get("npc_slot_area")), ("watch", TAVERN_ID, ""))
+check("so it holds the role", npc_spawn.held_roles_at(TAVERN_ID), ["watch"])
+check("…and the slot has no gap left",
+      npc_spawn.missing_slots({"id": TAVERN_ID, "npc_slots": [WATCH_SLOT]},
+                              npc_spawn.held_roles_at(TAVERN_ID)), [])
+
+# --- bound + living elsewhere: moved, not recycled. No pool, no trace sweep.
+TRACE_CALLS = []
+_real_cleanup = memory_service.cleanup_npc_traces
+
+
+def _counting_cleanup(npc_name):
+    TRACE_CALLS.append(npc_name)
+    return _real_cleanup(npc_name)
+
+
+memory_service.cleanup_npc_traces = _counting_cleanup
+add_memory("demo_witness", "demo_bound nodded at me by the door.",
+           memory_type="episodic")
+create_location_with_extras({
+    "name": "The Watchpost", "description": "A shed on the ridge road.",
+    "rooms": []})
+POST_ID = [l for l in __import__("app.models.world", fromlist=["x"]).list_locations()
+           if l.get("name") == "The Watchpost"][0]["id"]
+POST_LOC = get_location_by_id(POST_ID)
+POST_SLOT = {**WATCH_SLOT, "role": "lookout"}
+
+check("the living NPC is moved, not regenerated",
+      npc_spawn.spawn_for_slot(POST_LOC, POST_SLOT), "demo_bound")
+check("…without a pipeline call", PIPELINE, [])
+check("…without a single trace cleanup", TRACE_CALLS, [])
+check("…so the memory ABOUT it survives",
+      db.get_connection().execute(
+          "SELECT COUNT(*) FROM memories WHERE character_name='demo_witness'"
+          " AND content LIKE '%demo_bound%'").fetchone()[0], 1)
+check("it never went through the pool", get_character_status("demo_bound"), "")
+check("it stands at the new place",
+      get_character_current_location("demo_bound"), POST_ID)
+moved = get_character_profile("demo_bound") or {}
+check("…with the new stamps",
+      (moved.get("npc_slot_role"), moved.get("npc_slot_location"),
+       moved.get("npc_slot_area")), ("lookout", POST_ID, ""))
+check("…and the old place holds nobody any more",
+      npc_spawn.held_roles_at(TAVERN_ID), [])
+
+# --- bound + already standing there: nothing happens at all.
+BEFORE = get_character_profile("demo_bound")
+check("a second pass returns the same NPC",
+      npc_spawn.spawn_for_slot(POST_LOC, POST_SLOT), "demo_bound")
+check("…and wrote nothing", get_character_profile("demo_bound") == BEFORE, True)
+check("…and asked no pipeline", PIPELINE, [])
+
+# --- bound to something that is not a temporary NPC: skipped with a warning.
+WARNINGS = []
+_real_warning = npc_spawn.logger.warning
+
+
+def _counting_warning(msg, *args):
+    WARNINGS.append(msg % args if args else msg)
+    _real_warning(msg, *args)
+
+
+npc_spawn.logger.warning = _counting_warning
+save_character_profile("demo_person", {"character_name": "demo_person",
+                                       "template": "human-roleplay"},
+                       create_new=True)
+check("a full character is never bound",
+      npc_spawn.spawn_for_slot(TAVERN_LOC,
+                               {**WATCH_SLOT, "character": "demo_person"}), "")
+check("…and it was not moved an inch",
+      get_character_current_location("demo_person"), "")
+check("a name that exists nowhere is skipped too",
+      npc_spawn.spawn_for_slot(TAVERN_LOC,
+                               {**WATCH_SLOT, "character": "demo_ghost"}), "")
+check("both were reported", len([w for w in WARNINGS
+                                 if "not a temporary NPC" in w]), 2)
+check("…and neither generated anybody", PIPELINE, [])
+npc_spawn.logger.warning = _real_warning
+
+# --- bound + still waiting for its assets: this pass yields nothing.
+make_npc("demo_pending", role="watch", location=TAVERN_ID)
+pool_npc("demo_pending", reason="smoke")
+_real_awaiting = npc_assets.is_awaiting_assets
+npc_assets.is_awaiting_assets = lambda n: n == "demo_pending"
+try:
+    check("an unfinished sheet is left to its finish job",
+          npc_spawn.spawn_for_slot(TAVERN_LOC,
+                                   {**WATCH_SLOT,
+                                    "character": "demo_pending"}), "")
+    check("…and stays pooled", get_character_status("demo_pending"),
+          POOLED_STATUS)
+    check("…with no pipeline call", PIPELINE, [])
+finally:
+    npc_assets.is_awaiting_assets = _real_awaiting
+
+# --- bound + PERMANENT pooled sheet: the binding is its only way out.
+make_npc("demo_keeper", role="keeper", location=TAVERN_ID, npc_permanent=True)
+pool_npc("demo_keeper", reason="smoke")
+check("the ordinary pool draw skips a permanent sheet",
+      take_from_pool("keeper"), None)
+check("the binding revives it anyway",
+      npc_spawn.spawn_for_slot(TAVERN_LOC, {**WATCH_SLOT, "role": "keeper",
+                                            "character": "demo_keeper"}),
+      "demo_keeper")
+check("…and its lifetime is still none",
+      (get_character_profile("demo_keeper") or {}).get("expires_at"), "")
+check("…and nothing was generated", PIPELINE, [])
+
+# --- bound on a painted AREA: the area stamp, the area home, a point inside.
+make_npc("demo_ridge", role="", location=TAVERN_ID)
+check("the bound area slot took the living sheet",
+      npc_spawn.spawn_for_slot(terrain.get_area(BOUND_AREA),
+                               {**WATCH_SLOT, "role": "ranger",
+                                "character": "demo_ridge"}, kind="area"),
+      "demo_ridge")
+ridge = get_character_profile("demo_ridge") or {}
+check("…with the AREA stamp and no location stamp",
+      (ridge.get("npc_slot_role"), ridge.get("npc_slot_area"),
+       ridge.get("npc_slot_location")), ("ranger", BOUND_AREA, ""))
+check("…its home is the polygon", ridge.get("npc_home"),
+      {"kind": "area", "area_id": BOUND_AREA})
+rpos = get_character_pos("demo_ridge") or {}
+check("…and it stands inside it",
+      point_in_polygon(rpos.get("x"), rpos.get("z"),
+                       [[2000, 0], [2100, 0], [2100, 100], [2000, 100]]), True)
+check("…and the pipeline was still never asked", PIPELINE, [])
+
+# --- the time window governs the bound NPC exactly as it governs a fresh one.
+NIGHT_SLOT = {**WATCH_SLOT, "role": "robber", "when": "20:00-06:00",
+              "character": "demo_bound"}
+create_location_with_extras({
+    "name": "The Night Post", "description": "A crossing under bare trees.",
+    "rooms": [], "npc_slots": [NIGHT_SLOT]})
+NIGHT_ID = [l for l in __import__("app.models.world", fromlist=["x"]).list_locations()
+            if l.get("name") == "The Night Post"][0]["id"]
+NIGHT_LOC = get_location_by_id(NIGHT_ID)
+check("the binding survived the location save",
+      [(s["role"], s["character"], s["when"])
+       for s in NIGHT_LOC.get("npc_slots") or []],
+      [("robber", "demo_bound", "20:00-06:00")])
+
+set_game_time(GameTime.from_parts(1, 40, 22, 0, 0))          # 22:00 — open
+check("at 22:00 the slot wants somebody",
+      [g["role"] for g in npc_spawn.location_gap(NIGHT_LOC)], ["robber"])
+check("and it is the bound sheet that arrives",
+      npc_spawn.spawn_for_slot(NIGHT_LOC, NIGHT_SLOT), "demo_bound")
+check("…without a pipeline call", PIPELINE, [])
+
+set_game_time(GameTime.from_parts(1, 41, 12, 0, 0))          # 12:00 — shut
+check("at 12:00 the slot wants nobody", npc_spawn.location_gap(NIGHT_LOC), [])
+check("the window sweep pools the bound NPC",
+      npc_ops.sweep_closed_windows(), 1)
+check("…so it sits in the pool", get_character_status("demo_bound"),
+      POOLED_STATUS)
+
+set_game_time(GameTime.from_parts(1, 41, 22, 0, 0))          # 22:00 — open
+check("at nightfall the very same sheet comes back",
+      npc_spawn.spawn_for_slot(NIGHT_LOC, NIGHT_SLOT), "demo_bound")
+check("…alive at the night post",
+      (get_character_status("demo_bound"),
+       get_character_current_location("demo_bound")), ("", NIGHT_ID))
+check("…and the generator was never asked, once, in this whole section",
+      PIPELINE, [])
+memory_service.cleanup_npc_traces = _real_cleanup
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:
