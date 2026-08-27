@@ -500,16 +500,23 @@ def picture_areas(args):
         fit = _fit(model, faces)
         k = _next_k(kind, existing)
         area_id = f"{kind}_{k}"
-        # The atlas of the faces' current material (the majority one).
-        image = None
+        # The atlas of the faces' current material — the MAJORITY material
+        # among those that carry an image, so a pick that grazes a second
+        # material at its edge still gets the panel's own atlas.
+        votes = {}
+        images = {}
         for flat in faces:
             oi, pi = model.poly[flat]
             me = model.objects[oi].data
             mi = me.polygons[pi].material_index
             mat = me.materials[mi] if 0 <= mi < len(me.materials) else None
-            image = _base_image(mat)
-            if image is not None:
-                break
+            if mat is None or mat.name in images and images[mat.name] is None:
+                continue
+            if mat.name not in images:
+                images[mat.name] = _base_image(mat)
+            if images[mat.name] is not None:
+                votes[mat.name] = votes.get(mat.name, 0) + 1
+        image = images[max(votes, key=votes.get)] if votes else None
         origin = _assign(model, area_id, kind, faces, fit["uvs"], image)
         existing[area_id] = {"kind": kind, "k": k, "faces": faces}
         origins[area_id] = origin

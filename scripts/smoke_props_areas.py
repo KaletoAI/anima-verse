@@ -31,6 +31,12 @@ difference between "none" and "not detected yet".
 An unknown kind in `key_areas` is a ValueError (a silently dropped kind would
 report "Saved" over a request that reached nothing).
 
+`key_areas` is a prop patch field too (ruling R7), same sanitizer:
+
+    {"key_areas": ["glass"]}   -> stored ["glass"]
+    {"key_areas": []}          -> the key is removed (record reads [])
+    {"key_areas": ["neon"]}    -> ValueError, sidecar byte-identical
+
 ---------------------------------------------------------------------------
 [2] area_defaults ARE CHECKED AGAINST THE AREAS
 ---------------------------------------------------------------------------
@@ -128,6 +134,22 @@ def main() -> int:
         check("an unknown key kind is refused", False, "no ValueError")
     except ValueError as exc:
         check("an unknown key kind is refused", True, str(exc)[:60])
+    out = store.update_prop(pid, {"key_areas": ["glass"]})
+    check("R7: key_areas is patchable", out.get("key_areas") == ["glass"],
+          str(out.get("key_areas")))
+    out = store.update_prop(pid, {"key_areas": []})
+    check("R7: an empty list removes the key",
+          "key_areas" not in out and store.get_prop(pid)["key_areas"] == [],
+          str(out.get("key_areas")))
+    before = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
+    try:
+        store.update_prop(pid, {"key_areas": ["neon"]})
+        check("R7: an unknown kind is refused", False, "no ValueError")
+    except ValueError as exc:
+        after = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
+        check("R7: an unknown kind is refused, nothing written", after == before,
+              str(exc)[:50])
+    store.update_prop(pid, {"key_areas": ["picture", "glass"]})
     meta = store.read_sidecar(pid)
     meta[store.AREAS_KEY] = store.sanitize_areas(AREAS)
     store._write_sidecar(pid, meta)

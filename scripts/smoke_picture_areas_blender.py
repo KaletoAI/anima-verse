@@ -11,16 +11,21 @@ Needs Blender (``refine.unavailable_reason()`` empty); otherwise prints
 /tmp, no world, no DB, no server. Every expected number below is derived BY
 HAND from the fixture and the spec, never recorded from a run.
 
-THE FIXTURE (glTF y-up, written with the stdlib):
-  A 1 m x 1 m plate in the xy plane at z = 0, facing +z: 3x3 vertices at
-  x, y in {-0.5, 0, 0.5}; four quads of 0.5 m x 0.5 m, each two CCW triangles
-  -> 8 triangles, one mesh, one material "atlas" with a 64x64 PNG.
+THE FIXTURE (glTF y-up, written with the stdlib), `plate_glb(n)`:
+  A 1 m x 1 m plate in the xy plane at z = 0, facing +z: (n+1)x(n+1) vertices
+  at x, y = -0.5 + i/n; n*n quads of (1/n) m, each two CCW triangles -> 2n²
+  triangles, one mesh, one material "atlas" with a 64x64 PNG.
   UVs (glTF, v top-down): u = x + 0.5, v = 0.5 - y.
   The PNG is grey (128,128,128) except a pure green (0,255,0) block over
   columns 0..31 and rows 0..31 (the top-left quarter) -> u < 0.5, v < 0.5
-  -> x < 0 and y > 0 -> exactly the TOP-LEFT quad (fixture triangles 4, 5).
-  Fixture triangle order: q(0,0)=0,1  q(1,0)=2,3  q(0,1)=4,5  q(1,1)=6,7
-  (q(i,j): i along x, j along y, quad (0,1) is the top-left one).
+  -> x < 0 and y > 0 -> exactly the TOP-LEFT QUARTER of the plate.
+  n = 2 (parts A–C): four quads, the green quarter is ONE quad = 2 triangles,
+    fixture order q(0,0)=0,1  q(1,0)=2,3  q(0,1)=4,5  q(1,1)=6,7
+    (q(i,j): i along x, j along y; quad (0,1) is the top-left one).
+  n = 8 (parts D–F, the production filter): 64 quads = 128 triangles; the
+    green quarter is 4x4 quads = 32 triangles, 0.25 m² (both above the
+    12-face / 0.02 m² filter); its outline is 4 quad edges per side = 16
+    boundary edges; size_m [0.5, 0.5], normal [0, 0, 1].
 
 [A] AUTO — `detect_areas(pid, mode="auto", min_faces=2)`
   (min_faces lowered from the production 12: the fixture quad has 2 faces;
@@ -39,8 +44,9 @@ THE FIXTURE (glTF y-up, written with the stdlib):
     the diagonal is shared by both triangles and drops out); mesh_layout has
     ONE mesh with tri_count 8.
   Slots: `_autofill_slots` -> [{"name": "picture_1", "kind": "image"}].
-  Gallery: the result is a NEW file, selected; the original stays stored and
-    a copy sits under raw/.
+  Gallery: the result is a NEW file, selected; the original stays stored as
+    history and NO raw/ copy is made (ruling R6 — that rule is for in-place
+    refinements).
 
 [B] MANUAL — the bottom-right quad (x > 0, y < 0) as kind "glass"
   Its two flat face indices are taken off the [A] result by R1: flat index =
@@ -56,6 +62,29 @@ THE FIXTURE (glTF y-up, written with the stdlib):
   keeps 2; sidecar areas: picture_1 only. The restored faces carry their
   ATLAS UVs again: every vertex of the bottom-right quad has
   (u, v) = (x + 0.5, 0.5 - y) — that is what the backup layer is for.
+
+[D] THE LANDING HOOK — upload on a prop created with key_areas=["picture"]
+  `save_uploaded_glb(plate_glb(8))` WITHOUT calling detect_areas: the active
+  model is a second gallery file (the upload + the split) carrying
+  "slot_picture_1" with 32 triangles, "atlas" 96; sidecar areas = one entry
+  (picture_1, auto, faces 32, size_m [0.5, 0.5]), `areas_error` absent,
+  `areas_run_at` set; `.areas.json` has 16 edges, mesh_layout tri_count 128.
+  NOT a landing: `select_model(<the uploaded original>)` re-points the
+  selection and does NOT split again (file count stays 2, the active file is
+  the original) — the sidecar areas RECONCILE to [] (the original names no
+  slot material); selecting the split file back brings the list back from
+  its own `.areas.json` (one entry, picture_1).
+
+[E] THE HOOK NEVER FAILS A LANDING — `runner.run` patched to raise for the
+  `picture_areas` script only: `save_uploaded_glb` still returns True, the
+  uploaded file is the active one, sidecar `areas == []` and `areas_error`
+  carries the message.
+
+[F] THE GENERATION CHAIN — `_generate(mesh_only=True)` with the img2mesh
+  service faked to write plate_glb(8) into the output path (the pattern of
+  smoke_props_slots [3b]; no image backend is needed for a re-mesh): the
+  active model carries "slot_picture_1" with 32 triangles, sidecar areas one
+  entry, slots [{picture_1, image}].
 """
 import json
 import os
@@ -112,18 +141,18 @@ def atlas_png() -> bytes:
     return png_rgb(64, 64, pixel)
 
 
-def plate_glb() -> bytes:
+def plate_glb(n: int = 2) -> bytes:
     positions, uvs = [], []
-    for j in range(3):
-        for i in range(3):
-            x, y = -0.5 + 0.5 * i, -0.5 + 0.5 * j
+    for j in range(n + 1):
+        for i in range(n + 1):
+            x, y = -0.5 + i / n, -0.5 + j / n
             positions.append((x, y, 0.0))
             uvs.append((x + 0.5, 0.5 - y))
     indices = []
-    for j in range(2):
-        for i in range(2):
-            a, b = j * 3 + i, j * 3 + i + 1
-            c, d = (j + 1) * 3 + i + 1, (j + 1) * 3 + i
+    for j in range(n):
+        for i in range(n):
+            a, b = j * (n + 1) + i, j * (n + 1) + i + 1
+            c, d = (j + 1) * (n + 1) + i + 1, (j + 1) * (n + 1) + i
             indices += [a, b, c, a, c, d]
     pos = b"".join(struct.pack("<fff", *p) for p in positions)
     tex = b"".join(struct.pack("<ff", *t) for t in uvs)
@@ -156,9 +185,10 @@ def plate_glb() -> bytes:
         "buffers": [{"byteLength": len(blob)}],
         "bufferViews": views,
         "accessors": [
-            {"bufferView": 0, "componentType": 5126, "count": 9, "type": "VEC3",
-             "min": [-0.5, -0.5, 0.0], "max": [0.5, 0.5, 0.0]},
-            {"bufferView": 1, "componentType": 5126, "count": 9, "type": "VEC2"},
+            {"bufferView": 0, "componentType": 5126, "count": len(positions),
+             "type": "VEC3", "min": [-0.5, -0.5, 0.0], "max": [0.5, 0.5, 0.0]},
+            {"bufferView": 1, "componentType": 5126, "count": len(positions),
+             "type": "VEC2"},
             {"bufferView": 2, "componentType": 5123, "count": len(indices),
              "type": "SCALAR"},
         ],
@@ -263,6 +293,19 @@ def uv_rule_holds(prims, material, rule):
     return ok
 
 
+class FakeMeshService:
+    """Just enough of the image service for `props._generate`: `generate_mesh`
+    writes the GLB it is given a path for and reports the run."""
+
+    def __init__(self, blob: bytes) -> None:
+        self.blob = blob
+
+    def generate_mesh(self, *, output_path: str, **_kw) -> dict:
+        Path(output_path).write_bytes(self.blob)
+        return {"ok": True, "path": output_path, "format": "glb",
+                "rig": "none", "backend": "fake-mesh"}
+
+
 def main() -> int:
     reason = refine.unavailable_reason()
     if reason:
@@ -293,8 +336,7 @@ def main() -> int:
     check("the result is a NEW gallery file, selected",
           result is not None and result != original, f"{original} -> {result}")
     check("the original stays stored", original.exists())
-    check("a copy of the original sits under raw/",
-          (original.parent / "raw" / original.name).exists())
+    check("no raw/ copy (R6)", not (original.parent / "raw").exists())
     prims = primitives(result)
     check("materials: atlas + slot_picture_1",
           set(material_names(result)) == {"atlas", "slot_picture_1"},
@@ -369,6 +411,80 @@ def main() -> int:
     rec = store.get_prop(pid)
     check("slots: picture_1 only",
           rec["slots"] == [{"name": "picture_1", "kind": "image"}], str(rec["slots"]))
+
+    print("\n[D] the landing hook: an upload on a key_areas prop splits itself")
+    kp = store.create_prop(name="Keyed frame", key_areas=["picture"])["id"]
+    check("upload lands", store.save_uploaded_glb(kp, plate_glb(8)))
+    kg = store.model_gallery(kp)
+    files = kg.files()
+    active = store.model_path(kp)
+    uploaded = next((f for f in files if f != active), None)
+    check("two gallery files: the upload and the split", len(files) == 2, str([f.name for f in files]))
+    prims = primitives(active)
+    check("the ACTIVE model carries slot_picture_1 with 32 triangles",
+          tri_count(prims, "slot_picture_1") == 32, str(tri_count(prims, "slot_picture_1")))
+    check("atlas 96", tri_count(prims, "atlas") == 96, str(tri_count(prims, "atlas")))
+    meta = store.read_sidecar(kp)
+    ka = meta.get("areas") or []
+    check("sidecar: one area picture_1/auto/32 faces",
+          len(ka) == 1 and (ka[0]["id"], ka[0]["source"], ka[0]["faces"]) == ("picture_1", "auto", 32),
+          str(ka))
+    check("size_m [0.5, 0.5]", ka and near(ka[0]["size_m"][0], 0.5) and near(ka[0]["size_m"][1], 0.5))
+    check("areas_error absent", "areas_error" not in meta, str(meta.get("areas_error")))
+    check("areas_run_at set", bool(meta.get("areas_run_at")))
+    extra = json.loads(store.areas_sidecar_path(active).read_text(encoding="utf-8"))
+    check("16 boundary edges", len(extra["areas"][0]["edges"]) == 16, str(len(extra["areas"][0]["edges"])))
+    check("mesh_layout tri_count 128", extra["mesh_layout"][0]["tri_count"] == 128, str(extra["mesh_layout"]))
+    check("select_model of the original does NOT split again",
+          uploaded is not None and store.select_model(kp, uploaded.name)
+          and store.model_path(kp) == uploaded and len(store.model_gallery(kp).files()) == 2,
+          str([f.name for f in store.model_gallery(kp).files()]))
+    check("…and the areas reconcile to [] (the original names no slot material)",
+          store.read_sidecar(kp).get("areas") == [], str(store.read_sidecar(kp).get("areas")))
+    store.select_model(kp, active.name)
+    back = store.read_sidecar(kp).get("areas") or []
+    check("selecting the split file back brings its area list back",
+          [a["id"] for a in back] == ["picture_1"] and len(store.model_gallery(kp).files()) == 2, str(back))
+
+    print("\n[E] the hook never fails a landing")
+    from app.blender import runner
+    real_run = runner.run
+
+    def failing_run(script, **kw):
+        if script == "picture_areas":
+            raise RuntimeError("boom: simulated blender failure")
+        return real_run(script, **kw)
+
+    runner.run = failing_run
+    try:
+        ep = store.create_prop(name="Doomed frame", key_areas=["picture"])["id"]
+        ok = store.save_uploaded_glb(ep, plate_glb(8))
+    finally:
+        runner.run = real_run
+    check("save_uploaded_glb still returns True", ok is True, str(ok))
+    check("the uploaded file is the active model", len(store.model_gallery(ep).files()) == 1)
+    emeta = store.read_sidecar(ep)
+    check("sidecar areas == []", emeta.get("areas") == [], str(emeta.get("areas")))
+    check("areas_error carries the message", "boom" in str(emeta.get("areas_error")), str(emeta.get("areas_error")))
+    check("areas_info reports it", "boom" in store.areas_info(ep)["error"])
+
+    print("\n[F] the generation chain hooks the split as well")
+    import app.imagegen.service as image_service
+    real_service = image_service.get_image_service
+    image_service.get_image_service = lambda: FakeMeshService(plate_glb(8))
+    try:
+        gp = store.create_prop(name="Generated frame", key_areas=["picture"])["id"]
+        (store.prop_dir(gp, create=True) / store.SOURCE_NAME).write_bytes(b"\x89PNG fake")
+        out = store._generate(gp, "", "", "", "fake-mesh", mesh_only=True, variant=0)
+    finally:
+        image_service.get_image_service = real_service
+    check("the chain succeeded", out.get("ok") is True, str(out))
+    prims = primitives(store.model_path(gp))
+    check("the active model carries slot_picture_1 with 32 triangles",
+          tri_count(prims, "slot_picture_1") == 32, str(tri_count(prims, "slot_picture_1")))
+    gmeta = store.read_sidecar(gp)
+    check("sidecar: one area", [a["id"] for a in gmeta.get("areas") or []] == ["picture_1"], str(gmeta.get("areas")))
+    check("slots: picture_1 image", store.get_prop(gp)["slots"] == [{"name": "picture_1", "kind": "image"}])
 
     print()
     if FAILURES:

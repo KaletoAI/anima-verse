@@ -432,17 +432,17 @@ KEY_AREA_NEGATIVES = {
 
 
 def image_model_to_family(image_model: str) -> str:
-    """Uebersetzt ein 'Target Prompt Stil' (image_model) in eine Style-Familie."""
+    """Maps a 'target prompt style' (image_model) to a style family."""
     return _IMAGE_MODEL_FAMILY.get((image_model or "").strip(), "keywords")
 
 
 def get_use_case_prompts(use_case: str, image_model: str = "") -> dict:
-    """Loest Style/Negative/Instruction fuer einen Use-Case + Target-Style auf.
+    """Resolves style / negative / instruction for a use case + target style.
 
-    Prioritaet pro Feld: Admin-Override (config) -> eingebauter Default
-    (_DEFAULT_IMAGE_USE_CASES[use_case][familie]) -> "" (Aufrufer faellt dann
-    auf den Workflow-Style zurueck). Gibt immer ein Dict mit den drei Keys
-    zurueck (Werte koennen leer sein).
+    Priority per field: admin override (config) -> built-in default
+    (_DEFAULT_IMAGE_USE_CASES[use_case][family]) -> "" (the caller then falls
+    back to the workflow style). Always returns a dict with the three keys
+    (values may be empty).
     """
     uc = (use_case or "").strip() or "character"
     family = image_model_to_family(image_model)
