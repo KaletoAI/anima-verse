@@ -667,11 +667,11 @@ const mountSeq = new WeakMap<Tile, number>();
 /** The node name Blender gives the door leaf it cut out (spec § 6). */
 const LEAF_NODE = 'leaf';
 
-/**
- * Hang the placed model's `leaf` node in a pivot group on its hinge edge
 const LEAF_PIVOT = 'leaf_pivot';
 
  * (spec-picture-props.md § 6) and return that group with its axis — or
+/**
+ * Hang the placed model's `leaf` node in a pivot group on its hinge edge
  * `undefined` when the model has no such node, in which case the whole
  * group swings as before.
  *
@@ -755,8 +755,8 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
     swingAxis: hung?.axis,
     leafBbox,
     hinge,
-  });
     fixEuler,
+  });
 }
 
 /** How THIS client turns a slot's payload URL into a texture (§ B2 v5). It
