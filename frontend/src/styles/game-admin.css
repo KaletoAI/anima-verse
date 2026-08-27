@@ -3032,6 +3032,16 @@ a.ga-btn {
   margin-bottom: 8px;
 }
 
+.ga-imp-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text, #c9d1d9);
+}
+.ga-imp-switch input { cursor: pointer; }
+
 .ga-imp-idle {
   display: flex;
   align-items: center;

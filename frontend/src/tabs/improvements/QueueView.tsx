@@ -6,7 +6,7 @@
  * 1) — this view never sorts. Both feeds poll through the shared hub, so the
  * queue and its status head refresh together without two timers of their own.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
@@ -14,7 +14,9 @@ import { usePoll } from '../../player/usePolling'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { fetchQueue, fetchStatus, fetchTypes, saveSettings } from './api'
 import { STEP_STATUS_LABELS } from './types'
-import type { EngineStatus, ImprovementType, QueueSnapshot } from './types'
+import type {
+  EngineStatus, ImprovementType, QueueSnapshot, Settings,
+} from './types'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -62,6 +64,27 @@ export function QueueView() {
   const [entryFilter, setEntryFilter] = useState('')
   const [idleInput, setIdleInput] = useState('')
   const [saving, setSaving] = useState(false)
+  const [editingIdle, setEditingIdle] = useState(false)
+
+  /**
+   * The client's ONE source of truth for the two settings. The polled status
+   * only SEEDS it: afterwards it changes on a PUT answer, and on a poll only
+   * while nothing is in flight and the user is not typing. Two controls used to
+   * read `status` independently, so a blur (idle minutes) plus a click (engine)
+   * one second apart each sent the other's five-second-old value and the last
+   * PUT to land undid the first one.
+   */
+  const [settings, setSettings] = useState<Settings | null>(null)
+  /** The same value readable SYNCHRONOUSLY — a handler must not wait for a render. */
+  const settingsRef = useRef<Settings | null>(null)
+  /** One PUT at a time; a commit made during a save waits here and replaces it. */
+  const savingRef = useRef(false)
+  const pendingRef = useRef<Settings | null>(null)
+
+  const applySettings = useCallback((next: Settings) => {
+    settingsRef.current = next
+    setSettings(next)
+  }, [])
 
   const { data: snapshot, error: queueError, refresh: refreshQueue } =
     usePoll<QueueSnapshot>('improvements-queue', fetchQueue,
@@ -83,6 +106,20 @@ export function QueueView() {
   useEffect(() => {
     setIdleInput((current) => (current === '' ? serverIdle : current))
   }, [serverIdle])
+
+  // Seed from the first status, and keep following the server afterwards — but
+  // never while our own PUT is in flight or the user is mid-edit, or the poll
+  // would hand back the very value the user just changed.
+  useEffect(() => {
+    if (!status) return
+    if (savingRef.current || editingIdle) return
+    const current = settingsRef.current
+    if (current && current.enabled === status.enabled
+      && current.idle_minutes === status.idle_minutes) return
+    applySettings({
+      enabled: status.enabled, idle_minutes: status.idle_minutes,
+    })
+  }, [applySettings, editingIdle, status])
 
   const typeLabel = useCallback((typeId: string) => {
     const found = types.find((x) => x.id === typeId)
@@ -111,36 +148,62 @@ export function QueueView() {
     ? queue.filter((row) => row.improvement_id === entryFilter)
     : queue
 
-  const commitSettings = useCallback(async (
-    enabled: boolean, idleMinutes: number,
-  ) => {
+  /**
+   * Takes the FULL pair, applies it locally before awaiting anything (so the
+   * next handler in the same blur+click pair already reads the new value) and
+   * sends exactly one PUT at a time.
+   */
+  const commitSettings = useCallback(async (next: Settings) => {
+    applySettings(next)
+    if (savingRef.current) {
+      pendingRef.current = next
+      return
+    }
+    savingRef.current = true
     setSaving(true)
     try {
-      const stored = await saveSettings(enabled, idleMinutes)
-      setIdleInput(String(stored.idle_minutes))
+      let send: Settings | null = next
+      while (send) {
+        const stored = await saveSettings(send.enabled, send.idle_minutes)
+        // The stored answer wins over the optimistic value — unless another
+        // commit came in meanwhile, which is sent next and wins in turn.
+        send = pendingRef.current
+        pendingRef.current = null
+        if (!send) {
+          applySettings({
+            enabled: stored.enabled, idle_minutes: stored.idle_minutes,
+          })
+          setIdleInput(String(stored.idle_minutes))
+        }
+      }
       await refreshStatus()
       await refreshQueue()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
+      pendingRef.current = null
+      savingRef.current = false
       setSaving(false)
     }
-  }, [refreshQueue, refreshStatus, t, toast])
+  }, [applySettings, refreshQueue, refreshStatus, t, toast])
 
   const toggleEngine = useCallback(() => {
-    if (!status) return
-    commitSettings(!status.enabled, status.idle_minutes)
-  }, [commitSettings, status])
+    const current = settingsRef.current
+    if (!current) return
+    commitSettings({ ...current, enabled: !current.enabled })
+  }, [commitSettings])
 
   const commitIdle = useCallback(() => {
-    if (!status) return
+    setEditingIdle(false)
+    const current = settingsRef.current
+    if (!current) return
     const minutes = parseInt(idleInput, 10)
-    if (!Number.isFinite(minutes) || minutes === status.idle_minutes) {
-      setIdleInput(String(status.idle_minutes))
+    if (!Number.isFinite(minutes) || minutes === current.idle_minutes) {
+      setIdleInput(String(current.idle_minutes))
       return
     }
-    commitSettings(status.enabled, minutes)
-  }, [commitSettings, idleInput, status])
+    commitSettings({ ...current, idle_minutes: minutes })
+  }, [commitSettings, idleInput])
 
   const onIdleKey = useCallback((e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') e.currentTarget.blur()
@@ -167,6 +230,11 @@ export function QueueView() {
     }
   })()
 
+  // Until the seeding effect has run once, the freshly polled status IS the
+  // local state — the switch is never rendered without a value.
+  const shown: Settings = settings
+    ?? { enabled: status.enabled, idle_minutes: status.idle_minutes }
+
   const estimateHours = status.estimate_s
     ? (status.estimate_s / 3600).toFixed(1)
     : ''
@@ -179,15 +247,18 @@ export function QueueView() {
         <div className="ga-imp-error">{t('Error')}: {errorText(pollError)}</div>
       ) : null}
       <div className="ga-imp-head">
-        <button type="button" disabled={saving} onClick={toggleEngine}
-          className={'ga-btn ga-btn-sm'
-            + (status.enabled ? ' ga-btn-primary' : '')}>
-          {status.enabled ? t('Engine on') : t('Engine off')}
-        </button>
+        {/* A switch, not a state-labelled button: the old label read as a
+            status ("Engine off") and nobody clicked it. */}
+        <label className="ga-imp-switch">
+          <input type="checkbox" checked={shown.enabled} onChange={toggleEngine}
+            disabled={saving} />
+          {' '}{t('Engine')}
+        </label>
         <label className="ga-imp-idle">
           {t('Idle minutes')}
           <input type="number" min={1} max={1440} className="ga-input"
             value={idleInput} disabled={saving}
+            onFocus={() => setEditingIdle(true)}
             onChange={(e) => setIdleInput(e.target.value)}
             onBlur={commitIdle} onKeyDown={onIdleKey} />
         </label>
