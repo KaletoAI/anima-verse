@@ -10,13 +10,18 @@ packages/scene-render) turns it into a standing height on both sides.
 Validity is a property of the FILE: it names its format version, the model
 file it was baked from (size + mtime) and the fix it was baked under. Anything
 that disagrees reads as "no surface" — today's behaviour, never a stale floor.
+
+``stand_height_at`` at the bottom is the SERVER's reader (§ 7): the walk gate
+of ``POST /play/pos`` stands on the same lattices the clients walk on, so a
+crate is a step on both sides and a block a wall on both sides.
 """
 import hashlib
 import json
 import logging
 import math
+import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from app.core.timeutils import utc_now_iso
 
@@ -244,3 +249,133 @@ def highest_surface_at(specs: Iterable[Dict[str, Any]], x: float, z: float,
         if y is not None and (best is None or y > best):
             best = y
     return best
+
+
+# ── The server's standing height (spec § 7) ─────────────────────────────
+#
+# The walk gate of ``POST /play/pos`` runs up to four times a second per
+# walker and asks for TWO points per report, while composing a location's
+# scene reads its rooms, its props and every model meta. So the lattices of a
+# location are composed at most once per TTL — a window short enough that a
+# freshly baked surface reaches the gate before any client has re-fetched the
+# scene, and long enough that a walking party costs one compose, not fifty.
+_SURFACE_TTL_S = 5.0
+_placed_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+#: Location ids whose lattice lookup already failed once — the gate must not
+#: write a traceback per report for one malformed sidecar.
+_read_warned: Dict[str, bool] = {}
+
+
+def forget_surfaces(location_id: str = "") -> None:
+    """Drop the cached lattices of ONE location, or of all of them."""
+    if location_id:
+        _placed_cache.pop(location_id, None)
+    else:
+        _placed_cache.clear()
+
+
+def _placed_specs(location: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The placement specs of a location's scene that carry a surface — in
+    tile-local metres, like every scene number.
+
+    The same composition ``GET /play/locations/{id}/scene`` serves, down to
+    its 404 gate: a location with no room layout, no building outline and no
+    building model composes nothing, and that empty answer is cached too.
+    """
+    loc_id = str(location.get("id") or "")
+    now = time.monotonic()
+    hit = _placed_cache.get(loc_id)
+    if hit and hit[0] > now:
+        return hit[1]
+    from app.core.scene_recipe import compose_scene, scene_inputs
+    from app.core.surface_textures import library_kinds
+    specs: List[Dict[str, Any]] = []
+    map3d = location.get("map3d") or {}
+    has_layout = any(isinstance(r, dict) and r.get("layout")
+                     for r in location.get("rooms") or [])
+    plan_width_m, building_meta, room_metas = scene_inputs(location, loc_id)
+    if has_layout or len(map3d.get("outline") or []) >= 3 or building_meta:
+        try:
+            scene = compose_scene(location, plan_width_m=plan_width_m,
+                                  building_meta=building_meta,
+                                  room_metas=room_metas,
+                                  surface_kinds=library_kinds())
+            specs = [m for m in scene.get("models") or [] if m.get("surface")]
+        except Exception:      # a broken scene must not block walking
+            logger.exception("surfaces: compose failed for %s", loc_id)
+    _placed_cache[loc_id] = (now + _SURFACE_TTL_S, specs)
+    return specs
+
+
+def _datum_y(location: Dict[str, Any]) -> float:
+    """The ground under the location's PIN, which is the zero every scene
+    number is measured from — ``tile.center.y`` in the client
+    (``footprintCentre`` asks the height field at ``pos_x``/``pos_z``)."""
+    from app.core.relief import ground_at
+    try:
+        px = float(location.get("pos_x"))
+        pz = float(location.get("pos_z"))
+    except (TypeError, ValueError):
+        return 0.0
+    if not (math.isfinite(px) and math.isfinite(pz)):
+        return 0.0
+    g = ground_at(px, pz)
+    return g if math.isfinite(g) else 0.0
+
+
+def stand_height_at(location: Optional[Dict[str, Any]],
+                    x: float, z: float) -> float:
+    """Where a figure stands at WORLD (x, z), in metres: the world ground,
+    raised by the highest baked surface of ``location`` covering the point.
+
+    The server's copy of the client's ``standY(tileWalkY, worldGround)``
+    (spec § 7) — the terrain stays the lower bound (Entscheid 5), so a hollow
+    in a diorama never sinks a figure below the ground it stands on.
+
+    STOREY 0 ONLY, exactly like the client's GROUND ladder (``tileWalkY``): a
+    walker reports a point on the ground plane, and the diorama of an upper
+    floor must not be what it is measured against. A figure on an upper floor
+    got there through a room, not through this route.
+
+    A location that composes no scene, and a lattice that does not answer at
+    the point, both leave the bare ground — as does anything that goes wrong
+    while reading: the walk gate is a plausibility check on a step, and a
+    malformed sidecar must never be the reason a player cannot walk.
+    """
+    from app.core.relief import ground_at
+    ground = ground_at(x, z)
+    if not location:
+        return ground
+    loc_id = str(location.get("id") or "")
+    try:
+        specs = _placed_specs(location)
+        if not specs:
+            return ground
+        from app.core.world_geometry import local_to_world, world_to_local
+        cx = float(location.get("pos_x") or 0.0)
+        cz = float(location.get("pos_z") or 0.0)
+        yaw = float(location.get("yaw_deg") or 0.0)
+        datum = _datum_y(location)
+        lx, lz = world_to_local(x, z, cx, cz, yaw)
+
+        def lift_of(spec: Dict[str, Any]) -> float:
+            """§ A16.9: a storey-0 placement stands on the ground under ITS
+            OWN anchor, not under the pin — ``storeyGroundLift`` in the
+            client, and the lattice stands where its model stands."""
+            ax, az = spec["anchor"]
+            wx, wz = local_to_world(float(ax), float(az), cx, cz, yaw)
+            g = ground_at(wx, wz)
+            return (g - datum) if math.isfinite(g) else 0.0
+
+        baked = highest_surface_at(
+            (s for s in specs if int(s.get("level") or 0) == 0),
+            lx, lz, lift_of)
+    except Exception:
+        if not _read_warned.get(loc_id):
+            _read_warned[loc_id] = True
+            logger.exception("surfaces: unreadable lattice at %s — the walk "
+                             "gate falls back to the ground", loc_id)
+        return ground
+    if baked is None:
+        return ground
+    return max(ground, datum + baked)

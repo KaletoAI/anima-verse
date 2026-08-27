@@ -1114,14 +1114,19 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # the step-plausibility bound above.
     if here is not None:
         from app.core.boundary_entry import opening_world_points
+        from app.core.model_surface import stand_height_at
         from app.core.relief import (STEP_DISTANCE_M, get_max_slope_deg,
-                                     get_max_step_height_m, ground_at,
-                                     slope_blocks)
-        # ``ground_at`` asks the WORLD and nothing else ("Ein Boden" E5a): the
+                                     get_max_step_height_m, slope_blocks)
+        # ``stand_height_at`` asks the WORLD's ground ("Ein Boden" E5a): the
         # baked heightfield already carries every plateau, every carve and every
         # authored hill, so there is no per-location field left to resolve and
-        # no containment search on the walk-report path.
-        dh = ground_at(x, z) - ground_at(here["x"], here["z"])
+        # no containment search on the walk-report path — lifted by the baked
+        # surfaces of the location (v6, spec-surface-height § 7), which is the
+        # same ``max`` the client walks on. The location of the PREVIOUS point
+        # is resolved once here and reused by ``_at_an_opening`` below.
+        was_loc = location_at_point(here["x"], here["z"], _locs)
+        dh = stand_height_at(derived, x, z) \
+            - stand_height_at(was_loc, here["x"], here["z"])
         dist = math.hypot(x - here["x"], z - here["z"])
         def _at_an_opening() -> bool:
             """OPENINGS ARE RAMP ENDS. An authored opening sits on the edge
@@ -1137,9 +1142,9 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
             # report already read: the location the previous point lies in,
             # not the avatar's recorded ``current_location``. The two can
             # disagree — an admin move, a takeover, a teleport — and it is the
-            # POINT whose door this is about.
-            was = location_at_point(here["x"], here["z"], _locs)
-            for loc in (derived, was):
+            # POINT whose door this is about. ``was_loc`` is that location,
+            # resolved once above for the height the previous point stands at.
+            for loc in (derived, was_loc):
                 for _edge, (ox, oz) in opening_world_points(loc or {}):
                     if min(math.hypot(ox - x, oz - z),
                            math.hypot(ox - here["x"], oz - here["z"])) \

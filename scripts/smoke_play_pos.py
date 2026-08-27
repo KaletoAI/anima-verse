@@ -272,6 +272,51 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       acceptance. Two DIFFERENT avatars get two different locks, which is what
       keeps two players out of each other's way.
 
+  [23] THE BAKED SURFACES ARE PART OF THE STEP (spec-surface-height § 7).
+      The height gate does not measure the world ground alone any more: ``dh``
+      runs between ``stand_height_at(was, here)`` and
+      ``stand_height_at(derived, x, z)``, and ``stand_height_at`` is
+      ``max(ground_at, the highest answering lattice of the location)`` — the
+      server's copy of the client's ``standY``.
+      The lattices are STUBBED here (``model_surface._placed_specs``), so the
+      case owns its numbers instead of a Blender bake's. YARD — 40 m wide at
+      (1000, 1000), no openings, flat ground, nothing else near it — carries
+      two walkable props, each a 1 m x 1 m box of ONE height with a 5 x 5
+      lattice (1 m / 0.25 m + 1 nodes per side, ``origin`` on the box's lower
+      corner), ``max_m`` 1 and ``measure`` "xyz". So the placement scale is
+      ``s = max_m / max(1, h, 1) = 1`` and a node reads
+      ``bottom_y + lift + s * value/100`` = the box height itself, over the
+      local square x, z in [-0.5, 0.5] around the anchor:
+        CRATE at the pin, local (0, 0)  -> 0.30 m,
+        BLOCK 10 m east, local (10, 0)  -> 0.80 m.
+      With ``max_step`` = 0.4 m (the default of ``get_max_step_height_m()``),
+      ``max_slope_deg`` = 40 and a 0.7 m report — inside ``STEP_DISTANCE_M``
+      = 1 m, so the step limit applies on top of the slope one:
+        a) THE CACHE. YARD has no layout, no outline and no building model, so
+           it is the 404 case: nothing composes, the empty answer is cached
+           under the location id and ``forget_surfaces`` drops it again.
+        b) THE READINGS: beside the crate 0.00, on it 0.30, on the block 0.80,
+           and without a location the bare ground.
+        c) THE LIFT (§ 6.2). With the ground stubbed to a ramp
+           ``g(x) = (x - 1000) * 0.1`` the datum is the ground under the pin,
+           ``g(1000) = 0``, and a storey-0 placement stands on the ground under
+           ITS OWN anchor: the block's lift is ``g(1010) - 0 = 1.0``, so it
+           reads 0 + 1.0 + 0.8 = 1.80. The same spec on storey 1 gets no lift
+           by statement — its lattice says 0.80, the terrain under it says
+           1.00, and the ``max`` gives 1.00 (Entscheid 5: the terrain stays the
+           lower bound).
+        d) CLIMBING THE CRATE: park at (999.3, 1000) — 0.7 m west of the pin,
+           outside the lattice, so 0.00 — and report (1000, 1000):
+           dh = 0.30 <= 0.4 -> accepted.
+        e) THE BLOCK IS A WALL: park at (1009.3, 1000) (0.00) and report
+           (1010, 1000): dh = 0.80 > 0.4 over 0.7 m -> 409 ``too_steep`` with
+           the STEP sentence, and the last valid point comes back.
+        f) AND DOWN AGAIN: from the crate (1000, 1000) to (999.3, 1000) is
+           dh = -0.30 -> accepted; the gate is symmetric.
+        g) A BROKEN LATTICE IS NOT A WALL (ruling task 2): with the lookup
+           raising, the gate logs and answers on the world ground instead of
+           refusing the report — or, worse, 500-ing it.
+
 NOTE ON THE PARKING HELPER. ``park()`` writes the avatar's point directly
 (``set_character_pos``) and forgets the report clock — it is WORLD SETUP, not
 a call of the route: walking the 45 m up to HALL through the route would be a
@@ -284,6 +329,7 @@ without one. Cases [3] and [13] are the ones that supply that baseline.
 Usage:  ./.venv/bin/python scripts/smoke_play_pos.py
 """
 import asyncio
+import logging
 import os
 import sys
 import tempfile
@@ -464,6 +510,9 @@ SQUARE = place("Smoke Square", 0.0, 200.0, width=40.0, openings=False)
 HUT = place("Smoke Hut", 0.0, 200.0, width=8.0, edge=2, room="foyer",
             entry_room="hall")
 BLUFF = place("Smoke Bluff", 600.0, 50.0, room="foyer", entry_room="hall")
+# Case [23]: the baked-surface yard — 40 m without openings (x, z ∈ [980,
+# 1020] around (1000, 1000)), far from every other fixture, on flat ground.
+YARD = place("Smoke Yard", 1000.0, 1000.0, width=40.0, openings=False)
 patch_location(LOCKED, accessible_when=["has_item:silver_key"])
 add_item(name="Silver Key", description="opens the vault", item_id="silver_key")
 terrain.save_area({"kind": "deep_water",
@@ -930,6 +979,114 @@ def main() -> int:
     check("...and is a real acceptance", (again or {}).get("ok"), True)
     check("the avatar followed it", get_character_pos(AVATAR),
           {"x": 800.0, "z": 806.0})
+
+    print("\n[23] the baked surfaces are part of the step")
+    from app.core import model_surface, relief
+    from app.models.world import get_location_by_id
+    yard = get_location_by_id(YARD)
+    # (a) THE CACHE, on the real reader: YARD has nothing to compose, so the
+    # 404 case answers with no lattices at all — and remembers that.
+    model_surface.forget_surfaces()
+    check("a location without a scene stands on the ground alone",
+          round(model_surface.stand_height_at(yard, 1000.0, 1000.0), 3), 0.0)
+    check_true("...and the empty answer was cached",
+               YARD in model_surface._placed_cache)
+    model_surface.forget_surfaces(YARD)
+    check_true("...forget_surfaces drops it",
+               YARD not in model_surface._placed_cache)
+
+    def lattice(value_cm: int, height_m: float) -> dict:
+        """A 5 x 5 lattice of ONE height over a 1 m x 1 m box, in the model's
+        own frame: 1 m / 0.25 m + 1 nodes per side, origin on the lower
+        corner, values in centimetres above the box floor."""
+        return {"step": 0.25, "origin": [-0.5, -0.5], "cols": 5, "rows": 5,
+                "values": [value_cm] * 25,
+                "box_min": [-0.5, 0.0, -0.5], "box_max": [0.5, height_m, 0.5],
+                "extent_snapped": [1.0, height_m, 1.0]}
+
+    def walkable_prop(pid: str, anchor, value_cm: int, height_m: float,
+                      level: int = 0) -> dict:
+        """One placement spec of the shape ``compose_scene`` ships for a prop
+        tagged ``walkable`` — tile-local metres, ``max_m`` 1 so the scale is 1."""
+        return {"role": "prop", "id": pid, "room_id": "", "level": level,
+                "anchor": list(anchor), "yaw_deg": 0.0, "bottom_y": 0.0,
+                "max_m": 1.0, "measure": "xyz", "walkable": True,
+                "surface": lattice(value_cm, height_m)}
+
+    yard_specs = [walkable_prop("crate", (0.0, 0.0), 30, 0.3),
+                  walkable_prop("block", (10.0, 0.0), 80, 0.8)]
+    real_placed = model_surface._placed_specs
+    model_surface._placed_specs = lambda loc: (
+        yard_specs if str((loc or {}).get("id") or "") == YARD else [])
+    try:
+        # (b) THE READINGS.
+        check("beside the crate: the bare ground",
+              round(model_surface.stand_height_at(yard, 999.3, 1000.0), 3), 0.0)
+        check("on the crate", round(
+            model_surface.stand_height_at(yard, 1000.0, 1000.0), 3), 0.3)
+        check("on the block", round(
+            model_surface.stand_height_at(yard, 1010.0, 1000.0), 3), 0.8)
+        check("no location, no lattice", round(
+            model_surface.stand_height_at(None, 1000.0, 1000.0), 3), 0.0)
+
+        # (c) THE LIFT: a ramp of 0.1 m per metre east, datum g(1000) = 0.
+        real_ground = relief.ground_at
+        relief.ground_at = lambda x, z: (float(x) - 1000.0) * 0.1
+        try:
+            check("a storey-0 placement rides the ground under its own anchor",
+                  round(model_surface.stand_height_at(yard, 1010.0, 1000.0), 3),
+                  1.8)
+            yard_specs[1]["level"] = 1
+            check("...a storey-1 one gets no lift, and the terrain is the floor",
+                  round(model_surface.stand_height_at(yard, 1010.0, 1000.0), 3),
+                  1.0)
+        finally:
+            yard_specs[1]["level"] = 0
+            relief.ground_at = real_ground
+
+        # (d) CLIMBING THE CRATE — and the report that enters the yard.
+        park(999.3, 1000.0)
+        status, _payload = report(1000.0, 1000.0)
+        check("stepping onto the crate (0.30 m) is allowed", status, "ok")
+        check("the avatar stands on it", get_character_pos(AVATAR),
+              {"x": 1000.0, "z": 1000.0})
+
+        # (e) THE BLOCK IS A WALL.
+        park(1009.3, 1000.0)
+        res = report(1010.0, 1000.0)
+        status, reason, pos, _loc, message = refusal_of(res)
+        check("the block (0.80 m) refuses the step", res[0], "refused")
+        check("the status", status, 409)
+        check("the reason", reason, "too_steep")
+        check("...named as a STEP, not a slope", message,
+              "That step is too high to climb.")
+        check("the last valid point comes back", pos,
+              {"x": 1009.3, "z": 1000.0})
+
+        # (f) AND DOWN AGAIN.
+        park(1000.0, 1000.0)
+        status, _payload = report(999.3, 1000.0)
+        check("climbing back down off the crate is allowed", status, "ok")
+
+        # (g) A BROKEN LATTICE IS NOT A WALL (ruling task 2). The traceback it
+        # writes is the point of the ruling but not of this report, so the
+        # module's logger is muted and the ONCE-guard is asserted instead.
+        def _broken(_loc):
+            raise RuntimeError("a malformed surface sidecar")
+
+        model_surface._placed_specs = _broken
+        model_surface._read_warned.clear()
+        model_surface.logger.setLevel(logging.CRITICAL)
+        park(1000.0, 1000.0)
+        status, _payload = report(1000.7, 1000.0)
+        check("a broken lattice falls back to the ground instead of 500",
+              status, "ok")
+        check_true("...and it was logged, once per location",
+                   model_surface._read_warned == {YARD: True})
+        model_surface.logger.setLevel(logging.NOTSET)
+    finally:
+        model_surface._placed_specs = real_placed
+        model_surface.forget_surfaces()
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
     for f in FAILURES:
