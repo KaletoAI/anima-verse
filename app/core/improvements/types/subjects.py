@@ -21,7 +21,7 @@ engine calls them synchronously in a queue worker:
   defect, and the engine leaves the step pending without counting an attempt.
 """
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.improvements.base import CandidateBusy
 
@@ -436,6 +436,88 @@ def regenerate_gallery_image(location_id: str, filename: str,
     set_gallery_image_meta(location_id, new_name, meta)
     if new_name in get_background_images(location_id):
         remove_background_image(location_id, filename)
+
+
+# ---------------------------------------------------------------------------
+# Walkable surfaces
+# ---------------------------------------------------------------------------
+#
+# Both helpers answer in the same shape — ``(a, b, label, model file,
+# orientation fix)`` — because a surface subject is always "one model file
+# under one fix", whatever identifies it.  The fix travels with the file: a
+# baked lattice is only valid under the rotation it was made with
+# (spec-surface-height § 4).
+
+def room_models() -> List[Tuple[str, str, str, Path, Dict[str, Any]]]:
+    """``(location_id, room_id, label, model file, fix)`` of every LAID-OUT
+    room that has a model.
+
+    A room without a floor plan is placed in no scene, so a lattice baked for
+    its diorama would never be read — it is not a subject at all, the same way
+    a prop without its product shot is none for ``fill_missing``.
+
+    The file is the one the PAYLOAD serves (``find_building_model`` — the
+    gallery's active model with the tier fallback, exactly what
+    ``model_meta``/the scene recipe read the surface from), not the full tier
+    the landing bake picks: a room whose only model is a distance mesh still
+    needs the lattice its clients will ask for.
+    """
+    from app.core.location_model3d import find_building_model
+    from app.core.model_store import read_sidecar
+    out: List[Tuple[str, str, str, Path, Dict[str, Any]]] = []
+    for location in locations():
+        loc_id = str(location.get("id") or "")
+        if not loc_id:
+            continue
+        for room in location.get("rooms") or []:
+            if not isinstance(room, dict) or not room.get("layout"):
+                continue
+            room_id = str(room.get("id") or "")
+            if not room_id:
+                continue
+            path = find_building_model(loc_id, room_id)
+            if not path:
+                continue
+            label = (f"{location.get('name') or loc_id} / "
+                     f"{room.get('name') or room_id}")
+            rotation = dict(read_sidecar(path) or {}).get("rotation") or {}
+            out.append((loc_id, room_id, label, path, rotation))
+    return out
+
+
+def prop_model_variants() -> List[Tuple[str, int, str, Path, Dict[str, Any]]]:
+    """``(prop_id, variant index, label, model file, fix)`` of every ACTIVE
+    prop variant that has a mesh.
+
+    The index set is ``props``' own — manually active and capped at
+    ``variant_max``, the very set the landing bake walks
+    (``props.bake_surfaces``) — and deliberately NOT the season-filtered one:
+    a variant that is out of season right now still renders in its own season,
+    and a lattice is baked from the mesh, not from the calendar.
+
+    Indices are STORE indices, like everywhere in ``props``; the fix belongs to
+    the prop, because one orientation dial turns every variant of it.
+    """
+    from app.core import props as prop_store
+    out: List[Tuple[str, int, str, Path, Dict[str, Any]]] = []
+    for prop in props():
+        prop_id = str(prop.get("id") or "")
+        if not prop_id:
+            continue
+        meta = prop_store.read_sidecar(prop_id)
+        if not meta:
+            continue
+        rotation = meta.get("rotation") or {}
+        entries = prop_store._variant_list(meta)
+        for idx in prop_store._active_indices(entries):
+            path = prop_store.model_path(prop_id, variant=idx)
+            if not path:
+                continue
+            label = str(prop.get("name") or prop_id)
+            if idx:
+                label = f"{label} (variant {idx})"
+            out.append((prop_id, idx, label, path, rotation))
+    return out
 
 
 # ---------------------------------------------------------------------------

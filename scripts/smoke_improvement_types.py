@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Smoke check for the improvement types `model_replace`, `fill_missing` and
-`image_rerender` (plan-improvements-queue, tasks 3 + 4).
+"""Smoke check for the improvement types `model_replace`, `fill_missing`,
+`image_rerender` (plan-improvements-queue, tasks 3 + 4) and `surface_bake`
+(spec-surface-height § 5 no. 3).
 
 Every expectation below is derived BY HAND from the task contract and from the
 generator anchors it builds on — nothing here records what a run happened to
@@ -146,6 +147,36 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      skip the step for good after two of them, so `apply` translates it into
      `CandidateBusy`.
 
+ 21. `surface_bake room_model` works on LAID-OUT rooms that have a model: a
+     room whose floor plan is missing is placed in no scene, so its diorama's
+     lattice would never be read and it is no subject at all — the same rule
+     that keeps a prop without its product shot out of `fill_missing`.  The
+     candidate is keyed `room:<location>/<room>` and labelled
+     "<location> / <room>".
+
+ 22. Candidacy is `read_surface is None`, and validity is part of that
+     (spec § 4): after `apply` has baked, the room drops out and `is_done`
+     answers True; turning the orientation dial afterwards makes the stored
+     lattice read as stale — the very same "no surface" — and the room is a
+     candidate again.  `apply` waits the landing paths' 300 s for a Blender
+     slot and bakes with the sidecar's fix.
+
+ 23. `bake_surface` NEVER raises: it answers None for a missing Blender, for a
+     slot that never came free and for a failed script alike.  The engine
+     records a failure only from an exception, so `apply` has to raise, or the
+     step would be closed as finished and the model would stay without a
+     floor.
+
+ 24. A bake invalidates the walk gate's cached lattices.  A room knows its
+     location and drops only that one; a prop stands in many locations and
+     does not know in which, so its cache goes wholesale (`forget_surfaces()`
+     with no argument) — the same rule `props.bake_surfaces` follows.
+
+ 25. `surface_bake prop_model` works per ACTIVE VARIANT, keyed
+     `prop:<id>/<index>` on the STORE index: the prop with one variant is one
+     candidate labelled by its plain name, and a second active variant adds a
+     second candidate labelled "(variant 1)".
+
 The printed sections follow execution order, so expectations 9 and 10 are
 checked inside the sections whose fixtures they belong to.
 
@@ -171,7 +202,7 @@ db.init_schema()
 from fastapi import HTTPException  # noqa: E402
 
 from app.core import (expression_regen, location_model3d, model3d,  # noqa: E402
-                      model_refs, props, world_ops)
+                      model_refs, model_surface, props, world_ops)
 from app.core.improvements import registry  # noqa: E402
 from app.core.improvements.base import CandidateBusy  # noqa: E402
 from app.core.improvements.types import subjects  # noqa: E402
@@ -385,9 +416,46 @@ world_ops.generate_gallery_image_core = fake_gallery_generate
 model3d.list_mesh_backends = lambda rig="": {
     "backends": [{"name": "hy"}, {"name": "tr"}], "default": "tr"}
 
+BAKE_CALLS = []
+BAKE_FAILS = {"value": False}      # True = Blender missing / no slot / script failed
+FORGET_CALLS = []
+
+
+def fake_bake_surface(model_path, rotation, *, wait_s=0.0):
+    """What `model_surface.bake_surface` leaves behind on success: the lattice
+    file next to the model, naming the format version, the FILE it was baked
+    from and the FIX it was baked under. `read_surface` stays the real one, so
+    every "is there a surface" answer below goes through the production
+    validity check."""
+    BAKE_CALLS.append({"model": Path(model_path).name,
+                       "rotation": model_surface._norm_rotation(rotation),
+                       "wait_s": wait_s})
+    if BAKE_FAILS["value"]:
+        return None
+    surface = {"version": model_surface.SURFACE_VERSION,
+               "source": model_surface._source_of(Path(model_path)),
+               "rotation": model_surface._norm_rotation(rotation),
+               "baked_at": utc_now_iso(), "blender": "fake", "hits": 1,
+               "step": model_surface.SURFACE_STEP_M, "origin": [0.0, 0.0],
+               "cols": 1, "rows": 1, "values": [0.0],
+               "box_min": [0.0, 0.0, 0.0], "box_max": [1.0, 1.0, 1.0],
+               "extent_snapped": [1.0, 1.0, 1.0]}
+    model_surface.surface_path(Path(model_path)).write_text(
+        json.dumps(surface), encoding="utf-8")
+    return surface
+
+
+def fake_forget_surfaces(location_id=""):
+    FORGET_CALLS.append(location_id)
+
+
+model_surface.bake_surface = fake_bake_surface
+model_surface.forget_surfaces = fake_forget_surfaces
+
 MODEL_REPLACE = registry.get("model_replace")
 FILL_MISSING = registry.get("fill_missing")
 IMAGE_RERENDER = registry.get("image_rerender")
+SURFACE_BAKE = registry.get("surface_bake")
 
 A = make_character("demo_a")
 B = make_character("demo_b")
@@ -401,9 +469,9 @@ def candidates(improvement_type, params):
 
 # ── [1] the parameter contract ──────────────────────────────────────────────
 print("[1] model_replace parameters")
-check("all three types are registered",
+check("all four types are registered",
       sorted(t.id for t in registry.list_types()),
-      ["fill_missing", "image_rerender", "model_replace"])
+      ["fill_missing", "image_rerender", "model_replace", "surface_bake"])
 check("a complete set validates to itself",
       MODEL_REPLACE.validate({"subject": "character", "source_backend": "hy",
                               "target_backend": "tr"}),
@@ -733,6 +801,97 @@ check("and the candidate stayed exactly as it was",
       candidates(IMAGE_RERENDER, GALLERY_RERENDER),
       [(f"location:{LOC_ID}:new.png", "Crossroads Inn / new.png")])
 GALLERY_BUSY["value"] = False
+
+# ── [14] surface_bake over room models ──────────────────────────────────────
+print("[14] surface_bake room_model")
+BAKE_ROOM = {"subject": "room_model"}
+
+
+def set_room_layout(location_id, room_id, layout):
+    """Only the PRESENCE of a floor plan is the gate here, so a minimal one is
+    stored directly rather than through the layout sanitizer."""
+    data = world._load_world_data()
+    for _loc in data.get("locations", []):
+        if _loc.get("id") != location_id:
+            continue
+        for _room in _loc.get("rooms", []):
+            if _room.get("id") == room_id:
+                _room["layout"] = layout
+    world._save_world_data(data)
+
+
+TAPROOM = world.add_room(LOC_ID, "Taproom")["id"]
+CELLAR = world.add_room(LOC_ID, "Cellar")["id"]
+fake_building_generate(LOC_ID, "new.png", "tr", room_id=TAPROOM)
+fake_building_generate(LOC_ID, "new.png", "tr", room_id=CELLAR)
+check("both rooms have a model", [
+    bool(location_model3d.find_building_model(LOC_ID, TAPROOM)),
+    bool(location_model3d.find_building_model(LOC_ID, CELLAR))], [True, True])
+set_room_layout(LOC_ID, TAPROOM, {"w": 6.0, "h": 4.0})
+check("only the LAID-OUT room is a subject",
+      candidates(SURFACE_BAKE, BAKE_ROOM),
+      [(f"room:{LOC_ID}/{TAPROOM}", "Crossroads Inn / Taproom")])
+BAKE_CALLS.clear()
+FORGET_CALLS.clear()
+CAND_R = SURFACE_BAKE.find_candidates(SURFACE_BAKE.validate(BAKE_ROOM))[0]
+ROOM_MODEL = location_model3d.find_building_model(LOC_ID, TAPROOM)
+SURFACE_BAKE.apply(CAND_R, SURFACE_BAKE.validate(BAKE_ROOM), "task-15")
+check("apply bakes that model under its sidecar fix, waiting for a slot",
+      BAKE_CALLS, [{"model": ROOM_MODEL.name,
+                    "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "wait_s": 300.0}])
+check("and drops the walk gate's cache for THIS location", FORGET_CALLS,
+      [LOC_ID])
+check("is_done reads the fresh lattice back",
+      SURFACE_BAKE.is_done(CAND_R, SURFACE_BAKE.validate(BAKE_ROOM)), True)
+check("so the room has dropped out of the candidate list",
+      candidates(SURFACE_BAKE, BAKE_ROOM), [])
+ROOM_META = location_model3d.read_sidecar(ROOM_MODEL)
+ROOM_META["rotation"] = {"x": 0, "y": 90, "z": 0}
+write_sidecar(ROOM_MODEL, ROOM_META)
+check("turning the orientation dial makes the stored lattice stale — which "
+      "reads as no surface, so the room is a candidate again",
+      candidates(SURFACE_BAKE, BAKE_ROOM),
+      [(f"room:{LOC_ID}/{TAPROOM}", "Crossroads Inn / Taproom")])
+BAKE_CALLS.clear()
+FORGET_CALLS.clear()
+BAKE_FAILS["value"] = True
+check_raises("a bake that answers None is an exception, not a finished step",
+             RuntimeError,
+             lambda: SURFACE_BAKE.apply(CAND_R, SURFACE_BAKE.validate(BAKE_ROOM),
+                                        "task-16"),
+             f"room:{LOC_ID}/{TAPROOM}: surface bake failed")
+check("and nothing was invalidated", FORGET_CALLS, [])
+BAKE_FAILS["value"] = False
+
+# ── [15] surface_bake over prop variants ────────────────────────────────────
+print("[15] surface_bake prop_model")
+BAKE_PROP = {"subject": "prop_model"}
+check("the prop's one variant is one candidate, keyed on the STORE index",
+      candidates(SURFACE_BAKE, BAKE_PROP), [(f"prop:{PROP}/0", "Oak Chair")])
+VARIANT = props.add_variant(PROP)
+VAR_GALLERY = props.model_gallery(PROP, VARIANT)
+VAR_MODEL = VAR_GALLERY.new_path()
+VAR_MODEL.write_bytes(b"glTF fake")
+props.write_model_sidecar(VAR_MODEL, {
+    "created_at": utc_now_iso(), "source": "generated", "format": "glb",
+    "rig": "none", "tier": props.DEFAULT_TIER, "backend": "tr"})
+VAR_GALLERY.select(VAR_MODEL.name, props.DEFAULT_TIER)
+check("a second active variant is a second candidate",
+      candidates(SURFACE_BAKE, BAKE_PROP),
+      [(f"prop:{PROP}/0", "Oak Chair"),
+       (f"prop:{PROP}/1", "Oak Chair (variant 1)")])
+BAKE_CALLS.clear()
+FORGET_CALLS.clear()
+CAND_V = SURFACE_BAKE.find_candidates(SURFACE_BAKE.validate(BAKE_PROP))[1]
+SURFACE_BAKE.apply(CAND_V, SURFACE_BAKE.validate(BAKE_PROP), "task-17")
+check("apply bakes that VARIANT's mesh", BAKE_CALLS,
+      [{"model": VAR_MODEL.name, "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "wait_s": 300.0}])
+check("a prop does not know where it stands, so the whole cache goes",
+      FORGET_CALLS, [""])
+check("only the other variant is left to bake",
+      candidates(SURFACE_BAKE, BAKE_PROP), [(f"prop:{PROP}/0", "Oak Chair")])
 
 print()
 if FAILURES:
