@@ -34,6 +34,16 @@ class ModelReplace(ImprovementType):
         ParamField("target_backend", "Generate with", "mesh_backend"),
     ]
 
+    def validate(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The base contract plus the one rule that makes this type mean
+        anything: replacing a backend BY ITSELF would leave every candidate
+        instantly done, and a standing entry would regenerate the same models
+        for the rest of the world's life."""
+        out = super().validate(params)
+        if out["source_backend"] == out["target_backend"]:
+            raise ValueError("source and target backend must differ")
+        return out
+
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
         subject = params["subject"]
         source = params["source_backend"]
@@ -61,6 +71,11 @@ class ModelReplace(ImprovementType):
                 if model and model.get("backend") == source:
                     out.append(Candidate(f"prop:{prop_id}",
                                          prop.get("name") or prop_id))
+        # The contract is "every subject NOT yet done".  `validate` already
+        # rules out the case where source and target are the same backend, but
+        # params come back out of the store as stored — an entry written before
+        # that rule existed must not hand the engine work that is finished.
+        out = [c for c in out if not self.is_done(c, params)]
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:

@@ -84,12 +84,18 @@ def locations() -> List[Dict[str, Any]]:
 def building_model(location_id: str) -> Optional[Dict[str, Any]]:
     """Sidecar of the ACTIVE building model (``backend`` …), or None when the
     location has no model.  An existing model whose sidecar is unreadable
-    answers ``{}`` — present, but nothing is known about it."""
-    from app.core.location_model3d import get_building_info
-    info = get_building_info(location_id)
-    if not info.get("exists"):
+    answers ``{}`` — present, but nothing is known about it.
+
+    Deliberately NOT ``get_building_info``: that one assembles the whole admin
+    panel and probes the mesh backends, the shrink backends and Blender on
+    every call.  A scan asks this per location, so it stays a disk walk.
+    """
+    from app.core.location_model3d import find_building_model
+    from app.core.model_store import read_sidecar
+    path = find_building_model(location_id)
+    if not path:
         return None
-    return dict(info.get("meta") or {})
+    return dict(read_sidecar(path) or {})
 
 
 def building_source_image(location_id: str) -> str:
@@ -103,8 +109,8 @@ def building_source_image(location_id: str) -> str:
     """
     from app.models.world import get_gallery_dir, get_gallery_image_types
     gallery = get_gallery_dir(location_id)
-    meta = building_model(location_id) or {}
-    stored = str(meta.get("source_image") or "").strip()
+    stored = str((building_model(location_id) or {}).get("source_image")
+                 or "").strip()
     if stored and (gallery / stored).exists():
         return stored
     newest, newest_mtime = "", -1.0
@@ -120,15 +126,29 @@ def building_source_image(location_id: str) -> str:
     return newest
 
 
+#: Job kind this module claims a building's in-flight slot under.  ``_generate``
+#: does not take the slot itself — only the ``trigger_*`` wrappers do — so a
+#: direct caller has to hold it, or a parallel admin run would mesh the same
+#: subject a second time.
+_BUILDING_JOB_KIND = "improvement"
+
+
 def generate_building_model(location_id: str, backend: str) -> None:
     """Blocking mesh generation for a location's building, on ``backend``."""
     from app.core import location_model3d
+    # Someone else's job on this subject (the admin's, a shrink run) — the
+    # claim below cannot see it, because the mesh jobs key by image+backend+tier.
     if location_model3d.is_pending(location_id):
         raise CandidateBusy(f"{location_id}: model generation already running")
     source_image = building_source_image(location_id)
     if not source_image:
         raise RuntimeError("no building image")
-    result = location_model3d._generate(location_id, source_image, backend)
+    if not location_model3d.claim_job(location_id, kind=_BUILDING_JOB_KIND):
+        raise CandidateBusy(f"{location_id}: model generation already running")
+    try:
+        result = location_model3d._generate(location_id, source_image, backend)
+    finally:
+        location_model3d.release_job(location_id, kind=_BUILDING_JOB_KIND)
     if not result.get("ok"):
         raise RuntimeError(str(result.get("error") or "generation failed"))
 
@@ -165,11 +185,25 @@ def generate_prop_model(prop_id: str, backend: str) -> None:
     ``mesh_only``: the picture stays, only the mesh is made again — an idle
     improvement must not spend an image render on a product shot that is
     already there.
+
+    Holds the same job slot ``props.trigger_generation`` holds — ``_generate``
+    does not take it itself.  The variant is the PRIMARY one (``None``), which
+    is the variant every reader here looks at.
     """
     from app.core import props as props_module
     if props_module.is_pending(prop_id):
         raise CandidateBusy(f"{prop_id}: model generation already running")
-    result = props_module._generate(prop_id, "", "", "", backend, mesh_only=True)
+    key = props_module._gen_key(prop_id, None, backend)
+    with props_module._lock:
+        if key in props_module._generating:
+            raise CandidateBusy(f"{prop_id}: model generation already running")
+        props_module._generating.add(key)
+    try:
+        result = props_module._generate(prop_id, "", "", "", backend,
+                                        mesh_only=True)
+    finally:
+        with props_module._lock:
+            props_module._generating.discard(key)
     if not result.get("ok"):
         raise RuntimeError(str(result.get("error") or "generation failed"))
 
@@ -196,12 +230,20 @@ def generate_expression(name: str) -> None:
     """Blocking render of that default variant — the generator directly, so the
     per-character ``expression_variants_enabled`` gate stays out of it (the
     same call ``npc_assets`` makes).  It swallows every failure and answers
-    None, so the complaint is worded here."""
-    from app.core.expression_regen import generate_expression_image
+    None, so the complaint is worded here.
+
+    ``generate_expression_image`` does not register in the module's own
+    in-flight set — only the trigger path does — so the busy question is asked
+    with ``is_generating`` on the exact variant coordinates.
+    """
+    from app.core import expression_regen
     from app.core.model_refs import current_outfit_state
     pieces, items, _sig = current_outfit_state(name)
-    if generate_expression_image(name, "", "", equipped_pieces=pieces,
-                                 equipped_items=items) is None:
+    if expression_regen.is_generating(name, "", "", equipped_pieces=pieces,
+                                      equipped_items=items):
+        raise CandidateBusy(f"{name}: expression render already running")
+    if expression_regen.generate_expression_image(
+            name, "", "", equipped_pieces=pieces, equipped_items=items) is None:
         raise RuntimeError("expression render failed")
 
 

@@ -58,6 +58,50 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      shot, never burn a new image render) and `mesh_backend_glob` = the
      admin default "tr".
 
+  9. Replacing a backend BY ITSELF is not an improvement, it is a treadmill:
+     every candidate would already be `is_done`, the engine would apply
+     anyway and a standing entry would regenerate the same models forever.
+     `validate` refuses source == target, and `find_candidates` drops any
+     subject that is already done — the contract says it returns only the
+     unfinished ones, whatever an already-stored parameter set says.
+
+ 10. `_generate` does NOT take its module's in-flight slot — only the
+     `trigger_*` wrappers do — so calling it directly has to hold the slot,
+     or a parallel admin run meshes the same subject twice.  Pre-holding the
+     prop's own job key (`props._gen_key(pid, None, "tr")`, the very key
+     `props.trigger_generation` uses) makes `apply` raise `CandidateBusy`
+     without calling the producer; after a successful apply the key is gone
+     again, so a second apply runs instead of reporting busy.
+
+ 11. `building_source_image` resolves in three steps, and all three are
+     reachable: (d) a location with no building-typed gallery image at all
+     answers "" — such a location is not a `fill_missing building_model`
+     candidate, because there would be nothing to generate FROM; (a) with two
+     building-typed images and no model it answers the NEWEST of them
+     ("new.png", mtime-ordered — "map.png" is typed `map_2d` and never
+     counts); (b) once a model exists whose sidecar names an EXISTING gallery
+     file, that file wins ("old.png" — a regeneration re-meshes the picture
+     the model was made from); (c) a sidecar naming a file that is gone falls
+     back to (a) again.
+
+ 12. The building handler runs end to end: with a source image and no model
+     the location is the only candidate, `apply` calls
+     `location_model3d._generate` with ("new.png", "tr"), the stored sidecar
+     then names backend "tr" — so the location drops out of `fill_missing`
+     and becomes a `model_replace` candidate for source "tr".  Its slot is
+     claimed for the duration: a pre-claimed job makes `apply` busy without
+     calling the producer, and after a successful apply `is_pending` is False.
+
+ 13. The expression handler asks the NPC gate's question.  With
+     `peek_cached_expression` answering None both characters are candidates;
+     with it answering a path, neither is.  `generate_expression_image` does
+     not register in the module's in-flight set, so the busy question goes to
+     `expression_regen.is_generating` — True makes `apply` raise
+     `CandidateBusy` without rendering.
+
+The printed sections follow execution order, so expectations 9 and 10 are
+checked inside the sections whose fixtures they belong to.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvement_types.py
 """
 import json
@@ -77,11 +121,14 @@ from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
 
-from app.core import model3d, model_refs, props  # noqa: E402
+from app.core import (expression_regen, location_model3d, model3d,  # noqa: E402
+                      model_refs, props)
 from app.core.improvements import registry  # noqa: E402
 from app.core.improvements.base import CandidateBusy  # noqa: E402
 from app.core.improvements.types import subjects  # noqa: E402
+from app.core.model_store import write_sidecar  # noqa: E402
 from app.core.timeutils import utc_now_iso  # noqa: E402
+from app.models import world  # noqa: E402
 from app.models.character import (get_character_dir,  # noqa: E402
                                   save_character_profile)
 
@@ -149,6 +196,9 @@ def write_mesh_sidecar(name, backend):
 MESH_CALLS = []
 MESH_RESULT = {"value": None}       # None = persist and succeed
 PROP_CALLS = []
+BUILDING_CALLS = []
+EXPRESSION_CALLS = []
+EXPRESSION_CACHED = {"value": None}   # what peek_cached_expression answers
 
 
 def fake_mesh(character_name, *, force=False, backend_glob="", **kwargs):
@@ -176,8 +226,38 @@ def fake_prop_generate(prop_id, prompt, negative, image_backend_glob,
     return {"ok": True}
 
 
+def fake_building_generate(location_id, source_image, backend_glob,
+                           room_id="", **kwargs):
+    BUILDING_CALLS.append({"location_id": location_id,
+                           "source_image": source_image,
+                           "backend_glob": backend_glob})
+    owner = location_model3d._owner_id(location_id)
+    gallery = location_model3d._gallery(owner, room_id)
+    path = gallery.new_path()
+    path.write_bytes(b"glTF fake")
+    write_sidecar(path, {"created_at": utc_now_iso(), "source": "generated",
+                         "format": "glb", "rig": "none",
+                         "tier": location_model3d.DEFAULT_TIER,
+                         "backend": backend_glob,
+                         "source_image": source_image})
+    gallery.select(path.name, location_model3d.DEFAULT_TIER)
+    return {"ok": True}
+
+
+def fake_peek_expression(name, mood, pose_key, **kwargs):
+    return EXPRESSION_CACHED["value"]
+
+
+def fake_expression_image(name, mood, pose_key, **kwargs):
+    EXPRESSION_CALLS.append(name)
+    return Path("/tmp/fake-expression.png")
+
+
 model3d.generate_for_current_outfit = fake_mesh
 props._generate = fake_prop_generate
+location_model3d._generate = fake_building_generate
+expression_regen.peek_cached_expression = fake_peek_expression
+expression_regen.generate_expression_image = fake_expression_image
 # The backend INVENTORY, not an asset reader: without configured mesh
 # backends `list_mesh_backends` answers {"backends": [], "default": ""} and
 # every "which backend is the default" expectation would be vacuous.
@@ -209,6 +289,11 @@ check_raises("a missing target backend is refused", ValueError,
              lambda: MODEL_REPLACE.validate({"subject": "character",
                                              "source_backend": "hy"}),
              "missing parameter 'target_backend'")
+check_raises("replacing a backend by itself is refused", ValueError,
+             lambda: MODEL_REPLACE.validate({"subject": "character",
+                                             "source_backend": "hy",
+                                             "target_backend": "hy"}),
+             "source and target backend must differ")
 
 # ── [2] candidates are keyed on the CURRENT backend ─────────────────────────
 print("[2] model_replace candidates")
@@ -223,6 +308,10 @@ check("scanning for a backend nothing was made by finds nothing",
       candidates(MODEL_REPLACE, {"subject": "character",
                                  "source_backend": "tr",
                                  "target_backend": "hy"}), [])
+check("a STORED equal-backend set yields no work either (is_done filter)",
+      [(c.key, c.label) for c in MODEL_REPLACE.find_candidates(
+          {"subject": "character", "source_backend": "hy",
+           "target_backend": "hy"})], [])
 
 # ── [3] apply generates with the TARGET backend ─────────────────────────────
 print("[3] model_replace apply")
@@ -298,13 +387,110 @@ check("with the product shot on disk it becomes a candidate",
       candidates(FILL_MISSING, FILL_PROP), [(f"prop:{PROP}", "Oak Chair")])
 PROP_CALLS.clear()
 CAND_P = FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_PROP))[0]
-FILL_MISSING.apply(CAND_P, FILL_MISSING.validate(FILL_PROP), "task-5")
+PROP_KEY = props._gen_key(PROP, None, "tr")
+with props._lock:
+    props._generating.add(PROP_KEY)
+check_raises("a held job key makes apply busy", CandidateBusy,
+             lambda: FILL_MISSING.apply(CAND_P,
+                                        FILL_MISSING.validate(FILL_PROP),
+                                        "task-5"))
+check("the producer was never called", PROP_CALLS, [])
+with props._lock:
+    props._generating.discard(PROP_KEY)
+FILL_MISSING.apply(CAND_P, FILL_MISSING.validate(FILL_PROP), "task-6")
 check("apply re-meshes the existing image with the default backend", PROP_CALLS,
       [{"prop_id": PROP, "mesh_backend_glob": "tr", "mesh_only": True}])
+check("the job slot is released again", props._generating, set())
 check("the stored mesh records the backend that made it",
       (subjects.prop_model(PROP) or {}).get("backend"), "tr")
 check("and the prop is no longer missing a model",
       candidates(FILL_MISSING, FILL_PROP), [])
+
+# ── [9] building_source_image resolves in three steps ───────────────────────
+print("[9] subjects.building_source_image")
+LOC_ID = world.add_location("Crossroads Inn", "A stone house at the fork.")["id"]
+BARE_ID = world.add_location("Empty Field", "Grass, nothing else.")["id"]
+GALLERY = world.get_gallery_dir(LOC_ID)
+GALLERY.mkdir(parents=True, exist_ok=True)
+for _name in ("old.png", "new.png", "map.png"):
+    (GALLERY / _name).write_bytes(b"\x89PNG fake")
+# Deterministic age instead of write order: old.png is a minute older.
+_NOW = (GALLERY / "new.png").stat().st_mtime
+os.utime(GALLERY / "old.png", (_NOW - 60, _NOW - 60))
+check("(d) no building-typed image at all → no source",
+      subjects.building_source_image(LOC_ID), "")
+world.set_gallery_image_type(LOC_ID, "old.png", "building")
+world.set_gallery_image_type(LOC_ID, "new.png", "building")
+world.set_gallery_image_type(LOC_ID, "map.png", "map_2d")
+check("(a) without a model the NEWEST building-typed image wins",
+      subjects.building_source_image(LOC_ID), "new.png")
+check("(d) a location without any gallery image has none either",
+      subjects.building_source_image(BARE_ID), "")
+check("and neither location has a building model yet",
+      [subjects.building_model(LOC_ID), subjects.building_model(BARE_ID)],
+      [None, None])
+
+# ── [10] the building handler, end to end ───────────────────────────────────
+print("[10] fill_missing building_model")
+FILL_BUILDING = {"subject": "building_model"}
+check("only the location with a source image is a candidate",
+      candidates(FILL_MISSING, FILL_BUILDING),
+      [(f"location:{LOC_ID}", "Crossroads Inn")])
+CAND_L = FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_BUILDING))[0]
+check("the job slot can be claimed", location_model3d.claim_job(
+    LOC_ID, kind=subjects._BUILDING_JOB_KIND), True)
+check_raises("a claimed slot makes apply busy", CandidateBusy,
+             lambda: FILL_MISSING.apply(CAND_L,
+                                        FILL_MISSING.validate(FILL_BUILDING),
+                                        "task-7"))
+check("the producer was never called", BUILDING_CALLS, [])
+location_model3d.release_job(LOC_ID, kind=subjects._BUILDING_JOB_KIND)
+FILL_MISSING.apply(CAND_L, FILL_MISSING.validate(FILL_BUILDING), "task-8")
+check("apply meshes the newest building image with the default backend",
+      BUILDING_CALLS, [{"location_id": LOC_ID, "source_image": "new.png",
+                        "backend_glob": "tr"}])
+check("the slot is released again", location_model3d.is_pending(LOC_ID), False)
+check("the stored sidecar names the backend that made it",
+      (subjects.building_model(LOC_ID) or {}).get("backend"), "tr")
+check("nothing is missing any more", candidates(FILL_MISSING, FILL_BUILDING), [])
+check("and the location is now a model_replace candidate for 'tr'",
+      candidates(MODEL_REPLACE, {"subject": "location", "source_backend": "tr",
+                                 "target_backend": "hy"}),
+      [(f"location:{LOC_ID}", "Crossroads Inn")])
+MODEL_PATH = location_model3d.find_building_model(LOC_ID)
+SIDECAR = json.loads(MODEL_PATH.with_suffix(".json").read_text(encoding="utf-8"))
+SIDECAR["source_image"] = "old.png"
+MODEL_PATH.with_suffix(".json").write_text(json.dumps(SIDECAR), encoding="utf-8")
+check("(b) the active model's own source image wins over the newest",
+      subjects.building_source_image(LOC_ID), "old.png")
+SIDECAR["source_image"] = "gone.png"
+MODEL_PATH.with_suffix(".json").write_text(json.dumps(SIDECAR), encoding="utf-8")
+check("(c) a source image that is gone falls back to the newest",
+      subjects.building_source_image(LOC_ID), "new.png")
+
+# ── [11] the expression handler ─────────────────────────────────────────────
+print("[11] fill_missing character_expressions")
+FILL_EXPR = {"subject": "character_expressions"}
+EXPRESSION_CACHED["value"] = None
+check("no cached variant → every character is a candidate",
+      candidates(FILL_MISSING, FILL_EXPR),
+      [("character:demo_a", "demo_a"), ("character:demo_b", "demo_b")])
+CAND_E = FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_EXPR))[0]
+expression_regen.is_generating = lambda *a, **kw: True
+check_raises("a render already running makes apply busy", CandidateBusy,
+             lambda: FILL_MISSING.apply(CAND_E,
+                                        FILL_MISSING.validate(FILL_EXPR),
+                                        "task-9"))
+check("the renderer was never called", EXPRESSION_CALLS, [])
+expression_regen.is_generating = lambda *a, **kw: False
+FILL_MISSING.apply(CAND_E, FILL_MISSING.validate(FILL_EXPR), "task-10")
+check("otherwise the renderer runs for that character", EXPRESSION_CALLS,
+      ["demo_a"])
+EXPRESSION_CACHED["value"] = Path("/tmp/fake-expression.png")
+check("a cached variant → nobody is a candidate",
+      candidates(FILL_MISSING, FILL_EXPR), [])
+check("and is_done says so", FILL_MISSING.is_done(
+    CAND_E, FILL_MISSING.validate(FILL_EXPR)), True)
 
 print()
 if FAILURES:
