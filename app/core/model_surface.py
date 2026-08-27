@@ -197,7 +197,11 @@ def surface_height_at(surface: Dict[str, Any], spec: Dict[str, Any],
     vals = surface["values"]
 
     def at(i: int, j: int) -> Optional[float]:
-        val = vals[j * cols + i]
+        # A short/ragged values array reads as "no node", never an IndexError:
+        # a corrupt sidecar must answer like a hole (the terrain takes over),
+        # and the TS twin says the same by way of `undefined == null`.
+        idx = j * cols + i
+        val = vals[idx] if 0 <= idx < len(vals) else None
         return None if val is None else float(val)
 
     i1 = min(i0 + 1, cols - 1)

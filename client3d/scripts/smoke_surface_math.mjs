@@ -23,6 +23,9 @@
  *   F  (4,-3)    as A                                                  -> 100 -> 0.5 + (4/3)*1.00 = 1.8333333
  * P3: like P1 but yaw_deg 0, so l = q
  *   G  (3.5,-5)  q=(-0.5,-2)  l=(-0.5,-2)  m=(-0.25,-1)  u=0.75, v=0   ->  75 -> 0.5 + 2*0.75 = 2.0
+ *   H  (4,-3) on S1 with `values` truncated to four entries [0,100,200,0]: A's corner
+ *      indices are 4, 5, 7, 8 — all past the end -> no node -> null. A corrupt sidecar
+ *      reads as a hole (terrain takes over), in TS as in Python, never as an error.
  * Highest: [S1@P1, S1@P1 with bottom_y 1.0] at A -> max(2.5, 3.0) = 3.0
  *          [S1@P1, S1@P1 with bottom_y 1.0] at D -> both null -> null
  *          [S1@P1, S2] where S2 = S1 with values all null -> A -> 2.5
@@ -81,6 +84,7 @@ check('D null neighbour', h(S1, P1, 5, -2), null);
 check('E outside', h(S1, P1, 4, -6), null);
 check('F measure xyz', h({ ...S1, extent_snapped: [2, 3, 2] }, { ...P1, measure: 'xyz' }, 4, -3), 0.5 + 4 / 3);
 check('G yaw 0', h(S1, { ...P1, yaw_deg: 0 }, 3.5, -5), 2.0);
+check('H truncated values', h({ ...S1, values: [0, 100, 200, 0] }, P1, 4, -3), null);
 
 const both = [{ id: 'a', spec: P1, surface: S1 }, { id: 'b', spec: { ...P1, bottom_y: 1.0 }, surface: S1 }];
 check('highest at A', highestSurfaceAt(both, 4, -3), 3.0);

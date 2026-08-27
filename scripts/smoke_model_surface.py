@@ -54,6 +54,9 @@ P2: like P1 but measure 'xyz', extent_snapped [2,3,2], max_m 4 -> s = 4/3
   F  (4,-3)    as A                                                  -> 100 -> 0.5 + (4/3)*1.00 = 1.8333333
 P3: like P1 but yaw_deg 0, so l = q
   G  (3.5,-5)  q=(-0.5,-2)  l=(-0.5,-2)  m=(-0.25,-1)  u=0.75, v=0   ->  75 -> 0.5 + 2*0.75 = 2.0
+  H  (4,-3) on S1 with `values` truncated to four entries [0,100,200,0]: A's corner
+     indices are 4, 5, 7, 8 — all past the end -> no node -> null. A corrupt sidecar
+     reads as a hole (terrain takes over), in Python as in TS, never as an error.
 Highest: [S1@P1, S1@P1 with bottom_y 1.0] at A -> max(2.5, 3.0) = 3.0
          [S1@P1, S1@P1 with bottom_y 1.0] at D -> both null -> null
          [S1@P1, S2] where S2 = S1 with values all null -> A -> 2.5
@@ -219,22 +222,24 @@ P1 = {"anchor": [4, -3], "yaw_deg": 90, "bottom_y": 0.5, "max_m": 4, "measure": 
 
 def part2():
     from app.core.model_surface import highest_surface_at, surface_height_at as h
-    check("A anchor node", near(h(S1, P1, 4, -3), 2.5), str(h(S1, P1, 4, -3)))
-    check("B node (2,1)", near(h(S1, P1, 4, -5), 4.5), str(h(S1, P1, 4, -5)))
-    check("C bilinear 0.75", near(h(S1, P1, 2, -2.5), 2.0), str(h(S1, P1, 2, -2.5)))
+    check("A anchor node", near(h(S1, P1, 4, -3), 2.5, 1e-6), str(h(S1, P1, 4, -3)))
+    check("B node (2,1)", near(h(S1, P1, 4, -5), 4.5, 1e-6), str(h(S1, P1, 4, -5)))
+    check("C bilinear 0.75", near(h(S1, P1, 2, -2.5), 2.0, 1e-6), str(h(S1, P1, 2, -2.5)))
     check("D null neighbour", h(S1, P1, 5, -2) is None)
     check("E outside", h(S1, P1, 4, -6) is None)
     s2 = dict(S1, extent_snapped=[2, 3, 2])
     p2 = dict(P1, measure="xyz")
-    check("F measure xyz", near(h(s2, p2, 4, -3), 0.5 + 4 / 3), str(h(s2, p2, 4, -3)))
+    check("F measure xyz", near(h(s2, p2, 4, -3), 0.5 + 4 / 3, 1e-6), str(h(s2, p2, 4, -3)))
     p3 = dict(P1, yaw_deg=0)
-    check("G yaw 0", near(h(S1, p3, 3.5, -5), 2.0), str(h(S1, p3, 3.5, -5)))
+    check("G yaw 0", near(h(S1, p3, 3.5, -5), 2.0, 1e-6), str(h(S1, p3, 3.5, -5)))
+    short = dict(S1, values=[0, 100, 200, 0])
+    check("H truncated values", h(short, P1, 4, -3) is None)
     lifted = dict(P1, bottom_y=1.0)
     both = [dict(P1, surface=S1), dict(lifted, surface=S1)]
-    check("highest at A = 3.0", near(highest_surface_at(both, 4, -3), 3.0))
+    check("highest at A = 3.0", near(highest_surface_at(both, 4, -3), 3.0, 1e-6))
     check("highest at D = None", highest_surface_at(both, 5, -2) is None)
     blank = dict(S1, values=[None] * 9)
-    check("highest skips all-null", near(highest_surface_at([dict(P1, surface=S1), dict(P1, surface=blank)], 4, -3), 2.5))
+    check("highest skips all-null", near(highest_surface_at([dict(P1, surface=S1), dict(P1, surface=blank)], 4, -3), 2.5, 1e-6))
 
 
 def main():

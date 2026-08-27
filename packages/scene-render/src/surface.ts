@@ -79,7 +79,7 @@ export function surfaceHeightAt(surface: SceneSurface, spec: SurfacePlacement,
   const top = a + (b - a) * fu
   const bot = cc + (d - cc) * fu
   const val = top + (bot - top) * fv
-  return spec.bottom_y + (s * val) / 100
+  return (spec.bottom_y || 0) + (s * val) / 100
 }
 
 /** The highest answering surface of a list (a crate on a rock), or null. */
