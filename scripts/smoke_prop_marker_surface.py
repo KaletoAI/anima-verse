@@ -68,8 +68,25 @@ no ground offset and no placement trim.
              + _plate_top(level 0) 0.00                     (E5a: no plate)
              + PROP_CLEARANCE 0.01                          = 0.01
     y_world  = 0.00 + 0.00 + 0.01 + 0.577                   = 0.587
-    root_off = FIGURE_ROOT_DROP["sit"] 0.314 x 1.70 m       = 0.5338
+    root_off = groups["seat"].root_drop 0.314 x 1.70 m      = 0.5338
+               (the payload rounds it to millimetres: 0.534)
     root y   = 0.587 - 0.5338                               = 0.0532
+
+    The drop comes from the PLACE TYPE the marker names (Task 4 of
+    plan-posen-plaetze.md): the pose catalog's ``groups``, not a table in the
+    scene recipe. The marker therefore carries a ``group`` (``seat``), a
+    stable ``id`` and finished ``slots`` — capacity 1 ⇒ ``slots == [at_world]``
+    — and is addressed as ``"<placement.id>/<marker.id>"`` = ``"p1/s1"`` with
+    the placement's label, else the prop's name (``"Bench"``).
+
+Part 3 runs the SURFACE migration on the legacy sidecar shape it was written
+for (a marker still naming a clip KIND) and then the PLACES migration on
+top: ``sit`` becomes group ``seat`` (drop 0.314), ``idle`` a ``stand``
+spot, every marker gets an 8-char id, and the second run of either is a
+no-op. The room half of the places migration is exercised on one location
+saved straight into the throwaway world: a ``sleep`` marker becomes ``bed``,
+a ``laying`` one ``floor`` (the two ground-level kinds of the old table), and
+the placement gets its id.
 
     The invariant that survives every datum change: y_world - bottom_y is the
     marker's own composed height, 0.577 — the seat belongs to the OBJECT.
@@ -118,7 +135,9 @@ def main() -> int:
     db.init_schema()
     from app.core import props as ps
     from app.core.room_recipe import compose_prop_marker
-    from app.core.scene_recipe import FIGURE_HEIGHT_M, FIGURE_ROOT_DROP
+    from app.core.places_migration import group_for_kind, migrate_places_once
+    from app.core.pose_catalog import get_groups
+    from app.core.scene_recipe import FIGURE_HEIGHT_M
 
     BBOX = [1.0, 0.29406, 0.32149]
     DIMS = [1.73, 0.56, 0.51]
@@ -135,16 +154,24 @@ def main() -> int:
     check("height(0.41933)", height_of(0.41933), 0.21332)
     check("height(1.0) = the box top", height_of(1.0), 0.50872)
 
-    print("\n2. the drop the renderers subtract")
-    drop_real = FIGURE_ROOT_DROP["sit"] * FIGURE_HEIGHT_M
-    check("sit drop in real metres", drop_real, 0.5338)
-    check("kinds without an entry drop by nothing",
-          FIGURE_ROOT_DROP.get("idle", 0.0), 0.0)
+    print("\n2. the drop the renderers subtract — the catalog's place types")
+    groups = get_groups()
+    drop_real = groups["seat"]["root_drop"] * FIGURE_HEIGHT_M
+    check("seat drop in real metres", drop_real, 0.5338)
+    check("a standing spot drops by nothing", groups["stand"]["root_drop"], 0.0)
     # A lying clip authored ON A BED carries the whole body 0.6 x H above the
     # root — the biggest drop of all, and the reason a sleep marker had to be
     # dragged a metre under the mattress before this existed.
-    check("sleep drops by the most", FIGURE_ROOT_DROP["sleep"], 0.631)
-    check("laying lies at ground level", FIGURE_ROOT_DROP["laying"], 0.051)
+    check("bed drops by the most", groups["bed"]["root_drop"], 0.631)
+    check("floor lies at ground level", groups["floor"]["root_drop"], 0.051)
+    # The legacy kind → place type rule keeps every old drop: sit was 0.314,
+    # sleep 0.631, laying/lie 0.051, anything else 0.
+    check("legacy kind sit -> seat", group_for_kind("sit"), "seat")
+    check("legacy kind sleep -> bed", group_for_kind("sleep"), "bed")
+    check("legacy kind laying -> floor", group_for_kind("laying"), "floor")
+    check("legacy kind lie -> floor", group_for_kind("lie"), "floor")
+    check("legacy kind sit-ground -> floor", group_for_kind("sit-ground"), "floor")
+    check("legacy kind idle -> stand", group_for_kind("idle"), "stand")
 
     print("\n3. the migration lifts by exactly that — nothing moves")
     pid = "bench-smoke"
@@ -175,6 +202,43 @@ def main() -> int:
     check("surface rose by the drop", after - before, drop_real, 1.5e-3)
     check("ROOT stays where it was", after - drop_real, before, 1.5e-3)
     check("second run is a no-op", ps.migrate_marker_surface_once(), {})
+
+    print("\n3b. the places migration: kind -> place type, ids everywhere")
+    from app.models.world import _load_world_data, _save_world_data
+    _save_world_data({"locations": [{
+        "id": "loc1", "name": "Loc", "rooms": [{
+            "id": "r1", "name": "Room", "layout": {
+                "x": 0.0, "y": 0.0, "w": 4.0, "d": 4.0,
+                "markers": [{"at": [1.0, 1.0], "animation": "sleep"},
+                            {"at": [2.0, 2.0], "animation": "laying",
+                             "id": "keepme"}],
+                "props": [{"prop_id": pid, "at": [2.0, 2.0]}]}}]}]})
+    stats = migrate_places_once()
+    # Room: sleep -> group + id (2), laying -> group only, id kept (1);
+    # placement: id (1); sidecar: 2 markers x (group + id) = 4.
+    check("room markers changed", stats.get("room_markers"), 3)
+    check("placements changed", stats.get("placements"), 1)
+    check("prop markers changed", stats.get("prop_markers"), 4)
+    lay = _load_world_data()["locations"][0]["rooms"][0]["layout"]
+    check("sleep became a bed", lay["markers"][0]["group"], "bed")
+    check("laying became a floor spot", lay["markers"][1]["group"], "floor")
+    check("an existing id is kept", lay["markers"][1]["id"], "keepme")
+    check("no animation key survives in the room",
+          any("animation" in m for m in lay["markers"]), False)
+    check("the placement got an id", len(lay["props"][0].get("id") or ""), 8)
+    markers = ps.read_sidecar(pid)["markers"]
+    check("sit became a seat", markers[0]["group"], "seat")
+    check("idle became a standing spot", markers[1]["group"], "stand")
+    check("no animation key survives in the sidecar",
+          any("animation" in m for m in markers), False)
+    ids = [m.get("id") for m in markers]
+    check("8-char base32 ids, distinct",
+          all(len(i) == 8 and set(i) <= set("abcdefghijklmnopqrstuvwxyz234567")
+              for i in ids) and len(set(ids)) == 2, True)
+    check("...and the sanitizer now reads them (the seat survives)",
+          [m["group"] for m in ps.sanitize_markers(markers)],
+          ["seat", "stand"])
+    check("second places run is a no-op", migrate_places_once(), {})
 
     print("\n4. the composition follows the placement law (§ B2)")
     FIX20 = {"x": 0, "y": 20, "z": 0}
@@ -215,13 +279,15 @@ def main() -> int:
     composed = compose_prop_marker(
         bbox=BBOX, rotation=ROT, dims=DIMS, frac=[0.42, 1.135, 0.68],
         facing=None, placement_yaw=0, placement_offset_y=0)
-    composed["animation"] = "sit"
+    composed["group"] = "seat"
+    composed["id"] = "s1"
     composed["placement"] = 0
     recipe = {
         "room_id": "a", "level": 0, "floor_offset_y": 0.0,
         "markers": [], "prop_markers": [composed],
         "placements": [{
-            "prop_id": pid, "at": [1.0, 2.0], "yaw": 0, "has_model": False,
+            "prop_id": pid, "id": "p1", "label": "", "prop_name": "Bench",
+            "at": [1.0, 2.0], "yaw": 0, "has_model": False,
             "dims": {"width_m": DIMS[0], "depth_m": DIMS[1],
                      "height_m": DIMS[2]},
         }],
@@ -237,6 +303,12 @@ def main() -> int:
     check("prop bottom_y = the clearance alone", spec["bottom_y"], 0.01)
     check("the marker names the SURFACE", marker["y_world"], 0.587)
     check("root drop rides with the marker", marker["root_offset"], 0.5338)
+    check("the place is placement/marker", marker["id"], "p1/s1")
+    check("its label is the prop's name", marker["label"], "Bench")
+    check("group and capacity", (marker["group"], marker["capacity"]), ("seat", 1))
+    check("capacity 1: the one slot IS the marker", marker["slots"],
+          [marker["at_world"]])
+    check("no animation key any more", "animation" in marker, False)
     # THE INVARIANT: whatever the datum does, the seat stays the object's own
     # height over its own underside.
     check("y_world - bottom_y is the composed height",

@@ -117,8 +117,10 @@ def main() -> int:
           not ({m["room_id"] for m in sc["models"] if m["role"] == "room"}
                & {m["room_id"] for m in sc["models"] if m["role"] == "prop"}))
     check("markers are resolved to world coordinates",
-          all({"room_id", "at_world", "y_world", "animation", "source"}
-              <= set(m) for m in sc["markers"]))
+          all({"room_id", "id", "group", "label", "capacity", "at_world",
+               "slots", "y_world", "root_offset", "source"}
+              <= set(m) and len(m["slots"]) == m["capacity"]
+              for m in sc["markers"]))
     check("exits are resolved to world coordinates",
           all({"room_id", "at_world"} <= set(e) for e in sc["exits"]))
 

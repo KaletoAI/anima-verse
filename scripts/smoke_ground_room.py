@@ -275,7 +275,7 @@ def main():
         {"id": "hall", "name": "Hall", "layout": dict(plan)},
         {"id": GROUND_ROOM_ID, "name": "Yard"},
         {"id": GROUND_ROOM_ID, "name": "Court", "layout": dict(
-            plan, props=[{"prop_id": "bench", "at": [3.0, -2.0]}])},
+            plan, props=[{"prop_id": "bench", "id": "b1", "at": [3.0, -2.0]}])},
     ])
     check("a geometry-only layout on the ground is dropped whole",
           "layout" not in rooms[0], str(rooms[0]))
@@ -290,7 +290,7 @@ def main():
     # The yard (§ A13a): the placements stay, the room geometry around them
     # is stripped — `at` is a LOCATION-local metre and needs no min corner.
     check("a yard keeps its placements and loses the rest",
-          rooms[3].get("layout") == {"props": [{"prop_id": "bench",
+          rooms[3].get("layout") == {"props": [{"prop_id": "bench", "id": "b1",
                                                 "at": [3.0, -2.0]}]},
           str(rooms[3].get("layout")))
 

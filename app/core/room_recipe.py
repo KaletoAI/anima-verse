@@ -590,6 +590,11 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         px, py = place(float(at[0]), float(at[1]))
         entry: Dict[str, Any] = {
             "prop_id": pid,
+            # The placement's stable id and label (plan-posen-plaetze.md): a
+            # prop marker is the place "<placement.id>/<marker.id>", and the
+            # label names it in a chip.
+            "id": str(placement.get("id") or ""),
+            "label": str(placement.get("label") or ""),
             "at": [_r(px), _r(py)],
             "yaw": _r(yaw, 1),
             "offset_y": _r(off_y, 3),
@@ -627,6 +632,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         # (2026-08-24) — the scene spec turns it into `max_m`, the depth cut
         # and the placeholder box, and the markers below scale with it.
         entry["dims"] = _placement_dims(prop, entry.get("variant"))
+        entry["prop_name"] = str(prop.get("name") or pid)
         _carry_ground_offset(entry, prop, entry.get("variant"))
         entry["has_model"] = bool(prop.get("has_model"))
         if prop.get("has_model"):
@@ -656,7 +662,10 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                 frac=[float(v) for v in marker.get("at") or [0.5, 0, 0.5]],
                 facing=marker.get("facing"), placement_yaw=yaw,
                 placement_offset_y=off_y)
-            composed["animation"] = marker.get("animation") or ""
+            composed["id"] = str(marker.get("id") or "")
+            composed["group"] = str(marker.get("group") or "")
+            composed["capacity"] = int(marker.get("capacity") or 1)
+            composed["spacing_m"] = float(marker.get("spacing_m") or 0.6)
             composed["placement"] = idx
             prop_markers.append(composed)
     return placements, prop_markers

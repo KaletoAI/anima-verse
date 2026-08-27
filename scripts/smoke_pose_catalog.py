@@ -109,7 +109,8 @@ Stage 8 - place types (plan-posen-plaetze.md § 3.1/3.2), derived BY HAND
 from the catalog file:
 - get_groups() has exactly the five start types seat/bed/floor/counter/stand;
   seat.root_drop == 0.314, bed 0.631, floor 0.051, counter 0, stand 0
-  (the numbers scene_recipe.FIGURE_ROOT_DROP still holds today).
+  (the ONE source of every root_offset in the scene payload; the old
+  scene_recipe.FIGURE_ROOT_DROP table is gone).
 - every entry carries a group that exists; group_of("sitting") == "seat",
   group_of("sleeping") == "bed", group_of("standing") == "stand",
   group_of("nope") == "".

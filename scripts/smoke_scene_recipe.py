@@ -2199,7 +2199,8 @@ EXAMPLE_PROP = {
     # spec turns them into "<endpoint>?tier=<tier>" URLs.
     "has_model": True, "model_tiers": ["full", "low"],
     "model_signature": "propsig1",
-    "markers": [{"at": [0.5, 1.0, 0.25], "animation": "sit", "facing": 90}],
+    "markers": [{"id": "seat1", "group": "seat", "at": [0.5, 1.0, 0.25],
+                 "facing": 90}],
     # The two fillable surfaces of the example prop (v5 slots): one takes a
     # picture, one takes a look.
     "slots": [{"name": "picture", "kind": "image"},
@@ -2255,7 +2256,7 @@ def model_fixture(*, room_width_m: float = 4.0, map_yaw=None,
             # [0.25, 0.5] are [2.0, 1.5] and [1.0, 1.5] metres.
             room["layout"]["props"] = [{"prop_id": "table", "at": [2.0, 1.5],
                                         "yaw": 90}]
-            room["layout"]["markers"] = [{"at": [1.0, 1.5], "animation": "idle",
+            room["layout"]["markers"] = [{"at": [1.0, 1.5], "group": "stand",
                                           "rotation": 180, "offset_y": 0.05,
                                           "tilt": -12.0, "roll": 5.0}]
     return loc
@@ -2528,7 +2529,7 @@ def test_boundary_only_datum() -> None:
     stub_props()
     yard = {"id": GROUND_ID, "name": "", "layout": {
         "props": [{"prop_id": "table", "at": [-2.0, -2.0]}],
-        "markers": [{"at": [-3.0, -3.0], "animation": "idle"}]}}
+        "markers": [{"at": [-3.0, -3.0], "group": "stand"}]}}
     loc = {"id": "loc", "map3d": {
         "plan_width_m": PLAN_W, "storey_height_m": STOREY_REAL,
         "area_model": True,
@@ -2890,6 +2891,49 @@ def test_markers_figures() -> None:
     anchorless = scene_recipe.compose_scene(fixture())
     check("...and it is the same 1.70 m without a scale anchor",
           anchorless["figures"] == sc["figures"], str(anchorless["figures"]))
+
+
+def test_place_slots() -> None:
+    """[M] Place slots (plan-posen-plaetze.md § 3.3/3.4). A room marker at
+    room-local (2, 1) in room "a" (min corner −4/−4, no room turn), group
+    "seat", capacity 3, spacing 0.6, facing 90 (east). Facing 0 = south = +z;
+    east = +x. The lateral axis is the facing turned by +90°: (cos 90°,
+    −sin 90°) = (0, −1). Slot i ∈ {0,1,2} sits at (i − 1) × 0.6 along that
+    vector, i.e. at world x −2 and z = −3 − (i − 1) × 0.6: slot 0 at −2.4,
+    slot 1 at −3, slot 2 at −3.6 → slots [[-2,-2.4],[-2,-3],[-2,-3.6]] (an
+    N–S line, centre = the marker, slot 0 on the sitter's RIGHT when facing
+    east). root_offset = seat.root_drop 0.314 × 1.70 = 0.5338 → 0.534
+    (three decimals, like every drop in the payload). The payload
+    marker carries id "m1seat00", group "seat", label "Seat" (a room marker
+    has no prop → the group label), capacity 3. Capacity 1 → slots ==
+    [at_world]. A marker of an unknown group is skipped.
+    """
+    print("\n[M] place slots")
+    from app.core.scene_recipe import marker_slots
+    check("marker_slots facing east, cap 3",
+          marker_slots((-2.0, -3.0), 90.0, 3, 0.6)
+          == [[-2.0, -2.4], [-2.0, -3.0], [-2.0, -3.6]],
+          str(marker_slots((-2.0, -3.0), 90.0, 3, 0.6)))
+    check("marker_slots cap 1", marker_slots((1.0, 2.0), None, 1, 0.6) == [[1.0, 2.0]])
+    loc_m = fixture()
+    loc_m["rooms"][0]["layout"]["markers"] = [
+        {"id": "m1seat00", "group": "seat", "at": [2.0, 1.0], "capacity": 3,
+         "spacing_m": 0.6, "rotation": 90},
+        {"id": "m2nope00", "group": "sofa", "at": [1.0, 1.0]},
+    ]
+    scene_m = scene_recipe.compose_scene(loc_m, plan_width_m=PLAN_W)
+    mk = [m for m in scene_m["markers"] if m["room_id"] == "a"]
+    check("unknown group skipped", len(mk) == 1, str(mk))
+    m = mk[0]
+    check("payload id/group/label/capacity",
+          (m["id"], m["group"], m["label"], m["capacity"])
+          == ("m1seat00", "seat", "Seat", 3),
+          str((m.get("id"), m.get("group"), m.get("label"), m.get("capacity"))))
+    check("payload slots", m["slots"] == [[-2.0, -2.4], [-2.0, -3.0], [-2.0, -3.6]],
+          str(m["slots"]))
+    check("payload root_offset 0.534", m["root_offset"] == 0.534,
+          str(m["root_offset"]))
+    check("no animation key any more", "animation" not in m)
 
 
 def test_prop_ground_offset() -> None:
@@ -3711,7 +3755,7 @@ def test_ground_placements() -> None:
     # for a closed room to raise, on any location.
     sc = scene_recipe.compose_scene(
         ground_fixture(props=[{"prop_id": "table", "at": [3.0, -2.0]}],
-                       markers=[{"at": [-1.0, 2.0], "animation": "sit"}]),
+                       markers=[{"at": [-1.0, 2.0], "group": "seat"}]),
         plan_width_m=PLAN_W)
     props = [m for m in sc["models"] if m["role"] == "prop"]
     check("one prop spec, room_id = the ground",
@@ -3852,22 +3896,22 @@ def test_ground_placements() -> None:
         "openings": [{"edge": 0, "at": 0.5, "type": "door",
                       "width_m": 1.0, "height_m": 2.0}],
         "surfaces": {"floor": "wood"},
-        "props": [{"prop_id": "table", "at": [3.0, -2.0]}],
-        "markers": [{"at": [-1.0, 2.0], "animation": "sit"}]})
+        "props": [{"prop_id": "table", "at": [3.0, -2.0], "id": "t1"}],
+        "markers": [{"at": [-1.0, 2.0], "group": "seat"}]})
     check("only props and markers survive",
           sorted(clean) == ["markers", "props"], str(sorted(clean)))
     check("...the placement itself is untouched",
-          clean["props"] == [{"prop_id": "table", "at": [3.0, -2.0]}],
+          clean["props"] == [{"prop_id": "table", "id": "t1", "at": [3.0, -2.0]}],
           str(clean["props"]))
     check("an empty yard stores no layout at all",
           sanitize_ground_layout({"outline": [[0, 0], [1, 0], [1, 1]]}) == {})
     rooms = [{"id": GROUND_ID, "layout": {
         "x": 1.0, "y": 1.0, "w": 2.0, "d": 2.0,
         "outline": [[0, 0], [2, 0], [2, 2]],
-        "props": [{"prop_id": "table", "at": [3.0, -2.0]}]}}]
+        "props": [{"prop_id": "table", "at": [3.0, -2.0], "id": "t1"}]}}]
     _sanitize_rooms_layout(rooms)
     check("the room-list sanitizer routes the ground the same way",
-          rooms[0]["layout"] == {"props": [{"prop_id": "table",
+          rooms[0]["layout"] == {"props": [{"prop_id": "table", "id": "t1",
                                             "at": [3.0, -2.0]}]},
           str(rooms[0].get("layout")))
     empty = [{"id": GROUND_ID, "layout": {"x": 0.0, "y": 0.0, "w": 2.0,
@@ -3913,7 +3957,7 @@ def rot_fixture(*, rotation: int = 90, extra_rooms=(), boundary=None) -> dict:
                 # Room-local metres, all of them measured in the room's OWN
                 # straight frame — that is what the turn is applied to.
                 "props": [{"prop_id": "table", "at": [1.0, 0.5], "yaw": 30}],
-                "markers": [{"at": [3.0, 1.5], "animation": "idle",
+                "markers": [{"at": [3.0, 1.5], "group": "stand",
                              "rotation": 45}],
                 "openings": [{"edge": 0, "at": 0.5, "type": "door",
                               "width_m": 1.0, "height_m": 2.1,
@@ -4276,7 +4320,7 @@ def test_surface_specs() -> None:
     """
     print("\n[7g] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 6", scene_recipe.SCENE_RECIPE_VERSION == 6,
+    check("code_version 7 (markers speak place types)", scene_recipe.SCENE_RECIPE_VERSION == 7,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────
@@ -4424,6 +4468,7 @@ def main() -> int:
     test_floor_relation()
     test_room_and_prop_specs()
     test_markers_figures()
+    test_place_slots()
     test_prop_ground_offset()
     test_prop_stacking()
     test_prop_depth_cut()

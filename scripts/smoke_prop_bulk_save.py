@@ -153,7 +153,7 @@ def main() -> int:
           str(len(store.list_variants(bench))))
 
     print("\n[1] one request, one write")
-    seat = {"animation": "sit", "at": [0.5, 0.5, 0.5]}
+    seat = {"id": "seat1", "group": "seat", "at": [0.5, 0.5, 0.5]}
     with WriteCounter() as singles:
         store.update_prop(bench, {"name": "Bench"})
         store.set_variant_dims(bench, 0, {"width_m": 2.0})
@@ -180,7 +180,7 @@ def main() -> int:
          "category": "seating"},
         {"0": {"dims": {"width_m": 200, "depth_m": 0},
                "ground_offset_m": -9, "seasons": [],
-               "markers": [{"animation": "", "at": [0, 0, 0]}, seat]},
+               "markers": [{"group": "", "at": [0, 0, 0]}, seat]},
          "1": {"description": "   ", "ground_offset_m": 0, "seasons": []}})
     meta = store.read_sidecar(bench)
     v0, v1 = meta["model_variants"]
@@ -193,7 +193,8 @@ def main() -> int:
     check("-9 m sinks to the -5 m limit", v0["ground_offset_m"] == -5.0,
           str(v0.get("ground_offset_m")))
     check("the invalid marker is dropped, the seat is kept",
-          v0["markers"] == [{"animation": "sit", "at": [0.5, 0.5, 0.5]}],
+          v0["markers"] == [{"id": "seat1", "group": "seat",
+                             "at": [0.5, 0.5, 0.5]}],
           json.dumps(v0.get("markers")))
     check("a blank description writes NO key",
           "description" not in v1, json.dumps(v1))

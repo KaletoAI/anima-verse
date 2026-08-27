@@ -87,7 +87,7 @@ logger = get_logger(__name__)
 #: a prop tagged ``walkable`` carry the height lattice their mesh was baked
 #: into (``surface``, plus ``walkable`` on the prop), so a figure stands on
 #: the rock the model shows instead of on the land under it.
-SCENE_RECIPE_VERSION = 6
+SCENE_RECIPE_VERSION = 7
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -123,32 +123,12 @@ ROOM_PLATE_THICKNESS = 0.02
 # = plate top + this clearance (+ offset_y). Outdoor rooms have no
 # plate — there the clearance sits on the storey/terrain level directly.
 PROP_CLEARANCE = 0.01
-# How far BELOW a marked surface a figure's root goes, as a fraction of the
-# figure's height. A marker says where the SURFACE is — the seat of a bench,
-# the mattress. WHERE the body touches that surface is a property of the CLIP,
-# not of the marker, and it is nowhere near the feet:
-#
-#   clip      hips     lowest bone   what touches
-#   sit       0.344    0.000 (toes)  the buttocks, just under the hip joint
-#   sleep     0.660    0.604         the back — this clip lies on a BED, so the
-#                                    whole body sits 0.6 x H above the root
-#   laying    0.081   -0.004         the back, at ground level
-#
-# (measured on x-bot.fbx + the clips). ONE rule for all of them: the contact
-# is the hips bone minus 0.03 x H, and THIS TABLE IS THE ANSWER — for the
-# payload's ``root_offset`` and for every renderer alike. No viewer measures a
-# pose to decide the height any more (finding 2026-08-21): the admin prop
-# viewer used to read the hips off its "posed" skeleton, but a clip is played
-# IN PLACE there — the Mixamo hips POSITION track is dropped — so the joint
-# never moves and the reading was one constant for every clip, 0.9288 m at
-# H = 1.70 m. That sank a sitter by 0.395 m against the very numbers the
-# server composes with. The renderers' shared rule lives in
-# ``packages/scene-render/src/figure.ts``; the chain is derived by hand in
-# ``scripts/smoke_prop_marker_surface.py`` part 5.
-# A kind that is absent touches at its root and drops by nothing (standing,
-# walking, working poses).
-FIGURE_ROOT_DROP = {"sit": 0.314, "sleep": 0.631, "laying": 0.051,
-                    "lie": 0.051}
+# How far BELOW a marked surface a figure's root goes is a property of the
+# PLACE TYPE the marker names — ``pose_catalog.get_groups()[group]["root_drop"]``
+# × figure height (the measured numbers and their derivation sit at ``groups``
+# in the catalog file). ONE source for the payload's ``root_offset`` and for
+# every renderer alike; no viewer measures a pose to decide the height
+# (finding 2026-08-21). A group without a drop touches at its root.
 # Diorama clipping (§ B1): the shell polygon a room model may be cut against
 # is capped — the shader test runs per fragment, more points than this are not
 # worth the frame time, so the opt-in is ignored instead. Raised 32 → 64 for
@@ -2409,31 +2389,55 @@ def _store_variant_index(placement: Dict[str, Any],
 
 # ── Markers, figures ────────────────────────────────────────────────────
 
+def marker_slots(at: Tuple[float, float], facing_deg: Optional[float],
+                 capacity: int, spacing_m: float) -> List[List[float]]:
+    """The seats of one marker, world metres, centred on the marker along the
+    axis ACROSS the facing (a bench runs sideways). Facing 0 = south (+z),
+    90 = east (+x); the lateral unit vector is the facing turned by +90°:
+    (cos f, −sin f). Capacity 1 is the marker itself."""
+    n = max(1, int(capacity))
+    if n == 1:
+        return [[_r(at[0]), _r(at[1])]]
+    f = math.radians(float(facing_deg or 0.0))
+    lx, lz = math.cos(f), -math.sin(f)
+    return [[_r(at[0] + (i - (n - 1) / 2.0) * spacing_m * lx),
+             _r(at[1] + (i - (n - 1) / 2.0) * spacing_m * lz)] for i in range(n)]
+
+
 def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
              ) -> List[Dict[str, Any]]:
-    """Every marker of one room, finished in world coordinates.
+    """Every marker of one room, finished in world coordinates — as PLACES
+    (plan-posen-plaetze.md § 3.3/3.4): a stable ``id``, the place type
+    ``group``, a ``label`` for the chip, and the finished ``slots`` a figure
+    can take (``capacity`` of them, ``spacing_m`` apart across the facing;
+    capacity 1 ⇒ ``slots == [at_world]``). Nothing downstream computes a slot.
 
     Room markers are METRES from the room's min corner (v6 Nr. 2) with an
     offset additive to the sampled floor. On the GROUND that corner is the
     location's own origin (§ A13a) — the layout's absent ``x``/``y`` already
-    read as 0/0, so the anchor is the stored metre verbatim.
+    read as 0/0, so the anchor is the stored metre verbatim. Their id is the
+    marker's own; a prop marker is ``"<placement.id>/<marker.id>"`` and its
+    label the placement's, else the prop's name, else the group label.
 
     Prop markers arrive from the recipe as placement-relative transforms
     (fix → real size → yaw already applied) and only need ``placement point +
     [dx, dz]`` — resolved here, so the consumer adds nothing.
 
     ``y_world`` is the SURFACE the marker names. How far below it a figure's
-    root belongs travels with the marker as ``root_offset`` (world metres,
-    see FIGURE_ROOT_DROP) — a seated body touches at the buttocks, not at the
-    feet. That number used to live in the 3D client alone and only for ROOM
-    markers, so prop markers had no drop at all and every author baked one
-    into the marker by hand (all 15 in the field carry a negative height).
+    root belongs travels with the marker as ``root_offset`` (world metres:
+    the group's ``root_drop`` × figure height, read from the pose catalog) —
+    a seated body touches at the buttocks, not at the feet. That number used
+    to live in the 3D client alone and only for ROOM markers, so prop markers
+    had no drop at all and every author baked one into the marker by hand.
     One source, both renderers, both marker sources.
+
+    A marker whose group the catalog does not know is no place and is skipped.
 
     ``y_world`` measures from the room's STOREY DATUM, which on storey 0 is the
     terrain itself (E5a) — so a marker on the ground says "this far over the
     ground under it" and the consumer samples ``h_final`` there.
     """
+    from app.core.pose_catalog import get_groups
     room_id = recipe.get("room_id") or ""
     floor_y = _room_floor_y(recipe, storey)
     x, y, w, d = _room_rect(recipe, room)
@@ -2443,27 +2447,39 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     place = room_transform(room.get("layout"))
     room_yaw = layout_rotation(room.get("layout"))
     figure_h = FIGURE_HEIGHT_M
+    groups = get_groups()
 
-    def _root_drop(animation: Any) -> float:
-        """World metres a figure's root sinks below the marked surface."""
-        return _r(FIGURE_ROOT_DROP.get(str(animation or "").strip().lower(),
-                                       0.0) * figure_h)
+    def _root_drop(group: str) -> float:
+        """World metres a figure's root sinks below the marked surface
+        (millimetres — a drop is a body measure, not a survey point)."""
+        return _r(float(groups[group].get("root_drop") or 0.0) * figure_h, 3)
 
     out: List[Dict[str, Any]] = []
     for marker in recipe.get("markers") or []:
+        group = str(marker.get("group") or "").strip().lower()
+        if group not in groups:
+            continue
         at = marker.get("at") or [w / 2, d / 2]
         anchor_u, anchor_v = place(_num(at[0], w / 2), _num(at[1], d / 2))
+        facing: Optional[float] = None
+        if marker.get("rotation") is not None:
+            facing = _r((_num(marker.get("rotation")) + room_yaw) % 360, 1)
+        cap = max(1, int(_num(marker.get("capacity"), 1)))
         entry: Dict[str, Any] = {
             "room_id": room_id,
+            "id": str(marker.get("id") or ""),
+            "group": group,
+            "label": str(groups[group].get("label") or group),
+            "capacity": cap,
             "at_world": [_r(anchor_u), _r(anchor_v)],
+            "slots": marker_slots((anchor_u, anchor_v), facing, cap,
+                                  _num(marker.get("spacing_m"), 0.6)),
             "y_world": _r(floor_y + _num(marker.get("offset_y"))),
-            "animation": marker.get("animation") or "",
-            "root_offset": _root_drop(marker.get("animation")),
+            "root_offset": _root_drop(group),
             "source": "room",
         }
-        if marker.get("rotation") is not None:
-            entry["facing"] = _r((_num(marker.get("rotation")) + room_yaw)
-                                 % 360, 1)
+        if facing is not None:
+            entry["facing"] = facing
         # Tilt axes (2026-07-28): a figure on a slope is not upright, and
         # facing is only the compass. Applied AFTER the facing, in the
         # figure's own frame — tilt = head up/down, roll = leaning sideways.
@@ -2477,19 +2493,34 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     # heights ride along.
     prop_lift = _plate_top(recipe) + PROP_CLEARANCE
     for marker in recipe.get("prop_markers") or []:
+        group = str(marker.get("group") or "").strip().lower()
+        if group not in groups:
+            continue
         try:
             placement = placements[int(marker.get("placement"))]
         except (TypeError, ValueError, IndexError):
             continue
         at = placement.get("at") or [0.0, 0.0]
         offset = marker.get("offset_m") or [0.0, 0.0]
+        au = _num(at[0]) + _num(offset[0])
+        av = _num(at[1]) + _num(offset[1])
+        # A prop marker ALWAYS carries a composed facing (§ B, facing default).
+        facing = (_r(_num(marker.get("facing")), 1)
+                  if marker.get("facing") is not None else None)
+        cap = max(1, int(_num(marker.get("capacity"), 1)))
         # The marker belongs to its PLACEMENT: it is sampled at the prop's
         # anchor, not at its own offset point, so a bench and every seat on
         # it rise by exactly the same amount and the mesh stays level.
         entry = {
             "room_id": room_id,
-            "at_world": [_r(_num(at[0]) + _num(offset[0])),
-                         _r(_num(at[1]) + _num(offset[1]))],
+            "id": f"{placement.get('id') or ''}/{marker.get('id') or ''}",
+            "group": group,
+            "label": str(placement.get("label") or placement.get("prop_name")
+                         or groups[group].get("label") or group),
+            "capacity": cap,
+            "at_world": [_r(au), _r(av)],
+            "slots": marker_slots((au, av), facing, cap,
+                                  _num(marker.get("spacing_m"), 0.6)),
             # THE MARKER RIDES THE MESH (§ B2 addendum 2026-08-20): a sunk
             # trunk sinks its seat with it, so the placement's ground offset is
             # added here as well — the same term the prop spec adds to its
@@ -2498,12 +2529,11 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             # `height_m`, composed by `room_recipe.compose_prop_marker`.)
             "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m"))
                           + _num(placement.get("ground_offset_m"))),
-            "animation": marker.get("animation") or "",
-            "root_offset": _root_drop(marker.get("animation")),
+            "root_offset": _root_drop(group),
             "source": "prop",
         }
-        if marker.get("facing") is not None:
-            entry["facing"] = _r(_num(marker.get("facing")), 1)
+        if facing is not None:
+            entry["facing"] = facing
         out.append(entry)
     return out
 

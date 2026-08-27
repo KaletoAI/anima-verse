@@ -7,6 +7,7 @@ HTTPExceptions that were embedded mid-logic moved along unchanged.
 import asyncio
 import math
 import os
+import re
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -1301,21 +1302,52 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     return out
 
 
-def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
-    """Animation markers (schnittstellen-3d.md): optional spots a figure with
-    a matching active animation snaps to. ``at`` = METRES in the frame of
-    whatever carries the layout — the room's min corner for a room, the
-    LOCATION's own frame for the ground (§ A13a) — and ``animation`` a clip
-    kind from the OPEN clip vocabulary (nothing hardcoded; the editor offers
-    what exists).
+def _place_id(raw: Any) -> str:
+    """The stable id of a place (marker or placement): the stored one,
+    lower-cased to ``[a-z0-9]`` and cut to 16 chars — or a fresh one when
+    nothing usable was sent, so every stored place can be held by name."""
+    from app.core.places_migration import new_place_id
+    s = re.sub(r"[^a-z0-9]", "", str(raw or "").lower())[:16]
+    return s or new_place_id()
 
-    Optional per marker: ``rotation`` = the figure's facing in degrees
-    (0 = south, 90 = east, 180 = north, 270 = west; absent = the client's
-    face-the-neighbours default), ``offset_y`` (metres, ± — ADDITIVE to the
-    client-sampled seat height under the marker) and the two TILT axes
-    ``tilt``/``roll`` (degrees, ±90): a figure lying on a slope or leaning
-    against something is not upright, and facing alone cannot say that (user
-    finding 2026-07-28 — lying slightly angled on the sand). At most 50.
+
+def _capacity(raw: Any) -> int:
+    """How many figures a marker seats, 1..8 (a bench, a row of stools)."""
+    try:
+        return max(1, min(8, int(raw)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _spacing(raw: Any) -> float:
+    """Metres between two slots of one marker, 0.2..3.0 (default 0.6 = one
+    person's width on a bench)."""
+    try:
+        return round(max(0.2, min(3.0, float(raw))), 2)
+    except (TypeError, ValueError):
+        return 0.6
+
+
+def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
+    """Place markers (schnittstellen-3d.md § B, plan-posen-plaetze.md): the
+    spots of a layout a figure can take. ``at`` = METRES in the frame of
+    whatever carries the layout — the room's min corner for a room, the
+    LOCATION's own frame for the ground (§ A13a) — and ``group`` the PLACE
+    TYPE from the pose catalog (``pose_catalog.get_groups()``: seat, bed,
+    floor, counter, stand, …). A marker no longer names a clip: which pose
+    plays there is the character's business, the marker only says what kind
+    of place it is. ``id`` is stable (kept verbatim, else generated) so a
+    deleted neighbour never renumbers it.
+
+    Optional per marker: ``capacity`` (2..8 → a bench; the scene composes
+    that many slots ``spacing_m`` apart, across the facing), ``rotation`` =
+    the figure's facing in degrees (0 = south, 90 = east, 180 = north, 270 =
+    west; absent = the client's face-the-neighbours default), ``offset_y``
+    (metres, ± — ADDITIVE to the client-sampled surface height under the
+    marker) and the two TILT axes ``tilt``/``roll`` (degrees, ±90): a figure
+    lying on a slope or leaning against something is not upright, and facing
+    alone cannot say that (user finding 2026-07-28 — lying slightly angled on
+    the sand). At most 50.
     """
     if not isinstance(raw, list):
         return []
@@ -1324,13 +1356,18 @@ def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
         if not isinstance(m, dict):
             continue
         at = m.get("at")
-        anim = str(m.get("animation") or "").strip()
-        if not anim or not isinstance(at, (list, tuple)) or len(at) != 2:
+        group = str(m.get("group") or "").strip().lower()
+        if not group or not isinstance(at, (list, tuple)) or len(at) != 2:
             continue
         au, av = _metre(at[0]), _metre(at[1])
         if au is None or av is None:
             continue
-        entry: Dict[str, Any] = {"at": [au, av], "animation": anim}
+        entry: Dict[str, Any] = {"id": _place_id(m.get("id")), "group": group,
+                                 "at": [au, av]}
+        cap = _capacity(m.get("capacity"))
+        if cap > 1:
+            entry["capacity"] = cap
+            entry["spacing_m"] = _spacing(m.get("spacing_m"))
         rot = m.get("rotation")
         if rot is not None and f"{rot}".strip() != "":
             try:
@@ -1361,7 +1398,8 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
     """Prop placements (plan-room-props.md): the furnishing as single objects
     from the prop library. REAL-SIZE RULE — a placement never scales the prop;
     the client sizes it from the PROP's own dims, so only position/yaw/height
-    live here. ``at`` is METRES in the carrier's frame (room min corner, or
+    live here — plus a stable ``id`` and an optional ``label`` (a placement is
+    a place a character can hold by name, plan-posen-plaetze.md). ``at`` is METRES in the carrier's frame (room min corner, or
     the LOCATION frame on the ground — § A13a).
 
     A placement may additionally SCATTER (plan-area-detail-scenes.md,
@@ -1398,6 +1436,13 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
         if au is None or av is None:
             continue
         entry: Dict[str, Any] = {"prop_id": pid, "at": [au, av]}
+        # A placement is a PLACE too (plan-posen-plaetze.md): its markers are
+        # addressed as "<placement.id>/<marker.id>", so the id must survive
+        # every re-save, and an optional label names the piece in a chip.
+        entry["id"] = _place_id(p.get("id"))
+        label = str(p.get("label") or "").strip()[:60]
+        if label:
+            entry["label"] = label
         yaw = p.get("yaw")
         if yaw is not None and f"{yaw}".strip() != "":
             try:

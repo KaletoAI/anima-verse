@@ -15,9 +15,9 @@ placeholders:
   existing: List of {name, count} — already placed plus the stage-1a picks
   catalog_names: Names of the library items OFFERED for this room, to avoid duplicates
                  (MAY BE EMPTY: a fresh world, or an exclude filter that removed everything)
-  marker_kinds: List of allowed animation kinds for markers (open clip vocabulary, e.g. sit, lie).
-                MAY BE EMPTY when no animation clips are installed — the validator then
-                accepts any kind (room_furnish._valid_marker).
+  marker_groups: List of {key, label} — the PLACE TYPES of the pose catalog a marker
+                 may name (seat, bed, floor, counter, stand, …). The validator accepts
+                 only these keys (room_furnish._valid_marker).
 ---
 ## system
 You complete the furnishing of a room for a life-simulation game. The library picks are already made; you propose the pieces that are still MISSING and do not exist in the library yet. Each proposal must be complete enough to auto-generate a 3D model — nothing may require manual data entry.
@@ -27,7 +27,7 @@ Per proposed piece deliver:
 - "description": the GENERATION SUBJECT for the image pipeline — describe only the isolated object itself (materials, colors, shape, style matching the room), never a scene, never a room, never people.
 - "category": one word (chair, table, bed, shelf, machine, plant, lamp, decor, ...).
 - "width_m", "depth_m", "height_m": realistic real-world dimensions in metres.
-- "marker": where a character interacts with the piece, or null. Only for pieces a character sits or lies on. {"animation": one of the allowed kinds, "at": [x, y, z] fractions of the object's bounding box (x = along width, y = along height, z = along depth); a chair seat is roughly [0.5, 0.45, 0.5], a bed's lying surface roughly [0.5, 0.55, 0.5]}. The position is a rough default — it gets fine-tuned by hand.
+- "marker": the PLACE the piece offers a character, or null. Only for pieces a character sits, lies or works on. {"group": one of the allowed place types, "at": [x, y, z] fractions of the object's bounding box (x = along width, y = along height, z = along depth); a chair seat is roughly [0.5, 0.45, 0.5], a bed's lying surface roughly [0.5, 0.55, 0.5]}. The position is a rough default — it gets fine-tuned by hand.
 - "count": how many of this piece the room needs.
 
 Hard rules:
@@ -38,7 +38,7 @@ Hard rules:
 - Dimensions between 0.05 and 5 metres per axis.
 
 Respond with a SINGLE JSON object, no markdown, no explanations:
-{"new": [{"name": "...", "description": "...", "category": "...", "width_m": 0.0, "depth_m": 0.0, "height_m": 0.0, "marker": {"animation": "...", "at": [0.5, 0.45, 0.5]} , "count": 1}, ...]}
+{"new": [{"name": "...", "description": "...", "category": "...", "width_m": 0.0, "depth_m": 0.0, "height_m": 0.0, "marker": {"group": "...", "at": [0.5, 0.45, 0.5]} , "count": 1}, ...]}
 
 ## user
 Room: {{ room_name }} — {{ setting }}
@@ -63,11 +63,9 @@ Library names (do not duplicate these):
 {% else %}
 The furniture library holds no library items for this room — there is nothing you could duplicate.
 {% endif %}
-{% if marker_kinds %}
-Allowed marker animation kinds: {{ marker_kinds | join(', ') }}
-{% else %}
-No animation kinds are installed. Still name the kind you would want (e.g. "sit", "lie") for pieces a character sits or lies on.
-{% endif %}
+Allowed marker place types (use the key):
+{% for g in marker_groups %}- {{ g.key }} — {{ g.label }}
+{% endfor %}
 
 {% if budget_m2 > 0 %}
 Propose the missing pieces this room still needs.

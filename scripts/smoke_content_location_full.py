@@ -601,10 +601,10 @@ CLEARING_IN = {
     "surfaces": {"floor": "parquet", "wall": "stone"},
     "openings": [{"edge": 0, "at": 0.5, "width_m": 1.0, "height_m": 2.0,
                   "type": "door", "to": HUT}],
-    "markers": [{"at": [1, 1], "animation": "sitting", "rotation": 180,
+    "markers": [{"id": "seat1", "group": "seat", "at": [1, 1], "rotation": 180,
                  "offset_y": 0.1, "tilt": 5}],
-    "props": [{"prop_id": OAK, "at": [2, 3], "yaw": 45, "offset_y": 0.05,
-               "variant": 1}],
+    "props": [{"prop_id": OAK, "id": "oak1", "at": [2, 3], "yaw": 45,
+               "offset_y": 0.05, "variant": 1}],
 }
 # The control point (6, 3) bulges INWARD on edge 1 ((8,0)->(8,6)), so the
 # tessellated hull still spans exactly 0..8 / 0..6 and the bbox fold is a no-op:
@@ -613,8 +613,9 @@ HUT_IN = {"x": 0, "y": 0, "w": 8, "d": 6,
           "outline": [[0, 0], [8, 0], [8, 6], [0, 6]],
           "outline_curves": [{"edge": 1, "c": [6, 3]}],
           "no_walls": True, "clip_model": True}
-GROUND_IN = {"props": [{"prop_id": OAK, "at": [5, -5], "yaw": 90}],
-             "markers": [{"at": [-3, 4], "animation": "lying", "tilt": 10}]}
+GROUND_IN = {"props": [{"prop_id": OAK, "id": "oak2", "at": [5, -5], "yaw": 90}],
+             "markers": [{"id": "lie1", "group": "floor", "at": [-3, 4],
+                          "tilt": 10}]}
 
 rooms_in = [dict(r) for r in get_location_by_id(GROVE)["rooms"]]
 for r in rooms_in:
@@ -656,20 +657,23 @@ MAP3D_OUT = {
 CLEARING_OUT = {
     "x": -8.0, "y": -8.0, "w": 6.0, "d": 4.0, "level": 0, "rotation": 90,
     "model_at": [3.0, 2.0], "model_offset_y": 0.25, "floor_offset_y": 0.5,
-    "markers": [{"at": [1.0, 1.0], "animation": "sitting", "rotation": 180,
-                 "offset_y": 0.1, "tilt": 5.0}],
+    # Markers speak PLACE TYPES with a stable id (plan-posen-plaetze.md);
+    # a placement carries its id too — both survive the export verbatim.
+    "markers": [{"id": "seat1", "group": "seat", "at": [1.0, 1.0],
+                 "rotation": 180, "offset_y": 0.1, "tilt": 5.0}],
     "surfaces": {"floor": "parquet", "wall": "stone"},
     "openings": [{"edge": 0, "at": 0.5, "width_m": 1.0, "height_m": 2.0,
                   "sill_m": 0.0, "type": "door", "to": HUT}],
-    "props": [{"prop_id": OAK, "at": [2.0, 3.0], "yaw": 45, "offset_y": 0.05,
-               "variant": 1}],
+    "props": [{"prop_id": OAK, "id": "oak1", "at": [2.0, 3.0], "yaw": 45,
+               "offset_y": 0.05, "variant": 1}],
 }
 HUT_OUT = {"x": 0.0, "y": 0.0, "w": 8.0, "d": 6.0, "level": 0,
            "clip_model": True, "no_walls": True,
            "outline": [[0.0, 0.0], [8.0, 0.0], [8.0, 6.0], [0.0, 6.0]],
            "outline_curves": [{"edge": 1, "c": [6.0, 3.0]}]}
-GROUND_OUT = {"props": [{"prop_id": OAK, "at": [5.0, -5.0], "yaw": 90}],
-              "markers": [{"at": [-3.0, 4.0], "animation": "lying",
+GROUND_OUT = {"props": [{"prop_id": OAK, "id": "oak2", "at": [5.0, -5.0],
+                         "yaw": 90}],
+              "markers": [{"id": "lie1", "group": "floor", "at": [-3.0, 4.0],
                            "tilt": 10.0}]}
 
 
@@ -771,7 +775,7 @@ legacy_loc = {
         {"id": GROUND_ROOM_ID, "name": "Ground", "description": "",
          "layout": {"x": 0, "y": 0, "w": 10, "d": 10,
                     "outline": [[0, 0], [10, 0], [10, 10]],
-                    "props": [{"prop_id": OAK, "at": [1, 1]}]}},
+                    "props": [{"prop_id": OAK, "id": "oak3", "at": [1, 1]}]}},
     ],
 }
 legacy_buf = io.BytesIO()
@@ -813,7 +817,7 @@ check("Buchstaben-Kante am RAUM bleibt gueltig",
 # The ground keeps its placements and loses every piece of room geometry.
 check("Boden behaelt seine Platzierung",
       legacy_layouts[GROUND_ROOM_ID],
-      {"props": [{"prop_id": OAK, "at": [1.0, 1.0]}]})
+      {"props": [{"prop_id": OAK, "id": "oak3", "at": [1.0, 1.0]}]})
 check("verworfene Boden-Geometrie gemeldet",
       "ground layout: room-geometry field(s) dropped" in warn_text, True)
 

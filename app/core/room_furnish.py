@@ -447,12 +447,15 @@ def _valid_existing(raw: Any, library: Dict[str, Dict[str, Any]],
     return out
 
 
-def _valid_marker(raw: Any, kinds: List[str]) -> Optional[Dict[str, Any]]:
+def _valid_marker(raw: Any, groups: List[str]) -> Optional[Dict[str, Any]]:
+    """The LLM's marker suggestion for a new piece: a PLACE TYPE of the pose
+    catalog (``group``) plus box fractions. The id is minted where the marker
+    is stored (``props.sanitize_markers``)."""
     from app.core.props import MARKER_AT_MAX, MARKER_AT_MIN, MARKER_AT_Y_MIN
     if not isinstance(raw, dict):
         return None
-    anim = str(raw.get("animation") or "").strip()
-    if not anim or (kinds and anim not in kinds):
+    group = str(raw.get("group") or "").strip().lower()
+    if not group or group not in groups:
         return None
     at = raw.get("at")
     if not isinstance(at, (list, tuple)) or len(at) != 3:
@@ -465,10 +468,10 @@ def _valid_marker(raw: Any, kinds: List[str]) -> Optional[Dict[str, Any]]:
                for i in range(3)]
     except (TypeError, ValueError):
         at3 = [0.5, 0.5, 0.5]
-    return {"animation": anim, "at": at3}
+    return {"group": group, "at": at3}
 
 
-def _valid_new(raw: Any, kinds: List[str],
+def _valid_new(raw: Any, groups: List[str],
                limit: int = MAX_NEW_KINDS) -> List[Dict[str, Any]]:
     """New pieces: name/description non-empty, dims 0.05..5 m, counts 1..12,
     marker optional. ``prop_id`` is carried over when present (idempotent
@@ -494,7 +497,7 @@ def _valid_new(raw: Any, kinds: List[str],
             "description": description[:600],
             "category": str(entry.get("category") or "").strip()[:40],
             "count": _count(entry.get("count")),
-            "marker": _valid_marker(entry.get("marker"), kinds),
+            "marker": _valid_marker(entry.get("marker"), groups),
             "prop_id": str(entry.get("prop_id") or "").strip() or None,
             **dims,
         }
@@ -503,10 +506,10 @@ def _valid_new(raw: Any, kinds: List[str],
 
 
 def _validate_proposal(raw: Any, library: Dict[str, Dict[str, Any]],
-                       kinds: List[str]) -> Dict[str, Any]:
+                       groups: List[str]) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     return {"existing": _valid_existing(raw.get("existing"), library),
-            "new": _valid_new(raw.get("new"), kinds)}
+            "new": _valid_new(raw.get("new"), groups)}
 
 
 def _valid_exclude(raw: Any) -> Dict[str, List[str]]:
@@ -554,7 +557,7 @@ def _apply_exclude(library: Dict[str, Dict[str, Any]],
 # ── Phase 1: selecting ──────────────────────────────────────────────────
 
 def _phase_select(room_id: str) -> None:
-    from app.core.expression_pose_maps import available_animation_kinds
+    from app.core.pose_catalog import get_groups
     from app.core.prompt_templates import render_task
     from app.models.world import get_room_activity_hint
 
@@ -616,17 +619,20 @@ def _phase_select(room_id: str) -> None:
     covered = [{"name": e["name"], "count": e["count"]} for e in existing]
     covered += [{"name": catalog_lib[p["prop_id"]].get("name") or p["prop_id"],
                  "count": p["count"]} for p in picks]
-    kinds = available_animation_kinds()
+    # The place types a marker may name — the LLM sees key + label.
+    groups = get_groups()
     sys_p, user_p = render_task(
         "furnish_new", budget_m2=round(max(0.0, budget - picks_area), 2),
         max_new=MAX_NEW_KINDS, existing=covered,
         # Duplicate guard over the FILTERED names — an excluded bed must not
         # stop furnish_new from proposing a different-looking bed.
         catalog_names=sorted(p.get("name") or p["id"] for p in catalog_lib.values()),
-        marker_kinds=kinds, **common)
+        marker_groups=[{"key": k, "label": g.get("label") or k}
+                       for k, g in groups.items()],
+        **common)
     new_items = _valid_new(_list_field(
         _llm_json("furnish_new", sys_p, user_p, f"Furnish new: {room_name}"),
-        "new"), kinds)
+        "new"), list(groups))
 
     if not _get_row(room_id):
         return
@@ -975,10 +981,10 @@ def confirm(room_id: str, proposal: Any) -> Dict[str, Any]:
         raise FurnishError("No furnishing job for this room.", 404)
     if row["state"] != STATE_PROPOSAL_READY:
         raise FurnishError(f"Cannot confirm in state '{row['state']}'.", 409)
-    from app.core.expression_pose_maps import available_animation_kinds
+    from app.core.pose_catalog import get_groups
     _, room = _load_room(room_id)
     clean = _validate_proposal(proposal if proposal is not None else row["proposal"],
-                               _library(), available_animation_kinds())
+                               _library(), list(get_groups()))
     if not clean["existing"] and not clean["new"]:
         raise FurnishError("The confirmed list is empty.", 400)
     _update_row(room_id, state=STATE_GENERATING, error="", proposal=clean)

@@ -3,8 +3,8 @@
 Plan: ``development_instructions/plan-room-props.md``. Unlike the room-diorama
 models (``location_model3d.py``), a prop is ONE isolated object generated from a
 dedicated product-shot render (use case ``prop``) → img2mesh (rig "none"). Each
-prop carries OBJECT-LOCAL animation markers — a figure with a matching activity
-snaps to the marker in the object's own space, so markers live on the OBJECT
+prop carries OBJECT-LOCAL place markers — a figure taking that place snaps to
+the marker in the object's own space, so markers live on the OBJECT
 instead of being set per room.
 
 Storage: ``worlds/<world>/props/<prop_id>/``:
@@ -101,7 +101,7 @@ fallback reader:
 ``description``      the GENERATION SUBJECT this variant's product shot is
                      rendered from (absent = fall back to the prop's NAME)
 ``ground_offset_m``  how deep THIS version stands in the ground (absent = 0)
-``markers``          the OBJECT-LOCAL animation markers of THIS mesh
+``markers``          the OBJECT-LOCAL place markers of THIS mesh
 ===================  ========================================================
 
 so one entry reads::
@@ -111,7 +111,8 @@ so one entry reads::
                         "dims_estimated": false,
                         "description": "a tall pine tree",
                         "ground_offset_m": -0.1,
-                        "markers": [{"animation": "sit", "at": [.5, .4, .5]}]},
+                        "markers": [{"id": "a7k2m9xq", "group": "seat",
+                                     "at": [.5, .4, .5]}]},
                        {"stem": "model-v2", "active": true,
                         "width_m": 0.3, "depth_m": 0.3, "height_m": 1.4,
                         "dims_estimated": false,
@@ -154,8 +155,8 @@ redistribution it feeds writes into the PRIMARY variant's three numbers.
 ``markers[].at`` is an OBJECT-LOCAL ``[u, v, w]`` (fractions of the model
 bounding box, which MAY exceed 0..1 by half a box for seats and poses that
 sit on or outside the hull — range ``[-0.5, 1.5]``); the vocabulary is
-identical to ``layout.markers`` (animation + facing), only the frame is the
-object instead of the room rectangle.
+identical to ``layout.markers`` (id + group + capacity + facing), only the
+frame is the object instead of the room rectangle.
 
 The one-time move of the five fields out of the prop record lives in
 ``app/core/prop_field_migration.py`` (boot, guarded by ``world_kv``).
@@ -185,6 +186,7 @@ from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
                                      glb_material_names_at, shrink_capability)
 from app.core.picture_areas import KINDS as AREA_KINDS
 from app.core.timeutils import utc_now_iso
+from app.core.world_ops import _capacity, _place_id, _spacing
 
 logger = get_logger(__name__)
 
@@ -942,7 +944,7 @@ def variant_ground_offset(meta: Dict[str, Any], variant: Any = None) -> float:
 
 
 def variant_markers(meta: Dict[str, Any], variant: Any = None) -> List[Dict[str, Any]]:
-    """The OBJECT-LOCAL animation markers of ONE variant (``[]`` when it has
+    """The OBJECT-LOCAL place markers of ONE variant (``[]`` when it has
     none). The fractions are of THAT mesh's bounding box, which is why they
     are the variant's and never the prop's (2026-08-25)."""
     return sanitize_markers(_variant_entry(meta, variant).get(MARKERS_KEY))
@@ -995,11 +997,13 @@ def _sanitize_rotation(raw: Any, cur: Optional[Dict[str, Any]] = None) -> Dict[s
 
 
 def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
-    """Object-local animation markers (A4). Same vocabulary as
-    ``layout.markers`` — ``animation`` = a clip kind from the OPEN clip
-    vocabulary, ``facing`` = degrees (0 south / 90 east / 180 north / 270 west,
-    absent = client default) — but ``at`` is an OBJECT-LOCAL ``[u, v, w]``
-    (three fractions of the model bounding box) instead of a room ``[x, y]``.
+    """Object-local place markers (A4, plan-posen-plaetze.md). Same vocabulary
+    as ``layout.markers`` — ``group`` = a PLACE TYPE of the pose catalog
+    (``pose_catalog.get_groups()``), ``id`` stable, ``capacity``/``spacing_m``
+    for a bench, ``facing`` = degrees (0 south / 90 east / 180 north / 270
+    west, absent = client default) — but ``at`` is an OBJECT-LOCAL
+    ``[u, v, w]`` (three fractions of the model bounding box) instead of a
+    room ``[x, y]``.
 
     The fractions may exceed 0..1 by half a box in each direction
     (``[-0.5, 1.5]``): a seat or lying surface often sits ON the hull edge or
@@ -1015,9 +1019,9 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     for m in raw:
         if not isinstance(m, dict):
             continue
-        anim = str(m.get("animation") or "").strip()
+        group = str(m.get("group") or "").strip().lower()
         at = m.get("at")
-        if not anim or not isinstance(at, (list, tuple)) or len(at) != 3:
+        if not group or not isinstance(at, (list, tuple)) or len(at) != 3:
             continue
         try:
             at3 = [round(min(max(float(at[i]),
@@ -1026,7 +1030,12 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
                    for i in range(3)]
         except (TypeError, ValueError):
             continue
-        entry: Dict[str, Any] = {"animation": anim, "at": at3}
+        entry: Dict[str, Any] = {"id": _place_id(m.get("id")), "group": group,
+                                 "at": at3}
+        cap = _capacity(m.get("capacity"))
+        if cap > 1:
+            entry["capacity"] = cap
+            entry["spacing_m"] = _spacing(m.get("spacing_m"))
         fac = m.get("facing")
         if fac is not None and f"{fac}".strip() != "":
             try:
@@ -4227,10 +4236,16 @@ def migrate_marker_surface_once() -> Dict[str, int]:
     repairs, and a world that still needs this one still has its props in that
     shape. Once the field migration has run there is nothing here left to find.
     """
-    from app.core.scene_recipe import FIGURE_HEIGHT_M, FIGURE_ROOT_DROP
+    from app.core.places_migration import group_for_kind
+    from app.core.pose_catalog import get_groups
+    from app.core.scene_recipe import FIGURE_HEIGHT_M
     from app.models.world import get_world_setting, set_world_setting
     if get_world_setting(_MARKER_SURFACE_FLAG):
         return {}
+    # The pre-move marker still names a clip KIND; the drop it implies is the
+    # one of the place type that kind became (places_migration), read from
+    # the catalog groups — the deleted FIGURE_ROOT_DROP table said the same.
+    groups = get_groups()
     props = touched = 0
     for pid in _all_prop_ids():
         meta = read_sidecar(pid)
@@ -4250,8 +4265,9 @@ def migrate_marker_surface_once() -> Dict[str, int]:
             continue
         changed = False
         for m in markers:
-            drop = FIGURE_ROOT_DROP.get(
-                str(m.get("animation") or "").strip().lower(), 0.0)
+            drop = float((groups.get(group_for_kind(str(m.get("animation")
+                                                             or "")))
+                          or {}).get("root_drop") or 0.0)
             if not drop:
                 continue
             at = m.get("at")

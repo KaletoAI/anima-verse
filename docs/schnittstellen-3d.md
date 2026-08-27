@@ -1341,11 +1341,16 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   surfaces?: { floor?, wall? },       # Surface-Texture-Kinds
   openings: [{ edge, at, width_m, height_m, sill_m, type, to?,
                mirrored?, prop_id? }],
-  markers?,
-  placements: [{ prop_id, at: [x, y], yaw, offset_y,
+  markers?,                           # = layout.markers (Platz-Typen, s. u.)
+  placements: [{ prop_id, id, label, prop_name, at: [x, y], yaw, offset_y,
                  dims: {width_m, depth_m, height_m}, has_model, missing? }],
-  prop_markers: [{ placement, animation, offset_m: [dx, dz],
-                   height_m, facing? }],
+                                      # id = stabile Platzierungs-ID,
+                                      # label = optionale Beschriftung,
+                                      # prop_name = Name aus der Bibliothek
+  prop_markers: [{ placement, id, group, capacity, spacing_m,
+                   offset_m: [dx, dz], height_m, facing }],
+                                      # id = Marker-ID am Objekt, group =
+                                      # Platz-Typ des Posen-Katalogs
   always_visible?,                    # Outdoor-Flag (§ A5)
   clip_model?,                        # Diorama-Clip-Opt-in (§ B1)
   no_walls?,                          # Raum emittiert KEINE walls-Einträge
@@ -1421,9 +1426,12 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   (`facing = (0 − yaw) mod 360`); zeigt die Front eines Props nicht nach
   Süden, einmal am Objekt-Marker korrigieren. (Befund Café-Terrasse:
   gedrehte Stühle, alle Sitzenden schauten in dieselbe Richtung.)
-  Raum-Marker (`markers`) = unverändert `layout.markers` (raumlokal,
-  `at`/`animation`/`rotation`/`offset_y` additiv zur abgetasteten
-  Auflagehöhe; Marker schlagen die Client-Heuristik).
+  Raum-Marker (`markers`) = unverändert `layout.markers` (raumlokal:
+  `id`/`group`/`at`/`capacity?`/`spacing_m?`/`rotation`/`offset_y` additiv
+  zur abgetasteten Auflagehöhe/`tilt`/`roll`). **Ein Marker nennt seit v7
+  keinen Clip mehr, sondern einen PLATZ-TYP** (`group` = Gruppe des
+  Posen-Katalogs: seat/bed/floor/counter/stand …, Nachtrag 2026-08-28);
+  die fertigen Sitzplätze (`slots`) rechnet allein das Szenen-Rezept.
 - `placements[].model_url` ist deprecated — immer über
   `/assets/props/{id}/model` laden.
 - **Signatur-Polling** genügt; eine Änderung im NACHBARRAUM bewegt die
@@ -4397,8 +4405,21 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
   # --- Figuren & Marker ---
   figures: { base_height_m_world,          # = 1,70 (konstant seit E4)
              stand_clearance: 0.12 },      # Welt-Meter, Konstante
-  markers: [ { room_id, at_world: [x,z], y_world, animation, facing?,
-               source: "room"|"prop" } ],  # ALLE fertig in Welt-Koordinaten
+  markers: [ { room_id, id, group, label, capacity,
+               at_world: [x,z], slots: [[x,z], …],   # Länge = capacity
+               y_world, root_offset, facing?, tilt?, roll?,
+               source: "room"|"prop" } ], # ALLE fertig in Welt-Koordinaten
+                                           # id = Raum-Marker-ID bzw.
+                                           # "<placement.id>/<marker.id>";
+                                           # group = Platz-Typ des Posen-
+                                           # Katalogs (groups); label =
+                                           # Platzierungs-Label, sonst Prop-
+                                           # Name, sonst Gruppen-Label;
+                                           # root_offset =
+                                           # groups[group].root_drop × 1,70;
+                                           # Slots quer zur Blickrichtung,
+                                           # Kapazität 1 ⇒ slots == [at_world]
+                                           # (Nachtrag 2026-08-28, v7)
 
   # --- Türschwellen & Befunde (2026-08-05) ---
   doorways: [ { level, at_world: [x,z], along: [ux,uz], type, width_m,
@@ -4690,7 +4711,7 @@ gleich zu (Nachtrag „Oberflächen-Raster (v6)").
 |---|---|---|
 | 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Historisch, erledigt (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg — und der Client steht auf 1,70 (`client3d/src/scene/figures.ts BASE_FIGURE_HEIGHT_M`, Payload-Default `1.7`) |
 | 2 | „0,12 × k" in §2e der Rezept-Note | **Historisch, erledigt:** zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
-| 3 | `activityToClipKind`-Keyword-Heuristik im Client | **OFFEN (E7 nachgeprüft):** die Heuristik lebt (`client3d/src/scene/figures.ts:415`, gerufen in `main.ts` und `npcs.ts`) und greift genau dann, wenn `activity_animation` leer kommt. Fix unverändert: entfernen, sobald jede Aktivität ein Preset trägt |
+| 3 | `activityToClipKind`-Keyword-Heuristik im Client | **OFFEN (E7 nachgeprüft):** die Heuristik lebt (`client3d/src/scene/figures.ts:415`, gerufen in `main.ts` und `npcs.ts`) und greift genau dann, wenn `activity_animation` leer kommt. Fix unverändert: entfernen, sobald jede Aktivität ein Preset trägt. **Wird mit Task 13 (plan-posen-plaetze.md) gelöscht** — ein Marker nennt seit v7 keinen Clip mehr, die Pose kommt aus dem Katalog |
 | 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | **Erledigt — aber die Diagnose war FALSCH (E7-Korrektur):** `mapIconUrl()` lebt und liefert das Footprint-Icon der Karte (`frontend/src/tabs/map/PlacementLayer.tsx:78`, Konsumenten `MapTab`, `KnownLocationsEditor`, `LocationEditor`). Nichts daran ist Dead Code, `map_image_2d`/`map_rotation_2d` bleiben ausdrücklich (§ A1.9). Weg ist nur die README-Zeile des Clients |
 | 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `client3d/docs/implementierung-3d-pipeline.md:80` sagt heute selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
 | 6 | `placements[].model_url` | **Erledigt:** im Szenen-Payload existiert das Feld nicht mehr (`model_tiers`/`variants` statt dessen, v5-Kopf). `model_url` gibt es nur noch als Feld der Prop-BIBLIOTHEK (`app/core/props.py`) — anderer Namensraum, kein Rest |
@@ -7721,3 +7742,63 @@ wie `door`.
 | Improvements: nur der ausgelegte Raum ist Subject, `apply` backt unter dem bei APPLY neu gelesenen Fix, `is_done` liest frisch zurück, der gedrehte Regler macht den Kandidaten wieder zum Kandidaten, `busy` = `CandidateBusy` (kein Versuch verbraucht), ein Defekt = `RuntimeError`, und das Cache-Vergessen je Subject | `scripts/smoke_improvement_types.py` **[14]** Raum-Modelle (12 Checks), **[15]** Prop-Varianten (6 Checks) |
 | Dass ein Landen den Bake auslöst — mit Attrappe statt Blender, damit die LOD-Kette ohne ihn läuft | `scripts/smoke_model_lod.py` |
 | Verify-Zeile `surface_scale` je Spec mit Raster: die gemessene Skala des platzierten Objekts gegen `max_m / extent_snapped` — die einzige Stelle, an der eine Loader-Abweichung Blender ↔ three sichtbar würde („Prüfe am Verbraucher") | `client3d/src/scene/sceneRecipe.ts`, `?debug3d=1` |
+
+## Nachtrag 2026-08-28 (§ B): Marker sprechen PLATZ-TYPEN (v7)
+
+**Was sich ändert.** Ein Marker sagte bisher „hier spielt Clip `sit`"; jetzt
+sagt er „hier ist ein Sitzplatz". Das Vokabular ist die endliche Liste der
+**Platz-Typen** des Posen-Katalogs (`pose_catalog.get_groups()` — Start-Satz
+`seat` 0,314 / `bed` 0,631 / `floor` 0,051 / `counter` 0 / `stand` 0 als
+`root_drop`); welche Pose dort gespielt wird, entscheidet der Charakter, nicht
+der Marker (plan-posen-plaetze.md § 3). Jeder Marker und jede Platzierung
+trägt eine **stabile ID** (8 Zeichen Base32 `a-z2-7`, vom Sanitizer
+vergeben, gespeicherte IDs bleiben), damit ein gelöschter Nachbar keinen
+Platz umnummeriert und ein Charakter einen Platz beim Namen halten kann.
+`SCENE_RECIPE_VERSION` ist 7 — die Signatur kippt, kein Client behält Marker
+mit `animation`.
+
+**Gespeichert** (Sanitizer `world_ops._sanitize_markers` /
+`props.sanitize_markers`; ein Marker ohne `group` fällt weg):
+
+```
+Raum-Marker   { id, group, at: [x, y], capacity?, spacing_m?, rotation?, offset_y?, tilt?, roll? }
+Prop-Marker   { id, group, at: [u, v, w], capacity?, spacing_m?, facing? }
+Platzierung   { prop_id, id, label?, at, yaw?, … }           # id neu, label optional
+```
+
+`capacity` 1..8 (nur > 1 wird geschrieben, dann mit `spacing_m` 0,2..3,0,
+Vorgabe 0,6 m).
+
+**Szenen-Payload** `markers[]` (§ B, Block „Figuren & Marker"): `{room_id,
+id, group, label, capacity, at_world, slots, y_world, root_offset, facing?,
+tilt?, roll?, source}`. Platz-ID = Raum-Marker-ID bzw.
+`"<placement.id>/<marker.id>"`; `label` = Platzierungs-Label, sonst Prop-Name,
+sonst Gruppen-Label. `root_offset = groups[group].root_drop × 1,70` auf
+Millimeter gerundet — die Tabelle `FIGURE_ROOT_DROP` im Szenen-Rezept ist
+gelöscht, der Katalog ist die EINE Quelle. Ein Marker, dessen Gruppe der
+Katalog nicht kennt, ist kein Platz und fehlt im Payload.
+
+**Slots — Geometrie nur im Rezept** (`scene_recipe.marker_slots`, rein):
+die `capacity` Plätze liegen mittig um den Marker auf der Achse QUER zur
+Blickrichtung (eine Bank läuft seitwärts). Blickrichtung 0 = Süd (+z),
+90 = Ost (+x); die Querachse ist die um +90° gedrehte Blickrichtung
+`(cos f, −sin f)`; Slot i sitzt bei `(i − (n−1)/2) × spacing_m` darauf.
+Kapazität 1 ⇒ `slots == [at_world]`. Handrechnung (Smoke
+`scripts/smoke_scene_recipe.py` Block [M]): Marker Welt (−2, −3), Blick Ost,
+Kapazität 3, Abstand 0,6 → Querachse (0, −1) → Slots
+`[[-2, -2.4], [-2, -3], [-2, -3.6]]` (Slot 0 rechts vom Sitzenden). Kein
+Renderer rechnet einen Slot nach (§ B5a).
+
+**Einmal-Migration beim Boot** (`app/core/places_migration.py`,
+`world_kv`-Flag `migration.places_v1`, direkt nach der Marker-Oberflächen-
+Reparatur und VOR der Prop-Feld-Migration): `animation` → `group` nach der
+Regel der alten Absenk-Tabelle (`sit*` → seat, `sleep*` → bed, `lie*`/`lay*`
+und `sit-ground*` → floor, alles andere → stand), IDs für jeden Marker und
+jede Platzierung; betrifft `layout.markers[]`, `layout.props[]` und die
+Prop-Sidecars (Datensatz-`markers` UND jede Variante). Kein Fallback-Leser
+für `animation` — nirgends.
+
+**Raum-Rezept** (§ B1): `placements[]` zusätzlich `id`, `label`, `prop_name`;
+`prop_markers[]` = `{placement, id, group, capacity, spacing_m, offset_m,
+height_m, facing}`. Das LLM-Einrichten (`furnish_new`) schlägt je Möbel einen
+Marker mit `group` aus dieser Liste vor, keinen Clip-Kind mehr.

@@ -39,13 +39,13 @@ from app.core.config import load as _load_config, migrate_file as _migrate_confi
 _load_config(_paths.get_config_path())
 _migrate_config_file(_paths.get_config_path())
 
-# Welt-DB initialisieren (idempotent, legt world.db an falls noetig)
+# Initialise the world DB (idempotent, creates world.db if needed)
 from app.core.db import init_schema as _init_db_schema
 _init_db_schema()
 
-# Einmalige Migration: alte status_modifiers.json -> prompt_filters-Tabelle.
-# Idempotent: nur wenn die Datei existiert + Eintraege noch nicht in der DB
-# stehen. Datei wird danach in *.migrated umbenannt.
+# One-time migration: old status_modifiers.json -> prompt_filters table.
+# Idempotent: only when the file exists and its entries are not in the DB
+# yet. The file is renamed to *.migrated afterwards.
 try:
     from app.core.prompt_filters import migrate_status_modifiers_once
     migrate_status_modifiers_once()
@@ -194,16 +194,29 @@ async def lifespan(app: FastAPI):
     except Exception as _tre:
         logger.warning("terrain relief migration failed: %s", _tre)
 
-    # Prop-Marker benennen jetzt die OBERFLAECHE; der Sitz-Absatz reist als
-    # root_offset im Payload mit. Hebt die gespeicherten Brueche um genau
-    # diesen Betrag an, damit sich optisch nichts bewegt (2026-07-28).
+    # Prop markers name the SURFACE now; the seat drop travels as root_offset
+    # in the payload. Lifts the stored fractions by exactly that amount so
+    # nothing moves on screen (2026-07-28).
     try:
         from app.core.props import migrate_marker_surface_once
         _pm = migrate_marker_surface_once()
         if _pm:
-            logger.info("Prop-Marker migriert: %s", _pm)
+            logger.info("Prop markers migrated: %s", _pm)
     except Exception as _pme:
         logger.warning("prop marker migration failed: %s", _pme)
+
+    # Markers speak PLACE TYPES (plan-posen-plaetze.md § 9): the clip kind
+    # `animation` becomes the catalog group, every marker and placement gets
+    # a stable id. No reader keeps a fallback for the old key. AFTER the
+    # surface repair, which reads the kind; BEFORE the field migration, which
+    # copies the (already converted) record-level markers onto the variants.
+    try:
+        from app.core.places_migration import migrate_places_once
+        _pl = migrate_places_once()
+        if _pl:
+            logger.info("places migration: %s", _pl)
+    except Exception as e:
+        logger.warning("places migration failed: %s", e)
 
     # Size, generation subject, ground offset and markers belong to the MODEL
     # VARIANT now, not to the prop (2026-08-25): a variant is a whole version
@@ -220,32 +233,31 @@ async def lifespan(app: FastAPI):
     except Exception as _pfe:
         logger.warning("prop field migration failed: %s", _pfe)
 
-    # Vereinheitlichte Intents (plan-intents-unified.md, Phase 1): bestehende
-    # Assignments idempotent in die intents-Tabelle spiegeln. Kein Verhaltens-
-    # wechsel — assignments bleiben in Phase 1 die treibende Quelle.
+    # Unified intents (plan-intents-unified.md, phase 1): mirror existing
+    # assignments idempotently into the intents table. No behaviour change —
+    # assignments stay the driving source in phase 1.
     try:
         from app.models.intents import migrate_assignments_to_intents
         migrate_assignments_to_intents()
     except Exception as _ie:
         logger.debug("intents migration failed: %s", _ie)
 
-    # Klon-Hygiene: off-map / Duplikate / Waisen entfernen.
+    # Clone hygiene: remove off-map clones, duplicates and orphans.
     from app.models.world import cleanup_orphan_clones
     _cleanup_stats = cleanup_orphan_clones()
     if _cleanup_stats.get("removed"):
-        logger.info("Klon-Cleanup beim Start: %s", _cleanup_stats)
+        logger.info("Clone cleanup at startup: %s", _cleanup_stats)
 
-    # Background-Hygiene: tote Datei-Referenzen in background_images +
-    # gallery_meta.json + prompts.json prunen. Loescht keine Dateien.
+    # Background hygiene: prune dead file references in background_images +
+    # gallery_meta.json + prompts.json. Deletes no files.
     from app.models.world import cleanup_orphan_backgrounds
     _bg_stats = cleanup_orphan_backgrounds()
     if _bg_stats.get("pruned_bgs") or _bg_stats.get("pruned_meta"):
-        logger.info("Background-Cleanup beim Start: %s", _bg_stats)
+        logger.info("Background cleanup at startup: %s", _bg_stats)
 
-    # Orphan-Files: Galerie-PNGs ohne jegliche Referenz nach
-    # world_gallery_backup/ verschieben (nicht loeschen). Laeuft NACH
-    # dem DB/Meta-Cleanup, damit gerade-erst gepunete Referenzen nicht
-    # faelschlich Files am Leben halten.
+    # Orphan files: move gallery PNGs without any reference to
+    # world_gallery_backup/ (never delete). Runs AFTER the DB/meta cleanup,
+    # so references pruned a moment ago cannot wrongly keep files alive.
     from app.models.world import move_orphan_gallery_files
     _orphan_stats = move_orphan_gallery_files()
     if _orphan_stats.get("moved"):
@@ -382,15 +394,15 @@ async def lifespan(app: FastAPI):
     _routing = _cfg.get("llm_routing", []) or []
     logger.info("llm_routing: %d Einträge", len(_routing))
 
-    # Modelle mit preload_on_startup=True asynchron warm laden, damit
-    # llama-swap & Co. das Model schon in den Speicher legen, bevor der
-    # erste echte User-Request kommt. create_task = nicht blockierend.
+    # Warm up models with preload_on_startup=True asynchronously, so
+    # llama-swap & co. load the model into memory before the first real
+    # user request arrives. create_task = non-blocking.
     try:
         import asyncio as _asyncio
         from app.core.llm_router import preload_models as _preload_models
         _asyncio.create_task(_preload_models())
     except Exception as _pe:
-        logger.warning("LLM-Preload Task konnte nicht gestartet werden: %s", _pe)
+        logger.warning("LLM preload task could not be started: %s", _pe)
 
     logger.info("Initialisiere Skills (Image Backends, etc.)...")
     skill_manager = get_skill_manager()
@@ -431,7 +443,7 @@ async def lifespan(app: FastAPI):
         from app.models.character import preload_rembg_session
         preload_rembg_session()
     except Exception as _rembg_err:
-        logger.warning("rembg-Preload nicht gestartet: %s", _rembg_err)
+        logger.warning("rembg preload not started: %s", _rembg_err)
 
     # ── Startup Availability Summary ──
     import os as _os
@@ -481,9 +493,9 @@ async def lifespan(app: FastAPI):
     _telegram_polling = get_polling_manager()
     await _telegram_polling.start()
 
-    # Gedanken-Container instanziieren — kein Background-Task mehr,
-    # nur Zugriffsobjekt fuer ``run_thought_turn``. AgentLoop ruft die
-    # Funktion ueber ``get_thought_runner()``.
+    # Instantiate the thought container — no background task any more,
+    # just the access object for ``run_thought_turn``. The AgentLoop calls
+    # the function via ``get_thought_runner()``.
     from app.core.thoughts import ThoughtRunner, set_thought_runner
     _thought_runner = ThoughtRunner()
     set_thought_runner(_thought_runner)

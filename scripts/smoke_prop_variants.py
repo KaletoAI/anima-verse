@@ -769,7 +769,7 @@ def variant_fields_section() -> None:
                               height_m=0.9)["id"]
     put_mesh(bench, 0)
     put_mesh(bench, store.add_variant(bench))
-    seat = [{"animation": "sit", "at": [0.5, 0.5, 0.5]}]
+    seat = [{"id": "seat1", "group": "seat", "at": [0.5, 0.5, 0.5]}]
 
     # ── storage ──
     check("a variant on the ground stores NO key",
@@ -864,7 +864,8 @@ def variant_fields_section() -> None:
     check("...and one of variant 1 its −0.25",
           p1[0]["ground_offset_m"] == -0.25, str(p1[0]))
     check("variant 0's placement composes ONE prop marker",
-          len(m0) == 1 and m0[0]["animation"] == "sit", str(m0))
+          len(m0) == 1 and m0[0]["group"] == "seat"
+          and m0[0]["id"] == "seat1", str(m0))
     check("...and variant 1's composes none — markers do not leak between "
           "versions", m1 == [], str(m1))
 
