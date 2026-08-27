@@ -57,7 +57,10 @@ def _fix_matrix(rot, snap):
     def deg(axis):
         v = float(rot.get(axis, 0) or 0)
         if snap:
-            v = round(v / 90.0) * 90.0
+            # HALF-UP, like JS Math.round in place.ts — Python's round() is
+            # half-to-even and would snap a fix of exactly 45° to 0 where the
+            # client snaps to 90, i.e. a different scale for the same model.
+            v = math.floor(v / 90.0 + 0.5) * 90.0
         return math.radians(v)
     return (Matrix.Rotation(deg("y"), 3, "Y")
             @ Matrix.Rotation(deg("x"), 3, "X")
@@ -119,6 +122,18 @@ def _hits_below(bvh, x, z, top):
     return out
 
 
+def _inside(v, lo, hi):
+    """``v`` clamped EDGE_NUDGE inside [lo, hi] — the boundary ring answers the
+    model's edge instead of grazing it.
+
+    A box thinner than two nudges has no inside to clamp into (the two bounds
+    cross and every node would land OUTSIDE the box, giving a silently all-null
+    lattice); such an axis is sampled at its centre instead."""
+    if hi - lo < 2.0 * EDGE_NUDGE:
+        return (lo + hi) * 0.5
+    return min(max(v, lo + EDGE_NUDGE), hi - EDGE_NUDGE)
+
+
 def _walk_height(hits, clearance):
     """The cell rule of the docstring. None when nothing faces up."""
     for idx, (y, up) in enumerate(hits):
@@ -162,9 +177,9 @@ def heightgrid(args):
     values = []
     hits = 0
     for j in range(rows):
-        z = min(max(lo[2] + j * step, lo[2] + EDGE_NUDGE), hi[2] - EDGE_NUDGE)
+        z = _inside(lo[2] + j * step, lo[2], hi[2])
         for i in range(cols):
-            x = min(max(lo[0] + i * step, lo[0] + EDGE_NUDGE), hi[0] - EDGE_NUDGE)
+            x = _inside(lo[0] + i * step, lo[0], hi[0])
             y = _walk_height(_hits_below(bvh, x, z, top), clearance)
             if y is None:
                 values.append(None)

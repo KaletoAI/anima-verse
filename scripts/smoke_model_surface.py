@@ -25,6 +25,10 @@ Cell rule = lowest UP-facing hit with >= 1.2 m of air above it:
   node (8,8) = (1,1): the OTHER corner, 1 mm inside -> the block covers x[0,1] z[0,1]
                there too -> block top -> 80
 extent_snapped under fix 0/0/0 = [2, 1.6, 2].
+The storage side follows from § 4 alone: payload_block hands out exactly the eight fields the
+placement spec carries, with the file's own numbers; block_sig is 8 hex chars, the same for the
+same block and different once one number moves; surface_status reads "baked" with 9x9 @ 0.25 for
+the file just written under its own fix, and "missing" for a path that has no file at all.
 Under fix x = 90 (three's Rx: (x,y,z) -> (x, -z, y)): box_min [-1,-1,0], box_max
 [1,1,1.6], extent_snapped [2,2,1.6]; the base's z=-1 side now faces UP at y=1:
 node at (x=0.5, z=0.1) -> hits -1(down) 1(up) -> (1 - (-1))*100 = 200.
@@ -147,6 +151,24 @@ def part1():
         check("under low ledge (1,1) = 90", node(s, 1, 1) == 90, str(node(s, 1, 1)))
         check("corner (8,0) nudged inside = 20", node(s, 8, 0) == 20, str(node(s, 8, 0)))
         check("corner (8,8) nudged inside, block above = 80", node(s, 8, 8) == 80, str(node(s, 8, 8)))
+        block = ms.payload_block(s)
+        stored = json.loads(ms.surface_path(glb).read_text(encoding="utf-8"))
+        check("payload_block: exactly the eight spec fields",
+              tuple(block) == ("step", "origin", "cols", "rows", "values",
+                               "box_min", "box_max", "extent_snapped"),
+              str(tuple(block)))
+        check("payload_block: the file's own numbers",
+              all(block[k] == stored[k] for k in block))
+        sig = ms.block_sig(block)
+        check("block_sig: 8 hex chars", len(sig) == 8 and all(c in "0123456789abcdef" for c in sig), sig)
+        check("block_sig: stable for the same block", ms.block_sig(dict(block)) == sig)
+        check("block_sig: different after one changed value",
+              ms.block_sig(dict(block, step=block["step"] * 2)) != sig)
+        st = ms.surface_status(glb, {"x": 0, "y": 0, "z": 0})
+        check("status baked, 9x9 @ 0.25",
+              (st["state"], st["cols"], st["rows"], st["step"]) == ("baked", 9, 9, 0.25), str(st))
+        check("status missing without a file",
+              ms.surface_status(Path(tmp) / "absent.glb", {})["state"] == "missing")
         check("read_surface valid", ms.read_surface(glb, {"x": 0, "y": 0, "z": 0}) is not None)
         check("read_surface stale under another fix", ms.read_surface(glb, {"x": 90, "y": 0, "z": 0}) is None)
         check("status stale", ms.surface_status(glb, {"x": 90})["state"] == "stale")

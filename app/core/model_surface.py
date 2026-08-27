@@ -70,6 +70,7 @@ def bake_surface(model_path: Path, rotation: Any, *,
     from app.blender import refine, runner
     source = _source_of(model_path)
     if source is None:
+        logger.info("surface bake skipped (model file unreadable): %s", model_path)
         return None
     if not refine.take_lod_slot(wait_s):
         logger.info("surface bake skipped (no Blender slot): %s", Path(model_path).name)
@@ -91,8 +92,12 @@ def bake_surface(model_path: Path, rotation: Any, *,
                "rotation": _norm_rotation(rotation),
                "baked_at": utc_now_iso(), "blender": runner.version(),
                **{k: data[k] for k in PAYLOAD_KEYS}, "hits": data.get("hits", 0)}
-    surface_path(model_path).write_text(
-        json.dumps(surface, ensure_ascii=False), encoding="utf-8")
+    try:
+        surface_path(model_path).write_text(
+            json.dumps(surface, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        logger.info("surface not stored (%s): %s", Path(model_path).name, e)
+        return None
     logger.info("surface baked: %s (%dx%d @ %.2f m, %d hits)", Path(model_path).name,
                 surface["cols"], surface["rows"], surface["step"], surface["hits"])
     return surface
