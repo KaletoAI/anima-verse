@@ -20,6 +20,7 @@ import { nearestRoomAt, stairChain, stairsAt, type StairLink } from './game/stai
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
+import { doorTargetAngle, easeAngle, DOOR_SWING_RATE } from './game/doorSwing';
 import { getAudio } from './game/audio';
 import {
   emptyScatterCounts, newFpsMeter, pushFrame, scatterCosts, tierCounts,
@@ -1231,6 +1232,54 @@ async function startApp(username: string, role: string) {
         // `null` = open; a locked room WITHOUT a sentence is still locked.
         const locked = doorwayLock(rooms, locks, here) !== null;
         (mesh as THREE.Mesh).material = locked ? mats.locked : mats.open;
+      }
+    }
+  }
+
+  /**
+   * DOOR PROPS SWING OPEN when the avatar stands in front of them (v5, user
+   * decision 2026-08-27) — an OWN frame hook, and deliberately not part of the
+   * change-gated `applyDoorLocks` repaint below: an ease runs every frame,
+   * while that block only fires when the lock map, the location or the room
+   * changed.
+   *
+   * The rule itself is pure and hand-checked (`game/doorSwing.ts`,
+   * `client3d/scripts/smoke_door_swing.mjs`); this reads the two inputs it
+   * needs and hangs the answer on the group:
+   *
+   *  - the DISTANCE to the threshold, measured in the TILE's own frame. The
+   *    avatar's world point is turned in once per tile (`worldToTile`) instead
+   *    of every threshold being turned out — a rotation and a shift preserve
+   *    distances, and a turned tile must not make its doors open early;
+   *  - whether the door is ENTERABLE, from the SAME source the red threshold
+   *    look uses (`game/locks.doorwayLock` against this avatar's lock map, the
+   *    room it stands in left out of the judgement). A barred door stays shut:
+   *    it would otherwise promise a way in that `/play/enter-room` refuses.
+   *
+   * `group.rotation.y = baseYaw + angle`, never `+=` — the angle is state on
+   * the record, so a dropped frame or a tier swap cannot accumulate a drift
+   * into the object. Nothing here is persisted or sent to the server, and the
+   * collision never learns of it: a door prop is a model, and one walks
+   * through an open door as well as through a shut one (`game/collide.ts`).
+   */
+  function swingDoorProps(dt: number) {
+    const me = npcs.positionOf(avatarName);
+    const state = getGameState();
+    for (const tile of tiles.values()) {
+      const doors = tile.doorProps;
+      if (!doors?.length) continue;
+      // No avatar anywhere: every door eases shut, none of them is "near".
+      const local = me ? worldToTile(tile, me.x, me.z) : null;
+      const locks = tile.loc.id === state.lockedLoc ? state.lockedRooms : NO_LOCKS;
+      const here = avatarRoomId(tile) ?? '';
+      for (const door of doors) {
+        const dist = local
+          ? Math.hypot(local.x - door.at.x, local.z - door.at.z)
+          : Infinity;
+        const enterable = doorwayLock(door.rooms, locks, here) === null;
+        const target = doorTargetAngle(dist, enterable, door.swing);
+        door.angle = easeAngle(door.angle, target, dt, DOOR_SWING_RATE);
+        door.group.rotation.y = door.baseYaw + door.angle;
       }
     }
   }
@@ -3406,6 +3455,12 @@ async function startApp(username: string, role: string) {
     updateOcclusion(engine.camera.position,
                     embodied ? npcs.positionOf(avatarName) : null, embodied);
   });
+
+  // The DOOR PROPS of every mounted scene, eased every frame (v5) — see
+  // `swingDoorProps` for the rule. Registered HERE and not next to its own
+  // definition because it reads `avatarName`, which comes into scope further
+  // up this function; the occlusion hook above is bound for the same reason.
+  engine.addFrameHook((dt) => swingDoorProps(dt));
 
   const walkGoal = new THREE.Vector3();
   engine.addFrameHook((dt) => {

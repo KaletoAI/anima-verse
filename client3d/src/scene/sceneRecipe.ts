@@ -21,7 +21,8 @@ import {
   deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld, worldGroundSampler,
   worldWaterSampler,
-  type PlacedSceneModel, type RoomFloor, type StairWorldLink, type Tile,
+  type PlacedSceneModel, type RoomFloor, type StairWorldLink, type SwingingDoor,
+  type Tile,
 } from './tiles';
 import { SubmergedGhost } from './submergedGhost';
 import { ghostCutY } from '../game/walk';
@@ -597,6 +598,45 @@ function assertUnitScale(k: number): void {
  *  jeden Mount außer dem letzten für veraltet erklären. */
 const mountSeq = new WeakMap<Tile, number>();
 
+/**
+ * Remember a placed DOOR PROP so the frame loop can swing it (v5).
+ *
+ * Everything it needs is READ, never derived: the sign out of `door.swing`,
+ * the threshold's centre and the rooms it joins out of the `doorways[]` entry
+ * `door.opening` points at, and the base yaw off the group `placeModelSpec`
+ * just returned. A spec whose index points nowhere registers nothing — the
+ * prop still stands, it simply never opens.
+ */
+function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
+                          spec: SceneModelSpec, group: THREE.Object3D): void {
+  const door = spec.door;
+  if (!door) return;
+  const way = (scene.doorways ?? [])[door.opening];
+  if (!way || !Array.isArray(way.at_world)) return;
+  list.push({
+    group,
+    swing: door.swing,
+    at: { x: way.at_world[0], z: way.at_world[1] },
+    rooms: (way.rooms ?? []).filter((r): r is string => typeof r === 'string' && !!r),
+    baseYaw: group.rotation.y,
+    angle: 0,
+  });
+}
+
+/** A tier swap has replaced a door prop's mesh: the swing list points at the
+ *  GROUP, so it has to follow, or that door would freeze at whatever angle the
+ *  group taken out of the graph stood at. The angle carries over — it says
+ *  where the door STANDS, and the fresh group is placed shut. */
+function retargetDoorProp(tile: Tile, old: THREE.Object3D,
+                          next: THREE.Object3D): void {
+  for (const door of tile.doorProps ?? []) {
+    if (door.group !== old) continue;
+    door.group = next;
+    door.baseYaw = next.rotation.y;
+    next.rotation.y = door.baseYaw + door.angle;
+  }
+}
+
 /** The PLACED PROPS of one room — what the sit/lie derivation measures its
  *  bounding boxes on (`deriveRoomSpots`). A prop whose mesh never loaded and
  *  that got no placeholder either has no object and therefore no surface; the
@@ -654,6 +694,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // record gone and drops its answer.
   const placements: PlacedSceneModel[] = [];
   tile.placedModels = placements;
+  // The DOOR PROPS of this mount (v5) — filled below as the model specs land,
+  // read by the frame loop that swings them, and dropped with the scene by
+  // `unmountScene`. Pure view state: nothing in here is ever persisted.
+  const doorProps: SwingingDoor[] = [];
+  tile.doorProps = doorProps;
 
   const g = new THREE.Group();
   g.name = SCENE_GROUP;
@@ -827,6 +872,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   for (const wall of scene.walls) {
     const len = wallLength(wall);
     if (len < 1e-4) continue;
+    // A leaf whose hole a DOOR PROP fills is not drawn (v5): the prop in
+    // `models[]` IS the door there. The entry stays in the payload on purpose
+    // — the Blender exterior render builds its facade out of `walls` and would
+    // lose the door's prism with it — so it is the RENDERERS that skip it, and
+    // the admin preview skips it in the same one line.
+    if (wall.door_prop) continue;
     const { mat: wallMat, tileM } = wallMaterial(wall, style);
     const mesh = buildWall(THREE, wall, wallMat, tileM);
     parentFor(wall.room_id).add(mesh);
@@ -1130,6 +1181,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       parent.add(placed);
       const rec: PlacedSceneModel = { spec, url, object: placed, parent, lift: 0 };
       placements.push(rec);
+      // A DOOR PROP joins the swing list (v5). `placed`'s origin IS the hinge
+      // (`measure: "fit"`, § B2), so the entry needs nothing but the group and
+      // the threshold it belongs to — no geometry is computed here.
+      registerDoorProp(doorProps, scene, spec, placed);
       // The DEPTH CUT of a placed prop (§ B2 addendum 2026-08-23): the server
       // states the plane, this hangs it on the material clones. It runs after
       // `parent.add`, because `Material.clippingPlanes` is world space and the
@@ -1444,6 +1499,11 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       // exactly as in the mount: those two rewrite the materials of everything
       // they traverse, and the ghost's own material is not theirs to touch.
       refreshPlacementGhost(tile, rec);
+      // The swing list of a DOOR PROP follows its mesh (v5): the entry points
+      // at the GROUP, and the tier swap has just built a new one. The angle
+      // survives the swap — it says where the door stands, which is not a
+      // property of the mesh that fills it.
+      if (old) retargetDoorProp(tile, old, placed);
       if (old) {
         old.parent?.remove(old);
         disposeClipMaterials(old);
@@ -1617,6 +1677,10 @@ export function unmountScene(tile: Tile): void {
   // Placement ledger of the old mount: gone with the scene — an in-flight
   // tier swap compares against this list and drops its answer.
   tile.placedModels = undefined;
+  // The swing list points at groups that just left the graph — it dies with
+  // them, and the next mount builds its own (v5). Nothing to dispose: the
+  // groups are the placements above, and the angle was view state.
+  tile.doorProps = undefined;
   tile.cutouts = undefined;
   tile.modelIsGround = false;
   tile.modelIsShellArea = false;

@@ -35,7 +35,8 @@
  * a door reads as a door, and walking through it is precisely what a doorway
  * is for — a leaf that blocked would brick up every door in the world. Both
  * flags are the SERVER's word, not a height measured back out of the payload
- * here.
+ * here. And a DOOR PROP changes none of this: door props are `models[]`, and
+ * collision never reads them — an open leaf bars as little as a shut one (v5).
  *
  * Collision applies INSIDE the interior view only. Outdoors the figure walks
  * freely over the metre plane (E4 task 5): `walk.slideBlocked` holds it out of

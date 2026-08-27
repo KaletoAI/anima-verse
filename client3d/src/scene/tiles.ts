@@ -338,6 +338,37 @@ export interface PlacedSceneModel {
 }
 
 /**
+ * ONE DOOR PROP of the mounted scene, ready to swing (v5, user decision
+ * 2026-08-27).
+ *
+ * `placeModelSpec` puts the group's ORIGIN on the hinge edge (`measure:
+ * "fit"`, § B2), so opening the door is `group.rotation.y = baseYaw + angle`
+ * and nothing else — no pivot, no second object, no geometry a renderer could
+ * get wrong. `angle` is PURE VIEW STATE: it is never persisted, never sent to
+ * the server and lives and dies with the mount that built it.
+ */
+export interface SwingingDoor {
+  /** The placed group — its origin IS the hinge. */
+  group: THREE.Object3D;
+  /** Sign of a positive y rotation that opens this door OUTWARD, straight from
+   *  `models[].door.swing`: +1 for a left hinge, −1 for a right one. */
+  swing: 1 | -1;
+  /** Centre of the threshold in TILE-LOCAL metres (`doorways[opening]
+   *  .at_world`) — "the avatar stands in front of it" is measured against
+   *  this, not against the hinge the group hangs on. */
+  at: { x: number; z: number };
+  /** The rooms the threshold joins, in payload order — the same list
+   *  `applyDoorLocks` hands to `game/locks.doorwayLock`, so a locked door and
+   *  a red threshold can never disagree. */
+  rooms: string[];
+  /** `group.rotation.y` as `placeModelSpec` left it, read ONCE. The swing is
+   *  added to it every frame instead of accumulated onto the object. */
+  baseYaw: number;
+  /** Current opening angle in radians, signed like `swing`. */
+  angle: number;
+}
+
+/**
  * THE FLOOR OF ONE ROOM of a mounted scene, as the spot derivation reads it.
  *
  * `hull` is the room polygon in TILE-LOCAL metres. On storey 0 it comes from
@@ -525,6 +556,10 @@ export interface Tile {
   cutouts?: CutoutHandle;
   /** Modell-Platzierungen der montierten Szene (Stufen-Tausch, Etappe 3) */
   placedModels?: PlacedSceneModel[];
+  /** The DOOR PROPS of the mounted scene (v5), one per `models[]` entry with a
+   *  `door` block. Pure view state and part of the mount: `unmountScene` drops
+   *  the list with the groups it points at. */
+  doorProps?: SwingingDoor[];
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
   fade: number;
