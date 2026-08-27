@@ -253,3 +253,47 @@ Block-Beitrag (`admin_settings._prompt_filter_block_keys`).
 | `app.core.prompt_templates.render_task/render` | Jinja-Templates; Paket-Templates liegen im Suchpfad |
 | `app.core.tool_formats.format_example(fmt, tool_name, example_json)` ✅ | Baut ein Tool-Nutzungs-Beispiel im aktiven Tool-Format (für `get_usage_instructions`-Override) |
 | `PluginContext`: `ctx.get_config(path, default)`, `ctx.http`, `ctx.logger` | Welt-Config (Dot-Pfad; Beispiel `skills.markdown_writer.max_size_kb` seedet Per-Character-`_defaults`), HTTP, Logging |
+
+## Improvement types — `app.core.improvements` ✅
+
+The idle improvements queue runs generation work while nobody is playing: the
+engine picks ONE step at a time, hands it to a TaskQueue worker and never names
+a type — it asks the registry. A package contributes its own kind of background
+work by registering an improvement type; the core stays free of the package
+(R1).
+
+**The class.** Subclass `app.core.improvements.base.ImprovementType`, set `id`
+(stable, it is stored with every entry), `label` (admin UI) and
+`params_schema`, then implement four methods:
+
+| Member | Semantik |
+|---|---|
+| `params_schema: List[ParamField]` | The form the admin fills in when creating an entry. `ParamField(key, label, kind, options=None, required=True)`; `kind` ∈ `mesh_backend` \| `image_backend` \| `subject_kind` \| `enum` \| `text` — the backend kinds are filled by the server, `enum`/`subject_kind` carry their own `options` (`[{"value","label"}]`) |
+| `validate(params) -> params` | Normalised parameters, or `ValueError(message)`. The base class checks required fields and option membership; override it (calling `super().validate`) for rules between fields — e.g. "source and target backend must differ" |
+| `find_candidates(params) -> List[Candidate]` | Every subject NOT yet done, in a stable order (`(label.lower(), key)`). `Candidate(key, label)`: the key is unique per type and is what a step row stores (`"character:Mira"`, `"location:<id>:<file>"`). A subject that could not be worked at all (nothing to generate FROM) is not a candidate |
+| `is_done(candidate, params) -> bool` | Asked before work and after a scan — read the persisted asset, never a cached answer |
+| `apply(candidate, params, task_id)` | Does the work SYNCHRONOUSLY: it returns only once whatever it made is persisted. It runs in a queue worker thread (no event loop of its own, and `user_activity` is suppressed for the duration), so it calls the blocking producer directly — never a `trigger_*` thread wrapper, which would report success while nothing had been generated |
+
+**Failure vocabulary of `apply`.** A defect is a plain exception (its message
+lands in the step's `error`; the step is retried once, then skipped).
+`app.imagegen.base.BackendBusyError` and
+`app.core.improvements.base.CandidateBusy` mean LOAD, not a defect: the step
+stays pending and keeps both its attempts. Raise `CandidateBusy` when the
+subject is already being generated somewhere else — most producers keep an
+in-flight set that a direct caller has to honour itself.
+
+**Registration** — in the package's `on_load` module (see `docs/plugins.md`),
+so a package without a verb can contribute one too:
+
+```python
+from app.core.improvements import registry
+from .my_type import MyType
+
+registry.register(MyType())
+```
+
+Registering the same `id` twice simply replaces the entry, so a force reload is
+harmless. An entry whose type is not registered (a package went away) is
+skipped with a readable error instead of blocking the queue. The built-ins under `app/core/improvements/types/` are the
+worked examples; `subjects.py` there is where the "which subjects exist / how is
+one regenerated" knowledge lives, so a type stays a declaration.

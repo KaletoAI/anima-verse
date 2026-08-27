@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Smoke check for the improvement types `model_replace` + `fill_missing`
-(plan-improvements-queue, task 3).
+"""Smoke check for the improvement types `model_replace`, `fill_missing` and
+`image_rerender` (plan-improvements-queue, tasks 3 + 4).
 
 Every expectation below is derived BY HAND from the task contract and from the
 generator anchors it builds on — nothing here records what a run happened to
@@ -12,7 +12,8 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
 `props.list_models` are the production functions, and every "is the asset there
 / which backend made it" assertion goes through them.
 
-  1. The parameter contract is the base class's.  `model_replace` declares
+  1. The parameter contract is the base class's.  All three types are
+     registered by importing the package.  `model_replace` declares
      three required fields (subject, source_backend, target_backend), so a
      complete set validates to itself and a set without `target_backend`
      raises ValueError naming that field.  `subject` carries options, so
@@ -99,6 +100,30 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      `expression_regen.is_generating` — True makes `apply` raise
      `CandidateBusy` without rendering.
 
+ 14. `image_rerender character_images` works on the PROFILE image: a
+     character whose profile image's meta names backend "flux" is a candidate
+     for source "flux" and for no other source.  A portrait without a stored
+     prompt is not a candidate at all — there would be nothing to render it
+     from (the same rule as the missing source image in case 8).
+
+ 15. Its `apply` re-renders that profile image with `backend_name` = the
+     TARGET backend, `create_new=True` (decision E5: the old portrait stays
+     in the gallery) and `use_room=False` (a portrait is not a scene).  The
+     new file becomes the profile — `get_character_profile_image` says so —
+     and the expression cache is cleared, because every cached variant was
+     derived from the old portrait.  `is_done` then reads the NEW profile
+     image's meta backend and answers True.
+
+ 16. `regenerate_image` reports its failures in the return value
+     (`(False, "", "")`) instead of raising, so `apply` has to turn that into
+     an exception: RuntimeError("profile regenerate failed").
+
+ 17. `location_gallery` candidates are single gallery FILES, keyed
+     `location:<id>:<file>`: a gallery image whose meta names the source
+     backend AND that has a stored prompt is a candidate; the image without a
+     prompt is not, and neither is anything under a source backend nothing
+     was made by.
+
 The printed sections follow execution order, so expectations 9 and 10 are
 checked inside the sections whose fixtures they belong to.
 
@@ -129,8 +154,14 @@ from app.core.improvements.types import subjects  # noqa: E402
 from app.core.model_store import write_sidecar  # noqa: E402
 from app.core.timeutils import utc_now_iso  # noqa: E402
 from app.models import world  # noqa: E402
-from app.models.character import (get_character_dir,  # noqa: E402
-                                  save_character_profile)
+from app.models.character import (add_character_image_metadata,  # noqa: E402
+                                  add_character_image_prompt,
+                                  get_character_dir,
+                                  get_character_images_dir,
+                                  get_character_profile_image,
+                                  save_character_profile,
+                                  set_character_profile_image)
+from app.skills import image_regenerate  # noqa: E402
 
 import app.core.improvements.types  # noqa: E402,F401  (registers the types)
 
@@ -244,6 +275,42 @@ def fake_building_generate(location_id, source_image, backend_glob,
     return {"ok": True}
 
 
+REGEN_CALLS = []
+REGEN_OK = {"value": True}          # False = the producer reports a failure
+
+
+def fake_regenerate_image(character_name, output_path, original_prompt,
+                          improvement_request="", workflow_name="",
+                          backend_name="", **kwargs):
+    """What `image_regenerate.regenerate_image` does to the WORLD on a
+    `create_new` run: it writes a new file next to the old one and records the
+    backend that made it in that file's image meta (`_regen_meta["backend"]`).
+    The readers stay real — `get_character_image_metadata` answers from here."""
+    REGEN_CALLS.append({"name": character_name,
+                        "output_path": Path(output_path).name,
+                        "prompt": original_prompt,
+                        "backend_name": backend_name,
+                        "create_new": bool(kwargs.get("create_new")),
+                        "use_room": bool(kwargs.get("use_room"))})
+    if not REGEN_OK["value"]:
+        return (False, "", "")
+    new_name = Path(output_path).stem + "_v1" + Path(output_path).suffix
+    new_path = Path(output_path).parent / new_name
+    new_path.write_bytes(b"\x89PNG fake")
+    add_character_image_metadata(character_name, new_name,
+                                 {"backend": backend_name})
+    add_character_image_prompt(character_name, new_name, original_prompt)
+    return (True, original_prompt, str(new_path))
+
+
+EXPR_CLEARED = []
+
+
+def fake_clear_expression_cache(character_name):
+    EXPR_CLEARED.append(character_name)
+    return 0
+
+
 def fake_peek_expression(name, mood, pose_key, **kwargs):
     return EXPRESSION_CACHED["value"]
 
@@ -258,6 +325,8 @@ props._generate = fake_prop_generate
 location_model3d._generate = fake_building_generate
 expression_regen.peek_cached_expression = fake_peek_expression
 expression_regen.generate_expression_image = fake_expression_image
+expression_regen.clear_expression_cache = fake_clear_expression_cache
+image_regenerate.regenerate_image = fake_regenerate_image
 # The backend INVENTORY, not an asset reader: without configured mesh
 # backends `list_mesh_backends` answers {"backends": [], "default": ""} and
 # every "which backend is the default" expectation would be vacuous.
@@ -266,6 +335,7 @@ model3d.list_mesh_backends = lambda rig="": {
 
 MODEL_REPLACE = registry.get("model_replace")
 FILL_MISSING = registry.get("fill_missing")
+IMAGE_RERENDER = registry.get("image_rerender")
 
 A = make_character("demo_a")
 B = make_character("demo_b")
@@ -279,8 +349,9 @@ def candidates(improvement_type, params):
 
 # ── [1] the parameter contract ──────────────────────────────────────────────
 print("[1] model_replace parameters")
-check("both types are registered", sorted(t.id for t in registry.list_types()),
-      ["fill_missing", "model_replace"])
+check("all three types are registered",
+      sorted(t.id for t in registry.list_types()),
+      ["fill_missing", "image_rerender", "model_replace"])
 check("a complete set validates to itself",
       MODEL_REPLACE.validate({"subject": "character", "source_backend": "hy",
                               "target_backend": "tr"}),
@@ -491,6 +562,73 @@ check("a cached variant → nobody is a candidate",
       candidates(FILL_MISSING, FILL_EXPR), [])
 check("and is_done says so", FILL_MISSING.is_done(
     CAND_E, FILL_MISSING.validate(FILL_EXPR)), True)
+
+# ── [12] image_rerender over character portraits ────────────────────────────
+print("[12] image_rerender character_images")
+RERENDER = {"subject": "character_images", "source_backend": "flux",
+            "target_backend": "zimg"}
+check_raises("re-rendering into the same backend is refused", ValueError,
+             lambda: IMAGE_RERENDER.validate({"subject": "character_images",
+                                              "source_backend": "flux",
+                                              "target_backend": "flux"}),
+             "source and target backend must differ")
+PORTRAIT_DIR = get_character_images_dir(A)
+PORTRAIT_DIR.mkdir(parents=True, exist_ok=True)
+(PORTRAIT_DIR / "portrait.png").write_bytes(b"\x89PNG fake")
+add_character_image_metadata(A, "portrait.png", {"backend": "flux"})
+set_character_profile_image(A, "portrait.png")
+check("a portrait without a stored prompt is NOT a candidate",
+      candidates(IMAGE_RERENDER, RERENDER), [])
+add_character_image_prompt(A, "portrait.png", "a weathered farmhand, portrait")
+check("with a prompt the 'flux' portrait is one candidate",
+      candidates(IMAGE_RERENDER, RERENDER), [("character:demo_a", "demo_a")])
+check("scanning for a backend nothing was made by finds nothing",
+      candidates(IMAGE_RERENDER, {"subject": "character_images",
+                                  "source_backend": "sdxl",
+                                  "target_backend": "zimg"}), [])
+REGEN_CALLS.clear()
+EXPR_CLEARED.clear()
+CAND_I = IMAGE_RERENDER.find_candidates(IMAGE_RERENDER.validate(RERENDER))[0]
+IMAGE_RERENDER.apply(CAND_I, IMAGE_RERENDER.validate(RERENDER), "task-11")
+check("apply re-renders the profile image on the TARGET backend, as a new "
+      "file, without the room reference", REGEN_CALLS,
+      [{"name": "demo_a", "output_path": "portrait.png",
+        "prompt": "a weathered farmhand, portrait", "backend_name": "zimg",
+        "create_new": True, "use_room": False}])
+check("the new file is the profile image now",
+      get_character_profile_image(A), "portrait_v1.png")
+check("and the expression cache was dropped", EXPR_CLEARED, ["demo_a"])
+check("is_done reads the new profile image's meta backend",
+      IMAGE_RERENDER.is_done(CAND_I, IMAGE_RERENDER.validate(RERENDER)), True)
+check("the character has dropped out of the candidate list",
+      candidates(IMAGE_RERENDER, RERENDER), [])
+REGEN_OK["value"] = False
+check_raises("a producer failure becomes an exception", RuntimeError,
+             lambda: IMAGE_RERENDER.apply(
+                 type(CAND_I)("character:demo_a", "demo_a"),
+                 IMAGE_RERENDER.validate({"subject": "character_images",
+                                          "source_backend": "zimg",
+                                          "target_backend": "flux"}),
+                 "task-12"),
+             "profile regenerate failed")
+REGEN_OK["value"] = True
+
+# ── [13] image_rerender over a location gallery ─────────────────────────────
+print("[13] image_rerender location_gallery")
+GALLERY_RERENDER = {"subject": "location_gallery", "source_backend": "flux",
+                    "target_backend": "zimg"}
+world.set_gallery_image_meta(LOC_ID, "old.png", {"backend": "flux"})
+world.set_gallery_image_meta(LOC_ID, "new.png", {"backend": "flux"})
+world.save_gallery_prompt(LOC_ID, "new.png", "a stone house at the fork")
+check("only the image with a stored prompt can be re-rendered",
+      [g["filename"] for g in subjects.gallery_images(LOC_ID)], ["new.png"])
+check("it is one candidate, keyed location:<id>:<file>",
+      candidates(IMAGE_RERENDER, GALLERY_RERENDER),
+      [(f"location:{LOC_ID}:new.png", "Crossroads Inn / new.png")])
+check("scanning for a backend nothing was made by finds nothing",
+      candidates(IMAGE_RERENDER, {"subject": "location_gallery",
+                                  "source_backend": "zimg",
+                                  "target_backend": "flux"}), [])
 
 print()
 if FAILURES:

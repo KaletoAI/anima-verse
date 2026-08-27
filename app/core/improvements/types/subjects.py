@@ -1,12 +1,13 @@
 """What an improvement type may ask about a SUBJECT, and how it regenerates it.
 
-One place for the four subject kinds the built-in types work on — characters,
-location buildings, props and character expressions — so a type stays a
-declaration of *which* subjects it wants and never learns where a mesh sidecar
-lives or which producer function is the blocking one.
+One place for the subject kinds the built-in types work on — characters,
+location buildings, props, character expressions and the rendered images of
+characters and locations — so a type stays a declaration of *which* subjects it
+wants and never learns where a mesh sidecar lives or which producer function is
+the blocking one.
 
-Two rules hold for every ``generate_*`` here, because the engine calls them
-synchronously in a queue worker:
+Two rules hold for every ``generate_*``/``regenerate_*`` here, because the
+engine calls them synchronously in a queue worker:
 
 * the BLOCKING producer is called directly, never a ``trigger_*`` wrapper —
   a wrapper starts a daemon thread and would report success while nothing had
@@ -16,6 +17,7 @@ synchronously in a queue worker:
   elsewhere raises :class:`CandidateBusy` instead — that is load, not a defect,
   and the engine leaves the step pending without counting an attempt.
 """
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.improvements.base import CandidateBusy
@@ -245,6 +247,158 @@ def generate_expression(name: str) -> None:
     if expression_regen.generate_expression_image(
             name, "", "", equipped_pieces=pieces, equipped_items=items) is None:
         raise RuntimeError("expression render failed")
+
+
+# ---------------------------------------------------------------------------
+# Character images
+# ---------------------------------------------------------------------------
+
+def character_profile(name: str) -> Optional[Dict[str, Any]]:
+    """The character's CURRENT profile image as
+    ``{filename, path, backend, prompt}``, or None when there is none.
+
+    "Current" is what the profile field says — the same resolution
+    ``GET /characters/{name}/images/profile`` does
+    (``get_character_profile_image`` + the images dir).  ``backend`` is what
+    the image's own meta records as its maker, ``prompt`` the prompt it was
+    generated from; either may be empty for a hand-uploaded picture, and a
+    caller that wants to RENDER needs the prompt.
+    """
+    from app.models.character import (get_character_image_metadata,
+                                      get_character_image_prompts,
+                                      get_character_images_dir,
+                                      get_character_profile_image)
+    filename = str(get_character_profile_image(name) or "").strip()
+    if not filename:
+        return None
+    path = get_character_images_dir(name) / filename
+    if not path.exists():
+        return None
+    meta = get_character_image_metadata(name).get(filename) or {}
+    return {
+        "filename": filename,
+        "path": str(path),
+        "backend": str(meta.get("backend") or ""),
+        "prompt": str(get_character_image_prompts(name).get(filename) or ""),
+    }
+
+
+def regenerate_profile(name: str, backend: str) -> None:
+    """Blocking re-render of the character's PROFILE image on ``backend``.
+
+    ``create_new=True``: the old portrait stays in the gallery (decision E5) —
+    a re-render on another backend is an offer, not a replacement, and the
+    previous one has to remain recoverable.  ``use_room=False``: a portrait is
+    not a scene, so the room reference slot stays free for the face.
+
+    Afterwards the new file becomes the profile and the expression cache is
+    dropped: every cached variant was derived from the OLD portrait, and
+    ``generate_expression_image`` has no backend selector — the only way the
+    target backend reaches the expressions is by deriving them again from the
+    new portrait.
+
+    There is no double-start guard on this path (neither ``character_ops`` nor
+    ``image_regenerate`` keeps an in-flight set for a character's portrait), so
+    nothing can be reported as :class:`CandidateBusy` here.
+    """
+    from app.core.expression_regen import clear_expression_cache
+    from app.models.character import set_character_profile_image
+    from app.skills.image_regenerate import regenerate_image
+    current = character_profile(name)
+    if not current:
+        raise RuntimeError("no profile image")
+    if not current["prompt"]:
+        raise RuntimeError("profile image has no stored prompt")
+    ok, _final_prompt, new_path = regenerate_image(
+        name, current["path"], current["prompt"], backend_name=backend,
+        create_new=True, use_room=False)
+    if not ok or not new_path:
+        raise RuntimeError("profile regenerate failed")
+    set_character_profile_image(name, Path(new_path).name)
+    clear_expression_cache(name)
+
+
+# ---------------------------------------------------------------------------
+# Location gallery images
+# ---------------------------------------------------------------------------
+
+def gallery_images(location_id: str) -> List[Dict[str, Any]]:
+    """Every gallery image of a location that CAN be rendered again, as
+    ``{filename, backend, prompt, room_id, prompt_type}``.
+
+    Two conditions, both from the image's own bookkeeping: the meta has to name
+    the backend that made it (otherwise there is nothing to match a source
+    backend against), and a prompt has to be stored (otherwise there is nothing
+    to render FROM — the same rule that keeps a prop without its product shot
+    out of ``fill_missing``).
+    """
+    from app.models.world import (get_all_gallery_prompts,
+                                  get_gallery_image_metas,
+                                  get_gallery_image_rooms,
+                                  get_gallery_image_types)
+    prompts = get_all_gallery_prompts(location_id) or {}
+    rooms = get_gallery_image_rooms(location_id) or {}
+    types = get_gallery_image_types(location_id) or {}
+    out: List[Dict[str, Any]] = []
+    for filename, meta in (get_gallery_image_metas(location_id) or {}).items():
+        backend = str((meta or {}).get("backend") or "").strip()
+        prompt = str(prompts.get(filename) or "").strip()
+        if not backend or not prompt:
+            continue
+        out.append({"filename": filename, "backend": backend, "prompt": prompt,
+                    "room_id": str(rooms.get(filename) or ""),
+                    "prompt_type": str(types.get(filename) or "")})
+    return out
+
+
+def regenerate_gallery_image(location_id: str, filename: str,
+                             backend: str) -> None:
+    """Blocking re-render of one gallery image on ``backend``.
+
+    The render lands as a NEW gallery file — the generator only overwrites in
+    place when the caller asks for a replacement, and an improvement must not
+    destroy the picture it was asked to improve upon.
+
+    ``prompt_type`` travels with the prompt: without it a re-rendered map tile
+    or building render would come back untyped and be flagged as a room
+    background, which is exactly the leak the generator's own type handling
+    prevents.
+
+    ``asyncio.run`` is correct here and not a shortcut: ``apply`` runs in a
+    TaskQueue WORKER thread, which has no event loop of its own; the core is a
+    coroutine only because the HTTP routes await it, and everything blocking
+    inside it goes through ``asyncio.to_thread`` on whatever loop is running.
+    """
+    import asyncio
+
+    from app.core.world_ops import generate_gallery_image_core
+    entry = next((g for g in gallery_images(location_id)
+                  if g["filename"] == filename), None)
+    if entry is None:
+        raise RuntimeError(f"{filename}: nothing to render it from")
+    result = asyncio.run(generate_gallery_image_core(location_id, {
+        "prompt": entry["prompt"],
+        "room_id": entry["room_id"],
+        "prompt_type": entry["prompt_type"],
+        "backend": backend,
+    })) or {}
+    if result.get("status") != "success":
+        raise RuntimeError(str(result.get("error") or "gallery render failed"))
+
+
+# ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
+
+def image_backend_options() -> List[Dict[str, str]]:
+    """The image backends the admin form offers, in ``ParamField.options``
+    shape.  Inpaint backends are left out: they need a mask, so they can never
+    be the source or the target of a plain re-render — the render dialogs
+    filter them the same way."""
+    from app.core.world_ops import build_imagegen_options
+    return [{"value": o["name"], "label": o["label"]}
+            for o in build_imagegen_options().get("options", [])
+            if o.get("category") != "inpaint"]
 
 
 # ---------------------------------------------------------------------------

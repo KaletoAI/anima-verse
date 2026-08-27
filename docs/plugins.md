@@ -129,6 +129,10 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `env_prefix` | nein | Nur Altbestand (Env-Bridge); neue Pakete nutzen `ctx.get_config` |
 | `on_load` | nein | Modul (relativ zum Paket), das beim Laden importiert wird — für Code-Beiträge OHNE Verb, z.B. Registrierung eines Capability-Providers (`app.core.hooks.register_provider`). Zählt selbst als Paket-Beitrag; läuft bei jedem Force-Reload (Registrierung idempotent halten) |
 
+An `on_load` module is also where a package registers its own **improvement
+type** for the idle improvements queue (`app.core.improvements.registry`) — the
+contract is in `docs/skill-core-api.md` → „Improvement types".
+
 **Abhängigkeits-Semantik (F9):** „Aktiv am Charakter" heißt für Verb-Pakete: mindestens
 ein Verb ist für den Charakter aktiviert; für Content-Packs: mindestens ein
 Template-Fragment greift auf das Template des Charakters. Durchsetzung: Lade-Zeit
