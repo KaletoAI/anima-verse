@@ -232,11 +232,11 @@ export function reliftScene(tile: Tile, datumDelta = 0): void {
     for (const p of tile.elevatorStops?.values() ?? []) p.y += datumDelta;
     for (const s of tile.stairs ?? []) { s.foot.pos.y += datumDelta; s.head.pos.y += datumDelta; }
     const carried = new Set<object>();
-    for (const byKind of tile.roomMarkers.values()) {
-      if (carried.has(byKind)) continue;   // one map hangs under id AND name
-      carried.add(byKind);
-      for (const entries of byKind.values()) {
-        for (const e of entries) if (e.fixed) e.p.y += datumDelta;
+    for (const byId of tile.roomMarkers.values()) {
+      if (carried.has(byId)) continue;   // one map hangs under id AND name
+      carried.add(byId);
+      for (const e of byId.values()) {
+        if (e.fixed) for (const s of e.slots) s.y += datumDelta;
       }
     }
   }
@@ -261,18 +261,19 @@ export function reliftScene(tile: Tile, datumDelta = 0): void {
   // marker object hangs under BOTH the room id and the room name
   // (`mountScene`), hence the identity set: a second pass over it would move
   // it twice.
+  // The lift is ONE number per place, measured at its anchor slot (slot 0 —
+  // the slots are a few decimetres apart, one terrain sample serves them
+  // all), and applied to every slot alike.
   const seen = new Set<object>();
-  for (const byKind of tile.roomMarkers.values()) {
-    if (seen.has(byKind)) continue;
-    seen.add(byKind);
-    for (const entries of byKind.values()) {
-      for (const e of entries) {
-        if (!e.fixed) continue;
-        const step = storeyGroundRelift(e.lift, e.level, e.p.x, e.p.z,
-                                        tile.center.y, worldGroundSampler());
-        if (step.delta) e.p.y += step.delta;
-        e.lift = step.lift;
-      }
+  for (const byId of tile.roomMarkers.values()) {
+    if (seen.has(byId)) continue;
+    seen.add(byId);
+    for (const e of byId.values()) {
+      if (!e.fixed || !e.slots.length) continue;
+      const step = storeyGroundRelift(e.lift, e.level, e.slots[0].x, e.slots[0].z,
+                                      tile.center.y, worldGroundSampler());
+      if (step.delta) for (const s of e.slots) s.y += step.delta;
+      e.lift = step.lift;
     }
   }
   for (const floor of tile.declaredFloors) {
@@ -1148,7 +1149,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   }
   if (stairs.length) tile.stairs = stairs;
 
-  // ── Türen & Marker: fertig in Weltkoordinaten ───────────────────────────
+  // ── Doors & places: finished in world coordinates ───────────────────────
   // THE door of each room, for the floor sampling's reference ray: the one
   // leading outside, else the first the payload lists (`roomDoor`, the same
   // rule the walk uses). Read, never derived (plan-betreten-und-tueren.md
@@ -1168,20 +1169,24 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       tile.roomDoors.set(id, tileToWorld(tile, door.mid.x, door.mid.z, door.baseY));
     }
   }
+  // PLACES (plan-posen-plaetze.md § 4): one entry per marker ID, its slot
+  // points finished in world metres. Nothing here matches a clip kind — who
+  // sits on which slot is the server's word in the worldmap row, and
+  // `main.ts` only looks the seat up by id.
   for (const marker of scene.markers) {
     const id = marker.room_id;
-    if (!id || !marker.animation) continue;
-    let byKind = tile.roomMarkers.get(id);
-    if (!byKind) {
-      byKind = new Map();
-      tile.roomMarkers.set(id, byKind);
+    if (!id || !marker.id) continue;
+    let byId = tile.roomMarkers.get(id);
+    if (!byId) {
+      byId = new Map();
+      tile.roomMarkers.set(id, byId);
       const name = nameOf.get(id);
-      if (name) tile.roomMarkers.set(name, byKind);
+      if (name) tile.roomMarkers.set(name, byId);
     }
-    // Prop-Marker sind FERTIG komponiert (fixed: die Abtastung lässt ihre Höhe
-    // in Ruhe). Raum-Marker bleiben laut § A4 additiv zur ABGETASTETEN
-    // Auflagehöhe — ihr offset_y steckt im gelieferten y_world über dem
-    // Etagenboden und wird dafür zurückgerechnet.
+    // Prop markers are FINISHED as composed (fixed: the floor sampling leaves
+    // their height alone). Room markers stay additive to the SAMPLED seat
+    // height per § A4 — their offset_y is inside the delivered y_world over
+    // the storey floor and is derived back for that.
     const fixed = marker.source === 'prop';
     const level = roomLevel.get(id) ?? 0;
     const floorY = floorYof.get(level) ?? 0;
@@ -1197,14 +1202,17 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     const at = tileToWorld(tile, marker.at_world[0], marker.at_world[1], 0);
     const markerLift = storeyGroundLift(level, at.x, at.z, tile.center.y,
                                         worldGroundSampler());
-    // y_world ist die FLÄCHE; wie tief die Wurzel darunter sitzt, sagt der
-    // Server (root_offset). Der frühere eigene Sitz-Absatz des Clients galt
-    // nur für Raum-Marker — Prop-Marker bekamen gar keinen, und die Autoren
-    // rechneten ihn per Hand in den Marker hinein.
+    // y_world is the SURFACE; how deep the root sits below it is the server's
+    // word (root_offset, composed from the place type's `root_drop`). The
+    // client's former own seat drop applied to room markers only — prop
+    // markers got none, and the authors folded it into the marker by hand.
     const drop = marker.root_offset ?? 0;
-    byKind.set(marker.animation, [...(byKind.get(marker.animation) ?? []), {
-      p: tileToWorld(tile, marker.at_world[0], marker.at_world[1],
-                     marker.y_world - drop + markerLift),
+    byId.set(marker.id, {
+      group: marker.group,
+      // Every slot the server composed, turned into the world like the
+      // anchor: the payload is tile-local and the footprint may stand rotated.
+      slots: marker.slots.map(([x, z]) =>
+        tileToWorld(tile, x, z, marker.y_world - drop + markerLift)),
       rotation: marker.facing,
       tilt: marker.tilt,
       roll: marker.roll,
@@ -1213,16 +1221,16 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       fixed,
       // …and the two numbers the RE-LIFT needs when the height field moves
       // (`reliftScene`): which storey this marker belongs to, and how much of
-      // the terrain is already in its `p.y`.
+      // the terrain is already in the slot heights.
       level,
       lift: markerLift,
-    }]);
+    });
   }
 
-  // ── Raum-Labels + Etagen-Umschalter (Sicht-Zustand, bleibt Client) ──────
-  // Raum-Labels nur in GEBÄUDEN (`areaLoc` von oben): auf einer Flächen-
-  // Location sind die Räume Zonen wie „Road"/„Forest", und ihre generischen
-  // Namen über der Szene sind Rauschen (User-Vorgabe 2026-08-02).
+  // ── Room labels + storey switch (view state, stays in the client) ───────
+  // Room labels only in BUILDINGS (`areaLoc` from above): on an area
+  // location the rooms are zones like "Road"/"Forest", and their generic
+  // names over the scene are noise (user directive 2026-08-02).
   for (const [id, rg] of roomGroup) {
     if (areaLoc) break;  // Zonen statt Zimmer — keine Namen einblenden
     const name = nameOf.get(id);
