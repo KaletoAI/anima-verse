@@ -46,6 +46,10 @@ def scan(improvement_id: str) -> Dict[str, int]:
     result = store.replace_steps_scan(
         improvement_id, [(c.key, c.label) for c in candidates])
     store.update(improvement_id, last_scan_at=utc_now_iso())
+    # A one_shot whose scan finds nothing has nothing to do — ever. Without
+    # this it would sit 'open' with 0/0 steps forever, because the only other
+    # close happens after a step FINISHES and there is no step to finish.
+    _close_if_finished(improvement_id)
     return result
 
 
@@ -156,14 +160,21 @@ def tick() -> Dict[str, Any]:
         if reason == "active" and row["improvement_id"] not in _run_now:
             continue
         _run_now.discard(row["improvement_id"])
+        # Mark FIRST, submit second. A worker can pick the task up — and even
+        # finish it — before ``submit`` has returned here; a mark_running after
+        # that would overwrite the handler's 'done' back to 'running'.
+        store.mark_running(row["improvement_id"], row["candidate_key"])
         task_id = task_queue.submit(
             TASK_TYPE,
             {"improvement_id": row["improvement_id"],
              "candidate_key": row["candidate_key"]},
             queue_name=QUEUE_NAME, priority=STEP_PRIORITY, max_retries=0,
             deduplicate=True)
-        if task_id:
-            store.mark_running(row["improvement_id"], row["candidate_key"])
+        if not task_id:
+            # Deduplicated: nothing is owed after all, so give the step back.
+            store.mark_result(row["improvement_id"], row["candidate_key"],
+                              status="pending", count_attempt=False)
+            return {"scanned": scanned, "submitted": "", "reason": "dedup"}
         return {"scanned": scanned, "submitted": task_id, "reason": "ok"}
 
     # Nothing runnable. A run-now flag that got this far names an entry with no
@@ -192,11 +203,27 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
     improvement = store.get(improvement_id)
     if improvement is None:
         return {"skipped": "gone"}
-    improvement_type = registry.get(improvement["type_id"])
     step = next((s for s in store.list_steps(improvement_id)
                  if s["candidate_key"] == key), None)
-    if improvement_type is None or step is None:
+    if step is None:
+        # A scan closed the candidate while the task waited — there is no row
+        # left to write a result into, and nothing to run.
         return {"skipped": "gone"}
+
+    improvement_type = registry.get(improvement["type_id"])
+    if improvement_type is None:
+        # A package went away (or never loaded). The step MUST leave 'running'
+        # here: the next tick would otherwise rescue it, resubmit it, and —
+        # since only one improvement_step may ever be owed — every other entry
+        # would queue up behind a step that can never run.
+        message = f"type '{improvement['type_id']}' is not registered"
+        logger.warning("improvement step %s/%s: %s",
+                       improvement_id, key, message)
+        store.mark_result(improvement_id, key, status="skipped",
+                          error=message, count_attempt=False)
+        store.update(improvement_id,
+                     failed_count=int(improvement["failed_count"]) + 1)
+        return {"skipped": message}
 
     candidate = Candidate(key, step["candidate_label"])
     try:

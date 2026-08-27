@@ -123,6 +123,21 @@ taken from the ``submit`` call.
      spent there and then, so the tick after it reads the ordinary idle gate
      again — reason "active", not a second futile walk of the queue.
 
+ 19. A one_shot whose scan finds NOTHING is done on the spot.  D is created
+     and scanned against an empty candidate list: 0 added, 0 closed, no steps
+     at all — so the "0 pending and 0 running" rule closes it right there.
+     Without the close in ``scan`` it would sit 'open' 0/0 forever: the only
+     other close happens after a step finishes, and D has no step to finish.
+
+ 20. A step whose TYPE is gone clears the head of the queue.  E's k5 is marked
+     running (what the worker sees), then the registry is emptied — a package
+     that went away.  ``handle_step`` must not leave the step 'running': the
+     next tick would rescue it (17), resubmit it, and since only ONE
+     improvement_step may be owed, every other entry would queue behind a step
+     that can never run.  So the step goes 'skipped' with the type id in its
+     error, E's failed_count is 1, and the next tick — user idle 960 s, so the
+     gate is wide open — submits nothing and has never queued a row for E.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvements.py
 """
 import os
@@ -612,6 +627,38 @@ engine.request_run_now(C)             # C is done — it has no pending step
 check("the tick finds nothing to run", engine.tick()["reason"], "empty")
 check("…and the flag is gone, so the idle rule reads normally again",
       engine.tick()["reason"], "active")
+
+# ── 19. a one_shot with nothing to do ────────────────────────────────────────
+print("\n19. a one_shot whose scan finds nothing is done on the spot")
+FakeType.candidates = []
+D = store.create("fake", "D", {}, "one_shot")["id"]
+check("the scan adds nothing", engine.scan(D), {"added": 0, "closed": 0})
+check("…and it has no steps at all", counters(store.get(D)),
+      {"pending": 0, "running": 0, "done": 0, "failed": 0, "skipped": 0})
+check("…so it closed itself", store.get(D)["status"], "done")
+
+# ── 20. the type is gone ─────────────────────────────────────────────────────
+print("\n20. a step whose type is gone clears the head of the queue")
+FakeType.candidates = [("k5", "Solo")]
+E = store.create("fake", "E", {}, "one_shot")["id"]
+engine.scan(E)
+store.mark_running(E, "k5")           # the state the worker really sees
+registry.clear()                      # the package went away
+result = engine.handle_step({"improvement_id": E, "candidate_key": "k5",
+                             "_task_id": ""})
+check("the handler names the missing type", "fake" in (result.get("skipped") or ""),
+      True)
+step = step_of(E, "k5")
+check("the step does NOT stay running", step["status"], "skipped")
+check("…and carries the type id as its error", "fake" in step["error"], True)
+check("…counted as a failure, not as an attempt",
+      (store.get(E)["failed_count"], step["attempts"]), (1, 0))
+user_activity._set_for_test(960)      # the gate is wide open now
+result = engine.tick()
+check("the next tick does not resubmit it",
+      (result["submitted"], result["reason"]), ("", "empty"))
+check("…and no task row for E was ever queued",
+      [t for t in step_tasks() if t["payload"]["improvement_id"] == E], [])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

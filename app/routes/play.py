@@ -1,11 +1,11 @@
-"""Player-UI — eigene Seite unter ``/play`` (plan-room-conversation Phase 2).
+"""Player UI — its own page under ``/play`` (plan-room-conversation phase 2).
 
-Bewusst getrennt vom Game-Admin: die Player-UI ist in-world und User-gated
-(nicht admin). Sie zeigt die *wahrgenommene* aktuelle Raum-Szene des aktiven
-Avatars — read-only in diesem Schritt; Äußerungen senden kommt als Nächstes.
+Deliberately separate from the Game Admin: the player UI is in-world and
+user-gated (not admin). It shows the *perceived* current room scene of the
+active avatar.
 
-Die gebaute Shell liegt (wie game-admin) unter ``static/game_admin/play.html``
-— derselbe ``frontend/``-Build, aber eine eigene Seite/Route.
+The built shell lives (like game-admin) under ``static/game_admin/play.html``
+— the same ``frontend/`` build, but its own page/route.
 """
 import threading
 from pathlib import Path

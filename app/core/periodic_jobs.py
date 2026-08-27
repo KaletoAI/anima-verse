@@ -406,11 +406,11 @@ from app.core.npc_actions import _sub_npc_actions  # noqa: E402
 from app.core.improvements.engine import periodic_tick as _sub_improvements  # noqa: E402
 
 
-# Sub-Task-Tabelle: (callable, min_interval_seconds, label).
-# min_interval_seconds = wie oft soll dieser Sub-Task LAUFEN. Der Tick
-# selbst feuert haeufiger; jeder Sub-Task wird nur ausgefuehrt wenn seit
-# der letzten Ausfuehrung mindestens min_interval_seconds vergangen sind.
-# Sub-Tasks ohne minimum (=0) laufen jeden Tick.
+# Sub-task table: (callable, min_interval_seconds, label).
+# min_interval_seconds = how often this sub-task should RUN. The tick itself
+# fires more often; a sub-task only runs when at least min_interval_seconds
+# have passed since its last run. Sub-tasks without a minimum (=0) run on
+# every tick.
 _SUB_TASKS: List[tuple] = [
     # (func,                         min_interval_s,        label)
     (_sub_status_tick,               60,                    "status_tick"),

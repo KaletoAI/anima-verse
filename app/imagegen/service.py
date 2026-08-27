@@ -1445,13 +1445,13 @@ class ImageService:
         # Lade per-Agent per-Instanz Config
         cfg = self._get_instance_config(character_name, backend)
 
-        # Style/Negative/Instruction kommen AUSSCHLIESSLICH aus dem Use-Case
-        # (Admin-Override oder eingebauter Default). Kein Workflow-/Backend-
-        # Fallback mehr — der Style gehoert zum FALL der Generierung, nicht zum
-        # Modell. Familie (natural/keywords) wird aus dem "Target Prompt Stil"
-        # (image_model) des aufgeloesten Workflows abgeleitet.
-        # Default-Use-Case "character" — un-verdrahtete Gen-Pfade bekommen so den
-        # photoreal Character-Style statt eines leeren Styles.
+        # Style/negative/instruction come EXCLUSIVELY from the use case (admin
+        # override or built-in default). No workflow/backend fallback any more —
+        # the style belongs to the OCCASION of the generation, not to the model.
+        # The family (natural/keywords) is derived from the resolved workflow's
+        # "target prompt style" (image_model).
+        # Default use case "character": un-wired generation paths get the
+        # photoreal character style instead of an empty one.
         from app.core import config as _cfg_mod
         _uc_name = (input_data.get("image_use_case") or "character").strip()
         _uc_img_model = getattr(backend, "image_family", "") if backend else ""
