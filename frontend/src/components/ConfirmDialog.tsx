@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 
@@ -33,6 +34,29 @@ export function ConfirmDialog({
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const cancelRef = useRef<HTMLButtonElement | null>(null)
+
+  // ESC closes; lock body scroll while open.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [open, onClose])
+
+  // Focus lands on CANCEL, not on the confirming button: a dialog that asks
+  // "really delete?" must not turn the next stray Enter into the deletion.
+  useEffect(() => {
+    if (open) cancelRef.current?.focus()
+  }, [open])
+
   if (!open) return null
 
   return createPortal(
@@ -57,7 +81,8 @@ export function ConfirmDialog({
           className="ga-modal-footer"
           style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}
         >
-          <button type="button" className="ga-btn ga-btn-sm" onClick={onClose}>
+          <button type="button" className="ga-btn ga-btn-sm" ref={cancelRef}
+            onClick={onClose}>
             {t('Cancel')}
           </button>
           <button

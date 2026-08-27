@@ -20,6 +20,14 @@ function clockTime(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString()
 }
 
+/** Green for a finished step, red for one that ended badly, muted for the
+ *  ones that are still on their way. */
+function statusClass(status: string): string {
+  if (status === 'done') return 'ga-status-ok'
+  if (status === 'failed' || status === 'skipped') return 'ga-status-danger'
+  return 'ga-status-paused'
+}
+
 function duration(seconds: number | null | undefined): string {
   if (!seconds && seconds !== 0) return ''
   return seconds >= 60
@@ -100,8 +108,7 @@ export function EntryDetail({
               {steps.map((step) => (
                 <tr key={step.candidate_key}>
                   <td>{step.candidate_label || step.candidate_key}</td>
-                  <td className={step.status === 'done'
-                    ? 'ga-status-ok' : 'ga-status-paused'}>
+                  <td className={statusClass(step.status)}>
                     {statusLabel(step.status)}
                   </td>
                   <td>{step.attempts || 0}</td>

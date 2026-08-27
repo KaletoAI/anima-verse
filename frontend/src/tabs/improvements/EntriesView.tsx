@@ -48,12 +48,17 @@ export function EntriesView() {
   const [creating, setCreating] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Improvement | null>(null)
   const [busyId, setBusyId] = useState('')
+  const [loadError, setLoadError] = useState('')
 
+  // A failing load keeps the last good list on screen and says so — wiping it
+  // to [] would render "No entries yet", which is a LIE about the world: the
+  // entries are there, the request is not.
   const load = useCallback(async () => {
     try {
       setEntries(await fetchImprovements())
+      setLoadError('')
     } catch (e) {
-      setEntries([])
+      setLoadError((e as Error).message)
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [t, toast])
@@ -120,6 +125,11 @@ export function EntriesView() {
     await act(entry.id, () => deleteImprovement(entry.id))
   }, [act, pendingDelete, selectedId])
 
+  /** The step log is a drawer: clicking the open row closes it again. */
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedId((current) => (current === id ? '' : id))
+  }, [])
+
   const selected = useMemo(
     () => (entries || []).find((e) => e.id === selectedId) || null,
     [entries, selectedId])
@@ -141,8 +151,14 @@ export function EntriesView() {
         </span>
       </div>
 
+      {/* A standing notice, not a toast that scrolls away while the list
+          shows numbers from before the failure. */}
+      {loadError ? (
+        <div className="ga-imp-error">{t('Error')}: {loadError}</div>
+      ) : null}
+
       {entries === null ? (
-        <div className="ga-loading">{t('Loading…')}</div>
+        loadError ? null : <div className="ga-loading">{t('Loading…')}</div>
       ) : entries.length === 0 ? (
         <ul className="ga-list">
           <li className="ga-list-empty">{t('No entries yet')}</li>
@@ -152,11 +168,19 @@ export function EntriesView() {
           items={entries}
           getKey={(entry) => entry.id}
           onReorder={reorder}
+          rowClassName={(entry) => (
+            entry.id === selectedId ? 'is-active' : '')}
           render={(entry) => (
             <>
-              <span className="ga-list-row-main"
-                onClick={() => setSelectedId(
-                  selectedId === entry.id ? '' : entry.id)}>
+              <span className="ga-list-row-main" role="button" tabIndex={0}
+                aria-expanded={entry.id === selectedId}
+                onClick={() => toggleSelected(entry.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    toggleSelected(entry.id)
+                  }
+                }}>
                 <span>{entry.label || typeLabel(entry.type_id)}</span>
                 <span className="ga-list-row-sub">
                   {typeLabel(entry.type_id)}

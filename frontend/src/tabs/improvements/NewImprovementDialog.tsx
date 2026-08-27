@@ -12,7 +12,7 @@
  * mistake here (it looks fine and does nothing), so the count is one click
  * away rather than a surprise after the first scan.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
@@ -57,6 +57,30 @@ export function NewImprovementDialog({
   const [busy, setBusy] = useState(false)
   const [imageOptions, setImageOptions] = useState<ImagegenOption[] | null>(null)
   const [meshBackends, setMeshBackends] = useState<MeshBackendOption[] | null>(null)
+  const typeRef = useRef<HTMLSelectElement | null>(null)
+
+  // ESC closes (never mid-request, which would leave the user guessing what
+  // the server did); lock body scroll while open.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !busy) onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [open, busy, onClose])
+
+  // Focus goes to the TYPE select, not to a footer button: "Create" is
+  // disabled until a type is picked, so focusing it would leave the dialog
+  // with no focus at all — and the type is the first thing to answer anyway.
+  useEffect(() => {
+    if (open) typeRef.current?.focus()
+  }, [open])
 
   // Fresh state on every open — a dialog that reopens with the previous
   // entry's parameters half-filled is how a wrong entry gets created.
@@ -215,7 +239,7 @@ export function NewImprovementDialog({
         <div className="ga-modal-body">
           <div className="ga-form">
             <Field label={t('Type')}>
-              <select className="ga-input" value={typeId}
+              <select className="ga-input" value={typeId} ref={typeRef}
                 onChange={(e) => pickType(e.target.value)}>
                 <option value="">{t('— select —')}</option>
                 {types.map((x) => (

@@ -411,6 +411,9 @@ a.ga-btn {
 
 .ga-status-ok { color: #3fb950; }
 .ga-status-paused { color: var(--text-muted, #6e7681); }
+/* Ended badly (failed, skipped) — the red of .ga-btn-danger, so a failure
+   reads as one wherever it appears. */
+.ga-status-danger { color: var(--danger, #f85149); }
 
 .ga-sched-form {
   margin-top: 4px;
