@@ -3078,3 +3078,90 @@ a.ga-btn {
   border: 1px solid var(--danger, #f85149);
   border-radius: var(--radius, 6px);
 }
+
+/* Entries view — the row's action cluster keeps its own width so the label
+   column absorbs the wrapping instead of the buttons. */
+.ga-imp-actions {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+/* Candidate preview inside the create dialog. */
+.ga-imp-preview { margin-top: 4px; }
+
+.ga-imp-preview-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px 8px;
+  max-height: 140px;
+  overflow-y: auto;
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+}
+
+/* Step log of one entry. */
+.ga-imp-detail {
+  margin-top: 8px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+  background: var(--bg-container, #161b22);
+  padding: 8px;
+}
+
+.ga-imp-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* Wide content scrolls inside its own box — the page never scrolls sideways. */
+.ga-imp-steps-wrap {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.ga-imp-steps {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.ga-imp-steps th,
+.ga-imp-steps td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border, #30363d);
+  white-space: nowrap;
+}
+
+.ga-imp-steps th {
+  color: var(--text-muted, #8b949e);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+  background: var(--bg-container, #161b22);
+}
+
+/* The error is the one column that may be long — it truncates and keeps its
+   full text in the title attribute. */
+.ga-imp-steps-error {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--danger, #f85149);
+}
+
+/* Drag handle of .ga-list rows inside a SortableList. */
+.ga-sortable-handle {
+  cursor: grab;
+  color: var(--text-muted, #6e7681);
+  flex: 0 0 auto;
+  user-select: none;
+  letter-spacing: -2px;
+}
+.ga-sortable-handle:active { cursor: grabbing; }

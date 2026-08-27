@@ -98,3 +98,17 @@ export interface PreviewResult {
   count: number
   sample: string[]
 }
+
+/**
+ * The step statuses, as English UI strings — the raw enum is not one. Both
+ * views translate through this map, so a step reads the same in the queue and
+ * in an entry's step log. It lives next to the types it labels rather than in
+ * a view, which is also what keeps either view hot-reloadable.
+ */
+export const STEP_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  done: 'Done',
+  failed: 'Failed',
+  skipped: 'Skipped',
+}

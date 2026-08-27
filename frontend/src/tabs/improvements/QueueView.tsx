@@ -13,6 +13,7 @@ import { useToast } from '../../lib/Toast'
 import { usePoll } from '../../player/usePolling'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { fetchQueue, fetchStatus, fetchTypes, saveSettings } from './api'
+import { STEP_STATUS_LABELS } from './types'
 import type { EngineStatus, ImprovementType, QueueSnapshot } from './types'
 
 const POLL_INTERVAL_MS = 5000
@@ -41,15 +42,6 @@ function colorOf(improvementId: string): string {
 function mmss(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
-}
-
-/** The step statuses, translated — the raw enum is not a UI string. */
-const STATUS_LABELS: Record<string, string> = {
-  pending: 'Pending',
-  running: 'Running',
-  done: 'Done',
-  failed: 'Failed',
-  skipped: 'Skipped',
 }
 
 function errorText(error: unknown): string {
@@ -98,7 +90,7 @@ export function QueueView() {
   }, [types])
 
   const statusLabel = useCallback((value: string) => (
-    STATUS_LABELS[value] ? t(STATUS_LABELS[value]) : value
+    STEP_STATUS_LABELS[value] ? t(STEP_STATUS_LABELS[value]) : value
   ), [t])
 
   const queue = useMemo(() => snapshot?.queue ?? [], [snapshot])
