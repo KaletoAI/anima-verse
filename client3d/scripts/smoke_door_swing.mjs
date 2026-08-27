@@ -38,6 +38,23 @@
  * A non-finite distance (no avatar in the scene) is not "near": `NaN <= 2.0`
  * and `Infinity <= 2.0` are both false, so the door shuts.
  *
+ * --- doorDistance(doorLevel, shownLevel, distM) ---------------------------
+ * DOORS STACK. A front door and the balcony door above it share their (x, z)
+ * to the millimetre, so a plain 2D distance opens both at once while the tile
+ * displays one storey. The gate is the tile's `levelFilter` — the same source
+ * its walls, slabs, room groups and threshold quads read:
+ *
+ *   (0, 0, 1.9) -> 1.9        same storey, the distance stands
+ *   (1, 0, 0.1) -> Infinity   the door overhead, however close in plan
+ *   (0, 1, 0.1) -> Infinity   ...and the one under one's feet
+ *   (-1,-1, 0.4) -> 0.4       a basement door seen from the basement
+ *
+ * Fed onward, `Infinity` is exactly "nobody is in front of it", so
+ *   doorTargetAngle(doorDistance(1, 0, 0.1), true, 1) = 0
+ * while the same door on the displayed storey stands open. `Infinity` rather
+ * than skipping the door: one left open on the floor one has just ridden away
+ * from must ease SHUT, not freeze.
+ *
  * --- easeAngle(current, target, dt, rate) ---------------------------------
  * One frame of the swing: at most `rate · dt` radians towards the target, and
  * never past it. At 60 fps and 3.0 rad/s one step is
@@ -91,9 +108,12 @@ async function loadModule() {
 let failed = 0;
 let passed = 0;
 function check(label, actual, expected, eps = 1e-12) {
-  const ok = typeof expected === 'number'
-    ? typeof actual === 'number' && Math.abs(actual - expected) <= eps
-    : actual === expected;
+  // Exact first, so `Infinity` (a legitimate answer here — "nobody is in
+  // front of this door") compares as itself: `Infinity − Infinity` is NaN and
+  // every tolerance test on it is false.
+  const ok = actual === expected
+    || (typeof expected === 'number' && typeof actual === 'number'
+        && Math.abs(actual - expected) <= eps);
   if (ok) {
     passed += 1;
     console.log(`  ok   ${label}`);
@@ -106,7 +126,7 @@ function check(label, actual, expected, eps = 1e-12) {
 
 async function main() {
   const m = await loadModule();
-  const { doorTargetAngle, easeAngle,
+  const { doorDistance, doorTargetAngle, easeAngle,
           DOOR_OPEN_RANGE, DOOR_OPEN_DEG, DOOR_SWING_RATE } = m;
 
   console.log('\n--- the constants (user decision 2026-08-27) ---');
@@ -137,6 +157,20 @@ async function main() {
     doorTargetAngle(Infinity, true, 1), 0);
   check('NaN is not "near" either -> shut',
     doorTargetAngle(NaN, true, 1), 0);
+
+  console.log('\n--- doorDistance: stacked doors are not the same door ---');
+  check('same storey -> the distance stands',
+    doorDistance(0, 0, 1.9), 1.9);
+  check('the door one storey UP is out of reach, however close in plan',
+    doorDistance(1, 0, 0.1), Infinity);
+  check('...and so is the one under one\'s feet',
+    doorDistance(0, 1, 0.1), Infinity);
+  check('a basement door, seen from the basement',
+    doorDistance(-1, -1, 0.4), 0.4);
+  check('RED: a stacked door 0.1 m away in plan stays SHUT',
+    doorTargetAngle(doorDistance(1, 0, 0.1), true, 1), 0);
+  check('...while the very same door on the displayed storey stands open',
+    doorTargetAngle(doorDistance(1, 1, 0.1), true, 1), OPEN);
 
   console.log('\n--- easeAngle: one frame at 60 fps, 3.0 rad/s = 0.05 rad ---');
   check('shut -> opening: 0 + 0.05',

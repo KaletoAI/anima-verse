@@ -615,8 +615,13 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
   if (!way || !Array.isArray(way.at_world)) return;
   list.push({
     group,
-    swing: door.swing,
+    // Only ±1 ever reaches the object: a garbled or missing field would end up
+    // as `rotation.y = NaN` and take the whole door out of the picture, and a
+    // door that opens the wrong way is a far smaller lie than one that
+    // vanishes. The payload's own value is `1 | -1`.
+    swing: door.swing === -1 ? -1 : 1,
     at: { x: way.at_world[0], z: way.at_world[1] },
+    level: Number(way.level) || 0,
     rooms: (way.rooms ?? []).filter((r): r is string => typeof r === 'string' && !!r),
     baseYaw: group.rotation.y,
     angle: 0,
@@ -872,14 +877,19 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   for (const wall of scene.walls) {
     const len = wallLength(wall);
     if (len < 1e-4) continue;
-    // A leaf whose hole a DOOR PROP fills is not drawn (v5): the prop in
-    // `models[]` IS the door there. The entry stays in the payload on purpose
-    // — the Blender exterior render builds its facade out of `walls` and would
-    // lose the door's prism with it — so it is the RENDERERS that skip it, and
-    // the admin preview skips it in the same one line.
-    if (wall.door_prop) continue;
     const { mat: wallMat, tileM } = wallMaterial(wall, style);
     const mesh = buildWall(THREE, wall, wallMat, tileM);
+    // A leaf whose hole a DOOR PROP fills is not drawn INSIDE (v5) — the prop
+    // in `models[]` IS the door there, and both of them in one hole is one
+    // door too many. It is still BUILT and still hung in, invisible, for two
+    // reasons: the FAR SHELL copies from `builtWalls` below, and from outside
+    // a place without a server model has to show its doors — which is exactly
+    // what the leaf was added for, while a model is deliberately not part of
+    // that shell; and a piece the § B5a verify measures has to hang in the
+    // graph, or it would be measured without the tile's own transform.
+    // The wall entry itself stays in the payload on purpose as well: the
+    // Blender exterior render builds its facade out of `walls`.
+    if (wall.door_prop) mesh.visible = false;
     parentFor(wall.room_id).add(mesh);
     builtWalls.push({ mesh, wall });
     // A PANE never joins the facade culling — glass since it existed, the
@@ -1335,6 +1345,12 @@ function buildFarShell(tile: Tile,
     copy.material = mat;
     copy.castShadow = true;
     copy.receiveShadow = false;
+    // THE SHELL SHOWS EVERYTHING IT TAKES. `Mesh.clone()` copies `visible`,
+    // and one source is deliberately invisible inside: the leaf of a door
+    // whose hole a prop fills (v5). The prop is not part of a shell, so
+    // without this line that place would read as an empty hole from outside —
+    // the very thing the leaf exists to prevent.
+    copy.visible = true;
     // PICKING STAYS WITH THE SOCLE PLATE. A click on a place selected the tile
     // before this shell existed and must select exactly the same tile now —
     // so the copy is invisible to the raycaster (the pattern of

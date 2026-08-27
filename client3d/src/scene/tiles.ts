@@ -357,12 +357,25 @@ export interface SwingingDoor {
    *  .at_world`) — "the avatar stands in front of it" is measured against
    *  this, not against the hinge the group hangs on. */
   at: { x: number; z: number };
+  /** Storey of the threshold (`doorways[opening].level`). Doors STACK — a
+   *  front door and the balcony door above it share their (x, z) — so the
+   *  proximity test is gated on the storey the tile displays
+   *  (`levelFilter`), exactly like its walls, slabs and threshold quads. */
+  level: number;
   /** The rooms the threshold joins, in payload order — the same list
    *  `applyDoorLocks` hands to `game/locks.doorwayLock`, so a locked door and
    *  a red threshold can never disagree. */
   rooms: string[];
-  /** `group.rotation.y` as `placeModelSpec` left it, read ONCE. The swing is
-   *  added to it every frame instead of accumulated onto the object. */
+  /** `group.rotation.y` as `placeModelSpec` left it, read ONCE and added to
+   *  every frame instead of accumulated onto the object.
+   *
+   *  Today it is ALWAYS 0, and that is not an accident to be tidied away:
+   *  `place()` returns its OUTER group, and the placement yaw sits on an inner
+   *  one, precisely so that the outer group's own axis runs through the hinge.
+   *  Turning that inner group here instead would move the axis off the hinge
+   *  and the door would swing about its middle. The field is read rather than
+   *  assumed so the swing survives a `place()` that one day seats the yaw
+   *  somewhere else. */
   baseYaw: number;
   /** Current opening angle in radians, signed like `swing`. */
   angle: number;

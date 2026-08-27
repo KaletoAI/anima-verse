@@ -42,6 +42,25 @@ export const DOOR_SWING_RATE = 3.0;
 const OPEN_RAD = (DOOR_OPEN_DEG * Math.PI) / 180;
 
 /**
+ * How far the avatar is from THIS door, as the swing rule counts it: the plain
+ * distance while the door is on the storey the tile SHOWS, and `Infinity` —
+ * "nobody is standing in front of it" — while it is not.
+ *
+ * The storey has to be part of the answer because doors STACK: a front door
+ * and the balcony door above it share their (x, z) to the millimetre, and a
+ * plain 2D distance would swing both of them open at once while the display
+ * shows one. `shownLevel` is the tile's `levelFilter`, the same source its
+ * walls, its slabs, its room groups and its threshold quads read.
+ *
+ * `Infinity` rather than "skip this door": a door left open on the floor one
+ * has just left has to ease SHUT, not freeze at the angle it stood at.
+ */
+export function doorDistance(doorLevel: number, shownLevel: number,
+                             distM: number): number {
+  return doorLevel === shownLevel ? distM : Infinity;
+}
+
+/**
  * The angle this door WANTS to stand at, in radians, signed by `swing`.
  *
  * `swing` is the payload's own sign for "a positive rotation about y opens

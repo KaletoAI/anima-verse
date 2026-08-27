@@ -20,7 +20,7 @@ import { nearestRoomAt, stairChain, stairsAt, type StairLink } from './game/stai
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
-import { doorTargetAngle, easeAngle, DOOR_SWING_RATE } from './game/doorSwing';
+import { doorDistance, doorTargetAngle, easeAngle, DOOR_SWING_RATE } from './game/doorSwing';
 import { getAudio } from './game/audio';
 import {
   emptyScatterCounts, newFpsMeter, pushFrame, scatterCosts, tierCounts,
@@ -1250,7 +1250,10 @@ async function startApp(username: string, role: string) {
    *  - the DISTANCE to the threshold, measured in the TILE's own frame. The
    *    avatar's world point is turned in once per tile (`worldToTile`) instead
    *    of every threshold being turned out — a rotation and a shift preserve
-   *    distances, and a turned tile must not make its doors open early;
+   *    distances, and a turned tile must not make its doors open early. It is
+   *    gated on the STOREY the tile shows (`doorDistance`, `levelFilter`):
+   *    doors stack, a front door and the balcony door above it share their
+   *    (x, z), and a plain 2D distance would swing both of them at once;
    *  - whether the door is ENTERABLE, from the SAME source the red threshold
    *    look uses (`game/locks.doorwayLock` against this avatar's lock map, the
    *    room it stands in left out of the judgement). A barred door stays shut:
@@ -1273,9 +1276,9 @@ async function startApp(username: string, role: string) {
       const locks = tile.loc.id === state.lockedLoc ? state.lockedRooms : NO_LOCKS;
       const here = avatarRoomId(tile) ?? '';
       for (const door of doors) {
-        const dist = local
+        const dist = doorDistance(door.level, tile.levelFilter, local
           ? Math.hypot(local.x - door.at.x, local.z - door.at.z)
-          : Infinity;
+          : Infinity);
         const enterable = doorwayLock(door.rooms, locks, here) === null;
         const target = doorTargetAngle(dist, enterable, door.swing);
         door.angle = easeAngle(door.angle, target, dt, DOOR_SWING_RATE);
