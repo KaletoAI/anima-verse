@@ -76,6 +76,9 @@ Stage 5 - admin surface (task 6), derived BY HAND from the route contract:
   file; `update_entry` re-saving `kneading` with exactly the synonyms it
   already owns -> success (its own key is excluded from the check), while
   `update_entry` adding the foreign "sitzen" to it -> 409 again.
+- the pose axis demands a place type (task 2): `create_entry` WITHOUT `group`
+  -> 400 "place type missing or unknown" and no key written, while the same
+  body with `group: "seat"` goes through and the entry stores that group.
 The real catalog FILES are never written: the approve checks run against a
 COPY in the throwaway dir, injected through `pose_catalog.catalog_path` (the
 one funnel both router and loader use) and restored afterwards.
@@ -117,6 +120,13 @@ from the catalog file:
 - validate_catalog("pose") is empty for the shipped file; a private copy with
   a pose in group "sofa" (unknown) and a group whose default is a pose of
   another group reports exactly those two problems.
+
+Stage 9 - groups route contract (task 2), derived BY HAND:
+- _groups_problems accepts the shipped block against the shipped entries
+  (empty list); dropping "seat" while entries still use it reports
+  "still used"; a default from another group reports "default".
+- _normalize_group({"label": " Seat ", "root_drop": "0.3", "default": "Sitting"})
+  == {"label": "Seat", "root_drop": 0.3, "default": "sitting"}.
 
 The stage-2/3/4/5/7 DB work runs against a throwaway storage dir, never the
 demo world (the server may hold it).
@@ -457,20 +467,33 @@ try:
             asyncio.run(create_entry(_Req({
                 "axis": "pose", "key": "perching",
                 "prompt": "perched on a stool", "animation": "idle",
-                "synonyms": ["sitzen"],
+                "group": "seat", "synonyms": ["sitzen"],
             }), _={}))
             raise AssertionError("create collision was accepted")
         except HTTPException as _e:
             assert _e.status_code == 409, _e.status_code
             assert _e.detail == "'sitzen' already belongs to 'sitting'", _e.detail
         assert "perching" not in _entries(), sorted(_entries())
+        # a pose without a place type is unplaceable — the create is refused
+        # before any collision check even runs (task 2).
+        try:
+            asyncio.run(create_entry(_Req({
+                "axis": "pose", "key": "perching",
+                "prompt": "perched on a stool", "animation": "idle",
+            }), _={}))
+            raise AssertionError("groupless pose was accepted")
+        except HTTPException as _e:
+            assert _e.status_code == 400, _e.status_code
+            assert _e.detail == "place type missing or unknown", _e.detail
+        assert "perching" not in _entries(), sorted(_entries())
         # a free key + free synonym still goes through (the check is not a wall)
         asyncio.run(create_entry(_Req({
             "axis": "pose", "key": "perching",
             "prompt": "perched on a stool", "animation": "idle",
-            "synonyms": ["Stool Sitting "],
+            "group": "seat", "synonyms": ["Stool Sitting "],
         }), _={}))
         assert _entries()["perching"]["synonyms"] == ["stool sitting"], _entries()["perching"]
+        assert _entries()["perching"]["group"] == "seat", _entries()["perching"]
 
         # 7. update (PUT): re-saving an entry with the synonyms it ALREADY owns
         #    must stay legal — its own key is excluded from the check.
@@ -617,5 +640,23 @@ try:
     if _FAILURES:
         raise AssertionError(f"stage 8: {len(_FAILURES)} failed check(s): {_FAILURES}")
     print("OK smoke_pose_catalog stage 8")
+
+    # ── Stage 9: the groups route contract (task 2) ──────────────────────
+    print("\nStage 9 - groups route")
+    from app.routes import poses as poses_route
+    _FAILURES = []
+    _entries = {k: dict(v) for k, v in pc.get_catalog("pose").items()}
+    _g = pc.get_groups()
+    check("shipped block sound", poses_route._groups_problems(_g, _entries) == [])
+    _g2 = {k: v for k, v in _g.items() if k != "seat"}
+    check("dropping a used group is refused", any("still used" in p for p in poses_route._groups_problems(_g2, _entries)))
+    _g3 = dict(_g); _g3["seat"] = dict(_g["seat"], default="standing")
+    check("foreign default refused", any("default" in p for p in poses_route._groups_problems(_g3, _entries)))
+    check("normalize group", poses_route._normalize_group({"label": " Seat ", "root_drop": "0.3", "default": "Sitting"})
+          == {"label": "Seat", "root_drop": 0.3, "default": "sitting"})
+
+    if _FAILURES:
+        raise AssertionError(f"stage 9: {len(_FAILURES)} failed check(s): {_FAILURES}")
+    print("OK smoke_pose_catalog stage 9")
 finally:
     shutil.rmtree(_tmp_storage, ignore_errors=True)

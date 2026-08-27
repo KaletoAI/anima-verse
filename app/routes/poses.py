@@ -9,6 +9,10 @@ recorded for free text it could not absorb, and clear the rendered expression
 images after a prompt edit (the image cache is keyed by the catalog KEY, so an
 edited prompt does not invalidate anything by itself).
 
+The pose axis carries a second, much smaller vocabulary in the same file: the
+PLACE TYPES (``groups``) a marker speaks, edited through ``GET``/``PUT
+/poses/groups``. Every pose names exactly one of them.
+
 Free text never creates an entry any more — the catalog grows only through the
 approval flow here. The animation vocabulary is NOT hardcoded either: it is
 whatever clips the world currently ships.
@@ -127,6 +131,34 @@ def _synonyms(raw: Any) -> List[str]:
     return [str(s).strip().lower() for s in raw if str(s).strip()]
 
 
+def _group(raw: Any) -> str:
+    """Validated place type — the finite vocabulary of the ``groups`` block.
+
+    A pose without a known place type is unplaceable: the marker speaks group
+    ids, so an unknown one would silently make the pose unreachable.
+    """
+    group = str(raw or "").strip().lower()
+    if group not in pose_catalog.get_groups():
+        raise HTTPException(status_code=400, detail="place type missing or unknown")
+    return group
+
+
+def _places(raw: Any) -> int:
+    """Marker slots a PAIR pose consumes — 1 or 2, nothing else."""
+    try:
+        return 2 if int(raw or 2) >= 2 else 1
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="places must be 1 or 2")
+
+
+def _yaw_offset(raw: Any) -> float:
+    """Degrees the pair clip's frame turns against the marker facing."""
+    try:
+        return float(raw or 0.0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="yaw_offset must be a number")
+
+
 def _alias_owner(axis: str, alias: str, exclude_key: str = "") -> str:
     """Entry key that already claims this alias ("" = free).
 
@@ -155,6 +187,80 @@ def _require_free_aliases(axis: str, aliases: List[str], exclude_key: str = "") 
                                 detail=f"'{alias}' already belongs to '{owner}'")
 
 
+# ── Place types: the vocabulary a marker speaks ──────────────────────────
+# Registered BEFORE the /{key} routes on purpose — FastAPI matches in
+# declaration order, so a later `/groups` would be swallowed by `PUT /{key}`.
+
+def _normalize_group(raw: Any) -> Dict[str, Any]:
+    """One place type as it is stored: a label, the root drop as a fraction of
+    the figure height (clamped to 0..1) and the pose a click on such a marker
+    sets."""
+    raw = raw if isinstance(raw, dict) else {}
+    try:
+        drop = round(max(0.0, min(1.0, float(raw.get("root_drop") or 0.0))), 3)
+    except (TypeError, ValueError):
+        drop = 0.0
+    return {"label": str(raw.get("label") or "").strip(),
+            "root_drop": drop,
+            "default": str(raw.get("default") or "").strip().lower()}
+
+
+def _groups_problems(groups: Dict[str, Any], entries: Dict[str, Any]) -> List[str]:
+    """Why a groups block may NOT be written: a group still named by a pose
+    is missing, or a default is not a pose of its own group."""
+    problems: List[str] = []
+    for key, entry in entries.items():
+        g = str(entry.get("group") or "")
+        if g and g not in groups:
+            problems.append(f"place type '{g}' is still used by '{key}'")
+    for g, spec in groups.items():
+        d = spec.get("default", "")
+        if d not in entries or str(entries[d].get("group") or "") != g:
+            problems.append(f"place type '{g}': default '{d}' is not a pose of this group")
+    return problems
+
+
+@router.get("/groups")
+def list_groups(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """All place types, keyed by group id."""
+    return {"groups": pose_catalog.get_groups()}
+
+
+@router.put("/groups")
+async def put_groups(request: Request,
+                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Replaces the whole place-type block."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_put_groups_sync, body)
+
+
+def _put_groups_sync(body: Any) -> Dict[str, Any]:
+    """The blocking body of ``put_groups`` — runs in the threadpool.
+
+    The block is replaced as a WHOLE, so it is checked as a whole: dropping a
+    type some pose still names, or pointing a default at a pose of another
+    group, would leave the catalog invalid the moment it is written.
+    """
+    raw = (body or {}).get("groups")
+    if not isinstance(raw, dict) or not raw:
+        raise HTTPException(status_code=400, detail="groups missing")
+    groups: Dict[str, Any] = {}
+    for key, spec in raw.items():
+        k = _key(key)
+        groups[k] = _normalize_group(spec)
+        if not groups[k]["label"]:
+            groups[k]["label"] = k
+    with _catalog_txn("pose"):
+        data = _read("pose")
+        problems = _groups_problems(groups, data.get("entries") or {})
+        if problems:
+            raise HTTPException(status_code=400, detail="; ".join(problems))
+        data["groups"] = groups
+        _write("pose", data)
+    return {"status": "success", "groups": pose_catalog.get_groups()}
+
+
 @router.get("")
 def list_entries(axis: str = Query("pose"),
                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -163,7 +269,7 @@ def list_entries(axis: str = Query("pose"),
     axis = _axis(axis)
     out: List[Dict[str, Any]] = []
     for key, entry in pose_catalog.get_catalog(axis).items():
-        out.append({
+        row = {
             "key": key,
             "prompt": entry.get("prompt", ""),
             "synonyms": entry.get("synonyms", []) or [],
@@ -171,7 +277,13 @@ def list_entries(axis: str = Query("pose"),
             "solo": bool(entry.get("solo", True)),
             "is_default": bool(entry.get("_default")),
             "axis": axis,
-        })
+        }
+        if axis == "pose":
+            # Place fields are POSE vocabulary — an expression has no place.
+            row["group"] = entry.get("group", "")
+            row["places"] = entry.get("places", 2)
+            row["yaw_offset"] = entry.get("yaw_offset", 0.0)
+        out.append(row)
     out.sort(key=lambda p: p["key"])
     from app.core.animation_clips import pair_kinds
     return {
@@ -180,6 +292,7 @@ def list_entries(axis: str = Query("pose"),
         # Kinds that exist as a PAIR clip (two halves, § A8a): such a pose is
         # a two-person one and has to carry solo: false.
         "pair_kinds": pair_kinds() if axis == "pose" else [],
+        "groups": pose_catalog.get_groups() if axis == "pose" else {},
         "problems": pose_catalog.validate_catalog(axis),
     }
 
@@ -203,6 +316,7 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     animation = str(body.get("animation") or "").strip().lower()
     if axis == "pose" and not animation:
         raise HTTPException(status_code=400, detail="animation missing")
+    group = _group(body.get("group")) if axis == "pose" else ""
     with _catalog_txn(axis):
         data = _read(axis)
         if key in data["entries"]:
@@ -214,6 +328,10 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
         if axis == "pose":
             entry["animation"] = animation
             entry["solo"] = bool(body.get("solo", True))
+            entry["group"] = group
+            if not entry["solo"]:
+                entry["places"] = _places(body.get("places"))
+                entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
         data["entries"][key] = entry
         _write(axis, data)
     return {"status": "success", "key": key, "axis": axis}
@@ -253,6 +371,17 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
             entry["animation"] = anim
         if "solo" in body and axis == "pose":
             entry["solo"] = bool(body["solo"])
+        if "group" in body and axis == "pose":
+            entry["group"] = _group(body["group"])
+        if "places" in body and axis == "pose":
+            entry["places"] = _places(body["places"])
+        if "yaw_offset" in body and axis == "pose":
+            entry["yaw_offset"] = _yaw_offset(body["yaw_offset"])
+        if axis == "pose" and entry.get("solo", True):
+            # A solo pose occupies exactly one place and never turns — leaving
+            # the pair fields behind would be a stray the catalog reports.
+            entry.pop("places", None)
+            entry.pop("yaw_offset", None)
         data["entries"][key] = entry
         _write(axis, data)
     return {"status": "success", "key": key, "axis": axis}
