@@ -301,10 +301,13 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
            ``g(x) = (x - 1000) * 0.1`` the datum is the ground under the pin,
            ``g(1000) = 0``, and a storey-0 placement stands on the ground under
            ITS OWN anchor: the block's lift is ``g(1010) - 0 = 1.0``, so it
-           reads 0 + 1.0 + 0.8 = 1.80. The same spec on storey 1 gets no lift
-           by statement — its lattice says 0.80, the terrain under it says
-           1.00, and the ``max`` gives 1.00 (Entscheid 5: the terrain stays the
-           lower bound).
+           reads 0 + 1.0 + 0.8 = 1.80. Put the same spec on storey 1 and it is
+           FILTERED OUT OF THE GROUND LADDER entirely (``tileWalkY`` takes
+           ``level === 0`` only) — what is left at that point is the terrain,
+           1.00 (Entscheid 5: the terrain stays the lower bound).
+           And the filter is what does it, not the arithmetic: back on flat
+           ground a storey-1 lattice standing at ``bottom_y`` 3.0 would answer
+           3.80 and out-rank every terrain there is — the gate still says 0.00.
         d) CLIMBING THE CRATE: park at (999.3, 1000) — 0.7 m west of the pin,
            outside the lattice, so 0.00 — and report (1000, 1000):
            dh = 0.30 <= 0.4 -> accepted.
@@ -314,8 +317,10 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
         f) AND DOWN AGAIN: from the crate (1000, 1000) to (999.3, 1000) is
            dh = -0.30 -> accepted; the gate is symmetric.
         g) A BROKEN LATTICE IS NOT A WALL (ruling task 2): with the lookup
-           raising, the gate logs and answers on the world ground instead of
-           refusing the report — or, worse, 500-ing it.
+           raising, the gate logs ONCE per location and answers on the world
+           ground instead of refusing the report — or, worse, 500-ing it. The
+           flag that silences the second traceback is dropped by
+           ``forget_surfaces`` together with the cached lattices.
 
 NOTE ON THE PARKING HELPER. ``park()`` writes the avatar's point directly
 (``set_character_pos``) and forgets the report clock — it is WORLD SETUP, not
@@ -1037,12 +1042,25 @@ def main() -> int:
                   round(model_surface.stand_height_at(yard, 1010.0, 1000.0), 3),
                   1.8)
             yard_specs[1]["level"] = 1
-            check("...a storey-1 one gets no lift, and the terrain is the floor",
+            check("...a storey-1 one drops out of the ground ladder, and the "
+                  "terrain is the floor",
                   round(model_surface.stand_height_at(yard, 1010.0, 1000.0), 3),
                   1.0)
         finally:
             yard_specs[1]["level"] = 0
             relief.ground_at = real_ground
+        # …and the FILTER is what does that, not the arithmetic: on flat ground
+        # a storey-1 lattice at bottom_y 3.0 would answer 3.80 and out-rank
+        # every terrain there is. The ground ladder never sees it.
+        upstairs = walkable_prop("balcony", (5.0, 0.0), 80, 0.8, level=1)
+        upstairs["bottom_y"] = 3.0
+        yard_specs.append(upstairs)
+        try:
+            check("a storey-1 lattice does not raise the ground ladder",
+                  round(model_surface.stand_height_at(yard, 1005.0, 1000.0), 3),
+                  0.0)
+        finally:
+            yard_specs.pop()
 
         # (d) CLIMBING THE CRATE — and the report that enters the yard.
         park(999.3, 1000.0)
@@ -1083,8 +1101,13 @@ def main() -> int:
               status, "ok")
         check_true("...and it was logged, once per location",
                    model_surface._read_warned == {YARD: True})
-        model_surface.logger.setLevel(logging.NOTSET)
+        # …and the flag goes when the cache does, or a repaired sidecar would
+        # never be worth a traceback again.
+        model_surface.forget_surfaces(YARD)
+        check_true("forget_surfaces clears the failure flag too",
+                   model_surface._read_warned == {})
     finally:
+        model_surface.logger.setLevel(logging.NOTSET)
         model_surface._placed_specs = real_placed
         model_surface.forget_surfaces()
 

@@ -1119,11 +1119,14 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                                      get_max_step_height_m, slope_blocks)
         # ``stand_height_at`` asks the WORLD's ground ("Ein Boden" E5a): the
         # baked heightfield already carries every plateau, every carve and every
-        # authored hill, so there is no per-location field left to resolve and
-        # no containment search on the walk-report path — lifted by the baked
-        # surfaces of the location (v6, spec-surface-height § 7), which is the
-        # same ``max`` the client walks on. The location of the PREVIOUS point
-        # is resolved once here and reused by ``_at_an_opening`` below.
+        # authored hill, so there is no per-location height field left to
+        # resolve — lifted by the baked surfaces of the location (v6,
+        # spec-surface-height § 7), which is the same ``max`` the client walks
+        # on. Those lattices belong to a PLACE, so each of the two points needs
+        # the location it lies in: ``derived`` is the reported point's, already
+        # read above, and ``was_loc`` is the previous point's — one containment
+        # search over the snapshot this report holds, and ``_at_an_opening``
+        # below reuses it instead of running it a second time.
         was_loc = location_at_point(here["x"], here["z"], _locs)
         dh = stand_height_at(derived, x, z) \
             - stand_height_at(was_loc, here["x"], here["z"])

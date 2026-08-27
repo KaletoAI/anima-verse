@@ -259,6 +259,13 @@ def highest_surface_at(specs: Iterable[Dict[str, Any]], x: float, z: float,
 # location are composed at most once per TTL — a window short enough that a
 # freshly baked surface reaches the gate before any client has re-fetched the
 # scene, and long enough that a walking party costs one compose, not fifty.
+#
+# A BARE DICT ON THE SHARED THREADPOOL, and that is safe without a lock: the
+# reports run in worker threads, but a dict get/set is atomic under the GIL and
+# the cached list is only ever REPLACED, never mutated in place — a reader
+# holds a list nobody writes into. The worst a race can do is let two walkers
+# compose the same location once each, which is one wasted compose and never a
+# wrong height.
 _SURFACE_TTL_S = 5.0
 _placed_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
 #: Location ids whose lattice lookup already failed once — the gate must not
@@ -267,11 +274,18 @@ _read_warned: Dict[str, bool] = {}
 
 
 def forget_surfaces(location_id: str = "") -> None:
-    """Drop the cached lattices of ONE location, or of all of them."""
+    """Drop the cached lattices of ONE location, or of all of them.
+
+    The failure flag goes with them: a re-bake, a fixed sidecar or a repaired
+    scene deserves a fresh traceback if it is still broken, and a flag that is
+    never cleared silences the gate for the rest of the process.
+    """
     if location_id:
         _placed_cache.pop(location_id, None)
+        _read_warned.pop(location_id, None)
     else:
         _placed_cache.clear()
+        _read_warned.clear()
 
 
 def _placed_specs(location: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -281,46 +295,59 @@ def _placed_specs(location: Dict[str, Any]) -> List[Dict[str, Any]]:
     The same composition ``GET /play/locations/{id}/scene`` serves, down to
     its 404 gate: a location with no room layout, no building outline and no
     building model composes nothing, and that empty answer is cached too.
+
+    EVERYTHING that reads is inside the guard, ``scene_inputs`` included: it
+    goes to disk for the model metas, and a failure there that escaped the
+    cache would send every single report down the same failing disk reads,
+    four times a second per walker.
     """
     loc_id = str(location.get("id") or "")
     now = time.monotonic()
     hit = _placed_cache.get(loc_id)
     if hit and hit[0] > now:
         return hit[1]
-    from app.core.scene_recipe import compose_scene, scene_inputs
-    from app.core.surface_textures import library_kinds
     specs: List[Dict[str, Any]] = []
-    map3d = location.get("map3d") or {}
-    has_layout = any(isinstance(r, dict) and r.get("layout")
-                     for r in location.get("rooms") or [])
-    plan_width_m, building_meta, room_metas = scene_inputs(location, loc_id)
-    if has_layout or len(map3d.get("outline") or []) >= 3 or building_meta:
-        try:
+    try:
+        from app.core.scene_recipe import compose_scene, scene_inputs
+        from app.core.surface_textures import library_kinds
+        map3d = location.get("map3d") or {}
+        has_layout = any(isinstance(r, dict) and r.get("layout")
+                         for r in location.get("rooms") or [])
+        plan_width_m, building_meta, room_metas = scene_inputs(location, loc_id)
+        if has_layout or len(map3d.get("outline") or []) >= 3 or building_meta:
             scene = compose_scene(location, plan_width_m=plan_width_m,
                                   building_meta=building_meta,
                                   room_metas=room_metas,
                                   surface_kinds=library_kinds())
             specs = [m for m in scene.get("models") or [] if m.get("surface")]
-        except Exception:      # a broken scene must not block walking
-            logger.exception("surfaces: compose failed for %s", loc_id)
+    except Exception:          # a broken scene must not block walking
+        specs = []
+        logger.exception("surfaces: compose failed for %s", loc_id)
     _placed_cache[loc_id] = (now + _SURFACE_TTL_S, specs)
     return specs
 
 
-def _datum_y(location: Dict[str, Any]) -> float:
+def _datum_y(location: Dict[str, Any]) -> Optional[float]:
     """The ground under the location's PIN, which is the zero every scene
     number is measured from — ``tile.center.y`` in the client
-    (``footprintCentre`` asks the height field at ``pos_x``/``pos_z``)."""
+    (``footprintCentre`` asks the height field at ``pos_x``/``pos_z``).
+
+    ``None`` when there is no usable pin or the field answers nothing finite
+    there. NOT 0.0: the client's ``storeyGroundLift`` gives a placement no lift
+    at all without a finite datum (``packages/scene-render/src/storeyGround.ts``),
+    and reading the missing datum as sea level would lift every lattice by the
+    absolute height of its own anchor instead.
+    """
     from app.core.relief import ground_at
     try:
         px = float(location.get("pos_x"))
         pz = float(location.get("pos_z"))
     except (TypeError, ValueError):
-        return 0.0
+        return None
     if not (math.isfinite(px) and math.isfinite(pz)):
-        return 0.0
+        return None
     g = ground_at(px, pz)
-    return g if math.isfinite(g) else 0.0
+    return g if math.isfinite(g) else None
 
 
 def stand_height_at(location: Optional[Dict[str, Any]],
@@ -337,10 +364,11 @@ def stand_height_at(location: Optional[Dict[str, Any]],
     floor must not be what it is measured against. A figure on an upper floor
     got there through a room, not through this route.
 
-    A location that composes no scene, and a lattice that does not answer at
-    the point, both leave the bare ground — as does anything that goes wrong
-    while reading: the walk gate is a plausibility check on a step, and a
-    malformed sidecar must never be the reason a player cannot walk.
+    A location that composes no scene, a location without a usable datum and
+    a lattice that does not answer at the point all leave the bare ground — as
+    does anything that goes wrong while reading: the walk gate is a
+    plausibility check on a step, and a malformed sidecar must never be the
+    reason a player cannot walk.
     """
     from app.core.relief import ground_at
     ground = ground_at(x, z)
@@ -356,6 +384,8 @@ def stand_height_at(location: Optional[Dict[str, Any]],
         cz = float(location.get("pos_z") or 0.0)
         yaw = float(location.get("yaw_deg") or 0.0)
         datum = _datum_y(location)
+        if datum is None:
+            return ground
         lx, lz = world_to_local(x, z, cx, cz, yaw)
 
         def lift_of(spec: Dict[str, Any]) -> float:
