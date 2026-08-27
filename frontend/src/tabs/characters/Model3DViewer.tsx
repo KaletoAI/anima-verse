@@ -8,16 +8,37 @@
  * Format follows the file: the gateway decides what it produces (Trellis2 ->
  * FBX), so the loader is picked by extension.
  */
-import { useEffect, useRef, useState } from 'react'
-import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D } from 'three'
-import { FIGURE_HEIGHT_M, anchorFigureBind, figureRootY } from '@anima/scene-render'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
+  Vector3 } from 'three'
+import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
+  disposeSlotMaterials, figureRootY } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
 import { buildMeasureAids, disposeAids, referenceFigure,
   type MeasureKey } from '../world/measureKit'
+import { alignMeshLayout, groupPrimitives, pointInPolygon,
+  polygonArea } from '../props/faceSelect'
+import { areaKindOf } from '../props/propTypes'
+import type { AreaOutline, MeshLayoutEntry,
+  PropSlotValues } from '../props/propTypes'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
+
+/** Ceiling on ONE hand-drawn selection ring. A selection polygon is a gesture,
+ *  not a stored shape (the map's `MAX_POINTS` budgets a saved outline), and a
+ *  panel is ringed in a handful of clicks — 64 is generous and keeps the
+ *  per-triangle test cheap. */
+const MAX_POLYGON_POINTS = 64
+
+/** How far apart the two presses of a DOUBLE-click may land, in pixels. The
+ *  SVG has no double-click of its own: both presses arrive as ordinary clicks
+ *  and each drops a point, so by the time `dblclick` fires the ring carries
+ *  one point too many. A trailing point this close to its predecessor IS the
+ *  second press and goes again (the map's rule, `MapTab.DBLCLICK_MERGE_PX`). */
+const DBLCLICK_MERGE_PX = 8
 
 // ── Shared marker-figure sources (module cache — one fetch per session,
 // every viewer instance clones from these) ──
@@ -129,7 +150,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   offsetY = 0, offsetX = 0, offsetZ = 0,
   groundTextureUrl, placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
-  picking = false, onPickPoint }:
+  picking = false, onPickPoint,
+  frontal = false, areaOutlines, slots, meshLayout, drawing = false,
+  onPolygonFaces }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
@@ -192,7 +215,36 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     /** Armed pick mode: a plain click on the mesh reports the hit as RAW-box
      *  fractions — the floor-plan-style marker placement. */
     picking?: boolean
-    onPickPoint?: (at: [number, number, number]) => void }) {
+    onPickPoint?: (at: [number, number, number]) => void
+    /** THE FRONT VIEW (spec-picture-props.md § 4): the model straight on,
+     *  centred, filling the frame — the authoring view of a flat panel, and
+     *  the one the polygon tool is drawn on. It is the framing model mode
+     *  already opens with; this only makes it a stated MODE, so the viewer
+     *  offers "Front view" to get back to it after an orbit. Model mode only.
+     */
+    frontal?: boolean
+    /** Outlines of the prop's key surfaces, in glTF y-up MODEL space (the
+     *  server computed them at the split — the client draws, never measures).
+     *  One `LineSegments` per area, coloured by KIND out of `AREA_KINDS`, hung
+     *  under the loaded model so it rides the orientation fix along. Model
+     *  mode only; refreshed live. */
+    areaOutlines?: AreaOutline[]
+    /** THE ASSEMBLY PREVIEW: what the picture areas show, keyed by area id —
+     *  the SAME `applySlotMaterials` both renderers use, so the poster hangs
+     *  in this preview the way it hangs in the scene. Cleared (or changed) the
+     *  materials go back to the mesh's own. Model mode only. */
+    slots?: PropSlotValues
+    /** The R1 face order the server split against (`GET …/areas`). The polygon
+     *  tool refuses to send indices unless the LOADED meshes match it. */
+    meshLayout?: MeshLayoutEntry[]
+    /** Armed polygon tool: an SVG over the canvas takes the gesture (click =
+     *  point, double-click = close, Escape = cancel). Model mode only. */
+    drawing?: boolean
+    /** The closed polygon's triangles as FLAT indices in R1 order — every
+     *  front-facing, unoccluded triangle whose centre projects inside the
+     *  ring. An empty array means "nothing was hit", which the panel says out
+     *  loud instead of posting. */
+    onPolygonFaces?: (faces: number[]) => void }) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -240,6 +292,97 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   /** Re-frames the model-mode camera (model + scale kit). */
   const refitFnRef = useRef<(() => void) | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // ── Picture areas: outlines, the assembly preview, the polygon tool ──
+  const areaOutlinesRef = useRef(areaOutlines)
+  areaOutlinesRef.current = areaOutlines
+  const areaFnRef = useRef<(() => void) | null>(null)
+  const slotsRef = useRef(slots)
+  slotsRef.current = slots
+  const slotFnRef = useRef<(() => void) | null>(null)
+  const onPolygonFacesRef = useRef(onPolygonFaces)
+  onPolygonFacesRef.current = onPolygonFaces
+  /** The pick itself — set by the loader, because it needs the live camera.
+   *  Takes the ring in CANVAS PIXELS plus the canvas size and answers the flat
+   *  R1 triangle indices. */
+  const selectFacesRef = useRef<((poly: Array<[number, number]>,
+    w: number, h: number) => number[]) | null>(null)
+  /** What the LOADED model's R1 layout is — measured once per load, compared
+   *  against the server's `meshLayout` before the tool is armed. */
+  const [loadedLayout, setLoadedLayout] = useState<MeshLayoutEntry[] | null>(null)
+  /** The ring being drawn, in canvas pixels ([] = nothing started). */
+  const [poly, setPoly] = useState<Array<[number, number]>>([])
+  /** The same ring, read by the double-click handler: `dblclick` arrives as
+   *  its own event after both clicks, and reading it off state would race the
+   *  render they queued. */
+  const polyRef = useRef<Array<[number, number]>>([])
+  polyRef.current = poly
+  /** Where the cursor is while a ring is open — the rubber band. */
+  const [polyCursor, setPolyCursor] = useState<[number, number] | null>(null)
+
+  /** Model and area list still describe the same mesh? Only then may indices
+   *  be sent (R1) — a mismatched index marks a random strip of the mesh. */
+  const layoutOk = useMemo(() => alignMeshLayout(loadedLayout, meshLayout),
+    [loadedLayout, meshLayout])
+
+  // Live outline / preview refresh — a detected area or a picked picture must
+  // show up without re-downloading the model.
+  useEffect(() => { areaFnRef.current?.() }, [areaOutlines])
+  useEffect(() => { slotFnRef.current?.() }, [slots])
+  // Disarming the tool drops whatever was half-drawn: a ring that survived
+  // into the next arming would send points from the previous camera.
+  useEffect(() => {
+    if (!drawing) { setPoly([]); setPolyCursor(null) }
+  }, [drawing])
+  // Escape cancels the running ring (the map's gesture — see PolygonHandles).
+  useEffect(() => {
+    if (!drawing) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setPoly([])
+      setPolyCursor(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [drawing])
+  // Switching the front view on re-frames straight away — it is a MODE, not a
+  // one-off framing at load.
+  useEffect(() => { if (frontal) refitFnRef.current?.() }, [frontal])
+
+  /** Where a pointer event landed inside the overlay, in canvas pixels. */
+  const atOverlay = (e: { clientX: number; clientY: number
+    currentTarget: { getBoundingClientRect: () => DOMRect } }): [number, number] => {
+    const r = e.currentTarget.getBoundingClientRect()
+    return [e.clientX - r.left, e.clientY - r.top]
+  }
+
+  /** Click = one point of the ring. */
+  const addPolyPoint = (e: ReactMouseEvent<SVGSVGElement>) => {
+    const at = atOverlay(e)
+    setPoly((cur) => (cur.length >= MAX_POLYGON_POINTS ? cur : [...cur, at]))
+  }
+
+  /**
+   * Double-click closes the ring and hands over the triangles.
+   *
+   * Both presses already dropped a point (see `DBLCLICK_MERGE_PX`), so the
+   * trailing one goes again when it sits on its predecessor. Below three
+   * points — or with no enclosed area at all — nothing is reported: an empty
+   * selection is a refusal, and a scribble is not a polygon.
+   */
+  const closePoly = (e: ReactMouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    const ring = [...polyRef.current]
+    if (ring.length > 3) {
+      const [ax, ay] = ring[ring.length - 2]
+      const [bx, by] = ring[ring.length - 1]
+      if (Math.hypot(ax - bx, ay - by) <= DBLCLICK_MERGE_PX) ring.pop()
+    }
+    setPoly([])
+    setPolyCursor(null)
+    if (ring.length < 3 || polygonArea(ring) <= 0) return
+    const faces = selectFacesRef.current?.(ring, r.width, r.height) || []
+    onPolygonFacesRef.current?.(faces)
+  }
 
   // Live overlay refresh (markers moved/added, dims typed, a sink dialled)
   // without reload — a typed number must show up while it is being typed.
@@ -282,6 +425,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     setLoading(true)
     setError('')
     setMeshStats(null)
+    // A new model is a new face order — the polygon tool stays disabled until
+    // the fresh one has been measured and matched against the server's.
+    setLoadedLayout(null)
 
     ;(async () => {
       try {
@@ -364,20 +510,41 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         // unparented, its coordinates equal the later PIVOT-local space.
         const rawBox = new THREE.Box3().setFromObject(object)
         const rawSize = rawBox.getSize(new THREE.Vector3())
+        // Every mesh of the model in LOAD order, then folded into the R1
+        // order the server counts in (`groupPrimitives`: primitives of one
+        // glTF mesh back together, groups by name). The counts below, the
+        // layout comparison and the polygon tool's flat index all read this
+        // one list, so the order is stated exactly once.
+        const loaded: Mesh[] = []
+        object.traverse((o: Object3D) => {
+          const mesh = o as Mesh
+          if (mesh.isMesh) loaded.push(mesh)
+        })
+        const groups = groupPrimitives(loaded)
+        // The meshes in R1 sequence — groups by name, primitives within a
+        // group in their own order.
+        const ordered: Mesh[] = groups.flatMap((g) => g.members.map((i) => loaded[i]))
+        const triCountOf = (mesh: Mesh): number => {
+          const geo = mesh.geometry as { index?: { count: number } | null
+            attributes?: { position?: { count: number } } }
+          const pos = geo.attributes?.position?.count || 0
+          return Math.floor((geo.index ? geo.index.count : pos) / 3)
+        }
         {
           // Face/vertex count over all meshes (indexed: index/3, else pos/3).
           let tris = 0
           let verts = 0
-          object.traverse((o: Object3D) => {
-            const mesh = o as Mesh
-            if (!mesh.isMesh) return
-            const geo = mesh.geometry as { index?: { count: number } | null
+          for (const mesh of ordered) {
+            const geo = mesh.geometry as {
               attributes?: { position?: { count: number } } }
-            const pos = geo.attributes?.position?.count || 0
-            verts += pos
-            tris += Math.floor((geo.index ? geo.index.count : pos) / 3)
-          })
+            verts += geo.attributes?.position?.count || 0
+            tris += triCountOf(mesh)
+          }
           setMeshStats({ tris, verts })
+          setLoadedLayout(groups.map((g) => ({
+            name: g.name,
+            tri_count: g.members.reduce((n, i) => n + triCountOf(loaded[i]), 0),
+          })))
         }
         if (onBoundsRef.current) {
           onBoundsRef.current({
@@ -760,6 +927,144 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               })
             }
           }
+          // ── Picture areas: the outlines of the key surfaces ──
+          // The edges come from the server in glTF y-up MODEL space (the
+          // coordinates GLTFLoader hands over), so the group hangs under the
+          // loaded object itself: pivot centring and the orientation fix then
+          // carry the outline along with the surface it belongs to, and this
+          // viewer measures nothing (§ B5a).
+          const areaGroup = new THREE.Group()
+          object.add(areaGroup)
+          const rebuildAreas = () => {
+            clearGroup(areaGroup)
+            for (const area of areaOutlinesRef.current || []) {
+              const pts: Vector3[] = []
+              for (const [a, b] of area.edges || []) {
+                pts.push(new THREE.Vector3(a[0], a[1], a[2]),
+                         new THREE.Vector3(b[0], b[1], b[2]))
+              }
+              if (!pts.length) continue
+              // Colour by KIND, out of the one constant (R8) — a kind this
+              // client does not know yet draws in neutral grey rather than
+              // not at all.
+              const hex = areaKindOf(area.kind)?.color || '#8b949e'
+              const line = new THREE.LineSegments(
+                new THREE.BufferGeometry().setFromPoints(pts),
+                new THREE.LineBasicMaterial({ color: new THREE.Color(hex),
+                  depthTest: false }))
+              line.renderOrder = 4
+              areaGroup.add(line)
+            }
+          }
+          areaFnRef.current = rebuildAreas
+          rebuildAreas()
+          disposers.push(() => {
+            if (areaFnRef.current === rebuildAreas) areaFnRef.current = null
+            clearGroup(areaGroup)
+          })
+
+          // ── The assembly preview: pictures INTO the slot materials ──
+          // The same routine both renderers call (@anima/scene-render), so
+          // this preview cannot disagree with the scene about how a poster
+          // looks. It REPLACES `mesh.material` with a clone, so the mesh's own
+          // materials are remembered here and put back before every re-apply —
+          // otherwise switching the preview off would leave the last picture
+          // hanging with no way back short of a reload.
+          const ownMaterials = new Map<Mesh, Material | Material[]>()
+          for (const mesh of ordered) ownMaterials.set(mesh, mesh.material)
+          let slotClones: Material[] = []
+          const applySlots = () => {
+            disposeSlotMaterials(slotClones)
+            slotClones = []
+            for (const [mesh, mat] of ownMaterials) mesh.material = mat
+            const values = slotsRef.current
+            if (!values || !Object.keys(values).length) return
+            slotClones = applySlotMaterials(THREE, object, values,
+              (src, onError) => new THREE.TextureLoader()
+                .load(src, undefined, undefined, onError))
+          }
+          slotFnRef.current = applySlots
+          applySlots()
+          disposers.push(() => {
+            if (slotFnRef.current === applySlots) slotFnRef.current = null
+            // Put the mesh back BEFORE the general teardown traverses the
+            // scene: it disposes whatever material is attached, and a clone
+            // left in place would let the model's own one leak instead.
+            // Disposers run LIFO, so this one runs first.
+            disposeSlotMaterials(slotClones)
+            slotClones = []
+            for (const [mesh, mat] of ownMaterials) mesh.material = mat
+          })
+
+          // ── The polygon pick (D5 / R1) ──
+          // SIGHT logic, nothing else: which triangles did the admin ring in?
+          // Three tests per triangle, all in this camera's frame — the centre
+          // projects inside the ring, the face turns towards the camera, and
+          // the ray from the camera through that centre reaches it first
+          // (unoccluded). The flat index is the R1 one: meshes by name,
+          // triangles in buffer order, counted straight through.
+          const selectFaces = (ring: Array<[number, number]>,
+                               vw: number, vh: number): number[] => {
+            const out: number[] = []
+            if (ring.length < 3 || vw <= 0 || vh <= 0) return out
+            place.updateMatrixWorld(true)
+            const camPos = camera.getWorldPosition(new THREE.Vector3())
+            const ray = new THREE.Raycaster()
+            const a = new THREE.Vector3()
+            const b = new THREE.Vector3()
+            const c = new THREE.Vector3()
+            const centre = new THREE.Vector3()
+            const ab = new THREE.Vector3()
+            const ac = new THREE.Vector3()
+            const normal = new THREE.Vector3()
+            const toCam = new THREE.Vector3()
+            let base = 0
+            for (const mesh of ordered) {
+              const geo = mesh.geometry
+              const pos = geo.attributes.position
+              const index = geo.index
+              const tris = triCountOf(mesh)
+              for (let i = 0; i < tris; i++) {
+                const i0 = index ? index.getX(3 * i) : 3 * i
+                const i1 = index ? index.getX(3 * i + 1) : 3 * i + 1
+                const i2 = index ? index.getX(3 * i + 2) : 3 * i + 2
+                a.fromBufferAttribute(pos, i0)
+                b.fromBufferAttribute(pos, i1)
+                c.fromBufferAttribute(pos, i2)
+                mesh.localToWorld(a)
+                mesh.localToWorld(b)
+                mesh.localToWorld(c)
+                centre.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+                // Facing the camera: the winding normal against the line of
+                // sight. A back face of the same panel would double every
+                // index and drag the far wall of a box into the selection.
+                normal.copy(ab.subVectors(b, a)).cross(ac.subVectors(c, a))
+                if (normal.dot(toCam.subVectors(camPos, centre)) <= 0) continue
+                const p = centre.clone().project(camera)
+                const sx = ((p.x + 1) / 2) * vw
+                const sy = ((1 - p.y) / 2) * vh
+                if (!pointInPolygon(sx, sy, ring)) continue
+                // Unoccluded: the first thing the ray meets has to BE this
+                // triangle. `faceIndex` is three's triangle number in buffer
+                // order — the very number R1 counts.
+                ray.set(camPos, toCam.subVectors(centre, camPos).normalize())
+                // Against the MESHES only, never the whole subtree: the area
+                // outlines hang under the model as `LineSegments`, and a line
+                // is raycast with a fat threshold in model units — it would
+                // "occlude" every triangle behind it.
+                const hit = ray.intersectObjects(ordered, false)[0]
+                if (!hit || hit.object !== mesh || hit.faceIndex !== i) continue
+                out.push(base + i)
+              }
+              base += tris
+            }
+            return out
+          }
+          selectFacesRef.current = selectFaces
+          disposers.push(() => {
+            if (selectFacesRef.current === selectFaces) selectFacesRef.current = null
+          })
+
           const textSprite = (text: string, color: string, h: number) => {
             const c = document.createElement('canvas')
             const ctx = c.getContext('2d')!
@@ -1086,6 +1391,56 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         >
           {meshStats.tris.toLocaleString()} △ · {meshStats.verts.toLocaleString()} ●
         </span>
+      ) : null}
+      {/* THE POLYGON TOOL — an SVG over the canvas, the map's gestures
+          (PolygonHandles): click drops a point, double-click closes, Escape
+          cancels. It only ever REPORTS; the panel posts, the server splits. */}
+      {drawing && !loading && !error ? (
+        layoutOk ? (
+          <svg
+            width="100%" height={height}
+            style={{ position: 'absolute', inset: 0, cursor: 'crosshair' }}
+            onClick={addPolyPoint}
+            onDoubleClick={closePoly}
+            onMouseMove={(e) => {
+              if (poly.length) setPolyCursor(atOverlay(e))
+            }}
+          >
+            {poly.length ? (
+              <polyline
+                points={[...poly, ...(polyCursor ? [polyCursor] : [])]
+                  .map(([x, y]) => `${x},${y}`).join(' ')}
+                fill="rgba(88,166,255,0.14)" stroke="#58a6ff" strokeWidth={1.5}
+              />
+            ) : null}
+            {poly.map(([x, y], i) => (
+              <circle key={i} cx={x} cy={y} r={3} fill="#58a6ff" />
+            ))}
+          </svg>
+        ) : (
+          <div
+            style={{
+              position: 'absolute', inset: 0, display: 'flex',
+              alignItems: 'center', justifyContent: 'center', padding: 12,
+              textAlign: 'center', fontSize: '0.85em',
+              background: 'rgba(13,17,23,0.72)', color: '#e6edf3',
+            }}
+          >
+            {t('Model and area layout differ — run “Detect areas” first.')}
+          </div>
+        )
+      ) : null}
+      {/* Back to the authoring view after an orbit — the polygon is drawn on
+          whatever the camera shows, but a flat panel is judged head-on. */}
+      {frontal && !loading && !error ? (
+        <button
+          type="button" className="ga-btn ga-btn-sm"
+          style={{ position: 'absolute', right: 6, top: 6, opacity: 0.85 }}
+          onClick={() => refitFnRef.current?.()}
+          title={t('Look at the model straight on again — the view the areas were drawn in.')}
+        >
+          {t('Front view')}
+        </button>
       ) : null}
       {loading || error ? (
         <div

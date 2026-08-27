@@ -125,6 +125,18 @@ export interface PropFull {
   variants_missing_image?: number
   /** Configured ceiling on ACTIVE variants (image_generation.prop_variant_max). */
   variant_max?: number
+  /** Which key colours this prop's render was asked for (`["picture"]`) —
+   *  set in the create form, patchable here, and what makes a landing mesh
+   *  split itself automatically (spec-picture-props.md § 2/3). */
+  key_areas?: string[]
+  /** The key surfaces the mesh actually carries. The Areas tab reads the
+   *  richer `GET …/areas` (outlines, mesh layout, Blender state); this is the
+   *  same list on the record, so a reader that only needs "has it any?" costs
+   *  no second request. */
+  areas?: PropArea[]
+  /** Prop-wide slot values that apply WITHOUT a variant — a door's pane is
+   *  glass on every placement of it, and a door prop has no variants. */
+  area_defaults?: PropSlotValues
 }
 
 /**
@@ -199,6 +211,17 @@ export interface PropVariant {
   /** Its object-local animation markers — fractions of THIS mesh's bounding
    *  box, which is why they cannot be shared with another version. */
   markers: PropMarker[]
+  /** WHAT this variant shows in the prop's picture areas, keyed by area id
+   *  (spec-picture-props.md § 1, D2). Empty/absent = an ordinary model
+   *  variant; a filled map makes it a PICTURE variant, whose mesh is a COPY
+   *  of the primary frame. */
+  slot_values?: PropSlotValues
+  /** The name the variant is listed under. Derived from the picture file
+   *  names when it was created without one. */
+  label?: string
+  /** True = this picture variant's COPIED frame predates the mesh the prop
+   *  shows now (the frame was re-split) — the tab offers "Re-copy mesh". */
+  stale?: boolean
 }
 
 export interface ImageBackendInfo {
@@ -275,4 +298,175 @@ export function composePropPrompt(style: string, subject: string): string {
   // warns about that style and composes the same text. The replacer is a
   // FUNCTION so a `$` in the subject stays a dollar sign.
   return s.replace(SUBJECT_SLOT, () => fill).split(SUBJECT_SLOT).join('')
+}
+
+// ── Picture areas (spec-picture-props.md) ─────────────────────────────────
+
+/**
+ * THE AREA KINDS, in ONE place (ruling R8).
+ *
+ * A key surface of a prop's mesh — the panel a picture hangs on, the pane of
+ * a door — is a MATERIAL of the GLB, and its kind decides three unrelated
+ * things: the label it is listed under, the colour its outline gets in the 3D
+ * viewer, and the chroma-key fragment the render prompt asks for. All three
+ * hang on this list, so a new kind (Task 6 adds `leaf`) is one entry here and
+ * nothing else — the kind select, the polygon tool's kind choice, the create
+ * form's checkboxes and the outline colours all read from it.
+ *
+ * Mirrors `app/core/picture_areas.KINDS` (order included) and, for the two
+ * kinds that have one, `config.KEY_AREA_PROMPTS` / `KEY_AREA_NEGATIVES`
+ * verbatim — the server appends them itself and the append is idempotent, so
+ * this copy only PREVIEWS the finished prompt.
+ */
+export interface AreaKind {
+  /** The server's kind token — also the `<kind>_<n>` prefix of an area id. */
+  kind: string
+  /** English source string, rendered through `t()`. */
+  label: string
+  /** Outline colour in the 3D viewer. */
+  color: string
+  /** How the create form offers this kind. Absent = it cannot be REQUESTED
+   *  at generation time (it is only ever drawn by hand). */
+  requestLabel?: string
+  /** What asking for it appends to the render prompt (absent = nothing). */
+  prompt?: string
+  /** …and to the negative prompt. */
+  negative?: string
+}
+
+export const AREA_KINDS: AreaKind[] = [
+  {
+    kind: 'picture',
+    label: 'Picture',
+    color: '#22c55e',
+    requestLabel: 'Picture (green screen)',
+    prompt: ', the picture surface inside the frame is a single flat '
+      + 'uniform bright chroma-key green panel (#00FF00), no reflections, '
+      + 'no artwork, no text',
+    negative: 'painting, artwork, photo, poster, landscape in frame',
+  },
+  {
+    kind: 'glass',
+    label: 'Glass',
+    color: '#d946ef',
+    requestLabel: 'Glass (magenta)',
+    prompt: ', the window pane is a single flat uniform bright magenta '
+      + 'panel (#FF00FF), no reflections',
+    negative: 'transparent glass, reflections',
+  },
+]
+
+/** The kind record of an area id's kind — `undefined` for a kind this client
+ *  does not know (a newer server), which every reader treats as "no colour,
+ *  no fragment" rather than as a crash. */
+export function areaKindOf(kind: string): AreaKind | undefined {
+  return AREA_KINDS.find((k) => k.kind === kind)
+}
+
+/** Comma tags joined without duplicates, case-insensitively, order kept —
+ *  `prompt_compose.merge_tags` on this side. */
+function mergeTags(...parts: string[]): string {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const part of parts) {
+    for (const raw of (part || '').split(',')) {
+      const tag = raw.trim()
+      const key = tag.toLowerCase()
+      if (tag && !seen.has(key)) { seen.add(key); out.push(tag) }
+    }
+  }
+  return out.join(', ')
+}
+
+/**
+ * The chroma-key fragments of `kinds` on a FINAL prompt + negative — the
+ * client half of `props.apply_key_areas`, and a PREVIEW only.
+ *
+ * Idempotent for the same reason the server's is: the create form shows the
+ * composed text and sends it back, and the server appends to whatever it
+ * receives. Kind order is the fixed one of `AREA_KINDS`, not the order the
+ * checkboxes were ticked in.
+ */
+export function applyKeyAreas(prompt: string, negative: string,
+                              kinds: string[]): { prompt: string; negative: string } {
+  let out = (prompt || '').replace(/\s+$/, '')
+  let neg = negative || ''
+  for (const entry of AREA_KINDS) {
+    if (!kinds.includes(entry.kind) || !entry.prompt) continue
+    const core = entry.prompt.replace(/^[\s,]+|[\s,]+$/g, '')
+    if (core && !out.includes(core)) {
+      out = out ? out.replace(/[\s,]+$/, '') + entry.prompt : core
+    }
+    if (entry.negative && !neg.includes(entry.negative)) {
+      neg = mergeTags(neg, entry.negative)
+    }
+  }
+  return { prompt: out, negative: neg }
+}
+
+/** What ONE picture area is filled with. Exactly one of the two per entry —
+ *  a `picture` panel takes an image URL of this world's galleries, a `glass`
+ *  pane a preset out of `SLOT_PRESETS` (`glass` is the only one today).
+ *  Structurally the `SceneSlotValues` of @anima/scene-render. */
+export interface PropSlotValue {
+  image?: string
+  preset?: string
+}
+
+/** Keyed by AREA ID (`picture_1`) — the map a variant stores and the scene
+ *  recipe copies into its `models[].slots`. */
+export type PropSlotValues = Record<string, PropSlotValue>
+
+/** ONE detected or drawn key surface of the prop's mesh (`props.sanitize_areas`
+ *  + the outline of the active mesh). The face assignment itself lives in the
+ *  GLB and never travels — `faces` is a COUNT. */
+export interface PropArea {
+  /** `<kind>_<n>` — it IS the slot name, and `slot_<id>` the material name. */
+  id: string
+  kind: string
+  /** Real extent of the panel in metres, [w, h]. */
+  size_m: [number, number]
+  normal: [number, number, number]
+  source: 'auto' | 'manual'
+  /** How many triangles carry this area's material. */
+  faces: number
+  /** The material the faces came from (informational). */
+  origin?: string
+  centroid?: [number, number, number]
+  /** Outline segments in glTF y-up MODEL space — the server computed them at
+   *  the split, the viewer only draws them (§ B5a: no geometry in a client). */
+  edges?: AreaEdge[]
+}
+
+/** One outline segment: two points in model metres. */
+export type AreaEdge = [[number, number, number], [number, number, number]]
+
+/** What the viewer needs to draw one area's outline. */
+export interface AreaOutline {
+  id: string
+  kind: string
+  edges: AreaEdge[]
+}
+
+/** ONE mesh of the model in the R1 face-index order: meshes sorted by NAME,
+ *  triangles in buffer order within each. The polygon tool aligns the loaded
+ *  three.js meshes against this before it flattens an index. */
+export interface MeshLayoutEntry {
+  name: string
+  tri_count: number
+}
+
+/** The answer of `GET /world/props/{id}/areas`. */
+export interface PropAreasInfo {
+  areas: PropArea[]
+  mesh_layout: MeshLayoutEntry[]
+  /** Which key colours the prop's render was asked for. */
+  key_areas: string[]
+  /** Prop-wide values that apply WITHOUT a variant (a door's pane). */
+  area_defaults: PropSlotValues
+  blender: { available: boolean; reason: string }
+  /** UTC ISO stamp of the last detection run ('' / null = never). */
+  last_run?: string | null
+  /** What the last AUTOMATIC run failed with ('' = nothing). */
+  error?: string
 }

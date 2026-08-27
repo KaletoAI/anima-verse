@@ -55,6 +55,7 @@ import {
 } from './pendingFields'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { GroundOffsetGauge } from './GroundOffsetGauge'
+import { PropAreasPanel } from './PropAreasPanel'
 import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
 import { CATEGORY_DATALIST_ID } from './propTypes'
@@ -1105,6 +1106,22 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               </div>
               <span className="ga-hint">{t('Orientation fix — persisted; the 3D client applies it on load.')}</span>
             </>
+          ) : null}
+
+          {/* THE KEY SURFACES of this prop's mesh and the pictures hung on
+              them (spec-picture-props.md § 4). It needs a mesh to read them
+              off, so it appears with the model — and it works on the PRIMARY
+              variant's mesh, which is the frame every picture variant copies.
+              */}
+          {prop.has_model ? (
+            <PropAreasPanel
+              prop={prop}
+              variants={serverVariants}
+              variantMax={variantMax}
+              reloadKey={reloadKey}
+              onPropChanged={onRefresh}
+              onVariantsChanged={() => { void loadVariants() }}
+            />
           ) : null}
 
           {/* The SELECTED variant's mesh gallery: every stored run, one active

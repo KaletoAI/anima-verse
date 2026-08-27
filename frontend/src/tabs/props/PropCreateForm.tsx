@@ -16,7 +16,8 @@ import { Field } from '../../components/Field'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { CATEGORY_DATALIST_ID, composePropPrompt } from './propTypes'
+import { AREA_KINDS, applyKeyAreas, CATEGORY_DATALIST_ID,
+  composePropPrompt } from './propTypes'
 import type { ImageBackendInfo, MeshBackendInfo, PropFull } from './propTypes'
 
 export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGenerating, onCancel }: {
@@ -44,6 +45,11 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
   const [style, setStyle] = useState('')
   const [negative, setNegative] = useState('')
   const [styleTouched, setStyleTouched] = useState(false)
+  // WHICH key colours the render is asked for (spec-picture-props.md § 3).
+  // Ticking one appends a chroma-key fragment to the prompt below and puts
+  // the kind on the record, which is what makes every landing mesh split
+  // itself into picture areas.
+  const [keyAreas, setKeyAreas] = useState<string[]>([])
 
   const imageBackendInfo = imageBackends.find((b) => b.name === imageBackend) || imageBackends[0]
   // 0 = no cap. Above its cap such a backend does not fail, it HANGS.
@@ -63,7 +69,13 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
   // only supplies the object. Nothing about the framing is written here — it
   // would end up in the final prompt twice.
   const subject = (description.trim() || name.trim())
-  const finalPrompt = composePropPrompt(style, subject)
+  // The chroma-key fragments ride on the FINISHED prompt, exactly as the
+  // server appends them (`props.apply_key_areas`) — the form shows the whole
+  // text it sends (final-prompt rule), and the server's append is idempotent,
+  // so the same fragment cannot land twice.
+  const keyed = applyKeyAreas(composePropPrompt(style, subject), negative, keyAreas)
+  const finalPrompt = keyed.prompt
+  const finalNegative = keyed.negative
 
   // One approximate size creates a placeholder cube — the three dims refine
   // themselves from the mesh proportions as soon as the model exists.
@@ -78,7 +90,8 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
     void apiPost<{ status?: string; prop?: PropFull }>('/world/props/generate', {
       name: name.trim(), category: category.trim(), ...dimsPayload(),
       description: description.trim(),
-      prompt: finalPrompt, negative,
+      prompt: finalPrompt, negative: finalNegative,
+      ...(keyAreas.length ? { key_areas: keyAreas } : {}),
       image_backend: imageBackendInfo?.name || '', mesh_backend: meshBackend,
       ...((): Record<string, number> => {
         const out: Record<string, number> = {}
@@ -102,14 +115,18 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, category, sizeM, description, finalPrompt, negative, imageBackendInfo,
-      meshBackend, meshBackends, faceDraft, texSize, onCreated, onGenerating, t, toast])
+  }, [name, category, sizeM, description, finalPrompt, finalNegative, keyAreas,
+      imageBackendInfo, meshBackend, meshBackends, faceDraft, texSize,
+      onCreated, onGenerating, t, toast])
 
   const createEmpty = useCallback(() => {
     if (!name.trim()) return
     void apiPost<{ status?: string; prop?: PropFull }>('/world/props', {
       name: name.trim(), category: category.trim(), ...dimsPayload(),
       description: description.trim(),
+      // The request stands on the RECORD, not on the prompt: an uploaded GLB
+      // is split just the same when the prop asked for key colours.
+      ...(keyAreas.length ? { key_areas: keyAreas } : {}),
     })
       .then((d) => {
         toast(t('Prop created — upload a GLB or generate its model.'))
@@ -117,7 +134,7 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
       })
       .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, category, sizeM, description, onCreated, t, toast])
+  }, [name, category, sizeM, description, keyAreas, onCreated, t, toast])
 
   return (
     <>
@@ -207,10 +224,35 @@ export function PropCreateForm({ imageBackends, meshBackends, onCreated, onGener
               onChange={(e) => { setNegative(e.target.value); setStyleTouched(true) }} />
           </Field>
         )}
+        {/* KEY AREAS — the surfaces the object is rendered WITH, so they can
+            be detected in the mesh afterwards (spec-picture-props.md § 3).
+            Data-driven from AREA_KINDS (R8): a kind without a prompt fragment
+            cannot be asked for at render time and is not offered. */}
+        <Field label={t('Key areas')}
+          hint={t('Renders the surface as a flat chroma-key panel, so the detection can split it off as its own material — a picture frame gets a green panel, a pane a magenta one. The fragments are appended to the prompt below.')}>
+          <span style={{ display: 'inline-flex', gap: 12, flexWrap: 'wrap' }}>
+            {AREA_KINDS.filter((k) => k.requestLabel).map((k) => (
+              <label key={k.kind}
+                style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                <input type="checkbox" checked={keyAreas.includes(k.kind)}
+                  onChange={(e) => setKeyAreas((cur) => (e.target.checked
+                    ? [...cur, k.kind]
+                    : cur.filter((x) => x !== k.kind)))} />
+                {t(k.requestLabel as string)}
+              </label>
+            ))}
+          </span>
+        </Field>
         <Field label={t('Final prompt (sent to the render)')}>
           <textarea className="ga-textarea" rows={2} value={finalPrompt} readOnly
             style={{ opacity: 0.85 }} />
         </Field>
+        {keyAreas.length && finalNegative !== negative ? (
+          <Field label={t('Final negative prompt')}>
+            <textarea className="ga-textarea" rows={2} value={finalNegative} readOnly
+              style={{ opacity: 0.85 }} />
+          </Field>
+        ) : null}
 
         <div className="ga-form-row">
           <button type="button" className="ga-btn ga-btn-primary"
