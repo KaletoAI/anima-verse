@@ -39,6 +39,16 @@ export interface PropDims {
   height_m: number
 }
 
+/** State of the walkable-surface lattice baked out of a mesh
+ *  (`model_surface.surface_status`): `baked` with its size, `stale` when the
+ *  mesh or its orientation fix moved on, `missing` when none was ever baked. */
+export interface SurfaceStatus {
+  state: string
+  cols?: number
+  rows?: number
+  step?: number
+}
+
 export interface PropFull {
   id: string
   name: string
@@ -76,6 +86,9 @@ export interface PropFull {
   /** AABB edge lengths of the mesh on its RAW axes (before the fix) — the
    *  proportions the dims are derived from. Absent = no measurable model. */
   bbox?: [number, number, number]
+  /** Whether the PRIMARY variant's mesh has a walkable surface baked — what
+   *  the model panel's status line reads. */
+  surface_status?: SurfaceStatus
   /** True = the PRIMARY variant's size is still a placeholder cube, not
    *  informed by the model's proportions yet. */
   dims_estimated?: boolean
@@ -222,6 +235,8 @@ export interface PropVariant {
   /** True = this picture variant's COPIED frame predates the mesh the prop
    *  shows now (the frame was re-split) — the tab offers "Re-copy mesh". */
   stale?: boolean
+  /** Whether THIS variant's mesh has a walkable surface baked. */
+  surface_status?: SurfaceStatus
 }
 
 export interface ImageBackendInfo {

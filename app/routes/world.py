@@ -1357,10 +1357,19 @@ def _require_room(location_id: str, room_id: str) -> None:
 @router.get("/locations/{location_id}/rooms/{room_id}/model3d/status")
 def room_model3d_status(location_id: str, room_id: str) -> Dict[str, Any]:
     """Room-model status: {exists, pending, meta, backends, default,
-    shrink_backends} — same shape as the building twin."""
-    from app.core.location_model3d import get_building_info
+    shrink_backends} — same shape as the building twin, plus ``meta.surface``:
+    the state of the walkable surface baked out of the active model."""
+    from app.core.location_model3d import find_building_model, get_building_info
+    from app.core.model_surface import surface_status
     _require_room(location_id, room_id)
-    return get_building_info(location_id, room_id=room_id)
+    info = get_building_info(location_id, room_id=room_id)
+    meta = info.get("meta")
+    if isinstance(meta, dict):
+        # Judged against the CURRENT orientation fix — a surface baked before
+        # the admin turned the model reads as stale, not as baked.
+        meta["surface"] = surface_status(find_building_model(location_id, room_id),
+                                         meta.get("rotation"))
+    return info
 
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/generate")
@@ -1559,6 +1568,19 @@ def _room_model3d_walk_y_sync(location_id: str, room_id: str,
     except ValueError:
         raise HTTPException(status_code=404, detail="No model")
     return {"meta": meta}
+
+
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/surface")
+def room_model3d_surface(location_id: str, room_id: str,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Bake (or re-bake) the room model's walkable surface in the background.
+    ``force``: the admin asked for it, so a surface that is already valid is
+    baked again rather than skipped. Answers immediately — the bake waits for
+    its own Blender slot, so there is no busy state to report."""
+    from app.core.location_model3d import request_surface
+    _require_room(location_id, room_id)
+    request_surface(location_id, room_id, force=True)
+    return {"queued": True}
 
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/width")
@@ -2119,6 +2141,28 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               lod_faces=_mesh_int(data.get("lod_faces")) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
+
+
+@router.post("/props/{prop_id}/surface")
+async def prop_surface(prop_id: str, request: Request,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Bake (or re-bake) a prop's walkable surface in the background (body:
+    {variant?} — the STORE index of ONE variant; absent/empty = every active
+    one). ``force``: the admin asked for it, so a surface that is already valid
+    is baked again rather than skipped. Answers immediately — the bake waits
+    for its own Blender slot, so there is no busy state to report."""
+    from app.core.props import bake_surfaces, get_prop
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
+    if not isinstance(data, dict):
+        data = {}
+    raw = data.get("variant")
+    # Variant 0 is the PRIMARY variant, a real index — only an absent or empty
+    # field means "every active variant".
+    variant = None if raw is None or raw == "" else _mesh_int(raw)
+    bake_surfaces(prop_id, variant, background=True, force=True)
+    return {"queued": True}
 
 
 @router.post("/props/{prop_id}/rotation")

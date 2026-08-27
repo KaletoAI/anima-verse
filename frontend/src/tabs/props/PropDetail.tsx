@@ -339,6 +339,19 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     width_m: prop.width_m, depth_m: prop.depth_m, height_m: prop.height_m,
   }), [shownVariant, prop.width_m, prop.depth_m, prop.height_m])
 
+  // Same source rule as the dims: the shown variant answers, the prop record
+  // stands in until the variant list has arrived (its value IS the primary
+  // variant's).
+  const shownSurface = shownVariant?.surface_status ?? prop.surface_status ?? null
+  const surfaceLabel = shownSurface?.state === 'baked'
+    ? t('baked {cols}×{rows} @ {step} m')
+      .replace('{cols}', String(shownSurface.cols ?? '?'))
+      .replace('{rows}', String(shownSurface.rows ?? '?'))
+      .replace('{step}', String(shownSurface.step ?? '?'))
+    : shownSurface?.state === 'stale'
+      ? t('stale (model or fix changed)')
+      : t('missing')
+
   // ── Save / Discard ─────────────────────────────────────────────────────
   // ONE request for the whole panel: the general fields and every variant
   // patch travel in the batch body, the answer is what was really stored, and
@@ -462,6 +475,18 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [prop.rotation, enc, onChanged, t, toast])
+
+  // The walkable surface of the SHOWN variant's mesh. Blender bakes it in the
+  // background, so the answer is only "queued" — the status line opposite says
+  // what is stored, and tells the truth again on the panel's next reload.
+  const bakeSurface = useCallback(async () => {
+    try {
+      await apiPost(`/world/props/${enc}/surface`, { variant })
+      toast(t('Baking the surface — this runs in the background.'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [enc, variant, t, toast])
 
   // Object-local markers (A4) — same vocabulary as room markers, but the
   // frame is the MESH's own bounding box: `at` = [u, v, w] fractions,
@@ -625,7 +650,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   }
                 }} />
             </Field>
-            <Field label={t('Tags (comma-separated)')}>
+            <Field label={t('Tags (comma-separated)')}
+              hint={t('Tag "walkable" lets figures stand on this prop; its surface is baked from the mesh.')}>
               <input className="ga-input" value={tagsDraft}
                 onChange={(e) => setTagsDraft(e.target.value)}
                 onBlur={() => {
@@ -1105,6 +1131,19 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 ))}
               </div>
               <span className="ga-hint">{t('Orientation fix — persisted; the 3D client applies it on load.')}</span>
+
+              {/* The lattice a figure's feet are put on, baked from THIS
+                  variant's mesh — a state to read, not a value to dial. It
+                  follows the orientation fix, which is why it can go stale. */}
+              <div className="ga-form-section-label">{t('Walkable surface')}</div>
+              <div className="ga-form-row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span className="ga-muted">{surfaceLabel}</span>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => { void bakeSurface() }}
+                  title={t('Bake the surface figures walk on — runs Blender in the background')}>
+                  {t('Bake surface')}
+                </button>
+              </div>
             </>
           ) : null}
 

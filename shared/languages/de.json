@@ -2352,6 +2352,13 @@
     "Final prompt (sent to the render)": "Finaler Prompt (geht an den Render)",
     "Create the record only — then upload a GLB in its detail panel.": "Nur den Datensatz anlegen — die GLB lädst du danach im Detailbereich hoch.",
     "Create empty (upload later)": "Leer anlegen (später hochladen)",
-    "No img2mesh backend configured (api_type openai_mesh) — you can still create empty props and upload GLBs.": "Kein img2mesh-Backend konfiguriert (api_type openai_mesh) — leere Props anlegen und GLBs hochladen geht trotzdem."
+    "No img2mesh backend configured (api_type openai_mesh) — you can still create empty props and upload GLBs.": "Kein img2mesh-Backend konfiguriert (api_type openai_mesh) — leere Props anlegen und GLBs hochladen geht trotzdem.",
+    "Walkable surface": "Begehbare Oberfläche",
+    "Bake surface": "Oberfläche backen",
+    "baked {cols}×{rows} @ {step} m": "gebacken {cols}×{rows} @ {step} m",
+    "stale (model or fix changed)": "veraltet (Modell oder Fix geändert)",
+    "Bake the surface figures walk on — runs Blender in the background": "Backt die Oberfläche, auf der Figuren laufen — Blender läuft im Hintergrund",
+    "Baking the surface — this runs in the background.": "Die Oberfläche wird gebacken — das läuft im Hintergrund.",
+    "Tag \"walkable\" lets figures stand on this prop; its surface is baked from the mesh.": "Tag „walkable“ lässt Figuren auf diesem Prop stehen; die Oberfläche wird aus dem Mesh gebacken."
   }
 }

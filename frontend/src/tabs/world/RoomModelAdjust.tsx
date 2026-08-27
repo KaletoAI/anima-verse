@@ -31,6 +31,16 @@ interface ActiveModel {
   active?: boolean
 }
 
+/** What the server baked out of the mesh: the lattice a figure stands on.
+ *  `stale` = a surface exists, but the model or its orientation fix has
+ *  changed since (spec-surface-height § 8). */
+interface SurfaceStatus {
+  state: string
+  cols?: number
+  rows?: number
+  step?: number
+}
+
 export function RoomModelAdjust({ locationId, roomId, roomName,
                                   calibration = false, onCalibration,
                                   calibrationAt, onCalibrationAt,
@@ -56,6 +66,7 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
   const [loaded, setLoaded] = useState(false)
   const [widthDraft, setWidthDraft] = useState('')
   const [walkDraft, setWalkDraft] = useState('')
+  const [surface, setSurface] = useState<SurfaceStatus | null>(null)
 
   // ``meta`` is the ACTIVE model's sidecar — the only place that says what the
   // admin set by hand.
@@ -64,14 +75,16 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
     if (reset) {
       setLoaded(false)
       setModel(null)
+      setSurface(null)
     }
-    apiGet<{ models?: ActiveModel[]; meta?: { walk_y?: number } }>(
+    apiGet<{ models?: ActiveModel[]; meta?: { walk_y?: number; surface?: SurfaceStatus } }>(
       `/world/locations/${enc}/model3d/status`)
       .then((d) => {
         if (stale) return
         const found = (d.models || []).find((m) => m.active) || (d.models || [])[0] || null
         const active = found ? { ...found, walk_y: d.meta?.walk_y } : null
         setModel(active)
+        setSurface(d.meta?.surface || null)
         setWidthDraft(active?.width_m ? String(active.width_m) : '')
         setWalkDraft(active?.walk_y === undefined ? '' : String(active.walk_y))
         setLoaded(true)
@@ -172,6 +185,28 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
     }
   }, [model, walkDraft, enc, roomId, t, toast])
 
+  // The walkable surface is baked in the background (Blender), so the answer
+  // is only "queued" — the status line tells the truth again on the next
+  // reload of this strip.
+  const bakeSurface = useCallback(async () => {
+    try {
+      await apiPost(`/world/locations/${enc}/model3d/surface`, {})
+      toast(t('Baking the surface — this runs in the background.'))
+      notifyModel3dChanged({ roomId })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [enc, roomId, t, toast])
+
+  const surfaceLabel = surface?.state === 'baked'
+    ? t('baked {cols}×{rows} @ {step} m')
+      .replace('{cols}', String(surface.cols ?? '?'))
+      .replace('{rows}', String(surface.rows ?? '?'))
+      .replace('{step}', String(surface.step ?? '?'))
+    : surface?.state === 'stale'
+      ? t('stale (model or fix changed)')
+      : t('missing')
+
   if (!loaded) return null
   // Neutral, not a nag (E5 inventory 1a): a room diorama is optional polish.
   // The room renders from its floor plan and its props without one, so the
@@ -246,6 +281,20 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
         />
       </label>
+      {/* The lattice a figure's feet are put on — baked from the mesh, so it
+          is a state to read, not a value to dial. */}
+      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}>
+        {t('Walkable surface')}
+        <span className="ga-muted">{surfaceLabel}</span>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          onClick={() => { void bakeSurface() }}
+          title={t('Bake the surface figures walk on — runs Blender in the background')}
+        >
+          {t('Bake surface')}
+        </button>
+      </span>
       {onCalibration ? (
         <button
           type="button"
