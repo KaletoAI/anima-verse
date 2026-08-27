@@ -6950,3 +6950,135 @@ also muss jede Szenensignatur sich bewegen.
 | Keller → EG: 15 Stufen, erste bei −2,822667, letzte 2,92 hoch, Pads −2,945 / −0,025 auf `level` −1 / 0 | ebenda **[5s]** |
 | Kette aus zwei Läufen behält ihre `stair`-Indizes | ebenda **[5s]** |
 | ROTE PROBE: ohne `map3d.stairs` entsteht kein einziges `stair_*`-Primitiv (die Fahrstuhl-Zählung misst also keine Treppe) | ebenda **[5s]** |
+
+## Nachtrag 2026-08-27 (§ B1/B2): Tür-Props + Slots (v5)
+
+Bis hierher war eine Tür ein **Blatt**: eine dünne dunkle Platte im Loch
+(Nachtrag 2026-08-25). Sie bleibt der Normalfall. Neu ist, dass eine Öffnung
+statt der Platte ein **Prop** bekommen kann — ein modelliertes Türblatt samt
+Zarge aus der Prop-Bibliothek. Das Prop ist ein ganz normaler `models[]`-
+Eintrag; neu sind nur sein Mess-Modus (`fit`) und sein Anker (die Angel).
+
+**Es sperrt weiterhin NICHTS.** Ein Tür-Prop ist ein Modell, kein Kollider —
+die Kollision liest `models[]` nicht und tut es auch weiter nicht.
+
+### Auflösung: welches Prop steht in der Öffnung (dreiwertig)
+
+`scene_recipe.door_prop_id(opening, default)` ist die EINE Regel, und alle drei
+Verbraucher (Wand-Splitter, Schwellenliste, Modell-Spec) fragen sie:
+
+1. `openings[].prop_id` gesetzt → **dieses** Prop,
+2. sonst `openings[].door_prop == "none"` → **kein** Prop (das ist das
+   ausdrückliche „hier keine Tür", das den Location-Default aussperrt),
+3. sonst `location.default_door_prop_id` (neues Feld, leer = keiner),
+4. sonst offener Durchgang mit Blatt wie bisher.
+
+Nur `type: "door"` bekommt eins. Ein Fenster hat Glas, ein `passage` ist ein
+Loch OHNE Tür — beide nehmen auch den Default nicht an.
+
+### Felder
+
+| Feld | Wo | Bedeutung |
+|---|---|---|
+| `prop_id` | `rooms[].openings[]` (gespeichert) | das Prop dieser Öffnung |
+| `door_prop: "none"` | ebenda | ausdrücklich kein Prop; sperrt den Default aus |
+| `hinge: "left"\|"right"` | ebenda (fehlt = `left`) | an welchem Ende die Angel sitzt, gelesen gegen `along` der Schwelle |
+| `default_door_prop_id` | Location | Standard-Tür des Ortes |
+| `door_prop: true` | `walls[]` (nur zusammen mit `leaf`) | dieses Blatt füllt ein Prop → **Renderer zeichnen das Stück NICHT** |
+| `measure: "fit"` | `models[]` | in die Öffnung eingepasst statt real-size skaliert |
+| `size_m: [w, h]` | `models[]` (nur `fit`) | lichte Breite/Höhe der Öffnung in Weltmetern |
+| `door: {opening, hinge, swing}` | `models[]` | `opening` = Index in `doorways[]`, `swing` = ±1 |
+
+`walls[]` behält den Blatt-Eintrag mit Absicht: der Blender-Außenrender
+(`exterior_render.py`) baut seine Fassade aus `walls` und verlöre sonst das
+Prisma der Tür. Nur die beiden Renderer überspringen ihn. Ein `fit`-Spec trägt
+kein `max_m` — die Öffnung ist das Maß.
+
+### `place()` mit `measure: "fit"` (§ B2, die EINE Ausnahme)
+
+Nicht-uniform, und der einzige Spec, der nicht auf seiner Mitte hängt:
+
+- x → `size_m[0]`, y → `size_m[1]`, **z mit demselben Faktor wie x** (das Blatt
+  behält sein Tiefenverhältnis zur Breite),
+- die lokale **−x-Kante** und die Unterseite gehen in den Gruppenursprung, z
+  bleibt mittig (die Dicke sitzt auf der Wandebene),
+- die Skalierung liegt INNERHALB der Yaw-Gruppe — außerhalb würde sie das
+  Blatt bei jedem Yaw scheren, der kein Vielfaches von 90° ist.
+
+Der Ursprung der zurückgegebenen Gruppe IST damit die Angel: „Tür öffnen" ist
+eine Drehung dieser Gruppe um sich selbst und bleibt reiner Sicht-Zustand je
+App (Öffnungswinkel, Nähe, wann überhaupt).
+
+### Handrechnung Anker + Yaw
+
+Die Schwelle liefert `at_world`, `along = (ux, uz)`, `width_m`, `height_m`,
+`base_y` — nichts davon wird nachgerechnet. Dann gilt
+
+```
+anchor = at_world ∓ along · width_m/2     (− bei hinge left, + bei right)
+yaw    = (atan2(−uz, ux)·180/π + (hinge == "right" ? 180 : 0)) mod 360
+bottom_y = base_y,   size_m = [width_m, height_m]
+```
+
+`yaw` dreht das lokale +x auf die Richtung, in die das Blatt VON der Angel weg
+läuft: three's `Ry(+θ)` bildet lokal +x auf `(cos θ, −sin θ)` ab (§ A1.1), also
+löst `θ = atan2(−uz, ux)` genau `+x → along`; bei rechter Angel läuft es gegen
+`along`, daher +180°.
+
+Für eine Öffnung bei `at_world` = (x₀, z₀), `width_m` = 1,0:
+
+| `along` | `hinge` | `anchor` | `yaw` | `swing` |
+|---|---|---|---|---|
+| (1, 0) | left | (x₀ − 0,5 / z₀) | atan2(0, 1) = **0°** | +1 |
+| (1, 0) | right | (x₀ + 0,5 / z₀) | **180°** | −1 |
+| (0, 1) | left | (x₀ / z₀ − 0,5) | atan2(−1, 0) = −90° → **270°** | +1 |
+| (0, 1) | right | (x₀ / z₀ + 0,5) | 270 + 180 = **90°** | −1 |
+| (−1, 0) | left | (x₀ + 0,5 / z₀) | atan2(0, −1) = **180°** | +1 |
+
+Die letzte Zeile ist der Fall der Smoke-Fixtur (Südtür von Raum „a": `at_world`
+(−2, −1), `along` (−1, 0), Breite 1,0 → `anchor` (−1,5 / −1), `yaw` 180).
+
+### Woher `swing` kommt
+
+`swing` ist das Vorzeichen, mit dem eine POSITIVE Drehung um y das Blatt nach
+AUSSEN öffnet — „außen" ist `_door_outward` = `(uz, −ux)`, die Normale weg von
+dem Raum, aus dessen Wand das Loch geschnitten wurde (`rooms[0]`).
+
+Dreht man die gesetzte Gruppe um φ, wandert ein Weltversatz (vx, vz) mit
+
+```
+d/dφ (vx·cos φ + vz·sin φ, −vx·sin φ + vz·cos φ) |φ=0 = (vz, −vx)
+```
+
+Das freie Ende des Blattes liegt bei `v = +along` (linke Angel) bzw.
+`v = −along` (rechte). Also ist die Ableitung genau `(uz, −ux)` = außen für
+links → **+1**, und ihr Gegenteil für rechts → **−1**.
+
+`SCENE_RECIPE_VERSION` 4 → **5**: dieselben Daten liefern andere `models`/
+`walls`, also muss jede Szenensignatur sich bewegen. In der Signatur stehen
+zusätzlich `default_door_prop_id` (ein Feld der LOCATION, das keine
+Raumsignatur abdeckt) und die Mesh-Signatur jedes aufgelösten Tür-Props (die
+URL bleibt beim Neu-Erzeugen gleich).
+
+### Grenzen (bewusst)
+
+- Ein Prop-Ausweis, der ins Leere zeigt (oder ein Prop ohne Mesh), behält
+  seinen Spec mit leerem `variants` — dieselbe Regel wie bei hängenden
+  Raum-Platzierungen. Er bekommt KEINE `placeholder_dims`: eine Ersatzkiste
+  wird auf ihren Anker zentriert, und dieser Anker ist eine Kante.
+- Modell-Varianten (E2.3) hat ein Tür-Prop nicht — es liefert die primäre
+  Stufenkarte.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Öffnung mit `prop_id` → ein `models[]`-Eintrag `role:"prop"`, `measure:"fit"`, `size_m [1,0 / 2,1]`, Anker (−1,5 / −1), `yaw` 180, `bottom_y` 0, `door {0, left, +1}` | `scripts/smoke_scene_recipe.py` **[3p]** |
+| `hinge: "right"` → Anker (−2,5 / −1), `yaw` 0, `swing` −1 | ebenda **[3p]** |
+| zweite Achse: `along` (0, 1) → Anker (0 / −3,3), `yaw` 270, `size_m [1,6 / 2,1]` | ebenda **[3p]** |
+| Blatt bleibt in `walls[]` (Außenrender) und trägt `door_prop` — Raumwand UND Kontur | ebenda **[3p]** |
+| Default greift, `prop_id` gewinnt, `door_prop:"none"` unterdrückt (Blatt zurück, kein Flag) | ebenda **[3p]** |
+| ROTE PROBE: Fenster und `passage` bekommen nie ein Tür-Prop, auch nicht per Default | ebenda **[3p]** |
+| Prop-Ausweis ins Leere: Spec bleibt, `variants` leer, keine `placeholder_dims` | ebenda **[3p]** |
+| Signatur bewegt sich für Location-Default UND neue Mesh-Signatur | ebenda **[3p]** |
+| `place()` mit `fit`: 0,5×2×0,1-Kiste auf `size_m [1,0 / 2,1]` → 1,0 × 2,1 × 0,2, Angelkante AUF dem Anker, bei `yaw` 270 läuft die Breite in +z | `client3d/scripts/smoke_place_rotation.mjs` **[7]** |

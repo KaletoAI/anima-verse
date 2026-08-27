@@ -10,6 +10,11 @@
  * asks for it, clip it against the room hull. No scene wiring, no verify —
  * that is the callers' business.
  *
+ * `measure: 'fit'` (v5, door props) is the ONE spec that does not scale
+ * uniformly and does not hang on its centre: it is fitted into an opening
+ * (`size_m`) and hung on its HINGE edge, so the caller can swing the returned
+ * group about its own origin. Everything else about the chain is unchanged.
+ *
  * Returns: a wrapper around `source`. The caller hangs it into a group WITHOUT
  * a transform of its own (the grounding measures in the parent frame, and the
  * spec numbers are stated around the tile centre).
@@ -39,6 +44,8 @@ export function placeModelSpec(THREE: typeof import('three'),
   const { clone = true, clip = true } = opts
   const deg = (v?: number) => ((v || 0) * Math.PI) / 180
 
+  const fit = spec.measure === 'fit'
+
   const fix = new THREE.Group()
   fix.add(clone ? source.clone(true) : source)
 
@@ -61,8 +68,15 @@ export function placeModelSpec(THREE: typeof import('three'),
   fix.updateMatrixWorld(true)
   const sObj = new THREE.Box3().setFromObject(fix).getSize(new THREE.Vector3())
 
+  // The FIT scale lives INSIDE the yaw (v5): it is not one factor, so it has
+  // to act in the model's own axes — a non-uniform scale outside the rotation
+  // would shear the leaf at every yaw that is not a multiple of 90°. Identity
+  // for every other measure, which leaves their chain exactly as it was.
+  const fitG = new THREE.Group()
+  fitG.add(fix)
+
   const yawG = new THREE.Group()
-  yawG.add(fix)
+  yawG.add(fitG)
   // PLUS, since E4 (§ A1.1, decided 2026-08-07): the world map's turning sense
   // is THE turning sense of this contract, for map and scene alike. three.js'
   // Ry(+θ) maps a local point to
@@ -105,8 +119,25 @@ export function placeModelSpec(THREE: typeof import('three'),
   // not move at all under this change — there both boxes are the same one.
   yawG.rotation.y = 0
   yawG.updateMatrixWorld(true)
-  const cFix = new THREE.Box3().setFromObject(fix).getCenter(new THREE.Vector3())
-  fix.position.set(-cFix.x, -cFix.y, -cFix.z)
+  const bFix = new THREE.Box3().setFromObject(fix)
+  const cFix = bFix.getCenter(new THREE.Vector3())
+  // A FITTED model hangs on the edge it turns about, not on its centre: its
+  // local −x edge and its underside go into the origin (z stays centred, the
+  // leaf's thickness straddles the wall plane). Together with the server's
+  // yaw — local +x onto the direction the leaf RUNS, away from its hinge —
+  // that puts the mesh exactly in the hole while the group's origin stays the
+  // hinge a renderer swings it about.
+  fix.position.set(fit ? -bFix.min.x : -cFix.x,
+                   fit ? -bFix.min.y : -cFix.y,
+                   -cFix.z)
+  if (fit) {
+    // x to the width, y to the height, z with the SAME factor as x — the one
+    // sanctioned exception to the uniform scale law below: an opening is a
+    // hole with two given sides, and a door that fills only one of them
+    // leaves a lit gap. The depth keeps its proportion to the width.
+    const sx = (spec.size_m?.[0] || 1) / (sObj.x || 1)
+    fitG.scale.set(sx, (spec.size_m?.[1] || 1) / (sObj.y || 1), sx)
+  }
   yawG.rotation.y = deg(spec.yaw_deg)
   yawG.updateMatrixWorld(true)
 
@@ -117,10 +148,12 @@ export function placeModelSpec(THREE: typeof import('three'),
   // possibility of two renderers differing in height.
   const outer = new THREE.Group()
   outer.add(yawG)
-  const extent = (spec.measure === 'yawed_xz' ? Math.max(sYaw.x, sYaw.z)
-    : spec.measure === 'xz' ? Math.max(sObj.x, sObj.z)
-      : Math.max(sObj.x, sObj.y, sObj.z)) || 1
-  outer.scale.setScalar((spec.max_m || 1) / extent)
+  if (!fit) {
+    const extent = (spec.measure === 'yawed_xz' ? Math.max(sYaw.x, sYaw.z)
+      : spec.measure === 'xz' ? Math.max(sObj.x, sObj.z)
+        : Math.max(sObj.x, sObj.y, sObj.z)) || 1
+    outer.scale.setScalar((spec.max_m || 1) / extent)
+  }
   outer.updateMatrixWorld(true)
   // The object stands with its own centre in the origin of `outer` (see the
   // seating datum above), so that group's position IS the anchor. Only the

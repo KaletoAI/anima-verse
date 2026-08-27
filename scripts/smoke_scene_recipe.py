@@ -1566,6 +1566,227 @@ def test_doorways() -> None:
           f"{wider[:8]} vs {base_sig[:8]}")
 
 
+# ── Door props (plan-door-props-texture-slots.md, contract v5) ──────────
+
+DOOR_PROP = {
+    "id": "door1", "name": "Door leaf",
+    "width_m": 0.9, "depth_m": 0.06, "height_m": 2.0,
+    "rotation": {"x": 0, "y": 0, "z": 0},
+    "bbox": [0.9, 2.0, 0.06],
+    "has_model": True, "model_tiers": ["full"],
+    "model_signature": "doorsig1",
+}
+
+
+def stub_door_props() -> None:
+    """Two door props in the library — ``door1`` and ``door2``."""
+    from app.core import props as prop_store
+    prop_store.get_prop = lambda pid: (
+        {**DOOR_PROP, "id": pid} if pid in ("door1", "door2") else None)
+
+
+def door_prop_scene(*, a_openings=None, default_prop: str = "",
+                    extra_rooms=()) -> dict:
+    loc = door_fixture(extra_rooms=extra_rooms, a_openings=a_openings)
+    if default_prop:
+        loc["default_door_prop_id"] = default_prop
+    return scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+
+
+def door_specs(sc: dict) -> list:
+    return [m for m in sc["models"] if m.get("door")]
+
+
+def leaves(sc: dict, room_id: str = "a") -> list:
+    return [w for w in walls_of(sc, room_id) if w.get("leaf")]
+
+
+S_DOOR = {"edge": 2, "at": 0.5, "type": "door", "width_m": 1.0,
+          "height_m": 2.1, "to": "outside"}
+
+
+def test_door_props() -> None:
+    print("\n[3p] door props — the prop IS the door (v5)")
+    stub_door_props()
+    # THE HAND DERIVATION, from the doorway [3d] already checked above:
+    # room "a"'s S door sits at at_world (−2, −1), along (−1, 0), clear width
+    # 1.0, clear height 2.1, base_y 0.00.
+    #
+    # ANCHOR = the HINGE EDGE, so the group the renderer gets can be swung
+    # about it. Looking ALONG `along`, hinge "left" is the end the direction
+    # comes FROM:
+    #   left :  at − along·w/2 = (−2, −1) − (−1, 0)·0.5 = (−1.5, −1)
+    #   right:  at + along·w/2 = (−2, −1) + (−1, 0)·0.5 = (−2.5, −1)
+    #
+    # YAW turns the model's local +x onto the direction the LEAF runs, away
+    # from its hinge. three's Ry(+θ) — which IS `world_geometry.local_to_world`
+    # (§ A1.1) — maps local +x to world (cos θ, −sin θ), so
+    #   θ = atan2(−uz, ux) mod 360 puts +x on `along` (hinge left),
+    #   and hinge right adds 180° because the leaf then runs against `along`.
+    #   along (−1, 0):  θ = atan2(0, −1) = 180°   → right: 360 mod 360 = 0°
+    #   along ( 0, 1):  θ = atan2(−1, 0) = −90°   → 270° (mod 360)
+    #
+    # SWING is the sign of "positive rotation opens the leaf OUTWARD".
+    # `_door_outward` is (uz, −ux) — for the S door (0, 1), i.e. +z, and room
+    # "a" spans z −4…−1, so +z really is away from it. Turning the placed
+    # group by φ about y moves a world offset (vx, vz) with
+    #   d/dφ (vx cos φ + vz sin φ, −vx sin φ + vz cos φ)|₀ = (vz, −vx),
+    # and the free end of the leaf sits at v = ±along:
+    #   hinge left  (v = +along): (uz, −ux) = the outward normal → swing +1
+    #   hinge right (v = −along): −(uz, −ux)                     → swing −1
+    sc = door_prop_scene(a_openings=[{**S_DOOR, "prop_id": "door1"}])
+    specs = door_specs(sc)
+    check("an opening with a prop_id yields ONE door-prop spec",
+          len(specs) == 1, str(specs))
+    p = specs[0] if specs else {}
+    check("role prop, the authored id, the primary tier map",
+          p.get("role") == "prop" and p.get("id") == "door1"
+          and p.get("variants") == {"full":
+                                    "/assets/props/door1/model?tier=full"},
+          str(p))
+    check("measure 'fit' — the ONE non-uniform mode (§ B2 v5)",
+          p.get("measure") == "fit", str(p.get("measure")))
+    check("size_m = the CLEAR opening [width, height] = [1.0, 2.1]",
+          p.get("size_m") == [1.0, 2.1], str(p.get("size_m")))
+    check("anchor = the LEFT hinge edge (−1.5, −1)",
+          p.get("anchor") == [-1.5, -1.0], str(p.get("anchor")))
+    check("yaw 180 puts local +x on along (−1, 0)",
+          near(p.get("yaw_deg", -1), 180.0), str(p.get("yaw_deg")))
+    check("bottom_y = the threshold's own base_y, 0.00",
+          near(p.get("bottom_y", -1), 0.0), str(p.get("bottom_y")))
+    check("door = {opening 0, hinge left, swing +1}",
+          p.get("door") == {"opening": 0, "hinge": "left", "swing": 1},
+          str(p.get("door")))
+    check("...and `opening` indexes THIS scene's doorways",
+          len(sc["doorways"]) == 1
+          and sc["doorways"][(p.get("door") or {}).get("opening", -1)
+                             ]["at_world"] == [-2.0, -1.0],
+          str(sc["doorways"]))
+    check("no max_m: a fitted leaf is measured by size_m alone",
+          "max_m" not in p, str(p.get("max_m")))
+    # ENTSCHEID 3: the leaf STAYS in walls[] — the Blender exterior render
+    # reads that list and needs the door's prism — it only says it is now a
+    # prop's job to draw it.
+    lf = leaves(sc)
+    check("the leaf wall stays in walls[] for the exterior render",
+          len(lf) == 1, str(len(lf)))
+    check("...and is flagged door_prop so a renderer skips drawing it",
+          lf and lf[0].get("door_prop") is True, str(lf[0] if lf else None))
+    # The SAME door is projected onto the building contour (§ 4.2), and the
+    # hole it opens there carries its own leaf — that one has to say it too,
+    # or the shell keeps a dark plate in front of the prop.
+    hull_leaf = [w for w in sc["walls"]
+                 if w.get("leaf") and not w.get("room_id")]
+    check("the contour's leaf over the same door is flagged as well",
+          len(hull_leaf) == 1 and hull_leaf[0].get("door_prop") is True,
+          str(hull_leaf))
+    plain = door_prop_scene(a_openings=[dict(S_DOOR)])
+    check("without a prop nothing changes: leaf, no flag, no spec",
+          len(leaves(plain)) == 1
+          and "door_prop" not in leaves(plain)[0]
+          and not door_specs(plain), str(leaves(plain)))
+
+    # ── the hinge picks the edge, the yaw and the sign ───────────────────
+    right = door_specs(door_prop_scene(a_openings=[
+        {**S_DOOR, "prop_id": "door1", "hinge": "right"}]))
+    check("hinge right: anchor (−2.5, −1), yaw 0, swing −1",
+          len(right) == 1 and right[0]["anchor"] == [-2.5, -1.0]
+          and near(right[0]["yaw_deg"], 0.0)
+          and right[0]["door"] == {"opening": 0, "hinge": "right",
+                                   "swing": -1}, str(right))
+    # The OTHER axis: room "b" east of "a" shares the wall at x = 0 running
+    # z −4 → −1, so a's edge 1 has along (0, 1). Door at 0.5, width 1.6 →
+    # at_world (0, −2.5); hinge left → anchor (0, −2.5) − (0, 1)·0.8 =
+    # (0, −3.3), yaw 270, outward (uz, −ux) = (1, 0) = away from room "a".
+    b_room = {"id": "b", "name": "B", "layout": {
+        "x": 0.0, "y": -4.0, "w": 2.0, "d": 3.0, "level": 0}}
+    axis2 = door_specs(door_prop_scene(extra_rooms=(b_room,), a_openings=[
+        {"edge": 1, "at": 0.5, "type": "door", "width_m": 1.6,
+         "height_m": 2.1, "to": "b", "prop_id": "door1"}]))
+    check("along (0, 1): anchor (0, −3.3), yaw 270, size_m [1.6, 2.1]",
+          len(axis2) == 1 and axis2[0]["anchor"] == [0.0, -3.3]
+          and near(axis2[0]["yaw_deg"], 270.0)
+          and axis2[0]["size_m"] == [1.6, 2.1], str(axis2))
+    check("...still ONE spec for a door two rooms share",
+          len(axis2) == 1 and axis2[0]["door"]["swing"] == 1, str(axis2))
+
+    # ── the three-valued resolution (Entscheid 2) ────────────────────────
+    dflt = door_prop_scene(a_openings=[dict(S_DOOR)], default_prop="door2")
+    check("the location default fills an opening that names no prop",
+          len(door_specs(dflt)) == 1
+          and door_specs(dflt)[0]["id"] == "door2", str(door_specs(dflt)))
+    over = door_prop_scene(a_openings=[{**S_DOOR, "prop_id": "door1"}],
+                           default_prop="door2")
+    check("...the opening's own prop_id wins over it",
+          len(door_specs(over)) == 1
+          and door_specs(over)[0]["id"] == "door1", str(door_specs(over)))
+    none = door_prop_scene(a_openings=[{**S_DOOR, "door_prop": "none"}],
+                           default_prop="door2")
+    check("...and door_prop 'none' suppresses it — leaf back, no flag",
+          not door_specs(none) and len(leaves(none)) == 1
+          and "door_prop" not in leaves(none)[0], str(leaves(none)))
+
+    # ── only a DOOR gets one ─────────────────────────────────────────────
+    win = door_prop_scene(a_openings=[
+        {"edge": 0, "at": 0.5, "type": "window", "width_m": 2.0,
+         "height_m": 1.2, "sill_m": 0.9, "prop_id": "door1"}, dict(S_DOOR)],
+        default_prop="door2")
+    check("a window never takes a door prop, not even the default",
+          len(door_specs(win)) == 1
+          and door_specs(win)[0]["door"]["opening"] == 0, str(door_specs(win)))
+    pas = door_prop_scene(a_openings=[
+        {**S_DOOR, "type": "passage", "prop_id": "door1"}],
+        default_prop="door2")
+    check("a passage is an authored hole WITHOUT a door — no prop either",
+          not door_specs(pas), str(door_specs(pas)))
+
+    # ── a dangling id keeps its placement ────────────────────────────────
+    # The rule every prop placement follows (§ A2): world data lives in the
+    # DB, props are files, so there is no referential integrity — and a
+    # placement that vanished silently is worse than a visible hole. A door
+    # prop gets NO placeholder box, though: a stand-in is drawn centred on its
+    # anchor, and this anchor is an edge.
+    gone = door_specs(door_prop_scene(a_openings=[
+        {**S_DOOR, "prop_id": "nosuchprop"}]))
+    check("an id that names nothing keeps its spec, with NO variants",
+          len(gone) == 1 and gone[0]["id"] == "nosuchprop"
+          and gone[0]["variants"] == {}, str(gone))
+    check("...and carries no placeholder box (the anchor is an edge)",
+          len(gone) == 1 and "placeholder_dims" not in gone[0], str(gone))
+
+    # ── it has to reach the client ───────────────────────────────────────
+    check("the recipe version is 5", scene_recipe.SCENE_RECIPE_VERSION == 5,
+          str(scene_recipe.SCENE_RECIPE_VERSION))
+    base = door_prop_scene(a_openings=[dict(S_DOOR)])["signature"]
+    check("changing the location default moves the signature",
+          door_prop_scene(a_openings=[dict(S_DOOR)],
+                          default_prop="door2")["signature"] != base)
+    check("a new MESH for the door prop moves it too (same URL, new sig)",
+          _resigned_door_scene() != door_prop_scene(
+              a_openings=[dict(S_DOOR)], default_prop="door2")["signature"])
+    # The authored hinge rides in the room block the 2D editor reads back.
+    hinged = door_prop_scene(a_openings=[
+        {**S_DOOR, "prop_id": "door1", "hinge": "right"}])
+    ops = [o for r in hinged["rooms"] if r["room_id"] == "a"
+           for o in r["openings"]]
+    check("openings[].hinge reaches the payload's room block",
+          len(ops) == 1 and ops[0].get("hinge") == "right", str(ops))
+    stub_props()
+
+
+def _resigned_door_scene() -> str:
+    """The default-prop scene with a NEW mesh signature on that prop."""
+    from app.core import props as prop_store
+    prop_store.get_prop = lambda pid: (
+        {**DOOR_PROP, "id": pid, "model_signature": "doorsig2"}
+        if pid in ("door1", "door2") else None)
+    try:
+        return door_prop_scene(a_openings=[dict(S_DOOR)],
+                               default_prop="door2")["signature"]
+    finally:
+        stub_door_props()
+
+
 def test_threshold_base_y() -> None:
     print("\n[3e] thresholds stand where one STANDS (finding 2026-08-16)")
     # The finding: the 3D client lifted every threshold quad itself, against
@@ -3858,6 +4079,7 @@ def main() -> int:
     test_room_floor_offset()
     test_no_walls()
     test_doorways()
+    test_door_props()
     test_threshold_base_y()
     test_contour_walls()
     test_no_building_entrance()

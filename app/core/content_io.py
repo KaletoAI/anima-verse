@@ -510,19 +510,24 @@ def import_rule_from_zip(
 # ---------------------------------------------------------------------------
 
 def _referenced_prop_ids(loc: Dict[str, Any]) -> List[str]:
-    """Every prop id the location's rooms NAME, sorted.
+    """Every prop id the location NAMES, sorted.
 
-    Two places store one: a furnishing placement (``layout.props[].prop_id``)
-    and the optional frame/leaf prop of a wall opening
-    (``layout.openings[].prop_id``, world_ops._sanitize_opening). Both are
-    stored references, so both are a DEPENDENCY of the pack — a prop that does
-    not travel renders as "missing" forever on the far side.
+    Three places store one: a furnishing placement (``layout.props[].prop_id``),
+    the optional frame/leaf prop of a wall opening
+    (``layout.openings[].prop_id``, world_ops._sanitize_opening) and the
+    location's own ``default_door_prop_id``, which fills every door that names
+    none (2026-08-27). All three are stored references, so all three are a
+    DEPENDENCY of the pack — a prop that does not travel renders as "missing"
+    forever on the far side.
 
     The GROUND room is an ordinary member of ``rooms`` and its reduced layout
     (§ A13a) carries ``props`` like any other, so it is covered by walking the
     room list; there is no second place to look.
     """
     out: Set[str] = set()
+    default_door = str(loc.get("default_door_prop_id") or "").strip()
+    if default_door:
+        out.add(default_door)
     for room in (loc.get("rooms") or []):
         if not isinstance(room, dict):
             continue

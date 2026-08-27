@@ -93,6 +93,13 @@ export interface SceneWall {
    *  not leave its doors hanging in the air), and it bars nothing — one walks
    *  THROUGH a door, so 2D colliders skip it like a `lintel`. */
   leaf?: boolean
+  /** A DOOR PROP fills this leaf's hole (v5) — a renderer SKIPS drawing this
+   *  piece, because the prop in `models[]` (`measure: 'fit'`, with `door`) is
+   *  the door now. The entry itself stays in the payload on purpose: the
+   *  Blender exterior render builds its facade from `walls` and would lose
+   *  the door's prism with it (user decision 2026-08-27). Only ever set
+   *  together with `leaf`. */
+  door_prop?: boolean
   /** This piece hangs over a WALKABLE gap (a door or passage). It is drawn
    *  like any other wall, but it bars nothing in a floor plan — whoever
    *  derives 2D colliders from `walls` skips it. */
@@ -219,12 +226,29 @@ export interface SceneModelSpec {
    *  Modus mehr, in dem Y anders skaliert als XZ. Seit v6 Nr. 3 ist der Wert
    *  ÜBERALL eine deklarierte reale Breite (`width_m`) — beim Gebäude/der
    *  Fläche ersatzweise die Boundary-Breite, siehe `width_estimated`. */
-  max_m: number
-  /** Woran gemessen wird: `yawed_xz` = größte XZ-Seite der GEDREHTEN Box
-   *  (Location-Modelle passen auch schräg gedreht auf ihr Grundstück),
-   *  `xz` = größte XZ-Seite der gefixten Box (Dioramen: width_m ist eine
-   *  Grundriss-Breite), `xyz` = größte Kante überhaupt (Props). */
-  measure: 'yawed_xz' | 'xz' | 'xyz'
+  max_m?: number
+  /** What is measured: `yawed_xz` = the largest XZ side of the TURNED box
+   *  (location models have to fit their plot even when set at an angle),
+   *  `xz` = the largest XZ side of the fixed box (dioramas: width_m is a
+   *  floor-plan width), `xyz` = the largest edge of all (props) — those three
+   *  scale UNIFORMLY to `max_m`.
+   *  `fit` (v5) is the ONE exception and belongs to a DOOR PROP: it is fitted
+   *  into the hole it fills (`size_m`), x to the width and y to the height,
+   *  z with the same factor as x so the leaf keeps its depth proportion.
+   *  A `fit` spec carries no `max_m` — the opening is the ruler. */
+  measure: 'yawed_xz' | 'xz' | 'xyz' | 'fit'
+  /** `fit` only: [width, height] of the opening in world metres — the CLEAR
+   *  gap of the doorway, so a frame that is 5 cm too narrow cannot leave a
+   *  lit gap in a wall. */
+  size_m?: [number, number]
+  /** A prop that IS a door (v5). `opening` indexes `doorways[]`, `hinge` says
+   *  which end of the opening the `anchor` sits on — and the anchor is that
+   *  HINGE EDGE, not the middle, so a renderer swings the leaf by rotating
+   *  the placed group about its own origin. `swing` is the sign of that
+   *  rotation for OPENING outward (away from the room the hole was cut out
+   *  of): +1 for a left hinge, −1 for a right one. How far and when it opens
+   *  is view state and stays per app. */
+  door?: { opening: number; hinge: 'left' | 'right'; swing: 1 | -1 }
   anchor: [number, number]
   bottom_y: number
   /** Platzhalter-Box (schon Welt-Meter) für fehlendes/mesh-loses Prop */

@@ -1099,6 +1099,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       // its own LEAF entry — one box each.
       for (const wall of sc.walls) {
         if (!visibleLevel(wall.level)) continue
+        // A leaf whose hole a DOOR PROP fills is not drawn (v5) — the prop IS
+        // the door. The entry stays in the payload for the Blender exterior
+        // render, which builds its facade from `walls`.
+        if (wall.door_prop) continue
         const len = wallLength(wall)
         if (len < 1e-4) continue
         const upper = wall.opacity_role === 'upper'

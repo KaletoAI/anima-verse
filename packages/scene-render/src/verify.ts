@@ -142,6 +142,25 @@ export class SpecVerifier {
     this.check(name, 'bottom_y', box.min.y, spec.bottom_y + groundLift)
     const axisParallel = (v?: number) =>
       Math.abs((((v || 0) % 90) + 90) % 90) <= 0.01
+    // A FITTED model (v5, door props) hangs on its HINGE EDGE, so its bbox
+    // centre is half an opening away from the anchor by design. What is
+    // checked is the hanging point itself — the same measurement the diagonal
+    // case below uses, and for the same reason.
+    if (spec.measure === 'fit') {
+      const p = obj.getWorldPosition(new this.THREE.Vector3()).sub(origin)
+      const cos = Math.cos(frameYaw)
+      const sin = Math.sin(frameYaw)
+      this.check(name, 'anchor.x', p.x * cos - p.z * sin, spec.anchor[0])
+      this.check(name, 'anchor.z', p.x * sin + p.z * cos, spec.anchor[1])
+      // …and the opening is the ruler: the width lies on whichever horizontal
+      // axis the yaw put it on, the height is the height.
+      if (spec.size_m && axisParallel(spec.yaw_deg)
+          && axisParallel((frameYaw * 180) / Math.PI)) {
+        this.check(name, 'size_m.w', Math.max(size.x, size.z), spec.size_m[0])
+        this.check(name, 'size_m.h', size.y, spec.size_m[1])
+      }
+      return
+    }
     if (axisParallel(spec.yaw_deg) && axisParallel((frameYaw * 180) / Math.PI)) {
       // Axis-parallel, the world bbox centre IS the seating point — the
       // sharper measurement, because it checks the GEOMETRY, not the

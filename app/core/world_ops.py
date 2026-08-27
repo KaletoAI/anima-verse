@@ -1516,7 +1516,13 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     - ``sill_m``: 0..3 m (door = 0, window ≈ 0.9), default 0,
     - ``type``: 'door' | 'window' | 'passage',
     - ``to`` (optional str): connectivity target (room id or 'outside'),
-    - ``prop_id`` (optional str): a frame/leaf prop scaled onto the opening.
+    - ``prop_id`` (optional str): a frame/leaf prop scaled onto the opening,
+    - ``door_prop`` (optional): only ``'none'`` — "no prop in this door",
+      which is what keeps the LOCATION's ``default_door_prop_id`` out of it.
+      An absent field means "nothing chosen", i.e. the default applies
+      (``scene_recipe.door_prop_id``),
+    - ``hinge`` (optional): ``'left'`` | ``'right'``, the side the door prop
+      turns about, read against the doorway's own direction; absent = left.
     """
     if not isinstance(raw, dict):
         return None
@@ -1563,6 +1569,14 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     prop_id = raw.get("prop_id")
     if isinstance(prop_id, str) and prop_id.strip():
         out["prop_id"] = prop_id.strip()
+    # THE THREE-VALUED DOOR PROP (2026-08-27): only the explicit "none" is
+    # stored — every other value is "nothing chosen", and that is the state
+    # the location default fills.
+    if str(raw.get("door_prop") or "").strip().lower() == "none":
+        out["door_prop"] = "none"
+    hinge = str(raw.get("hinge") or "").strip().lower()
+    if hinge in ("left", "right"):
+        out["hinge"] = hinge
     return out
 
 
@@ -1625,6 +1639,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     knowledge_item_id = data.get("knowledge_item_id")
     passable = data.get("passable")
     entry_room = data.get("entry_room")
+    default_door_prop_id = data.get("default_door_prop_id")
     indoor = data.get("indoor")
     terrain = data.get("terrain")
     map3d = data.get("map3d")
@@ -1651,6 +1666,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                   or outfit_type is not None or knowledge_item_id is not None
                   or passable is not None
                   or entry_room is not None or indoor is not None
+                  or default_door_prop_id is not None
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
@@ -1684,6 +1700,15 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                     _l["passable"] = bool(passable)
                 if entry_room is not None:
                     _l["entry_room"] = (entry_room or "").strip()
+                if default_door_prop_id is not None:
+                    # THE PLACE'S OWN DOOR (2026-08-27): every door opening
+                    # that names no prop of its own gets this one, unless it
+                    # opts out with ``door_prop: "none"``. Normalized through
+                    # the ONE prop-id rule, so a typo cannot become a
+                    # directory name; empty = no default.
+                    from app.core.props import safe_prop_id
+                    _l["default_door_prop_id"] = safe_prop_id(
+                        str(default_door_prop_id or ""))
                 if indoor is not None:
                     _v = (indoor or "").strip().lower()
                     _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
@@ -1735,6 +1760,7 @@ def update_location_with_extras(location_id: str,
     knowledge_item_id = data.get("knowledge_item_id")
     passable = data.get("passable")
     entry_room = data.get("entry_room")
+    default_door_prop_id = data.get("default_door_prop_id")
     indoor = data.get("indoor")
     terrain = data.get("terrain")
     map3d = data.get("map3d")
@@ -1769,6 +1795,7 @@ def update_location_with_extras(location_id: str,
                   or outfit_type is not None or knowledge_item_id is not None
                   or passable is not None
                   or entry_room is not None or indoor is not None
+                  or default_door_prop_id is not None
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
@@ -1802,6 +1829,15 @@ def update_location_with_extras(location_id: str,
                     _l["passable"] = bool(passable)
                 if entry_room is not None:
                     _l["entry_room"] = (entry_room or "").strip()
+                if default_door_prop_id is not None:
+                    # THE PLACE'S OWN DOOR (2026-08-27): every door opening
+                    # that names no prop of its own gets this one, unless it
+                    # opts out with ``door_prop: "none"``. Normalized through
+                    # the ONE prop-id rule, so a typo cannot become a
+                    # directory name; empty = no default.
+                    from app.core.props import safe_prop_id
+                    _l["default_door_prop_id"] = safe_prop_id(
+                        str(default_door_prop_id or ""))
                 if indoor is not None:
                     _v = (indoor or "").strip().lower()
                     _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""

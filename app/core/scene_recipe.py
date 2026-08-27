@@ -78,7 +78,12 @@ logger = get_logger(__name__)
 #: 4 (2026-08-25): STAIRS — ``map3d.stairs`` becomes a flight of solid
 #: ``stair_step`` boxes plus a ``stair_pad`` at each end, so a storey can be
 #: reached on foot and the elevator is only the fallback.
-SCENE_RECIPE_VERSION = 4
+#: 5 (2026-08-27): DOOR PROPS — a door opening may be filled by a PROP
+#: instead of the flat leaf: a ``models[]`` spec with ``measure "fit"``,
+#: hung on its HINGE edge so a renderer can swing it. The leaf wall stays in
+#: ``walls[]`` (the Blender exterior render reads that list) and merely says
+#: ``door_prop`` so the renderers skip drawing it.
+SCENE_RECIPE_VERSION = 5
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -814,9 +819,10 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         area2 += x1 * z2 - x2 * z1
     ccw = area2 > 0
 
-    # (level, edge index) → the (span, head height, has a leaf) the doors of
-    # that storey cut out of it.
-    cuts: Dict[Tuple[int, int], List[Tuple[float, float, float, bool]]] = {}
+    # (level, edge index) → the (span, head height, has a leaf, the leaf is a
+    # PROP) the doors of that storey cut out of it.
+    cuts: Dict[Tuple[int, int],
+               List[Tuple[float, float, float, bool, bool]]] = {}
     for door in doors:
         hit = _contour_hit(pts, door["at"], door["normal"])
         if not hit:
@@ -825,7 +831,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         half = _num(door.get("width")) / 2
         cuts.setdefault((int(door.get("level") or 0), i), []).append(
             (t - half, t + half, _num(door.get("top_y")),
-             bool(door.get("leaf"))))
+             bool(door.get("leaf")), bool(door.get("door_prop"))))
 
     height = _wall_height(storey)
     wall_kind = str((map3d or {}).get("wall_kind") or "").strip()
@@ -858,26 +864,26 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
             # against the stretches that yielded to a room hull, because there
             # is no contour wall there to carry either. A door as tall as the
             # wall leaves no lintel and drops out; a passage carries no leaf.
-            pieces: List[Tuple[float, float, float, float, str]] = [
-                (s0, s1, foot - sink, height + sink, "")
+            pieces: List[Tuple[float, float, float, float, str, bool]] = [
+                (s0, s1, foot - sink, height + sink, "", False)
                 for s0, s1 in _subtract([(0.0, length)], holes,
                                         MIN_WALL_PIECE_M)]
-            for t0, t1, top_y, has_leaf in door_cuts:
+            for t0, t1, top_y, has_leaf, has_prop in door_cuts:
                 span = (max(t0, 0.0), min(t1, length))
                 if span[1] - span[0] < MIN_WALL_PIECE_M:
                     continue
                 clipped = _subtract([span], sorted(yielded), MIN_WALL_PIECE_M)
                 lintel = foot + height - top_y
                 if MIN_WALL_PIECE_M <= lintel <= height:
-                    pieces.extend((s0, s1, top_y, lintel, "lintel")
+                    pieces.extend((s0, s1, top_y, lintel, "lintel", False)
                                   for s0, s1 in clipped)
                 # THE LEAF fills the CLEAR opening: from the wall's own foot
                 # (never skirted — it is the door, not a wall standing in the
                 # terrain) up to the door's head.
                 if has_leaf and top_y - foot >= MIN_WALL_PIECE_M:
-                    pieces.extend((s0, s1, foot, top_y - foot, "leaf")
-                                  for s0, s1 in clipped)
-            for s0, s1, base_y, piece_h, kind in pieces:
+                    pieces.extend((s0, s1, foot, top_y - foot, "leaf",
+                                   has_prop) for s0, s1 in clipped)
+            for s0, s1, base_y, piece_h, kind, has_prop in pieces:
                 start, end = _segment_points(a, ux, uz, s0, s1)
                 entry: Dict[str, Any] = {
                     "level": level,
@@ -905,6 +911,11 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                     # excluded from the facade culling like a glass pane, and
                     # no barrier — one walks THROUGH a door.
                     entry["leaf"] = True
+                    if has_prop:
+                        # A PROP fills this hole (v5) — same rule as on a room
+                        # wall: the renderers skip the plate, the entry stays
+                        # for the exterior render.
+                        entry["door_prop"] = True
                 elif wall_kind:
                     entry["texture_kind"] = wall_kind
                 if kind == "lintel":
@@ -971,8 +982,40 @@ def _opening_height(op: Dict[str, Any], wall_height: float) -> float:
     return height if height > 0 else wall_height
 
 
+def door_prop_id(opening: Dict[str, Any], default_prop_id: str = "") -> str:
+    """WHICH prop stands in this opening — ``""`` when none does.
+
+    THREE-VALUED, and the same rule everywhere this file asks (user decision
+    2026-08-27, plan-door-props-texture-slots.md):
+
+    * the opening's own ``prop_id`` wins,
+    * ``door_prop: "none"`` is the explicit "no prop here" and blocks the
+      location default (an EMPTY ``prop_id`` is "nothing chosen", which is
+      what the default is for),
+    * otherwise the location's ``default_door_prop_id``,
+    * and otherwise the open hole with the flat leaf, exactly as before.
+
+    Only a ``door`` takes one: a window's hole is glass, and a ``passage`` is
+    an authored opening WITHOUT a door — putting a leaf, let alone a prop, in
+    either would state something nobody drew.
+
+    A pure function of the two records on purpose: the wall splitter, the
+    doorway list and the model spec all have to agree about which openings
+    have a door prop, and they do because they all ask THIS.
+    """
+    if str(opening.get("type") or "door").lower() != "door":
+        return ""
+    own = str(opening.get("prop_id") or "").strip()
+    if own:
+        return own
+    if str(opening.get("door_prop") or "").strip().lower() == "none":
+        return ""
+    return str(default_prop_id or "").strip()
+
+
 def _room_walls(recipe: Dict[str, Any], storey: float,
-                ground_level: int) -> List[Dict[str, Any]]:
+                ground_level: int,
+                default_door_prop_id: str = "") -> List[Dict[str, Any]]:
     """One room's shell walls, split around its openings (§ A4).
 
     EVERY opening is cut the same way (finding 2026-08-25): the wall below it
@@ -1014,7 +1057,8 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
 
         def _emit(s0: float, s1: float, y: float, h: float,
                   thickness: float, glass: bool = False,
-                  lintel: bool = False, leaf: bool = False) -> None:
+                  lintel: bool = False, leaf: bool = False,
+                  door_prop: bool = False) -> None:
             if s1 - s0 < MIN_SEGMENT_M or h < MIN_SEGMENT_M:
                 return
             # Only a piece that STANDS ON THE FLOOR gets the skirt (§ A16.9):
@@ -1046,6 +1090,13 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
                 # a pane, out of the facade culling like a pane, and no
                 # barrier — one walks THROUGH a door.
                 entry["leaf"] = True
+                if door_prop:
+                    # …and a PROP fills this hole (v5): the renderers skip the
+                    # plate, the prop is the door. The entry itself STAYS —
+                    # the Blender exterior render builds its facade from
+                    # ``walls`` and would lose the door's prism with it
+                    # (user decision 2026-08-27).
+                    entry["door_prop"] = True
             elif kind:
                 entry["texture_kind"] = kind
             if lintel:
@@ -1090,14 +1141,15 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
                       WALL_THICKNESS * PANE_THICKNESS_FACTOR, glass=True)
             elif op_type == "door":
                 _emit(s0, s1, 0.0, top,
-                      WALL_THICKNESS * PANE_THICKNESS_FACTOR, leaf=True)
+                      WALL_THICKNESS * PANE_THICKNESS_FACTOR, leaf=True,
+                      door_prop=bool(door_prop_id(op, default_door_prop_id)))
     return walls
 
 
 # ── Doorways ────────────────────────────────────────────────────────────
 
-def _doorways(recipes: List[Dict[str, Any]],
-              storey: float) -> List[Dict[str, Any]]:
+def _doorways(recipes: List[Dict[str, Any]], storey: float,
+              default_door_prop_id: str = "") -> List[Dict[str, Any]]:
     """Every walkable threshold of the location as a finished primitive
     (plan-betreten-und-tueren.md § 4.1).
 
@@ -1137,6 +1189,14 @@ def _doorways(recipes: List[Dict[str, Any]],
     A window is no way out (``_WALKABLE_TYPES``), a room without a shell has
     no threshold, and the order is deterministic (level, position, rooms):
     consumers diff whole payloads.
+
+    THE DOOR PROP rides along in the INTERNAL key ``_door_prop`` (v5): which
+    prop fills this hole (:func:`door_prop_id`) and which side its hinge is
+    on. It is resolved here because this is where an opening becomes a hole —
+    :func:`_door_prop_models` is its only reader and :func:`compose_scene`
+    strips the key before the payload leaves. ``hinge`` is read against THIS
+    entry's ``along``, i.e. against the wall of ``rooms[0]``; a neighbour's
+    mirrored copy runs the other way and never wins the dedup at equal width.
     """
     from app.models.world import GROUND_ROOM_ID
 
@@ -1185,6 +1245,13 @@ def _doorways(recipes: List[Dict[str, Any]],
                     "height_m": _r(min(_opening_height(op, wall_h), wall_h)),
                     "base_y": base,
                     "rooms": _rooms_of(room_id, to),
+                    # INTERNAL, stripped in compose_scene — see the docstring.
+                    "_door_prop": {
+                        "id": door_prop_id(op, default_door_prop_id),
+                        "hinge": ("right"
+                                  if str(op.get("hinge") or "").strip().lower()
+                                  == "right" else "left"),
+                    },
                 }
                 # The CENTRE before the edge clamp: that point is identical on
                 # both faces of a shared wall (up to the wall's own offset),
@@ -2054,6 +2121,100 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     return out
 
 
+def _door_prop_models(doorways: List[Dict[str, Any]],
+                      ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """The door props of a location as ``models[]`` specs (§ B2 v5), plus the
+    ``{prop_id: model_signature}`` of the props they name.
+
+    The second half is for the scene signature and nothing else: a door prop's
+    URL never changes when its mesh is regenerated, so without the signature a
+    running client would keep the old leaf forever — the same reason a room
+    placement carries ``model_sig`` (``room_recipe._join_placements``).
+
+    ONE spec per threshold that :func:`door_prop_id` gave a prop — a door two
+    rooms share is one hole, so it is one door, and the dedup in
+    :func:`_doorways` has already made it one entry. Call this AFTER
+    :func:`threshold_base_y` has settled ``base_y``: a door prop stands on the
+    threshold, not in it.
+
+    NOT REAL-SIZE, and the only such spec in this file: a door prop is FITTED
+    to the hole it fills (``measure "fit"``, ``size_m`` = the clear width and
+    height of the doorway). A frame that is 5 cm too narrow is a lit gap in a
+    wall, so the opening wins over the mesh's own metres — the renderer scales
+    x to the width, y to the height and z with the width factor, keeping the
+    leaf's depth in proportion.
+
+    THE ANCHOR IS THE HINGE EDGE, not the middle, because that is the point a
+    renderer swings the leaf about (the client's own view state, never the
+    server's). Looking ALONG ``along``, hinge ``left`` is the end the
+    direction comes from::
+
+        left :  at_world − along · width/2
+        right:  at_world + along · width/2
+
+    and ``yaw_deg`` turns the model's local +x onto the direction the leaf
+    RUNS, away from its hinge: three's ``Ry(+θ)`` (= the server's
+    ``local_to_world``, § A1.1) puts local +x on ``(cos θ, −sin θ)``, so
+    ``θ = atan2(−uz, ux)`` for a left hinge and 180° more for a right one.
+    The shared ``place()`` hangs a ``fit`` model on its own local −x edge, so
+    those two numbers together put the mesh exactly in the hole.
+
+    ``door.swing`` is the sign of "a POSITIVE rotation about y opens the leaf
+    outward". Turning the placed group by φ moves a world offset (vx, vz) with
+    ``d/dφ|₀ = (vz, −vx)``, and the free end of the leaf sits at ``v = +along``
+    (left hinge) or ``v = −along`` (right hinge); ``(uz, −ux)`` IS
+    :func:`_door_outward`, the normal away from the room the hole was cut out
+    of. Hence +1 for a left hinge, −1 for a right one.
+
+    A prop id that names nothing (or a prop without a mesh) keeps its spec
+    with an EMPTY ``variants`` map — the same rule dangling room-prop
+    placements follow. It carries no ``placeholder_dims``: a stand-in box is
+    drawn centred on its anchor, and this anchor is an edge, so the box would
+    stand half a door beside the hole.
+    """
+    from urllib.parse import quote
+
+    from app.core import props as prop_store
+    out: List[Dict[str, Any]] = []
+    sigs: Dict[str, str] = {}
+    for index, door in enumerate(doorways):
+        info = door.get("_door_prop") or {}
+        pid = str(info.get("id") or "")
+        if not pid:
+            continue
+        hinge = "right" if info.get("hinge") == "right" else "left"
+        along = door.get("along") or [1.0, 0.0]
+        ux, uz = _num(along[0]), _num(along[1])
+        width = _num(door.get("width_m"))
+        edge = (width / 2) * (1.0 if hinge == "right" else -1.0)
+        yaw = math.degrees(math.atan2(-uz, ux)) + (180.0 if hinge == "right"
+                                                   else 0.0)
+        prop = prop_store.get_prop(pid) or {}
+        has_model = bool(prop.get("has_model"))
+        sigs[pid] = str(prop.get("model_signature") or "")
+        out.append({
+            "role": "prop",
+            "id": pid,
+            "variants": (_variants(f"/assets/props/{quote(pid)}/model",
+                                   prop.get("model_tiers"))
+                         if has_model else {}),
+            # The room the hole was cut out of — a threshold names it first,
+            # and that is the parent a renderer hangs the leaf in.
+            "room_id": (door.get("rooms") or [""])[0],
+            "level": int(door.get("level") or 0),
+            "fix_euler": _fix_euler(prop.get("rotation")),
+            "yaw_deg": _r(yaw % 360, 1),
+            "measure": "fit",
+            "size_m": [_r(width), _r(_num(door.get("height_m")))],
+            "anchor": [_r(_num(door["at_world"][0]) + ux * edge),
+                       _r(_num(door["at_world"][1]) + uz * edge)],
+            "bottom_y": _r(_num(door.get("base_y"))),
+            "door": {"opening": index, "hinge": hinge,
+                     "swing": 1 if hinge == "left" else -1},
+        })
+    return out, sigs
+
+
 def depth_cut_plane(anchor_u: float, anchor_v: float, yaw_deg: float,
                     depth_m: float, keep: float, side: str,
                     ) -> Optional[Dict[str, Any]]:
@@ -2267,7 +2428,8 @@ def _figures() -> Dict[str, Any]:
 def _signature(location: Dict[str, Any], plan_width_m: float,
                recipes: List[Dict[str, Any]], building_meta: Dict[str, Any],
                room_metas: Dict[str, Dict[str, Any]],
-               ground_kind: str = "") -> str:
+               ground_kind: str = "",
+               door_prop_sigs: Optional[Dict[str, str]] = None) -> str:
     """Change detection for the whole scene — a SUPERSET of the room recipe's
     signature: the room signatures already cover layouts, neighbour openings
     and prop sidecars, and the model metas add every anchor dial (floors,
@@ -2291,7 +2453,13 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     payload is a function of the CODE as much as of the data: a changed
     geometry rule used to leave every signature exactly where it was, so
     clients and caches kept the old scene until someone saved the location by
-    hand. Bumping the constant moves every scene signature at once."""
+    hand. Bumping the constant moves every scene signature at once.
+
+    THE DOOR PROPS are in here twice over (v5): the location's
+    ``default_door_prop_id``, which no room signature covers because it is a
+    field of the LOCATION, and ``door_prop_sigs`` — the mesh signature of
+    every prop a door actually resolved to, for the same reason a room
+    placement carries one (a regenerated mesh keeps its URL)."""
     import hashlib
     import json
     from app.core.game_time import get_calendar
@@ -2312,6 +2480,9 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
                   for r in recipes},
         "building_meta": building_meta or {},
         "room_metas": room_metas or {},
+        "default_door_prop_id": str(location.get("default_door_prop_id")
+                                    or "").strip(),
+        "door_props": door_prop_sigs or {},
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True,
                                   default=str).encode()).hexdigest()
@@ -2593,10 +2764,16 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         by_room[str(room.get("id") or "")] = room
     levels = _used_levels(recipes)
 
+    # The location's own fallback door prop (v5, user decision 2026-08-27):
+    # an opening that names none takes this one, and ``door_prop: "none"``
+    # opts out of it. Resolved in :func:`door_prop_id`, nowhere else.
+    default_door_prop_id = str(location.get("default_door_prop_id")
+                               or "").strip()
+
     # Thresholds as finished primitives (plan-betreten-und-tueren.md § 4.1) —
     # composed BEFORE the shell, because the shell takes its holes from them
     # (§ 4.2). One derivation, two consumers: this block and the payload.
-    doorways = _doorways(recipes, storey)
+    doorways = _doorways(recipes, storey, default_door_prop_id)
 
     # Indoor room hulls per level, world metres — where they run on the
     # contour line, the contour wall yields (one wall, one owner).
@@ -2625,7 +2802,9 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                       "top_y": _num(d["base_y"]) + _num(d["height_m"]),
                       # …and whether the hull's hole gets a LEAF: a door has
                       # one, an open passage has not.
-                      "leaf": str(d.get("type") or "door") == "door"}
+                      "leaf": str(d.get("type") or "door") == "door",
+                      # …and whether a PROP fills that leaf's place (v5).
+                      "door_prop": bool((d.get("_door_prop") or {}).get("id"))}
                      for d in doorways if d.get("outside")]
 
     walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey,
@@ -2706,7 +2885,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     for recipe in recipes:
         room_id = str(recipe.get("room_id") or "")
         room = by_room.get(room_id) or {}
-        walls.extend(_room_walls(recipe, storey, min(levels)))
+        walls.extend(_room_walls(recipe, storey, min(levels),
+                                 default_door_prop_id))
         diorama = _diorama_model(recipe, room, room_metas.get(room_id) or {},
                                  storey)
         if diorama:
@@ -2728,6 +2908,16 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         door["base_y"] = _r(threshold_base_y(
             [(_num(door["base_y"]), stand_by_room.get(room_id))
              for room_id in door["rooms"]]))
+
+    # DOOR PROPS (v5) — after the thresholds have found their standing height,
+    # because a door prop stands ON its threshold. The resolution rode in on
+    # the doorway (``_door_prop``) and leaves the payload again right here:
+    # the model spec is its only consumer, and the same fact twice in one
+    # payload is exactly what § B5 forbids.
+    door_props, door_prop_sigs = _door_prop_models(doorways)
+    models.extend(door_props)
+    for door in doorways:
+        door.pop("_door_prop", None)
 
     # Per-room recipe vocabulary in LOCAL METRES — the 2D editor's ghost
     # openings draw from here instead of re-deriving the mirroring locally
@@ -2759,7 +2949,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
 
     out = {
         "signature": _signature(location, plan_width_m, recipes,
-                                building_meta, room_metas, ground_kind),
+                                building_meta, room_metas, ground_kind,
+                                door_prop_sigs),
         "rooms": room_blocks,
         # The location's FOOTPRINT as a polygon in the scene frame (contract
         # v6 Nr. 1 + Nr. 4): the drawn ``map3d.boundary`` where there is one,
