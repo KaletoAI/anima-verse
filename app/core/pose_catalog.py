@@ -44,20 +44,27 @@ def _load(axis: str) -> Dict[str, dict]:
     out: Dict[str, dict] = {}
     for key, entry in entries.items():
         solo = bool(entry.get("solo", True))
-        out[str(key).strip().lower()] = {
+        norm = {
             "prompt": str(entry.get("prompt") or ""),
             "synonyms": [str(s).strip().lower() for s in (entry.get("synonyms") or []) if str(s).strip()],
             "animation": str(entry.get("animation") or ""),
             "solo": solo,
             "_default": bool(entry.get("_default", False)),
-            # plan-posen-plaetze.md § 3.2: the PLACE TYPE the pose needs.
-            "group": str(entry.get("group") or "").strip().lower(),
-            # pair poses only: slots of the anchor marker the pair consumes,
-            # and how the clip frame (+X = A->B) turns against the marker facing
-            "places": (2 if solo else max(1, min(2, int(entry.get("places") or 2)))),
-            "yaw_offset": (0.0 if solo else float(entry.get("yaw_offset") or 0.0)),
-            "_stray_pair_fields": solo and ("places" in entry or "yaw_offset" in entry),
         }
+        if axis == "pose":
+            # Place types are POSE vocabulary — an expression has no place.
+            # plan-posen-plaetze.md § 3.2: the PLACE TYPE the pose needs.
+            norm["group"] = str(entry.get("group") or "").strip().lower()
+            # pair poses only: slots of the anchor marker the pair consumes,
+            # and how the clip frame (+X = A->B) turns against the marker
+            # facing. A solo pose occupies exactly one place and never turns.
+            norm["places"] = (1 if solo
+                              else max(1, min(2, int(entry.get("places") or 2))))
+            norm["yaw_offset"] = (0.0 if solo
+                                  else float(entry.get("yaw_offset") or 0.0))
+            norm["_stray_pair_fields"] = solo and ("places" in entry
+                                                   or "yaw_offset" in entry)
+        out[str(key).strip().lower()] = norm
     return out
 
 
@@ -126,7 +133,7 @@ def poses_in_group(group: str) -> List[str]:
     """Keys of the group, the group's default first, the rest alphabetical."""
     g = (group or "").strip().lower()
     default = (get_groups().get(g) or {}).get("default", "")
-    keys = sorted(k for k, e in get_catalog("pose").items() if e["group"] == g)
+    keys = sorted(k for k, e in get_catalog("pose").items() if e.get("group") == g)
     if default in keys:
         keys.remove(default)
         keys.insert(0, default)
@@ -182,12 +189,12 @@ def validate_catalog(axis: str) -> List[str]:
         groups = get_groups()
         for g, spec in groups.items():
             d = spec["default"]
-            if d not in catalog or catalog[d]["group"] != g:
+            if d not in catalog or catalog[d].get("group") != g:
                 problems.append(f"pose group '{g}': default '{d}' is not a pose of this group")
         for key, entry in catalog.items():
-            if entry["group"] not in groups:
-                problems.append(f"{axis}/{key}: unknown place type '{entry['group']}'")
-            if entry["_stray_pair_fields"]:
+            if entry.get("group", "") not in groups:
+                problems.append(f"{axis}/{key}: unknown place type '{entry.get('group', '')}'")
+            if entry.get("_stray_pair_fields"):
                 problems.append(f"{axis}/{key}: places/yaw_offset only make sense on a pair pose")
     return problems
 

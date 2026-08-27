@@ -110,7 +110,10 @@ from the catalog file:
   group_of("nope") == "".
 - poses_in_group("seat") starts with the group's default "sitting".
 - pose_places("sitting") == 1 (solo), pose_places("dancing together") == 2
-  (pair default), pose_yaw_offset("dancing together") == 0.0.
+  (pair default), pose_yaw_offset("dancing together") == 0.0; the stored entry
+  says the same as the accessor, so a solo entry carries places 1, not 2.
+- the place vocabulary is POSE vocabulary: an expression entry (`neutral`) has
+  no group/places/yaw_offset at all.
 - validate_catalog("pose") is empty for the shipped file; a private copy with
   a pose in group "sofa" (unknown) and a group whose default is a pose of
   another group reports exactly those two problems.
@@ -582,6 +585,10 @@ try:
           pc.group_of("standing"), pc.group_of("nope")) == ("seat", "bed", "stand", ""))
     check("poses_in_group(seat) starts with default", pc.poses_in_group("seat")[0] == "sitting")
     check("pose_places solo 1 / pair 2", (pc.pose_places("sitting"), pc.pose_places("dancing together")) == (1, 2))
+    check("solo entry stores 1 place", cat["sitting"]["places"] == 1, str(cat["sitting"]))
+    _expr = pc.get_catalog("expression")["neutral"]
+    check("expression entry has no place fields",
+          not ({"group", "places", "yaw_offset"} & set(_expr)), str(sorted(_expr)))
     check("pose_yaw_offset pair 0.0", pc.pose_yaw_offset("dancing together") == 0.0)
     check("shipped catalog validates", pc.validate_catalog("pose") == [], str(pc.validate_catalog("pose")))
     # private copy with two deliberate faults
