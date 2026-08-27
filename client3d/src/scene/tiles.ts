@@ -433,9 +433,9 @@ export interface SwingingDoor {
   /** `door.leaf_bbox` and the spec's `fix_euler` as the payload sent them —
    *  kept so a tier swap can hang the pivot again without the spec in hand. */
   leafBbox?: { min: [number, number, number]; max: [number, number, number] };
-  hinge: 'left' | 'right';
   fixEuler?: { x?: number; y?: number; z?: number };
 }
+  hinge: 'left' | 'right';
 
 /**
  * THE FLOOR OF ONE ROOM of a mounted scene, as the spot derivation reads it.

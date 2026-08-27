@@ -15,7 +15,8 @@ import {
   type SceneWall,
 } from '../api';
 import { roomDoor } from '../game/doors';
-import { leafPivot, type LeafBox } from '../game/doorSwing';
+import { leafPivot } from '@anima/scene-render';
+import type { FixEuler, LeafBox } from '@anima/scene-render';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
