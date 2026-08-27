@@ -122,11 +122,21 @@ from the catalog file:
 - validate_catalog("pose") is empty for the shipped file; a private copy with
   a pose in group "sofa" (unknown) and a group whose default is a pose of
   another group reports exactly those two problems.
+- the empty-default rule (fix round 1): a place type has to EXIST before a
+  pose can name it, so a group with no poses may carry an empty default. A
+  second private copy with four groups — `stand` (sound), `bench` (no poses,
+  default ""), `shelf` (no poses, default "standing", which belongs to
+  `stand`) and `floor` (owns the pose `lying`, default "") — therefore reports
+  exactly two problems, `shelf` and `floor`, and says nothing about `bench`.
 
 Stage 9 - groups route contract (task 2), derived BY HAND:
 - _groups_problems accepts the shipped block against the shipped entries
   (empty list); dropping "seat" while entries still use it reports
   "still used"; a default from another group reports "default".
+- the same empty-default rule against the entries dict: the shipped block plus
+  a poseless `bench` with default "" stays empty; `seat` (which owns poses)
+  with default "" is reported; a poseless `bench` whose default is `standing`
+  (a pose of `stand`) is reported.
 - _normalize_group({"label": " Seat ", "root_drop": "0.3", "default": "Sitting"})
   == {"label": "Seat", "root_drop": 0.3, "default": "sitting"}.
 - the two new routes, against a COPY of the shipped catalog (stage-5 harness):
@@ -145,7 +155,13 @@ Stage 9 - groups route contract (task 2), derived BY HAND:
   no place field at all.
 - approve-as-entry is a pose creation, so it obeys the same rule: without
   `group` -> 400 "place type missing or unknown", with `group: "stand"` the
-  written entry carries it and validate_catalog stays empty.
+  written entry carries it and validate_catalog stays empty. Approving a PAIR
+  candidate (`solo: false`, places 1, yaw_offset 90) stores both fields, the
+  same way create does.
+- end to end, the block can GROW: writing a `bench` type with no poses and an
+  empty default succeeds and validates, the first pose may then name `bench`,
+  and re-writing the very same block afterwards is a 400 -- `bench` has a pose
+  now, so its empty default is no longer legal.
 
 The stage-2/3/4/5/7 DB work runs against a throwaway storage dir, never the
 demo world (the server may hold it).
@@ -657,6 +673,34 @@ try:
         shutil.rmtree(_bad.parent, ignore_errors=True)
         pc.reload_catalogs()
 
+    # A second private copy for the EMPTY-DEFAULT rule. A place type has to
+    # exist before any pose can name it, so a group without poses may carry an
+    # empty default; `floor` (which owns `lying`) may not, and the poseless
+    # `shelf` pointing at `standing` (a pose of `stand`) is still wrong.
+    _new = _P(_tf.mkdtemp(prefix="pose-newgroup-")) / "pose_catalog.json"
+    _new.write_text(_json.dumps({
+        "groups": {"stand": {"label": "Stand", "root_drop": 0, "default": "standing"},
+                   "bench": {"label": "Bench", "root_drop": 0.3, "default": ""},
+                   "shelf": {"label": "Shelf", "root_drop": 0, "default": "standing"},
+                   "floor": {"label": "Floor", "root_drop": 0.051, "default": ""}},
+        "entries": {"standing": {"prompt": "p", "animation": "idle", "group": "stand", "_default": True},
+                    "lying": {"prompt": "p", "animation": "lie", "group": "floor"}}}), encoding="utf-8")
+    pc.catalog_path = lambda axis: _new if axis == "pose" else _orig(axis)
+    try:
+        pc.reload_catalogs()
+        _p2 = pc.validate_catalog("pose")
+        check("poseless group may keep an empty default",
+              not any("'bench'" in p for p in _p2), str(_p2))
+        check("a group WITH poses is still asked for one",
+              any("'floor'" in p and "default ''" in p for p in _p2), str(_p2))
+        check("a poseless group with a foreign default is still wrong",
+              any("'shelf'" in p for p in _p2), str(_p2))
+        check("exactly shelf + floor", len(_p2) == 2, str(_p2))
+    finally:
+        pc.catalog_path = _orig
+        shutil.rmtree(_new.parent, ignore_errors=True)
+        pc.reload_catalogs()
+
     if _FAILURES:
         raise AssertionError(f"stage 8: {len(_FAILURES)} failed check(s): {_FAILURES}")
     print("OK smoke_pose_catalog stage 8")
@@ -674,6 +718,21 @@ try:
     check("foreign default refused", any("default" in p for p in poses_route._groups_problems(_g3, _entry_map)))
     check("normalize group", poses_route._normalize_group({"label": " Seat ", "root_drop": "0.3", "default": "Sitting"})
           == {"label": "Seat", "root_drop": 0.3, "default": "sitting"})
+    # The empty-default rule, measured against the entries the block is
+    # written for: no poses -> an empty default is fine, poses -> it is not.
+    _g4 = dict(_g); _g4["bench"] = {"label": "Bench", "root_drop": 0.3, "default": ""}
+    check("a poseless type may carry an empty default",
+          poses_route._groups_problems(_g4, _entry_map) == [],
+          str(poses_route._groups_problems(_g4, _entry_map)))
+    _g5 = dict(_g); _g5["seat"] = dict(_g["seat"], default="")
+    check("a type WITH poses may not",
+          any("'seat'" in p and "default ''" in p
+              for p in poses_route._groups_problems(_g5, _entry_map)),
+          str(poses_route._groups_problems(_g5, _entry_map)))
+    _g6 = dict(_g); _g6["bench"] = {"label": "Bench", "root_drop": 0.3, "default": "standing"}
+    check("a poseless type with a foreign default is refused",
+          any("'bench'" in p for p in poses_route._groups_problems(_g6, _entry_map)),
+          str(poses_route._groups_problems(_g6, _entry_map)))
 
     def expect_400(name, call, needle):
         """Records the 400 a route owes (and its message) instead of aborting
@@ -755,8 +814,41 @@ try:
         check("the approved entry carries its place type",
               _doc()["entries"]["roosting high"]["group"] == "stand",
               str(_doc()["entries"].get("roosting high")))
+        # A PAIR approval carries the pair fields too — approve mirrors
+        # create, otherwise every approved pair silently became "2 places, 0".
+        record_candidate("pose", "leaning on each other", "standing", 0.5)
+        poses_route._approve_candidate_sync({}, {
+            "axis": "pose", "raw_text": "leaning on each other",
+            "key": "leaning together", "prompt": "two figures leaning together",
+            "animation": "idle", "group": "stand", "solo": False,
+            "places": 1, "yaw_offset": 90})
+        _lean = _doc()["entries"]["leaning together"]
+        check("the approved pair keeps places/yaw_offset",
+              (_lean.get("places"), _lean.get("yaw_offset")) == (1, 90.0), str(_lean))
         check("the grown catalog still validates",
               pc.validate_catalog("pose") == [], str(pc.validate_catalog("pose")))
+
+        # End to end: the block can GROW. A brand-new type has no poses yet,
+        # so it is written with an empty default; the first pose may then name
+        # it; and the very same block is refused afterwards, because the empty
+        # default is no longer legal once the type is in use.
+        _g_new = dict(_res["groups"])
+        _g_new["bench"] = {"label": "Bench", "root_drop": 0.3, "default": ""}
+        poses_route._put_groups_sync({"groups": _g_new})
+        check("a poseless new place type is written",
+              _doc()["groups"]["bench"] == {"label": "Bench", "root_drop": 0.3, "default": ""},
+              str(_doc()["groups"].get("bench")))
+        check("the catalog with the empty new type validates",
+              pc.validate_catalog("pose") == [], str(pc.validate_catalog("pose")))
+        poses_route._create_entry_sync({}, {
+            "axis": "pose", "key": "perching", "prompt": "perched on a bench",
+            "animation": "idle", "group": "bench"})
+        check("the first pose of the new type is accepted",
+              _doc()["entries"]["perching"]["group"] == "bench",
+              str(_doc()["entries"].get("perching")))
+        expect_400("a type in use may not keep an empty default",
+                   lambda: poses_route._put_groups_sync({"groups": _doc()["groups"]}),
+                   "default '' is not a pose of this group")
     finally:
         pc.catalog_path = _g_real
         pc.reload_catalogs()

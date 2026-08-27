@@ -207,7 +207,12 @@ def _normalize_group(raw: Any) -> Dict[str, Any]:
 
 def _groups_problems(groups: Dict[str, Any], entries: Dict[str, Any]) -> List[str]:
     """Why a groups block may NOT be written: a group still named by a pose
-    is missing, or a default is not a pose of its own group."""
+    is missing, or a default is not a pose of its own group.
+
+    A group with NO poses may carry an empty default — a place type has to
+    exist before any pose can name it (``_group`` rejects an unknown one), so
+    demanding a default from the start would make the block unable to grow.
+    """
     problems: List[str] = []
     for key, entry in entries.items():
         g = str(entry.get("group") or "")
@@ -215,6 +220,8 @@ def _groups_problems(groups: Dict[str, Any], entries: Dict[str, Any]) -> List[st
             problems.append(f"place type '{g}' is still used by '{key}'")
     for g, spec in groups.items():
         d = spec.get("default", "")
+        if not d and not any(str(e.get("group") or "") == g for e in entries.values()):
+            continue
         if d not in entries or str(entries[d].get("group") or "") != g:
             problems.append(f"place type '{g}': default '{d}' is not a pose of this group")
     return problems

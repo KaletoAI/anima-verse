@@ -548,14 +548,26 @@ export function PosesTab() {
                       </Field>
                       <Field
                         label={t('Default pose')}
-                        hint={t('The pose a click on such a marker sets. It has to be a pose of this place type.')}
+                        hint={t('The pose a click on such a marker sets. It has to be a pose of this place type — only a place type without poses may stay empty.')}
                       >
                         <select
                           className="ga-input"
                           value={g.default}
                           onChange={(e) => patchGroup(key, { default: e.target.value })}
                         >
-                          <option value="">{t('— none —')}</option>
+                          {!poses.length ? (
+                            // A place type only just added has no poses yet: a
+                            // pose can only name a type that already exists, so
+                            // the default arrives with the first pose.
+                            <option value="">{t('— none —')}</option>
+                          ) : !g.default ? (
+                            // With poses the server demands a real default —
+                            // show the gap instead of silently rendering the
+                            // first pose while the value is still empty.
+                            <option value="" disabled>
+                              {t('— pick a default pose —')}
+                            </option>
+                          ) : null}
                           {poses.map((p) => (
                             <option key={p.key} value={p.key}>
                               {p.key}

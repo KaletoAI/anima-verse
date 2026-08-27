@@ -189,6 +189,12 @@ def validate_catalog(axis: str) -> List[str]:
         groups = get_groups()
         for g, spec in groups.items():
             d = spec["default"]
+            # A place type only just added has no poses yet — and a pose can
+            # only name a type that already EXISTS, so the empty default of a
+            # poseless group is legal; without that the block could never grow.
+            # A default is demanded as soon as the group has its first pose.
+            if not d and not any(e.get("group") == g for e in catalog.values()):
+                continue
             if d not in catalog or catalog[d].get("group") != g:
                 problems.append(f"pose group '{g}': default '{d}' is not a pose of this group")
         for key, entry in catalog.items():
