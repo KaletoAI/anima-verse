@@ -79,7 +79,6 @@ import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { PropVariantPicker } from './PropVariantPicker'
 import { OpeningDoorProp } from './DoorPropPicker'
-import { SlotValuesEditor } from './SlotValuesEditor'
 import type { PropSlot } from '../props/propTypes'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
@@ -3555,16 +3554,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               variant={placement.variant}
               onVariant={(v) => patchProp({ variant: v })}
             />
-            {/* THE PROP'S TEXTURE SLOTS (v5): the picture in the frame, the
-                look of the pane. Rendered only for a prop that DECLARES one —
-                the list comes from the library record, and the panel writes
-                the value, nothing else. */}
-            <SlotValuesEditor
-              slots={dims?.slots}
-              values={placement.slot_values}
-              locationId={locationId}
-              onChange={(v) => patchProp({ slot_values: v })}
-            />
           </div>
         )
       })() : null}
@@ -3866,7 +3855,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 key={openingSel}
                 opening={op}
                 defaultPropId={defaultDoorPropId}
-                locationId={locationId}
                 onPatch={patchOpening}
               />
             ) : null}

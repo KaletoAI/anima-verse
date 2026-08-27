@@ -19,10 +19,8 @@
  *                      with the flat leaf, whatever the location says.
  *   Custom           — `prop_id`; this opening brings its own door.
  *
- * A door prop fills its TEXTURE SLOTS like any other prop (v5) — a glass door
- * is the stated case — so the panel offers a control per slot the RESOLVED
- * prop declares: the opening's own where it has one, the location's default
- * otherwise, because that is the mesh which will hang in this hole.
+ * What the resolved prop SHOWS is not decided here: a picture belongs to the
+ * prop, chosen where it is built (spec-picture-props.md, decision D3).
  *
  * Nothing here computes geometry: the editor writes fields, the server hangs
  * the mesh on the hinge (§ B2 `measure: "fit"`).
@@ -31,7 +29,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { PropFull } from '../props/propTypes'
-import { SlotValuesEditor } from './SlotValuesEditor'
 import type { RoomOpening } from './worldTypes'
 
 /** THE convention (plan-door-props-texture-slots.md): a door prop is tagged
@@ -112,13 +109,11 @@ export function DoorPropSelect({ value, onChange, emptyLabel, title, width,
 
 type DoorPropMode = 'default' | 'none' | 'custom'
 
-export function OpeningDoorProp({ opening, defaultPropId, locationId, onPatch }: {
+export function OpeningDoorProp({ opening, defaultPropId, onPatch }: {
   opening: RoomOpening
   /** The location's own default, so the first option can say WHICH door it
    *  is instead of leaving the reader to go and look. */
   defaultPropId?: string
-  /** The place whose gallery an image slot offers first. */
-  locationId?: string
   onPatch: (patch: Partial<RoomOpening>) => void
 }) {
   const { t } = useI18n()
@@ -131,12 +126,6 @@ export function OpeningDoorProp({ opening, defaultPropId, locationId, onPatch }:
   // per selected opening — the caller keys the component on the selection.
   const [pending, setPending] = useState(false)
   const mode: DoorPropMode = pending && stored === 'default' ? 'custom' : stored
-
-  // WHICH prop this opening will really show — the same three-valued rule the
-  // server resolves (`scene_recipe.door_prop_id`), asked here so the slot
-  // controls describe the mesh that is going to hang in the hole.
-  const effectivePropId = mode === 'none' ? ''
-    : mode === 'custom' ? (opening.prop_id || '') : (defaultPropId || '')
 
   const setMode = (next: DoorPropMode) => {
     setPending(next === 'custom')
@@ -175,17 +164,10 @@ export function OpeningDoorProp({ opening, defaultPropId, locationId, onPatch }:
           library={props}
         />
       ) : null}
-      {/* Everything that only means something where a leaf actually HANGS: the
-          slots of the prop that will fill this hole (the opening's own where
-          it named one, else the location's default), and the hinge. */}
+      {/* The one thing that only means something where a leaf actually HANGS:
+          which jamb it turns about. */}
       {mode !== 'none' ? (
         <>
-          <SlotValuesEditor
-            slots={props.find((p) => p.id === effectivePropId)?.slots}
-            values={opening.slot_values}
-            locationId={locationId || ''}
-            onChange={(v) => onPatch({ slot_values: v })}
-          />
           <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
             title={t('Left or right as seen from inside this room, facing the door.')}>
             {t('Hinge')}

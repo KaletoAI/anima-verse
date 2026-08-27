@@ -7154,69 +7154,11 @@ ist ein 400, kein stilles Verwerfen.
 
 ### Slot-WERTE: was in der Fläche steht
 
-Das Prop sagt, WELCHE Flächen füllbar sind; die **Platzierung** sagt, was
-hineinkommt. Gespeichert wird das als `slot_values` — an der Raum-Platzierung
-(`rooms[].layout.props[]`) und, gleichbedeutend, an der Öffnung
-(`rooms[].openings[]`, denn ein Tür-Prop hängt an der Öffnung, nicht an einer
-Platzierung):
-
-```json
-"slot_values": {
-  "picture": { "image": "/world/locations/haus/gallery/poster.png" },
-  "glass":   { "preset": "glass" }
-}
-```
-
-Der Schlüssel ist der **Slot-Name**, also ein **Materialname des Meshes**. Je
-Eintrag ist genau eines der beiden Felder gesetzt, und WELCHES entscheidet die
-Art des Slots:
-
-| Slot-Art | erlaubtes Feld | erlaubter Wert |
-|---|---|---|
-| `image` | `image` | eine Galerie-URL DIESES Servers: `/world/locations/{id}/gallery/{datei}` oder `/characters/{name}/images/{datei}` |
-| `material` | `preset` | ein Preset aus `MATERIAL_PRESETS` — heute nur `glass` |
-
-**Zwei Tore, und sie beantworten verschiedene Fragen.** Beim SPEICHERN
-(`props.sanitize_slot_values`, gerufen aus `world_ops._sanitize_props` und
-`_sanitize_opening`) wird geprüft, ob das Prop den Slot überhaupt deklariert
-— gelesen mit `props.declared_slots`, also direkt aus dem Sidecar und
-ausdrücklich NICHT über `get_prop`: ein voller Datensatz fordert nebenbei die
-Fernsicht-Meshes aller Varianten an, und ein Grundriss-Speichern ist kein
-Anlass, Mesh-Arbeit einzureihen — und ob der Wert die zur Art passende FORM
-hat; alles andere fällt weg (leise —
-eine hängengebliebene URL darf keinen Grundriss kosten). Beim KOMPONIEREN
-prüft `scene_recipe.slot_spec` ein zweites Mal gegen das, was das Prop
-**jetzt** deklariert: ein neu erzeugtes Mesh benennt andere Materialien, und
-ein Payload, der auf eine verschwundene Fläche zeigt, wäre in einem Renderer
-ein stiller Leerlauf und im nächsten eine Vermutung.
-
-Eine Öffnung, die den **Location-Default** erbt, nennt beim Speichern kein
-Prop — dort wird nur die Form geprüft, die Deklarations-Prüfung macht das
-Rezept, sobald der Default aufgelöst ist.
-
-Im Payload steht das Ergebnis am Spec:
-
-| Feld | Wo | Bedeutung |
-|---|---|---|
-| `slots` | `models[]` (Raum-Prop UND Tür-Prop) | `{"<materialname>": {"image"\|"preset"}}`; fehlt = das Prop rendert, wie es modelliert wurde |
-
-**Handrechnung.** Eine Platzierung des Props `table` (deklariert `picture`
-= `image` und `glass` = `material`) mit
-
-```
-slot_values = {"picture": {"image": "/world/locations/loc/gallery/wall.png"},
-               "glass":   {"preset": "glass"},
-               "screen":  {"image": "/world/locations/loc/gallery/wall.png"}}
-```
-
-ergibt am Spec `slots = {"picture": {"image": "/world/locations/loc/gallery/wall.png"},
-"glass": {"preset": "glass"}}` — `screen` fällt weg, weil das Prop es nicht
-deklariert. Wird dasselbe Prop danach neu erzeugt und benennt nur noch `glass`,
-bleibt vom selben gespeicherten Wert nur `{"glass": {"preset": "glass"}}` übrig.
-
-`slot_values` liegt in der **Signatur**: es reist in der Platzierung bzw. in
-der Öffnung mit und damit in der Raumsignatur, die in die Szenensignatur
-eingeht — ein getauschtes Bild erreicht also einen laufenden Client.
+Was in einer füllbaren Fläche steht, gehört zum **Prop**, nicht zur
+Platzierung: die Werte kommen aus den Prop-Defaults und aus den Bild-Varianten
+— siehe Addendum „Bild-Props". Im Payload steht das Ergebnis unverändert am
+Spec als `slots` (`models[]`, Raum-Prop wie Tür-Prop); fehlt der Schlüssel,
+rendert das Prop, wie es modelliert wurde.
 
 ### Der Tausch im Renderer (`applySlotMaterials`)
 
@@ -7279,9 +7221,6 @@ Neuaufbau).
 | Ein neues Mesh ERSETZT eine Auto-Liste — auch mit leerem Ergebnis | ebenda **[3c]** |
 | Patch-Pfad weist kaputte Listen ab und schreibt dabei nichts; gespeicherte Liste ist klein und dedupliziert | ebenda **[4]** |
 | Von Hand gepflegte (auch geleerte) Liste überlebt das nächste Modell | ebenda **[5]** |
-| Slot-WERTE: deklarierter Bild- + Material-Slot landen am Spec unter `slots`; undeklarierter Schlüssel, fremde/verformte URL, Preset im Bild-Slot und Bild im Material-Slot fallen weg | `scripts/smoke_scene_recipe.py` **[3s]** |
-| …und ein Wert, dessen Slot das Prop NICHT MEHR deklariert, fällt im Rezept (nicht erst im Renderer) | ebenda **[3s]** |
-| Tür-Prop: `openings[].slot_values` erreicht `slots` am Tür-Spec; geerbte Tür wird nur auf Form geprüft | ebenda **[3s]** |
-| Ein getauschtes Bild bewegt die Szenensignatur | ebenda **[3s]** |
+| Eine Platzierung/Öffnung mit `slot_values` verliert das Feld beim Speichern, und am Spec entsteht kein `slots` daraus | `scripts/smoke_scene_recipe.py` **[3p]** |
 | `applySlotMaterials`: das benannte Material bekommt eine `map`, das andere bleibt DASSELBE Objekt, und zwei Platzierungen derselben Cache-Gruppe haben VERSCHIEDENE Material-Instanzen | `scripts/smoke_slot_materials.mjs` **[1]/[2]** |
 | Glas-Preset setzt `transparent` + die Konstanten, `transmission` nur wo das Feld existiert | ebenda **[3]** |

@@ -2275,14 +2275,6 @@
     "Remove this texture slot": "Diesen Textur-Slot entfernen",
     "Add a slot by hand — for a material the detection does not know by name.": "Einen Slot von Hand anlegen — für ein Material, das die Erkennung nicht beim Namen kennt.",
     "A slot without a name cannot be saved.": "Ein Slot ohne Namen lässt sich nicht speichern.",
-    "Two slots share a name — only the first one would be kept.": "Zwei Slots teilen sich einen Namen — nur der erste bliebe erhalten.",
-    "Glass": "Glas",
-    "This place": "Dieser Ort",
-    "Where the picture for this slot comes from.": "Woher das Bild für diesen Slot kommt.",
-    "Which picture fills the “{slot}” surface of this prop.": "Welches Bild die Fläche „{slot}“ dieses Props füllt.",
-    "— pick a picture —": "— Bild wählen —",
-    "Which look the “{slot}” surface of this prop gets.": "Welchen Look die Fläche „{slot}“ dieses Props bekommt.",
-    "This prop has a fillable picture surface. The picture is shown on it in the 3D client and in the preview.": "Dieses Prop hat eine füllbare Bildfläche. Das Bild erscheint darauf im 3D-Client und in der Vorschau.",
-    "This prop has a fillable material surface — give it a look instead of a picture.": "Dieses Prop hat eine füllbare Materialfläche — gib ihr einen Look statt eines Bildes."
+    "Two slots share a name — only the first one would be kept.": "Zwei Slots teilen sich einen Namen — nur der erste bliebe erhalten."
   }
 }

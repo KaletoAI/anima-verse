@@ -312,6 +312,7 @@ MATERIAL_SLOT_NAMES = ("glass", "mirror", "matte")
 #: is a mirror of that list and never grows on its own. (It is deliberately
 #: shorter than :data:`MATERIAL_SLOT_NAMES`: a mesh may NAME a ``mirror``
 #: surface long before anything can render one.)
+#: Kept for variant slot values (picture props).
 SLOT_PRESETS = ("glass",)
 
 #: How much of a placed prop's DEPTH survives its cut (§ B2 addendum
@@ -1026,75 +1027,10 @@ def sanitize_slots(raw: Any) -> List[Dict[str, str]]:
 #: a path outside the two galleries. The shape is the whole check: the file
 #: does not have to exist (a picture may be deleted after it was hung, exactly
 #: as a prop may be), but its ADDRESS has to be one of these.
+#: Kept for variant slot values (picture props).
 _SLOT_IMAGE_RE = re.compile(
     r"^/(?:world/locations/[^/?#]+/gallery"
     r"|characters/[^/?#]+/images)/[^/?#]+$")
-
-
-def sanitize_slot_values(raw: Any, declared: Any = None) -> Dict[str, Any]:
-    """What a PLACEMENT puts into the slots its prop declares.
-
-    ``{"<slot>": {"image": "<url>"}}`` for an image slot,
-    ``{"<slot>": {"preset": "glass"}}`` for a material one — and nothing else.
-    Unusable entries are DROPPED (not refused like :func:`sanitize_slots`):
-    this is a placement field among many, and losing a whole floor plan over
-    one stale picture would cost far more than the picture.
-
-    ``declared`` is the prop's own ``slots`` list. Given, it is the gate: a key
-    the prop does not declare is dropped, and the KIND decides which of the two
-    value shapes is allowed (an image slot takes no preset and vice versa).
-    Passed as ``None`` — the one case being an opening that INHERITS the
-    location's default door and therefore names no prop here — only the SHAPE
-    is judged; the declaration check then happens in the recipe, where the
-    default is resolved (``scene_recipe.slot_spec``).
-    """
-    if not isinstance(raw, dict):
-        return {}
-    kinds: Optional[Dict[str, str]] = None
-    if declared is not None:
-        kinds = {str(s.get("name") or "").strip().lower():
-                 str(s.get("kind") or "")
-                 for s in (declared or []) if isinstance(s, dict)}
-    out: Dict[str, Any] = {}
-    for key, val in raw.items():
-        name = str(key or "").strip().lower()
-        if not name or not isinstance(val, dict):
-            continue
-        kind = kinds.get(name) if kinds is not None else None
-        if kinds is not None and kind is None:
-            continue
-        image = str(val.get("image") or "").strip()
-        preset = str(val.get("preset") or "").strip().lower()
-        if image and kind in (None, "image") and _SLOT_IMAGE_RE.match(image):
-            out[name] = {"image": image}
-        elif preset and kind in (None, "material") and preset in SLOT_PRESETS:
-            out[name] = {"preset": preset}
-    return out
-
-
-def declared_slots(prop_id: str) -> List[Dict[str, str]]:
-    """The prop's fillable surfaces, read straight off its sidecar.
-
-    Deliberately NOT through :func:`get_prop`: building a full record DEMANDS
-    the distance mesh of every variant (``_demand_low`` → a background job),
-    and saving a floor plan is no occasion to enqueue mesh work. The value is
-    the same one the record publishes — ``_prop_record`` reads this very key.
-    """
-    pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    return (meta or {}).get(SLOTS_KEY) or []
-
-
-def slot_values_of(prop_id: str, raw: Any) -> Dict[str, Any]:
-    """:func:`sanitize_slot_values` against the LIBRARY's own slot list — the
-    storage-side gate, used by the layout and opening sanitizers.
-
-    An empty/unknown prop id yields nothing: a value can only be stored for a
-    slot somebody declared.
-    """
-    if not isinstance(raw, dict) or not raw:
-        return {}
-    return sanitize_slot_values(raw, declared_slots(prop_id))
 
 
 def _autofill_slots(prop_id: str) -> None:

@@ -1581,17 +1581,9 @@ DOOR_PROP = {
 
 
 def stub_library(get) -> None:
-    """Point the prop library at ``get`` — BOTH accessors.
-
-    The recipe asks ``get_prop`` (the full record), while the STORAGE gate asks
-    ``declared_slots``, which reads the sidecar alone: a floor-plan save must
-    not build a record and thereby demand every variant's distance mesh. Two
-    accessors, one fixture — a stub of only one of them would let a check pass
-    for the wrong reason.
-    """
+    """Point the prop library at ``get`` — the ONE accessor the recipe asks."""
     from app.core import props as prop_store
     prop_store.get_prop = get
-    prop_store.declared_slots = lambda pid: (get(pid) or {}).get("slots") or []
 
 
 def stub_door_props() -> None:
@@ -1823,6 +1815,46 @@ def test_door_props() -> None:
            for o in r["openings"]]
     check("openings[].hinge reaches the payload's room block",
           len(ops) == 1 and ops[0].get("hinge") == "right", str(ops))
+
+    # ── D3: the picture is chosen where the prop is BUILT ────────────────
+    # There is no picture choice PER PLACEMENT any more
+    # (spec-picture-props.md, decision D3). `slot_values` is not a stored
+    # field on either carrier — `_sanitize_props` and `_sanitize_opening`, the
+    # two sanitizers `save_location` runs over a floor plan, drop it silently,
+    # and no `slots` key is derived from it in the payload. What a
+    # prop shows is settled where the prop is BUILT: its own defaults and its
+    # picture variants. One mechanism, and deliberately no fallback reader for
+    # the old field.
+    from app.core.world_ops import _sanitize_opening, _sanitize_props
+    values = {"glass": {"preset": "glass"}}   # a slot `door1` really declares
+    stored = _sanitize_props([{"prop_id": "door1", "at": [1.0, 1.0],
+                               "slot_values": values}])
+    check("a placement's slot_values do not survive the save",
+          len(stored) == 1 and "slot_values" not in stored[0], str(stored))
+    op_saved = _sanitize_opening({**S_DOOR, "prop_id": "door1",
+                                  "slot_values": values})
+    check("...and neither do an opening's",
+          op_saved and "slot_values" not in op_saved, str(op_saved))
+    filled = door_prop_scene(a_openings=[{**S_DOOR, "prop_id": "door1",
+                                          "slot_values": values}])
+    check("a door-prop spec derives no `slots` from them",
+          len(door_specs(filled)) == 1
+          and "slots" not in door_specs(filled)[0], str(door_specs(filled)))
+    # The room placement says the same with the example prop, which declares
+    # an image slot and a material one.
+    stub_props()
+    room_loc = model_fixture()
+    for room in room_loc["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["props"][0]["slot_values"] = {
+                "picture": {"image": "/world/locations/loc/gallery/wall.png"}}
+    room_spec = spec_of(
+        scene_recipe.compose_scene(room_loc, plan_width_m=PLAN_W,
+                                   building_meta=BUILDING_META,
+                                   room_metas=room_metas()),
+        "prop", "table")
+    check("...and neither does a room placement's prop spec",
+          "slots" not in room_spec, str(sorted(room_spec)))
     stub_props()
 
 
@@ -3164,154 +3196,6 @@ def test_prop_depth_cut() -> None:
     stub_props()
 
 
-# ── Texture slot VALUES (plan-door-props-texture-slots.md, v5) ──────────
-# The prop declares which surfaces are fillable (`slots`, Task 4); the
-# PLACEMENT says what goes into them (`slot_values`). Two gates, and both are
-# checked here because they answer different questions:
-#
-#   the SANITIZER (storage)  — is this a key the prop declares, and is the
-#                              value the SHAPE its kind allows?
-#   the RECIPE   (payload)   — does the prop STILL declare that slot? A mesh
-#                              regenerated after the placement was authored
-#                              may name other surfaces, and the payload must
-#                              not point a renderer at a material that is gone.
-#
-# The two URL forms are the only ones a value may name (hand-derived from the
-# routes: `world.py` serves the location gallery, `characters.py` the
-# character images) — anything else is dropped rather than sent to a browser.
-GAL = "/world/locations/loc/gallery/wall.png"
-CHAR_IMG = "/characters/demo/images/portrait.png"
-FULL_VALUES = {"picture": {"image": GAL}, "glass": {"preset": "glass"}}
-
-
-def slot_fixture(values, prop_slots=None) -> dict:
-    """The model fixture with ``values`` on room "a"'s single placement.
-
-    ``prop_slots`` overrides what the LIBRARY says the prop declares — that is
-    how the "the mesh changed under the placement" case is built without
-    touching the stored layout.
-    """
-    rec = dict(EXAMPLE_PROP)
-    if prop_slots is not None:
-        rec["slots"] = prop_slots
-    stub_library(lambda pid: dict(rec) if pid == "table" else None)
-    loc = model_fixture()
-    for room in loc["rooms"]:
-        if room["id"] == "a":
-            room["layout"]["props"][0]["slot_values"] = values
-    return loc
-
-
-def slot_scene(values, prop_slots=None) -> dict:
-    return scene_recipe.compose_scene(
-        slot_fixture(values, prop_slots), plan_width_m=PLAN_W,
-        building_meta=BUILDING_META, room_metas=room_metas())
-
-
-def test_slot_values() -> None:
-    print("\n[3s] texture slot VALUES — placement, opening, payload")
-    stub_props()
-    from app.core.world_ops import _sanitize_opening, _sanitize_props
-
-    def stored(values):
-        out = _sanitize_props([{"prop_id": "table", "at": [1.0, 1.0],
-                                "slot_values": values}])
-        return (out or [{}])[0].get("slot_values")
-
-    # ── the sanitizer: declared key + allowed shape ──────────────────────
-    check("a declared image slot keeps its gallery URL, a material slot its "
-          "preset", stored(FULL_VALUES) == FULL_VALUES, str(stored(FULL_VALUES)))
-    check("a character image is the second accepted URL form",
-          stored({"picture": {"image": CHAR_IMG}})
-          == {"picture": {"image": CHAR_IMG}},
-          str(stored({"picture": {"image": CHAR_IMG}})))
-    check("a key the prop does NOT declare is dropped",
-          stored({"screen": {"image": GAL}}) is None,
-          str(stored({"screen": {"image": GAL}})))
-    for bad in ("http://elsewhere/x.png", "/etc/passwd", "wall.png",
-                "/world/locations/loc/gallery/../../secret.png",
-                "/world/locations/loc/gallery/a.png?x=1"):
-        check(f"a URL that is not a gallery path is dropped ({bad})",
-              stored({"picture": {"image": bad}}) is None,
-              str(stored({"picture": {"image": bad}})))
-    check("an image slot refuses a preset",
-          stored({"picture": {"preset": "glass"}}) is None,
-          str(stored({"picture": {"preset": "glass"}})))
-    check("a material slot refuses an image",
-          stored({"glass": {"image": GAL}}) is None,
-          str(stored({"glass": {"image": GAL}})))
-    check("an unknown preset is dropped (only 'glass' exists today)",
-          stored({"glass": {"preset": "mirror"}}) is None,
-          str(stored({"glass": {"preset": "mirror"}})))
-    check("no values → no key on the placement at all",
-          stored({}) is None and stored(None) is None, str(stored({})))
-
-    # ── the payload: `slots` on the prop spec ────────────────────────────
-    spec = spec_of(slot_scene(FULL_VALUES), "prop", "table")
-    check("the spec carries the sanitized values under `slots`",
-          spec.get("slots") == FULL_VALUES, str(spec.get("slots")))
-    check("a placement without values carries no `slots` key",
-          "slots" not in spec_of(model_scene(), "prop", "table"),
-          str(sorted(spec_of(model_scene(), "prop", "table"))))
-    # The mesh changed under the placement: the library now declares only
-    # `glass`, so the stored picture points at a material the file no longer
-    # has. The RECIPE drops it — the storage layer never sees this happen.
-    moved = spec_of(slot_scene(FULL_VALUES,
-                               prop_slots=[{"name": "glass",
-                                            "kind": "material"}]),
-                    "prop", "table")
-    check("a value whose slot the prop no longer declares is dropped by the "
-          "recipe", moved.get("slots") == {"glass": {"preset": "glass"}},
-          str(moved.get("slots")))
-    # …and a prop that declares nothing at all publishes nothing.
-    bare = spec_of(slot_scene(FULL_VALUES, prop_slots=[]), "prop", "table")
-    check("a prop without slots publishes no `slots` key",
-          "slots" not in bare, str(sorted(bare)))
-
-    # ── the signature: a changed picture must reach a running client ─────
-    base = slot_scene(FULL_VALUES)["signature"]
-    other = slot_scene({**FULL_VALUES,
-                        "picture": {"image": "/world/locations/loc/gallery/"
-                                             "other.png"}})["signature"]
-    check("swapping the picture moves the scene signature", base != other)
-    check("...and so does taking the values away",
-          model_scene()["signature"] != base)
-
-    # ── the door prop: same field, same rule ─────────────────────────────
-    stub_door_props()
-    sv = {"glass": {"preset": "glass"}}
-    sc = door_prop_scene(a_openings=[{**S_DOOR, "prop_id": "door1",
-                                      "slot_values": sv}])
-    specs = door_specs(sc)
-    check("a door prop's opening values reach its spec",
-          len(specs) == 1 and specs[0].get("slots") == sv, str(specs))
-    bare_door = door_prop_scene(a_openings=[{**S_DOOR, "prop_id": "door1"}])
-    check("a door prop without values carries no `slots` key",
-          "slots" not in door_specs(bare_door)[0])
-    # …and the OPENING's values move the signature exactly as a placement's
-    # do: they ride in the room recipe, and a client that never re-fetches
-    # keeps the old pane.
-    check("filling a door prop's slot moves the scene signature",
-          sc["signature"] != bare_door["signature"],
-          f"{sc['signature'][:8]} vs {bare_door['signature'][:8]}")
-    op = _sanitize_opening({**S_DOOR, "prop_id": "door1",
-                            "slot_values": {"glass": {"preset": "glass"},
-                                            "picture": {"image": GAL}}})
-    check("the opening sanitizer keeps the door prop's declared slot and "
-          "drops the rest",
-          op.get("slot_values") == sv, str(op.get("slot_values")))
-    # An opening that INHERITS the location default names no prop, so the
-    # declared list is unknowable here — only the SHAPE can be judged, and the
-    # recipe does the declaration check once the default is resolved.
-    inherited = _sanitize_opening({**S_DOOR,
-                                   "slot_values": {"glass": {"preset": "glass"},
-                                                   "x": {"image": "nope"}}})
-    check("an inherited door keeps a well-shaped value and drops junk",
-          inherited.get("slot_values") == sv,
-          str(inherited.get("slot_values")))
-    stub_props()
-
-
 def plate_of(sc: dict, room_id: str) -> dict:
     """The room's FLOOR as the payload carries it, under one key.
 
@@ -4302,7 +4186,6 @@ def main() -> int:
     test_prop_ground_offset()
     test_prop_stacking()
     test_prop_depth_cut()
-    test_slot_values()
     test_clip_outline()
     test_signature()
     test_curved_outline()
