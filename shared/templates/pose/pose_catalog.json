@@ -1,5 +1,32 @@
 {
-  "_comment": "Curated pose catalog - the ONLY render/cache key axis for poses. Every entry MUST carry an animation kind. Grows only via the candidate approval flow in the Poses admin tab.",
+  "_comment": "Curated pose catalog - the ONLY render/cache key axis for poses. Every entry MUST carry an animation kind. Grows only via the candidate approval flow in the Poses admin tab. `groups` are the PLACE TYPES a marker names; every entry belongs to exactly one.",
+  "groups": {
+    "seat": {
+      "label": "Seat",
+      "root_drop": 0.314,
+      "default": "sitting"
+    },
+    "bed": {
+      "label": "Bed",
+      "root_drop": 0.631,
+      "default": "sleeping"
+    },
+    "floor": {
+      "label": "Floor",
+      "root_drop": 0.051,
+      "default": "lying"
+    },
+    "counter": {
+      "label": "Counter",
+      "root_drop": 0,
+      "default": "working"
+    },
+    "stand": {
+      "label": "Standing spot",
+      "root_drop": 0,
+      "default": "standing"
+    }
+  },
   "entries": {
     "standing": {
       "prompt": "standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up",
@@ -8,7 +35,8 @@
         "stehend"
       ],
       "_default": true,
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "sitting": {
       "prompt": "sitting comfortably in a chair, legs crossed, hands resting on lap, relaxed shoulders",
@@ -17,7 +45,8 @@
         "sitzend",
         "sauna"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "reading": {
       "prompt": "sitting with book in hands, head tilted slightly down, focused posture, legs tucked",
@@ -25,7 +54,8 @@
         "lesen",
         "lesend"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "cooking": {
       "prompt": "standing at kitchen counter, one hand stirring, slightly leaned forward, apron on",
@@ -35,7 +65,8 @@
         "kaffee kochen",
         "kaffee machen"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "sleeping": {
       "prompt": "lying on side, head on pillow, eyes closed, relaxed curled body",
@@ -44,7 +75,8 @@
         "schlafend",
         "pennen"
       ],
-      "animation": "lie"
+      "animation": "lie",
+      "group": "bed"
     },
     "walking": {
       "prompt": "mid-stride walking pose, arms naturally swinging, upright posture, looking ahead",
@@ -55,7 +87,8 @@
         "spaziergang"
       ],
       "animation": "walk-cmu",
-      "solo": true
+      "solo": true,
+      "group": "stand"
     },
     "running": {
       "prompt": "dynamic running pose, one foot forward, arms pumping, leaning forward",
@@ -66,7 +99,8 @@
         "joggen",
         "laufband"
       ],
-      "animation": "run"
+      "animation": "run",
+      "group": "stand"
     },
     "dancing": {
       "prompt": "graceful dance pose, one arm raised, body turned, weight on one foot",
@@ -74,7 +108,8 @@
         "tanzen",
         "tanzend"
       ],
-      "animation": "dance"
+      "animation": "dance",
+      "group": "stand"
     },
     "eating": {
       "prompt": "sitting at table, fork in hand, leaning slightly toward plate, napkin on lap",
@@ -82,7 +117,8 @@
         "essen",
         "essend"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "drinking": {
       "prompt": "holding glass near lips, elbow raised, other hand resting on table",
@@ -101,7 +137,8 @@
         "have a cup of coffee",
         "ordering drinks"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "working": {
       "prompt": "sitting at desk, hands on keyboard, slightly hunched forward, focused posture",
@@ -112,7 +149,8 @@
         "sorting papers",
         "inhaltserstellung"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "counter"
     },
     "exercising": {
       "prompt": "athletic stance, arms flexed, feet shoulder-width apart, dynamic energy",
@@ -125,7 +163,8 @@
         "rowing on a rowing machine",
         "handtraining"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "meditating": {
       "prompt": "cross-legged on floor, hands on knees palms up, straight back, eyes closed",
@@ -133,7 +172,8 @@
         "meditieren",
         "meditierend"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "painting": {
       "prompt": "standing at easel, brush in one hand, palette in other, stepping back to look",
@@ -142,7 +182,8 @@
         "malend",
         "zeichnen"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "gaming": {
       "prompt": "sitting forward on chair, controller in hands, elbows on knees, intense focus",
@@ -152,7 +193,8 @@
         "zocken",
         "gamen"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "cleaning": {
       "prompt": "on all fours cleaning, hands and knees on floor, focused cleaning task",
@@ -162,7 +204,8 @@
         "aufraeumen",
         "saubermachen"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "gardening": {
       "prompt": "kneeling on ground, hands in soil, sun hat on, looking down at plants",
@@ -170,7 +213,8 @@
         "gaertnern",
         "im garten"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "shopping": {
       "prompt": "walking with bags in hand, browsing posture, one hand reaching toward shelf",
@@ -179,7 +223,8 @@
         "einkaufend",
         "shoppen"
       ],
-      "animation": "walk"
+      "animation": "walk",
+      "group": "stand"
     },
     "relaxing": {
       "prompt": "reclined on couch, legs stretched out, hands behind head, laid-back posture",
@@ -191,7 +236,8 @@
         "chillen",
         "relaxen"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "studying": {
       "prompt": "hunched over books at desk, pen in hand, chin resting on other hand",
@@ -200,7 +246,8 @@
         "lernend",
         "studieren"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "singing": {
       "prompt": "standing upright, mouth open, one hand near chest, other hand gesturing",
@@ -209,7 +256,8 @@
         "singend",
         "performing"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "playing": {
       "prompt": "playful dynamic pose, arms outstretched, light bouncy stance",
@@ -217,7 +265,8 @@
         "herumtoben",
         "herumalbern"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "talking": {
       "prompt": "standing relaxed, one hand gesturing while speaking, open expressive posture",
@@ -234,7 +283,8 @@
         "private conversations",
         "mit_jemandem_fluestern"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "showering": {
       "prompt": "standing under water, head tilted back, eyes closed, arms raised to hair",
@@ -242,7 +292,8 @@
         "duschen",
         "duschend"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "bathing": {
       "prompt": "reclining in bathtub, arms resting on edges, head tilted back, relaxed",
@@ -250,14 +301,16 @@
         "baden",
         "badend"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "yoga": {
       "prompt": "standing in tree pose, one foot on inner thigh, arms raised above head, balanced",
       "synonyms": [
         "yoga machen"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "meeting": {
       "prompt": "sitting at conference table, hands folded, upright posture, attentive engaged pose",
@@ -266,7 +319,8 @@
         "konferenz",
         "meeting"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "presenting": {
       "prompt": "standing in front of audience, one hand gesturing, other holding notes, confident posture",
@@ -275,7 +329,8 @@
         "vortragen",
         "vortrag"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "driving": {
       "prompt": "sitting with hands on steering wheel, upright posture, eyes forward, seatbelt on",
@@ -283,7 +338,8 @@
         "fahren",
         "autofahren"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "photography": {
       "prompt": "standing with camera raised to eye, one knee slightly bent, focused stance",
@@ -301,7 +357,8 @@
         "künstlerische aufnahme machen"
       ],
       "animation": "taking-fotos",
-      "solo": true
+      "solo": true,
+      "group": "stand"
     },
     "watching_tv": {
       "prompt": "slumped comfortably on a sofa, legs extended or crossed, arms resting loosely on cushions or holding a remote, head tilted toward the screen",
@@ -313,7 +370,8 @@
         "choosing_a_movie",
         "preparing movie"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "thinking": {
       "prompt": "leaning forward slightly, one elbow propped on a knee while the other hand supports the chin, contemplative gaze",
@@ -323,7 +381,8 @@
         "grübeln",
         "nachdenken"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "waiting": {
       "prompt": "standing with weight shifted to one leg, arms loosely crossed over the chest, head tilted slightly as if scanning",
@@ -331,7 +390,8 @@
         "warten",
         "waiting for guests"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "kneeling": {
       "prompt": "kneeling upright, legs folded beneath the torso, arms resting gently on the thighs, back held straight",
@@ -341,7 +401,8 @@
         "kneeling on the kitchen floor",
         "kneeling on the black carpet"
       ],
-      "animation": "kneel"
+      "animation": "kneel",
+      "group": "stand"
     },
     "celebrating": {
       "prompt": "standing with legs slightly apart, arms raised high in a celebratory gesture, energetic stance",
@@ -349,7 +410,8 @@
         "feiern",
         "partying"
       ],
-      "animation": "dance"
+      "animation": "dance",
+      "group": "stand"
     },
     "making_coffee": {
       "prompt": "standing upright, leaning slightly forward at a counter, hands operating the coffee machine or pitcher, focused posture",
@@ -363,7 +425,8 @@
         "polishing the coffee machine",
         "going to the coffee machine"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "serving": {
       "prompt": "standing upright behind a counter, leaning slightly forward with hands resting on the surface, ready stance",
@@ -372,7 +435,8 @@
         "serving customers",
         "preparing for customers"
       ],
-      "animation": "walk"
+      "animation": "walk",
+      "group": "stand"
     },
     "monitoring": {
       "prompt": "sitting upright with focused gaze, hands resting lightly on desk or device, legs firmly on the floor",
@@ -380,7 +444,8 @@
         "überwachen",
         "beobachten"
       ],
-      "animation": "sit"
+      "animation": "sit",
+      "group": "seat"
     },
     "flirting": {
       "prompt": "leaning slightly forward with an open posture, one hand gently touching the hair, relaxed crossed legs",
@@ -388,7 +453,8 @@
         "flirten",
         "flirtend"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "filming": {
       "prompt": "standing upright with slight forward lean, holding a camera steady with both hands at eye level, legs shoulder-width apart for balance",
@@ -400,7 +466,8 @@
         "taking photos",
         "preparing for the next shot"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "chopping": {
       "prompt": "standing with knees bent and feet wide apart, leaning forward with arms extended downward as if striking or chopping",
@@ -408,7 +475,8 @@
         "hacken",
         "hackend"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "applying_makeup": {
       "prompt": "sitting upright with legs crossed, arms raised holding a makeup brush or sponge near the face",
@@ -416,7 +484,8 @@
         "make-up auftragen",
         "schminken"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "changing_clothes": {
       "prompt": "standing with one leg slightly bent, arms reaching behind the head or holding a garment, torso slightly twisted",
@@ -425,7 +494,8 @@
         "sich umkleiden",
         "sich_umkleiden"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "freshening_up": {
       "prompt": "standing upright, leaning slightly toward a mirror, hands engaged in grooming or washing",
@@ -433,7 +503,8 @@
         "sich frisch machen",
         "freshening up"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "lying": {
       "prompt": "lying flat with limbs sprawled loosely, arms resting at the sides, head tilted back",
@@ -445,7 +516,8 @@
         "lying exhausted on the sofa",
         "lying on the training mat"
       ],
-      "animation": "lie"
+      "animation": "lie",
+      "group": "floor"
     },
     "washing_dishes": {
       "prompt": "standing at sink, legs slightly apart, arms extended forward with elbows bent, hands scrubbing under running water",
@@ -454,7 +526,8 @@
         "washing knives in the kitchen sink",
         "geschirr spülen"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "holding_knife": {
       "prompt": "standing upright with a relaxed posture, holding a knife firmly in one hand while the other arm rests naturally at the side",
@@ -462,7 +535,8 @@
         "holding a knife in the kitchen",
         "messer halten"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "recovering": {
       "prompt": "slumped in a chair with a relaxed posture, arms resting loosely on the knees, legs gently crossed",
@@ -470,21 +544,24 @@
         "erholen",
         "ausruhen"
       ],
-      "animation": "lie"
+      "animation": "lie",
+      "group": "bed"
     },
     "shooting": {
       "prompt": "standing with knees slightly bent and feet shoulder-width apart, firearm held with both hands extended forward at shoulder height, elbows tucked in",
       "synonyms": [
         "schießen"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "commanding_attention": {
       "prompt": "standing tall with shoulders back, feet planted firmly in a wide stance, arms held open and deliberate at the sides",
       "synonyms": [
         "autoritaet"
       ],
-      "animation": "idle"
+      "animation": "idle",
+      "group": "stand"
     },
     "shaking hands": {
       "prompt": "two people shaking hands, firm handshake, standing face to face, friendly eye contact",
@@ -497,7 +574,10 @@
         "begrüßung per handschlag"
       ],
       "animation": "handshake",
-      "solo": false
+      "solo": false,
+      "group": "stand",
+      "places": 2,
+      "yaw_offset": 0
     },
     "dancing together": {
       "prompt": "two people dancing salsa together as a couple, close hold, hips moving, facing each other",
@@ -511,7 +591,10 @@
         "salsa tanzen"
       ],
       "animation": "salsa",
-      "solo": false
+      "solo": false,
+      "group": "stand",
+      "places": 2,
+      "yaw_offset": 0
     },
     "comforting": {
       "prompt": "one person comforting another, both hands on the other's shoulders, leaning in with a caring expression",
@@ -525,7 +608,10 @@
         "reassure"
       ],
       "animation": "comfort",
-      "solo": false
+      "solo": false,
+      "group": "stand",
+      "places": 2,
+      "yaw_offset": 0
     }
   }
 }

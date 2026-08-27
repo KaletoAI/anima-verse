@@ -23,6 +23,7 @@ _FALLBACK_DEFAULT = {"pose": "standing", "expression": "neutral"}
 
 _lock = threading.Lock()
 _cache: Dict[str, Dict[str, dict]] = {}
+_groups_cache: Dict[str, dict] = {}
 
 
 def catalog_path(axis: str) -> Path:
@@ -42,14 +43,56 @@ def _load(axis: str) -> Dict[str, dict]:
         entries = {}
     out: Dict[str, dict] = {}
     for key, entry in entries.items():
+        solo = bool(entry.get("solo", True))
         out[str(key).strip().lower()] = {
             "prompt": str(entry.get("prompt") or ""),
             "synonyms": [str(s).strip().lower() for s in (entry.get("synonyms") or []) if str(s).strip()],
             "animation": str(entry.get("animation") or ""),
-            "solo": bool(entry.get("solo", True)),
+            "solo": solo,
             "_default": bool(entry.get("_default", False)),
+            # plan-posen-plaetze.md § 3.2: the PLACE TYPE the pose needs.
+            "group": str(entry.get("group") or "").strip().lower(),
+            # pair poses only: slots of the anchor marker the pair consumes,
+            # and how the clip frame (+X = A->B) turns against the marker facing
+            "places": (2 if solo else max(1, min(2, int(entry.get("places") or 2)))),
+            "yaw_offset": (0.0 if solo else float(entry.get("yaw_offset") or 0.0)),
+            "_stray_pair_fields": solo and ("places" in entry or "yaw_offset" in entry),
         }
     return out
+
+
+def _load_groups() -> Dict[str, dict]:
+    """Place types of the pose axis (plan-posen-plaetze.md § 3.1): the finite
+    vocabulary a MARKER speaks. ``root_drop`` x figure height is how far a
+    figure's root sinks below the marked surface; ``default`` the pose a
+    "sit here" click sets."""
+    try:
+        data = json.loads(catalog_path("pose").read_text(encoding="utf-8"))
+        raw = data.get("groups") or {}
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning("pose groups unreadable: %s", e)
+        raw = {}
+    out: Dict[str, dict] = {}
+    for key, spec in raw.items():
+        k = str(key).strip().lower()
+        if not k or not isinstance(spec, dict):
+            continue
+        try:
+            drop = float(spec.get("root_drop") or 0.0)
+        except (TypeError, ValueError):
+            drop = 0.0
+        out[k] = {"label": str(spec.get("label") or k),
+                  "root_drop": round(max(0.0, min(1.0, drop)), 3),
+                  "default": str(spec.get("default") or "").strip().lower()}
+    return out
+
+
+def get_groups() -> Dict[str, dict]:
+    """All place types, keyed by group id."""
+    with _lock:
+        if not _groups_cache:
+            _groups_cache.update(_load_groups())
+        return dict(_groups_cache)
 
 
 def get_catalog(axis: str) -> Dict[str, dict]:
@@ -62,6 +105,7 @@ def get_catalog(axis: str) -> Dict[str, dict]:
 def reload_catalogs() -> None:
     with _lock:
         _cache.clear()
+        _groups_cache.clear()
         _embed_cache.clear()
 
 
@@ -70,6 +114,35 @@ def get_default_key(axis: str) -> str:
         if entry["_default"]:
             return key
     return _FALLBACK_DEFAULT[axis]
+
+
+def group_of(pose_key: str) -> str:
+    """Place type a pose needs ("" = unknown key or ungrouped entry)."""
+    entry = get_catalog("pose").get((pose_key or "").strip().lower())
+    return (entry or {}).get("group", "")
+
+
+def poses_in_group(group: str) -> List[str]:
+    """Keys of the group, the group's default first, the rest alphabetical."""
+    g = (group or "").strip().lower()
+    default = (get_groups().get(g) or {}).get("default", "")
+    keys = sorted(k for k, e in get_catalog("pose").items() if e["group"] == g)
+    if default in keys:
+        keys.remove(default)
+        keys.insert(0, default)
+    return keys
+
+
+def pose_places(pose_key: str) -> int:
+    """Marker slots the pose consumes: 1 for a solo pose, else its ``places``."""
+    entry = get_catalog("pose").get((pose_key or "").strip().lower()) or {}
+    return 1 if entry.get("solo", True) else int(entry.get("places") or 2)
+
+
+def pose_yaw_offset(pose_key: str) -> float:
+    """Degrees the pair clip's frame turns against the marker facing (0 solo)."""
+    entry = get_catalog("pose").get((pose_key or "").strip().lower()) or {}
+    return 0.0 if entry.get("solo", True) else float(entry.get("yaw_offset") or 0.0)
 
 
 def validate_catalog(axis: str) -> List[str]:
@@ -105,6 +178,17 @@ def validate_catalog(axis: str) -> List[str]:
             seen[alias] = key
     if defaults != 1:
         problems.append(f"{axis}: expected exactly 1 _default entry, found {defaults}")
+    if axis == "pose":
+        groups = get_groups()
+        for g, spec in groups.items():
+            d = spec["default"]
+            if d not in catalog or catalog[d]["group"] != g:
+                problems.append(f"pose group '{g}': default '{d}' is not a pose of this group")
+        for key, entry in catalog.items():
+            if entry["group"] not in groups:
+                problems.append(f"{axis}/{key}: unknown place type '{entry['group']}'")
+            if entry["_stray_pair_fields"]:
+                problems.append(f"{axis}/{key}: places/yaw_offset only make sense on a pair pose")
     return problems
 
 

@@ -100,6 +100,21 @@ Stage 7 - the pose-variant teardown (Aug 2026), derived BY HAND from it:
 - `clear_expression_cache` - the surviving per-character reset - runs without
   any variant row and reports 0 for a character that never rendered.
 
+Stage 8 - place types (plan-posen-plaetze.md § 3.1/3.2), derived BY HAND
+from the catalog file:
+- get_groups() has exactly the five start types seat/bed/floor/counter/stand;
+  seat.root_drop == 0.314, bed 0.631, floor 0.051, counter 0, stand 0
+  (the numbers scene_recipe.FIGURE_ROOT_DROP still holds today).
+- every entry carries a group that exists; group_of("sitting") == "seat",
+  group_of("sleeping") == "bed", group_of("standing") == "stand",
+  group_of("nope") == "".
+- poses_in_group("seat") starts with the group's default "sitting".
+- pose_places("sitting") == 1 (solo), pose_places("dancing together") == 2
+  (pair default), pose_yaw_offset("dancing together") == 0.0.
+- validate_catalog("pose") is empty for the shipped file; a private copy with
+  a pose in group "sofa" (unknown) and a group whose default is a pose of
+  another group reports exactly those two problems.
+
 The stage-2/3/4/5/7 DB work runs against a throwaway storage dir, never the
 demo world (the server may hold it).
 """
@@ -540,5 +555,60 @@ try:
 
     _ch.clear_pose_intent("demo")
     print("OK smoke_pose_catalog stage 7")
+
+    # ── Stage 8: place types (the groups a marker names) ─────────────────
+    print("\nStage 8 - place types")
+    from app.core import pose_catalog as pc
+    _FAILURES = []
+
+    def check(name, ok, detail=""):
+        """Records a failed expectation instead of aborting the stage, so one
+        broken group does not hide the rest."""
+        if not ok:
+            _FAILURES.append(name)
+            print(f"  ✗ {name} {detail}".rstrip())
+
+    pc.reload_catalogs()
+    groups = pc.get_groups()
+    check("five start types", sorted(groups) == ["bed", "counter", "floor", "seat", "stand"], str(sorted(groups)))
+    check("seat root_drop 0.314", groups["seat"]["root_drop"] == 0.314)
+    check("bed root_drop 0.631", groups["bed"]["root_drop"] == 0.631)
+    check("floor root_drop 0.051", groups["floor"]["root_drop"] == 0.051)
+    check("stand/counter drop 0", groups["stand"]["root_drop"] == 0 and groups["counter"]["root_drop"] == 0)
+    cat = pc.get_catalog("pose")
+    check("every pose has a known group", all(e["group"] in groups for e in cat.values()),
+          str([k for k, e in cat.items() if e["group"] not in groups]))
+    check("group_of sitting/sleeping/standing", (pc.group_of("sitting"), pc.group_of("sleeping"),
+          pc.group_of("standing"), pc.group_of("nope")) == ("seat", "bed", "stand", ""))
+    check("poses_in_group(seat) starts with default", pc.poses_in_group("seat")[0] == "sitting")
+    check("pose_places solo 1 / pair 2", (pc.pose_places("sitting"), pc.pose_places("dancing together")) == (1, 2))
+    check("pose_yaw_offset pair 0.0", pc.pose_yaw_offset("dancing together") == 0.0)
+    check("shipped catalog validates", pc.validate_catalog("pose") == [], str(pc.validate_catalog("pose")))
+    # private copy with two deliberate faults
+    import json as _json
+    import tempfile as _tf
+    from pathlib import Path as _P
+    _bad = _P(_tf.mkdtemp(prefix="pose-groups-")) / "pose_catalog.json"
+    _bad.write_text(_json.dumps({
+        "groups": {"seat": {"label": "Seat", "root_drop": 0.3, "default": "standing"},
+                   "stand": {"label": "Stand", "root_drop": 0, "default": "standing"}},
+        "entries": {"standing": {"prompt": "p", "animation": "idle", "group": "stand", "_default": True},
+                    "sitting": {"prompt": "p", "animation": "sit", "group": "sofa"}}}), encoding="utf-8")
+    _orig = pc.catalog_path
+    pc.catalog_path = lambda axis: _bad if axis == "pose" else _orig(axis)
+    try:
+        pc.reload_catalogs()
+        _problems = pc.validate_catalog("pose")
+        check("unknown group reported", any("sofa" in p for p in _problems), str(_problems))
+        check("foreign default reported", any("default" in p and "seat" in p for p in _problems), str(_problems))
+        check("exactly two problems", len(_problems) == 2, str(_problems))
+    finally:
+        pc.catalog_path = _orig
+        shutil.rmtree(_bad.parent, ignore_errors=True)
+        pc.reload_catalogs()
+
+    if _FAILURES:
+        raise AssertionError(f"stage 8: {len(_FAILURES)} failed check(s): {_FAILURES}")
+    print("OK smoke_pose_catalog stage 8")
 finally:
     shutil.rmtree(_tmp_storage, ignore_errors=True)

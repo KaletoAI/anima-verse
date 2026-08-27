@@ -85,6 +85,12 @@ def resolve_pose_animation(pose_key: str) -> str:
     return (entry or {}).get("animation", "")
 
 
+def pose_group(pose_key: str) -> str:
+    """Place type of a catalog pose ("" = unknown key)."""
+    from app.core.pose_catalog import group_of
+    return group_of(pose_key)
+
+
 def is_partner_activity(pose_key: str) -> bool:
     """True if the pose is tagged ``"solo": false`` — an interaction between
     two people (kissing, embracing).
