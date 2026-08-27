@@ -5,6 +5,13 @@ Usage:  ./.venv/bin/python scripts/smoke_model_surface.py
 
 Every expected number is derived BY HAND from the spec here, never recorded.
 
+--- PART 0: the bake's reasons (no Blender needed) ---------------------------
+`bake_surface_result` answers (surface, reason): the improvements engine skips a
+candidate for good after two failed attempts, so it has to tell a busy machine —
+retry, no attempt counted — from a real defect (spec § 10). A path with no file
+behind it is stopped by `_source_of` before Blender is ever asked, so it answers
+(None, "unreadable"); `bake_surface` is the same call reduced to its first half.
+
 --- PART 1: the bake (needs Blender; prints SKIP and exits 0 without it) -----
 A GLB written in pure Python, four axis-aligned boxes (glTF axes, y up):
   base      x[-1,1]      y[0,0.2]    z[-1,1]
@@ -159,6 +166,25 @@ def node(surface, i, j):
     return surface["values"][j * surface["cols"] + i]
 
 
+def part0():
+    """The bake's REASONS, without Blender: `bake_surface_result` says WHY there
+    is no surface, because the improvements engine has to tell a busy machine
+    (retry, no attempt counted) from a defect (skip after two).  A path with no
+    file behind it never reaches Blender at all — `_source_of` cannot stat it —
+    so the answer is (None, "unreadable"), and the plain wrapper reduces the
+    same pair to None, which is every other caller's whole contract."""
+    from app.core import model_surface as ms
+    with tempfile.TemporaryDirectory() as tmp:
+        absent = Path(tmp) / "absent.glb"
+        surface, reason = ms.bake_surface_result(absent, {"x": 0}, wait_s=0)
+        check("unreadable model: (None, 'unreadable')",
+              (surface, reason) == (None, "unreadable"), f"{surface!r}, {reason!r}")
+        check("the wrapper answers the surface alone",
+              ms.bake_surface(absent, {"x": 0}) is None)
+        check("'unreadable' is one of the declared reasons",
+              reason in ms.BAKE_REASONS, str(ms.BAKE_REASONS))
+
+
 def part1():
     from app.blender import runner
     from app.core import model_surface as ms
@@ -282,6 +308,8 @@ def part2():
 
 
 def main():
+    print("smoke_model_surface — part 0: the bake's reasons")
+    part0()
     print("smoke_model_surface — part 1: bake")
     part1()
     print("smoke_model_surface — part 2: sampler")

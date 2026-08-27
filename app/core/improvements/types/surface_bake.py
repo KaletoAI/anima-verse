@@ -11,9 +11,11 @@ A candidate is simply "a model file whose surface does not read back": absent,
 from another file, or baked under another fix all mean the same thing to
 :func:`model_surface.read_surface`, and all three want the same bake.
 """
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from app.core.improvements.base import Candidate, ImprovementType, ParamField
+from app.core.improvements.base import (Candidate, CandidateBusy,
+                                        ImprovementType, ParamField)
 from app.core.improvements.types import subjects
 
 SUBJECTS = [
@@ -43,7 +45,7 @@ _HANDLERS: Dict[str, tuple] = {
 }
 
 
-def _index(subject: str) -> Dict[str, Tuple[str, Any, Dict[str, Any]]]:
+def _index(subject: str) -> Dict[str, Tuple[str, Path, Dict[str, Any]]]:
     """``key → (label, model file, orientation fix)`` for every model of this
     subject kind.
 
@@ -92,16 +94,28 @@ class SurfaceBake(ImprovementType):
 
     def apply(self, candidate: Candidate, params: Dict[str, Any],
               task_id: str) -> None:
-        from app.core.model_surface import bake_surface
+        from app.core.model_surface import bake_surface_result
         subject = params["subject"]
         entry = _index(subject).get(candidate.key)
         if entry is None:
             raise RuntimeError(f"{candidate.key}: no model to bake")
         _label, path, rotation = entry
-        # None is EVERY failure the bake knows — no Blender, no free slot, a
-        # script that gave up — and it never raises one of them itself. The
-        # engine records a failure only from an exception, so swallowing this
-        # would close the step as finished and leave the model without a floor.
-        if bake_surface(path, rotation, wait_s=SLOT_WAIT_S) is None:
-            raise RuntimeError(f"{candidate.key}: surface bake failed")
+        # The bake never raises — it answers a reason. Which one it is decides
+        # the step's fate, so the plain Optional is not enough here:
+        surface, reason = bake_surface_result(path, rotation,
+                                              wait_s=SLOT_WAIT_S)
+        if reason == "busy":
+            # Every Blender slot was taken for SLOT_WAIT_S — load, not a
+            # defect. As a failure this would cost the candidate one of its two
+            # attempts, and a subject skipped after two of them is never
+            # resurrected: a model would lose its floor for good because the
+            # machine happened to be busy twice (spec § 10 — "no free slot"
+            # leaves the candidate MISSING). The engine leaves a busy step
+            # pending without counting an attempt.
+            raise CandidateBusy(f"{candidate.key}: no Blender slot")
+        if surface is None:
+            # A real defect of this subject or of this installation — no
+            # Blender, an unreadable model, a script that gave up. Two of those
+            # SHOULD skip the candidate instead of retrying forever.
+            raise RuntimeError(f"surface bake {reason}: {candidate.key}")
         _forget(subject, candidate.key)

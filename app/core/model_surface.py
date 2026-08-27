@@ -65,22 +65,43 @@ def _source_of(model_path: Path) -> Optional[Dict[str, Any]]:
             "mtime": int(st.st_mtime)}
 
 
-def bake_surface(model_path: Path, rotation: Any, *,
-                 wait_s: float = 0.0) -> Optional[Dict[str, Any]]:
-    """Bake and store the surface of ``model_path`` under ``rotation``.
+#: Why a bake produced no surface — ``bake_surface_result``'s second answer.
+#: ``busy`` is the only TRANSIENT one: every Blender slot was taken, and the
+#: very same call would succeed a minute later. Everything else is a defect of
+#: this subject or of this installation.
+BAKE_REASONS = ("ok", "unreadable", "no_blender", "busy", "failed", "unstorable")
 
-    None when Blender is unavailable, no slot came free within ``wait_s``, or
-    the script failed — with ONE info log, never an exception: a missing
-    surface is a legal state (the terrain answers), not an error.
+
+def bake_surface_result(model_path: Path, rotation: Any, *,
+                        wait_s: float = 0.0) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Bake and store the surface of ``model_path`` under ``rotation``, and say
+    WHY when there is none: ``(surface, reason)`` with ``reason`` one of
+    :data:`BAKE_REASONS`.
+
+    The reason exists for the one caller that must tell load from defect: the
+    improvements engine skips a candidate for good after two failed attempts,
+    so a Blender slot that was taken twice would cost a model its floor
+    permanently (spec § 10 — "no free slot" leaves the candidate MISSING, only
+    a real failure counts). Every other caller wants :func:`bake_surface` and
+    its plain ``Optional``.
+
+    Never raises, one info log per branch: a missing surface is a legal state
+    (the terrain answers), not an error.
     """
     from app.blender import refine, runner
     source = _source_of(model_path)
     if source is None:
         logger.info("surface bake skipped (model file unreadable): %s", model_path)
-        return None
+        return None, "unreadable"
+    # Asked BEFORE the slot: without Blender the run would fail anyway, and
+    # holding one of the few slots to find that out blocks the jobs that could
+    # still do something.
+    if not runner.is_available():
+        logger.info("surface bake skipped (no Blender): %s", Path(model_path).name)
+        return None, "no_blender"
     if not refine.take_lod_slot(wait_s):
         logger.info("surface bake skipped (no Blender slot): %s", Path(model_path).name)
-        return None
+        return None, "busy"
     try:
         res = runner.run("heightgrid", inputs={"model": Path(model_path)},
                          params={"rotation": _norm_rotation(rotation),
@@ -92,7 +113,7 @@ def bake_surface(model_path: Path, rotation: Any, *,
     if not res.get("ok"):
         logger.info("surface bake failed (%s): %s", Path(model_path).name,
                     res.get("error"))
-        return None
+        return None, "failed"
     data = dict(res["data"])
     surface = {"version": SURFACE_VERSION, "source": source,
                "rotation": _norm_rotation(rotation),
@@ -103,10 +124,23 @@ def bake_surface(model_path: Path, rotation: Any, *,
             json.dumps(surface, ensure_ascii=False), encoding="utf-8")
     except OSError as e:
         logger.info("surface not stored (%s): %s", Path(model_path).name, e)
-        return None
+        return None, "unstorable"
     logger.info("surface baked: %s (%dx%d @ %.2f m, %d hits)", Path(model_path).name,
                 surface["cols"], surface["rows"], surface["step"], surface["hits"])
-    return surface
+    return surface, "ok"
+
+
+def bake_surface(model_path: Path, rotation: Any, *,
+                 wait_s: float = 0.0) -> Optional[Dict[str, Any]]:
+    """Bake and store the surface of ``model_path`` under ``rotation``.
+
+    None when the model is unreadable, Blender is unavailable, no slot came
+    free within ``wait_s``, the script failed or the lattice could not be
+    stored — with ONE info log, never an exception: a missing surface is a
+    legal state (the terrain answers), not an error. A caller that has to act
+    on WHICH of those it was takes :func:`bake_surface_result`.
+    """
+    return bake_surface_result(model_path, rotation, wait_s=wait_s)[0]
 
 
 def _load(model_path: Path) -> Optional[Dict[str, Any]]:

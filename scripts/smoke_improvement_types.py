@@ -159,13 +159,22 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      answers True; turning the orientation dial afterwards makes the stored
      lattice read as stale — the very same "no surface" — and the room is a
      candidate again.  `apply` waits the landing paths' 300 s for a Blender
-     slot and bakes with the sidecar's fix.
+     slot and bakes with the sidecar's fix, RE-READ at apply time: a scan and
+     the apply that follows it are minutes apart, and what lands on disk has
+     to be the fix that was dialled last.
 
- 23. `bake_surface` NEVER raises: it answers None for a missing Blender, for a
-     slot that never came free and for a failed script alike.  The engine
-     records a failure only from an exception, so `apply` has to raise, or the
-     step would be closed as finished and the model would stay without a
-     floor.
+ 23. The bake NEVER raises — it answers a reason, and which one decides the
+     step's fate.  A defect ("failed": no Blender, an unreadable model, a
+     script that gave up) has to become an exception, or the engine would
+     close the step as finished and the model would stay without a floor.
+     "busy" — every Blender slot taken for the whole wait — is LOAD: as a
+     failure it would burn one of the candidate's two attempts, and a subject
+     skipped after two is never resurrected, so a model would lose its floor
+     for good because the machine was busy twice (spec § 10: no free slot
+     leaves the candidate MISSING).  `apply` raises `CandidateBusy` for it,
+     which the engine leaves pending without counting an attempt — that
+     engine-side contract is case 14 of `smoke_improvements.py`, which drives
+     the engine itself; proven here is that the type raises the right type.
 
  24. A bake invalidates the walk gate's cached lattices.  A room knows its
      location and drops only that one; a prop stands in many locations and
@@ -417,21 +426,21 @@ model3d.list_mesh_backends = lambda rig="": {
     "backends": [{"name": "hy"}, {"name": "tr"}], "default": "tr"}
 
 BAKE_CALLS = []
-BAKE_FAILS = {"value": False}      # True = Blender missing / no slot / script failed
+BAKE_REASON = {"value": "ok"}      # the reason bake_surface_result reports back
 FORGET_CALLS = []
 
 
-def fake_bake_surface(model_path, rotation, *, wait_s=0.0):
-    """What `model_surface.bake_surface` leaves behind on success: the lattice
-    file next to the model, naming the format version, the FILE it was baked
-    from and the FIX it was baked under. `read_surface` stays the real one, so
-    every "is there a surface" answer below goes through the production
-    validity check."""
+def fake_bake_surface_result(model_path, rotation, *, wait_s=0.0):
+    """What `model_surface.bake_surface_result` leaves behind on success: the
+    lattice file next to the model, naming the format version, the FILE it was
+    baked from and the FIX it was baked under — plus the reason "ok".
+    `read_surface` stays the real one, so every "is there a surface" answer
+    below goes through the production validity check."""
     BAKE_CALLS.append({"model": Path(model_path).name,
                        "rotation": model_surface._norm_rotation(rotation),
                        "wait_s": wait_s})
-    if BAKE_FAILS["value"]:
-        return None
+    if BAKE_REASON["value"] != "ok":
+        return None, BAKE_REASON["value"]
     surface = {"version": model_surface.SURFACE_VERSION,
                "source": model_surface._source_of(Path(model_path)),
                "rotation": model_surface._norm_rotation(rotation),
@@ -442,14 +451,18 @@ def fake_bake_surface(model_path, rotation, *, wait_s=0.0):
                "extent_snapped": [1.0, 1.0, 1.0]}
     model_surface.surface_path(Path(model_path)).write_text(
         json.dumps(surface), encoding="utf-8")
-    return surface
+    return surface, "ok"
 
 
 def fake_forget_surfaces(location_id=""):
     FORGET_CALLS.append(location_id)
 
 
-model_surface.bake_surface = fake_bake_surface
+model_surface.bake_surface_result = fake_bake_surface_result
+# The landing paths take the plain wrapper — it stays exactly what production
+# makes of the pair, so patching one fake covers both callers.
+model_surface.bake_surface = (
+    lambda *a, **kw: fake_bake_surface_result(*a, **kw)[0])
 model_surface.forget_surfaces = fake_forget_surfaces
 
 MODEL_REPLACE = registry.get("model_replace")
@@ -854,15 +867,28 @@ check("turning the orientation dial makes the stored lattice stale — which "
       candidates(SURFACE_BAKE, BAKE_ROOM),
       [(f"room:{LOC_ID}/{TAPROOM}", "Crossroads Inn / Taproom")])
 BAKE_CALLS.clear()
+SURFACE_BAKE.apply(SURFACE_BAKE.find_candidates(
+    SURFACE_BAKE.validate(BAKE_ROOM))[0], SURFACE_BAKE.validate(BAKE_ROOM),
+    "task-16")
+check("the fix is re-read at APPLY time, so the turned dial is what gets baked",
+      BAKE_CALLS[-1]["rotation"], {"x": 0.0, "y": 90.0, "z": 0.0})
+BAKE_CALLS.clear()
 FORGET_CALLS.clear()
-BAKE_FAILS["value"] = True
-check_raises("a bake that answers None is an exception, not a finished step",
-             RuntimeError,
+BAKE_REASON["value"] = "failed"
+check_raises("a defect is an exception, not a finished step", RuntimeError,
              lambda: SURFACE_BAKE.apply(CAND_R, SURFACE_BAKE.validate(BAKE_ROOM),
-                                        "task-16"),
-             f"room:{LOC_ID}/{TAPROOM}: surface bake failed")
+                                        "task-17"),
+             f"surface bake failed: room:{LOC_ID}/{TAPROOM}")
 check("and nothing was invalidated", FORGET_CALLS, [])
-BAKE_FAILS["value"] = False
+BAKE_REASON["value"] = "busy"
+check_raises("a Blender slot that never came free is LOAD — CandidateBusy, so "
+             "the engine leaves the step pending without counting an attempt",
+             CandidateBusy,
+             lambda: SURFACE_BAKE.apply(CAND_R, SURFACE_BAKE.validate(BAKE_ROOM),
+                                        "task-18"),
+             f"room:{LOC_ID}/{TAPROOM}: no Blender slot")
+check("the candidate is untouched by either", FORGET_CALLS, [])
+BAKE_REASON["value"] = "ok"
 
 # ── [15] surface_bake over prop variants ────────────────────────────────────
 print("[15] surface_bake prop_model")
@@ -884,7 +910,7 @@ check("a second active variant is a second candidate",
 BAKE_CALLS.clear()
 FORGET_CALLS.clear()
 CAND_V = SURFACE_BAKE.find_candidates(SURFACE_BAKE.validate(BAKE_PROP))[1]
-SURFACE_BAKE.apply(CAND_V, SURFACE_BAKE.validate(BAKE_PROP), "task-17")
+SURFACE_BAKE.apply(CAND_V, SURFACE_BAKE.validate(BAKE_PROP), "task-19")
 check("apply bakes that VARIANT's mesh", BAKE_CALLS,
       [{"model": VAR_MODEL.name, "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
         "wait_s": 300.0}])
