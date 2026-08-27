@@ -248,10 +248,13 @@ export function QueueView() {
       ) : null}
       <div className="ga-imp-head">
         {/* A switch, not a state-labelled button: the old label read as a
-            status ("Engine off") and nobody clicked it. */}
+            status ("Engine off") and nobody clicked it. It stays clickable
+            while a save runs — the reported flow is "type minutes → click the
+            switch", where the blur's save is still in flight and a disabled
+            checkbox would swallow the click; `commitSettings` queues it. */}
         <label className="ga-imp-switch">
-          <input type="checkbox" checked={shown.enabled} onChange={toggleEngine}
-            disabled={saving} />
+          <input type="checkbox" checked={shown.enabled}
+            onChange={toggleEngine} />
           {' '}{t('Engine')}
         </label>
         <label className="ga-imp-idle">
