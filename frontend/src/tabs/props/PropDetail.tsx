@@ -477,16 +477,20 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   }, [prop.rotation, enc, onChanged, t, toast])
 
   // The walkable surface of the SHOWN variant's mesh. Blender bakes it in the
-  // background, so the answer is only "queued" — the status line opposite says
-  // what is stored, and tells the truth again on the panel's next reload.
+  // background, so the answer is only "queued" — but the record is reloaded
+  // right away all the same: the bake INVALIDATES what the status line shows
+  // (a valid lattice becomes the one being replaced), and every other action
+  // on this panel refreshes the record it edited. Without it the line kept
+  // saying "baked 33×33" until something else happened to reload the prop.
   const bakeSurface = useCallback(async () => {
     try {
       await apiPost(`/world/props/${enc}/surface`, { variant })
       toast(t('Baking the surface — this runs in the background.'))
+      await onChanged()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, variant, t, toast])
+  }, [enc, variant, onChanged, t, toast])
 
   // Object-local markers (A4) — same vocabulary as room markers, but the
   // frame is the MESH's own bounding box: `at` = [u, v, w] fractions,
@@ -1131,10 +1135,18 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 ))}
               </div>
               <span className="ga-hint">{t('Orientation fix — persisted; the 3D client applies it on load.')}</span>
+            </>
+          ) : null}
 
-              {/* The lattice a figure's feet are put on, baked from THIS
-                  variant's mesh — a state to read, not a value to dial. It
-                  follows the orientation fix, which is why it can go stale. */}
+          {/* The lattice a figure's feet are put on, baked from THIS variant's
+              mesh — a state to read, not a value to dial. It follows the
+              orientation fix, which is why it can go stale.
+              Gated on the SHOWN variant's mesh, not on the prop's: the status
+              line, the button and the route all speak about the variant the
+              viewer has open, so a variant with a mesh must offer the bake
+              even when the primary one has none (T8). */}
+          {shownHasMesh ? (
+            <>
               <div className="ga-form-section-label">{t('Walkable surface')}</div>
               <div className="ga-form-row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="ga-muted">{surfaceLabel}</span>

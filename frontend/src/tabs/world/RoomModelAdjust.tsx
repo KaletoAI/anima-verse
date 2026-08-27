@@ -77,14 +77,15 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
       setModel(null)
       setSurface(null)
     }
-    apiGet<{ models?: ActiveModel[]; meta?: { walk_y?: number; surface?: SurfaceStatus } }>(
+    apiGet<{ models?: ActiveModel[]
+             meta?: { walk_y?: number; surface_status?: SurfaceStatus } }>(
       `/world/locations/${enc}/model3d/status`)
       .then((d) => {
         if (stale) return
         const found = (d.models || []).find((m) => m.active) || (d.models || [])[0] || null
         const active = found ? { ...found, walk_y: d.meta?.walk_y } : null
         setModel(active)
-        setSurface(d.meta?.surface || null)
+        setSurface(d.meta?.surface_status || null)
         setWidthDraft(active?.width_m ? String(active.width_m) : '')
         setWalkDraft(active?.walk_y === undefined ? '' : String(active.walk_y))
         setLoaded(true)

@@ -69,15 +69,63 @@ function reliftPlacement(tile: Tile, rec: PlacedSceneModel): number {
   rec.lift = step.lift;
   // THE BAKED LATTICE COMES ALONG (v6): it describes where the model stands,
   // so the one funnel that moves the model moves it too — mount, re-drape and
-  // tier swap alike. Only for a placement that actually stands: a spec whose
-  // mesh never loaded keeps its entry on the composed height the payload
-  // states. The entry is found ONCE by spec identity and then held on the
-  // record, so a redrape does not search again.
-  if (rec.object && rec.spec.surface) {
+  // tier swap alike. The entry is found ONCE by spec identity and then held on
+  // the record, so a redrape does not search again.
+  //
+  // AND IT IS WRITTEN WHETHER OR NOT THE MESH LOADED (Minor 6). The lift is a
+  // property of the PLACEMENT, not of the object: the payload states where the
+  // lattice stands, and § A16.9 moves it onto the ground under its own anchor
+  // whether three managed to draw a mesh there or not. Gating the write on
+  // `rec.object` left a failed-to-load diorama's lattice on lift 0 while every
+  // figure in it walked on the lifted ground — the walking height and the
+  // (missing) mesh disagreeing by the relief under the anchor. Only the
+  // OBJECT MOVE stays conditional: there is nothing to move.
+  if (rec.spec.surface) {
     if (!rec.surface) rec.surface = tile.surfaces.find((e) => e.spec === rec.spec);
     if (rec.surface) rec.surface.lift = step.lift;
   }
   return step.lift;
+}
+
+/**
+ * THE BOX OF A PLACEMENT'S FIX GROUP — the mesh under its EXACT orientation
+ * fix, in MODEL UNITS, before the placement yaw and the `max_m` scale. That is
+ * precisely the box `heightgrid.py` writes as `box_min`/`box_max`, so the two
+ * are comparable number for number (the `surface_box` verify row, fix wave B).
+ *
+ * `placeModelSpec` builds outer → yawG → fitG → fix and hangs the source under
+ * `fix`; measuring in `fitG`'s frame therefore strips the yaw and the outer
+ * scale while keeping the fix. `Box3.setFromObject` cannot do that — it always
+ * measures in WORLD space, and un-turning a finished AABB grows it — so the
+ * union is built here from the same per-geometry boxes three itself unions,
+ * each carried into `fitG`'s frame.
+ *
+ * `place()` then re-seats the group on its own centre (`fix.position`) AFTER
+ * measuring, so that translation is taken back out: what is left is the box
+ * the bake describes, seated where the bake seated it.
+ *
+ * `null` when the placement carries no mesh geometry at all (a placeholder,
+ * an empty group) — there is nothing to compare then.
+ */
+function fixGroupBox(placed: THREE.Object3D): THREE.Box3 | null {
+  const fitG = placed.children[0]?.children[0];
+  const fix = fitG?.children[0];
+  if (!fitG || !fix) return null;
+  fitG.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(fitG.matrixWorld).invert();
+  const local = new THREE.Matrix4();
+  const one = new THREE.Box3();
+  const box = new THREE.Box3();
+  fix.traverse((o) => {
+    const geo = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+    if (!geo) return;
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    if (!geo.boundingBox) return;
+    local.multiplyMatrices(inv, o.matrixWorld);
+    box.union(one.copy(geo.boundingBox).applyMatrix4(local));
+  });
+  if (box.isEmpty()) return null;
+  return box.translate(fix.position.clone().negate());
 }
 
 /**
@@ -1234,6 +1282,25 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       // side of this comparison is the factor it applied.
       verify.check(`${spec.role}:${spec.id}`, 'surface_scale', placed.scale.x,
                    surfaceScale(spec.surface, spec));
+      // …AND THE BOX ITSELF (fix wave B). `surface_scale` compares ONE number
+      // derived from `extent_snapped`, so it stays green whenever the two
+      // sides agree about the largest side — a mesh whose Blender box and
+      // three box differ in the OTHER axes, or in where its underside sits,
+      // passes it while every lattice reading is off by that difference. This
+      // row measures the exact box `place()` seated the model on against the
+      // one the bake wrote, in model units, and reports the worst of the four
+      // numbers (three sizes + the bottom edge).
+      const box = fixGroupBox(placed);
+      if (box) {
+        const size = box.getSize(new THREE.Vector3());
+        const [bx0, by0, bz0] = spec.surface.box_min;
+        const [bx1, by1, bz1] = spec.surface.box_max;
+        const dev = Math.max(Math.abs(size.x - (bx1 - bx0)),
+                             Math.abs(size.y - (by1 - by0)),
+                             Math.abs(size.z - (bz1 - bz0)),
+                             Math.abs(box.min.y - by0));
+        verify.check(`${spec.role}:${spec.id}`, 'surface_box', dev, 0);
+      }
     }
     if (spec.role === 'building') {
       applyBuildingModel(tile, placed, spec);
