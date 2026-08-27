@@ -282,7 +282,9 @@ def status() -> Dict[str, Any]:
     idle_seconds = user_activity.seconds_since()
     running = store.running_steps()
     averages = store.avg_duration_by_type()
-    pending = store.pending_count_by_type()
+    # Only OPEN entries are waiting for anything — a paused entry's steps must
+    # not show up in the panel's pending total or in its estimate.
+    pending = store.pending_count_by_type(open_only=True)
     estimate = sum(averages[type_id] * count
                    for type_id, count in pending.items()
                    if type_id in averages) if averages else None

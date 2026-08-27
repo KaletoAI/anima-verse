@@ -16,6 +16,7 @@ import { TerrainTab } from './terrain/TerrainTab'
 import { PropsTab } from './props/PropsTab'
 import { WorldDevTab } from './world-dev/WorldDevTab'
 import { SchedulerTab } from './scheduler/SchedulerTab'
+import { ImprovementsTab } from './improvements/ImprovementsTab'
 import { IntentsTab } from './intents/IntentsTab'
 import { EventsTab } from './events/EventsTab'
 import { MarketplaceTab } from './marketplace/MarketplaceTab'
@@ -37,6 +38,7 @@ export type TabId =
   | 'props'
   | 'world-dev'
   | 'scheduler'
+  | 'improvements'
   | 'intents'
   | 'events'
   | 'marketplace'
@@ -64,6 +66,7 @@ export const TABS: TabSpec[] = [
   { id: 'props', label: 'Props', Component: PropsTab },
   { id: 'world-dev', label: 'World Dev', Component: WorldDevTab },
   { id: 'scheduler', label: 'Scheduler', Component: SchedulerTab },
+  { id: 'improvements', label: 'Improvements', Component: ImprovementsTab },
   { id: 'intents', label: 'Intents', Component: IntentsTab },
   { id: 'events', label: 'Events', Component: EventsTab },
   { id: 'marketplace', label: 'Marketplace', Component: MarketplaceTab },

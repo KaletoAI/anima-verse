@@ -2198,6 +2198,22 @@
     "Re-render default expression": "Standard-Ausdruck neu rendern",
     "Rendering…": "Wird gerendert…",
     "Rendering the default expression — this takes a moment.": "Der Standard-Ausdruck wird gerendert — das dauert einen Moment.",
-    "The picture appears here as soon as the backend delivers it.": "Das Bild erscheint hier, sobald das Backend es liefert."
+    "The picture appears here as soon as the backend delivers it.": "Das Bild erscheint hier, sobald das Backend es liefert.",
+    "Improvements": "Verbesserungen",
+    "Queue": "Warteschlange",
+    "Entries": "Einträge",
+    "Engine on": "Motor an",
+    "Engine off": "Motor aus",
+    "Idle minutes": "Ruhe-Minuten",
+    "Idle since": "Ruhe seit",
+    "Next step allowed in": "Nächster Schritt erlaubt in",
+    "World frozen": "Welt eingefroren",
+    "Step running": "Schritt läuft",
+    "Ready to run": "Bereit zu laufen",
+    "All": "Alle",
+    "Nothing queued": "Nichts in der Warteschlange",
+    "{n} steps pending": "{n} Schritte offen",
+    "~{h} h estimated": "~{h} h geschätzt",
+    "Recently finished": "Zuletzt fertig"
   }
 }

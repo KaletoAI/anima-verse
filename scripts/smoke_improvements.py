@@ -103,6 +103,13 @@ taken from the ``submit`` call.
      [(1, B/k9), (2, A/k1)] — k7 is skipped and k2 done, neither shows.
      Pausing B removes its rows, and A becomes position 1.
 
+ 15b. What is PAUSED is not pending.  With B paused, two pending steps exist in
+     the table (B/k9 and A/k1), but only A is open — so
+     ``pending_count_by_type()`` counts 1 and ``status()["pending_total"]``
+     says 1, while ``pending_count_by_type(open_only=False)`` still sees both.
+     A paused entry runs nothing; counting its steps would inflate both the
+     panel's "n steps pending" and the estimate derived from it.
+
  16. The three gates and the one-shot override.  Disabled →
      (False, "disabled"); enabled but frozen → (False, "frozen"); thawed but
      the user active 60 s ago → (False, "active").  ``request_run_now(A)``
@@ -578,6 +585,14 @@ store.update(B, status="paused")
 check("a paused entry leaves the queue",
       [(r["pos"], r["improvement_id"]) for r in engine.ordered_queue()],
       [(1, A)])
+
+print("\n15b. a paused entry's pending steps are not pending work")
+check("the table still holds both pending steps",
+      store.pending_count_by_type(open_only=False), {"fake": 2})
+check("…but only the open entry's step counts",
+      store.pending_count_by_type(), {"fake": 1})
+check("…and status() counts what the panel promises",
+      engine.status()["pending_total"], 1)
 
 # ── 16. gates + run-now ──────────────────────────────────────────────────────
 print("\n16. the gates, and the one-shot override")

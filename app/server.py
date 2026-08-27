@@ -73,6 +73,7 @@ from app.routes import play as play_route
 from app.routes import api_images as api_images_route
 from app.routes import assist as assist_route
 from app.routes import prop_variants as prop_variants_route
+from app.routes import improvements as improvements_route
 from app.routes import npc as npc_route
 from app.scheduler.scheduler_manager import SchedulerManager
 from app.core.dependencies import initialize_channels, get_skill_manager
@@ -644,6 +645,7 @@ app.include_router(story_dev.router)
 app.include_router(world_dev.router)
 app.include_router(tts.router)
 app.include_router(queue_route.router)
+app.include_router(improvements_route.router)
 app.include_router(logs.router)
 app.include_router(dashboard.router)
 app.include_router(admin.router)

@@ -284,12 +284,20 @@ def avg_duration_by_type() -> Dict[str, float]:
     ).fetchall()}
 
 
-def pending_count_by_type() -> Dict[str, int]:
+def pending_count_by_type(open_only: bool = True) -> Dict[str, int]:
+    """Pending steps grouped by the improvement's type_id.
+
+    ``open_only`` (the default) counts only steps of an entry that is still
+    'open' — that is what the panel means by "waiting".  A paused entry runs
+    nothing, so its steps must inflate neither the pending total nor the
+    estimate; pass False to count every pending step regardless of the entry.
+    """
     conn = get_connection()
+    entry_filter = " AND i.status='open'" if open_only else ""
     return {r["type_id"]: int(r["n"]) for r in conn.execute(
         "SELECT i.type_id AS type_id, COUNT(*) AS n "
         "FROM improvement_steps s JOIN improvements i ON i.id = s.improvement_id "
-        "WHERE s.status='pending' GROUP BY i.type_id"
+        f"WHERE s.status='pending'{entry_filter} GROUP BY i.type_id"
     ).fetchall()}
 
 

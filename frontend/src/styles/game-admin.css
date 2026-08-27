@@ -3010,3 +3010,60 @@ a.ga-btn {
   border-radius: var(--radius, 6px);
 }
 .ga-outfit-batch-summary b { font-size: 1.1em; }
+
+/* Improvements tab — the idle worker's queue. The head carries the engine
+   switch, the idle threshold and the gate line on one wrapping row; the list
+   itself reuses .ga-list, so only the tab's own bits live here. */
+.ga-imp-segments {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex: 0 0 auto;
+}
+
+.ga-imp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.ga-imp-idle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #8b949e);
+}
+.ga-imp-idle .ga-input { width: 70px; }
+
+.ga-imp-running {
+  font-size: 12px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+  background: var(--bg-container, #161b22);
+}
+
+.ga-imp-filter { margin-bottom: 6px; }
+
+/* One colour per entry — the inline background is the entry's own. */
+.ga-imp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.ga-imp-foot {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-muted, #8b949e);
+  padding: 6px 2px;
+}
+
+.ga-imp-recent { margin-top: 6px; }
