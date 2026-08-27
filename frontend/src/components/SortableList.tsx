@@ -82,7 +82,17 @@ export function SortableList<T>({
               className="ga-sortable-handle"
               title={t('Drag to reorder')}
               draggable
-              onDragStart={() => setDragKey(key)}
+              onDragStart={(e) => {
+                // Firefox starts no drag at all without payload data — the
+                // handle would simply not move. The key travels with it even
+                // though `drop` reads it from state: the browser wants a
+                // transfer, and text/plain is the one every target accepts.
+                if (e.dataTransfer) {
+                  e.dataTransfer.setData('text/plain', key)
+                  e.dataTransfer.effectAllowed = 'move'
+                }
+                setDragKey(key)
+              }}
               onDragEnd={() => { setDragKey(null); setOverKey(null) }}
             >
               ⋮⋮

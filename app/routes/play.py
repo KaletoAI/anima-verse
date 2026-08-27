@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
-from app.core import user_activity, users
+from app.core import users
 from app.core.auth_dependency import get_current_user, require_admin
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
@@ -290,7 +290,6 @@ async def play_enter_room(request: Request, user=Depends(get_current_user)):
     block rules (the entry-room constraint only applies to leaving the
     location). Going onto the ground is an ordinary room change like any
     other and runs through the same check — a rule may lock the ground too."""
-    user_activity.touch()
     import asyncio
 
     body = await request.json()
@@ -455,7 +454,6 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
     The ticker's arrival gate stays the second net: rules can change while
     someone is on the road.
     """
-    user_activity.touch()
     from app.core.i18n import t
     from app.core.travel_engine import start_journey
     from app.models.account import get_active_character
@@ -801,7 +799,6 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
 
     Gates hand-derived in ``scripts/smoke_play_pos.py``.
     """
-    user_activity.touch()
     import asyncio
     from app.models.account import get_active_character
 

@@ -144,6 +144,22 @@ taken from the ``submit`` call.
      that can never run.  So the step goes 'skipped' with the type id in its
      error, E's failed_count is 1, and the next tick — user idle 960 s, so the
      gate is wide open — submits nothing and has never queued a row for E.
+     E is a one_shot with that ONE candidate, so the skip also finishes it:
+     nothing is pending or running any more, hence status 'done'.
+
+ 21. The other skip path closes too.  F is a one_shot with the single candidate
+     k8 and a type that always raises.  The first failure keeps it runnable
+     (attempts 1, entry still 'open'), the second reaches MAX_ATTEMPTS and
+     skips it — and with that F has neither a pending nor a running step, so it
+     is 'done'.  Without the close a one_shot whose last candidate failed would
+     sit 'open' 0/0 forever, exactly like case 19's empty scan.
+
+ 22. Nothing a step calls can end the idle window.  ``handle_step`` runs
+     ``apply`` inside ``user_activity.suppressed()``, so even a producer that
+     stamps activity itself (behaviour "touch" — what every image/mesh
+     generator used to do) leaves the stamp where it was: 500 s old before the
+     step, 500 s old after it.  Otherwise the queue would keep itself awake and
+     never run a second step.
 
 Usage:  ./.venv/bin/python scripts/smoke_improvements.py
 """
@@ -447,7 +463,7 @@ class FakeType(ImprovementType):  # noqa: F811 — part 2's own, drivable stand-
     label = "Fake improvement"
     params_schema = []
     candidates = [("k1", "Zeta"), ("k2", "Alpha")]
-    behaviour = "ok"          # "ok" | "fail" | "busy"
+    behaviour = "ok"          # "ok" | "fail" | "busy" | "touch"
     applied = []              # [(candidate_key, task_id)] in call order
 
     def find_candidates(self, params):
@@ -462,6 +478,10 @@ class FakeType(ImprovementType):  # noqa: F811 — part 2's own, drivable stand-
             raise RuntimeError("boom")
         if FakeType.behaviour == "busy":
             raise BackendBusyError("gpu busy")
+        if FakeType.behaviour == "touch":
+            # A producer that stamps user activity itself — the step must be
+            # deaf to it (case 22).
+            user_activity.touch()
 
 
 registry.clear()
@@ -668,12 +688,46 @@ check("the step does NOT stay running", step["status"], "skipped")
 check("…and carries the type id as its error", "fake" in step["error"], True)
 check("…counted as a failure, not as an attempt",
       (store.get(E)["failed_count"], step["attempts"]), (1, 0))
+check("…and the one_shot has nothing left, so it closed itself",
+      store.get(E)["status"], "done")
 user_activity._set_for_test(960)      # the gate is wide open now
 result = engine.tick()
 check("the next tick does not resubmit it",
       (result["submitted"], result["reason"]), ("", "empty"))
 check("…and no task row for E was ever queued",
       [t for t in step_tasks() if t["payload"]["improvement_id"] == E], [])
+
+# ── 21. the last step is skipped ─────────────────────────────────────────────
+print("\n21. a one_shot whose last step is SKIPPED closes itself")
+registry.clear()                      # case 20 emptied it — the type is back
+registry.register(FakeType())
+FakeType.candidates = [("k8", "Only")]
+F = store.create("fake", "F", {}, "one_shot")["id"]
+engine.scan(F)
+FakeType.behaviour = "fail"
+engine.handle_step({"improvement_id": F, "candidate_key": "k8", "_task_id": ""})
+check("the first failure leaves the entry open",
+      (step_of(F, "k8")["status"], store.get(F)["status"]),
+      ("pending", "open"))
+engine.handle_step({"improvement_id": F, "candidate_key": "k8", "_task_id": ""})
+check("the second gives the step up", step_of(F, "k8")["status"], "skipped")
+check("…and the entry is worked off, so it is done",
+      store.get(F)["status"], "done")
+FakeType.behaviour = "ok"
+
+# ── 22. the step's own activity is suppressed ────────────────────────────────
+print("\n22. nothing a step calls can end the idle window")
+FakeType.candidates = [("k4", "Solo")]
+G = store.create("fake", "G", {}, "one_shot")["id"]
+engine.scan(G)
+FakeType.behaviour = "touch"
+user_activity._set_for_test(500)
+check("the step runs", engine.handle_step({"improvement_id": G,
+                                           "candidate_key": "k4",
+                                           "_task_id": ""}), {"ok": True})
+check("…and the producer's own touch changed nothing",
+      500.0 <= user_activity.seconds_since() < 501.0, True)
+FakeType.behaviour = "ok"
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

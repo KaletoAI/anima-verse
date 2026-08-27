@@ -262,6 +262,15 @@ a type — it asks the registry. A package contributes its own kind of backgroun
 work by registering an improvement type; the core stays free of the package
 (R1).
 
+**When it runs.** The engine ticks at the admin tick
+(`server.world_admin_tick_interval_seconds`, default 60 s) with a sub-task floor
+of 30 s, and only submits when the user has been idle for `idle_minutes`. The
+idle stamp has exactly ONE source: an HTTP request that writes (any method that
+is not GET/HEAD/OPTIONS, except the `/improvements` admin API itself), stamped
+by the single middleware in `app/server.py`. No route and no producer stamps by
+hand — a generation is not activity in itself, or the queue's own autonomous
+renders would keep the window closed forever.
+
 **The class.** Subclass `app.core.improvements.base.ImprovementType`, set `id`
 (stable, it is stored with every entry), `label` (admin UI) and
 `params_schema`, then implement four methods:
@@ -271,7 +280,7 @@ work by registering an improvement type; the core stays free of the package
 | `params_schema: List[ParamField]` | The form the admin fills in when creating an entry. `ParamField(key, label, kind, options=None, required=True)`; `kind` ∈ `mesh_backend` \| `image_backend` \| `subject_kind` \| `enum` \| `text` — the backend kinds are filled by the server, `enum`/`subject_kind` carry their own `options` (`[{"value","label"}]`) |
 | `validate(params) -> params` | Normalised parameters, or `ValueError(message)`. The base class checks required fields and option membership; override it (calling `super().validate`) for rules between fields — e.g. "source and target backend must differ" |
 | `find_candidates(params) -> List[Candidate]` | Every subject NOT yet done, in a stable order (`(label.lower(), key)`). `Candidate(key, label)`: the key is unique per type and is what a step row stores (`"character:Mira"`, `"location:<id>:<file>"`). A subject that could not be worked at all (nothing to generate FROM) is not a candidate |
-| `is_done(candidate, params) -> bool` | Asked before work and after a scan — read the persisted asset, never a cached answer |
+| `is_done(candidate, params) -> bool` | The type's own "is this subject finished" test — read the persisted asset, never a cached answer. The engine never calls it; `find_candidates` uses it to decide what to list, and a subject that drops off that list is closed as done |
 | `apply(candidate, params, task_id)` | Does the work SYNCHRONOUSLY: it returns only once whatever it made is persisted. It runs in a queue worker thread (no event loop of its own, and `user_activity` is suppressed for the duration), so it calls the blocking producer directly — never a `trigger_*` thread wrapper, which would report success while nothing had been generated |
 
 **Failure vocabulary of `apply`.** A defect is a plain exception (its message

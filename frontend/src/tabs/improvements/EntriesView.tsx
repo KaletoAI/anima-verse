@@ -244,7 +244,7 @@ export function EntriesView() {
       <ConfirmDialog
         open={!!pendingDelete}
         title={t('Delete improvement')}
-        message={t('The entry and all its steps are removed, and a step of it that is running right now is cancelled.')}
+        message={t('The entry and all its steps are removed. A step that is already running will finish; queued steps are cancelled.')}
         confirmLabel={t('Delete')}
         danger
         onConfirm={confirmDelete}

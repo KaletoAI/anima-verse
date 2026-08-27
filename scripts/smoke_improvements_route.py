@@ -67,6 +67,22 @@ recorded from a run.  A mini FastAPI app carries only this router, and
      touched: the cancel asks for tasks BY TYPE and picks by payload, it does
      not sample a panel view.
 
+ 11b. A RUNNING task is not cancelled.  Its worker is inside ``apply()`` and
+     keeps generating whatever the row says; flipping the row to 'cancelled'
+     would only make ``has_pending_task`` report False, and the next tick would
+     start a second generation on the same backend.  So with one running and
+     one queued task of the same entry, DELETE cancels the queued one and
+     leaves the running one alone — the deleted step row makes its later
+     ``mark_result`` a no-op anyway (store: no row, no write).
+
+ 12. The user-activity stamp comes from ONE middleware, not from routes.  The
+     mini app carries the same hook (``user_activity.activity_middleware_hook``)
+     that ``app/server.py`` applies.  A POST to a non-improvements path is a
+     player action → the stamp resets to 0; a GET is a poll → the stamp keeps
+     its age; and a write to the improvements admin API itself is not player
+     activity → the stamp keeps its age too, so watching the queue panel cannot
+     push away the idle window the panel is waiting for.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvements_route.py
 """
 import os
@@ -89,6 +105,7 @@ db.init_schema()
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.core import user_activity  # noqa: E402
 from app.core.auth_dependency import require_admin  # noqa: E402
 from app.core.improvements import engine, registry, store  # noqa: E402
 from app.core.improvements.base import (Candidate, ImprovementType,  # noqa: E402
@@ -140,7 +157,47 @@ app = FastAPI()
 app.include_router(improvements_route.router)
 app.dependency_overrides[require_admin] = lambda: {"username": "demo",
                                                    "role": "admin"}
+
+
+@app.middleware("http")
+async def _activity_middleware(request, call_next):
+    """The same two lines ``app/server.py`` runs — the rule itself lives in
+    ``user_activity``, which is why this smoke can carry it without booting the
+    real app."""
+    user_activity.activity_middleware_hook(request.method, request.url.path)
+    return await call_next(request)
+
+
+@app.post("/play/say")
+def _play_say():
+    """A stand-in for any player write — the middleware never looks at the
+    route, only at method and path."""
+    return {"ok": True}
+
+
 client = TestClient(app)
+
+
+def set_task_status(task_id, status):
+    """What the queue worker does when it picks a task up — this smoke runs
+    without worker threads, so the row is moved by hand."""
+    conn = sqlite3.connect(QUEUE_DB)
+    try:
+        conn.execute("UPDATE tasks SET status=? WHERE task_id=?",
+                     (status, task_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def status_of(task_id):
+    conn = sqlite3.connect(f"file:{QUEUE_DB}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT status FROM tasks WHERE task_id=?",
+                           (task_id,)).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
 
 
 def task_rows(task_type=None):
@@ -299,7 +356,6 @@ check("…and on preview",
 print("\n11. DELETE cancels the running task and takes the steps with it")
 store.set_settings(True, 15)
 client.patch("/improvements/order", json={"ids": [A, B]})   # A owes the step
-from app.core import user_activity  # noqa: E402
 user_activity._set_for_test(960)
 submitted = engine.tick()["submitted"]
 check("a step is owed", (submitted != "", len(task_rows())), (True, 1))
@@ -327,6 +383,40 @@ check("…and no unrelated task was touched",
       sorted({row["status"] for row in task_rows("noise")}), ["pending"])
 check("…the steps are gone", client.get(f"/improvements/{A}/steps").status_code, 404)
 check("…and the list is empty", client.get("/improvements").json(), [])
+
+# ── 11b. a running task finishes, a queued one does not ──────────────────────
+print("\n11b. DELETE cancels the QUEUED task and lets the running one finish")
+FakeType.candidates = [("k1", "Solo")]
+F = client.post("/improvements", json={"type_id": "fake", "label": "F",
+                                       "mode": "one_shot",
+                                       "params": {"backend": "x"}}).json()["id"]
+user_activity._set_for_test(960)
+running_task = engine.tick()["submitted"]
+check("a step is owed", running_task != "", True)
+set_task_status(running_task, "running")      # a worker picked it up
+queued_task = get_task_queue().submit(
+    engine.TASK_TYPE, {"improvement_id": F, "candidate_key": "k1"},
+    queue_name=engine.QUEUE_NAME, priority=90, max_retries=0,
+    deduplicate=False)
+check("DELETE answers ok", client.delete(f"/improvements/{F}").status_code, 200)
+check("the running step is left to finish", status_of(running_task), "running")
+check("…and only the queued one is cancelled", status_of(queued_task),
+      "cancelled")
+
+# ── 12. the activity stamp ───────────────────────────────────────────────────
+print("\n12. one middleware stamps the user's activity — no route does")
+user_activity._set_for_test(300)
+check("a GET is a poll, not activity",
+      (client.get("/improvements").status_code,
+       user_activity.seconds_since() >= 300.0), (200, True))
+check("…and neither is a write to the improvements admin API",
+      (client.post("/improvements/preview",
+                   json={"type_id": "fake", "params": {"backend": "x"}}
+                   ).status_code,
+       user_activity.seconds_since() >= 300.0), (200, True))
+check("a player's write resets the window",
+      (client.post("/play/say").status_code,
+       user_activity.seconds_since() < 1.0), (200, True))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

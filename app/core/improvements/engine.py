@@ -223,6 +223,10 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
                           error=message, count_attempt=False)
         store.update(improvement_id,
                      failed_count=int(improvement["failed_count"]) + 1)
+        # A skip finishes a step just as a success does: if it was the last one
+        # of a one_shot, the entry is worked off and must close here — nothing
+        # else will ever come back to it.
+        _close_if_finished(improvement_id)
         return {"skipped": message}
 
     candidate = Candidate(key, step["candidate_label"])
@@ -244,6 +248,10 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
                               error=str(e), count_attempt=True)
             store.update(improvement_id,
                          failed_count=int(improvement["failed_count"]) + 1)
+            # Giving up finishes the step. A one_shot whose LAST candidate is
+            # skipped has nothing pending or running left, so it closes here —
+            # without this it would stay 'open' with 0 runnable steps forever.
+            _close_if_finished(improvement_id)
         else:
             store.mark_result(improvement_id, key, status="pending",
                               error=str(e), count_attempt=True)

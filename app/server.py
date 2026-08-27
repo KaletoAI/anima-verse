@@ -618,6 +618,17 @@ app.add_middleware(
 from app.core.auth_dependency import user_context_middleware
 app.middleware("http")(user_context_middleware)
 
+# The ONE place the user-activity stamp is written: only humans issue HTTP
+# writes, queue work never does, and the improvements admin API itself is not
+# player activity. The rule lives in the hook, this is just where it is applied.
+from app.core.user_activity import activity_middleware_hook
+
+
+@app.middleware("http")
+async def player_activity_middleware(request, call_next):
+    activity_middleware_hook(request.method, request.url.path)
+    return await call_next(request)
+
 
 # Include routers
 app.include_router(auth.router)

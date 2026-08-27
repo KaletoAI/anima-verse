@@ -19,7 +19,6 @@ from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
 from app.imagegen.base import BackendBusyError
 from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
 
-from app.core import user_activity
 from app.core.config import MAX_IMAGE_BACKENDS
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
@@ -1458,12 +1457,6 @@ class ImageService:
         _ucp = _cfg_mod.get_use_case_prompts(_uc_name, _uc_img_model)
         prompt_style = _ucp.get("prompt_style", "")
         negative_prompt = _ucp.get("prompt_negative", "")
-
-        # A generation is a user action — it keeps the improvements queue's
-        # idle window closed. An improvement step's OWN generation runs inside
-        # ``user_activity.suppressed()``, where this call is a no-op, so the
-        # queue never keeps itself awake.
-        user_activity.touch()
 
         # Register the task in the queue system for uniform visibility.
         # start_running=False: prompt build (LLM calls) + GPU channel wait time

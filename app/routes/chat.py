@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
-from app.core import user_activity
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
 from app.core.turn_trace import begin_trace
@@ -704,7 +703,6 @@ def analyze_chat_image_blocking(image_path: str, agent_name: str = "",
 @router.post("/{user_id}")
 async def chat(request: Request) -> StreamingResponse:
     """Main endpoint for chatting with characters."""
-    user_activity.touch()
     import time as _t
     _probe_req_id = uuid.uuid4().hex[:8]
 

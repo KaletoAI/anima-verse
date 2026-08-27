@@ -45,6 +45,9 @@ class ImprovementType:
         raise NotImplementedError
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
+        """The type's own finished-test, used INSIDE ``find_candidates`` — the
+        engine never calls it; a subject that drops off the candidate list is
+        closed as done."""
         raise NotImplementedError
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:

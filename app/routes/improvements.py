@@ -80,7 +80,14 @@ def _validated(type_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _cancel_in_flight(improvement_id: str) -> None:
-    """Cancel the queue task(s) of a step this entry has in flight.
+    """Cancel the QUEUED task(s) of this entry — never a running one.
+
+    A running task's worker is inside ``apply()`` and keeps generating no
+    matter what the row says; cancelling it only flips the status, and
+    ``has_pending_task`` then reports False, so the very next tick would submit
+    a second step and two generations would run on one backend at once. So a
+    running step is left to finish: its ``mark_result`` writes into a step row
+    that the delete has already removed, which the store handles as a no-op.
 
     Ownership is decided by the task's own payload, never by "there is only one
     improvement_step owed": a foreign entry's task must survive this delete.
@@ -92,6 +99,10 @@ def _cancel_in_flight(improvement_id: str) -> None:
     task_queue = get_task_queue()
     for row in task_queue.list_tasks_of_type(engine.TASK_TYPE):
         if (row["payload"] or {}).get("improvement_id") != improvement_id:
+            continue
+        if row["status"] != "pending":
+            logger.info("improvements: task %s of deleted entry %s is running "
+                        "— left to finish", row["task_id"], improvement_id)
             continue
         task_queue.cancel_task(row["task_id"])
         logger.info("improvements: cancelled task %s of deleted entry %s",
@@ -179,6 +190,8 @@ def patch_improvement(improvement_id: str, body: PatchBody) -> Dict[str, Any]:
 
 @router.delete("/{improvement_id}")
 def delete_improvement(improvement_id: str) -> Dict[str, Any]:
+    """Removes the entry and its steps; queued tasks of it are cancelled, a
+    step already running is left to finish (see ``_cancel_in_flight``)."""
     _improvement_or_404(improvement_id)
     _cancel_in_flight(improvement_id)
     store.delete(improvement_id)

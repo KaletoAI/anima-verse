@@ -2246,6 +2246,6 @@
     "Rescan": "Neu scannen",
     "{a} added, {c} closed": "{a} hinzugefügt, {c} geschlossen",
     "Delete improvement": "Verbesserung löschen",
-    "The entry and all its steps are removed, and a step of it that is running right now is cancelled.": "Der Eintrag und alle seine Schritte werden entfernt; ein gerade laufender Schritt davon wird abgebrochen."
+    "The entry and all its steps are removed. A step that is already running will finish; queued steps are cancelled.": "Der Eintrag und alle seine Schritte werden entfernt. Ein bereits laufender Schritt wird noch zu Ende geführt; wartende Schritte werden abgebrochen."
   }
 }
