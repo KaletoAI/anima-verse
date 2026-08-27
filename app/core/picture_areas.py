@@ -9,6 +9,13 @@ Everything here is pure geometry over plain tuples; the caller (Blender)
 supplies triangles, per-vertex UVs and a pixel sampler, and gets back plane,
 frame, planar UVs and boundary edges.
 
+MODEL SPACE IS glTF **Y-UP** — the same convention as the meshes this
+project ships and as three.js in both renderers (``docs/schnittstellen-3d.md``:
+the ground plane is ``(pos_x, pos_z)``, height is ``y``). Blender works z-up,
+so the Blender caller converts its coordinates to y-up BEFORE handing them
+in. ``planar_frame`` relies on that: it needs to know which way is up to keep
+a picture on a wall from being stored on its side.
+
 The pipeline a caller runs:
 
 1. ``classify_faces`` — which triangles show the key colour (the image model
@@ -42,9 +49,15 @@ SampleFn = Callable[[float, float], Tuple[float, float, float]]
 KEY_LEVEL = 0.39
 KEY_MARGIN = 0.12
 
-KINDS = ("picture", "glass")
+WORLD_UP: Point = (0.0, 1.0, 0.0)   # glTF y-up, see the module docstring
 
 _EPS = 1e-12
+# A plane is "horizontal" when its normal is within this of the up axis —
+# then up projects to nothing and the frame needs the documented fallback.
+_PARALLEL = 1.0 - 1e-6
+# fit_plane calls a cloud degenerate when the two smallest eigenvalues are
+# this close (relative to the trace): a line or a point has no unique plane.
+_RANK_TOL = 1e-9
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +87,10 @@ def _unit(a: Point) -> Point:
     n = _norm(a)
     if n <= _EPS:
         return (0.0, 0.0, 0.0)
-    return (a[0] / n, a[1] / n, a[2] / n)
+    # "+ 0.0" only normalises a signed zero (-0.0 + 0.0 == 0.0) and is exact
+    # for every other value — a "-0.0" in a stored normal is noise the
+    # sidecar and the clients do not need to carry.
+    return (a[0] / n + 0.0, a[1] / n + 0.0, a[2] / n + 0.0)
 
 
 def _edge_key(a: int, b: int) -> Tuple[int, int]:
@@ -85,6 +101,36 @@ def _edge_key(a: int, b: int) -> Tuple[int, int]:
 # ---------------------------------------------------------------------------
 # 1. colour classification
 # ---------------------------------------------------------------------------
+def _is_green(r: float, g: float, b: float) -> bool:
+    return g > KEY_LEVEL and g > r + KEY_MARGIN and g > b + KEY_MARGIN
+
+
+def _is_magenta(r: float, g: float, b: float) -> bool:
+    return (
+        r > KEY_LEVEL
+        and b > KEY_LEVEL
+        and g < r - KEY_MARGIN
+        and g < b - KEY_MARGIN
+    )
+
+
+_KEY_TESTS: Dict[str, Callable[[float, float, float], bool]] = {
+    "picture": _is_green,
+    "glass": _is_magenta,
+}
+KINDS = tuple(_KEY_TESTS)
+
+
+def _key_test(kind: str) -> Callable[[float, float, float], bool]:
+    """Resolve the predicate ONCE — the callers sample per face, not per kind."""
+    try:
+        return _KEY_TESTS[kind]
+    except KeyError:
+        raise ValueError(
+            f"unknown key colour kind {kind!r} (expected one of {KINDS})"
+        ) from None
+
+
 def is_key_colour(rgb: Tuple[float, float, float], kind: str) -> bool:
     """Is this 0..1 RGB triple the chroma key of ``kind``?
 
@@ -98,17 +144,8 @@ def is_key_colour(rgb: Tuple[float, float, float], kind: str) -> bool:
 
     Raises ``ValueError`` for an unknown ``kind``.
     """
-    if kind not in KINDS:
-        raise ValueError(f"unknown key colour kind {kind!r} (expected one of {KINDS})")
-    r, g, b = float(rgb[0]), float(rgb[1]), float(rgb[2])
-    if kind == "picture":
-        return g > KEY_LEVEL and g > r + KEY_MARGIN and g > b + KEY_MARGIN
-    return (
-        r > KEY_LEVEL
-        and b > KEY_LEVEL
-        and g < r - KEY_MARGIN
-        and g < b - KEY_MARGIN
-    )
+    test = _key_test(kind)
+    return test(float(rgb[0]), float(rgb[1]), float(rgb[2]))
 
 
 def face_samples(uv: Sequence[UV], face: Face) -> List[UV]:
@@ -141,15 +178,18 @@ def classify_faces(
 
     Two of three tolerates a single stray texel (JPEG ringing, a seam, a
     speck of the frame bleeding into the panel) without letting a face that
-    merely grazes the panel count as panel.
+    merely grazes the panel count as panel: a triangle straddling the panel
+    edge with only one sample inside stays frame.
+
+    Raises ``ValueError`` for an unknown ``kind``.
     """
-    if kind not in KINDS:
-        raise ValueError(f"unknown key colour kind {kind!r} (expected one of {KINDS})")
+    test = _key_test(kind)
     flags: List[bool] = []
     for face in faces:
         hits = 0
         for u, v in face_samples(uvs, face):
-            if is_key_colour(sample_rgb(u, v), kind):
+            r, g, b = sample_rgb(u, v)
+            if test(r, g, b):
                 hits += 1
         flags.append(hits >= 2)
     return flags
@@ -162,8 +202,8 @@ def components(flags: Sequence[bool], faces: Sequence[Face]) -> List[List[int]]:
     """Group the flagged faces into patches connected over SHARED EDGES.
 
     Two faces are neighbours when they share two vertex indices, not merely
-    one — a single shared corner (two panels touching at a frame joint) must
-    not fuse two patches.
+    one — two panels that touch at a single frame-joint corner must stay two
+    patches, or they would be fitted to one averaged plane.
 
     Returns the face indices per patch, each list ascending, the patches
     sorted by face count descending, ties by smallest face index.
@@ -171,7 +211,6 @@ def components(flags: Sequence[bool], faces: Sequence[Face]) -> List[List[int]]:
     keyed = [n for n, f in enumerate(flags) if f]
     if not keyed:
         return []
-    keyed_set = set(keyed)
 
     by_edge: Dict[Tuple[int, int], List[int]] = {}
     for n in keyed:
@@ -193,7 +232,7 @@ def components(flags: Sequence[bool], faces: Sequence[Face]) -> List[List[int]]:
             a, b, c = faces[n]
             for e in (_edge_key(a, b), _edge_key(b, c), _edge_key(c, a)):
                 for m in by_edge.get(e, ()):
-                    if m not in seen and m in keyed_set:
+                    if m not in seen:
                         seen.add(m)
                         queue.append(m)
         group.sort()
@@ -266,7 +305,13 @@ def fit_plane(points: Sequence[Point]) -> Tuple[Point, Point]:
     covariance (scatter) matrix — the direction of least spread. Sign per
     ``_orient``: towards +z, else +y, else +x.
 
-    Fewer than three points, or a degenerate cloud, falls back to +z.
+    DEGENERATE INPUT falls back to ``(0, 0, 1)``: fewer than three points, or
+    a cloud whose two smallest eigenvalues are not separated by more than
+    ``1e-9 * trace``. A line and a single repeated point lie in infinitely
+    many planes, and the eigenvector the solver happens to return for them is
+    arbitrary — an arbitrary normal would silently produce arbitrary UVs, so
+    the caller gets a stated fallback instead. The centroid is always the
+    real mean.
     """
     pts = [(float(p[0]), float(p[1]), float(p[2])) for p in points]
     if not pts:
@@ -292,44 +337,57 @@ def fit_plane(points: Sequence[Point]) -> Tuple[Point, Point]:
     cov = [[sxx, sxy, sxz], [sxy, syy, syz], [sxz, syz, szz]]
 
     values, vectors = _jacobi_eigen(cov)
-    smallest = min(range(3), key=lambda k: values[k])
-    normal = _unit(vectors[smallest])
-    if _norm(normal) <= _EPS:
-        normal = (0.0, 0.0, 1.0)
-    return centroid, _orient(normal)
+    order = sorted(range(3), key=lambda k: values[k])
+    trace = max(values[0] + values[1] + values[2], 0.0)
+    if values[order[1]] - values[order[0]] <= _RANK_TOL * trace:
+        return centroid, (0.0, 0.0, 1.0)
+    return centroid, _orient(_unit(vectors[order[0]]))
 
 
-def planar_frame(normal: Point) -> Tuple[Point, Point]:
+def planar_frame(normal: Point, up: Point = WORLD_UP) -> Tuple[Point, Point]:
     """A right-handed in-plane frame ``(u_axis, v_axis)`` for ``normal``.
 
-    ``u`` starts from the world axis with the SMALLEST ``|dot(normal)|``
-    (ties go to the earlier axis, x before y before z) — the axis most nearly
-    parallel to the plane, so the projection can never collapse. That axis is
-    projected into the plane and normalised. ``v = normal x u`` completes a
-    right-handed triple.
+    ``v`` IS WORLD-UP PROJECTED INTO THE PLANE — that is the whole point.
+    A picture hangs on a wall, so its normal lies in the horizontal plane and
+    its "height" must come out along world up; deriving ``u`` from whichever
+    axis happens to be most parallel to the plane would hand a wall panel a
+    vertical ``u`` and return ``size_m`` transposed with the UVs rotated by
+    90 degrees.
 
-    Finally, if ``v . (0, 1, 0) < 0`` BOTH axes are flipped: that keeps the
-    triple right-handed while making ``v`` point roughly "up" in the world,
-    so a picture hung on a wall is not stored upside down. (For a plane whose
-    normal is world-up, ``v`` has no up-component and the frame is left as
-    it is.)
+    ``u = normalize(up x n)``, ``v = n x u``. Then ``v`` is the up-component
+    of the plane and ``u x v = n``, so the triple stays right-handed::
+
+        n = (1, 0, 0)   ->  u = (0, 0, -1),  v = (0, 1, 0)
+        n = (-1, 0, 0)  ->  u = (0, 0, 1),   v = (0, 1, 0)
+        n = (0, 0, 1)   ->  u = (1, 0, 0),   v = (0, 1, 0)
+
+    HORIZONTAL PLANE (``|n . up| > 1 - 1e-6``, e.g. a table top or a skylight):
+    up projects to nothing, so there is no "up" in the plane at all. Then
+    ``u`` = world +x projected into the plane and normalised, ``v = n x u`` —
+    deterministic, no flip::
+
+        n = (0, 1, 0)   ->  u = (1, 0, 0),   v = (0, 0, -1)
+        n = (0, -1, 0)  ->  u = (1, 0, 0),   v = (0, 0, 1)
+
+    ``up`` defaults to glTF world up ``(0, 1, 0)``; see the module docstring
+    on why model space is y-up here and Blender converts before calling.
     """
     n = _unit(normal)
     if _norm(n) <= _EPS:
         return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
+    up_u = _unit(up)
+    if _norm(up_u) <= _EPS:
+        up_u = WORLD_UP
 
-    axes = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-    best = min(range(3), key=lambda k: (abs(_dot(n, axes[k])), k))
-    axis = axes[best]
-    d = _dot(axis, n)
-    u = _unit((axis[0] - d * n[0], axis[1] - d * n[1], axis[2] - d * n[2]))
+    if abs(_dot(n, up_u)) > _PARALLEL:
+        axis = (1.0, 0.0, 0.0)
+        d = _dot(axis, n)
+        u = _unit((axis[0] - d * n[0], axis[1] - d * n[1], axis[2] - d * n[2]))
+    else:
+        u = _unit(_cross(up_u, n))
     if _norm(u) <= _EPS:            # cannot happen for a unit normal, but be safe
         u = (1.0, 0.0, 0.0)
-    v = _unit(_cross(n, u))
-    if v[1] < -_EPS:
-        u = (-u[0], -u[1], -u[2])
-        v = (-v[0], -v[1], -v[2])
-    return u, v
+    return u, _unit(_cross(n, u))
 
 
 def planar_uvs(
@@ -342,7 +400,8 @@ def planar_uvs(
     Returns ``(uvs, size_m)`` where ``size_m`` is the bounding-box extent in
     METRES along the u and v axes — i.e. the physical width and height of the
     panel, which is what the picture's aspect ratio has to be fitted to.
-    A degenerate extent maps to 0 instead of dividing by zero.
+    A degenerate extent maps every UV on that axis to 0 (and reports 0 in
+    ``size_m``) instead of dividing by zero.
     """
     u_axis, v_axis = frame
     flat = []
@@ -392,19 +451,25 @@ def detect_areas(
     parallel to ``vertices``, ``sample_rgb(u, v)`` returns the texture's
     0..1 RGB at that coordinate.
 
-    A component is dropped when its summed 3D triangle area is below
-    ``min_area_m2`` OR it has fewer than ``min_faces`` faces — a chroma
-    speck on the frame is not a picture panel.
+    A component is dropped when it has fewer than ``min_faces`` faces OR its
+    summed 3D triangle area is below ``min_area_m2``. The two filters are
+    independent on purpose: a dense speck of chroma noise can carry plenty of
+    tiny triangles, and a single huge stray triangle carries none.
 
-    Returns one dict per surviving component, sorted by area descending
-    (ties by smallest face index)::
+    The result is re-sorted by AREA descending (ties by smallest face index)
+    — unlike ``components``, which orders by face count. ``size_m`` can carry
+    a 0 component when the patch is degenerate along one axis; see
+    ``planar_uvs``.
+
+    One dict per surviving component::
 
         {"kind": str,
          "faces": [face index, …],          # ascending
          "normal": (x, y, z),                # unit, oriented per fit_plane
          "centroid": (x, y, z),              # metres
          "size_m": (w, h),                   # bbox extent along u / v
-         "uvs": {vertex index: (u, v)}}      # 0..1 over that bbox
+         "uvs": {vertex index: (u, v)},      # 0..1 over that bbox
+         "area_m2": float}                   # summed triangle area
     """
     flags = classify_faces(faces, uvs, sample_rgb, kind)
     out: List[Dict] = []
