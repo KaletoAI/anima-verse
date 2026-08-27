@@ -76,9 +76,11 @@ Stage 5 - admin surface (task 6), derived BY HAND from the route contract:
   file; `update_entry` re-saving `kneading` with exactly the synonyms it
   already owns -> success (its own key is excluded from the check), while
   `update_entry` adding the foreign "sitzen" to it -> 409 again.
-- the pose axis demands a place type (task 2): `create_entry` WITHOUT `group`
-  -> 400 "place type missing or unknown" and no key written, while the same
-  body with `group: "seat"` goes through and the entry stores that group.
+- the pose axis demands a place type (task 2), on BOTH creation paths:
+  `create_entry` WITHOUT `group` -> 400 "place type missing or unknown" and no
+  key written, while the same body with `group: "seat"` goes through and the
+  entry stores that group; approve-as-entry stores the `group: "counter"` it
+  was given.
 The real catalog FILES are never written: the approve checks run against a
 COPY in the throwaway dir, injected through `pose_catalog.catalog_path` (the
 one funnel both router and loader use) and restored afterwards.
@@ -127,6 +129,23 @@ Stage 9 - groups route contract (task 2), derived BY HAND:
   "still used"; a default from another group reports "default".
 - _normalize_group({"label": " Seat ", "root_drop": "0.3", "default": "Sitting"})
   == {"label": "Seat", "root_drop": 0.3, "default": "sitting"}.
+- the two new routes, against a COPY of the shipped catalog (stage-5 harness):
+  `_put_groups_sync({})` -> 400 "groups missing"; a block whose `seat` default
+  is `standing` (a pose of `stand`) -> 400 "... default 'standing' is not a
+  pose of this group", and the file still says default "sitting" - a refused
+  block is not written.
+- the invariant of the whole task: after a SUCCESSFUL group write (seat
+  relabelled) an entry save through `_create_entry_sync` leaves the block
+  alone - the re-read file still has all five types AND the new label, plus
+  the new entry with its group. `_write` serialises the whole document.
+- `list_entries("pose")` carries the five types and reads the place fields
+  through the ACCESSORS: the solo entry `sitting` reports places 1 /
+  yaw_offset 0.0 (the stored entry has neither field), the pair entry
+  `dancing together` reports 2. The expression axis carries `groups` {} and
+  no place field at all.
+- approve-as-entry is a pose creation, so it obeys the same rule: without
+  `group` -> 400 "place type missing or unknown", with `group: "stand"` the
+  written entry carries it and validate_catalog stays empty.
 
 The stage-2/3/4/5/7 DB work runs against a throwaway storage dir, never the
 demo world (the server may hold it).
@@ -432,7 +451,7 @@ try:
         asyncio.run(approve_candidate(_Req({
             "axis": "pose", "raw_text": "kneading dough", "key": "kneading",
             "prompt": "leaning over a table, pressing dough with both hands",
-            "animation": "idle", "solo": True,
+            "animation": "idle", "solo": True, "group": "counter",
             "synonyms": ["Baking bread", " rolling dough ", ""],
         }), _={}))
         _new = _entries()["kneading"]
@@ -441,6 +460,7 @@ try:
         assert _new["synonyms"] == ["baking bread", "rolling dough",
                                     "kneading dough"], _new["synonyms"]
         assert _new["animation"] == "idle" and _new["solo"] is True, _new
+        assert _new["group"] == "counter", _new
         assert "kneading dough" not in {c["raw_text"] for c in list_candidates("pose")}
         # the freshly approved aliases resolve now — that is the point of it
         assert resolve_to_catalog("baking bread", "pose")[0] == "kneading"
@@ -451,7 +471,7 @@ try:
             asyncio.run(approve_candidate(_Req({
                 "axis": "pose", "raw_text": "perching on a stool",
                 "key": "perching", "prompt": "perched on a stool",
-                "animation": "idle", "synonyms": ["sitzen"],
+                "animation": "idle", "group": "seat", "synonyms": ["sitzen"],
             }), _={}))
             raise AssertionError("collision was accepted")
         except HTTPException as _e:
@@ -645,15 +665,104 @@ try:
     print("\nStage 9 - groups route")
     from app.routes import poses as poses_route
     _FAILURES = []
-    _entries = {k: dict(v) for k, v in pc.get_catalog("pose").items()}
+    _entry_map = {k: dict(v) for k, v in pc.get_catalog("pose").items()}
     _g = pc.get_groups()
-    check("shipped block sound", poses_route._groups_problems(_g, _entries) == [])
+    check("shipped block sound", poses_route._groups_problems(_g, _entry_map) == [])
     _g2 = {k: v for k, v in _g.items() if k != "seat"}
-    check("dropping a used group is refused", any("still used" in p for p in poses_route._groups_problems(_g2, _entries)))
+    check("dropping a used group is refused", any("still used" in p for p in poses_route._groups_problems(_g2, _entry_map)))
     _g3 = dict(_g); _g3["seat"] = dict(_g["seat"], default="standing")
-    check("foreign default refused", any("default" in p for p in poses_route._groups_problems(_g3, _entries)))
+    check("foreign default refused", any("default" in p for p in poses_route._groups_problems(_g3, _entry_map)))
     check("normalize group", poses_route._normalize_group({"label": " Seat ", "root_drop": "0.3", "default": "Sitting"})
           == {"label": "Seat", "root_drop": 0.3, "default": "sitting"})
+
+    def expect_400(name, call, needle):
+        """Records the 400 a route owes (and its message) instead of aborting
+        the stage — same spirit as `check`."""
+        try:
+            call()
+        except HTTPException as e:
+            check(name, e.status_code == 400 and needle in str(e.detail),
+                  f"got {e.status_code}: {e.detail}")
+        else:
+            check(name, False, "accepted")
+
+    # The route write paths touch catalog FILES — same harness as stage 5: a
+    # COPY of the shipped catalog, injected through the one `catalog_path`
+    # funnel that both the router and the loader go through.
+    _g_real = pc.catalog_path
+    _g_cat = Path(_tmp_storage) / "pose_catalog_groups.json"
+    shutil.copyfile(_g_real("pose"), _g_cat)
+    pc.catalog_path = lambda a: _g_cat if a == "pose" else _g_real(a)
+    pc.reload_catalogs()
+
+    def _doc():
+        """The catalog copy as it is ON DISK — the write is what is checked."""
+        return _json.loads(_g_cat.read_text(encoding="utf-8"))
+
+    try:
+        expect_400("empty body refused",
+                   lambda: poses_route._put_groups_sync({}), "groups missing")
+        expect_400("foreign default is a 400",
+                   lambda: poses_route._put_groups_sync({"groups": _g3}),
+                   "default 'standing' is not a pose of this group")
+        check("a refused block is not written",
+              _doc()["groups"]["seat"]["default"] == "sitting", str(_doc()["groups"]["seat"]))
+
+        # A sound block goes through — and the ENTRY save after it leaves the
+        # block alone. That is the invariant of the whole task.
+        _g_edit = dict(_g); _g_edit["seat"] = dict(_g["seat"], label="Seat edited")
+        _res = poses_route._put_groups_sync({"groups": _g_edit})
+        check("put groups succeeds",
+              _res["status"] == "success" and _res["groups"]["seat"]["label"] == "Seat edited",
+              str(_res.get("groups", {}).get("seat")))
+        poses_route._create_entry_sync({}, {
+            "axis": "pose", "key": "roosting", "prompt": "perched on a rail",
+            "animation": "idle", "group": "seat"})
+        check("groups survive an entry save",
+              sorted(_doc()["groups"]) == ["bed", "counter", "floor", "seat", "stand"]
+              and _doc()["groups"]["seat"]["label"] == "Seat edited",
+              str(sorted(_doc()["groups"])))
+        check("the new entry stored its place type",
+              _doc()["entries"]["roosting"]["group"] == "seat",
+              str(_doc()["entries"].get("roosting")))
+
+        # The listing reads the place fields through the ACCESSORS.
+        _listing = poses_route.list_entries(axis="pose", _={})
+        check("listing carries the groups block",
+              sorted(_listing["groups"]) == ["bed", "counter", "floor", "seat", "stand"],
+              str(sorted(_listing["groups"])))
+        _row = next(r for r in _listing["entries"] if r["key"] == "sitting")
+        check("solo row says 1 place",
+              (_row["places"], _row["yaw_offset"], _row["group"]) == (1, 0.0, "seat"), str(_row))
+        _pair = next(r for r in _listing["entries"] if r["key"] == "dancing together")
+        check("pair row says 2 places", _pair["places"] == 2, str(_pair))
+        _expr_listing = poses_route.list_entries(axis="expression", _={})
+        check("expression listing has no place vocabulary",
+              _expr_listing["groups"] == {}
+              and not any("places" in r or "group" in r for r in _expr_listing["entries"]),
+              str(_expr_listing["entries"][0]))
+
+        # Approve-as-entry creates a pose, so it obeys the same rule.
+        record_candidate("pose", "perched on a rail", "standing", 0.5)
+        _approve = {"axis": "pose", "raw_text": "perched on a rail",
+                    "key": "roosting high", "prompt": "perched high on a beam",
+                    "animation": "idle"}
+        expect_400("approve without a place type",
+                   lambda: poses_route._approve_candidate_sync({}, dict(_approve)),
+                   "place type missing or unknown")
+        check("the refused approval wrote nothing", "roosting high" not in _doc()["entries"])
+        poses_route._approve_candidate_sync({}, dict(_approve, group="stand"))
+        check("the approved entry carries its place type",
+              _doc()["entries"]["roosting high"]["group"] == "stand",
+              str(_doc()["entries"].get("roosting high")))
+        check("the grown catalog still validates",
+              pc.validate_catalog("pose") == [], str(pc.validate_catalog("pose")))
+    finally:
+        pc.catalog_path = _g_real
+        pc.reload_catalogs()
+    check("the real catalog file is untouched",
+          len(pc.get_catalog("pose")) == 53 and "roosting" not in pc.get_catalog("pose"),
+          str(len(pc.get_catalog("pose"))))
 
     if _FAILURES:
         raise AssertionError(f"stage 9: {len(_FAILURES)} failed check(s): {_FAILURES}")

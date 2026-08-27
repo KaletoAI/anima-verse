@@ -280,9 +280,12 @@ def list_entries(axis: str = Query("pose"),
         }
         if axis == "pose":
             # Place fields are POSE vocabulary — an expression has no place.
+            # Read through the ACCESSORS, never off the entry: a solo pose has
+            # no stored places/yaw_offset, and a raw `.get(..., 2)` would tell
+            # the client 2 where the loader says 1.
             row["group"] = entry.get("group", "")
-            row["places"] = entry.get("places", 2)
-            row["yaw_offset"] = entry.get("yaw_offset", 0.0)
+            row["places"] = pose_catalog.pose_places(key)
+            row["yaw_offset"] = pose_catalog.pose_yaw_offset(key)
         out.append(row)
     out.sort(key=lambda p: p["key"])
     from app.core.animation_clips import pair_kinds
@@ -428,8 +431,9 @@ def list_candidates(axis: str = Query("pose"), status: str = Query("open"),
 async def approve_candidate(request: Request,
                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Absorbs a candidate into the catalog — either as a new entry
-    (``key`` + ``prompt``, ``animation`` mandatory on the pose axis) or as a
-    synonym of an existing entry (``as_synonym_of``). The candidate row is
+    (``key`` + ``prompt``, ``animation`` and ``group`` mandatory on the pose
+    axis) or as a synonym of an existing entry (``as_synonym_of``, which
+    inherits the target's place type and needs none of its own). The candidate row is
     deleted afterwards: it resolves now, and if it still does not, the miss
     has to show up again instead of hiding behind a terminal status.
     """
@@ -474,6 +478,9 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
             # warning, not a wall.
             if axis == "pose" and not animation:
                 raise HTTPException(status_code=400, detail="animation missing")
+            # A new pose entry is a new pose: same place-type rule as create,
+            # or the catalog is invalid the moment the candidate is absorbed.
+            group = _group(body.get("group")) if axis == "pose" else ""
             if key in data["entries"]:
                 raise HTTPException(status_code=409, detail="Entry already exists")
             # The candidate text itself becomes a synonym unless it IS the key
@@ -487,6 +494,7 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
             if axis == "pose":
                 entry["animation"] = animation
                 entry["solo"] = bool(body.get("solo", True))
+                entry["group"] = group
             data["entries"][key] = entry
 
         _write(axis, data)
