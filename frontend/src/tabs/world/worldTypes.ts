@@ -136,6 +136,20 @@ export interface RoomPropPlacement {
   /** Which half REMAINS: 'front' is the top of the footprint on the plan
    *  (local −z), 'back' the bottom (local +z). Turns with the yaw. */
   cut_side?: 'front' | 'back'
+  /** WHAT FILLS THE PROP'S TEXTURE SLOTS (v5) — keyed by SLOT NAME, which is
+   *  a material name of the mesh (`props.detect_slots`). An `image` slot takes
+   *  a same-origin gallery URL (`/world/locations/{id}/gallery/{file}` or
+   *  `/characters/{name}/images/{file}`), a `material` slot a preset
+   *  (`glass`). A key the prop does not declare, or a value of the wrong shape
+   *  for its kind, is dropped on save. Absent = the prop as it was modelled. */
+  slot_values?: Record<string, SlotValue>
+}
+
+/** One filled slot: exactly one of the two fields is meaningful, chosen by the
+ *  slot's own kind. */
+export interface SlotValue {
+  image?: string
+  preset?: string
 }
 
 export interface RoomOpening {
@@ -160,6 +174,12 @@ export interface RoomOpening {
   /** Which side the door prop turns about, read against the doorway's own
    *  direction. Absent = left. */
   hinge?: 'left' | 'right'
+  /** What fills the DOOR PROP's texture slots (v5) — a glass pane is the
+   *  stated case. Same field and same rules as on a placement; where the
+   *  opening inherits the location's default door it names no prop, so only
+   *  the value shape is checked on save and the recipe drops what the
+   *  resolved prop does not declare. */
+  slot_values?: Record<string, SlotValue>
 }
 
 export interface Room {

@@ -360,6 +360,12 @@ export interface PlacedSceneModel {
    *  It belongs to the OBJECT: a tier swap replaces the mesh and the ghost with
    *  it. */
   ghost?: SubmergedGhost;
+  /** THE MATERIAL CLONES this placement's texture slots created (§ B2 v5,
+   *  `applySlotMaterials`), absent where the spec fills none. They exist PER
+   *  PLACEMENT on purpose — the loader cache shares ONE group between all
+   *  copies of a prop — and each owns the texture it loaded, so the list is
+   *  disposed when the object goes (tier swap, unmount). */
+  slotMats?: THREE.Material[];
 }
 
 /**

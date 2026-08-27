@@ -618,6 +618,15 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                 entry["cut_side"] = ("front"
                                      if placement.get("cut_side") == "front"
                                      else "back")
+        # WHAT FILLS THE PROP'S TEXTURE SLOTS (v5) travels as it was authored;
+        # `scene_recipe.slot_spec` gates it against what the prop declares
+        # TODAY and turns it into the spec's `slots`. Like the depth cut, a
+        # scattered copy carries none — filling a slot is an act on ONE
+        # hand-placed piece of furniture, and a forest of identical posters is
+        # nothing anybody asked for.
+        if isinstance(placement.get("slot_values"), dict) \
+                and placement["slot_values"]:
+            entry["slot_values"] = placement["slot_values"]
         prop = prop_store.get_prop(pid)
         if not prop:
             entry["missing"] = True

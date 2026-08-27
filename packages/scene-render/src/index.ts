@@ -29,6 +29,10 @@ export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
 export { applyDepthCut, cutPlaneFor, disposeCutMaterials } from './depthCut'
 
+export { applySlotMaterials, disposeSlotMaterials, GLASS_PRESET,
+  MATERIAL_PRESETS } from './slotMaterials'
+export type { MaterialPreset, SlotTextureLoader } from './slotMaterials'
+
 export { applyCutouts, CUTOUT_MAX_POLYS,
   CUTOUT_MAX_POINTS } from './cutouts'
 export type { CutoutHandle } from './cutouts'
@@ -103,4 +107,5 @@ export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneFloor,
   SceneBoundaryOpening, SceneCutPlane, SceneDoorway, SceneProblem,
+  SceneSlotValues,
 } from './types'

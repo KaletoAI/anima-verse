@@ -79,6 +79,8 @@ import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { PropVariantPicker } from './PropVariantPicker'
 import { OpeningDoorProp } from './DoorPropPicker'
+import { SlotValuesEditor } from './SlotValuesEditor'
+import type { PropSlot } from '../props/propTypes'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
@@ -230,7 +232,10 @@ type DragState =
  *  preview beside it reads the scene payload, which IS resolved per variant
  *  (`props.variant_dims`), so the finished scene is always right — only this
  *  schematic footprint stays the primary variant's. */
-interface PropDims { name: string; width_m: number; depth_m: number; height_m: number }
+interface PropDims { name: string; width_m: number; depth_m: number; height_m: number
+  /** The prop's FILLABLE SURFACES (v5) — what the placement panel offers a
+   *  value for. Always present on the library record, `[]` for most props. */
+  slots?: PropSlot[] }
 
 /** One shape the plan DRAWS: a room with its rectangle, or the yard with the
  *  rect derived from the location boundary (§ A13a). */
@@ -338,7 +343,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         const map: Record<string, PropDims> = {}
         for (const p of d.props || []) {
           map[p.id] = { name: p.name, width_m: p.width_m,
-            depth_m: p.depth_m, height_m: p.height_m }
+            depth_m: p.depth_m, height_m: p.height_m, slots: p.slots }
         }
         setPropDims(map)
       })
@@ -3550,6 +3555,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               variant={placement.variant}
               onVariant={(v) => patchProp({ variant: v })}
             />
+            {/* THE PROP'S TEXTURE SLOTS (v5): the picture in the frame, the
+                look of the pane. Rendered only for a prop that DECLARES one —
+                the list comes from the library record, and the panel writes
+                the value, nothing else. */}
+            <SlotValuesEditor
+              slots={dims?.slots}
+              values={placement.slot_values}
+              locationId={locationId}
+              onChange={(v) => patchProp({ slot_values: v })}
+            />
           </div>
         )
       })() : null}
@@ -3851,6 +3866,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 key={openingSel}
                 opening={op}
                 defaultPropId={defaultDoorPropId}
+                locationId={locationId}
                 onPatch={patchOpening}
               />
             ) : null}

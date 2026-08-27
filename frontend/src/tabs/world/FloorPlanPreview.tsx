@@ -25,7 +25,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   anchorFigureBind, figureRootY,
-  applyClipOutline, applyDepthCut, disposeClipMaterials, disposeCutMaterials,
+  applyClipOutline, applyDepthCut, applySlotMaterials,
+  disposeClipMaterials, disposeCutMaterials, disposeSlotMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, flatGround, storeyGroundLift,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
@@ -151,6 +152,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // Cutout handle of the last rebuild (area locations): its material clones
   // must be released before the next one patches fresh clones.
   const cutoutRef = useRef<CutoutHandle | null>(null)
+  // TEXTURE-SLOT material clones of the last rebuild (§ B2 v5): one per filled
+  // slot per placement, each owning the picture loaded into it. They hang on
+  // __noDispose subtrees (the model cache's), so the subtree walk deliberately
+  // leaves them alone — this list is what frees them.
+  const slotMatsRef = useRef<Material[]>([])
   // Plate + edge loop of the reference square — both are unit-sized and get
   // scaled to the payload's extent_m on every rebuild.
   const squareRef = useRef<Object3D[] | null>(null)
@@ -492,6 +498,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // sit on __noDispose clones that disposeSafe deliberately leaves alone.
     cutoutRef.current?.dispose()
     cutoutRef.current = null
+    disposeSlotMaterials(slotMatsRef.current)
+    slotMatsRef.current = []
     for (const child of [...boxes.children]) {
       boxes.remove(child)
       disposeSafe(child)
@@ -513,6 +521,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       outer.position.y += groundLiftOf(spec)
       outer.userData.__noDispose = true
       boxes.add(outer)
+      // THE TEXTURE SLOTS of this placement (§ B2 v5) — the SAME routine the
+      // 3D client calls, so a poster hangs at the same brightness in both. It
+      // runs FIRST of the material passes: the clip and the cut below clone
+      // what they traverse, and a picture written here rides into their clones.
+      slotMatsRef.current.push(
+        ...applySlotMaterials(THREE, outer, spec.slots,
+                              (url) => new THREE.TextureLoader().load(url)))
       // Room clip (§ B1): the client discards diorama fragments outside the
       // room hull — without the same call here the preview showed the FULL
       // diorama including its baked surroundings and diverged massively from

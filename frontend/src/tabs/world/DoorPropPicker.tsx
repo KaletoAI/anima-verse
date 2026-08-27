@@ -19,6 +19,11 @@
  *                      with the flat leaf, whatever the location says.
  *   Custom           — `prop_id`; this opening brings its own door.
  *
+ * A door prop fills its TEXTURE SLOTS like any other prop (v5) — a glass door
+ * is the stated case — so the panel offers a control per slot the RESOLVED
+ * prop declares: the opening's own where it has one, the location's default
+ * otherwise, because that is the mesh which will hang in this hole.
+ *
  * Nothing here computes geometry: the editor writes fields, the server hangs
  * the mesh on the hinge (§ B2 `measure: "fit"`).
  */
@@ -26,6 +31,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { PropFull } from '../props/propTypes'
+import { SlotValuesEditor } from './SlotValuesEditor'
 import type { RoomOpening } from './worldTypes'
 
 /** THE convention (plan-door-props-texture-slots.md): a door prop is tagged
@@ -38,20 +44,26 @@ function isDoorProp(p: PropFull): boolean {
 
 /** The prop library, once per mounted picker. Props change in the Props tab,
  *  not while a floor plan is being edited — the palette next to this one
- *  fetches on the same terms. */
-function usePropLibrary(): PropFull[] {
+ *  fetches on the same terms.
+ *
+ *  `enabled` is how a caller that ALREADY holds the list keeps this from
+ *  fetching it a second time (the opening panel needs it for the slot
+ *  controls and hands it to the select below it). */
+function usePropLibrary(enabled = true): PropFull[] {
   const [props, setProps] = useState<PropFull[]>([])
   useEffect(() => {
+    if (!enabled) return
     let stale = false
     apiGet<{ props?: PropFull[] }>('/world/props')
       .then((d) => { if (!stale) setProps(d.props || []) })
       .catch(() => { if (!stale) setProps([]) })
     return () => { stale = true }
-  }, [])
+  }, [enabled])
   return props
 }
 
-export function DoorPropSelect({ value, onChange, emptyLabel, title, width }: {
+export function DoorPropSelect({ value, onChange, emptyLabel, title, width,
+                                 library }: {
   /** The chosen prop id ('' = nothing chosen — what `emptyLabel` names). */
   value: string
   onChange: (propId: string) => void
@@ -60,9 +72,12 @@ export function DoorPropSelect({ value, onChange, emptyLabel, title, width }: {
   emptyLabel: string
   title?: string
   width?: number
+  /** The library, where the caller already has it — otherwise it is fetched. */
+  library?: PropFull[]
 }) {
   const { t } = useI18n()
-  const props = usePropLibrary()
+  const fetched = usePropLibrary(!library)
+  const props = library || fetched
   const [doors, others] = useMemo(() => {
     const sorted = [...props].sort((a, b) => a.name.localeCompare(b.name))
     return [sorted.filter(isDoorProp), sorted.filter((p) => !isDoorProp(p))]
@@ -97,14 +112,17 @@ export function DoorPropSelect({ value, onChange, emptyLabel, title, width }: {
 
 type DoorPropMode = 'default' | 'none' | 'custom'
 
-export function OpeningDoorProp({ opening, defaultPropId, onPatch }: {
+export function OpeningDoorProp({ opening, defaultPropId, locationId, onPatch }: {
   opening: RoomOpening
   /** The location's own default, so the first option can say WHICH door it
    *  is instead of leaving the reader to go and look. */
   defaultPropId?: string
+  /** The place whose gallery an image slot offers first. */
+  locationId?: string
   onPatch: (patch: Partial<RoomOpening>) => void
 }) {
   const { t } = useI18n()
+  const props = usePropLibrary()
   const stored: DoorPropMode = opening.prop_id
     ? 'custom' : opening.door_prop === 'none' ? 'none' : 'default'
   // "Custom" chosen but no prop picked yet: an empty `prop_id` is not stored,
@@ -113,6 +131,12 @@ export function OpeningDoorProp({ opening, defaultPropId, onPatch }: {
   // per selected opening — the caller keys the component on the selection.
   const [pending, setPending] = useState(false)
   const mode: DoorPropMode = pending && stored === 'default' ? 'custom' : stored
+
+  // WHICH prop this opening will really show — the same three-valued rule the
+  // server resolves (`scene_recipe.door_prop_id`), asked here so the slot
+  // controls describe the mesh that is going to hang in the hole.
+  const effectivePropId = mode === 'none' ? ''
+    : mode === 'custom' ? (opening.prop_id || '') : (defaultPropId || '')
 
   const setMode = (next: DoorPropMode) => {
     setPending(next === 'custom')
@@ -148,23 +172,34 @@ export function OpeningDoorProp({ opening, defaultPropId, onPatch }: {
                                       door_prop: undefined })}
           emptyLabel={t('— pick a prop —')}
           title={t('The prop hung in THIS opening — it overrides the location default.')}
+          library={props}
         />
       ) : null}
-      {/* The hinge only says anything where a leaf actually hangs. */}
+      {/* Everything that only means something where a leaf actually HANGS: the
+          slots of the prop that will fill this hole (the opening's own where
+          it named one, else the location's default), and the hinge. */}
       {mode !== 'none' ? (
-        <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-          title={t('Which side the door turns about, seen along the wall from the room this opening was cut out of.')}>
-          {t('Hinge')}
-          <select
-            className="ga-input"
-            style={{ width: 90 }}
-            value={opening.hinge || 'left'}
-            onChange={(e) => onPatch({ hinge: e.target.value as 'left' | 'right' })}
-          >
-            <option value="left">{t('Left')}</option>
-            <option value="right">{t('Right')}</option>
-          </select>
-        </label>
+        <>
+          <SlotValuesEditor
+            slots={props.find((p) => p.id === effectivePropId)?.slots}
+            values={opening.slot_values}
+            locationId={locationId || ''}
+            onChange={(v) => onPatch({ slot_values: v })}
+          />
+          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+            title={t('Which side the door turns about, seen along the wall from the room this opening was cut out of.')}>
+            {t('Hinge')}
+            <select
+              className="ga-input"
+              style={{ width: 90 }}
+              value={opening.hinge || 'left'}
+              onChange={(e) => onPatch({ hinge: e.target.value as 'left' | 'right' })}
+            >
+              <option value="left">{t('Left')}</option>
+              <option value="right">{t('Right')}</option>
+            </select>
+          </label>
+        </>
       ) : null}
     </>
   )

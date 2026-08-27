@@ -278,6 +278,16 @@ export interface SceneModelSpec {
    *  stehen, in den Löchern steht das Rezept-Innenleben. Nur am
    *  building-Spec, nur bei `map3d.area_model`. */
   cutouts?: [number, number][][]
+  /** WHAT FILLS THIS PLACEMENT'S TEXTURE SLOTS (v5). The KEY is a material
+   *  name of the mesh — a slot IS a material (`props.detect_slots`) — and the
+   *  value is either a picture (`image`, a same-origin gallery URL) or a look
+   *  (`preset`, today only `glass`). Only slots the prop still declares are in
+   *  here; the server drops the rest, so a renderer matches names and asks
+   *  nothing. Absent = the prop renders as it was modelled.
+   *  `applySlotMaterials` (@anima/scene-render) is the ONE routine that
+   *  writes it — it clones the material per placement, because the model
+   *  cache shares one group between all of them. */
+  slots?: SceneSlotValues
   /** Prop-Platzierungen mit TIEFENSCHNITT (§ B2-Nachtrag 2026-08-23): die
    *  fertige Schnittebene in den Weltmetern des Payloads — ein halber Tisch an
    *  der Wand, ohne zweites Prop in der Bibliothek. Fehlt = ungeschnitten.
@@ -285,6 +295,12 @@ export interface SceneModelSpec {
    *  (`applyDepthCut`); er rechnet nichts nach. */
   cut_plane?: SceneCutPlane
 }
+
+/** The filled texture slots of one placement, keyed by MATERIAL NAME (v5).
+ *  Exactly one of the two fields is set per entry — the server has already
+ *  decided which by the slot's kind, so a renderer never has to. */
+export type SceneSlotValues = Record<string,
+  { image?: string; preset?: string }>
 
 /** Eine Halbraum-Ebene in den Weltmetern des Szenen-Payloads. Behalten wird,
  *  wo `normal·p + constant >= 0` — three.js' eigene `Plane`-Konvention, damit

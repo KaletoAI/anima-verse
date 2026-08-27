@@ -7152,6 +7152,100 @@ auf `false` — ab da fasst kein weiteres Modell sie an, auch eine **geleerte**
 Liste nicht (alle Slots löschen ist auch eine Entscheidung). Eine kaputte Liste
 ist ein 400, kein stilles Verwerfen.
 
+### Slot-WERTE: was in der Fläche steht
+
+Das Prop sagt, WELCHE Flächen füllbar sind; die **Platzierung** sagt, was
+hineinkommt. Gespeichert wird das als `slot_values` — an der Raum-Platzierung
+(`rooms[].layout.props[]`) und, gleichbedeutend, an der Öffnung
+(`rooms[].openings[]`, denn ein Tür-Prop hängt an der Öffnung, nicht an einer
+Platzierung):
+
+```json
+"slot_values": {
+  "picture": { "image": "/world/locations/haus/gallery/poster.png" },
+  "glass":   { "preset": "glass" }
+}
+```
+
+Der Schlüssel ist der **Slot-Name**, also ein **Materialname des Meshes**. Je
+Eintrag ist genau eines der beiden Felder gesetzt, und WELCHES entscheidet die
+Art des Slots:
+
+| Slot-Art | erlaubtes Feld | erlaubter Wert |
+|---|---|---|
+| `image` | `image` | eine Galerie-URL DIESES Servers: `/world/locations/{id}/gallery/{datei}` oder `/characters/{name}/images/{datei}` |
+| `material` | `preset` | ein Preset aus `MATERIAL_PRESETS` — heute nur `glass` |
+
+**Zwei Tore, und sie beantworten verschiedene Fragen.** Beim SPEICHERN
+(`props.sanitize_slot_values`, gerufen aus `world_ops._sanitize_props` und
+`_sanitize_opening`) wird geprüft, ob das Prop den Slot überhaupt deklariert
+und ob der Wert die zur Art passende FORM hat; alles andere fällt weg (leise —
+eine hängengebliebene URL darf keinen Grundriss kosten). Beim KOMPONIEREN
+prüft `scene_recipe.slot_spec` ein zweites Mal gegen das, was das Prop
+**jetzt** deklariert: ein neu erzeugtes Mesh benennt andere Materialien, und
+ein Payload, der auf eine verschwundene Fläche zeigt, wäre in einem Renderer
+ein stiller Leerlauf und im nächsten eine Vermutung.
+
+Eine Öffnung, die den **Location-Default** erbt, nennt beim Speichern kein
+Prop — dort wird nur die Form geprüft, die Deklarations-Prüfung macht das
+Rezept, sobald der Default aufgelöst ist.
+
+Im Payload steht das Ergebnis am Spec:
+
+| Feld | Wo | Bedeutung |
+|---|---|---|
+| `slots` | `models[]` (Raum-Prop UND Tür-Prop) | `{"<materialname>": {"image"\|"preset"}}`; fehlt = das Prop rendert, wie es modelliert wurde |
+
+**Handrechnung.** Eine Platzierung des Props `table` (deklariert `picture`
+= `image` und `glass` = `material`) mit
+
+```
+slot_values = {"picture": {"image": "/world/locations/loc/gallery/wall.png"},
+               "glass":   {"preset": "glass"},
+               "screen":  {"image": "/world/locations/loc/gallery/wall.png"}}
+```
+
+ergibt am Spec `slots = {"picture": {"image": "/world/locations/loc/gallery/wall.png"},
+"glass": {"preset": "glass"}}` — `screen` fällt weg, weil das Prop es nicht
+deklariert. Wird dasselbe Prop danach neu erzeugt und benennt nur noch `glass`,
+bleibt vom selben gespeicherten Wert nur `{"glass": {"preset": "glass"}}` übrig.
+
+`slot_values` liegt in der **Signatur**: es reist in der Platzierung bzw. in
+der Öffnung mit und damit in der Raumsignatur, die in die Szenensignatur
+eingeht — ein getauschtes Bild erreicht also einen laufenden Client.
+
+### Der Tausch im Renderer (`applySlotMaterials`)
+
+`packages/scene-render/src/slotMaterials.ts` ist die EINE Routine, die einen
+Slot auf ein Mesh schreibt; beide Renderer rufen sie (3D-Client
+`sceneRecipe.ts`, Admin-Vorschau `FloorPlanPreview.tsx`). Sie durchläuft die
+gesetzte Gruppe und vergleicht `material.name` (getrimmt, klein) mit den
+Slot-Namen.
+
+**Die Regel, die sie korrekt macht: das Material wird JE PLATZIERUNG geklont,
+bevor es angefasst wird.** Der GLB-Lader hält eine `THREE.Group` je URL und
+gibt sie allen Platzierungen; `Object3D.clone()` kopiert die Knoten, TEILT aber
+die Material-Instanzen — ohne Klon hinge das Poster der Diele auch in der
+Küche. (Dieselbe Regel wie bei `applyDepthCut`.) Der Aufruf steht deshalb VOR
+Schnitt/Clip/Ghost: die klonen ihrerseits, was sie durchlaufen, und übernehmen
+das Bild damit von selbst.
+
+- `image` → `loadTexture(url)` (der Lader ist Parameter — Ladepolitik ist
+  App-Sache), dann `colorSpace = SRGBColorSpace`, `flipY = false` (glTF-UVs)
+  auf `map`, und `color = 0xffffff`, damit ein grauer Grundton das Bild nicht
+  herunter multipliziert.
+- `preset "glass"` → `GLASS_PRESET` (`opacity` 0,3 · `roughness` 0,06 ·
+  `metalness` 0 · `transmission` 0,85 nur, wenn das Material das Feld hat) plus
+  `transparent` und `DoubleSide` — eine einseitige Scheibe verschwindet, sobald
+  man um die Tür herumgeht.
+
+Zurück kommt die Liste der Klone. Sie gehört dem Aufrufer: jeder Klon besitzt
+die Textur, die für ihn geladen wurde, und `disposeSlotMaterials` gibt beides
+frei (Client: beim Stufenwechsel und im `unmountScene`; Vorschau: vor jedem
+Neuaufbau).
+
+`three` ist Parameter, kein Import — Paketregel.
+
 ### Grenzen (bewusst)
 
 - Ein Prop-Ausweis, der ins Leere zeigt (oder ein Prop ohne Mesh), behält
@@ -7181,3 +7275,9 @@ ist ein 400, kein stilles Verwerfen.
 | Ein neues Mesh ERSETZT eine Auto-Liste — auch mit leerem Ergebnis | ebenda **[3c]** |
 | Patch-Pfad weist kaputte Listen ab und schreibt dabei nichts; gespeicherte Liste ist klein und dedupliziert | ebenda **[4]** |
 | Von Hand gepflegte (auch geleerte) Liste überlebt das nächste Modell | ebenda **[5]** |
+| Slot-WERTE: deklarierter Bild- + Material-Slot landen am Spec unter `slots`; undeklarierter Schlüssel, fremde/verformte URL, Preset im Bild-Slot und Bild im Material-Slot fallen weg | `scripts/smoke_scene_recipe.py` **[3s]** |
+| …und ein Wert, dessen Slot das Prop NICHT MEHR deklariert, fällt im Rezept (nicht erst im Renderer) | ebenda **[3s]** |
+| Tür-Prop: `openings[].slot_values` erreicht `slots` am Tür-Spec; geerbte Tür wird nur auf Form geprüft | ebenda **[3s]** |
+| Ein getauschtes Bild bewegt die Szenensignatur | ebenda **[3s]** |
+| `applySlotMaterials`: das benannte Material bekommt eine `map`, das andere bleibt DASSELBE Objekt, und zwei Platzierungen derselben Cache-Gruppe haben VERSCHIEDENE Material-Instanzen | `scripts/smoke_slot_materials.mjs` **[1]/[2]** |
+| Glas-Preset setzt `transparent` + die Konstanten, `transmission` nur wo das Feld existiert | ebenda **[3]** |

@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { applyClipOutline, applyCutouts, applyDepthCut, buildExtra,
+import { applyClipOutline, applyCutouts, applyDepthCut, applySlotMaterials,
+  buildExtra,
   buildPlaceholder,
   buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials,
-  disposeCutMaterials,
+  disposeCutMaterials, disposeSlotMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, storeyGroundLift, storeyGroundRelift, VERIFY_EPS,
   surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
@@ -633,6 +634,21 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
   });
 }
 
+/** How THIS client turns a slot's payload URL into a texture (§ B2 v5). One
+ *  line, and it stays here rather than in the shared package: the loading
+ *  policy is the app's (the preview loads on its own terms), while "sRGB, not
+ *  flipped, onto `map`" is the same everywhere and lives in
+ *  `applySlotMaterials`. Deliberately NOT cached by URL — a texture belongs to
+ *  the placement that disposes it. */
+const slotTexture = (url: string) => new THREE.TextureLoader().load(url);
+
+/** Fill the texture slots of one placed group and REMEMBER the clones on its
+ *  record, so the tier swap and the unmount can free them. The record is the
+ *  only thing that knows they exist. */
+function fillSlots(rec: PlacedSceneModel, placed: THREE.Object3D): void {
+  rec.slotMats = applySlotMaterials(THREE, placed, rec.spec.slots, slotTexture);
+}
+
 /** A tier swap has replaced a door prop's mesh: the swing list points at the
  *  GROUP, so it has to follow, or that door would freeze at whatever angle the
  *  group taken out of the graph stood at. The angle carries over — it says
@@ -1196,6 +1212,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       parent.add(placed);
       const rec: PlacedSceneModel = { spec, url, object: placed, parent, lift: 0 };
       placements.push(rec);
+      // THE TEXTURE SLOTS of this placement (§ B2 v5) — FIRST of the material
+      // passes: the cut, the clip and the ghost below all clone what they
+      // traverse, so a picture written here rides into their clones instead of
+      // having to be written again after each of them.
+      fillSlots(rec, placed);
       // A DOOR PROP joins the swing list (v5). `placed`'s origin IS the hinge
       // (`measure: "fit"`, § B2), so the entry needs nothing but the group and
       // the threshold it belongs to — no geometry is computed here.
@@ -1510,6 +1531,11 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       dropPlacementGhost(rec);
       rec.object = placed;
       rec.lift = 0;
+      // The texture slots belong to the PLACEMENT, not to the mesh that fills
+      // it — same as the clip and the cut below, and for the same reason. The
+      // old clones (and their textures) go with the old group further down.
+      const oldSlotMats = rec.slotMats;
+      fillSlots(rec, placed);
       reliftPlacement(tile, rec);
       applyModelClip(tile, placed, rec.spec);
       rec.parent?.add(placed);
@@ -1525,6 +1551,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       // survives the swap — it says where the door stands, which is not a
       // property of the mesh that fills it.
       if (old) retargetDoorProp(tile, old, placed);
+      disposeSlotMaterials(oldSlotMats);
       if (old) {
         old.parent?.remove(old);
         disposeClipMaterials(old);
@@ -1694,7 +1721,15 @@ export function unmountScene(tile: Tile): void {
   // own, and their registration is what isolation toggle 22 walks — a ghost
   // left registered would keep a whole unmounted scene alive for the switch's
   // sake.
-  for (const rec of tile.placedModels ?? []) dropPlacementGhost(rec);
+  // …and so do the TEXTURE SLOTS (§ B2 v5): each placement owns its material
+  // clones AND the picture loaded into them — nothing else in the graph
+  // references either, so leaving them would leak one texture per filled slot
+  // per mount.
+  for (const rec of tile.placedModels ?? []) {
+    dropPlacementGhost(rec);
+    disposeSlotMaterials(rec.slotMats);
+    rec.slotMats = undefined;
+  }
   // Placement ledger of the old mount: gone with the scene — an in-flight
   // tier swap compares against this list and drops its answer.
   tile.placedModels = undefined;

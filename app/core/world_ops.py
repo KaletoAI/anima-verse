@@ -1374,10 +1374,15 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
     It may also be CUT (``cut_keep``/``cut_side``, § B2 addendum 2026-08-23):
     half a table against a wall is this table with a clipping plane through it,
     not a second library entry.
+
+    And it may FILL the prop's texture slots (``slot_values``, v5): a picture
+    into the frame, a look into the pane. Which slots exist is the PROP's
+    statement (``props.detect_slots``), so the values are gated against it —
+    see :func:`app.core.props.sanitize_slot_values`.
     """
     if not isinstance(raw, list):
         return []
-    from app.core.props import CUT_KEEP_MIN, safe_prop_id
+    from app.core.props import CUT_KEEP_MIN, safe_prop_id, slot_values_of
     placements: List[Dict[str, Any]] = []
     scatter_total = 0
     for p in raw:
@@ -1437,6 +1442,14 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
                 entry["variant"] = max(0, int(var))
             except (TypeError, ValueError):
                 pass
+        # WHAT GOES INTO THE PROP'S TEXTURE SLOTS (v5). The library is asked
+        # only when there is something to gate — an ordinary placement costs no
+        # sidecar read. A slot the prop does not declare (or a value of the
+        # wrong shape for its kind) is dropped, not refused: the rest of the
+        # floor plan is worth more than one stale picture.
+        slot_values = slot_values_of(pid, p.get("slot_values"))
+        if slot_values:
+            entry["slot_values"] = slot_values
         # Scatter fields survive only complete (count + seed) and within
         # the budget — a truncated count keeps what still fits.
         try:
@@ -1523,6 +1536,11 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
       (``scene_recipe.door_prop_id``),
     - ``hinge`` (optional): ``'left'`` | ``'right'``, the side the door prop
       turns about, read against the doorway's own direction; absent = left.
+    - ``slot_values`` (optional): what fills the door prop's texture slots
+      (v5) — a glass pane is the stated use case. Gated exactly like a room
+      placement's, EXCEPT when this opening inherits the location's default
+      door: it names no prop here, so only the value SHAPE can be judged and
+      the declaration check falls to the recipe, which resolves the default.
     """
     if not isinstance(raw, dict):
         return None
@@ -1577,6 +1595,13 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     hinge = str(raw.get("hinge") or "").strip().lower()
     if hinge in ("left", "right"):
         out["hinge"] = hinge
+    if isinstance(raw.get("slot_values"), dict) and raw["slot_values"]:
+        from app.core.props import sanitize_slot_values, slot_values_of
+        own = out.get("prop_id") or ""
+        values = (slot_values_of(own, raw["slot_values"]) if own
+                  else sanitize_slot_values(raw["slot_values"]))
+        if values:
+            out["slot_values"] = values
     return out
 
 

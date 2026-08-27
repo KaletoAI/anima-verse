@@ -1013,6 +1013,26 @@ def door_prop_id(opening: Dict[str, Any], default_prop_id: str = "") -> str:
     return str(default_prop_id or "").strip()
 
 
+def slot_spec(slot_values: Any, prop: Any) -> Dict[str, Any]:
+    """WHAT FILLS THIS PLACEMENT'S TEXTURE SLOTS, as the payload states it.
+
+    ``{"<slot>": {"image": url}}`` / ``{"<slot>": {"preset": "glass"}}`` — the
+    same shape the placement stores, gated a second time against what the prop
+    declares RIGHT NOW (``props.detect_slots``). The second gate is not
+    paranoia: a mesh regenerated after the placement was authored names other
+    materials, and a payload that pointed a renderer at a surface the file no
+    longer has would be a silent no-op in one renderer and a guess in the next.
+
+    ONE function for both kinds of prop — a room placement and a door prop
+    differ in how they are measured, not in how a slot is filled.
+    """
+    from app.core import props as prop_store
+    declared = (prop or {}).get("slots") or []
+    if not declared:
+        return {}
+    return prop_store.sanitize_slot_values(slot_values, declared)
+
+
 def _room_walls(recipe: Dict[str, Any], storey: float,
                 ground_level: int,
                 default_door_prop_id: str = "") -> List[Dict[str, Any]]:
@@ -1251,6 +1271,11 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
                         "hinge": ("right"
                                   if str(op.get("hinge") or "").strip().lower()
                                   == "right" else "left"),
+                        # …and what fills that prop's texture slots (v5). It
+                        # rides on the OPENING, so it comes along here for the
+                        # same reason the hinge does: this is where an opening
+                        # becomes a hole.
+                        "slot_values": op.get("slot_values") or {},
                     },
                 }
                 # The CENTRE before the edge clamp: that point is identical on
@@ -2114,6 +2139,11 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
                               str(placement.get("cut_side") or "back"))
         if cut:
             spec["cut_plane"] = cut
+        # WHAT FILLS THIS PLACEMENT'S SLOTS (v5) — the picture in the frame,
+        # the look of the pane. Only declared slots survive; see `slot_spec`.
+        slots = slot_spec(placement.get("slot_values"), prop)
+        if slots:
+            spec["slots"] = slots
         if not has_model:
             spec["placeholder_dims"] = {"w": _r(dims[0]), "d": _r(dims[1]),
                                         "h": _r(dims[2])}
@@ -2192,6 +2222,9 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
         prop = prop_store.get_prop(pid) or {}
         has_model = bool(prop.get("has_model"))
         sigs[pid] = str(prop.get("model_signature") or "")
+        # The pane of a glass door: the same field a room placement carries,
+        # gated through the same function (`slot_spec`).
+        slots = slot_spec(info.get("slot_values"), prop)
         out.append({
             "role": "prop",
             "id": pid,
@@ -2211,6 +2244,7 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
             "bottom_y": _r(_num(door.get("base_y"))),
             "door": {"opening": index, "hinge": hinge,
                      "swing": 1 if hinge == "left" else -1},
+            **({"slots": slots} if slots else {}),
         })
     return out, sigs
 
