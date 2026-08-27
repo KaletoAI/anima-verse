@@ -118,6 +118,11 @@ taken from the ``submit`` call.
      that never finished looks like), the next tick makes k9 pending again —
      and, the user still being active, queues nothing in the same breath.
 
+ 18. A run-now flag can never get stuck.  C is 'done' and has no pending step,
+     so the tick it overrides finds nothing: reason "empty".  The flag is
+     spent there and then, so the tick after it reads the ordinary idle gate
+     again — reason "active", not a second futile walk of the queue.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvements.py
 """
 import os
@@ -600,6 +605,13 @@ drop_step_tasks()
 result = engine.tick()
 check("the step is runnable again", step_of(B, "k9")["status"], "pending")
 check("…and nothing was queued in the same breath", result["submitted"], "")
+
+# ── 18. a run-now flag that can never fire ───────────────────────────────────
+print("\n18. a run-now flag on a stepless entry is spent, not stuck")
+engine.request_run_now(C)             # C is done — it has no pending step
+check("the tick finds nothing to run", engine.tick()["reason"], "empty")
+check("…and the flag is gone, so the idle rule reads normally again",
+      engine.tick()["reason"], "active")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

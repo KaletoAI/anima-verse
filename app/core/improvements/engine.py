@@ -166,6 +166,10 @@ def tick() -> Dict[str, Any]:
             store.mark_running(row["improvement_id"], row["candidate_key"])
         return {"scanned": scanned, "submitted": task_id, "reason": "ok"}
 
+    # Nothing runnable. A run-now flag that got this far names an entry with no
+    # pending step (its last one finished between the click and this tick) —
+    # it can never fire, so it is spent here instead of sticking forever.
+    _run_now.clear()
     return {"scanned": scanned, "submitted": "", "reason": "empty"}
 
 
