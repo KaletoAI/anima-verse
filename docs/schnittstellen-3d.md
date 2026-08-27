@@ -7167,8 +7167,17 @@ rendert das Prop, wie es modelliert wurde.
 `packages/scene-render/src/slotMaterials.ts` ist die EINE Routine, die einen
 Slot auf ein Mesh schreibt; beide Renderer rufen sie (3D-Client
 `sceneRecipe.ts`, Admin-Vorschau `FloorPlanPreview.tsx`). Sie durchläuft die
-gesetzte Gruppe und vergleicht `material.name` (getrimmt, klein) mit den
-Slot-Namen.
+gesetzte Gruppe und vergleicht den SLOT-NAMEN jedes Materials mit den
+Schlüsseln aus `slots`.
+
+**Der Schlüssel ist der Slot-Name, nicht der Materialname** (Ruling R11): der
+Slot-Name ist der Materialname ohne sein `slot_`-Präfix — genau so, wie
+`props.detect_slots` ihn beim Lesen des Modells abgestreift hat. Das Material
+`slot_picture_1` ist also der Slot `picture_1`; die Routine streift beim
+Vergleich **ein** führendes `slot_` ab (getrimmt und klein auf beiden Seiten,
+und hinter dem Präfix noch einmal getrimmt, wie auf dem Server). Ein Material
+ohne Präfix (`picture`, `glass`) heißt weiterhin wie sein Slot. Der rohe Name
+`slot_picture_1` als Schlüssel trifft nichts — den schickt der Server nie.
 
 **Die Regel, die sie korrekt macht: das Material wird JE PLATZIERUNG geklont,
 bevor es angefasst wird.** Der GLB-Lader hält eine `THREE.Group` je URL und
@@ -7225,6 +7234,7 @@ Neuaufbau).
 | Von Hand gepflegte (auch geleerte) Liste überlebt das nächste Modell | ebenda **[5]** |
 | Eine Platzierung/Öffnung mit `slot_values` verliert das Feld beim Speichern, und am Spec entsteht kein `slots` daraus | `scripts/smoke_scene_recipe.py` **[3p]** |
 | `applySlotMaterials`: das benannte Material bekommt eine `map`, das andere bleibt DASSELBE Objekt, und zwei Platzierungen derselben Cache-Gruppe haben VERSCHIEDENE Material-Instanzen | `scripts/smoke_slot_materials.mjs` **[1]/[2]** |
+| `applySlotMaterials` streift das Präfix ab: Materialien `slot_picture_1`/`slot_glass_1` werden von den Schlüsseln `picture_1`/`glass_1` gefüllt — plus rote Proben (roher Name als Schlüssel trifft nichts, `slotpicture_1` ohne Unterstrich ist kein Treffer, nur EIN Präfix fällt) | ebenda **[8]** |
 | Glas-Preset setzt `transparent` + die Konstanten, `transmission` nur wo das Feld existiert | ebenda **[3]** |
 
 ## Nachtrag 2026-08-27 (§ B2): Bild-Props (v5) — das Bild reitet auf der VARIANTE
@@ -7242,7 +7252,11 @@ kein eigenes Prop.
 spec["slots"] = { **prop.area_defaults, **variante.slot_values }
 ```
 
-Zwei Quellen, eine Vereinigung, in dieser Reihenfolge:
+Zwei Quellen, eine Vereinigung, in dieser Reihenfolge. Der Schlüssel ist in
+beiden Quellen die **Flächen-ID** — und die ist zugleich der Slot-Name, also der
+Materialname ohne `slot_`-Präfix (`slot_picture_1` → `picture_1`). Genau diesen
+Schlüssel schlagen die Renderer nach, siehe
+[„Der Tausch im Renderer"](#der-tausch-im-renderer-applyslotmaterials).
 
 | Quelle | Wo gespeichert | Wofür |
 |---|---|---|

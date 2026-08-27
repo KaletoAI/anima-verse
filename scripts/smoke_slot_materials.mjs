@@ -267,6 +267,76 @@ async function main() {
   check('disposing an empty/undefined list is harmless',
         (disposeSlotMaterials([]), disposeSlotMaterials(undefined), true))
 
+  console.log('\n[8] a material `slot_<name>` IS the slot `<name>`')
+  // The server already strips the prefix: `detect_slots` turns the GLB
+  // material `slot_picture_1` into the slot `picture_1`, and the recipe keys
+  // `models[].slots` by that SLOT name. A split picture prop therefore always
+  // arrives as `{picture_1: …, glass_1: …}` over materials that still carry
+  // the prefix — so the lookup has to strip it here too, or neither renderer
+  // ever hangs the picture (Befund 2026-08-27, Ruling R11).
+  // Hand-derived: materials ["wood", "slot_picture_1", "slot_glass_1"] with
+  // slots {picture_1: {image}, glass_1: {preset:"glass"}} → the two prefixed
+  // materials are replaced by clones (map / glass preset), "wood" stays the
+  // very same object, and exactly 2 clones come back.
+  const w8 = new FakeMaterial('wood')
+  const pic8 = new FakeMaterial('slot_picture_1')
+  const gls8 = new FakeMaterial('slot_glass_1', { transmission: 0 })
+  const g8 = groupOver([w8, pic8, gls8])
+  const clones8 = applySlotMaterials(THREE, g8, {
+    picture_1: { image: '/world/locations/demo/gallery/x.png' },
+    glass_1: { preset: 'glass' },
+  }, loadTexture)
+  check('`slot_picture_1` is filled by the payload key `picture_1`',
+        g8.meshes[1].material !== pic8
+        && g8.meshes[1].material.map?.__texture
+           === '/world/locations/demo/gallery/x.png',
+        String(g8.meshes[1].material.map?.__texture))
+  check('`slot_glass_1` is filled by the payload key `glass_1`',
+        g8.meshes[2].material !== gls8
+        && g8.meshes[2].material.transparent === true
+        && g8.meshes[2].material.transmission === GLASS_PRESET.transmission,
+        String(g8.meshes[2].material.transmission))
+  check('the unprefixed `wood` is the very same object',
+        g8.meshes[0].material === w8)
+  check('exactly two clones come back', clones8.length === 2,
+        String(clones8.length))
+
+  // The RAW material name must NOT be required as the key — that is the shape
+  // the server never sends, and demanding it is the defect itself.
+  const pic8b = new FakeMaterial('slot_picture_1')
+  const g8b = groupOver([pic8b])
+  applySlotMaterials(THREE, g8b,
+    { slot_picture_1: { image: '/world/locations/demo/gallery/x.png' } },
+    loadTexture)
+  check('ROTE PROBE: the raw name `slot_picture_1` as a key matches nothing',
+        g8b.meshes[0].material === pic8b)
+
+  // ...and the prefix is a PREFIX, not a substring: only one leading `slot_`
+  // goes, and only when the underscore is really there.
+  const near = new FakeMaterial('slotpicture_1')
+  const gNear = groupOver([near])
+  check('ROTE PROBE: `slotpicture_1` (no underscore) is not the slot `picture_1`',
+        applySlotMaterials(THREE, gNear,
+          { picture_1: { image: '/world/locations/demo/gallery/x.png' } },
+          loadTexture).length === 0
+        && gNear.meshes[0].material === near)
+  const twice = new FakeMaterial('slot_slot_sign')
+  const gTwice = groupOver([twice])
+  check('exactly ONE prefix is stripped: `slot_slot_sign` is the slot `slot_sign`',
+        applySlotMaterials(THREE, gTwice,
+          { slot_sign: { image: '/world/locations/demo/gallery/s.png' } },
+          loadTexture).length === 1
+        && gTwice.meshes[0].material !== twice)
+  // The server trims BEHIND the prefix as well (`props.detect_slots`), so a
+  // modeller's `slot_ picture_1` is the same slot, not a name with a space.
+  const spaced = new FakeMaterial('slot_ picture_1')
+  const gSpaced = groupOver([spaced])
+  check('...and the name behind the prefix is trimmed, like on the server',
+        applySlotMaterials(THREE, gSpaced,
+          { picture_1: { image: '/world/locations/demo/gallery/x.png' } },
+          loadTexture).length === 1
+        && gSpaced.meshes[0].material !== spaced)
+
   console.log(`\n${failures.length
     ? 'FAILED: ' + failures.join(', ') : 'all checks passed'}`)
   process.exit(failures.length ? 1 : 0)

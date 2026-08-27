@@ -6,9 +6,12 @@
  * fillable surface (`picture`, `sign`, `glass`, or anything behind the `slot_`
  * prefix), the server reads those names off the GLB and the placement says
  * what goes in. The payload states the finished answer as
- * `models[].slots = {"<material name>": {image} | {preset}}`; this routine is
- * the one place that WRITES it onto a mesh, and both renderers call it — the
- * 3D client and the admin floor-plan preview.
+ * `models[].slots = {"<slot name>": {image} | {preset}}`, and the SLOT NAME is
+ * the material name without its `slot_` prefix — the prefix is `detect_slots`'
+ * marker for "this surface is fillable", not part of the slot's name, so the
+ * material `slot_picture_1` is the slot `picture_1`. This routine is the one
+ * place that WRITES it onto a mesh, and both renderers call it — the 3D client
+ * and the admin floor-plan preview.
  *
  * THE ONE RULE THAT MAKES IT CORRECT: clone the material for THIS placement
  * before touching it. The GLB loader keeps one `THREE.Group` per URL and hands
@@ -73,10 +76,26 @@ type SlotMaterial = Material & {
   needsUpdate?: boolean
 }
 
+/** WHICH SLOT a material is. `props.detect_slots` reads `slot_picture_1` off
+ *  the GLB and stores the slot as `picture_1`; the recipe keys `slots` by that
+ *  stored name, so the renderer has to take the prefix off again or a split
+ *  picture prop — whose materials ALWAYS carry it — matches nothing.
+ *
+ *  ONE leading `slot_` goes, and the rest is trimmed again for the same reason
+ *  the server does it: `slot_ picture_1` is a modeller's typo, not a slot whose
+ *  name starts with a space. A bare `picture` is its own slot name and passes
+ *  through untouched. */
+const slotNameOf = (raw: string | undefined): string => {
+  const key = (raw || '').trim().toLowerCase()
+  return key.startsWith('slot_') ? key.slice(5).trim() : key
+}
+
 /**
  * Fill the slots of an already placed group.
  *
- * `slots` is the spec's own map, so the keys ARE material names; matching is
+ * `slots` is the spec's own map, so the keys are SLOT names — that is the
+ * material name with its `slot_` prefix taken off, exactly as
+ * `props.detect_slots` took it off when it read the model. Matching is
  * case-insensitive and trimmed on both sides (the server stores names
  * lower-cased, an exporter may not). A slot the mesh does not name is simply
  * not there — a prop whose model was regenerated without its frame keeps
@@ -103,7 +122,7 @@ export function applySlotMaterials(
   const clones: Material[] = []
   const fill = (src: Material): Material => {
     const cur = src as SlotMaterial
-    const value = wanted.get((cur.name || '').trim().toLowerCase())
+    const value = wanted.get(slotNameOf(cur.name))
     if (!value) return src
     const image = (value.image || '').trim()
     const preset = (value.preset || '').trim().toLowerCase()
