@@ -618,8 +618,11 @@ class PromptBuilder:
         if config.include_activity and persons:
             self._collect_activity(persons, variables, photographer_mode)
 
-        # Location
-        if config.include_location:
+        # Location. Not for a profile render: a portrait shows the character,
+        # never the room it happens to stand in — the dedicated profile entry
+        # point (dialog_profile) says the same via include_location=False, and
+        # the slot planner drops the room reference for the same reason.
+        if config.include_location and not set_profile:
             self._collect_location(variables)
 
         # Personality (nur bei Profilbild)
@@ -1199,16 +1202,26 @@ class PromptBuilder:
         self, variables: PromptVariables, max_slots: int) -> List[Dict[str, Any]]:
         """Ordnet Referenzbilder nach Prioritaet auf die verfuegbaren Slots.
 
-        Reihenfolge (fuellt Slots 1..max_slots der Reihe nach, bis voll):
-            1. erstellender Character (is_agent)
-            2. Raum / Location (ref_image_room)
-            3. andere Charaktere im Prompt
-            4. Items
+        Order (fills slots 1..max_slots in turn until full):
+            1. creating character (is_agent)
+            2. room / location (ref_image_room)
+            3. other characters in the prompt
+            4. items
 
-        Einzige Quelle der Slot-Zuordnung — wird sowohl fuer die Generierung
-        (_resolve_qwen_slots) als auch fuer die Ausschlussregeln genutzt, damit
-        beide konsistent entscheiden, was tatsaechlich in einem Slot liegt.
+        The ONE source of the slot assignment — used both for the generation
+        (_resolve_qwen_slots) and for the exclusion rules, so both decide
+        consistently what actually sits in a slot.
+
+        A profile render (``set_profile``) fills NO slot: the profile picture
+        is where the character's identity comes from, so nothing may condition
+        it — not a self-reference (that would loop) and above all not the room
+        the character happens to stand in. ``service.render_has_reference_
+        image`` promises the backend selection exactly this, and this is the
+        end that keeps the promise.
         """
+        if variables.set_profile:
+            return []
+
         plan: List[Dict[str, Any]] = []
 
         def _person_entry(pos: int, person) -> Optional[Dict[str, Any]]:

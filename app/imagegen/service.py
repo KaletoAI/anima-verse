@@ -1623,6 +1623,11 @@ class ImageService:
                 pv = PromptVariables()
                 pv.persons = persons
                 pv.negative_prompt = negative_prompt
+                # Carries into the slot planner: a profile render fills no
+                # reference slot at all (see _plan_qwen_slots). Without it the
+                # room image of wherever the character stands would end up
+                # conditioning its own portrait.
+                pv.set_profile = set_profile
 
                 # Reference-Bilder aufloesen (fuer Style-Conditioning der Generierung).
                 # profile_only: Profilbild statt Outfit-Bild (z.B. Outfit-Erstellung).
