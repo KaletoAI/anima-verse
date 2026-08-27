@@ -35,6 +35,14 @@ type Axis = 'pose' | 'expression'
  *  waiting to be imported. */
 type View = 'entries' | 'catalog' | 'inbox'
 
+/** One place type: the vocabulary a marker speaks. `root_drop` is a FRACTION
+ *  of the figure height, so it reads back as metres against a 1.70 m figure. */
+interface PlaceType {
+  label: string
+  root_drop: number
+  default: string
+}
+
 interface Entry {
   key: string
   prompt: string
@@ -43,6 +51,12 @@ interface Entry {
   solo: boolean
   is_default?: boolean
   axis?: Axis
+  /** place fields — pose axis only, an expression has no place */
+  group?: string
+  /** slots of the anchor marker a PAIR pose consumes (solo poses: always 1) */
+  places?: 1 | 2
+  /** degrees the pair clip's frame turns against the marker facing */
+  yaw_offset?: number
 }
 
 interface CatalogData {
@@ -50,6 +64,8 @@ interface CatalogData {
   kinds: string[]
   /** kinds that exist as a PAIR clip (two halves) — two-person poses */
   pair_kinds?: string[]
+  /** place types, keyed by group id (pose axis only) */
+  groups?: Record<string, PlaceType>
   problems: string[]
 }
 
@@ -62,7 +78,11 @@ interface Candidate {
   last_seen: string
 }
 
-const EMPTY: Entry = { key: '', prompt: '', synonyms: [], animation: '', solo: true }
+const EMPTY: Entry = { key: '', prompt: '', synonyms: [], animation: '', solo: true, group: '' }
+
+/** Figure height the root drop is read back against — the reference figure of
+ *  every metre readout in the admin UI. */
+const REFERENCE_HEIGHT_M = 1.7
 
 export function PosesTab() {
   const { t } = useI18n()
@@ -78,6 +98,15 @@ export function PosesTab() {
   const [approveOf, setApproveOf] = useState('')
   const [search, setSearch] = useState('')
   const [onlyMissing, setOnlyMissing] = useState(false)
+  // '' = no place-type filter on the list
+  const [groupFilter, setGroupFilter] = useState('')
+  // Editable copy of the whole `groups` block — PUT /poses/groups replaces it
+  // as a whole, so it is edited as a whole and saved with one button.
+  const [groupsDraft, setGroupsDraft] = useState<Record<string, PlaceType>>({})
+  const [newGroupKey, setNewGroupKey] = useState('')
+  // The place-type editor is collapsed by default: it lives above the catalog
+  // list in the narrow left column and would otherwise squeeze the list.
+  const [showGroups, setShowGroups] = useState(false)
   const [confirmDismiss, setConfirmDismiss] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -109,12 +138,21 @@ export function PosesTab() {
     setIsNew(false)
     setApproveOf('')
     setConfirmDismiss(null)
+    setGroupFilter('')
   }, [axis])
+
+  // The server is the truth for the place types: every (re)load restarts the
+  // editable copy from what was just fetched.
+  useEffect(() => {
+    setGroupsDraft({ ...(data.groups || {}) })
+    setNewGroupKey('')
+  }, [data.groups])
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase()
     return data.entries.filter((p) => {
       if (isPose && onlyMissing && p.animation) return false
+      if (isPose && groupFilter && (p.group || '') !== groupFilter) return false
       if (!q) return true
       return (
         p.key.includes(q) ||
@@ -122,7 +160,7 @@ export function PosesTab() {
         p.synonyms.some((s) => s.includes(q))
       )
     })
-  }, [data.entries, search, onlyMissing, isPose])
+  }, [data.entries, search, onlyMissing, groupFilter, isPose])
 
   const missingCount = useMemo(
     () => data.entries.filter((p) => !p.animation).length,
@@ -182,13 +220,28 @@ export function PosesTab() {
       toast(t('An animation kind is required for poses'), 'error')
       return
     }
+    if (isPose && !draft.group) {
+      toast(t('A place type is required for poses'), 'error')
+      return
+    }
     try {
       const body = {
         axis,
         key,
         prompt: draft.prompt,
         synonyms: draft.synonyms,
-        ...(isPose ? { animation: draft.animation, solo: draft.solo } : {}),
+        ...(isPose
+          ? {
+              animation: draft.animation,
+              solo: draft.solo,
+              group: draft.group,
+              // Pair fields only: a solo pose occupies one place and never
+              // turns, and the server drops them again when solo is set.
+              ...(draft.solo
+                ? {}
+                : { places: draft.places ?? 2, yaw_offset: draft.yaw_offset ?? 0 }),
+            }
+          : {}),
       }
       if (approveOf) {
         await apiPost('/poses/candidates/approve', { ...body, raw_text: approveOf })
@@ -280,6 +333,56 @@ export function PosesTab() {
   const upd = useCallback(<K extends keyof Entry>(k: K, v: Entry[K]) => {
     setDraft((prev) => (prev ? { ...prev, [k]: v } : prev))
   }, [])
+
+  // ── Place types ────────────────────────────────────────────────────────
+  /** How many catalog entries name each place type — a type still in use
+   *  cannot be removed, because its poses would become unplaceable. */
+  const groupUsage = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const p of data.entries) {
+      const g = p.group || ''
+      if (g) out[g] = (out[g] || 0) + 1
+    }
+    return out
+  }, [data.entries])
+
+  const patchGroup = useCallback((key: string, patch: Partial<PlaceType>) => {
+    setGroupsDraft((prev) =>
+      prev[key] ? { ...prev, [key]: { ...prev[key], ...patch } } : prev,
+    )
+  }, [])
+
+  const addGroup = useCallback(() => {
+    const key = newGroupKey.trim().toLowerCase()
+    if (!key) {
+      toast(t('A key is required for a place type'), 'error')
+      return
+    }
+    if (groupsDraft[key]) {
+      toast(t('This place type already exists'), 'error')
+      return
+    }
+    setGroupsDraft((prev) => ({ ...prev, [key]: { label: key, root_drop: 0, default: '' } }))
+    setNewGroupKey('')
+  }, [groupsDraft, newGroupKey, t, toast])
+
+  const removeGroup = useCallback((key: string) => {
+    setGroupsDraft((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }, [])
+
+  const saveGroups = useCallback(async () => {
+    try {
+      await apiPut('/poses/groups', { groups: groupsDraft })
+      toast(t('Saved'))
+      await load()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [groupsDraft, load, t, toast])
 
   const viewSwitch = (
     <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
@@ -379,6 +482,114 @@ export function PosesTab() {
           </div>
         ) : null}
 
+        {/* Place types — the finite vocabulary a marker speaks. Collapsed by
+            default so it does not eat the catalog list's height. */}
+        {isPose ? (
+          <div style={{ marginBottom: 8 }}>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              style={{ width: '100%' }}
+              onClick={() => setShowGroups((v) => !v)}
+            >
+              {showGroups ? '▾' : '▸'} {t('Place types')} ({Object.keys(groupsDraft).length})
+            </button>
+            {showGroups ? (
+              <div style={{ marginTop: 6 }}>
+                <p className="ga-form-hint" style={{ margin: '0 0 6px' }}>
+                  {t('A marker names a place type; every pose belongs to exactly one. Root drop × 1.70 m is how far a figure’s root sinks below the marked surface.')}
+                </p>
+                {Object.entries(groupsDraft).map(([key, g]) => {
+                  const used = groupUsage[key] || 0
+                  const poses = data.entries.filter((p) => (p.group || '') === key)
+                  return (
+                    <div key={key} className="ga-fieldset">
+                      <div
+                        className="ga-fieldset-title"
+                        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                      >
+                        <code style={{ flex: 1 }}>{key}</code>
+                        <button
+                          type="button"
+                          className="ga-btn ga-btn-sm ga-btn-danger"
+                          disabled={used > 0}
+                          title={
+                            used
+                              ? `${t('Still in use — reassign these poses first')} (${used})`
+                              : t('Remove this place type')
+                          }
+                          onClick={() => removeGroup(key)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <Field label={t('Label')}>
+                        <input
+                          className="ga-input"
+                          value={g.label}
+                          onChange={(e) => patchGroup(key, { label: e.target.value })}
+                        />
+                      </Field>
+                      <Field
+                        label={t('Root drop')}
+                        hint={`× 1.70 m = ${(g.root_drop * REFERENCE_HEIGHT_M).toFixed(2)} m`}
+                      >
+                        <input
+                          className="ga-input"
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.001}
+                          value={g.root_drop}
+                          onChange={(e) =>
+                            patchGroup(key, { root_drop: Number(e.target.value) })
+                          }
+                        />
+                      </Field>
+                      <Field
+                        label={t('Default pose')}
+                        hint={t('The pose a click on such a marker sets. It has to be a pose of this place type.')}
+                      >
+                        <select
+                          className="ga-input"
+                          value={g.default}
+                          onChange={(e) => patchGroup(key, { default: e.target.value })}
+                        >
+                          <option value="">{t('— none —')}</option>
+                          {poses.map((p) => (
+                            <option key={p.key} value={p.key}>
+                              {p.key}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                  )
+                })}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <input
+                    className="ga-input"
+                    style={{ flex: 1, minWidth: 90 }}
+                    placeholder={t('new key')}
+                    value={newGroupKey}
+                    onChange={(e) => setNewGroupKey(e.target.value)}
+                  />
+                  <button type="button" className="ga-btn ga-btn-sm" onClick={addGroup}>
+                    + {t('Place type')}
+                  </button>
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm ga-btn-primary"
+                    onClick={saveGroups}
+                  >
+                    {t('Save place types')}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
           <input
             className="ga-input"
@@ -398,6 +609,22 @@ export function PosesTab() {
               </span>
             </label>
           ) : null}
+          {isPose && Object.keys(data.groups || {}).length ? (
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {Object.entries(data.groups || {}).map(([key, g]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`ga-btn ga-btn-sm${groupFilter === key ? ' ga-btn-primary' : ''}`}
+                  title={`${g.label} (${groupUsage[key] || 0})`}
+                  // clicking the active chip clears the filter again
+                  onClick={() => setGroupFilter((prev) => (prev === key ? '' : key))}
+                >
+                  {g.label || key}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <ul className="ga-list">
@@ -412,8 +639,12 @@ export function PosesTab() {
                 <span className="ga-list-row-main">
                   <code>{p.key}</code>
                   {isPose ? (
-                    <span className="ga-list-row-sub" style={{ opacity: p.animation ? 1 : 0.4 }}>
-                      — {p.animation || t('no animation')}
+                    <span
+                      className="ga-list-row-sub"
+                      style={{ opacity: p.animation && p.group ? 1 : 0.4 }}
+                    >
+                      — {p.animation || t('no animation')} ·{' '}
+                      {p.group || t('no place type')}
                     </span>
                   ) : null}
                 </span>
@@ -635,6 +866,71 @@ export function PosesTab() {
                       {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
                     </div>
                   ) : null}
+                  <Field
+                    label={t('Place type')}
+                    hint={t('The kind of marker this pose can be played on. Every pose belongs to exactly one place type.')}
+                  >
+                    <select
+                      className="ga-input"
+                      value={draft.group || ''}
+                      onChange={(e) => upd('group', e.target.value)}
+                    >
+                      <option value="">{t('— pick a place type —')}</option>
+                      {Object.entries(data.groups || {}).map(([key, g]) => (
+                        <option key={key} value={key}>
+                          {g.label ? `${g.label} (${key})` : key}
+                        </option>
+                      ))}
+                      {/* keep a place type that has since been removed visible */}
+                      {draft.group && !(data.groups || {})[draft.group] ? (
+                        <option value={draft.group}>
+                          {draft.group} ({t('unknown')})
+                        </option>
+                      ) : null}
+                    </select>
+                  </Field>
+
+                  {draft.solo === false ? (
+                    <div className="ga-form-row">
+                      <Field
+                        label={t('Places')}
+                        hint={t('How many slots of the anchor marker the pair uses: 2 = both on the bench, 1 = one on the bed edge, the other beside it')}
+                      >
+                        <div style={{ display: 'flex', gap: 12 }}>
+                          {([1, 2] as const).map((n) => (
+                            <label
+                              key={n}
+                              style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+                            >
+                              <input
+                                type="radio"
+                                name="pose-places"
+                                checked={(draft.places ?? 2) === n}
+                                onChange={() => upd('places', n)}
+                              />
+                              <span>{n}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </Field>
+                      <Field
+                        label={t('Yaw offset')}
+                        hint={t('Degrees the pair clip’s frame turns against the marker facing.')}
+                      >
+                        <input
+                          className="ga-input"
+                          type="number"
+                          min={-180}
+                          max={180}
+                          step={1}
+                          value={draft.yaw_offset ?? 0}
+                          onChange={(e) => upd('yaw_offset', Number(e.target.value))}
+                        />
+                        <span style={{ alignSelf: 'center' }}>°</span>
+                      </Field>
+                    </div>
+                  ) : null}
+
                   {/* Below the select, not inside the Field: .ga-field-control
                       is a flex ROW and would put the canvas beside the select. */}
                   {draft.animation ? <ClipPreview kind={draft.animation} height={360} /> : null}

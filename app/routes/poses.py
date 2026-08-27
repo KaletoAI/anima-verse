@@ -495,6 +495,12 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
                 entry["animation"] = animation
                 entry["solo"] = bool(body.get("solo", True))
                 entry["group"] = group
+                if not entry["solo"]:
+                    # Same as create: a pair pose carries its own slot count
+                    # and clip rotation — dropping them here would silently
+                    # approve every pair candidate as "2 places, 0°".
+                    entry["places"] = _places(body.get("places"))
+                    entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
             data["entries"][key] = entry
 
         _write(axis, data)
