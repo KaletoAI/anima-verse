@@ -107,24 +107,29 @@ function ImageSlot({ slot, value, locationId, onValue }: {
   const stored = value?.image || ''
   const locImages = useLocationImages(locationId)
   const names = useCharacterNames()
-  // "Character picked, no image yet" is not a storable state — the same
-  // problem the door-prop picker has, and the same answer: a local flag that
-  // holds the second select open until something is chosen.
-  const [pendingChar, setPendingChar] = useState('')
-  const source = pendingChar ? `c:${pendingChar}` : sourceOf(stored)
+  // "Source picked, no picture yet" is not a storable state — an empty value
+  // is no value, so the stored URL would read back as "None" and the select
+  // would snap shut the moment it was opened. The same problem the door-prop
+  // picker has, and the same answer: a local flag, consulted only while
+  // nothing is stored.
+  const [pendingSource, setPendingSource] = useState('')
+  const source = stored ? sourceOf(stored) : pendingSource
   const character = source.startsWith('c:') ? source.slice(2) : ''
   const charImages = useCharacterImages(character)
   const files = character ? charImages : locImages
   const picked = fileOf(stored)
-  // A stored file the gallery no longer lists keeps its place, marked — a
-  // deleted picture must not silently empty the frame on the next save.
-  const dangling = !!stored && !!picked && !files.includes(picked)
+  // A stored file the gallery does not list keeps its place — a deleted
+  // picture must not silently empty the frame on the next save. It is only
+  // CALLED missing once the list has actually arrived; before that it is
+  // simply the current pick.
+  const ownOption = !!picked && !files.includes(picked)
+  const missing = ownOption && files.length > 0
 
   const setSource = (next: string) => {
-    setPendingChar(next.startsWith('c:') ? next.slice(2) : '')
-    if (!next) onValue(undefined)
-    else if (next === 'loc' && source !== 'loc') onValue(undefined)
-    else if (next.startsWith('c:')) onValue(undefined)
+    setPendingSource(next)
+    // Changing the source cannot keep the file: it names a picture in the
+    // other gallery. Staying on the same source keeps it.
+    if (next !== sourceOf(stored)) onValue(undefined)
   }
   const setFile = (file: string) => {
     if (!file) { onValue(undefined); return }
@@ -156,8 +161,10 @@ function ImageSlot({ slot, value, locationId, onValue }: {
           onChange={(e) => setFile(e.target.value)}
         >
           <option value="">{t('— pick a picture —')}</option>
-          {dangling ? (
-            <option value={picked}>{`${picked} ${t('(missing)')}`}</option>
+          {ownOption ? (
+            <option value={picked}>
+              {missing ? `${picked} ${t('(missing)')}` : picked}
+            </option>
           ) : null}
           {files.map((f) => <option key={f} value={f}>{f}</option>)}
         </select>

@@ -7179,7 +7179,11 @@ Art des Slots:
 **Zwei Tore, und sie beantworten verschiedene Fragen.** Beim SPEICHERN
 (`props.sanitize_slot_values`, gerufen aus `world_ops._sanitize_props` und
 `_sanitize_opening`) wird geprüft, ob das Prop den Slot überhaupt deklariert
-und ob der Wert die zur Art passende FORM hat; alles andere fällt weg (leise —
+— gelesen mit `props.declared_slots`, also direkt aus dem Sidecar und
+ausdrücklich NICHT über `get_prop`: ein voller Datensatz fordert nebenbei die
+Fernsicht-Meshes aller Varianten an, und ein Grundriss-Speichern ist kein
+Anlass, Mesh-Arbeit einzureihen — und ob der Wert die zur Art passende FORM
+hat; alles andere fällt weg (leise —
 eine hängengebliebene URL darf keinen Grundriss kosten). Beim KOMPONIEREN
 prüft `scene_recipe.slot_spec` ein zweites Mal gegen das, was das Prop
 **jetzt** deklariert: ein neu erzeugtes Mesh benennt andere Materialien, und
