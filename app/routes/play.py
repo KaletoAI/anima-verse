@@ -3218,17 +3218,11 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             raise HTTPException(status_code=404, detail="no such place here")
         if group_of(pose) != target["group"]:
             raise HTTPException(status_code=400, detail="pose does not fit this place")
-        # Refuse a taken place BEFORE the pose is set: the setter below would
-        # otherwise seat the avatar on some OTHER chair of the group and the
-        # 409 would leave it sitting there. The assign(prefer=) after it is
-        # what actually holds the slot (under the room's lock); the check
-        # here only spares the common case the detour.
-        taken = places.occupancy(loc, room, exclude=avatar).get(place_id, [])
-        if not places.free_slots(target, taken):
-            raise HTTPException(status_code=409, detail="place is taken")
-        set_pose_intent(avatar, pose)                 # assigns SOME place of the group
+        # ONE path: the setter seats on the insisted place (before it writes
+        # the pose — a taken place raises with nothing changed) and publishes
+        # that seat, also when only the seat changes under the same pose.
         try:
-            places.assign(avatar, pose, prefer=place_id)   # …then insists on the clicked one
+            set_pose_intent(avatar, pose, prefer=place_id)
         except places.PlaceUnavailable:
             raise HTTPException(status_code=409, detail="place is taken")
         activity = pose

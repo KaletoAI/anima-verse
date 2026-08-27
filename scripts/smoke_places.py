@@ -68,8 +68,18 @@ Hand-derived expectations:
       both slots) and Eve stays unseated with no pose — the taken chair
       is refused BEFORE the pose is set; place_id s1 + "sitting" → ok,
       place {s1, 0, lounge}, Eve at (−3, −3); {"activity": "reading"}
-      keeps s1 (same group); {"activity": ""} clears: pose_key "" and
-      place None.
+      keeps s1 (same group). Dan and Cid released → s2 has two free
+      slots: Eve (on s1, pose "reading") clicks s2 with the SAME pose →
+      profile s2 slot 0, Eve at (0.7, −3), and an SSE is published although
+      the pose text did not change (the seat did). Eve now 0.6 m from
+      s2/1 and 3.7 m from s1 clicks s1 with "sitting" → the setter alone
+      would keep s2 (own place, same group); the click insists, so BOTH
+      the profile and the SSE carry s1 — one event, never a wrong seat
+      first. {"activity": ""} clears: pose_key "" and place None.
+  [5b] Guard: with places.assign raising RuntimeError,
+      set_pose_intent("Eve", "sitting") still stores the pose and still
+      publishes activity_changed with place None — a seat failure degrades
+      exactly like the no-marker case, never into a lost pose.
 
 Usage:  ./.venv/bin/python scripts/smoke_places.py
 """
@@ -367,10 +377,51 @@ check("Eve sits on (−3, −3)", get_character_pos("Eve") == {"x": -3.0, "z": -
 r = route({"activity": "reading"})
 check("free text of the same group keeps s1", isinstance(r, dict) and r.get("place") == field("s1", 0)
       and get_character_profile("Eve").get("pose_key") == "reading", str(r))
+places.release("Dan")
+places.release("Cid")
+n_events = len(EVENTS)
+r = route({"place_id": "s2", "pose": "reading"})
+check("same pose, other seat: profile carries the clicked s2",
+      isinstance(r, dict) and r.get("place") == field("s2", 0)
+      and get_character_profile("Eve").get("place") == field("s2", 0), str(r))
+check("… Eve moved to (0.7, −3)", get_character_pos("Eve") == {"x": 0.7, "z": -3.0},
+      str(get_character_pos("Eve")))
+check("… and ONE SSE announces the seat change",
+      len(EVENTS) == n_events + 1 and (last_event("Eve") or {}).get("place") == field("s2", 0)
+      and (last_event("Eve") or {}).get("activity") == "reading", str(last_event("Eve")))
+n_events = len(EVENTS)
+r = route({"place_id": "s1", "pose": "sitting"})
+check("farther clicked s1 beats the own s2: profile s1",
+      isinstance(r, dict) and r.get("place") == field("s1", 0)
+      and get_character_pos("Eve") == {"x": -3.0, "z": -3.0}, str(r))
+check("… and the ONE SSE carries s1, never s2 first",
+      len(EVENTS) == n_events + 1 and (last_event("Eve") or {}).get("place") == field("s1", 0)
+      and (last_event("Eve") or {}).get("activity") == "sitting", str(last_event("Eve")))
 r = route({"activity": ""})
 check("empty activity clears pose and place", isinstance(r, dict) and r.get("place") is None
       and r.get("activity") == "" and get_character_profile("Eve").get("pose_key") == ""
       and get_character_profile("Eve").get("place") is None, str(r))
+
+# ── [5b] a failing seat never loses the pose ────────────────────────────
+print("\n[5b] a failing seat never loses the pose")
+_orig_assign = places.assign
+
+
+def _boom(*a, **k):
+    raise RuntimeError("layout broke")
+
+
+places.assign = _boom
+n_events = len(EVENTS)
+set_pose_intent("Eve", "sitting")
+places.assign = _orig_assign
+check("the pose is stored although assign raised",
+      get_character_profile("Eve").get("pose_key") == "sitting")
+check("… without a place", get_character_profile("Eve").get("place") is None)
+check("… and the SSE was published with place None",
+      len(EVENTS) == n_events + 1 and (last_event("Eve") or {}).get("activity") == "sitting"
+      and (last_event("Eve") or {}).get("place", "missing") is None, str(last_event("Eve")))
+clear_pose_intent("Eve")
 state_events.publish = _orig_publish
 
 # ── summary ─────────────────────────────────────────────────────────────

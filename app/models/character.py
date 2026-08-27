@@ -1845,15 +1845,20 @@ def get_character_pose_flavor(character_name: str) -> str:
     return (profile.get("pose_flavor") or "") if profile else ""
 
 
-def set_pose_intent(character_name: str, pose: str) -> None:
+def set_pose_intent(character_name: str, pose: str, prefer: str = "") -> None:
     """Canonical setter for 'character does X now'. Resolves the free text to
     a catalog key (the ONLY render key) + sanitized flavor. Empty pose resets.
 
-    The key also SEATS the character (plan-posen-plaetze.md § 4): after the
-    pose is stored, ``places.assign`` gives it a free place of the pose's
-    group in its room and moves it onto the slot — or releases the place it
-    held when the group has none here (a standing pose, no marker). An
-    identical repeat returns early and never re-assigns."""
+    The key also SEATS the character (plan-posen-plaetze.md § 4):
+    ``places.assign`` gives it a free place of the pose's group in its room
+    and moves it onto the slot — or releases the place it held when the
+    group has none here (a standing pose, no marker). ``prefer`` names the
+    ONE place that will do (a clicked seat): it is seated BEFORE the pose is
+    written, so a taken place raises ``places.PlaceUnavailable`` with
+    nothing changed, and a mere seat change under an unchanged pose is
+    still carried out and published. Without ``prefer`` an identical repeat
+    returns early and never re-assigns. Any other seat failure degrades to
+    "pose without place" — never into a lost pose."""
     if not character_name:
         return
     raw = (pose or "").strip()
@@ -1865,26 +1870,54 @@ def set_pose_intent(character_name: str, pose: str) -> None:
         if flavor.lower() == key.lower():
             flavor = ""          # flavor that adds nothing is noise
     profile = get_character_profile(character_name) or {}
-    if (profile.get("pose_key") or "") == key and (profile.get("pose_flavor") or "") == flavor:
+    unchanged = ((profile.get("pose_key") or "") == key
+                 and (profile.get("pose_flavor") or "") == flavor)
+    if unchanged and not prefer:
         return
     old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
+    old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
     inter = profile.get("interaction")
     if isinstance(inter, dict) and inter.get("pose_key") != key:
-        # A new pose mid-interaction releases both partners; the engine
-        # re-reads and saves the profile, so re-load before writing the pose.
+        # A new pose mid-interaction releases both partners (the engine
+        # re-reads and saves the profiles itself).
         from app.core.interaction_engine import end_interaction
         end_interaction(character_name, reason="pose")
+    # Seat FIRST: an insisted place that is taken raises here, before any
+    # pose write. assign/release load and save the profile themselves, so
+    # the pose is written into a fresh copy afterwards — never over the
+    # place they just stored.
+    place = _seat_for_pose(character_name, key, prefer)
+    if not unchanged:
         profile = get_character_profile(character_name) or {}
-    profile["pose_key"] = key
-    profile["pose_flavor"] = flavor
-    save_character_profile(character_name, profile)
-    # assign re-loads and saves the profile itself — it must run AFTER the
-    # pose write above so the key is on disk when the place is chosen.
+        profile["pose_key"] = key
+        profile["pose_flavor"] = flavor
+        save_character_profile(character_name, profile)
+    _publish_activity_changed(character_name, flavor or key, old_display, key,
+                              place, old_place)
+
+
+def _seat_for_pose(character_name: str, key: str, prefer: str = "") -> Optional[dict]:
+    """The place step of the setter: assign for a key, release for none.
+    ``PlaceUnavailable`` (an insisted, taken place) propagates — it is the
+    caller's answer. Anything else (a layout whose slot is not finite, a
+    composer that chokes) is a seat problem, not a pose problem: log it,
+    release whatever half-written place there may be and report None."""
     from app.core import places
-    place = places.assign(character_name, key) if key else None
-    if not key:
+    try:
+        if key:
+            return places.assign(character_name, key, prefer=prefer)
         places.release(character_name)
-    _publish_activity_changed(character_name, flavor or key, old_display, key, place)
+        return None
+    except places.PlaceUnavailable:
+        raise
+    except Exception as e:
+        logger.warning("place step failed for %s (%s): %s — pose kept without a place",
+                       character_name, key or "clear", e)
+        try:
+            places.release(character_name)
+        except Exception:
+            pass
+        return None
 
 
 def clear_pose_intent(character_name: str) -> None:
@@ -1894,23 +1927,26 @@ def clear_pose_intent(character_name: str) -> None:
     profile = get_character_profile(character_name) or {}
     if profile.get("pose_key") or profile.get("pose_flavor") or profile.get("place"):
         old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
+        old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
         profile["place"] = None          # the character stands up (§ 3.5)
         save_character_profile(character_name, profile)
-        _publish_activity_changed(character_name, "", old_display, "", None)
+        _publish_activity_changed(character_name, "", old_display, "", None, old_place)
 
 
 def _publish_activity_changed(character_name: str, pose: str, old_pose: str,
-                              pose_key: str, place: Optional[dict] = None) -> None:
+                              pose_key: str, place: Optional[dict] = None,
+                              old_place: Optional[dict] = None) -> None:
     """AV3D-3: push an activity change to the SSE state stream — carries the
     animation kind the worldmap would deliver, so a streaming client swaps
-    the figure's clip without waiting for its next poll. No-op when the
-    activity did not actually change. ``pose`` is the display text,
-    ``pose_key`` the catalog key the animation is resolved from, ``place``
-    the profile field the setter just assigned (``{"id", "slot",
-    "room_id"}``) or None — the client seats the figure from it."""
-    if pose == old_pose:
+    the figure's clip without waiting for its next poll. No-op when neither
+    the activity nor the place actually changed. ``pose`` is the display
+    text, ``pose_key`` the catalog key the animation is resolved from,
+    ``place`` the profile field the setter just assigned (``{"id", "slot",
+    "room_id"}``) or None — the client seats the figure from it, so a seat
+    change under an unchanged pose is an event too."""
+    if pose == old_pose and place == old_place:
         return
     try:
         from app.core.state_events import publish as _publish_state
