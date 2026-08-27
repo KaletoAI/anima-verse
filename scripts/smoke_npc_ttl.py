@@ -193,6 +193,23 @@ The branch fires ONLY for a temporary NPC and ONLY when the save carries
                 ([10c]) → the caller's 5 h stand: Day 11, 17:00.
       ``default`` is unchanged and stays proven by [12]'s Rook.
 
+ [19] THE MODE ALONE MAKES A SHEET PERMANENT, AND THE SWEEP HEALS IT.
+      ``npc_permanent`` is younger than the ``lifetime`` dropdown, so a sheet
+      made permanent before the flag existed carries the MODE and no flag —
+      and an older revive stamped exactly such a sheet with a fresh TTL, which
+      the sweep then read as a real lifetime. Every reader asks
+      ``npc_ops.is_permanent_npc`` now, so:
+
+        Ember   lifetime "permanent", NO npc_permanent key, expires_at
+                T0 − 3 600 s = 903 600 s = Day 11, 11:00 (an hour in the past,
+                so ``is_expired`` says True). ``sweep_expired_npcs`` leaves it
+                ALIVE (status "") and HEALS the sheet: expires_at "" and
+                npc_permanent True, so the admin list stops showing
+                "expires in …" beside "permanent". Pooling it would be a
+                one-way door — [16] proves ``take_from_pool`` skips it.
+        Ash     no mode, no flag, the SAME past stamp → pooled by that very
+                same sweep call (status "pooled"), unchanged behaviour.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_ttl.py
 """
 import os
@@ -617,6 +634,38 @@ check("revived", revive_from_pool(SORREL, "", ttl_hours=5), True)
 check("zero hours are no lifetime — the caller's TTL stands",
       (get_character_profile(SORREL) or {}).get("expires_at"),
       "Y0001-D011T17:00:00")
+
+# ---------------------------------------------------------------------------
+print("\n[19] the sweep heals a stale stamp on a mode-only permanent sheet")
+
+PAST = (T0 - GameDuration.of(hours=1)).canonical()
+check("the stale stamp is an hour in the past", PAST, "Y0001-D011T11:00:00")
+check("and the sweep would read it as expired", is_expired(PAST), True)
+
+EMBER = make_npc("Ember", ttl_hours=2)
+_ember = get_character_profile(EMBER) or {}
+# The sheet as an OLD profile looks on disk: the admin's dropdown decision,
+# and no flag at all — `apply_npc` never writes one, so nothing has to be
+# removed here.
+_ember.update({"lifetime": "permanent", "expires_at": PAST})
+save_character_profile(EMBER, _ember)
+check("the sheet carries the mode and no flag",
+      (_ember.get("lifetime"), "npc_permanent" in _ember),
+      ("permanent", False))
+
+ASH = make_npc("Ash", ttl_hours=2)
+_ash = get_character_profile(ASH) or {}
+_ash["expires_at"] = PAST
+save_character_profile(ASH, _ash)
+
+sweep_expired_npcs()
+_ember = get_character_profile(EMBER) or {}
+check("the permanent sheet is still alive", get_character_status(EMBER), "")
+check("its stale stamp is gone", _ember.get("expires_at"), "")
+check("and the derived flag was written onto it",
+      _ember.get("npc_permanent"), True)
+check("the mortal sheet with the same stamp went into the pool",
+      get_character_status(ASH), "pooled")
 
 # ---------------------------------------------------------------------------
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")

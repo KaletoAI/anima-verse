@@ -570,6 +570,16 @@ def sweep_expired_npcs() -> int:
     plan). An NPC without ``expires_at`` is never swept; it lives until an
     admin deletes it.
 
+    A PERMANENT sheet (:func:`is_permanent_npc`) is never swept EITHER, stamp
+    or no stamp — the lifetime decision outranks the stamp, and a sheet made
+    permanent before ``npc_permanent`` existed may still carry a stale one
+    that an older revive wrote onto it. Pooling it would be a one-way door
+    (``npc_pool.take_from_pool`` skips a permanent sheet), so the kept
+    character would quietly leave the world. The stale stamp is HEALED here
+    instead, the same way ``npc_pool.revive_from_pool`` heals it: the flag is
+    written and the stamp cleared, so the admin list stops showing
+    "expires in …" beside "permanent".
+
     ONE NPC IS LEFT ALONE: the one an avatar is talking to right now — the
     same rule ``sweep_closed_windows`` uses (``npc_actions._in_chat``, the
     AgentLoop's HOT window), so a lifetime never runs out mid-sentence. It
@@ -577,12 +587,24 @@ def sweep_expired_npcs() -> int:
     """
     from app.core.npc_actions import _in_chat
     from app.core.npc_pool import pool_npc
-    from app.models.character import get_character_profile, list_temporary_npcs
+    from app.models.character import (get_character_profile,
+                                      list_temporary_npcs,
+                                      save_character_profile)
 
     removed = 0
     for name in list_temporary_npcs():
         try:
             profile = get_character_profile(name) or {}
+            if is_permanent_npc(profile):
+                if (profile.get("expires_at")
+                        or not profile.get("npc_permanent")):
+                    profile["npc_permanent"] = True
+                    profile["expires_at"] = ""
+                    save_character_profile(name, profile)
+                    logger.info("Sweep: '%s' is permanent — the stale TTL is "
+                                "cleared and the flag written, not pooled",
+                                name)
+                continue
             if not is_expired(str(profile.get("expires_at") or "")):
                 continue
             if _in_chat(name):
