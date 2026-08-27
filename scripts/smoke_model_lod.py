@@ -5,9 +5,9 @@ No server, no Blender, no real world: a throwaway storage directory in /tmp
 holds the stores (with a throwaway world.db for the location records), and
 every Blender stage of the ingest — ``refine.build_static_lod`` above all, the
 surface bake of spec-surface-height § 5 included — is REPLACED by a fake that
-records its calls and hands back a stub blob. What is
-checked is therefore the STORE semantics around the reduction; the Blender
-step itself has its own smokes (``smoke_blender_*``).
+records its calls and hands back a stub blob. What is checked is therefore the
+STORE semantics around the reduction; the Blender step itself has its own
+smokes (``smoke_blender_*``).
 
 Expected behaviour, derived from the design decisions of
 ``development_instructions/done/plan-distance-mesh-props-dioramen.md``:

@@ -411,6 +411,15 @@ _lock = threading.Lock()
 _generating: set = set()
 # Props whose distance mesh is being built right now (one build per prop).
 _lod_building: set = set()
+# Props whose walking surface is being baked right now (spec-surface-height
+# § 5). The bake writes a file per variant under the PROP's orientation fix, so
+# two runs on one prop would race for the same files and the loser's rotation
+# on disk makes every reader reject the lattice.
+_surface_building: set = set()
+# Props asked for again WHILE their bake was running, and whether that request
+# wanted a forced bake. Dropping such a request would lose exactly the fix the
+# admin just dialled, so the running job takes one more turn instead.
+_surface_dirty: Dict[str, bool] = {}
 # Props whose distance-mesh build FAILED in this process. The automatic path
 # skips them from then on: the demand comes from payload builds, so without
 # this memory every poll would start the same doomed reduction again. The
@@ -2167,15 +2176,25 @@ def surface_status_for(prop_id: str, variant: Any = None) -> Dict[str, Any]:
 
 
 def bake_surfaces(prop_id: str, variant: Any = None, *,
-                  background: bool = False) -> None:
+                  background: bool = False, force: bool = False) -> None:
     """Bring one variant's walking surface up to date — ``variant=None`` every
     ACTIVE one (spec-surface-height § 5).
 
     Baked is exactly the file :func:`surface_for` reads back, so what the
     lattice describes is what the payload ships. A surface that is already
-    valid for this file and fix is left alone: re-baking it would cost a
-    Blender run per variant for a result byte-identical to the stored one.
-    Nothing is reported back — a missing surface is a legal state.
+    valid for its file and fix is left alone: re-baking it would cost a Blender
+    run per variant for a result identical to the stored one, an all-``null``
+    lattice included. ``force`` bypasses that skip — it is the admin's "Bake
+    surface" button (§ 8), which must do something visible. Nothing is reported
+    back: a missing surface is a legal state.
+
+    ONE bake per PROP at a time, synchronous and background callers alike: the
+    fix is the prop's, so two runs would write the same variant files, and the
+    loser's rotation on disk means every reader rejects the lattice and the
+    prop silently walks on terrain. A request arriving mid-bake is not dropped
+    but REMEMBERED — the running job takes one more turn, over EVERY active
+    variant (a superset of whatever that call asked for; the validity guard
+    makes the untouched ones free).
 
     SYNCHRONOUS by default: the generation chain calls it from its own worker,
     which already runs Blender step by step (``attach_measurement``), so one
@@ -2186,37 +2205,77 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
     """
     from app.core.model_surface import bake_surface, forget_surfaces, read_surface
     pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    if not meta:
+    if not pid:
         return
-    # Manually active, NOT effectively active: a variant that is out of season
-    # right now still renders in its own season, and a lattice is baked from
-    # the mesh, not from the calendar.
-    indices: List[Any] = ([variant] if variant is not None
-                          else list(_active_indices(_variant_list(meta))))
+    with _lock:
+        if pid in _surface_building:
+            _surface_dirty[pid] = _surface_dirty.get(pid, False) or force
+            return
+        _surface_building.add(pid)
+        _surface_dirty.pop(pid, None)
 
     def _work() -> None:
-        baked = False
+        run_force = force
+        # None = every active variant; a re-run always widens to that.
+        only: Optional[List[Any]] = [variant] if variant is not None else None
         try:
-            for idx in indices:
-                mp = model_path(prop_id, variant=idx)
-                if not mp or read_surface(mp, meta.get("rotation")):
-                    continue
-                if bake_surface(mp, meta.get("rotation"), wait_s=300):
-                    baked = True
-        except Exception as e:                              # noqa: BLE001
-            # A landing calls this in its own worker: a surface that fails to
-            # bake must not cost the prop its measurement.
-            logger.warning("Prop %s: surface bake failed: %s", pid, e)
-        if baked:
-            # A prop stands in many locations, so the walk gate's per-location
-            # cache (5 s) is dropped WHOLESALE — the prop does not know where
-            # it is placed, and a stale metre is worse than one recomposition.
-            forget_surfaces()
+            while True:
+                # The sidecar is read HERE, inside the job: the fix that is
+                # current when Blender starts is the one the lattice records,
+                # not the one that stood when this call was made.
+                meta = read_sidecar(pid)
+                # Manually active, NOT effectively active: a variant that is
+                # out of season right now still renders in its season, and a
+                # lattice is baked from the mesh, not from the calendar.
+                indices = (only if only is not None
+                           else list(_active_indices(_variant_list(meta))))
+                baked = False
+                for idx in (indices if meta else []):
+                    try:
+                        mp = model_path(pid, variant=idx)
+                        if not mp:
+                            continue
+                        if not run_force and read_surface(mp, meta.get("rotation")):
+                            continue
+                        if bake_surface(mp, meta.get("rotation"), wait_s=300):
+                            baked = True
+                    except Exception as e:                  # noqa: BLE001
+                        # Per VARIANT: one mesh that cannot be baked must cost
+                        # neither the other variants their surface nor — on the
+                        # synchronous path — the prop its measurement.
+                        logger.warning("Prop %s: surface bake failed for "
+                                       "variant %s: %s", pid, idx, e)
+                if baked:
+                    # A prop stands in many locations, so the walk gate's
+                    # per-location cache (5 s) is dropped WHOLESALE — the prop
+                    # does not know where it is placed, and a stale metre is
+                    # worse than one recomposition.
+                    forget_surfaces()
+                with _lock:
+                    if pid not in _surface_dirty:
+                        # Released and marked done in ONE critical section, so
+                        # a request arriving now starts its own job instead of
+                        # writing into a dirty flag nobody reads again.
+                        _surface_building.discard(pid)
+                        return
+                    run_force = _surface_dirty.pop(pid)
+                    only = None
+        finally:
+            # Safety net for what the loop's own guard cannot catch; a no-op on
+            # the ordinary way out.
+            with _lock:
+                _surface_building.discard(pid)
 
     if background:
-        threading.Thread(target=_work, daemon=True,
-                         name=f"prop-surface-{pid}").start()
+        try:
+            threading.Thread(target=_work, daemon=True,
+                             name=f"prop-surface-{pid}").start()
+        except RuntimeError:
+            # A refused thread start gives the key back — otherwise this prop
+            # would never be baked again in this process.
+            with _lock:
+                _surface_building.discard(pid)
+                _surface_dirty.pop(pid, None)
     else:
         _work()
 

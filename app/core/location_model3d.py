@@ -71,8 +71,15 @@ _lod_building: set = set()
 # problem (Blender missing, mesh broken) — fix it and press the button again.
 _lod_failed: set = set()
 # Subjects ("<owner>:<room_id>") whose walking surface is being baked right
-# now — one bake per gallery at a time (spec-surface-height § 5).
+# now — one bake per gallery at a time (spec-surface-height § 5). Two writers
+# on one lattice file is the failure that matters: the LOSER's rotation would
+# end up on disk, every reader would reject it, and the room would silently
+# fall back to terrain.
 _surface_building: set = set()
+# Subjects asked for again WHILE their bake was running, and whether that
+# request wanted a forced bake. Dropping such a request would lose exactly the
+# fix the admin just dialled, so the running job takes one more turn instead.
+_surface_dirty: Dict[str, bool] = {}
 
 
 def _stem(room_id: str = "") -> str:
@@ -1004,15 +1011,22 @@ def request_low_tier(location_id: str, room_id: str = "",
                 _lod_building.discard(key)
 
 
-def request_surface(location_id: str, room_id: str, *, owner: str = "") -> None:
+def request_surface(location_id: str, room_id: str, *, owner: str = "",
+                    force: bool = False) -> None:
     """Bake the ROOM's active full model walking surface in the BACKGROUND
     (spec-surface-height § 5).
 
     Rooms only: a building's walkable surface is out of scope (decision 1), and
-    a subject without a room id is a building. One bake per gallery at a time —
+    a subject without a room id is a building. ONE bake per gallery at a time —
     the in-flight key is taken BEFORE the thread starts (``request_low_tier``'s
-    pattern), so two landings in the same second do not run Blender twice on
-    the same model.
+    pattern). A request that arrives while that bake runs is not dropped but
+    REMEMBERED: the job takes one more turn afterwards, so the fix the admin
+    dialled mid-bake is the one that ends up on disk.
+
+    A surface that is already valid for its file and fix is left alone — a
+    re-bake would cost a Blender run for a result identical to the stored one,
+    an all-``null`` lattice included. ``force`` bypasses that skip: it is the
+    admin's "Bake surface" button (§ 8), which must do something visible.
 
     ``owner`` is the gallery owner (clones share their template's gallery); a
     caller that just resolved it hands it in. Nothing is reported back: a
@@ -1026,27 +1040,43 @@ def request_surface(location_id: str, room_id: str, *, owner: str = "") -> None:
     key = f"{owner}:{room_id}"
     with _lock:
         if key in _surface_building:
+            _surface_dirty[key] = _surface_dirty.get(key, False) or force
             return
         _surface_building.add(key)
+        _surface_dirty.pop(key, None)
 
     def _work() -> None:
+        run_force = force
         try:
-            from app.core.model_surface import (bake_surface, forget_surfaces,
-                                                read_surface)
-            src = _gallery(owner, room_id).find(DEFAULT_TIER, fallback=False)
-            rot = read_sidecar(src).get("rotation") if src else None
-            # A surface that is already valid for this file and fix is left
-            # alone — re-baking it would cost a Blender run for a result
-            # identical to the stored one, an all-``null`` lattice included.
-            if src and not read_surface(src, rot):
-                bake_surface(src, rot, wait_s=300)
-                # The walk gate caches a location's lattices for 5 s — without
-                # this the server would keep the old floor after the bake.
-                forget_surfaces(location_id)
-        except Exception as e:                              # noqa: BLE001
-            logger.warning("Location model %s/%s: surface bake failed: %s",
-                           owner, room_id, e)
+            while True:
+                try:
+                    from app.core.model_surface import (bake_surface,
+                                                        forget_surfaces,
+                                                        read_surface)
+                    # Model AND fix are read HERE, inside the thread: what is
+                    # current when Blender starts is what the lattice records.
+                    src = _gallery(owner, room_id).find(DEFAULT_TIER,
+                                                        fallback=False)
+                    rot = read_sidecar(src).get("rotation") if src else None
+                    if src and (run_force or not read_surface(src, rot)):
+                        bake_surface(src, rot, wait_s=300)
+                        # The walk gate caches a location's lattices for 5 s —
+                        # without this the server would keep the old floor.
+                        forget_surfaces(location_id)
+                except Exception as e:                      # noqa: BLE001
+                    logger.warning("Location model %s/%s: surface bake "
+                                   "failed: %s", owner, room_id, e)
+                with _lock:
+                    if key not in _surface_dirty:
+                        # Released and marked done in ONE critical section, so
+                        # a request arriving now starts its own thread instead
+                        # of writing into a dirty flag nobody reads again.
+                        _surface_building.discard(key)
+                        return
+                    run_force = _surface_dirty.pop(key)
         finally:
+            # Safety net for what the inner guard cannot catch; a no-op on the
+            # ordinary way out.
             with _lock:
                 _surface_building.discard(key)
 
@@ -1058,6 +1088,7 @@ def request_surface(location_id: str, room_id: str, *, owner: str = "") -> None:
         # would never be baked again in this process.
         with _lock:
             _surface_building.discard(key)
+            _surface_dirty.pop(key, None)
 
 
 def _demand_low(location_id: str, room_id: str, tiers: Any,
