@@ -16,7 +16,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 from app.core.timeutils import utc_now_iso
 
@@ -171,10 +171,13 @@ def surface_scale(surface: Dict[str, Any], spec: Dict[str, Any]) -> float:
 
 
 def surface_height_at(surface: Dict[str, Any], spec: Dict[str, Any],
-                      x: float, z: float) -> Optional[float]:
+                      x: float, z: float, lift: float = 0.0) -> Optional[float]:
     """Standing height (tile-local metres) of placement ``spec`` at (x, z), or
     None where the lattice does not answer. The exact inverse of
     placeModelSpec — see spec § 6.2; the TS twin is surfaceHeightAt.
+
+    ``lift`` is the storey-0 terrain lift the placement was moved by after
+    placement (§ A16.9): the lattice stands where its model stands.
 
     The bake's outermost lattice ring is cast 1 mm inside the box but read at
     its nominal node coordinate, so when the box extent is not a whole multiple
@@ -219,18 +222,25 @@ def surface_height_at(surface: Dict[str, Any], spec: Dict[str, Any],
     top = a + (b - a) * fu
     bot = cc + (d - cc) * fu
     val = top + (bot - top) * fv
-    return float(spec.get("bottom_y") or 0.0) + s * val / 100.0
+    return float(spec.get("bottom_y") or 0.0) + float(lift) + s * val / 100.0
 
 
-def highest_surface_at(specs: Iterable[Dict[str, Any]],
-                       x: float, z: float) -> Optional[float]:
-    """The highest answering surface among placement specs carrying one."""
+def highest_surface_at(specs: Iterable[Dict[str, Any]], x: float, z: float,
+                       lift_of: Optional[Callable[[Dict[str, Any]], float]] = None
+                       ) -> Optional[float]:
+    """The highest answering surface among placement specs carrying one.
+
+    ``lift_of`` names the § A16.9 terrain lift of ONE spec; without it every
+    placement is read on its composed ``bottom_y`` (lift 0). The caller owns
+    that number — the recipe composes the specs, the ground field lifts them.
+    """
     best: Optional[float] = None
     for spec in specs:
         surface = spec.get("surface")
         if not surface:
             continue
-        y = surface_height_at(surface, spec, x, z)
+        y = surface_height_at(surface, spec, x, z,
+                              lift_of(spec) if lift_of else 0.0)
         if y is not None and (best is None or y > best):
             best = y
     return best

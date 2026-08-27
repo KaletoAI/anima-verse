@@ -67,6 +67,16 @@ function reliftPlacement(tile: Tile, rec: PlacedSceneModel): number {
                                   tile.center.y, worldGroundSampler());
   if (rec.object && step.delta) rec.object.position.y += step.delta;
   rec.lift = step.lift;
+  // THE BAKED LATTICE COMES ALONG (v6): it describes where the model stands,
+  // so the one funnel that moves the model moves it too — mount, re-drape and
+  // tier swap alike. Only for a placement that actually stands: a spec whose
+  // mesh never loaded keeps its entry on the composed height the payload
+  // states. The entry is found ONCE by spec identity and then held on the
+  // record, so a redrape does not search again.
+  if (rec.object && rec.spec.surface) {
+    if (!rec.surface) rec.surface = tile.surfaces.find((e) => e.spec === rec.spec);
+    if (rec.surface) rec.surface.lift = step.lift;
+  }
   return step.lift;
 }
 
@@ -831,9 +841,13 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   tile.walkPlates = [];
   // The BAKED SURFACES (v6): collected synchronously from the payload, before
   // any model has loaded — the figure stands right when the scene arrives.
+  // `lift` starts at 0 and is written by `reliftPlacement` once the placement
+  // is on its ground; an entry whose mesh never loads keeps 0, which is the
+  // composed height the payload itself states.
   tile.surfaces = scene.models
     .filter((m) => m.surface)
-    .map((m) => ({ id: `${m.role}:${m.id}:${m.room_id ?? ''}`, spec: m, surface: m.surface! }));
+    .map((m) => ({ id: `${m.role}:${m.id}:${m.room_id ?? ''}`, spec: m, surface: m.surface!,
+                   lift: 0, level: m.level, roomId: m.room_id ?? '' }));
   for (const plate of scene.plates) {
     const mesh = buildPlate(THREE, plate, plateMaterial(plate, style));
     // THE FLOOR THE FIGURES STAND ON (§ B1 addendum 2026-08-20): every plate is
@@ -1204,16 +1218,18 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       return;
     }
     verify.placed += 1;
-    // clone:false — der Client uebergibt das Objekt zur Uebernahme (die
-    // Admin-Vorschau platziert dasselbe gecachte Objekt mehrfach und klont).
-    // clip:false — wir clippen unten selbst, in WELT-Koordinaten um das
-    // Kachelzentrum; die Spec traegt das Polygon relativ dazu.
+    // clone:false — the client hands the object over for good (the admin
+    // preview places the same cached object several times and clones it).
+    // clip:false — we clip below ourselves, in WORLD coordinates around the
+    // tile centre; the spec carries the polygon relative to it.
     const placed = placeModelSpec(THREE, source, spec,
                                   { clone: false, clip: false });
-    if (spec.surface) {
+    if (spec.surface && spec.measure !== 'fit') {
       // The one place a loader divergence Blender↔three would show: the
       // spec's scale (max_m over the BAKED snapped extent) against the scale
-      // place() derived from the mesh it actually loaded.
+      // place() derived from the mesh it actually loaded. A `fit` spec is out
+      // — it is fitted to an opening instead of scaled to `max_m`, so neither
+      // side of this comparison is the factor it applied.
       verify.check(`${spec.role}:${spec.id}`, 'surface_scale', placed.scale.x,
                    surfaceScale(spec.surface, spec));
     }

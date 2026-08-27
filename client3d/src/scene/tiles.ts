@@ -354,6 +354,12 @@ export interface PlacedSceneModel {
    *  difference needs the old value. 0 = no lift applied (a building model, a
    *  declared storey, a field that had nothing to say). */
   lift: number;
+  /** THIS PLACEMENT'S ENTRY IN `tile.surfaces` (v6), where it has a baked
+   *  lattice. Held here so the ONE funnel that lifts a placement
+   *  (`reliftPlacement`) writes the lift onto the lattice in the same move —
+   *  the surface stands where its model stands, and looking the entry up by a
+   *  key would only invite the two to drift. */
+  surface?: PlacedSurface;
   /** THE UNDERWATER GHOST of this placement (`scene/submergedGhost.ts`), or
    *  absent while the object has never been gated. A prop whose base stands
    *  under the local water level is redrawn tinted below the waterline, so a
@@ -584,13 +590,16 @@ export interface Tile {
    *  diorama and every `walkable` prop. RUNG 0 of `tileWalkY`, above the
    *  declaration: the highest lattice answering at the point wins (a crate on
    *  a rock). Built from the SPEC NUMBERS, never from three's matrices — the
-   *  spec decides, the renderer only re-measures. */
+   *  spec decides, the renderer only re-measures. Each entry carries its own
+   *  `lift` (§ A16.9, written by `reliftPlacement`), its `level` and its
+   *  `roomId`, because WHICH lattices may answer depends on who is asking:
+   *  the ground ladder takes storey 0, a room's stands take that room. */
   surfaces: PlacedSurface[];
-  /** Wand-Materialien je Etage (fürs Etagen-Umschalten). Liste, weil
-   *  texturierte Wände je Stück ein eigenes Material mit eigener repeat
-   *  brauchen (Szenen-Rezept) — der Legacy-Grundriss trägt genau eines ein. */
+  /** Wall materials per storey (for the storey switch). A list, because
+   *  textured walls need one material with its own repeat per piece (scene
+   *  recipe) — the legacy floor plan carries exactly one. */
   levelWallMats: Map<number, THREE.MeshStandardMaterial[]>;
-  /** aktuell gewählte Etage der Innenansicht (Umschalter; Default EG) */
+  /** Currently chosen storey of the interior view (switch; default ground) */
   levelFilter: number;
   /** Pull the in-world storey switch's display state out of `levelFilter`
    *  (its marking and its height). Whoever sets `levelFilter` from outside —
@@ -919,7 +928,7 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   const cx = inside ? inside.x : bx;
   const cz = inside ? inside.z : bz;
 
-  const floorAt = (lx: number, lz: number) => roomFloorWorldY(tile, floor, lx, lz);
+  const floorAt = (lx: number, lz: number) => roomFloorWorldY(tile, roomId, floor, lx, lz);
   const floorY = floorAt(cx, cz);
   // The centre, ONE instance under id AND name — the readers key by both.
   const centre = tileToWorld(tile, cx, cz, 0).setY(floorY + WALK_CLEARANCE_M);
@@ -984,24 +993,41 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   }
 }
 
+/**
+ * THE BAKED SURFACE under a tile-local point, in WORLD metres, or `null` where
+ * no lattice answers — the ONE place `tile.surfaces` is read (rung 0 of every
+ * ladder there is: the walking figure, a room's stands, the avatar indoors).
+ *
+ * `keep` says WHICH lattices may answer, and that is not a detail: the ground
+ * ladder takes storey 0 only, or a figure on an upper floor would be pulled
+ * onto the diorama below it; a room's stands take that room's own lattices on
+ * any storey. The clearance is NOT added here — every caller carries its own
+ * (`WALK_CLEARANCE_M` for a standing height, none for a floor number).
+ */
+export function bakedFloorAt(tile: Tile, lx: number, lz: number,
+                             keep: (e: PlacedSurface) => boolean): number | null {
+  if (!tile.surfaces.length) return null;
+  const baked = highestSurfaceAt(tile.surfaces.filter(keep), lx, lz);
+  return baked === null ? null : tile.center.y + baked;
+}
+
 /** The floor of ONE room at a tile-local point, in WORLD metres: the baked
  *  surface where one answers, else the payload's declaration where there is
  *  one, else the terrain. `NaN` from a sampler that has nothing to say reads
  *  as the tile's own datum — a room must not put its stands at no height.
  *
  *  RUNG 0 IS THE SAME SAMPLER `tileWalkY` asks, in the same order (ruling R1,
- *  spec-surface-height): a room's stands and the figure walking over them must
- *  come out on ONE floor (law 2026-08-20), so a spot on a diorama's hillock
- *  stands on the hillock. The `SPOT_FLAT_M` gate in `deriveRoomSpots` still
- *  keeps the room's stands together — a lattice cell that runs far away from
- *  the room's own floor drops out of the raster exactly as a climbing piece of
- *  terrain does. */
-function roomFloorWorldY(tile: Tile, floor: RoomFloor,
+ *  spec-surface-height) — but scoped to THIS ROOM's own lattices, on any
+ *  storey: a room's stands and the figure walking over them must come out on
+ *  ONE floor (law 2026-08-20), so a spot on a diorama's hillock stands on the
+ *  hillock, while the diorama of the room next door has no say here. The
+ *  `SPOT_FLAT_M` gate in `deriveRoomSpots` still keeps the room's stands
+ *  together — a lattice cell that runs far away from the room's own floor
+ *  drops out of the raster exactly as a climbing piece of terrain does. */
+function roomFloorWorldY(tile: Tile, roomId: string, floor: RoomFloor,
                          lx: number, lz: number): number {
-  if (tile.surfaces.length) {
-    const baked = highestSurfaceAt(tile.surfaces, lx, lz);
-    if (baked !== null) return tile.center.y + baked;
-  }
+  const baked = bakedFloorAt(tile, lx, lz, (e) => e.roomId === roomId);
+  if (baked !== null) return baked;
   if (floor.declared !== undefined) return tile.center.y + floor.declared;
   const w = tileToWorld(tile, lx, lz, 0);
   const y = worldGroundAt ? worldGroundAt(w.x, w.z) : NaN;
@@ -1033,14 +1059,18 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
  *
  * FOUR RUNGS, in this order:
  *
- *  0. THE BAKED SURFACES (`highestSurfaceAt`, spec-surface-height 2026-08-27):
+ *  0. THE BAKED SURFACES (`bakedFloorAt`, spec-surface-height 2026-08-27):
  *     a diorama's or a walkable prop's measured lattice — the highest one
  *     answering wins (a crate on a rock), and where none answers the ladder
  *     goes on. It outranks the declaration (ruling R1): `walk_y` was the
  *     stand-in for the measurement that did not exist; a crate above the
  *     declared floor forces the order anyway. No `plateCeiling` cap: the head
- *     room is baked in. The mesh ray of E5b is NOT back — this is DATA the
- *     server baked, not a measurement the renderer takes.
+ *     room is baked in. STOREY 0 ONLY, because this is the GROUND ladder —
+ *     outdoors, on a passable tile, in an always-visible zone; a figure on an
+ *     upper floor must never be pulled down onto the diorama below it (the
+ *     avatar indoors asks its own room instead, `main.roomFloorY`). The mesh
+ *     ray of E5b is NOT back — this is DATA the server baked, not a
+ *     measurement the renderer takes.
  *  1. A ROOM'S DECLARATION (`declaredFloorAt`, user finding 2026-08-20,
  *     Mondhütte). A room whose diorama spec carries a `walk_y_world` states
  *     where its own modelled floor is — a podium, a sunken lounge, a hut
@@ -1064,18 +1094,16 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
  */
 function tileWalkY(tile: Tile, at: THREE.Vector3): number {
   const lift = tile.center.y;
-  if (tile.surfaces.length) {
-    const local = worldToTile(tile, at.x, at.z);
-    const baked = highestSurfaceAt(tile.surfaces, local.x, local.z);
-    if (baked !== null) return tile.center.y + baked + WALK_CLEARANCE_M;
-  }
+  // ONE turn into the tile's frame for all three data rungs — they ask about
+  // the same point, and turning it three times only invited them to drift.
+  const local = worldToTile(tile, at.x, at.z);
+  const baked = bakedFloorAt(tile, local.x, local.z, (e) => e.level === 0);
+  if (baked !== null) return baked + WALK_CLEARANCE_M;
   if (tile.declaredFloors.length) {
-    const local = worldToTile(tile, at.x, at.z);
     const declared = declaredFloorAt(tile.declaredFloors, local.x, local.z);
     if (declared !== null) return tile.center.y + declared + WALK_CLEARANCE_M;
   }
   if (tile.walkPlates.length) {
-    const local = worldToTile(tile, at.x, at.z);
     const info: GroundModelInfo = {
       display: tile.modelIsGround ? 'ground'
         : tile.modelIsShellArea ? 'shell_area' : 'shell',

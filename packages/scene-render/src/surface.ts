@@ -12,6 +12,10 @@
  * +centre into the lattice, and the lattice's centimetres over `box_min.y`
  * scale straight onto `bottom_y`.
  *
+ * `lift` is the storey-0 terrain lift the placement was moved by AFTER
+ * `place()` seated it (§ A16.9, `reliftPlacement`) — the lattice stands where
+ * its model stands, so whoever moved the model hands the same number in here.
+ *
  * Pure: no three, no scene state. Answers null wherever the lattice does not
  * — outside its extent or next to a null node — so the caller's next rung
  * (the declaration, the plates, the terrain) has the floor there.
@@ -30,6 +34,16 @@ export interface PlacedSurface {
   id: string
   spec: SurfacePlacement
   surface: SceneSurface
+  /** The § A16.9 terrain lift this placement carries right now (0 until it has
+   *  been placed). Kept on the entry, not re-derived: the mount, the re-drape
+   *  and the tier swap all move the model through one funnel. */
+  lift: number
+  /** Storey of the placement (`spec.level`) — a ground ladder must not pull a
+   *  figure onto the lattice of another floor. */
+  level: number
+  /** Room the placement belongs to (`spec.room_id`, `''` for none) — a room's
+   *  own stands ask only its own lattices. */
+  roomId: string
 }
 
 function extentOf(surface: SceneSurface, measure: string): number {
@@ -50,7 +64,7 @@ export function surfaceScale(surface: SceneSurface, spec: SurfacePlacement): num
  *  of `step` the last ring's value extrapolates outward over up to one step of
  *  ground the model does not cover. */
 export function surfaceHeightAt(surface: SceneSurface, spec: SurfacePlacement,
-                                x: number, z: number): number | null {
+                                x: number, z: number, lift = 0): number | null {
   const s = surfaceScale(surface, spec)
   const cx = (surface.box_min[0] + surface.box_max[0]) / 2
   const cz = (surface.box_min[2] + surface.box_max[2]) / 2
@@ -79,14 +93,16 @@ export function surfaceHeightAt(surface: SceneSurface, spec: SurfacePlacement,
   const top = a + (b - a) * fu
   const bot = cc + (d - cc) * fu
   const val = top + (bot - top) * fv
-  return (spec.bottom_y || 0) + (s * val) / 100
+  return (spec.bottom_y || 0) + lift + (s * val) / 100
 }
 
-/** The highest answering surface of a list (a crate on a rock), or null. */
+/** The highest answering surface of a list (a crate on a rock), or null. Each
+ *  entry is sampled with ITS OWN lift — two placements on a slope stand at
+ *  different heights even when their specs were composed against one datum. */
 export function highestSurfaceAt(list: readonly PlacedSurface[], x: number, z: number): number | null {
   let best: number | null = null
   for (const p of list) {
-    const y = surfaceHeightAt(p.surface, p.spec, x, z)
+    const y = surfaceHeightAt(p.surface, p.spec, x, z, p.lift)
     if (y !== null && (best === null || y > best)) best = y
   }
   return best

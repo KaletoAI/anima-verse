@@ -40,7 +40,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, buildTile, footprintCentre, redatumTile, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintCentre, redatumTile, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -49,6 +49,7 @@ import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, reliftScene, SceneLibrary, setSceneModelTier,
   unmountScene } from './scene/sceneRecipe';
+import { WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { figureTransition, placementOf, type ShownPlacement } from './game/placement';
 import { seededRandom } from './scene/textures';
@@ -3442,7 +3443,7 @@ async function startApp(username: string, role: string) {
     // Marker height from the same source the walking uses: the room floor
     // where the avatar's room reaches, the ground skin everywhere else.
     npcs.setWalkTarget(new THREE.Vector3(goal.x,
-      roomFloorY(tileAt(goal.x, goal.z)) ?? groundY(goal.x, goal.z), goal.z));
+      roomFloorY(tileAt(goal.x, goal.z), goal.x, goal.z) ?? groundY(goal.x, goal.z), goal.z));
     return true;
   };
 
@@ -3616,7 +3617,7 @@ async function startApp(username: string, role: string) {
       routeStalled = walkStalled(from, { x, z }) ? routeStalled + 1 : 0;
       if (routeStalled >= STALL_FRAMES) cancelRoute();
     }
-    walkGoal.set(x, roomFloorY(here) ?? groundY(x, z), z);
+    walkGoal.set(x, roomFloorY(here, x, z) ?? groundY(x, z), z);
     npcs.setPlayerTarget(avatarName, walkGoal, pace);
     // The report is about where the figure IS, not where it is being sent:
     // `setPlayerTarget` only moves the goal, `tick()` walks the figure there.
@@ -3806,11 +3807,21 @@ async function startApp(username: string, role: string) {
    * this used to have to argue against ("Zur Rosinante": the ray hit the
    * tavern's ROOF at ~0.6…0.9 m instead of its floor, and the avatar walked
    * over the houses) is deleted from the ladder altogether.
+   *
+   * AND THE POINT MATTERS SINCE v6 (spec-surface-height): the room's centre is
+   * ONE number, so an interior diorama with a relief would have been sampled
+   * at its middle and nowhere else — the avatar would walk through the hillock
+   * the NPCs stand on. So the room's own baked lattices are asked AT (x, z)
+   * first, exactly as `deriveRoomSpots` asks them per stand; the centre stays
+   * as the answer wherever no lattice covers the point.
    */
-  function roomFloorY(tile: Tile | null): number | null {
+  function roomFloorY(tile: Tile | null, x: number, z: number): number | null {
     if (!tile?.isBuilding) return null;
     const room = avatarRoomId(tile);
     if (!room || tile.alwaysVisibleRooms.has(room)) return null;
+    const local = worldToTile(tile, x, z);
+    const baked = bakedFloorAt(tile, local.x, local.z, (e) => e.roomId === room);
+    if (baked !== null) return baked + WALK_CLEARANCE_M;
     return tile.roomCenters.get(room)?.y ?? null;
   }
 

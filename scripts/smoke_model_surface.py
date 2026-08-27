@@ -57,9 +57,14 @@ P3: like P1 but yaw_deg 0, so l = q
   H  (4,-3) on S1 with `values` truncated to four entries [0,100,200,0]: A's corner
      indices are 4, 5, 7, 8 — all past the end -> no node -> null. A corrupt sidecar
      reads as a hole (terrain takes over), in Python as in TS, never as an error.
+  I  (4,-3) = A with the § A16.9 terrain LIFT 0.75 the placement was moved by after
+     placement: the lattice stands where its model stands, so the whole answer moves
+     with it -> 2.5 + 0.75 = 3.25. Lift 0 reproduces A exactly.
 Highest: [S1@P1, S1@P1 with bottom_y 1.0] at A -> max(2.5, 3.0) = 3.0
          [S1@P1, S1@P1 with bottom_y 1.0] at D -> both null -> null
          [S1@P1, S2] where S2 = S1 with values all null -> A -> 2.5
+         lift_of per spec: [S1@P1 lift 0.75, S1@P1 lift 0] at A -> max(3.25, 2.5) =
+         3.25, and without lift_of the same pair reads 2.5 — the caller owns the lift.
 C and G sample v = 0 on purpose: a point at v = 1 sits in the cell spanning rows
 j=1..2, which touches the null node (0,2) and is therefore null by design (D). The
 bilinear reading is tested one row of nodes away from that hole, at the same u = 0.75.
@@ -256,12 +261,24 @@ def part2():
     check("G yaw 0", near(h(S1, p3, 3.5, -5), 2.0, 1e-6), str(h(S1, p3, 3.5, -5)))
     short = dict(S1, values=[0, 100, 200, 0])
     check("H truncated values", h(short, P1, 4, -3) is None)
+    check("I lift 0.75 = 3.25", near(h(S1, P1, 4, -3, 0.75), 3.25, 1e-6),
+          str(h(S1, P1, 4, -3, 0.75)))
+    check("I lift 0 = A", near(h(S1, P1, 4, -3, 0.0), 2.5, 1e-6))
     lifted = dict(P1, bottom_y=1.0)
     both = [dict(P1, surface=S1), dict(lifted, surface=S1)]
     check("highest at A = 3.0", near(highest_surface_at(both, 4, -3), 3.0, 1e-6))
     check("highest at D = None", highest_surface_at(both, 5, -2) is None)
     blank = dict(S1, values=[None] * 9)
     check("highest skips all-null", near(highest_surface_at([dict(P1, surface=S1), dict(P1, surface=blank)], 4, -3), 2.5, 1e-6))
+    # lift_of names ONE spec's lift — the pair below is the same spec twice, so
+    # the callable keys on identity, exactly as the client keys on its entry.
+    a = dict(P1, surface=S1)
+    b = dict(P1, surface=S1)
+    lifts = {id(a): 0.75, id(b): 0.0}
+    check("highest with lift_of = 3.25",
+          near(highest_surface_at([a, b], 4, -3, lambda s: lifts[id(s)]), 3.25, 1e-6))
+    check("highest without lift_of = 2.5",
+          near(highest_surface_at([a, b], 4, -3), 2.5, 1e-6))
 
 
 def main():
