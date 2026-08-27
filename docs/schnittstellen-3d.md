@@ -7089,8 +7089,9 @@ Nur **Raum-Props** (`app/core/props.py`) haben Slots. Map-Props
 
 Ein Prop aus einem **Content-Pack** bringt seine `slots` im mitkopierten
 `sidecar.json` mit (`content_io.export_prop_to_zip` / der Prop-Import kopieren
-das Verzeichnis unverändert). Erkannt wird nur beim **Erzeugen** des Modells,
-nicht beim Import — wer ein Prop zum Teilen baut, benennt die füllbaren
+das Verzeichnis unverändert). Erkannt wird nur, wenn ein **Mesh landet**
+(Upload oder Generierung), nie beim Import — wer ein Prop zum Teilen baut,
+benennt die füllbaren
 Materialien also schon im Mesh nach dieser Konvention oder pflegt die Liste vor
 dem Export im Prop-Editor.
 
@@ -7101,9 +7102,23 @@ Normalisierung (`normalize.py`) fassen `bpy.data.materials` nicht an, der
 glTF-Import/Export von Blender reicht den Namen durch. Die **eine** Ausnahme
 ist der Vertex-Farben-Bake (`bake_vc.py`): er leert die Materialliste des
 Objekts und legt `baked_vc_mat_<i>` an. Deshalb liest die Erkennung erst
-**nach** allen Veredelungsschritten desselben Ingests (`props._store_bbox`:
-bake → retexture → LOD → Slots → Messung). Betroffen sind ohnehin nur
+**nach** den Veredelungsschritten desselben Ingests. Betroffen sind ohnehin nur
 Vertex-Farben-Meshes, die gar keine benannten Flächen mitbringen.
+
+Gelesen wird auf **beiden** Landewegen eines Meshes — es gibt keinen
+gemeinsamen Trichter:
+
+| Weg | Auslöser | Reihenfolge |
+|---|---|---|
+| `props._store_bbox` | Upload, Galerie-Auswahl, gelöschtes Mesh, gelöschte Variante | bake → retexture → LOD → **Slots** → Messung |
+| `props._generate` | die img2mesh-Kette (der Normalfall) | `select` → Sidecar-Schreibung mit `bbox` → **Slots** |
+
+`_generate` wählt und misst inline und kommt **nicht** durch `_store_bbox` —
+ein Nachbearbeitungsschritt muss in beide Blöcke (Befund 2026-08-27: die
+Erkennung stand nur in `_store_bbox` und feuerte für ein GENERIERTES Prop nie).
+Die Verkleinerungswege (`_shrink`, `_reduce_to_low`, `_store_lod_stages`)
+brauchen keinen eigenen Aufruf: sie wählen ausschließlich in die Stufe `low`,
+gelesen werden die Slots aber am `full`-Mesh (`model_path(prop_id)`).
 
 Im Datensatz (`props._prop_record`, immer vorhanden):
 
@@ -7112,11 +7127,19 @@ Im Datensatz (`props._prop_record`, immer vorhanden):
 | `slots: [{name, kind}]` | die füllbaren Flächen; `[]` = keine. Auch auf dem schlanken Record — die Szene gleicht dagegen ab |
 | `slots_auto: true\|false` | nur im vollen Record: `true` = aus den Materialnamen gelesen (der Editor zeigt „detected"), `false` = von Hand gepflegt |
 
-Gefüllt wird `slots` **nur, solange niemand sie von Hand gesetzt hat**: ein
-`POST /world/props/{id}` mit `slots` (oder der Batch-Save) speichert die Liste
-und setzt `slots_auto` auf `false` — ab da fasst kein weiteres Modell sie an,
-auch eine **geleerte** Liste nicht (alle Slots löschen ist auch eine
-Entscheidung). Eine kaputte Liste ist ein 400, kein stilles Verwerfen.
+Solange `slots_auto` **nicht** `false` ist, wird die Liste bei **jedem**
+landenden Mesh **neu erkannt** — ein neu generiertes Modell bringt seine
+eigenen Flächen mit, statt die des Vorgängers hinter dem Abzeichen „detected"
+stehen zu lassen; ein **leeres** Ergebnis zählt genauso (das neue Modell nennt
+dann wirklich keine füllbare Fläche). Ein Ergebnis, das dem Gespeicherten
+gleicht, schreibt nichts, und ein unlesbares Mesh ändert nichts — nur ein
+POSITIVER Befund.
+
+Sobald jemand sie **von Hand setzt**, ist Schluss: ein `POST /world/props/{id}`
+mit `slots` (oder der Batch-Save) speichert die Liste und setzt `slots_auto`
+auf `false` — ab da fasst kein weiteres Modell sie an, auch eine **geleerte**
+Liste nicht (alle Slots löschen ist auch eine Entscheidung). Eine kaputte Liste
+ist ein 400, kein stilles Verwerfen.
 
 ### Grenzen (bewusst)
 
@@ -7143,5 +7166,7 @@ Entscheidung). Eine kaputte Liste ist ein 400, kein stilles Verwerfen.
 | Materialnamen aus dem GLB (`materials[].name`, Header + JSON-Chunk) | `scripts/smoke_props_slots.py` **[1]** |
 | `detect_slots`: Präfix, feste Liste, Groß/Klein, Dedup, Reihenfolge — plus rote Probe („glasses", „slots_x", „picture_frame") | ebenda **[2]** |
 | Erkennung läuft beim Modell-Eintreffen NACH bake/retexture/LOD; Record trägt `slots` + `slots_auto true` | ebenda **[3]** |
+| …und auf der GENERATIONS-Kette, die `_store_bbox` überspringt (img2mesh-Dienst gefälscht) | ebenda **[3b]** |
+| Ein neues Mesh ERSETZT eine Auto-Liste — auch mit leerem Ergebnis | ebenda **[3c]** |
 | Patch-Pfad weist kaputte Listen ab und schreibt dabei nichts; gespeicherte Liste ist klein und dedupliziert | ebenda **[4]** |
 | Von Hand gepflegte (auch geleerte) Liste überlebt das nächste Modell | ebenda **[5]** |

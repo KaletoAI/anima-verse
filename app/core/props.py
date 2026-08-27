@@ -967,7 +967,9 @@ def detect_slots(material_names: Any) -> List[Dict[str, str]]:
     for raw in (material_names or []):
         key = str(raw or "").strip().lower()
         if key.startswith(SLOT_PREFIX):
-            name = key[len(SLOT_PREFIX):]
+            # Stripped AGAIN behind the prefix: "slot_ poster" is a modeller's
+            # typo, not a slot called " poster" that nothing would ever match.
+            name = key[len(SLOT_PREFIX):].strip()
         elif key in BARE_SLOT_NAMES:
             name = key
         else:
@@ -1010,22 +1012,27 @@ def sanitize_slots(raw: Any) -> List[Dict[str, str]]:
 
 
 def _autofill_slots(prop_id: str) -> None:
-    """Read the texture slots off the PRIMARY variant's mesh — once.
+    """Re-read the texture slots off the PRIMARY variant's mesh.
 
-    Called from :func:`_store_bbox`, i.e. AFTER the Blender steps of the same
-    ingest: the vertex-colour bake replaces every material name with one of its
-    own, so a list read before it would describe a file that no longer exists.
-    The other refinement steps (re-encode, reduction, normalisation) never touch
-    a material name.
+    Called from EVERY path on which a mesh lands: :func:`_store_bbox` (upload,
+    gallery selection, a deleted mesh) and the generation chain's own landing
+    block (:func:`_generate`). Always AFTER the refinement of the same ingest —
+    the vertex-colour bake replaces every material name with one of its own, so
+    a list read before it would describe a file that no longer exists. The
+    other steps (re-encode, reduction, normalisation) never touch a material
+    name. The shrink paths need no call: they only ever select into the ``low``
+    tier, and the slots are read off the FULL mesh.
 
-    Fills only a record that has NO slots and was never edited by hand
-    (``slots_auto`` False is the admin's signature, an empty list included) —
-    and writes nothing at all when the model names no slot, so the ordinary
-    prop costs no extra sidecar write.
+    An AUTO list is RE-DETECTED, so a regenerated model brings its own
+    surfaces instead of leaving the previous mesh's list behind a "detected"
+    badge — an emptied result included. A list the admin has stored
+    (``slots_auto`` False) is never touched again, an empty one included:
+    deleting every slot is a decision too. A result equal to what is stored
+    writes nothing, so the ordinary prop costs no extra sidecar write.
     """
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
-    if not meta or meta.get(SLOTS_AUTO_KEY) is False or meta.get(SLOTS_KEY):
+    if not meta or meta.get(SLOTS_AUTO_KEY) is False:
         return
     mp = model_path(prop_id)
     if not mp or mp.suffix.lower() != ".glb":
@@ -1034,9 +1041,11 @@ def _autofill_slots(prop_id: str) -> None:
         names = glb_material_names_at(mp)
     except (OSError, ValueError, KeyError, json.JSONDecodeError,
             UnicodeDecodeError):
+        # Only a POSITIVE finding may change the list — an unreadable mesh is
+        # not a statement that the prop has no slots.
         return
     slots = detect_slots(names)
-    if not slots:
+    if slots == (meta.get(SLOTS_KEY) or []):
         return
     meta[SLOTS_KEY] = slots
     meta[SLOTS_AUTO_KEY] = True
@@ -1045,7 +1054,7 @@ def _autofill_slots(prop_id: str) -> None:
     except (OSError, ValueError):
         return
     logger.info("Prop %s: %d texture slot(s) detected (%s)", pid, len(slots),
-                ", ".join(s["name"] for s in slots))
+                ", ".join(s["name"] for s in slots) or "none")
 
 
 # ── CRUD ────────────────────────────────────────────────────────────────
@@ -2558,8 +2567,13 @@ def _store_bbox(prop_id: str, variant: Any = None) -> None:
     read-modify-write) and redistribute still-estimated dims over the fresh
     proportions. A failed measurement leaves the sidecar untouched.
 
-    Called from all three ingest paths (generate, shrink variant, upload), so
-    this is the one place a post-ingest step has to be added.
+    Called from the paths that store or re-point a mesh WITHOUT running the
+    generation chain: ``save_uploaded_glb``, ``select_model``, ``delete_model``
+    and ``delete_variant``. The chain itself (:func:`_generate`) selects and
+    measures inline and does NOT come through here — a post-ingest step has to
+    be added in BOTH places, which is why each of them says so (finding
+    2026-08-27: the slot detection sat here alone and never fired for a
+    generated prop).
 
     The per-file work (bake, re-encode, distance mesh) belongs to the variant
     that just received the mesh; the MEASUREMENT belongs to the object and is
@@ -2572,7 +2586,8 @@ def _store_bbox(prop_id: str, variant: Any = None) -> None:
     # The texture slots are read AFTER the Blender steps above — the
     # vertex-colour bake renames every material — and before the measurement,
     # so an unmeasurable mesh still contributes the slots it names. Its own
-    # read-modify-write, and only when it has something to store.
+    # read-modify-write, and it writes only when the result really changed.
+    # The generation chain has the same call of its own (`_generate`).
     _autofill_slots(prop_id)
     bbox = _extract_bbox(prop_id)
     if not bbox:
@@ -3223,12 +3238,21 @@ def _generate(prop_id: str, prompt: str, negative: str,
         meta["source"] = "generated"
         # Only the PRIMARY variant informs the object's proportions — a second
         # chair mesh must not redistribute the dims the admin sees.
-        if _stem_of(prop_id, variant) == _stem_of(prop_id):
+        primary = _stem_of(prop_id, variant) == _stem_of(prop_id)
+        if primary:
             bbox = _extract_bbox(prop_id)
             if bbox:
                 meta["bbox"] = bbox
                 _redistribute_dims(meta)
         _write_sidecar(prop_id, meta)
+        if primary:
+            # …and the object's texture slots, off the mesh that just landed.
+            # AFTER the write above, never before: `_autofill_slots` does its
+            # own read-modify-write and the `meta` in hand here predates it.
+            # This chain does not go through `_store_bbox` (it selects and
+            # measures inline), so the call has to stand here as well or a
+            # GENERATED prop would never get its slots.
+            _autofill_slots(prop_id)
         logger.info("Prop %s: model generated into variant %s (%s, backend %s)",
                     prop_id, _stem_of(prop_id, variant), path.name,
                     res.get("backend", ""))

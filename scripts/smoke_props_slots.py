@@ -55,6 +55,9 @@ Hand-derived cases:
 
     []              -> []
     ["slot_"]       -> [] (a prefix with nothing behind it names nothing)
+    ["slot_ "]      -> [] (…and neither does one with only blanks behind it)
+    ["slot_ poster"] -> [{"poster", "image"}]   the name is stripped AGAIN
+                        behind the prefix: " poster" would match no material
     ["slot_mirror"] -> [{"mirror", "material"}]
 
 ROTE PROBE: "glasses", "slots_x" and "picture_frame" are NOT slots — the
@@ -78,6 +81,26 @@ After uploading the [1] fixture into a fresh prop:
 A prop that never got a model has `slots == []` — the field is ALWAYS on the
 record, so no consumer has to know the difference.
 
+[3b] …AND ON THE GENERATION CHAIN, which does NOT come through `_store_bbox`.
+`_generate` selects the mesh and measures it inline (`g.select` + its own bbox
+block), so a call that sits only in `_store_bbox` fires for an UPLOAD and never
+for the img2mesh run that makes the vast majority of props. Driven here with
+the img2mesh service faked to write the [1] fixture into the output path:
+
+    record["slots"] == [{"name": "picture", "kind": "image"}], slots_auto True
+
+The shrink paths (`_shrink`, `_reduce_to_low`, `_store_lod_stages`) need no
+call of their own: all three select into the `low` tier
+(`props.py` — the only `select(..., LOW_TIER)` sites), while the slots are read
+off the FULL mesh via `model_path(prop_id)`.
+
+[3c] A NEW MESH REPLACES AN AUTO LIST. Otherwise a regenerated model leaves the
+PREVIOUS mesh's surfaces standing behind a "detected" badge:
+
+    upload a mesh with materials [metal, slot_glass]  -> [{glass, material}]
+    upload a mesh with materials [metal]              -> []   (an emptied
+        result counts too — the new model really names no fillable surface)
+
 ---------------------------------------------------------------------------
 [4] THE PATCH PATH VALIDATES, AND A REFUSAL WRITES NOTHING
 ---------------------------------------------------------------------------
@@ -99,9 +122,9 @@ A refused patch leaves the sidecar BYTE-IDENTICAL — the batch's law.
 ---------------------------------------------------------------------------
 [5] A HAND-EDITED LIST IS NEVER OVERWRITTEN
 ---------------------------------------------------------------------------
-Storing `slots` clears the marker (`slots_auto` False), and the auto-fill only
-ever fills a record that has NONE — so a second model of the same prop cannot
-throw the admin's list away:
+Storing `slots` clears the marker (`slots_auto` False), and the auto-fill skips
+every record that carries the admin's signature — so a second model of the same
+prop cannot throw the admin's list away:
 
     patch slots [{"name": "screen", "kind": "image"}]  -> slots_auto False
     upload the [1] fixture again (picture material)    -> slots UNCHANGED
@@ -170,6 +193,31 @@ UNNAMED = {
     "asset": {"version": "2.0"},
     "materials": [{"name": "wood"}, {"doubleSided": True}],
 }
+# [3c]: a SECOND mesh of the same prop, naming another surface — and a third
+# that names none at all.
+METAL_GLASS = {
+    "asset": {"version": "2.0"},
+    "materials": [{"name": "metal"}, {"name": "slot_glass"}],
+    "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+}
+METAL_ONLY = {
+    "asset": {"version": "2.0"},
+    "materials": [{"name": "metal"}],
+    "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+}
+
+
+class FakeMeshService:
+    """Just enough of the image service for `props._generate`: `generate_mesh`
+    writes the GLB it is given a path for and reports the run."""
+
+    def __init__(self, blob: bytes) -> None:
+        self.blob = blob
+
+    def generate_mesh(self, *, output_path: str, **_kw) -> dict:
+        Path(output_path).write_bytes(self.blob)
+        return {"ok": True, "path": output_path, "format": "glb",
+                "rig": "none", "backend": "fake-mesh"}
 
 
 def main() -> int:
@@ -203,7 +251,12 @@ def main() -> int:
                   {"name": "poster", "kind": "image"},
                   {"name": "sign", "kind": "image"}], str(got))
     check("nothing in, nothing out", store.detect_slots([]) == [])
-    check("a bare prefix names nothing", store.detect_slots(["slot_"]) == [])
+    check("a bare prefix names nothing",
+          store.detect_slots(["slot_", "slot_ "]) == [])
+    check("the name is stripped again behind the prefix",
+          store.detect_slots(["slot_ poster"])
+          == [{"name": "poster", "kind": "image"}],
+          str(store.detect_slots(["slot_ poster"])))
     check("slot_mirror is a MATERIAL slot",
           store.detect_slots(["slot_mirror"])
           == [{"name": "mirror", "kind": "material"}])
@@ -239,6 +292,41 @@ def main() -> int:
               str(rec["slots"]))
         check("…marked as detected", rec.get("slots_auto") is True,
               str(rec.get("slots_auto")))
+
+        print("\n[3b] …and on the generation chain, which skips _store_bbox")
+        import app.imagegen.service as image_service
+        real_service = image_service.get_image_service
+        image_service.get_image_service = lambda: FakeMeshService(data)
+        try:
+            gen = store.create_prop(name="Generated frame")["id"]
+            # The chain re-meshes an EXISTING source image (mesh_only), so the
+            # picture only has to be on disk — nothing reads it here.
+            (store.prop_dir(gen, create=True)
+             / store.SOURCE_NAME).write_bytes(b"\x89PNG fake")
+            out = store._generate(gen, "", "", "", "fake-mesh",
+                                  mesh_only=True, variant=0)
+            grec = store.get_prop(gen)
+            check("the generated prop got its mesh", out.get("ok") is True,
+                  str(out))
+            check("…and the slots off it",
+                  grec["slots"] == [{"name": "picture", "kind": "image"}],
+                  str(grec["slots"]))
+            check("…marked as detected", grec.get("slots_auto") is True,
+                  str(grec.get("slots_auto")))
+        finally:
+            image_service.get_image_service = real_service
+
+        print("\n[3c] a new mesh REPLACES an auto list")
+        store.save_uploaded_glb(pid, glb(METAL_GLASS))
+        check("another mesh, another surface",
+              store.get_prop(pid)["slots"]
+              == [{"name": "glass", "kind": "material"}],
+              str(store.get_prop(pid)["slots"]))
+        store.save_uploaded_glb(pid, glb(METAL_ONLY))
+        rec = store.get_prop(pid)
+        check("a mesh that names none empties the auto list",
+              rec["slots"] == [] and rec.get("slots_auto") is True,
+              f"{rec['slots']} / {rec.get('slots_auto')}")
 
         print("\n[4] the patch path validates, and a refusal writes nothing")
         before = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")

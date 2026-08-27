@@ -655,16 +655,16 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             {t('Texture slots')}
             {prop.slots_auto && slots.length ? (
               <span className="ga-hint" style={{ marginLeft: 6, fontWeight: 400 }}
-                title={t('This list was read off the model’s material names when the mesh arrived. Editing it makes it yours — no later model overwrites it.')}>
+                title={t('This list was read off the model’s material names, and every new mesh re-reads it. Editing it makes it yours — from then on no model overwrites it.')}>
                 · {t('detected')}
               </span>
             ) : null}
           </div>
           <span className="ga-hint">
-            {t('Surfaces of the mesh that can be filled later: a material named “slot_<name>” is one, and so are the plain names picture, screen, sign (image) and glass (material). Read off the model when it arrives — correct it here, and no later mesh touches your list again.')}
+            {t('Surfaces of the mesh that can be filled later: a material named “slot_<name>” is one, and so are the plain names picture, screen, sign (image) and glass (material). Read off every mesh that lands — correct it here, and no later mesh touches your list again.')}
           </span>
           {slots.length === 0 ? (
-            <div className="ga-empty" style={{ fontSize: '0.85em' }}>
+            <div className="ga-hint" style={{ fontSize: '0.85em' }}>
               {t('No texture slots — the model names none.')}
             </div>
           ) : (
