@@ -7265,12 +7265,28 @@ stehen, eine `picture`-Fläche nimmt eine Bild-URL dieser Welt
 eine `glass`-Fläche ein Preset aus `SLOT_PRESETS`. Alles andere ist ein 400, und
 gespeichert wird nichts. Das Rezept liest die abgelegten Werte wörtlich.
 
+**Der `label` ist dreiwertig (R10)** — „der Körper hat nichts gesagt" und „der
+Admin hat das Feld geleert" sind verschiedene Aussagen:
+
+| `label` im Körper | Wirkung |
+|---|---|
+| fehlt / `null` | der gespeicherte Name **bleibt** — ein neues Bild benennt die Variante nicht hinter dem Rücken des Admins um |
+| `""` | wird aus den neuen Bild-Dateinamen **neu hergeleitet** (auch der Fall einer frisch angelegten Variante) |
+| Text | wird wörtlich gespeichert (getrimmt, gekappt) |
+
+**Verschwindet eine Fläche, verschwinden BEIDE Hälften.** Ein erneuter Split
+oder ein Mesh, das ein Material nicht mehr nennt, zieht die Fläche aus dem
+Sidecar (`_reconcile_areas` bzw. der Split-Landung) — und mit ihr den Eintrag
+aus `area_defaults` **und** aus den `slot_values` **jeder** Variante
+(`_prune_to_areas`). Der `label` bleibt: er ist der Name der Version, keine
+Beschreibung ihrer Werte. Am Spec steht danach kein toter Schlüssel mehr.
+
 ### Felder am Varianten-Eintrag (`GET /world/props/{id}/variants`)
 
 | Feld | Bedeutung |
 |---|---|
 | `slot_values` | `{}` = diese Variante zeigt nichts Eigenes |
-| `label` | Anzeigename; leer gelassen → aus den Bild-Dateinamen (Basisname ohne Endung, `", "`-verbunden), bei reinem Glas aus dem Preset |
+| `label` | Anzeigename; hergeleitet aus den Bild-Dateinamen (Basisname ohne Endung, `", "`-verbunden), bei reinem Glas aus dem Preset |
 | `stale` | die **kopierte** Rahmen-Geometrie ist älter als das Mesh, das das Prop jetzt zeigt |
 
 ### Die Kopie und `stale` (R4)
@@ -7294,7 +7310,9 @@ stale  ⟺  copied_from.file ≠ der AKTIVE full-Datei­name der primären Varia
 ```
 
 Ein Mesh ohne `copied_from` (die primäre Variante selbst, eine hochgeladene
-Variante) ist nie veraltet — es ist niemandes Kopie. `POST …/variants/{i}/recopy`
+Variante) ist nie veraltet — es ist niemandes Kopie; und solange die primäre
+Variante gar kein aktives full-Mesh hat, ist nichts veraltet, weil es nichts
+zu vergleichen gibt. `POST …/variants/{i}/recopy`
 kopiert erneut (neue Galerie-Datei, die alte bleibt als Historie stehen) und
 **behält die `slot_values`**.
 
@@ -7329,9 +7347,15 @@ Varianten, davon Variante 1 mit
 | `POST /world/props/{id}/variants/{i}/slot-values` | `{slot_values, label?}` | `{status, index, slot_values, label}` |
 | `POST /world/props/{id}/variants/{i}/recopy` | — | `{status, index, variant}` |
 
-400 mit dem Text des Stores für unbekannte Fläche, falsche URL-Form, Preset an
-einer Bild-Fläche (und umgekehrt), erreichten Varianten-Cap (R5) und die
-primäre Variante bei `recopy`; 409, solange die Variante generiert.
+`label` folgt an beiden Routen der Dreiwertigkeit oben: **weggelassen** heißt
+„nicht erwähnt" (Name bleibt bzw. wird bei einer neuen Variante hergeleitet),
+`""` heißt „neu herleiten", Text wird gespeichert.
+
+400 mit dem Text des Stores für unbekannte Fläche, LEERE Zuordnung (das ist
+eine gewöhnliche Modell-Variante, keine Bild-Variante), falsche URL-Form,
+Preset an einer Bild-Fläche (und umgekehrt), erreichten Varianten-Cap (R5) und
+die primäre Variante bei `recopy`; 409, solange die Variante generiert — der
+Store weist das ein zweites Mal ab, ein Rennen kommt also nicht daran vorbei.
 
 ### Die Beweise (§ B5a)
 
@@ -7344,3 +7368,6 @@ primäre Variante bei `recopy`; 409, solange die Variante generiert.
 | Rezept: `variant: 1` → `slots`, ohne Variante nur Defaults, Tür-Prop nur Defaults, leer → kein Schlüssel, Index außerhalb wickelt | ebenda **[8]** |
 | Prop- UND Szenen-Signatur bewegen sich bei geändertem Bild und geänderten Defaults | ebenda **[9]** |
 | `stale` nach neuem Primär-Mesh, `recopy` macht frisch und behält die Werte; die alte Kopie bleibt Historie | ebenda **[10]** |
+| `label`-Dreiwertigkeit (R10), leere Zuordnung abgewiesen, `recopy` während einer Generierung abgewiesen | ebenda **[11]** |
+| Verschwundene Fläche: `area_defaults` UND `slot_values` jeder Variante gehen mit, `label` bleibt, am Spec kein toter Schlüssel | ebenda **[11]** |
+| Primäre Variante ohne aktives full-Mesh → nichts ist `stale` | ebenda **[11]** |

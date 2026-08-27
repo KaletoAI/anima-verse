@@ -151,8 +151,12 @@ async def prop_variant_add_picture(
     with it) and shows the pictures on top. The answer is the finished variant
     record, so the strip can render the new chip without a second request.
 
+    ``label`` is optional: omitted (or ``null``) it is DERIVED from the
+    picture file names, any text is stored verbatim (R10).
+
     400 for everything the store refuses with a reason the tab can show: an
-    unknown area, a URL that is not one of this world's two galleries, a
+    unknown area, an EMPTY assignment (that is a plain model variant, not a
+    picture one), a URL that is not one of this world's two galleries, a
     preset on a picture panel (or a picture on a pane) and the reached variant
     cap (R5). Nothing is created for any of them."""
     from app.core.props import add_picture_variant, get_prop, list_variants
@@ -161,7 +165,8 @@ async def prop_variant_add_picture(
     body = await _body(request)
     try:
         index = add_picture_variant(prop_id, body.get("slot_values"),
-                                    body.get("label"))
+                                    body.get("label")
+                                    if "label" in body else None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return {"status": "ok", "index": index,
@@ -180,15 +185,23 @@ async def prop_variant_slot_values(
     exist, a ``picture`` panel takes an image URL of this world and a
     ``glass`` one a preset from ``SLOT_PRESETS``. Anything else is a 400 and
     nothing is written — this is the ONE gate, the scene recipe reads what is
-    stored verbatim. A blank ``label`` is derived from the picture file names.
+    stored verbatim.
+
+    ``label`` is three-valued (R10): OMITTED from the body (or ``null``) keeps
+    the stored name — re-hanging a picture must not rename the variant behind
+    the admin's back — ``""`` re-derives it from the new picture file names,
+    and any text is stored verbatim.
     """
     from app.core.props import list_variants, set_variant_slot_values
     _variant(prop_id, index)
     body = await _body(request)
     try:
+        # `None` when the body does not mention the label at all — the store
+        # then keeps the stored name (R10); an explicit "" re-derives it.
         stored = set_variant_slot_values(prop_id, index,
                                          body.get("slot_values"),
-                                         body.get("label"))
+                                         body.get("label")
+                                         if "label" in body else None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     if not stored:
@@ -208,7 +221,8 @@ def prop_variant_recopy(
     The answer to the strip's "variants outdated" — a re-split frame leaves
     every copy behind, and this is how they catch up. 400 for the primary
     variant itself (it IS the source), 409 while this variant is generating:
-    the run is about to write the very file the copy lands in."""
+    the run is about to write the very file the copy lands in (the store
+    refuses it a second time, so a race cannot slip past this check)."""
     from app.core.props import (list_variants, recopy_variant_mesh,
                                 variant_generating)
     _variant(prop_id, index)

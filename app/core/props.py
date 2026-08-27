@@ -173,7 +173,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.core.game_time import (current_season_tokens, sanitize_season_tags,
                                 season_tags_active)
@@ -1575,18 +1575,46 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
         meta[AREAS_KEY] = areas
         meta.pop(AREAS_ERROR_KEY, None)
         meta[AREAS_RUN_AT_KEY] = utc_now_iso()
-        defaults = {k: v for k, v in (meta.get(AREA_DEFAULTS_KEY) or {}).items()
-                    if k in ids}
-        if defaults:
-            meta[AREA_DEFAULTS_KEY] = defaults
-        else:
-            meta.pop(AREA_DEFAULTS_KEY, None)
+        _prune_to_areas(meta, ids)
         _write_sidecar(pid, meta)
         _autofill_slots(pid)
     logger.info("Prop %s: picture areas %s -> %s (%s)", pid,
                 params.get("mode"), ", ".join(a["id"] for a in areas) or "none",
                 model_file.name)
     return areas
+
+
+def _prune_to_areas(meta: Dict[str, Any], ids: Set[str]) -> None:
+    """Drop everything that names an area the prop no longer has — the
+    prop-wide ``area_defaults`` AND every variant's ``slot_values``.
+
+    BOTH halves of a spec's ``slots`` are area-bound, so both follow the mesh:
+    after a re-split that loses a panel, a dead key on either half would ride
+    in every payload of every world and describe a surface the GLB no longer
+    names. The variant's ``label`` is NOT touched — it is the name the admin
+    gave that version, not a description of its values.
+
+    Mutates ``meta`` in place; the caller owns the sidecar write."""
+    defaults = {k: v for k, v in (meta.get(AREA_DEFAULTS_KEY) or {}).items()
+                if k in ids}
+    if defaults:
+        meta[AREA_DEFAULTS_KEY] = defaults
+    else:
+        meta.pop(AREA_DEFAULTS_KEY, None)
+    entries = _variant_list(meta)
+    touched = False
+    for entry in entries:
+        values = entry.get(SLOT_VALUES_KEY) or {}
+        kept = {k: v for k, v in values.items() if k in ids}
+        if kept == values:
+            continue
+        if kept:
+            entry[SLOT_VALUES_KEY] = kept
+        else:
+            entry.pop(SLOT_VALUES_KEY, None)
+        touched = True
+    if touched:
+        meta[VARIANTS_KEY] = entries
 
 
 def _origins(meta: Dict[str, Any]) -> Dict[str, str]:
@@ -1861,14 +1889,8 @@ def _reconcile_areas(pid: str, meta: Optional[Dict[str, Any]] = None) -> None:
         kept = [a for a in areas if f"{SLOT_PREFIX}{a['id']}" in names]
     if kept == areas:
         return
-    ids = {a["id"] for a in kept}
     meta[AREAS_KEY] = kept
-    defaults = {k: v for k, v in (meta.get(AREA_DEFAULTS_KEY) or {}).items()
-                if k in ids}
-    if defaults:
-        meta[AREA_DEFAULTS_KEY] = defaults
-    else:
-        meta.pop(AREA_DEFAULTS_KEY, None)
+    _prune_to_areas(meta, {a["id"] for a in kept})
     try:
         _write_sidecar(pid, meta)
     except (OSError, ValueError):
@@ -2138,6 +2160,52 @@ def surface_status_for(prop_id: str, variant: Any = None) -> Dict[str, Any]:
                           meta.get("rotation"))
 
 
+def bake_surfaces(prop_id: str, variant: Any = None, *,
+                  background: bool = False) -> None:
+    """Bring one variant's walking surface up to date — ``variant=None`` every
+    ACTIVE one (spec-surface-height § 5).
+
+    Baked is exactly the file :func:`surface_for` reads back, so what the
+    lattice describes is what the payload ships. A surface that is already
+    valid for this file and fix is left alone: re-baking it would cost a
+    Blender run per variant for a result byte-identical to the stored one.
+    Nothing is reported back — a missing surface is a legal state.
+
+    SYNCHRONOUS by default: the landing paths already run Blender in their own
+    worker (``attach_measurement``), so one more step there is no news. The
+    orientation dial passes ``background`` so the request returns at once.
+    """
+    from app.core.model_surface import bake_surface, forget_surfaces, read_surface
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return
+    # Manually active, NOT effectively active: a variant that is out of season
+    # right now still renders in its own season, and a lattice is baked from
+    # the mesh, not from the calendar.
+    indices: List[Any] = ([variant] if variant is not None
+                          else list(_active_indices(_variant_list(meta))))
+
+    def _work() -> None:
+        baked = False
+        for idx in indices:
+            mp = model_path(prop_id, variant=idx)
+            if not mp or read_surface(mp, meta.get("rotation")):
+                continue
+            baked = bake_surface(mp, meta.get("rotation"), wait_s=300) is not None or baked
+        if baked:
+            # A prop stands in many locations, so the walk gate's per-location
+            # cache (5 s) is dropped WHOLESALE — the prop does not know where
+            # it is placed, and a stale metre is worse than one recomposition.
+            forget_surfaces()
+
+    if background:
+        threading.Thread(target=_work, daemon=True,
+                         name=f"prop-surface-{pid}").start()
+    else:
+        _work()
+
+
 def model_tiers(prop_id: str, variant: Any = None) -> List[str]:
     """The resolution tiers the prop actually HAS, sorted ('' id or no mesh →
     empty list).
@@ -2237,7 +2305,11 @@ def _variant_stale(prop_id: str, index: int, primary_file: str) -> bool:
     ``copied_from.file`` on the active mesh's sidecar names the file the copy
     was taken from; the primary's active full file is what it should be. A
     mesh that was never copied (the primary itself, an uploaded variant) is
-    never stale — it is nobody's copy."""
+    never stale — it is nobody's copy — and neither is anything while the
+    PRIMARY has no active full mesh at all: there is nothing to compare
+    against, and the tab must not offer a re-copy that can only fail."""
+    if not primary_file:
+        return False
     g = model_gallery(prop_id, index)
     active = g.find(DEFAULT_TIER, fallback=False) if g else None
     if not active:
@@ -2513,14 +2585,28 @@ def _apply_variant_slot_values(entry: Dict[str, Any],
     """Store an ALREADY CHECKED assignment and the name it is listed under.
 
     ``clean`` comes out of :func:`sanitize_variant_slot_values` — this only
-    writes. An empty assignment removes both keys (absence is how "this
-    variant shows nothing of its own" is stored), and a blank label falls back
-    to the derived one."""
+    writes. An empty assignment removes the values (absence is how "this
+    variant shows nothing of its own" is stored).
+
+    THE LABEL IS THREE-VALUED (ruling R10), because "the body said nothing"
+    and "the admin cleared the field" are different statements:
+
+    * ``None`` — not mentioned: the stored name STANDS. Re-hanging a picture
+      must not silently rename the variant the admin christened.
+    * ``""`` — cleared: the name is DERIVED from the new values again
+      (:func:`default_variant_label`), which is also what a brand-new variant
+      with no stored name gets.
+    * any text — stored verbatim (stripped, capped).
+    """
     if clean:
         entry[SLOT_VALUES_KEY] = clean
     else:
         entry.pop(SLOT_VALUES_KEY, None)
-    text = _coerce_variant_label(label) or default_variant_label(clean)
+    if label is None:
+        text = (_coerce_variant_label(entry.get(VARIANT_LABEL_KEY))
+                or default_variant_label(clean))
+    else:
+        text = _coerce_variant_label(label) or default_variant_label(clean)
     if text:
         entry[VARIANT_LABEL_KEY] = text
     else:
@@ -2637,9 +2723,11 @@ def set_variant_slot_values(prop_id: str, variant: int, slot_values: Any,
     BEFORE anything is written, so a refused save leaves the sidecar exactly
     as it was — and the recipe can read the stored values verbatim.
 
-    ``label`` is what the strip lists this variant under; blank derives it
-    from the picture file names. An EMPTY assignment clears both keys, which
-    is how a variant stops being a picture variant.
+    ``label`` is what the strip lists this variant under, three-valued
+    (R10): ``None`` — the body did not mention it — KEEPS the stored name,
+    ``""`` re-derives it from the picture file names, any text is stored. An
+    EMPTY assignment clears the values, which is how a variant stops being a
+    picture variant.
 
     Deliberately NOT refused for a generating variant, like the other value
     setters: a picture moves no file and renames no stem. It does move the
@@ -2729,8 +2817,9 @@ def add_picture_variant(prop_id: str, slot_values: Any,
     the primary variant's mesh and shows ``slot_values`` on it (D2, § 1).
 
     Returns the store index of the new variant. ``ValueError`` for an unknown
-    prop, an unusable assignment, a reached cap (R5) or a prop without a
-    full-tier mesh to copy — and all four are answered BEFORE anything is
+    prop, an unusable or EMPTY assignment (a variant that shows nothing of its
+    own is a plain :func:`add_variant`), a reached cap (R5) or a prop without a
+    full-tier mesh to copy — and all of them are answered BEFORE anything is
     created, so a refusal leaves no half-built variant behind.
 
     The mesh is the PRIMARY variant's, because that is the frame everything
@@ -2741,6 +2830,10 @@ def add_picture_variant(prop_id: str, slot_values: Any,
     if not meta:
         raise ValueError("unknown prop")
     clean = sanitize_variant_slot_values(slot_values, meta.get(AREAS_KEY) or [])
+    if not clean:
+        # A variant that shows nothing of its own is a plain model variant —
+        # `add_variant` is the verb for that, and it does not copy a mesh.
+        raise ValueError("a picture variant needs at least one slot value")
     entries = _variant_list(meta)
     if len(_active_indices(entries)) >= variant_max():
         raise ValueError(f"At most {variant_max()} active variants per prop")
@@ -2763,9 +2856,11 @@ def recopy_variant_mesh(prop_id: str, variant: int) -> bool:
     """Take the primary variant's mesh again for ONE picture variant (R4) —
     the answer to "variants outdated" after the frame was re-split.
 
-    ``False`` when the prop or the index does not exist, ``ValueError`` for
-    the primary variant itself (it IS the source). The assignment is kept: the
-    admin re-copies the frame, not the picture."""
+    ``False`` when the prop or the index does not exist — and while THIS
+    variant is GENERATING: the run is about to write the very file the copy
+    lands in, the same reason a delete and the on/off toggle refuse it.
+    ``ValueError`` for the primary variant itself (it IS the source). The
+    assignment is kept: the admin re-copies the frame, not the picture."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -2776,6 +2871,8 @@ def recopy_variant_mesh(prop_id: str, variant: int) -> bool:
     except (TypeError, ValueError):
         return False
     if not 0 <= i < len(entries):
+        return False
+    if variant_generating(pid, i):
         return False
     primary = _effective_indices(entries)[0]
     if i == primary:

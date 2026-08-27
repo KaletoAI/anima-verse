@@ -186,6 +186,36 @@ therefore flips it:
         the variant's active file has the new primary's BYTES, and the old
         copy stays in the gallery as history (2 files under the stem)
     `recopy_variant_mesh(pid, 0)` (the primary itself) -> ValueError
+
+---------------------------------------------------------------------------
+[11] LABEL RULE (R10), EMPTY ASSIGNMENT, AND PRUNING WITH THE AREAS
+---------------------------------------------------------------------------
+The label is THREE-valued, because "the body said nothing" and "the admin
+cleared the field" are different statements:
+
+    set_variant_slot_values(..., label="Wall")  -> stored verbatim
+    set_variant_slot_values(..., <no label>)    -> "Wall" STANDS
+    set_variant_slot_values(..., label="")      -> derived again -> "x"
+
+`add_picture_variant(pid, {})` is a ValueError: a variant that shows nothing
+of its own is a plain `add_variant`, and that one copies no mesh.
+`recopy_variant_mesh` is refused while the variant generates (the run is about
+to write the very file the copy lands in) — the core says so, not only the
+route.
+
+PRUNING: an area that leaves the mesh takes BOTH halves of a spec's `slots`
+with it, and the label stays. Driven through `_reconcile_areas` by uploading a
+mesh that names `slot_picture_1` only:
+
+    areas         ["picture_1", "glass_1"] -> ["picture_1"]
+    area_defaults {"glass_1": …}           -> {}
+    slot_values   {"picture_1": …, "glass_1": …} -> {"picture_1": …}
+    label         "Both"                   -> "Both"   (untouched)
+    spec slots                             -> {"picture_1": {"image": IMG}}
+
+And a PRIMARY without an active full mesh makes nothing stale — there is
+nothing to compare `copied_from.file` against, and the tab must not offer a
+re-copy that can only fail.
 """
 import json
 import os
@@ -515,6 +545,79 @@ def part2() -> None:
     except ValueError as exc:
         check("re-copying the PRIMARY onto itself is refused", True,
               str(exc)[:60])
+
+    print("\n[11] the label rule (R10), an empty assignment, and pruning")
+    # R10 — the label is three-valued. Variant 1 is named "sunset" right now
+    # (derived when it was hung), so:
+    store.set_variant_slot_values(pid, 1, {"picture_1": {"image": IMG2}}, "Wall")
+    check("a text is stored verbatim",
+          store.list_variants(pid)[1]["label"] == "Wall",
+          store.list_variants(pid)[1]["label"])
+    store.set_variant_slot_values(pid, 1, {"picture_1": {"image": IMG}})
+    check("label None (the body said nothing) KEEPS the stored name",
+          store.list_variants(pid)[1]["label"] == "Wall",
+          store.list_variants(pid)[1]["label"])
+    store.set_variant_slot_values(pid, 1, {"picture_1": {"image": IMG}}, "")
+    check("label '' re-derives it from the file names",
+          store.list_variants(pid)[1]["label"] == "x",
+          store.list_variants(pid)[1]["label"])
+    try:
+        store.add_picture_variant(pid, {})
+        check("an EMPTY assignment is not a picture variant", False,
+              "no ValueError")
+    except ValueError as exc:
+        check("an EMPTY assignment is not a picture variant", True,
+              str(exc)[:60])
+
+    # A generating variant is refused in the core, not only in the route.
+    real_gen = store.variant_generating
+    store.variant_generating = lambda *a, **k: True
+    try:
+        check("recopy is refused while the variant generates",
+              store.recopy_variant_mesh(pid, 1) is False)
+    finally:
+        store.variant_generating = real_gen
+
+    # PRUNING: an area that leaves the mesh takes BOTH halves of `slots` with
+    # it — the prop-wide default and every variant's value — and leaves the
+    # label alone. Driven through `_reconcile_areas`, the path a re-selected
+    # or re-uploaded mesh takes: the new mesh names `slot_picture_1` only, so
+    # `glass_1` is gone.
+    store.set_variant_slot_values(pid, 1, {"picture_1": {"image": IMG},
+                                           "glass_1": {"preset": "glass"}},
+                                  "Both")
+    store.update_prop(pid, {"area_defaults": {"glass_1": {"preset": "glass"}}})
+    only_picture = glb({"asset": {"version": "2.0"},
+                        "materials": [{"name": "atlas"},
+                                      {"name": "slot_picture_1"}],
+                        "meshes": [{"primitives": [
+                            {"attributes": {"POSITION": 0}}]}]})
+    store.save_uploaded_glb(pid, only_picture)
+    rec = store.get_prop(pid)
+    entry = store.list_variants(pid)[1]
+    check("the vanished area is gone from the prop's areas",
+          [a["id"] for a in rec["areas"]] == ["picture_1"],
+          str([a["id"] for a in rec["areas"]]))
+    check("…from the prop-wide defaults", rec["area_defaults"] == {},
+          str(rec["area_defaults"]))
+    check("…and from the variant's slot_values",
+          entry["slot_values"] == {"picture_1": {"image": IMG}},
+          str(entry["slot_values"]))
+    check("…while the label the admin gave it stands",
+          entry["label"] == "Both", entry["label"])
+    check("the spec carries only the surviving area",
+          prop_specs(scene_of(pid, door_pid)).get((-3.0, -3.0), {}).get("slots")
+          == {"picture_1": {"image": IMG}},
+          str(prop_specs(scene_of(pid, door_pid)).get((-3.0, -3.0),
+                                                      {}).get("slots")))
+
+    # A primary variant with NO active full mesh has nothing to compare
+    # against — the tab must not offer a re-copy that can only fail.
+    prim = store.model_gallery(pid, 0)
+    prim.select("", "full")
+    check("no primary mesh -> nothing is stale",
+          all(v["stale"] is False for v in store.list_variants(pid)),
+          str([v["stale"] for v in store.list_variants(pid)]))
 
 
 def main() -> int:
