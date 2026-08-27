@@ -14,8 +14,9 @@ that disagrees reads as "no surface" — today's behaviour, never a stale floor.
 import hashlib
 import json
 import logging
+import math
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from app.core.timeutils import utc_now_iso
 
@@ -149,3 +150,77 @@ def block_sig(block: Dict[str, Any]) -> str:
     """Eight hex chars over a payload block — for the scene signature."""
     raw = json.dumps(block, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.md5(raw).hexdigest()[:8]
+
+
+def _extent(surface: Dict[str, Any], measure: str) -> float:
+    ex, ey, ez = (float(v) for v in surface["extent_snapped"])
+    if measure == "xyz":
+        return max(ex, ey, ez)
+    return max(ex, ez)
+
+
+def surface_scale(surface: Dict[str, Any], spec: Dict[str, Any]) -> float:
+    """``max_m`` over the snapped extent — the factor placeModelSpec applies."""
+    return float(spec.get("max_m") or 1.0) / (_extent(surface, str(spec.get("measure") or "xz")) or 1.0)
+
+
+def surface_height_at(surface: Dict[str, Any], spec: Dict[str, Any],
+                      x: float, z: float) -> Optional[float]:
+    """Standing height (tile-local metres) of placement ``spec`` at (x, z), or
+    None where the lattice does not answer. The exact inverse of
+    placeModelSpec — see spec § 6.2; the TS twin is surfaceHeightAt.
+
+    The bake's outermost lattice ring is cast 1 mm inside the box but read at
+    its nominal node coordinate, so when the box extent is not a whole multiple
+    of ``step`` the last ring's value extrapolates outward over up to one step
+    of ground the model does not cover.
+    """
+    s = surface_scale(surface, spec)
+    bmin, bmax = surface["box_min"], surface["box_max"]
+    cx = (float(bmin[0]) + float(bmax[0])) / 2.0
+    cz = (float(bmin[2]) + float(bmax[2])) / 2.0
+    ax, az = spec["anchor"]
+    qx, qz = float(x) - float(ax), float(z) - float(az)
+    th = math.radians(float(spec.get("yaw_deg") or 0.0))
+    c, sn = math.cos(th), math.sin(th)
+    lx = qx * c - qz * sn
+    lz = qx * sn + qz * c
+    step = float(surface["step"])
+    u = (lx / s + cx - float(surface["origin"][0])) / step
+    v = (lz / s + cz - float(surface["origin"][1])) / step
+    cols, rows = int(surface["cols"]), int(surface["rows"])
+    if not (0.0 <= u <= cols - 1 and 0.0 <= v <= rows - 1):
+        return None
+    i0 = min(int(math.floor(u)), cols - 2) if cols > 1 else 0
+    j0 = min(int(math.floor(v)), rows - 2) if rows > 1 else 0
+    fu, fv = u - i0, v - j0
+    vals = surface["values"]
+
+    def at(i: int, j: int) -> Optional[float]:
+        val = vals[j * cols + i]
+        return None if val is None else float(val)
+
+    i1 = min(i0 + 1, cols - 1)
+    j1 = min(j0 + 1, rows - 1)
+    corners = (at(i0, j0), at(i1, j0), at(i0, j1), at(i1, j1))
+    if any(cv is None for cv in corners):
+        return None
+    a, b, cc, d = corners  # type: ignore[misc]
+    top = a + (b - a) * fu
+    bot = cc + (d - cc) * fu
+    val = top + (bot - top) * fv
+    return float(spec.get("bottom_y") or 0.0) + s * val / 100.0
+
+
+def highest_surface_at(specs: Iterable[Dict[str, Any]],
+                       x: float, z: float) -> Optional[float]:
+    """The highest answering surface among placement specs carrying one."""
+    best: Optional[float] = None
+    for spec in specs:
+        surface = spec.get("surface")
+        if not surface:
+            continue
+        y = surface_height_at(surface, spec, x, z)
+        if y is not None and (best is None or y > best):
+            best = y
+    return best

@@ -20,6 +20,9 @@
 export { placeModelSpec } from './place'
 export type { PlaceOptions } from './place'
 
+export { surfaceHeightAt, highestSurfaceAt, surfaceScale } from './surface'
+export type { PlacedSurface, SurfacePlacement } from './surface'
+
 export { flatGround, storeyGroundLift, storeyGroundRelift,
   tileDatumStep } from './storeyGround'
 export type { GroundSampler, StoreyGroundStep,
@@ -107,5 +110,5 @@ export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneFloor,
   SceneBoundaryOpening, SceneCutPlane, SceneDoorway, SceneProblem,
-  SceneSlotValues,
+  SceneSlotValues, SceneSurface,
 } from './types'

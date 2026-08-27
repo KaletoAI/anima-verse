@@ -175,6 +175,23 @@ export function pickModelVariant(
   return pickVariant(list[i] || spec.variants, tier)
 }
 
+/** A model's baked walkable surface (spec-surface-height § 4/6): a lattice in
+ *  the model's OWN frame after the orientation fix. `values[j*cols+i]` is the
+ *  walkable height of node (i, j) in whole centimetres over `box_min[1]`, or
+ *  null where nothing faces up. `box_min/box_max` = the hull under the exact
+ *  fix (three's Box3.setFromObject measure), `extent_snapped` = the hull size
+ *  under the fix rounded to 90° — what `max_m` is divided by. */
+export interface SceneSurface {
+  step: number
+  origin: [number, number]
+  cols: number
+  rows: number
+  values: (number | null)[]
+  box_min: [number, number, number]
+  box_max: [number, number, number]
+  extent_snapped: [number, number, number]
+}
+
 /** EINE Platzierungs-Spec für Gebäude, Raum-Diorama und Prop gleichermaßen —
  *  Futter für die einzige place()-Routine des Vertrags (§ B2). */
 export interface SceneModelSpec {
@@ -258,20 +275,27 @@ export interface SceneModelSpec {
    *  contour). Everything outside is discarded — a real-size diorama may stick
    *  out over its floor plan, only the part inside the room stays visible. */
   clip_outline?: [number, number][]
-  /** Absolute Höhe, auf der eine Figur AUF diesem Modell steht — im Diorama
-   *  (§ B6 Nr. 7) wie auf einer Flächen-Location. Bei `display: 'ground'` ist
-   *  das zugleich der Anker: das Modell hängt so weit unter dieser Höhe, wie
-   *  seine Gehfläche über seiner Unterkante liegt. */
+  /** Absolute height at which a figure stands ON this model — in the diorama
+   *  (§ B6 no. 7) as on an area location. With `display: 'ground'` it is the
+   *  anchor at the same time: the model hangs as far below this height as its
+   *  walking surface lies above its bottom edge. */
   walk_y_world?: number
-  /** Modelle ohne geeichtes `width_m`: `max_m` ist nur ein Notbehelf — beim
-   *  Diorama die Breite des Raum-Rechtecks, beim Gebäude/der Fläche die
-   *  Boundary-Breite (`extent_m`, seit v6 Nr. 3). Die UI soll zur Eichung
-   *  auffordern. */
+  /** The baked surface (v6). A room spec carries it once its model is baked;
+   *  a prop spec only when the prop is `walkable`. Read by `surfaceHeightAt`
+   *  — rung 0 of the walking height, above the `walk_y_world` declaration. */
+  surface?: SceneSurface
+  /** Prop spec only (v6): the prop carries the `walkable` tag, so figures may
+   *  stand on it. Without it a prop ships no surface. */
+  walkable?: boolean
+  /** Models without a calibrated `width_m`: `max_m` is only a stopgap — for a
+   *  diorama the width of the room rectangle, for a building/an area the
+   *  boundary width (`extent_m`, since v6 no. 3). The UI is meant to ask for
+   *  calibration. */
   width_estimated?: boolean
-  // `walk_y_auto` gab es bis 2026-07-28: die aus dem Mesh GEMESSENE Gehhöhe,
-  // die einen leeren Regler still ausfüllte. Eine Automatik, die Modelle
-  // ausrichtet, gibt es nicht mehr — der Admin setzt walk_y, alles andere
-  // rechnet von diesem Basiswert aus.
+  // `walk_y_auto` existed until 2026-07-28: the walking height MEASURED from
+  // the mesh, which silently filled an empty dial. There is no automation left
+  // that aligns models — the admin sets walk_y and everything else is computed
+  // from that base value.
   /** Area locations (plan-area-locations.md): world polygons cut out of THIS
    *  model — the building's floor plan plus the outlines of placed indoor
    *  rooms outside it. The model stays standing in the interior view, and the
