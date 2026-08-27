@@ -1580,11 +1580,24 @@ DOOR_PROP = {
 }
 
 
+def stub_library(get) -> None:
+    """Point the prop library at ``get`` — BOTH accessors.
+
+    The recipe asks ``get_prop`` (the full record), while the STORAGE gate asks
+    ``declared_slots``, which reads the sidecar alone: a floor-plan save must
+    not build a record and thereby demand every variant's distance mesh. Two
+    accessors, one fixture — a stub of only one of them would let a check pass
+    for the wrong reason.
+    """
+    from app.core import props as prop_store
+    prop_store.get_prop = get
+    prop_store.declared_slots = lambda pid: (get(pid) or {}).get("slots") or []
+
+
 def stub_door_props() -> None:
     """Two door props in the library — ``door1`` and ``door2``."""
-    from app.core import props as prop_store
-    prop_store.get_prop = lambda pid: (
-        {**DOOR_PROP, "id": pid} if pid in ("door1", "door2") else None)
+    stub_library(lambda pid: (
+        {**DOOR_PROP, "id": pid} if pid in ("door1", "door2") else None))
 
 
 def door_prop_scene(*, a_openings=None, default_prop: str = "",
@@ -1778,10 +1791,9 @@ def test_door_props() -> None:
 
 def _resigned_door_scene() -> str:
     """The default-prop scene with a NEW mesh signature on that prop."""
-    from app.core import props as prop_store
-    prop_store.get_prop = lambda pid: (
+    stub_library(lambda pid: (
         {**DOOR_PROP, "id": pid, "model_signature": "doorsig2"}
-        if pid in ("door1", "door2") else None)
+        if pid in ("door1", "door2") else None))
     try:
         return door_prop_scene(a_openings=[dict(S_DOOR)],
                                default_prop="door2")["signature"]
@@ -2135,11 +2147,10 @@ def stub_props(ground_offset_m: float = 0.0) -> None:
     """Stub the library. ``ground_offset_m`` is the PROP's own sink (§ B2
     addendum 2026-08-20) — the library record carries it, the recipe copies it
     onto every placement of the prop, and the scene spec adds it to the base."""
-    from app.core import props as prop_store
     rec = dict(EXAMPLE_PROP)
     if ground_offset_m:
         rec["ground_offset_m"] = ground_offset_m
-    prop_store.get_prop = lambda pid: dict(rec) if pid == "table" else None
+    stub_library(lambda pid: dict(rec) if pid == "table" else None)
 
 
 def model_fixture(*, room_width_m: float = 4.0, map_yaw=None,
@@ -3143,11 +3154,10 @@ def slot_fixture(values, prop_slots=None) -> dict:
     how the "the mesh changed under the placement" case is built without
     touching the stored layout.
     """
-    from app.core import props as prop_store
     rec = dict(EXAMPLE_PROP)
     if prop_slots is not None:
         rec["slots"] = prop_slots
-    prop_store.get_prop = lambda pid: dict(rec) if pid == "table" else None
+    stub_library(lambda pid: dict(rec) if pid == "table" else None)
     loc = model_fixture()
     for room in loc["rooms"]:
         if room["id"] == "a":
@@ -3346,10 +3356,9 @@ def test_signature() -> None:
         building_meta={**BUILDING_META, "signature": "other"})
     check("a new building-model file (signature only) moves it",
           tiered["signature"] != base)
-    from app.core import props as prop_store
-    prop_store.get_prop = lambda pid: (
+    stub_library(lambda pid: (
         {**EXAMPLE_PROP, "model_signature": "propsig2"} if pid == "table"
-        else None)
+        else None))
     check("a new PROP mesh (same URL, new signature) moves it too",
           model_scene()["signature"] != base)
     stub_props()

@@ -1072,17 +1072,29 @@ def sanitize_slot_values(raw: Any, declared: Any = None) -> Dict[str, Any]:
     return out
 
 
-def slot_values_of(prop_id: str, raw: Any) -> Dict[str, Any]:
-    """:func:`sanitize_slot_values` against the LIBRARY's own slot list.
+def declared_slots(prop_id: str) -> List[Dict[str, str]]:
+    """The prop's fillable surfaces, read straight off its sidecar.
 
-    Kept out of the sanitizer proper so a caller that already holds the prop
-    record does not read the sidecar a second time. An empty/unknown prop id
-    yields nothing: a value can only be stored for a slot somebody declared.
+    Deliberately NOT through :func:`get_prop`: building a full record DEMANDS
+    the distance mesh of every variant (``_demand_low`` → a background job),
+    and saving a floor plan is no occasion to enqueue mesh work. The value is
+    the same one the record publishes — ``_prop_record`` reads this very key.
+    """
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    return (meta or {}).get(SLOTS_KEY) or []
+
+
+def slot_values_of(prop_id: str, raw: Any) -> Dict[str, Any]:
+    """:func:`sanitize_slot_values` against the LIBRARY's own slot list — the
+    storage-side gate, used by the layout and opening sanitizers.
+
+    An empty/unknown prop id yields nothing: a value can only be stored for a
+    slot somebody declared.
     """
     if not isinstance(raw, dict) or not raw:
         return {}
-    prop = get_prop(prop_id) if prop_id else None
-    return sanitize_slot_values(raw, (prop or {}).get(SLOTS_KEY) or [])
+    return sanitize_slot_values(raw, declared_slots(prop_id))
 
 
 def _autofill_slots(prop_id: str) -> None:
