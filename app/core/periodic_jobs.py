@@ -400,6 +400,11 @@ def _sub_npc_wanderers():
 # the per-NPC GAME cooldown `npc.action_interval_game_minutes`.
 from app.core.npc_actions import _sub_npc_actions  # noqa: E402
 
+# The improvements queue feeds ONE step into the TaskQueue when the user has
+# been idle long enough, and rescans standing entries. Its own gates
+# (enabled/frozen/idle/busy) live in the engine — this file only schedules it.
+from app.core.improvements.engine import periodic_tick as _sub_improvements  # noqa: E402
+
 
 # Sub-Task-Tabelle: (callable, min_interval_seconds, label).
 # min_interval_seconds = wie oft soll dieser Sub-Task LAUFEN. Der Tick
@@ -429,6 +434,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_npc_windows,               120,                   "npc_windows"),
     (_sub_npc_wanderers,             300,                   "npc_wanderers"),
     (_sub_npc_actions,               60,                    "npc_actions"),
+    (_sub_improvements,              30,                    "improvements"),
 ]
 
 

@@ -19,6 +19,7 @@ from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
 from app.imagegen.base import BackendBusyError
 from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
 
+from app.core import user_activity
 from app.core.config import MAX_IMAGE_BACKENDS
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
@@ -1458,10 +1459,16 @@ class ImageService:
         prompt_style = _ucp.get("prompt_style", "")
         negative_prompt = _ucp.get("prompt_negative", "")
 
-        # Task im Queue-System registrieren fuer einheitliche Sichtbarkeit.
-        # start_running=False: Prompt-Build (LLM-Calls) + GPU-Kanal-Wartezeit
-        # zaehlen nicht als running — track_activate() erfolgt im GPU-Callable,
-        # wenn der Channel-Worker die Generierung tatsaechlich startet.
+        # A generation is a user action — it keeps the improvements queue's
+        # idle window closed. An improvement step's OWN generation runs inside
+        # ``user_activity.suppressed()``, where this call is a no-op, so the
+        # queue never keeps itself awake.
+        user_activity.touch()
+
+        # Register the task in the queue system for uniform visibility.
+        # start_running=False: prompt build (LLM calls) + GPU channel wait time
+        # do not count as running — track_activate() happens in the GPU callable
+        # once the channel worker really starts the generation.
         _tq = get_task_queue()
         _track_id = _tq.track_start(
             "image_generation", "Bild generieren", agent_name=character_name,

@@ -57,6 +57,67 @@ contract, never recorded from a run:
   7. ``update`` re-encodes params to JSON on write and decodes on read;
      ``delete`` takes the steps with it.
 
+PART 2 — the idle engine (task 2).  Settings for the whole part:
+enabled = True, idle_minutes = 15, so the idle threshold is 15 * 60 = 900 s.
+Every task row below is read back out of ``STORAGE/task_queue.db``, never
+taken from the ``submit`` call.
+
+  8. The idle gate is the threshold, not a mood.  840 s < 900 s → the tick
+     submits nothing and marks nothing running; 960 s > 900 s → exactly ONE
+     task row exists, of type ``improvement_step``, priority 90, queue
+     "improvements", ``max_retries`` 0.  Which step?  ``list_steps`` orders by
+     LABEL, and A's candidates are ("k1", "Zeta") + ("k2", "Alpha") — so the
+     payload names k2, and k2 alone is 'running'.
+
+  9. ONE step at a time.  The row from 8 is still pending, so
+     ``has_pending_task`` is True and the next tick returns "" (reason
+     "busy") without adding a second row.
+
+ 10. A finished step is done, counted and timed.  ``handle_step`` runs the
+     type's ``apply`` (recorded in ``FakeType.applied`` with the task id),
+     marks k2 done with a real duration (started_at was stamped in 8) and
+     raises ``done_count`` to 1.  A ``touch()`` right after — the user came
+     back — closes the window again: the next tick submits nothing.
+
+ 11. A one_shot closes itself.  C has both candidates; after two
+     ``handle_step`` calls nothing is pending or running any more, so its
+     status is 'done' and it drops out of ``ordered_queue`` (which shows only
+     'open' entries) — leaving A, whose k1 is still pending.
+
+ 12. A standing entry rescans on the clock.  B is scanned once with the single
+     candidate k7; with ``last_scan_at`` set 700 s back (>= SCAN_INTERVAL_S =
+     600) the next tick rescans it — ``scanned`` 1 — and the newly listed k9
+     lands as pending beside k7.  With the stamp 100 s back (< 600) the tick
+     rescans nothing: ``scanned`` 0.
+
+ 13. A defect costs an attempt.  MAX_ATTEMPTS = 2: the first raise leaves the
+     step runnable with attempts 1, the second gives up — status 'skipped',
+     attempts 2 — and raises the improvement's ``failed_count`` to 1.
+
+ 14. Busy is load, not a defect.  A ``BackendBusyError`` leaves the step
+     pending with attempts still 0, so a busy backend can never burn a
+     candidate's two attempts.
+
+ 15. ``ordered_queue`` is the ENTRY order, positions numbered from 1.
+     ``set_order([B, A])`` puts B first, so the queue reads
+     [(1, B/k9), (2, A/k1)] — k7 is skipped and k2 done, neither shows.
+     Pausing B removes its rows, and A becomes position 1.
+
+ 16. The three gates and the one-shot override.  Disabled →
+     (False, "disabled"); enabled but frozen → (False, "frozen"); thawed but
+     the user active 60 s ago → (False, "active").  ``request_run_now(A)``
+     makes the NEXT tick submit A's k1 anyway; while that row is owed the
+     status reason is "busy" and ``running_step`` is k1.  After the step is
+     handled the flag is spent: with the user still 60 s active the next tick
+     submits "" again, and A — its last step done — has closed itself.
+     ``next_allowed_in_s`` is 900 - 60 = 840, minus the test's own runtime,
+     hence the 830..840 window.
+
+ 17. A restart leaves 'running' rows behind.  With B's k9 marked running and
+     every ``improvement_step`` row deleted from the queue DB (what a restart
+     that never finished looks like), the next tick makes k9 pending again —
+     and, the user still being active, queues nothing in the same breath.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvements.py
 """
 import os
@@ -289,6 +350,256 @@ store.delete(A)
 check("delete removes the improvement",
       [r["label"] for r in store.list_all()], ["B"])
 check("…and its steps", store.list_steps(A), [])
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PART 2 — the idle engine
+# ═══════════════════════════════════════════════════════════════════════════
+import json  # noqa: E402
+import sqlite3  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+from app.core.improvements import engine  # noqa: E402
+from app.core.timeutils import utc_now  # noqa: E402
+from app.imagegen.base import BackendBusyError  # noqa: E402
+from app.models.world import set_world_frozen  # noqa: E402
+
+QUEUE_DB = STORAGE / "task_queue.db"
+
+
+def step_tasks():
+    """The improvement_step rows the queue really stored — asked at the
+    consumer (the queue DB), never taken from the ``submit`` return value."""
+    conn = sqlite3.connect(f"file:{QUEUE_DB}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT task_id, priority, queue_name, max_retries, status, payload"
+            " FROM tasks WHERE task_type=? ORDER BY created_at, rowid",
+            (engine.TASK_TYPE,)).fetchall()
+    finally:
+        conn.close()
+    return [{"task_id": r[0], "priority": r[1], "queue_name": r[2],
+             "max_retries": r[3], "status": r[4], "payload": json.loads(r[5])}
+            for r in rows]
+
+
+def worker_done(task_id):
+    """What the queue worker does once the handler returned — this smoke runs
+    without worker threads, so the row is closed by hand."""
+    conn = sqlite3.connect(QUEUE_DB)
+    try:
+        conn.execute("UPDATE tasks SET status='completed' WHERE task_id=?",
+                     (task_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def drop_step_tasks():
+    """A restart: the queue rows are gone, the 'running' step rows are not."""
+    conn = sqlite3.connect(QUEUE_DB)
+    try:
+        conn.execute("DELETE FROM tasks WHERE task_type=?", (engine.TASK_TYPE,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def step_of(improvement_id, key):
+    return [s for s in store.list_steps(improvement_id)
+            if s["candidate_key"] == key][0]
+
+
+def ago(seconds):
+    return (utc_now() - timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+
+class FakeType(ImprovementType):  # noqa: F811 — part 2's own, drivable stand-in
+    """Candidate list and failure mode are class state the cases drive."""
+
+    id = "fake"
+    label = "Fake improvement"
+    params_schema = []
+    candidates = [("k1", "Zeta"), ("k2", "Alpha")]
+    behaviour = "ok"          # "ok" | "fail" | "busy"
+    applied = []              # [(candidate_key, task_id)] in call order
+
+    def find_candidates(self, params):
+        return [Candidate(key, label) for key, label in FakeType.candidates]
+
+    def is_done(self, candidate, params):
+        return False
+
+    def apply(self, candidate, params, task_id):
+        FakeType.applied.append((candidate.key, task_id))
+        if FakeType.behaviour == "fail":
+            raise RuntimeError("boom")
+        if FakeType.behaviour == "busy":
+            raise BackendBusyError("gpu busy")
+
+
+registry.clear()
+registry.register(FakeType())
+store.delete(B)                       # part 1's leftover — start from empty
+store.set_settings(True, 15)
+set_world_frozen(False)
+
+# ── 8. the idle gate ─────────────────────────────────────────────────────────
+print("\n8. tick submits one step, and only once the user is idle")
+A = store.create("fake", "A", {}, "one_shot")["id"]
+check("a fresh one_shot is scanned on demand", engine.scan(A),
+      {"added": 2, "closed": 0})
+
+user_activity._set_for_test(840)
+result = engine.tick()
+check("840 s is short of the 900 s window",
+      (result["submitted"], result["reason"]), ("", "active"))
+check("…and nothing was marked running", store.get(A)["running"], 0)
+
+user_activity._set_for_test(960)
+result = engine.tick()
+tasks = step_tasks()
+check("960 s submits exactly one step", len(tasks), 1)
+check("…the label order picks Alpha (k2)", tasks[0]["payload"],
+      {"improvement_id": A, "candidate_key": "k2"})
+check("…priority 90, queue 'improvements', no retries",
+      (tasks[0]["priority"], tasks[0]["queue_name"], tasks[0]["max_retries"]),
+      (90, "improvements", 0))
+check("…and tick returns that task id", result["submitted"], tasks[0]["task_id"])
+check("…only that step is running",
+      {s["candidate_key"]: s["status"] for s in store.list_steps(A)},
+      {"k2": "running", "k1": "pending"})
+
+# ── 9. one step at a time ────────────────────────────────────────────────────
+print("\n9. one step at a time")
+result2 = engine.tick()
+check("a second tick waits for the owed row",
+      (result2["submitted"], result2["reason"]), ("", "busy"))
+check("…and adds no row", len(step_tasks()), 1)
+
+# ── 10. a finished step ──────────────────────────────────────────────────────
+print("\n10. handle_step finishes the step")
+TID = result["submitted"]
+worker_done(TID)
+check("the handler reports success",
+      engine.handle_step({"improvement_id": A, "candidate_key": "k2",
+                          "_task_id": TID}), {"ok": True})
+step = step_of(A, "k2")
+check("the step is done", step["status"], "done")
+check("…with a real duration",
+      isinstance(step["duration_s"], float) and step["duration_s"] >= 0.0, True)
+check("…counted on the improvement", store.get(A)["done_count"], 1)
+check("…and the type really ran, with the task id", FakeType.applied[-1],
+      ("k2", TID))
+user_activity.touch()
+check("a user action closes the window again", engine.tick()["submitted"], "")
+
+# ── 11. a one_shot closes itself ─────────────────────────────────────────────
+print("\n11. a one_shot with every step done closes itself")
+C = store.create("fake", "C", {}, "one_shot")["id"]
+engine.scan(C)
+for candidate_key in ("k2", "k1"):
+    engine.handle_step({"improvement_id": C, "candidate_key": candidate_key,
+                        "_task_id": ""})
+check("its status is done", store.get(C)["status"], "done")
+check("…and it leaves the queue view",
+      [r["improvement_id"] for r in engine.ordered_queue()], [A])
+
+# ── 12. a standing entry rescans ─────────────────────────────────────────────
+print("\n12. a standing entry rescans on the clock")
+FakeType.candidates = [("k7", "Beta")]
+B = store.create("fake", "B", {}, "standing")["id"]
+engine.scan(B)
+store.update(B, last_scan_at=ago(700))
+FakeType.candidates = [("k7", "Beta"), ("k9", "Alpha")]
+user_activity.touch()                 # keep this tick to its scan
+check("a stamp older than SCAN_INTERVAL_S rescans", engine.tick()["scanned"], 1)
+check("…and the new candidate lands as pending",
+      {s["candidate_key"]: s["status"] for s in store.list_steps(B)},
+      {"k7": "pending", "k9": "pending"})
+store.update(B, last_scan_at=ago(100))
+check("a fresh stamp is left alone", engine.tick()["scanned"], 0)
+
+# ── 13. a defect costs an attempt ────────────────────────────────────────────
+print("\n13. a defect costs an attempt, twice is a skip")
+FakeType.behaviour = "fail"
+result = engine.handle_step({"improvement_id": B, "candidate_key": "k7",
+                             "_task_id": ""})
+check("the error is reported", "boom" in (result.get("error") or ""), True)
+step = step_of(B, "k7")
+check("the first attempt stays runnable", (step["status"], step["attempts"]),
+      ("pending", 1))
+engine.handle_step({"improvement_id": B, "candidate_key": "k7", "_task_id": ""})
+step = step_of(B, "k7")
+check("the second gives up", (step["status"], step["attempts"]),
+      ("skipped", 2))
+check("…counted as a failure on the improvement",
+      store.get(B)["failed_count"], 1)
+
+# ── 14. busy is not a defect ─────────────────────────────────────────────────
+print("\n14. busy is load, not a defect")
+FakeType.behaviour = "busy"
+engine.handle_step({"improvement_id": B, "candidate_key": "k9", "_task_id": ""})
+step = step_of(B, "k9")
+check("a busy backend spends no attempt", (step["status"], step["attempts"]),
+      ("pending", 0))
+FakeType.behaviour = "ok"
+
+# ── 15. ordered_queue ────────────────────────────────────────────────────────
+print("\n15. ordered_queue follows the entry order")
+store.set_order([B, A])
+queue = engine.ordered_queue()
+check("B first, A second, positions from 1",
+      [(r["pos"], r["improvement_id"], r["candidate_key"]) for r in queue],
+      [(1, B, "k9"), (2, A, "k1")])
+check("…each row carries its entry's label, type and mode",
+      (queue[0]["label"], queue[0]["type_id"], queue[0]["mode"]),
+      ("B", "fake", "standing"))
+store.update(B, status="paused")
+check("a paused entry leaves the queue",
+      [(r["pos"], r["improvement_id"]) for r in engine.ordered_queue()],
+      [(1, A)])
+
+# ── 16. gates + run-now ──────────────────────────────────────────────────────
+print("\n16. the gates, and the one-shot override")
+store.set_settings(False, 15)
+check("disabled", engine.submit_allowed(), (False, "disabled"))
+store.set_settings(True, 15)
+set_world_frozen(True)
+check("frozen", engine.submit_allowed(), (False, "frozen"))
+set_world_frozen(False)
+user_activity._set_for_test(60)
+check("active", engine.submit_allowed(), (False, "active"))
+
+engine.request_run_now(A)
+result = engine.tick()
+check("run-now overrides the idle rule",
+      (result["submitted"] != "", step_tasks()[-1]["payload"]),
+      (True, {"improvement_id": A, "candidate_key": "k1"}))
+state = engine.status()
+check("status names the step in flight",
+      (state["reason"], state["running_step"]["candidate_key"]),
+      ("busy", "k1"))
+
+worker_done(result["submitted"])
+engine.handle_step({"improvement_id": A, "candidate_key": "k1",
+                    "_task_id": result["submitted"]})
+user_activity._set_for_test(60)
+check("the flag is spent after one step", engine.tick()["submitted"], "")
+check("…and A's last step closed it", store.get(A)["status"], "done")
+state = engine.status()
+check("status reports the settings and the gate",
+      (state["enabled"], state["idle_minutes"], state["frozen"],
+       state["reason"]), (True, 15, False, "active"))
+check("…and counts the window down",
+      830 <= state["next_allowed_in_s"] <= 840, True)
+
+# ── 17. restart recovery ─────────────────────────────────────────────────────
+print("\n17. a restart's orphaned running step")
+store.mark_running(B, "k9")
+drop_step_tasks()
+result = engine.tick()
+check("the step is runnable again", step_of(B, "k9")["status"], "pending")
+check("…and nothing was queued in the same breath", result["submitted"], "")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:
