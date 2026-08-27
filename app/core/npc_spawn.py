@@ -748,7 +748,7 @@ def _fill_bound_slot(name: str, slot: Dict[str, Any], where: str,
       be bound (they are the throwaway sheets a slot may move around at will);
       a full character has a place in this world of its own.
     * POOLED — revived DIRECTLY, without ``take_from_pool``: the draw picks by
-      role and deliberately skips a ``npc_permanent`` sheet, and this binding
+      role and deliberately skips a PERMANENT sheet, and this binding
       is exactly the documented way such a sheet leaves the pool. A sheet
       whose assets are still rendering is left alone for this pass — its
       finish job carries the placement and will put it here by itself.
@@ -993,10 +993,11 @@ def _settle_wanderer(name: str) -> bool:
     the very character the player is writing to. It settles on a later tick,
     once the conversation has cooled.
 
-    A PERMANENT wanderer (``npc_permanent``) is never pooled here — see the
-    branch below.
+    A PERMANENT wanderer (``npc_ops.is_permanent_npc``) is never pooled here —
+    see the branch below.
     """
     from app.core.npc_actions import _in_chat
+    from app.core.npc_ops import is_permanent_npc
     from app.models.character import (get_character_current_location,
                                       get_character_profile,
                                       save_character_profile)
@@ -1020,12 +1021,12 @@ def _settle_wanderer(name: str) -> bool:
     # A PERMANENT wanderer is NEVER pool stock. "Make permanent" is an admin's
     # explicit decision (Character config → Temporary NPC → Lifetime), and
     # pooling it would be a one-way door: `take_from_pool` deliberately skips a
-    # `npc_permanent` sheet, so no spawn would ever draw it back and the pool
-    # list offers no way out either. So the coin is only tossed for the MORTAL
+    # permanent sheet, so no spawn would ever draw it back and the pool list
+    # offers no way out either. So the coin is only tossed for the MORTAL
     # wanderers, whose other half is the pool — a permanent one always turns
     # around, and if the road back cannot be started it simply stands here and
     # tries again on the next tick.
-    permanent = bool(profile.get("npc_permanent"))
+    permanent = is_permanent_npc(profile)
     if origin and origin != here and (permanent or random.random() < 0.5):
         # Turn around instead of vanishing (§ 5, 50/50).
         profile["wander_target"] = origin

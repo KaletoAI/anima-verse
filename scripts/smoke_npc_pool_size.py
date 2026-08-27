@@ -63,6 +63,46 @@ Hand-derived expectations:
       so the header reads "2/2" — full, and honestly so. Counting the rows
       instead would say "3/2", a pool over its own cap that will never shrink.
 
+  [6] THE MODE IS THE DECISION, THE FLAG IS DERIVED FROM IT. ``npc_permanent``
+      is younger than the ``lifetime`` dropdown, so a sheet made permanent
+      before the flag existed (or imported from a pack that only knows the
+      mode) carries ``lifetime "permanent"`` and NO flag. Every reader asks
+      ``npc_ops.is_permanent_npc``, which accepts either, so such a sheet is
+      kept exactly like a flagged one. Straight off [4]/[5]'s state — pool
+      [demo_pool_c, demo_pool_d, demo_pool_keep], two mortal sheets, cap 2:
+
+        pooling the mode-only demo_pool_mode gives FOUR rows and deletes
+        nothing — there are still only two mortal sheets, so the cap
+        (``_enforce_pool_cap``) never fires;
+        pooling the mortal demo_pool_lamp then makes three mortal ones, so
+        the oldest MORTAL (demo_pool_c) goes;
+        both of those carry the slot role "lamplighter", and the mode-only
+        one is the OLDER of the two — so ``take_from_pool("lamplighter")``
+        answering demo_pool_lamp proves both halves at once: the role match
+        works, and the mode-only sheet was stepped over.
+
+      Result: the pool is [demo_pool_d, demo_pool_keep, demo_pool_mode,
+      demo_pool_lamp] and the list row for demo_pool_mode says
+      ``permanent True``.
+
+  [7] A REVIVE HEALS THE MISSING FLAG INSTEAD OF RESTAMPING THE NPC. This is
+      the path the bug ran through: ``revive_from_pool`` read the flag alone,
+      found none, and handed the kept sheet a fresh TTL — the sweeper then
+      read a real stamp and the admin list showed "expires in …" next to
+      "permanent". With the cap out of the way (``max_pool_size=10``) and the
+      asset gate off (``require_assets=False``, so the revive is not held
+      back for a portrait this throwaway world will never render):
+
+        revive(demo_pool_mode, ttl=3)   expires_at ""   npc_permanent True
+        revive(demo_pool_plain, ttl=3)  expires_at = expiry_stamp(3), i.e.
+                                        remaining_span (3.0, "3h")
+
+      The first line is the fix (no stamp, and the flag written onto the sheet
+      as part of the same save); the second is the unchanged normal case — a
+      sheet with neither mode nor flag is stamped with the caller's TTL, which
+      3 game hours from now reads as (3.0, "3h") exactly as in
+      ``smoke_npc_ttl``.
+
 Usage:  ./.venv/bin/python scripts/smoke_npc_pool_size.py
 """
 import os
@@ -82,10 +122,12 @@ config.load(STORAGE / "config.json")
 db.init_schema()
 
 from app.core import npc_spawn  # noqa: E402
+from app.core.npc_ops import remaining_span  # noqa: E402
 from app.core.npc_pool import (list_pool, max_pool_size,  # noqa: E402
-                               pool_npc, take_from_pool)
+                               pool_npc, revive_from_pool, take_from_pool)
 from app.core.task_queue import get_task_queue  # noqa: E402
-from app.models.character import (list_available_characters,  # noqa: E402
+from app.models.character import (get_character_profile,  # noqa: E402
+                                  list_available_characters,
                                   list_pooled_characters,
                                   save_character_profile)
 
@@ -113,7 +155,7 @@ def set_npc_config(**values) -> None:
     config.save(cfg, STORAGE / "config.json")
 
 
-def make_npc(name: str, permanent: bool = False) -> str:
+def make_npc(name: str, permanent: bool = False, role: str = "") -> str:
     """A living temporary NPC, the way the apply path leaves one."""
     save_character_profile(name, {
         "character_name": name, "template": "npc-temporary",
@@ -122,6 +164,25 @@ def make_npc(name: str, permanent: bool = False) -> str:
         "outfit_description": "grey linen apron",
         "expires_at": "",
         "npc_permanent": permanent,
+        "npc_slot_role": role,
+    }, create_new=True)
+    return name
+
+
+def make_mode_only_npc(name: str, role: str = "") -> str:
+    """A sheet made permanent BEFORE ``npc_permanent`` existed: mode, no flag.
+
+    The key is absent, not False — that is exactly what an old profile (or a
+    content-pack import that only knows the dropdown) looks like on disk.
+    """
+    save_character_profile(name, {
+        "character_name": name, "template": "npc-temporary",
+        "character_personality": "Dry, economical with words.",
+        "standing_task": "lights the lamps",
+        "outfit_description": "grey linen apron",
+        "expires_at": "",
+        "lifetime": "permanent",
+        "npc_slot_role": role,
     }, create_new=True)
     return name
 
@@ -184,6 +245,49 @@ check("every row carries the state",
 _limits = list_npcs_route()["limits"]
 check("the counter beside the size skips the kept sheet",
       (_limits["pool_used"], _limits["pool_size"]), (2, 2))
+
+# ---------------------------------------------------------------------------
+print("\n[6] A sheet whose lifetime says permanent is kept without the flag")
+
+MODE = make_mode_only_npc("demo_pool_mode", role="lamplighter")
+check("the sheet really carries the mode and NO flag",
+      (get_character_profile(MODE).get("lifetime"),
+       "npc_permanent" in get_character_profile(MODE)),
+      ("permanent", False))
+check("the mode-only sheet goes in", pool_npc(MODE, reason="smoke"), True)
+check("four rows, and nothing was dropped for a cap of 2",
+      sorted(list_pooled_characters()), sorted([C, D, KEEP, MODE]))
+
+LAMP = make_npc("demo_pool_lamp", role="lamplighter")
+check("a third MORTAL sheet goes in", pool_npc(LAMP, reason="smoke"), True)
+check("the oldest MORTAL went, the mode-only one stayed",
+      sorted(list_pooled_characters()), sorted([D, KEEP, MODE, LAMP]))
+check("the draw for that role steps over the older mode-only sheet",
+      take_from_pool("lamplighter"), LAMP)
+check("and the list row says it is kept",
+      [r["permanent"] for r in list_pool() if r["name"] == MODE], [True])
+
+# ---------------------------------------------------------------------------
+print("\n[7] A revive heals the missing flag instead of restamping the NPC")
+# Cap out of the way (nothing more may be deleted) and the asset gate off —
+# this throwaway world renders no portraits, so an armed gate would hold every
+# revive back before the placement.
+set_npc_config(max_pool_size=10, require_assets=False)
+
+check("the mode-only sheet is revived",
+      revive_from_pool(MODE, "", ttl_hours=3), True)
+_mode = get_character_profile(MODE)
+check("no new TTL was stamped on it", _mode.get("expires_at"), "")
+check("and the derived flag was written onto the sheet",
+      _mode.get("npc_permanent"), True)
+
+PLAIN = make_npc("demo_pool_plain")
+check("a sheet with neither mode nor flag goes in",
+      pool_npc(PLAIN, reason="smoke"), True)
+check("…is revived", revive_from_pool(PLAIN, "", ttl_hours=3), True)
+check("…and is stamped with the caller's TTL as before",
+      remaining_span(get_character_profile(PLAIN).get("expires_at") or ""),
+      (3.0, "3h"))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

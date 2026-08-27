@@ -308,6 +308,26 @@ def activate_default_skills(name: str, template: str = "") -> List[str]:
     return enabled
 
 
+def is_permanent_npc(profile: Dict[str, Any]) -> bool:
+    """True when this sheet is KEPT — the one question every reader asks.
+
+    The MODE is the admin's decision: ``lifetime`` is what was picked in the
+    config form (Character config → Temporary NPC → Lifetime), and
+    ``npc_permanent`` is merely derived from it
+    (``character_ops._lifetime_fields`` writes both together). So a sheet that
+    carries the mode WITHOUT the flag — made permanent before the flag
+    existed, or imported from a content pack that only knows the mode — is
+    permanent all the same, and asking for the flag alone would restamp it
+    with a fresh TTL on the next revive.
+
+    Readers ask this, writers keep writing both keys: the flag stays the fast
+    field on the profile, this is the honest reading of it.
+    """
+    if bool(profile.get("npc_permanent")):
+        return True
+    return str(profile.get("lifetime") or "").strip().lower() == "permanent"
+
+
 def expiry_stamp(ttl_hours: Optional[float]) -> str:
     """Canonical GAME stamp ``ttl_hours`` of game time from now, or "".
 
@@ -480,9 +500,10 @@ def npc_summary(name: str) -> Dict[str, Any]:
         "expired": is_expired(expires_at),
         # PERMANENT is a decision, not a missing stamp. An NPC that never got
         # a TTL and one an admin explicitly made permanent both carry
-        # ``expires_at ""`` — only this flag tells the list which of the two it
-        # is showing, and it is what keeps a revive from re-stamping the sheet.
-        "permanent": bool(profile.get("npc_permanent")),
+        # ``expires_at ""`` — only the lifetime decision tells the list which
+        # of the two it is showing, and it is what keeps a revive from
+        # re-stamping the sheet.
+        "permanent": is_permanent_npc(profile),
     }
 
 

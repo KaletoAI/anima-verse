@@ -164,19 +164,21 @@ def _end_interaction(name: str) -> None:
 def _enforce_pool_cap() -> int:
     """Delete the oldest pooled NPCs beyond the cap. Returns how many went.
 
-    A PERMANENT sheet (``npc_permanent``) is invisible to the cap in both
-    directions: it is never deleted, and it never counts towards the overflow.
-    The cap exists to stop recycled stock from piling up, and a permanent sheet
-    is not stock — since ``take_from_pool`` skips it, no spawn will ever touch
-    it again, so it would otherwise sit at the FRONT of the deletion queue
-    (``list_pooled_characters`` is oldest-first) and the one character an admin
-    explicitly marked as kept would be the first one deleted for good.
+    A PERMANENT sheet (``npc_ops.is_permanent_npc``) is invisible to the cap in
+    both directions: it is never deleted, and it never counts towards the
+    overflow. The cap exists to stop recycled stock from piling up, and a
+    permanent sheet is not stock — since ``take_from_pool`` skips it, no spawn
+    will ever touch it again, so it would otherwise sit at the FRONT of the
+    deletion queue (``list_pooled_characters`` is oldest-first) and the one
+    character an admin explicitly marked as kept would be the first one deleted
+    for good.
     """
+    from app.core.npc_ops import is_permanent_npc
     from app.models.character import (delete_character, get_character_profile,
                                       list_pooled_characters)
     cap = max(0, max_pool_size())
     pooled = [n for n in list_pooled_characters()
-              if not (get_character_profile(n) or {}).get("npc_permanent")]
+              if not is_permanent_npc(get_character_profile(n) or {})]
     dropped = 0
     for name in pooled[:max(0, len(pooled) - cap)]:
         # delete_character sweeps the row, the storage dir and (temp NPC) the
@@ -209,14 +211,16 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
     claimant's location, so handing the same sheet out twice would place it
     there and leave the second slot silently empty.
 
-    A PERMANENT sheet (``npc_permanent``) is not stock either. An admin took
-    that character's lifetime away on purpose, and an automatic spawn grabbing
-    it would drop somebody's kept NPC into the next inn as its barkeeper. Its
-    way out of the pool is a SLOT BINDING — a bound slot revives exactly that
-    sheet; there is no other exit today. It is invisible to the pool cap in
-    exchange (see ``_enforce_pool_cap``), so waiting there costs it nothing.
+    A PERMANENT sheet (``npc_ops.is_permanent_npc``) is not stock either. An
+    admin took that character's lifetime away on purpose, and an automatic
+    spawn grabbing it would drop somebody's kept NPC into the next inn as its
+    barkeeper. Its way out of the pool is a SLOT BINDING — a bound slot revives
+    exactly that sheet; there is no other exit today. It is invisible to the
+    pool cap in exchange (see ``_enforce_pool_cap``), so waiting there costs it
+    nothing.
     """
     from app.core.npc_assets import is_awaiting_assets
+    from app.core.npc_ops import is_permanent_npc
     from app.models.character import get_character_profile, is_temporary_npc
     from app.models.character import list_pooled_characters
     wanted = (role or "").strip().lower()
@@ -225,7 +229,7 @@ def take_from_pool(role: str = "", template: str = "") -> Optional[str]:
         if not is_temporary_npc(name) or is_awaiting_assets(name):
             continue
         profile = get_character_profile(name) or {}
-        if profile.get("npc_permanent"):
+        if is_permanent_npc(profile):
             continue
         if wanted_tmpl and str(profile.get("template") or "") != wanted_tmpl:
             continue
@@ -259,7 +263,7 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     ``current_location`` is whatever the point turns out to lie in (usually
     nothing).
     """
-    from app.core.npc_ops import expiry_stamp
+    from app.core.npc_ops import expiry_stamp, is_permanent_npc
     from app.models.character import (POOLED_STATUS, get_character_profile,
                                       is_temporary_npc,
                                       save_character_profile,
@@ -273,8 +277,8 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     # config → Temporary NPC → Lifetime); pooling keeps every key but the
     # stamp, so a revive must not overwrite that decision with the slot's TTL:
     #
-    # * `permanent` — no stamp at all. `npc_permanent` is what stops the sheet
-    #   being handed the lifetime it was just relieved of.
+    # * `permanent` — no stamp at all. The lifetime decision is what stops the
+    #   sheet being handed the lifetime it was just relieved of.
     # * `custom` — its OWN hours. Stamping the slot TTL here left the dropdown
     #   saying "3 hours" while the NPC actually died after the slot's 24, and
     #   the disagreement came back on every single revive.
@@ -287,8 +291,19 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
             own_hours = float(profile.get("lifetime_hours") or 0)
         except (TypeError, ValueError):
             own_hours = 0.0
+    permanent = is_permanent_npc(profile)
+    if permanent and not profile.get("npc_permanent"):
+        # SELF-HEAL, in the same save. This is the one path that would
+        # otherwise restamp such a sheet: a profile made permanent before
+        # `npc_permanent` existed carries the mode alone, and the admin list
+        # then showed "expires in …" next to "permanent". Writing the derived
+        # flag here repairs the sheet on the spot instead of leaving the class
+        # of old sheets to be fixed one "Make permanent" click at a time.
+        profile["npc_permanent"] = True
+        logger.info("Revive of '%s': lifetime says permanent, the flag was "
+                    "missing — writing it instead of stamping a new TTL", name)
     profile["expires_at"] = (
-        "" if profile.get("npc_permanent")
+        "" if permanent
         else expiry_stamp(own_hours if own_hours > 0 else ttl_hours))
     profile["npc_slot_role"] = (slot_role or "").strip()
     # BOTH slot stamps are written on every revive, one of them empty: a
@@ -400,6 +415,7 @@ def list_pool() -> List[Dict[str, Any]]:
     """
     from urllib.parse import quote
 
+    from app.core.npc_ops import is_permanent_npc
     from app.models.character import get_character_profile, is_temporary_npc
     from app.models.character import list_pooled_characters
     rows: List[Dict[str, Any]] = []
@@ -419,7 +435,7 @@ def list_pool() -> List[Dict[str, Any]]:
             # pool by itself nor counts against its size, and the row has to
             # say both. Without it the list showed a sheet that looks like
             # every other one and silently never comes back.
-            "permanent": bool(profile.get("npc_permanent")),
+            "permanent": is_permanent_npc(profile),
             "image_url": (f"/characters/{quote(name, safe='')}/images/"
                           f"{quote(image, safe='')}" if image else ""),
             "description": _pool_description(profile),

@@ -1199,8 +1199,11 @@ def _lifetime_fields(profile: Dict[str, Any],
     Three modes, one stamp (plan-npc-leben-bugs § Lifetime):
 
     * ``permanent`` — no stamp at all (``""`` is what ``sweep_expired_npcs``
-      reads as "never") plus ``npc_permanent``, the flag that survives pooling
-      and stops ``npc_pool.revive_from_pool`` from handing the NPC a new TTL;
+      reads as "never") plus ``npc_permanent``, the flag DERIVED from the mode
+      that survives pooling and stops ``npc_pool.revive_from_pool`` from
+      handing the NPC a new TTL. The mode is the decision, the flag follows
+      it — readers ask ``npc_ops.is_permanent_npc``, which accepts either, so
+      a sheet written before the flag existed is permanent all the same;
     * ``custom`` — ``lifetime_hours`` GAME hours from now;
     * ``default`` — the world's own TTL for this kind of NPC: the wanderer TTL
       for a wanderer, the slot TTL for everyone else.
