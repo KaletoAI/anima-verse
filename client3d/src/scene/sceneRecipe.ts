@@ -25,7 +25,8 @@ import {
   type Tile,
 } from './tiles';
 import { SubmergedGhost } from './submergedGhost';
-import { ghostCutY } from '../game/walk';
+import { ghostCutY, ghostWaterLevel } from '../game/walk';
+import { waterInside } from './waterShade';
 
 /** Which resolution tier a mount loads, per model group. `building` = the
  *  far-view shell/area model, `interior` = everything else (dioramas, props).
@@ -87,7 +88,10 @@ function reliftPlacement(tile: Tile, rec: PlacedSceneModel): number {
  *  - the WATER. `worldWaterSampler()` is the raster the terrain draws its own
  *    surface from (K-A E2/E3), so the line the ghost cuts at is the line the
  *    player sees. `NaN` where nothing knows of water, which the gate reads as
- *    dry.
+ *    dry. It is asked the SAME question the terrain asks — level AND
+ *    `waterInside(sd)`, exactly the pair of `terrainLod.liftedHeight` — because
+ *    the level is dilated 4 m past the authored outline and a gate reading it
+ *    alone ghosts a diorama standing on the bank (user finding 2026-08-27).
  *
  * IT IS CALLED AT PLACEMENT TIME, NOT PER FRAME. A prop does not move; what
  * moves under it is the height field and the water raster, and those arrive on
@@ -106,7 +110,8 @@ function refreshPlacementGhost(tile: Tile, rec: PlacedSceneModel): void {
   if (!water) return;
   const w = tileToWorld(tile, rec.spec.anchor[0], rec.spec.anchor[1],
                         rec.spec.bottom_y + rec.lift);
-  const level = ghostCutY(w.y, water(w.x, w.z));
+  const ww = water(w.x, w.z);
+  const level = ghostCutY(w.y, ghostWaterLevel(ww.level, waterInside(ww.sd)));
   if (!rec.ghost) {
     // Nothing is built for a dry placement — no object, no meshes, no
     // registration. That is the red probe of the smoke.

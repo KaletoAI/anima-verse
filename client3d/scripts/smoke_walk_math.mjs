@@ -909,7 +909,7 @@ async function main() {
   const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
     groundScope, wadeGate, swimFrom, SWIM_FROM_DEFAULT_M, MIN_PACE,
-    submergedInWater, ghostCutY, WATER_GHOST_FROM_M,
+    submergedInWater, ghostCutY, ghostWaterLevel, WATER_GHOST_FROM_M,
     MOVE_EPS_M } = walk;
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
@@ -1495,6 +1495,82 @@ async function main() {
       ghostCutY(-2.0 + -0.28 + 2.335, 0.3), 0.3);
     check('...and 3.5 cm of water over the same placement -> none',
       ghostCutY(-2.0 + -0.28 + 2.335, 0.09), null);
+  }
+
+  // --- ghostWaterLevel: the ghost asks what the WATER asks (2026-08-27) -----
+  // THE BUG. At a shore location the placed diorama was drawn half transparent
+  // although it stood on dry land, while the avatar beside it was solid. Both
+  // gates were `submergedInWater(base, level)`, but they read different fields:
+  // the figure gets its level through `ground.typeAt`, a polygon-inside test,
+  // and the placement got the raster LEVEL — which the server DILATES 4 m past
+  // every authored outline (`app/core/heightfield.py`, § A16.5). Since the bank
+  // clamp was retired (K-A E6) the ground in that collar sits up to 0.772 m
+  // under the dilated mirror, and the ghost trips at 0.05 m. So it fired on
+  // ground the terrain draws as bank.
+  //
+  // THE FIELD THAT ANSWERS "INSIDE" is the signed distance, and the terrain
+  // already uses it: `terrainLod.liftedHeight` scales the water lift by
+  // `waterShade.waterInside(sd)` = smoothstep(0, 0.5, sd), i.e. with
+  // t = clamp(sd/0.5, 0, 1), the value t²(3−2t):
+  //
+  //     sd = -1    -> t = 0    -> 0        (1 m outside: the dilation collar)
+  //     sd =  0    -> t = 0    -> 0        (exactly ON the authored waterline)
+  //     sd =  0.05 -> t = 0.1  -> 0.028
+  //     sd =  0.25 -> t = 0.5  -> 0.5      (half the band in)
+  //     sd =  2    -> t = 1    -> 1        (full water)
+  //
+  // (those five are re-derived in client3d/scripts/smoke_water_shade.mjs
+  // against `waterInside` itself; here they are the INPUT, because `walk.ts`
+  // must stay import-free and a second copy of the smoothstep in it is exactly
+  // the twin rule that let the two gates drift apart in the first place.)
+  //
+  // `ghostWaterLevel(level, insideness)` therefore returns the level where the
+  // picture draws water and `NaN` — the raster's own "nothing here" — where it
+  // does not, and `ghostCutY` is left to judge the depth. BOTH must pass.
+  //
+  //     level 12.30, inside 0     -> NaN     -> ghostCutY(12.00, ·) = null
+  //     level 12.30, inside 0.5   -> 12.30   -> ghostCutY(12.00, ·) = 12.30
+  console.log('ghostWaterLevel — no ghost outside the authored outline');
+  {
+    const BASE = 12.0;
+    const LEVEL = 12.3;            // 0.30 m over the base: six times the gate
+    const inside = (sd) => {       // the hand-derived smoothstep, see above
+      const t = Math.min(Math.max(sd / 0.5, 0), 1);
+      return t * t * (3 - 2 * t);
+    };
+    check('sd = -1: the dilation collar is not water', inside(-1), 0);
+    check('...so the level is withdrawn', Number.isNaN(
+      ghostWaterLevel(LEVEL, inside(-1))), true);
+    check('...and 0.30 m of "water" over a bank prop makes NO ghost',
+      ghostCutY(BASE, ghostWaterLevel(LEVEL, inside(-1))), null);
+    check('sd = 0: ON the waterline the ramp is still 0', inside(0), 0);
+    check('...so the outline itself carries no ghost either',
+      ghostCutY(BASE, ghostWaterLevel(LEVEL, inside(0))), null);
+    check('sd = 0.25: half the band in, the ramp is 0.5', inside(0.25), 0.5);
+    check('...the level passes through untouched',
+      ghostWaterLevel(LEVEL, inside(0.25)), LEVEL);
+    check('...and the cut is the usual waterline',
+      ghostCutY(BASE, ghostWaterLevel(LEVEL, inside(0.25))), 12.3);
+    check('sd = 2: full water', inside(2), 1);
+    check('...and the cut is the same line',
+      ghostCutY(BASE, ghostWaterLevel(LEVEL, inside(2))), 12.3);
+    // The tiniest bit inside is already inside: the ramp only has to be > 0,
+    // the DEPTH is `ghostCutY`'s question and nobody else's.
+    check('sd = 0.05: a ramp of 0.028 is still inside', inside(0.05), 0.028);
+    check('...so a shallow rim inside the outline does get its ghost',
+      ghostCutY(BASE, ghostWaterLevel(LEVEL, inside(0.05))), 12.3);
+    // …and the depth gate keeps its veto inside the outline.
+    check('inside the outline, 2 cm of water is still no ghost',
+      ghostCutY(BASE, ghostWaterLevel(12.02, inside(2))), null);
+    check('a raster that knows no level is dry however far inside',
+      ghostCutY(BASE, ghostWaterLevel(NaN, inside(2))), null);
+    // THE RED PROBE — the bug itself, in numbers. The measured shore case:
+    // the bank ground sits 0.772 m under the dilated mirror (§ K-A E6 addendum)
+    // and lies 1 m OUTSIDE the outline. The old gate saw only the level.
+    check('RED: the old level-only gate ghosted the bank diorama',
+      ghostCutY(BASE, BASE + 0.772), 12.772);
+    check('...the gate that asks the outline too leaves it solid',
+      ghostCutY(BASE, ghostWaterLevel(BASE + 0.772, inside(-1))), null);
   }
 
   // --- slopeBlocks (E8 task 1) ---------------------------------------------

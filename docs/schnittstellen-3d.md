@@ -6211,6 +6211,17 @@ genug gemacht, dass er nicht hob. Wer die Wasserlinie exakt am gezeichneten
 Umriss haben will, malt das Ufer nicht unter den Spiegel — das ist eine
 Autoren-Aussage und keine Bake-Regel mehr.
 
+**Der Unterwasser-Geist stellt dieselbe Frage wie das Wasser** (Befund
+2026-08-27, Nachtrag zu diesem Preis): Ein Ding steht genau dann im Wasser, wenn
+Pegel UND `waterInside(sd)` es sagen — dasselbe Paar, aus dem `liftedHeight` den
+Wasser-Lift bildet (`ground.waterGhostAt` → `walk.ghostWaterLevel` +
+`walk.ghostCutY`, geprüft in `smoke_walk_math.mjs`). Ein für sich gelesener
+Pegel ist NIE eine Maske: er ist 4 m über jeden Umriss hinaus dilatiert, und der
+Boden in diesem Kragen liegt seit dem Rückbau bis zu 0,772 m darunter — also
+weit über den 0,05 m des Geist-Gates, weshalb ein Diorama auf dem trockenen Ufer
+halbtransparent geisterte, während die Figur daneben (sie liest den
+Polygon-Test `ground.typeAt`) fest blieb.
+
 ### Begehung und Navigation
 
 `world_height` liefert am Ufer jetzt Boden, der unter dem Spiegel liegen darf.

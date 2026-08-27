@@ -63,9 +63,29 @@ export function worldGroundSampler(): ((x: number, z: number) => number) | null 
   return worldGroundAt;
 }
 
-/** The world's WATER level over a point, or `null` while nothing has been taken
+/**
+ * WHAT THE WATER IS OVER ONE POINT — the pair every underwater gate needs, and
+ * the reason it is a pair.
+ *
+ * `level` is the drawn mirror (`waterRaster.rasterLevelAt`) and `sd` the signed
+ * distance to the authored outline (`waterRaster.rasterSdAt`, positive inside).
+ * The LEVEL ALONE IS NOT A MASK: the server dilates it 4 m past every outline,
+ * so it answers a mirror on ground that is drawn as bank. The terrain settles
+ * that with `waterShade.waterInside(sd)` (`terrainLod.liftedHeight`), and so
+ * must anything that decides whether a thing stands in water — hence one
+ * sampler handing out both numbers, never two hooks that can drift apart.
+ */
+export interface WorldWater {
+  /** The drawn water surface in world metres; `NaN` where no tile knows. */
+  level: number;
+  /** Signed distance to the authored outline, > 0 inside; `WATER_SD_DRY`
+   *  (`waterRaster.ts`) where no tile knows. */
+  sd: number;
+}
+
+/** The world's WATER over a point, or `null` while nothing has been taken
  *  over — see `setWorldWater`. */
-let worldWaterAt: ((x: number, z: number) => number) | null = null;
+let worldWaterAt: ((x: number, z: number) => WorldWater) | null = null;
 
 /**
  * Take over the world's water sampler — the mirror twin of the ground hook.
@@ -75,20 +95,25 @@ let worldWaterAt: ((x: number, z: number) => number) | null = null;
  * `NaN` where no tile knows of water. Nothing else may be used for it — a
  * placement gated against the painted area's profile while the picture is drawn
  * from the raster would put a ghost's waterline somewhere the eye does not see
- * one.
+ * one. It answers the OUTLINE with it ({@link WorldWater}), because the level is
+ * dilated and a gate keyed on it alone ghosts things standing on the bank.
  *
  * Set by `scene/ground.ts`, which owns the raster. Read by `sceneRecipe.ts` to
- * decide whether a placement stands under water (`walk.ghostCutY`,
- * `scene/submergedGhost.ts`); a world with no water never registers anything
- * interesting and every placement comes out dry, which is right.
+ * decide whether a placement stands under water (`walk.ghostWaterLevel` +
+ * `walk.ghostCutY`, `scene/submergedGhost.ts`); a world with no water never
+ * registers anything interesting and every placement comes out dry, which is
+ * right.
  */
-export function setWorldWater(sampler: (x: number, z: number) => number): void {
+export function setWorldWater(
+  sampler: (x: number, z: number) => WorldWater,
+): void {
   worldWaterAt = sampler;
 }
 
 /** The same sampler for consumers outside this module. `null` while none has
  *  arrived, which every gate reads as "dry". */
-export function worldWaterSampler(): ((x: number, z: number) => number) | null {
+export function worldWaterSampler(
+): ((x: number, z: number) => WorldWater) | null {
   return worldWaterAt;
 }
 

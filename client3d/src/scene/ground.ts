@@ -82,7 +82,8 @@ import type { Point2, ScatterFootprint, ScatterInstance,
 import { fetchHeightfield, fetchHeightTiles, fetchHeightTileStats, fetchTerrain,
   fetchTerrainLayers } from '../api';
 import type { HeightTileBatch, HeightTileStatsBatch } from '../api';
-import { emptyWaterRaster, rasterLevelAt, waterTileFrom } from './waterRaster';
+import { emptyWaterRaster, rasterLevelAt, rasterSdAt,
+  waterTileFrom } from './waterRaster';
 import { localToWorld } from '../game/enterLocation';
 import { footprintSignature, TERRAIN_FALLBACK_COLOR } from '../game/minimap';
 import { sanitizePolygon } from '../game/polygon';
@@ -96,6 +97,7 @@ import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
 import { hasSurfaceTexture, setWorldGround, setWorldWater, surfaceFor,
   surfaceMaterialSpec } from './tiles';
+import type { WorldWater } from './tiles';
 import { acquireImpostor, createImpostorMesh, disposeImpostorMesh,
   releaseImpostor } from './impostors';
 import { applyTerrainLayers, disposeLayerGround, layerIndexOfKind, layerTable,
@@ -786,11 +788,28 @@ export interface Ground {
    * arrived is dry, which is what a renderer must draw — a mirror invented from
    * a coarse raster would be a surface no lattice of the model describes.
    *
-   * Its readers are the underwater ghosts (`scene/submergedGhost.ts`): the
-   * world props gate their own placements on it and the scene recipe gets it
-   * through the tiles' water hook.
+   * It is a LEVEL, not a mask — see {@link waterGhostAt} for the pair the
+   * underwater ghosts gate on.
    */
   waterLevelAt(x: number, z: number): number;
+
+  /**
+   * THE SAME MIRROR PLUS THE OUTLINE IT IS DRAWN INSIDE — the pair the
+   * underwater ghosts (`scene/submergedGhost.ts`) gate on, and the ONE reason
+   * this exists next to {@link waterLevelAt}.
+   *
+   * The level is dilated by the server (4 m past every authored outline,
+   * § A16.5), so it answers a mirror over ground the terrain draws as bank —
+   * and since the bank clamp was retired (K-A E6) that ground can sit 0.77 m
+   * under it, which is fifteen times the 5 cm the ghost gate trips at. The
+   * signed distance is the field the terrain itself asks
+   * (`waterShade.waterInside`, `terrainLod.liftedHeight`), so a gate reading
+   * both is the gate the picture already uses.
+   *
+   * Its readers are the world props (through `createWorldProps`) and the scene
+   * recipe (through the tiles' water hook, `tiles.setWorldWater`).
+   */
+  waterGhostAt(x: number, z: number): WorldWater;
   // `maxHeightIn` and `heightRangeIn` — the highest ground inside a world
   // rectangle and how much it moves there — went with the veil (contract v6
   // Nr. 8): they existed to hang the fog quads and to decide which of them was
@@ -1190,9 +1209,20 @@ export function createGround(): Ground {
   const waterAt = (x: number, z: number): number =>
     rasterLevelAt(waterRaster, x, z);
 
+  /** THE LEVEL AND THE OUTLINE IN ONE READ — what every underwater-ghost gate
+   *  asks for (`tiles.WorldWater`). The level alone is DILATED 4 m past the
+   *  authored outline, so a gate keyed on it ghosts props standing on the bank;
+   *  the signed distance is the same field the terrain shades the water by
+   *  (`waterShade.waterInside`, `terrainLod.liftedHeight`), and taking both
+   *  from one closure is what keeps the ghost and the picture in step. */
+  const waterGhostAt = (x: number, z: number): WorldWater => ({
+    level: rasterLevelAt(waterRaster, x, z),
+    sd: rasterSdAt(waterRaster, x, z),
+  });
+
   // …and the same hook for the SCENE placements (`scene/sceneRecipe.ts`), which
   // reach the ground through `tiles.ts` rather than through this object.
-  setWorldWater(waterAt);
+  setWorldWater(waterGhostAt);
 
   /**
    * THE TERRAIN ITSELF — one instanced patch, a quadtree, and the height taken
@@ -3255,6 +3285,7 @@ export function createGround(): Ground {
       return hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
     },
     waterLevelAt: waterAt,
+    waterGhostAt,
     heightRevision: () => heightRev,
     // THE OVERVIEW FIELD ITSELF, for the readers that draw the relief instead
     // of standing on it (the minimap's hillshade). The overview and nothing

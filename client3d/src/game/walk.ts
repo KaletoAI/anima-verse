@@ -535,6 +535,41 @@ export function ghostCutY(baseY: number,
   return submergedInWater(baseY, waterLevel) ? waterLevel : null;
 }
 
+/**
+ * THE LEVEL A GHOST MAY BE CUT AT, ONCE THE PICTURE AGREES THERE IS WATER —
+ * the second half of the gate, and the fix for the ghosting diorama on the
+ * shore (user finding 2026-08-27, "Klippen").
+ *
+ * `waterLevel` is the raster's DILATED level: the server defines it 4 m past
+ * every authored outline (`app/core/heightfield.py`, § A16.5), so on a bank it
+ * still answers a mirror that is drawn nowhere — and since the bank clamp was
+ * retired (K-A E6) the ground there sits up to 0.77 m under it, far over the
+ * 5 cm of {@link submergedInWater}. Read alone it floods the collar and every
+ * prop standing in it turns into a half-transparent ghost on dry land.
+ *
+ * `insideness` is what the TERRAIN asks instead: `waterShade.waterInside(sd)`
+ * over the very same point, the ramp that scales the water lift in
+ * `terrainLod.liftedHeight`. It is 0 outside the authored outline and ON it,
+ * and rises to 1 half a metre in. Passing the ramp's VALUE rather than `sd`
+ * keeps this file import-free and leaves the ramp itself in exactly one place;
+ * a second copy of the smoothstep here is how the ghost and the drawn water
+ * start disagreeing again.
+ *
+ * The answer is the level to hand {@link ghostCutY}, or `NaN` — the raster's
+ * own "nothing knows of water here", which that gate already reads as dry.
+ *
+ * Hand values:
+ *
+ *     level 12.6, inside 0     -> NaN    (1 m outside: the dilation collar)
+ *     level 12.6, inside 0     -> NaN    (sd = 0, exactly on the waterline)
+ *     level 12.6, inside 0.5   -> 12.6   (sd = 0.25, half a band in)
+ *     level 12.6, inside 1     -> 12.6   (sd >= 0.5, full water)
+ */
+export function ghostWaterLevel(waterLevel: number,
+                                insideness: number): number {
+  return insideness > 0 ? waterLevel : NaN;
+}
+
 /** The reach rule BOTH ground clips share, in one place: outside a built
  *  place the ground may name a clip, inside it never does, and a blank name
  *  is no name. Two copies of this is how one of them starts reaching further

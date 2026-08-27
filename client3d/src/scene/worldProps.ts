@@ -32,7 +32,9 @@ import { loadGlb } from './propAssets';
 import { instanceTier, SCATTER_LOD_DEFAULTS } from './scatterLod';
 import type { InstanceTier, ScatterLodCfg } from './scatterLod';
 import { SubmergedGhost } from './submergedGhost';
-import { ghostCutY } from '../game/walk';
+import { ghostCutY, ghostWaterLevel } from '../game/walk';
+import type { WorldWater } from './tiles';
+import { waterInside } from './waterShade';
 import type { WorldPropSpec } from '../types';
 
 /**
@@ -142,17 +144,20 @@ function shapeKey(wp: WorldPropSpec): string {
 
 /**
  * @param heightAt the world ground under a point, in metres
- * @param waterAt  the DRAWN water surface over that point (`NaN` = dry) — the
- *                 raster twin of `heightAt` (`ground.waterLevelAt`). It decides
- *                 nothing but the underwater ghost: a prop whose base stands
- *                 under the local water level is redrawn tinted below the
+ * @param waterAt  the DRAWN water over that point — level AND the signed
+ *                 distance to the authored outline (`ground.waterGhostAt`), the
+ *                 raster twin of `heightAt`. It decides nothing but the
+ *                 underwater ghost: a prop whose base stands under the local
+ *                 water level, INSIDE that outline, is redrawn tinted below the
  *                 waterline, so a sunken crate or a jetty post is visible
- *                 through the opaque surface. A layer built without it simply
- *                 has no ghosts.
+ *                 through the opaque surface. The outline half is not optional:
+ *                 the level is dilated 4 m past it, so a level-only gate ghosts
+ *                 props on the dry bank. A layer built without the sampler
+ *                 simply has no ghosts.
  */
 export function createWorldProps(
   heightAt: (x: number, z: number) => number,
-  waterAt?: (x: number, z: number) => number,
+  waterAt?: (x: number, z: number) => WorldWater,
 ): WorldPropsLayer {
   const group = new THREE.Group();
   group.name = 'world-props';
@@ -163,11 +168,17 @@ export function createWorldProps(
 
   /** The water over ONE prop's base, or null where it stands dry — the one
    *  gate of the underwater ghost (`walk.ghostCutY`, `scene/submergedGhost`).
-   *  It is asked at PLACEMENT time and on every beat that re-seats a placement,
-   *  never per frame: a world prop does not move, and what moves under it (the
-   *  height field and the water raster) arrives exactly on those beats. */
+   *  It asks the SAME pair the terrain shades by: the level, and
+   *  `waterInside(sd)` (`walk.ghostWaterLevel`), because the level is dilated
+   *  4 m past the authored outline and reading it as a mask ghosts a prop that
+   *  stands on the bank. It is asked at PLACEMENT time and on every beat that
+   *  re-seats a placement, never per frame: a world prop does not move, and what
+   *  moves under it (the height field and the water raster) arrives exactly on
+   *  those beats. */
   function ghostLevelOf(rec: PropRecord, bottom: number): number | null {
-    return waterAt ? ghostCutY(bottom, waterAt(rec.spec.x, rec.spec.z)) : null;
+    if (!waterAt) return null;
+    const ww = waterAt(rec.spec.x, rec.spec.z);
+    return ghostCutY(bottom, ghostWaterLevel(ww.level, waterInside(ww.sd)));
   }
 
   function drop(rec: PropRecord): void {
