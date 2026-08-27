@@ -162,11 +162,25 @@ export function NpcSlotsEditor({
           {t('The area itself is the home: its NPCs stand at a free point inside the outline and roam there. No rooms, no radius.')}
         </div>
       )}
+      {/* Three rows per slot, not one: the eight controls do not fit a single
+          line at a usual editor width, and stretching them until they do is
+          what made every one of them a sliver. Identity and counts first, the
+          placement/window second, the free text last. */}
       {slots.map((slot, idx) => (
-        <div key={idx} className="ga-form-row" style={{ alignItems: 'flex-end' }}>
+        <div
+          key={idx}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            paddingBottom: 8,
+            borderBottom: '1px solid var(--border, #30363d)',
+          }}
+        >
+        <div className="ga-form-row" style={{ alignItems: 'flex-end' }}>
           <Field
             label={t('Role')}
-            hint={t('The tag an NPC of this slot carries. Also what a recycled NPC is matched on.')}
+            tip={t('The tag an NPC of this slot carries. Also what a recycled NPC is matched on.')}
           >
             <input
               className="ga-input"
@@ -177,7 +191,7 @@ export function NpcSlotsEditor({
           </Field>
           <Field
             label={t('Character')}
-            hint={t('Bind this slot to one existing NPC — only temporary NPCs. It is revived from the pool or moved here from wherever it stands, and nobody new is ever generated for this slot.')}
+            tip={t('Bind this slot to one existing NPC — only temporary NPCs. It is revived from the pool or moved here from wherever it stands, and nobody new is ever generated for this slot.')}
           >
             <select
               className="ga-input"
@@ -201,7 +215,7 @@ export function NpcSlotsEditor({
           <Field
             label={t('Min')}
             compact
-            hint={slot.character ? t('A bound slot is exactly one NPC.') : undefined}
+            tip={slot.character ? t('A bound slot is exactly one NPC.') : undefined}
           >
             <input
               type="number"
@@ -226,11 +240,13 @@ export function NpcSlotsEditor({
               onChange={(e) => update(idx, { count_max: parseInt(e.target.value, 10) || 0 })}
             />
           </Field>
+        </div>
+        <div className="ga-form-row" style={{ alignItems: 'flex-end' }}>
           {!isArea && (
           <Field
             label={t('Room')}
             compact
-            hint={
+            tip={
               (slot.radius_m || 0) > 0
                 ? t('Ignored — this slot has a home area instead of a room.')
                 : undefined
@@ -255,7 +271,7 @@ export function NpcSlotsEditor({
           <Field
             label={t('Radius (m)')}
             compact
-            hint={t("0 = inside the location's rooms. Above 0 the NPC stands at a free point within this many metres of the place and roams there.")}
+            tip={t("0 = inside the location's rooms. Above 0 the NPC stands at a free point within this many metres of the place and roams there.")}
           >
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input
@@ -281,7 +297,7 @@ export function NpcSlotsEditor({
           <Field
             label={t('Active')}
             compact
-            hint={t('Outside its window nobody is placed here and the NPCs of this slot go back into the pool.')}
+            tip={t('Outside its window nobody is placed here and the NPCs of this slot go back into the pool.')}
           >
             <select
               className="ga-input"
@@ -305,7 +321,7 @@ export function NpcSlotsEditor({
             </select>
           </Field>
           {whenMode(slot.when) === 'custom' && (
-            <Field label={t('Game time')} compact hint={t('From (inclusive) — to (exclusive); a window may span midnight.')}>
+            <Field label={t('Game time')} compact tip={t('From (inclusive) — to (exclusive); a window may span midnight.')}>
               <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                 <input
                   type="time"
@@ -329,9 +345,11 @@ export function NpcSlotsEditor({
               </div>
             </Field>
           )}
+        </div>
+        <div className="ga-form-row" style={{ alignItems: 'flex-end' }}>
           <Field
             label={t('Briefing')}
-            hint={t('What the generator should know about this person.')}
+            tip={t('What the generator should know about this person.')}
           >
             <textarea
               className="ga-textarea"
@@ -343,6 +361,7 @@ export function NpcSlotsEditor({
           <button className="ga-btn ga-btn-sm ga-btn-danger" onClick={() => remove(idx)}>
             {t('Remove')}
           </button>
+        </div>
         </div>
       ))}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>

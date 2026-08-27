@@ -10,6 +10,10 @@ import { useHelp } from '../help/HelpContext'
  *   </Field>
  *
  * - `hint`: small muted helper text below the control.
+ * - `tip`: the same help, but as a "ⓘ" glyph next to the caption instead of a
+ *   paragraph under the control. Use it in crowded rows: a hint is laid out as
+ *   content, so the longest help text — not the control — decides how wide the
+ *   column gets, and eight helpful sentences squeeze eight inputs into slivers.
  * - `inline`: caption left, control right (for tight rows like checkboxes).
  * - `compact`: don't stretch this field to fill the row — use the control's
  *   own width. Useful for narrow number inputs or checkboxes inside a
@@ -25,6 +29,7 @@ import { useHelp } from '../help/HelpContext'
 export function Field({
   label,
   hint,
+  tip,
   inline,
   compact,
   help,
@@ -33,6 +38,7 @@ export function Field({
 }: {
   label: string
   hint?: ReactNode
+  tip?: string
   inline?: boolean
   compact?: boolean
   help?: string
@@ -45,7 +51,12 @@ export function Field({
   if (compact) cls.push('ga-field-compact')
   return (
     <div className={cls.join(' ')}>
-      <label className="ga-field-caption">{label}</label>
+      <label className="ga-field-caption">
+        {label}
+        {tip ? (
+          <span className="ga-field-tip" role="img" title={tip} aria-label={tip}>ⓘ</span>
+        ) : null}
+      </label>
       <div
         className="ga-field-control"
         data-help={help || undefined}

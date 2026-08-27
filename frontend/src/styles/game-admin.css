@@ -584,6 +584,15 @@ a.ga-btn {
   line-height: 1.4;
 }
 
+/* The same help as a hint, but out of the layout: a glyph beside the caption
+   with the text in the native tooltip. In a crowded row a hint paragraph is
+   what decides the column width — this decides nothing. */
+.ga-field-tip {
+  color: var(--text-muted, #8b949e);
+  cursor: help;
+  margin-left: 4px;
+}
+
 /* A field value that decides nothing — amber, not red: the value is saved
    and readable, it simply matches no entry, so a default takes over. */
 .ga-field-warn {
