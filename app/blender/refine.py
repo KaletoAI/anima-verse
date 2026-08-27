@@ -287,10 +287,17 @@ MAX_PARALLEL_LOD_BUILDS = 2
 _lod_slots = threading.BoundedSemaphore(MAX_PARALLEL_LOD_BUILDS)
 
 
-def take_lod_slot() -> bool:
-    """Reserve one of the background build slots. False = all of them are
-    busy; the caller skips SILENTLY (there is nothing to report — the same
-    demand comes back with the next payload)."""
+def take_lod_slot(wait_s: float = 0.0) -> bool:
+    """One of the parallel Blender slots, or False when all are busy.
+
+    ``wait_s`` > 0 waits that long for a slot instead of answering at once —
+    for background jobs that have nowhere better to be (a landing model's
+    surface bake, an improvements task); request threads keep the default 0,
+    where False means the caller skips SILENTLY (there is nothing to report —
+    the same demand comes back with the next payload).
+    """
+    if wait_s > 0:
+        return _lod_slots.acquire(blocking=True, timeout=wait_s)
     return _lod_slots.acquire(blocking=False)
 
 
