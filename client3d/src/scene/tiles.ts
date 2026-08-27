@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { tileDatumStep, worldToLocalXZ } from '@anima/scene-render';
-import type { CutoutHandle, SceneModelSpec, SurfaceMaterialSpec } from '@anima/scene-render';
+import { highestSurfaceAt, tileDatumStep, worldToLocalXZ } from '@anima/scene-render';
+import type { CutoutHandle, PlacedSurface, SceneModelSpec,
+  SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
   recipeFloorAt, roomSpotGrid, SPOT_FLAT_M, standY, WALK_CLEARANCE_M,
@@ -578,6 +579,13 @@ export interface Tile {
    *  It is the same number `deriveRoomSpots` stands the NPC spots on, so
    *  figure and spot cannot end up on two floors. */
   declaredFloors: DeclaredFloor[];
+  /** THE BAKED MODEL SURFACES of this scene (v6, spec-surface-height): one
+   *  entry per placed model that ships a `surface` lattice — every room
+   *  diorama and every `walkable` prop. RUNG 0 of `tileWalkY`, above the
+   *  declaration: the highest lattice answering at the point wins (a crate on
+   *  a rock). Built from the SPEC NUMBERS, never from three's matrices — the
+   *  spec decides, the renderer only re-measures. */
+  surfaces: PlacedSurface[];
   /** Wand-Materialien je Etage (fürs Etagen-Umschalten). Liste, weil
    *  texturierte Wände je Stück ein eigenes Material mit eigener repeat
    *  brauchen (Szenen-Rezept) — der Legacy-Grundriss trägt genau eines ein. */
@@ -808,7 +816,7 @@ export function buildTile(loc: WorldLocation): Tile {
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
     outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), walkPlates: [],
-    declaredFloors: [],
+    declaredFloors: [], surfaces: [],
     levelFilter: 0, roomOutdoor: new Set(),
     fade: 0, fadeTarget: 0, occl: 0,
   };
@@ -859,10 +867,12 @@ export function buildTile(loc: WorldLocation): Tile {
  * `floor_plan` (§ A19 no. 3) and the HEIGHT from the one height function at the
  * point being asked about.
  *
- * THE FLOOR, in three data rungs and no fourth (`roomFloorWorldY`): the room's
- * declared floor where the payload states one (a diorama `walk_y_world`, a
- * storey plate, an overlay zone on an area model), otherwise the TERRAIN — and
- * under a built plot the terrain IS the flat plateau the bake stamped there
+ * THE FLOOR, in data rungs only (`roomFloorWorldY`): the BAKED SURFACE where
+ * one answers (v6, the same rung 0 `tileWalkY` asks — a spot on a diorama's
+ * hillock stands on the hillock), else the room's declared floor where the
+ * payload states one (a diorama `walk_y_world`, a storey plate, an overlay
+ * zone on an area model), otherwise the TERRAIN — and under a built plot the
+ * terrain IS the flat plateau the bake stamped there
  * (§ G5), which is why a built interior comes out level without anybody
  * levelling it.
  *
@@ -974,12 +984,24 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   }
 }
 
-/** The floor of ONE room at a tile-local point, in WORLD metres: the payload's
- *  declaration where there is one, the terrain otherwise. `NaN` from a sampler
- *  that has nothing to say reads as the tile's own datum — a room must not put
- *  its stands at no height. */
+/** The floor of ONE room at a tile-local point, in WORLD metres: the baked
+ *  surface where one answers, else the payload's declaration where there is
+ *  one, else the terrain. `NaN` from a sampler that has nothing to say reads
+ *  as the tile's own datum — a room must not put its stands at no height.
+ *
+ *  RUNG 0 IS THE SAME SAMPLER `tileWalkY` asks, in the same order (ruling R1,
+ *  spec-surface-height): a room's stands and the figure walking over them must
+ *  come out on ONE floor (law 2026-08-20), so a spot on a diorama's hillock
+ *  stands on the hillock. The `SPOT_FLAT_M` gate in `deriveRoomSpots` still
+ *  keeps the room's stands together — a lattice cell that runs far away from
+ *  the room's own floor drops out of the raster exactly as a climbing piece of
+ *  terrain does. */
 function roomFloorWorldY(tile: Tile, floor: RoomFloor,
                          lx: number, lz: number): number {
+  if (tile.surfaces.length) {
+    const baked = highestSurfaceAt(tile.surfaces, lx, lz);
+    if (baked !== null) return tile.center.y + baked;
+  }
   if (floor.declared !== undefined) return tile.center.y + floor.declared;
   const w = tileToWorld(tile, lx, lz, 0);
   const y = worldGroundAt ? worldGroundAt(w.x, w.z) : NaN;
@@ -1009,8 +1031,16 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
  * Boden" E5b. Split off so the world term above wraps the whole answer instead
  * of one of its exits.
  *
- * TWO RUNGS, in this order:
+ * FOUR RUNGS, in this order:
  *
+ *  0. THE BAKED SURFACES (`highestSurfaceAt`, spec-surface-height 2026-08-27):
+ *     a diorama's or a walkable prop's measured lattice — the highest one
+ *     answering wins (a crate on a rock), and where none answers the ladder
+ *     goes on. It outranks the declaration (ruling R1): `walk_y` was the
+ *     stand-in for the measurement that did not exist; a crate above the
+ *     declared floor forces the order anyway. No `plateCeiling` cap: the head
+ *     room is baked in. The mesh ray of E5b is NOT back — this is DATA the
+ *     server baked, not a measurement the renderer takes.
  *  1. A ROOM'S DECLARATION (`declaredFloorAt`, user finding 2026-08-20,
  *     Mondhütte). A room whose diorama spec carries a `walk_y_world` states
  *     where its own modelled floor is — a podium, a sunken lounge, a hut
@@ -1024,7 +1054,7 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
  *     `plateCeiling` so a figure on the ground floor is never hoisted onto the
  *     2.90 m slab above it.
  *
- * AND THE THIRD RUNG IS THE TERRAIN, which is `lift` — the tile's own centre,
+ * AND THE LAST RUNG IS THE TERRAIN, which is `lift` — the tile's own centre,
  * i.e. the field at the location's anchor, with the world term of `tileGroundY`
  * over it. The MESH RAY that used to sit between the plates and the ground is
  * DELETED: an area model's walkable surface is the `walk_y_world` it declares,
@@ -1034,6 +1064,11 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
  */
 function tileWalkY(tile: Tile, at: THREE.Vector3): number {
   const lift = tile.center.y;
+  if (tile.surfaces.length) {
+    const local = worldToTile(tile, at.x, at.z);
+    const baked = highestSurfaceAt(tile.surfaces, local.x, local.z);
+    if (baked !== null) return tile.center.y + baked + WALK_CLEARANCE_M;
+  }
   if (tile.declaredFloors.length) {
     const local = worldToTile(tile, at.x, at.z);
     const declared = declaredFloorAt(tile.declaredFloors, local.x, local.z);

@@ -5,7 +5,8 @@
  * lookups (the tile's plate list, the height sampler) stay in `scene/tiles.ts`
  * (`tileGroundY`, `deriveRoomSpots`); only the RULES live here.
  *
- * THE LADDER IS DATA-ONLY SINCE "Ein Boden" E5b. Three rungs and no fourth:
+ * THE LADDER IS DATA-ONLY SINCE "Ein Boden" E5b. Three rungs here, under the
+ * baked rung 0 that `tileWalkY` asks first (see the note at the end):
  *
  *  1. a ROOM's own declaration (`declaredFloorAt`) — where a diorama spec
  *     carries a `walk_y_world`, that is the floor of that room, in every
@@ -22,6 +23,9 @@
  * none the answer is the terrain, which is the ground that model is drawn over
  * anyway. Asking the triangles was only ever a way of finding out which of two
  * grounds was in front — there is one now.
+ *
+ * Since v6 a baked lattice (`tile.surfaces`, scene-render `surfaceHeightAt`)
+ * stands where the ray stood — data from the payload, not a measurement.
  */
 
 import { pointInPolygon, polygonArea, type Polygon } from './polygon';

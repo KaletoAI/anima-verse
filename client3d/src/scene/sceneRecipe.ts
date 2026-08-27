@@ -7,7 +7,7 @@ import { applyClipOutline, applyCutouts, applyDepthCut, applySlotMaterials,
   disposeCutMaterials, disposeSlotMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, storeyGroundLift, storeyGroundRelift, VERIFY_EPS,
-  surfaceMaterial, wallLength, wallTargets } from '@anima/scene-render';
+  surfaceMaterial, surfaceScale, wallLength, wallTargets } from '@anima/scene-render';
 import type { ModelTier, PrimitiveTarget, VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
@@ -829,6 +829,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // `unmountScene`, but a tile built fresh never saw one) — the list below is
   // filled from this payload alone.
   tile.walkPlates = [];
+  // The BAKED SURFACES (v6): collected synchronously from the payload, before
+  // any model has loaded — the figure stands right when the scene arrives.
+  tile.surfaces = scene.models
+    .filter((m) => m.surface)
+    .map((m) => ({ id: `${m.role}:${m.id}:${m.room_id ?? ''}`, spec: m, surface: m.surface! }));
   for (const plate of scene.plates) {
     const mesh = buildPlate(THREE, plate, plateMaterial(plate, style));
     // THE FLOOR THE FIGURES STAND ON (§ B1 addendum 2026-08-20): every plate is
@@ -1205,6 +1210,13 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // Kachelzentrum; die Spec traegt das Polygon relativ dazu.
     const placed = placeModelSpec(THREE, source, spec,
                                   { clone: false, clip: false });
+    if (spec.surface) {
+      // The one place a loader divergence Blender↔three would show: the
+      // spec's scale (max_m over the BAKED snapped extent) against the scale
+      // place() derived from the mesh it actually loaded.
+      verify.check(`${spec.role}:${spec.id}`, 'surface_scale', placed.scale.x,
+                   surfaceScale(spec.surface, spec));
+    }
     if (spec.role === 'building') {
       applyBuildingModel(tile, placed, spec);
       placements.push({ spec, url, object: placed, lift: 0 });
@@ -1751,6 +1763,7 @@ export function unmountScene(tile: Tile): void {
   // it. No plate, no restore.
   tile.walkPlates = [];
   tile.declaredFloors = [];
+  tile.surfaces = [];
   for (const [, rg] of tile.roomGroups) rg.parent?.remove(rg);
   for (const label of tile.interiorLabels) label.element?.remove();
   tile.interior = null;
