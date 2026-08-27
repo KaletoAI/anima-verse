@@ -405,8 +405,9 @@ export interface SwingingDoor {
    *  `applyDoorLocks` hands to `game/locks.doorwayLock`, so a locked door and
    *  a red threshold can never disagree. */
   rooms: string[];
-  /** `group.rotation.y` as `placeModelSpec` left it, read ONCE and added to
-   *  every frame instead of accumulated onto the object.
+  /** `rotation.y` of the node that swings (`swingNode ?? group`) as it was
+   *  left when the door was registered, read ONCE and added to every frame
+   *  instead of accumulated onto the object.
    *
    *  Today it is ALWAYS 0, and that is not an accident to be tidied away:
    *  `place()` returns its OUTER group, and the placement yaw sits on an inner
@@ -418,6 +419,17 @@ export interface SwingingDoor {
   baseYaw: number;
   /** Current opening angle in radians, signed like `swing`. */
   angle: number;
+  /** THE LEAF PIVOT (spec-picture-props.md § 6): when the placed model has a
+   *  node `leaf` and the payload a `door.leaf_bbox`, that node hangs in a
+   *  pivot group on its hinge edge and ONLY this group turns — the frame
+   *  stands still. Absent = the whole `group` swings, as before. Rebuilt on
+   *  every tier swap (`retargetDoorProp`), because the node lives in the
+   *  mesh that was just replaced. */
+  swingNode?: THREE.Object3D;
+  /** `door.leaf_bbox` as the payload sent it — kept so a tier swap can hang
+   *  the pivot again without the spec in hand. */
+  leafBbox?: { min: [number, number, number]; max: [number, number, number] };
+  hinge: 'left' | 'right';
 }
 
 /**

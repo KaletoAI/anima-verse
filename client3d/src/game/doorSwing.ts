@@ -17,8 +17,15 @@
  * THE GEOMETRY IS ALREADY DONE. `placeModelSpec` puts the placed group's
  * ORIGIN on the hinge edge (`measure: "fit"`, § B2), so opening the door is a
  * rotation of that group about its own y axis and nothing else — there is no
- * pivot to compute here and no geometry that both renderers would have to
- * share.
+ * geometry that both renderers would have to share.
+ *
+ * THE LEAF NODE (spec-picture-props.md § 6, D7). A door model that Blender
+ * has split carries its leaf as its own glTF node `leaf`, and the payload
+ * says where that node's box sits (`door.leaf_bbox`, raw y-up model metres).
+ * Then ONLY the leaf swings, about a pivot the renderer hangs on the leaf's
+ * hinge edge — `leafPivot` below is that one pure piece of arithmetic. (Not
+ * the wall piece `leaf` of `walls[]`, the flat panel in a door hole; that is
+ * a wall.)
  *
  * A LOCKED DOOR STAYS SHUT. `enterable` is the server's verdict for the rooms
  * behind the threshold (`game/locks.doorwayLock`), and a door that swung open
@@ -96,4 +103,45 @@ export function easeAngle(current: number, target: number, dt: number,
   const diff = target - current;
   if (Math.abs(diff) <= step) return target;
   return current + Math.sign(diff) * step;
+}
+
+/** `door.leaf_bbox` of the payload: the leaf node's box in RAW y-up model
+ *  metres — the coordinates the node's own vertices are in, before the fit
+ *  scaling `place()` puts on an ANCESTOR of that node. */
+export interface LeafBox {
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
+/**
+ * The x of the leaf's hinge edge in model space — `bbox.min.x`, for BOTH
+ * hinges (ruling R12, 2026-08-28).
+ *
+ * Why the hinge does not pick a side: `place()` seats every `fit` model on
+ * its local −x edge (the group origin IS that edge), and the server's
+ * `yaw_deg` turns a RIGHT-hinged door 180° about that very edge
+ * (`_door_prop_models`: "+x onto the direction the leaf runs, away from its
+ * hinge"). So in the model's own frame the hinge is the −x side whichever
+ * way the door opens — a right-hinged door is the same model turned round,
+ * not mirrored. `max.x` for a right hinge would swing the leaf about its
+ * FREE edge, through the frame. `hinge` stays in the signature so a call
+ * site reads its intent and so this stays the one place that states the
+ * rule; it only ever feeds the SIGN of the swing (`doorTargetAngle`).
+ */
+export function leafPivotX(bbox: LeafBox, hinge: 'left' | 'right'): number {
+  void hinge;
+  return bbox.min[0];
+}
+
+/**
+ * Where the pivot group goes, in the leaf node's PARENT frame (= model
+ * space for every GLB Blender writes: `frame` and `leaf` are root nodes with
+ * identity transforms): the hinge edge `leafPivotX`, the box's underside and
+ * the middle of its thickness — a rotation about the local y axis through
+ * that point turns the leaf on its hinge line.
+ */
+export function leafPivot(bbox: LeafBox, hinge: 'left' | 'right'
+): { x: number; y: number; z: number } {
+  return { x: leafPivotX(bbox, hinge), y: bbox.min[1],
+           z: (bbox.min[2] + bbox.max[2]) / 2 };
 }

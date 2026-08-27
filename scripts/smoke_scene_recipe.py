@@ -1717,6 +1717,32 @@ def test_door_props() -> None:
     check("...still ONE spec for a door two rooms share",
           len(axis2) == 1 and axis2[0]["door"]["swing"] == 1, str(axis2))
 
+    # ── the LEAF NODE's box rides on the spec (spec-picture-props.md § 6) ─
+    # The prop record carries `leaf_bbox` exactly while its mesh has a `leaf`
+    # node (props.LEAF_BBOX_KEY); the recipe copies it VERBATIM into
+    # `door.leaf_bbox` — raw y-up model metres, the renderer scales — and
+    # writes no key at all without it (the whole group swings then). Ruling
+    # R12: the pivot is always min.x, so nothing hinge-dependent is derived.
+    LEAF_BBOX = {"min": [0.1, 0.1, -0.02], "max": [0.9, 2.1, 0.0]}
+    stub_library(lambda pid: (
+        {**DOOR_PROP, "id": pid, "leaf_bbox": LEAF_BBOX} if pid == "door1" else None))
+    with_leaf = door_specs(door_prop_scene(a_openings=[
+        {**S_DOOR, "prop_id": "door1", "hinge": "right"}]))
+    check("a prop with leaf_bbox: door.leaf_bbox == the sidecar value, verbatim",
+          len(with_leaf) == 1 and with_leaf[0]["door"] == {
+              "opening": 0, "hinge": "right", "swing": -1,
+              "leaf_bbox": LEAF_BBOX}, str(with_leaf and with_leaf[0]["door"]))
+    check("...and the rest of the spec is unchanged by it (anchor, yaw, fit)",
+          with_leaf and with_leaf[0]["anchor"] == [-2.5, -1.0]
+          and near(with_leaf[0]["yaw_deg"], 0.0)
+          and with_leaf[0]["measure"] == "fit", str(with_leaf))
+    stub_door_props()
+    without = door_specs(door_prop_scene(a_openings=[
+        {**S_DOOR, "prop_id": "door1"}]))
+    check("without a sidecar leaf_bbox the field is ABSENT (not null)",
+          len(without) == 1 and "leaf_bbox" not in without[0]["door"],
+          str(without and without[0]["door"]))
+
     # ── the MIRRORED copy may win the width, never the direction ─────────
     # A shared door clamped into the AUTHOR's corner, on a neighbour wall that
     # is longer there, is the one case in which the wider entry is the

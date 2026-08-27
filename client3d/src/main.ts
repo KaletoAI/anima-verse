@@ -1264,9 +1264,11 @@ async function startApp(username: string, role: string) {
    *    room it stands in left out of the judgement). A barred door stays shut:
    *    it would otherwise promise a way in that `/play/enter-room` refuses.
    *
-   * `group.rotation.y = baseYaw + angle`, never `+=` — the angle is state on
+   * `node.rotation.y = baseYaw + angle`, never `+=` — the angle is state on
    * the record, so a dropped frame or a tier swap cannot accumulate a drift
-   * into the object. Nothing here is persisted or sent to the server, and the
+   * into the object. The node is the LEAF PIVOT when the model carries a
+   * `leaf` node (spec-picture-props.md § 6 — only the leaf turns, the frame
+   * stands), else the whole placed group, exactly as before. Nothing here is persisted or sent to the server, and the
    * collision never learns of it: a door prop is a model, and one walks
    * through an open door as well as through a shut one (`game/collide.ts`).
    */
@@ -1302,7 +1304,7 @@ async function startApp(username: string, role: string) {
         const enterable = doorwayLock(door.rooms, locks, here) === null;
         const target = doorTargetAngle(dist, enterable, door.swing);
         door.angle = easeAngle(door.angle, target, dt, DOOR_SWING_RATE);
-        door.group.rotation.y = door.baseYaw + door.angle;
+        (door.swingNode ?? door.group).rotation.y = door.baseYaw + door.angle;
       }
     }
   }

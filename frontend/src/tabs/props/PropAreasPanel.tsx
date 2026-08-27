@@ -298,6 +298,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
           drawing={!!drawKind}
           onPolygonFaces={onPolygonFaces}
           slots={slots}
+          leafBbox={info?.leaf_bbox || null}
         />
       ) : (
         <div className="ga-empty">
@@ -322,6 +323,15 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
                 </span>
               </span>
               <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                {/* THE DOOR LEAF is a node, not a material (R9): it cannot be
+                    renamed into a colour kind, nor a colour area into it —
+                    the server refuses both, so neither is offered. */}
+                {a.kind === 'leaf' ? (
+                  <span className="ga-hint" style={{ width: 110 }}
+                    title={t('The door leaf is a node of the mesh, not a material — only the leaf swings. Dissolve it to put its faces back into the frame.')}>
+                    {t('Door leaf')}
+                  </span>
+                ) : (
                 <select className="ga-input" style={{ width: 110 }}
                   value={a.kind} disabled={running}
                   title={t('Change what this surface IS — the material is renamed, and a picture area becomes a pane or the other way round.')}
@@ -332,10 +342,11 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
                   {areaKindOf(a.kind) ? null : (
                     <option value={a.kind}>{a.kind}</option>
                   )}
-                  {AREA_KINDS.map((k) => (
+                  {AREA_KINDS.filter((k) => k.kind !== 'leaf').map((k) => (
                     <option key={k.kind} value={k.kind}>{t(k.label)}</option>
                   ))}
                 </select>
+                )}
                 <button type="button" className="ga-btn ga-btn-sm"
                   disabled={running}
                   aria-label={t('Delete area')}

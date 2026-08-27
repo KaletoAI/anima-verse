@@ -2367,6 +2367,11 @@
     "Edit the pictures": "Bilder bearbeiten",
     "Picture": "Bild",
     "Picture (green screen)": "Bild (Greenscreen)",
-    "Glass (magenta)": "Glas (Magenta)"
+    "Glass (magenta)": "Glas (Magenta)",
+    "Door leaf": "Türblatt",
+    "Test swing": "Schwenk testen",
+    "Shut leaf": "Blatt schließen",
+    "Swing the door leaf 85° open about its hinge edge (left hinge) to check the cut — click again to shut it.": "Schwenkt das Türblatt um 85° um seine Angelkante auf (linke Angel), um den Schnitt zu prüfen — erneut klicken schließt es.",
+    "The door leaf is a node of the mesh, not a material — only the leaf swings. Dissolve it to put its faces back into the frame.": "Das Türblatt ist ein Knoten des Meshes, kein Material — nur das Blatt schwenkt. Auflösen legt seine Faces zurück in die Zarge."
   }
 }

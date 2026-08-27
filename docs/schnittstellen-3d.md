@@ -7439,6 +7439,54 @@ Store weist das ein zweites Mal ab, ein Rennen kommt also nicht daran vorbei.
 | Verschwundene Fläche: `area_defaults` UND `slot_values` jeder Variante gehen mit, `label` bleibt, am Spec kein toter Schlüssel | ebenda **[11]** |
 | Primäre Variante ohne aktives full-Mesh → nichts ist `stale` | ebenda **[11]** |
 
+### Das Türblatt als KNOTEN — `door.leaf_bbox` (spec-picture-props.md § 6, D7)
+
+Ein generiertes Türbild zeigt immer Zarge **und** Blatt; bis hierher schwenkte
+der Client die ganze Gruppe. Jetzt schneidet Blender das Blatt geometrisch aus
+(größte ebene Face-Gruppe im Zargen-Inneren plus ihre Kantenfaces, oder das
+Polygon des Admins mit Art `leaf`) und macht es zum eigenen glTF-Knoten
+**`leaf`**; der Rest ist der Knoten **`frame`**. Materialien und UVs bleiben,
+also bleibt eine Glasfläche im Blatt ein Slot-Material des Blatt-Knotens und
+schwenkt mit. Beide Knoten haben Identitäts-Transform (die Welt-Matrix ist in
+die Vertices gebacken). Art `leaf` ist eine Fläche ohne Farbe (Ruling R9):
+kein Prompt-Fragment, nie ein Slot, nie ein Default, nicht umbenennbar —
+nur `key_areas`, die Flächenliste und der Polygon-Pick kennen sie. (Das ist
+NICHT das Wandstück `leaf` in `walls[]` — das ist die flache Platte im
+Türloch, ein Wandteil; hier geht es um einen Knoten im Prop-Modell.)
+
+Am Tür-Spec (`_door_prop_models`) steht dann
+
+| Feld | Quelle | Bedeutung |
+|---|---|---|
+| `door.leaf_bbox: {min: [x,y,z], max: [x,y,z]}` | Prop-Sidecar `leaf_bbox` (vom Split-Lauf) | die Box des `leaf`-Knotens in **rohen** y-up-Modell-Metern, VOR der `fit`-Skalierung von `place()`; fehlt, solange das Mesh keinen `leaf`-Knoten hat — dann schwenkt wie bisher die ganze Gruppe |
+
+Der Client (`registerDoorProp`) sucht im platzierten Klon das Kind `leaf`,
+hängt es in eine Pivot-Gruppe mit Ursprung **(min.x, min.y, (min.z+max.z)/2)**
+— innerhalb der skalierten Modellwurzel, darum sind die rohen Koordinaten die
+richtigen — und dreht (`swingDoorProps`) **nur diese**; `retargetDoorProp`
+hängt sie nach dem Stufenwechsel neu. Winkel, Ease und Gate sind unverändert.
+
+**Ruling R12 (2026-08-28): der Pivot liegt für BEIDE Angeln bei `min.x`.**
+`place()` setzt jedes `fit`-Modell mit seiner lokalen −x-Kante in den Ursprung
+(§ B2 v5), und `_door_prop_models` dreht eine rechts angeschlagene Tür um
+zusätzliche 180° um genau diese Kante (`yaw = atan2(−uz, ux) + 180`). Eine
+rechte Tür ist also dasselbe Modell umgedreht, nie gespiegelt — ihre Angel ist
+im Modellraum weiterhin die −x-Seite. `max.x` bei rechter Angel setzte die
+Achse auf die FREIE Kante und schwenkte das Blatt durch die Zarge. `hinge`
+liefert weiterhin nur das Vorzeichen (`swing`).
+
+Handbeispiel (`scripts/smoke_scene_recipe.py` **[3p]**, `client3d/scripts/smoke_door_swing.mjs`):
+Sidecar `leaf_bbox = {min: [0.1, 0.1, −0.02], max: [0.9, 2.1, 0]}` (ein
+0,8 × 2,0-m-Blatt, 2 cm dick, 2 cm zurückgesetzt in einer 1,0 × 2,2-m-Zarge)
+→ `door = {opening: 0, hinge: "right", swing: −1, leaf_bbox: {…}}` wörtlich,
+Anker/Yaw/`fit` unverändert; ohne Sidecar-Wert **kein** Schlüssel (nicht
+`null`). Pivot: `leafPivotX(bbox, "left") = 0.1`, `leafPivotX(bbox, "right")
+= 0.1` (R12), `leafPivot(bbox, ·) = (0.1, 0.1, −0.01)`. Der Split selbst:
+`scripts/smoke_door_leaf_blender.py` (Ring aus vier Quadern um eine
+zurückgesetzte Platte → Knoten `frame` 48 / `leaf` 12 Dreiecke, `leaf_bbox`
+wie oben, `delete` fügt zu einem Knoten zurück); die Heuristik ohne Blender:
+`scripts/smoke_picture_areas.py` Fixture F.
+
 ## Nachtrag 2026-08-27 (§ B2): Oberflächen-Raster (v6)
 
 **Anlass** (User am Ort „Klippen"): „Die Laufhöhe des Avatars ist die Höhe des

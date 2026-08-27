@@ -21,10 +21,11 @@ Params (``args["params"]``)::
                            area of ``kind``; every other area stays; a listed
                            face that belonged to another area moves
                 "delete" — the area ``area`` is dissolved, nothing else changes
-    kinds       ["picture", "glass"] — the kinds to detect in mode auto
+    kinds       ["picture", "glass", "leaf"] — the kinds to detect in mode
+                auto; "leaf" runs the § 6 door-leaf heuristic (below)
     faces       [int] — mode manual
-    kind        "picture" | "glass" — mode manual
-    area        "<area id>" — mode delete
+    kind        "picture" | "glass" | "leaf" — mode manual
+    area        "<area id>" | "leaf" — mode delete
     min_area_m2 float, min_faces int — the size filter of mode auto
     origins     {"<area id>": "<material name>"} — where dissolved faces go
                 (the server keeps it from the run that created the area);
@@ -53,12 +54,31 @@ materials: a mesh that has them and two or more layers keeps its backup in
 the last one. When the last area is dissolved the backup is removed again
 (layer 0 is the atlas once more), so a mesh does not grow a layer per cycle.
 
+THE DOOR LEAF (spec § 6, decision D7) is a NODE, not a material: the faces
+of the leaf become their own object ``leaf`` — materials and UVs untouched,
+so a glass area inside the leaf stays a slot material of that node and
+swings with it — and everything else becomes the one object ``frame``. Both
+end up with an IDENTITY transform (the world matrix is baked into the
+vertices), so the ``leaf_bbox`` reported below is at once the leaf node's
+own local box and the model-space box a renderer hangs its pivot on. Auto
+mode (``"leaf"`` in ``kinds``) joins a previous leaf back first and runs
+``picture_areas.detect_leaf``; manual mode with kind ``leaf`` takes the
+listed faces (R1 indices of the CURRENT mesh, a previous leaf included —
+the list REPLACES the leaf); delete with area ``leaf`` joins it back into
+``frame``. NOT the wall-piece kind ``leaf`` of the scene payload (the flat
+panel in a door hole) — same word, different thing.
+
 Result ``data``::
 
     {"areas": [{id, kind, faces: n, size_m: [w, h], normal, centroid,
                 edges: [[[x,y,z],[x,y,z]], …], origin: "<material>"}, …],
+     "leaf_bbox": {"min": [x, y, z], "max": [x, y, z]},   # only with a leaf
      "mesh_layout": [{name, tri_count}, …],
      "changed": bool}
+
+The leaf's area entry is ``{id: "leaf", kind: "leaf", faces, size_m, normal,
+centroid, edges: <the 12 edges of leaf_bbox>, origin: ""}`` and always
+sorts last. Everything glTF y-up (R2), the box included.
 
 Output ``model`` (a GLB, textures embedded) only when the mesh changed.
 Blender-side Python only: bpy, bmesh, mathutils, the bundled numpy, stdlib —
@@ -84,6 +104,12 @@ import numpy as np                                            # noqa: E402
 
 SLOT_PREFIX = "slot_"
 ATLAS_LAYER_NAME = "atlas_uv"
+#: The door leaf's node name and the frame's (spec § 6) — object names in
+#: Blender, node names in the GLB, what the clients look up.
+LEAF_NAME = "leaf"
+FRAME_NAME = "frame"
+#: The face attribute that carries the leaf pick across the join/split.
+LEAF_MARK = "av_leaf"
 _AREA_RE = re.compile(r"^slot_(" + "|".join(pa.KINDS) + r")_(\d+)$")
 ROUND = 5
 
@@ -150,6 +176,22 @@ class Model:
                 self.poly.append((oi, t.polygon_index))
             self.layout.append({"name": obj.name, "tri_count": len(me.loop_triangles)})
             self.had_areas.append(any(_area_name(m.name) for m in me.materials if m))
+
+    def welded_faces(self):
+        """The face list over vertices WELDED BY POSITION (5 decimals) — for
+        the door-leaf geometry only. A glTF export stores a flat-shaded box
+        with three vertices per corner (one per normal), so after one
+        export/import round trip no two faces of the box share an edge any
+        more and the maths module's edge connectivity would see 60 islands.
+        Positions are the same either way; only the indices are folded. The
+        colour path keeps the split indices, because ITS per-vertex UVs
+        differ across a seam and must not be folded."""
+        canon = {}
+        remap = []
+        for i, v in enumerate(self.vertices):
+            key = (round(v[0], 5), round(v[1], 5), round(v[2], 5))
+            remap.append(canon.setdefault(key, i))
+        return [tuple(remap[i] for i in f) for f in self.faces]
 
     def atlas_uvs(self):
         """Per-vertex atlas UVs (Blender convention, v bottom-up — the same
@@ -434,12 +476,152 @@ def _report(model, existing, origins):
 
 
 # ---------------------------------------------------------------------------
+# the door leaf — a NODE, not a material (spec § 6)
+# ---------------------------------------------------------------------------
+def _leaf_faces(model):
+    """Flat R1 indices of the faces on the object named ``leaf`` ([] = none)."""
+    idx = next((oi for oi, o in enumerate(model.objects) if o.name == LEAF_NAME), None)
+    if idx is None:
+        return []
+    return [flat for flat, (oi, _pi) in enumerate(model.poly) if oi == idx]
+
+
+def _apply_world(obj):
+    """Bakes ``matrix_world`` into the mesh: identity node transform, no
+    parent — the reported box is the node's own local box (client rule)."""
+    from mathutils import Matrix
+    mw = obj.matrix_world.copy()
+    obj.parent = None
+    obj.data.transform(mw)
+    obj.matrix_world = Matrix.Identity(4)
+
+
+def _join_all(objects):
+    """ONE object out of ``objects`` (materials merged, UV layers matched by
+    name — Blender's own join), its world matrix applied."""
+    target = objects[0]
+    for o in objects:
+        _apply_world(o)
+    if len(objects) > 1:
+        with bpy.context.temp_override(active_object=target,
+                                       selected_editable_objects=list(objects),
+                                       selected_objects=list(objects)):
+            bpy.ops.object.join()
+    target.name = FRAME_NAME
+    target.data.name = FRAME_NAME
+    return target
+
+
+def _mark(model, flat_faces):
+    """Writes the pick as a face attribute on every object, so it survives
+    the join that follows (an attribute of the same name merges)."""
+    chosen = set(flat_faces)
+    per_obj = {}
+    for flat in chosen:
+        oi, pi = model.poly[flat]
+        per_obj.setdefault(oi, set()).add(pi)
+    for oi, obj in enumerate(model.objects):
+        me = obj.data
+        attr = me.attributes.get(LEAF_MARK)
+        if attr is None or attr.domain != "FACE" or attr.data_type != "INT":
+            if attr is not None:
+                me.attributes.remove(attr)
+            attr = me.attributes.new(LEAF_MARK, "INT", "FACE")
+        picks = per_obj.get(oi, set())
+        for pi in range(len(me.polygons)):
+            attr.data[pi].value = 1 if pi in picks else 0
+
+
+def _unmark(me):
+    attr = me.attributes.get(LEAF_MARK)
+    if attr is not None:
+        me.attributes.remove(attr)
+
+
+def _split_leaf(model, flat_faces):
+    """``flat_faces`` (R1 indices of the CURRENT mesh) become the object
+    ``leaf``, everything else the object ``frame``: mark → join every
+    object into one → split the marked faces off with bmesh (materials and
+    loop layers, i.e. UVs, ride along untouched). An empty pick only joins
+    (= delete). Returns True when a leaf object exists afterwards."""
+    _mark(model, flat_faces)
+    frame = _join_all(list(model.objects))
+    me = frame.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    layer = bm.faces.layers.int.get(LEAF_MARK)
+    picked = [f for f in bm.faces if layer is not None and f[layer] == 1]
+    if not picked:
+        bm.free()
+        _unmark(me)
+        me.update()
+        return False
+    # The leaf: a copy with everything BUT the pick deleted.
+    bm_leaf = bm.copy()
+    layer_l = bm_leaf.faces.layers.int.get(LEAF_MARK)
+    bmesh.ops.delete(bm_leaf, geom=[f for f in bm_leaf.faces if f[layer_l] != 1],
+                     context="FACES")
+    leaf_me = bpy.data.meshes.new(LEAF_NAME)
+    bm_leaf.to_mesh(leaf_me)
+    bm_leaf.free()
+    for mat in me.materials:
+        leaf_me.materials.append(mat)
+    # The frame: the pick deleted.
+    bmesh.ops.delete(bm, geom=picked, context="FACES")
+    bm.to_mesh(me)
+    bm.free()
+    _unmark(me)
+    _unmark(leaf_me)
+    me.update()
+    leaf_me.update()
+    leaf = bpy.data.objects.new(LEAF_NAME, leaf_me)
+    for coll in frame.users_collection or [bpy.context.scene.collection]:
+        coll.objects.link(leaf)
+    return True
+
+
+def _leaf_report(model, faces):
+    """The leaf's area entry + ``leaf_bbox`` (glTF space, 5 decimals)."""
+    lo, hi = pa.bbox_of(model.vertices, model.faces, faces)
+    fit = _fit(model, faces)
+    x0, y0, z0 = lo
+    x1, y1, z1 = hi
+    corners = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+               (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+    box_edges = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
+                 (0, 4), (1, 5), (2, 6), (3, 7)]
+    entry = {
+        "id": LEAF_NAME,
+        "kind": LEAF_NAME,
+        "faces": len(faces),
+        "size_m": _r(fit["size_m"]),
+        "normal": _r(fit["normal"]),
+        "centroid": _r(fit["centroid"]),
+        "edges": [[_r(corners[a]), _r(corners[b])] for a, b in box_edges],
+        "origin": "",
+    }
+    return entry, {"min": _r(lo), "max": _r(hi)}
+
+
+def _rebuild():
+    """The model as it stands now — after a join or a split the objects, the
+    flat face order and the material-defined areas all have to be re-read."""
+    objects = _mesh_objects()
+    if not objects:
+        raise RuntimeError("no mesh objects")
+    model = Model(objects)
+    return model, _existing_areas(model)
+
+
+# ---------------------------------------------------------------------------
 # the run
 # ---------------------------------------------------------------------------
 def picture_areas(args):
     params = args.get("params") or {}
     mode = str(params.get("mode") or "auto")
-    kinds = [k for k in (params.get("kinds") or list(pa.KINDS)) if k in pa.KINDS]
+    kinds = [k for k in (params.get("kinds") or list(pa.KINDS))
+             if k in pa.KINDS or k == LEAF_NAME]
+    colour_kinds = [k for k in kinds if k in pa.KINDS]
     min_area = float(params.get("min_area_m2") or 0.02)
     min_faces = int(params.get("min_faces") or 12)
     origins = {str(k): str(v) for k, v in (params.get("origins") or {}).items()}
@@ -454,6 +636,12 @@ def picture_areas(args):
     changed = False
 
     if mode == "auto":
+        # A previous LEAF goes back into the frame first when the leaf is to
+        # be detected anew — the colour kinds then work on one plain mesh.
+        if LEAF_NAME in kinds and _leaf_faces(model):
+            _split_leaf(model, [])
+            model, existing = _rebuild()
+            changed = True
         for area_id, entry in existing.items():
             _dissolve(model, entry, origins.get(area_id, ""))
             changed = True
@@ -467,7 +655,7 @@ def picture_areas(args):
             group = [flat for flat, (o, pi) in enumerate(model.poly)
                      if o == oi and me.polygons[pi].material_index == mi]
             sub_faces = [model.faces[n] for n in group]
-            for kind in kinds:
+            for kind in colour_kinds:
                 found = pa.detect_areas(model.vertices, sub_faces, atlas_uvs, sample,
                                         kind, min_area_m2=min_area, min_faces=min_faces)
                 for area in found:
@@ -478,10 +666,18 @@ def picture_areas(args):
                     existing[area_id] = {"kind": kind, "k": k, "faces": faces}
                     origins[area_id] = origin
                     changed = True
+        if LEAF_NAME in kinds:
+            # THE DOOR LEAF (§ 6): geometry only, on the mesh the colour
+            # split just left behind — the leaf takes its slot materials
+            # along, that is the point of a node.
+            found = pa.detect_leaf(model.vertices, model.welded_faces())
+            if found and _split_leaf(model, found["faces"]):
+                model, existing = _rebuild()
+                changed = True
 
     elif mode == "manual":
         kind = str(params.get("kind") or "picture")
-        if kind not in pa.KINDS:
+        if kind not in pa.KINDS and kind != LEAF_NAME:
             raise ValueError(f"unknown area kind {kind!r}")
         faces = sorted({int(f) for f in (params.get("faces") or [])})
         bad = [f for f in faces if f < 0 or f >= len(model.faces)]
@@ -489,47 +685,64 @@ def picture_areas(args):
             raise ValueError(f"faces must be flat triangle indices below "
                              f"{len(model.faces)} (got {len(faces)}, bad: {bad[:5]})")
         listed = set(faces)
-        # A listed face leaves the area it was in; an area left empty goes.
-        for area_id, entry in list(existing.items()):
-            taken = [f for f in entry["faces"] if f in listed]
-            if taken:
-                _dissolve(model, {"faces": taken}, origins.get(area_id, ""))
-                entry["faces"] = [f for f in entry["faces"] if f not in listed]
-                if not entry["faces"]:
-                    existing.pop(area_id)
-        fit = _fit(model, faces)
-        k = _next_k(kind, existing)
-        area_id = f"{kind}_{k}"
-        # The atlas of the faces' current material — the MAJORITY material
-        # among those that carry an image, so a pick that grazes a second
-        # material at its edge still gets the panel's own atlas.
-        votes = {}
-        images = {}
-        for flat in faces:
-            oi, pi = model.poly[flat]
-            me = model.objects[oi].data
-            mi = me.polygons[pi].material_index
-            mat = me.materials[mi] if 0 <= mi < len(me.materials) else None
-            if mat is None or mat.name in images and images[mat.name] is None:
-                continue
-            if mat.name not in images:
-                images[mat.name] = _base_image(mat)
-            if images[mat.name] is not None:
-                votes[mat.name] = votes.get(mat.name, 0) + 1
-        image = images[max(votes, key=votes.get)] if votes else None
-        origin = _assign(model, area_id, kind, faces, fit["uvs"], image)
-        existing[area_id] = {"kind": kind, "k": k, "faces": faces}
-        origins[area_id] = origin
-        changed = True
+        if kind == LEAF_NAME:
+            # The listed faces ARE the leaf — a previous leaf's faces not on
+            # the list return to the frame. Materials stay as they are, so a
+            # colour area on the list simply moves into the leaf node.
+            _split_leaf(model, faces)
+            model, existing = _rebuild()
+            changed = True
+            listed = set()
+            faces = []
+        if faces:
+            # A listed face leaves the area it was in; an area left empty goes.
+            for area_id, entry in list(existing.items()):
+                taken = [f for f in entry["faces"] if f in listed]
+                if taken:
+                    _dissolve(model, {"faces": taken}, origins.get(area_id, ""))
+                    entry["faces"] = [f for f in entry["faces"] if f not in listed]
+                    if not entry["faces"]:
+                        existing.pop(area_id)
+            fit = _fit(model, faces)
+            k = _next_k(kind, existing)
+            area_id = f"{kind}_{k}"
+            # The atlas of the faces' current material — the MAJORITY material
+            # among those that carry an image, so a pick that grazes a second
+            # material at its edge still gets the panel's own atlas.
+            votes = {}
+            images = {}
+            for flat in faces:
+                oi, pi = model.poly[flat]
+                me = model.objects[oi].data
+                mi = me.polygons[pi].material_index
+                mat = me.materials[mi] if 0 <= mi < len(me.materials) else None
+                if mat is None or mat.name in images and images[mat.name] is None:
+                    continue
+                if mat.name not in images:
+                    images[mat.name] = _base_image(mat)
+                if images[mat.name] is not None:
+                    votes[mat.name] = votes.get(mat.name, 0) + 1
+            image = images[max(votes, key=votes.get)] if votes else None
+            origin = _assign(model, area_id, kind, faces, fit["uvs"], image)
+            existing[area_id] = {"kind": kind, "k": k, "faces": faces}
+            origins[area_id] = origin
+            changed = True
 
     elif mode == "delete":
         area_id = str(params.get("area") or "")
-        entry = existing.pop(area_id, None)
-        if entry is None:
-            raise ValueError(f"no area {area_id!r} on the mesh "
-                             f"(has: {', '.join(existing) or 'none'})")
-        _dissolve(model, entry, origins.get(area_id, ""))
-        changed = True
+        if area_id == LEAF_NAME:
+            if not _leaf_faces(model):
+                raise ValueError("no leaf node on the mesh")
+            _split_leaf(model, [])
+            model, existing = _rebuild()
+            changed = True
+        else:
+            entry = existing.pop(area_id, None)
+            if entry is None:
+                raise ValueError(f"no area {area_id!r} on the mesh "
+                                 f"(has: {', '.join(existing) or 'none'})")
+            _dissolve(model, entry, origins.get(area_id, ""))
+            changed = True
 
     else:
         raise ValueError(f"unknown mode {mode!r} (auto | manual | delete)")
@@ -539,8 +752,13 @@ def picture_areas(args):
         model.drop_backup_if_unused(oi)
         obj.data.update()
 
-    data = {"areas": _report(model, existing, origins),
-            "mesh_layout": model.layout, "changed": changed}
+    areas = _report(model, existing, origins)
+    data = {"areas": areas, "mesh_layout": model.layout, "changed": changed}
+    leaf_faces = _leaf_faces(model)
+    if leaf_faces:
+        entry, bbox = _leaf_report(model, leaf_faces)
+        areas.append(entry)
+        data["leaf_bbox"] = bbox
     if not changed:
         return data, {}
     out = Path(args["out_dir"]) / "model.glb"

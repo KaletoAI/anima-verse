@@ -52,6 +52,32 @@ two areas of [1] stored:
 A refused patch leaves the sidecar BYTE-IDENTICAL.
 
 ---------------------------------------------------------------------------
+[2b] THE DOOR LEAF IS A KIND WITHOUT A COLOUR (spec § 6, ruling R9)
+---------------------------------------------------------------------------
+`COLOUR_KINDS` = picture_areas.KINDS = (picture, glass); `AREA_KINDS` =
+COLOUR_KINDS + ("leaf",). Hand-derived consequences:
+
+    sanitize_key_areas(["leaf", "picture"])  -> ["picture", "leaf"]  (kind order)
+    apply_key_areas("p", "n", ["leaf"])      -> ("p", "n")  (no fragment)
+    sanitize_areas([... + {"id": "leaf", "kind": "leaf", size_m [0.8, 2.0],
+        normal [0,0,1], source "auto", faces 12}])  -> round-trips
+    {"id": "leaf", "kind": "picture"}        -> ValueError (id spells its kind)
+    {"id": "leaf_1", "kind": "leaf"}         -> ValueError (no numbering)
+    area_defaults {"leaf": {"preset": "glass"}} -> ValueError (a node, not
+        a surface), sidecar byte-identical
+    slot_values {"leaf": {"preset": "glass"}}   -> ValueError, same reason
+    rename_area_kind(pid, "picture_1", "leaf")  -> ValueError
+    rename_area_kind(pid, "leaf", "glass")      -> ValueError
+    sanitize_leaf_bbox({"min": [0.1, 0.1, -0.02], "max": [0.9, 2.1, 0]})
+        -> {"min": [0.1, 0.1, -0.02], "max": [0.9, 2.1, 0.0]}
+    sanitize_leaf_bbox({"min": [1, 0, 0], "max": [0, 0, 0]}) -> ValueError
+    sanitize_leaf_bbox(None) -> None
+    a sidecar `leaf_bbox` shows on the full record and in areas_info;
+    without one the record has NO `leaf_bbox` key and areas_info says None
+    is_door_prop: category "Door" -> True; tags [" door "] -> True;
+        category "decor", tags ["wood"] -> False
+
+---------------------------------------------------------------------------
 [3] detect_slots: THE PREFIX RULE FOR glass
 ---------------------------------------------------------------------------
 A split writes materials `slot_picture_<k>` / `slot_glass_<k>`. The kind rule
@@ -680,6 +706,80 @@ def main() -> int:
         except ValueError as exc:
             after = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
             check(f"refused: {label}", after == before, str(exc)[:60])
+
+    print("\n[2b] the door leaf is a kind without a colour (R9)")
+    check("COLOUR_KINDS = picture_areas.KINDS, AREA_KINDS adds leaf last",
+          tuple(store.COLOUR_KINDS) == ("picture", "glass")
+          and store.AREA_KINDS == ("picture", "glass", "leaf"),
+          str((store.COLOUR_KINDS, store.AREA_KINDS)))
+    check("sanitize_key_areas accepts leaf, in kind order",
+          store.sanitize_key_areas(["leaf", "picture"]) == ["picture", "leaf"],
+          str(store.sanitize_key_areas(["leaf", "picture"])))
+    check("apply_key_areas: leaf adds no fragment",
+          store.apply_key_areas("p", "n", ["leaf"]) == ("p", "n"),
+          str(store.apply_key_areas("p", "n", ["leaf"])))
+    LEAF = {"id": "leaf", "kind": "leaf", "size_m": [0.8, 2.0],
+            "normal": [0, 0, 1], "source": "auto", "faces": 12}
+    check("sanitize_areas round-trips a leaf entry",
+          store.sanitize_areas(AREAS + [LEAF]) == AREAS + [LEAF],
+          str(store.sanitize_areas(AREAS + [LEAF])[-1]))
+    for label, bad in (("id leaf of kind picture", {**LEAF, "kind": "picture"}),
+                       ("a numbered leaf_1", {**LEAF, "id": "leaf_1"})):
+        try:
+            store.sanitize_areas([bad])
+            check(f"refused: {label}", False, "no ValueError")
+        except ValueError as exc:
+            check(f"refused: {label}", True, str(exc)[:60])
+    meta = store.read_sidecar(pid)
+    meta[store.AREAS_KEY] = store.sanitize_areas(AREAS + [LEAF])
+    store._write_sidecar(pid, meta)
+    before = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
+    try:
+        store.update_prop(pid, {"area_defaults": {"leaf": {"preset": "glass"}}})
+        check("area_defaults on the leaf is refused", False, "no ValueError")
+    except ValueError as exc:
+        after = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
+        check("area_defaults on the leaf is refused, nothing written",
+              after == before, str(exc)[:60])
+    try:
+        store.sanitize_variant_slot_values({"leaf": {"preset": "glass"}}, AREAS + [LEAF])
+        check("slot_values on the leaf is refused", False, "no ValueError")
+    except ValueError as exc:
+        check("slot_values on the leaf is refused", True, str(exc)[:60])
+    for label, args in (("picture_1 -> leaf", ("picture_1", "leaf")),
+                        ("leaf -> glass", ("leaf", "glass"))):
+        try:
+            store.rename_area_kind(pid, *args)
+            check(f"rename refused: {label}", False, "no ValueError")
+        except ValueError as exc:
+            check(f"rename refused: {label}", "node" in str(exc), str(exc)[:60])
+    bb = store.sanitize_leaf_bbox({"min": [0.1, 0.1, -0.02], "max": [0.9, 2.1, 0]})
+    check("sanitize_leaf_bbox round-trips",
+          bb == {"min": [0.1, 0.1, -0.02], "max": [0.9, 2.1, 0.0]}, str(bb))
+    try:
+        store.sanitize_leaf_bbox({"min": [1, 0, 0], "max": [0, 0, 0]})
+        check("leaf_bbox min > max is refused", False, "no ValueError")
+    except ValueError as exc:
+        check("leaf_bbox min > max is refused", True, str(exc)[:50])
+    check("sanitize_leaf_bbox(None) is None", store.sanitize_leaf_bbox(None) is None)
+    check("no leaf_bbox: the record has no key, areas_info says None",
+          "leaf_bbox" not in store.get_prop(pid)
+          and store.areas_info(pid)["leaf_bbox"] is None)
+    meta = store.read_sidecar(pid)
+    meta[store.LEAF_BBOX_KEY] = bb
+    store._write_sidecar(pid, meta)
+    check("a sidecar leaf_bbox shows on the record and in areas_info",
+          store.get_prop(pid).get("leaf_bbox") == bb
+          and store.areas_info(pid)["leaf_bbox"] == bb,
+          str(store.get_prop(pid).get("leaf_bbox")))
+    meta = store.read_sidecar(pid)
+    meta[store.AREAS_KEY] = store.sanitize_areas(AREAS)
+    meta.pop(store.LEAF_BBOX_KEY, None)
+    store._write_sidecar(pid, meta)
+    check("is_door_prop: category Door / tag ' door ' / neither",
+          store.is_door_prop({"category": "Door"}) is True
+          and store.is_door_prop({"tags": [" door "]}) is True
+          and store.is_door_prop({"category": "decor", "tags": ["wood"]}) is False)
 
     print("\n[3] detect_slots: the prefix rule for glass")
     got = store.detect_slots(["slot_glass_1", "slot_picture_2"])

@@ -184,7 +184,7 @@ from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
                                   write_sidecar as write_model_sidecar)
 from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
                                      glb_material_names_at, shrink_capability)
-from app.core.picture_areas import KINDS as AREA_KINDS
+from app.core.picture_areas import KINDS as COLOUR_KINDS
 from app.core.timeutils import utc_now_iso
 from app.core.world_ops import _capacity, _place_id, _spacing
 
@@ -333,12 +333,30 @@ SLOT_PRESETS = ("glass",)
 #: (``app/blender/scripts/picture_areas.py``) — automatically when a mesh
 #: lands and the prop asked for key colours, by hand from the Areas tab.
 #:
+#: THE KINDS (ruling R9). ``COLOUR_KINDS`` = ``picture_areas.KINDS`` — the
+#: chroma-key kinds with a colour predicate and a prompt fragment; an area of
+#: one of them IS a material. ``leaf`` (spec § 6, D7) is the DOOR LEAF: a
+#: NODE of the GLB cut out by geometry, no colour, no prompt, never a slot,
+#: never a default — it is in ``AREA_KINDS`` so the request list, the area
+#: list, the manual pick and the kind check know it, and in nothing else.
+#: (Not the WALL-piece kind ``leaf`` of the scene payload, the flat panel in
+#: a door hole — same word, a different thing.)
+LEAF_KIND = "leaf"
+AREA_KINDS = tuple(COLOUR_KINDS) + (LEAF_KIND,)
 #: Sidecar key: which key colours the generation was asked for — a subset of
-#: ``picture_areas.KINDS`` in that order. Non-empty = detect on every landing.
+#: ``AREA_KINDS`` in that order (``leaf`` = "cut the door leaf out on every
+#: landing", no prompt text). Non-empty = detect on every landing.
 KEY_AREAS_KEY = "key_areas"
 #: Sidecar key: ``[{id, kind, size_m: [w, h], normal: [x, y, z], source,
-#: faces, origin?, centroid?}, …]``; ``id`` = the slot name (``picture_1``).
+#: faces, origin?, centroid?}, …]``; ``id`` = the slot name (``picture_1``),
+#: or ``leaf`` for the door leaf node.
 AREAS_KEY = "areas"
+#: Sidecar key: ``{"min": [x, y, z], "max": [x, y, z]}`` of the ``leaf`` node
+#: in glTF y-up RAW model metres (before the placement's fit scaling) —
+#: what the scene recipe copies into ``door.leaf_bbox`` so a renderer hangs
+#: its pivot without measuring (§ B5a). Present exactly while the model has
+#: a leaf node; written by the same run that writes ``areas``.
+LEAF_BBOX_KEY = "leaf_bbox"
 #: Sidecar key: ``{"<area id>": {"preset": "glass"}}`` — prop-wide defaults
 #: that apply without a variant (a door's pane). Checked against ``areas``.
 AREA_DEFAULTS_KEY = "area_defaults"
@@ -361,7 +379,7 @@ MAX_MANUAL_FACES = 200_000
 #: Not a gallery name (the stem pattern wants ``.glb`` last) and not the
 #: mesh's own ``.json`` sidecar, which describes the generation run.
 AREAS_SIDECAR_SUFFIX = ".areas.json"
-_AREA_ID_RE = re.compile(r"^(" + "|".join(AREA_KINDS) + r")_([1-9][0-9]*)$")
+_AREA_ID_RE = re.compile(r"^(" + "|".join(COLOUR_KINDS) + r")_([1-9][0-9]*)$")
 #: Variant key: WHAT this variant shows in which area (spec-picture-props.md
 #: § 1, D2) — ``{"picture_1": {"image": "<url>"}, "glass_1": {"preset":
 #: "glass"}}``. A picture assignment IS a variant of the frame prop, so the
@@ -1134,10 +1152,11 @@ def sanitize_slots(raw: Any) -> List[Dict[str, str]]:
 
 
 def sanitize_key_areas(raw: Any) -> List[str]:
-    """The requested key colours as a subset of ``picture_areas.KINDS`` in
-    that order, de-duplicated — or ``ValueError`` for an unknown kind (a
-    silently dropped kind would report "Saved" over a request that reached
-    nothing). ``None`` / an empty list is "no key areas"."""
+    """The requested kinds as a subset of ``AREA_KINDS`` in that order,
+    de-duplicated — or ``ValueError`` for an unknown kind (a silently
+    dropped kind would report "Saved" over a request that reached nothing).
+    ``leaf`` is accepted: it asks for the door-leaf cut on every landing and
+    adds no prompt text. ``None`` / an empty list is "no key areas"."""
     if raw is None or raw == "":
         return []
     if isinstance(raw, str):
@@ -1168,9 +1187,10 @@ def sanitize_areas(raw: Any) -> List[Dict[str, Any]]:
     """The stored shape of the area list — or ``ValueError``.
 
     Every entry is ``{id, kind, size_m, normal, source, faces}``, with the
-    ``id`` spelling its kind (``picture_1`` is a picture) and optional
-    ``origin`` (material the faces came from) / ``centroid``. Optional keys
-    are kept only when given — the list round-trips byte for byte."""
+    ``id`` spelling its kind (``picture_1`` is a picture; the door leaf is
+    ``id == kind == "leaf"``, at most once) and optional ``origin`` (material
+    the faces came from) / ``centroid``. Optional keys are kept only when
+    given — the list round-trips byte for byte."""
     if not isinstance(raw, list):
         raise ValueError("areas must be a list")
     out: List[Dict[str, Any]] = []
@@ -1180,10 +1200,14 @@ def sanitize_areas(raw: Any) -> List[Dict[str, Any]]:
             raise ValueError("each area must be an object")
         area_id = str(entry.get("id") or "").strip().lower()
         m = _AREA_ID_RE.match(area_id)
-        if not m:
-            raise ValueError(f"bad area id {area_id!r} (expected <kind>_<k>)")
-        kind = str(entry.get("kind") or m.group(1)).strip().lower()
-        if kind != m.group(1):
+        if area_id == LEAF_KIND:
+            id_kind = LEAF_KIND
+        elif m:
+            id_kind = m.group(1)
+        else:
+            raise ValueError(f"bad area id {area_id!r} (expected <kind>_<k> or leaf)")
+        kind = str(entry.get("kind") or id_kind).strip().lower()
+        if kind != id_kind:
             raise ValueError(f"area {area_id!r} cannot be of kind {kind!r}")
         if area_id in seen:
             raise ValueError(f"area {area_id!r} listed twice")
@@ -1230,6 +1254,10 @@ def sanitize_area_defaults(raw: Any,
         if aid not in known:
             raise ValueError(f"area_defaults names an unknown area {aid!r} "
                              f"(the prop has: {', '.join(sorted(known)) or 'none'})")
+        if aid == LEAF_KIND:
+            # R9: the leaf is a node, not a material — nothing to fill.
+            raise ValueError("area_defaults cannot name the door leaf — it is "
+                             "a node of the mesh, not a surface")
         if not isinstance(value, dict):
             raise ValueError(f"area_defaults[{aid!r}] must be an object {{preset}}")
         preset = str(value.get("preset") or "").strip().lower()
@@ -1241,6 +1269,31 @@ def sanitize_area_defaults(raw: Any,
                              f"{preset!r} (known: {', '.join(SLOT_PRESETS)})")
         out[aid] = {"preset": preset}
     return out
+
+
+def sanitize_leaf_bbox(raw: Any) -> Optional[Dict[str, List[float]]]:
+    """``{"min": [x, y, z], "max": [x, y, z]}`` with ``min <= max`` per axis
+    — or None for ``None``/``{}`` (no leaf), or ``ValueError``."""
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("leaf_bbox must be an object {min, max}")
+    lo = _coerce_vec(raw.get("min"), 3, "leaf_bbox.min")
+    hi = _coerce_vec(raw.get("max"), 3, "leaf_bbox.max")
+    if any(a > b for a, b in zip(lo, hi)):
+        raise ValueError("leaf_bbox: min must not exceed max")
+    return {"min": lo, "max": hi}
+
+
+def is_door_prop(meta: Dict[str, Any]) -> bool:
+    """THE convention (plan-door-props-texture-slots.md, mirrored by the
+    admin's ``DoorPropPicker``): a door prop is filed under category ``door``
+    or carries the tag ``door`` — free strings, compared trimmed and
+    case-insensitively. A door prop gets its leaf cut out on every landing
+    (spec § 6) even without ``key_areas``."""
+    if str(meta.get("category") or "").strip().lower() == "door":
+        return True
+    return any(str(t or "").strip().lower() == "door" for t in (meta.get("tags") or []))
 
 
 #: THE TWO URL FORMS a filled image slot may name, and no third. Both are
@@ -1292,6 +1345,10 @@ def sanitize_variant_slot_values(raw: Any,
                 f"{', '.join(sorted(kinds)) or 'none'})")
         if not isinstance(value, dict):
             raise ValueError(f"slot_values[{aid!r}] must be an object")
+        if kind == LEAF_KIND:
+            # R9: the leaf is a node of the mesh, not a fillable surface.
+            raise ValueError(f"slot_values[{aid!r}]: the door leaf is a node, "
+                             "not a surface — nothing can be hung on it")
         if kind == "picture":
             if set(value) - {"image"}:
                 raise ValueError(f"slot_values[{aid!r}] is a picture area and "
@@ -1453,16 +1510,19 @@ def read_areas_sidecar(model_path: Optional[Path]) -> Dict[str, Any]:
 
 
 def _write_areas_sidecar(model_path: Path, areas: List[Dict[str, Any]],
-                         edges: Dict[str, Any], mesh_layout: Any) -> None:
+                         edges: Dict[str, Any], mesh_layout: Any,
+                         leaf_bbox: Optional[Dict[str, Any]] = None) -> None:
     """The per-mesh record: the FULL area entries of that file (what the
-    sidecar carries, plus the outline ``edges``) and the R1 layout. Full, not
-    just edges, so a re-selected file brings its own area list back
+    sidecar carries, plus the outline ``edges``), the R1 layout and the
+    ``leaf_bbox`` of its leaf node (when it has one). Full, not just edges,
+    so a re-selected file brings its own area list back
     (:func:`_reconcile_areas`)."""
     sp = areas_sidecar_path(model_path)
     if not sp:
         return
     sp.write_text(json.dumps({
         "areas": [{**a, "edges": edges.get(a["id"]) or []} for a in areas],
+        **({"leaf_bbox": leaf_bbox} if leaf_bbox else {}),
         "mesh_layout": [{"name": str(m.get("name") or ""),
                          "tri_count": int(m.get("tri_count") or 0)}
                         for m in (mesh_layout or []) if isinstance(m, dict)],
@@ -1588,12 +1648,17 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     meta = read_sidecar(pid)
     areas = _sidecar_areas_from_script(script_areas, meta.get(AREAS_KEY) or [],
                                        default_source)
+    leaf_bbox = sanitize_leaf_bbox(data.get("leaf_bbox"))
     _write_areas_sidecar(model_file, areas,
                          {a.get("id"): a.get("edges") for a in script_areas},
-                         data.get("mesh_layout"))
+                         data.get("mesh_layout"), leaf_bbox)
     if _is_primary(pid, variant) and meta:
         ids = {a["id"] for a in areas}
         meta[AREAS_KEY] = areas
+        if leaf_bbox:
+            meta[LEAF_BBOX_KEY] = leaf_bbox
+        else:
+            meta.pop(LEAF_BBOX_KEY, None)
         meta.pop(AREAS_ERROR_KEY, None)
         meta[AREAS_RUN_AT_KEY] = utc_now_iso()
         _prune_to_areas(meta, ids)
@@ -1652,11 +1717,16 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
     sidecar ``areas`` list after the run.
 
     ``mode="auto"`` dissolves every existing area and detects the key-coloured
-    panels of the kinds the prop asked for (``key_areas``; every kind when it
-    asked for none). ``mode="manual"`` turns ``faces`` (flat triangle indices
-    in the R1 order of the CURRENT mesh — the tab's polygon pick) into one new
-    area of ``kind``; every other area stays. ``min_faces`` / ``min_area_m2``
-    are the auto filter (production: 12 faces, 0.02 m²).
+    panels of the kinds the prop asked for (``key_areas``; every COLOUR kind
+    when it asked for none) — plus the door LEAF (spec § 6) when the prop
+    asked for ``leaf`` or is a door prop (:func:`is_door_prop`); the leaf
+    heuristic never runs on a prop that is neither, a picture frame must not
+    lose its biggest plate to it. ``mode="manual"`` turns ``faces`` (flat
+    triangle indices in the R1 order of the CURRENT mesh — the tab's polygon
+    pick) into one new area of ``kind``; every other area stays; kind
+    ``leaf`` cuts exactly those faces out as the leaf node (replacing a
+    previous leaf). ``min_faces`` / ``min_area_m2`` are the auto filter
+    (production: 12 faces, 0.02 m²).
 
     ``variant``: on a NON-primary variant only that variant's GLB (and its
     ``.areas.json``) is changed — the sidecar ``areas`` describe the PRIMARY
@@ -1676,7 +1746,10 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
     mode = str(mode or "auto").strip().lower()
     params: Dict[str, Any] = {"mode": mode, "origins": _origins(meta)}
     if mode == "auto":
-        params["kinds"] = list(meta.get(KEY_AREAS_KEY) or AREA_KINDS)
+        kinds = list(meta.get(KEY_AREAS_KEY) or COLOUR_KINDS)
+        if is_door_prop(meta) and LEAF_KIND not in kinds:
+            kinds.append(LEAF_KIND)
+        params["kinds"] = kinds
         params["min_faces"] = max(1, int(min_faces))
         params["min_area_m2"] = max(0.0, float(min_area_m2))
     elif mode == "manual":
@@ -1706,7 +1779,8 @@ def delete_area(prop_id: str, area_id: str, variant: Any = None,
                 wait_s: float = 10.0) -> List[Dict[str, Any]]:
     """Dissolve one area: its faces go back to the material they came from
     (``origin``) with their atlas UVs restored, the material is gone from the
-    mesh, the sidecar entry and any default on it with it. Returns the
+    mesh, the sidecar entry and any default on it with it. For ``leaf`` the
+    node is joined back into ``frame`` and ``leaf_bbox`` goes. Returns the
     remaining ``areas``. ``ValueError`` for an unknown area. A non-primary
     ``variant`` changes only that GLB (see :func:`detect_areas`)."""
     pid = safe_prop_id(prop_id)
@@ -1756,7 +1830,11 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
     file (the GLB's JSON chunk rewritten, no Blender needed), and the sidecar
     entry, its outline record and any default on it follow the new id.
     Returns the ``areas`` list. Same kind = nothing to do. A non-primary
-    ``variant`` changes only that GLB (see :func:`detect_areas`)."""
+    ``variant`` changes only that GLB (see :func:`detect_areas`).
+
+    The door LEAF is refused in both directions (R9): a node is not a
+    material, so there is no name to rewrite — dissolve it and draw the
+    faces again as the other kind instead."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -1772,6 +1850,9 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
         raise ValueError(f"unknown area {aid!r}")
     if entry["kind"] == kind:
         return areas
+    if kind == LEAF_KIND or entry["kind"] == LEAF_KIND:
+        raise ValueError("the door leaf is a node, not a material — dissolve "
+                         "it and draw the faces as the other kind instead")
     used = {int(a["id"].rsplit("_", 1)[1]) for a in areas if a["kind"] == kind}
     k = 1
     while k in used:
@@ -1825,6 +1906,7 @@ def areas_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
         "mesh_layout": outline.get("mesh_layout") or [],
         "key_areas": list(meta.get(KEY_AREAS_KEY) or []),
         "area_defaults": dict(meta.get(AREA_DEFAULTS_KEY) or {}),
+        LEAF_BBOX_KEY: meta.get(LEAF_BBOX_KEY) or None,
         "blender": {"available": not reason, "reason": reason},
         "last_run": meta.get(AREAS_RUN_AT_KEY) or None,
         "error": meta.get(AREAS_ERROR_KEY) or "",
@@ -1835,9 +1917,11 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
                          wait_s: float = 10.0) -> None:
     """The landing hook of the TWO paths a NEW mesh arrives on — the upload
     (``save_uploaded_glb`` → ``_store_bbox(landing=True)``) and the generation
-    chain (``_generate``): a prop that asked for key colours gets its fresh
-    primary mesh split automatically; one that did not gets its area list
-    reconciled with the mesh (:func:`_reconcile_areas`).
+    chain (``_generate``): a prop that asked for key colours — or is a DOOR
+    prop (:func:`is_door_prop`, spec § 6: its leaf is cut out on every
+    landing) — gets its fresh primary mesh split automatically; one that is
+    neither gets its area list reconciled with the mesh
+    (:func:`_reconcile_areas`).
 
     ONLY on a landing (review finding 2026-08-27): a gallery selection or a
     deleted file goes through ``_store_bbox`` too, and an auto-run there would
@@ -1852,7 +1936,7 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
     meta = read_sidecar(pid) if pid else {}
     if not meta or not _is_primary(pid, variant):
         return
-    if not meta.get(KEY_AREAS_KEY):
+    if not meta.get(KEY_AREAS_KEY) and not is_door_prop(meta):
         _reconcile_areas(pid, meta)
         return
     try:
@@ -1866,6 +1950,7 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
         meta[AREAS_KEY] = []
         meta[AREAS_ERROR_KEY] = str(e) or type(e).__name__
         meta.pop(AREA_DEFAULTS_KEY, None)
+        meta.pop(LEAF_BBOX_KEY, None)
         try:
             _write_sidecar(pid, meta)
         except (OSError, ValueError):
@@ -1878,9 +1963,10 @@ def _reconcile_areas(pid: str, meta: Optional[Dict[str, Any]] = None) -> None:
     without key colours.
 
     A file that carries its own ``.areas.json`` (every split result does)
-    brings that list back verbatim — switching away from a split file and
-    back loses nothing. Any other file keeps only the areas whose material
-    it actually names. Only a POSITIVE reading changes the list — an
+    brings that list back verbatim, its ``leaf_bbox`` with it — switching
+    away from a split file and back loses nothing. Any other file keeps only
+    the areas whose material it actually names (and therefore no leaf: a
+    node is not a material). Only a POSITIVE reading changes the list — an
     unreadable mesh is not a statement that the areas are gone."""
     if meta is None:
         meta = read_sidecar(pid) if pid else {}
@@ -1891,10 +1977,12 @@ def _reconcile_areas(pid: str, meta: Optional[Dict[str, Any]] = None) -> None:
     if not mp or mp.suffix.lower() != ".glb":
         return
     record = read_areas_sidecar(mp)
+    leaf_bbox = None
     if record.get("areas") is not None and isinstance(record.get("areas"), list):
         try:
             kept = sanitize_areas([{k: v for k, v in a.items() if k != "edges"}
                                    for a in record["areas"] if isinstance(a, dict)])
+            leaf_bbox = sanitize_leaf_bbox(record.get("leaf_bbox"))
         except ValueError:
             return
     else:
@@ -1908,9 +1996,13 @@ def _reconcile_areas(pid: str, meta: Optional[Dict[str, Any]] = None) -> None:
             # `shrink_capability`) — a selection must never fail on it.
             return
         kept = [a for a in areas if f"{SLOT_PREFIX}{a['id']}" in names]
-    if kept == areas:
+    if kept == areas and (meta.get(LEAF_BBOX_KEY) or None) == leaf_bbox:
         return
     meta[AREAS_KEY] = kept
+    if leaf_bbox:
+        meta[LEAF_BBOX_KEY] = leaf_bbox
+    else:
+        meta.pop(LEAF_BBOX_KEY, None)
     _prune_to_areas(meta, {a["id"] for a in kept})
     try:
         _write_sidecar(pid, meta)
@@ -4109,6 +4201,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         KEY_AREAS_KEY: list(meta.get(KEY_AREAS_KEY) or []),
         AREAS_KEY: list(meta.get(AREAS_KEY) or []),
         AREA_DEFAULTS_KEY: dict(meta.get(AREA_DEFAULTS_KEY) or {}),
+        # The door leaf's box (spec § 6) — only while the mesh has a leaf
+        # node; the recipe copies it into `door.leaf_bbox`.
+        **({LEAF_BBOX_KEY: meta[LEAF_BBOX_KEY]} if meta.get(LEAF_BBOX_KEY) else {}),
         "marker_count": len(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
@@ -4402,7 +4497,8 @@ def apply_key_areas(prompt: str, negative: str,
 
     Idempotent: a fragment the prompt already carries (the dialog showed the
     composed text and sent it back) is not appended twice. Kind order is the
-    fixed one of ``picture_areas.KINDS``."""
+    fixed one of ``AREA_KINDS``; a kind without a fragment (``leaf`` — the
+    door image already shows frame and leaf) adds nothing."""
     from app.core.config import KEY_AREA_NEGATIVES, KEY_AREA_PROMPTS
     from app.core.prompt_compose import merge_tags
     prompt = (prompt or "").rstrip()

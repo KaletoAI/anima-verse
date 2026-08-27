@@ -235,6 +235,94 @@ flips it to::
     scatter has ONE non-zero eigenvalue and two zeros, so the two smallest
     are equal -> degenerate (there is no unique plane through a line)
 
+==========================================================================
+FIXTURE F — the DOOR: a ring of four boxes around a set-back plate
+(spec-picture-props.md § 6, D7 — the leaf heuristic)
+==========================================================================
+Five closed boxes, 8 shared vertices and 12 outward-wound triangles each
+(front/back/left/right/bottom/top, two triangles per face), all in glTF
+y-up model space; the four FRAME bars first, the PLATE last:
+
+    left bar    x 0.0..0.1   y 0.0..2.2   z -0.05..0.02    faces  0..11
+    right bar   x 0.9..1.0   y 0.0..2.2   z -0.05..0.02    faces 12..23
+    bottom bar  x 0.1..0.9   y 0.0..0.1   z -0.05..0.02    faces 24..35
+    top bar     x 0.1..0.9   y 2.1..2.2   z -0.05..0.02    faces 36..47
+    plate       x 0.1..0.9   y 0.1..2.1   z -0.02..0.00    faces 48..59
+
+The bars' fronts stand at z = 0.02, the plate's front at z = 0.00 — the
+plate is SET BACK 2 cm, its back at -0.02. The bars are 7 cm deep, so a
+bar's SIDE face (0.07 x 2.2 = 0.154 m2) stays smaller than its front
+(0.22 m2) — at 12 cm it would not, and the side would become the largest
+cluster of fixture F7. Nothing shares a vertex with anything else (40
+vertices, 60 triangles).
+
+[F1] THE LEAF PLANE = the largest planar cluster.  Coplanar clusters are
+connected over shared edges with the same normal (cos >= 0.95) and the same
+offset (+-2 cm).  Areas: plate front 0.8 x 2.0 = 1.6 m2, plate back the
+same 1.6 m2, each vertical bar front 0.1 x 2.2 = 0.22, each horizontal bar
+front 0.8 x 0.1 = 0.08.  The tie between the plate's front and back is
+broken towards +z (then +y, then +x — the same preference as
+``fit_plane``'s sign rule): normal (0, 0, 1), offset 0.0.  ``planar_frame``
+of that normal is u = (1, 0, 0), v = (0, 1, 0) (fixture D).
+
+[F2] SILHOUETTE + FRAME THICKNESS.  Every vertex projected on (u, v) spans
+(0, 0)..(1.0, 2.2).  The rim rule per side: faces that DEVIATE from the
+leaf plane (normal off by more than the cosine, or depth off by more than
+2 cm), whose centre sits in the middle half of the OTHER axis and less than
+25 % of this axis in from the edge; the inset is the face's innermost
+vertex.  Left side (band y 0.55..1.65): the left bar's back, inner side and
+inner side face reach x = 0.1 (its front at depth 0.02 does NOT deviate:
+0.02 <= tol; its outer side face reaches only x = 0, and an inset <= tol
+is no rim — the outermost faces of any model deviate at inset 0), the
+plate's left edge face (x = 0.1, normal -x) too; the plate's front/back
+centres sit 0.37+ in (excluded), the right bar 0.9+ (excluded) -> 0.1.
+Right, bottom (band x 0.25..0.75: the bottom bar's back/top faces and the
+plate's bottom edge reach y = 0.1) and top likewise
+-> thickness (0.1, 0.1, 0.1, 0.1) and
+
+    inner_rect(((0, 0), (1.0, 2.2)), 0.1) == ((0.1, 0.1), (0.9, 2.1))
+
+[F3] THE FRAME FRONT = the largest cluster facing the leaf plane whose
+centre lies OUTSIDE the inner rectangle: a vertical bar's front, 0.22 m2,
+at depth 0.02.
+
+[F4] leaf_candidates: the SEED is every face facing +z within 2 cm of
+z = 0 whose centre lies strictly inside the inner rectangle — the plate's
+two front triangles (centres (0.633, 1.433) and (0.367, 0.767)); the bars'
+fronts sit at depth 0.02 (inside the tolerance!) but their centres lie
+outside the rectangle (x 0.05 / 0.95, y 0.05 / 2.15).  From the seed the
+selection grows over shared edges into every face that is not the frame
+front (facing +z within 2 cm of depth 0.02 — the plate's BACK faces -z and
+is never one, whatever its depth), whose vertices all lie inside the
+SEED's own extent (0.1, 0.1)..(0.9, 2.1) widened by 2 cm and no more than
+2 cm proud of the leaf plane:
+the plate's four edge faces and its back — and nothing of the bars, which
+share no edge with the plate.  => exactly faces 48..59 (the 12 plate
+triangles), ascending.  Seed share 1.6 / (1.0 * 2.2) = 0.727 >= 0.30.
+
+[F5] leaf_bbox over those faces' vertices:
+    min (0.1, 0.1, -0.02)   max (0.9, 2.1, 0.0)
+
+[F6] THE FALLBACK: the plate ALONE (one box, faces 0..11).  Its edge
+faces deviate, but they sit ON the silhouette edge (inset 0 <= tol) and
+its back is not in any band's 25 % -> no side has a rim -> every side
+falls back to 8 % of the silhouette width 0.8 = 0.064; inner =
+(0.164, 0.164)..(0.736, 2.036); the front's centres (0.633, 1.433) and
+(0.367, 0.767) are still inside -> the seed is the front, and the growth
+takes the edges and the back: it is bounded by the SEED's extent
+(0.1..0.9 x 0.1..2.1) + 2 cm, not by the guessed inner rectangle (which
+would cut the edges at x = 0.1 off), and the back faces -z, so it is not
+the frame front (the leaf plane itself here) -> the leaf is the whole box,
+share 1.6 / 1.6 = 1.0, bbox as the box.
+
+[F7] THE 30 % GATE: the four bars alone (no plate) — the largest cluster
+is a vertical bar's front (0.22 m2, offset 0.02; the side faces are
+0.154 m2, see above); the silhouette is 1.0 x 2.2; the rim rule (the
+bars' backs at depth -0.07 deviate) gives 0.1 all round; the bar fronts'
+centres sit at x 0.05 / 0.95 or y < 0.1 / > 2.1 — nothing faces +z inside
+(0.1..0.9, 0.1..2.1) -> no seed -> ``leaf_candidates`` is ``[]`` and
+``detect_leaf`` answers None.
+
 Usage:  ./.venv/bin/python scripts/smoke_picture_areas.py
 """
 import math
@@ -565,9 +653,123 @@ def part_colour():
     check("colour: face_samples returns 3 points", len(samples) == 3, str(samples))
 
 
+# ---------------------------------------------------------------------------
+# FIXTURE F — the door
+# ---------------------------------------------------------------------------
+def box(x0, x1, y0, y1, z0, z1, verts, faces):
+    """One closed box, 8 shared vertices, 12 outward-wound triangles."""
+    b = len(verts)
+    verts += [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+              (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+    for tri in ((4, 5, 6), (4, 6, 7),     # front  +z
+                (0, 2, 1), (0, 3, 2),     # back   -z
+                (0, 4, 7), (0, 7, 3),     # left   -x
+                (1, 2, 6), (1, 6, 5),     # right  +x
+                (0, 1, 5), (0, 5, 4),     # bottom -y
+                (3, 7, 6), (3, 6, 2)):    # top    +y
+        faces.append(tuple(b + i for i in tri))
+
+
+def build_door(bars=True, plate=True):
+    verts, faces = [], []
+    if bars:
+        box(0.0, 0.1, 0.0, 2.2, -0.05, 0.02, verts, faces)
+        box(0.9, 1.0, 0.0, 2.2, -0.05, 0.02, verts, faces)
+        box(0.1, 0.9, 0.0, 0.1, -0.05, 0.02, verts, faces)
+        box(0.1, 0.9, 2.1, 2.2, -0.05, 0.02, verts, faces)
+    if plate:
+        box(0.1, 0.9, 0.1, 2.1, -0.02, 0.00, verts, faces)
+    return verts, faces
+
+
+def part_f():
+    print("[F] the door: ring of four bars around a set-back plate")
+    verts, faces = build_door()
+    check("F: 40 vertices, 60 triangles", (len(verts), len(faces)) == (40, 60),
+          str((len(verts), len(faces))))
+    normals = pa.face_normals(verts, faces)
+    check("F: the plate's first front triangle faces +z",
+          vclose(normals[48], (0, 0, 1)), str(normals[48]))
+
+    print("  [F1] the leaf plane is the largest planar cluster, +z wins the tie")
+    clusters = pa.planar_clusters(verts, faces, normals)
+    top = clusters[0] if clusters else {}
+    check("F1: largest cluster = the plate front, 2 faces, 1.6 m2",
+          top.get("faces") == [48, 49] and close(top.get("area", 0), 1.6),
+          str({k: top.get(k) for k in ("faces", "area")}))
+    check("F1: normal (0, 0, 1), offset 0",
+          vclose(top.get("normal", (9, 9, 9)), (0, 0, 1))
+          and close(top.get("offset", 9), 0.0), str(top))
+    check("F1: the plate back is the runner-up (same area, -z)",
+          len(clusters) > 1 and clusters[1]["faces"] == [50, 51]
+          and vclose(clusters[1]["normal"], (0, 0, -1)), str(clusters[1:2]))
+
+    print("  [F2] inner_rect + the rim rule")
+    check("F2: inner_rect(((0,0),(1,2.2)), 0.1) == ((0.1,0.1),(0.9,2.1))",
+          pa.inner_rect(((0.0, 0.0), (1.0, 2.2)), 0.1) == ((0.1, 0.1), (0.9, 2.1)),
+          str(pa.inner_rect(((0.0, 0.0), (1.0, 2.2)), 0.1)))
+    check("F2: inner_rect with per-side thickness (0.1, 0, 0.1, 0.2)",
+          pa.inner_rect(((0.0, 0.0), (1.0, 2.2)), (0.1, 0.0, 0.1, 0.2))
+          == ((0.1, 0.0), (0.9, 2.0)),
+          str(pa.inner_rect(((0.0, 0.0), (1.0, 2.2)), (0.1, 0.0, 0.1, 0.2))))
+    plane = pa.leaf_plane(verts, faces, normals)
+    check("F2: silhouette bbox (0,0)..(1.0,2.2)",
+          plane is not None and vclose(plane["bbox2d"][0], (0, 0))
+          and vclose(plane["bbox2d"][1], (1.0, 2.2)), str(plane and plane["bbox2d"]))
+    check("F2: frame thickness 0.1 on all four sides",
+          plane is not None and all(close(t, 0.1) for t in plane["thickness"]),
+          str(plane and plane["thickness"]))
+    check("F2: inner rectangle (0.1,0.1)..(0.9,2.1)",
+          plane is not None and vclose(plane["inner"][0], (0.1, 0.1))
+          and vclose(plane["inner"][1], (0.9, 2.1)), str(plane and plane["inner"]))
+
+    print("  [F3] the frame front")
+    check("F3: front_offset 0.02 (a vertical bar's front)",
+          plane is not None and close(plane["front_offset"], 0.02),
+          str(plane and plane["front_offset"]))
+
+    print("  [F4] leaf_candidates = exactly the plate's 12 triangles")
+    cand = pa.leaf_candidates(verts, faces, normals, plane)
+    check("F4: faces 48..59", cand == list(range(48, 60)), str(cand))
+
+    print("  [F5] detect_leaf + leaf_bbox")
+    leaf = pa.detect_leaf(verts, faces)
+    check("F5: detect_leaf finds the same 12 faces",
+          leaf is not None and leaf["faces"] == list(range(48, 60)), str(leaf and leaf["faces"]))
+    check("F5: bbox min (0.1, 0.1, -0.02)",
+          leaf is not None and vclose(leaf["bbox"][0], (0.1, 0.1, -0.02)), str(leaf and leaf["bbox"]))
+    check("F5: bbox max (0.9, 2.1, 0.0)",
+          leaf is not None and vclose(leaf["bbox"][1], (0.9, 2.1, 0.0)), str(leaf and leaf["bbox"]))
+    check("F5: seed share 1.6 / 2.2 = 0.727",
+          leaf is not None and close(leaf["share"], 1.6 / 2.2, 1e-6), str(leaf and leaf["share"]))
+    check("F5: bbox_of over the same faces agrees",
+          vclose(pa.bbox_of(verts, faces, cand)[0], (0.1, 0.1, -0.02))
+          and vclose(pa.bbox_of(verts, faces, cand)[1], (0.9, 2.1, 0.0)))
+
+    print("  [F6] the fallback thickness: the plate alone")
+    pv, pf = build_door(bars=False)
+    alone = pa.detect_leaf(pv, pf)
+    check("F6: 8 % of 0.8 = 0.064 on every side",
+          alone is not None and all(close(t, 0.064) for t in alone["plane"]["thickness"]),
+          str(alone and alone["plane"]["thickness"]))
+    check("F6: the whole box is the leaf, share 1.0",
+          alone is not None and alone["faces"] == list(range(12)) and close(alone["share"], 1.0),
+          str(alone and (alone["faces"], alone["share"])))
+
+    print("  [F7] the 30 % gate: bars without a plate find no leaf")
+    bv, bf = build_door(plate=False)
+    bplane = pa.leaf_plane(bv, bf, pa.face_normals(bv, bf))
+    check("F7: the largest cluster is a bar front at 0.02",
+          bplane is not None and close(bplane["offset"], 0.02), str(bplane and bplane["offset"]))
+    check("F7: leaf_candidates is empty",
+          bplane is not None and pa.leaf_candidates(bv, bf, pa.face_normals(bv, bf), bplane) == [])
+    check("F7: detect_leaf answers None", pa.detect_leaf(bv, bf) is None)
+
+
 def main():
     print("smoke_picture_areas")
     part_colour()
+    part_f()
     part_a()
     part_b()
     part_c()

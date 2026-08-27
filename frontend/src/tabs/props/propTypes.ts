@@ -142,6 +142,9 @@ export interface PropFull {
    *  set in the create form, patchable here, and what makes a landing mesh
    *  split itself automatically (spec-picture-props.md § 2/3). */
   key_areas?: string[]
+  /** The door leaf node's box (spec § 6) — present only while the mesh has
+   *  a `leaf` node; the scene recipe copies it into `door.leaf_bbox`. */
+  leaf_bbox?: LeafBbox
   /** The key surfaces the mesh actually carries. The Areas tab reads the
    *  richer `GET …/areas` (outlines, mesh layout, Blender state); this is the
    *  same list on the record, so a reader that only needs "has it any?" costs
@@ -343,8 +346,10 @@ export interface AreaKind {
   /** WHAT fills an area of this kind — a picture out of a gallery (`image`)
    *  or a look out of `MATERIAL_PRESETS` (`preset`). It is the field the value
    *  is written under, so the editor picks its control from this instead of
-   *  naming a kind. Mirrors `props.SLOT_KINDS` through `detect_slots`. */
-  value: 'image' | 'preset'
+   *  naming a kind. Mirrors `props.SLOT_KINDS` through `detect_slots`.
+   *  ABSENT for the door leaf (R9): a node of the mesh, not a surface —
+   *  nothing is hung on it and no default names it. */
+  value?: 'image' | 'preset'
   /** How the create form offers this kind. Absent = it cannot be REQUESTED
    *  at generation time (it is only ever drawn by hand). */
   requestLabel?: string
@@ -376,7 +381,28 @@ export const AREA_KINDS: AreaKind[] = [
       + 'panel (#FF00FF), no reflections',
     negative: 'transparent glass, reflections',
   },
+  {
+    // THE DOOR LEAF (spec-picture-props.md § 6, D7; ruling R9): not a colour
+    // and not a material — Blender cuts the leaf's faces out of the frame as
+    // their own glTF NODE `leaf` so only the leaf swings. No prompt fragment
+    // (a door render already shows frame and leaf), no `value`; the request
+    // label puts it on the create form and the Areas tab so `key_areas`
+    // may carry "leaf" = "cut the leaf out on every landing". (Not the wall
+    // piece `leaf` of the scene payload — that one is a wall.)
+    kind: 'leaf',
+    label: 'Door leaf',
+    color: '#f59e0b',
+    requestLabel: 'Door leaf',
+  },
 ]
+
+/** `door.leaf_bbox` / the prop's `leaf_bbox`: the box of the `leaf` node in
+ *  RAW y-up model metres (spec § 6) — where the viewer's test swing hangs its
+ *  pivot; the server measured it at the split, the client only reads it. */
+export interface LeafBbox {
+  min: [number, number, number]
+  max: [number, number, number]
+}
 
 /** The kind record of an area id's kind — `undefined` for a kind this client
  *  does not know (a newer server), which every reader treats as "no colour,
@@ -482,6 +508,8 @@ export interface MeshLayoutEntry {
 export interface PropAreasInfo {
   areas: PropArea[]
   mesh_layout: MeshLayoutEntry[]
+  /** The door leaf node's box, while the mesh has one (spec § 6). */
+  leaf_bbox?: LeafBbox | null
   /** Which key colours the prop's render was asked for. */
   key_areas: string[]
   /** Prop-wide values that apply WITHOUT a variant (a door's pane). */

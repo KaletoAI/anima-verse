@@ -2212,6 +2212,10 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
     :func:`_door_outward`, the normal away from the room the hole was cut out
     of. Hence +1 for a left hinge, −1 for a right one.
 
+    ``door.leaf_bbox`` (spec-picture-props.md § 6) rides along when the prop
+    sidecar carries one — the ``leaf`` node's box in raw model metres — and
+    is absent otherwise; nothing here measures a mesh.
+
     A prop id that names nothing (or a prop without a mesh) keeps its spec
     with an EMPTY ``variants`` map — the same rule dangling room-prop
     placements follow. It carries no ``placeholder_dims``: a stand-in box is
@@ -2255,8 +2259,18 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
             "anchor": [_r(_num(door["at_world"][0]) + ux * edge),
                        _r(_num(door["at_world"][1]) + uz * edge)],
             "bottom_y": _r(_num(door.get("base_y"))),
+            # `leaf_bbox` (spec-picture-props.md § 6): the box of the prop's
+            # `leaf` NODE in raw y-up model metres, copied off the prop
+            # sidecar so a renderer hangs the leaf's pivot without measuring
+            # (§ B5a). Absent when the mesh has no leaf node — then the
+            # whole group swings, as before. Ruling R12: the pivot is ALWAYS
+            # the box's min.x edge; the yaw above already turns a
+            # right-hinged door 180°, so the hinge is the local −x edge for
+            # both hinges and `hinge` only feeds the swing sign.
             "door": {"opening": index, "hinge": hinge,
-                     "swing": 1 if hinge == "left" else -1},
+                     "swing": 1 if hinge == "left" else -1,
+                     **({"leaf_bbox": prop["leaf_bbox"]}
+                        if isinstance(prop.get("leaf_bbox"), dict) else {})},
             # A door prop has no variants (see the note below), so its panes
             # come from the PROP's own defaults and from nothing else
             # (spec-picture-props.md § 5) — absent when it declares none.

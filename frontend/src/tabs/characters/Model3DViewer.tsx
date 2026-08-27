@@ -22,7 +22,7 @@ import { buildMeasureAids, disposeAids, referenceFigure,
 import { alignMeshLayout, meshLayoutOf, pointInPolygon,
   polygonArea } from '../props/faceSelect'
 import { areaKindOf } from '../props/propTypes'
-import type { AreaOutline, MeshLayoutEntry,
+import type { AreaOutline, LeafBbox, MeshLayoutEntry,
   PropSlotValues } from '../props/propTypes'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
@@ -163,7 +163,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint,
   frontal = false, areaOutlines, slots, meshLayout, drawing = false,
-  onPolygonFaces }:
+  onPolygonFaces, leafBbox }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
@@ -255,7 +255,15 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  front-facing, unoccluded triangle whose centre projects inside the
      *  ring. An empty array means "nothing was hit", which the panel says out
      *  loud instead of posting. */
-    onPolygonFaces?: (faces: number[]) => void }) {
+    onPolygonFaces?: (faces: number[]) => void
+    /** THE DOOR LEAF (spec-picture-props.md § 6): the box of the model's
+     *  `leaf` node in raw model metres, as the server measured it at the
+     *  split. With it — and a `leaf` node in the loaded model — the viewer
+     *  offers "Test swing": the leaf turns 85° about its hinge edge (x =
+     *  min.x, the same rule as the 3D client, ruling R12; a left hinge for
+     *  the preview) and back, so the cut can be judged before a door is
+     *  placed anywhere. Model mode only. */
+    leafBbox?: LeafBbox | null }) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -312,6 +320,17 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const slotFnRef = useRef<(() => void) | null>(null)
   const onPolygonFacesRef = useRef(onPolygonFaces)
   onPolygonFacesRef.current = onPolygonFaces
+  // ── The door leaf test swing (spec § 6) ──
+  const leafBboxRef = useRef(leafBbox)
+  leafBboxRef.current = leafBbox
+  /** Turns the loaded model's `leaf` node open/shut — set by the loader,
+   *  because it needs the node. */
+  const swingFnRef = useRef<((open: boolean) => void) | null>(null)
+  /** Does the LOADED model carry a `leaf` node at all? Without one there is
+   *  nothing to swing and the button stays away. */
+  const [hasLeaf, setHasLeaf] = useState(false)
+  /** Is the leaf standing open right now (the button's own state)? */
+  const [leafOpen, setLeafOpen] = useState(false)
   /** The pick itself — set by the loader, because it needs the live camera.
    *  Takes the ring in CANVAS PIXELS plus the canvas size and answers the flat
    *  R1 triangle indices. */
@@ -436,6 +455,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     setLoading(true)
     setError('')
     setMeshStats(null)
+    setHasLeaf(false)
+    setLeafOpen(false)
     // A new model is a new face order — the polygon tool stays disabled until
     // the fresh one has been measured and matched against the server's.
     setLoadedLayout(null)
@@ -1016,6 +1037,45 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             clearGroup(areaGroup)
           })
 
+          // ── The door leaf test swing (spec § 6) ──
+          // The SAME rule the 3D client applies (`hangLeafPivot` in
+          // client3d/src/scene/sceneRecipe.ts): the `leaf` node goes into a
+          // pivot group at (min.x, min.y, centre z) of the server's
+          // `leaf_bbox` — min.x for BOTH hinges, ruling R12, since the
+          // placement seats every door on its local −x edge — and that group
+          // turns. Hung INSIDE the loaded object, so pivot centring and the
+          // orientation fix carry it along, and the leaf keeps its world
+          // position until the pivot turns. Nothing is measured here.
+          let leafNode: Object3D | null = null
+          object.traverse((o: Object3D) => {
+            if (!leafNode && o !== object && o.name === 'leaf') leafNode = o
+          })
+          setHasLeaf(!!leafNode)
+          let leafPivot: Object3D | null = null
+          let leafHome: Vector3 | null = null
+          const swingLeaf = (open: boolean) => {
+            const bbox = leafBboxRef.current
+            const leaf = leafNode as Object3D | null
+            if (!leaf || !leaf.parent || !bbox) return
+            if (!leafPivot) {
+              leafPivot = new THREE.Group()
+              leafPivot.name = 'leaf_pivot'
+              leafHome = leaf.position.clone()
+              leaf.parent.add(leafPivot)
+              leafPivot.add(leaf)
+            }
+            // Re-seated on every swing: a fresh detection moves the box.
+            leafPivot.position.set(bbox.min[0], bbox.min[1],
+              (bbox.min[2] + bbox.max[2]) / 2)
+            leaf.position.copy(leafHome as Vector3).sub(leafPivot.position)
+            leafPivot.rotation.y = open ? (85 * Math.PI) / 180 : 0
+            leafPivot.updateMatrixWorld(true)
+          }
+          swingFnRef.current = swingLeaf
+          disposers.push(() => {
+            if (swingFnRef.current === swingLeaf) swingFnRef.current = null
+          })
+
           // ── The assembly preview: pictures INTO the slot materials ──
           // The same routine both renderers call (@anima/scene-render), so
           // this preview cannot disagree with the scene about how a poster
@@ -1503,6 +1563,24 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           title={t('Look at the model straight on again — the view the areas were drawn in.')}
         >
           {t('Front view')}
+        </button>
+      ) : null}
+      {/* The door leaf's test swing (spec § 6): only with a leaf node in the
+          model AND a leaf_bbox from the server — both, or there is nothing
+          to turn or nowhere to turn it about. */}
+      {leafBbox && hasLeaf && !loading && !error ? (
+        <button
+          type="button" className="ga-btn ga-btn-sm"
+          style={{ position: 'absolute', right: 6, top: frontal ? 34 : 6, opacity: 0.85 }}
+          aria-pressed={leafOpen}
+          onClick={() => {
+            const next = !leafOpen
+            setLeafOpen(next)
+            swingFnRef.current?.(next)
+          }}
+          title={t('Swing the door leaf 85° open about its hinge edge (left hinge) to check the cut — click again to shut it.')}
+        >
+          {leafOpen ? t('Shut leaf') : t('Test swing')}
         </button>
       ) : null}
       {loading || error ? (

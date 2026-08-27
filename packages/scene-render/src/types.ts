@@ -264,8 +264,21 @@ export interface SceneModelSpec {
    *  the placed group about its own origin. `swing` is the sign of that
    *  rotation for OPENING outward (away from the room the hole was cut out
    *  of): +1 for a left hinge, −1 for a right one. How far and when it opens
-   *  is view state and stays per app. */
-  door?: { opening: number; hinge: 'left' | 'right'; swing: 1 | -1 }
+   *  is view state and stays per app.
+   *
+   *  `leaf_bbox` (spec-picture-props.md § 6, D7): the box of the prop's
+   *  `leaf` NODE — the door leaf Blender cut out of the frame — in RAW y-up
+   *  model metres, before the fit scaling `place()` applies; absent when the
+   *  mesh has no such node (then the whole group swings). A renderer hangs
+   *  that node in a pivot group at x = `min.x`, y = `min.y`, z = the box's
+   *  centre — for BOTH hinges (ruling R12): `place()` seats every fit model
+   *  on its local −x edge and the server turns a right-hinged door 180°, so
+   *  the hinge is always the model's −x side. NOT the wall piece `leaf`
+   *  above (the flat panel in a door hole): that one is a wall, this one is
+   *  a node inside the prop model. */
+  door?: { opening: number; hinge: 'left' | 'right'; swing: 1 | -1
+           leaf_bbox?: { min: [number, number, number]
+                         max: [number, number, number] } }
   anchor: [number, number]
   bottom_y: number
   /** Placeholder box (already world metres) for a missing/mesh-less prop */

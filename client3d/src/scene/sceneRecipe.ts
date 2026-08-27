@@ -15,6 +15,7 @@ import {
   type SceneWall,
 } from '../api';
 import { roomDoor } from '../game/doors';
+import { leafPivot, type LeafBox } from '../game/doorSwing';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
@@ -662,14 +663,54 @@ function assertUnitScale(k: number): void {
  *  every mount but the last one stale. */
 const mountSeq = new WeakMap<Tile, number>();
 
+/** The node name Blender gives the door leaf it cut out (spec § 6). */
+const LEAF_NODE = 'leaf';
+
+/**
+ * Hang the placed model's `leaf` node in a pivot group on its hinge edge
+ * (spec-picture-props.md § 6) and return that group — or `undefined` when
+ * the model has no such node, in which case the whole group swings as
+ * before.
+ *
+ * WHERE THE PIVOT SITS is the payload's business: `leaf_bbox` is the node's
+ * box in raw model metres, and `leafPivot` turns it into the point
+ * (min.x, min.y, centre z) — nothing is measured here (§ B5a). The pivot is
+ * inserted between the leaf and its parent, INSIDE the scaled model root,
+ * so the raw coordinates are the right ones: the fit scale of `place()`
+ * sits on an ancestor and scales pivot and leaf alike. The leaf keeps its
+ * world position (its own position is re-expressed in the pivot's frame),
+ * so hanging it changes nothing until the pivot turns.
+ *
+ * Looked up on the CLONE `place()` returned, never on the shared source —
+ * a door two rooms share must not have its leaf re-parented twice.
+ */
+function hangLeafPivot(group: THREE.Object3D, bbox: LeafBox,
+                       hinge: 'left' | 'right'): THREE.Object3D | undefined {
+  let leaf: THREE.Object3D | undefined;
+  group.traverse((o) => { if (!leaf && o.name === LEAF_NODE) leaf = o; });
+  if (!leaf || !leaf.parent) return undefined;
+  const parent = leaf.parent;
+  const p = leafPivot(bbox, hinge);
+  const pivot = new THREE.Group();
+  pivot.name = 'leaf_pivot';
+  pivot.position.set(p.x, p.y, p.z);
+  parent.add(pivot);
+  pivot.add(leaf);                       // `add` takes it off `parent`
+  leaf.position.sub(pivot.position);
+  pivot.updateMatrixWorld(true);
+  return pivot;
+}
+
 /**
  * Remember a placed DOOR PROP so the frame loop can swing it (v5).
  *
  * Everything it needs is READ, never derived: the sign out of `door.swing`,
  * the threshold's centre and the rooms it joins out of the `doorways[]` entry
- * `door.opening` points at, and the base yaw off the group `placeModelSpec`
- * just returned. A spec whose index points nowhere registers nothing — the
- * prop still stands, it simply never opens.
+ * `door.opening` points at, and the base yaw off the node that will turn —
+ * the leaf pivot when the model has a `leaf` node and the payload a
+ * `leaf_bbox` (spec § 6), else the group `placeModelSpec` just returned. A
+ * spec whose index points nowhere registers nothing — the prop still stands,
+ * it simply never opens.
  */
 function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
                           spec: SceneModelSpec, group: THREE.Object3D): void {
@@ -677,6 +718,9 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
   if (!door) return;
   const way = (scene.doorways ?? [])[door.opening];
   if (!way || !Array.isArray(way.at_world)) return;
+  const hinge = door.hinge === 'right' ? 'right' : 'left';
+  const leafBbox = door.leaf_bbox;
+  const swingNode = leafBbox ? hangLeafPivot(group, leafBbox, hinge) : undefined;
   list.push({
     group,
     // Only ±1 ever reaches the object: a garbled or missing field would end up
@@ -687,8 +731,11 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
     at: { x: way.at_world[0], z: way.at_world[1] },
     level: Number(way.level) || 0,
     rooms: (way.rooms ?? []).filter((r): r is string => typeof r === 'string' && !!r),
-    baseYaw: group.rotation.y,
+    baseYaw: (swingNode ?? group).rotation.y,
     angle: 0,
+    swingNode,
+    leafBbox,
+    hinge,
   });
 }
 
@@ -711,14 +758,20 @@ function fillSlots(rec: PlacedSceneModel, placed: THREE.Object3D): void {
 /** A tier swap has replaced a door prop's mesh: the swing list points at the
  *  GROUP, so it has to follow, or that door would freeze at whatever angle the
  *  group taken out of the graph stood at. The angle carries over — it says
- *  where the door STANDS, and the fresh group is placed shut. */
+ *  where the door STANDS, and the fresh group is placed shut. The LEAF PIVOT
+ *  is hung again on the fresh mesh (spec § 6): the `leaf` node lives in the
+ *  file that was just swapped, and a distance tier without one falls back
+ *  to swinging the whole group. */
 function retargetDoorProp(tile: Tile, old: THREE.Object3D,
                           next: THREE.Object3D): void {
   for (const door of tile.doorProps ?? []) {
     if (door.group !== old) continue;
     door.group = next;
-    door.baseYaw = next.rotation.y;
-    next.rotation.y = door.baseYaw + door.angle;
+    door.swingNode = door.leafBbox
+      ? hangLeafPivot(next, door.leafBbox, door.hinge) : undefined;
+    const node = door.swingNode ?? next;
+    door.baseYaw = node.rotation.y;
+    node.rotation.y = door.baseYaw + door.angle;
   }
 }
 

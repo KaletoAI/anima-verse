@@ -29,6 +29,17 @@ The pipeline a caller runs:
    the patch bounding box, plus its physical size in metres.
 4. ``detect_areas`` wraps 1–3 and drops patches that are too small to be a
    real panel; ``area_edges`` yields the outline for the editor overlay.
+5. THE DOOR LEAF (spec § 6, decision D7) is geometry, not colour: a door
+   render always shows frame AND leaf, and the leaf has to become its OWN
+   glTF node so a renderer can swing it alone. ``detect_leaf`` finds it —
+   the leaf plane (``planar_clusters``), the silhouette shrunk by the frame
+   thickness (``inner_rect``), the seed and its thickness faces
+   (``leaf_candidates``) and the ``bbox_of`` that becomes ``leaf_bbox``.
+   Kind ``leaf`` is deliberately NOT in ``KINDS``: those are the COLOUR kinds
+   with a chroma-key predicate and a prompt fragment; ``is_key_colour`` /
+   ``classify_faces`` raise on it. (The scene payload also knows a WALL
+   piece kind ``leaf`` — the flat panel filling a door hole; that one has
+   nothing to do with this node and is never touched here.)
 
 The colour rule mirrors ``app/core/messaging_frame.py`` (the 8-bit chroma
 key used for messaging frames), only expressed on 0..1 floats.
@@ -37,7 +48,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from typing import Callable, Dict, List, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 Point = Tuple[float, float, float]
 Face = Tuple[int, int, int]
@@ -50,6 +61,25 @@ KEY_LEVEL = 0.39
 KEY_MARGIN = 0.12
 
 WORLD_UP: Point = (0.0, 1.0, 0.0)   # glTF y-up, see the module docstring
+
+# --- the door leaf (section 5) ---------------------------------------------
+#: "Coplanar" for the leaf heuristic: within this many metres of the plane
+#: (spec § 6: ±2 cm — img2mesh surfaces are bumpy, a leaf is not a lens).
+LEAF_TOL_M = 0.02
+#: …and within this cosine of the plane normal (about 18°).
+COPLANAR_COS = 0.95
+#: Frame thickness fallback when no rim can be measured: 8 % of the
+#: silhouette width (spec § 6).
+FRAME_FALLBACK_SHARE = 0.08
+#: A rim is at most this share of its axis in from the silhouette edge — a
+#: face further in is leaf, not frame, whatever its depth says.
+FRAME_MAX_SHARE = 0.25
+#: The middle half of the OTHER axis: only faces there measure a side's rim,
+#: so the top rail never measures the left jamb.
+FRAME_BAND = (0.25, 0.75)
+#: The seed has to cover this share of the silhouette, or the model has no
+#: leaf worth cutting out (spec § 6: "Mindestanteil 30 % der Frontfläche").
+LEAF_MIN_SHARE = 0.30
 
 _EPS = 1e-12
 # A plane is "horizontal" when its normal is within this of the up axis —
@@ -520,3 +550,338 @@ def area_edges(
         for (a, b), n in counts.items()
         if n == 1
     ]
+
+
+# ---------------------------------------------------------------------------
+# 5. the door leaf (spec § 6, D7) — geometry only, no colour
+# ---------------------------------------------------------------------------
+Rect2 = Tuple[Tuple[float, float], Tuple[float, float]]
+
+
+def _centroid(vertices: Sequence[Point], face: Face) -> Point:
+    a, b, c = vertices[face[0]], vertices[face[1]], vertices[face[2]]
+    return ((a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0,
+            (a[2] + b[2] + c[2]) / 3.0)
+
+
+def face_normals(vertices: Sequence[Point], faces: Sequence[Face]) -> List[Point]:
+    """Unit normal per triangle from its winding (``(b − a) × (c − a)``);
+    a degenerate triangle gets ``(0, 0, 0)`` and can never be coplanar with
+    anything. Computed HERE rather than read off the mesh, so the leaf
+    heuristic sees the same y-up coordinates the rest of the module does."""
+    out: List[Point] = []
+    for face in faces:
+        a, b, c = vertices[face[0]], vertices[face[1]], vertices[face[2]]
+        out.append(_unit(_cross(_sub(b, a), _sub(c, a))))
+    return out
+
+
+def _face_edges(face: Face):
+    a, b, c = face
+    return (_edge_key(a, b), _edge_key(b, c), _edge_key(c, a))
+
+
+def _edge_index(faces: Sequence[Face], face_idx) -> Dict[Tuple[int, int], List[int]]:
+    by_edge: Dict[Tuple[int, int], List[int]] = {}
+    for n in face_idx:
+        for e in _face_edges(faces[n]):
+            by_edge.setdefault(e, []).append(n)
+    return by_edge
+
+
+def planar_clusters(vertices: Sequence[Point], faces: Sequence[Face],
+                    normals: Sequence[Point], *, tol: float = LEAF_TOL_M,
+                    cos_min: float = COPLANAR_COS) -> List[Dict]:
+    """Connected, coplanar face groups: a neighbour over a SHARED EDGE joins
+    when its normal is within ``cos_min`` of the cluster's first face and
+    its centroid within ``tol`` of that face's plane.
+
+    One dict per cluster — ``{"faces": [ascending], "normal": unit (the
+    seed face's), "offset": area-weighted mean of ``normal · centroid``,
+    "area": summed triangle area}`` — sorted by area DESCENDING; a tie
+    (a plate's front and back have the same area) goes to the normal that
+    points towards +z, then +y, then +x — the same preference
+    :func:`fit_plane` states for its sign, so the "front view" of a symmetric
+    model is the same on every run — and after that to the smallest face
+    index.
+    """
+    by_edge = _edge_index(faces, range(len(faces)))
+    seen = [False] * len(faces)
+    out: List[Dict] = []
+    for start in range(len(faces)):
+        if seen[start]:
+            continue
+        n0 = normals[start]
+        if _norm(n0) <= _EPS:
+            seen[start] = True
+            continue
+        d0 = _dot(n0, _centroid(vertices, faces[start]))
+        seen[start] = True
+        group = [start]
+        queue = deque([start])
+        while queue:
+            k = queue.popleft()
+            for e in _face_edges(faces[k]):
+                for m in by_edge.get(e, ()):
+                    if seen[m]:
+                        continue
+                    if _dot(normals[m], n0) < cos_min:
+                        continue
+                    if abs(_dot(n0, _centroid(vertices, faces[m])) - d0) > tol:
+                        continue
+                    seen[m] = True
+                    group.append(m)
+                    queue.append(m)
+        group.sort()
+        areas = [_triangle_area(vertices, faces[k]) for k in group]
+        total = sum(areas)
+        offset = (sum(a * _dot(n0, _centroid(vertices, faces[k]))
+                      for a, k in zip(areas, group)) / total) if total > _EPS else d0
+        out.append({"faces": group, "normal": n0, "offset": offset, "area": total})
+    out.sort(key=lambda c: (-round(c["area"], 9), -c["normal"][2], -c["normal"][1],
+                            -c["normal"][0], c["faces"][0]))
+    return out
+
+
+def inner_rect(bbox2d: Rect2,
+               frame_thickness: Union[float, Sequence[float]]) -> Rect2:
+    """The silhouette rectangle ``((u0, v0), (u1, v1))`` shrunk by the frame:
+    one thickness for all four sides, or ``(left, bottom, right, top)`` —
+    a door without a bottom rail has a rim of 0 there and 0.1 elsewhere.
+    Never inverts: a thickness that would cross the middle stops there."""
+    (u0, v0), (u1, v1) = bbox2d
+    if isinstance(frame_thickness, (int, float)):
+        left = bottom = right = top = float(frame_thickness)
+    else:
+        left, bottom, right, top = (float(t) for t in frame_thickness)
+    mu, mv = (u0 + u1) / 2.0, (v0 + v1) / 2.0
+    return ((min(u0 + left, mu), min(v0 + bottom, mv)),
+            (max(u1 - right, mu), max(v1 - top, mv)))
+
+
+def _project(plane: Dict, p: Point) -> Tuple[float, float, float]:
+    """``(u, v, depth)`` of a point: in-plane coordinates along the frame
+    axes (absolute, not centred) and the signed distance off the plane."""
+    return (_dot(plane["u"], p), _dot(plane["v"], p),
+            _dot(plane["normal"], p) - plane["offset"])
+
+
+def frame_thickness(vertices: Sequence[Point], faces: Sequence[Face],
+                    normals: Sequence[Point], plane: Dict, bbox2d: Rect2, *,
+                    tol: float = LEAF_TOL_M, cos_min: float = COPLANAR_COS,
+                    ) -> Tuple[float, float, float, float]:
+    """The rim ``(left, bottom, right, top)`` in metres: on each side, how far
+    in from the silhouette edge the faces that DEVIATE from the leaf plane
+    reach (spec § 6: "the width of the rim in which the depth differs from
+    the leaf plane").
+
+    A face deviates when its normal is off the plane normal by more than the
+    cosine or its centroid more than ``tol`` off the plane. Only faces whose
+    centroid lies in the middle half of the OTHER axis (``FRAME_BAND``) and
+    less than ``FRAME_MAX_SHARE`` of this axis in from the edge measure a
+    side; the inset is the face's INNERMOST vertex. A rim has to be deeper
+    than ``tol`` to count — the outermost faces of ANY model deviate at
+    inset 0, and that is no rim. A side without one has none (0 — the leaf
+    reaches the edge, as a door without a bottom rail does); when NO side
+    has one the rim cannot be measured at all and every side falls back to
+    ``FRAME_FALLBACK_SHARE`` of the silhouette width.
+    """
+    (u0, v0), (u1, v1) = bbox2d
+    du, dv = u1 - u0, v1 - v0
+    n = plane["normal"]
+    # per side: (axis, edge, sign, other-axis band)
+    lo_u, hi_u = u0 + FRAME_BAND[0] * du, u0 + FRAME_BAND[1] * du
+    lo_v, hi_v = v0 + FRAME_BAND[0] * dv, v0 + FRAME_BAND[1] * dv
+    sides = (
+        (0, u0, 1.0, (lo_v, hi_v), du),     # left
+        (1, v0, 1.0, (lo_u, hi_u), dv),     # bottom
+        (0, u1, -1.0, (lo_v, hi_v), du),    # right
+        (1, v1, -1.0, (lo_u, hi_u), dv),    # top
+    )
+    found = [None, None, None, None]
+    for k, face in enumerate(faces):
+        cu, cv, cd = _project(plane, _centroid(vertices, face))
+        deviates = _dot(normals[k], n) < cos_min or abs(cd) > tol
+        if not deviates:
+            continue
+        pts = [_project(plane, vertices[i]) for i in face]
+        for s, (axis, edge, sign, band, span) in enumerate(sides):
+            other = cv if axis == 0 else cu
+            if other < band[0] or other > band[1]:
+                continue
+            centre = (cu if axis == 0 else cv)
+            if sign * (centre - edge) >= FRAME_MAX_SHARE * span:
+                continue
+            inset = max(sign * (p[axis] - edge) for p in pts)
+            if inset <= tol:
+                continue
+            if found[s] is None or inset > found[s]:
+                found[s] = inset
+    if all(f is None for f in found):
+        fb = FRAME_FALLBACK_SHARE * du
+        return (fb, fb, fb, fb)
+    return tuple(0.0 if f is None else float(f) for f in found)  # type: ignore[return-value]
+
+
+def leaf_candidates(vertices: Sequence[Point], faces: Sequence[Face],
+                    normals: Sequence[Point], plane: Dict) -> List[int]:
+    """The faces of the door LEAF for one leaf plane — ascending flat indices,
+    ``[]`` when nothing qualifies.
+
+    ``plane`` is what :func:`leaf_plane` builds: ``normal``, ``offset``
+    (``normal · point`` on the leaf plane), the in-plane axes ``u`` / ``v``,
+    ``inner`` (the silhouette shrunk by the frame, in absolute u/v),
+    ``front_offset`` (the frame front's ``normal · point``) and ``tol``.
+
+    THE SEED (spec § 6): every face facing the plane normal (cos ≥
+    ``COPLANAR_COS``) with its centroid within ``tol`` of the plane and
+    STRICTLY inside ``inner`` — grouped over shared edges, the group with
+    the largest area wins. THE GROWTH: from the seed over shared edges into
+    every face that (a) is not the FRAME FRONT (facing the plane normal
+    within ``tol`` of ``front_offset`` — same orientation only, so a 2 cm
+    leaf's back is never mistaken for it), (b) has all its
+    vertices inside the SEED's own in-plane extent widened by ``tol`` (the
+    leaf front's true edges — ``inner`` is only an estimate) and (c) has no vertex more
+    than ``tol`` proud of the leaf plane — the leaf's thickness and its back,
+    but not the jamb the leaf hangs in and not the frame's back. A leaf set
+    back into a proud frame therefore stops at the rebate; a leaf FLUSH with
+    its frame takes the rebate strip along (at most ``tol`` deep).
+    """
+    n = plane["normal"]
+    tol = float(plane.get("tol", LEAF_TOL_M))
+    cos_min = float(plane.get("cos_min", COPLANAR_COS))
+    (iu0, iv0), (iu1, iv1) = plane["inner"]
+    front_depth = float(plane.get("front_offset", plane["offset"])) - plane["offset"]
+
+    flags = []
+    for k, face in enumerate(faces):
+        cu, cv, cd = _project(plane, _centroid(vertices, face))
+        flags.append(_dot(normals[k], n) >= cos_min and abs(cd) <= tol
+                     and iu0 < cu < iu1 and iv0 < cv < iv1)
+    groups = components(flags, faces)
+    if not groups:
+        return []
+    seed = max(groups, key=lambda g: (sum(_triangle_area(vertices, faces[k]) for k in g),
+                                      -g[0]))
+
+    # The growth bound is the SEED'S OWN in-plane extent, widened by tol —
+    # the leaf front's true edges. Not the inner rectangle: that one is an
+    # estimate (8 % of the width when no rim could be measured) and would cut
+    # the leaf's edge faces off exactly when the frame is unknown.
+    seed_pts = [_project(plane, vertices[i]) for k in seed for i in faces[k]]
+    su0 = min(p[0] for p in seed_pts) - tol
+    su1 = max(p[0] for p in seed_pts) + tol
+    sv0 = min(p[1] for p in seed_pts) - tol
+    sv1 = max(p[1] for p in seed_pts) + tol
+
+    def grows(k: int) -> bool:
+        cu, cv, cd = _project(plane, _centroid(vertices, faces[k]))
+        if _dot(normals[k], n) >= cos_min and abs(cd - front_depth) <= tol:
+            return False                        # the frame front
+        for i in faces[k]:
+            pu, pv, pd = _project(plane, vertices[i])
+            if pu < su0 or pu > su1 or pv < sv0 or pv > sv1:
+                return False
+            if pd > tol:
+                return False
+        return True
+
+    by_edge = _edge_index(faces, range(len(faces)))
+    chosen = set(seed)
+    queue = deque(seed)
+    while queue:
+        k = queue.popleft()
+        for e in _face_edges(faces[k]):
+            for m in by_edge.get(e, ()):
+                if m in chosen or not grows(m):
+                    continue
+                chosen.add(m)
+                queue.append(m)
+    return sorted(chosen)
+
+
+def leaf_plane(vertices: Sequence[Point], faces: Sequence[Face],
+               normals: Optional[Sequence[Point]] = None, *,
+               tol: float = LEAF_TOL_M, cos_min: float = COPLANAR_COS,
+               ) -> Optional[Dict]:
+    """The plane dict :func:`leaf_candidates` works on, or None for an empty
+    mesh: the largest planar cluster's plane (the "front view"), the
+    silhouette ``bbox2d`` of ALL vertices in that plane, the measured
+    ``thickness`` per side, the ``inner`` rectangle and the frame front —
+    the largest cluster facing the same way whose centroid lies OUTSIDE the
+    inner rectangle (falls back to the leaf plane itself)."""
+    if not faces:
+        return None
+    if normals is None:
+        normals = face_normals(vertices, faces)
+    clusters = planar_clusters(vertices, faces, normals, tol=tol, cos_min=cos_min)
+    if not clusters:
+        return None
+    top = clusters[0]
+    n = top["normal"]
+    u, v = planar_frame(n)
+    plane: Dict = {"normal": n, "offset": top["offset"], "u": u, "v": v,
+                   "tol": tol, "cos_min": cos_min}
+    us = [_dot(u, p) for p in vertices]
+    vs = [_dot(v, p) for p in vertices]
+    bbox2d: Rect2 = ((min(us), min(vs)), (max(us), max(vs)))
+    thickness = frame_thickness(vertices, faces, normals, plane, bbox2d,
+                                tol=tol, cos_min=cos_min)
+    inner = inner_rect(bbox2d, thickness)
+    plane.update({"bbox2d": bbox2d, "thickness": thickness, "inner": inner})
+    front = top["offset"]
+    for c in clusters:
+        if _dot(c["normal"], n) < cos_min:
+            continue
+        pts = [vertices[i] for k in c["faces"] for i in faces[k]]
+        cu = sum(_dot(u, p) for p in pts) / len(pts)
+        cv = sum(_dot(v, p) for p in pts) / len(pts)
+        if inner[0][0] < cu < inner[1][0] and inner[0][1] < cv < inner[1][1]:
+            continue
+        front = c["offset"]
+        break
+    plane["front_offset"] = front
+    return plane
+
+
+def bbox_of(vertices: Sequence[Point], faces: Sequence[Face],
+            face_idx: Sequence[int]) -> Tuple[Point, Point]:
+    """Axis-aligned box ``(min, max)`` over the vertices of ``face_idx`` in
+    model space — what the sidecar stores as ``leaf_bbox`` (y-up, RAW model
+    metres before any placement scaling). Empty -> two zero points."""
+    ids = {i for k in face_idx for i in faces[k]}
+    if not ids:
+        return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+    pts = [vertices[i] for i in ids]
+    lo = (min(p[0] for p in pts), min(p[1] for p in pts), min(p[2] for p in pts))
+    hi = (max(p[0] for p in pts), max(p[1] for p in pts), max(p[2] for p in pts))
+    return lo, hi
+
+
+def detect_leaf(vertices: Sequence[Point], faces: Sequence[Face], *,
+                tol: float = LEAF_TOL_M, cos_min: float = COPLANAR_COS,
+                min_share: float = LEAF_MIN_SHARE) -> Optional[Dict]:
+    """The whole § 6 heuristic: ``{"faces", "bbox": (min, max), "plane",
+    "share"}`` or None when the seed covers less than ``min_share`` of the
+    silhouette (or nothing qualifies). ``share`` is the seed's area over the
+    silhouette rectangle's — the leaf's FRONT against the door's front."""
+    normals = face_normals(vertices, faces)
+    plane = leaf_plane(vertices, faces, normals, tol=tol, cos_min=cos_min)
+    if plane is None:
+        return None
+    chosen = leaf_candidates(vertices, faces, normals, plane)
+    if not chosen:
+        return None
+    n = plane["normal"]
+    seed_area = 0.0
+    for k in chosen:
+        cu, cv, cd = _project(plane, _centroid(vertices, faces[k]))
+        if _dot(normals[k], n) >= cos_min and abs(cd) <= tol:
+            seed_area += _triangle_area(vertices, faces[k])
+    (u0, v0), (u1, v1) = plane["bbox2d"]
+    front = (u1 - u0) * (v1 - v0)
+    share = seed_area / front if front > _EPS else 0.0
+    if share < min_share:
+        return None
+    return {"faces": chosen, "bbox": bbox_of(vertices, faces, chosen),
+            "plane": plane, "share": share}
