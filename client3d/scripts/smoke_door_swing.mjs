@@ -77,29 +77,8 @@
  *   (0.3,   1.4835298641951802, 0,    3.0) -> 0.3        a frame of no time
  *                                                        moves nothing
  *
- * --- leafPivotX(bbox, hinge) / leafPivot(bbox, hinge) ---------------------
- * The LEAF NODE (spec-picture-props.md § 6, D7): `door.leaf_bbox` is the box
- * of the prop's `leaf` node in raw model metres, and the renderer hangs that
- * node in a pivot group on its hinge edge. RULING R12 (2026-08-28): the
- * pivot's x is `min.x` for BOTH hinges. Derivation: `place()` seats every
- * fit model on its local −x edge (the group origin IS the hinge edge, § B2),
- * and `_door_prop_models` turns a RIGHT-hinged door by an extra 180° about
- * that edge (`yaw = atan2(−uz, ux) + 180`, smoke_scene_recipe [3p]: hinge
- * right → anchor on the right jamb, yaw 0 instead of 180). A right-hinged
- * door is therefore the same model turned round, never mirrored, and its
- * hinge is STILL the −x side of the model; `max.x` would put the axis on
- * the free edge and swing the leaf through the frame. `hinge` only feeds the
- * sign (`swing`), as it always has.
- *
- *   bbox = {min: [0.1, 0.1, −0.02], max: [0.9, 2.1, 0]}   (the door fixture
- *          of scripts/smoke_picture_areas.py fixture F: a 0.8 × 2.0 m leaf,
- *          2 cm thick, set back 2 cm in a 1.0 × 2.2 m frame)
- *   leafPivotX(bbox, "left")  -> 0.1
- *   leafPivotX(bbox, "right") -> 0.1        (R12, see above)
- *   leafPivot(bbox, "left")   -> {x: 0.1, y: 0.1, z: −0.01}
- *        y = min.y (the underside), z = (−0.02 + 0) / 2 = −0.01 (the middle
- *        of the leaf's thickness — the hinge line runs through the leaf)
- *   leafPivot(bbox, "right")  -> the same point
+ * The LEAF PIVOT (where the leaf node turns, ruling R13) is NOT here: it is
+ * `leafPivot` of @anima/scene-render, checked by scripts/smoke_leaf_pivot.mjs.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -152,7 +131,7 @@ function check(label, actual, expected, eps = 1e-12) {
 
 async function main() {
   const m = await loadModule();
-  const { doorDistance, doorTargetAngle, easeAngle, leafPivotX, leafPivot,
+  const { doorDistance, doorTargetAngle, easeAngle,
           DOOR_OPEN_RANGE, DOOR_OPEN_DEG, DOOR_SWING_RATE } = m;
 
   console.log('\n--- the constants (user decision 2026-08-27) ---');
@@ -235,21 +214,6 @@ async function main() {
     shutFrames += 1;
   }
   check('and 30 frames back to shut when the avatar walks away', shutFrames, 30);
-
-  console.log('\n--- leafPivotX / leafPivot: the hinge edge is min.x for BOTH hinges (R12) ---');
-  const bbox = { min: [0.1, 0.1, -0.02], max: [0.9, 2.1, 0] };
-  check('leafPivotX(bbox, "left") == 0.1', leafPivotX(bbox, 'left'), 0.1);
-  check('leafPivotX(bbox, "right") == 0.1 — the placement turns a right-hinged door 180°',
-    leafPivotX(bbox, 'right'), 0.1);
-  const pl = leafPivot(bbox, 'left');
-  check('leafPivot(bbox, "left").x == 0.1', pl.x, 0.1);
-  check('leafPivot(bbox, "left").y == min.y == 0.1', pl.y, 0.1);
-  check('leafPivot(bbox, "left").z == the middle of the thickness == -0.01', pl.z, -0.01);
-  const pr = leafPivot(bbox, 'right');
-  check('leafPivot(bbox, "right") is the same point',
-    pr.x === pl.x && pr.y === pl.y && pr.z === pl.z, true);
-  check('a mirrored-looking box (min.x negative) still answers min.x',
-    leafPivotX({ min: [-0.45, 0, 0], max: [0.45, 2, 0.04] }, 'right'), -0.45);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

@@ -13,7 +13,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
   Vector3 } from 'three'
 import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
-  disposeSlotMaterials, figureRootY } from '@anima/scene-render'
+  disposeSlotMaterials, figureRootY, leafPivot } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -259,10 +259,11 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     /** THE DOOR LEAF (spec-picture-props.md § 6): the box of the model's
      *  `leaf` node in raw model metres, as the server measured it at the
      *  split. With it — and a `leaf` node in the loaded model — the viewer
-     *  offers "Test swing": the leaf turns 85° about its hinge edge (x =
-     *  min.x, the same rule as the 3D client, ruling R12; a left hinge for
-     *  the preview) and back, so the cut can be judged before a door is
-     *  placed anywhere. Model mode only. */
+     *  offers "Test swing": the leaf turns 85° about its hinge edge — the
+     *  line `leafPivot` of @anima/scene-render states from this box and the
+     *  orientation fix (`rotation`), the same routine the 3D client hangs
+     *  its pivot with (ruling R13) — and back, so the cut can be judged
+     *  before a door is placed anywhere. Model mode only. */
     leafBbox?: LeafBbox | null }) {
   const { t } = useI18n()
   const mountRef = useRef<HTMLDivElement>(null)
@@ -1038,38 +1039,42 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           })
 
           // ── The door leaf test swing (spec § 6) ──
-          // The SAME rule the 3D client applies (`hangLeafPivot` in
-          // client3d/src/scene/sceneRecipe.ts): the `leaf` node goes into a
-          // pivot group at (min.x, min.y, centre z) of the server's
-          // `leaf_bbox` — min.x for BOTH hinges, ruling R12, since the
-          // placement seats every door on its local −x edge — and that group
-          // turns. Hung INSIDE the loaded object, so pivot centring and the
-          // orientation fix carry it along, and the leaf keeps its world
+          // The SAME routine the 3D client hangs its pivot with — `leafPivot`
+          // of @anima/scene-render (ruling R13): the rule is stated in the
+          // FIXED frame `place()` seats (min.x, min.y, centre z of the box
+          // turned by the orientation fix) and mapped back into the raw one,
+          // axis included; `rotationRef.current` is that very fix, the one
+          // `orient` above applies here and `_door_prop_models` ships as
+          // `fix_euler`. Hung INSIDE the loaded object, below `orient`, so the
+          // raw coordinates are the right ones; the leaf keeps its world
           // position until the pivot turns. Nothing is measured here.
           let leafNode: Object3D | null = null
           object.traverse((o: Object3D) => {
             if (!leafNode && o !== object && o.name === 'leaf') leafNode = o
           })
           setHasLeaf(!!leafNode)
-          let leafPivot: Object3D | null = null
+          let leafPivotGroup: Object3D | null = null
           let leafHome: Vector3 | null = null
           const swingLeaf = (open: boolean) => {
             const bbox = leafBboxRef.current
             const leaf = leafNode as Object3D | null
             if (!leaf || !leaf.parent || !bbox) return
-            if (!leafPivot) {
-              leafPivot = new THREE.Group()
-              leafPivot.name = 'leaf_pivot'
+            if (!leafPivotGroup) {
+              leafPivotGroup = new THREE.Group()
+              leafPivotGroup.name = 'leaf_pivot'
               leafHome = leaf.position.clone()
-              leaf.parent.add(leafPivot)
-              leafPivot.add(leaf)
+              leaf.parent.add(leafPivotGroup)
+              leafPivotGroup.add(leaf)
             }
-            // Re-seated on every swing: a fresh detection moves the box.
-            leafPivot.position.set(bbox.min[0], bbox.min[1],
-              (bbox.min[2] + bbox.max[2]) / 2)
-            leaf.position.copy(leafHome as Vector3).sub(leafPivot.position)
-            leafPivot.rotation.y = open ? (85 * Math.PI) / 180 : 0
-            leafPivot.updateMatrixWorld(true)
+            // Re-seated on every swing: a fresh detection moves the box, a
+            // turned orientation dial moves the hinge edge.
+            const spec = leafPivot(bbox, rotationRef.current)
+            leafPivotGroup.position.set(spec.point[0], spec.point[1], spec.point[2])
+            leaf.position.copy(leafHome as Vector3).sub(leafPivotGroup.position)
+            leafPivotGroup.setRotationFromAxisAngle(
+              new THREE.Vector3(spec.axis[0], spec.axis[1], spec.axis[2]),
+              open ? (85 * Math.PI) / 180 : 0)
+            leafPivotGroup.updateMatrixWorld(true)
           }
           swingFnRef.current = swingLeaf
           disposers.push(() => {

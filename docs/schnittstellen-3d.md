@@ -7474,27 +7474,46 @@ Am Tür-Spec (`_door_prop_models`) steht dann
 | `door.leaf_bbox: {min: [x,y,z], max: [x,y,z]}` | Prop-Sidecar `leaf_bbox` (vom Split-Lauf) | die Box des `leaf`-Knotens in **rohen** y-up-Modell-Metern, VOR der `fit`-Skalierung von `place()`; fehlt, solange das Mesh keinen `leaf`-Knoten hat — dann schwenkt wie bisher die ganze Gruppe |
 
 Der Client (`registerDoorProp`) sucht im platzierten Klon das Kind `leaf`,
-hängt es in eine Pivot-Gruppe mit Ursprung **(min.x, min.y, (min.z+max.z)/2)**
-— innerhalb der skalierten Modellwurzel, darum sind die rohen Koordinaten die
-richtigen — und dreht (`swingDoorProps`) **nur diese**; `retargetDoorProp`
-hängt sie nach dem Stufenwechsel neu. Winkel, Ease und Gate sind unverändert.
+hängt es in eine Pivot-Gruppe — Ursprung und Achse liefert die EINE geteilte
+Routine **`leafPivot(bbox, fix_euler)`** in `packages/scene-render/src/leafPivot.ts`
+(beide Renderer rufen sie: `hangLeafPivot` im 3D-Client, der „Test swing" des
+Admin-Viewers) — innerhalb der skalierten Modellwurzel und UNTER dem
+Orientierungs-Fix, darum sind die rohen Koordinaten die richtigen — und dreht
+(`swingDoorProps`) **nur diese**, per `setRotationFromAxisAngle(axis, winkel)`;
+`retargetDoorProp` hängt sie nach dem Stufenwechsel neu. Winkel, Ease und Gate
+sind unverändert.
 
-**Ruling R12 (2026-08-28): der Pivot liegt für BEIDE Angeln bei `min.x`.**
-`place()` setzt jedes `fit`-Modell mit seiner lokalen −x-Kante in den Ursprung
+**Ruling R12 (2026-08-28): die Angel ist für BEIDE Angeln die −x-Seite.**
+`place()` setzt jedes `fit`-Modell mit seiner −x-Kante in den Ursprung
 (§ B2 v5), und `_door_prop_models` dreht eine rechts angeschlagene Tür um
 zusätzliche 180° um genau diese Kante (`yaw = atan2(−uz, ux) + 180`). Eine
-rechte Tür ist also dasselbe Modell umgedreht, nie gespiegelt — ihre Angel ist
-im Modellraum weiterhin die −x-Seite. `max.x` bei rechter Angel setzte die
-Achse auf die FREIE Kante und schwenkte das Blatt durch die Zarge. `hinge`
-liefert weiterhin nur das Vorzeichen (`swing`).
+rechte Tür ist also dasselbe Modell umgedreht, nie gespiegelt. `max.x` bei
+rechter Angel setzte die Achse auf die FREIE Kante und schwenkte das Blatt
+durch die Zarge. `hinge` liefert weiterhin nur das Vorzeichen (`swing`).
 
-Handbeispiel (`scripts/smoke_scene_recipe.py` **[3p]**, `client3d/scripts/smoke_door_swing.mjs`):
+**Ruling R13 (2026-08-28): die −x-Kante ist die des FIX-Rahmens, nicht des
+rohen.** `place()` misst die Kiste NACH dem Orientierungs-Fix (`bFix`,
+`fix.position.x = −bFix.min.x`), der Pivot hängt aber unter dem Fix in rohen
+Koordinaten. Die Regel wird deshalb im Fix-Rahmen ausgesprochen und
+zurückgerechnet: die 8 Ecken von `leaf_bbox` mit der Fix-Rotation R drehen
+(three-Euler **'YXZ'** = Ry·Rx·Rz, dieselbe Reihenfolge wie `place()`, feine
+Winkel), dort **x = min, y = min, z = Mitte** wählen, den Punkt mit Rᵀ
+zurückdrehen; die Achse ist Rᵀ·(0, 1, 0). Fix 0 ergibt genau R12
+(min.x, min.y, Mitte z; Achse +y). Ein y-Fix von 180° legte sonst die Angel
+auf das rohe `max.x` (die freie Kante), ein y-Fix von 90° auf eine z-Kante,
+und jeder x/z-Fix kippte die Achse.
+
+Handbeispiel (`scripts/smoke_scene_recipe.py` **[3p]**, `scripts/smoke_leaf_pivot.mjs`):
 Sidecar `leaf_bbox = {min: [0.1, 0.1, −0.02], max: [0.9, 2.1, 0]}` (ein
 0,8 × 2,0-m-Blatt, 2 cm dick, 2 cm zurückgesetzt in einer 1,0 × 2,2-m-Zarge)
 → `door = {opening: 0, hinge: "right", swing: −1, leaf_bbox: {…}}` wörtlich,
 Anker/Yaw/`fit` unverändert; ohne Sidecar-Wert **kein** Schlüssel (nicht
-`null`). Pivot: `leafPivotX(bbox, "left") = 0.1`, `leafPivotX(bbox, "right")
-= 0.1` (R12), `leafPivot(bbox, ·) = (0.1, 0.1, −0.01)`. Der Split selbst:
+`null`). Pivot `leafPivot(bbox, fix)`: Fix 0 → Punkt (0.1, 0.1, −0.01), Achse
+(0, 1, 0); Fix y = 180° → (0.9, 0.1, −0.01) (das rohe `max.x` IST die
+Fix-−x-Kante), Achse (0, 1, 0); Fix y = 90° → (0.5, 0.1, −0.02) (die rohe
+min.z-Kante), Achse (0, 1, 0); Fix x = 90° → (0.1, 1.1, 0), Achse (0, 0, −1)
+(die Achse kippt); Fix z = 90° → (0.1, 2.1, −0.01), Achse (1, 0, 0). Jede
+Zahl von Hand, dazu der Gegenbeweis, dass R three's Euler(YXZ) ist. Der Split selbst:
 `scripts/smoke_door_leaf_blender.py` (Ring aus vier Quadern um eine
 zurückgesetzte Platte → Knoten `frame` 48 / `leaf` 12 Dreiecke, `leaf_bbox`
 wie oben, `delete` fügt zu einem Knoten zurück); die Heuristik ohne Blender:

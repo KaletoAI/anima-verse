@@ -426,10 +426,15 @@ export interface SwingingDoor {
    *  every tier swap (`retargetDoorProp`), because the node lives in the
    *  mesh that was just replaced. */
   swingNode?: THREE.Object3D;
-  /** `door.leaf_bbox` as the payload sent it — kept so a tier swap can hang
-   *  the pivot again without the spec in hand. */
+  /** The axis `swingNode` turns about, in the leaf's parent frame — the
+   *  FIXED frame's vertical mapped back through the orientation fix
+   *  (`leafPivot` of @anima/scene-render, ruling R13); +y for a fix of 0. */
+  swingAxis?: THREE.Vector3;
+  /** `door.leaf_bbox` and the spec's `fix_euler` as the payload sent them —
+   *  kept so a tier swap can hang the pivot again without the spec in hand. */
   leafBbox?: { min: [number, number, number]; max: [number, number, number] };
   hinge: 'left' | 'right';
+  fixEuler?: { x?: number; y?: number; z?: number };
 }
 
 /**

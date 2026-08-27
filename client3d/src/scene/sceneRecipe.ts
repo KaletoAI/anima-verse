@@ -668,37 +668,53 @@ const LEAF_NODE = 'leaf';
 
 /**
  * Hang the placed model's `leaf` node in a pivot group on its hinge edge
- * (spec-picture-props.md § 6) and return that group — or `undefined` when
- * the model has no such node, in which case the whole group swings as
- * before.
+const LEAF_PIVOT = 'leaf_pivot';
+
+ * (spec-picture-props.md § 6) and return that group with its axis — or
+ * `undefined` when the model has no such node, in which case the whole
+ * group swings as before.
  *
- * WHERE THE PIVOT SITS is the payload's business: `leaf_bbox` is the node's
- * box in raw model metres, and `leafPivot` turns it into the point
- * (min.x, min.y, centre z) — nothing is measured here (§ B5a). The pivot is
- * inserted between the leaf and its parent, INSIDE the scaled model root,
- * so the raw coordinates are the right ones: the fit scale of `place()`
- * sits on an ancestor and scales pivot and leaf alike. The leaf keeps its
- * world position (its own position is re-expressed in the pivot's frame),
- * so hanging it changes nothing until the pivot turns.
+ * WHERE THE PIVOT SITS is the shared package's business (`leafPivot`,
+ * ruling R13): `leaf_bbox` is the node's box in raw model metres and
+ * `fix_euler` the orientation fix `place()` put on the model; the rule is
+ * stated in the FIXED frame (min.x, min.y, centre z — the edge `place()`
+ * seats) and mapped back into raw coordinates, axis included — nothing is
+ * measured here (§ B5a). The pivot is inserted between the leaf and its
+ * parent, BELOW the fix and INSIDE the scaled model root, so the raw
+ * coordinates are the right ones: fix and fit scale sit on ancestors and act
+ * on pivot and leaf alike. The leaf keeps its world position (its own
+ * position is re-expressed in the pivot's frame), so hanging it changes
+ * nothing until the pivot turns.
  *
  * Looked up on the CLONE `place()` returned, never on the shared source —
- * a door two rooms share must not have its leaf re-parented twice.
+ * a door two rooms share must not have its leaf re-parented twice; and a
+ * leaf that already hangs in a pivot is re-seated, never wrapped again.
  */
 function hangLeafPivot(group: THREE.Object3D, bbox: LeafBox,
-                       hinge: 'left' | 'right'): THREE.Object3D | undefined {
+                       fix: FixEuler | undefined,
+): { node: THREE.Object3D; axis: THREE.Vector3 } | undefined {
   let leaf: THREE.Object3D | undefined;
   group.traverse((o) => { if (!leaf && o.name === LEAF_NODE) leaf = o; });
   if (!leaf || !leaf.parent) return undefined;
-  const parent = leaf.parent;
-  const p = leafPivot(bbox, hinge);
-  const pivot = new THREE.Group();
-  pivot.name = 'leaf_pivot';
-  pivot.position.set(p.x, p.y, p.z);
-  parent.add(pivot);
-  pivot.add(leaf);                       // `add` takes it off `parent`
+  const spec = leafPivot(bbox, fix);
+  const axis = new THREE.Vector3(spec.axis[0], spec.axis[1], spec.axis[2]);
+  let pivot: THREE.Object3D;
+  if (leaf.parent.name === LEAF_PIVOT) {
+    // Already wrapped (a second registration of the same clone): put the
+    // leaf back where it was and seat the existing pivot anew.
+    pivot = leaf.parent;
+    leaf.position.add(pivot.position);
+    pivot.rotation.set(0, 0, 0);
+  } else {
+    pivot = new THREE.Group();
+    pivot.name = LEAF_PIVOT;
+    leaf.parent.add(pivot);
+    pivot.add(leaf);                     // `add` takes it off the parent
+  }
+  pivot.position.set(spec.point[0], spec.point[1], spec.point[2]);
   leaf.position.sub(pivot.position);
   pivot.updateMatrixWorld(true);
-  return pivot;
+  return { node: pivot, axis };
 }
 
 /**
@@ -720,7 +736,8 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
   if (!way || !Array.isArray(way.at_world)) return;
   const hinge = door.hinge === 'right' ? 'right' : 'left';
   const leafBbox = door.leaf_bbox;
-  const swingNode = leafBbox ? hangLeafPivot(group, leafBbox, hinge) : undefined;
+  const fixEuler = spec.fix_euler;
+  const hung = leafBbox ? hangLeafPivot(group, leafBbox, fixEuler) : undefined;
   list.push({
     group,
     // Only ±1 ever reaches the object: a garbled or missing field would end up
@@ -731,12 +748,14 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
     at: { x: way.at_world[0], z: way.at_world[1] },
     level: Number(way.level) || 0,
     rooms: (way.rooms ?? []).filter((r): r is string => typeof r === 'string' && !!r),
-    baseYaw: (swingNode ?? group).rotation.y,
+    baseYaw: group.rotation.y,
     angle: 0,
-    swingNode,
+    swingNode: hung?.node,
+    swingAxis: hung?.axis,
     leafBbox,
     hinge,
   });
+    fixEuler,
 }
 
 /** How THIS client turns a slot's payload URL into a texture (§ B2 v5). It
@@ -767,11 +786,16 @@ function retargetDoorProp(tile: Tile, old: THREE.Object3D,
   for (const door of tile.doorProps ?? []) {
     if (door.group !== old) continue;
     door.group = next;
-    door.swingNode = door.leafBbox
-      ? hangLeafPivot(next, door.leafBbox, door.hinge) : undefined;
-    const node = door.swingNode ?? next;
-    door.baseYaw = node.rotation.y;
-    node.rotation.y = door.baseYaw + door.angle;
+    const hung = door.leafBbox
+      ? hangLeafPivot(next, door.leafBbox, door.fixEuler) : undefined;
+    door.swingNode = hung?.node;
+    door.swingAxis = hung?.axis;
+    door.baseYaw = next.rotation.y;
+    if (door.swingNode && door.swingAxis) {
+      door.swingNode.setRotationFromAxisAngle(door.swingAxis, door.angle);
+    } else {
+      next.rotation.y = door.baseYaw + door.angle;
+    }
   }
 }
 

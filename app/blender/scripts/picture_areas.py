@@ -488,12 +488,25 @@ def _leaf_faces(model):
 
 def _apply_world(obj):
     """Bakes ``matrix_world`` into the mesh: identity node transform, no
-    parent — the reported box is the node's own local box (client rule)."""
+    parent — the reported box is the node's own local box (client rule).
+    A mesh shared by several objects (an instanced GLB node) is copied first,
+    or the second object would be transformed twice."""
     from mathutils import Matrix
     mw = obj.matrix_world.copy()
+    if obj.data.users > 1:
+        obj.data = obj.data.copy()
     obj.parent = None
     obj.data.transform(mw)
     obj.matrix_world = Matrix.Identity(4)
+
+
+def _drop_empties():
+    """Whatever is not a mesh (the Empties a GLB's parent nodes became) has
+    lost its children to :func:`_apply_world` and would only be exported as
+    a dangling node."""
+    for o in list(bpy.context.scene.objects):
+        if o.type != "MESH":
+            bpy.data.objects.remove(o, do_unlink=True)
 
 
 def _join_all(objects):
@@ -502,7 +515,21 @@ def _join_all(objects):
     target = objects[0]
     for o in objects:
         _apply_world(o)
+    _drop_empties()
     if len(objects) > 1:
+        # Every UV layer any part carries has to exist on the target BEFORE
+        # the join, or the join drops it: the atlas backup layer (always the
+        # LAST layer) lives on the part that has slot areas — a leaf with a
+        # pane — and the frame's own loops take their layer-0 UVs as backup,
+        # which is what they are.
+        names = []
+        for o in objects:
+            for layer in o.data.uv_layers:
+                if layer.name not in names:
+                    names.append(layer.name)
+        for name in names:
+            if target.data.uv_layers.get(name) is None:
+                target.data.uv_layers.new(name=name, do_init=True)
         with bpy.context.temp_override(active_object=target,
                                        selected_editable_objects=list(objects),
                                        selected_objects=list(objects)):

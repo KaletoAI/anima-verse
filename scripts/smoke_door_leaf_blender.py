@@ -60,6 +60,45 @@ Positions are float32 in the file; the script rounds to 5 decimals, so
   key_areas and no door tag, so the landing only reconciles: ONE gallery
   file, one node, no leaf_bbox, areas [].
 
+[F] A PANE INSIDE THE LEAF SWINGS WITH IT (spec § 6: "Glas-Flächen, die im
+  Blatt liegen, bleiben Material-Slots im leaf-Knoten") — ``door_glb(glass=
+  True)``: the plate's four FRONT vertices (the only ones at z = 0.0) map to
+  the UV square u, v in [0.6, 0.9] (corner (0.1, 0.1) -> (0.6, 0.6),
+  (0.9, 2.1) -> (0.9, 0.9)); every other vertex maps to (0.1, 0.1). The
+  atlas is magenta (255, 0, 255) over png columns/rows 36..60 (u, v in
+  [0.5625, 0.953)) and grey elsewhere. So the plate's two front triangles
+  sample magenta (centroid of (0.6,0.6),(0.9,0.6),(0.9,0.9) = (0.8, 0.7);
+  the two median samples (0.733, 0.667) and (0.833, 0.667) — all inside);
+  an edge face (two front vertices + one back vertex at (0.1, 0.1)) has its
+  centroid at u = (0.6 + 0.9 + 0.1) / 3 = 0.533 and its nearest median
+  sample at 0.533 + (0.6 - 0.533) / 3 = 0.556 < 0.5625 — grey, so at most
+  ONE of three samples is magenta and the face stays atlas; the frame's
+  faces sit at (0.1, 0.1) — grey. => exactly 2 magenta faces.
+  ``create_prop(category="door", key_areas=["glass"])`` + upload: the
+  landing run asks for kinds [glass, leaf]; the 2 magenta faces are below
+  the production 12-face filter, so only the leaf is cut (areas = [leaf]).
+  Then ``detect_areas(gp, mode="auto", min_faces=2)`` (the same lowering
+  Task 3's smoke uses — the fixture quad has 2 faces): the leaf is joined
+  back, glass_1 is split off (planar UVs: u = (x - 0.1) / 0.8, glTF
+  v = 1 - (y - 0.1) / 2.0, size_m [0.8, 2.0], normal [0, 0, 1], 4 outline
+  edges), then the leaf is cut again with the glass faces INSIDE it:
+    nodes frame + leaf; the LEAF's primitives carry slot_glass_1 (2 tris)
+    and atlas (10); the frame: atlas 48, no slot_glass_1;
+    TEXCOORD_1 (the atlas backup layer) on the leaf's primitives;
+    sidecar areas [glass_1 (auto, 2 faces), leaf (12)], leaf_bbox as [A];
+    slots [{glass_1, material}]; .areas.json: glass_1 has 4 edges.
+  ``delete_area(gp, "leaf")``: one node "frame", 60 tris, slot_glass_1
+  still 2 tris with its planar UVs, TEXCOORD_1 still present (the join
+  keeps the backup layer), areas [glass_1], no leaf_bbox, slots unchanged.
+
+[G] NO LEAF FOUND — a door prop (category "door", no key_areas) with the
+  BARS ONLY (``door_glb(plate=False)``, fixture F7 of the maths smoke):
+  the landing run asks for kinds ["leaf"] ONLY (no unrequested chroma
+  detection: the door tag alone never adds a colour kind), finds no seed ->
+  ONE gallery file (nothing changed, no split file), areas [], no
+  leaf_bbox, and ``areas_error`` carries props.NO_LEAF_NOTE ("no door leaf
+  found — draw it with the polygon tool") — areas_info.error shows it.
+
 [E] AUTO RE-RUN ON A SPLIT MESH — ``detect_areas(pid, mode="auto")`` on the
   prop of [C]: the previous leaf is joined back first and found again —
   still frame 48 / leaf 12, the same box. The source STAYS "manual": an
@@ -131,25 +170,33 @@ def box(x0, x1, y0, y1, z0, z1, verts, faces):
         faces.append(tuple(b + i for i in tri))
 
 
-def door_geometry():
+def door_geometry(plate: bool = True):
     verts, faces = [], []
     box(0.0, 0.1, 0.0, 2.2, -0.05, 0.02, verts, faces)
     box(0.9, 1.0, 0.0, 2.2, -0.05, 0.02, verts, faces)
     box(0.1, 0.9, 0.0, 0.1, -0.05, 0.02, verts, faces)
     box(0.1, 0.9, 2.1, 2.2, -0.05, 0.02, verts, faces)
-    box(0.1, 0.9, 0.1, 2.1, -0.02, 0.00, verts, faces)
+    if plate:
+        box(0.1, 0.9, 0.1, 2.1, -0.02, 0.00, verts, faces)
     return verts, faces
 
 
-def door_glb() -> bytes:
-    positions, faces = door_geometry()
-    uvs = [(x, y / 2.2) for x, y, _z in positions]
+def door_glb(glass: bool = False, plate: bool = True) -> bytes:
+    positions, faces = door_geometry(plate)
+    if glass:
+        # Only the plate's FRONT vertices sit at z == 0.0 exactly.
+        uvs = [((0.6 + (x - 0.1) / 0.8 * 0.3, 0.6 + (y - 0.1) / 2.0 * 0.3)
+                if z == 0.0 else (0.1, 0.1)) for x, y, z in positions]
+    else:
+        uvs = [(x, y / 2.2) for x, y, _z in positions]
     indices = [i for f in faces for i in f]
     pos = b"".join(struct.pack("<fff", *p) for p in positions)
     tex = b"".join(struct.pack("<ff", *t) for t in uvs)
     idx = b"".join(struct.pack("<H", i) for i in indices)
     idx += b"\0" * ((4 - len(idx) % 4) % 4)
-    png = png_rgb(64, 64, lambda x, y: (128, 128, 128))
+    png = png_rgb(64, 64, (lambda x, y: (255, 0, 255) if 36 <= x < 61 and 36 <= y < 61
+                           else (128, 128, 128)) if glass
+                  else (lambda x, y: (128, 128, 128)))
     png_len = len(png)
     png += b"\0" * ((4 - len(png) % 4) % 4)
     blob = pos + tex + idx + png
@@ -232,25 +279,52 @@ def accessor(gltf, blob, index):
 
 
 def nodes(path: Path):
-    """``{node name: {"tris": [(p, p, p), …], "trs": bool}}`` for every node
-    with a mesh, in node order; ``trs`` = the node carries a transform."""
+    """``{node name: {"tris": [(p, p, p), …], "prims": [{material, tris, uvs,
+    has_uv1}], "trs": bool}}`` for every node with a mesh, in node order;
+    ``trs`` = the node carries a transform."""
     gltf, blob = read_glb(path.read_bytes())
+    mats = [m.get("name", "") for m in gltf.get("materials", [])]
     out = {}
     for node in gltf.get("nodes", []):
         if "mesh" not in node:
             continue
         mesh = gltf["meshes"][node["mesh"]]
-        tris = []
+        tris, prims = [], []
         for prim in mesh.get("primitives", []):
-            pos = accessor(gltf, blob, prim["attributes"]["POSITION"])
+            attrs = prim["attributes"]
+            pos = accessor(gltf, blob, attrs["POSITION"])
+            uv = accessor(gltf, blob, attrs["TEXCOORD_0"]) if "TEXCOORD_0" in attrs else []
             idx = [i[0] for i in accessor(gltf, blob, prim["indices"])] if "indices" in prim \
                 else list(range(len(pos)))
-            tris += [tuple(pos[i] for i in idx[k:k + 3]) for k in range(0, len(idx), 3)]
+            ptris = [tuple(pos[i] for i in idx[k:k + 3]) for k in range(0, len(idx), 3)]
+            puvs = [tuple(uv[i] for i in idx[k:k + 3]) for k in range(0, len(idx), 3)] if uv else []
+            tris += ptris
+            prims.append({"material": mats[prim["material"]] if "material" in prim else "",
+                          "tris": ptris, "uvs": puvs, "has_uv1": "TEXCOORD_1" in attrs})
         out[node.get("name", "")] = {
-            "tris": tris,
+            "tris": tris, "prims": prims,
             "trs": any(k in node for k in ("translation", "rotation", "scale", "matrix")),
         }
     return out
+
+
+def mat_tris(n, node: str, material: str) -> int:
+    return sum(len(p["tris"]) for p in n.get(node, {}).get("prims", []) if p["material"] == material)
+
+
+def uv_rule_holds(n, node: str, material: str, rule) -> bool:
+    """Every vertex of every triangle of ``material`` on ``node`` has uv == rule(x, y)."""
+    ok = False
+    for p in n.get(node, {}).get("prims", []):
+        if p["material"] != material:
+            continue
+        ok = True
+        for t, tu in zip(p["tris"], p["uvs"]):
+            for (x, y, _z), (u, v) in zip(t, tu):
+                eu, ev = rule(x, y)
+                if not (near(u, eu) and near(v, ev)):
+                    return False
+    return ok
 
 
 def span(tris):
@@ -276,7 +350,7 @@ LEAF_MIN = [0.1, 0.1, -0.02]
 LEAF_MAX = [0.9, 2.1, 0.0]
 
 
-def check_split(label: str, pid: str, source: str) -> None:
+def check_split(label: str, pid: str, source: str, extra_areas: int = 0) -> None:
     active = store.model_path(pid)
     n = nodes(active)
     check(f"{label}: nodes are exactly frame + leaf", set(n) == {"frame", "leaf"}, str(sorted(n)))
@@ -292,10 +366,11 @@ def check_split(label: str, pid: str, source: str) -> None:
               vnear(lo, LEAF_MIN) and vnear(hi, LEAF_MAX), f"{lo} .. {hi}")
     meta = store.read_sidecar(pid)
     areas = meta.get("areas") or []
-    check(f"{label}: sidecar areas = one leaf entry",
-          len(areas) == 1 and areas[0]["id"] == "leaf" and areas[0]["kind"] == "leaf"
-          and areas[0]["faces"] == 12 and areas[0]["source"] == source, str(areas))
-    a = areas[0] if areas else {}
+    check(f"{label}: sidecar areas = {extra_areas} colour + one leaf entry, leaf LAST",
+          len(areas) == extra_areas + 1 and areas[-1]["id"] == "leaf"
+          and areas[-1]["kind"] == "leaf"
+          and areas[-1]["faces"] == 12 and areas[-1]["source"] == source, str(areas))
+    a = areas[-1] if areas else {}
     check(f"{label}: size_m [0.8, 2.0], normal [0, 0, 1]",
           vnear(a.get("size_m") or [0, 0], [0.8, 2.0])
           and vnear(a.get("normal") or [9, 9, 9], [0, 0, 1]), str(a))
@@ -320,7 +395,8 @@ def check_split(label: str, pid: str, source: str) -> None:
           vnear((rec.get("leaf_bbox") or {}).get("min") or [], LEAF_MIN), str(rec.get("leaf_bbox")))
     check(f"{label}: areas_info carries leaf_bbox",
           vnear((store.areas_info(pid).get("leaf_bbox") or {}).get("max") or [], LEAF_MAX))
-    check(f"{label}: slots stay [] — a node is not a material", rec["slots"] == [], str(rec["slots"]))
+    if not extra_areas:
+        check(f"{label}: slots stay [] — a node is not a material", rec["slots"] == [], str(rec["slots"]))
 
 
 def main() -> int:
@@ -368,6 +444,69 @@ def main() -> int:
     areas = store.detect_areas(pid, mode="auto")
     check("E: returns the leaf entry", [a["id"] for a in areas] == ["leaf"], str(areas))
     check_split("E", pid, "manual")
+
+    print("\n[F] a pane inside the leaf stays a slot material of the leaf node")
+    gp = store.create_prop(name="Glass door", category="door", key_areas=["glass"])["id"]
+    check("F: upload lands", store.save_uploaded_glb(gp, door_glb(glass=True)))
+    meta = store.read_sidecar(gp)
+    check("F: the landing (production filter) cut the leaf only",
+          [a["id"] for a in meta.get("areas") or []] == ["leaf"], str(meta.get("areas")))
+    areas = store.detect_areas(gp, mode="auto", min_faces=2)
+    check("F: areas glass_1 (auto, 2 faces) then leaf (auto, 12)",
+          [(a["id"], a["source"], a["faces"]) for a in areas]
+          == [("glass_1", "auto", 2), ("leaf", "auto", 12)], str(areas))
+    g = next((a for a in areas if a["id"] == "glass_1"), {})
+    check("F: glass_1 size_m [0.8, 2.0], normal [0, 0, 1]",
+          vnear(g.get("size_m") or [], [0.8, 2.0]) and vnear(g.get("normal") or [], [0, 0, 1]), str(g))
+    check_split("F", gp, "auto", extra_areas=1)
+    n = nodes(store.model_path(gp))
+    check("F: the LEAF carries slot_glass_1 with 2 triangles",
+          mat_tris(n, "leaf", "slot_glass_1") == 2, str(mat_tris(n, "leaf", "slot_glass_1")))
+    check("F: …and atlas with 10", mat_tris(n, "leaf", "atlas") == 10, str(mat_tris(n, "leaf", "atlas")))
+    check("F: the frame has atlas 48 and no slot_glass_1",
+          mat_tris(n, "frame", "atlas") == 48 and mat_tris(n, "frame", "slot_glass_1") == 0,
+          str([(p["material"], len(p["tris"])) for p in n.get("frame", {}).get("prims", [])]))
+    glass_uv = lambda x, y: ((x - 0.1) / 0.8, 1 - (y - 0.1) / 2.0)  # noqa: E731
+    check("F: the glass faces carry planar UVs ((x-0.1)/0.8, 1-(y-0.1)/2)",
+          uv_rule_holds(n, "leaf", "slot_glass_1", glass_uv))
+    check("F: TEXCOORD_1 (the atlas backup layer) on the leaf's primitives",
+          all(p["has_uv1"] for p in n.get("leaf", {}).get("prims", [])))
+    rec = store.get_prop(gp)
+    check("F: slots [{glass_1, material}]",
+          rec["slots"] == [{"name": "glass_1", "kind": "material"}], str(rec["slots"]))
+    sp = store.areas_sidecar_path(store.model_path(gp))
+    extra = json.loads(sp.read_text(encoding="utf-8")) if sp and sp.exists() else {}
+    g_edges = next((x.get("edges") for x in extra.get("areas", []) if x.get("id") == "glass_1"), None)
+    check("F: .areas.json: glass_1 has 4 outline edges", len(g_edges or []) == 4, str(len(g_edges or [])))
+    areas = store.delete_area(gp, "leaf")
+    check("F: delete leaf -> areas [glass_1]", [a["id"] for a in areas] == ["glass_1"], str(areas))
+    n = nodes(store.model_path(gp))
+    check("F: one node 'frame' with 60 triangles",
+          set(n) == {"frame"} and len(n["frame"]["tris"]) == 60,
+          str({k: len(v["tris"]) for k, v in n.items()}))
+    check("F: slot_glass_1 still has its 2 triangles on the frame",
+          mat_tris(n, "frame", "slot_glass_1") == 2, str(mat_tris(n, "frame", "slot_glass_1")))
+    check("F: …with their planar UVs", uv_rule_holds(n, "frame", "slot_glass_1", glass_uv))
+    check("F: TEXCOORD_1 survives the join",
+          all(p["has_uv1"] for p in n.get("frame", {}).get("prims", [])))
+    meta = store.read_sidecar(gp)
+    check("F: no leaf_bbox after the delete", "leaf_bbox" not in meta)
+    check("F: slots unchanged",
+          store.get_prop(gp)["slots"] == [{"name": "glass_1", "kind": "material"}])
+
+    print("\n[G] a door without a leaf: the run says so")
+    np_ = store.create_prop(name="Bare frame", category="door")["id"]
+    check("G: upload lands", store.save_uploaded_glb(np_, door_glb(plate=False)))
+    check("G: ONE gallery file — nothing was split",
+          len(store.model_gallery(np_).files()) == 1,
+          str([f.name for f in store.model_gallery(np_).files()]))
+    meta = store.read_sidecar(np_)
+    check("G: areas [] and no leaf_bbox",
+          meta.get("areas", []) == [] and "leaf_bbox" not in meta, str(meta.get("areas")))
+    check("G: areas_error carries NO_LEAF_NOTE",
+          meta.get("areas_error") == store.NO_LEAF_NOTE, str(meta.get("areas_error")))
+    check("G: areas_info.error shows it",
+          store.areas_info(np_)["error"] == store.NO_LEAF_NOTE)
 
     print()
     if FAILURES:

@@ -365,6 +365,9 @@ AREA_DEFAULTS_KEY = "area_defaults"
 AREAS_ERROR_KEY = "areas_error"
 #: Sidecar key: ISO stamp of the last detection/split run (system time).
 AREAS_RUN_AT_KEY = "areas_run_at"
+#: The ``areas_error`` note of a run that looked for the door leaf and found
+#: none — the tab shows it; the areas the run DID find stay as they are.
+NO_LEAF_NOTE = "no door leaf found — draw it with the polygon tool"
 #: How an area came to be: found on the atlas, or drawn by the admin.
 AREA_SOURCES = ("auto", "manual")
 #: The size filter of the automatic detection (§ 2 "Mindestgrößen"): a patch
@@ -1660,6 +1663,8 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
         else:
             meta.pop(LEAF_BBOX_KEY, None)
         meta.pop(AREAS_ERROR_KEY, None)
+        if LEAF_KIND in (params.get("kinds") or []) and not leaf_bbox:
+            meta[AREAS_ERROR_KEY] = NO_LEAF_NOTE
         meta[AREAS_RUN_AT_KEY] = utc_now_iso()
         _prune_to_areas(meta, ids)
         _write_sidecar(pid, meta)
@@ -1717,11 +1722,13 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
     sidecar ``areas`` list after the run.
 
     ``mode="auto"`` dissolves every existing area and detects the key-coloured
-    panels of the kinds the prop asked for (``key_areas``; every COLOUR kind
-    when it asked for none) — plus the door LEAF (spec § 6) when the prop
-    asked for ``leaf`` or is a door prop (:func:`is_door_prop`); the leaf
-    heuristic never runs on a prop that is neither, a picture frame must not
-    lose its biggest plate to it. ``mode="manual"`` turns ``faces`` (flat
+    panels of the kinds the prop asked for (``key_areas``) — plus the door
+    LEAF (spec § 6) when the prop asked for ``leaf`` or is a door prop
+    (:func:`is_door_prop`); a door that asked for nothing gets the leaf only,
+    a prop that is neither gets every COLOUR kind, and the leaf heuristic
+    never runs on such a prop — a picture frame must not lose its biggest
+    plate to it. A run that looked for the leaf and found none leaves
+    :data:`NO_LEAF_NOTE` in ``areas_error`` (the areas it found stay). ``mode="manual"`` turns ``faces`` (flat
     triangle indices in the R1 order of the CURRENT mesh — the tab's polygon
     pick) into one new area of ``kind``; every other area stays; kind
     ``leaf`` cuts exactly those faces out as the leaf node (replacing a
@@ -1746,9 +1753,16 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
     mode = str(mode or "auto").strip().lower()
     params: Dict[str, Any] = {"mode": mode, "origins": _origins(meta)}
     if mode == "auto":
-        kinds = list(meta.get(KEY_AREAS_KEY) or COLOUR_KINDS)
+        # The kinds of an automatic run: what the prop ASKED for, plus the
+        # leaf for a door prop; a prop that asked for nothing and is no door
+        # gets every colour kind (the "Detect areas" button on a plain frame)
+        # — a door that asked for nothing gets the leaf ONLY, never an
+        # unrequested chroma detection.
+        kinds = list(meta.get(KEY_AREAS_KEY) or [])
         if is_door_prop(meta) and LEAF_KIND not in kinds:
             kinds.append(LEAF_KIND)
+        if not kinds:
+            kinds = list(COLOUR_KINDS)
         params["kinds"] = kinds
         params["min_faces"] = max(1, int(min_faces))
         params["min_area_m2"] = max(0.0, float(min_area_m2))

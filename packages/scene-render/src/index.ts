@@ -20,6 +20,9 @@
 export { placeModelSpec } from './place'
 export type { PlaceOptions } from './place'
 
+export { leafPivot, fixMatrix } from './leafPivot'
+export type { LeafBox, FixEuler, LeafPivotSpec } from './leafPivot'
+
 export { surfaceHeightAt, highestSurfaceAt, surfaceScale } from './surface'
 export type { PlacedSurface, SurfacePlacement } from './surface'
 
