@@ -15,6 +15,13 @@ so the body shape can be read off the path. The gallery bodies and the HTTP
 mapping are shared with the unqualified routes — the helpers are imported, not
 copied, so a change to one answers for both.
 
+PICTURE VARIANTS (spec-picture-props.md § 5, 2026-08-27) are three more verbs
+of the same list: ``POST /variants/picture`` appends a variant that carries a
+COPY of the frame's mesh and the pictures on it, ``POST
+/variants/{i}/slot-values`` re-hangs them, ``POST /variants/{i}/recopy`` takes
+the frame again after it was re-split. All three are admin-only and answer 400
+with the store's own reason — the Areas tab shows it verbatim.
+
 THE ADMIN PANEL DOES NOT USE THE FIVE FIELD ROUTES ANY MORE (2026-08-25): it
 keeps a local draft and writes it through ``POST /world/props/{id}/bulk``
 (``props.bulk_update``), one request and one sidecar write for the whole prop.
@@ -24,8 +31,10 @@ and because the batch runs their sanitizers verbatim (the appliers in
 """
 from typing import Any, Dict
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Request,
+                     UploadFile)
 
+from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
 
 logger = get_logger("prop_variants")
@@ -59,8 +68,14 @@ async def _body(request: Request) -> Dict[str, Any]:
 def prop_variants(prop_id: str) -> Dict[str, Any]:
     """The prop's model variants: ``{variants: [{index, stem, active, seasons,
     in_season, primary, tiers, has_model, model_file, model_url, signature,
-    dims, dims_estimated, description, ground_offset_m, markers}], max,
-    generating_variants, world_seasons, current_season}``.
+    dims, dims_estimated, description, ground_offset_m, markers, slot_values,
+    label, stale}], max, generating_variants, world_seasons,
+    current_season}``.
+
+    ``slot_values`` / ``label`` / ``stale`` are the picture half
+    (spec-picture-props.md § 1): what this variant shows in the prop's picture
+    areas, the name it is listed under, and whether its COPIED frame predates
+    the mesh the prop shows now — the tab's "Re-copy mesh" runs on that flag.
 
     Since 2026-08-25 the variant OWNS what the object looks like, so each
     record carries one value per field and no inherited twin: ``dims`` are the
@@ -121,6 +136,93 @@ async def prop_variant_add(prop_id: str, request: Request) -> Dict[str, Any]:
             status_code=409,
             detail=f"At most {variant_max()} active variants per prop")
     return {"status": "ok", "index": index}
+
+
+@router.post("/props/{prop_id}/variants/picture")
+async def prop_variant_add_picture(
+        prop_id: str, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """HANG A PICTURE (spec-picture-props.md § 1, D2) — body
+    ``{slot_values: {"<area id>": {"image"|"preset": …}}, label?}``.
+
+    A picture assignment is a VARIANT of the frame prop, not a property of the
+    placement and not a prop of its own: the new variant carries a COPY of the
+    primary variant's mesh (its ``.areas.json`` companion and its source image
+    with it) and shows the pictures on top. The answer is the finished variant
+    record, so the strip can render the new chip without a second request.
+
+    400 for everything the store refuses with a reason the tab can show: an
+    unknown area, a URL that is not one of this world's two galleries, a
+    preset on a picture panel (or a picture on a pane) and the reached variant
+    cap (R5). Nothing is created for any of them."""
+    from app.core.props import add_picture_variant, get_prop, list_variants
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    body = await _body(request)
+    try:
+        index = add_picture_variant(prop_id, body.get("slot_values"),
+                                    body.get("label"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {"status": "ok", "index": index,
+            "variant": list_variants(prop_id)[index]}
+
+
+@router.post("/props/{prop_id}/variants/{index}/slot-values")
+async def prop_variant_slot_values(
+        prop_id: str, index: int, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """WHAT this variant shows in the prop's picture areas — body
+    ``{slot_values: {…}, label?}``; an EMPTY object clears both and the
+    variant stops being a picture variant.
+
+    The values are checked against the prop's real areas: the area has to
+    exist, a ``picture`` panel takes an image URL of this world and a
+    ``glass`` one a preset from ``SLOT_PRESETS``. Anything else is a 400 and
+    nothing is written — this is the ONE gate, the scene recipe reads what is
+    stored verbatim. A blank ``label`` is derived from the picture file names.
+    """
+    from app.core.props import list_variants, set_variant_slot_values
+    _variant(prop_id, index)
+    body = await _body(request)
+    try:
+        stored = set_variant_slot_values(prop_id, index,
+                                         body.get("slot_values"),
+                                         body.get("label"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if not stored:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    entry = list_variants(prop_id)[index]
+    return {"status": "ok", "index": index,
+            "slot_values": entry["slot_values"], "label": entry["label"]}
+
+
+@router.post("/props/{prop_id}/variants/{index}/recopy")
+def prop_variant_recopy(
+        prop_id: str, index: int,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Take the frame again (ruling R4): copy the PRIMARY variant's current
+    mesh into this picture variant, keeping its ``slot_values``.
+
+    The answer to the strip's "variants outdated" — a re-split frame leaves
+    every copy behind, and this is how they catch up. 400 for the primary
+    variant itself (it IS the source), 409 while this variant is generating:
+    the run is about to write the very file the copy lands in."""
+    from app.core.props import (list_variants, recopy_variant_mesh,
+                                variant_generating)
+    _variant(prop_id, index)
+    if variant_generating(prop_id, index):
+        raise HTTPException(status_code=409,
+                            detail="This variant is generating right now")
+    try:
+        done = recopy_variant_mesh(prop_id, index)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if not done:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    return {"status": "ok", "index": index,
+            "variant": list_variants(prop_id)[index]}
 
 
 @router.post("/props/{prop_id}/variants/{index}/active")

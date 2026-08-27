@@ -7155,8 +7155,10 @@ ist ein 400, kein stilles Verwerfen.
 ### Slot-WERTE: was in der Fläche steht
 
 Was in einer füllbaren Fläche steht, gehört zum **Prop**, nicht zur
-Platzierung: die Werte kommen aus den Prop-Defaults und aus den Bild-Varianten
-— siehe Addendum „Bild-Props". Im Payload steht das Ergebnis unverändert am
+Platzierung: die Werte kommen aus den Prop-Defaults (`area_defaults`) und aus
+den `slot_values` der Bild-Variante — die Regel steht im Nachtrag
+[„Bild-Props (v5)"](#nachtrag-2026-08-27--b2-bild-props-v5--das-bild-reitet-auf-der-variante)
+am Ende dieses Dokuments. Im Payload steht das Ergebnis unverändert am
 Spec als `slots` (`models[]`, Raum-Prop wie Tür-Prop); fehlt der Schlüssel,
 rendert das Prop, wie es modelliert wurde.
 
@@ -7224,3 +7226,121 @@ Neuaufbau).
 | Eine Platzierung/Öffnung mit `slot_values` verliert das Feld beim Speichern, und am Spec entsteht kein `slots` daraus | `scripts/smoke_scene_recipe.py` **[3p]** |
 | `applySlotMaterials`: das benannte Material bekommt eine `map`, das andere bleibt DASSELBE Objekt, und zwei Platzierungen derselben Cache-Gruppe haben VERSCHIEDENE Material-Instanzen | `scripts/smoke_slot_materials.mjs` **[1]/[2]** |
 | Glas-Preset setzt `transparent` + die Konstanten, `transmission` nur wo das Feld existiert | ebenda **[3]** |
+
+## Nachtrag 2026-08-27 (§ B2): Bild-Props (v5) — das Bild reitet auf der VARIANTE
+
+Ein Rahmen-Prop (Bilderrahmen, Tür mit Scheibe, Bildschirm, Schild) trägt seit
+`spec-picture-props.md` **Flächen** im Mesh: die Faces einer erkannten Fläche `k`
+liegen auf dem Material `slot_picture_<k>` bzw. `slot_glass_<k>` mit planaren
+UVs 0…1. **Welches Bild** darin hängt, ist eine **Variante** des Props (D2) —
+keine Eigenschaft der Platzierung (D3: der Platzierungs-Picker ist entfernt) und
+kein eigenes Prop.
+
+### Woher `slots` am Spec kommt
+
+```
+spec["slots"] = { **prop.area_defaults, **variante.slot_values }
+```
+
+Zwei Quellen, eine Vereinigung, in dieser Reihenfolge:
+
+| Quelle | Wo gespeichert | Wofür |
+|---|---|---|
+| `area_defaults` | Prop-Sidecar, `{"<area id>": {"preset": "glass"}}` | prop-weite Aussage, gilt **ohne** Variante — die Scheibe einer Tür |
+| `slot_values` | **Varianten**-Eintrag in `model_variants`, `{"<area id>": {"image": "<url>"}}` oder `{"preset": …}` | das Bild, das jemand auf DIESE Version des Rahmens gehängt hat |
+
+Die Variante wird mit der EINEN Regel aufgelöst (`_variant_index` → Position in
+der veröffentlichten Varianten-Liste → dieser Eintrag), also aus demselben
+Eintrag wie das Mesh, das die Kopie zeigt. Eine Platzierung ohne Variante — und
+jede Platzierung jedes gewöhnlichen Props — bekommt damit nur die Defaults; ein
+**Tür-Prop** (`_door_prop_models`) hat keine Varianten und bekommt ausschließlich
+die Defaults. Ist das Ergebnis **leer**, fehlt der Schlüssel `slots` ganz:
+„keine Slots" heißt für beide Renderer „render das Mesh, wie es modelliert
+wurde", und ein leeres Objekt sagte in jedem Payload jeder Welt dasselbe.
+
+**Kein zweites Tor im Rezept.** Geprüft wird beim SPEICHERN der Variante
+(`props.set_variant_slot_values`): die Fläche muss im Prop-Sidecar `areas`
+stehen, eine `picture`-Fläche nimmt eine Bild-URL dieser Welt
+(`/world/locations/<loc>/gallery/<file>` oder `/characters/<name>/images/<file>`),
+eine `glass`-Fläche ein Preset aus `SLOT_PRESETS`. Alles andere ist ein 400, und
+gespeichert wird nichts. Das Rezept liest die abgelegten Werte wörtlich.
+
+### Felder am Varianten-Eintrag (`GET /world/props/{id}/variants`)
+
+| Feld | Bedeutung |
+|---|---|
+| `slot_values` | `{}` = diese Variante zeigt nichts Eigenes |
+| `label` | Anzeigename; leer gelassen → aus den Bild-Dateinamen (Basisname ohne Endung, `", "`-verbunden), bei reinem Glas aus dem Preset |
+| `stale` | die **kopierte** Rahmen-Geometrie ist älter als das Mesh, das das Prop jetzt zeigt |
+
+### Die Kopie und `stale` (R4)
+
+Eine Bild-Variante **kopiert** die primäre GLB unter ihren eigenen Stem
+(`ModelGallery.new_path` + `write_sidecar` + `select`), samt `<model>.glb.areas.json`
+und Quellbild; die LOD-Stufe entsteht wie bei jeder Variante (`request_low_tier`).
+Das spart jede Referenz-Mechanik — Auswahl, Stufen, Signatur und Rezept bleiben
+unangetastet — und kostet eine GLB je Bild.
+
+Der Sidecar der Kopie trägt dafür
+
+```json
+"copied_from": {"file": "model_1787866010.glb", "signature": "a3fc8b8b6aa0"}
+```
+
+und daraus folgt die Antwort auf „veraltet?" ohne Raten:
+
+```
+stale  ⟺  copied_from.file ≠ der AKTIVE full-Datei­name der primären Variante
+```
+
+Ein Mesh ohne `copied_from` (die primäre Variante selbst, eine hochgeladene
+Variante) ist nie veraltet — es ist niemandes Kopie. `POST …/variants/{i}/recopy`
+kopiert erneut (neue Galerie-Datei, die alte bleibt als Historie stehen) und
+**behält die `slot_values`**.
+
+### Signatur
+
+`props._prop_record.model_signature` nimmt `area_defaults` und die
+`slot_values` **aller** Varianten mit auf. Ein Bildwechsel ändert weder Mesh
+noch Stufe noch URL — ohne das im Schlüssel behielte ein laufender Client das
+alte Poster an der Wand. Über `model_sig` an der Platzierung wandert das in die
+Raum- und damit in die Szenen-Signatur. Props, die nichts über Bilder sagen,
+behalten ihren Schlüssel Zeichen für Zeichen.
+
+### Handbeispiel
+
+Rahmen-Prop mit den Flächen `picture_1` (Art `picture`) und `glass_1` (Art
+`glass`), `area_defaults = {"glass_1": {"preset": "glass"}}`, vier aktive
+Varianten, davon Variante 1 mit
+`slot_values = {"picture_1": {"image": "/world/locations/demo/gallery/x.png"}}`:
+
+| Platzierung | `slots` am Spec |
+|---|---|
+| `{"prop_id": "frame", "variant": 1}` | `{"glass_1": {"preset": "glass"}, "picture_1": {"image": "/world/locations/demo/gallery/x.png"}}` |
+| `{"prop_id": "frame"}` (ohne Variante → Position 0) | `{"glass_1": {"preset": "glass"}}` |
+| `{"prop_id": "frame", "variant": 5}` (5 mod 4 = 1) | wie Variante 1 — ein Index außerhalb wickelt, er 404t nie |
+| Tür-Prop ohne `area_defaults` | kein `slots`-Schlüssel |
+
+### API (admin-only, `app/routes/prop_variants.py`)
+
+| Route | Körper | Antwort |
+|---|---|---|
+| `POST /world/props/{id}/variants/picture` | `{slot_values, label?}` | `{status, index, variant}` — neue Variante mit Mesh-Kopie |
+| `POST /world/props/{id}/variants/{i}/slot-values` | `{slot_values, label?}` | `{status, index, slot_values, label}` |
+| `POST /world/props/{id}/variants/{i}/recopy` | — | `{status, index, variant}` |
+
+400 mit dem Text des Stores für unbekannte Fläche, falsche URL-Form, Preset an
+einer Bild-Fläche (und umgekehrt), erreichten Varianten-Cap (R5) und die
+primäre Variante bei `recopy`; 409, solange die Variante generiert.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Bild-Variante anlegen: neue Stem-Datei, Mesh Byte für Byte, `.areas.json` + Quellbild wandern mit, `copied_from` zeigt auf die Primär-Datei | `scripts/smoke_props_areas.py` **[5]** |
+| `label` aus den Bild-Dateinamen bzw. aus dem Preset | ebenda **[5]** |
+| Prüfung: unbekannte Fläche, fremde URL, Preset an Bild-Fläche, Bild an Scheibe, Preset außerhalb `SLOT_PRESETS` — und der Sidecar bleibt Byte-identisch | ebenda **[6]** |
+| Der Varianten-Cap gilt auch für Bild-Varianten (R5) | ebenda **[7]** |
+| Rezept: `variant: 1` → `slots`, ohne Variante nur Defaults, Tür-Prop nur Defaults, leer → kein Schlüssel, Index außerhalb wickelt | ebenda **[8]** |
+| Prop- UND Szenen-Signatur bewegen sich bei geändertem Bild und geänderten Defaults | ebenda **[9]** |
+| `stale` nach neuem Primär-Mesh, `recopy` macht frisch und behält die Werte; die alte Kopie bleibt Historie | ebenda **[10]** |

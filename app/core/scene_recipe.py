@@ -2076,6 +2076,11 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     variants renders exactly what it rendered before. The index is resolved
     here, not in the renderers: the same copy must show the same mesh in the
     3D client, in the admin preview and in the smoke.
+
+    PICTURE AREAS (spec-picture-props.md § 5): ``slots`` says what is IN the
+    prop's fillable surfaces — the prop's ``area_defaults`` overlaid with the
+    resolved variant's ``slot_values`` (:func:`_slot_spec`). Absent when there
+    is nothing to say.
     """
     from app.core import props as prop_store
     level = int(recipe.get("level") or 0)
@@ -2123,6 +2128,10 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         if len(model_variants) > 1:
             spec["model_variants"] = model_variants
             spec["variant"] = _variant_index(placement, len(model_variants))
+        # WHAT IS IN THE PICTURE AREAS (spec-picture-props.md § 5).
+        slots = _slot_spec(prop, placement, model_variants)
+        if slots:
+            spec["slots"] = slots
         # WALKABLE (v6): only a prop that carries the tag ships its surface —
         # a table's lattice would be dead weight in every payload.
         tags = [str(t).lower() for t in ((prop or {}).get("tags") or [])]
@@ -2143,6 +2152,38 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
             spec["placeholder_dims"] = {"w": _r(dims[0]), "d": _r(dims[1]),
                                         "h": _r(dims[2])}
         out.append(spec)
+    return out
+
+
+def _slot_spec(prop: Optional[Dict[str, Any]], placement: Dict[str, Any],
+               model_variants: List[Dict[str, str]]) -> Dict[str, Any]:
+    """WHAT one placement shows in its prop's picture areas: the prop's
+    ``area_defaults``, overlaid with the ``slot_values`` of the VARIANT this
+    placement resolves to (spec-picture-props.md § 5).
+
+    Two sources, one merge, in that order: the defaults are the prop-wide
+    statement (a door's pane), the variant's values are the picture somebody
+    hung on THIS version of the frame. A placement whose variant shows nothing
+    of its own — every placement of every ordinary prop — therefore gets the
+    defaults alone, and a prop with neither gets nothing at all: an EMPTY
+    result is an ABSENT key, because a renderer reads "no slots" as "render
+    the mesh as it was modelled" and an empty object would say the same thing
+    in every payload of every world.
+
+    NO SECOND GATE: the values were checked against the prop's real areas when
+    the variant was saved (``props.set_variant_slot_values``), so the recipe
+    copies them verbatim. The variant is resolved with the ONE rule
+    (:func:`_variant_index` → position in the published list → that entry), so
+    the picture a copy shows and the mesh it shows come from the same entry.
+    """
+    if not prop:
+        return {}
+    out: Dict[str, Any] = dict(prop.get("area_defaults") or {})
+    entries = placement.get("variant_tiers")
+    if isinstance(entries, list) and entries:
+        pos = _variant_index(placement, len(model_variants) or len(entries))
+        if 0 <= pos < len(entries) and isinstance(entries[pos], dict):
+            out.update(entries[pos].get("slot_values") or {})
     return out
 
 
@@ -2236,6 +2277,11 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
             "bottom_y": _r(_num(door.get("base_y"))),
             "door": {"opening": index, "hinge": hinge,
                      "swing": 1 if hinge == "left" else -1},
+            # A door prop has no variants (see the note below), so its panes
+            # come from the PROP's own defaults and from nothing else
+            # (spec-picture-props.md § 5) — absent when it declares none.
+            **({"slots": dict(prop.get("area_defaults") or {})}
+               if prop.get("area_defaults") else {}),
         })
     return out, sigs
 

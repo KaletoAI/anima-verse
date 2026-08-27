@@ -360,6 +360,25 @@ MAX_MANUAL_FACES = 200_000
 #: mesh's own ``.json`` sidecar, which describes the generation run.
 AREAS_SIDECAR_SUFFIX = ".areas.json"
 _AREA_ID_RE = re.compile(r"^(" + "|".join(AREA_KINDS) + r")_([1-9][0-9]*)$")
+#: Variant key: WHAT this variant shows in which area (spec-picture-props.md
+#: § 1, D2) — ``{"picture_1": {"image": "<url>"}, "glass_1": {"preset":
+#: "glass"}}``. A picture assignment IS a variant of the frame prop, so the
+#: values ride on the variant entry and nowhere else; the recipe merges them
+#: over :data:`AREA_DEFAULTS_KEY`.
+SLOT_VALUES_KEY = "slot_values"
+#: Variant key: the name the strip lists a picture variant under (derived
+#: from the picture file names when the admin types none).
+VARIANT_LABEL_KEY = "label"
+#: MODEL-sidecar key of a mesh that was COPIED from another variant (R4):
+#: ``{"file": <source file name>, "signature": <source gallery signature>}``.
+#: A picture variant carries a copy of the frame, so it goes stale as soon as
+#: the primary variant's ACTIVE full mesh is no longer that file.
+COPIED_FROM_KEY = "copied_from"
+#: What a variant COPY carries over from the run that made its source mesh —
+#: the same three facts :func:`_land_split` keeps.
+_COPIED_RUN_KEYS = ("backend", "face_num", "texture_size")
+#: Ceiling on a variant label — a name, not a description.
+VARIANT_LABEL_MAX = 120
 
 #: How much of a placed prop's DEPTH survives its cut (§ B2 addendum
 #: 2026-08-23) — a fraction, 1.0 = the whole prop. The floor never reaches 0:
@@ -517,6 +536,10 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     ``image`` (the base stem keeps its four master-record keys instead) —
     every writer stores the sanitized list back, so it has to survive here.
 
+    A PICTURE VARIANT's ``slot_values`` and its ``label`` survive here too
+    (spec-picture-props.md § 1) — the pictures ARE what makes that variant a
+    version of the frame prop.
+
     ``seasons`` (E2c) survives by the same law as ``description``,
     ``ground_offset_m`` and ``markers`` (2026-08-25): kept when it says
     something, dropped when it is empty/blank/zero — the default is stored as
@@ -559,6 +582,12 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             markers = sanitize_markers(entry.get(MARKERS_KEY))
             if markers:
                 rec[MARKERS_KEY] = markers
+            values = _coerce_slot_values(entry.get(SLOT_VALUES_KEY))
+            if values:
+                rec[SLOT_VALUES_KEY] = values
+            label = _coerce_variant_label(entry.get(VARIANT_LABEL_KEY))
+            if label:
+                rec[VARIANT_LABEL_KEY] = label
             out.append(rec)
     return out or [_new_variant_entry(MODEL_STEM)]
 
@@ -910,6 +939,15 @@ def variant_markers(meta: Dict[str, Any], variant: Any = None) -> List[Dict[str,
     return sanitize_markers(_variant_entry(meta, variant).get(MARKERS_KEY))
 
 
+def variant_slot_values(meta: Dict[str, Any],
+                        variant: Any = None) -> Dict[str, Dict[str, str]]:
+    """WHAT one variant shows in the prop's picture areas (``{}`` when it
+    shows nothing of its own) — the picture rides on the VARIANT, so this is
+    the only place a payload asks for it (spec-picture-props.md § 1)."""
+    return _coerce_slot_values(
+        _variant_entry(meta, variant).get(SLOT_VALUES_KEY))
+
+
 def _coerce_tags(raw: Any) -> List[str]:
     """Free-text tags — accepts a list or a comma/newline string; deduped
     case-insensitively, capped at 30."""
@@ -1195,6 +1233,119 @@ def sanitize_area_defaults(raw: Any,
 _SLOT_IMAGE_RE = re.compile(
     r"^/(?:world/locations/[^/?#]+/gallery"
     r"|characters/[^/?#]+/images)/[^/?#]+$")
+
+
+def sanitize_variant_slot_values(raw: Any,
+                                 areas: Sequence[Dict[str, Any]],
+                                 ) -> Dict[str, Dict[str, str]]:
+    """What ONE picture variant shows, checked against the prop's areas — or
+    ``ValueError`` (spec-picture-props.md § 1).
+
+    ``{"<area id>": {"image": "<url>"}}`` on a ``picture`` area,
+    ``{"<area id>": {"preset": "<SLOT_PRESETS>"}}`` on a ``glass`` one, and no
+    third shape: the KIND of the area decides which key it takes, so a preset
+    can never end up on a panel that wants a picture and a picture never on a
+    pane. The URL form is one of the two galleries this world serves
+    (:data:`_SLOT_IMAGE_RE`) — the file need not exist (a picture may be
+    deleted after it was hung, exactly as a prop may be), its ADDRESS has to
+    be one of them.
+
+    THIS IS THE ONE GATE. The recipe reads the stored values verbatim and
+    validates nothing, so everything that writes them comes through here:
+    :func:`set_variant_slot_values` and, before it creates anything,
+    :func:`add_picture_variant`.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("slot_values must be an object {area_id: {…}}")
+    kinds = {str(a.get("id") or ""): str(a.get("kind") or "")
+             for a in (areas or [])}
+    out: Dict[str, Dict[str, str]] = {}
+    for area_id, value in raw.items():
+        aid = str(area_id or "").strip().lower()
+        kind = kinds.get(aid)
+        if not kind:
+            raise ValueError(
+                f"slot_values names an unknown area {aid!r} (the prop has: "
+                f"{', '.join(sorted(kinds)) or 'none'})")
+        if not isinstance(value, dict):
+            raise ValueError(f"slot_values[{aid!r}] must be an object")
+        if kind == "picture":
+            if set(value) - {"image"}:
+                raise ValueError(f"slot_values[{aid!r}] is a picture area and "
+                                 "takes an image and nothing else")
+            url = str(value.get("image") or "").strip()
+            if not url:
+                raise ValueError(f"slot_values[{aid!r}] needs an image URL")
+            if not _SLOT_IMAGE_RE.match(url):
+                raise ValueError(
+                    f"slot_values[{aid!r}]: {url!r} is not a picture of this "
+                    "world (/world/locations/<loc>/gallery/<file> or "
+                    "/characters/<name>/images/<file>)")
+            out[aid] = {"image": url}
+        else:
+            if set(value) - {"preset"}:
+                raise ValueError(f"slot_values[{aid!r}] is a {kind} area and "
+                                 "takes a preset and nothing else")
+            preset = str(value.get("preset") or "").strip().lower()
+            if not preset:
+                raise ValueError(f"slot_values[{aid!r}] needs a preset "
+                                 f"(known: {', '.join(SLOT_PRESETS)})")
+            if preset not in SLOT_PRESETS:
+                raise ValueError(f"slot_values[{aid!r}]: unknown preset "
+                                 f"{preset!r} (known: "
+                                 f"{', '.join(SLOT_PRESETS)})")
+            out[aid] = {"preset": preset}
+    return out
+
+
+def _coerce_slot_values(raw: Any) -> Dict[str, Dict[str, str]]:
+    """A stored ``slot_values`` object as it is READ BACK: junk is dropped
+    entry by entry, exactly like every other variant field.
+
+    Deliberately lenient, unlike :func:`sanitize_variant_slot_values`: a read
+    has no area list in hand (the areas describe the PRIMARY mesh and may have
+    been re-detected since), and an area deleted after the fact must not make
+    the whole variant unreadable. The check belongs where the value is
+    WRITTEN."""
+    out: Dict[str, Dict[str, str]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for area_id, value in raw.items():
+        aid = str(area_id or "").strip().lower()
+        if not _AREA_ID_RE.match(aid) or not isinstance(value, dict):
+            continue
+        for key in ("image", "preset"):
+            text = str(value.get(key) or "").strip()
+            if text:
+                out[aid] = {key: text}
+                break
+    return out
+
+
+def _coerce_variant_label(value: Any) -> str:
+    """A variant's display name as it is STORED: stripped, capped. ``""``
+    means "write no key at all" — the strip then shows the derived one."""
+    return str(value or "").strip()[:VARIANT_LABEL_MAX]
+
+
+def default_variant_label(slot_values: Dict[str, Dict[str, str]]) -> str:
+    """The name a picture variant lists itself under when the admin typed
+    none: the picture FILE NAMES (basename without extension), joined by
+    ", ", and the preset name for a glass-only variant.
+
+    Area order, so the same assignment always reads the same way."""
+    from urllib.parse import unquote
+    parts: List[str] = []
+    for aid in sorted(slot_values or {}):
+        value = slot_values[aid] or {}
+        url = str(value.get("image") or "")
+        if url:
+            parts.append(unquote(url.rsplit("/", 1)[-1]).rsplit(".", 1)[0])
+        elif value.get("preset"):
+            parts.append(str(value["preset"]))
+    return _coerce_variant_label(", ".join(p for p in parts if p))
 
 
 def _autofill_slots(prop_id: str) -> None:
@@ -2026,6 +2177,15 @@ def _published_entry(meta: Dict[str, Any], index: int,
     off = variant_ground_offset(meta, index)
     if off:
         entry[GROUND_OFFSET_KEY] = off
+    # WHAT THIS VERSION SHOWS in the prop's picture areas
+    # (spec-picture-props.md § 5). It rides with the entry for the same reason
+    # the size does: the consumer resolves ONE position in this list into one
+    # placement, and the recipe would otherwise have to ask the library a
+    # second time per placement. Absent when the variant shows nothing of its
+    # own — every prop that is not a frame keeps the payload it always had.
+    values = variant_slot_values(meta, index)
+    if values:
+        entry[SLOT_VALUES_KEY] = values
     if markers:
         own = variant_markers(meta, index)
         if own:
@@ -2070,12 +2230,34 @@ def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _variant_stale(prop_id: str, index: int, primary_file: str) -> bool:
+    """Was this variant's mesh COPIED from a file the prop no longer shows?
+    (ruling R4)
+
+    ``copied_from.file`` on the active mesh's sidecar names the file the copy
+    was taken from; the primary's active full file is what it should be. A
+    mesh that was never copied (the primary itself, an uploaded variant) is
+    never stale — it is nobody's copy."""
+    g = model_gallery(prop_id, index)
+    active = g.find(DEFAULT_TIER, fallback=False) if g else None
+    if not active:
+        return False
+    name = str((read_model_sidecar(active).get(COPIED_FROM_KEY)
+                or {}).get("file") or "")
+    return bool(name) and name != primary_file
+
+
 def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
     seasons, in_season, tiers, has_model, model_file, model_url, signature,
     has_source, source_url, image, dims, dims_estimated, description,
-    ground_offset_m, markers, surface_status}]`` — every variant, active or
-    not, in order.
+    ground_offset_m, markers, slot_values, label, stale, surface_status}]`` —
+    every variant, active or not, in order.
+
+    ``slot_values`` is WHAT this variant shows in the prop's picture areas
+    (``{}`` = nothing of its own), ``label`` the name it is listed under and
+    ``stale`` whether its COPIED mesh predates the frame the prop shows now
+    (:func:`_variant_stale`) — the tab's "Re-copy mesh" runs on that flag.
 
     Since 2026-08-25 there is ONE number per field and no pair of them: the
     variant owns its size, its subject, its sink and its markers, so ``dims``
@@ -2099,6 +2281,10 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     meta = read_sidecar(prop_id)
     entries = _variant_list(meta)
     primary = _effective_indices(entries)[0]
+    primary_gallery = model_gallery(prop_id, primary)
+    primary_file = primary_gallery.find(DEFAULT_TIER, fallback=False) \
+        if primary_gallery else None
+    primary_name = primary_file.name if primary_file else ""
     now = current_season_tokens()
     out: List[Dict[str, Any]] = []
     for i, entry in enumerate(entries):
@@ -2129,6 +2315,11 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "description": entry.get(DESCRIPTION_KEY, ""),
             "ground_offset_m": entry.get(GROUND_OFFSET_KEY, GROUND_OFFSET_DEFAULT),
             "markers": entry.get(MARKERS_KEY, []),
+            # The picture assignment of THIS variant, the name it is listed
+            # under, and whether its copied frame is out of date (R4).
+            SLOT_VALUES_KEY: dict(entry.get(SLOT_VALUES_KEY) or {}),
+            VARIANT_LABEL_KEY: entry.get(VARIANT_LABEL_KEY, ""),
+            "stale": _variant_stale(prop_id, i, primary_name),
             # This variant's own baked walking surface, STATE only (the
             # lattice is what ``surface`` means, and it travels on the scene
             # spec) — every variant is a mesh of its own and is baked on its
@@ -2316,6 +2507,26 @@ def _apply_variant_seasons(entry: Dict[str, Any], seasons: Any) -> None:
         entry.pop(SEASONS_KEY, None)
 
 
+def _apply_variant_slot_values(entry: Dict[str, Any],
+                               clean: Dict[str, Dict[str, str]],
+                               label: Any) -> None:
+    """Store an ALREADY CHECKED assignment and the name it is listed under.
+
+    ``clean`` comes out of :func:`sanitize_variant_slot_values` — this only
+    writes. An empty assignment removes both keys (absence is how "this
+    variant shows nothing of its own" is stored), and a blank label falls back
+    to the derived one."""
+    if clean:
+        entry[SLOT_VALUES_KEY] = clean
+    else:
+        entry.pop(SLOT_VALUES_KEY, None)
+    text = _coerce_variant_label(label) or default_variant_label(clean)
+    if text:
+        entry[VARIANT_LABEL_KEY] = text
+    else:
+        entry.pop(VARIANT_LABEL_KEY, None)
+
+
 #: The five fields a variant owns, by the name a batch body calls them — the
 #: dims travel as ONE `dims` object because the trio is one statement (a prop
 #: is scaled uniformly, so the three numbers say how big AND what shape).
@@ -2410,6 +2621,168 @@ def set_variant_description(prop_id: str, variant: int, text: Any) -> bool:
     _apply_variant_description(entries[i], text)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
+    return True
+
+
+def set_variant_slot_values(prop_id: str, variant: int, slot_values: Any,
+                            label: Any = None) -> bool:
+    """WHAT this variant shows in the prop's picture areas — the picture
+    assignment itself (spec-picture-props.md § 1, D2). ``False`` when the prop
+    or the index does not exist, ``ValueError`` for an unusable value.
+
+    The areas belong to the PROP (they are materials of its mesh), the values
+    to the VARIANT: hanging another picture is a new version of the frame, not
+    a new prop and not a property of the placement. Everything is checked
+    against the prop's real areas (:func:`sanitize_variant_slot_values`)
+    BEFORE anything is written, so a refused save leaves the sidecar exactly
+    as it was — and the recipe can read the stored values verbatim.
+
+    ``label`` is what the strip lists this variant under; blank derives it
+    from the picture file names. An EMPTY assignment clears both keys, which
+    is how a variant stops being a picture variant.
+
+    Deliberately NOT refused for a generating variant, like the other value
+    setters: a picture moves no file and renames no stem. It does move the
+    prop's mesh signature (a swapped picture has to reach a running client),
+    which is a payload fact and not a job's business."""
+    ctx = _edit_variant(prop_id, variant)
+    if not ctx:
+        return False
+    pid, meta, entries, i = ctx
+    clean = sanitize_variant_slot_values(slot_values, meta.get(AREAS_KEY) or [])
+    _apply_variant_slot_values(entries[i], clean, label)
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return True
+
+
+def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
+    """Copy the SOURCE variant's active full mesh into the TARGET variant's
+    stem and select it — the mechanic a picture variant runs on (ruling R4).
+
+    A picture variant is a version of the same object, so it carries the
+    frame's mesh rather than referencing it: LOD, selection, signature and
+    recipe stay exactly what they are, at the price of one GLB per picture.
+    Everything that describes THAT mesh travels with it — the ``.areas.json``
+    companion (the outline edges the Areas tab draws) and the variant's source
+    image, which the source-image law makes the variant's own.
+
+    The copy lands as a NEW gallery file, so a re-copy keeps the old one as
+    history, and its model sidecar records :data:`COPIED_FROM_KEY`: the file
+    it was taken from and that gallery's signature. THAT is what makes
+    staleness a fact instead of a guess — the copy is stale as soon as the
+    source's active full file is no longer that name.
+
+    ``ValueError`` when there is nothing to copy or no such variant."""
+    pid = safe_prop_id(prop_id)
+    src_gal = model_gallery(pid, source) if pid else None
+    src = src_gal.find(DEFAULT_TIER, fallback=False) if src_gal else None
+    if not src:
+        raise ValueError("this prop has no full-tier mesh to copy")
+    dst_gal = model_gallery(pid, target)
+    if not dst_gal:
+        raise ValueError(f"this prop has no variant {target}")
+    dst = dst_gal.new_path(src.suffix)
+    shutil.copyfile(src, dst)
+    prev = read_model_sidecar(src)
+    write_model_sidecar(dst, {
+        "created_at": utc_now_iso(),
+        "source": "variant-copy",
+        "format": prev.get("format") or "glb",
+        "rig": prev.get("rig") or "none",
+        "tier": DEFAULT_TIER,
+        "source_file": src.name,
+        COPIED_FROM_KEY: {"file": src.name,
+                          "signature": src_gal.signature(DEFAULT_TIER)},
+        **{k: prev[k] for k in _COPIED_RUN_KEYS if prev.get(k)},
+    })
+    dst_gal.select(dst.name, DEFAULT_TIER)
+    # A distance mesh this store built from the PREVIOUS copy shows the
+    # previous frame — the same reason a split drops it.
+    _drop_stale_low(dst_gal)
+    companion = areas_sidecar_path(src)
+    target_companion = areas_sidecar_path(dst)
+    if companion and target_companion and companion.exists():
+        shutil.copyfile(companion, target_companion)
+    src_img = source_path(pid, source)
+    dst_img = _source_file(pid, target, create=True)
+    if src_img and dst_img and src_img != dst_img:
+        shutil.copyfile(src_img, dst_img)
+        # …and what that picture was made with, so the panel shows the
+        # provenance of the image it is displaying.
+        meta = read_sidecar(pid)
+        entries = _variant_list(meta)
+        rec = _image_meta(meta, _stem_of(pid, source, meta=meta))
+        dst_stem = _stem_of(pid, target, meta=meta)
+        if any(rec.values()) and dst_stem and dst_stem != MODEL_STEM:
+            for entry in entries:
+                if entry["stem"] == dst_stem:
+                    entry["image"] = rec
+            meta[VARIANTS_KEY] = entries
+            _write_sidecar(pid, meta)
+    return dst
+
+
+def add_picture_variant(prop_id: str, slot_values: Any,
+                        label: Any = None) -> int:
+    """Hang a picture: a NEW variant of the frame prop that carries a COPY of
+    the primary variant's mesh and shows ``slot_values`` on it (D2, § 1).
+
+    Returns the store index of the new variant. ``ValueError`` for an unknown
+    prop, an unusable assignment, a reached cap (R5) or a prop without a
+    full-tier mesh to copy — and all four are answered BEFORE anything is
+    created, so a refusal leaves no half-built variant behind.
+
+    The mesh is the PRIMARY variant's, because that is the frame everything
+    else on this prop is a version of; the distance mesh is asked for exactly
+    as it is for any other variant (:func:`request_low_tier`)."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        raise ValueError("unknown prop")
+    clean = sanitize_variant_slot_values(slot_values, meta.get(AREAS_KEY) or [])
+    entries = _variant_list(meta)
+    if len(_active_indices(entries)) >= variant_max():
+        raise ValueError(f"At most {variant_max()} active variants per prop")
+    src_index = _effective_indices(entries)[0]
+    src_gal = model_gallery(pid, src_index)
+    if not (src_gal and src_gal.find(DEFAULT_TIER, fallback=False)):
+        raise ValueError("this prop has no full-tier mesh to copy")
+    index = add_variant(pid, src_index)
+    if index < 0:
+        raise ValueError("no free variant slot")
+    _copy_variant_mesh(pid, index, src_index)
+    set_variant_slot_values(pid, index, clean, label)
+    request_low_tier(pid, index)
+    logger.info("Prop %s: picture variant %d added (%s)", pid, index,
+                ", ".join(sorted(clean)) or "nothing")
+    return index
+
+
+def recopy_variant_mesh(prop_id: str, variant: int) -> bool:
+    """Take the primary variant's mesh again for ONE picture variant (R4) —
+    the answer to "variants outdated" after the frame was re-split.
+
+    ``False`` when the prop or the index does not exist, ``ValueError`` for
+    the primary variant itself (it IS the source). The assignment is kept: the
+    admin re-copies the frame, not the picture."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return False
+    entries = _variant_list(meta)
+    try:
+        i = int(variant)
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= i < len(entries):
+        return False
+    primary = _effective_indices(entries)[0]
+    if i == primary:
+        raise ValueError("the primary variant IS the mesh every picture "
+                         "variant is copied from")
+    _copy_variant_mesh(pid, i, primary)
+    request_low_tier(pid, i)
     return True
 
 
@@ -3451,6 +3824,26 @@ def _all_prop_ids() -> List[str]:
     return sorted(out)
 
 
+def _picture_signature_part(meta: Dict[str, Any],
+                            entries: List[Dict[str, Any]]) -> str:
+    """What the PICTURES contribute to a prop's mesh signature
+    (spec-picture-props.md § 5): the prop-wide ``area_defaults`` and EVERY
+    variant's ``slot_values``, keyed by store index.
+
+    Every variant, not just the active ones: switching a picture variant on is
+    a change of the cast the scene shows, and the mesh half of the signature
+    already covers that — this half has to move when the picture ON one of
+    them changes, whichever it is. ``""`` when the prop says nothing about
+    pictures at all, so no other prop's key moves for this feature."""
+    defaults = meta.get(AREA_DEFAULTS_KEY) or {}
+    values = {str(i): e.get(SLOT_VALUES_KEY) or {}
+              for i, e in enumerate(entries) if e.get(SLOT_VALUES_KEY)}
+    if not defaults and not values:
+        return ""
+    return "|" + json.dumps({"defaults": defaults, "variants": values},
+                            sort_keys=True)
+
+
 def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
     meta = _ensure_bbox(prop_id, meta)
     entries = _variant_list(meta)
@@ -3565,10 +3958,17 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # Over ALL active variants: adding, removing or re-generating one
             # of them must move the scene signature, or a client that already
             # holds the room keeps showing the old cast of meshes.
+            # …and over the PICTURES (spec-picture-props.md § 5): a swapped
+            # image changes no mesh, no tier and no URL, so without it in the
+            # key a running client would keep the old poster on the wall.
+            # Appended only when the prop says something about pictures, so
+            # every other prop's key stays character for character what it
+            # was.
             "model_signature": hashlib.md5(
-                "|".join(f"{i}:{g.signature() if g else ''}"
-                         for i, g in zip(active_idx, galleries)
-                         ).encode()).hexdigest()[:12],
+                ("|".join(f"{i}:{g.signature() if g else ''}"
+                          for i, g in zip(active_idx, galleries))
+                 + _picture_signature_part(meta, entries)
+                 ).encode()).hexdigest()[:12],
             "variant_count": len(variant_tiers),
             "variant_max": variant_max(),
             # Active variants in total, and how many of them are incomplete.
