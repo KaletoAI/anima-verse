@@ -297,12 +297,13 @@ SLOT_KINDS = ("image", "material")
 #: convention (Entscheid 4). Everything behind the prefix is the slot name.
 SLOT_PREFIX = "slot_"
 #: …and these material names are slots WITHOUT the prefix, because they are
-#: what a mesh generator calls those surfaces on its own. The name must match
-#: WHOLE — "glasses" is a pair of glasses, not a pane.
-BARE_IMAGE_SLOTS = ("picture", "screen", "sign")
-BARE_MATERIAL_SLOTS = ("glass",)
-#: Which slot NAMES mean a look rather than a picture. Applies to the prefixed
-#: form as well, so ``slot_glass`` and ``glass`` describe the same thing.
+#: what a mesh generator calls those surfaces on its own — the closed half of
+#: the convention. The name must match WHOLE: "glasses" is a pair of glasses,
+#: not a pane.
+BARE_SLOT_NAMES = ("picture", "screen", "sign", "glass")
+#: Which slot NAMES mean a look rather than a picture. The kind is decided by
+#: the NAME and by nothing else, so ``slot_glass`` and ``glass`` can never
+#: describe the same surface differently.
 MATERIAL_SLOT_NAMES = ("glass", "mirror", "matte")
 
 #: How much of a placed prop's DEPTH survives its cut (§ B2 addendum
@@ -952,8 +953,9 @@ def detect_slots(material_names: Any) -> List[Dict[str, str]]:
       the names in :data:`MATERIAL_SLOT_NAMES`, ``image`` otherwise. The prefix
       is the OPEN half of the convention — anything can be a slot if the
       modeller says so.
-    * a whole name out of :data:`BARE_IMAGE_SLOTS` → an ``image`` slot,
-    * ``glass`` → a ``material`` slot,
+    * a whole name out of :data:`BARE_SLOT_NAMES` → the same slot under that
+      name (so ``picture`` / ``screen`` / ``sign`` are image slots and ``glass``
+      is a material one),
     * anything else → no slot.
 
     Names come back LOWER-CASE, de-duplicated, in order of first appearance —
@@ -966,7 +968,7 @@ def detect_slots(material_names: Any) -> List[Dict[str, str]]:
         key = str(raw or "").strip().lower()
         if key.startswith(SLOT_PREFIX):
             name = key[len(SLOT_PREFIX):]
-        elif key in BARE_IMAGE_SLOTS or key in BARE_MATERIAL_SLOTS:
+        elif key in BARE_SLOT_NAMES:
             name = key
         else:
             continue
