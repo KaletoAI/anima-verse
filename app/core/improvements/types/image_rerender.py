@@ -24,16 +24,25 @@ SUBJECTS = [
 ]
 
 
-def _profile_backend(name: str) -> str:
-    return str((subjects.character_profile(name) or {}).get("backend") or "")
+def _profile_done(name: str, target_backend: str) -> bool:
+    """The character's CURRENT profile image was made by the target backend —
+    the re-render swaps the profile over, so this flips."""
+    return str((subjects.character_profile(name) or {}).get("backend")
+               or "") == target_backend
 
 
-def _gallery_backend(ident: str) -> str:
+def _gallery_done(ident: str, target_backend: str) -> bool:
+    """A gallery image is done when its REPLACEMENT is there: some image of the
+    location made by the target backend that names this file as its source.
+
+    The candidate file itself never changes — the re-render is a new picture,
+    not an overwrite — so the question has to be asked about the location, not
+    about the file.
+    """
     location_id, _sep, filename = ident.partition(":")
-    for image in subjects.gallery_images(location_id):
-        if image["filename"] == filename:
-            return image["backend"]
-    return ""
+    return any(image["backend"] == target_backend
+               and image["source_file"] == filename
+               for image in subjects.gallery_images(location_id))
 
 
 def _rerender_gallery(ident: str, backend: str) -> None:
@@ -41,11 +50,11 @@ def _rerender_gallery(ident: str, backend: str) -> None:
     subjects.regenerate_gallery_image(location_id, filename, backend)
 
 
-#: candidate kind → (which backend made it, render it again on another one) —
+#: candidate kind → (is it on the target backend now?, render it again there) —
 #: the whole kind-specific part of this type.
 _HANDLERS = {
-    "character": (_profile_backend, subjects.regenerate_profile),
-    "location": (_gallery_backend, _rerender_gallery),
+    "character": (_profile_done, subjects.regenerate_profile),
+    "location": (_gallery_done, _rerender_gallery),
 }
 
 
@@ -101,20 +110,14 @@ class ImageRerender(ImprovementType):
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
-        """Whether the subject's CURRENT image was made by the target backend.
-
-        For a character that is the profile image, which the re-render swaps —
-        so this flips to True.  For a gallery image it is that very file, and
-        a re-render leaves it alone (the new picture is a new file), so it
-        stays False; the engine closes such a step because ``apply`` returned,
-        not because this said so.
-        """
+        """Whether the subject is on the target backend now — read back from
+        what is persisted, never from what ``apply`` did."""
         kind, ident = candidate.key.split(":", 1)
-        current_backend, _rerender = _HANDLERS[kind]
-        return current_backend(ident) == params["target_backend"]
+        done, _rerender = _HANDLERS[kind]
+        return done(ident, params["target_backend"])
 
     def apply(self, candidate: Candidate, params: Dict[str, Any],
               task_id: str) -> None:
         kind, ident = candidate.key.split(":", 1)
-        _current_backend, rerender = _HANDLERS[kind]
+        _done, rerender = _HANDLERS[kind]
         rerender(ident, params["target_backend"])

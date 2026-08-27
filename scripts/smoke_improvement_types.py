@@ -122,7 +122,29 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      `location:<id>:<file>`: a gallery image whose meta names the source
      backend AND that has a stored prompt is a candidate; the image without a
      prompt is not, and neither is anything under a source backend nothing
-     was made by.
+     was made by.  A picture that was DELETED is not a candidate either —
+     `delete_gallery_image` keeps both the meta and the stored prompt, so only
+     the file's existence tells the two apart.
+
+ 18. The stored gallery prompt IS the finished prompt: the core saves the fully
+     composed one (`save_gallery_prompt(loc_id, image_name, full_prompt)`), so
+     handing it back without `settings_applied` would compose it a second time
+     and store a prompt that grows with every pass.  `apply` therefore sends
+     `settings_applied: True`, and the image's `prompt_type` with it (an
+     untyped re-render of a map tile would be flagged as a room background).
+
+ 19. A gallery re-render is a NEW file, so "done" cannot be a property of the
+     candidate file: after `apply` the new image carries `backend` = the target
+     AND `source_file` = the candidate — the meta the core wrote survives, the
+     source is only merged in — and `is_done` answers True through that pair,
+     so the candidate disappears from the list.  The background flag follows
+     the picture: the core flags the new file, the old one is unflagged, or the
+     location would keep showing the image that was just superseded.
+
+ 20. The core reports a saturated/unavailable backend as `HTTPException(503)`,
+     not as a return value.  Letting that through would count an attempt and
+     skip the step for good after two of them, so `apply` translates it into
+     `CandidateBusy`.
 
 The printed sections follow execution order, so expectations 9 and 10 are
 checked inside the sections whose fixtures they belong to.
@@ -146,8 +168,10 @@ from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
 
+from fastapi import HTTPException  # noqa: E402
+
 from app.core import (expression_regen, location_model3d, model3d,  # noqa: E402
-                      model_refs, props)
+                      model_refs, props, world_ops)
 from app.core.improvements import registry  # noqa: E402
 from app.core.improvements.base import CandidateBusy  # noqa: E402
 from app.core.improvements.types import subjects  # noqa: E402
@@ -303,6 +327,33 @@ def fake_regenerate_image(character_name, output_path, original_prompt,
     return (True, original_prompt, str(new_path))
 
 
+GALLERY_CALLS = []
+GALLERY_BUSY = {"value": False}     # True = the backend reports load (503)
+GALLERY_SEQ = {"n": 0}
+
+
+async def fake_gallery_generate(location_name, data):
+    """What `generate_gallery_image_core` does to the WORLD: it writes a NEW
+    gallery file, stores that file's prompt and its generation meta (backend,
+    backend_type, model, LoRAs), flags an untyped image as a background — and
+    reports the new file name under "image".  Failures never come back as a
+    return value; the core raises, and load raises an HTTPException(503)."""
+    GALLERY_CALLS.append(dict(data))
+    if GALLERY_BUSY["value"]:
+        raise HTTPException(status_code=503, detail="zimg ist ausgelastet")
+    GALLERY_SEQ["n"] += 1
+    new_name = f"{2000 + GALLERY_SEQ['n']}.png"
+    (world.get_gallery_dir(location_name) / new_name).write_bytes(b"\x89PNG fake")
+    world.save_gallery_prompt(location_name, new_name, data["prompt"])
+    world.set_gallery_image_meta(location_name, new_name, {
+        "backend": data["backend"], "backend_type": "http", "model": "",
+        "loras": []})
+    if data.get("prompt_type") not in ("map_2d", "building"):
+        world.toggle_background_image(location_name, new_name)
+    return {"status": "success", "location": location_name,
+            "location_id": location_name, "image": new_name, "warnings": []}
+
+
 EXPR_CLEARED = []
 
 
@@ -327,6 +378,7 @@ expression_regen.peek_cached_expression = fake_peek_expression
 expression_regen.generate_expression_image = fake_expression_image
 expression_regen.clear_expression_cache = fake_clear_expression_cache
 image_regenerate.regenerate_image = fake_regenerate_image
+world_ops.generate_gallery_image_core = fake_gallery_generate
 # The backend INVENTORY, not an asset reader: without configured mesh
 # backends `list_mesh_backends` answers {"backends": [], "default": ""} and
 # every "which backend is the default" expectation would be vacuous.
@@ -629,6 +681,58 @@ check("scanning for a backend nothing was made by finds nothing",
       candidates(IMAGE_RERENDER, {"subject": "location_gallery",
                                   "source_backend": "zimg",
                                   "target_backend": "flux"}), [])
+
+# A second location whose image is untyped (so the core flags it as a
+# background) — plus a picture that was DELETED while its meta and prompt
+# stayed behind, which is what delete_gallery_image leaves.
+MILL_ID = world.add_location("Riverside Mill", "A mill by the river.")["id"]
+MILL_GALLERY = world.get_gallery_dir(MILL_ID)
+MILL_GALLERY.mkdir(parents=True, exist_ok=True)
+(MILL_GALLERY / "shot.png").write_bytes(b"\x89PNG fake")
+world.set_gallery_image_meta(MILL_ID, "shot.png", {"backend": "flux"})
+world.save_gallery_prompt(MILL_ID, "shot.png", "a mill by the river, daylight")
+world.toggle_background_image(MILL_ID, "shot.png")
+world.set_gallery_image_meta(MILL_ID, "gone.png", {"backend": "flux"})
+world.save_gallery_prompt(MILL_ID, "gone.png", "a mill by the river, at night")
+check("a deleted picture is no subject, meta and prompt notwithstanding",
+      [g["filename"] for g in subjects.gallery_images(MILL_ID)], ["shot.png"])
+check("both locations' 'flux' images are candidates",
+      candidates(IMAGE_RERENDER, GALLERY_RERENDER),
+      [(f"location:{LOC_ID}:new.png", "Crossroads Inn / new.png"),
+       (f"location:{MILL_ID}:shot.png", "Riverside Mill / shot.png")])
+CAND_G = IMAGE_RERENDER.find_candidates(
+    IMAGE_RERENDER.validate(GALLERY_RERENDER))[1]
+GALLERY_CALLS.clear()
+IMAGE_RERENDER.apply(CAND_G, IMAGE_RERENDER.validate(GALLERY_RERENDER),
+                     "task-13")
+check("apply renders the STORED (already composed) prompt on the target "
+      "backend, with the image's type", GALLERY_CALLS,
+      [{"prompt": "a mill by the river, daylight", "settings_applied": True,
+        "room_id": "", "prompt_type": "", "backend": "zimg"}])
+check("the new image names its source — and the core's own meta survives it",
+      world.get_gallery_image_metas(MILL_ID).get("2001.png"),
+      {"backend": "zimg", "backend_type": "http", "model": "", "loras": [],
+       "source_file": "shot.png"})
+check("the background flag moved to the new picture",
+      world.get_background_images(MILL_ID), ["2001.png"])
+check("is_done finds the replacement, not the candidate file",
+      IMAGE_RERENDER.is_done(CAND_G, IMAGE_RERENDER.validate(GALLERY_RERENDER)),
+      True)
+check("so the re-rendered image has dropped out of the candidate list",
+      candidates(IMAGE_RERENDER, GALLERY_RERENDER),
+      [(f"location:{LOC_ID}:new.png", "Crossroads Inn / new.png")])
+GALLERY_CALLS.clear()
+GALLERY_BUSY["value"] = True
+CAND_G2 = IMAGE_RERENDER.find_candidates(
+    IMAGE_RERENDER.validate(GALLERY_RERENDER))[0]
+check_raises("a 503 from the core is load, not a defect", CandidateBusy,
+             lambda: IMAGE_RERENDER.apply(
+                 CAND_G2, IMAGE_RERENDER.validate(GALLERY_RERENDER), "task-14"),
+             "zimg ist ausgelastet")
+check("and the candidate stayed exactly as it was",
+      candidates(IMAGE_RERENDER, GALLERY_RERENDER),
+      [(f"location:{LOC_ID}:new.png", "Crossroads Inn / new.png")])
+GALLERY_BUSY["value"] = False
 
 print()
 if FAILURES:

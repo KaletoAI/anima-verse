@@ -12,10 +12,13 @@ engine calls them synchronously in a queue worker:
 * the BLOCKING producer is called directly, never a ``trigger_*`` wrapper —
   a wrapper starts a daemon thread and would report success while nothing had
   been generated;
-* the producers swallow their failures and answer ``{"ok": False, "error": …}``,
-  so the error is raised here.  A subject that is already being generated
-  elsewhere raises :class:`CandidateBusy` instead — that is load, not a defect,
-  and the engine leaves the step pending without counting an attempt.
+* a failure has to leave here as an exception.  The mesh/prop producers swallow
+  theirs and answer ``{"ok": False, "error": …}``, so the error is raised here;
+  the gallery core is the exception — it raises ``HTTPException`` itself, and
+  the busy case has to be translated back (see ``regenerate_gallery_image``).
+  A subject that is already being generated elsewhere — or a backend that is
+  simply saturated — raises :class:`CandidateBusy` instead: that is load, not a
+  defect, and the engine leaves the step pending without counting an attempt.
 """
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -324,18 +327,25 @@ def regenerate_profile(name: str, backend: str) -> None:
 
 def gallery_images(location_id: str) -> List[Dict[str, Any]]:
     """Every gallery image of a location that CAN be rendered again, as
-    ``{filename, backend, prompt, room_id, prompt_type}``.
+    ``{filename, backend, prompt, room_id, prompt_type, source_file}``.
 
-    Two conditions, both from the image's own bookkeeping: the meta has to name
-    the backend that made it (otherwise there is nothing to match a source
-    backend against), and a prompt has to be stored (otherwise there is nothing
-    to render FROM — the same rule that keeps a prop without its product shot
-    out of ``fill_missing``).
+    Three conditions, all from the image's own bookkeeping: the file has to
+    exist (``delete_gallery_image`` drops the room/type/background entries but
+    keeps the meta and the stored prompt, so a deleted picture would otherwise
+    stay a candidate forever), the meta has to name the backend that made it
+    (otherwise there is nothing to match a source backend against), and a
+    prompt has to be stored (otherwise there is nothing to render FROM — the
+    same rule that keeps a prop without its product shot out of
+    ``fill_missing``).
+
+    ``source_file`` is the picture this one was re-rendered FROM, ``""`` for an
+    original — that is how a re-render can be recognised again after the fact.
     """
-    from app.models.world import (get_all_gallery_prompts,
+    from app.models.world import (get_all_gallery_prompts, get_gallery_dir,
                                   get_gallery_image_metas,
                                   get_gallery_image_rooms,
                                   get_gallery_image_types)
+    gallery = get_gallery_dir(location_id)
     prompts = get_all_gallery_prompts(location_id) or {}
     rooms = get_gallery_image_rooms(location_id) or {}
     types = get_gallery_image_types(location_id) or {}
@@ -343,11 +353,12 @@ def gallery_images(location_id: str) -> List[Dict[str, Any]]:
     for filename, meta in (get_gallery_image_metas(location_id) or {}).items():
         backend = str((meta or {}).get("backend") or "").strip()
         prompt = str(prompts.get(filename) or "").strip()
-        if not backend or not prompt:
+        if not backend or not prompt or not (gallery / filename).exists():
             continue
         out.append({"filename": filename, "backend": backend, "prompt": prompt,
                     "room_id": str(rooms.get(filename) or ""),
-                    "prompt_type": str(types.get(filename) or "")})
+                    "prompt_type": str(types.get(filename) or ""),
+                    "source_file": str((meta or {}).get("source_file") or "")})
     return out
 
 
@@ -357,11 +368,23 @@ def regenerate_gallery_image(location_id: str, filename: str,
 
     The render lands as a NEW gallery file — the generator only overwrites in
     place when the caller asks for a replacement, and an improvement must not
-    destroy the picture it was asked to improve upon.
+    destroy the picture it was asked to improve upon.  Afterwards the new image
+    carries ``source_file`` (which picture it replaces), and the background
+    flag follows it: the core already flagged the new file, so the old one is
+    unflagged here, or the location would show the picture that was meant to be
+    superseded.
+
+    ``settings_applied``: the stored prompt IS the finished prompt — the core
+    saves the fully composed one (``save_gallery_prompt(loc_id, image_name,
+    full_prompt)``).  Without the flag the core would run it through the
+    composer a second time, weaving the use-case style in again (plus an LLM
+    compose call where the use case enables it) and storing the doubled prompt,
+    which would grow with every pass.  The negative falls back to the use-case
+    negative, exactly as for the dialog.
 
     ``prompt_type`` travels with the prompt: without it a re-rendered map tile
     or building render would come back untyped and be flagged as a room
-    background, which is exactly the leak the generator's own type handling
+    background, which is exactly the leak the core's own type handling
     prevents.
 
     ``asyncio.run`` is correct here and not a shortcut: ``apply`` runs in a
@@ -371,19 +394,48 @@ def regenerate_gallery_image(location_id: str, filename: str,
     """
     import asyncio
 
+    from fastapi import HTTPException
+
     from app.core.world_ops import generate_gallery_image_core
+    from app.imagegen.base import BackendBusyError
+    from app.models.world import (get_background_images,
+                                  get_gallery_image_metas,
+                                  remove_background_image,
+                                  set_gallery_image_meta)
     entry = next((g for g in gallery_images(location_id)
                   if g["filename"] == filename), None)
     if entry is None:
         raise RuntimeError(f"{filename}: nothing to render it from")
-    result = asyncio.run(generate_gallery_image_core(location_id, {
-        "prompt": entry["prompt"],
-        "room_id": entry["room_id"],
-        "prompt_type": entry["prompt_type"],
-        "backend": backend,
-    })) or {}
-    if result.get("status") != "success":
-        raise RuntimeError(str(result.get("error") or "gallery render failed"))
+    try:
+        result = asyncio.run(generate_gallery_image_core(location_id, {
+            "prompt": entry["prompt"],
+            "settings_applied": True,
+            "room_id": entry["room_id"],
+            "prompt_type": entry["prompt_type"],
+            "backend": backend,
+        })) or {}
+    except BackendBusyError as busy:
+        raise CandidateBusy(str(busy)) from busy
+    except HTTPException as e:
+        # The core turns every "come back later" into a 503: a saturated
+        # backend (BackendBusyError), an unavailable one, no image service at
+        # all. None of those is a defect of this candidate, and counting them
+        # as attempts would skip the step permanently after two of them.
+        if e.status_code == 503:
+            raise CandidateBusy(str(e.detail)) from e
+        raise
+    # Every real failure inside the core raises — a result without a file name
+    # would mean it returned something else entirely.
+    new_name = str(result.get("image") or "").strip()
+    if not new_name:
+        raise RuntimeError("gallery render produced no image")
+    # Merge: the core has just written this image's meta (backend, model,
+    # LoRAs) and `set_gallery_image_meta` REPLACES the entry.
+    meta = dict((get_gallery_image_metas(location_id) or {}).get(new_name) or {})
+    meta["source_file"] = filename
+    set_gallery_image_meta(location_id, new_name, meta)
+    if new_name in get_background_images(location_id):
+        remove_background_image(location_id, filename)
 
 
 # ---------------------------------------------------------------------------
