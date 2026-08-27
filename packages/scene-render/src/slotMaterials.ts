@@ -52,8 +52,10 @@ export const GLASS_PRESET = {
 }
 
 /** How a renderer turns a payload URL into a texture. `TextureLoader.load` in
- *  both apps today — the routine only ever sets what it gets. */
-export type SlotTextureLoader = (url: string) => Texture
+ *  both apps today — the routine only ever sets what it gets. `onError` is the
+ *  loader's own error callback: a picture that never arrives must not leave the
+ *  surface white, so this routine puts the material back the way it found it. */
+export type SlotTextureLoader = (url: string, onError?: () => void) => Texture
 
 /** A material as this routine has to see it: three's own types split `map`
  *  and the PBR dials across several classes, and the routine deliberately
@@ -61,7 +63,7 @@ export type SlotTextureLoader = (url: string) => Texture
 type SlotMaterial = Material & {
   name: string
   map?: Texture | null
-  color?: { set: (hex: number) => void }
+  color?: { set: (hex: number) => void; getHex?: () => number }
   opacity?: number
   roughness?: number
   metalness?: number
@@ -109,7 +111,16 @@ export function applySlotMaterials(
     if (!image && !isPreset) return src
     const mat = src.clone() as SlotMaterial
     if (image) {
-      const tex = loadTexture(image)
+      // A picture that never arrives (deleted from the gallery, a 404 out of
+      // the cache) would otherwise leave the surface WHITE — the neutralised
+      // tint below with no map on it. So the loader's error hands the
+      // material back exactly as the mesh modelled it.
+      const tint = cur.color?.getHex?.() ?? 0xffffff
+      const tex = loadTexture(image, () => {
+        mat.map = null
+        mat.color?.set(tint)
+        mat.needsUpdate = true
+      })
       // sRGB because a picture is authored in sRGB, `flipY = false` because
       // glTF UVs run the other way than three's image default — the same two
       // lines the character FBX textures need (`client3d/scene/figures.ts`).

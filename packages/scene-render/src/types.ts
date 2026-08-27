@@ -221,11 +221,11 @@ export interface SceneModelSpec {
    *  Tilt/Roll im schon gedrehten Rahmen (2026-07-28). */
   fix_euler: { x: number; y: number; z: number }
   yaw_deg: number
-  /** Ziel-Ausdehnung in WELT-Metern. EIN Faktor auf alle drei Achsen
-   *  (2026-07-28): `s = max_m / gemessene Ausdehnung`. Es gibt keinen
-   *  Modus mehr, in dem Y anders skaliert als XZ. Seit v6 Nr. 3 ist der Wert
-   *  ÜBERALL eine deklarierte reale Breite (`width_m`) — beim Gebäude/der
-   *  Fläche ersatzweise die Boundary-Breite, siehe `width_estimated`. */
+  /** Target extent in WORLD metres. ONE factor on all three axes
+   *  (2026-07-28): `s = max_m / measured extent`. There is no mode left in
+   *  which Y scales differently from XZ. Since v6 Nr. 3 the value is EVERYWHERE
+   *  a declared real width (`width_m`) — for a building/an area the boundary
+   *  width stands in for it, see `width_estimated`. */
   max_m?: number
   /** What is measured: `yawed_xz` = the largest XZ side of the TURNED box
    *  (location models have to fit their plot even when set at an angle),
@@ -251,12 +251,12 @@ export interface SceneModelSpec {
   door?: { opening: number; hinge: 'left' | 'right'; swing: 1 | -1 }
   anchor: [number, number]
   bottom_y: number
-  /** Platzhalter-Box (schon Welt-Meter) für fehlendes/mesh-loses Prop */
+  /** Placeholder box (already world metres) for a missing/mesh-less prop */
   placeholder_dims?: { w: number; d: number; h: number }
-  /** Räume, Opt-in je Raum (layout.clip_model): Hüllen-Polygon in WELT-
-   *  Koordinaten um das Kachelzentrum (max. 32 Punkte, = Bodenplatten-Kontur).
-   *  Alles außerhalb wird verworfen — ein real-size-Diorama darf über seinen
-   *  Grundriss hinausragen, sichtbar bleibt nur der Teil im Raum. */
+  /** Rooms, opt-in per room (layout.clip_model): hull polygon in WORLD
+   *  coordinates around the tile centre (max. 32 points, = the floor plate's
+   *  contour). Everything outside is discarded — a real-size diorama may stick
+   *  out over its floor plan, only the part inside the room stays visible. */
   clip_outline?: [number, number][]
   /** Absolute Höhe, auf der eine Figur AUF diesem Modell steht — im Diorama
    *  (§ B6 Nr. 7) wie auf einer Flächen-Location. Bei `display: 'ground'` ist
@@ -272,11 +272,11 @@ export interface SceneModelSpec {
   // die einen leeren Regler still ausfüllte. Eine Automatik, die Modelle
   // ausrichtet, gibt es nicht mehr — der Admin setzt walk_y, alles andere
   // rechnet von diesem Basiswert aus.
-  /** Flächen-Locations (plan-area-locations.md): Welt-Polygone, die aus DIESEM
-   *  Modell geschnitten werden — Gebäude-Grundriss plus die Umrisse platzierter
-   *  Indoor-Räume außerhalb davon. Das Modell bleibt in der Innenansicht
-   *  stehen, in den Löchern steht das Rezept-Innenleben. Nur am
-   *  building-Spec, nur bei `map3d.area_model`. */
+  /** Area locations (plan-area-locations.md): world polygons cut out of THIS
+   *  model — the building's floor plan plus the outlines of placed indoor
+   *  rooms outside it. The model stays standing in the interior view, and the
+   *  recipe's own interior stands in the holes. Only on the building spec,
+   *  only with `map3d.area_model`. */
   cutouts?: [number, number][][]
   /** WHAT FILLS THIS PLACEMENT'S TEXTURE SLOTS (v5). The KEY is a material
    *  name of the mesh — a slot IS a material (`props.detect_slots`) — and the
@@ -288,11 +288,11 @@ export interface SceneModelSpec {
    *  writes it — it clones the material per placement, because the model
    *  cache shares one group between all of them. */
   slots?: SceneSlotValues
-  /** Prop-Platzierungen mit TIEFENSCHNITT (§ B2-Nachtrag 2026-08-23): die
-   *  fertige Schnittebene in den Weltmetern des Payloads — ein halber Tisch an
-   *  der Wand, ohne zweites Prop in der Bibliothek. Fehlt = ungeschnitten.
-   *  Der Renderer baut daraus EINE `THREE.Plane` und hängt sie ans Material
-   *  (`applyDepthCut`); er rechnet nichts nach. */
+  /** Prop placements with a DEPTH CUT (§ B2 addendum 2026-08-23): the finished
+   *  cutting plane in the payload's own world metres — half a table against
+   *  the wall, without a second prop in the library. Absent = uncut. The
+   *  renderer builds ONE `THREE.Plane` from it and hands it to the material
+   *  (`applyDepthCut`); it recalculates nothing. */
   cut_plane?: SceneCutPlane
 }
 

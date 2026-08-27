@@ -2256,7 +2256,7 @@
     "Hinge": "Angel",
     "Left": "Links",
     "Right": "Rechts",
-    "Which side the door turns about, seen along the wall from the room this opening was cut out of.": "Um welche Seite die Tür schwenkt, entlang der Wand des Raums gesehen, aus dem die Öffnung geschnitten ist.",
+    "Left or right as seen from inside this room, facing the door.": "Links oder rechts, von innen aus diesem Raum auf die Tür blickend.",
     "Doors": "Türen",
     "Other props": "Andere Props",
     "Default door prop": "Standard-Tür-Prop",

@@ -81,7 +81,10 @@ async function main() {
     constructor(name, extra = {}) {
       this.name = name
       this.userData = {}
-      this.color = { hex: 0x808080, set(v) { this.hex = v } }
+      // three's Color, reduced to what the routine uses: it READS the
+      // source tint (to put it back if the picture fails) and WRITES white.
+      this.color = { hex: 0x808080, set(v) { this.hex = v },
+                     getHex() { return this.hex } }
       this.map = null
       this.transparent = false
       this.opacity = 1
@@ -93,7 +96,8 @@ async function main() {
     }
     clone() {
       const m = new FakeMaterial(this.name)
-      m.color = { hex: this.color.hex, set(v) { this.hex = v } }
+      m.color = { hex: this.color.hex, set(v) { this.hex = v },
+                  getHex() { return this.hex } }
       m.userData = { ...this.userData }
       if ('transmission' in this) m.transmission = this.transmission
       return m
@@ -224,7 +228,38 @@ async function main() {
         && multi.material[1].map?.__texture === '/world/locations/l/gallery/s.png',
         String(multi.material[1].map?.__texture))
 
-  console.log('\n[6] disposal frees the clone AND the texture it owns')
+  console.log('\n[6] a picture that never arrives puts the material back')
+  // The loader's ERROR callback is the routine's own: without it a 404 (a
+  // gallery image deleted after the placement was authored) leaves the clone
+  // with the neutralised white tint and no map — a bright white rectangle
+  // where the modelled surface was. The stub keeps the callback instead of
+  // calling it, so the state BEFORE and AFTER the failure are both checkable.
+  let failLoad = null
+  const failingLoader = (url, onError) => {
+    failLoad = onError
+    return { __texture: url, colorSpace: 'linear-token', flipY: true,
+             disposed: false, dispose() { this.disposed = true } }
+  }
+  const frame = new FakeMaterial('picture')          // source tint 0x808080
+  const g6 = groupOver([frame])
+  applySlotMaterials(THREE, g6, { picture: { image: '/world/locations/l/gallery/gone.png' } },
+                     failingLoader)
+  const m6 = g6.meshes[0].material
+  check('while it is loading the clone holds the map and the white tint',
+        m6.map?.__texture === '/world/locations/l/gallery/gone.png'
+        && m6.color.hex === 0xffffff, String(m6.color.hex))
+  m6.needsUpdate = false
+  check('the routine handed the loader an error callback',
+        typeof failLoad === 'function', String(typeof failLoad))
+  failLoad?.()
+  check('on error the map is dropped', m6.map === null, String(m6.map))
+  check('...the SOURCE tint is restored, not white',
+        m6.color.hex === 0x808080, String(m6.color.hex))
+  check('...and the material is flagged for an upload', m6.needsUpdate === true)
+  check('the source material is still untouched',
+        frame.map === null && frame.color.hex === 0x808080)
+
+  console.log('\n[7] disposal frees the clone AND the texture it owns')
   const tex = clones1[0].map
   disposeSlotMaterials(clones1)
   check('the material clone is disposed', clones1[0].disposed === true)

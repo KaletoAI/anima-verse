@@ -1285,10 +1285,15 @@ async function startApp(username: string, role: string) {
       // deliberately holds the view), so "avatar on the ground floor, view on
       // the first" is an everyday state, and gating on the camera there would
       // open the door directly ABOVE the avatar with nobody in front of it.
-      // No room resolved — the avatar is outdoors, or a poll is in flight —
-      // leaves the displayed storey as the only answer there is, which is what
-      // keeps an outdoor front door working.
-      const avatarLevel = tile.roomLevels.get(here) ?? tile.levelFilter;
+      // OUTSIDE is storey 0, not the camera's: no room at all (the avatar
+      // stands on the yard) and the GROUND room itself — which has no plate,
+      // so `roomLevels` never knows it — are the ground storey by definition.
+      // That is the same rule the room-change heuristic states below; taking
+      // the displayed storey here would shut the front door the moment
+      // someone glanced at the first floor from outside. Only a room whose
+      // storey is not known YET (a poll in flight) falls back on the view.
+      const avatarLevel = tile.roomLevels.get(here)
+        ?? (here && here !== getGameState().groundRoomId ? tile.levelFilter : 0);
       for (const door of doors) {
         const dist = doorDistance(door.level, avatarLevel, local
           ? Math.hypot(local.x - door.at.x, local.z - door.at.z)

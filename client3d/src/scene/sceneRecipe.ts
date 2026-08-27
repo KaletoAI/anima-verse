@@ -598,10 +598,10 @@ function assertUnitScale(k: number): void {
     + ' (§ B) — the value is ignored and the scene is drawn in real metres');
 }
 
-/** Laufende Mount-Nummer PRO KACHEL: ein während des GLB-Ladens ersetzter
- *  Mount darf nichts mehr nachtragen. Pro Kachel, nicht global — beim Start
- *  montieren alle Szenen-Locations gleichzeitig, ein globaler Zähler würde
- *  jeden Mount außer dem letzten für veraltet erklären. */
+/** Running mount number PER TILE: a mount replaced while its GLBs were still
+ *  loading must not add anything afterwards. Per tile, not global — at startup
+ *  every scene location mounts at once, and a global counter would declare
+ *  every mount but the last one stale. */
 const mountSeq = new WeakMap<Tile, number>();
 
 /**
@@ -634,13 +634,14 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
   });
 }
 
-/** How THIS client turns a slot's payload URL into a texture (§ B2 v5). One
- *  line, and it stays here rather than in the shared package: the loading
+/** How THIS client turns a slot's payload URL into a texture (§ B2 v5). It
+ *  stays here rather than in the shared package: the loading
  *  policy is the app's (the preview loads on its own terms), while "sRGB, not
  *  flipped, onto `map`" is the same everywhere and lives in
  *  `applySlotMaterials`. Deliberately NOT cached by URL — a texture belongs to
  *  the placement that disposes it. */
-const slotTexture = (url: string) => new THREE.TextureLoader().load(url);
+const slotTexture = (url: string, onError?: () => void) =>
+  new THREE.TextureLoader().load(url, undefined, undefined, onError);
 
 /** Fill the texture slots of one placed group and REMEMBER the clones on its
  *  record, so the tier swap and the unmount can free them. The record is the
@@ -728,7 +729,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
 
   const g = new THREE.Group();
   g.name = SCENE_GROUP;
-  g.visible = false;                      // der Crossfade deckt sie auf
+  g.visible = false;                      // the crossfade uncovers it
   // NUR eine Szene mit INNEN-Inhalt ist eine Innenansicht: eine Location,
   // deren Payload allein aus dem Gebäudemodell besteht (Mondscheinsee —
   // Modell, aber keine Räume/Platten/Wände), darf beim Reinzoomen NICHT
@@ -1706,16 +1707,16 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
  *  Räumt auch die Felder, die mountScene gefüllt hat — die Kachel selbst
  *  (Sockel, prozedurale Hülle, Label, Ring) bleibt stehen. */
 export function unmountScene(tile: Tile): void {
-  // Über den NAMEN suchen, nicht über tile.interior — eine Nur-Gebäude-Szene
-  // (kein Innen-Inhalt) hängt als Gruppe im Graphen, ohne interior zu sein.
+  // Found by NAME, not through tile.interior — a building-only scene (no
+  // interior content) hangs in the graph as a group without being `interior`.
   const prev = tile.group.children.find((c) => c.name === SCENE_GROUP)
     ?? tile.interior;
   if (prev && prev.name === SCENE_GROUP) tile.group.remove(prev);
   // The far-view shell is a copy of THIS scene's primitives, so it dies with
   // it — its geometries are the ones just taken out of the graph.
   dropFarShell(tile);
-  // Cutout-Material-Klone der vorigen Szene freigeben (Muster
-  // disposeClipMaterials — die Texturen sind mit dem Cache geteilt).
+  // Free the previous scene's cutout material clones (the disposeClipMaterials
+  // pattern — their textures are shared with the cache).
   tile.cutouts?.dispose();
   // The underwater ghosts of this scene die with it: their materials are their
   // own, and their registration is what isolation toggle 22 walks — a ghost

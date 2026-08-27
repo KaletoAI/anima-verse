@@ -1725,6 +1725,43 @@ def test_door_props() -> None:
     check("...still ONE spec for a door two rooms share",
           len(axis2) == 1 and axis2[0]["door"]["swing"] == 1, str(axis2))
 
+    # ── the MIRRORED copy may win the width, never the direction ─────────
+    # A shared door clamped into the AUTHOR's corner, on a neighbour wall that
+    # is longer there, is the one case in which the wider entry is the
+    # neighbour's mirrored copy — and a mirrored copy runs backwards.
+    #   a's edge 1: (0, −4) → (0, −1), u = (0, 1), length 3. Door at 0.0,
+    #   width 1.0 → half 0.5, centre 0 → span [0, 0.5]: clear width 0.5,
+    #   middle (0, −3.75).
+    #   room "wide" (x 0 y −5 w 2 d 4) is world x 0…2, z −5…−1; its edge 3
+    #   runs (0, −1) → (0, −5), u = (0, −1), length 4. The mirror projects the
+    #   door's point (0, −4) onto it at t = 3 → at 0.75 → half 0.5, centre 3
+    #   → span [2.5, 3.5]: width 1.0, middle (0, −4), along (0, −1).
+    # 1.0 > 0.5, so the mirrored copy brings at_world (0, −4) and width 1.0.
+    # Everything else stays with the author: along (0, 1), rooms ["a", …],
+    # hinge. Hence anchor = (0, −4) − (0, 1)·0.5 = (0, −4.5) and
+    # yaw = atan2(−1, 0) = −90 → 270. The mirrored direction would put the
+    # hinge on the OTHER jamb, at (0, −3.5) with yaw 90.
+    wide_room = {"id": "wide", "name": "Wide", "layout": {
+        "x": 0.0, "y": -5.0, "w": 2.0, "d": 4.0, "level": 0}}
+    corner = door_prop_scene(extra_rooms=(wide_room,), a_openings=[
+        {"edge": 1, "at": 0.0, "type": "door", "width_m": 1.0,
+         "height_m": 2.1, "to": "wide", "prop_id": "door1"}])
+    ways = corner["doorways"]
+    check("the wider mirrored copy brings the GEOMETRY: (0, −4), width 1.0",
+          len(ways) == 1 and ways[0]["at_world"] == [0.0, -4.0]
+          and near(ways[0]["width_m"], 1.0), str(ways))
+    check("...but the wall's own direction (0, 1) and its room stay first",
+          len(ways) == 1 and ways[0]["along"] == [0.0, 1.0]
+          and ways[0]["rooms"] == ["a", "wide"], str(ways))
+    cspec = door_specs(corner)
+    check("...so the hinge sits on the AUTHOR's jamb (0, −4.5), yaw 270",
+          len(cspec) == 1 and cspec[0]["anchor"] == [0.0, -4.5]
+          and near(cspec[0]["yaw_deg"], 270.0), str(cspec))
+    check("...and the prop the author named survives the swap",
+          len(cspec) == 1 and cspec[0]["id"] == "door1"
+          and cspec[0]["door"] == {"opening": 0, "hinge": "left",
+                                   "swing": 1}, str(cspec))
+
     # ── the three-valued resolution (Entscheid 2) ────────────────────────
     dflt = door_prop_scene(a_openings=[dict(S_DOOR)], default_prop="door2")
     check("the location default fills an opening that names no prop",
@@ -3248,9 +3285,15 @@ def test_slot_values() -> None:
     specs = door_specs(sc)
     check("a door prop's opening values reach its spec",
           len(specs) == 1 and specs[0].get("slots") == sv, str(specs))
+    bare_door = door_prop_scene(a_openings=[{**S_DOOR, "prop_id": "door1"}])
     check("a door prop without values carries no `slots` key",
-          "slots" not in door_specs(door_prop_scene(
-              a_openings=[{**S_DOOR, "prop_id": "door1"}]))[0])
+          "slots" not in door_specs(bare_door)[0])
+    # …and the OPENING's values move the signature exactly as a placement's
+    # do: they ride in the room recipe, and a client that never re-fetches
+    # keeps the old pane.
+    check("filling a door prop's slot moves the scene signature",
+          sc["signature"] != bare_door["signature"],
+          f"{sc['signature'][:8]} vs {bare_door['signature'][:8]}")
     op = _sanitize_opening({**S_DOOR, "prop_id": "door1",
                             "slot_values": {"glass": {"preset": "glass"},
                                             "picture": {"image": GAL}}})

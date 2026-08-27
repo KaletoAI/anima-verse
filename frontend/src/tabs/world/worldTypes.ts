@@ -136,8 +136,9 @@ export interface RoomPropPlacement {
   /** Which half REMAINS: 'front' is the top of the footprint on the plan
    *  (local −z), 'back' the bottom (local +z). Turns with the yaw. */
   cut_side?: 'front' | 'back'
-  /** WHAT FILLS THE PROP'S TEXTURE SLOTS (v5) — keyed by SLOT NAME, which is
-   *  a material name of the mesh (`props.detect_slots`). An `image` slot takes
+  /** WHAT FILLS THE PROP'S TEXTURE SLOTS (v5) — keyed by SLOT NAME, i.e. an
+   *  entry of the prop's stored `slots` list (detected off the mesh material
+   *  names, editable afterwards in the prop editor). An `image` slot takes
    *  a same-origin gallery URL (`/world/locations/{id}/gallery/{file}` or
    *  `/characters/{name}/images/{file}`), a `material` slot a preset
    *  (`glass`). A key the prop does not declare, or a value of the wrong shape

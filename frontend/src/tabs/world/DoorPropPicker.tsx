@@ -187,7 +187,7 @@ export function OpeningDoorProp({ opening, defaultPropId, locationId, onPatch }:
             onChange={(v) => onPatch({ slot_values: v })}
           />
           <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Which side the door turns about, seen along the wall from the room this opening was cut out of.')}>
+            title={t('Left or right as seen from inside this room, facing the door.')}>
             {t('Hinge')}
             <select
               className="ga-input"

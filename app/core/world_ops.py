@@ -1377,8 +1377,9 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
 
     And it may FILL the prop's texture slots (``slot_values``, v5): a picture
     into the frame, a look into the pane. Which slots exist is the PROP's
-    statement (``props.detect_slots``), so the values are gated against it —
-    see :func:`app.core.props.sanitize_slot_values`.
+    statement — its stored ``slots`` list, detected off the mesh but editable
+    in the prop editor — so the values are gated against it, see
+    :func:`app.core.props.sanitize_slot_values`.
     """
     if not isinstance(raw, list):
         return []

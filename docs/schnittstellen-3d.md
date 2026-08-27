@@ -6993,7 +6993,7 @@ Loch OHNE Tür — beide nehmen auch den Default nicht an.
 |---|---|---|
 | `prop_id` | `rooms[].openings[]` (gespeichert) | das Prop dieser Öffnung |
 | `door_prop: "none"` | ebenda | ausdrücklich kein Prop; sperrt den Default aus |
-| `hinge: "left"\|"right"` | ebenda (fehlt = `left`) | an welchem Ende die Angel sitzt, gelesen gegen `along` der Schwelle |
+| `hinge: "left"\|"right"` | ebenda (fehlt = `left`) | an welchem Ende die Angel sitzt, gelesen gegen `along` der Schwelle — für den Autor: links oder rechts, von innen aus diesem Raum auf die Tür blickend |
 | `default_door_prop_id` | Location | Standard-Tür des Ortes |
 | `door_prop: true` | `walls[]` (nur zusammen mit `leaf`) | dieses Blatt füllt ein Prop → **Renderer zeichnen das Stück NICHT** |
 | `measure: "fit"` | `models[]` | in die Öffnung eingepasst statt real-size skaliert |

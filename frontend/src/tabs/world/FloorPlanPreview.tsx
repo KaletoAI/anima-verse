@@ -527,7 +527,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       // what they traverse, and a picture written here rides into their clones.
       slotMatsRef.current.push(
         ...applySlotMaterials(THREE, outer, spec.slots,
-                              (url) => new THREE.TextureLoader().load(url)))
+                              (url, onError) => new THREE.TextureLoader()
+                                .load(url, undefined, undefined, onError)))
       // Room clip (§ B1): the client discards diorama fragments outside the
       // room hull — without the same call here the preview showed the FULL
       // diorama including its baked surroundings and diverged massively from

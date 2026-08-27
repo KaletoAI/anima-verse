@@ -1018,7 +1018,9 @@ def slot_spec(slot_values: Any, prop: Any) -> Dict[str, Any]:
 
     ``{"<slot>": {"image": url}}`` / ``{"<slot>": {"preset": "glass"}}`` — the
     same shape the placement stores, gated a second time against what the prop
-    declares RIGHT NOW (``props.detect_slots``). The second gate is not
+    declares RIGHT NOW — its STORED ``slots`` list, which detection fills on
+    every ingest but an admin may have edited by hand (``slots_auto`` False,
+    and then detection leaves it alone). The second gate is not
     paranoia: a mesh regenerated after the placement was authored names other
     materials, and a payload that pointed a renderer at a surface the file no
     longer has would be a silent no-op in one renderer and a guess in the next.
@@ -1198,9 +1200,13 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     * BOTH rooms of a party wall authoring their own door at the same spot;
     * the same door authored twice in one room.
 
-    The widest span wins the geometry (the gap is the union of the overlapping
-    spans) and with it the first place in ``rooms``: ``rooms[0]`` is always the
-    room whose wall this entry was cut out of.
+    The widest span wins the GEOMETRY (the gap is the union of the overlapping
+    spans — ``at_world`` and ``width_m``), never the ORIENTATION: ``along``,
+    the order of ``rooms`` and the door prop stay with the entry that was kept
+    first, so ``rooms[0]`` is always the room whose wall this entry was cut out
+    of. A mirrored copy runs backwards along the same line and names the
+    neighbour first — letting it win those would put an authored hinge on the
+    other jamb and open the door into the author's room.
 
     ``outside`` is GEOMETRY, not authored text — see below. The GROUND room
     never appears in ``rooms``: it has no walls, and ``outside`` already says
@@ -1215,8 +1221,8 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     on. It is resolved here because this is where an opening becomes a hole —
     :func:`_door_prop_models` is its only reader and :func:`compose_scene`
     strips the key before the payload leaves. ``hinge`` is read against THIS
-    entry's ``along``, i.e. against the wall of ``rooms[0]``; a neighbour's
-    mirrored copy runs the other way and never wins the dedup at equal width.
+    entry's ``along``, i.e. against the wall of ``rooms[0]`` — which is why
+    the dedup above never lets a mirrored copy replace either of the two.
     """
     from app.models.world import GROUND_ROOM_ID
 
@@ -1337,12 +1343,15 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
         base_entry = base[0]
         if entry["width_m"] > base_entry["width_m"] + 1e-9:
             # The gap is the union of the overlapping spans, so the wider
-            # entry is the one that describes it — geometry, leading room and
-            # the centre later candidates are measured against all move over.
-            rooms = entry["rooms"] + [r for r in base_entry["rooms"]
-                                      if r not in entry["rooms"]]
+            # entry describes the GEOMETRY — and only that. Both candidates
+            # lie on the same line, so the direction, the room order and the
+            # door prop stay with the base: a mirrored copy runs backwards and
+            # would move an authored hinge onto the other jamb.
+            keep = {k: base_entry[k] for k in ("along", "rooms", "_door_prop")}
+            keep["rooms"] = keep["rooms"] + [r for r in entry["rooms"]
+                                             if r not in keep["rooms"]]
             base_entry.update(entry)
-            base_entry["rooms"] = rooms
+            base_entry.update(keep)
             base[1] = centre
         else:
             for room_id in entry["rooms"]:
