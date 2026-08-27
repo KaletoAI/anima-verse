@@ -1786,6 +1786,8 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         _l.pop("npc_slots", None)
                 break
         _save_world_data(wdata)
+        # The seat inventory reads this layout — drop the cached one.
+        from app.core import places; places.invalidate()
         location = get_location_by_id(location["id"])
 
     return {"status": "success", "location": location}
@@ -1915,6 +1917,7 @@ def update_location_with_extras(location_id: str,
                         _l.pop("npc_slots", None)
                 break
         _save_world_data(wdata)
+        from app.core import places; places.invalidate()
 
     updated = get_location_by_id(location_id)
     return {"status": "success", "location": updated}

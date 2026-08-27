@@ -514,6 +514,9 @@ def _write_sidecar(prop_id: str, meta: Dict[str, Any]) -> None:
         raise ValueError("bad prop id")
     (d / SIDECAR_NAME).write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    # A prop's markers are part of the seat inventory of every room it
+    # stands in — the sidecar is where they change.
+    from app.core import places; places.invalidate()
 
 
 # ── Model variants ──────────────────────────────────────────────────────

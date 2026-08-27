@@ -112,6 +112,9 @@ def _write(axis: str, data: Dict[str, Any]) -> None:
         raise
     # Drops the catalog cache, the alias embeddings and the expression memo.
     epm.reload_presets()
+    # The place types (groups) live in this catalog — the seat inventory
+    # composed from the old ones is stale.
+    from app.core import places; places.invalidate()
 
 
 def _key(raw: Any) -> str:

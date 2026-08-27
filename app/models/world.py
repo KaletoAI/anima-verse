@@ -699,6 +699,8 @@ def append_room_props(location_id: str, room_id: str,
                 return False
             room["layout"] = clean
             _save_world_data(data)
+            # Accepted props bring markers — the seat inventory is stale.
+            from app.core import places; places.invalidate()
             logger.info("Room %s: %d prop placements accepted",
                         room_id, len(placements))
             return True
@@ -706,7 +708,7 @@ def append_room_props(location_id: str, room_id: str,
 
 
 def clear_room_prompt_changed(location_id: str, room_id: str) -> bool:
-    """Entfernt das prompt_changed Flag von einem Raum. Returns True bei Erfolg."""
+    """Remove the prompt_changed flag from a room. Returns True on success."""
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
@@ -719,7 +721,7 @@ def clear_room_prompt_changed(location_id: str, room_id: str) -> bool:
 
 
 def clear_location_prompt_changed(location_id: str) -> bool:
-    """Entfernt das prompt_changed Flag von einer Location. Returns True bei Erfolg."""
+    """Remove the prompt_changed flag from a location. Returns True on success."""
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
