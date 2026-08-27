@@ -827,7 +827,7 @@ Die Feldnamen des Charakter-Eintrags sind unverändert; neu ist **`pos`**
 Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
-`travel`, `avatar_url`.
+`travel`, `interaction` (§ A8a), `place` (§ A8a), `avatar_url`.
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
@@ -1610,6 +1610,19 @@ Positionsänderung, neue Pose — immer für BEIDE.
 `null`, wenn keine läuft (auch unter Nebel ausgedünnt). `elapsed_s` ist die
 Clip-Zeit in SPIELsekunden zum Payload-Zeitpunkt, `rate` Spielsekunden pro
 Realsekunde (0 = Freeze).
+
+Daneben `place: {id, slot, x, z, facing?, room_id} | null` — der Platz
+(Raum- oder Prop-Marker, plan-posen-plaetze.md § 4), auf den der Server die
+Figur mit ihrer Pose gesetzt hat: `x`/`z` ist der Weltpunkt des gehaltenen
+Slots (`slot` = Index, `"pair"` bei einem Paar), `facing` das Marker-Facing in
+Kompassgrad (fehlt am Marker → `null`). **Der Server hat gestellt; ein Client
+zeichnet die Figur auf dem Slot und wählt nicht mehr selbst.** `null`, wenn die
+Figur keinen Platz hält (Pose ohne Marker im Raum, verschwundener Marker), unter
+Nebel ausgedünnt. Das SSE-Ereignis `activity_changed` trägt dasselbe Profilfeld
+`place` (`{id, slot, room_id}` oder `null`) neben `activity`/`animation`; der
+Avatar setzt über `POST /play/self/activity` (`{"activity": ""}` = Pose und
+Platz löschen, `{"place_id", "pose"}` = angeklickter Platz — 400 Pose passt
+nicht zur Gruppe, 404 kein solcher Platz im Raum, 409 belegt).
 
 **Renderer.** Figur-Root = `anchor + R_y(yaw)·clipRoot(t)` mit der three.js-
 Y-Drehung (`x' = x·cos + z·sin`, `z' = −x·sin + z·cos`); `clipRoot(t)` ist die

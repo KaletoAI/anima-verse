@@ -41,6 +41,35 @@ Hand-derived expectations:
       (−3.5, −3.5) is untouched. The inventory is cached: after b1 is
       removed from the layout, room_places still lists it until
       invalidate(); afterwards Bob's held b1 reads as no place.
+  [4] The setter. Ann holds s1 without a pose: clear_pose_intent releases
+      it anyway (a place alone is reason enough to clear). Then
+      set_pose_intent("Eve", "sitting") seats Eve on s1 — s2 is full
+      (Dan/0, Cid/1) — so profile["place"] is {s1, 0, lounge}, Eve stands
+      on (−3, −3), and the SSE activity_changed carries that place. A
+      repeated identical setter publishes nothing and keeps s1.
+      set_pose_intent("Eve", "standing") releases (group stand has no
+      marker here): place None, the SSE carries place None. Seated again
+      and cleared with clear_pose_intent: place None. The worldmap row
+      (show_all — a fogged row is thinned to null) of the seated Eve
+      carries place {id s1, slot 0, x −3, z −3, facing 0.0 (rotation 0
+      in an unrotated room), room_id lounge}; Ann's row (nothing held)
+      carries null, and so does Eve's row in a fogged payload.
+  [4b] Hardening. A profile place {id s1, room_id "kitchen"} neither
+      counts in the lounge's occupancy nor resolves — marker ids are per
+      room, s1 in the kitchen is another chair. {id s2, slot 5} on the
+      capacity-2 s2 neither counts nor resolves: a slot today's capacity
+      does not have is a vanished marker. Both leave s1/s2 free for
+      others: assign(prefer="s1") succeeds for Bob while Ann "holds"
+      the kitchen's s1.
+  [5] The avatar route (_play_set_activity_sync with Eve as the active
+      avatar, nobody seated on s1): place_id s1 + pose "sleeping" → 400
+      (a bed pose on a seat); place_id "nope" → 404; pose "flying" → 400
+      (unknown key); place_id s2 + "sitting" → 409 (Dan/0 and Cid/1 hold
+      both slots) and Eve stays unseated with no pose — the taken chair
+      is refused BEFORE the pose is set; place_id s1 + "sitting" → ok,
+      place {s1, 0, lounge}, Eve at (−3, −3); {"activity": "reading"}
+      keeps s1 (same group); {"activity": ""} clears: pose_key "" and
+      place None.
 
 Usage:  ./.venv/bin/python scripts/smoke_places.py
 """
@@ -60,8 +89,9 @@ db.init_schema()
 
 from app.core import places, pose_catalog  # noqa: E402
 from app.models.character import (  # noqa: E402
-    get_character_pos, get_character_profile, save_character_current_location,
-    save_character_current_room, save_character_profile, set_character_pos)
+    clear_pose_intent, get_character_pos, get_character_profile,
+    save_character_current_location, save_character_current_room,
+    save_character_profile, set_character_pos, set_pose_intent)
 from app.models.world import (  # noqa: E402
     _load_world_data, _save_world_data, add_location, update_location_position)
 
@@ -231,6 +261,117 @@ places.invalidate()
 check("invalidate() drops b1", sorted(p["id"] for p in places.room_places(HOUSE, "lounge")) == ["s1", "s2"])
 check("Bob's vanished bed reads as no place", places.place_of("Bob") is None)
 check("… and is no occupancy", "b1" not in places.occupancy(HOUSE, "lounge"))
+
+# ── [4] the setter, the SSE and the worldmap row ────────────────────────
+print("\n[4] the setter, the SSE and the worldmap row")
+from app.core import state_events  # noqa: E402
+from app.core.world_ops import build_worldmap_payload  # noqa: E402
+
+EVENTS = []
+_orig_publish = state_events.publish
+state_events.publish = lambda event_type, character, **fields: EVENTS.append(
+    {"type": event_type, "character": character, **fields})
+
+
+def last_event(character: str):
+    return next((e for e in reversed(EVENTS)
+                 if e["type"] == "activity_changed" and e["character"] == character), None)
+
+
+clear_pose_intent("Ann")
+check("clear_pose_intent releases a place held without a pose",
+      (get_character_profile("Ann") or {}).get("place") is None
+      and "s1" not in places.occupancy(HOUSE, "lounge"))
+set_pose_intent("Eve", "sitting")
+check("setter assigns", (get_character_profile("Eve").get("place") or {}).get("id") == "s1",
+      str(get_character_profile("Eve").get("place")))
+check("setter stores the pose key", get_character_profile("Eve").get("pose_key") == "sitting")
+check("Eve sits on (−3, −3)", get_character_pos("Eve") == {"x": -3.0, "z": -3.0},
+      str(get_character_pos("Eve")))
+ev = last_event("Eve")
+check("SSE activity_changed carries the place",
+      ev is not None and ev.get("activity") == "sitting" and ev.get("place") == field("s1", 0),
+      str(ev))
+n_events = len(EVENTS)
+set_pose_intent("Eve", "sitting")
+check("an identical repeat publishes nothing and keeps s1",
+      len(EVENTS) == n_events and get_character_profile("Eve").get("place") == field("s1", 0))
+wm = build_worldmap_payload(show_all=True)
+row = next(c for c in wm["characters"] if c["name"] == "Eve")
+check("payload place", row.get("place") == {"id": "s1", "slot": 0, "x": -3.0, "z": -3.0,
+                                            "facing": 0.0, "room_id": "lounge"},
+      str(row.get("place")))
+check("an unseated row carries place null",
+      next(c for c in wm["characters"] if c["name"] == "Ann").get("place") is None)
+fog = build_worldmap_payload("Ann", show_all=False)
+check("a fogged (thinned) row carries place null",
+      next((c.get("place") for c in fog["characters"] if c["name"] == "Eve"), None) is None)
+set_pose_intent("Eve", "standing")
+check("group without marker releases", get_character_profile("Eve").get("place") is None)
+check("… and the SSE says place None", (last_event("Eve") or {}).get("place", "missing") is None
+      and (last_event("Eve") or {}).get("activity") == "standing", str(last_event("Eve")))
+set_pose_intent("Eve", "sitting")
+clear_pose_intent("Eve")
+check("clear releases", get_character_profile("Eve").get("place") is None
+      and get_character_profile("Eve").get("pose_key") == "")
+check("… with an SSE of activity '' and place None",
+      (last_event("Eve") or {}).get("activity") == "" and (last_event("Eve") or {}).get("place", "missing") is None)
+check("s1 is free again", "s1" not in places.occupancy(HOUSE, "lounge"))
+
+# ── [4b] hardening: room id and capacity are part of the match ──────────
+print("\n[4b] hardening: room id and capacity are part of the match")
+_prof = get_character_profile("Ann")
+_prof["place"] = {"id": "s1", "slot": 0, "room_id": "kitchen"}
+save_character_profile("Ann", _prof)
+check("s1 of another room is no occupancy of the lounge's s1",
+      "s1" not in places.occupancy(HOUSE, "lounge"), str(places.occupancy(HOUSE, "lounge")))
+check("… and does not resolve", places.place_of("Ann") is None)
+check("… so Bob may take s1 by preference", places.assign("Bob", "sitting", prefer="s1") == field("s1", 0))
+places.release("Bob")
+_prof = get_character_profile("Ann")
+_prof["place"] = {"id": "s2", "slot": 5, "room_id": "lounge"}
+save_character_profile("Ann", _prof)
+check("a slot beyond today's capacity is no occupancy",
+      sorted(places.occupancy(HOUSE, "lounge").get("s2") or []) == [("Cid", 1), ("Dan", 0)],
+      str(places.occupancy(HOUSE, "lounge")))
+check("… and does not resolve", places.place_of("Ann") is None)
+places.release("Ann")
+
+# ── [5] the avatar route ────────────────────────────────────────────────
+print("\n[5] the avatar route")
+from fastapi import HTTPException  # noqa: E402
+from app.models.account import set_active_character  # noqa: E402
+from app.routes import play as play_route  # noqa: E402
+
+set_active_character("Eve")
+
+
+def route(body: dict):
+    try:
+        return play_route._play_set_activity_sync(body)
+    except HTTPException as e:
+        return e.status_code
+
+
+check("bed pose on a seat → 400", route({"place_id": "s1", "pose": "sleeping"}) == 400)
+check("unknown place → 404", route({"place_id": "nope", "pose": "sitting"}) == 404)
+check("unknown pose → 400", route({"place_id": "s1", "pose": "flying"}) == 400)
+check("taken place → 409", route({"place_id": "s2", "pose": "sitting"}) == 409)
+check("… and Eve stays unseated without a pose",
+      get_character_profile("Eve").get("place") is None
+      and get_character_profile("Eve").get("pose_key") == "")
+r = route({"place_id": "s1", "pose": "sitting"})
+check("clicked s1 → ok with the place", isinstance(r, dict) and r.get("ok") is True
+      and r.get("activity") == "sitting" and r.get("place") == field("s1", 0), str(r))
+check("Eve sits on (−3, −3)", get_character_pos("Eve") == {"x": -3.0, "z": -3.0})
+r = route({"activity": "reading"})
+check("free text of the same group keeps s1", isinstance(r, dict) and r.get("place") == field("s1", 0)
+      and get_character_profile("Eve").get("pose_key") == "reading", str(r))
+r = route({"activity": ""})
+check("empty activity clears pose and place", isinstance(r, dict) and r.get("place") is None
+      and r.get("activity") == "" and get_character_profile("Eve").get("pose_key") == ""
+      and get_character_profile("Eve").get("place") is None, str(r))
+state_events.publish = _orig_publish
 
 # ── summary ─────────────────────────────────────────────────────────────
 print()

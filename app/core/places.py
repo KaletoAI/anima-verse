@@ -115,18 +115,38 @@ def _present(location_id: str, room_id: str) -> List[Tuple[str, Dict[str, Any]]]
     return out
 
 
+def _held_slot(pl: Any, place: Place, room_id: str) -> Optional[Any]:
+    """The slot a profile ``place`` field holds OF ``place`` — None when it
+    names another place, another room (marker ids are per room: ``s1`` in
+    the kitchen is another chair), or a slot index today's capacity does
+    not have (a shrunk marker reads like a vanished one). A pair's
+    ``PAIR_SLOT`` passes as it is."""
+    if not isinstance(pl, dict) or pl.get("id") != place["id"] \
+            or (pl.get("room_id") or "") != room_id:
+        return None
+    slot = pl.get("slot", 0)
+    if slot == PAIR_SLOT:
+        return slot
+    if isinstance(slot, int) and 0 <= slot < place["capacity"]:
+        return slot
+    return None
+
+
 def occupancy(location_id: str, room_id: str, exclude: str = "") -> Dict[str, List[Tuple[str, Any]]]:
     """``{place_id: [(name, slot), …]}`` of the room's present characters. A
-    pair holds ``PAIR_SLOT`` and counts as ``pose_places`` slots. A held id
-    that today's inventory does not know is no occupancy."""
-    known = {p["id"] for p in room_places(location_id, room_id)}
+    pair holds ``PAIR_SLOT`` and counts as ``pose_places`` slots. A held
+    place that today's inventory does not know — unknown id, another
+    room's id, a slot beyond the capacity — is no occupancy."""
+    known = {p["id"]: p for p in room_places(location_id, room_id)}
     out: Dict[str, List[Tuple[str, Any]]] = {}
     for name, prof in _present(location_id, room_id):
         if name == exclude:
             continue
         pl = prof.get("place")
-        if isinstance(pl, dict) and pl.get("id") in known:
-            out.setdefault(pl["id"], []).append((name, pl.get("slot", 0)))
+        place = known.get(pl.get("id")) if isinstance(pl, dict) else None
+        slot = _held_slot(pl, place, room_id) if place else None
+        if slot is not None:
+            out.setdefault(place["id"], []).append((name, slot))
     return out
 
 
@@ -189,7 +209,7 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
             # Same group, own place still there: stay seated (keep the very
             # slot when it is free, else any free one of the same place).
             for p, free in options:
-                if p["id"] == current.get("id"):
+                if p["id"] == current.get("id") and (current.get("room_id") or "") == room:
                     slot = current.get("slot") if current.get("slot") in free else free[0]
                     chosen = (p, slot)
         if chosen is None and options:
@@ -228,8 +248,9 @@ def release(name: str) -> None:
 
 def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
     """The place a character holds, validated against today's inventory —
-    a marker that vanished reads as no place. The dict is the place plus
-    ``slot`` and the ``x, z`` of the held slot (a pair sits on slot 0)."""
+    a marker that vanished, another room's id or a slot beyond the capacity
+    reads as no place. The dict is the place plus ``slot`` and the ``x, z``
+    of the held slot (a pair sits on slot 0)."""
     from app.models.character import get_character_profile
     prof = profile if profile is not None else (get_character_profile(name) or {})
     pl = prof.get("place")
@@ -237,9 +258,9 @@ def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
         return None
     loc, room = where(name)
     for p in room_places(loc, room):
-        if p["id"] == pl["id"]:
-            slot = pl.get("slot", 0)
-            idx = 0 if slot == PAIR_SLOT else int(slot)
+        slot = _held_slot(pl, p, room)
+        if slot is not None:
+            idx = 0 if slot == PAIR_SLOT else slot
             xz = p["slots"][idx] if idx < len(p["slots"]) else p["slots"][0]
             return dict(p, slot=slot, x=xz[0], z=xz[1])
     return None

@@ -3171,26 +3171,73 @@ def _play_set_mood_sync(user, body: Any):
 
 @router.post("/play/self/activity")
 async def play_set_activity(request: Request, user=Depends(get_current_user)):
-    """The avatar sets its own pose/activity (free-text pose)."""
+    """The avatar sets its own pose/activity — free text, empty = clear, or
+    a CLICKED place (``place_id`` + ``pose``, plan-posen-plaetze.md § 4).
+
+    Off the event loop: set_pose_intent resolves the text against the pose
+    catalog, which may embed it (a routed external embedding endpoint is a
+    blocking HTTP call) and writes the DB — that would stall every SSE stream.
+    """
     import asyncio
-    from app.models.character import (set_pose_intent, is_character_sleeping,
-                                      set_is_sleeping, wake_from_offmap)
+    body = await request.json() or {}
+    return await asyncio.to_thread(_play_set_activity_sync, body)
+
+
+def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``play_set_activity`` — runs in the threadpool.
+
+    Three shapes: ``{"activity": "<text>"}`` sets the pose (the setter seats
+    the avatar on SOME free place of the group), ``{"activity": ""}`` clears
+    pose and place, ``{"place_id", "pose"}`` insists on the clicked place —
+    400 unknown pose / pose not of the place's group, 404 no such place in
+    the avatar's room, 409 place taken. Answer ``{"ok", "activity", "place"}``.
+    """
+    from app.core import places
+    from app.core.pose_catalog import get_catalog, group_of
+    from app.models.character import (clear_pose_intent, get_character_profile,
+                                      is_character_sleeping, set_is_sleeping,
+                                      set_pose_intent, wake_from_offmap)
     avatar = _require_avatar()
-    body = await request.json()
-    activity = str((body or {}).get("activity") or "").strip()
+    place_id = str(body.get("place_id") or "").strip()
+    pose = str(body.get("pose") or "").strip().lower()
+    activity = str(body.get("activity") or "").strip()
     # Setting an activity while asleep wakes the avatar — the sleeping flag
     # otherwise overrides the displayed activity ("Sleeping").
-    if activity and is_character_sleeping(avatar):
+    if (activity or place_id) and is_character_sleeping(avatar):
         set_is_sleeping(avatar, False)
         try:
             wake_from_offmap(avatar)
         except Exception:
             pass
-    # Off the event loop: set_pose_intent resolves the text against the pose
-    # catalog, which may embed it (a routed external embedding endpoint is a
-    # blocking HTTP call) and writes the DB — that would stall every SSE stream.
-    await asyncio.to_thread(set_pose_intent, avatar, activity)
-    return {"ok": True, "activity": activity}
+    if place_id:
+        if pose not in get_catalog("pose"):
+            raise HTTPException(status_code=400, detail="unknown pose")
+        loc, room = places.where(avatar)
+        target = next((p for p in places.room_places(loc, room) if p["id"] == place_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="no such place here")
+        if group_of(pose) != target["group"]:
+            raise HTTPException(status_code=400, detail="pose does not fit this place")
+        # Refuse a taken place BEFORE the pose is set: the setter below would
+        # otherwise seat the avatar on some OTHER chair of the group and the
+        # 409 would leave it sitting there. The assign(prefer=) after it is
+        # what actually holds the slot (under the room's lock); the check
+        # here only spares the common case the detour.
+        taken = places.occupancy(loc, room, exclude=avatar).get(place_id, [])
+        if not places.free_slots(target, taken):
+            raise HTTPException(status_code=409, detail="place is taken")
+        set_pose_intent(avatar, pose)                 # assigns SOME place of the group
+        try:
+            places.assign(avatar, pose, prefer=place_id)   # …then insists on the clicked one
+        except places.PlaceUnavailable:
+            raise HTTPException(status_code=409, detail="place is taken")
+        activity = pose
+    elif activity:
+        set_pose_intent(avatar, activity)
+    else:
+        clear_pose_intent(avatar)
+    return {"ok": True, "activity": activity,
+            "place": (get_character_profile(avatar) or {}).get("place")}
 
 
 @router.post("/play/self/outfit")

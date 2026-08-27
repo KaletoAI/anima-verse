@@ -162,6 +162,18 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
 
 # === Worldmap payload (player map panel + 3D client) ===
 
+def _place_payload(name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The worldmap's ``place`` block: the held place validated against the
+    room's inventory, reduced to what a renderer needs (id, slot, the
+    slot's metre point, facing, room). None when the character holds none."""
+    from app.core import places
+    p = places.place_of(name, profile)
+    if not p:
+        return None
+    return {"id": p["id"], "slot": p["slot"], "x": p["x"], "z": p["z"],
+            "facing": p.get("facing"), "room_id": p["room_id"]}
+
+
 def build_worldmap_payload(avatar_name: Optional[str] = None,
                            show_all: bool = False) -> Dict[str, Any]:
     """Aggregated world map in METRES: locations (centre/rotation/footprint
@@ -632,6 +644,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # lockstep at one anchor; null when the character has none.
             "interaction": (None if _thin else
                             _interaction_payload(name, _prof, _now_game, _factor)),
+            # The place the server seated the character on (plan-posen-
+            # plaetze.md § 4): the slot's metre point, so a client draws the
+            # figure THERE and never picks a seat itself; null when it holds
+            # none (or the marker vanished — place_of validates).
+            "place": (None if _thin else _place_payload(name, _prof)),
             "avatar_url": (f"/characters/{name}/images/{prof}" if prof else ""),
         })
 

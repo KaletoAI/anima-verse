@@ -1814,7 +1814,7 @@ def set_character_pos(character_name: str, x: float, z: float,
 
 
 def get_location_changed_at(character_name: str = "") -> str:
-    """Gibt den Timestamp des letzten Location-Wechsels zurueck (Character-Level)."""
+    """The timestamp of the last location change (character level)."""
     if not character_name:
         return ""
     profile = get_character_profile(character_name)
@@ -1847,7 +1847,13 @@ def get_character_pose_flavor(character_name: str) -> str:
 
 def set_pose_intent(character_name: str, pose: str) -> None:
     """Canonical setter for 'character does X now'. Resolves the free text to
-    a catalog key (the ONLY render key) + sanitized flavor. Empty pose resets."""
+    a catalog key (the ONLY render key) + sanitized flavor. Empty pose resets.
+
+    The key also SEATS the character (plan-posen-plaetze.md § 4): after the
+    pose is stored, ``places.assign`` gives it a free place of the pose's
+    group in its room and moves it onto the slot — or releases the place it
+    held when the group has none here (a standing pose, no marker). An
+    identical repeat returns early and never re-assigns."""
     if not character_name:
         return
     raw = (pose or "").strip()
@@ -1872,7 +1878,13 @@ def set_pose_intent(character_name: str, pose: str) -> None:
     profile["pose_key"] = key
     profile["pose_flavor"] = flavor
     save_character_profile(character_name, profile)
-    _publish_activity_changed(character_name, flavor or key, old_display, key)
+    # assign re-loads and saves the profile itself — it must run AFTER the
+    # pose write above so the key is on disk when the place is chosen.
+    from app.core import places
+    place = places.assign(character_name, key) if key else None
+    if not key:
+        places.release(character_name)
+    _publish_activity_changed(character_name, flavor or key, old_display, key, place)
 
 
 def clear_pose_intent(character_name: str) -> None:
@@ -1880,28 +1892,32 @@ def clear_pose_intent(character_name: str) -> None:
     if not character_name:
         return
     profile = get_character_profile(character_name) or {}
-    if profile.get("pose_key") or profile.get("pose_flavor"):
+    if profile.get("pose_key") or profile.get("pose_flavor") or profile.get("place"):
         old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
+        profile["place"] = None          # the character stands up (§ 3.5)
         save_character_profile(character_name, profile)
-        _publish_activity_changed(character_name, "", old_display, "")
+        _publish_activity_changed(character_name, "", old_display, "", None)
 
 
 def _publish_activity_changed(character_name: str, pose: str, old_pose: str,
-                              pose_key: str) -> None:
+                              pose_key: str, place: Optional[dict] = None) -> None:
     """AV3D-3: push an activity change to the SSE state stream — carries the
     animation kind the worldmap would deliver, so a streaming client swaps
     the figure's clip without waiting for its next poll. No-op when the
     activity did not actually change. ``pose`` is the display text,
-    ``pose_key`` the catalog key the animation is resolved from."""
+    ``pose_key`` the catalog key the animation is resolved from, ``place``
+    the profile field the setter just assigned (``{"id", "slot",
+    "room_id"}``) or None — the client seats the figure from it."""
     if pose == old_pose:
         return
     try:
         from app.core.state_events import publish as _publish_state
         from app.core.expression_pose_maps import resolve_pose_animation
         _publish_state("activity_changed", character_name,
-                       activity=pose, animation=resolve_pose_animation(pose_key))
+                       activity=pose, animation=resolve_pose_animation(pose_key),
+                       place=place)
     except Exception:
         pass
 
@@ -1943,7 +1959,7 @@ def get_effective_pose_key(character_name: str) -> str:
 
 
 def get_character_current_room(character_name: str) -> str:
-    """Gibt die aktuelle Raum-ID zurueck"""
+    """The current room id ("" when none)."""
     if not character_name:
         return ""
     profile = get_character_profile(character_name)
@@ -1952,11 +1968,11 @@ def get_character_current_room(character_name: str) -> str:
 
 def save_character_current_room(character_name: str, room_id: str,
                                 _party_drag: bool = False):
-    """Speichert den aktuellen Raum (Room-ID) und prueft Outfit-Type-
-    Compliance fuer den Raum (ueberschreibt Location-Vorgabe).
+    """Store the current room (room id) and check the outfit-type compliance
+    for the room (overrides the location's requirement).
 
-    _party_drag: True nur fuer einen mitgezogenen Party-Follower (Rekursions-
-    schutz, analog save_character_current_location)."""
+    _party_drag: True only for a party follower dragged along (recursion
+    guard, like save_character_current_location)."""
     profile = get_character_profile(character_name)
     old_room = profile.get("current_room", "")
     cur_loc = profile.get("current_location", "")
