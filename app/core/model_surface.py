@@ -115,6 +115,12 @@ def _load(model_path: Path) -> Optional[Dict[str, Any]]:
 def _valid(surface: Dict[str, Any], model_path: Path, rotation: Any) -> bool:
     if surface.get("version") != SURFACE_VERSION:
         return False
+    # COMPLETE, not merely current: ``payload_block`` indexes all eight keys,
+    # so a file that lost one — a truncated write, a hand-edit — would raise a
+    # KeyError inside the scene route instead of reading as "no surface". A
+    # missing surface is a legal state; a half one is not.
+    if any(k not in surface for k in PAYLOAD_KEYS):
+        return False
     src = _source_of(model_path)
     if not src or surface.get("source") != src:
         return False

@@ -2513,7 +2513,9 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     THE SURFACES are in here for that same reason once more (v6): a lattice
     that was just baked — or has just gone stale — changes no dial, no URL and
     no sidecar the room signature reads, so without ``surface_sigs`` a running
-    client would keep walking the old floor."""
+    client would keep walking the old floor. ``surface_sigs`` is the ONLY
+    place a lattice enters this hash — the room metas hand theirs over to it
+    and travel here without it."""
     import hashlib
     import json
     from app.core.game_time import get_calendar
@@ -2533,7 +2535,14 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
         "rooms": {str(r.get("room_id") or ""): r.get("signature") or ""
                   for r in recipes},
         "building_meta": building_meta or {},
-        "room_metas": room_metas or {},
+        # The room metas MINUS their lattices: a baked surface is hundreds of
+        # kilobytes of integers, and json-dumping it into every signature to
+        # md5 it once more would hash the very numbers ``surface_sigs`` has
+        # already reduced to eight characters. Dropped, not summarized — the
+        # sigs below cover the rooms too.
+        "room_metas": {rid: ({k: v for k, v in meta.items() if k != "surface"}
+                             if isinstance(meta, dict) else meta)
+                       for rid, meta in (room_metas or {}).items()},
         "default_door_prop_id": str(location.get("default_door_prop_id")
                                     or "").strip(),
         "door_props": door_prop_sigs or {},
@@ -3038,14 +3047,22 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
 
     boundary = _boundary_openings(map3d, extent)
 
-    # One short hash per placement that ships a lattice, keyed by the
-    # placement it hangs on. A PROP's lattice is read from the prop store and
-    # appears in no other hashed input, so without this a freshly baked crate
-    # would never reach a running client; a room's rides in ``room_metas``
-    # anyway and is covered here a second time, which costs eight characters.
+    # One short hash per placement that ships a lattice — the only form in
+    # which a lattice enters the scene signature (``_signature`` drops it from
+    # the room metas). A room's lattice reaches the hash through no other
+    # input, and a PROP's through none at all, so without this a freshly baked
+    # crate would never reach a running client.
+    #
+    # THE VARIANT IS PART OF THE KEY: two copies of the same crate in the same
+    # room may show DIFFERENT meshes with different lattices, and role + id +
+    # room alone would let the second one overwrite the first in this dict —
+    # a bake of the swallowed variant would then move nothing. Two copies of
+    # the SAME variant do collide, and that is right: their block is the same
+    # block, so one entry says everything two would.
     from app.core.model_surface import block_sig
     surface_sigs = {
-        f"{m.get('role')}:{m.get('id')}:{m.get('room_id', '')}": block_sig(m["surface"])
+        f"{m.get('role')}:{m.get('id')}:{m.get('room_id', '')}:{m.get('variant', 0)}":
+            block_sig(m["surface"])
         for m in models if isinstance(m, dict) and m.get("surface")}
 
     out = {

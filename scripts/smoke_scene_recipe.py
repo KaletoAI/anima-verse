@@ -4180,6 +4180,22 @@ WALKABLE_PROP = {
 }
 
 
+# The SAME crate with two model variants published. The store indices are 0
+# and 2, not 0 and 1: variant 1 is switched off, and the payload entry names
+# its own store index (`props._published_entry`) precisely so a position may
+# not stand in for it. `room_recipe._join_placements` copies this list onto
+# every placement of the prop as `variant_tiers`.
+TWO_VARIANT_CRATE = {
+    **WALKABLE_PROP,
+    "variant_tiers": [
+        {"variant": 0, "tiers": ["full"],
+         "dims": {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}},
+        {"variant": 2, "tiers": ["full"],
+         "dims": {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}},
+    ],
+}
+
+
 def _surf_note(spec: dict) -> str:
     """The lattice in one line — 81 identical values are unreadable as a
     failure detail, its size and its first value are not."""
@@ -4189,6 +4205,46 @@ def _surf_note(spec: dict) -> str:
     return (f'{s.get("cols")}x{s.get("rows")} @ {s.get("step")} m, '
             f'values[0]={(s.get("values") or [None])[0]}, '
             f'box {s.get("box_min")}..{s.get("box_max")}')
+
+
+def two_crate_fixture() -> dict:
+    """Room "a" with TWO copies of the walkable crate showing DIFFERENT
+    variants: the first takes the default (position 0), the second names
+    position 1. Both are clear of the table, so the stacking rule stays out."""
+    loc = model_fixture()
+    for room in loc["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["props"] += [
+                {"prop_id": "crate", "at": [3.5, 0.5], "yaw": 0},
+                {"prop_id": "crate", "at": [3.5, 2.5], "yaw": 0, "variant": 1},
+            ]
+    return loc
+
+
+def crate_surface_stub(store0_values: int = 20):
+    """A ``props.surface_for`` stand-in that gives each STORE index its own
+    lattice and RECORDS what it was asked for. Returns ``(seen, fn)``."""
+    seen = []
+
+    def surface_for(pid, variant=None):
+        seen.append((pid, variant))
+        if pid != "crate":
+            return None
+        value = store0_values if variant in (None, 0) else 40
+        return dict(SURFACE_BLOCK, values=[value] * 81)
+
+    return seen, surface_for
+
+
+def crate_scene(loc: dict) -> dict:
+    return scene_recipe.compose_scene(loc, plan_width_m=PLAN_W,
+                                      building_meta=BUILDING_META,
+                                      room_metas=room_metas())
+
+
+def props_of(sc: dict, ident: str) -> list:
+    return [m for m in sc["models"]
+            if m.get("role") == "prop" and m.get("id") == ident]
 
 
 def surface_fixture() -> dict:
@@ -4276,6 +4332,71 @@ def test_surface_specs() -> None:
         stub_props()
 
 
+def test_surface_variants() -> None:
+    """[7h] THE VARIANT IS PART OF THE QUESTION AND PART OF THE KEY.
+
+    Two copies of the same crate in one room, showing two different meshes.
+    Two statements, both hand-derived from the shapes above:
+
+    * WHICH VARIANT IS ASKED FOR. ``TWO_VARIANT_CRATE`` publishes store
+      indices 0 and 2 (variant 1 is switched off), so ``model_variants`` has
+      two entries at POSITIONS 0 and 1. The second placement says
+      ``variant: 1``, which is a position — and the prop library addresses a
+      mesh by its STORE index, so the recipe must ask ``surface_for`` for 2,
+      not for 1. The first placement says nothing, i.e. position 0 → store 0.
+      A crate with only ONE published variant has no list to resolve through
+      and asks for None, the primary.
+    * WHICH KEY THE SIGNATURE USES. Both copies are ``prop:crate:a``, so a key
+      of role + id + room would keep only the LAST of them and a re-bake of
+      the first one's mesh would move no hashed input at all. Here the first
+      copy's lattice changes (values 20 → 25) and nothing else does — the
+      signature has to move.
+    """
+    print("\n[7h] two variants of one prop in one room")
+    from app.core import props as prop_store
+    real_surface_for = prop_store.surface_for
+    recs = {"table": EXAMPLE_PROP, "crate": TWO_VARIANT_CRATE}
+    stub_library(lambda pid: dict(recs[pid]) if pid in recs else None)
+    try:
+        seen, prop_store.surface_for = crate_surface_stub()
+        sc = crate_scene(two_crate_fixture())
+        crates = props_of(sc, "crate")
+        check("both copies are in the payload", len(crates) == 2,
+              str(len(crates)))
+        check("...at POSITIONS 0 and 1 of model_variants",
+              [c.get("variant") for c in crates] == [0, 1],
+              str([c.get("variant") for c in crates]))
+        check("the library is asked for the STORE indices 0 and 2",
+              seen == [("crate", 0), ("crate", 2)], str(seen))
+        check("copy 1 got store 0's lattice (values 20)",
+              crates[0]["surface"]["values"][0] == 20,
+              str(crates[0]["surface"]["values"][0]))
+        check("copy 2 got store 2's lattice (values 40)",
+              crates[1]["surface"]["values"][0] == 40,
+              str(crates[1]["surface"]["values"][0]))
+
+        # Re-bake the FIRST copy's mesh alone — the one a role:id:room key
+        # would have dropped.
+        _, prop_store.surface_for = crate_surface_stub(store0_values=25)
+        moved = crate_scene(two_crate_fixture())
+        check("a re-bake of the SWALLOWED variant moves the signature",
+              moved["signature"] != sc["signature"])
+        check("...and nothing else in the payload changed",
+              [c.get("variant") for c in props_of(moved, "crate")] == [0, 1])
+
+        # One published variant: no list to resolve through, so the primary.
+        seen, prop_store.surface_for = crate_surface_stub()
+        stub_library(lambda pid: (dict(WALKABLE_PROP) if pid == "crate"
+                                  else dict(EXAMPLE_PROP) if pid == "table"
+                                  else None))
+        crate_scene(surface_fixture())
+        check("a single-variant placement asks for the primary (None)",
+              seen == [("crate", None)], str(seen))
+    finally:
+        prop_store.surface_for = real_surface_for
+        stub_props()
+
+
 def main() -> int:
     test_scalars()
     test_scale_is_one()
@@ -4318,6 +4439,7 @@ def main() -> int:
     test_rotation_outside_boundary()
     test_rotation_shared_walls()
     test_surface_specs()
+    test_surface_variants()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

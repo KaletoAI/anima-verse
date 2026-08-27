@@ -1393,8 +1393,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
     seasons, in_season, tiers, has_model, model_file, model_url, signature,
     has_source, source_url, image, dims, dims_estimated, description,
-    ground_offset_m, markers, surface}]`` — every variant, active or not, in
-    order.
+    ground_offset_m, markers, surface_status}]`` — every variant, active or
+    not, in order.
 
     Since 2026-08-25 there is ONE number per field and no pair of them: the
     variant owns its size, its subject, its sink and its markers, so ``dims``
@@ -1448,10 +1448,11 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "description": entry.get(DESCRIPTION_KEY, ""),
             "ground_offset_m": entry.get(GROUND_OFFSET_KEY, GROUND_OFFSET_DEFAULT),
             "markers": entry.get(MARKERS_KEY, []),
-            # This variant's own baked walking surface, state only — every
-            # variant is a mesh of its own and is baked on its own
-            # (spec-surface-height § 6.1).
-            "surface": surface_status_for(prop_id, i),
+            # This variant's own baked walking surface, STATE only (the
+            # lattice is what ``surface`` means, and it travels on the scene
+            # spec) — every variant is a mesh of its own and is baked on its
+            # own (spec-surface-height § 6.1).
+            "surface_status": surface_status_for(prop_id, i),
         })
     return out
 
@@ -2870,11 +2871,12 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # detail, hence the full record only — the badge in the prop editor
             # is its one consumer.
             "slots_auto": bool(meta.get(SLOTS_AUTO_KEY)),
-            # The PRIMARY variant's baked walking surface — state only, never
+            # The PRIMARY variant's baked walking surface — STATE only, never
             # the lattice: the panel says baked/stale/missing and offers the
             # bake button, the numbers travel on the scene spec alone
-            # (spec-surface-height § 6.1).
-            "surface": surface_status_for(prop_id),
+            # (spec-surface-height § 6.1). Hence the name: ``surface`` is the
+            # lattice, everywhere, and this is not it.
+            "surface_status": surface_status_for(prop_id),
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]

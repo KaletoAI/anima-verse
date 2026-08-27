@@ -210,6 +210,28 @@ def part1():
             # node nearest (x=0.5, z=0.1): i = (0.5+1)/0.25 = 6, j = (0.1-0)/0.25 = 0.4 -> j=0 is z=0
             # (cast 1 mm inside) — the base's side face at y=1 answers: 200
             check("x90 side face up (6,0) = 200", node(r, 6, 0) == 200, str(node(r, 6, 0)))
+        # A TRUNCATED FILE READS AS NO SURFACE, never as a KeyError.
+        # `payload_block` indexes all eight PAYLOAD_KEYS, so validity has to
+        # mean COMPLETE as well as current: dropping `values` from the file the
+        # rebake above just wrote (still the right source and the right fix)
+        # must turn `read_surface` into None and the state into "stale" — the
+        # file is there, so it is not "missing", and it cannot be trusted, so
+        # it is not "baked".
+        sp = ms.surface_path(glb)
+        whole = sp.read_text(encoding="utf-8")
+        for lost in ("values", "origin", "extent_snapped"):
+            partial = json.loads(whole)
+            partial.pop(lost)
+            sp.write_text(json.dumps(partial), encoding="utf-8")
+            check(f"a file without `{lost}` reads as no surface",
+                  ms.read_surface(glb, {"x": 90, "y": 0, "z": 0}) is None)
+            check(f"...and its state is stale, not baked (`{lost}`)",
+                  ms.surface_status(glb, {"x": 90})["state"] == "stale",
+                  ms.surface_status(glb, {"x": 90})["state"])
+        sp.write_text(whole, encoding="utf-8")
+        check("the restored file is baked again",
+              ms.surface_status(glb, {"x": 90})["state"] == "baked",
+              ms.surface_status(glb, {"x": 90})["state"])
         glb.write_bytes(glb.read_bytes() + b"\0\0\0\0")
         check("status stale after model change", ms.surface_status(glb, {"x": 90})["state"] == "stale")
 
