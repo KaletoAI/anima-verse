@@ -796,6 +796,39 @@ SCHEMA_STATEMENTS = [
         cz           INTEGER NOT NULL,
         PRIMARY KEY (character_id, cx, cz)
     )""",
+
+    # ── The IMPROVEMENTS QUEUE (2026-08-27) ─────────────────────────────────
+    # A standing order ("give every character a 3D model") plus one row per
+    # subject it still has to work on. The order lives in `improvements`, the
+    # work list in `improvement_steps` — rebuilt by each scan as a DIFF, so a
+    # subject that disappeared from the candidate list is done, and the
+    # attempts/error of a subject already worked on survive every rescan.
+    # See app/core/improvements/store.py.
+    """CREATE TABLE IF NOT EXISTS improvements (
+        id TEXT PRIMARY KEY,
+        type_id TEXT NOT NULL,
+        label TEXT NOT NULL DEFAULT '',
+        params TEXT NOT NULL DEFAULT '{}',
+        mode TEXT NOT NULL DEFAULT 'one_shot',
+        status TEXT NOT NULL DEFAULT 'open',
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        last_scan_at TEXT,
+        done_count INTEGER NOT NULL DEFAULT 0,
+        failed_count INTEGER NOT NULL DEFAULT 0
+    )""",
+    """CREATE TABLE IF NOT EXISTS improvement_steps (
+        improvement_id TEXT NOT NULL,
+        candidate_key TEXT NOT NULL,
+        candidate_label TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        error TEXT NOT NULL DEFAULT '',
+        started_at TEXT,
+        finished_at TEXT,
+        duration_s REAL,
+        PRIMARY KEY (improvement_id, candidate_key)
+    )""",
 ]
 
 
