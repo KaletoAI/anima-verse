@@ -229,6 +229,26 @@ export async function postPos(x: number, z: number, signal?: AbortSignal,
   return res.json() as Promise<PosReport>;
 }
 
+/** The avatar's pose and PLACE (`POST /play/self/activity`,
+ *  plan-posen-plaetze.md § 4). `{activity: ''}` clears pose and place — the
+ *  figure stands up (sent on the first steering input while seated);
+ *  `{place_id, pose}` seats the avatar on a place (409 when it is taken).
+ *  Throws an `ApiError` carrying the server's reason on every refusal. */
+export async function postActivity(body: { activity?: string; place_id?: string; pose?: string }
+): Promise<{ ok: boolean; place: unknown }> {
+  const res = await fetch('/play/self/activity', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('auth:required'));
+    throw new AuthError();
+  }
+  if (!res.ok) throw await refusal(res);
+  return res.json() as Promise<{ ok: boolean; place: unknown }>;
+}
+
 /** The painted terrain of the world (`GET /play/terrain`): the areas plus the
  *  effective type catalog they name. NEVER withheld — terrain is always
  *  visible, only locations hide, so this is fetched ONCE and refetched when

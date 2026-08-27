@@ -335,14 +335,14 @@ export function PlanSidePanel({
       ) : null}
       {markers.map((m, i) => (
         <button
-          key={`${m.animation}-${i}`}
+          key={`${m.group}-${i}`}
           type="button"
           className={`ga-btn ga-btn-sm${markerSel === i ? ' ga-btn-primary' : ''}`}
           style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
           onClick={() => onSelectMarker(markerSel === i ? null : i)}
           title={t('Select this marker to adjust facing/height or remove it.')}
         >
-          🎯 {i + 1} · {m.animation}
+          🎯 {i + 1} · {m.group}
         </button>
       ))}
     </>

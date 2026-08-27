@@ -33,7 +33,10 @@ export interface FurnishNewPiece {
   width_m: number
   depth_m: number
   height_m: number
-  marker?: { animation: string; at: [number, number, number] } | null
+  /** The PLACE the piece offers (plan-posen-plaetze.md § 4): a place type
+   *  of the pose catalog, never a clip — as `room_furnish._valid_marker`
+   *  answers it. */
+  marker?: { group: string; at: [number, number, number] } | null
   count: number
   prop_id?: string | null
 }
@@ -511,7 +514,7 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
             <span className="ga-hint">
               {n.marker
                 ? t('Marker: {kind} (adjust it by hand on the prop later)')
-                  .replace('{kind}', n.marker.animation)
+                  .replace('{kind}', n.marker.group)
                 : t('No marker')}
               {n.prop_id ? ` · ${t('already generated')}` : ''}
             </span>

@@ -187,6 +187,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // animation clips per kind — markers show a real animated figure; without
   // figure/clip the mannequin stays the fallback.
   const figRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'; obj?: Object3D }>({ status: 'idle' })
+  // The pose catalog's PLACE TYPES (plan-posen-plaetze.md § 4): a marker
+  // names a group, not a clip, so the preview figure plays the group's
+  // DEFAULT pose — `GET /poses` → `groups[g].default` → that entry's
+  // `animation`. Fetched once; until it is in, the figure stands idle.
+  const poseKindsRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'
+    kindOf: Map<string, string> }>({ status: 'idle', kindOf: new Map() })
   // Surface textures per kind: the /assets listing (url + real tiling size)
   // plus lazily loaded THREE textures — walls/floors sample them real-scale.
   const surfaceListRef = useRef<{ status: 'idle' | 'loading' | 'ready'
@@ -314,6 +320,30 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       setBump((b) => b + 1)
     })()
     return null
+  }
+  /** The clip kind a marker of place type `group` shows: the animation of
+   *  the group's default pose. `undefined` while the catalog loads or for a
+   *  group the catalog does not know — the figure then stands idle. */
+  const defaultKindOf = (group: string): string | undefined => {
+    const st = poseKindsRef.current
+    if (st.status === 'idle') {
+      poseKindsRef.current = { status: 'loading', kindOf: new Map() }
+      apiGet<{ entries?: Array<{ key: string; animation?: string }>
+               groups?: Record<string, { default?: string }> }>('/poses')
+        .then((d) => {
+          const anim = new Map((d.entries || []).map((e) => [e.key, e.animation || '']))
+          const kindOf = new Map<string, string>()
+          for (const [g, spec] of Object.entries(d.groups || {})) {
+            const kind = spec.default ? anim.get(spec.default) : ''
+            if (kind) kindOf.set(g, kind)
+          }
+          poseKindsRef.current = { status: 'ready', kindOf }
+          setBump((b) => b + 1)
+        })
+        .catch(() => { poseKindsRef.current = { status: 'missing', kindOf: new Map() } })
+      return undefined
+    }
+    return st.kindOf.get(group)
   }
   const ensureClip = (kind: string) => {
     const idx = clipListRef.current
@@ -620,6 +650,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     const placeFigure = (opts: { x: number; y: number; z: number
                                  animation?: string; facing?: number
                                  tilt?: number; roll?: number
+                                 /** a place's figure (marker colour), not the
+                                  *  comparison figure */
+                                 marker?: boolean
                                  label?: string }) => {
       const fig = new THREE.Group()
       const figSrc = ensureTestFigure()
@@ -673,7 +706,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // height as the real figure would be.
         const tgt = figBase
         const figMat = new THREE.MeshStandardMaterial({
-          color: opts.animation ? AID.marker : AID.figure,
+          color: opts.marker ? AID.marker : AID.figure,
           transparent: true, opacity: 0.85,
         })
         const body = new THREE.Mesh(
@@ -933,27 +966,35 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         })
       }
     }
-    // Animation markers: room markers AND the props' seat/stand spots, both
-    // already composed into world coordinates by the server. A figure with
-    // the marker's clip stands there, numbered per room.
+    // PLACES (plan-posen-plaetze.md § 4): room markers AND the props' places,
+    // both already composed into world coordinates by the server — the
+    // anchor and ONE slot point per unit of capacity. A test figure sits on
+    // every slot, playing the default pose of the marker's place type
+    // (`defaultKindOf`), numbered per room; a multi-slot place counts its
+    // slots after the dot. The pose cycler per marker is a later step.
     const markerNo = new Map<string, number>()
     for (const marker of sc?.markers || []) {
       const lv = levelOfRoom.get(marker.room_id)
       if (lv !== undefined && !visibleLevel(lv)) continue
       const n = (markerNo.get(marker.room_id) || 0) + 1
       markerNo.set(marker.room_id, n)
-      placeFigure({
-        x: marker.at_world[0],
-        // y_world is the SURFACE; the figure's root sits root_offset below it
-        // (a seated body touches at the buttocks). ONE routine for the 3D
-        // client, this preview and the prop viewer — the number comes from the
-        // payload, never from a measurement taken here.
-        y: figureRootY(marker.y_world, figBase, marker.animation,
-                       marker.root_offset),
-        z: marker.at_world[1],
-        animation: marker.animation, facing: marker.facing,
-        tilt: marker.tilt, roll: marker.roll,
-        label: `${n} · ${marker.animation}`,
+      const kind = defaultKindOf(marker.group)
+      const slots = marker.slots
+      const name = marker.label || marker.group
+      slots.forEach(([sx, sz], i) => {
+        placeFigure({
+          x: sx,
+          // y_world is the SURFACE; the figure's root sits root_offset below it
+          // (a seated body touches at the buttocks). ONE routine for the 3D
+          // client, this preview and the prop viewer — the number comes from
+          // the payload, never from a measurement taken here.
+          y: figureRootY(marker.y_world, figBase, kind, marker.root_offset),
+          z: sz,
+          animation: kind, facing: marker.facing,
+          tilt: marker.tilt, roll: marker.roll,
+          marker: true,
+          label: slots.length > 1 ? `${n}.${i + 1} · ${name}` : `${n} · ${name}`,
+        })
       })
     }
 

@@ -3,8 +3,9 @@ import * as api from './api';
 import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
-import { activityToClipKind, FigureLibrary } from './scene/figures';
-import { animFamily, matchAnimKind } from './scene/clipCoverage';
+import { FigureLibrary } from './scene/figures';
+import { animFamily } from './scene/clipCoverage';
+import { slotFor } from './scene/placeSlot';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
   groundScope, slideBlocked, slopeBlocks, terrainBlocks, terrainPace, walkDir,
@@ -1953,6 +1954,9 @@ async function startApp(username: string, role: string) {
   async function pollWorldMap() {
     let map: WorldMap;
     const rev = viewRev;
+    // WHEN this poll was asked, so a seat the avatar has just stood up from
+    // can be told apart from a payload that still shows it (`reconcileAvatarPlace`).
+    const polledAt = performance.now();
     try {
       map = await api.getWorldMap(showAll);
       // The view was switched while this was in flight (the admin's "show all"):
@@ -1966,6 +1970,7 @@ async function startApp(username: string, role: string) {
       takeRoomsFrom(map);
       updatePins(map);
       refreshSelection(map);
+      reconcileAvatarPlace(map, polledAt); // server seated the avatar? (places § 4)
       reconcileAvatarPos(map);    // server moved the avatar? (E4-T5)
       announceSceneProblems(map); // what the composer found wrong (§ 4.3)
     } catch (e) {
@@ -2230,42 +2235,40 @@ async function startApp(username: string, role: string) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);
           const spots = tile.roomSpots.get(inRoom);
-          // Aktivitäts-Animation entscheidet die Stellfläche. Kuratierte
-          // Marker (AV3D-11) schlagen die Heuristik aus der Modell-Abtastung.
-          const kind = c.activity_animation || activityToClipKind(c.activity || '');
-          // Marker und Kind treffen sich über die FAMILIE (`matchAnimKind`):
-          // a marker authored `walk` serves a character on `walk-cmu` and the
-          // other way round — the exact kind still wins wherever it exists.
-          // Without it the pose catalog's `walk` → `walk-cmu` rename of
-          // 2026-08-24 silently unhooked every marker authored before it.
-          const byKind = tile.roomMarkers.get(inRoom);
-          const markerKind = byKind ? matchAnimKind([...byKind.keys()], kind) : '';
-          const marked = markerKind ? byKind!.get(markerKind) : undefined;
+          // WHERE the figure stands is the server's word first: a character
+          // the server SEATED (plan-posen-plaetze.md § 4) carries `place`,
+          // and the seat is looked up by marker ID — no clip kind is matched
+          // against a marker any more (the kind-keyed markers of AV3D-11 are
+          // gone). Only a character WITHOUT a place still falls down the
+          // heuristic ladder below: sampled sit/lie surfaces by the family of
+          // its animation, then the room's free stands, then the huddle.
+          const kind = c.activity_animation || '';
+          const held = c.place ? tile.roomMarkers.get(inRoom)?.get(c.place.id) : undefined;
           const sit = tile.roomSitSpots.get(inRoom);
           const lieDown = tile.roomLieSpots.get(inRoom);
-          // Die Stellflächen-Wahl läuft über dieselbe Familie — `sit-cmu` ist
-          // ein Sitzen und gehört auf die Sitz-Flächen.
+          // The surface choice runs over the FAMILY — `sit-cmu` is a sitting
+          // and belongs on the sit surfaces.
           const family = animFamily(kind);
           const pool = family === 'lie' ? (lieDown?.length ? lieDown : sit)
             : family === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
-          if (marked?.length) {
-            // kuratierter Marker: Position, Blickrichtung UND Neigung
-            const m = marked[idx % marked.length];
-            pos = m.p.clone();
-            if (m.rotation !== undefined) {
+          if (held && c.place) {
+            // The server seated this figure: its slot, its facing, its lean —
+            // nothing is chosen here.
+            pos = slotFor(held, c.place.slot).clone();
+            if (held.rotation !== undefined) {
               // `facing` is TILE-LOCAL like every other payload angle, and a
               // gaze is a DIRECTION: it turns with the footprint but is not
               // shifted by its centre. The position two lines up went through
-              // `tileToWorld`; without the same turn here a curated figure on
+              // `tileToWorld`; without the same turn here a seated figure on
               // a rotated location sits in the right chair looking off by the
               // location's yaw. The counter-sense of `facing` itself
               // (scene_recipe.py `_marker_facing`) is untouched — this changes
               // the FRAME, not the convention.
-              const a = THREE.MathUtils.degToRad(m.rotation);
+              const a = THREE.MathUtils.degToRad(held.rotation);
               const dir = tileDirToWorld(tile, Math.sin(a), Math.cos(a));
               face = new THREE.Vector3(dir.x, 0, dir.z);
             }
-            if (m.tilt || m.roll) lean = { tilt: m.tilt || 0, roll: m.roll || 0 };
+            if (held.tilt || held.roll) lean = { tilt: held.tilt || 0, roll: held.roll || 0 };
           } else if (pool?.length) {
             pos = pool[idx % pool.length].clone();
           } else if (spots?.length) {
@@ -3213,6 +3216,17 @@ async function startApp(username: string, role: string) {
   /** True while the figure moved since the last report — the flag that turns
    *  the "one final report on stop" into a single call instead of a stream. */
   let posDirty = false;
+  /** True while the server has the avatar on a PLACE (plan-posen-plaetze.md
+   *  § 4, `reconcileAvatarPlace`): no position reports, and the first
+   *  steering input stands it up. */
+  let avatarSeated = false;
+  /** `<place id>#<slot>` the figure was last snapped onto — a poll repeating
+   *  the same seat must not re-snap a figure that is already sitting there. */
+  let seatedKey = '';
+  /** When the last stand-up was ACKNOWLEDGED by the server (`performance.now()`);
+   *  `Infinity` while the release is in flight. A poll asked before that
+   *  moment may still carry the old seat and is not believed. */
+  let standUpDoneAt = 0;
   /** Reason of the last refusal and until when it stays quiet. */
   let quietReason = '';
   let quietUntil = 0;
@@ -3360,6 +3374,14 @@ async function startApp(username: string, role: string) {
   function tickPosReport(pos: { x: number; z: number }): void {
     if (posInFlight) return;
     if (!posDirty) return;
+    // A SEATED avatar reports nothing (plan-posen-plaetze.md § 4), for the
+    // same reason a pair interaction reports nothing (`npcs.inInteraction`
+    // at the callers): the server put the figure on that point, and a
+    // position write is how a seat is RELEASED — telling the server its own
+    // seat back would stand the avatar up. The stand-up goes through
+    // `postActivity({activity: ''})` in the steering hook, and the first
+    // report follows the first step.
+    if (avatarSeated) return;
     if (performance.now() - lastReportAt < POS_REPORT_MS) return;
     void reportPos(Math.round(pos.x * 100) / 100, Math.round(pos.z * 100) / 100);
     posDirty = false;
@@ -3575,6 +3597,25 @@ async function startApp(username: string, role: string) {
         else { dir = { x: to.x, z: to.z }; reach = to.dist; }
       }
     }
+    // STANDING UP (plan-posen-plaetze.md § 4): the first steering input while
+    // seated — a key or a click order — releases the place on the server,
+    // ONCE and before the first step. The figure walks straight away (no
+    // round trip stands between the key and the picture); the server clears
+    // pose and place, and its next worldmap row carries no `place`. Until
+    // that answer is in, a poll that still shows the old seat is ignored
+    // (`standUpDoneAt` in `reconcileAvatarPlace`) — otherwise the poll in
+    // flight would snap the figure back into the chair it just left. A
+    // refused release (the toast says why) leaves the server's seat standing,
+    // and the next poll seats the figure again: the server's word.
+    if (dir && avatarSeated) {
+      avatarSeated = false;
+      seatedKey = '';
+      standUpDoneAt = Infinity;
+      npcs.setPlayerPose(avatarName, null, null);
+      void api.postActivity({ activity: '' })
+        .then(() => { standUpDoneAt = performance.now(); })
+        .catch((e) => { standUpDoneAt = 0; uiActions.toast?.(String(e)); });
+    }
     if (!dir) {
       // Standing still is when the FINAL report of a walk goes out — the
       // server's last word about where the avatar is must be where it really
@@ -3714,6 +3755,64 @@ async function startApp(username: string, role: string) {
       const p = new THREE.Vector3(me.pos.x, groundY(me.pos.x, me.pos.z), me.pos.z);
       engine.flyTo(p, engine.targetDist);
     }
+  }
+
+  // --- The avatar's PLACE (plan-posen-plaetze.md § 4) ------------------------
+  // The server seats a character; the worldmap row says so (`place`), and
+  // the figure is drawn on that slot — for an NPC by `computeNpcStates`, for
+  // the steered avatar here, because `npcs.update()` deliberately stops
+  // placing the player-driven figure (its position is the steering hook's).
+  // The three state variables live with the report state above
+  // (`avatarSeated`, `seatedKey`, `standUpDoneAt`).
+
+  /** Put the steered figure on the seat the server says it holds, once per
+   *  seat — with the place's facing and lean, the way an NPC gets them from
+   *  `computeNpcStates`. Nothing is chosen here: the id and the slot are the
+   *  server's, the slot point is the payload's (`slotFor`). */
+  function reconcileAvatarPlace(map: WorldMap, polledAt: number): void {
+    const me = map.characters.find((c) => c.name === avatarName);
+    const place = me?.place ?? null;
+    if (!place || polledAt < standUpDoneAt) {
+      // Not seated (any more): the server released the place — by our own
+      // stand-up, by a pose change, or behind the player's back. The figure
+      // keeps standing where it is; only the seat's pose comes off it.
+      if (seatedKey) npcs.setPlayerPose(avatarName, null, null);
+      avatarSeated = false;
+      seatedKey = '';
+      return;
+    }
+    avatarSeated = true;
+    // Outside the embodied mode the avatar is placed like every other figure,
+    // from its row, by `npcs.update()` — the seat included. The key is
+    // dropped so that taking control again re-applies the seat's pose:
+    // `takeOver` clears the figure's facing, and a poll repeating the same
+    // seat would otherwise leave the sitter staring at its neighbours.
+    if (getGameState().mode !== 'embodied') { seatedKey = ''; return; }
+    const key = `${place.id}#${place.slot}`;
+    if (key === seatedKey) return;
+    const tile = me?.location_id ? tiles.get(me.location_id) : undefined;
+    const held = tile?.roomMarkers.get(place.room_id)?.get(place.id);
+    // Scene not mounted yet (the interior opens on approach): the next poll
+    // tries again, `seatedKey` stays empty on purpose.
+    if (!tile || !held) return;
+    seatedKey = key;
+    // Whatever the figure was walking towards is void — it sits now. The
+    // snap is a hard placement like a teleport correction: the seat is a
+    // point, not a goal to walk at.
+    cancelRoute();
+    walkIn = null;
+    correction = null;
+    npcs.snapPlayerTo(avatarName, slotFor(held, place.slot).clone());
+    let face: THREE.Vector3 | null = null;
+    if (held.rotation !== undefined) {
+      // Same frame rule as the NPC placement: `facing` is tile-local, a gaze
+      // turns with the footprint (see `computeNpcStates`).
+      const a = THREE.MathUtils.degToRad(held.rotation);
+      const dir = tileDirToWorld(tile, Math.sin(a), Math.cos(a));
+      face = new THREE.Vector3(dir.x, 0, dir.z);
+    }
+    npcs.setPlayerPose(avatarName, face,
+      held.tilt || held.roll ? { tilt: held.tilt || 0, roll: held.roll || 0 } : null);
   }
 
   // --- Changing rooms on foot (E3-T6) ---------------------------------------

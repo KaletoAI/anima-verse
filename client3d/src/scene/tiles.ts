@@ -9,6 +9,7 @@ import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
 import type { SubmergedGhost } from './submergedGhost';
+import type { PlaceEntry } from './placeSlot';
 
 // --- The FOOTPRINT of a location (contract v6 "Gebiete", § A1.1) -------------
 //
@@ -434,8 +435,8 @@ export interface SwingingDoor {
    *  kept so a tier swap can hang the pivot again without the spec in hand. */
   leafBbox?: { min: [number, number, number]; max: [number, number, number] };
   fixEuler?: { x?: number; y?: number; z?: number };
-}
   hinge: 'left' | 'right';
+}
 
 /**
  * THE FLOOR OF ONE ROOM of a mounted scene, as the spot derivation reads it.
@@ -540,34 +541,22 @@ export interface Tile {
    *  entry into centre, stands and furniture. It replaced the holder groups the
    *  6 x 6 raycast raster was shot from. */
   roomFloors: Map<string, RoomFloor>;
-  /** freie Stellflächen im Raum-Modell (Welt-Koordinaten auf Bodenhöhe) */
+  /** free stands in the room (world coordinates at floor height) */
   roomSpots: Map<string, THREE.Vector3[]>;
-  /** erkannte Sitzflächen (Möbelhöhe, kleine Flächen) */
+  /** detected sit surfaces (furniture height, small faces) */
   roomSitSpots: Map<string, THREE.Vector3[]>;
-  /** erkannte Liegeflächen (Möbelhöhe, große zusammenhängende Flächen) */
+  /** detected lie surfaces (furniture height, large contiguous faces) */
   roomLieSpots: Map<string, THREE.Vector3[]>;
-  /** kuratierte Animations-Marker (AV3D-11): Raum -> Clip-Kind -> Punkte
-   *  (rotation = Blickrichtung in Grad, offsetY additiv zur Auflagehöhe;
-   *  fixed = Höhe ist fertig komponiert (prop_markers) und wird von der
-   *  Abtastung nicht mehr verfeinert) */
-  roomMarkers: Map<string, Map<string, { p: THREE.Vector3; rotation?: number;
-    /** Neigung aus dem Payload (Grad): Kopf hoch/tief bzw. seitlich kippen —
-     *  ohne sie kann eine Figur nur senkrecht stehen. */
-    tilt?: number; roll?: number;
-    /** Absatz der Figurenwurzel unter der Fläche (Welt-Meter, Server) —
-     *  beim Nachjustieren gegen die abgetastete Oberfläche erneut abziehen. */
-    drop: number;
-    offsetY: number; fixed?: boolean;
-    /** Storey of the room this marker belongs to — only 0 is carried by the
-     *  terrain, so only there does the lift below ever become non-zero. */
-    level: number;
-    /** THE STOREY-0 TERRAIN LIFT baked into `p.y`, for `fixed` markers the
-     *  same bookkeeping the placements keep (§ A16.9): the height field moves,
-     *  and a seat mark that stayed behind leaves the sitter in the air where
-     *  the chair used to be. A room marker is re-derived absolutely by
-     *  `deriveRoomSpots` and does not read it. */
-    lift: number }[]>>;
-  /** komplette Raum-Gruppe je Layout-Raum (für den Fokus-Modus) */
+  /** The PLACES of the location (plan-posen-plaetze.md § 4): room → marker
+   *  id → entry with its slot points in world metres (`PlaceEntry`). Keyed by
+   *  the marker ID, never by a clip kind: which character sits where is the
+   *  server's word (`MapCharacter.place`), and the client only looks the
+   *  named seat up. One entry map hangs under the room id AND the room name.
+   *  `fixed` (prop markers) = height finished as composed, the floor sampling
+   *  leaves it alone; a room marker is re-derived against the room's floor by
+   *  `deriveRoomSpots`. */
+  roomMarkers: Map<string, Map<string, PlaceEntry>>;
+  /** the whole room group per layout room (for the focus mode) */
   roomGroups: Map<string, THREE.Group>;
   /** Room rectangles in TILE-LOCAL metres (E4: a turned rectangle is not a
    *  rectangle, so readers turn their query point with `worldToTile` instead) */
@@ -1002,11 +991,12 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   //
   // WRITTEN ABSOLUTELY, never as a delta: a model tier swap re-derives the same
   // room (`setSceneModelTier`), and a relative correction would apply twice.
-  // `fixed` markers (prop markers) are finished and are never touched.
-  for (const entries of tile.roomMarkers.get(roomId)?.values() ?? []) {
-    for (const e of entries) {
-      if (!e.fixed) e.p.setY(floorY - e.drop + e.offsetY);
-    }
+  // `fixed` markers (prop markers) are finished and are never touched. Every
+  // SLOT of a place is written, in place — a figure the server seated holds
+  // a reference to its slot vector and follows it.
+  for (const e of tile.roomMarkers.get(roomId)?.values() ?? []) {
+    if (e.fixed) continue;
+    for (const s of e.slots) s.setY(floorY - e.drop + e.offsetY);
   }
 }
 

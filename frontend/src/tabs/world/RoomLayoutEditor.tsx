@@ -1510,7 +1510,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     } else if (clickMode === 'marker' && markerKind) {
       updateLayout(room.id, {
         markers: [...(stored?.markers || []),
-                  { at: [px, py] as [number, number], animation: markerKind }],
+                  { at: [px, py] as [number, number], group: markerKind }],
       })
       setMarkerSel((stored?.markers || []).length)
     } else if (ground) {
@@ -2636,8 +2636,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               })() : null}
               {(content?.markers || []).map((m, i) => (
                 <span
-                  key={`${m.animation}-${i}`}
-                  title={`${i + 1} · ${m.animation}`}
+                  key={`${m.group}-${i}`}
+                  title={`${i + 1} · ${m.group}`}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     // An armed tool owns the click — it must reach the room
@@ -3654,7 +3654,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         return (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="ga-hint" style={{ fontWeight: 600 }}>
-              🎯 {markerSel + 1} · {marker.animation}:
+              🎯 {markerSel + 1} · {marker.group}:
             </span>
             <button
               type="button"

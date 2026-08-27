@@ -669,9 +669,9 @@ const LEAF_NODE = 'leaf';
 
 const LEAF_PIVOT = 'leaf_pivot';
 
- * (spec-picture-props.md § 6) and return that group with its axis — or
 /**
  * Hang the placed model's `leaf` node in a pivot group on its hinge edge
+ * (spec-picture-props.md § 6) and return that group with its axis — or
  * `undefined` when the model has no such node, in which case the whole
  * group swings as before.
  *
@@ -754,8 +754,8 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
     swingNode: hung?.node,
     swingAxis: hung?.axis,
     leafBbox,
-    hinge,
     fixEuler,
+    hinge,
   });
 }
 

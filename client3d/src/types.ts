@@ -1,23 +1,14 @@
-/** AV3D-11: Animations-Marker im Raum (generisches Clip-Vokabular). */
-export interface RoomMarker {
-  at: [number, number];    // Fraktion der Raum-Grundfläche
-  animation: string;       // Clip-Kind (sit, lie, dance, ...)
-  /** Blickrichtung der Figur in Grad: 0 = Süd, 90 = Ost, 180 = Nord, 270 = West */
-  rotation?: number;
-  /** Höhen-Feinjustierung in Metern, additiv zur abgetasteten Auflagehöhe */
-  offset_y?: number;
-}
-
-/** AV3D-2: Platzierung eines Raums relativ zur Gebäude-Grundfläche. */
+/** AV3D-2: placement of a room relative to the building footprint. The room
+ *  markers (places) are NOT read from here — the client takes them from the
+ *  scene payload's `markers[]`, finished in world metres (§ B). */
 export interface RoomLayout {
-  x: number;               // linke obere Ecke (Fraktion 0..1)
+  x: number;               // top-left corner (fraction 0..1)
   y: number;
-  w: number;               // Breite/Tiefe (Fraktion 0..1)
+  w: number;               // width/depth (fraction 0..1)
   d: number;
-  level?: number;          // Etage: 0 = EG, negativ = Keller
-  /** Drehung des Raum-Inhalts um die Hochachse in Grad */
+  level?: number;          // storey: 0 = ground floor, negative = basement
+  /** Turn of the room content around the vertical axis in degrees */
   rotation?: number;
-  markers?: RoomMarker[];  // AV3D-11
   /** Anker des Diorama-Modells als Fraktionen des Raum-Rechtecks
    *  (Nachtrag 2026-07-24); fehlt = zentriert */
   model_at?: [number, number];
@@ -256,6 +247,11 @@ export interface MapCharacter {
   travel?: MapTravel | null;
   /** running PAIR interaction (§ A8a); null/absent when there is none */
   interaction?: MapInteraction | null;
+  /** The place the SERVER seated this character on (plan-posen-plaetze.md
+   *  § 4): the client draws the figure on that slot and chooses nothing.
+   *  `x`/`z` are the slot's world metres as the server composed them (the
+   *  same point as the marker's `slots[slot]` in the scene payload). */
+  place?: { id: string; slot: number | 'pair'; x: number; z: number; facing?: number; room_id: string } | null;
   avatar_url?: string;
 }
 

@@ -352,23 +352,40 @@ export interface SceneCutPlane {
   constant: number
 }
 
+/** A PLACE of the location (plan-posen-plaetze.md § 4, payload § B): a
+ *  marker names a place TYPE (`group` — the pose vocabulary it speaks), not a
+ *  clip. Who sits on it is the server's decision and rides in the character's
+ *  worldmap row (`place: {id, slot}`); a renderer looks the marker up by `id`
+ *  and draws the figure on the named slot — it chooses nothing. */
 export interface SceneMarker {
   room_id: string
+  /** Stable marker id; for a prop marker `"<placement.id>/<marker.id>"`. */
+  id: string
+  /** Place type (pose-catalog group key, e.g. `seat`, `bed`, `floor`). */
+  group: string
+  /** Human label the server composed for this place (placement label or the
+   *  group's own). */
+  label: string
+  /** How many figures the place takes — `slots.length`. */
+  capacity: number
+  /** The anchor point in the payload's world metres. */
   at_world: [number, number]
-  /** Die OBERFLÄCHE, die der Marker benennt (Sitzfläche, Matratze, Boden). */
+  /** One point per unit of capacity, `spacing_m` apart across the facing;
+   *  capacity 1 ⇒ `slots == [at_world]`. Nothing downstream computes a slot. */
+  slots: [number, number][]
+  /** The SURFACE the marker names (seat, mattress, floor). */
   y_world: number
-  animation: string
-  /** Wie weit UNTER dieser Fläche die Figurenwurzel sitzt, in Welt-Metern
-   *  (2026-07-28). Ein sitzender Körper berührt am Gesäß, nicht an den Füßen —
-   *  wie tief, ist eine Eigenschaft des CLIPS und stand bisher nur im
-   *  3D-Client, und dort nur für Raum-Marker. Fehlt/0 = die Wurzel liegt auf
-   *  der Fläche. Jeder Renderer zieht ihn ab, NACHDEM er die Fläche kennt. */
+  /** How far BELOW that surface the figure root sits, in world metres
+   *  (2026-07-28). A seated body touches at the buttocks, not at the feet —
+   *  how deep is a property of the place type, composed by the server from
+   *  the group's `root_drop`. Absent/0 = the root lies on the surface. Every
+   *  renderer subtracts it AFTER it knows the surface. */
   root_offset?: number
   facing?: number
-  /** Neigung der Figur in Grad (±90), NACH dem Facing im Figuren-System:
-   *  `tilt` = Kopf hoch/tief, `roll` = seitlich kippen. Ohne die beiden kann
-   *  eine Figur nur senkrecht stehen — schräg auf dem Sand liegen ging nicht
-   *  (User-Befund 2026-07-28). Fehlt = 0. */
+  /** Lean of the figure in degrees (±90), AFTER the facing in the figure's
+   *  own frame: `tilt` = head up/down, `roll` = sideways. Without the two a
+   *  figure can only stand upright — lying askew on the sand was impossible
+   *  (user finding 2026-07-28). Absent = 0. */
   tilt?: number
   roll?: number
   source: 'room' | 'prop'

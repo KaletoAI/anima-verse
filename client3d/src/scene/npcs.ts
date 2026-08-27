@@ -417,6 +417,21 @@ export class NpcManager {
     npc.pace = 1;
   }
 
+  /** The standing pose of the player-driven figure (plan-posen-plaetze.md
+   *  § 4): the facing and lean of the PLACE the server seated it on, or
+   *  `null`/`null` when it stands up. `update()` stops writing these for a
+   *  steered figure (they are placement decisions of the server view), so
+   *  the seat is the one case that has to hand them in from outside — a
+   *  seated avatar staring at its neighbours instead of along its chair
+   *  would look wrong exactly where every NPC looks right. */
+  setPlayerPose(name: string, face: THREE.Vector3 | null,
+                lean: { tilt: number; roll: number } | null) {
+    const npc = this.npcs.get(name);
+    if (!npc) return;
+    npc.face = face;
+    npc.figure?.setLean(lean?.tilt ?? 0, lean?.roll ?? 0);
+  }
+
   /** Show the goal of a click-to-walk order on the ground (E3-T4); null takes
    *  the marker away again (arrival, cancel, leaving the mode). The ring hangs
    *  in the manager's own group, NOT in a figure — it marks a place. */
