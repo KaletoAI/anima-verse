@@ -117,9 +117,10 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     act_list = ""
     if loc_id:
         try:
-            from app.models.world import get_room_activity_hint
+            from app.core import places
             from app.models.character import get_character_current_room
-            act_list = get_room_activity_hint(loc_id, get_character_current_room(character_name))
+            act_list = places.room_offer(character_name, loc_id,
+                                         get_character_current_room(character_name) or "")
         except Exception:
             act_list = ""
     self_outfit = render_outfit(character_name=character_name).get("full", "") or "(nothing equipped)"
@@ -146,7 +147,7 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
             f"Decide which tools to call based on the conversation. "
             f"If no tools are needed, respond with: NONE\n{warn}{lang_block}"
             f"\nKnown locations: {loc_list}\n"
-            + (f"What people typically do here: {act_list}\n" if act_list else "")
+            + (f"{act_list}\n" if act_list else "")   # the offer brings its own headings
             + outfit_block)
 
 

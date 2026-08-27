@@ -1152,15 +1152,15 @@ def location_presence_split(character_name: str, location_id: str,
 def _build_activity_hint_block(character_name: str,
                                location_id: str,
                                room_id: str) -> str:
-    """Free-text activity direction of the current room (fallback:
-    location) — "what one typically does here". The LLM decides freely;
-    there is no activity library anymore (renamed from the library-era
-    available_activities_block)."""
+    """The room's place offer (``places.room_offer``): free seats with the
+    poses they allow, busy ones by name, the room's free-text hint as the
+    tail. The LLM decides freely; there is no activity library anymore
+    (renamed from the library-era available_activities_block)."""
     if not location_id:
         return ""
     try:
-        from app.models.world import get_room_activity_hint
-        return get_room_activity_hint(location_id, room_id)
+        from app.core import places
+        return places.room_offer(character_name, location_id, room_id or "")
     except Exception as e:
         logger.debug("activity hint block failed for %s: %s", character_name, e)
         return ""

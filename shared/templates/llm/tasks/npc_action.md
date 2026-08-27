@@ -10,7 +10,7 @@ placeholders:
   current_room_name: Display name of that room (empty for an NPC with a home area)
   current_activity: What the NPC is doing right now (may be empty)
   game_time_label: The world's date and time as a label
-  rooms: Rooms of this place — list of {id, name, hint}; empty for an NPC with a home area
+  rooms: Rooms of this place — list of {id, name, hint, places}; empty for an NPC with a home area
   home: The NPC's home area in words ("within 60 m of the Old Mill"); empty = the ordinary room variant
 ---
 ## system
@@ -42,7 +42,7 @@ Hard rules:
 
 What makes a good answer:
 - The standing task is the anchor. Most turns are a variation of it, not a departure from it.
-- The room's hint says what one does there. A move that carries the standing task into a fitting room reads right; wandering into a room that has nothing to do with the task does not.
+- The room's hint says what one does there. A move that carries the standing task into a fitting room reads right; wandering into a room that has nothing to do with the task does not. `[…]` after the hint says how many free places of each type the room has — do not send someone to sit where nothing is free.
 - The time of day matters: early morning is preparation, midday is work, late evening is winding down.
 
 Answer exactly in this shape:
@@ -64,7 +64,7 @@ Right now: in {{ current_room_name }} ({{ current_room_id }}){% if current_activ
 Time: {{ game_time_label }}
 
 Rooms of this place:
-{% for room in rooms %}- {{ room.id }} — {{ room.name }}{% if room.hint %}: {{ room.hint }}{% endif %}
+{% for room in rooms %}- {{ room.id }} — {{ room.name }}{% if room.hint %}: {{ room.hint }}{% endif %}{% if room.places %} [{{ room.places }}]{% endif %}
 {% endfor %}
 Decide where {{ npc_name }} is now and what they are doing.
 {% endif %}

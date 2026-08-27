@@ -46,7 +46,7 @@
      condition_reminder
      tool_instructions  — pre-built tool spec block (built externally; complex)
      known_locations    — comma-separated location names (when locations_enabled)
-     known_activities   — comma-separated activity names (when activities_enabled)
+     known_activities   — the room's place offer: free places with their poses, busy ones by name, the free-text hint as the tail (when activities_enabled)
 
    FLAGS:
      tools_enabled, mood_tracking_enabled, intent_tracking_enabled,
@@ -193,7 +193,7 @@ You may also use other locations not in this list if the roleplay requires it.
 {% if known_activities %}
 
 Activity change: If the roleplay clearly changes your activity, add this line at the very end (BEFORE any location line): **I do <activity name>**
-Available activities at this location: {{ known_activities }}
+{{ known_activities }}
 Use the EXACT activity name from the list above. You may also use other activities not in this list if the roleplay requires it.
 {% endif %}
 {% if intent_tracking_enabled %}

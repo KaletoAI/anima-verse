@@ -80,6 +80,23 @@ Hand-derived expectations:
       set_pose_intent("Eve", "sitting") still stores the pose and still
       publishes activity_changed with place None — a seat failure degrades
       exactly like the no-marker case, never into a lost pose.
+  [6] room_offer for Fay (standing, unseated) while Ann sits on s1, Bob and
+      Cid on s2, nobody on b1 — hand-built line by line (plan § 5):
+        Places here:
+        - Seat (occupied by Ann)
+        - Seat (occupied by Bob, Cid)
+        - Bed (free): sleeping
+        Anywhere here: standing
+        Also typical here: reading nooks
+      (s1 and s2 are both room markers labelled "Seat" but different places →
+      two lines; the pair pose "cuddling" needs 2 free seat slots → absent;
+      "reading" is a seat pose → absent because no seat is free; the lounge's
+      activity_hint "reading nooks" closes the block.)
+      room_offer_short == "seat 0 free, bed 1 free".
+      place_label("Ann") == "Seat"; place_label("Fay") == "".
+      The setup restores the full layout (stage 3 dropped b1) and sets the
+      room hint straight in the world data — there is no setter,
+      activity_hint is a column of the rooms table.
 
 Usage:  ./.venv/bin/python scripts/smoke_places.py
 """
@@ -423,6 +440,41 @@ check("… and the SSE was published with place None",
       and (last_event("Eve") or {}).get("place", "missing") is None, str(last_event("Eve")))
 clear_pose_intent("Eve")
 state_events.publish = _orig_publish
+
+# ── [6] the offer the LLM reads ─────────────────────────────────────────
+print("\n[6] the offer the LLM reads")
+write_layout(MARKERS)                      # b1 is back
+_data = _load_world_data()
+for _loc in _data["locations"]:
+    if _loc["id"] == HOUSE:
+        _loc["rooms"][0]["activity_hint"] = "reading nooks"
+_save_world_data(_data)
+places.invalidate()
+for _n in ("Ann", "Bob", "Cid", "Dan", "Eve"):
+    clear_pose_intent(_n)                  # nobody seated, no pose
+check("Ann → s1", places.assign("Ann", "sitting", prefer="s1") == field("s1", 0))
+check("Bob → s2/0", places.assign("Bob", "sitting", prefer="s2") == field("s2", 0))
+check("Cid → s2/1", places.assign("Cid", "sitting", prefer="s2") == field("s2", 1))
+person("Fay", -3.5, -3.5)
+offer = places.room_offer("Fay", HOUSE, "lounge")
+EXPECTED_OFFER = "\n".join([
+    "Places here:",
+    "- Seat (occupied by Ann)",
+    "- Seat (occupied by Bob, Cid)",
+    "- Bed (free): sleeping",
+    "Anywhere here: standing",
+    "Also typical here: reading nooks",
+])
+for _i, (_want, _got) in enumerate(zip(EXPECTED_OFFER.split("\n"),
+                                       offer.split("\n") + [""] * 6)):
+    check(f"offer line {_i + 1}: {_want}", _got == _want, repr(_got))
+check("offer has exactly six lines", offer == EXPECTED_OFFER, repr(offer))
+short = places.room_offer_short(HOUSE, "lounge")
+check("room_offer_short", short == "seat 0 free, bed 1 free", repr(short))
+check("place_label(Ann) == 'Seat'", places.place_label("Ann") == "Seat",
+      repr(places.place_label("Ann")))
+check("place_label(Fay) == ''", places.place_label("Fay") == "",
+      repr(places.place_label("Fay")))
 
 # ── summary ─────────────────────────────────────────────────────────────
 print()

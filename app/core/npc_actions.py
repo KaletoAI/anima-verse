@@ -44,6 +44,7 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+from app.core import places
 from app.core.game_time import GameDuration, GameTime
 from app.core.log import get_logger
 from app.core.timeutils import game_time
@@ -289,7 +290,8 @@ def prompt_vars(name: str) -> Dict[str, Any]:
             continue
         rooms.append({"id": room_id,
                       "name": get_room_name(location_id, room_id),
-                      "hint": get_room_activity_hint(location_id, room_id)})
+                      "hint": get_room_activity_hint(location_id, room_id),
+                      "places": places.room_offer_short(location_id, room_id)})
     if not rooms:
         return {}
 

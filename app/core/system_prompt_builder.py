@@ -216,8 +216,7 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
         list_available_characters,
         get_character_current_location,
         get_character_current_room,
-        get_character_language,
-        get_effective_activity)
+        get_character_language)
     from app.models.account import get_active_character
     from app.models.world import get_room_name
 
@@ -260,10 +259,9 @@ def _load_presence(character_name: str, location_id: str) -> tuple:
 
     for other in others_in_room:
         # Display text again (flavor or catalog key, "Sleeping" when asleep) —
-        # what the others SEE, never the key an image or clip is picked with.
-        other_act = get_effective_activity(other) or ""
-        suffix = f" ({other_act})" if other_act else ""
-        lines.append(f"- {other} is here{suffix}")
+        # what the others SEE, never the key an image or clip is picked with —
+        # plus the place they hold ("in the bed"; a standing spot names nothing).
+        lines.append(f"- {other} is here{_presence_suffix(other)}")
 
     # Every room resolves by name, the location's ground among them.
     for other, other_room in elsewhere:
@@ -283,7 +281,7 @@ def _load_presence_in_the_open(character_name: str) -> tuple:
     them into the scene."""
     from app.core.perception import nearby_in_the_open
     from app.models.account import get_active_character
-    from app.models.character import get_character_pos, get_effective_activity
+    from app.models.character import get_character_pos
 
     pos = get_character_pos(character_name)
     if not pos:
@@ -304,10 +302,21 @@ def _load_presence_in_the_open(character_name: str) -> tuple:
     for other in names:
         if other == player_char:
             continue
-        other_act = get_effective_activity(other) or ""
-        suffix = f" ({other_act})" if other_act else ""
-        lines.append(f"- {other} is here{suffix}")
+        lines.append(f"- {other} is here{_presence_suffix(other)}")
     return lines, [], bool(names)
+
+
+def _presence_suffix(other: str) -> str:
+    """`` (reading, in the seat)`` — the activity the others see and the
+    place held (``places.place_label``); ``""`` when there is neither."""
+    from app.core import places
+    from app.models.character import get_effective_activity
+    bits = [get_effective_activity(other) or ""]
+    lbl = places.place_label(other)
+    if lbl:
+        bits.append(f"in the {lbl.lower()}")
+    bits = [b for b in bits if b]
+    return f" ({', '.join(bits)})" if bits else ""
 
 
 def _load_events(location_id: str, character_name: str = "") -> str:

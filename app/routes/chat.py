@@ -1151,12 +1151,13 @@ async def chat(request: Request) -> StreamingResponse:
             photographer_mode=_tool_photographer, user_appearance=_tool_user_appearance,
             is_roleplay=is_roleplay_character(current_agent))
         available_tool_names = [t.name for t in agent_tools]
-        # Locations + Activities fuer Fallback-Marker (Tool-LLM muss erraten
-        # koennen welche Location/Activity gemeint ist wenn RP-LLM es vergessen hat)
+        # Locations + the room's place offer for the fallback markers (the
+        # tool LLM must be able to guess which location/activity is meant
+        # when the RP LLM forgot to say)
         _tool_loc_id = get_character_current_location(current_agent)
         _tool_loc_list = ", ".join(l.get("name", "") for l in list_locations() if l.get("name"))
         _tool_act_list = _current_activity_hint(current_agent, _tool_loc_id)
-        # Aktuelles Outfit beider Gespraechspartner fuer ChangeOutfit-Kontext
+        # Current outfit of both conversation partners for ChangeOutfit context
         from app.models.account import get_active_character
         _tool_agent_outfit = render_outfit(character_name=current_agent).get("full", "") or "(nothing equipped)"
         _tool_avatar_name = get_active_character() or ""
@@ -1191,7 +1192,7 @@ async def chat(request: Request) -> StreamingResponse:
             f"{_partner_talk_warn}"
             f"{_lang_block}"
             f"\nKnown locations: {_tool_loc_list}\n"
-            + (f"What people typically do here: {_tool_act_list}" if _tool_act_list else "")
+            + (f"{_tool_act_list}" if _tool_act_list else "")   # the offer brings its own headings
             + f"{_outfit_block}"
         )
         logger.debug("Tool-System-Prompt erstellt (%d Zeichen)", len(tool_system_content))
@@ -1617,27 +1618,21 @@ async def chat_stream(task_id: str, request: Request) -> StreamingResponse:
 
 
 # ---------------------------------------------------------------------------
-# Post-Stream Helpers — ausgelagert aus generate() fuer Lesbarkeit
+# Post-stream helpers — moved out of generate() for readability
 # ---------------------------------------------------------------------------
 
 def _current_activity_hint(character_name: str, location_id: str) -> str:
-    """Freitext-Richtung „was man hier tut" aus dem aktuellen Raum (Fallback:
-    Location). Ersetzt die fruehere Activity-Namen-Liste aus der Library —
-    der Raum gibt nur noch eine Richtung vor, das LLM entscheidet frei.
+    """The room's PLACE OFFER — markers first (free seats with their poses,
+    busy ones by name), the room's free-text hint as the tail
+    (``places.room_offer``). Replaces the earlier activity-name list: the
+    room offers, the LLM decides freely.
     """
     if not location_id:
         return ""
     try:
-        from app.models.world import get_location_by_id
-        loc = get_location_by_id(location_id) or {}
-        rid = get_character_current_room(character_name)
-        for r in (loc.get("rooms") or []):
-            if r.get("id") == rid:
-                h = (r.get("activity_hint") or "").strip()
-                if h:
-                    return h
-                break
-        return (loc.get("activity_hint") or "").strip()
+        from app.core import places
+        return places.room_offer(character_name, location_id,
+                                 get_character_current_room(character_name) or "")
     except Exception:
         return ""
 

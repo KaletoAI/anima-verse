@@ -25,7 +25,7 @@
      skill_context_blocks      — Medium: self-contained sections contributed by the character's active skills
      inventory_block           — what the character is carrying
      room_items_block          — visible items in the current room
-     activity_hint_block       — free-text direction what one typically does here
+     activity_hint_block       — the room's place offer: free places with their poses, busy ones by name, the free-text hint as the tail
      daily_schedule_block      — typical-rhythm hint for current hour
      tracker_block             — carried tracker-items revealing target locations
      recent_thoughts           — how this character's OWN last thoughts ENDED,
@@ -91,7 +91,7 @@ Decide based on this and other relevant factors — your rhythm is a guideline, 
 {% endif %}
 {% if activity_hint_block %}
 
-=== What people typically do here ===
+=== Places and activities here ===
 {{ activity_hint_block }}
 This is just inspiration for the location. Use SetActivity to set what you are
 doing right now (free text) — e.g. "leaning against the windowsill" or
