@@ -14,6 +14,7 @@ import { BuildingModelPanel } from './BuildingModelPanel'
 import { RoomLayoutEditor } from './RoomLayoutEditor'
 import { FloorPlanPreview } from './FloorPlanPreview'
 import { RoomModelAdjust } from './RoomModelAdjust'
+import { DoorPropSelect } from './DoorPropPicker'
 import { useScenePreview } from './useScenePreview'
 
 // ── Location editor ────────────────────────────────────────────────────────
@@ -139,6 +140,9 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         description: draft.description,
         rooms: draft.rooms,
         entry_room: draft.entry_room || '',
+        // Always sent, empty included: that is how the place's default door
+        // is taken away again (the server normalizes it through safe_prop_id).
+        default_door_prop_id: draft.default_door_prop_id || '',
         danger_level: draft.danger_level,
         indoor: draft.indoor || '',
         decency: draft.decency,
@@ -595,6 +599,23 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
     && r.id !== GROUND_ROOM_ID)
   const tabFloor = (
     <div className="ga-form">
+      {/* THE PLACE'S OWN DOOR. It belongs beside the plan, not in the general
+          data: it is the fallback every door opening on this plan inherits,
+          and the opening panel below names it in its first option. */}
+      <div className="ga-form-row">
+        <Field
+          label={t('Default door prop')}
+          compact
+          hint={t('Fills every door opening that picks nothing of its own. An opening can override it with its own prop or opt out with “None”.')}
+        >
+          <DoorPropSelect
+            value={draft.default_door_prop_id || ''}
+            onChange={(id) => upd('default_door_prop_id', id)}
+            emptyLabel={t('— no default door —')}
+            width={190}
+          />
+        </Field>
+      </div>
       <div className="ga-loc-twocol ga-loc-twocol--5050">
         <RoomLayoutEditor
           rooms={draft.rooms || []}
@@ -616,6 +637,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           calibrationRoomId={calibration?.roomId || ''}
           onCalibrationAt={(at) => setCalibration((cur) => (cur ? { ...cur, at } : cur))}
           unsaved={dirty}
+          defaultDoorPropId={draft.default_door_prop_id || ''}
         >
           {floorSelRoom?.id ? (
             <RoomModelAdjust

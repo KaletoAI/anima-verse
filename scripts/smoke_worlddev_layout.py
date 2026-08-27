@@ -137,6 +137,36 @@ THE DRAFT — hand-built as an LLM would emit it, and the hand expectations:
       naming a location that does not exist raises too, and a snapshot id with
       a path traversal in it never opens a file.
 
+ [12] THE DOOR PROP SURVIVES THE EDITOR'S SAVE PATH (plan-door-props, v5).
+      The floor-plan editor writes nothing but fields — the three-valued
+      "Door prop" control and the hinge toggle land in `openings[]`, the
+      "Default door prop" in the location. Both go through
+      `update_location_with_extras`, i.e. the same writer `PUT
+      /world/locations/{id}` uses, so what the UI can express is exactly what
+      comes back out. Hand-derived from `world_ops._sanitize_opening` and the
+      `default_door_prop_id` branch of the writer:
+
+        · a door with `prop_id "oak_door"` + `hinge "right"` keeps BOTH —
+          the "Custom" state of the control;
+        · a door with `door_prop "none"` keeps that value and gains no
+          `prop_id` — the "None" state, the one thing that holds the
+          location default out of an opening;
+        · a door with neither is stored with neither: absent fields ARE the
+          "Location default" state, so the control's third value costs no
+          stored key at all;
+        · `hinge "up"` is not one of the two sides -> the key is DROPPED, and
+          an absent `hinge` reads as `left` (`scene_recipe._doorways`:
+          `"right" if … == "right" else "left"`), i.e. junk normalises to the
+          default side instead of refusing the opening;
+        · the location's `default_door_prop_id` runs through
+          `props.safe_prop_id` (`^[a-z0-9][a-z0-9_-]{0,63}$` after
+          strip+lower), so "Plain_Door" is stored as "plain_door" and
+          "../etc/passwd" as "" — a typo can never become a directory name.
+
+      Four openings in, four openings back: none of this is a reason to drop
+      one, and the sanitizer's own fields (edge/at/width/height/sill/type)
+      come back unchanged beside them.
+
 Usage:  ./.venv/bin/python scripts/smoke_worlddev_layout.py
 """
 import os
@@ -450,6 +480,48 @@ raises_value_error("a traversing snapshot id",
                    lambda: la.restore_layout_snapshot("../../etc/passwd"))
 raises_value_error("an unknown snapshot id",
                    lambda: la.restore_layout_snapshot("nope"))
+
+print("[12] the door prop rides the editor's own save path")
+gate = world.add_location("Gatehouse", "A gate with a room over it.",
+                          rooms=[{"name": "Hall", "description": "Cold stone."}])
+GATE_ID = gate["id"]
+HALL = next(r["id"] for r in gate["rooms"] if r.get("name") == "Hall")
+
+
+def _door(edge, **extra):
+    """One 1.0 x 2.1 m door on `edge`, plus whatever the case adds."""
+    return {"edge": edge, "at": 0.5, "width_m": 1.0, "height_m": 2.1,
+            "sill_m": 0, "type": "door", **extra}
+
+
+update_location_with_extras(GATE_ID, {
+    "rooms": [{"id": HALL, "name": "Hall", "description": "Cold stone.",
+               "layout": {"x": 0, "y": 0, "w": 4, "d": 3, "level": 0,
+                          "openings": [
+                              _door("N", prop_id="oak_door", hinge="right"),
+                              _door("S", door_prop="none"),
+                              _door("E"),
+                              _door("W", hinge="up"),
+                          ]}}],
+    "default_door_prop_id": "Plain_Door",
+})
+gate_after = world.get_location_by_id(GATE_ID)
+OPS = next(r for r in gate_after["rooms"]
+           if r["id"] == HALL)["layout"]["openings"]
+check("all four openings survive", len(OPS), 4)
+check("the picked prop and its hinge come back together",
+      OPS[0], _door("N", prop_id="oak_door", hinge="right"))
+check("the explicit 'no prop' comes back, without a prop id",
+      OPS[1], _door("S", door_prop="none"))
+check("'location default' is the ABSENCE of both keys",
+      OPS[2], _door("E"))
+check("a hinge that is neither side is dropped — and absent reads as left",
+      (OPS[3], OPS[3].get("hinge", "left")), (_door("W"), "left"))
+check("the location default is normalized, not stored verbatim",
+      gate_after.get("default_door_prop_id"), "plain_door")
+update_location_with_extras(GATE_ID, {"default_door_prop_id": "../etc/passwd"})
+check("and a traversing id becomes no default at all",
+      world.get_location_by_id(GATE_ID).get("default_door_prop_id"), "")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

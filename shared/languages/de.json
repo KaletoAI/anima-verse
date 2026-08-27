@@ -2246,6 +2246,20 @@
     "Rescan": "Neu scannen",
     "{a} added, {c} closed": "{a} hinzugefügt, {c} geschlossen",
     "Delete improvement": "Verbesserung löschen",
-    "The entry and all its steps are removed. A step that is already running will finish; queued steps are cancelled.": "Der Eintrag und alle seine Schritte werden entfernt. Ein bereits laufender Schritt wird noch zu Ende geführt; wartende Schritte werden abgebrochen."
+    "The entry and all its steps are removed. A step that is already running will finish; queued steps are cancelled.": "Der Eintrag und alle seine Schritte werden entfernt. Ein bereits laufender Schritt wird noch zu Ende geführt; wartende Schritte werden abgebrochen.",
+    "Door prop": "Tür-Prop",
+    "Location default": "Standard des Ortes",
+    "— pick a prop —": "— Prop wählen —",
+    "Which prop fills this door. “Location default” takes the place’s own door, “None” leaves the hole open with the plain leaf, “Custom” hangs the prop picked beside it.": "Welches Prop diese Tür füllt. „Standard des Ortes“ nimmt die Tür des Ortes, „Keine“ lässt die Öffnung mit dem einfachen Türblatt offen, „Eigen“ hängt das daneben gewählte Prop ein.",
+    "The prop hung in THIS opening — it overrides the location default.": "Das Prop in DIESER Öffnung — es sticht den Standard des Ortes.",
+    "Hinge": "Angel",
+    "Left": "Links",
+    "Right": "Rechts",
+    "Which side the door turns about, seen along the wall from the room this opening was cut out of.": "Um welche Seite die Tür schwenkt, entlang der Wand des Raums gesehen, aus dem die Öffnung geschnitten ist.",
+    "Doors": "Türen",
+    "Other props": "Andere Props",
+    "Default door prop": "Standard-Tür-Prop",
+    "Fills every door opening that picks nothing of its own. An opening can override it with its own prop or opt out with “None”.": "Füllt jede Tür-Öffnung, die nichts Eigenes wählt. Eine Öffnung kann es mit einem eigenen Prop übersteuern oder mit „Keine“ abwählen.",
+    "— no default door —": "— keine Standard-Tür —"
   }
 }

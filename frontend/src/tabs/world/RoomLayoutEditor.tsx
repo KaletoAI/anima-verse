@@ -78,6 +78,7 @@ import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { PropVariantPicker } from './PropVariantPicker'
+import { OpeningDoorProp } from './DoorPropPicker'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
@@ -190,6 +191,10 @@ interface RoomLayoutEditorProps {
    *  STORED world have to know: a room that only exists in this draft does
    *  not exist for them. */
   unsaved?: boolean
+  /** The location's `default_door_prop_id` — READ only, so the opening panel
+   *  can name the door an opening inherits when it chooses nothing. The
+   *  field itself is edited on the Floor-plan tab, beside the plan. */
+  defaultDoorPropId?: string
   /** Rendered at the bottom INSIDE the editor's frame — the Floor-plan tab
    *  slots the model adjustment strip of the selected room here. */
   children?: ReactNode
@@ -280,7 +285,7 @@ const atOrigin = (lay: PlacedLayout, ground: boolean): Pt =>
 const storedAt = (lay: PlacedLayout, ground: boolean, p: Pt): Pt =>
   (ground ? p : localToRoom(lay, p))
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, defaultDoorPropId = '', children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -3836,6 +3841,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 ))}
               </select>
             </label>
+            {/* WHICH DOOR hangs in this hole. Only a door has one — a window
+                takes no prop and a passage is the open gap by definition
+                (`scene_recipe.door_prop_id`). Keyed on the selection so the
+                control's "Custom, nothing picked yet" state never travels to
+                the next opening. */}
+            {op.type === 'door' ? (
+              <OpeningDoorProp
+                key={openingSel}
+                opening={op}
+                defaultPropId={defaultDoorPropId}
+                onPatch={patchOpening}
+              />
+            ) : null}
             <button
               type="button"
               className="ga-btn ga-btn-sm ga-btn-danger"

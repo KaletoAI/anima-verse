@@ -150,8 +150,16 @@ export interface RoomOpening {
   type: 'door' | 'window' | 'passage'
   /** Connectivity target: room id or 'outside' (door/passage). */
   to?: string
-  /** Optional frame/leaf prop scaled onto the opening. */
+  /** Optional frame/leaf prop scaled onto the opening. Set = this opening
+   *  brings its own door, whatever the location's default says. */
   prop_id?: string
+  /** The explicit "no prop in this door" — the ONE value that keeps the
+   *  location's `default_door_prop_id` out of this opening. Absent = nothing
+   *  chosen, i.e. the default applies (`scene_recipe.door_prop_id`). */
+  door_prop?: 'none'
+  /** Which side the door prop turns about, read against the doorway's own
+   *  direction. Absent = left. */
+  hinge?: 'left' | 'right'
 }
 
 export interface Room {
@@ -344,6 +352,10 @@ export interface Location {
   description?: string
   rooms?: Room[]
   entry_room?: string
+  /** The place's own door: every door opening that names no prop of its own
+   *  is filled with this one, unless it opts out with `door_prop: 'none'`.
+   *  Empty = no default, i.e. the plain leaf as before. */
+  default_door_prop_id?: string
   danger_level?: number
   indoor?: string
   decency?: '' | 'public' | 'private' | 'nude_ok'
