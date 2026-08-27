@@ -55,41 +55,61 @@ export interface MeshGroup {
 }
 
 /**
- * THE LOADED MESHES AS THE SERVER COUNTS THEM.
- *
- * A glTF mesh with several materials — which is exactly what a prop looks like
- * once ONE area has been split off — is handed over by GLTFLoader as one three
- * mesh PER PRIMITIVE, named `Frame`, `Frame_1`, … (`createUniqueName`). Blender
- * re-imports that same file as a single object `Frame` with that many material
- * slots, its polygons in primitive order — so the server's `mesh_layout` names
- * one entry of 122 triangles where the client sees two of 120 and 2.
- *
- * Folding the primitives back together is therefore not a convenience but the
- * R1 order itself: same sequence, same flat index, and a layout that can be
- * compared. Without it the polygon tool would refuse from the first split
- * onwards — which is precisely when a correction is wanted.
- *
- * The fold is deliberately narrow: a mesh folds into the group before it only
- * when its name is that group's name plus `_<digits>` AND it follows it
- * directly in load order. A model that really does carry two objects named
- * `Frame` and `Frame_1` folds them too — and then the layout comparison fails
- * (the server lists two entries), which disables the tool instead of marking
- * the wrong triangles.
+ * ONE loaded mesh, described by the glTF NODE it belongs to — everything the
+ * R1 order needs and nothing three.js-shaped, so the grouping below can be
+ * checked without a browser.
  */
-export function groupPrimitives(meshes: Array<{ name: string }>): MeshGroup[] {
-  const groups: MeshGroup[] = []
+export interface LoadedPrimitive {
+  /** WHICH node — any stable key; the loader's node index where there is one.
+   *  Two primitives of the same node share it, two nodes never do. */
+  nodeKey: string
+  /** The node's EXPORTED name, unsanitised: that is what Blender named the
+   *  object and therefore what the server's `mesh_layout` lists. */
+  name: string
+  /** Primitive index inside the node's mesh — the order the triangles are
+   *  concatenated in. */
+  primitive: number
+}
+
+/**
+ * THE LOADED MESHES AS THE SERVER COUNTS THEM (R1).
+ *
+ * The server counts per BLENDER OBJECT, which is per glTF NODE. three does not:
+ *
+ *   · a glTF mesh with several materials — exactly what a prop looks like once
+ *     ONE area has been split off — arrives as one three `Mesh` PER PRIMITIVE
+ *     under a `Group`, so two objects where Blender has one;
+ *   · the names do not match either. GLTFLoader reserves the NODE's name first
+ *     (`loadNode`: `createUniqueName(nodeDef.name)`) and then names every
+ *     primitive `createUniqueName(meshDef.name)`, so node `Frame` with mesh
+ *     `Frame` yields children `Frame_1` and `Frame_2` — and where the mesh
+ *     DATA is called something else (`Cube`, `mesh_0`) the children carry that
+ *     instead of the object name the server knows;
+ *   · `createUniqueName` runs `PropertyBinding.sanitizeNodeName`, which strips
+ *     `. : / [ ]` and replaces whitespace, so a Blender object `Frame.001` is
+ *     `Frame001` in three and would never compare equal.
+ *
+ * So the name is taken from the NODE, never from the three object, and the
+ * primitives of one node are folded back together in primitive order. That IS
+ * the R1 sequence: same triangles, same flat index, and a layout that can be
+ * compared to the server's. Without it the polygon tool would refuse from the
+ * first split onwards — precisely when a correction is wanted.
+ */
+export function meshLayoutOf(meshes: LoadedPrimitive[]): MeshGroup[] {
+  const byNode = new Map<string, { name: string; members: number[] }>()
   meshes.forEach((mesh, i) => {
-    const last = groups[groups.length - 1]
-    if (last && new RegExp(`^${last.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_\\d+$`)
-      .test(mesh.name)) {
-      last.members.push(i)
-      return
-    }
-    groups.push({ name: mesh.name, members: [i] })
+    const group = byNode.get(mesh.nodeKey)
+    if (group) group.members.push(i)
+    else byNode.set(mesh.nodeKey, { name: mesh.name, members: [i] })
   })
-  // Sorted by NAME, like everything else in R1; the members of one group keep
-  // their load order, which IS the primitive order.
-  return sortByName(groups)
+  for (const group of byNode.values()) {
+    // Primitive order, load order as the tie-break — `parent.children` is
+    // already in primitive order, so this only guards a loader that ever
+    // hands them over differently.
+    group.members.sort((a, b) => (meshes[a].primitive - meshes[b].primitive) || (a - b))
+  }
+  // Sorted by NAME, like everything else in R1.
+  return sortByName([...byNode.values()])
 }
 
 /**

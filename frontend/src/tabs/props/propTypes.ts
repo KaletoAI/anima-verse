@@ -340,6 +340,11 @@ export interface AreaKind {
   label: string
   /** Outline colour in the 3D viewer. */
   color: string
+  /** WHAT fills an area of this kind — a picture out of a gallery (`image`)
+   *  or a look out of `MATERIAL_PRESETS` (`preset`). It is the field the value
+   *  is written under, so the editor picks its control from this instead of
+   *  naming a kind. Mirrors `props.SLOT_KINDS` through `detect_slots`. */
+  value: 'image' | 'preset'
   /** How the create form offers this kind. Absent = it cannot be REQUESTED
    *  at generation time (it is only ever drawn by hand). */
   requestLabel?: string
@@ -354,6 +359,7 @@ export const AREA_KINDS: AreaKind[] = [
     kind: 'picture',
     label: 'Picture',
     color: '#22c55e',
+    value: 'image',
     requestLabel: 'Picture (green screen)',
     prompt: ', the picture surface inside the frame is a single flat '
       + 'uniform bright chroma-key green panel (#00FF00), no reflections, '
@@ -364,6 +370,7 @@ export const AREA_KINDS: AreaKind[] = [
     kind: 'glass',
     label: 'Glass',
     color: '#d946ef',
+    value: 'preset',
     requestLabel: 'Glass (magenta)',
     prompt: ', the window pane is a single flat uniform bright magenta '
       + 'panel (#FF00FF), no reflections',

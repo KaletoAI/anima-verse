@@ -302,12 +302,15 @@ export interface SceneModelSpec {
    *  recipe's own interior stands in the holes. Only on the building spec,
    *  only with `map3d.area_model`. */
   cutouts?: [number, number][][]
-  /** WHAT FILLS THIS PLACEMENT'S TEXTURE SLOTS (v5). The KEY is a material
-   *  name of the mesh — a slot IS a material (`props.detect_slots`) — and the
-   *  value is either a picture (`image`, a same-origin gallery URL) or a look
-   *  (`preset`, today only `glass`). Only slots the prop still declares are in
-   *  here; the server drops the rest, so a renderer matches names and asks
-   *  nothing. Absent = the prop renders as it was modelled.
+  /** WHAT FILLS THIS PLACEMENT'S TEXTURE SLOTS (v5). The KEY is a SLOT NAME:
+   *  a slot IS a material of the mesh, and its name is that material's name
+   *  with the optional `slot_` prefix taken off (`props.detect_slots` —
+   *  material `slot_picture_1` is the slot `picture_1`, material `glass` is
+   *  the slot `glass`). The value is either a picture (`image`, a same-origin
+   *  gallery URL) or a look (`preset`, today only `glass`). Only slots the
+   *  prop still declares are in here; the server drops the rest, so a renderer
+   *  matches names and asks nothing. Absent = the prop renders as it was
+   *  modelled.
    *  `applySlotMaterials` (@anima/scene-render) is the ONE routine that
    *  writes it — it clones the material per placement, because the model
    *  cache shares one group between all of them. */
@@ -320,7 +323,9 @@ export interface SceneModelSpec {
   cut_plane?: SceneCutPlane
 }
 
-/** The filled texture slots of one placement, keyed by MATERIAL NAME (v5).
+/** The filled texture slots of one placement, keyed by SLOT NAME (v5) — the
+ *  material's name without its `slot_` prefix, which is what the store keys by
+ *  and what `applySlotMaterials` derives from the material it is looking at.
  *  Exactly one of the two fields is set per entry — the server has already
  *  decided which by the slot's kind, so a renderer never has to. */
 export type SceneSlotValues = Record<string,

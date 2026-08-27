@@ -23,6 +23,7 @@
  * a third kind is one entry in `propTypes.ts` and no branch here.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { MATERIAL_PRESETS } from '@anima/scene-render'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
@@ -31,27 +32,6 @@ import { PictureVariantDialog } from './PictureVariantDialog'
 import { AREA_KINDS, areaKindOf } from './propTypes'
 import type { PropAreasInfo, PropFull, PropSlotValues,
   PropVariant } from './propTypes'
-
-/**
- * The slot map the PREVIEW hands to `applySlotMaterials`.
- *
- * The routine matches by MATERIAL name, and the material of area `picture_1`
- * is `slot_picture_1` (`props.SLOT_PREFIX` + the id) — while the values are
- * keyed by the AREA ID everywhere else, from the sidecar through the scene
- * recipe. So the preview offers BOTH spellings of every key: an entry that
- * matches no material is ignored by the routine ("an unmatched slot name
- * touches nothing", `smoke_slot_materials.mjs`), which makes this correct
- * whichever of the two the mesh in front of us carries.
- */
-function previewSlots(values: PropSlotValues | undefined): PropSlotValues | undefined {
-  if (!values || !Object.keys(values).length) return undefined
-  const out: PropSlotValues = {}
-  for (const [id, value] of Object.entries(values)) {
-    out[id] = value
-    out[`slot_${id}`] = value
-  }
-  return out
-}
 
 /** What one variant is called in the list. */
 function variantName(v: PropVariant, t: (s: string) => string): string {
@@ -88,11 +68,18 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   /** The variant the dialog is editing (null = a new one, undefined = closed). */
   const [editing, setEditing] = useState<number | null | undefined>(undefined)
 
+  /** Did the last areas request FAIL? `info` null alone cannot say — before
+   *  the first answer it means "still reading", after a failure "we know
+   *  nothing", and the status line must not read the same in both. */
+  const [loadFailed, setLoadFailed] = useState(false)
+
   const load = useCallback(async () => {
     try {
       setInfo(await apiGet<PropAreasInfo>(`/world/props/${enc}/areas`))
+      setLoadFailed(false)
     } catch {
       setInfo(null)
+      setLoadFailed(true)
     }
   }, [enc])
   useEffect(() => { void load() }, [load, reloadKey])
@@ -104,8 +91,10 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   const areas = useMemo(() => info?.areas || [], [info])
   const outlines = useMemo(() => areas.map((a) => ({
     id: a.id, kind: a.kind, edges: a.edges || [] })), [areas])
-  const pictureAreas = areas.filter((a) => a.kind === 'picture')
-  const glassAreas = areas.filter((a) => a.kind === 'glass')
+  // Split by what an area is FILLED with, not by its kind name (R8): a picture
+  // variant needs a gallery area, the pane defaults a preset one.
+  const pictureAreas = areas.filter((a) => areaKindOf(a.kind)?.value === 'image')
+  const presetAreas = areas.filter((a) => areaKindOf(a.kind)?.value === 'preset')
   const pictureVariants = variants.filter(
     (v) => v.slot_values && Object.keys(v.slot_values).length)
   /** The cap counts ACTIVE variants INCLUDING the primary one, so a frame
@@ -113,12 +102,20 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   const pictureCap = Math.max(0, variantMax - 1)
   const previewVariant = preview === null
     ? null : variants.find((v) => v.index === preview) || null
+  // WHAT THE PREVIEW SHOWS: the prop-wide defaults with the picked variant's
+  // own values on top — the same merge the scene recipe does (`_slot_spec`),
+  // keyed by AREA ID, which is the slot name `applySlotMaterials` matches
+  // after taking the material's `slot_` prefix off (R11).
+  //
   // MEMOISED, deliberately: the viewer re-applies its slot materials whenever
   // this object's identity changes, and a fresh map per render would reload
-  // every texture on every keystroke elsewhere in the panel.
-  const slots = useMemo(() => previewSlots(previewVariant
-    ? { ...(info?.area_defaults || {}), ...(previewVariant.slot_values || {}) }
-    : undefined), [previewVariant, info])
+  // every texture on every keystroke elsewhere in the panel. It depends on the
+  // two things it reads, not on the whole `info` — a status refresh must not
+  // re-download the picture.
+  const defaults = info?.area_defaults
+  const slots = useMemo(() => (previewVariant
+    ? { ...(defaults || {}), ...(previewVariant.slot_values || {}) }
+    : undefined), [previewVariant, defaults])
 
   /** Every areas call answers the same payload — one place that stores it and
    *  maps the failure onto a toast the admin can act on. */
@@ -217,9 +214,16 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
     }
   }
 
+  // THREE states, not two: `info` is null while the areas request is in
+  // flight or after it failed, and reading that as "Blender available" would
+  // put a green tick on a panel that knows nothing. Only an answered request
+  // that says `available` is one.
   const blenderReason = info?.blender.available === false
-    ? info.blender.reason : ''
+    ? (info.blender.reason || t('unknown reason')) : ''
   const running = !!busy
+  /** A verb may only be offered when the answer actually said Blender can
+   *  run — an unread panel knows nothing and must not promise a split. */
+  const canRun = !!info && !blenderReason && !running && prop.has_model
 
   return (
     <>
@@ -230,9 +234,13 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
 
       {/* Status: can Blender run at all, when did it last, what went wrong. */}
       <div className="ga-hint" style={{ display: 'block' }}>
-        {blenderReason
-          ? `⚠ ${t('Blender is not available')}: ${blenderReason}`
-          : `✓ ${t('Blender available')}`}
+        {!info
+          ? (loadFailed
+            ? `⚠ ${t('Could not read this prop’s areas — reload the page.')}`
+            : `… ${t('Reading the areas…')}`)
+          : blenderReason
+            ? `⚠ ${t('Blender is not available')}: ${blenderReason}`
+            : `✓ ${t('Blender available')}`}
         {info?.last_run ? ` · ${t('last run')} ${info.last_run.slice(0, 16).replace('T', ' ')}` : ''}
       </div>
       {info?.error ? (
@@ -248,7 +256,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
 
       <div className="ga-form-row">
         <button type="button" className="ga-btn ga-btn-sm"
-          disabled={running || !!blenderReason || !prop.has_model}
+          disabled={!canRun}
           onClick={detect}
           title={t('Look for chroma-key panels in the mesh again and split every one of them off as its own material. Replaces the automatically detected areas; a drawn one is kept.')}>
           🔍 {busy === 'detect' ? t('Detecting…') : t('Detect areas')}
@@ -264,7 +272,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
         ) : (
           <>
             <select className="ga-input" style={{ width: 130 }} value=""
-              disabled={running || !!blenderReason || !prop.has_model}
+              disabled={!canRun}
               title={t('Draw a surface by hand: pick its kind, then ring it on the front view.')}
               onChange={(e) => { if (e.target.value) setDrawKind(e.target.value) }}>
               <option value="">{t('✏ Draw area…')}</option>
@@ -330,6 +338,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
                 </select>
                 <button type="button" className="ga-btn ga-btn-sm"
                   disabled={running}
+                  aria-label={t('Delete area')}
                   title={t('Dissolve this area — its triangles go back to the material they came from.')}
                   onClick={() => removeArea(a.id)}>🗑</button>
               </span>
@@ -340,22 +349,29 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
 
       {/* A pane's look is prop-wide: a door prop has no variants, so without
           this its glass could never be set at all. */}
-      {glassAreas.length ? (
+      {presetAreas.length ? (
         <>
           <div className="ga-form-section-label">{t('Pane defaults')}</div>
           <span className="ga-hint" style={{ display: 'block' }}>
             {t('What these panes look like on EVERY placement of this prop — a door has no variants, so this is where its glass is set.')}
           </span>
           <div className="ga-form-row">
-            {glassAreas.map((a) => (
+            {presetAreas.map((a) => (
               <label key={a.id} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
                 <span className="ga-hint">{a.id}</span>
                 <select className="ga-input" style={{ width: 120 }}
                   disabled={running}
-                  value={info?.area_defaults?.[a.id]?.preset || ''}
+                  value={defaults?.[a.id]?.preset || ''}
                   onChange={(e) => setDefault(a.id, e.target.value)}>
                   <option value="">{t('None')}</option>
-                  <option value="glass">{t('Glass')}</option>
+                  {/* The looks a renderer actually draws — @anima/scene-render
+                      owns that list, and a preset nothing draws must not be
+                      offerable. */}
+                  {MATERIAL_PRESETS.map((preset) => (
+                    <option key={preset} value={preset}>
+                      {preset === 'glass' ? t('Glass') : preset}
+                    </option>
+                  ))}
                 </select>
               </label>
             ))}
@@ -390,6 +406,8 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
               style={{ cursor: 'default' }}>
               <span className="ga-list-row-main">
                 <button type="button" className="ga-btn ga-btn-sm"
+                  aria-label={t('Preview this variant')}
+                  aria-pressed={preview === v.index}
                   title={preview === v.index
                     ? t('Stop previewing — show the bare frame again.')
                     : t('Show this assembly in the viewer above.')}
@@ -421,6 +439,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
               <span style={{ display: 'inline-flex', gap: 4 }}>
                 <button type="button" className="ga-btn ga-btn-sm"
                   disabled={running}
+                  aria-label={t('Edit the pictures')}
                   title={t('Change the pictures on this variant.')}
                   onClick={() => setEditing(v.index)}>✏</button>
                 {v.stale ? (

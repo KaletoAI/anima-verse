@@ -19,13 +19,24 @@ import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
 import { buildMeasureAids, disposeAids, referenceFigure,
   type MeasureKey } from '../world/measureKit'
-import { alignMeshLayout, groupPrimitives, pointInPolygon,
+import { alignMeshLayout, meshLayoutOf, pointInPolygon,
   polygonArea } from '../props/faceSelect'
 import { areaKindOf } from '../props/propTypes'
 import type { AreaOutline, MeshLayoutEntry,
   PropSlotValues } from '../props/propTypes'
 
 const _deg = (v?: number) => ((v || 0) * Math.PI) / 180
+
+/**
+ * The sliver of GLTFLoader's parser this file uses: which glTF node/mesh/
+ * primitive an object came from, and the raw node names. Typed here rather
+ * than imported, because `GLTFParser` is not part of three's public types and
+ * only these three fields are read.
+ */
+interface GltfParser {
+  associations?: Map<Object3D, { nodes?: number; meshes?: number; primitives?: number }>
+  json?: { nodes?: Array<{ name?: string }> }
+}
 
 /** Ceiling on ONE hand-drawn selection ring. A selection polygon is a gesture,
  *  not a stored shape (the map's `MAX_POINTS` budgets a saved outline), and a
@@ -488,6 +499,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
 
         const ext = (format || url.split('.').pop() || '').toLowerCase()
         let object: Object3D
+        let gltfParser: GltfParser | null = null
         if (ext === 'fbx') {
           const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
           object = await new FBXLoader().loadAsync(url)
@@ -495,6 +507,11 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
           const gltf = await new GLTFLoader().loadAsync(url)
           object = gltf.scene
+          // The parser is kept for ONE reason: it is the only place that still
+          // knows which glTF NODE a loaded mesh came from (`associations`) and
+          // what that node was really called (`json.nodes[i].name`, unsanitised).
+          // The R1 face order counts per node, so the polygon tool needs both.
+          gltfParser = gltf.parser as GltfParser
         } else if (ext === 'obj') {
           const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js')
           object = await new OBJLoader().loadAsync(url)
@@ -511,16 +528,52 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         const rawBox = new THREE.Box3().setFromObject(object)
         const rawSize = rawBox.getSize(new THREE.Vector3())
         // Every mesh of the model in LOAD order, then folded into the R1
-        // order the server counts in (`groupPrimitives`: primitives of one
-        // glTF mesh back together, groups by name). The counts below, the
-        // layout comparison and the polygon tool's flat index all read this
-        // one list, so the order is stated exactly once.
+        // order the SERVER counts in — per glTF NODE, which is per Blender
+        // object (`meshLayoutOf`). The counts below, the layout comparison and
+        // the polygon tool's flat index all read this one list, so the order is
+        // stated exactly once.
         const loaded: Mesh[] = []
         object.traverse((o: Object3D) => {
           const mesh = o as Mesh
-          if (mesh.isMesh) loaded.push(mesh)
+          // An InstancedMesh draws one geometry many times; there is no single
+          // triangle behind a face index, so it can never be part of an R1
+          // order. Excluded here AND in the pick below.
+          if (mesh.isMesh && !(mesh as { isInstancedMesh?: boolean }).isInstancedMesh) {
+            loaded.push(mesh)
+          }
         })
-        const groups = groupPrimitives(loaded)
+        // WHICH NODE a primitive belongs to, and what that node is called.
+        // `associations` maps every object the loader made to its glTF indices:
+        // a single-primitive node IS the mesh (it carries `nodes`), while the
+        // primitives of a multi-primitive node carry only `primitives` and hang
+        // under a Group that carries `nodes`. So the mesh is asked first and
+        // its parents after, and the NAME comes out of the raw glTF JSON —
+        // three's own `name` went through `sanitizeNodeName` (`Frame.001` →
+        // `Frame001`) and through `createUniqueName` (`Frame` → `Frame_1`), and
+        // neither is what the server split against.
+        const nodeOf = (mesh: Mesh, at: number) => {
+          const assoc = gltfParser?.associations
+          const own = assoc?.get(mesh)
+          const primitive = own?.primitives ?? 0
+          let node: Object3D | null = mesh
+          while (node) {
+            const idx = assoc?.get(node)?.nodes
+            if (idx !== undefined) {
+              // A node without a name carries none in three either (`node.name`
+              // is only assigned inside `if (nodeDef.name)`), and Blender's
+              // importer falls back to the MESH name for exactly that case —
+              // so this falls back the same way before giving up.
+              const named = gltfParser?.json?.nodes?.[idx]?.name
+              return { nodeKey: `n${idx}`, name: named || node.name || mesh.name,
+                       primitive }
+            }
+            node = node.parent
+          }
+          // No parser (an FBX/OBJ preview) or a mesh the loader never
+          // registered: the object stands for itself, under its own name.
+          return { nodeKey: `o${at}`, name: mesh.userData?.name || mesh.name, primitive }
+        }
+        const groups = meshLayoutOf(loaded.map(nodeOf))
         // The meshes in R1 sequence — groups by name, primitives within a
         // group in their own order.
         const ordered: Mesh[] = groups.flatMap((g) => g.members.map((i) => loaded[i]))
@@ -1020,9 +1073,19 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             const toCam = new THREE.Vector3()
             let base = 0
             for (const mesh of ordered) {
+              // An INSTANCED mesh draws one geometry many times — a face index
+              // would name a triangle of the template, not of an instance, so
+              // it can carry no area. (It never reaches this list either; the
+              // guard is here so the rule stands where the index is built.)
+              if ((mesh as { isInstancedMesh?: boolean }).isInstancedMesh) continue
               const geo = mesh.geometry
               const pos = geo.attributes.position
               const index = geo.index
+              // The WHOLE buffer, deliberately: `geometry.drawRange` and
+              // material groups can render a subset, but the server counts
+              // every triangle of the object (`calc_loop_triangles`), so the
+              // flat index has to as well. A prop mesh out of the split has
+              // neither, and one that did would fail the layout comparison.
               const tris = triCountOf(mesh)
               for (let i = 0; i < tris; i++) {
                 const i0 = index ? index.getX(3 * i) : 3 * i

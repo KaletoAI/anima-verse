@@ -2359,6 +2359,14 @@
     "stale (model or fix changed)": "veraltet (Modell oder Fix geändert)",
     "Bake the surface figures walk on — runs Blender in the background": "Backt die Oberfläche, auf der Figuren laufen — Blender läuft im Hintergrund",
     "Baking the surface — this runs in the background.": "Die Oberfläche wird gebacken — das läuft im Hintergrund.",
-    "Tag \"walkable\" lets figures stand on this prop; its surface is baked from the mesh.": "Tag „walkable“ lässt Figuren auf diesem Prop stehen; die Oberfläche wird aus dem Mesh gebacken."
+    "Tag \"walkable\" lets figures stand on this prop; its surface is baked from the mesh.": "Tag „walkable“ lässt Figuren auf diesem Prop stehen; die Oberfläche wird aus dem Mesh gebacken.",
+    "unknown reason": "unbekannter Grund",
+    "Could not read this prop’s areas — reload the page.": "Die Flächen dieses Props ließen sich nicht lesen — Seite neu laden.",
+    "Reading the areas…": "Flächen werden gelesen…",
+    "Preview this variant": "Diese Variante in der Vorschau zeigen",
+    "Edit the pictures": "Bilder bearbeiten",
+    "Picture": "Bild",
+    "Picture (green screen)": "Bild (Greenscreen)",
+    "Glass (magenta)": "Glas (Magenta)"
   }
 }

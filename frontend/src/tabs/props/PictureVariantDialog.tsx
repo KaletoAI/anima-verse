@@ -82,7 +82,11 @@ export function PictureVariantDialog({ open, title, areas, initial, initialLabel
     })
   }
 
-  const filled = Object.keys(values).length
+  // WHAT MAKES IT A PICTURE VARIANT: a picture. The dialog opens pre-filled
+  // with the prop's defaults (a door's pane), and those alone are not one —
+  // the server refuses such a body, and the button must not promise otherwise.
+  const filled = areas.some((a) => areaKindOf(a.kind)?.value === 'image'
+    && (values[a.id]?.image || '').trim())
 
   return createPortal(
     <div className="ga-modal-backdrop">
@@ -104,12 +108,12 @@ export function PictureVariantDialog({ open, title, areas, initial, initialLabel
                     {' · '}{area.id}
                     {' · '}{`${area.size_m[0].toFixed(2)} × ${area.size_m[1].toFixed(2)} m`}
                   </label>
-                  {area.kind === 'picture' ? (
+                  {kind?.value === 'image' ? (
                     <ImagePicker
                       value={value?.image || ''}
                       onChange={(url) => set(area.id, url ? { image: url } : null)}
                     />
-                  ) : area.kind === 'glass' ? (
+                  ) : kind?.value === 'preset' ? (
                     <select
                       className="ga-input" style={{ maxWidth: 180 }}
                       value={value?.preset || ''}
