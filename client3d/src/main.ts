@@ -3936,6 +3936,12 @@ async function startApp(username: string, role: string) {
   /** Storey the displayed one was last pulled to per tile — the memory that
    *  makes the following EDGE-triggered (see below). */
   const followedStorey = new Map<string, number>();
+  /** The location that memory belongs to. It is cleared when the avatar's
+   *  tile changes (user finding 2026-08-27): a storey picked on the switch
+   *  survives only while the avatar STAYS — leaving the location and coming
+   *  back is not staying, so the re-entry pulls the view to the avatar's
+   *  storey again instead of leaving it wherever the last visit put it. */
+  let followedLoc: string | null = null;
 
   /**
    * The displayed storey follows the avatar (E3 acceptance). Every way the
@@ -3952,8 +3958,22 @@ async function startApp(username: string, role: string) {
    * only authority, unchanged.
    */
   function followAvatarStorey(tile: Tile | null, room: string | null) {
-    if (!tile || !room) return;
-    const level = tile.roomLevels.get(room) ?? 0;
+    if (!tile) return;
+    if (tile.loc.id !== followedLoc) {
+      followedStorey.clear();
+      followedLoc = tile.loc.id;
+    }
+    // OUTSIDE is storey 0 — no room at all (the avatar stands on the yard)
+    // and the GROUND room itself, which has no plate and so is unknown to
+    // `roomLevels`. The same rule the door gate and the room-change heuristic
+    // state; the follow used to skip both cases, so an avatar stepping out of
+    // a cellar onto the ground left the view down there. A room whose storey
+    // is not known YET (the scene has not mounted) decides nothing — that is
+    // not an edge, and remembering 0 for it would swallow the real one.
+    const level = room
+      ? tile.roomLevels.get(room) ?? (room === getGameState().groundRoomId ? 0 : undefined)
+      : 0;
+    if (level === undefined) return;
     if (followedStorey.get(tile.loc.id) === level) return;
     followedStorey.set(tile.loc.id, level);
     if (tile.levelFilter === level) return;
@@ -4583,9 +4603,14 @@ async function startApp(username: string, role: string) {
           if (tile.outlineWalls.length) {
             applyWallCulling(tile, engine.camera.position.x, engine.camera.position.z);
           }
-          // Same condition as the ground-plate ghost in applyTileFade: while
-          // a basement scene's interior is up, the global ground opens too.
-          if (tile.hasBasement) basementOpen = tile;
+          // The ground opens over a basement ONLY while a storey BELOW ground
+          // is the displayed one (user finding 2026-08-27). It used to open
+          // the moment a basement scene's interior was up at all — so with
+          // the switch on the ground floor the cellar showed through a hole
+          // in the yard. Same gate as the area model in `applyTileFade`
+          // (`levelFilter < 0`): the storey switch decides what is looked at,
+          // and the ground is part of every storey at or above it.
+          if (tile.hasBasement && tile.levelFilter < 0) basementOpen = tile;
         }
         // The hole/occlusion pass below always assumed "one open tile" — it
         // is now BOUND to the singleton explicitly (fade still gates, so the
@@ -4604,24 +4629,23 @@ async function startApp(username: string, role: string) {
       let { minX, minZ, maxX, maxZ } = basementBox;
       // A tile-sized hole is enough to look straight down, but not to look
       // INTO the pit: from an angle its near rim stands between camera and
-      // basement. So while a storey BELOW ground is actually displayed, the
-      // hole grows towards the viewer — up to double the extent, smoothly
-      // with the camera angle, recomputed per frame (that is what the
-      // uniforms are for). Only for level < 0: at level 0 and above the
-      // enlarged hole would tear open the map around the tile for nothing.
-      if (basementOpen.levelFilter < 0) {
-        const dx = engine.camera.position.x - basementOpen.center.x;
-        const dz = engine.camera.position.z - basementOpen.center.z;
-        const len = Math.hypot(dx, dz) || 1;
-        const ux = dx / len;
-        const uz = dz / len;
-        // Only the edge FACING the camera moves — the far one stays put, so
-        // the pit does not grow away from the viewer. It grows by one whole
-        // footprint at most, the same "up to double the extent" as before.
-        const grow = basementOpen.width;
-        if (ux > 0) maxX += grow * ux; else minX += grow * ux;
-        if (uz > 0) maxZ += grow * uz; else minZ += grow * uz;
-      }
+      // basement. So the hole grows towards the viewer — up to double the
+      // extent, smoothly with the camera angle, recomputed per frame (that is
+      // what the uniforms are for). The hole exists only while a storey
+      // BELOW ground is displayed (the gate above), so there is no level-0
+      // case here any more in which the enlarged hole would tear open the map
+      // around the tile for nothing.
+      const dx = engine.camera.position.x - basementOpen.center.x;
+      const dz = engine.camera.position.z - basementOpen.center.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const ux = dx / len;
+      const uz = dz / len;
+      // Only the edge FACING the camera moves — the far one stays put, so
+      // the pit does not grow away from the viewer. It grows by one whole
+      // footprint at most, the same "up to double the extent" as before.
+      const grow = basementOpen.width;
+      if (ux > 0) maxX += grow * ux; else minX += grow * ux;
+      if (uz > 0) maxZ += grow * uz; else minZ += grow * uz;
       terrainGround.setHole([minX, minZ, maxX, maxZ]);
     }
 

@@ -758,7 +758,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   const floorYof = new Map(scene.levels.map((l) => [l.level, l.floor_y]));
   const levels = scene.levels.map((l) => l.level);
   // Signal for the camera rule that opens a basement view (main.ts): this
-  // scene has a storey below ground. The recipe itself needs nothing for this.
+  // scene has a storey below ground. The ground itself opens only while the
+  // storey switch shows a level below 0 — this flag says there is one to show.
+  // The recipe itself needs nothing for this.
   tile.hasBasement = levels.some((lv) => lv < 0);
 
   // THE SCENE'S OWN RELIEF IS GONE ("Ein Boden" E5a, decision 1): there is no
