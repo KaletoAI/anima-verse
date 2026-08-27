@@ -408,6 +408,29 @@ _DEFAULT_IMAGE_USE_CASES = {
 }
 
 
+# ── Key-area prompt fragments (spec-picture-props.md § 3) ──────────────────
+# A frame prop that is meant to take a picture (or a pane of glass) is asked
+# for a CHROMA-KEY panel at generation time: the image model paints the
+# picture surface a flat green, the glass a flat magenta, and the mesh that
+# is baked from that render carries the colour in its atlas — the only marker
+# the area detection (``app/core/picture_areas.py``) has. The text lives HERE,
+# beside the ``prop`` use case whose prompt it is appended to
+# (``props.compose_prompt``), keyed by the area KIND the detection looks for.
+# The fragments are appended AFTER the composed prompt (they start with the
+# separator), the negatives are merged into the negative prompt.
+KEY_AREA_PROMPTS = {
+    "picture": (", the picture surface inside the frame is a single flat "
+                "uniform bright chroma-key green panel (#00FF00), no "
+                "reflections, no artwork, no text"),
+    "glass": (", the window pane is a single flat uniform bright magenta "
+              "panel (#FF00FF), no reflections"),
+}
+KEY_AREA_NEGATIVES = {
+    "picture": "painting, artwork, photo, poster, landscape in frame",
+    "glass": "transparent glass, reflections",
+}
+
+
 def image_model_to_family(image_model: str) -> str:
     """Uebersetzt ein 'Target Prompt Stil' (image_model) in eine Style-Familie."""
     return _IMAGE_MODEL_FAMILY.get((image_model or "").strip(), "keywords")

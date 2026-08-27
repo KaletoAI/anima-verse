@@ -1850,10 +1850,13 @@ def props_admin() -> Dict[str, Any]:
 async def prop_generate(request: Request) -> Dict[str, Any]:
     """Create a prop from a prompt and kick off the source→mesh chain (body:
     {name, category?, width_m?, depth_m?, height_m?, prompt?, negative?,
-    image_backend?, mesh_backend?}). Missing dims become the largest given one;
-    they are refined from the mesh proportions once the model exists. Size and
-    description land on the prop's FIRST MODEL VARIANT, where both live
-    (2026-08-25); every further variant gets its own in the variant strip.
+    image_backend?, mesh_backend?, key_areas?}). Missing dims become the
+    largest given one; they are refined from the mesh proportions once the
+    model exists. Size and description land on the prop's FIRST MODEL VARIANT,
+    where both live (2026-08-25); every further variant gets its own in the
+    variant strip. ``key_areas`` (``["picture", "glass"]``) asks the render
+    for chroma-key panels and has every landing mesh split into picture areas
+    (spec-picture-props.md § 2/3); an unknown kind is a 400.
     Background job — poll /world/props for pending."""
     data = await request.json()
     return await asyncio.to_thread(_prop_generate_sync, data)
@@ -1867,12 +1870,15 @@ def _prop_generate_sync(data: Any) -> Dict[str, Any]:
     name = str(data.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name required")
-    prop = create_prop(name=name, category=str(data.get("category") or ""),
-                       width_m=data.get("width_m"), depth_m=data.get("depth_m"),
-                       height_m=data.get("height_m"),
-                       description=str(data.get("description") or ""),
-                       prompt=str(data.get("prompt") or ""),
-                       source="generated")
+    try:
+        prop = create_prop(name=name, category=str(data.get("category") or ""),
+                           width_m=data.get("width_m"), depth_m=data.get("depth_m"),
+                           height_m=data.get("height_m"),
+                           description=str(data.get("description") or ""),
+                           prompt=str(data.get("prompt") or ""),
+                           source="generated", key_areas=data.get("key_areas"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     trigger_generation(prop["id"],
                         prompt=str(data.get("prompt") or ""),
                         negative=str(data.get("negative") or ""),
@@ -1888,10 +1894,11 @@ def _prop_generate_sync(data: Any) -> Dict[str, Any]:
 @router.post("/props")
 async def prop_create(request: Request) -> Dict[str, Any]:
     """Create a prop record (body: {name, category?, width_m?, depth_m?,
-    height_m?, description?, tags?}). Missing dims become the largest given
-    one; size and description land on the prop's FIRST MODEL VARIANT, where
-    both live (2026-08-25). The model/source files follow via upload or the
-    generation chain."""
+    height_m?, description?, tags?, key_areas?}). Missing dims become the
+    largest given one; size and description land on the prop's FIRST MODEL
+    VARIANT, where both live (2026-08-25). The model/source files follow via
+    upload or the generation chain. ``key_areas`` (``["picture", "glass"]``)
+    has every landing mesh split into picture areas; an unknown kind is a 400."""
     data = await request.json()
     return await asyncio.to_thread(_prop_create_sync, data)
 
@@ -1904,10 +1911,14 @@ def _prop_create_sync(data: Any) -> Dict[str, Any]:
     name = str(data.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name required")
-    prop = create_prop(name=name, category=str(data.get("category") or ""),
-                       width_m=data.get("width_m"), depth_m=data.get("depth_m"),
-                       height_m=data.get("height_m"), tags=data.get("tags"),
-                       description=str(data.get("description") or ""))
+    try:
+        prop = create_prop(name=name, category=str(data.get("category") or ""),
+                           width_m=data.get("width_m"), depth_m=data.get("depth_m"),
+                           height_m=data.get("height_m"), tags=data.get("tags"),
+                           description=str(data.get("description") or ""),
+                           key_areas=data.get("key_areas"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok", "prop": prop}
 
 
@@ -1998,8 +2009,10 @@ def prop_detail(prop_id: str) -> Dict[str, Any]:
 @router.post("/props/{prop_id}")
 async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
     """Update the PROP's own fields (body: {name?, category?, tags?,
-    sway_factor?, slots?}). `sway_factor` at its default 1.0 (and any junk)
-    clears the key rather than storing it.
+    sway_factor?, slots?, area_defaults?}). `sway_factor` at its default 1.0
+    (and any junk) clears the key rather than storing it. `area_defaults`
+    (`{"<area id>": {"preset": "glass"}}`) is checked against the prop's
+    picture areas — an unknown area or preset is a 400.
 
     `slots` is the list of fillable surfaces of the mesh
     (`[{name, kind: "image"|"material"}, …]`, `props.detect_slots` reads a
@@ -2269,6 +2282,106 @@ def prop_model_file(prop_id: str, filename: str, request: Request):
     if not p:
         raise HTTPException(status_code=404, detail="Model not found")
     return etag_file_response(p, request, "model/gltf-binary")
+
+
+# ── Picture areas (spec-picture-props.md § 2 / § 5, admin-only) ──
+# The panels of a frame prop as slot materials of its GLB. Every verb that
+# changes the mesh runs Blender headless (`props.detect_areas` and friends)
+# and lands a NEW gallery file; the HTTP mapping is one helper for all four.
+
+def _areas_call(fn, *args, **kwargs) -> Any:
+    """ValueError -> 400; a Blender that is missing or busy -> 503 with the
+    reason in `detail` (the tab shows it); a failing run -> 500."""
+    from app.core.props import BlenderUnavailable
+    try:
+        return fn(*args, **kwargs)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except BlenderUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _areas_prop(prop_id: str) -> None:
+    from app.core.props import get_prop
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+
+
+@router.get("/props/{prop_id}/areas")
+def prop_areas(prop_id: str,
+               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The prop's picture areas: ``{areas: [{id, kind, size_m, normal, source,
+    faces, edges}], mesh_layout: [{name, tri_count}], key_areas,
+    area_defaults, blender: {available, reason}, last_run, error}``. `edges`
+    are the outline segments in model metres (glTF y-up), `mesh_layout` the R1
+    face-index order the polygon pick has to mirror."""
+    from app.core.props import areas_info
+    _areas_prop(prop_id)
+    return areas_info(prop_id)
+
+
+@router.post("/props/{prop_id}/areas")
+async def prop_areas_detect(prop_id: str, request: Request,
+                            _: Dict[str, Any] = Depends(require_admin)
+                            ) -> Dict[str, Any]:
+    """Detect or draw picture areas (body: ``{mode: "auto"}`` or
+    ``{mode: "manual", faces: [flat triangle index …], kind: "picture"|"glass"}``).
+    Blocking Blender run; answers the same payload as GET afterwards. 503
+    with the reason when Blender is missing or busy."""
+    data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
+    if not isinstance(data, dict):
+        data = {}
+    return await asyncio.to_thread(_prop_areas_detect_sync, prop_id, data)
+
+
+def _prop_areas_detect_sync(prop_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``prop_areas_detect`` — runs in the threadpool."""
+    from app.core.props import areas_info, detect_areas
+    _areas_prop(prop_id)
+    _areas_call(detect_areas, prop_id, mode=str(data.get("mode") or "auto"),
+                faces=data.get("faces"), kind=str(data.get("kind") or "picture"))
+    return {"status": "ok", **areas_info(prop_id)}
+
+
+@router.patch("/props/{prop_id}/areas/{area_id}")
+async def prop_area_patch(prop_id: str, area_id: str, request: Request,
+                          _: Dict[str, Any] = Depends(require_admin)
+                          ) -> Dict[str, Any]:
+    """Change an area's kind (body: ``{kind: "picture"|"glass"}``) — the
+    material is renamed to the next free id of that kind in a new gallery
+    file; the answer carries the new area list (the id changes)."""
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    return await asyncio.to_thread(_prop_area_patch_sync, prop_id, area_id, data)
+
+
+def _prop_area_patch_sync(prop_id: str, area_id: str,
+                          data: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``prop_area_patch`` — runs in the threadpool."""
+    from app.core.props import areas_info, rename_area_kind
+    _areas_prop(prop_id)
+    _areas_call(rename_area_kind, prop_id, area_id, str(data.get("kind") or ""))
+    return {"status": "ok", **areas_info(prop_id)}
+
+
+@router.delete("/props/{prop_id}/areas/{area_id}")
+async def prop_area_delete(prop_id: str, area_id: str,
+                           _: Dict[str, Any] = Depends(require_admin)
+                           ) -> Dict[str, Any]:
+    """Dissolve an area: its faces go back to the material they came from
+    (atlas UVs restored), the slot material is gone. Blocking Blender run."""
+    return await asyncio.to_thread(_prop_area_delete_sync, prop_id, area_id)
+
+
+def _prop_area_delete_sync(prop_id: str, area_id: str) -> Dict[str, Any]:
+    """The blocking body of ``prop_area_delete`` — runs in the threadpool."""
+    from app.core.props import areas_info, delete_area
+    _areas_prop(prop_id)
+    _areas_call(delete_area, prop_id, area_id)
+    return {"status": "ok", **areas_info(prop_id)}
 
 
 @router.delete("/props/{prop_id}")

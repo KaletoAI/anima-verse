@@ -626,7 +626,7 @@ def description_section() -> None:
     subjects: list = []
     real_compose = store.compose_prompt
 
-    def recording_compose(subject, backend):
+    def recording_compose(subject, backend, **_kw):   # key_areas rides along
         subjects.append(subject)
         return {"style": "", "prompt": f"studio shot, {subject}",
                 "negative": ""}

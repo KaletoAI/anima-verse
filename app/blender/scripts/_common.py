@@ -2,11 +2,37 @@
 
 These scripts run inside Blender's OWN Python — the application's venv is not
 importable here, so this module may only use the standard library and bpy.
+Blender's BUNDLED numpy is allowed too (ruling 2026-08-27, spec-picture-props
+§ 2): pixel access over ``image.pixels`` is hopeless in pure Python, and the
+bundle ships numpy with every Blender release.
+
+``app_root_on_path()`` puts the repository root on ``sys.path`` so a script
+can import a module of the application — ONLY modules that are stdlib-only
+by contract (``app.core.picture_areas`` is the one such module today). Any
+other ``app.*`` import would drag the venv's dependencies in and fail on the
+first ``import numpy``-style line that resolves against the wrong interpreter.
 """
 import json
 import sys
 import traceback
 from pathlib import Path
+
+# <repo>/app/blender/scripts/_common.py -> <repo>
+_APP_ROOT = Path(__file__).resolve().parents[3]
+
+
+def app_root_on_path():
+    """Makes ``app.core.<stdlib-only module>`` importable; idempotent.
+
+    The root goes to the END of the path, not the front: nothing of the
+    repository may shadow a stdlib module Blender's add-ons import while they
+    load (the same reason the scripts directory itself is only on the path
+    for the sibling import and comes straight back off it).
+    """
+    root = str(_APP_ROOT)
+    if root not in sys.path:
+        sys.path.append(root)
+    return _APP_ROOT
 
 # Blender's importers are addons; their operators live under bpy.ops.
 IMPORTERS = {

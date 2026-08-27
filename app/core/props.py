@@ -17,8 +17,10 @@ Storage: ``worlds/<world>/props/<prop_id>/``:
                        from (one per variant, see the source-image law below)
     sidecar.json     — the prop MASTER record: {name, category, tags[],
                        rotation{x,y,z}, bbox[3], sway_factor, slots[],
-                       slots_auto, created_at, source, prompt,
-                       model_variants[…]}
+                       slots_auto, key_areas[], areas[], area_defaults{},
+                       created_at, source, prompt, model_variants[…]}
+    model_<ts>.glb.areas.json — outline edges + mesh layout of the picture
+                       areas of THAT mesh (spec-picture-props.md § 2)
 
 The mesh files are a GALLERY like the location/room models — same mechanics,
 same module (``app/core/model_store.py``): several files per prop, one active
@@ -166,6 +168,8 @@ import os
 import random
 import re
 import shutil
+import struct
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -179,6 +183,7 @@ from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
                                   write_sidecar as write_model_sidecar)
 from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
                                      glb_material_names_at, shrink_capability)
+from app.core.picture_areas import KINDS as AREA_KINDS
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
@@ -314,6 +319,43 @@ MATERIAL_SLOT_NAMES = ("glass", "mirror", "matte")
 #: surface long before anything can render one.)
 #: Kept for variant slot values (picture props).
 SLOT_PRESETS = ("glass",)
+
+# ── Picture areas (spec-picture-props.md) ───────────────────────────────
+#: A frame prop's PANELS — the faces of its mesh that take a picture (kind
+#: ``picture``) or a pane (kind ``glass``). An area IS a material of the GLB,
+#: ``slot_<kind>_<k>``, with planar 0..1 UVs on exactly its faces; the face
+#: assignment lives ONLY in the GLB, the sidecar keeps the metadata per area
+#: (``AREAS_KEY``) and the outline edges + mesh layout of the active mesh sit
+#: in ``<model>.glb.areas.json`` beside it (:func:`areas_sidecar_path`).
+#: Detection and split run headless in Blender
+#: (``app/blender/scripts/picture_areas.py``) — automatically when a mesh
+#: lands and the prop asked for key colours, by hand from the Areas tab.
+#:
+#: Sidecar key: which key colours the generation was asked for — a subset of
+#: ``picture_areas.KINDS`` in that order. Non-empty = detect on every landing.
+KEY_AREAS_KEY = "key_areas"
+#: Sidecar key: ``[{id, kind, size_m: [w, h], normal: [x, y, z], source,
+#: faces, origin?, centroid?}, …]``; ``id`` = the slot name (``picture_1``).
+AREAS_KEY = "areas"
+#: Sidecar key: ``{"<area id>": {"preset": "glass"}}`` — prop-wide defaults
+#: that apply without a variant (a door's pane). Checked against ``areas``.
+AREA_DEFAULTS_KEY = "area_defaults"
+#: Sidecar key: why the last automatic run stored no areas ("" / absent when
+#: it succeeded) — the tab shows it, the landing never fails on it.
+AREAS_ERROR_KEY = "areas_error"
+#: Sidecar key: ISO stamp of the last detection/split run (system time).
+AREAS_RUN_AT_KEY = "areas_run_at"
+#: How an area came to be: found on the atlas, or drawn by the admin.
+AREA_SOURCES = ("auto", "manual")
+#: The size filter of the automatic detection (§ 2 "Mindestgrößen"): a patch
+#: below EITHER bound is noise at a frame edge, not a panel.
+MIN_AREA_M2 = 0.02
+MIN_AREA_FACES = 12
+#: The per-mesh companion file: ``model_<ts>.glb`` -> ``model_<ts>.glb.areas.json``.
+#: Not a gallery name (the stem pattern wants ``.glb`` last) and not the
+#: mesh's own ``.json`` sidecar, which describes the generation run.
+AREAS_SIDECAR_SUFFIX = ".areas.json"
+_AREA_ID_RE = re.compile(r"^(" + "|".join(AREA_KINDS) + r")_([1-9][0-9]*)$")
 
 #: How much of a placed prop's DEPTH survives its cut (§ B2 addendum
 #: 2026-08-23) — a fraction, 1.0 = the whole prop. The floor never reaches 0:
@@ -948,8 +990,16 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
 
 def _slot_kind(name: str) -> str:
     """Whether a slot of this NAME takes a picture or a look. One rule for both
-    spellings, so ``slot_glass`` and ``glass`` never disagree."""
-    return "material" if name in MATERIAL_SLOT_NAMES else "image"
+    spellings, so ``slot_glass`` and ``glass`` never disagree.
+
+    The PREFIX rule (spec-picture-props.md § 1): a split writes numbered
+    areas ``slot_glass_<k>`` / ``slot_picture_<k>``, so the first ``_``-token
+    of the name decides too — ``glass_1`` is a material slot, ``picture_2``
+    an image one. Whole token only: ``glassy`` is not glass.
+    """
+    if name in MATERIAL_SLOT_NAMES:
+        return "material"
+    return "material" if name.split("_", 1)[0] in MATERIAL_SLOT_NAMES else "image"
 
 
 def detect_slots(material_names: Any) -> List[Dict[str, str]]:
@@ -959,9 +1009,9 @@ def detect_slots(material_names: Any) -> List[Dict[str, str]]:
     For every name, lower-cased and stripped:
 
     * ``slot_<name>`` → a slot called ``<name>``; its kind is ``material`` for
-      the names in :data:`MATERIAL_SLOT_NAMES`, ``image`` otherwise. The prefix
-      is the OPEN half of the convention — anything can be a slot if the
-      modeller says so.
+      the names in :data:`MATERIAL_SLOT_NAMES` (whole, or as the first
+      ``_``-token: ``glass_1``), ``image`` otherwise. The prefix is the OPEN
+      half of the convention — anything can be a slot if the modeller says so.
     * a whole name out of :data:`BARE_SLOT_NAMES` → the same slot under that
       name (so ``picture`` / ``screen`` / ``sign`` are image slots and ``glass``
       is a material one),
@@ -1017,6 +1067,116 @@ def sanitize_slots(raw: Any) -> List[Dict[str, str]]:
             continue
         seen.add(name)
         out.append({"name": name, "kind": kind})
+    return out
+
+
+def sanitize_key_areas(raw: Any) -> List[str]:
+    """The requested key colours as a subset of ``picture_areas.KINDS`` in
+    that order, de-duplicated — or ``ValueError`` for an unknown kind (a
+    silently dropped kind would report "Saved" over a request that reached
+    nothing). ``None`` / an empty list is "no key areas"."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("key_areas must be a list of kinds "
+                         + "(" + ", ".join(AREA_KINDS) + ")")
+    wanted = set()
+    for entry in raw:
+        kind = str(entry or "").strip().lower()
+        if kind not in AREA_KINDS:
+            raise ValueError(f"unknown key area kind {kind!r} (known: "
+                             + ", ".join(AREA_KINDS) + ")")
+        wanted.add(kind)
+    return [k for k in AREA_KINDS if k in wanted]
+
+
+def _coerce_vec(raw: Any, n: int, label: str) -> List[float]:
+    if not isinstance(raw, (list, tuple)) or len(raw) != n:
+        raise ValueError(f"{label} must be a list of {n} numbers")
+    try:
+        return [float(v) for v in raw]
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must be a list of {n} numbers") from None
+
+
+def sanitize_areas(raw: Any) -> List[Dict[str, Any]]:
+    """The stored shape of the area list — or ``ValueError``.
+
+    Every entry is ``{id, kind, size_m, normal, source, faces}``, with the
+    ``id`` spelling its kind (``picture_1`` is a picture) and optional
+    ``origin`` (material the faces came from) / ``centroid``. Optional keys
+    are kept only when given — the list round-trips byte for byte."""
+    if not isinstance(raw, list):
+        raise ValueError("areas must be a list")
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError("each area must be an object")
+        area_id = str(entry.get("id") or "").strip().lower()
+        m = _AREA_ID_RE.match(area_id)
+        if not m:
+            raise ValueError(f"bad area id {area_id!r} (expected <kind>_<k>)")
+        kind = str(entry.get("kind") or m.group(1)).strip().lower()
+        if kind != m.group(1):
+            raise ValueError(f"area {area_id!r} cannot be of kind {kind!r}")
+        if area_id in seen:
+            raise ValueError(f"area {area_id!r} listed twice")
+        seen.add(area_id)
+        source = str(entry.get("source") or "auto").strip().lower()
+        if source not in AREA_SOURCES:
+            raise ValueError(f"unknown area source {source!r}")
+        try:
+            faces = int(entry.get("faces") or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"area {area_id!r}: faces must be an integer") from None
+        if faces < 0:
+            raise ValueError(f"area {area_id!r}: faces must be >= 0")
+        item: Dict[str, Any] = {
+            "id": area_id,
+            "kind": kind,
+            "size_m": _coerce_vec(entry.get("size_m"), 2, f"area {area_id!r}: size_m"),
+            "normal": _coerce_vec(entry.get("normal"), 3, f"area {area_id!r}: normal"),
+            "source": source,
+            "faces": faces,
+        }
+        if entry.get("origin"):
+            item["origin"] = str(entry["origin"])
+        if entry.get("centroid") is not None:
+            item["centroid"] = _coerce_vec(entry.get("centroid"), 3,
+                                           f"area {area_id!r}: centroid")
+        out.append(item)
+    return out
+
+
+def sanitize_area_defaults(raw: Any,
+                           areas: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+    """``{"<area id>": {"preset": <SLOT_PRESETS>}}`` checked against the
+    prop's areas — an unknown area or preset is ``ValueError``, never a
+    silently stored default that no surface answers to."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("area_defaults must be an object {area_id: {preset}}")
+    known = {a.get("id") for a in (areas or [])}
+    out: Dict[str, Dict[str, str]] = {}
+    for area_id, value in raw.items():
+        aid = str(area_id or "").strip().lower()
+        if aid not in known:
+            raise ValueError(f"area_defaults names an unknown area {aid!r} "
+                             f"(the prop has: {', '.join(sorted(known)) or 'none'})")
+        if not isinstance(value, dict):
+            raise ValueError(f"area_defaults[{aid!r}] must be an object {{preset}}")
+        preset = str(value.get("preset") or "").strip().lower()
+        if not preset:
+            raise ValueError(f"area_defaults[{aid!r}] needs a preset "
+                             f"(known: {', '.join(SLOT_PRESETS)})")
+        if preset not in SLOT_PRESETS:
+            raise ValueError(f"area_defaults[{aid!r}]: unknown preset "
+                             f"{preset!r} (known: {', '.join(SLOT_PRESETS)})")
+        out[aid] = {"preset": preset}
     return out
 
 
@@ -1079,14 +1239,462 @@ def _autofill_slots(prop_id: str) -> None:
                 ", ".join(s["name"] for s in slots) or "none")
 
 
+# ── Picture areas: detection, split, rename, delete ─────────────────────
+# The GLB is the truth (spec-picture-props.md § 1): an area is a material
+# ``slot_<kind>_<k>`` on exactly its faces. Every change to that assignment
+# runs through Blender (``scripts/picture_areas.py``) and lands as a NEW
+# gallery file that is then selected — the signature moves, the history
+# stays, and a copy of the very first original goes under ``raw/`` like every
+# refinement (plan ruling). The one exception is a KIND RENAME: it only
+# changes a material NAME, which the JSON chunk of the GLB carries verbatim,
+# so it is rewritten in Python without a Blender round trip.
+
+class BlenderUnavailable(RuntimeError):
+    """Blender cannot run right now — missing, disabled or every slot busy.
+    A state of the host, not a defect of the mesh: the route answers 503."""
+
+
+def areas_sidecar_path(model_path: Optional[Path]) -> Optional[Path]:
+    """``model_<ts>.glb`` -> ``model_<ts>.glb.areas.json`` — the outline
+    edges and the mesh layout (R1) of THAT mesh's areas. Beside the mesh,
+    because they describe it and are meaningless for any other file."""
+    if not model_path:
+        return None
+    mp = Path(model_path)
+    return mp.with_name(mp.name + AREAS_SIDECAR_SUFFIX)
+
+
+def read_areas_sidecar(model_path: Optional[Path]) -> Dict[str, Any]:
+    sp = areas_sidecar_path(model_path)
+    if sp and sp.exists():
+        try:
+            data = json.loads(sp.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (OSError, ValueError):
+            pass
+    return {}
+
+
+def _write_areas_sidecar(model_path: Path, script_areas: List[Dict[str, Any]],
+                         mesh_layout: Any) -> None:
+    sp = areas_sidecar_path(model_path)
+    if not sp:
+        return
+    sp.write_text(json.dumps({
+        "areas": [{"id": a["id"], "kind": a["kind"],
+                   "edges": a.get("edges") or []} for a in script_areas],
+        "mesh_layout": [{"name": str(m.get("name") or ""),
+                         "tri_count": int(m.get("tri_count") or 0)}
+                        for m in (mesh_layout or []) if isinstance(m, dict)],
+        "run_at": utc_now_iso(),
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def _sidecar_areas_from_script(script_areas: List[Dict[str, Any]],
+                               previous: List[Dict[str, Any]],
+                               default_source: str) -> List[Dict[str, Any]]:
+    """The sidecar list from what the script reported: an area that existed
+    before keeps its ``source``, a new one gets ``default_source``."""
+    before = {a.get("id"): a for a in (previous or [])}
+    out = []
+    for a in script_areas:
+        prev = before.get(a.get("id")) or {}
+        out.append({
+            "id": a.get("id"),
+            "kind": a.get("kind"),
+            "size_m": a.get("size_m"),
+            "normal": a.get("normal"),
+            "source": prev.get("source") or default_source,
+            "faces": a.get("faces"),
+            "origin": a.get("origin") or prev.get("origin") or "",
+            "centroid": a.get("centroid"),
+        })
+    return sanitize_areas(out)
+
+
+def _is_primary(prop_id: str, variant: Any) -> bool:
+    return variant is None or _stem_of(prop_id, variant) == _stem_of(prop_id)
+
+
+def _drop_stale_low(gallery: ModelGallery) -> None:
+    """A CPU-built distance mesh of the file that was just superseded shows
+    the atlas where the picture is — remove it so the on-demand build makes
+    a new one from the split file. Only a mesh this store reduced ITSELF
+    (sidecar ``source: lod``); an uploaded or backend-delivered low mesh is
+    the admin's and stays."""
+    low = gallery.tiers().get(LOW_TIER)
+    if not low:
+        return
+    if read_model_sidecar(low).get("source") != "lod":
+        return
+    gallery.delete(low.name)
+    # `delete` re-points a dangling DEFAULT selection only; the low entry is
+    # dropped, so the auto-LOD demand rebuilds it from the current full mesh.
+
+
+def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
+                mode: str) -> Path:
+    """The split result as a NEW gallery file, selected for the full tier;
+    the first original kept under ``raw/`` (once, like ``refine.apply_script``)."""
+    from app.blender.refine import raw_backup_path
+    backup = raw_backup_path(src)
+    if not backup.exists():
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, backup)
+    target = gallery.new_path()
+    target.write_bytes(blob)
+    prev = read_model_sidecar(src)
+    write_model_sidecar(target, {
+        "created_at": utc_now_iso(),
+        "source": "areas",
+        "format": "glb",
+        "rig": "none",
+        "tier": DEFAULT_TIER,
+        "source_file": src.name,
+        "areas_mode": mode,
+        **({"backend": prev["backend"]} if prev.get("backend") else {}),
+        **({"face_num": prev["face_num"]} if prev.get("face_num") else {}),
+        **({"texture_size": prev["texture_size"]}
+           if prev.get("texture_size") else {}),
+    })
+    gallery.select(target.name, DEFAULT_TIER)
+    _drop_stale_low(gallery)
+    return target
+
+
+def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
+               default_source: str, wait_s: float) -> List[Dict[str, Any]]:
+    """ONE Blender run of ``scripts/picture_areas.py`` on a variant's full
+    mesh and everything that lands from it: the new gallery file, the sidecar
+    ``areas`` (primary variant only — the metadata describes the object's
+    mesh), the ``.areas.json`` beside the mesh, the texture slots.
+
+    Raises :class:`BlenderUnavailable` when Blender is missing or busy (503),
+    ``RuntimeError`` when the script fails (500), ``ValueError`` for a prop or
+    variant without a full-tier GLB."""
+    from app.blender import refine, runner
+    from app.core.model_validate import validate_static_glb
+    reason = refine.unavailable_reason()
+    if reason:
+        raise BlenderUnavailable(reason)
+    pid = safe_prop_id(prop_id)
+    g = model_gallery(pid, variant) if pid else None
+    src = g.find(DEFAULT_TIER, fallback=False) if g else None
+    if not src or src.suffix.lower() != ".glb":
+        raise ValueError("this variant has no full-tier GLB to work on")
+    if not refine.take_lod_slot(wait_s):
+        raise BlenderUnavailable("blender is busy with another model — try "
+                                 "again in a moment")
+    try:
+        with tempfile.TemporaryDirectory(prefix="av-areas-") as tmp:
+            res = runner.run("picture_areas", inputs={"model": src},
+                             params=params, out_dir=Path(tmp), timeout_s=600)
+            if not res.get("ok"):
+                raise RuntimeError(res.get("error") or "picture_areas failed")
+            data = res.get("data") or {}
+            produced = (res.get("outputs") or {}).get("model")
+            blob = Path(produced).read_bytes() if produced else None
+    finally:
+        refine.free_lod_slot()
+
+    model_file = src
+    if blob is not None:
+        verdict = validate_static_glb(blob)
+        if not verdict.get("ok"):
+            raise RuntimeError("split model failed validation: "
+                               + "; ".join(verdict.get("errors") or []))
+        model_file = _land_split(g, src, blob, str(params.get("mode") or ""))
+
+    script_areas = [a for a in (data.get("areas") or []) if isinstance(a, dict)]
+    _write_areas_sidecar(model_file, script_areas, data.get("mesh_layout"))
+    meta = read_sidecar(pid)
+    areas = _sidecar_areas_from_script(script_areas, meta.get(AREAS_KEY) or [],
+                                       default_source)
+    if _is_primary(pid, variant) and meta:
+        ids = {a["id"] for a in areas}
+        meta[AREAS_KEY] = areas
+        meta.pop(AREAS_ERROR_KEY, None)
+        meta[AREAS_RUN_AT_KEY] = utc_now_iso()
+        defaults = {k: v for k, v in (meta.get(AREA_DEFAULTS_KEY) or {}).items()
+                    if k in ids}
+        if defaults:
+            meta[AREA_DEFAULTS_KEY] = defaults
+        else:
+            meta.pop(AREA_DEFAULTS_KEY, None)
+        _write_sidecar(pid, meta)
+        _autofill_slots(pid)
+    logger.info("Prop %s: picture areas %s -> %s (%s)", pid,
+                params.get("mode"), ", ".join(a["id"] for a in areas) or "none",
+                model_file.name)
+    return areas
+
+
+def _origins(meta: Dict[str, Any]) -> Dict[str, str]:
+    return {a["id"]: a["origin"] for a in (meta.get(AREAS_KEY) or [])
+            if a.get("origin")}
+
+
+def detect_areas(prop_id: str, *, mode: str = "auto",
+                 faces: Any = None, kind: str = "picture",
+                 variant: Any = None, min_faces: int = MIN_AREA_FACES,
+                 min_area_m2: float = MIN_AREA_M2,
+                 wait_s: float = 10.0) -> List[Dict[str, Any]]:
+    """Find or draw the picture areas of one variant's mesh — returns the
+    sidecar ``areas`` list after the run.
+
+    ``mode="auto"`` dissolves every existing area and detects the key-coloured
+    panels of the kinds the prop asked for (``key_areas``; every kind when it
+    asked for none). ``mode="manual"`` turns ``faces`` (flat triangle indices
+    in the R1 order of the CURRENT mesh — the tab's polygon pick) into one new
+    area of ``kind``; every other area stays. ``min_faces`` / ``min_area_m2``
+    are the auto filter (production: 12 faces, 0.02 m²).
+
+    Raises ``ValueError`` for bad input, :class:`BlenderUnavailable` when
+    Blender is missing or busy, ``RuntimeError`` when the run fails.
+    ``wait_s`` is how long to wait for a Blender slot — a request thread
+    keeps it short, a landing thread may wait.
+    """
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        raise ValueError("prop not found")
+    mode = str(mode or "auto").strip().lower()
+    params: Dict[str, Any] = {"mode": mode, "origins": _origins(meta)}
+    if mode == "auto":
+        params["kinds"] = list(meta.get(KEY_AREAS_KEY) or AREA_KINDS)
+        params["min_faces"] = max(1, int(min_faces))
+        params["min_area_m2"] = max(0.0, float(min_area_m2))
+    elif mode == "manual":
+        kind = str(kind or "").strip().lower()
+        if kind not in AREA_KINDS:
+            raise ValueError(f"unknown area kind {kind!r} (known: "
+                             + ", ".join(AREA_KINDS) + ")")
+        try:
+            idx = sorted({int(f) for f in (faces or [])})
+        except (TypeError, ValueError):
+            raise ValueError("faces must be a list of triangle indices") from None
+        if not idx or idx[0] < 0:
+            raise ValueError("faces must be a non-empty list of triangle indices")
+        params["faces"] = idx
+        params["kind"] = kind
+    else:
+        raise ValueError(f"unknown mode {mode!r} (auto | manual)")
+    return _areas_run(pid, variant, params,
+                      default_source="auto" if mode == "auto" else "manual",
+                      wait_s=wait_s)
+
+
+def delete_area(prop_id: str, area_id: str, variant: Any = None,
+                wait_s: float = 10.0) -> List[Dict[str, Any]]:
+    """Dissolve one area: its faces go back to the material they came from
+    (``origin``) with their atlas UVs restored, the material is gone from the
+    mesh, the sidecar entry and any default on it with it. Returns the
+    remaining ``areas``. ``ValueError`` for an unknown area."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        raise ValueError("prop not found")
+    aid = str(area_id or "").strip().lower()
+    if aid not in {a["id"] for a in (meta.get(AREAS_KEY) or [])}:
+        raise ValueError(f"unknown area {aid!r}")
+    return _areas_run(pid, variant, {"mode": "delete", "area": aid,
+                                     "origins": _origins(meta)},
+                      default_source="manual", wait_s=wait_s)
+
+
+def _rewrite_glb_material_names(blob: bytes, mapping: Dict[str, str]) -> bytes:
+    """The GLB with ``materials[].name`` renamed per ``mapping`` — the JSON
+    chunk re-serialised, every other chunk byte for byte. The one mesh edit
+    that needs no Blender: a name is data of the container, not geometry."""
+    if len(blob) < 20 or blob[:4] != b"glTF":
+        raise ValueError("not a GLB file")
+    chunks: List[Tuple[int, bytes]] = []
+    offset = 12
+    while offset + 8 <= len(blob):
+        length, ctype = struct.unpack("<II", blob[offset:offset + 8])
+        chunks.append((ctype, blob[offset + 8:offset + 8 + length]))
+        offset += 8 + length + ((4 - length % 4) % 4)
+    out = b""
+    for ctype, body in chunks:
+        if ctype == 0x4E4F534A:
+            gltf = json.loads(body.decode("utf-8"))
+            for mat in gltf.get("materials") or []:
+                if mat.get("name") in mapping:
+                    mat["name"] = mapping[mat["name"]]
+            body = json.dumps(gltf, separators=(",", ":"),
+                              ensure_ascii=False).encode("utf-8")
+            body += b" " * ((4 - len(body) % 4) % 4)
+        else:
+            body += b"\0" * ((4 - len(body) % 4) % 4)
+        out += struct.pack("<II", len(body), ctype) + body
+    return struct.pack("<III", 0x46546C67, 2, 12 + len(out)) + out
+
+
+def rename_area_kind(prop_id: str, area_id: str, kind: str,
+                     variant: Any = None) -> List[Dict[str, Any]]:
+    """Change what an area IS (picture <-> glass): the material is renamed to
+    the next free ``slot_<kind>_<k>`` of the target kind, in a NEW gallery
+    file (the GLB's JSON chunk rewritten, no Blender needed), and the sidecar
+    entry, its outline record and any default on it follow the new id.
+    Returns the ``areas`` list. Same kind = nothing to do."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        raise ValueError("prop not found")
+    kind = str(kind or "").strip().lower()
+    if kind not in AREA_KINDS:
+        raise ValueError(f"unknown area kind {kind!r} (known: "
+                         + ", ".join(AREA_KINDS) + ")")
+    aid = str(area_id or "").strip().lower()
+    areas = list(meta.get(AREAS_KEY) or [])
+    entry = next((a for a in areas if a["id"] == aid), None)
+    if entry is None:
+        raise ValueError(f"unknown area {aid!r}")
+    if entry["kind"] == kind:
+        return areas
+    used = {int(a["id"].rsplit("_", 1)[1]) for a in areas if a["kind"] == kind}
+    k = 1
+    while k in used:
+        k += 1
+    new_id = f"{kind}_{k}"
+    g = model_gallery(pid, variant)
+    src = g.find(DEFAULT_TIER, fallback=False) if g else None
+    if not src or src.suffix.lower() != ".glb":
+        raise ValueError("this variant has no full-tier GLB to work on")
+    blob = _rewrite_glb_material_names(
+        src.read_bytes(), {f"{SLOT_PREFIX}{aid}": f"{SLOT_PREFIX}{new_id}"})
+    outline = read_areas_sidecar(src)
+    target = _land_split(g, src, blob, "rename")
+    for rec in outline.get("areas") or []:
+        if rec.get("id") == aid:
+            rec["id"], rec["kind"] = new_id, kind
+    if outline:
+        sp = areas_sidecar_path(target)
+        if sp:
+            sp.write_text(json.dumps(outline, ensure_ascii=False), encoding="utf-8")
+    if _is_primary(pid, variant):
+        entry["id"], entry["kind"] = new_id, kind
+        meta[AREAS_KEY] = sanitize_areas(areas)
+        defaults = dict(meta.get(AREA_DEFAULTS_KEY) or {})
+        if aid in defaults:
+            defaults[new_id] = defaults.pop(aid)
+            meta[AREA_DEFAULTS_KEY] = defaults
+        meta[AREAS_RUN_AT_KEY] = utc_now_iso()
+        _write_sidecar(pid, meta)
+        _autofill_slots(pid)
+    logger.info("Prop %s: area %s renamed to %s (%s)", pid, aid, new_id,
+                target.name)
+    return list(meta.get(AREAS_KEY) or [])
+
+
+def areas_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
+    """What ``GET /world/props/{id}/areas`` answers: the sidecar areas, each
+    with the outline ``edges`` of the active mesh's record, the R1
+    ``mesh_layout``, whether Blender can run, the last run and the last
+    automatic run's error."""
+    from app.blender import refine
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    outline = read_areas_sidecar(model_path(pid, variant=variant)) if meta else {}
+    edges = {rec.get("id"): rec.get("edges") or []
+             for rec in (outline.get("areas") or []) if isinstance(rec, dict)}
+    reason = refine.unavailable_reason()
+    return {
+        "areas": [{**a, "edges": edges.get(a["id"], [])}
+                  for a in (meta.get(AREAS_KEY) or [])],
+        "mesh_layout": outline.get("mesh_layout") or [],
+        "key_areas": list(meta.get(KEY_AREAS_KEY) or []),
+        "area_defaults": dict(meta.get(AREA_DEFAULTS_KEY) or {}),
+        "blender": {"available": not reason, "reason": reason},
+        "last_run": meta.get(AREAS_RUN_AT_KEY) or None,
+        "error": meta.get(AREAS_ERROR_KEY) or "",
+    }
+
+
+def _areas_after_landing(prop_id: str, variant: Any = None) -> None:
+    """The landing hook of BOTH ingest paths (``_store_bbox``, ``_generate``):
+    a prop that asked for key colours gets its fresh primary mesh split
+    automatically; one that did not gets its area list reconciled with the
+    mesh that is active now (an area whose material the mesh no longer
+    carries is dropped, with its default).
+
+    NEVER fails the landing: a failure is logged, stored as ``areas_error``
+    with ``areas: []`` and shown by the tab. Waits up to half a minute for a
+    Blender slot — a landing thread has nowhere better to be."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta or not _is_primary(pid, variant):
+        return
+    if not meta.get(KEY_AREAS_KEY):
+        _reconcile_areas(pid, meta)
+        return
+    try:
+        detect_areas(pid, mode="auto", variant=variant, wait_s=30.0)
+    except Exception as e:                                  # noqa: BLE001
+        logger.warning("Prop %s: automatic picture-area detection failed: %s",
+                       pid, e)
+        meta = read_sidecar(pid)
+        if not meta:
+            return
+        meta[AREAS_KEY] = []
+        meta[AREAS_ERROR_KEY] = str(e) or type(e).__name__
+        meta.pop(AREA_DEFAULTS_KEY, None)
+        try:
+            _write_sidecar(pid, meta)
+        except (OSError, ValueError):
+            pass
+
+
+def _reconcile_areas(pid: str, meta: Dict[str, Any]) -> None:
+    """Drop sidecar areas whose material the ACTIVE primary mesh does not
+    carry (the admin selected another gallery file, uploaded a new mesh).
+    Only a POSITIVE reading changes the list — an unreadable mesh is not a
+    statement that the areas are gone."""
+    areas = meta.get(AREAS_KEY) or []
+    if not areas:
+        return
+    mp = model_path(pid)
+    if not mp or mp.suffix.lower() != ".glb":
+        return
+    try:
+        names = {str(n).strip().lower() for n in glb_material_names_at(mp)}
+    except (OSError, ValueError, KeyError, json.JSONDecodeError,
+            UnicodeDecodeError):
+        return
+    kept = [a for a in areas if f"{SLOT_PREFIX}{a['id']}" in names]
+    if len(kept) == len(areas):
+        return
+    ids = {a["id"] for a in kept}
+    meta[AREAS_KEY] = kept
+    defaults = {k: v for k, v in (meta.get(AREA_DEFAULTS_KEY) or {}).items()
+                if k in ids}
+    if defaults:
+        meta[AREA_DEFAULTS_KEY] = defaults
+    else:
+        meta.pop(AREA_DEFAULTS_KEY, None)
+    try:
+        _write_sidecar(pid, meta)
+    except (OSError, ValueError):
+        return
+    logger.info("Prop %s: %d picture area(s) dropped — not on the active mesh",
+                pid, len(areas) - len(kept))
+
+
 # ── CRUD ────────────────────────────────────────────────────────────────
 
 def create_prop(*, name: str, category: str = "", width_m: Any = None,
                 depth_m: Any = None, height_m: Any = None,
                 tags: Any = None, description: str = "", prompt: str = "",
-                source: str = "manual") -> Dict[str, Any]:
+                source: str = "manual", key_areas: Any = None) -> Dict[str, Any]:
     """Create a new prop record (sidecar only — the model/source files are
     added by upload or the generation chain). Returns ``{id, **sidecar}``.
+
+    ``key_areas`` (``["picture", "glass"]``) records which chroma-key panels
+    the generation is asked for — the prompt gets the fragments
+    (:func:`compose_prompt`) and every landing mesh is split automatically
+    (:func:`_areas_after_landing`). Stored only when non-empty; an unknown
+    kind is ``ValueError``.
 
     Dims: whatever is given is taken, every missing one becomes the LARGEST
     given value (a rough cube); nothing given = 1 m per dim. They land on the
@@ -1113,6 +1721,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     subject = _coerce_description(description)
     if subject:
         variant[DESCRIPTION_KEY] = subject
+    keys = sanitize_key_areas(key_areas)
     meta = {
         "name": name,
         "category": (category or "").strip(),
@@ -1129,6 +1738,8 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         "source": (source or "manual").strip(),
         "prompt": (prompt or "").strip(),
     }
+    if keys:
+        meta[KEY_AREAS_KEY] = keys
     _write_sidecar(prop_id, meta)
     logger.info("Prop %s created (%s)", prop_id, name)
     return {"id": prop_id, **meta}
@@ -1138,7 +1749,8 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
 #: of the admin form edits. Everything about how the object LOOKS moved onto
 #: the variants (2026-08-25), and :data:`MOVED_TO_VARIANT` names those so a
 #: stale client is REFUSED instead of silently writing a key nobody reads.
-PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor", "slots")
+PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor", "slots",
+                   "area_defaults")
 #: The five fields that are variant-only now. A prop-level patch naming one of
 #: them is a 400 with the route that owns it — never a no-op: an editor that
 #: still sends ``height_m`` here would report "Saved" over a value that never
@@ -1154,7 +1766,8 @@ MOVED_TO_VARIANT = {
 }
 
 
-def _check_prop_patch(patch: Dict[str, Any]) -> None:
+def _check_prop_patch(patch: Dict[str, Any],
+                      meta: Optional[Dict[str, Any]] = None) -> None:
     """Refuse a prop patch that names a field this record does not own.
 
     A key that MOVED onto the variants gets the route that owns it now
@@ -1178,6 +1791,11 @@ def _check_prop_patch(patch: Dict[str, Any]) -> None:
     # and this is the only prop field a body can get structurally wrong.
     if SLOTS_KEY in patch:
         sanitize_slots(patch.get(SLOTS_KEY))
+    if AREA_DEFAULTS_KEY in patch:
+        # …and the second: a default is checked against the areas the prop
+        # HAS, so the record is needed to refuse it.
+        sanitize_area_defaults(patch.get(AREA_DEFAULTS_KEY),
+                               (meta or {}).get(AREAS_KEY) or [])
 
 
 def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
@@ -1211,6 +1829,13 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
         # it alone, an emptied list included.
         meta[SLOTS_KEY] = sanitize_slots(patch.get(SLOTS_KEY))
         meta[SLOTS_AUTO_KEY] = False
+    if AREA_DEFAULTS_KEY in patch:
+        defaults = sanitize_area_defaults(patch.get(AREA_DEFAULTS_KEY),
+                                          meta.get(AREAS_KEY) or [])
+        if defaults:
+            meta[AREA_DEFAULTS_KEY] = defaults
+        else:
+            meta.pop(AREA_DEFAULTS_KEY, None)
 
 
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1228,7 +1853,7 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
         return None
     if not isinstance(patch, dict):
         patch = {}
-    _check_prop_patch(patch)
+    _check_prop_patch(patch, meta)
     _apply_prop_fields(meta, patch)
     _write_sidecar(pid, meta)
     return {"id": pid, **meta}
@@ -1787,7 +2412,7 @@ def bulk_update(prop_id: str, general: Any = None,
     if not meta:
         return None
     prop_patch = general if isinstance(general, dict) else {}
-    _check_prop_patch(prop_patch)
+    _check_prop_patch(prop_patch, meta)
 
     raw = variants if isinstance(variants, dict) else {}
     entries = _variant_list(meta)
@@ -1848,7 +2473,9 @@ def delete_variant(prop_id: str, variant: int) -> bool:
         return False
     g = model_gallery(pid, i)
     if g:
+        doomed = g.files()
         g.delete()
+        _drop_areas_sidecars(doomed)
         # The stem's selection entry survives its files (``delete`` only
         # re-points what is left), and a freed stem may be handed out again —
         # so it goes with the variant.
@@ -2220,10 +2847,26 @@ def delete_model(prop_id: str, filename: str = "",
     selection pointing at a removed file moves to the newest remaining one
     (default tier) or is dropped (any other tier)."""
     g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
-    if not g or not g.delete(filename):
+    if not g:
         return False
+    doomed = [g.file(filename)] if filename else g.files()
+    if not g.delete(filename):
+        return False
+    _drop_areas_sidecars(doomed)
     _store_bbox(prop_id, variant)
     return True
+
+
+def _drop_areas_sidecars(files: Sequence[Optional[Path]]) -> None:
+    """The ``.areas.json`` companions of removed mesh files go with them —
+    the gallery only knows a file's own ``.json`` sidecar."""
+    for f in files:
+        sp = areas_sidecar_path(f) if f else None
+        if sp and sp.exists():
+            try:
+                sp.unlink()
+            except OSError:
+                pass
 
 
 # ── The source image, one per variant ───────────────────────────────────
@@ -2453,6 +3096,13 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
     if not gallery:
         out["error"] = "no_model"
         return out
+    if gallery.find(DEFAULT_TIER, fallback=False) != src:
+        # The full mesh moved on while this ran (a picture-area split landed
+        # a new file and dropped the old low tier): a distance mesh of the
+        # superseded file must not become the low tier of the new one — the
+        # next payload asks again and reduces the current file.
+        out["error"] = "full mesh changed during the build"
+        return out
     target = gallery.new_path()
     target.write_bytes(res["blob"])
     write_model_sidecar(target, {
@@ -2633,6 +3283,11 @@ def _store_bbox(prop_id: str, variant: Any = None) -> None:
     that just received the mesh; the MEASUREMENT belongs to the object and is
     therefore only redone when the primary variant was the one that changed."""
     _auto_bake_vc(prop_id, variant)
+    # The picture-area split right after the bake (it renames every material)
+    # and BEFORE the distance mesh is asked for, so the low tier is reduced
+    # from the split file and not from the one it replaces. Never fails the
+    # landing. The generation chain has the same call of its own (`_generate`).
+    _areas_after_landing(prop_id, variant)
     _auto_retexture(prop_id, variant)
     request_low_tier(prop_id, variant)
     if variant is not None and _stem_of(prop_id, variant) != _stem_of(prop_id):
@@ -2785,6 +3440,12 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         # "none" and "not detected yet". On the lean record too: it is what a
         # scene's `slots` are matched against.
         "slots": meta.get(SLOTS_KEY) or [],
+        # The picture areas of the primary mesh and the prop-wide defaults
+        # (spec-picture-props.md § 1) — always present, like `slots`: the
+        # recipe reads `area_defaults` off the record, the tab reads all three.
+        KEY_AREAS_KEY: list(meta.get(KEY_AREAS_KEY) or []),
+        AREAS_KEY: list(meta.get(AREAS_KEY) or []),
+        AREA_DEFAULTS_KEY: dict(meta.get(AREA_DEFAULTS_KEY) or {}),
         "marker_count": len(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
@@ -3056,7 +3717,32 @@ def variant_generating(prop_id: str, variant: Any) -> bool:
 # mesh-backend fallback — the existing rule). Runs on a worker thread with the
 # per-job double-start guard (prop_id|mesh backend).
 
-def compose_prompt(subject: str, backend) -> Dict[str, str]:
+def apply_key_areas(prompt: str, negative: str,
+                    key_areas: Any) -> Tuple[str, str]:
+    """Appends the chroma-key fragments for ``key_areas`` to a FINAL prompt
+    and merges their negatives (spec-picture-props.md § 3; the text is
+    ``config.KEY_AREA_PROMPTS`` / ``KEY_AREA_NEGATIVES``).
+
+    Idempotent: a fragment the prompt already carries (the dialog showed the
+    composed text and sent it back) is not appended twice. Kind order is the
+    fixed one of ``picture_areas.KINDS``."""
+    from app.core.config import KEY_AREA_NEGATIVES, KEY_AREA_PROMPTS
+    from app.core.prompt_compose import merge_tags
+    prompt = (prompt or "").rstrip()
+    negative = negative or ""
+    for kind in sanitize_key_areas(key_areas):
+        fragment = KEY_AREA_PROMPTS.get(kind, "")
+        core = fragment.strip(" ,")
+        if core and core not in prompt:
+            prompt = prompt.rstrip(" ,") + fragment if prompt else core
+        neg = KEY_AREA_NEGATIVES.get(kind, "")
+        if neg and neg not in negative:
+            negative = merge_tags(negative, neg)
+    return prompt, negative
+
+
+def compose_prompt(subject: str, backend,
+                   key_areas: Any = None) -> Dict[str, str]:
     """Final source-render prompt + negative for a prop on a backend — the
     ``prop`` use-case style (per image family) with the object subject woven
     into its ``{subject}`` slot. The dialog shows exactly this and may edit it
@@ -3067,7 +3753,12 @@ def compose_prompt(subject: str, backend) -> Dict[str, str]:
     generation, 8k resolution") is part of that style and of nothing else —
     see ``_DEFAULT_IMAGE_USE_CASES["prop"]`` in ``app.core.config``. Nothing
     here adds a phrase of its own, so the framing cannot land in a prompt
-    twice."""
+    twice.
+
+    ``key_areas`` (``["picture", "glass"]``) appends the chroma-key fragment
+    per kind to the composed prompt and its negative addition to the negative
+    (:func:`apply_key_areas`) — the one thing this prompt gets beyond the
+    style, and only on request. ``style`` stays raw either way."""
     from app.core import config as _cfg
     from app.core.prompt_compose import compose as _compose
     ucp = _cfg.resolve_use_case_style(
@@ -3079,10 +3770,12 @@ def compose_prompt(subject: str, backend) -> Dict[str, str]:
     # belongs to prompt_compose; only the return SHAPE is this module's, the
     # dialog recomposes per object from `style` + its own subject field.
     composed = _compose(use_case="prop", subject=subject, backend=backend)
+    prompt, negative = apply_key_areas(composed.prompt, composed.negative,
+                                       key_areas)
     return {
         "style": (ucp.get("prompt_style") or "").strip(),
-        "prompt": composed.prompt,
-        "negative": composed.negative,
+        "prompt": prompt,
+        "negative": negative,
     }
 
 
@@ -3113,19 +3806,26 @@ def _render_source(prop_id: str, backend_glob: str,
         logger.warning("Prop %s: no image backend available", prop_id)
         return False
 
+    meta0 = read_sidecar(prop_id)
+    key_areas = meta0.get(KEY_AREAS_KEY) or []
     if not prompt.strip():
         # The stored description is the generation subject; the name is only
         # the display fallback when no description was written. It is THIS
         # VARIANT's description (2026-08-24) — a version of the object is
         # rendered from its own sentence where it has one, and only a variant
         # without one falls back to the prop's.
-        meta0 = read_sidecar(prop_id)
         composed = compose_prompt(
             variant_description(meta0, variant) or meta0.get("name", ""),
-            backend)
+            backend, key_areas=key_areas)
         prompt = composed["prompt"]
         if not negative.strip():
             negative = composed["negative"]
+    elif key_areas:
+        # A prompt the dialog sent back already carries the chroma-key
+        # fragments (the client mirrors them); one from an older client does
+        # not. The request for key colours is on the record either way, and
+        # the append is idempotent — so it is honoured either way.
+        prompt, negative = apply_key_areas(prompt, negative, key_areas)
 
     params: Dict[str, Any] = {
         "width": 1024, "height": 1024,
@@ -3306,6 +4006,11 @@ def _generate(prop_id: str, prompt: str, negative: str,
                 _redistribute_dims(meta)
         _write_sidecar(prop_id, meta)
         if primary:
+            # The picture-area split of the mesh that just landed (when the
+            # prop asked for key colours) — same law as the slots below: this
+            # chain does not go through `_store_bbox`, so the landing hook has
+            # to stand here as well. Its own read-modify-write, never raises.
+            _areas_after_landing(prop_id, variant)
             # …and the object's texture slots, off the mesh that just landed.
             # AFTER the write above, never before: `_autofill_slots` does its
             # own read-modify-write and the `meta` in hand here predates it.
