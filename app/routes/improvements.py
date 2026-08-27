@@ -80,22 +80,18 @@ def _validated(type_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _cancel_in_flight(improvement_id: str) -> None:
-    """Cancel the queue task of a step this entry has in flight.
+    """Cancel the queue task(s) of a step this entry has in flight.
 
-    The engine owes at most ONE ``improvement_step`` task at a time (its own
-    ``has_pending_task`` gate), and a step is marked running in the same breath
-    as the task is submitted.  So: this entry has a running step exactly when
-    the owed task — if there is one — is its own.  The queue's status rows carry
-    no payload, which is why the ownership question is answered from the step
-    rows rather than from the task.
+    Ownership is decided by the task's own payload, never by "there is only one
+    improvement_step owed": a foreign entry's task must survive this delete.
+    ``list_tasks_of_type`` is used rather than ``get_status``, whose pending
+    list is the admin panel's top-50 window ordered by priority — improvement
+    steps run at the very back (STEP_PRIORITY 90), so under load the task to
+    cancel is exactly the one that window drops.
     """
-    if not any(step["improvement_id"] == improvement_id
-               for step in store.running_steps()):
-        return
     task_queue = get_task_queue()
-    status = task_queue.get_status()
-    for row in list(status.get("pending") or []) + list(status.get("running") or []):
-        if row.get("task_type") != engine.TASK_TYPE:
+    for row in task_queue.list_tasks_of_type(engine.TASK_TYPE):
+        if (row["payload"] or {}).get("improvement_id") != improvement_id:
             continue
         task_queue.cancel_task(row["task_id"])
         logger.info("improvements: cancelled task %s of deleted entry %s",

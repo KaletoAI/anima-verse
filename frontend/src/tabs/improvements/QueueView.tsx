@@ -23,10 +23,37 @@ const ENTRY_COLORS = [
   '#ff9ec7', '#8fd17f', '#ffae8a', '#b388ff',
 ]
 
+/**
+ * The colour is a property of the ENTRY, not of its place in the snapshot:
+ * indexing by position would recolour the whole queue every time the head
+ * entry drains. A small string hash keeps a block of work the same colour for
+ * as long as it is in the queue.
+ */
+function colorOf(improvementId: string): string {
+  let hash = 0
+  for (let i = 0; i < improvementId.length; i++) {
+    hash = (hash * 31 + improvementId.charCodeAt(i)) | 0
+  }
+  return ENTRY_COLORS[Math.abs(hash) % ENTRY_COLORS.length]
+}
+
 /** m:ss — the countdown is minutes, and a bare number of seconds is unreadable. */
 function mmss(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+/** The step statuses, translated — the raw enum is not a UI string. */
+const STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  done: 'Done',
+  failed: 'Failed',
+  skipped: 'Skipped',
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** A system stamp (technical, not game time) rendered as a wall clock. */
@@ -44,12 +71,15 @@ export function QueueView() {
   const [idleInput, setIdleInput] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const { data: snapshot, refresh: refreshQueue } =
+  const { data: snapshot, error: queueError, refresh: refreshQueue } =
     usePoll<QueueSnapshot>('improvements-queue', fetchQueue,
       { intervalMs: POLL_INTERVAL_MS })
-  const { data: status, refresh: refreshStatus } =
+  const { data: status, error: statusError, refresh: refreshStatus } =
     usePoll<EngineStatus>('improvements-status', fetchStatus,
       { intervalMs: POLL_INTERVAL_MS })
+
+  /** The last failure of either feed — polling continues either way. */
+  const pollError = statusError || queueError
 
   useEffect(() => {
     fetchTypes().then(setTypes).catch(() => setTypes([]))
@@ -67,6 +97,10 @@ export function QueueView() {
     return found ? found.label : typeId
   }, [types])
 
+  const statusLabel = useCallback((value: string) => (
+    STATUS_LABELS[value] ? t(STATUS_LABELS[value]) : value
+  ), [t])
+
   const queue = useMemo(() => snapshot?.queue ?? [], [snapshot])
   const recent = snapshot?.recent ?? []
 
@@ -80,11 +114,6 @@ export function QueueView() {
     }
     return out
   }, [queue])
-
-  const colorOf = useCallback((improvementId: string) => {
-    const index = entries.findIndex((e) => e.value === improvementId)
-    return ENTRY_COLORS[(index < 0 ? 0 : index) % ENTRY_COLORS.length]
-  }, [entries])
 
   const visible = entryFilter
     ? queue.filter((row) => row.improvement_id === entryFilter)
@@ -125,7 +154,15 @@ export function QueueView() {
     if (e.key === 'Enter') e.currentTarget.blur()
   }, [])
 
-  if (!status) return <div className="ga-loading">{t('Loading…')}</div>
+  // A failing feed must not leave the tab on "Loading…" forever — the poll
+  // hub keeps retrying, so the message says what is wrong and stays put.
+  if (!status) {
+    return pollError
+      ? <div className="ga-imp-error">
+          {t('Error')}: {errorText(pollError)}
+        </div>
+      : <div className="ga-loading">{t('Loading…')}</div>
+  }
 
   const gate = (() => {
     switch (status.reason) {
@@ -144,6 +181,11 @@ export function QueueView() {
 
   return (
     <div className="ga-page-scroll">
+      {/* Data is on screen, so the list stays — but a stale feed has to say so
+          rather than quietly showing the last good snapshot forever. */}
+      {pollError ? (
+        <div className="ga-imp-error">{t('Error')}: {errorText(pollError)}</div>
+      ) : null}
       <div className="ga-imp-head">
         <button type="button" disabled={saving} onClick={toggleEngine}
           className={'ga-btn ga-btn-sm'
@@ -202,7 +244,7 @@ export function QueueView() {
             </span>
             <span className={row.status === 'running'
               ? 'ga-status-ok' : 'ga-status-paused'}>
-              {row.status}
+              {statusLabel(row.status)}
             </span>
           </li>
         ))}
@@ -234,7 +276,7 @@ export function QueueView() {
                 </span>
                 <span className={row.status === 'done'
                   ? 'ga-status-ok' : 'ga-status-paused'}>
-                  {row.status} {clockTime(row.finished_at)}
+                  {statusLabel(row.status)} {clockTime(row.finished_at)}
                 </span>
               </li>
             ))}

@@ -57,6 +57,16 @@ recorded from a run.  A mini FastAPI app carries only this router, and
      flight is cancelled first, so no worker keeps working for an entry that is
      gone.  The queue row goes 'cancelled' and the last entry leaves the list.
 
+     Two things the cancel must get right, and both are set up here.  First,
+     OWNERSHIP: with A's step owed, deleting B may cancel nothing — the task is
+     not B's.  Second, VISIBILITY under load: improvement steps run at priority
+     90, behind everything a player waits for, and the admin panel's pending
+     window is ``ORDER BY priority, created_at LIMIT 50``.  So 51 unrelated
+     priority-20 tasks are queued in front of it — enough to push A's task out
+     of that window entirely.  It is still cancelled, and none of the 51 is
+     touched: the cancel asks for tasks BY TYPE and picks by payload, it does
+     not sample a panel view.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvements_route.py
 """
 import os
@@ -133,14 +143,15 @@ app.dependency_overrides[require_admin] = lambda: {"username": "demo",
 client = TestClient(app)
 
 
-def task_rows():
-    """The improvement_step rows the queue really stored — read at the
-    consumer (the queue DB), never taken from a submit return value."""
+def task_rows(task_type=None):
+    """The rows the queue really stored — read at the consumer (the queue DB),
+    never taken from a submit return value."""
     conn = sqlite3.connect(f"file:{QUEUE_DB}?mode=ro", uri=True)
     try:
         return [dict(zip(("task_id", "status"), r)) for r in conn.execute(
             "SELECT task_id, status FROM tasks WHERE task_type=? "
-            "ORDER BY created_at, rowid", (engine.TASK_TYPE,)).fetchall()]
+            "ORDER BY created_at, rowid",
+            (task_type or engine.TASK_TYPE,)).fetchall()]
     finally:
         conn.close()
 
@@ -294,11 +305,27 @@ submitted = engine.tick()["submitted"]
 check("a step is owed", (submitted != "", len(task_rows())), (True, 1))
 running = store.running_steps()[0]
 check("…for A", running["improvement_id"], A)
+
+# 51 unrelated tasks in front of it: one more than the admin panel's pending
+# window holds, and all of them at the default priority 20, so A's priority-90
+# task is the first thing that window drops.
+for i in range(51):
+    get_task_queue().submit("noise", {"i": i}, priority=20, deduplicate=False)
+check("the panel's window no longer shows the owed step",
+      [r for r in get_task_queue().get_status()["pending"]
+       if r["task_type"] == engine.TASK_TYPE], [])
+
+check("deleting the OTHER entry answers ok",
+      client.delete(f"/improvements/{B}").status_code, 200)
+check("…and cancels nothing — the task is not B's",
+      [row["status"] for row in task_rows()], ["pending"])
+
 check("DELETE answers ok", client.delete(f"/improvements/{A}").status_code, 200)
-check("…the owed task is cancelled",
+check("…the owed task is cancelled, window or no window",
       [row["status"] for row in task_rows()], ["cancelled"])
+check("…and no unrelated task was touched",
+      sorted({row["status"] for row in task_rows("noise")}), ["pending"])
 check("…the steps are gone", client.get(f"/improvements/{A}/steps").status_code, 404)
-client.delete(f"/improvements/{B}")
 check("…and the list is empty", client.get("/improvements").json(), [])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")

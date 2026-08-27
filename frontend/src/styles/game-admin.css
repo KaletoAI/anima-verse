@@ -3067,3 +3067,14 @@ a.ga-btn {
 }
 
 .ga-imp-recent { margin-top: 6px; }
+
+/* A failing poll — the feed keeps retrying, so this is a standing notice, not
+   a toast that scrolls away while the tab shows stale numbers. */
+.ga-imp-error {
+  font-size: 12px;
+  color: var(--danger, #f85149);
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--danger, #f85149);
+  border-radius: var(--radius, 6px);
+}

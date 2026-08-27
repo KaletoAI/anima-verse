@@ -2214,6 +2214,11 @@
     "Nothing queued": "Nichts in der Warteschlange",
     "{n} steps pending": "{n} Schritte offen",
     "~{h} h estimated": "~{h} h geschätzt",
-    "Recently finished": "Zuletzt fertig"
+    "Recently finished": "Zuletzt fertig",
+    "Pending": "Offen",
+    "Running": "Läuft",
+    "Done": "Fertig",
+    "Failed": "Fehlgeschlagen",
+    "Skipped": "Übersprungen"
   }
 }

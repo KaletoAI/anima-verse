@@ -232,6 +232,30 @@ class TaskQueue:
         with self._connect() as conn:
             return bool(self._find_pending(conn, task_type, agent_name))
 
+    def list_tasks_of_type(self, task_type: str) -> List[Dict[str, Any]]:
+        """Every still-owed task of one type: task_id, status, payload.
+
+        Deliberately unlimited and unsorted by priority, unlike ``get_status``,
+        whose pending list is the admin panel's top-50 window — a low-priority
+        task (background work sits far behind anything a player waits for)
+        falls out of that window under load. A caller that has to act on ITS
+        OWN task, e.g. cancel it, must see it regardless of the load.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT task_id, status, payload FROM tasks WHERE task_type=? "
+                "AND status IN ('pending','running') ORDER BY created_at, rowid",
+                (task_type,)).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except (ValueError, TypeError):
+                payload = {}
+            out.append({"task_id": row["task_id"], "status": row["status"],
+                        "payload": payload})
+        return out
+
     def submit(
         self,
         task_type: str,
