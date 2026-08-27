@@ -59,7 +59,9 @@ import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { DimKey } from './dims'
-import type { PropFull, PropMarker, PropSourceImage, PropVariant } from './propTypes'
+import type {
+  PropFull, PropMarker, PropSlot, PropSlotKind, PropSourceImage, PropVariant,
+} from './propTypes'
 
 /**
  * The scale kit of the 3D preview — the 1.70 m reference figure beside the
@@ -94,6 +96,13 @@ const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
   { label: 'X (width)', dim: 'width_m', min: AT_MIN },
   { label: 'Y (height)', dim: 'height_m', min: -1 },
   { label: 'Z (depth)', dim: 'depth_m', min: AT_MIN },
+]
+
+/** The two things a texture slot can take — the server's `props.SLOT_KINDS`,
+ *  with the label each one gets in the picker. */
+const SLOT_KINDS: Array<{ kind: PropSlotKind; label: string }> = [
+  { kind: 'image', label: 'Image' },
+  { kind: 'material', label: 'Material' },
 ]
 
 export function PropDetail({ prop, pending, generatingVariants, cacheBump,
@@ -276,6 +285,31 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const tagsNow = draftValue(buf, GENERAL_TARGET, 'tags', prop.tags.join(', '))
   const swayNow = draftValue<number>(buf, GENERAL_TARGET, 'sway_factor',
     prop.sway_factor ?? 1)
+
+  // ── TEXTURE SLOTS ──────────────────────────────────────────────────────
+  // The fillable surfaces of the mesh, a plain list of {name, kind}. They
+  // belong to the OBJECT (a slot IS a material of the model), so they sit here
+  // beside the sway factor and not on a variant. The list needs no local
+  // typing state: it lives in the draft, which is also what the rows render
+  // from — one buffered FIELD however many rows are edited.
+  const slots = draftValue<PropSlot[]>(buf, GENERAL_TARGET, 'slots',
+    prop.slots || [])
+  const saveSlots = useCallback((next: PropSlot[]) => {
+    queueGeneral({ slots: next })
+  }, [queueGeneral])
+  const patchSlot = (i: number, patch: Partial<PropSlot>) =>
+    saveSlots(slots.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
+  // What the server would do with this list, said BEFORE the save: a nameless
+  // slot is a 400 for the whole batch, and a name given twice collapses to its
+  // first entry. Both are silent surprises otherwise ("Saved" and a row gone).
+  const slotProblem = useMemo(() => {
+    const names = slots.map((s) => (s.name || '').trim().toLowerCase())
+    if (names.some((n) => !n)) return t('A slot without a name cannot be saved.')
+    if (new Set(names).size !== names.length) {
+      return t('Two slots share a name — only the first one would be kept.')
+    }
+    return ''
+  }, [slots, t])
 
   // The RAW box of the mesh the viewer has OPEN, i.e. the SELECTED variant's,
   // measured on load. What the overlays scale by is the mesh on screen: a
@@ -612,6 +646,65 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
             </Field>
           </div>
+
+          {/* THE TEXTURE SLOTS — the surfaces of this mesh that can be filled
+              later (a frame that takes a picture, a pane that takes glass).
+              The import reads a first draft off the model's material names;
+              this is where it is corrected. */}
+          <div className="ga-form-section-label">
+            {t('Texture slots')}
+            {prop.slots_auto && slots.length ? (
+              <span className="ga-hint" style={{ marginLeft: 6, fontWeight: 400 }}
+                title={t('This list was read off the model’s material names when the mesh arrived. Editing it makes it yours — no later model overwrites it.')}>
+                · {t('detected')}
+              </span>
+            ) : null}
+          </div>
+          <span className="ga-hint">
+            {t('Surfaces of the mesh that can be filled later: a material named “slot_<name>” is one, and so are the plain names picture, screen, sign (image) and glass (material). Read off the model when it arrives — correct it here, and no later mesh touches your list again.')}
+          </span>
+          {slots.length === 0 ? (
+            <div className="ga-empty" style={{ fontSize: '0.85em' }}>
+              {t('No texture slots — the model names none.')}
+            </div>
+          ) : (
+            slots.map((s, i) => (
+              <div key={i} className="ga-form-row">
+                <input className="ga-input" style={{ flex: 1, minWidth: 0 }}
+                  value={s.name}
+                  placeholder={t('Slot name')}
+                  title={t('The material name in the model, lower-case (the “slot_” prefix is not part of it).')}
+                  onChange={(e) => patchSlot(i, { name: e.target.value })} />
+                <select className="ga-input" style={{ width: 120 }}
+                  value={s.kind}
+                  title={t('What fills it: an image (a picture on the surface) or a material (glass, mirror, matte).')}
+                  onChange={(e) => patchSlot(i,
+                    { kind: e.target.value as PropSlotKind })}>
+                  {SLOT_KINDS.map((k) => (
+                    <option key={k.kind} value={k.kind}>{t(k.label)}</option>
+                  ))}
+                </select>
+                <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+                  title={t('Remove this texture slot')}
+                  onClick={() => saveSlots(slots.filter((_, idx) => idx !== i))}>
+                  ×
+                </button>
+              </div>
+            ))
+          )}
+          {slotProblem ? (
+            <span className="ga-hint" style={{ color: 'var(--warn, #d29922)' }}>
+              {slotProblem}
+            </span>
+          ) : null}
+          <div>
+            <button type="button" className="ga-btn ga-btn-sm"
+              title={t('Add a slot by hand — for a material the detection does not know by name.')}
+              onClick={() => saveSlots([...slots, { name: '', kind: 'image' }])}>
+              + {t('Texture slot')}
+            </button>
+          </div>
+
           {/* Measured in the mesh itself — the cost of placing this prop
               many times, which the sizes below say nothing about. */}
           {prop.measured?.tris ? (

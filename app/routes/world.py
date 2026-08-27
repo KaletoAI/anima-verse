@@ -1998,8 +1998,14 @@ def prop_detail(prop_id: str) -> Dict[str, Any]:
 @router.post("/props/{prop_id}")
 async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
     """Update the PROP's own fields (body: {name?, category?, tags?,
-    sway_factor?}). `sway_factor` at its default 1.0 (and any junk) clears the
-    key rather than storing it.
+    sway_factor?, slots?}). `sway_factor` at its default 1.0 (and any junk)
+    clears the key rather than storing it.
+
+    `slots` is the list of fillable surfaces of the mesh
+    (`[{name, kind: "image"|"material"}, …]`, `props.detect_slots` reads a
+    first draft off the model's material names). A malformed list is a 400,
+    and storing one signs it as the admin's — the model import never overwrites
+    it again.
 
     Size, description, ground offset and markers are NOT here any more
     (2026-08-25): they belong to the model VARIANT and are written through
@@ -2027,7 +2033,7 @@ def _prop_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
 @router.post("/props/{prop_id}/bulk")
 async def prop_bulk_update(prop_id: str, request: Request) -> Dict[str, Any]:
     """THE BATCH SAVE of the prop detail (body: ``{general?: {name?, category?,
-    tags?, sway_factor?}, variants?: {"<store index>": {dims?, description?,
+    tags?, sway_factor?, slots?}, variants?: {"<store index>": {dims?, description?,
     ground_offset_m?, markers?, seasons?}}}``) — every field edit of one prop in
     ONE request and ONE sidecar write.
 

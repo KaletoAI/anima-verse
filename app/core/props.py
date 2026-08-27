@@ -16,8 +16,9 @@ Storage: ``worlds/<world>/props/<prop_id>/``:
     source.png       — the product-shot render THIS variant's meshes were made
                        from (one per variant, see the source-image law below)
     sidecar.json     — the prop MASTER record: {name, category, tags[],
-                       rotation{x,y,z}, bbox[3], sway_factor, created_at,
-                       source, prompt, model_variants[…]}
+                       rotation{x,y,z}, bbox[3], sway_factor, slots[],
+                       slots_auto, created_at, source, prompt,
+                       model_variants[…]}
 
 The mesh files are a GALLERY like the location/room models — same mechanics,
 same module (``app/core/model_store.py``): several files per prop, one active
@@ -177,7 +178,7 @@ from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
                                   read_sidecar as read_model_sidecar,
                                   write_sidecar as write_model_sidecar)
 from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
-                                     shrink_capability)
+                                     glb_material_names_at, shrink_capability)
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger(__name__)
@@ -273,6 +274,36 @@ SWAY_FACTOR_MIN, SWAY_FACTOR_MAX = 0.0, 1.0
 #: automatic base + ``ground_offset_m`` + ``offset_y``.
 GROUND_OFFSET_DEFAULT = 0.0
 GROUND_OFFSET_MIN, GROUND_OFFSET_MAX = -5.0, 5.0
+
+# ── Texture slots (plan-door-props-texture-slots) ───────────────────────
+#: The surfaces of a prop's mesh that can later be FILLED: a picture frame that
+#: takes a gallery image, a window pane that takes a material. A slot is a
+#: MATERIAL of the model — the modeller (or the img2mesh prompt) names it, the
+#: import reads the names off the GLB (:func:`detect_slots`), and the admin
+#: corrects the list in the prop editor. Room props only: the map props
+#: (``app/models/world_props.py``) are a different namespace and get none.
+#:
+#: Sidecar key holding the list of ``{"name": …, "kind": …}``.
+SLOTS_KEY = "slots"
+#: Marker beside it: True = the list is what the model's materials said, False
+#: = an admin edited it. The auto-fill only ever fills a record it has not
+#: touched and no admin has — a hand-authored list is never overwritten, not
+#: even an EMPTY one (deleting every slot is a decision too).
+SLOTS_AUTO_KEY = "slots_auto"
+#: What a slot can be filled WITH. ``image`` takes a picture (a gallery URL),
+#: ``material`` takes a look (glass, mirror, matte).
+SLOT_KINDS = ("image", "material")
+#: A material named ``slot_<name>`` IS a slot — the explicit, open half of the
+#: convention (Entscheid 4). Everything behind the prefix is the slot name.
+SLOT_PREFIX = "slot_"
+#: …and these material names are slots WITHOUT the prefix, because they are
+#: what a mesh generator calls those surfaces on its own. The name must match
+#: WHOLE — "glasses" is a pair of glasses, not a pane.
+BARE_IMAGE_SLOTS = ("picture", "screen", "sign")
+BARE_MATERIAL_SLOTS = ("glass",)
+#: Which slot NAMES mean a look rather than a picture. Applies to the prefixed
+#: form as well, so ``slot_glass`` and ``glass`` describe the same thing.
+MATERIAL_SLOT_NAMES = ("glass", "mirror", "matte")
 
 #: How much of a placed prop's DEPTH survives its cut (§ B2 addendum
 #: 2026-08-23) — a fraction, 1.0 = the whole prop. The floor never reaches 0:
@@ -903,6 +934,118 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     return out[:50]
 
 
+# ── Texture slots ───────────────────────────────────────────────────────
+
+def _slot_kind(name: str) -> str:
+    """Whether a slot of this NAME takes a picture or a look. One rule for both
+    spellings, so ``slot_glass`` and ``glass`` never disagree."""
+    return "material" if name in MATERIAL_SLOT_NAMES else "image"
+
+
+def detect_slots(material_names: Any) -> List[Dict[str, str]]:
+    """THE detection rule (Entscheid 4): which of a model's MATERIAL NAMES are
+    texture slots. This function is the only place it is stated.
+
+    For every name, lower-cased and stripped:
+
+    * ``slot_<name>`` → a slot called ``<name>``; its kind is ``material`` for
+      the names in :data:`MATERIAL_SLOT_NAMES`, ``image`` otherwise. The prefix
+      is the OPEN half of the convention — anything can be a slot if the
+      modeller says so.
+    * a whole name out of :data:`BARE_IMAGE_SLOTS` → an ``image`` slot,
+    * ``glass`` → a ``material`` slot,
+    * anything else → no slot.
+
+    Names come back LOWER-CASE, de-duplicated, in order of first appearance —
+    so the list reads like the material list of the model, and a mesh that
+    names the same surface twice yields one slot.
+    """
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for raw in (material_names or []):
+        key = str(raw or "").strip().lower()
+        if key.startswith(SLOT_PREFIX):
+            name = key[len(SLOT_PREFIX):]
+        elif key in BARE_IMAGE_SLOTS or key in BARE_MATERIAL_SLOTS:
+            name = key
+        else:
+            continue
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append({"name": name, "kind": _slot_kind(name)})
+    return out
+
+
+def sanitize_slots(raw: Any) -> List[Dict[str, str]]:
+    """The stored shape of an AUTHORED slot list — or ``ValueError``.
+
+    Junk is refused rather than dropped: unlike the markers, where an unusable
+    entry costs one spot on a mesh, a silently swallowed slot would report
+    "Saved" over a surface that stays unfillable. Names are lower-cased (the
+    detection stores them that way, and a slot is matched against a material
+    name), and a name given twice collapses to its FIRST entry.
+    """
+    if not isinstance(raw, list):
+        raise ValueError("slots must be a list of {name, kind} objects")
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError("each slot must be an object {name, kind}")
+        name = str(entry.get("name") or "").strip().lower()
+        if not name:
+            raise ValueError("a slot needs a name")
+        kind = str(entry.get("kind") or "").strip().lower()
+        if kind not in SLOT_KINDS:
+            raise ValueError(f"unknown slot kind {kind!r} (known: "
+                             + ", ".join(SLOT_KINDS) + ")")
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append({"name": name, "kind": kind})
+    return out
+
+
+def _autofill_slots(prop_id: str) -> None:
+    """Read the texture slots off the PRIMARY variant's mesh — once.
+
+    Called from :func:`_store_bbox`, i.e. AFTER the Blender steps of the same
+    ingest: the vertex-colour bake replaces every material name with one of its
+    own, so a list read before it would describe a file that no longer exists.
+    The other refinement steps (re-encode, reduction, normalisation) never touch
+    a material name.
+
+    Fills only a record that has NO slots and was never edited by hand
+    (``slots_auto`` False is the admin's signature, an empty list included) —
+    and writes nothing at all when the model names no slot, so the ordinary
+    prop costs no extra sidecar write.
+    """
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta or meta.get(SLOTS_AUTO_KEY) is False or meta.get(SLOTS_KEY):
+        return
+    mp = model_path(prop_id)
+    if not mp or mp.suffix.lower() != ".glb":
+        return
+    try:
+        names = glb_material_names_at(mp)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError,
+            UnicodeDecodeError):
+        return
+    slots = detect_slots(names)
+    if not slots:
+        return
+    meta[SLOTS_KEY] = slots
+    meta[SLOTS_AUTO_KEY] = True
+    try:
+        _write_sidecar(pid, meta)
+    except (OSError, ValueError):
+        return
+    logger.info("Prop %s: %d texture slot(s) detected (%s)", pid, len(slots),
+                ", ".join(s["name"] for s in slots))
+
+
 # ── CRUD ────────────────────────────────────────────────────────────────
 
 def create_prop(*, name: str, category: str = "", width_m: Any = None,
@@ -962,7 +1105,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
 #: of the admin form edits. Everything about how the object LOOKS moved onto
 #: the variants (2026-08-25), and :data:`MOVED_TO_VARIANT` names those so a
 #: stale client is REFUSED instead of silently writing a key nobody reads.
-PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor")
+PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor", "slots")
 #: The five fields that are variant-only now. A prop-level patch naming one of
 #: them is a 400 with the route that owns it — never a no-op: an editor that
 #: still sends ``height_m`` here would report "Saved" over a value that never
@@ -997,6 +1140,11 @@ def _check_prop_patch(patch: Dict[str, Any]) -> None:
         raise ValueError("unknown prop field(s): " + ", ".join(sorted(unknown))
                          + " (the prop record has: "
                          + ", ".join(PROP_PATCH_KEYS) + ")")
+    # The one field whose VALUE is checked here rather than in the applier: the
+    # batch save's law is "everything is checked before anything is written",
+    # and this is the only prop field a body can get structurally wrong.
+    if SLOTS_KEY in patch:
+        sanitize_slots(patch.get(SLOTS_KEY))
 
 
 def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
@@ -1023,11 +1171,18 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
             meta.pop("sway_factor", None)
         else:
             meta["sway_factor"] = factor
+    if SLOTS_KEY in patch:
+        # Already validated in `_check_prop_patch` (nothing is written before
+        # the whole body is checked); this stores the sanitized result and
+        # signs the list as the ADMIN's — from here on the model import leaves
+        # it alone, an emptied list included.
+        meta[SLOTS_KEY] = sanitize_slots(patch.get(SLOTS_KEY))
+        meta[SLOTS_AUTO_KEY] = False
 
 
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Update the PROP's own fields (name / category / tags / sway_factor).
-    None when the prop does not exist.
+    """Update the PROP's own fields (name / category / tags / sway_factor /
+    slots). None when the prop does not exist.
 
     Raises ``ValueError`` when the patch names one of the five fields that
     moved onto the variants (:data:`MOVED_TO_VARIANT`) — the route maps that to
@@ -2412,6 +2567,11 @@ def _store_bbox(prop_id: str, variant: Any = None) -> None:
     request_low_tier(prop_id, variant)
     if variant is not None and _stem_of(prop_id, variant) != _stem_of(prop_id):
         return
+    # The texture slots are read AFTER the Blender steps above — the
+    # vertex-colour bake renames every material — and before the measurement,
+    # so an unmeasurable mesh still contributes the slots it names. Its own
+    # read-modify-write, and only when it has something to store.
+    _autofill_slots(prop_id)
     bbox = _extract_bbox(prop_id)
     if not bbox:
         return
@@ -2549,6 +2709,11 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         # same role as the room-model meta rotation.
         "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
         "tags": meta.get("tags") or [],
+        # The fillable surfaces of this prop's mesh, `[{name, kind}, …]` —
+        # ALWAYS present, so no consumer has to know the difference between
+        # "none" and "not detected yet". On the lean record too: it is what a
+        # scene's `slots` are matched against.
+        "slots": meta.get(SLOTS_KEY) or [],
         "marker_count": len(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
@@ -2630,6 +2795,11 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # 0.0 is what a prop that stands ON the ground reads back, whether
             # the key exists or not.
             "ground_offset_m": variant_ground_offset(meta, primary),
+            # Where the slot list above came FROM: True = read off the model's
+            # material names, False = authored in the editor. An authoring
+            # detail, hence the full record only — the badge in the prop editor
+            # is its one consumer.
+            "slots_auto": bool(meta.get(SLOTS_AUTO_KEY)),
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]

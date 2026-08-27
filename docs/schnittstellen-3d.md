@@ -7060,6 +7060,64 @@ zusätzlich `default_door_prop_id` (ein Feld der LOCATION, das keine
 Raumsignatur abdeckt) und die Mesh-Signatur jedes aufgelösten Tür-Props (die
 URL bleibt beim Neu-Erzeugen gleich).
 
+### Slots: welche Fläche eines Props sich füllen lässt
+
+Ein **Slot** ist ein **Material des Modells**. Wer ein Prop modelliert (oder
+prompten lässt), benennt die füllbare Fläche — den Bilderrahmen, die
+Fensterscheibe, das Schild — und genau dieser Materialname ist der Slot. Es
+gibt keine zweite Auszeichnung, keine Zusatzdatei.
+
+Die Regel steht in **einer** Funktion, `props.detect_slots(material_names)`,
+und nirgends sonst. Für jeden Materialnamen `m`, klein geschrieben und
+getrimmt:
+
+| `m` | Slot |
+|---|---|
+| beginnt mit `slot_` | Name = `m[5:]`; Art `material`, wenn der Name in {`glass`, `mirror`, `matte`} steht, sonst `image` |
+| ∈ {`picture`, `screen`, `sign`} (ganzer Name) | `{name: m, kind: "image"}` |
+| == `glass` | `{name: "glass", kind: "material"}` |
+| sonst | kein Slot |
+
+Groß/Kleinschreibung ist egal, Namen werden **klein** gespeichert, **doppelte
+fallen weg** (das erste Auftreten gewinnt), die **Reihenfolge ist die des
+Modells**. Beispiel von Hand: `["slot_glass", "Slot_Poster", "glass", "SIGN"]`
+→ `[{glass, material}, {poster, image}, {sign, image}]` — das zweite `glass`
+ist dasselbe wie das erste und fällt weg.
+
+Nur **Raum-Props** (`app/core/props.py`) haben Slots. Map-Props
+(`world_props`) bekommen keine.
+
+Ein Prop aus einem **Content-Pack** bringt seine `slots` im mitkopierten
+`sidecar.json` mit (`content_io.export_prop_to_zip` / der Prop-Import kopieren
+das Verzeichnis unverändert). Erkannt wird nur beim **Erzeugen** des Modells,
+nicht beim Import — wer ein Prop zum Teilen baut, benennt die füllbaren
+Materialien also schon im Mesh nach dieser Konvention oder pflegt die Liste vor
+dem Export im Prop-Editor.
+
+**Materialnamen müssen die Blender-Veredelung überleben**, sonst zeigt die
+Liste auf Flächen, die die gespeicherte Datei nicht mehr hat. Stand heute tut
+sie das: Neukodierung (`retexture.py`), Reduktion (`lod.py`) und
+Normalisierung (`normalize.py`) fassen `bpy.data.materials` nicht an, der
+glTF-Import/Export von Blender reicht den Namen durch. Die **eine** Ausnahme
+ist der Vertex-Farben-Bake (`bake_vc.py`): er leert die Materialliste des
+Objekts und legt `baked_vc_mat_<i>` an. Deshalb liest die Erkennung erst
+**nach** allen Veredelungsschritten desselben Ingests (`props._store_bbox`:
+bake → retexture → LOD → Slots → Messung). Betroffen sind ohnehin nur
+Vertex-Farben-Meshes, die gar keine benannten Flächen mitbringen.
+
+Im Datensatz (`props._prop_record`, immer vorhanden):
+
+| Feld | Bedeutung |
+|---|---|
+| `slots: [{name, kind}]` | die füllbaren Flächen; `[]` = keine. Auch auf dem schlanken Record — die Szene gleicht dagegen ab |
+| `slots_auto: true\|false` | nur im vollen Record: `true` = aus den Materialnamen gelesen (der Editor zeigt „detected"), `false` = von Hand gepflegt |
+
+Gefüllt wird `slots` **nur, solange niemand sie von Hand gesetzt hat**: ein
+`POST /world/props/{id}` mit `slots` (oder der Batch-Save) speichert die Liste
+und setzt `slots_auto` auf `false` — ab da fasst kein weiteres Modell sie an,
+auch eine **geleerte** Liste nicht (alle Slots löschen ist auch eine
+Entscheidung). Eine kaputte Liste ist ein 400, kein stilles Verwerfen.
+
 ### Grenzen (bewusst)
 
 - Ein Prop-Ausweis, der ins Leere zeigt (oder ein Prop ohne Mesh), behält
@@ -7082,3 +7140,8 @@ URL bleibt beim Neu-Erzeugen gleich).
 | Prop-Ausweis ins Leere: Spec bleibt, `variants` leer, keine `placeholder_dims` | ebenda **[3p]** |
 | Signatur bewegt sich für Location-Default UND neue Mesh-Signatur | ebenda **[3p]** |
 | `place()` mit `fit`: 0,5×2×0,1-Kiste auf `size_m [1,0 / 2,1]` → 1,0 × 2,1 × 0,2, Angelkante AUF dem Anker, bei `yaw` 270 läuft die Breite in +z | `client3d/scripts/smoke_place_rotation.mjs` **[7]** |
+| Materialnamen aus dem GLB (`materials[].name`, Header + JSON-Chunk) | `scripts/smoke_props_slots.py` **[1]** |
+| `detect_slots`: Präfix, feste Liste, Groß/Klein, Dedup, Reihenfolge — plus rote Probe („glasses", „slots_x", „picture_frame") | ebenda **[2]** |
+| Erkennung läuft beim Modell-Eintreffen NACH bake/retexture/LOD; Record trägt `slots` + `slots_auto true` | ebenda **[3]** |
+| Patch-Pfad weist kaputte Listen ab und schreibt dabei nichts; gespeicherte Liste ist klein und dedupliziert | ebenda **[4]** |
+| Von Hand gepflegte (auch geleerte) Liste überlebt das nächste Modell | ebenda **[5]** |

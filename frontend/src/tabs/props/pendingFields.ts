@@ -51,14 +51,14 @@
  */
 
 /** One target's pending fields — `{dims, description, …}` for a variant,
- *  `{name, category, tags, sway_factor}` for the prop itself. */
+ *  `{name, category, tags, sway_factor, slots}` for the prop itself. */
 export type FieldPatch = Record<string, unknown>
 
 /** target key → the fields decided about it so far. */
 export type PendingFields = ReadonlyMap<string, FieldPatch>
 
-/** The prop's own fields (name / category / tags / sway) live under this one
- *  key — the batch body's `general`. */
+/** The prop's own fields (name / category / tags / sway / slots) live under
+ *  this one key — the batch body's `general`. */
 export const GENERAL_TARGET = 'general'
 
 /** A variant's target key. The STORE INDEX is what every variant-scoped route

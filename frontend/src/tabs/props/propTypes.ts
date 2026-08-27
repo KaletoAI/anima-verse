@@ -14,6 +14,22 @@ export interface PropMarker {
   facing?: number
 }
 
+/** What a texture slot can be filled WITH: a picture (a gallery image URL) or
+ *  a look (glass, mirror, matte). Mirrors `props.SLOT_KINDS`. */
+export type PropSlotKind = 'image' | 'material'
+
+/**
+ * ONE fillable surface of a prop's mesh — a picture frame, a screen, a window
+ * pane. A slot IS a material of the model: the import reads a first draft off
+ * the material names (`slot_<name>`, or one of picture / screen / sign /
+ * glass — `props.detect_slots`), and the list is corrected here.
+ */
+export interface PropSlot {
+  /** Lower-case, unique within the prop — it names the material. */
+  name: string
+  kind: PropSlotKind
+}
+
 /** Real extent in metres after the orientation fix. Owned by the VARIANT
  *  since 2026-08-25 and mandatory there — every variant answers with all
  *  three, because there is no prop-level size left to inherit. */
@@ -35,6 +51,13 @@ export interface PropFull {
   depth_m: number
   height_m: number
   tags: string[]
+  /** The fillable surfaces of this prop's mesh — always present, `[]` = none.
+   *  Edited here on the prop, because a slot is a material of the OBJECT. */
+  slots?: PropSlot[]
+  /** True = the list above is what the model's material names said (the badge
+   *  "detected"); False = an admin authored it, and no import touches it
+   *  again. Full records only. */
+  slots_auto?: boolean
   /** How many markers the PRIMARY variant carries. */
   marker_count: number
   has_model: boolean

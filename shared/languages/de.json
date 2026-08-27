@@ -2261,6 +2261,20 @@
     "Other props": "Andere Props",
     "Default door prop": "Standard-Tür-Prop",
     "Fills every door opening that picks nothing of its own. An opening can override it with its own prop or opt out with “None”.": "Füllt jede Tür-Öffnung, die nichts Eigenes wählt. Eine Öffnung kann es mit einem eigenen Prop übersteuern oder mit „Keine“ abwählen.",
-    "— no default door —": "— keine Standard-Tür —"
+    "— no default door —": "— keine Standard-Tür —",
+    "Texture slots": "Textur-Slots",
+    "Texture slot": "Textur-Slot",
+    "detected": "erkannt",
+    "This list was read off the model’s material names when the mesh arrived. Editing it makes it yours — no later model overwrites it.": "Diese Liste stammt aus den Materialnamen des Modells, gelesen als das Mesh ankam. Sobald du sie bearbeitest, gehört sie dir — kein späteres Modell überschreibt sie.",
+    "Surfaces of the mesh that can be filled later: a material named “slot_<name>” is one, and so are the plain names picture, screen, sign (image) and glass (material). Read off the model when it arrives — correct it here, and no later mesh touches your list again.": "Flächen des Meshes, die später gefüllt werden können: ein Material namens „slot_<name>“ ist eine, ebenso die schlichten Namen picture, screen, sign (Bild) und glass (Material). Beim Eintreffen des Modells gelesen — hier korrigierst du sie, und kein späteres Mesh fasst deine Liste noch an.",
+    "No texture slots — the model names none.": "Keine Textur-Slots — das Modell benennt keine.",
+    "Slot name": "Slot-Name",
+    "The material name in the model, lower-case (the “slot_” prefix is not part of it).": "Der Materialname im Modell, klein geschrieben (das Präfix „slot_“ gehört nicht dazu).",
+    "What fills it: an image (a picture on the surface) or a material (glass, mirror, matte).": "Was sie füllt: ein Bild (ein Motiv auf der Fläche) oder ein Material (Glas, Spiegel, matt).",
+    "Material": "Material",
+    "Remove this texture slot": "Diesen Textur-Slot entfernen",
+    "Add a slot by hand — for a material the detection does not know by name.": "Einen Slot von Hand anlegen — für ein Material, das die Erkennung nicht beim Namen kennt.",
+    "A slot without a name cannot be saved.": "Ein Slot ohne Namen lässt sich nicht speichern.",
+    "Two slots share a name — only the first one would be kept.": "Zwei Slots teilen sich einen Namen — nur der erste bliebe erhalten."
   }
 }

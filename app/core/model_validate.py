@@ -67,12 +67,32 @@ def _image_size(data: bytes) -> Optional[Tuple[int, int]]:
     return _png_size(data) or _jpeg_size(data)
 
 
+def material_names(gltf: Dict[str, Any]) -> List[str]:
+    """The names of a glTF document's materials, in FILE order.
+
+    A prop's TEXTURE SLOTS are read off exactly this list (``props.detect_slots``
+    — a material called ``slot_poster`` or ``picture`` is a surface a picture can
+    later be hung on), which is why it travels with every GLB check. Materials
+    without a name are left out: an unnamed one can never spell a slot, and a
+    placeholder in the list would only have to be filtered by every caller.
+    """
+    out: List[str] = []
+    for mat in (gltf.get("materials") or []):
+        if not isinstance(mat, dict):
+            continue
+        name = str(mat.get("name") or "").strip()
+        if name:
+            out.append(name)
+    return out
+
+
 def parse_glb(data: bytes) -> Dict[str, Any]:
     """Reads the glTF JSON + embedded image sizes out of a GLB container.
 
-    Returns ``{gltf, images, joints, joint_count, bin}`` — ``bin`` is the raw
-    BIN chunk (needed to decode geometry, see ``glb_bounds``); callers index
-    by key, so the extra entry changes nothing for them.
+    Returns ``{gltf, images, material_names, joints, joint_count, bin}`` —
+    ``bin`` is the raw BIN chunk (needed to decode geometry, see
+    ``glb_bounds``); callers index by key, so the extra entries change nothing
+    for them.
     """
     if len(data) < 20 or data[:4] != b"glTF":
         raise ValueError("not a GLB file (magic missing)")
@@ -118,7 +138,8 @@ def parse_glb(data: bytes) -> Dict[str, Any]:
         for j in (skins[0].get("joints") or []):
             if 0 <= j < len(nodes):
                 joints.append(str(nodes[j].get("name", "")))
-    return {"gltf": gltf, "images": images, "joints": joints,
+    return {"gltf": gltf, "images": images,
+            "material_names": material_names(gltf), "joints": joints,
             "joint_count": len(joints), "bin": bin_chunk}
 
 
@@ -216,6 +237,16 @@ def glb_capabilities_at(path: Union[str, Path]) -> Dict[str, Any]:
     """``gltf_capabilities`` of a STORED GLB — header + JSON chunk only, so a
     100-MB mesh costs a few hundred kB of reading."""
     return gltf_capabilities(read_glb_json(path))
+
+
+def glb_material_names_at(path: Union[str, Path]) -> List[str]:
+    """:func:`material_names` of a STORED GLB — header + JSON chunk only, for
+    the same reason as :func:`glb_capabilities_at`.
+
+    Raises ValueError when the file is not a readable glTF 2 container; the
+    caller decides whether that blocks anything.
+    """
+    return material_names(read_glb_json(path))
 
 
 def shrink_capability(path: Union[str, Path]) -> Dict[str, Any]:
@@ -540,7 +571,9 @@ def _check_embedded_textures(info: Dict[str, Any], subject: str,
 def validate_glb(data: bytes) -> Dict[str, Any]:
     """Validates a humanoid GLB: 52-joint Mixamo rig + a real embedded texture.
 
-    Returns {"ok", "errors": [...], "warnings": [...], "joint_count", "rig"}.
+    Returns {"ok", "errors": [...], "warnings": [...], "joint_count", "rig",
+    "material_names"}. The material names are not a criterion — they ride along
+    because the ingest reads the prop's texture slots off them.
     """
     errors: List[str] = []
     warnings: List[str] = []
@@ -548,7 +581,8 @@ def validate_glb(data: bytes) -> Dict[str, Any]:
         info = parse_glb(data)
     except (ValueError, KeyError, struct.error, json.JSONDecodeError) as e:
         return {"ok": False, "errors": [f"GLB unreadable: {e}"],
-                "warnings": [], "joint_count": 0, "rig": "generic"}
+                "warnings": [], "joint_count": 0, "rig": "generic",
+                "material_names": []}
 
     joints = info["joints"]
     count = info["joint_count"]
@@ -566,7 +600,8 @@ def validate_glb(data: bytes) -> Dict[str, Any]:
 
     rig = "mixamo" if (count == MIXAMO_JOINT_COUNT and mixamo) else "generic"
     return {"ok": not errors, "errors": errors, "warnings": warnings,
-            "joint_count": count, "rig": rig}
+            "joint_count": count, "rig": rig,
+            "material_names": info["material_names"]}
 
 
 def validate_static_glb(data: bytes) -> Dict[str, Any]:
@@ -575,7 +610,8 @@ def validate_static_glb(data: bytes) -> Dict[str, Any]:
     skeleton requirement, and a present skin is not an error either — the
     client simply never animates these.
 
-    Returns the same shape as validate_glb, with rig fixed to "none".
+    Returns the same shape as validate_glb, with rig fixed to "none" — the
+    ``material_names`` in it are what a prop's texture slots are detected from.
     """
     errors: List[str] = []
     warnings: List[str] = []
@@ -583,7 +619,8 @@ def validate_static_glb(data: bytes) -> Dict[str, Any]:
         info = parse_glb(data)
     except (ValueError, KeyError, struct.error, json.JSONDecodeError) as e:
         return {"ok": False, "errors": [f"GLB unreadable: {e}"],
-                "warnings": [], "joint_count": 0, "rig": "none"}
+                "warnings": [], "joint_count": 0, "rig": "none",
+                "material_names": []}
 
     if not (info["gltf"].get("meshes") or []):
         errors.append("no mesh in the GLB — an empty scene is not a model")
@@ -591,7 +628,8 @@ def validate_static_glb(data: bytes) -> Dict[str, Any]:
     _check_embedded_textures(info, "building model", errors, warnings)
 
     return {"ok": not errors, "errors": errors, "warnings": warnings,
-            "joint_count": info["joint_count"], "rig": "none"}
+            "joint_count": info["joint_count"], "rig": "none",
+            "material_names": info["material_names"]}
 
 
 def validate_fbx(data: bytes, texture: Optional[bytes]) -> Dict[str, Any]:
