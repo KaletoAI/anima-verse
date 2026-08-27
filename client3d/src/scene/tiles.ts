@@ -359,8 +359,9 @@ export interface SwingingDoor {
   at: { x: number; z: number };
   /** Storey of the threshold (`doorways[opening].level`). Doors STACK — a
    *  front door and the balcony door above it share their (x, z) — so the
-   *  proximity test is gated on the storey the tile displays
-   *  (`levelFilter`), exactly like its walls, slabs and threshold quads. */
+   *  proximity test is gated on the storey the AVATAR is on, the one its room
+   *  sits on. Not `levelFilter`: that is the storey the CAMERA shows, and the
+   *  two come apart every time the view is held on another floor. */
   level: number;
   /** The rooms the threshold joins, in payload order — the same list
    *  `applyDoorLocks` hands to `game/locks.doorwayLock`, so a locked door and

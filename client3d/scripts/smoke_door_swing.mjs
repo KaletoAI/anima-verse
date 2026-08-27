@@ -38,11 +38,13 @@
  * A non-finite distance (no avatar in the scene) is not "near": `NaN <= 2.0`
  * and `Infinity <= 2.0` are both false, so the door shuts.
  *
- * --- doorDistance(doorLevel, shownLevel, distM) ---------------------------
+ * --- doorDistance(doorLevel, avatarLevel, distM) --------------------------
  * DOORS STACK. A front door and the balcony door above it share their (x, z)
- * to the millimetre, so a plain 2D distance opens both at once while the tile
- * displays one storey. The gate is the tile's `levelFilter` — the same source
- * its walls, slabs, room groups and threshold quads read:
+ * to the millimetre, so a plain 2D distance opens both at once. The gate is
+ * the storey the AVATAR is on (the storey of its room), never the displayed
+ * one: `levelFilter` is the in-world storey BUTTON, and "avatar on storey 0,
+ * view on storey 1" is an everyday state — gating on the camera would open
+ * the door directly overhead with nobody in front of it.
  *
  *   (0, 0, 1.9) -> 1.9        same storey, the distance stands
  *   (1, 0, 0.1) -> Infinity   the door overhead, however close in plan
@@ -51,9 +53,9 @@
  *
  * Fed onward, `Infinity` is exactly "nobody is in front of it", so
  *   doorTargetAngle(doorDistance(1, 0, 0.1), true, 1) = 0
- * while the same door on the displayed storey stands open. `Infinity` rather
- * than skipping the door: one left open on the floor one has just ridden away
- * from must ease SHUT, not freeze.
+ * while the same door on the avatar's own storey stands open. `Infinity`
+ * rather than skipping the door: one left open on the floor one has just
+ * ridden away from must ease SHUT, not freeze.
  *
  * --- easeAngle(current, target, dt, rate) ---------------------------------
  * One frame of the swing: at most `rate · dt` radians towards the target, and
@@ -169,7 +171,7 @@ async function main() {
     doorDistance(-1, -1, 0.4), 0.4);
   check('RED: a stacked door 0.1 m away in plan stays SHUT',
     doorTargetAngle(doorDistance(1, 0, 0.1), true, 1), 0);
-  check('...while the very same door on the displayed storey stands open',
+  check('...while the very same door on the avatar\'s own storey stands open',
     doorTargetAngle(doorDistance(1, 1, 0.1), true, 1), OPEN);
 
   console.log('\n--- easeAngle: one frame at 60 fps, 3.0 rad/s = 0.05 rad ---');

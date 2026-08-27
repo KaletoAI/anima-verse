@@ -43,21 +43,27 @@ const OPEN_RAD = (DOOR_OPEN_DEG * Math.PI) / 180;
 
 /**
  * How far the avatar is from THIS door, as the swing rule counts it: the plain
- * distance while the door is on the storey the tile SHOWS, and `Infinity` —
+ * distance while the door is on the storey the AVATAR is on, and `Infinity` —
  * "nobody is standing in front of it" — while it is not.
  *
  * The storey has to be part of the answer because doors STACK: a front door
  * and the balcony door above it share their (x, z) to the millimetre, and a
- * plain 2D distance would swing both of them open at once while the display
- * shows one. `shownLevel` is the tile's `levelFilter`, the same source its
- * walls, its slabs, its room groups and its threshold quads read.
+ * plain 2D distance would swing both of them open at once.
+ *
+ * `avatarLevel` is the FIGURE'S storey — the one its room sits on — and never
+ * the displayed one. `levelFilter` is the in-world storey BUTTON, i.e. what
+ * the CAMERA shows, and the two come apart as a matter of course: the follow
+ * is edge-triggered and the button deliberately holds the view. Gating on the
+ * camera's storey would swing the door directly ABOVE the avatar open, with
+ * nobody in front of it and the avatar itself hidden. The same distinction is
+ * drawn for the wall clamp and for the room-change heuristic in `main.ts`.
  *
  * `Infinity` rather than "skip this door": a door left open on the floor one
  * has just left has to ease SHUT, not freeze at the angle it stood at.
  */
-export function doorDistance(doorLevel: number, shownLevel: number,
+export function doorDistance(doorLevel: number, avatarLevel: number,
                              distM: number): number {
-  return doorLevel === shownLevel ? distM : Infinity;
+  return doorLevel === avatarLevel ? distM : Infinity;
 }
 
 /**

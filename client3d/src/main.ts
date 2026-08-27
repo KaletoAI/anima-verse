@@ -1251,9 +1251,10 @@ async function startApp(username: string, role: string) {
    *    avatar's world point is turned in once per tile (`worldToTile`) instead
    *    of every threshold being turned out — a rotation and a shift preserve
    *    distances, and a turned tile must not make its doors open early. It is
-   *    gated on the STOREY the tile shows (`doorDistance`, `levelFilter`):
-   *    doors stack, a front door and the balcony door above it share their
-   *    (x, z), and a plain 2D distance would swing both of them at once;
+   *    gated on the AVATAR'S OWN storey (`doorDistance`, the storey of the
+   *    room it stands in): doors stack, a front door and the balcony door
+   *    above it share their (x, z), and a plain 2D distance would swing both
+   *    of them at once;
    *  - whether the door is ENTERABLE, from the SAME source the red threshold
    *    look uses (`game/locks.doorwayLock` against this avatar's lock map, the
    *    room it stands in left out of the judgement). A barred door stays shut:
@@ -1275,8 +1276,18 @@ async function startApp(username: string, role: string) {
       const local = me ? worldToTile(tile, me.x, me.z) : null;
       const locks = tile.loc.id === state.lockedLoc ? state.lockedRooms : NO_LOCKS;
       const here = avatarRoomId(tile) ?? '';
+      // THE FIGURE'S storey, not the displayed one — the same distinction the
+      // wall clamp and the room-change heuristic draw: `levelFilter` is the
+      // in-world storey BUTTON (the follow is edge-triggered, and the button
+      // deliberately holds the view), so "avatar on the ground floor, view on
+      // the first" is an everyday state, and gating on the camera there would
+      // open the door directly ABOVE the avatar with nobody in front of it.
+      // No room resolved — the avatar is outdoors, or a poll is in flight —
+      // leaves the displayed storey as the only answer there is, which is what
+      // keeps an outdoor front door working.
+      const avatarLevel = tile.roomLevels.get(here) ?? tile.levelFilter;
       for (const door of doors) {
-        const dist = doorDistance(door.level, tile.levelFilter, local
+        const dist = doorDistance(door.level, avatarLevel, local
           ? Math.hypot(local.x - door.at.x, local.z - door.at.z)
           : Infinity);
         const enterable = doorwayLock(door.rooms, locks, here) === null;
