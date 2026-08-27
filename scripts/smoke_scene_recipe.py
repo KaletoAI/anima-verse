@@ -4303,7 +4303,7 @@ def surface_fixture() -> dict:
 
 
 def test_surface_specs() -> None:
-    """[7g] BAKED SURFACES ON THE PLACEMENT SPEC (v6, spec-surface-height).
+    """[7i] BAKED SURFACES ON THE PLACEMENT SPEC (v6, spec-surface-height).
 
     Four statements, all of them payload rules and none of them geometry —
     the numbers of the lattice are the bake's, and the recipe hands them on
@@ -4318,7 +4318,7 @@ def test_surface_specs() -> None:
     * the signature moves when a block appears, which is what makes a freshly
       baked surface reach a running client.
     """
-    print("\n[7g] baked model surfaces (v6)")
+    print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
     check("code_version 7 (markers speak place types)", scene_recipe.SCENE_RECIPE_VERSION == 7,
           str(scene_recipe.SCENE_RECIPE_VERSION))

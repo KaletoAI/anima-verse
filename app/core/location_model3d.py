@@ -1045,6 +1045,15 @@ def request_surface(location_id: str, room_id: str, *, owner: str = "",
         _surface_building.add(key)
         _surface_dirty.pop(key, None)
 
+    # A KEY GIVEN BACK INSIDE THE LOOP IS NOT OURS ANY MORE. The loop releases
+    # it and marks itself done in ONE critical section — but between that and
+    # the ``finally`` below (and the refused-thread handler) another request
+    # may already have taken the very same key and started its own worker. A
+    # second ``discard`` would then steal ITS key, and the request after that
+    # would start a third worker on a subject that is being baked. So the
+    # release is recorded, and everything downstream keeps its hands off.
+    released = threading.Event()
+
     def _work() -> None:
         run_force = force
         try:
@@ -1072,23 +1081,28 @@ def request_surface(location_id: str, room_id: str, *, owner: str = "",
                         # a request arriving now starts its own thread instead
                         # of writing into a dirty flag nobody reads again.
                         _surface_building.discard(key)
+                        released.set()
                         return
                     run_force = _surface_dirty.pop(key)
         finally:
             # Safety net for what the inner guard cannot catch; a no-op on the
-            # ordinary way out.
+            # ordinary way out — and never on a key the loop already gave back.
             with _lock:
-                _surface_building.discard(key)
+                if not released.is_set():
+                    _surface_building.discard(key)
 
     try:
         threading.Thread(target=_work, daemon=True,
                          name=f"locmodel-surface-{owner}").start()
     except RuntimeError:
         # A refused thread start gives the key back — otherwise this subject
-        # would never be baked again in this process.
+        # would never be baked again in this process. Same rule: only while the
+        # key is still ours (a thread that started, ran and released before
+        # ``start()`` returned would leave nothing to hand back).
         with _lock:
-            _surface_building.discard(key)
-            _surface_dirty.pop(key, None)
+            if not released.is_set():
+                _surface_building.discard(key)
+                _surface_dirty.pop(key, None)
 
 
 def _demand_low(location_id: str, room_id: str, tiers: Any,

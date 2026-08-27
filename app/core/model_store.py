@@ -313,9 +313,11 @@ class ModelGallery:
             self._write_all(sel)
 
     def delete(self, filename: str = "") -> bool:
-        """Remove ONE stored file (+ its sidecar) or ALL files of the stem.
-        A selection pointing at a removed file moves to the newest remaining
-        one (default tier) or is dropped (any other tier) — never dangling."""
+        """Remove ONE stored file (+ its sidecar and its baked surface) or ALL
+        files of the stem. A selection pointing at a removed file moves to the
+        newest remaining one (default tier) or is dropped (any other tier) —
+        never dangling."""
+        from app.core.model_surface import surface_path
         removed = False
         if filename:
             p = self.file(filename)
@@ -327,9 +329,17 @@ class ModelGallery:
         self._files = None
         for p in targets:
             sidecar = p.with_suffix(".json")
+            # The BAKED SURFACE goes with the mesh (spec-surface-height § 4).
+            # It is named `<file>.surface.json` and therefore matches neither
+            # the model pattern nor the sidecar suffix — nothing else would
+            # ever collect it, and a lattice outliving its mesh would be read
+            # back the moment a new file happened to land under the same name.
+            lattice = surface_path(p)
             p.unlink()
             if sidecar.exists():
                 sidecar.unlink()
+            if lattice.exists():
+                lattice.unlink()
             removed = True
         sel = self._read_all()
         entry = dict(sel.get(self.stem) or {})

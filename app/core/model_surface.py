@@ -19,7 +19,9 @@ import hashlib
 import json
 import logging
 import math
+import os
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -40,7 +42,8 @@ PAYLOAD_KEYS = ("step", "origin", "cols", "rows", "values",
 
 def surface_path(model_path: Path) -> Path:
     """``room_1.glb`` -> ``room_1.glb.surface.json``: not a model name for the
-    gallery's pattern, but purged with the model by its ``<name>.*`` glob."""
+    gallery's pattern, and deleted together with its model by
+    ``ModelGallery.delete`` — the lattice dies with the mesh it measured."""
     p = Path(model_path)
     return p.with_name(p.name + SURFACE_SUFFIX)
 
@@ -119,12 +122,25 @@ def bake_surface_result(model_path: Path, rotation: Any, *,
                "rotation": _norm_rotation(rotation),
                "baked_at": utc_now_iso(), "blender": runner.version(),
                **{k: data[k] for k in PAYLOAD_KEYS}, "hits": data.get("hits", 0)}
+    # ATOMICALLY (Minor 5): a lattice is read by the scene route, by the walk
+    # gate and by the improvements scan while it is being written, and a
+    # half-written file is not merely "no surface" — ``_load`` would parse it
+    # every time it is asked, and a reader that caught it mid-write would put
+    # a figure on a truncated `values` row. ``os.replace`` swaps the whole file
+    # in one step, so a reader sees either the old lattice or the new one.
+    dest = surface_path(model_path)
+    tmp = dest.with_name(dest.name + ".tmp")
     try:
-        surface_path(model_path).write_text(
-            json.dumps(surface, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(surface, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, dest)
     except OSError as e:
         logger.info("surface not stored (%s): %s", Path(model_path).name, e)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
         return None, "unstorable"
+    _forget_loaded(dest)
     logger.info("surface baked: %s (%dx%d @ %.2f m, %d hits)", Path(model_path).name,
                 surface["cols"], surface["rows"], surface["step"], surface["hits"])
     return surface, "ok"
@@ -143,12 +159,56 @@ def bake_surface(model_path: Path, rotation: Any, *,
     return bake_surface_result(model_path, rotation, wait_s=wait_s)[0]
 
 
+# ── The parsed sidecars (Important 3) ───────────────────────────────────
+#
+# WHY A CACHE AT ALL. A lattice is a few hundred kilobytes of JSON, and almost
+# nobody who parses one wants the numbers: composing a scene reads the sidecar
+# of every room model and of every placed prop just to find out whether the
+# spec carries a `surface` field at all, the walk gate composes a location
+# afresh every 5 s per walker, and the improvements scan walks the whole stock
+# in one pass. Without this, one walking player parsed every prop lattice of
+# their location twelve times a minute.
+#
+# THE KEY IS THE FILE'S IDENTITY, not its path: size and nanosecond mtime come
+# from the very ``stat`` the lookup needs anyway, so a re-bake, a hand edit or
+# a restored backup can never be answered from the cache — the key simply is
+# not the same one any more. ``_forget_loaded`` on top of that is belt and
+# braces for a bake that lands inside one mtime tick.
+#
+# The parsed dict is handed out AS IS and every reader treats it as read-only
+# (``payload_block`` copies the mapping, the samplers only index it).
+_LOAD_CACHE_MAX = 256
+_load_cache: "OrderedDict[Tuple[str, int, int], Dict[str, Any]]" = OrderedDict()
+
+
+def _forget_loaded(path: Path) -> None:
+    """Drop every cached parse of ONE surface file — the bake that overwrote
+    it must not be shadowed by the version it replaced."""
+    name = str(path)
+    for key in [k for k in _load_cache if k[0] == name]:
+        _load_cache.pop(key, None)
+
+
 def _load(model_path: Path) -> Optional[Dict[str, Any]]:
     p = surface_path(model_path)
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        st = p.stat()
+    except OSError:
+        return None
+    key = (str(p), st.st_size, st.st_mtime_ns)
+    hit = _load_cache.get(key)
+    if hit is not None:
+        return hit
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(data, dict):
+        return None
+    _load_cache[key] = data
+    while len(_load_cache) > _LOAD_CACHE_MAX:
+        _load_cache.popitem(last=False)          # oldest entry goes first
+    return data
 
 
 def _valid(surface: Dict[str, Any], model_path: Path, rotation: Any) -> bool:
@@ -289,30 +349,35 @@ def highest_surface_at(specs: Iterable[Dict[str, Any]], x: float, z: float,
 #
 # The walk gate of ``POST /play/pos`` runs up to four times a second per
 # walker and asks for TWO points per report, while composing a location's
-# scene reads its rooms, its props and every model meta. So the lattices of a
+# scene reads its rooms, its props and every model meta. So the rungs of a
 # location are composed at most once per TTL — a window short enough that a
 # freshly baked surface reaches the gate before any client has re-fetched the
 # scene, and long enough that a walking party costs one compose, not fifty.
 #
 # A BARE DICT ON THE SHARED THREADPOOL, and that is safe without a lock: the
 # reports run in worker threads, but a dict get/set is atomic under the GIL and
-# the cached list is only ever REPLACED, never mutated in place — a reader
-# holds a list nobody writes into. The worst a race can do is let two walkers
+# the cached lists are only ever REPLACED, never mutated in place — a reader
+# holds lists nobody writes into. The worst a race can do is let two walkers
 # compose the same location once each, which is one wasted compose and never a
 # wrong height.
 _SURFACE_TTL_S = 5.0
-_placed_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+_placed_cache: Dict[str, Tuple[float, List[Dict[str, Any]],
+                               List[Dict[str, Any]]]] = {}
 #: Location ids whose lattice lookup already failed once — the gate must not
 #: write a traceback per report for one malformed sidecar.
 _read_warned: Dict[str, bool] = {}
 
 
 def forget_surfaces(location_id: str = "") -> None:
-    """Drop the cached lattices of ONE location, or of all of them.
+    """Drop the cached scene rungs of ONE location, or of all of them.
 
     The failure flag goes with them: a re-bake, a fixed sidecar or a repaired
     scene deserves a fresh traceback if it is still broken, and a flag that is
     never cleared silences the gate for the rest of the process.
+
+    The bare call also empties the PARSED-SIDECAR cache: it is the call every
+    bake makes, and "forget what you know about surfaces" must not leave a
+    lattice behind that a reader could still be answered from.
     """
     if location_id:
         _placed_cache.pop(location_id, None)
@@ -320,11 +385,80 @@ def forget_surfaces(location_id: str = "") -> None:
     else:
         _placed_cache.clear()
         _read_warned.clear()
+        _load_cache.clear()
 
 
-def _placed_specs(location: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """The placement specs of a location's scene that carry a surface — in
-    tile-local metres, like every scene number.
+def _room_declarations(scene: Dict[str, Any],
+                       models: Iterable[Dict[str, Any]],
+                       ) -> List[Dict[str, Any]]:
+    """RUNG 1 of the server ladder as data: one ``{spec, hull}`` per storey-0
+    room that DECLARES a walking height.
+
+    The hull is the room's ``floor_plan`` polygon — the very entry the client
+    builds its ``declaredFloors`` from (``sceneRecipe.ts``), so both sides
+    judge the declaration inside the same shape. A room whose polygon the
+    composer did not emit (an unplaced location has none) declares nothing:
+    without a hull there is no point at which the declaration would apply.
+    """
+    hulls: Dict[str, Any] = {}
+    for entry in scene.get("floor_plan") or []:
+        if not isinstance(entry, dict):
+            continue
+        rid = str(entry.get("room_id") or "")
+        poly = entry.get("polygon_world")
+        if rid and isinstance(poly, list) and len(poly) >= 3:
+            hulls[rid] = poly
+    out: List[Dict[str, Any]] = []
+    for spec in models:
+        if spec.get("role") != "room" or int(spec.get("level") or 0) != 0:
+            continue
+        if spec.get("walk_y_world") is None:
+            continue
+        hull = hulls.get(str(spec.get("room_id") or ""))
+        if hull:
+            out.append({"spec": spec, "hull": hull})
+    return out
+
+
+def declared_floor_of(declarations: Iterable[Dict[str, Any]],
+                      x: float, z: float) -> Optional[Dict[str, Any]]:
+    """The declaration that applies at tile-local (x, z), or None.
+
+    The Python twin of ``declaredFloorAt`` (``client3d/src/game/ground.ts``),
+    tie-break included: where several hulls contain the point the SMALLEST one
+    wins — the innermost answer, the same most-specific-first rule the
+    footprints use. Rooms are not supposed to overlap, but an always-visible
+    outdoor zone spanning half the location legally contains a hut standing in
+    it, and the hut's floor is the one a figure inside it stands on.
+
+    Containment first and the area only for the hulls that answer at all: the
+    overlap is the rare case and must not cost a shoelace pass over every room
+    of the location.
+    """
+    from app.core.world_geometry import point_in_polygon, polygon_area
+    best: Optional[Dict[str, Any]] = None
+    best_area = -1.0                       # < 0 = not measured yet
+    for dec in declarations:
+        if not point_in_polygon(x, z, dec["hull"]):
+            continue
+        if best is None:
+            best = dec
+            continue
+        if best_area < 0:
+            best_area = polygon_area(best["hull"])
+        area = polygon_area(dec["hull"])
+        if area > 0 and (best_area <= 0 or area < best_area):
+            best = dec
+            best_area = area
+    return best
+
+
+def _scene_specs(location: Dict[str, Any],
+                 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """What the walk gate reads off a location's scene: ``(lattices,
+    declarations)`` — the placement specs that carry a baked ``surface``, and
+    the storey-0 rooms that declare a ``walk_y_world`` with the hull it
+    applies inside. Everything in tile-local metres, like every scene number.
 
     The same composition ``GET /play/locations/{id}/scene`` serves, down to
     its 404 gate: a location with no room layout, no building outline and no
@@ -339,8 +473,9 @@ def _placed_specs(location: Dict[str, Any]) -> List[Dict[str, Any]]:
     now = time.monotonic()
     hit = _placed_cache.get(loc_id)
     if hit and hit[0] > now:
-        return hit[1]
+        return hit[1], hit[2]
     specs: List[Dict[str, Any]] = []
+    declarations: List[Dict[str, Any]] = []
     try:
         from app.core.scene_recipe import compose_scene, scene_inputs
         from app.core.surface_textures import library_kinds
@@ -353,12 +488,14 @@ def _placed_specs(location: Dict[str, Any]) -> List[Dict[str, Any]]:
                                   building_meta=building_meta,
                                   room_metas=room_metas,
                                   surface_kinds=library_kinds())
-            specs = [m for m in scene.get("models") or [] if m.get("surface")]
+            models = scene.get("models") or []
+            specs = [m for m in models if m.get("surface")]
+            declarations = _room_declarations(scene, models)
     except Exception:          # a broken scene must not block walking
-        specs = []
+        specs, declarations = [], []
         logger.exception("surfaces: compose failed for %s", loc_id)
-    _placed_cache[loc_id] = (now + _SURFACE_TTL_S, specs)
-    return specs
+    _placed_cache[loc_id] = (now + _SURFACE_TTL_S, specs, declarations)
+    return specs, declarations
 
 
 def _datum_y(location: Dict[str, Any]) -> Optional[float]:
@@ -387,22 +524,42 @@ def _datum_y(location: Dict[str, Any]) -> Optional[float]:
 def stand_height_at(location: Optional[Dict[str, Any]],
                     x: float, z: float) -> float:
     """Where a figure stands at WORLD (x, z), in metres: the world ground,
-    raised by the highest baked surface of ``location`` covering the point.
+    raised by what the location's scene puts over it at that point.
 
-    The server's copy of the client's ``standY(tileWalkY, worldGround)``
-    (spec § 7) — the terrain stays the lower bound (Entscheid 5), so a hollow
-    in a diorama never sinks a figure below the ground it stands on.
+    THE SERVER LADDER HAS THREE RUNGS, and it is the client's ground ladder
+    (``tileWalkY``) minus the one rung that cannot apply here:
+
+    0. THE BAKED LATTICE — ``highest_surface_at`` over the storey-0 specs that
+       carry a ``surface``. Highest answering lattice wins (Ruling R3).
+    1. THE DECLARATION — where no lattice answers (a ``null`` cell, a point
+       beside every model), the ``walk_y_world`` a storey-0 room states, taken
+       inside its ``floor_plan`` hull and the smallest hull first
+       (:func:`declared_floor_of`). ``walk_y_world`` is tile-local like
+       ``bottom_y``, so it takes the SAME storey-0 terrain lift as the
+       placement it belongs to (§ A16.9) — the declaration stands where its
+       diorama stands.
+    2. THE TERRAIN — ``ground_at``, and it is the lower bound of the two rungs
+       above as well (Entscheid 5): a hollow in a diorama never sinks a figure
+       below the ground it stands on.
+
+    THE PLATES (the client's rung 2) ARE DELIBERATELY ABSENT. Since E5a the
+    recipe draws a plate for DECLARED STOREYS only — storey 0 has none — and
+    this gate is storey-0 only (see below). There is nothing for that rung to
+    answer here, and adding it would mean measuring a walker on the ground
+    plane against the slab of the floor above them.
+
+    The whole thing is the server's copy of the client's
+    ``standY(tileWalkY, worldGround)`` (spec § 7).
 
     STOREY 0 ONLY, exactly like the client's GROUND ladder (``tileWalkY``): a
     walker reports a point on the ground plane, and the diorama of an upper
     floor must not be what it is measured against. A figure on an upper floor
     got there through a room, not through this route.
 
-    A location that composes no scene, a location without a usable datum and
-    a lattice that does not answer at the point all leave the bare ground — as
-    does anything that goes wrong while reading: the walk gate is a
-    plausibility check on a step, and a malformed sidecar must never be the
-    reason a player cannot walk.
+    A location that composes no scene, a location without a usable datum and a
+    point no rung answers at all leave the bare ground — as does anything that
+    goes wrong while reading: the walk gate is a plausibility check on a step,
+    and a malformed sidecar must never be the reason a player cannot walk.
     """
     from app.core.relief import ground_at
     ground = ground_at(x, z)
@@ -410,8 +567,8 @@ def stand_height_at(location: Optional[Dict[str, Any]],
         return ground
     loc_id = str(location.get("id") or "")
     try:
-        specs = _placed_specs(location)
-        if not specs:
+        specs, declarations = _scene_specs(location)
+        if not specs and not declarations:
             return ground
         from app.core.world_geometry import local_to_world, world_to_local
         cx = float(location.get("pos_x") or 0.0)
@@ -434,6 +591,17 @@ def stand_height_at(location: Optional[Dict[str, Any]],
         baked = highest_surface_at(
             (s for s in specs if int(s.get("level") or 0) == 0),
             lx, lz, lift_of)
+        if baked is None:
+            # RUNG 1: no lattice covers the point — a hole in the bake, a
+            # ``null`` cell, or a room that has no lattice at all. The room's
+            # own declaration is what the client falls to here, so the gate
+            # falls to it too: without this the server judged a step onto a
+            # declared podium against the terrain under it and refused what
+            # every renderer draws as a floor.
+            dec = declared_floor_of(declarations, lx, lz)
+            if dec is not None:
+                baked = (lift_of(dec["spec"])
+                         + float(dec["spec"]["walk_y_world"]))
     except Exception:
         if not _read_warned.get(loc_id):
             _read_warned[loc_id] = True

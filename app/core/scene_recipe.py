@@ -2863,11 +2863,18 @@ def layout_signature(map3d: Dict[str, Any],
 
 
 def scene_inputs(location: Dict[str, Any], location_id: str,
-                 building_model_file: str = "",
+                 building_model_file: str = "", *,
+                 with_surface: bool = True,
                  ) -> Tuple[float, Dict[str, Any], Dict[str, Any]]:
     """What :func:`compose_scene` needs beside the location: plan width, the
     building model's meta and one meta per laid-out room (each a
     ``get_client_meta`` dict, surfaces included).
+
+    ``with_surface=False`` leaves the baked lattices out of the room metas —
+    for a consumer that DRAWS the scene and never walks it (the admin's
+    floor-plan preview, Minor 10). A lattice is a few hundred kilobytes per
+    room and reading it costs a JSON parse per model; the preview would ship
+    all of that on every keystroke of the plan editor and use none of it.
 
     Clones need no special handling: the model store redirects them to their
     template (gallery owner) and room ids are template-identical, so the same
@@ -2890,7 +2897,7 @@ def scene_inputs(location: Dict[str, Any], location_id: str,
             continue
         rid = str(room.get("id") or "")
         meta = get_client_meta(location_id, room_id=rid,
-                               with_surface=True) if rid else None
+                               with_surface=with_surface) if rid else None
         if meta:
             room_metas[rid] = meta
     return (derive_plan_width_m(location_id, map3d),

@@ -7502,8 +7502,8 @@ und wie jede Blender-Stufe über einen LOD-Slot gegattet.
 
 `app/core/model_surface.py`. Sie liegt neben ihrem Modell
 (`raum_1.glb` → `raum_1.glb.surface.json`), matcht das Modell-Muster der
-Galerie absichtlich NICHT und wird vom Purge-Glob `<name>.*` mit dem Modell
-gelöscht — das Raster stirbt mit seinem Mesh.
+Galerie absichtlich NICHT und wird beim Löschen des Modells
+(`ModelGallery.delete`) mit gelöscht — das Raster stirbt mit seinem Mesh.
 
 ```jsonc
 {
@@ -7638,8 +7638,27 @@ für Schwellen (`threshold_base_y`), `plateCeiling` und die Raum-Deklaration.
 ### Der Server steht auf demselben Raster
 
 `model_surface.stand_height_at(location, x, z)` =
-`max(relief.ground_at(x, z), höchstes antwortendes Raster der Location)` —
+`max(relief.ground_at(x, z), was die Szene am Punkt darüber legt)` —
 dieselbe `standY`-Formel wie im Client, mit demselben Sampler.
+
+**Drei Sprossen**, die Boden-Leiter des Clients minus der einen, die hier nicht
+greifen kann:
+
+0. **Das gebackene Raster** — `highest_surface_at` über die Etage-0-Specs mit
+   `surface`; das höchste antwortende gewinnt (Ruling R3).
+1. **Die Deklaration** — wo kein Raster antwortet (`null`-Zelle, Loch im Bake,
+   Punkt neben jedem Modell): das `walk_y_world` eines Etage-0-Raums, geprüft
+   in seinem `floor_plan`-Hull, bei Überlappung gewinnt der KLEINSTE Hull
+   (`model_surface.declared_floor_of`, Python-Zwilling von `declaredFloorAt`).
+   `walk_y_world` ist kachel-lokal wie `bottom_y` und bekommt denselben
+   Etage-0-Lift wie seine Platzierung.
+2. **Das Gelände** — `ground_at`, und zugleich Untergrenze der beiden Sprossen
+   darüber (Entscheid 5).
+
+**Die Platten (Client-Sprosse 2) fehlen mit Absicht:** seit E5a zeichnet das
+Rezept nur für DEKLARIERTE Stockwerke Platten, Etage 0 hat keine, und dieses
+Tor ist Etage-0-only. Es gäbe nichts zu fragen — wohl aber die Platte des
+Geschosses über dem Läufer, gegen die niemand gemessen werden darf.
 
 * Die Raster einer Location sind die Specs mit `surface` aus `compose_scene`
   (über `scene_inputs`, das dafür aus `routes/play.py` nach `scene_recipe`
@@ -7655,7 +7674,7 @@ dieselbe `standY`-Formel wie im Client, mit demselben Sampler.
   misst (`tile.center.y` im Client). Ohne endliches Datum kein Raster, nur
   Boden: `storeyGroundLift` hebt dann auch im Client nicht, und das Datum als
   0 zu lesen hübe jedes Raster um die absolute Höhe seines eigenen Ankers.
-* Keine Szene, kein Raster am Punkt, ein defekter Sidecar: **nacktes Gelände**,
+* Keine Szene, keine Sprosse am Punkt, ein defekter Sidecar: **nacktes Gelände**,
   ein Log je Location. Das Schritt-Tor ist eine Plausibilitätsprüfung und darf
   nie der Grund sein, warum jemand nicht laufen kann.
 * In `POST /play/pos` (§ A15 Nr. 8) misst Δh damit zwischen zwei **Standhöhen**
@@ -7672,9 +7691,12 @@ Prop steht in vielen und vergisst deshalb alles.
 1. **Beim Landen.** Beim Prop beide Mess-Pfade (`_store_bbox` und der
    Inline-Pfad der Generierung), beim Raum `select_model` — der Trichter, durch
    den Auswahl, Upload und Generierung/Shrink alle gehen; gebacken wird das
-   aktive Voll-Modell. Immer im selben Hintergrund-Job, in dem heute schon
-   gemessen wird, nie im Request-Thread. Ein bereits gültiges Raster wird
-   übersprungen.
+   aktive Voll-Modell. **Nie im Request-Thread**, aber nicht überall auf
+   dieselbe Weise: `_store_bbox` startet einen eigenen Hintergrund-Thread, weil
+   seine Aufrufer (Upload, Auswahl, Löschen) auf dem Request-Pfad sitzen und
+   ein Raster minutenlang auf einen Blender-Slot warten darf; `_generate` läuft
+   ohnehin schon in seinem Job und backt dort **synchron**. Ein bereits
+   gültiges Raster wird übersprungen.
 2. **Bei der Fix-Drehung** (`location_model3d.request_surface`,
    `props.bake_surfaces`) sofort im Hintergrund. Bis das neue landet, ist das
    alte ungültig (`rotation` ≠) und es gilt Terrain. Ein Auftrag, der WÄHREND
@@ -7695,15 +7717,31 @@ Prop steht in vielen und vergisst deshalb alles.
 | Route | Körper | Antwort |
 |---|---|---|
 | `POST /world/locations/{lid}/rooms/{rid}/model3d/surface` | — | `{queued: true}` |
-| `POST /world/props/{pid}/surface` | `{variant?}` — der STORE-Index EINER Variante; fehlt/leer = jede aktive | `{queued: true}` |
+| `POST /world/props/{pid}/surface` | `{variant?}` — der STORE-Index EINER Variante; fehlt/leer = jede aktive; alles andere (negativ, nicht ganzzahlig, kein Zahlwort) ist ein Fehler | `{queued: true}`, sonst 400 |
 
 Beide erzwingen (`force`) — der Admin hat gedrückt, also wird auch ein gültiges
 Raster neu gebacken —, beide antworten sofort und **kennen keinen
 `busy`-Zustand**: das Backen wartet im Hintergrund auf seinen eigenen Slot.
 Daneben zeigen die Panels die Statuszeile aus `surface_status`
 („baked 33×33 @ 0.25 m", „missing", „stale (model or fix changed)"), am Prop je
-gezeigter Variante. Das Tag `walkable` ist im Prop-Admin ein bekannter Vorschlag
-wie `door`.
+gezeigter Variante — und der Bake-Knopf lädt den Datensatz gleich neu, weil er
+den Status ungültig macht. Der Raum-Status liefert sie als
+**`meta.surface_status`**, nicht als `meta.surface`: `surface` ist im
+Szenen-Rezept das RASTER selbst, und zwei Felder gleichen Namens mit
+verschiedenem Inhalt sind der Weg, auf dem ein Consumer ein Status-Dict
+abtastet. Am Prop hängt der Block an der GEZEIGTEN Variante (`shownHasMesh`),
+nicht am Prop-Flag: Status, Knopf und Route sprechen alle über die Variante,
+die offen ist.
+
+Das Tag `walkable` steht im Prop-Admin als **Hinweistext unter dem Tag-Feld**
+(„Tag \"walkable\" lets figures stand on this prop; its surface is baked from
+the mesh.") — die Tags sind ein freies Komma-Feld ohne Vorschlagsliste, anders
+als die Kategorie mit ihrer Datalist.
+
+**Die Admin-Vorschau (`POST /play/scene-preview`) bekommt keine Raster**:
+`scene_inputs(..., with_surface=False)`. Sie zeichnet und läuft nie, und ein
+Raster kostet je Raum ein paar hundert Kilobyte plus JSON-Parse — bei jedem
+Tastendruck im Lageplan-Editor.
 
 ### Fehlerfälle
 
@@ -7736,12 +7774,14 @@ wie `door`.
 | Die Zellenregel Knoten für Knoten an einer rein in Python geschriebenen Mini-GLB (Sockel + Block + hoher Überhang + niedriger Sims): 80 / 20 / **20** / **90** cm und `null` neben dem Modell — 20, weil unter dem hohen Überhang 1,3 m ≥ 1,2 m Luft ist, 90, weil unter dem Sims nur 0,6 m bleiben; dazu beide Boxen, `extent_snapped` unter Fix 0 und Fix x = 90, und die Gültigkeit (Version, Quelle, Fix, unvollständige Datei) | ebenda **part 1** (36 Checks, echtes Blender; ohne Blender SKIP statt Fehler) |
 | Die Sampler-Handtabelle: Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt | ebenda **part 2** (15 Checks) |
 | **Dieselbe Handtabelle in TypeScript** — `surfaceHeightAt`/`highestSurfaceAt` Zahl für Zahl wie der Python-Zwilling | `client3d/scripts/smoke_surface_math.mjs` (15 Checks) |
-| Rezept: `code_version` 6, das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7g]** (9 Checks) |
+| Rezept: `code_version` 6, das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
 | Zwei Varianten desselben Props in einem Raum: jede Kopie bekommt das Raster IHRER Store-Variante, und ein Neubacken der „verschluckten" Variante bewegt die Signatur | ebenda **[7h]** (8 Checks) |
 | Die Höhensperre: neben der Kiste blanker Boden, auf der 0,3-m-Kiste 0,3 (Schritt erlaubt), am 0,8-m-Block `too_steep` als STUFE, wieder herunter erlaubt; Etage-0-Filter, Anker-Lift, TTL-Cache, `forget_surfaces` und der defekte Sidecar, der auf Boden zurückfällt statt zu 500 | `scripts/smoke_play_pos.py` **[23]** (21 Checks) |
-| Improvements: nur der ausgelegte Raum ist Subject, `apply` backt unter dem bei APPLY neu gelesenen Fix, `is_done` liest frisch zurück, der gedrehte Regler macht den Kandidaten wieder zum Kandidaten, `busy` = `CandidateBusy` (kein Versuch verbraucht), ein Defekt = `RuntimeError`, und das Cache-Vergessen je Subject | `scripts/smoke_improvement_types.py` **[14]** Raum-Modelle (12 Checks), **[15]** Prop-Varianten (6 Checks) |
+| Sprosse 1 auf der Server-Seite: ein Loch im Raster (`null`-Knoten) fällt auf das `walk_y_world` des Raums in seinem `floor_plan`-Hull, außerhalb jedes Hulls antwortet das Gelände, bei Überlappung gewinnt der kleinste Hull — und das Schritt-Tor misst gegen 0,9 statt gegen 0,0 | ebenda **[23h]** (11 Checks) |
+| Improvements: nur der ausgelegte Raum ist Subject, `apply` backt unter dem bei APPLY neu gelesenen Fix, `is_done` liest frisch zurück, der gedrehte Regler macht den Kandidaten wieder zum Kandidaten, `busy` = `CandidateBusy` (kein Versuch verbraucht), ein Defekt = `RuntimeError`, und das Cache-Vergessen je Subject | `scripts/smoke_improvement_types.py` **[14]** Raum-Modelle (12 Checks), **[15]** Prop-Varianten (5 Checks) |
 | Dass ein Landen den Bake auslöst — mit Attrappe statt Blender, damit die LOD-Kette ohne ihn läuft | `scripts/smoke_model_lod.py` |
 | Verify-Zeile `surface_scale` je Spec mit Raster: die gemessene Skala des platzierten Objekts gegen `max_m / extent_snapped` — die einzige Stelle, an der eine Loader-Abweichung Blender ↔ three sichtbar würde („Prüfe am Verbraucher") | `client3d/src/scene/sceneRecipe.ts`, `?debug3d=1` |
+| Verify-Zeile `surface_box` daneben: die EXAKTE Box der Fix-Gruppe (outer → yawG → fitG → fix, in Modell-Einheiten vor Yaw und Skala) gegen `box_max − box_min` und `box_min[1]` der Datei, als größte Abweichung der vier Zahlen. `surface_scale` vergleicht nur die größte Seite — ein Mesh, dessen Box in den anderen Achsen oder in der Unterkante abweicht, kommt dort grün durch, während jede Raster-Lesung um genau diese Differenz danebenliegt | ebenda |
 
 ## Nachtrag 2026-08-28 (§ B): Marker sprechen PLATZ-TYPEN (v7)
 

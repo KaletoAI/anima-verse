@@ -1588,7 +1588,11 @@ def _play_scene_preview_sync(_, data: Any):
     known = bool(draft["id"] and get_location_by_id(draft["id"]))
     plan_width_m, building_meta, room_metas = scene_inputs(
         draft, draft["id"] if known else "",
-        building_model_file=str(data.get("building_model_file") or "").strip())
+        building_model_file=str(data.get("building_model_file") or "").strip(),
+        # The preview DRAWS and never walks (Minor 10): nothing on this route
+        # samples a lattice, so the hundreds of kilobytes per room stay on
+        # disk. The 3D client's scene route keeps them — that one is walked.
+        with_surface=False)
     return compose_scene(draft, plan_width_m=plan_width_m,
                          building_meta=building_meta, room_metas=room_metas,
                          surface_kinds=library_kinds())

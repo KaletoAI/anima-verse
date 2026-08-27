@@ -1357,8 +1357,12 @@ def _require_room(location_id: str, room_id: str) -> None:
 @router.get("/locations/{location_id}/rooms/{room_id}/model3d/status")
 def room_model3d_status(location_id: str, room_id: str) -> Dict[str, Any]:
     """Room-model status: {exists, pending, meta, backends, default,
-    shrink_backends} — same shape as the building twin, plus ``meta.surface``:
-    the state of the walkable surface baked out of the active model."""
+    shrink_backends} — same shape as the building twin, plus
+    ``meta.surface_status``: the STATE of the walkable surface baked out of
+    the active model ({state, cols, rows, step}). Named apart from the
+    ``surface`` of the scene recipe on purpose — that one is the lattice
+    itself, and two fields of one name carrying different things is how a
+    consumer ends up sampling a status dict (Minor 9)."""
     from app.core.location_model3d import find_building_model, get_building_info
     from app.core.model_surface import surface_status
     _require_room(location_id, room_id)
@@ -1367,8 +1371,8 @@ def room_model3d_status(location_id: str, room_id: str) -> Dict[str, Any]:
     if isinstance(meta, dict):
         # Judged against the CURRENT orientation fix — a surface baked before
         # the admin turned the model reads as stale, not as baked.
-        meta["surface"] = surface_status(find_building_model(location_id, room_id),
-                                         meta.get("rotation"))
+        meta["surface_status"] = surface_status(
+            find_building_model(location_id, room_id), meta.get("rotation"))
     return info
 
 
@@ -2159,8 +2163,26 @@ async def prop_surface(prop_id: str, request: Request,
         data = {}
     raw = data.get("variant")
     # Variant 0 is the PRIMARY variant, a real index — only an absent or empty
-    # field means "every active variant".
-    variant = None if raw is None or raw == "" else _mesh_int(raw)
+    # field means "every active variant". NOT ``_mesh_int``: that one is a
+    # tolerant reader for optional mesh dials, where 0 and "unset" mean the
+    # same thing and nonsense clamps to 0 — here 0 IS a variant, so a
+    # negative or non-numeric index would silently bake the primary variant
+    # instead of saying that the request made no sense (T8).
+    variant: Optional[int] = None
+    if raw is not None and raw != "":
+        # A whole number and nothing else: a bool is not an index, "2.5" is not
+        # an index, and a JSON 2.0 is one only because it names no other.
+        try:
+            if isinstance(raw, bool):
+                raise ValueError("bool is not an index")
+            variant = int(raw)
+            if variant != float(raw) or variant < 0:
+                raise ValueError("not a store index")
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="variant must be a store index >= 0 (or absent for "
+                       "every active variant)")
     bake_surfaces(prop_id, variant, background=True, force=True)
     return {"queued": True}
 

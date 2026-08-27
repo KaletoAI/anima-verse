@@ -278,7 +278,7 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
       ``stand_height_at(derived, x, z)``, and ``stand_height_at`` is
       ``max(ground_at, the highest answering lattice of the location)`` — the
       server's copy of the client's ``standY``.
-      The lattices are STUBBED here (``model_surface._placed_specs``), so the
+      The lattices are STUBBED here (``model_surface._scene_specs``), so the
       case owns its numbers instead of a Blender bake's. YARD — 40 m wide at
       (1000, 1000), no openings, flat ground, nothing else near it — carries
       two walkable props, each a 1 m x 1 m box of ONE height with a 5 x 5
@@ -321,6 +321,48 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
            ground instead of refusing the report — or, worse, 500-ing it. The
            flag that silences the second traceback is dropped by
            ``forget_surfaces`` together with the cached lattices.
+
+  [23h] AND WHERE THE LATTICE HAS A HOLE, THE ROOM'S DECLARATION ANSWERS
+      (fix wave A, 2026-08-28). The server ladder has three rungs — lattice,
+      declaration, terrain — and the middle one used to be missing on this
+      side, so a step onto a declared podium was judged against the terrain
+      under it while every renderer drew it as a floor. (The client's plate
+      rung has no counterpart here: plates are DECLARED STOREYS since E5a and
+      this gate is storey-0 only.)
+      The stub answers with ONE room spec and ONE declaration, both hand-made:
+        * ROOM "hall" at the pin — `max_m` 4 over `extent_snapped`
+          [4, 0.6, 4], `measure` "xyz", so the extent is max(4, 0.6, 4) = 4
+          and the scale s = 4/4 = 1. `anchor` (0, 0), `yaw_deg` 0,
+          `bottom_y` 0. `box_min` [-2, 0, -2], `box_max` [2, 0.6, 2], so the
+          box centre is (0, 0) and a tile-local x reads at the node
+          coordinate u = (x/s + c.x - origin[0])/step = (x + 0 + 2)/1 = x + 2
+          (v = z + 2 likewise).
+        * ITS LATTICE — 5 x 5 nodes at step 1, `origin` [-2, -2], value 60 cm
+          at every node with i <= 2 and `null` at i = 3 and i = 4. The
+          bilinear read needs all four corners, so u in [2, 4] answers None:
+          the eastern half of the room is A HOLE.
+        * `walk_y_world` 0.9 and, as the hull it is declared inside, the
+          room's `floor_plan` polygon — 4 m x 4 m around the pin, i.e. world
+          x, z in [998, 1002] (YARD's pin is (1000, 1000), yaw 0, flat
+          ground 0.00).
+      With that:
+        a) west of the hole (world 999.0 = local -1.0, u = 1.0, corners
+           i = 1, 2) the LATTICE answers 0 + 0 + 1 * 60/100 = 0.60;
+        b) in the hole (world 1000.5 = local 0.5, u = 2.5, the corner at
+           i = 3 is null) the DECLARATION answers 0.9 + lift 0 = 0.90;
+        c) outside every hull (world 1003.0 = local 3.0, u = 5.0 > cols - 1)
+           the TERRAIN answers 0.00;
+        d) THE TIE-BREAK is the client's (`declaredFloorAt`): an
+           always-visible 20 m x 20 m zone declaring 0.2 legally contains the
+           4 m hall, and the SMALLEST hull wins — the hole still reads 0.90.
+           Where only the zone contains the point (world 1003.0) it answers
+           0.20 and the terrain is out-ranked.
+        e) AND THE GATE JUDGES THE STEP AGAINST 0.9: from the lattice (park
+           world 999.7 = local -0.3, u = 1.7 -> 0.60) onto the hole 0.8 m
+           away, dh = 0.30 <= 0.4 -> accepted; from the bare ground (park
+           world 1002.5 -> 0.00) onto world 1001.6 (local 1.6, u = 3.6, the
+           corner at i = 4 is null -> 0.90) 0.9 m away, dh = 0.90 > 0.4 ->
+           409 `too_steep` with the STEP sentence.
 
 NOTE ON THE PARKING HELPER. ``park()`` writes the avatar's point directly
 (``set_character_pos``) and forgets the report clock — it is WORLD SETUP, not
@@ -1020,9 +1062,10 @@ def main() -> int:
 
     yard_specs = [walkable_prop("crate", (0.0, 0.0), 30, 0.3),
                   walkable_prop("block", (10.0, 0.0), 80, 0.8)]
-    real_placed = model_surface._placed_specs
-    model_surface._placed_specs = lambda loc: (
-        yard_specs if str((loc or {}).get("id") or "") == YARD else [])
+    real_placed = model_surface._scene_specs
+    model_surface._scene_specs = lambda loc: (
+        (yard_specs, []) if str((loc or {}).get("id") or "") == YARD
+        else ([], []))
     try:
         # (b) THE READINGS.
         check("beside the crate: the bare ground",
@@ -1092,7 +1135,7 @@ def main() -> int:
         def _broken(_loc):
             raise RuntimeError("a malformed surface sidecar")
 
-        model_surface._placed_specs = _broken
+        model_surface._scene_specs = _broken
         model_surface._read_warned.clear()
         model_surface.logger.setLevel(logging.CRITICAL)
         park(1000.0, 1000.0)
@@ -1108,7 +1151,98 @@ def main() -> int:
                    model_surface._read_warned == {})
     finally:
         model_surface.logger.setLevel(logging.NOTSET)
-        model_surface._placed_specs = real_placed
+        model_surface._scene_specs = real_placed
+        model_surface.forget_surfaces()
+
+    print("\n[23h] a hole in the lattice falls to the room's declaration")
+    # THE FIXTURE, all numbers by hand (see the docstring's [23h]).
+    #   room "hall": max_m 4 over extent_snapped [4, 0.6, 4], measure "xyz"
+    #   -> extent = max(4, 0.6, 4) = 4, s = 4/4 = 1. anchor (0, 0), yaw 0,
+    #   bottom_y 0, so a tile-local x maps to the node coordinate
+    #   u = (x/1 + cx - origin[0]) / step = (x + 0 + 2) / 1 = x + 2 (cx = 0
+    #   because box_min.x + box_max.x = -2 + 2 = 0), and v = z + 2.
+    #   values: 60 cm at every node with i <= 2, null at i = 3 and i = 4.
+    #   Bilinear needs all four corners, so u in [2, 4] reads null -> None.
+    hall_lattice = {
+        "step": 1.0, "origin": [-2.0, -2.0], "cols": 5, "rows": 5,
+        "values": [(60 if i <= 2 else None) for _j in range(5) for i in range(5)],
+        "box_min": [-2.0, 0.0, -2.0], "box_max": [2.0, 0.6, 2.0],
+        "extent_snapped": [4.0, 0.6, 4.0],
+    }
+    hall_spec = {"role": "room", "id": "hall", "room_id": "hall", "level": 0,
+                 "anchor": [0.0, 0.0], "yaw_deg": 0.0, "bottom_y": 0.0,
+                 "max_m": 4.0, "measure": "xyz", "walk_y_world": 0.9,
+                 "surface": hall_lattice}
+    # The hull is the room's floor_plan polygon: 4 m x 4 m around the pin, so
+    # world x, z in [998, 1002] (YARD's pin is (1000, 1000), yaw 0).
+    hall_decl = {"spec": hall_spec,
+                 "hull": [[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]]}
+    hall_decls = [hall_decl]
+    model_surface._scene_specs = lambda loc: (
+        ([hall_spec], hall_decls) if str((loc or {}).get("id") or "") == YARD
+        else ([], []))
+    try:
+        model_surface.forget_surfaces()
+        # (a) RUNG 0 still answers where the lattice has nodes: world 999.0 is
+        # tile-local -1.0, u = 1.0 -> corners i = 1, 2, both 60 cm ->
+        # bottom_y + lift + s * 60/100 = 0.60.
+        check("west of the hole the lattice answers", round(
+            model_surface.stand_height_at(yard, 999.0, 1000.0), 3), 0.6)
+        # (b) RUNG 1 in the hole: world 1000.5 is tile-local 0.5, u = 2.5 ->
+        # the corner at i = 3 is null -> no lattice answer. The hull contains
+        # (0.5, 0), so the declaration answers walk_y_world + lift = 0.9.
+        check("in the hole the room's declaration answers", round(
+            model_surface.stand_height_at(yard, 1000.5, 1000.0), 3), 0.9)
+        # (c) RUNG 2 outside every hull: world 1003.0 is tile-local 3.0,
+        # u = 5.0 > cols - 1 = 4 (outside the lattice) and outside the 4 m
+        # hull -> the bare ground, which is 0.00 at YARD.
+        check("outside every hull the ground answers", round(
+            model_surface.stand_height_at(yard, 1003.0, 1000.0), 3), 0.0)
+        # (d) THE TIE-BREAK: an always-visible zone spanning 20 m x 20 m
+        # (area 400) legally contains the 4 m hall (area 16). The SMALLEST
+        # hull wins — the client's `declaredFloorAt` rule — so the hole still
+        # reads 0.9 and not the zone's 0.2.
+        zone_spec = dict(hall_spec, id="zone", room_id="zone",
+                         walk_y_world=0.2)
+        zone_spec.pop("surface")
+        hall_decls.insert(0, {"spec": zone_spec,
+                              "hull": [[-10.0, -10.0], [10.0, -10.0],
+                                       [10.0, 10.0], [-10.0, 10.0]]})
+        try:
+            check("the smallest hull wins over an enclosing zone", round(
+                model_surface.stand_height_at(yard, 1000.5, 1000.0), 3), 0.9)
+            # …and where only the zone contains the point, the zone answers:
+            # world 1003.0 is inside the 20 m hull but outside the 4 m one.
+            check("where only the zone contains the point, it answers", round(
+                model_surface.stand_height_at(yard, 1003.0, 1000.0), 3), 0.2)
+        finally:
+            hall_decls.pop(0)
+
+        # (e) THE STEP ONTO THE DECLARED FLOOR IS JUDGED AGAINST 0.9.
+        # From the 0.6 lattice: park at world 999.7 (tile-local -0.3,
+        # u = 1.7 -> corners i = 1, 2 -> 0.60) and report world 1000.5
+        # (0.90). Distance 0.8 m < STEP_DISTANCE_M = 1 m, so the step limit
+        # applies: dh = 0.30 <= 0.4 -> accepted.
+        park(999.7, 1000.0)
+        status, _payload = report(1000.5, 1000.0)
+        check("stepping up from the lattice (0.30 m) is allowed", status, "ok")
+        # From the bare ground: park at world 1002.5 (tile-local 2.5 — outside
+        # hull and lattice -> 0.00) and report world 1001.6 (tile-local 1.6,
+        # u = 3.6 -> the corner at i = 4 is null -> the declaration, 0.90).
+        # Distance 0.9 m < 1 m, dh = 0.90 > 0.4 -> refused as a STEP.
+        park(1002.5, 1000.0)
+        res = report(1001.6, 1000.0)
+        status, reason, pos, _loc, message = refusal_of(res)
+        check("the same declared floor is a wall from the ground",
+              res[0], "refused")
+        check("the status", status, 409)
+        check("the reason", reason, "too_steep")
+        check("...named as a STEP, not a slope", message,
+              "That step is too high to climb.")
+        check("the last valid point comes back", pos,
+              {"x": 1002.5, "z": 1000.0})
+    finally:
+        model_surface._scene_specs = real_placed
         model_surface.forget_surfaces()
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} failed")

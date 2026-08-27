@@ -2226,6 +2226,15 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
         _surface_building.add(pid)
         _surface_dirty.pop(pid, None)
 
+    # A KEY GIVEN BACK INSIDE THE LOOP IS NOT OURS ANY MORE. The loop releases
+    # it and marks itself done in ONE critical section — but between that and
+    # the ``finally`` below (and the refused-thread handler) another request
+    # may already have taken the very same key and started its own job. A
+    # second ``discard`` would then steal ITS key, and the request after that
+    # would start a third job on a prop that is being baked. So the release is
+    # recorded, and everything downstream keeps its hands off.
+    released = threading.Event()
+
     def _work() -> None:
         run_force = force
         # None = every active variant; a re-run always widens to that.
@@ -2269,14 +2278,16 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
                         # a request arriving now starts its own job instead of
                         # writing into a dirty flag nobody reads again.
                         _surface_building.discard(pid)
+                        released.set()
                         return
                     run_force = _surface_dirty.pop(pid)
                     only = None
         finally:
             # Safety net for what the loop's own guard cannot catch; a no-op on
-            # the ordinary way out.
+            # the ordinary way out — and never on a key the loop gave back.
             with _lock:
-                _surface_building.discard(pid)
+                if not released.is_set():
+                    _surface_building.discard(pid)
 
     if background:
         try:
@@ -2284,10 +2295,12 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
                              name=f"prop-surface-{pid}").start()
         except RuntimeError:
             # A refused thread start gives the key back — otherwise this prop
-            # would never be baked again in this process.
+            # would never be baked again in this process. Same rule: only while
+            # the key is still ours.
             with _lock:
-                _surface_building.discard(pid)
-                _surface_dirty.pop(pid, None)
+                if not released.is_set():
+                    _surface_building.discard(pid)
+                    _surface_dirty.pop(pid, None)
     else:
         _work()
 
