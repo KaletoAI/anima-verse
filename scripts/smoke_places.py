@@ -93,7 +93,20 @@ Hand-derived expectations:
       "reading" is a seat pose → absent because no seat is free; the lounge's
       activity_hint "reading nooks" closes the block.)
       room_offer_short == "seat 0 free, bed 1 free".
+      location_occupancy(house) — one roster pass — is exactly
+      {"lounge": {s1: [Ann/0], s2: [Bob/0, Cid/1]}} (Dan, Eve, Fay hold
+      nothing; b1 is nobody's), and room_offer_short fed that room's map
+      (occ=) gives the same string as the self-reading call.
       place_label("Ann") == "Seat"; place_label("Fay") == "".
+  [6b] The pair gate of _group_lines counts free slots PER PLACE, never the
+      row's sum: two prop-sourced "Chair" seats of capacity 1 collapse to
+      ONE row "2× Chair" (same label + group) with 2 free slots in total but
+      at most 1 on any one chair → "- 2× Chair (free): sitting, reading" —
+      the pair pose "cuddling" (places 2) is absent. One prop "Sofa" of
+      capacity 2 → "- Sofa (free): sitting, cuddling (with partner), reading"
+      (poses_in_group: the group default first, the rest alphabetical).
+      room_places is stubbed for a room "den" nobody is in, so the
+      occupancy is empty and the lines are pure inventory.
       The setup restores the full layout (stage 3 dropped b1) and sets the
       room hint straight in the world data — there is no setter,
       activity_hint is a column of the rooms table.
@@ -471,10 +484,39 @@ for _i, (_want, _got) in enumerate(zip(EXPECTED_OFFER.split("\n"),
 check("offer has exactly six lines", offer == EXPECTED_OFFER, repr(offer))
 short = places.room_offer_short(HOUSE, "lounge")
 check("room_offer_short", short == "seat 0 free, bed 1 free", repr(short))
+loc_occ = places.location_occupancy(HOUSE)
+check("location_occupancy: one map for the whole house",
+      loc_occ == {"lounge": {"s1": [("Ann", 0)], "s2": [("Bob", 0), ("Cid", 1)]}}, str(loc_occ))
+check("room_offer_short with a precomputed map gives the same string",
+      places.room_offer_short(HOUSE, "lounge", occ=loc_occ["lounge"]) == short)
 check("place_label(Ann) == 'Seat'", places.place_label("Ann") == "Seat",
       repr(places.place_label("Ann")))
 check("place_label(Fay) == ''", places.place_label("Fay") == "",
       repr(places.place_label("Fay")))
+
+# ── [6b] the pair gate counts free slots per place ──────────────────────
+print("\n[6b] the pair gate counts free slots per place")
+
+
+def prop_place(pid: str, label: str, cap: int) -> dict:
+    return {"id": pid, "group": "seat", "label": label, "capacity": cap,
+            "slots": [[float(i), 0.0] for i in range(cap)], "facing": 0.0, "y_world": 0.0,
+            "root_offset": 0.534, "source": "prop", "room_id": "den"}
+
+
+_orig_room_places = places.room_places
+places.room_places = lambda loc, room: (
+    [prop_place("c1/s", "Chair", 1), prop_place("c2/s", "Chair", 1), prop_place("sofa/s", "Sofa", 2)]
+    if room == "den" else _orig_room_places(loc, room))
+try:
+    den = places._group_lines(HOUSE, "den", "Fay")
+finally:
+    places.room_places = _orig_room_places
+check("two rows (the two chairs collapsed, the sofa apart)", len(den) == 2, str(den))
+check("2× Chair: 2 free in total, 1 per chair → no pair pose",
+      den[0] == "- 2× Chair (free): sitting, reading", repr(den[0]))
+check("Sofa: 2 free on one place → cuddling (with partner)",
+      den[1] == "- Sofa (free): sitting, cuddling (with partner), reading", repr(den[1]))
 
 # ── summary ─────────────────────────────────────────────────────────────
 print()

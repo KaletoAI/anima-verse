@@ -194,7 +194,7 @@ You may also use other locations not in this list if the roleplay requires it.
 
 Activity change: If the roleplay clearly changes your activity, add this line at the very end (BEFORE any location line): **I do <activity name>**
 {{ known_activities }}
-Use the EXACT activity name from the list above. You may also use other activities not in this list if the roleplay requires it.
+Name the activity by one of the pose keys listed after a place (or under "Anywhere here"); free text is fine when the roleplay needs it.
 {% endif %}
 {% if intent_tracking_enabled %}
 

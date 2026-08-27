@@ -281,8 +281,11 @@ def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
     """One line per place — the markers of one prop collapse into a single
     line per group (a "2× Chair" is one row), room markers stay apart —
     busy ones by the names holding them, free ones with the poses of their
-    group the free slots allow (a pair pose needs ``places`` free slots).
-    ``viewer`` never counts as an occupant: the block is written for them."""
+    group the free slots allow. A pair pose needs ``places`` free slots ON
+    ONE place (a pair sits on one marker, never across two chairs), so the
+    gate is the largest free count of any single place in the row, not the
+    row's sum. ``viewer`` never counts as an occupant: the block is written
+    for them."""
     from app.core.pose_catalog import get_catalog, poses_in_group
     occ = occupancy(location_id, room_id, exclude=viewer)
     cat = get_catalog("pose")
@@ -290,10 +293,12 @@ def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
     for p in room_places(location_id, room_id):
         key = (p["label"], p["group"]) if p["source"] == "prop" else (p["id"], p["group"])
         row = rows.setdefault(key, {"label": p["label"], "group": p["group"], "count": 0,
-                                    "free": 0, "cap": 0, "who": []})
+                                    "free": 0, "max_free": 0, "cap": 0, "who": []})
         taken = occ.get(p["id"], [])
+        n_free = len(free_slots(p, taken))
         row["count"] += 1
-        row["free"] += len(free_slots(p, taken))
+        row["free"] += n_free
+        row["max_free"] = max(row["max_free"], n_free)
         row["cap"] += p["capacity"]
         row["who"] += [n for n, _ in taken]
     lines: List[str] = []
@@ -307,7 +312,7 @@ def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
             e = cat[k]
             if e["solo"]:
                 poses.append(k)
-            elif row["free"] >= e["places"]:
+            elif row["max_free"] >= e["places"]:
                 poses.append(f"{k} (with partner)")
         state = ("free" if not row["who"]
                  else f"{row['free']} of {row['cap']} free, {', '.join(row['who'])} here")
@@ -348,10 +353,38 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
     return "\n".join(out)
 
 
-def room_offer_short(location_id: str, room_id: str) -> str:
+def location_occupancy(location_id: str) -> Dict[str, Dict[str, List[Tuple[str, Any]]]]:
+    """``{room_id: {place_id: [(name, slot), …]}}`` of the whole location
+    from ONE roster pass — for a caller that asks about every room (the
+    NPC director), where per-room :func:`occupancy` would read every
+    profile once per room. Same validation as :func:`occupancy`."""
+    from app.models.character import get_character_profile, list_available_characters
+    out: Dict[str, Dict[str, List[Tuple[str, Any]]]] = {}
+    if not location_id:
+        return out
+    for name in list_available_characters():
+        prof = get_character_profile(name) or {}
+        if (prof.get("current_location") or "") != location_id:
+            continue
+        room = prof.get("current_room") or ""
+        pl = prof.get("place")
+        if not room or not isinstance(pl, dict):
+            continue
+        place = next((p for p in room_places(location_id, room) if p["id"] == pl.get("id")), None)
+        slot = _held_slot(pl, place, room) if place else None
+        if slot is not None:
+            out.setdefault(room, {}).setdefault(place["id"], []).append((name, slot))
+    return out
+
+
+def room_offer_short(location_id: str, room_id: str,
+                     occ: Optional[Dict[str, List[Tuple[str, Any]]]] = None) -> str:
     """Per group: free slots — ``"seat 2 free, bed 1 free"`` — what the NPC
-    director needs to pick a room; ``""`` for a room without markers."""
-    occ = occupancy(location_id, room_id)
+    director needs to pick a room; ``""`` for a room without markers.
+    ``occ`` is the room's precomputed occupancy (one entry of
+    :func:`location_occupancy`); None reads it for this room alone."""
+    if occ is None:
+        occ = occupancy(location_id, room_id)
     free: Dict[str, int] = {}
     for p in room_places(location_id, room_id):
         free[p["group"]] = free.get(p["group"], 0) + len(free_slots(p, occ.get(p["id"], [])))

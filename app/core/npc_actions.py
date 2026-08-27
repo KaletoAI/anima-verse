@@ -283,6 +283,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
     if not location_id:
         return {}
     location = get_location_by_id(location_id) or {}
+    loc_occ = places.location_occupancy(location_id)     # ONE roster pass for all rooms
     rooms = []
     for room in (location.get("rooms") or []):
         room_id = str((room or {}).get("id") or "").strip()
@@ -291,7 +292,8 @@ def prompt_vars(name: str) -> Dict[str, Any]:
         rooms.append({"id": room_id,
                       "name": get_room_name(location_id, room_id),
                       "hint": get_room_activity_hint(location_id, room_id),
-                      "places": places.room_offer_short(location_id, room_id)})
+                      "places": places.room_offer_short(location_id, room_id,
+                                                        occ=loc_occ.get(room_id, {}))})
     if not rooms:
         return {}
 
