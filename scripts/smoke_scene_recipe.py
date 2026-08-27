@@ -1799,7 +1799,8 @@ def test_door_props() -> None:
           len(gone) == 1 and "placeholder_dims" not in gone[0], str(gone))
 
     # ── it has to reach the client ───────────────────────────────────────
-    check("the recipe version is 5", scene_recipe.SCENE_RECIPE_VERSION == 5,
+    check("the recipe version has moved past the door props (5)",
+          scene_recipe.SCENE_RECIPE_VERSION >= 5,
           str(scene_recipe.SCENE_RECIPE_VERSION))
     base = door_prop_scene(a_openings=[dict(S_DOOR)])["signature"]
     check("changing the location default moves the signature",
@@ -4156,6 +4157,125 @@ def test_map_water_reference() -> None:
           str(sorted(plan_dry)))
 
 
+# ── Baked surfaces (spec-surface-height § 6.1) ─────────────────────────
+
+# ONE hand-written lattice, the shape ``model_surface.payload_block`` emits:
+# a 2 × 2 m box on a 0.25 m raster is 9 × 9 = 81 nodes, all 20 cm above the
+# lower edge (values are centimetre ints relative to ``box_min.y``).
+SURFACE_BLOCK = {"step": 0.25, "origin": [-1, -1], "cols": 9, "rows": 9,
+                 "values": [20] * 81, "box_min": [-1, 0, -1],
+                 "box_max": [1, 1.6, 1], "extent_snapped": [2, 1.6, 2]}
+
+# A walkable prop beside the plain example one: same shape as EXAMPLE_PROP,
+# plus the ONE tag that switches the surface on (decision 7).
+WALKABLE_PROP = {
+    "id": "crate", "name": "Crate",
+    "width_m": 1.0, "depth_m": 1.0, "height_m": 1.0,
+    "rotation": {"x": 0, "y": 0, "z": 0},
+    "bbox": [1.0, 1.0, 1.0],
+    "has_model": True, "model_tiers": ["full"],
+    "model_signature": "cratesig1",
+    "tags": ["Walkable"],          # case is not part of the tag (lowered)
+    "slots": [],
+}
+
+
+def _surf_note(spec: dict) -> str:
+    """The lattice in one line — 81 identical values are unreadable as a
+    failure detail, its size and its first value are not."""
+    s = spec.get("surface")
+    if not isinstance(s, dict):
+        return str(s)
+    return (f'{s.get("cols")}x{s.get("rows")} @ {s.get("step")} m, '
+            f'values[0]={(s.get("values") or [None])[0]}, '
+            f'box {s.get("box_min")}..{s.get("box_max")}')
+
+
+def surface_fixture() -> dict:
+    """The model fixture with a SECOND prop in room "a" — the walkable crate
+    beside the plain table, far enough from it not to be stacked on it."""
+    loc = model_fixture()
+    for room in loc["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["props"].append(
+                {"prop_id": "crate", "at": [3.5, 0.5], "yaw": 0})
+    return loc
+
+
+def test_surface_specs() -> None:
+    """[7g] BAKED SURFACES ON THE PLACEMENT SPEC (v6, spec-surface-height).
+
+    Four statements, all of them payload rules and none of them geometry —
+    the numbers of the lattice are the bake's, and the recipe hands them on
+    character for character:
+
+    * ``SCENE_RECIPE_VERSION`` is 6, so every client re-fetches once;
+    * a room whose meta carries ``surface`` gives the block to its ``room``
+      spec unchanged, and a room whose meta carries none gets no field;
+    * a prop tagged ``walkable`` gets ``walkable: True`` and — only if its
+      variant really has a baked lattice — the block; an untagged prop gets
+      neither field, so a table's lattice is not dead weight in the payload;
+    * the signature moves when a block appears, which is what makes a freshly
+      baked surface reach a running client.
+    """
+    print("\n[7g] baked model surfaces (v6)")
+    from app.core import props as prop_store
+    check("code_version 6", scene_recipe.SCENE_RECIPE_VERSION == 6,
+          str(scene_recipe.SCENE_RECIPE_VERSION))
+
+    # ── the room diorama ─────────────────────────────────────────────────
+    stub_props()
+    metas = room_metas()
+    metas["d"] = dict(metas["d"], surface=SURFACE_BLOCK)
+    sc = scene_recipe.compose_scene(model_fixture(), plan_width_m=PLAN_W,
+                                    building_meta=BUILDING_META,
+                                    room_metas=metas)
+    room = spec_of(sc, "room", "d")
+    check("the room spec carries the meta's block, unchanged",
+          room.get("surface") == SURFACE_BLOCK, _surf_note(room))
+    other = spec_of(sc, "room", "garden")
+    check("a room whose meta has no surface carries no field",
+          other and "surface" not in other, str(sorted(other)))
+    plain = scene_recipe.compose_scene(model_fixture(), plan_width_m=PLAN_W,
+                                       building_meta=BUILDING_META,
+                                       room_metas=room_metas())
+    check("the signature moves with the block",
+          sc["signature"] != plain["signature"])
+
+    # ── props: the walkable crate and the plain table ────────────────────
+    recs = {"table": EXAMPLE_PROP, "crate": WALKABLE_PROP}
+    stub_library(lambda pid: dict(recs[pid]) if pid in recs else None)
+    real_surface_for = prop_store.surface_for
+    prop_store.surface_for = (
+        lambda pid, variant=None: dict(SURFACE_BLOCK) if pid == "crate" else None)
+    try:
+        sc = scene_recipe.compose_scene(surface_fixture(), plan_width_m=PLAN_W,
+                                        building_meta=BUILDING_META,
+                                        room_metas=room_metas())
+        crate = spec_of(sc, "prop", "crate")
+        table = spec_of(sc, "prop", "table")
+        check("the tagged prop says walkable", crate.get("walkable") is True,
+              str(crate.get("walkable")))
+        check("...and ships the baked block of its variant",
+              crate.get("surface") == SURFACE_BLOCK, _surf_note(crate))
+        check("the untagged prop says nothing", "walkable" not in table)
+        check("...and ships no block", "surface" not in table)
+        # The tag is the switch, the bake is the content: a walkable prop
+        # whose mesh was never baked stays walkable and simply has no lattice
+        # — the renderers fall back to the floor under it.
+        prop_store.surface_for = lambda pid, variant=None: None
+        unbaked = spec_of(scene_recipe.compose_scene(
+            surface_fixture(), plan_width_m=PLAN_W,
+            building_meta=BUILDING_META, room_metas=room_metas()),
+            "prop", "crate")
+        check("walkable without a bake: the flag, no block",
+              unbaked.get("walkable") is True and "surface" not in unbaked,
+              str(sorted(unbaked)))
+    finally:
+        prop_store.surface_for = real_surface_for
+        stub_props()
+
+
 def main() -> int:
     test_scalars()
     test_scale_is_one()
@@ -4197,6 +4317,7 @@ def main() -> int:
     test_room_rotation()
     test_rotation_outside_boundary()
     test_rotation_shared_walls()
+    test_surface_specs()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

@@ -45,8 +45,7 @@ def main() -> int:
         print(f"[warn] config.load failed (continuing): {e}")
 
     from app.models.world import list_locations
-    from app.routes.play import _scene_inputs
-    from app.core.scene_recipe import compose_scene
+    from app.core.scene_recipe import compose_scene, scene_inputs
 
     def score(loc):
         rooms = [r for r in (loc.get("rooms") or []) if r.get("layout")]
@@ -62,7 +61,7 @@ def main() -> int:
     print(f"\nLocation: {best.get('name')} ({loc_id}) — "
           f"{score(best)[0]} rooms with layout")
 
-    plan_width_m, building_meta, room_metas = _scene_inputs(best, loc_id)
+    plan_width_m, building_meta, room_metas = scene_inputs(best, loc_id)
     print(f"  plan_width_m={plan_width_m} building_meta={bool(building_meta)} "
           f"room_metas={sorted(room_metas)}")
     sc = compose_scene(best, plan_width_m=plan_width_m,

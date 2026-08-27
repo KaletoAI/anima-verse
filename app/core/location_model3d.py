@@ -444,7 +444,8 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
 
 
 def get_client_meta(location_id: str, room_id: str = "",
-                    filename: str = "") -> Optional[Dict[str, Any]]:
+                    filename: str = "", *,
+                    with_surface: bool = False) -> Optional[Dict[str, Any]]:
     """Lean meta for the 3D client (``{format, rig, rotation, offset_y,
     tiers, signature}``) of the ACTIVE model, or None when there is none — no
     backend/model enumeration (that is the admin status's job). ``rotation``
@@ -461,7 +462,13 @@ def get_client_meta(location_id: str, room_id: str = "",
     ``filename`` picks ONE stored model instead of the active one — the admin
     preview of a non-active model needs the scene spec computed for the file
     it shows, or its placement dials write to a sidecar nobody renders
-    (user finding 2026-08-19: Shift X/Z and walk height looked dead)."""
+    (user finding 2026-08-19: Shift X/Z and walk height looked dead).
+
+    ``with_surface`` adds the model's BAKED walking surface as ``surface``
+    (the payload block of ``model_surface``, absent when none is baked or the
+    stored one no longer matches the file/fix). Off by default: the lattice is
+    a few hundred kilobytes and only the scene recipe wants it — the meta
+    route ships the bake STATUS instead (spec-surface-height § 6.1)."""
     owner = _owner_id(location_id)
     if not owner:
         return None
@@ -497,6 +504,11 @@ def get_client_meta(location_id: str, room_id: str = "",
            # every tier is the point: a freshly generated low variant used to
            # leave the signature untouched and stayed invisible.
            "signature": gallery.signature()}
+    if with_surface:
+        from app.core.model_surface import payload_block, read_surface
+        surface = read_surface(p, meta.get("rotation"))
+        if surface:
+            out["surface"] = payload_block(surface)
     if room_id:
         # Rooms: the height offset lives in the FLOOR PLAN
         # (layout.model_offset_y), not on the model — the sidecar offsets are

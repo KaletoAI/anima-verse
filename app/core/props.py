@@ -1280,6 +1280,32 @@ def model_path(prop_id: str, tier: str = "",
     return g.find(tier) if g else None
 
 
+def surface_for(prop_id: str, variant: Any = None) -> Optional[Dict[str, Any]]:
+    """The payload block of a variant's baked surface, or None
+    (spec-surface-height § 6.1).
+
+    ``variant`` is the STORE index, like everywhere else in this module. The
+    orientation fix is the PROP's, not the variant's — every variant of a prop
+    is the same object, so one dial turns them all, and the bake is only valid
+    under the fix it was made with."""
+    from app.core.model_surface import payload_block, read_surface
+    mp = model_path(prop_id, variant=variant)
+    if not mp:
+        return None
+    meta = read_sidecar(safe_prop_id(prop_id) or "")
+    surface = read_surface(mp, meta.get("rotation"))
+    return payload_block(surface) if surface else None
+
+
+def surface_status_for(prop_id: str, variant: Any = None) -> Dict[str, Any]:
+    """What the prop panel shows about one variant's surface: baked, stale or
+    missing (:func:`model_surface.surface_status`)."""
+    from app.core.model_surface import surface_status
+    meta = read_sidecar(safe_prop_id(prop_id) or "")
+    return surface_status(model_path(prop_id, variant=variant),
+                          meta.get("rotation"))
+
+
 def model_tiers(prop_id: str, variant: Any = None) -> List[str]:
     """The resolution tiers the prop actually HAS, sorted ('' id or no mesh →
     empty list).
@@ -1367,7 +1393,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
     seasons, in_season, tiers, has_model, model_file, model_url, signature,
     has_source, source_url, image, dims, dims_estimated, description,
-    ground_offset_m, markers}]`` — every variant, active or not, in order.
+    ground_offset_m, markers, surface}]`` — every variant, active or not, in
+    order.
 
     Since 2026-08-25 there is ONE number per field and no pair of them: the
     variant owns its size, its subject, its sink and its markers, so ``dims``
@@ -1421,6 +1448,10 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "description": entry.get(DESCRIPTION_KEY, ""),
             "ground_offset_m": entry.get(GROUND_OFFSET_KEY, GROUND_OFFSET_DEFAULT),
             "markers": entry.get(MARKERS_KEY, []),
+            # This variant's own baked walking surface, state only — every
+            # variant is a mesh of its own and is baked on its own
+            # (spec-surface-height § 6.1).
+            "surface": surface_status_for(prop_id, i),
         })
     return out
 
@@ -2839,6 +2870,11 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # detail, hence the full record only — the badge in the prop editor
             # is its one consumer.
             "slots_auto": bool(meta.get(SLOTS_AUTO_KEY)),
+            # The PRIMARY variant's baked walking surface — state only, never
+            # the lattice: the panel says baked/stale/missing and offers the
+            # bake button, the numbers travel on the scene spec alone
+            # (spec-surface-height § 6.1).
+            "surface": surface_status_for(prop_id),
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]

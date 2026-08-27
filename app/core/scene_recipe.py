@@ -83,7 +83,11 @@ logger = get_logger(__name__)
 #: hung on its HINGE edge so a renderer can swing it. The leaf wall stays in
 #: ``walls[]`` (the Blender exterior render reads that list) and merely says
 #: ``door_prop`` so the renderers skip drawing it.
-SCENE_RECIPE_VERSION = 5
+#: 6 (2026-08-27): BAKED MODEL SURFACES (spec-surface-height) — a diorama and
+#: a prop tagged ``walkable`` carry the height lattice their mesh was baked
+#: into (``surface``, plus ``walkable`` on the prop), so a figure stands on
+#: the rock the model shows instead of on the land under it.
+SCENE_RECIPE_VERSION = 6
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -1958,6 +1962,11 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     # Absent = the room keeps whatever floor the renderer samples.
     if meta.get("walk_y") is not None:
         spec["walk_y_world"] = _r(spec["bottom_y"] + _num(meta["walk_y"]))
+    # The BAKED surface (v6, spec-surface-height): rung 0 of the walking height
+    # in both renderers and the server's walk gate. Shipped verbatim from the
+    # sidecar file — the recipe states no geometry of its own here.
+    if isinstance(meta.get("surface"), dict):
+        spec["surface"] = meta["surface"]
     # Opt-in shell clip (§ B1): a diorama may stick out over its floor plan —
     # with the flag the renderer discards everything outside the room shell.
     # The polygon is the room's floor plate, not a second derivation. An
@@ -2114,6 +2123,15 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         if len(model_variants) > 1:
             spec["model_variants"] = model_variants
             spec["variant"] = _variant_index(placement, len(model_variants))
+        # WALKABLE (v6): only a prop that carries the tag ships its surface —
+        # a table's lattice would be dead weight in every payload.
+        tags = [str(t).lower() for t in ((prop or {}).get("tags") or [])]
+        if "walkable" in tags:
+            spec["walkable"] = True
+            store_variant = _store_variant_index(placement, model_variants)
+            surface = prop_store.surface_for(pid, store_variant) if has_model else None
+            if surface:
+                spec["surface"] = surface
         # The DEPTH CUT, already turned into a plane in world metres — the
         # renderers only hand it to a material (§ B2 addendum 2026-08-23).
         cut = depth_cut_plane(anchor_u, anchor_v, _num(placement.get("yaw")),
@@ -2320,6 +2338,29 @@ def _variant_index(placement: Dict[str, Any], count: int) -> int:
     return i % count if count > 0 else 0
 
 
+def _store_variant_index(placement: Dict[str, Any],
+                         model_variants: List[Dict[str, str]]) -> Optional[int]:
+    """The STORE index of the variant this placement shows (None = primary).
+
+    Two numbers meet here and they are not the same one:
+    :func:`_variant_index` answers with a POSITION in ``model_variants`` (the
+    list of variants that are effectively active AND have a mesh), while the
+    prop library addresses a variant by its position in the FULL variant list
+    — the number ``props._published_entry`` writes into each entry as
+    ``variant``, and the very number the serving URL names. Switching variant
+    1 off leaves positions 0, 1 over store indices 0, 2. So the position is
+    resolved through the entry's own number, exactly as
+    :func:`_prop_variant_urls` builds its URLs."""
+    entries = placement.get("variant_tiers")
+    if not isinstance(entries, list) or len(model_variants) <= 1:
+        return None
+    pos = _variant_index(placement, len(model_variants))
+    try:
+        return int(entries[pos].get("variant") or 0)
+    except (IndexError, AttributeError, TypeError, ValueError):
+        return None
+
+
 # ── Markers, figures ────────────────────────────────────────────────────
 
 def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
@@ -2436,7 +2477,8 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
                recipes: List[Dict[str, Any]], building_meta: Dict[str, Any],
                room_metas: Dict[str, Dict[str, Any]],
                ground_kind: str = "",
-               door_prop_sigs: Optional[Dict[str, str]] = None) -> str:
+               door_prop_sigs: Optional[Dict[str, str]] = None,
+               surface_sigs: Optional[Dict[str, str]] = None) -> str:
     """Change detection for the whole scene — a SUPERSET of the room recipe's
     signature: the room signatures already cover layouts, neighbour openings
     and prop sidecars, and the model metas add every anchor dial (floors,
@@ -2466,7 +2508,12 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     ``default_door_prop_id``, which no room signature covers because it is a
     field of the LOCATION, and ``door_prop_sigs`` — the mesh signature of
     every prop a door actually resolved to, for the same reason a room
-    placement carries one (a regenerated mesh keeps its URL)."""
+    placement carries one (a regenerated mesh keeps its URL).
+
+    THE SURFACES are in here for that same reason once more (v6): a lattice
+    that was just baked — or has just gone stale — changes no dial, no URL and
+    no sidecar the room signature reads, so without ``surface_sigs`` a running
+    client would keep walking the old floor."""
     import hashlib
     import json
     from app.core.game_time import get_calendar
@@ -2490,6 +2537,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
         "default_door_prop_id": str(location.get("default_door_prop_id")
                                     or "").strip(),
         "door_props": door_prop_sigs or {},
+        "surfaces": surface_sigs or {},
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True,
                                   default=str).encode()).hexdigest()
@@ -2729,6 +2777,42 @@ def layout_signature(map3d: Dict[str, Any],
                                   default=str).encode()).hexdigest()
 
 
+def scene_inputs(location: Dict[str, Any], location_id: str,
+                 building_model_file: str = "",
+                 ) -> Tuple[float, Dict[str, Any], Dict[str, Any]]:
+    """What :func:`compose_scene` needs beside the location: plan width, the
+    building model's meta and one meta per laid-out room (each a
+    ``get_client_meta`` dict, surfaces included).
+
+    Clones need no special handling: the model store redirects them to their
+    template (gallery owner) and room ids are template-identical, so the same
+    call works for template and clone.
+
+    Lived in ``routes/play.py`` until the server's own walk gate needed it
+    (spec-surface-height § 7) — a route may not be the only way to the
+    composer's inputs."""
+    from app.core.location_model3d import derive_plan_width_m, get_client_meta
+    map3d = location.get("map3d") or {}
+    if not location_id:
+        try:
+            plan_width_m = float(map3d.get("plan_width_m") or 0)
+        except (TypeError, ValueError):
+            plan_width_m = 0.0
+        return plan_width_m, {}, {}
+    room_metas: Dict[str, Any] = {}
+    for room in location.get("rooms") or []:
+        if not isinstance(room, dict) or not room.get("layout"):
+            continue
+        rid = str(room.get("id") or "")
+        meta = get_client_meta(location_id, room_id=rid,
+                               with_surface=True) if rid else None
+        if meta:
+            room_metas[rid] = meta
+    return (derive_plan_width_m(location_id, map3d),
+            get_client_meta(location_id, filename=building_model_file) or {},
+            room_metas)
+
+
 def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                   building_meta: Optional[Dict[str, Any]] = None,
                   room_metas: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -2954,10 +3038,20 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
 
     boundary = _boundary_openings(map3d, extent)
 
+    # One short hash per placement that ships a lattice, keyed by the
+    # placement it hangs on. A PROP's lattice is read from the prop store and
+    # appears in no other hashed input, so without this a freshly baked crate
+    # would never reach a running client; a room's rides in ``room_metas``
+    # anyway and is covered here a second time, which costs eight characters.
+    from app.core.model_surface import block_sig
+    surface_sigs = {
+        f"{m.get('role')}:{m.get('id')}:{m.get('room_id', '')}": block_sig(m["surface"])
+        for m in models if isinstance(m, dict) and m.get("surface")}
+
     out = {
         "signature": _signature(location, plan_width_m, recipes,
                                 building_meta, room_metas, ground_kind,
-                                door_prop_sigs),
+                                door_prop_sigs, surface_sigs),
         "rooms": room_blocks,
         # The location's FOOTPRINT as a polygon in the scene frame (contract
         # v6 Nr. 1 + Nr. 4): the drawn ``map3d.boundary`` where there is one,

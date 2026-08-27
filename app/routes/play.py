@@ -1474,14 +1474,24 @@ def play_room_recipe(room_id: str):
 @router.get("/play/rooms/{room_id}/model/meta")
 def play_room_model_meta(room_id: str):
     """Meta of the room's 3D model ({format, rig, rotation, tiers, url}) —
-    same tier contract as the building model. 404 = none."""
+    same tier contract as the building model. 404 = none.
+
+    ``surface_status`` says whether the model's walking surface is baked,
+    stale or missing (spec-surface-height § 6.1). The LATTICE itself does not
+    travel this route — it is a few hundred kilobytes and belongs to the scene
+    recipe, which asks for it with ``with_surface``."""
     from urllib.parse import quote
     from app.models.world import find_location_by_room
-    from app.core.location_model3d import get_client_meta
+    from app.core.location_model3d import find_building_model, get_client_meta
+    from app.core.model_store import read_sidecar
+    from app.core.model_surface import surface_status
     loc = find_location_by_room(room_id)
     meta = get_client_meta(loc.get("id", ""), room_id=room_id) if loc else None
     if not meta:
         raise HTTPException(status_code=404, detail="No model")
+    p = find_building_model(loc.get("id", ""), room_id)
+    meta["surface_status"] = surface_status(
+        p, (read_sidecar(p) if p else {}).get("rotation"))
     base = f"/play/rooms/{quote(room_id)}/model"
     return {**meta, "url": base,
             "tiers": {t: {**info, "url": f"{base}?tier={t}"}
@@ -1493,33 +1503,6 @@ def play_room_model_meta(room_id: str):
 # own no geometry decision of their own (app/core/scene_recipe.py).
 # ⚠ Not to be confused with GET /play/scene above: that is the avatar's CHAT
 # perception and has nothing to do with 3D.
-
-def _scene_inputs(location: dict, location_id: str,
-                  building_model_file: str = "") -> tuple:
-    """(plan_width_m, building_meta, room_metas) — everything the composer
-    needs from disk. Clones need no special handling: the model store
-    redirects them to their template (gallery owner) and room ids are
-    template-identical, so the same call works for template and clone."""
-    from app.core.location_model3d import derive_plan_width_m, get_client_meta
-    map3d = location.get("map3d") or {}
-    if not location_id:
-        try:
-            plan_width_m = float(map3d.get("plan_width_m") or 0)
-        except (TypeError, ValueError):
-            plan_width_m = 0.0
-        return plan_width_m, {}, {}
-    room_metas = {}
-    for room in location.get("rooms") or []:
-        if not isinstance(room, dict) or not room.get("layout"):
-            continue
-        rid = str(room.get("id") or "")
-        meta = get_client_meta(location_id, room_id=rid) if rid else None
-        if meta:
-            room_metas[rid] = meta
-    return (derive_plan_width_m(location_id, map3d),
-            get_client_meta(location_id, filename=building_model_file) or {},
-            room_metas)
-
 
 @router.get("/play/locations/{location_id}/scene")
 def play_location_scene(location_id: str):
@@ -1540,12 +1523,12 @@ def play_location_scene(location_id: str):
     no building model) — that is the legacy auto-grid case, the client keeps
     rendering the location procedurally as before."""
     from app.models.world import get_location_by_id
-    from app.core.scene_recipe import compose_scene
+    from app.core.scene_recipe import compose_scene, scene_inputs
     from app.core.surface_textures import library_kinds
     loc = get_location_by_id(location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
-    plan_width_m, building_meta, room_metas = _scene_inputs(loc, location_id)
+    plan_width_m, building_meta, room_metas = scene_inputs(loc, location_id)
     map3d = loc.get("map3d") or {}
     has_layout = any(isinstance(r, dict) and r.get("layout")
                      for r in loc.get("rooms") or [])
@@ -1576,7 +1559,7 @@ async def play_scene_preview(request: Request, _=Depends(require_admin)):
 def _play_scene_preview_sync(_, data: Any):
     """The blocking body of ``play_scene_preview`` — runs in the threadpool."""
     from app.models.world import get_location_by_id
-    from app.core.scene_recipe import compose_scene
+    from app.core.scene_recipe import compose_scene, scene_inputs
     from app.core.surface_textures import library_kinds
     from app.core.world_ops import _sanitize_map3d, _sanitize_rooms_layout
     if not isinstance(data, dict):
@@ -1595,7 +1578,7 @@ def _play_scene_preview_sync(_, data: Any):
         "rooms": _sanitize_rooms_layout(rooms),
     }
     known = bool(draft["id"] and get_location_by_id(draft["id"]))
-    plan_width_m, building_meta, room_metas = _scene_inputs(
+    plan_width_m, building_meta, room_metas = scene_inputs(
         draft, draft["id"] if known else "",
         building_model_file=str(data.get("building_model_file") or "").strip())
     return compose_scene(draft, plan_width_m=plan_width_m,
