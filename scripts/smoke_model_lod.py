@@ -3,8 +3,9 @@
 
 No server, no Blender, no real world: a throwaway storage directory in /tmp
 holds the stores (with a throwaway world.db for the location records), and
-every Blender stage of the ingest — ``refine.build_static_lod`` above all — is
-REPLACED by a fake that records its calls and hands back a stub blob. What is
+every Blender stage of the ingest — ``refine.build_static_lod`` above all, the
+surface bake of spec-surface-height § 5 included — is REPLACED by a fake that
+records its calls and hands back a stub blob. What is
 checked is therefore the STORE semantics around the reduction; the Blender
 step itself has its own smokes (``smoke_blender_*``).
 
@@ -103,6 +104,11 @@ def main() -> int:
     # They are not what this checks, and a smoke must not depend on a binary.
     refine.auto_retexture_enabled = lambda: False
     refine.auto_bake_vc_enabled = lambda: False
+    # Since spec-surface-height § 5 a landing also bakes the model's walking
+    # surface — another Blender stage, and one that takes a LOD SLOT. Faked
+    # here for both reasons: this smoke counts slots.
+    from app.core import model_surface  # noqa: PLC0415
+    model_surface.bake_surface = lambda *a, **k: None
     # "Build distance meshes on demand" stays OFF for [1]-[5] and [7]: the
     # explicit build is the admin's own action and must ignore that switch —
     # and with the automatic trigger silent, every recorded call below is one

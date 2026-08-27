@@ -42,8 +42,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
-from app.core.model_store import (DEFAULT_TIER, ModelGallery, read_sidecar,
-                                  write_sidecar)
+from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
+                                  read_sidecar, write_sidecar)
 from app.core.model_validate import MeshNotShrinkable, shrink_capability
 from app.core.timeutils import utc_now_iso
 
@@ -70,6 +70,9 @@ _lod_building: set = set()
 # automatic path for that subject: deliberate. The failure is an environment
 # problem (Blender missing, mesh broken) — fix it and press the button again.
 _lod_failed: set = set()
+# Subjects ("<owner>:<room_id>") whose walking surface is being baked right
+# now — one bake per gallery at a time (spec-surface-height § 5).
+_surface_building: set = set()
 
 
 def _stem(room_id: str = "") -> str:
@@ -142,7 +145,16 @@ def select_model(location_id: str, filename: str, room_id: str = "",
     owner = _owner_id(location_id)
     if not owner:
         return False
-    return _gallery(owner, room_id).select(filename, tier)
+    if not _gallery(owner, room_id).select(filename, tier):
+        return False
+    # EVERY room landing path ends here — upload, generation, shrink and the
+    # admin's own pick — so this is the ONE place the walking surface has to be
+    # asked for (spec-surface-height § 5 Nr. 1). Only the full tier carries a
+    # surface: a distance mesh is a coarser copy of the same object and would
+    # bake a lattice nobody reads. A deselection has nothing to bake.
+    if filename and room_id and (normalize_tier(tier) or DEFAULT_TIER) == DEFAULT_TIER:
+        request_surface(location_id, room_id, owner=owner)
+    return True
 
 
 def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
@@ -585,6 +597,14 @@ def set_rotation(location_id: str, rotation: Dict[str, Any],
             meta.pop(key, None)
     meta["rotation"] = rot
     write_sidecar(p, meta)
+    # The fix is part of a surface's identity (spec-surface-height § 4): a
+    # turned model invalidates its lattice, so bake it again — in the
+    # background, so the dial answers at once. Only for the file that actually
+    # carries the room's surface; turning an unselected model changes nothing
+    # anybody reads.
+    if (rot != cur and room_id
+            and p == _gallery(owner, room_id).find(DEFAULT_TIER, fallback=False)):
+        request_surface(location_id, room_id, owner=owner)
     return meta
 
 
@@ -982,6 +1002,62 @@ def request_low_tier(location_id: str, room_id: str = "",
             refine.free_lod_slot()
             with _lock:
                 _lod_building.discard(key)
+
+
+def request_surface(location_id: str, room_id: str, *, owner: str = "") -> None:
+    """Bake the ROOM's active full model walking surface in the BACKGROUND
+    (spec-surface-height § 5).
+
+    Rooms only: a building's walkable surface is out of scope (decision 1), and
+    a subject without a room id is a building. One bake per gallery at a time —
+    the in-flight key is taken BEFORE the thread starts (``request_low_tier``'s
+    pattern), so two landings in the same second do not run Blender twice on
+    the same model.
+
+    ``owner`` is the gallery owner (clones share their template's gallery); a
+    caller that just resolved it hands it in. Nothing is reported back: a
+    missing surface is a legal state (the terrain answers), never an error.
+    """
+    if not room_id:
+        return
+    owner = owner or _owner_id(location_id)
+    if not owner:
+        return
+    key = f"{owner}:{room_id}"
+    with _lock:
+        if key in _surface_building:
+            return
+        _surface_building.add(key)
+
+    def _work() -> None:
+        try:
+            from app.core.model_surface import (bake_surface, forget_surfaces,
+                                                read_surface)
+            src = _gallery(owner, room_id).find(DEFAULT_TIER, fallback=False)
+            rot = read_sidecar(src).get("rotation") if src else None
+            # A surface that is already valid for this file and fix is left
+            # alone — re-baking it would cost a Blender run for a result
+            # identical to the stored one, an all-``null`` lattice included.
+            if src and not read_surface(src, rot):
+                bake_surface(src, rot, wait_s=300)
+                # The walk gate caches a location's lattices for 5 s — without
+                # this the server would keep the old floor after the bake.
+                forget_surfaces(location_id)
+        except Exception as e:                              # noqa: BLE001
+            logger.warning("Location model %s/%s: surface bake failed: %s",
+                           owner, room_id, e)
+        finally:
+            with _lock:
+                _surface_building.discard(key)
+
+    try:
+        threading.Thread(target=_work, daemon=True,
+                         name=f"locmodel-surface-{owner}").start()
+    except RuntimeError:
+        # A refused thread start gives the key back — otherwise this subject
+        # would never be baked again in this process.
+        with _lock:
+            _surface_building.discard(key)
 
 
 def _demand_low(location_id: str, room_id: str, tiers: Any,

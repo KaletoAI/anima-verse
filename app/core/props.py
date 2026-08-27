@@ -2098,8 +2098,14 @@ def set_rotation(prop_id: str, rotation: Any) -> Optional[Dict[str, Any]]:
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         return None
-    meta["rotation"] = _sanitize_rotation(rotation, meta.get("rotation"))
+    cur = meta.get("rotation")
+    meta["rotation"] = _sanitize_rotation(rotation, cur)
     _write_sidecar(pid, meta)
+    # The fix is part of a surface's identity (spec-surface-height § 4), and it
+    # is the PROP's fix — one dial invalidates every variant's lattice. In the
+    # background, so the dial answers at once.
+    if meta["rotation"] != cur:
+        bake_surfaces(pid, background=True)
     return {"id": pid, **meta}
 
 
@@ -2171,9 +2177,12 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
     Blender run per variant for a result byte-identical to the stored one.
     Nothing is reported back — a missing surface is a legal state.
 
-    SYNCHRONOUS by default: the landing paths already run Blender in their own
-    worker (``attach_measurement``), so one more step there is no news. The
-    orientation dial passes ``background`` so the request returns at once.
+    SYNCHRONOUS by default: the generation chain calls it from its own worker,
+    which already runs Blender step by step (``attach_measurement``), so one
+    more step there is no news. Everything that sits on a REQUEST — the upload,
+    a selection, the orientation dial — passes ``background``, because a
+    lattice may wait minutes for a Blender slot and the spec's rule is "never
+    in the request thread".
     """
     from app.core.model_surface import bake_surface, forget_surfaces, read_surface
     pid = safe_prop_id(prop_id)
@@ -2188,11 +2197,17 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
 
     def _work() -> None:
         baked = False
-        for idx in indices:
-            mp = model_path(prop_id, variant=idx)
-            if not mp or read_surface(mp, meta.get("rotation")):
-                continue
-            baked = bake_surface(mp, meta.get("rotation"), wait_s=300) is not None or baked
+        try:
+            for idx in indices:
+                mp = model_path(prop_id, variant=idx)
+                if not mp or read_surface(mp, meta.get("rotation")):
+                    continue
+                if bake_surface(mp, meta.get("rotation"), wait_s=300):
+                    baked = True
+        except Exception as e:                              # noqa: BLE001
+            # A landing calls this in its own worker: a surface that fails to
+            # bake must not cost the prop its measurement.
+            logger.warning("Prop %s: surface bake failed: %s", pid, e)
         if baked:
             # A prop stands in many locations, so the walk gate's per-location
             # cache (5 s) is dropped WHOLESALE — the prop does not know where
@@ -3825,6 +3840,15 @@ def _store_bbox(prop_id: str, variant: Any = None, *,
         _reconcile_areas(safe_prop_id(prop_id))
     _auto_retexture(prop_id, variant)
     request_low_tier(prop_id, variant)
+    # The walking surface (spec-surface-height § 5 Nr. 1) — AFTER every step
+    # that rewrites the mesh (bake, area split, re-encode), because the lattice
+    # is only valid for the file it was measured on, and BEFORE the early
+    # return below: a non-primary variant carries its own mesh and therefore
+    # its own surface. In the BACKGROUND: unlike the generation chain, every
+    # caller of this function (upload, selection, deletion) sits on the request
+    # path, and a lattice may wait minutes for a Blender slot — "never in the
+    # request thread" is the spec's own wording.
+    bake_surfaces(prop_id, variant, background=True)
     if variant is not None and _stem_of(prop_id, variant) != _stem_of(prop_id):
         return
     # The texture slots are read AFTER the Blender steps above — the
@@ -4581,6 +4605,12 @@ def _generate(prop_id: str, prompt: str, negative: str,
             # measures inline), so the call has to stand here as well or a
             # GENERATED prop would never get its slots.
             _autofill_slots(prop_id)
+        # The walking surface of the mesh that just landed — AFTER the area
+        # split above, which rewrites the file. Same law as the slots: this
+        # chain does not go through `_store_bbox`, so the hook has to stand
+        # here as well, and it stands OUTSIDE the primary gate because every
+        # variant carries its own mesh (spec-surface-height § 5 Nr. 1).
+        bake_surfaces(prop_id, variant)
         logger.info("Prop %s: model generated into variant %s (%s, backend %s)",
                     prop_id, _stem_of(prop_id, variant), path.name,
                     res.get("backend", ""))
