@@ -393,14 +393,18 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
             fineStep={1}
             value={yawOffset}
             onChange={onYawOffset}
-            disabled={!seated}
+            // Nothing to SEE the angle against — but plenty to set it for: a
+            // pair the server seats on a `stand` marker turns by this very
+            // number (`places.pair_yaw` reads it for every place type). So
+            // the track goes, the number field stays.
+            slider={seated}
             sliderWidth="auto"
             sliderStyle={{ flex: 1, minWidth: 80 }}
             style={{ display: 'flex', marginTop: 6 }}
           />
-          {/* Nothing to turn against: no place type with a body, or a kind
-              that has no two halves. The value stays what it is — it is
-              edited again as soon as there is a marker to see it on. */}
+          {/* No box to dial against: a place type without a body, or a kind
+              that has no two halves. The value is still typed here — it is
+              the same field, only without a track to sweep. */}
           {seated ? null : (
             <div className="ga-hint" style={{ marginTop: 2 }}>
               {t('No marker box for this place type')}
