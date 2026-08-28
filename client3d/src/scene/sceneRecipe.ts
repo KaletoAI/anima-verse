@@ -1000,7 +1000,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // THE FLOOR THE FIGURES STAND ON (§ B1 addendum 2026-08-20): every plate is
     // one, and `tileWalkY` takes the highest one under the point that is still
     // below the storey ceiling. Since E5a that list is a list of STOREYS.
-    tile.walkPlates.push({ top: plate.top_y, outline: plate.outline });
+    // The OPENINGS travel with it (addendum "Treppen v2"): where a flight
+    // cuts a stairwell into this floor, the walk rule must not answer inside
+    // the ring the mesh above has just been built without.
+    tile.walkPlates.push({ top: plate.top_y, outline: plate.outline,
+                           holes: plate.holes });
     // Shadow flags are view state and stay here: upper storeys cast, every
     // plate receives.
     mesh.receiveShadow = true;
@@ -1127,14 +1131,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
 
   // ── Extras (elevator, stairs) ───────────────────────────────────────────
   // Typed boxes, centre + size, straight from the payload — one entry per
-  // part. The pads double as the stops for the level routing: the elevator's
-  // one per storey, a staircase's two per flight (foot and head).
+  // part. The ELEVATOR's pads double as the stops of its level routing (one
+  // per storey); a staircase is read from `scene.stairs` below, not measured
+  // back out of its boxes.
   let elevatorXZ: THREE.Vector2 | null = null;
-  // Landings collected per staircase. `extra.stair` groups the pieces WITHIN
-  // this payload — it is a list position on the server, not a saved identity,
-  // so it lives no longer than this loop.
-  const stairEnds = new Map<number, { foot?: { level: number; pos: THREE.Vector3 };
-                                      head?: { level: number; pos: THREE.Vector3 } }>();
   for (const extra of scene.extras) {
     g.add(buildExtra(THREE, extra, extraMaterial(extra, style)));
     // Only the ELEVATOR anchors the storey switch (finding 2026-08-25): the
@@ -1143,28 +1143,46 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     if (extra.kind.startsWith('elevator_')) {
       elevatorXZ = elevatorXZ ?? new THREE.Vector2(extra.center[0], extra.center[2]);
     }
-    if (extra.level === undefined) continue;
-    // Top face of the pad + 1 cm: that is the storey's floor, and a figure
-    // standing there stands ON the landing rather than in it.
-    const stopY = extra.center[1] + extra.size[1] / 2 + 0.01;
-    if (extra.kind === 'elevator_pad') {
-      tile.elevatorStops = tile.elevatorStops ?? new Map();
-      tile.elevatorStops.set(extra.level, tileToWorld(tile,
-        extra.center[0], extra.center[2], stopY));
-    } else if (extra.kind === 'stair_pad' && extra.stair !== undefined && extra.end) {
-      let ends = stairEnds.get(extra.stair);
-      if (!ends) stairEnds.set(extra.stair, ends = {});
-      ends[extra.end] = { level: extra.level,
-                          pos: tileToWorld(tile, extra.center[0], extra.center[2], stopY) };
-    }
+    if (extra.kind !== 'elevator_pad' || extra.level === undefined) continue;
+    // THE TOP FACE OF THE PAD, and nothing added to it (addendum "Treppen
+    // v2"): since the pads clear the floor by `PROP_CLEARANCE` on the server,
+    // that face IS the height one stands at. The client's own extra
+    // centimetre was the second half of a clearance that now exists once, and
+    // it left a figure hovering two centimetres over every landing.
+    const stopY = extra.center[1] + extra.size[1] / 2;
+    tile.elevatorStops = tile.elevatorStops ?? new Map();
+    tile.elevatorStops.set(extra.level, tileToWorld(tile,
+      extra.center[0], extra.center[2], stopY));
   }
-  // A staircase is a LINK, so only a complete pair is one. A half pair — a
-  // payload carrying just a foot or just a head — is skipped in silence: it
-  // would be a route to nowhere.
-  const stairs: StairWorldLink[] = [];
-  for (const ends of stairEnds.values()) {
-    if (ends.foot && ends.head) stairs.push({ foot: ends.foot, head: ends.head });
-  }
+  // ── Staircases, from the payload's own block (§ B1 `stairs`) ────────────
+  // The flight AS DATA: the two landings finished (the server states where one
+  // stands, this only turns the point into the world frame), plus the run it
+  // covers — the axis a guided climb follows and the floor it eats. Nothing
+  // here derives a staircase from the `stair_step`/`stair_pad` boxes any more,
+  // and no pair can be half missing: a block always carries both ends.
+  const stairs: StairWorldLink[] = scene.stairs.map((s) => {
+    const foot = tileToWorld(tile, s.foot[0], s.foot[2], s.foot[1]);
+    const head = tileToWorld(tile, s.head[0], s.head[2], s.head[1]);
+    const at = tileToWorld(tile, s.at[0], s.at[1]);
+    // The climb direction in WORLD xz, read off the payload's own points
+    // instead of turning `dir_deg` through the tile yaw: `head` lies on the
+    // flight's axis past its end, so head − at IS that direction, and the
+    // server's degree table stays where it belongs.
+    const dir = new THREE.Vector2(head.x - at.x, head.z - at.z).normalize();
+    return {
+      foot: { level: s.from_level, pos: foot },
+      head: { level: s.to_level, pos: head },
+      at: new THREE.Vector2(at.x, at.z),
+      dir,
+      runM: s.run_m,
+      widthM: s.width_m,
+      steps: s.steps,
+      footprint: s.footprint.map(([x, z]) => {
+        const p = tileToWorld(tile, x, z);
+        return [p.x, p.z] as [number, number];
+      }),
+    };
+  });
   if (stairs.length) tile.stairs = stairs;
 
   // ── Doors & places: finished in world coordinates ───────────────────────

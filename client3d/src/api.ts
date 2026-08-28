@@ -6,7 +6,7 @@ import type {
 import type {
   SceneBoundaryOpening, SceneDoorway, SceneExtra, SceneMarker,
   SceneFloor, SceneModelSpec, ScenePayload, ScenePlate, SceneProblem,
-  SceneRoom, SceneWall, TerrainLayerBatch, TerrainLayerIndex,
+  SceneRoom, SceneStairs, SceneWall, TerrainLayerBatch, TerrainLayerIndex,
   WorldHeightField,
 } from '@anima/scene-render';
 // The audio manifest is TYPED and validated in the pure soundtrack module, so
@@ -692,8 +692,8 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 // gelaufen. Re-Export, damit kein Importeur angefasst werden muss.
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneFloor,
-  SceneMarker, SceneStyle, SceneRoom, ModelTier, SceneBoundaryOpening,
-  SceneDoorway, SceneProblem,
+  SceneMarker, SceneStyle, SceneRoom, SceneStairs, ModelTier,
+  SceneBoundaryOpening, SceneDoorway, SceneProblem,
   /** hiess hier frueher ApiOpening */
   SceneOpening,
 } from '@anima/scene-render';
@@ -718,7 +718,20 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     storey_m: data.storey_m || 3,
     levels: arr(data.levels),
     style: data.style ?? {},
-    plates: arr<ScenePlate>(data.plates).filter((p) => arr(p.outline).length >= 3),
+    // A plate travels through with its OPENINGS (§ B1 `plates.holes`,
+    // addendum "Treppen v2"): the stairwell a flight cuts into the floor it
+    // arrives on. Same defensiveness as the outline it belongs to and no
+    // more — a ring of fewer than three points encloses nothing, and the
+    // field itself is always present, so `holes` is normalised to a list
+    // here rather than left for every consumer to guard.
+    plates: arr<ScenePlate>(data.plates)
+      .filter((p) => arr(p.outline).length >= 3)
+      .map((p) => ({ ...p, holes: arr<[number, number][]>(p.holes)
+        .filter((ring) => arr(ring).length >= 3) })),
+    // THE FLIGHTS AS DATA (§ B1 `stairs`): run, climb, step count, the two
+    // landings and the floor they eat. The client reads them instead of
+    // measuring a staircase back out of the `stair_*` boxes in `extras`.
+    stairs: arr<SceneStairs>(data.stairs),
     // THE STOREY-0 ROOMS AS DATA (§ A19 no. 3) — what replaced the storey-0
     // plates. Same defensiveness as `plates`: a hull of fewer than three points
     // encloses nothing, so it names no floor.

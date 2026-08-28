@@ -24,8 +24,13 @@ import { useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 // The staircase symbol comes from the plan geometry the floor-plan EDITOR
 // draws with — one routine, so a flight looks the same before and after the
-// apply, and the run is never computed a second way.
-import { stairSymbol } from '../world/planGeometry'
+// apply. THE DRAFT VARIANT: the editor draws the flight the SERVER composed
+// (the scene payload's `stairs` block), which a normalized draft has not got —
+// `draftStairSymbol` derives the rectangle from the authored entry and hands
+// the drawing to the very same symbol routine. It is the one place the run
+// formula is still repeated on this side; the comment at its definition names
+// what closes it.
+import { draftStairSymbol } from '../world/planGeometry'
 import type { StairSpec } from '../world/planGeometry'
 
 /* ------------------------------------------------------------------ types */
@@ -223,7 +228,7 @@ export function LayoutDraftPreview({
       for (const p of roomShell(r)) { xs.push(p[0]); ys.push(p[1]) }
     }
     for (const st of stairs) {
-      const sym = stairSymbol(st, storeyM)
+      const sym = draftStairSymbol(st, storeyM)
       for (const p of sym?.outline || []) { xs.push(p[0]); ys.push(p[1]) }
     }
     if (!xs.length) return null
@@ -367,7 +372,7 @@ export function LayoutDraftPreview({
               strength on the one it starts from, faint on the one it arrives
               at, and as faint as an off-level room everywhere else. */}
           {stairs.map((st, i) => {
-            const sym = stairSymbol(st, storeyM)
+            const sym = draftStairSymbol(st, storeyM)
             if (!sym) return null
             const onLevel = st.from_level === shownLevel
             const arriving = st.from_level + 1 === shownLevel

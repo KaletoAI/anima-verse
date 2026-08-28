@@ -831,6 +831,13 @@
  * Its building spec declares `walk_y_world = offset_y = −0.30`, so the storey
  * ceiling is `−0.30 + 1.2 = 0.90` and neither plate is in reach from the
  * ground floor: the answer there is `null`, and `null` means the terrain.
+ *
+ * --- AND ONE OF THEM CAN HAVE A HOLE (addendum "Treppen v2") --------------
+ * A flight of stairs opens the floor it ARRIVES on: the plate carries the
+ * ring in `holes`, the renderer takes it out of the shape, and the walk rule
+ * has to make the same statement — a point inside a ring is not on that plate,
+ * so the height falls through to the rung below it. Derived by hand from the
+ * contract example further down ("THE STAIRWELL").
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -4322,6 +4329,69 @@ async function main() {
   check('no plates at all = no recipe floor', recipeFloorAt([], 0, 0, 1.2), null);
   check('...and neither does a tile that never got a list',
     recipeFloorAt(undefined, 0, 0, 1.2), null);
+
+  console.log('\nground — THE STAIRWELL: a hole in a plate is not floor');
+  // The opening a flight cuts into the floor it ARRIVES on (`plates[].holes`,
+  // contract addendum "Treppen v2"). Drawn it is a hole in the ceiling; walked
+  // it must not answer — otherwise a figure stands on the lid of the very
+  // stairwell it is climbing through.
+  //
+  // The numbers are the contract example, derived by hand from the server's
+  // constants (STAIR_TREAD_M 0.26, STAIR_RISE_M 0.20, STAIR_WIDTH_M 1.20,
+  // STAIR_PAD_M 0.90, STAIR_PAD_GAP_M 0.05, LEVEL_PLATE_TOP 0.08,
+  // ROOM_PLATE_TOP 0.10), storey 3.0 m, one flight at (2, −2) climbing +x:
+  //
+  //   climb = storey_floor_y(1) − storey_floor_y(0) = 3.08 − 0.00 = 3.08
+  //   steps = round(3.08 / 0.20) = 15        run = 15 · 0.26 = 3.90
+  //   hole  = run + STAIR_PAD_GAP_M + STAIR_PAD_M = 3.90 + 0.05 + 0.90 = 4.85
+  //           long, max(1.20, 0.90) = 1.20 wide, from `at` along the climb:
+  //           x 2 … 6.85, z −2.6 … −1.4
+  //   plates of storey 1: the contour at 1·3 + 0.08 = 3.08, the room "hall"
+  //           (x 1…5, z −4…0) at 1·3 + 0.10 = 3.10 — the flight's centre
+  //           (4.425, −2) lies in "hall", so BOTH carry the ring.
+  //
+  // The contour is ±8 rather than the example's ±5 so that the whole ring
+  // (out to x 6.85) and the ground beyond it lie ON the plate: what is being
+  // measured is the hole, and a point outside the outline would answer `null`
+  // for the wrong reason.
+  const HOLE = [[2, -2.6], [6.85, -2.6], [6.85, -1.4], [2, -1.4]];
+  const CONTOUR = [[-8, -8], [8, -8], [8, 8], [-8, 8]];
+  const HALL = [[1, -4], [5, -4], [5, 0], [1, 0]];
+  const CUT_PLATES = [
+    { top: 3.08, outline: CONTOUR, holes: [HOLE] },
+    { top: 3.10, outline: HALL, holes: [HOLE] },
+  ];
+  // High enough to have every plate of storey 1 in reach (the storey question
+  // is settled elsewhere; what is measured here is the hole).
+  const UP = 4.5;
+  check('inside the opening, both plates cut: no floor at all',
+    recipeFloorAt(CUT_PLATES, 3.0, -2.0, UP), null);
+  check('red: the SAME point without the rings is the room plate',
+    recipeFloorAt(CUT_PLATES.map((p) => ({ ...p, holes: [] })), 3.0, -2.0, UP),
+    3.10);
+  check('one step north of the opening (z −1.0) the room floor answers',
+    recipeFloorAt(CUT_PLATES, 3.0, -1.0, UP), 3.10);
+  check('...and one step south of it (z −3.0) as well',
+    recipeFloorAt(CUT_PLATES, 3.0, -3.0, UP), 3.10);
+  check('just short of the foot (x 1.9) there is floor',
+    recipeFloorAt(CUT_PLATES, 1.9, -2.0, UP), 3.10);
+  check('past the head pad (x 6.9), outside "hall", the contour answers',
+    recipeFloorAt(CUT_PLATES, 6.9, -2.0, UP), 3.08);
+  check('in the opening but past "hall" (x 6.0): the contour is cut too',
+    recipeFloorAt(CUT_PLATES, 6.0, -2.0, UP), null);
+  // THE FALL-THROUGH IS TO THE NEXT RUNG, not to null: only the room is cut
+  // here (a hypothetical the server does not compose — it cuts the level plate
+  // as well — but it is exactly the rule this loop implements, and it says
+  // that the answer is the plate BELOW rather than "no plate here").
+  check('a hole in the room plate alone falls through to the contour under it',
+    recipeFloorAt([{ top: 3.08, outline: CONTOUR, holes: [] },
+      { top: 3.10, outline: HALL, holes: [HOLE] }], 3.0, -2.0, UP), 3.08);
+  check('an empty ring list is a plate like any other',
+    recipeFloorAt([{ top: 3.08, outline: CONTOUR, holes: [] }], 3.0, -2.0, UP),
+    3.08);
+  check('...and so is a plate that carries no rings at all (a room\'s own '
+    + 'declared floor)',
+    recipeFloorAt([{ top: 3.08, outline: CONTOUR }], 3.0, -2.0, UP), 3.08);
 
   console.log('\nground — the HEADLINE: built and natural are ONE chain');
   // Hand-derived from § A19 no. 2, both columns, storey 2.8 m, no dials:

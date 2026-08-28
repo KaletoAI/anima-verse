@@ -462,14 +462,36 @@ export interface RoomFloor {
   declared?: number;
 }
 
-/** ONE staircase of a scene, reduced to what a route needs: the two landings
- *  it connects, in WORLD coordinates, standing on the pad's top face (= the
- *  floor of that storey) exactly like an elevator stop. `foot.level + 1 ===
- *  head.level` always holds — a staircase spans a single storey. Only complete
- *  pairs exist here; a payload carrying just one end contributes nothing. */
+/**
+ * ONE staircase of a scene, in WORLD coordinates — the payload's own `stairs`
+ * block turned into the tile's frame (addendum "Treppen v2"), never measured
+ * back out of the `stair_*` boxes.
+ *
+ * The two LANDINGS are what a route needs: they stand on the pad's top face
+ * (= that storey's floor plus the prop clearance) exactly like an elevator
+ * stop, and `foot.level + 1 === head.level` always holds — a flight spans a
+ * single storey.
+ *
+ * The RUN is what a guided climb needs: `at` is the foot of the first tread,
+ * `dir` the unit climb direction in world xz, `runM` its length and `widthM`
+ * its width across. Two numbers are deliberately NOT kept, because they are
+ * the same fact twice over: the climb is `head.pos.y − foot.pos.y`, and the
+ * tread is `runM / steps`.
+ */
 export interface StairWorldLink {
   foot: { level: number; pos: THREE.Vector3 };
   head: { level: number; pos: THREE.Vector3 };
+  /** Foot of the RUN (where the first tread begins) — not the foot LANDING,
+   *  which lies a pad's half plus a gap behind it. */
+  at: THREE.Vector2;
+  /** Unit climb direction in world xz. */
+  dir: THREE.Vector2;
+  runM: number;
+  widthM: number;
+  steps: number;
+  /** The `widthM × runM` rectangle the flight covers, world xz — the floor it
+   *  eats, for whoever has to ask whether a point is ON the flight. */
+  footprint: [number, number][];
 }
 
 export interface Tile {

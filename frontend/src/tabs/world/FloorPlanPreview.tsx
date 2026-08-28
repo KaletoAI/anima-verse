@@ -1177,6 +1177,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           const spec: ScenePlate = {
             level: 0,
             outline: floor.polygon_world,
+            // A storey-0 room floor is never cut: a flight opens the floor it
+            // ARRIVES on, and storey 0 has no plate in the payload at all —
+            // this stand-in is drawn from `floor_plan`, which states hulls.
+            holes: [],
             top_y: 0,
             thickness: 0,
             opacity_role: 'ground',

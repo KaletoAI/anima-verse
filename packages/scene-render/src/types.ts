@@ -23,16 +23,80 @@
  * steht durchgehend die kurze Schreibweise.
  */
 
-/** Bodenplatte: Kontur-Platte je genutzter Etage oder Boden eines Raums.
- *  thickness 0 = reine Textur-Fläche ohne Körper (Outdoor-Räume, § A5). */
+/** Floor plate: the contour plate of a declared storey, or the floor of one
+ *  room on it. `thickness` 0 = a bare texture surface without a body
+ *  (outdoor rooms, § A5). */
 export interface ScenePlate {
   level: number
   outline: [number, number][]
+  /** THE OPENINGS CUT INTO THIS PLATE — one closed ring each, in the same
+   *  local metres as `outline`, and ALWAYS present (usually empty).
+   *
+   *  The only source today is a staircase: a flight opens the floor it
+   *  ARRIVES on, over its whole run plus its head pad (`stairs`, contract
+   *  addendum "Treppen v2"). A renderer owes the hole TWO duties, and they
+   *  are two different code paths:
+   *    - it is DRAWN — the shape is triangulated with the ring taken out of
+   *      it (`buildPlate`), so one sees the flight through the ceiling;
+   *    - it is WALKED — a point inside a ring is not on this plate, so the
+   *      height under it falls through to the storey below or the terrain
+   *      (`recipeFloorAt` in the client).
+   *
+   *  A ring may reach over the plate's edge; nothing clips it (the server
+   *  states the flight, the shape takes what overlaps). */
+  holes: [number, number][][]
   top_y: number
   thickness: number
   texture_kind?: string
   opacity_role: 'ground' | 'upper'
   room_id?: string
+}
+
+/**
+ * ONE FLIGHT OF STAIRS AS DATA (§ B1 `stairs`, addendum "Treppen v2").
+ *
+ * A flight spans exactly ONE storey (`to_level === from_level + 1`), and it
+ * arrives in the payload three times over: as the `stair_step`/`stair_pad`
+ * boxes in `extras`, as the hole it cuts into the floor above
+ * (`plates[].holes`), and as this block. THE BLOCK IS THE ONE A CONSUMER
+ * READS: the run, the step count, the two landings and the floor the flight
+ * eats are numbers here, so neither renderer measures a staircase back out of
+ * its own mesh and the plan preview stops re-deriving the server's formula.
+ *
+ * Everything is in the scene frame (local metres around the anchor pin), like
+ * every other coordinate of this payload.
+ */
+export interface SceneStairs {
+  /** Position in the location's `map3d.stairs` list — the same number the
+   *  `stair` field of the pieces in `extras` carries. It groups ONE payload
+   *  and is not a saved identity. */
+  id: number
+  from_level: number
+  to_level: number
+  /** THE FOOT OF THE RUN: where the first tread begins. The foot LANDING
+   *  (`foot`) lies a pad's half plus a gap behind it. */
+  at: [number, number]
+  /** Climb direction, one of 0/90/180/270 — 0 points +z, 90 points +x. */
+  dir_deg: number
+  /** Floor the run itself covers, `steps × tread_m`. */
+  run_m: number
+  /** The climb of the WHOLE flight (the gap between the two storey floors).
+   *  The rise PER STEP is `rise_m / steps`. */
+  rise_m: number
+  steps: number
+  tread_m: number
+  width_m: number
+  /** WHERE ONE STANDS at the lower end: the foot pad's centre, y = that
+   *  storey's floor plus the prop clearance. It is the finished standing
+   *  height — a renderer adds nothing of its own to it. */
+  foot: [number, number, number]
+  /** The same at the upper end, on `to_level`. */
+  head: [number, number, number]
+  /** The `width_m × run_m` rectangle from `at` along the climb, COUNTER-
+   *  CLOCKWISE in map view — a plan SYMBOL, not a hole: it lacks the head
+   *  pad and it winds the other way round than a stored outline. Whoever
+   *  needs the opening takes `plates[].holes`. */
+  footprint: [number, number][]
 }
 
 /**
@@ -610,6 +674,11 @@ export interface ScenePayload {
   floor_plan: SceneFloor[]
   walls: SceneWall[]
   extras: SceneExtra[]
+  /** THE STAIRCASES AS DATA (addendum "Treppen v2") — always present, empty
+   *  for a location without a flight. The boxes of the same flights are in
+   *  `extras`; what a consumer reads to route, to walk or to draw a plan
+   *  symbol is this block. */
+  stairs: SceneStairs[]
   models: SceneModelSpec[]
   figures: { base_height_m_world: number; stand_clearance: number }
   markers: SceneMarker[]

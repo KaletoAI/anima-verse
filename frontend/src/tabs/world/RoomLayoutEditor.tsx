@@ -62,7 +62,7 @@ import {
   edgePointOnEdge, edgeSegment, exteriorEdges, fmtM, localToRoom,
   nearestPolygonEdge, normalizeOpeningEdge, outlineOf, planMapView, r4, rM,
   rotateAbout,
-  sharedEdges, snapDrawPoint, snapMoveOffset, snapToGrid, stairRunM,
+  sharedEdges, snapDrawPoint, snapMoveOffset, snapToGrid,
   stairSymbol, STAIR_MAX, viewFx, viewFz,
   viewMx, viewMz, viewportFor,
 } from './planGeometry'
@@ -803,6 +803,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // draws them; it never re-derives them.
   const sceneRooms = useMemo(
     () => new Map((scene?.rooms || []).map((r) => [r.room_id, r] as [string, SceneRoom])),
+    [scene])
+  // ── The composed FLIGHTS (contract § B1 `stairs`) ────────────────────
+  // Same law as the openings above: the run, the step count and the floor a
+  // flight eats are the server's numbers, keyed by the position of the flight
+  // in `map3d.stairs` (`id`). The plan used to compute them from the storey
+  // height with a copy of the server's formula; it reads them now, so what an
+  // author sees on the plan is what the client walks on. Until the preview has
+  // answered (it is debounced), a freshly placed flight has no symbol yet.
+  const sceneStairs = useMemo(
+    () => new Map((scene?.stairs || []).map((s) => [s.id, s])),
     [scene])
   // A mirrored opening is one hole seen from the other side — find the
   // ORIGINAL in the owning room so a click can select it there. Identity by
@@ -2938,11 +2948,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             {map3d.stairs.map((st, i) => {
               const arriving = st.from_level + 1 === level
               if (st.from_level !== level && !arriving) return null
-              // ONE symbol routine for both plan surfaces (planGeometry) — the
-              // draft preview next to the world-dev chat draws the very same
-              // points, so an author sees the flight identically before and
-              // after the apply.
-              const sym = stairSymbol(st, map3d.storey_height_m || 3)
+              // THE SERVER'S FLIGHT, drawn (planGeometry.stairSymbol): the
+              // rectangle, the tread lines and the arrow all sit on the
+              // composed `stairs` block, so the plan cannot state a run the
+              // scene does not have. No symbol = the preview has not answered
+              // yet, and then nothing is drawn rather than a guess.
+              const flight = sceneStairs.get(i)
+              const sym = flight ? stairSymbol(flight) : null
               if (!sym) return null
               const { steps, run, outline, treads, arrow } = sym
               const sel = stairSel === i
@@ -4020,7 +4032,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         && map3d.stairs[stairSel].from_level === level ? (() => {
         const st = map3d.stairs![stairSel]
         const list = map3d.stairs || []
-        const { steps, run } = stairRunM(st.from_level, map3d.storey_height_m || 3)
+        // The two numbers that decide whether a flight fits are the SERVER's
+        // (§ B1 `stairs`), not a formula repeated here. Absent = the scene
+        // preview has not answered for this draft yet.
+        const flight = sceneStairs.get(stairSel)
         const patch = (next: typeof st | null) => {
           const rest = list.filter((_, i) => i !== stairSel)
           if (!next) {
@@ -4036,11 +4051,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               🪜 {t('Staircase')} {stairSel + 1}:
             </span>
             <span className="ga-hint">
-              {t('Level {a} → {b} · {n} steps · {run} m of floor · {deg}°')
+              {(flight
+                ? t('Level {a} → {b} · {n} steps · {run} m of floor · {deg}°')
+                  .replace('{n}', String(flight.steps))
+                  .replace('{run}', fmtM(flight.run_m))
+                : t('Level {a} → {b} · {deg}° · measuring the flight…'))
                 .replace('{a}', String(st.from_level))
                 .replace('{b}', String(st.from_level + 1))
-                .replace('{n}', String(steps))
-                .replace('{run}', fmtM(run))
                 .replace('{deg}', String(st.dir_deg))}
             </span>
             <button

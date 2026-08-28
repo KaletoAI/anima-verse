@@ -40,17 +40,43 @@ export function wallLength(wall: SceneWall): number {
  * The shape plane maps to world XZ after the rotation. An extruded plate goes
  * in as (x, z) and turns +90° (the extrusion then runs downward), a flat one
  * as (x, −z) with −90°.
+ *
+ * `plate.holes` (contract addendum "Treppen v2") are taken OUT of the shape:
+ * every ring becomes a `Path` in `shape.holes`, which both `ShapeGeometry` and
+ * `ExtrudeGeometry` honour — the extrusion even caps the walls of the opening,
+ * so a stairwell looks like a stairwell from below. THE SIGN OF THE SECOND
+ * COORDINATE IS THE SAME AS THE OUTER RING'S: a hole written with the other
+ * sign would land mirrored about z = 0, which on a plate that straddles the
+ * anchor pin is a hole in the wrong half of the room rather than an obvious
+ * error. Winding is NOT this function's business — three normalises the rings
+ * against each other in both geometry classes.
  */
 export function buildPlate(THREE: typeof import('three'),
                            plate: ScenePlate, material: Material): Mesh {
   const solid = plate.thickness > 0
+  /** One closed ring into a shape or a hole path, in the plate's own plane. */
+  const ring = (into: { moveTo(x: number, y: number): unknown
+                        lineTo(x: number, y: number): unknown
+                        closePath(): unknown },
+                points: readonly [number, number][]) => {
+    points.forEach(([px, pz], i) => {
+      const sy = solid ? pz : -pz
+      if (i === 0) into.moveTo(px, sy)
+      else into.lineTo(px, sy)
+    })
+    into.closePath()
+  }
   const shape = new THREE.Shape()
-  plate.outline.forEach(([px, pz], i) => {
-    const sy = solid ? pz : -pz
-    if (i === 0) shape.moveTo(px, sy)
-    else shape.lineTo(px, sy)
-  })
-  shape.closePath()
+  ring(shape, plate.outline)
+  for (const hole of plate.holes) {
+    // Fewer than three points enclose nothing — the same rule the outline
+    // itself is filtered by, and an empty `Path` would break the triangulation
+    // of the ring around it.
+    if (hole.length < 3) continue
+    const path = new THREE.Path()
+    ring(path, hole)
+    shape.holes.push(path)
+  }
   const mesh = new THREE.Mesh(
     solid
       ? new THREE.ExtrudeGeometry(shape, { depth: plate.thickness, bevelEnabled: false })
@@ -207,7 +233,11 @@ export function buildPlaceholder(THREE: typeof import('three'),
  *  Every plate is verifiable now: the `relief` exception died with the scene's
  *  own height field ("Ein Boden" E5a, decision 1) — a plate that followed a
  *  lattice had no stated world box, and there is no such plate any more. What
- *  is left in `plates` is a declared storey, and a storey is flat. */
+ *  is left in `plates` is a declared storey, and a storey is flat.
+ *
+ *  A HOLE CHANGES NOTHING HERE (decision "Treppen v2"): the opening is taken
+ *  out of the INSIDE of the outline, so the plate's bounding box is the
+ *  outline's either way — the verify keeps measuring the same two numbers. */
 export function plateTargets(plate: ScenePlate): PrimitiveTarget[] {
   const targets: PrimitiveTarget[] = [
     { field: 'top_y', actual: (b) => b.max.y, target: plate.top_y },

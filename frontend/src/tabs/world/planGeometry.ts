@@ -587,86 +587,141 @@ export function snapMoveOffset(hull: Pt[], targets: SnapTargets, tol: number): P
   return [dx, dy]
 }
 
-// ── Staircases (Nachtrag "Treppen") ──
+// ── Staircases (addendum "Treppen v2") ──
 // A flight is AUTHORED as a foot, a storey and one of four climb directions
-// (`map3d.stairs`, one entry per storey jump); the SERVER composes the steps
-// and the two trigger pads from it (`scene_recipe._stairs`). The constants
-// below are that composition's, mirrored here for the PLAN SYMBOL only — the
-// way the elevator's 1.8 m footprint is: a plan has to show how much floor a
-// flight really eats before its author can decide where it fits. Nothing
-// geometric is decided here, and both plan surfaces (the editor canvas and the
-// world-dev draft preview) draw the ONE symbol `stairSymbol` returns.
+// (`map3d.stairs`, one entry per storey jump); the SERVER composes it — the
+// steps, the two landing pads, the floor it eats and the hole it cuts — and
+// states the result as the `stairs` block of the scene payload
+// (`scene_recipe._stair_flights`).
+//
+// THE RUN AND THE FOOTPRINT USED TO BE COMPUTED HERE TOO, from the server's
+// own formula written down a second time. They are not any more: `stairSymbol`
+// reads the composed flight. What is left below is DRAWING — where the tread
+// lines and the arrowhead go — plus the authoring cap, which is not geometry.
 
-/** Step width ACROSS the climb direction (scene_recipe.STAIR_WIDTH_M). */
-export const STAIR_WIDTH_M = 1.2
-/** Run per step ALONG the climb direction (scene_recipe.STAIR_TREAD_M). */
-export const STAIR_TREAD_M = 0.26
-/** Nominal rise; the real one divides the climb evenly (STAIR_RISE_M). */
-export const STAIR_RISE_M = 0.2
-/** Top of a declared storey's level plate (scene_recipe.LEVEL_PLATE_TOP). */
-export const LEVEL_PLATE_TOP = 0.08
 /** At most this many flights per location (scene_recipe.STAIR_MAX). */
 export const STAIR_MAX = 8
-/** Unit climb direction per `dir_deg`, in plan metres (y points south). */
-export const STAIR_DIRS: Record<number, Pt> = {
-  0: [0, 1], 90: [1, 0], 180: [0, -1], 270: [-1, 0],
-}
 
-/** One authored flight — `map3d.stairs[i]`. */
+/** One authored flight — `map3d.stairs[i]`. What the plan EDITS; what it
+ *  DRAWS is the composed `SceneStairs` of the same index. */
 export interface StairSpec {
   at: Pt
   from_level: number
   dir_deg: number
 }
 
-/** The FLOOR DATUM of a storey (scene_recipe.storey_floor_y): storey 0 IS the
- *  terrain and has no plate to clear, every declared one sits on its own. */
-export const storeyFloorY = (level: number, storey: number) =>
-  level * storey + (level === 0 ? 0 : LEVEL_PLATE_TOP)
-
-/** Steps and floor RUN of one flight, by the server's formula: the climb
- *  between the two floor datums divided by the nominal rise, at least two
- *  steps, one tread each. */
-export function stairRunM(fromLevel: number, storey: number):
-    { steps: number; run: number } {
-  const climb = storeyFloorY(fromLevel + 1, storey) - storeyFloorY(fromLevel, storey)
-  const steps = Math.max(2, Math.round(climb / STAIR_RISE_M))
-  return { steps, run: steps * STAIR_TREAD_M }
-}
-
-/** The PLAN SYMBOL of one flight in LOCATION-LOCAL metres: the footprint it
- *  really covers, one line per tread, and the arrowhead at the head end that
- *  says which way is up. Both plan renderers only project these points.
- *  `null` for a `dir_deg` that is not one of the four quarter turns — the same
- *  entry the server refuses. */
-export function stairSymbol(st: StairSpec, storey: number): {
+/** The plan symbol of one flight. */
+export interface StairSymbol {
   steps: number
   run: number
   outline: Pt[]
   treads: Array<[Pt, Pt]>
   arrow: Pt[]
-} | null {
-  const dir = STAIR_DIRS[((Math.round(st.dir_deg) % 360) + 360) % 360]
-  if (!dir) return null
-  const { steps, run } = stairRunM(st.from_level, storey)
-  const [dx, dy] = dir
-  // Across the climb: the plan's own perpendicular, so a flight pointing east
-  // is as wide north–south as one pointing north is east–west.
-  const [px, py] = [-dy, dx]
-  const half = STAIR_WIDTH_M / 2
-  const [ax, ay] = st.at
-  const pt = (along: number, across: number): Pt =>
-    [ax + dx * along + px * across, ay + dy * along + py * across]
+}
+
+/** What `stairSymbol` needs of a composed flight — the payload's `SceneStairs`
+ *  satisfies it; the loose point type is only there so a caller may hand in a
+ *  raw JSON array without casting. */
+export interface StairFlight {
+  run_m: number
+  steps: number
+  footprint: Array<readonly [number, number] | readonly number[]>
+}
+
+/**
+ * The PLAN SYMBOL of one composed flight in LOCATION-LOCAL metres: the
+ * footprint it really covers, one line per tread, and the arrowhead at the
+ * head end that says which way is up.
+ *
+ * EVERY METRE IN IT IS THE PAYLOAD'S. The outline IS `footprint`, and the axis
+ * is read off its corners rather than out of an angle — the contract lists
+ * them as `[at +half, at+run +half, at+run −half, at −half]`, so
+ *
+ *   along = (c1 − c0) / run_m        across = (c3 − c0) / width
+ *
+ * and the symbol needs no direction table, no storey height and no idea of how
+ * many steps fit into a climb. A plan has to show how much floor a flight
+ * really eats before its author can decide where it fits, and that is now the
+ * same rectangle the 3D client walks on.
+ *
+ * `null` where the payload does not state a rectangle — the flight is then not
+ * drawn rather than drawn wrong.
+ */
+export function stairSymbol(flight: StairFlight): StairSymbol | null {
+  const fp = flight.footprint
+  const run = flight.run_m
+  if (fp?.length !== 4 || !(run > 0)) return null
+  const c = fp.map((p) => [Number(p[0]), Number(p[1])] as Pt)
+  if (c.some((p) => !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return null
+  const steps = Math.max(1, Math.round(flight.steps))
+  // Unit vectors of the flight's own frame, straight off the rectangle.
+  const along: Pt = [(c[1][0] - c[0][0]) / run, (c[1][1] - c[0][1]) / run]
+  const width = Math.hypot(c[3][0] - c[0][0], c[3][1] - c[0][1])
+  if (!(width > 0)) return null
+  const across: Pt = [(c[3][0] - c[0][0]) / width, (c[3][1] - c[0][1]) / width]
+  /** A point `a` metres up the flight and `t` metres in from its first edge. */
+  const pt = (a: number, t: number): Pt =>
+    [c[0][0] + along[0] * a + across[0] * t,
+      c[0][1] + along[1] * a + across[1] * t]
   const treads: Array<[Pt, Pt]> = []
   for (let i = 1; i < steps; i++) {
-    treads.push([pt(i * STAIR_TREAD_M, half), pt(i * STAIR_TREAD_M, -half)])
+    treads.push([pt((i * run) / steps, 0), pt((i * run) / steps, width)])
   }
   return {
     steps,
     run,
-    outline: [pt(0, half), pt(run, half), pt(run, -half), pt(0, -half)],
+    outline: c,
     treads,
     // A chevron just past the head end — the flight itself ends at `run`.
-    arrow: [pt(run, half * 0.8), pt(run + 0.45, 0), pt(run, -half * 0.8)],
+    arrow: [pt(run, width * 0.1), pt(run + 0.45, width / 2), pt(run, width * 0.9)],
   }
+}
+
+// ── The one surface without a composed flight: the world-dev DRAFT ──────────
+// `POST /world-dev/preview-layout` normalizes an LLM's plan; it does not
+// compose a scene, so its preview has no `stairs` block to draw — only the
+// authored `at` / `from_level` / `dir_deg` and the location's storey height.
+// The rectangle below is therefore the SERVER'S FORMULA REPEATED, the last
+// copy of it on this side, and it exists for that one pane.
+//
+// TO REMOVE IT the draft preview needs a composed flight: either
+// `/world-dev/preview-layout` returns `_stair_flights(...)`'s blocks along
+// with the normalized plan, or the pane posts its draft through
+// `POST /play/scene-preview` like the floor-plan editor does. Both are server-
+// side or wiring work; until then this function is the marked exception and
+// nothing else may call it.
+const DRAFT_STAIR_WIDTH_M = 1.2      // scene_recipe.STAIR_WIDTH_M
+const DRAFT_STAIR_TREAD_M = 0.26     // scene_recipe.STAIR_TREAD_M
+const DRAFT_STAIR_RISE_M = 0.2       // scene_recipe.STAIR_RISE_M (nominal)
+const DRAFT_LEVEL_PLATE_TOP = 0.08   // scene_recipe.LEVEL_PLATE_TOP
+/** Unit climb direction per `dir_deg`, in plan metres (y points south). */
+const DRAFT_STAIR_DIRS: Record<number, Pt> = {
+  0: [0, 1], 90: [1, 0], 180: [0, -1], 270: [-1, 0],
+}
+
+/** The plan symbol of an AUTHORED flight, for the world-dev draft alone —
+ *  see the block comment above. The drawing itself is `stairSymbol`'s: only
+ *  the rectangle is derived here. `null` for a `dir_deg` that is not one of
+ *  the four quarter turns, the same entry the server refuses. */
+export function draftStairSymbol(st: StairSpec, storey: number): StairSymbol | null {
+  const dir = DRAFT_STAIR_DIRS[((Math.round(st.dir_deg) % 360) + 360) % 360]
+  if (!dir) return null
+  const floorY = (level: number) =>
+    level * storey + (level === 0 ? 0 : DRAFT_LEVEL_PLATE_TOP)
+  const climb = floorY(st.from_level + 1) - floorY(st.from_level)
+  const steps = Math.max(2, Math.round(climb / DRAFT_STAIR_RISE_M))
+  const run = steps * DRAFT_STAIR_TREAD_M
+  const [dx, dy] = dir
+  // Across the climb: the plan's own perpendicular, so a flight pointing east
+  // is as wide north–south as one pointing north is east–west.
+  const [px, py] = [-dy, dx]
+  const half = DRAFT_STAIR_WIDTH_M / 2
+  const [ax, ay] = st.at
+  const pt = (along: number, across: number): Pt =>
+    [ax + dx * along + px * across, ay + dy * along + py * across]
+  return stairSymbol({
+    run_m: run,
+    steps,
+    footprint: [pt(0, half), pt(run, half), pt(run, -half), pt(0, -half)],
+  })
 }

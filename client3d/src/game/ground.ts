@@ -50,6 +50,13 @@ export const WALK_CLEARANCE_M = 0.01;
 export interface WalkPlate {
   top: number;
   outline: readonly (readonly [number, number])[];
+  /** THE OPENINGS CUT INTO IT (`plates[].holes`, contract addendum "Treppen
+   *  v2") — a stairwell today. A point inside a ring is NOT on this plate:
+   *  the floor is open there, so the answer falls through to the rung below
+   *  (the storey under it, in the end the terrain). Absent where the source
+   *  is not a drawn plate — a room's declared floor is a statement about a
+   *  surface, and nothing cuts a hole into a statement. */
+  holes?: readonly (readonly (readonly [number, number])[])[];
 }
 
 /**
@@ -65,6 +72,12 @@ export interface WalkPlate {
  *
  * The rule survives the plate cull unchanged on purpose: it is what stops an
  * uncapped pick from hoisting a ground-floor figure onto the storey above it.
+ *
+ * A HOLE IS NOT FLOOR (addendum "Treppen v2"): where a plate carries rings,
+ * a point inside one is not on that plate at all — the plate simply does not
+ * answer, and the next rung under it does. That is what lets a figure climb
+ * through a stairwell instead of standing on its lid, and it is the same
+ * statement the renderer makes by taking the ring out of the shape.
  */
 export function recipeFloorAt(plates: readonly WalkPlate[] | null | undefined,
                               lx: number, lz: number,
@@ -73,7 +86,9 @@ export function recipeFloorAt(plates: readonly WalkPlate[] | null | undefined,
   for (const plate of plates ?? []) {
     if (!(plate.top < ceiling)) continue;
     if (best !== null && plate.top <= best) continue;
-    if (pointInPolygon(lx, lz, plate.outline as Polygon)) best = plate.top;
+    if (!pointInPolygon(lx, lz, plate.outline as Polygon)) continue;
+    if (plate.holes?.some((ring) => pointInPolygon(lx, lz, ring as Polygon))) continue;
+    best = plate.top;
   }
   return best;
 }

@@ -113,5 +113,5 @@ export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneFloor,
   SceneBoundaryOpening, SceneCutPlane, SceneDoorway, SceneProblem,
-  SceneSlotValues, SceneSurface,
+  SceneSlotValues, SceneStairs, SceneSurface,
 } from './types'
