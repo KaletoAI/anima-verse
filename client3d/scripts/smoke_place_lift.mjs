@@ -92,18 +92,22 @@
  *
  * `PLACE_PICK_RADIUS_M = 0.6` — the same 0.6 m the spot light fades out over
  * (`spotHighlight.ts`), so what the player sees lit is exactly what the click
- * takes. Against the same bench fixture, hits on the x axis:
+ * takes. Measured against ONE place with ONE free slot at the origin, so the
+ * hit coordinate IS the distance:
  *
- *   0.4 m from a slot -> the place      (0.4 <= 0.6)
- *   0.6 m from a slot -> the place      (ON the radius still counts)
- *   0.7 m from a slot -> null           (0.7 > 0.6, the click falls through
- *                                        to the ground, as it does today when
- *                                        no place answers)
- *   (0.4, 0.5) from a slot -> null      (hypot = 0.64031242… > 0.6 — the gate
- *                                        is XZ distance, not an x distance)
+ *   hit (0.4, 0)   -> the place   (0.4 <= 0.6)
+ *   hit (-0.6, 0)  -> the place   (ON the radius still counts: the gate
+ *                                  squares the same number on both sides, so
+ *                                  the comparison is exact)
+ *   hit (-0.7, 0)  -> null        (0.7 > 0.6, the click falls through to the
+ *                                  ground, as it does today when no place
+ *                                  answers)
+ *   hit (0.4, 0.5) -> null        (hypot = 0.64031242… > 0.6 — the gate is XZ
+ *                                  distance, not an x distance)
  *
- * The gate never changes WHICH place wins — only whether one does at all; and
- * WITHOUT the argument the pick is exactly as before (prop targets pass none).
+ * The gate never changes WHICH place wins — only whether one does at all
+ * (shown on the two-place bench fixture above); and WITHOUT the argument the
+ * pick is exactly as before (prop targets pass none).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -219,21 +223,25 @@ async function main() {
 
   // --- [3] the radius gate (plan-diorama-hover.md) -------------------------
   console.log('\n[3] pickablePlaceFor with a radius — a DIORAMA is room-sized');
+  // ONE place with ONE free slot at the origin: the hit coordinate is the
+  // distance, so every number below can be read straight off the call.
+  const ONE = [{ id: 'stool', free: [{ x: 0, z: 0 }] }];
   check('a slot 0.4 m away is inside the 0.6 m radius',
-        pickablePlaceFor({ x: 0.4, z: 0 }, [PLACES[0]], PLACE_PICK_RADIUS_M), 'b1/seat1');
+        pickablePlaceFor({ x: 0.4, z: 0 }, ONE, PLACE_PICK_RADIUS_M), 'stool');
   check('a slot 0.7 m away is outside it -> null',
-        pickablePlaceFor({ x: -0.7, z: 0 }, [PLACES[0]], PLACE_PICK_RADIUS_M), null);
+        pickablePlaceFor({ x: -0.7, z: 0 }, ONE, PLACE_PICK_RADIUS_M), null);
   check('exactly ON the radius still counts',
-        pickablePlaceFor({ x: -0.6, z: 0 }, [PLACES[0]], PLACE_PICK_RADIUS_M), 'b1/seat1');
+        pickablePlaceFor({ x: -0.6, z: 0 }, ONE, PLACE_PICK_RADIUS_M), 'stool');
   check('the gate is XZ, not x: hypot(0.4, 0.5) = 0.640… -> null',
-        pickablePlaceFor({ x: 0.4, z: 0.5 }, [{ id: 's', free: [{ x: 0, z: 0 }] }],
-                         PLACE_PICK_RADIUS_M), null);
+        pickablePlaceFor({ x: 0.4, z: 0.5 }, ONE, PLACE_PICK_RADIUS_M), null);
   check('the gate never changes WHICH place wins, only whether one does',
         pickablePlaceFor({ x: 1.9, z: 0 }, PLACES, PLACE_PICK_RADIUS_M), 'b1/seat2');
+  check('...and it is the WINNER that is measured: the bench is 1.3 m away',
+        pickablePlaceFor({ x: 1.3, z: 0 }, [PLACES[0]], PLACE_PICK_RADIUS_M), null);
   check('without a gate the same far hit still answers the nearest',
-        pickablePlaceFor({ x: -0.7, z: 0 }, [PLACES[0]]), 'b1/seat1');
+        pickablePlaceFor({ x: -0.7, z: 0 }, ONE), 'stool');
   check('a gate of Infinity is no gate',
-        pickablePlaceFor({ x: -99, z: 0 }, [PLACES[0]], Infinity), 'b1/seat1');
+        pickablePlaceFor({ x: -99, z: 0 }, ONE, Infinity), 'stool');
   check('the radius is 0.6 m', PLACE_PICK_RADIUS_M, 0.6);
 
   console.log(`\n${passed} ok, ${failed} failed`);

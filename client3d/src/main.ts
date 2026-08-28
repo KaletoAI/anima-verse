@@ -944,7 +944,9 @@ async function startApp(username: string, role: string) {
         // is the one routine that repairs all of that: it drops a live hover
         // (which would be holding the unmounted object), derives the targets
         // from the records as they now stand, and re-installs the patch on
-        // the fresh clones.
+        // the fresh clones. Called ONCE per swap and after the seats were
+        // re-derived — `setSceneModelTier` coalesces, so a room full of props
+        // costs one rebuild, not one per prop.
         void setSceneModelTier(tile, 'interior', i, () => rebuildPlaceGlyphs());
       }
     }

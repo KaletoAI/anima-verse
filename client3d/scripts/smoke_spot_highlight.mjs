@@ -28,11 +28,29 @@
  *       - the falloff is the plan's: `1 − smoothstep(r · 0.5, r, distance)`,
  *         so a fragment ON the slot point gets the full colour, one at half
  *         the radius still gets it, and one at or beyond the radius gets
- *         nothing.
+ *         nothing;
+ *       - and SPOT_COLOR is LINEAR. `totalEmissiveRadiance` is a linear
+ *         radiance, the hex `HOVER_EMISSIVE` (0x6a6555) is sRGB, and the
+ *         prop path converts (`new THREE.Color(hex)`, `ColorManagement`
+ *         on). Added raw, the diorama spot would be ~2.9× the prop's
+ *         (0.415686 vs 0.144128). The sRGB→linear transfer for c > 0.04045
+ *         is `((c + 0.055) / 1.055) ^ 2.4`:
+ *           0x6a = 106/255 = 0.41568627… -> (0.47068627/1.055)^2.4
+ *                                        = 0.44614813^2.4 = 0.144128
+ *           0x65 = 101/255 = 0.39607843… -> 0.42756249^2.4  = 0.130136
+ *           0x55 =  85/255 = 0.33333333… -> 0.36808057^2.4  = 0.090842
+ *         …and those three ARE `THREE.Color(0x6a6555).r/g/b`, which is where
+ *         the module reads them: parity with the prop hover by construction,
+ *         in a `ColorManagement`-off build too.
  * [2] A source WITHOUT the include is returned UNCHANGED (identity of the
  *     string): a `MeshBasicMaterial` has no emissive channel to add to, and
  *     inventing an anchor would put the line where `totalEmissiveRadiance`
  *     does not exist and break the compile of the whole diorama.
+ * [2b] BOTH HALVES OR NEITHER (`spotShaders`): the fragment READS
+ *     `vSpotWorld`, the vertex WRITES it. A fragment anchor without a vertex
+ *     anchor would leave a varying nothing feeds — a link error that takes
+ *     the whole diorama down, not just its light. So a pair in which one
+ *     anchor is missing comes back untouched on BOTH sides.
  * [3] IDEMPOTENT: `spotFragment(spotFragment(src)) === spotFragment(src)`.
  *     `onBeforeCompile` runs again on every recompile (a `needsUpdate`, a
  *     LOD swap that re-patches), and a second copy of the uniform block is a
@@ -99,12 +117,20 @@ async function main() {
   }
 
   const THREE = await import('three')
-  const { installSpotHighlight, setSpot, spotFragment, spotVertex } =
+  const { installSpotHighlight, setSpot, spotFragment, spotShaders, spotVertex } =
     await import('../src/scene/spotHighlight.ts')
+  const { HOVER_EMISSIVE } = await import('../src/scene/placeGlyphs.ts')
 
   const FAILED = []
   function checkTrue(label, ok) {
     console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}`)
+    if (!ok) FAILED.push(label)
+  }
+  function checkList(label, got, want) {
+    const ok = Array.isArray(got) && got.length === want.length
+      && got.every((v, i) => v === want[i])
+    console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}: ${JSON.stringify(got)}`
+      + (ok ? '' : `  (expected ${JSON.stringify(want)})`))
     if (!ok) FAILED.push(label)
   }
   function checkEq(label, got, want) {
@@ -152,11 +178,35 @@ async function main() {
   checkTrue('...scaled by the strength uniform',
     lines[at + 1].includes('uSpotStrength'))
 
+  console.log('[1c] SPOT_COLOR is the LINEAR form of the prop hover colour')
+  const spotColour = /vec3\( ([0-9.]+), ([0-9.]+), ([0-9.]+) \)/.exec(frag)
+  checkTrue('the head declares SPOT_COLOR', !!spotColour)
+  checkList('...as the hand-derived sRGB→linear triple of 0x6a6555',
+    spotColour.slice(1, 4), ['0.144128', '0.130136', '0.090842'])
+  const worn = new THREE.Color(HOVER_EMISSIVE)
+  checkList('...which is exactly what the PROP hover wears',
+    spotColour.slice(1, 4),
+    [worn.r.toFixed(6), worn.g.toFixed(6), worn.b.toFixed(6)])
+
   console.log('[2] a source without the anchor is returned unchanged')
   checkEq('spotFragment(no include) === the source',
     spotFragment('void main() {}'), 'void main() {}')
   checkEq('spotVertex(no include) === the source',
     spotVertex('void main() {}'), 'void main() {}')
+
+  console.log('[2b] both halves or neither')
+  const paired = spotShaders(VERT, FRAG)
+  checkTrue('a pair with both anchors is patched on both sides',
+    paired.vertexShader.includes('vSpotWorld = ( modelMatrix')
+    && paired.fragmentShader.includes('totalEmissiveRadiance +='))
+  const lone = spotShaders('void main() {}', FRAG)
+  checkEq('...no vertex anchor: the FRAGMENT stays untouched too',
+    lone.fragmentShader, FRAG)
+  checkEq('...and the vertex source is handed back as it came',
+    lone.vertexShader, 'void main() {}')
+  const lone2 = spotShaders(VERT, 'void main() {}')
+  checkEq('...no fragment anchor: the VERTEX stays untouched too',
+    lone2.vertexShader, VERT)
 
   console.log('[3] the transforms are idempotent')
   checkEq('spotFragment twice === once', spotFragment(frag), frag)

@@ -27,10 +27,21 @@ import { HOVER_EMISSIVE } from './placeGlyphs';
 
 /** The spot's colour — the SAME one a hovered prop gains
  *  (`HOVER_EMISSIVE`): a seat on a diorama and a seat on a bench must read
- *  identically, they are the same offer. */
-const SPOT_COLOR_GLSL = [16, 8, 0]
-  .map((shift) => (((HOVER_EMISSIVE >> shift) & 0xff) / 255).toFixed(6))
-  .join(', ');
+ *  identically, they are the same offer.
+ *
+ *  AND IT GOES THROUGH `THREE.Color`, not through the raw bytes of the hex.
+ *  `totalEmissiveRadiance` is LINEAR, while a hex literal is sRGB — added
+ *  straight, 0x6a would arrive as 0.4157 instead of 0.1441 and the diorama
+ *  spot would glow ~2.9× brighter than the prop hover it is supposed to match
+ *  (review finding 2026-08-29). `Color.setHex` does exactly the conversion
+ *  the prop path relies on (`new THREE.Color(HOVER_EMISSIVE)` in
+ *  `highlightProp`), so reading `r/g/b` off it is parity BY CONSTRUCTION —
+ *  including in a build that turns `ColorManagement` off, where both sides
+ *  then keep the sRGB numbers. */
+const SPOT_COLOR_GLSL = (() => {
+  const c = new THREE.Color(HOVER_EMISSIVE);
+  return [c.r, c.g, c.b].map((v) => v.toFixed(6)).join(', ');
+})();
 
 /** The vertex anchor: `applyClipOutline` passes `vClipWorld` through at the
  *  very same chunk, and for the same reason — `transformed` is final after
@@ -72,6 +83,29 @@ export function spotFragment(src: string): string {
     + ' distance( vSpotWorld, uSpotPoint ) ) );');
 }
 
+/**
+ * THE TWO HALVES ARE PATCHED TOGETHER OR NOT AT ALL (review finding
+ * 2026-08-29). The fragment half READS `vSpotWorld`, the vertex half WRITES
+ * it — patching only the fragment because its anchor happens to be there
+ * would leave a varying that nothing feeds, which is a LINK error and takes
+ * the whole diorama's shader down, not just the light. Both anchors or
+ * neither.
+ *
+ * The decision belongs here and not to the install: the shader sources only
+ * exist at compile time, so a material can only be judged when three hands
+ * its chunks over.
+ */
+export function spotShaders(vertexShader: string, fragmentShader: string):
+    { vertexShader: string; fragmentShader: string } {
+  if (!vertexShader.includes(VERTEX_ANCHOR) || !fragmentShader.includes(FRAGMENT_ANCHOR)) {
+    return { vertexShader, fragmentShader };
+  }
+  return {
+    vertexShader: spotVertex(vertexShader),
+    fragmentShader: spotFragment(fragmentShader),
+  };
+}
+
 /** The three uniforms of one patched material, held by the module so a
  *  `setSpot` reaches them without touching `userData` — `Material.copy()`
  *  JSON-clones `userData`, which would turn a live uniform into a dead
@@ -110,8 +144,9 @@ function patchMaterial(mat: THREE.Material): void {
     shader.uniforms.uSpotPoint = u.uSpotPoint;
     shader.uniforms.uSpotRadius = u.uSpotRadius;
     shader.uniforms.uSpotStrength = u.uSpotStrength;
-    shader.vertexShader = spotVertex(shader.vertexShader);
-    shader.fragmentShader = spotFragment(shader.fragmentShader);
+    const patch = spotShaders(shader.vertexShader, shader.fragmentShader);
+    shader.vertexShader = patch.vertexShader;
+    shader.fragmentShader = patch.fragmentShader;
   };
   mat.customProgramCacheKey = () => `${baseKey ?? prevKey.call(mat)}|spot`;
   mat.needsUpdate = true;

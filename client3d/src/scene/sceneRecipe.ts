@@ -1725,17 +1725,26 @@ function applyModelClip(tile: Tile, placed: THREE.Object3D,
  * shaders, shell/roof clones); geometries and base materials belong to the
  * loader cache and stay.
  *
- * `onSwapped` is called once per record that really changed its mesh, with
- * that record — a PARAMETER and not a module-level hook, so this routine
- * keeps knowing nothing about its callers. It exists because everything a
- * VIEW holds on the old object dies with the swap: the seat targets point at
- * a mesh that has left the graph, and the shader patches a view installed on
- * its materials are gone with the clones (`scene/spotHighlight.ts`).
+ * `onSwapped` is called ONCE per tier swap with the records that really
+ * changed their mesh — a PARAMETER and not a module-level hook, so this
+ * routine keeps knowing nothing about its callers. It exists because
+ * everything a VIEW holds on the old object dies with the swap: the seat
+ * targets point at a mesh that has left the graph, and the shader patches a
+ * view installed on its materials are gone with the clones
+ * (`scene/spotHighlight.ts`).
+ *
+ * ONCE, at the very END, and both halves of that matter: a room of twelve
+ * props would otherwise call the view back twelve times for one swap, and the
+ * seats of a swapped diorama are re-derived onto the new mesh's floor in the
+ * block below this loop — a callback fired earlier would rebuild the targets
+ * from slot heights that are about to move. A remount (`placedModels`
+ * replaced) returns without the call: that path rebuilds everything anyway.
  */
 export async function setSceneModelTier(tile: Tile, group: 'building' | 'interior',
                                         tier: ModelTier,
-                                        onSwapped?: (rec: PlacedSceneModel) => void
+                                        onSwapped?: (recs: PlacedSceneModel[]) => void
                                        ): Promise<void> {
+  const swapped: PlacedSceneModel[] = [];
   const placements = tile.placedModels;
   if (!placements) return;
   await Promise.all(placements.map(async (rec) => {
@@ -1814,7 +1823,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
     rec.object = placed;
     rec.url = url;
     rec.placeholder = false;
-    onSwapped?.(rec);
+    swapped.push(rec);
   }));
   if (tile.placedModels !== placements) return;
   // A swapped mesh changes the furniture boxes — re-derive the
@@ -1859,6 +1868,9 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       deriveRoomSpots(tile, id, roomProps(placements, id));
     }
   }
+  // LAST, and once: the seats above have found the swapped mesh's floor, so
+  // whatever the caller derives from them now sees their final heights.
+  if (swapped.length) onSwapped?.(swapped);
 }
 
 /** Gebäudehülle aus der Szene einwechseln: ersetzt die prozedurale Hülle und
