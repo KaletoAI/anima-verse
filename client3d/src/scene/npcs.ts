@@ -6,6 +6,7 @@ import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   ghostCutY, groundWaterLevel, idleClip, moveClip, sinkForState, standingClipFor,
   terrainPace, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
+import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import { Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import type { PlaceEntry } from './placeSlot';
@@ -22,10 +23,6 @@ const RUN_DISTANCE = 6; // farther than this -> run animation
  *  the next one. Generous on purpose: the points are door and route stations,
  *  not marks to hit, and a figure that had to touch them would pivot on each. */
 const WAYPOINT_ARRIVE_M = 1.5;
-/** …and how close during a GUIDED STAIR RIDE (plan-treppen-v2 task 3), where
- *  the landing IS a mark to hit: the same 1.5 m would retire the head landing
- *  half way up the flight. It is also the radius the ride itself ends at. */
-const RIDE_ARRIVE_M = 0.4;
 
 /** What the ground says about a figure at one point: the clip its terrain type
  *  asks for while the figure MOVES (`anim`) and the one while it STANDS
@@ -129,26 +126,6 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
   return tex;
 }
 
-/**
- * A guided climb, as the walking machine sees it (plan-treppen-v2 task 3):
- * where the figure stands while it is on the flight, and where the ride is
- * over. Nothing of the STAIRCASE is in here — the geometry is the server's and
- * the rule is `game/stairs.stairY`; this file only asks and stops asking.
- *
- * `y` answers `null` for a point that is not on the run at all (beside the
- * flight, or on a chain whose flights the figure has left), and the walking
- * machine then falls back to its ordinary blend towards the current waypoint.
- * The third argument is the height the figure is AT: on a stairwell two
- * stacked flights cover the same xz and only that number tells them apart.
- */
-export interface StairRide {
-  y: (x: number, z: number, y: number) => number | null;
-  /** the landing the ride ends on, world metres — the FULL point, height
-   *  included, because a stairwell puts two landings of one chain over the
-   *  same xz and only the storey tells them apart. */
-  end: { x: number; y: number; z: number };
-}
-
 interface Npc {
   name: string;
   /** AV3D-6: the animation category the server delivered (authoritative) */
@@ -177,10 +154,11 @@ interface Npc {
   face: THREE.Vector3 | null;
   /** The waypoints left on the way to the goal (routing around buildings) */
   waypoints: THREE.Vector3[];
-  /** A GUIDED STAIR RIDE, while one is running (plan-treppen-v2 task 3):
-   *  it owns the figure's height for as long as the figure is on the run,
-   *  and it retires waypoints tightly so the flight is walked to its end.
-   *  `null`/absent for everybody who is not on stairs. */
+  /** A GUIDED STAIR RIDE, while one is running (plan-treppen-v2 task 3): it
+   *  owns the figure's height for as long as the figure is on the flight it
+   *  is walking, and it retires waypoints tightly so every landing is walked
+   *  onto. MUTABLE — `rideStep` answers the leg and the arming, this file
+   *  writes them back. `null`/absent for everybody who is not on stairs. */
   ride?: StairRide | null;
   /** server journey being followed (§ A11) — replaces goal/waypoint logic.
    *  `key` identifies the POLYLINE: as long as it is unchanged the local
@@ -457,10 +435,10 @@ export class NpcManager {
   }
 
   /** The GUIDED CLIMB of one figure (plan-treppen-v2 task 3), `null` ends it.
-   *  Set by whoever starts the climb — `rideStairs` for the avatar, the stair
-   *  chain of the routing for an NPC — and cleared by the walking machine
-   *  itself the moment the figure stands on the landing the ride ends at, so
-   *  no caller has to watch a figure walk. */
+   *  Set by whoever plans the climb — `rideStairs` for the avatar, the stair
+   *  chain of the routing for an NPC, which also clears it whenever it plans a
+   *  route WITHOUT stairs — and cleared by the walking machine itself when the
+   *  last leg's landing is reached, so no caller has to watch a figure walk. */
   setStairRide(name: string, ride: StairRide | null) {
     const npc = this.npcs.get(name);
     if (!npc) return;
@@ -756,7 +734,7 @@ export class NpcManager {
         npc.root.position.copy(st.pos);
         arrived = true;
       }
-      // Zielwechsel -> Zwischenstationen übernehmen (Raum-Ausgänge). The A*
+      // A new goal adopts the stations on the way to it (room exits). The A*
       // detour around buildings that stood here is GONE with the cell grid
       // (E4 task 5, `scene/pathfind.ts` deleted): it was built from the v1
       // grid keys the server stopped sending in E3, so it had been planning
@@ -1200,19 +1178,14 @@ export class NpcManager {
         npc.label.visible = labelVisible;
         continue;   // travellers skip the normal goal/waypoint logic
       }
-      // A GUIDED STAIR RIDE ends where its landing is (plan-treppen-v2 task
-      // 3): the figure has stepped off, and from here the floor answers for
-      // its height again. Measured in all three axes — over a stairwell the
-      // last landing of a chain stands right over the middle one, and an XZ
-      // check would end the ride a storey early.
-      if (npc.ride && Math.hypot(npc.ride.end.x - npc.root.position.x,
-        npc.ride.end.y - npc.root.position.y,
-        npc.ride.end.z - npc.root.position.z) < RIDE_ARRIVE_M) npc.ride = null;
       // The next waypoint (when a way is planned), otherwise straight to the
-      // goal. A ride retires its points TIGHTLY: the generic 1.5 m would drop
-      // the head landing while the figure is still half way up the flight, and
-      // it would then walk the rest of the climb aiming at the next stop —
-      // off the run, where the ramp has no answer and the old blend took over.
+      // goal. A GUIDED STAIR RIDE retires its points TIGHTLY: the generic
+      // 1.5 m would drop the head landing while the figure is still half way
+      // up the flight, and it would then walk the rest of the climb aiming at
+      // the next stop — off the run, where the ramp has no answer. The tight
+      // radius is the ride's own arrival radius, so the landings of a chain
+      // are the points the figure really walks onto and its legs change hands
+      // exactly where the waypoints do.
       const retireM = npc.ride ? RIDE_ARRIVE_M : WAYPOINT_ARRIVE_M;
       while (npc.waypoints.length
         && npc.root.position.distanceTo(npc.waypoints[0]) < retireM) {
@@ -1298,11 +1271,24 @@ export class NpcManager {
       // no sink either: a staircase is a floor, and the ground rules of water
       // do not reach into a stairwell.
       //
-      // Off the flight the old rule stands: match the height to the CURRENT
-      // waypoint and blend — that is what makes the vertical ride between two
-      // lift stops (AV3D-12).
-      const rideY = npc.ride?.y(npc.root.position.x, npc.root.position.z,
-        npc.root.position.y) ?? null;
+      // The ride is asked AFTER the step, at the point the figure now stands
+      // on, and the whole rule is pure (`game/stairs.rideStep`): which leg,
+      // armed or not, the height, and whether the climb is over — this file
+      // only writes the answer back. It answers `null` while the figure is
+      // walking TO a flight rather than on it, and then the old rule stands:
+      // match the height to the CURRENT waypoint and blend, which is what
+      // makes the vertical ride between two lift stops (AV3D-12).
+      let rideY: number | null = null;
+      if (npc.ride) {
+        const step = rideStep(npc.ride, npc.root.position.x,
+          npc.root.position.y, npc.root.position.z);
+        if (step.done) npc.ride = null;
+        else {
+          npc.ride.leg = step.leg;
+          npc.ride.armed = step.armed;
+          rideY = step.y;
+        }
+      }
       if (rideY !== null) {
         npc.root.position.y = rideY;
       } else {

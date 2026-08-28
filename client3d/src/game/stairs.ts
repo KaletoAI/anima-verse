@@ -37,11 +37,26 @@ export interface StairEndPoint {
   z: number;
 }
 
-/** ONE flight, reduced to the two landings it connects. `foot.level + 1 ===
- *  head.level` by construction — a flight never spans two storeys. */
+/** The RUN of a flight, world metres: `at` is the foot of the first tread (NOT
+ *  the foot landing, which lies a pad's half plus a gap behind it), `dir` the
+ *  climb direction in xz, `runM` the length of the run and `widthM` its width
+ *  across. No heights — those are the flight's two landings, said once. */
+export interface StairRun {
+  at: { x: number; z: number };
+  /** climb direction in world xz; normalised where it is used, so it need not
+   *  be unit */
+  dir: { x: number; z: number };
+  runM: number;
+  widthM: number;
+}
+
+/** ONE flight: the two landings it connects and the run between them.
+ *  `foot.level + 1 === head.level` by construction — a flight never spans two
+ *  storeys. */
 export interface StairLink {
   foot: StairEndPoint;
   head: StairEndPoint;
+  run: StairRun;
 }
 
 /**
@@ -154,34 +169,17 @@ export function stairsAt(
 // server ships the run that answers it (§ B1 `stairs`).
 
 /**
- * ONE flight as the RUN it covers, in world metres — everything `stairY` needs
- * and nothing else. `at` is the foot of the first tread (NOT the foot landing,
- * which lies a pad's half plus a gap behind it), `dir` the climb direction in
- * xz, `runM` the length of the run and `widthM` its width across.
- *
- * The two landing heights are the ends of the ramp: at `at` the figure stands
- * at `footY`, `runM` metres along at `headY`. That is the same pair
- * `StairLink` carries, said in the run's frame.
- */
-export interface StairRun {
-  at: { x: number; z: number };
-  /** climb direction in world xz; normalised here, so it need not be unit */
-  dir: { x: number; z: number };
-  runM: number;
-  widthM: number;
-  footY: number;
-  headY: number;
-}
-
-/**
  * Height of a figure standing at `x`/`z` ON this flight — `null` when it is
  * not on it (more than half a width off the run's axis).
  *
  * A RAMP, not a stair-step function (ruling, plan-treppen-v2 § 7a): the figure
  * walks the flight with a walking clip, and quantising the height to the
- * treads would make it bounce fifteen times per storey for no gain — the
- * treads are 26 cm of run and 20 cm of rise, so the ramp never leaves a
- * tread by more than a centimetre of sole.
+ * treads would make it bounce fifteen times per storey for no gain. The price
+ * is stated rather than hidden: the server's tread `i` covers the run from
+ * `i·tread` to `(i+1)·tread` with its top face at `(i+1)·rise`, so the ramp
+ * runs a FULL RISE under the tread at its near edge (0.205 m on the contract
+ * flight), meets it at the far edge and lies about half a rise under it on
+ * average. The sole cuts through the nosings, and that is accepted.
  *
  * ALONG the axis the projection is CLAMPED, and that is deliberate: the two
  * landings lie past the ends of the run (pad gap plus half a pad), so a figure
@@ -190,45 +188,157 @@ export interface StairRun {
  * there is no clamp but a gate: half a step width to either side is the
  * flight, everything beyond is floor somebody else has to answer for.
  */
-export function stairY(flight: StairRun, x: number, z: number): number | null {
-  const len = Math.hypot(flight.dir.x, flight.dir.z);
-  if (!(len > 0) || !(flight.runM > 0)) return null;    // degenerate = no flight
-  const dx = flight.dir.x / len, dz = flight.dir.z / len;
-  const px = x - flight.at.x, pz = z - flight.at.z;
+export function stairY(flight: StairLink, x: number, z: number): number | null {
+  const run = flight.run;
+  const len = Math.hypot(run.dir.x, run.dir.z);
+  if (!(len > 0) || !(run.runM > 0)) return null;       // degenerate = no flight
+  const dx = run.dir.x / len, dz = run.dir.z / len;
+  const px = x - run.at.x, pz = z - run.at.z;
   // The axis normal in xz — the sign does not matter, only the distance.
   const across = px * -dz + pz * dx;
-  if (Math.abs(across) > flight.widthM / 2) return null;
-  const t = Math.min(1, Math.max(0, (px * dx + pz * dz) / flight.runM));
-  return flight.footY + t * (flight.headY - flight.footY);
+  if (Math.abs(across) > run.widthM / 2) return null;
+  const t = Math.min(1, Math.max(0, (px * dx + pz * dz) / run.runM));
+  return flight.foot.y + t * (flight.head.y - flight.foot.y);
+}
+
+// --- The RIDE: which flight, and from when on (review round 1) -------------
+//
+// A climb is not "somewhere on a staircase" but a SEQUENCE: the figure walks
+// to a landing, climbs that flight to its far landing, and over two storeys
+// does it again. Two things fall out of that and neither can be measured from
+// xz alone, because a stairwell may stack two flights over the SAME footprint
+// (same `at`, same direction, one storey apart — the server builds it and the
+// plate holes are cut for it):
+//
+//   - WHICH flight answers: the leg being walked, never the nearest height.
+//     Proximity in y cannot tell a stack apart at the moment of the change,
+//     where both flights meet at the same landing height.
+//   - FROM WHEN it answers: only once the figure has REACHED that leg's start
+//     landing. The way to a flight regularly crosses its own footprint — the
+//     walk from the first flight's head landing back to the second flight's
+//     foot runs the whole length of the second run — and a ramp answering
+//     there would lift the figure into the air under the stairs.
+
+/** How close to a landing a figure has to be for the ride to count it as
+ *  reached, world metres, measured in ALL THREE axes: over a stairwell the
+ *  landings of two legs stand over each other and only the storey tells them
+ *  apart. Smaller than the server's landing offset `STAIR_PAD_M/2 +
+ *  STAIR_PAD_GAP_M` = 0.5 m by construction (pinned in the smoke), so the
+ *  radius around a landing can never reach into the run itself. It is also
+ *  the radius `scene/npcs.ts` retires waypoints at during a ride, which is
+ *  what makes a chain's landings the points the figure really walks onto. */
+export const RIDE_ARRIVE_M = 0.4;
+
+/** ONE leg of a guided climb: the flight walked and the two landings it is
+ *  walked between — `start` arms the ramp, `end` retires the leg. */
+export interface StairLeg {
+  flight: StairLink;
+  start: StairEndPoint;
+  end: StairEndPoint;
 }
 
 /**
- * The height of a guided ride over a CHAIN of flights: the answer of the
- * flight the figure is on, or `null` when it is on none of them.
+ * A guided climb as the walking machine holds it. `leg` is the one being
+ * walked and `armed` says the figure has reached that leg's start landing —
+ * before that the ride answers nothing and the floor keeps the figure.
  *
- * A chain over two storeys walks two flights, and where a stairwell stacks
- * them the same xz lies on both — so the tie is broken by the height the
- * figure is at: the ramp whose answer is NEAREST to `y` is the one it is
- * climbing. Equal answers make the choice moot, and the first flight wins so
- * that the same list always answers the same way.
+ * The avatar's own ride starts ARMED: it accepted the offer while standing at
+ * the landing (`stairsAt` only offers within reach of one). An NPC's chain
+ * starts unarmed, because the figure is still a room away and walks to the
+ * foot of the flight first.
  */
-export function stairRideY(
-  runs: readonly StairRun[],
+export interface StairRide {
+  legs: StairLeg[];
+  leg: number;
+  armed: boolean;
+}
+
+/** Is this landing that landing? Storey FIRST — a stacked stairwell has two
+ *  landings over the same xz — then the point, with a hair of tolerance
+ *  because both sides are copies of the same payload numbers. */
+function sameLanding(a: StairEndPoint, b: StairEndPoint): boolean {
+  return a.level === b.level && Math.abs(a.x - b.x) < 1e-6
+    && Math.abs(a.y - b.y) < 1e-6 && Math.abs(a.z - b.z) < 1e-6;
+}
+
+/**
+ * What a ride answers for a figure at `x`/`y`/`z`: the leg it is on now,
+ * whether that leg's ramp has taken over, the height (`null` = the floor
+ * answers) and whether the ride is over.
+ *
+ * Pure — the caller writes `leg`/`armed` back and drops the ride on `done`.
+ * The loop is a loop and not an `if` because a leg can be finished before it
+ * begins: a chain whose next flight starts where the last one ended arms and
+ * retires in the same frame, and the ride must not stall on it.
+ */
+export function rideStep(
+  ride: StairRide,
   x: number,
-  z: number,
   y: number,
-): number | null {
-  let best: number | null = null;
-  let bestGap = Infinity;
-  for (const run of runs) {
-    const at = stairY(run, x, z);
-    if (at === null) continue;
-    const gap = Math.abs(at - y);
-    if (gap >= bestGap) continue;
-    best = at;
-    bestGap = gap;
+  z: number,
+): { leg: number; armed: boolean; y: number | null; done: boolean } {
+  const at = (p: StairEndPoint) =>
+    Math.hypot(p.x - x, p.y - y, p.z - z) < RIDE_ARRIVE_M;
+  let leg = ride.leg;
+  let armed = ride.armed;
+  while (leg < ride.legs.length) {
+    const cur = ride.legs[leg];
+    if (!armed && at(cur.start)) armed = true;
+    // Only an ARMED leg can end: the end landing of a stacked leg lies over
+    // its own start, and a ride that ended there would skip the flight.
+    if (armed && at(cur.end)) {
+      leg += 1;
+      armed = false;
+      continue;
+    }
+    break;
   }
-  return best;
+  if (leg >= ride.legs.length) return { leg, armed, y: null, done: true };
+  return {
+    leg,
+    armed,
+    y: armed ? stairY(ride.legs[leg].flight, x, z) : null,
+    done: false,
+  };
+}
+
+/**
+ * The ONE leg that ends on this landing: the flight that HAS it, walked from
+ * its other end. That is the avatar's climb — it stands at one landing and
+ * rides to the other — and the search is by landing, not by storey, so a
+ * stacked pair cannot hand back the wrong flight.
+ */
+export function stairLegTo(
+  links: readonly StairLink[],
+  dest: StairEndPoint,
+): StairLeg | null {
+  for (const flight of links) {
+    if (sameLanding(flight.head, dest)) return { flight, start: flight.foot, end: dest };
+    if (sameLanding(flight.foot, dest)) return { flight, start: flight.head, end: dest };
+  }
+  return null;
+}
+
+/**
+ * The legs of a `stairChain`: the chain is landing PAIRS (near end, far end
+ * per flight), so each pair names its own flight — matched on BOTH landings,
+ * in either order, which is what keeps a climb over a stacked stairwell on
+ * the flight it is actually walking. A pair no flight owns is skipped rather
+ * than guessed at.
+ */
+export function stairLegs(
+  links: readonly StairLink[],
+  chain: readonly StairEndPoint[],
+): StairLeg[] {
+  const legs: StairLeg[] = [];
+  for (let i = 0; i + 1 < chain.length; i += 2) {
+    const [a, b] = [chain[i], chain[i + 1]];
+    const flight = links.find((s) =>
+      (sameLanding(s.foot, a) && sameLanding(s.head, b))
+      || (sameLanding(s.head, a) && sameLanding(s.foot, b)));
+    if (flight) legs.push({ flight, start: a, end: b });
+  }
+  return legs;
 }
 
 /**
