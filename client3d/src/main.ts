@@ -55,7 +55,7 @@ import { mountScene, reliftScene, SceneLibrary, setSceneModelTier,
   unmountScene } from './scene/sceneRecipe';
 import { WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
-import { figureTransition, pickablePlaceFor, placementOf,
+import { figureTransition, pickablePlaceFor, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
 import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
@@ -576,10 +576,10 @@ async function startApp(username: string, role: string) {
       scope: groundScopeAt(x, z) };
   });
   engine.scene.add(npcs.group);
-  // Server-Modelle trudeln asynchron ein -> betroffenen NPC neu aufbauen
+  // Server models trickle in asynchronously -> rebuild the affected NPC
   figures.onModelReady = (charName) => {
     npcs.rebuild(charName);
-    if (lastMap) npcs.update(computeNpcStates(lastMap));
+    if (lastMap) npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
   };
   const panel = new InfoPanel();
 
@@ -1904,6 +1904,16 @@ async function startApp(username: string, role: string) {
    *  NpcManager only runs against a genuinely NEW payload (npcs.update is
    *  called at 1 Hz off the cached map, the poll refreshes every 3 s) */
   let mapStamp = 1;
+  /** When `lastMap` was ASKED (`performance.now()`), so the 1 Hz `npcs.update`
+   *  can apply the same "is this poll older than our own seat change" rule the
+   *  two reconcilers apply (`pollIsStale`, plan-aufstehen.md). 0 = the payload
+   *  the session started with, which predates every seat change there can be. */
+  let mapPolledAt = 0;
+  /** What `npcs.update` has to be told about the CACHED map — the third
+   *  consumer of the stamp rule, beside the two reconcilers below. Called from
+   *  the 1 Hz tick and from the model-ready rebuild, never before
+   *  `ownSeatChangeAt` (declared with the report state further down) exists. */
+  const npcUpdateOpts = () => ({ playerStale: pollIsStale(mapPolledAt, ownSeatChangeAt) });
   /** Counts the changes of the VIEW (`applyShowAll`). A poll that started
    *  under the old view is dropped when it comes back under the new one — the
    *  two payloads describe different worlds. */
@@ -2019,6 +2029,7 @@ async function startApp(username: string, role: string) {
       // switch has just taken away. The switch published its own snapshot.
       if (rev !== viewRev) return;
       lastMap = map;
+      mapPolledAt = polledAt;
       mapStamp += 1;
       hud.setOnline(true);
       hud.setClock(map.game_time?.label ?? '');
@@ -2026,7 +2037,7 @@ async function startApp(username: string, role: string) {
       updatePins(map);
       refreshSelection(map);
       reconcileAvatarPlace(map, polledAt); // server seated the avatar? (places § 4)
-      reconcileAvatarPos(map);    // server moved the avatar? (E4-T5)
+      reconcileAvatarPos(map, polledAt);   // server moved the avatar? (E4-T5)
       void syncPlaceGlyphs(map);  // free slots to sit down on (places § 4)
       announceSceneProblems(map); // what the composer found wrong (§ 4.3)
     } catch (e) {
@@ -2474,7 +2485,7 @@ async function startApp(username: string, role: string) {
   }
 
   setInterval(() => {
-    if (lastMap) npcs.update(computeNpcStates(lastMap));
+    if (lastMap) npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
     // Talk target (E3-T5): the same 1 Hz tick, and deliberately not a frame
     // hook — walking up to someone is a second-scale event, and
     // `shownPlacement` is only rewritten here anyway. See the section further
@@ -2484,6 +2495,9 @@ async function startApp(username: string, role: string) {
     updateStairs();     // …and so is standing at a flight of stairs
     updateEnterOffer(); // …and so is standing at a location entry (Etappe 3)
   }, 1000);
+  // The very first payload of the session is never stale: no seat change of
+  // our own has been made, let alone answered, so the default (`playerStale`
+  // false) is the answer the rule would give.
   npcs.update(computeNpcStates(firstMap));
 
   // --- Walking on foot (E3-T3; FREE on the metre plane since E4 task 5) -----
@@ -3058,10 +3072,15 @@ async function startApp(username: string, role: string) {
     if (!isAdmin || on === showAll || viewSwitchBusy) return;
     viewSwitchBusy = true;
     try {
+      // Asked BEFORE the request goes out, like the poll's own stamp: this
+      // payload is just as unable to know about a seat change answered while
+      // it was in flight (`pollIsStale`).
+      const askedAt = performance.now();
       const map = await api.getWorldMap(on);
       showAll = on;
       viewRev += 1;
       lastMap = map;
+      mapPolledAt = askedAt;
       mapStamp += 1;
       // The frame comes over with the switch: `world_bounds` is unfiltered and
       // therefore the same in both views, but this payload is what the ground
@@ -3702,15 +3721,21 @@ async function startApp(username: string, role: string) {
     // round trip stands between the key and the picture); the server clears
     // pose and place, and its next worldmap row carries no `place`. Until
     // that answer is in, a poll that still shows the old seat is ignored
-    // (`ownSeatChangeAt` in `reconcileAvatarPlace`) — otherwise the poll in
-    // flight would snap the figure back into the chair it just left. A
+    // WHOLE (`pollIsStale`, see `reconcileAvatarPlace`) — otherwise the poll
+    // in flight would snap the figure back into the chair it just left. A
     // refused release (the toast says why) leaves the server's seat standing,
     // and the next poll seats the figure again: the server's word.
+    //
+    // The CLIP is cleared here for the same reason the pose is: it is server
+    // state, and the server's last word is the seat's `sit`. Waiting for the
+    // next poll would play the sitting animation on a figure that is already
+    // walking, which is exactly the picture plan-aufstehen.md is about.
     if (dir && avatarSeated) {
       avatarSeated = false;
       seatedKey = '';
       ownSeatChangeAt = Infinity;
       npcs.setPlayerPose(avatarName, null, null);
+      npcs.setPlayerAnimation(avatarName, null);
       void api.postActivity({ activity: '' })
         .then(() => { ownSeatChangeAt = performance.now(); })
         .catch((e) => { ownSeatChangeAt = 0; uiActions.toast?.(String(e)); });
@@ -3820,8 +3845,14 @@ async function startApp(username: string, role: string) {
    * when the distance is still walkable and is put back hard when it is not
    * (`correctTo`) — a teleport is a jump, not a sprint across the map.
    */
-  function reconcileAvatarPos(map: WorldMap) {
+  function reconcileAvatarPos(map: WorldMap, polledAt: number) {
     if (getGameState().mode !== 'embodied') return;
+    // A poll older than our own last seat change knows nothing about now (the
+    // one rule, `pollIsStale` — see `reconcileAvatarPlace`). Its point is the
+    // SEAT the figure has just stood up from, and `correctTo` would walk the
+    // figure back onto it for up to CORRECT_MS, swallowing the steering input
+    // all the while (plan-aufstehen.md).
+    if (pollIsStale(polledAt, ownSeatChangeAt)) return;
     // A SEATED avatar stands where `reconcileAvatarPlace` put it: on the
     // payload's slot point, the server's word. The row's `pos` need not be
     // that point (a pair's centre, a report that landed before the seat), and
@@ -3880,7 +3911,14 @@ async function startApp(username: string, role: string) {
     // has just taken one — and says nothing about now. Ignored whole: read
     // as "not seated" it would clear `avatarSeated` under a fresh click and
     // let a position report release the seat that was just taken.
-    if (polledAt < ownSeatChangeAt) return;
+    //
+    // ONE RULE, THREE CONSUMERS (`pollIsStale`, plan-aufstehen.md): the seat
+    // here, the position in `reconcileAvatarPos`, and what the payload says
+    // about the avatar in `npcs.update` (activity, clip and label — via
+    // `npcUpdateOpts`, because that one runs at 1 Hz off the cached map).
+    // A stale poll that only two of the three ignored put the figure back
+    // into the chair through the third.
+    if (pollIsStale(polledAt, ownSeatChangeAt)) return;
     const me = map.characters.find((c) => c.name === avatarName);
     const place = me?.place ?? null;
     if (!place) {

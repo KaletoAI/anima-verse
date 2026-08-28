@@ -65,6 +65,37 @@
  *       An entry without an anchor is never matched (it is a room marker),
  *       and a placement whose mesh has not loaded (`object: null`) is
  *       nothing to click.
+ *
+ * A POLL OLDER THAN OUR OWN SEAT CHANGE (plan-aufstehen.md, Task 1)
+ * ----------------------------------------------------------------
+ * Standing up releases the seat on the server and walks straight away. The
+ * worldmap poll that was in flight while that happened still shows the seat,
+ * and all three of its consumers (`reconcileAvatarPlace`, `reconcileAvatarPos`
+ * and the player branch of `npcs.update`) ask ONE rule whether to believe it:
+ * `pollIsStale(polledAt, ownSeatChangeAt)` — the poll is stale when it was
+ * ASKED before the server ANSWERED our own last seat change. Both stamps are
+ * `performance.now()` milliseconds, so the comparison is a plain `<`.
+ *
+ *   [9] `pollIsStale(1000, Infinity)` -> true: `Infinity` is the release in
+ *       flight (no answer yet), and nothing asked before it can know about it.
+ *       `pollIsStale(120, 200)`      -> true: asked 80 ms before the answer.
+ *       `pollIsStale(300, 200)`      -> false: asked after it, believe it.
+ *       `pollIsStale(200, 200)`      -> false: the same instant is not older.
+ *       `pollIsStale(0, 0)`          -> false: no seat change of our own has
+ *       ever been answered (the start value, and the value a FAILED release
+ *       falls back to) — every poll counts, the server's word stands.
+ *
+ *  [10] WHICH CLIP A STANDING FIGURE PLAYS, `standingClipFor(animation,
+ *       groundIdle)` — the expression the frame loop of `npcs.tick()` runs for
+ *       every figure, the avatar included: the GROUND has the first word, then
+ *       the server's activity clip, and a figure that has neither simply
+ *       stands.
+ *         ('sit', '')      -> 'sit'   the server's activity clip
+ *         (undefined, '')  -> 'idle'  nothing named: the figure stands
+ *         ('sit', 'tread') -> 'tread' the ground wins (standing in a lake)
+ *       This is why the stand-up clears `npc.animation` locally
+ *       (`setPlayerAnimation(name, null)`): with 'sit' still on the figure the
+ *       rule keeps answering 'sit' until a fresh poll arrives.
  */
 
 // Self-bundling guard — esbuild is required to resolve TypeScript imports
@@ -200,6 +231,27 @@ async function main() {
   checkTrue('a room in which nothing is free offers no prop',
     pickableProps([{ roomId: 'a', anchor: [1, 2], object: mesh }],
       propEntries, []).length === 0)
+
+  // --- the stale poll and the standing clip (plan-aufstehen.md) ------------
+  const { pollIsStale } = await import('../src/game/placement.ts')
+  const { standingClipFor } = await import('../src/game/walk.ts')
+
+  console.log('[9] a poll asked before our own seat change was answered is stale')
+  checkTrue('pollIsStale(1000, Infinity) — release in flight',
+    pollIsStale(1000, Infinity) === true)
+  checkTrue('pollIsStale(120, 200) — asked before the answer',
+    pollIsStale(120, 200) === true)
+  checkTrue('pollIsStale(300, 200) — asked after the answer',
+    pollIsStale(300, 200) === false)
+  checkTrue('pollIsStale(200, 200) — the same instant is not older',
+    pollIsStale(200, 200) === false)
+  checkTrue('pollIsStale(0, 0) — no seat change of our own, ever',
+    pollIsStale(0, 0) === false)
+
+  console.log('[10] the standing clip: ground first, then the server, then idle')
+  checkList("standingClipFor('sit', '') / (undefined, '') / ('sit', 'tread')",
+    [standingClipFor('sit', ''), standingClipFor(undefined, ''),
+     standingClipFor('sit', 'tread')], ['sit', 'idle', 'tread'])
 
   if (FAILED.length) {
     console.error(`\n${FAILED.length} check(s) FAILED: ${FAILED.join(', ')}`)

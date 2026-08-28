@@ -234,6 +234,30 @@ export function idleClip(idleAnim: string, scope: GroundScope): string {
 }
 
 /**
+ * WHICH CLIP A STANDING FIGURE ACTUALLY PLAYS — the one decision of every
+ * figure, the player's avatar included (`npcs.tick`).
+ *
+ * Three words in one order: the GROUND first (`idleClip` above, `''` where it
+ * says nothing), then the server's activity clip (§ A8/AV3D-6, the worldmap's
+ * `activity_animation`), and where neither names one the figure simply
+ * stands. There is no keyword guessing over the activity text any more — a
+ * pose comes from the catalog or not at all (plan-posen-plaetze.md, Task 13).
+ *
+ * @param animation the figure's server clip, `undefined` for none.
+ * @param groundIdle what the ground named, `''` for nothing.
+ *
+ * The avatar's stand-up clears `animation` locally the moment the key is
+ * pressed (`NpcManager.setPlayerAnimation`), because otherwise this rule keeps
+ * answering the seat's `sit` until the next poll (plan-aufstehen.md).
+ *
+ * PURE, and hand-derived in `client3d/scripts/smoke_places_client.mjs` [10].
+ */
+export function standingClipFor(animation: string | undefined,
+                                groundIdle: string | undefined): string {
+  return groundIdle || animation || 'idle';
+}
+
+/**
  * HOW DEEP the ground swallows the figure standing or moving on it (§ A9,
  * world metres) — the third field of the same contract, with the SAME reach.
  *

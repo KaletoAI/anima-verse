@@ -128,6 +128,34 @@ export function markerLiftPoint(at: FreePoint,
   return { x: at.x, z: at.z };
 }
 
+/**
+ * WHETHER A WORLDMAP POLL IS TOO OLD TO SAY ANYTHING ABOUT THE AVATAR'S SEAT
+ * (plan-aufstehen.md, plan-posen-plaetze.md § 4).
+ *
+ * The avatar sits down and stands up WITHOUT waiting for the round trip — the
+ * figure walks the moment the key is pressed. A poll asked before the server
+ * answered that seat change describes the world before it (the seat just
+ * stood up from, no seat where the click has just taken one), and every
+ * consumer of the payload has to ignore it wholesale: the place reconcile
+ * would snap the figure back into the chair, the position reconcile would
+ * walk it back to the chair's point, and the player branch of `npcs.update`
+ * would put the seat's `sit` clip back onto a figure that is already walking.
+ *
+ * @param polledAt   when the poll was ASKED (`performance.now()`).
+ * @param ownChangeAt when the server last ANSWERED a seat change of our own:
+ *                   `Infinity` while a release is in flight (nothing older
+ *                   than "never" can know about it), `0` when none has ever
+ *                   been answered — then no poll is ever stale.
+ *
+ * The same instant is not older, so a poll and an answer that share a
+ * millisecond are believed.
+ *
+ * PURE, and hand-derived in `client3d/scripts/smoke_places_client.mjs` [9].
+ */
+export function pollIsStale(polledAt: number, ownChangeAt: number): boolean {
+  return polledAt < ownChangeAt;
+}
+
 /** How much closer a slot has to be to BEAT the leader (metres², i.e. a
  *  micrometre of distance). Without it the documented "a tie falls to the
  *  first entry" would be decided by floating-point noise: two slots 0.7 m

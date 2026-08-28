@@ -3,7 +3,8 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
-  ghostCutY, groundWaterLevel, idleClip, moveClip, sinkForState, terrainPace, wadeGate,
+  ghostCutY, groundWaterLevel, idleClip, moveClip, sinkForState, standingClipFor,
+  terrainPace, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
 import { Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
@@ -452,6 +453,21 @@ export class NpcManager {
     npc.figure?.setLean(lean?.tilt ?? 0, lean?.roll ?? 0);
   }
 
+  /** The standing CLIP of the player-driven figure, `null` = none any more
+   *  (plan-aufstehen.md).
+   *
+   *  The clip is server state like the activity (`update()` writes it from the
+   *  worldmap row), and the avatar's stand-up is the one moment where the
+   *  client knows better than the last poll: the seat is released and the
+   *  figure walks, while the payload in flight still says `sit`. Clearing it
+   *  here makes the very next frame ask `standingClipFor` again and get
+   *  `idle`/`walk`; the poll after the server's answer writes the truth back. */
+  setPlayerAnimation(name: string, animation: string | null) {
+    const npc = this.npcs.get(name);
+    if (!npc) return;
+    npc.animation = animation || undefined;
+  }
+
   /** Show the goal of a click-to-walk order on the ground (E3-T4); null takes
    *  the marker away again (arrival, cancel, leaving the mode). The ring hangs
    *  in the manager's own group, NOT in a figure — it marks a place. */
@@ -582,8 +598,14 @@ export class NpcManager {
     npc.travelKey = '';
   }
 
-  /** Soll-Zustand aus dem Worldmap-Poll übernehmen. */
-  update(states: NpcState[]) {
+  /** Adopt the target state from the worldmap poll.
+   *
+   *  `playerStale` says that this payload was asked BEFORE the avatar's own
+   *  last seat change was answered (`pollIsStale`, plan-aufstehen.md): what it
+   *  says about the player-driven figure is then the state before that change
+   *  and is skipped. Every other figure is unaffected — the poll is only old
+   *  with respect to OUR OWN move. */
+  update(states: NpcState[], opts: { playerStale?: boolean } = {}) {
     const seen = new Set<string>();
     for (const st of states) {
       seen.add(st.char.name);
@@ -606,10 +628,17 @@ export class NpcManager {
       // would start it where the figure is not.
       this.adoptInteraction(npc, st);
       if (st.char.name === this.playerDriven) {
-        npc.activity = st.char.activity || '';
-        npc.animation = st.char.activity_animation || undefined;
-        npc.labelActivity.textContent = npc.activity;
-        npc.labelName.textContent = st.char.name;
+        // …and it applies only while the poll is NEWER than the avatar's own
+        // last seat change (`opts.playerStale`, plan-aufstehen.md): a payload
+        // asked before the stand-up still carries the seat's activity and its
+        // `sit` clip, and adopting it would animate the figure back into the
+        // chair for up to one poll while it is already walking.
+        if (!opts.playerStale) {
+          npc.activity = st.char.activity || '';
+          npc.animation = st.char.activity_animation || undefined;
+          npc.labelActivity.textContent = npc.activity;
+          npc.labelName.textContent = st.char.name;
+        }
         // …and for the same reason it carries no dead reckoning: a figure the
         // player steers walks on the player's input, not on a rate measured
         // between two polls of where the server thought it was.
@@ -1191,7 +1220,8 @@ export class NpcManager {
         standGm.water, standSink);
       npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
       if (!moving && npc.figure) {
-        // Stehend: Marker-Richtung > Nachbarn ansehen > Kamera-Grundrichtung
+        // Standing: the marker's facing > look at the neighbours > the
+        // camera's base direction
         const target = faceTo.get(npc.name);
         const dir = npc.face
           ? npc.face.clone()
@@ -1212,8 +1242,9 @@ export class NpcManager {
         // the activity text is gone (Task 13, plan-posen-plaetze.md), a pose
         // comes from the catalog or not at all. This is the ONE clip decision
         // of every figure, the player's avatar included: it is steered
-        // through this same loop.
-        const standingClip = npc.animation || 'idle';
+        // through this same loop. The order is `standingClipFor`'s, hand-checked
+        // in smoke_places_client.mjs [10] — the expression is not repeated here.
+        const standingClip = standingClipFor(npc.animation, standIdle);
         // The second argument is the gate of the clip ground offset (see the
         // traveller branch above): a clip the GROUND named — moving or
         // standing — has the ground as its reference, an activity clip does
@@ -1225,7 +1256,7 @@ export class NpcManager {
         // pair meet: root − sink is the surface the body rests on.
         npc.figure.play(
           moving ? moveClip(standGm.anim, !reckoning && dist > RUN_DISTANCE, standRaw.scope)
-            : (standIdle || standingClip), moving || !!standIdle, standSink);
+            : standingClip, moving || !!standIdle, standSink);
         npc.figure.update(dt);
         // The ring grows with the camera distance so NPCs stay findable from afar
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
