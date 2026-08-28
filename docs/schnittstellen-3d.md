@@ -1509,7 +1509,8 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   (Oberkante = Etagenboden + `PROP_CLEARANCE`).
   Wo ein Lauf steht, gewinnt er gegen den Fahrstuhl; der bleibt Fallback.
   Der Payload trägt den Lauf ZUSÄTZLICH als Daten (`stairs[]`) und schneidet
-  sein Loch in die Platten der Etage darüber (`plates[].holes`).
+  sein Loch in die Platten der Etage darüber (`plates[].holes`, je Platte auf
+  deren Kontur geclippt).
   Zahlen und Handrechnung: die Nachträge „Treppen" und „Treppen v2" am
   Dateiende.
 - Legacy: prozedurale Innen-Wände + Auto-Grid NUR, wenn kein Raum der
@@ -4355,12 +4356,16 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # AUSGESCHNITTEN sind (Nachtrag
                                            # "Treppen v2"): heute genau das
                                            # Treppenloch, sonst leer. Immer da,
-                                           # oft `[]`. Wer die Platte
-                                           # trianguliert, hängt sie als
-                                           # `Shape.holes` an; wer BEGEHBARKEIT
-                                           # aus `outline` ableitet, muss sie
-                                           # ABZIEHEN — sonst läuft man über
-                                           # den offenen Treppenschacht
+                                           # oft `[]`. Jeder Ring ist vom
+                                           # Server auf die Kontur SEINER
+                                           # Platte geclippt und liegt damit
+                                           # immer INNERHALB der `outline`.
+                                           # Wer die Platte trianguliert, hängt
+                                           # sie als `Shape.holes` an; wer
+                                           # BEGEHBARKEIT aus `outline`
+                                           # ableitet, muss sie ABZIEHEN —
+                                           # sonst läuft man über den offenen
+                                           # Treppenschacht
   walls:   [ { level, from: [x,z], to: [x,z], base_y, height, thickness,
                texture_kind?, glass?, leaf?, lintel?, opacity_role, room_id?,
                outward_normal: [nx,nz] } ],
@@ -8303,9 +8308,27 @@ Breite = max(STAIR_WIDTH_M, STAIR_PAD_M)
 
 — damit fehlt der Boden auch noch dort, wo die Figur von der letzten Stufe auf
 die Landung tritt. Die Ecken laufen im UHRZEIGERSINN in Kartensicht, wie jede
-gespeicherte Outline. Ein Loch, das über den Rand seiner Platte hinausragt,
-wird **nicht** geclippt: ein Lauf, der in eine Wand stößt, ist ein Autorenfehler,
-den der Composer nicht hinter dem Rücken des Autors repariert.
+gespeicherte Outline.
+
+**Jeder Ring ist auf die Kontur SEINER Platte geclippt** (Task 5, Befund der
+Task-2-Review): ein Ring, der über die Outline hinausragt, wird von
+`THREE.Shape` nicht auf die Überlappung reduziert, sondern lässt die Platte sich
+selbst schneiden und ÜBERLAUFEN — gemessen an einer 8×6-Platte mit einem Ring
+2 m über der Ostkante: Deckfläche 82 m² statt 46. Der Server schneidet deshalb
+Ring gegen Outline (Sutherland–Hodgman, der Ring als konvexes Clip-Polygon, die
+Outline als Subjekt; `scene_recipe.clip_ring_to_outline`), und was in `holes`
+steht, liegt **immer innerhalb der `outline`**. Bleibt nichts übrig (< 3 Ecken
+oder Fläche < 1e-6 m² — eine Outline, die den Ring nur BERÜHRT), trägt die
+Platte kein Loch. Ein Ring, der ganz innen liegt, kommt unverändert durch. Das
+Ergebnis ist wie jede Outline gerundet, im Uhrzeigersinn gewickelt und beginnt
+an seiner kleinsten Ecke — die Zahlen hängen also nicht davon ab, wo die
+Plattenkontur ihren ersten Punkt hat.
+
+Welche Läufe eine Platte HÖRT, entscheidet weiterhin die Mitte (Etagenplatte:
+alle ihrer Etage; Raumplatte: nur die, deren Mitte in ihr liegt); WIE VIEL vom
+Ring sie trägt, entscheidet der Clip. Ein Lauf, der in eine Wand stößt, bleibt
+ein Autorenfehler — der Composer repariert die Treppe nicht, er hält nur die
+Platte heil.
 
 Kommt ein Lauf auf Etage 0 an (Kellerlauf), passiert nichts: dort gibt es seit
 „Ein Boden" E5a gar keine Platte.
@@ -8353,6 +8376,8 @@ muss sich bewegen, sonst behält jeder Client seine alte Szene.
 | Pad-Abstand: Aufzugs-Pad −0,015, Treppen-Pads −0,015 / 3,065 / −2,935, ROTE PROBEN auf die alten +0,055 und −0,025 | ebenda **[5]/[5s]** |
 | Plattenloch: Etagenplatte 1 und der Raum, in dem die Mitte liegt, tragen das Rechteck; ein Nachbarraum derselben Etage nicht; eine Platte ohne Lauf trägt `[]`; ROTE PROBE: ein Kellerlauf schneidet nirgends | ebenda **[2]/[2s]** |
 | Zwei Läufe auf DIESELBE Etage: die Etagenplatte trägt beide Ringe in Autorenreihenfolge, der Raum nur den, dessen Mitte in ihm liegt | ebenda **[2s]** |
+| Clipping: der Ring x 2…6,85 kommt an der ±5-Kontur UND im Raum „hall" (x 1…5) als x 2…5 an; ein Raum, in dessen Ecke er ragt, trägt nur die Überlappung; ein Ring, der ganz innen liegt, bleibt unverändert; ROTE PROBE: keine Platte trägt das rohe Rechteck | ebenda **[2s]** |
+| `clip_ring_to_outline` von Hand: Identität (auch bei umgekehrt gewickelter Outline), Ost-Schnitt, Ecken-Schnitt, keine Überlappung → `[]`, blosse BERÜHRUNG → `[]`, Ergebnis im Uhrzeigersinn, Fläche 3,6 m² | ebenda **[2c]** |
 | `SCENE_RECIPE_VERSION` == 10 (die Konstante gehört dem ganzen Payload: seit dieser Runde hat der Marker-`diorama` sie weitergedreht) | ebenda **[7i]** |
 | Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
 | `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |

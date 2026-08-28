@@ -207,6 +207,12 @@ MIN_SEGMENT_M = 0.02
 # decimals a mirrored ``at`` is rounded to and orders of magnitude below any
 # gap an author can mean.
 _SAME_SPAN_M = 0.01
+# Clipping a stair hole against a plate outline (:func:`clip_ring_to_outline`).
+# ``CLIP_EPS`` is a doubled-triangle-area slack, so a corner exactly ON a clip
+# edge counts as inside; below ``CLIP_MIN_AREA`` an overlap is a TOUCH — an
+# outline that shares a line with the ring encloses no floor to cut away.
+CLIP_EPS = 1e-9
+CLIP_MIN_AREA = 1e-6
 # Elevator (§ A6) — metres.
 ELEVATOR_SHAFT_M = 1.8
 ELEVATOR_COLUMN_M = 0.14
@@ -428,6 +434,92 @@ def _point_in_polygon(x: float, z: float, poly: List[List[float]]) -> bool:
     return inside
 
 
+def clip_ring_to_outline(ring: List[List[float]],
+                         outline: List[List[float]]) -> List[List[float]]:
+    """The part of a hole ring that lies INSIDE one plate's outline (§ B1).
+
+    A PLATE MAY NOT CARRY A RING THAT HANGS OVER ITS EDGE. A renderer builds
+    the plate from outline + holes, and a hole reaching past the outline does
+    not shrink to the overlap there — it makes the polygon self-intersect and
+    the plate SPILLS (measured on Task 2: an 8 x 6 plate with a ring 2 m past
+    its east edge came out 82 m² instead of 46). So the composer clips, once,
+    here — geometry lives in exactly one place.
+
+    SUTHERLAND–HODGMAN, with the roles the way round that makes it exact: the
+    RING is the clip polygon (a rectangle, hence convex — the algorithm is
+    exact for a convex clipper) and the OUTLINE is the subject, which may be
+    any polygon a room or a contour was drawn as. A subject with a notch can
+    come back with a zero-width seam joining two lobes; that is the known
+    limit of the method and harmless for both consumers of a hole (a
+    triangulator and a point-in-polygon test).
+
+    Returned is one ring, or ``[]`` when there is no overlap worth cutting
+    (fewer than 3 corners, or an area under :data:`CLIP_MIN_AREA` — an
+    outline that merely TOUCHES the ring shares a line with it, not an area).
+    The result is rounded like every outline (:func:`_r`), wound CLOCKWISE in
+    map view (positive shoelace — the winding of every stored outline, no
+    matter which way the subject ran) and rotated to start at its smallest
+    corner. That last rule is what makes the no-op case a true no-op: a ring
+    that lies fully inside comes back byte for byte, whatever the outline
+    looks like.
+    """
+    from app.core.world_geometry import polygon_signed_area
+    if len(ring) < 3 or len(outline) < 3:
+        return []
+    # The ring may be authored either way round; the inside of a clip edge is
+    # the side its own winding puts there.
+    orient = 1.0 if polygon_signed_area(ring) >= 0 else -1.0
+    poly: List[Tuple[float, float]] = [(float(p[0]), float(p[1]))
+                                       for p in outline]
+    n = len(ring)
+    for i in range(n):
+        if len(poly) < 3:
+            return []
+        ax, az = float(ring[i][0]), float(ring[i][1])
+        bx, bz = float(ring[(i + 1) % n][0]), float(ring[(i + 1) % n][1])
+        ex, ez = bx - ax, bz - az
+        if ex == 0.0 and ez == 0.0:
+            continue                      # a doubled ring corner clips nothing
+
+        def _inside(px: float, pz: float) -> bool:
+            return orient * (ex * (pz - az) - ez * (px - ax)) >= -CLIP_EPS
+
+        out: List[Tuple[float, float]] = []
+        sx, sz = poly[-1]
+        s_in = _inside(sx, sz)
+        for cx, cz in poly:
+            c_in = _inside(cx, cz)
+            if c_in != s_in:
+                # Where the subject edge crosses the clip edge's LINE.
+                den = ex * (sz - cz) - ez * (sx - cx)
+                if den:
+                    t = (ex * (sz - az) - ez * (sx - ax)) / den
+                    out.append((sx + t * (cx - sx), sz + t * (cz - sz)))
+            if c_in:
+                out.append((cx, cz))
+            sx, sz, s_in = cx, cz, c_in
+        poly = out
+    pts = _dedup_ring([[_r(x), _r(z)] for x, z in poly])
+    if len(pts) < 3 or abs(polygon_signed_area(pts)) < CLIP_MIN_AREA:
+        return []
+    if polygon_signed_area(pts) < 0:
+        pts.reverse()
+    start = min(range(len(pts)), key=lambda k: (pts[k][0], pts[k][1]))
+    return pts[start:] + pts[:start]
+
+
+def _dedup_ring(pts: List[List[float]]) -> List[List[float]]:
+    """A ring without repeated neighbours — the clip walks a corner twice
+    wherever the subject grazes a clip edge."""
+    out: List[List[float]] = []
+    for p in pts:
+        if not out or out[-1] != p:
+            out.append(p)
+    while len(out) > 1 and out[0] == out[-1]:
+        out.pop()
+    return out
+
+
 def _bbox_inside(outline: List[List[float]],
                  contour: List[List[float]]) -> bool:
     """Does an outline lie fully inside the building contour?
@@ -574,25 +666,36 @@ def level_plate_kind(level: int, level_floors: Any, ground_kind: str) -> str:
 
 
 def _plate_holes(flights: List[Dict[str, Any]], level: int,
-                 outline: Optional[List[List[float]]] = None
-                 ) -> List[List[List[float]]]:
+                 outline: List[List[float]],
+                 *, by_centre: bool) -> List[List[List[float]]]:
     """The stair holes ONE plate carries — the rectangles of every flight that
-    ARRIVES on this storey (§ B1, Nachtrag "Treppen (v2)").
+    ARRIVES on this storey, each CLIPPED to the plate's own outline (§ B1,
+    Nachtrag "Treppen (v2)").
 
-    A level plate takes them all (``outline`` None); a room plate takes only
-    those whose CENTRE lies in its own polygon, so the flight opens the floor
-    of the room it comes up in and not of its neighbour.
+    TWO RULES, and they answer two different questions. WHICH flights a plate
+    hears: a level plate takes every one of its storey (``by_centre`` False),
+    a room plate only those whose CENTRE lies in its polygon, so the flight
+    opens the floor of the room it comes up in and not of its neighbour. HOW
+    MUCH of a ring a plate carries: exactly the part inside its outline
+    (:func:`clip_ring_to_outline`) — a stairwell that reaches into a wall is an
+    authoring error, but a plate may never carry a ring hanging over its edge,
+    because that plate would spill instead of shrinking to the overlap.
 
-    A hole that hangs over the edge of its plate is NOT clipped: a flight
-    reaching into a wall is an authoring error the composer does not repair
-    behind the author's back, and both a triangulator and a point test carry
-    the ring either way.
+    A ring wholly inside its plate passes through untouched, so the ordinary
+    stairwell in the middle of a room is the identity case.
     """
-    return [f["hole"]["ring"] for f in flights
-            if f["hole"]["level"] == level
-            and (outline is None
-                 or _point_in_polygon(f["hole"]["center"][0],
-                                      f["hole"]["center"][1], outline))]
+    holes: List[List[List[float]]] = []
+    for flight in flights:
+        hole = flight["hole"]
+        if hole["level"] != level:
+            continue
+        if by_centre and not _point_in_polygon(hole["center"][0],
+                                               hole["center"][1], outline):
+            continue
+        ring = clip_ring_to_outline(hole["ring"], outline)
+        if ring:
+            holes.append(ring)
+    return holes
 
 
 def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
@@ -637,7 +740,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     A PLATE MAY HAVE HOLES since "Treppen v2": every plate carries a ``holes``
     list of rings — empty on all but the floors a staircase arrives on, where
     the flight's footprint plus its head pad is missing so one can look up the
-    stairwell and walk out of it (:func:`_plate_holes`).
+    stairwell and walk out of it (:func:`_plate_holes`). Every ring is clipped
+    to the plate it belongs to, so a hole never hangs over an outline.
     """
     plates: List[Dict[str, Any]] = []
     contour = _outline_world(map3d) or _drawn_boundary(map3d)
@@ -650,7 +754,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
             plates.append({
                 "level": level,
                 "outline": contour,
-                "holes": _plate_holes(flights, level),
+                "holes": _plate_holes(flights, level, contour,
+                                      by_centre=False),
                 "top_y": _r(level * storey + LEVEL_PLATE_TOP),
                 "thickness": LEVEL_PLATE_THICKNESS,
                 "texture_kind": level_plate_kind(level, level_floors,
@@ -668,7 +773,8 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
         entry: Dict[str, Any] = {
             "level": level,
             "outline": outline,
-            "holes": _plate_holes(flights, level, outline),
+            "holes": _plate_holes(flights, level, outline,
+                                  by_centre=True),
             "top_y": _r(_room_floor_y(recipe, storey) + _plate_top(recipe)),
             "thickness": 0.0 if outdoor else ROOM_PLATE_THICKNESS,
             "opacity_role": _opacity_role(level, ground),

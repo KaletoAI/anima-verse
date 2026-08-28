@@ -232,6 +232,14 @@ TERRACE = {"id": "terrace", "name": "Terrace", "layout": {
 HALL = {"id": "hall", "name": "Hall", "layout": {
     "x": 1.0, "y": -4.0, "w": 4.0, "d": 4.0, "level": 1,
     "surfaces": {"floor": "stone"}}}
+# A storey-1 room the flight's hole reaches INTO A CORNER OF — world x 3…5,
+# z −2.2…0. The hole of [5s] is x 2…6.85, z −2.6…−1.4, so the room's
+# north-west corner (3, −2.2) sits inside it and the ring survives only as
+# x 3…5, z −2.2…−1.4. Its centre (4.425, −2) is in the room, so the room owns
+# the hole — and still may not carry a ring that hangs over three of its edges.
+NOOK = {"id": "nook", "name": "Nook", "layout": {
+    "x": 3.0, "y": -2.2, "w": 2.0, "d": 2.2, "level": 1,
+    "surfaces": {"floor": "stone"}}}
 
 
 def test_plates() -> None:
@@ -301,15 +309,33 @@ def test_plates() -> None:
     #   [[2, −2.6], [6.85, −2.6], [6.85, −1.4], [2, −1.4]]
     # Its centre is at + dir·(4.85/2) = (4.425, −2): inside the ±5 contour and
     # inside "hall" (x 1…5, z −4…0), outside "up" and "terrace".
-    HOLE = [[2.0, -2.6], [6.85, -2.6], [6.85, -1.4], [2.0, -1.4]]
+    RING = [[2.0, -2.6], [6.85, -2.6], [6.85, -1.4], [2.0, -1.4]]
+    # SINCE TASK 5 EVERY PLATE CLIPS THAT RING TO ITS OWN OUTLINE (a ring that
+    # hangs over the edge makes the plate self-intersect, review finding of
+    # Task 2). This ring runs to x 6.85, the contour ends at x 5 and "hall"
+    # ends at x 5 as well, so BOTH plates carry the same clipped rectangle:
+    #   ring ∩ (x ≤ 5) = x 2…5, z −2.6…−1.4
+    # written from its smallest corner and clockwise like every stored outline:
+    HOLE = [[2.0, -2.6], [5.0, -2.6], [5.0, -1.4], [2.0, -1.4]]
     hs = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90}],
-                     [UPPER, TERRACE, HALL])
+                     [UPPER, TERRACE, HALL, NOOK])
     by_room = {q.get("room_id") or "": q for q in hs["plates"]}
-    check("the level-1 contour plate is cut open",
+    check("the level-1 contour plate is cut open — CLIPPED to the contour",
           by_room[""].get("holes") == [HOLE], str(by_room[""].get("holes")))
-    check("...and so is the room the hole lands in",
+    check("...and so is the room the hole lands in, clipped to ITS outline",
           by_room["hall"].get("holes") == [HOLE],
           str(by_room["hall"].get("holes")))
+    check("red: no plate carries the raw ring that pokes 1.85 m past x = 5",
+          all(RING not in (q.get("holes") or []) for q in hs["plates"]),
+          str([q.get("holes") for q in hs["plates"]]))
+    # THE CORNER CASE, by hand: "nook" is x 3…5, z −2.2…0 and owns the hole
+    # (centre 4.425, −2). Clipping the ring against its four edges keeps
+    # x 3…5 (west + east) and z −2.2…−1.4 (south + north) — a smaller
+    # rectangle, 2.0 × 0.8 m.
+    check("a room whose CORNER the ring cuts keeps only the overlap",
+          by_room["nook"].get("holes")
+          == [[[3.0, -2.2], [5.0, -2.2], [5.0, -1.4], [3.0, -1.4]]],
+          str(by_room["nook"].get("holes")))
     check("a room on the same storey that does NOT contain it keeps its floor",
           by_room["up"].get("holes") == []
           and by_room["terrace"].get("holes") == [],
@@ -326,6 +352,9 @@ def test_plates() -> None:
     # x 1…5, "up" x −4…0 / z −4…−1, "terrace" x 1…3 / z 1…3. So the level
     # plate carries BOTH rings in authoring order and "hall" still only the
     # first — which is exactly the difference between the two rules.
+    # This second ring lies WHOLLY inside the ±5 contour (x −4…0.85,
+    # z 2.4…3.6), so the clip leaves it alone: one list, one clipped ring and
+    # one untouched.
     HOLE2 = [[-4.0, 2.4], [0.85, 2.4], [0.85, 3.6], [-4.0, 3.6]]
     h2 = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90},
                       {"at": [-4.0, 3.0], "from_level": 0, "dir_deg": 90}],
@@ -341,6 +370,17 @@ def test_plates() -> None:
     check("still not one plate on storey 0, where both flights START",
           not [q for q in h2["plates"] if q["level"] == 0],
           str([q.get("room_id") for q in h2["plates"] if q["level"] == 0]))
+    # A FLIGHT THAT FITS IS NOT TOUCHED. Moved to at = (−2, −2), the same
+    # flight's ring is x −2…2.85, z −2.6…−1.4 — every corner inside the ±5
+    # contour, so the contour plate carries the ring byte for byte. Its centre
+    # (0.425, −2) lies in no room ("hall" starts at x 1, "up" ends at x 0), so
+    # no room plate takes it.
+    FITS = [[-2.0, -2.6], [2.85, -2.6], [2.85, -1.4], [-2.0, -1.4]]
+    hf = stair_scene([{"at": [-2.0, -2.0], "from_level": 0, "dir_deg": 90}],
+                     [UPPER, TERRACE, HALL])
+    fit = {q.get("room_id") or "": q for q in hf["plates"]}
+    check("a ring that lies fully inside comes back UNCLIPPED — the same ring",
+          fit[""]["holes"] == [FITS], str(fit[""]["holes"]))
     # A BASEMENT FLIGHT arrives on storey 0, which is the terrain: nothing to
     # cut, and above all no hole leaking into the storey-1 plates.
     hb = stair_scene([{"at": [2.0, -2.0], "from_level": -1, "dir_deg": 90}],
@@ -348,6 +388,47 @@ def test_plates() -> None:
     check("red: a flight arriving on storey 0 cuts nothing anywhere",
           all(q.get("holes") == [] for q in hb["plates"]),
           str([(q.get("room_id"), q.get("holes")) for q in hb["plates"]]))
+
+    print("\n[2c] clip_ring_to_outline — the clip itself, by hand")
+    # THE PURE FUNCTION (Task 5). Sutherland–Hodgman with the RING as the
+    # convex clip polygon and the plate outline as the subject. Every case is
+    # derived from the ring of [5s], x 2…6.85 / z −2.6…−1.4, area 5.82 m².
+    clip = scene_recipe.clip_ring_to_outline
+    BIG = [[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]]
+    check("a ring inside the outline is returned unchanged",
+          clip(RING, BIG) == RING, str(clip(RING, BIG)))
+    check("...and so it is when the outline runs the OTHER way round",
+          clip(RING, list(reversed(BIG))) == RING,
+          str(clip(RING, list(reversed(BIG)))))
+    check("the ±5 contour cuts it at its east edge: x 2…5",
+          clip(RING, [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]])
+          == HOLE, str(clip(RING, [[-5.0, -5.0], [5.0, -5.0],
+                                   [5.0, 5.0], [-5.0, 5.0]])))
+    check("a corner-crossing room keeps the overlap rectangle",
+          clip(RING, [[3.0, -2.2], [5.0, -2.2], [5.0, 0.0], [3.0, 0.0]])
+          == [[3.0, -2.2], [5.0, -2.2], [5.0, -1.4], [3.0, -1.4]],
+          str(clip(RING, [[3.0, -2.2], [5.0, -2.2], [5.0, 0.0], [3.0, 0.0]])))
+    check("no overlap at all → NO hole",
+          clip(RING, [[-4.0, -4.0], [0.0, -4.0], [0.0, -1.0], [-4.0, -1.0]])
+          == [], str(clip(RING, [[-4.0, -4.0], [0.0, -4.0],
+                                 [0.0, -1.0], [-4.0, -1.0]])))
+    # TOUCHING IS NOT OVERLAPPING: an outline that starts exactly on the ring's
+    # east edge shares a 1.2 m line with it and encloses 0 m² of it.
+    check("an outline that only TOUCHES the ring → no hole",
+          clip(RING, [[6.85, -4.0], [9.0, -4.0], [9.0, 0.0], [6.85, 0.0]])
+          == [], str(clip(RING, [[6.85, -4.0], [9.0, -4.0],
+                                 [9.0, 0.0], [6.85, 0.0]])))
+    # A hole is a stored outline like any other, so it is CLOCKWISE in map
+    # view — positive shoelace (``world_geometry.polygon_signed_area``).
+    from app.core.world_geometry import polygon_signed_area
+    check("every clipped ring is wound CLOCKWISE, like the outlines",
+          polygon_signed_area(HOLE) > 0
+          and polygon_signed_area(clip(RING, list(reversed(BIG)))) > 0,
+          f"{polygon_signed_area(HOLE)}")
+    check("...and its area is the overlap: 3.0 x 1.2 = 3.6 m²",
+          near(polygon_signed_area(HOLE), 3.6), str(polygon_signed_area(HOLE)))
+    check("a degenerate outline cannot cut anything", clip(RING, []) == []
+          and clip([], BIG) == [])
 
     print("\n[2b] floor_plan — the storey-0 rooms as DATA")
     plan = {f["room_id"]: f for f in sc["floor_plan"]}
