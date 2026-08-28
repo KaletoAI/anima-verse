@@ -24,7 +24,8 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
-  anchorFigureBind, figureRootY, pairPoints, pairYaw,
+  anchorFigureBind, clipHipsDrop, figureRootY, hipsTrackMedian,
+  pairPoints, pairYaw,
   applyClipOutline, applyDepthCut, applySlotMaterials,
   disposeClipMaterials, disposeCutMaterials, disposeSlotMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
@@ -220,7 +221,11 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     clips: Array<{ kind: string; role?: string; set: string; url: string }>
     pairs: Record<string, { geometry?: { roles?: Record<string, { anchor_xz_m?: [number, number] }> } }> }>(
       { status: 'idle', clips: [], pairs: {} })
-  const clipCacheRef = useRef<Map<string, { clip: AnimationClip; restObj: Object3D } | 'loading' | 'missing'>>(new Map())
+  // `hipsMedian` is the clip's own hips height in CLIP units, measured before
+  // the position track is dropped — the figure is lowered by it again in
+  // `placeFigure` (`clipHipsDrop`).
+  const clipCacheRef = useRef<Map<string, { clip: AnimationClip; restObj: Object3D
+    hipsMedian: number | null } | 'loading' | 'missing'>>(new Map())
   const mixersRef = useRef<AnimationMixer[]>([])
   const clockRef = useRef<Clock | null>(null)
 
@@ -374,11 +379,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         const clipObj = await new FBXLoader().loadAsync(pick.url)
         const clip = clipObj.animations?.[0]
         if (!clip) throw new Error('no track')
+        // The hips height the clip is played AT — measured BEFORE the track
+        // goes, because dropping the track drops that information with it
+        // (see `placeFigure`).
+        const hipsMedian = hipsTrackMedian(clip)
         // Play IN PLACE — drop the root/hips position track (clip units are
         // Mixamo centimetres; it would fling the scaled figure around).
         clip.tracks = clip.tracks.filter(
           (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
-        clipCacheRef.current.set(cacheKey, { clip, restObj: clipObj })
+        clipCacheRef.current.set(cacheKey, { clip, restObj: clipObj, hipsMedian })
       } catch {
         clipCacheRef.current.set(cacheKey, 'missing')
       }
@@ -697,6 +706,21 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // surface is what `root_offset` says (see the marker loop below), and
         // measuring the pose here would count that drop a second time.
         anchorFigureBind(THREE, pivot, figBase)
+        // …but the clip's OWN hips height is the second, independent term,
+        // and it went out with the position track above. Put it back: without
+        // it sit, sleep and idle are all drawn at the same bind height and a
+        // seated figure floats 0.43 m over its marker. `standRef` is the
+        // library's standing reference (the idle clip's hips median) through
+        // this file's own loader — `ensureClip` answers null on the first
+        // pass and bumps a rebuild when the clip is in, like every other clip
+        // here. Applied to the PIVOT, inside `fig`: the label stays on the
+        // marker, and a tilt/roll turns the drop with the body, the way the
+        // 3D client's retargeted hips track does.
+        const standRef = ensureClip('idle')?.hipsMedian ?? null
+        const hipsBindY = modelHips
+          ? modelHips.getWorldPosition(new THREE.Vector3()).y
+          : null
+        pivot.position.y -= clipHipsDrop(hipsBindY, anim.hipsMedian, standRef)
         const mixer = new THREE.AnimationMixer(inst)
         mixer.clipAction(anim.clip).play()
         mixer.update(0)

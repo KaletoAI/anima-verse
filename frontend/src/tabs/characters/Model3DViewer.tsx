@@ -147,9 +147,13 @@ const loadClip = (kind: string, role = '') => {
 let _standRefPromise: Promise<number | null> | null = null
 /** The STANDING hips height of the clip library, in clip units — the hips
  *  median of the `idle` clip, the reference every other clip's height is read
- *  against (the same choice `client3d` makes). One load per session; `null`
- *  when there is no idle clip, and then no figure is lowered at all rather
- *  than lowered against a guess. */
+ *  against. Today the same number `client3d` uses, but not the same
+ *  derivation: the client takes the median of the confirmed STANDING CLUSTER
+ *  over all clips it loads (`figures.adaptExternalClips`), which for the
+ *  served library is the idle median (110.13). A viewer that loads ONE clip
+ *  has no cluster to confirm, so it names the standing clip instead. One load
+ *  per session; `null` when there is no idle clip, and then no figure is
+ *  lowered at all rather than lowered against a guess. */
 export const standHipsRef = (): Promise<number | null> => {
   if (!_standRefPromise) {
     _standRefPromise = loadClip('idle').then((anim) => {
