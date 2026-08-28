@@ -63,6 +63,11 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   const [busy, setBusy] = useState('')
   /** The kind the polygon tool is drawing for ('' = not drawing). */
   const [drawKind, setDrawKind] = useState('')
+  /** Is the viewer in the FRONT VIEW (§ B1)? The panel holds the mode, not the
+   *  viewer, because it is what a drawn ring depends on: the server splits
+   *  against the projection the ring was drawn in, so drawing is only offered
+   *  head-on. On by default — this panel opens as the authoring view. */
+  const [frontal, setFrontal] = useState(true)
   /** Which picture variant the viewer is previewing (null = the bare mesh). */
   const [preview, setPreview] = useState<number | null>(null)
   /** The variant the dialog is editing (null = a new one, undefined = closed). */
@@ -85,8 +90,12 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   useEffect(() => { void load() }, [load, reloadKey])
   // A prop switch drops every view state — the previous prop's variant index
   // means something else here.
-  useEffect(() => { setPreview(null); setDrawKind(''); setEditing(undefined) },
-    [prop.id])
+  useEffect(() => {
+    setPreview(null); setDrawKind(''); setEditing(undefined); setFrontal(true)
+  }, [prop.id])
+  // Turning the front view off ends a running gesture: the points already
+  // clicked belong to the old projection and would ring a different surface.
+  useEffect(() => { if (!frontal) setDrawKind('') }, [frontal])
 
   const areas = useMemo(() => info?.areas || [], [info])
   const outlines = useMemo(() => areas.map((a) => ({
@@ -276,7 +285,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
         {drawKind ? (
           <>
             <span className="ga-hint">
-              {t('Click the outline of the surface, double-click to close, Escape cancels.')}
+              {t('Click the outline of the surface; click the first point again to close it, Escape cancels.')}
             </span>
             <button type="button" className="ga-btn ga-btn-sm"
               onClick={() => setDrawKind('')}>{t('Cancel')}</button>
@@ -284,8 +293,10 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
         ) : (
           <>
             <select className="ga-input" style={{ width: 130 }} value=""
-              disabled={!canRun}
-              title={t('Draw a surface by hand: pick its kind, then ring it on the front view.')}
+              disabled={!canRun || !frontal}
+              title={frontal
+                ? t('Draw a surface by hand: pick its kind, then ring it on the front view.')
+                : t('Switch the front view back on first — a surface is ringed straight on, and the server splits against exactly that view.')}
               onChange={(e) => { if (e.target.value) setDrawKind(e.target.value) }}>
               <option value="">{t('✏ Draw area…')}</option>
               {AREA_KINDS.map((k) => (
@@ -304,7 +315,8 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
           format="glb"
           height={340}
           rotation={prop.rotation}
-          frontal
+          frontal={frontal}
+          onFrontalChange={setFrontal}
           areaOutlines={outlines}
           meshLayout={info?.mesh_layout}
           drawing={!!drawKind}

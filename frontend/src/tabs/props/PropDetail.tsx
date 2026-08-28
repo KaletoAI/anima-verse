@@ -666,15 +666,14 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   if (tagsDraft !== tagsNow) queueGeneral({ tags: tagsDraft })
                 }} />
             </Field>
-          </div>
-
-          {/* The one number that describes the WHOLE object rather than one
-              of its versions: how hard it bends in the wind. Size, subject,
-              sink and markers moved into the variants (2026-08-25). */}
-          <div className="ga-form-row">
-            <Field label={t('Sway factor')} compact>
+            {/* The one number that describes the WHOLE object rather than one
+                of its versions: how hard it bends in the wind. It rides the
+                same row as the other prop-wide fields instead of holding a
+                line of its own for one narrow number (§ B1). Size, subject,
+                sink and markers moved into the variants (2026-08-25). */}
+            <Field label={t('Sway factor')}>
               <input className="ga-input" type="number" min={0} max={1} step={0.05}
-                style={{ width: 90 }} value={swayDraft}
+                value={swayDraft}
                 title={t('How much of its ground’s wind this prop takes part in when it is scattered over a painted area: the terrain kind says how far things bend there, this multiplies it. 1 = the full amount, 0 = stands still whatever blows, empty = 1. Very small products stand still as well — the deflection only starts at about 0.005 m, so on a ground that bends 0.06 m every factor up to 0.08 comes to a standstill.')}
                 onChange={(e) => setSwayDraft(e.target.value)}
                 onBlur={commitSway}

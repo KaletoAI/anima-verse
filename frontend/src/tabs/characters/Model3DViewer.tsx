@@ -22,6 +22,8 @@ import { buildMeasureAids, disposeAids, referenceFigure,
   type MeasureKey } from '../world/measureKit'
 import { alignMeshLayout, meshLayoutOf, pointInPolygon,
   polygonArea } from '../props/faceSelect'
+import { closesOnFirstPoint, shouldRefit } from '../props/viewerMath'
+import { CLOSE_TOL_PX } from '../world/planGeometry'
 import { areaKindOf } from '../props/propTypes'
 import type { AreaOutline, LeafBbox, MeshLayoutEntry,
   PropSlotValues } from '../props/propTypes'
@@ -44,13 +46,6 @@ interface GltfParser {
  *  panel is ringed in a handful of clicks — 64 is generous and keeps the
  *  per-triangle test cheap. */
 const MAX_POLYGON_POINTS = 64
-
-/** How far apart the two presses of a DOUBLE-click may land, in pixels. The
- *  SVG has no double-click of its own: both presses arrive as ordinary clicks
- *  and each drops a point, so by the time `dblclick` fires the ring carries
- *  one point too many. A trailing point this close to its predecessor IS the
- *  second press and goes again (the map's rule, `MapTab.DBLCLICK_MERGE_PX`). */
-const DBLCLICK_MERGE_PX = 8
 
 // ── Shared marker-figure sources (module cache — one fetch per session,
 // every viewer instance clones from these) ──
@@ -180,7 +175,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   groundTextureUrl, placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint,
-  frontal = false, areaOutlines, slots, meshLayout, drawing = false,
+  frontal = false, onFrontalChange, areaOutlines, slots, meshLayout, drawing = false,
   onPolygonFaces, leafBbox }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
@@ -254,13 +249,19 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  fractions — the floor-plan-style marker placement. */
     picking?: boolean
     onPickPoint?: (at: [number, number, number]) => void
-    /** THE FRONT VIEW (spec-picture-props.md § 4): the model straight on,
-     *  centred, filling the frame — the authoring view of a flat panel, and
-     *  the one the polygon tool is drawn on. It is the framing model mode
-     *  already opens with; this only makes it a stated MODE, so the viewer
-     *  offers "Front view" to get back to it after an orbit. Model mode only.
-     */
+    /** THE FRONT VIEW (spec-picture-props.md § 4, spec-bild-props-v2 § B1):
+     *  the model straight on, centred, filling the frame — the authoring view
+     *  of a flat panel, and the one the polygon tool is drawn on. It is a
+     *  MODE, not a framing: while it is on, the orbit is LOCKED (zoom and pan
+     *  stay) so a ring can never be drawn on a view the server's projection
+     *  does not share. Model mode only. */
     frontal?: boolean
+    /** Offering this makes the front view a switchable mode: the viewer then
+     *  shows its own "Front view" / "Reset view" controls and reports every
+     *  press here, so the OWNER holds the state and can gate what only works
+     *  head-on (the polygon tool). Without it nothing changes for a caller —
+     *  no buttons, and the framing stays the straight-on one it always was. */
+    onFrontalChange?: (on: boolean) => void
     /** Outlines of the prop's key surfaces, in glTF y-up MODEL space (the
      *  server computed them at the split — the client draws, never measures).
      *  One `LineSegments` per area, coloured by KIND out of `AREA_KINDS`, hung
@@ -339,6 +340,24 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   /** Re-frames the model-mode camera (model + scale kit). */
   const refitFnRef = useRef<(() => void) | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // ── The front view as a MODE (§ B1) ──
+  const frontalRef = useRef(frontal)
+  frontalRef.current = frontal
+  /** Does the CALLER offer the toggle? Only then is "not frontal" a stated
+   *  mode with a framing of its own — every viewer that never heard of the
+   *  toggle keeps the straight-on framing it has always opened with. */
+  const frontalModeRef = useRef(!!onFrontalChange)
+  frontalModeRef.current = !!onFrontalChange
+  /** Locks / unlocks the orbit for the mode — set by the loader, because it
+   *  needs the live controls. */
+  const frontalFnRef = useRef<((on: boolean) => void) | null>(null)
+  /** Where the camera stood, and how big the model under it was. Survives the
+   *  loader effect, which is the whole point: a model switch inside one viewer
+   *  (a re-split frame, a picture variant) must not yank the camera back to
+   *  the default view — only a model of a different SIZE does (`shouldRefit`).
+   *  Model mode only; the tile mode frames its stage every time. */
+  const camStateRef = useRef<{ pos: [number, number, number]
+    target: [number, number, number]; zoom: number; radius: number } | null>(null)
   // ── Picture areas: outlines, the assembly preview, the polygon tool ──
   const areaOutlinesRef = useRef(areaOutlines)
   areaOutlinesRef.current = areaOutlines
@@ -369,9 +388,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const [loadedLayout, setLoadedLayout] = useState<MeshLayoutEntry[] | null>(null)
   /** The ring being drawn, in canvas pixels ([] = nothing started). */
   const [poly, setPoly] = useState<Array<[number, number]>>([])
-  /** The same ring, read by the double-click handler: `dblclick` arrives as
-   *  its own event after both clicks, and reading it off state would race the
-   *  render they queued. */
+  /** The same ring, read by the click handler: a click decides against the
+   *  ring AS IT STANDS, and reading it off state would race the render its
+   *  predecessor queued. */
   const polyRef = useRef<Array<[number, number]>>([])
   polyRef.current = poly
   /** Where the cursor is while a ring is open — the rubber band. */
@@ -402,9 +421,13 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [drawing])
-  // Switching the front view on re-frames straight away — it is a MODE, not a
-  // one-off framing at load.
-  useEffect(() => { if (frontal) refitFnRef.current?.() }, [frontal])
+  // The front view is a MODE: switching it on locks the orbit (zoom and pan
+  // stay) and re-frames the model straight on ONCE. Switching it off only
+  // hands the rotation back — the camera keeps standing where it is.
+  useEffect(() => {
+    frontalFnRef.current?.(frontal)
+    if (frontal) refitFnRef.current?.()
+  }, [frontal])
 
   /** Where a pointer event landed inside the overlay, in canvas pixels. */
   const atOverlay = (e: { clientX: number; clientY: number
@@ -413,34 +436,46 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     return [e.clientX - r.left, e.clientY - r.top]
   }
 
-  /** Click = one point of the ring. */
-  const addPolyPoint = (e: ReactMouseEvent<SVGSVGElement>) => {
-    const at = atOverlay(e)
-    setPoly((cur) => (cur.length >= MAX_POLYGON_POINTS ? cur : [...cur, at]))
-  }
-
   /**
-   * Double-click closes the ring and hands over the triangles.
+   * Closes the ring and hands the triangles over.
    *
-   * Both presses already dropped a point (see `DBLCLICK_MERGE_PX`), so the
-   * trailing one goes again when it sits on its predecessor. Below three
-   * points — or with no enclosed area at all — nothing is reported: an empty
-   * selection is a refusal, and a scribble is not a polygon.
+   * Below three points — or with no enclosed area at all — nothing is
+   * reported: an empty selection is a refusal, and a scribble is not a
+   * polygon.
    */
-  const closePoly = (e: ReactMouseEvent<SVGSVGElement>) => {
-    const r = e.currentTarget.getBoundingClientRect()
-    const ring = [...polyRef.current]
-    if (ring.length > 3) {
-      const [ax, ay] = ring[ring.length - 2]
-      const [bx, by] = ring[ring.length - 1]
-      if (Math.hypot(ax - bx, ay - by) <= DBLCLICK_MERGE_PX) ring.pop()
-    }
+  const finishPoly = (ring: Array<[number, number]>, w: number, h: number) => {
     setPoly([])
     setPolyCursor(null)
     if (ring.length < 3 || polygonArea(ring) <= 0) return
-    const faces = selectFacesRef.current?.(ring, r.width, r.height) || []
+    const faces = selectFacesRef.current?.(ring, w, h) || []
     onPolygonFacesRef.current?.(faces)
   }
+
+  /**
+   * One click: close the ring, or drop another point.
+   *
+   * THE MAP'S GESTURE (`MapTab.addDraftPoint`): a ring closes by clicking its
+   * FIRST point again, within `CLOSE_TOL_PX` pixels — there is no double-click
+   * here, because on an SVG both presses of one arrive as ordinary clicks and
+   * each would drop a point of its own.
+   */
+  const addPolyPoint = (e: ReactMouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    const at = atOverlay(e)
+    const cur = polyRef.current
+    if (closesOnFirstPoint(cur, at, CLOSE_TOL_PX)) {
+      finishPoly([...cur], r.width, r.height)
+      return
+    }
+    if (cur.length >= MAX_POLYGON_POINTS) return
+    setPoly([...cur, at])
+  }
+
+  /** Is the cursor standing ON the first point, i.e. would this click close
+   *  the ring? Drawn as a snap highlight plus the closing segment, so the
+   *  gesture is visible BEFORE it is committed. */
+  const closesHere = !!polyCursor
+    && closesOnFirstPoint(poly, polyCursor, CLOSE_TOL_PX)
 
   // Live overlay refresh (markers moved/added, dims typed, a sink dialled)
   // without reload — a typed number must show up while it is being typed.
@@ -545,6 +580,32 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.enableDamping = true
         disposers.push(() => controls.dispose())
+
+        // THE FRONT VIEW'S LOCK (§ B1). Rotation off, zoom and pan on — the
+        // admin still has to get close to a panel and shift it into the
+        // middle, only the ANGLE is fixed. `enableRotate = false` alone would
+        // leave the left button (and the one-finger drag) doing nothing at
+        // all, so both are handed to the pan that is still allowed.
+        const applyFrontal = (on: boolean) => {
+          controls.enableRotate = !on
+          controls.enableZoom = true
+          controls.enablePan = true
+          controls.mouseButtons = {
+            LEFT: on ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+            MIDDLE: THREE.MOUSE.DOLLY,
+            RIGHT: THREE.MOUSE.PAN,
+          }
+          controls.touches = {
+            ONE: on ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE,
+            TWO: THREE.TOUCH.DOLLY_PAN,
+          }
+          controls.update()
+        }
+        applyFrontal(frontalRef.current)
+        frontalFnRef.current = applyFrontal
+        disposers.push(() => {
+          if (frontalFnRef.current === applyFrontal) frontalFnRef.current = null
+        })
 
         const ext = (format || url.split('.').pop() || '').toLowerCase()
         let object: Object3D
@@ -977,16 +1038,56 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
                 kitH - (groundOffsetRef.current || 0) * metre)
             }
             const dist = (maxDim / 2) / Math.tan((Math.PI * camera.fov) / 360)
-            camera.position.set(0, 0, dist * 1.6)
+            const back = dist * 1.6
+            // WHICH view is reset to depends on the mode. Straight on is the
+            // authoring view — and the only framing a viewer without the
+            // toggle has ever had, so nothing changes for those. With the
+            // toggle OFF the reset is a three-quarter view instead: rotation
+            // is free there, and a solid object only reads as a body from an
+            // angle. Same distance either way.
+            if (frontalRef.current || !frontalModeRef.current) {
+              camera.position.set(0, 0, back)
+            } else {
+              camera.position.copy(new THREE.Vector3(0.6, 0.45, 0.9)
+                .normalize().multiplyScalar(back))
+            }
             camera.near = dist / 100
             camera.far = dist * 100
             camera.updateProjectionMatrix()
             controls.target.set(0, 0, 0)
             controls.update()
           }
+          // How big this model is, as ONE number: the radius of its bounding
+          // sphere. It is the yardstick for whether the next model to load is
+          // still the same object (`shouldRefit`).
+          const radius = size.length() / 2
+          const prevCam = camStateRef.current
           fitView()
-          // Only the kit switch refits — a marker edit or a typed dim must
-          // never yank a camera the user has orbited into place.
+          // THE CAMERA SURVIVES A MODEL SWITCH (§ B1): a re-split frame or a
+          // picture variant is the same object in another version, and
+          // re-framing it would throw away the angle that was being worked
+          // at. Only a model of a different SIZE is framed again.
+          if (prevCam && !shouldRefit(prevCam.radius, radius)) {
+            camera.position.fromArray(prevCam.pos)
+            controls.target.fromArray(prevCam.target)
+            camera.zoom = prevCam.zoom
+            camera.updateProjectionMatrix()
+            controls.update()
+          }
+          const saveCam = () => {
+            camStateRef.current = {
+              pos: camera.position.toArray() as [number, number, number],
+              target: controls.target.toArray() as [number, number, number],
+              zoom: camera.zoom,
+              radius,
+            }
+          }
+          saveCam()
+          controls.addEventListener('change', saveCam)
+          disposers.push(() => controls.removeEventListener('change', saveCam))
+          // Only the kit switch and "Reset view" refit — a marker edit or a
+          // typed dim must never yank a camera the user has orbited into
+          // place.
           refitFnRef.current = fitView
           disposers.push(() => {
             if (refitFnRef.current === fitView) refitFnRef.current = null
@@ -1600,28 +1701,37 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         </span>
       ) : null}
       {/* THE POLYGON TOOL — an SVG over the canvas, the map's gestures
-          (PolygonHandles): click drops a point, double-click closes, Escape
-          cancels. It only ever REPORTS; the panel posts, the server splits. */}
+          (`MapTab.addDraftPoint`): a click drops a point, a click back ON the
+          first point closes the ring, Escape cancels. The closing click is
+          announced before it happens — the first point swells and the closing
+          segment is drawn — so the ring is never closed by surprise. It only
+          ever REPORTS; the panel posts, the server splits. */}
       {drawing && !loading && !error ? (
         layoutOk ? (
           <svg
             width="100%" height={height}
-            style={{ position: 'absolute', inset: 0, cursor: 'crosshair' }}
+            style={{ position: 'absolute', inset: 0,
+              cursor: closesHere ? 'pointer' : 'crosshair' }}
             onClick={addPolyPoint}
-            onDoubleClick={closePoly}
             onMouseMove={(e) => {
               if (poly.length) setPolyCursor(atOverlay(e))
             }}
           >
             {poly.length ? (
               <polyline
-                points={[...poly, ...(polyCursor ? [polyCursor] : [])]
+                points={[...poly,
+                  // The band runs to the cursor — or, when the cursor has
+                  // snapped, to the first point: that IS the closing segment.
+                  ...(closesHere ? [poly[0]] : polyCursor ? [polyCursor] : [])]
                   .map(([x, y]) => `${x},${y}`).join(' ')}
-                fill="rgba(88,166,255,0.14)" stroke="#58a6ff" strokeWidth={1.5}
+                fill={closesHere ? 'rgba(63,185,80,0.16)' : 'rgba(88,166,255,0.14)'}
+                stroke={closesHere ? '#3fb950' : '#58a6ff'} strokeWidth={1.5}
               />
             ) : null}
             {poly.map(([x, y], i) => (
-              <circle key={i} cx={x} cy={y} r={3} fill="#58a6ff" />
+              <circle key={i} cx={x} cy={y}
+                r={i === 0 && closesHere ? 6 : 3}
+                fill={i === 0 && closesHere ? '#3fb950' : '#58a6ff'} />
             ))}
           </svg>
         ) : (
@@ -1637,35 +1747,60 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           </div>
         )
       ) : null}
-      {/* Back to the authoring view after an orbit — the polygon is drawn on
-          whatever the camera shows, but a flat panel is judged head-on. */}
-      {frontal && !loading && !error ? (
-        <button
-          type="button" className="ga-btn ga-btn-sm"
-          style={{ position: 'absolute', right: 6, top: 6, opacity: 0.85 }}
-          onClick={() => refitFnRef.current?.()}
-          title={t('Look at the model straight on again — the view the areas were drawn in.')}
-        >
-          {t('Front view')}
-        </button>
-      ) : null}
-      {/* The door leaf's test swing (spec § 6): only with a leaf node in the
-          model AND a leaf_bbox from the server — both, or there is nothing
-          to turn or nowhere to turn it about. */}
-      {leafBbox && hasLeaf && !loading && !error ? (
-        <button
-          type="button" className="ga-btn ga-btn-sm"
-          style={{ position: 'absolute', right: 6, top: frontal ? 34 : 6, opacity: 0.85 }}
-          aria-pressed={leafOpen}
-          onClick={() => {
-            const next = !leafOpen
-            setLeafOpen(next)
-            swingFnRef.current?.(next)
-          }}
-          title={t('Swing the door leaf 85° open about its hinge edge (left hinge) to check the cut — click again to shut it.')}
-        >
-          {leafOpen ? t('Shut leaf') : t('Test swing')}
-        </button>
+      {/* THE VIEW CONTROLS — one column at the top right, so no button has to
+          know how many of its neighbours happen to be shown. */}
+      {!loading && !error ? (
+        <div style={{
+          position: 'absolute', right: 6, top: 6, display: 'flex',
+          flexDirection: 'column', alignItems: 'flex-end', gap: 4,
+        }}>
+          {/* The front view is a MODE the owner holds (§ B1): pressed, the
+              model stands straight on and the orbit is locked — the state a
+              ring may be drawn in. */}
+          {onFrontalChange ? (
+            <>
+              <button
+                type="button" className="ga-btn ga-btn-sm"
+                style={{ opacity: 0.85,
+                  ...(frontal ? { background: '#238636', borderColor: '#2ea043',
+                    color: '#fff' } : null) }}
+                aria-pressed={frontal}
+                onClick={() => onFrontalChange(!frontal)}
+                title={frontal
+                  ? t('Front view is on: the model stands straight on and cannot be turned — zoom and pan still work. Click to orbit freely again.')
+                  : t('Look at the model straight on and lock the turning — the view a surface is drawn in.')}
+              >
+                {t('Front view')}
+              </button>
+              <button
+                type="button" className="ga-btn ga-btn-sm"
+                style={{ opacity: 0.85 }}
+                onClick={() => refitFnRef.current?.()}
+                title={t('Frame the whole model again, in the view that is switched on right now.')}
+              >
+                {t('Reset view')}
+              </button>
+            </>
+          ) : null}
+          {/* The door leaf's test swing (spec § 6): only with a leaf node in
+              the model AND a leaf_bbox from the server — both, or there is
+              nothing to turn or nowhere to turn it about. */}
+          {leafBbox && hasLeaf ? (
+            <button
+              type="button" className="ga-btn ga-btn-sm"
+              style={{ opacity: 0.85 }}
+              aria-pressed={leafOpen}
+              onClick={() => {
+                const next = !leafOpen
+                setLeafOpen(next)
+                swingFnRef.current?.(next)
+              }}
+              title={t('Swing the door leaf 85° open about its hinge edge (left hinge) to check the cut — click again to shut it.')}
+            >
+              {leafOpen ? t('Shut leaf') : t('Test swing')}
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {loading || error ? (
         <div
