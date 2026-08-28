@@ -3299,6 +3299,37 @@ def test_prop_ground_offset() -> None:
     room_mk = [m for m in sc["markers"] if m["source"] == "room"]
     check("a room marker has no placement and no anchor",
           all("anchor" not in m for m in room_mk), str(room_mk))
+
+    # THE ROOM MARKER NAMES ITS DIORAMA (2026-08-29). A place on a diorama has
+    # no placement of its own, so the only mesh that can take its click is the
+    # room model — and the marker says whether the room has one. The fixture
+    # gives room "d" a diorama meta and room "a" none, so one scene carries
+    # both cases. The key is a PRESENCE, never a `false`: no diorama, no field.
+    dio_loc = model_fixture()
+    for room in dio_loc["rooms"]:
+        if room["id"] == "d":
+            room["layout"]["markers"] = [
+                {"id": "chair", "at": [1.0, 1.0], "group": "seat"}]
+            room["layout"]["props"] = [{"prop_id": "table", "at": [1.0, 1.0]}]
+    dio = scene_recipe.compose_scene(
+        dio_loc, plan_width_m=PLAN_W, building_meta=BUILDING_META,
+        room_metas=room_metas())
+    check("room \"d\" really has a diorama, room \"a\" really has none",
+          bool(spec_of(dio, "room", "d")) and not spec_of(dio, "room", "a"),
+          str(sorted(m["id"] for m in dio["models"] if m["role"] == "room")))
+    d_mk = [m for m in dio["markers"]
+            if m["source"] == "room" and m["room_id"] == "d"]
+    check("the room marker of a dioramed room carries diorama: true",
+          len(d_mk) == 1 and d_mk[0].get("diorama") is True, str(d_mk))
+    a_mk = [m for m in dio["markers"]
+            if m["source"] == "room" and m["room_id"] == "a"]
+    check("...and without a diorama the key is ABSENT, not false",
+          len(a_mk) == 1 and "diorama" not in a_mk[0], str(a_mk))
+    dio_pm = [m for m in dio["markers"] if m["source"] == "prop"]
+    check("a prop marker never carries it — it names its own mesh (anchor)",
+          len(dio_pm) == 2 and all("diorama" not in m for m in dio_pm),
+          str([sorted(m) for m in dio_pm]))
+
     # The counter-probe, on the same numbers: doubled, the mesh is 0.20 deeper.
     check("a doubled offset would be −0.39, and it is not",
           not near(prop["bottom_y"], -0.39), str(prop.get("bottom_y")))
@@ -4634,12 +4665,13 @@ def test_surface_specs() -> None:
     the numbers of the lattice are the bake's, and the recipe hands them on
     character for character:
 
-    * ``SCENE_RECIPE_VERSION`` is 9, so every client re-fetches once — the
+    * ``SCENE_RECIPE_VERSION`` is 10, so every client re-fetches once — the
       constant is the payload's own code version and moves with EVERY change
       to what the composer answers for unchanged data (6 = these baked
       surfaces, 7 = markers speaking place types, 8 = the prop marker naming
       its placement's ``anchor``, 9 = the ``stairs[]`` block plus the hole a
-      flight cuts into the floor it arrives on, 2026-08-29);
+      flight cuts into the floor it arrives on, 10 = the room marker's
+      ``diorama``, 2026-08-29);
     * a room whose meta carries ``surface`` gives the block to its ``room``
       spec unchanged, and a room whose meta carries none gets no field;
     * a prop tagged ``walkable`` gets ``walkable: True`` and — only if its
@@ -4650,8 +4682,8 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 9 (the stairs[] block and the stair hole)",
-          scene_recipe.SCENE_RECIPE_VERSION == 9,
+    check("code_version 10 (the room marker's diorama)",
+          scene_recipe.SCENE_RECIPE_VERSION == 10,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────

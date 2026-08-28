@@ -96,7 +96,11 @@ logger = get_logger(__name__)
 #: no consumer re-derives them from the boxes; the floor a flight ARRIVES on
 #: is cut open (``plates[].holes``); and both trigger pads clear their floor
 #: by ``PROP_CLEARANCE`` instead of lying exactly on it.
-SCENE_RECIPE_VERSION = 9
+#: 10 (2026-08-29): A ROOM MARKER NAMES ITS DIORAMA (``markers[].diorama``,
+#: Nachtrag "Plätze auf Dioramen") — a place on a diorama has no placement of
+#: its own, so the room model is the only mesh that can take its click, and
+#: the marker is where the payload says so.
+SCENE_RECIPE_VERSION = 10
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -2579,7 +2583,7 @@ def marker_slots(at: Tuple[float, float], facing_deg: Optional[float],
 
 
 def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
-             ) -> List[Dict[str, Any]]:
+             has_diorama: bool) -> List[Dict[str, Any]]:
     """Every marker of one room, finished in world coordinates — as PLACES
     (plan-posen-plaetze.md § 3.3/3.4): a stable ``id``, the place type
     ``group``, a ``label`` for the chip, and the finished ``slots`` a figure
@@ -2606,6 +2610,15 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     One source, both renderers, both marker sources.
 
     A marker whose group the catalog does not know is no place and is skipped.
+
+    ``has_diorama`` is the caller's answer to "did :func:`_diorama_model`
+    produce a spec for THIS room" — the one determination, handed down rather
+    than asked a second time, because a second condition here would drift from
+    the one that puts the mesh in the payload. When it is true every room
+    marker carries ``diorama: True``: the furniture it sits on is part of the
+    room mesh, so that mesh (``role: "room"``, same ``room_id``) is the click
+    target of the place, the way a prop marker's ``anchor`` names its own. No
+    diorama, no key — never a ``False``.
 
     ``y_world`` measures from the room's STOREY DATUM, which on storey 0 is the
     terrain itself (E5a) — so a marker on the ground says "this far over the
@@ -2652,6 +2665,10 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             "root_offset": _root_drop(group),
             "source": "room",
         }
+        if has_diorama:
+            # The room's diorama mesh is this place's click target (§ B,
+            # Nachtrag "Plätze auf Dioramen"). Absent = there is no such mesh.
+            entry["diorama"] = True
         if facing is not None:
             entry["facing"] = facing
         # Tilt axes (2026-07-28): a figure on a slope is not upright, and
@@ -3263,7 +3280,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         if diorama:
             models.append(diorama)
         models.extend(_prop_models(recipe, storey))
-        markers.extend(_markers(recipe, room, storey))
+        # ONE determination, two readers: the spec just built above IS the
+        # answer to "does this room have a diorama", so the marker branch is
+        # handed that very result instead of re-deciding it from the meta.
+        markers.extend(_markers(recipe, room, storey, diorama is not None))
 
     # A threshold lies at the STANDING height of the rooms it joins, and THIS
     # is where that is decided (finding 2026-08-16: the 3D client recomputed

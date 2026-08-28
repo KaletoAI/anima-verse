@@ -4236,7 +4236,7 @@ sie produziert.
 | `scripts/smoke_terrain_layers.py` | [1] Raster == `rank_at` == `kind_at` an 500 Gitterproben, die sd-Quantisierung, der Endpunkt in beiden Modi, `uniform`, `waters` |
 | `scripts/smoke_terrain_types.py` [9] | die Sanitizer der Katalog-Felder (`edge_blend_m` mit 0 als WERT, Relief-Amplitude/Welle) |
 | `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor`; **[4a]** der Wandsaum — beide Grenzen des 0,14-Maßes von Hand, die feste Oberkante, der ungesäumte Sturz, die ungesäumte Türschwelle und die unbewegte deklarierte Etage |
-| `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **9** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
+| `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **10** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
 **Client — Höhe, Schnitt, Wasser, Szene**
@@ -4485,6 +4485,7 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                at_world: [x,z], slots: [[x,z], …],   # Länge = capacity
                y_world, root_offset, facing?, tilt?, roll?,
                anchor?: [x,z],               # NUR Prop-Marker
+               diorama?: true,               # NUR Raum-Marker
                source: "room"|"prop" } ], # ALLE fertig in Welt-Koordinaten
                                            # id = Raum-Marker-ID bzw.
                                            # "<placement.id>/<marker.id>";
@@ -4505,7 +4506,13 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # Boden) UND die einzige Verbindung
                                            # Marker → Mesh — models[].id ist
                                            # die PROP-ID und gilt für jede
-                                           # Kopie. Fehlt am Raum-Marker.
+                                           # Kopie. Fehlt am Raum-Marker;
+                                           # diorama = der Raum hat ein
+                                           # Diorama-Modell (role "room",
+                                           # dieselbe room_id) — DAS ist das
+                                           # Klick-Ziel dieses Platzes
+                                           # (Nachtrag 2026-08-29, v10).
+                                           # Nur `true`, sonst fehlt es.
 
   # --- Türschwellen & Befunde (2026-08-05) ---
   doorways: [ { level, at_world: [x,z], along: [ux,uz], type, width_m,
@@ -7842,11 +7849,12 @@ voller `null` — sonst würde ewig neu gebacken.
 | `surface` | `models[]` mit `role: "room"`, und `role: "prop"` **mit** `walkable` | der Nutzlast-Block `step, origin, cols, rows, values, box_min, box_max, extent_snapped` — die Zahlen der Datei unverändert, im Modell-Rahmen |
 | `walkable` | nur Prop-Spec | das Prop trägt das Tag `walkable`; ohne das Feld schickt es kein Raster (das Raster einer Tischplatte wäre totes Gewicht in jeder Nutzlast) |
 
-Gebäude-Specs bekommen keins (Entscheid 1). `code_version` steht auf **9** —
+Gebäude-Specs bekommen keins (Entscheid 1). `code_version` steht auf **10** —
 die Konstante gehört dem ganzen Payload, nicht diesem Abschnitt, und bewegt
 sich mit jeder Änderung an dem, was der Composer bei unveränderten Daten
 antwortet (6 = diese Raster, 7 = Platz-Typen an den Markern, 8 = der
-`anchor` am Prop-Marker, 9 = `stairs[]` samt Plattenloch).
+`anchor` am Prop-Marker, 9 = `stairs[]` samt Plattenloch, 10 = Marker
+`diorama`).
 
 **Die Signatur.** `_signature` nimmt je Raster einen Kurz-Hash des Blocks auf
 (`model_surface.block_sig`, 8 Zeichen), unter dem Schlüssel
@@ -8085,7 +8093,7 @@ Tastendruck im Lageplan-Editor.
 | Die Zellenregel Knoten für Knoten an einer rein in Python geschriebenen Mini-GLB (Sockel + Block + hoher Überhang + niedriger Sims): 80 / 20 / **20** / **90** cm und `null` neben dem Modell — 20, weil unter dem hohen Überhang 1,3 m ≥ 1,2 m Luft ist, 90, weil unter dem Sims nur 0,6 m bleiben; dazu beide Boxen, `extent_snapped` unter Fix 0 und Fix x = 90, und die Gültigkeit (Version, Quelle, Fix, unvollständige Datei) | ebenda **part 1** (36 Checks, echtes Blender; ohne Blender SKIP statt Fehler) |
 | Die Sampler-Handtabelle: Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt | ebenda **part 2** (15 Checks) |
 | **Dieselbe Handtabelle in TypeScript** — `surfaceHeightAt`/`highestSurfaceAt` Zahl für Zahl wie der Python-Zwilling | `client3d/scripts/smoke_surface_math.mjs` (15 Checks) |
-| Rezept: `code_version` **9** (die Konstante bewegt sich mit JEDER Änderung an dem, was der Composer bei unveränderten Daten antwortet: 6 = diese Oberflächen-Raster, 7 = Marker sprechen Platz-Typen, 8 = der Prop-Marker nennt seinen `anchor`, 9 = `stairs[]` samt Plattenloch), das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
+| Rezept: `code_version` **10** (die Konstante bewegt sich mit JEDER Änderung an dem, was der Composer bei unveränderten Daten antwortet: 6 = diese Oberflächen-Raster, 7 = Marker sprechen Platz-Typen, 8 = der Prop-Marker nennt seinen `anchor`, 9 = `stairs[]` samt Plattenloch, 10 = Marker `diorama`), das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
 | Zwei Varianten desselben Props in einem Raum: jede Kopie bekommt das Raster IHRER Store-Variante, und ein Neubacken der „verschluckten" Variante bewegt die Signatur | ebenda **[7h]** (8 Checks) |
 | Die Höhensperre: neben der Kiste blanker Boden, auf der 0,3-m-Kiste 0,3 (Schritt erlaubt), am 0,8-m-Block `too_steep` als STUFE, wieder herunter erlaubt; Etage-0-Filter, Anker-Lift, TTL-Cache, `forget_surfaces` und der defekte Sidecar, der auf Boden zurückfällt statt zu 500 | `scripts/smoke_play_pos.py` **[23]** (21 Checks) |
 | Sprosse 1 auf der Server-Seite: ein Loch im Raster (`null`-Knoten) fällt auf das `walk_y_world` des Raums in seinem `floor_plan`-Hull, außerhalb jedes Hulls antwortet das Gelände, bei Überlappung gewinnt der kleinste Hull — und das Schritt-Tor misst gegen 0,9 statt gegen 0,0 | ebenda **[23h]** (11 Checks) |
@@ -8122,7 +8130,7 @@ Vorgabe 0,6 m).
 
 **Szenen-Payload** `markers[]` (§ B, Block „Figuren & Marker"): `{room_id,
 id, group, label, capacity, at_world, slots, y_world, root_offset, facing?,
-tilt?, roll?, anchor?, source}`. Platz-ID = Raum-Marker-ID bzw.
+tilt?, roll?, anchor?, diorama?, source}`. Platz-ID = Raum-Marker-ID bzw.
 `"<placement.id>/<marker.id>"`; `label` = Platzierungs-Label, sonst Prop-Name,
 sonst Gruppen-Label. `root_offset = groups[group].root_drop × 1,70` auf
 Millimeter gerundet — die Tabelle `FIGURE_ROOT_DROP` im Szenen-Rezept ist
@@ -8149,6 +8157,23 @@ zurück, statt gar kein Klickziel zu haben. Handrechnung:
 0,25 → Hebung 0,75 statt 1,15), Payload-Seite
 `scripts/smoke_scene_recipe.py` [9a]/[7i], Ziel-Aufteilung
 `client3d/scripts/smoke_places_client.mjs` [7]/[8].
+
+**Nachtrag „Plätze auf Dioramen" (2026-08-29, v10) — `diorama`.** Ein Möbel in
+einem Diorama-Raum ist kein Prop, sondern Teil des EINEN Raum-Meshes: der Platz
+darauf ist ein Raum-Marker, hat also keine Platzierung und damit auch keinen
+`anchor`, der auf ein Mesh zeigen könnte. Deshalb trägt ein Raum-Marker
+`diorama: true`, sobald sein Raum ein Diorama-Modell bekommt — und die Aussage
+lautet: **das Modell mit `role: "room"` und derselben `room_id` ist das
+Klick-Ziel dieses Platzes.** Ohne Diorama fehlt der Schlüssel (nie `false`);
+ein Prop-Marker trägt ihn nie, der nennt sein Mesh über `anchor`. Die
+Entscheidung fällt im Rezept EINMAL — es ist derselbe Wert, mit dem
+`_diorama_model` den Spec in `models[]` legt, hinuntergereicht statt zweitens
+abgefragt, damit Marker und Mesh nicht auseinanderlaufen können. Der Client
+macht daraus das punktuelle Leuchten um den Slot statt des Rings (der Ring
+bleibt, solange das Diorama-Mesh noch nicht gemountet ist). Handrechnung:
+`scripts/smoke_scene_recipe.py` [9a] (Raum „d" mit Meta trägt `true`, Raum „a"
+ohne Meta hat den Schlüssel gar nicht, die zwei Prop-Marker desselben Raums
+ebenfalls nicht).
 
 **Slots — Geometrie nur im Rezept** (`scene_recipe.marker_slots`, rein):
 die `capacity` Plätze liegen mittig um den Marker auf der Achse QUER zur

@@ -299,7 +299,9 @@ def main() -> int:
     check("storey 0 IS the datum", storey_floor_y(0, STOREY), 0.0)
 
     spec = _prop_models(recipe, STOREY)[0]
-    marker = _markers(recipe, room, STOREY)[0]
+    # The last argument is "this room has a diorama" (v10) — false here: the
+    # seat under test is a PROP marker, and a prop marker never carries the key.
+    marker = _markers(recipe, room, STOREY, False)[0]
     check("prop bottom_y = the clearance alone", spec["bottom_y"], 0.01)
     check("the marker names the SURFACE", marker["y_world"], 0.587)
     check("root drop rides with the marker", marker["root_offset"], 0.5338)
