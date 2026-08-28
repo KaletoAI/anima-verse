@@ -38,8 +38,9 @@ The pipeline a caller runs:
    projects into it, at ANY depth and with ANY normal — front skin, back
    skin, edges, handles) and the ``bbox_of`` that becomes ``leaf_bbox``.
    A hand-drawn face list becomes the same kind of prism through its own
-   footprint (``leaf_prism``), and ``leaf_residual`` counts what a cut
-   left behind inside the leaf's outline. ``leaf_candidates`` is the v1
+   footprint (``list_footprint`` / ``leaf_prism``), ``leaf_residual``
+   counts what a cut left behind inside the footprint it was made through,
+   and ``clamp_bbox`` holds ``leaf_bbox`` to that footprint in the plane. ``leaf_candidates`` is the v1
    SKIN heuristic (seed + edge growth), kept as the reference the prism is
    measured against — a real door's back skin is one continuous surface
    with the frame's, and the skin cut left 979 frame triangles behind the
@@ -688,8 +689,13 @@ def frame_thickness(vertices: Sequence[Point], faces: Sequence[Face],
     reach (spec § 6: "the width of the rim in which the depth differs from
     the leaf plane").
 
-    A face deviates when its normal is off the plane normal by more than the
-    cosine or its centroid more than ``tol`` off the plane. Only faces whose
+    ONLY SIDEWAYS FACES MEASURE THE RIM (E2 fix round 1): a face whose
+    normal is off the plane normal by more than the cosine — jambs, rails,
+    a leaf's own edge faces — never one that is merely off in DEPTH: a
+    finely triangulated front skin set back by 2 cm, or the frame's back
+    skin, is a skin, and measured as a rim it would crop the leaf to the
+    middle of the door (measured: a 16 x 16 front grid read a rim of
+    0.2 / 0.475 and left 272 skin faces in the frame). Only faces whose
     centroid lies in the middle half of the OTHER axis (``FRAME_BAND``) and
     less than ``FRAME_MAX_SHARE`` of this axis in from the edge measure a
     side; the inset is the face's INNERMOST vertex — unless that vertex
@@ -719,10 +725,9 @@ def frame_thickness(vertices: Sequence[Point], faces: Sequence[Face],
     )
     found = [None, None, None, None]
     for k, face in enumerate(faces):
-        cu, cv, cd = _project(plane, _centroid(vertices, face))
-        deviates = _dot(normals[k], n) < cos_min or abs(cd) > tol
-        if not deviates:
-            continue
+        cu, cv, _cd = _project(plane, _centroid(vertices, face))
+        if abs(_dot(normals[k], n)) >= cos_min:
+            continue                                    # a skin, not a rim
         pts = [_project(plane, vertices[i]) for i in face]
         for s, (axis, edge, sign, band, span) in enumerate(sides):
             other = cv if axis == 0 else cu
@@ -916,24 +921,22 @@ def prism_faces(vertices: Sequence[Point], faces: Sequence[Face],
     return out
 
 
-def leaf_prism(vertices: Sequence[Point], faces: Sequence[Face],
-               listed: Sequence[int], *,
-               normals: Optional[Sequence[Point]] = None) -> List[int]:
-    """A hand-picked face list turned into the prism through ITS OWN
-    footprint (E2, the manual cut with ``through``): the plane is the
-    least-squares plane of the listed faces' vertices — for a leaf picked
-    front, back and edges together that is the door's depth axis, and for a
-    front skin alone it is the same — the footprint is the bounding
-    rectangle of the listed faces' CENTRES in that plane, widened by ten
-    ``PRISM_EDGE_M`` so the faces that define it are strictly inside, and
-    the result is :func:`prism_faces` through it. A polygon the admin drew
-    over the front therefore takes the back and the edges under it along,
-    whatever the client tested; and a list that already IS a prism comes
-    back as itself. ``[]`` for an empty list.
+def list_footprint(vertices: Sequence[Point], faces: Sequence[Face],
+                   listed: Sequence[int]) -> Tuple[Rect2, Point]:
+    """The footprint a face list stands over: ``(rect, axis)`` — the axis
+    is the normal of the least-squares plane of the listed faces' vertices
+    (for a leaf picked front, back and edges together that is the door's
+    depth axis, for a front skin alone it is the same), the rect the
+    bounding rectangle of the listed faces' CENTRES in that plane's
+    :func:`planar_frame`, EXACT (no padding: a face whose centre sits on
+    its edge is decided by the edge rule of :func:`prism_faces`, which is
+    what keeps a jamb coincident with the leaf's edge out). Centres, not
+    vertices: a coarse triangle reaches far past where the list stands.
+    Raises ``ValueError`` for an empty list.
     """
     idx = sorted({int(k) for k in listed})
     if not idx:
-        return []
+        raise ValueError("an empty face list has no footprint")
     verts = sorted({i for k in idx for i in faces[k]})
     _c, normal = fit_plane([vertices[i] for i in verts])
     u_axis, v_axis = planar_frame(normal)
@@ -942,37 +945,54 @@ def leaf_prism(vertices: Sequence[Point], faces: Sequence[Face],
         c = _centroid(vertices, faces[k])
         us.append(_dot(u_axis, c))
         vs.append(_dot(v_axis, c))
-    pad = 10.0 * PRISM_EDGE_M
-    footprint: Rect2 = ((min(us) - pad, min(vs) - pad), (max(us) + pad, max(vs) + pad))
-    return prism_faces(vertices, faces, footprint, normal, normals=normals)
+    return ((min(us), min(vs)), (max(us), max(vs))), normal
+
+
+def leaf_prism(vertices: Sequence[Point], faces: Sequence[Face],
+               listed: Sequence[int], *,
+               normals: Optional[Sequence[Point]] = None) -> List[int]:
+    """A hand-picked face list turned into the prism through ITS OWN
+    footprint (E2, the manual cut with ``through``): :func:`prism_faces`
+    through :func:`list_footprint`, UNITED with the list itself — what the
+    admin ringed is always in, and a face on the footprint's edge that is
+    not listed follows the edge rule (a jamb coincident with the leaf's
+    edge stays out). A polygon the admin drew over the front therefore
+    takes the back and the edges under it along, whatever the client
+    tested; and a list that already IS a prism comes back as ITSELF
+    (fixture G: the 332 prism faces listed give exactly 332). ``[]`` for
+    an empty list.
+    """
+    idx = sorted({int(k) for k in listed})
+    if not idx:
+        return []
+    footprint, normal = list_footprint(vertices, faces, idx)
+    return sorted(set(idx) | set(prism_faces(vertices, faces, footprint, normal,
+                                             normals=normals)))
 
 
 def leaf_residual(vertices: Sequence[Point], faces: Sequence[Face],
-                  leaf_faces: Sequence[int], frame_faces: Sequence[int], *,
+                  footprint: Rect2, axis: Point, frame_faces: Sequence[int], *,
                   tol: float = LEAF_TOL_M) -> int:
-    """How many ``frame_faces`` still stand INSIDE the leaf after a cut: the
-    count of frame faces whose centre projects more than ``tol`` inside the
-    outline of the leaf's face centres, in the leaf's own plane (E2 — "n
-    Faces des Rahmens liegen in der Blatt-Grundfläche", the warning that
-    keeps a skin cut from staying silent). The outline is that of the leaf
-    faces' CENTRES, not their vertices: a coarse back-skin triangle taken
-    into the leaf can reach the silhouette with a vertex, and the frame
-    around the footprint would be counted against a leaf that is right.
-    Shrunk by ``tol`` so a jamb face sitting ON the outline, or the ring of
-    a bumpy mesh straddling it, is not a residual; a clean prism cut
-    answers 0. 0 for an empty leaf or an empty frame.
+    """How many ``frame_faces`` still stand inside THE SPLIT'S FOOTPRINT
+    after a cut — the count of frame faces whose centre projects more than
+    ``tol`` inside ``footprint`` along ``axis`` (E2 — "n Faces des Rahmens
+    liegen in der Blatt-Grundfläche", the warning that keeps a skin cut
+    from staying silent). The footprint is the one the cut was made
+    through: the inner rectangle for an automatic cut, the list's
+    :func:`list_footprint` for a manual one (with ``through`` that is the
+    prism's; without it the outline of the faces the admin listed — and a
+    v1-style skin list of a leaf's middle then reports the back skin it
+    left behind). Shrunk by ``tol`` so a jamb face sitting ON the outline,
+    or the ring of a bumpy mesh straddling it, is not a residual; a clean
+    prism cut answers 0. 0 for an empty frame.
     """
-    if not leaf_faces or not frame_faces:
+    if not frame_faces:
         return 0
-    verts = sorted({i for k in leaf_faces for i in faces[k]})
-    _c, normal = fit_plane([vertices[i] for i in verts])
-    u_axis, v_axis = planar_frame(normal)
-    us, vs = [], []
-    for k in leaf_faces:
-        c = _centroid(vertices, faces[k])
-        us.append(_dot(u_axis, c))
-        vs.append(_dot(v_axis, c))
-    (u0, v0), (u1, v1) = inner_rect(((min(us), min(vs)), (max(us), max(vs))), tol)
+    n = _unit(axis)
+    if _norm(n) <= _EPS:
+        return 0
+    u_axis, v_axis = planar_frame(n)
+    (u0, v0), (u1, v1) = inner_rect(footprint, tol)
     count = 0
     for k in frame_faces:
         c = _centroid(vertices, faces[k])
@@ -980,6 +1000,37 @@ def leaf_residual(vertices: Sequence[Point], faces: Sequence[Face],
         if u0 < cu < u1 and v0 < cv < v1:
             count += 1
     return count
+
+
+def clamp_bbox(box: Tuple[Point, Point], footprint: Rect2,
+               axis: Point) -> Tuple[Point, Point]:
+    """``leaf_bbox`` held to the split's footprint IN THE PLANE: a
+    back-skin face straddling the footprint's edge is taken into the leaf
+    by its centre and reaches past the edge with a vertex, and the hinge a
+    renderer hangs on the box's edge (``leafPivot``: x = min) must land on
+    the leaf's edge, not the door's outer edge. Each model axis that
+    coincides with ±u or ±v of the footprint's frame (within 1e-6 — every
+    axis-aligned door; a tilted footprint clamps nothing on that axis) has
+    its range intersected with the footprint's range on that axis, sign
+    respected; the depth axis is never touched. Never inverts: a footprint
+    that does not overlap the box leaves the box alone on that axis.
+    """
+    n = _unit(axis)
+    if _norm(n) <= _EPS:
+        return box
+    u_axis, v_axis = planar_frame(n)
+    lo, hi = list(box[0]), list(box[1])
+    for frame_axis, (f0, f1) in ((u_axis, (footprint[0][0], footprint[1][0])),
+                                 (v_axis, (footprint[0][1], footprint[1][1]))):
+        for m in range(3):
+            comp = frame_axis[m]
+            if abs(abs(comp) - 1.0) > 1e-6:
+                continue
+            a, b = (f0, f1) if comp > 0 else (-f1, -f0)
+            new_lo, new_hi = max(lo[m], a), min(hi[m], b)
+            if new_lo <= new_hi:
+                lo[m], hi[m] = new_lo, new_hi
+    return (lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2])
 
 
 def bbox_of(vertices: Sequence[Point], faces: Sequence[Face],
@@ -1003,10 +1054,14 @@ def detect_leaf(vertices: Sequence[Point], faces: Sequence[Face], *,
     max), "plane", "share"}`` or None when the coplanar part of the prism
     covers less than ``min_share`` of the silhouette (or nothing qualifies).
     The faces are :func:`prism_faces` through the plane's ``inner``
-    rectangle along its normal; ``share`` is the area of the prism's faces
-    coplanar with the leaf plane (facing it, within ``tol``) over the
-    silhouette rectangle's — the leaf's skin against the door's front, the
-    same gate v1 put on its seed."""
+    rectangle along its normal; ``bbox`` is :func:`bbox_of` those faces
+    held to the inner rectangle by :func:`clamp_bbox`; ``share`` is the
+    summed area of the prism's faces that lie IN the leaf plane (facing its
+    normal within the cosine, centre within ``tol``) over the area of the
+    silhouette rectangle — the skin the cut found against the door's
+    front. Below ``min_share`` there is no leaf worth cutting: the gate
+    that keeps a bare frame (whose jambs alone would fill a prism) from
+    becoming a leaf."""
     normals = face_normals(vertices, faces)
     plane = leaf_plane(vertices, faces, normals, tol=tol, cos_min=cos_min)
     if plane is None:
@@ -1026,5 +1081,5 @@ def detect_leaf(vertices: Sequence[Point], faces: Sequence[Face], *,
     share = seed_area / front if front > _EPS else 0.0
     if share < min_share:
         return None
-    return {"faces": chosen, "bbox": bbox_of(vertices, faces, chosen),
-            "plane": plane, "share": share}
+    bbox = clamp_bbox(bbox_of(vertices, faces, chosen), plane["inner"], n)
+    return {"faces": chosen, "bbox": bbox, "plane": plane, "share": share}

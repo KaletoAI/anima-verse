@@ -88,8 +88,11 @@ there after the v1 skin cut). A manual cut with ``through`` does the same
 through the footprint of the LISTED faces (``picture_areas.leaf_prism``);
 without it the list is the leaf as given (v1). After every run that leaves
 a leaf, ``leaf_residual`` counts the frame faces whose centre still lies
-inside the leaf's outline (``picture_areas.leaf_residual``) — the server
-turns a count above 0 into the file's ``areas_warning``.
+inside the footprint the cut was made through — the inner rectangle for
+auto, the list's footprint for manual (``picture_areas.leaf_residual``) —
+and ``leaf_bbox`` is held to that footprint in the plane
+(``picture_areas.clamp_bbox``); the server turns a count above 0 into the
+file's ``areas_warning``.
 
 ADOPT (E6): a mesh whose modeller NAMED its surfaces — ``slot_<name>``,
 or a bare ``picture`` / ``screen`` / ``sign`` / ``glass`` — gets an area
@@ -672,9 +675,13 @@ def _split_leaf(model, flat_faces):
     return True
 
 
-def _leaf_report(model, faces):
-    """The leaf's area entry + ``leaf_bbox`` (glTF space, 5 decimals)."""
-    lo, hi = pa.bbox_of(model.vertices, model.faces, faces)
+def _leaf_report(model, faces, footprint):
+    """The leaf's area entry + ``leaf_bbox`` (glTF space, 5 decimals), the
+    box held to the split's ``(rect, axis)`` footprint in the plane
+    (``pa.clamp_bbox`` — the hinge must land on the leaf's edge, not on a
+    straddling back-skin vertex)."""
+    lo, hi = pa.clamp_bbox(pa.bbox_of(model.vertices, model.faces, faces),
+                           footprint[0], footprint[1])
     fit = _fit(model, faces)
     x0, y0, z0 = lo
     x1, y1, z1 = hi
@@ -726,6 +733,10 @@ def picture_areas(args):
     model = Model(objects)
     existing = _existing_areas(model)
     changed = False
+    # The footprint THIS run cut the leaf through — ``(rect, axis)`` — for
+    # the residual count and the box clamp; None when the run left a
+    # previous leaf standing (the leaf's own outline answers then).
+    leaf_footprint = None
 
     if mode == "auto":
         # R14 — WHAT THE ADMIN DREW STAYS. `keep` names the areas the server
@@ -784,6 +795,7 @@ def picture_areas(args):
             # along, that is the point of a node.
             found = pa.detect_leaf(model.vertices, model.welded_faces())
             if found and _split_leaf(model, found["faces"]):
+                leaf_footprint = (found["plane"]["inner"], found["plane"]["normal"])
                 model, existing = _rebuild()
                 changed = True
 
@@ -804,6 +816,7 @@ def picture_areas(args):
             # `through` the list is a polygon pick and the leaf is the PRISM
             # through its footprint (E2): back skin, edges and handles under
             # the ring come along whatever the client's sight test kept.
+            leaf_footprint = pa.list_footprint(model.vertices, model.faces, faces)
             if params.get("through"):
                 faces = pa.leaf_prism(model.vertices, model.faces, faces)
             _split_leaf(model, faces)
@@ -879,9 +892,17 @@ def picture_areas(args):
                     continue
                 other = bpy.data.materials.get(wanted)
                 if other is not None and other is not mat:
-                    # An orphan of that name would make Blender call ours
-                    # `<wanted>.001` — the orphan moves aside instead.
-                    other.name = f"{wanted}.unused"
+                    # A material of that name on ANY object is an area with
+                    # faces — renaming over it would take them silently
+                    # (the server's mapping reserves canonical names, so
+                    # this is a defect, never a plan). An orphan — no
+                    # object wears it — merely goes, or Blender would call
+                    # ours `<wanted>.001`.
+                    if any(m is not None and m.name == wanted
+                           for o in model.objects for m in o.data.materials):
+                        raise ValueError(f"adopt: {mat.name!r} -> {wanted!r} "
+                                         f"would take over a material in use")
+                    bpy.data.materials.remove(other)
                 mat.name = wanted
                 changed = True
         # The mesh itself is untouched; only the names moved, so the areas
@@ -900,13 +921,16 @@ def picture_areas(args):
     data = {"areas": areas, "mesh_layout": model.layout, "changed": changed}
     leaf_faces = _leaf_faces(model)
     if leaf_faces:
-        entry, bbox = _leaf_report(model, leaf_faces)
+        if leaf_footprint is None:
+            leaf_footprint = pa.list_footprint(model.vertices, model.faces, leaf_faces)
+        entry, bbox = _leaf_report(model, leaf_faces, leaf_footprint)
         areas.append(entry)
         data["leaf_bbox"] = bbox
         in_leaf = set(leaf_faces)
         frame_faces = [k for k in range(len(model.faces)) if k not in in_leaf]
         data["leaf_residual"] = pa.leaf_residual(model.vertices, model.faces,
-                                                 leaf_faces, frame_faces)
+                                                 leaf_footprint[0], leaf_footprint[1],
+                                                 frame_faces)
     if not changed:
         return data, {}
     out = Path(args["out_dir"]) / "model.glb"

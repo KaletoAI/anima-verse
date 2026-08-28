@@ -833,9 +833,28 @@ def part_f():
 #                  are ((3i+1)/30, (3j+2)/30), so i = 6, j = 7: quad (6, 7),
 #                  tri 60 + 2 * 76 = 212 — the same column, so the same
 #                  prism -> [48, 50, 212].
-def build_door_g():
+def build_door_g(front_n=0):
+    """``front_n`` > 0 replaces the slab's two front triangles by an n x n
+    grid over x 0.1..0.9, y 0.1..2.1 at z = 0 (facing +z) — the finely
+    triangulated front skin of a real img2mesh door (fixture G', [G7]):
+    faces 48..57 are then the slab's back + edges, 58..(58 + 2 n² - 1) the
+    front grid (quad (i, j) = tris 58 + 2 (n j + i), + 1), the back skin
+    follows."""
     verts, faces = build_door(plate=False)
     box(0.1, 0.9, 0.1, 2.1, -0.04, 0.00, verts, faces)
+    if front_n:
+        del faces[48:50]                       # the slab's two front triangles
+        b = len(verts)
+        w, h = 0.8 / front_n, 2.0 / front_n
+        for j in range(front_n + 1):
+            for i in range(front_n + 1):
+                verts.append((0.1 + i * w, 0.1 + j * h, 0.0))
+        for j in range(front_n):
+            for i in range(front_n):
+                v00 = b + j * (front_n + 1) + i
+                v10, v01, v11 = v00 + 1, v00 + front_n + 1, v00 + front_n + 2
+                faces.append((v00, v10, v11))  # facing +z
+                faces.append((v00, v11, v01))
     b = len(verts)
     for j in range(23):
         for i in range(11):
@@ -903,24 +922,98 @@ def part_g():
     check("G4: share 3.2 / 2.2", leaf is not None and close(leaf["share"], 3.2 / 2.2, 1e-6),
           str(leaf and leaf["share"]))
 
-    print("  [G5] leaf_residual: frame faces more than 2 cm inside the leaf's outline")
+    print("  [G5] leaf_residual: frame faces more than 2 cm inside the split's footprint")
     frame = [k for k in range(len(faces)) if k not in set(expected)]
-    check("G5: a clean prism split leaves 0", pa.leaf_residual(verts, faces, expected, frame) == 0,
-          str(pa.leaf_residual(verts, faces, expected, frame)))
+    rect, axis = plane["inner"], plane["normal"]
+    check("G5: a clean prism split leaves 0 against the inner rect",
+          pa.leaf_residual(verts, faces, rect, axis, frame) == 0,
+          str(pa.leaf_residual(verts, faces, rect, axis, frame)))
     short = [k for k in expected if k not in (268, 269)]
-    check("G5: the central quad left behind counts 2",
-          pa.leaf_residual(verts, faces, short, frame + [268, 269]) == 2,
-          str(pa.leaf_residual(verts, faces, short, frame + [268, 269])))
+    fp, ax = pa.list_footprint(verts, faces, short)
+    check("G5: a plain list's footprint is the outline of its centres (0.1..0.9 x 0.1..2.1, +z)",
+          vclose(fp[0], (0.1, 0.1)) and vclose(fp[1], (0.9, 2.1)) and vclose(ax, (0, 0, 1)),
+          str((fp, ax)))
+    check("G5: the central quad left behind counts 2 against that footprint",
+          pa.leaf_residual(verts, faces, fp, ax, frame + [268, 269]) == 2,
+          str(pa.leaf_residual(verts, faces, fp, ax, frame + [268, 269])))
     check("G5: the bars' jamb faces (ON the outline) never count",
-          pa.leaf_residual(verts, faces, expected, list(range(48))) == 0)
+          pa.leaf_residual(verts, faces, rect, axis, list(range(48))) == 0)
 
     print("  [G6] leaf_prism: a face list becomes the prism through its own footprint")
-    through = pa.leaf_prism(verts, faces, [48])               # ONE front triangle
-    check("G6: one front triangle reaches its back twin and the grid tri in its column: [48, 50, 212]",
-          through == [48, 50, 212], str(through))
-    check("G6: the listed faces are always part of their own prism",
-          set(expected) <= set(pa.leaf_prism(verts, faces, expected)))
+    check("G6: the whole prism listed gives EXACTLY the whole prism back (332, no jamb)",
+          pa.leaf_prism(verts, faces, expected) == expected,
+          str(len(pa.leaf_prism(verts, faces, expected))))
+    front_and_edges = [48, 49] + list(range(52, 60))
+    check("G6: the slab's front + its four edges (10 faces) reach the back and the "
+          "back skin: the same 332",
+          pa.leaf_prism(verts, faces, front_and_edges) == expected,
+          str(len(pa.leaf_prism(verts, faces, front_and_edges))))
     check("G6: an empty list is an empty prism", pa.leaf_prism(verts, faces, []) == [])
+
+    print("  [G6b] clamp_bbox holds the box to the footprint in the plane")
+    wide = ((0.0, 0.0, -0.05), (1.0, 2.2, 0.0))
+    clamped = pa.clamp_bbox(wide, rect, axis)
+    check("G6b: (0,0,-0.05)..(1,2.2,0) -> (0.1,0.1,-0.05)..(0.9,2.1,0), depth untouched",
+          vclose(clamped[0], (0.1, 0.1, -0.05)) and vclose(clamped[1], (0.9, 2.1, 0.0)),
+          str(clamped))
+    check("G6b: a box inside the footprint is left alone",
+          pa.clamp_bbox(((0.2, 0.3, -0.01), (0.5, 1.0, 0.0)), rect, axis)
+          == ((0.2, 0.3, -0.01), (0.5, 1.0, 0.0)))
+
+    print("[G7] fixture G': a 16 x 16 front grid — the rim is measured from SIDEWAYS faces only")
+    # 48 bar faces, 10 slab faces (back + edges), 512 front-grid faces
+    # (58..569), 440 back-skin faces (570..1009) = 1010. The rim: only faces
+    # whose normal is more than 18 deg off the plane normal measure it —
+    # the bars' sides and the slab's edges (0.1 on every side); the front
+    # grid (normal +z) and the back skin are skins whatever their depth. So
+    # inner is the same (0.1..0.9 x 0.1..2.1) and the prism takes every
+    # slab face (10 + 512, centres strictly inside) plus the 320 inner
+    # back-skin faces: 842. Measured before this rule: rim (0.2, 0.475,
+    # 0.2, 0.475), 386 faces, 272 front faces left behind, no warning.
+    gv, gf = build_door_g(front_n=16)
+    check("G7: 1010 faces", len(gf) == 1010, str(len(gf)))
+    gplane = pa.leaf_plane(gv, gf, pa.face_normals(gv, gf))
+    check("G7: thickness 0.1 on every side (sideways faces only)",
+          gplane is not None and all(close(t, 0.1) for t in gplane["thickness"]),
+          str(gplane and gplane["thickness"]))
+    check("G7: inner (-0.9, 0.1)..(-0.1, 2.1)",
+          gplane is not None and vclose(gplane["inner"][0], (-0.9, 0.1))
+          and vclose(gplane["inner"][1], (-0.1, 2.1)), str(gplane and gplane["inner"]))
+    g_expected = list(range(48, 570)) + [570 + 2 * q + d for q in inner_quads for d in (0, 1)]
+    g_leaf = pa.detect_leaf(gv, gf)
+    check("G7: detect_leaf = every slab face + the 320 back-skin faces = 842",
+          g_leaf is not None and g_leaf["faces"] == g_expected,
+          str(g_leaf and (len(g_leaf["faces"]), len(g_expected))))
+    check("G7: bbox (0.1, 0.1, -0.05)..(0.9, 2.1, 0), share 3.2 / 2.2",
+          g_leaf is not None and vclose(g_leaf["bbox"][0], (0.1, 0.1, -0.05))
+          and vclose(g_leaf["bbox"][1], (0.9, 2.1, 0.0)) and close(g_leaf["share"], 3.2 / 2.2, 1e-6),
+          str(g_leaf and (g_leaf["bbox"], g_leaf["share"])))
+    g_frame = [k for k in range(len(gf)) if k not in set(g_expected)]
+    check("G7: residual 0 against the inner rect",
+          pa.leaf_residual(gv, gf, gplane["inner"], gplane["normal"], g_frame) == 0)
+
+    print("  [G8] a v1-style skin cut of the leaf's middle: the residual reports the back skin")
+    # A plain list (no through) of the front grid's quads i 6..9, j 6..9 —
+    # x 0.4..0.6, y 0.85..1.35, 32 tris. Its footprint is the outline of
+    # its centres: x 0.4 + w/3 .. 0.6 - w/3 = 0.4167..0.5833, y 0.85 + h/3
+    # .. 1.35 - h/3 = 0.8917..1.3083 (w = 0.05, h = 0.125); shrunk by 2 cm
+    # -> x 0.4367..0.5633, y 0.9117..1.2883. Frame faces with centres in
+    # it: only back-skin tris — first type (i/10 + 1/30, j/10 + 2/30): i = 5
+    # (0.5333), j = 9..12 (0.9667..1.2667) -> 4; second type (i/10 + 2/30,
+    # j/10 + 1/30): i = 4 (0.4667), j = 9..12 (0.9333..1.2333) -> 4. The
+    # slab's back tris (0.367, 0.767) / (0.633, 1.433) and the neighbouring
+    # front quads (x 0.3833 / 0.6167, y 0.8083 / 1.3917) lie outside: 8.
+    patch = sorted(58 + 2 * (16 * j + i) + d for j in range(6, 10) for i in range(6, 10)
+                   for d in (0, 1))
+    pfp, pax = pa.list_footprint(gv, gf, patch)
+    check("G8: the patch's footprint (0.4167, 0.8917)..(0.5833, 1.3083) along +z",
+          vclose(pfp[0], (0.4 + 0.05 / 3, 0.85 + 0.125 / 3), 1e-9)
+          and vclose(pfp[1], (0.6 - 0.05 / 3, 1.35 - 0.125 / 3), 1e-9) and vclose(pax, (0, 0, 1)),
+          str((pfp, pax)))
+    p_frame = [k for k in range(len(gf)) if k not in set(patch)]
+    check("G8: residual 8 — the back skin behind the patch",
+          pa.leaf_residual(gv, gf, pfp, pax, p_frame) == 8,
+          str(pa.leaf_residual(gv, gf, pfp, pax, p_frame)))
 
 
 def main():

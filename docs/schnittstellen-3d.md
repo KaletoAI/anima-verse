@@ -7653,9 +7653,12 @@ zugleich". Seit E2 ist das Blatt ein **Prisma**: `picture_areas.prism_faces` nim
 **jedes** Face, dessen Zentrum in die Blatt-Grundfläche projiziert — über die
 **gesamte Tiefe**, ohne Sichtbarkeits- und Normalentest (Vorderhaut, Rückhaut,
 Kanten, Klinken **und** der Teil der Rahmen-Rückhaut hinter dem Blatt). Auto:
-Grundfläche = `inner` der Blattebene (kein messbarer Rand → 0, die Silhouette ist
-die Grundfläche; ein Face, das mehr als ein Viertel der Achse hineinreicht, ist eine
-Haut und misst keinen Rand). Manuell: der Client sendet für Art `leaf` `through:
+Grundfläche = `inner` der Blattebene — den Rand messen **nur seitwärts stehende**
+Faces (Normale > 18° von der Blattebenen-Normale: Zargen, Riegel, Blattkanten), nie
+Faces, die bloß in der Tiefe abweichen (eine fein triangulierte Vorderhaut oder die
+Rückhaut würde das Blatt sonst auf die Türmitte beschneiden); kein messbarer Rand →
+0, die Silhouette ist die Grundfläche; ein Face, das mehr als ein Viertel der Achse
+hineinreicht, ist eine Haut und misst keinen Rand. Manuell: der Client sendet für Art `leaf` `through:
 true` (Polygon = alle Faces mit Zentrum im Ring, `Model3DViewer.selectFaces`), der
 Server bildet aus den **Zentren** der gelisteten Faces die Grundfläche in deren
 Ausgleichsebene und schneidet dasselbe Prisma (`leaf_prism`) — die Client-Liste ist
@@ -7663,7 +7666,11 @@ eine Auswahl, nie die Geometrie-Wahrheit. Ein Face **auf** der Grundflächenkant
 (sub-mikron, nur modellierte Meshes) gehört zum Blatt, wenn seine Normale aus der
 Grundfläche hinauszeigt (Blattkante), nicht hinein (Zarge). Bild/Glas behalten die
 Sichtauswahl. Jeder Lauf mit Blatt meldet `leaf_residual` = Rahmen-Faces, deren
-Zentrum mehr als 2 cm innerhalb des Umrisses der Blatt-Zentren liegt; > 0 wird
+Zentrum mehr als 2 cm innerhalb der Grundfläche liegt, **durch die geschnitten
+wurde** (auto: `inner`; manuell: Umriss der Zentren der gelisteten Faces — ein
+v1-artiger Hautschnitt der Blattmitte meldet so die Rückhaut dahinter); `leaf_bbox`
+wird in der Ebene auf diese Grundfläche geklemmt (`clamp_bbox` — die Angel liegt auf
+der Blattkante, nicht auf einem überstehenden Rückhaut-Vertex); > 0 wird
 `areas_warning` = `LEAF_RESIDUAL_NOTE` („{n} frame faces remain inside the leaf
 footprint — draw the leaf again or check the door"). E6: benannte Materialien
 (`slot_<name>`, `picture|screen|sign|glass`) werden beim Landen zu Areas (`mode:
@@ -7675,9 +7682,10 @@ trägt (`glass*` → glass, sonst picture) — nur unter diesem Namen können Re
 von `auto`-Läufen nicht aufgelöst (R14). R16: der Umriss (`edges`) wird auf den
 **gewelded** Faces gerechnet — 16 Kanten für ein 4 × 4-Feld nach dem Round-Trip,
 nicht 96. Beweise: `scripts/smoke_picture_areas.py` Fixture G (332 Prisma-Faces =
-12 Blatt + 320 Rückhaut; v1 hätte 12 genommen), `scripts/smoke_door_leaf_blender.py`
-[H] (Landing 332/168, `through` 1 → 3, Restzahl 2), `scripts/smoke_picture_areas_blender.py`
-[I] (adopt) + [H] (R16).
+12 Blatt + 320 Rückhaut; v1 hätte 12 genommen; G' mit 16 × 16-Vorderhaut: Rand 0,1,
+842 Faces, Hautschnitt der Mitte → Restzahl 8), `scripts/smoke_door_leaf_blender.py`
+[H] (Landing 332/168, `through` 10 → 332, Restzahl 2, G' 842 + Restzahl 8),
+`scripts/smoke_picture_areas_blender.py` [I] (adopt, Namenskollision) + [H] (R16).
 
 ## Nachtrag 2026-08-27 (§ B2): Oberflächen-Raster (v6)
 

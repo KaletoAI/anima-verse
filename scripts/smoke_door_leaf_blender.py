@@ -116,7 +116,7 @@ Positions are float32 in the file; the script rounds to 5 decimals, so
   y 0.1..2.1, z -0.04..0.00 with front skin, back skin and four edge faces
   (faces 48..59) and a frame BACK SKIN WITHOUT A HOLE at z = -0.05 over the
   whole silhouette as a 10 x 22 grid of 0.1 m quads facing -z (faces
-  60..499; quad (i, j) = tris 60 + 2 * (10 j + i), + 1). 301 vertices, 500
+  60..499; quad (i, j) = tris 60 + 2 * (10 j + i), + 1). 293 vertices, 500
   triangles. The measured door (befunde 2026-08-28, Wurzel 2) had 979 frame
   triangles in exactly that place, 6 cm behind a 1.8 cm leaf skin.
   H1 — the landing hook (``category="door"``): the leaf plane is the back
@@ -130,29 +130,51 @@ Positions are float32 in the file; the script rounds to 5 decimals, so
     size_m [0.8, 2.0], normal [0, 0, 1]; NO frame triangle has its centre
     more than 1 cm inside the footprint; ``leaf_residual`` 0, so the file
     carries NO ``areas_warning``.
-  H2 — MANUAL WITH ``through`` (the tab's polygon for kind leaf): ONE of
-    the slab's two FRONT triangles is listed — the one with centre x > 0.5,
-    i.e. (0.1, 0.1), (0.9, 0.1), (0.9, 2.1), centre (19/30, 23/30); the
-    front faces are the only ones whose centre sits at z == 0 exactly —
-    as an R1 index of the CURRENT split file, ``through=True``. The server
-    derives the footprint from the listed face's centre — a point — and
-    cuts the prism through it: its BACK twin (the same three x/y at z =
-    -0.04) comes along, and so does the ONE back-skin triangle whose centre
-    sits in the same column (the grid's first-type centres are ((3i+1)/30,
-    (3j+2)/30): quad (6, 7)) — nothing else -> leaf 3, frame 497; the leaf
-    spans z -0.05..0 over the slab's x 0.1..0.9, y 0.1..2.1, and all three
-    of its triangles share one centre (19/30, 23/30). The outline of the
-    leaf's centres is a point, so ``leaf_residual`` is 0: NO areas_warning.
+  H2 — MANUAL WITH ``through`` (the tab's polygon for kind leaf): the
+    slab's two FRONT triangles and its four edge faces (8 tris) are listed
+    — 10 R1 indices of the CURRENT split file (the 12 slab faces are those
+    with every vertex at z -0.04..0 inside the slab widened by 1 cm; the
+    back's 2 have every vertex at z = -0.04 and are left out) — with
+    ``through=True``. The server's footprint is the outline of the listed
+    faces' centres: the edge faces' centres sit at x 0.1 / 0.9, y 0.1 /
+    2.1 -> exactly the auto footprint; the prism through it takes the
+    slab's back (2) and the back skin's inner 320 along, and the bars'
+    jamb faces — centres ON that outline, normals pointing in — stay out:
+    leaf 332, frame 168, the same leaf_bbox as H1, ``leaf_residual`` 0,
+    NO areas_warning.
   H3 — MANUAL WITHOUT ``through`` (a plain face list is the leaf, v1): the
     332 prism faces of H1 MINUS the central back-skin quad (4, 10) — its
     two tris have centres (0.433, 1.067) / (0.467, 1.033), more than 2 cm
-    inside the outline of the leaf's centres (x 0.1..0.9, y 0.1..2.1) — as
-    kind leaf -> leaf 330, frame 170, ``leaf_residual`` 2 and the file's
+    inside the list's footprint (the outline of the listed faces' centres:
+    x 0.1..0.9, y 0.1..2.1 — the plain list has no ``through``, so the
+    residual is measured against what the admin listed) — as kind leaf ->
+    leaf 330, frame 170, ``leaf_residual`` 2 and the file's
     ``areas_warning`` reads ``LEAF_RESIDUAL_NOTE`` with n = 2 ("2 frame
     faces remain inside the leaf footprint — draw the leaf again or check
     the door"); the run WORKED, so ``areas_error`` stays absent and
     areas_info reports it as `warning`. Then ``detect_areas(mode="auto")``
     cuts the prism again: 332 / 168, warning gone.
+  H4 — FIXTURE G' — A FINELY TRIANGULATED FRONT (the measured door: 432
+    tris in a 1.8 cm layer): ``door_glb(two_skin=True, front_n=16)``
+    replaces the slab's two front triangles by a 16 x 16 grid at z = 0
+    (512 tris; 1010 faces in all). The rim is measured from SIDEWAYS faces
+    only (normal more than 18 deg off the plane normal — the bars' sides
+    and the slab's edges), so a skin merely off in depth never crops the
+    leaf: rim 0.1 all round, footprint x 0.1..0.9 x y 0.1..2.1, the landing
+    cuts every slab face (10 + 512) plus the 320 inner back-skin faces ->
+    leaf 842, frame 168, leaf_bbox as H1, no warning. (Measured before the
+    rule: rim (0.2, 0.475, 0.2, 0.475), leaf 386, 272 front faces left in
+    the frame and no warning — E2's own case coming out "shut and open at
+    once" again.)
+    Then a v1-STYLE SKIN CUT of the leaf's middle as a plain list (no
+    ``through``): the front-grid quads i 6..9, j 6..9 — x 0.4..0.6, y
+    0.85..1.35, 32 tris, found by their centres (z == 0 and inside that
+    rectangle) — as kind leaf: leaf 32, frame 978. The list's footprint is
+    the outline of its centres, x 0.4167..0.5833, y 0.8917..1.3083; shrunk
+    by 2 cm, the frame faces with centres in it are 8 back-skin triangles
+    (first type i = 5, j = 9..12; second type i = 4, j = 9..12 — the maths
+    smoke [G8] derives them) -> ``leaf_residual`` 8, areas_warning with
+    n = 8, areas_error absent.
 """
 import json
 import os
@@ -232,11 +254,26 @@ def door_geometry(plate: bool = True):
     return verts, faces
 
 
-def two_skin_geometry():
+def two_skin_geometry(front_n: int = 0):
     """Fixture G of the maths smoke: bars, a 4 cm leaf slab, a back skin
-    without a hole as a 10 x 22 grid of 0.1 m quads facing -z."""
+    without a hole as a 10 x 22 grid of 0.1 m quads facing -z. ``front_n``
+    > 0 replaces the slab's two front triangles by an n x n grid at z = 0
+    (fixture G', part [H4])."""
     verts, faces = door_geometry(plate=False)
     box(0.1, 0.9, 0.1, 2.1, -0.04, 0.00, verts, faces)
+    if front_n:
+        del faces[48:50]
+        b = len(verts)
+        w, h = 0.8 / front_n, 2.0 / front_n
+        for j in range(front_n + 1):
+            for i in range(front_n + 1):
+                verts.append((0.1 + i * w, 0.1 + j * h, 0.0))
+        for j in range(front_n):
+            for i in range(front_n):
+                v00 = b + j * (front_n + 1) + i
+                v10, v01, v11 = v00 + 1, v00 + front_n + 1, v00 + front_n + 2
+                faces.append((v00, v10, v11))
+                faces.append((v00, v11, v01))
     b = len(verts)
     for j in range(23):
         for i in range(11):
@@ -250,8 +287,9 @@ def two_skin_geometry():
     return verts, faces
 
 
-def door_glb(glass: bool = False, plate: bool = True, two_skin: bool = False) -> bytes:
-    positions, faces = two_skin_geometry() if two_skin else door_geometry(plate)
+def door_glb(glass: bool = False, plate: bool = True, two_skin: bool = False,
+             front_n: int = 0) -> bytes:
+    positions, faces = two_skin_geometry(front_n) if two_skin else door_geometry(plate)
     if glass:
         # Only the plate's FRONT vertices sit at z == 0.0 exactly.
         uvs = [((0.6 + (x - 0.1) / 0.8 * 0.3, 0.6 + (y - 0.1) / 2.0 * 0.3)
@@ -639,25 +677,27 @@ def main() -> int:
           "areas_warning" not in meta and "areas_error" not in meta,
           str((meta.get("areas_warning"), meta.get("areas_error"))))
 
-    front = flat_faces_where_centre(store.model_path(hp),
-                                    lambda cx, cy, cz: cz == 0.0 and cx > 0.5)
-    check("H2: the slab's right-hand front triangle is 1 flat face of the split file",
-          len(front) == 1, str(front))
-    areas = store.detect_areas(hp, mode="manual", faces=front, kind="leaf", through=True)
-    check("H2: through: one front triangle reaches its back twin and the grid tri in its column -> leaf 3",
-          [(x["id"], x["faces"]) for x in areas] == [("leaf", 3)], str(areas))
+    slab = flat_faces_where(store.model_path(hp),
+                            lambda x, y, z: -0.041 < z < 0.001 and 0.09 < x < 0.91 and 0.09 < y < 2.11)
+    back = flat_faces_where(store.model_path(hp),
+                            lambda x, y, z: -0.041 < z < -0.039 and 0.09 < x < 0.91 and 0.09 < y < 2.11)
+    front_and_edges = [k for k in slab if k not in set(back)]
+    check("H2: the slab's front + edges are 10 flat faces of the split file (12 slab - 2 back)",
+          len(front_and_edges) == 10 and len(back) == 2, str((len(slab), len(back))))
+    areas = store.detect_areas(hp, mode="manual", faces=front_and_edges, kind="leaf", through=True)
+    check("H2: through: the prism takes the back and the back skin, not the jambs -> leaf 332",
+          [(x["id"], x["faces"]) for x in areas] == [("leaf", 332)], str(areas))
     n = nodes(store.model_path(hp))
-    check("H2: nodes leaf 3 / frame 497",
-          len(n.get("leaf", {}).get("tris", [])) == 3 and len(n.get("frame", {}).get("tris", [])) == 497,
+    check("H2: nodes leaf 332 / frame 168",
+          len(n.get("leaf", {}).get("tris", [])) == 332 and len(n.get("frame", {}).get("tris", [])) == 168,
           str({k: len(v["tris"]) for k, v in n.items()}))
     leaf_tris = n.get("leaf", {}).get("tris", [])
     lo, hi = span(leaf_tris) if leaf_tris else ([], [])
-    check("H2: the leaf spans z -0.05..0 over the slab — front, back AND the skin behind",
+    check("H2: the leaf spans (0.1, 0.1, -0.05)..(0.9, 2.1, 0) like H1",
           vnear(lo, [0.1, 0.1, -0.05]) and vnear(hi, [0.9, 2.1, 0.0]), f"{lo} .. {hi}")
-    check("H2: all three share the centre (19/30, 23/30)",
-          all(near(sum(v[0] for v in t) / 3, 19 / 30) and near(sum(v[1] for v in t) / 3, 23 / 30)
-              for t in leaf_tris),
-          str([(round(sum(v[0] for v in t) / 3, 4), round(sum(v[1] for v in t) / 3, 4)) for t in leaf_tris]))
+    check("H2: NO frame triangle has its centre more than 1 cm inside the footprint",
+          node_tris_where_centre(store.model_path(hp), "frame", inside) == 0,
+          str(node_tris_where_centre(store.model_path(hp), "frame", inside)))
     meta = file_meta(hp)
     check("H2: no areas_warning (a prism cut leaves nothing behind), no areas_error",
           "areas_warning" not in meta and "areas_error" not in meta,
@@ -690,6 +730,38 @@ def main() -> int:
     check("H3: auto cuts the prism again — 332, warning gone",
           [(x["id"], x["faces"]) for x in areas] == [("leaf", 332)] and "areas_warning" not in file_meta(hp),
           str((areas, file_meta(hp).get("areas_warning"))))
+
+    print("\n[H4] fixture G': a finely triangulated front — the rim is measured from sideways faces only")
+    fp_ = store.create_prop(name="Fine-front door", category="door")["id"]
+    check("H4: upload lands", store.save_uploaded_glb(fp_, door_glb(two_skin=True, front_n=16)))
+    n = nodes(store.model_path(fp_))
+    check("H4: leaf 842 (10 slab + 512 front grid + 320 back-skin), frame 168",
+          len(n.get("leaf", {}).get("tris", [])) == 842
+          and len(n.get("frame", {}).get("tris", [])) == 168,
+          str({k: len(v["tris"]) for k, v in n.items()}))
+    check("H4: NO frame triangle has its centre more than 1 cm inside the footprint",
+          node_tris_where_centre(store.model_path(fp_), "frame", inside) == 0,
+          str(node_tris_where_centre(store.model_path(fp_), "frame", inside)))
+    meta = file_meta(fp_)
+    bb = meta.get("leaf_bbox") or {}
+    check("H4: leaf_bbox (0.1, 0.1, -0.05)..(0.9, 2.1, 0), no warning, no error",
+          vnear(bb.get("min") or [], [0.1, 0.1, -0.05]) and vnear(bb.get("max") or [], [0.9, 2.1, 0.0])
+          and "areas_warning" not in meta and "areas_error" not in meta,
+          str((bb, meta.get("areas_warning"), meta.get("areas_error"))))
+    patch = flat_faces_where_centre(store.model_path(fp_),
+                                    lambda cx, cy, cz: cz == 0.0 and 0.4 < cx < 0.6 and 0.85 < cy < 1.35)
+    check("H4: the middle patch of the front grid is 32 faces", len(patch) == 32, str(len(patch)))
+    areas = store.detect_areas(fp_, mode="manual", faces=patch, kind="leaf")
+    check("H4: a v1-style skin cut of the middle: leaf 32 as listed",
+          [(x["id"], x["faces"]) for x in areas] == [("leaf", 32)], str(areas))
+    n = nodes(store.model_path(fp_))
+    check("H4: frame 978", len(n.get("frame", {}).get("tris", [])) == 978,
+          str({k: len(v["tris"]) for k, v in n.items()}))
+    meta = file_meta(fp_)
+    note8 = store.LEAF_RESIDUAL_NOTE.format(n=8)
+    check("H4: areas_warning = the residual note with n = 8 (the back skin behind the patch), no error",
+          meta.get("areas_warning") == note8 and "areas_error" not in meta,
+          str((meta.get("areas_warning"), meta.get("areas_error"))))
 
     print()
     if FAILURES:

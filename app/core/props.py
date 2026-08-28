@@ -2254,23 +2254,35 @@ def adopt_mapping(material_names: Any,
         m = _AREA_ID_RE.match(str(aid or ""))
         if m:
             used[m.group(1)].add(int(m.group(2)))
-    out: Dict[str, str] = {}
+    # TWO PASSES (fix round 1): every canonical name reserves its number
+    # FIRST, whatever its position in the material list — in a single pass
+    # a bare `glass` ahead of `slot_glass_1` would take glass_1 and the
+    # real slot_glass_1 would be skipped and, in the script, renamed over.
+    canonical: Dict[str, Tuple[str, int]] = {}
+    others: List[Tuple[str, str]] = []
     for raw in (material_names or []):
         name = str(raw or "")
+        if name in canonical or any(name == n for n, _s in others):
+            continue
         slots = detect_slots([name])
         if not slots:
             continue
         slot = slots[0]["name"]
         m = _AREA_ID_RE.match(slot)
         if m:
-            kind, k = m.group(1), int(m.group(2))
-            if slot in have or k in used[kind]:
-                continue
+            canonical[name] = (m.group(1), int(m.group(2)))
+            used[m.group(1)].add(int(m.group(2)))
         else:
-            kind = "glass" if slot.startswith("glass") else "picture"
-            k = 1
-            while k in used[kind]:
-                k += 1
+            others.append((name, slot))
+    out: Dict[str, str] = {}
+    for name, (kind, k) in canonical.items():
+        if f"{kind}_{k}" not in have:
+            out[name] = f"{kind}_{k}"
+    for name, slot in others:
+        kind = "glass" if slot.startswith("glass") else "picture"
+        k = 1
+        while k in used[kind]:
+            k += 1
         used[kind].add(k)
         out[name] = f"{kind}_{k}"
     return out

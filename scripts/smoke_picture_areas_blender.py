@@ -142,6 +142,15 @@ THE FIXTURE (glTF y-up, written with the stdlib), `plate_glb(n)`:
   An `auto` run afterwards KEEPS them (R14: only `auto`-sourced areas are
   dissolved; the grey atlas yields nothing new) -> the same two areas.
   A second `adopt` on that file has nothing left to adopt -> ValueError.
+  [I2] NAME COLLISION (fix round 1): materials in the order ["atlas",
+  "glass", "slot_glass_1"] — the bare ``glass`` on the top-left quad AHEAD
+  of the canonical ``slot_glass_1`` on the bottom-right one. The mapping
+  reserves every canonical name FIRST, so slot_glass_1 keeps glass_1 and
+  its 2 faces (x > 0, y < 0) and the bare glass becomes slot_glass_2 with
+  its 2 faces (x < 0, y > 0): materials {atlas, slot_glass_1, slot_glass_2},
+  areas [glass_1 (adopt, 2), glass_2 (adopt, 2)]. (A single pass numbered
+  the bare glass 1, skipped the real slot_glass_1 and renamed it over —
+  its faces silently lost their area.)
 """
 import json
 import os
@@ -268,10 +277,11 @@ def plate_glb(n: int = 2, bump: float = 0.0) -> bytes:
             + struct.pack("<II", len(blob), 0x004E4942) + blob)
 
 
-def named_glb() -> bytes:
+def named_glb(top_left: str = "slot_picture_1", bottom_right: str = "glass") -> bytes:
     """The n = 2 plate with THREE materials (part [I]): q(0,0) + q(1,1) on
-    the textured ``atlas``, q(0,1) on ``slot_picture_1``, q(1,0) on the bare
-    ``glass`` — plain colours, no texture, no slot_ prefix on the pane."""
+    the textured ``atlas``, q(0,1) (top-left) on ``top_left``, q(1,0)
+    (bottom-right) on ``bottom_right`` — plain colours, no texture. The
+    defaults: a canonical slot_picture_1 and a bare ``glass``."""
     n = 2
     positions, uvs = [], []
     for j in range(n + 1):
@@ -286,8 +296,8 @@ def named_glb() -> bytes:
             c, d = (j + 1) * (n + 1) + i + 1, (j + 1) * (n + 1) + i
             quads[(i, j)] = [a, b, c, a, c, d]
     groups = [("atlas", quads[(0, 0)] + quads[(1, 1)], 0),
-              ("slot_picture_1", quads[(0, 1)], 1),
-              ("glass", quads[(1, 0)], 2)]
+              (top_left, quads[(0, 1)], 1),
+              (bottom_right, quads[(1, 0)], 2)]
     pos = b"".join(struct.pack("<fff", *p) for p in positions)
     tex = b"".join(struct.pack("<ff", *t) for t in uvs)
     idx_blobs = []
@@ -325,9 +335,9 @@ def named_glb() -> bytes:
         "materials": [
             {"name": "atlas", "pbrMetallicRoughness": {
                 "baseColorTexture": {"index": 0}, "metallicFactor": 0.0}},
-            {"name": "slot_picture_1", "pbrMetallicRoughness": {
+            {"name": top_left, "pbrMetallicRoughness": {
                 "baseColorFactor": [0.9, 0.9, 0.2, 1.0], "metallicFactor": 0.0}},
-            {"name": "glass", "pbrMetallicRoughness": {
+            {"name": bottom_right, "pbrMetallicRoughness": {
                 "baseColorFactor": [0.2, 0.6, 0.9, 1.0], "metallicFactor": 0.0}},
         ],
         "textures": [{"source": 0, "sampler": 0}],
@@ -715,6 +725,30 @@ def main() -> int:
         check("I: a second adopt has nothing left and says so", False, "no ValueError")
     except ValueError as e:
         check("I: a second adopt has nothing left and says so", "adopt" in str(e), str(e))
+
+    print("\n[I2] adopt: a bare glass AHEAD of a canonical slot_glass_1 keeps both")
+    cp = store.create_prop(name="Colliding plate", category="decor")["id"]
+    check("I2: upload lands", store.save_uploaded_glb(cp, named_glb("glass", "slot_glass_1")))
+    prims = primitives(store.model_path(cp))
+    names = set(material_names(store.model_path(cp)))
+    check("I2: materials {atlas, slot_glass_1, slot_glass_2}",
+          names == {"atlas", "slot_glass_1", "slot_glass_2"}, str(sorted(names)))
+    check("I2: slot_glass_1 keeps its 2 faces (x > 0, y < 0)",
+          tri_count(prims, "slot_glass_1") == 2
+          and all(sum(v[0] for v in t) / 3 > 0 and sum(v[1] for v in t) / 3 < 0
+                  for p in prims if p["material"] == "slot_glass_1" for t in p["tris"]))
+    check("I2: the bare glass became slot_glass_2 with its 2 faces (x < 0, y > 0)",
+          tri_count(prims, "slot_glass_2") == 2
+          and all(sum(v[0] for v in t) / 3 < 0 and sum(v[1] for v in t) / 3 > 0
+                  for p in prims if p["material"] == "slot_glass_2" for t in p["tris"]))
+    areas = file_meta(cp).get("areas") or []
+    check("I2: areas [glass_1 (adopt, 2), glass_2 (adopt, 2)]",
+          [(a["id"], a["source"], a["faces"]) for a in areas]
+          == [("glass_1", "adopt", 2), ("glass_2", "adopt", 2)], str(areas))
+    check("I2: adopt_mapping itself: glass_1 reserved by the canonical name, the bare glass numbered 2",
+          store.adopt_mapping(["atlas", "glass", "slot_glass_1"], [])
+          == {"slot_glass_1": "glass_1", "glass": "glass_2"},
+          str(store.adopt_mapping(["atlas", "glass", "slot_glass_1"], [])))
 
     print()
     if FAILURES:
