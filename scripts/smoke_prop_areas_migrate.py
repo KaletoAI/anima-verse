@@ -29,8 +29,10 @@ described the PRIMARY variant's active full mesh — so that is where it goes:
     the primary's mesh, same axes) gets the ``rotation`` too, and its own
     ``areas`` / ``leaf_bbox`` from the ``.areas.json`` companion that
     travelled with the copy (that companion IS a reading of that file);
-  * a variant that is its OWN generation gets nothing — its axes are not
-    the primary's, and the legacy value never described it;
+  * EVERY other variant with an active full file gets the ``rotation`` too
+    (ruling V4: the prop-wide dial applied to it before the boot, and a
+    variant must not come back unturned after a restart); only a copy gets
+    an area reading back — an own generation keeps none;
   * ``area_defaults`` moves onto the PRIMARY variant's entry (checked
     against the file areas it now names);
   * the prop sidecar LOSES all six keys; ``key_areas`` stays prop-wide (V2).
@@ -69,14 +71,14 @@ EXPECTED after the first run — ``{"props": 2, "moved": 1}`` (a second prop
                      file_areas(model_2.glb) == the full file's values
     model-v2_1.json  rotation y 270, areas ids [picture_1], the companion's
                      leaf_bbox
-    model-v3_1.json  untouched (no rotation, no areas key)
+    model-v3_1.json  rotation y 270 (V4), NO areas / leaf_bbox key
     sidecar          none of the six keys; key_areas ["glass"];
                      model_variants[0].area_defaults == {glass_1: glass}
     record           no prop-level areas/leaf_bbox/rotation/area_defaults;
                      variant_tiers[0]: rotation y 270, areas ids
                      [picture_1, glass_1], leaf_bbox, area_defaults;
                      variant_tiers[1]: rotation y 270, areas [picture_1];
-                     variant_tiers[2]: rotation 0, areas []
+                     variant_tiers[2]: rotation y 270, areas [], no leaf
 
 Second run: ``{"props": 2, "moved": 0}`` and every file byte-identical.
 
@@ -215,7 +217,7 @@ def main() -> int:
           and fa["rotation"] == {"x": 0, "y": 270, "z": 0} and fa["leaf_bbox"] == LEAF
           and fa["areas_warning"] == store.NO_LEAF_NOTE, str(fa))
 
-    print("\n[3] a variant COPY gets the rotation and its companion's areas; an own generation nothing")
+    print("\n[3] every variant gets the rotation (V4); only a COPY gets its companion's areas")
     copy = sidecar_of(d, "model-v2_1.glb")
     check("copy: rotation y 270", copy.get("rotation") == {"x": 0, "y": 270, "z": 0},
           str(copy.get("rotation")))
@@ -224,8 +226,9 @@ def main() -> int:
     check("copy: leaf_bbox from its .areas.json", copy.get("leaf_bbox") == COPY_LEAF,
           str(copy.get("leaf_bbox")))
     own = sidecar_of(d, "model-v3_1.glb")
-    check("own generation: no rotation, no areas",
-          "rotation" not in own and "areas" not in own and "leaf_bbox" not in own, str(own))
+    check("own generation: rotation y 270 (V4), but no areas and no leaf_bbox",
+          own.get("rotation") == {"x": 0, "y": 270, "z": 0}
+          and "areas" not in own and "leaf_bbox" not in own, str(own))
 
     print("\n[4] the prop sidecar lost the keys, variant 0 carries the defaults")
     meta = store.read_sidecar("door-old")
@@ -261,8 +264,8 @@ def main() -> int:
           and [a["id"] for a in t1.get("areas") or []] == ["picture_1"]
           and t1.get("leaf_bbox") == COPY_LEAF, str(t1))
     t2 = tiers[2] if len(tiers) > 2 else {}
-    check("variant_tiers[2]: rotation 0, no areas, no leaf_bbox",
-          t2.get("rotation") == {"x": 0, "y": 0, "z": 0} and t2.get("areas") == []
+    check("variant_tiers[2]: rotation y 270, no areas, no leaf_bbox",
+          t2.get("rotation") == {"x": 0, "y": 270, "z": 0} and t2.get("areas") == []
           and "leaf_bbox" not in t2, str(t2))
 
     print("\n[6] the second run is a no-op")

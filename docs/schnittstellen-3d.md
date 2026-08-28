@@ -7554,7 +7554,7 @@ Entscheid **E1** (`spec-bild-props-v2.md`): **Flächen gehören zur Modelldatei.
 | Sidecar der **Full-Datei** (`model_<ts>.json`, `props.file_areas` / `props.set_file_areas`) | `areas[]`, `leaf_bbox`, `rotation {x,y,z}`, `areas_run_at`, `areas_error`, `areas_warning`, `key_areas_run[]` | das Gemessene DIESER Datei; `areas_warning` (heute nur die No-Leaf-Notiz) ist seit v2 ein **eigener** Schlüssel neben `areas_error`; `key_areas_run` = welche Arten der letzte automatische Lauf wirklich gesucht hat |
 | Sidecar der **Low-Datei** | `inherits_from: <Full-Dateiname>` + Kopien von `areas`/`leaf_bbox`/`rotation` | `file_areas(low)` antwortet über `inherits_from` mit den Werten der Full-Datei (Decimate behält Knoten und Materialien — gemessen); die Kopien sind für einen Leser, dessen Full-Datei verschwunden ist |
 | **Varianten-Eintrag** (`model_variants[i]`) | `area_defaults {"<area id>": {"preset": "glass"}}` | neben `slot_values`/`label`; geprüft gegen die Flächen der **eigenen** Datei; eine neue Variante KOPIERT die Defaults ihrer Quellvariante (`_COPIED_ON_ADD`), das Landen ihres Meshes stutzt sie auf das, was die Datei nennt |
-| Prop-Sidecar | `key_areas[]` **bleibt** (Ruling V2: der Wunsch für die nächste Generierung) | `areas`, `leaf_bbox`, `rotation`, `area_defaults`, `areas_error`, `areas_run_at` sind **weg** — einmalige Boot-Migration `app/core/prop_areas_migrate.py` (Ruling V0), danach **kein** Fallback-Leser |
+| Prop-Sidecar | `key_areas[]` **bleibt** (Ruling V2: der Wunsch für die nächste Generierung) | `areas`, `leaf_bbox`, `rotation`, `area_defaults`, `areas_error`, `areas_run_at` sind **weg** — einmalige Boot-Migration `app/core/prop_areas_migrate.py` (Ruling V0): Werte auf die aktive Full-Datei der Primärvariante (+ Low), der alte `rotation`-Wert auf die aktive Full-Datei **jeder** Variante (Ruling V4 — er galt vor dem Boot für alle; nur eine Varianten-KOPIE bekommt dazu ihre `areas`/`leaf_bbox` aus dem `.areas.json`-Begleiter zurück), `area_defaults` an den Primär-Eintrag; danach **kein** Fallback-Leser |
 | **Prop-Record** | `variant_tiers[i]` += `areas`, `rotation`, `area_defaults`, `areas_warning` (immer) und `leaf_bbox` (nur solange das Mesh einen `leaf`-Knoten hat) | die prop-weiten Felder `areas`/`area_defaults`/`leaf_bbox`/`rotation` **entfallen ohne Alias**; `model_signature` nimmt jetzt **jeder** Variante `area_defaults`+`slot_values` und den Fix jeder aktiven Datei mit (eine gedrehte Variante 1 invalidiert die Szenen, die sie zeigen) |
 
 Regel für neue Dateien: die **Orientierung wird je Datei gesetzt**
@@ -7604,7 +7604,12 @@ erkennen" des Tabs, E3: **genau** diese Arten). Neu: `POST
 /world/props/{id}/variants/{i}/area-defaults {area_defaults}`; ein Prop-PATCH
 mit `area_defaults` ist ein 400, das diese Route nennt (`MOVED_TO_VARIANT`).
 `POST /world/props/{id}/rotation?variant=i&filename=` antwortet `{status,
-variant, filename, rotation, prop}`. Der Landing-Hook (`_areas_after_landing`)
+variant, filename, rotation, prop}`; ein unbekanntes Prop, eine unbekannte
+Variante oder ein fremder Dateiname ist ein 404. Eine Variante **ohne** Mesh
+hat keine Datei und damit keine Flächen: `slot_values`/`area_defaults` werden
+gegen die Flächen ihrer aktiven Full-Datei geprüft und sind bis zum ersten
+gelandeten Mesh nicht setzbar (E1 — es gibt nichts, worauf ein Bild hängen
+könnte). Der Landing-Hook (`_areas_after_landing`)
 läuft für **jede** Variante (Tor: `key_areas` nicht leer oder Tür-Prop);
 `_reconcile_areas(pid, variant)` gibt einer Datei ohne Lesung ihre Liste (aus
 dem `.areas.json`-Begleiter, sonst „keine Flächen") und lässt die Defaults

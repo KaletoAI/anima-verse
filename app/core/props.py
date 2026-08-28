@@ -1802,7 +1802,9 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
         **({"face_num": prev["face_num"]} if prev.get("face_num") else {}),
         **({"texture_size": prev["texture_size"]}
            if prev.get("texture_size") else {}),
-        **({ROTATION_KEY: prev[ROTATION_KEY]} if prev.get(ROTATION_KEY) else {}),
+        **({ROTATION_KEY: prev[ROTATION_KEY]}
+           if isinstance(prev.get(ROTATION_KEY), dict)
+           and any(prev[ROTATION_KEY].values()) else {}),
         **({KEY_AREAS_RUN_KEY: prev[KEY_AREAS_RUN_KEY]}
            if prev.get(KEY_AREAS_RUN_KEY) else {}),
     })
@@ -2488,8 +2490,8 @@ def set_rotation(prop_id: str, rotation: Any, variant: Any = None,
     """Persist the orientation fix ``{x, y, z}`` (degrees, free values) on
     ONE model FILE of one variant — ``filename`` "" = the variant's active
     full file (pattern ``location_model3d.set_rotation``). None when the
-    prop or the variant does not exist; ``ValueError`` for a foreign file
-    name or a variant without a full-tier mesh.
+    prop, the variant or the named FILE does not exist (the route's 404);
+    ``ValueError`` for a variant without a full-tier mesh.
 
     A LOW file inherits its fix from the full file it was reduced from, so
     a dial on the active full file is copied onto the variant's active low
@@ -2516,7 +2518,7 @@ def set_rotation(prop_id: str, rotation: Any, variant: Any = None,
     if filename:
         target = g.file(filename)
         if not target:
-            raise ValueError("no such model file in this variant")
+            return None
         parent = str(read_model_sidecar(target).get(INHERITS_FROM_KEY) or "")
         if parent and g.file(parent):
             target = g.file(parent)

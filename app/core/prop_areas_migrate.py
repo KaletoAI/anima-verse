@@ -24,13 +24,16 @@ PRIMARY variant's active full mesh, and that is where it goes:
 * the primary's LOW file, when this store reduced it itself (sidecar
   ``source: lod``), gets ``inherits_from`` plus copies of the three facts, so
   ``file_areas(low)`` answers with the full file's values;
-* a VARIANT COPY (model sidecar ``source: variant-copy`` — a byte copy of the
-  primary's mesh, hence the same axes) gets the ``rotation`` too, and its own
-  ``areas`` / ``leaf_bbox`` from the ``.areas.json`` companion that travelled
-  with the copy (that companion IS a reading of that very file); its low file
-  inherits likewise;
-* a variant that is its OWN generation gets nothing: the legacy value never
-  described its mesh;
+* EVERY other variant with an active full file gets the ``rotation`` as well
+  (ruling V4): the prop-wide dial applied to every variant before this boot,
+  and a variant that came back unturned after a restart would be a regression
+  even where the dial was geometrically wrong for it — the admin re-dials it
+  per file in the Areas tab (Task 2). Its low file inherits likewise;
+* only a VARIANT COPY (model sidecar ``source: variant-copy`` — a byte copy
+  of the primary's mesh) gets its own ``areas`` / ``leaf_bbox`` back, from the
+  ``.areas.json`` companion that travelled with the copy (that companion IS a
+  reading of that very file); an own generation keeps no area reading — the
+  legacy list never described its mesh;
 * ``area_defaults`` moves onto the PRIMARY variant's entry, checked against
   the areas its file now names — an entry that already carries defaults keeps
   them (a repair never overwrites an explicit answer);
@@ -120,7 +123,10 @@ def move_prop_areas(prop_id: str) -> bool:
     raw_defaults = meta.get("area_defaults")
 
     entries = store._variant_list(meta)
-    primary = store._effective_indices(entries)[0]
+    # The MANUAL primary, not the in-season one: a boot repair must land the
+    # same way in every season, and the legacy value described the mesh the
+    # bare URL served all year — the first active variant.
+    primary = store._active_indices(entries)[0]
     gallery = store.model_gallery(prop_id, primary)
     full = gallery.find(store.DEFAULT_TIER, fallback=False) if gallery else None
     if full:
@@ -143,23 +149,25 @@ def move_prop_areas(prop_id: str) -> bool:
                 clean = {}
             if clean:
                 entries[primary][store.AREA_DEFAULTS_KEY] = clean
-    # Byte copies of the primary's mesh share its axes — and carry their own
-    # reading beside them.
-    if any(rotation.values()) or full:
-        for idx, entry in enumerate(entries):
-            if idx == primary:
-                continue
-            g = store.model_gallery(prop_id, idx)
-            f = g.find(store.DEFAULT_TIER, fallback=False) if g else None
-            if not f or store.read_model_sidecar(f).get("source") != "variant-copy":
-                continue
-            reading = _companion_reading(f)
-            fields = {"rotation": rotation if any(rotation.values()) else None,
-                      **reading}
-            store.set_file_areas(f, **fields)
-            _inherit_low(g, f, {"rotation": fields["rotation"],
-                                "areas": reading.get("areas"),
-                                "leaf_bbox": reading.get("leaf_bbox")})
+    # Ruling V4: the prop-wide dial applied to EVERY variant before this
+    # boot, so every variant file takes it (None = the zero fix, which is
+    # "no key"); only a byte copy of the primary's mesh gets an area reading
+    # back, from the companion that travelled with it.
+    fix = rotation if any(rotation.values()) else None
+    for idx, entry in enumerate(entries):
+        if idx == primary:
+            continue
+        g = store.model_gallery(prop_id, idx)
+        f = g.find(store.DEFAULT_TIER, fallback=False) if g else None
+        if not f:
+            continue
+        reading = (_companion_reading(f)
+                   if store.read_model_sidecar(f).get("source") == "variant-copy"
+                   else {})
+        store.set_file_areas(f, rotation=fix, **reading)
+        _inherit_low(g, f, {"rotation": fix,
+                            "areas": reading.get("areas"),
+                            "leaf_bbox": reading.get("leaf_bbox")})
 
     meta[store.VARIANTS_KEY] = entries
     for key in LEGACY_KEYS:

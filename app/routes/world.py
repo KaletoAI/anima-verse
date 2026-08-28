@@ -2203,8 +2203,9 @@ async def prop_rotation(prop_id: str, request: Request,
     degrees, free values with 0.1° resolution — the 3D client applies it on
     load). ``?variant=<store index>`` names the variant (default: the primary
     one), ``&filename=`` one of its gallery files (default: its active full
-    file; a distance mesh inherits from its full file). Answers
-    ``{status, variant, filename, rotation, prop}``."""
+    file; a distance mesh inherits from its full file). An unknown prop,
+    variant or file name is a 404. Answers ``{status, variant, filename,
+    rotation, prop}``."""
     data = await request.json()
     return await asyncio.to_thread(_prop_rotation_sync, prop_id, data,
                                    variant, filename)
@@ -2221,7 +2222,8 @@ def _prop_rotation_sync(prop_id: str, data: Any, variant: Optional[int],
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not out:
-        raise HTTPException(status_code=404, detail="Prop or variant not found")
+        raise HTTPException(status_code=404,
+                            detail="Prop, variant or model file not found")
     return {"status": "ok", **out}
 
 
