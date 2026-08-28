@@ -3283,7 +3283,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # ONE determination, two readers: the spec just built above IS the
         # answer to "does this room have a diorama", so the marker branch is
         # handed that very result instead of re-deciding it from the meta.
-        markers.extend(_markers(recipe, room, storey, diorama is not None))
+        markers.extend(_markers(recipe, room, storey, bool(diorama)))
 
     # A threshold lies at the STANDING height of the rooms it joins, and THIS
     # is where that is decided (finding 2026-08-16: the 3D client recomputed
