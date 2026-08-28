@@ -2078,10 +2078,13 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     here, not in the renderers: the same copy must show the same mesh in the
     3D client, in the admin preview and in the smoke.
 
-    PICTURE AREAS (spec-picture-props.md § 5): ``slots`` says what is IN the
-    prop's fillable surfaces — the prop's ``area_defaults`` overlaid with the
-    resolved variant's ``slot_values`` (:func:`_slot_spec`). Absent when there
-    is nothing to say.
+    PICTURE AREAS (spec-picture-props.md § 5, spec-bild-props-v2.md E1):
+    ``slots`` says what is IN the prop's fillable surfaces — the RESOLVED
+    VARIANT's ``area_defaults`` overlaid with its ``slot_values``
+    (:func:`_slot_spec`). Absent when there is nothing to say. The same
+    entry gives ``fix_euler`` (the orientation fix of that variant's FILE)
+    and, while its mesh has a leaf node, ``leaf_bbox`` — every variant is
+    its own generation, so nothing here reads a prop-wide value.
     """
     from app.core import props as prop_store
     level = int(recipe.get("level") or 0)
@@ -2101,6 +2104,9 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         prop = prop_store.get_prop(pid) if pid else None
         model_variants = (_prop_variant_urls(pid, placement)
                           if has_model else [])
+        # The published entry THIS placement resolves to — its file's
+        # orientation fix, areas and leaf box (v2 E1).
+        entry = _placement_entry(placement, len(model_variants))
         spec: Dict[str, Any] = {
             "role": "prop",
             "id": pid,
@@ -2110,7 +2116,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
             "variants": model_variants[0] if model_variants else {},
             "room_id": room_id,
             "level": level,
-            "fix_euler": _fix_euler((prop or {}).get("rotation")),
+            "fix_euler": _fix_euler(entry.get("rotation")),
             "yaw_deg": _r(_num(placement.get("yaw")), 1),
             "max_m": _r(max(dims)),
             "measure": "xyz",
@@ -2130,9 +2136,13 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
             spec["model_variants"] = model_variants
             spec["variant"] = _variant_index(placement, len(model_variants))
         # WHAT IS IN THE PICTURE AREAS (spec-picture-props.md § 5).
-        slots = _slot_spec(prop, placement, model_variants)
+        slots = _slot_spec(entry)
         if slots:
             spec["slots"] = slots
+        # The door-leaf box of THAT variant's mesh (spec § 6), raw y-up model
+        # metres — absent while the mesh has no leaf node.
+        if isinstance(entry.get("leaf_bbox"), dict):
+            spec["leaf_bbox"] = entry["leaf_bbox"]
         # WALKABLE (v6): only a prop that carries the tag ships its surface —
         # a table's lattice would be dead weight in every payload.
         tags = [str(t).lower() for t in ((prop or {}).get("tags") or [])]
@@ -2156,36 +2166,40 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
     return out
 
 
-def _slot_spec(prop: Optional[Dict[str, Any]], placement: Dict[str, Any],
-               model_variants: List[Dict[str, str]]) -> Dict[str, Any]:
-    """WHAT one placement shows in its prop's picture areas: the prop's
-    ``area_defaults``, overlaid with the ``slot_values`` of the VARIANT this
-    placement resolves to (spec-picture-props.md § 5).
-
-    Two sources, one merge, in that order: the defaults are the prop-wide
-    statement (a door's pane), the variant's values are the picture somebody
-    hung on THIS version of the frame. A placement whose variant shows nothing
-    of its own — every placement of every ordinary prop — therefore gets the
-    defaults alone, and a prop with neither gets nothing at all: an EMPTY
-    result is an ABSENT key, because a renderer reads "no slots" as "render
-    the mesh as it was modelled" and an empty object would say the same thing
-    in every payload of every world.
-
-    NO SECOND GATE: the values were checked against the prop's real areas when
-    the variant was saved (``props.set_variant_slot_values``), so the recipe
-    copies them verbatim. The variant is resolved with the ONE rule
-    (:func:`_variant_index` → position in the published list → that entry), so
-    the picture a copy shows and the mesh it shows come from the same entry.
-    """
-    if not prop:
-        return {}
-    out: Dict[str, Any] = dict(prop.get("area_defaults") or {})
+def _placement_entry(placement: Dict[str, Any], count: int) -> Dict[str, Any]:
+    """The published variant entry (``variant_tiers[pos]``) a placement
+    resolves to with the ONE rule (:func:`_variant_index` → position in the
+    published list → that entry) — ``{}`` when the prop publishes none (no
+    mesh anywhere). The mesh a copy shows, the picture on it, its
+    orientation fix and its leaf box all come from this one entry."""
     entries = placement.get("variant_tiers")
-    if isinstance(entries, list) and entries:
-        pos = _variant_index(placement, len(model_variants) or len(entries))
-        if 0 <= pos < len(entries) and isinstance(entries[pos], dict):
-            out.update(entries[pos].get("slot_values") or {})
-    return out
+    if not isinstance(entries, list) or not entries:
+        return {}
+    pos = _variant_index(placement, count or len(entries))
+    if 0 <= pos < len(entries) and isinstance(entries[pos], dict):
+        return entries[pos]
+    return {}
+
+
+def _slot_spec(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """WHAT one placement shows in its prop's picture areas: the resolved
+    VARIANT's ``area_defaults``, overlaid with its ``slot_values``
+    (spec-picture-props.md § 5, spec-bild-props-v2.md E1).
+
+    Two sources, one merge, in that order: the defaults are what this
+    version's panes show when nobody hung anything (a door's glass), the
+    values are the picture somebody hung on THIS version of the frame. A
+    variant with neither gets nothing at all: an EMPTY result is an ABSENT
+    key, because a renderer reads "no slots" as "render the mesh as it was
+    modelled" and an empty object would say the same thing in every payload
+    of every world.
+
+    NO SECOND GATE: both were checked against that variant's real file areas
+    when they were saved (``props.set_variant_slot_values`` /
+    ``props.set_variant_area_defaults``), so the recipe copies them verbatim.
+    """
+    return {**(entry.get("area_defaults") or {}),
+            **(entry.get("slot_values") or {})}
 
 
 def _door_prop_models(doorways: List[Dict[str, Any]],
@@ -2233,9 +2247,13 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
     :func:`_door_outward`, the normal away from the room the hole was cut out
     of. Hence +1 for a left hinge, −1 for a right one.
 
-    ``door.leaf_bbox`` (spec-picture-props.md § 6) rides along when the prop
-    sidecar carries one — the ``leaf`` node's box in raw model metres — and
-    is absent otherwise; nothing here measures a mesh.
+    ``door.leaf_bbox`` (spec-picture-props.md § 6) rides along when the
+    PRIMARY variant's file carries one — the ``leaf`` node's box in raw model
+    metres — and is absent otherwise; nothing here measures a mesh. An
+    opening names no variant (spec-bild-props-v2.md, ruling V1), so the
+    orientation fix, the leaf box and the pane defaults are the primary
+    variant's — ``variant_tiers[0]`` of the record, the same file the bare
+    URL serves.
 
     A prop id that names nothing (or a prop without a mesh) keeps its spec
     with an EMPTY ``variants`` map — the same rule dangling room-prop
@@ -2263,6 +2281,9 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
         prop = prop_store.get_prop(pid) or {}
         has_model = bool(prop.get("has_model"))
         sigs[pid] = str(prop.get("model_signature") or "")
+        # The PRIMARY variant's published entry (ruling V1).
+        tiers = prop.get("variant_tiers") or []
+        primary = tiers[0] if tiers and isinstance(tiers[0], dict) else {}
         out.append({
             "role": "prop",
             "id": pid,
@@ -2273,7 +2294,7 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
             # and that is the parent a renderer hangs the leaf in.
             "room_id": (door.get("rooms") or [""])[0],
             "level": int(door.get("level") or 0),
-            "fix_euler": _fix_euler(prop.get("rotation")),
+            "fix_euler": _fix_euler(primary.get("rotation")),
             "yaw_deg": _r(yaw % 360, 1),
             "measure": "fit",
             "size_m": [_r(width), _r(_num(door.get("height_m")))],
@@ -2281,9 +2302,9 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
                        _r(_num(door["at_world"][1]) + uz * edge)],
             "bottom_y": _r(_num(door.get("base_y"))),
             # `leaf_bbox` (spec-picture-props.md § 6): the box of the prop's
-            # `leaf` NODE in raw y-up model metres, copied off the prop
-            # sidecar so a renderer hangs the leaf's pivot without measuring
-            # (§ B5a). Absent when the mesh has no leaf node — then the
+            # `leaf` NODE in raw y-up model metres, copied off the primary
+            # variant's FILE so a renderer hangs the leaf's pivot without
+            # measuring (§ B5a). Absent when the mesh has no leaf node — then the
             # whole group swings, as before. Ruling R13: WHERE the pivot goes
             # is the shared package's `leafPivot`, which states the rule in
             # the FIXED frame (x = min, y = min, z = centre of the box turned
@@ -2293,13 +2314,13 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
             # centre z), the earlier R12 wording.
             "door": {"opening": index, "hinge": hinge,
                      "swing": 1 if hinge == "left" else -1,
-                     **({"leaf_bbox": prop["leaf_bbox"]}
-                        if isinstance(prop.get("leaf_bbox"), dict) else {})},
-            # A door prop has no variants (see the note below), so its panes
-            # come from the PROP's own defaults and from nothing else
+                     **({"leaf_bbox": primary["leaf_bbox"]}
+                        if isinstance(primary.get("leaf_bbox"), dict) else {})},
+            # An opening names no variant (V1), so its panes come from the
+            # PRIMARY variant's own defaults and from nothing else
             # (spec-picture-props.md § 5) — absent when it declares none.
-            **({"slots": dict(prop.get("area_defaults") or {})}
-               if prop.get("area_defaults") else {}),
+            **({"slots": dict(primary.get("area_defaults") or {})}
+               if primary.get("area_defaults") else {}),
         })
     return out, sigs
 

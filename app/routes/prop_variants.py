@@ -211,6 +211,32 @@ async def prop_variant_slot_values(
             "slot_values": entry["slot_values"], "label": entry["label"]}
 
 
+@router.post("/props/{prop_id}/variants/{index}/area-defaults")
+async def prop_variant_area_defaults(
+        prop_id: str, index: int, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """What this variant shows in its PANES when nobody hung anything — body
+    ``{area_defaults: {"<area id>": {"preset": "glass"}}}``; an EMPTY object
+    clears them (spec-bild-props-v2.md E1: the defaults describe ONE
+    variant's mesh, so they live on the variant like its ``slot_values``).
+
+    Checked against THAT variant's file areas: the area has to exist on its
+    active full mesh and be a ``glass`` one, the preset one of
+    ``SLOT_PRESETS``. Anything else is a 400 and nothing is written."""
+    from app.core.props import set_variant_area_defaults
+    _variant(prop_id, index)
+    body = await _body(request)
+    try:
+        entry = set_variant_area_defaults(prop_id, index,
+                                          body.get("area_defaults"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    return {"status": "ok", "index": index,
+            "area_defaults": entry["area_defaults"], "variant": entry}
+
+
 @router.post("/props/{prop_id}/variants/{index}/recopy")
 def prop_variant_recopy(
         prop_id: str, index: int,

@@ -504,7 +504,8 @@ def prop_model_variants() -> List[Tuple[str, int, str, Path, Dict[str, Any],
     and a lattice is baked from the mesh, not from the calendar.
 
     Indices are STORE indices, like everywhere in ``props``; the fix belongs to
-    the prop, because one orientation dial turns every variant of it.
+    the FILE (spec-bild-props-v2.md E1) — every variant is its own mesh with
+    its own dial, read beside it through ``props.file_areas``.
     """
     from app.core import props as prop_store
     out: List[Tuple[str, int, str, Path, Dict[str, Any], float, str]] = []
@@ -515,7 +516,6 @@ def prop_model_variants() -> List[Tuple[str, int, str, Path, Dict[str, Any],
         meta = prop_store.read_sidecar(prop_id)
         if not meta:
             continue
-        rotation = meta.get("rotation") or {}
         entries = prop_store._variant_list(meta)
         for idx in prop_store._active_indices(entries):
             path = prop_store.model_path(prop_id, variant=idx)
@@ -527,7 +527,8 @@ def prop_model_variants() -> List[Tuple[str, int, str, Path, Dict[str, Any],
             # The world size THIS variant renders at, and the prop's own
             # measure — exactly what ``_prop_models`` puts on the placement
             # spec (``max_m`` = the largest of the three dims, ``measure`` xyz).
-            out.append((prop_id, idx, label, path, rotation,
+            out.append((prop_id, idx, label, path,
+                        prop_store.file_areas(path)["rotation"],
                         max(prop_store.variant_dims(meta, idx).values()), "xyz"))
     return out
 

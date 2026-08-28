@@ -1138,10 +1138,14 @@ def main() -> int:
     # the fern was created without dims, so both variants are the 1 m
     # placeholder cube and neither overrides it.
     cube = {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
+    # …and (spec-bild-props-v2.md E1) what each variant's ACTIVE FILE
+    # carries: no areas, no leaf, the zero fix, no pane defaults, no note.
+    plain = {"areas": [], "rotation": {"x": 0, "y": 0, "z": 0},
+             "area_defaults": {}, "areas_warning": ""}
     check("the record lists tiers per active variant, with its store index",
           (store.get_prop(fern) or {}).get("variant_tiers")
-          == [{"variant": 0, "tiers": ["full", "low"], "dims": cube},
-              {"variant": 1, "tiers": ["full"], "dims": cube}],
+          == [{"variant": 0, "tiers": ["full", "low"], "dims": cube, **plain},
+              {"variant": 1, "tiers": ["full"], "dims": cube, **plain}],
           str((store.get_prop(fern) or {}).get("variant_tiers")))
     spec = spec_of(fern)
     check("model_variants has one map per active variant",

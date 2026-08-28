@@ -2188,22 +2188,33 @@ async def prop_surface(prop_id: str, request: Request,
 
 
 @router.post("/props/{prop_id}/rotation")
-async def prop_rotation(prop_id: str, request: Request) -> Dict[str, Any]:
-    """Persist the prop's orientation fix (body: {x,y,z} in degrees, free
-    values with 0.1° resolution — the 3D client applies it on load)."""
+async def prop_rotation(prop_id: str, request: Request,
+                        variant: Optional[int] = None,
+                        filename: str = "") -> Dict[str, Any]:
+    """Persist the orientation fix of ONE model FILE (body: {x,y,z} in
+    degrees, free values with 0.1° resolution — the 3D client applies it on
+    load). ``?variant=<store index>`` names the variant (default: the primary
+    one), ``&filename=`` one of its gallery files (default: its active full
+    file; a distance mesh inherits from its full file). Answers
+    ``{status, variant, filename, rotation, prop}``."""
     data = await request.json()
-    return await asyncio.to_thread(_prop_rotation_sync, prop_id, data)
+    return await asyncio.to_thread(_prop_rotation_sync, prop_id, data,
+                                   variant, filename)
 
 
-def _prop_rotation_sync(prop_id: str, data: Any) -> Dict[str, Any]:
+def _prop_rotation_sync(prop_id: str, data: Any, variant: Optional[int],
+                        filename: str) -> Dict[str, Any]:
     """The blocking body of ``prop_rotation`` — runs in the threadpool."""
     from app.core.props import set_rotation
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    prop = set_rotation(prop_id, data)
-    if not prop:
-        raise HTTPException(status_code=404, detail="Prop not found")
-    return {"status": "ok", "prop": prop}
+    try:
+        out = set_rotation(prop_id, data, variant=variant, filename=filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not out:
+        raise HTTPException(status_code=404, detail="Prop or variant not found")
+    return {"status": "ok", **out}
 
 
 @router.post("/props/{prop_id}/upload")
@@ -2369,33 +2380,44 @@ def _areas_call(fn, *args, **kwargs) -> Any:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _areas_prop(prop_id: str) -> None:
-    from app.core.props import get_prop
+def _areas_prop(prop_id: str, variant: Optional[int] = None) -> None:
+    """404 for an unknown prop — and for a ``?variant=`` this prop does not
+    have (spec-bild-props-v2.md E1: every areas verb works on ONE variant's
+    file; ``None`` is the primary variant)."""
+    from app.core.props import get_prop, list_variants
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
+    if variant is not None and not 0 <= variant < len(list_variants(prop_id)):
+        raise HTTPException(status_code=404, detail="Variant not found")
 
 
 @router.get("/props/{prop_id}/areas")
-def prop_areas(prop_id: str,
+def prop_areas(prop_id: str, variant: Optional[int] = None,
                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """The prop's picture areas: ``{areas: [{id, kind, size_m, normal, source,
-    faces, edges}], mesh_layout: [{name, tri_count}], key_areas,
-    area_defaults, blender: {available, reason}, last_run, error, warning}``.
-    `edges` are the outline segments in model metres (glTF y-up),
-    `mesh_layout` the R1 face-index order the polygon pick has to mirror.
-    `error` is a run that BROKE, `warning` one that worked and found nothing
-    to cut (the no-leaf note) — the tab shows them differently."""
+    """ONE variant's picture areas (``?variant=<store index>``, default the
+    primary one): ``{variant, model_file, areas: [{id, kind, size_m, normal,
+    source, faces, edges}], mesh_layout: [{name, tri_count}], key_areas,
+    key_areas_run, area_defaults, leaf_bbox, rotation, blender: {available,
+    reason}, last_run, error, warning}`` — everything but ``key_areas`` is
+    that variant's active FILE's (spec-bild-props-v2.md E1). `edges` are the
+    outline segments in model metres (glTF y-up), `mesh_layout` the R1
+    face-index order the polygon pick has to mirror. `error` is a run that
+    BROKE, `warning` one that worked and found nothing to cut (the no-leaf
+    note) — the tab shows them differently."""
     from app.core.props import areas_info
-    _areas_prop(prop_id)
-    return areas_info(prop_id)
+    _areas_prop(prop_id, variant)
+    return areas_info(prop_id, variant)
 
 
 @router.post("/props/{prop_id}/areas")
 async def prop_areas_detect(prop_id: str, request: Request,
+                            variant: Optional[int] = None,
                             _: Dict[str, Any] = Depends(require_admin)
                             ) -> Dict[str, Any]:
-    """Detect or draw picture areas (body: ``{mode: "auto"}`` or
-    ``{mode: "manual", faces: [flat triangle index …], kind: "picture"|"glass"}``).
+    """Detect or draw picture areas on ONE variant's mesh (``?variant=``;
+    body: ``{mode: "auto", kinds?: ["picture", "glass", "leaf"]}`` — ``kinds``
+    is the tab's "Detect now", EXACTLY these kinds — or ``{mode: "manual",
+    faces: [flat triangle index …], kind: "picture"|"glass"|"leaf"}``).
     Blocking Blender run; answers the same payload as GET afterwards. 503
     with the reason when Blender is missing or busy."""
     # The BODY decides whether there is one, not a header a client may leave
@@ -2403,55 +2425,70 @@ async def prop_areas_detect(prop_id: str, request: Request,
     data = await request.json() if await request.body() else {}
     if not isinstance(data, dict):
         data = {}
-    return await asyncio.to_thread(_prop_areas_detect_sync, prop_id, data)
+    return await asyncio.to_thread(_prop_areas_detect_sync, prop_id, data,
+                                   variant)
 
 
-def _prop_areas_detect_sync(prop_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+def _prop_areas_detect_sync(prop_id: str, data: Dict[str, Any],
+                            variant: Optional[int]) -> Dict[str, Any]:
     """The blocking body of ``prop_areas_detect`` — runs in the threadpool."""
     from app.core.props import areas_info, detect_areas
-    _areas_prop(prop_id)
+    _areas_prop(prop_id, variant)
+    kinds = data.get("kinds")
+    if kinds is not None and not isinstance(kinds, list):
+        raise HTTPException(status_code=400, detail="kinds must be a list")
     _areas_call(detect_areas, prop_id, mode=str(data.get("mode") or "auto"),
-                faces=data.get("faces"), kind=str(data.get("kind") or "picture"))
-    return {"status": "ok", **areas_info(prop_id)}
+                faces=data.get("faces"), kind=str(data.get("kind") or "picture"),
+                variant=variant, kinds=kinds)
+    return {"status": "ok", **areas_info(prop_id, variant)}
 
 
 @router.patch("/props/{prop_id}/areas/{area_id}")
 async def prop_area_patch(prop_id: str, area_id: str, request: Request,
+                          variant: Optional[int] = None,
                           _: Dict[str, Any] = Depends(require_admin)
                           ) -> Dict[str, Any]:
-    """Change an area's kind (body: ``{kind: "picture"|"glass"}``) — the
-    material is renamed to the next free id of that kind in a new gallery
-    file; the answer carries the new area list (the id changes)."""
+    """Change an area's kind on ONE variant's mesh (``?variant=``; body:
+    ``{kind: "picture"|"glass"}``) — the material is renamed to the next free
+    id of that kind in a new gallery file; the answer carries the new area
+    list (the id changes)."""
     data = await request.json()
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    return await asyncio.to_thread(_prop_area_patch_sync, prop_id, area_id, data)
+    return await asyncio.to_thread(_prop_area_patch_sync, prop_id, area_id,
+                                   data, variant)
 
 
 def _prop_area_patch_sync(prop_id: str, area_id: str,
-                          data: Dict[str, Any]) -> Dict[str, Any]:
+                          data: Dict[str, Any],
+                          variant: Optional[int]) -> Dict[str, Any]:
     """The blocking body of ``prop_area_patch`` — runs in the threadpool."""
     from app.core.props import areas_info, rename_area_kind
-    _areas_prop(prop_id)
-    _areas_call(rename_area_kind, prop_id, area_id, str(data.get("kind") or ""))
-    return {"status": "ok", **areas_info(prop_id)}
+    _areas_prop(prop_id, variant)
+    _areas_call(rename_area_kind, prop_id, area_id, str(data.get("kind") or ""),
+                variant=variant)
+    return {"status": "ok", **areas_info(prop_id, variant)}
 
 
 @router.delete("/props/{prop_id}/areas/{area_id}")
 async def prop_area_delete(prop_id: str, area_id: str,
+                           variant: Optional[int] = None,
                            _: Dict[str, Any] = Depends(require_admin)
                            ) -> Dict[str, Any]:
-    """Dissolve an area: its faces go back to the material they came from
-    (atlas UVs restored), the slot material is gone. Blocking Blender run."""
-    return await asyncio.to_thread(_prop_area_delete_sync, prop_id, area_id)
+    """Dissolve an area of ONE variant's mesh (``?variant=``): its faces go
+    back to the material they came from (atlas UVs restored), the slot
+    material is gone. Blocking Blender run."""
+    return await asyncio.to_thread(_prop_area_delete_sync, prop_id, area_id,
+                                   variant)
 
 
-def _prop_area_delete_sync(prop_id: str, area_id: str) -> Dict[str, Any]:
+def _prop_area_delete_sync(prop_id: str, area_id: str,
+                           variant: Optional[int]) -> Dict[str, Any]:
     """The blocking body of ``prop_area_delete`` — runs in the threadpool."""
     from app.core.props import areas_info, delete_area
-    _areas_prop(prop_id)
-    _areas_call(delete_area, prop_id, area_id)
-    return {"status": "ok", **areas_info(prop_id)}
+    _areas_prop(prop_id, variant)
+    _areas_call(delete_area, prop_id, area_id, variant=variant)
+    return {"status": "ok", **areas_info(prop_id, variant)}
 
 
 @router.delete("/props/{prop_id}")

@@ -1568,13 +1568,23 @@ def test_doorways() -> None:
 
 # ── Door props (plan-door-props-texture-slots.md, contract v5) ──────────
 
+# The ONE published variant of the door prop. Since spec-bild-props-v2 E1 the
+# orientation fix, the areas, the leaf box and the pane defaults are facts of
+# the MODEL FILE and ride on the variant entry — the record has no prop-level
+# `rotation` / `leaf_bbox` / `area_defaults` any more.
+DOOR_TIER = {
+    "variant": 0, "tiers": ["full"],
+    "dims": {"width_m": 0.9, "depth_m": 0.06, "height_m": 2.0},
+    "rotation": {"x": 0, "y": 0, "z": 0},
+    "areas": [], "area_defaults": {}, "areas_warning": "",
+}
 DOOR_PROP = {
     "id": "door1", "name": "Door leaf",
     "width_m": 0.9, "depth_m": 0.06, "height_m": 2.0,
-    "rotation": {"x": 0, "y": 0, "z": 0},
     "bbox": [0.9, 2.0, 0.06],
     "has_model": True, "model_tiers": ["full"],
     "model_signature": "doorsig1",
+    "variant_tiers": [DOOR_TIER],
     # A glass door is the stated use case of the material slots (v5).
     "slots": [{"name": "glass", "kind": "material"}],
 }
@@ -1718,19 +1728,22 @@ def test_door_props() -> None:
           len(axis2) == 1 and axis2[0]["door"]["swing"] == 1, str(axis2))
 
     # ── the LEAF NODE's box rides on the spec (spec-picture-props.md § 6) ─
-    # The prop record carries `leaf_bbox` exactly while its mesh has a `leaf`
-    # node (props.LEAF_BBOX_KEY); the recipe copies it VERBATIM into
-    # `door.leaf_bbox` — raw y-up model metres, the renderer scales — and
-    # writes no key at all without it (the whole group swings then). Ruling
-    # R13: where the pivot goes is the shared `leafPivot` (the rule stated in
-    # the FIXED frame and mapped back through `fix_euler`), so the server
-    # derives nothing hinge-dependent here — it copies the box.
+    # The PRIMARY variant's entry carries `leaf_bbox` exactly while its mesh
+    # has a `leaf` node (props.LEAF_BBOX_KEY on the model FILE's sidecar,
+    # published as `variant_tiers[0].leaf_bbox`); the recipe copies it
+    # VERBATIM into `door.leaf_bbox` — raw y-up model metres, the renderer
+    # scales — and writes no key at all without it (the whole group swings
+    # then). Ruling R13: where the pivot goes is the shared `leafPivot` (the
+    # rule stated in the FIXED frame and mapped back through `fix_euler`), so
+    # the server derives nothing hinge-dependent here — it copies the box.
     LEAF_BBOX = {"min": [0.1, 0.1, -0.02], "max": [0.9, 2.1, 0.0]}
     stub_library(lambda pid: (
-        {**DOOR_PROP, "id": pid, "leaf_bbox": LEAF_BBOX} if pid == "door1" else None))
+        {**DOOR_PROP, "id": pid,
+         "variant_tiers": [{**DOOR_TIER, "leaf_bbox": LEAF_BBOX}]}
+        if pid == "door1" else None))
     with_leaf = door_specs(door_prop_scene(a_openings=[
         {**S_DOOR, "prop_id": "door1", "hinge": "right"}]))
-    check("a prop with leaf_bbox: door.leaf_bbox == the sidecar value, verbatim",
+    check("a prop with leaf_bbox: door.leaf_bbox == the primary FILE's value, verbatim",
           len(with_leaf) == 1 and with_leaf[0]["door"] == {
               "opening": 0, "hinge": "right", "swing": -1,
               "leaf_bbox": LEAF_BBOX}, str(with_leaf and with_leaf[0]["door"]))
@@ -1741,9 +1754,101 @@ def test_door_props() -> None:
     stub_door_props()
     without = door_specs(door_prop_scene(a_openings=[
         {**S_DOOR, "prop_id": "door1"}]))
-    check("without a sidecar leaf_bbox the field is ABSENT (not null)",
+    check("without a file leaf_bbox the field is ABSENT (not null)",
           len(without) == 1 and "leaf_bbox" not in without[0]["door"],
           str(without and without[0]["door"]))
+
+    # ── the PLACED VARIANT decides (spec-bild-props-v2.md E1) ────────────
+    # Areas, leaf box and orientation fix are facts of the MODEL FILE, and a
+    # variant is its own file — so the recipe reads them off the variant the
+    # placement resolves to (`_variant_index` → position in `variant_tiers`),
+    # never off a prop-wide value. HAND CASE: the prop "frame" publishes two
+    # variants; variant 1 carries rotation y = 90, the area `glass_1` with
+    # the default preset `glass`, and a leaf box; variant 0 carries nothing.
+    # Room "a" (world x −4…0, z −4…−1) gets two copies, `at` [1, 1] on
+    # variant 1 → anchor (−3, −3), and `at` [2, 1] on variant 0 → (−2, −3):
+    #
+    #   variant 1 → fix_euler {0, 90, 0}, slots {glass_1: {preset glass}},
+    #               leaf_bbox = the variant's box
+    #   variant 0 → fix_euler {0, 0, 0}, NO `slots` key, NO `leaf_bbox` key
+    #
+    # A `slot_values` on the variant is laid OVER its own `area_defaults`
+    # (same key wins for the values): variant 1 with slot_values
+    # {glass_1: {preset glass}, picture_1: {image …}} → both keys. The DOOR
+    # opening carries no variant (ruling V1), so its spec reads the PRIMARY
+    # variant's file: rotation y = 270 on `variant_tiers[0]` → fix_euler
+    # {0, 270, 0}; its `area_defaults` {glass_1: glass} → `slots`.
+    FRAME_LEAF = {"min": [0.05, 0.05, -0.01], "max": [0.55, 0.45, 0.0]}
+    FRAME_PROP = {
+        "id": "frame", "name": "Frame",
+        "width_m": 0.6, "depth_m": 0.05, "height_m": 0.5,
+        "bbox": [0.6, 0.5, 0.05],
+        "has_model": True, "model_tiers": ["full"], "model_signature": "fr1",
+        "slots": [],
+        "variant_tiers": [
+            {"variant": 0, "tiers": ["full"],
+             "dims": {"width_m": 0.6, "depth_m": 0.05, "height_m": 0.5},
+             "rotation": {"x": 0, "y": 0, "z": 0},
+             "areas": [], "area_defaults": {}, "areas_warning": ""},
+            {"variant": 1, "tiers": ["full"],
+             "dims": {"width_m": 0.6, "depth_m": 0.05, "height_m": 0.5},
+             "rotation": {"x": 0, "y": 90, "z": 0},
+             "areas": [{"id": "glass_1", "kind": "glass", "size_m": [0.5, 0.4],
+                        "normal": [0, 0, 1], "source": "auto", "faces": 2}],
+             "area_defaults": {"glass_1": {"preset": "glass"}},
+             "leaf_bbox": FRAME_LEAF, "areas_warning": ""},
+        ],
+    }
+    TURNED_DOOR = {**DOOR_PROP, "variant_tiers": [
+        {**DOOR_TIER, "rotation": {"x": 0, "y": 270, "z": 0},
+         "area_defaults": {"glass_1": {"preset": "glass"}}}]}
+    stub_library(lambda pid: (
+        dict(FRAME_PROP) if pid == "frame"
+        else {**TURNED_DOOR, "id": pid} if pid == "door1" else None))
+    loc = door_fixture(a_openings=[{**S_DOOR, "prop_id": "door1"}])
+    loc["rooms"][0]["layout"]["props"] = [
+        {"prop_id": "frame", "at": [1.0, 1.0], "variant": 1},
+        {"prop_id": "frame", "at": [2.0, 1.0], "variant": 0}]
+    sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    by_anchor = {tuple(m["anchor"]): m for m in props_of(sc, "frame")}
+    v1 = by_anchor.get((-3.0, -3.0), {})
+    v0 = by_anchor.get((-2.0, -3.0), {})
+    check("both copies of the frame are placed", bool(v1) and bool(v0),
+          str(sorted(by_anchor)))
+    check("variant 1: fix_euler comes from ITS file — y = 90",
+          v1.get("fix_euler") == {"x": 0.0, "y": 90.0, "z": 0.0},
+          str(v1.get("fix_euler")))
+    check("variant 1: slots = its own area_defaults",
+          v1.get("slots") == {"glass_1": {"preset": "glass"}},
+          str(v1.get("slots")))
+    check("variant 1: leaf_bbox = its own file's box",
+          v1.get("leaf_bbox") == FRAME_LEAF, str(v1.get("leaf_bbox")))
+    check("variant 0: fix_euler 0, no slots, no leaf_bbox",
+          v0.get("fix_euler") == {"x": 0.0, "y": 0.0, "z": 0.0}
+          and "slots" not in v0 and "leaf_bbox" not in v0, str(v0))
+    with_values = dict(FRAME_PROP)
+    with_values["variant_tiers"] = [
+        FRAME_PROP["variant_tiers"][0],
+        {**FRAME_PROP["variant_tiers"][1],
+         "slot_values": {"picture_1": {"image": "/world/locations/l/gallery/p.png"}}}]
+    stub_library(lambda pid: (
+        with_values if pid == "frame"
+        else {**TURNED_DOOR, "id": pid} if pid == "door1" else None))
+    sc2 = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    v1b = {tuple(m["anchor"]): m for m in props_of(sc2, "frame")}.get(
+        (-3.0, -3.0), {})
+    check("variant 1: slot_values are laid over its area_defaults",
+          v1b.get("slots") == {"glass_1": {"preset": "glass"},
+                               "picture_1": {"image": "/world/locations/l/gallery/p.png"}},
+          str(v1b.get("slots")))
+    dspec = door_specs(sc)
+    check("the door spec reads the PRIMARY variant's file: fix_euler y = 270",
+          len(dspec) == 1 and dspec[0]["fix_euler"] == {"x": 0.0, "y": 270.0, "z": 0.0},
+          str(dspec and dspec[0].get("fix_euler")))
+    check("...and its slots from variant_tiers[0].area_defaults",
+          len(dspec) == 1 and dspec[0].get("slots") == {"glass_1": {"preset": "glass"}},
+          str(dspec and dspec[0].get("slots")))
+    stub_door_props()
 
     # ── the MIRRORED copy may win the width, never the direction ─────────
     # A shared door clamped into the AUTHOR's corner, on a neighbour wall that
@@ -2221,7 +2326,6 @@ def test_style() -> None:
 EXAMPLE_PROP = {
     "id": "table", "name": "Table",
     "width_m": 1.2, "depth_m": 0.6, "height_m": 0.3,
-    "rotation": {"x": 0, "y": 90, "z": 0},
     "bbox": [1.0, 0.5, 2.0],
     # Two resolution tiers (v5.3 Nr. 16) → the placement carries both and the
     # spec turns them into "<endpoint>?tier=<tier>" URLs.
@@ -2229,6 +2333,16 @@ EXAMPLE_PROP = {
     "model_signature": "propsig1",
     "markers": [{"id": "seat1", "group": "seat", "at": [0.5, 1.0, 0.25],
                  "facing": 90}],
+    # The ONE published variant: the orientation fix is ITS file's
+    # (spec-bild-props-v2.md E1), and the markers are its own (2026-08-25) —
+    # the record's `markers` above is the primary's list, the same one.
+    "variant_tiers": [{
+        "variant": 0, "tiers": ["full", "low"],
+        "dims": {"width_m": 1.2, "depth_m": 0.6, "height_m": 0.3},
+        "rotation": {"x": 0, "y": 90, "z": 0},
+        "markers": [{"id": "seat1", "group": "seat", "at": [0.5, 1.0, 0.25],
+                     "facing": 90}],
+        "areas": [], "area_defaults": {}, "areas_warning": ""}],
     # The two fillable surfaces of the example prop (v5 slots): one takes a
     # picture, one takes a look.
     "slots": [{"name": "picture", "kind": "image"},
@@ -2248,7 +2362,11 @@ def stub_props(ground_offset_m: float = 0.0) -> None:
     onto every placement of the prop, and the scene spec adds it to the base."""
     rec = dict(EXAMPLE_PROP)
     if ground_offset_m:
+        # The sink is the VARIANT's (2026-08-25): it rides on the published
+        # entry the placement resolves to, beside the record's own copy.
         rec["ground_offset_m"] = ground_offset_m
+        rec["variant_tiers"] = [{**EXAMPLE_PROP["variant_tiers"][0],
+                                 "ground_offset_m": ground_offset_m}]
     stub_library(lambda pid: dict(rec) if pid == "table" else None)
 
 

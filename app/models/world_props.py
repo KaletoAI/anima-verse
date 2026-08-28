@@ -374,7 +374,10 @@ def _prop_facts(prop_id: str) -> Dict[str, Any]:
         # existing client caches valid (§ B2 addendum).
         maps.append(variant_urls(base if pos == 0 else f"{base}?variant={idx}",
                                  entry.get("tiers") or []))
-    rot = meta.get("rotation") if isinstance(meta.get("rotation"), dict) else {}
+    # The orientation fix is the FILE's (v2 E1); this block carries ONE
+    # `fix_euler` per prop, so it is the PRIMARY variant's — the same file
+    # the bare URL serves.
+    rot = prop_store.file_areas(prop_store.model_path(prop_id))["rotation"]
     # ONE scale number per published variant, in the same order as the URL maps
     # (2026-08-24): a variant may override the prop's dims, and a placement
     # that shows the sapling variant must be scaled to the sapling. The

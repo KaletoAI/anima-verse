@@ -208,6 +208,8 @@ taken from" (`copied_from.file`). Uploading a second mesh onto the primary
 therefore flips it:
 
     after `save_uploaded_glb(pid, FRAME2)`   -> list_variants[1]["stale"] True
+        (+ the stubbed split of FRAME2 written onto the new FILE — v2 E1: a
+        fresh upload names no area until a run writes them)
     after `recopy_variant_mesh(pid, 1)`      -> False, `slot_values` KEPT,
         the variant's active file has the new primary's BYTES, and the old
         copy stays in the gallery as history (2 files under the stem)
@@ -293,8 +295,95 @@ of that variant answered 400 — the smoke saves it again to prove it passes.
 
 Both halves wait for the next SUCCESSFUL run to prune them. And the note a
 run that WORKED leaves when a door has no cuttable leaf (`NO_LEAF_NOTE`) is a
-`warning`, never an `error` — one sidecar key, two fields, so the tab cannot
-report "Last automatic run failed" over a working detection.
+`warning`, never an `error` — two file-sidecar keys since v2 (`areas_error`
+/ `areas_warning`), so the tab cannot report "Last automatic run failed" over
+a working detection.
+
+---------------------------------------------------------------------------
+PART 3 — AREAS, LEAF AND ORIENTATION BELONG TO THE MODEL FILE
+          (spec-bild-props-v2.md E1; still no Blender — the run is stubbed)
+---------------------------------------------------------------------------
+Every variant is its own img2mesh generation (measured 2026-08-28: variant
+`model-v3` of a real door has other axes and no leaf node), so `areas`,
+`leaf_bbox` and `rotation` live on the FULL file's sidecar, `area_defaults`
+on the VARIANT entry, and nothing of the kind on the prop any more. The
+record publishes them per `variant_tiers[i]`; `key_areas` (a wish for the
+next generation) stays prop-wide (ruling V2).
+
+Parts 1 and 2 above were rewritten to that model: `make_prop` writes the
+areas onto the primary's FILE (`set_file_areas`), defaults go through
+`set_variant_area_defaults(pid, i, …)`, a prop patch naming `area_defaults`
+is refused with the variant route, and the record's `areas` / `leaf_bbox` /
+`rotation` / `area_defaults` are read off `variant_tiers[i]`. Consequences
+that CHANGED a hand-derived expectation:
+
+    [8]  defaults are per VARIANT: a placement on variant 1 merges variant
+         1's OWN defaults, so the smoke sets them on variant 1 too; a
+         picture variant created AFTER the defaults were set copies them
+         from the source variant (`_COPIED_ON_ADD`) — checked in [12]
+    [11] a fresh upload without a split NAMES NO AREA (areas [] on its
+         file; the material-name heuristic is gone — E6 `adopt` is its
+         successor); the smoke then hands the file a stubbed split result
+         naming picture_1 only, and the re-copy prunes the variant's values
+         against THAT file's areas
+    [13] a rename on variant 0 touches variant 0's values only: the picture
+         variant hangs on its OWN copy, which still carries glass_1, so its
+         slot_values / area_defaults STAND and a save of them still passes
+         (validated against ITS file); a rename ON the variant prunes them
+
+[15] EVERY VARIANT CARRIES ITS OWN — Blender stubbed: `runner.run` answers
+  the store with a fixed result (areas [glass_1, manual, 2 faces, size_m
+  [0.5, 0.5], normal [0, 0, 1], 4 edges], mesh_layout [{m, 8}]) and a GLB
+  naming [atlas, slot_glass_1]; `refine.unavailable_reason` "", the slot
+  gate open, `validate_static_glb` ok. Prop "Two frames" (category decor,
+  no key_areas): variant 0 = frame_glb() + file areas [picture_1] (the
+  split is Blender's), variant 1 = `add_variant` + upload of a plain GLB
+  (materials [atlas]) → `areas_info(pid, 1)["areas"] == []`, variant 0's
+  [picture_1].
+
+    set_rotation(pid, {"y": 90}, variant=1)
+        -> {variant 1, filename <v1 full>, rotation {0, 90, 0}}
+        -> areas_info(pid, 1)["rotation"] == {0, 90, 0}; (pid, 0) -> 0
+        -> the v1 full file's sidecar carries rotation; the prop sidecar
+           carries NO rotation key
+    detect_areas(pid, variant=1, mode="manual", faces=[6, 7], kind="glass")
+        -> returns [glass_1]; variant 1's gallery has 2 files, the active one
+           is the split (source "areas", areas_mode manual, source_file =
+           the upload) and INHERITS the upload's rotation y 90 (`_land_split`
+           copies it — the split is the same mesh)
+        -> areas_info(pid, 1): areas [glass_1] with the 4 edges, last_run set
+        -> areas_info(pid, 0): STILL [picture_1] (untouched)
+        -> the prop sidecar has none of areas/leaf_bbox/rotation/area_defaults
+    set_variant_area_defaults(pid, 1, {"glass_1": {"preset": "glass"}})
+        -> list_variants(pid)[1]["area_defaults"] == that
+    set_variant_area_defaults(pid, 0, {"glass_1": …})
+        -> ValueError (variant 0's file has no glass_1), sidecar byte-identical
+    get_prop(pid)
+        -> no prop-level areas / leaf_bbox / rotation / area_defaults
+        -> variant_tiers[1]: rotation y 90, areas [glass_1], area_defaults
+        -> variant_tiers[0]: rotation y 0, areas [picture_1], area_defaults {}
+    build_low_tier(pid, ratio=0.5, variant=1)  (refine.build_static_lod
+      stubbed: the source bytes back, tris 4 / 8)
+        -> the low file's sidecar: inherits_from == <v1 full name>,
+           rotation y 90, areas [glass_1]
+        -> file_areas(<low>) == the full file's values
+    set_rotation(pid, {"y": 180}, variant=1)
+        -> the full file 180, the low file's copy 180, file_areas(low) 180
+        -> bake_surfaces was asked for (pid, 1) — the lattice is per file
+        -> model_signature moved (a turned variant invalidates its scenes)
+
+[16] THE LANDING HOOK RUNS FOR EVERY VARIANT — prop with key_areas
+  ["picture"], `detect_areas` monkeypatched to record its kwargs:
+    save_uploaded_glb(pid, glb, variant=1)  -> recorded variant == 1, mode auto
+    _generate(pid, …, mesh_only=True, variant=1) with a fake mesh service
+                                           -> recorded variant == 1
+
+[17] THE ORIENTATION IS THE FILE'S — AND A NEW FILE STARTS FROM THE ONE IT
+  REPLACES: on "Two frames" variant 1 (rotation 180) a further upload lands
+  a file whose sidecar rotation is 180 (the dial the admin set is the
+  default for the variant's next file; a re-generation with other axes is
+  re-dialled), `areas_info(pid, 1)["rotation"]["y"] == 180`, while variant
+  0 stays 0.
 """
 import json
 import struct
@@ -316,7 +405,23 @@ paths.init(WORLD)
 from app.core import config  # noqa: E402
 from app.core import props as store  # noqa: E402
 
+# No Blender and no LOD threads: the three post-ingest hooks are stubbed
+# exactly as `scripts/smoke_props_slots.py` stubs them — for every part, the
+# file-level areas of Part 1 need a landed mesh as well.
+store._auto_bake_vc = lambda *a, **k: None
+store._auto_retexture = lambda *a, **k: None
+store.request_low_tier = lambda *a, **k: None
+
 FAILURES = []
+
+
+def sidecar_text(pid: str) -> str:
+    return (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
+
+
+def full_file(pid: str, variant=None) -> Path:
+    """The ACTIVE full-tier file of one variant (the file the areas live on)."""
+    return store.model_gallery(pid, variant).find(store.DEFAULT_TIER, fallback=False)
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -384,13 +489,12 @@ def door_glb() -> bytes:
 
 
 def make_prop(name: str, blob: bytes, areas: list) -> str:
-    """A prop with a landed mesh and hand-written sidecar areas — the split
-    itself is Blender's job (scripts/smoke_picture_areas_blender.py)."""
+    """A prop with a landed mesh and hand-written areas on that mesh's FILE
+    sidecar — the split itself is Blender's job
+    (scripts/smoke_picture_areas_blender.py)."""
     pid = store.create_prop(name=name, category="decor")["id"]
     store.save_uploaded_glb(pid, blob)
-    meta = store.read_sidecar(pid)
-    meta[store.AREAS_KEY] = store.sanitize_areas(areas)
-    store._write_sidecar(pid, meta)
+    store.set_file_areas(full_file(pid), areas=areas)
     return pid
 
 
@@ -558,9 +662,12 @@ def part2() -> None:
     check("a door prop without defaults says nothing either",
           "slots" not in doors[0], str(doors[0].get("slots")))
 
-    store.update_prop(pid, {"area_defaults": {"glass_1": {"preset": "glass"}}})
-    store.update_prop(door_pid,
-                      {"area_defaults": {"glass_1": {"preset": "glass"}}})
+    # Defaults are PER VARIANT (E1): variant 0's for the bare placement, the
+    # door's primary for the door spec, and variant 1's own for the picture
+    # placement — the copy of [5] predates them, so they are set there too.
+    store.set_variant_area_defaults(pid, 0, {"glass_1": {"preset": "glass"}})
+    store.set_variant_area_defaults(pid, 1, {"glass_1": {"preset": "glass"}})
+    store.set_variant_area_defaults(door_pid, 0, {"glass_1": {"preset": "glass"}})
     sc = scene_of(pid, door_pid)
     specs = prop_specs(sc)
     doors = [m for m in sc["models"] if m.get("door")]
@@ -592,13 +699,21 @@ def part2() -> None:
           f"{sig_before} -> {sig_after}")
     check("…and so does the scene signature",
           scene_of(pid, door_pid)["signature"] != scene_before)
-    store.update_prop(pid, {"area_defaults": {}})
-    check("a changed area_defaults moves it too",
-          store.get_prop(pid)["model_signature"] != sig_after,
+    store.set_variant_area_defaults(pid, 0, {})
+    sig_defaults = store.get_prop(pid)["model_signature"]
+    check("a changed area_defaults moves it too", sig_defaults != sig_after,
+          sig_defaults)
+    store.set_rotation(pid, {"y": 90}, variant=1)
+    check("…and so does a turned variant (its fix is part of the scene)",
+          store.get_prop(pid)["model_signature"] != sig_defaults,
           store.get_prop(pid)["model_signature"])
+    store.set_rotation(pid, {"y": 0}, variant=1)
 
     print("\n[10] stale + re-copy")
     store.save_uploaded_glb(pid, frame_glb(extra="trim"))
+    # …and the (stubbed) split of the new frame — its areas are the new
+    # FILE's (E1); a fresh upload names none until a run writes them.
+    store.set_file_areas(full_file(pid), areas=FRAME_AREAS)
     check("a new primary mesh makes the copy stale",
           store.list_variants(pid)[1]["stale"] is True,
           str(store.list_variants(pid)[1]["stale"]))
@@ -658,16 +773,16 @@ def part2() -> None:
     finally:
         store.variant_generating = real_gen
 
-    # PRUNING, R15 — the two halves of `slots` do NOT share a fate.
-    # `_reconcile_areas` (the path a re-selected or re-uploaded mesh takes)
-    # reads the ACTIVE PRIMARY mesh, so it prunes what describes the primary:
-    # the prop-wide `area_defaults`. A variant hangs on its OWN copy, which
-    # still carries `slot_glass_1`, so its value stays — and the label, which
-    # is a name and no description at all, stays as it always did.
+    # PRUNING, R15 per variant — the two halves of `slots` do NOT share a
+    # fate. A landing on variant 0 (`_reconcile_areas(pid, 0)`) reads THAT
+    # variant's active mesh, so it prunes what describes it: variant 0's
+    # `area_defaults`. Variant 1 hangs on its OWN copy, which still carries
+    # `slot_glass_1`, so its values stay — and the label, which is a name and
+    # no description at all, stays as it always did.
     store.set_variant_slot_values(pid, 1, {"picture_1": {"image": IMG},
                                            "glass_1": {"preset": "glass"}},
                                   "Both")
-    store.update_prop(pid, {"area_defaults": {"glass_1": {"preset": "glass"}}})
+    store.set_variant_area_defaults(pid, 0, {"glass_1": {"preset": "glass"}})
     only_picture = glb({"asset": {"version": "2.0"},
                         "materials": [{"name": "atlas"},
                                       {"name": "slot_picture_1"}],
@@ -675,12 +790,20 @@ def part2() -> None:
                             {"attributes": {"POSITION": 0}}]}]})
     store.save_uploaded_glb(pid, only_picture)
     rec = store.get_prop(pid)
+    check("a fresh upload without a split names NO area on its file",
+          rec["variant_tiers"][0]["areas"] == []
+          and store.read_model_sidecar(full_file(pid)).get("areas") == [],
+          str(rec["variant_tiers"][0]["areas"]))
+    # …and a (stubbed) split result naming picture_1 only on that file:
+    store.set_file_areas(full_file(pid), areas=[FRAME_AREAS[0]])
+    store._reconcile_areas(pid, 0)
+    rec = store.get_prop(pid)
     entry = store.list_variants(pid)[1]
-    check("the vanished area is gone from the prop's areas",
-          [a["id"] for a in rec["areas"]] == ["picture_1"],
-          str([a["id"] for a in rec["areas"]]))
-    check("…from the prop-wide defaults", rec["area_defaults"] == {},
-          str(rec["area_defaults"]))
+    check("the vanished area is gone from variant 0's areas",
+          [a["id"] for a in rec["variant_tiers"][0]["areas"]] == ["picture_1"],
+          str([a["id"] for a in rec["variant_tiers"][0]["areas"]]))
+    check("…from variant 0's defaults", rec["variant_tiers"][0]["area_defaults"] == {},
+          str(rec["variant_tiers"][0]["area_defaults"]))
     check("…but NOT from the variant's slot_values (R15)",
           entry["slot_values"] == {"picture_1": {"image": IMG},
                                    "glass_1": {"preset": "glass"}},
@@ -692,14 +815,19 @@ def part2() -> None:
           == {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
           str(prop_specs(scene_of(pid, door_pid)).get((-3.0, -3.0),
                                                       {}).get("slots")))
-    # A RE-COPY is the moment the variant takes the primary's mesh, so THERE
-    # the values are re-read against the prop's current areas — `glass_1`
+    # A RE-COPY is the moment the variant takes the primary's mesh — and the
+    # primary FILE's areas with it (`_copy_variant_mesh` copies the sidecar
+    # fields), so THERE its values are re-read against them: `glass_1`
     # describes nothing on the new copy and goes; the picture stays.
     check("re-copy answers True", store.recopy_variant_mesh(pid, 1) is True)
     entry = store.list_variants(pid)[1]
-    check("…and prunes THIS variant's values to the current areas",
-          entry["slot_values"] == {"picture_1": {"image": IMG}},
-          str(entry["slot_values"]))
+    check("…the copy carries the primary file's areas",
+          [a["id"] for a in store.file_areas(full_file(pid, 1))["areas"]] == ["picture_1"],
+          str(store.file_areas(full_file(pid, 1))["areas"]))
+    check("…and prunes THIS variant's values to them",
+          entry["slot_values"] == {"picture_1": {"image": IMG}}
+          and entry["area_defaults"] == {},
+          str((entry["slot_values"], entry["area_defaults"])))
     check("…without touching the label", entry["label"] == "Both",
           entry["label"])
 
@@ -718,40 +846,48 @@ def part2() -> None:
         {"areas": [{**a, "edges": []} for a in FRAME_AREAS],
          "mesh_layout": [], "run_at": "x"}), encoding="utf-8")
     store._source_file(pid12, 0, create=True).write_bytes(b"\x89PNG-source")
-    store.update_prop(pid12, {"area_defaults": {"glass_1": {"preset": "glass"}}})
+    store.set_variant_area_defaults(pid12, 0, {"glass_1": {"preset": "glass"}})
     v12 = store.add_picture_variant(
         pid12, {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
         "Sunset")
+    check("a picture variant copies the source variant's area_defaults",
+          store.list_variants(pid12)[v12]["area_defaults"]
+          == {"glass_1": {"preset": "glass"}},
+          str(store.list_variants(pid12)[v12]["area_defaults"]))
+    check("…and its file carries the primary file's areas",
+          [a["id"] for a in store.file_areas(full_file(pid12, v12))["areas"]]
+          == ["picture_1", "glass_1"])
     # The admin selects the PRE-SPLIT file — one that names no slot material.
     plain = glb({"asset": {"version": "2.0"}, "materials": [{"name": "atlas"}],
                  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}]})
     store.save_uploaded_glb(pid12, plain)
     plain_file = store.model_path(pid12)
     store.select_model(pid12, plain_file.name)
-    check("the pre-split file names no area", store.get_prop(pid12)["areas"] == [],
-          str(store.get_prop(pid12)["areas"]))
-    check("the prop-wide defaults follow the primary and go",
-          store.get_prop(pid12)["area_defaults"] == {},
-          str(store.get_prop(pid12)["area_defaults"]))
-    check("…but the variant still hangs its picture AND its pane",
+    t0 = store.get_prop(pid12)["variant_tiers"][0]
+    check("the pre-split file names no area", t0["areas"] == [], str(t0["areas"]))
+    check("variant 0's defaults follow ITS active mesh and go",
+          t0["area_defaults"] == {}, str(t0["area_defaults"]))
+    check("…but the picture variant still hangs its picture AND its pane",
           store.list_variants(pid12)[v12]["slot_values"]
-          == {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
+          == {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}}
+          and store.list_variants(pid12)[v12]["area_defaults"]
+          == {"glass_1": {"preset": "glass"}},
           str(store.list_variants(pid12)[v12]["slot_values"]))
-    # …and back: the split file brings its own list back from `.areas.json`.
+    # …and back: the split file carries its own list on its sidecar.
     store.select_model(pid12, split_file.name)
     check("selecting the split file back restores the areas",
-          [a["id"] for a in store.get_prop(pid12)["areas"]]
+          [a["id"] for a in store.get_prop(pid12)["variant_tiers"][0]["areas"]]
           == ["picture_1", "glass_1"],
-          str([a["id"] for a in store.get_prop(pid12)["areas"]]))
+          str([a["id"] for a in store.get_prop(pid12)["variant_tiers"][0]["areas"]]))
     check("…and the assignment came through the round trip untouched",
           store.list_variants(pid12)[v12]["slot_values"]
           == {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
           str(store.list_variants(pid12)[v12]["slot_values"]))
 
-    print("\n[13] a RENAME drops both halves of the dead id")
+    print("\n[13] a RENAME drops both halves of the dead id — on THAT variant")
     pid13 = make_prop("Rename frame", frame_glb(), FRAME_AREAS)
     store._source_file(pid13, 0, create=True).write_bytes(b"\x89PNG-source")
-    store.update_prop(pid13, {"area_defaults": {"glass_1": {"preset": "glass"}}})
+    store.set_variant_area_defaults(pid13, 0, {"glass_1": {"preset": "glass"}})
     v13 = store.add_picture_variant(
         pid13, {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
         "Both")
@@ -762,63 +898,334 @@ def part2() -> None:
           == [("picture_1", "picture"), ("picture_2", "picture")],
           str([(a["id"], a["kind"]) for a in renamed]))
     check("the glass preset is NOT moved onto the renamed picture panel",
-          store.get_prop(pid13)["area_defaults"] == {},
-          str(store.get_prop(pid13)["area_defaults"]))
+          store.get_prop(pid13)["variant_tiers"][0]["area_defaults"] == {},
+          str(store.get_prop(pid13)["variant_tiers"][0]["area_defaults"]))
+    check("the picture variant hangs on its OWN copy: its values STAND",
+          store.list_variants(pid13)[v13]["slot_values"]
+          == {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}}
+          and store.list_variants(pid13)[v13]["area_defaults"]
+          == {"glass_1": {"preset": "glass"}},
+          str(store.list_variants(pid13)[v13]["slot_values"]))
+    check("…its file still names glass_1",
+          [a["id"] for a in store.file_areas(full_file(pid13, v13))["areas"]]
+          == ["picture_1", "glass_1"])
+    store.set_variant_slot_values(pid13, v13, {"picture_1": {"image": IMG2},
+                                               "glass_1": {"preset": "glass"}})
+    check("…and saving them is validated against ITS file — it passes",
+          store.list_variants(pid13)[v13]["slot_values"]
+          == {"picture_1": {"image": IMG2}, "glass_1": {"preset": "glass"}},
+          str(store.list_variants(pid13)[v13]["slot_values"]))
+    # The rename ON the variant is what drops the dead id there.
+    renamed = store.rename_area_kind(pid13, "glass_1", "picture", variant=v13)
+    check("renaming on the variant: its file reads picture_1, picture_2",
+          [(a["id"], a["kind"]) for a in renamed]
+          == [("picture_1", "picture"), ("picture_2", "picture")],
+          str([(a["id"], a["kind"]) for a in renamed]))
     check("…and the variant's value for the dead id is gone with it",
           store.list_variants(pid13)[v13]["slot_values"]
-          == {"picture_1": {"image": IMG}},
+          == {"picture_1": {"image": IMG2}}
+          and store.list_variants(pid13)[v13]["area_defaults"] == {},
           str(store.list_variants(pid13)[v13]["slot_values"]))
     check("…the label stands", store.list_variants(pid13)[v13]["label"] == "Both")
     # THE SYMPTOM the stale key caused: every save of that variant 400s,
     # because the dialog can only send back what it renders.
-    store.set_variant_slot_values(pid13, v13, {"picture_1": {"image": IMG2}})
+    store.set_variant_slot_values(pid13, v13, {"picture_1": {"image": IMG}})
     check("saving the variant works again",
           store.list_variants(pid13)[v13]["slot_values"]
-          == {"picture_1": {"image": IMG2}},
+          == {"picture_1": {"image": IMG}},
           str(store.list_variants(pid13)[v13]["slot_values"]))
 
     print("\n[14] a FAILED run says so and deletes nothing")
     pid14 = store.create_prop(name="Doomed frame", key_areas=["picture"])["id"]
-    store.save_uploaded_glb(pid14, frame_glb())
-    meta14 = store.read_sidecar(pid14)
-    meta14[store.AREAS_KEY] = store.sanitize_areas(FRAME_AREAS)
-    store._write_sidecar(pid14, meta14)
-    store._source_file(pid14, 0, create=True).write_bytes(b"\x89PNG-source")
-    store.update_prop(pid14, {"area_defaults": {"glass_1": {"preset": "glass"}}})
-    v14 = store.add_picture_variant(pid14, {"picture_1": {"image": IMG}}, "Keep")
     real_detect = store.detect_areas
 
     def unavailable(*_a, **_k):
         raise store.BlenderUnavailable("blender is busy with another model")
 
+    # The landing itself must not run the (real) detection here.
+    store.detect_areas = unavailable
+    try:
+        store.save_uploaded_glb(pid14, frame_glb())
+    finally:
+        store.detect_areas = real_detect
+    store.set_file_areas(full_file(pid14), areas=FRAME_AREAS, areas_error=None)
+    store._source_file(pid14, 0, create=True).write_bytes(b"\x89PNG-source")
+    store.set_variant_area_defaults(pid14, 0, {"glass_1": {"preset": "glass"}})
+    v14 = store.add_picture_variant(pid14, {"picture_1": {"image": IMG}}, "Keep")
     store.detect_areas = unavailable
     try:
         store._areas_after_landing(pid14, 0)
     finally:
         store.detect_areas = real_detect
-    rec14 = store.get_prop(pid14)
+    t14 = store.get_prop(pid14)["variant_tiers"][0]
     check("the unsplit mesh names no area — that much IS a reading",
-          rec14["areas"] == [], str(rec14["areas"]))
-    check("the prop-wide defaults SURVIVE a load condition",
-          rec14["area_defaults"] == {"glass_1": {"preset": "glass"}},
-          str(rec14["area_defaults"]))
-    check("…and so does the variant's picture",
+          t14["areas"] == [], str(t14["areas"]))
+    check("variant 0's defaults SURVIVE a load condition",
+          t14["area_defaults"] == {"glass_1": {"preset": "glass"}},
+          str(t14["area_defaults"]))
+    check("…and so does the picture variant's picture",
           store.list_variants(pid14)[v14]["slot_values"]
           == {"picture_1": {"image": IMG}},
           str(store.list_variants(pid14)[v14]["slot_values"]))
-    info14 = store.areas_info(pid14)
+    info14 = store.areas_info(pid14, 0)
     check("areas_info: the busy Blender is an ERROR",
           "busy" in info14["error"] and info14["warning"] == "",
           str((info14["error"], info14["warning"])))
-    # A run that WORKED and found no leaf is a note, not a failure — the two
-    # live in one sidecar key and are told apart here.
-    meta14 = store.read_sidecar(pid14)
-    meta14[store.AREAS_ERROR_KEY] = store.NO_LEAF_NOTE
-    store._write_sidecar(pid14, meta14)
+    check("…stored on the FILE's sidecar",
+          "busy" in str(store.read_model_sidecar(full_file(pid14)).get("areas_error")))
+    # A run that WORKED and found no leaf is a note, not a failure — two
+    # file-sidecar keys since v2, so the tab tells them apart by key.
+    store.set_file_areas(full_file(pid14), areas_error=None,
+                         areas_warning=store.NO_LEAF_NOTE)
     info14 = store.areas_info(pid14)
     check("the no-leaf note is a WARNING, and `error` stays empty",
           info14["warning"] == store.NO_LEAF_NOTE and info14["error"] == "",
           str((info14["error"], info14["warning"])))
+    check("…and variant_tiers[0].areas_warning carries it",
+          store.get_prop(pid14)["variant_tiers"][0]["areas_warning"] == store.NO_LEAF_NOTE)
+
+
+PLAIN_GLB = glb({"asset": {"version": "2.0"}, "materials": [{"name": "atlas"}],
+                 "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}]})
+SPLIT_GLB = glb({"asset": {"version": "2.0"},
+                 "materials": [{"name": "atlas"}, {"name": "slot_glass_1"}],
+                 "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}]})
+GLASS_EDGES = [[[0.0, -0.5, 0.0], [0.5, -0.5, 0.0]], [[0.5, -0.5, 0.0], [0.5, 0.0, 0.0]],
+               [[0.5, 0.0, 0.0], [0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0], [0.0, -0.5, 0.0]]]
+
+
+class FakeMeshService:
+    """`generate_mesh` writes the given bytes into the output path — the
+    pattern of scripts/smoke_props_slots.py [3b]."""
+
+    def __init__(self, blob: bytes) -> None:
+        self.blob = blob
+
+    def generate_mesh(self, *, output_path: str, **_kw) -> dict:
+        Path(output_path).write_bytes(self.blob)
+        return {"ok": True, "path": output_path, "format": "glb",
+                "rig": "none", "backend": "fake-mesh", "stages": []}
+
+
+def stub_blender_split(faces_seen: list):
+    """Stub the Blender run of `_areas_run`: the slot gate opens, the script
+    'finds' glass_1 on the picked faces and hands back SPLIT_GLB. Returns the
+    restore function."""
+    from app.blender import refine, runner
+    from app.core import model_validate
+    saved = (refine.unavailable_reason, refine.take_lod_slot,
+             refine.free_lod_slot, runner.run, model_validate.validate_static_glb)
+
+    def fake_run(script, *, inputs, params, out_dir, timeout_s=0):
+        faces_seen.append(dict(params))
+        out = Path(out_dir) / "split.glb"
+        out.write_bytes(SPLIT_GLB)
+        return {"ok": True, "outputs": {"model": str(out)}, "data": {
+            "areas": [{"id": "glass_1", "kind": "glass", "size_m": [0.5, 0.5],
+                       "normal": [0, 0, 1], "faces": len(params.get("faces") or []),
+                       "origin": "atlas", "centroid": [0.25, -0.25, 0.0],
+                       "edges": GLASS_EDGES}],
+            "mesh_layout": [{"name": "m", "tri_count": 8}]}}
+
+    refine.unavailable_reason = lambda: ""
+    refine.take_lod_slot = lambda *_a, **_k: True
+    refine.free_lod_slot = lambda *_a, **_k: None
+    runner.run = fake_run
+    model_validate.validate_static_glb = lambda _blob: {"ok": True, "errors": []}
+
+    def restore() -> None:
+        (refine.unavailable_reason, refine.take_lod_slot, refine.free_lod_slot,
+         runner.run, model_validate.validate_static_glb) = saved
+    return restore
+
+
+def part3() -> None:
+    print("\n[15] every variant carries its own areas, leaf and orientation")
+    pid = store.create_prop(name="Two frames", category="decor")["id"]
+    store.save_uploaded_glb(pid, frame_glb())
+    store.set_file_areas(full_file(pid, 0), areas=[FRAME_AREAS[0]])
+    v1 = store.add_variant(pid)
+    check("variant 1 added", v1 == 1, str(v1))
+    store.save_uploaded_glb(pid, PLAIN_GLB, variant=1)
+    upload_v1 = full_file(pid, 1)
+    check("variant 1's file names no area, variant 0's names picture_1",
+          store.areas_info(pid, 1)["areas"] == []
+          and [a["id"] for a in store.areas_info(pid, 0)["areas"]] == ["picture_1"],
+          str((store.areas_info(pid, 1)["areas"], store.areas_info(pid, 0)["areas"])))
+    bakes = []
+    real_bake = store.bake_surfaces
+    store.bake_surfaces = lambda p, v=None, **k: bakes.append((p, v))
+    try:
+        out = store.set_rotation(pid, {"y": 90}, variant=1)
+    finally:
+        store.bake_surfaces = real_bake
+    check("set_rotation answers variant 1, the v1 full file and {0, 90, 0}",
+          out and out.get("variant") == 1 and out.get("filename") == upload_v1.name
+          and out.get("rotation") == {"x": 0, "y": 90, "z": 0}, str(out))
+    check("areas_info(pid, 1) rotation y 90; variant 0 stays 0",
+          store.areas_info(pid, 1)["rotation"] == {"x": 0, "y": 90, "z": 0}
+          and store.areas_info(pid, 0)["rotation"] == {"x": 0, "y": 0, "z": 0},
+          str((store.areas_info(pid, 1)["rotation"], store.areas_info(pid, 0)["rotation"])))
+    check("the FILE sidecar carries the rotation, the prop sidecar does not",
+          store.read_model_sidecar(upload_v1).get("rotation") == {"x": 0, "y": 90, "z": 0}
+          and "rotation" not in store.read_sidecar(pid))
+    check("the dial asked for variant 1's surface bake", bakes == [(pid, 1)], str(bakes))
+
+    seen: list = []
+    restore = stub_blender_split(seen)
+    try:
+        areas = store.detect_areas(pid, variant=1, mode="manual", faces=[6, 7],
+                                   kind="glass")
+    finally:
+        restore()
+    check("detect on variant 1 returns [glass_1]",
+          [(a["id"], a["source"], a["faces"]) for a in areas] == [("glass_1", "manual", 2)],
+          str(areas))
+    check("the run saw manual faces [6, 7], kind glass",
+          len(seen) == 1 and seen[0].get("mode") == "manual"
+          and seen[0].get("faces") == [6, 7] and seen[0].get("kind") == "glass",
+          str(seen))
+    g1 = store.model_gallery(pid, 1)
+    split_v1 = full_file(pid, 1)
+    check("variant 1's gallery has 2 files; the split is active",
+          len(g1.files()) == 2 and split_v1 != upload_v1, str([f.name for f in g1.files()]))
+    smeta = store.read_model_sidecar(split_v1)
+    check("the split file: source areas, mode manual, source_file = the upload",
+          smeta.get("source") == "areas" and smeta.get("areas_mode") == "manual"
+          and smeta.get("source_file") == upload_v1.name, str(smeta))
+    check("…and it INHERITS the upload's rotation y 90 (same mesh)",
+          smeta.get("rotation") == {"x": 0, "y": 90, "z": 0}, str(smeta.get("rotation")))
+    info1 = store.areas_info(pid, 1)
+    check("areas_info(pid, 1): glass_1 with its 4 edges, last_run set, variant 1",
+          [a["id"] for a in info1["areas"]] == ["glass_1"]
+          and info1["areas"][0].get("edges") == GLASS_EDGES and bool(info1["last_run"])
+          and info1.get("variant") == 1, str(info1))
+    check("areas_info(pid, 0) is untouched: [picture_1]",
+          [a["id"] for a in store.areas_info(pid, 0)["areas"]] == ["picture_1"],
+          str(store.areas_info(pid, 0)["areas"]))
+    check("the prop sidecar carries none of the moved keys",
+          not any(k in store.read_sidecar(pid)
+                  for k in ("areas", "leaf_bbox", "rotation", "area_defaults",
+                            "areas_error", "areas_run_at")),
+          str(sorted(store.read_sidecar(pid))))
+
+    out = store.set_variant_area_defaults(pid, 1, {"glass_1": {"preset": "glass"}})
+    check("defaults on variant 1 are stored on ITS entry",
+          out and out.get("area_defaults") == {"glass_1": {"preset": "glass"}}
+          and store.list_variants(pid)[1]["area_defaults"] == {"glass_1": {"preset": "glass"}},
+          str(out and out.get("area_defaults")))
+    before = sidecar_text(pid)
+    try:
+        store.set_variant_area_defaults(pid, 0, {"glass_1": {"preset": "glass"}})
+        check("the same default on variant 0 is refused (its file has no glass_1)",
+              False, "no ValueError")
+    except ValueError as exc:
+        check("the same default on variant 0 is refused (its file has no glass_1)",
+              sidecar_text(pid) == before, str(exc)[:70])
+
+    rec = store.get_prop(pid)
+    check("the record has no prop-level areas / leaf_bbox / rotation / area_defaults",
+          not any(k in rec for k in ("areas", "leaf_bbox", "rotation", "area_defaults")),
+          str([k for k in ("areas", "leaf_bbox", "rotation", "area_defaults") if k in rec]))
+    t = rec["variant_tiers"]
+    check("variant_tiers[1]: rotation y 90, areas [glass_1], its defaults",
+          len(t) == 2 and t[1]["rotation"] == {"x": 0, "y": 90, "z": 0}
+          and [a["id"] for a in t[1]["areas"]] == ["glass_1"]
+          and t[1]["area_defaults"] == {"glass_1": {"preset": "glass"}}
+          and "leaf_bbox" not in t[1], str(t[1:] if len(t) > 1 else t))
+    check("variant_tiers[0]: rotation 0, areas [picture_1], defaults {}",
+          t[0]["rotation"] == {"x": 0, "y": 0, "z": 0}
+          and [a["id"] for a in t[0]["areas"]] == ["picture_1"]
+          and t[0]["area_defaults"] == {}, str(t[0]))
+
+    from app.blender import refine
+    real_lod = refine.build_static_lod
+    refine.build_static_lod = lambda src, ratio: {
+        "ok": True, "blob": Path(src).read_bytes(), "tris": 4, "tris_before": 8}
+    try:
+        lod = store.build_low_tier(pid, ratio=0.5, variant=1)
+    finally:
+        refine.build_static_lod = real_lod
+    check("the low tier was built", lod.get("ok") is True, str(lod))
+    low = g1.find(store.LOW_TIER, fallback=False)
+    lmeta = store.read_model_sidecar(low) if low else {}
+    check("the low file inherits_from the split full file",
+          lmeta.get("inherits_from") == split_v1.name, str(lmeta.get("inherits_from")))
+    check("…and carries copies of rotation and areas",
+          lmeta.get("rotation") == {"x": 0, "y": 90, "z": 0}
+          and [a["id"] for a in lmeta.get("areas") or []] == ["glass_1"], str(lmeta))
+    check("file_areas(low) answers with the full file's values",
+          low is not None and store.file_areas(low)["areas"] == store.file_areas(split_v1)["areas"]
+          and store.file_areas(low)["rotation"] == {"x": 0, "y": 90, "z": 0})
+    sig = store.get_prop(pid)["model_signature"]
+    store.set_rotation(pid, {"y": 180}, variant=1)
+    check("a further turn: the full file 180, the low file's copy 180",
+          store.read_model_sidecar(split_v1).get("rotation") == {"x": 0, "y": 180, "z": 0}
+          and store.read_model_sidecar(low).get("rotation") == {"x": 0, "y": 180, "z": 0}
+          and store.file_areas(low)["rotation"]["y"] == 180,
+          str((store.read_model_sidecar(split_v1).get("rotation"),
+               store.read_model_sidecar(low).get("rotation"))))
+    check("a turned variant moves the prop's model_signature",
+          store.get_prop(pid)["model_signature"] != sig)
+    rows = store.list_models(pid, 1)
+    check("list_models publishes each file's rotation",
+          all("rotation" in r for r in rows)
+          and next(r for r in rows if r["filename"] == split_v1.name)["rotation"]["y"] == 180,
+          str([(r["filename"], r.get("rotation")) for r in rows]))
+
+    print("\n[16] the landing hook runs for EVERY variant")
+    pid2 = store.create_prop(name="Keyed pair", key_areas=["picture"])["id"]
+    calls: list = []
+    real_detect = store.detect_areas
+
+    def recording(prop_id, **kw):
+        calls.append({"prop_id": prop_id, **kw})
+        return []
+
+    store.detect_areas = recording
+    try:
+        store.save_uploaded_glb(pid2, frame_glb())
+        store.add_variant(pid2)
+        store.save_uploaded_glb(pid2, PLAIN_GLB, variant=1)
+    finally:
+        store.detect_areas = real_detect
+    check("the upload on variant 0 ran the hook for variant 0, mode auto",
+          len(calls) >= 1 and calls[0]["mode"] == "auto"
+          and calls[0].get("variant") in (0, None), str(calls[:1]))
+    check("the upload on variant 1 ran the hook for variant 1",
+          len(calls) == 2 and calls[1]["mode"] == "auto" and calls[1].get("variant") == 1,
+          str(calls))
+    import app.imagegen.service as image_service
+    real_service = image_service.get_image_service
+    image_service.get_image_service = lambda: FakeMeshService(PLAIN_GLB)
+    store._source_file(pid2, 1, create=True).write_bytes(b"\x89PNG fake")
+    calls.clear()
+    store.detect_areas = recording
+    try:
+        out = store._generate(pid2, "", "", "", "fake-mesh", mesh_only=True, variant=1)
+    finally:
+        store.detect_areas = real_detect
+        image_service.get_image_service = real_service
+    check("the generation chain into variant 1 succeeded", out.get("ok") is True, str(out))
+    check("…and ran the hook for variant 1 as well",
+          len(calls) == 1 and calls[0].get("variant") == 1 and calls[0]["mode"] == "auto",
+          str(calls))
+
+    print("\n[17] a new file of a variant starts from the rotation of the one it replaces")
+    store.save_uploaded_glb(pid, PLAIN_GLB, variant=1)
+    newest = full_file(pid, 1)
+    check("the new upload is a fourth file of variant 1 (upload, split, low, upload)",
+          len(store.model_gallery(pid, 1).files()) == 4
+          and newest not in (upload_v1, split_v1, low),
+          str([f.name for f in store.model_gallery(pid, 1).files()]))
+    check("…whose sidecar starts with the previous file's rotation y 180",
+          store.read_model_sidecar(newest).get("rotation") == {"x": 0, "y": 180, "z": 0},
+          str(store.read_model_sidecar(newest)))
+    check("areas_info(pid, 1) rotation 180, areas [] (a fresh, unsplit file); variant 0 still 0",
+          store.areas_info(pid, 1)["rotation"]["y"] == 180
+          and store.areas_info(pid, 1)["areas"] == []
+          and store.areas_info(pid, 0)["rotation"]["y"] == 0,
+          str(store.areas_info(pid, 1)))
 
 
 def main() -> int:
@@ -832,9 +1239,12 @@ def main() -> int:
     rec = store.get_prop(pid)
     check("the record carries key_areas",
           rec.get("key_areas") == ["picture", "glass"], str(rec.get("key_areas")))
-    check("no run yet: areas == []", rec.get("areas") == [], str(rec.get("areas")))
-    check("no run yet: area_defaults == {}", rec.get("area_defaults") == {},
-          str(rec.get("area_defaults")))
+    check("the record has NO prop-level areas / area_defaults / leaf_bbox / rotation (E1)",
+          not any(k in rec for k in ("areas", "area_defaults", "leaf_bbox", "rotation")),
+          str([k for k in ("areas", "area_defaults", "leaf_bbox", "rotation") if k in rec]))
+    check("no mesh yet: areas_info answers areas [] and area_defaults {}",
+          store.areas_info(pid)["areas"] == [] and store.areas_info(pid)["area_defaults"] == {},
+          str(store.areas_info(pid)))
     try:
         store.create_prop(name="Bad", key_areas=["neon"])
         check("an unknown key kind is refused", False, "no ValueError")
@@ -855,37 +1265,60 @@ def main() -> int:
         after = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
         check("R7: an unknown kind is refused, nothing written", after == before,
               str(exc)[:50])
+    # The areas live on the FILE: a landed mesh first (while no key colour is
+    # requested, so the landing only reconciles), then the list.
+    store.save_uploaded_glb(pid, frame_glb())
     store.update_prop(pid, {"key_areas": ["picture", "glass"]})
-    meta = store.read_sidecar(pid)
-    meta[store.AREAS_KEY] = store.sanitize_areas(AREAS)
-    store._write_sidecar(pid, meta)
-    got = store.get_prop(pid)["areas"]
-    check("areas read back as written", got == AREAS, str(got))
+    mp = full_file(pid)
+    store.set_file_areas(mp, areas=AREAS)
+    got = store.get_prop(pid)["variant_tiers"][0]["areas"]
+    check("areas read back as written, on variant_tiers[0]", got == AREAS, str(got))
+    check("…and the file sidecar carries them, the prop sidecar does not",
+          store.read_model_sidecar(mp).get("areas") == AREAS
+          and "areas" not in store.read_sidecar(pid))
+    check("file_areas: rotation 0, no leaf, no warning, no run",
+          store.file_areas(mp) == {"areas": AREAS, "leaf_bbox": None,
+                                   "rotation": {"x": 0, "y": 0, "z": 0},
+                                   "areas_run_at": "", "areas_error": "",
+                                   "areas_warning": "", "key_areas_run": []},
+          str(store.file_areas(mp)))
 
-    print("\n[2] area_defaults are checked against the areas")
-    out = store.update_prop(pid, {"area_defaults": {"glass_1": {"preset": "glass"}}})
-    check("a default on an existing area is stored",
-          out.get("area_defaults") == {"glass_1": {"preset": "glass"}},
-          str(out.get("area_defaults")))
-    check("…and on the record",
-          store.get_prop(pid)["area_defaults"] == {"glass_1": {"preset": "glass"}})
-    before = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
+    print("\n[2] area_defaults are checked against the VARIANT's file areas")
+    out = store.set_variant_area_defaults(pid, 0, {"glass_1": {"preset": "glass"}})
+    check("a default on an existing area is stored on the variant entry",
+          out and out.get("area_defaults") == {"glass_1": {"preset": "glass"}},
+          str(out and out.get("area_defaults")))
+    check("…and on the record's variant_tiers[0]",
+          store.get_prop(pid)["variant_tiers"][0]["area_defaults"]
+          == {"glass_1": {"preset": "glass"}})
+    check("…and in areas_info",
+          store.areas_info(pid, 0)["area_defaults"] == {"glass_1": {"preset": "glass"}})
+    before = sidecar_text(pid)
     for label, value in (("an unknown area", {"nope": {"preset": "glass"}}),
                          ("a preset outside SLOT_PRESETS",
                           {"glass_1": {"preset": "mirror"}}),
                          ("a default without preset", {"glass_1": {}}),
                          # The KIND decides the shape, as it does for a
-                         # variant's slot_values: a prop-wide default is the
-                         # LOOK of a pane, so a picture area takes none.
+                         # variant's slot_values: a default is the LOOK of a
+                         # pane, so a picture area takes none.
                          ("a preset on a PICTURE area",
                           {"picture_1": {"preset": "glass"}}),
                          ("a string instead of an object", "glass")):
         try:
-            store.update_prop(pid, {"area_defaults": value})
+            store.set_variant_area_defaults(pid, 0, value)
             check(f"refused: {label}", False, "no ValueError")
         except ValueError as exc:
-            after = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
-            check(f"refused: {label}", after == before, str(exc)[:60])
+            check(f"refused: {label}", sidecar_text(pid) == before, str(exc)[:60])
+    try:
+        store.update_prop(pid, {"area_defaults": {"glass_1": {"preset": "glass"}}})
+        check("a PROP patch naming area_defaults is refused (moved to the variant)",
+              False, "no ValueError")
+    except ValueError as exc:
+        check("a PROP patch naming area_defaults is refused (moved to the variant)",
+              "variants/{i}/area-defaults" in str(exc) and sidecar_text(pid) == before,
+              str(exc)[:80])
+    check("an unknown variant index answers None",
+          store.set_variant_area_defaults(pid, 7, {}) is None)
 
     print("\n[2b] the door leaf is a kind without a colour (R9)")
     check("COLOUR_KINDS = picture_areas.KINDS, AREA_KINDS adds leaf last",
@@ -910,17 +1343,14 @@ def main() -> int:
             check(f"refused: {label}", False, "no ValueError")
         except ValueError as exc:
             check(f"refused: {label}", True, str(exc)[:60])
-    meta = store.read_sidecar(pid)
-    meta[store.AREAS_KEY] = store.sanitize_areas(AREAS + [LEAF])
-    store._write_sidecar(pid, meta)
-    before = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
+    store.set_file_areas(mp, areas=AREAS + [LEAF])
+    before = sidecar_text(pid)
     try:
-        store.update_prop(pid, {"area_defaults": {"leaf": {"preset": "glass"}}})
+        store.set_variant_area_defaults(pid, 0, {"leaf": {"preset": "glass"}})
         check("area_defaults on the leaf is refused", False, "no ValueError")
     except ValueError as exc:
-        after = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
         check("area_defaults on the leaf is refused, nothing written",
-              after == before, str(exc)[:60])
+              sidecar_text(pid) == before, str(exc)[:60])
     try:
         store.sanitize_variant_slot_values({"leaf": {"preset": "glass"}}, AREAS + [LEAF])
         check("slot_values on the leaf is refused", False, "no ValueError")
@@ -942,20 +1372,17 @@ def main() -> int:
     except ValueError as exc:
         check("leaf_bbox min > max is refused", True, str(exc)[:50])
     check("sanitize_leaf_bbox(None) is None", store.sanitize_leaf_bbox(None) is None)
-    check("no leaf_bbox: the record has no key, areas_info says None",
-          "leaf_bbox" not in store.get_prop(pid)
+    check("no leaf_bbox: variant_tiers[0] has no key, areas_info says None",
+          "leaf_bbox" not in store.get_prop(pid)["variant_tiers"][0]
           and store.areas_info(pid)["leaf_bbox"] is None)
-    meta = store.read_sidecar(pid)
-    meta[store.LEAF_BBOX_KEY] = bb
-    store._write_sidecar(pid, meta)
-    check("a sidecar leaf_bbox shows on the record and in areas_info",
-          store.get_prop(pid).get("leaf_bbox") == bb
+    store.set_file_areas(mp, leaf_bbox=bb)
+    check("a FILE leaf_bbox shows on variant_tiers[0] and in areas_info",
+          store.get_prop(pid)["variant_tiers"][0].get("leaf_bbox") == bb
           and store.areas_info(pid)["leaf_bbox"] == bb,
-          str(store.get_prop(pid).get("leaf_bbox")))
-    meta = store.read_sidecar(pid)
-    meta[store.AREAS_KEY] = store.sanitize_areas(AREAS)
-    meta.pop(store.LEAF_BBOX_KEY, None)
-    store._write_sidecar(pid, meta)
+          str(store.get_prop(pid)["variant_tiers"][0].get("leaf_bbox")))
+    store.set_file_areas(mp, areas=AREAS, leaf_bbox=None)
+    check("leaf_bbox=None removes the key again",
+          "leaf_bbox" not in store.read_model_sidecar(mp))
     check("is_door_prop: category Door / tag ' door ' / neither",
           store.is_door_prop({"category": "Door"}) is True
           and store.is_door_prop({"tags": [" door "]}) is True
@@ -1012,6 +1439,7 @@ def main() -> int:
           pic not in both["style"] and gl not in both["style"])
 
     part2()
+    part3()
 
     print()
     if FAILURES:

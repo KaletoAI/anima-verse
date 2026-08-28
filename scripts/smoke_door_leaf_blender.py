@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Blender integration run for the DOOR LEAF split (spec-picture-props.md § 6,
 decision D7, plan task 6): the leaf of a door mesh becomes its own glTF node
-``leaf``, the rest the node ``frame``, the sidecar carries ``leaf_bbox``, and
-a delete joins the leaf back.
+``leaf``, the rest the node ``frame``, the model FILE's sidecar carries
+``leaf_bbox`` (spec-bild-props-v2.md E1), and a delete joins the leaf back.
 
 Usage:  ./.venv/bin/python scripts/smoke_door_leaf_blender.py
 
@@ -96,7 +96,7 @@ Positions are float32 in the file; the script rounds to 5 decimals, so
   the landing run asks for kinds ["leaf"] ONLY (no unrequested chroma
   detection: the door tag alone never adds a colour kind), finds no seed ->
   ONE gallery file (nothing changed, no split file), areas [], no
-  leaf_bbox, and ``areas_error`` carries props.NO_LEAF_NOTE ("no door leaf
+  leaf_bbox, and the file's ``areas_warning`` carries props.NO_LEAF_NOTE ("no door leaf
   found — draw it with the polygon tool"). The run WORKED, so areas_info
   reports it as `warning`, not as `error` (which stays "").
 
@@ -132,6 +132,12 @@ from app.core import props as store  # noqa: E402
 
 FAILURES = []
 
+
+
+def file_meta(pid: str) -> dict:
+    """The ACTIVE full mesh's own sidecar — where the areas, the leaf box, the
+    run stamp and the note of a run live since spec-bild-props-v2.md E1."""
+    return store.read_model_sidecar(store.model_gallery(pid).find(store.DEFAULT_TIER, fallback=False))
 
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
@@ -365,7 +371,7 @@ def check_split(label: str, pid: str, source: str, extra_areas: int = 0) -> None
         lo, hi = span(n["leaf"]["tris"])
         check(f"{label}: the leaf's vertices span the derived box",
               vnear(lo, LEAF_MIN) and vnear(hi, LEAF_MAX), f"{lo} .. {hi}")
-    meta = store.read_sidecar(pid)
+    meta = file_meta(pid)
     areas = meta.get("areas") or []
     check(f"{label}: sidecar areas = {extra_areas} colour + one leaf entry, leaf LAST",
           len(areas) == extra_areas + 1 and areas[-1]["id"] == "leaf"
@@ -393,7 +399,8 @@ def check_split(label: str, pid: str, source: str, extra_areas: int = 0) -> None
           and vnear((extra.get("leaf_bbox") or {}).get("max") or [], LEAF_MAX))
     rec = store.get_prop(pid)
     check(f"{label}: the full record carries leaf_bbox",
-          vnear((rec.get("leaf_bbox") or {}).get("min") or [], LEAF_MIN), str(rec.get("leaf_bbox")))
+          vnear((rec["variant_tiers"][0].get("leaf_bbox") or {}).get("min") or [], LEAF_MIN),
+          str(rec["variant_tiers"][0].get("leaf_bbox")))
     check(f"{label}: areas_info carries leaf_bbox",
           vnear((store.areas_info(pid).get("leaf_bbox") or {}).get("max") or [], LEAF_MAX))
     if not extra_areas:
@@ -419,10 +426,11 @@ def main() -> int:
     n = nodes(store.model_path(pid))
     check("B: one node 'frame' with 60 triangles",
           set(n) == {"frame"} and len(n["frame"]["tris"]) == 60, str({k: len(v["tris"]) for k, v in n.items()}))
-    meta = store.read_sidecar(pid)
+    meta = file_meta(pid)
     check("B: sidecar has no leaf_bbox", "leaf_bbox" not in meta, str(meta.get("leaf_bbox")))
     check("B: areas_info leaf_bbox is None, record has no key",
-          store.areas_info(pid)["leaf_bbox"] is None and "leaf_bbox" not in store.get_prop(pid))
+          store.areas_info(pid)["leaf_bbox"] is None
+          and "leaf_bbox" not in store.get_prop(pid)["variant_tiers"][0])
 
     print("\n[C] a manual face list becomes the leaf")
     faces = flat_faces_where(store.model_path(pid),
@@ -439,7 +447,7 @@ def main() -> int:
     check("D: ONE gallery file", len(store.model_gallery(dp).files()) == 1)
     check("D: one node, no leaf", set(nodes(store.model_path(dp))) == {"door"})
     check("D: areas [] and no leaf_bbox",
-          store.read_sidecar(dp).get("areas", []) == [] and "leaf_bbox" not in store.read_sidecar(dp))
+          file_meta(dp).get("areas", []) == [] and "leaf_bbox" not in file_meta(dp))
 
     print("\n[E] auto on a split mesh: the leaf is joined back and found again")
     areas = store.detect_areas(pid, mode="auto")
@@ -449,7 +457,7 @@ def main() -> int:
     print("\n[F] a pane inside the leaf stays a slot material of the leaf node")
     gp = store.create_prop(name="Glass door", category="door", key_areas=["glass"])["id"]
     check("F: upload lands", store.save_uploaded_glb(gp, door_glb(glass=True)))
-    meta = store.read_sidecar(gp)
+    meta = file_meta(gp)
     check("F: the landing (production filter) cut the leaf only",
           [a["id"] for a in meta.get("areas") or []] == ["leaf"], str(meta.get("areas")))
     areas = store.detect_areas(gp, mode="auto", min_faces=2)
@@ -490,7 +498,7 @@ def main() -> int:
     check("F: …with their planar UVs", uv_rule_holds(n, "frame", "slot_glass_1", glass_uv))
     check("F: TEXCOORD_1 survives the join",
           all(p["has_uv1"] for p in n.get("frame", {}).get("prims", [])))
-    meta = store.read_sidecar(gp)
+    meta = file_meta(gp)
     check("F: no leaf_bbox after the delete", "leaf_bbox" not in meta)
     check("F: slots unchanged",
           store.get_prop(gp)["slots"] == [{"name": "glass_1", "kind": "material"}])
@@ -501,11 +509,12 @@ def main() -> int:
     check("G: ONE gallery file — nothing was split",
           len(store.model_gallery(np_).files()) == 1,
           str([f.name for f in store.model_gallery(np_).files()]))
-    meta = store.read_sidecar(np_)
+    meta = file_meta(np_)
     check("G: areas [] and no leaf_bbox",
           meta.get("areas", []) == [] and "leaf_bbox" not in meta, str(meta.get("areas")))
-    check("G: areas_error carries NO_LEAF_NOTE",
-          meta.get("areas_error") == store.NO_LEAF_NOTE, str(meta.get("areas_error")))
+    check("G: areas_warning carries NO_LEAF_NOTE (its own file key since v2)",
+          meta.get("areas_warning") == store.NO_LEAF_NOTE and "areas_error" not in meta,
+          str((meta.get("areas_warning"), meta.get("areas_error"))))
     # A run that WORKED and found nothing to cut is a NOTE: `areas_info`
     # splits the one sidecar key into `warning` (this) and `error` (a run
     # that broke), so the tab cannot report a failure over a working run.

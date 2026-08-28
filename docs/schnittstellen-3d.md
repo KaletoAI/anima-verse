@@ -7537,6 +7537,82 @@ zurückgesetzte Platte → Knoten `frame` 48 / `leaf` 12 Dreiecke, `leaf_bbox`
 wie oben, `delete` fügt zu einem Knoten zurück); die Heuristik ohne Blender:
 `scripts/smoke_picture_areas.py` Fixture F.
 
+## Nachtrag 2026-08-28 (§ B2): Bild-Props v2 — Flächen, Türblatt und Orientierung gehören zur MODELLDATEI
+
+**Anlass** (`development_instructions/befunde-bild-props-2026-08-28.md`, Wurzel 1,
+gemessen an einem echten Tür-Prop): jede Variante ist eine **eigene**
+img2mesh-Generierung — Variante `model-v3` hatte andere Achsen und keinen
+`leaf`-Knoten —, aber `areas`, `leaf_bbox`, `rotation` und `area_defaults`
+lagen **prop-weit** im Sidecar, der Areas-Tab und der Landing-Hook kannten nur
+die Primärvariante, und das Rezept las `leaf_bbox`/`area_defaults` vom Prop-Record.
+Entscheid **E1** (`spec-bild-props-v2.md`): **Flächen gehören zur Modelldatei.**
+
+### Datenmodell
+
+| Wo | Felder | Bemerkung |
+|---|---|---|
+| Sidecar der **Full-Datei** (`model_<ts>.json`, `props.file_areas` / `props.set_file_areas`) | `areas[]`, `leaf_bbox`, `rotation {x,y,z}`, `areas_run_at`, `areas_error`, `areas_warning`, `key_areas_run[]` | das Gemessene DIESER Datei; `areas_warning` (heute nur die No-Leaf-Notiz) ist seit v2 ein **eigener** Schlüssel neben `areas_error`; `key_areas_run` = welche Arten der letzte automatische Lauf wirklich gesucht hat |
+| Sidecar der **Low-Datei** | `inherits_from: <Full-Dateiname>` + Kopien von `areas`/`leaf_bbox`/`rotation` | `file_areas(low)` antwortet über `inherits_from` mit den Werten der Full-Datei (Decimate behält Knoten und Materialien — gemessen); die Kopien sind für einen Leser, dessen Full-Datei verschwunden ist |
+| **Varianten-Eintrag** (`model_variants[i]`) | `area_defaults {"<area id>": {"preset": "glass"}}` | neben `slot_values`/`label`; geprüft gegen die Flächen der **eigenen** Datei; eine neue Variante KOPIERT die Defaults ihrer Quellvariante (`_COPIED_ON_ADD`), das Landen ihres Meshes stutzt sie auf das, was die Datei nennt |
+| Prop-Sidecar | `key_areas[]` **bleibt** (Ruling V2: der Wunsch für die nächste Generierung) | `areas`, `leaf_bbox`, `rotation`, `area_defaults`, `areas_error`, `areas_run_at` sind **weg** — einmalige Boot-Migration `app/core/prop_areas_migrate.py` (Ruling V0), danach **kein** Fallback-Leser |
+| **Prop-Record** | `variant_tiers[i]` += `areas`, `rotation`, `area_defaults`, `areas_warning` (immer) und `leaf_bbox` (nur solange das Mesh einen `leaf`-Knoten hat) | die prop-weiten Felder `areas`/`area_defaults`/`leaf_bbox`/`rotation` **entfallen ohne Alias**; `model_signature` nimmt jetzt **jeder** Variante `area_defaults`+`slot_values` und den Fix jeder aktiven Datei mit (eine gedrehte Variante 1 invalidiert die Szenen, die sie zeigen) |
+
+Regel für neue Dateien: die **Orientierung wird je Datei gesetzt**
+(`POST /world/props/{id}/rotation?variant=i[&filename=…]`, Muster
+`location_model3d.set_rotation`); eine neue Datei derselben Variante (Upload,
+Generierung) **startet mit dem Fix der Datei, die sie ersetzt**, ein Split
+(`_land_split`) übernimmt den Fix seiner Eingabedatei — die Dial-Vorbelegung
+der Befunde. Ein Fix auf der aktiven Full-Datei wird auf die aktive Low-Datei
+kopiert; ein Fix, der auf eine erbende Low-Datei zielt, landet auf ihrer
+Full-Datei.
+
+### Rezept
+
+```
+entry = variant_tiers[_variant_index(placement, len(model_variants))]   # die aufgelöste Variante
+spec["fix_euler"]  = fix_euler(entry.rotation)
+spec["slots"]      = { **entry.area_defaults, **entry.slot_values }       # leer → Schlüssel fehlt
+spec["leaf_bbox"]  = entry.leaf_bbox                                       # nur wenn vorhanden
+```
+
+`_prop_models` liest **je aufgelöster Variante** (`_placement_entry`), nie
+einen prop-weiten Wert; `_door_prop_models` liest die **Primärvariante**
+(`variant_tiers[0]` — Öffnungen tragen keine Variante, Ruling V1): `fix_euler`,
+`door.leaf_bbox` und `slots` aus deren Datei bzw. Eintrag. Neu am
+Raum-Platzierungs-Spec: `leaf_bbox` (rohe y-up-Modell-Meter der aufgelösten
+Variante), wenn deren Mesh einen `leaf`-Knoten hat — dieselbe Bedeutung wie
+`door.leaf_bbox`, ohne Schwenk-Auftrag.
+
+Handbeispiel (`scripts/smoke_scene_recipe.py` **[3p]**, „the PLACED VARIANT
+decides"): Prop `frame`, Variante 1 mit `rotation {y: 90}`, `areas [glass_1]`,
+`area_defaults {glass_1: glass}`, `leaf_bbox`; Variante 0 ohne alles. Zwei
+Kopien in Raum a (x −4…0, z −4…−1), `at [1, 1]` auf Variante 1 → Anker
+(−3, −3), `at [2, 1]` auf Variante 0 → (−2, −3): Variante 1 → `fix_euler
+{0, 90, 0}`, `slots {glass_1: {preset glass}}`, `leaf_bbox` = ihre Box;
+Variante 0 → `fix_euler 0`, **kein** `slots`, **kein** `leaf_bbox`. Tür-Spec
+mit `variant_tiers[0].rotation {y: 270}` → `fix_euler {0, 270, 0}`.
+
+### Routen
+
+`GET/POST/PATCH/DELETE /world/props/{id}/areas[/{area_id}]?variant=<i>`
+(Query; ohne = Primärvariante; unbekannter Index 404). `GET` antwortet
+`{variant, model_file, areas(+edges), mesh_layout, key_areas, key_areas_run,
+area_defaults, leaf_bbox, rotation, blender, last_run, error, warning}` — alles
+außer `key_areas` von der aktiven Datei dieser Variante. `POST` mit `mode:
+"auto"` nimmt optional `kinds: ["picture","glass","leaf"]` (das „Jetzt
+erkennen" des Tabs, E3: **genau** diese Arten). Neu: `POST
+/world/props/{id}/variants/{i}/area-defaults {area_defaults}`; ein Prop-PATCH
+mit `area_defaults` ist ein 400, das diese Route nennt (`MOVED_TO_VARIANT`).
+`POST /world/props/{id}/rotation?variant=i&filename=` antwortet `{status,
+variant, filename, rotation, prop}`. Der Landing-Hook (`_areas_after_landing`)
+läuft für **jede** Variante (Tor: `key_areas` nicht leer oder Tür-Prop);
+`_reconcile_areas(pid, variant)` gibt einer Datei ohne Lesung ihre Liste (aus
+dem `.areas.json`-Begleiter, sonst „keine Flächen") und lässt die Defaults
+**dieser** Variante ihrer aktiven Datei folgen; `slot_values` bleiben bei
+einem Galerie-Klick unberührt (R15, jetzt je Variante), ein Split/Rename/
+Delete/Re-Copy auf Variante i stutzt beide Hälften **von i**. Beweise:
+`scripts/smoke_props_areas.py` Teil 3 [15]–[17], `scripts/smoke_prop_areas_migrate.py`.
+
 ## Nachtrag 2026-08-27 (§ B2): Oberflächen-Raster (v6)
 
 **Anlass** (User am Ort „Klippen"): „Die Laufhöhe des Avatars ist die Höhe des

@@ -233,6 +233,23 @@ async def lifespan(app: FastAPI):
     except Exception as _pfe:
         logger.warning("prop field migration failed: %s", _pfe)
 
+    # Picture areas, the door-leaf box and the orientation fix belong to the
+    # MODEL FILE now (spec-bild-props-v2.md E1, ruling V0, 2026-08-28): every
+    # variant is its own generation with its own axes. The legacy prop-level
+    # values are moved ONCE onto the primary variant's active full file (its
+    # low file inherits, the pane defaults onto the variant entry); no reader
+    # keeps a fallback for the prop-level keys. Idempotent by content — a
+    # sidecar without a legacy key is left alone — so no world_kv flag.
+    # AFTER the field migration above, which reads the pre-move `rotation`
+    # for its size arithmetic.
+    try:
+        from app.core.prop_areas_migrate import migrate_prop_areas_to_files
+        _pa = migrate_prop_areas_to_files()
+        if _pa.get("moved"):
+            logger.info("Prop area fields moved onto the model files: %s", _pa)
+    except Exception as _pae:
+        logger.warning("prop area migration failed: %s", _pae)
+
     # Unified intents (plan-intents-unified.md, phase 1): mirror existing
     # assignments idempotently into the intents table. No behaviour change —
     # assignments stay the driving source in phase 1.

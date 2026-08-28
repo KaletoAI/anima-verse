@@ -281,8 +281,6 @@ def seed_prop(name: str, variants: int = 1, rotation=None) -> str:
     rec = prop_store.create_prop(name=name, width_m=2.0, height_m=3.0,
                                  depth_m=1.0)
     pid = rec["id"]
-    if rotation:
-        prop_store.set_rotation(pid, rotation)
     for i in range(variants):
         if i > 0:
             prop_store.add_variant(pid)
@@ -290,6 +288,11 @@ def seed_prop(name: str, variants: int = 1, rotation=None) -> str:
         target = g.new_path()
         target.write_bytes(b"not-a-real-glb")
         g.select(target.name, "full")
+    if rotation:
+        # The fix is the FILE's (spec-bild-props-v2.md E1): the primary
+        # variant's active full mesh carries it, so it is dialled once the
+        # mesh exists — and the world-prop row reads that primary file.
+        prop_store.set_rotation(pid, rotation)
     return pid
 
 

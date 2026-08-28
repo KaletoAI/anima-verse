@@ -38,7 +38,7 @@ THE FIXTURE (glTF y-up, written with the stdlib), `plate_glb(n)`:
     -> corner (-0.5,0)->(0,1), (0,0)->(1,1), (0,0.5)->(1,0), (-0.5,0.5)->(0,0)
     i.e. every picture vertex has (u, v) = (2x+1, 1-2y).
     TEXCOORD_1 (the atlas backup layer) is present on the split file.
-  Sidecar `areas`: one entry, id "picture_1", kind "picture",
+  FILE sidecar `areas` (spec-bild-props-v2.md E1): one entry, id "picture_1", kind "picture",
     size_m [0.5, 0.5], normal [0,0,1], source "auto", faces 2.
   `<model>.areas.json`: picture_1 has 4 boundary edges (the quad's outline;
     the diagonal is shared by both triangles and drops out); mesh_layout has
@@ -136,6 +136,12 @@ from app.core import props as store  # noqa: E402
 
 FAILURES = []
 
+
+
+def file_meta(pid: str) -> dict:
+    """The ACTIVE full mesh's own sidecar — where the areas, the run stamp and
+    the error of a run live since spec-bild-props-v2.md E1."""
+    return store.read_model_sidecar(store.model_gallery(pid).find(store.DEFAULT_TIER, fallback=False))
 
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
@@ -382,8 +388,8 @@ def main() -> int:
           uv_rule_holds(prims, "atlas", lambda x, y: (x + 0.5, 0.5 - y)))
     check("the atlas backup layer TEXCOORD_1 is present",
           all(p["has_uv1"] for p in prims))
-    meta = store.read_sidecar(pid)
-    check("sidecar areas == the returned list", meta.get("areas") == areas)
+    meta = file_meta(pid)
+    check("FILE sidecar areas == the returned list", meta.get("areas") == areas)
     check("sidecar areas_error empty", not meta.get("areas_error"), str(meta.get("areas_error")))
     side = store.areas_sidecar_path(result)
     check("<model>.areas.json exists", side is not None and side.exists(), str(side))
@@ -456,7 +462,7 @@ def main() -> int:
     check("the ACTIVE model carries slot_picture_1 with 32 triangles",
           tri_count(prims, "slot_picture_1") == 32, str(tri_count(prims, "slot_picture_1")))
     check("atlas 96", tri_count(prims, "atlas") == 96, str(tri_count(prims, "atlas")))
-    meta = store.read_sidecar(kp)
+    meta = file_meta(kp)
     ka = meta.get("areas") or []
     check("sidecar: one area picture_1/auto/32 faces",
           len(ka) == 1 and (ka[0]["id"], ka[0]["source"], ka[0]["faces"]) == ("picture_1", "auto", 32),
@@ -472,9 +478,9 @@ def main() -> int:
           and store.model_path(kp) == uploaded and len(store.model_gallery(kp).files()) == 2,
           str([f.name for f in store.model_gallery(kp).files()]))
     check("…and the areas reconcile to [] (the original names no slot material)",
-          store.read_sidecar(kp).get("areas") == [], str(store.read_sidecar(kp).get("areas")))
+          file_meta(kp).get("areas") == [], str(file_meta(kp).get("areas")))
     store.select_model(kp, active.name)
-    back = store.read_sidecar(kp).get("areas") or []
+    back = file_meta(kp).get("areas") or []
     check("selecting the split file back brings its area list back",
           [a["id"] for a in back] == ["picture_1"] and len(store.model_gallery(kp).files()) == 2, str(back))
 
@@ -495,7 +501,7 @@ def main() -> int:
         runner.run = real_run
     check("save_uploaded_glb still returns True", ok is True, str(ok))
     check("the uploaded file is the active model", len(store.model_gallery(ep).files()) == 1)
-    emeta = store.read_sidecar(ep)
+    emeta = file_meta(ep)
     check("sidecar areas == []", emeta.get("areas") == [], str(emeta.get("areas")))
     check("areas_error carries the message", "boom" in str(emeta.get("areas_error")), str(emeta.get("areas_error")))
     check("areas_info reports it", "boom" in store.areas_info(ep)["error"])
@@ -514,7 +520,7 @@ def main() -> int:
     prims = primitives(store.model_path(gp))
     check("the active model carries slot_picture_1 with 32 triangles",
           tri_count(prims, "slot_picture_1") == 32, str(tri_count(prims, "slot_picture_1")))
-    gmeta = store.read_sidecar(gp)
+    gmeta = file_meta(gp)
     check("sidecar: one area", [a["id"] for a in gmeta.get("areas") or []] == ["picture_1"], str(gmeta.get("areas")))
     check("slots: picture_1 image", store.get_prop(gp)["slots"] == [{"name": "picture_1", "kind": "image"}])
 
@@ -544,7 +550,7 @@ def main() -> int:
     print("\n[H] a split file can be detected again after its own round trip")
     hp = store.create_prop(name="Bumpy frame", key_areas=["picture"])["id"]
     check("the landing splits the bumpy plate", store.save_uploaded_glb(hp, plate_glb(8, 0.002)))
-    first = store.read_sidecar(hp).get("areas") or []
+    first = file_meta(hp).get("areas") or []
     check("run 1: picture_1 with 32 faces",
           [(a["id"], a["faces"]) for a in first] == [("picture_1", 32)], str(first))
     areas = store.detect_areas(hp, mode="auto")

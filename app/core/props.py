@@ -11,14 +11,18 @@ Storage: ``worlds/<world>/props/<prop_id>/``:
 
     model_<ts>.glb   — the meshes (unrigged GLB, embedded texture)
     model_<ts>.json  — one sidecar per mesh: {created_at, source, format,
-                       tier, backend, face_num, texture_size}
+                       tier, backend, face_num, texture_size} plus what is
+                       MEASURED ON THAT MESH (spec-bild-props-v2.md E1):
+                       {areas[], leaf_bbox, rotation{x,y,z}, areas_run_at,
+                       areas_error, areas_warning, key_areas_run[]}; a LOW
+                       file says `inherits_from: <full file>` instead
     selection.json   — {"model": {"<tier>": "<filename>"}}
     source.png       — the product-shot render THIS variant's meshes were made
                        from (one per variant, see the source-image law below)
     sidecar.json     — the prop MASTER record: {name, category, tags[],
-                       rotation{x,y,z}, bbox[3], sway_factor, slots[],
-                       slots_auto, key_areas[], areas[], area_defaults{},
-                       created_at, source, prompt, model_variants[…]}
+                       bbox[3], sway_factor, slots[], slots_auto,
+                       key_areas[], created_at, source, prompt,
+                       model_variants[{…, area_defaults{}, slot_values{}}]}
     model_<ts>.glb.areas.json — outline edges + mesh layout of the picture
                        areas of THAT mesh (spec-picture-props.md § 2)
 
@@ -347,25 +351,60 @@ AREA_KINDS = tuple(COLOUR_KINDS) + (LEAF_KIND,)
 #: ``AREA_KINDS`` in that order (``leaf`` = "cut the door leaf out on every
 #: landing", no prompt text). Non-empty = detect on every landing.
 KEY_AREAS_KEY = "key_areas"
-#: Sidecar key: ``[{id, kind, size_m: [w, h], normal: [x, y, z], source,
+#: THE MEASURED FACTS LIVE ON THE MODEL FILE (spec-bild-props-v2.md E1,
+#: 2026-08-28). Every variant is its own img2mesh generation — measured on a
+#: real door prop: one variant had other axes and no leaf node — so what a
+#: split found, where the leaf sits and which way is up are facts of ONE
+#: FILE, kept on that file's own ``.json`` sidecar (``model_store``) and read
+#: through :func:`file_areas`. A LOW file inherits them from its full file
+#: (:data:`INHERITS_FROM_KEY`). The prop record publishes them per
+#: ``variant_tiers[i]``; nothing of the kind is on the prop any more (the
+#: legacy prop-level values were moved once, ``prop_areas_migrate``).
+#:
+#: FILE-sidecar key: ``[{id, kind, size_m: [w, h], normal: [x, y, z], source,
 #: faces, origin?, centroid?}, …]``; ``id`` = the slot name (``picture_1``),
 #: or ``leaf`` for the door leaf node.
 AREAS_KEY = "areas"
-#: Sidecar key: ``{"min": [x, y, z], "max": [x, y, z]}`` of the ``leaf`` node
-#: in glTF y-up RAW model metres (before the placement's fit scaling) —
+#: FILE-sidecar key: ``{"min": [x, y, z], "max": [x, y, z]}`` of the ``leaf``
+#: node in glTF y-up RAW model metres (before the placement's fit scaling) —
 #: what the scene recipe copies into ``door.leaf_bbox`` so a renderer hangs
 #: its pivot without measuring (§ B5a). Present exactly while the model has
 #: a leaf node; written by the same run that writes ``areas``.
 LEAF_BBOX_KEY = "leaf_bbox"
-#: Sidecar key: ``{"<area id>": {"preset": "glass"}}`` — prop-wide defaults
-#: that apply without a variant (a door's pane). Checked against ``areas``.
+#: FILE-sidecar key: the admin's orientation fix ``{x, y, z}`` in degrees
+#: (pattern ``location_model3d.set_rotation``, per file). A new file of a
+#: variant starts from the fix of the file it replaces (the dial is the
+#: default for the variant's next mesh); a split copies its input's.
+ROTATION_KEY = "rotation"
+#: Variant key: ``{"<area id>": {"preset": "glass"}}`` — what this variant
+#: shows in its panes when nobody hung anything (a door's glass). Checked
+#: against THAT variant's file areas; the recipe lays ``slot_values`` over it.
 AREA_DEFAULTS_KEY = "area_defaults"
-#: Sidecar key: why the last automatic run stored no areas ("" / absent when
-#: it succeeded) — the tab shows it, the landing never fails on it.
+#: FILE-sidecar key: why the last automatic run on this file stored no areas
+#: ("" / absent when it succeeded) — the tab shows it, the landing never
+#: fails on it.
 AREAS_ERROR_KEY = "areas_error"
-#: Sidecar key: ISO stamp of the last detection/split run (system time).
+#: FILE-sidecar key: the note of a run that WORKED and found nothing to cut
+#: (today only :data:`NO_LEAF_NOTE`). Its own key since v2, so no reader has
+#: to tell a note from a failure by its text.
+AREAS_WARNING_KEY = "areas_warning"
+#: FILE-sidecar key: ISO stamp of the last detection/split run (system time).
 AREAS_RUN_AT_KEY = "areas_run_at"
-#: The ``areas_error`` note of a run that looked for the door leaf and found
+#: FILE-sidecar key: which kinds the last AUTOMATIC run on this file actually
+#: searched (ruling V2: ``key_areas`` is the prop's wish for the next
+#: generation, this is what a run did).
+KEY_AREAS_RUN_KEY = "key_areas_run"
+#: FILE-sidecar key of a LOW file: the FULL file it inherits areas, leaf box
+#: and orientation from — Decimate keeps node names and materials (measured),
+#: so the distance mesh is the same object and re-measures nothing.
+INHERITS_FROM_KEY = "inherits_from"
+#: Every area field a model FILE's sidecar may carry — what
+#: :func:`set_file_areas` accepts and :func:`_copy_variant_mesh` carries over.
+FILE_AREAS_KEYS = (AREAS_KEY, LEAF_BBOX_KEY, ROTATION_KEY, AREAS_RUN_AT_KEY,
+                   AREAS_ERROR_KEY, AREAS_WARNING_KEY, KEY_AREAS_RUN_KEY)
+#: The three of them a LOW file copies from its full file at the LOD build.
+_INHERITED_AREAS_KEYS = (AREAS_KEY, LEAF_BBOX_KEY, ROTATION_KEY)
+#: The ``areas_warning`` of a run that looked for the door leaf and found
 #: none — the tab shows it; the areas the run DID find stay as they are.
 NO_LEAF_NOTE = "no door leaf found — draw it with the polygon tool"
 #: How an area came to be: found on the atlas, or drawn by the admin.
@@ -620,6 +659,11 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             values = _coerce_slot_values(entry.get(SLOT_VALUES_KEY))
             if values:
                 rec[SLOT_VALUES_KEY] = values
+            # …and its PANE DEFAULTS (v2 E1): they describe this variant's
+            # own mesh, so they live beside the pictures hung on it.
+            defaults = _coerce_area_defaults(entry.get(AREA_DEFAULTS_KEY))
+            if defaults:
+                rec[AREA_DEFAULTS_KEY] = defaults
             label = _coerce_variant_label(entry.get(VARIANT_LABEL_KEY))
             if label:
                 rec[VARIANT_LABEL_KEY] = label
@@ -981,6 +1025,33 @@ def variant_slot_values(meta: Dict[str, Any],
     the only place a payload asks for it (spec-picture-props.md § 1)."""
     return _coerce_slot_values(
         _variant_entry(meta, variant).get(SLOT_VALUES_KEY))
+
+
+def variant_area_defaults(meta: Dict[str, Any],
+                          variant: Any = None) -> Dict[str, Dict[str, str]]:
+    """What one variant shows in its PANES when nobody hung anything
+    (``{}`` = nothing) — the defaults ride on the variant since v2 E1,
+    because they describe that variant's own mesh."""
+    return _coerce_area_defaults(
+        _variant_entry(meta, variant).get(AREA_DEFAULTS_KEY))
+
+
+def _coerce_area_defaults(raw: Any) -> Dict[str, Dict[str, str]]:
+    """A stored ``area_defaults`` object as it is READ BACK — junk dropped
+    entry by entry, like :func:`_coerce_slot_values`; the check against the
+    file's areas belongs where the value is WRITTEN
+    (:func:`sanitize_area_defaults`)."""
+    out: Dict[str, Dict[str, str]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for area_id, value in raw.items():
+        aid = str(area_id or "").strip().lower()
+        if not _AREA_ID_RE.match(aid) or not isinstance(value, dict):
+            continue
+        preset = str(value.get("preset") or "").strip()
+        if preset:
+            out[aid] = {"preset": preset}
+    return out
 
 
 def _coerce_tags(raw: Any) -> List[str]:
@@ -1568,8 +1639,123 @@ def _sidecar_areas_from_script(script_areas: List[Dict[str, Any]],
     return sanitize_areas(out)
 
 
-def _is_primary(prop_id: str, variant: Any) -> bool:
-    return variant is None or _stem_of(prop_id, variant) == _stem_of(prop_id)
+# ── The measured facts of ONE model file ────────────────────────────────
+# (spec-bild-props-v2.md E1.) What a split found, where the leaf node sits
+# and which way is up are facts of ONE FILE — every variant is its own
+# generation — and live on that file's ``.json`` sidecar. `file_areas` is the
+# ONE reader (a LOW file answers through `inherits_from`), `set_file_areas`
+# the ONE writer; nothing reads a prop-level value for any of them.
+
+def _file_areas_owner(model_path: Path) -> Tuple[Path, Dict[str, Any]]:
+    """``(file, its sidecar)`` that answers for ``model_path``: the file
+    itself — or, for a LOW file that says ``inherits_from``, the full file it
+    was reduced from while that file still exists (its sidecar is read, the
+    logic is not duplicated). A low file whose full file is gone answers
+    with the copies it carries itself."""
+    meta = read_model_sidecar(model_path)
+    parent = str(meta.get(INHERITS_FROM_KEY) or "")
+    if parent:
+        pp = model_path.with_name(parent)
+        if pp.exists():
+            return pp, read_model_sidecar(pp)
+    return model_path, meta
+
+
+def _coerce_file_areas(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The seven fields as READ BACK — junk is a missing value, never a
+    crash: a hand-edited sidecar must not take a whole prop record down."""
+    try:
+        areas = (sanitize_areas(meta.get(AREAS_KEY))
+                 if isinstance(meta.get(AREAS_KEY), list) else [])
+    except ValueError:
+        areas = []
+    try:
+        leaf = sanitize_leaf_bbox(meta.get(LEAF_BBOX_KEY))
+    except ValueError:
+        leaf = None
+    try:
+        run = sanitize_key_areas(meta.get(KEY_AREAS_RUN_KEY))
+    except ValueError:
+        run = []
+    return {
+        AREAS_KEY: areas,
+        LEAF_BBOX_KEY: leaf,
+        ROTATION_KEY: _sanitize_rotation(meta.get(ROTATION_KEY)),
+        AREAS_RUN_AT_KEY: str(meta.get(AREAS_RUN_AT_KEY) or ""),
+        AREAS_ERROR_KEY: str(meta.get(AREAS_ERROR_KEY) or ""),
+        AREAS_WARNING_KEY: str(meta.get(AREAS_WARNING_KEY) or ""),
+        KEY_AREAS_RUN_KEY: run,
+    }
+
+
+def file_areas(model_path: Optional[Path]) -> Dict[str, Any]:
+    """``{areas, leaf_bbox, rotation, areas_run_at, areas_error,
+    areas_warning, key_areas_run}`` of ONE model file, read off the FULL
+    file's sidecar — a LOW file answers with its full file's values
+    (sidecar ``inherits_from``). ``None`` / a missing file answers with the
+    empty shape (no areas, no leaf, rotation 0), never raises."""
+    if not model_path:
+        return _coerce_file_areas({})
+    _, meta = _file_areas_owner(Path(model_path))
+    return _coerce_file_areas(meta)
+
+
+def set_file_areas(model_path: Path, **fields: Any) -> None:
+    """Write ONLY the given area fields onto a model file's sidecar
+    (:data:`FILE_AREAS_KEYS`); every other key of the sidecar stands. A
+    value of ``None`` removes the key (``leaf_bbox=None`` = no leaf,
+    ``areas_error=None`` = the run succeeded); ``areas=[]`` is a positive
+    reading ("no areas") and is stored. ``ValueError`` for an unknown field
+    or an unusable value — the same sanitizers every other writer runs."""
+    unknown = sorted(set(fields) - set(FILE_AREAS_KEYS))
+    if unknown:
+        raise ValueError("unknown file area field(s): " + ", ".join(unknown))
+    meta = read_model_sidecar(model_path)
+    for key, value in fields.items():
+        if value is None:
+            meta.pop(key, None)
+            continue
+        if key == AREAS_KEY:
+            value = sanitize_areas(value)
+        elif key == LEAF_BBOX_KEY:
+            value = sanitize_leaf_bbox(value)
+            if value is None:
+                meta.pop(key, None)
+                continue
+        elif key == ROTATION_KEY:
+            value = _sanitize_rotation(value, meta.get(ROTATION_KEY))
+        elif key == KEY_AREAS_RUN_KEY:
+            value = sanitize_key_areas(value)
+        else:
+            value = str(value)
+            if not value:
+                meta.pop(key, None)
+                continue
+        meta[key] = value
+    write_model_sidecar(model_path, meta)
+
+
+def _variant_full_file(prop_id: str, variant: Any = None) -> Optional[Path]:
+    """The ACTIVE full-tier file of one variant — the file the areas live
+    on — or None (no gallery, no full tier, the ``__none__`` sentinel)."""
+    g = model_gallery(prop_id, variant)
+    return g.find(DEFAULT_TIER, fallback=False) if g else None
+
+
+def _resolve_variant(prop_id: str, variant: Any,
+                     meta: Optional[Dict[str, Any]] = None) -> int:
+    """The STORE index ``variant`` names: ``None`` / negative = the primary
+    variant, an index this prop has = itself, anything else = ``-1``."""
+    entries = _variant_list(read_sidecar(prop_id) if meta is None else meta)
+    if variant is None:
+        return _effective_indices(entries)[0]
+    try:
+        i = int(variant)
+    except (TypeError, ValueError):
+        return -1
+    if i < 0:
+        return _effective_indices(entries)[0]
+    return i if i < len(entries) else -1
 
 
 def _drop_stale_low(gallery: ModelGallery) -> None:
@@ -1595,7 +1781,12 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
     NO ``raw/`` copy (ruling R6): that rule belongs to the in-place
     refinements of ``refine.apply_script``, where the original would be
     overwritten. Here the input stays in the gallery as history, one entry
-    per run, and the admin can select it back."""
+    per run, and the admin can select it back.
+
+    The new file is the SAME MESH cut differently, so it inherits what
+    describes the mesh rather than the cut: the input's orientation fix and
+    the kinds its last automatic run searched. The areas themselves are
+    written by the caller, off the run's report."""
     target = gallery.new_path()
     target.write_bytes(blob)
     prev = read_model_sidecar(src)
@@ -1611,6 +1802,9 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
         **({"face_num": prev["face_num"]} if prev.get("face_num") else {}),
         **({"texture_size": prev["texture_size"]}
            if prev.get("texture_size") else {}),
+        **({ROTATION_KEY: prev[ROTATION_KEY]} if prev.get(ROTATION_KEY) else {}),
+        **({KEY_AREAS_RUN_KEY: prev[KEY_AREAS_RUN_KEY]}
+           if prev.get(KEY_AREAS_RUN_KEY) else {}),
     })
     gallery.select(target.name, DEFAULT_TIER)
     _drop_stale_low(gallery)
@@ -1620,9 +1814,10 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
 def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
                default_source: str, wait_s: float) -> List[Dict[str, Any]]:
     """ONE Blender run of ``scripts/picture_areas.py`` on a variant's full
-    mesh and everything that lands from it: the new gallery file, the sidecar
-    ``areas`` (primary variant only — the metadata describes the object's
-    mesh), the ``.areas.json`` beside the mesh, the texture slots.
+    mesh and everything that lands from it: the new gallery file, ITS
+    sidecar ``areas`` / ``leaf_bbox`` / run stamps, the ``.areas.json``
+    beside the mesh, the pruning of THAT variant's defaults and values
+    (ruling R15, per variant) and the texture slots.
 
     Raises :class:`BlenderUnavailable` when Blender is missing or busy (503),
     ``RuntimeError`` when the script fails (500), ``ValueError`` for a prop or
@@ -1633,7 +1828,9 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     if reason:
         raise BlenderUnavailable(reason)
     pid = safe_prop_id(prop_id)
-    g = model_gallery(pid, variant) if pid else None
+    meta = read_sidecar(pid) if pid else {}
+    index = _resolve_variant(pid, variant, meta) if meta else -1
+    g = model_gallery(pid, index) if index >= 0 else None
     src = g.find(DEFAULT_TIER, fallback=False) if g else None
     if not src or src.suffix.lower() != ".glb":
         raise ValueError("this variant has no full-tier GLB to work on")
@@ -1652,6 +1849,7 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     finally:
         refine.free_lod_slot()
 
+    previous = file_areas(src)
     model_file = src
     if blob is not None:
         verdict = validate_static_glb(blob)
@@ -1661,87 +1859,86 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
         model_file = _land_split(g, src, blob, str(params.get("mode") or ""))
 
     script_areas = [a for a in (data.get("areas") or []) if isinstance(a, dict)]
-    meta = read_sidecar(pid)
-    areas = _sidecar_areas_from_script(script_areas, meta.get(AREAS_KEY) or [],
+    areas = _sidecar_areas_from_script(script_areas, previous[AREAS_KEY],
                                        default_source)
     leaf_bbox = sanitize_leaf_bbox(data.get("leaf_bbox"))
     _write_areas_sidecar(model_file, areas,
                          {a.get("id"): a.get("edges") for a in script_areas},
                          data.get("mesh_layout"), leaf_bbox)
-    if _is_primary(pid, variant) and meta:
-        ids = {a["id"] for a in areas}
-        meta[AREAS_KEY] = areas
-        if leaf_bbox:
-            meta[LEAF_BBOX_KEY] = leaf_bbox
-        else:
-            meta.pop(LEAF_BBOX_KEY, None)
-        meta.pop(AREAS_ERROR_KEY, None)
-        if LEAF_KIND in (params.get("kinds") or []) and not leaf_bbox:
-            meta[AREAS_ERROR_KEY] = NO_LEAF_NOTE
-        meta[AREAS_RUN_AT_KEY] = utc_now_iso()
-        _prune_to_areas(meta, ids)
+    kinds = list(params.get("kinds") or [])
+    fields: Dict[str, Any] = {
+        AREAS_KEY: areas,
+        LEAF_BBOX_KEY: leaf_bbox,
+        AREAS_RUN_AT_KEY: utc_now_iso(),
+        AREAS_ERROR_KEY: None,
+        # A run that looked for the leaf and found none leaves its note; any
+        # other run (a manual cut, a delete, a run that found it) clears it.
+        AREAS_WARNING_KEY: (NO_LEAF_NOTE
+                            if LEAF_KIND in kinds and not leaf_bbox else None),
+    }
+    if params.get("mode") == "auto":
+        fields[KEY_AREAS_RUN_KEY] = kinds
+    set_file_areas(model_file, **fields)
+    # THIS variant's defaults and values follow its rewritten mesh (R15).
+    if _prune_variant_entry(meta, index, {a["id"] for a in areas}):
         _write_sidecar(pid, meta)
-        _autofill_slots(pid)
-    logger.info("Prop %s: picture areas %s -> %s (%s)", pid,
+    _autofill_slots(pid)
+    logger.info("Prop %s: picture areas %s -> %s (%s, variant %s)", pid,
                 params.get("mode"), ", ".join(a["id"] for a in areas) or "none",
-                model_file.name)
+                model_file.name, index)
     return areas
 
 
-def _prune_to_areas(meta: Dict[str, Any], ids: Set[str], *,
-                    variants: bool = True) -> None:
-    """Drop everything that names an area the prop no longer has — the
-    prop-wide ``area_defaults`` and, with ``variants``, every variant's
-    ``slot_values``.
+def _prune_variant_entry(meta: Dict[str, Any], index: int, ids: Set[str], *,
+                         slot_values: bool = True) -> bool:
+    """Drop what ONE variant says about areas its mesh no longer has — its
+    ``area_defaults`` and, with ``slot_values``, its ``slot_values``.
 
-    The prop-wide defaults describe the PRIMARY mesh, so they follow it on
-    every reading of it. A variant's values describe THAT VARIANT'S OWN
-    copied mesh, which still carries the materials it was copied with —
-    ruling R15: they are pruned only by the events that actually rewrite the
-    primary (a split, a re-split, a rename, a deleted area) and by a re-copy,
-    never because the admin selected another gallery file for a moment and
-    never on a failed run. ``variants=False`` is that reconcile case.
+    Both describe THAT VARIANT'S OWN mesh (v2 E1), so only the events that
+    rewrite that mesh prune them: a split, a re-split, a rename, a deleted
+    area, a re-copy. Ruling R15 keeps one asymmetry: a mere gallery click
+    (:func:`_reconcile_areas`) lets the defaults follow the file that is
+    active now but never touches the pictures somebody hung
+    (``slot_values=False``). A failed run prunes nothing at all.
 
     The variant's ``label`` is NEVER touched — it is the name the admin gave
     that version, not a description of its values.
 
-    Mutates ``meta`` in place; the caller owns the sidecar write."""
-    defaults = {k: v for k, v in (meta.get(AREA_DEFAULTS_KEY) or {}).items()
-                if k in ids}
-    if defaults:
-        meta[AREA_DEFAULTS_KEY] = defaults
-    else:
-        meta.pop(AREA_DEFAULTS_KEY, None)
-    if not variants:
-        return
+    Mutates ``meta`` in place and returns whether anything changed; the
+    caller owns the sidecar write."""
     entries = _variant_list(meta)
-    touched = False
-    for entry in entries:
-        values = entry.get(SLOT_VALUES_KEY) or {}
+    if not 0 <= index < len(entries):
+        return False
+    entry = entries[index]
+    changed = False
+    for key in ((AREA_DEFAULTS_KEY, SLOT_VALUES_KEY) if slot_values
+                else (AREA_DEFAULTS_KEY,)):
+        values = entry.get(key) or {}
         kept = {k: v for k, v in values.items() if k in ids}
         if kept == values:
             continue
         if kept:
-            entry[SLOT_VALUES_KEY] = kept
+            entry[key] = kept
         else:
-            entry.pop(SLOT_VALUES_KEY, None)
-        touched = True
-    if touched:
+            entry.pop(key, None)
+        changed = True
+    if changed:
         meta[VARIANTS_KEY] = entries
+    return changed
 
 
-def _origins(meta: Dict[str, Any]) -> Dict[str, str]:
-    return {a["id"]: a["origin"] for a in (meta.get(AREAS_KEY) or [])
-            if a.get("origin")}
+def _origins(areas: Sequence[Dict[str, Any]]) -> Dict[str, str]:
+    return {a["id"]: a["origin"] for a in (areas or []) if a.get("origin")}
 
 
 def detect_areas(prop_id: str, *, mode: str = "auto",
                  faces: Any = None, kind: str = "picture",
-                 variant: Any = None, min_faces: int = MIN_AREA_FACES,
+                 variant: Any = None, kinds: Any = None,
+                 min_faces: int = MIN_AREA_FACES,
                  min_area_m2: float = MIN_AREA_M2,
                  wait_s: float = 10.0) -> List[Dict[str, Any]]:
-    """Find or draw the picture areas of one variant's mesh — returns the
-    sidecar ``areas`` list after the run.
+    """Find or draw the picture areas of ONE VARIANT's mesh — returns that
+    file's ``areas`` list after the run.
 
     ``mode="auto"`` dissolves every area it once detected ITSELF — an area
     the admin drew by hand (``source == "manual"``) is kept as it is, faces,
@@ -1751,19 +1948,20 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
     (:func:`is_door_prop`); a door that asked for nothing gets the leaf only,
     a prop that is neither gets every COLOUR kind, and the leaf heuristic
     never runs on such a prop — a picture frame must not lose its biggest
-    plate to it. A run that looked for the leaf and found none leaves
-    :data:`NO_LEAF_NOTE` in ``areas_error`` (the areas it found stay). ``mode="manual"`` turns ``faces`` (flat
-    triangle indices in the R1 order of the CURRENT mesh — the tab's polygon
-    pick) into one new area of ``kind``; every other area stays; kind
-    ``leaf`` cuts exactly those faces out as the leaf node (replacing a
-    previous leaf). ``min_faces`` / ``min_area_m2`` are the auto filter
-    (production: 12 faces, 0.02 m²).
+    plate to it. ``kinds`` overrides that rule with EXACTLY the given kinds
+    (the tab's "Detect now", E3). A run that looked for the leaf and found
+    none leaves :data:`NO_LEAF_NOTE` in the file's ``areas_warning`` (the
+    areas it found stay). ``mode="manual"`` turns ``faces`` (flat triangle
+    indices in the R1 order of the CURRENT mesh — the tab's polygon pick)
+    into one new area of ``kind``; every other area stays; kind ``leaf``
+    cuts exactly those faces out as the leaf node (replacing a previous
+    leaf). ``min_faces`` / ``min_area_m2`` are the auto filter (production:
+    12 faces, 0.02 m²).
 
-    ``variant``: on a NON-primary variant only that variant's GLB (and its
-    ``.areas.json``) is changed — the sidecar ``areas`` describe the PRIMARY
-    mesh (spec § 1: one area list per prop) and stay untouched; the returned
-    list is what the script found on that GLB. Same for :func:`delete_area`
-    and :func:`rename_area_kind`.
+    ``variant`` is the STORE index (``None`` = the primary variant): the run
+    changes THAT variant's GLB, its file sidecar and its ``.areas.json`` and
+    nothing of any other variant (v2 E1 — every variant is its own mesh).
+    Same for :func:`delete_area` and :func:`rename_area_kind`.
 
     Raises ``ValueError`` for bad input, :class:`BlenderUnavailable` when
     Blender is missing or busy, ``RuntimeError`` when the run fails.
@@ -1774,27 +1972,37 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         raise ValueError("prop not found")
+    index = _resolve_variant(pid, variant, meta)
+    if index < 0:
+        raise ValueError(f"this prop has no variant {variant}")
+    current = file_areas(_variant_full_file(pid, index))[AREAS_KEY]
     mode = str(mode or "auto").strip().lower()
-    params: Dict[str, Any] = {"mode": mode, "origins": _origins(meta)}
+    params: Dict[str, Any] = {"mode": mode, "origins": _origins(current)}
     if mode == "auto":
-        # The kinds of an automatic run: what the prop ASKED for, plus the
-        # leaf for a door prop; a prop that asked for nothing and is no door
-        # gets every colour kind (the "Detect areas" button on a plain frame)
-        # — a door that asked for nothing gets the leaf ONLY, never an
-        # unrequested chroma detection.
-        kinds = list(meta.get(KEY_AREAS_KEY) or [])
-        if is_door_prop(meta) and LEAF_KIND not in kinds:
-            kinds.append(LEAF_KIND)
-        if not kinds:
-            kinds = list(COLOUR_KINDS)
-        params["kinds"] = kinds
+        if kinds is not None:
+            # The tab's "Detect now": exactly these kinds, nothing added.
+            wanted = sanitize_key_areas(kinds)
+            if not wanted:
+                raise ValueError("kinds must name at least one kind "
+                                 "(" + ", ".join(AREA_KINDS) + ")")
+        else:
+            # The kinds of an automatic run: what the prop ASKED for, plus
+            # the leaf for a door prop; a prop that asked for nothing and is
+            # no door gets every colour kind (the "Detect areas" button on a
+            # plain frame) — a door that asked for nothing gets the leaf
+            # ONLY, never an unrequested chroma detection.
+            wanted = list(meta.get(KEY_AREAS_KEY) or [])
+            if is_door_prop(meta) and LEAF_KIND not in wanted:
+                wanted.append(LEAF_KIND)
+            if not wanted:
+                wanted = list(COLOUR_KINDS)
+        params["kinds"] = wanted
         # R14: an automatic run dissolves what it detected itself and leaves
         # what the ADMIN drew standing — faces, material, number. The detector
         # never sees those faces again (their material is a slot material, and
         # only the atlas materials are read), so a hand-drawn panel survives
         # every "Detect areas" click, which is what the button's tooltip says.
-        params["keep"] = [a["id"] for a in (meta.get(AREAS_KEY) or [])
-                          if a.get("source") == "manual"]
+        params["keep"] = [a["id"] for a in current if a.get("source") == "manual"]
         params["min_faces"] = max(1, int(min_faces))
         params["min_area_m2"] = max(0.0, float(min_area_m2))
     elif mode == "manual":
@@ -1815,28 +2023,32 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
         params["kind"] = kind
     else:
         raise ValueError(f"unknown mode {mode!r} (auto | manual)")
-    return _areas_run(pid, variant, params,
+    return _areas_run(pid, index, params,
                       default_source="auto" if mode == "auto" else "manual",
                       wait_s=wait_s)
 
 
 def delete_area(prop_id: str, area_id: str, variant: Any = None,
                 wait_s: float = 10.0) -> List[Dict[str, Any]]:
-    """Dissolve one area: its faces go back to the material they came from
-    (``origin``) with their atlas UVs restored, the material is gone from the
-    mesh, the sidecar entry and any default on it with it. For ``leaf`` the
-    node is joined back into ``frame`` and ``leaf_bbox`` goes. Returns the
-    remaining ``areas``. ``ValueError`` for an unknown area. A non-primary
-    ``variant`` changes only that GLB (see :func:`detect_areas`)."""
+    """Dissolve one area of ONE variant's mesh: its faces go back to the
+    material they came from (``origin``) with their atlas UVs restored, the
+    material is gone from the mesh, the file's entry and any default or
+    value of that variant on it with it. For ``leaf`` the node is joined
+    back into ``frame`` and the file's ``leaf_bbox`` goes. Returns the
+    remaining ``areas``. ``ValueError`` for an unknown area."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         raise ValueError("prop not found")
+    index = _resolve_variant(pid, variant, meta)
+    if index < 0:
+        raise ValueError(f"this prop has no variant {variant}")
+    current = file_areas(_variant_full_file(pid, index))[AREAS_KEY]
     aid = str(area_id or "").strip().lower()
-    if aid not in {a["id"] for a in (meta.get(AREAS_KEY) or [])}:
+    if aid not in {a["id"] for a in current}:
         raise ValueError(f"unknown area {aid!r}")
-    return _areas_run(pid, variant, {"mode": "delete", "area": aid,
-                                     "origins": _origins(meta)},
+    return _areas_run(pid, index, {"mode": "delete", "area": aid,
+                                   "origins": _origins(current)},
                       default_source="manual", wait_s=wait_s)
 
 
@@ -1870,19 +2082,19 @@ def _rewrite_glb_material_names(blob: bytes, mapping: Dict[str, str]) -> bytes:
 
 def rename_area_kind(prop_id: str, area_id: str, kind: str,
                      variant: Any = None) -> List[Dict[str, Any]]:
-    """Change what an area IS (picture <-> glass): the material is renamed to
-    the next free ``slot_<kind>_<k>`` of the target kind, in a NEW gallery
-    file (the GLB's JSON chunk rewritten, no Blender needed), and the sidecar
-    entry and its outline record follow the new id.
-    Returns the ``areas`` list. Same kind = nothing to do. A non-primary
-    ``variant`` changes only that GLB (see :func:`detect_areas`).
+    """Change what an area of ONE variant's mesh IS (picture <-> glass): the
+    material is renamed to the next free ``slot_<kind>_<k>`` of the target
+    kind, in a NEW gallery file (the GLB's JSON chunk rewritten, no Blender
+    needed), and the file's entry and its outline record follow the new id.
+    Returns the ``areas`` list. Same kind = nothing to do.
 
-    Everything stored for the OLD id goes (``_prune_to_areas``, both halves):
-    the old id names no area any more, so the dialog cannot show — let alone
-    remove — a value keyed on it, and a save would keep failing on it. The
-    preset is NOT carried over either: the area just became another kind, and
-    a glass preset on a picture panel is exactly the value the sanitizers
-    refuse.
+    Everything THAT variant stored for the OLD id goes
+    (:func:`_prune_variant_entry`, both halves): the old id names no area
+    any more, so the dialog cannot show — let alone remove — a value keyed
+    on it, and a save would keep failing on it. The preset is NOT carried
+    over either: the area just became another kind, and a glass preset on a
+    picture panel is exactly the value the sanitizers refuse. Another
+    variant's copy still carries the old material and keeps its values.
 
     The door LEAF is refused in both directions (R9): a node is not a
     material, so there is no name to rewrite — dissolve it and draw the
@@ -1895,8 +2107,16 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
     if kind not in AREA_KINDS:
         raise ValueError(f"unknown area kind {kind!r} (known: "
                          + ", ".join(AREA_KINDS) + ")")
+    index = _resolve_variant(pid, variant, meta)
+    if index < 0:
+        raise ValueError(f"this prop has no variant {variant}")
+    g = model_gallery(pid, index)
+    src = g.find(DEFAULT_TIER, fallback=False) if g else None
+    if not src or src.suffix.lower() != ".glb":
+        raise ValueError("this variant has no full-tier GLB to work on")
+    current = file_areas(src)
+    areas = [dict(a) for a in current[AREAS_KEY]]
     aid = str(area_id or "").strip().lower()
-    areas = list(meta.get(AREAS_KEY) or [])
     entry = next((a for a in areas if a["id"] == aid), None)
     if entry is None:
         raise ValueError(f"unknown area {aid!r}")
@@ -1910,10 +2130,6 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
     while k in used:
         k += 1
     new_id = f"{kind}_{k}"
-    g = model_gallery(pid, variant)
-    src = g.find(DEFAULT_TIER, fallback=False) if g else None
-    if not src or src.suffix.lower() != ".glb":
-        raise ValueError("this variant has no full-tier GLB to work on")
     blob = _rewrite_glb_material_names(
         src.read_bytes(), {f"{SLOT_PREFIX}{aid}": f"{SLOT_PREFIX}{new_id}"})
     outline = read_areas_sidecar(src)
@@ -1925,53 +2141,59 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
         sp = areas_sidecar_path(target)
         if sp:
             sp.write_text(json.dumps(outline, ensure_ascii=False), encoding="utf-8")
-    if _is_primary(pid, variant):
-        entry["id"], entry["kind"] = new_id, kind
-        meta[AREAS_KEY] = sanitize_areas(areas)
-        # A rename is ALWAYS a kind change, so nothing that was stored for the
-        # old id can survive it: a glass preset on a panel that is now a
-        # picture is invalid on its face, and re-keying it onto the new id
-        # would only move the invalid value. Both halves lose the dead id.
-        _prune_to_areas(meta, {a["id"] for a in meta[AREAS_KEY]})
-        meta[AREAS_RUN_AT_KEY] = utc_now_iso()
+    entry["id"], entry["kind"] = new_id, kind
+    areas = sanitize_areas(areas)
+    # The new file is the same mesh under new names: it keeps the leaf box
+    # the input had and gets the renamed list; the run stamp moves.
+    set_file_areas(target, areas=areas, leaf_bbox=current[LEAF_BBOX_KEY],
+                   areas_run_at=utc_now_iso(),
+                   areas_warning=current[AREAS_WARNING_KEY] or None)
+    # A rename is ALWAYS a kind change, so nothing that was stored for the
+    # old id can survive it: a glass preset on a panel that is now a
+    # picture is invalid on its face, and re-keying it onto the new id
+    # would only move the invalid value. Both halves lose the dead id.
+    if _prune_variant_entry(meta, index, {a["id"] for a in areas}):
         _write_sidecar(pid, meta)
-        _autofill_slots(pid)
-    logger.info("Prop %s: area %s renamed to %s (%s)", pid, aid, new_id,
-                target.name)
-    return list(meta.get(AREAS_KEY) or [])
+    _autofill_slots(pid)
+    logger.info("Prop %s: area %s renamed to %s (%s, variant %s)", pid, aid,
+                new_id, target.name, index)
+    return areas
 
 
 def areas_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
-    """What ``GET /world/props/{id}/areas`` answers: the sidecar areas, each
-    with the outline ``edges`` of the active mesh's record, the R1
-    ``mesh_layout``, whether Blender can run, the last run and what the last
-    automatic run left to say.
-
-    That last part is TWO fields, because the store keeps both in one key:
-    ``error`` is a run that broke (Blender missing, busy, a failing script),
-    ``warning`` is a run that worked and found nothing to cut — today only
-    :data:`NO_LEAF_NOTE`. A note is not a failure and must not be shown as
-    one, so the split happens here rather than in every reader."""
+    """What ``GET /world/props/{id}/areas?variant=i`` answers for ONE
+    variant: its active file's areas, each with the outline ``edges`` of
+    that file's record, the R1 ``mesh_layout``, its ``leaf_bbox`` and
+    ``rotation``, the variant's ``area_defaults``, the prop's ``key_areas``
+    and what the file's last automatic run searched, whether Blender can
+    run, the last run, and — as two fields — what the last run left to
+    say: ``error`` is a run that broke (Blender missing, busy, a failing
+    script), ``warning`` a run that worked and found nothing to cut. An
+    unknown variant answers the empty shape with ``variant -1``."""
     from app.blender import refine
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
-    outline = read_areas_sidecar(model_path(pid, variant=variant)) if meta else {}
+    index = _resolve_variant(pid, variant, meta) if meta else -1
+    mp = model_path(pid, DEFAULT_TIER, index) if index >= 0 else None
+    fa = file_areas(mp)
+    outline = read_areas_sidecar(mp) if mp else {}
     edges = {rec.get("id"): rec.get("edges") or []
              for rec in (outline.get("areas") or []) if isinstance(rec, dict)}
     reason = refine.unavailable_reason()
-    stored = str(meta.get(AREAS_ERROR_KEY) or "")
-    warning = stored if stored == NO_LEAF_NOTE else ""
     return {
-        "areas": [{**a, "edges": edges.get(a["id"], [])}
-                  for a in (meta.get(AREAS_KEY) or [])],
+        "variant": index,
+        "model_file": mp.name if mp else "",
+        "areas": [{**a, "edges": edges.get(a["id"], [])} for a in fa[AREAS_KEY]],
         "mesh_layout": outline.get("mesh_layout") or [],
         "key_areas": list(meta.get(KEY_AREAS_KEY) or []),
-        "area_defaults": dict(meta.get(AREA_DEFAULTS_KEY) or {}),
-        LEAF_BBOX_KEY: meta.get(LEAF_BBOX_KEY) or None,
+        KEY_AREAS_RUN_KEY: fa[KEY_AREAS_RUN_KEY],
+        AREA_DEFAULTS_KEY: variant_area_defaults(meta, index) if index >= 0 else {},
+        LEAF_BBOX_KEY: fa[LEAF_BBOX_KEY],
+        ROTATION_KEY: fa[ROTATION_KEY],
         "blender": {"available": not reason, "reason": reason},
-        "last_run": meta.get(AREAS_RUN_AT_KEY) or None,
-        "error": "" if warning else stored,
-        "warning": warning,
+        "last_run": fa[AREAS_RUN_AT_KEY] or None,
+        "error": fa[AREAS_ERROR_KEY],
+        "warning": fa[AREAS_WARNING_KEY],
     }
 
 
@@ -1979,111 +2201,108 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
                          wait_s: float = 10.0) -> None:
     """The landing hook of the TWO paths a NEW mesh arrives on — the upload
     (``save_uploaded_glb`` → ``_store_bbox(landing=True)``) and the generation
-    chain (``_generate``): a prop that asked for key colours — or is a DOOR
-    prop (:func:`is_door_prop`, spec § 6: its leaf is cut out on every
-    landing) — gets its fresh primary mesh split automatically; one that is
-    neither gets its area list reconciled with the mesh
-    (:func:`_reconcile_areas`).
+    chain (``_generate``) — for EVERY variant (v2 E1: each is its own mesh):
+    a prop that asked for key colours — or is a DOOR prop
+    (:func:`is_door_prop`, spec § 6: its leaf is cut out on every landing) —
+    gets the fresh mesh of THAT variant split automatically; one that is
+    neither gets that file's area list reconciled (:func:`_reconcile_areas`).
 
     ONLY on a landing (review finding 2026-08-27): a gallery selection or a
     deleted file goes through ``_store_bbox`` too, and an auto-run there would
     override the admin's choice with a fresh split file and cost a Blender
     process per click — those paths only reconcile.
 
-    NEVER fails the landing: a failure is logged, stored as ``areas_error``
-    with ``areas: []`` and shown by the tab. ``wait_s`` is the Blender-slot
-    wait: the upload request keeps the route's 10 s, the generation worker
-    thread may wait longer."""
+    NEVER fails the landing: a failure is logged and stored on the landed
+    FILE as ``areas_error`` with ``areas: []``, and shown by the tab.
+    ``wait_s`` is the Blender-slot wait: the upload request keeps the
+    route's 10 s, the generation worker thread may wait longer."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
-    if not meta or not _is_primary(pid, variant):
+    if not meta:
         return
     if not meta.get(KEY_AREAS_KEY) and not is_door_prop(meta):
-        _reconcile_areas(pid, meta)
+        _reconcile_areas(pid, variant)
         return
     try:
         detect_areas(pid, mode="auto", variant=variant, wait_s=wait_s)
     except Exception as e:                                  # noqa: BLE001
-        logger.warning("Prop %s: automatic picture-area detection failed: %s",
-                       pid, e)
-        meta = read_sidecar(pid)
-        if not meta:
-            return
+        logger.warning("Prop %s: automatic picture-area detection failed "
+                       "(variant %s): %s", pid, variant, e)
         # The fresh mesh is unsplit, so it names no area and carries no leaf
         # node — that much is a reading of the file. What the ADMIN authored
-        # (`area_defaults`, every variant's `slot_values`) is NOT: a missing
+        # (the variant's `area_defaults` and `slot_values`) is NOT: a missing
         # or busy Blender is a load condition, and answering it by deleting
         # the panes and pictures of a door would make a queue wipe a prop.
         # Both halves stay until the next SUCCESSFUL run prunes them (R15).
-        meta[AREAS_KEY] = []
-        meta[AREAS_ERROR_KEY] = str(e) or type(e).__name__
-        meta.pop(LEAF_BBOX_KEY, None)
+        mp = _variant_full_file(pid, variant)
+        if not mp:
+            return
         try:
-            _write_sidecar(pid, meta)
+            set_file_areas(mp, areas=[], leaf_bbox=None,
+                           areas_error=str(e) or type(e).__name__)
         except (OSError, ValueError):
             pass
 
 
-def _reconcile_areas(pid: str, meta: Optional[Dict[str, Any]] = None) -> None:
-    """Make the sidecar ``areas`` describe the ACTIVE primary mesh after the
-    admin selected another gallery file, deleted one or uploaded a mesh
-    without key colours.
+def _reconcile_areas(pid: str, variant: Any = None) -> None:
+    """Give ONE variant's ACTIVE full mesh its area reading when it has none
+    yet, and let that variant's defaults follow it — after the admin
+    selected another gallery file, deleted one or uploaded a mesh without
+    key colours.
 
-    A file that carries its own ``.areas.json`` (every split result does)
-    brings that list back verbatim, its ``leaf_bbox`` with it — switching
-    away from a split file and back loses nothing. Any other file keeps only
-    the areas whose material it actually names (and therefore no leaf: a
-    node is not a material). Only a POSITIVE reading changes the list — an
-    unreadable mesh is not a statement that the areas are gone.
+    Since v2 E1 every split result carries its areas on its own sidecar, so
+    a re-selected split file needs nothing here. What this settles is the
+    file WITHOUT a reading: one that carries a ``.areas.json`` companion but
+    no sidecar list (a split from before the move, a copy) takes the
+    companion's list and ``leaf_bbox`` verbatim; a readable file without a
+    companion is no split result and reads as "no areas" (the material-name
+    heuristic of v1 is gone — E6's ``adopt`` is its successor). Only a
+    POSITIVE reading is written — an unreadable mesh is not a statement.
 
-    NEVER touches a variant's ``slot_values`` (ruling R15): a picture variant
-    hangs on its OWN copied mesh, which keeps its materials while the admin
-    clicks through the primary's gallery. Only the prop-wide
-    ``area_defaults`` follow the active primary here."""
-    if meta is None:
-        meta = read_sidecar(pid) if pid else {}
+    Then the VARIANT's ``area_defaults`` are pruned to the areas its active
+    file names; its ``slot_values`` are NEVER touched here (ruling R15): a
+    picture variant hangs its pictures on its own copy, and a gallery click
+    is not the moment they are re-read."""
+    pid = safe_prop_id(pid)
+    meta = read_sidecar(pid) if pid else {}
     if not meta:
         return
-    areas = meta.get(AREAS_KEY) or []
-    mp = model_path(pid)
+    index = _resolve_variant(pid, variant, meta)
+    if index < 0:
+        return
+    mp = _variant_full_file(pid, index)
     if not mp or mp.suffix.lower() != ".glb":
         return
-    record = read_areas_sidecar(mp)
-    leaf_bbox = None
-    if record.get("areas") is not None and isinstance(record.get("areas"), list):
+    if AREAS_KEY not in read_model_sidecar(mp):
+        record = read_areas_sidecar(mp)
+        if isinstance(record.get("areas"), list):
+            try:
+                kept = sanitize_areas([{k: v for k, v in a.items() if k != "edges"}
+                                       for a in record["areas"] if isinstance(a, dict)])
+                leaf_bbox = sanitize_leaf_bbox(record.get("leaf_bbox"))
+            except ValueError:
+                return
+        else:
+            try:
+                glb_material_names_at(mp)
+            except (OSError, ValueError, KeyError, json.JSONDecodeError,
+                    UnicodeDecodeError, struct.error):
+                # struct.error: a truncated container (same reader as
+                # `shrink_capability`) — a selection must never fail on it.
+                return
+            kept, leaf_bbox = [], None
         try:
-            kept = sanitize_areas([{k: v for k, v in a.items() if k != "edges"}
-                                   for a in record["areas"] if isinstance(a, dict)])
-            leaf_bbox = sanitize_leaf_bbox(record.get("leaf_bbox"))
-        except ValueError:
+            set_file_areas(mp, areas=kept, leaf_bbox=leaf_bbox)
+        except (OSError, ValueError):
             return
-    else:
-        if not areas:
-            return
+        logger.info("Prop %s: picture areas read for %s (%s)", pid, mp.name,
+                    ", ".join(a["id"] for a in kept) or "none")
+    ids = {a["id"] for a in file_areas(mp)[AREAS_KEY]}
+    if _prune_variant_entry(meta, index, ids, slot_values=False):
         try:
-            names = {str(n).strip().lower() for n in glb_material_names_at(mp)}
-        except (OSError, ValueError, KeyError, json.JSONDecodeError,
-                UnicodeDecodeError, struct.error):
-            # struct.error: a truncated container (same reader as
-            # `shrink_capability`) — a selection must never fail on it.
+            _write_sidecar(pid, meta)
+        except (OSError, ValueError):
             return
-        kept = [a for a in areas if f"{SLOT_PREFIX}{a['id']}" in names]
-    if kept == areas and (meta.get(LEAF_BBOX_KEY) or None) == leaf_bbox:
-        return
-    meta[AREAS_KEY] = kept
-    if leaf_bbox:
-        meta[LEAF_BBOX_KEY] = leaf_bbox
-    else:
-        meta.pop(LEAF_BBOX_KEY, None)
-    # R15: the prop-wide defaults follow the primary mesh, the VARIANTS' own
-    # values do not — see :func:`_prune_to_areas`.
-    _prune_to_areas(meta, {a["id"] for a in kept}, variants=False)
-    try:
-        _write_sidecar(pid, meta)
-    except (OSError, ValueError):
-        return
-    logger.info("Prop %s: picture areas follow the active mesh (%s)", pid,
-                ", ".join(a["id"] for a in kept) or "none")
 
 
 # ── CRUD ────────────────────────────────────────────────────────────────
@@ -2131,7 +2350,6 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         "name": name,
         "category": (category or "").strip(),
         VARIANTS_KEY: [variant],
-        "rotation": {"x": 0, "y": 0, "z": 0},
         # NEW props do not sway (user order 2026-08-20): the 1.0 default is
         # the VEGETATION-era reading of an ABSENT key, kept so existing
         # scatter plants keep waving — but furniture is the normal case now,
@@ -2155,11 +2373,12 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
 #: the variants (2026-08-25), and :data:`MOVED_TO_VARIANT` names those so a
 #: stale client is REFUSED instead of silently writing a key nobody reads.
 PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor", "slots",
-                   "area_defaults", "key_areas")
-#: The five fields that are variant-only now. A prop-level patch naming one of
+                   "key_areas")
+#: The fields that are variant-only now. A prop-level patch naming one of
 #: them is a 400 with the route that owns it — never a no-op: an editor that
 #: still sends ``height_m`` here would report "Saved" over a value that never
-#: reached anything.
+#: reached anything. ``area_defaults`` joined them with v2 E1 (2026-08-28):
+#: a pane default describes ONE variant's mesh.
 MOVED_TO_VARIANT = {
     "width_m": "POST /world/props/{id}/variants/{i}/dims",
     "depth_m": "POST /world/props/{id}/variants/{i}/dims",
@@ -2168,6 +2387,7 @@ MOVED_TO_VARIANT = {
     "description": "POST /world/props/{id}/variants/{i}/description",
     "ground_offset_m": "POST /world/props/{id}/variants/{i}/ground-offset",
     "markers": "POST /world/props/{id}/variants/{i}/markers",
+    AREA_DEFAULTS_KEY: "POST /world/props/{id}/variants/{i}/area-defaults",
 }
 
 
@@ -2196,11 +2416,6 @@ def _check_prop_patch(patch: Dict[str, Any],
     # and this is the only prop field a body can get structurally wrong.
     if SLOTS_KEY in patch:
         sanitize_slots(patch.get(SLOTS_KEY))
-    if AREA_DEFAULTS_KEY in patch:
-        # …and the second: a default is checked against the areas the prop
-        # HAS, so the record is needed to refuse it.
-        sanitize_area_defaults(patch.get(AREA_DEFAULTS_KEY),
-                               (meta or {}).get(AREAS_KEY) or [])
     if KEY_AREAS_KEY in patch:
         sanitize_key_areas(patch.get(KEY_AREAS_KEY))
 
@@ -2236,13 +2451,6 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
         # it alone, an emptied list included.
         meta[SLOTS_KEY] = sanitize_slots(patch.get(SLOTS_KEY))
         meta[SLOTS_AUTO_KEY] = False
-    if AREA_DEFAULTS_KEY in patch:
-        defaults = sanitize_area_defaults(patch.get(AREA_DEFAULTS_KEY),
-                                          meta.get(AREAS_KEY) or [])
-        if defaults:
-            meta[AREA_DEFAULTS_KEY] = defaults
-        else:
-            meta.pop(AREA_DEFAULTS_KEY, None)
     if KEY_AREAS_KEY in patch:
         # Ruling R7: an existing prop may request key colours later (the
         # detail page offers the checkboxes too; a re-generation reads them).
@@ -2256,9 +2464,9 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
 
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update the PROP's own fields (name / category / tags / sway_factor /
-    slots / area_defaults / key_areas). None when the prop does not exist.
+    slots / key_areas). None when the prop does not exist.
 
-    Raises ``ValueError`` when the patch names one of the five fields that
+    Raises ``ValueError`` when the patch names one of the fields that
     moved onto the variants (:data:`MOVED_TO_VARIANT`) — the route maps that to
     a 400. Ignoring them would be worse than refusing: the admin would get a
     green "Saved" for a size that was never stored anywhere.
@@ -2275,25 +2483,61 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
     return {"id": pid, **meta}
 
 
-def set_rotation(prop_id: str, rotation: Any) -> Optional[Dict[str, Any]]:
-    """Persist the orientation fix. None when the prop does not exist.
+def set_rotation(prop_id: str, rotation: Any, variant: Any = None,
+                 filename: str = "") -> Optional[Dict[str, Any]]:
+    """Persist the orientation fix ``{x, y, z}`` (degrees, free values) on
+    ONE model FILE of one variant — ``filename`` "" = the variant's active
+    full file (pattern ``location_model3d.set_rotation``). None when the
+    prop or the variant does not exist; ``ValueError`` for a foreign file
+    name or a variant without a full-tier mesh.
 
-    The STORED dims stay untouched: re-orienting a prop does not silently
+    A LOW file inherits its fix from the full file it was reduced from, so
+    a dial on the active full file is copied onto the variant's active low
+    file as well, and a dial aimed at an inheriting low file lands on its
+    full file — the two tiers are one object and must never disagree.
+
+    The STORED dims stay untouched: re-orienting a mesh does not silently
     rewrite numbers the admin can see — the editor recomputes its proportional
-    suggestions live instead."""
+    suggestions live instead.
+
+    Returns ``{variant, filename, rotation, prop}`` — the store index, the
+    file the fix landed on, the fix as stored, and the full record."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         return None
-    cur = meta.get("rotation")
-    meta["rotation"] = _sanitize_rotation(rotation, cur)
-    _write_sidecar(pid, meta)
-    # The fix is part of a surface's identity (spec-surface-height § 4), and it
-    # is the PROP's fix — one dial invalidates every variant's lattice. In the
-    # background, so the dial answers at once.
-    if meta["rotation"] != cur:
-        bake_surfaces(pid, background=True)
-    return {"id": pid, **meta}
+    index = _resolve_variant(pid, variant, meta)
+    if index < 0:
+        return None
+    g = model_gallery(pid, index)
+    if not g:
+        return None
+    active_full = g.find(DEFAULT_TIER, fallback=False)
+    if filename:
+        target = g.file(filename)
+        if not target:
+            raise ValueError("no such model file in this variant")
+        parent = str(read_model_sidecar(target).get(INHERITS_FROM_KEY) or "")
+        if parent and g.file(parent):
+            target = g.file(parent)
+    else:
+        target = active_full
+        if not target:
+            raise ValueError("this variant has no full-tier mesh to orient")
+    cur = file_areas(target)[ROTATION_KEY]
+    set_file_areas(target, rotation=rotation)
+    rot = file_areas(target)[ROTATION_KEY]
+    if active_full and target == active_full:
+        low = g.find(LOW_TIER, fallback=False)
+        if low and low != target:
+            set_file_areas(low, rotation=rot)
+        # The fix is part of a surface's identity (spec-surface-height § 4):
+        # a turned mesh invalidates THIS variant's lattice. In the
+        # background, so the dial answers at once.
+        if rot != cur:
+            bake_surfaces(pid, index, background=True)
+    return {"variant": index, "filename": target.name, "rotation": rot,
+            "prop": _prop_record(pid, read_sidecar(pid), full=True)}
 
 
 def delete_prop(prop_id: str) -> bool:
@@ -2332,15 +2576,14 @@ def surface_for(prop_id: str, variant: Any = None) -> Optional[Dict[str, Any]]:
     (spec-surface-height § 6.1).
 
     ``variant`` is the STORE index, like everywhere else in this module. The
-    orientation fix is the PROP's, not the variant's — every variant of a prop
-    is the same object, so one dial turns them all, and the bake is only valid
-    under the fix it was made with."""
+    orientation fix is the FILE's (v2 E1) — every variant is its own mesh
+    with its own dial — and the bake is only valid under the fix it was made
+    with."""
     from app.core.model_surface import payload_block, read_surface
     mp = model_path(prop_id, variant=variant)
     if not mp:
         return None
-    meta = read_sidecar(safe_prop_id(prop_id) or "")
-    surface = read_surface(mp, meta.get("rotation"))
+    surface = read_surface(mp, file_areas(mp)[ROTATION_KEY])
     return payload_block(surface) if surface else None
 
 
@@ -2348,9 +2591,8 @@ def surface_status_for(prop_id: str, variant: Any = None) -> Dict[str, Any]:
     """What the prop panel shows about one variant's surface: baked, stale or
     missing (:func:`model_surface.surface_status`)."""
     from app.core.model_surface import surface_status
-    meta = read_sidecar(safe_prop_id(prop_id) or "")
-    return surface_status(model_path(prop_id, variant=variant),
-                          meta.get("rotation"))
+    mp = model_path(prop_id, variant=variant)
+    return surface_status(mp, file_areas(mp)[ROTATION_KEY])
 
 
 def bake_surfaces(prop_id: str, variant: Any = None, *,
@@ -2422,7 +2664,9 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
                         mp = model_path(pid, variant=idx)
                         if not mp:
                             continue
-                        if not run_force and read_surface(mp, meta.get("rotation")):
+                        # The fix is the FILE's (v2 E1), read beside the mesh.
+                        fix = file_areas(mp)[ROTATION_KEY]
+                        if not run_force and read_surface(mp, fix):
                             continue
                         # The world size THIS variant renders at decides the
                         # lattice resolution: the step is 0,25 WORLD metres and
@@ -2430,7 +2674,7 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
                         # the very ``max_m``/``measure`` the placement spec
                         # carries (``_prop_models``: max of the variant's three
                         # dims, measured over all three axes).
-                        if bake_surface(mp, meta.get("rotation"), wait_s=300,
+                        if bake_surface(mp, fix, wait_s=300,
                                         target_m=max(variant_dims(meta, idx).values()),
                                         measure="xyz"):
                             baked = True
@@ -2498,20 +2742,28 @@ def model_tiers(prop_id: str, variant: Any = None) -> List[str]:
 
 
 def _published_entry(meta: Dict[str, Any], index: int,
-                     tiers: List[str], *, markers: bool) -> Dict[str, Any]:
+                     tiers: List[str], *, markers: bool,
+                     file: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """ONE entry of the published variant list: ``{variant, tiers, dims,
-    ground_offset_m?, markers?}``.
+    ground_offset_m?, slot_values?, markers?}`` — plus, on the prop RECORD
+    (``file`` given), what its active mesh carries: ``areas``, ``rotation``,
+    ``area_defaults``, ``areas_warning`` and ``leaf_bbox`` (while it has a
+    leaf node).
 
     Written once, because it is the ONE shape a consumer resolves a placement's
     variant POSITION in — the world-prop payload, the ground boxes, the room
-    recipe and the terrain scatter all index into it, and the four fields a
+    recipe and the terrain scatter all index into it, and the fields a
     variant owns have to travel together or a placement gets one version's size
-    with another one's sink.
+    with another one's sink — or, since v2 E1, one version's mesh with another
+    one's orientation fix.
 
     ``ground_offset_m`` follows the storage law (absent = on the ground) so the
     payload does not carry a 0.0 for every prop in every world. ``markers`` are
     ADMIN detail and ride only where the full record does: the lean client
     library gets ``marker_count`` and nothing else, exactly as before.
+    ``file`` is the :func:`file_areas` reading of the variant's active full
+    mesh; the scatter/world-prop payloads (:func:`active_variant_tiers`) pass
+    none and stay what they were.
     """
     entry: Dict[str, Any] = {"variant": index, "tiers": tiers,
                              "dims": variant_dims(meta, index)}
@@ -2527,6 +2779,16 @@ def _published_entry(meta: Dict[str, Any], index: int,
     values = variant_slot_values(meta, index)
     if values:
         entry[SLOT_VALUES_KEY] = values
+    if file is not None:
+        # The measured facts of THIS variant's mesh (v2 E1): the recipe reads
+        # `fix_euler`, `slots` and `leaf_bbox` off the entry a placement
+        # resolves to, the Areas tab reads the same entry.
+        entry[AREAS_KEY] = list(file[AREAS_KEY])
+        entry[ROTATION_KEY] = dict(file[ROTATION_KEY])
+        entry[AREA_DEFAULTS_KEY] = variant_area_defaults(meta, index)
+        entry[AREAS_WARNING_KEY] = file[AREAS_WARNING_KEY]
+        if file[LEAF_BBOX_KEY]:
+            entry[LEAF_BBOX_KEY] = file[LEAF_BBOX_KEY]
     if markers:
         own = variant_markers(meta, index)
         if own:
@@ -2660,9 +2922,11 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "description": entry.get(DESCRIPTION_KEY, ""),
             "ground_offset_m": entry.get(GROUND_OFFSET_KEY, GROUND_OFFSET_DEFAULT),
             "markers": entry.get(MARKERS_KEY, []),
-            # The picture assignment of THIS variant, the name it is listed
-            # under, and whether its copied frame is out of date (R4).
+            # The picture assignment of THIS variant, its pane defaults (v2
+            # E1), the name it is listed under, and whether its copied frame
+            # is out of date (R4).
             SLOT_VALUES_KEY: dict(entry.get(SLOT_VALUES_KEY) or {}),
+            AREA_DEFAULTS_KEY: dict(entry.get(AREA_DEFAULTS_KEY) or {}),
             VARIANT_LABEL_KEY: entry.get(VARIANT_LABEL_KEY, ""),
             "stale": _variant_stale(prop_id, i, primary_name),
             # This variant's own baked walking surface, STATE only (the
@@ -2678,8 +2942,11 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
 #: variant owns except its own files. The stem, the mesh gallery, the source
 #: image and its provenance are what makes the new slot a new VERSION; the
 #: fields below are what makes it a version OF THIS OBJECT.
+#: ``area_defaults`` joins them (v2 E1): a new version of a door has the same
+#: panes until its own mesh says otherwise — the landing of that mesh prunes
+#: whatever the new file does not name (:func:`_prune_variant_entry`).
 _COPIED_ON_ADD = (*DIM_KEYS, DIMS_ESTIMATED_KEY, DESCRIPTION_KEY,
-                  GROUND_OFFSET_KEY, MARKERS_KEY)
+                  GROUND_OFFSET_KEY, MARKERS_KEY, AREA_DEFAULTS_KEY)
 
 
 def add_variant(prop_id: str, source: Any = None) -> int:
@@ -2989,12 +3256,13 @@ def set_variant_slot_values(prop_id: str, variant: int, slot_values: Any,
     assignment itself (spec-picture-props.md § 1, D2). ``False`` when the prop
     or the index does not exist, ``ValueError`` for an unusable value.
 
-    The areas belong to the PROP (they are materials of its mesh), the values
-    to the VARIANT: hanging another picture is a new version of the frame, not
-    a new prop and not a property of the placement. Everything is checked
-    against the prop's real areas (:func:`sanitize_variant_slot_values`)
-    BEFORE anything is written, so a refused save leaves the sidecar exactly
-    as it was — and the recipe can read the stored values verbatim.
+    The areas belong to the VARIANT'S FILE (they are materials of its mesh,
+    v2 E1) and so do the values: hanging another picture is a new version of
+    the frame, not a new prop and not a property of the placement.
+    Everything is checked against THAT variant's real areas
+    (:func:`sanitize_variant_slot_values`) BEFORE anything is written, so a
+    refused save leaves the sidecar exactly as it was — and the recipe can
+    read the stored values verbatim.
 
     ``label`` is what the strip lists this variant under, three-valued
     (R10): ``None`` — the body did not mention it — KEEPS the stored name,
@@ -3010,11 +3278,37 @@ def set_variant_slot_values(prop_id: str, variant: int, slot_values: Any,
     if not ctx:
         return False
     pid, meta, entries, i = ctx
-    clean = sanitize_variant_slot_values(slot_values, meta.get(AREAS_KEY) or [])
+    clean = sanitize_variant_slot_values(
+        slot_values, file_areas(_variant_full_file(pid, i))[AREAS_KEY])
     _apply_variant_slot_values(entries[i], clean, label)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return True
+
+
+def set_variant_area_defaults(prop_id: str, variant: int,
+                              area_defaults: Any) -> Optional[Dict[str, Any]]:
+    """What this variant shows in its PANES when nobody hung anything —
+    ``{"<area id>": {"preset": "glass"}}``, checked against THAT variant's
+    file areas (:func:`sanitize_area_defaults`: the area must exist on its
+    active full mesh and be a ``glass`` one). ``None`` when the prop or the
+    index does not exist, ``ValueError`` for an unusable value — and nothing
+    is written then. An EMPTY object clears the defaults.
+
+    Returns the variant's published record (:func:`list_variants`)."""
+    ctx = _edit_variant(prop_id, variant)
+    if not ctx:
+        return None
+    pid, meta, entries, i = ctx
+    clean = sanitize_area_defaults(
+        area_defaults, file_areas(_variant_full_file(pid, i))[AREAS_KEY])
+    if clean:
+        entries[i][AREA_DEFAULTS_KEY] = clean
+    else:
+        entries[i].pop(AREA_DEFAULTS_KEY, None)
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return list_variants(pid)[i]
 
 
 def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
@@ -3024,9 +3318,12 @@ def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
     A picture variant is a version of the same object, so it carries the
     frame's mesh rather than referencing it: LOD, selection, signature and
     recipe stay exactly what they are, at the price of one GLB per picture.
-    Everything that describes THAT mesh travels with it — the ``.areas.json``
-    companion (the outline edges the Areas tab draws) and the variant's source
-    image, which the source-image law makes the variant's own.
+    Everything that describes THAT mesh travels with it — the area fields of
+    its sidecar (``areas``, ``leaf_bbox``, ``rotation``, the run stamps; v2
+    E1: the copy is the same mesh, so it carries the same reading), the
+    ``.areas.json`` companion (the outline edges the Areas tab draws) and the
+    variant's source image, which the source-image law makes the variant's
+    own.
 
     The copy lands as a NEW gallery file, so a re-copy keeps the old one as
     history, and its model sidecar records :data:`COPIED_FROM_KEY`: the file
@@ -3056,6 +3353,7 @@ def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
         COPIED_FROM_KEY: {"file": src.name,
                           "signature": src_gal.signature(DEFAULT_TIER)},
         **{k: prev[k] for k in _COPIED_RUN_KEYS if prev.get(k)},
+        **{k: prev[k] for k in FILE_AREAS_KEYS if k in prev},
     })
     dst_gal.select(dst.name, DEFAULT_TIER)
     # A distance mesh this store built from the PREVIOUS copy shows the
@@ -3102,17 +3400,21 @@ def add_picture_variant(prop_id: str, slot_values: Any,
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         raise ValueError("unknown prop")
-    clean = sanitize_variant_slot_values(slot_values, meta.get(AREAS_KEY) or [])
+    entries = _variant_list(meta)
+    src_index = _effective_indices(entries)[0]
+    src_gal = model_gallery(pid, src_index)
+    src_file = src_gal.find(DEFAULT_TIER, fallback=False) if src_gal else None
+    # Checked against the areas of the mesh that is COPIED — the primary's
+    # active full file (v2 E1: the areas are that file's).
+    clean = sanitize_variant_slot_values(slot_values,
+                                         file_areas(src_file)[AREAS_KEY])
     if not clean:
         # A variant that shows nothing of its own is a plain model variant —
         # `add_variant` is the verb for that, and it does not copy a mesh.
         raise ValueError("a picture variant needs at least one slot value")
-    entries = _variant_list(meta)
     if len(_active_indices(entries)) >= variant_max():
         raise ValueError(f"At most {variant_max()} active variants per prop")
-    src_index = _effective_indices(entries)[0]
-    src_gal = model_gallery(pid, src_index)
-    if not (src_gal and src_gal.find(DEFAULT_TIER, fallback=False)):
+    if not src_file:
         raise ValueError("this prop has no full-tier mesh to copy")
     index = add_variant(pid, src_index)
     if index < 0:
@@ -3162,25 +3464,16 @@ def recopy_variant_mesh(prop_id: str, variant: int) -> bool:
 
 
 def _prune_variant_values(pid: str, index: int) -> None:
-    """Drop what ONE variant's ``slot_values`` say about areas the prop's
-    primary mesh no longer has (R15, the re-copy event). Only that variant is
+    """Drop what ONE variant's ``slot_values`` and ``area_defaults`` say
+    about areas its FRESH COPY does not carry (R15, the re-copy event: the
+    copy brought the primary file's areas with it). Only that variant is
     touched — every other one still hangs on its own older copy."""
     meta = read_sidecar(pid)
     if not meta:
         return
-    ids = {a["id"] for a in (meta.get(AREAS_KEY) or [])}
-    entries = _variant_list(meta)
-    if not 0 <= index < len(entries):
+    ids = {a["id"] for a in file_areas(_variant_full_file(pid, index))[AREAS_KEY]}
+    if not _prune_variant_entry(meta, index, ids):
         return
-    values = entries[index].get(SLOT_VALUES_KEY) or {}
-    kept = {k: v for k, v in values.items() if k in ids}
-    if kept == values:
-        return
-    if kept:
-        entries[index][SLOT_VALUES_KEY] = kept
-    else:
-        entries[index].pop(SLOT_VALUES_KEY, None)
-    meta[VARIANTS_KEY] = entries
     try:
         _write_sidecar(pid, meta)
     except (OSError, ValueError):
@@ -3611,6 +3904,7 @@ def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
     for p in g.files():
         meta = read_model_sidecar(p)
         cap = shrink_capability(p)
+        fa = file_areas(p)
         out.append({
             "filename": p.name,
             "tier": g.tier_of(p),
@@ -3622,6 +3916,12 @@ def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
             "backend": meta.get("backend", ""),
             "source": meta.get("source", ""),
             "source_file": meta.get("source_file", ""),
+            # What THIS file carries (v2 E1): its orientation fix, the ids of
+            # its areas, and — for a distance mesh — the full file it
+            # inherits them from (pattern `location_model3d.list_models`).
+            ROTATION_KEY: fa[ROTATION_KEY],
+            "area_ids": [a["id"] for a in fa[AREAS_KEY]],
+            INHERITS_FROM_KEY: str(meta.get(INHERITS_FROM_KEY) or ""),
             # What the reduction actually cost this file (0 = not a reduced
             # mesh, or one from before these numbers were recorded).
             "tris": int(meta.get("tris") or 0),
@@ -3811,6 +4111,13 @@ def save_uploaded_glb(prop_id: str, contents: bytes,
     g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
     if not g:
         return False
+    # The dial the admin set on the file this one replaces is the default
+    # for the variant's next mesh (v2 E1: the fix is the file's; a mesh with
+    # other axes is re-dialled). A low upload inherits nothing here — the
+    # tier it lands in follows its full file.
+    previous = (g.find(DEFAULT_TIER, fallback=False)
+                if (normalize_tier(tier) or DEFAULT_TIER) == DEFAULT_TIER else None)
+    inherited = file_areas(previous)[ROTATION_KEY] if previous else None
     target = g.new_path()
     target.write_bytes(contents)
     write_model_sidecar(target, {
@@ -3819,6 +4126,8 @@ def save_uploaded_glb(prop_id: str, contents: bytes,
         "format": "glb",
         "rig": "none",
         "tier": tier or DEFAULT_TIER,
+        **({ROTATION_KEY: inherited}
+           if inherited and any(inherited.values()) else {}),
     })
     g.select(target.name, tier)
     logger.info("Prop %s: model uploaded (%d bytes) -> %s",
@@ -3935,6 +4244,12 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
         return out
     target = gallery.new_path()
     target.write_bytes(res["blob"])
+    # The distance mesh is the SAME object: Decimate keeps node names and
+    # materials (measured on real props), so it inherits the full file's
+    # areas, leaf box and orientation instead of re-measuring them (v2 E1;
+    # `file_areas` follows `inherits_from`, the copies are for a reader
+    # whose full file is gone).
+    prev = read_model_sidecar(src)
     write_model_sidecar(target, {
         "created_at": utc_now_iso(),
         "source": "lod",
@@ -3945,6 +4260,8 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
         "lod_ratio": ratio,
         "tris": res.get("tris"),
         "tris_before": res.get("tris_before"),
+        INHERITS_FROM_KEY: src.name,
+        **{k: prev[k] for k in _INHERITED_AREAS_KEYS if k in prev},
     })
     gallery.select(target.name, LOW_TIER)
     _lod_failed.discard(key)
@@ -4125,8 +4442,8 @@ def _store_bbox(prop_id: str, variant: Any = None, *,
     # landing. The generation chain has the same call of its own (`_generate`).
     if landing:
         _areas_after_landing(prop_id, variant, wait_s=10.0)
-    elif _is_primary(prop_id, variant):
-        _reconcile_areas(safe_prop_id(prop_id))
+    else:
+        _reconcile_areas(prop_id, variant)
     _auto_retexture(prop_id, variant)
     request_low_tier(prop_id, variant)
     # The walking surface (spec-surface-height § 5 Nr. 1) — AFTER every step
@@ -4154,7 +4471,7 @@ def _store_bbox(prop_id: str, variant: Any = None, *,
     if not meta:
         return
     meta["bbox"] = bbox
-    _redistribute_dims(meta)
+    _redistribute_dims(meta, file_areas(model_path(prop_id))[ROTATION_KEY])
     # Same write, one more source: the header parser above yields the box, but
     # not the triangle count, the UV sets or whether the colour sits in the
     # vertices — and those are what decides whether a prop is cheap enough to
@@ -4199,11 +4516,12 @@ def _ensure_bbox(prop_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
 
 # ── Dims redistribution ─────────────────────────────────────────────────
 
-def _redistribute_dims(meta: Dict[str, Any]) -> None:
+def _redistribute_dims(meta: Dict[str, Any], rotation: Any = None) -> None:
     """Re-derive the PRIMARY variant's dims from the model's proportions,
     keeping the largest edge — ONLY while they are a still-estimated
     placeholder cube. A size the admin typed (``dims_estimated`` False) is
-    never touched.
+    never touched. ``rotation`` is the orientation fix of the mesh the box
+    was measured on (the primary's active full file, v2 E1).
 
     The primary variant and no other: ``bbox`` is measured on ITS mesh
     (``_extract_bbox``), so it is the only entry whose proportions this box
@@ -4216,7 +4534,7 @@ def _redistribute_dims(meta: Dict[str, Any]) -> None:
         return
     dims = {key: _coerce_dim_m(entries[i].get(key)) for key in DIM_KEYS}
     entries[i].update(_dims_from_size(max(dims.values()), meta["bbox"],
-                                      meta.get("rotation")))
+                                      rotation))
     entries[i][DIMS_ESTIMATED_KEY] = False
     meta[VARIANTS_KEY] = entries
 
@@ -4234,24 +4552,29 @@ def _all_prop_ids() -> List[str]:
     return sorted(out)
 
 
-def _picture_signature_part(meta: Dict[str, Any],
-                            entries: List[Dict[str, Any]]) -> str:
-    """What the PICTURES contribute to a prop's mesh signature
-    (spec-picture-props.md § 5): the prop-wide ``area_defaults`` and EVERY
-    variant's ``slot_values``, keyed by store index.
+def _picture_signature_part(entries: List[Dict[str, Any]],
+                            rotations: Dict[int, Dict[str, Any]]) -> str:
+    """What the PICTURES and the ORIENTATION contribute to a prop's mesh
+    signature (spec-picture-props.md § 5, v2 E1): EVERY variant's
+    ``area_defaults`` and ``slot_values``, keyed by store index, and the
+    non-zero orientation fix of every ACTIVE variant's file (``rotations``).
 
     Every variant, not just the active ones: switching a picture variant on is
     a change of the cast the scene shows, and the mesh half of the signature
     already covers that — this half has to move when the picture ON one of
-    them changes, whichever it is. ``""`` when the prop says nothing about
-    pictures at all, so no other prop's key moves for this feature."""
-    defaults = meta.get(AREA_DEFAULTS_KEY) or {}
+    them changes, whichever it is. A turned file keeps its name, so the fix
+    has to be in the key or a running client would keep the old lean.
+    ``""`` when the prop says nothing about pictures and stands untouched,
+    so no other prop's key moves for this feature."""
+    defaults = {str(i): e.get(AREA_DEFAULTS_KEY) or {}
+                for i, e in enumerate(entries) if e.get(AREA_DEFAULTS_KEY)}
     values = {str(i): e.get(SLOT_VALUES_KEY) or {}
               for i, e in enumerate(entries) if e.get(SLOT_VALUES_KEY)}
-    if not defaults and not values:
+    fixes = {str(i): r for i, r in rotations.items() if any(r.values())}
+    if not defaults and not values and not fixes:
         return ""
-    return "|" + json.dumps({"defaults": defaults, "variants": values},
-                            sort_keys=True)
+    return "|" + json.dumps({"defaults": defaults, "variants": values,
+                             "rotation": fixes}, sort_keys=True)
 
 
 def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
@@ -4280,11 +4603,15 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
     gallery = galleries[0]
     tiers = tier_lists[0]
     # …plus everything the VARIANT owns (2026-08-25): the three real metres it
-    # renders at, how deep it stands and — on a full record — its markers. A
-    # placement reads all three off the entry it draws
-    # (`room_recipe._placement_dims` and friends) instead of off the record,
-    # which answers for the PRIMARY variant.
-    variant_tiers = [_published_entry(meta, i, vt, markers=full)
+    # renders at, how deep it stands and — on a full record — its markers,
+    # and (v2 E1) what its ACTIVE FULL MESH carries: areas, leaf box,
+    # orientation fix, pane defaults. A placement reads all of them off the
+    # entry it draws (`room_recipe._placement_dims` and friends,
+    # `scene_recipe._prop_models`) instead of off the record, which answers
+    # for the PRIMARY variant.
+    files = {i: file_areas(g.find(DEFAULT_TIER, fallback=False) if g else None)
+             for i, g in zip(active_idx, galleries)}
+    variant_tiers = [_published_entry(meta, i, vt, markers=full, file=files[i])
                      for i, vt in zip(active_idx, tier_lists) if vt]
     has_model = bool(tiers)
     # The PRIMARY variant's values — the answer to every question asked without
@@ -4299,24 +4626,17 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         "width_m": dims["width_m"],
         "depth_m": dims["depth_m"],
         "height_m": dims["height_m"],
-        # The client applies the fix before measuring/scaling the mesh —
-        # same role as the room-model meta rotation.
-        "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
         "tags": meta.get("tags") or [],
         # The fillable surfaces of this prop's mesh, `[{name, kind}, …]` —
         # ALWAYS present, so no consumer has to know the difference between
         # "none" and "not detected yet". On the lean record too: it is what a
         # scene's `slots` are matched against.
         "slots": meta.get(SLOTS_KEY) or [],
-        # The picture areas of the primary mesh and the prop-wide defaults
-        # (spec-picture-props.md § 1) — always present, like `slots`: the
-        # recipe reads `area_defaults` off the record, the tab reads all three.
+        # Which key colours the NEXT generation is asked for (ruling V2: the
+        # one area fact that is the prop's wish, not a file's measurement).
+        # Areas, leaf box, orientation fix and pane defaults are on
+        # `variant_tiers[i]` — nothing of the kind on the record (v2 E1).
         KEY_AREAS_KEY: list(meta.get(KEY_AREAS_KEY) or []),
-        AREAS_KEY: list(meta.get(AREAS_KEY) or []),
-        AREA_DEFAULTS_KEY: dict(meta.get(AREA_DEFAULTS_KEY) or {}),
-        # The door leaf's box (spec § 6) — only while the mesh has a leaf
-        # node; the recipe copies it into `door.leaf_bbox`.
-        **({LEAF_BBOX_KEY: meta[LEAF_BBOX_KEY]} if meta.get(LEAF_BBOX_KEY) else {}),
         "marker_count": len(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
@@ -4360,7 +4680,6 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # variant in hand, and this is the same answer every other
             # unqualified read gives (2026-08-25).
             "description": variant_description(meta, primary),
-            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
             "markers": variant_markers(meta, primary),
             "has_source": has_source,
             "created_at": meta.get("created_at") or "",
@@ -4371,16 +4690,18 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # Over ALL active variants: adding, removing or re-generating one
             # of them must move the scene signature, or a client that already
             # holds the room keeps showing the old cast of meshes.
-            # …and over the PICTURES (spec-picture-props.md § 5): a swapped
-            # image changes no mesh, no tier and no URL, so without it in the
-            # key a running client would keep the old poster on the wall.
-            # Appended only when the prop says something about pictures, so
-            # every other prop's key stays character for character what it
-            # was.
+            # …and over the PICTURES (spec-picture-props.md § 5) and the
+            # per-file ORIENTATION (v2 E1): a swapped image or a turned dial
+            # changes no mesh, no tier and no URL, so without them in the
+            # key a running client would keep the old poster on the wall or
+            # the old lean. Appended only when the prop says something about
+            # pictures or stands turned, so every other prop's key stays
+            # character for character what it was.
             "model_signature": hashlib.md5(
                 ("|".join(f"{i}:{g.signature() if g else ''}"
                           for i, g in zip(active_idx, galleries))
-                 + _picture_signature_part(meta, entries)
+                 + _picture_signature_part(
+                     entries, {i: files[i][ROTATION_KEY] for i in active_idx})
                  ).encode()).hexdigest()[:12],
             "variant_count": len(variant_tiers),
             "variant_max": variant_max(),
@@ -4842,6 +5163,10 @@ def _generate(prop_id: str, prompt: str, negative: str,
         if not g:
             error = "bad prop id"
             return {"ok": False, "error": error}
+        # The dial of the file this run replaces is the new file's default
+        # (v2 E1; same rule as the upload) — read BEFORE the new file lands.
+        previous = g.find(DEFAULT_TIER, fallback=False)
+        inherited = file_areas(previous)[ROTATION_KEY] if previous else None
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
             output_path=str(g.new_path()),
@@ -4869,6 +5194,8 @@ def _generate(prop_id: str, prompt: str, negative: str,
             "backend": res.get("backend", ""),
             **({"face_num": int(face_num)} if face_num else {}),
             **({"texture_size": int(texture_size)} if texture_size else {}),
+            **({ROTATION_KEY: inherited}
+               if inherited and any(inherited.values()) else {}),
         })
         g.select(path.name, tier)
         # LOD stages of the SAME job (§ 3.2): each becomes its own gallery
@@ -4889,15 +5216,16 @@ def _generate(prop_id: str, prompt: str, negative: str,
             bbox = _extract_bbox(prop_id)
             if bbox:
                 meta["bbox"] = bbox
-                _redistribute_dims(meta)
+                _redistribute_dims(meta, file_areas(path)[ROTATION_KEY])
         _write_sidecar(prop_id, meta)
+        # The picture-area split of the mesh that just landed (when the prop
+        # asked for key colours) — for EVERY variant (v2 E1: each is its own
+        # mesh), same law as the slots below: this chain does not go through
+        # `_store_bbox`, so the landing hook has to stand here as well. Its
+        # own read-modify-write, never raises; a worker thread may wait
+        # longer for a Blender slot.
+        _areas_after_landing(prop_id, variant, wait_s=30.0)
         if primary:
-            # The picture-area split of the mesh that just landed (when the
-            # prop asked for key colours) — same law as the slots below: this
-            # chain does not go through `_store_bbox`, so the landing hook has
-            # to stand here as well. Its own read-modify-write, never raises;
-            # a worker thread may wait longer for a Blender slot.
-            _areas_after_landing(prop_id, variant, wait_s=30.0)
             # …and the object's texture slots, off the mesh that just landed.
             # AFTER the write above, never before: `_autofill_slots` does its
             # own read-modify-write and the `meta` in hand here predates it.
@@ -4959,6 +5287,7 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
             logger.error("Prop %s shrink failed: %s", prop_id, error)
             return {"ok": False, "error": error}
         path = Path(res["path"])
+        src_fix = file_areas(src)[ROTATION_KEY]
         write_model_sidecar(path, {
             "created_at": utc_now_iso(),
             "source": "shrink",
@@ -4969,6 +5298,9 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
             "source_file": source_file,
             **({"face_num": int(face_num)} if face_num else {}),
             **({"texture_size": int(texture_size)} if texture_size else {}),
+            # A backend re-mesh keeps the axes of its source, not its nodes
+            # or materials — the fix travels, the areas do not (v2 E1).
+            **({ROTATION_KEY: src_fix} if any(src_fix.values()) else {}),
         })
         g.select(path.name, LOW_TIER)
         logger.info("Prop %s: low variant %s (backend %s, from %s)",

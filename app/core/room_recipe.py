@@ -656,9 +656,12 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         # The markers of the VARIANT this placement draws (2026-08-25) — the
         # same entry its dims came from, so the seat sits on the mesh that is
         # really there.
+        # …under the orientation fix of that same variant's FILE (v2 E1):
+        # the fix is a fact of the mesh the marker sits on.
+        published = _variant_entry(prop, entry.get("variant")) or {}
         for marker in _placement_markers(prop, entry.get("variant")):
             composed = compose_prop_marker(
-                bbox=bbox, rotation=prop.get("rotation"), dims=dims,
+                bbox=bbox, rotation=published.get("rotation"), dims=dims,
                 frac=[float(v) for v in marker.get("at") or [0.5, 0, 0.5]],
                 facing=marker.get("facing"), placement_yaw=yaw,
                 placement_offset_y=off_y)
