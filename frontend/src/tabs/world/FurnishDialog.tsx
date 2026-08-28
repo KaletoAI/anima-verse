@@ -20,6 +20,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { RoomPropPlacement } from './worldTypes'
+import { groupLabel, usePoseCatalog } from './placeTypes'
 
 export type FurnishState = 'selecting' | 'proposal_ready' | 'generating'
   | 'placing' | 'review_ready' | 'error'
@@ -176,6 +177,8 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
   onClearRoom, onAccept, onClose }: FurnishDialogProps) {
   const { t } = useI18n()
   const { toast } = useToast()
+  // Place-type labels for the proposal's markers (a group key is stored).
+  const poseCatalog = usePoseCatalog()
   const { status, busy, ghosts, act } = job
   const state = status?.state
   // Editable copy of the proposal — seeded once per job revision.
@@ -513,9 +516,9 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
               onChange={(ev) => setNew(i, { description: ev.target.value })} />
             <span className="ga-hint">
               {n.marker
-                ? t('Marker: {kind} (adjust it by hand on the prop later)')
-                  .replace('{kind}', n.marker.group)
-                : t('No marker')}
+                ? t('Place: {label} (adjust the marker by hand on the prop later)')
+                  .replace('{label}', groupLabel(poseCatalog.groups, n.marker.group))
+                : t('No place')}
               {n.prop_id ? ` · ${t('already generated')}` : ''}
             </span>
           </div>

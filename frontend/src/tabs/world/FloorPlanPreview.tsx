@@ -37,6 +37,7 @@ import type { Map3D, Room, SceneModelSpec, ScenePayload, ScenePlate } from './wo
 import { hasRect, readMapWater } from './worldTypes'
 import { buildMeasureAids, disposeAids, useActiveMeasure,
   type MeasureKey } from './measureKit'
+import { previewEntry, usePoseCatalog } from './placeTypes'
 
 // The reference square is the preview's stage — ground plate, ruler position
 // and camera framing. Its WORLD size is a per-location dial and arrives in
@@ -100,10 +101,18 @@ interface FloorPlanPreviewProps {
    *  room's min corner (click on the 2D plan, contract v6 Nr. 2); absent =
    *  the diorama anchor. Pure UI state, never persisted. */
   calibration?: { roomId: string; at?: [number, number] } | null
+  /** Pose the figures of a marker play, keyed by the payload's marker id
+   *  (the ◀ ▶ cycler in the editor's marker strip). VIEW state only; an
+   *  unlisted marker plays its place type's default pose. */
+  previewPose?: Record<string, string>
   height?: number
 }
 
-export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, scene, sceneError = '', calibration = null, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
+// Stable default for the optional pose map — a fresh `{}` per render would
+// re-run the rebuild effect every time.
+const NO_PREVIEW_POSES: Record<string, string> = {}
+
+export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onStoreyHeight, scene, sceneError = '', calibration = null, previewPose = NO_PREVIEW_POSES, measure: measureProp, height = 540 }: FloorPlanPreviewProps) {
   const { t } = useI18n()
   // Reference sizes: the toolbar's own fields drive them; a parent may push
   // one in for a field it hosts (the model tab does that).
@@ -188,11 +197,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // figure/clip the mannequin stays the fallback.
   const figRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'; obj?: Object3D }>({ status: 'idle' })
   // The pose catalog's PLACE TYPES (plan-posen-plaetze.md § 4): a marker
-  // names a group, not a clip, so the preview figure plays the group's
-  // DEFAULT pose — `GET /poses` → `groups[g].default` → that entry's
-  // `animation`. Fetched once; until it is in, the figure stands idle.
-  const poseKindsRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'
-    kindOf: Map<string, string> }>({ status: 'idle', kindOf: new Map() })
+  // names a group, not a clip, so the preview figure plays a pose OF that
+  // group — the cycled one (`previewPose[id]`) or the group's default — and
+  // that entry's `animation` is the clip kind. Until the catalog is in, the
+  // figure stands idle.
+  const poseCatalog = usePoseCatalog()
+  const poseCatalogRef = useRef(poseCatalog)
+  poseCatalogRef.current = poseCatalog
+  const previewPoseRef = useRef(previewPose)
+  previewPoseRef.current = previewPose
   // Surface textures per kind: the /assets listing (url + real tiling size)
   // plus lazily loaded THREE textures — walls/floors sample them real-scale.
   const surfaceListRef = useRef<{ status: 'idle' | 'loading' | 'ready'
@@ -200,8 +213,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
                        material?: SurfaceMaterialSpec | null }> }>(
     { status: 'idle', map: new Map() })
   const surfaceTexRef = useRef<Map<string, unknown>>(new Map())
+  // Clip listing: per clip its kind, the half of a pair it is (`role` a/b,
+  // '' = solo) and the set; `pairs[kind].geometry.roles.<role>.anchor_xz_m`
+  // is where each half stands in the pair's own frame (clip +X = A → B).
   const clipListRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'
-    clips: Array<{ kind: string; set: string; url: string }> }>({ status: 'idle', clips: [] })
+    clips: Array<{ kind: string; role?: string; set: string; url: string }>
+    pairs: Record<string, { geometry?: { roles?: Record<string, { anchor_xz_m?: [number, number] }> } }> }>(
+      { status: 'idle', clips: [], pairs: {} })
   const clipCacheRef = useRef<Map<string, { clip: AnimationClip; restObj: Object3D } | 'loading' | 'missing'>>(new Map())
   const mixersRef = useRef<AnimationMixer[]>([])
   const clockRef = useRef<Clock | null>(null)
@@ -321,54 +339,35 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     })()
     return null
   }
-  /** The clip kind a marker of place type `group` shows: the animation of
-   *  the group's default pose. `undefined` while the catalog loads or for a
-   *  group the catalog does not know — the figure then stands idle. */
-  const defaultKindOf = (group: string): string | undefined => {
-    const st = poseKindsRef.current
-    if (st.status === 'idle') {
-      poseKindsRef.current = { status: 'loading', kindOf: new Map() }
-      apiGet<{ entries?: Array<{ key: string; animation?: string }>
-               groups?: Record<string, { default?: string }> }>('/poses')
-        .then((d) => {
-          const anim = new Map((d.entries || []).map((e) => [e.key, e.animation || '']))
-          const kindOf = new Map<string, string>()
-          for (const [g, spec] of Object.entries(d.groups || {})) {
-            const kind = spec.default ? anim.get(spec.default) : ''
-            if (kind) kindOf.set(g, kind)
-          }
-          poseKindsRef.current = { status: 'ready', kindOf }
-          setBump((b) => b + 1)
-        })
-        .catch(() => { poseKindsRef.current = { status: 'missing', kindOf: new Map() } })
-      return undefined
-    }
-    return st.kindOf.get(group)
-  }
-  const ensureClip = (kind: string) => {
+  /** The clip of `kind` — for a pair kind the half `role` ('a'/'b'), else
+   *  the solo clip. Loaded lazily and cached per kind+role; `null` while it
+   *  loads or when there is none. */
+  const ensureClip = (kind: string, role = '') => {
     const idx = clipListRef.current
     if (idx.status === 'idle') {
-      clipListRef.current = { status: 'loading', clips: [] }
-      apiGet<{ clips?: Array<{ kind: string; set: string; url: string }> }>('/assets/animation-clips')
+      clipListRef.current = { status: 'loading', clips: [], pairs: {} }
+      apiGet<{ clips?: Array<{ kind: string; role?: string; set: string; url: string }>
+               pairs?: typeof idx.pairs }>('/assets/animation-clips')
         .then((d) => {
-          clipListRef.current = { status: 'ready', clips: d.clips || [] }
+          clipListRef.current = { status: 'ready', clips: d.clips || [], pairs: d.pairs || {} }
           setBump((b) => b + 1)
         })
-        .catch(() => { clipListRef.current = { status: 'missing', clips: [] } })
+        .catch(() => { clipListRef.current = { status: 'missing', clips: [], pairs: {} } })
       return null
     }
     if (idx.status !== 'ready') return null
-    const cached = clipCacheRef.current.get(kind)
+    const cacheKey = role ? `${kind}#${role}` : kind
+    const cached = clipCacheRef.current.get(cacheKey)
     if (cached === 'loading' || cached === 'missing') return null
     if (cached) return cached
     // Prefer a set-less clip, then female, then anything of the kind.
-    const of = idx.clips.filter((c) => c.kind === kind)
+    const of = idx.clips.filter((c) => c.kind === kind && (c.role || '') === role)
     const pick = of.find((c) => !c.set) || of.find((c) => c.set === 'female') || of[0]
     if (!pick) {
-      clipCacheRef.current.set(kind, 'missing')
+      clipCacheRef.current.set(cacheKey, 'missing')
       return null
     }
-    clipCacheRef.current.set(kind, 'loading')
+    clipCacheRef.current.set(cacheKey, 'loading')
     ;(async () => {
       try {
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
@@ -379,9 +378,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // Mixamo centimetres; it would fling the scaled figure around).
         clip.tracks = clip.tracks.filter(
           (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
-        clipCacheRef.current.set(kind, { clip, restObj: clipObj })
+        clipCacheRef.current.set(cacheKey, { clip, restObj: clipObj })
       } catch {
-        clipCacheRef.current.set(kind, 'missing')
+        clipCacheRef.current.set(cacheKey, 'missing')
       }
       setBump((b) => b + 1)
     })()
@@ -648,7 +647,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // the fixed reference, it never scales with a slider. World coordinates,
     // bottom seated on `y`; `facing` is the world compass (0 = south).
     const placeFigure = (opts: { x: number; y: number; z: number
-                                 animation?: string; facing?: number
+                                 animation?: string
+                                 /** half of a pair clip ('a'/'b'), '' = solo */
+                                 role?: string
+                                 facing?: number
                                  tilt?: number; roll?: number
                                  /** a place's figure (marker colour), not the
                                   *  comparison figure */
@@ -659,7 +661,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       const kinds = clipListRef.current.clips.map((c) => c.kind)
       const kind = opts.animation
         || (kinds.includes('idle') ? 'idle' : kinds.includes('stand') ? 'stand' : kinds[0])
-      const anim = figSrc && kind ? ensureClip(kind) : null
+      const anim = figSrc && kind ? ensureClip(kind, opts.role || '') : null
       if (figSrc && anim) {
         const inst = h.skclone(figSrc)
         const pivot = new THREE.Group()
@@ -969,26 +971,58 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // PLACES (plan-posen-plaetze.md § 4): room markers AND the props' places,
     // both already composed into world coordinates by the server — the
     // anchor and ONE slot point per unit of capacity. A test figure sits on
-    // every slot, playing the default pose of the marker's place type
-    // (`defaultKindOf`), numbered per room; a multi-slot place counts its
-    // slots after the dot. The pose cycler per marker is a later step.
+    // every slot, playing the marker's preview pose (the cycled one, else
+    // the default of its place type — `previewEntry`), numbered per room; a
+    // multi-slot place counts its slots after the dot.
+    //
+    // A PAIR pose is one clip in two halves around ONE anchor: the server
+    // seats a pair at the marker CENTRE (`places.assign_pair`) and turns the
+    // clip frame by `facing − 90° + yaw_offset` (`places.pair_yaw`), each
+    // half standing at its sidecar `anchor_xz_m` in that frame. The preview
+    // does the same — A and B around `at_world`, not one per slot.
     const markerNo = new Map<string, number>()
+    const pairs = clipListRef.current.pairs
     for (const marker of sc?.markers || []) {
       const lv = levelOfRoom.get(marker.room_id)
       if (lv !== undefined && !visibleLevel(lv)) continue
       const n = (markerNo.get(marker.room_id) || 0) + 1
       markerNo.set(marker.room_id, n)
-      const kind = defaultKindOf(marker.group)
+      const entry = previewEntry(poseCatalogRef.current, marker.group,
+                                 previewPoseRef.current[marker.id])
+      const kind = entry?.animation || undefined
       const slots = marker.slots
       const name = marker.label || marker.group
+      // y_world is the SURFACE; the figure's root sits root_offset below it
+      // (a seated body touches at the buttocks). ONE routine for the 3D
+      // client, this preview and the prop viewer — the number comes from
+      // the payload, never from a measurement taken here.
+      const rootY = figureRootY(marker.y_world, figBase, kind, marker.root_offset)
+      const pair = kind ? pairs[kind] : undefined
+      if (pair) {
+        const yawDeg = (marker.facing ?? 0) - 90 + (entry?.yaw_offset || 0)
+        const yaw = deg(yawDeg)
+        const [ax, az] = marker.at_world
+        for (const role of ['a', 'b'] as const) {
+          // The server's `_rotate`: clip-frame (x, z) turned by yaw about Y —
+          // the very rotation three.js applies to a child of a group with
+          // rotation.y = yaw, so figure + offset agree with the seated pair.
+          const [ox, oz] = pair.geometry?.roles?.[role]?.anchor_xz_m || [0, 0]
+          placeFigure({
+            x: ax + ox * Math.cos(yaw) + oz * Math.sin(yaw),
+            y: rootY,
+            z: az - ox * Math.sin(yaw) + oz * Math.cos(yaw),
+            animation: kind, role, facing: yawDeg,
+            tilt: marker.tilt, roll: marker.roll,
+            marker: true,
+            label: `${n}${role.toUpperCase()} · ${name}`,
+          })
+        }
+        continue
+      }
       slots.forEach(([sx, sz], i) => {
         placeFigure({
           x: sx,
-          // y_world is the SURFACE; the figure's root sits root_offset below it
-          // (a seated body touches at the buttocks). ONE routine for the 3D
-          // client, this preview and the prop viewer — the number comes from
-          // the payload, never from a measurement taken here.
-          y: figureRootY(marker.y_world, figBase, kind, marker.root_offset),
+          y: rootY,
           z: sz,
           animation: kind, facing: marker.facing,
           tilt: marker.tilt, roll: marker.roll,
@@ -1689,7 +1723,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     if (handleRef.current) rebuild(handleRef.current, rooms)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, map3d, showModels, showBuilding, showWalls, soloLevel, bump, lh,
-      scene, calibration, verify, measure])
+      scene, calibration, previewPose, poseCatalog, verify, measure])
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>

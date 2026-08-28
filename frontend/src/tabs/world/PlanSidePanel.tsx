@@ -2,7 +2,7 @@
  * PlanSidePanel — the context column right of the floor plan. Everything that
  * belongs to the SELECTED shape and is not a click tool lives here: room info
  * (name, rotation, always-visible), how the room's FLOOR meets the ground
- * around it, the animation-marker vocabulary + the marker list, and the room
+ * around it, the place-type vocabulary + the marker list, and the room
  * shell's surface kinds. The 🪑 tool opens the prop palette below them. Purely
  * presentational — RoomLayoutEditor owns the state and hands in the callbacks.
  *
@@ -25,6 +25,8 @@ import { SliderInput } from '../../components/SliderInput'
 import { PropsPalette } from './PropsPalette'
 import type { PropFull } from '../props/propTypes'
 import type { MapWaterRef, Room, RoomLayout, SurfaceKind } from './worldTypes'
+import { groupKeys, groupLabel } from './placeTypes'
+import type { PoseGroupSpec } from './placeTypes'
 
 /** Widest transition a floor may be given, in metres — the server window of
  *  `layout.edge_blend_m` (`terrain_layers.sanitize_edge_blend`). */
@@ -49,10 +51,12 @@ interface PlanSidePanelProps {
    *  author's own name or the ONE shared default. Never a second word for
    *  the same room. */
   groundName: string
-  /** Open animation-clip vocabulary — the marker tool drops this kind. */
-  clipKinds: string[]
-  markerKind: string
-  onMarkerKind: (kind: string) => void
+  /** The pose catalog's PLACE TYPES (`GET /poses` → `groups`) — the 🎯
+   *  tool drops a marker of `markerGroup`; the select shows the label and
+   *  stores the key. */
+  groups: Record<string, PoseGroupSpec>
+  markerGroup: string
+  onMarkerGroup: (group: string) => void
   markerSel: number | null
   onSelectMarker: (index: number | null) => void
   /** The 🎯 place tool — armed state + toggle (it lives HERE, next to the
@@ -113,7 +117,7 @@ const FURNISH_BADGE: Record<string, string> = {
 
 export function PlanSidePanel({
   room, ground, groundName,
-  clipKinds, markerKind, onMarkerKind, markerSel, onSelectMarker,
+  groups, markerGroup, onMarkerGroup, markerSel, onSelectMarker,
   markerMode, onArmMarker, onAlwaysVisible, onRotation, onLayout, onNoWalls,
   onFloorOffset,
   surfaceKinds, waterKinds, onSurface, mapWater,
@@ -307,26 +311,26 @@ export function PlanSidePanel({
       </>
       ) : null}
 
-      {clipKinds.length ? (
+      {groupKeys(groups).length ? (
         <>
           <div className="ga-plan-panel-title">{t('Markers')}</div>
           <div style={{ display: 'flex', gap: 4 }}>
             <select
               className="ga-input"
               style={{ flex: 1, minWidth: 0 }}
-              value={markerKind}
-              onChange={(e) => onMarkerKind(e.target.value)}
-              title={t('Animation kind the 🎯 tool drops — the open clip vocabulary, nothing hardcoded.')}
+              value={markerGroup}
+              onChange={(e) => onMarkerGroup(e.target.value)}
+              title={t('Place type the 🎯 tool drops — a pose-catalog group (seat, bed, floor, …); the server seats characters on it.')}
             >
-              {clipKinds.map((k) => (
-                <option key={k} value={k}>{k}</option>
+              {groupKeys(groups).map((k) => (
+                <option key={k} value={k}>{groupLabel(groups, k)}</option>
               ))}
             </select>
             <button
               type="button"
               className={`ga-btn ga-btn-sm${markerMode ? ' ga-btn-primary' : ''}`}
               onClick={onArmMarker}
-              title={t('Place a marker — then click inside the room; figures with this animation snap to it.')}
+              title={t('Place a marker — then click inside the room; a character taking a pose of this place type is seated on it.')}
             >
               🎯
             </button>
@@ -335,14 +339,14 @@ export function PlanSidePanel({
       ) : null}
       {markers.map((m, i) => (
         <button
-          key={`${m.group}-${i}`}
+          key={m.id || `${m.group}-${i}`}
           type="button"
           className={`ga-btn ga-btn-sm${markerSel === i ? ' ga-btn-primary' : ''}`}
           style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
           onClick={() => onSelectMarker(markerSel === i ? null : i)}
-          title={t('Select this marker to adjust facing/height or remove it.')}
+          title={t('Select this marker to adjust capacity, facing, height or the preview pose, or to remove it.')}
         >
-          🎯 {i + 1} · {m.group}
+          🎯 {i + 1} · {groupLabel(groups, m.group)}{(m.capacity || 1) > 1 ? ` ×${m.capacity}` : ''}
         </button>
       ))}
     </>

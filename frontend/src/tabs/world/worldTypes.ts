@@ -109,6 +109,12 @@ export interface RoomLayout {
 
 export interface RoomPropPlacement {
   prop_id: string
+  /** Stable placement id (the server mints one for a placement stored
+   *  without): a prop marker is addressed as "<placement.id>/<marker.id>". */
+  id?: string
+  /** What the LLM calls this place ("armchair by the window") — names the
+   *  placement's markers in chips and prompts. ≤ 60 characters. */
+  label?: string
   /** Room-local position: METRES from the room's min corner (0…w / 0…d).
    *  ON THE YARD (§ A13a) the same field is LOCATION-LOCAL metres — the
    *  ground has no min corner, its frame IS the location frame. */

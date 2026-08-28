@@ -84,6 +84,7 @@ import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
 import { GROUND_ROOM_ID, groundRoomLabel, hasRect, readMapWater } from './worldTypes'
+import { groupKeys, groupLabel, newId, posesInGroup, usePoseCatalog } from './placeTypes'
 import { isWaterKind } from '../map/mapTypes'
 import type { TerrainTypesResp } from '../map/mapTypes'
 
@@ -188,6 +189,11 @@ interface RoomLayoutEditorProps {
    *  it moves the figure (fraction of the room rectangle, UI state only). */
   calibrationRoomId?: string
   onCalibrationAt?: (at: [number, number]) => void
+  /** Pose the 3D preview figures of a marker play, keyed by marker id —
+   *  pure VIEW state the parent shares with FloorPlanPreview; absent = the
+   *  place type's default pose. The ◀ ▶ cycler in the marker strip writes it. */
+  previewPose?: Record<string, string>
+  onPreviewPose?: (markerId: string, poseKey: string) => void
   /** The location draft carries unsaved changes. Actions that work on the
    *  STORED world have to know: a room that only exists in this draft does
    *  not exist for them. */
@@ -289,7 +295,9 @@ const atOrigin = (lay: PlacedLayout, ground: boolean): Pt =>
 const storedAt = (lay: PlacedLayout, ground: boolean, p: Pt): Pt =>
   (ground ? p : localToRoom(lay, p))
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, unsaved = false, defaultDoorPropId = '', children }: RoomLayoutEditorProps) {
+const NO_PREVIEW_POSES: Record<string, string> = {}
+
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
@@ -355,7 +363,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // Selected opening (index into the selected room's openings) for the
   // per-opening controls below the plan.
   const [openingSel, setOpeningSel] = useState<number | null>(null)
-  const [markerKind, setMarkerKind] = useState('')
+  // Place type the 🎯 tool drops (a pose-catalog group key, never a clip).
+  const [markerGroup, setMarkerGroup] = useState('')
   // Building outline drawing (AV3D-12): points collected while in outline
   // mode, committed to map3d.outline on finish (>= 3 points; clicking the
   // first vertex closes too).
@@ -375,16 +384,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // Selected boundary pass-through (index into map3d.boundary_openings) —
   // highlights its bar on the frame and its edit row below the plan.
   const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null)
-  const [clipKinds, setClipKinds] = useState<string[]>([])
+  // The pose catalog: its place types feed the 🎯 picker, its poses the
+  // preview cycler of the selected marker.
+  const poseCatalog = usePoseCatalog()
   useEffect(() => {
-    apiGet<{ kinds?: string[] }>('/assets/animation-clips')
-      .then((d) => {
-        const kinds = d.kinds || []
-        setClipKinds(kinds)
-        setMarkerKind((k) => k || kinds[0] || '')
-      })
-      .catch(() => setClipKinds([]))
-  }, [])
+    const first = groupKeys(poseCatalog.groups)[0] || ''
+    setMarkerGroup((g) => (g && poseCatalog.groups[g] ? g : first))
+  }, [poseCatalog])
   // Surface-texture kinds for the room shell (floor/wall). The route answers
   // a BARE array mixing texture entries ({kind, url, size_m}) and blend
   // entries ({kind, blend}) — the picker wants the deduplicated kinds, with a
@@ -1507,10 +1513,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             idx === markerSel ? { ...m, at: [px, py] as [number, number] } : m),
         })
       }
-    } else if (clickMode === 'marker' && markerKind) {
+    } else if (clickMode === 'marker' && markerGroup) {
+      // The id is minted HERE so the preview cycler can address the marker
+      // before the first save — the server keeps a client-sent id verbatim.
       updateLayout(room.id, {
         markers: [...(stored?.markers || []),
-                  { at: [px, py] as [number, number], group: markerKind }],
+                  { id: newId(), group: markerGroup, at: [px, py] as [number, number] }],
       })
       setMarkerSel((stored?.markers || []).length)
     } else if (ground) {
@@ -1574,7 +1582,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // to stack several doors/windows on top of each other.
     }
     setClickMode('')
-  }, [clickMode, armedProp, ghostYaw, markerKind, markerSel, selected,
+  }, [clickMode, armedProp, ghostYaw, markerGroup, markerSel, selected,
     setSelected, updateLayout, calibrationRoomId, onCalibrationAt, t, toast,
     pointerM, gridStep])
 
@@ -2637,7 +2645,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               {(content?.markers || []).map((m, i) => (
                 <span
                   key={`${m.group}-${i}`}
-                  title={`${i + 1} · ${m.group}`}
+                  title={`${i + 1} · ${groupLabel(poseCatalog.groups, m.group)}`}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     // An armed tool owns the click — it must reach the room
@@ -3228,9 +3236,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         room={selectedRoom || null}
         ground={groundSel}
         groundName={yardName}
-        clipKinds={clipKinds}
-        markerKind={markerKind}
-        onMarkerKind={setMarkerKind}
+        groups={poseCatalog.groups}
+        markerGroup={markerGroup}
+        onMarkerGroup={setMarkerGroup}
         markerSel={markerSel}
         onSelectMarker={setMarkerSel}
         markerMode={clickMode === 'marker'}
@@ -3337,6 +3345,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             <span className="ga-hint" style={{ fontWeight: 600 }}>
               🪑 {dims?.name || placement.prop_id}:
             </span>
+            {/* What the LLM calls this place — names the placement's markers
+                in chips and prompts ("armchair by the window"). ≤ 60 chars,
+                the server trims the rest. */}
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
+              title={t('A name for this placement as a PLACE — the LLM and the marker chips call it that. Empty = the prop’s own name.')}>
+              {t('Label')}
+              <input
+                type="text"
+                className="ga-input"
+                maxLength={60}
+                style={{ width: 200 }}
+                value={placement.label || ''}
+                placeholder={t('e.g. armchair by the window — what the LLM calls this place')}
+                onChange={(e) => patchProp({ label: e.target.value.slice(0, 60) || undefined })}
+              />
+            </label>
             {/* A stack is invisible on the plan — the top footprint covers the
                 rest. This says how deep the selection sits and that there is
                 anything else here at all, so the cycling click is
@@ -3651,10 +3675,24 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         // unset = the client's face-the-neighbours default.
         const FACING: Record<number, string> = { 0: 'S', 90: 'E', 180: 'N', 270: 'W' }
         const fac = marker.rotation
+        const capacity = marker.capacity || 1
+        // Preview cycler: the poses of the marker's place type, default
+        // first. VIEW state only, keyed by marker id — a marker stored before
+        // ids existed gets one minted into the draft on the first click, so
+        // the preview (which reads the payload's id) can find it.
+        const poses = posesInGroup(poseCatalog, marker.group)
+        const poseIdx = Math.max(0, poses.indexOf(
+          (marker.id && previewPose[marker.id]) || poses[0]))
+        const setPreview = (pose: string) => {
+          const id = marker.id || newId()
+          if (!marker.id) patchMarker({ id })
+          onPreviewPose?.(id, pose)
+        }
         return (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="ga-hint" style={{ fontWeight: 600 }}>
-              🎯 {markerSel + 1} · {marker.group}:
+              🎯 {markerSel + 1} · {groupLabel(poseCatalog.groups, marker.group)}
+              {capacity > 1 ? ` ×${capacity}` : ''}:
             </span>
             <button
               type="button"
@@ -3732,6 +3770,57 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 </button>
               ) : null}
             </SliderInput>
+            {/* A place with room for several: the SERVER composes `capacity`
+                slots `spacing_m` apart across the facing (payload
+                `markers[].slots`); the plan shows one dot, the preview one
+                figure per slot. */}
+            <SliderInput
+              label={t('Capacity')}
+              ariaLabel={t('Marker capacity (figures)')}
+              title={t('How many figures this place takes — a bench seats several. The slots line up across the facing.')}
+              min={1}
+              max={8}
+              step={1}
+              value={capacity}
+              onChange={(v) => {
+                const cap = Math.max(1, Math.min(8, Math.round(v)))
+                patchMarker(cap > 1
+                  ? { capacity: cap }
+                  : { capacity: undefined, spacing_m: undefined })
+              }}
+              sliderWidth={80}
+              inputWidth={52}
+            />
+            {capacity > 1 ? (
+              <SliderInput
+                label={t('Spacing')}
+                ariaLabel={t('Marker slot spacing (m)')}
+                title={t('Distance between neighbouring slots in metres (0.6 = a bench seat).')}
+                min={0.2}
+                max={3}
+                step={0.05}
+                value={marker.spacing_m ?? 0.6}
+                onChange={(v) => patchMarker({ spacing_m: rM(v) })}
+                unit="m"
+                sliderWidth={90}
+                inputWidth={62}
+              />
+            ) : null}
+            {poses.length ? (
+              <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}
+                title={t('Which pose of this place type the preview figures play — view only, nothing is stored. Every slot shows it; a pair pose seats both halves around the marker.')}>
+                <span className="ga-hint">{t('Preview pose')}</span>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => setPreview(poses[(poseIdx + poses.length - 1) % poses.length])}>
+                  ◀
+                </button>
+                <span className="ga-hint">{poses[poseIdx]} ({poseIdx + 1}/{poses.length})</span>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => setPreview(poses[(poseIdx + 1) % poses.length])}>
+                  ▶
+                </button>
+              </span>
+            ) : null}
             <SliderInput
               label={t('Height offset (m)')}
               ariaLabel={t('Marker height offset (m)')}

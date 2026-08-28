@@ -591,6 +591,11 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
     // Selecting another room ends the calibration of the previous one.
     setCalibration((cur) => (cur && cur.roomId === floorRoomSel ? cur : null))
   }, [floorRoomSel])
+  // Preview pose per marker id (plan-posen-plaetze.md § 4): which pose of
+  // the place type the 3D preview figures play. VIEW state shared by the
+  // marker strip (writes) and the preview (reads); nothing is persisted and
+  // an unlisted marker plays its group's default.
+  const [previewPose, setPreviewPose] = useState<Record<string, string>>({})
 
   // The model-calibration strip belongs to a ROOM with a diorama. The yard is
   // the location surface and has neither (§ A13a), so selecting it shows no
@@ -636,6 +641,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           scene={scene}
           calibrationRoomId={calibration?.roomId || ''}
           onCalibrationAt={(at) => setCalibration((cur) => (cur ? { ...cur, at } : cur))}
+          previewPose={previewPose}
+          onPreviewPose={(id, pose) => setPreviewPose((cur) => ({ ...cur, [id]: pose }))}
           unsaved={dirty}
           defaultDoorPropId={draft.default_door_prop_id || ''}
         >
@@ -675,6 +682,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           scene={scene}
           sceneError={sceneError}
           calibration={calibration}
+          previewPose={previewPose}
         />
       </div>
     </div>
