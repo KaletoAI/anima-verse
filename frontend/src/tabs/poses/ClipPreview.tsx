@@ -24,10 +24,10 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Object3D } from 'three'
-import { anchorFigureBind, pairYaw } from '@anima/scene-render'
+import { anchorFigureBind, clipHipsDrop, pairYaw } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
-import { loadTestFigure } from '../characters/Model3DViewer'
+import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
 import { SliderInput } from '../../components/SliderInput'
 
 const FIGURE_H = 1.7
@@ -69,14 +69,16 @@ interface ApiClip { kind: string; role?: string; set?: string; url: string }
  *  previews a TRIAL clip, which is in no library and has no kind yet. */
 export interface ClipUrls { a?: string; b?: string; solo?: string }
 
-/** Root path of a half: hips XZ per key, clip centimetres → metres. */
-/** Standing hips height of the clip library's skeleton (metres) — every
- *  converted clip puts a standing actor's hips there (cmu_clip leg ratio). */
-const CLIP_STAND_HIPS_M = 1.13
-
-function rootPath(clip: AnimationClip): { times: ArrayLike<number>; xyz: Float32Array } {
+/** Root path of a half: hips XZ per key, clip centimetres → metres.
+ *
+ *  `standRefM` is the STANDING hips height of the clip library in metres
+ *  (`standHipsRef`, the idle clip's hips median) — a clip without a hips
+ *  track carries no height of its own, so it is played at exactly that
+ *  reference and the figure stays where it binds. */
+function rootPath(clip: AnimationClip, standRefM: number):
+{ times: ArrayLike<number>; xyz: Float32Array } {
   const track = clip.tracks.find((tr) => tr.name.endsWith('.position') && /hips/i.test(tr.name))
-  if (!track) return { times: [0], xyz: new Float32Array([0, CLIP_STAND_HIPS_M, 0]) }
+  if (!track) return { times: [0], xyz: new Float32Array([0, standRefM, 0]) }
   const n = track.times.length
   const xyz = new Float32Array(n * 3)
   for (let i = 0; i < n * 3; i++) xyz[i] = track.values[i] / 100
@@ -248,11 +250,18 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
           return found
         }
+        // The standing reference of the clip library (idle hips median, clip
+        // centimetres) — the SAME measurement the prop viewer and the 3D
+        // client take, so a sit clip drops the figure by the same amount in
+        // all three. `null` = no idle clip: then nothing is put back and the
+        // figures play at their bind height.
+        const standRefM = ((await standHipsRef()) || 0) / 100
+        if (disposed) return
         for (const { role, url } of parts) {
           const obj = await fbx.loadAsync(url)
           const clip = obj.animations?.[0]
           if (!clip || disposed) return
-          const path = rootPath(clip)
+          const path = rootPath(clip, standRefM)
           // play in place — the root follows the path instead
           const tracks = clip.tracks.filter((tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
           const inplace = new THREE.AnimationClip(clip.name, clip.duration, tracks)
@@ -282,8 +291,9 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
           root.add(pivot)
           frame.add(root)
           // where the figure's hips sit in its bind pose — the clip's hips
-          // height is played RELATIVE to that: a lying clip (hips 0.2 m) drops
-          // the body, a standing one (1.13 m) leaves it where it binds
+          // height is played RELATIVE to that: a lying clip (hips ~0.15 m)
+          // drops the body, a clip at the standing reference leaves it where
+          // it binds
           root.updateMatrixWorld(true)
           const hipsBindY = instHips ? instHips.getWorldPosition(new THREE.Vector3()).y : FIGURE_H * 0.55
           // label A / B over the head (pair only)
@@ -330,9 +340,11 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
           for (const p of players) {
             p.mixer.setTime(time)
             const r = rootAt(p.path, time)
-            // hips height scaled by this figure's proportion (bind hips over
-            // the library's standing 1.13 m), minus the bind height itself
-            p.root.position.set(r.x, r.y * (p.hipsBindY / CLIP_STAND_HIPS_M) - p.hipsBindY, r.z)
+            // The clip carries its own hips height and the figure is lowered
+            // by it — the shared rule, live per key here (the clip plays in
+            // place, so this preview walks the root along the path itself).
+            // A standing clip yields 0 and the figure stays where it binds.
+            p.root.position.set(r.x, -clipHipsDrop(p.hipsBindY, r.y, standRefM), r.z)
           }
           if (performance.now() - lastInfo > 150) {
             lastInfo = performance.now()

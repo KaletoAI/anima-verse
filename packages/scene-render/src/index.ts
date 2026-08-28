@@ -93,7 +93,8 @@ export {
 
 export { pickVariant, pickModelVariant, MODEL_TIERS } from './types'
 
-export { FIGURE_HEIGHT_M, anchorFigureBind, figureRootY } from './figure'
+export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureRootY,
+  hipsTrackMedian } from './figure'
 
 export { markerSlots, pairYaw, rotateXZ, pairPoints } from './placeGeometry'
 export type { XZ } from './placeGeometry'

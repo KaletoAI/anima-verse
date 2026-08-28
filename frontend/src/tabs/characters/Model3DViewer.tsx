@@ -12,9 +12,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
   Vector3 } from 'three'
-import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
-  disposeSlotMaterials, figureRootY, leafPivot, markerSlots, pairPoints,
-  pairYaw } from '@anima/scene-render'
+import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials, clipHipsDrop,
+  disposeSlotMaterials, figureRootY, hipsTrackMedian, leafPivot, markerSlots,
+  pairPoints, pairYaw } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -106,7 +106,8 @@ const clipIndex = () => {
   }
   return _clipIndexPromise
 }
-const _clipCache = new Map<string, Promise<{ clip: AnimationClip; restObj: Object3D } | null>>()
+const _clipCache = new Map<string, Promise<{ clip: AnimationClip; restObj: Object3D
+                                             hipsMedian: number | null } | null>>()
 /** One clip of `kind` — the `role` half of it when it is a pair clip. */
 const loadClip = (kind: string, role = '') => {
   const key = role ? `${kind}#${role}` : kind
@@ -124,10 +125,17 @@ const loadClip = (kind: string, role = '') => {
         const clipObj = await new FBXLoader().loadAsync(pick.url)
         const clip = clipObj.animations?.[0]
         if (!clip) return null
-        // Play in place — the hips position track is in Mixamo centimetres.
+        // The hips height the clip is played AT — measured BEFORE the track
+        // goes, because dropping it drops that information with it. The
+        // figure is lowered by it again in `addMarkerFigure`
+        // (`clipHipsDrop`); the 3D client keeps the track and rescales it,
+        // which comes to the same height.
+        const hipsMedian = hipsTrackMedian(clip)
+        // Play in place — the hips position track is in Mixamo centimetres
+        // and carries the locomotion of the take across the room.
         clip.tracks = clip.tracks.filter(
           (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
-        return { clip, restObj: clipObj }
+        return { clip, restObj: clipObj, hipsMedian }
       } catch {
         return null
       }
@@ -135,6 +143,24 @@ const loadClip = (kind: string, role = '') => {
     _clipCache.set(key, cached)
   }
   return cached
+}
+let _standRefPromise: Promise<number | null> | null = null
+/** The STANDING hips height of the clip library, in clip units — the hips
+ *  median of the `idle` clip, the reference every other clip's height is read
+ *  against (the same choice `client3d` makes). One load per session; `null`
+ *  when there is no idle clip, and then no figure is lowered at all rather
+ *  than lowered against a guess. */
+export const standHipsRef = (): Promise<number | null> => {
+  if (!_standRefPromise) {
+    _standRefPromise = loadClip('idle').then((anim) => {
+      const m = anim?.hipsMedian
+      if (typeof m === 'number' && m > 0) return m
+      console.warn('[Model3DViewer] no idle clip with a hips track — posed'
+        + ' preview figures keep their bind hips height')
+      return null
+    })
+  }
+  return _standRefPromise
 }
 
 /** Placement of a building model on its map tile — mirrors the worldmap
@@ -1488,18 +1514,20 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               const { clone: skclone } =
                 await import('three/examples/jsm/utils/SkeletonUtils.js')
               if (disposed || figTokenRef.current !== o.token) return
+              const standRef = anim ? await standHipsRef() : null
+              if (disposed || figTokenRef.current !== o.token) return
               const inst = skclone(src) as Object3D
               const fpivot = new THREE.Group()
               fpivot.add(inst)
+              const hipsOf = (root: Object3D): Object3D | null => {
+                let found: Object3D | null = null
+                root.traverse((o2) => { if (!found && /hips/i.test(o2.name)) found = o2 })
+                return found
+              }
+              const instHips = hipsOf(inst)
               // Up-axis fix measured on the REST skeletons — same logic as
               // the floor-plan preview / the main clip path above.
               if (anim) {
-                const hipsOf = (root: Object3D): Object3D | null => {
-                  let found: Object3D | null = null
-                  root.traverse((o2) => { if (!found && /hips/i.test(o2.name)) found = o2 })
-                  return found
-                }
-                const instHips = hipsOf(inst)
                 const clipHips = hipsOf(anim.restObj)
                 if (instHips?.parent && clipHips?.parent) {
                   inst.updateMatrixWorld(true)
@@ -1521,14 +1549,32 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               // routine — soles on 0, XZ centred, scaled to `figH` (1.70 m in
               // this mesh's units). The clip is played afterwards and never
               // re-grounds the body.
+              // LATENT TRAP: this runs AFTER `fpivot.rotation.x = bestRx`, so
+              // the box it measures is the box of the TILTED figure — with a
+              // ±90° fix the "height" would be the figure's depth. Today
+              // every clip in the library matches the figure's up axis and
+              // `bestRx` is 0; the day one does not, the anchor has to be
+              // taken before the tilt (or the tilt applied to a parent).
               anchorFigureBind(THREE, fpivot, o.figH)
+              // The clip's OWN hips height, put back. Every clip is played in
+              // place (the hips position track is dropped above), which also
+              // drops the height that track carried: without this, sit, sleep
+              // and idle are all drawn at the same bind height and a seated
+              // figure floats 0.43 m over the seat marker. Measured HERE, in
+              // mesh units, so it scales with `figH` on its own — right after
+              // the anchor (which leaves the world matrix current) and BEFORE
+              // the clip is played, so it is the BIND height.
+              const hipsBindY = instHips
+                ? instHips.getWorldPosition(new THREE.Vector3()).y
+                : null
+              const hipsDrop = clipHipsDrop(hipsBindY, anim?.hipsMedian, standRef)
               if (anim) {
                 const mixer = new THREE.AnimationMixer(inst)
                 mixer.clipAction(anim.clip).play()
                 mixer.update(0)  // static frame-0 pose — no per-frame cost
               }
               const fig = new THREE.Group()
-              fig.position.set(o.x, o.y, o.z)
+              fig.position.set(o.x, o.y - hipsDrop, o.z)
               fig.rotation.y = _deg(o.facingDeg)
               fig.add(fpivot)
               fig.userData.__shared = true

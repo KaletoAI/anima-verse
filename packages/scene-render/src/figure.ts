@@ -19,6 +19,12 @@
  * BED and carries the body 0.6 × H over its own root, so dropping the posed
  * body onto the mattress would bury the sleeper by a metre.
  *
+ * The CLIP's own hips height is the second, independent term, and it is NOT
+ * in `root_offset` — see `clipHipsDrop` below. A renderer that plays clips in
+ * place (both admin previews) has to put it back by hand; the 3D client gets
+ * it by keeping and rescaling the hips track. Missing it is what drew a
+ * seated figure 0.43 m over its chair in the prop viewer until 2026-08-29.
+ *
  * WHY THIS LIVES HERE (finding 2026-08-21). The rule existed three times:
  *
  *   * `client3d` — bind anchor, `y_world − root_offset`. Correct.
@@ -43,7 +49,7 @@
  * that lived here was deleted 2026-08-28: it had already drifted from the
  * catalog's groups).
  */
-import type { Object3D } from 'three'
+import type { AnimationClip, Object3D } from 'three'
 
 /** The figure of this contract: 1.70 m, everywhere and always (§ A3). */
 export const FIGURE_HEIGHT_M = 1.7
@@ -60,6 +66,72 @@ export const FIGURE_HEIGHT_M = 1.7
 export function figureRootY(surfaceY: number, rootOffset?: number | null): number {
   const drop = typeof rootOffset === 'number' && Number.isFinite(rootOffset) ? rootOffset : 0
   return surfaceY - drop
+}
+
+/**
+ * The standing hips height a clip is played at, in the CLIP's own units
+ * (Mixamo centimetres) — the median of |y| over the `…hips….position` track,
+ * or `null` when the clip has no such track at all.
+ *
+ * The same measurement `client3d/src/scene/figures.adaptExternalClips` takes
+ * (`hipMedian` there), deliberately to the letter: the median, not the mean
+ * and not the maximum — a single mis-scaled export once became the reference
+ * and pushed EVERY figure into the ground (finding 2026-07-26). Admin and
+ * client must read the same number off the same file, so this rule exists
+ * once and both call it.
+ *
+ * `null` is not zero: a clip without the track carries no height information,
+ * and a zero would read as "hips on the floor".
+ */
+export function hipsTrackMedian(clip: AnimationClip | null | undefined): number | null {
+  const ys: number[] = []
+  for (const track of clip?.tracks || []) {
+    if (!track.name.endsWith('.position')) continue
+    if (!/hips\./i.test(track.name.replace(/^mixamorig:?/i, ''))) continue
+    const values = track.values as ArrayLike<number>
+    for (let i = 1; i < values.length; i += 3) ys.push(Math.abs(values[i]))
+  }
+  if (!ys.length) return null
+  ys.sort((a, b) => a - b)
+  return ys[Math.floor(ys.length / 2)]
+}
+
+/**
+ * How far a figure playing this clip has to SINK so its hips end up where the
+ * clip puts them — in the unit `hipsBindY` is given in (mesh units, metres).
+ *
+ *     drop = hipsBindY × (1 − hipsMedian / standRef)
+ *
+ * WHY THIS IS NEEDED AT ALL. Every renderer here drops the Mixamo hips
+ * POSITION track before playing a clip: it is in centimetres and would fling
+ * the body a hundred metres sideways ("play in place"). But that track is not
+ * only locomotion — it also carries the clip's OWN hips HEIGHT, and that is
+ * real information: a sit clip holds the hips at 62 cm where an idle clip
+ * holds them at 110. Drop the track and every pose is drawn at the same bind
+ * height, so a seated figure floats 0.43 m over its chair.
+ *
+ * `figureRootY` does NOT cover this. It places the figure's bind-pose ROOT
+ * relative to the marked surface (the place type's share, from the catalog);
+ * this is the second, independent term, and it belongs to the CLIP. The 3D
+ * client gets it by KEEPING the hips track and rescaling it against the same
+ * standing reference (`figures.adaptExternalClips`); a renderer that plays in
+ * place instead subtracts this drop once, which comes to the same height.
+ *
+ * `standRef` is what a STANDING actor's hips measure in that same clip
+ * library — `hipsTrackMedian` of the idle clip. A clip at exactly that height
+ * yields 0 (nothing to put back), a sleep clip animated ON a bed yields a
+ * NEGATIVE drop and must: it is played above its own standing hips.
+ *
+ * Any missing or unusable input (no bind height, no track, no reference,
+ * a zero reference) = 0, never a NaN into a position.
+ */
+export function clipHipsDrop(hipsBindY?: number | null,
+                             hipsMedian?: number | null,
+                             standRef?: number | null): number {
+  const ok = (v?: number | null): v is number =>
+    typeof v === 'number' && Number.isFinite(v)
+  if (!ok(hipsBindY) || !ok(hipsMedian) || !ok(standRef) || standRef <= 0) return 0
+  return hipsBindY * (1 - hipsMedian / standRef)
 }
 
 /**
