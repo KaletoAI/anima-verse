@@ -16,6 +16,25 @@ MUTANTS THIS FILE KILLS (each one verified by actually running it):
   * ``planar_frame`` derived from the least-parallel world axis  -> fixture D
   * ``fit_plane`` returning the raw eigenvector for a degenerate
     cloud, or its sign convention flipped                        -> fixture E
+  * the two-class gate of ``thickness_footprint`` dropped (every
+    mesh gets a footprint)                                       -> fixtures I, F6, F7
+  * the per-side edge refinement dropped (every edge stays one
+    raster cell inside the leaf)                             -> fixtures F, G, G', H
+  * the snap onto the nearest vertex coordinate dropped         -> fixtures F, G, G'
+    (the footprint then misses the leaf's own edge faces, which
+    sit ON the leaf edge and are only admitted when it is EXACT)
+
+NOT KILLED BY ANY FIXTURE, and measured to be so (2026-08-28): taking EVERY
+thick cell as frame instead of only the thick region CONNECTED TO THE
+BORDER.  The footprint is a BOUNDING rectangle and a bounding rectangle
+cannot see an enclosed island — fixture H's lock rail and handle are thick
+and sit inside the leaf, and dropping the connectivity walk changes neither
+the rectangle nor the 84 prism faces, on the fixture or on any of the four
+measured wooden doors.  (It cannot: a thick island that would shorten a
+side has to span a whole edge row of the leaf, and spanning it means
+touching the jambs, which is what makes it border-connected in the first
+place.)  The walk is kept because it is what the word "frame" MEANS here,
+not because a fixture can tell the difference.
 
 MODEL SPACE IS glTF Y-UP (``docs/schnittstellen-3d.md``: ground = x/z, height
 = y). A picture hangs on a WALL, so its normal lies in the x-z plane and its
@@ -265,22 +284,40 @@ broken towards +z (then +y, then +x — the same preference as
 ``fit_plane``'s sign rule): normal (0, 0, 1), offset 0.0.  ``planar_frame``
 of that normal is u = (1, 0, 0), v = (0, 1, 0) (fixture D).
 
-[F2] SILHOUETTE + FRAME THICKNESS.  Every vertex projected on (u, v) spans
-(0, 0)..(1.0, 2.2).  The rim rule per side: faces that DEVIATE from the
-leaf plane (normal off by more than the cosine, or depth off by more than
-2 cm), whose centre sits in the middle half of the OTHER axis and less than
-25 % of this axis in from the edge; the inset is the face's innermost
-vertex.  Left side (band y 0.55..1.65): the left bar's back, inner side and
-inner side face reach x = 0.1 (its front at depth 0.02 does NOT deviate:
-0.02 <= tol; its outer side face reaches only x = 0, and an inset <= tol
-is no rim — the outermost faces of any model deviate at inset 0), the
-plate's left edge face (x = 0.1, normal -x) too; the plate's front/back
-centres sit 0.37+ in (excluded), the right bar 0.9+ (excluded) -> 0.1.
-Right, bottom (band x 0.25..0.75: the bottom bar's back/top faces and the
-plate's bottom edge reach y = 0.1) and top likewise
--> thickness (0.1, 0.1, 0.1, 0.1) and
+[F2] SILHOUETTE + THE THICKNESS FOOTPRINT.  Every vertex projected on
+(u, v) spans (0, 0)..(1.0, 2.2), so the raster cell is 0.025 * 2.2 = 0.055 m
+and the grid is ceil(1.0/0.055) x ceil(2.2/0.055) = 19 x 40 cells.  MATERIAL
+THICKNESS per cell = max - min of the sampled surface points' depth: the
+bars run z -0.05..0.02 -> 0.07, the plate z -0.02..0 -> 0.02, and a cell
+holding both (the columns/rows where they meet) reads 0.07.  So there are
+exactly two values; Otsu splits them at (0.02 + 0.07) / 2 = **0.045** with
+m_thin = 0.02 and m_thick = 0.07 -> ratio 3.5 >= 1.3, difference 0.05 >=
+0.015 -> a frame exists.
 
-    inner_rect(((0, 0), (1.0, 2.2)), 0.1) == ((0.1, 0.1), (0.9, 2.1))
+The bars fill the cell columns 0..1 (x 0..0.1, and x = 0.1 falls in column
+1 = 0.055..0.11) and 16..18 (x 0.9..1.0), plus the rows 0..1 and 38..39;
+each of those cells touches the outermost row or column, so the border BFS
+takes exactly them.  The leaf cells are the rest: columns 2..15 x rows
+2..37 = 14 * 36 = 504 of the 760 cells (thin share 0.663 >= 0.30) ->
+COARSE rectangle 0.11..0.88 x 0.11..2.09.
+
+EDGE REFINEMENT at fine = 0.055 / 5 = 0.011, band = the middle half of the
+coarse rectangle:
+  left   the fine column 0.099..0.11 holds the left bar's and the plate's
+         faces at x = 0.1 -> 0.07, not thin -> the edge stays at 0.11.
+  right  0.88..0.891 holds plate skin only (0.02) -> thin, the edge moves
+         to 0.891; 0.891..0.902 holds x = 0.9 (bar and plate) -> 0.07,
+         stop.
+  bottom 0.099..0.11 holds y = 0.1 (bottom bar and plate) -> stop at 0.11.
+  top    2.09..2.101 holds y = 2.1 -> stop at 2.09.
+SNAP each edge onto the nearest vertex coordinate within +-0.011:
+0.11 -> 0.1 (0.010), 0.891 -> 0.9 (0.009), 0.11 -> 0.1, 2.09 -> 2.1 (0.010)
+
+    thickness_footprint(...) == ((0.1, 0.1), (0.9, 2.1))
+
+— EXACTLY the plate's own coordinates, which is what lets ``prism_faces``'
+edge rule admit the plate's four edge faces (normals pointing OUT of the
+footprint) and reject the bars' jamb faces (pointing IN).
 
 [F3] THE FRAME FRONT = the largest cluster facing the leaf plane whose
 centre lies OUTSIDE the inner rectangle: a vertical bar's front, 0.22 m2,
@@ -303,27 +340,122 @@ triangles), ascending.  Seed share 1.6 / (1.0 * 2.2) = 0.727 >= 0.30.
 [F5] leaf_bbox over those faces' vertices:
     min (0.1, 0.1, -0.02)   max (0.9, 2.1, 0.0)
 
-[F6] THE FALLBACK: the plate ALONE (one box, faces 0..11).  Its edge
-faces deviate, but they sit ON the silhouette edge (inset 0 <= tol) and
-its back is not in any band's 25 % -> no side has a rim -> every side
-falls back to 8 % of the silhouette width 0.8 = 0.064; inner =
-(0.164, 0.164)..(0.736, 2.036); the front's centres (0.633, 1.433) and
-(0.367, 0.767) are still inside -> the seed is the front, and the growth
-takes the edges and the back: it is bounded by the SEED's extent
-(0.1..0.9 x 0.1..2.1) + 2 cm, not by the guessed inner rectangle (which
-would cut the edges at x = 0.1 off), and the back faces -z, so it is not
-the frame front (the leaf plane itself here) -> the leaf is the whole box,
-share 1.6 / 1.6 = 1.0, bbox as the box.
+[F6] A BARE LEAF IS NOT A DOOR: the plate ALONE (one box, faces 0..11).
+Every non-empty cell reads the same 0.02, so Otsu's two classes have the
+same mean: the difference 0 is below 0.015 and the ratio 1.0 below 1.3.
+No thickness split, no frame, no footprint -> ``thickness_footprint`` is
+None, ``leaf_plane`` is None and ``detect_leaf`` answers None (the Blender
+side reports "no leaf", exactly as it does for a glass door).
 
-[F7] THE 30 % GATE: the four bars alone (no plate) — the largest cluster
-is a vertical bar's front (0.22 m2, offset 0.02; the side faces are
-0.154 m2, see above); the silhouette is 1.0 x 2.2; the rim rule (the
-bars' backs at depth -0.07 deviate) gives 0.1 all round; the bar fronts'
-centres sit at x 0.05 / 0.95 or y < 0.1 / > 2.1 — nothing faces +z inside
-(0.1..0.9, 0.1..2.1) -> no seed -> ``leaf_candidates`` is ``[]`` and
-``detect_leaf`` answers None.
+[F7] THE SAME GATE FROM THE OTHER SIDE: the four bars alone (no plate).
+The largest cluster is a vertical bar's front (0.22 m2, offset 0.02; the
+side faces are 0.154 m2, see above).  The hole in the middle is EMPTY —
+no surface, no thickness — and every cell that does hold material reads
+0.07, so again there is only one class: ``detect_leaf`` answers None, now
+at the footprint instead of at the 30 % share gate.  ``leaf_candidates``
+(v1, kept as the reference) still answers ``[]`` for a plane built by
+hand.
+
+==========================================================================
+FIXTURE H — the MEASURED wooden door (plan-blatt-dicke.md, 2026-08-28)
+==========================================================================
+The shape the thickness method was designed on, rebuilt from closed boxes
+in the model metres of "Door - wood old" variant 2 (a mesh normalised to
+1 m height).  Silhouette x 0..0.585, y 0..1.0; ten boxes:
+
+    left jamb    x 0.000..0.075  y 0.000..1.000  z -0.075..0.075   0.15
+    right jamb   x 0.510..0.585  y 0.000..1.000  z -0.075..0.075   0.15
+    lintel       x 0.000..0.585  y 0.925..1.000  z -0.075..0.075   0.15
+    leaf filling x 0.075..0.510  y 0.000..0.925  z -0.010..0.010   0.02
+    frieze left  x 0.075..0.150  y 0.000..0.925  z -0.020..0.020   0.04
+    frieze right x 0.435..0.510  y 0.000..0.925  z -0.020..0.020   0.04
+    frieze top   x 0.075..0.510  y 0.850..0.925  z -0.020..0.020   0.04
+    frieze bott. x 0.075..0.510  y 0.000..0.075  z -0.020..0.020   0.04
+    handle       x 0.090..0.140  y 0.450..0.500  z  0.010..0.110   0.12*
+    lock rail    x 0.075..0.510  y 0.400..0.450  z -0.050..0.050   0.10
+
+There is NO bottom rail (the measured door has none either), and the
+handle stands 3.5 cm PROUD of the frame's front, so the model's total
+depth (-0.075..0.11 = 0.185) is set by the handle — a rim measured against
+the total depth would be nonsense here.  (*) the handle's cells also hold
+the filling underneath it, so they read 0.11 - (-0.01) = 0.12.
+
+[H1] THE LEAF PLANE.  The largest planar cluster is the filling's front
+(0.435 * 0.925 = 0.402 m2, at z = 0.01; the tie against its back at
+z = -0.01 goes to +z) -> normal (0, 0, 1), offset 0.01, u = +x, v = +y,
+silhouette (0, 0)..(0.585, 1.0).
+
+[H2] THE RASTER.  cell = 0.025 * max(0.585, 1.0) = 0.025 -> 24 x 40 cells,
+the same grid the measurement printed.  Thicknesses: 0.15 (jambs, lintel),
+0.10 (rail), 0.12 (handle, whose cells hold the filling under it: 0.11 -
+(-0.01)), 0.04 (friezes), 0.02 (filling); a mixed cell reads the union's
+extent, and the deepest of all is 0.185 — the handle's front (0.11) over
+the left jamb's back (-0.075) in the column x 0.075..0.10 the two share,
+which is the model's WHOLE depth.  That is the fixture's second point: a
+rim measured as a fraction of the total depth would measure against the
+handle.  Otsu puts the split between the friezes and the
+rail, so the THICK class is jambs + lintel + rail + handle and the THIN
+class filling + friezes.  Thin cells are the leaf area minus the rail:
+(0.435 * 0.925 - 0.435 * 0.05) / (0.585 * 1.0) ~ 0.65 >= 0.30, and
+0.14 / 0.03 is far past both 1.3 and 0.015 -> a frame exists.
+
+[H3] THE THICK PARTS OF THE LEAF.  The rail spans the full leaf width and
+touches BOTH jambs; the handle hangs off the left jamb as a thick
+peninsula.  Both are thick, so both come out as FRAME cells — and both lie
+INSIDE the leaf, so the bounding rectangle of the remaining cells is
+unaffected: leaf cells still span x 0.075..0.51 and y 0..0.925, and the
+prism of [H5] takes rail and handle along.  This is what the plan's
+measurement demanded ("neither may crop the rectangle"); note that the
+border walk is not what achieves it — see the mutant list above.
+
+[H4] EDGES.  Refinement (fine = 0.005) walks each coarse edge outward
+until the next fine column holds jamb/lintel material, then snaps onto the
+nearest vertex coordinate within +-0.005:
+
+    thickness_footprint(...) == ((0.075, 0.0), (0.51, 0.925))
+
+The bottom edge is the silhouette edge itself (no bottom rail) and stays
+at 0.0; the top edge stops under the lintel at 0.925.
+
+[H5] THE PRISM through that footprint, along +z: every face of the seven
+boxes that stand over the leaf area — filling, four friezes, handle, rail
+= 7 * 12 = **84** faces.  Their centres are either strictly inside or ON
+an edge with the normal pointing OUT (the filling's and the friezes' left
+face at x = 0.075, right at 0.51, bottom at y = 0, top at 0.925).  NOT the
+jambs: the left jamb's right face sits at x = 0.075 too, but its normal
+points +x, INTO the footprint (the edge rule), and its front/back centres
+lie at x 0.025..0.05, outside.  NOT the lintel: its bottom face is at
+y = 0.925 with the normal -y, pointing in.
+
+[H6] SHARE = the prism's faces lying IN the leaf plane (facing +z, centre
+within 2 cm of z = 0.01): the filling's front (0.402375) and the four
+frieze fronts at z = 0.02 (2 * 0.075 * 0.925 + 2 * 0.435 * 0.075 =
+0.204) = 0.606375 over the silhouette 0.585 -> 1.0365 >= 0.30.  The rail's
+front (z = 0.05) and the handle's (z = 0.11) are further off than 2 cm and
+do not count.
+
+[H7] THE RESIDUAL of that cut is 0: of the 36 faces left in the frame (the
+two jambs and the lintel) not one has its centre more than 2 cm inside the
+footprint — a clean prism split raises no ``areas_warning``.
+
+==========================================================================
+FIXTURE I — the glass door: a frame with a HOLE, not a leaf
+==========================================================================
+The four bars of fixture F (no plate), but all of them z -0.01..0.01.
+Every cell that holds material reads the same 0.02 and the pane's cells
+hold nothing at all.  Otsu's best split of a single-valued sample has
+m_thick - m_thin = 0 < 0.015 (and ratio 1.0 < 1.3), so there is no
+two-class thickness: ``thickness_footprint`` is None and ``detect_leaf``
+answers None.  This is the measured glass door (0.027 against 0.021 all
+over, plan-blatt-dicke.md) in its purest form — a pane is a hole, and a
+hole must never be cut out as a swinging leaf.
 
 Usage:  ./.venv/bin/python scripts/smoke_picture_areas.py
+        ./.venv/bin/python scripts/smoke_picture_areas.py --glb <path> [--cell M]
+
+The second form is the REAL-MESH mode: it loads one door GLB, prints its
+thickness map, the Otsu classes, the footprint and ``detect_leaf``'s share,
+and exits without running the fixtures.
 """
 import math
 import sys
@@ -704,24 +836,30 @@ def part_f():
           len(clusters) > 1 and clusters[1]["faces"] == [50, 51]
           and vclose(clusters[1]["normal"], (0, 0, -1)), str(clusters[1:2]))
 
-    print("  [F2] inner_rect + the rim rule")
-    check("F2: inner_rect(((0,0),(1,2.2)), 0.1) == ((0.1,0.1),(0.9,2.1))",
-          pa.inner_rect(((0.0, 0.0), (1.0, 2.2)), 0.1) == ((0.1, 0.1), (0.9, 2.1)),
-          str(pa.inner_rect(((0.0, 0.0), (1.0, 2.2)), 0.1)))
-    check("F2: inner_rect with per-side thickness (0.1, 0, 0.1, 0.2)",
-          pa.inner_rect(((0.0, 0.0), (1.0, 2.2)), (0.1, 0.0, 0.1, 0.2))
-          == ((0.1, 0.0), (0.9, 2.0)),
-          str(pa.inner_rect(((0.0, 0.0), (1.0, 2.2)), (0.1, 0.0, 0.1, 0.2))))
+    print("  [F2] the thickness raster and the footprint it yields")
     plane = pa.leaf_plane(verts, faces, normals)
     check("F2: silhouette bbox (0,0)..(1.0,2.2)",
           plane is not None and vclose(plane["bbox2d"][0], (0, 0))
           and vclose(plane["bbox2d"][1], (1.0, 2.2)), str(plane and plane["bbox2d"]))
-    check("F2: frame thickness 0.1 on all four sides",
-          plane is not None and all(close(t, 0.1) for t in plane["thickness"]),
-          str(plane and plane["thickness"]))
-    check("F2: inner rectangle (0.1,0.1)..(0.9,2.1)",
+    grid = pa.thickness_map(verts, faces, plane, plane["bbox2d"], cell=0.055)
+    check("F2: 19 x 40 cells of 0.055 m, none of them empty",
+          (grid["nu"], grid["nv"]) == (19, 40)
+          and all(t is not None for row in grid["thick"] for t in row),
+          str((grid["nu"], grid["nv"])))
+    levels = sorted({round(t, 6) for row in grid["thick"] for t in row})
+    check("F2: exactly two thicknesses — the bars' 0.07 and the plate's 0.02",
+          levels == [0.02, 0.07], str(levels))
+    thin_cells = sum(1 for row in grid["thick"] for t in row if t < 0.045)
+    check("F2: 14 x 36 = 504 thin cells of 760 (share 0.663 >= 0.30)",
+          thin_cells == 504, str(thin_cells))
+    check("F2: footprint (0.1,0.1)..(0.9,2.1) — the plate's own coordinates",
           plane is not None and vclose(plane["inner"][0], (0.1, 0.1))
           and vclose(plane["inner"][1], (0.9, 2.1)), str(plane and plane["inner"]))
+    check("F2: thickness_footprint answers the same rectangle directly",
+          vclose(pa.thickness_footprint(verts, faces, plane, plane["bbox2d"])[0], (0.1, 0.1))
+          and vclose(pa.thickness_footprint(verts, faces, plane, plane["bbox2d"])[1],
+                     (0.9, 2.1)),
+          str(pa.thickness_footprint(verts, faces, plane, plane["bbox2d"])))
 
     print("  [F3] the frame front")
     check("F3: front_offset 0.02 (a vertical bar's front)",
@@ -751,27 +889,34 @@ def part_f():
           vclose(pa.bbox_of(verts, faces, cand)[0], (0.1, 0.1, -0.02))
           and vclose(pa.bbox_of(verts, faces, cand)[1], (0.9, 2.1, 0.0)))
 
-    print("  [F6] no rim to measure: the plate alone")
+    print("  [F6] a bare leaf is not a door: the plate alone")
     pv, pf = build_door(bars=False)
-    alone = pa.detect_leaf(pv, pf)
-    # E2: nothing deviates from the leaf plane near any edge, so there is no
-    # frame — the rim is 0 on every side and the silhouette is the footprint
-    # (v1 shrank it by 8 % to find a seed strictly inside; the prism needs
-    # no seed, and that shrink would cut the leaf's own edge faces off).
-    check("F6: no rim measurable -> 0 on every side",
-          alone is not None and all(close(t, 0.0) for t in alone["plane"]["thickness"]),
-          str(alone and alone["plane"]["thickness"]))
-    check("F6: the whole box is the leaf, share 1.0",
-          alone is not None and alone["faces"] == list(range(12)) and close(alone["share"], 1.0),
-          str(alone and (alone["faces"], alone["share"])))
+    p_plane = {"normal": (0.0, 0.0, 1.0), "offset": 0.0,
+               "u": (1.0, 0.0, 0.0), "v": (0.0, 1.0, 0.0)}
+    check("F6: one thickness class (0.02 everywhere) -> no footprint",
+          pa.thickness_footprint(pv, pf, p_plane, ((0.1, 0.1), (0.9, 2.1))) is None,
+          str(pa.thickness_footprint(pv, pf, p_plane, ((0.1, 0.1), (0.9, 2.1)))))
+    check("F6: leaf_plane is None", pa.leaf_plane(pv, pf) is None)
+    check("F6: detect_leaf answers None", pa.detect_leaf(pv, pf) is None)
 
-    print("  [F7] the 30 % gate: bars without a plate find no leaf")
+    print("  [F7] the same gate from the other side: bars without a plate")
     bv, bf = build_door(plate=False)
-    bplane = pa.leaf_plane(bv, bf, pa.face_normals(bv, bf))
+    bnormals = pa.face_normals(bv, bf)
+    bclusters = pa.planar_clusters(bv, bf, bnormals)
     check("F7: the largest cluster is a bar front at 0.02",
-          bplane is not None and close(bplane["offset"], 0.02), str(bplane and bplane["offset"]))
-    check("F7: leaf_candidates is empty",
-          bplane is not None and pa.leaf_candidates(bv, bf, pa.face_normals(bv, bf), bplane) == [])
+          bool(bclusters) and close(bclusters[0]["offset"], 0.02),
+          str(bclusters[:1]))
+    check("F7: one thickness class (0.07 where there is material, the hole "
+          "is empty) -> leaf_plane is None",
+          pa.leaf_plane(bv, bf, bnormals) is None)
+    hand_plane = {"normal": (0.0, 0.0, 1.0), "offset": 0.02,
+                  "u": (1.0, 0.0, 0.0), "v": (0.0, 1.0, 0.0),
+                  "tol": pa.LEAF_TOL_M, "cos_min": pa.COPLANAR_COS,
+                  "inner": ((0.1, 0.1), (0.9, 2.1)), "front_offset": 0.02}
+    check("F7: leaf_candidates (v1) on a hand-built plane is empty — the bar "
+          "fronts' centres all lie outside the rectangle",
+          pa.leaf_candidates(bv, bf, bnormals, hand_plane) == [],
+          str(pa.leaf_candidates(bv, bf, bnormals, hand_plane)))
     check("F7: detect_leaf answers None", pa.detect_leaf(bv, bf) is None)
 
 
@@ -793,10 +938,16 @@ def part_f():
 #                  slab front's 1.6): normal (0, 0, -1), offset 0.05; frame
 #                  u = up x n = (-1, 0, 0), v = n x u = (0, 1, 0); silhouette
 #                  u -1..0, v 0..2.2.
-#   rim          = 0.1 on every side (the bars and the slab's edges reach in
-#                  0.1; the slab's skins are more than a quarter in and do
-#                  not measure) -> inner (-0.9, 0.1) .. (-0.1, 2.1), i.e.
-#                  x 0.1..0.9, y 0.1..2.1.
+#   footprint    = the thickness raster over that plane, cell 0.025 * 2.2 =
+#                  0.055: a leaf cell runs from the back skin at z = -0.05 to
+#                  the slab's front at z = 0 -> 0.05, a frame cell from the
+#                  back skin to a bar's front at z = 0.02 -> 0.07. Otsu splits
+#                  at 0.06; ratio 0.07 / 0.05 = 1.4 >= 1.3 and difference
+#                  0.02 >= 0.015, so the two classes hold (a 5 cm leaf in a
+#                  7 cm frame is the tightest case the gate must still pass).
+#                  Border BFS = the bars; refinement + snapping put the edges
+#                  on the slab's own coordinates -> inner (-0.9, 0.1) ..
+#                  (-0.1, 2.1), i.e. x 0.1..0.9, y 0.1..2.1.
 #   PRISM        = every face whose centre projects inside that rect, ANY
 #                  depth, ANY normal: the slab's front and back (centres x
 #                  0.367 / 0.633), its four edge faces (centres ON the rect's
@@ -892,14 +1043,16 @@ def part_g():
     expected = list(range(48, 60)) + skin_inner
     check("G: 332 expected prism faces by hand", len(expected) == 332, str(len(expected)))
 
-    print("  [G1] the leaf plane is the back skin, the rim is 0.1 all round")
+    print("  [G1] the leaf plane is the back skin, 0.05 against the frame's 0.07")
     plane = pa.leaf_plane(verts, faces, normals)
     check("G1: normal (0, 0, -1), offset 0.05",
           plane is not None and vclose(plane["normal"], (0, 0, -1)) and close(plane["offset"], 0.05),
           str(plane and (plane["normal"], plane["offset"])))
-    check("G1: thickness 0.1 on every side",
-          plane is not None and all(close(t, 0.1) for t in plane["thickness"]),
-          str(plane and plane["thickness"]))
+    g_levels = sorted({round(t, 6) for row in pa.thickness_map(
+        verts, faces, plane, plane["bbox2d"], cell=0.055)["thick"] for t in row})
+    check("G1: exactly two thicknesses — 0.05 in the leaf, 0.07 in the frame "
+          "(ratio 1.4 >= 1.3, difference 0.02 >= 0.015: the tightest pass)",
+          g_levels == [0.05, 0.07], str(g_levels))
     check("G1: inner (-0.9, 0.1)..(-0.1, 2.1) in the (u, v) frame",
           plane is not None and vclose(plane["inner"][0], (-0.9, 0.1))
           and vclose(plane["inner"][1], (-0.1, 2.1)), str(plane and plane["inner"]))
@@ -975,22 +1128,27 @@ def part_g():
           pa.clamp_bbox(((0.2, 0.3, -0.01), (0.5, 1.0, 0.0)), rect, axis)
           == ((0.2, 0.3, -0.01), (0.5, 1.0, 0.0)))
 
-    print("[G7] fixture G': a 16 x 16 front grid — the rim is measured from SIDEWAYS faces only")
+    print("[G7] fixture G': a 16 x 16 front grid — a fine skin is no frame")
     # 48 bar faces, 10 slab faces (back + edges), 512 front-grid faces
-    # (58..569), 440 back-skin faces (570..1009) = 1010. The rim: only faces
-    # whose normal is more than 18 deg off the plane normal measure it —
-    # the bars' sides and the slab's edges (0.1 on every side); the front
-    # grid (normal +z) and the back skin are skins whatever their depth. So
-    # inner is the same (0.1..0.9 x 0.1..2.1) and the prism takes every
+    # (58..569), 440 back-skin faces (570..1009) = 1010. Triangulating the
+    # front finely changes no DEPTH anywhere, so the raster is the one of
+    # fixture G — 0.05 in the leaf columns, 0.07 in the frame columns — and
+    # the footprint stays (0.1..0.9 x 0.1..2.1). The prism then takes every
     # slab face (10 + 512, centres strictly inside) plus the 320 inner
-    # back-skin faces: 842. Measured before this rule: rim (0.2, 0.475,
-    # 0.2, 0.475), 386 faces, 272 front faces left behind, no warning.
+    # back-skin faces: 842. Measured with the v2 rim (which read the FACE
+    # ORIENTATION instead of the material thickness): rim (0.2, 0.475, 0.2,
+    # 0.475), 386 faces, 272 front faces left behind, no warning.
     gv, gf = build_door_g(front_n=16)
     check("G7: 1010 faces", len(gf) == 1010, str(len(gf)))
     gplane = pa.leaf_plane(gv, gf, pa.face_normals(gv, gf))
-    check("G7: thickness 0.1 on every side (sideways faces only)",
-          gplane is not None and all(close(t, 0.1) for t in gplane["thickness"]),
-          str(gplane and gplane["thickness"]))
+    check("G7: thickness_footprint = (-0.9, 0.1)..(-0.1, 2.1), the same as "
+          "for the coarse front of fixture G",
+          gplane is not None
+          and vclose(pa.thickness_footprint(gv, gf, gplane, gplane["bbox2d"])[0],
+                     (-0.9, 0.1))
+          and vclose(pa.thickness_footprint(gv, gf, gplane, gplane["bbox2d"])[1],
+                     (-0.1, 2.1)),
+          str(gplane and pa.thickness_footprint(gv, gf, gplane, gplane["bbox2d"])))
     check("G7: inner (-0.9, 0.1)..(-0.1, 2.1)",
           gplane is not None and vclose(gplane["inner"][0], (-0.9, 0.1))
           and vclose(gplane["inner"][1], (-0.1, 2.1)), str(gplane and gplane["inner"]))
@@ -1031,11 +1189,296 @@ def part_g():
           str(pa.leaf_residual(gv, gf, pfp, pax, p_frame)))
 
 
+# ---------------------------------------------------------------------------
+# FIXTURE H — the measured wooden door (plan-blatt-dicke.md)
+# ---------------------------------------------------------------------------
+def build_door_h():
+    """The ten boxes of fixture H, in the order of the header docstring:
+    two jambs, the lintel, the leaf filling, four friezes, the handle and
+    the lock rail — 10 * 12 = 120 triangles, 80 vertices."""
+    verts, faces = [], []
+    box(0.000, 0.075, 0.000, 1.000, -0.075, 0.075, verts, faces)   # left jamb
+    box(0.510, 0.585, 0.000, 1.000, -0.075, 0.075, verts, faces)   # right jamb
+    box(0.000, 0.585, 0.925, 1.000, -0.075, 0.075, verts, faces)   # lintel
+    box(0.075, 0.510, 0.000, 0.925, -0.010, 0.010, verts, faces)   # filling
+    box(0.075, 0.150, 0.000, 0.925, -0.020, 0.020, verts, faces)   # frieze left
+    box(0.435, 0.510, 0.000, 0.925, -0.020, 0.020, verts, faces)   # frieze right
+    box(0.075, 0.510, 0.850, 0.925, -0.020, 0.020, verts, faces)   # frieze top
+    box(0.075, 0.510, 0.000, 0.075, -0.020, 0.020, verts, faces)   # frieze bottom
+    box(0.090, 0.140, 0.450, 0.500, 0.010, 0.110, verts, faces)    # handle
+    box(0.075, 0.510, 0.400, 0.450, -0.050, 0.050, verts, faces)   # lock rail
+    return verts, faces
+
+
+H_FOOTPRINT = ((0.075, 0.0), (0.51, 0.925))
+
+
+def part_h():
+    print("[H] the measured wooden door: handle peninsula and full-width rail")
+    verts, faces = build_door_h()
+    check("H: 80 vertices, 120 triangles", (len(verts), len(faces)) == (80, 120),
+          str((len(verts), len(faces))))
+
+    print("  [H1] the leaf plane is the filling's front")
+    normals = pa.face_normals(verts, faces)
+    plane = pa.leaf_plane(verts, faces, normals)
+    check("H1: normal (0, 0, 1), offset 0.01",
+          plane is not None and vclose(plane["normal"], (0, 0, 1))
+          and close(plane["offset"], 0.01),
+          str(plane and (plane["normal"], plane["offset"])))
+    check("H1: silhouette (0, 0)..(0.585, 1.0)",
+          plane is not None and vclose(plane["bbox2d"][0], (0.0, 0.0))
+          and vclose(plane["bbox2d"][1], (0.585, 1.0)),
+          str(plane and plane["bbox2d"]))
+
+    print("  [H2] the 24 x 40 raster and its two classes")
+    grid = pa.thickness_map(verts, faces, plane, plane["bbox2d"], cell=0.025)
+    check("H2: 24 x 40 cells, none empty",
+          (grid["nu"], grid["nv"]) == (24, 40)
+          and all(t is not None for row in grid["thick"] for t in row),
+          str((grid["nu"], grid["nv"])))
+    thick = [t for row in grid["thick"] for t in row]
+    check("H2: thinnest cell 0.02 (the filling), deepest 0.185 (the handle's "
+          "front over a jamb's back — the model's WHOLE depth), with the "
+          "jamb's own 0.15 and the handle-over-filling 0.12 both present",
+          close(min(thick), 0.02, 1e-9) and close(max(thick), 0.185, 1e-9)
+          and any(close(t, 0.15, 1e-9) for t in thick)
+          and any(close(t, 0.12, 1e-9) for t in thick),
+          f"min {min(thick)} max {max(thick)}")
+
+    print("  [H3] the border BFS: rail and handle are frame, but INSIDE the leaf")
+    check("H3: footprint (0.075, 0)..(0.51, 0.925) — the rail does not crop it",
+          vclose(pa.thickness_footprint(verts, faces, plane, plane["bbox2d"])[0],
+                 H_FOOTPRINT[0])
+          and vclose(pa.thickness_footprint(verts, faces, plane, plane["bbox2d"])[1],
+                     H_FOOTPRINT[1]),
+          str(pa.thickness_footprint(verts, faces, plane, plane["bbox2d"])))
+    check("H4: leaf_plane reports the same rectangle as its inner",
+          plane is not None and vclose(plane["inner"][0], H_FOOTPRINT[0])
+          and vclose(plane["inner"][1], H_FOOTPRINT[1]), str(plane and plane["inner"]))
+
+    print("  [H5] the prism = the seven boxes over the leaf area, 84 faces")
+    leaf = pa.detect_leaf(verts, faces)
+    check("H5: detect_leaf takes faces 36..119 (filling, 4 friezes, handle, rail)",
+          leaf is not None and leaf["faces"] == list(range(36, 120)),
+          str(leaf and (len(leaf["faces"]), leaf["faces"][:3], leaf["faces"][-3:])))
+    check("H5: no jamb and no lintel face (0..35)",
+          leaf is not None and not any(k < 36 for k in leaf["faces"]))
+    check("H5: bbox (0.075, 0, -0.05)..(0.51, 0.925, 0.11) — the rail sets the "
+          "back, the handle the front",
+          leaf is not None and vclose(leaf["bbox"][0], (0.075, 0.0, -0.05))
+          and vclose(leaf["bbox"][1], (0.51, 0.925, 0.11)), str(leaf and leaf["bbox"]))
+    check("H6: share 0.606375 / 0.585 = 1.0365",
+          leaf is not None and close(leaf["share"], 0.606375 / 0.585, 1e-9),
+          str(leaf and leaf["share"]))
+
+    print("  [H7] the residual: a clean prism cut leaves no frame face inside")
+    frame = list(range(36))          # the two jambs and the lintel
+    check("H7: 0 frame faces inside the footprint",
+          pa.leaf_residual(verts, faces, plane["inner"], plane["normal"], frame) == 0,
+          str(pa.leaf_residual(verts, faces, plane["inner"], plane["normal"], frame)))
+
+
+# ---------------------------------------------------------------------------
+# FIXTURE I — the glass door: a frame with a hole
+# ---------------------------------------------------------------------------
+def build_door_i():
+    """The four bars of fixture F at a uniform 2 cm depth — a frame around a
+    HOLE, which is what a glass door's mesh is."""
+    verts, faces = [], []
+    box(0.0, 0.1, 0.0, 2.2, -0.01, 0.01, verts, faces)
+    box(0.9, 1.0, 0.0, 2.2, -0.01, 0.01, verts, faces)
+    box(0.1, 0.9, 0.0, 0.1, -0.01, 0.01, verts, faces)
+    box(0.1, 0.9, 2.1, 2.2, -0.01, 0.01, verts, faces)
+    return verts, faces
+
+
+def part_i():
+    print("[I] the glass door: one thickness class, so no leaf at all")
+    verts, faces = build_door_i()
+    check("I: 32 vertices, 48 triangles", (len(verts), len(faces)) == (32, 48),
+          str((len(verts), len(faces))))
+    i_plane = {"normal": (0.0, 0.0, 1.0), "offset": 0.01,
+               "u": (1.0, 0.0, 0.0), "v": (0.0, 1.0, 0.0)}
+    grid = pa.thickness_map(verts, faces, i_plane, ((0.0, 0.0), (1.0, 2.2)), cell=0.055)
+    levels = sorted({round(t, 6) for row in grid["thick"] for t in row if t is not None})
+    check("I: every cell that holds material reads 0.02", levels == [0.02], str(levels))
+    check("I: the pane is a HOLE — the middle cells are empty",
+          any(t is None for row in grid["thick"] for t in row))
+    check("I: thickness_footprint is None (difference 0 < 0.015)",
+          pa.thickness_footprint(verts, faces, i_plane, ((0.0, 0.0), (1.0, 2.2))) is None,
+          str(pa.thickness_footprint(verts, faces, i_plane, ((0.0, 0.0), (1.0, 2.2)))))
+    check("I: leaf_plane is None", pa.leaf_plane(verts, faces) is None)
+    check("I: detect_leaf is None", pa.detect_leaf(verts, faces) is None)
+
+
+# ---------------------------------------------------------------------------
+# the real-mesh mode: --glb <path> [--cell M]
+# ---------------------------------------------------------------------------
+# A minimal stdlib glTF-binary reader — enough to get the triangles of a
+# door prop out of a .glb: the JSON chunk (type 0x4E4F534A) describes
+# accessors into the BIN chunk (0x004E4942), and every mesh sits under a
+# node whose TRS (or 4x4 matrix) has to be applied, parents first.
+_GLB_COMPONENT = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f"}
+_GLB_COUNT = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
+
+
+def _glb_chunks(path):
+    import json
+    import struct
+    blob = Path(path).read_bytes()
+    _magic, _ver, length = struct.unpack_from("<III", blob, 0)
+    off, js, binc = 12, None, b""
+    while off < length:
+        clen, ctype = struct.unpack_from("<II", blob, off)
+        off += 8
+        chunk = blob[off:off + clen]
+        off += clen
+        if ctype == 0x4E4F534A:
+            js = json.loads(chunk)
+        elif ctype == 0x004E4942:
+            binc = chunk
+    return js, binc
+
+
+def _glb_accessor(js, binc, idx):
+    import struct
+    acc = js["accessors"][idx]
+    view = js["bufferViews"][acc["bufferView"]]
+    n = _GLB_COUNT[acc["type"]]
+    fmt = _GLB_COMPONENT[acc["componentType"]]
+    item = struct.calcsize("<" + fmt)
+    start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    stride = view.get("byteStride") or n * item
+    out = []
+    for i in range(acc["count"]):
+        out.append(struct.unpack_from("<" + fmt * n, binc, start + i * stride))
+    return out
+
+
+def _glb_matrix(node):
+    if "matrix" in node:                       # glTF stores column-major
+        m = node["matrix"]
+        return [[m[0], m[4], m[8], m[12]], [m[1], m[5], m[9], m[13]],
+                [m[2], m[6], m[10], m[14]], [m[3], m[7], m[11], m[15]]]
+    tx, ty, tz = node.get("translation", (0.0, 0.0, 0.0))
+    x, y, z, w = node.get("rotation", (0.0, 0.0, 0.0, 1.0))
+    sx, sy, sz = node.get("scale", (1.0, 1.0, 1.0))
+    rot = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+           [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+           [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+    scale = (sx, sy, sz)
+    return [[rot[r][c] * scale[c] for c in range(3)] + [(tx, ty, tz)[r]]
+            for r in range(3)] + [[0.0, 0.0, 0.0, 1.0]]
+
+
+def _mat_mul(a, b):
+    return [[sum(a[r][k] * b[k][c] for k in range(4)) for c in range(4)]
+            for r in range(4)]
+
+
+def _mat_apply(m, p):
+    return tuple(m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + m[r][3]
+                 for r in range(3))
+
+
+def load_glb(path):
+    """``(vertices, faces)`` of one GLB in scene space, y-up as authored."""
+    js, binc = _glb_chunks(path)
+    verts, faces = [], []
+
+    def walk(ni, parent):
+        node = js["nodes"][ni]
+        m = _mat_mul(parent, _glb_matrix(node))
+        if "mesh" in node:
+            for prim in js["meshes"][node["mesh"]]["primitives"]:
+                base = len(verts)
+                for p in _glb_accessor(js, binc, prim["attributes"]["POSITION"]):
+                    verts.append(_mat_apply(m, p))
+                idx = [i[0] for i in _glb_accessor(js, binc, prim["indices"])]
+                for k in range(0, len(idx) - 2, 3):
+                    faces.append((base + idx[k], base + idx[k + 1], base + idx[k + 2]))
+        for child in node.get("children", ()):
+            walk(child, m)
+
+    eye = [[1.0 if r == c else 0.0 for c in range(4)] for r in range(4)]
+    for root in js["scenes"][js.get("scene", 0)]["nodes"]:
+        walk(root, eye)
+    return verts, faces
+
+
+def run_glb(path, cell=None):
+    """Print the thickness map, the Otsu classes, the footprint and the
+    share for ONE real door mesh, then stop — the fixtures do not run."""
+    verts, faces = load_glb(path)
+    print(f"{path}: {len(verts)} vertices, {len(faces)} triangles")
+    normals = pa.face_normals(verts, faces)
+    clusters = pa.planar_clusters(verts, faces, normals)
+    if not clusters:
+        print("  no planar cluster — no leaf plane")
+        return 0
+    top = clusters[0]
+    u_axis, v_axis = pa.planar_frame(top["normal"])
+    plane = {"normal": top["normal"], "offset": top["offset"],
+             "u": u_axis, "v": v_axis, "tol": pa.LEAF_TOL_M,
+             "cos_min": pa.COPLANAR_COS}
+    us = [pa._dot(u_axis, p) for p in verts]
+    vs = [pa._dot(v_axis, p) for p in verts]
+    bbox2d = ((min(us), min(vs)), (max(us), max(vs)))
+    (u0, v0), (u1, v1) = bbox2d
+    print(f"  plane normal {tuple(round(c, 4) for c in top['normal'])} "
+          f"offset {top['offset']:.4f}")
+    print(f"  silhouette u {u0:.4f}..{u1:.4f}  v {v0:.4f}..{v1:.4f}")
+    if cell is None:
+        cell = pa.THICK_CELL_SHARE * max(u1 - u0, v1 - v0)
+    grid = pa.thickness_map(verts, faces, plane, bbox2d, cell=cell)
+    flat = [t for row in grid["thick"] for t in row if t is not None]
+    if not flat:
+        print("  empty raster")
+        return 0
+    top_thick = max(flat)
+    print(f"  raster {grid['nu']} x {grid['nv']} cells of {cell:.4f} m, "
+          f"{len(flat)} of {grid['nu'] * grid['nv']} hold material "
+          f"(rows top -> bottom, ' ' = empty, thickest = '@')")
+    steps = " .:-=+*#%@"
+    for r in range(grid["nv"] - 1, -1, -1):
+        print("    " + "".join(
+            " " if t is None else steps[min(9, int(t / top_thick * 9.999))]
+            for t in grid["thick"][r]))
+    split, m_thin, m_thick = pa.otsu_split(flat)
+    thin = sum(1 for t in flat if t < split)
+    print(f"  Otsu split {split:.4f}: thin mean {m_thin:.4f}, thick mean "
+          f"{m_thick:.4f}, ratio {m_thick / m_thin if m_thin else float('inf'):.2f}, "
+          f"difference {m_thick - m_thin:.4f}, thin share {thin / len(flat):.3f}")
+    foot = pa.thickness_footprint(verts, faces, plane, bbox2d)
+    if foot is None:
+        print("  footprint: None — no two-class thickness, so no leaf")
+    else:
+        print(f"  footprint u {foot[0][0]:.4f}..{foot[1][0]:.4f}  "
+              f"v {foot[0][1]:.4f}..{foot[1][1]:.4f}")
+    leaf = pa.detect_leaf(verts, faces)
+    if leaf is None:
+        print("  detect_leaf: None")
+    else:
+        lo, hi = leaf["bbox"]
+        print(f"  detect_leaf: {len(leaf['faces'])} faces, share "
+              f"{leaf['share']:.3f}, bbox {tuple(round(c, 4) for c in lo)}.."
+              f"{tuple(round(c, 4) for c in hi)}")
+    return 0
+
+
 def main():
+    if "--glb" in sys.argv:
+        args = sys.argv[1:]
+        path = args[args.index("--glb") + 1]
+        cell = float(args[args.index("--cell") + 1]) if "--cell" in args else None
+        return run_glb(path, cell)
     print("smoke_picture_areas")
     part_colour()
     part_f()
     part_g()
+    part_h()
+    part_i()
     part_a()
     part_b()
     part_c()

@@ -32,8 +32,14 @@ The pipeline a caller runs:
 5. THE DOOR LEAF (spec § 6, decision D7) is geometry, not colour: a door
    render always shows frame AND leaf, and the leaf has to become its OWN
    glTF node so a renderer can swing it alone. ``detect_leaf`` finds it —
-   the leaf plane (``planar_clusters``), the silhouette shrunk by the frame
-   thickness (``inner_rect``) and, since spec-bild-props-v2.md E2, the
+   the leaf plane (``planar_clusters``) and, in it, the leaf's FOOTPRINT
+   read off the MATERIAL THICKNESS (``thickness_map`` /
+   ``thickness_footprint``, plan-blatt-dicke.md 2026-08-28): the silhouette
+   is rastered, every cell measures how DEEP the mesh is there, an Otsu
+   split separates a thick class from a thin one, the thick region
+   CONNECTED TO THE SILHOUETTE'S BORDER is the frame, and the rectangle
+   around everything that region encloses is the leaf. Since
+   spec-bild-props-v2.md E2 the leaf itself is the
    PRISM through that footprint (``prism_faces``: every face whose centre
    projects into it, at ANY depth and with ANY normal — front skin, back
    skin, edges, handles) and the ``bbox_of`` that becomes ``leaf_bbox``.
@@ -58,7 +64,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 Point = Tuple[float, float, float]
 Face = Tuple[int, int, int]
@@ -78,22 +84,34 @@ WORLD_UP: Point = (0.0, 1.0, 0.0)   # glTF y-up, see the module docstring
 LEAF_TOL_M = 0.02
 #: …and within this cosine of the plane normal (about 18°).
 COPLANAR_COS = 0.95
-#: A rim is at most this share of its axis in from the silhouette edge — a
-#: face further in is leaf, not frame, whatever its depth says; and a face
-#: REACHING further in than that is a skin, not a rim (E2: a frame's back
-#: skin behind the leaf deviates from the leaf plane everywhere).
-FRAME_MAX_SHARE = 0.25
 #: A face centre within this of a footprint's edge is ON that edge
 #: (:func:`prism_faces`): float32 positions of a 2 m door are exact to
 #: about 2.4e-7 m, so a modelled leaf edge and the jamb it hangs in — the
 #: same coordinate by construction — both land here, and nothing else does.
 PRISM_EDGE_M = 1e-6
-#: The middle half of the OTHER axis: only faces there measure a side's rim,
-#: so the top rail never measures the left jamb.
-FRAME_BAND = (0.25, 0.75)
 #: The seed has to cover this share of the silhouette, or the model has no
 #: leaf worth cutting out (spec § 6: "Mindestanteil 30 % der Frontfläche").
+#: It is also the least share of cells the THIN thickness class must hold
+#: before :func:`thickness_footprint` believes in a leaf at all.
 LEAF_MIN_SHARE = 0.30
+#: The thickness raster's cell = this share of the LONGER silhouette side,
+#: i.e. 40 cells along it (2.5 cm on a door normalised to 1 m height).
+THICK_CELL_SHARE = 0.025
+#: The per-side edge refinement then runs at cell / THICK_FINE_DIV.
+THICK_FINE_DIV = 5
+#: The frame class has to be at least this much thicker than the leaf class …
+THICK_MIN_RATIO = 1.3
+#: … and at least this much thicker in metres. Both together are what keeps
+#: a glass door out: its mesh measures 0.027 m against 0.021 m all over
+#: (a pane is a HOLE, not a leaf) and fails either test.
+THICK_MIN_DIFF_M = 0.015
+#: The middle half of the OTHER axis: only samples there refine a side's
+#: edge, so the lintel never measures against the jamb.
+THICK_BAND = (0.25, 0.75)
+#: Sampling guard: no triangle is split into more than this many steps per
+#: edge. A door mesh never comes close — the cap only stops a pathological
+#: sliver from costing a quadratic number of samples.
+_THICK_MAX_DIV = 128
 
 _EPS = 1e-12
 # A plane is "horizontal" when its normal is within this of the up axis —
@@ -657,22 +675,6 @@ def planar_clusters(vertices: Sequence[Point], faces: Sequence[Face],
     return out
 
 
-def inner_rect(bbox2d: Rect2,
-               frame_thickness: Union[float, Sequence[float]]) -> Rect2:
-    """The silhouette rectangle ``((u0, v0), (u1, v1))`` shrunk by the frame:
-    one thickness for all four sides, or ``(left, bottom, right, top)`` —
-    a door without a bottom rail has a rim of 0 there and 0.1 elsewhere.
-    Never inverts: a thickness that would cross the middle stops there."""
-    (u0, v0), (u1, v1) = bbox2d
-    if isinstance(frame_thickness, (int, float)):
-        left = bottom = right = top = float(frame_thickness)
-    else:
-        left, bottom, right, top = (float(t) for t in frame_thickness)
-    mu, mv = (u0 + u1) / 2.0, (v0 + v1) / 2.0
-    return ((min(u0 + left, mu), min(v0 + bottom, mv)),
-            (max(u1 - right, mu), max(v1 - top, mv)))
-
-
 def _project(plane: Dict, p: Point) -> Tuple[float, float, float]:
     """``(u, v, depth)`` of a point: in-plane coordinates along the frame
     axes (absolute, not centred) and the signed distance off the plane."""
@@ -680,68 +682,317 @@ def _project(plane: Dict, p: Point) -> Tuple[float, float, float]:
             _dot(plane["normal"], p) - plane["offset"])
 
 
-def frame_thickness(vertices: Sequence[Point], faces: Sequence[Face],
-                    normals: Sequence[Point], plane: Dict, bbox2d: Rect2, *,
-                    tol: float = LEAF_TOL_M, cos_min: float = COPLANAR_COS,
-                    ) -> Tuple[float, float, float, float]:
-    """The rim ``(left, bottom, right, top)`` in metres: on each side, how far
-    in from the silhouette edge the faces that DEVIATE from the leaf plane
-    reach (spec § 6: "the width of the rim in which the depth differs from
-    the leaf plane").
+def _lattice_steps(a: Tuple[float, float, float], b: Tuple[float, float, float],
+                   c: Tuple[float, float, float], step: float) -> int:
+    """How many pieces a triangle's edges are cut into so no piece spans more
+    than ``step`` in u, in v or in DEPTH — at least 2, at most
+    ``_THICK_MAX_DIV``. Depth counts because a face standing EDGE-ON to the
+    plane (a jamb's side, a leaf's own edge) has almost no reach in u and v
+    and all of its reach in depth, and it is depth this raster measures."""
+    if step <= _EPS:
+        return 2
+    reach = 0.0
+    for p, q in ((a, b), (b, c), (c, a)):
+        reach = max(reach, abs(q[0] - p[0]), abs(q[1] - p[1]), abs(q[2] - p[2]))
+    return max(2, min(_THICK_MAX_DIV, int(math.ceil(reach / step))))
 
-    ONLY SIDEWAYS FACES MEASURE THE RIM (E2 fix round 1): a face whose
-    normal is off the plane normal by more than the cosine — jambs, rails,
-    a leaf's own edge faces — never one that is merely off in DEPTH: a
-    finely triangulated front skin set back by 2 cm, or the frame's back
-    skin, is a skin, and measured as a rim it would crop the leaf to the
-    middle of the door (measured: a 16 x 16 front grid read a rim of
-    0.2 / 0.475 and left 272 skin faces in the frame). Only faces whose
-    centroid lies in the middle half of the OTHER axis (``FRAME_BAND``) and
-    less than ``FRAME_MAX_SHARE`` of this axis in from the edge measure a
-    side; the inset is the face's INNERMOST vertex — unless that vertex
-    itself reaches ``FRAME_MAX_SHARE`` in: such a face is a SKIN spanning
-    the door (a frame's back skin behind the leaf, one big triangle of a
-    modelled fixture), not a rim, and measures nothing. A rim has to be
-    deeper than ``tol`` to count — the outermost faces of ANY model deviate
-    at inset 0, and that is no rim. A side without one has none (0 — the
-    leaf reaches the edge, as a door without a bottom rail does); when NO
-    side has one, nothing deviates from the leaf plane near any edge, so
-    there is no frame at all and every side is 0: the silhouette IS the
-    leaf's footprint (E2 — v1 shrank it by 8 % to find a coplanar seed
-    inside; the prism needs no seed, and that shrink would cut the leaf's
-    own edge faces off a bare leaf).
+
+def _surface_samples(vertices: Sequence[Point], faces: Sequence[Face],
+                     plane: Dict, step: float,
+                     ) -> List[Tuple[float, float, float]]:
+    """The mesh SURFACE as projected ``(u, v, depth)`` points, dense enough
+    that a triangle marks every raster cell it covers with its true depth.
+
+    Per triangle the barycentric lattice ``i + j + k = n`` plus the
+    centroid, with ``n`` chosen so no lattice edge spans more than ``step``.
+    For a triangle no bigger than ``step`` that is ``n = 2``: the three
+    corners and the three edge midpoints, plus the centroid — SEVEN points,
+    all an img2mesh door (edges around a centimetre against 2.5 cm cells)
+    ever needs. A MODELLED fixture, though, carries triangles spanning the
+    whole door, and seven points leave 95 % of the raster empty (measured
+    on the smoke's fixture F: 43 of 760 cells); an empty raster has neither
+    frame nor leaf. The lattice is symmetric in the three corners on
+    purpose — a lattice built from two edges alone misses the third and
+    reads a jamb's side face as half as deep as it is.
+    """
+    out: List[Tuple[float, float, float]] = []
+    for face in faces:
+        a = _project(plane, vertices[face[0]])
+        b = _project(plane, vertices[face[1]])
+        c = _project(plane, vertices[face[2]])
+        n = _lattice_steps(a, b, c, step)
+        for i in range(n + 1):
+            for j in range(n + 1 - i):
+                wa, wb, wc = i / n, j / n, (n - i - j) / n
+                out.append((wa * a[0] + wb * b[0] + wc * c[0],
+                            wa * a[1] + wb * b[1] + wc * c[1],
+                            wa * a[2] + wb * b[2] + wc * c[2]))
+        out.append(((a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0,
+                    (a[2] + b[2] + c[2]) / 3.0))
+    return out
+
+
+def _bin_thickness(samples: Sequence[Tuple[float, float, float]],
+                   u0: float, v0: float, cell_u: float, cell_v: float,
+                   nu: int, nv: int) -> List[List[Optional[float]]]:
+    """Depth EXTENT per cell — ``dmax - dmin`` of the samples that fall into
+    it, ``None`` for a cell no sample reached. A sample past the last row or
+    column is put INTO it: that is the silhouette's own far edge, where
+    ``ceil`` cut the raster off and the mesh goes on."""
+    dmin: List[List[Optional[float]]] = [[None] * nu for _ in range(nv)]
+    dmax: List[List[Optional[float]]] = [[None] * nu for _ in range(nv)]
+    for su, sv, sd in samples:
+        iu = min(nu - 1, max(0, int(math.floor((su - u0) / cell_u))))
+        iv = min(nv - 1, max(0, int(math.floor((sv - v0) / cell_v))))
+        lo, hi = dmin[iv][iu], dmax[iv][iu]
+        if lo is None or sd < lo:
+            dmin[iv][iu] = sd
+        if hi is None or sd > hi:
+            dmax[iv][iu] = sd
+    return [[None if dmin[r][c] is None else dmax[r][c] - dmin[r][c]  # type: ignore[operator]
+             for c in range(nu)] for r in range(nv)]
+
+
+def thickness_map(vertices: Sequence[Point], faces: Sequence[Face],
+                  plane: Dict, bbox2d: Rect2, *, cell: float) -> Dict:
+    """HOW DEEP THE MESH IS, cell by cell over the silhouette.
+
+    ``bbox2d = ((u0, v0), (u1, v1))`` is rastered into ``ceil`` cells of
+    ``cell`` metres per axis; a point lands in ``floor((u - u0) / cell)``,
+    clamped to the last row/column. Each cell reports ``dmax - dmin`` of the
+    surface samples that fall into it — the material's DEPTH EXTENT along
+    the plane normal, which is the one measure that tells a door's frame
+    (a solid jamb) from its leaf (a thin panel) without asking any face
+    which way it points. A cell no sample reached is ``None``: a hole, and
+    a hole is neither.
+
+    Returns ``{"nu", "nv", "cell", "thick"}`` — ``thick`` indexed
+    ``[iv][iu]``, rows bottom-up in the plane's own v.
+    """
+    (u0, v0), (u1, v1) = bbox2d
+    nu = max(1, int(math.ceil((u1 - u0) / cell)))
+    nv = max(1, int(math.ceil((v1 - v0) / cell)))
+    samples = _surface_samples(vertices, faces, plane, 0.5 * cell)
+    return {"nu": nu, "nv": nv, "cell": cell,
+            "thick": _bin_thickness(samples, u0, v0, cell, cell, nu, nv)}
+
+
+def otsu_split(values: Sequence[float]) -> Tuple[float, float, float]:
+    """Otsu's two-class threshold, computed EXACTLY (no histogram): sort the
+    values and pick the cut ``k`` that maximises the between-class variance
+    ``w0 * w1 * (m1 - m0)^2``. Returns ``(split, mean_low, mean_high)`` with
+    ``split`` half way between the two values the cut separates.
+
+    A single value answers itself three times — the caller's gate then sees
+    a difference of 0 and knows there are no two classes. Raises
+    ``ValueError`` on an empty sequence.
+    """
+    s = sorted(float(x) for x in values)
+    n = len(s)
+    if n == 0:
+        raise ValueError("otsu_split needs at least one value")
+    if n == 1:
+        return s[0], s[0], s[0]
+    prefix = [0.0]
+    for x in s:
+        prefix.append(prefix[-1] + x)
+    best = -1.0
+    split = m_low = m_high = s[0]
+    for k in range(1, n):
+        w0, w1 = k / n, (n - k) / n
+        mean0 = prefix[k] / k
+        mean1 = (prefix[n] - prefix[k]) / (n - k)
+        var = w0 * w1 * (mean1 - mean0) ** 2
+        if var > best:
+            best = var
+            split = (s[k - 1] + s[k]) / 2.0
+            m_low, m_high = mean0, mean1
+    return split, m_low, m_high
+
+
+def _frame_cells(thick: List[List[Optional[float]]], nu: int, nv: int,
+                 split: float):
+    """The FRAME: the thick cells connected (4-neighbourhood) to a thick cell
+    on the raster's outermost row or column. A door's jambs, rails and
+    lintel form that ring; a handle bolted to the leaf and a lock rail
+    spanning it are thick too, but they hang off the ring and come along
+    with it, while an ENCLOSED thick island (or a hole, which is not thick
+    at all) does not. Empty cells block the walk like thin ones do: a
+    missing pane is not a frame."""
+    def is_thick(iu: int, iv: int) -> bool:
+        t = thick[iv][iu]
+        return t is not None and t >= split
+
+    seen = set()
+    queue = deque()
+    for iv in range(nv):
+        for iu in range(nu):
+            if (iu in (0, nu - 1) or iv in (0, nv - 1)) and is_thick(iu, iv):
+                if (iu, iv) not in seen:
+                    seen.add((iu, iv))
+                    queue.append((iu, iv))
+    while queue:
+        iu, iv = queue.popleft()
+        for du, dv in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nu_, nv_ = iu + du, iv + dv
+            if 0 <= nu_ < nu and 0 <= nv_ < nv and (nu_, nv_) not in seen \
+                    and is_thick(nu_, nv_):
+                seen.add((nu_, nv_))
+                queue.append((nu_, nv_))
+    return seen
+
+
+def _refine_edge(samples: Sequence[Tuple[float, float, float]], axis: int,
+                 edge: float, sign: float, band: Tuple[float, float],
+                 cell: float, fine: float, split: float, bound: float) -> float:
+    """Walk ONE coarse edge outward while the next fine column is thin.
+
+    The column is ``fine`` wide and reaches across the middle half of the
+    other axis only (``THICK_BAND`` of the coarse rectangle), so the top
+    rail never has a say about where the left edge is. It counts as thin
+    when at least HALF of the band rows it does touch (rows ``cell`` tall,
+    the raster's own rows) read less than ``split`` — a median, not a
+    minimum, because a handle is a thick peninsula a few rows tall and must
+    not stop the edge. Rows the column does not reach at all say nothing;
+    a column that reaches none is thin, since nothing there is frame.
+    The walk stops after one coarse cell, or at ``bound`` (the silhouette).
+    """
+    other = 1 - axis
+    band_lo, band_hi = band
+    n_rows = max(1, int(math.ceil((band_hi - band_lo) / cell)))
+    limit = edge + sign * cell
+    limit = max(limit, bound) if sign < 0 else min(limit, bound)
+    strip_lo, strip_hi = min(edge, limit), max(edge, limit)
+    strip = [s for s in samples
+             if strip_lo <= s[axis] <= strip_hi and band_lo <= s[other] < band_hi]
+    while abs(limit - edge) > _EPS:
+        step = edge + sign * fine
+        step = max(step, limit) if sign < 0 else min(step, limit)
+        lo, hi = min(edge, step), max(edge, step)
+        dmin: List[Optional[float]] = [None] * n_rows
+        dmax: List[Optional[float]] = [None] * n_rows
+        for s in strip:
+            if not lo <= s[axis] < hi:
+                continue
+            r = int(math.floor((s[other] - band_lo) / cell))
+            if r < 0 or r >= n_rows:
+                continue
+            if dmin[r] is None or s[2] < dmin[r]:
+                dmin[r] = s[2]
+            if dmax[r] is None or s[2] > dmax[r]:
+                dmax[r] = s[2]
+        solid = thin = 0
+        for r in range(n_rows):
+            if dmin[r] is None:
+                continue
+            solid += 1
+            if dmax[r] - dmin[r] < split:   # type: ignore[operator]
+                thin += 1
+        if 2 * thin < solid:
+            break
+        edge = step
+    return edge
+
+
+def _snap_edge(coords: Sequence[float], edge: float, fine: float) -> float:
+    """The vertex coordinate nearest to ``edge`` within ``±fine``, else
+    ``edge`` itself. On a MODELLED mesh this reproduces the coincidence line
+    "leaf edge = jamb inner face" exactly, which is what lets the edge rule
+    of :func:`prism_faces` tell the two apart; on an img2mesh door it is a
+    harmless vertex half a centimetre away."""
+    best = None
+    for c in coords:
+        d = abs(c - edge)
+        if d <= fine and (best is None or (d, c) < best):
+            best = (d, c)
+    return edge if best is None else best[1]
+
+
+def thickness_footprint(vertices: Sequence[Point], faces: Sequence[Face],
+                        plane: Dict, bbox2d: Rect2, *,
+                        cell_share: float = THICK_CELL_SHARE,
+                        fine_div: int = THICK_FINE_DIV,
+                        min_ratio: float = THICK_MIN_RATIO,
+                        min_diff: float = THICK_MIN_DIFF_M,
+                        min_share: float = LEAF_MIN_SHARE,
+                        ) -> Optional[Rect2]:
+    """THE LEAF'S FOOTPRINT FROM THE MATERIAL THICKNESS (plan-blatt-dicke.md,
+    2026-08-28) — ``((u_lo, v_lo), (u_hi, v_hi))`` in the absolute u/v of
+    ``plane``, or None when this mesh has no leaf.
+
+    1. Raster the silhouette into cells of ``cell_share`` of its longer side
+       and measure each cell's depth extent (:func:`thickness_map`).
+    2. Cut the non-empty cells into two classes with :func:`otsu_split`.
+       They only count as a FRAME and a LEAF when the thick class is at
+       least ``min_ratio`` times and ``min_diff`` metres thicker than the
+       thin one and the thin class holds at least ``min_share`` of the
+       cells — otherwise there is no leaf: a glass door is 2.7 cm all over
+       (its pane is a hole), and a leaf lying on its own is 2 cm all over.
+    3. The FRAME is the thick region touching the border
+       (:func:`_frame_cells`); every other cell is leaf-side, the enclosed
+       thick ones included — a handle stands proud of the leaf and a lock
+       rail spans its full width, and neither is allowed to crop it.
+    4. The coarse rectangle is the bounding box of the leaf cells, clipped
+       to the silhouette.
+    5. Each side is then refined at ``cell / fine_div``
+       (:func:`_refine_edge`) and snapped onto the nearest vertex
+       coordinate (:func:`_snap_edge`).
+
+    WHY THIS AND NOT THE RIM v2 MEASURED: that one read the ORIENTATION of
+    single faces (a normal sideways to the leaf plane) and mistook a bumpy
+    img2mesh surface for a rim — three of four measured wooden doors ended
+    up with a footprint around the middle third and no leaf at all.
     """
     (u0, v0), (u1, v1) = bbox2d
     du, dv = u1 - u0, v1 - v0
-    n = plane["normal"]
-    # per side: (axis, edge, sign, other-axis band)
-    lo_u, hi_u = u0 + FRAME_BAND[0] * du, u0 + FRAME_BAND[1] * du
-    lo_v, hi_v = v0 + FRAME_BAND[0] * dv, v0 + FRAME_BAND[1] * dv
-    sides = (
-        (0, u0, 1.0, (lo_v, hi_v), du),     # left
-        (1, v0, 1.0, (lo_u, hi_u), dv),     # bottom
-        (0, u1, -1.0, (lo_v, hi_v), du),    # right
-        (1, v1, -1.0, (lo_u, hi_u), dv),    # top
-    )
-    found = [None, None, None, None]
-    for k, face in enumerate(faces):
-        cu, cv, _cd = _project(plane, _centroid(vertices, face))
-        if abs(_dot(normals[k], n)) >= cos_min:
-            continue                                    # a skin, not a rim
-        pts = [_project(plane, vertices[i]) for i in face]
-        for s, (axis, edge, sign, band, span) in enumerate(sides):
-            other = cv if axis == 0 else cu
-            if other < band[0] or other > band[1]:
-                continue
-            centre = (cu if axis == 0 else cv)
-            if sign * (centre - edge) >= FRAME_MAX_SHARE * span:
-                continue
-            inset = max(sign * (p[axis] - edge) for p in pts)
-            if inset <= tol or inset >= FRAME_MAX_SHARE * span:
-                continue
-            if found[s] is None or inset > found[s]:
-                found[s] = inset
-    return tuple(0.0 if f is None else float(f) for f in found)  # type: ignore[return-value]
+    if du <= _EPS or dv <= _EPS:
+        return None
+    cell = cell_share * max(du, dv)
+    if cell <= _EPS:
+        return None
+    fine = cell / max(1, int(fine_div))
+    nu = max(1, int(math.ceil(du / cell)))
+    nv = max(1, int(math.ceil(dv / cell)))
+    samples = _surface_samples(vertices, faces, plane, 0.5 * cell)
+    thick = _bin_thickness(samples, u0, v0, cell, cell, nu, nv)
+
+    flat = [t for row in thick for t in row if t is not None]
+    if not flat:
+        return None
+    split, m_thin, m_thick = otsu_split(flat)
+    if m_thick < min_ratio * m_thin or m_thick - m_thin < min_diff:
+        return None
+    if sum(1 for t in flat if t < split) < min_share * len(flat):
+        return None
+
+    frame = _frame_cells(thick, nu, nv, split)
+    leaf = [(iu, iv) for iv in range(nv) for iu in range(nu)
+            if (iu, iv) not in frame]
+    if not leaf:
+        return None
+    c0 = min(c for c, _ in leaf)
+    c1 = max(c for c, _ in leaf)
+    r0 = min(r for _, r in leaf)
+    r1 = max(r for _, r in leaf)
+    u_lo, u_hi = max(u0, u0 + c0 * cell), min(u1, u0 + (c1 + 1) * cell)
+    v_lo, v_hi = max(v0, v0 + r0 * cell), min(v1, v0 + (r1 + 1) * cell)
+
+    band_u = (u_lo + THICK_BAND[0] * (u_hi - u_lo),
+              u_lo + THICK_BAND[1] * (u_hi - u_lo))
+    band_v = (v_lo + THICK_BAND[0] * (v_hi - v_lo),
+              v_lo + THICK_BAND[1] * (v_hi - v_lo))
+    u_lo = _refine_edge(samples, 0, u_lo, -1.0, band_v, cell, fine, split, u0)
+    u_hi = _refine_edge(samples, 0, u_hi, 1.0, band_v, cell, fine, split, u1)
+    v_lo = _refine_edge(samples, 1, v_lo, -1.0, band_u, cell, fine, split, v0)
+    v_hi = _refine_edge(samples, 1, v_hi, 1.0, band_u, cell, fine, split, v1)
+
+    us = [_dot(plane["u"], p) for p in vertices]
+    vs = [_dot(plane["v"], p) for p in vertices]
+    u_lo, u_hi = _snap_edge(us, u_lo, fine), _snap_edge(us, u_hi, fine)
+    v_lo, v_hi = _snap_edge(vs, v_lo, fine), _snap_edge(vs, v_hi, fine)
+    if u_hi - u_lo <= _EPS or v_hi - v_lo <= _EPS:
+        return None
+    return ((u_lo, v_lo), (u_hi, v_hi))
 
 
 def leaf_candidates(vertices: Sequence[Point], faces: Sequence[Face],
@@ -756,7 +1007,8 @@ def leaf_candidates(vertices: Sequence[Point], faces: Sequence[Face],
 
     ``plane`` is what :func:`leaf_plane` builds: ``normal``, ``offset``
     (``normal · point`` on the leaf plane), the in-plane axes ``u`` / ``v``,
-    ``inner`` (the silhouette shrunk by the frame, in absolute u/v),
+    ``inner`` (the leaf's footprint from the material thickness, in
+    absolute u/v),
     ``front_offset`` (the frame front's ``normal · point``) and ``tol``.
 
     THE SEED (spec § 6): every face facing the plane normal (cos ≥
@@ -791,9 +1043,9 @@ def leaf_candidates(vertices: Sequence[Point], faces: Sequence[Face],
                                       -g[0]))
 
     # The growth bound is the SEED'S OWN in-plane extent, widened by tol —
-    # the leaf front's true edges. Not the inner rectangle: that one is an
-    # estimate and would cut the leaf's edge faces off when the rim measure
-    # is off.
+    # the leaf front's true edges. Not the footprint: that one is measured
+    # off a raster and would cut the leaf's edge faces off whenever it comes
+    # out a little tight.
     seed_pts = [_project(plane, vertices[i]) for k in seed for i in faces[k]]
     su0 = min(p[0] for p in seed_pts) - tol
     su1 = max(p[0] for p in seed_pts) + tol
@@ -830,12 +1082,17 @@ def leaf_plane(vertices: Sequence[Point], faces: Sequence[Face],
                normals: Optional[Sequence[Point]] = None, *,
                tol: float = LEAF_TOL_M, cos_min: float = COPLANAR_COS,
                ) -> Optional[Dict]:
-    """The plane dict :func:`leaf_candidates` works on, or None for an empty
-    mesh: the largest planar cluster's plane (the "front view"), the
-    silhouette ``bbox2d`` of ALL vertices in that plane, the measured
-    ``thickness`` per side, the ``inner`` rectangle and the frame front —
-    the largest cluster facing the same way whose centroid lies OUTSIDE the
-    inner rectangle (falls back to the leaf plane itself)."""
+    """The plane dict :func:`leaf_candidates` works on, or None: the largest
+    planar cluster's plane (the "front view"), the silhouette ``bbox2d`` of
+    ALL vertices in that plane, the ``inner`` rectangle from
+    :func:`thickness_footprint` and the frame front — the largest cluster
+    facing the same way whose centroid lies OUTSIDE that rectangle (falls
+    back to the leaf plane itself).
+
+    NONE for an empty mesh, a mesh without a planar cluster, and — since
+    plan-blatt-dicke.md — for a mesh whose material thickness does not fall
+    into two classes: no frame against a leaf means no leaf to cut, and the
+    Blender side reports "no leaf" for it (a glass door, a bare panel)."""
     if not faces:
         return None
     if normals is None:
@@ -851,10 +1108,10 @@ def leaf_plane(vertices: Sequence[Point], faces: Sequence[Face],
     us = [_dot(u, p) for p in vertices]
     vs = [_dot(v, p) for p in vertices]
     bbox2d: Rect2 = ((min(us), min(vs)), (max(us), max(vs)))
-    thickness = frame_thickness(vertices, faces, normals, plane, bbox2d,
-                                tol=tol, cos_min=cos_min)
-    inner = inner_rect(bbox2d, thickness)
-    plane.update({"bbox2d": bbox2d, "thickness": thickness, "inner": inner})
+    inner = thickness_footprint(vertices, faces, plane, bbox2d)
+    if inner is None:
+        return None
+    plane.update({"bbox2d": bbox2d, "inner": inner})
     front = top["offset"]
     for c in clusters:
         if _dot(c["normal"], n) < cos_min:
@@ -978,7 +1235,7 @@ def leaf_residual(vertices: Sequence[Point], faces: Sequence[Face],
     ``tol`` inside ``footprint`` along ``axis`` (E2 — "n Faces des Rahmens
     liegen in der Blatt-Grundfläche", the warning that keeps a skin cut
     from staying silent). The footprint is the one the cut was made
-    through: the inner rectangle for an automatic cut, the list's
+    through: the thickness footprint for an automatic cut, the list's
     :func:`list_footprint` for a manual one (with ``through`` that is the
     prism's; without it the outline of the faces the admin listed — and a
     v1-style skin list of a leaf's middle then reports the back skin it
@@ -992,7 +1249,11 @@ def leaf_residual(vertices: Sequence[Point], faces: Sequence[Face],
     if _norm(n) <= _EPS:
         return 0
     u_axis, v_axis = planar_frame(n)
-    (u0, v0), (u1, v1) = inner_rect(footprint, tol)
+    # the footprint shrunk by tol on every side, never past its own middle
+    (f0, g0), (f1, g1) = footprint
+    mu, mv = (f0 + f1) / 2.0, (g0 + g1) / 2.0
+    u0, v0 = min(f0 + tol, mu), min(g0 + tol, mv)
+    u1, v1 = max(f1 - tol, mu), max(g1 - tol, mv)
     count = 0
     for k in frame_faces:
         c = _centroid(vertices, faces[k])
@@ -1051,11 +1312,15 @@ def detect_leaf(vertices: Sequence[Point], faces: Sequence[Face], *,
                 tol: float = LEAF_TOL_M, cos_min: float = COPLANAR_COS,
                 min_share: float = LEAF_MIN_SHARE) -> Optional[Dict]:
     """The whole § 6 heuristic, with E2's prism: ``{"faces", "bbox": (min,
-    max), "plane", "share"}`` or None when the coplanar part of the prism
-    covers less than ``min_share`` of the silhouette (or nothing qualifies).
+    max), "plane", "share"}`` — or None, on THREE counts: the mesh has no
+    planar cluster, its material thickness does not fall into a frame class
+    and a leaf class (:func:`thickness_footprint`, so a glass door or a
+    panel on its own), or the coplanar part of the prism covers less than
+    ``min_share`` of the silhouette.
     The faces are :func:`prism_faces` through the plane's ``inner``
-    rectangle along its normal; ``bbox`` is :func:`bbox_of` those faces
-    held to the inner rectangle by :func:`clamp_bbox`; ``share`` is the
+    footprint (:func:`thickness_footprint`) along its normal; ``bbox`` is
+    :func:`bbox_of` those faces held to that footprint by
+    :func:`clamp_bbox`; ``share`` is the
     summed area of the prism's faces that lie IN the leaf plane (facing its
     normal within the cosine, centre within ``tol``) over the area of the
     silhouette rectangle — the skin the cut found against the door's

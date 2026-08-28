@@ -88,8 +88,9 @@ there after the v1 skin cut). A manual cut with ``through`` does the same
 through the footprint of the LISTED faces (``picture_areas.leaf_prism``);
 without it the list is the leaf as given (v1). After every run that leaves
 a leaf, ``leaf_residual`` counts the frame faces whose centre still lies
-inside the footprint the cut was made through — the inner rectangle for
-auto, the list's footprint for manual (``picture_areas.leaf_residual``) —
+inside the footprint the cut was made through — the THICKNESS FOOTPRINT for
+auto (the leaf area read off the material depth, ``plane["inner"]``), the
+list's footprint for manual (``picture_areas.leaf_residual``) —
 and ``leaf_bbox`` is held to that footprint in the plane
 (``picture_areas.clamp_bbox``); the server turns a count above 0 into the
 file's ``areas_warning``.
