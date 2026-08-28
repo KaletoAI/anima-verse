@@ -266,8 +266,12 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
 
   return (
     <>
+      {/* The column above already says which variant this is (2026-08-29) —
+          what is worth adding here is the variant's own LABEL, when it has
+          one, because that is what the areas of a picture variant are named
+          after. */}
       <div className="ga-form-section-label">
-        {`${t('Areas')} · ${t('Variant')} ${variant + 1}`}
+        {t('Areas')}
         {shownVariant?.label ? ` · ${shownVariant.label}` : ''}
       </div>
       <span className="ga-hint" style={{ display: 'block' }}>

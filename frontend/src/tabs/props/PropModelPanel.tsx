@@ -29,6 +29,7 @@ import {
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { FACE_FIELDS, FACE_TARGET_MAX, FACE_TARGET_MIN } from './variantFields'
 
 interface PropModelInfo {
   models?: GalleryModel[]
@@ -42,7 +43,8 @@ interface PropModelInfo {
 }
 
 export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
-  onChanged, pending = false, faceTargets = {}, onGenerating }: {
+  onChanged, pending = false, faceTargets = {}, onEditFaceTarget,
+  backendFaces = 0, onGenerating }: {
   propId: string
   /** Index of the model variant this gallery belongs to (0 = the first one;
    *  the primary variant is the first ACTIVE one, which the strip marks). */
@@ -63,6 +65,16 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
    *  distance-mesh button names the low budget, the reduction dialog opens on
    *  it — both would otherwise say nothing about how small the result gets. */
   faceTargets?: FaceTargets
+  /** Edit one of those two budgets (2026-08-29): they say what the next run of
+   *  THIS variant costs, so they are dialled where the tiers are read. The raw
+   *  field text travels — an empty one clears the budget, and the law for that
+   *  lives in `variantFields.facePatch`. Absent = the fields are not offered
+   *  (no variant record to edit yet). */
+  onEditFaceTarget?: (which: 'high' | 'low', raw: string) => void
+  /** Face count the picked mesh backend would use of its own accord — the
+   *  PLACEHOLDER of the two budget fields (v2 E5). 0 = unknown, and the
+   *  placeholder says "backend default" instead of a number. */
+  backendFaces?: number
   /** Start the container's pending poll — a low variant runs in the
    *  background like every mesh job. */
   onGenerating?: () => void
@@ -77,6 +89,13 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   const [armedDel, setArmedDel] = useState<string | null>(null)
   const [uploadTier, setUploadTier] = useState<ModelTier>(DEFAULT_MODEL_TIER)
   const uploadRef = useRef<HTMLInputElement>(null)
+  // What is being TYPED into a budget field, keyed `high`/`low`. An entry
+  // lives only while the field is edited: the commit drops it and the input
+  // falls back to the stored budget, so an empty field under the cursor is not
+  // read back as "cleared" until it is committed — and another variant never
+  // shows the number typed into the one before it.
+  const [faceDraft, setFaceDraft] = useState<Record<string, string>>({})
+  useEffect(() => { setFaceDraft({}) }, [base])
 
   const load = useCallback(async () => {
     try {
@@ -188,14 +207,13 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
         onGenerate={shrink}
         onClose={() => setShrinkFile(null)}
       />
-      {/* Which variant these rows belong to — the strip above selects it, and
-          without the reminder a gallery of four files reads as "the prop's"
-          rather than "this variant's". */}
-      <div className="ga-form-section-label">
-        {t('3D models')} · {t('Variant')} {variant + 1}
-      </div>
+      {/* WHICH FILE THE CLIENTS GET AT WHICH DISTANCE. The section is named
+          after that question (2026-08-29) and no longer after the variant —
+          the column it stands in is one variant's, said once at its top. */}
+      <div className="ga-form-section-label">{t('Resolution tiers')}</div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <TierSummary tiers={info?.tiers} />
+        {/* The heading already says what these tags are. */}
+        <TierSummary tiers={info?.tiers} showLabel={false} />
         {/* The CPU way to the missing low mesh — no backend, no queue, and
             the only one that works without a mesh→mesh alias. */}
         {tiers.includes('full') ? (
@@ -209,6 +227,61 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
           />
         ) : null}
       </div>
+      {/* WHAT THIS VERSION COSTS (v2 E5). Two budgets, because a prop is
+          rendered at two distances: the close-up mesh and the one the client
+          swaps in at range. They are the DEFAULT of every run that names none
+          — the generate dialog opens on them, the automatic improvement
+          inherits them, and the CPU distance mesh turns the low one into its
+          reduction ratio. Empty = no statement, and the placeholder shows what
+          would happen then. A budget belongs to the VARIANT and not to the
+          run: a sapling is cheaper than the grown tree beside it, whichever
+          dialog the mesh was last made from. They stand with the tiers because
+          that is what they decide (2026-08-29). */}
+      {onEditFaceTarget ? (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center',
+          flexWrap: 'wrap' }}>
+          {FACE_FIELDS.map((f) => {
+            const stored = f.key === 'high' ? faceTargets.high : faceTargets.low
+            const shown = faceDraft[f.key] ?? (stored ? String(stored) : '')
+            return (
+              <label
+                key={f.key}
+                style={{ display: 'flex', alignItems: 'center', gap: 3 }}
+                title={t(f.title)}
+              >
+                <span className="ga-hint">{t(f.label)}</span>
+                <input
+                  className="ga-input"
+                  type="number"
+                  min={FACE_TARGET_MIN}
+                  max={FACE_TARGET_MAX}
+                  step={500}
+                  style={{ width: 96 }}
+                  value={shown}
+                  placeholder={f.placeholder(backendFaces, t)}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setFaceDraft((d) => ({ ...d, [f.key]: value }))
+                  }}
+                  onBlur={(e) => {
+                    const raw = e.target.value
+                    setFaceDraft((d) => {
+                      const next = { ...d }
+                      delete next[f.key]
+                      return next
+                    })
+                    onEditFaceTarget(f.key, raw)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                  }}
+                />
+                <span className="ga-hint">{t('faces')}</span>
+              </label>
+            )
+          })}
+        </div>
+      ) : null}
       {models.length === 0 ? (
         <span className="ga-hint">
           {/* "Generate" (🧊) appends ANOTHER variant since E2.3 — the action

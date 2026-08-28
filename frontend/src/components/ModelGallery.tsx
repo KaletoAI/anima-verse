@@ -158,13 +158,18 @@ export function BuildDistanceMeshButton({
 
 /** Which tiers a subject has + the "low missing" hint. A missing tier is not
  *  an error — the clients fall back to the best available one — but nothing
- *  else would ever tell the admin that the low mesh was never built. */
-export function TierSummary({ tiers }: { tiers?: string[] }) {
+ *  else would ever tell the admin that the low mesh was never built.
+ *
+ *  `showLabel={false}` drops the leading caption for a caller whose SECTION is
+ *  already named after these tiers (the prop detail since 2026-08-29) — the
+ *  word twice above one another says nothing twice. */
+export function TierSummary({ tiers, showLabel = true }:
+  { tiers?: string[]; showLabel?: boolean }) {
   const { t } = useI18n()
   const have = new Set(tiers || [])
   return (
     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-      <span className="ga-hint">{t('Resolution tiers')}</span>
+      {showLabel ? <span className="ga-hint">{t('Resolution tiers')}</span> : null}
       {MODEL_TIERS.map((tier) => (
         <span
           key={tier}

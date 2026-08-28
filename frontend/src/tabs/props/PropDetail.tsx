@@ -3,14 +3,15 @@
  *
  * TWO COLUMNS, and since 2026-08-25 the split says what a prop IS:
  *
- *   left   the PROP's general fields (name, category, tags, sway) — and below
- *          them the MODEL VARIANTS, which carry everything about how the
- *          object looks: size, generation subject, ground offset, seasons and
- *          markers. The marker editor of the SELECTED variant sits under the
- *          strip, because it is dialled against the viewer opposite.
- *   right  the preview: the selected variant's source image, its mesh in the
- *          3D viewer with the 1.70 m reference figure, the persisted
- *          orientation fix and the mesh gallery.
+ *   left   the PROP's general fields (name, category, tags, sway), the MODEL
+ *          VARIANTS as a strip of selector chips, and the object-local places
+ *          of the selected variant — dialled against the viewer opposite.
+ *   right  EVERYTHING THE SELECTED VARIANT IS, named once at the top and never
+ *          again ("Variant n", 2026-08-29): its source image, its mesh in the
+ *          3D viewer with the 1.70 m reference figure, its resolution tiers
+ *          with the two triangle budgets, its own settings (size, sink,
+ *          generation subject), the persisted orientation fix, the walkable
+ *          surface and its key areas.
  *
  * The prop's meshes are a GALLERY (`PropModelPanel`, one active file per
  * resolution tier) — upload and tier assignment live there, and clicking a
@@ -69,6 +70,10 @@ import {
   groupKeys, groupLabel, newId, posesInGroup, previewEntry, usePoseCatalog,
 } from '../world/placeTypes'
 import { CATEGORY_DATALIST_ID } from './propTypes'
+import {
+  DESC_ROWS_OPEN, DESC_ROWS_REST, DIM_FIELDS, SINK_LIMIT_M, descPatch,
+  dimRatios, dimsPatch, facePatch, sinkPatch,
+} from './variantFields'
 import type { DimKey } from './dims'
 import type {
   PropAreasInfo, PropFull, PropMarker, PropSourceImage, PropVariant,
@@ -626,6 +631,68 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     queueGeneral({ sway_factor: next })
   }, [swayDraft, swayNow, queueGeneral])
 
+  // ── THE SELECTED VARIANT'S OWN FIELDS (2026-08-29) ─────────────────────
+  // Size, sink, description and the two triangle budgets belong to the
+  // VARIANT (2026-08-25) but are edited HERE, beside the model they describe:
+  // one set of inputs for the version on screen instead of a form per chip.
+  // The law behind each of them lives in `variantFields.ts`; what this file
+  // owns is the typing state and the hand-off into the change buffer.
+  //
+  // What is being TYPED into a size field, keyed by dim. An entry lives only
+  // while the field is edited — the commit drops it and the input falls back
+  // to the stored number, so a background reload can never stomp what is under
+  // the cursor and no sync effect is needed.
+  const [dimDraft, setDimDraft] = useState<Record<string, string>>({})
+  const [descDraft, setDescDraft] = useState<string | null>(null)
+  /** Is the description expanded to writing size? Readable at rest, a real
+   *  editor while it is written in. */
+  const [descOpen, setDescOpen] = useState(false)
+  // Another variant is another set of numbers: a draft of the one before it
+  // would show its size in the new one's fields.
+  useEffect(() => {
+    setDimDraft({})
+    setDescDraft(null)
+    setDescOpen(false)
+  }, [prop.id, variant])
+
+  // One edited edge, three answers — the whole row is rewritten, so no field
+  // of it keeps a draft (a stale one would show a number the server never
+  // got). The proportions come from the mesh ON SCREEN when it is loaded.
+  const commitDim = useCallback((key: DimKey, raw: string) => {
+    setDimDraft({})
+    if (!shownVariant) return
+    const next = dimsPatch(shownVariant.dims, key, raw,
+      dimRatios(shownVariant.dims, shownBbox, variantRotation))
+    if (next) queueVariant(variant, { dims: next })
+  }, [shownVariant, shownBbox, variantRotation, queueVariant, variant])
+
+  // How deep this variant stands in the ground. No debounce and no local echo:
+  // the number goes straight into the draft, the draft IS what the field, the
+  // gauge and the viewer's ground plane read, and Save writes it once however
+  // often it was corrected. 0 clears the key, which is the normal state.
+  const commitSink = useCallback((value: number) => {
+    if (!shownVariant) return
+    const next = sinkPatch(shownVariant.ground_offset_m, value)
+    if (next !== null) queueVariant(variant, { ground_offset_m: next })
+  }, [shownVariant, queueVariant, variant])
+
+  const commitDesc = useCallback((raw: string) => {
+    setDescDraft(null)
+    if (!shownVariant) return
+    const next = descPatch(shownVariant.description, raw)
+    if (next !== null) queueVariant(variant, { description: next })
+  }, [shownVariant, queueVariant, variant])
+
+  // One of the two triangle budgets (v2 E5) — committed from the resolution
+  // tiers section, which is what they decide. Both halves travel every time;
+  // the reason is in `variantFields.facePatch`.
+  const commitFaces = useCallback((which: 'high' | 'low', raw: string) => {
+    if (!shownVariant) return
+    const next = facePatch({ high: shownVariant.target_faces_high,
+      low: shownVariant.target_faces_low }, which, raw)
+    if (next) queueVariant(variant, { face_targets: next })
+  }, [shownVariant, queueVariant, variant])
+
   // THE FIX IS THE FILE'S (v2 E1): the route takes the variant, and what comes
   // back has to reach the viewers below — the preview here, the areas viewer
   // and the strip's dims all turn with it, so this reloads the meshes rather
@@ -878,10 +945,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             </span>
           ) : null}
 
-          {/* THE VARIANTS — several meshes of the same object, each with its
-              own size, subject, sink, seasons and markers. The selected chip
-              decides what the viewer opposite shows and what the gallery and
-              the marker editor below act on. */}
+          {/* THE VARIANTS — several meshes of the same object. The chip is the
+              SELECTOR (2026-08-29): it says which version this is, whether it
+              renders and in which seasons, while everything that describes the
+              version itself is edited opposite, beside the model it is about.
+              The selected chip decides what the viewer opposite shows and what
+              the gallery, the settings and the marker editor act on. */}
           <PropVariantStrip
             propId={prop.id}
             variants={variants}
@@ -890,8 +959,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             onSelect={setVariant}
             onChanged={meshesChanged}
             onEditVariant={queueVariant}
-            // What an empty budget field means, as its placeholder (v2 E5).
-            backendFaces={backendFaces}
             // A deleted variant renumbers the list, so the draft is renumbered
             // with it — an unsaved size must never land on the neighbour that
             // moved into the gap.
@@ -899,13 +966,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             generating={generatingVariants}
             worldSeasons={worldSeasons}
             currentSeason={currentSeason}
-            // The proportions a variant's W/D/H redistribute along: the box of
-            // the mesh ON SCREEN, which belongs to the SELECTED chip. Every
-            // other chip falls back to its own stored dims inside the strip.
-            shownBbox={shownBbox}
-            // The fix of the SELECTED variant's file — the box on screen is
-            // that mesh's, and it has to be turned by that file's angles.
-            rotation={variantRotation}
           />
 
           {/* THE SELECTED VARIANT, dialled against the viewer opposite: the
@@ -1148,12 +1208,18 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
           </div>
         </div>
 
-        {/* Preview: the viewer plus the orientation fix that steers it —
-            sticky, so it stays in view while a long marker list scrolls. */}
+        {/* Preview: the viewer plus everything the SELECTED variant is —
+            sticky, so it stays in view while a long marker list scrolls.
+            ONE HEADER (2026-08-29, user decision): this whole column speaks
+            about the variant the strip has open, so it is named ONCE at the
+            top instead of appending "· Variant n" to every section below. */}
         <div className="ga-form ga-detail-cols-sticky">
+          <div className="ga-form-section-label" style={{ marginTop: 0 }}>
+            {t('Variant')} {variant + 1}
+          </div>
           {variantBusy ? (
             <span className="ga-hint">
-              {`${t('Generating the model — this takes a few minutes.')} · ${t('Variant')} ${variant + 1}`}
+              {t('Generating the model — this takes a few minutes.')}
             </span>
           ) : pending ? (
             // Another variant of the same prop is busy — worth saying, but it
@@ -1172,7 +1238,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
           <div style={{ flex: '0 1 220px', minWidth: 160, display: 'flex',
             flexDirection: 'column', gap: 4 }}>
             <div className="ga-form-section-label" style={{ margin: 0 }}>
-              {t('Source image')} · {t('Variant')} {variant + 1}
+              {t('Source image')}
             </div>
             {shownImage && srcOk ? (
               <img
@@ -1250,7 +1316,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               title={variantBusy
                 ? t('This variant is generating right now.')
                 : t('Mesh THIS image again into the SELECTED variant — no new render, no new variant; backend, face count and texture size come from the dialog. Dims and markers stay.')}>
-              ⚙ {t('3D from this image')} · {t('Variant')} {variant + 1}
+              ⚙ {t('3D from this image')}
             </button>
           </div>
           <div style={{ flex: '1 1 260px', minWidth: 240 }} ref={viewerRef}>
@@ -1362,18 +1428,139 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               {t('Reference figure (1.70 m)')}
             </label>
           ) : null}
-          {/* WHICH numbers the preview is measuring — the chip's, always. Said
-              once here, so the viewer and the strip opposite never read as
-              contradicting each other. */}
+          {/* WHICH numbers the preview is measuring — the open variant's,
+              always. It is the one this whole column is about (the header
+              names it), so the line says the metres and not the number. */}
           <span className="ga-hint" style={{ display: 'block' }}>
-            {t('Measured against variant {n}: {w} × {d} × {h} m.')
-              .replace('{n}', String(variant + 1))
+            {t('Measured: {w} × {d} × {h} m.')
               .replace('{w}', shownDims.width_m.toFixed(2))
               .replace('{d}', shownDims.depth_m.toFixed(2))
               .replace('{h}', shownDims.height_m.toFixed(2))}
           </span>
           </div>
           </div>
+
+          {/* THE RESOLUTION TIERS of the SELECTED variant, directly under the
+              preview (user 2026-08-29): which file the clients get at which
+              distance is what the viewer above is showing, so the two belong
+              together. The section carries the gallery — every stored run, one
+              active file per tier, upload and delete — and the two triangle
+              budgets that decide what the next run costs. */}
+          <PropModelPanel
+            propId={prop.id}
+            variant={variant}
+            reloadKey={reloadKey}
+            preview={previewFile}
+            onPreview={showStoredFile}
+            onChanged={meshesChanged}
+            pending={variantBusy}
+            // The SELECTED variant's own budgets (v2 E5) — the distance-mesh
+            // button names the low one, the reduction dialog opens on it, and
+            // the two fields in the section edit them.
+            faceTargets={{ high: shownVariant?.target_faces_high,
+              low: shownVariant?.target_faces_low }}
+            onEditFaceTarget={commitFaces}
+            backendFaces={backendFaces}
+            onGenerating={onGenerating}
+          />
+
+          {/* WHAT THIS VERSION IS (2026-08-29). The three numbers every
+              renderer scales its mesh by, how deep it stands in the ground and
+              the subject its product shot is rendered from — the variant's own
+              fields, dialled against the model above them rather than inside a
+              chip in the other column. Nothing is written until Save: every
+              commit here goes into the change buffer, which is also what the
+              preview reads, so a typed metre is on screen at once. */}
+          {shownVariant ? (
+            <>
+              <div className="ga-form-section-label">{t('Variant settings')}</div>
+              <div className="ga-form-row" style={{ gap: 8, alignItems: 'center' }}>
+                {DIM_FIELDS.map((f) => {
+                  const shown = dimDraft[f.key] ?? String(shownVariant.dims[f.key])
+                  return (
+                    <label
+                      key={f.key}
+                      style={{ display: 'flex', alignItems: 'center', gap: 3 }}
+                      title={`${t(f.title)} — ${t('the real extent of THIS variant’s mesh after the orientation fix.')} ${t('Edit one of the three and the other two follow this variant’s proportions — a prop is always scaled uniformly, so the trio says how big it is, its ratios say what shape.')}`}
+                    >
+                      <span className="ga-hint">{t(f.label)}</span>
+                      <input
+                        className="ga-input"
+                        type="number"
+                        min={0.01}
+                        max={100}
+                        step={0.05}
+                        style={{ width: 74 }}
+                        value={shown}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          setDimDraft((d) => ({ ...d, [f.key]: value }))
+                        }}
+                        onBlur={(e) => commitDim(f.key, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur()
+                        }}
+                      />
+                      <span className="ga-hint">m</span>
+                    </label>
+                  )
+                })}
+              </div>
+              {shownVariant.dims_estimated ? (
+                <span className="ga-hint">
+                  {t('Estimated — refined automatically when the model arrives.')}
+                </span>
+              ) : null}
+              {/* HOW DEEP THIS VERSION STANDS IN THE GROUND — it applies
+                  wherever this variant is drawn: every manual placement, every
+                  scattered copy in a room or yard, every instance of a painted
+                  terrain scatter and every world prop. The per-placement
+                  `offset_y` in the room editor stays the trim of ONE instance
+                  on top of it. A TYPED number, no dial (user 2026-08-25):
+                  sinking is a value you know — 0.05 for a mesh with a base
+                  plate, 0.4 to bury a root ball — and a slider that has to
+                  sweep the whole ±5 m range cannot hit either. What makes it
+                  judgeable is the 1.70 m figure in the viewer above. */}
+              <SliderInput
+                ariaLabel={t('Ground offset (m)')}
+                label={<span className="ga-hint"
+                  style={{ width: 66, flex: '0 0 auto' }}
+                  title={t('Negative sinks this variant into the ground, positive lifts it off — the same amount everywhere it stands: rooms, yard, painted scatter, world props. Use it for a mesh that carries no root ball or base plate. 0 = it stands on the ground.')}>
+                  ⤓ {t('Sink')}
+                </span>}
+                style={{ display: 'flex', fontSize: '0.85em' }}
+                unit="m"
+                slider={false}
+                min={-SINK_LIMIT_M}
+                max={SINK_LIMIT_M}
+                step={0.01}
+                value={shownVariant.ground_offset_m}
+                onChange={commitSink}
+                inputWidth={74}
+              />
+              {/* The variant's own generation subject (2026-08-24). A new
+                  variant starts with a COPY of the one it was added from, so
+                  the field opens filled and is EDITED ("…as a sapling")
+                  instead of written from nothing. Cleared = the render
+                  composes from the prop's name. Five lines at rest — enough to
+                  READ the sentence without opening it — and twelve while it is
+                  being written. */}
+              <textarea
+                className="ga-textarea"
+                rows={descOpen ? DESC_ROWS_OPEN : DESC_ROWS_REST}
+                style={{ width: '100%', resize: 'vertical' }}
+                value={descDraft ?? (shownVariant.description || '')}
+                placeholder={t('Description (generation subject)')}
+                title={t('What THIS variant’s source image is rendered from — the subject of its prompt. Empty = the render composes from the prop’s name. A new variant starts as a copy of the one it was added from, so a version differs by an edit: “…as a sapling”, “…broken”, “…covered in snow”.')}
+                onFocus={() => setDescOpen(true)}
+                onChange={(e) => setDescDraft(e.target.value)}
+                onBlur={(e) => {
+                  setDescOpen(false)
+                  commitDesc(e.target.value)
+                }}
+              />
+            </>
+          ) : null}
 
           {/* Orientation fix — ↻ adds +90°, the field sets a free exact angle.
               IT BELONGS TO THE FILE (v2 E1): what is dialled here is the OPEN
@@ -1386,7 +1573,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
           {shownHasMesh ? (
             <>
               <div className="ga-form-section-label">
-                {`${t('Orientation fix')} · ${t('Variant')} ${variant + 1}`}
+                {t('Orientation fix')}
               </div>
               <div className="ga-form-row">
                 {(['x', 'y', 'z'] as const).map((axis) => (
@@ -1464,22 +1651,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             />
           ) : null}
 
-          {/* The SELECTED variant's mesh gallery: every stored run, one active
-              file per resolution tier, upload and delete. */}
-          <PropModelPanel
-            propId={prop.id}
-            variant={variant}
-            reloadKey={reloadKey}
-            preview={previewFile}
-            onPreview={showStoredFile}
-            onChanged={meshesChanged}
-            pending={variantBusy}
-            // The SELECTED variant's own budgets (v2 E5) — the distance-mesh
-            // button names the low one and the reduction dialog opens on it.
-            faceTargets={{ high: shownVariant?.target_faces_high,
-              low: shownVariant?.target_faces_low }}
-            onGenerating={onGenerating}
-          />
         </div>
       </div>
     </>
