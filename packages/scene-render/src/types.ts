@@ -479,6 +479,12 @@ export interface SceneMarker {
    *  payload, since `models[].id` is the PROP id and is shared by every copy
    *  of it. Absent on a room marker, which has no placement. */
   anchor?: [number, number]
+  /** ROOM MARKERS ONLY (2026-08-29): the room this marker belongs to gets a
+   *  DIORAMA model (`models[]` with `role: "room"` and the same `room_id`),
+   *  and that model is this place's click target — the furniture the place
+   *  sits on is part of it and has no placement of its own. Absent (never
+   *  `false`) when the room has no diorama. */
+  diorama?: true
   source: 'room' | 'prop'
 }
 

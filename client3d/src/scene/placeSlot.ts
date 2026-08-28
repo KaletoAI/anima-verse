@@ -38,6 +38,13 @@ export interface PlaceEntry {
   /** Composed and finished (a prop marker): the floor sampling leaves its
    *  height alone; only the terrain re-lift moves it. */
   fixed?: boolean;
+  /** THE ROOM OF THIS PLACE IS A DIORAMA (`markers[].diorama`,
+   *  plan-diorama-hover.md): the furniture this place sits on is part of the
+   *  room's ONE diorama mesh and has no placement of its own. That mesh is
+   *  the place's click target — it lights up in a radius around the hovered
+   *  slot (`scene/spotHighlight.ts`) and takes the click, so the place needs
+   *  no ring. Only a ROOM marker ever carries it. */
+  diorama: boolean;
   /** Storey of the room — only 0 is carried by the terrain. */
   level: number;
   /** The storey-0 terrain lift already baked into the slot heights. */

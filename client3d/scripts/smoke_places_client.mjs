@@ -55,7 +55,12 @@
  *           `pickableProps` cannot find its mesh, so a ring is the only
  *           target it can have)                                   -> yes
  *       …and `skipPlaceId` still removes the place the avatar itself holds.
- *       Three offers, two rings, and their `userData.placeId` are the room
+ *       …and a DIORAMA place (`diorama: true`, plan-diorama-hover.md) loses
+ *       its ring exactly when its room's diorama is MOUNTED — the fourth
+ *       argument is that set of rooms. Without a mounted diorama (the
+ *       interior has not loaded, or it belongs to another room) the ring
+ *       stays: a place one cannot click is worse than a ring.
+ *       Four offers, two rings, and their `userData.placeId` are the room
  *       marker's and the anchor-less prop marker's.
  *   [8] `pickableProps` keys on ROOM + ANCHOR, not on the anchor alone: an
  *       anchor is a metre point in the room's own frame, so a bench in the
@@ -65,6 +70,12 @@
  *       An entry without an anchor is never matched (it is a room marker),
  *       and a placement whose mesh has not loaded (`object: null`) is
  *       nothing to click.
+ *   [8b] A target of `role: 'room'` is the room's DIORAMA and takes every
+ *       `diorama` place of the same room — no anchor is compared, because a
+ *       place on a diorama has no placement to name one. The two roles
+ *       partition the places: the invariant of [7] + [8] is that every
+ *       offered place ends up with EXACTLY ONE target (a ring, a prop or a
+ *       diorama), never two.
  *
  * A POLL OLDER THAN OUR OWN SEAT CHANGE (plan-aufstehen.md, Task 1)
  * ----------------------------------------------------------------
@@ -200,25 +211,37 @@ async function main() {
     ['r1', place('a', 1, 1)],
     ['p1', place('a', 2, 2, { fixed: true, anchor: [2, 2] })],
     ['p2', place('a', 3, 3, { fixed: true })],
+    ['d1', place('a', 4, 4, { diorama: true })],
   ])
-  const glyphOffers = [offer('r1'), offer('p1'), offer('p2')]
-  const rings = buildGlyphs(glyphEntries, glyphOffers, '')
+  const glyphOffers = [offer('r1'), offer('p1'), offer('p2'), offer('d1')]
+  const MOUNTED = new Set(['a'])
+  const rings = buildGlyphs(glyphEntries, glyphOffers, '', MOUNTED)
   const ringIds = rings.children.map((m) => m.userData.placeId).sort()
   checkList('two rings: the room marker and the anchor-less prop marker',
     ringIds, ['p2', 'r1'])
-  const skipped = buildGlyphs(glyphEntries, glyphOffers, 'r1')
+  const skipped = buildGlyphs(glyphEntries, glyphOffers, 'r1', MOUNTED)
   checkList('...and the place the avatar holds still loses its ring',
     skipped.children.map((m) => m.userData.placeId), ['p2'])
+  const unmounted = buildGlyphs(glyphEntries, glyphOffers, '', new Set())
+  checkList('...but with NO diorama mounted the diorama place keeps its ring',
+    unmounted.children.map((m) => m.userData.placeId).sort(), ['d1', 'p2', 'r1'])
+  const otherRoom = buildGlyphs(glyphEntries, glyphOffers, '', new Set(['b']))
+  checkList('...and another room’s mounted diorama is not this room’s target',
+    otherRoom.children.map((m) => m.userData.placeId).sort(), ['d1', 'p2', 'r1'])
 
   console.log('[8] pickableProps keys on ROOM + anchor')
   const propEntries = new Map([
     ['a/seat', place('a', 1, 2, { fixed: true, anchor: [1, 2] })],
     ['b/seat', place('b', 1, 2, { fixed: true, anchor: [1, 2] })],
     ['a/room', place('a', 4, 4)],
+    ['a/dio', place('a', 5, 5, { diorama: true })],
+    ['b/dio', place('b', 6, 6, { diorama: true })],
   ])
   const mesh = new THREE.Object3D()
-  const picked = pickableProps([{ roomId: 'a', anchor: [1, 2], object: mesh }],
-    propEntries, [offer('a/seat'), offer('b/seat'), offer('a/room')])
+  const prop = { role: 'prop', roomId: 'a', anchor: [1, 2], object: mesh }
+  const allOffers = [offer('a/seat'), offer('b/seat'), offer('a/room'),
+                     offer('a/dio'), offer('b/dio')]
+  const picked = pickableProps([prop], propEntries, allOffers)
   checkTrue('one pickable prop', picked.length === 1)
   checkList('...carrying ONLY the place of its own room',
     picked[0].places.map((p) => p.id), ['a/seat'])
@@ -226,11 +249,24 @@ async function main() {
     [picked[0].places[0].free.length,
      picked[0].places[0].free[0].x, picked[0].places[0].free[0].z], [1, 1, 2])
   checkTrue('a placement whose mesh has not loaded is nothing to click',
-    pickableProps([{ roomId: 'a', anchor: [1, 2], object: null }],
-      propEntries, [offer('a/seat')]).length === 0)
+    pickableProps([{ ...prop, object: null }], propEntries,
+      [offer('a/seat')]).length === 0)
   checkTrue('a room in which nothing is free offers no prop',
-    pickableProps([{ roomId: 'a', anchor: [1, 2], object: mesh }],
-      propEntries, []).length === 0)
+    pickableProps([prop], propEntries, []).length === 0)
+
+  console.log('[8b] a DIORAMA takes every diorama place of its own room')
+  const dio = { role: 'room', roomId: 'a', anchor: [0, 0], object: new THREE.Object3D() }
+  const both = pickableProps([prop, dio], propEntries, allOffers)
+  checkTrue('two targets: the prop and the diorama', both.length === 2)
+  checkList('the diorama carries the diorama places of ITS room, no anchor asked',
+    both[1].places.map((p) => p.id), ['a/dio'])
+  checkList('...and the roles say which is which',
+    both.map((p) => p.role), ['prop', 'room'])
+  checkTrue('EXACTLY ONE target per place: no place is on two of them',
+    new Set(both.flatMap((p) => p.places.map((x) => x.id))).size
+      === both.reduce((n, p) => n + p.places.length, 0))
+  checkTrue('a diorama with no diorama place of its own is nothing to click',
+    pickableProps([{ ...dio, roomId: 'c' }], propEntries, allOffers).length === 0)
 
   // --- the stale poll and the standing clip (plan-aufstehen.md) ------------
   const { pollIsStale } = await import('../src/game/placement.ts')

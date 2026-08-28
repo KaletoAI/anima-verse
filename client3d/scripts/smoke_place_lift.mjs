@@ -80,6 +80,30 @@
  *                 (z counts — a hit is a point on the mesh, not an x)
  *   a place with no free slot never wins, and a list in which nobody has one
  *   answers null (total, never a throw — same contract as `slotFor`).
+ *
+ * ==========================================================================
+ * [3] …and the RADIUS GATE a diorama needs (plan-diorama-hover.md)
+ * ==========================================================================
+ * A room diorama is ONE mesh for the whole room, so every click inside the
+ * room hits it — without a gate the nearest seat anywhere in the room would
+ * answer, and clicking the floor two metres away would seat the avatar. The
+ * optional third argument is that gate: the winner counts only if its nearest
+ * free slot lies within `maxDistM` metres of the hit point.
+ *
+ * `PLACE_PICK_RADIUS_M = 0.6` — the same 0.6 m the spot light fades out over
+ * (`spotHighlight.ts`), so what the player sees lit is exactly what the click
+ * takes. Against the same bench fixture, hits on the x axis:
+ *
+ *   0.4 m from a slot -> the place      (0.4 <= 0.6)
+ *   0.6 m from a slot -> the place      (ON the radius still counts)
+ *   0.7 m from a slot -> null           (0.7 > 0.6, the click falls through
+ *                                        to the ground, as it does today when
+ *                                        no place answers)
+ *   (0.4, 0.5) from a slot -> null      (hypot = 0.64031242… > 0.6 — the gate
+ *                                        is XZ distance, not an x distance)
+ *
+ * The gate never changes WHICH place wins — only whether one does at all; and
+ * WITHOUT the argument the pick is exactly as before (prop targets pass none).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -137,7 +161,7 @@ function compare(a, b, eps) {
 async function main() {
   const placement = await loadModule('client3d/src/game/placement.ts');
   const storeyGround = await loadModule('packages/scene-render/src/storeyGround.ts');
-  const { markerLiftPoint, pickablePlaceFor } = placement;
+  const { markerLiftPoint, pickablePlaceFor, PLACE_PICK_RADIUS_M } = placement;
   const { storeyGroundLift, storeyGroundRelift } = storeyGround;
 
   // --- [1] markerLiftPoint -------------------------------------------------
@@ -192,6 +216,25 @@ async function main() {
   check('nobody free -> null',
         pickablePlaceFor({ x: 0, z: 0 }, [{ id: 'x', free: [] }]), null);
   check('an empty list -> null', pickablePlaceFor({ x: 0, z: 0 }, []), null);
+
+  // --- [3] the radius gate (plan-diorama-hover.md) -------------------------
+  console.log('\n[3] pickablePlaceFor with a radius — a DIORAMA is room-sized');
+  check('a slot 0.4 m away is inside the 0.6 m radius',
+        pickablePlaceFor({ x: 0.4, z: 0 }, [PLACES[0]], PLACE_PICK_RADIUS_M), 'b1/seat1');
+  check('a slot 0.7 m away is outside it -> null',
+        pickablePlaceFor({ x: -0.7, z: 0 }, [PLACES[0]], PLACE_PICK_RADIUS_M), null);
+  check('exactly ON the radius still counts',
+        pickablePlaceFor({ x: -0.6, z: 0 }, [PLACES[0]], PLACE_PICK_RADIUS_M), 'b1/seat1');
+  check('the gate is XZ, not x: hypot(0.4, 0.5) = 0.640… -> null',
+        pickablePlaceFor({ x: 0.4, z: 0.5 }, [{ id: 's', free: [{ x: 0, z: 0 }] }],
+                         PLACE_PICK_RADIUS_M), null);
+  check('the gate never changes WHICH place wins, only whether one does',
+        pickablePlaceFor({ x: 1.9, z: 0 }, PLACES, PLACE_PICK_RADIUS_M), 'b1/seat2');
+  check('without a gate the same far hit still answers the nearest',
+        pickablePlaceFor({ x: -0.7, z: 0 }, [PLACES[0]]), 'b1/seat1');
+  check('a gate of Infinity is no gate',
+        pickablePlaceFor({ x: -99, z: 0 }, [PLACES[0]], Infinity), 'b1/seat1');
+  check('the radius is 0.6 m', PLACE_PICK_RADIUS_M, 0.6);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

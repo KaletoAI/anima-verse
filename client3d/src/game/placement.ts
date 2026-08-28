@@ -163,6 +163,12 @@ export function pollIsStale(polledAt: number, ownChangeAt: number): boolean {
  *  depending on which side of the hit they lie on. */
 const PICK_EPS_M2 = 1e-9;
 
+/** How near a free slot has to lie to a click on a ROOM DIORAMA for that
+ *  click to be the seat's (metres, plan-diorama-hover.md). The same 0.6 m the
+ *  hover light fades out over (`scene/spotHighlight.ts`), so what the player
+ *  sees lit is exactly what the click takes. A prop target has no gate. */
+export const PLACE_PICK_RADIUS_M = 0.6;
+
 /** One offered place with the slot points that are FREE, for the pick below.
  *  The points are metres in whatever frame the hit point is measured in
  *  (the client hands in world metres). */
@@ -186,10 +192,19 @@ export interface PlacePick {
  * which nobody has one answers `null` (total, never a throw — the same
  * contract as `slotFor`).
  *
- * PURE, and hand-derived in `client3d/scripts/smoke_place_lift.mjs` [2].
+ * `maxDistM` is the RADIUS GATE a room diorama needs (plan-diorama-hover.md):
+ * a diorama is one mesh for the whole room, so every click inside the room
+ * hits it, and without a gate a click on the empty floor would seat the avatar
+ * on whatever chair happens to stand nearest. With the gate the winner counts
+ * only if its nearest free slot lies within that many metres of the hit point;
+ * otherwise the answer is `null` and the click falls through to the ground, as
+ * it does today when no place answers at all. A PROP target passes none — its
+ * mesh is the seat, and a hit on it is already the answer.
+ *
+ * PURE, and hand-derived in `client3d/scripts/smoke_place_lift.mjs` [2] + [3].
  */
-export function pickablePlaceFor(hit: FreePoint,
-                                 places: PlacePick[]): string | null {
+export function pickablePlaceFor(hit: FreePoint, places: PlacePick[],
+                                 maxDistM?: number): string | null {
   let best: string | null = null;
   let bestD = Infinity;
   for (const place of places) {
@@ -201,5 +216,9 @@ export function pickablePlaceFor(hit: FreePoint,
       }
     }
   }
+  // Squared, like the comparison above — and the gate is a `<=`, so a slot
+  // EXACTLY on the radius still counts (the same number squared on both
+  // sides, so the comparison is exact).
+  if (maxDistM !== undefined && bestD > maxDistM * maxDistM) return null;
   return best;
 }

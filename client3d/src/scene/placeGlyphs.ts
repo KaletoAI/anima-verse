@@ -12,9 +12,16 @@
  * looks at, it brightens under the pointer (`highlightProp`) and a click on
  * its mesh opens the same seat menu (`pickableProps` + `hitProp` here,
  * `pickablePlaceFor` in `game/placement.ts`). A ring in front of the bench
- * only competed with it. Room markers — a spot on the floor, a window sill,
- * anything the payload marks without a placement — have no mesh to click and
- * keep their ring.
+ * only competed with it.
+ *
+ * AND A ROOM DIORAMA IS SUCH A TARGET TOO (plan-diorama-hover.md, user
+ * decision 2026-08-29). Furniture inside a diorama has no placement of its
+ * own — the whole room is ONE mesh — so those places used to be the "no mesh"
+ * case. They are not: the diorama takes the click and lights up in a radius
+ * around the hovered slot (`scene/spotHighlight.ts`, uniforms, never a
+ * material clone). What keeps its ring is a place with NO mesh at all: a spot
+ * on the floor, a window sill, and every diorama place whose room has not
+ * loaded its interior yet.
  */
 import * as THREE from 'three';
 import type { PlaceOffer } from '../api';
@@ -60,11 +67,19 @@ export function glyphColour(group: string): number {
  *  too would leave the place with no target at all. A place one cannot click
  *  is worse than a ring in front of a bench.
  *
+ *  AND THE SAME FOR A DIORAMA (plan-diorama-hover.md): a place whose room is
+ *  a diorama (`entry.diorama`) has its target in that ONE room mesh, so it
+ *  drops its ring — but only while the mesh actually stands. `dioramaRooms`
+ *  is the caller's list of rooms whose diorama is MOUNTED; a room missing
+ *  from it has no interior loaded yet, and its places keep their rings for
+ *  the same reason the anchor-less prop marker does.
+ *
  *  Every mesh carries `userData.placeId` for `hitPlace`. ONE geometry and one
  *  material per colour for the whole group — `disposeGlyphs` frees them
  *  once. */
 export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers: PlaceOffer[],
-                            skipPlaceId = ''): THREE.Group {
+                            skipPlaceId = '',
+                            dioramaRooms: ReadonlySet<string> = new Set()): THREE.Group {
   const group = new THREE.Group();
   group.name = 'placeGlyphs';
   if (!entries) return group;
@@ -73,7 +88,9 @@ export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers
   for (const offer of offers) {
     if (offer.id === skipPlaceId || offer.free <= 0) continue;
     const entry = entries.get(offer.id);
-    if (!entry || (entry.fixed && entry.anchor)) continue;
+    if (!entry) continue;
+    if (entry.fixed && entry.anchor) continue;               // its prop is the target
+    if (entry.diorama && dioramaRooms.has(entry.roomId)) continue;   // its room is
     const colour = glyphColour(offer.group);
     let material = materials.get(colour);
     if (!material) {
@@ -104,21 +121,29 @@ export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers
   return group;
 }
 
-/** A placed PROP mesh together with the places its markers offer — what a
- *  click and a hover pick from. `places` is never empty (a prop without a
- *  free slot is not pickable at all). */
+/** What a placement is to a place: `prop` = a piece of furniture with a
+ *  placement of its own, `room` = the room's DIORAMA, one mesh for everything
+ *  standing in it. The two differ in how they find their places and in how
+ *  they light up — see `pickableProps` and `scene/spotHighlight.ts`. */
+export type PlaceTargetRole = 'prop' | 'room';
+
+/** A placed mesh together with the places its markers offer — what a click
+ *  and a hover pick from. `places` is never empty (a target without a free
+ *  slot is not pickable at all). */
 export interface PickableProp {
+  role: PlaceTargetRole;
   object: THREE.Object3D;
   places: PlacePick[];
 }
 
-/** The three facts `pickableProps` needs about a mounted placement, so this
- *  module stays clear of `scene/tiles`: which room it stands in, where in it,
- *  and what was drawn there. `anchor` is the payload's own `models[].anchor`,
- *  tile-local — the link the markers name (`PlaceEntry.anchor`); `object` is
- *  null while the mesh has not loaded, and a prop without a mesh is nothing
- *  to click. */
+/** The facts `pickableProps` needs about a mounted placement, so this module
+ *  stays clear of `scene/tiles`: what it is, which room it stands in, where
+ *  in it, and what was drawn there. `anchor` is the payload's own
+ *  `models[].anchor`, tile-local — the link a PROP's markers name
+ *  (`PlaceEntry.anchor`) and unread for a diorama; `object` is null while the
+ *  mesh has not loaded, and a placement without a mesh is nothing to click. */
 export interface PlacedPropRef {
+  role: PlaceTargetRole;
   roomId: string;
   anchor: [number, number];
   object: THREE.Object3D | null;
@@ -138,6 +163,13 @@ export interface PlacedPropRef {
  * alone would cross-link the two. A room marker carries no anchor and is
  * never matched.
  *
+ * A DIORAMA (`role: 'room'`) matches differently, and has to
+ * (plan-diorama-hover.md): the furniture inside it has no placement, so its
+ * places carry no anchor to compare — every place of the SAME ROOM that the
+ * payload marked `diorama` belongs to it. That is also why the two roles
+ * partition the room's places instead of competing for them: a place is
+ * either on a prop (anchor) or on the diorama (`diorama`), never both.
+ *
  * `offers` is the server's word on occupancy (`GET /play/places`) and decides
  * both which places count and WHICH slots of them are free — the same data
  * the rings used to read, so a prop offers exactly what a ring would have.
@@ -156,8 +188,13 @@ export function pickableProps(props: PlacedPropRef[],
     if (!prop.object) continue;
     const places: PlacePick[] = [];
     for (const [id, entry] of entries) {
-      if (!entry.anchor || entry.roomId !== prop.roomId) continue;
-      if (entry.anchor[0] !== prop.anchor[0] || entry.anchor[1] !== prop.anchor[1]) continue;
+      if (entry.roomId !== prop.roomId) continue;
+      if (prop.role === 'room') {
+        if (!entry.diorama) continue;
+      } else {
+        if (!entry.anchor) continue;
+        if (entry.anchor[0] !== prop.anchor[0] || entry.anchor[1] !== prop.anchor[1]) continue;
+      }
       const slots = free.get(id);
       if (!slots) continue;
       // The payload's capacity and the server's may disagree for one poll —
@@ -167,7 +204,7 @@ export function pickableProps(props: PlacedPropRef[],
         .map((p) => ({ x: p.x, z: p.z }));
       if (points.length) places.push({ id, free: points });
     }
-    if (places.length) out.push({ object: prop.object, places });
+    if (places.length) out.push({ role: prop.role, object: prop.object, places });
   }
   return out;
 }
@@ -193,7 +230,7 @@ export function hitProp(props: PickableProp[], raycaster: THREE.Raycaster):
 /** How much emissive a hovered prop gains. A flat colour, not a factor: the
  *  point is that the piece of furniture under the pointer reads as "this one"
  *  against its neighbours, and a factor would leave an already dark prop dark. */
-const HOVER_EMISSIVE = 0x6a6555;
+export const HOVER_EMISSIVE = 0x6a6555;
 
 /** What a hover took off a prop, so leaving it can put it back exactly:
  *  one entry per mesh with the material (or material list) it wore. */

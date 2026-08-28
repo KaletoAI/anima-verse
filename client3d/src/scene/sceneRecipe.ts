@@ -1265,6 +1265,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       offsetY,
       drop,
       fixed,
+      // …and whether the furniture under this place is part of the room's
+      // DIORAMA (plan-diorama-hover.md). The server says so per marker; the
+      // client only carries it, because it decides the place's target: the
+      // diorama mesh instead of a ring.
+      diorama: marker.diorama === true,
       // …and the two numbers the RE-LIFT needs when the height field moves
       // (`reliftScene`): which storey this marker belongs to, and how much of
       // the terrain is already in the slot heights — and WHERE it was
@@ -1719,9 +1724,18 @@ function applyModelClip(tile: Tile, placed: THREE.Object3D,
  * clones leave the graph and their CLONED materials are disposed (clip
  * shaders, shell/roof clones); geometries and base materials belong to the
  * loader cache and stay.
+ *
+ * `onSwapped` is called once per record that really changed its mesh, with
+ * that record — a PARAMETER and not a module-level hook, so this routine
+ * keeps knowing nothing about its callers. It exists because everything a
+ * VIEW holds on the old object dies with the swap: the seat targets point at
+ * a mesh that has left the graph, and the shader patches a view installed on
+ * its materials are gone with the clones (`scene/spotHighlight.ts`).
  */
 export async function setSceneModelTier(tile: Tile, group: 'building' | 'interior',
-                                        tier: ModelTier): Promise<void> {
+                                        tier: ModelTier,
+                                        onSwapped?: (rec: PlacedSceneModel) => void
+                                       ): Promise<void> {
   const placements = tile.placedModels;
   if (!placements) return;
   await Promise.all(placements.map(async (rec) => {
@@ -1800,6 +1814,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
     rec.object = placed;
     rec.url = url;
     rec.placeholder = false;
+    onSwapped?.(rec);
   }));
   if (tile.placedModels !== placements) return;
   // A swapped mesh changes the furniture boxes — re-derive the

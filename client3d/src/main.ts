@@ -5,9 +5,11 @@ import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { FigureLibrary } from './scene/figures';
 import { animFamily } from './scene/clipCoverage';
-import { slotFor } from './scene/placeSlot';
+import { slotFor, type PlaceEntry } from './scene/placeSlot';
 import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace,
-  hitProp, pickableProps, type PickableProp, type PropHighlight } from './scene/placeGlyphs';
+  hitProp, pickableProps, type PickableProp, type PlacedPropRef,
+  type PropHighlight } from './scene/placeGlyphs';
+import { installSpotHighlight, setSpot } from './scene/spotHighlight';
 import { openPlaceMenu } from './game/placeMenu';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
@@ -55,7 +57,7 @@ import { mountScene, reliftScene, SceneLibrary, setSceneModelTier,
   unmountScene } from './scene/sceneRecipe';
 import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
-import { figureTransition, pickablePlaceFor, placementOf, pollIsStale,
+import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
 import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
@@ -937,7 +939,13 @@ async function startApp(username: string, role: string) {
       const i = wantedInteriorTier(tile.loc.id, scenes.get(tile.loc.id));
       if (interiorTierByLoc.get(tile.loc.id) !== i) {
         interiorTierByLoc.set(tile.loc.id, i);
-        void setSceneModelTier(tile, 'interior', i);
+        // A tier swap replaces the very mesh the seat targets point at — and
+        // with it the materials the spot light was patched onto. The rebuild
+        // is the one routine that repairs all of that: it drops a live hover
+        // (which would be holding the unmounted object), derives the targets
+        // from the records as they now stand, and re-installs the patch on
+        // the fresh clones.
+        void setSceneModelTier(tile, 'interior', i, () => rebuildPlaceGlyphs());
       }
     }
     // Same tick, third driver: character figures by camera distance.
@@ -1712,10 +1720,19 @@ async function startApp(username: string, role: string) {
       // the hit point picks which of its places — clicking the left end of a
       // bench offers the left end (`pickablePlaceFor`, hand-derived). Only a
       // place WITHOUT a prop still has a ring to hit.
+      //
+      // AND A ROOM DIORAMA IS ONE OF THOSE TARGETS (plan-diorama-hover.md),
+      // with a RADIUS GATE: its mesh covers the whole room, so only a hit
+      // within `PLACE_PICK_RADIUS_M` of a free slot is a seat click — the
+      // same radius the hover lights up, so the player clicks what is lit.
+      // Further away the pick answers null and the click falls through to the
+      // ground below, exactly as it does today when no place answers.
       const propHit = hitProp(placeProps, ray);
       if (propHit) {
         const id = pickablePlaceFor({ x: propHit.point.x, z: propHit.point.z },
-                                    propHit.prop.places);
+                                    propHit.prop.places,
+                                    propHit.prop.role === 'room'
+                                      ? PLACE_PICK_RADIUS_M : undefined);
         if (id) {
           openPlaceMenuFor(id, x, y);
           return true;
@@ -3378,12 +3395,20 @@ async function startApp(username: string, role: string) {
    *  on the furniture. */
   let placeGlyphs: THREE.Group | null = null;
   /** The mounted props a free place hangs on — the seat's click and hover
-   *  target. Rebuilt with the rings, from the same inventory. */
+   *  target. Rebuilt with the rings, from the same inventory. Carries the
+   *  room's DIORAMA too, for the places whose furniture is part of it. */
   let placeProps: PickableProp[] = [];
-  /** The prop the pointer stands on right now, brightened, with the materials
-   *  it wore before. Exactly one at a time, and it is cleared before anything
-   *  can replace the objects under it (a rebuild, leaving the mode). */
-  let propHover: { prop: PickableProp; lit: PropHighlight } | null = null;
+  /** The place inventory those targets were built from (the avatar's room),
+   *  so the hover can look the picked place's slot POINTS up — the pick
+   *  itself works on flat XZ metres, the spot light needs a world point. */
+  let placeEntries: Map<string, PlaceEntry> | undefined;
+  /** The target the pointer stands on right now, lit, with the materials it
+   *  wore before. Exactly one at a time, and it is cleared before anything
+   *  can replace the objects under it (a rebuild, leaving the mode). `lit` is
+   *  null on a DIORAMA: that one is not brightened as a whole (it is the
+   *  entire room) but spot-lit around the hovered slot through uniforms, and
+   *  there is nothing to put back — `setSpot(…, null)` switches it off. */
+  let propHover: { prop: PickableProp; lit: PropHighlight | null } | null = null;
   /** DIRTY MARKS of that hover probe — what it last looked at. `−1` is "ask
    *  again whatever the pointer does" and is what `rebuildPlaceGlyphs` sets;
    *  `engine.pointerSeq` never reaches it. */
@@ -4077,12 +4102,13 @@ async function startApp(username: string, role: string) {
     rebuildPlaceGlyphs();
   }
 
-  /** Throw the rings and the prop targets away and derive them anew from the
+  /** Throw the rings and the mesh targets away and derive them anew from the
    *  last inventory — only while the player steers the figure, only inside a
    *  mounted room. A ring is never drawn on the place the avatar itself holds
    *  (it would sit under its own feet); a PROP is, because a bench one sits on
    *  is still the way to change one's pose on it, and it has no ring to be in
-   *  the way. */
+   *  the way. Three targets come out of it: the rings, the props, and the
+   *  room's DIORAMA for the places whose furniture is part of it. */
   function rebuildPlaceGlyphs(): void {
     // The highlight points at objects this rebuild may unmount — let go of it
     // first, so no prop can be left wearing a hover clone, and force the next
@@ -4094,30 +4120,76 @@ async function startApp(username: string, role: string) {
       placeGlyphs = null;
     }
     placeProps = [];
+    placeEntries = undefined;
     if (getGameState().mode !== 'embodied' || !placeOffersRoom) return;
     const me = lastMap?.characters.find((c) => c.name === avatarName);
     const tile = me?.location_id ? tiles.get(me.location_id) : undefined;
     const entries = tile?.roomMarkers.get(placeOffersRoom);
     if (!entries) return;
-    placeGlyphs = buildGlyphs(entries, placeOffers, me?.place?.id ?? '');
-    engine.scene.add(placeGlyphs);
+    placeEntries = entries;
     // The mesh side of the same inventory: every mounted prop placement of
     // this room, matched to its markers by the placement anchor the payload
-    // states on both (`pickableProps`).
-    placeProps = pickableProps(
-      (tile?.placedModels ?? [])
-        .filter((rec) => rec.spec.role === 'prop' && rec.spec.room_id === placeOffersRoom)
-        .map((rec) => ({ roomId: rec.spec.room_id ?? '', anchor: rec.spec.anchor,
-                         object: rec.object })),
-      entries, placeOffers);
+    // states on both — PLUS the room's diorama, if any place of the room says
+    // its furniture is part of it (plan-diorama-hover.md). The diorama is one
+    // mesh for the whole room and matches by room alone (`pickableProps`).
+    const wantsDiorama = [...entries.values()].some((e) => e.diorama);
+    const refs: PlacedPropRef[] = [];
+    for (const rec of tile?.placedModels ?? []) {
+      if (rec.spec.room_id !== placeOffersRoom) continue;
+      if (rec.spec.role === 'prop') {
+        refs.push({ role: 'prop', roomId: placeOffersRoom, anchor: rec.spec.anchor,
+                    object: rec.object });
+      } else if (rec.spec.role === 'room' && wantsDiorama) {
+        refs.push({ role: 'room', roomId: placeOffersRoom, anchor: rec.spec.anchor,
+                    object: rec.object });
+        // The spot light lives on the diorama's OWN materials, patched in
+        // place (never cloned — a clone would drop the shell clip). Installed
+        // here rather than at the mount because this is the one routine that
+        // runs again after a tier swap has built fresh clones; a material
+        // that already carries the patch is skipped.
+        if (rec.object) installSpotHighlight(rec.object);
+      }
+    }
+    // The rings go to the places that have NO mesh target: neither a prop of
+    // their own nor a MOUNTED diorama. A room whose interior has not loaded
+    // yet is not in the set, and its places keep their rings.
+    const mounted = new Set(refs.filter((r) => r.role === 'room' && r.object)
+      .map((r) => r.roomId));
+    placeGlyphs = buildGlyphs(entries, placeOffers, me?.place?.id ?? '', mounted);
+    engine.scene.add(placeGlyphs);
+    placeProps = pickableProps(refs, entries, placeOffers);
   }
 
-  /** Let the hovered prop have its own materials back. */
+  /** Let the hovered target have its own look back — the prop its materials,
+   *  the diorama its unlit shader. */
   function clearPropHover(): void {
     if (!propHover) return;
-    clearPropHighlight(propHover.lit);
+    if (propHover.lit) clearPropHighlight(propHover.lit);
+    else setSpot(propHover.prop.object, null, PLACE_PICK_RADIUS_M);
     propHover = null;
     applyHoverCursor();
+  }
+
+  /** The world point the spot light sits on: the FREE slot of the picked
+   *  place that lies nearest the hit — the very slot `pickablePlaceFor` chose
+   *  the place by, now with its height. Free by the server's word
+   *  (`placeOffers`), like everything else here. */
+  function spotPointFor(placeId: string, hit: THREE.Vector3): THREE.Vector3 | null {
+    const entry = placeEntries?.get(placeId);
+    const offer = placeOffers.find((o) => o.id === placeId);
+    if (!entry || !offer) return null;
+    let best: THREE.Vector3 | null = null;
+    let bestD = Infinity;
+    for (const i of offer.free_slots) {
+      const p = entry.slots[i];
+      if (!p) continue;
+      const d = (p.x - hit.x) * (p.x - hit.x) + (p.z - hit.z) * (p.z - hit.z);
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best;
   }
 
   // HOVER ON A SEATABLE PROP (ruling 2026-08-28) — ONCE PER FRAME, not per
@@ -4147,6 +4219,23 @@ async function startApp(username: string, role: string) {
     hoverCam.copy(engine.camera.position);
     const at = placeProps.length ? engine.pointerAt : null;
     const hit = at ? hitProp(placeProps, engine.raycasterAt(at.x, at.y)) : null;
+    // A DIORAMA is the whole room, so "the same target as last frame" says
+    // nothing: the pointer slides from the chair to the table without leaving
+    // the mesh. Its spot is therefore re-aimed on every probe — at the free
+    // slot nearest the hit, and only while one lies inside the pick radius,
+    // which is exactly the condition under which the click would take it
+    // (`pickablePlaceFor` with the same gate). No slot near: no light, no
+    // pointer cursor, and the click falls through to the ground.
+    if (hit && hit.prop.role === 'room') {
+      if (propHover && propHover.prop !== hit.prop) clearPropHover();
+      const id = pickablePlaceFor({ x: hit.point.x, z: hit.point.z }, hit.prop.places,
+                                  PLACE_PICK_RADIUS_M);
+      const spot = id ? spotPointFor(id, hit.point) : null;
+      setSpot(hit.prop.object, spot, PLACE_PICK_RADIUS_M);
+      propHover = spot ? { prop: hit.prop, lit: null } : null;
+      applyHoverCursor();
+      return;
+    }
     if (hit?.prop === propHover?.prop) return;
     clearPropHover();
     if (!hit) return;
