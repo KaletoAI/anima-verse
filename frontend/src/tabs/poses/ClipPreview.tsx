@@ -32,18 +32,34 @@ import { SliderInput } from '../../components/SliderInput'
 
 const FIGURE_H = 1.7
 
-/** The virtual marker a pair is seated on, per place type: width × height ×
- *  depth in metres, the width across the marker's facing. A stand (and any
- *  place type without a body — an unknown or empty group) has no box: the
- *  pair plays on the ground, the way this preview always did. */
-const MARKER_BOX: Record<string, [number, number, number]> = {
-  seat: [0.5, 0.45, 0.5],
-  bed: [2.0, 0.5, 1.0],
-  floor: [1.0, 0.05, 0.6],
-  counter: [1.0, 0.9, 0.6],
+/** The virtual marker a pair is played on, per place type.
+ *
+ *  `size` is width × height × depth in metres, the width across the marker's
+ *  facing. `support` says what the box IS: a body the figures rest on (seat,
+ *  bed, floor — the marked surface is its TOP, the root sinks `root_drop`
+ *  below that), or furniture they stand AT. A counter's `root_drop` is 0
+ *  because the marked surface is the floor spot where the person stands; the
+ *  counter body belongs in FRONT of them, so its box keeps the ground plane
+ *  and is pushed out along the marker facing.
+ *
+ *  A stand (and any place type without a body — an unknown or empty group)
+ *  has no box: the pair plays on the ground, the way this preview always did. */
+interface MarkerBox {
+  size: [number, number, number]
+  support: boolean
 }
 
-function markerBox(group?: string): [number, number, number] | undefined {
+/** Gap between the figures' floor spot and the furniture they stand at. */
+const FRONT_GAP_M = 0.2
+
+const MARKER_BOX: Record<string, MarkerBox> = {
+  seat: { size: [0.5, 0.45, 0.5], support: true },
+  bed: { size: [2.0, 0.5, 1.0], support: true },
+  floor: { size: [1.0, 0.05, 0.6], support: true },
+  counter: { size: [1.0, 0.9, 0.6], support: false },
+}
+
+function markerBox(group?: string): MarkerBox | undefined {
   return MARKER_BOX[(group || '').trim().toLowerCase()]
 }
 
@@ -127,6 +143,11 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
   const dropRef = useRef(rootDrop)
   dropRef.current = rootDrop
   const box = markerBox(group)
+  // Does the loaded clip actually have two halves? Only then is there a pair
+  // to seat — a kind without an A/B pair plays solo whatever the pose says.
+  const [pairClip, setPairClip] = useState(false)
+  // A marker to turn against: a pair clip AND a place type with a body.
+  const seated = pairClip && !!box
 
   useEffect(() => {
     const host = hostRef.current
@@ -138,6 +159,7 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
     const disposers: Array<() => void> = []
     setStatus(t('Loading…'))
     setInfo(null)
+    setPairClip(false)
     void (async () => {
       try {
         const THREE = await import('three')
@@ -192,20 +214,25 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
         // body. It does NOT turn with the clip frame: the marker faces south,
         // and seeing the couple turn against it is the point of the slider.
         const seat = parts.length === 2 ? markerBox(group) : undefined
+        setPairClip(parts.length === 2)
         if (seat) {
-          const [bw, bh, bd] = seat
+          const [bw, bh, bd] = seat.size
           const geom = new THREE.BoxGeometry(bw, bh, bd)
           const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
             color: 0x7d8ea8, transparent: true, opacity: 0.45, roughness: 0.9,
           }))
-          mesh.position.y = bh / 2
-          scene.add(mesh)
           const edges = new THREE.LineSegments(
             new THREE.EdgesGeometry(geom),
             new THREE.LineBasicMaterial({ color: 0xc9d4e4 }),
           )
-          edges.position.y = bh / 2
-          scene.add(edges)
+          // Both kinds stand ON the ground plane; furniture the figures only
+          // stand AT is pushed out along the marker facing (+z = south), so
+          // the counter is in front of them instead of under them.
+          const boxZ = seat.support ? 0 : bd / 2 + FRONT_GAP_M
+          for (const o of [mesh, edges]) {
+            o.position.set(0, bh / 2, boxZ)
+            scene.add(o)
+          }
           disposers.push(() => {
             geom.dispose()
             edges.geometry.dispose();
@@ -299,9 +326,11 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
           if (seat) {
             // Server formula, both terms: the frame turns by facing − 90° +
             // yaw_offset, and its origin sits `root_drop × 1.70` under the
-            // marked surface (the box top).
+            // MARKED SURFACE — the box top for a body the figures rest on,
+            // the ground plane for furniture they only stand at.
             frame.rotation.y = pairYaw(yawRef.current || 0)
-            frame.position.y = seat[1] - (dropRef.current || 0) * FIGURE_H
+            frame.position.y = (seat.support ? seat.size[1] : 0)
+              - (dropRef.current || 0) * FIGURE_H
           }
           for (const p of players) {
             p.mixer.setTime(time)
@@ -331,11 +360,14 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
     }
   }, [kind, height, urlKey, group, t])
 
-  // What the marker under the pair is — shown only once a pair is actually
-  // playing (a finite A ↔ B distance).
-  const markerNote = box
-    ? ` · ${t('marker')} ${box[0].toFixed(2)} × ${box[1].toFixed(2)} × ${box[2].toFixed(2)} m,`
-      + ` ${t('facing south')}, ${t('drop')} ${(rootDrop * FIGURE_H).toFixed(2)} m`
+  // What the marker under (or in front of) the pair is — only while one is
+  // actually seated on it.
+  const markerNote = seated && box
+    ? ` · ${t('marker')} ${box.size[0].toFixed(2)} × ${box.size[1].toFixed(2)}`
+      + ` × ${box.size[2].toFixed(2)} m, ${t('facing south')}`
+      + (box.support
+        ? `, ${t('drop')} ${(rootDrop * FIGURE_H).toFixed(2)} m`
+        : `, ${t('in front — the figures stand on the floor spot')}`)
     : ''
 
   return (
@@ -350,20 +382,31 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
           : '')}
       </div>
       {onYawOffset ? (
-        <SliderInput
-          label={t('Yaw offset')}
-          unit="°"
-          title={t('Degrees the pair clip’s frame turns against the marker facing. The preview’s marker faces south, so the couple turns exactly as it will on the real bench.')}
-          min={-180}
-          max={180}
-          step={5}
-          fineStep={1}
-          value={yawOffset}
-          onChange={onYawOffset}
-          sliderWidth="auto"
-          sliderStyle={{ flex: 1, minWidth: 80 }}
-          style={{ display: 'flex', marginTop: 6 }}
-        />
+        <>
+          <SliderInput
+            label={t('Yaw offset')}
+            unit="°"
+            title={t('Degrees the pair clip’s frame turns against the marker facing. The preview’s marker faces south, so the couple turns exactly as it will on the real bench.')}
+            min={-180}
+            max={180}
+            step={5}
+            fineStep={1}
+            value={yawOffset}
+            onChange={onYawOffset}
+            disabled={!seated}
+            sliderWidth="auto"
+            sliderStyle={{ flex: 1, minWidth: 80 }}
+            style={{ display: 'flex', marginTop: 6 }}
+          />
+          {/* Nothing to turn against: no place type with a body, or a kind
+              that has no two halves. The value stays what it is — it is
+              edited again as soon as there is a marker to see it on. */}
+          {seated ? null : (
+            <div className="ga-hint" style={{ marginTop: 2 }}>
+              {t('No marker box for this place type')}
+            </div>
+          )}
+        </>
       ) : null}
     </div>
   )
