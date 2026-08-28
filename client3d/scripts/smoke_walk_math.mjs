@@ -339,15 +339,33 @@
  * the same 0.5 m at dist 0.999 is a step of 0.5 > 0.4 -> blocked. That jump is
  * the rule, not a defect: a 0.5 m rise one takes in a single stride IS a wall,
  * and the same rise spread over a metre is a ramp.
- * The two LOOKUPS stay in main.ts, deliberately: the heights come from
- * `reliefLiftAt` — the innermost enclosing tile that HAS a relief field, via
- * `scene/tiles.terrainLiftAt` (the payload's field, the server's own source —
- * never the model raycast of `tileGroundY`); a hut without a field of its own
- * stands ON the ground under it rather than flattening it (finding F3). The
- * OPENING EXEMPTION (a point within 1.5 m of an authored opening is never
- * refused for its height — an opening is the ramp onto a plateau) is
- * `slopeBlockedBetween` there. The server half is hand-derived in
+ * The OPENING EXEMPTION (a point within 1.5 m of an authored opening is never
+ * refused for its height — an opening is the ramp onto a plateau) stays in
+ * `main.ts` `slopeBlockedBetween`. The server half is hand-derived in
  * `scripts/smoke_slope_gate.py`.
+ *
+ * --- gateStandY: THE HEIGHT THE GATE COMPARES (plan-huette-dach task 2) ----
+ * `slopeBlocks` judges a DIFFERENCE, and until 2026-08-28 the client looked
+ * that difference up on the terrain alone while the server looked it up on
+ * the whole standing ladder (`model_surface.stand_height_at`, in the gate of
+ * `POST /play/pos` since 165ccf61). The figure is DRAWN on the ladder, so it
+ * walked up onto a hut's baked roof and the server refused every report.
+ * `gateStandY` is that ladder as a rule, one point at a time — the three
+ * rungs the server composes, in the server's order:
+ *
+ *   gateStandY(baked, declared, terrain) =
+ *     baked    finite -> max(baked,    terrain)   rung 0, the baked lattice
+ *     declared finite -> max(declared, terrain)   rung 1, a room's walk_y
+ *     otherwise       -> terrain                  rung 2, the world ground
+ *
+ * All three are WORLD metres; the terrain is the lower bound of the upper two
+ * (Entscheid 5: a hollow in a diorama never sinks a figure below the ground).
+ * A non-finite rung is not a height and falls through to the next one, and a
+ * terrain sampler with nothing to say leaves the upper rung standing.
+ * THE STOREY PLATES ARE NOT A RUNG — the server's ladder has none (storey 0
+ * draws no plate since E5a), so the gate's has none either; mirroring, not
+ * extending. The three LOOKUPS stay in main.ts (`gateStandAt`: `bakedFloorAt`
+ * with the storey-0 filter, `declaredFloorAt`, `terrainGround.heightAt`).
  *
  * --- slideBlocked (E4 task 5) ---------------------------------------------
  * The step that would end in blocked ground keeps the component that runs
@@ -916,7 +934,7 @@ async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, minimap, locks, placement, ground, stairs } = await loadGameModules();
-  const { walkDir, slideBlocked, slopeBlocks, terrainBlocks, terrainPace,
+  const { walkDir, slideBlocked, slopeBlocks, gateStandY, terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
     groundScope, wadeGate, swimFrom, SWIM_FROM_DEFAULT_M, MIN_PACE,
     submergedInWater, ghostCutY, ghostWaterLevel, WATER_GHOST_FROM_M,
@@ -1639,6 +1657,52 @@ async function main() {
       eitherOr(0.18, 0.15, STEP, SLOPE), false);
     check('...and the crawl as well',
       eitherOr(0.4, 0.1, STEP, SLOPE), false);
+  }
+
+  // --- gateStandY: WHAT THE HEIGHT GATE MEASURES (plan-huette-dach task 2) --
+  // The rungs the gate compares are derived in the header; the numbers here
+  // are the Mondscheinhütte case, by hand.
+  console.log('gateStandY — the gate stands on the lattice, like the server');
+  {
+    const STEP = 0.4;
+    const SLOPE = 40;
+    // Flat terrain at 0, a hut whose baked lattice answers its roof at 2.5 m.
+    const outside = gateStandY(null, null, 0);         // no rung but the ground
+    const onRoof = gateStandY(2.5, null, 0);           // rung 0 answers 2.5
+    check('off the lattice the gate stands on the terrain', outside, 0);
+    check('over the lattice it stands on the lattice', onRoof, 2.5);
+    // THE CLIMB the server refuses: 2.5 m up, over a 0.15 m walking lead
+    // (step: 2.5 > 0.4) and over a 1.12 m report step (slope: 65.8676° > 40).
+    check('a 2.5 m lattice is a wall over a 0.15 m lead',
+      slopeBlocks(onRoof - outside, 0.15, STEP, SLOPE), true);
+    check('...and over a 1.12 m report step as well',
+      slopeBlocks(onRoof - outside, 1.12, STEP, SLOPE), true);
+    // THE COUNTER-PROBE (409b4f3e): coming back down is never judged.
+    check('stepping off the same roof is free',
+      slopeBlocks(outside - onRoof, 0.15, STEP, SLOPE), false);
+    // RED: the terrain-only ladder the gate used until this task. Both points
+    // read 0, the step is invisible here and the server refuses it — the
+    // figure walks up and is snapped back three times a second.
+    check('RED: terrain only sees no step at all',
+      slopeBlocks(0 - 0, 0.15, STEP, SLOPE), false);
+    // RUNG 1, where no lattice answers: the room's own declared floor, a
+    // podium 1.2 m over the flat ground.
+    check('the declaration carries the gate where no lattice answers',
+      gateStandY(null, 1.2, 0), 1.2);
+    check('...and a lattice outranks it (ruling R1)',
+      gateStandY(2.5, 1.2, 0), 2.5);
+    // RUNG 2 is also the LOWER BOUND (Entscheid 5): a hollow in a diorama
+    // never sinks the gate below the ground the figure stands on.
+    check('the terrain is the floor under both upper rungs',
+      gateStandY(-0.5, null, 0.3), 0.3);
+    check('...and under a declaration as well', gateStandY(null, -0.5, 0.3), 0.3);
+    // A sampler with nothing to say is not a height: NaN must neither become
+    // a rung nor drag the answer to NaN.
+    check('a lattice that answers nonsense falls to the next rung',
+      gateStandY(NaN, 1.2, 0), 1.2);
+    check('...and with no rung left, to the ground', gateStandY(NaN, NaN, 0.3), 0.3);
+    check('a terrain sampler with nothing to say leaves the lattice standing',
+      gateStandY(2.5, null, NaN), 2.5);
   }
 
   // --- clickmove (E4 task 5) -----------------------------------------------

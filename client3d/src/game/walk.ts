@@ -611,8 +611,13 @@ export const STEP_DISTANCE_M = 1;
 
 /**
  * Does a height change of `dh` over `dist` metres stop the figure? The
- * client's half of the E8 height gate of `POST /play/pos` (§ A15), and the
- * exact mirror of `relief.slope_blocks` on the server.
+ * client's half of the E8 height gate of `POST /play/pos` (§ A15): the exact
+ * mirror of `relief.slope_blocks` on the server, applied to the exact
+ * difference the server applies it to — `stand_height_at` at both points,
+ * which is {@link gateStandY} here (`main.ts` `gateStandAt` looks the rungs
+ * up). Both halves of the mirror matter: the RULE below refuses the same
+ * numbers the server refuses only as long as the NUMBERS are the same
+ * heights, and for a while they were not (plan-huette-dach task 2).
  *
  * THE TWO LIMITS APPLY TOGETHER, and the step is the ADDITIONAL one:
  *
@@ -639,9 +644,10 @@ export const STEP_DISTANCE_M = 1;
  * Level ground never blocks either, which is what keeps the whole gate inert
  * in a world without relief.
  *
- * `dh` is the caller's lookup (`main.ts` `reliefLiftAt` at both points),
- * `maxStep`/`maxSlope` the world settings off the worldmap payload — what is
- * derivable is the RULE, and only the rule lives in this import-free file.
+ * `dh` is the caller's lookup ({@link gateStandY} at both points, through
+ * `main.ts` `gateStandAt`), `maxStep`/`maxSlope` the world settings off the
+ * worldmap payload — what is derivable is the RULE, and only the rule lives
+ * in this import-free file.
  */
 export function slopeBlocks(dh: number, dist: number, maxStep: number,
                             maxSlope: number): boolean {
@@ -649,6 +655,47 @@ export function slopeBlocks(dh: number, dist: number, maxStep: number,
   if (!(rise > 0)) return false;
   return (dist < STEP_DISTANCE_M && rise > maxStep)
     || Math.atan2(rise, dist) * 180 / Math.PI > maxSlope;
+}
+
+/**
+ * WHERE A FIGURE STANDS at one point, as the HEIGHT GATE reads it — the
+ * client's copy of `app/core/model_surface.stand_height_at`, which is what
+ * `POST /play/pos` measures its step with (`app/routes/play.py`, since
+ * 165ccf61).
+ *
+ * THE SAME THREE RUNGS AS THE SERVER, in the server's order, all in WORLD
+ * metres:
+ *
+ *  0. THE BAKED LATTICE (`baked`) — the storey-0 surfaces of the tile
+ *     (`tiles.bakedFloorAt`, `highest_surface_at` there), which is what a hut
+ *     puts over the ground it stands on.
+ *  1. THE DECLARATION (`declared`) — where no lattice answers, the
+ *     `walk_y_world` a storey-0 room states (`ground.declaredFloorAt`,
+ *     `declared_floor_of` there): a podium, a sunken lounge, a hut in a lake.
+ *  2. THE TERRAIN (`terrain`) — the world ground, and it is the LOWER BOUND
+ *     of the two rungs above as well (Entscheid 5): a hollow in a diorama
+ *     never sinks a figure below the ground it stands on.
+ *
+ * THE STOREY PLATES ARE DELIBERATELY ABSENT, exactly as they are on the
+ * server: since E5a the recipe draws a plate for DECLARED storeys only, this
+ * gate is storey-0 only, and a walker on the ground plane must not be
+ * measured against the slab of the floor above them. The drawing ladder
+ * (`tiles.tileWalkY`) does read that rung, and it also adds
+ * `WALK_CLEARANCE_M` — the hair that keeps a sole out of its floor. Neither
+ * belongs here: this is a MIRROR of the server's ladder, not the drawing one.
+ *
+ * A NON-FINITE RUNG IS NOT A HEIGHT (`ground.standY`'s rule): a sampler with
+ * nothing to say — no field loaded yet, a malformed sidecar — falls through
+ * to the next rung instead of putting the gate at NaN, and with the terrain
+ * gone the upper rung stands alone. A gate that answers NaN judges nothing,
+ * which would silently unblock the world.
+ */
+export function gateStandY(baked: number | null, declared: number | null,
+                           terrain: number): number {
+  const lattice = Number.isFinite(baked) ? (baked as number)
+    : Number.isFinite(declared) ? (declared as number) : NaN;
+  if (!Number.isFinite(lattice)) return terrain;
+  return Number.isFinite(terrain) ? Math.max(lattice, terrain) : lattice;
 }
 
 export function slideBlocked(from: Point, to: Point, blocked: BlockedFn): Point {

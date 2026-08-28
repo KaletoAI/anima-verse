@@ -11,8 +11,8 @@ import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace
 import { openPlaceMenu } from './game/placeMenu';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
-  groundScope, slideBlocked, slopeBlocks, terrainBlocks, terrainPace, walkDir,
-  type GroundScope,
+  gateStandY, groundScope, slideBlocked, slopeBlocks, terrainBlocks,
+  terrainPace, walkDir, type GroundScope,
 } from './game/walk';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
@@ -53,7 +53,7 @@ import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountScene, reliftScene, SceneLibrary, setSceneModelTier,
   unmountScene } from './scene/sceneRecipe';
-import { WALK_CLEARANCE_M } from './game/ground';
+import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { figureTransition, pickablePlaceFor, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
@@ -2724,19 +2724,53 @@ async function startApp(username: string, role: string) {
    * The second term is gone with the scene's own relief (§ A19 no. 6,
    * decision 1): a location had a 17 x 17 field of its own, the innermost
    * enclosing one counted (`groundLift`), and local relief is authored through
-   * the map's height areas now. Deliberately NOT `tileGroundY`: a declared
-   * room floor is a floor INSIDE a place, not the landscape, and using it here
-   * would refuse steps the server accepts.
+   * the map's height areas now.
+   *
+   * THE LANDSCAPE ONLY, and its one caller wants exactly that: the huddle
+   * above applies the DIFFERENCE of the terrain between a room's centre and a
+   * figure set aside from it. The HEIGHT GATE does not read this — it reads
+   * `gateStandAt` below, the whole standing ladder.
    */
   function reliefLiftAt(x: number, z: number): number {
     return terrainGround.heightAt(x, z);
   }
 
   /**
+   * WHERE THE HEIGHT GATE MEASURES A FIGURE at a world point — the three
+   * lookups behind `walk.gateStandY`, which is the client's copy of the
+   * server's `model_surface.stand_height_at` (the gate of `POST /play/pos`).
+   *
+   * Until 2026-08-28 the gate compared `reliefLiftAt`, the TERRAIN alone,
+   * while the server compared the whole ladder and the figure was DRAWN on it
+   * (`tiles.tileWalkY`): the client walked up onto a hut's baked lattice and
+   * every report it sent from up there came back `too_steep`
+   * (plan-huette-dach, cause 2). The gate now measures what the figure stands
+   * on, and the server measures the same thing.
+   *
+   * MIRRORING, NOT EXTENDING: the storey-0 filter on the lattice, the
+   * declaration under it and the terrain as the lower bound are the server's
+   * rungs; the storey PLATES that `tileWalkY` reads as its rung 2 are absent
+   * on the server (storey 0 draws none) and absent here, and the drawing
+   * clearance `WALK_CLEARANCE_M` is not a height either side judges by.
+   */
+  function gateStandAt(x: number, z: number): number {
+    const terrain = terrainGround.heightAt(x, z);
+    const tile = tileAt(x, z);
+    if (!tile) return terrain;
+    const local = worldToTile(tile, x, z);
+    const baked = bakedFloorAt(tile, local.x, local.z, (e) => e.level === 0);
+    const declared = tile.declaredFloors.length
+      ? declaredFloorAt(tile.declaredFloors, local.x, local.z) : null;
+    return gateStandY(baked,
+      declared === null ? null : tile.center.y + declared, terrain);
+  }
+
+  /**
    * Does the HEIGHT between two points stop the figure (§ A15 Nr. 9)?
    *
-   * The rule is `walk.slopeBlocks` and the limits are the world's
-   * (`maxStepHeightM` / `maxSlopeDeg`, off the worldmap payload) — this only
+   * The rule is `walk.slopeBlocks`, the two heights are `gateStandAt` — the
+   * server's own standing ladder — and the limits are the world's
+   * (`maxStepHeightM` / `maxSlopeDeg`, off the worldmap payload). This only
    * looks the two heights up and applies the OPENING EXEMPTION: an authored
    * opening is where a place is entered, and a place sitting on its own
    * plateau has a step at exactly that spot. Refusing it would lock every
@@ -2749,7 +2783,7 @@ async function startApp(username: string, role: string) {
 
   function slopeBlockedBetween(from: { x: number; z: number },
                                x: number, z: number): boolean {
-    const dh = reliefLiftAt(x, z) - reliefLiftAt(from.x, from.z);
+    const dh = gateStandAt(x, z) - gateStandAt(from.x, from.z);
     if (!dh) return false;
     if (!slopeBlocks(dh, Math.hypot(x - from.x, z - from.z),
                      maxStepHeightM, maxSlopeDeg)) return false;
