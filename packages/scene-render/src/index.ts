@@ -91,13 +91,12 @@ export {
   plateTargets, wallTargets,
 } from './primitives'
 
-export {
-  FIGURE_ROOT_DROP, rootDropFor, pickVariant, pickModelVariant, MODEL_TIERS,
-} from './types'
+export { pickVariant, pickModelVariant, MODEL_TIERS } from './types'
 
-export {
-  FIGURE_HEIGHT_M, anchorFigureBind, figureRootDrop, figureRootY,
-} from './figure'
+export { FIGURE_HEIGHT_M, anchorFigureBind, figureRootY } from './figure'
+
+export { markerSlots, pairYaw, rotateXZ, pairPoints } from './placeGeometry'
+export type { XZ } from './placeGeometry'
 
 export { surfaceMaterial, updateSurfaceMaterials, setSurfaceSky,
   surfaceTimeUniform, surfaceSkyUniform, surfaceWaveNormal,

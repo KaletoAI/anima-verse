@@ -28,7 +28,14 @@ What the LLM is told about all this lives here too (plan § 5):
 free places with the poses they allow, busy ones by name, the room's
 free-text ``activity_hint`` as the tail; :func:`room_offer_short` is the
 per-group free count the NPC director picks a room by; :func:`place_label`
-names the seat a character holds for the 2D prompt and the presence line.
+names the seat a character holds, :func:`place_phrase` puts the group's
+preposition in front of it ("on the sofa") for the 2D prompt, the presence
+line and the player's Others panel.
+
+A seat NEVER evicts: ``set_character_pos`` derives the location from the
+point, so a slot outside the location's boundary (a marker authored past
+the footprint) is bookkept but the figure stays put (:func:`inside`), and
+an unplaced location — no pin, no world frame — has no places at all.
 """
 import math
 import threading
@@ -49,6 +56,7 @@ _CACHE_TTL_S = 300.0          # belt and braces — every writer invalidates any
 
 _lock = threading.Lock()      # guards ``_cache`` only, never held around a compose
 _cache: Dict[str, Tuple[Any, Dict[str, List[Place]]]] = {}   # location_id -> (stamp, {room_id: places})
+_warned_outside: set = set()  # place ids already reported as lying outside their location
 
 
 class PlaceUnavailable(ValueError):
@@ -69,24 +77,22 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
     every slot goes through ``local_to_world`` with the location's pin and
     turn, and a turned location turns its markers' compass facing by the
     same angle (as a turned room does in ``scene_recipe._markers``). An
-    unplaced location has no world frame; its markers stay as composed —
-    nobody can stand in it anyway (the location derives from the point)."""
+    UNPLACED location (no pin) has no world frame, so it has no places:
+    its recipe-local metres would read as world metres, and a seat there
+    would put the sitter somewhere on the map that is not this location."""
     from app.core.scene_recipe import compose_scene, scene_inputs
     from app.core.world_geometry import local_to_world
     from app.models.world import get_location_by_id
     loc = get_location_by_id(location_id)
-    if not loc:
+    if not loc or loc.get("pos_x") is None or loc.get("pos_z") is None:
         return {}
     plan_width_m, building_meta, room_metas = scene_inputs(loc, location_id)
     scene = compose_scene(loc, plan_width_m=plan_width_m,
                           building_meta=building_meta, room_metas=room_metas)
-    placed = loc.get("pos_x") is not None and loc.get("pos_z") is not None
-    cx, cz = (float(loc["pos_x"]), float(loc["pos_z"])) if placed else (0.0, 0.0)
-    yaw = float(loc.get("yaw_deg") or 0.0) if placed else 0.0
+    cx, cz = float(loc["pos_x"]), float(loc["pos_z"])
+    yaw = float(loc.get("yaw_deg") or 0.0)
 
     def _world(pt: List[float]) -> List[float]:
-        if not placed:
-            return [float(pt[0]), float(pt[1])]
         wx, wz = local_to_world(float(pt[0]), float(pt[1]), cx, cz, yaw)
         return [round(wx, 2), round(wz, 2)]
 
@@ -250,6 +256,29 @@ def pair_yaw(place: Place, pose_key: str) -> float:
     return math.radians(facing - 90.0 + pose_yaw_offset(pose_key))
 
 
+def inside(location_id: str, x: float, z: float) -> bool:
+    """Does the point derive ``location_id`` — the same question
+    ``set_character_pos`` asks (``location_at_point``: the smallest drawn
+    boundary containing the point)? A slot that answers No must never be
+    walked to: the write would evict the character from its location."""
+    from app.core.world_geometry import location_at_point
+    from app.models.world import list_locations
+    loc = location_at_point(float(x), float(z), list_locations())
+    return ((loc.get("id") or "") if loc else "") == (location_id or "")
+
+
+def _warn_outside(location_id: str, place: Place, x: float, z: float) -> None:
+    """Once per place id: the marker lies outside its location's boundary,
+    so the seat is bookkept but nobody is moved onto it."""
+    key = f"{location_id}/{place['room_id']}/{place['id']}"
+    if key in _warned_outside:
+        return
+    _warned_outside.add(key)
+    logger.warning("places: %s '%s' in %s/%s lies outside the location at (%.2f, %.2f) — "
+                   "seated without moving the character", place["group"], place["id"],
+                   location_id, place["room_id"], x, z)
+
+
 def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
     """Give ``name`` a free place of the pose's group in its room, write it to
     the profile and put the character on the slot; returns the profile field
@@ -325,10 +354,16 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
         profile["place"] = field
         save_character_profile(name, profile)
         sx, sz = place["slots"][slot]
-        # The slot lies inside the room's own location, so the point derives
-        # the location it already has; preserve_movement_target keeps a
-        # journey that just arrived from being cancelled by its own seat.
-        set_character_pos(name, sx, sz, preserve_movement_target=True)
+        # The point derives the location: a slot inside the room's own
+        # location keeps the one the character has, and preserve_movement_
+        # target keeps a journey that just arrived from being cancelled by
+        # its own seat. A slot OUTSIDE the boundary (a marker authored past
+        # the footprint) would evict — the seat is bookkept, the figure
+        # stays where it is.
+        if inside(loc, sx, sz):
+            set_character_pos(name, sx, sz, preserve_movement_target=True)
+        else:
+            _warn_outside(loc, place, sx, sz)
         return field
 
 
@@ -369,7 +404,9 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
     pair seat counts as free for a re-assignment) — the nearest to the
     pair's midpoint — written to BOTH profiles as the ``PAIR_SLOT``;
     returns ``(place, yaw_rad)`` (:func:`pair_yaw`). Nobody is moved: the
-    interaction engine places the figures from the anchor. None when the
+    interaction engine places the figures from the anchor — and asks
+    :func:`inside` first, since a centre outside the location (warned here,
+    once per place) would evict both partners. None when the
     actor stands in no location/room (outdoors: the caller anchors at the
     midpoint, whatever the group) or when no place of the group fits and
     the group is ``stand`` (a standing pair meets halfway); any other
@@ -406,6 +443,9 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
             prof = get_character_profile(name) or {}
             prof["place"] = {"id": best["id"], "slot": PAIR_SLOT, "room_id": room}
             save_character_profile(name, prof)
+        cx, cz = centre_of(best)
+        if not inside(loc, cx, cz):
+            _warn_outside(loc, best, cx, cz)
         return best, pair_yaw(best, pose_key)
 
 
@@ -439,6 +479,10 @@ def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
 
 # ── what the LLM is told ────────────────────────────────────────────────
 _OFFER_MAX_LINES = 12
+_ANYWHERE_MAX = 8             # the stand group's default + 7 more on the "Anywhere" line
+#: The preposition a prompt puts before a held place, per group — a group
+#: nobody listed here (an admin-made place type) reads "at the".
+_PREPOSITION = {"seat": "on", "bed": "in", "floor": "on", "counter": "at"}
 
 
 def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
@@ -497,9 +541,13 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
         Also typical here: reading nooks
 
     Markers first (capped at ``_OFFER_MAX_LINES`` rows), then the poses
-    that need no place at all, then the room's free-text ``activity_hint``
-    as the tail. A room without markers still gets the last two lines;
-    nothing at all yields ``""`` so a template can ``{% if %}`` it away."""
+    that need no place at all — the group's default first, then up to
+    ``_ANYWHERE_MAX - 1`` more in catalog order and ``…and N more`` when
+    the stand group is bigger (it holds dozens of poses; the LLM may use any
+    catalog key, the line is a reminder, not the menu) — then the room's
+    free-text ``activity_hint`` as the tail. A room without markers still
+    gets the last two lines; nothing at all yields ``""`` so a template can
+    ``{% if %}`` it away."""
     from app.core.pose_catalog import get_catalog, poses_in_group
     from app.models.world import get_room_activity_hint
     lines = _group_lines(location_id, room_id, name) if location_id and room_id else []
@@ -512,7 +560,10 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
     cat = get_catalog("pose")
     anywhere = [k if cat[k]["solo"] else f"{k} (with partner)" for k in poses_in_group("stand")]
     if anywhere:
-        out.append("Anywhere here: " + ", ".join(anywhere))
+        line = "Anywhere here: " + ", ".join(anywhere[:_ANYWHERE_MAX])
+        if len(anywhere) > _ANYWHERE_MAX:
+            line += f", …and {len(anywhere) - _ANYWHERE_MAX} more (any pose key works)"
+        out.append(line)
     hint = get_room_activity_hint(location_id, room_id) if location_id else ""
     if hint:
         out.append(f"Also typical here: {hint}")
@@ -557,9 +608,26 @@ def room_offer_short(location_id: str, room_id: str,
     return ", ".join(f"{g} {n} free" for g, n in free.items())
 
 
+def _named_place(name: str) -> Optional[Place]:
+    """The place ``name`` holds when it is worth naming — a standing spot
+    is not: "standing, on the standing spot" tells a prompt nothing."""
+    p = place_of(name)
+    return p if p and p["group"] != "stand" else None
+
+
 def place_label(name: str) -> str:
     """Label of the place ``name`` holds ("Seat", "Bed", a prop's name) or
-    ``""`` — also for a standing spot: "standing, on the standing spot"
-    tells a prompt nothing."""
-    p = place_of(name)
-    return p["label"] if p and p["group"] != "stand" else ""
+    ``""`` (nothing held, or a standing spot)."""
+    p = _named_place(name)
+    return p["label"] if p else ""
+
+
+def place_phrase(name: str) -> str:
+    """The held place as a prompt reads it — ``"on the sofa"``, ``"in the
+    bed"``, ``"at the counter"`` (:data:`_PREPOSITION` per group) — or
+    ``""`` like :func:`place_label`. ONE phrase for the 2D scene prompt, the
+    presence line and the player's Others panel."""
+    p = _named_place(name)
+    if not p:
+        return ""
+    return f"{_PREPOSITION.get(p['group'], 'at')} the {p['label'].lower()}"

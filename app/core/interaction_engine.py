@@ -244,11 +244,15 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
         save_character_profile(name, prof)
         # The game-state position is where the clip holds the figure at the
         # anchor moment — perception, rules and the map all see them there.
+        # Unless that point lies outside the location (a marker authored
+        # past the footprint): the write would evict, so the figure stays
+        # where it is and only the seat is bookkept (`places.inside`).
         off = (roles.get(role) or {}).get("anchor_xz_m")
         if off:
             dx, dz = _rotate(float(off[0]), float(off[1]), yaw)
-            set_character_pos(name, anchor["x"] + dx, anchor["z"] + dz,
-                              preserve_movement_target=True)
+            px, pz = anchor["x"] + dx, anchor["z"] + dz
+            if not anchor.get("place_id") or places.inside(loc_a, px, pz):
+                set_character_pos(name, px, pz, preserve_movement_target=True)
         set_pose_intent(name, pose_key)
     publish("interaction_started", actor, partner=partner, kind=kind,
             interaction_id=inter_id, duration_s=duration)

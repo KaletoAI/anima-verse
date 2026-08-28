@@ -13,7 +13,8 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
   Vector3 } from 'three'
 import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
-  disposeSlotMaterials, figureRootY, leafPivot } from '@anima/scene-render'
+  disposeSlotMaterials, figureRootY, leafPivot, markerSlots, pairPoints,
+  pairYaw } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -139,40 +140,6 @@ const loadClip = (kind: string, role = '') => {
     _clipCache.set(key, cached)
   }
   return cached
-}
-
-/**
- * The SLOT POINTS of one place, in this viewer's own units — the client half
- * of `scene_recipe.marker_slots`, which stays THE authority: a change to the
- * formula there is a change here.
- *
- * A place seats `capacity` figures `spacing_m` apart ACROSS the facing (a
- * bench runs sideways), centred on the marker point: the lateral unit vector
- * is the facing turned by +90°, `(cos f, −sin f)` in XZ with facing 0 = south
- * (+z) and 90 = east (+x) — the same convention the figure's own `rotation.y`
- * follows here. Capacity 1 is the marker point itself.
- *
- * Computing them here is legitimate view geometry: this preview shows ONE
- * prop BEFORE any composition, so there is no scene payload to read finished
- * slots off (a placed prop gets `markers[].slots` from the server and nobody
- * recomputes them). `perMetre` converts the stored metres into the mesh's own
- * units, which is what everything else in model mode measures in.
- */
-function markerSlotPoints(x: number, z: number, facingDeg: number | undefined,
-                          capacity: number | undefined,
-                          spacingM: number | undefined,
-                          perMetre: number): Array<[number, number]> {
-  const n = Math.max(1, Math.round(capacity || 1))
-  if (n === 1) return [[x, z]]
-  const f = _deg(facingDeg)
-  const lx = Math.cos(f)
-  const lz = -Math.sin(f)
-  // 0.6 m = one person's width on a bench, the server's own default.
-  const step = (spacingM || 0.6) * perMetre
-  return Array.from({ length: n }, (_, i) => {
-    const d = (i - (n - 1) / 2) * step
-    return [x + d * lx, z + d * lz] as [number, number]
-  })
 }
 
 /** Placement of a building model on its map tile — mirrors the worldmap
@@ -1449,34 +1416,41 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
                 // but the number cannot come from the payload's `root_offset`
                 // here, because a prop in this viewer is UNCOMPOSED: the
                 // caller reads `root_drop` off the pose catalog's group and
-                // the fraction becomes mesh units right here.
-                const rootY = figureRootY(world.y, figH, kind,
+                // the fraction becomes mesh units right here (0 while the
+                // catalog is not loaded — the root on the surface).
+                const rootY = figureRootY(world.y,
                   typeof m.rootDrop === 'number' ? m.rootDrop * figH : undefined)
                 const pair = kind ? idx.pairs[kind] : undefined
+                // Slot and pair geometry are the shared package's mirror of
+                // the server formulas (`markerSlots`, `pairPoints`) — this
+                // viewer shows ONE prop BEFORE any composition, so there is
+                // no payload to read finished slots off. Metres → mesh units
+                // through `perMetre` (spacing and the role offsets alike).
                 if (pair) {
                   // A PAIR pose is ONE clip in two halves around ONE anchor:
-                  // the server seats it at the marker CENTRE
-                  // (`places.assign_pair`) and turns the clip frame by
-                  // `facing − 90° + yaw_offset` (`places.pair_yaw`), each half
-                  // standing at its sidecar `anchor_xz_m` in that frame — the
-                  // same two figures the floor-plan preview draws, not one
-                  // per slot.
-                  const yawDeg = (m.facing ?? 0) - 90 + (m.previewYawOffset || 0)
-                  const yaw = _deg(yawDeg)
-                  for (const role of ['a', 'b'] as const) {
+                  // the server seats it at the marker CENTRE and turns the
+                  // clip frame by `pairYaw`, each half standing at its
+                  // sidecar `anchor_xz_m` in that frame — the same two
+                  // figures the floor-plan preview draws, not one per slot.
+                  const yawOffset = m.previewYawOffset || 0
+                  const yawDeg = (pairYaw(m.facing, yawOffset) * 180) / Math.PI
+                  const offset = (role: 'a' | 'b'): [number, number] => {
                     const [ox, oz] = pair.geometry?.roles?.[role]?.anchor_xz_m || [0, 0]
-                    // The server's `_rotate`: the clip frame's (x, z) turned
-                    // by yaw about Y; metres → mesh units through `perMetre`.
+                    return [ox * perMetre, oz * perMetre]
+                  }
+                  const pts = pairPoints([world.x, world.z], m.facing, yawOffset,
+                                         { a: offset('a'), b: offset('b') })
+                  for (const role of ['a', 'b'] as const) {
                     await addMarkerFigure({
-                      x: world.x + (ox * Math.cos(yaw) + oz * Math.sin(yaw)) * perMetre,
-                      y: rootY,
-                      z: world.z + (-ox * Math.sin(yaw) + oz * Math.cos(yaw)) * perMetre,
+                      x: pts[role][0], y: rootY, z: pts[role][1],
                       kind, role, facingDeg: yawDeg, figH, token: figToken })
                   }
                   return
                 }
-                for (const [sx, sz] of markerSlotPoints(world.x, world.z, m.facing,
-                                                        m.capacity, m.spacing_m, perMetre)) {
+                // 0.6 m = one person's width on a bench, the server's default.
+                for (const [sx, sz] of markerSlots([world.x, world.z], m.facing,
+                                                   m.capacity || 1,
+                                                   (m.spacing_m || 0.6) * perMetre)) {
                   await addMarkerFigure({ x: sx, y: rootY, z: sz, kind,
                                           facingDeg: m.facing, figH, token: figToken })
                 }

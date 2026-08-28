@@ -24,7 +24,7 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
-  anchorFigureBind, figureRootY,
+  anchorFigureBind, figureRootY, pairPoints, pairYaw,
   applyClipOutline, applyDepthCut, applySlotMaterials,
   disposeClipMaterials, disposeCutMaterials, disposeSlotMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
@@ -996,21 +996,23 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       // (a seated body touches at the buttocks). ONE routine for the 3D
       // client, this preview and the prop viewer — the number comes from
       // the payload, never from a measurement taken here.
-      const rootY = figureRootY(marker.y_world, figBase, kind, marker.root_offset)
+      const rootY = figureRootY(marker.y_world, marker.root_offset)
       const pair = kind ? pairs[kind] : undefined
       if (pair) {
-        const yawDeg = (marker.facing ?? 0) - 90 + (entry?.yaw_offset || 0)
-        const yaw = deg(yawDeg)
-        const [ax, az] = marker.at_world
+        // The shared package's mirror of the server's seating (`pairPoints`:
+        // centre, `facing − 90° + yaw_offset`, `_rotate`) — the payload
+        // carries the slots but not a pair's halves.
+        const yawOffset = entry?.yaw_offset || 0
+        const yawDeg = (pairYaw(marker.facing, yawOffset) * 180) / Math.PI
+        const role = (r: 'a' | 'b'): [number, number] =>
+          pair.geometry?.roles?.[r]?.anchor_xz_m || [0, 0]
+        const pts = pairPoints(marker.at_world, marker.facing, yawOffset,
+                               { a: role('a'), b: role('b') })
         for (const role of ['a', 'b'] as const) {
-          // The server's `_rotate`: clip-frame (x, z) turned by yaw about Y —
-          // the very rotation three.js applies to a child of a group with
-          // rotation.y = yaw, so figure + offset agree with the seated pair.
-          const [ox, oz] = pair.geometry?.roles?.[role]?.anchor_xz_m || [0, 0]
           placeFigure({
-            x: ax + ox * Math.cos(yaw) + oz * Math.sin(yaw),
+            x: pts[role][0],
             y: rootY,
-            z: az - ox * Math.sin(yaw) + oz * Math.cos(yaw),
+            z: pts[role][1],
             animation: kind, role, facing: yawDeg,
             tilt: marker.tilt, roll: marker.roll,
             marker: true,

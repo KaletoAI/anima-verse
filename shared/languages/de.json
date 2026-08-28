@@ -1,7 +1,10 @@
 {
   "_meta": {
+    "at the": "am",
+    "in the": "im",
     "label": "Deutsch",
     "language": "de",
+    "on the": "auf dem",
     "purpose": "Translation map for the German UI. Keys are the canonical English UI strings exactly as they appear in the code. Each key MUST be unique across the file. When the same English word means different things in different contexts, disambiguate the English source string itself so the key stays unique.",
     "schema": {
       "<English source>": "<German translation>"

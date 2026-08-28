@@ -1980,19 +1980,31 @@ def play_self(user=Depends(get_current_user)):
 
 
 def _state_block(name: str) -> dict:
-    """Mood + Status-Bars + Conditions + Profilbild eines Characters (geteilt von
-    /play/self-Logik, genutzt von /play/others)."""
+    """Mood + status bars + conditions + profile image of a character (shared
+    with the /play/self logic, used by /play/others) — plus the place it holds
+    (plan-posen-plaetze.md § 7: the presence list shows "in the armchair"):
+    ``place_label`` is the bare label, ``place_group`` the place type the
+    client picks its localized preposition by; both "" when nothing is held."""
+    from app.core import places
     from app.models.character import (get_effective_activity,
                                       get_character_current_feeling,
                                       get_character_profile_image)
     blk = {"name": name, "mood": "", "activity": "", "status_effects": {},
-           "bar_meta": {}, "conditions": [], "profile_image": ""}
+           "bar_meta": {}, "conditions": [], "profile_image": "",
+           "place_label": "", "place_group": ""}
     try:
         blk["mood"] = get_character_current_feeling(name) or ""
     except Exception:
         pass
     try:
         blk["activity"] = get_effective_activity(name) or ""
+    except Exception:
+        pass
+    try:
+        held = places.place_of(name)
+        if held and held["group"] != "stand":
+            blk["place_label"] = held["label"]
+            blk["place_group"] = held["group"]
     except Exception:
         pass
     try:

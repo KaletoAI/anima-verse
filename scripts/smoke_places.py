@@ -184,6 +184,43 @@ Hand-derived expectations:
       display label of its own). Eve with an empty current_room →
       {"room_id": "", "places": []} (restored afterwards).
 
+  [9] A seat NEVER evicts (review fix). set_character_pos derives the
+      location from the point, so a slot outside the boundary would throw
+      the sitter out of the house. (a) An UNPLACED second location "Smoke
+      Shed" (no pin) with a seat marker has room_places == [] — its
+      recipe-local metres are no world frame. (b) The lounge gains
+      s5  group seat, at (12, 1), capacity 2, spacing 0.6, facing 0
+          → slots (8 − 0.3, −3) = (7.7, −3) and (8.3, −3): beyond the
+          house's 5 m boundary, inside(house, 7.7, −3) is False (s1's
+          (−3, −3) is inside). Ann (at (−3.5, −3.5)) takes s5 by preference:
+      the profile carries {s5, 0, lounge}, s5 counts as occupied, but her
+      position stays (−3.5, −3.5) and where() still says the lounge. With
+      s2 full (Dan/0, Eve/1) and s1 seating one, s5 is the only place a pair
+      fits: assign_pair(Bob, Cid) returns it, both hold {s5, pair}, nobody
+      moved, and its centre (8, −3) is outside — the interaction engine asks
+      inside() before it moves a partner.
+  [10] A room change stands the character up (§ 3.5, § 10): Ann on s1,
+      save_character_current_room("Ann", "lounge") (same room) keeps the
+      seat; "den" → place None and s1 free; back to the lounge.
+  [11] The "Anywhere" line is capped (controller ruling): a catalog variant
+      with 10 stand poses — standing (default) + st01…st09 — lists the
+      default, then 7 more in poses_in_group order (alphabetical after the
+      default), then "…and 2 more (any pose key works)":
+        Anywhere here: standing, st01, st02, st03, st04, st05, st06, st07,
+        …and 2 more (any pose key works)
+      Base catalog (one stand pose): "Anywhere here: standing", no suffix.
+  [12] Place lines are capped at 12: room_places stubbed (stage-6b pattern)
+      with 13 prop-sourced seats "Chair 1" … "Chair 13" (distinct labels →
+      13 rows) → header, 12 rows, "…and 1 more", "Anywhere here: standing"
+      = 15 lines (the den has no activity_hint); row 12 is
+      "- Chair 12 (free): sitting, reading", Chair 13 appears nowhere.
+  [13] place_phrase — the preposition per group: Ann sitting on s1 (seat)
+      → "on the seat"; scene_render._pose_hint("Ann") = "p, on the seat"
+      (catalog prompt "p", no flavor) and system_prompt_builder
+      ._presence_suffix("Ann") = " (sitting, on the seat)"; sleeping on b1
+      (bed) → "in the bed" while place_label stays "Bed"; Fay holds nothing
+      → "" and her suffix names no place.
+
 Usage:  ./.venv/bin/python scripts/smoke_places.py
 """
 import json
@@ -779,6 +816,112 @@ save_character_current_room("Eve", "")
 r = play_route._play_places_sync()
 check("no room → empty answer", r == {"room_id": "", "places": []}, str(r))
 save_character_current_room("Eve", "lounge")
+
+# ── [9] a seat never evicts: unplaced locations and markers out of bounds ──
+print("\n[9] a seat never evicts")
+SHED = add_location(name="Smoke Shed", description="unplaced", rooms=[{"id": "bay", "name": "Bay"}])["id"]
+_data = _load_world_data()
+for _loc in _data["locations"]:
+    if _loc["id"] == SHED:
+        _loc["rooms"][0]["layout"] = {"x": -4, "y": -4, "w": 8, "d": 6,
+                                      "markers": [{"id": "x1", "group": "seat", "at": [1, 1]}]}
+_save_world_data(_data)
+places.invalidate()
+check("an unplaced location has no places", places.room_places(SHED, "bay") == [],
+      str(places.room_places(SHED, "bay")))
+check("… while its neighbour keeps its three", len(places.room_places(HOUSE, "lounge")) == 3)
+S5 = {"id": "s5", "group": "seat", "at": [12, 1], "capacity": 2, "spacing_m": 0.6, "rotation": 0}
+write_layout(MARKERS + [S5])
+places.invalidate()
+for _n in ("Ann", "Bob", "Cid", "Dan", "Eve", "Fay"):
+    clear_pose_intent(_n)
+    set_character_pos(_n, -3.5, -3.5)
+s5 = next(p for p in places.room_places(HOUSE, "lounge") if p["id"] == "s5")
+check("s5 slots (7.7, −3), (8.3, −3) — beyond the 5 m boundary",
+      s5["slots"] == [[7.7, -3.0], [8.3, -3.0]], str(s5["slots"]))
+check("inside(): the slot lies in no location", not places.inside(HOUSE, 7.7, -3.0))
+check("inside(): s1's slot does", places.inside(HOUSE, -3.0, -3.0))
+check("Ann takes s5 by preference", places.assign("Ann", "sitting", prefer="s5") == field("s5", 0))
+check("… her profile carries the seat", get_character_profile("Ann").get("place") == field("s5", 0))
+check("… but she was NOT moved out of the house",
+      get_character_pos("Ann") == {"x": -3.5, "z": -3.5} and places.where("Ann") == (HOUSE, "lounge"),
+      f'{get_character_pos("Ann")} {places.where("Ann")}')
+check("… and s5 counts as occupied", places.occupancy(HOUSE, "lounge").get("s5") == [("Ann", 0)])
+places.release("Ann")
+check("Dan → s2/0, Eve → s2/1 (s2 full, s1 seats one: only s5 fits a pair)",
+      places.assign("Dan", "sitting", prefer="s2") == field("s2", 0)
+      and places.assign("Eve", "sitting", prefer="s2") == field("s2", 1))
+r = places.assign_pair("Bob", "Cid", "cuddling")
+check("assign_pair takes s5 too — it moves nobody", r is not None and r[0]["id"] == "s5"
+      and get_character_profile("Bob").get("place") == {"id": "s5", "slot": "pair", "room_id": "lounge"}
+      and get_character_pos("Bob") == {"x": -3.5, "z": -3.5}, str(r))
+check("… and says the anchor lies outside", r is not None and not places.inside(HOUSE, *places.centre_of(r[0])))
+places.release_pair("Bob", "Cid")
+places.release("Dan")
+places.release("Eve")
+
+# ── [10] a room change stands the character up ──────────────────────────
+print("\n[10] a room change releases the place")
+write_layout(MARKERS)
+places.invalidate()
+check("Ann → s1", places.assign("Ann", "sitting", prefer="s1") == field("s1", 0))
+save_character_current_room("Ann", "lounge")
+check("the same room again keeps the seat", get_character_profile("Ann").get("place") == field("s1", 0))
+save_character_current_room("Ann", "den")
+check("another room: place None", get_character_profile("Ann").get("place") is None,
+      str(get_character_profile("Ann").get("place")))
+check("… and s1 is free", "s1" not in places.occupancy(HOUSE, "lounge"))
+save_character_current_room("Ann", "lounge")
+
+# ── [11] the Anywhere line is capped ────────────────────────────────────
+print("\n[11] the Anywhere line is capped")
+_variant = json.loads(json.dumps(BASE_CATALOG))
+for _i in range(1, 10):
+    _variant["entries"][f"st{_i:02d}"] = {"prompt": "p", "animation": "idle", "group": "stand"}
+(CAT / "pose_catalog.json").write_text(json.dumps(_variant), encoding="utf-8")
+pose_catalog.reload_catalogs()
+places.invalidate()
+offer = places.room_offer("Fay", HOUSE, "lounge")
+anywhere = next((ln for ln in offer.split("\n") if ln.startswith("Anywhere here:")), "")
+check("10 stand poses: the default, 7 more, then '…and 2 more'",
+      anywhere == "Anywhere here: standing, st01, st02, st03, st04, st05, st06, st07, "
+                  "…and 2 more (any pose key works)", repr(anywhere))
+(CAT / "pose_catalog.json").write_text(json.dumps(BASE_CATALOG), encoding="utf-8")
+pose_catalog.reload_catalogs()
+places.invalidate()
+offer = places.room_offer("Fay", HOUSE, "lounge")
+check("one stand pose: no cap suffix", "Anywhere here: standing" in offer.split("\n"), repr(offer))
+
+# ── [12] the place lines are capped at 12 ───────────────────────────────
+print("\n[12] the place lines are capped at 12")
+places.room_places = lambda loc, room: (
+    [prop_place(f"c{i}/s", f"Chair {i}", 1) for i in range(1, 14)]
+    if room == "den" else _orig_room_places(loc, room))
+try:
+    offer = places.room_offer("Fay", HOUSE, "den")
+finally:
+    places.room_places = _orig_room_places
+lines = offer.split("\n")
+check("header + 12 rows + '…and 1 more' + Anywhere", len(lines) == 15, str(len(lines)))
+check("row 12 is Chair 12", lines[12] == "- Chair 12 (free): sitting, reading", repr(lines[12]))
+check("then '…and 1 more'", lines[13] == "…and 1 more", repr(lines[13]))
+check("Chair 13 is not listed", not any("Chair 13" in ln for ln in lines))
+
+# ── [13] the phrase a prompt reads: preposition per group ───────────────
+print("\n[13] the phrase a prompt reads")
+from app.core.scene_render import _pose_hint  # noqa: E402
+from app.core.system_prompt_builder import _presence_suffix  # noqa: E402
+set_pose_intent("Ann", "sitting")
+check("Ann on s1: 'on the seat'", places.place_phrase("Ann") == "on the seat", repr(places.place_phrase("Ann")))
+check("_pose_hint ends with it", _pose_hint("Ann").endswith(", on the seat"), repr(_pose_hint("Ann")))
+check("_presence_suffix ends with it", _presence_suffix("Ann").endswith(", on the seat)"),
+      repr(_presence_suffix("Ann")))
+set_pose_intent("Ann", "sleeping")
+check("Ann on b1: 'in the bed'", places.place_phrase("Ann") == "in the bed", repr(places.place_phrase("Ann")))
+check("place_label stays the bare label", places.place_label("Ann") == "Bed")
+check("Fay (no place): ''", places.place_phrase("Fay") == "" and _presence_suffix("Fay").count("the") == 0,
+      repr(_presence_suffix("Fay")))
+clear_pose_intent("Ann")
 
 # ── summary ─────────────────────────────────────────────────────────────
 print()

@@ -307,14 +307,12 @@ def _load_presence_in_the_open(character_name: str) -> tuple:
 
 
 def _presence_suffix(other: str) -> str:
-    """`` (reading, in the seat)`` — the activity the others see and the
-    place held (``places.place_label``); ``""`` when there is neither."""
+    """`` (reading, on the sofa)`` — the activity the others see and the
+    place held (``places.place_phrase``, the group's own preposition);
+    ``""`` when there is neither."""
     from app.core import places
     from app.models.character import get_effective_activity
-    bits = [get_effective_activity(other) or ""]
-    lbl = places.place_label(other)
-    if lbl:
-        bits.append(f"in the {lbl.lower()}")
+    bits = [get_effective_activity(other) or "", places.place_phrase(other)]
     bits = [b for b in bits if b]
     return f" ({', '.join(bits)})" if bits else ""
 

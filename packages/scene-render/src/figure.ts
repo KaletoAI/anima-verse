@@ -3,10 +3,12 @@
  * renderers (§ A4 / § A16.9).
  *
  * A marker names the SURFACE: the seat of a bench, the mattress of a bed.
- * WHERE the body touches that surface is a property of the CLIP, and it is
- * nowhere near the feet — a seated body touches at the buttocks. The scene
- * payload therefore ships `root_offset` beside every marker (world metres,
- * `FIGURE_ROOT_DROP × 1.70 m` on the server), and the consumer subtracts it:
+ * WHERE the body touches that surface is a property of the PLACE TYPE, and
+ * it is nowhere near the feet — a seated body touches at the buttocks. The
+ * scene payload therefore ships `root_offset` beside every marker (world
+ * metres: the pose catalog's `groups[group].root_drop × 1.70 m`, computed
+ * by the server — the catalog is the ONE source, there is no table here or
+ * in the recipe), and the consumer subtracts it:
  *
  *     figure root y = surface y − root drop
  *
@@ -33,40 +35,31 @@
  *     0.144 m too high and a lying figure 0.842 m too low — the sit case is
  *     what the user saw as "the figure is not where I put the marker".
  *
- * So: the drop comes from the DATA (the payload's `root_offset`, or the
- * shared table for a viewer with no payload), and the anchor is the bind
- * pose. No renderer measures a pose to decide a height.
+ * So: the drop comes from the DATA — the payload's `root_offset`, or for a
+ * viewer with no payload (the prop tab renders one prop, not a scene) the
+ * catalog group's `root_drop` × its figure height, fetched by the caller —
+ * and the anchor is the bind pose. No renderer measures a pose to decide a
+ * height, and none carries a kind → drop table of its own (the shadow copy
+ * that lived here was deleted 2026-08-28: it had already drifted from the
+ * catalog's groups).
  */
 import type { Object3D } from 'three'
-import { rootDropFor } from './types'
 
 /** The figure of this contract: 1.70 m, everywhere and always (§ A3). */
 export const FIGURE_HEIGHT_M = 1.7
 
 /**
- * How far below a marked surface the figure's ROOT belongs, in the same unit
- * as `figureHeight`.
+ * The y a figure's bind-pose root sits at, for a marker naming `surfaceY`.
  *
- * `payloadOffset` is the scene payload's own `root_offset` and wins whenever
- * it is present — the server has already multiplied the clip's share by the
- * figure height, and a consumer that recomputes it is a second opinion. A
- * viewer without a payload (the prop tab renders one prop, not a scene) passes
- * nothing and gets the shared table instead, which is the very table the
- * server composed with.
+ * `rootOffset` is the ONLY input: the scene payload's own `root_offset`
+ * (already the group's share × the figure height, in the caller's unit), or
+ * what a payload-less viewer computed from the catalog group. Absent or
+ * not a number = 0, the root on the surface — a standing spot, or a marker
+ * whose group the caller does not know yet.
  */
-export function figureRootDrop(figureHeight: number, animation?: string,
-                               payloadOffset?: number | null): number {
-  if (typeof payloadOffset === 'number' && Number.isFinite(payloadOffset)) {
-    return payloadOffset
-  }
-  return rootDropFor(animation) * figureHeight
-}
-
-/** The y a figure's bind-pose root sits at, for a marker naming `surfaceY`. */
-export function figureRootY(surfaceY: number, figureHeight: number,
-                            animation?: string,
-                            payloadOffset?: number | null): number {
-  return surfaceY - figureRootDrop(figureHeight, animation, payloadOffset)
+export function figureRootY(surfaceY: number, rootOffset?: number | null): number {
+  const drop = typeof rootOffset === 'number' && Number.isFinite(rootOffset) ? rootOffset : 0
+  return surfaceY - drop
 }
 
 /**

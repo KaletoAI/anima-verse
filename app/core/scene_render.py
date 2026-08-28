@@ -296,8 +296,9 @@ def _person_image_path(name: str) -> Optional[Path]:
 
 def _pose_hint(name: str, skip_activity: bool = False) -> str:
     """Pose hint for the scene prompt: catalog prompt + sanitized flavor +
-    the place held ("on the bed"; a standing spot names nothing). All are
-    bounded at the source - no emergency trimming here."""
+    the place held (``places.place_phrase``: "on the sofa", "in the bed";
+    a standing spot names nothing). All are bounded at the source - no
+    emergency trimming here."""
     from app.core import places
     from app.models.character import get_effective_pose_key, get_character_pose_flavor
     from app.core.expression_pose_maps import get_pose_prompt
@@ -308,9 +309,7 @@ def _pose_hint(name: str, skip_activity: bool = False) -> str:
     flavor = "" if skip_activity else get_character_pose_flavor(name)
     if flavor:
         parts.append(flavor)
-    label = places.place_label(name)
-    if label:
-        parts.append(f"on the {label.lower()}")
+    parts.append(places.place_phrase(name))
     return ", ".join(p for p in parts if p)
 
 

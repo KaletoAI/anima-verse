@@ -2024,6 +2024,11 @@ def save_character_current_room(character_name: str, room_id: str,
     old_room = profile.get("current_room", "")
     cur_loc = profile.get("current_location", "")
     profile["current_room"] = room_id
+    if room_id != old_room:
+        # A place is per room (plan-posen-plaetze.md § 3.5): whoever leaves
+        # the room stands up from its seat — in the SAME profile write, so
+        # no reader ever sees the lounge's armchair held from the kitchen.
+        profile["place"] = None
     save_character_profile(character_name, profile)
 
     # AV3D-3: room-change push (within-location moves; cross-location moves
@@ -2037,8 +2042,8 @@ def save_character_current_room(character_name: str, room_id: str,
         except Exception:
             pass
 
-    # state_history-Event bei echtem Raumwechsel — sonst sind Raum-Aenderungen
-    # in der Diary/Activity-Auswertung unsichtbar (frueher nur location getrackt).
+    # state_history event on a real room change — otherwise room changes stay
+    # invisible to the diary/activity evaluation (only the location used to be tracked).
     if room_id and room_id != old_room:
         # The character's own language — these lines are narrated about it and
         # stored in its history, and the ground's default word is translated.
@@ -2047,9 +2052,9 @@ def save_character_current_room(character_name: str, room_id: str,
         _record_state_change(character_name, "room", room_id,
                               metadata={"name": room_name, "old": old_room})
         # C1: movement trace (storyteller) on a room change WITHIN the same
-        # Location. Guard: beide Räume gehören zum aktuellen Ort → so wird der
-        # Raum-Reset während eines Cross-Location-Moves (alter Raum gehört dann
-        # zum alten Ort) NICHT fälschlich als Raumwechsel getrackt.
+        # location. Guard: both rooms belong to the current location, so the
+        # room reset during a cross-location move (the old room belongs to the
+        # old location then) is NOT mistaken for a room change.
         if old_room and _room_in_location(old_room, cur_loc) \
                 and _room_in_location(room_id, cur_loc):
             _old_rn = _room_name_for(old_room, cur_loc, _lang)
@@ -2060,12 +2065,12 @@ def save_character_current_room(character_name: str, room_id: str,
             _suggest_follow_after_move(character_name, cur_loc, old_room,
                                        cur_loc, room_id, room_name)
 
-        # Party-Mitziehen (Raum): wechselt der Leader den Raum, ziehen alle
-        # Follower in denselben Raum mit. _party_drag verhindert Rekursion.
+        # Party drag (room): when the leader changes room, every follower is
+        # pulled into the same room. _party_drag prevents recursion.
         if not _party_drag:
             _drag_party_followers_to_room(character_name, room_id)
 
-    # Decency-Compliance nur bei echtem Raumwechsel + Avatar ausnehmen
+    # Decency compliance only on a real room change, and never for the avatar
     if not room_id or room_id == old_room:
         return
     try:
@@ -2077,7 +2082,7 @@ def save_character_current_room(character_name: str, room_id: str,
     except Exception as _e:
         from app.core.log import get_logger
         get_logger("character_model").debug(
-            "Outfit-Compliance bei Raumwechsel fehlgeschlagen: %s", _e)
+            "outfit compliance on room change failed: %s", _e)
 
 
 def get_character_current_feeling(character_name: str) -> str:

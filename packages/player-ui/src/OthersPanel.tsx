@@ -21,10 +21,31 @@ interface CharState {
   bar_meta: Record<string, BarMeta>
   conditions: Array<{ name?: string; label?: string; icon?: string }>
   profile_image: string
+  /** The place held (plan-posen-plaetze.md § 7) — the bare label and its
+   *  place type; both "" when nothing (or only a standing spot) is held. */
+  place_label?: string
+  place_group?: string
   in_party?: boolean
   relation?: Relation | null
 }
 interface Others { avatar: string; characters: CharState[] }
+
+/** The preposition per place type — "reading, in the armchair"; a place
+ *  type not listed (an admin-made one) reads "at the". English source
+ *  strings, localized through t(); the server's own English phrase for the
+ *  LLM (`places.place_phrase`) uses the same words. */
+const PLACE_PREPOSITION: Record<string, string> = {
+  seat: 'on the', bed: 'in the', floor: 'on the', counter: 'at the',
+}
+
+/** "reading, in the armchair" — activity and place, either alone when the
+ *  other is missing, "" when both are. */
+function whereabouts(c: CharState, t: (s: string) => string): string {
+  const place = c.place_label
+    ? `${t(PLACE_PREPOSITION[c.place_group || ''] || 'at the')} ${c.place_label.toLowerCase()}`
+    : ''
+  return [c.activity, place].filter(Boolean).join(', ')
+}
 
 function portraitUrl(c: CharState): string {
   return c.profile_image
@@ -121,7 +142,7 @@ export function OthersPanel() {
                 {c.name}{c.in_party ? <span title={t('In your party')} style={{ marginLeft: 4 }}>👥</span> : null}
               </div>
               {c.mood && <div style={{ opacity: 0.6, fontSize: '0.78em', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.mood}</div>}
-              {c.activity && <div style={{ opacity: 0.55, fontSize: '0.74em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.activity}</div>}
+              {whereabouts(c, t) && <div title={whereabouts(c, t)} style={{ opacity: 0.55, fontSize: '0.74em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{whereabouts(c, t)}</div>}
               <RelationLine c={c} t={t} />
             </div>
           </div>

@@ -619,20 +619,3 @@ export interface ScenePayload {
   // and say nothing.
 }
 
-/**
- * WHICH clip kinds are seated — the poses whose contact point is not the
- * lowest edge of the body, and by how much of the figure height.
- *
- * THE TABLE IS THE ANSWER, for every consumer alike: the server multiplies it
- * by 1.70 m into each marker's `root_offset`, and a renderer with no payload
- * (the prop viewer shows ONE prop, not a scene) reads it straight. Nobody
- * measures a posed skeleton for this any more — see `figure.ts` for what that
- * cost. Numbers measured on x-bot.fbx + the clips; the server's own copy is
- * `FIGURE_ROOT_DROP` in `app/core/scene_recipe.py`.
- */
-export const FIGURE_ROOT_DROP: Record<string, number> =
-  { sit: 0.314, sleep: 0.631, laying: 0.051, lie: 0.051 }
-
-/** The drop for one clip kind (0 = the root sits on the surface). */
-export const rootDropFor = (animation?: string) =>
-  FIGURE_ROOT_DROP[(animation || '').trim().toLowerCase()] ?? 0

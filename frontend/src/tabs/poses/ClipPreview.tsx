@@ -24,7 +24,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Object3D } from 'three'
-import { anchorFigureBind } from '@anima/scene-render'
+import { anchorFigureBind, pairYaw } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { loadTestFigure } from '../characters/Model3DViewer'
@@ -61,13 +61,6 @@ const MARKER_BOX: Record<string, MarkerBox> = {
 
 function markerBox(group?: string): MarkerBox | undefined {
   return MARKER_BOX[(group || '').trim().toLowerCase()]
-}
-
-/** Y rotation (radians) of the clip frame on the marker — the server's rule
- *  (`app/core/places.py: pair_yaw`) with the preview's marker facing SOUTH
- *  (compass 0): clip +X (A → B) falls along `facing − 90° + yaw_offset`. */
-function pairYaw(yawOffsetDeg: number): number {
-  return ((0 - 90 + yawOffsetDeg) * Math.PI) / 180
 }
 
 interface ApiClip { kind: string; role?: string; set?: string; url: string }
@@ -328,7 +321,9 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
             // yaw_offset, and its origin sits `root_drop × 1.70` under the
             // MARKED SURFACE — the box top for a body the figures rest on,
             // the ground plane for furniture they only stand at.
-            frame.rotation.y = pairYaw(yawRef.current || 0)
+            // The server's rule (`places.pair_yaw`, shared mirror) with the
+            // preview's virtual marker facing SOUTH (compass 0).
+            frame.rotation.y = pairYaw(0, yawRef.current || 0)
             frame.position.y = (seat.support ? seat.size[1] : 0)
               - (dropRef.current || 0) * FIGURE_H
           }

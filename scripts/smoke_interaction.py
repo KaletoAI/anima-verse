@@ -113,6 +113,18 @@ Hand-derived expectations:
       90° + 0.3·sin 90° = 10.3, z = 22 − 0·sin 90° + 0.3·cos 90° = 22 →
       (10.3, 22); slot 1 (9.7, 22); facing 90 + 90 = 180.
 
+  [9b] A marker OUTSIDE the boundary seats without moving (review fix,
+      "a seat never evicts"): "edge" at room-local (15.5, 5), capacity 2,
+      rotation 90 → world (10 − 5 + 15.5, 22) = (20.5, 22), slots (20.5,
+      22.3) + (20.5, 21.7) — half a metre past the plaza's boundary edge
+      x = 20, so places.inside(plaza, 20.5, 22) is False. Ann (19, 21) +
+      Bob (19, 23) — 1.8 m from the anchor, within MAX_START_DISTANCE_M —
+      with Cid on spot/0 (spot cannot take two) start "embracing": the
+      anchor is the edge centre (20.5, 22) with place_id "edge", both hold
+      {edge, pair}, but the partner points (20.2, 22)/(20.8, 22) lie
+      outside, so set_character_pos is skipped: Ann stays (19, 21), Bob
+      (19, 23), both still in the square. The marker is removed afterwards.
+
 Usage:  ./.venv/bin/python scripts/smoke_interaction.py
 """
 import json
@@ -468,6 +480,45 @@ check("neither partner holds a place (a pair pose never takes a solo slot)",
       f'{get_character_profile("Ann").get("place")} {get_character_profile("Bob").get("place")}')
 check("… and the spot's free slot stays free for a third",
       places.occupancy(PLAZA, "square").get("spot") == [("Cid", 0)])
+
+# [9b] a marker outside the boundary seats the pair without moving anybody
+ie.end_interaction("Ann")
+clear_pose_intent("Cid")
+_data = _load_world_data()
+for _loc in _data["locations"]:
+    if _loc["id"] == PLAZA:
+        _loc["rooms"][0]["layout"]["markers"].append(
+            {"id": "edge", "group": "stand", "at": [15.5, 5], "capacity": 2, "rotation": 90})
+_save_world_data(_data)
+places.invalidate()
+PL = {p["id"]: p for p in places.room_places(PLAZA, "square")}
+check("edge: world (20.5, 22) — 0.5 m past the boundary's x = 20",
+      PL.get("edge", {}).get("slots") == [[20.5, 22.3], [20.5, 21.7]], str(PL.get("edge")))
+check("inside() says so", not places.inside(PLAZA, 20.5, 22.0) and places.inside(PLAZA, 19.0, 21.0))
+set_character_pos("Ann", 19.0, 21.0)
+set_character_pos("Bob", 19.0, 23.0)
+check("Cid holds spot/0 again (spot cannot take two)",
+      places.assign("Cid", "standing", prefer="spot") == {"id": "spot", "slot": 0, "room_id": "square"})
+inter = ie.start_interaction("Ann", "Bob", "embracing")
+anchor = inter["anchor"]
+check("anchor is the edge marker's centre (20.5, 22), place_id edge",
+      near(anchor["x"], 20.5) and near(anchor["z"], 22) and anchor.get("place_id") == "edge", str(anchor))
+check("both hold {edge, pair}",
+      get_character_profile("Ann").get("place") == {"id": "edge", "slot": "pair", "room_id": "square"}
+      and get_character_profile("Bob").get("place") == {"id": "edge", "slot": "pair", "room_id": "square"})
+check("nobody was moved out of the plaza: Ann (19, 21), Bob (19, 23), both still in the square",
+      get_character_pos("Ann") == {"x": 19.0, "z": 21.0} and get_character_pos("Bob") == {"x": 19.0, "z": 23.0}
+      and places.where("Ann") == (PLAZA, "square") and places.where("Bob") == (PLAZA, "square"),
+      f'{get_character_pos("Ann")} {get_character_pos("Bob")} {places.where("Ann")}')
+ie.end_interaction("Ann")
+clear_pose_intent("Cid")
+_data = _load_world_data()
+for _loc in _data["locations"]:
+    if _loc["id"] == PLAZA:
+        _loc["rooms"][0]["layout"]["markers"] = [
+            m for m in _loc["rooms"][0]["layout"]["markers"] if m["id"] != "edge"]
+_save_world_data(_data)
+places.invalidate()
 ie.end_interaction("Ann")
 clear_pose_intent("Cid")
 

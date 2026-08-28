@@ -7913,7 +7913,9 @@ tilt?, roll?, source}`. Platz-ID = Raum-Marker-ID bzw.
 `"<placement.id>/<marker.id>"`; `label` = Platzierungs-Label, sonst Prop-Name,
 sonst Gruppen-Label. `root_offset = groups[group].root_drop × 1,70` auf
 Millimeter gerundet — die Tabelle `FIGURE_ROOT_DROP` im Szenen-Rezept ist
-gelöscht, der Katalog ist die EINE Quelle. Ein Marker, dessen Gruppe der
+gelöscht (ebenso ihre Schattenkopie in `@anima/scene-render`, 2026-08-28:
+`figureRootY(surfaceY, rootOffset)` kennt nur noch den Payload-Wert), der
+Katalog ist die EINE Quelle. Ein Marker, dessen Gruppe der
 Katalog nicht kennt, ist kein Platz und fehlt im Payload.
 
 **Slots — Geometrie nur im Rezept** (`scene_recipe.marker_slots`, rein):
