@@ -215,6 +215,10 @@ export function applyVariantDraft<T extends VariantDraftFields>(
       const ft = patch.face_targets as Record<string, number | null>
       if ('target_faces_high' in ft) out.target_faces_high = ft.target_faces_high
       if ('target_faces_low' in ft) out.target_faces_low = ft.target_faces_low
+      // The nested patch key itself has no business on a RECORD — it is a
+      // batch-body shape, and a reader looking for `target_faces_low` must not
+      // find a second, stale copy of it under another name.
+      delete (out as Record<string, unknown>).face_targets
     }
     return out
   })

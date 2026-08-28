@@ -59,6 +59,8 @@
  * typed number is on screen and in the 3D preview long before it is stored.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { faceFor } from '../../components/faceBudget'
+import { DEFAULT_MODEL_TIER } from '../../components/ModelGallery'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
 import { SliderInput } from '../../components/SliderInput'
@@ -87,11 +89,13 @@ const FACE_FIELDS: Array<{
   placeholder: (backendFaces: number, t: (s: string) => string) => string
 }> = [
   { key: 'high', label: '△ High', title: 'Triangles this variant’s close-up mesh should cost. Empty = whatever the picked backend uses by default. The generate dialog opens on this number and the automatic improvement re-meshes to it; above the backend’s own ceiling the run is clamped and the gallery row says so.',
-    placeholder: (faces, t) => (faces ? String(faces) : t('backend default')) },
+    // The dialog's own rule, imported rather than restated: the number the
+    // admin sees here and the number a run starts on must be one function.
+    placeholder: (faces, t) => (faces
+      ? faceFor(DEFAULT_MODEL_TIER, faces) : t('backend default')) },
   { key: 'low', label: '△ Low', title: 'Triangles this variant’s DISTANCE mesh should cost. Empty = the configured reduction fraction decides. Given, the server reduces to exactly this budget — it divides it by the full mesh’s own triangle count to get the Decimate ratio.',
     placeholder: (faces, t) => (faces
-      ? String(Math.max(500, Math.round(faces * 0.25 / 500) * 500))
-      : t('LOD ratio')) },
+      ? faceFor('low', faces) : t('LOD ratio')) },
 ]
 
 /** The window the server accepts a budget in (`props.FACE_TARGET_MIN/MAX`) —

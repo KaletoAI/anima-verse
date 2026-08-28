@@ -39,6 +39,10 @@ export function PropsTab() {
   const [genVariants, setGenVariants] = useState<Record<string, number[]>>({})
   const [imageBackends, setImageBackends] = useState<ImageBackendInfo[]>([])
   const [meshBackends, setMeshBackends] = useState<MeshBackendInfo[]>([])
+  // The admin's configured img2mesh alias ('' = none). What a run would
+  // really start on, and therefore whose face count the variants' budget
+  // fields show as their placeholder (v2 E5).
+  const [meshDefault, setMeshDefault] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [selected, setSelected] = useState('')
   const [armedDel, setArmedDel] = useState('')
@@ -92,13 +96,15 @@ export function PropsTab() {
     try {
       const d = await apiGet<{ props?: PropFull[]; pending?: string[]
         generating_variants?: Record<string, number[]>
-        image_backends?: ImageBackendInfo[]; mesh_backends?: MeshBackendInfo[] }>(
+        image_backends?: ImageBackendInfo[]; mesh_backends?: MeshBackendInfo[]
+        mesh_default?: string }>(
         '/world/props')
       setProps(d.props || [])
       setPending(d.pending || [])
       setGenVariants(d.generating_variants || {})
       setImageBackends(d.image_backends || [])
       setMeshBackends(d.mesh_backends || [])
+      setMeshDefault(d.mesh_default || '')
       setLoaded(true)
       return d
     } catch {
@@ -287,12 +293,14 @@ export function PropsTab() {
             onRegenerateImage={(variant, image, subject) =>
               setImgRegen({ prop: selectedProp, variant, image, subject })}
             onGenerating={startPoll}
-            // The face count a mesh backend would use of its own accord — the
-            // PLACEHOLDER behind the variants' budget fields (v2 E5). Read off
-            // the first backend that declares one: the strip only needs to say
-            // what happens when the field is left empty, and no backend is
-            // picked until a run is started.
-            backendFaces={meshBackends.find((b) => b.face_num)?.face_num || 0}
+            // The face count a run would really start on — the PLACEHOLDER
+            // behind the variants' budget fields (v2 E5). The admin's
+            // CONFIGURED alias, because that is the one an unqualified run
+            // picks; the first backend that declares a count stands in where
+            // none is configured, so the field still says a number instead of
+            // going quiet.
+            backendFaces={meshBackends.find((b) => b.name === meshDefault)?.face_num
+              || meshBackends.find((b) => b.face_num)?.face_num || 0}
             onDirtyChange={setDirty}
             onRefresh={() => {
               setCacheBump((b) => b + 1)
@@ -308,7 +316,8 @@ export function PropsTab() {
             ? `${t('Re-mesh from the source image')} · ${t('Variant')} ${(regen.variant || 0) + 1}`
             : t('Regenerate prop model — as another variant')}
           backends={meshBackends}
-          defaultBackend={meshBackends.length === 1 ? meshBackends[0].name : ''}
+          defaultBackend={meshDefault
+            || (meshBackends.length === 1 ? meshBackends[0].name : '')}
           generateLabel={regen?.meshOnly ? t('Mesh') : t('Regenerate')}
           // What the addressed variant STATES it should cost (v2 E5) — the
           // dialog opens on it instead of on the backend default, because the
@@ -338,7 +347,11 @@ export function PropsTab() {
                 ...(target.meshOnly ? { mesh_only: true } : {}),
                 ...(opts.face_num ? { face_num: opts.face_num } : {}),
                 ...(opts.texture_size ? { texture_size: opts.texture_size } : {}),
-                ...(opts.lod_faces ? { lod_faces: opts.lod_faces } : {}),
+                // `[]` is a VALUE here, not "nothing" (ruling V9): it is how
+                // the dialog says its stage toggle is off, and the server must
+                // see it or it falls back to the variant's low budget.
+                ...(opts.lod_faces !== undefined
+                  ? { lod_faces: opts.lod_faces } : {}),
                 ...(opts.tier ? { tier: opts.tier } : {}) })
               .then((d) => {
                 toast(d?.status === 'already_running'

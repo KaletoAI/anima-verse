@@ -17,8 +17,9 @@
  * variant 3.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { type FaceTargets } from '../../components/faceBudget'
 import {
-  MeshBackendDialog, type FaceTargets, type MeshBackend, type MeshGenerateOpts,
+  MeshBackendDialog, type MeshBackend, type MeshGenerateOpts,
 } from '../../components/MeshBackendDialog'
 import {
   BuildDistanceMeshButton, DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow,
