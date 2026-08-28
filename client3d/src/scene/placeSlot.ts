@@ -38,6 +38,19 @@ export interface PlaceEntry {
   level: number;
   /** The storey-0 terrain lift already baked into the slot heights. */
   lift: number;
+  /** WHERE that lift is sampled, in WORLD metres (`markerLiftPoint` turned
+   *  into the world at mount time). For a PROP marker that is its
+   *  placement's anchor — the very point the prop mesh itself is lifted at
+   *  (§ A16.9), so the bench and every seat on it rise by the same amount on
+   *  a slope; for a room marker it is the marker's own point. The MOUNT and
+   *  the RE-LIFT (`reliftScene`) both sample here, which is also what stops
+   *  the two from disagreeing on a bench of capacity > 1. */
+  liftAt: { x: number; z: number };
+  /** PROP MARKERS ONLY: the placement's anchor as the payload states it
+   *  (`markers[].anchor`, TILE-LOCAL metres) — the link to the mesh, whose
+   *  `models[]` spec carries the identical `anchor`. That is how a click on
+   *  the prop finds the places on it. */
+  anchor?: [number, number];
 }
 
 /** The point a held place puts the figure on: a numbered slot is that slot

@@ -33,7 +33,7 @@ Cell rule = lowest UP-facing hit with >= 1.2 m of air above it:
                there too -> block top -> 80
 extent_snapped under fix 0/0/0 = [2, 1.6, 2].
 
-THE STEP IS 0,25 WORLD METRES, and the lattice is cast in MODEL units (fix 2026-08-28).
+THE STEP IS 0.25 WORLD METRES, and the lattice is cast in MODEL units (fix 2026-08-28).
 The same fixture baked with target_m = 20, measure 'xz': s = target_m / max(ex, ez) =
 20 / 2 = 10, so step = 0.25 / 10 = 0.025 model units and step_world = 0.025 * 10 = 0.25.
 cols = rows = ceil(2 / 0.025) + 1 = 81 (81*81 = 6561 <= max_cells 40000, so the doubling

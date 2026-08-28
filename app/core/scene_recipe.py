@@ -2589,6 +2589,20 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             "y_world": _r(floor_y + prop_lift + _num(marker.get("height_m"))
                           + _num(placement.get("ground_offset_m"))),
             "root_offset": _root_drop(group),
+            # THE PLACEMENT THIS MARKER BELONGS TO (2026-08-28): its ANCHOR,
+            # the very ``[u, v]`` the prop's own spec carries. Two jobs, one
+            # number, and both need it to be the placement's point rather
+            # than the marker's:
+            #   - the storey-0 terrain lift (§ A16.9). A placement is put on
+            #     the ground under its own anchor; a seat on it was lifted at
+            #     its OWN point, decimetres away, and on a slope that is a
+            #     different height — the sitter floated over or sank into the
+            #     bench by the relief between the two. One prop, one ground.
+            #   - the LINK marker → mesh. Nothing else in the payload names
+            #     it (``models[].id`` is the PROP id, shared by every copy),
+            #     and a renderer that lets the prop take the seat's click has
+            #     to know which mesh belongs to which place.
+            "anchor": [_r(_num(at[0])), _r(_num(at[1]))],
             "source": "prop",
         }
         if facing is not None:

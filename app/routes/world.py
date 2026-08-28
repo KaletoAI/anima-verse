@@ -1519,7 +1519,9 @@ def room_model3d_file(location_id: str, room_id: str, filename: str, request: Re
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/rotation")
 async def room_model3d_rotation(location_id: str, room_id: str,
-                                request: Request) -> Dict[str, Any]:
+                                request: Request,
+                                _: Dict[str, Any] = Depends(require_admin),
+                                ) -> Dict[str, Any]:
     """Persist a room model's orientation fix ({x,y,z} in 90-degree steps;
     optional {file} targets a stored model, default the active one) — same
     contract as the building model."""
@@ -1546,7 +1548,9 @@ def _room_model3d_rotation_sync(location_id: str, room_id: str,
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/walk_y")
 async def room_model3d_walk_y(location_id: str, room_id: str,
-                              request: Request) -> Dict[str, Any]:
+                              request: Request,
+                              _: Dict[str, Any] = Depends(require_admin),
+                              ) -> Dict[str, Any]:
     """Persist a room model's WALKABLE floor height (body: {walk_y} in world
     metres above the diorama's final lower edge, 0..5; empty/null removes it;
     optional {file}). Diorama floors are modelled — podiums, sunken lounges
@@ -1589,7 +1593,9 @@ def room_model3d_surface(location_id: str, room_id: str,
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/width")
 async def room_model3d_width(location_id: str, room_id: str,
-                             request: Request) -> Dict[str, Any]:
+                             request: Request,
+                             _: Dict[str, Any] = Depends(require_admin),
+                             ) -> Dict[str, Any]:
     """Persist a room model's real-world width in metres (body: {width_m},
     0/empty = undeclared; optional {file}). The admin estimates the
     largest side from the source image; placement stays untouched — the

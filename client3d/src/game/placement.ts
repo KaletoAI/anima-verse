@@ -95,3 +95,83 @@ export function figureTransition(prev: ShownPlacement | null | undefined,
   if (prev.interiorShown !== next.interiorShown) return 'snap';
   return 'route';
 }
+
+/**
+ * WHERE A PLACE MARKER'S TERRAIN LIFT IS SAMPLED — one prop, one ground
+ * (user finding 2026-08-28, the avatar sitting ~40 cm too low on the "Stone
+ * bench" above the cliff).
+ *
+ * A storey-0 placement stands on the ground under its OWN ANCHOR (§ A16.9,
+ * `models[].anchor`). The seat marks ON it used to be lifted at the MARKER's
+ * own point instead — the anchor plus the marker's offset, decimetres away
+ * and, on a slope, at a different height — so the sitter floated over or sank
+ * into the bench by exactly the relief between the two points. The prop and
+ * everything one sits on it are ONE object and are lifted at ONE point.
+ *
+ * @param at     the marker's own point (`markers[].at_world`), tile-local
+ * @param anchor the placement's anchor (`markers[].anchor`) for a prop
+ *               marker; null/absent for a ROOM marker, which has no
+ *               placement and keeps its own point. A non-finite anchor is no
+ *               anchor — a payload that says nothing must not move a seat to
+ *               NaN.
+ *
+ * Always a fresh point: the caller turns it into the world and must not be
+ * able to write back into the payload it came from.
+ *
+ * PURE, and hand-derived in `client3d/scripts/smoke_place_lift.mjs` [1].
+ */
+export function markerLiftPoint(at: FreePoint,
+                                anchor?: FreePoint | null): FreePoint {
+  if (anchor && finite(anchor.x) && finite(anchor.z)) {
+    return { x: anchor.x, z: anchor.z };
+  }
+  return { x: at.x, z: at.z };
+}
+
+/** How much closer a slot has to be to BEAT the leader (metres², i.e. a
+ *  micrometre of distance). Without it the documented "a tie falls to the
+ *  first entry" would be decided by floating-point noise: two slots 0.7 m
+ *  from the hit point differ in the last bit of their squared distance
+ *  depending on which side of the hit they lie on. */
+const PICK_EPS_M2 = 1e-9;
+
+/** One offered place with the slot points that are FREE, for the pick below.
+ *  The points are metres in whatever frame the hit point is measured in
+ *  (the client hands in world metres). */
+export interface PlacePick {
+  id: string;
+  free: FreePoint[];
+}
+
+/**
+ * WHICH PLACE A CLICK ON A PROP OPENS (ruling 2026-08-28).
+ *
+ * Since the prop mesh itself is the click target — rings are left to the
+ * places WITHOUT a prop — one hit object may carry several places (a table
+ * with four chairs' worth of seats, a bunk with two beds). The hit POINT
+ * decides: the place whose nearest FREE slot lies closest to it, so clicking
+ * the left end of a bench offers the left end.
+ *
+ * Plain XZ distance, and a tie falls to the first entry of the list — the
+ * order the payload delivered, so two renderers asked the same question
+ * answer the same place. A place without a free slot can never win; a list in
+ * which nobody has one answers `null` (total, never a throw — the same
+ * contract as `slotFor`).
+ *
+ * PURE, and hand-derived in `client3d/scripts/smoke_place_lift.mjs` [2].
+ */
+export function pickablePlaceFor(hit: FreePoint,
+                                 places: PlacePick[]): string | null {
+  let best: string | null = null;
+  let bestD = Infinity;
+  for (const place of places) {
+    for (const p of place.free) {
+      const d = (p.x - hit.x) * (p.x - hit.x) + (p.z - hit.z) * (p.z - hit.z);
+      if (d < bestD - PICK_EPS_M2) {
+        bestD = d;
+        best = place.id;
+      }
+    }
+  }
+  return best;
+}

@@ -16,6 +16,7 @@ import {
   type SceneWall,
 } from '../api';
 import { roomDoor } from '../game/doors';
+import { markerLiftPoint } from '../game/placement';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
@@ -260,16 +261,19 @@ export function reliftScene(tile: Tile, datumDelta = 0): void {
   // marker object hangs under BOTH the room id and the room name
   // (`mountScene`), hence the identity set: a second pass over it would move
   // it twice.
-  // The lift is ONE number per place, measured at its anchor slot (slot 0 —
-  // the slots are a few decimetres apart, one terrain sample serves them
-  // all), and applied to every slot alike.
+  // The lift is ONE number per place, measured at the place's OWN LIFT POINT
+  // (`liftAt` — for a prop marker its placement's anchor, the point the mesh
+  // itself is lifted at), and applied to every slot alike. It used to be
+  // measured at slot 0, which on a bench of capacity > 1 is neither the
+  // marker's point nor the prop's anchor: mount and re-lift then answered two
+  // different heights for the same seat (finding 2026-08-28).
   const seen = new Set<object>();
   for (const byId of tile.roomMarkers.values()) {
     if (seen.has(byId)) continue;
     seen.add(byId);
     for (const e of byId.values()) {
       if (!e.fixed || !e.slots.length) continue;
-      const step = storeyGroundRelift(e.lift, e.level, e.slots[0].x, e.slots[0].z,
+      const step = storeyGroundRelift(e.lift, e.level, e.liftAt.x, e.liftAt.z,
                                       tile.center.y, worldGroundSampler());
       if (step.delta) for (const s of e.slots) s.y += step.delta;
       e.lift = step.lift;
@@ -1190,15 +1194,24 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     const level = roomLevel.get(id) ?? 0;
     const floorY = floorYof.get(level) ?? 0;
     const offsetY = fixed ? 0 : marker.y_world - floorY;
-    // THE STOREY-0 TERRAIN LIFT of this marker (§ A16.9), at the MARKER'S own
-    // point. It matters for the `fixed` ones: a prop marker is composed from
-    // its prop's bounding box and stays exactly as composed, so if the prop
-    // rises onto its shore and the seat mark does not, the sitter is left in
-    // the air where the chair used to be. A ROOM marker is re-derived from the
-    // room's own floor a few lines further down (`deriveRoomSpots`), which
-    // already samples the terrain per point — there this term is simply
-    // overwritten, never counted twice.
-    const at = tileToWorld(tile, marker.at_world[0], marker.at_world[1], 0);
+    // THE STOREY-0 TERRAIN LIFT of this marker (§ A16.9). It matters for the
+    // `fixed` ones: a prop marker is composed from its prop's bounding box and
+    // stays exactly as composed, so if the prop rises onto its shore and the
+    // seat mark does not, the sitter is left in the air where the chair used
+    // to be. A ROOM marker is re-derived from the room's own floor a few lines
+    // further down (`deriveRoomSpots`), which already samples the terrain per
+    // point — there this term is simply overwritten, never counted twice.
+    //
+    // AND IT IS SAMPLED AT THE PROP'S ANCHOR, not at the marker's own point
+    // (user finding 2026-08-28, the sitter ~40 cm too low on the "Stone
+    // bench"): `reliftPlacement` puts the MESH on the ground under
+    // `spec.anchor`, so a seat lifted anywhere else differs from its bench by
+    // the relief between the two points. `markerLiftPoint` is that choice,
+    // pure and hand-derived (`client3d/scripts/smoke_place_lift.mjs`).
+    const liftPoint = markerLiftPoint(
+      { x: marker.at_world[0], z: marker.at_world[1] },
+      marker.anchor ? { x: marker.anchor[0], z: marker.anchor[1] } : null);
+    const at = tileToWorld(tile, liftPoint.x, liftPoint.z, 0);
     const markerLift = storeyGroundLift(level, at.x, at.z, tile.center.y,
                                         worldGroundSampler());
     // y_world is the SURFACE; how deep the root sits below it is the server's
@@ -1220,9 +1233,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       fixed,
       // …and the two numbers the RE-LIFT needs when the height field moves
       // (`reliftScene`): which storey this marker belongs to, and how much of
-      // the terrain is already in the slot heights.
+      // the terrain is already in the slot heights — and WHERE it was
+      // sampled, so the re-lift asks the field at the very same point.
       level,
       lift: markerLift,
+      liftAt: { x: at.x, z: at.z },
+      anchor: marker.anchor,
     });
   }
 

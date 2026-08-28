@@ -394,6 +394,15 @@ export interface SceneMarker {
    *  (user finding 2026-07-28). Absent = 0. */
   tilt?: number
   roll?: number
+  /** PROP MARKERS ONLY (2026-08-28): the ANCHOR of the placement this marker
+   *  sits on, in the same world metres as `at_world` — and the identical
+   *  number the prop's own `models[]` entry carries as `anchor`. Two jobs:
+   *  it is the point the marker's storey-0 terrain lift is sampled at (one
+   *  prop, one ground — a seat lifted at its own point sinks into a bench
+   *  standing on a slope), and it is the only link marker → mesh in the
+   *  payload, since `models[].id` is the PROP id and is shared by every copy
+   *  of it. Absent on a room marker, which has no placement. */
+  anchor?: [number, number]
   source: 'room' | 'prop'
 }
 

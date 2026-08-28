@@ -3120,6 +3120,22 @@ def test_prop_ground_offset() -> None:
     check("...so the seat keeps its 0.30 over the mesh",
           near(pm["y_world"] - prop["bottom_y"], 0.30),
           f'{pm["y_world"]} vs {prop["bottom_y"]}')
+    # THE MARKER NAMES ITS PLACEMENT (2026-08-28): `anchor` is the placement's
+    # own point, i.e. the identical pair the prop's spec carries — which is
+    # what makes it BOTH the lift point (one prop, one ground: a seat sampled
+    # at its own point sinks into a bench standing on a slope) and the only
+    # link marker → mesh (`models[].id` is the PROP id, shared by every copy).
+    # It is NOT the marker's own point: the fixture's seat sits at a marker
+    # offset, so `at_world` and `anchor` must differ.
+    check("the prop marker names its placement's anchor",
+          pm["anchor"] == prop["anchor"],
+          f'{pm.get("anchor")} vs {prop.get("anchor")}')
+    check("...and that is NOT the marker's own point",
+          pm["anchor"] != pm["at_world"],
+          f'{pm.get("anchor")} vs {pm.get("at_world")}')
+    room_mk = [m for m in sc["markers"] if m["source"] == "room"]
+    check("a room marker has no placement and no anchor",
+          all("anchor" not in m for m in room_mk), str(room_mk))
     # The counter-probe, on the same numbers: doubled, the mesh is 0.20 deeper.
     check("a doubled offset would be −0.39, and it is not",
           not near(prop["bottom_y"], -0.39), str(prop.get("bottom_y")))

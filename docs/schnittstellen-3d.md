@@ -4447,6 +4447,7 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
   markers: [ { room_id, id, group, label, capacity,
                at_world: [x,z], slots: [[x,z], …],   # Länge = capacity
                y_world, root_offset, facing?, tilt?, roll?,
+               anchor?: [x,z],               # NUR Prop-Marker
                source: "room"|"prop" } ], # ALLE fertig in Welt-Koordinaten
                                            # id = Raum-Marker-ID bzw.
                                            # "<placement.id>/<marker.id>";
@@ -4458,7 +4459,16 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # groups[group].root_drop × 1,70;
                                            # Slots quer zur Blickrichtung,
                                            # Kapazität 1 ⇒ slots == [at_world]
-                                           # (Nachtrag 2026-08-28, v7)
+                                           # (Nachtrag 2026-08-28, v7);
+                                           # anchor = Anker SEINER Platzierung,
+                                           # dieselbe Zahl wie models[].anchor
+                                           # (Nachtrag 2026-08-28): der Punkt,
+                                           # an dem die Gelände-Hebung § A16.9
+                                           # abgetastet wird (EIN Prop, EIN
+                                           # Boden) UND die einzige Verbindung
+                                           # Marker → Mesh — models[].id ist
+                                           # die PROP-ID und gilt für jede
+                                           # Kopie. Fehlt am Raum-Marker.
 
   # --- Türschwellen & Befunde (2026-08-05) ---
   doorways: [ { level, at_world: [x,z], along: [ux,uz], type, width_m,
@@ -8019,7 +8029,7 @@ Vorgabe 0,6 m).
 
 **Szenen-Payload** `markers[]` (§ B, Block „Figuren & Marker"): `{room_id,
 id, group, label, capacity, at_world, slots, y_world, root_offset, facing?,
-tilt?, roll?, source}`. Platz-ID = Raum-Marker-ID bzw.
+tilt?, roll?, anchor?, source}`. Platz-ID = Raum-Marker-ID bzw.
 `"<placement.id>/<marker.id>"`; `label` = Platzierungs-Label, sonst Prop-Name,
 sonst Gruppen-Label. `root_offset = groups[group].root_drop × 1,70` auf
 Millimeter gerundet — die Tabelle `FIGURE_ROOT_DROP` im Szenen-Rezept ist
@@ -8027,6 +8037,19 @@ gelöscht (ebenso ihre Schattenkopie in `@anima/scene-render`, 2026-08-28:
 `figureRootY(surfaceY, rootOffset)` kennt nur noch den Payload-Wert), der
 Katalog ist die EINE Quelle. Ein Marker, dessen Gruppe der
 Katalog nicht kennt, ist kein Platz und fehlt im Payload.
+
+**`anchor` — EIN Prop, EIN Boden** (Befund 2026-08-28, der Sitzende ~40 cm zu
+tief auf der „Stone bench" über der Klippe). Ein Prop-Marker trägt zusätzlich
+den Anker SEINER Platzierung, exakt die Zahl, die auch `models[].anchor`
+führt; ein Raum-Marker hat keine Platzierung und kein Feld. Zwei Aufgaben, ein
+Wert: (1) die Gelände-Hebung von § A16.9 wird DORT abgetastet — das Mesh steht
+auf dem Boden unter seinem Anker, ein an seinem eigenen Punkt gehobener Sitz
+weicht am Hang um genau das Relief zwischen beiden Punkten ab; (2) es ist die
+EINZIGE Verbindung Marker → Mesh, denn `models[].id` ist die Prop-ID und
+gehört jeder Kopie der Bank. Handrechnung:
+`client3d/scripts/smoke_place_lift.mjs` [1] (Anker 1,0 / Marker 1,4 / Datum
+0,25 → Hebung 0,75 statt 1,15), Payload-Seite
+`scripts/smoke_scene_recipe.py` [9a].
 
 **Slots — Geometrie nur im Rezept** (`scene_recipe.marker_slots`, rein):
 die `capacity` Plätze liegen mittig um den Marker auf der Achse QUER zur
