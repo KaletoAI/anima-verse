@@ -32,7 +32,7 @@
  * Hence: the edited edge is the statement, the other two are recomputed from
  * it, and all three go out in one call. Clearing any one of them clears all
  * three (a two-thirds override matches no aspect ratio) — that half is client
- * wiring, `PropVariantStrip.commitDim`, and is documented rather than asserted
+ * wiring, `variantFields.dimsPatch`, and is documented rather than asserted
  * here.
  *
  * ============================================================================

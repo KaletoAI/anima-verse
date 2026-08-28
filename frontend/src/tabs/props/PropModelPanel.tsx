@@ -238,8 +238,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
           dialog the mesh was last made from. They stand with the tiers because
           that is what they decide (2026-08-29). */}
       {onEditFaceTarget ? (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center',
-          flexWrap: 'wrap' }}>
+        <div className="ga-form-row" style={{ gap: 8, alignItems: 'center' }}>
           {FACE_FIELDS.map((f) => {
             const stored = f.key === 'high' ? faceTargets.high : faceTargets.low
             const shown = faceDraft[f.key] ?? (stored ? String(stored) : '')

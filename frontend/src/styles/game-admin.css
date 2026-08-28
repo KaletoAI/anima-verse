@@ -2669,6 +2669,28 @@ a.ga-btn {
   font-size: 9px;
 }
 
+/* A list that SELECTS beside a detail that EDITS — one entry at a time
+   (Places editor of the prop detail). The list column is narrow on purpose:
+   it carries a number and a type, the card next to it carries the form.
+   Under 900 px the two stack, like every other split here. */
+.ga-list-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.ga-list-detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .ga-list-detail { grid-template-columns: 1fr; }
+}
+
 /* One object-local prop marker: header row + one slider row per axis
    (X/Y/Z fraction, metre readout) + the facing row. */
 .ga-marker-card {

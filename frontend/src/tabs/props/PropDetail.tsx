@@ -62,7 +62,6 @@ import {
   variantTarget, type PendingFields,
 } from './pendingFields'
 import { Model3DViewer } from '../characters/Model3DViewer'
-import { GroundOffsetGauge } from './GroundOffsetGauge'
 import { PropAreasPanel } from './PropAreasPanel'
 import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
@@ -759,6 +758,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   // Which pose of its place type a marker's preview figures play, keyed by
   // marker id. VIEW state only — nothing of it is stored.
   const [previewPose, setPreviewPose] = useState<Record<string, string>>({})
+  /** WHICH PLACE THE CARD BESIDE THE LIST IS ABOUT (2026-08-29). The list only
+   *  selects; a place is edited in exactly ONE card, so the column no longer
+   *  grows a form per marker and the sliders of the place in hand stay in
+   *  view. View state — nothing of it is stored. */
+  const [selectedMarker, setSelectedMarker] = useState(0)
   // THE MARKER LIST IS THE DRAFT'S. It needs no local state of its own any
   // more and no debounce: an edit goes into the change buffer, the buffer is
   // what `variants` above is drawn from, and the viewer beside it reads the
@@ -775,6 +779,15 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const groupOptions = useMemo(() => groupKeys(groups), [groups])
   const firstGroup = groupOptions[0] || ''
 
+  // The selection is CLAMPED on the way out, not corrected in an effect: the
+  // list can shrink under it (a discarded draft, a reloaded variant) and what
+  // is edited must be a place that exists — in the very same render, not one
+  // later.
+  const selIdx = markers.length
+    ? Math.min(selectedMarker, markers.length - 1)
+    : 0
+  const selMarker: PropMarker | undefined = markers[selIdx]
+
   const saveMarkers = useCallback((next: PropMarker[]) => {
     queueVariant(variant, { markers: next })
   }, [queueVariant, variant])
@@ -789,30 +802,62 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     at[axis] = Math.round(v * 10000) / 10000
     patchMarker(i, { at })
   }
-  const addMarker = () =>
+  // A place is added TO BE EDITED — the card opposite the list follows it, so
+  // the type select and the sliders are already about the new one.
+  const addMarker = () => {
     saveMarkers([...markers, { id: newId(), group: firstGroup, at: [0.5, 0, 0.5] }])
-  const removeMarker = (i: number) =>
-    saveMarkers(markers.filter((_, idx) => idx !== i))
+    setSelectedMarker(markers.length)
+  }
+  // Removing leaves the NEIGHBOUR selected: the place that slid into the gap,
+  // or the new last one when the tail went. An armed pick would otherwise
+  // point at an index that now means another place.
+  const removeMarker = (i: number) => {
+    const next = markers.filter((_, idx) => idx !== i)
+    saveMarkers(next)
+    setSelectedMarker(Math.max(0, Math.min(i, next.length - 1)))
+    setPlacing(null)
+  }
+
+  // Capacity 1 is a single spot and carries no key — the shape the server
+  // stores, so the absent key reads as the one figure it means.
+  const selCapacity = selMarker?.capacity || 1
+  // The poses of the SELECTED place's TYPE, its default first — the ◀ ▶ cycler
+  // in the card picks which one the preview figures hold. View state only,
+  // keyed by the marker's id; a place stored before ids existed gets one
+  // minted into the draft on the first click.
+  const selPoses = selMarker ? posesInGroup(poseCatalog, selMarker.group) : []
+  const selPoseIdx = Math.max(0, selPoses.indexOf(
+    (selMarker?.id && previewPose[selMarker.id]) || selPoses[0]))
+  const setPreview = (pose: string) => {
+    if (!selMarker) return
+    const id = selMarker.id || newId()
+    if (!selMarker.id) patchMarker(selIdx, { id })
+    setPreviewPose((cur) => ({ ...cur, [id]: pose }))
+  }
 
   // Floor-plan-style placement: armed further up (it shares the canvas with
   // the ring), then click the mesh in the viewer — the hit lands as raw-box
-  // fractions. Esc disarms.
-  useEffect(() => { setPlacing(null) }, [prop.id, variant])
+  // fractions. Esc disarms. And another prop or another variant is another
+  // list of places: an index selected here means something else there.
+  useEffect(() => { setPlacing(null); setSelectedMarker(0) }, [prop.id, variant])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlacing(null) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+  // The hit lands on the place the editor is about: 'add' appends one and
+  // selects it, an armed index is the selected place (✥ arms exactly that
+  // one). Reading `placing` instead of updating through it keeps the write
+  // out of a state updater, which React may run more than once.
   const onPickPoint = useCallback((at: [number, number, number]) => {
-    setPlacing((cur) => {
-      if (cur === 'add') {
-        saveMarkers([...markers, { id: newId(), group: firstGroup, at }])
-      } else if (cur !== null && markers[cur]) {
-        saveMarkers(markers.map((m, idx) => (idx === cur ? { ...m, at } : m)))
-      }
-      return null
-    })
-  }, [markers, firstGroup, saveMarkers])
+    if (placing === 'add') {
+      saveMarkers([...markers, { id: newId(), group: firstGroup, at }])
+      setSelectedMarker(markers.length)
+    } else if (placing !== null && markers[placing]) {
+      saveMarkers(markers.map((m, idx) => (idx === placing ? { ...m, at } : m)))
+    }
+    setPlacing(null)
+  }, [placing, markers, firstGroup, saveMarkers])
 
   return (
     <>
@@ -968,52 +1013,98 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             currentSeason={currentSeason}
           />
 
-          {/* THE SELECTED VARIANT, dialled against the viewer opposite: the
-              1.70 m figure that makes its ground offset judgeable, and its
-              object-local markers. Both are the variant's, and both need the
-              mesh beside them — which is why they stand here and not inside
-              the chip. */}
-          <div className="ga-form-section-label">
-            {t('Variant')} {variant + 1} · {t('Markers')}
-          </div>
-          {/* The visible reference (Maße brauchen Bezug): the sink is only
-              judgeable against this variant's own box and a person. The
-              SLIDER in the chip follows the variant's height too — a footstool
-              is dialled in its own centimetres, a tree in its own metres —
-              while the stored limit stays ±5 m. */}
-          <GroundOffsetGauge offsetM={shownVariant?.ground_offset_m ?? 0}
-            widthM={shownDims.width_m}
-            heightM={shownDims.height_m} />
+          {/* THE SELECTED VARIANT'S PLACES, dialled against the viewer
+              opposite: they are the variant's own (at = a fraction of ITS
+              box), so they need the mesh beside them — which is why they
+              stand here and not inside the chip.
+              LIST LEFT, ONE CARD RIGHT (2026-08-29, user decision): the
+              column used to grow a whole form per place, so five places meant
+              five stacked slider sets and the one in hand scrolled away. The
+              list names them, the card edits exactly one. The heading says
+              only "Places" — WHICH variant they belong to is said once at the
+              top of the column opposite. */}
+          <div className="ga-form-section-label">{t('Places')}</div>
           <span className="ga-hint">
             {t('Object-local PLACES a character is seated on — each names a place type (seat, bed, floor …) and takes as many figures as its capacity. They belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 1.5, because seats and lying surfaces sit on the hull or just outside it. Place roughly with ✥, fine-tune with the sliders — the figures in the preview follow live.')}
           </span>
-          {markers.length === 0 ? (
-            <div className="ga-empty" style={{ fontSize: '0.85em' }}>{t('No markers yet.')}</div>
-          ) : (
-            markers.map((m, i) => {
-              const capacity = m.capacity || 1
-              // The poses of this marker's PLACE TYPE, its default first —
-              // the ◀ ▶ cycler picks which one the preview figures hold. View
-              // state only, keyed by the marker's id; a marker stored before
-              // ids existed gets one minted into the draft on the first click.
-              const poses = posesInGroup(poseCatalog, m.group)
-              const poseIdx = Math.max(0, poses.indexOf(
-                (m.id && previewPose[m.id]) || poses[0]))
-              const setPreview = (pose: string) => {
-                const id = m.id || newId()
-                if (!m.id) patchMarker(i, { id })
-                setPreviewPose((cur) => ({ ...cur, [id]: pose }))
-              }
-              return (
-              <div key={i} className="ga-marker-card">
+          <div className="ga-list-detail">
+            <div className="ga-list-detail-side">
+              {markers.length === 0 ? (
+                /* `ga-empty` carries no style in this stylesheet — the muted
+                   hint is what every other "nothing here yet" line uses. */
+                <span className="ga-hint">{t('No places yet.')}</span>
+              ) : (
+                <ul className="ga-list">
+                  {markers.map((m, i) => (
+                    <li key={m.id || i}>
+                      <button
+                        type="button"
+                        className={`ga-list-row${i === selIdx ? ' is-active' : ''}`}
+                        onClick={() => {
+                          setSelectedMarker(i)
+                          // A pick armed for the place just left behind would
+                          // move THAT one on the next click in the viewer.
+                          // 'add' names no place yet and stays armed.
+                          if (typeof placing === 'number') setPlacing(null)
+                        }}
+                      >
+                        <span className="ga-list-row-main">
+                          🎯 {i + 1}
+                          {/* A long place-type label is cut, not wrapped —
+                              the row is 160 px wide and the number in front
+                              of it must stay readable. `minWidth: 0` is what
+                              lets a flex child shrink at all. */}
+                          <span className="ga-list-row-sub" style={{
+                            minWidth: 0, overflow: 'hidden',
+                            textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            · {groupLabel(groups, m.group)}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button type="button" className="ga-btn ga-btn-sm" onClick={addMarker}
+                  disabled={!firstGroup}
+                  title={firstGroup
+                    ? t('Add a place at the box centre — pick its type, then position it with ✥ or the X/Y/Z sliders.')
+                    : t('No place types yet — the Poses tab defines them.')}>
+                  + {t('Marker')}
+                </button>
+                <button
+                  type="button"
+                  className={`ga-btn ga-btn-sm${placing === 'add' ? ' ga-btn-primary' : ''}`}
+                  // Placing means clicking the mesh in the viewer — so it needs
+                  // a mesh SHOWN there, not just one somewhere on the prop. And
+                  // a marker needs a place type to name: without the catalog
+                  // the server would drop it on save.
+                  // …and not while a ring is being drawn: the two arm modes
+                  // share the one canvas (V11).
+                  disabled={!(shownHasMesh || previewFile) || !firstGroup || !!drawKind}
+                  onClick={() => armPlacing('add')}
+                  title={drawKind
+                    ? t('Finish or cancel the surface you are drawing first — the ring and the marker pick share the one preview.')
+                    : t('Then click the spot on the model in the viewer to drop a marker there (Esc cancels) — like placing markers on the floor plan.')}
+                >
+                  🎯 {placing === 'add' ? t('Click the model…') : t('Place marker')}
+                </button>
+              </div>
+            </div>
+            {/* THE ONE PLACE IN HAND. Every input of it writes through the
+                clamped index, so a list that shrank under the selection can
+                never be edited past its end. */}
+            {selMarker ? (
+              <div className="ga-marker-card">
                 <div className="ga-form-row">
-                  <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {i + 1}</span>
+                  <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {selIdx + 1}</span>
                   <select
                     className="ga-input"
                     style={{ flex: 1, minWidth: 0 }}
-                    value={m.group}
+                    value={selMarker.group}
                     title={t('Place type of the pose catalog (seat, bed, floor …) — WHAT this spot is, not which clip plays on it. A character taking a pose of this type is seated here.')}
-                    onChange={(e) => patchMarker(i, { group: e.target.value })}
+                    onChange={(e) => patchMarker(selIdx, { group: e.target.value })}
                   >
                     {groupOptions.map((k) => (
                       <option key={k} value={k}>{groupLabel(groups, k)}</option>
@@ -1021,17 +1112,17 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     {/* A stored place type the catalog no longer offers stays
                         selectable — losing it silently would rewrite the
                         marker on the next save. */}
-                    {m.group && !groupOptions.includes(m.group) ? (
-                      <option value={m.group}>{m.group}</option>
+                    {selMarker.group && !groupOptions.includes(selMarker.group) ? (
+                      <option value={selMarker.group}>{selMarker.group}</option>
                     ) : null}
                   </select>
                   <button
                     type="button"
-                    className={`ga-btn ga-btn-sm${placing === i ? ' ga-btn-primary' : ''}`}
+                    className={`ga-btn ga-btn-sm${placing === selIdx ? ' ga-btn-primary' : ''}`}
                     // One canvas, one gesture: while a ring is being drawn the
                     // SVG over the viewer swallows every click a pick needs.
                     disabled={!!drawKind}
-                    onClick={() => armPlacing(i)}
+                    onClick={() => armPlacing(selIdx)}
                     title={drawKind
                       ? t('Finish or cancel the surface you are drawing first — the ring and the marker pick share the one preview.')
                       : t('Then click the spot on the model in the viewer to move this marker there (Esc cancels).')}
@@ -1041,7 +1132,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   <button
                     type="button"
                     className="ga-btn ga-btn-sm ga-btn-danger"
-                    onClick={() => removeMarker(i)}
+                    onClick={() => removeMarker(selIdx)}
                     title={t('Remove this marker')}
                   >
                     ×
@@ -1067,15 +1158,15 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                       max={AT_MAX}
                       step={0.005}
                       fineStep={0.001}
-                      value={m.at[ax]}
-                      onChange={(v) => setMarkerAt(i, ax as 0 | 1 | 2, v)}
+                      value={selMarker.at[ax]}
+                      onChange={(v) => setMarkerAt(selIdx, ax as 0 | 1 | 2, v)}
                       sliderWidth="auto"
                       sliderStyle={{ flex: 1, minWidth: 60 }}
                       inputWidth={72}
                       readback={(
                         <span className="ga-hint" style={{ width: 58, flex: '0 0 auto', textAlign: 'right' }}
                           title={t('Fraction × this variant’s dimension.')}>
-                          {(m.at[ax] * dimM).toFixed(2)} m
+                          {(selMarker.at[ax] * dimM).toFixed(2)} m
                         </span>
                       )}
                     />
@@ -1091,12 +1182,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   max={360}
                   step={5}
                   fineStep={1}
-                  value={m.facing}
+                  value={selMarker.facing}
                   fallback={0}
                   clearable
                   placeholder="—"
-                  onChange={(v) => patchMarker(i, { facing: ((v % 360) + 360) % 360 })}
-                  onClear={() => patchMarker(i, { facing: undefined })}
+                  onChange={(v) => patchMarker(selIdx, { facing: ((v % 360) + 360) % 360 })}
+                  onClear={() => patchMarker(selIdx, { facing: undefined })}
                   sliderWidth="auto"
                   sliderStyle={{ flex: 1, minWidth: 60 }}
                   inputWidth={72}
@@ -1105,8 +1196,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     type="button"
                     className="ga-btn ga-btn-sm"
                     style={{ width: 58, flex: '0 0 auto' }}
-                    disabled={m.facing === undefined}
-                    onClick={() => patchMarker(i, { facing: undefined })}
+                    disabled={selMarker.facing === undefined}
+                    onClick={() => patchMarker(selIdx, { facing: undefined })}
                     title={t('Unset the facing — the client decides.')}
                   >
                     ✕
@@ -1125,12 +1216,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   min={1}
                   max={8}
                   step={1}
-                  value={capacity}
+                  value={selCapacity}
                   onChange={(v) => {
                     const cap = Math.max(1, Math.min(8, Math.round(v)))
                     // Capacity 1 is a single spot and carries neither key —
                     // the same shape the server stores.
-                    patchMarker(i, cap > 1
+                    patchMarker(selIdx, cap > 1
                       ? { capacity: cap }
                       : { capacity: undefined, spacing_m: undefined })
                   }}
@@ -1138,7 +1229,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   sliderStyle={{ flex: 1, minWidth: 60 }}
                   inputWidth={72}
                 />
-                {capacity > 1 ? (
+                {selCapacity > 1 ? (
                   <SliderInput
                     className="ga-marker-axis"
                     style={{ display: 'flex', fontSize: '0.8em' }}
@@ -1149,62 +1240,35 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     max={3}
                     step={0.05}
                     fineStep={0.01}
-                    value={m.spacing_m ?? 0.6}
-                    onChange={(v) => patchMarker(i, { spacing_m: Math.round(v * 100) / 100 })}
+                    value={selMarker.spacing_m ?? 0.6}
+                    onChange={(v) => patchMarker(selIdx, { spacing_m: Math.round(v * 100) / 100 })}
                     unit="m"
                     sliderWidth="auto"
                     sliderStyle={{ flex: 1, minWidth: 60 }}
                     inputWidth={72}
                   />
                 ) : null}
-                {poses.length ? (
+                {selPoses.length ? (
                   <div className="ga-form-row" style={{ fontSize: '0.8em' }}
                     title={t('Which pose of this place type the preview figures hold — view only, nothing is stored. Every slot shows it; a pair pose seats both halves around the marker.')}>
                     <span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>
                       {t('Pose')}
                     </span>
                     <button type="button" className="ga-btn ga-btn-sm"
-                      onClick={() => setPreview(poses[(poseIdx + poses.length - 1) % poses.length])}>
+                      onClick={() => setPreview(selPoses[(selPoseIdx + selPoses.length - 1) % selPoses.length])}>
                       ◀
                     </button>
                     <span className="ga-hint" style={{ flex: 1, minWidth: 0 }}>
-                      {poses[poseIdx]} ({poseIdx + 1}/{poses.length})
+                      {selPoses[selPoseIdx]} ({selPoseIdx + 1}/{selPoses.length})
                     </span>
                     <button type="button" className="ga-btn ga-btn-sm"
-                      onClick={() => setPreview(poses[(poseIdx + 1) % poses.length])}>
+                      onClick={() => setPreview(selPoses[(selPoseIdx + 1) % selPoses.length])}>
                       ▶
                     </button>
                   </div>
                 ) : null}
               </div>
-              )
-            })
-          )}
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              type="button"
-              className={`ga-btn ga-btn-sm${placing === 'add' ? ' ga-btn-primary' : ''}`}
-              // Placing means clicking the mesh in the viewer — so it needs a
-              // mesh SHOWN there, not just one somewhere on the prop. And a
-              // marker needs a place type to name: without the catalog the
-              // server would drop it on save.
-              // …and not while a ring is being drawn: the two arm modes share
-              // the one canvas (V11).
-              disabled={!(shownHasMesh || previewFile) || !firstGroup || !!drawKind}
-              onClick={() => armPlacing('add')}
-              title={drawKind
-                ? t('Finish or cancel the surface you are drawing first — the ring and the marker pick share the one preview.')
-                : t('Then click the spot on the model in the viewer to drop a marker there (Esc cancels) — like placing markers on the floor plan.')}
-            >
-              🎯 {placing === 'add' ? t('Click the model…') : t('Place marker')}
-            </button>
-            <button type="button" className="ga-btn ga-btn-sm" onClick={addMarker}
-              disabled={!firstGroup}
-              title={firstGroup
-                ? t('Add a place at the box centre — pick its type, then position it with ✥ or the X/Y/Z sliders.')
-                : t('No place types yet — the Poses tab defines them.')}>
-              + {t('Marker')}
-            </button>
+            ) : null}
           </div>
         </div>
 
@@ -1459,7 +1523,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             // the two fields in the section edit them.
             faceTargets={{ high: shownVariant?.target_faces_high,
               low: shownVariant?.target_faces_low }}
-            onEditFaceTarget={commitFaces}
+            // Without a variant record there is nothing to commit into —
+            // `commitFaces` would return on its own doorstep — so the two
+            // fields are not offered at all, the same gate the Variant
+            // settings below stand behind.
+            onEditFaceTarget={shownVariant ? commitFaces : undefined}
             backendFaces={backendFaces}
             onGenerating={onGenerating}
           />

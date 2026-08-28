@@ -24,8 +24,8 @@
  * season comes round, which the chip row says in as many words. A world
  * without seasons gets no chips at all: the tags would be inert.
  *
- * THE CHIP IS THE SELECTOR (2026-08-29, user decision "Spalte 2 zeigt immer
- * die gewählte Variante"). Size, generation subject, sink and the two triangle
+ * THE CHIP IS THE SELECTOR (2026-08-29, user decision "column 2 always shows
+ * the selected variant"). Size, generation subject, sink and the two triangle
  * budgets are the VARIANT's (2026-08-25) — but they are edited beside the
  * model they describe, in the second column: the strip would otherwise be a
  * form of forms, one per version, next to a preview showing exactly one of
