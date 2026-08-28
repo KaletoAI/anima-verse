@@ -430,15 +430,21 @@ BAKE_REASON = {"value": "ok"}      # the reason bake_surface_result reports back
 FORGET_CALLS = []
 
 
-def fake_bake_surface_result(model_path, rotation, *, wait_s=0.0):
+def fake_bake_surface_result(model_path, rotation, *, wait_s=0.0,
+                             target_m=0.0, measure="xz"):
     """What `model_surface.bake_surface_result` leaves behind on success: the
     lattice file next to the model, naming the format version, the FILE it was
     baked from and the FIX it was baked under — plus the reason "ok".
     `read_surface` stays the real one, so every "is there a surface" answer
-    below goes through the production validity check."""
+    below goes through the production validity check.
+
+    `target_m`/`measure` are the WORLD size the model is placed at and how that
+    size is measured: the lattice step is 0,25 world metres and the lattice is
+    cast in model units, so the bake has to be told the placement's own scale."""
     BAKE_CALLS.append({"model": Path(model_path).name,
                        "rotation": model_surface._norm_rotation(rotation),
-                       "wait_s": wait_s})
+                       "wait_s": wait_s,
+                       "target_m": target_m, "measure": measure})
     if BAKE_REASON["value"] != "ok":
         return None, BAKE_REASON["value"]
     surface = {"version": model_surface.SURFACE_VERSION,
@@ -849,10 +855,13 @@ FORGET_CALLS.clear()
 CAND_R = SURFACE_BAKE.find_candidates(SURFACE_BAKE.validate(BAKE_ROOM))[0]
 ROOM_MODEL = location_model3d.find_building_model(LOC_ID, TAPROOM)
 SURFACE_BAKE.apply(CAND_R, SURFACE_BAKE.validate(BAKE_ROOM), "task-15")
-check("apply bakes that model under its sidecar fix, waiting for a slot",
+check("apply bakes that model under its sidecar fix, waiting for a slot — and "
+      "at the world size the diorama is placed at: the sidecar declares no "
+      "width_m, so `diorama_max_m` falls back to the room rectangle's larger "
+      "side, max(w 6.0, d 1.0) = 6.0, measured 'xz' like every room",
       BAKE_CALLS, [{"model": ROOM_MODEL.name,
                     "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
-                    "wait_s": 300.0}])
+                    "wait_s": 300.0, "target_m": 6.0, "measure": "xz"}])
 check("and drops the walk gate's cache for THIS location", FORGET_CALLS,
       [LOC_ID])
 check("is_done reads the fresh lattice back",
@@ -911,9 +920,11 @@ BAKE_CALLS.clear()
 FORGET_CALLS.clear()
 CAND_V = SURFACE_BAKE.find_candidates(SURFACE_BAKE.validate(BAKE_PROP))[1]
 SURFACE_BAKE.apply(CAND_V, SURFACE_BAKE.validate(BAKE_PROP), "task-19")
-check("apply bakes that VARIANT's mesh", BAKE_CALLS,
+check("apply bakes that VARIANT's mesh, at the variant's own world size: the "
+      "fresh variant is the placeholder cube, so max(1.0, 1.0, 1.0) = 1.0, "
+      "measured 'xyz' like every prop", BAKE_CALLS,
       [{"model": VAR_MODEL.name, "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
-        "wait_s": 300.0}])
+        "wait_s": 300.0, "target_m": 1.0, "measure": "xyz"}])
 check("a prop does not know where it stands, so the whole cache goes",
       FORGET_CALLS, [""])
 check("only the other variant is left to bake",

@@ -13,7 +13,18 @@ the sidecar orientation fix (Euler 'YXZ' in degrees, exactly the order
                      a lattice over the box's XZ extent; ``values[j*cols+i]``
                      is the walkable height of node (i, j) in whole centimetres
                      above ``box_min[1]``, or null where no surface answers
+  step_world         the same step in WORLD metres (= step * s), informational
+  target_m           the world size the model is placed at, as handed in
   hits               number of non-null nodes
+
+THE STEP IS A WORLD LENGTH, the lattice is cast in MODEL units. A generated
+mesh is normalised to about one unit and the renderer scales it by
+``s = target_m / extent(measure)`` (``placeModelSpec``, spec § 6.2), so a step
+taken literally in model units covers ``s`` metres of world — on a 10 m diorama
+one node per 2,5 m, which averages the rocks away. The world step is therefore
+divided by that very ``s`` before the lattice is laid out: ``step = step_world / s``.
+Without ``target_m`` (0 or absent) there is no scaling knowledge here and
+``step`` is used as handed in.
 
 Cell rule (user decision 2026-08-27): the LOWEST upward-facing hit that has at
 least ``clearance`` metres of air above it (to the next hit of any facing) —
@@ -25,7 +36,9 @@ Rays are cast at the node's lattice position clamped 1 mm INSIDE the box, so
 the boundary ring answers the model's edge instead of grazing it; the lattice
 itself stays uniform.
 
-Params: rotation {x,y,z} (deg), step (m), clearance (m), max_cells (int).
+Params: rotation {x,y,z} (deg), step (m, WORLD), clearance (m), max_cells (int),
+target_m (m, 0 = unknown), measure ("xz" | "xyz", how ``s`` measures the extent —
+the same word the placement spec carries).
 Blender-side Python only (bpy, mathutils, stdlib).
 """
 import math
@@ -148,9 +161,11 @@ def _walk_height(hits, clearance):
 def heightgrid(args):
     params = args.get("params") or {}
     rot = params.get("rotation") or {}
-    step = float(params.get("step") or 0.25)
+    step_world = float(params.get("step") or 0.25)
     clearance = float(params.get("clearance") or 1.2)
     max_cells = int(params.get("max_cells") or 40000)
+    target_m = float(params.get("target_m") or 0.0)
+    measure = str(params.get("measure") or "xz")
 
     _common.reset_scene()
     _common.import_model(args["inputs"]["model"])
@@ -163,6 +178,16 @@ def heightgrid(args):
     slo, shi = _three_box(objects, _fix_matrix(rot, snap=True))
     verts, tris = _triangles(objects, fix)
     bvh = BVHTree.FromPolygons(verts, tris)
+
+    # THE WORLD STEP, CAST IN MODEL UNITS. ``s`` is the very factor the
+    # renderers apply (``surface_scale`` / ``placeModelSpec``): the placement's
+    # ``max_m`` over the snapped extent, measured the way the spec's ``measure``
+    # says. Without a target the model's world size is unknown here and the step
+    # stays what the caller handed in.
+    ext = [shi[k] - slo[k] for k in range(3)]
+    extent = max(ext[0], ext[1], ext[2]) if measure == "xyz" else max(ext[0], ext[2])
+    s = (target_m / (extent or 1.0)) if target_m > 0 else 1.0
+    step = step_world / (s or 1.0)
 
     width = hi[0] - lo[0]
     depth = hi[2] - lo[2]
@@ -189,6 +214,10 @@ def heightgrid(args):
 
     data = {
         "step": step,
+        # What that step is worth in the world, after the max_cells loop may
+        # have doubled it — the number the spec states in metres.
+        "step_world": step * s,
+        "target_m": target_m,
         "origin": [round(lo[0], 5), round(lo[2], 5)],
         "cols": cols,
         "rows": rows,

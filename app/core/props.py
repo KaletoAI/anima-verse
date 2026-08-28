@@ -2424,7 +2424,15 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
                             continue
                         if not run_force and read_surface(mp, meta.get("rotation")):
                             continue
-                        if bake_surface(mp, meta.get("rotation"), wait_s=300):
+                        # The world size THIS variant renders at decides the
+                        # lattice resolution: the step is 0,25 WORLD metres and
+                        # the lattice is cast in model units, so the bake needs
+                        # the very ``max_m``/``measure`` the placement spec
+                        # carries (``_prop_models``: max of the variant's three
+                        # dims, measured over all three axes).
+                        if bake_surface(mp, meta.get("rotation"), wait_s=300,
+                                        target_m=max(variant_dims(meta, idx).values()),
+                                        measure="xyz"):
                             baked = True
                     except Exception as e:                  # noqa: BLE001
                         # Per VARIANT: one mesh that cannot be baked must cost

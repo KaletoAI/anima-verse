@@ -45,17 +45,19 @@ _HANDLERS: Dict[str, tuple] = {
 }
 
 
-def _index(subject: str) -> Dict[str, Tuple[str, Path, Dict[str, Any]]]:
-    """``key → (label, model file, orientation fix)`` for every model of this
-    subject kind.
+def _index(subject: str) -> Dict[str, Tuple[str, Path, Dict[str, Any], float, str]]:
+    """``key → (label, model file, orientation fix, target_m, measure)`` for
+    every model of this subject kind.
 
     Read fresh on every call: a scan and the apply that follows it are minutes
     apart, and in between the admin may have selected another model, turned the
-    prop or deleted the whole subject.
+    prop, resized it or deleted the whole subject.  ``target_m``/``measure``
+    are the placement's own scale (the lattice step is 0,25 WORLD metres and
+    the lattice is cast in model units) and are re-read with everything else.
     """
     rows, key_of = _HANDLERS[subject]
-    return {key_of(a, b): (label, path, rotation)
-            for a, b, label, path, rotation in rows()}
+    return {key_of(a, b): (label, path, rotation, target_m, measure)
+            for a, b, label, path, rotation, target_m, measure in rows()}
 
 
 def _forget(subject: str, key: str) -> None:
@@ -83,7 +85,7 @@ class SurfaceBake(ImprovementType):
         from app.core.model_surface import read_surface
         index = _index(params["subject"])
         return sorted((Candidate(key, label)
-                       for key, (label, path, rotation) in index.items()
+                       for key, (label, path, rotation, _t, _m) in index.items()
                        if read_surface(path, rotation) is None),
                       key=lambda c: (c.label.lower(), c.key))
 
@@ -99,11 +101,13 @@ class SurfaceBake(ImprovementType):
         entry = _index(subject).get(candidate.key)
         if entry is None:
             raise RuntimeError(f"{candidate.key}: no model to bake")
-        _label, path, rotation = entry
+        _label, path, rotation, target_m, measure = entry
         # The bake never raises — it answers a reason. Which one it is decides
         # the step's fate, so the plain Optional is not enough here:
         surface, reason = bake_surface_result(path, rotation,
-                                              wait_s=SLOT_WAIT_S)
+                                              wait_s=SLOT_WAIT_S,
+                                              target_m=target_m,
+                                              measure=measure)
         if reason == "busy":
             # Every Blender slot was taken for SLOT_WAIT_S — load, not a
             # defect. As a failure this would cost the candidate one of its two

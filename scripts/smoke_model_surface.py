@@ -32,6 +32,22 @@ Cell rule = lowest UP-facing hit with >= 1.2 m of air above it:
   node (8,8) = (1,1): the OTHER corner, 1 mm inside -> the block covers x[0,1] z[0,1]
                there too -> block top -> 80
 extent_snapped under fix 0/0/0 = [2, 1.6, 2].
+
+THE STEP IS 0,25 WORLD METRES, and the lattice is cast in MODEL units (fix 2026-08-28).
+The same fixture baked with target_m = 20, measure 'xz': s = target_m / max(ex, ez) =
+20 / 2 = 10, so step = 0.25 / 10 = 0.025 model units and step_world = 0.025 * 10 = 0.25.
+cols = rows = ceil(2 / 0.025) + 1 = 81 (81*81 = 6561 <= max_cells 40000, so the doubling
+loop never runs). Node (i, j) sits at x = -1 + 0.025 i, z = -1 + 0.025 j, so the three
+hand-derived points above move but keep their values:
+  model (0.5, 0.5)     -> i = j = (0.5+1)/0.025 = 60  -> block top   -> 80
+  model (-0.5, 0.25)   -> i = 20, j = 50              -> high overhang, base -> 20
+  model (-0.75,-0.75)  -> i = j = 10                  -> low ledge   -> 90
+With target_m = 0 the bake knows no world size and keeps the step as handed in: 9x9 @ 0.25,
+i.e. exactly the lattice of the first bake above.
+`surface_status` reports the WORLD step, because that is what its label says ("@ 0.25 m"):
+81x81 @ 0.25 for that bake, not @ 0.025.
+A stored file that names version 1 is a lattice measured at the wrong resolution — SURFACE_VERSION
+is 2 — so it reads back as no surface and its state is "stale", not "baked".
 The storage side follows from § 4 alone: payload_block hands out exactly the eight fields the
 placement spec carries, with the file's own numbers; block_sig is 8 hex chars, the same for the
 same block and different once one number moves; surface_status reads "baked" with 9x9 @ 0.25 for
@@ -265,6 +281,55 @@ def part1():
               ms.surface_status(glb, {"x": 90})["state"])
         glb.write_bytes(glb.read_bytes() + b"\0\0\0\0")
         check("status stale after model change", ms.surface_status(glb, {"x": 90})["state"] == "stale")
+
+        # ── THE WORLD STEP (fix 2026-08-28) ─────────────────────────────
+        # A SECOND, untouched copy of the same fixture: the file above has been
+        # truncated, restored and finally had four bytes appended, so it is no
+        # longer the mesh the hand table describes.
+        scaled = Path(tmp) / "scaled.glb"
+        write_glb(scaled, BOXES)
+        w = ms.bake_surface(scaled, {"x": 0, "y": 0, "z": 0}, wait_s=60,
+                            target_m=20, measure="xz")
+        check("bake at target_m=20 returns a surface", w is not None)
+        if w:
+            check("step 0.25 m world / s 10 = 0.025 model units",
+                  near(w["step"], 0.025, 1e-9), str(w["step"]))
+            check("step_world is the 0.25 m it was asked for",
+                  near(w["step_world"], 0.25, 1e-9), str(w["step_world"]))
+            check("target_m/measure are recorded",
+                  (w["target_m"], w["measure"]) == (20.0, "xz"),
+                  f"{w['target_m']}, {w['measure']}")
+            check("cols/rows 81x81", (w["cols"], w["rows"]) == (81, 81),
+                  f"{w['cols']}x{w['rows']}")
+            check("block top (60,60) = 80", node(w, 60, 60) == 80, str(node(w, 60, 60)))
+            check("under high overhang (20,50) = 20", node(w, 20, 50) == 20, str(node(w, 20, 50)))
+            check("under low ledge (10,10) = 90", node(w, 10, 10) == 90, str(node(w, 10, 10)))
+            # The admin line promises METRES on the ground: 81x81 @ 0.25 m,
+            # not @ 0.025 (which is the same resolution in model units).
+            wst = ms.surface_status(scaled, {"x": 0, "y": 0, "z": 0})
+            check("status baked, 81x81 @ 0.25 m WORLD",
+                  (wst["state"], wst["cols"], wst["rows"], wst["step"])
+                  == ("baked", 81, 81, 0.25), str(wst))
+            check("the payload block is still the eight spec fields",
+                  tuple(ms.payload_block(w)) == ("step", "origin", "cols", "rows",
+                                                 "values", "box_min", "box_max",
+                                                 "extent_snapped"))
+        u = ms.bake_surface(scaled, {"x": 0, "y": 0, "z": 0}, wait_s=60)
+        check("without a target the step stays as handed in: 9x9 @ 0.25",
+              u is not None and (u["cols"], u["rows"]) == (9, 9)
+              and near(u["step"], 0.25, 1e-9),
+              str(u and (u["cols"], u["rows"], u["step"])))
+        # A v1 file was measured at the WRONG resolution — it must not be read
+        # back as a floor, it must be re-baked.
+        sp2 = ms.surface_path(scaled)
+        v1 = json.loads(sp2.read_text(encoding="utf-8"))
+        v1["version"] = 1
+        sp2.write_text(json.dumps(v1), encoding="utf-8")
+        check("a version-1 file reads as no surface",
+              ms.read_surface(scaled, {"x": 0, "y": 0, "z": 0}) is None)
+        check("...and its state is stale",
+              ms.surface_status(scaled, {"x": 0})["state"] == "stale",
+              ms.surface_status(scaled, {"x": 0})["state"])
 
 
 S1 = {"step": 1, "origin": [-1, -1], "cols": 3, "rows": 3,

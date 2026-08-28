@@ -477,12 +477,34 @@ def _room_floor_y(recipe: Dict[str, Any], storey: float) -> float:
             + _num(recipe.get("floor_offset_y")))
 
 
-def _room_rect(recipe: Dict[str, Any], room: Dict[str, Any]) -> Tuple[float, float, float, float]:
+def room_rect(room: Dict[str, Any]) -> Tuple[float, float, float, float]:
     """The room's placed rectangle (x, y, w, d) in LOCAL METRES — min corner
-    plus size, exactly as stored (contract v6 Nr. 2)."""
-    lay = room.get("layout") or {}
+    plus size, exactly as stored (contract v6 Nr. 2).
+
+    Public because the surface bake needs the same ``w``/``d`` the diorama is
+    scaled by (:func:`diorama_max_m`) without a composed recipe in hand."""
+    lay = (room or {}).get("layout") or {}
     return (_num(lay.get("x")), _num(lay.get("y")),
             _num(lay.get("w"), 1.0), _num(lay.get("d"), 1.0))
+
+
+def _room_rect(recipe: Dict[str, Any], room: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    """:func:`room_rect` under the recipe the caller already holds — the
+    ``recipe`` argument is the reading context, never a source of geometry."""
+    return room_rect(room)
+
+
+def diorama_max_m(width_m: float, room_w: float, room_d: float) -> float:
+    """The WORLD size a room's diorama is scaled to: its declared real width,
+    or — undeclared — the room rectangle's larger side (§ B2a).
+
+    ONE determination, two callers: :func:`_diorama_model` puts it on the
+    placement spec as ``max_m``, and the surface bake casts its lattice step at
+    it (``location_model3d.request_surface``). They must not drift: a lattice
+    baked for another size than the model is placed at has the wrong resolution
+    in exactly the way this function exists to prevent."""
+    w = _num(width_m)
+    return w if w > 0 else max(_num(room_w, 1.0), _num(room_d, 1.0))
 
 
 def room_size_m(location: Dict[str, Any],
@@ -1926,14 +1948,13 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         "measure": "xz",
     }
     width_m = _num(meta.get("width_m"))
-    max_m = width_m
-    if max_m <= 0:
-        # Not calibrated yet: the room rectangle's own world width is the
-        # honest stand-in — same number the old rectangle fit produced, but
-        # now as a real size the admin can dial at the reference figure.
-        max_m = max(w, d)
+    # Not calibrated yet: the room rectangle's own world width is the honest
+    # stand-in — same number the old rectangle fit produced, but now as a real
+    # size the admin can dial at the reference figure. The bake asks
+    # :func:`diorama_max_m` for the very same number.
+    if width_m <= 0:
         spec["width_estimated"] = True
-    spec["max_m"] = _r(max_m)
+    spec["max_m"] = _r(diorama_max_m(width_m, w, d))
     # Modelled floors (a podium, a sunken lounge, a hole in the mesh) make the
     # standing height unreadable from outside — so the admin states it, in
     # metres above the model's lower edge, dialled against the

@@ -4203,7 +4203,7 @@ sie produziert.
 | `scripts/smoke_slope_gate.py` | das Steilheits-Gate und die Ausnahme für **gebaute** Orte (`draws_built_floor`), plus die rote Gegenprobe „`natural_floor` steht in keinem Payload" |
 | `scripts/smoke_nav_grid.py` | Routing: Steilheits-Tod je Zelle, Fußabdruck-/Öffnungs-Ausnahmen, Höhenstrafe |
 | `scripts/smoke_world_geometry.py` | `ground_y` als die eine Lesung |
-| `scripts/smoke_model_surface.py` | das Oberflächen-Raster (v6): **part 0** die Gründe eines Backens, **part 1** die Zellenregel Knoten für Knoten an einer rein in Python geschriebenen Mini-GLB (80/20/20/90 cm + `null`) samt beider Boxen, `extent_snapped` unter zwei Fixen und der Gültigkeitsprüfung, **part 2** die Sampler-Handtabelle |
+| `scripts/smoke_model_surface.py` | das Oberflächen-Raster (v6): **part 0** die Gründe eines Backens, **part 1** die Zellenregel Knoten für Knoten an einer rein in Python geschriebenen Mini-GLB (80/20/20/90 cm + `null`) samt beider Boxen, `extent_snapped` unter zwei Fixen und der Gültigkeitsprüfung, dazu der WELT-Schritt (`target_m` 20 → `s` 10 → `step` 0,025 Modell-Einheiten, 81×81 Knoten, dieselben 80/20/90 cm an den verschobenen Indizes; `target_m` 0 lässt 9×9 @ 0,25; eine v1-Datei liest sich als `stale`), **part 2** die Sampler-Handtabelle |
 | `scripts/smoke_play_pos.py` **[23]** | die Höhensperre auf demselben Raster: 0,3-m-Kiste erlaubt, 0,8-m-Block `too_steep` (als STUFE), wieder herunter erlaubt — dazu Etage-0-Filter, Anker-Lift, TTL-Cache und der defekte Sidecar, der auf Boden zurückfällt statt zu 500 |
 | `scripts/smoke_improvement_types.py` **[14]/[15]** | der Bestands-Bake: Kandidaten und `is_done` über `read_surface`, der bei APPLY neu gelesene Fix, `busy` = `CandidateBusy` (verbraucht keinen Versuch) gegen den echten Fehlschlag, das Cache-Vergessen je Subject |
 | `scripts/smoke_water_meta.mjs` | was die Admin-UI über Wasser liest und zeichnet: die Leser aus dem freien `meta` (Zahlen, Profil, gewrappte Fließrichtung, Bett-Art), das EINE Prädikat `meta.water` gegen Namen und Material-Klasse, Art-Vorgabe vs. Flächen-Überschreibung, die Yaw-Konvention des Pfeils samt Flächen-Schwerpunkt (W3), und der `map_water`-Verweis des Lageplans |
@@ -7582,6 +7582,20 @@ und wie jede Blender-Stufe über einen LOD-Slot gegattet.
   Objekt-BBox transformiert): `box` unter dem **exakten** Fix (davon Ursprung,
   Mitte, Unterkante) und `extent_snapped` als Größe unter dem auf 90°
   **gerundeten** Fix — genau der Maßstabsnenner, den `place()` benutzt.
+* **Der Schritt sind 0,25 WELT-Meter** (Korrektur 2026-08-28, Datei-`version` 2).
+  Das Raster wird im **Modell-Rahmen** ausgelegt, ein generiertes Mesh ist aber
+  auf ~1 Einheit normiert und wird erst beim Platzieren mit
+  `s = target_m / extent(measure)` skaliert (`placeModelSpec`, dieselbe Formel
+  wie `surface_scale`). Der Schritt in der Datei ist deshalb
+  **`step = 0,25 / s`** in Modell-Einheiten; `step_world = step · s` steht
+  informativ daneben. `target_m` ist die Zahl, mit der der Renderer skaliert —
+  beim Raum `width_m`, sonst die längere Seite des Raum-Rechtecks
+  (`scene_recipe.diorama_max_m`, `measure: "xz"`), beim Prop `max(width_m,
+  depth_m, height_m)` der Variante (`measure: "xyz"`). Ohne `target_m` (0)
+  weiß das Skript nichts über die Weltgröße und nimmt den Schritt wie
+  übergeben. *(Vorher wurde 0,25 als Modell-Einheit gelesen: ein 10-m-Diorama
+  bekam 5 statt 41 Knoten je Seite, Felsen wurden weggemittelt und die Figur
+  stand im Stein.)*
 * **Knoten** bei `origin + i·step`, `cols = ceil(Breite/step) + 1`, `rows`
   analog in z. Ist `cols·rows > max_cells` (40 000), verdoppelt sich `step` und
   es wird neu gerechnet; das Raster nennt seinen Schritt selbst. Der äußerste
@@ -7605,25 +7619,32 @@ Galerie absichtlich NICHT und wird beim Löschen des Modells
 
 ```jsonc
 {
-  "version": 1, "step": 0.25,
+  "version": 2, "step": 0.025,
+  // Buchhaltung, keine Nutzlast: bei welcher Weltgröße die Auflösung gewählt
+  // wurde. step_world = step · s = 0,25 m.
+  "target_m": 20.0, "measure": "xz", "step_world": 0.25,
   "source": {"name": "raum_1.glb", "size": 812344, "mtime": 1787869178},
   "rotation": {"x": 0.0, "y": 90.0, "z": 0.0},
   "box_min": [-1, 0, -1], "box_max": [1, 1.6, 1],
   "extent_snapped": [2, 1.6, 2],
-  "origin": [-1, -1], "cols": 9, "rows": 9,
+  "origin": [-1, -1], "cols": 81, "rows": 81,
   "values": [20, 20, null, /* … cols·rows Einträge, zeilenweise … */],
-  "hits": 81,
+  "hits": 6561,
   "baked_at": "2026-08-27T22:19:36Z", "blender": "4.2.5 LTS"
 }
 ```
 
 **Gültigkeit ist eine Eigenschaft der DATEI** (`read_surface`): sie nennt ihr
-Format (`SURFACE_VERSION` = 1), das Modell, aus dem sie gebacken wurde (Name +
+Format (`SURFACE_VERSION` = **2** seit 2026-08-28 — jede v1-Datei wurde in der
+falschen Auflösung gemessen, liest sich damit als `stale` und wird neu gebacken;
+umzurechnen gibt es nichts), das Modell, aus dem sie gebacken wurde (Name +
 Größe + mtime), und den Fix, unter dem das geschah (je Achse `% 360`, auf 0,1°
 verglichen) — und sie muss alle acht Nutzlast-Felder tragen. Weicht eines ab,
 liest sie sich als „kein Raster": heutiges Verhalten, nie ein veralteter Boden.
 Für die Admin-Zeile unterscheidet `surface_status` `baked` / `missing` /
-`stale`. Ein Modell ohne jede nach oben weisende Fläche bekommt eine Datei
+`stale` — und nennt dort `step` in **Welt-Metern** (`step_world`), denn die
+Zeile „baked 81×81 @ 0,25 m" verspricht eine Länge auf dem Boden, nicht in
+Modell-Einheiten. Ein Modell ohne jede nach oben weisende Fläche bekommt eine Datei
 voller `null` — sonst würde ewig neu gebacken.
 
 ### Am Spec (§ B2)

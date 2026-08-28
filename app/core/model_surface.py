@@ -29,7 +29,14 @@ from app.core.timeutils import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
-SURFACE_VERSION = 1
+#: 2 since 2026-08-28: a lattice baked as version 1 took SURFACE_STEP_M for a
+#: MODEL unit, so a normalised mesh scaled to 10 m got a node every 2,5 m. Every
+#: v1 file therefore reads as stale and is re-baked (the button, or the
+#: "Bake walkable surfaces" improvement) — there is nothing to convert, the
+#: numbers were measured at the wrong resolution.
+SURFACE_VERSION = 2
+#: The lattice resolution in WORLD metres — what a node is worth on the ground
+#: a figure walks on, not in the model's own units (spec § 3).
 SURFACE_STEP_M = 0.25
 SURFACE_CLEARANCE_M = 1.2
 MAX_SURFACE_CELLS = 40_000
@@ -76,10 +83,21 @@ BAKE_REASONS = ("ok", "unreadable", "no_blender", "busy", "failed", "unstorable"
 
 
 def bake_surface_result(model_path: Path, rotation: Any, *,
-                        wait_s: float = 0.0) -> Tuple[Optional[Dict[str, Any]], str]:
+                        wait_s: float = 0.0, target_m: float = 0.0,
+                        measure: str = "xz") -> Tuple[Optional[Dict[str, Any]], str]:
     """Bake and store the surface of ``model_path`` under ``rotation``, and say
     WHY when there is none: ``(surface, reason)`` with ``reason`` one of
     :data:`BAKE_REASONS`.
+
+    ``target_m`` is the WORLD size the model is placed at — the placement
+    spec's ``max_m`` — and ``measure`` the word that spec uses to measure the
+    extent it is met over (``"xz"`` for rooms, ``"xyz"`` for props). Together
+    they are the scale ``s`` every renderer applies, and the bake needs them
+    because :data:`SURFACE_STEP_M` is a world length while the lattice is laid
+    out in the model's own units: a normalised mesh scaled to 10 m must get a
+    node every 0,25/s of a unit, not every 0,25. A caller that cannot say how
+    big the model will be leaves ``target_m`` at 0 and gets the step as it is —
+    correct for a model that is already world-sized, coarse for a normalised one.
 
     The reason exists for the one caller that must tell load from defect: the
     improvements engine skips a candidate for good after two failed attempts,
@@ -110,7 +128,9 @@ def bake_surface_result(model_path: Path, rotation: Any, *,
                          params={"rotation": _norm_rotation(rotation),
                                  "step": SURFACE_STEP_M,
                                  "clearance": SURFACE_CLEARANCE_M,
-                                 "max_cells": MAX_SURFACE_CELLS})
+                                 "max_cells": MAX_SURFACE_CELLS,
+                                 "target_m": float(target_m or 0.0),
+                                 "measure": str(measure or "xz")})
     finally:
         refine.free_lod_slot()
     if not res.get("ok"):
@@ -121,7 +141,12 @@ def bake_surface_result(model_path: Path, rotation: Any, *,
     surface = {"version": SURFACE_VERSION, "source": source,
                "rotation": _norm_rotation(rotation),
                "baked_at": utc_now_iso(), "blender": runner.version(),
-               **{k: data[k] for k in PAYLOAD_KEYS}, "hits": data.get("hits", 0)}
+               **{k: data[k] for k in PAYLOAD_KEYS}, "hits": data.get("hits", 0),
+               # The scale the lattice was cast at — bookkeeping, not payload:
+               # the sampler works in model units and reads `step` alone, but a
+               # file has to say at which world size its resolution was chosen.
+               "target_m": float(target_m or 0.0), "measure": str(measure or "xz"),
+               "step_world": data.get("step_world", data["step"])}
     # ATOMICALLY (Minor 5): a lattice is read by the scene route, by the walk
     # gate and by the improvements scan while it is being written, and a
     # half-written file is not merely "no surface" — ``_load`` would parse it
@@ -141,13 +166,16 @@ def bake_surface_result(model_path: Path, rotation: Any, *,
             pass
         return None, "unstorable"
     _forget_loaded(dest)
-    logger.info("surface baked: %s (%dx%d @ %.2f m, %d hits)", Path(model_path).name,
-                surface["cols"], surface["rows"], surface["step"], surface["hits"])
+    logger.info("surface baked: %s (%dx%d @ %.4f model units = %.2f m world, "
+                "%d hits)", Path(model_path).name, surface["cols"],
+                surface["rows"], surface["step"], surface["step_world"],
+                surface["hits"])
     return surface, "ok"
 
 
 def bake_surface(model_path: Path, rotation: Any, *,
-                 wait_s: float = 0.0) -> Optional[Dict[str, Any]]:
+                 wait_s: float = 0.0, target_m: float = 0.0,
+                 measure: str = "xz") -> Optional[Dict[str, Any]]:
     """Bake and store the surface of ``model_path`` under ``rotation``.
 
     None when the model is unreadable, Blender is unavailable, no slot came
@@ -155,8 +183,12 @@ def bake_surface(model_path: Path, rotation: Any, *,
     stored — with ONE info log, never an exception: a missing surface is a
     legal state (the terrain answers), not an error. A caller that has to act
     on WHICH of those it was takes :func:`bake_surface_result`.
+
+    ``target_m``/``measure`` are that function's — the world size the model is
+    placed at and how its extent is measured.
     """
-    return bake_surface_result(model_path, rotation, wait_s=wait_s)[0]
+    return bake_surface_result(model_path, rotation, wait_s=wait_s,
+                               target_m=target_m, measure=measure)[0]
 
 
 # ── The parsed sidecars (Important 3) ───────────────────────────────────
@@ -235,7 +267,14 @@ def read_surface(model_path: Path, rotation: Any) -> Optional[Dict[str, Any]]:
 
 
 def surface_status(model_path: Optional[Path], rotation: Any) -> Dict[str, Any]:
-    """What the admin panels show: baked / missing / stale (+ lattice size)."""
+    """What the admin panels show: baked / missing / stale (+ lattice size).
+
+    ``step`` is the WORLD step ("baked 81×81 @ 0.25 m") — the resolution the
+    label promises is a length on the ground, not in the model's own units. The
+    file's ``step`` is the same number divided by the placement scale, and a
+    panel that printed it would read "@ 0.03 m" for the very lattice that
+    resolves the ground every 25 cm.
+    """
     if not model_path:
         return {"state": "missing"}
     surface = _load(model_path)
@@ -243,7 +282,7 @@ def surface_status(model_path: Optional[Path], rotation: Any) -> Dict[str, Any]:
         return {"state": "missing"}
     state = "baked" if _valid(surface, model_path, rotation) else "stale"
     return {"state": state, "cols": surface.get("cols"), "rows": surface.get("rows"),
-            "step": surface.get("step")}
+            "step": surface.get("step_world", surface.get("step"))}
 
 
 def payload_block(surface: Dict[str, Any]) -> Dict[str, Any]:

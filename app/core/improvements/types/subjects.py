@@ -443,14 +443,17 @@ def regenerate_gallery_image(location_id: str, filename: str,
 # ---------------------------------------------------------------------------
 #
 # Both helpers answer in the same shape — ``(a, b, label, model file,
-# orientation fix)`` — because a surface subject is always "one model file
-# under one fix", whatever identifies it.  The fix travels with the file: a
-# baked lattice is only valid under the rotation it was made with
-# (spec-surface-height § 4).
+# orientation fix, target_m, measure)`` — because a surface subject is always
+# "one model file under one fix, placed at one world size", whatever identifies
+# it.  The fix travels with the file: a baked lattice is only valid under the
+# rotation it was made with (spec-surface-height § 4).  The world size travels
+# with it too: the lattice step is 0,25 WORLD metres but is cast in the model's
+# own units, so the bake has to know the ``max_m``/``measure`` the placement
+# spec will scale this model by — the same numbers the landing bakes pass.
 
-def room_models() -> List[Tuple[str, str, str, Path, Dict[str, Any]]]:
-    """``(location_id, room_id, label, model file, fix)`` of every LAID-OUT
-    room that has a model.
+def room_models() -> List[Tuple[str, str, str, Path, Dict[str, Any], float, str]]:
+    """``(location_id, room_id, label, model file, fix, target_m, measure)`` of
+    every LAID-OUT room that has a model.
 
     A room without a floor plan is placed in no scene, so a lattice baked for
     its diorama would never be read — it is not a subject at all, the same way
@@ -462,9 +465,9 @@ def room_models() -> List[Tuple[str, str, str, Path, Dict[str, Any]]]:
     the landing bake picks: a room whose only model is a distance mesh still
     needs the lattice its clients will ask for.
     """
-    from app.core.location_model3d import find_building_model
+    from app.core.location_model3d import find_building_model, surface_target_m
     from app.core.model_store import read_sidecar
-    out: List[Tuple[str, str, str, Path, Dict[str, Any]]] = []
+    out: List[Tuple[str, str, str, Path, Dict[str, Any], float, str]] = []
     for location in locations():
         loc_id = str(location.get("id") or "")
         if not loc_id:
@@ -481,13 +484,18 @@ def room_models() -> List[Tuple[str, str, str, Path, Dict[str, Any]]]:
             label = (f"{location.get('name') or loc_id} / "
                      f"{room.get('name') or room_id}")
             rotation = dict(read_sidecar(path) or {}).get("rotation") or {}
-            out.append((loc_id, room_id, label, path, rotation))
+            # The diorama's own scale law (``scene_recipe.diorama_max_m``),
+            # read off the file that will be served — never a second reading of
+            # the layout here.
+            out.append((loc_id, room_id, label, path, rotation,
+                        surface_target_m(loc_id, room_id, path), "xz"))
     return out
 
 
-def prop_model_variants() -> List[Tuple[str, int, str, Path, Dict[str, Any]]]:
-    """``(prop_id, variant index, label, model file, fix)`` of every ACTIVE
-    prop variant that has a mesh.
+def prop_model_variants() -> List[Tuple[str, int, str, Path, Dict[str, Any],
+                                        float, str]]:
+    """``(prop_id, variant index, label, model file, fix, target_m, measure)``
+    of every ACTIVE prop variant that has a mesh.
 
     The index set is ``props``' own — manually active and capped at
     ``variant_max``, the very set the landing bake walks
@@ -499,7 +507,7 @@ def prop_model_variants() -> List[Tuple[str, int, str, Path, Dict[str, Any]]]:
     the prop, because one orientation dial turns every variant of it.
     """
     from app.core import props as prop_store
-    out: List[Tuple[str, int, str, Path, Dict[str, Any]]] = []
+    out: List[Tuple[str, int, str, Path, Dict[str, Any], float, str]] = []
     for prop in props():
         prop_id = str(prop.get("id") or "")
         if not prop_id:
@@ -516,7 +524,11 @@ def prop_model_variants() -> List[Tuple[str, int, str, Path, Dict[str, Any]]]:
             label = str(prop.get("name") or prop_id)
             if idx:
                 label = f"{label} (variant {idx})"
-            out.append((prop_id, idx, label, path, rotation))
+            # The world size THIS variant renders at, and the prop's own
+            # measure — exactly what ``_prop_models`` puts on the placement
+            # spec (``max_m`` = the largest of the three dims, ``measure`` xyz).
+            out.append((prop_id, idx, label, path, rotation,
+                        max(prop_store.variant_dims(meta, idx).values()), "xyz"))
     return out
 
 
