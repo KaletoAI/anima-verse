@@ -456,12 +456,13 @@ def clip_ring_to_outline(ring: List[List[float]],
     Returned is one ring, or ``[]`` when there is no overlap worth cutting
     (fewer than 3 corners, or an area under :data:`CLIP_MIN_AREA` — an
     outline that merely TOUCHES the ring shares a line with it, not an area).
-    The result is rounded like every outline (:func:`_r`), wound CLOCKWISE in
-    map view (positive shoelace — the winding of every stored outline, no
-    matter which way the subject ran) and rotated to start at its smallest
-    corner. That last rule is what makes the no-op case a true no-op: a ring
-    that lies fully inside comes back byte for byte, whatever the outline
-    looks like.
+    The result is rounded like every outline (:func:`_r`) and canonically
+    ordered (:func:`_canonical_ring`). Sutherland–Hodgman hands its result
+    back in the SUBJECT's order, so without that last step the same overlap
+    would come out written differently depending on where the plate outline
+    happens to start — and the no-op case would not be one. With it, a ring
+    that lies fully inside comes back byte for byte, because the rings this
+    module emits are canonical to begin with.
     """
     from app.core.world_geometry import polygon_signed_area
     if len(ring) < 3 or len(outline) < 3:
@@ -502,10 +503,27 @@ def clip_ring_to_outline(ring: List[List[float]],
     pts = _dedup_ring([[_r(x), _r(z)] for x, z in poly])
     if len(pts) < 3 or abs(polygon_signed_area(pts)) < CLIP_MIN_AREA:
         return []
-    if polygon_signed_area(pts) < 0:
-        pts.reverse()
-    start = min(range(len(pts)), key=lambda k: (pts[k][0], pts[k][1]))
-    return pts[start:] + pts[:start]
+    return _canonical_ring(pts)
+
+
+def _canonical_ring(pts: List[List[float]]) -> List[List[float]]:
+    """A ring in the ONE order the payload writes it: CLOCKWISE in map view
+    (positive shoelace — the winding of every stored outline) and starting at
+    its SMALLEST corner (smallest x, then smallest z).
+
+    Two rings that enclose the same area are then the same list, whichever way
+    round and from wherever they were built. That is what lets a hole survive
+    :func:`clip_ring_to_outline` unchanged when it lies fully inside its
+    plate — a flight pointing north writes its rectangle from a different
+    corner than one pointing east, and only a canonical order makes the two
+    cases one.
+    """
+    from app.core.world_geometry import polygon_signed_area
+    out = [list(p) for p in pts]
+    if polygon_signed_area(out) < 0:
+        out.reverse()
+    start = min(range(len(out)), key=lambda k: (out[k][0], out[k][1]))
+    return out[start:] + out[:start]
 
 
 def _dedup_ring(pts: List[List[float]]) -> List[List[float]]:
@@ -1896,8 +1914,12 @@ def _stair_flights(map3d: Dict[str, Any],
                      _pt(run, -half), _pt(0.0, -half)]
         # THE HOLE: footprint ∪ head pad as ONE rectangle along the climb, so
         # a figure that has walked the last tread still has floor missing over
-        # it while it steps onto the landing. Corners CLOCKWISE in map view,
-        # the winding every stored outline carries.
+        # it while it steps onto the landing. Written CANONICALLY — clockwise
+        # in map view, the winding every stored outline carries, and from the
+        # rectangle's smallest corner. The (along, across) frame turns with
+        # ``dir_deg``, so which of the four corners comes first would turn with
+        # it too; ``_canonical_ring`` pins it, and only then is clipping a ring
+        # that lies fully inside its plate a true no-op for every direction.
         hole_len = run + STAIR_PAD_GAP_M + STAIR_PAD_M
         hole_half = max(STAIR_WIDTH_M, STAIR_PAD_M) / 2
         flights.append({
@@ -1921,8 +1943,9 @@ def _stair_flights(map3d: Dict[str, Any],
             },
             "hole": {
                 "level": from_level + 1,
-                "ring": [_pt(0.0, -hole_half), _pt(hole_len, -hole_half),
-                         _pt(hole_len, hole_half), _pt(0.0, hole_half)],
+                "ring": _canonical_ring(
+                    [_pt(0.0, -hole_half), _pt(hole_len, -hole_half),
+                     _pt(hole_len, hole_half), _pt(0.0, hole_half)]),
                 "center": _pt(hole_len / 2, 0.0),
             },
         })

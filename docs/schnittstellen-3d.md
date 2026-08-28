@@ -8319,10 +8319,16 @@ Ring gegen Outline (Sutherland–Hodgman, der Ring als konvexes Clip-Polygon, di
 Outline als Subjekt; `scene_recipe.clip_ring_to_outline`), und was in `holes`
 steht, liegt **immer innerhalb der `outline`**. Bleibt nichts übrig (< 3 Ecken
 oder Fläche < 1e-6 m² — eine Outline, die den Ring nur BERÜHRT), trägt die
-Platte kein Loch. Ein Ring, der ganz innen liegt, kommt unverändert durch. Das
-Ergebnis ist wie jede Outline gerundet, im Uhrzeigersinn gewickelt und beginnt
-an seiner kleinsten Ecke — die Zahlen hängen also nicht davon ab, wo die
-Plattenkontur ihren ersten Punkt hat.
+Platte kein Loch.
+
+**Ringe sind KANONISCH geschrieben**, im Payload wie nach dem Clip: gerundet
+wie jede Outline, im Uhrzeigersinn gewickelt und beginnend an der KLEINSTEN
+Ecke (kleinstes x, dann kleinstes z). Das (`along`, `across`)-Gerüst eines
+Laufs dreht sich mit `dir_deg`, und Sutherland–Hodgman gibt sein Ergebnis in
+der Reihenfolge des SUBJEKTS zurück — ohne diese Regel stünde dasselbe
+Rechteck je nach Richtung des Laufs und je nach Startpunkt der Plattenkontur
+anders da. Mit ihr gilt: ein Ring, der ganz innen liegt, kommt als DASSELBE
+Polygon zurück, Punkt für Punkt, in allen vier Richtungen.
 
 Welche Läufe eine Platte HÖRT, entscheidet weiterhin die Mitte (Etagenplatte:
 alle ihrer Etage; Raumplatte: nur die, deren Mitte in ihr liegt); WIE VIEL vom
@@ -8377,7 +8383,8 @@ muss sich bewegen, sonst behält jeder Client seine alte Szene.
 | Plattenloch: Etagenplatte 1 und der Raum, in dem die Mitte liegt, tragen das Rechteck; ein Nachbarraum derselben Etage nicht; eine Platte ohne Lauf trägt `[]`; ROTE PROBE: ein Kellerlauf schneidet nirgends | ebenda **[2]/[2s]** |
 | Zwei Läufe auf DIESELBE Etage: die Etagenplatte trägt beide Ringe in Autorenreihenfolge, der Raum nur den, dessen Mitte in ihm liegt | ebenda **[2s]** |
 | Clipping: der Ring x 2…6,85 kommt an der ±5-Kontur UND im Raum „hall" (x 1…5) als x 2…5 an; ein Raum, in dessen Ecke er ragt, trägt nur die Überlappung; ein Ring, der ganz innen liegt, bleibt unverändert; ROTE PROBE: keine Platte trägt das rohe Rechteck | ebenda **[2s]** |
-| `clip_ring_to_outline` von Hand: Identität (auch bei umgekehrt gewickelter Outline), Ost-Schnitt, Ecken-Schnitt, keine Überlappung → `[]`, blosse BERÜHRUNG → `[]`, Ergebnis im Uhrzeigersinn, Fläche 3,6 m² | ebenda **[2c]** |
+| Kanonische Ringe: ein ganz innen liegender Lauf bleibt unverändert — nach Osten (`dir` 90, Ring x −2…2,85) UND nach Norden (`dir` 0, Ring `[[1,4,−2],[2,6,−2],[2,6,2,85],[1,4,2,85]]` ab der kleinsten Ecke) | ebenda **[2s]** |
+| `clip_ring_to_outline` von Hand: Identität (auch bei umgekehrt gewickelter Outline), Ost-Schnitt, Ecken-Schnitt, keine Überlappung → `[]`, blosse BERÜHRUNG → `[]`, Ergebnis im Uhrzeigersinn, Fläche 3,6 m² (beides am RÜCKGABEWERT gemessen) | ebenda **[2c]** |
 | `SCENE_RECIPE_VERSION` == 10 (die Konstante gehört dem ganzen Payload: seit dieser Runde hat der Marker-`diorama` sie weitergedreht) | ebenda **[7i]** |
 | Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
 | `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |

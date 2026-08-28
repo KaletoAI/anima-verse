@@ -237,6 +237,10 @@ HALL = {"id": "hall", "name": "Hall", "layout": {
 # north-west corner (3, −2.2) sits inside it and the ring survives only as
 # x 3…5, z −2.2…−1.4. Its centre (4.425, −2) is in the room, so the room owns
 # the hole — and still may not carry a ring that hangs over three of its edges.
+# IT LIES WHOLLY INSIDE "hall" ON PURPOSE: two rooms sharing floor is nonsense
+# for a wall, a floor or a door, and it is exactly right for the question this
+# fixture asks — which OUTLINE clips a ring. It is therefore passed to the ONE
+# scene of the hole checks ([2s]) and nothing else may read that scene.
 NOOK = {"id": "nook", "name": "Nook", "layout": {
     "x": 3.0, "y": -2.2, "w": 2.0, "d": 2.2, "level": 1,
     "surfaces": {"floor": "stone"}}}
@@ -381,6 +385,22 @@ def test_plates() -> None:
     fit = {q.get("room_id") or "": q for q in hf["plates"]}
     check("a ring that lies fully inside comes back UNCLIPPED — the same ring",
           fit[""]["holes"] == [FITS], str(fit[""]["holes"]))
+    # THE SAME, POINTING NORTH — the case that would break if a ring were
+    # written from wherever the flight's own (along, across) frame begins.
+    # dir 0 is +z, so across is −x: with at = (2, −2) the four corners are
+    #   pt(0, −0.6) = (2.6, −2)      pt(4.85, −0.6) = (2.6, 2.85)
+    #   pt(4.85, 0.6) = (1.4, 2.85)  pt(0, 0.6)     = (1.4, −2)
+    # — clockwise, but starting at (2.6, −2). Canonically ordered the ring
+    # starts at its smallest corner (1.4, −2) and reads
+    #   [[1.4, −2], [2.6, −2], [2.6, 2.85], [1.4, 2.85]]   (x 1.4…2.6, z −2…2.85)
+    # which lies wholly in the ±5 contour, so the plate carries it unchanged.
+    # Its centre (2, 0.425) is in no room ("hall" ends at z 0).
+    NORTH = [[1.4, -2.0], [2.6, -2.0], [2.6, 2.85], [1.4, 2.85]]
+    hn = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 0}],
+                     [UPPER, TERRACE, HALL])
+    nrt = {q.get("room_id") or "": q for q in hn["plates"]}
+    check("...and so does a flight pointing NORTH — rings are canonical",
+          nrt[""]["holes"] == [NORTH], str(nrt[""]["holes"]))
     # A BASEMENT FLIGHT arrives on storey 0, which is the terrain: nothing to
     # cut, and above all no hole leaking into the storey-1 plates.
     hb = stair_scene([{"at": [2.0, -2.0], "from_level": -1, "dir_deg": 90}],
@@ -395,15 +415,15 @@ def test_plates() -> None:
     # derived from the ring of [5s], x 2…6.85 / z −2.6…−1.4, area 5.82 m².
     clip = scene_recipe.clip_ring_to_outline
     BIG = [[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]]
+    inside = clip(RING, BIG)
+    backwards = clip(RING, list(reversed(BIG)))
+    cut = clip(RING, [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]])
     check("a ring inside the outline is returned unchanged",
-          clip(RING, BIG) == RING, str(clip(RING, BIG)))
+          inside == RING, str(inside))
     check("...and so it is when the outline runs the OTHER way round",
-          clip(RING, list(reversed(BIG))) == RING,
-          str(clip(RING, list(reversed(BIG)))))
+          backwards == RING, str(backwards))
     check("the ±5 contour cuts it at its east edge: x 2…5",
-          clip(RING, [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]])
-          == HOLE, str(clip(RING, [[-5.0, -5.0], [5.0, -5.0],
-                                   [5.0, 5.0], [-5.0, 5.0]])))
+          cut == HOLE, str(cut))
     check("a corner-crossing room keeps the overlap rectangle",
           clip(RING, [[3.0, -2.2], [5.0, -2.2], [5.0, 0.0], [3.0, 0.0]])
           == [[3.0, -2.2], [5.0, -2.2], [5.0, -1.4], [3.0, -1.4]],
@@ -419,14 +439,14 @@ def test_plates() -> None:
           == [], str(clip(RING, [[6.85, -4.0], [9.0, -4.0],
                                  [9.0, 0.0], [6.85, 0.0]])))
     # A hole is a stored outline like any other, so it is CLOCKWISE in map
-    # view — positive shoelace (``world_geometry.polygon_signed_area``).
+    # view — positive shoelace (``world_geometry.polygon_signed_area``). Both
+    # measurements read what the FUNCTION returned, never the constant above.
     from app.core.world_geometry import polygon_signed_area
     check("every clipped ring is wound CLOCKWISE, like the outlines",
-          polygon_signed_area(HOLE) > 0
-          and polygon_signed_area(clip(RING, list(reversed(BIG)))) > 0,
-          f"{polygon_signed_area(HOLE)}")
-    check("...and its area is the overlap: 3.0 x 1.2 = 3.6 m²",
-          near(polygon_signed_area(HOLE), 3.6), str(polygon_signed_area(HOLE)))
+          polygon_signed_area(cut) > 0 and polygon_signed_area(backwards) > 0,
+          f"{polygon_signed_area(cut)} / {polygon_signed_area(backwards)}")
+    check("...and the cut ring's area is the overlap: 3.0 x 1.2 = 3.6 m²",
+          near(polygon_signed_area(cut), 3.6), str(polygon_signed_area(cut)))
     check("a degenerate outline cannot cut anything", clip(RING, []) == []
           and clip([], BIG) == [])
 
