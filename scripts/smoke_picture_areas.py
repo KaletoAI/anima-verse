@@ -409,7 +409,8 @@ row 18, the row above the rail's own two rows.  And the barycentric weights
 sum to 1 only to within a rounding unit, so a MINORITY of the samples on
 such a line come out an ulp low and drop into the cell below: of the 6940
 samples on the lintel's bottom face at y = 0.925 (exactly 37.0), 812 land
-in row 36 and make that row read the lintel's depth.  Where the division is
+in row 36 and make that row read the lintel's depth in every column but 8
+and 14, which none of them reached.  Where the division is
 NOT exact the two columns simply share the line: 0.075 / 0.025 =
 2.9999999999999996, and the 19302 samples on the jambs' inner faces split
 15266 into column 2 and 4036 into column 3.  Structurally:
@@ -424,13 +425,18 @@ NOT exact the two columns simply share the line: 0.075 / 0.025 =
     - the handle, columns 4..5 x rows 19..20             -4  =   -4
                                                           = 524 thin cells
 
-and FIVE single cells fall the other way, each of them a KNIFE-EDGE value
-within 2 % of the split 0.08741: +1 (row 18, column 10, extent 0.08571),
--1 (row 15, column 14, extent 0.08857 — the rail's bottom face at y = 0.400
-dropping an ulp low), +2 (row 36, columns 8 and 14), +1 (column 3, row 33,
-extent 0.08625) = **527 of 960**, a thin share of **0.549** >= 0.30.  Those
-five are why the check asserts the share with a tolerance instead of the
-exact count, and why it asserts the class means as BOUNDS.
+and FIVE single cells fall the other way — cells whose CLASS HANGS ON WHICH
+BOUNDARY SAMPLES HAPPENED TO REACH THEM, which shows up in two ways.  Three
+of them land a hair off the split 0.08741: +1 (row 18, column 10, extent
+0.08571), -1 (row 15, column 14, extent 0.08857 — the rail's bottom face at
+y = 0.400 dropping an ulp low) and +1 (column 3, row 33, extent 0.08625,
+where the jamb samples that arrived spanned a slightly narrower depth than
+in the rows above and below).  The other two are nowhere near it: +2 (row
+36, columns 8 and 14) read 0.040 — the top frieze alone — and 0.063,
+because no ulp-low lintel sample reached those two columns at all.
+Together: **527 of 960**, a thin share of **0.549** >= 0.30.  Those five are
+why the check asserts the share with a tolerance instead of the exact
+count, and why it asserts the class means as BOUNDS.
 
 [H3] THE THICK PARTS OF THE LEAF.  The rail spans the full leaf width and
 touches BOTH jambs; the handle hangs off the left jamb as a thick
@@ -468,8 +474,8 @@ out of the coarse rectangle already final.
 
 The snap onto the nearest vertex coordinate then moves nothing — all four
 are vertex coordinates already.  THE RESULT DOES NOT HANG ON THE ROUNDING:
-if the knife-edge cells of [H2] had all read thick — (3, 33) and row 36's
-two — the coarse rectangle would be columns 4..19 x rows 0..35, i.e.
+if the boundary-dependent cells of [H2] had read thick — (3, 33) and row
+36's two — the coarse rectangle would be columns 4..19 x rows 0..35, i.e.
 x 0.100..0.500, y 0.0..0.900, and the walk plus the snap answer the same
 ((0.075, 0.0), (0.51, 0.925)) — the left edge walks 0.100 -> 0.080 (the
 handle is thick but only two of the band's rows tall, so the median keeps
