@@ -1505,9 +1505,13 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
 - `map3d.stairs`: eine Liste von Treppenläufen, je Eintrag
   `{at:[x,z], from_level, dir_deg}` in lokalen Metern — EIN Lauf je
   Etagensprung, max. 8 je Location. Rezept: Stufen 1,20 breit × 0,26 tief,
-  Steigung teilt den Etagenabstand gleichmäßig, Pad 0,9 m² an jedem Ende.
+  Steigung teilt den Etagenabstand gleichmäßig, Pad 0,9 m² an jedem Ende
+  (Oberkante = Etagenboden + `PROP_CLEARANCE`).
   Wo ein Lauf steht, gewinnt er gegen den Fahrstuhl; der bleibt Fallback.
-  Zahlen und Handrechnung: Nachtrag „Treppen (v4)" am Dateiende.
+  Der Payload trägt den Lauf ZUSÄTZLICH als Daten (`stairs[]`) und schneidet
+  sein Loch in die Platten der Etage darüber (`plates[].holes`).
+  Zahlen und Handrechnung: die Nachträge „Treppen" und „Treppen v2" am
+  Dateiende.
 - Legacy: prozedurale Innen-Wände + Auto-Grid NUR, wenn kein Raum der
   Location ein Layout hat.
 
@@ -3932,7 +3936,7 @@ alt → neu:
 | Diorama `bottom_y` (ohne Regler) | 0,12 | 0,03 | **0,02** |
 | Türschwelle ohne Deklaration | 0,10 | — | **0,00** |
 | Gebäudemodell `walk_y_world` | 0,08 + `offset_y` | 0,00 + `offset_y` | **`offset_y`** |
-| Aufzugs-Pad (Mitte) | +0,055 | — | **−0,025** |
+| Aufzugs-Pad (Mitte) | +0,055 | — | **−0,015** (E5a: −0,025; seit Treppen v2 eine `PROP_CLEARANCE` höher) |
 
 **Die beiden NEU-Spalten sind identisch — das ist der Punkt.** Die drei alten
 BODEN-Zahlen 0,10 / 0,09 / 0,01 sind die roten Gegenproben dieser Etappe. Die
@@ -4343,9 +4347,20 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
            # Vorschau-AIDs, keine Vertragsgeometrie
 
   # --- fertige Primitive (Reihenfolge egal, alles Welt-Koordinaten) ---
-  plates:  [ { level, outline: [[x,z],…], top_y, thickness,
+  plates:  [ { level, outline: [[x,z],…], holes: [ [[x,z],…], … ],
+               top_y, thickness,
                texture_kind?, opacity_role: "ground"|"upper",
                room_id? } ],
+                                           # holes = Ringe, die aus der Platte
+                                           # AUSGESCHNITTEN sind (Nachtrag
+                                           # "Treppen v2"): heute genau das
+                                           # Treppenloch, sonst leer. Immer da,
+                                           # oft `[]`. Wer die Platte
+                                           # trianguliert, hängt sie als
+                                           # `Shape.holes` an; wer BEGEHBARKEIT
+                                           # aus `outline` ableitet, muss sie
+                                           # ABZIEHEN — sonst läuft man über
+                                           # den offenen Treppenschacht
   walls:   [ { level, from: [x,z], to: [x,z], base_y, height, thickness,
                texture_kind?, glass?, leaf?, lintel?, opacity_role, room_id?,
                outward_normal: [nx,nz] } ],
@@ -4373,8 +4388,22 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # am Kopf des Laufs, `end`:
                                            # "foot"|"head", `level` = die
                                            # Etage, auf der er liegt — Oberkante
-                                           # ist deren Boden, wie beim
-                                           # elevator_pad
+                                           # ist deren Boden + PROP_CLEARANCE,
+                                           # wie beim elevator_pad
+  stairs:  [ { id, from_level, to_level, at: [x,z], dir_deg,
+               run_m, rise_m, steps, tread_m, width_m,
+               foot: [x,y,z], head: [x,y,z],
+               footprint: [[x,z] × 4] } ],
+                                           # DER LAUF ALS DATEN (Nachtrag
+                                           # "Treppen v2"): dieselben Zahlen,
+                                           # aus denen die `extras`-Kästen
+                                           # gebaut sind — niemand misst eine
+                                           # Treppe mehr aus ihrem eigenen Mesh
+                                           # zurück. `foot`/`head` = die beiden
+                                           # STAND-Punkte (Pad-Mitte, y = Pad-
+                                           # Oberkante), `footprint` = die
+                                           # Grundfläche, `rise_m` = die
+                                           # Steighöhe des GANZEN Laufs
 
   # --- Modell-Platzierungen (eine Spec-Form für ALLES) ---
   models:  [ { role: "building"|"room"|"prop",
@@ -7005,8 +7034,10 @@ center = at + dir·(i+0.5)·TREAD ,  y = base + (i+1)·rise/2
 size   = TREAD entlang der Richtung, (i+1)·rise hoch, WIDTH quer
 ```
 
-Die **Pad-OBERKANTE ist der Etagenboden** — dasselbe Gesetz wie beim
-`elevator_pad`, also `center_y = Boden − THICKNESS/2`:
+Die **Pad-OBERKANTE ist der Etagenboden + `PROP_CLEARANCE`** (0,01) — dasselbe
+Gesetz wie beim `elevator_pad`, also `center_y = Boden + 0,01 − THICKNESS/2`.
+(Bis Treppen v2 lag die Oberkante EXAKT auf dem Boden-Datum; das flimmerte
+gegen den Boden, den das Pad markiert — siehe den Nachtrag „Treppen v2".)
 
 ```
 foot = at − dir·(STAIR_PAD_M/2 + STAIR_PAD_GAP_M) , level = from_level
@@ -7028,8 +7059,8 @@ head = at + dir·(run + STAIR_PAD_M/2 + STAIR_PAD_GAP_M) , level = from_level+1
 |---|---|---|---|
 | `stair_step` i = 0 | [2,13 / 0,102667 / −2] | [0,26 / 0,205333 / 1,20] | 0 |
 | `stair_step` i = 14 | [5,77 / 1,54 / −2] | [0,26 / 3,08 / 1,20] | 0 |
-| `stair_pad` `foot` | [1,50 / −0,025 / −2] | [0,90 / 0,05 / 0,90] | 0 |
-| `stair_pad` `head` | [6,40 / 3,055 / −2] | [0,90 / 0,05 / 0,90] | 1 |
+| `stair_pad` `foot` | [1,50 / −0,015 / −2] | [0,90 / 0,05 / 0,90] | 0 |
+| `stair_pad` `head` | [6,40 / 3,065 / −2] | [0,90 / 0,05 / 0,90] | 1 |
 
 Bei `dir_deg` 0/180 läuft der Auftritt in z: `size` tauscht x ↔ z und das
 Zentrum wandert entlang z — sonst ändert sich keine Zahl.
@@ -7043,7 +7074,7 @@ Zentrum wandert entlang z — sonst ändert sich keine Zahl.
 | `climb` / `steps` / `rise` / `run` | 2,92 · `round(14,6)` = 15 | 2,92 / 15 / **0,194667** / 3,90 |
 
 Stufe 0 sitzt bei y = −2,822667, Stufe 14 ist 2,92 hoch (Mitte −1,46); das
-Fuß-Pad liegt bei −2,945 auf `level` −1, das Kopf-Pad bei −0,025 auf `level` 0.
+Fuß-Pad liegt bei −2,935 auf `level` −1, das Kopf-Pad bei −0,015 auf `level` 0.
 Der Keller ist damit KEIN Sonderfall, sondern dieselbe Formel.
 
 ### Payload — additiv, zwei neue `extras`-Kinds
@@ -7068,7 +7099,7 @@ also muss jede Szenensignatur sich bewegen.
 |---|---|
 | EG → OG: 15 Stufen + 2 Pads, Stufe 0 und Stufe 14 nach center/size, beide Pads nach center/size/level/end | `scripts/smoke_scene_recipe.py` **[5s]** |
 | `dir_deg` 0: `size` x ↔ z getauscht, Zentrum und Pads wandern in z | ebenda **[5s]** |
-| Keller → EG: 15 Stufen, erste bei −2,822667, letzte 2,92 hoch, Pads −2,945 / −0,025 auf `level` −1 / 0 | ebenda **[5s]** |
+| Keller → EG: 15 Stufen, erste bei −2,822667, letzte 2,92 hoch, Pads −2,935 / −0,015 auf `level` −1 / 0 | ebenda **[5s]** |
 | Kette aus zwei Läufen behält ihre `stair`-Indizes | ebenda **[5s]** |
 | ROTE PROBE: ohne `map3d.stairs` entsteht kein einziges `stair_*`-Primitiv (die Fahrstuhl-Zählung misst also keine Treppe) | ebenda **[5s]** |
 
@@ -8143,3 +8174,152 @@ für `animation` — nirgends.
 `prop_markers[]` = `{placement, id, group, capacity, spacing_m, offset_m,
 height_m, facing}`. Das LLM-Einrichten (`furnish_new`) schlägt je Möbel einen
 Marker mit `group` aus dieser Liste vor, keinen Clip-Kind mehr.
+
+## Nachtrag 2026-08-29 (§ A6/B1): TREPPEN v2 — der Lauf ist DATEN, der Boden bekommt ein Loch
+
+Der Nachtrag „TREPPEN — man geht in den ersten Stock" (v1, 2026-08-25) hat zwei
+Dinge ausdrücklich vertagt: die geführte Fahrt ENTLANG des Laufs und das Loch
+in der Decke, durch die der Lauf stößt. Beide werden hier nachgeholt, dazu ein
+Z-Fighting am Startviereck. **Freies WASD-Steigen bleibt vertagt** (eigener
+Strang, braucht eine Server-Höhenleiter für Rampen).
+
+### Befund
+
+- **Die Figur steigt IN der Treppe.** Die Fahrt setzte EIN Ziel — die Landung
+  am Kopf bzw. am Fuß — und überließ die Höhe der generischen Blende der
+  Lauf-Maschine. Auf dem Beispiel unten (Lauf 3,90 m, Etage 3,08 m) ist y nach
+  einer halben Sekunde zu 86 % da, XZ erst zu 35 %: aufwärts schwebt die Figur
+  gut anderthalb Meter über der Stufe, abwärts hängt sie darunter.
+- **Das Startviereck flimmert.** `stair_pad` und `elevator_pad` hatten ihre
+  OBERKANTE exakt auf dem Etagenboden — koplanar mit genau der Fläche, die sie
+  markieren. Jedes andere Boden-Primitiv hält seit „Ein Boden" die
+  `PROP_CLEARANCE`-Haarlinie von 0,01 m.
+- **Kein Loch.** Eine Platte war ein Ring, und `extras` sind bewusst nicht
+  etagengefiltert: die Treppe steht also in der gezeigten Etage und die
+  gezeigte Platte deckelt sie.
+- **Der Payload sagte nichts über den Lauf.** Nur Kästen. Wer Lauf, Steigung,
+  Stufenzahl oder Grundfläche brauchte, hat sie nachgerechnet — die
+  Admin-Plan-Vorschau tat genau das, mit einer zweiten Kopie der
+  Server-Formel.
+
+### 1. Pad-Abstand: OBERKANTE = Boden + `PROP_CLEARANCE`
+
+`stair_pad` (Fuß und Kopf) und `elevator_pad` liegen jetzt eine
+`PROP_CLEARANCE` (0,01 m) über ihrem Etagenboden:
+
+```
+center_y = storey_floor_y(level, storey) + PROP_CLEARANCE − THICKNESS/2
+```
+
+Damit wandert das Aufzugs-Pad auf Etage 0 von −0,025 auf **−0,015**, das
+Treppen-Fuß-Pad ebenso, das Kopf-Pad von 3,055 auf **3,065**. Kein Renderer
+braucht dafür einen `polygonOffset`.
+
+**Der Halte-Punkt ist damit die Pad-Oberkante, nichts mehr dazu.** Ein Client,
+der aus einem Pad einen Stopp macht, hat bisher `Oberkante + 0,01` gerechnet,
+weil die Oberkante der nackte Boden war; diese eigene Haarlinie **entfällt für
+BEIDE Pad-Arten** (`elevator_pad` wie `stair_pad`) — sonst steht die Figur
+2 cm über der Etage.
+
+### 2. `stairs[]` — der Lauf als Daten
+
+Neuer Wurzelblock neben `extras`, EIN Eintrag je autoriertem Lauf, in der
+Reihenfolge von `map3d.stairs`. Die `stair_step`/`stair_pad`-Kästen bleiben —
+sie sind das MESH; dieser Block ist die GEOMETRIE, aus der sie gebaut sind.
+Der Server rechnet einmal und speist beides (`scene_recipe._stair_flights`).
+
+| Feld | Was |
+|---|---|
+| `id` | Index des Laufs in `map3d.stairs` — dieselbe Zahl wie `stair` an den Kästen |
+| `from_level` / `to_level` | untere und obere Etage; `to_level` ist immer `from_level + 1` |
+| `at` | `[x, z]` — der FUSSPUNKT, wie autoriert, ebenen-lokal wie die Extras |
+| `dir_deg` | Aufstiegsrichtung ∈ {0, 90, 180, 270} |
+| `run_m` | Grundriss-Länge des Laufs = `steps · tread_m` |
+| `rise_m` | Steighöhe des GANZEN Laufs (der Etagenabstand). **Pro Stufe: `rise_m / steps`** |
+| `steps` | Stufenzahl |
+| `tread_m` / `width_m` | `STAIR_TREAD_M` 0,26 / `STAIR_WIDTH_M` 1,20, mitgeführt statt gespiegelt |
+| `foot` / `head` | `[x, y, z]` — die beiden STAND-Punkte: Pad-Mitte in XZ, Pad-OBERKANTE als y |
+| `footprint` | `[[x,z] × 4]` — das Rechteck `width_m × run_m` ab `at` entlang `dir` |
+
+`foot`/`head` sind damit genau die Zahlen, die ein Client bisher aus den beiden
+Pads zusammengesucht und um 0,01 angehoben hat — **dieses eigene +0,01 im
+Client entfällt**, die Anhebung steckt jetzt in der Pad-Oberkante selbst.
+
+**Die Fahrt läuft AUF dem Lauf.** Der Client führt die Figur nicht mehr auf ein
+einzelnes Ziel zu, sondern liest die Höhe an ihrer aktuellen XZ aus dem Lauf:
+Projektion auf die Achse (`at`, `dir_deg`), `t = clamp(along / run_m, 0, 1)`,
+`y = foot.y + t · (head.y − foot.y)`. Das ist bewusst eine **Rampe**, keine
+Stufenfunktion: die Figur läuft mit einem Lauf-Clip, Treppenstufen-Ruckeln ist
+nicht gewünscht. Quer außerhalb der halben `width_m` gilt der Lauf nicht.
+
+### 3. `plates[].holes` — der Lauf stößt durch die Decke
+
+Jede Platte trägt jetzt `holes`: eine Liste von Ringen, die aus ihr
+AUSGESCHNITTEN sind. Das Feld ist immer da und meist `[]`.
+
+Ein Lauf schneidet sein Loch in die Etage, auf der er ANKOMMT
+(`from_level + 1`) — in die Etagenplatte dieser Etage UND in jede Raumplatte
+darauf, deren Outline die MITTE des Lochs enthält. Das Loch ist die
+Grundfläche VEREINIGT mit dem Kopf-Pad, als EIN achsparalleles Rechteck
+entlang `dir`:
+
+```
+Länge  = run_m + STAIR_PAD_GAP_M + STAIR_PAD_M      (ab `at`)
+Breite = max(STAIR_WIDTH_M, STAIR_PAD_M)
+```
+
+— damit fehlt der Boden auch noch dort, wo die Figur von der letzten Stufe auf
+die Landung tritt. Die Ecken laufen im UHRZEIGERSINN in Kartensicht, wie jede
+gespeicherte Outline. Ein Loch, das über den Rand seiner Platte hinausragt,
+wird **nicht** geclippt: ein Lauf, der in eine Wand stößt, ist ein Autorenfehler,
+den der Composer nicht hinter dem Rücken des Autors repariert.
+
+Kommt ein Lauf auf Etage 0 an (Kellerlauf), passiert nichts: dort gibt es seit
+„Ein Boden" E5a gar keine Platte.
+
+**Für beide Renderer heißt das zweierlei.** Wer die Platte trianguliert, hängt
+die Ringe als `Shape.holes` an (`buildPlate`, gleiches `sy`-Vorzeichen wie der
+Außenring). Wer BEGEHBARKEIT aus `outline` ableitet, muss sie ABZIEHEN:
+`pointInPolygon(outline) && !holes.some(pointInPolygon)` — sonst läuft die
+Figur über den offenen Schacht.
+
+### 4. Fahrstuhl: zwei Etagen fahren direkt
+
+Kennt eine Location genau zwei Etagen, hat der Fahrstuhl genau EINE Option.
+Der Picker klappt dafür nicht mehr auf — der Tastendruck fährt. Der HUD-Chip
+sagt dann „Press F to go up" bzw. „…to go down" statt einer Auswahl. Reine
+Client-Sache; am Payload ändert das nichts.
+
+### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
+
+Aus v1 unverändert: `base` 0,00 · `target` 3,08 · `steps` 15 · `run` 3,90.
+
+| Größe | Rechnung | Wert |
+|---|---|---|
+| `rise_m` | `target − base` | **3,08** (pro Stufe 3,08/15 = 0,205333…) |
+| `foot` | `at − dir·(0,45 + 0,05)`, y = 0,00 + 0,01 | **[1,50 / 0,01 / −2]** |
+| `head` | `at + dir·(3,90 + 0,50)`, y = 3,08 + 0,01 | **[6,40 / 3,09 / −2]** |
+| `footprint` | Breite 1,20 ab `at`, Querachse (0, +1) | **[[2 / −1,4], [5,9 / −1,4], [5,9 / −2,6], [2 / −2,6]]** |
+| Loch-Rechteck | Länge 3,90 + 0,05 + 0,90 = 4,85, Breite 1,20 | **[[2 / −2,6], [6,85 / −2,6], [6,85 / −1,4], [2 / −1,4]]** |
+| Loch-Mitte | `at + dir·(4,85/2)` | (4,425 / −2) → Etage **1** |
+
+Bei `dir_deg` 0 (Querachse (−1, 0)): `footprint` = [[1,4 / −2], [1,4 / 1,9],
+[2,6 / 1,9], [2,6 / −2]], `foot` = [2 / 0,01 / −2,5], `head` = [2 / 3,09 / 2,4].
+Kellerlauf (`from_level` −1): `rise_m` 2,92, `foot` y −2,91, `head` y 0,01.
+
+`SCENE_RECIPE_VERSION` 8 → **9**: dieselben Daten liefern einen neuen
+Wurzelblock, Löcher in den Platten und verschobene Pads — jede Szenensignatur
+muss sich bewegen, sonst behält jeder Client seine alte Szene.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| `stairs[]` auf dem Vertragsbeispiel: id/Etagen/`at`/`dir`, `steps` 15, `run_m` 3,90, `rise_m` 3,08, `tread_m`/`width_m`, `foot` [1,5 / 0,01 / −2], `head` [6,4 / 3,09 / −2], `footprint`; dazu `dir_deg` 0 und der Kellerlauf | `scripts/smoke_scene_recipe.py` **[5t]** |
+| `foot`/`head` = Pad-Mitte + halbe Pad-Dicke — Block und Kästen dürfen nicht auseinanderlaufen | ebenda **[5t]** |
+| Pad-Abstand: Aufzugs-Pad −0,015, Treppen-Pads −0,015 / 3,065 / −2,935, ROTE PROBEN auf die alten +0,055 und −0,025 | ebenda **[5]/[5s]** |
+| Plattenloch: Etagenplatte 1 und der Raum, in dem die Mitte liegt, tragen das Rechteck; ein Nachbarraum derselben Etage nicht; eine Platte ohne Lauf trägt `[]`; ROTE PROBE: ein Kellerlauf schneidet nirgends | ebenda **[2]/[2s]** |
+| `SCENE_RECIPE_VERSION` == 9 | ebenda **[7i]** |
+| `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | `client3d/scripts/smoke_walk_math.mjs` |
+| Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | ebenda |
+| Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | ebenda |

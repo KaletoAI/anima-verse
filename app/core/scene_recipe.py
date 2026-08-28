@@ -91,7 +91,12 @@ logger = get_logger(__name__)
 #: the anchor its mesh is put on the ground under, so the seat rises with the
 #: bench on a slope instead of by the relief at its own point, and the only
 #: link marker → mesh a renderer has (``models[].id`` is the shared prop id).
-SCENE_RECIPE_VERSION = 8
+#: 9 (2026-08-29): A FLIGHT OF STAIRS IS DATA (``stairs[]``, Nachtrag
+#: "Treppen (v2)") — run, rise, steps, the two landings and the footprint, so
+#: no consumer re-derives them from the boxes; the floor a flight ARRIVES on
+#: is cut open (``plates[].holes``); and both trigger pads clear their floor
+#: by ``PROP_CLEARANCE`` instead of lying exactly on it.
+SCENE_RECIPE_VERSION = 9
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -564,9 +569,31 @@ def level_plate_kind(level: int, level_floors: Any, ground_kind: str) -> str:
     return DEFAULT_FLOOR_KIND
 
 
+def _plate_holes(flights: List[Dict[str, Any]], level: int,
+                 outline: Optional[List[List[float]]] = None
+                 ) -> List[List[List[float]]]:
+    """The stair holes ONE plate carries — the rectangles of every flight that
+    ARRIVES on this storey (§ B1, Nachtrag "Treppen (v2)").
+
+    A level plate takes them all (``outline`` None); a room plate takes only
+    those whose CENTRE lies in its own polygon, so the flight opens the floor
+    of the room it comes up in and not of its neighbour.
+
+    A hole that hangs over the edge of its plate is NOT clipped: a flight
+    reaching into a wall is an authoring error the composer does not repair
+    behind the author's back, and both a triangulator and a point test carry
+    the ring either way.
+    """
+    return [f["hole"]["ring"] for f in flights
+            if f["hole"]["level"] == level
+            and (outline is None
+                 or _point_in_polygon(f["hole"]["center"][0],
+                                      f["hole"]["center"][1], outline))]
+
+
 def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
-            levels: List[int], storey: float,
-            ground_kind: str = "") -> List[Dict[str, Any]]:
+            levels: List[int], storey: float, ground_kind: str,
+            flights: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The floors of every DECLARED storey — one contour plate per level plus
     one floor plate per room on it. **Storey 0 gets nothing** (E5a).
 
@@ -602,6 +629,11 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     neither gets no level plate at all, exactly as before — the synthesized
     square is a transition crutch for the payload's ``boundary``
     field, never a floor somebody drew.
+
+    A PLATE MAY HAVE HOLES since "Treppen v2": every plate carries a ``holes``
+    list of rings — empty on all but the floors a staircase arrives on, where
+    the flight's footprint plus its head pad is missing so one can look up the
+    stairwell and walk out of it (:func:`_plate_holes`).
     """
     plates: List[Dict[str, Any]] = []
     contour = _outline_world(map3d) or _drawn_boundary(map3d)
@@ -614,6 +646,7 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
             plates.append({
                 "level": level,
                 "outline": contour,
+                "holes": _plate_holes(flights, level),
                 "top_y": _r(level * storey + LEVEL_PLATE_TOP),
                 "thickness": LEVEL_PLATE_THICKNESS,
                 "texture_kind": level_plate_kind(level, level_floors,
@@ -631,6 +664,7 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
         entry: Dict[str, Any] = {
             "level": level,
             "outline": outline,
+            "holes": _plate_holes(flights, level, outline),
             "top_y": _r(_room_floor_y(recipe, storey) + _plate_top(recipe)),
             "thickness": 0.0 if outdoor else ROOM_PLATE_THICKNESS,
             "opacity_role": _opacity_role(level, ground),
@@ -1607,13 +1641,15 @@ def _elevator(map3d: Dict[str, Any], levels: List[int],
                         gw, shaft_top, gd, side=side))
     pad = ELEVATOR_PAD_M
     for level in levels:
-        # THE PAD HANGS UNDER THE FLOOR OF ITS STOREY — the same law as before,
-        # only the floor is now :func:`storey_floor_y` instead of a hard 0.08:
-        # on storey 0 the pad's top is the terrain (0.0) and one steps onto it
-        # level with the ground, on every declared storey it is the level
-        # plate's top exactly as it always was.
+        # THE PAD LIES ON THE FLOOR OF ITS STOREY, one ``PROP_CLEARANCE``
+        # above it — the floor being :func:`storey_floor_y`, so on storey 0
+        # that is the terrain and on a declared storey the level plate's top.
+        # The clearance is what every other ground primitive already keeps
+        # (finding 7b, plan-treppen-v2.md): with the top EXACTLY on the datum
+        # the pad and the floor it marks are coplanar and flicker against each
+        # other, and no renderer can break the tie without a depth bias.
         out.append(_box("elevator_pad", ex,
-                        storey_floor_y(level, storey)
+                        storey_floor_y(level, storey) + PROP_CLEARANCE
                         - ELEVATOR_PAD_THICKNESS / 2,
                         ez, pad, ELEVATOR_PAD_THICKNESS, pad, level=level))
     cabin = ELEVATOR_CABIN_M
@@ -1624,10 +1660,22 @@ def _elevator(map3d: Dict[str, Any], levels: List[int],
     return out
 
 
-def _stairs(map3d: Dict[str, Any], levels: List[int],
-            storey: float) -> List[Dict[str, Any]]:
-    """The staircases of a location: a flight of solid steps per entry, with a
-    trigger pad at each end (§ A6, Nachtrag "Treppen (v4)").
+def _stair_flights(map3d: Dict[str, Any],
+                   storey: float) -> List[Dict[str, Any]]:
+    """The staircases of a location, each computed ONCE (§ A6, Nachtrag
+    "Treppen (v2)").
+
+    THREE CONSUMERS, ONE CALCULATION. A flight ends up in the payload three
+    times over — as the boxes a renderer builds a mesh from, as the ``stairs[]``
+    block a renderer walks and the plan preview draws, and as the hole it cuts
+    into the floor it arrives on — and the run, the step count and the two
+    landings must be the SAME numbers in all three. So this returns one entry
+    per flight and nobody derives a stair from a stair primitive again:
+
+    * ``extras`` — the ``stair_step`` boxes and the two ``stair_pad`` markers;
+    * ``block`` — the ``stairs[]`` payload entry;
+    * ``hole`` — ``{"level", "ring", "center"}``: the rectangle this flight
+      opens in the floor of the storey it ARRIVES on.
 
     ``map3d.stairs`` is a list of ``{"at": [x, z], "from_level": int,
     "dir_deg": 0|90|180|270}`` in LOCAL METRES, like ``map3d.elevator``. ``at``
@@ -1639,22 +1687,24 @@ def _stairs(map3d: Dict[str, Any], levels: List[int],
     (``from_level`` −1) is the same formula and not a special case:
 
     * ``climb`` = the two floor datums apart; ``steps`` = the climb divided by
-      the NOMINAL rise and rounded, at least two — the real ``rise`` then
-      divides the climb evenly, so the last tread lands EXACTLY on the upper
-      floor instead of a hand's breadth under or over it;
+      the NOMINAL rise and rounded, at least two — the real per-step rise
+      (``rise_m / steps``) then divides the climb evenly, so the last tread
+      lands EXACTLY on the upper floor instead of a hand's breadth under or
+      over it;
     * step *i* is a SOLID box from the lower floor up to its own tread — a
       staircase one can stand on anywhere, not a set of floating slabs;
-    * a pad's TOP is its storey's floor, the same law ``elevator_pad`` follows,
-      and it sits one pad-half plus a gap clear of the flight.
+    * a pad's TOP is its storey's floor plus ``PROP_CLEARANCE``, the same law
+      ``elevator_pad`` follows, and it sits one pad-half plus a gap clear of
+      the flight.
 
-    ``levels`` is the storey census of the layout and deliberately NOT read: a
-    flight is anchored by its own ``from_level``, whereas the elevator needs
-    the census because it puts a pad on every storey that exists.
+    The storey census of the layout is deliberately NOT read: a flight is
+    anchored by its own ``from_level``, whereas the elevator needs the census
+    because it puts a pad on every storey that exists.
     """
     raw = (map3d or {}).get("stairs")
     if not isinstance(raw, (list, tuple)):
         return []
-    out: List[Dict[str, Any]] = []
+    flights: List[Dict[str, Any]] = []
     for idx, item in enumerate(list(raw)[:STAIR_MAX]):
         if not isinstance(item, dict):
             continue
@@ -1676,6 +1726,20 @@ def _stairs(map3d: Dict[str, Any], levels: List[int],
         if step_dir is None:
             continue
         dx, dz = step_dir
+        # ACROSS the climb = the direction turned by +90°. A flight pointing
+        # east is then as wide north–south as one pointing north is east–west,
+        # and every rectangle below is written in the same (along, across)
+        # frame instead of branching on the axis.
+        px, pz = -dz, dx
+
+        def _pt(along: float, across: float,
+                _ax: float = ax, _az: float = az,
+                _dx: float = dx, _dz: float = dz,
+                _px: float = px, _pz: float = pz) -> List[float]:
+            """One corner in the flight's own (along, across) frame."""
+            return [_r(_ax + _dx * along + _px * across),
+                    _r(_az + _dz * along + _pz * across)]
+
         base = storey_floor_y(from_level, storey)
         target = storey_floor_y(from_level + 1, storey)
         climb = target - base
@@ -1684,6 +1748,7 @@ def _stairs(map3d: Dict[str, Any], levels: List[int],
         steps = max(2, int(round(climb / STAIR_RISE_M)))
         rise = climb / steps
         run = steps * STAIR_TREAD_M
+        extras: List[Dict[str, Any]] = []
         # The tread runs ALONG the climb, the width ACROSS it — which of the
         # two is the x size therefore depends on the direction, and nothing
         # else does.
@@ -1692,20 +1757,66 @@ def _stairs(map3d: Dict[str, Any], levels: List[int],
         for i in range(steps):
             along = (i + 0.5) * STAIR_TREAD_M
             height = (i + 1) * rise
-            out.append(_box("stair_step", ax + dx * along, base + height / 2,
-                            az + dz * along, size_x, height, size_z,
-                            level=from_level, stair=idx))
+            extras.append(_box("stair_step", ax + dx * along,
+                               base + height / 2, az + dz * along,
+                               size_x, height, size_z,
+                               level=from_level, stair=idx))
         gap = STAIR_PAD_M / 2 + STAIR_PAD_GAP_M
-        out.append(_box("stair_pad", ax - dx * gap,
-                        base - STAIR_PAD_THICKNESS / 2, az - dz * gap,
-                        STAIR_PAD_M, STAIR_PAD_THICKNESS, STAIR_PAD_M,
-                        level=from_level, stair=idx, end="foot"))
-        head = run + gap
-        out.append(_box("stair_pad", ax + dx * head,
-                        target - STAIR_PAD_THICKNESS / 2, az + dz * head,
-                        STAIR_PAD_M, STAIR_PAD_THICKNESS, STAIR_PAD_M,
-                        level=from_level + 1, stair=idx, end="head"))
-    return out
+        # THE LANDINGS. ``foot``/``head`` are these pad centres with the pad's
+        # TOP as the y — the height one stands at, so a renderer takes the
+        # landing straight from the block and adds nothing of its own.
+        foot_top = base + PROP_CLEARANCE
+        head_top = target + PROP_CLEARANCE
+        foot = [_r(ax - dx * gap), _r(foot_top), _r(az - dz * gap)]
+        head = [_r(ax + dx * (run + gap)), _r(head_top),
+                _r(az + dz * (run + gap))]
+        extras.append(_box("stair_pad", foot[0],
+                           foot_top - STAIR_PAD_THICKNESS / 2, foot[2],
+                           STAIR_PAD_M, STAIR_PAD_THICKNESS, STAIR_PAD_M,
+                           level=from_level, stair=idx, end="foot"))
+        extras.append(_box("stair_pad", head[0],
+                           head_top - STAIR_PAD_THICKNESS / 2, head[2],
+                           STAIR_PAD_M, STAIR_PAD_THICKNESS, STAIR_PAD_M,
+                           level=from_level + 1, stair=idx, end="head"))
+        # THE FOOTPRINT: the ``STAIR_WIDTH_M × run`` rectangle from ``at``
+        # along the climb — the floor the flight really eats, and the ONE
+        # outline the plan preview draws (it used to re-derive it).
+        half = STAIR_WIDTH_M / 2
+        footprint = [_pt(0.0, half), _pt(run, half),
+                     _pt(run, -half), _pt(0.0, -half)]
+        # THE HOLE: footprint ∪ head pad as ONE rectangle along the climb, so
+        # a figure that has walked the last tread still has floor missing over
+        # it while it steps onto the landing. Corners CLOCKWISE in map view,
+        # the winding every stored outline carries.
+        hole_len = run + STAIR_PAD_GAP_M + STAIR_PAD_M
+        hole_half = max(STAIR_WIDTH_M, STAIR_PAD_M) / 2
+        flights.append({
+            "extras": extras,
+            "block": {
+                "id": idx,
+                "from_level": from_level,
+                "to_level": from_level + 1,
+                "at": [_r(ax), _r(az)],
+                "dir_deg": deg,
+                "run_m": _r(run),
+                # The whole climb of the flight, NOT the per-step rise: the
+                # storey gap it bridges. Per step it is ``rise_m / steps``.
+                "rise_m": _r(climb),
+                "steps": steps,
+                "tread_m": STAIR_TREAD_M,
+                "width_m": STAIR_WIDTH_M,
+                "foot": foot,
+                "head": head,
+                "footprint": footprint,
+            },
+            "hole": {
+                "level": from_level + 1,
+                "ring": [_pt(0.0, -hole_half), _pt(hole_len, -hole_half),
+                         _pt(hole_len, hole_half), _pt(0.0, hole_half)],
+                "center": _pt(hole_len / 2, 0.0),
+            },
+        })
+    return flights
 
 
 # ── Placement specs (§ B2) ──────────────────────────────────────────────
@@ -3207,6 +3318,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
 
     boundary = _boundary_openings(map3d, extent)
 
+    # ONE calculation per staircase, three readers: the ``extras`` boxes, the
+    # ``stairs`` block and the hole in the floor the flight arrives on.
+    flights = _stair_flights(map3d, storey)
+
     # One short hash per placement that ships a lattice — the only form in
     # which a lattice enters the scene signature (``_signature`` drops it from
     # the room metas). A room's lattice reaches the hash through no other
@@ -3258,7 +3373,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "plates": _plates(map3d,
                           [r for r in recipes
                            if str(r.get("room_id") or "") not in overlay_rooms],
-                          levels, storey, ground_kind),
+                          levels, storey, ground_kind, flights),
         # THE STOREY-0 ROOMS AS DATA, which is what replaces those plates: the
         # polygons a consumer needs for room spots, NPC stands and labels
         # (``_floor_plan``). Heights are not in it on purpose — they come from
@@ -3268,7 +3383,11 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # The vertical connections of the building, one flat list: the
         # elevator's shaft primitives and every staircase's steps and pads.
         "extras": (_elevator(map3d, levels, storey)
-                   + _stairs(map3d, levels, storey)),
+                   + [box for f in flights for box in f["extras"]]),
+        # A STAIRCASE IS ALSO DATA, not only boxes: run, climb, step count,
+        # the two landings and the footprint, so neither renderer measures a
+        # flight back out of its own mesh (§ B1, Nachtrag "Treppen (v2)").
+        "stairs": [f["block"] for f in flights],
         "models": models,
         "figures": _figures(),
         "markers": markers,

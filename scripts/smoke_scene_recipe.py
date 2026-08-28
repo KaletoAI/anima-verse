@@ -226,6 +226,12 @@ UPPER = {"id": "up", "name": "Up", "layout": {
 TERRACE = {"id": "terrace", "name": "Terrace", "layout": {
     "x": 1.0, "y": 1.0, "w": 2.0, "d": 2.0, "level": 1,
     "always_visible": True, "surfaces": {"floor": "stone"}}}
+# A storey-1 room BIG ENOUGH to swallow a whole flight's hole — world
+# x 1…5, z −4…0. The flight of [5s] pokes its hole at (4.425, −2), which is
+# inside this room and inside NEITHER "up" (x −4…0) nor "terrace" (z 1…3).
+HALL = {"id": "hall", "name": "Hall", "layout": {
+    "x": 1.0, "y": -4.0, "w": 4.0, "d": 4.0, "level": 1,
+    "surfaces": {"floor": "stone"}}}
 
 
 def test_plates() -> None:
@@ -279,6 +285,45 @@ def test_plates() -> None:
           not any(near(t, 0.09) for t in tops), str(tops))
     check("red: none at the old L0 room datum 0.10",
           not any(near(t, 0.10) for t in tops), str(tops))
+    check("a plate without a flight over it carries an EMPTY hole list",
+          all(q.get("holes") == [] for q in sc["plates"]),
+          str([q.get("holes") for q in sc["plates"]]))
+
+    print("\n[2s] the stair hole — a flight opens the floor it arrives on")
+    # THE HAND DERIVATION (Nachtrag "Treppen v2"). The flight of [5s]:
+    # at = (2, −2), dir 90 → (+1, 0), from_level 0, so the hole belongs to
+    # level 1. Its rectangle is the footprint UNION the head pad, as ONE
+    # rectangle along dir:
+    #   length = run 3.90 + STAIR_PAD_GAP_M 0.05 + STAIR_PAD_M 0.90 = 4.85
+    #   width  = max(STAIR_WIDTH_M 1.20, STAIR_PAD_M 0.90) = 1.20, half 0.60
+    # Corners CLOCKWISE in map view like every stored outline (x east,
+    # z south) — across −half first, then along, then across +half:
+    #   [[2, −2.6], [6.85, −2.6], [6.85, −1.4], [2, −1.4]]
+    # Its centre is at + dir·(4.85/2) = (4.425, −2): inside the ±5 contour and
+    # inside "hall" (x 1…5, z −4…0), outside "up" and "terrace".
+    HOLE = [[2.0, -2.6], [6.85, -2.6], [6.85, -1.4], [2.0, -1.4]]
+    hs = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90}],
+                     [UPPER, TERRACE, HALL])
+    by_room = {q.get("room_id") or "": q for q in hs["plates"]}
+    check("the level-1 contour plate is cut open",
+          by_room[""].get("holes") == [HOLE], str(by_room[""].get("holes")))
+    check("...and so is the room the hole lands in",
+          by_room["hall"].get("holes") == [HOLE],
+          str(by_room["hall"].get("holes")))
+    check("a room on the same storey that does NOT contain it keeps its floor",
+          by_room["up"].get("holes") == []
+          and by_room["terrace"].get("holes") == [],
+          str([by_room["up"].get("holes"), by_room["terrace"].get("holes")]))
+    check("storey 0 — where the flight STARTS — has no plate to cut at all",
+          not [q for q in hs["plates"] if q["level"] == 0],
+          str([q.get("room_id") for q in hs["plates"] if q["level"] == 0]))
+    # A BASEMENT FLIGHT arrives on storey 0, which is the terrain: nothing to
+    # cut, and above all no hole leaking into the storey-1 plates.
+    hb = stair_scene([{"at": [2.0, -2.0], "from_level": -1, "dir_deg": 90}],
+                     [UPPER, TERRACE, HALL])
+    check("red: a flight arriving on storey 0 cuts nothing anywhere",
+          all(q.get("holes") == [] for q in hb["plates"]),
+          str([(q.get("room_id"), q.get("holes")) for q in hb["plates"]]))
 
     print("\n[2b] floor_plan — the storey-0 rooms as DATA")
     plan = {f["room_id"]: f for f in sc["floor_plan"]}
@@ -2135,33 +2180,37 @@ def test_elevator() -> None:
           near(cabin["size"][0], 1.4) and near(cabin["size"][1], 1.8),
           str(cabin["size"]))
     pad = [e for e in sc["extras"] if e["kind"] == "elevator_pad"][0]
-    # THE PAD HANGS UNDER THE FLOOR OF ITS STOREY, and on storey 0 that floor
-    # is the TERRAIN since "Ein Boden" E5a: its top is 0.00 and its centre half
-    # a thickness below, −0.025. (The slab era put it under the 0.08 plate, at
-    # +0.055.)
-    check("pad 1.6 m just under the storey-0 floor, i.e. the terrain",
-          near(pad["size"][0], 1.6) and near(pad["center"][1], -0.025),
+    # THE PAD LIES ON THE FLOOR OF ITS STOREY, one PROP_CLEARANCE over it
+    # (Treppen v2 / finding 7b: a top exactly ON the floor datum z-fights with
+    # the floor it marks). On storey 0 that floor is the TERRAIN since "Ein
+    # Boden" E5a, so the top is 0.00 + 0.01 = 0.01 and the centre half a
+    # thickness below it: 0.01 − 0.05/2 = −0.015. (The slab era put the pad
+    # under the 0.08 plate, at +0.055; v1 had it flush on the datum, −0.025.)
+    check("pad 1.6 m, top one clearance over the storey-0 floor",
+          near(pad["size"][0], 1.6) and near(pad["center"][1], -0.015),
           str(pad))
     check("red: the old 0.055 (under a 0.08 slab) is gone",
           not near(pad["center"][1], 0.055), str(pad["center"][1]))
+    check("red: the v1 top FLUSH on the floor datum (−0.025) is gone",
+          not near(pad["center"][1], -0.025), str(pad["center"][1]))
     check("no elevator without map3d.elevator",
           not scene_recipe.compose_scene({"map3d": {}, "rooms": []})["extras"])
 
 
-def stair_fixture(stairs) -> dict:
+def stair_fixture(stairs, extra_rooms=()) -> dict:
     """The [1] fixture PLUS ``map3d.stairs`` — a variant on purpose.
 
     The base fixture must stay stair-less: every expectation above (the
     elevator's ``extras`` census in particular) is derived against it, and a
     staircase in it would silently move those numbers.
     """
-    loc = fixture()
+    loc = fixture(extra_rooms)
     loc["map3d"] = {**loc["map3d"], "stairs": list(stairs)}
     return loc
 
 
-def stair_scene(stairs) -> dict:
-    return scene_recipe.compose_scene(stair_fixture(stairs),
+def stair_scene(stairs, extra_rooms=()) -> dict:
+    return scene_recipe.compose_scene(stair_fixture(stairs, extra_rooms),
                                       plan_width_m=PLAN_W)
 
 
@@ -2183,10 +2232,12 @@ def test_stairs() -> None:
     #   i = 14 → centre [2 + 3.77, 3.08/2, −2] = [5.77, 1.54, −2]
     #            size [0.26, 3.08, 1.2]
     # The pads are markers, one per end, and their TOP is the storey floor
-    # (elevator_pad's law): centre_y = floor − 0.05/2.
-    #   foot: at − dir·(0.90/2 + 0.05) = (2 − 0.5, −2) → [1.5, −0.025, −2]
+    # PLUS one PROP_CLEARANCE (0.01) — elevator_pad's law since Treppen v2,
+    # because a top exactly on the datum z-fights with the floor (finding 7b):
+    # centre_y = floor + 0.01 − 0.05/2 = floor − 0.015.
+    #   foot: at − dir·(0.90/2 + 0.05) = (2 − 0.5, −2) → [1.5, −0.015, −2]
     #   head: at + dir·(run + 0.90/2 + 0.05) = (2 + 3.9 + 0.5, −2)
-    #         → [6.4, 3.08 − 0.025, −2] = [6.4, 3.055, −2]
+    #         → [6.4, 3.08 − 0.015, −2] = [6.4, 3.065, −2]
     sc = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90}])
     kinds = {}
     for e in sc["extras"]:
@@ -2213,18 +2264,18 @@ def test_stairs() -> None:
           all(s.get("level") == 0 and s.get("stair") == 0 for s in steps),
           str({(s.get("level"), s.get("stair")) for s in steps}))
     pads = {e.get("end"): e for e in sc["extras"] if e["kind"] == "stair_pad"}
-    check("foot pad: centre [1.5, −0.025, −2], size 0.9 × 0.05, level 0",
+    check("foot pad: centre [1.5, −0.015, −2], size 0.9 × 0.05, level 0",
           near(pads["foot"]["center"][0], 1.5)
-          and near(pads["foot"]["center"][1], -0.025)
+          and near(pads["foot"]["center"][1], -0.015)
           and near(pads["foot"]["center"][2], -2.0)
           and near(pads["foot"]["size"][0], 0.9)
           and near(pads["foot"]["size"][1], 0.05)
           and near(pads["foot"]["size"][2], 0.9)
           and pads["foot"].get("level") == 0, str(pads.get("foot")))
-    check("head pad: centre [6.4, 3.055, −2], level 1 — one run plus half a "
+    check("head pad: centre [6.4, 3.065, −2], level 1 — one run plus half a "
           "pad beyond the last step",
           near(pads["head"]["center"][0], 6.4)
-          and near(pads["head"]["center"][1], 3.055)
+          and near(pads["head"]["center"][1], 3.065)
           and near(pads["head"]["center"][2], -2.0)
           and pads["head"].get("level") == 1, str(pads.get("head")))
     # The climb direction decides which axis carries the tread — the width
@@ -2248,7 +2299,8 @@ def test_stairs() -> None:
     # steps = round(14.6) = 15, rise = 2.92 / 15 = 0.1946667, run 3.90.
     #   step 0  centre_y = −2.92 + 0.0973333 = −2.8226667
     #   step 14 centre_y = −2.92 + 1.46 = −1.46, size_y = 2.92
-    #   foot pad −2.92 − 0.025 = −2.945 (level −1), head pad −0.025 (level 0)
+    #   foot pad −2.92 + 0.01 − 0.025 = −2.935 (level −1),
+    #   head pad 0.00 + 0.01 − 0.025 = −0.015 (level 0)
     scb = stair_scene([{"at": [2.0, -2.0], "from_level": -1, "dir_deg": 90}])
     bsteps = [e for e in scb["extras"] if e["kind"] == "stair_step"]
     bpads = {e.get("end"): e for e in scb["extras"] if e["kind"] == "stair_pad"}
@@ -2258,10 +2310,10 @@ def test_stairs() -> None:
           and near(bsteps[-1]["size"][1], 2.92)
           and near(bsteps[-1]["center"][1], -1.46),
           f"{bsteps[0]['center']} {bsteps[-1]['size']}")
-    check("basement pads: −2.945 on level −1, −0.025 on level 0",
-          near(bpads["foot"]["center"][1], -2.945)
+    check("basement pads: −2.935 on level −1, −0.015 on level 0",
+          near(bpads["foot"]["center"][1], -2.935)
           and bpads["foot"].get("level") == -1
-          and near(bpads["head"]["center"][1], -0.025)
+          and near(bpads["head"]["center"][1], -0.015)
           and bpads["head"].get("level") == 0,
           f"{bpads['foot']['center'][1]} {bpads['head']['center'][1]}")
     # Two flights = two indices; the second one is untouched by the first.
@@ -2276,6 +2328,93 @@ def test_stairs() -> None:
     check("red: no stair primitive without map3d.stairs",
           not [e for e in scene()["extras"]
                if str(e["kind"]).startswith("stair_")])
+
+
+def test_stairs_block() -> None:
+    print("\n[5t] stairs[] — the flight as DATA, not only as boxes")
+    # THE HAND DERIVATION, the contract's own example (Nachtrag "Treppen v2"):
+    # storey 3.00, at = (2, −2), from_level 0, dir_deg 90 → dir (+1, 0).
+    #   base = 0.00 ; target = 1·3 + 0.08 = 3.08 ; rise_m = climb = 3.08
+    #   steps = round(3.08 / 0.20) = round(15.4) = 15 ; run_m = 15·0.26 = 3.90
+    #   tread_m = 0.26 ; width_m = 1.20
+    # foot/head are the PAD CENTRES with the pad TOP as y (floor + 0.01):
+    #   foot = at − dir·(0.45 + 0.05)          → [1.5, 0.00 + 0.01, −2]
+    #   head = at + dir·(run + 0.45 + 0.05)    → [6.4, 3.08 + 0.01, −2]
+    # footprint = the rectangle width × run from `at` along dir, in the plan
+    # symbol's own order (`across` +half first): with dir (1, 0) the across
+    # axis is (−dz, dx) = (0, 1) and half = 0.60, so
+    #   pt(along, across) = (2 + along, −2 + across)
+    #   [pt(0, .6), pt(3.9, .6), pt(3.9, −.6), pt(0, −.6)]
+    #   = [[2, −1.4], [5.9, −1.4], [5.9, −2.6], [2, −2.6]]
+    sc = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90}])
+    check("one flight in stairs[]", len(sc["stairs"]) == 1,
+          str(len(sc.get("stairs") or [])))
+    st = sc["stairs"][0]
+    check("id/levels/at/dir as authored",
+          st["id"] == 0 and st["from_level"] == 0 and st["to_level"] == 1
+          and st["at"] == [2.0, -2.0] and st["dir_deg"] == 90, str(st))
+    check("steps 15, run_m 3.9, rise_m 3.08 (the STOREY climb, per step "
+          "rise_m / steps)",
+          st["steps"] == 15 and near(st["run_m"], 3.9)
+          and near(st["rise_m"], 3.08),
+          f"{st['steps']} {st['run_m']} {st['rise_m']}")
+    check("tread_m 0.26 and width_m 1.2 — the recipe constants, carried",
+          near(st["tread_m"], 0.26) and near(st["width_m"], 1.2),
+          f"{st['tread_m']} {st['width_m']}")
+    check("foot [1.5, 0.01, −2] — the pad centre with the pad TOP as y",
+          near(st["foot"][0], 1.5) and near(st["foot"][1], 0.01)
+          and near(st["foot"][2], -2.0), str(st["foot"]))
+    check("head [6.4, 3.09, −2] — one storey up, same law",
+          near(st["head"][0], 6.4) and near(st["head"][1], 3.09)
+          and near(st["head"][2], -2.0), str(st["head"]))
+    check("footprint = [[2,−1.4],[5.9,−1.4],[5.9,−2.6],[2,−2.6]]",
+          st["footprint"] == [[2.0, -1.4], [5.9, -1.4],
+                              [5.9, -2.6], [2.0, -2.6]],
+          str(st["footprint"]))
+    # THE PADS SAY THE SAME NUMBERS: foot/head are the pad centres, one pad
+    # half-thickness over their centre — no consumer measures a landing out of
+    # the extras any more, and the two must not drift apart.
+    pads = {e.get("end"): e for e in sc["extras"] if e["kind"] == "stair_pad"}
+    check("foot == foot pad centre + 0.05/2, head likewise",
+          near(st["foot"][1], pads["foot"]["center"][1] + 0.025)
+          and near(st["foot"][0], pads["foot"]["center"][0])
+          and near(st["head"][1], pads["head"]["center"][1] + 0.025)
+          and near(st["head"][0], pads["head"]["center"][0]),
+          f"{st['foot']} {pads['foot']['center']}")
+    # dir 0 → dir (0, +1), across axis (−1, 0), half 0.60:
+    #   pt(along, across) = (2 − across, −2 + along)
+    #   footprint = [pt(0,.6), pt(3.9,.6), pt(3.9,−.6), pt(0,−.6)]
+    #             = [[1.4, −2], [1.4, 1.9], [2.6, 1.9], [2.6, −2]]
+    #   foot = (2, −2.5) at y 0.01 ; head = (2, −2 + 4.4) = (2, 2.4) at y 3.09
+    sc0 = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 0}])
+    st0 = sc0["stairs"][0]
+    check("dir 0: footprint [[1.4,−2],[1.4,1.9],[2.6,1.9],[2.6,−2]]",
+          st0["footprint"] == [[1.4, -2.0], [1.4, 1.9],
+                               [2.6, 1.9], [2.6, -2.0]],
+          str(st0["footprint"]))
+    check("dir 0: foot [2, 0.01, −2.5], head [2, 3.09, 2.4]",
+          near(st0["foot"][0], 2.0) and near(st0["foot"][1], 0.01)
+          and near(st0["foot"][2], -2.5) and near(st0["head"][0], 2.0)
+          and near(st0["head"][1], 3.09) and near(st0["head"][2], 2.4),
+          f"{st0['foot']} {st0['head']}")
+    # Basement → EG: base = −2.92, target = 0.00, rise_m = 2.92, steps 15,
+    # run 3.90; foot y = −2.92 + 0.01 = −2.91, head y = 0.00 + 0.01 = 0.01.
+    scb = stair_scene([{"at": [2.0, -2.0], "from_level": -1, "dir_deg": 90}])
+    stb = scb["stairs"][0]
+    check("basement flight: −1 → 0, rise_m 2.92, foot −2.91, head 0.01",
+          stb["from_level"] == -1 and stb["to_level"] == 0
+          and near(stb["rise_m"], 2.92) and stb["steps"] == 15
+          and near(stb["foot"][1], -2.91) and near(stb["head"][1], 0.01),
+          str(stb))
+    # Two flights = two ids, in authoring order.
+    sc2 = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90},
+                       {"at": [-2.0, 2.0], "from_level": 1, "dir_deg": 270}])
+    check("a chain of two flights keeps its own ids",
+          [s["id"] for s in sc2["stairs"]] == [0, 1]
+          and [s["from_level"] for s in sc2["stairs"]] == [0, 1],
+          str([(s["id"], s["from_level"]) for s in sc2["stairs"]]))
+    check("red: no stairs[] entry without map3d.stairs", scene()["stairs"] == [],
+          str(scene()["stairs"]))
 
 
 def test_style() -> None:
@@ -4471,11 +4610,12 @@ def test_surface_specs() -> None:
     the numbers of the lattice are the bake's, and the recipe hands them on
     character for character:
 
-    * ``SCENE_RECIPE_VERSION`` is 8, so every client re-fetches once — the
+    * ``SCENE_RECIPE_VERSION`` is 9, so every client re-fetches once — the
       constant is the payload's own code version and moves with EVERY change
       to what the composer answers for unchanged data (6 = these baked
       surfaces, 7 = markers speaking place types, 8 = the prop marker naming
-      its placement's ``anchor``, 2026-08-28);
+      its placement's ``anchor``, 9 = the ``stairs[]`` block plus the hole a
+      flight cuts into the floor it arrives on, 2026-08-29);
     * a room whose meta carries ``surface`` gives the block to its ``room``
       spec unchanged, and a room whose meta carries none gets no field;
     * a prop tagged ``walkable`` gets ``walkable: True`` and — only if its
@@ -4486,8 +4626,8 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 8 (a prop marker names its placement's anchor)",
-          scene_recipe.SCENE_RECIPE_VERSION == 8,
+    check("code_version 9 (the stairs[] block and the stair hole)",
+          scene_recipe.SCENE_RECIPE_VERSION == 9,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────
@@ -4630,6 +4770,7 @@ def main() -> int:
     test_area_room_walk_height()
     test_elevator()
     test_stairs()
+    test_stairs_block()
     test_style()
     test_building_spec()
     test_floor_relation()
