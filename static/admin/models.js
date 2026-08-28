@@ -78,12 +78,14 @@ function renderAll() {
     const provFilter = document.getElementById('filterProvider').value;
     const statusFilter = document.getElementById('filterStatus').value;
 
-    // Modelle filtern
+    // Filter the models. Default: only the ones we actually know something
+    // about — a suitability test or a capability somebody filled in. Without
+    // this the table lists every model every provider offers.
     let filtered = allModels.slice();
     if (search) filtered = filtered.filter(m => m.name.toLowerCase().includes(search) || m.provider.toLowerCase().includes(search));
     if (provFilter) filtered = filtered.filter(m => m.provider === provFilter);
-    if (statusFilter === 'documented') filtered = filtered.filter(m => m.has_custom_entry);
-    if (statusFilter === 'unknown') filtered = filtered.filter(m => !m.has_custom_entry);
+    if (statusFilter === 'results') filtered = filtered.filter(m => m.has_result);
+    if (statusFilter === 'unknown') filtered = filtered.filter(m => !m.has_result);
 
     // Sortieren
     if (sortField && sortDir !== 0) {
@@ -100,7 +102,9 @@ function renderAll() {
 
     renderModels(filtered);
     renderUnmatched(unmatchedEntries);
-    document.getElementById('countLabel').textContent = filtered.length + ' / ' + allModels.length + ' Modelle';
+    const withResult = allModels.filter(m => m.has_result).length;
+    document.getElementById('countLabel').textContent =
+        filtered.length + ' / ' + allModels.length + ' models · ' + withResult + ' with result';
 }
 
 function renderModels(models) {
@@ -108,7 +112,7 @@ function renderModels(models) {
     body.innerHTML = '';
     models.forEach(m => {
         const row = document.createElement('tr');
-        row.className = m.has_custom_entry ? 'row-documented' : 'row-unknown';
+        row.className = m.has_result ? 'row-documented' : 'row-unknown';
         const caps = m.capabilities || {};
         const sizeStr = m.size_gb ? m.size_gb + ' GB' : '';
         const paramStr = m.parameter_size ? ' (' + esc(m.parameter_size) + ')' : '';
@@ -131,7 +135,7 @@ function renderModels(models) {
         `;
         body.appendChild(row);
 
-        // Aufklappbare Detail-Zeile fuer tool_instruction
+        // Collapsible detail row for tool_instruction
         const detailRow = document.createElement('tr');
         detailRow.className = 'instruction-row';
         detailRow.id = instrId;
@@ -143,7 +147,7 @@ function renderModels(models) {
                 </div>
                 <textarea class="instruction-textarea" data-model="${esc(m.name)}"
                     onchange="saveRow(this)" onblur="saveRow(this)"
-                    placeholder="Custom tool instruction fuer dieses Modell...">${esc(caps.tool_instruction || '')}</textarea>
+                    placeholder="Custom tool instruction for this model...">${esc(caps.tool_instruction || '')}</textarea>
             </td>
         `;
         body.appendChild(detailRow);
@@ -193,7 +197,7 @@ function renderUnmatched(entries) {
                 </div>
                 <textarea class="instruction-textarea" data-model="${esc(e.pattern)}"
                     onchange="saveRow(this)" onblur="saveRow(this)"
-                    placeholder="Custom tool instruction fuer dieses Modell...">${esc(caps.tool_instruction || '')}</textarea>
+                    placeholder="Custom tool instruction for this model...">${esc(caps.tool_instruction || '')}</textarea>
             </td>
         `;
         body.appendChild(detailRow);
@@ -224,14 +228,14 @@ function testBadge(caps, modelName) {
     if (verdict && verdict.tool === false) cls = (hall > 0 ? 'fail' : 'warn');
 
     // Welches Modell wurde WIRKLICH getestet? (Substring-Matching kann fremde
-    // Ergebnisse anzeigen.) testedBare = Name ohne Provider-Prefix.
+    // results.) testedBare = the name without the provider prefix.
     const testedFull = (suit && suit.model) ? suit.model : '';
     const testedBare = testedFull.indexOf('::') >= 0 ? testedFull.split('::').pop() : testedFull;
     const inherited = !!(testedBare && modelName && testedBare.toLowerCase() !== modelName.toLowerCase());
 
     let tooltip = 'Score: ' + score;
-    if (testedFull) tooltip += '\nGetestet als: ' + testedFull
-        + (inherited ? '  \u26a0 GEERBT — dieses Modell wurde NICHT selbst getestet' : '');
+    if (testedFull) tooltip += '\nTested as: ' + testedFull
+        + (inherited ? '  \u26a0 INHERITED — this model was NOT tested itself' : '');
     if (verdict) tooltip += '\nVerdict tool: ' + (verdict.tool ? 'SUITABLE' : 'not suitable') +
         ' / helper: ' + (verdict.helper ? 'suitable' : 'not suitable');
     if (toolScore) tooltip += '\nTool: ' + toolScore;
@@ -240,11 +244,11 @@ function testBadge(caps, modelName) {
     if (sp && (sp.tok_per_s || sp.avg_latency_s)) tooltip += '\nSpeed: '
         + (sp.tok_per_s ? sp.tok_per_s + ' tok/s' : '')
         + (sp.avg_latency_s ? ' · Ø ' + sp.avg_latency_s + 's/Call' : '');
-    if (hall > 0) tooltip += '\n' + hall + ' mit Halluzination';
-    if (bestFmt) tooltip += '\nBestes Format: ' + bestFmt;
+    if (hall > 0) tooltip += '\n' + hall + ' with hallucination';
+    if (bestFmt) tooltip += '\nBest format: ' + bestFmt;
     if (visionResp.red) tooltip += '\nVision red: ' + visionResp.red;
     if (visionResp.blue) tooltip += '\nVision blue: ' + visionResp.blue;
-    if (date) tooltip += '\nGetestet: ' + date;
+    if (date) tooltip += '\nTested: ' + date;
     if (suit && Array.isArray(suit.checks)) {
         tooltip += '\n———';
         suit.checks.forEach(function(c){
@@ -257,7 +261,7 @@ function testBadge(caps, modelName) {
         + (inherited ? ' *' : '');
     if (hall > 0) html += ' <span class="test-detail">(' + hall + ' warn)</span>';
     html += '</span>';
-    if (inherited) html += '<span class="test-date" style="color:#d29922;" title="' + esc(testedFull) + '">\u21aa geerbt: ' + esc(testedBare) + '</span>';
+    if (inherited) html += '<span class="test-date" style="color:#d29922;" title="' + esc(testedFull) + '">\u21aa inherited: ' + esc(testedBare) + '</span>';
     if (verdict) {
         const tcol = verdict.tool ? '#3fb950' : '#f85149';
         const tlab = verdict.tool ? 'TOOL \u2713' : 'TOOL \u2717';
@@ -300,7 +304,7 @@ async function saveFromElement(el) {
     // Modellname aus Element oder Zeile
     const modelName = el.getAttribute('data-model') || el.closest('tr').querySelector('[data-model]').getAttribute('data-model');
 
-    // Alle Elemente fuer dieses Modell suchen (Hauptzeile + Detail-Zeile)
+    // Find every element for this model (main row + detail row)
     const allEls = document.querySelectorAll('[data-model="' + CSS.escape(modelName) + '"]');
     let tool_calling = null, vision = null, notes_de = '', tool_instruction = '';
 
@@ -381,9 +385,9 @@ function cssId(s) {
 // ── Tool/Helper Suitability Test (asynchron, läuft im Hintergrund) ──
 let suitPollTimer = null;
 let suitCur = { provider: '', model: '' };
-let suitModels = [];          // alle Modelle des gewählten Providers
-let suitVision = new Set();   // davon Vision-Modelle
-let suitLoadErr = '';         // Fehlertext beim Modell-Laden
+let suitModels = [];          // every model of the selected provider
+let suitVision = new Set();   // of those, the vision-capable ones
+let suitLoadErr = '';         // error text from loading the model list
 
 let suitJobsTimer = null;
 
@@ -421,7 +425,7 @@ async function suitJobsRefresh() {
                 if (j.status === 'running') { st = (j.done || 0) + '/' + (j.total || '?'); col = '#58a6ff'; }
                 else if (j.status === 'done') {
                     st = (j.score || '') + (v.tool ? ' · TOOL ✓' : ' · TOOL ✗'); col = v.tool ? '#3fb950' : '#d29922';
-                } else if (j.status === 'error') { st = 'Fehler'; col = '#f85149'; }
+                } else if (j.status === 'error') { st = 'Error'; col = '#f85149'; }
                 else { st = j.status || ''; col = '#8b949e'; }
                 const dot = j.status === 'running' ? '⏳' : (j.status === 'error' ? '❌' : '✔');
                 return '<div style="padding:2px 0; cursor:pointer; font-size:13px;" '
@@ -430,7 +434,7 @@ async function suitJobsRefresh() {
                     + '<span style="color:' + col + ';">' + esc(st) + '</span></div>';
             }).join('');
     }
-    // Solange etwas laeuft: haeufig pollen; sonst gemaechlich (zeigt fertige an).
+    // While something is running poll often, otherwise slowly (finished jobs).
     suitJobsTimer = setTimeout(suitJobsRefresh, running.length ? 2000 : 8000);
 }
 
@@ -507,7 +511,7 @@ async function suitStart() {
     const provider = document.getElementById('suitProvider').value;
     const model = document.getElementById('suitModel').value;
     const status = document.getElementById('suitStatus');
-    if (!model) { status.textContent = 'Bitte ein Modell wählen'; return; }
+    if (!model) { status.textContent = 'Please pick a model'; return; }
     document.getElementById('suitStartBtn').disabled = true;
     status.textContent = 'Starte…';
     document.getElementById('suitProgress').innerHTML = '';
@@ -520,7 +524,7 @@ async function suitStart() {
         suitPoll();
         suitJobsRefresh();  // neuen Job sofort in der Liste zeigen
     } catch (e) {
-        status.textContent = 'Fehler: ' + e.message;
+        status.textContent = 'Error: ' + e.message;
         document.getElementById('suitStartBtn').disabled = false;
     }
 }
@@ -530,13 +534,13 @@ function suitRenderJob(job) {
     const checks = job.checks || [];
     if (job.status === 'running') {
         document.getElementById('suitStartBtn').disabled = true;
-        status.textContent = 'Läuft… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
+        status.textContent = 'Running… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
     } else if (job.status === 'done') {
         const s = job.summary || {}; const v = s.verdict || {}; const sp = s.speed || {};
         const speedTxt = (sp.tok_per_s ? ' · ⚡ ' + sp.tok_per_s + ' tok/s' : '')
             + (sp.avg_latency_s ? ' · Ø ' + sp.avg_latency_s + 's/Call' : '');
         const infraTxt = (s.infra || s.saved === false)
-            ? ' <span style="color:#d29922;">⚠ NICHT gespeichert (Infrastruktur-Fehler — Provider nicht erreichbar)</span>'
+            ? ' <span style="color:#d29922;">⚠ NOT saved (infrastructure error — provider unreachable)</span>'
             : '';
         status.innerHTML = 'Fertig ✔ — Tool: '
             + (v.tool ? '<span style="color:#3fb950;">SUITABLE</span>' : '<span style="color:#f85149;">not suitable</span>')
@@ -544,7 +548,7 @@ function suitRenderJob(job) {
             + ' · Score ' + esc(s.score || '') + ' (Tool ' + esc(s.tool || '') + ', Helper ' + esc(s.helper || '')
             + ', Halluz ' + (s.hallucinations || 0) + ')' + speedTxt + infraTxt;
     } else if (job.status === 'error') {
-        status.innerHTML = '<span style="color:#f85149;">Fehler: ' + esc(job.error || '') + '</span>';
+        status.innerHTML = '<span style="color:#f85149;">Error: ' + esc(job.error || '') + '</span>';
     } else {
         status.textContent = '';
     }

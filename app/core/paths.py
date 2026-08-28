@@ -177,8 +177,31 @@ def get_templates_dir() -> Path:
 
 
 def get_config_dir() -> Path:
-    """Shared JSON-Config-Dateien (languages, etc.)."""
+    """Shared JSON config files (languages, etc.)."""
     return get_shared_dir() / "config"
+
+
+def get_model_capabilities_path() -> Path:
+    """Model capabilities + suitability test results.
+
+    Shared across every world and tracked in git: a model's tool-calling /
+    vision ability and its measured test scores describe the MODEL and the
+    hardware behind it, not the world it happened to be tested from.
+    Consolidated out of the old per-world files by
+    ``model_capabilities_migration.migrate_model_capabilities_once``.
+    """
+    return get_config_dir() / "model_capabilities.json"
+
+
+def get_model_capabilities_outputs_path() -> Path:
+    """Raw model answers from the suitability test — LOCAL, never committed.
+
+    The test replays REAL logged prompts, so the answers quote characters,
+    places and plots from the world it was run against. That is study material
+    for prompt tuning, not a result, and it has no place in a shared repo — so
+    it is split off ``get_model_capabilities_path()`` and gitignored.
+    """
+    return get_config_dir() / "model_capabilities_outputs.json"
 
 
 def get_languages_dir() -> Path:
@@ -187,7 +210,7 @@ def get_languages_dir() -> Path:
 
 
 def get_expression_presets_dir() -> Path:
-    """Expression-Presets fuer Bild-Generierung."""
+    """Expression presets for image generation."""
     return get_shared_dir() / "templates" / "expression"
 
 

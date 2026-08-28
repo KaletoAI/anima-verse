@@ -52,6 +52,18 @@ try:
 except Exception:
     pass
 
+# One-time consolidation: the per-world model_capabilities.json files are folded
+# into the shared shared/config/model_capabilities.json. Model abilities and
+# suitability scores describe the model plus its hardware, not a world.
+# Each source file is renamed to *.migrated, so this runs once per world file.
+try:
+    from app.core.model_capabilities_migration import migrate_model_capabilities_once
+    _mc = migrate_model_capabilities_once()
+    if _mc:
+        logger.info("Model capabilities migration: %s", _mc)
+except Exception as _mce:
+    logger.warning("model capabilities migration failed: %s", _mce)
+
 # Import routers
 from app.routes import auth, store, characters, chat, group_chat, scheduler, instagram, world, telegram, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
 from app.routes import admin_settings

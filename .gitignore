@@ -192,6 +192,12 @@ node_modules/
 # Test-/Runtime-Daten enthalten echte Welt-Prompts — NIE einchecken (auch nicht in demo)
 worlds/*/suitability_cases.json
 worlds/*/model_capabilities.json
+worlds/*/model_capabilities.json.migrated
+# Consolidated results (scores/verdicts/timings) ARE tracked:
+#   shared/config/model_capabilities.json
+# The raw model answers next to them are NOT — the suitability test replays real
+# logged prompts, so the answers quote the world's characters and plot.
+shared/config/model_capabilities_outputs.json
 exports/
 
 # Shared 3D animation clips: shared/models/clips/** is the FREE library

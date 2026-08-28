@@ -1,4 +1,4 @@
-"""Admin Routes — Model Capabilities Verwaltung"""
+"""Admin routes — model capabilities management."""
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -10,6 +10,7 @@ from app.core.model_capabilities import (
     get_all_suitability,
     save_model_capability,
     delete_model_capability)
+from app.core.model_capabilities_migration import has_capability_info
 from app.core.provider_manager import get_provider_manager
 from app.core.auth_dependency import require_admin
 
@@ -38,18 +39,18 @@ def admin_root():
 
 @router.get("/models", response_class=HTMLResponse)
 def model_capabilities_page():
-    """Admin-Seite fuer Model Capabilities."""
+    """Admin page for model capabilities."""
     return HTMLResponse(content=_build_models_html())
 
 
 @router.get("/models/data")
 def model_capabilities_data() -> Dict[str, Any]:
-    """JSON-API: Alle verfuegbaren Modelle + Capabilities."""
+    """JSON API: every available model plus its capabilities."""
     pm = get_provider_manager()
     all_caps = get_all_capabilities()
     suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
 
-    # Alle Modelle von allen Providern sammeln
+    # Collect every model from every provider
     models: List[Dict[str, Any]] = []
     seen_names = set()
 
@@ -59,12 +60,19 @@ def model_capabilities_data() -> Dict[str, Any]:
             name = m.get("name", "")
             if not name:
                 continue
-            # Caps KOPIEREN (sonst Cache-Mutation). Intrinsisch per Substring,
-            # Vision-Flag vorbelegen, Test-Ergebnis HW-genau (provider::model).
+            # COPY the caps (otherwise we mutate the cache). Intrinsic ones come
+            # from the substring match, the test result is hardware-exact
+            # (provider::model), and the vision flag is pre-filled from what the
+            # provider itself reports.
             caps = dict(get_model_capabilities(f"{prov_name}::{name}"))
+            sd = suit_all.get(f"{prov_name}::{name}".lower())
+            # "Has a result" is decided BEFORE the provider's own vision claim is
+            # merged in — that claim is self-reported metadata, not something
+            # anybody tested or documented here. Otherwise every vision model
+            # would look documented and the short list would be pointless.
+            has_result = has_capability_info(caps) or bool(sd)
             if caps.get("vision") is None and m.get("vision"):
                 caps["vision"] = True
-            sd = suit_all.get(f"{prov_name}::{name}".lower())
             if sd:
                 caps.update(sd)
             default_caps = all_caps.get("_default", {})
@@ -79,24 +87,25 @@ def model_capabilities_data() -> Dict[str, Any]:
                 "quantization": m.get("quantization", ""),
                 "capabilities": caps,
                 "has_custom_entry": has_custom,
+                "has_result": has_result,
             })
             seen_names.add(name.lower())
 
-    # Sortieren: Provider, dann Name
+    # Sort by provider, then name
     models.sort(key=lambda x: (x["provider"], x["name"]))
 
-    # Pattern-Eintraege ohne zugeordnetes Modell
+    # Pattern entries with no model behind them
     unmatched: List[Dict[str, Any]] = []
     for pattern, caps in all_caps.items():
         if pattern.startswith("_"):
             continue
-        # Pruefen ob irgendein Modell dieses Pattern matched
+        # Does any model match this pattern?
         matched = any(pattern.lower() in name for name in seen_names)
         if not matched:
             unmatched.append({"pattern": pattern, "capabilities": caps})
     unmatched.sort(key=lambda x: x["pattern"])
 
-    # Default Tool Instruction holen
+    # Fetch the default tool instruction
     try:
         from app.core.tool_formats import _DEFAULT_TOOL_INSTRUCTION
         default_instruction = _DEFAULT_TOOL_INSTRUCTION
@@ -113,12 +122,12 @@ def model_capabilities_data() -> Dict[str, Any]:
 
 @router.post("/models/capabilities")
 def update_model_capability(body: CapabilityUpdate) -> Dict[str, Any]:
-    """Speichert/aktualisiert Capabilities fuer ein Pattern.
+    """Saves/updates the capabilities for a pattern.
 
-    Merged mit bestehenden Feldern (z.B. tested_* vom Test-Script).
+    Merges with the existing fields (e.g. tested_* from the test script).
     """
     existing = get_model_capabilities(body.pattern)
-    # tested_* Felder aus bestehendem Eintrag uebernehmen
+    # Carry the tested_* fields over from the existing entry
     caps = {k: v for k, v in existing.items() if k.startswith("tested_")}
     caps["tool_calling"] = body.tool_calling
     caps["vision"] = body.vision
@@ -131,14 +140,14 @@ def update_model_capability(body: CapabilityUpdate) -> Dict[str, Any]:
 
 @router.delete("/models/capabilities")
 def remove_model_capability(body: CapabilityDelete) -> Dict[str, Any]:
-    """Loescht einen Capability-Eintrag."""
+    """Deletes a capability entry."""
     deleted = delete_model_capability(body.pattern)
     return {"status": "success" if deleted else "not_found", "pattern": body.pattern}
 
 
 def _build_models_html() -> str:
     return '''<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -149,14 +158,14 @@ def _build_models_html() -> str:
 
 <div class="toolbar">
     <strong style="color:#58a6ff;">Model Capabilities</strong>
-    <input type="text" id="searchInput" placeholder="Modell suchen..." oninput="filterTable()" />
-    <select id="filterProvider" onchange="filterTable()"><option value="">Alle Provider</option></select>
+    <input type="text" id="searchInput" placeholder="Search model..." oninput="filterTable()" />
+    <select id="filterProvider" onchange="filterTable()"><option value="">All providers</option></select>
     <select id="filterStatus" onchange="filterTable()">
-        <option value="">Alle</option>
-        <option value="documented">Dokumentiert</option>
-        <option value="unknown">Unbekannt</option>
+        <option value="results" selected>With result</option>
+        <option value="">All models</option>
+        <option value="unknown">Without result</option>
     </select>
-    <button onclick="loadData()">Neu laden</button>
+    <button onclick="loadData()">Reload</button>
     <span class="count" id="countLabel"></span>
 </div>
 
@@ -170,40 +179,42 @@ def _build_models_html() -> str:
             <input type="text" id="suitSearch" placeholder="Modell suchen…" style="min-width:160px;" oninput="suitRenderModels()" />
             <select id="suitModel" style="min-width:240px;" onchange="suitOnModelChange()"><option value="">Model…</option></select>
             <span id="suitModelCount" class="info-text"></span>
-            <button class="btn btn-primary" id="suitStartBtn" onclick="suitStart()">Test starten</button>
+            <button class="btn btn-primary" id="suitStartBtn" onclick="suitStart()">Start test</button>
             <span id="suitStatus" class="info-text"></span>
         </div>
         <div id="suitJobs" style="margin-top:10px;"></div>
         <div id="suitProgress" style="margin-top:10px;"></div>
     </div>
 
-    <h2>Verfuegbare Modelle</h2>
-    <p class="info-text">Click Tool/Vision to toggle the value. Edit notes directly — saved automatically.</p>
+    <h2>Available models</h2>
+    <p class="info-text">Click Tool/Vision to toggle the value. Edit notes directly — saved automatically.
+    By default only models with a result are listed: a suitability test, or a capability someone filled in.
+    Switch the filter to "All models" to document a newly discovered one.</p>
     <table>
         <thead>
             <tr>
                 <th class="sortable" data-sort="provider" onclick="sortBy('provider')">Provider<span class="sort-arrow" id="arrow-provider"></span></th>
-                <th class="sortable" data-sort="name" onclick="sortBy('name')">Modell<span class="sort-arrow" id="arrow-name"></span></th>
-                <th class="sortable" data-sort="size_gb" onclick="sortBy('size_gb')">Groesse<span class="sort-arrow" id="arrow-size_gb"></span></th>
+                <th class="sortable" data-sort="name" onclick="sortBy('name')">Model<span class="sort-arrow" id="arrow-name"></span></th>
+                <th class="sortable" data-sort="size_gb" onclick="sortBy('size_gb')">Size<span class="sort-arrow" id="arrow-size_gb"></span></th>
                 <th class="sortable" data-sort="tool_calling" onclick="sortBy('tool_calling')">Tool-Calling<span class="sort-arrow" id="arrow-tool_calling"></span></th>
                 <th class="sortable" data-sort="vision" onclick="sortBy('vision')">Vision<span class="sort-arrow" id="arrow-vision"></span></th>
                 <th class="sortable" data-sort="tested_score" onclick="sortBy('tested_score')">Test<span class="sort-arrow" id="arrow-tested_score"></span></th>
-                <th class="sortable" data-sort="notes_de" onclick="sortBy('notes_de')">Notizen<span class="sort-arrow" id="arrow-notes_de"></span></th>
+                <th class="sortable" data-sort="notes_de" onclick="sortBy('notes_de')">Notes<span class="sort-arrow" id="arrow-notes_de"></span></th>
                 <th></th>
             </tr>
         </thead>
         <tbody id="modelsBody"></tbody>
     </table>
 
-    <h2 id="unmatchedHeader" style="display:none;">Pattern-Eintraege (kein aktives Modell)</h2>
-    <p id="unmatchedInfo" class="info-text" style="display:none;">Diese Eintraege matchen kein aktuell verfuegbares Modell — koennen aber als Substring-Pattern fuer zukuenftige Modelle relevant sein.</p>
+    <h2 id="unmatchedHeader" style="display:none;">Pattern entries (no active model)</h2>
+    <p id="unmatchedInfo" class="info-text" style="display:none;">These entries match no currently available model, but may still apply as a substring pattern to a future one.</p>
     <table id="unmatchedTable" style="display:none;">
         <thead>
             <tr>
                 <th>Pattern</th>
-                <th>Tool-Calling</th>
+                <th>Tool calling</th>
                 <th>Vision</th>
-                <th>Notizen</th>
+                <th>Notes</th>
                 <th></th>
             </tr>
         </thead>
@@ -211,10 +222,10 @@ def _build_models_html() -> str:
     </table>
 
     <div class="add-pattern-row" style="margin-top:16px;">
-        <h2>Neues Pattern hinzufuegen</h2>
+        <h2>Add new pattern</h2>
         <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
-            <input type="text" id="newPattern" placeholder="z.B. gemma, llava, gpt-4o" />
-            <button class="btn btn-primary" onclick="addPattern()">Hinzufuegen</button>
+            <input type="text" id="newPattern" placeholder="e.g. gemma, llava, gpt-4o" />
+            <button class="btn btn-primary" onclick="addPattern()">Add</button>
         </div>
     </div>
 

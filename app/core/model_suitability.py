@@ -20,8 +20,11 @@ geben Tool-Calls im FALSCHEN Format aus (``**SetActivity: …**`` statt
 ``<tool name="SetActivity">…</tool>``) und ertraenken sie in Prosa -> der
 Projekt-Parser fuehrt NICHTS aus -> faellt hier durch.
 
-Ergebnis -> storage/model_capabilities.json (``tested_*`` + ``tested_suitability``
-+ ``tested_verdict``), Anzeige auf "Model Capabilities".
+Result -> ``shared/config/model_capabilities.json`` (``tested_*`` +
+``tested_suitability`` + ``tested_verdict``), shown on the "Model Capabilities"
+page. Shared across all worlds and tracked in git; the models' RAW answers go to
+the gitignored ``model_capabilities_outputs.json`` next to it, because the test
+replays real logged prompts and the answers quote the world.
 """
 import json
 import re
@@ -491,11 +494,15 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
         logger.info("Suitability NOT saved for %s — infrastructure error (provider "
                     "unreachable/non-serverless)", model_full)
         return False
-    from app.core.model_capabilities import save_suitability
-    # gespeicherte Checks: ohne interne Felder, MIT Roh-Output/Timing fuers Tuning
+    from app.core.model_capabilities import save_raw_outputs, save_suitability
+    # Stored checks: verdict, detail and timing only. The raw answer goes into
+    # the local sidecar file — the test replays REAL logged prompts, so it
+    # quotes the world's characters and plot and must not reach the shared,
+    # committed results file.
     stored_checks = [{k: r.get(k) for k in
                       ("id", "label", "category", "ok", "hallucinated", "detail",
-                       "duration_s", "tok_s", "output")} for r in results]
+                       "duration_s", "tok_s")} for r in results]
+    raw_outputs = {r["id"]: r.get("output") or "" for r in results if r.get("output")}
     # Geschluesselt nach vollem Provider::Model → gleiches Modell auf anderer HW
     # ueberschreibt sich NICHT mehr.
     record = {
@@ -517,6 +524,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     }
     try:
         save_suitability(model_full, record)
+        save_raw_outputs(model_full, raw_outputs)
         logger.info("Suitability saved for %s: %s (tool_ok=%s, %.1f tok/s)",
                     model_full, summary["score"], summary["verdict"]["tool"],
                     (summary.get("speed") or {}).get("tok_per_s", 0))
