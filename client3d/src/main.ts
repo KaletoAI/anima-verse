@@ -6,7 +6,8 @@ import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { FigureLibrary } from './scene/figures';
 import { animFamily } from './scene/clipCoverage';
 import { slotFor } from './scene/placeSlot';
-import { buildGlyphs, disposeGlyphs, hitPlace } from './scene/placeGlyphs';
+import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace,
+  hitProp, pickableProps, type PickableProp, type PropHighlight } from './scene/placeGlyphs';
 import { openPlaceMenu } from './game/placeMenu';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
@@ -54,7 +55,8 @@ import { mountScene, reliftScene, SceneLibrary, setSceneModelTier,
   unmountScene } from './scene/sceneRecipe';
 import { WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
-import { figureTransition, placementOf, type ShownPlacement } from './game/placement';
+import { figureTransition, pickablePlaceFor, placementOf,
+  type ShownPlacement } from './game/placement';
 import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
@@ -1639,8 +1641,15 @@ async function startApp(username: string, role: string) {
     // 2026-08-19) — the polygon plate itself shows what a place covers, and
     // the cursor says it is clickable.
     hovered = tile;
-    document.body.style.cursor = hovered ? 'pointer' : 'default';
+    applyHoverCursor();
   };
+  /** ONE writer for the cursor: a tile under the pointer says "clickable",
+   *  and so does a seatable prop (`propHover`). Two independent handlers
+   *  setting `body.style.cursor` would take it away from each other on every
+   *  pointer move. */
+  function applyHoverCursor(): void {
+    document.body.style.cursor = (hovered || propHover) ? 'pointer' : 'default';
+  }
   engine.onPick = (id) => {
     if (!id) {
       panel.hide();
@@ -1681,12 +1690,25 @@ async function startApp(username: string, role: string) {
     npcs.setSelected(name);
     if (!name) {
       setGameState({ selected: null });
-      // No figure under the pointer: a ring on a free slot takes the click
-      // and opens the seat menu (plan-posen-plaetze.md § 4). Asked BEFORE
-      // the ground, or the click would be a walk order to the chair's foot;
-      // asked AFTER the figures, so a ring under a sitter's feet never
-      // steals the click on the sitter (`characterAt` sees figure roots
-      // only, never the rings).
+      // No figure under the pointer: a free place takes the click and opens
+      // the seat menu (plan-posen-plaetze.md § 4). Asked BEFORE the ground,
+      // or the click would be a walk order to the chair's foot; asked AFTER
+      // the figures, so a seat under a sitter never steals the click on the
+      // sitter (`characterAt` sees figure roots only).
+      //
+      // THE PROP FIRST (ruling 2026-08-28): a bench IS its seats' target, and
+      // the hit point picks which of its places — clicking the left end of a
+      // bench offers the left end (`pickablePlaceFor`, hand-derived). Only a
+      // place WITHOUT a prop still has a ring to hit.
+      const propHit = hitProp(placeProps, ray);
+      if (propHit) {
+        const id = pickablePlaceFor({ x: propHit.point.x, z: propHit.point.z },
+                                    propHit.prop.places);
+        if (id) {
+          openPlaceMenuFor(id, x, y);
+          return true;
+        }
+      }
       const placeId = placeGlyphs ? hitPlace(placeGlyphs, ray) : null;
       if (placeId) {
         openPlaceMenuFor(placeId, x, y);
@@ -3262,8 +3284,17 @@ async function startApp(username: string, role: string) {
   /** What the inventory depends on, as one string; a poll whose signature
    *  matches does not ask the server again. */
   let placeSig = '';
-  /** The rings in the scene right now, or null. */
+  /** The rings in the scene right now, or null. Only places WITHOUT a prop
+   *  get one (ruling 2026-08-28) — a seat on a piece of furniture is clicked
+   *  on the furniture. */
   let placeGlyphs: THREE.Group | null = null;
+  /** The mounted props a free place hangs on — the seat's click and hover
+   *  target. Rebuilt with the rings, from the same inventory. */
+  let placeProps: PickableProp[] = [];
+  /** The prop the pointer stands on right now, brightened, with the materials
+   *  it wore before. Exactly one at a time, and it is cleared before anything
+   *  can replace the objects under it (a rebuild, leaving the mode). */
+  let propHover: { prop: PickableProp; lit: PropHighlight } | null = null;
   /** Whether the rings were last built for the embodied mode (edge memory
    *  of the mode subscription). */
   let glyphsEmbodied = false;
@@ -3913,14 +3944,21 @@ async function startApp(username: string, role: string) {
     rebuildPlaceGlyphs();
   }
 
-  /** Throw the rings away and draw them anew from the last inventory —
-   *  only while the player steers the figure, only inside a mounted room,
-   *  never on the place the avatar itself holds. */
+  /** Throw the rings and the prop targets away and derive them anew from the
+   *  last inventory — only while the player steers the figure, only inside a
+   *  mounted room. A ring is never drawn on the place the avatar itself holds
+   *  (it would sit under its own feet); a PROP is, because a bench one sits on
+   *  is still the way to change one's pose on it, and it has no ring to be in
+   *  the way. */
   function rebuildPlaceGlyphs(): void {
+    // The highlight points at objects this rebuild may unmount — let go of it
+    // first, so no prop can be left wearing a hover clone.
+    clearPropHover();
     if (placeGlyphs) {
       disposeGlyphs(placeGlyphs);
       placeGlyphs = null;
     }
+    placeProps = [];
     if (getGameState().mode !== 'embodied' || !placeOffersRoom) return;
     const me = lastMap?.characters.find((c) => c.name === avatarName);
     const tile = me?.location_id ? tiles.get(me.location_id) : undefined;
@@ -3928,7 +3966,43 @@ async function startApp(username: string, role: string) {
     if (!entries) return;
     placeGlyphs = buildGlyphs(entries, placeOffers, me?.place?.id ?? '');
     engine.scene.add(placeGlyphs);
+    // The mesh side of the same inventory: every mounted prop placement of
+    // this room, matched to its markers by the placement anchor the payload
+    // states on both (`pickableProps`).
+    placeProps = pickableProps(
+      (tile?.placedModels ?? [])
+        .filter((rec) => rec.spec.role === 'prop' && rec.spec.room_id === placeOffersRoom)
+        .map((rec) => ({ anchor: rec.spec.anchor, object: rec.object })),
+      entries, placeOffers);
   }
+
+  /** Let the hovered prop have its own materials back. */
+  function clearPropHover(): void {
+    if (!propHover) return;
+    clearPropHighlight(propHover.lit);
+    propHover = null;
+    applyHoverCursor();
+  }
+
+  // HOVER ON A SEATABLE PROP (ruling 2026-08-28) — ONCE PER FRAME, not per
+  // pointer event: the engine only records where the pointer stands
+  // (`engine.pointerAt`), and the raycast happens here, at most once per
+  // drawn frame, against the handful of props this room offers a free slot on.
+  //
+  // FIGURES ARE NOT ASKED HERE, deliberately: the highlight says "this bench
+  // has a free seat", which stays true with somebody standing in front of it,
+  // and the CLICK still gives the figure priority (`pickFigure` asks
+  // `characterAt` first). A second raycast per frame to take the glow away
+  // again would buy nothing.
+  engine.addFrameHook(() => {
+    const at = placeProps.length ? engine.pointerAt : null;
+    const hit = at ? hitProp(placeProps, engine.raycasterAt(at.x, at.y)) : null;
+    if (hit?.prop === propHover?.prop) return;
+    clearPropHover();
+    if (!hit) return;
+    propHover = { prop: hit.prop, lit: highlightProp(hit.prop.object) };
+    applyHoverCursor();
+  });
 
   /** The seat menu for a clicked place; a pick seats the avatar there. */
   function openPlaceMenuFor(placeId: string, x: number, y: number): void {

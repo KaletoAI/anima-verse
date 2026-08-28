@@ -89,6 +89,13 @@ export class Engine {
 
   onPick: ((locationId: string | null) => void) | null = null;
   onHover: ((locationId: string | null) => void) | null = null;
+  /** Where the pointer stands over the canvas, in CLIENT coordinates, or null
+   *  while it is outside it. Written on every `pointermove` (two numbers, no
+   *  raycast) and meant to be read ONCE PER FRAME by whoever wants to pick
+   *  under the cursor — a raycast per pointer event is a storm, one per frame
+   *  is the budget the render loop already has. `main.ts` picks the seatable
+   *  props with it. */
+  pointerAt: { x: number; y: number } | null = null;
   /** Asked BEFORE onPick on a left click (E3-T1): true = the click hit a figure
    *  and is used up, so no tile pick follows. */
   pickFigure: ((x: number, y: number) => boolean) | null = null;
@@ -368,6 +375,7 @@ export class Engine {
       if (e.button === 1) e.preventDefault();
     });
     el.addEventListener('pointermove', (e) => {
+      this.pointerAt = { x: e.clientX, y: e.clientY };
       if (this.orbiting) {
         const dx = e.clientX - this.orbitLast.x;
         const dy = e.clientY - this.orbitLast.y;
@@ -424,7 +432,10 @@ export class Engine {
       if (e.key === '-') this.targetDist = this.clampZoom(this.targetDist * 1.25);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
-    container.addEventListener('pointerleave', () => this.onHover?.(null));
+    container.addEventListener('pointerleave', () => {
+      this.pointerAt = null;
+      this.onHover?.(null);
+    });
   }
 
   private frame() {

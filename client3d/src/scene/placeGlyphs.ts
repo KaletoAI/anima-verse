@@ -6,9 +6,19 @@
  * tile's own place inventory (`tile.roomMarkers`, world metres), and the
  * group only picks the colour. Rebuilt on every worldmap poll — occupancy
  * changes under the player — and the old group is disposed each time.
+ *
+ * RINGS ARE FOR PLACES WITHOUT A PROP (ruling 2026-08-28). Where a place sits
+ * on a piece of furniture, the FURNITURE is the target: it is what the player
+ * looks at, it brightens under the pointer (`highlightProp`) and a click on
+ * its mesh opens the same seat menu (`pickableProps` + `hitProp` here,
+ * `pickablePlaceFor` in `game/placement.ts`). A ring in front of the bench
+ * only competed with it. Room markers — a spot on the floor, a window sill,
+ * anything the payload marks without a placement — have no mesh to click and
+ * keep their ring.
  */
 import * as THREE from 'three';
 import type { PlaceOffer } from '../api';
+import type { PlacePick } from '../game/placement';
 import type { PlaceEntry } from './placeSlot';
 
 /** Ring colour per place group — the five groups the catalog knows. */
@@ -38,10 +48,13 @@ export function glyphColour(group: string): number {
 }
 
 /** One ring per FREE slot of every offered place in `entries` (the room's
- *  markers), skipping the place `skipPlaceId` — the one the avatar itself
- *  holds; its rings would sit under the avatar's own feet. Every mesh carries
- *  `userData.placeId` for `hitPlace`. ONE geometry and one material per
- *  colour for the whole group — `disposeGlyphs` frees them once. */
+ *  markers) that has NO PROP under it, skipping the place `skipPlaceId` — the
+ *  one the avatar itself holds; its rings would sit under the avatar's own
+ *  feet. A place ON a prop (`entry.fixed`, i.e. the payload's
+ *  `source: "prop"`) is drawn by nothing here: its mesh is the target, see
+ *  the header. Every mesh carries `userData.placeId` for `hitPlace`. ONE
+ *  geometry and one material per colour for the whole group —
+ *  `disposeGlyphs` frees them once. */
 export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers: PlaceOffer[],
                             skipPlaceId = ''): THREE.Group {
   const group = new THREE.Group();
@@ -52,7 +65,7 @@ export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers
   for (const offer of offers) {
     if (offer.id === skipPlaceId || offer.free <= 0) continue;
     const entry = entries.get(offer.id);
-    if (!entry) continue;
+    if (!entry || entry.fixed) continue;
     const colour = glyphColour(offer.group);
     let material = materials.get(colour);
     if (!material) {
@@ -73,7 +86,156 @@ export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers
       group.add(mesh);
     }
   }
+  // NOTHING TO DRAW is now the normal case in a furnished room — every place
+  // of it sits on a prop. `disposeGlyphs` frees what it finds under the
+  // CHILDREN, so a geometry allocated for nobody would never be reached.
+  if (!group.children.length) {
+    geometry.dispose();
+    for (const material of materials.values()) material.dispose();
+  }
   return group;
+}
+
+/** A placed PROP mesh together with the places its markers offer — what a
+ *  click and a hover pick from. `places` is never empty (a prop without a
+ *  free slot is not pickable at all). */
+export interface PickableProp {
+  object: THREE.Object3D;
+  places: PlacePick[];
+}
+
+/** The two facts `pickableProps` needs about a mounted placement, so this
+ *  module stays clear of `scene/tiles`: where it stands and what was drawn
+ *  there. `anchor` is the payload's own `models[].anchor`, tile-local — the
+ *  link the markers name (`PlaceEntry.anchor`); `object` is null while the
+ *  mesh has not loaded, and a prop without a mesh is nothing to click. */
+export interface PlacedPropRef {
+  anchor: [number, number];
+  object: THREE.Object3D | null;
+}
+
+/**
+ * WHICH MOUNTED PROPS TAKE A SEAT CLICK (ruling 2026-08-28) — every placement
+ * that carries at least one place with a FREE slot.
+ *
+ * The link is the placement ANCHOR: `models[].anchor` and the prop marker's
+ * `anchor` are the same two numbers out of the same recipe placement, rounded
+ * once by the server, so they compare exactly; `models[].id` could not do the
+ * job, being the PROP id that every copy of a bench shares. A room marker
+ * carries no anchor and is never matched.
+ *
+ * `offers` is the server's word on occupancy (`GET /play/places`) and decides
+ * both which places count and WHICH slots of them are free — the same data
+ * the rings used to read, so a prop offers exactly what a ring would have.
+ */
+export function pickableProps(props: PlacedPropRef[],
+                              entries: Map<string, PlaceEntry> | undefined,
+                              offers: PlaceOffer[]): PickableProp[] {
+  const out: PickableProp[] = [];
+  if (!entries) return out;
+  const free = new Map<string, number[]>();
+  for (const offer of offers) {
+    if (offer.free > 0 && offer.free_slots.length) free.set(offer.id, offer.free_slots);
+  }
+  if (!free.size) return out;
+  for (const prop of props) {
+    if (!prop.object) continue;
+    const places: PlacePick[] = [];
+    for (const [id, entry] of entries) {
+      if (!entry.anchor) continue;
+      if (entry.anchor[0] !== prop.anchor[0] || entry.anchor[1] !== prop.anchor[1]) continue;
+      const slots = free.get(id);
+      if (!slots) continue;
+      // The payload's capacity and the server's may disagree for one poll —
+      // an index without a slot point is simply not offered (`buildGlyphs`
+      // draws no ring for it either).
+      const points = slots.map((i) => entry.slots[i]).filter((p) => !!p)
+        .map((p) => ({ x: p.x, z: p.z }));
+      if (points.length) places.push({ id, free: points });
+    }
+    if (places.length) out.push({ object: prop.object, places });
+  }
+  return out;
+}
+
+/** The pickable prop the ray hits first with the world point it hit, or null.
+ *  Asked AFTER the figures (`NpcManager.characterAt`) and BEFORE the ground,
+ *  for the click as for the hover — one order, one answer. */
+export function hitProp(props: PickableProp[], raycaster: THREE.Raycaster):
+    { prop: PickableProp; point: THREE.Vector3 } | null {
+  if (!props.length) return null;
+  const byRoot = new Map<THREE.Object3D, PickableProp>();
+  for (const p of props) byRoot.set(p.object, p);
+  const hits = raycaster.intersectObjects([...byRoot.keys()], true);
+  for (const hit of hits) {
+    for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
+      const prop = byRoot.get(o);
+      if (prop) return { prop, point: hit.point };
+    }
+  }
+  return null;
+}
+
+/** How much emissive a hovered prop gains. A flat colour, not a factor: the
+ *  point is that the piece of furniture under the pointer reads as "this one"
+ *  against its neighbours, and a factor would leave an already dark prop dark. */
+const HOVER_EMISSIVE = 0x6a6555;
+
+/** What a hover took off a prop, so leaving it can put it back exactly:
+ *  one entry per mesh with the material (or material list) it wore. */
+export interface PropHighlight {
+  object: THREE.Object3D;
+  worn: { mesh: THREE.Mesh; material: THREE.Material | THREE.Material[] }[];
+  clones: THREE.Material[];
+}
+
+/**
+ * BRIGHTEN THE PROP UNDER THE POINTER — on CLONES, never on the material the
+ * object wears.
+ *
+ * The prop loader hands every copy of a prop ONE cached group, so the
+ * materials on a mounted placement are shared with every other copy of the
+ * same bench in the world (that is exactly why `applySlotMaterials` clones
+ * per placement). Writing `emissive` onto them would light up every bench in
+ * the location, and a missed restore would leave them lit for good. So the
+ * hover swaps in clones and `clearPropHighlight` swaps the originals back and
+ * disposes them — a hover transition happens at human speed, a handful of
+ * clones per transition is nothing.
+ *
+ * A material without an `emissive` channel (a basic/line material) is left
+ * alone rather than replaced by something that has one: the cursor already
+ * says the prop is clickable.
+ */
+export function highlightProp(object: THREE.Object3D): PropHighlight {
+  const h: PropHighlight = { object, worn: [], clones: [] };
+  object.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const worn = mesh.material;
+    const list = Array.isArray(worn) ? worn : [worn];
+    let touched = false;
+    const lit = list.map((m) => {
+      if (!('emissive' in m)) return m;
+      const clone = m.clone() as THREE.MeshStandardMaterial;
+      clone.emissive = new THREE.Color(HOVER_EMISSIVE);
+      clone.emissiveIntensity = 1;
+      h.clones.push(clone);
+      touched = true;
+      return clone as THREE.Material;
+    });
+    if (!touched) return;
+    h.worn.push({ mesh, material: worn });
+    mesh.material = Array.isArray(worn) ? lit : lit[0];
+  });
+  return h;
+}
+
+/** Put the prop's own materials back and free the clones the hover made. */
+export function clearPropHighlight(h: PropHighlight): void {
+  for (const entry of h.worn) entry.mesh.material = entry.material;
+  for (const clone of h.clones) clone.dispose();
+  h.worn.length = 0;
+  h.clones.length = 0;
 }
 
 /** The place whose ring the ray hits first, or null. Rings only — figures

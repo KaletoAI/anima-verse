@@ -1637,8 +1637,16 @@ kann, sagt `GET /play/places` (Task 13): die Plätze seines aktuellen Raums als
 label}]}]}` — `free_slots` indiziert die `slots[]` des Szenen-Payloads, der
 Avatar selbst zählt nicht als Belegung (sein eigener Platz bleibt mit einer
 anderen Pose der Gruppe wählbar), `poses` sind die SOLO-Posen der Gruppe,
-Default zuerst. Der 3D-Client zeichnet je freiem Slot einen flachen Ring
-(`placeGlyphs.ts`, Farbe nach Gruppe) und öffnet beim Klick ein Posen-Menü.
+Default zuerst. Der 3D-Client macht daraus zwei Klickziele (Beschluss
+2026-08-28, `placeGlyphs.ts`): ein Platz AUF einem Prop wird am **Prop-Mesh**
+selbst angeklickt — es leuchtet unter dem Zeiger auf, der Cursor wird zum
+Zeigefinger, und der Treffpunkt entscheidet, welchen seiner Plätze das
+Posen-Menü anbietet (der mit dem nächsten freien Slot) —, während ein Platz
+OHNE Prop (`source: "room"`) weiterhin je freiem Slot einen flachen Ring in
+Gruppenfarbe bekommt. Reihenfolge des Klicks: Figur → Prop → Ring → Boden.
+Verbindung Prop-Mesh ↔ Marker ist der Platzierungs-Anker (`markers[].anchor`
+== `models[].anchor`); die Auswahl selbst ist rein
+(`placement.pickablePlaceFor`, `client3d/scripts/smoke_place_lift.mjs` [2]).
 
 **Renderer.** Figur-Root = `anchor + R_y(yaw)·clipRoot(t)` mit der three.js-
 Y-Drehung (`x' = x·cos + z·sin`, `z' = −x·sin + z·cos`); `clipRoot(t)` ist die
