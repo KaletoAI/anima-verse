@@ -21,6 +21,26 @@ export const MODEL_TIERS = ['full', 'low'] as const
 export type ModelTier = (typeof MODEL_TIERS)[number]
 export const DEFAULT_MODEL_TIER: ModelTier = 'full'
 
+/** WHERE a stored file came from, grouped as the props gallery publishes it
+ *  (`app/core/props.list_models`, v2 E4). The building/room galleries send
+ *  none — the row then labels itself from `source` alone. */
+export interface GalleryLabelParts {
+  /** `upload` | `generated` | `areas` | `variant-copy` | `lod` | `shrink` | … */
+  source?: string
+  /** Splits only: `auto` | `manual` | `rename` | `delete`. */
+  areas_mode?: string
+  /** The ONE area a rename or a delete was about ('' for a detection). */
+  areas_area?: string
+  /** The areas this file names, in mesh order. */
+  area_ids?: string[]
+  /** A split names the ORIGIN it was cut from, not its predecessor. */
+  source_file?: string
+  /** A variant copy names the file and the VARIANT it was taken from. */
+  copied_from?: { file?: string; variant?: number }
+  /** A distance mesh names the full file it inherits its areas from. */
+  inherits_from?: string
+}
+
 /** One stored model file as every gallery route reports it. */
 export interface GalleryModel {
   filename: string
@@ -49,6 +69,8 @@ export interface GalleryModel {
   lod_ratio?: number
   /** The file a client without a tier request gets. */
   active?: boolean
+  /** What the second line says about the file's origin (props gallery). */
+  label_parts?: GalleryLabelParts
 }
 
 /** The state of the Blender refinement runner, as every model status reports
@@ -154,22 +176,65 @@ export function TierSummary({ tiers }: { tiers?: string[] }) {
   )
 }
 
-/** Per-run facts of one stored file, as one line ("upload", backend, faces,
- *  texture, origin) — empty when the file carries no record. */
-function runHint(m: GalleryModel, t: (s: string) => string): string {
-  const parts: string[] = []
-  if (m.source === 'upload') parts.push(t('upload'))
+/** WHAT this file is, in one phrase — the answer to the measured symptom of
+ *  a gallery full of identically named GLBs (befunde 2026-08-28 § 8: eight
+ *  files of one variant in ten minutes, each row showing only a minute and a
+ *  backend). Empty when the file records no origin worth a word (a plain
+ *  generation says its backend two parts later). */
+function originLabel(m: GalleryModel, t: (s: string) => string): string {
+  const lp = m.label_parts || {}
+  const source = lp.source || m.source || ''
+  const ids = (lp.area_ids || []).join(', ')
+  if (source === 'areas') {
+    // The four things a run can do to a mesh — the mode says which, and the
+    // areas say what came out of it.
+    switch (lp.areas_mode) {
+      case 'auto':
+        return [t('Split'), t('auto'), ids].filter(Boolean).join(' · ')
+      case 'manual':
+        return [t('Drawn'), ids].filter(Boolean).join(' · ')
+      case 'rename':
+        return `${t('Renamed →')} ${lp.areas_area || ids}`.trim()
+      case 'delete':
+        return t('Area removed')
+      default:
+        return [t('Split'), ids].filter(Boolean).join(' · ')
+    }
+  }
+  if (source === 'variant-copy') {
+    const from = lp.copied_from || {}
+    // A picture variant carries a COPY of the frame — saying which variant it
+    // was taken from is what makes a stale copy findable.
+    if (typeof from.variant === 'number' && from.variant >= 0) {
+      return `${t('Copy of variant')} ${from.variant + 1}`
+    }
+    return from.file ? `${t('Copy of')} ${from.file}` : t('Variant copy')
+  }
+  if (source === 'upload') return t('Upload')
   // A reduction is not a generation: naming the mesh→mesh step is what
   // separates a real low mesh from a second full run at a low budget.
-  else if (m.source === 'shrink') parts.push(t('reduced'))
+  if (source === 'shrink') return t('reduced')
   // A stage came out of the SAME job as its full mesh (baked from the same
   // views), which is why it names a source_file without being a reduction.
-  else if (m.source === 'lod') parts.push(t('LOD stage'))
+  if (source === 'lod') return t('Distance mesh')
+  return ''
+}
+
+/** Per-run facts of one stored file, as one line (origin, backend, faces,
+ *  texture, source) — empty when the file carries no record. */
+function runHint(m: GalleryModel, t: (s: string) => string): string {
+  const parts: string[] = []
+  const origin = originLabel(m, t)
+  if (origin) parts.push(origin)
   if (m.backend) parts.push(m.backend)
   if (m.face_num) parts.push(`${m.face_num.toLocaleString()} ${t('faces')}`)
   if (m.texture_size) parts.push(`${m.texture_size}²`)
   if (m.source_image) parts.push(`${t('from')} ${m.source_image}`)
-  if (m.source_file) parts.push(`${t('from')} ${m.source_file}`)
+  // A variant copy already NAMED its source above; every other file that
+  // records one gets it here (a split names its origin, a low mesh its full).
+  if (m.source_file && (m.label_parts?.source || m.source) !== 'variant-copy') {
+    parts.push(`${t('from')} ${m.source_file}`)
+  }
   // What the CPU reduction actually achieved — the only place these numbers
   // are visible, and the answer to "is this low mesh worth serving".
   if (m.tris) parts.push(`${m.tris.toLocaleString()} ${t('tris')}`)
