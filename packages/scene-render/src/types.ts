@@ -269,13 +269,17 @@ export interface SceneModelSpec {
    *  `leaf_bbox` (spec-picture-props.md § 6, D7): the box of the prop's
    *  `leaf` NODE — the door leaf Blender cut out of the frame — in RAW y-up
    *  model metres, before the fit scaling `place()` applies; absent when the
-   *  mesh has no such node (then the whole group swings). A renderer hangs
-   *  that node in a pivot group at x = `min.x`, y = `min.y`, z = the box's
-   *  centre — for BOTH hinges (ruling R12): `place()` seats every fit model
-   *  on its local −x edge and the server turns a right-hinged door 180°, so
-   *  the hinge is always the model's −x side. NOT the wall piece `leaf`
-   *  above (the flat panel in a door hole): that one is a wall, this one is
-   *  a node inside the prop model. */
+   *  mesh has no such node (then the whole group swings). WHERE the pivot
+   *  goes is `leafPivot` of this package and nowhere else (ruling R13): the
+   *  rule is stated in the FIXED frame — x = min, y = min, z = centre of the
+   *  box rotated by `fix_euler`, because `place()` seats a fit model on its
+   *  −x edge after the orientation fix and the server turns a right-hinged
+   *  door 180° about that same edge — and mapped back through the fix, since
+   *  the pivot has to be inserted beside the leaf node in RAW coordinates.
+   *  With `fix_euler` 0 that is exactly (min.x, min.y, centre z) and a +y
+   *  axis, the old R12 wording. NOT the wall piece `leaf` above (the flat
+   *  panel in a door hole): that one is a wall, this one is a node inside
+   *  the prop model. */
   door?: { opening: number; hinge: 'left' | 'right'; swing: 1 | -1
            leaf_bbox?: { min: [number, number, number]
                          max: [number, number, number] } }
@@ -320,10 +324,12 @@ export interface SceneModelSpec {
    *  with the optional `slot_` prefix taken off (`props.detect_slots` —
    *  material `slot_picture_1` is the slot `picture_1`, material `glass` is
    *  the slot `glass`). The value is either a picture (`image`, a same-origin
-   *  gallery URL) or a look (`preset`, today only `glass`). Only slots the
-   *  prop still declares are in here; the server drops the rest, so a renderer
-   *  matches names and asks nothing. Absent = the prop renders as it was
-   *  modelled.
+   *  gallery URL) or a look (`preset`, today only `glass`). The prop-wide
+   *  half follows the prop's primary mesh, but a picture VARIANT hangs on
+   *  its own copied mesh and keeps its values until that copy is taken again
+   *  (ruling R15) — so a key may name a material the current primary no
+   *  longer has. A renderer matches names and ignores what it cannot find;
+   *  it asks nothing. Absent = the prop renders as it was modelled.
    *  `applySlotMaterials` (@anima/scene-render) is the ONE routine that
    *  writes it — it clones the material per placement, because the model
    *  cache shares one group between all of them. */

@@ -1722,7 +1722,9 @@ def test_door_props() -> None:
     # node (props.LEAF_BBOX_KEY); the recipe copies it VERBATIM into
     # `door.leaf_bbox` — raw y-up model metres, the renderer scales — and
     # writes no key at all without it (the whole group swings then). Ruling
-    # R12: the pivot is always min.x, so nothing hinge-dependent is derived.
+    # R13: where the pivot goes is the shared `leafPivot` (the rule stated in
+    # the FIXED frame and mapped back through `fix_euler`), so the server
+    # derives nothing hinge-dependent here — it copies the box.
     LEAF_BBOX = {"min": [0.1, 0.1, -0.02], "max": [0.9, 2.1, 0.0]}
     stub_library(lambda pid: (
         {**DOOR_PROP, "id": pid, "leaf_bbox": LEAF_BBOX} if pid == "door1" else None))

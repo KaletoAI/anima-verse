@@ -93,6 +93,10 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
     id: a.id, kind: a.kind, edges: a.edges || [] })), [areas])
   // Split by what an area is FILLED with, not by its kind name (R8): a picture
   // variant needs a gallery area, the pane defaults a preset one.
+  // `warning` is what a SUCCESSFUL run had to say (today: no leaf found).
+  // Read off the payload here rather than through `PropAreasInfo`, which a
+  // parallel strand owns.
+  const warning = (info as { warning?: string } | null)?.warning || ''
   const pictureAreas = areas.filter((a) => areaKindOf(a.kind)?.value === 'image')
   const presetAreas = areas.filter((a) => areaKindOf(a.kind)?.value === 'preset')
   const pictureVariants = variants.filter(
@@ -246,6 +250,14 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
       {info?.error ? (
         <div className="ga-hint" style={{ display: 'block', color: 'var(--danger, #f85149)' }}>
           {`${t('Last automatic run failed')}: ${info.error}`}
+        </div>
+      ) : null}
+      {/* A run that WORKED and found nothing to cut is a note, not a failure
+          — the server keeps the two apart (`warning` vs. `error`), so a door
+          without a detectable leaf does not read as a broken detection. */}
+      {warning ? (
+        <div className="ga-hint" style={{ display: 'block' }}>
+          {`ℹ ${t(warning)}`}
         </div>
       ) : null}
       {info && !areas.length && info.last_run ? (

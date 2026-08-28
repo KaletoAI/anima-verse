@@ -14,9 +14,10 @@ panel still shows its key colour ("a picture is missing here").
 
 Params (``args["params"]``)::
 
-    mode        "auto"   — dissolve every existing slot_<kind>_<k> area (faces
-                           back to their origin material, atlas UVs restored)
-                           and detect anew for every kind in ``kinds``
+    mode        "auto"   — dissolve every existing slot_<kind>_<k> area that
+                           is not in ``keep`` (faces back to their origin
+                           material, atlas UVs restored) and detect anew for
+                           every kind in ``kinds``
                 "manual" — ``faces`` (flat triangle indices, R1) become ONE new
                            area of ``kind``; every other area stays; a listed
                            face that belonged to another area moves
@@ -27,6 +28,11 @@ Params (``args["params"]``)::
     kind        "picture" | "glass" | "leaf" — mode manual
     area        "<area id>" | "leaf" — mode delete
     min_area_m2 float, min_faces int — the size filter of mode auto
+    keep        ["<area id>", …] — mode auto, ruling R14: the areas the ADMIN
+                drew. They keep their faces, their material and their number
+                (so ``_next_k`` steps over it), and the detection never sees
+                their faces — it reads NON-area materials only. "leaf" in the
+                list keeps the leaf node uncut.
     origins     {"<area id>": "<material name>"} — where dissolved faces go
                 (the server keeps it from the run that created the area);
                 without an entry the mesh's FIRST non-slot material takes them
@@ -177,21 +183,37 @@ class Model:
             self.layout.append({"name": obj.name, "tri_count": len(me.loop_triangles)})
             self.had_areas.append(any(_area_name(m.name) for m in me.materials if m))
 
-    def welded_faces(self):
-        """The face list over vertices WELDED BY POSITION (5 decimals) — for
-        the door-leaf geometry only. A glTF export stores a flat-shaded box
-        with three vertices per corner (one per normal), so after one
-        export/import round trip no two faces of the box share an edge any
-        more and the maths module's edge connectivity would see 60 islands.
-        Positions are the same either way; only the indices are folded. The
-        colour path keeps the split indices, because ITS per-vertex UVs
-        differ across a seam and must not be folded."""
+    def weld(self, uvs=None):
+        """``(faces, remap)`` over vertices FOLDED BY POSITION (5 decimals),
+        and by ``(position, uv)`` when ``uvs`` is given.
+
+        EVERY connectivity question has to ask this first. A glTF file stores
+        a vertex per (position, uv, normal) triple and one primitive per
+        material, so after a single export/import round trip the very mesh
+        this script wrote comes back with its faces sharing no vertex indices
+        across a former material seam, across a UV seam and — on a flat-shaded
+        box — anywhere at all. Raw indices would then see 60 islands where the
+        model has one leaf, or a panel of single triangles that every size
+        filter drops: a split file could not be re-detected.
+
+        Positions (and UVs) are identical either way; only the indices fold.
+        The LEAF asks by position alone — it is pure geometry. The COLOUR path
+        passes the atlas UVs, so two loops that disagree about the texture
+        stay apart (they sample different texels and are not one panel) while
+        the duplicates of one and the same texel fold back together."""
         canon = {}
         remap = []
         for i, v in enumerate(self.vertices):
             key = (round(v[0], 5), round(v[1], 5), round(v[2], 5))
+            if uvs is not None:
+                uv = uvs[i]
+                key += (round(uv[0], 5), round(uv[1], 5))
             remap.append(canon.setdefault(key, i))
-        return [tuple(remap[i] for i in f) for f in self.faces]
+        return [tuple(remap[i] for i in f) for f in self.faces], remap
+
+    def welded_faces(self):
+        """The face list welded by POSITION — the door leaf's geometry."""
+        return self.weld()[0]
 
     def atlas_uvs(self):
         """Per-vertex atlas UVs (Blender convention, v bottom-up — the same
@@ -503,7 +525,15 @@ def _apply_world(obj):
 def _drop_empties():
     """Whatever is not a mesh (the Empties a GLB's parent nodes became) has
     lost its children to :func:`_apply_world` and would only be exported as
-    a dangling node."""
+    a dangling node.
+
+    SCOPE, deliberately stated: this removes EVERY non-mesh object in the
+    scene, not merely the parents just emptied — cameras, lights, armatures
+    included. It is called only from :func:`_join_all`, i.e. only on the leaf
+    split, and a prop mesh in this pipeline carries none of those: the scene
+    is `_common.reset_scene`'d and holds exactly the imported static GLB.
+    Should a lit or rigged model ever reach this script, the leaf split is
+    where its extra nodes would be dropped."""
     for o in list(bpy.context.scene.objects):
         if o.type != "MESH":
             bpy.data.objects.remove(o, do_unlink=True)
@@ -663,17 +693,34 @@ def picture_areas(args):
     changed = False
 
     if mode == "auto":
+        # R14 — WHAT THE ADMIN DREW STAYS. `keep` names the areas the server
+        # holds as hand-drawn: they are neither dissolved nor renumbered, and
+        # the detection cannot even see their faces (only NON-area materials
+        # are read, and a kept area's faces wear its slot material). Their
+        # numbers stay taken, because they stay in `existing`, which is what
+        # `_next_k` counts.
+        keep = {str(a) for a in (params.get("keep") or [])}
+        keep_leaf = LEAF_NAME in keep and bool(_leaf_faces(model))
         # A previous LEAF goes back into the frame first when the leaf is to
         # be detected anew — the colour kinds then work on one plain mesh.
-        if LEAF_NAME in kinds and _leaf_faces(model):
+        if LEAF_NAME in kinds and not keep_leaf and _leaf_faces(model):
             _split_leaf(model, [])
             model, existing = _rebuild()
             changed = True
-        for area_id, entry in existing.items():
+        for area_id, entry in list(existing.items()):
+            if area_id in keep:
+                continue
             _dissolve(model, entry, origins.get(area_id, ""))
+            existing.pop(area_id)
             changed = True
-        existing = {}
         atlas_uvs = model.atlas_uvs()
+        # The connectivity the detection walks is the WELDED one (see
+        # `Model.weld`): a split file that has been through one export is the
+        # ordinary input of a re-run, and its panel would otherwise fall apart
+        # into single triangles. `remap` folds a vertex onto the first index
+        # of its (position, uv) — the planar UVs come back keyed by that
+        # index and are expanded onto every vertex it swallowed.
+        welded, remap = model.weld(atlas_uvs)
         for oi, mi, image in _material_groups(model):
             sample = _sampler(image)
             if sample is None:
@@ -681,19 +728,22 @@ def picture_areas(args):
             me = model.objects[oi].data
             group = [flat for flat, (o, pi) in enumerate(model.poly)
                      if o == oi and me.polygons[pi].material_index == mi]
-            sub_faces = [model.faces[n] for n in group]
+            sub_faces = [welded[n] for n in group]
             for kind in colour_kinds:
                 found = pa.detect_areas(model.vertices, sub_faces, atlas_uvs, sample,
                                         kind, min_area_m2=min_area, min_faces=min_faces)
                 for area in found:
                     faces = [group[i] for i in area["faces"]]
+                    uvs = {v: area["uvs"][remap[v]]
+                           for v in range(len(model.vertices))
+                           if remap[v] in area["uvs"]}
                     k = _next_k(kind, existing)
                     area_id = f"{kind}_{k}"
-                    origin = _assign(model, area_id, kind, faces, area["uvs"], image)
+                    origin = _assign(model, area_id, kind, faces, uvs, image)
                     existing[area_id] = {"kind": kind, "k": k, "faces": faces}
                     origins[area_id] = origin
                     changed = True
-        if LEAF_NAME in kinds:
+        if LEAF_NAME in kinds and not keep_leaf:
             # THE DOOR LEAF (§ 6): geometry only, on the mesh the colour
             # split just left behind — the leaf takes its slot materials
             # along, that is the point of a node.

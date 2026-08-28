@@ -406,9 +406,10 @@ export interface SwingingDoor {
    *  `applyDoorLocks` hands to `game/locks.doorwayLock`, so a locked door and
    *  a red threshold can never disagree. */
   rooms: string[];
-  /** `rotation.y` of the node that swings (`swingNode ?? group`) as it was
-   *  left when the door was registered, read ONCE and added to every frame
-   *  instead of accumulated onto the object.
+  /** `group.rotation.y` as it was left when the door was registered, read
+   *  ONCE and added to every frame instead of accumulated onto the object.
+   *  Used ONLY in the no-leaf branch — a mesh Blender has split swings its
+   *  `swingNode` about `swingAxis` and never touches the group's yaw.
    *
    *  Today it is ALWAYS 0, and that is not an accident to be tidied away:
    *  `place()` returns its OUTER group, and the placement yaw sits on an inner

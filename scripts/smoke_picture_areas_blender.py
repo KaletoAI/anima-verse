@@ -85,6 +85,34 @@ THE FIXTURE (glTF y-up, written with the stdlib), `plate_glb(n)`:
   smoke_props_slots [3b]; no image backend is needed for a re-mesh): the
   active model carries "slot_picture_1" with 32 triangles, sidecar areas one
   entry, slots [{picture_1, image}].
+
+[G] AN AUTOMATIC RUN KEEPS WHAT THE ADMIN DREW (ruling R14)
+  On plate_glb(8), the BOTTOM-RIGHT quarter (x > 0, y < 0 — grey, so the
+  detector would never find it) is drawn by hand as kind "glass": 4x4 quads =
+  32 triangles, `source "manual"`. An `auto` run afterwards therefore has one
+  auto area to find (the green quarter) and one manual area to leave alone:
+
+    areas -> [(picture_1, auto, 32), (glass_1, manual, 32)]   (kind order)
+    mesh  -> slot_picture_1 32 tris, slot_glass_1 32 tris, atlas 128-64 = 64
+
+  glass_1 keeps its id (so `_next_k` stepped over the number), its faces and
+  its planar UVs. Its frame is the same as [A]'s — n = (0,0,1), u = (1,0,0),
+  v = (0,1,0) — over the bbox x in [0, 0.5], y in [-0.5, 0]: u = (x-0)/0.5 =
+  2x, v_blender = (y+0.5)/0.5, glTF v = 1 - v_blender = -2y.
+
+[H] A SPLIT FILE CAN BE DETECTED AGAIN AFTER ITS OWN ROUND TRIP
+  `plate_glb(8, 0.002)`: every second grid vertex sits 2 mm proud, so all
+  POSITIONS stay shared between the quads that meet at them while every
+  triangle gets its own normal — an ordinary img2mesh surface. glTF stores one
+  vertex per (position, normal, uv) triple, so Blender's export duplicates
+  every vertex of the panel per adjoining face and the re-imported file shares
+  no index between two faces of it. Raw indices would break the green quarter
+  into 32 one-face components, every one of them below the 12-face filter, and
+  the second run would report NO area. With the (position, uv) weld the quarter
+  is one patch again:
+
+    run 1 (the landing hook splits the upload)  -> picture_1, 32 faces
+    run 2 (`auto` on the file run 1 exported)   -> picture_1, 32 faces
 """
 import json
 import os
@@ -141,12 +169,16 @@ def atlas_png() -> bytes:
     return png_rgb(64, 64, pixel)
 
 
-def plate_glb(n: int = 2) -> bytes:
+def plate_glb(n: int = 2, bump: float = 0.0) -> bytes:
+    """The plate. ``bump`` lifts every second grid vertex by that many metres
+    (a checkerboard), which leaves every POSITION shared between the quads
+    that meet at it but gives every triangle its OWN normal — the shape of an
+    img2mesh surface, and the reason a round trip needs a weld (part [H])."""
     positions, uvs = [], []
     for j in range(n + 1):
         for i in range(n + 1):
             x, y = -0.5 + i / n, -0.5 + j / n
-            positions.append((x, y, 0.0))
+            positions.append((x, y, bump if (i + j) % 2 else -bump))
             uvs.append((x + 0.5, 0.5 - y))
     indices = []
     for j in range(n):
@@ -186,7 +218,7 @@ def plate_glb(n: int = 2) -> bytes:
         "bufferViews": views,
         "accessors": [
             {"bufferView": 0, "componentType": 5126, "count": len(positions),
-             "type": "VEC3", "min": [-0.5, -0.5, 0.0], "max": [0.5, 0.5, 0.0]},
+             "type": "VEC3", "min": [-0.5, -0.5, -bump], "max": [0.5, 0.5, bump]},
             {"bufferView": 1, "componentType": 5126, "count": len(positions),
              "type": "VEC2"},
             {"bufferView": 2, "componentType": 5123, "count": len(indices),
@@ -485,6 +517,42 @@ def main() -> int:
     gmeta = store.read_sidecar(gp)
     check("sidecar: one area", [a["id"] for a in gmeta.get("areas") or []] == ["picture_1"], str(gmeta.get("areas")))
     check("slots: picture_1 image", store.get_prop(gp)["slots"] == [{"name": "picture_1", "kind": "image"}])
+
+    print("\n[G] an automatic run keeps what the ADMIN drew (R14)")
+    gp = store.create_prop(name="Drawn frame", category="decor")["id"]
+    store.save_uploaded_glb(gp, plate_glb(8))
+    up = store.model_path(gp)
+    drawn = flat_faces_where(primitives(up), lambda cx, cy: cx > 0 and cy < 0)
+    check("the bottom-right quarter is 32 flat faces", len(drawn) == 32, str(len(drawn)))
+    areas = store.detect_areas(gp, mode="manual", faces=drawn, kind="glass")
+    check("the drawn area is glass_1, source manual, 32 faces",
+          [(a["id"], a["source"], a["faces"]) for a in areas]
+          == [("glass_1", "manual", 32)], str(areas))
+    areas = store.detect_areas(gp, mode="auto")
+    ids = [(a["id"], a["source"], a["faces"]) for a in areas]
+    check("auto adds the green panel and LEAVES the drawn one standing",
+          ids == [("picture_1", "auto", 32), ("glass_1", "manual", 32)], str(ids))
+    prims = primitives(store.model_path(gp))
+    check("the mesh carries both materials, 32 triangles each",
+          tri_count(prims, "slot_picture_1") == 32
+          and tri_count(prims, "slot_glass_1") == 32,
+          str((tri_count(prims, "slot_picture_1"), tri_count(prims, "slot_glass_1"))))
+    check("…and the drawn area kept its planar UVs (u = 2x, v = -2y)",
+          uv_rule_holds(prims, "slot_glass_1", lambda x, y: (2 * x, -2 * y)))
+    check("atlas 64", tri_count(prims, "atlas") == 64, str(tri_count(prims, "atlas")))
+
+    print("\n[H] a split file can be detected again after its own round trip")
+    hp = store.create_prop(name="Bumpy frame", key_areas=["picture"])["id"]
+    check("the landing splits the bumpy plate", store.save_uploaded_glb(hp, plate_glb(8, 0.002)))
+    first = store.read_sidecar(hp).get("areas") or []
+    check("run 1: picture_1 with 32 faces",
+          [(a["id"], a["faces"]) for a in first] == [("picture_1", 32)], str(first))
+    areas = store.detect_areas(hp, mode="auto")
+    check("run 2 on the EXPORTED file: still one area of 32 faces",
+          [(a["id"], a["faces"]) for a in areas] == [("picture_1", 32)], str(areas))
+    prims = primitives(store.model_path(hp))
+    check("…and the mesh really carries them", tri_count(prims, "slot_picture_1") == 32,
+          str(tri_count(prims, "slot_picture_1")))
 
     print()
     if FAILURES:

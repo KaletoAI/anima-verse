@@ -242,9 +242,61 @@ mesh that names `slot_picture_1` only:
 And a PRIMARY without an active full mesh makes nothing stale — there is
 nothing to compare `copied_from.file` against, and the tab must not offer a
 re-copy that can only fail.
+
+---------------------------------------------------------------------------
+[12] A GALLERY CLICK KEEPS EVERY HUNG PICTURE (ruling R15)
+---------------------------------------------------------------------------
+The two halves of a spec's `slots` do NOT share a fate. `area_defaults`
+describe the PRIMARY mesh, so they follow whatever file is selected for it. A
+variant's `slot_values` describe THAT VARIANT'S OWN copied mesh, which still
+carries `slot_picture_1` / `slot_glass_1` while the admin clicks through the
+primary's gallery — so a select must not touch them. Hand-derived, with the
+frame prop of [5] (areas picture_1 + glass_1, defaults `{glass_1: glass}`, one
+picture variant showing both):
+
+    select the PRE-SPLIT file (materials: atlas)
+        -> areas []            (the file names no slot material)
+        -> area_defaults {}    (they described the primary)
+        -> slot_values {picture_1: IMG, glass_1: glass}   UNCHANGED
+    select the split file back (its `.areas.json` states the list)
+        -> areas [picture_1, glass_1]
+        -> slot_values still {picture_1: IMG, glass_1: glass}
+
+The re-copy in [11] is the counterpart: THERE the variant takes the primary's
+mesh, so there its values are re-read against the prop's current areas.
+
+---------------------------------------------------------------------------
+[13] A RENAME DROPS BOTH HALVES OF THE DEAD ID
+---------------------------------------------------------------------------
+`rename_area_kind(pid, "glass_1", "picture")` on the frame of [12]: picture_1
+is taken, so the target id is `picture_2` and the areas read
+[(picture_1, picture), (picture_2, picture)].
+
+A rename is ALWAYS a kind change, so nothing stored under the old id can
+survive it — a glass preset on a picture panel is the very value both
+sanitizers refuse, and moving it onto `picture_2` would only move the invalid
+value. Hence `area_defaults == {}` and `slot_values == {picture_1: IMG}`; the
+`label` stands. The symptom this closes: the dialog renders existing areas
+only, so a stale `glass_1` key could never be removed by hand and every save
+of that variant answered 400 — the smoke saves it again to prove it passes.
+
+---------------------------------------------------------------------------
+[14] A FAILED RUN SAYS SO AND DELETES NOTHING
+---------------------------------------------------------------------------
+`_areas_after_landing` with `detect_areas` raising `BlenderUnavailable`
+("busy") — the LOAD condition, not a statement about the prop:
+
+    areas          []      (the freshly landed mesh really is unsplit)
+    area_defaults  {glass_1: glass}   KEPT
+    slot_values    {picture_1: IMG}   KEPT
+    areas_info     error "…busy…", warning ""
+
+Both halves wait for the next SUCCESSFUL run to prune them. And the note a
+run that WORKED leaves when a door has no cuttable leaf (`NO_LEAF_NOTE`) is a
+`warning`, never an `error` — one sidecar key, two fields, so the tab cannot
+report "Last automatic run failed" over a working detection.
 """
 import json
-import os
 import struct
 import sys
 import tempfile
@@ -253,10 +305,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 WORLD = Path(tempfile.mkdtemp(prefix="prop-areas-smoke-"))
-os.environ["STORAGE_DIR"] = str(WORLD)
 
 from app.core import paths  # noqa: E402
 
+# `paths.init` IS the selection (project rule: no env config) — the throwaway
+# storage needs nothing else, and an env var here would only be a second,
+# silently disagreeing source.
 paths.init(WORLD)
 
 from app.core import config  # noqa: E402
@@ -604,11 +658,12 @@ def part2() -> None:
     finally:
         store.variant_generating = real_gen
 
-    # PRUNING: an area that leaves the mesh takes BOTH halves of `slots` with
-    # it — the prop-wide default and every variant's value — and leaves the
-    # label alone. Driven through `_reconcile_areas`, the path a re-selected
-    # or re-uploaded mesh takes: the new mesh names `slot_picture_1` only, so
-    # `glass_1` is gone.
+    # PRUNING, R15 — the two halves of `slots` do NOT share a fate.
+    # `_reconcile_areas` (the path a re-selected or re-uploaded mesh takes)
+    # reads the ACTIVE PRIMARY mesh, so it prunes what describes the primary:
+    # the prop-wide `area_defaults`. A variant hangs on its OWN copy, which
+    # still carries `slot_glass_1`, so its value stays — and the label, which
+    # is a name and no description at all, stays as it always did.
     store.set_variant_slot_values(pid, 1, {"picture_1": {"image": IMG},
                                            "glass_1": {"preset": "glass"}},
                                   "Both")
@@ -626,16 +681,27 @@ def part2() -> None:
           str([a["id"] for a in rec["areas"]]))
     check("…from the prop-wide defaults", rec["area_defaults"] == {},
           str(rec["area_defaults"]))
-    check("…and from the variant's slot_values",
-          entry["slot_values"] == {"picture_1": {"image": IMG}},
+    check("…but NOT from the variant's slot_values (R15)",
+          entry["slot_values"] == {"picture_1": {"image": IMG},
+                                   "glass_1": {"preset": "glass"}},
           str(entry["slot_values"]))
     check("…while the label the admin gave it stands",
           entry["label"] == "Both", entry["label"])
-    check("the spec carries only the surviving area",
+    check("the spec still carries what the variant's own mesh shows",
           prop_specs(scene_of(pid, door_pid)).get((-3.0, -3.0), {}).get("slots")
-          == {"picture_1": {"image": IMG}},
+          == {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
           str(prop_specs(scene_of(pid, door_pid)).get((-3.0, -3.0),
                                                       {}).get("slots")))
+    # A RE-COPY is the moment the variant takes the primary's mesh, so THERE
+    # the values are re-read against the prop's current areas — `glass_1`
+    # describes nothing on the new copy and goes; the picture stays.
+    check("re-copy answers True", store.recopy_variant_mesh(pid, 1) is True)
+    entry = store.list_variants(pid)[1]
+    check("…and prunes THIS variant's values to the current areas",
+          entry["slot_values"] == {"picture_1": {"image": IMG}},
+          str(entry["slot_values"]))
+    check("…without touching the label", entry["label"] == "Both",
+          entry["label"])
 
     # A primary variant with NO active full mesh has nothing to compare
     # against — the tab must not offer a re-copy that can only fail.
@@ -644,6 +710,115 @@ def part2() -> None:
     check("no primary mesh -> nothing is stale",
           all(v["stale"] is False for v in store.list_variants(pid)),
           str([v["stale"] for v in store.list_variants(pid)]))
+
+    print("\n[12] a GALLERY CLICK keeps every hung picture (R15)")
+    pid12 = make_prop("Gallery frame", frame_glb(), FRAME_AREAS)
+    split_file = store.model_gallery(pid12, 0).find("full")
+    store.areas_sidecar_path(split_file).write_text(json.dumps(
+        {"areas": [{**a, "edges": []} for a in FRAME_AREAS],
+         "mesh_layout": [], "run_at": "x"}), encoding="utf-8")
+    store._source_file(pid12, 0, create=True).write_bytes(b"\x89PNG-source")
+    store.update_prop(pid12, {"area_defaults": {"glass_1": {"preset": "glass"}}})
+    v12 = store.add_picture_variant(
+        pid12, {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
+        "Sunset")
+    # The admin selects the PRE-SPLIT file — one that names no slot material.
+    plain = glb({"asset": {"version": "2.0"}, "materials": [{"name": "atlas"}],
+                 "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}]})
+    store.save_uploaded_glb(pid12, plain)
+    plain_file = store.model_path(pid12)
+    store.select_model(pid12, plain_file.name)
+    check("the pre-split file names no area", store.get_prop(pid12)["areas"] == [],
+          str(store.get_prop(pid12)["areas"]))
+    check("the prop-wide defaults follow the primary and go",
+          store.get_prop(pid12)["area_defaults"] == {},
+          str(store.get_prop(pid12)["area_defaults"]))
+    check("…but the variant still hangs its picture AND its pane",
+          store.list_variants(pid12)[v12]["slot_values"]
+          == {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
+          str(store.list_variants(pid12)[v12]["slot_values"]))
+    # …and back: the split file brings its own list back from `.areas.json`.
+    store.select_model(pid12, split_file.name)
+    check("selecting the split file back restores the areas",
+          [a["id"] for a in store.get_prop(pid12)["areas"]]
+          == ["picture_1", "glass_1"],
+          str([a["id"] for a in store.get_prop(pid12)["areas"]]))
+    check("…and the assignment came through the round trip untouched",
+          store.list_variants(pid12)[v12]["slot_values"]
+          == {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
+          str(store.list_variants(pid12)[v12]["slot_values"]))
+
+    print("\n[13] a RENAME drops both halves of the dead id")
+    pid13 = make_prop("Rename frame", frame_glb(), FRAME_AREAS)
+    store._source_file(pid13, 0, create=True).write_bytes(b"\x89PNG-source")
+    store.update_prop(pid13, {"area_defaults": {"glass_1": {"preset": "glass"}}})
+    v13 = store.add_picture_variant(
+        pid13, {"picture_1": {"image": IMG}, "glass_1": {"preset": "glass"}},
+        "Both")
+    # glass_1 becomes a PICTURE area: picture_1 is taken, so it is picture_2.
+    renamed = store.rename_area_kind(pid13, "glass_1", "picture")
+    check("glass_1 -> picture_2 (the next free number of the target kind)",
+          [(a["id"], a["kind"]) for a in renamed]
+          == [("picture_1", "picture"), ("picture_2", "picture")],
+          str([(a["id"], a["kind"]) for a in renamed]))
+    check("the glass preset is NOT moved onto the renamed picture panel",
+          store.get_prop(pid13)["area_defaults"] == {},
+          str(store.get_prop(pid13)["area_defaults"]))
+    check("…and the variant's value for the dead id is gone with it",
+          store.list_variants(pid13)[v13]["slot_values"]
+          == {"picture_1": {"image": IMG}},
+          str(store.list_variants(pid13)[v13]["slot_values"]))
+    check("…the label stands", store.list_variants(pid13)[v13]["label"] == "Both")
+    # THE SYMPTOM the stale key caused: every save of that variant 400s,
+    # because the dialog can only send back what it renders.
+    store.set_variant_slot_values(pid13, v13, {"picture_1": {"image": IMG2}})
+    check("saving the variant works again",
+          store.list_variants(pid13)[v13]["slot_values"]
+          == {"picture_1": {"image": IMG2}},
+          str(store.list_variants(pid13)[v13]["slot_values"]))
+
+    print("\n[14] a FAILED run says so and deletes nothing")
+    pid14 = store.create_prop(name="Doomed frame", key_areas=["picture"])["id"]
+    store.save_uploaded_glb(pid14, frame_glb())
+    meta14 = store.read_sidecar(pid14)
+    meta14[store.AREAS_KEY] = store.sanitize_areas(FRAME_AREAS)
+    store._write_sidecar(pid14, meta14)
+    store._source_file(pid14, 0, create=True).write_bytes(b"\x89PNG-source")
+    store.update_prop(pid14, {"area_defaults": {"glass_1": {"preset": "glass"}}})
+    v14 = store.add_picture_variant(pid14, {"picture_1": {"image": IMG}}, "Keep")
+    real_detect = store.detect_areas
+
+    def unavailable(*_a, **_k):
+        raise store.BlenderUnavailable("blender is busy with another model")
+
+    store.detect_areas = unavailable
+    try:
+        store._areas_after_landing(pid14, 0)
+    finally:
+        store.detect_areas = real_detect
+    rec14 = store.get_prop(pid14)
+    check("the unsplit mesh names no area — that much IS a reading",
+          rec14["areas"] == [], str(rec14["areas"]))
+    check("the prop-wide defaults SURVIVE a load condition",
+          rec14["area_defaults"] == {"glass_1": {"preset": "glass"}},
+          str(rec14["area_defaults"]))
+    check("…and so does the variant's picture",
+          store.list_variants(pid14)[v14]["slot_values"]
+          == {"picture_1": {"image": IMG}},
+          str(store.list_variants(pid14)[v14]["slot_values"]))
+    info14 = store.areas_info(pid14)
+    check("areas_info: the busy Blender is an ERROR",
+          "busy" in info14["error"] and info14["warning"] == "",
+          str((info14["error"], info14["warning"])))
+    # A run that WORKED and found no leaf is a note, not a failure — the two
+    # live in one sidecar key and are told apart here.
+    meta14 = store.read_sidecar(pid14)
+    meta14[store.AREAS_ERROR_KEY] = store.NO_LEAF_NOTE
+    store._write_sidecar(pid14, meta14)
+    info14 = store.areas_info(pid14)
+    check("the no-leaf note is a WARNING, and `error` stays empty",
+          info14["warning"] == store.NO_LEAF_NOTE and info14["error"] == "",
+          str((info14["error"], info14["warning"])))
 
 
 def main() -> int:
@@ -699,6 +874,11 @@ def main() -> int:
                          ("a preset outside SLOT_PRESETS",
                           {"glass_1": {"preset": "mirror"}}),
                          ("a default without preset", {"glass_1": {}}),
+                         # The KIND decides the shape, as it does for a
+                         # variant's slot_values: a prop-wide default is the
+                         # LOOK of a pane, so a picture area takes none.
+                         ("a preset on a PICTURE area",
+                          {"picture_1": {"preset": "glass"}}),
                          ("a string instead of an object", "glass")):
         try:
             store.update_prop(pid, {"area_defaults": value})

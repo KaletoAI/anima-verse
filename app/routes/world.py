@@ -2380,9 +2380,11 @@ def prop_areas(prop_id: str,
                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The prop's picture areas: ``{areas: [{id, kind, size_m, normal, source,
     faces, edges}], mesh_layout: [{name, tri_count}], key_areas,
-    area_defaults, blender: {available, reason}, last_run, error}``. `edges`
-    are the outline segments in model metres (glTF y-up), `mesh_layout` the R1
-    face-index order the polygon pick has to mirror."""
+    area_defaults, blender: {available, reason}, last_run, error, warning}``.
+    `edges` are the outline segments in model metres (glTF y-up),
+    `mesh_layout` the R1 face-index order the polygon pick has to mirror.
+    `error` is a run that BROKE, `warning` one that worked and found nothing
+    to cut (the no-leaf note) — the tab shows them differently."""
     from app.core.props import areas_info
     _areas_prop(prop_id)
     return areas_info(prop_id)
@@ -2396,7 +2398,9 @@ async def prop_areas_detect(prop_id: str, request: Request,
     ``{mode: "manual", faces: [flat triangle index …], kind: "picture"|"glass"}``).
     Blocking Blender run; answers the same payload as GET afterwards. 503
     with the reason when Blender is missing or busy."""
-    data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
+    # The BODY decides whether there is one, not a header a client may leave
+    # off (or send chunked): Starlette caches it, so the second read is free.
+    data = await request.json() if await request.body() else {}
     if not isinstance(data, dict):
         data = {}
     return await asyncio.to_thread(_prop_areas_detect_sync, prop_id, data)

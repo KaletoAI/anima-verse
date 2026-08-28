@@ -2263,10 +2263,13 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
             # `leaf` NODE in raw y-up model metres, copied off the prop
             # sidecar so a renderer hangs the leaf's pivot without measuring
             # (§ B5a). Absent when the mesh has no leaf node — then the
-            # whole group swings, as before. Ruling R12: the pivot is ALWAYS
-            # the box's min.x edge; the yaw above already turns a
-            # right-hinged door 180°, so the hinge is the local −x edge for
-            # both hinges and `hinge` only feeds the swing sign.
+            # whole group swings, as before. Ruling R13: WHERE the pivot goes
+            # is the shared package's `leafPivot`, which states the rule in
+            # the FIXED frame (x = min, y = min, z = centre of the box turned
+            # by `fix_euler` above) and maps it back — the yaw already turns a
+            # right-hinged door 180° onto the same jamb, so `hinge` only feeds
+            # the swing sign. With `fix_euler` 0 that is (min.x, min.y,
+            # centre z), the earlier R12 wording.
             "door": {"opening": index, "hinge": hinge,
                      "swing": 1 if hinge == "left" else -1,
                      **({"leaf_bbox": prop["leaf_bbox"]}

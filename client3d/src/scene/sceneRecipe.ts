@@ -4,19 +4,18 @@ import { applyClipOutline, applyCutouts, applyDepthCut, applySlotMaterials,
   buildExtra,
   buildPlaceholder,
   buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials,
-  disposeCutMaterials, disposeSlotMaterials,
+  disposeCutMaterials, disposeSlotMaterials, leafPivot,
   pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, storeyGroundLift, storeyGroundRelift, VERIFY_EPS,
   surfaceMaterial, surfaceScale, wallLength, wallTargets } from '@anima/scene-render';
-import type { ModelTier, PrimitiveTarget, VerifyRow } from '@anima/scene-render';
+import type { FixEuler, LeafBox, ModelTier, PrimitiveTarget,
+  VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
   type SceneExtra, type SceneModelSpec, type ScenePayload, type ScenePlate,
   type SceneWall,
 } from '../api';
 import { roomDoor } from '../game/doors';
-import { leafPivot } from '@anima/scene-render';
-import type { FixEuler, LeafBox } from '@anima/scene-render';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';

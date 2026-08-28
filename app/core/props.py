@@ -1245,22 +1245,35 @@ def sanitize_area_defaults(raw: Any,
                            areas: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
     """``{"<area id>": {"preset": <SLOT_PRESETS>}}`` checked against the
     prop's areas — an unknown area or preset is ``ValueError``, never a
-    silently stored default that no surface answers to."""
+    silently stored default that no surface answers to.
+
+    The KIND decides, exactly as in :func:`sanitize_variant_slot_values`: a
+    prop-wide default is the LOOK of a pane (spec § 1), so only a ``glass``
+    area takes one. A picture is hung on a VARIANT of the prop — a prop-wide
+    picture would hang the same poster in every room the prop stands in —
+    and the door leaf is a node, not a surface (R9)."""
     if raw is None:
         return {}
     if not isinstance(raw, dict):
         raise ValueError("area_defaults must be an object {area_id: {preset}}")
-    known = {a.get("id") for a in (areas or [])}
+    kinds = {str(a.get("id") or ""): str(a.get("kind") or "")
+             for a in (areas or [])}
+    known = set(kinds)
     out: Dict[str, Dict[str, str]] = {}
     for area_id, value in raw.items():
         aid = str(area_id or "").strip().lower()
         if aid not in known:
             raise ValueError(f"area_defaults names an unknown area {aid!r} "
                              f"(the prop has: {', '.join(sorted(known)) or 'none'})")
-        if aid == LEAF_KIND:
+        if kinds[aid] == LEAF_KIND:
             # R9: the leaf is a node, not a material — nothing to fill.
             raise ValueError("area_defaults cannot name the door leaf — it is "
                              "a node of the mesh, not a surface")
+        if kinds[aid] != "glass":
+            raise ValueError(
+                f"area_defaults[{aid!r}] is a {kinds[aid]} area — a prop-wide "
+                "default is the LOOK of a pane; a picture is hung on a "
+                "variant of the prop")
         if not isinstance(value, dict):
             raise ValueError(f"area_defaults[{aid!r}] must be an object {{preset}}")
         preset = str(value.get("preset") or "").strip().lower()
@@ -1675,15 +1688,22 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     return areas
 
 
-def _prune_to_areas(meta: Dict[str, Any], ids: Set[str]) -> None:
+def _prune_to_areas(meta: Dict[str, Any], ids: Set[str], *,
+                    variants: bool = True) -> None:
     """Drop everything that names an area the prop no longer has — the
-    prop-wide ``area_defaults`` AND every variant's ``slot_values``.
+    prop-wide ``area_defaults`` and, with ``variants``, every variant's
+    ``slot_values``.
 
-    BOTH halves of a spec's ``slots`` are area-bound, so both follow the mesh:
-    after a re-split that loses a panel, a dead key on either half would ride
-    in every payload of every world and describe a surface the GLB no longer
-    names. The variant's ``label`` is NOT touched — it is the name the admin
-    gave that version, not a description of its values.
+    The prop-wide defaults describe the PRIMARY mesh, so they follow it on
+    every reading of it. A variant's values describe THAT VARIANT'S OWN
+    copied mesh, which still carries the materials it was copied with —
+    ruling R15: they are pruned only by the events that actually rewrite the
+    primary (a split, a re-split, a rename, a deleted area) and by a re-copy,
+    never because the admin selected another gallery file for a moment and
+    never on a failed run. ``variants=False`` is that reconcile case.
+
+    The variant's ``label`` is NEVER touched — it is the name the admin gave
+    that version, not a description of its values.
 
     Mutates ``meta`` in place; the caller owns the sidecar write."""
     defaults = {k: v for k, v in (meta.get(AREA_DEFAULTS_KEY) or {}).items()
@@ -1692,6 +1712,8 @@ def _prune_to_areas(meta: Dict[str, Any], ids: Set[str]) -> None:
         meta[AREA_DEFAULTS_KEY] = defaults
     else:
         meta.pop(AREA_DEFAULTS_KEY, None)
+    if not variants:
+        return
     entries = _variant_list(meta)
     touched = False
     for entry in entries:
@@ -1721,7 +1743,9 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
     """Find or draw the picture areas of one variant's mesh — returns the
     sidecar ``areas`` list after the run.
 
-    ``mode="auto"`` dissolves every existing area and detects the key-coloured
+    ``mode="auto"`` dissolves every area it once detected ITSELF — an area
+    the admin drew by hand (``source == "manual"``) is kept as it is, faces,
+    material and number (ruling R14) — and detects the key-coloured
     panels of the kinds the prop asked for (``key_areas``) — plus the door
     LEAF (spec § 6) when the prop asked for ``leaf`` or is a door prop
     (:func:`is_door_prop`); a door that asked for nothing gets the leaf only,
@@ -1764,6 +1788,13 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
         if not kinds:
             kinds = list(COLOUR_KINDS)
         params["kinds"] = kinds
+        # R14: an automatic run dissolves what it detected itself and leaves
+        # what the ADMIN drew standing — faces, material, number. The detector
+        # never sees those faces again (their material is a slot material, and
+        # only the atlas materials are read), so a hand-drawn panel survives
+        # every "Detect areas" click, which is what the button's tooltip says.
+        params["keep"] = [a["id"] for a in (meta.get(AREAS_KEY) or [])
+                          if a.get("source") == "manual"]
         params["min_faces"] = max(1, int(min_faces))
         params["min_area_m2"] = max(0.0, float(min_area_m2))
     elif mode == "manual":
@@ -1842,9 +1873,16 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
     """Change what an area IS (picture <-> glass): the material is renamed to
     the next free ``slot_<kind>_<k>`` of the target kind, in a NEW gallery
     file (the GLB's JSON chunk rewritten, no Blender needed), and the sidecar
-    entry, its outline record and any default on it follow the new id.
+    entry and its outline record follow the new id.
     Returns the ``areas`` list. Same kind = nothing to do. A non-primary
     ``variant`` changes only that GLB (see :func:`detect_areas`).
+
+    Everything stored for the OLD id goes (``_prune_to_areas``, both halves):
+    the old id names no area any more, so the dialog cannot show — let alone
+    remove — a value keyed on it, and a save would keep failing on it. The
+    preset is NOT carried over either: the area just became another kind, and
+    a glass preset on a picture panel is exactly the value the sanitizers
+    refuse.
 
     The door LEAF is refused in both directions (R9): a node is not a
     material, so there is no name to rewrite — dissolve it and draw the
@@ -1890,10 +1928,11 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
     if _is_primary(pid, variant):
         entry["id"], entry["kind"] = new_id, kind
         meta[AREAS_KEY] = sanitize_areas(areas)
-        defaults = dict(meta.get(AREA_DEFAULTS_KEY) or {})
-        if aid in defaults:
-            defaults[new_id] = defaults.pop(aid)
-            meta[AREA_DEFAULTS_KEY] = defaults
+        # A rename is ALWAYS a kind change, so nothing that was stored for the
+        # old id can survive it: a glass preset on a panel that is now a
+        # picture is invalid on its face, and re-keying it onto the new id
+        # would only move the invalid value. Both halves lose the dead id.
+        _prune_to_areas(meta, {a["id"] for a in meta[AREAS_KEY]})
         meta[AREAS_RUN_AT_KEY] = utc_now_iso()
         _write_sidecar(pid, meta)
         _autofill_slots(pid)
@@ -1905,8 +1944,14 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
 def areas_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
     """What ``GET /world/props/{id}/areas`` answers: the sidecar areas, each
     with the outline ``edges`` of the active mesh's record, the R1
-    ``mesh_layout``, whether Blender can run, the last run and the last
-    automatic run's error."""
+    ``mesh_layout``, whether Blender can run, the last run and what the last
+    automatic run left to say.
+
+    That last part is TWO fields, because the store keeps both in one key:
+    ``error`` is a run that broke (Blender missing, busy, a failing script),
+    ``warning`` is a run that worked and found nothing to cut — today only
+    :data:`NO_LEAF_NOTE`. A note is not a failure and must not be shown as
+    one, so the split happens here rather than in every reader."""
     from app.blender import refine
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
@@ -1914,6 +1959,8 @@ def areas_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
     edges = {rec.get("id"): rec.get("edges") or []
              for rec in (outline.get("areas") or []) if isinstance(rec, dict)}
     reason = refine.unavailable_reason()
+    stored = str(meta.get(AREAS_ERROR_KEY) or "")
+    warning = stored if stored == NO_LEAF_NOTE else ""
     return {
         "areas": [{**a, "edges": edges.get(a["id"], [])}
                   for a in (meta.get(AREAS_KEY) or [])],
@@ -1923,7 +1970,8 @@ def areas_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
         LEAF_BBOX_KEY: meta.get(LEAF_BBOX_KEY) or None,
         "blender": {"available": not reason, "reason": reason},
         "last_run": meta.get(AREAS_RUN_AT_KEY) or None,
-        "error": meta.get(AREAS_ERROR_KEY) or "",
+        "error": "" if warning else stored,
+        "warning": warning,
     }
 
 
@@ -1961,9 +2009,14 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
         meta = read_sidecar(pid)
         if not meta:
             return
+        # The fresh mesh is unsplit, so it names no area and carries no leaf
+        # node — that much is a reading of the file. What the ADMIN authored
+        # (`area_defaults`, every variant's `slot_values`) is NOT: a missing
+        # or busy Blender is a load condition, and answering it by deleting
+        # the panes and pictures of a door would make a queue wipe a prop.
+        # Both halves stay until the next SUCCESSFUL run prunes them (R15).
         meta[AREAS_KEY] = []
         meta[AREAS_ERROR_KEY] = str(e) or type(e).__name__
-        meta.pop(AREA_DEFAULTS_KEY, None)
         meta.pop(LEAF_BBOX_KEY, None)
         try:
             _write_sidecar(pid, meta)
@@ -1981,7 +2034,12 @@ def _reconcile_areas(pid: str, meta: Optional[Dict[str, Any]] = None) -> None:
     away from a split file and back loses nothing. Any other file keeps only
     the areas whose material it actually names (and therefore no leaf: a
     node is not a material). Only a POSITIVE reading changes the list — an
-    unreadable mesh is not a statement that the areas are gone."""
+    unreadable mesh is not a statement that the areas are gone.
+
+    NEVER touches a variant's ``slot_values`` (ruling R15): a picture variant
+    hangs on its OWN copied mesh, which keeps its materials while the admin
+    clicks through the primary's gallery. Only the prop-wide
+    ``area_defaults`` follow the active primary here."""
     if meta is None:
         meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -2017,7 +2075,9 @@ def _reconcile_areas(pid: str, meta: Optional[Dict[str, Any]] = None) -> None:
         meta[LEAF_BBOX_KEY] = leaf_bbox
     else:
         meta.pop(LEAF_BBOX_KEY, None)
-    _prune_to_areas(meta, {a["id"] for a in kept})
+    # R15: the prop-wide defaults follow the primary mesh, the VARIANTS' own
+    # values do not — see :func:`_prune_to_areas`.
+    _prune_to_areas(meta, {a["id"] for a in kept}, variants=False)
     try:
         _write_sidecar(pid, meta)
     except (OSError, ValueError):
@@ -3065,7 +3125,11 @@ def recopy_variant_mesh(prop_id: str, variant: int) -> bool:
     variant is GENERATING: the run is about to write the very file the copy
     lands in, the same reason a delete and the on/off toggle refuse it.
     ``ValueError`` for the primary variant itself (it IS the source). The
-    assignment is kept: the admin re-copies the frame, not the picture."""
+    assignment is kept: the admin re-copies the frame, not the picture — but
+    it is CHECKED here (R15): this variant's mesh becomes the primary's, so
+    a value naming an area the primary no longer has describes nothing any
+    more and goes. This is the one moment a variant's values are re-read
+    against the prop's current areas; a mere gallery click is not."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -3084,8 +3148,35 @@ def recopy_variant_mesh(prop_id: str, variant: int) -> bool:
         raise ValueError("the primary variant IS the mesh every picture "
                          "variant is copied from")
     _copy_variant_mesh(pid, i, primary)
+    _prune_variant_values(pid, i)
     request_low_tier(pid, i)
     return True
+
+
+def _prune_variant_values(pid: str, index: int) -> None:
+    """Drop what ONE variant's ``slot_values`` say about areas the prop's
+    primary mesh no longer has (R15, the re-copy event). Only that variant is
+    touched — every other one still hangs on its own older copy."""
+    meta = read_sidecar(pid)
+    if not meta:
+        return
+    ids = {a["id"] for a in (meta.get(AREAS_KEY) or [])}
+    entries = _variant_list(meta)
+    if not 0 <= index < len(entries):
+        return
+    values = entries[index].get(SLOT_VALUES_KEY) or {}
+    kept = {k: v for k, v in values.items() if k in ids}
+    if kept == values:
+        return
+    if kept:
+        entries[index][SLOT_VALUES_KEY] = kept
+    else:
+        entries[index].pop(SLOT_VALUES_KEY, None)
+    meta[VARIANTS_KEY] = entries
+    try:
+        _write_sidecar(pid, meta)
+    except (OSError, ValueError):
+        return
 
 
 def bulk_update(prop_id: str, general: Any = None,

@@ -97,7 +97,8 @@ Positions are float32 in the file; the script rounds to 5 decimals, so
   detection: the door tag alone never adds a colour kind), finds no seed ->
   ONE gallery file (nothing changed, no split file), areas [], no
   leaf_bbox, and ``areas_error`` carries props.NO_LEAF_NOTE ("no door leaf
-  found — draw it with the polygon tool") — areas_info.error shows it.
+  found — draw it with the polygon tool"). The run WORKED, so areas_info
+  reports it as `warning`, not as `error` (which stays "").
 
 [E] AUTO RE-RUN ON A SPLIT MESH — ``detect_areas(pid, mode="auto")`` on the
   prop of [C]: the previous leaf is joined back first and found again —
@@ -505,8 +506,13 @@ def main() -> int:
           meta.get("areas", []) == [] and "leaf_bbox" not in meta, str(meta.get("areas")))
     check("G: areas_error carries NO_LEAF_NOTE",
           meta.get("areas_error") == store.NO_LEAF_NOTE, str(meta.get("areas_error")))
-    check("G: areas_info.error shows it",
-          store.areas_info(np_)["error"] == store.NO_LEAF_NOTE)
+    # A run that WORKED and found nothing to cut is a NOTE: `areas_info`
+    # splits the one sidecar key into `warning` (this) and `error` (a run
+    # that broke), so the tab cannot report a failure over a working run.
+    check("G: areas_info reports it as a WARNING, with `error` empty",
+          store.areas_info(np_)["warning"] == store.NO_LEAF_NOTE
+          and store.areas_info(np_)["error"] == "",
+          str((store.areas_info(np_)["error"], store.areas_info(np_)["warning"])))
 
     print()
     if FAILURES:
