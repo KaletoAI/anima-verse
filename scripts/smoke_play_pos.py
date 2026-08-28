@@ -315,7 +315,11 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
            (1010, 1000): dh = 0.80 > 0.4 over 0.7 m -> 409 ``too_steep`` with
            the STEP sentence, and the last valid point comes back.
         f) AND DOWN AGAIN: from the crate (1000, 1000) to (999.3, 1000) is
-           dh = -0.30 -> accepted; the gate is symmetric.
+           dh = -0.30 -> accepted. AND OFF THE BLOCK: from (1010, 1000) to
+           (1009.3, 1000) is dh = -0.80 over the same 0.7 m — the identical
+           number (e) refuses as a climb — and it is accepted, because the gate
+           judges CLIMBING only since 2026-08-28 (user rule). The gate is no
+           longer symmetric; one can step down where one cannot step up.
         g) A BROKEN LATTICE IS NOT A WALL (ruling task 2): with the lookup
            raising, the gate logs ONCE per location and answers on the world
            ground instead of refusing the report — or, worse, 500-ing it. The
@@ -1128,6 +1132,16 @@ def main() -> int:
         park(1000.0, 1000.0)
         status, _payload = report(999.3, 1000.0)
         check("climbing back down off the crate is allowed", status, "ok")
+        # …AND OFF THE BLOCK, the drop the OLD symmetric gate refused: the very
+        # 0.80 m over 0.70 m that (e) blocks as a climb is walked DOWNWARDS
+        # since the rule of 2026-08-28. Nothing but the sign differs.
+        check("beside the block: the bare ground", round(
+            model_surface.stand_height_at(yard, 1009.3, 1000.0), 3), 0.0)
+        park(1010.0, 1000.0)
+        status, _payload = report(1009.3, 1000.0)
+        check("stepping DOWN off the 0.80 m block is allowed", status, "ok")
+        check("...and the avatar really stands beside it",
+              get_character_pos(AVATAR), {"x": 1009.3, "z": 1000.0})
 
         # (g) A BROKEN LATTICE IS NOT A WALL (ruling task 2). The traceback it
         # writes is the point of the ruling but not of this report, so the

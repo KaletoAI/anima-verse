@@ -593,9 +593,9 @@ export const STEP_DISTANCE_M = 1;
  * THE TWO LIMITS APPLY TOGETHER, and the step is the ADDITIONAL one:
  *
  *   - the SLOPE limit holds at EVERY distance: blocked when
- *     `atan(|dh| / dist) > maxSlope` degrees;
+ *     `atan(dh / dist) > maxSlope` degrees;
  *   - BELOW `STEP_DISTANCE_M` the step limit holds on top: blocked when
- *     `|dh| > maxStep`, however gentle the angle would call it.
+ *     `dh > maxStep`, however gentle the angle would call it.
  *
  * It was an either/or once, and that broke this mirror in particular (review
  * 2026-08-13): the client tests a walking LEAD of ~0.15 m while the server
@@ -606,10 +606,14 @@ export const STEP_DISTANCE_M = 1;
  * slope climbable by crawling: 0.1 m per report turns a 76° wall into a legal
  * "step".)
  *
- * Direction does not matter — dropping off a cliff is as impossible as
- * climbing it, and a walker allowed down where it cannot come back up is a
- * walker one can strand. Level ground never blocks, which is what keeps the
- * whole gate inert in a world without relief.
+ * DIRECTION DOES MATTER (user rule, 2026-08-28): `dh` is SIGNED — the ground
+ * under the target minus the ground under the point the figure stands on — and
+ * ONLY A CLIMB is judged. A descent (`dh <= 0`) always passes, however deep:
+ * walking downhill is what a body does without asking, and refusing it reads
+ * as the world holding the figure back for nothing. The price is accepted: a
+ * walker can go down where it cannot come back up and be stranded there.
+ * Level ground never blocks either, which is what keeps the whole gate inert
+ * in a world without relief.
  *
  * `dh` is the caller's lookup (`main.ts` `reliefLiftAt` at both points),
  * `maxStep`/`maxSlope` the world settings off the worldmap payload — what is
@@ -617,8 +621,8 @@ export const STEP_DISTANCE_M = 1;
  */
 export function slopeBlocks(dh: number, dist: number, maxStep: number,
                             maxSlope: number): boolean {
-  const rise = Math.abs(dh);
-  if (!rise) return false;
+  const rise = dh;
+  if (!(rise > 0)) return false;
   return (dist < STEP_DISTANCE_M && rise > maxStep)
     || Math.atan2(rise, dist) * 180 / Math.PI > maxSlope;
 }

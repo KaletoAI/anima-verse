@@ -23,7 +23,8 @@ holds ON TOP of it. Two limits rather than one because a 1 m wall and a 1 m
 rise over 20 m are not the same obstacle — the first is unclimbable at any
 pace, the second is a gentle hill; and they hold together rather than
 either/or because each one alone can be walked round (see
-:func:`slope_blocks`).
+:func:`slope_blocks`). Both limits judge a CLIMB only — since 2026-08-28 a
+descent always passes (user rule).
 """
 
 import math
@@ -118,9 +119,9 @@ def slope_blocks(dh: float, dist: float, max_step: float,
     THE TWO LIMITS APPLY TOGETHER, and the step is the ADDITIONAL one:
 
       * the SLOPE limit holds at every distance — blocked when
-        ``atan(|dh| / dist)`` exceeds ``max_slope_deg``;
+        ``atan(dh / dist)`` exceeds ``max_slope_deg``;
       * BELOW ``STEP_DISTANCE_M`` the step limit holds on top of it — blocked
-        when ``|dh| > max_step``, however gentle the angle would call it.
+        when ``dh > max_step``, however gentle the angle would call it.
 
     It was an either/or once (step under a metre, slope above it), and that
     was wrong twice over (review 2026-08-13). First, the two sides of the
@@ -133,13 +134,22 @@ def slope_blocks(dh: float, dist: float, max_step: float,
     climbable by walking slowly: report 0.1 m at a time and a 76° wall passes
     as a legal "step". A limit one gets round by being patient is not a limit.
 
-    Direction does not matter — falling down a cliff is as impossible as
-    climbing it, and a walker who may go down somewhere it cannot come back up
-    is a walker one can strand. Level ground (``dh == 0``) is never blocked,
-    which also makes the whole gate inert in a world without relief.
+    DIRECTION DOES MATTER (user rule, 2026-08-28): ``dh`` is SIGNED — the
+    ground under the target minus the ground under the point one stands on —
+    and ONLY CLIMBING is judged. A descent (``dh <= 0``) always passes, however
+    deep, because a figure walking downhill is doing the one thing bodies do
+    without asking, and a gate that refuses it reads as the world holding the
+    walker back for no visible reason. The price is named and accepted: a
+    walker can go down somewhere it cannot come back up and be stranded there
+    — until now the symmetric gate was what prevented exactly that. Level
+    ground (``dh == 0``) is never blocked either, which also makes the whole
+    gate inert in a world without relief.
+
+    So the two limits above read on the RISE, and there is only a rise when
+    ``dh > 0``.
     """
-    rise = abs(float(dh))
-    if not rise:
+    rise = float(dh)
+    if rise <= 0:
         return False
     dist = float(dist)
     return (dist < STEP_DISTANCE_M and rise > float(max_step)) \

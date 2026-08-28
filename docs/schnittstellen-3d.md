@@ -2780,7 +2780,7 @@ auseinanderstehen):
 | 6 | **Location des Punktes** ableiten (`location_at_point`) — entscheidet Nr. 7 | — |
 | 7 | Gelände `passability_at` am Punkt (§ A1.5) — **nur in der WILDNIS** (`location_id == ""`); NUR die Passierbarkeit, das Tempo wird hier nie geprüft | 409 `impassable` |
 | 8 | **Location-Übergang** — EXIT vor ENTRY | 403 (siehe unten) |
-| 9 | **Höhe** des Punktes gegen den letzten gültigen (Steigung immer, Stufe zusätzlich unter 1 m — siehe unten) | 409 `too_steep` |
+| 9 | **Höhe** des Punktes gegen den letzten gültigen — nur BERGAUF (Steigung immer, Stufe zusätzlich unter 1 m; ein Abstieg geht seit 2026-08-28 immer durch — siehe unten) | 409 `too_steep` |
 
 **Die Erlaubnis in Nr. 5 hat DREI Terme**, und der dritte ist keine
 Verzierung:
@@ -2875,8 +2875,9 @@ letzten gültigen Punkt mit dem Boden unter dem gemeldeten:
 
 ```
 Δh = lift(neuer Punkt) − lift(letzter Punkt)
-IMMER       ->  STEIGUNG:  atan(|Δh| / dist) > game.max_slope_deg  (Default 40°)
-dist < 1 m  ->  UND STUFE: |Δh| > game.max_step_height_m           (Default 0,4 m)
+Δh <= 0     ->  frei (ein ABSTIEG wird nicht beurteilt)
+sonst       ->  STEIGUNG:  atan(Δh / dist) > game.max_slope_deg   (Default 40°)
+dist < 1 m  ->  UND STUFE: Δh > game.max_step_height_m            (Default 0,4 m)
 ```
 
 **Zwei Grenzwerte statt einem**, weil eine 1-m-Mauer und 1 m Anstieg über 20 m
@@ -2897,9 +2898,14 @@ zurückschnappte. Zweitens machte die Entweder-Oder-Form jede Steigung durch
 LANGSAMES Gehen erkletterbar: 0,1 m pro Meldung verwandelt eine 76°-Wand in
 lauter legale „Stufen". Ein Grenzwert, den man durch Geduld umgeht, ist keiner.
 
-**Die Richtung zählt nicht**: einen Abhang hinunterzufallen ist so unmöglich
-wie ihn hinaufzuklettern, sonst könnte man einen Läufer irgendwo aussetzen, wo
-er nicht mehr hochkommt.
+**Die Richtung zählt (User-Regel, 2026-08-28)**: das Gate verweigert NUR das
+KLETTERN, ein Abstieg geht immer durch — Δh ist vorzeichenbehaftet, und bei
+`Δh <= 0` fragt die Regel gar nicht erst nach Stufe oder Winkel. Bergab zu
+gehen ist das, was ein Körper ungefragt tut; es zu verweigern liest sich als
+Welt, die die Figur grundlos festhält. Der Preis ist benannt und akzeptiert:
+man kann irgendwo hinuntersteigen, wo man nicht mehr hochkommt, und dort
+stranden — bis 2026-08-28 war genau die Symmetrie des Gates das, was das
+verhindert hat.
 
 **Woher die Höhe kommt: EINE Quelle, EINE Antwort**
 (`app/core/relief.ground_at` → `world_geometry.ground_y` →
@@ -2942,7 +2948,9 @@ eine Wand, und zwar auf beiden Seiten der Leitung.
 blockiert, wenn der Boden AN IHRER MITTE steiler steht als `max_slope_deg` —
 gemessen als ZENTRALE Differenz über die je zwei Gegennachbarn
 (`rise = hypot(h(x+c,z)−h(x−c,z), h(x,z+c)−h(x,z−c))`, `run = 2 · NAV_CELL_M`).
-Zentral und nicht einseitig: der flache Boden am FUSS einer Klippe erbte sonst
+Dieser `rise` ist ein BETRAG und damit nie negativ, die Kletter-Regel von
+2026-08-28 ändert hier also nichts: eine Zelle hat keine Richtung, sie ist
+steil oder nicht. Zentral und nicht einseitig: der flache Boden am FUSS einer Klippe erbte sonst
 deren Steilheit, und das Ufer jedes Sees wäre unbegehbar. Ausgenommen sind
 Zellen INNERHALB eines **GEBAUTEN** Fußabdrucks (Footprint gewinnt; nur DORT
 ist das Feld planiert — `draws_built_floor`, § A16.4, und unter einem

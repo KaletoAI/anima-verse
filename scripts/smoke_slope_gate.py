@@ -14,8 +14,14 @@ consumer of a height. ``POST /play/pos`` now compares the ground under the
 last valid point with the ground under the reported one and refuses the report
 when the difference is not walkable:
 
-    ALWAYS       -> a SLOPE: atan(|Δh| / dist) > game.max_slope_deg  (def. 40)
-    dist < 1 m   -> AND a STEP: |Δh| > game.max_step_height_m    (default 0.4)
+    Δh > 0 only  -> a SLOPE: atan(Δh / dist) > game.max_slope_deg   (def. 40)
+    dist < 1 m   -> AND a STEP: Δh > game.max_step_height_m     (default 0.4)
+
+ONLY A CLIMB IS JUDGED (user rule, 2026-08-28): Δh is signed — the ground under
+the reported point minus the ground under the last one — and a descent
+(Δh ≤ 0) always passes, however deep. Walking downhill is what a body does
+without asking; the accepted price is that a walker can drop somewhere it
+cannot climb back out of and be stranded there.
 
 Two limits rather than one, because a 1 m wall and a 1 m rise over 20 m are not
 the same obstacle — and they hold TOGETHER rather than either/or, because each
@@ -81,7 +87,15 @@ The flank. ``falloff_m`` 20 over the same 5 m gives ``h = d/4``, so on z = 5020
       0.3 m over 0.5 m -> step 0.3 ≤ 0.4, angle 30.9638°    -> free
       0.4 m over 0.5 m -> the step limit itself passes (strict >), and
                           atan(0.8) = 38.6598° < 40         -> free
-      −1.2 m over 0.5 m -> a drop is the same wall           -> blocked
+      −1.2 m over 0.5 m -> a DROP is never judged            -> free
+      −0.9 m over 0.5 m -> nor this one, though the climb of
+                          +0.9 m over the same 0.5 m is a step
+                          twice the cap                      -> free
+      −3 m over 1 m    -> a three-metre drop, atan(3) = 71.5651°
+                          as a climb, is walked down all the same
+                                                             -> free
+      +0.9 m over 0.5 m -> the same rise UPWARDS is a step,
+                          0.9 > 0.4                          -> blocked
       2 m over 2 m     -> atan(1) = 45° > 40                -> blocked
       1.6 m over 2 m   -> atan(0.8) = 38.6598° < 40         -> free
       1.6 m over 0.99 m -> a STEP as well there             -> blocked
@@ -129,10 +143,15 @@ The flank. ``falloff_m`` 20 over the same 5 m gives ``h = d/4``, so on z = 5020
          was the height gate and only the height gate.
       d) THE OPENING IS A RAMP END (E8 inventory finding 8). Walking IN through
          the ledge's door, (5004.5, 5020) -> (5003.5, 5020), is Δh = 0 − 1.25 =
-         −1.25 m over 1.0 m, i.e. atan(1.25) = 51.3402° and blocked on its own
-         — but the arriving point lies in the ledge and 0.5 m from its opening,
-         inside the 1.5 m crossing tolerance -> accepted. Without the exemption
-         a place at the foot of a cliff would be locked behind its own door.
+         −1.25 m over 1.0 m — a DESCENT, and since 2026-08-28 those are not
+         judged at all, so this crossing passes before the exemption is even
+         asked. The exemption is measured in the direction that still can
+         refuse: back OUT and up, (5003.5, 5020) -> (5004.5, 5020), is
+         Δh = +1.25 m over 1.0 m, i.e. atan(1.25) = 51.3402° and blocked on its
+         own — but the departing point lies in the ledge and 0.5 m from its
+         opening, inside the 1.5 m crossing tolerance -> accepted. Without the
+         exemption a place at the foot of a cliff would be locked behind its
+         own door.
       e) INERT WITHOUT A RELIEF: the same kind of report on PLAIN, where
          nobody shaped the ground, is accepted with both heights 0. That is why
          the gate cannot break a world without a relief — and why
@@ -501,8 +520,14 @@ def main() -> int:
           relief.slope_blocks(0.3, 0.5, STEP, SLOPE), False)
     check("the cap itself passes (strictly greater blocks)",
           relief.slope_blocks(0.4, 0.5, STEP, SLOPE), False)
-    check("a DROP is the same obstacle as a climb",
-          relief.slope_blocks(-1.2, 0.5, STEP, SLOPE), True)
+    check("a DROP is never judged — only climbing is (rule 2026-08-28)",
+          relief.slope_blocks(-1.2, 0.5, STEP, SLOPE), False)
+    check("...nor a 0.9 m drop over 0.5 m",
+          relief.slope_blocks(-0.9, 0.5, STEP, SLOPE), False)
+    check("...nor three metres straight down over one",
+          relief.slope_blocks(-3.0, 1.0, STEP, SLOPE), False)
+    check("but the SAME 0.9 m upwards over 0.5 m is a step",
+          relief.slope_blocks(0.9, 0.5, STEP, SLOPE), True)
     check("45° over 2 m is refused",
           relief.slope_blocks(2.0, 2.0, STEP, SLOPE), True)
     check("38.66° over the same 2 m is not",
@@ -540,12 +565,17 @@ def main() -> int:
           old_either_or(0.18, 0.15, STEP, SLOPE), False)
     check("...and the crawl as well — which is why it is gone",
           old_either_or(0.4, 0.1, STEP, SLOPE), False)
+    # THE SHARED TABLE, the one the client's `smoke_walk_math.mjs` checks its
+    # own mirror against, row for row. Every negative Δh answers False since
+    # the climbing rule of 2026-08-28.
     for dh, dist, expected in ((1.2, 0.5, True), (0.3, 2.0, False),
                                (0.3, 0.5, False), (0.4, 0.5, False),
-                               (-1.2, 0.5, True), (2.0, 2.0, True),
+                               (-1.2, 0.5, False), (-0.9, 0.5, False),
+                               (-3.0, 1.0, False), (0.9, 0.5, True),
+                               (2.0, 2.0, True),
                                (1.6, 2.0, False), (1.6, 0.99, True),
                                (0.5, 1.0, False), (0.0, 0.0, False)):
-        check(f"unchanged for the old table: {dh} m / {dist} m",
+        check(f"the shared table: {dh} m / {dist} m",
               relief.slope_blocks(dh, dist, STEP, SLOPE), expected)
 
     print("\n[2] the two world settings (the get_travel_speed_m_s pattern)")
@@ -669,8 +699,8 @@ def main() -> int:
     in_x, in_z = 5003.5, 5020.0
     near("the ground inside the ledge is untouched flat", ground_y(in_x, in_z),
          0.0)
-    check_true("the crossing would block on its own",
-               relief.slope_blocks(0.0 - 1.25, 1.0, 0.4, 40.0))
+    check_true("walking IN is a DESCENT and is not judged at all",
+               not relief.slope_blocks(0.0 - 1.25, 1.0, 0.4, 40.0))
     near("its angle", math.degrees(math.atan2(1.25, 1.0)), 51.3402, 1e-4)
     near("but the arriving point is 0.5 m from the opening",
          math.dist((in_x, in_z), (5004.0, 5020.0)), 0.5, 1e-9)
@@ -680,6 +710,17 @@ def main() -> int:
           if status == "ok" else status, True)
     check("...and it is the ledge one stands in",
           (payload or {}).get("location_id"), LEDGE)
+    # THE OTHER WAY, which is the one the exemption is still for: back out and
+    # UP the same 1.25 m over the same metre blocks on its own, and only the
+    # opening lets it through.
+    check_true("the way back OUT and up blocks on its own",
+               relief.slope_blocks(1.25 - 0.0, 1.0, 0.4, 40.0))
+    park(in_x, in_z, LEDGE)
+    status, payload = report(a_x, a_z)
+    check("...but the door exempts it", (payload or {}).get("ok")
+          if status == "ok" else status, True)
+    check("...and the avatar climbed out", get_character_pos(AVATAR),
+          {"x": a_x, "z": a_z})
 
     print("\n[4f] a 10 cm lead up the same face — the SLOPE limit catches it")
     lead_a, lead_b = 5004.1, 5004.2

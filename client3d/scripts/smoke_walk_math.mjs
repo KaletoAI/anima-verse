@@ -294,9 +294,14 @@
  * distance, and below one metre the STEP limit holds ON TOP of it:
  *
  *   slopeBlocks(dh, dist, maxStep, maxSlope) =
- *     |dh| === 0  -> false
- *     otherwise   -> (dist < 1 && |dh| > maxStep)
- *                    || atan(|dh| / dist) * 180/pi > maxSlope
+ *     dh <= 0     -> false          (a DESCENT is never judged)
+ *     otherwise   -> (dist < 1 && dh > maxStep)
+ *                    || atan(dh / dist) * 180/pi > maxSlope
+ *
+ * ONLY A CLIMB IS JUDGED (user rule, 2026-08-28): `dh` is signed (target minus
+ * the point one stands on) and every descent passes, however deep — walking
+ * downhill is what a body does without asking. The accepted price: a figure
+ * can drop somewhere it cannot climb back out of and be stranded there.
  *
  * The two hold TOGETHER and not either/or, and this file is where that shows
  * (review finding F1/F2): the walk loop tests a LEAD of ~0.15 m while the
@@ -313,7 +318,12 @@
  *   dh 0.3,  dist 2    -> SLOPE, atan(0.15)  =  8.5308 deg  < 40 -> free
  *   dh 0.3,  dist 0.5  -> STEP,  0.3 <= 0.4                      -> free
  *   dh 0.4,  dist 0.5  -> STEP,  the limit itself passes (`>`)   -> free
- *   dh -1.2, dist 0.5  -> STEP,  the drop is the climb           -> blocked
+ *   dh -1.2, dist 0.5  -> a DROP is not judged                   -> free
+ *   dh -0.9, dist 0.5  -> nor this one, though +0.9 over the same
+ *                         0.5 m is a step twice the cap          -> free
+ *   dh -3,   dist 1    -> three metres down, atan(3) = 71.5651 deg
+ *                         as a climb, is walked down all the same -> free
+ *   dh 0.9,  dist 0.5  -> the SAME rise UPWARDS: 0.9 > 0.4       -> blocked
  *   dh 2,    dist 2    -> SLOPE, atan(1)     = 45      deg  > 40 -> blocked
  *   dh 1.6,  dist 2    -> SLOPE, atan(0.8)   = 38.6598 deg  < 40 -> free
  *   dh 1.6,  dist 0.99 -> the SAME rise a hair under the metre is a step
@@ -1588,8 +1598,14 @@ async function main() {
       slopeBlocks(0.3, 0.5, STEP, SLOPE), false);
     check('the cap itself passes (strictly greater blocks)',
       slopeBlocks(0.4, 0.5, STEP, SLOPE), false);
-    check('a DROP is the same obstacle as a climb',
-      slopeBlocks(-1.2, 0.5, STEP, SLOPE), true);
+    check('a DROP is never judged — only climbing is (rule 2026-08-28)',
+      slopeBlocks(-1.2, 0.5, STEP, SLOPE), false);
+    check('...nor a 0.9 m drop over 0.5 m',
+      slopeBlocks(-0.9, 0.5, STEP, SLOPE), false);
+    check('...nor three metres straight down over one',
+      slopeBlocks(-3, 1, STEP, SLOPE), false);
+    check('but the SAME 0.9 m upwards over 0.5 m is a step',
+      slopeBlocks(0.9, 0.5, STEP, SLOPE), true);
     check('45 deg over 2 m is refused',
       slopeBlocks(2, 2, STEP, SLOPE), true);
     check('38.66 deg over the same 2 m is not',
