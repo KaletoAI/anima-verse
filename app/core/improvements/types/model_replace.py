@@ -63,14 +63,28 @@ class ModelReplace(ImprovementType):
                     out.append(Candidate(f"location:{loc_id}",
                                          location.get("name") or loc_id))
         else:
+            # EVERY MODEL VARIANT, not only the primary one
+            # (spec-bild-props-v2.md E5): a prop carries several meshes of the
+            # same object, and a variant made by the old backend is exactly as
+            # much of a candidate as the first one. The ident names the
+            # variant it addresses; the primary variant keeps the BARE prop
+            # id, so a candidate key written before this still means the same
+            # subject and stays "done".
             for prop in subjects.props():
                 prop_id = prop.get("id") or ""
                 if not prop_id:
                     continue
-                model = subjects.prop_model(prop_id)
-                if model and model.get("backend") == source:
-                    out.append(Candidate(f"prop:{prop_id}",
-                                         prop.get("name") or prop_id))
+                name = prop.get("name") or prop_id
+                for entry in subjects.prop_variants(prop_id):
+                    index = int(entry.get("index") or 0)
+                    ident = subjects.prop_ident(
+                        prop_id, None if entry.get("primary") else index)
+                    model = subjects.prop_model(ident)
+                    if not (model and model.get("backend") == source):
+                        continue
+                    label = (name if entry.get("primary")
+                             else f"{name} · variant {index + 1}")
+                    out.append(Candidate(f"prop:{ident}", label))
         # The contract is "every subject NOT yet done".  `validate` already
         # rules out the case where source and target are the same backend, but
         # params come back out of the store as stored — an entry written before

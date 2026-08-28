@@ -167,45 +167,93 @@ def props() -> List[Dict[str, Any]]:
     return list_props()
 
 
-def prop_model(prop_id: str) -> Optional[Dict[str, Any]]:
-    """The prop's ACTIVE mesh entry (carrying ``backend``), or None."""
+#: What separates a prop id from the model VARIANT a candidate addresses.
+#: A prop carries several meshes of the same object (E2.3) and the improvement
+#: engine may re-generate any of them (spec-bild-props-v2.md E5), so the
+#: subject ident has to be able to name one — while a BARE id keeps meaning
+#: the primary variant, which is what every unqualified read in the prop store
+#: means as well.
+PROP_VARIANT_SEP = "#"
+
+
+def split_prop_ident(ident: str) -> Tuple[str, Optional[int]]:
+    """``"<prop id>#<index>"`` → ``(prop id, index)``; a bare id →
+    ``(prop id, None)`` = the primary variant.
+
+    Junk behind the separator is NOT an error: an ident is a stored candidate
+    key, and a hand-edited one must fall back to the primary variant rather
+    than take an improvement run down."""
+    pid, sep, index = str(ident or "").partition(PROP_VARIANT_SEP)
+    if not sep:
+        return pid, None
+    try:
+        return pid, int(index)
+    except (TypeError, ValueError):
+        return pid, None
+
+
+def prop_ident(prop_id: str, variant: Optional[int] = None) -> str:
+    """The subject ident of ONE variant — the inverse of
+    :func:`split_prop_ident`. The primary variant gets the BARE id, so a
+    candidate key written before variants existed still names the same
+    thing."""
+    return prop_id if not variant else f"{prop_id}{PROP_VARIANT_SEP}{variant}"
+
+
+def prop_variants(prop_id: str) -> List[Dict[str, Any]]:
+    """Every model variant of one prop, active or not (the store's list)."""
+    from app.core.props import list_variants
+    return list_variants(prop_id)
+
+
+def prop_model(ident: str) -> Optional[Dict[str, Any]]:
+    """The ACTIVE mesh entry (carrying ``backend``) of the variant ``ident``
+    addresses, or None."""
     from app.core.props import list_models
-    for entry in list_models(prop_id):
+    pid, variant = split_prop_ident(ident)
+    for entry in list_models(pid, variant):
         if entry.get("active"):
             return entry
     return None
 
 
-def prop_has_source(prop_id: str) -> bool:
-    """Whether the prop's primary variant has the product shot a re-mesh needs.
+def prop_has_source(ident: str) -> bool:
+    """Whether the addressed variant has the product shot a re-mesh needs.
     Without it there is nothing to generate FROM — such a prop is not a
     candidate for anything here."""
     from app.core.props import source_path
-    return source_path(prop_id) is not None
+    pid, variant = split_prop_ident(ident)
+    return source_path(pid, variant) is not None
 
 
-def generate_prop_model(prop_id: str, backend: str) -> None:
-    """Blocking re-mesh of the prop's existing source image, on ``backend``.
+def generate_prop_model(ident: str, backend: str) -> None:
+    """Blocking re-mesh of an existing source image, on ``backend``.
+
+    ``ident`` names the VARIANT this run is about (``"<prop id>#<index>"``, a
+    bare id = the primary one): a prop carries several meshes of the same
+    object, and replacing the backend of one of them must re-generate THAT
+    one — not the primary variant's mesh in its place (E5).
 
     ``mesh_only``: the picture stays, only the mesh is made again — an idle
     improvement must not spend an image render on a product shot that is
-    already there.
+    already there. The face budgets come from the variant as well: ``_generate``
+    reads them where the caller passes none, which is exactly this path.
 
     Holds the same job slot ``props.trigger_generation`` holds — ``_generate``
-    does not take it itself.  The variant is the PRIMARY one (``None``), which
-    is the variant every reader here looks at.
+    does not take it itself.
     """
     from app.core import props as props_module
+    prop_id, variant = split_prop_ident(ident)
     if props_module.is_pending(prop_id):
-        raise CandidateBusy(f"{prop_id}: model generation already running")
-    key = props_module._gen_key(prop_id, None, backend)
+        raise CandidateBusy(f"{ident}: model generation already running")
+    key = props_module._gen_key(prop_id, variant, backend)
     with props_module._lock:
         if key in props_module._generating:
-            raise CandidateBusy(f"{prop_id}: model generation already running")
+            raise CandidateBusy(f"{ident}: model generation already running")
         props_module._generating.add(key)
     try:
         result = props_module._generate(prop_id, "", "", "", backend,
-                                        mesh_only=True)
+                                        mesh_only=True, variant=variant)
     finally:
         with props_module._lock:
             props_module._generating.discard(key)

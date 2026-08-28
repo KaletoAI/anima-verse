@@ -10,7 +10,8 @@ These routes are the variant-scoped twins of the prop gallery endpoints in
 does to ONE variant what the unqualified route does to the primary one, plus
 the verbs the strip itself needs (list, add, toggle, delete) and one per field
 the VARIANT owns (2026-08-25): ``/dims``, ``/description``,
-``/ground-offset``, ``/markers``, ``/seasons``. One route per kind of value,
+``/ground-offset``, ``/markers``, ``/seasons``, ``/face-targets`` (v2 E5:
+what this version should cost in triangles). One route per kind of value,
 so the body shape can be read off the path. The gallery bodies and the HTTP
 mapping are shared with the unqualified routes — the helpers are imported, not
 copied, so a change to one answers for both.
@@ -235,6 +236,44 @@ async def prop_variant_area_defaults(
         raise HTTPException(status_code=404, detail="Variant not found")
     return {"status": "ok", "index": index,
             "area_defaults": entry["area_defaults"], "variant": entry}
+
+
+@router.post("/props/{prop_id}/variants/{index}/face-targets")
+async def prop_variant_face_targets(
+        prop_id: str, index: int, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """What this variant should COST in triangles — body
+    ``{target_faces_high?, target_faces_low?}`` (spec-bild-props-v2.md E5).
+
+    Each field is three-valued: OMITTED keeps the stored budget, ``null``
+    clears it (the backend's own default / the configured distance-mesh ratio
+    takes over again), a number stores it. Outside 100 … 2,000,000 it is a 400
+    and nothing is written — a face budget is what a GPU job is billed for, so
+    a slipped digit is refused rather than rounded.
+
+    The budgets are the DEFAULT of every run that names none: the generate
+    dialog, the automatic improvement, the mesh→mesh reduction and the CPU
+    distance mesh (which turns the low budget into its Decimate ratio)."""
+    from app.core.props import set_variant_face_targets
+    _variant(prop_id, index)
+    body = await _body(request)
+    # Only the fields the BODY names reach the store — an omitted key must
+    # keep its budget, which a `None` default could not tell from a clear.
+    patch: Dict[str, Any] = {}
+    if "target_faces_high" in body:
+        patch["high"] = body["target_faces_high"]
+    if "target_faces_low" in body:
+        patch["low"] = body["target_faces_low"]
+    try:
+        entry = set_variant_face_targets(prop_id, index, **patch)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    return {"status": "ok", "index": index,
+            "target_faces_high": entry["target_faces_high"],
+            "target_faces_low": entry["target_faces_low"],
+            "variant": entry}
 
 
 @router.post("/props/{prop_id}/variants/{index}/recopy")

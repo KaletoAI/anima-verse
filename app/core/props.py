@@ -187,7 +187,8 @@ from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
                                   read_sidecar as read_model_sidecar,
                                   write_sidecar as write_model_sidecar)
 from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
-                                     glb_material_names_at, shrink_capability)
+                                     glb_material_names_at, parse_glb,
+                                     shrink_capability)
 from app.core.picture_areas import KINDS as COLOUR_KINDS
 from app.core.timeutils import utc_now_iso
 from app.core.world_ops import _capacity, _place_id, _spacing
@@ -457,6 +458,32 @@ _COPIED_RUN_KEYS = ("backend", "face_num", "texture_size")
 #: Ceiling on a variant label — a name, not a description.
 VARIANT_LABEL_MAX = 120
 
+#: Variant keys: what THIS version of the object should cost in triangles
+#: (spec-bild-props-v2.md E5). Absence is the default — the backend's own
+#: face count for the full mesh, the configured ratio for the distance mesh —
+#: so a prop nobody dialled behaves exactly as it did before the fields
+#: existed. Set, they are the DEFAULT of three readers: :func:`_generate`,
+#: the automatic improvement (which goes through it) and the CPU distance
+#: mesh; an explicit run argument always wins over them.
+TARGET_FACES_HIGH_KEY = "target_faces_high"
+TARGET_FACES_LOW_KEY = "target_faces_low"
+#: The window a face budget has to fall in. The floor is what separates a
+#: budget from a typing slip (a 99-triangle prop is not a thing anybody
+#: wants), the ceiling is well above every backend's own cap — the clamp to
+#: the BACKEND happens per run, this is only the field's own sanity.
+FACE_TARGET_MIN = 100
+FACE_TARGET_MAX = 2_000_000
+#: MODEL-sidecar key: why the file has fewer faces than its variant asked for
+#: ('' / absent = it got what was asked). Written when the effective target
+#: was over the backend's ``face_num_max``, shown on the gallery row.
+FACE_TARGET_NOTE_KEY = "face_target_note"
+#: Bounds of the Decimate ratio an absolute low target is turned into. Blender
+#: reduces by FRACTION, so the target only becomes a ratio against the source's
+#: own triangle count — and a ratio outside these bounds is either a mesh that
+#: collapses into nothing or a "reduction" that reduces nothing.
+LOD_RATIO_MIN = 0.02
+LOD_RATIO_MAX = 0.95
+
 #: How much of a placed prop's DEPTH survives its cut (§ B2 addendum
 #: 2026-08-23) — a fraction, 1.0 = the whole prop. The floor never reaches 0:
 #: an infinitely thin slab is a prop nobody can see and an authoring slip that
@@ -682,6 +709,13 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             label = _coerce_variant_label(entry.get(VARIANT_LABEL_KEY))
             if label:
                 rec[VARIANT_LABEL_KEY] = label
+            # …and what this version should COST in triangles (v2 E5). Same
+            # law as `seasons` and the ground offset: a variant that states
+            # nothing stores no key, and the backend/config default stands.
+            for key in (TARGET_FACES_HIGH_KEY, TARGET_FACES_LOW_KEY):
+                faces = _coerce_face_target(entry.get(key))
+                if faces:
+                    rec[key] = faces
             out.append(rec)
     return out or [_new_variant_entry(MODEL_STEM)]
 
@@ -891,6 +925,44 @@ def _coerce_ground_offset_m(value: Any) -> Optional[float]:
     return None if v == GROUND_OFFSET_DEFAULT else v
 
 
+def _coerce_face_target(value: Any) -> Optional[int]:
+    """A face budget as it is READ BACK — ``None`` for "no statement".
+
+    Never raises: a hand-edited sidecar must not take a whole prop record
+    down, exactly like :func:`_coerce_ground_offset_m`. The WRITE path is
+    :func:`sanitize_face_target`, which refuses junk instead of swallowing it —
+    a number the admin typed and that reached nothing is the worse answer.
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if FACE_TARGET_MIN <= n <= FACE_TARGET_MAX else None
+
+
+def sanitize_face_target(value: Any) -> Optional[int]:
+    """A face budget as it is WRITTEN: ``None`` (or an empty string) CLEARS
+    the field, an integer in ``FACE_TARGET_MIN … FACE_TARGET_MAX`` is stored,
+    anything else raises ``ValueError``.
+
+    Out-of-window numbers are REFUSED, not clamped — unlike the ground offset,
+    where a slip costs the limit. A face budget is what a GPU job is billed
+    for: 99 is a slipped digit and 5,000,000 is a run nobody meant to start,
+    and quietly turning either into the nearest legal value would hide the
+    typo behind a green "Saved".
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"face target must be a whole number: {value!r}") from None
+    if not FACE_TARGET_MIN <= n <= FACE_TARGET_MAX:
+        raise ValueError(f"face target must be between {FACE_TARGET_MIN} and "
+                         f"{FACE_TARGET_MAX}: {n}")
+    return n
+
+
 def _variant_entry(meta: Dict[str, Any], variant: Any = None) -> Dict[str, Any]:
     """ONE sanitized variant record — THE index resolution every per-variant
     read shares (2026-08-25).
@@ -903,9 +975,9 @@ def _variant_entry(meta: Dict[str, Any], variant: Any = None) -> Dict[str, Any]:
     bbox measurement, the payload's single ``variants`` map).
 
     Written once and called by :func:`variant_dims`,
-    :func:`variant_description`, :func:`variant_ground_offset` and
-    :func:`variant_markers`, so "which variant is this" cannot drift between
-    the four fields the variant owns.
+    :func:`variant_description`, :func:`variant_ground_offset`,
+    :func:`variant_markers` and :func:`variant_face_targets`, so "which
+    variant is this" cannot drift between the fields the variant owns.
     """
     entries = _variant_list(meta)
     try:
@@ -2992,6 +3064,11 @@ def _published_entry(meta: Dict[str, Any], index: int,
         entry[ROTATION_KEY] = dict(file[ROTATION_KEY])
         entry[AREA_DEFAULTS_KEY] = variant_area_defaults(meta, index)
         entry[AREAS_WARNING_KEY] = file[AREAS_WARNING_KEY]
+        # …and what this version should COST (v2 E5) — the re-mesh dialog
+        # opens on the prop record, so it prefills from here rather than
+        # asking the variant list a second time. `None` = no statement.
+        for key in (TARGET_FACES_HIGH_KEY, TARGET_FACES_LOW_KEY):
+            entry[key] = _variant_entry(meta, index).get(key)
         if file[LEAF_BBOX_KEY]:
             entry[LEAF_BBOX_KEY] = file[LEAF_BBOX_KEY]
     if markers:
@@ -3080,8 +3157,15 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
     seasons, in_season, tiers, has_model, model_file, model_url, signature,
     has_source, source_url, image, dims, dims_estimated, description,
-    ground_offset_m, markers, slot_values, label, stale, surface_status}]`` —
-    every variant, active or not, in order.
+    ground_offset_m, markers, slot_values, label, target_faces_high,
+    target_faces_low, stale, surface_status}]`` — every variant, active or
+    not, in order.
+
+    ``target_faces_high`` / ``target_faces_low`` are what this version should
+    COST in triangles (v2 E5), ``None`` where it states nothing — and that
+    ``None`` is the whole point: the strip shows the backend's own default as
+    a PLACEHOLDER, so an untouched field keeps meaning "whatever the backend
+    does" instead of freezing today's default into the record.
 
     ``slot_values`` is WHAT this variant shows in the prop's picture areas
     (``{}`` = nothing of its own), ``label`` the name it is listed under and
@@ -3151,6 +3235,11 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             SLOT_VALUES_KEY: dict(entry.get(SLOT_VALUES_KEY) or {}),
             AREA_DEFAULTS_KEY: dict(entry.get(AREA_DEFAULTS_KEY) or {}),
             VARIANT_LABEL_KEY: entry.get(VARIANT_LABEL_KEY, ""),
+            # What this version should COST in triangles (v2 E5) — `None`
+            # where it states nothing, which is what the strip shows as the
+            # backend default in its placeholder rather than as a value.
+            TARGET_FACES_HIGH_KEY: entry.get(TARGET_FACES_HIGH_KEY),
+            TARGET_FACES_LOW_KEY: entry.get(TARGET_FACES_LOW_KEY),
             "stale": _variant_stale(prop_id, i, primary_name, primary_sig),
             # This variant's own baked walking surface, STATE only (the
             # lattice is what ``surface`` means, and it travels on the scene
@@ -3168,8 +3257,11 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
 #: ``area_defaults`` joins them (v2 E1): a new version of a door has the same
 #: panes until its own mesh says otherwise — the landing of that mesh prunes
 #: whatever the new file does not name (:func:`_prune_variant_entry`).
+#: The face budgets join them for the same reason (v2 E5): a new version of
+#: the same object costs the same, so the field opens FILLED and is edited.
 _COPIED_ON_ADD = (*DIM_KEYS, DIMS_ESTIMATED_KEY, DESCRIPTION_KEY,
-                  GROUND_OFFSET_KEY, MARKERS_KEY, AREA_DEFAULTS_KEY)
+                  GROUND_OFFSET_KEY, MARKERS_KEY, AREA_DEFAULTS_KEY,
+                  TARGET_FACES_HIGH_KEY, TARGET_FACES_LOW_KEY)
 
 
 def add_variant(prop_id: str, source: Any = None) -> int:
@@ -3376,15 +3468,41 @@ def _apply_variant_slot_values(entry: Dict[str, Any],
         entry.pop(VARIANT_LABEL_KEY, None)
 
 
-#: The five fields a variant owns, by the name a batch body calls them — the
+def _apply_variant_face_targets(entry: Dict[str, Any], targets: Any) -> None:
+    """Store this variant's face budgets — a PATCH, key by key, and
+    THREE-VALUED per key (v2 E5), because "the body said nothing" and "the
+    admin emptied the field" are different statements:
+
+    * the key is ABSENT — the stored budget stands (clearing the high target
+      must not silently drop the low one);
+    * the key is ``null`` / ``""`` — the budget is cleared and the
+      backend/config default takes over again;
+    * a number — stored, or ``ValueError`` when it is outside the window
+      (:func:`sanitize_face_target`; nothing is written then).
+    """
+    patch = targets if isinstance(targets, dict) else {}
+    for key in (TARGET_FACES_HIGH_KEY, TARGET_FACES_LOW_KEY):
+        if key not in patch:
+            continue
+        value = sanitize_face_target(patch.get(key))
+        if value:
+            entry[key] = value
+        else:
+            entry.pop(key, None)
+
+
+#: The six fields a variant owns, by the name a batch body calls them — the
 #: dims travel as ONE `dims` object because the trio is one statement (a prop
-#: is scaled uniformly, so the three numbers say how big AND what shape).
+#: is scaled uniformly, so the three numbers say how big AND what shape), and
+#: the two face budgets as ONE `face_targets` object for the same reason: high
+#: and low describe one object at two distances.
 VARIANT_PATCH_APPLIERS = {
     "dims": _apply_variant_dims,
     "description": _apply_variant_description,
     "ground_offset_m": _apply_variant_ground_offset,
     "markers": _apply_variant_markers,
     "seasons": _apply_variant_seasons,
+    "face_targets": _apply_variant_face_targets,
 }
 #: The same names as a tuple, for the refusal message.
 VARIANT_PATCH_KEYS = tuple(VARIANT_PATCH_APPLIERS)
@@ -3532,6 +3650,56 @@ def set_variant_area_defaults(prop_id: str, variant: int,
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return list_variants(pid)[i]
+
+
+#: The sentinel that separates "the caller did not mention this budget" from
+#: an explicit ``None``, which CLEARS it. A default of ``None`` could not tell
+#: the two apart, and clearing the high target would then wipe the low one.
+_KEEP = object()
+
+
+def set_variant_face_targets(prop_id: str, variant: int,
+                             high: Any = _KEEP,
+                             low: Any = _KEEP) -> Optional[Dict[str, Any]]:
+    """What this variant should COST in triangles (v2 E5) — the full mesh's
+    budget and the distance mesh's. ``None`` when the prop or the index does
+    not exist, ``ValueError`` for a number outside the window (and nothing is
+    written then).
+
+    Each argument is three-valued: OMITTED keeps the stored budget, ``None``
+    clears it (the backend/config default takes over again), a number stores
+    it. The pair is deliberately not one value: a variant may state what its
+    close-up mesh costs and leave the distance mesh to the configured ratio.
+
+    Returns the variant's published record (:func:`list_variants`)."""
+    ctx = _edit_variant(prop_id, variant)
+    if not ctx:
+        return None
+    pid, meta, entries, i = ctx
+    patch: Dict[str, Any] = {}
+    if high is not _KEEP:
+        patch[TARGET_FACES_HIGH_KEY] = high
+    if low is not _KEEP:
+        patch[TARGET_FACES_LOW_KEY] = low
+    _apply_variant_face_targets(entries[i], patch)
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return list_variants(pid)[i]
+
+
+def variant_face_targets(prop_id: str,
+                         variant: Any = None) -> Dict[str, Optional[int]]:
+    """``{target_faces_high, target_faces_low}`` of ONE variant, ``None`` per
+    field where the variant states nothing — THE read every consumer of the
+    budgets shares (generation, the improvement engine through it, the
+    distance mesh, the mesh→mesh reduction).
+
+    An unknown prop or index answers with two ``None``s: "no statement" is
+    exactly what a caller can do something with, and there is no run in which
+    a missing prop should mean a different face count."""
+    entry = _variant_entry(read_sidecar(prop_id), variant)
+    return {TARGET_FACES_HIGH_KEY: entry.get(TARGET_FACES_HIGH_KEY),
+            TARGET_FACES_LOW_KEY: entry.get(TARGET_FACES_LOW_KEY)}
 
 
 def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
@@ -4132,9 +4300,9 @@ def _copied_from_label(meta: Dict[str, Any], raw: Any) -> Dict[str, Any]:
 
 def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
     """All stored meshes of the prop for the admin gallery, newest first:
-    ``[{filename, tier, selected_for, face_num, texture_size, format,
-    created_at, backend, source, source_file, tris, lod_ratio, shrinkable,
-    shrink_reason, active}]``. ``tier`` is what the file was made for,
+    ``[{filename, tier, selected_for, face_num, face_target_note,
+    texture_size, format, created_at, backend, source, source_file, tris,
+    lod_ratio, shrinkable, shrink_reason, active}]``. ``tier`` is what the file was made for,
     ``selected_for`` the tiers it currently serves, ``source_file`` the stored
     mesh a low variant was reduced FROM, ``tris``/``lod_ratio`` what the CPU
     reduction left of it (0 = not a reduced mesh), ``active`` the one a client
@@ -4169,6 +4337,9 @@ def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
             "tier": g.tier_of(p),
             "selected_for": g.selected_for(p.name),
             "face_num": int(meta.get("face_num") or 0),
+            # Why the file has fewer faces than its variant asked for
+            # ('' = it got what was asked; v2 E5).
+            FACE_TARGET_NOTE_KEY: str(meta.get(FACE_TARGET_NOTE_KEY) or ""),
             "texture_size": int(meta.get("texture_size") or 0),
             "format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
             "created_at": meta.get("created_at", ""),
@@ -4485,6 +4656,139 @@ def _lod_key(prop_id: str, variant: Any = None) -> str:
     return f"{safe_prop_id(prop_id)}#{_stem_of(prop_id, variant) or '?'}"
 
 
+def _glb_triangles(data: bytes) -> int:
+    """Triangle count of a GLB, read from its glTF JSON alone.
+
+    The number is in the accessors: a ``mode`` 4 primitive has one triangle
+    per three indices (or per three positions when it is not indexed), and the
+    scene uses a mesh once per node that references it. No BIN chunk is
+    decoded and no geometry is touched — this runs on the polled distance-mesh
+    path, where a full parse of every prop would be the cost of the feature.
+
+    0 when the file says nothing usable; the caller then falls back to the
+    configured ratio instead of dividing by an invented number.
+    """
+    try:
+        gltf = parse_glb(data).get("gltf") or {}
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError, struct.error):
+        return 0
+    accessors = gltf.get("accessors") or []
+
+    def _count(index: Any) -> int:
+        if not isinstance(index, int) or not 0 <= index < len(accessors):
+            return 0
+        try:
+            return int((accessors[index] or {}).get("count") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    per_mesh: List[int] = []
+    for mesh in (gltf.get("meshes") or []):
+        total = 0
+        for prim in ((mesh or {}).get("primitives") or []):
+            if not isinstance(prim, dict) or int(prim.get("mode", 4) or 4) != 4:
+                continue
+            n = _count(prim.get("indices"))
+            if not n:
+                n = _count((prim.get("attributes") or {}).get("POSITION"))
+            total += n // 3
+        per_mesh.append(total)
+    if not per_mesh:
+        return 0
+    # A mesh referenced by two nodes IS in the scene twice — that is what
+    # Blender counts, and the ratio has to agree with what it will reduce.
+    used = [n.get("mesh") for n in (gltf.get("nodes") or [])
+            if isinstance(n, dict) and isinstance(n.get("mesh"), int)]
+    if used:
+        return sum(per_mesh[i] for i in used if 0 <= i < len(per_mesh))
+    return sum(per_mesh)
+
+
+def _source_triangles(model_path: Optional[Path]) -> int:
+    """How many triangles ONE stored mesh has — 0 when nothing can say.
+
+    The sidecar first (a Blender measurement, or the count a reduction left),
+    the file itself second: measuring is what the sidecar is for, and a file
+    that was never measured must still answer or the low target could not
+    become a ratio."""
+    if not model_path or not model_path.is_file():
+        return 0
+    meta = read_model_sidecar(model_path)
+    measured = meta.get("measured")
+    for value in ((measured or {}).get("tris") if isinstance(measured, dict)
+                  else None, meta.get("tris")):
+        try:
+            n = int(value or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n > 0:
+            return n
+    try:
+        return _glb_triangles(model_path.read_bytes())
+    except OSError:
+        return 0
+
+
+def _lod_ratio_for(prop_id: str, variant: Any, src: Path) -> float:
+    """The Decimate fraction ONE variant's distance mesh is built at.
+
+    The variant's ``target_faces_low`` is an ABSOLUTE triangle count, Blender
+    reduces by FRACTION — so the target only means anything against the
+    source's own count: ``target / source_tris``, clamped to
+    ``[LOD_RATIO_MIN, LOD_RATIO_MAX]``. Without a target (or without a
+    readable source count) the configured per-kind ratio stands, which is what
+    every prop did before the field existed.
+    """
+    from app.blender import refine
+    target = variant_face_targets(prop_id, variant)[TARGET_FACES_LOW_KEY]
+    if target:
+        tris = _source_triangles(src)
+        if tris > 0:
+            return max(LOD_RATIO_MIN, min(target / tris, LOD_RATIO_MAX))
+    return float(refine.lod_ratio("prop"))
+
+
+def _backend_face_cap(backend: str) -> int:
+    """The ``face_num_max`` of ONE mesh backend, 0 = no ceiling (or unknown).
+
+    Read off the live backend objects rather than the config, because that is
+    where the clamp itself lives (``openai_mesh._effective_faces``) — the note
+    on a file must say the same number the job was actually cut to. Never
+    raises: a note is worth nothing next to a lost generation result."""
+    if not backend:
+        return 0
+    try:
+        from app.imagegen.service import get_image_service
+        svc = get_image_service()
+        listers = (getattr(svc, "list_mesh_backends", None),
+                   getattr(svc, "list_shrink_backends", None))
+        for lister in listers:
+            for b in (lister() if lister else []):
+                if getattr(b, "name", "") == backend:
+                    return int(getattr(b, "face_num_max", 0) or 0)
+    except Exception:                                       # noqa: BLE001
+        return 0
+    return 0
+
+
+def _face_target_note(backend: str, faces: Any) -> str:
+    """What a file has to SAY when its backend cut the requested budget —
+    '' when it got what was asked for (v2 E5).
+
+    A silently halved budget is the kind of thing nobody finds again: the
+    admin dials 60,000 on the variant, the alias hangs above 40,000 and caps
+    it, and the gallery row would show a face count that agrees with neither.
+    """
+    cap = _backend_face_cap(backend)
+    try:
+        want = int(faces or 0)
+    except (TypeError, ValueError):
+        return ""
+    if cap and want > cap:
+        return f"clamped to backend maximum {cap}"
+    return ""
+
+
 def _reduce_to_low(pid: str, src: Path, ratio: float,
                    variant: Any = None) -> Dict[str, Any]:
     """The reduction itself: Blender Decimate, then a NEW gallery file that
@@ -4556,14 +4860,15 @@ def build_low_tier(prop_id: str, ratio: float = 0.0, force: bool = False,
     where an existing choice always wins). ``force`` also ignores the failure
     memory — the admin may have fixed the very thing that failed.
 
-    ``ratio`` 0 takes the configured target for props. One build per prop at a
-    time, and the reduced mesh must pass the same static validation as a
-    freshly delivered model. Returns ``{ok, tier, ratio, tris, tris_before,
-    size, size_before, error}``.
+    ``ratio`` 0 takes the variant's own target (v2 E5:
+    ``target_faces_low / source triangles``, clamped) and the configured
+    per-kind fraction where it states none. One build per prop at a time, and
+    the reduced mesh must pass the same static validation as a freshly
+    delivered model. Returns ``{ok, tier, ratio, tris, tris_before, size,
+    size_before, error}``.
     """
-    from app.blender import refine
-    ratio = float(ratio or refine.lod_ratio("prop"))
-    out: Dict[str, Any] = {"ok": False, "tier": LOW_TIER, "ratio": ratio,
+    out: Dict[str, Any] = {"ok": False, "tier": LOW_TIER,
+                           "ratio": float(ratio or 0.0),
                            "tris": None, "tris_before": None, "size": 0,
                            "size_before": 0, "error": ""}
     pid = safe_prop_id(prop_id)
@@ -4572,6 +4877,10 @@ def build_low_tier(prop_id: str, ratio: float = 0.0, force: bool = False,
     if not src or src.suffix.lower() != ".glb":
         out["error"] = "no_model"
         return out
+    # AFTER the source is known: the variant's absolute low target only
+    # becomes a fraction against THAT file's triangle count.
+    ratio = float(ratio or _lod_ratio_for(pid, variant, src))
+    out["ratio"] = ratio
     if LOW_TIER in g.tiers() and not force:
         out["error"] = "low tier already exists"
         return out
@@ -4641,7 +4950,7 @@ def request_low_tier(prop_id: str, variant: Any = None) -> None:
         if not shrink_capability(src)["shrinkable"]:
             _lod_failed.add(key)
             return
-        ratio = refine.lod_ratio("prop")
+        ratio = _lod_ratio_for(pid, variant, src)
 
         def _run() -> None:
             try:
@@ -5435,6 +5744,19 @@ def _generate(prop_id: str, prompt: str, negative: str,
         if not g:
             error = "bad prop id"
             return {"ok": False, "error": error}
+        # WHAT THIS VERSION COSTS (v2 E5): the variant states its budgets, the
+        # caller's explicit numbers win. That one order is why the automatic
+        # improvement inherits them too — it comes through here without any
+        # face argument of its own, and used to run on whatever the backend
+        # default happened to be.
+        targets = variant_face_targets(prop_id, variant)
+        if not face_num:
+            face_num = targets[TARGET_FACES_HIGH_KEY]
+        if not lod_faces and targets[TARGET_FACES_LOW_KEY]:
+            # Sent to every alias; the ones whose schema declares no LOD param
+            # log it and drop it (openai_mesh), and the CPU distance mesh then
+            # reads the same target for its own ratio.
+            lod_faces = [targets[TARGET_FACES_LOW_KEY]]
         # The dial of the file this run replaces is the new file's default
         # (v2 E1; same rule as the upload) — read BEFORE the new file lands.
         previous = g.find(DEFAULT_TIER, fallback=False)
@@ -5466,6 +5788,11 @@ def _generate(prop_id: str, prompt: str, negative: str,
             "backend": res.get("backend", ""),
             **({"face_num": int(face_num)} if face_num else {}),
             **({"texture_size": int(texture_size)} if texture_size else {}),
+            # Over the alias' ceiling the job runs CLAMPED, and the file says
+            # so — the gallery row shows it (v2 E5).
+            **({FACE_TARGET_NOTE_KEY: note}
+               if (note := _face_target_note(res.get("backend", ""), face_num))
+               else {}),
             **({ROTATION_KEY: inherited}
                if inherited and any(inherited.values()) else {}),
         })
@@ -5530,13 +5857,19 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
     trigger_shrink). Adds a NEW file to the prop's gallery and makes it the
     ``low`` variant; the source file and the prop's dims stay untouched — the
     dims are measured from the FULL mesh and a coarser copy of the same object
-    must not move them."""
+    must not move them.
+
+    Without a ``face_num`` the variant's ``target_faces_low`` applies (v2 E5):
+    this IS the variant's distance mesh, so it is the same budget the CPU
+    reduction aims at — only reached by a backend instead of by Decimate."""
     from app.core.task_queue import get_task_queue
     from app.imagegen.service import get_image_service
     g = model_gallery(prop_id, variant)
     src = g.file(source_file) if g else None
     if not g or not src:
         return {"ok": False, "error": "source model missing"}
+    if not face_num:
+        face_num = variant_face_targets(prop_id, variant)[TARGET_FACES_LOW_KEY]
     name = read_sidecar(prop_id).get("name") or prop_id
     task_id = ""
     try:
@@ -5570,6 +5903,9 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
             "source_file": source_file,
             **({"face_num": int(face_num)} if face_num else {}),
             **({"texture_size": int(texture_size)} if texture_size else {}),
+            **({FACE_TARGET_NOTE_KEY: note}
+               if (note := _face_target_note(res.get("backend", ""), face_num))
+               else {}),
             # A backend re-mesh keeps the axes of its source, not its nodes
             # or materials — the fix travels, the areas do not (v2 E1).
             **({ROTATION_KEY: src_fix} if any(src_fix.values()) else {}),

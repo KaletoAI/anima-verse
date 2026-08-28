@@ -126,6 +126,15 @@ carries none of them. Three sections derive that by hand:
        room recipe) and the one-time MIGRATION: values copied down, prop keys
        gone, an authored variant value kept.
 
+A VARIANT STATES WHAT IT COSTS (spec-bild-props-v2.md E5, 2026-08-28). The
+face count used to be a RUN argument — whatever the generate dialog was left
+at — so the automatic improvement re-meshed on the backend default and the
+distance mesh on a fixed fraction. Section [21] derives the three readers by
+hand: generation (and the improvement, which goes through it) takes
+`target_faces_high` where the caller names none, the distance mesh turns
+`target_faces_low` into `target / source triangles` clamped to [0.02, 0.95],
+and a target over the alias' ceiling runs CLAMPED with the file saying so.
+
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
 """
 import io
@@ -198,6 +207,18 @@ def png_bytes(color, *, alpha: bool = False) -> bytes:
 # real `_generate` runs from end to end without a backend.
 
 MESH_INPUTS: list = []
+#: Every kwarg the store hands the mesher — the face-target section reads it.
+MESH_KWARGS: list = []
+
+
+class FakeMeshBackend:
+    """The mesh alias the store asks for a face ceiling — 40,000 is the
+    number the clamp case below is derived from."""
+    name = "fake-mesh"
+    face_num = 20000
+    face_num_max = 40000
+    supports_lod_stages = True
+    mesh_rig = "none"
 
 
 class FakeBackend:
@@ -224,9 +245,18 @@ class FakeService:
 
     def generate_mesh(self, *, source_image_path, output_path, **kw):
         MESH_INPUTS.append(Path(source_image_path).name)
+        # …and the whole call, for the face-target section: what the store
+        # asks the mesher for IS the thing under test there.
+        MESH_KWARGS.append(dict(kw))
         Path(output_path).write_bytes(b"glTF-stub")
         return {"ok": True, "path": output_path, "format": "glb",
                 "rig": "none", "backend": "fake-mesh"}
+
+    def list_mesh_backends(self, rig: str = ""):
+        return [FakeMeshBackend()]
+
+    def list_shrink_backends(self):
+        return []
 
 
 def install_fakes() -> None:
@@ -1071,6 +1101,259 @@ def season_section() -> None:
           sig_none_a == _signature({"map3d": {}}, 0.0, [], {}, {}))
 
 
+# ── [21] Face targets per variant (spec-bild-props-v2.md E5) ────────────
+# The face count used to be a RUN argument: whatever the generate dialog was
+# left at, gone the moment the job finished. A variant now STATES what it
+# should cost, and three readers take that statement as their default —
+# generation, the automatic improvement and the CPU distance mesh.
+#
+# Every number below is derived by hand from E5, not from what the code
+# prints:
+#
+#   * the fields are ABSENCE-by-default (like `seasons`/`ground_offset_m`):
+#     a fresh variant states nothing and the backend default stands;
+#   * the sanitizer's window is 100 … 2,000,000 — 99 is a typing slip, not a
+#     face budget, and it is refused instead of silently rounded;
+#   * `_generate` without a `face_num` uses `target_faces_high`; WITH one the
+#     caller wins (the dialog is an override, not a suggestion);
+#   * the distance mesh is a RATIO in Blender, so the absolute low target
+#     becomes `target_low / source_tris`, clamped to [0.02, 0.95]. Hand
+#     cases on a source of 8,000 triangles:
+#
+#         low  2,000 → 2000/8000  = 0.25
+#         low  4,000 → 4000/8000  = 0.5    (≠ the config default 0.25 —
+#                                           this is what proves the target
+#                                           drives it and not the config)
+#         low    100 →  100/8000  = 0.0125 → clamped to 0.02
+#         low 60,000 → 60000/8000 = 7.5    → clamped to 0.95
+#         no target  → the configured 0.25
+#
+#     8,000 is read off the FILE (24,000 indices / 3), so a sidecar that
+#     never measured anything still answers.
+#   * a target above the backend's ceiling is not an error: the run proceeds
+#     clamped and the file SAYS SO (`face_target_note`), because a silently
+#     halved budget is the kind of thing nobody finds again.
+
+
+def glb_with_tris(n: int) -> bytes:
+    """A minimal GLB whose ONE mesh has ``n`` triangles — JSON chunk only.
+
+    The triangle count of a glTF is readable from the JSON alone (the index
+    accessor's `count`), so the reader needs no BIN chunk and no geometry:
+    3·n indices on one `mode` 4 primitive, referenced by one node.
+    """
+    import struct
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0},
+                                    "indices": 1, "mode": 4}]}],
+        "accessors": [
+            {"count": n * 3, "type": "VEC3", "componentType": 5126},
+            {"count": n * 3, "type": "SCALAR", "componentType": 5125},
+        ],
+    }
+    body = json.dumps(gltf).encode("utf-8")
+    body += b" " * ((4 - len(body) % 4) % 4)
+    chunk = struct.pack("<II", len(body), 0x4E4F534A) + body
+    return b"glTF" + struct.pack("<II", 2, 12 + len(chunk)) + chunk
+
+
+def put_real_mesh(prop_id: str, variant, tris: int, tier: str = "full") -> str:
+    """Like :func:`put_mesh`, but with a GLB a triangle reader can answer on."""
+    g = store.model_gallery(prop_id, variant)
+    assert g is not None
+    p = g.new_path()
+    p.write_bytes(glb_with_tris(tris))
+    write_sidecar(p, {"created_at": "2026-08-28T10:00:00+00:00",
+                      "source": "generated", "format": "glb", "tier": tier})
+    g.select(p.name, tier)
+    return p.name
+
+
+def face_targets_section() -> None:
+    print("\n[21] face targets per variant (E5) — the fields")
+    install_fakes()
+    lantern = store.create_prop(name="Lantern")["id"]
+    v0 = store.list_variants(lantern)[0]
+    check("a fresh variant states no target — absence IS the default",
+          v0.get("target_faces_high") is None
+          and v0.get("target_faces_low") is None,
+          f"{v0.get('target_faces_high')!r}/{v0.get('target_faces_low')!r}")
+
+    rec = store.set_variant_face_targets(lantern, 0, high=12000, low=2000)
+    check("setting both comes back on the published record",
+          (rec or {}).get("target_faces_high") == 12000
+          and (rec or {}).get("target_faces_low") == 2000, str(rec))
+    again = store.list_variants(lantern)[0]
+    check("...and survives the round trip through the sidecar",
+          (again["target_faces_high"], again["target_faces_low"])
+          == (12000, 2000),
+          f"{again['target_faces_high']}/{again['target_faces_low']}")
+    check("the store read answers the same pair",
+          store.variant_face_targets(lantern, 0)
+          == {"target_faces_high": 12000, "target_faces_low": 2000},
+          str(store.variant_face_targets(lantern, 0)))
+
+    refused = False
+    try:
+        store.set_variant_face_targets(lantern, 0, high=99)
+    except ValueError:
+        refused = True
+    check("99 faces is a typing slip, not a budget — refused", refused)
+    check("...and the stored pair is untouched",
+          store.variant_face_targets(lantern, 0)["target_faces_high"] == 12000)
+    check("100 is the smallest accepted budget",
+          (store.set_variant_face_targets(lantern, 0, high=100) or {})
+          .get("target_faces_high") == 100)
+    over = False
+    try:
+        store.set_variant_face_targets(lantern, 0, high=2_000_001)
+    except ValueError:
+        over = True
+    check("two million and one is over the window — refused", over)
+    store.set_variant_face_targets(lantern, 0, high=12000)
+
+    cleared = store.set_variant_face_targets(lantern, 0, high=None)
+    check("an explicit null CLEARS the high target",
+          (cleared or {}).get("target_faces_high") is None, str(cleared))
+    check("...and leaves the low one standing — one field, one statement",
+          (cleared or {}).get("target_faces_low") == 2000, str(cleared))
+    store.set_variant_face_targets(lantern, 0, high=12000)
+
+    batch = store.bulk_update(lantern, variants={
+        "0": {"face_targets": {"target_faces_high": 8000}}})
+    check("the batch save carries the pair like every other variant field",
+          store.variant_face_targets(lantern, 0)["target_faces_high"] == 8000,
+          str(batch and batch.get("variant_tiers")))
+    check("...and a field the body did not mention is kept",
+          store.variant_face_targets(lantern, 0)["target_faces_low"] == 2000)
+    bad = False
+    try:
+        store.bulk_update(lantern, variants={
+            "0": {"face_targets": {"target_faces_low": 5}}})
+    except ValueError:
+        bad = True
+    check("a junk value in the batch is refused before anything is written",
+          bad and store.variant_face_targets(lantern, 0)["target_faces_low"] == 2000)
+    store.set_variant_face_targets(lantern, 0, high=12000)
+
+    print("\n[21b] generation reads the target as its DEFAULT")
+    MESH_KWARGS.clear()
+    store.save_source_image(lantern, png_bytes((200, 180, 40)), 0,
+                            backend="fake-image")
+    res = store._generate(lantern, "", "", "", "fake-mesh", mesh_only=True,
+                          variant=0)
+    check("the run went through", res.get("ok"), str(res))
+    check("...and the mesher was asked for the variant's 12,000 faces",
+          MESH_KWARGS and MESH_KWARGS[-1].get("face_num") == 12000,
+          str(MESH_KWARGS[-1:]))
+    check("...and for a low stage of the variant's 2,000",
+          MESH_KWARGS and list(MESH_KWARGS[-1].get("lod_faces") or []) == [2000],
+          str(MESH_KWARGS[-1:]))
+
+    MESH_KWARGS.clear()
+    store._generate(lantern, "", "", "", "fake-mesh", face_num=5000,
+                    mesh_only=True, variant=0)
+    check("an explicit face count WINS — the dialog is an override",
+          MESH_KWARGS and MESH_KWARGS[-1].get("face_num") == 5000,
+          str(MESH_KWARGS[-1:]))
+
+    print("\n[21c] the improvement engine inherits the same default")
+    from app.core.improvements.types import subjects
+    MESH_KWARGS.clear()
+    subjects.generate_prop_model(lantern, "fake-mesh")
+    check("a model_replace/fill_missing run asks for the variant's 12,000",
+          MESH_KWARGS and MESH_KWARGS[-1].get("face_num") == 12000,
+          str(MESH_KWARGS[-1:]))
+    check("...and the subject ident may NAME a variant, not only the primary",
+          subjects.split_prop_ident(f"{lantern}#2") == (lantern, 2)
+          and subjects.split_prop_ident(lantern) == (lantern, None),
+          str(subjects.split_prop_ident(f"{lantern}#2")))
+
+    print("\n[21d] the distance mesh turns the low target into a ratio")
+    RATIOS: list = []
+    from app.blender import refine
+
+    real_lod = refine.build_static_lod
+
+    def fake_lod(path, ratio):
+        RATIOS.append(round(float(ratio), 6))
+        return {"ok": True, "blob": glb_with_tris(1000), "tris": 1000,
+                "tris_before": 8000, "error": ""}
+
+    refine.build_static_lod = fake_lod
+    try:
+        torch = store.create_prop(name="Torch")["id"]
+        put_real_mesh(torch, 0, 8000)
+        check("the source file reads back as 8,000 triangles",
+              store._source_triangles(store.model_path(torch, variant=0)) == 8000,
+              str(store._source_triangles(store.model_path(torch, variant=0))))
+
+        for low, want in ((2000, 0.25), (4000, 0.5), (100, 0.02),
+                          (60000, 0.95)):
+            store.set_variant_face_targets(torch, 0, low=low)
+            RATIOS.clear()
+            out = store.build_low_tier(torch, force=True, variant=0)
+            check(f"low target {low} on 8,000 triangles → ratio {want}",
+                  out.get("ok") and RATIOS == [want],
+                  f"{RATIOS} / {out.get('error')}")
+            check(f"...and the answer reports that ratio ({want})",
+                  round(float(out.get("ratio") or 0), 6) == want,
+                  str(out.get("ratio")))
+
+        store.set_variant_face_targets(torch, 0, low=None)
+        RATIOS.clear()
+        store.build_low_tier(torch, force=True, variant=0)
+        check("no target → the configured prop ratio 0.25 stands",
+              RATIOS == [0.25], str(RATIOS))
+
+        # The measured count wins over the parse — a sidecar that HAS the
+        # number must not make the reader open the file again.
+        from app.core.model_store import read_sidecar as _read_model_sidecar
+        src = store.model_path(torch, variant=0)
+        meta = _read_model_sidecar(src)
+        meta["measured"] = {"tris": 4000}
+        write_sidecar(src, meta)
+        check("a measured triangle count wins over the file's own",
+              store._source_triangles(src) == 4000,
+              str(store._source_triangles(src)))
+    finally:
+        refine.build_static_lod = real_lod
+
+    print("\n[21e] over the backend ceiling: clamped, and the file says so")
+    MESH_KWARGS.clear()
+    torch2 = store.create_prop(name="Beacon")["id"]
+    store.save_source_image(torch2, png_bytes((40, 40, 200)), 0,
+                            backend="fake-image")
+    store.set_variant_face_targets(torch2, 0, high=60000)
+    store._generate(torch2, "", "", "", "fake-mesh", mesh_only=True, variant=0)
+    # The row of the file this run just made — two files of one variant can
+    # share a second, so "the active one" is what names it, not "the first".
+    def active_row(prop_id: str) -> dict:
+        return next((r for r in store.list_models(prop_id, 0) if r["active"]),
+                    {})
+
+    row = active_row(torch2)
+    check("the run happened despite the ceiling", bool(row), str(row))
+    check("...and its file names the backend maximum of 40,000",
+          "40000" in (row.get("face_target_note") or ""),
+          str(row.get("face_target_note")))
+
+    store.set_variant_face_targets(torch2, 0, high=20000)
+    MESH_KWARGS.clear()
+    store._generate(torch2, "", "", "", "fake-mesh", mesh_only=True, variant=0)
+    row = active_row(torch2)
+    check("...and the mesher got the 20,000 the variant now states",
+          MESH_KWARGS and MESH_KWARGS[-1].get("face_num") == 20000,
+          str(MESH_KWARGS[-1:]))
+    check("a target UNDER the ceiling leaves no note behind",
+          bool(row) and not (row.get("face_target_note") or ""),
+          str(row.get("face_target_note")))
+
+
 def main() -> int:
     print("\n[1] a prop without the key has ONE variant — the primary one")
     pine = store.create_prop(name="Pine")["id"]
@@ -1139,9 +1422,11 @@ def main() -> int:
     # placeholder cube and neither overrides it.
     cube = {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
     # …and (spec-bild-props-v2.md E1) what each variant's ACTIVE FILE
-    # carries: no areas, no leaf, the zero fix, no pane defaults, no note.
+    # carries: no areas, no leaf, the zero fix, no pane defaults, no note —
+    # plus (E5) the two face budgets, unstated on a prop nobody dialled.
     plain = {"areas": [], "rotation": {"x": 0, "y": 0, "z": 0},
-             "area_defaults": {}, "areas_warning": ""}
+             "area_defaults": {}, "areas_warning": "",
+             "target_faces_high": None, "target_faces_low": None}
     check("the record lists tiers per active variant, with its store index",
           (store.get_prop(fern) or {}).get("variant_tiers")
           == [{"variant": 0, "tiers": ["full", "low"], "dims": cube, **plain},
@@ -1496,6 +1781,7 @@ def main() -> int:
     description_section()
     variant_fields_section()
     season_section()
+    face_targets_section()
 
     print()
     if FAILURES:
