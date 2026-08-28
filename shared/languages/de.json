@@ -2283,7 +2283,6 @@
     "The primary variant has no picture area yet — detect or draw one on it first.": "Die Primär-Variante hat noch keine Bildfläche — erkenne oder zeichne dort zuerst eine.",
     "Orientation fix": "Ausrichtungs-Fix",
     "Orientation fix of this variant’s model file — persisted; the 3D client applies it on load.": "Ausrichtungs-Fix der Modelldatei dieser Variante — gespeichert; der 3D-Client wendet ihn beim Laden an.",
-    "Switch this variant on (and into season) to dial its orientation — only a variant a scene renders publishes its fix.": "Schalte diese Variante ein (und in die Saison), um ihre Ausrichtung zu stellen — nur eine Variante, die eine Szene rendert, veröffentlicht ihren Fix.",
     "Blender is not available": "Blender ist nicht verfügbar",
     "Blender available": "Blender verfügbar",
     "last run": "letzter Lauf",

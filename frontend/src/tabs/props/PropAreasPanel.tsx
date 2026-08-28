@@ -37,7 +37,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { PictureVariantDialog } from './PictureVariantDialog'
 import { AREA_KINDS, areaKindOf } from './propTypes'
-import type { PropAreasInfo, PropFull, PropSlotValues,
+import type { PropArea, PropAreasInfo, PropFull, PropSlotValues,
   PropVariant } from './propTypes'
 
 /** What one variant is called in the list. */
@@ -46,7 +46,7 @@ function variantName(v: PropVariant, t: (s: string) => string): string {
 }
 
 export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
-  onPropChanged, onVariantsChanged }: {
+  info, infoFailed, onInfo, reloadAreas, onPropChanged, onVariantsChanged }: {
   prop: PropFull
   /** STORE index of the variant the detail has open — the mesh this panel
    *  reads, draws on and splits. Every route below takes it. */
@@ -59,6 +59,18 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   variantMax: number
   /** Bumped whenever this prop's meshes changed — the viewer has to refetch. */
   reloadKey: number
+  /** The OPEN variant's areas payload, read by the detail (`GET …/areas?
+   *  variant=`) — one reader for the fix, the strip's box turn and this
+   *  panel. `null` = still reading, or the read failed. */
+  info: PropAreasInfo | null
+  /** …and it FAILED (`info` null alone cannot tell that from "still
+   *  reading", and the status line must not read the same in both). */
+  infoFailed: boolean
+  /** A verb of this panel answered with a fresh payload for its variant. */
+  onInfo: (info: PropAreasInfo) => void
+  /** Read the areas again (a verb that did not answer with them, or one that
+   *  failed). */
+  reloadAreas: () => void
   /** Reload the prop record — a split, a rename or a delete rewrites the
    *  variant entry (`areas`, `leaf_bbox`, `area_defaults`) it publishes. */
   onPropChanged: () => void
@@ -69,7 +81,6 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(prop.id)
-  const [info, setInfo] = useState<PropAreasInfo | null>(null)
   /** Which action is running ('' = none). A Blender run blocks the lot: they
    *  all write the same mesh, and the server serialises them anyway. */
   const [busy, setBusy] = useState('')
@@ -88,32 +99,38 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   /** The variant the dialog is editing (null = a new one, undefined = closed). */
   const [editing, setEditing] = useState<number | null | undefined>(undefined)
 
-  /** Did the last areas request FAIL? `info` null alone cannot say — before
-   *  the first answer it means "still reading", after a failure "we know
-   *  nothing", and the status line must not read the same in both. */
-  const [loadFailed, setLoadFailed] = useState(false)
-
   /** Every route of this panel names the variant — one place that writes it,
    *  so no verb can quietly fall back to the primary mesh. */
   const q = `?variant=${variant}`
 
-  const load = useCallback(async () => {
-    try {
-      setInfo(await apiGet<PropAreasInfo>(
-        `/world/props/${enc}/areas?variant=${variant}`))
-      setLoadFailed(false)
-    } catch {
-      setInfo(null)
-      setLoadFailed(true)
-    }
-  }, [enc, variant])
-  useEffect(() => { void load() }, [load, reloadKey])
   // A prop OR variant switch drops every view state — both put another mesh
   // under the camera, and the previous variant index means something else on
   // the next prop.
   useEffect(() => {
     setPreview(null); setDrawKind(''); setEditing(undefined); setFrontal(true)
   }, [prop.id, variant])
+  /** The areas of the variant the DIALOG is editing, whenever that is not the
+   *  one the panel has open. The record publishes only the variants a scene
+   *  renders, and a switched-off or out-of-season one has to be dressed too —
+   *  so the file is asked directly, exactly as the detail asks for the open
+   *  one. `null` = nothing fetched (yet). */
+  const [editAreas, setEditAreas] = useState<PropArea[] | null>(null)
+  useEffect(() => {
+    setEditAreas(null)
+    if (editing === undefined || editing === null || editing === variant) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const d = await apiGet<PropAreasInfo>(
+          `/world/props/${enc}/areas?variant=${editing}`)
+        if (!cancelled && d.variant === editing) setEditAreas(d.areas || [])
+      } catch {
+        if (!cancelled) setEditAreas([])
+      }
+    })()
+    return () => { cancelled = true }
+  }, [enc, editing, variant, reloadKey])
+
   // Turning the front view off ends a running gesture: the points already
   // clicked were placed against the old camera, and the ring is projected as
   // a whole when it closes — half of it from another angle rings nothing.
@@ -143,43 +160,44 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   const pictureCap = Math.max(0, variantMax - 1)
   const previewVariant = preview === null
     ? null : variants.find((v) => v.index === preview) || null
-  // WHAT THE PREVIEW SHOWS: the OPEN variant's pane defaults with the picked
-  // variant's own values on top — the same merge the scene recipe does
-  // (`_slot_spec`),
-  // keyed by AREA ID, which is the slot name `applySlotMaterials` matches
-  // after taking the material's `slot_` prefix off (R11).
+  // WHAT THE PREVIEW SHOWS: the PICKED variant's own pane defaults with its
+  // own values on top — exactly the merge the scene recipe makes for the
+  // variant it resolves (`scene_recipe._slot_spec`:
+  // `{**entry.area_defaults, **entry.slot_values}`), keyed by AREA ID, which
+  // is the slot name `applySlotMaterials` matches after taking the material's
+  // `slot_` prefix off (R11). Both halves belong to the SAME entry since v2
+  // E1 — the open variant's defaults would preview a mesh nobody renders.
   //
   // MEMOISED, deliberately: the viewer re-applies its slot materials whenever
   // this object's identity changes, and a fresh map per render would reload
-  // every texture on every keystroke elsewhere in the panel. It depends on the
-  // two things it reads, not on the whole `info` — a status refresh must not
-  // re-download the picture.
-  const defaults = info?.area_defaults
+  // every texture on every keystroke elsewhere in the panel.
   const slots = useMemo(() => (previewVariant
-    ? { ...(defaults || {}), ...(previewVariant.slot_values || {}) }
-    : undefined), [previewVariant, defaults])
+    ? { ...(previewVariant.area_defaults || {}),
+      ...(previewVariant.slot_values || {}) }
+    : undefined), [previewVariant])
 
-  /** Every areas call answers the same payload — one place that stores it and
-   *  maps the failure onto a toast the admin can act on. */
+  /** Every areas call answers the same payload — one place that hands it to
+   *  the detail (which drops it if the admin has moved on) and maps the
+   *  failure onto a toast the admin can act on. */
   const run = useCallback(async (what: string, call: () => Promise<unknown>) => {
     setBusy(what)
     try {
       const answer = await call() as PropAreasInfo | undefined
-      if (answer && Array.isArray(answer.areas)) setInfo(answer)
-      else await load()
+      if (answer && Array.isArray(answer.areas)) onInfo(answer)
+      else reloadAreas()
       onPropChanged()
     } catch (e) {
       toast(`${t('Error')}: ${(e as Error).message}`, 'error')
-      await load()
+      reloadAreas()
     } finally {
       setBusy('')
     }
-  }, [load, onPropChanged, t, toast])
+  }, [onInfo, reloadAreas, onPropChanged, t, toast])
 
   /** A fresh split of THIS variant's mesh. Without `kinds` the server looks
    *  for everything it knows; "Detect now" hands it exactly what the prop
    *  asked its render for (E3). */
-  const detect = (kinds?: string[]) => void run('detect',
+  const detect = (kinds?: string[]) => void run(kinds ? 'detect-kinds' : 'detect',
     () => apiPost(`/world/props/${enc}/areas${q}`,
       kinds ? { mode: 'auto', kinds } : { mode: 'auto' }))
 
@@ -274,13 +292,12 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   const canRun = !!info && !blenderReason && !running && !!info.model_file
   /** WHICH MESH the dialog is dressing. A NEW picture variant is a copy of
    *  the PRIMARY frame and the server checks its values against THAT file's
-   *  areas; an existing variant is checked against its own. So the controls
-   *  are built from the entry that will be validated, not from whichever
-   *  variant the panel happens to be open on. */
+   *  areas; an EXISTING variant is checked against its OWN file — never the
+   *  primary's, or the dialog would offer areas that variant does not have.
+   *  So the controls are built from the entry that will be validated. */
   const dialogAreas = editing === null || editing === undefined
     ? frameAreas
-    : (prop.variant_tiers?.find((v) => v.variant === editing)?.areas
-      || (editing === variant ? areas : frameAreas))
+    : (editing === variant ? areas : (editAreas || []))
   /** Which key surfaces the NEXT render of this prop is asked for (R7, E3) —
    *  a prop-wide wish, edited in the generation dialogs. `info` answers with
    *  the record's list, the record itself before the first payload. */
@@ -299,7 +316,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
       {/* Status: can Blender run at all, when did it last, what went wrong. */}
       <div className="ga-hint" style={{ display: 'block' }}>
         {!info
-          ? (loadFailed
+          ? (infoFailed
             ? `⚠ ${t('Could not read this prop’s areas — reload the page.')}`
             : `… ${t('Reading the areas…')}`)
           : blenderReason
@@ -344,7 +361,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
           title={requested.length
             ? t('Split THIS variant’s mesh now, looking for exactly the kinds above — for a mesh that landed before the prop asked for them.')
             : t('This prop asks its renders for no key surface — pick the kinds when you order a render.')}>
-          🔍 {busy === 'detect' ? t('Detecting…') : t('Detect now')}
+          🔍 {busy === 'detect-kinds' ? t('Detecting…') : t('Detect now')}
         </button>
       </div>
 
@@ -474,7 +491,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
                 <span className="ga-hint">{a.id}</span>
                 <select className="ga-input" style={{ width: 120 }}
                   disabled={running}
-                  value={defaults?.[a.id]?.preset || ''}
+                  value={info?.area_defaults?.[a.id]?.preset || ''}
                   onChange={(e) => setDefault(a.id, e.target.value)}>
                   <option value="">{t('None')}</option>
                   {/* The looks a renderer actually draws — @anima/scene-render

@@ -32,9 +32,13 @@ export type PropSlotKind = 'image' | 'material'
 
 /**
  * ONE fillable surface of a prop's mesh — a picture frame, a screen, a window
- * pane. A slot IS a material of the model: the import reads a first draft off
- * the material names (`slot_<name>`, or one of picture / screen / sign /
- * glass — `props.detect_slots`), and the list is corrected here.
+ * pane. A slot IS a material of the model: the import reads the list off the
+ * material names (`slot_<name>`, or one of picture / screen / sign / glass —
+ * `props.detect_slots`).
+ *
+ * READ-ONLY since v2 E6 — the editor is gone. A named material becomes an
+ * AREA when the mesh lands, and areas are what the Areas tab works on; this
+ * list only survives as what a scene's `slots` are matched against.
  */
 export interface PropSlot {
   /** Lower-case, unique within the prop — it names the material. */

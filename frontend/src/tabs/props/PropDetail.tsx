@@ -64,7 +64,7 @@ import {
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { DimKey } from './dims'
 import type {
-  PropFull, PropMarker, PropSourceImage, PropVariant,
+  PropAreasInfo, PropFull, PropMarker, PropSourceImage, PropVariant,
 } from './propTypes'
 
 /**
@@ -228,15 +228,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const variants = useMemo(() => applyVariantDraft(serverVariants, buf),
     [serverVariants, buf])
   const shownVariant = variants.find((v) => v.index === variant) || null
-  // WHAT THE OPEN VARIANT'S FILE CARRIES (spec-bild-props-v2.md E1): the
-  // orientation fix belongs to the model FILE, so it is read off the entry of
-  // the variant that is open and never off the prop — every variant is its own
-  // generation and came out of it with its own axes. `variant_tiers` holds the
-  // variants a scene renders right now, so a switched-off or out-of-season one
-  // is NOT in it: its fix is unknown here, and the control below says so
-  // instead of offering a 0 that would wipe the stored angles.
-  const variantEntry = prop.variant_tiers?.find((v) => v.variant === variant)
-  const variantRotation = variantEntry?.rotation
   // Is the variant the detail has OPEN the one that is generating? Every
   // variant-scoped action below reads this instead of the prop-level flag —
   // rendering variant 3's image must not put "Generating…" on variant 1.
@@ -247,6 +238,55 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const shownHasMesh = shownVariant
     ? shownVariant.has_model
     : variant === 0 && prop.has_model
+
+  // ── WHAT THE OPEN VARIANT'S FILE CARRIES (v2 E1) ───────────────────────
+  // The areas, the door-leaf box and the orientation fix belong to the model
+  // FILE, so they are read PER VARIANT — and from the one place that answers
+  // for ANY store index: `GET …/areas?variant=` resolves a switched-off or
+  // out-of-season variant just as well (`props.areas_info` →
+  // `_resolve_variant`, 404 only for an index the prop does not have), while
+  // the record's `variant_tiers` publishes the effective variants alone.
+  //
+  // ONE request feeds everything that needs them: the fix of the 3D preview,
+  // the turn the strip applies to the measured box, and the areas panel below
+  // — which is why the fetch lives here and not inside that panel.
+  const [areasInfo, setAreasInfo] = useState<PropAreasInfo | null>(null)
+  const [areasFailed, setAreasFailed] = useState(false)
+  /** Bumped by the areas panel when one of its verbs changed the file. */
+  const [areasBump, setAreasBump] = useState(0)
+  const reloadAreas = useCallback(() => setAreasBump((n) => n + 1), [])
+  useEffect(() => {
+    if (!shownHasMesh) { setAreasInfo(null); setAreasFailed(false); return }
+    let cancelled = false
+    void (async () => {
+      try {
+        const d = await apiGet<PropAreasInfo>(
+          `/world/props/${enc}/areas?variant=${variant}`)
+        if (!cancelled) { setAreasInfo(d); setAreasFailed(false) }
+      } catch {
+        if (!cancelled) { setAreasInfo(null); setAreasFailed(true) }
+      }
+    })()
+    // A chip switched while the request was in flight would otherwise land
+    // variant A's areas on variant B's mesh — outlines and R1 face indices of
+    // the wrong file, and a drawn ring would split the wrong triangles.
+    return () => { cancelled = true }
+  }, [enc, variant, shownHasMesh, reloadKey, areasBump])
+  /** The payload ONLY while it speaks about the variant that is open. The
+   *  answer names the store index it was read for, so a late one is simply
+   *  not used instead of being applied to the wrong mesh. */
+  const variantAreas = areasInfo && areasInfo.variant === variant
+    ? areasInfo : null
+  /** The orientation fix of THIS variant's active full file. */
+  const variantRotation = variantAreas?.rotation
+  /** A verb of the panel answered with a fresh payload. It names the store
+   *  index it was read for, so one that finished after the admin moved on is
+   *  dropped rather than applied to the mesh now on screen. */
+  const onAreasInfo = useCallback((next: PropAreasInfo) => {
+    if (next.variant !== variant) return
+    setAreasInfo(next)
+    setAreasFailed(false)
+  }, [variant])
   // The SOURCE IMAGE belongs to the variant just like its meshes do (variant 0
   // keeps the historic `source.png`, every further one has `source-v<n>.png`),
   // so the left pane shows, re-renders and uploads THIS variant's picture. The
@@ -1151,10 +1191,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
 
           {/* Orientation fix — ↻ adds +90°, the field sets a free exact angle.
               IT BELONGS TO THE FILE (v2 E1): what is dialled here is the OPEN
-              variant's active full mesh, and the low mesh follows it. A
-              variant that is switched off or out of season is not published
-              with its fix, so the control reads it out rather than offering a
-              0 that the next click would write over the stored angles. */}
+              variant's active full mesh, and the low mesh follows it. Every
+              variant answers, a switched-off or out-of-season one included —
+              the angles come from the areas payload, which is read per store
+              index. Only while that payload is still on its way is there
+              nothing to dial: a 0 offered then would be written over the
+              stored angles by the next click. */}
           {shownHasMesh ? (
             <>
               <div className="ga-form-section-label">
@@ -1164,7 +1206,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 {(['x', 'y', 'z'] as const).map((axis) => (
                   <span key={axis} style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
                     <button type="button" className="ga-btn ga-btn-sm"
-                      disabled={!variantEntry}
+                      disabled={!variantAreas}
                       onClick={() => { void rotate(axis) }} title={t('+90°')}>
                       ↻ {axis.toUpperCase()}
                     </button>
@@ -1172,7 +1214,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                       key={`${axis}-${variant}-${variantRotation?.[axis] || 0}`}
                       className="ga-input" type="number" min={-360} max={720} step={0.1}
                       style={{ width: 64 }}
-                      disabled={!variantEntry}
+                      disabled={!variantAreas}
                       defaultValue={variantRotation?.[axis] || 0}
                       title={t('Exact angle in degrees — free rotation for meshes that came out tilted.')}
                       onBlur={(e) => { void setRotationAxis(axis, e.target.value) }}
@@ -1182,9 +1224,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 ))}
               </div>
               <span className="ga-hint">
-                {variantEntry
+                {variantAreas
                   ? t('Orientation fix of this variant’s model file — persisted; the 3D client applies it on load.')
-                  : t('Switch this variant on (and into season) to dial its orientation — only a variant a scene renders publishes its fix.')}
+                  : (areasFailed
+                    ? t('Could not read this prop’s areas — reload the page.')
+                    : t('Reading the areas…'))}
               </span>
             </>
           ) : null}
@@ -1223,6 +1267,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               variants={serverVariants}
               variantMax={variantMax}
               reloadKey={reloadKey}
+              // The areas of the OPEN variant, read once above — the panel
+              // draws and splits on exactly the file the viewers show.
+              info={variantAreas}
+              infoFailed={areasFailed}
+              onInfo={onAreasInfo}
+              reloadAreas={reloadAreas}
               onPropChanged={onRefresh}
               onVariantsChanged={() => { void loadVariants() }}
             />
