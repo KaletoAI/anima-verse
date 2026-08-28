@@ -44,6 +44,10 @@ hand-derived points above move but keep their values:
   model (-0.75,-0.75)  -> i = j = 10                  -> low ledge   -> 90
 With target_m = 0 the bake knows no world size and keeps the step as handed in: 9x9 @ 0.25,
 i.e. exactly the lattice of the first bake above.
+The max_cells cap runs AFTER the conversion, on the converted step: with max_cells = 100 and
+target_m = 20, step 0.025 gives 81*81 = 6561 > 100, so the step doubles — 0.05 -> 41*41 = 1681,
+0.1 -> 21*21 = 441, 0.2 -> 11*11 = 121, all still over 100 — until 0.4 -> ceil(2/0.4)+1 = 6,
+6*6 = 36 <= 100. Result: step 0.4 model units, step_world 0.4 * 10 = 4.0 m, 6x6 nodes.
 `surface_status` reports the WORLD step, because that is what its label says ("@ 0.25 m"):
 81x81 @ 0.25 for that bake, not @ 0.025.
 A stored file that names version 1 is a lattice measured at the wrong resolution — SURFACE_VERSION
@@ -319,6 +323,18 @@ def part1():
               u is not None and (u["cols"], u["rows"]) == (9, 9)
               and near(u["step"], 0.25, 1e-9),
               str(u and (u["cols"], u["rows"], u["step"])))
+        # THE CAP RUNS AFTER THE CONVERSION, on the converted step.
+        cells = ms.MAX_SURFACE_CELLS
+        ms.MAX_SURFACE_CELLS = 100
+        try:
+            c = ms.bake_surface(scaled, {"x": 0, "y": 0, "z": 0}, wait_s=60,
+                                target_m=20, measure="xz")
+        finally:
+            ms.MAX_SURFACE_CELLS = cells
+        check("the cap doubles the CONVERTED step: 6x6 @ 0.4 model units = 4 m world",
+              c is not None and (c["cols"], c["rows"]) == (6, 6)
+              and near(c["step"], 0.4, 1e-9) and near(c["step_world"], 4.0, 1e-9),
+              str(c and (c["cols"], c["rows"], c["step"], c["step_world"])))
         # A v1 file was measured at the WRONG resolution — it must not be read
         # back as a floor, it must be re-baked.
         sp2 = ms.surface_path(scaled)

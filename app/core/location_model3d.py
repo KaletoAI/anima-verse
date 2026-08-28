@@ -1012,26 +1012,32 @@ def request_low_tier(location_id: str, room_id: str = "",
 
 
 def surface_target_m(location_id: str, room_id: str,
-                     model_path: Optional[Path]) -> float:
+                     model_path: Optional[Path],
+                     room: Optional[Dict[str, Any]] = None) -> float:
     """The WORLD size the room's diorama is placed at — the ``max_m`` the scene
     recipe puts on its placement spec (:func:`scene_recipe.diorama_max_m`): the
     model's declared ``width_m``, or the room rectangle's larger side.
 
-    The bake casts its lattice step at this number (the step is 0,25 WORLD
+    The bake casts its lattice step at this number (the step is 0.25 WORLD
     metres, the lattice is model units), so it has to be the SAME number the
     renderer scales by — hence the shared helper rather than a second reading
-    of the layout here."""
+    of the layout here.
+
+    ``room`` is that room's record when the caller already holds it: a scan
+    over every room of the world (``improvements.types.subjects``) would
+    otherwise load every location once per room."""
     from app.core.scene_recipe import diorama_max_m, room_rect
-    from app.models.world import get_location_by_id
     try:
         width_m = float((read_sidecar(model_path).get("width_m") or 0.0)
                         if model_path else 0.0)
     except (TypeError, ValueError):
         width_m = 0.0
-    location = get_location_by_id(location_id) or {}
-    room = next((r for r in (location.get("rooms") or [])
-                 if isinstance(r, dict) and str(r.get("id") or "") == room_id),
-                None)
+    if room is None:
+        from app.models.world import get_location_by_id
+        location = get_location_by_id(location_id) or {}
+        room = next((r for r in (location.get("rooms") or [])
+                     if isinstance(r, dict)
+                     and str(r.get("id") or "") == room_id), None)
     _x, _y, w, d = room_rect(room or {})
     return diorama_max_m(width_m, w, d)
 
@@ -1095,7 +1101,7 @@ def request_surface(location_id: str, room_id: str, *, owner: str = "",
                     if src and (run_force or not read_surface(src, rot)):
                         # The world size the diorama is placed at decides the
                         # lattice resolution — a normalised mesh scaled to 10 m
-                        # needs a node every 0,25/s of a model unit.
+                        # needs a node every 0.25/s of a model unit.
                         bake_surface(src, rot, wait_s=300,
                                      target_m=surface_target_m(location_id,
                                                                room_id, src),

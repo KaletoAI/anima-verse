@@ -2669,7 +2669,7 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
                         if not run_force and read_surface(mp, fix):
                             continue
                         # The world size THIS variant renders at decides the
-                        # lattice resolution: the step is 0,25 WORLD metres and
+                        # lattice resolution: the step is 0.25 WORLD metres and
                         # the lattice is cast in model units, so the bake needs
                         # the very ``max_m``/``measure`` the placement spec
                         # carries (``_prop_models``: max of the variant's three

@@ -21,7 +21,7 @@ THE STEP IS A WORLD LENGTH, the lattice is cast in MODEL units. A generated
 mesh is normalised to about one unit and the renderer scales it by
 ``s = target_m / extent(measure)`` (``placeModelSpec``, spec § 6.2), so a step
 taken literally in model units covers ``s`` metres of world — on a 10 m diorama
-one node per 2,5 m, which averages the rocks away. The world step is therefore
+one node per 2.5 m, which averages the rocks away. The world step is therefore
 divided by that very ``s`` before the lattice is laid out: ``step = step_world / s``.
 Without ``target_m`` (0 or absent) there is no scaling knowledge here and
 ``step`` is used as handed in.
@@ -215,8 +215,11 @@ def heightgrid(args):
     data = {
         "step": step,
         # What that step is worth in the world, after the max_cells loop may
-        # have doubled it — the number the spec states in metres.
-        "step_world": step * s,
+        # have doubled it — the number the spec states in metres. ROUNDED,
+        # because it is read by people: step * s is a float division undone by
+        # a float multiplication, so about an eighth of all (extent, target)
+        # pairs land on 0.24999999999999997 and the admin line says so.
+        "step_world": round(step * s, 6),
         "target_m": target_m,
         "origin": [round(lo[0], 5), round(lo[2], 5)],
         "cols": cols,

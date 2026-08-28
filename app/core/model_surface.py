@@ -30,7 +30,7 @@ from app.core.timeutils import utc_now_iso
 logger = logging.getLogger(__name__)
 
 #: 2 since 2026-08-28: a lattice baked as version 1 took SURFACE_STEP_M for a
-#: MODEL unit, so a normalised mesh scaled to 10 m got a node every 2,5 m. Every
+#: MODEL unit, so a normalised mesh scaled to 10 m got a node every 2.5 m. Every
 #: v1 file therefore reads as stale and is re-baked (the button, or the
 #: "Bake walkable surfaces" improvement) — there is nothing to convert, the
 #: numbers were measured at the wrong resolution.
@@ -95,7 +95,7 @@ def bake_surface_result(model_path: Path, rotation: Any, *,
     they are the scale ``s`` every renderer applies, and the bake needs them
     because :data:`SURFACE_STEP_M` is a world length while the lattice is laid
     out in the model's own units: a normalised mesh scaled to 10 m must get a
-    node every 0,25/s of a unit, not every 0,25. A caller that cannot say how
+    node every 0.25/s of a unit, not every 0.25. A caller that cannot say how
     big the model will be leaves ``target_m`` at 0 and gets the step as it is —
     correct for a model that is already world-sized, coarse for a normalised one.
 
@@ -146,7 +146,7 @@ def bake_surface_result(model_path: Path, rotation: Any, *,
                # the sampler works in model units and reads `step` alone, but a
                # file has to say at which world size its resolution was chosen.
                "target_m": float(target_m or 0.0), "measure": str(measure or "xz"),
-               "step_world": data.get("step_world", data["step"])}
+               "step_world": data["step_world"]}
     # ATOMICALLY (Minor 5): a lattice is read by the scene route, by the walk
     # gate and by the improvements scan while it is being written, and a
     # half-written file is not merely "no surface" — ``_load`` would parse it

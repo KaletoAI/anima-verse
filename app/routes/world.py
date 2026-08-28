@@ -1603,7 +1603,7 @@ async def room_model3d_width(location_id: str, room_id: str,
 def _room_model3d_width_sync(location_id: str, room_id: str,
                              data: Any) -> Dict[str, Any]:
     """The blocking body of ``room_model3d_width`` — runs in the threadpool."""
-    from app.core.location_model3d import set_width_m
+    from app.core.location_model3d import request_surface, set_width_m
     _require_room(location_id, room_id)
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
@@ -1612,6 +1612,14 @@ def _room_model3d_width_sync(location_id: str, room_id: str,
                            filename=str(data.get("file") or "").strip())
     except ValueError:
         raise HTTPException(status_code=404, detail="No model")
+    # THE WIDTH IS THE LATTICE RESOLUTION. The surface step is 0.25 WORLD
+    # metres, cast in model units at the scale this very number decides — a
+    # calibration from 1 m to 12 m leaves a lattice twelve times too coarse
+    # behind, and it would stay that way (the stored one is still valid for
+    # its file and fix, so nothing re-bakes it). Hence force, in the
+    # background; the in-flight guard bounds a rapid series of edits to one
+    # extra run.
+    request_surface(location_id, room_id, force=True)
     return {"meta": meta}
 
 

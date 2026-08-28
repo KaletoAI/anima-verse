@@ -447,7 +447,7 @@ def regenerate_gallery_image(location_id: str, filename: str,
 # "one model file under one fix, placed at one world size", whatever identifies
 # it.  The fix travels with the file: a baked lattice is only valid under the
 # rotation it was made with (spec-surface-height § 4).  The world size travels
-# with it too: the lattice step is 0,25 WORLD metres but is cast in the model's
+# with it too: the lattice step is 0.25 WORLD metres but is cast in the model's
 # own units, so the bake has to know the ``max_m``/``measure`` the placement
 # spec will scale this model by — the same numbers the landing bakes pass.
 
@@ -488,7 +488,7 @@ def room_models() -> List[Tuple[str, str, str, Path, Dict[str, Any], float, str]
             # read off the file that will be served — never a second reading of
             # the layout here.
             out.append((loc_id, room_id, label, path, rotation,
-                        surface_target_m(loc_id, room_id, path), "xz"))
+                        surface_target_m(loc_id, room_id, path, room), "xz"))
     return out
 
 
