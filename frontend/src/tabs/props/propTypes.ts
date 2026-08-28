@@ -197,6 +197,12 @@ export interface PropVariantTier {
    *  mesh has a `leaf` node; the scene recipe copies it into
    *  `door.leaf_bbox`. */
   leaf_bbox?: LeafBbox
+  /** What this version should COST in triangles, full mesh (v2 E5;
+   *  null/absent = the backend's own default). Full records only — the
+   *  re-mesh dialog prefills from here. */
+  target_faces_high?: number | null
+  /** …and its distance mesh (null/absent = the configured LOD ratio). */
+  target_faces_low?: number | null
 }
 
 /**
@@ -289,6 +295,14 @@ export interface PropVariant {
   stale?: boolean
   /** Whether THIS variant's mesh has a walkable surface baked. */
   surface_status?: SurfaceStatus
+  /** What this version should COST in triangles (v2 E5): the full mesh's
+   *  budget. `null` = no statement — the strip shows the picked backend's own
+   *  default as a PLACEHOLDER, so an untouched field keeps meaning "whatever
+   *  the backend does" instead of freezing today's default into the record. */
+  target_faces_high?: number | null
+  /** …and the distance mesh's. `null` = the configured LOD ratio decides;
+   *  a number is turned into `target / source triangles` server-side. */
+  target_faces_low?: number | null
 }
 
 export interface ImageBackendInfo {

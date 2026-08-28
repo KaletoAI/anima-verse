@@ -287,6 +287,12 @@ export function PropsTab() {
             onRegenerateImage={(variant, image, subject) =>
               setImgRegen({ prop: selectedProp, variant, image, subject })}
             onGenerating={startPoll}
+            // The face count a mesh backend would use of its own accord — the
+            // PLACEHOLDER behind the variants' budget fields (v2 E5). Read off
+            // the first backend that declares one: the strip only needs to say
+            // what happens when the field is left empty, and no backend is
+            // picked until a run is started.
+            backendFaces={meshBackends.find((b) => b.face_num)?.face_num || 0}
             onDirtyChange={setDirty}
             onRefresh={() => {
               setCacheBump((b) => b + 1)
@@ -304,6 +310,17 @@ export function PropsTab() {
           backends={meshBackends}
           defaultBackend={meshBackends.length === 1 ? meshBackends[0].name : ''}
           generateLabel={regen?.meshOnly ? t('Mesh') : t('Regenerate')}
+          // What the addressed variant STATES it should cost (v2 E5) — the
+          // dialog opens on it instead of on the backend default, because the
+          // budget is a decision about the object and outlives the run. A
+          // plain regenerate APPENDS a variant, and the new slot copies its
+          // source's budgets, so variant 0's are the right prefill there too.
+          faceTargets={(() => {
+            const tier = (selectedProp?.variant_tiers || [])
+              .find((v) => v.variant === (regen?.variant || 0))
+            return { high: tier?.target_faces_high,
+              low: tier?.target_faces_low }
+          })()}
           showTier
           onGenerate={(backend, opts) => {
             const target = regen

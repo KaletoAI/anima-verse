@@ -34,7 +34,10 @@
  *   - how deep it stands in the ground,
  *   - the season chips,
  *   - how many object-local markers it has (the editor itself is below the
- *     strip, on the SELECTED chip: it needs the 3D viewer beside it).
+ *     strip, on the SELECTED chip: it needs the 3D viewer beside it),
+ *   - and what it should COST in triangles, close up and at distance (v2 E5):
+ *     two budgets that are the DEFAULT of every run naming none — the
+ *     generate dialog, the automatic improvement, the distance mesh.
  *
  * THE THREE DIMS MOVE TOGETHER (2026-08-24, user decision): editing one of
  * them pulls the other two along the variant's proportions — and all three go
@@ -72,6 +75,30 @@ const DIM_FIELDS: Array<{ key: DimKey; label: string; title: string }> = [
   { key: 'height_m', label: 'H', title: 'Height (m)' },
 ]
 
+/** The two face budgets of a variant (v2 E5), in the order they are used: the
+ *  close-up mesh first, the distance mesh second. `placeholder` says what
+ *  happens when the field is left empty — the picked backend's own face count
+ *  for the full mesh, a quarter of it for the distance mesh (the dialog's
+ *  `faceFor` rule, and the number the reduction lands near). */
+const FACE_FIELDS: Array<{
+  key: 'high' | 'low'
+  label: string
+  title: string
+  placeholder: (backendFaces: number, t: (s: string) => string) => string
+}> = [
+  { key: 'high', label: '△ High', title: 'Triangles this variant’s close-up mesh should cost. Empty = whatever the picked backend uses by default. The generate dialog opens on this number and the automatic improvement re-meshes to it; above the backend’s own ceiling the run is clamped and the gallery row says so.',
+    placeholder: (faces, t) => (faces ? String(faces) : t('backend default')) },
+  { key: 'low', label: '△ Low', title: 'Triangles this variant’s DISTANCE mesh should cost. Empty = the configured reduction fraction decides. Given, the server reduces to exactly this budget — it divides it by the full mesh’s own triangle count to get the Decimate ratio.',
+    placeholder: (faces, t) => (faces
+      ? String(Math.max(500, Math.round(faces * 0.25 / 500) * 500))
+      : t('LOD ratio')) },
+]
+
+/** The window the server accepts a budget in (`props.FACE_TARGET_MIN/MAX`) —
+ *  the input only has to agree with it. */
+const FACE_TARGET_MIN = 100
+const FACE_TARGET_MAX = 2000000
+
 /** One chip's width in pixels — wide enough for the three size fields, which
  *  are the widest row in it. Fixed on purpose (see the chip's own comment):
  *  the strip may only ever grow DOWNWARDS, never re-flow sideways. */
@@ -93,7 +120,7 @@ const DESC_ROWS_OPEN = 12
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   onChanged, onEditVariant, onDeleted, generating = [], worldSeasons = [],
-  currentSeason = '', shownBbox = null, rotation }: {
+  currentSeason = '', shownBbox = null, rotation, backendFaces = 0 }: {
   propId: string
   /** Every variant, active or not, in order — the DRAFT list (PropDetail's
    *  load with the change buffer laid on top), so a field edit shows here and
@@ -138,6 +165,10 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
    *  every renderer makes. The fix belongs to the FILE (v2 E1), so it is only
    *  ever the box on screen that it is applied to. */
   rotation?: { x?: number; y?: number; z?: number }
+  /** Face count the picked mesh backend would use of its own accord — the
+   *  PLACEHOLDER of the two budget fields (v2 E5). 0 = unknown, and the
+   *  placeholder says "backend default" instead of a number. */
+  backendFaces?: number
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -160,6 +191,11 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   const [descDraft, setDescDraft] = useState<Record<number, string>>({})
   const [descOpen, setDescOpen] = useState<number | null>(null)
   useEffect(() => { setDescDraft({}); setDescOpen(null) }, [propId])
+  // …and for the two face budgets, keyed `<store index>:<high|low>`. Same
+  // law: a draft exists only while the field is edited, so an empty field
+  // under the cursor is not read back as "cleared" until it is committed.
+  const [faceDraft, setFaceDraft] = useState<Record<string, string>>({})
+  useEffect(() => { setFaceDraft({}) }, [propId])
   // Arming is bound to an INDEX, and a delete renumbers everything behind it —
   // so any change of the list disarms rather than pointing at another variant.
   useEffect(() => { setArmedDel(null) }, [propId, variants.length])
@@ -299,6 +335,40 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     onEditVariant(v.index, { description: value })
   }, [onEditVariant])
 
+  // Commit ONE of the variant's two face budgets (v2 E5).
+  //
+  // An EMPTY field is a real statement here, unlike a size: it CLEARS the
+  // budget and hands the decision back to the backend default (full) / the
+  // configured reduction ratio (low) — which is exactly what the placeholder
+  // then shows, so the field never lies about what the next run will use.
+  //
+  // BOTH budgets travel every time, like the dims trio and for the same
+  // reason: the change buffer merges patches field by field, so a second edit
+  // sending only its own half would drop the first one. The other half is read
+  // off the DRAFT list, which already carries an earlier edit.
+  const commitFaces = useCallback(
+    (v: PropVariant, which: 'high' | 'low', raw: string) => {
+      setFaceDraft((d) => {
+        const next = { ...d }
+        delete next[`${v.index}:${which}`]
+        return next
+      })
+      const text = raw.trim()
+      const n = text ? parseInt(text, 10) : 0
+      const value = text && Number.isFinite(n) && n > 0 ? n : null
+      const stored = {
+        target_faces_high: v.target_faces_high ?? null,
+        target_faces_low: v.target_faces_low ?? null,
+      }
+      const next = {
+        ...stored,
+        [which === 'high' ? 'target_faces_high' : 'target_faces_low']: value,
+      }
+      if (next.target_faces_high === stored.target_faces_high
+        && next.target_faces_low === stored.target_faces_low) return
+      onEditVariant(v.index, { face_targets: next })
+    }, [onEditVariant])
+
   // Deleting a variant is IMMEDIATE (it takes its meshes and its source image
   // with it and renumbers everything behind it) — so the detail is told which
   // index went, and it renumbers its pending fields the same way.
@@ -425,6 +495,54 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   {t('Estimated — refined automatically when the model arrives.')}
                 </span>
               ) : null}
+              {/* WHAT THIS VERSION COSTS (v2 E5). Two budgets, because a prop
+                  is rendered at two distances: the close-up mesh and the one
+                  the client swaps in at range. They are the DEFAULT of every
+                  run that names none — the generate dialog opens on them, the
+                  automatic improvement inherits them, and the CPU distance
+                  mesh turns the low one into its reduction ratio. Empty = no
+                  statement, and the placeholder shows what would happen then.
+                  A budget belongs to the VARIANT and not to the run: a sapling
+                  is cheaper than the grown tree beside it, whichever dialog
+                  the mesh was last made from. */}
+              <div style={{ display: 'flex', gap: 3, alignItems: 'center',
+                flexWrap: 'wrap' }}>
+                {FACE_FIELDS.map((f) => {
+                  const draftKey = `${v.index}:${f.key}`
+                  const stored = f.key === 'high'
+                    ? v.target_faces_high : v.target_faces_low
+                  const shown = faceDraft[draftKey]
+                    ?? (stored ? String(stored) : '')
+                  return (
+                    <label
+                      key={f.key}
+                      style={{ display: 'flex', alignItems: 'center', gap: 2 }}
+                      title={t(f.title)}
+                    >
+                      <span className="ga-hint">{t(f.label)}</span>
+                      <input
+                        className="ga-input"
+                        type="number"
+                        min={FACE_TARGET_MIN}
+                        max={FACE_TARGET_MAX}
+                        step={500}
+                        style={{ width: 84, padding: '1px 3px' }}
+                        disabled={busy}
+                        value={shown}
+                        placeholder={f.placeholder(backendFaces, t)}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          setFaceDraft((d) => ({ ...d, [draftKey]: value }))
+                        }}
+                        onBlur={(e) => commitFaces(v, f.key, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur()
+                        }}
+                      />
+                    </label>
+                  )
+                })}
+              </div>
               {/* HOW DEEP THIS VERSION STANDS IN THE GROUND — it applies
                   wherever this variant is drawn: every manual placement, every
                   scattered copy in a room or yard, every instance of a painted

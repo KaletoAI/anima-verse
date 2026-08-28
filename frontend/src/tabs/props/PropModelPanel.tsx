@@ -18,7 +18,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  MeshBackendDialog, type MeshBackend, type MeshGenerateOpts,
+  MeshBackendDialog, type FaceTargets, type MeshBackend, type MeshGenerateOpts,
 } from '../../components/MeshBackendDialog'
 import {
   BuildDistanceMeshButton, DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow,
@@ -41,7 +41,7 @@ interface PropModelInfo {
 }
 
 export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
-  onChanged, pending = false, onGenerating }: {
+  onChanged, pending = false, faceTargets = {}, onGenerating }: {
   propId: string
   /** Index of the model variant this gallery belongs to (0 = the first one;
    *  the primary variant is the first ACTIVE one, which the strip marks). */
@@ -58,6 +58,10 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
    *  container) — the gallery below belongs to one variant, and a run in
    *  another one blocks nothing here. */
   pending?: boolean
+  /** What THIS variant states it should cost in triangles (v2 E5). The
+   *  distance-mesh button names the low budget, the reduction dialog opens on
+   *  it — both would otherwise say nothing about how small the result gets. */
+  faceTargets?: FaceTargets
   /** Start the container's pending poll — a low variant runs in the
    *  background like every mesh job. */
   onGenerating?: () => void
@@ -174,6 +178,12 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
         defaultBackend={shrinkBackends.length === 1 ? shrinkBackends[0].name : ''}
         defaultTextureSize={1024}
         generateLabel={t('Create')}
+        // The reduction IS this variant's distance mesh, so it opens on the
+        // budget the variant states for THAT (v2 E5). It goes into the
+        // dialog's `high` slot because this dialog has no tier choice: its one
+        // face field IS the target of this run, and that target is the low
+        // budget.
+        faceTargets={{ high: faceTargets.low }}
         onGenerate={shrink}
         onClose={() => setShrinkFile(null)}
       />
@@ -193,6 +203,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
             hasLow={tiers.includes('low')}
             blender={info?.blender}
             disabled={pending}
+            targetFaces={faceTargets.low || 0}
             onDone={async () => { await load(); await onChanged() }}
           />
         ) : null}

@@ -175,6 +175,8 @@ interface VariantDraftFields {
   ground_offset_m: number
   markers: unknown[]
   seasons: string[]
+  target_faces_high?: number | null
+  target_faces_low?: number | null
 }
 
 /**
@@ -191,6 +193,12 @@ interface VariantDraftFields {
  * `dims_estimated` in the draft, because storing a size does exactly that —
  * the hint must not go on claiming the number is a guess the admin just typed
  * over.
+ *
+ * `face_targets` (v2 E5) is spread the same way, onto the two flat fields the
+ * records carry — a nested patch object left on the record would be invisible
+ * to every reader of `target_faces_high`. A `null` inside it is a real value:
+ * it is how a budget is CLEARED, so it has to reach the draft as null and not
+ * be skipped as "nothing said".
  */
 export function applyVariantDraft<T extends VariantDraftFields>(
   list: T[], buf: PendingFields): T[] {
@@ -202,6 +210,11 @@ export function applyVariantDraft<T extends VariantDraftFields>(
     if (patch.dims) {
       out.dims = { ...v.dims, ...(patch.dims as Partial<T['dims']>) }
       out.dims_estimated = false
+    }
+    if (patch.face_targets) {
+      const ft = patch.face_targets as Record<string, number | null>
+      if ('target_faces_high' in ft) out.target_faces_high = ft.target_faces_high
+      if ('target_faces_low' in ft) out.target_faces_low = ft.target_faces_low
     }
     return out
   })

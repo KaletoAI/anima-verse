@@ -104,7 +104,8 @@ const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
 
 export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   onChanged, onDelete, armedDelete, onRegenerate, onRegenerateMesh,
-  onRegenerateImage, onRefresh, onGenerating, onDirtyChange }: {
+  onRegenerateImage, onRefresh, onGenerating, backendFaces = 0,
+  onDirtyChange }: {
   prop: PropFull
   /** ANY variant of this prop is generating — the aggregate. Only the two
    *  prop-level actions read it; everything variant-scoped asks
@@ -137,6 +138,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   /** Start the container's pending poll — a background job was just kicked
    *  off from inside the detail (the mesh gallery's low variant). */
   onGenerating: () => void
+  /** Face count a mesh backend would use of its own accord — the PLACEHOLDER
+   *  behind the variants' face budgets (v2 E5). 0 = unknown. */
+  backendFaces?: number
   /** How many FIELD edits are waiting in the draft (0 = clean). The container
    *  asks before it lets the selection leave this prop — a tab switch is the
    *  shell's question, a prop switch has to be this tab's own. */
@@ -732,6 +736,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             onSelect={setVariant}
             onChanged={meshesChanged}
             onEditVariant={queueVariant}
+            // What an empty budget field means, as its placeholder (v2 E5).
+            backendFaces={backendFaces}
             // A deleted variant renumbers the list, so the draft is renumbered
             // with it — an unsaved size must never land on the neighbour that
             // moved into the gap.
@@ -1288,6 +1294,10 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             onPreview={setPreviewFile}
             onChanged={meshesChanged}
             pending={variantBusy}
+            // The SELECTED variant's own budgets (v2 E5) — the distance-mesh
+            // button names the low one and the reduction dialog opens on it.
+            faceTargets={{ high: shownVariant?.target_faces_high,
+              low: shownVariant?.target_faces_low }}
             onGenerating={onGenerating}
           />
         </div>

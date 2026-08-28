@@ -57,6 +57,10 @@ export interface GalleryModel {
   /** The tiers the file currently SERVES (the selection). */
   selected_for?: string[]
   face_num?: number
+  /** Why the file has fewer faces than its variant asked for ('' = it got
+   *  what was asked). Written when the target was over the backend's own
+   *  ceiling and the job ran clamped (props v2 E5). */
+  face_target_note?: string
   texture_size?: number
   /** Whether a mesh→mesh reduction of THIS file can work at all (server-side
    *  capability probe): a mesh without UVs/texture has nothing to re-bake. */
@@ -94,7 +98,7 @@ export interface BlenderStatus {
  * Blender: an action that can only fail is worse than no action.
  */
 export function BuildDistanceMeshButton({
-  url, hasLow, blender, disabled = false, onDone,
+  url, hasLow, blender, disabled = false, targetFaces = 0, onDone,
 }: {
   /** POST endpoint of this subject's build (…/lod). */
   url: string
@@ -104,6 +108,10 @@ export function BuildDistanceMeshButton({
   blender?: BlenderStatus
   /** Another job of this subject is running. */
   disabled?: boolean
+  /** The triangle count this subject STATES for its distance mesh (props v2
+   *  E5; 0 = none, and the configured fraction decides). Named on the button,
+   *  because "Build distance mesh" otherwise says nothing about how small. */
+  targetFaces?: number
   /** Reload the gallery — the build added a file and moved the selection. */
   onDone: () => void | Promise<unknown>
 }) {
@@ -143,6 +151,7 @@ export function BuildDistanceMeshButton({
       title={t('Builds a reduced copy of this mesh for viewing at a distance. The full model is untouched — the client picks whichever fits the camera distance.')}
     >
       {hasLow ? t('Rebuild distance mesh') : t('Build distance mesh')}
+      {targetFaces ? ` → ${targetFaces.toLocaleString()} ${t('faces')}` : ''}
     </button>
   )
 }
@@ -231,6 +240,9 @@ function runHint(m: GalleryModel, t: (s: string) => string): string {
   if (origin) parts.push(origin)
   if (m.backend) parts.push(m.backend)
   if (m.face_num) parts.push(`${m.face_num.toLocaleString()} ${t('faces')}`)
+  // A budget the backend cut: the row would otherwise show a face count the
+  // file does not have, and nobody would find the ceiling again.
+  if (m.face_target_note) parts.push(m.face_target_note)
   if (m.texture_size) parts.push(`${m.texture_size}²`)
   if (m.source_image) parts.push(`${t('from')} ${m.source_image}`)
   // A variant copy already NAMED its source above; every other file that

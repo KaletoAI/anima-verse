@@ -41,12 +41,30 @@ const LOW_FACE_FRACTION = 0.25
 const LOW_FACE_FALLBACK = 4000
 const LOW_TEXTURE_SIZE = 512
 
-/** Face budget prefilled for a tier: the backend default for `full`, a
- *  quarter of it (rounded to 500) for `low`. '' = leave it to the backend. */
-function faceFor(tier: ModelTier, backendDefault: number): string {
-  if (tier === DEFAULT_MODEL_TIER) return backendDefault ? String(backendDefault) : ''
+/** Face budget prefilled for a tier: what the SUBJECT states for it, else the
+ *  backend default for `full` and a quarter of it (rounded to 500) for `low`.
+ *  '' = leave it to the backend.
+ *
+ *  The subject's own targets come first because they are a decision that
+ *  outlives the run (props v2 E5): a variant that says what it costs must not
+ *  have that overwritten by whatever the picked backend defaults to. */
+function faceFor(tier: ModelTier, backendDefault: number,
+                 stated: FaceTargets = {}): string {
+  if (tier === DEFAULT_MODEL_TIER) {
+    if (stated.high) return String(stated.high)
+    return backendDefault ? String(backendDefault) : ''
+  }
+  if (stated.low) return String(stated.low)
   if (!backendDefault) return String(LOW_FACE_FALLBACK)
   return String(Math.max(500, Math.round(backendDefault * LOW_FACE_FRACTION / 500) * 500))
+}
+
+/** What the SUBJECT of this run states about its own triangle budgets — the
+ *  variant's `target_faces_high` / `target_faces_low` where the caller has
+ *  them (props v2 E5). Absent fields fall back to the backend default. */
+export interface FaceTargets {
+  high?: number | null
+  low?: number | null
 }
 
 /**
@@ -80,6 +98,7 @@ export function MeshBackendDialog({
   generateLabel,
   showTier = false,
   hint = '',
+  faceTargets = {},
   onGenerate,
   onClose,
 }: {
@@ -97,6 +116,9 @@ export function MeshBackendDialog({
   showTier?: boolean
   /** One line above the fields explaining what this particular run does. */
   hint?: string
+  /** What the subject STATES it should cost — prefilled over the backend
+   *  default, and editable per run like everything else here. */
+  faceTargets?: FaceTargets
   onGenerate: (backend: string, opts: MeshGenerateOpts) => void
   onClose: () => void
 }) {
@@ -116,17 +138,19 @@ export function MeshBackendDialog({
   // their lists on every job poll, and a fresh (but identical) array must
   // not wipe a selection the admin just made.
   const backendsKey = backends.map((b) => `${b.name}:${b.face_num || 0}`).join('|')
+  const statedHigh = faceTargets.high || 0
+  const statedLow = faceTargets.low || 0
   useEffect(() => {
     if (!open) return
     setPicked(defaultBackend)
     const b = backends.find((x) => x.name === defaultBackend)
-    setFaceDraft(faceFor(DEFAULT_MODEL_TIER, b?.face_num || 0))
+    setFaceDraft(faceFor(DEFAULT_MODEL_TIER, b?.face_num || 0, faceTargets))
     setTexSize(defaultTextureSize ? String(defaultTextureSize) : '')
     setTier(DEFAULT_MODEL_TIER)
     setLodOn(true)
-    setLodDraft(String(LOD_STAGE_DEFAULT))
+    setLodDraft(String(statedLow || LOD_STAGE_DEFAULT))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, defaultBackend, defaultTextureSize, backendsKey])
+  }, [open, defaultBackend, defaultTextureSize, backendsKey, statedHigh, statedLow])
 
   if (!open) return null
   const none = backends.length === 0
@@ -145,13 +169,13 @@ export function MeshBackendDialog({
     // backend's configured default (reduced when the target tier is low),
     // ready to be overridden.
     const b = backends.find((x) => x.name === name)
-    setFaceDraft(faceFor(tier, b?.face_num || 0))
+    setFaceDraft(faceFor(tier, b?.face_num || 0, faceTargets))
   }
 
   const pickTier = (next: ModelTier) => {
     setTier(next)
     const b = backends.find((x) => x.name === picked)
-    setFaceDraft(faceFor(next, b?.face_num || 0))
+    setFaceDraft(faceFor(next, b?.face_num || 0, faceTargets))
     setTexSize(next === DEFAULT_MODEL_TIER ? '' : String(LOW_TEXTURE_SIZE))
   }
 
@@ -162,7 +186,9 @@ export function MeshBackendDialog({
     const max = selected?.face_num_max || 0
     if (Number.isFinite(f) && max > 0 && f > max) f = max
     // Send the face count only when it differs from the backend default —
-    // an untouched prefill keeps meaning "backend default".
+    // an untouched prefill keeps meaning "backend default", and the server
+    // then falls back to the subject's own stated budget (props v2 E5), which
+    // is the very number this field was prefilled with.
     if (Number.isFinite(f) && f > 0 && f !== (selected?.face_num || 0)) {
       opts.face_num = f
     }

@@ -2387,6 +2387,11 @@
     "Copy of variant": "Kopie aus Variante",
     "Copy of": "Kopie aus",
     "Variant copy": "Varianten-Kopie",
-    "reduced": "reduziert"
+    "reduced": "reduziert",
+    "LOD ratio": "LOD-Verhältnis",
+    "Triangles this variant’s DISTANCE mesh should cost. Empty = the configured reduction fraction decides. Given, the server reduces to exactly this budget — it divides it by the full mesh’s own triangle count to get the Decimate ratio.": "Dreiecke, die das FERN-Mesh dieser Variante kosten soll. Leer = das eingestellte Reduktions-Verhältnis entscheidet. Gesetzt, reduziert der Server genau auf diesen Wert — er teilt ihn durch die Dreieckszahl des vollen Meshes und bekommt so das Decimate-Verhältnis.",
+    "Triangles this variant’s close-up mesh should cost. Empty = whatever the picked backend uses by default. The generate dialog opens on this number and the automatic improvement re-meshes to it; above the backend’s own ceiling the run is clamped and the gallery row says so.": "Dreiecke, die das Nah-Mesh dieser Variante kosten soll. Leer = was das gewählte Backend von sich aus nimmt. Der Erzeugen-Dialog öffnet auf dieser Zahl und die automatische Verbesserung meshet darauf; über dem Maximum des Backends läuft der Job geklemmt, und die Galerie-Zeile sagt es.",
+    "△ High": "△ Hoch",
+    "△ Low": "△ Fern"
   }
 }
