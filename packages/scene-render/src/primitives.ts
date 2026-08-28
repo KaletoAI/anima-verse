@@ -44,12 +44,33 @@ export function wallLength(wall: SceneWall): number {
  * `plate.holes` (contract addendum "Treppen v2") are taken OUT of the shape:
  * every ring becomes a `Path` in `shape.holes`, which both `ShapeGeometry` and
  * `ExtrudeGeometry` honour — the extrusion even caps the walls of the opening,
- * so a stairwell looks like a stairwell from below. THE SIGN OF THE SECOND
- * COORDINATE IS THE SAME AS THE OUTER RING'S: a hole written with the other
- * sign would land mirrored about z = 0, which on a plate that straddles the
- * anchor pin is a hole in the wrong half of the room rather than an obvious
- * error. Winding is NOT this function's business — three normalises the rings
- * against each other in both geometry classes.
+ * so a stairwell looks like a stairwell from below.
+ *
+ * THE SIGN OF THE SECOND COORDINATE IS THE SAME AS THE OUTER RING'S: a hole
+ * written with the other sign would land mirrored about z = 0, which on a
+ * plate that straddles the anchor pin is a hole in the wrong half of the room
+ * rather than an obvious error.
+ *
+ * RINGS MUST LIE INSIDE THE OUTLINE, and they do: the server clips a flight
+ * that reaches over the plate's edge to its contour (`_plate_holes`). A
+ * crossing ring would make the shape self-intersect, and the triangulation
+ * then spills BEYOND the outline instead of dropping the overlap — nothing
+ * here can repair that, which is why it is settled where the ring is written.
+ *
+ * WINDING is not normalised here either, and one detail of three's is
+ * load-bearing. The triangulation itself does not care (earcut sorts the rings
+ * out), but `ExtrudeGeometry`'s SIDE WALLS do: it re-winds the holes only
+ * inside its `if (reverse)` branch, i.e. only when the outer contour is not
+ * clockwise by its own `ShapeUtils.isClockWise`. Every outline this payload
+ * carries has a POSITIVE shoelace (`world_geometry`: positive = clockwise in
+ * map view, x east / z south), which three reads as "not clockwise" — so the
+ * branch DOES run, and it then re-winds every hole however it was written.
+ * `client3d/scripts/smoke_plate_hole.mjs` pins the good case (8/8 outer walls
+ * outward, 8/8 hole walls inward). Measured counter-case: with a NEGATIVE
+ * shoelace outline the branch is skipped, the hole's own winding decides, and
+ * a hole wound like its outline gives 0/8 — walls facing out of the stairwell
+ * instead of into it. A payload wound the other way would therefore need a
+ * normalisation this function does not do.
  */
 export function buildPlate(THREE: typeof import('three'),
                            plate: ScenePlate, material: Material): Mesh {
@@ -68,7 +89,12 @@ export function buildPlate(THREE: typeof import('three'),
   }
   const shape = new THREE.Shape()
   ring(shape, plate.outline)
-  for (const hole of plate.holes) {
+  // `?? []` is a GUARD, not a compat reader: the field is required by the
+  // contract, but this routine is handed raw payload JSON in the admin
+  // (`useScenePreview`), and an older server's plate would otherwise throw
+  // inside the render pass and take the whole floor-plan preview with it. The
+  // same defensiveness the outline gets from its `length < 3` filters.
+  for (const hole of plate.holes ?? []) {
     // Fewer than three points enclose nothing — the same rule the outline
     // itself is filtered by, and an empty `Path` would break the triangulation
     // of the ring around it.

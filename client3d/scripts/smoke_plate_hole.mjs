@@ -2,12 +2,13 @@
  * Smoke: a floor plate with a HOLE in it — the opening a staircase cuts into
  * the floor it arrives on (`plates[].holes`, contract addendum "Treppen v2").
  *
- * Usage (the package is TypeScript, so it is bundled first; esbuild lives in
- * the client3d workspace, three has to resolve from a path inside it — hence
- * the bundle step rather than a bare `node`):
+ * Usage:  node client3d/scripts/smoke_plate_hole.mjs
+ *
+ * (Node 22 strips the types of the imported `.ts` itself and resolves `three`
+ * out of `client3d/node_modules`. On an older runtime, bundle it first:
  *     client3d/node_modules/.bin/esbuild client3d/scripts/smoke_plate_hole.mjs \
  *         --bundle --platform=node --format=esm --outfile=/tmp/ph.mjs \
- *         && node /tmp/ph.mjs
+ *         && node /tmp/ph.mjs )
  *
  * Runs headless against the SHARED `buildPlate` — the one routine both
  * renderers build a floor with — using the real three from node_modules, so
@@ -36,11 +37,15 @@
  *
  *   A. Top-face area with the hole:      48 − 6      = 42 m²
  *      Top-face area without it:                       48 m²
- *   B. Triangle count of the top face. A simple polygon with n vertices and
- *      h holes triangulates into n + 2h − 2 triangles (the two bridge edges
- *      per hole add one vertex each to the ring):
- *        no hole:  n = 4, h = 0  ->  4 + 0 − 2 =  2 triangles
- *        one hole: n = 8, h = 1  ->  8 + 2 − 2 =  8 triangles
+ *   B. Triangle count of the top face, for ONE hole. Counting n over EVERY
+ *      ring — the outline plus the hole, because each bridge splits one
+ *      vertex of each into two — a polygon with n vertices and h holes comes
+ *      out at n + 2h − 2:
+ *        no hole:  n = 4,     h = 0  ->  4 + 0 − 2 =  2 triangles
+ *        one hole: n = 4 + 4, h = 1  ->  8 + 2 − 2 =  8 triangles
+ *      The law is stated here for the one-hole case only, which is what a
+ *      staircase produces per plate. Section 5 MEASURES the two-hole count
+ *      (two flights onto one storey) instead of trusting the formula.
  *   C. Coverage in WORLD xz. The hole's centre is (3.5, 1.5); its MIRROR
  *      about z = 0 is (3.5, −1.5), which lies inside the outline as well —
  *      that pair is the sign probe:
@@ -56,6 +61,18 @@
  *   E. The extrusion CAPS THE OPENING. Side triangles (the ones spanning both
  *      y levels) are 2 per ring edge: 4 edges outer = 8 without a hole, plus
  *      4 edges of the hole = 16 with one.
+ *   F. AND THOSE WALLS FACE THE RIGHT WAY. A surface normal points away from
+ *      the material, and the material lies outside a hole, so the 8 outer
+ *      walls must face away from the plate's middle and the 8 hole walls
+ *      towards the opening's. This is where three's winding rule is load-
+ *      bearing: `ExtrudeGeometry` re-winds the holes only inside its
+ *      `if (reverse)` branch, i.e. only when the outer contour is NOT
+ *      clockwise by `ShapeUtils.isClockWise`. Every stored outline has a
+ *      POSITIVE shoelace (`world_geometry`: positive = clockwise in map view),
+ *      which three reads as "not clockwise" — the branch runs and normalises
+ *      the hole whatever its own winding is. Measured counter-case, NOT pinned
+ *      below because the server never composes it: a negative-shoelace outline
+ *      skips the branch, and a hole wound like it then answers 0/8.
  *
  * Both plate kinds are measured with the same numbers, because the two
  * branches of `buildPlate` differ only in how they get there:
@@ -126,6 +143,46 @@ const sideFaces = (tris, topY, bottomY) =>
   tris.filter((t) => t.some((p) => Math.abs(p.y - topY) < 1e-6)
     && t.some((p) => Math.abs(p.y - bottomY) < 1e-6))
 
+/** The FRONT-FACE direction of a triangle, from its winding (three's faces are
+ *  counter-clockwise seen from the front). The mesh matrix is a pure rotation
+ *  here, so it carries the normal without flipping it. */
+const triNormal = ([a, b, c]) => new THREE.Vector3()
+  .subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize()
+
+/** Centre of a set of points in xz. */
+const centroidXZ = (pts) => {
+  const n = pts.length
+  return [pts.reduce((s, p) => s + p[0], 0) / n, pts.reduce((s, p) => s + p[1], 0) / n]
+}
+
+/**
+ * How many of these wall triangles face AWAY from a given axis (`sign` +1) or
+ * TOWARDS it (`sign` −1), measured in xz.
+ *
+ * That is the whole orientation question of an extruded plate with a hole: the
+ * outer walls must face away from the plate's middle, and the walls of the
+ * opening must face towards the opening's middle — a surface normal points
+ * away from the material, and the material lies OUTSIDE a hole.
+ */
+function facing(tris, [cx, cz], sign) {
+  return tris.filter((t) => {
+    const n = triNormal(t)
+    const mid = t.reduce((s, p) => [s[0] + p.x / 3, s[1] + p.z / 3], [0, 0])
+    return sign * (n.x * (mid[0] - cx) + n.z * (mid[1] - cz)) > 1e-9
+  }).length
+}
+
+/** The wall triangles belonging to one ring: those whose xz footprint sits on
+ *  that ring's own rectangle (within a hair), told apart by the box. */
+function wallsOfRect(tris, ring) {
+  const xs = ring.map((p) => p[0])
+  const zs = ring.map((p) => p[1])
+  const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs),
+    Math.min(...zs), Math.max(...zs)]
+  return tris.filter((t) => t.every((p) => p.x >= x0 - 1e-6 && p.x <= x1 + 1e-6
+    && p.z >= z0 - 1e-6 && p.z <= z1 + 1e-6))
+}
+
 /** Area of a triangle PROJECTED onto the xz plane. */
 const areaXZ = ([a, b, c]) => Math.abs(
   (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)) / 2
@@ -171,8 +228,23 @@ function measure(label, spec) {
   check('C east of it (6.5, 1.5) is floor', covers(top, 6.5, 1.5), 1)
   check('C north of it (3.5, 2.9) is floor', covers(top, 3.5, 2.9), 1)
   check('C south of it (3.5, 0.1) is floor', covers(top, 3.5, 0.1), 1)
+  const side = sideFaces(tris, 3.08, 2.98)
   check('E the extrusion caps the opening: 2 side triangles per ring edge, '
-    + '4 + 4 edges', sideFaces(tris, 3.08, 2.98).length, 16)
+    + '4 + 4 edges', side.length, 16)
+  // F THE WALLS FACE THE RIGHT WAY — the one place three's winding rule is
+  // load-bearing. `ExtrudeGeometry` re-winds the holes only when the outer
+  // contour is NOT clockwise by its own `ShapeUtils.isClockWise`, and every
+  // outline of this payload has a POSITIVE shoelace (`world_geometry`:
+  // positive = clockwise in map view), which three reads as "not clockwise".
+  // So the branch runs, and the walls of the opening face INTO it.
+  const holeWalls = wallsOfRect(side, HOLE)
+  const outerWalls = side.filter((t) => !holeWalls.includes(t))
+  check('F 8 of the walls belong to the opening, 8 to the outline',
+    [holeWalls.length, outerWalls.length], [8, 8])
+  check('F the outer walls face AWAY from the plate\'s middle',
+    facing(outerWalls, centroidXZ(OUTLINE), +1), 8)
+  check('F ...and the walls of the opening face INTO it',
+    facing(holeWalls, centroidXZ(HOLE), -1), 8)
   const box = new THREE.Box3().setFromObject(mesh)
   check('D the box is the OUTLINE\'s, x 0…8',
     [box.min.x, box.max.x], [0, 8])
@@ -226,6 +298,33 @@ function measure(label, spec) {
   check('A only the real opening is taken out (48 − 6 m²)',
     top.reduce((s, t) => s + areaXZ(t), 0), 42)
   check('B ...and the triangulation is the one-hole one', top.length, 8)
+}
+
+// ── 5. TWO openings in one plate ───────────────────────────────────────────
+// The normal case as soon as two flights arrive on the same storey (the
+// server's own `[2s]` check composes exactly that). The AREA is hand-derived —
+// 48 − 6 − 2 = 40 m², the second ring being 1 × 2 m at x 6…7 / z −2.5…−0.5,
+// disjoint from the first — while the TRIANGLE COUNT is MEASURED and pinned:
+// the n + 2h − 2 of section B is stated for one hole, and a second bridge does
+// not have to behave like the first. It comes out at 14 here (n = 12, h = 2),
+// and the check exists so a three release that triangulates differently is
+// noticed rather than assumed away.
+{
+  const HOLE2 = [[6, -2.5], [7, -2.5], [7, -0.5], [6, -0.5]]
+  const spec = plate([HOLE, HOLE2], 0.10, 3.08)
+  const { tris, top } = measure('5. two openings, 3 × 2 m and 1 × 2 m', spec)
+  check('A the top face measures 48 − 6 − 2 m²',
+    top.reduce((s, t) => s + areaXZ(t), 0), 40)
+  check('B the two-hole triangulation, measured', top.length, 14)
+  check('C both openings are open',
+    [covers(top, 3.5, 1.5), covers(top, 6.5, -1.5)], [0, 0])
+  check('C ...and the floor between them is not',
+    covers(top, 5.5, -1.5), 1)
+  check('E 8 outer wall triangles + 8 + 8 for the two openings',
+    sideFaces(tris, 3.08, 2.98).length, 24)
+  const side = sideFaces(tris, 3.08, 2.98)
+  check('F the second opening\'s walls face into it too',
+    facing(wallsOfRect(side, HOLE2), centroidXZ(HOLE2), -1), 8)
 }
 
 console.log(FAILED.length

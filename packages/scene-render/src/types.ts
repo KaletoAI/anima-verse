@@ -1,26 +1,26 @@
 /**
- * Szenen-Payload des Vertrags (§ B1) — EIN Satz Typen für beide Renderer.
- * Gegenstück auf der Serverseite: `app/core/scene_recipe.py`.
+ * The scene payload of the contract (§ B1) — ONE set of types for both
+ * renderers. Its counterpart on the server side: `app/core/scene_recipe.py`.
  *
- * Zusammengeführt aus `frontend/src/tabs/world/worldTypes.ts` (Admin) und
- * `client3d/src/api.ts` (Client). Beide beschrieben denselben Payload, wichen
- * aber an drei Stellen auseinander; so ist es aufgelöst:
+ * Merged out of `frontend/src/tabs/world/worldTypes.ts` (admin) and
+ * `client3d/src/api.ts` (client). Both described the same payload but had
+ * drifted apart in three places; this is how that was settled:
  *
- *   - `SceneStyle.elevator_*`: Admin hatte sie als PFLICHT, Client als
- *     optional. Optional gewinnt — der Server liefert sie nur, wenn die Szene
- *     überhaupt einen Fahrstuhl hat. Die Admin-Aufrufer haben ohnehin schon
- *     Fallbacks; sie sind jetzt auch typseitig ehrlich.
- *   - `SceneRoom.openings`: Admin hatte sie als Pflicht und über den
- *     Editor-Typ `RoomOpening` beschrieben, Client als optionales
- *     `ApiOpening[]`. Optional gewinnt aus demselben Grund; der Editor-Typ
- *     bleibt im Admin, weil er PLAN-Fraktionen für das Zeichnen trägt und
- *     hier nichts zu suchen hat.
- *   - `openings[].type`: Admin verengte auf 'door'|'window'|'passage', der
- *     Client ließ `string` offen. Offen gewinnt — der Vertrag nennt das
- *     Vokabular ausdrücklich erweiterbar.
+ *   - `SceneStyle.elevator_*`: the admin had them REQUIRED, the client
+ *     optional. Optional wins — the server sends them only for a scene that
+ *     has a lift at all. The admin callers already had fallbacks; now the
+ *     type says so too.
+ *   - `SceneRoom.openings`: the admin had them required and described through
+ *     its editor type `RoomOpening`, the client as an optional
+ *     `ApiOpening[]`. Optional wins for the same reason; the editor type
+ *     stays in the admin, because it carries PLAN fractions for drawing and
+ *     has no business here.
+ *   - `openings[].type`: the admin narrowed it to 'door'|'window'|'passage',
+ *     the client left `string` open. Open wins — the contract calls the
+ *     vocabulary expressly extensible.
  *
- * `Array<[number, number]>` und `[number, number][]` sind derselbe Typ; hier
- * steht durchgehend die kurze Schreibweise.
+ * `Array<[number, number]>` and `[number, number][]` are the same type; the
+ * short spelling is used throughout.
  */
 
 /** Floor plate: the contour plate of a declared storey, or the floor of one
@@ -42,8 +42,13 @@ export interface ScenePlate {
    *      height under it falls through to the storey below or the terrain
    *      (`recipeFloorAt` in the client).
    *
-   *  A ring may reach over the plate's edge; nothing clips it (the server
-   *  states the flight, the shape takes what overlaps). */
+   *  EVERY RING LIES INSIDE THE OUTLINE — the SERVER clips a flight that
+   *  reaches past the plate's edge to the contour (`_plate_holes`), so no
+   *  consumer has to. That is not a nicety: a ring crossing the outline makes
+   *  the shape SELF-INTERSECT, and the plate then spills BEYOND its own
+   *  contour instead of merely losing the overlap (measured: an 8 × 6 m plate
+   *  with a ring 2 m past its east edge triangulates to 82 m² over a box
+   *  x 0…10). */
   holes: [number, number][][]
   top_y: number
   thickness: number

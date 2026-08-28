@@ -53,9 +53,12 @@ export interface WalkPlate {
   /** THE OPENINGS CUT INTO IT (`plates[].holes`, contract addendum "Treppen
    *  v2") — a stairwell today. A point inside a ring is NOT on this plate:
    *  the floor is open there, so the answer falls through to the rung below
-   *  (the storey under it, in the end the terrain). Absent where the source
-   *  is not a drawn plate — a room's declared floor is a statement about a
-   *  surface, and nothing cuts a hole into a statement. */
+   *  (the storey under it, in the end the terrain).
+   *
+   *  Optional because a plate without an opening simply has none — most have
+   *  none — and a caller that knows its floors are whole may leave the field
+   *  off entirely (`declaredFloorAt` reads this same shape for the DECLARED
+   *  floors and never sets it). */
   holes?: readonly (readonly (readonly [number, number])[])[];
 }
 
