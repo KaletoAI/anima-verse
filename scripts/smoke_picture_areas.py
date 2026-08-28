@@ -728,9 +728,14 @@ def part_f():
           plane is not None and close(plane["front_offset"], 0.02),
           str(plane and plane["front_offset"]))
 
-    print("  [F4] leaf_candidates = exactly the plate's 12 triangles")
+    print("  [F4] leaf_candidates (the v1 skin heuristic) = exactly the plate's 12 triangles")
     cand = pa.leaf_candidates(verts, faces, normals, plane)
     check("F4: faces 48..59", cand == list(range(48, 60)), str(cand))
+    print("  [F4b] prism_faces over the inner rect along +z = the same 12 (E2)")
+    prism = pa.prism_faces(verts, faces, plane["inner"], plane["normal"])
+    check("F4b: faces 48..59 — the plate's edge faces sit ON the inner rect's "
+          "edge and point OUT of it, the bars' jamb faces point IN",
+          prism == list(range(48, 60)), str(prism))
 
     print("  [F5] detect_leaf + leaf_bbox")
     leaf = pa.detect_leaf(verts, faces)
@@ -746,11 +751,15 @@ def part_f():
           vclose(pa.bbox_of(verts, faces, cand)[0], (0.1, 0.1, -0.02))
           and vclose(pa.bbox_of(verts, faces, cand)[1], (0.9, 2.1, 0.0)))
 
-    print("  [F6] the fallback thickness: the plate alone")
+    print("  [F6] no rim to measure: the plate alone")
     pv, pf = build_door(bars=False)
     alone = pa.detect_leaf(pv, pf)
-    check("F6: 8 % of 0.8 = 0.064 on every side",
-          alone is not None and all(close(t, 0.064) for t in alone["plane"]["thickness"]),
+    # E2: nothing deviates from the leaf plane near any edge, so there is no
+    # frame — the rim is 0 on every side and the silhouette is the footprint
+    # (v1 shrank it by 8 % to find a seed strictly inside; the prism needs
+    # no seed, and that shrink would cut the leaf's own edge faces off).
+    check("F6: no rim measurable -> 0 on every side",
+          alone is not None and all(close(t, 0.0) for t in alone["plane"]["thickness"]),
           str(alone and alone["plane"]["thickness"]))
     check("F6: the whole box is the leaf, share 1.0",
           alone is not None and alone["faces"] == list(range(12)) and close(alone["share"], 1.0),
@@ -766,10 +775,159 @@ def part_f():
     check("F7: detect_leaf answers None", pa.detect_leaf(bv, bf) is None)
 
 
+# ---------------------------------------------------------------------------
+# FIXTURE G — the two-skin door (spec-bild-props-v2.md E2)
+# ---------------------------------------------------------------------------
+# The four bars of F (faces 0..47, z -0.05..0.02), a LEAF SLAB with a front
+# skin, a back skin and four edge faces — x 0.1..0.9, y 0.1..2.1,
+# z -0.04..0.00, faces 48..59 — and a FRAME BACK SKIN WITHOUT A HOLE: a plane
+# at z = -0.05 over the whole silhouette (0..1) x (0..2.2) as a 10 x 22 grid
+# of 0.1 m quads facing -z, faces 60..499 (quad (i, j), i 0..9 along x,
+# j 0..21 along y, tris 60 + 2 * (10 j + i) and + 1). 32 + 8 + 253 = 293
+# vertices, 500 triangles. That back skin is what an img2mesh door carries: the leaf's
+# back is part of one continuous rear surface, and the measured door had
+# 979 frame triangles in exactly that place (befunde 2026-08-28, Wurzel 2).
+#
+# BY HAND:
+#   leaf plane   = the largest planar cluster = the back skin (2.2 m2 > the
+#                  slab front's 1.6): normal (0, 0, -1), offset 0.05; frame
+#                  u = up x n = (-1, 0, 0), v = n x u = (0, 1, 0); silhouette
+#                  u -1..0, v 0..2.2.
+#   rim          = 0.1 on every side (the bars and the slab's edges reach in
+#                  0.1; the slab's skins are more than a quarter in and do
+#                  not measure) -> inner (-0.9, 0.1) .. (-0.1, 2.1), i.e.
+#                  x 0.1..0.9, y 0.1..2.1.
+#   PRISM        = every face whose centre projects inside that rect, ANY
+#                  depth, ANY normal: the slab's front and back (centres x
+#                  0.367 / 0.633), its four edge faces (centres ON the rect's
+#                  edge, normals pointing OUT of it), and the back skin's
+#                  inner 8 x 20 quads (i 1..8, j 1..20: centres at i/10 +
+#                  0.033 / 0.067, all strictly inside) = 320 tris. NOT the
+#                  bars (centres at x 0.05 / 0.95, y 0.05 / 2.15), NOT their
+#                  jamb faces (centres ON the edge, normals pointing IN), NOT
+#                  the back skin's outer ring (centres at 0.033 / 0.067 off
+#                  the silhouette edge). 332 faces.
+#   leaf_bbox    = (0.1, 0.1, -0.05) .. (0.9, 2.1, 0.0): the inner grid
+#                  vertices span 0.1..0.9 x 0.1..2.1 like the slab.
+#   share        = coplanar faces of the prism (facing -z within 2 cm of z =
+#                  -0.05): the 320 inner grid tris (1.6 m2) + the slab's back
+#                  at z = -0.04 (1.6 m2) = 3.2 over the silhouette's 2.2.
+#   v1 heuristic = leaf_candidates on the same plane: the seed ties between
+#                  the inner grid (1.6) and the slab's back (1.6) and falls to
+#                  the smaller first index (the slab back, 50); the back skin
+#                  is the "frame front" of that plane and not edge-connected
+#                  to the slab -> the 12 slab faces only. The prism differs
+#                  by exactly the 320 back-skin faces.
+#   residual     = after the split the frame holds no face whose centre lies
+#                  more than 2 cm inside the leaf's outline (the outline of
+#                  its face centres, x 0.1..0.9, y 0.1..2.1): 0. Leave the
+#                  central quad (4, 10) — tris 60 + 2 * 104 = 268, 269,
+#                  centres (0.433, 1.067) / (0.467, 1.033) — in the frame
+#                  and it is 2.
+#   leaf_prism   = a listed face's own prism: ONE front triangle of the
+#                  slab — 48 = (0.1, 0.1), (0.9, 0.1), (0.9, 2.1), centre
+#                  (19/30, 23/30) — has a footprint that is that point
+#                  (widened by a hair). Faces whose centre projects onto
+#                  it: its back twin 50 (the same three x/y at z -0.04) and
+#                  ONE back-skin triangle — the grid's first-type centres
+#                  are ((3i+1)/30, (3j+2)/30), so i = 6, j = 7: quad (6, 7),
+#                  tri 60 + 2 * 76 = 212 — the same column, so the same
+#                  prism -> [48, 50, 212].
+def build_door_g():
+    verts, faces = build_door(plate=False)
+    box(0.1, 0.9, 0.1, 2.1, -0.04, 0.00, verts, faces)
+    b = len(verts)
+    for j in range(23):
+        for i in range(11):
+            verts.append((i / 10.0, j / 10.0, -0.05))
+    for j in range(22):
+        for i in range(10):
+            v00 = b + j * 11 + i
+            v10, v01, v11 = v00 + 1, v00 + 11, v00 + 12
+            faces.append((v00, v01, v11))     # facing -z
+            faces.append((v00, v11, v10))
+    return verts, faces
+
+
+def part_g():
+    print("[G] the two-skin door: the leaf is a PRISM through the whole door")
+    verts, faces = build_door_g()
+    check("G: 293 vertices, 500 triangles", (len(verts), len(faces)) == (293, 500),
+          str((len(verts), len(faces))))
+    normals = pa.face_normals(verts, faces)
+    check("G: the back skin faces -z", vclose(normals[60], (0, 0, -1)) and vclose(normals[499], (0, 0, -1)),
+          str((normals[60], normals[499])))
+    inner_quads = [j * 10 + i for j in range(1, 21) for i in range(1, 9)]
+    skin_inner = sorted(60 + 2 * q + d for q in inner_quads for d in (0, 1))
+    expected = list(range(48, 60)) + skin_inner
+    check("G: 332 expected prism faces by hand", len(expected) == 332, str(len(expected)))
+
+    print("  [G1] the leaf plane is the back skin, the rim is 0.1 all round")
+    plane = pa.leaf_plane(verts, faces, normals)
+    check("G1: normal (0, 0, -1), offset 0.05",
+          plane is not None and vclose(plane["normal"], (0, 0, -1)) and close(plane["offset"], 0.05),
+          str(plane and (plane["normal"], plane["offset"])))
+    check("G1: thickness 0.1 on every side",
+          plane is not None and all(close(t, 0.1) for t in plane["thickness"]),
+          str(plane and plane["thickness"]))
+    check("G1: inner (-0.9, 0.1)..(-0.1, 2.1) in the (u, v) frame",
+          plane is not None and vclose(plane["inner"][0], (-0.9, 0.1))
+          and vclose(plane["inner"][1], (-0.1, 2.1)), str(plane and plane["inner"]))
+
+    print("  [G2] prism_faces = slab + the back skin behind it, whatever the axis sign")
+    prism = pa.prism_faces(verts, faces, plane["inner"], plane["normal"])
+    check("G2: 332 faces along the plane normal (-z)", prism == expected,
+          f"{len(prism)} faces; first/last {prism[:1]}..{prism[-1:]}")
+    prism_z = pa.prism_faces(verts, faces, ((0.1, 0.1), (0.9, 2.1)), (0.0, 0.0, 1.0))
+    check("G2: the same 332 along +z with the rect in x/y", prism_z == expected,
+          str(len(prism_z)))
+    check("G2: no bar face, no jamb face, no outer-ring face",
+          not any(k < 48 for k in prism) and not any(60 + 2 * (j * 10 + i) + d in prism
+                                                     for j in range(22) for i in range(10)
+                                                     for d in (0, 1)
+                                                     if i in (0, 9) or j in (0, 21)))
+
+    print("  [G3] the v1 skin heuristic would have missed the back skin")
+    old = pa.leaf_candidates(verts, faces, normals, plane)
+    check("G3: leaf_candidates = the 12 slab faces only", old == list(range(48, 60)), str(old[:14]))
+    check("G3: the prism adds exactly the 320 back-skin faces",
+          sorted(set(prism) - set(old)) == skin_inner and not set(old) - set(prism))
+
+    print("  [G4] detect_leaf + leaf_bbox + share")
+    leaf = pa.detect_leaf(verts, faces)
+    check("G4: detect_leaf = the prism", leaf is not None and leaf["faces"] == expected,
+          str(leaf and len(leaf["faces"])))
+    check("G4: bbox (0.1, 0.1, -0.05)..(0.9, 2.1, 0)",
+          leaf is not None and vclose(leaf["bbox"][0], (0.1, 0.1, -0.05))
+          and vclose(leaf["bbox"][1], (0.9, 2.1, 0.0)), str(leaf and leaf["bbox"]))
+    check("G4: share 3.2 / 2.2", leaf is not None and close(leaf["share"], 3.2 / 2.2, 1e-6),
+          str(leaf and leaf["share"]))
+
+    print("  [G5] leaf_residual: frame faces more than 2 cm inside the leaf's outline")
+    frame = [k for k in range(len(faces)) if k not in set(expected)]
+    check("G5: a clean prism split leaves 0", pa.leaf_residual(verts, faces, expected, frame) == 0,
+          str(pa.leaf_residual(verts, faces, expected, frame)))
+    short = [k for k in expected if k not in (268, 269)]
+    check("G5: the central quad left behind counts 2",
+          pa.leaf_residual(verts, faces, short, frame + [268, 269]) == 2,
+          str(pa.leaf_residual(verts, faces, short, frame + [268, 269])))
+    check("G5: the bars' jamb faces (ON the outline) never count",
+          pa.leaf_residual(verts, faces, expected, list(range(48))) == 0)
+
+    print("  [G6] leaf_prism: a face list becomes the prism through its own footprint")
+    through = pa.leaf_prism(verts, faces, [48])               # ONE front triangle
+    check("G6: one front triangle reaches its back twin and the grid tri in its column: [48, 50, 212]",
+          through == [48, 50, 212], str(through))
+    check("G6: the listed faces are always part of their own prism",
+          set(expected) <= set(pa.leaf_prism(verts, faces, expected)))
+    check("G6: an empty list is an empty prism", pa.leaf_prism(verts, faces, []) == [])
+
+
 def main():
     print("smoke_picture_areas")
     part_colour()
     part_f()
+    part_g()
     part_a()
     part_b()
     part_c()

@@ -1274,11 +1274,18 @@ def part3() -> None:
         store.save_uploaded_glb(pid2, PLAIN_GLB, variant=1)
     finally:
         store.detect_areas = real_detect
-    check("the upload on variant 0 ran the hook for variant 0, mode auto",
-          len(calls) >= 1 and calls[0]["mode"] == "auto"
+    # E6 (spec-bild-props-v2.md): the frame fixture NAMES slot_picture_1 /
+    # slot_glass_1, so the landing adopts them first (mode adopt, variant
+    # 0) and runs the key-colour hook after; the plain mesh on variant 1
+    # names nothing and gets the auto run only.
+    check("the upload on variant 0 adopted its named materials first (E6), variant 0",
+          len(calls) >= 1 and calls[0]["mode"] == "adopt"
           and calls[0].get("variant") in (0, None), str(calls[:1]))
-    check("the upload on variant 1 ran the hook for variant 1",
-          len(calls) == 2 and calls[1]["mode"] == "auto" and calls[1].get("variant") == 1,
+    check("…then ran the hook for variant 0, mode auto",
+          len(calls) >= 2 and calls[1]["mode"] == "auto"
+          and calls[1].get("variant") in (0, None), str(calls[:2]))
+    check("the upload on variant 1 ran the hook for variant 1 (no adopt: nothing named)",
+          len(calls) == 3 and calls[2]["mode"] == "auto" and calls[2].get("variant") == 1,
           str(calls))
     import app.imagegen.service as image_service
     real_service = image_service.get_image_service
@@ -1520,18 +1527,27 @@ def main() -> int:
         after = (store._sidecar_path(pid) or Path()).read_text(encoding="utf-8")
         check("R7: an unknown kind is refused, nothing written", after == before,
               str(exc)[:50])
-    # The areas live on the FILE: a landed mesh first (while no key colour is
-    # requested, so the landing only reconciles), then the list.
+    # The areas live on the FILE: a landed mesh first (no key colour is
+    # requested, so there is no automatic split — but the fixture NAMES
+    # slot_picture_1 / slot_glass_1, so the landing tries to ADOPT them,
+    # E6; this fixture is a name-only container without a mesh, Blender
+    # finds "no mesh objects", and the landing survives with that on the
+    # file's `areas_error` — the hook never fails a landing), then the
+    # list, written with the error cleared.
     store.save_uploaded_glb(pid, frame_glb())
     store.update_prop(pid, {"key_areas": ["picture", "glass"]})
     mp = full_file(pid)
-    store.set_file_areas(mp, areas=AREAS)
+    check("the landing tried to adopt the named materials (E6) and, on a mesh-less "
+          "fixture, left the failure on the file — the landing survived",
+          "no mesh objects" in store.file_areas(mp)["areas_error"],
+          str(store.file_areas(mp)["areas_error"]))
+    store.set_file_areas(mp, areas=AREAS, areas_error=None)
     got = store.get_prop(pid)["variant_tiers"][0]["areas"]
     check("areas read back as written, on variant_tiers[0]", got == AREAS, str(got))
     check("…and the file sidecar carries them, the prop sidecar does not",
           store.read_model_sidecar(mp).get("areas") == AREAS
           and "areas" not in store.read_sidecar(pid))
-    check("file_areas: rotation 0, no leaf, no warning, no run",
+    check("file_areas: rotation 0, no leaf, no warning, no run (a failed run stamps nothing)",
           store.file_areas(mp) == {"areas": AREAS, "leaf_bbox": None,
                                    "rotation": {"x": 0, "y": 0, "z": 0},
                                    "areas_run_at": "", "areas_error": "",

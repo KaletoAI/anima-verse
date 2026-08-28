@@ -412,8 +412,18 @@ _INHERITED_AREAS_KEYS = (AREAS_KEY, LEAF_BBOX_KEY, ROTATION_KEY)
 #: The ``areas_warning`` of a run that looked for the door leaf and found
 #: none — the tab shows it; the areas the run DID find stay as they are.
 NO_LEAF_NOTE = "no door leaf found — draw it with the polygon tool"
-#: How an area came to be: found on the atlas, or drawn by the admin.
-AREA_SOURCES = ("auto", "manual")
+#: The ``areas_warning`` of a run that left a leaf with frame faces still
+#: standing inside its outline (``leaf_residual`` of the script, spec
+#: -bild-props-v2.md E2): a skin cut that is "shut and open at once" must
+#: never stay silent. ``{n}`` is the count; the client renders the English
+#: text and its translation from the same template.
+LEAF_RESIDUAL_NOTE = ("{n} frame faces remain inside the leaf footprint — "
+                      "draw the leaf again or check the door")
+#: How an area came to be: found on the atlas, drawn by the admin, or
+#: ADOPTED from a material the modeller named (E6). Only ``auto`` areas
+#: are dissolved by the next automatic run (R14: what somebody authored —
+#: by hand or by naming — stays).
+AREA_SOURCES = ("auto", "manual", "adopt")
 #: The size filter of the automatic detection (§ 2 "Mindestgrößen"): a patch
 #: below EITHER bound is noise at a frame edge, not a panel.
 MIN_AREA_M2 = 0.02
@@ -1952,15 +1962,25 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
                          {a.get("id"): a.get("edges") for a in script_areas},
                          data.get("mesh_layout"), leaf_bbox)
     kinds = list(params.get("kinds") or [])
+    try:
+        residual = int(data.get("leaf_residual") or 0)
+    except (TypeError, ValueError):
+        residual = 0
+    # A run that left a leaf with frame faces still inside its outline says
+    # so (E2); a run that looked for the leaf and found none leaves its
+    # note; any other run (a clean cut, a delete) clears both.
+    if leaf_bbox and residual > 0:
+        warning: Optional[str] = LEAF_RESIDUAL_NOTE.format(n=residual)
+    elif LEAF_KIND in kinds and not leaf_bbox:
+        warning = NO_LEAF_NOTE
+    else:
+        warning = None
     fields: Dict[str, Any] = {
         AREAS_KEY: areas,
         LEAF_BBOX_KEY: leaf_bbox,
         AREAS_RUN_AT_KEY: utc_now_iso(),
         AREAS_ERROR_KEY: None,
-        # A run that looked for the leaf and found none leaves its note; any
-        # other run (a manual cut, a delete, a run that found it) clears it.
-        AREAS_WARNING_KEY: (NO_LEAF_NOTE
-                            if LEAF_KIND in kinds and not leaf_bbox else None),
+        AREAS_WARNING_KEY: warning,
     }
     if params.get("mode") == "auto":
         fields[KEY_AREAS_RUN_KEY] = kinds
@@ -2019,12 +2039,13 @@ def _origins(areas: Sequence[Dict[str, Any]]) -> Dict[str, str]:
 
 def detect_areas(prop_id: str, *, mode: str = "auto",
                  faces: Any = None, kind: str = "picture",
+                 through: bool = False,
                  variant: Any = None, kinds: Any = None,
                  min_faces: int = MIN_AREA_FACES,
                  min_area_m2: float = MIN_AREA_M2,
                  wait_s: float = 10.0) -> List[Dict[str, Any]]:
-    """Find or draw the picture areas of ONE VARIANT's mesh — returns that
-    file's ``areas`` list after the run.
+    """Find, draw or adopt the picture areas of ONE VARIANT's mesh —
+    returns that file's ``areas`` list after the run.
 
     ``mode="auto"`` dissolves every area it once detected ITSELF — an area
     the admin drew by hand (``source == "manual"``) is kept as it is, faces,
@@ -2040,9 +2061,19 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
     areas it found stay). ``mode="manual"`` turns ``faces`` (flat triangle
     indices in the R1 order of the CURRENT mesh — the tab's polygon pick)
     into one new area of ``kind``; every other area stays; kind ``leaf``
-    cuts exactly those faces out as the leaf node (replacing a previous
-    leaf). ``min_faces`` / ``min_area_m2`` are the auto filter (production:
-    12 faces, 0.02 m²).
+    cuts those faces out as the leaf node (replacing a previous leaf) —
+    with ``through`` (the tab's polygon pick, E2) as the PRISM through the
+    listed faces' footprint, back skin and edges included, without it
+    exactly as listed. The leaf is a prism in ``auto`` mode too; a run that
+    leaves frame faces inside the leaf's outline stores
+    :data:`LEAF_RESIDUAL_NOTE` as the file's ``areas_warning``.
+    ``mode="adopt"`` (E6) turns every material the slot convention names
+    (:func:`detect_slots`: ``slot_<name>``, bare picture/screen/sign/glass)
+    that is not an area yet into one made of that material's faces — no UV
+    rewrite, the material renamed to its canonical ``slot_<kind>_<k>`` when
+    it is not that already (``glass*`` → glass, everything else → picture);
+    ``ValueError`` when there is nothing left to adopt. ``min_faces`` /
+    ``min_area_m2`` are the auto filter (production: 12 faces, 0.02 m²).
 
     ``variant`` is the STORE index (``None`` = the primary variant): the run
     changes THAT variant's GLB, its file sidecar and its ``.areas.json`` and
@@ -2084,11 +2115,12 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
                 wanted = list(COLOUR_KINDS)
         params["kinds"] = wanted
         # R14: an automatic run dissolves what it detected itself and leaves
-        # what the ADMIN drew standing — faces, material, number. The detector
-        # never sees those faces again (their material is a slot material, and
-        # only the atlas materials are read), so a hand-drawn panel survives
-        # every "Detect areas" click, which is what the button's tooltip says.
-        params["keep"] = [a["id"] for a in current if a.get("source") == "manual"]
+        # what the ADMIN drew — or the modeller NAMED (adopt, E6) — standing:
+        # faces, material, number. The detector never sees those faces again
+        # (their material is a slot material, and only the atlas materials
+        # are read), so a hand-drawn panel survives every "Detect areas"
+        # click, which is what the button's tooltip says.
+        params["keep"] = [a["id"] for a in current if a.get("source") != "auto"]
         params["min_faces"] = max(1, int(min_faces))
         params["min_area_m2"] = max(0.0, float(min_area_m2))
     elif mode == "manual":
@@ -2107,11 +2139,69 @@ def detect_areas(prop_id: str, *, mode: str = "auto",
                              f"{MAX_MANUAL_FACES} allowed")
         params["faces"] = idx
         params["kind"] = kind
+        if kind == LEAF_KIND and through:
+            params["through"] = True
+    elif mode == "adopt":
+        src = _variant_full_file(pid, index)
+        if not src or src.suffix.lower() != ".glb":
+            raise ValueError("this variant has no full-tier GLB to work on")
+        try:
+            names = glb_material_names_at(src)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError,
+                UnicodeDecodeError, struct.error):
+            raise ValueError("the mesh's material names cannot be read") from None
+        mapping = adopt_mapping(names, current)
+        if not mapping:
+            raise ValueError("nothing to adopt: no material named slot_<name>, "
+                             "picture, screen, sign or glass that is not an "
+                             "area already")
+        params["adopt"] = mapping
     else:
-        raise ValueError(f"unknown mode {mode!r} (auto | manual)")
+        raise ValueError(f"unknown mode {mode!r} (auto | manual | adopt)")
     return _areas_run(pid, index, params,
-                      default_source="auto" if mode == "auto" else "manual",
+                      default_source=mode if mode in AREA_SOURCES else "manual",
                       wait_s=wait_s)
+
+
+def adopt_mapping(material_names: Any,
+                  current: Sequence[Dict[str, Any]]) -> Dict[str, str]:
+    """``{material name: area id}`` for E6's ``adopt``: every material name
+    :func:`detect_slots` recognises that is not an area of the file yet.
+
+    The id is the canonical ``<kind>_<k>``: a name that already IS
+    ``slot_<kind>_<k>`` keeps that id (and is skipped when the file lists
+    it); any other slot name — ``slot_poster``, a bare ``glass``,
+    ``slot_screen`` — gets the next free number of its kind, ``glass*``
+    being glass and everything else a picture (ruling of 2026-08-28: the
+    two colour kinds are what the renderers can fill). Names come back as
+    the mesh spells them, so the script can find the material.
+    """
+    have = {a.get("id") for a in (current or [])}
+    used: Dict[str, Set[int]] = {k: set() for k in COLOUR_KINDS}
+    for aid in have:
+        m = _AREA_ID_RE.match(str(aid or ""))
+        if m:
+            used[m.group(1)].add(int(m.group(2)))
+    out: Dict[str, str] = {}
+    for raw in (material_names or []):
+        name = str(raw or "")
+        slots = detect_slots([name])
+        if not slots:
+            continue
+        slot = slots[0]["name"]
+        m = _AREA_ID_RE.match(slot)
+        if m:
+            kind, k = m.group(1), int(m.group(2))
+            if slot in have or k in used[kind]:
+                continue
+        else:
+            kind = "glass" if slot.startswith("glass") else "picture"
+            k = 1
+            while k in used[kind]:
+                k += 1
+        used[kind].add(k)
+        out[name] = f"{kind}_{k}"
+    return out
 
 
 def delete_area(prop_id: str, area_id: str, variant: Any = None,
@@ -2306,28 +2396,57 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         return
+    # E6 FIRST: a mesh whose modeller named its surfaces gets an area per
+    # such material — on a file that has no reading yet, so a re-landed
+    # split result is not adopted twice. The key-colour run that may follow
+    # keeps them (R14: only `auto` areas are dissolved).
+    if _names_slot_materials(_variant_full_file(pid, variant)):
+        try:
+            detect_areas(pid, mode="adopt", variant=variant, wait_s=wait_s)
+        except Exception as e:                              # noqa: BLE001
+            _landing_run_failed(pid, variant, e, "adoption of named materials")
     if not meta.get(KEY_AREAS_KEY) and not is_door_prop(meta):
         _reconcile_areas(pid, variant)
         return
     try:
         detect_areas(pid, mode="auto", variant=variant, wait_s=wait_s)
     except Exception as e:                                  # noqa: BLE001
-        logger.warning("Prop %s: automatic picture-area detection failed "
-                       "(variant %s): %s", pid, variant, e)
-        # The fresh mesh is unsplit, so it names no area and carries no leaf
-        # node — that much is a reading of the file. What the ADMIN authored
-        # (the variant's `area_defaults` and `slot_values`) is NOT: a missing
-        # or busy Blender is a load condition, and answering it by deleting
-        # the panes and pictures of a door would make a queue wipe a prop.
-        # Both halves stay until the next SUCCESSFUL run prunes them (R15).
-        mp = _variant_full_file(pid, variant)
-        if not mp:
-            return
-        try:
-            set_file_areas(mp, areas=[], leaf_bbox=None,
-                           areas_error=str(e) or type(e).__name__)
-        except (OSError, ValueError):
-            pass
+        _landing_run_failed(pid, variant, e, "picture-area detection")
+
+
+def _names_slot_materials(mp: Optional[Path]) -> bool:
+    """Does this landed full file carry a material the slot convention
+    names (:func:`detect_slots`) while it has NO area reading yet? Only a
+    positive finding on a readable GLB answers True."""
+    if not mp or mp.suffix.lower() != ".glb" or AREAS_KEY in read_model_sidecar(mp):
+        return False
+    try:
+        return bool(detect_slots(glb_material_names_at(mp)))
+    except (OSError, ValueError, KeyError, json.JSONDecodeError,
+            UnicodeDecodeError, struct.error):
+        return False
+
+
+def _landing_run_failed(pid: str, variant: Any, e: BaseException,
+                        what: str) -> None:
+    """A landing run failed: log it and store it on the landed FILE.
+
+    The fresh mesh is unsplit, so it names no area and carries no leaf node
+    — that much is a reading of the file. What the ADMIN authored (the
+    variant's ``area_defaults`` and ``slot_values``) is NOT: a missing or
+    busy Blender is a load condition, and answering it by deleting the
+    panes and pictures of a door would make a queue wipe a prop. Both
+    halves stay until the next SUCCESSFUL run prunes them (R15)."""
+    logger.warning("Prop %s: automatic %s failed (variant %s): %s", pid, what,
+                   variant, e)
+    mp = _variant_full_file(pid, variant)
+    if not mp:
+        return
+    try:
+        set_file_areas(mp, areas=[], leaf_bbox=None,
+                       areas_error=str(e) or type(e).__name__)
+    except (OSError, ValueError):
+        pass
 
 
 def _reconcile_areas(pid: str, variant: Any = None) -> None:

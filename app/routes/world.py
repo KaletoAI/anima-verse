@@ -2430,12 +2430,16 @@ async def prop_areas_detect(prop_id: str, request: Request,
                             variant: Optional[int] = None,
                             _: Dict[str, Any] = Depends(require_admin)
                             ) -> Dict[str, Any]:
-    """Detect or draw picture areas on ONE variant's mesh (``?variant=``;
-    body: ``{mode: "auto", kinds?: ["picture", "glass", "leaf"]}`` — ``kinds``
-    is the tab's "Detect now", EXACTLY these kinds — or ``{mode: "manual",
-    faces: [flat triangle index …], kind: "picture"|"glass"|"leaf"}``).
-    Blocking Blender run; answers the same payload as GET afterwards. 503
-    with the reason when Blender is missing or busy."""
+    """Detect, draw or adopt picture areas on ONE variant's mesh
+    (``?variant=``; body: ``{mode: "auto", kinds?: ["picture", "glass",
+    "leaf"]}`` — ``kinds`` is the tab's "Detect now", EXACTLY these kinds —
+    or ``{mode: "manual", faces: [flat triangle index …], kind:
+    "picture"|"glass"|"leaf", through?: bool}`` — ``through`` with kind
+    ``leaf`` cuts the PRISM through the listed faces' footprint (spec-bild-
+    props-v2.md E2: the polygon pick's back skin and edges come along) — or
+    ``{mode: "adopt"}``, an area per material the slot convention names,
+    E6). Blocking Blender run; answers the same payload as GET afterwards.
+    503 with the reason when Blender is missing or busy."""
     # The BODY decides whether there is one, not a header a client may leave
     # off (or send chunked): Starlette caches it, so the second read is free.
     data = await request.json() if await request.body() else {}
@@ -2455,7 +2459,7 @@ def _prop_areas_detect_sync(prop_id: str, data: Dict[str, Any],
         raise HTTPException(status_code=400, detail="kinds must be a list")
     _areas_call(detect_areas, prop_id, mode=str(data.get("mode") or "auto"),
                 faces=data.get("faces"), kind=str(data.get("kind") or "picture"),
-                variant=variant, kinds=kinds)
+                through=bool(data.get("through")), variant=variant, kinds=kinds)
     return {"status": "ok", **areas_info(prop_id, variant)}
 
 

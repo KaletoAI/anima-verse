@@ -22,11 +22,16 @@ Params (``args["params"]``)::
                            area of ``kind``; every other area stays; a listed
                            face that belonged to another area moves
                 "delete" — the area ``area`` is dissolved, nothing else changes
+                "adopt"  — ``adopt`` maps material NAMES to area ids: every
+                           face of such a material IS the area (E6, below)
     kinds       ["picture", "glass", "leaf"] — the kinds to detect in mode
                 auto; "leaf" runs the § 6 door-leaf heuristic (below)
     faces       [int] — mode manual
     kind        "picture" | "glass" | "leaf" — mode manual
+    through     bool — mode manual, kind leaf: the list is a POLYGON pick
+                and the leaf is the PRISM through its footprint (E2, below)
     area        "<area id>" | "leaf" — mode delete
+    adopt       {"<material name>": "<area id>"} — mode adopt
     min_area_m2 float, min_faces int — the size filter of mode auto
     keep        ["<area id>", …] — mode auto, ruling R14: the areas the ADMIN
                 drew. They keep their faces, their material and their number
@@ -74,11 +79,35 @@ the list REPLACES the leaf); delete with area ``leaf`` joins it back into
 ``frame``. NOT the wall-piece kind ``leaf`` of the scene payload (the flat
 panel in a door hole) — same word, different thing.
 
+THE LEAF IS A PRISM (spec-bild-props-v2.md E2, 2026-08-28): the auto cut
+takes every face whose centre projects into the leaf's footprint at ANY
+depth with ANY normal — front skin, back skin, edges, handles and the part
+of the frame's back skin that sits behind the leaf (an img2mesh door's
+rear is one continuous surface; a measured door kept 979 frame triangles
+there after the v1 skin cut). A manual cut with ``through`` does the same
+through the footprint of the LISTED faces (``picture_areas.leaf_prism``);
+without it the list is the leaf as given (v1). After every run that leaves
+a leaf, ``leaf_residual`` counts the frame faces whose centre still lies
+inside the leaf's outline (``picture_areas.leaf_residual``) — the server
+turns a count above 0 into the file's ``areas_warning``.
+
+ADOPT (E6): a mesh whose modeller NAMED its surfaces — ``slot_<name>``,
+or a bare ``picture`` / ``screen`` / ``sign`` / ``glass`` — gets an area
+per such material out of the material's own faces: plane fit and size from
+those faces, NO planar UVs written, NO atlas backup layer, the material's
+node tree untouched. The server decides the mapping (its slot convention
+lives in ``props.detect_slots``) and hands it in as ``adopt``; here a
+material whose name is not already the canonical ``slot_<kind>_<k>`` is
+RENAMED to it — a name is data of the container, and every consumer (the
+renderers' ``applySlotMaterials``, delete, rename) addresses an area by
+exactly that name. Nothing to rename = nothing changed = no export.
+
 Result ``data``::
 
     {"areas": [{id, kind, faces: n, size_m: [w, h], normal, centroid,
                 edges: [[[x,y,z],[x,y,z]], …], origin: "<material>"}, …],
      "leaf_bbox": {"min": [x, y, z], "max": [x, y, z]},   # only with a leaf
+     "leaf_residual": n,                                  # only with a leaf
      "mesh_layout": [{name, tri_count}, …],
      "changed": bool}
 
@@ -478,11 +507,17 @@ def _material_groups(model):
 
 
 def _report(model, existing, origins):
+    # R16: the outline is a connectivity question and asks the WELDED faces
+    # like every other one — on raw indices a split file that has been
+    # through one export shares no vertex between two faces of a panel, and
+    # every edge would count as boundary (96 segments for a 4 x 4 patch
+    # whose outline has 16).
+    welded = model.welded_faces()
     areas = []
     for area_id, entry in existing.items():
         faces = entry["faces"]
         fit = _fit(model, faces)
-        edges = pa.area_edges(model.vertices, model.faces, faces)
+        edges = pa.area_edges(model.vertices, welded, faces)
         areas.append({
             "id": area_id,
             "kind": entry["kind"],
@@ -765,7 +800,12 @@ def picture_areas(args):
         if kind == LEAF_NAME:
             # The listed faces ARE the leaf — a previous leaf's faces not on
             # the list return to the frame. Materials stay as they are, so a
-            # colour area on the list simply moves into the leaf node.
+            # colour area on the list simply moves into the leaf node. With
+            # `through` the list is a polygon pick and the leaf is the PRISM
+            # through its footprint (E2): back skin, edges and handles under
+            # the ring come along whatever the client's sight test kept.
+            if params.get("through"):
+                faces = pa.leaf_prism(model.vertices, model.faces, faces)
             _split_leaf(model, faces)
             model, existing = _rebuild()
             changed = True
@@ -821,8 +861,35 @@ def picture_areas(args):
             _dissolve(model, entry, origins.get(area_id, ""))
             changed = True
 
+    elif mode == "adopt":
+        mapping = {str(k): str(v) for k, v in (params.get("adopt") or {}).items()}
+        if not mapping:
+            raise ValueError("adopt needs a {material name: area id} mapping")
+        seen = set()
+        for obj in model.objects:
+            for mat in obj.data.materials:
+                if mat is None or mat.name in seen:
+                    continue
+                area_id = mapping.get(mat.name)
+                if not area_id:
+                    continue
+                seen.add(mat.name)
+                wanted = f"{SLOT_PREFIX}{area_id}"
+                if mat.name == wanted:
+                    continue
+                other = bpy.data.materials.get(wanted)
+                if other is not None and other is not mat:
+                    # An orphan of that name would make Blender call ours
+                    # `<wanted>.001` — the orphan moves aside instead.
+                    other.name = f"{wanted}.unused"
+                mat.name = wanted
+                changed = True
+        # The mesh itself is untouched; only the names moved, so the areas
+        # are simply read off the materials again.
+        existing = _existing_areas(model)
+
     else:
-        raise ValueError(f"unknown mode {mode!r} (auto | manual | delete)")
+        raise ValueError(f"unknown mode {mode!r} (auto | manual | delete | adopt)")
 
     for oi, obj in enumerate(model.objects):
         _drop_empty_area_materials(obj)
@@ -836,6 +903,10 @@ def picture_areas(args):
         entry, bbox = _leaf_report(model, leaf_faces)
         areas.append(entry)
         data["leaf_bbox"] = bbox
+        in_leaf = set(leaf_faces)
+        frame_faces = [k for k in range(len(model.faces)) if k not in in_leaf]
+        data["leaf_residual"] = pa.leaf_residual(model.vertices, model.faces,
+                                                 leaf_faces, frame_faces)
     if not changed:
         return data, {}
     out = Path(args["out_dir"]) / "model.glb"

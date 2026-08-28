@@ -113,6 +113,35 @@ THE FIXTURE (glTF y-up, written with the stdlib), `plate_glb(n)`:
 
     run 1 (the landing hook splits the upload)  -> picture_1, 32 faces
     run 2 (`auto` on the file run 1 exported)   -> picture_1, 32 faces
+  R16 (v2 Task 3): the outline the second run reports is computed on the
+  WELDED faces too — 16 boundary edges, not 96 (32 tris x 3 unshared edges).
+
+[I] ADOPT — NAMED MATERIALS BECOME AREAS ON LANDING (spec-bild-props-v2.md E6)
+  `named_glb()`: the n = 2 plate with THREE materials — quads q(0,0) and
+  q(1,1) on "atlas" (the grey/green PNG), the top-left quad q(0,1) on
+  "slot_picture_1" and the bottom-right quad q(1,0) on "glass" (both plain
+  colours, no texture) — one node, three primitives, 8 triangles. UVs as
+  in `plate_glb`: (x + 0.5, 0.5 - y) everywhere.
+  The landing hook on a plain prop (category "decor", no key_areas, not a
+  door) finds material names the slot convention knows (`detect_slots`:
+  `slot_<name>` / bare picture|screen|sign|glass) on a file with no areas
+  yet and runs `adopt`: every such material becomes an area made of ITS
+  faces — plane fit and size from those faces, NO planar UV rewrite, NO
+  atlas backup layer, the material's own node tree kept. The ids are the
+  canonical `<kind>_<k>` (glass* -> glass, everything else -> picture), and
+  a material whose name is not already `slot_<kind>_<k>` is RENAMED to it
+  (a name is data of the container, and every consumer — the renderer's
+  `applySlotMaterials`, delete, rename — addresses an area by exactly that
+  name; a bare "glass" could never be filled):
+    materials  -> {atlas, slot_picture_1, slot_glass_1}, 4 / 2 / 2 tris
+    UVs        -> every vertex still (x + 0.5, 0.5 - y); no TEXCOORD_1
+    areas      -> [picture_1 (adopt, 2 faces, size_m [0.5, 0.5], normal
+                   [0, 0, 1]), glass_1 (adopt, 2 faces, [0.5, 0.5])]
+    gallery    -> two files (the upload + the renamed result), the result
+                  active; slots [{picture_1, image}, {glass_1, material}].
+  An `auto` run afterwards KEEPS them (R14: only `auto`-sourced areas are
+  dissolved; the grey atlas yields nothing new) -> the same two areas.
+  A second `adopt` on that file has nothing left to adopt -> ValueError.
 """
 import json
 import os
@@ -230,6 +259,84 @@ def plate_glb(n: int = 2, bump: float = 0.0) -> bytes:
             {"bufferView": 2, "componentType": 5123, "count": len(indices),
              "type": "SCALAR"},
         ],
+    }
+    js = json.dumps(gltf, separators=(",", ":")).encode()
+    js += b" " * ((4 - len(js) % 4) % 4)
+    total = 12 + 8 + len(js) + 8 + len(blob)
+    return (struct.pack("<III", 0x46546C67, 2, total)
+            + struct.pack("<II", len(js), 0x4E4F534A) + js
+            + struct.pack("<II", len(blob), 0x004E4942) + blob)
+
+
+def named_glb() -> bytes:
+    """The n = 2 plate with THREE materials (part [I]): q(0,0) + q(1,1) on
+    the textured ``atlas``, q(0,1) on ``slot_picture_1``, q(1,0) on the bare
+    ``glass`` — plain colours, no texture, no slot_ prefix on the pane."""
+    n = 2
+    positions, uvs = [], []
+    for j in range(n + 1):
+        for i in range(n + 1):
+            x, y = -0.5 + i / n, -0.5 + j / n
+            positions.append((x, y, 0.0))
+            uvs.append((x + 0.5, 0.5 - y))
+    quads = {}
+    for j in range(n):
+        for i in range(n):
+            a, b = j * (n + 1) + i, j * (n + 1) + i + 1
+            c, d = (j + 1) * (n + 1) + i + 1, (j + 1) * (n + 1) + i
+            quads[(i, j)] = [a, b, c, a, c, d]
+    groups = [("atlas", quads[(0, 0)] + quads[(1, 1)], 0),
+              ("slot_picture_1", quads[(0, 1)], 1),
+              ("glass", quads[(1, 0)], 2)]
+    pos = b"".join(struct.pack("<fff", *p) for p in positions)
+    tex = b"".join(struct.pack("<ff", *t) for t in uvs)
+    idx_blobs = []
+    for _name, indices, _m in groups:
+        raw = b"".join(struct.pack("<H", i) for i in indices)
+        idx_blobs.append(raw + b"\0" * ((4 - len(raw) % 4) % 4))
+    png = atlas_png()
+    png_pad = png + b"\0" * ((4 - len(png) % 4) % 4)
+    blob = pos + tex + b"".join(idx_blobs) + png_pad
+    views = [
+        {"buffer": 0, "byteOffset": 0, "byteLength": len(pos), "target": 34962},
+        {"buffer": 0, "byteOffset": len(pos), "byteLength": len(tex), "target": 34962},
+    ]
+    accessors = [
+        {"bufferView": 0, "componentType": 5126, "count": len(positions),
+         "type": "VEC3", "min": [-0.5, -0.5, 0.0], "max": [0.5, 0.5, 0.0]},
+        {"bufferView": 1, "componentType": 5126, "count": len(positions), "type": "VEC2"},
+    ]
+    prims = []
+    off = len(pos) + len(tex)
+    for (_name, indices, m), raw in zip(groups, idx_blobs):
+        views.append({"buffer": 0, "byteOffset": off, "byteLength": len(indices) * 2,
+                      "target": 34963})
+        accessors.append({"bufferView": len(views) - 1, "componentType": 5123,
+                          "count": len(indices), "type": "SCALAR"})
+        prims.append({"attributes": {"POSITION": 0, "TEXCOORD_0": 1},
+                      "indices": len(accessors) - 1, "material": m})
+        off += len(raw)
+    views.append({"buffer": 0, "byteOffset": off, "byteLength": len(png)})
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "name": "plate"}],
+        "meshes": [{"name": "plate", "primitives": prims}],
+        "materials": [
+            {"name": "atlas", "pbrMetallicRoughness": {
+                "baseColorTexture": {"index": 0}, "metallicFactor": 0.0}},
+            {"name": "slot_picture_1", "pbrMetallicRoughness": {
+                "baseColorFactor": [0.9, 0.9, 0.2, 1.0], "metallicFactor": 0.0}},
+            {"name": "glass", "pbrMetallicRoughness": {
+                "baseColorFactor": [0.2, 0.6, 0.9, 1.0], "metallicFactor": 0.0}},
+        ],
+        "textures": [{"source": 0, "sampler": 0}],
+        "samplers": [{"magFilter": 9728, "minFilter": 9728,
+                      "wrapS": 10497, "wrapT": 10497}],
+        "images": [{"mimeType": "image/png", "bufferView": len(views) - 1, "name": "atlas"}],
+        "buffers": [{"byteLength": len(blob)}],
+        "bufferViews": views,
+        "accessors": accessors,
     }
     js = json.dumps(gltf, separators=(",", ":")).encode()
     js += b" " * ((4 - len(js) % 4) % 4)
@@ -559,6 +666,55 @@ def main() -> int:
     prims = primitives(store.model_path(hp))
     check("…and the mesh really carries them", tri_count(prims, "slot_picture_1") == 32,
           str(tri_count(prims, "slot_picture_1")))
+    sp = store.areas_sidecar_path(store.model_path(hp))
+    extra = json.loads(sp.read_text(encoding="utf-8")) if sp and sp.exists() else {}
+    h_edges = next((x.get("edges") for x in extra.get("areas", []) if x.get("id") == "picture_1"), None)
+    check("R16: the outline of run 2 is computed on the WELDED faces — 16 edges, not 96",
+          len(h_edges or []) == 16, str(len(h_edges or [])))
+
+    print("\n[I] adopt: named materials become areas on landing (E6)")
+    ip = store.create_prop(name="Named plate", category="decor")["id"]
+    check("I: upload lands", store.save_uploaded_glb(ip, named_glb()))
+    files = store.model_gallery(ip).files()
+    check("I: two gallery files — the upload and the adopted result", len(files) == 2,
+          str([f.name for f in files]))
+    prims = primitives(store.model_path(ip))
+    names = set(material_names(store.model_path(ip)))
+    check("I: materials {atlas, slot_picture_1, slot_glass_1} — the bare glass renamed",
+          names == {"atlas", "slot_picture_1", "slot_glass_1"}, str(sorted(names)))
+    check("I: 4 / 2 / 2 triangles",
+          (tri_count(prims, "atlas"), tri_count(prims, "slot_picture_1"),
+           tri_count(prims, "slot_glass_1")) == (4, 2, 2),
+          str((tri_count(prims, "atlas"), tri_count(prims, "slot_picture_1"),
+               tri_count(prims, "slot_glass_1"))))
+    delivered = lambda x, y: (x + 0.5, 0.5 - y)  # noqa: E731
+    check("I: UVs as delivered on every material (no planar rewrite)",
+          all(uv_rule_holds(prims, m, delivered) for m in ("atlas", "slot_picture_1", "slot_glass_1")))
+    check("I: no TEXCOORD_1 (no atlas backup layer was made)",
+          not any(p.get("has_uv1") for p in prims), str([p.get("has_uv1") for p in prims]))
+    meta = file_meta(ip)
+    areas = meta.get("areas") or []
+    check("I: areas [picture_1 (adopt, 2), glass_1 (adopt, 2)]",
+          [(a["id"], a["source"], a["faces"]) for a in areas]
+          == [("picture_1", "adopt", 2), ("glass_1", "adopt", 2)], str(areas))
+    check("I: size_m [0.5, 0.5], normal [0, 0, 1] on both",
+          all(near(a["size_m"][0], 0.5) and near(a["size_m"][1], 0.5)
+              and all(near(x, y) for x, y in zip(a["normal"], [0, 0, 1])) for a in areas), str(areas))
+    check("I: no areas_error, no areas_warning",
+          "areas_error" not in meta and "areas_warning" not in meta)
+    check("I: slots [{picture_1, image}, {glass_1, material}]",
+          store.get_prop(ip)["slots"] == [{"name": "picture_1", "kind": "image"},
+                                          {"name": "glass_1", "kind": "material"}],
+          str(store.get_prop(ip)["slots"]))
+    areas = store.detect_areas(ip, mode="auto")
+    check("I: an auto run keeps the adopted areas (R14) and finds nothing new",
+          [(a["id"], a["source"], a["faces"]) for a in areas]
+          == [("picture_1", "adopt", 2), ("glass_1", "adopt", 2)], str(areas))
+    try:
+        store.detect_areas(ip, mode="adopt")
+        check("I: a second adopt has nothing left and says so", False, "no ValueError")
+    except ValueError as e:
+        check("I: a second adopt has nothing left and says so", "adopt" in str(e), str(e))
 
     print()
     if FAILURES:
