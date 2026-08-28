@@ -19,6 +19,17 @@
  * Neither touches three.js, which is the point: the viewer does the projection
  * and the occlusion raycast (both need a live camera), these two are checkable
  * with `node`.
+ *
+ * TWO PICK MODES live in the viewer's `selectFaces` (`Model3DViewer.tsx`),
+ * both on top of `pointInPolygon`:
+ *   · a SURFACE pick (picture, glass) keeps a triangle only when it faces the
+ *     camera and nothing occludes its centre — the admin rings what they see;
+ *   · a THROUGH pick (the door leaf, spec-bild-props-v2.md E2) keeps every
+ *     triangle whose centre projects inside the ring, whatever it faces and
+ *     whatever is in front of it — the leaf is a body, and the server cuts
+ *     the same prism through the footprint of the list it receives
+ *     (`picture_areas.leaf_prism`), so the client's list is a pick, never
+ *     the geometry truth.
  */
 
 import type { MeshLayoutEntry } from './propTypes'

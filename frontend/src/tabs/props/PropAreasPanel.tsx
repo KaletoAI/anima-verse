@@ -208,8 +208,10 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
       toast(t('Nothing was inside the outline — draw around the surface, facing it.'), 'error')
       return
     }
+    // The door leaf is a BODY (E2): its ring is a prism and the server cuts
+    // the same prism through what it gets. A surface kind is picked by sight.
     void run('draw', () => apiPost(`/world/props/${enc}/areas${q}`,
-      { mode: 'manual', faces, kind }))
+      { mode: 'manual', faces, kind, through: kind === 'leaf' }))
   }
 
   const setKind = (areaId: string, kind: string) => void run('kind',
@@ -414,6 +416,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
           areaOutlines={outlines}
           meshLayout={info?.mesh_layout}
           drawing={!!drawKind}
+          drawThrough={drawKind === 'leaf'}
           onPolygonFaces={onPolygonFaces}
           slots={slots}
           leafBbox={info?.leaf_bbox || null}

@@ -176,7 +176,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint,
   frontal = false, onFrontalChange, keepCamera = false,
-  areaOutlines, slots, meshLayout, drawing = false,
+  areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, leafBbox }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
@@ -292,10 +292,18 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     /** Armed polygon tool: an SVG over the canvas takes the gesture (click =
      *  point, double-click = close, Escape = cancel). Model mode only. */
     drawing?: boolean
+    /** THE PICK IS A PRISM (spec-bild-props-v2.md E2): with it, the ring
+     *  takes EVERY triangle whose centre projects inside it — back faces,
+     *  edges, handles, whatever sits behind the front — with no facing and
+     *  no occlusion test. The door leaf is a body, and a leaf cut as a skin
+     *  is "shut and open at once". Off (a picture, a pane: surfaces) the
+     *  three sight tests below apply. */
+    drawThrough?: boolean
     /** The closed polygon's triangles as FLAT indices in R1 order — every
      *  front-facing, unoccluded triangle whose centre projects inside the
-     *  ring. An empty array means "nothing was hit", which the panel says out
-     *  loud instead of posting. */
+     *  ring (or, with `drawThrough`, every triangle under it). An empty
+     *  array means "nothing was hit", which the panel says out loud instead
+     *  of posting. */
     onPolygonFaces?: (faces: number[]) => void
     /** THE DOOR LEAF (spec-picture-props.md § 6): the box of the model's
      *  `leaf` node in raw model metres, as the server measured it at the
@@ -399,7 +407,11 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
    *  Takes the ring in CANVAS PIXELS plus the canvas size and answers the flat
    *  R1 triangle indices. */
   const selectFacesRef = useRef<((poly: Array<[number, number]>,
-    w: number, h: number) => number[]) | null>(null)
+    w: number, h: number, through: boolean) => number[]) | null>(null)
+  /** Read at the moment the ring closes — a prop value would be the render
+   *  the gesture started in. */
+  const drawThroughRef = useRef(drawThrough)
+  drawThroughRef.current = drawThrough
   /** What the LOADED model's R1 layout is — measured once per load, compared
    *  against the server's `meshLayout` before the tool is armed. */
   const [loadedLayout, setLoadedLayout] = useState<MeshLayoutEntry[] | null>(null)
@@ -464,7 +476,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     setPoly([])
     setPolyCursor(null)
     if (ring.length < 3 || polygonArea(ring) <= 0) return
-    const faces = selectFacesRef.current?.(ring, w, h) || []
+    const faces = selectFacesRef.current?.(ring, w, h, drawThroughRef.current) || []
     onPolygonFacesRef.current?.(faces)
   }
 
@@ -1265,10 +1277,13 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           // Three tests per triangle, all in this camera's frame — the centre
           // projects inside the ring, the face turns towards the camera, and
           // the ray from the camera through that centre reaches it first
-          // (unoccluded). The flat index is the R1 one: meshes by name,
-          // triangles in buffer order, counted straight through.
+          // (unoccluded). With `through` (kind leaf, E2) only the FIRST test
+          // runs: the ring is a prism and takes back faces, edges and
+          // handles under it — the server cuts the same prism through the
+          // footprint of what it gets. The flat index is the R1 one: meshes
+          // by name, triangles in buffer order, counted straight through.
           const selectFaces = (ring: Array<[number, number]>,
-                               vw: number, vh: number): number[] => {
+                               vw: number, vh: number, through: boolean): number[] => {
             const out: number[] = []
             if (ring.length < 3 || vw <= 0 || vh <= 0) return out
             place.updateMatrixWorld(true)
@@ -1309,15 +1324,17 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
                 mesh.localToWorld(b)
                 mesh.localToWorld(c)
                 centre.copy(a).add(b).add(c).multiplyScalar(1 / 3)
-                // Facing the camera: the winding normal against the line of
-                // sight. A back face of the same panel would double every
-                // index and drag the far wall of a box into the selection.
-                normal.copy(ab.subVectors(b, a)).cross(ac.subVectors(c, a))
-                if (normal.dot(toCam.subVectors(camPos, centre)) <= 0) continue
                 const p = centre.clone().project(camera)
                 const sx = ((p.x + 1) / 2) * vw
                 const sy = ((1 - p.y) / 2) * vh
                 if (!pointInPolygon(sx, sy, ring)) continue
+                if (through) { out.push(base + i); continue }
+                // Facing the camera: the winding normal against the line of
+                // sight. A back face of the same panel would double every
+                // index and drag the far wall of a box into the selection —
+                // exactly what a leaf pick WANTS and a surface pick must not.
+                normal.copy(ab.subVectors(b, a)).cross(ac.subVectors(c, a))
+                if (normal.dot(toCam.subVectors(camPos, centre)) <= 0) continue
                 // Unoccluded: the first thing the ray meets has to BE this
                 // triangle. `faceIndex` is three's triangle number in buffer
                 // order — the very number R1 counts.
