@@ -393,29 +393,72 @@ extent, and the deepest of all is 0.185 — the handle's front (0.11) over
 the left jamb's back (-0.075) in the column x 0.075..0.10 the two share,
 which is the model's WHOLE depth.  That is the fixture's second point: a
 rim measured as a fraction of the total depth would measure against the
-handle.  Otsu puts the split between the friezes and the
-rail, so the THICK class is jambs + lintel + rail + handle and the THIN
-class filling + friezes.  Thin cells are the leaf area minus the rail:
-(0.435 * 0.925 - 0.435 * 0.05) / (0.585 * 1.0) ~ 0.65 >= 0.30, and
-0.14 / 0.03 is far past both 1.3 and 0.015 -> a frame exists.
+handle.  Otsu puts the split between the friezes and the rail, so the THICK
+class is jambs + lintel + rail + handle and the THIN class filling +
+friezes.  The thin class therefore holds only the values 0.02 and 0.04 and
+its mean must lie strictly between them; the thick class holds 0.10, 0.12,
+0.15 and 0.185, so its mean must lie between 0.10 and 0.185; and the split
+must fall between 0.04 and 0.10.  Both gates clear with room to spare.
+
+COUNTING THE THIN CELLS — with the ROUNDING CAVEAT that runs through this
+whole fixture.  Three of the boxes have an edge that falls exactly on a
+raster line, and in binary those divisions are not exact: 0.075 / 0.025 =
+2.9999999999999996 (the jambs' inner faces), while 0.4 / 0.025 and
+0.925 / 0.025 ARE exact, so the rail's and the lintel's boundary samples —
+barycentric weights that sum to 1 only to within a rounding unit — land a
+unit BELOW the line and fall into the row underneath.  Structurally:
+
+    columns 4..19 x rows 0..36              16 * 37 = 592 candidate cells
+      (columns 0..3 and 20..23 hold jamb material in every row, rows
+       37..39 the lintel)
+    - the rail's rows 16 and 17 (y 0.400..0.450)      -2 * 16 =  -32
+    - row 18, where the rail's top edge rounds down      -16 =  -16
+    - row 36, where the lintel's bottom edge does        -16 =  -16
+    - the handle, columns 4..5 x rows 19..20             -4  =   -4
+                                                          = 524 thin cells
+
+and FIVE single cells fall the other way, where a column happened to catch
+or miss the boundary sample: +1 (row 18, column 10), -1 (row 15, column
+14), +2 (row 36, columns 8 and 14), +1 (column 3, row 33) = **527 of 960**,
+a thin share of **0.549** >= 0.30.  Those five are why the check asserts
+the share with a tolerance instead of the exact count.
 
 [H3] THE THICK PARTS OF THE LEAF.  The rail spans the full leaf width and
 touches BOTH jambs; the handle hangs off the left jamb as a thick
 peninsula.  Both are thick, so both come out as FRAME cells — and both lie
 INSIDE the leaf, so the bounding rectangle of the remaining cells is
-unaffected: leaf cells still span x 0.075..0.51 and y 0..0.925, and the
-prism of [H5] takes rail and handle along.  This is what the plan's
-measurement demanded ("neither may crop the rectangle"); note that the
-border walk is not what achieves it — see the mutant list above.
+unaffected by them: the coarse leaf cells are columns 3..19 x rows 0..36,
+i.e. x 0.075..0.500 and y 0.0..0.925, and the prism of [H5] takes rail and
+handle along.  This is what the plan's measurement demanded ("neither may
+crop the rectangle"); note that the border walk is not what achieves it —
+see the mutant list above.
 
-[H4] EDGES.  Refinement (fine = 0.005) walks each coarse edge outward
-until the next fine column holds jamb/lintel material, then snaps onto the
-nearest vertex coordinate within +-0.005:
+[H4] EDGES.  Only the RIGHT edge is refined at all; the other three come
+out of the coarse rectangle already final.
+
+  right   0.500 walks outward at fine = 0.005: the columns 0.500..0.505
+          and 0.505..0.510 hold nothing but the right frieze (0.04), the
+          next one holds the right jamb's inner face at x = 0.51 (0.15)
+          and stops the walk.  Two steps -> 0.510.
+  left    0.075 already: the jambs' inner faces at x = 0.075 land in
+          column 2 by the rounding above, so column 3 is a leaf column,
+          and the fine column 0.070..0.075 holds jamb material at once.
+  bottom  0.0 is the silhouette edge (there is no bottom rail): the walk
+          has nowhere to go.
+  top     0.925 already, because the lintel's bottom edge rounds down into
+          row 36 and makes row 36 the last leaf row.
 
     thickness_footprint(...) == ((0.075, 0.0), (0.51, 0.925))
 
-The bottom edge is the silhouette edge itself (no bottom rail) and stays
-at 0.0; the top edge stops under the lintel at 0.925.
+The snap onto the nearest vertex coordinate then moves nothing — all four
+are vertex coordinates already.  THE RESULT DOES NOT HANG ON THE ROUNDING:
+if every boundary cell had fallen the other way the coarse rectangle would
+be x 0.100..0.500, y 0.0..0.900, and the walk plus the snap answer the same
+((0.075, 0.0), (0.51, 0.925)) — the left edge walks 0.100 -> 0.080 (the
+handle is thick but only two of the band's rows tall, so the median keeps
+the walk going) and snaps the last 0.005 onto 0.075, the top walks
+0.900 -> 0.920 and snaps onto 0.925.  That left snap sits at EXACTLY the
+tolerance, which is why ``_snap_edge`` compares against ``fine + _EPS``.
 
 [H5] THE PRISM through that footprint, along +z: every face of the seven
 boxes that stand over the leaf area — filling, four friezes, handle, rail
@@ -1245,8 +1288,26 @@ def part_h():
           and any(close(t, 0.15, 1e-9) for t in thick)
           and any(close(t, 0.12, 1e-9) for t in thick),
           f"min {min(thick)} max {max(thick)}")
+    split, m_thin, m_thick = pa.otsu_split(thick)
+    check("H2: the split falls between the friezes (0.04) and the rail (0.10)",
+          0.04 < split < 0.10, f"{split}")
+    check("H2: the thin class holds only 0.02 and 0.04, so its mean lies "
+          "strictly between them; the thick class holds 0.10..0.185",
+          0.02 < m_thin < 0.04 and 0.10 < m_thick < 0.185,
+          f"m_thin {m_thin} m_thick {m_thick}")
+    check("H2: both gates clear — ratio >= 1.3 and difference >= 0.015",
+          m_thick >= pa.THICK_MIN_RATIO * m_thin
+          and m_thick - m_thin >= pa.THICK_MIN_DIFF_M,
+          f"ratio {m_thick / m_thin:.2f} diff {m_thick - m_thin:.4f}")
+    thin_n = sum(1 for t in thick if t < split)
+    check("H2: 527 of 960 cells thin (524 by the block count + 5 boundary "
+          "cells, see the derivation) -> share 0.549 >= 0.30",
+          abs(thin_n / len(thick) - 527 / 960.0) <= 0.01
+          and thin_n / len(thick) >= pa.LEAF_MIN_SHARE,
+          f"{thin_n} of {len(thick)} = {thin_n / len(thick):.4f}")
 
-    print("  [H3] the border BFS: rail and handle are frame, but INSIDE the leaf")
+    print("  [H3/H4] rail and handle are thick but INSIDE the leaf; only the "
+          "right edge is refined (0.500 -> 0.510)")
     check("H3: footprint (0.075, 0)..(0.51, 0.925) — the rail does not crop it",
           vclose(pa.thickness_footprint(verts, faces, plane, plane["bbox2d"])[0],
                  H_FOOTPRINT[0])

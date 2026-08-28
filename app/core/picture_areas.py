@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 Point = Tuple[float, float, float]
 Face = Tuple[int, int, int]
@@ -753,6 +753,22 @@ def _bin_thickness(samples: Sequence[Tuple[float, float, float]],
              for c in range(nu)] for r in range(nv)]
 
 
+def _raster(vertices: Sequence[Point], faces: Sequence[Face], plane: Dict,
+            bbox2d: Rect2, cell: float,
+            ) -> Tuple[int, int, List[List[Optional[float]]],
+                       List[Tuple[float, float, float]]]:
+    """THE ONE raster both :func:`thickness_map` and
+    :func:`thickness_footprint` are built on — ``(nu, nv, thick, samples)``.
+    The footprint needs the samples again for its edge refinement, and the
+    map is what the smoke asserts; deriving them twice would let the tested
+    raster and the used one drift apart."""
+    (u0, v0), (u1, v1) = bbox2d
+    nu = max(1, int(math.ceil((u1 - u0) / cell)))
+    nv = max(1, int(math.ceil((v1 - v0) / cell)))
+    samples = _surface_samples(vertices, faces, plane, 0.5 * cell)
+    return nu, nv, _bin_thickness(samples, u0, v0, cell, cell, nu, nv), samples
+
+
 def thickness_map(vertices: Sequence[Point], faces: Sequence[Face],
                   plane: Dict, bbox2d: Rect2, *, cell: float) -> Dict:
     """HOW DEEP THE MESH IS, cell by cell over the silhouette.
@@ -769,12 +785,8 @@ def thickness_map(vertices: Sequence[Point], faces: Sequence[Face],
     Returns ``{"nu", "nv", "cell", "thick"}`` — ``thick`` indexed
     ``[iv][iu]``, rows bottom-up in the plane's own v.
     """
-    (u0, v0), (u1, v1) = bbox2d
-    nu = max(1, int(math.ceil((u1 - u0) / cell)))
-    nv = max(1, int(math.ceil((v1 - v0) / cell)))
-    samples = _surface_samples(vertices, faces, plane, 0.5 * cell)
-    return {"nu": nu, "nv": nv, "cell": cell,
-            "thick": _bin_thickness(samples, u0, v0, cell, cell, nu, nv)}
+    nu, nv, thick, _samples = _raster(vertices, faces, plane, bbox2d, cell)
+    return {"nu": nu, "nv": nv, "cell": cell, "thick": thick}
 
 
 def otsu_split(values: Sequence[float]) -> Tuple[float, float, float]:
@@ -811,20 +823,23 @@ def otsu_split(values: Sequence[float]) -> Tuple[float, float, float]:
 
 
 def _frame_cells(thick: List[List[Optional[float]]], nu: int, nv: int,
-                 split: float):
+                 split: float) -> Set[Tuple[int, int]]:
     """The FRAME: the thick cells connected (4-neighbourhood) to a thick cell
     on the raster's outermost row or column. A door's jambs, rails and
     lintel form that ring; a handle bolted to the leaf and a lock rail
     spanning it are thick too, but they hang off the ring and come along
     with it, while an ENCLOSED thick island (or a hole, which is not thick
     at all) does not. Empty cells block the walk like thin ones do: a
-    missing pane is not a frame."""
+    missing pane is not a frame.
+
+    EMPTY when no thick cell reaches the border at all — the caller must
+    treat that as "no frame", not as "everything is leaf"."""
     def is_thick(iu: int, iv: int) -> bool:
         t = thick[iv][iu]
         return t is not None and t >= split
 
-    seen = set()
-    queue = deque()
+    seen: Set[Tuple[int, int]] = set()
+    queue: deque = deque()
     for iv in range(nv):
         for iu in range(nu):
             if (iu in (0, nu - 1) or iv in (0, nv - 1)) and is_thick(iu, iv):
@@ -834,32 +849,35 @@ def _frame_cells(thick: List[List[Optional[float]]], nu: int, nv: int,
     while queue:
         iu, iv = queue.popleft()
         for du, dv in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            nu_, nv_ = iu + du, iv + dv
-            if 0 <= nu_ < nu and 0 <= nv_ < nv and (nu_, nv_) not in seen \
-                    and is_thick(nu_, nv_):
-                seen.add((nu_, nv_))
-                queue.append((nu_, nv_))
+            ju, jv = iu + du, iv + dv
+            if 0 <= ju < nu and 0 <= jv < nv and (ju, jv) not in seen \
+                    and is_thick(ju, jv):
+                seen.add((ju, jv))
+                queue.append((ju, jv))
     return seen
 
 
 def _refine_edge(samples: Sequence[Tuple[float, float, float]], axis: int,
                  edge: float, sign: float, band: Tuple[float, float],
-                 cell: float, fine: float, split: float, bound: float) -> float:
+                 origin: float, cell: float, fine: float, split: float,
+                 bound: float) -> float:
     """Walk ONE coarse edge outward while the next fine column is thin.
 
     The column is ``fine`` wide and reaches across the middle half of the
     other axis only (``THICK_BAND`` of the coarse rectangle), so the top
     rail never has a say about where the left edge is. It counts as thin
-    when at least HALF of the band rows it does touch (rows ``cell`` tall,
-    the raster's own rows) read less than ``split`` — a median, not a
-    minimum, because a handle is a thick peninsula a few rows tall and must
-    not stop the edge. Rows the column does not reach at all say nothing;
-    a column that reaches none is thin, since nothing there is frame.
-    The walk stops after one coarse cell, or at ``bound`` (the silhouette).
+    when at least HALF of the band rows it does touch read less than
+    ``split`` — a median, not a minimum, because a handle is a thick
+    peninsula a few rows tall and must not stop the edge. The rows are the
+    RASTER'S OWN rows of 1b: ``cell`` tall and counted from ``origin``, the
+    silhouette's edge on the other axis, so a column measures against the
+    same cells the coarse rectangle was found in. Rows the column does not
+    reach say nothing; a column that reaches none is thin, since nothing
+    there is frame. The walk stops after one coarse cell, or at ``bound``
+    (the silhouette).
     """
     other = 1 - axis
     band_lo, band_hi = band
-    n_rows = max(1, int(math.ceil((band_hi - band_lo) / cell)))
     limit = edge + sign * cell
     limit = max(limit, bound) if sign < 0 else min(limit, bound)
     strip_lo, strip_hi = min(edge, limit), max(edge, limit)
@@ -869,26 +887,21 @@ def _refine_edge(samples: Sequence[Tuple[float, float, float]], axis: int,
         step = edge + sign * fine
         step = max(step, limit) if sign < 0 else min(step, limit)
         lo, hi = min(edge, step), max(edge, step)
-        dmin: List[Optional[float]] = [None] * n_rows
-        dmax: List[Optional[float]] = [None] * n_rows
+        rows: Dict[int, List[float]] = {}
         for s in strip:
             if not lo <= s[axis] < hi:
                 continue
-            r = int(math.floor((s[other] - band_lo) / cell))
-            if r < 0 or r >= n_rows:
-                continue
-            if dmin[r] is None or s[2] < dmin[r]:
-                dmin[r] = s[2]
-            if dmax[r] is None or s[2] > dmax[r]:
-                dmax[r] = s[2]
-        solid = thin = 0
-        for r in range(n_rows):
-            if dmin[r] is None:
-                continue
-            solid += 1
-            if dmax[r] - dmin[r] < split:   # type: ignore[operator]
-                thin += 1
-        if 2 * thin < solid:
+            r = int(math.floor((s[other] - origin) / cell))
+            span = rows.get(r)
+            if span is None:
+                rows[r] = [s[2], s[2]]
+            else:
+                if s[2] < span[0]:
+                    span[0] = s[2]
+                if s[2] > span[1]:
+                    span[1] = s[2]
+        thin = sum(1 for span in rows.values() if span[1] - span[0] < split)
+        if 2 * thin < len(rows):
             break
         edge = step
     return edge
@@ -899,11 +912,15 @@ def _snap_edge(coords: Sequence[float], edge: float, fine: float) -> float:
     ``edge`` itself. On a MODELLED mesh this reproduces the coincidence line
     "leaf edge = jamb inner face" exactly, which is what lets the edge rule
     of :func:`prism_faces` tell the two apart; on an img2mesh door it is a
-    harmless vertex half a centimetre away."""
+    harmless vertex half a centimetre away.
+
+    The tolerance carries ``_EPS``: a refined edge is ``edge0 ± k * fine``
+    summed step by step, so a vertex exactly ``fine`` away can land a
+    rounding unit outside a bare ``<=`` and lose its snap."""
     best = None
     for c in coords:
         d = abs(c - edge)
-        if d <= fine and (best is None or (d, c) < best):
+        if d <= fine + _EPS and (best is None or (d, c) < best):
             best = (d, c)
     return edge if best is None else best[1]
 
@@ -931,7 +948,10 @@ def thickness_footprint(vertices: Sequence[Point], faces: Sequence[Face],
     3. The FRAME is the thick region touching the border
        (:func:`_frame_cells`); every other cell is leaf-side, the enclosed
        thick ones included — a handle stands proud of the leaf and a lock
-       rail spans its full width, and neither is allowed to crop it.
+       rail spans its full width, and neither is allowed to crop it. When
+       the thick class reaches NO border cell there is no frame around
+       anything and the answer is None — never "the whole silhouette is
+       the leaf", which is the v2 fallback this method replaces.
     4. The coarse rectangle is the bounding box of the leaf cells, clipped
        to the silhouette.
     5. Each side is then refined at ``cell / fine_div``
@@ -951,10 +971,7 @@ def thickness_footprint(vertices: Sequence[Point], faces: Sequence[Face],
     if cell <= _EPS:
         return None
     fine = cell / max(1, int(fine_div))
-    nu = max(1, int(math.ceil(du / cell)))
-    nv = max(1, int(math.ceil(dv / cell)))
-    samples = _surface_samples(vertices, faces, plane, 0.5 * cell)
-    thick = _bin_thickness(samples, u0, v0, cell, cell, nu, nv)
+    nu, nv, thick, samples = _raster(vertices, faces, plane, bbox2d, cell)
 
     flat = [t for row in thick for t in row if t is not None]
     if not flat:
@@ -966,6 +983,8 @@ def thickness_footprint(vertices: Sequence[Point], faces: Sequence[Face],
         return None
 
     frame = _frame_cells(thick, nu, nv, split)
+    if not frame:
+        return None            # a thick class, but no frame AROUND anything
     leaf = [(iu, iv) for iv in range(nv) for iu in range(nu)
             if (iu, iv) not in frame]
     if not leaf:
@@ -981,10 +1000,10 @@ def thickness_footprint(vertices: Sequence[Point], faces: Sequence[Face],
               u_lo + THICK_BAND[1] * (u_hi - u_lo))
     band_v = (v_lo + THICK_BAND[0] * (v_hi - v_lo),
               v_lo + THICK_BAND[1] * (v_hi - v_lo))
-    u_lo = _refine_edge(samples, 0, u_lo, -1.0, band_v, cell, fine, split, u0)
-    u_hi = _refine_edge(samples, 0, u_hi, 1.0, band_v, cell, fine, split, u1)
-    v_lo = _refine_edge(samples, 1, v_lo, -1.0, band_u, cell, fine, split, v0)
-    v_hi = _refine_edge(samples, 1, v_hi, 1.0, band_u, cell, fine, split, v1)
+    u_lo = _refine_edge(samples, 0, u_lo, -1.0, band_v, v0, cell, fine, split, u0)
+    u_hi = _refine_edge(samples, 0, u_hi, 1.0, band_v, v0, cell, fine, split, u1)
+    v_lo = _refine_edge(samples, 1, v_lo, -1.0, band_u, u0, cell, fine, split, v0)
+    v_hi = _refine_edge(samples, 1, v_hi, 1.0, band_u, u0, cell, fine, split, v1)
 
     us = [_dot(plane["u"], p) for p in vertices]
     vs = [_dot(plane["v"], p) for p in vertices]
