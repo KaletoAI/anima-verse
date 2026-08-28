@@ -5764,10 +5764,13 @@ def _generate(prop_id: str, prompt: str, negative: str,
         targets = variant_face_targets(prop_id, variant)
         if not face_num:
             face_num = targets[TARGET_FACES_HIGH_KEY]
-        if not lod_faces and targets[TARGET_FACES_LOW_KEY]:
-            # Sent to every alias; the ones whose schema declares no LOD param
-            # log it and drop it (openai_mesh), and the CPU distance mesh then
-            # reads the same target for its own ratio.
+        if lod_faces is None and targets[TARGET_FACES_LOW_KEY]:
+            # `None` and an EMPTY LIST are different statements (ruling V9):
+            # None = "nobody said", so the variant's budget applies; `[]` = the
+            # dialog's stage toggle is OFF, and switching it off has to switch
+            # something off. Sent to every alias; the ones whose schema
+            # declares no LOD param log it and drop it (openai_mesh), and the
+            # CPU distance mesh then reads the same target for its own ratio.
             lod_faces = [targets[TARGET_FACES_LOW_KEY]]
         # The dial of the file this run replaces is the new file's default
         # (v2 E1; same rule as the upload) — read BEFORE the new file lands.
@@ -6031,7 +6034,10 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
     the PRIMARY variant's image, like every other unqualified read.
 
     ``lod_faces`` additionally asks the mesh alias for reduced stages of the
-    same bake; the smallest one lands as that variant's ``low`` tier."""
+    same bake; the smallest one lands as that variant's ``low`` tier. It is
+    THREE-VALUED (ruling V9): ``None`` lets the variant's ``target_faces_low``
+    decide, an EMPTY LIST switches the stage off explicitly, a number asks for
+    that stage."""
     pid = safe_prop_id(prop_id)
     if not pid or not read_sidecar(pid):
         return False

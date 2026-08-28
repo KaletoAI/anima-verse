@@ -66,23 +66,29 @@ class ModelReplace(ImprovementType):
             # EVERY MODEL VARIANT, not only the primary one
             # (spec-bild-props-v2.md E5): a prop carries several meshes of the
             # same object, and a variant made by the old backend is exactly as
-            # much of a candidate as the first one. The ident names the
-            # variant it addresses; the primary variant keeps the BARE prop
-            # id, so a candidate key written before this still means the same
-            # subject and stays "done".
+            # much of a candidate as the first one.
+            #
+            # THE IDENT ALWAYS STATES THE INDEX, variant 0 included (ruling
+            # V8). "The primary variant" is the first EFFECTIVELY ACTIVE one
+            # and moves with the season tags, so a candidate that named itself
+            # by that would read one variant's mesh and re-mesh another's the
+            # moment a season turned. A bare ident is only ever READ (legacy
+            # keys), never written here.
             for prop in subjects.props():
                 prop_id = prop.get("id") or ""
                 if not prop_id:
                     continue
                 name = prop.get("name") or prop_id
-                for entry in subjects.prop_variants(prop_id):
+                variants = subjects.prop_variants(prop_id)
+                for entry in variants:
                     index = int(entry.get("index") or 0)
-                    ident = subjects.prop_ident(
-                        prop_id, None if entry.get("primary") else index)
+                    ident = subjects.prop_ident(prop_id, index)
                     model = subjects.prop_model(ident)
                     if not (model and model.get("backend") == source):
                         continue
-                    label = (name if entry.get("primary")
+                    # A one-variant prop IS the object — naming its single
+                    # version would be noise in a list of a hundred props.
+                    label = (name if len(variants) < 2
                              else f"{name} · variant {index + 1}")
                     out.append(Candidate(f"prop:{ident}", label))
         # The contract is "every subject NOT yet done".  `validate` already

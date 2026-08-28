@@ -590,7 +590,7 @@ async def prop_variant_generate(prop_id: str, index: int,
     ``mesh_only`` meshes this variant's picture, and the full chain does both.
     """
     from app.core.props import trigger_generation
-    from app.routes.world import _mesh_int, _tier
+    from app.routes.world import _mesh_int, _mesh_lod, _tier
     _variant(prop_id, index)
     data = await _body(request)
     if bool(data.get("mesh_only")) and bool(data.get("image_only")):
@@ -607,6 +607,8 @@ async def prop_variant_generate(prop_id: str, index: int,
         mesh_only=bool(data.get("mesh_only")),
         image_only=bool(data.get("image_only")),
         tier=_tier(data.get("tier")),
-        lod_faces=_mesh_int(data.get("lod_faces")) or None,
+        # Three-valued (ruling V9): absent = the variant's own low budget may
+        # apply, `[]` = the dialog switched the stage OFF, a number = that one.
+        lod_faces=_mesh_lod(data),
         variant=index)
     return {"status": "generating" if started else "already_running"}

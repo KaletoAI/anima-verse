@@ -177,8 +177,13 @@ PROP_VARIANT_SEP = "#"
 
 
 def split_prop_ident(ident: str) -> Tuple[str, Optional[int]]:
-    """``"<prop id>#<index>"`` → ``(prop id, index)``; a bare id →
-    ``(prop id, None)`` = the primary variant.
+    """``"<prop id>#<index>"`` → ``(prop id, index)``; a BARE id →
+    ``(prop id, None)``, which every reader resolves to the PRIMARY variant.
+
+    A bare id is the LEGACY shape (ruling V8): candidate keys written before
+    variants were addressable, and they must keep naming what they named —
+    "whichever variant this prop serves unqualified". Nothing writes one any
+    more, :func:`prop_ident` always states the index.
 
     Junk behind the separator is NOT an error: an ident is a stored candidate
     key, and a hand-edited one must fall back to the primary variant rather
@@ -194,10 +199,18 @@ def split_prop_ident(ident: str) -> Tuple[str, Optional[int]]:
 
 def prop_ident(prop_id: str, variant: Optional[int] = None) -> str:
     """The subject ident of ONE variant — the inverse of
-    :func:`split_prop_ident`. The primary variant gets the BARE id, so a
-    candidate key written before variants existed still names the same
-    thing."""
-    return prop_id if not variant else f"{prop_id}{PROP_VARIANT_SEP}{variant}"
+    :func:`split_prop_ident`.
+
+    THE INDEX IS ALWAYS STATED, index 0 included (ruling V8). Index 0 is NOT
+    the same subject as the bare id: the primary variant is the first
+    EFFECTIVELY ACTIVE one, which moves with the season tags and the on/off
+    toggles — so a bare ident for variant 0 would read the primary's mesh, be
+    labelled "variant 1" and re-mesh whatever is primary today. ``None`` still
+    answers with the bare id, because that IS "the primary one, whichever it
+    is" — the shape legacy candidate keys carry."""
+    if variant is None:
+        return prop_id
+    return f"{prop_id}{PROP_VARIANT_SEP}{int(variant)}"
 
 
 def prop_variants(prop_id: str) -> List[Dict[str, Any]]:

@@ -920,6 +920,31 @@ def _mesh_int(val) -> int:
         return 0
 
 
+#: Sentinel of "the body did not mention lod_faces at all" — the ONE thing an
+#: int cannot say. See :func:`_mesh_lod`.
+_LOD_ABSENT = object()
+
+
+def _mesh_lod(data: Dict[str, Any], key: str = "lod_faces") -> Any:
+    """The requested LOD stage of a mesh run, THREE-VALUED (ruling V9).
+
+    ``None`` — the body said nothing, and the store may fall back to whatever
+    the subject states for its distance mesh (a prop variant's
+    ``target_faces_low``). An EMPTY LIST — the caller switched the stage OFF
+    explicitly, and nothing is derived. A number — that stage is asked for.
+
+    Without the distinction a dialog's "also bake a low stage" checkbox would
+    stop controlling anything the moment its subject carried a budget:
+    unchecking it sends no value, and "no value" used to mean "decide for me".
+    """
+    if key not in data or data.get(key) is None:
+        return None
+    raw = data.get(key)
+    if isinstance(raw, (list, tuple)):
+        return [n for n in (_mesh_int(v) for v in raw) if n]
+    return _mesh_int(raw) or []
+
+
 def _tier(val) -> str:
     """Requested resolution tier from a body/form field ('' = the default
     tier). Unknown names are not rejected — the store answers with what it
@@ -1856,12 +1881,15 @@ def props_admin() -> Dict[str, Any]:
     the available backends. ``image_backends`` carry their resolved ``prop``
     use-case style so the dialog can show and edit the COMPLETE final source
     prompt (final-prompt rule); ``mesh_backends`` are the rig-'none' img2mesh
-    aliases."""
+    aliases and ``mesh_default`` the admin's configured one among them ('' =
+    none) — the tab shows THAT backend's face count as the placeholder behind
+    a variant's face budget, i.e. the number a run would really start on."""
     from app.core.props import (compose_prompt, is_pending, list_props,
                                 pending_variants)
     from app.core.model3d import list_mesh_backends
     from app.imagegen.service import get_image_service
     svc = get_image_service()
+    mesh = list_mesh_backends("none")
     image_backends = []
     try:
         for b in svc.list_available_backends(media="image"):
@@ -1883,7 +1911,8 @@ def props_admin() -> Dict[str, Any]:
             # aggregate the library row shows.
             "generating_variants": pending_variants(),
             "image_backends": image_backends,
-            "mesh_backends": list_mesh_backends("none").get("backends", [])}
+            "mesh_backends": mesh.get("backends", []),
+            "mesh_default": mesh.get("default", "")}
 
 
 @router.post("/props/generate")
@@ -1927,7 +1956,7 @@ def _prop_generate_sync(data: Any) -> Dict[str, Any]:
                         face_num=_mesh_int(data.get("face_num")) or None,
                         texture_size=_mesh_int(data.get("texture_size")) or None,
                         tier=_tier(data.get("tier")),
-                        lod_faces=_mesh_int(data.get("lod_faces")) or None)
+                        lod_faces=_mesh_lod(data))
     return {"status": "generating", "prop": prop}
 
 

@@ -156,7 +156,8 @@ from app.core import paths  # noqa: E402
 paths.init(WORLD)
 
 from app.core import props as store  # noqa: E402
-from app.core.model_store import write_sidecar  # noqa: E402
+from app.core.model_store import (read_sidecar as read_model_sidecar,  # noqa: E402
+                                  write_sidecar)
 from app.core.scene_recipe import _prop_models  # noqa: E402
 
 FAILURES = []
@@ -1261,6 +1262,34 @@ def face_targets_section() -> None:
           MESH_KWARGS and MESH_KWARGS[-1].get("face_num") == 5000,
           str(MESH_KWARGS[-1:]))
 
+    # RULING V9: "no stage" is a STATEMENT, and it is an empty list — not the
+    # absence of one. Without the distinction the dialog's "also bake a low
+    # stage" checkbox would stop controlling anything for a variant that
+    # states a low budget: unchecking it sends nothing, and nothing used to
+    # mean "decide for me".
+    MESH_KWARGS.clear()
+    store._generate(lantern, "", "", "", "fake-mesh", lod_faces=[],
+                    mesh_only=True, variant=0)
+    check("lod_faces [] switches the stage OFF — nothing is derived",
+          MESH_KWARGS and MESH_KWARGS[-1].get("lod_faces") == [],
+          str(MESH_KWARGS[-1:]))
+    MESH_KWARGS.clear()
+    store._generate(lantern, "", "", "", "fake-mesh", mesh_only=True, variant=0)
+    check("...while `None` still derives the variant's 2,000",
+          MESH_KWARGS and list(MESH_KWARGS[-1].get("lod_faces") or []) == [2000],
+          str(MESH_KWARGS[-1:]))
+
+    # The route is where the two shapes have to survive the JSON body.
+    from app.routes.world import _mesh_lod
+    check("the route reads an ABSENT lod_faces as None",
+          _mesh_lod({}) is None and _mesh_lod({"lod_faces": None}) is None)
+    check("...an empty list as the explicit OFF",
+          _mesh_lod({"lod_faces": []}) == [], str(_mesh_lod({"lod_faces": []})))
+    check("...and a number as that one stage",
+          _mesh_lod({"lod_faces": 3000}) == 3000
+          and _mesh_lod({"lod_faces": [3000, 0]}) == [3000],
+          str(_mesh_lod({"lod_faces": 3000})))
+
     print("\n[21c] the improvement engine inherits the same default")
     from app.core.improvements.types import subjects
     MESH_KWARGS.clear()
@@ -1272,6 +1301,39 @@ def face_targets_section() -> None:
           subjects.split_prop_ident(f"{lantern}#2") == (lantern, 2)
           and subjects.split_prop_ident(lantern) == (lantern, None),
           str(subjects.split_prop_ident(f"{lantern}#2")))
+    # RULING V8: index 0 is STATED, never collapsed into the bare id. The
+    # primary variant is the first EFFECTIVELY ACTIVE one — it moves with the
+    # season tags — so "variant 0" and "whichever one is primary" are two
+    # different subjects, and a candidate that confused them would read one
+    # mesh and re-mesh another's.
+    check("the ident of variant 0 is NOT the bare id",
+          subjects.prop_ident(lantern, 0) == f"{lantern}#0"
+          and subjects.prop_ident(lantern, 0) != lantern,
+          subjects.prop_ident(lantern, 0))
+    check("...only `None` answers with the bare id — the LEGACY shape",
+          subjects.prop_ident(lantern) == lantern, subjects.prop_ident(lantern))
+    check("...and a legacy bare id still resolves to the PRIMARY variant",
+          subjects.split_prop_ident(lantern)[1] is None
+          and subjects.prop_model(lantern) == subjects.prop_model(f"{lantern}#0"),
+          str(subjects.split_prop_ident(lantern)))
+
+    # …and the candidate list states it too: a two-variant prop whose SECOND
+    # variant is the one made by the old backend must hand out `#1`.
+    from app.core.improvements.types.model_replace import ModelReplace
+    pair = store.create_prop(name="Pair")["id"]
+    put_mesh(pair, 0)
+    put_mesh(pair, store.target_variant(pair))              # variant 1
+    for i in (0, 1):
+        g = store.model_gallery(pair, i)
+        f = g.find("full", fallback=False)
+        meta = read_model_sidecar(f)
+        meta["backend"] = "old-mesh" if i == 1 else "new-mesh"
+        write_sidecar(f, meta)
+    keys = [c.key for c in ModelReplace().find_candidates(
+        {"subject": "prop", "source_backend": "old-mesh",
+         "target_backend": "new-mesh"})]
+    check("model_replace names the VARIANT it addresses, index and all",
+          keys == [f"prop:{pair}#1"], str(keys))
 
     print("\n[21d] the distance mesh turns the low target into a ratio")
     RATIOS: list = []
