@@ -920,11 +920,6 @@ def _mesh_int(val) -> int:
         return 0
 
 
-#: Sentinel of "the body did not mention lod_faces at all" — the ONE thing an
-#: int cannot say. See :func:`_mesh_lod`.
-_LOD_ABSENT = object()
-
-
 def _mesh_lod(data: Dict[str, Any], key: str = "lod_faces") -> Any:
     """The requested LOD stage of a mesh run, THREE-VALUED (ruling V9).
 
@@ -2161,8 +2156,10 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     {prompt?, negative?, image_backend?, mesh_backend?, face_num?,
     texture_size?, tier?, lod_faces?} — empty prompt = composed from the
     stored description/name). ``lod_faces`` asks the mesh alias for a reduced
-    stage of the same bake, which lands as the ``low`` variant.
-    ``mesh_only`` re-meshes the
+    stage of the same bake, which lands as the ``low`` variant; it is
+    three-valued (ruling V9, :func:`_mesh_lod`) — absent lets the target
+    variant's own ``target_faces_low`` decide, ``[]`` is the caller's explicit
+    "no stage". ``mesh_only`` re-meshes the
     existing source image; ``image_only`` renders a new source image and
     stops (re-meshing is its own step). Background job — poll /world/props
     for pending."""
@@ -2185,7 +2182,7 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               mesh_only=bool(data.get("mesh_only")),
                               image_only=bool(data.get("image_only")),
                               tier=_tier(data.get("tier")),
-                              lod_faces=_mesh_int(data.get("lod_faces")) or None):
+                              lod_faces=_mesh_lod(data)):
         return {"status": "already_running"}
     return {"status": "generating"}
 

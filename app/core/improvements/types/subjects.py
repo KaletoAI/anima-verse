@@ -169,10 +169,11 @@ def props() -> List[Dict[str, Any]]:
 
 #: What separates a prop id from the model VARIANT a candidate addresses.
 #: A prop carries several meshes of the same object (E2.3) and the improvement
-#: engine may re-generate any of them (spec-bild-props-v2.md E5), so the
-#: subject ident has to be able to name one — while a BARE id keeps meaning
-#: the primary variant, which is what every unqualified read in the prop store
-#: means as well.
+#: engine may re-generate any of them (spec-bild-props-v2.md E5), so every
+#: ident WRITTEN here names its variant by index — variant 0 included (ruling
+#: V8). A bare id is the LEGACY shape only: it is still READ, as "whichever
+#: variant this prop serves unqualified", so candidate keys stored before
+#: variants were addressable keep naming what they named.
 PROP_VARIANT_SEP = "#"
 
 

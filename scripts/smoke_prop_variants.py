@@ -1279,16 +1279,49 @@ def face_targets_section() -> None:
           MESH_KWARGS and list(MESH_KWARGS[-1].get("lod_faces") or []) == [2000],
           str(MESH_KWARGS[-1:]))
 
-    # The route is where the two shapes have to survive the JSON body.
+    # The route is where the shapes have to survive the JSON body — all four
+    # of them, because the collapse that broke this ruling happened in the
+    # PARSER and not in the store (`_mesh_int([])` is 0, and `0 or None` is
+    # None: the explicit OFF became "nobody said").
     from app.routes.world import _mesh_lod
     check("the route reads an ABSENT lod_faces as None",
-          _mesh_lod({}) is None and _mesh_lod({"lod_faces": None}) is None)
-    check("...an empty list as the explicit OFF",
-          _mesh_lod({"lod_faces": []}) == [], str(_mesh_lod({"lod_faces": []})))
+          _mesh_lod({}) is None, str(_mesh_lod({})))
+    check("...an explicit null as None as well — both mean 'nobody said'",
+          _mesh_lod({"lod_faces": None}) is None,
+          str(_mesh_lod({"lod_faces": None})))
+    check("...an empty list as the explicit OFF, NOT as None",
+          _mesh_lod({"lod_faces": []}) == []
+          and _mesh_lod({"lod_faces": []}) is not None,
+          str(_mesh_lod({"lod_faces": []})))
     check("...and a number as that one stage",
           _mesh_lod({"lod_faces": 3000}) == 3000
           and _mesh_lod({"lod_faces": [3000, 0]}) == [3000],
           str(_mesh_lod({"lod_faces": 3000})))
+
+    # …and EVERY prop generate route has to go through it. This is a source
+    # check on purpose: the ruling survived one fix round in two of the three
+    # routes because each parses its own body, and a store-level test cannot
+    # see a route that never calls the store the same way. The building and
+    # room routes are deliberately not in here — their subjects carry no face
+    # budget, so "off" and "absent" mean the same thing to them.
+    import re as _re
+    routes = {"app/routes/world.py": ("prop_regenerate", "_prop_generate_sync"),
+              "app/routes/prop_variants.py": ("prop_variant_generate",)}
+    stale = []
+    for path, funcs in routes.items():
+        src = (Path(__file__).resolve().parents[1] / path).read_text()
+        for func in funcs:
+            i = src.find(f"def {func}(")
+            if i < 0:
+                stale.append(f"{path}:{func} not found")
+                continue
+            body = src[i:i + 3000]
+            body = body[:body.find("\n@router") if "\n@router" in body else None]
+            call = _re.search(r"lod_faces=([^,\n)]+)", body)
+            if not call or "_mesh_lod" not in call.group(1):
+                stale.append(f"{path}:{func} -> {call and call.group(1)}")
+    check("every PROP generate route parses lod_faces with _mesh_lod",
+          not stale, "; ".join(stale))
 
     print("\n[21c] the improvement engine inherits the same default")
     from app.core.improvements.types import subjects
