@@ -17,6 +17,10 @@ export interface PlaceEntry {
    *  IN PLACE by `deriveRoomSpots` / `reliftScene` — a seat is never copied
    *  out of here, so a held reference follows the ground. */
   slots: THREE.Vector3[];
+  /** The room this place belongs to (`markers[].room_id`). The map it hangs
+   *  in is keyed by the room too — but under the room's NAME as well as its
+   *  id — so a consumer that has to compare rooms reads the id from here. */
+  roomId: string;
   /** The place type — the pose vocabulary this marker speaks. */
   group: string;
   /** Facing in degrees, tile-local like every payload angle. */

@@ -87,7 +87,11 @@ logger = get_logger(__name__)
 #: a prop tagged ``walkable`` carry the height lattice their mesh was baked
 #: into (``surface``, plus ``walkable`` on the prop), so a figure stands on
 #: the rock the model shows instead of on the land under it.
-SCENE_RECIPE_VERSION = 7
+#: 8 (2026-08-28): a PROP MARKER NAMES ITS PLACEMENT (``markers[].anchor``) —
+#: the anchor its mesh is put on the ground under, so the seat rises with the
+#: bench on a slope instead of by the relief at its own point, and the only
+#: link marker → mesh a renderer has (``models[].id`` is the shared prop id).
+SCENE_RECIPE_VERSION = 8
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):

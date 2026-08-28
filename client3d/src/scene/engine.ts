@@ -96,6 +96,12 @@ export class Engine {
    *  is the budget the render loop already has. `main.ts` picks the seatable
    *  props with it. */
   pointerAt: { x: number; y: number } | null = null;
+  /** Counts up on EVERY write to `pointerAt`, the leave included. A frame
+   *  hook that picks under the cursor compares it with the value it last
+   *  probed and skips the raycast entirely while the pointer stands still —
+   *  the dirty flag for `pointerAt`, kept here so there is one writer of
+   *  both. Never negative, so a caller may use −1 to force the next probe. */
+  pointerSeq = 0;
   /** Asked BEFORE onPick on a left click (E3-T1): true = the click hit a figure
    *  and is used up, so no tile pick follows. */
   pickFigure: ((x: number, y: number) => boolean) | null = null;
@@ -376,6 +382,7 @@ export class Engine {
     });
     el.addEventListener('pointermove', (e) => {
       this.pointerAt = { x: e.clientX, y: e.clientY };
+      this.pointerSeq += 1;
       if (this.orbiting) {
         const dx = e.clientX - this.orbitLast.x;
         const dy = e.clientY - this.orbitLast.y;
@@ -434,6 +441,7 @@ export class Engine {
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     container.addEventListener('pointerleave', () => {
       this.pointerAt = null;
+      this.pointerSeq += 1;
       this.onHover?.(null);
     });
   }

@@ -8089,10 +8089,16 @@ Wert: (1) die Gelände-Hebung von § A16.9 wird DORT abgetastet — das Mesh ste
 auf dem Boden unter seinem Anker, ein an seinem eigenen Punkt gehobener Sitz
 weicht am Hang um genau das Relief zwischen beiden Punkten ab; (2) es ist die
 EINZIGE Verbindung Marker → Mesh, denn `models[].id` ist die Prop-ID und
-gehört jeder Kopie der Bank. Handrechnung:
+gehört jeder Kopie der Bank. `SCENE_RECIPE_VERSION` steht deshalb auf **8** —
+der Payload ändert sich bei unveränderten Daten, also muss die Signatur sich
+bewegen, sonst behielte jeder Client seine alte Szene bis zum nächsten
+Speichern des Ortes. Ein Prop-Marker OHNE `anchor` (eine noch zwischen-
+gespeicherte Szene von vor der Änderung) bekommt im 3D-Client den alten Ring
+zurück, statt gar kein Klickziel zu haben. Handrechnung:
 `client3d/scripts/smoke_place_lift.mjs` [1] (Anker 1,0 / Marker 1,4 / Datum
 0,25 → Hebung 0,75 statt 1,15), Payload-Seite
-`scripts/smoke_scene_recipe.py` [9a].
+`scripts/smoke_scene_recipe.py` [9a]/[7i], Ziel-Aufteilung
+`client3d/scripts/smoke_places_client.mjs` [7]/[8].
 
 **Slots — Geometrie nur im Rezept** (`scene_recipe.marker_slots`, rein):
 die `capacity` Plätze liegen mittig um den Marker auf der Achse QUER zur

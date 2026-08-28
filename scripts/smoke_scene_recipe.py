@@ -4471,7 +4471,11 @@ def test_surface_specs() -> None:
     the numbers of the lattice are the bake's, and the recipe hands them on
     character for character:
 
-    * ``SCENE_RECIPE_VERSION`` is 6, so every client re-fetches once;
+    * ``SCENE_RECIPE_VERSION`` is 8, so every client re-fetches once — the
+      constant is the payload's own code version and moves with EVERY change
+      to what the composer answers for unchanged data (6 = these baked
+      surfaces, 7 = markers speaking place types, 8 = the prop marker naming
+      its placement's ``anchor``, 2026-08-28);
     * a room whose meta carries ``surface`` gives the block to its ``room``
       spec unchanged, and a room whose meta carries none gets no field;
     * a prop tagged ``walkable`` gets ``walkable: True`` and — only if its
@@ -4482,7 +4486,8 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 7 (markers speak place types)", scene_recipe.SCENE_RECIPE_VERSION == 7,
+    check("code_version 8 (a prop marker names its placement's anchor)",
+          scene_recipe.SCENE_RECIPE_VERSION == 8,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────

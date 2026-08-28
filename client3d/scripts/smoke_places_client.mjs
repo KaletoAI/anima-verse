@@ -41,6 +41,30 @@
  *   [6] an entry WITHOUT slots (a payload marker that named none) answers
  *       `undefined` for a numbered slot and for a pair alike — total, never
  *       a throw and never a made-up point; the callers guard.
+ *
+ * WHICH TARGET A PLACE GETS (`scene/placeGlyphs.ts`, ruling 2026-08-28)
+ * --------------------------------------------------------------------
+ * Since the prop mesh itself takes the seat's click, the ring and the mesh
+ * split the offered places between them — every place must end up with
+ * exactly one target, and none with two.
+ *
+ *   [7] `buildGlyphs` draws a ring for
+ *         - a ROOM marker (`fixed: false`)                        -> yes
+ *         - a PROP marker with an `anchor` (its mesh is the target) -> no
+ *         - a PROP marker WITHOUT one (a payload from before the field:
+ *           `pickableProps` cannot find its mesh, so a ring is the only
+ *           target it can have)                                   -> yes
+ *       …and `skipPlaceId` still removes the place the avatar itself holds.
+ *       Three offers, two rings, and their `userData.placeId` are the room
+ *       marker's and the anchor-less prop marker's.
+ *   [8] `pickableProps` keys on ROOM + ANCHOR, not on the anchor alone: an
+ *       anchor is a metre point in the room's own frame, so a bench in the
+ *       same corner of two rooms carries the same pair. Two entries at
+ *       anchor (1, 2), one in room "a" and one in room "b", against ONE
+ *       placement in room "a" -> one pickable prop with ONE place, "a/seat".
+ *       An entry without an anchor is never matched (it is a room marker),
+ *       and a placement whose mesh has not loaded (`object: null`) is
+ *       nothing to click.
  */
 
 // Self-bundling guard — esbuild is required to resolve TypeScript imports
@@ -87,6 +111,16 @@ async function main() {
       + (ok ? '' : `  (expected ${want.join(', ')})`))
     if (!ok) FAILED.push(label)
   }
+  /** …and the same for a plain LIST of values — `check` above compares a
+   *  `Vector3` against three numbers and cannot say anything about the ids
+   *  the ring/prop targets carry. */
+  function checkList(label, got, want) {
+    const ok = Array.isArray(got) && got.length === want.length
+      && got.every((v, i) => v === want[i])
+    console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}: ${JSON.stringify(got)}`
+      + (ok ? '' : `  (expected ${JSON.stringify(want)})`))
+    if (!ok) FAILED.push(label)
+  }
   function checkTrue(label, ok) {
     console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}`)
     if (!ok) FAILED.push(label)
@@ -117,6 +151,55 @@ async function main() {
   const bare = { ...entry, slots: [] }
   checkTrue('slotFor(bare, 0) === undefined', slotFor(bare, 0) === undefined)
   checkTrue("slotFor(bare, 'pair') === undefined", slotFor(bare, 'pair') === undefined)
+
+  // --- the two targets a place can have (ruling 2026-08-28) ----------------
+  const { buildGlyphs, pickableProps } = await import('../src/scene/placeGlyphs.ts')
+  /** One place entry of a room's marker map. Only the fields the two
+   *  functions read are set — the rest is `slotFor`'s business above. */
+  const place = (roomId, x, z, extra) => ({
+    roomId, group: 'seat', slots: [new THREE.Vector3(x, 0, z)],
+    drop: 0, offsetY: 0, level: 0, lift: 0, liftAt: { x, z }, ...extra,
+  })
+  /** One offer of `GET /play/places` — free slot 0, as the fixtures need. */
+  const offer = (id) => ({ id, label: id, group: 'seat', capacity: 1,
+    free: 1, free_slots: [0], poses: [] })
+
+  console.log('[7] rings: room markers and anchor-less prop markers only')
+  const glyphEntries = new Map([
+    ['r1', place('a', 1, 1)],
+    ['p1', place('a', 2, 2, { fixed: true, anchor: [2, 2] })],
+    ['p2', place('a', 3, 3, { fixed: true })],
+  ])
+  const glyphOffers = [offer('r1'), offer('p1'), offer('p2')]
+  const rings = buildGlyphs(glyphEntries, glyphOffers, '')
+  const ringIds = rings.children.map((m) => m.userData.placeId).sort()
+  checkList('two rings: the room marker and the anchor-less prop marker',
+    ringIds, ['p2', 'r1'])
+  const skipped = buildGlyphs(glyphEntries, glyphOffers, 'r1')
+  checkList('...and the place the avatar holds still loses its ring',
+    skipped.children.map((m) => m.userData.placeId), ['p2'])
+
+  console.log('[8] pickableProps keys on ROOM + anchor')
+  const propEntries = new Map([
+    ['a/seat', place('a', 1, 2, { fixed: true, anchor: [1, 2] })],
+    ['b/seat', place('b', 1, 2, { fixed: true, anchor: [1, 2] })],
+    ['a/room', place('a', 4, 4)],
+  ])
+  const mesh = new THREE.Object3D()
+  const picked = pickableProps([{ roomId: 'a', anchor: [1, 2], object: mesh }],
+    propEntries, [offer('a/seat'), offer('b/seat'), offer('a/room')])
+  checkTrue('one pickable prop', picked.length === 1)
+  checkList('...carrying ONLY the place of its own room',
+    picked[0].places.map((p) => p.id), ['a/seat'])
+  checkList('...at that place’s free slot point',
+    [picked[0].places[0].free.length,
+     picked[0].places[0].free[0].x, picked[0].places[0].free[0].z], [1, 1, 2])
+  checkTrue('a placement whose mesh has not loaded is nothing to click',
+    pickableProps([{ roomId: 'a', anchor: [1, 2], object: null }],
+      propEntries, [offer('a/seat')]).length === 0)
+  checkTrue('a room in which nothing is free offers no prop',
+    pickableProps([{ roomId: 'a', anchor: [1, 2], object: mesh }],
+      propEntries, []).length === 0)
 
   if (FAILED.length) {
     console.error(`\n${FAILED.length} check(s) FAILED: ${FAILED.join(', ')}`)

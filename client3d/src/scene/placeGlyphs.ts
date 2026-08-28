@@ -52,9 +52,17 @@ export function glyphColour(group: string): number {
  *  one the avatar itself holds; its rings would sit under the avatar's own
  *  feet. A place ON a prop (`entry.fixed`, i.e. the payload's
  *  `source: "prop"`) is drawn by nothing here: its mesh is the target, see
- *  the header. Every mesh carries `userData.placeId` for `hitPlace`. ONE
- *  geometry and one material per colour for the whole group —
- *  `disposeGlyphs` frees them once. */
+ *  the header.
+ *
+ *  THE FALLBACK: a prop marker WITHOUT an `anchor` keeps its ring. That is a
+ *  payload from before the anchor field (a scene a client cached across the
+ *  change) — `pickableProps` cannot find its mesh, so taking the ring away
+ *  too would leave the place with no target at all. A place one cannot click
+ *  is worse than a ring in front of a bench.
+ *
+ *  Every mesh carries `userData.placeId` for `hitPlace`. ONE geometry and one
+ *  material per colour for the whole group — `disposeGlyphs` frees them
+ *  once. */
 export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers: PlaceOffer[],
                             skipPlaceId = ''): THREE.Group {
   const group = new THREE.Group();
@@ -65,7 +73,7 @@ export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers
   for (const offer of offers) {
     if (offer.id === skipPlaceId || offer.free <= 0) continue;
     const entry = entries.get(offer.id);
-    if (!entry || entry.fixed) continue;
+    if (!entry || (entry.fixed && entry.anchor)) continue;
     const colour = glyphColour(offer.group);
     let material = materials.get(colour);
     if (!material) {
@@ -104,12 +112,14 @@ export interface PickableProp {
   places: PlacePick[];
 }
 
-/** The two facts `pickableProps` needs about a mounted placement, so this
- *  module stays clear of `scene/tiles`: where it stands and what was drawn
- *  there. `anchor` is the payload's own `models[].anchor`, tile-local — the
- *  link the markers name (`PlaceEntry.anchor`); `object` is null while the
- *  mesh has not loaded, and a prop without a mesh is nothing to click. */
+/** The three facts `pickableProps` needs about a mounted placement, so this
+ *  module stays clear of `scene/tiles`: which room it stands in, where in it,
+ *  and what was drawn there. `anchor` is the payload's own `models[].anchor`,
+ *  tile-local — the link the markers name (`PlaceEntry.anchor`); `object` is
+ *  null while the mesh has not loaded, and a prop without a mesh is nothing
+ *  to click. */
 export interface PlacedPropRef {
+  roomId: string;
   anchor: [number, number];
   object: THREE.Object3D | null;
 }
@@ -118,11 +128,15 @@ export interface PlacedPropRef {
  * WHICH MOUNTED PROPS TAKE A SEAT CLICK (ruling 2026-08-28) — every placement
  * that carries at least one place with a FREE slot.
  *
- * The link is the placement ANCHOR: `models[].anchor` and the prop marker's
- * `anchor` are the same two numbers out of the same recipe placement, rounded
- * once by the server, so they compare exactly; `models[].id` could not do the
- * job, being the PROP id that every copy of a bench shares. A room marker
- * carries no anchor and is never matched.
+ * The link is the ROOM plus the placement ANCHOR: `models[].anchor` and the
+ * prop marker's `anchor` are the same two numbers out of the same recipe
+ * placement, rounded once by the server, so they compare exactly;
+ * `models[].id` could not do the job, being the PROP id that every copy of a
+ * bench shares. The room is in the key because an anchor is only unique
+ * WITHIN one room — it is a metre point in the room's own frame, so a bench
+ * standing in the same corner of two rooms carries the same pair, and anchor
+ * alone would cross-link the two. A room marker carries no anchor and is
+ * never matched.
  *
  * `offers` is the server's word on occupancy (`GET /play/places`) and decides
  * both which places count and WHICH slots of them are free — the same data
@@ -142,7 +156,7 @@ export function pickableProps(props: PlacedPropRef[],
     if (!prop.object) continue;
     const places: PlacePick[] = [];
     for (const [id, entry] of entries) {
-      if (!entry.anchor) continue;
+      if (!entry.anchor || entry.roomId !== prop.roomId) continue;
       if (entry.anchor[0] !== prop.anchor[0] || entry.anchor[1] !== prop.anchor[1]) continue;
       const slots = free.get(id);
       if (!slots) continue;

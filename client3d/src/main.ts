@@ -914,7 +914,19 @@ async function startApp(username: string, role: string) {
     for (const tile of tiles.values()) {
       if (heightMoved) {
         const datumMove = redatumTile(tile);
-        if (tile.placedModels) reliftScene(tile, datumMove);
+        // AND THE SITTER FOLLOWS ITS SEAT (review finding 2026-08-28). Every
+        // figure but one re-reads its slot on the next worldmap poll
+        // (`computeNpcStates` → `slotFor`), so a re-lifted seat carries it
+        // along by itself. The STEERED avatar does not: it is snapped onto
+        // the point once and then held by `seatedKey`, so it would keep the
+        // height the seat had when it sat down and end up hanging over — or
+        // buried in — the bench that has just risen under it. Dropping the
+        // key is the whole fix: the next poll re-runs `reconcileAvatarPlace`
+        // against the moved slot vector.
+        if (tile.placedModels && reliftScene(tile, datumMove) && seatedKey) {
+          const me = lastMap?.characters.find((c) => c.name === avatarName);
+          if (me?.location_id === tile.loc.id) seatedKey = '';
+        }
       }
       if (!tile.placedModels) continue;   // no mounted scene, nothing to swap
       const b = wantedBuildingTier(tile);
@@ -3295,6 +3307,16 @@ async function startApp(username: string, role: string) {
    *  it wore before. Exactly one at a time, and it is cleared before anything
    *  can replace the objects under it (a rebuild, leaving the mode). */
   let propHover: { prop: PickableProp; lit: PropHighlight } | null = null;
+  /** DIRTY MARKS of that hover probe — what it last looked at. `−1` is "ask
+   *  again whatever the pointer does" and is what `rebuildPlaceGlyphs` sets;
+   *  `engine.pointerSeq` never reaches it. */
+  let hoverSeq = -1;
+  const hoverCam = new THREE.Vector3(NaN, NaN, NaN);
+  /** How far the camera may travel before the picture under a STANDING
+   *  pointer counts as changed (metres², i.e. one millimetre). Not zero: the
+   *  camera eases its distance and yaw asymptotically and never lands on the
+   *  target exactly, so a strict comparison would call every frame dirty. */
+  const HOVER_CAM_EPS_M2 = 1e-6;
   /** Whether the rings were last built for the embodied mode (edge memory
    *  of the mode subscription). */
   let glyphsEmbodied = false;
@@ -3952,8 +3974,10 @@ async function startApp(username: string, role: string) {
    *  the way. */
   function rebuildPlaceGlyphs(): void {
     // The highlight points at objects this rebuild may unmount — let go of it
-    // first, so no prop can be left wearing a hover clone.
+    // first, so no prop can be left wearing a hover clone, and force the next
+    // frame to probe again: the list under the pointer is about to change.
     clearPropHover();
+    hoverSeq = -1;
     if (placeGlyphs) {
       disposeGlyphs(placeGlyphs);
       placeGlyphs = null;
@@ -3972,7 +3996,8 @@ async function startApp(username: string, role: string) {
     placeProps = pickableProps(
       (tile?.placedModels ?? [])
         .filter((rec) => rec.spec.role === 'prop' && rec.spec.room_id === placeOffersRoom)
-        .map((rec) => ({ anchor: rec.spec.anchor, object: rec.object })),
+        .map((rec) => ({ roomId: rec.spec.room_id ?? '', anchor: rec.spec.anchor,
+                         object: rec.object })),
       entries, placeOffers);
   }
 
@@ -3994,7 +4019,21 @@ async function startApp(username: string, role: string) {
   // and the CLICK still gives the figure priority (`pickFigure` asks
   // `characterAt` first). A second raycast per frame to take the glow away
   // again would buy nothing.
+  //
+  // AND ONLY WHEN THE PICTURE UNDER THE POINTER CAN HAVE CHANGED (review
+  // finding 2026-08-28): a standing pointer over a standing camera answers
+  // the same prop every frame, so the probe is gated on two dirty marks —
+  // `engine.pointerSeq` (the pointer moved or left) and the camera POSITION
+  // (a WASD pan, a wheel zoom or a fly-to slides a different prop under a
+  // pointer that never moved; a drag and an orbit fire pointer moves anyway).
+  // The camera is compared with a millimetre of slack because its distance
+  // and yaw are eased asymptotically and never land on the target exactly —
+  // a strict comparison would call every frame dirty forever.
   engine.addFrameHook(() => {
+    if (engine.pointerSeq === hoverSeq
+        && hoverCam.distanceToSquared(engine.camera.position) <= HOVER_CAM_EPS_M2) return;
+    hoverSeq = engine.pointerSeq;
+    hoverCam.copy(engine.camera.position);
     const at = placeProps.length ? engine.pointerAt : null;
     const hit = at ? hitProp(placeProps, engine.raycasterAt(at.x, at.y)) : null;
     if (hit?.prop === propHover?.prop) return;

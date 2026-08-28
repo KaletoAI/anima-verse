@@ -223,10 +223,17 @@ function dropPlacementGhost(rec: PlacedSceneModel): void {
  * and those are carried here: the room doors, the elevator stops, the stair
  * landings and the `fixed` prop markers. A moved datum also re-derives every room, because a
  * room whose floor is DECLARED measures from that very datum.
+ *
+ * RETURNS whether anything in this scene actually moved. The caller needs it
+ * for the one thing in the world that does NOT read its height back every
+ * poll: the STEERED avatar, which is snapped onto its seat once and then held
+ * there (`main.reconcileAvatarPlace`, gated by `seatedKey`). An NPC re-reads
+ * `slotFor` on every worldmap poll and follows a re-lifted seat by itself; the
+ * player's own figure would keep the height the seat had when it sat down.
  */
-export function reliftScene(tile: Tile, datumDelta = 0): void {
+export function reliftScene(tile: Tile, datumDelta = 0): boolean {
   const placements = tile.placedModels;
-  if (!placements) return;
+  if (!placements) return false;
   if (datumDelta) {
     for (const p of tile.roomDoors.values()) p.y += datumDelta;
     for (const p of tile.elevatorStops?.values() ?? []) p.y += datumDelta;
@@ -267,6 +274,10 @@ export function reliftScene(tile: Tile, datumDelta = 0): void {
   // measured at slot 0, which on a bench of capacity > 1 is neither the
   // marker's point nor the prop's anchor: mount and re-lift then answered two
   // different heights for the same seat (finding 2026-08-28).
+  // A moved SEAT is reported separately from `moved` and deliberately does not
+  // feed it: `moved` gates `deriveRoomSpots` below, and a prop marker is the
+  // one thing that law never touches. Both are in the return value.
+  let seatsMoved = false;
   const seen = new Set<object>();
   for (const byId of tile.roomMarkers.values()) {
     if (seen.has(byId)) continue;
@@ -275,7 +286,10 @@ export function reliftScene(tile: Tile, datumDelta = 0): void {
       if (!e.fixed || !e.slots.length) continue;
       const step = storeyGroundRelift(e.lift, e.level, e.liftAt.x, e.liftAt.z,
                                       tile.center.y, worldGroundSampler());
-      if (step.delta) for (const s of e.slots) s.y += step.delta;
+      if (step.delta) {
+        for (const s of e.slots) s.y += step.delta;
+        seatsMoved = true;
+      }
       e.lift = step.lift;
     }
   }
@@ -295,6 +309,7 @@ export function reliftScene(tile: Tile, datumDelta = 0): void {
       deriveRoomSpots(tile, id, roomProps(placements, id));
     }
   }
+  return moved || seatsMoved;
 }
 
 /**
@@ -1220,6 +1235,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     // markers got none, and the authors folded it into the marker by hand.
     const drop = marker.root_offset ?? 0;
     byId.set(marker.id, {
+      roomId: id,
       group: marker.group,
       // Every slot the server composed, turned into the world like the
       // anchor: the payload is tile-local and the footprint may stand rotated.
