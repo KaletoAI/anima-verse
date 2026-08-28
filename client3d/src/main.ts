@@ -1898,7 +1898,7 @@ async function startApp(username: string, role: string) {
     }
   }
 
-  // --- Polling: Worldmap + Raumbelegung -------------------------------------
+  // --- Polling: worldmap + room occupancy -----------------------------------
   let lastMap: WorldMap | null = firstMap;
   /** counts successful worldmap polls — travel seg/frac reconciliation in the
    *  NpcManager only runs against a genuinely NEW payload (npcs.update is
@@ -1910,15 +1910,21 @@ async function startApp(username: string, role: string) {
    *  the session started with, which predates every seat change there can be. */
   let mapPolledAt = 0;
   /** What `npcs.update` has to be told about the CACHED map — the third
-   *  consumer of the stamp rule, beside the two reconcilers below. Called from
-   *  the 1 Hz tick and from the model-ready rebuild, never before
-   *  `ownSeatChangeAt` (declared with the report state further down) exists. */
+   *  consumer of the stamp rule, beside the two reconcilers below.
+   *
+   *  It reads `ownSeatChangeAt`, which is declared much further down with the
+   *  report state, so both callers have to run after that declaration. They
+   *  do, and the reason is `lastMap` right above: every caller reads it first
+   *  (the 1 Hz tick and the model-ready rebuild are both `if (lastMap) …`), so
+   *  a call that got past THAT line is already past this point of `startApp` —
+   *  and from here to the seat state there is no suspension point, no `await`
+   *  and no timer, so the two declarations exist together or not at all. */
   const npcUpdateOpts = () => ({ playerStale: pollIsStale(mapPolledAt, ownSeatChangeAt) });
   /** Counts the changes of the VIEW (`applyShowAll`). A poll that started
    *  under the old view is dropped when it comes back under the new one — the
    *  two payloads describe different worlds. */
   let viewRev = 0;
-  const roomOf = new Map<string, string>(); // Charaktername -> Raum (ID oder Name)
+  const roomOf = new Map<string, string>(); // character name -> room (id or name)
   /** How each figure was placed LAST TIME: the room it was drawn in (null = on
    *  the ground) and whether its location's interior was revealed then. Both
    *  halves are needed to tell a real room change from a mere visibility
@@ -3737,7 +3743,15 @@ async function startApp(username: string, role: string) {
       npcs.setPlayerPose(avatarName, null, null);
       npcs.setPlayerAnimation(avatarName, null);
       void api.postActivity({ activity: '' })
-        .then(() => { ownSeatChangeAt = performance.now(); })
+        .then(() => {
+          // …and a poll is asked right away, exactly as the sit-down does it:
+          // the stamp only makes the OLD payloads worthless, it does not
+          // produce a new one, and everything the poll carries for the avatar
+          // (the activity label above all) would otherwise lag by up to
+          // WORLDMAP_POLL_MS.
+          ownSeatChangeAt = performance.now();
+          void pollWorldMap();
+        })
         .catch((e) => { ownSeatChangeAt = 0; uiActions.toast?.(String(e)); });
     }
     if (!dir) {

@@ -610,6 +610,10 @@ export class NpcManager {
     for (const st of states) {
       seen.add(st.char.name);
       let npc = this.npcs.get(st.char.name);
+      /** this update BUILT the figure — `createNpc` seeds it from `st`, which
+       *  is the one write of the worldmap's clip that the guard below cannot
+       *  wrap (review finding 1). */
+      const created = !npc;
       if (!npc) {
         npc = this.createNpc(st);
         this.npcs.set(st.char.name, npc);
@@ -638,6 +642,15 @@ export class NpcManager {
           npc.animation = st.char.activity_animation || undefined;
           npc.labelActivity.textContent = npc.activity;
           npc.labelName.textContent = st.char.name;
+        } else if (created) {
+          // A figure BUILT from this payload got the stale clip through
+          // `createNpc` before the guard could run — and that is the live
+          // path: a model arriving mid-walk rebuilds the avatar
+          // (`figures.onModelReady`), which would put the seat's `sit` back on
+          // a figure that stood up. Only on creation: clearing it on every
+          // stale update would strip the clip off a figure that is legitimately
+          // sitting (a click-to-sit sets the stamp too).
+          npc.animation = undefined;
         }
         // …and for the same reason it carries no dead reckoning: a figure the
         // player steers walks on the player's input, not on a rate measured
