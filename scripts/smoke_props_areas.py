@@ -440,6 +440,35 @@ variant in 10 minutes, and the row said nothing but a minute and a backend.
 
     copy {source "variant-copy", copied_from {"file": <primary file>,
           "variant": 0}}
+
+[22] A LEGACY CHAIN COLLAPSES ON THE NEXT CLICK (ruling V6). Files written
+  before E4 name their IMMEDIATE PREDECESSOR as `source_file`, so comparing
+  the stored name alone would delete only the last link and promote the
+  second-to-last to "origin" — the measured prop of eight files would drop
+  to four, not two. Every candidate therefore resolves its own origin by
+  FOLLOWING `source_file` while the name points at another split of this
+  gallery. Fixture, sidecars written by hand:
+
+    O  source upload                 (the origin)
+    A  source areas, source_file O
+    B  source areas, source_file A   <- legacy: the predecessor, not O
+    C  source areas, source_file B   <- active full file
+
+    resolved origin of A, B and C  ->  O
+    one detect_areas run on C      ->  gallery {O, D}         2 files
+        A, B and C are gone, each with its .json and its .areas.json
+        D's `source_file` is O
+
+  The selection guard survives the walk: with B selected for the LOW tier,
+  the same run leaves {O, B, D} — B is a choice, not a leftover.
+
+[23] A NAME THAT COMES BACK DOES NOT MAKE A STALE COPY LOOK CURRENT.
+  `ModelGallery.new_path` keys on the whole second and E4 frees the name of
+  the file it replaces, so a re-cut inside the same second can land under the
+  predecessor's exact name. `copied_from` records the source gallery's
+  SIGNATURE as well as the file name (v1 task 4), and `_variant_stale`
+  compares both: a picture variant whose recorded signature no longer matches
+  the primary's is stale even when the name still does.
 """
 import json
 import struct
@@ -1385,6 +1414,73 @@ def part4() -> None:
           and (cparts.get("copied_from") or {}).get("variant") == 0
           and (cparts.get("copied_from") or {}).get("file")
           == full_file(pid2, 0).name, str(cparts))
+
+    print("\n[22] a legacy chain collapses on the next click (V6)")
+    for low_tier_on_b in (False, True):
+        pid3 = store.create_prop(name="Legacy chain", category="decor")["id"]
+        store.save_uploaded_glb(pid3, frame_glb())
+        gal3 = store.model_gallery(pid3, 0)
+        o = full_file(pid3)
+        chain = []
+        prev_name = o.name
+        for _ in ("a", "b", "c"):
+            f = gal3.new_path()
+            f.write_bytes(SPLIT_GLB)
+            # A pre-E4 split: it names the file it was cut FROM, not the origin.
+            store.write_model_sidecar(f, {
+                "created_at": store.utc_now_iso(), "source": "areas",
+                "format": "glb", "rig": "none", "tier": store.DEFAULT_TIER,
+                "source_file": prev_name, "areas_mode": "auto"})
+            store.areas_sidecar_path(f).write_text("{}", encoding="utf-8")
+            chain.append(f)
+            prev_name = f.name
+        a, b, c = chain
+        store.select_model(pid3, c.name, "full")
+        if low_tier_on_b:
+            store.select_model(pid3, b.name, "low")
+        check(("the fixture chain is O, A, B, C"
+               + (" with B on the low tier" if low_tier_on_b else "")),
+              len(store.model_gallery(pid3, 0).files()) == 4,
+              str(sorted(f.name for f in store.model_gallery(pid3, 0).files())))
+        seen3: list = []
+        r3 = stub_blender_split(seen3)
+        try:
+            store.detect_areas(pid3, mode="manual", faces=[0, 1], kind="glass")
+        finally:
+            r3()
+        d = full_file(pid3)
+        names = sorted(f.name for f in store.model_gallery(pid3, 0).files())
+        want = sorted([o.name, b.name, d.name] if low_tier_on_b else [o.name, d.name])
+        check(("one run collapses the whole chain"
+               + (" but keeps the low-tier file" if low_tier_on_b else "")),
+              names == want, str(names))
+        gone = [b] if low_tier_on_b else []
+        dead = [f for f in chain if f not in gone]
+        check("…every collapsed link took its sidecar and its companion with it",
+              not any(f.exists() or f.with_suffix(".json").exists()
+                      or store.areas_sidecar_path(f).exists() for f in dead),
+              str([f.name for f in dead if f.exists()]))
+        check("…and the new split names the ORIGIN, not a link of the chain",
+              store.read_model_sidecar(d).get("source_file") == o.name,
+              str(store.read_model_sidecar(d).get("source_file")))
+
+    print("\n[23] a recycled name does not make a stale copy look current")
+    pid4 = make_prop("Recycled name", frame_glb(), FRAME_AREAS)
+    store.add_picture_variant(pid4, {"picture_1": {"image": IMG}}, "x")
+    check("the fresh copy is not stale", store.list_variants(pid4)[1]["stale"] is False,
+          str(store.list_variants(pid4)[1]["stale"]))
+    prim = full_file(pid4, 0)
+    ref = store.read_model_sidecar(full_file(pid4, 1)).get("copied_from") or {}
+    check("…and it recorded the primary's signature next to the name",
+          ref.get("file") == prim.name and bool(ref.get("signature")), str(ref))
+    # The very case E4 made possible: the SAME name, another file.
+    store.set_file_areas(prim, areas_run_at=store.utc_now_iso())
+    store.write_model_sidecar(prim, {**store.read_model_sidecar(prim),
+                                     "created_at": "2099-01-01T00:00:00+00:00"})
+    v1 = store.list_variants(pid4)[1]
+    check("the same name with another signature IS stale",
+          v1["stale"] is True and store.list_variants(pid4)[0]["stale"] is False,
+          str((v1["stale"], store.list_variants(pid4)[0]["stale"])))
 
 
 def main() -> int:

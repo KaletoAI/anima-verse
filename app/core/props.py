@@ -1779,17 +1779,35 @@ def _drop_stale_low(gallery: ModelGallery) -> None:
     # dropped, so the auto-LOD demand rebuilds it from the current full mesh.
 
 
-def _split_origin(src: Path, prev: Dict[str, Any]) -> str:
+def _split_origin(gallery: ModelGallery, src: Path,
+                  meta: Optional[Dict[str, Any]] = None) -> str:
     """The file a split CHAIN started from — the ORIGIN, never the immediate
-    predecessor (v2 E4).
+    predecessor (v2 E4, ruling V6).
 
-    A split of a split carries the origin forward, so every link of a chain
-    names the same ``source_file`` and each new link recognises the one it
-    replaces. Without that, a re-cut of a re-cut would name a file that is
-    already gone and the chain would grow a third entry per click."""
-    if prev.get("source") == "areas" and prev.get("source_file"):
-        return str(prev["source_file"])
-    return src.name
+    A split written since E4 carries the origin forward, so one hop over its
+    ``source_file`` already answers. A file from BEFORE E4 names the file it
+    was cut from, so the name is FOLLOWED as long as it points at another
+    SPLIT of this gallery: one run on a legacy chain O → A → B → C then
+    resolves to O for every link, and the landing collapses the whole chain
+    instead of leaving every second file behind (the measured prop's eight
+    files drop to two, not four).
+
+    A predecessor that is gone ends the walk on ITS NAME — that name is what
+    the remaining links of the chain still share. The walk is capped at the
+    gallery size: a hand-edited sidecar pointing in a circle must not spin."""
+    name = src.name
+    current = read_model_sidecar(src) if meta is None else meta
+    for _ in range(len(gallery.files()) + 1):
+        if current.get("source") != "areas":
+            return name
+        nxt = str(current.get("source_file") or "")
+        if not nxt:
+            return name
+        p = gallery.file(nxt)
+        if not p:
+            return nxt
+        name, current = p.name, read_model_sidecar(p)
+    return name
 
 
 def _drop_superseded_splits(gallery: ModelGallery, target: Path, origin: str,
@@ -1806,7 +1824,13 @@ def _drop_superseded_splits(gallery: ModelGallery, target: Path, origin: str,
     Never removed: the ORIGIN itself (it is no split, and it is what every
     further run starts from), anything the admin uploaded or generated, and
     a split that is still the active file of ANOTHER tier — a distance mesh
-    somebody selected by hand is a choice, not a leftover."""
+    somebody selected by hand is a choice, not a leftover.
+
+    Every candidate resolves its OWN origin through the same walk the target
+    used (ruling V6), so a chain written before E4 — where each link names
+    its immediate predecessor — collapses on the next click instead of
+    leaving every second file standing. The doomed list is computed in full
+    BEFORE the first delete: the walks read files that the deletes remove."""
     doomed: List[Path] = []
     for p in gallery.files():
         if p.name in (target.name, origin) or p.name in protected:
@@ -1814,7 +1838,7 @@ def _drop_superseded_splits(gallery: ModelGallery, target: Path, origin: str,
         meta = read_model_sidecar(p)
         if meta.get("source") != "areas":
             continue
-        if str(meta.get("source_file") or "") == origin:
+        if _split_origin(gallery, p, meta) == origin:
             doomed.append(p)
     for p in doomed:
         gallery.delete(p.name)
@@ -1840,7 +1864,7 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
     the run is about (the renamed or dissolved id) — what the gallery row
     needs to say "Renamed picture_1" instead of "another file"."""
     prev = read_model_sidecar(src)
-    origin = _split_origin(src, prev)
+    origin = _split_origin(gallery, src, prev)
     # Read the selection BEFORE the new file takes the full tier, so
     # "another tier" means exactly that and not "the tier being replaced".
     protected = {name for tier, name in gallery.selection().items()
@@ -2895,25 +2919,42 @@ def active_variant_tiers(prop_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _variant_stale(prop_id: str, index: int, primary_file: str) -> bool:
+def _variant_stale(prop_id: str, index: int, primary_file: str,
+                   primary_signature: str = "") -> bool:
     """Was this variant's mesh COPIED from a file the prop no longer shows?
     (ruling R4)
 
-    ``copied_from.file`` on the active mesh's sidecar names the file the copy
-    was taken from; the primary's active full file is what it should be. A
-    mesh that was never copied (the primary itself, an uploaded variant) is
-    never stale — it is nobody's copy — and neither is anything while the
-    PRIMARY has no active full mesh at all: there is nothing to compare
-    against, and the tab must not offer a re-copy that can only fail."""
+    ``copied_from`` on the active mesh's sidecar names the file the copy was
+    taken from AND that gallery's signature at the time; the primary's active
+    full file and its signature now are what they should be. A mesh that was
+    never copied (the primary itself, an uploaded variant) is never stale —
+    it is nobody's copy — and neither is anything while the PRIMARY has no
+    active full mesh at all: there is nothing to compare against, and the tab
+    must not offer a re-copy that can only fail.
+
+    The SIGNATURE is checked as well as the name, because a name can come
+    back: ``ModelGallery.new_path`` keys on the whole second, and since E4 a
+    landing frees the name of the file it replaces — a re-cut inside the same
+    second can therefore land under the predecessor's exact name, and a
+    name-only comparison would call the copy current over a frame that
+    changed. The signature carries ``created_at`` and moves either way."""
     if not primary_file:
         return False
     g = model_gallery(prop_id, index)
     active = g.find(DEFAULT_TIER, fallback=False) if g else None
     if not active:
         return False
-    name = str((read_model_sidecar(active).get(COPIED_FROM_KEY)
-                or {}).get("file") or "")
-    return bool(name) and name != primary_file
+    ref = read_model_sidecar(active).get(COPIED_FROM_KEY)
+    if not isinstance(ref, dict):
+        return False
+    name = str(ref.get("file") or "")
+    if not name:
+        return False
+    if name != primary_file:
+        return True
+    # Same name: only a RECORDED signature can still say "another file".
+    stored = str(ref.get("signature") or "")
+    return bool(stored) and bool(primary_signature) and stored != primary_signature
 
 
 def list_variants(prop_id: str) -> List[Dict[str, Any]]:
@@ -2954,6 +2995,7 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     primary_file = primary_gallery.find(DEFAULT_TIER, fallback=False) \
         if primary_gallery else None
     primary_name = primary_file.name if primary_file else ""
+    primary_sig = primary_gallery.signature(DEFAULT_TIER) if primary_gallery else ""
     now = current_season_tokens()
     out: List[Dict[str, Any]] = []
     for i, entry in enumerate(entries):
@@ -2990,7 +3032,7 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             SLOT_VALUES_KEY: dict(entry.get(SLOT_VALUES_KEY) or {}),
             AREA_DEFAULTS_KEY: dict(entry.get(AREA_DEFAULTS_KEY) or {}),
             VARIANT_LABEL_KEY: entry.get(VARIANT_LABEL_KEY, ""),
-            "stale": _variant_stale(prop_id, i, primary_name),
+            "stale": _variant_stale(prop_id, i, primary_name, primary_sig),
             # This variant's own baked walking surface, STATE only (the
             # lattice is what ``surface`` means, and it travels on the scene
             # spec) — every variant is a mesh of its own and is baked on its
