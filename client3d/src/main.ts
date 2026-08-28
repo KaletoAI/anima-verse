@@ -22,7 +22,8 @@ import {
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
-import { nearestRoomAt, stairChain, stairsAt, type StairLink } from './game/stairs';
+import { nearestRoomAt, stairChain, stairRideY, stairY, stairsAt,
+  type StairEndPoint, type StairLink, type StairRun } from './game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
@@ -46,7 +47,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintCentre, redatumTile, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintCentre, redatumTile, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type StairWorldLink, type Tile } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -2448,9 +2449,18 @@ async function startApp(username: string, role: string) {
               ? stairChain(stairLinksOf(tile), lf, lt)
               : null;
             if (chain) {
-              // Foot then head per flight — the waypoint machine turns that
-              // pair into the climb all by itself (scene/npcs.ts).
+              // Foot then head per flight — that pair IS the climb, and the
+              // ride below is what makes the figure walk it instead of
+              // floating over it (plan-treppen-v2 task 3): the height comes
+              // from the ramp of whichever flight of the chain it is on, until
+              // it stands on the last landing.
               chain.forEach((e) => stops.push(new THREE.Vector3(e.x, e.y, e.z)));
+              const runs = stairRunsOfChain(tile, chain);
+              const last = chain[chain.length - 1];
+              npcs.setStairRide(c.name, runs.length
+                ? { y: (x, z, y) => stairRideY(runs, x, z, y),
+                  end: { x: last.x, y: last.y, z: last.z } }
+                : null);
             } else if (lf !== lt && tile.elevatorStops) {
               const a = tile.elevatorStops.get(lf) ?? tile.elevatorStops.get(0);
               const b = tile.elevatorStops.get(lt) ?? tile.elevatorStops.get(0);
@@ -3724,6 +3734,7 @@ async function startApp(username: string, role: string) {
     if (state.mode !== 'embodied') {
       cancelRoute();                      // leaving the mode drops the route
       verticalRide = null;   // ditto for a ride nobody is in any more
+      npcs.setStairRide(avatarName, null);   // …and the flight under it
       walkIn = null;         // …and for a walk-in nobody is walking
       correction = null;     // …and for a correction of a figure nobody steers
       return;
@@ -3750,6 +3761,12 @@ async function startApp(username: string, role: string) {
         && Math.abs(verticalRide.goal.y - pos.y) < VERTICAL_ARRIVE;
       if (!arrived && performance.now() <= verticalRide.until) return;
       verticalRide = null;
+      // The climb is over — the flight stops answering for the height, so a
+      // figure that walks back over the run afterwards is on the FLOOR, and a
+      // ride broken off on the deadline does not keep the figure on a ramp it
+      // is no longer riding. (`npcs` clears it on arrival too; this is the
+      // other end of the same ride, and both ends have to close it.)
+      npcs.setStairRide(avatarName, null);
     }
     // A walk-in owns the figure the same way: the offer was accepted and the
     // figure walks THROUGH the boundary opening, which is what makes the next
@@ -4774,14 +4791,50 @@ async function startApp(username: string, role: string) {
   // arguments and rides the ONE room-request machine of the room walk.
   //
   // `tile.stairs` carries the landings as WORLD points already (`mountScene`),
-  // so the far landing goes straight to `setPlayerTarget` and the walk hook
-  // blends the height towards it — which is exactly the climb the NPC chain
-  // walks over the same two points (task 4).
+  // so the far landing goes straight to `setPlayerTarget` — and the RUN goes
+  // with it as the figure's height for the whole climb (`stairRunOf`, task 3),
+  // which is exactly the ride the NPC chain gets over the same two points.
   function stairLinksOf(tile: Tile): StairLink[] {
     return (tile.stairs ?? []).map((s): StairLink => ({
       foot: { level: s.foot.level, x: s.foot.pos.x, y: s.foot.pos.y, z: s.foot.pos.z },
       head: { level: s.head.level, x: s.head.pos.x, y: s.head.pos.y, z: s.head.pos.z },
     }));
+  }
+
+  /** The flight as the RAMP module wants it: plain numbers, the tile's Vector2
+   *  pair read as xz (`.y` of a Vector2 IS the z of the world here). */
+  function stairRunOf(s: StairWorldLink): StairRun {
+    return {
+      at: { x: s.at.x, z: s.at.y },
+      dir: { x: s.dir.x, z: s.dir.y },
+      runM: s.runM,
+      widthM: s.widthM,
+      footY: s.foot.pos.y,
+      headY: s.head.pos.y,
+    };
+  }
+
+  /** Is this landing that world point? Compared with a hair of tolerance
+   *  rather than by identity: both sides are copies of the same payload
+   *  numbers, and a route must not silently lose its ramp to a rounding. */
+  function sameLanding(pos: THREE.Vector3, p: StairEndPoint): boolean {
+    return Math.abs(pos.x - p.x) < 1e-6 && Math.abs(pos.z - p.z) < 1e-6;
+  }
+
+  /** The runs a stair chain walks, in the order it walks them. The chain is
+   *  landing PAIRS (near end, far end per flight), so each pair identifies its
+   *  flight — which is what keeps a climb over two storeys on the two ramps it
+   *  actually uses instead of every flight in the house. */
+  function stairRunsOfChain(tile: Tile, chain: readonly StairEndPoint[]): StairRun[] {
+    const runs: StairRun[] = [];
+    for (let i = 0; i + 1 < chain.length; i += 2) {
+      const [a, b] = [chain[i], chain[i + 1]];
+      const flight = (tile.stairs ?? []).find((s) =>
+        (sameLanding(s.foot.pos, a) && sameLanding(s.head.pos, b))
+        || (sameLanding(s.head.pos, a) && sameLanding(s.foot.pos, b)));
+      if (flight) runs.push(stairRunOf(flight));
+    }
+    return runs;
   }
 
   /** Same 1 Hz tick as the talk target and the lift, and for the same reason:
@@ -4825,16 +4878,18 @@ async function startApp(username: string, role: string) {
 
   /**
    * The climb: the server moves the avatar into the room the far landing lies
-   * in, then the figure walks to that landing — its world point carries the
-   * target storey's height, and `tick()` blends the height towards its goal,
-   * which is the same vertical ride the lift and the NPC stair chain take.
-   * The guard is the LIFT's (`verticalRide`), deliberately: only one storey
-   * change can run, whichever way it was started.
+   * in, then the figure walks to that landing — and WALKS the flight while it
+   * does, because the ride hands `npcs` the run to take its height from
+   * (`setStairRide`, plan-treppen-v2 task 3). The guard is the LIFT's
+   * (`verticalRide`), deliberately: only one storey change can run, whichever
+   * way it was started — and it is the lift's ride that has nothing but a
+   * height to blend, a shaft having no run to walk.
    */
   async function rideStairs() {
     const state = getGameState();
     if (state.mode !== 'embodied' || !state.stairs || state.movementLocked) return;
-    const dest = state.stairs.dest;
+    const offer = state.stairs;
+    const dest = offer.dest;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
     const tile = tileAt(pos.x, pos.z);
@@ -4859,6 +4914,17 @@ async function startApp(username: string, role: string) {
     roomOf.set(avatarName, target);
     const goal = new THREE.Vector3(dest.x, dest.y, dest.z);
     npcs.setPlayerTarget(avatarName, goal.clone());
+    // THE FLIGHT under the figure, for the whole climb: the offer names the
+    // landing it ends on, and the flight is the one that HAS that landing —
+    // up it is a head, down a foot. Without a match (a landing the payload no
+    // longer carries) the walk simply keeps its old blend; the climb still
+    // happens, it is only the height that is eased instead of walked.
+    const flight = (tile.stairs ?? []).find((s) =>
+      sameLanding(offer.dir === 'up' ? s.head.pos : s.foot.pos, dest));
+    const run = flight ? stairRunOf(flight) : null;
+    npcs.setStairRide(avatarName, run
+      ? { y: (x, z) => stairY(run, x, z), end: { x: goal.x, y: goal.y, z: goal.z } }
+      : null);
     // From here the climb owns the figure until it stands at that point.
     verticalRide = { goal: goal.clone(), until: performance.now() + VERTICAL_RIDE_MS };
     // The view follows the climb. `levelFilter` is the in-world storey button,

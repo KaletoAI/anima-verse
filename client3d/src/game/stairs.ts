@@ -8,12 +8,13 @@
  * a figure going from the basement to the first floor rides TWO flights, and
  * the route is the flights laid end to end.
  *
- * Whoever walks the chain needs nothing else. The waypoint machine in
- * `scene/npcs.ts` shifts to the next point at an XZ distance under 1.5 m and
- * blends the height exponentially towards the current one, so a foot point
- * followed by a head point already IS the climb — no ramp, no animation state,
- * no per-step geometry. The stairs themselves are the server's business
- * (`app/core/scene_recipe.py`), and this module never sees a step.
+ * The chain says WHERE the climb goes; `stairY` at the bottom of this file
+ * says how HIGH the figure stands on the way (task 3, plan-treppen-v2). The
+ * waypoint machine in `scene/npcs.ts` walks the pair and asks the ramp for
+ * every frame's height instead of blending towards the far landing — no
+ * animation state and no per-step geometry either way. The stairs themselves
+ * are the server's business (`app/core/scene_recipe.py`), and this module
+ * never sees a single tread.
  *
  * The chain WINS over the lift: where stairs connect two storeys the figure
  * takes them, and `tile.elevatorStops` stays the fallback for everything they
@@ -137,6 +138,95 @@ export function stairsAt(
       best = { dir, dest: there };
       bestDist = dist;
     }
+  }
+  return best;
+}
+
+// --- The climb ITSELF: the height on the run (task 3, plan-treppen-v2) -----
+//
+// Until now the climb was a blend: one goal at the far landing and an
+// exponential ease of the root height towards it (`scene/npcs.ts`). On the
+// contract flight — 3.9 m of run for 3.08 m of climb — that ease is 86 % done
+// after half a second while the walk has covered 35 % of the run, so the
+// figure floats a metre and a half over the treads going up and hangs the same
+// under them coming down. The fix is to stop blending and ASK THE FLIGHT: the
+// height of a figure on a staircase is a function of WHERE IT STANDS, and the
+// server ships the run that answers it (§ B1 `stairs`).
+
+/**
+ * ONE flight as the RUN it covers, in world metres — everything `stairY` needs
+ * and nothing else. `at` is the foot of the first tread (NOT the foot landing,
+ * which lies a pad's half plus a gap behind it), `dir` the climb direction in
+ * xz, `runM` the length of the run and `widthM` its width across.
+ *
+ * The two landing heights are the ends of the ramp: at `at` the figure stands
+ * at `footY`, `runM` metres along at `headY`. That is the same pair
+ * `StairLink` carries, said in the run's frame.
+ */
+export interface StairRun {
+  at: { x: number; z: number };
+  /** climb direction in world xz; normalised here, so it need not be unit */
+  dir: { x: number; z: number };
+  runM: number;
+  widthM: number;
+  footY: number;
+  headY: number;
+}
+
+/**
+ * Height of a figure standing at `x`/`z` ON this flight — `null` when it is
+ * not on it (more than half a width off the run's axis).
+ *
+ * A RAMP, not a stair-step function (ruling, plan-treppen-v2 § 7a): the figure
+ * walks the flight with a walking clip, and quantising the height to the
+ * treads would make it bounce fifteen times per storey for no gain — the
+ * treads are 26 cm of run and 20 cm of rise, so the ramp never leaves a
+ * tread by more than a centimetre of sole.
+ *
+ * ALONG the axis the projection is CLAMPED, and that is deliberate: the two
+ * landings lie past the ends of the run (pad gap plus half a pad), so a figure
+ * standing on one gets its landing height instead of an extrapolated one, and
+ * the answer stays continuous with the floor it steps onto. ACROSS the axis
+ * there is no clamp but a gate: half a step width to either side is the
+ * flight, everything beyond is floor somebody else has to answer for.
+ */
+export function stairY(flight: StairRun, x: number, z: number): number | null {
+  const len = Math.hypot(flight.dir.x, flight.dir.z);
+  if (!(len > 0) || !(flight.runM > 0)) return null;    // degenerate = no flight
+  const dx = flight.dir.x / len, dz = flight.dir.z / len;
+  const px = x - flight.at.x, pz = z - flight.at.z;
+  // The axis normal in xz — the sign does not matter, only the distance.
+  const across = px * -dz + pz * dx;
+  if (Math.abs(across) > flight.widthM / 2) return null;
+  const t = Math.min(1, Math.max(0, (px * dx + pz * dz) / flight.runM));
+  return flight.footY + t * (flight.headY - flight.footY);
+}
+
+/**
+ * The height of a guided ride over a CHAIN of flights: the answer of the
+ * flight the figure is on, or `null` when it is on none of them.
+ *
+ * A chain over two storeys walks two flights, and where a stairwell stacks
+ * them the same xz lies on both — so the tie is broken by the height the
+ * figure is at: the ramp whose answer is NEAREST to `y` is the one it is
+ * climbing. Equal answers make the choice moot, and the first flight wins so
+ * that the same list always answers the same way.
+ */
+export function stairRideY(
+  runs: readonly StairRun[],
+  x: number,
+  z: number,
+  y: number,
+): number | null {
+  let best: number | null = null;
+  let bestGap = Infinity;
+  for (const run of runs) {
+    const at = stairY(run, x, z);
+    if (at === null) continue;
+    const gap = Math.abs(at - y);
+    if (gap >= bestGap) continue;
+    best = at;
+    bestGap = gap;
   }
   return best;
 }

@@ -18,6 +18,14 @@ import { advanceProgress, catchUpStep, clampProgress, deadReckonRate, deadReckon
  *  move at exactly the NPC pace; a second constant would drift. */
 export const WALK_SPEED = 3.4;
 const RUN_DISTANCE = 6; // farther than this -> run animation
+/** How close a figure has to come to a planned waypoint before it walks on to
+ *  the next one. Generous on purpose: the points are door and route stations,
+ *  not marks to hit, and a figure that had to touch them would pivot on each. */
+const WAYPOINT_ARRIVE_M = 1.5;
+/** …and how close during a GUIDED STAIR RIDE (plan-treppen-v2 task 3), where
+ *  the landing IS a mark to hit: the same 1.5 m would retire the head landing
+ *  half way up the flight. It is also the radius the ride itself ends at. */
+const RIDE_ARRIVE_M = 0.4;
 
 /** What the ground says about a figure at one point: the clip its terrain type
  *  asks for while the figure MOVES (`anim`) and the one while it STANDS
@@ -121,6 +129,26 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
   return tex;
 }
 
+/**
+ * A guided climb, as the walking machine sees it (plan-treppen-v2 task 3):
+ * where the figure stands while it is on the flight, and where the ride is
+ * over. Nothing of the STAIRCASE is in here — the geometry is the server's and
+ * the rule is `game/stairs.stairY`; this file only asks and stops asking.
+ *
+ * `y` answers `null` for a point that is not on the run at all (beside the
+ * flight, or on a chain whose flights the figure has left), and the walking
+ * machine then falls back to its ordinary blend towards the current waypoint.
+ * The third argument is the height the figure is AT: on a stairwell two
+ * stacked flights cover the same xz and only that number tells them apart.
+ */
+export interface StairRide {
+  y: (x: number, z: number, y: number) => number | null;
+  /** the landing the ride ends on, world metres — the FULL point, height
+   *  included, because a stairwell puts two landings of one chain over the
+   *  same xz and only the storey tells them apart. */
+  end: { x: number; y: number; z: number };
+}
+
 interface Npc {
   name: string;
   /** AV3D-6: the animation category the server delivered (authoritative) */
@@ -145,10 +173,15 @@ interface Npc {
    *  (swim finding 2026-08-13). Server-driven journeys bring their own rate
    *  and never look at this. */
   pace: number;
-  /** feste Blickrichtung im Stand (Marker) — sonst Nachbarn ansehen */
+  /** fixed facing while standing (marker) — else look at the neighbours */
   face: THREE.Vector3 | null;
-  /** Restliche Wegpunkte bis zum Ziel (Wegfindung um Gebäude) */
+  /** The waypoints left on the way to the goal (routing around buildings) */
   waypoints: THREE.Vector3[];
+  /** A GUIDED STAIR RIDE, while one is running (plan-treppen-v2 task 3):
+   *  it owns the figure's height for as long as the figure is on the run,
+   *  and it retires waypoints tightly so the flight is walked to its end.
+   *  `null`/absent for everybody who is not on stairs. */
+  ride?: StairRide | null;
   /** server journey being followed (§ A11) — replaces goal/waypoint logic.
    *  `key` identifies the POLYLINE: as long as it is unchanged the local
    *  `progressM` keeps running and only reconciles against a fresh poll; a new
@@ -383,6 +416,7 @@ export class NpcManager {
   private takeOver(npc: Npc) {
     npc.route = null;        // a server journey would keep overriding the input
     npc.waypoints = [];      // ditto for a planned A* path
+    npc.ride = null;         // …and for a climb the server had it on
     npc.target.copy(npc.root.position);
     npc.pace = 1;            // the walking hook reads the ground on its first frame
     // The placement fields update() stops writing keep their last value, and
@@ -422,6 +456,17 @@ export class NpcManager {
     npc.pace = Number.isFinite(pace) && pace > 0 ? pace : 1;
   }
 
+  /** The GUIDED CLIMB of one figure (plan-treppen-v2 task 3), `null` ends it.
+   *  Set by whoever starts the climb — `rideStairs` for the avatar, the stair
+   *  chain of the routing for an NPC — and cleared by the walking machine
+   *  itself the moment the figure stands on the landing the ride ends at, so
+   *  no caller has to watch a figure walk. */
+  setStairRide(name: string, ride: StairRide | null) {
+    const npc = this.npcs.get(name);
+    if (!npc) return;
+    npc.ride = ride;
+  }
+
   /** Hard placement of the player-driven figure (E3-T3): used when the SERVER
    *  moved the avatar behind the player's back (teleport, party pull, admin) —
    *  that is a jump, not a walk, so the position is set instead of targeted. */
@@ -432,6 +477,7 @@ export class NpcManager {
     npc.target.copy(pos);
     npc.waypoints = [];
     npc.route = null;
+    npc.ride = null;         // …and a climb the figure was jumped out of
     // A jump lands on ground nobody has read yet — the pace of the ground the
     // figure stood on a moment ago says nothing about it. The next walking
     // frame supplies the real one.
@@ -706,6 +752,7 @@ export class NpcManager {
         // a door, not a direction.
         npc.route = null;
         npc.waypoints = [];
+        npc.ride = null;
         npc.root.position.copy(st.pos);
         arrived = true;
       }
@@ -731,6 +778,7 @@ export class NpcManager {
       // waypoints dropped, position set.
       if (st.snap && !arrived) {
         npc.waypoints = [];
+        npc.ride = null;      // a placement, not a climb
         npc.root.position.copy(st.pos);
       }
       npc.target.copy(st.pos);
@@ -994,6 +1042,7 @@ export class NpcManager {
       };
       npc.route = null;
       npc.waypoints = [];
+      npc.ride = null;       // the anchor places the figure, not a flight
       this.updateTravelLine(npc, null);
       return;
     }
@@ -1151,8 +1200,22 @@ export class NpcManager {
         npc.label.visible = labelVisible;
         continue;   // travellers skip the normal goal/waypoint logic
       }
-      // The next waypoint (when a way is planned), otherwise straight to the goal
-      while (npc.waypoints.length && npc.root.position.distanceTo(npc.waypoints[0]) < 1.5) {
+      // A GUIDED STAIR RIDE ends where its landing is (plan-treppen-v2 task
+      // 3): the figure has stepped off, and from here the floor answers for
+      // its height again. Measured in all three axes — over a stairwell the
+      // last landing of a chain stands right over the middle one, and an XZ
+      // check would end the ride a storey early.
+      if (npc.ride && Math.hypot(npc.ride.end.x - npc.root.position.x,
+        npc.ride.end.y - npc.root.position.y,
+        npc.ride.end.z - npc.root.position.z) < RIDE_ARRIVE_M) npc.ride = null;
+      // The next waypoint (when a way is planned), otherwise straight to the
+      // goal. A ride retires its points TIGHTLY: the generic 1.5 m would drop
+      // the head landing while the figure is still half way up the flight, and
+      // it would then walk the rest of the climb aiming at the next stop —
+      // off the run, where the ramp has no answer and the old blend took over.
+      const retireM = npc.ride ? RIDE_ARRIVE_M : WAYPOINT_ARRIVE_M;
+      while (npc.waypoints.length
+        && npc.root.position.distanceTo(npc.waypoints[0]) < retireM) {
         npc.waypoints.shift();
       }
       const goal = npc.waypoints[0] ?? npc.target;
@@ -1227,11 +1290,26 @@ export class NpcManager {
       const standIdle = idleClip(standGm.idle, standRaw.scope);
       const standSink = groundSink(
         sinkForState(moving, standIdle, standGm.sink), standRaw.scope);
-      // Match the height to the CURRENT waypoint — that is what makes the
-      // vertical ride between two lift stops (AV3D-12).
-      const goalY = floatRootY(npc.waypoints[0]?.y ?? npc.target.y,
-        standGm.water, standSink);
-      npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
+      // THE HEIGHT. On a flight of stairs the ride answers it OUTRIGHT: the
+      // ramp is a function of where the figure stands (`game/stairs.stairY`),
+      // so there is nothing left to ease towards and easing would be the very
+      // lag the ramp was written against (plan-treppen-v2 § 7a — 86 % of the
+      // climb done after half a second, 35 % of the run walked). No float and
+      // no sink either: a staircase is a floor, and the ground rules of water
+      // do not reach into a stairwell.
+      //
+      // Off the flight the old rule stands: match the height to the CURRENT
+      // waypoint and blend — that is what makes the vertical ride between two
+      // lift stops (AV3D-12).
+      const rideY = npc.ride?.y(npc.root.position.x, npc.root.position.z,
+        npc.root.position.y) ?? null;
+      if (rideY !== null) {
+        npc.root.position.y = rideY;
+      } else {
+        const goalY = floatRootY(npc.waypoints[0]?.y ?? npc.target.y,
+          standGm.water, standSink);
+        npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
+      }
       if (!moving && npc.figure) {
         // Standing: the marker's facing > look at the neighbours > the
         // camera's base direction

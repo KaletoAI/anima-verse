@@ -976,7 +976,8 @@ async function main() {
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
     locationsSignature, footprintSignature, MINIMAP_PREF_KEY } = minimap;
   const { placementOf, figureTransition } = placement;
-  const { stairChain, stairsAt, nearestRoomAt, STAIR_RANGE } = stairs;
+  const { stairChain, stairsAt, nearestRoomAt, stairY, stairRideY,
+    STAIR_RANGE } = stairs;
   // The defaults are spelled out here BY HAND, never read from the module —
   // that is the whole point of pinning them (see the header).
   const DEFAULTS = {
@@ -2407,6 +2408,78 @@ async function main() {
       stairsAt({ x: 2.5, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: A.head });
     check('...literally the first, not the geometric one',
       stairsAt({ x: 2.5, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head });
+  }
+
+  // --- stairY: the height ON the run (plan-treppen-v2 task 3) --------------
+  // The climb is no longer a blend towards the far landing but a RAMP along
+  // the run: `y = footY + t · (headY − footY)` with `t` the clamped projection
+  // of the figure onto the run axis. The flight is the § 0 hand calculation
+  // again, now with the run the payload ships (§ B1 `stairs`):
+  //
+  //   at = [2, −2], dir = +x, run = 15 · 0.26 = 3.9, width = 1.2
+  //   footY = 0.01 (foot pad top + walk clearance), headY = 3.09
+  //   climb = 3.09 − 0.01 = 3.08
+  //
+  // so `t` is `(x − 2) / 3.9` and the height is `0.01 + t · 3.08`:
+  //   x = 2     → t = 0            → 0.01
+  //   x = 3.3   → t = 1.3/3.9 = ⅓  → 0.01 + 1.026666… = 1.036666…
+  //   x = 3.95  → t = 1.95/3.9 = ½ → 0.01 + 1.54 = 1.55
+  //   x = 5.9   → t = 3.9/3.9 = 1  → 3.09
+  //   x = 6.4   → t clamped to 1   → 3.09  (the head LANDING, 0.5 m past the run)
+  //   x = 1.0   → t clamped to 0   → 0.01  (a metre in front of the first tread)
+  // ACROSS the axis the gate is half a step width, 1.2/2 = 0.6: the axis is
+  // z = −2, so `across = z + 2` and −2.6 … −1.4 is on the flight, ±0.61 off it.
+  console.log('stairY — the ramp along the run, not a blend towards the landing');
+  {
+    const A = { at: { x: 2, z: -2 }, dir: { x: 1, z: 0 }, runM: 3.9, widthM: 1.2,
+      footY: 0.01, headY: 3.09 };
+    check('at the first tread the figure stands at the foot', stairY(A, 2, -2), 0.01);
+    check('a third of the way up', stairY(A, 3.3, -2), 1.0366666666666666, 1e-12);
+    check('half way up is half the climb', stairY(A, 3.95, -2), 1.55, 1e-12);
+    check('the end of the run is the head', stairY(A, 5.9, -2), 3.09, 1e-12);
+    check('the head landing past the run is clamped to it', stairY(A, 6.4, -2), 3.09);
+    check('...and the foot landing in front of it just the same',
+      stairY(A, 1.0, -2), 0.01);
+    // The gate across is `|across| > width/2`. The EDGE itself, `across` =
+    // 0.6, is deliberately not pinned: `−1.4 + 2` is 0.6000000000000001 in
+    // doubles, so which side of the gate the exact rim falls on is a float
+    // coin-flip and no rule anybody could rely on. Half a tread inside and a
+    // quarter of one outside are the statement.
+    check('half a step width inside is on the flight',
+      stairY(A, 3.95, -1.5), 1.55, 1e-12);
+    check('...on the other side just the same', stairY(A, 3.95, -2.5), 1.55, 1e-12);
+    check('a quarter width past the rim is not on the flight',
+      stairY(A, 3.95, -1.25), null);
+    check('two metres beside the flight is no flight at all', stairY(A, 3.95, 0), null);
+    // Flight B of the § 0 calculation, but turned: `at` [2, 2] climbing along
+    // +z from storey 1 to 2 — the projection has to work on either axis.
+    const B = { at: { x: 2, z: 2 }, dir: { x: 0, z: 1 }, runM: 3.9, widthM: 1.2,
+      footY: 3.09, headY: 6.09 };
+    check('a flight along +z climbs the same way', stairY(B, 2, 3.95), 4.59, 1e-12);
+    check('...and gates across x instead of z', stairY(B, 2.61, 3.95), null);
+    // The direction is normalised inside, so a payload vector of any length
+    // answers the same — and a degenerate flight answers nothing.
+    check('the direction need not be unit length',
+      stairY({ ...A, dir: { x: 2, z: 0 } }, 3.95, -2), 1.55, 1e-12);
+    check('a run of zero length is no run', stairY({ ...A, runM: 0 }, 3.95, -2), null);
+    check('a direction of zero length neither',
+      stairY({ ...A, dir: { x: 0, z: 0 } }, 3.95, -2), null);
+
+    // stairRideY: a chain over two storeys rides two ramps, and a STAIRWELL
+    // stacks them over the same footprint. The figure's own height decides
+    // which one it is on — at 1.5 m it is on A (|1.55 − 1.5| = 0.05) and not
+    // on the flight above (|4.59 − 1.5| = 3.09), at 4.0 m the other way round
+    // (|1.55 − 4| = 2.45 against |4.59 − 4| = 0.59).
+    const stacked = { ...A, footY: 3.09, headY: 6.09 };
+    check('the ride takes the ramp nearest the figure',
+      stairRideY([A, stacked], 3.95, -2, 1.5), 1.55, 1e-12);
+    check('...and the one above once the figure is up there',
+      stairRideY([A, stacked], 3.95, -2, 4.0), 4.59, 1e-12);
+    check('...in either list order',
+      stairRideY([stacked, A], 3.95, -2, 1.5), 1.55, 1e-12);
+    check('beside every flight of the chain there is no ride height',
+      stairRideY([A, stacked], 3.95, 0, 1.5), null);
+    check('no flights, no ride height', stairRideY([], 3.95, -2, 1.5), null);
   }
 
   // --- nearestRoomAt: where the climb ends up ------------------------------
