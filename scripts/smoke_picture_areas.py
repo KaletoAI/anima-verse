@@ -400,28 +400,37 @@ its mean must lie strictly between them; the thick class holds 0.10, 0.12,
 0.15 and 0.185, so its mean must lie between 0.10 and 0.185; and the split
 must fall between 0.04 and 0.10.  Both gates clear with room to spare.
 
-COUNTING THE THIN CELLS — with the ROUNDING CAVEAT that runs through this
-whole fixture.  Three of the boxes have an edge that falls exactly on a
-raster line, and in binary those divisions are not exact: 0.075 / 0.025 =
-2.9999999999999996 (the jambs' inner faces), while 0.4 / 0.025 and
-0.925 / 0.025 ARE exact, so the rail's and the lintel's boundary samples —
-barycentric weights that sum to 1 only to within a rounding unit — land a
-unit BELOW the line and fall into the row underneath.  Structurally:
+COUNTING THE THIN CELLS — with the BOUNDARY CAVEAT that runs through this
+whole fixture.  Several boxes have an edge that falls exactly on a raster
+line, and TWO different things happen there.  A sample sitting exactly ON
+the line bins into the cell ABOVE it (``floor`` of an exact integer), so
+the rail's TOP face at y = 0.450 — 0.450 / 0.025 is exactly 18.0 — lands in
+row 18, the row above the rail's own two rows.  And the barycentric weights
+sum to 1 only to within a rounding unit, so a MINORITY of the samples on
+such a line come out an ulp low and drop into the cell below: of the 6940
+samples on the lintel's bottom face at y = 0.925 (exactly 37.0), 812 land
+in row 36 and make that row read the lintel's depth.  Where the division is
+NOT exact the two columns simply share the line: 0.075 / 0.025 =
+2.9999999999999996, and the 19302 samples on the jambs' inner faces split
+15266 into column 2 and 4036 into column 3.  Structurally:
 
     columns 4..19 x rows 0..36              16 * 37 = 592 candidate cells
       (columns 0..3 and 20..23 hold jamb material in every row, rows
        37..39 the lintel)
     - the rail's rows 16 and 17 (y 0.400..0.450)      -2 * 16 =  -32
-    - row 18, where the rail's top edge rounds down      -16 =  -16
-    - row 36, where the lintel's bottom edge does        -16 =  -16
+    - row 18, which the rail's TOP face bins into       -16 =  -16
+    - row 36, which a minority of the lintel's bottom
+      face drops into                                   -16 =  -16
     - the handle, columns 4..5 x rows 19..20             -4  =   -4
                                                           = 524 thin cells
 
-and FIVE single cells fall the other way, where a column happened to catch
-or miss the boundary sample: +1 (row 18, column 10), -1 (row 15, column
-14), +2 (row 36, columns 8 and 14), +1 (column 3, row 33) = **527 of 960**,
-a thin share of **0.549** >= 0.30.  Those five are why the check asserts
-the share with a tolerance instead of the exact count.
+and FIVE single cells fall the other way, each of them a KNIFE-EDGE value
+within 2 % of the split 0.08741: +1 (row 18, column 10, extent 0.08571),
+-1 (row 15, column 14, extent 0.08857 — the rail's bottom face at y = 0.400
+dropping an ulp low), +2 (row 36, columns 8 and 14), +1 (column 3, row 33,
+extent 0.08625) = **527 of 960**, a thin share of **0.549** >= 0.30.  Those
+five are why the check asserts the share with a tolerance instead of the
+exact count, and why it asserts the class means as BOUNDS.
 
 [H3] THE THICK PARTS OF THE LEAF.  The rail spans the full leaf width and
 touches BOTH jambs; the handle hangs off the left jamb as a thick
@@ -429,8 +438,12 @@ peninsula.  Both are thick, so both come out as FRAME cells — and both lie
 INSIDE the leaf, so the bounding rectangle of the remaining cells is
 unaffected by them: the coarse leaf cells are columns 3..19 x rows 0..36,
 i.e. x 0.075..0.500 and y 0.0..0.925, and the prism of [H5] takes rail and
-handle along.  This is what the plan's measurement demanded ("neither may
-crop the rectangle"); note that the border walk is not what achieves it —
+handle along.  That column 3 rests on ONE knife-edge cell — (3, 33), see
+[H2] — so a different sampling density would leave the coarse rectangle at
+columns 4..19, x 0.100..0.500; [H4] shows the footprint comes out the same
+either way, which is why the checks below assert the FOOTPRINT and not the
+coarse rectangle.  This is what the plan's measurement demanded ("neither
+may crop the rectangle"); note that the border walk is not what achieves it —
 see the mutant list above.
 
 [H4] EDGES.  Only the RIGHT edge is refined at all; the other three come
@@ -440,9 +453,12 @@ out of the coarse rectangle already final.
           and 0.505..0.510 hold nothing but the right frieze (0.04), the
           next one holds the right jamb's inner face at x = 0.51 (0.15)
           and stops the walk.  Two steps -> 0.510.
-  left    0.075 already: the jambs' inner faces at x = 0.075 land in
-          column 2 by the rounding above, so column 3 is a leaf column,
-          and the fine column 0.070..0.075 holds jamb material at once.
+  left    0.075 already, but only just: the jambs' inner faces reach into
+          column 3 (4036 of their samples bin there), so column 3 reads
+          thick in 39 of its 40 rows, and the ONE thin cell (3, 33) is the
+          whole reason the coarse rectangle starts at column 3 rather than
+          4.  There is nothing to walk to either way — the fine column
+          0.070..0.075 holds jamb material at once.
   bottom  0.0 is the silhouette edge (there is no bottom rail): the walk
           has nowhere to go.
   top     0.925 already, because the lintel's bottom edge rounds down into
@@ -452,8 +468,9 @@ out of the coarse rectangle already final.
 
 The snap onto the nearest vertex coordinate then moves nothing — all four
 are vertex coordinates already.  THE RESULT DOES NOT HANG ON THE ROUNDING:
-if every boundary cell had fallen the other way the coarse rectangle would
-be x 0.100..0.500, y 0.0..0.900, and the walk plus the snap answer the same
+if the knife-edge cells of [H2] had all read thick — (3, 33) and row 36's
+two — the coarse rectangle would be columns 4..19 x rows 0..35, i.e.
+x 0.100..0.500, y 0.0..0.900, and the walk plus the snap answer the same
 ((0.075, 0.0), (0.51, 0.925)) — the left edge walks 0.100 -> 0.080 (the
 handle is thick but only two of the band's rows tall, so the median keeps
 the walk going) and snaps the last 0.005 onto 0.075, the top walks
