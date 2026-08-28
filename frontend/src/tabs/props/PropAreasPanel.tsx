@@ -40,6 +40,12 @@ import { AREA_KINDS, areaKindOf } from './propTypes'
 import type { PropArea, PropAreasInfo, PropFull, PropSlotValues,
   PropVariant } from './propTypes'
 
+/** The server's `LEAF_RESIDUAL_NOTE` (props.py) — a warning with a number
+ *  in it, so it cannot be looked up as it stands: the count is taken off
+ *  the text and the template translated. */
+const LEAF_RESIDUAL_NOTE = '{n} frame faces remain inside the leaf footprint — draw the leaf again or check the door'
+const LEAF_RESIDUAL_RE = /^(\d+) frame faces remain inside the leaf footprint/
+
 /** What one variant is called in the list. */
 function variantName(v: PropVariant, t: (s: string) => string): string {
   return v.label || `${t('Variant')} ${v.index + 1}`
@@ -336,7 +342,9 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
           without a detectable leaf does not read as a broken detection. */}
       {warning ? (
         <div className="ga-hint" style={{ display: 'block' }}>
-          {`ℹ ${t(warning)}`}
+          {`ℹ ${LEAF_RESIDUAL_RE.test(warning)
+            ? t(LEAF_RESIDUAL_NOTE).replace('{n}', LEAF_RESIDUAL_RE.exec(warning)![1])
+            : t(warning)}`}
         </div>
       ) : null}
       {info && !areas.length && info.last_run ? (
@@ -438,7 +446,8 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
                 <span className="ga-list-row-sub">
                   {`${a.size_m[0].toFixed(2)} × ${a.size_m[1].toFixed(2)} m`}
                   {' · '}
-                  {a.source === 'manual' ? t('drawn') : t('detected')}
+                  {a.source === 'manual' ? t('drawn')
+                    : a.source === 'adopt' ? t('named') : t('detected')}
                   {' · '}
                   {t('{n} faces').replace('{n}', String(a.faces))}
                 </span>

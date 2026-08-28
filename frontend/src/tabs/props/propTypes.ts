@@ -538,7 +538,9 @@ export interface PropArea {
   /** Real extent of the panel in metres, [w, h]. */
   size_m: [number, number]
   normal: [number, number, number]
-  source: 'auto' | 'manual'
+  /** Found on the atlas, drawn by the admin, or ADOPTED from a material
+   *  the modeller named (spec-bild-props-v2.md E6) — `props.AREA_SOURCES`. */
+  source: 'auto' | 'manual' | 'adopt'
   /** How many triangles carry this area's material. */
   faces: number
   /** The material the faces came from (informational). */

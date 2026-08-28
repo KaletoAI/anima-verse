@@ -207,6 +207,9 @@ function originLabel(m: GalleryModel, t: (s: string) => string): string {
       case 'delete':
         // The dissolved id is the only thing that tells two removals apart.
         return lp.areas_area ? `${t('Removed →')} ${lp.areas_area}` : t('Area removed')
+      case 'adopt':
+        // The modeller NAMED these surfaces (E6); nothing was detected.
+        return [t('Adopted'), ids].filter(Boolean).join(' · ')
       default:
         return [t('Split'), ids].filter(Boolean).join(' · ')
     }

@@ -2377,6 +2377,8 @@
     "The door leaf is a node of the mesh, not a material — only the leaf swings. Dissolve it to put its faces back into the frame.": "Das Türblatt ist ein Knoten des Meshes, kein Material — nur das Blatt schwenkt. Auflösen legt seine Faces zurück in die Zarge.",
     "no door leaf found — draw it with the polygon tool": "kein Türblatt gefunden — zeichne es mit dem Polygon-Werkzeug",
     "{n} frame faces remain inside the leaf footprint — draw the leaf again or check the door": "{n} Faces des Rahmens liegen noch in der Blatt-Grundfläche — zeichne das Blatt erneut oder prüfe die Tür",
+    "named": "benannt",
+    "Adopted": "Übernommen",
     "Uploaded": "Hochgeladen",
     "Removed →": "Entfernt →",
     "Distance mesh": "Fern-Mesh",
