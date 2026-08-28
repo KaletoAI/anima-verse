@@ -52,7 +52,7 @@ def _index(subject: str) -> Dict[str, Tuple[str, Path, Dict[str, Any], float, st
     Read fresh on every call: a scan and the apply that follows it are minutes
     apart, and in between the admin may have selected another model, turned the
     prop, resized it or deleted the whole subject.  ``target_m``/``measure``
-    are the placement's own scale (the lattice step is 0,25 WORLD metres and
+    are the placement's own scale (the lattice step is 0.25 WORLD metres and
     the lattice is cast in model units) and are re-read with everything else.
     """
     rows, key_of = _HANDLERS[subject]
