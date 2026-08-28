@@ -196,7 +196,8 @@ function originLabel(m: GalleryModel, t: (s: string) => string): string {
       case 'rename':
         return `${t('Renamed →')} ${lp.areas_area || ids}`.trim()
       case 'delete':
-        return t('Area removed')
+        // The dissolved id is the only thing that tells two removals apart.
+        return lp.areas_area ? `${t('Removed →')} ${lp.areas_area}` : t('Area removed')
       default:
         return [t('Split'), ids].filter(Boolean).join(' · ')
     }
@@ -210,7 +211,9 @@ function originLabel(m: GalleryModel, t: (s: string) => string): string {
     }
     return from.file ? `${t('Copy of')} ${from.file}` : t('Variant copy')
   }
-  if (source === 'upload') return t('Upload')
+  // NOT `Upload`: that source string is the button label, and its German is
+  // the imperative „Hochladen“ — a row states what the file IS.
+  if (source === 'upload') return t('Uploaded')
   // A reduction is not a generation: naming the mesh→mesh step is what
   // separates a real low mesh from a second full run at a low budget.
   if (source === 'shrink') return t('reduced')
