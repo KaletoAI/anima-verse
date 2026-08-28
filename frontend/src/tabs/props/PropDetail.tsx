@@ -317,6 +317,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   /** Which areas call is running ('' = none) — the lock the panel's verbs and
    *  the polygon tool share, because they all write the same mesh. */
   const [areaBusy, setAreaBusy] = useState('')
+  /** THE OTHER ARM MODE OF THE SAME CANVAS: floor-plan-style marker placement
+   *  ('add' or a marker index, null = disarmed). It is declared up here with
+   *  the ring because the two cannot both be armed — the drawing SVG lies
+   *  over the canvas and swallows every click the pick is waiting for, and a
+   *  ring that closes would hand the canvas back to a pick armed minutes
+   *  ago, which then drops a marker on the next click. */
+  const [placing, setPlacing] = useState<'add' | number | null>(null)
   // A prop or variant switch puts another mesh under the camera: the view
   // state means nothing there, and the previous variant index means something
   // else on the next prop.
@@ -337,7 +344,10 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     }
     if (patch.drawKind !== undefined) {
       setDrawKind(patch.drawKind)
-      if (patch.drawKind) { setAreaFrontal(true); setPreviewFile('') }
+      // ONE CANVAS, ONE GESTURE: arming the ring disarms the marker pick.
+      if (patch.drawKind) {
+        setAreaFrontal(true); setPreviewFile(''); setPlacing(null)
+      }
     }
     if (patch.preview !== undefined) {
       setAreaPreview(patch.preview)
@@ -350,6 +360,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const showStoredFile = useCallback((file: string) => {
     setPreviewFile(file)
     if (file) { setDrawKind(''); setAreaPreview(null) }
+  }, [])
+  /** Arm or disarm the marker pick — the other half of the exclusion: it
+   *  drops a running ring, and while a ring IS running every pick button is
+   *  disabled, so the two modes are never both offered. */
+  const armPlacing = useCallback((which: 'add' | number) => {
+    setPlacing((cur) => (cur === which ? null : which))
+    setDrawKind('')
   }, [])
   /** Every areas call answers the same payload — one place that holds the
    *  lock, hands a fresh payload to the reader above (which drops it if the
@@ -389,6 +406,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
    *  another file, and its triangles are not the ones the outlines, the leaf
    *  box and the R1 indices belong to. */
   const areasOnView = !previewFile && !!variantAreas
+  // …and when it stops being so mid-gesture (a refetch that failed), the tool
+  // disarms: the ring would have nothing to be flattened against, and leaving
+  // "Click the outline…" standing over a viewer that has already dropped the
+  // overlay promises a gesture nobody can finish.
+  useEffect(() => {
+    if (drawKind && !areasOnView) setDrawKind('')
+  }, [drawKind, areasOnView])
   /** The key surfaces of the open variant, as the viewer draws them — the
    *  edges come from the server, the client never measures (§ B5a). */
   const areaOutlines = useMemo(() => (variantAreas?.areas || []).map((a) => ({
@@ -703,9 +727,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const removeMarker = (i: number) =>
     saveMarkers(markers.filter((_, idx) => idx !== i))
 
-  // Floor-plan-style placement: arm ('add' or a marker index), then click the
-  // mesh in the viewer — the hit lands as raw-box fractions. Esc disarms.
-  const [placing, setPlacing] = useState<'add' | number | null>(null)
+  // Floor-plan-style placement: armed further up (it shares the canvas with
+  // the ring), then click the mesh in the viewer — the hit lands as raw-box
+  // fractions. Esc disarms.
   useEffect(() => { setPlacing(null) }, [prop.id, variant])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlacing(null) }
@@ -944,8 +968,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   <button
                     type="button"
                     className={`ga-btn ga-btn-sm${placing === i ? ' ga-btn-primary' : ''}`}
-                    onClick={() => setPlacing((cur) => (cur === i ? null : i))}
-                    title={t('Then click the spot on the model in the viewer to move this marker there (Esc cancels).')}
+                    // One canvas, one gesture: while a ring is being drawn the
+                    // SVG over the viewer swallows every click a pick needs.
+                    disabled={!!drawKind}
+                    onClick={() => armPlacing(i)}
+                    title={drawKind
+                      ? t('Finish or cancel the surface you are drawing first — the ring and the marker pick share the one preview.')
+                      : t('Then click the spot on the model in the viewer to move this marker there (Esc cancels).')}
                   >
                     ✥
                   </button>
@@ -1099,9 +1128,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               // mesh SHOWN there, not just one somewhere on the prop. And a
               // marker needs a place type to name: without the catalog the
               // server would drop it on save.
-              disabled={!(shownHasMesh || previewFile) || !firstGroup}
-              onClick={() => setPlacing((cur) => (cur === 'add' ? null : 'add'))}
-              title={t('Then click the spot on the model in the viewer to drop a marker there (Esc cancels) — like placing markers on the floor plan.')}
+              // …and not while a ring is being drawn: the two arm modes share
+              // the one canvas (V11).
+              disabled={!(shownHasMesh || previewFile) || !firstGroup || !!drawKind}
+              onClick={() => armPlacing('add')}
+              title={drawKind
+                ? t('Finish or cancel the surface you are drawing first — the ring and the marker pick share the one preview.')
+                : t('Then click the spot on the model in the viewer to drop a marker there (Esc cancels) — like placing markers on the floor plan.')}
             >
               🎯 {placing === 'add' ? t('Click the model…') : t('Place marker')}
             </button>
@@ -1255,6 +1288,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               drawing={areasOnView && !!drawKind}
               drawThrough={drawKind === 'leaf'}
               onPolygonFaces={onPolygonFaces}
+              onDrawCancel={() => setAreaView({ drawKind: '' })}
               leafBbox={areasOnView ? (variantAreas?.leaf_bbox || null) : null}
               onBounds={(b) => setShownBbox(b.size)}
               // ONE FIGURE PER SLOT, holding the pose the cycler stands on

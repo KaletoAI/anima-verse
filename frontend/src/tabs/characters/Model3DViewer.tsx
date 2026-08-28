@@ -177,7 +177,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   picking = false, onPickPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
-  onPolygonFaces, leafBbox }:
+  onPolygonFaces, onDrawCancel, leafBbox }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
@@ -305,6 +305,11 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  array means "nothing was hit", which the panel says out loud instead
      *  of posting. */
     onPolygonFaces?: (faces: number[]) => void
+    /** Escape was pressed while the tool was armed. The half-drawn ring is
+     *  dropped here either way; this tells the OWNER to disarm as well, which
+     *  is what "Escape cancels" promises — without it the tool stays armed
+     *  with an empty ring and the next click starts another one. */
+    onDrawCancel?: () => void
     /** THE DOOR LEAF (spec-picture-props.md § 6): the box of the model's
      *  `leaf` node in raw model metres, as the server measured it at the
      *  split. With it — and a `leaf` node in the loaded model — the viewer
@@ -392,6 +397,13 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   const slotFnRef = useRef<(() => void) | null>(null)
   const onPolygonFacesRef = useRef(onPolygonFaces)
   onPolygonFacesRef.current = onPolygonFaces
+  const onDrawCancelRef = useRef(onDrawCancel)
+  onDrawCancelRef.current = onDrawCancel
+  const drawingRef = useRef(drawing)
+  drawingRef.current = drawing
+  /** Shows / hides the marker dots and the figures on them — set by the
+   *  loader, because it owns the two groups. */
+  const figuresFnRef = useRef<((show: boolean) => void) | null>(null)
   // ── The door leaf test swing (spec § 6) ──
   const leafBboxRef = useRef(leafBbox)
   leafBboxRef.current = leafBbox
@@ -439,6 +451,10 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   useEffect(() => {
     if (!drawing) { setPoly([]); setPolyCursor(null) }
   }, [drawing])
+  // A ring is drawn over the MODEL, and a marker dot with a 1.70 m figure on
+  // it stands in front of exactly the surface being ringed. The pick itself
+  // never sees them (the raycast is model-only), but the admin has to.
+  useEffect(() => { figuresFnRef.current?.(!drawing) }, [drawing])
   // Escape cancels the running ring (the map's gesture — see PolygonHandles).
   useEffect(() => {
     if (!drawing) return
@@ -446,6 +462,10 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
       if (e.key !== 'Escape') return
       setPoly([])
       setPolyCursor(null)
+      // "Escape cancels" — the whole gesture, not only its points: the owner
+      // disarms the tool, so the next click orbits again instead of starting
+      // another ring nobody asked for.
+      onDrawCancelRef.current?.()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -1628,7 +1648,15 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           }
           overlayFnRef.current = rebuildOverlay
           rebuildOverlay()
+          const showFigures = (show: boolean) => {
+            markerGroup.visible = show
+            figGroup.visible = show
+          }
+          figuresFnRef.current = showFigures
+          // A load that lands mid-gesture starts hidden, like the rest.
+          showFigures(!drawingRef.current)
           disposers.push(() => {
+            if (figuresFnRef.current === showFigures) figuresFnRef.current = null
             overlayFnRef.current = null
             figTokenRef.current++
             clearGroup(markerGroup)
