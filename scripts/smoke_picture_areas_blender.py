@@ -11,6 +11,14 @@ Needs Blender (``refine.unavailable_reason()`` empty); otherwise prints
 /tmp, no world, no DB, no server. Every expected number below is derived BY
 HAND from the fixture and the spec, never recorded from a run.
 
+ON-DEMAND DISTANCE MESHES ARE OFF here (`image_generation.blender_auto_lod`,
+set on the throw-away config right after the imports): they are built in a
+background thread, and a low mesh landing between two checks is a gallery file
+this smoke never asked for. Every FILE COUNT below is therefore a fact about
+the split alone. A failing count prints the gallery — file names with their
+sidecar ``source`` / ``source_file`` and the tier selection — because a count
+that is off by one says nothing about which file arrived.
+
 THE FIXTURE (glTF y-up, written with the stdlib), `plate_glb(n)`:
   A 1 m x 1 m plate in the xy plane at z = 0, facing +z: (n+1)x(n+1) vertices
   at x, y = -0.5 + i/n; n*n quads of (1/n) m, each two CCW triangles -> 2n²
@@ -170,7 +178,19 @@ from app.core import paths  # noqa: E402
 paths.init(WORLD)
 
 from app.blender import refine  # noqa: E402
+from app.core import config  # noqa: E402
 from app.core import props as store  # noqa: E402
+
+# NO DISTANCE MESHES ON DEMAND in this run. Every ingest path asks for one
+# (`request_low_tier`) and the reduction runs in its OWN thread, so a low mesh
+# can land between two checks and BE a third gallery file — which turned the
+# file counts of parts [D], [E] and [I] into a coin toss (measured 2026-08-28:
+# 2 failures in 20 runs, always "one file too many"). The switch the store
+# reads is `refine.auto_lod_enabled()`; the throw-away world has no
+# config.json and the key's default is ON, so this run states the OFF. The
+# distance mesh is not what this smoke is about — the split is.
+config._CONFIG.setdefault("image_generation", {})["blender_auto_lod"] = False
+assert not refine.auto_lod_enabled()
 
 FAILURES = []
 
@@ -181,10 +201,27 @@ def file_meta(pid: str) -> dict:
     the error of a run live since spec-bild-props-v2.md E1."""
     return store.read_model_sidecar(store.model_gallery(pid).find(store.DEFAULT_TIER, fallback=False))
 
-def check(label: str, ok: bool, detail: str = "") -> None:
+def check(label: str, ok: bool, detail: str = "", pid: str = "") -> None:
     print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
     if not ok:
         FAILURES.append(label)
+        if pid:
+            dump_gallery(pid)
+
+
+def dump_gallery(pid: str) -> None:
+    """Every gallery file of a prop with the sidecar fields that say WHERE it
+    came from, plus the tier selection. Printed by a failing file-count check,
+    because a count that is off by one is unreadable without them: an extra
+    file is either a distance mesh the store built on demand (``source: lod``)
+    or a split that should have been dropped (``source: areas``), and only its
+    ``source_file`` says which mesh it was made from."""
+    g = store.model_gallery(pid)
+    print(f"    ! gallery of {pid}: selection {g.selection()}")
+    for f in g.files():
+        meta = store.read_model_sidecar(f)
+        print(f"      {f.name}  source={meta.get('source')!r} "
+              f"tier={meta.get('tier')!r} source_file={meta.get('source_file')!r}")
 
 
 def near(a, b, eps=1e-4) -> bool:
@@ -574,7 +611,8 @@ def main() -> int:
     files = kg.files()
     active = store.model_path(kp)
     uploaded = next((f for f in files if f != active), None)
-    check("two gallery files: the upload and the split", len(files) == 2, str([f.name for f in files]))
+    check("two gallery files: the upload and the split", len(files) == 2,
+          str([f.name for f in files]), pid=kp)
     prims = primitives(active)
     check("the ACTIVE model carries slot_picture_1 with 32 triangles",
           tri_count(prims, "slot_picture_1") == 32, str(tri_count(prims, "slot_picture_1")))
@@ -593,13 +631,14 @@ def main() -> int:
     check("select_model of the original does NOT split again",
           uploaded is not None and store.select_model(kp, uploaded.name)
           and store.model_path(kp) == uploaded and len(store.model_gallery(kp).files()) == 2,
-          str([f.name for f in store.model_gallery(kp).files()]))
+          str([f.name for f in store.model_gallery(kp).files()]), pid=kp)
     check("…and the areas reconcile to [] (the original names no slot material)",
           file_meta(kp).get("areas") == [], str(file_meta(kp).get("areas")))
     store.select_model(kp, active.name)
     back = file_meta(kp).get("areas") or []
     check("selecting the split file back brings its area list back",
-          [a["id"] for a in back] == ["picture_1"] and len(store.model_gallery(kp).files()) == 2, str(back))
+          [a["id"] for a in back] == ["picture_1"] and len(store.model_gallery(kp).files()) == 2,
+          str(back), pid=kp)
 
     print("\n[E] the hook never fails a landing")
     from app.blender import runner
@@ -617,7 +656,8 @@ def main() -> int:
     finally:
         runner.run = real_run
     check("save_uploaded_glb still returns True", ok is True, str(ok))
-    check("the uploaded file is the active model", len(store.model_gallery(ep).files()) == 1)
+    check("the uploaded file is the active model", len(store.model_gallery(ep).files()) == 1,
+          "", pid=ep)
     emeta = file_meta(ep)
     check("sidecar areas == []", emeta.get("areas") == [], str(emeta.get("areas")))
     check("areas_error carries the message", "boom" in str(emeta.get("areas_error")), str(emeta.get("areas_error")))
@@ -687,7 +727,7 @@ def main() -> int:
     check("I: upload lands", store.save_uploaded_glb(ip, named_glb()))
     files = store.model_gallery(ip).files()
     check("I: two gallery files — the upload and the adopted result", len(files) == 2,
-          str([f.name for f in files]))
+          str([f.name for f in files]), pid=ip)
     prims = primitives(store.model_path(ip))
     names = set(material_names(store.model_path(ip)))
     check("I: materials {atlas, slot_picture_1, slot_glass_1} — the bare glass renamed",

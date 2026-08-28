@@ -9,19 +9,27 @@ written through the real store. Every expected value below is derived BY HAND
 from the spec, never recorded from a run.
 
 ---------------------------------------------------------------------------
-[1] SIDECAR ROUND-TRIP: key_areas / areas / area_defaults
+[1] WHERE THE THREE FIELDS LIVE: key_areas / areas / area_defaults
 ---------------------------------------------------------------------------
-`create_prop(..., key_areas=["glass", "picture", "picture"])` stores the
-requested key colours de-duplicated in the fixed kind order of
-`picture_areas.KINDS` = (picture, glass):
+Only `key_areas` is a PROP field — a wish for the render, not a measurement,
+so it holds for every variant. `create_prop(..., key_areas=["glass",
+"picture", "picture"])` stores the requested key colours de-duplicated in the
+fixed kind order of `picture_areas.KINDS` = (picture, glass), on the prop's
+own sidecar:
 
     key_areas -> ["picture", "glass"]
 
-A prop without a detection run carries `areas == []` and `area_defaults == {}`
-on its record — both fields are ALWAYS present, so no consumer has to know the
-difference between "none" and "not detected yet".
+`areas` are NOT on the prop record (spec-bild-props-v2.md E1): they describe
+ONE mesh, so they live on that mesh's FILE sidecar and the record only
+PUBLISHES them per variant. A freshly created prop therefore has no `areas` /
+`area_defaults` / `leaf_bbox` / `rotation` key at all, and `areas_info(pid)`
+answers `areas == []` / `area_defaults == {}` — the readers still never have
+to tell "none" from "not detected yet".
 
-`areas` written through `sanitize_areas` reads back identically:
+With a mesh landed, `set_file_areas(<full file>, areas=…)` writes the list
+through `sanitize_areas` and it reads back identically — off
+`file_areas(<full file>)`, off `read_model_sidecar(<full file>)`, and on the
+record's `variant_tiers[0]["areas"]`, never on the prop sidecar:
 
     [{"id": "picture_1", "kind": "picture", "size_m": [0.5, 0.4],
       "normal": [0, 0, 1], "source": "auto", "faces": 48},
@@ -38,15 +46,22 @@ report "Saved" over a request that reached nothing).
     {"key_areas": ["neon"]}    -> ValueError, sidecar byte-identical
 
 ---------------------------------------------------------------------------
-[2] area_defaults ARE CHECKED AGAINST THE AREAS
+[2] area_defaults ARE A VARIANT'S, CHECKED AGAINST ITS FILE AREAS
 ---------------------------------------------------------------------------
-`area_defaults` travels the ordinary prop patch (`PROP_PATCH_KEYS`). With the
-two areas of [1] stored:
+`area_defaults` is no prop patch key either. It rides its own writer,
+`set_variant_area_defaults(pid, i, …)` (`POST /world/props/{id}/variants/{i}
+/area-defaults`), and is checked against THAT variant's file areas. With the
+two areas of [1] on variant 0's full file:
 
-    {"glass_1": {"preset": "glass"}}    -> stored as is
+    {"glass_1": {"preset": "glass"}}    -> stored on the variant entry, and
+                                           read back off `variant_tiers[0]`
+                                           and `areas_info(pid, 0)`
+    {}                                  -> clears them
     {"nope": {"preset": "glass"}}       -> ValueError (unknown area)
     {"glass_1": {"preset": "mirror"}}   -> ValueError (preset not in SLOT_PRESETS)
     {"glass_1": {}}                     -> ValueError (a default needs a preset)
+    {"picture_1": {"preset": "glass"}}  -> ValueError (a default is the LOOK
+                                           of a pane; a picture area takes none)
     "glass"                             -> ValueError (not an object)
 
 A refused patch leaves the sidecar BYTE-IDENTICAL.

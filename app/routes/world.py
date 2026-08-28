@@ -931,6 +931,13 @@ def _mesh_lod(data: Dict[str, Any], key: str = "lod_faces") -> Any:
     Without the distinction a dialog's "also bake a low stage" checkbox would
     stop controlling anything the moment its subject carried a budget:
     unchecking it sends no value, and "no value" used to mean "decide for me".
+
+    A SCALAR that is not a usable face count — ``0``, a negative number, a
+    string, ``[]``, ``[0]`` — is read as the explicit OFF, i.e. ``[]``, not as
+    "say nothing". Only a missing key (or ``null``) is silence: a caller that
+    puts the field in the body has spoken, and "0 faces" is the same statement
+    as an unchecked box. That is why a garbled value never falls back to the
+    subject's stored ``target_faces_low``.
     """
     if key not in data or data.get(key) is None:
         return None

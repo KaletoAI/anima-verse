@@ -283,6 +283,13 @@ export interface SceneModelSpec {
   door?: { opening: number; hinge: 'left' | 'right'; swing: 1 | -1
            leaf_bbox?: { min: [number, number, number]
                          max: [number, number, number] } }
+  /** Same meaning and same space as `door.leaf_bbox` — the box of the mesh's
+   *  `leaf` node in RAW y-up model metres — but stated on the PLACEMENT spec
+   *  itself, so a prop whose mesh has a leaf node reports it whether or not
+   *  the placement fills a doorway. It carries no swing order: a renderer
+   *  that swings leaves reads `door` (opening, hinge, sign) and nothing here. */
+  leaf_bbox?: { min: [number, number, number]
+                max: [number, number, number] }
   anchor: [number, number]
   bottom_y: number
   /** Placeholder box (already world metres) for a missing/mesh-less prop */

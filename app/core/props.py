@@ -2023,7 +2023,14 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
         if not verdict.get("ok"):
             raise RuntimeError("split model failed validation: "
                                + "; ".join(verdict.get("errors") or []))
-        model_file = _land_split(g, src, blob, str(params.get("mode") or ""),
+        # A FRESH gallery for the landing. ``g`` was built before the Blender
+        # run and memoizes the selection file it read then — minutes ago. A
+        # distance-mesh thread that selected a ``low`` in the meantime would
+        # have that entry written back away by the landing's own `select`,
+        # leaving its file behind as an orphan nothing can reach. The gallery
+        # contract says so itself: instances are SHORT-LIVED, one per call.
+        model_file = _land_split(model_gallery(pid, index), src, blob,
+                                 str(params.get("mode") or ""),
                                  str(params.get("area") or ""))
 
     script_areas = [a for a in (data.get("areas") or []) if isinstance(a, dict)]
@@ -4851,7 +4858,23 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
         INHERITS_FROM_KEY: src.name,
         **{k: prev[k] for k in _INHERITED_AREAS_KEYS if k in prev},
     })
-    gallery.select(target.name, LOW_TIER)
+    # THE SAME QUESTION AGAIN, NOW THAT THE FILE EXISTS. The check above is a
+    # look BEFORE the write, and a picture-area split can land in the gap:
+    # `_land_split` drops a stale low tier, but at that moment there is none to
+    # drop, and the distance mesh of the file that was just replaced would then
+    # become the low tier of its successor — the atlas where the picture is.
+    # So the selection is written and read back under `_lock`, and a low mesh
+    # that turns out to belong to the superseded file removes itself again
+    # (`delete` takes the sidecar with it). The gallery is built FRESH here:
+    # the instance above memoized the selection file before the reduction, and
+    # writing that memo back would restore the superseded full tier.
+    with _lock:
+        fresh = model_gallery(pid, variant) or gallery
+        fresh.select(target.name, LOW_TIER)
+        if fresh.find(DEFAULT_TIER, fallback=False) != src:
+            fresh.delete(target.name)
+            out["error"] = "full mesh changed during the build"
+            return out
     _lod_failed.discard(key)
     logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
                 target.name, res.get("tris_before"), res.get("tris"))

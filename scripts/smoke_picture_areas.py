@@ -818,21 +818,32 @@ def part_f():
 #                  is the "frame front" of that plane and not edge-connected
 #                  to the slab -> the 12 slab faces only. The prism differs
 #                  by exactly the 320 back-skin faces.
-#   residual     = after the split the frame holds no face whose centre lies
-#                  more than 2 cm inside the leaf's outline (the outline of
-#                  its face centres, x 0.1..0.9, y 0.1..2.1): 0. Leave the
-#                  central quad (4, 10) — tris 60 + 2 * 104 = 268, 269,
-#                  centres (0.433, 1.067) / (0.467, 1.033) — in the frame
-#                  and it is 2.
-#   leaf_prism   = a listed face's own prism: ONE front triangle of the
-#                  slab — 48 = (0.1, 0.1), (0.9, 0.1), (0.9, 2.1), centre
-#                  (19/30, 23/30) — has a footprint that is that point
-#                  (widened by a hair). Faces whose centre projects onto
-#                  it: its back twin 50 (the same three x/y at z -0.04) and
-#                  ONE back-skin triangle — the grid's first-type centres
-#                  are ((3i+1)/30, (3j+2)/30), so i = 6, j = 7: quad (6, 7),
-#                  tri 60 + 2 * 76 = 212 — the same column, so the same
-#                  prism -> [48, 50, 212].
+#   residual     = frame faces whose centre lies more than 2 cm inside THE
+#                  FOOTPRINT THE CUT WAS MADE THROUGH — not the leaf's own
+#                  outline. For the automatic cut that footprint is the
+#                  inner rect (x 0.1..0.9, y 0.1..2.1) and the frame that
+#                  is left holds none: 0. For a plain manual list it is
+#                  `list_footprint` of the listed faces: drop the central
+#                  quad (4, 10) — tris 60 + 2 * 104 = 268, 269, centres
+#                  (0.433, 1.067) / (0.467, 1.033) — from the list, and the
+#                  remaining 330 centres still span exactly 0.1..0.9 x
+#                  0.1..2.1 (the slab's four edge faces sit on those very
+#                  lines), so the two faces left in the frame count 2.
+#   list_footprint = the EXACT bounding rect of the listed faces' CENTRES,
+#                  no padding. For ONE front triangle of the slab — 48 =
+#                  (0.1, 0.1), (0.9, 0.1), (0.9, 2.1), centre (19/30,
+#                  23/30) — that rect degenerates to that single point.
+#   leaf_prism   = prism_faces through that rect, UNITED with the list. Over
+#                  a degenerate rect every candidate centre lies ON the
+#                  outline, so the EDGE RULE decides, and it admits only a
+#                  face whose normal points OUT of the rect in the plane:
+#                  the back twin 50 (the same three x/y at z -0.04) and the
+#                  one back-skin triangle in the same column (the grid's
+#                  first-type centres are ((3i+1)/30, (3j+2)/30), so i = 6,
+#                  j = 7: quad (6, 7), tri 60 + 2 * 76 = 212) both face
+#                  ±z — along the axis, no in-plane component at all — and
+#                  stay out. -> leaf_prism([48]) == [48]: a lone skin
+#                  triangle takes nothing with it.
 def build_door_g(front_n=0):
     """``front_n`` > 0 replaces the slab's two front triangles by an n x n
     grid over x 0.1..0.9, y 0.1..2.1 at z = 0 (facing +z) — the finely
@@ -949,6 +960,10 @@ def part_g():
           pa.leaf_prism(verts, faces, front_and_edges) == expected,
           str(len(pa.leaf_prism(verts, faces, front_and_edges))))
     check("G6: an empty list is an empty prism", pa.leaf_prism(verts, faces, []) == [])
+    check("G6: ONE front triangle takes nothing along — its centres' rect is a "
+          "point, and the edge rule keeps every ±z face out",
+          pa.leaf_prism(verts, faces, [48]) == [48],
+          str(pa.leaf_prism(verts, faces, [48])))
 
     print("  [G6b] clamp_bbox holds the box to the footprint in the plane")
     wide = ((0.0, 0.0, -0.05), (1.0, 2.2, 0.0))
