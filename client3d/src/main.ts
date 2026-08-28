@@ -3887,7 +3887,14 @@ async function startApp(username: string, role: string) {
       // Not seated (any more): the server released the place — by our own
       // stand-up, by a pose change, or behind the player's back. The figure
       // keeps standing where it is; only the seat's pose comes off it.
-      if (seatedKey) npcs.setPlayerPose(avatarName, null, null);
+      //
+      // `avatarSeated` is asked BESIDE `seatedKey` (review finding
+      // 2026-08-28): the height tick drops the key on its own to re-snap a
+      // sitter whose seat rose under it, and a stand-up landing in that same
+      // gap would have found an empty key and left the sit pose on a figure
+      // that is standing. Both say "this figure was seated"; the pose comes
+      // off if either does.
+      if (avatarSeated || seatedKey) npcs.setPlayerPose(avatarName, null, null);
       avatarSeated = false;
       seatedKey = '';
       return;

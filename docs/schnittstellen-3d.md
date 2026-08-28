@@ -4232,7 +4232,7 @@ sie produziert.
 | `scripts/smoke_terrain_layers.py` | [1] Raster == `rank_at` == `kind_at` an 500 Gitterproben, die sd-Quantisierung, der Endpunkt in beiden Modi, `uniform`, `waters` |
 | `scripts/smoke_terrain_types.py` [9] | die Sanitizer der Katalog-Felder (`edge_blend_m` mit 0 als WERT, Relief-Amplitude/Welle) |
 | `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor`; **[4a]** der Wandsaum — beide Grenzen des 0,14-Maßes von Hand, die feste Oberkante, der ungesäumte Sturz, die ungesäumte Türschwelle und die unbewegte deklarierte Etage |
-| `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` 6, der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
+| `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **8** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
 **Client — Höhe, Schnitt, Wasser, Szene**
@@ -7796,7 +7796,11 @@ voller `null` — sonst würde ewig neu gebacken.
 | `surface` | `models[]` mit `role: "room"`, und `role: "prop"` **mit** `walkable` | der Nutzlast-Block `step, origin, cols, rows, values, box_min, box_max, extent_snapped` — die Zahlen der Datei unverändert, im Modell-Rahmen |
 | `walkable` | nur Prop-Spec | das Prop trägt das Tag `walkable`; ohne das Feld schickt es kein Raster (das Raster einer Tischplatte wäre totes Gewicht in jeder Nutzlast) |
 
-Gebäude-Specs bekommen keins (Entscheid 1). `code_version` steht auf **6**.
+Gebäude-Specs bekommen keins (Entscheid 1). `code_version` steht auf **8** —
+die Konstante gehört dem ganzen Payload, nicht diesem Abschnitt, und bewegt
+sich mit jeder Änderung an dem, was der Composer bei unveränderten Daten
+antwortet (6 = diese Raster, 7 = Platz-Typen an den Markern, 8 = der
+`anchor` am Prop-Marker).
 
 **Die Signatur.** `_signature` nimmt je Raster einen Kurz-Hash des Blocks auf
 (`model_surface.block_sig`, 8 Zeichen), unter dem Schlüssel
@@ -8035,7 +8039,7 @@ Tastendruck im Lageplan-Editor.
 | Die Zellenregel Knoten für Knoten an einer rein in Python geschriebenen Mini-GLB (Sockel + Block + hoher Überhang + niedriger Sims): 80 / 20 / **20** / **90** cm und `null` neben dem Modell — 20, weil unter dem hohen Überhang 1,3 m ≥ 1,2 m Luft ist, 90, weil unter dem Sims nur 0,6 m bleiben; dazu beide Boxen, `extent_snapped` unter Fix 0 und Fix x = 90, und die Gültigkeit (Version, Quelle, Fix, unvollständige Datei) | ebenda **part 1** (36 Checks, echtes Blender; ohne Blender SKIP statt Fehler) |
 | Die Sampler-Handtabelle: Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt | ebenda **part 2** (15 Checks) |
 | **Dieselbe Handtabelle in TypeScript** — `surfaceHeightAt`/`highestSurfaceAt` Zahl für Zahl wie der Python-Zwilling | `client3d/scripts/smoke_surface_math.mjs` (15 Checks) |
-| Rezept: `code_version` 6, das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
+| Rezept: `code_version` **8** (die Konstante bewegt sich mit JEDER Änderung an dem, was der Composer bei unveränderten Daten antwortet: 6 = diese Oberflächen-Raster, 7 = Marker sprechen Platz-Typen, 8 = der Prop-Marker nennt seinen `anchor`), das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
 | Zwei Varianten desselben Props in einem Raum: jede Kopie bekommt das Raster IHRER Store-Variante, und ein Neubacken der „verschluckten" Variante bewegt die Signatur | ebenda **[7h]** (8 Checks) |
 | Die Höhensperre: neben der Kiste blanker Boden, auf der 0,3-m-Kiste 0,3 (Schritt erlaubt), am 0,8-m-Block `too_steep` als STUFE, wieder herunter erlaubt; Etage-0-Filter, Anker-Lift, TTL-Cache, `forget_surfaces` und der defekte Sidecar, der auf Boden zurückfällt statt zu 500 | `scripts/smoke_play_pos.py` **[23]** (21 Checks) |
 | Sprosse 1 auf der Server-Seite: ein Loch im Raster (`null`-Knoten) fällt auf das `walk_y_world` des Raums in seinem `floor_plan`-Hull, außerhalb jedes Hulls antwortet das Gelände, bei Überlappung gewinnt der kleinste Hull — und das Schritt-Tor misst gegen 0,9 statt gegen 0,0 | ebenda **[23h]** (11 Checks) |
