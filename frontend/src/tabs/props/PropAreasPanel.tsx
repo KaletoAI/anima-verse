@@ -9,29 +9,35 @@
  * variant's areas, shows that variant's mesh, and every verb below carries
  * `?variant=` so a split can never land in the mesh nobody is looking at.
  *
+ * ONE 3D VIEW PER PROP (spec-bild-props-v2.md, ruling V11). This panel renders
+ * NO viewer of its own any more: the prop page has exactly one preview — the
+ * big one above — and the Areas tools are a MODE of it. The outlines, the
+ * front view, the polygon ring, the assembly preview and the test swing all
+ * ride the model the admin is already looking at, which is also the only mesh
+ * whose R1 face order matches the `mesh_layout` a ring is flattened against.
+ * So the view state does not live here: PropDetail owns it (it owns the
+ * viewer), and this panel switches it through `tools`.
+ *
  * WHERE A PICTURE PROP IS ASSEMBLED. A frame prop is rendered with a chroma-key
  * panel in it, Blender splits that panel off as its own material, and here the
  * admin sees the result, corrects it, and hangs a picture on it:
  *
- *   · the FRONT VIEW of the prop with every key surface outlined in its kind's
- *     colour (the outline edges come from the server — the client draws them,
- *     it never measures geometry, § B5a),
  *   · "Detect areas" (another Blender run) and "Draw area" (the polygon tool
- *     of D5: ring the panel on the front view, the client turns the ring into
- *     flat R1 triangle indices, the server splits them),
+ *     of D5: picking a kind turns the preview above to the front view and arms
+ *     the ring; the client turns the ring into flat R1 triangle indices, the
+ *     server splits them),
  *   · the area list — kind, real size, where it came from, how many triangles,
  *     and a way to dissolve it again,
  *   · "Picture variants": every picture hung on this frame is a VARIANT of it
  *     (D2), so the list is the variant list filtered to the ones that carry
- *     slot values, and clicking one shows the assembly in the viewer.
+ *     slot values, and clicking one shows the assembly in the preview above.
  *
  * Nothing in here decides geometry, a material name or a URL form: the server
  * owns all three, and every kind-dependent choice reads `AREA_KINDS` (R8), so
  * a third kind is one entry in `propTypes.ts` and no branch here.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MATERIAL_PRESETS } from '@anima/scene-render'
-import { Model3DViewer } from '../characters/Model3DViewer'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -39,6 +45,32 @@ import { PictureVariantDialog } from './PictureVariantDialog'
 import { AREA_KINDS, areaKindOf } from './propTypes'
 import type { PropArea, PropAreasInfo, PropFull, PropSlotValues,
   PropVariant } from './propTypes'
+
+/**
+ * THE HANDLE ON THE ONE 3D VIEW (V11) — what this panel may switch on the
+ * preview above, plus the lock its own verbs share with the polygon tool up
+ * there. PropDetail owns every field: it owns the viewer, it reads the areas,
+ * and it is where the coupling rules live (arming the ring turns the front
+ * view on, leaving the front view disarms it, a stored gallery file stands the
+ * tools down — that file has another face order).
+ */
+export interface PropAreaTools {
+  /** Which kind the polygon tool is drawing for ('' = not drawing). */
+  drawKind: string
+  /** Which picture variant the preview is assembled with (null = bare mesh). */
+  preview: number | null
+  /** Switch either — the parent applies the coupling rules. The FRONT VIEW is
+   *  not switched from here: arming the ring turns it on, and its button sits
+   *  on the viewer that owns it. */
+  setView: (patch: { drawKind?: string; preview?: number | null }) => void
+  /** Which areas call is running ('' = none). A Blender run blocks the lot:
+   *  they all write the same mesh, and the server serialises them anyway. */
+  busy: string
+  setBusy: (what: string) => void
+  /** Run one areas call: it holds the lock, hands a fresh payload to the
+   *  reader and maps a failure onto a toast. */
+  run: (what: string, call: () => Promise<unknown>) => void
+}
 
 /** The server's `LEAF_RESIDUAL_NOTE` (props.py) — a warning with a number
  *  in it, so it cannot be looked up as it stands: the count is taken off
@@ -52,7 +84,7 @@ function variantName(v: PropVariant, t: (s: string) => string): string {
 }
 
 export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
-  info, infoFailed, onInfo, reloadAreas, onPropChanged, onVariantsChanged }: {
+  info, infoFailed, tools, onVariantsChanged }: {
   prop: PropFull
   /** STORE index of the variant the detail has open — the mesh this panel
    *  reads, draws on and splits. Every route below takes it. */
@@ -63,7 +95,8 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   /** Configured ceiling on ACTIVE variants, the PRIMARY one included: a frame
    *  therefore holds at most `variantMax − 1` picture variants. */
   variantMax: number
-  /** Bumped whenever this prop's meshes changed — the viewer has to refetch. */
+  /** Bumped whenever this prop's meshes changed — a mesh that moved under an
+   *  area list has to be read again. */
   reloadKey: number
   /** The OPEN variant's areas payload, read by the detail (`GET …/areas?
    *  variant=`) — one reader for the fix, the strip's box turn and this
@@ -72,14 +105,9 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   /** …and it FAILED (`info` null alone cannot tell that from "still
    *  reading", and the status line must not read the same in both). */
   infoFailed: boolean
-  /** A verb of this panel answered with a fresh payload for its variant. */
-  onInfo: (info: PropAreasInfo) => void
-  /** Read the areas again (a verb that did not answer with them, or one that
-   *  failed). */
-  reloadAreas: () => void
-  /** Reload the prop record — a split, a rename or a delete rewrites the
-   *  variant entry (`areas`, `leaf_bbox`, `area_defaults`) it publishes. */
-  onPropChanged: () => void
+  /** The one 3D view above: what this panel may switch on it, and the call
+   *  lock its verbs share with the polygon tool up there (V11). */
+  tools: PropAreaTools
   /** Reload the variant list (one was added, re-copied, or its pane
    *  defaults changed). */
   onVariantsChanged: () => void
@@ -87,21 +115,9 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(prop.id)
-  /** Which action is running ('' = none). A Blender run blocks the lot: they
-   *  all write the same mesh, and the server serialises them anyway. */
-  const [busy, setBusy] = useState('')
-  /** The kind the polygon tool is drawing for ('' = not drawing). */
-  const [drawKind, setDrawKind] = useState('')
-  /** Is the viewer in the FRONT VIEW (§ B1)? The panel holds the mode, not the
-   *  viewer, because drawing depends on it: the CLIENT projects the ring
-   *  against its live camera and sends triangle indices, so any camera works
-   *  arithmetically — but a flat surface seen edge-on is a foreshortened
-   *  sliver with half of it behind the frame, which is not something anyone
-   *  can ring. So drawing is offered head-on only. On by default — this panel
-   *  opens as the authoring view. */
-  const [frontal, setFrontal] = useState(true)
-  /** Which picture variant the viewer is previewing (null = the bare mesh). */
-  const [preview, setPreview] = useState<number | null>(null)
+  /** The view state and the call lock of the ONE preview (V11) — held by
+   *  PropDetail, switched from here. */
+  const { busy, setBusy, run, drawKind, preview } = tools
   /** The variant the dialog is editing (null = a new one, undefined = closed). */
   const [editing, setEditing] = useState<number | null | undefined>(undefined)
 
@@ -109,12 +125,10 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
    *  so no verb can quietly fall back to the primary mesh. */
   const q = `?variant=${variant}`
 
-  // A prop OR variant switch drops every view state — both put another mesh
-  // under the camera, and the previous variant index means something else on
-  // the next prop.
-  useEffect(() => {
-    setPreview(null); setDrawKind(''); setEditing(undefined); setFrontal(true)
-  }, [prop.id, variant])
+  // A prop OR variant switch closes the dialog: the previous variant index
+  // means something else on the next prop. The VIEW state is dropped by the
+  // detail, which owns it together with the viewer it belongs to.
+  useEffect(() => { setEditing(undefined) }, [prop.id, variant])
   /** The areas of the variant the DIALOG is editing, whenever that is not the
    *  one the panel has open. The record publishes only the variants a scene
    *  renders, and a switched-off or out-of-season one has to be dressed too —
@@ -137,14 +151,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
     return () => { cancelled = true }
   }, [enc, editing, variant, reloadKey])
 
-  // Turning the front view off ends a running gesture: the points already
-  // clicked were placed against the old camera, and the ring is projected as
-  // a whole when it closes — half of it from another angle rings nothing.
-  useEffect(() => { if (!frontal) setDrawKind('') }, [frontal])
-
   const areas = useMemo(() => info?.areas || [], [info])
-  const outlines = useMemo(() => areas.map((a) => ({
-    id: a.id, kind: a.kind, edges: a.edges || [] })), [areas])
   // Split by what an area is FILLED with, not by its kind name (R8): a picture
   // variant needs a gallery area, the pane defaults a preset one.
   // `warning` is what a SUCCESSFUL run had to say (today: no leaf found).
@@ -164,67 +171,19 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   /** The cap counts ACTIVE variants INCLUDING the primary one, so a frame
    *  holds at most `variantMax − 1` pictures. */
   const pictureCap = Math.max(0, variantMax - 1)
-  const previewVariant = preview === null
-    ? null : variants.find((v) => v.index === preview) || null
-  // WHAT THE PREVIEW SHOWS: the PICKED variant's own pane defaults with its
-  // own values on top — exactly the merge the scene recipe makes for the
-  // variant it resolves (`scene_recipe._slot_spec`:
-  // `{**entry.area_defaults, **entry.slot_values}`), keyed by AREA ID, which
-  // is the slot name `applySlotMaterials` matches after taking the material's
-  // `slot_` prefix off (R11). Both halves belong to the SAME entry since v2
-  // E1 — the open variant's defaults would preview a mesh nobody renders.
-  //
-  // MEMOISED, deliberately: the viewer re-applies its slot materials whenever
-  // this object's identity changes, and a fresh map per render would reload
-  // every texture on every keystroke elsewhere in the panel.
-  const slots = useMemo(() => (previewVariant
-    ? { ...(previewVariant.area_defaults || {}),
-      ...(previewVariant.slot_values || {}) }
-    : undefined), [previewVariant])
-
-  /** Every areas call answers the same payload — one place that hands it to
-   *  the detail (which drops it if the admin has moved on) and maps the
-   *  failure onto a toast the admin can act on. */
-  const run = useCallback(async (what: string, call: () => Promise<unknown>) => {
-    setBusy(what)
-    try {
-      const answer = await call() as PropAreasInfo | undefined
-      if (answer && Array.isArray(answer.areas)) onInfo(answer)
-      else reloadAreas()
-      onPropChanged()
-    } catch (e) {
-      toast(`${t('Error')}: ${(e as Error).message}`, 'error')
-      reloadAreas()
-    } finally {
-      setBusy('')
-    }
-  }, [onInfo, reloadAreas, onPropChanged, t, toast])
 
   /** A fresh split of THIS variant's mesh. Without `kinds` the server looks
    *  for everything it knows; "Detect now" hands it exactly what the prop
    *  asked its render for (E3). */
-  const detect = (kinds?: string[]) => void run(kinds ? 'detect-kinds' : 'detect',
+  const detect = (kinds?: string[]) => run(kinds ? 'detect-kinds' : 'detect',
     () => apiPost(`/world/props/${enc}/areas${q}`,
       kinds ? { mode: 'auto', kinds } : { mode: 'auto' }))
 
-  const onPolygonFaces = (faces: number[]) => {
-    const kind = drawKind
-    setDrawKind('')
-    if (!faces.length) {
-      toast(t('Nothing was inside the outline — draw around the surface, facing it.'), 'error')
-      return
-    }
-    // The door leaf is a BODY (E2): its ring is a prism and the server cuts
-    // the same prism through what it gets. A surface kind is picked by sight.
-    void run('draw', () => apiPost(`/world/props/${enc}/areas${q}`,
-      { mode: 'manual', faces, kind, through: kind === 'leaf' }))
-  }
-
-  const setKind = (areaId: string, kind: string) => void run('kind',
+  const setKind = (areaId: string, kind: string) => run('kind',
     () => apiPatch(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}${q}`,
       { kind }))
 
-  const removeArea = (areaId: string) => void run('delete',
+  const removeArea = (areaId: string) => run('delete',
     () => apiDelete(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}${q}`))
 
   /** What THIS variant's pane shows when nobody hung anything on it. The
@@ -235,7 +194,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
     const next: PropSlotValues = { ...(info?.area_defaults || {}) }
     if (preset) next[areaId] = { preset }
     else delete next[areaId]
-    void run('defaults', async () => {
+    run('defaults', async () => {
       await apiPost(`/world/props/${enc}/variants/${variant}/area-defaults`,
         { area_defaults: next })
       onVariantsChanged()
@@ -289,12 +248,6 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   /** The variant this panel is open on, as the strip knows it — its label
    *  names the header, its mesh decides whether there is anything to split. */
   const shownVariant = variants.find((v) => v.index === variant) || null
-  /** Has the OPEN variant a mesh? `model_file` is the server's own answer for
-   *  exactly this variant; before the first payload the variant list stands
-   *  in, and the prop record before that (its state IS the primary's). */
-  const variantHasMesh = info
-    ? !!info.model_file
-    : (shownVariant ? shownVariant.has_model : variant === 0 && prop.has_model)
   /** A verb may only be offered when the answer actually said Blender can
    *  run — an unread panel knows nothing and must not promise a split. */
   const canRun = !!info && !blenderReason && !running && !!info.model_file
@@ -382,58 +335,32 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
           title={t('Look for chroma-key panels in the mesh again and split every one of them off as its own material. Replaces the automatically detected areas; a drawn one is kept.')}>
           🔍 {busy === 'detect' ? t('Detecting…') : t('Detect areas')}
         </button>
+        {/* THE POLYGON TOOL IS DRAWN UP THERE (V11): picking a kind turns the
+            one preview to the front view and arms the ring — a flat surface is
+            only fully in view head-on, and edge-on there is barely a sliver of
+            it to click. */}
         {drawKind ? (
           <>
             <span className="ga-hint">
               {t('Click the outline of the surface; click the first point again to close it, Escape cancels.')}
             </span>
             <button type="button" className="ga-btn ga-btn-sm"
-              onClick={() => setDrawKind('')}>{t('Cancel')}</button>
+              onClick={() => tools.setView({ drawKind: '' })}>{t('Cancel')}</button>
           </>
         ) : (
-          <>
-            <select className="ga-input" style={{ width: 130 }} value=""
-              disabled={!canRun || !frontal}
-              title={frontal
-                ? t('Draw a surface by hand: pick its kind, then ring it on the front view.')
-                : t('Switch the front view back on first — a flat surface is only fully in view head-on; edge-on there is barely a sliver of it to ring. Zooming and panning inside the front view are fine.')}
-              onChange={(e) => { if (e.target.value) setDrawKind(e.target.value) }}>
-              <option value="">{t('✏ Draw area…')}</option>
-              {AREA_KINDS.map((k) => (
-                <option key={k.kind} value={k.kind}>{t(k.label)}</option>
-              ))}
-            </select>
-          </>
+          <select className="ga-input" style={{ width: 130 }} value=""
+            disabled={!canRun}
+            title={t('Draw a surface by hand: pick its kind, then ring it on the front view.')}
+            onChange={(e) => {
+              if (e.target.value) tools.setView({ drawKind: e.target.value })
+            }}>
+            <option value="">{t('✏ Draw area…')}</option>
+            {AREA_KINDS.map((k) => (
+              <option key={k.kind} value={k.kind}>{t(k.label)}</option>
+            ))}
+          </select>
         )}
       </div>
-
-      {/* The front view with the outlines — and, while a picture variant is
-          picked, the assembly it renders as. The mesh is the OPEN variant's:
-          the outlines and the R1 face indices the polygon tool sends belong to
-          exactly that file, and a viewer showing another one would ring the
-          wrong triangles. The orientation fix comes with it, off the file. */}
-      {variantHasMesh ? (
-        <Model3DViewer
-          url={`/assets/props/${enc}/model?variant=${variant}&v=${encodeURIComponent(prop.created_at || '')}-${reloadKey}`}
-          format="glb"
-          height={340}
-          rotation={info?.rotation}
-          frontal={frontal}
-          onFrontalChange={setFrontal}
-          keepCamera
-          areaOutlines={outlines}
-          meshLayout={info?.mesh_layout}
-          drawing={!!drawKind}
-          drawThrough={drawKind === 'leaf'}
-          onPolygonFaces={onPolygonFaces}
-          slots={slots}
-          leafBbox={info?.leaf_bbox || null}
-        />
-      ) : (
-        <div className="ga-empty">
-          {t('This variant has no mesh yet — its key surfaces are read off the model.')}
-        </div>
-      )}
 
       {/* The areas themselves. */}
       {areas.length ? (
@@ -539,7 +466,8 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
                   title={preview === v.index
                     ? t('Stop previewing — show the bare frame again.')
                     : t('Show this assembly in the viewer above.')}
-                  onClick={() => setPreview(preview === v.index ? null : v.index)}>
+                  onClick={() => tools.setView({
+                    preview: preview === v.index ? null : v.index })}>
                   👁
                 </button>
                 <strong>{variantName(v, t)}</strong>

@@ -23,6 +23,13 @@
  * Markers are OBJECT-LOCAL (`at` = [u, v, w] fractions of THAT variant's model
  * bounding box), so they travel with the mesh into any room.
  *
+ * ONE 3D VIEW (2026-08-28, spec-bild-props-v2 ruling V11). There is exactly
+ * one preview on this page, and the AREAS tools are a mode of it: the front
+ * view, the surface outlines, the polygon ring, the assembly preview of a
+ * picture variant and the door leaf's test swing all ride the model in that
+ * viewer. The Areas panel below is the list and the verbs; the view state and
+ * the areas-call lock live here, because the viewer does.
+ *
  * ONE DRAFT, ONE SAVE (2026-08-25). Every FIELD on this panel — the prop's
  * general ones and the five each variant owns — collects in a change buffer
  * (`pendingFields`) and reaches the server when "Save (n)" is pressed, in ONE
@@ -291,6 +298,129 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     setAreasInfo(next)
     setAreasFailed(false)
   }, [variant])
+
+  // ── ONE 3D VIEW PER PROP (v2 ruling V11) ───────────────────────────────
+  // The Areas tools are a MODE of the preview above, not a viewer of their
+  // own: outlines, front view, polygon ring, assembly preview and test swing
+  // ride the model the admin is already looking at — which is also the only
+  // mesh whose R1 face order matches the `mesh_layout` a ring is flattened
+  // against. So the VIEW state lives here, with the viewer, and the panel
+  // below only switches it.
+  /** Front view on (§ B1)? Off by default: this is the general preview, where
+   *  markers and dims are dialled at an angle. Arming the ring turns it on,
+   *  because a flat surface is only ringable head-on. */
+  const [areaFrontal, setAreaFrontal] = useState(false)
+  /** The kind the polygon tool is drawing for ('' = not drawing). */
+  const [drawKind, setDrawKind] = useState('')
+  /** Which picture variant the preview is assembled with (null = bare mesh). */
+  const [areaPreview, setAreaPreview] = useState<number | null>(null)
+  /** Which areas call is running ('' = none) — the lock the panel's verbs and
+   *  the polygon tool share, because they all write the same mesh. */
+  const [areaBusy, setAreaBusy] = useState('')
+  // A prop or variant switch puts another mesh under the camera: the view
+  // state means nothing there, and the previous variant index means something
+  // else on the next prop.
+  useEffect(() => {
+    setAreaFrontal(false); setDrawKind(''); setAreaPreview(null)
+  }, [prop.id, variant])
+  /** THE COUPLING RULES, in one place because they are invariants of the one
+   *  view: arming the ring turns the front view on and drops a stored gallery
+   *  file (another file is another face order); leaving the front view
+   *  disarms the ring — the points already clicked were placed against the old
+   *  camera; and previewing an assembly also needs the served mesh, the one
+   *  the areas were split against. */
+  const setAreaView = useCallback((patch: { frontal?: boolean
+    drawKind?: string; preview?: number | null }) => {
+    if (patch.frontal !== undefined) {
+      setAreaFrontal(patch.frontal)
+      if (!patch.frontal) setDrawKind('')
+    }
+    if (patch.drawKind !== undefined) {
+      setDrawKind(patch.drawKind)
+      if (patch.drawKind) { setAreaFrontal(true); setPreviewFile('') }
+    }
+    if (patch.preview !== undefined) {
+      setAreaPreview(patch.preview)
+      if (patch.preview !== null) setPreviewFile('')
+    }
+  }, [])
+  /** A file picked in the mesh gallery below. It is a DIFFERENT file — its
+   *  triangles are not the ones the areas were split against — so the tools
+   *  stand down while it is on screen. */
+  const showStoredFile = useCallback((file: string) => {
+    setPreviewFile(file)
+    if (file) { setDrawKind(''); setAreaPreview(null) }
+  }, [])
+  /** Every areas call answers the same payload — one place that holds the
+   *  lock, hands a fresh payload to the reader above (which drops it if the
+   *  admin has moved on) and maps a failure onto a toast. */
+  const runAreas = useCallback((what: string,
+    call: () => Promise<unknown>): void => {
+    setAreaBusy(what)
+    void (async () => {
+      try {
+        const answer = await call() as PropAreasInfo | undefined
+        if (answer && Array.isArray(answer.areas)) onAreasInfo(answer)
+        else reloadAreas()
+        onRefresh()
+      } catch (e) {
+        toast(`${t('Error')}: ${(e as Error).message}`, 'error')
+        reloadAreas()
+      } finally {
+        setAreaBusy('')
+      }
+    })()
+  }, [onAreasInfo, reloadAreas, onRefresh, t, toast])
+  /** The closed ring, as flat R1 triangle indices of the mesh on screen. The
+   *  door leaf is a BODY (E2): its ring is a prism and the server cuts the
+   *  same prism through what it gets. A surface kind is picked by sight. */
+  const onPolygonFaces = useCallback((faces: number[]) => {
+    const kind = drawKind
+    setDrawKind('')
+    if (!faces.length) {
+      toast(t('Nothing was inside the outline — draw around the surface, facing it.'), 'error')
+      return
+    }
+    runAreas('draw', () => apiPost(`/world/props/${enc}/areas?variant=${variant}`,
+      { mode: 'manual', faces, kind, through: kind === 'leaf' }))
+  }, [drawKind, enc, variant, runAreas, t, toast])
+  /** MAY THE TOOLS SPEAK ABOUT WHAT IS ON SCREEN? Only while the viewer shows
+   *  the SERVED mesh of the open variant: a file picked in the gallery is
+   *  another file, and its triangles are not the ones the outlines, the leaf
+   *  box and the R1 indices belong to. */
+  const areasOnView = !previewFile && !!variantAreas
+  /** The key surfaces of the open variant, as the viewer draws them — the
+   *  edges come from the server, the client never measures (§ B5a). */
+  const areaOutlines = useMemo(() => (variantAreas?.areas || []).map((a) => ({
+    id: a.id, kind: a.kind, edges: a.edges || [] })), [variantAreas])
+  /** WHAT AN ASSEMBLY PREVIEW SHOWS: the PICKED variant's own pane defaults
+   *  with its own values on top — exactly the merge the scene recipe makes for
+   *  the variant it resolves (`scene_recipe._slot_spec`), keyed by AREA ID,
+   *  which is the slot name `applySlotMaterials` matches after taking the
+   *  material's `slot_` prefix off (R11). Both halves belong to the SAME entry
+   *  since v2 E1 — the open variant's defaults would preview a mesh nobody
+   *  renders.
+   *
+   *  MEMOISED, deliberately: the viewer re-applies its slot materials whenever
+   *  this object's identity changes, and a fresh map per render would reload
+   *  every texture on every keystroke on this page. */
+  const previewSlots = useMemo(() => {
+    const picked = areaPreview === null
+      ? null : serverVariants.find((v) => v.index === areaPreview) || null
+    return picked
+      ? { ...(picked.area_defaults || {}), ...(picked.slot_values || {}) }
+      : undefined
+  }, [areaPreview, serverVariants])
+  const areaTools = useMemo(() => ({
+    drawKind, preview: areaPreview, setView: setAreaView,
+    busy: areaBusy, setBusy: setAreaBusy, run: runAreas,
+  }), [drawKind, areaPreview, setAreaView, areaBusy, runAreas])
+  /** The preview, so arming the ring can bring it into view: the tools sit
+   *  below a long panel, and a front view nobody can see is not one. */
+  const viewerRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (drawKind) viewerRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [drawKind])
   // The SOURCE IMAGE belongs to the variant just like its meshes do (variant 0
   // keeps the historic `source.png`, every further one has `source-v<n>.png`),
   // so the left pane shows, re-renders and uploads THIS variant's picture. The
@@ -1090,7 +1220,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               ⚙ {t('3D from this image')} · {t('Variant')} {variant + 1}
             </button>
           </div>
-          <div style={{ flex: '1 1 260px', minWidth: 240 }}>
+          <div style={{ flex: '1 1 260px', minWidth: 240 }} ref={viewerRef}>
           {shownHasMesh || previewFile ? (
             <Model3DViewer
               url={previewFile
@@ -1110,6 +1240,22 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               // object under the camera — the angle stays, "Reset view" frames
               // again on demand (§ B1).
               keepCamera
+              // ── THE AREAS MODE (V11) ──────────────────────────────────
+              // The one view is also the authoring view: the front view is a
+              // mode of it, the outlines are drawn on it, a ring is projected
+              // against ITS camera, and the assembly the panel below picks is
+              // hung on this very mesh. Everything mesh-bound is offered only
+              // while the SERVED file of the open variant is on screen — a
+              // file picked in the gallery has another face order.
+              frontal={areaFrontal}
+              onFrontalChange={(on) => setAreaView({ frontal: on })}
+              areaOutlines={areasOnView ? areaOutlines : undefined}
+              meshLayout={areasOnView ? variantAreas?.mesh_layout : undefined}
+              slots={areasOnView ? previewSlots : undefined}
+              drawing={areasOnView && !!drawKind}
+              drawThrough={drawKind === 'leaf'}
+              onPolygonFaces={onPolygonFaces}
+              leafBbox={areasOnView ? (variantAreas?.leaf_bbox || null) : null}
               onBounds={(b) => setShownBbox(b.size)}
               // ONE FIGURE PER SLOT, holding the pose the cycler stands on
               // (else the place type's default). `root_drop` comes from the
@@ -1274,12 +1420,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               variantMax={variantMax}
               reloadKey={reloadKey}
               // The areas of the OPEN variant, read once above — the panel
-              // draws and splits on exactly the file the viewers show.
+              // lists and splits exactly the file the preview shows.
               info={variantAreas}
               infoFailed={areasFailed}
-              onInfo={onAreasInfo}
-              reloadAreas={reloadAreas}
-              onPropChanged={onRefresh}
+              // The one 3D view (V11): the panel has none of its own, it
+              // switches the preview above and shares its call lock.
+              tools={areaTools}
               onVariantsChanged={() => { void loadVariants() }}
             />
           ) : null}
@@ -1291,7 +1437,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             variant={variant}
             reloadKey={reloadKey}
             preview={previewFile}
-            onPreview={setPreviewFile}
+            onPreview={showStoredFile}
             onChanged={meshesChanged}
             pending={variantBusy}
             // The SELECTED variant's own budgets (v2 E5) — the distance-mesh
