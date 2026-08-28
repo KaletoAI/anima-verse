@@ -7756,7 +7756,13 @@ und wie jede Blender-Stufe über einen LOD-Slot gegattet.
   über dem bis zum nächsten Treffer (beliebiger Orientierung) mindestens
   `clearance` = 1,2 m frei sind — der oberste hat unendlich Luft und
   qualifiziert immer. Kein nach oben weisender Treffer → `null`, dort antwortet
-  das Raster nie.
+  das Raster nie. **Die Kopffreiheit sind WELT-Meter wie der Schritt** und
+  werden im Bake genauso durch `s` geteilt (`clearance_model = 1,2 / s`),
+  bevor das Raster gelaufen wird (Korrektur 2026-08-28, Datei-`version` 3).
+  *(Vorher wurden die 1,2 gegen Modell-Koordinaten verglichen: ein auf ~1
+  Einheit normiertes Mesh ist nirgends 1,2 Einheiten hoch, also qualifizierte
+  nur der oberste Treffer — jedes Raster war die Silhouetten-Oberkante, das
+  Hüttendach statt des Hüttenbodens.)*
 * **`values`** sind Zentimeter-Ints über `box_min.y`, zeilenweise
   `values[j*cols + i]`, `null` = keine Fläche.
 
@@ -7769,7 +7775,7 @@ Galerie absichtlich NICHT und wird beim Löschen des Modells
 
 ```jsonc
 {
-  "version": 2, "step": 0.025,
+  "version": 3, "step": 0.025,
   // Buchhaltung, keine Nutzlast: bei welcher Weltgröße die Auflösung gewählt
   // wurde. step_world = step · s = 0,25 m.
   "target_m": 20.0, "measure": "xz", "step_world": 0.25,
@@ -7785,8 +7791,9 @@ Galerie absichtlich NICHT und wird beim Löschen des Modells
 ```
 
 **Gültigkeit ist eine Eigenschaft der DATEI** (`read_surface`): sie nennt ihr
-Format (`SURFACE_VERSION` = **2** seit 2026-08-28 — jede v1-Datei wurde in der
-falschen Auflösung gemessen, liest sich damit als `stale` und wird neu gebacken;
+Format (`SURFACE_VERSION` = **3** seit 2026-08-28 — eine v1-Datei wurde in der
+falschen Auflösung gemessen, eine v2-Datei verglich die Kopffreiheit in
+Modell-Einheiten; beide lesen sich damit als `stale` und werden neu gebacken,
 umzurechnen gibt es nichts), das Modell, aus dem sie gebacken wurde (Name +
 Größe + mtime), und den Fix, unter dem das geschah (je Achse `% 360`, auf 0,1°
 verglichen) — und sie muss alle acht Nutzlast-Felder tragen. Weicht eines ab,

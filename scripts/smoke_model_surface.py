@@ -14,18 +14,26 @@ behind it is stopped by `_source_of` before Blender is ever asked, so it answers
 
 --- PART 1: the bake (needs Blender; prints SKIP and exits 0 without it) -----
 A GLB written in pure Python, four axis-aligned boxes (glTF axes, y up):
-  base      x[-1,1]      y[0,0.2]    z[-1,1]
-  block     x[0,1]       y[0.2,0.8]  z[0,1]
-  overhang  x[-1,0]      y[1.5,1.6]  z[0,0.5]      (high: 1.3 m air over the base)
-  ledge     x[-1,-0.5]   y[0.8,0.9]  z[-1,-0.5]    (low: 0.6 m air over the base)
+  base      x[-1,1]      y[0,0.2]     z[-1,1]
+  block     x[0,1]       y[0.21,0.8]  z[0,1]     (1 cm CLEAR of the base, see below)
+  overhang  x[-1,0]      y[1.5,1.6]   z[0,0.5]      (high: 1.3 of air over the base)
+  ledge     x[-1,-0.5]   y[0.8,0.9]   z[-1,-0.5]    (low: 0.6 of air over the base)
 Hull: box_min [-1,0,-1], box_max [1,1.6,1]; width 2 m / 0.25 + 1 = 9 nodes per axis;
 node (i,j) sits at x = -1 + 0.25 i, z = -1 + 0.25 j; values in cm over box_min.y = 0.
-Cell rule = lowest UP-facing hit with >= 1.2 m of air above it:
-  node (6,6) = (0.5,0.5): hits 0(down) 0.2(up, base top) 0.2(down, block bottom)
-               0.8(up) -> base top has 0 m air -> block top -> 80
+THE BLOCK FLOATS 1 cm OVER THE BASE on purpose: `_hits_below` restarts its ray 10 µm
+under the hit it just took, so two COPLANAR faces collapse into a single hit whose
+recorded orientation is a matter of traversal order — a base top at 0.2 under a block
+underside at 0.2 would make the node's answer an accident. The gap is far too small to
+stand in at any scale used here (0.01 model units = 0.1 m at s = 10, see below), so the
+block still answers its own top.
+Cell rule = lowest UP-facing hit with at least the head-room of air above it. The
+head-room is 1.2 WORLD metres and is divided by the placement scale s before the
+lattice is walked (fix 2026-08-28); without a target_m, s = 1 and the two coincide:
+  node (6,6) = (0.5,0.5): hits 0(down) 0.2(up, base top) 0.21(down, block bottom)
+               0.8(up) -> base top has 0.01 of air -> block top -> 80
   node (2,7) = (-0.5,0.75): base only -> 20
-  node (2,5) = (-0.5,0.25): 0.2(up) then 1.5(down, overhang) -> 1.3 m >= 1.2 -> 20
-  node (1,1) = (-0.75,-0.75): 0.2(up) then 0.8(down, ledge) -> 0.6 m < 1.2 -> ledge top -> 90
+  node (2,5) = (-0.5,0.25): 0.2(up) then 1.5(down, overhang) -> 1.3 >= 1.2 -> 20
+  node (1,1) = (-0.75,-0.75): 0.2(up) then 0.8(down, ledge) -> 0.6 < 1.2 -> ledge top -> 90
   node (8,0) = (1,-1): cast 1 mm inside the corner -> base only (the block starts at
                z = 0, the ledge ends at x = -0.5) -> 20; without the nudge the ray
                would graze the base's edge and the node would read null
@@ -33,15 +41,23 @@ Cell rule = lowest UP-facing hit with >= 1.2 m of air above it:
                there too -> block top -> 80
 extent_snapped under fix 0/0/0 = [2, 1.6, 2].
 
-THE STEP IS 0.25 WORLD METRES, and the lattice is cast in MODEL units (fix 2026-08-28).
-The same fixture baked with target_m = 20, measure 'xz': s = target_m / max(ex, ez) =
-20 / 2 = 10, so step = 0.25 / 10 = 0.025 model units and step_world = 0.025 * 10 = 0.25.
+THE STEP IS 0.25 WORLD METRES AND THE HEAD-ROOM 1.2 WORLD METRES, while the lattice is
+cast in MODEL units (fix 2026-08-28). The same fixture baked with target_m = 20,
+measure 'xz': s = target_m / max(ex, ez) = 20 / 2 = 10, so step = 0.25 / 10 = 0.025
+model units (step_world = 0.025 * 10 = 0.25) and the air the rule asks for is
+1.2 / 10 = 0.12 model units.
 cols = rows = ceil(2 / 0.025) + 1 = 81 (81*81 = 6561 <= max_cells 40000, so the doubling
 loop never runs). Node (i, j) sits at x = -1 + 0.025 i, z = -1 + 0.025 j, so the three
-hand-derived points above move but keep their values:
-  model (0.5, 0.5)     -> i = j = (0.5+1)/0.025 = 60  -> block top   -> 80
-  model (-0.5, 0.25)   -> i = 20, j = 50              -> high overhang, base -> 20
-  model (-0.75,-0.75)  -> i = j = 10                  -> low ledge   -> 90
+hand-derived points above move — and one of them CHANGES ITS VALUE, because ten metres
+of world are one model unit here:
+  model (0.5, 0.5)     -> i = j = (0.5+1)/0.025 = 60  -> the base top has 0.01 of air
+                          (0.1 m world), under 0.12 -> block top -> 80
+  model (-0.5, 0.25)   -> i = 20, j = 50  -> the base top has 1.3 of air (13 m world)
+                          under the high overhang -> the base -> 20
+  model (-0.75,-0.75)  -> i = j = 10  -> the base top has 0.6 of air under the ledge,
+                          and that is 6 WORLD metres, far over the 1.2 m a figure
+                          needs -> the base wins -> 20  (this node read 90 for as long
+                          as the 1.2 was compared against model coordinates)
 With target_m = 0 the bake knows no world size and keeps the step as handed in: 9x9 @ 0.25,
 i.e. exactly the lattice of the first bake above.
 The max_cells cap runs AFTER the conversion, on the converted step: with max_cells = 100 and
@@ -50,8 +66,43 @@ target_m = 20, step 0.025 gives 81*81 = 6561 > 100, so the step doubles — 0.05
 6*6 = 36 <= 100. Result: step 0.4 model units, step_world 0.4 * 10 = 4.0 m, 6x6 nodes.
 `surface_status` reports the WORLD step, because that is what its label says ("@ 0.25 m"):
 81x81 @ 0.25 for that bake, not @ 0.025.
-A stored file that names version 1 is a lattice measured at the wrong resolution — SURFACE_VERSION
-is 2 — so it reads back as no surface and its state is "stale", not "baked".
+A stored file that names version 2 is a lattice whose head-room was compared in model
+units — SURFACE_VERSION is 3 — so it reads back as no surface and its state is "stale",
+not "baked".
+
+THE HUT is the head-room's own fixture: a closed shell, written by the same pure-Python
+GLB writer, inner height 1.0 model units (glTF axes, y up):
+  floor      x,z[-0.8,0.8]   y[-0.1,0]                (INTERIOR ONLY, see below)
+  threshold  x[-0.25,0.25]   y[-0.1,0]     z[-1,-0.8]
+  walls      the ring where |x| or |z| is in [0.8,1.0], y[0,1.0], with a full-height
+             door through the -z wall over x[-0.25,0.25]
+  roof       x,z[-1.25,1.25] y[1.0,1.1]                (0.25 of eaves on all four sides)
+THE FLOOR STOPS AT THE WALLS, again because this is a box soup and not a watertight
+shell: a slab continued under the walls would leave an up-facing face inside solid wall
+with the whole room's air over it, and a wall node would answer the floor.
+Hull: box_min [-1.25,-0.1,-1.25], box_max [1.25,1.1,1.25], extent_snapped [2.5,1.2,2.5].
+Baked at target_m = 5, measure 'xz': s = 5 / 2.5 = 2, so step = 0.25 / 2 = 0.125 model
+units, head-room = 1.2 / 2 = 0.6 model units, cols = rows = ceil(2.5/0.125) + 1 = 21, and
+node (i,j) sits at x = -1.25 + 0.125 i, z = -1.25 + 0.125 j. Values are cm over
+box_min.y = -0.1, so the floor top (y = 0) reads 10 and the roof top (y = 1.1) reads 120.
+  inside (10,10) = (0,0): hits -0.1(down) 0(up, floor) 1.0(down, roof underside) 1.1(up)
+      -> the floor has 1.0 model units of air = 2.0 WORLD metres, over the 1.2 m a figure
+      needs -> the floor -> 10.  (The whole bug: 1.0 < 1.2 read as model units -> 120.)
+  doorway (10,3) = (0,-0.875): inside the door gap, over the threshold — the same four
+      hits -> 10. The wall band is 0.2 thick, so the plan's -0.95 is not a node; -0.875
+      is the nearest node whose ray grazes neither a wall face nor the box edge.
+  wall (10,17) = (0,0.875): no floor here; hits 0(down, wall bottom), 1.0, 1.1(up). The
+      wall top and the roof underside are COPLANAR at 1.0 and collapse into one hit
+      (see the block above): recorded up it has 0.1 of air under the roof, under the 0.6
+      asked for, and is skipped; recorded down it is skipped for facing down. Either way
+      the roof top answers -> 120.
+  eaves (10,1) = (0,-1.125): outside the walls, under the overhang — the roof is the
+      only up-facing hit and the topmost hit has infinite air -> 120. That is rule R2 as
+      it stands: a figure under a free-standing eave is put on top of it.
+  crawlspace: the same shell with inner height 0.25 (walls y[0,0.25], roof y[0.25,0.35],
+      hull y[-0.1,0.35]) — the floor's air is 0.25 model units = 0.5 WORLD metres, UNDER
+      the 1.2 m, so the ledge wins and the interior node answers the roof top,
+      (0.35 + 0.1) * 100 = 45. The two huts pin the unit from both sides.
 The storage side follows from § 4 alone: payload_block hands out exactly the eight fields the
 placement spec carries, with the file's own numbers; block_sig is 8 hex chars, the same for the
 same block and different once one number moves; surface_status reads "baked" with 9x9 @ 0.25 for
@@ -177,9 +228,24 @@ def write_glb(path, boxes):
 
 
 BOXES = [((-1, 0, -1), (1, 0.2, 1)),
-         ((0, 0.2, 0), (1, 0.8, 1)),
+         ((0, 0.21, 0), (1, 0.8, 1)),
          ((-1, 1.5, 0), (0, 1.6, 0.5)),
          ((-1, 0.8, -1), (-0.5, 0.9, -0.5))]
+
+
+def hut_boxes(inner_h):
+    """The hut of the docstring: floor, threshold, four walls with a door in
+    the -z one, and a roof with 0.25 of eaves — ``inner_h`` model units of air
+    between the floor top and the roof underside."""
+    roof_top = inner_h + 0.1
+    return [((-0.8, -0.1, -0.8), (0.8, 0.0, 0.8)),               # floor (interior)
+            ((-0.25, -0.1, -1.0), (0.25, 0.0, -0.8)),            # threshold
+            ((-1.0, 0.0, -1.0), (-0.25, inner_h, -0.8)),         # -z wall, left of door
+            ((0.25, 0.0, -1.0), (1.0, inner_h, -0.8)),           # -z wall, right of door
+            ((-1.0, 0.0, 0.8), (1.0, inner_h, 1.0)),             # +z wall
+            ((-1.0, 0.0, -0.8), (-0.8, inner_h, 0.8)),           # -x wall
+            ((0.8, 0.0, -0.8), (1.0, inner_h, 0.8)),             # +x wall
+            ((-1.25, inner_h, -1.25), (1.25, roof_top, 1.25))]   # roof + eaves
 
 
 def node(surface, i, j):
@@ -307,7 +373,8 @@ def part1():
                   f"{w['cols']}x{w['rows']}")
             check("block top (60,60) = 80", node(w, 60, 60) == 80, str(node(w, 60, 60)))
             check("under high overhang (20,50) = 20", node(w, 20, 50) == 20, str(node(w, 20, 50)))
-            check("under low ledge (10,10) = 90", node(w, 10, 10) == 90, str(node(w, 10, 10)))
+            check("under the ledge (10,10) = 20 — 6 m of world air, not 0.6 m",
+                  node(w, 10, 10) == 20, str(node(w, 10, 10)))
             # The admin line promises METRES on the ground: 81x81 @ 0.25 m,
             # not @ 0.025 (which is the same resolution in model units).
             wst = ms.surface_status(scaled, {"x": 0, "y": 0, "z": 0})
@@ -335,17 +402,53 @@ def part1():
               c is not None and (c["cols"], c["rows"]) == (6, 6)
               and near(c["step"], 0.4, 1e-9) and near(c["step_world"], 4.0, 1e-9),
               str(c and (c["cols"], c["rows"], c["step"], c["step_world"])))
-        # A v1 file was measured at the WRONG resolution — it must not be read
+        # A v2 file compared its head-room in MODEL units — it must not be read
         # back as a floor, it must be re-baked.
         sp2 = ms.surface_path(scaled)
-        v1 = json.loads(sp2.read_text(encoding="utf-8"))
-        v1["version"] = 1
-        sp2.write_text(json.dumps(v1), encoding="utf-8")
-        check("a version-1 file reads as no surface",
+        old = json.loads(sp2.read_text(encoding="utf-8"))
+        old["version"] = 2
+        sp2.write_text(json.dumps(old), encoding="utf-8")
+        check("a version-2 file reads as no surface",
               ms.read_surface(scaled, {"x": 0, "y": 0, "z": 0}) is None)
         check("...and its state is stale",
               ms.surface_status(scaled, {"x": 0})["state"] == "stale",
               ms.surface_status(scaled, {"x": 0})["state"])
+
+        # ── THE HEAD-ROOM IS A WORLD LENGTH TOO (fix 2026-08-28) ────────
+        # The hut of the docstring, baked at the size it is placed at: inside
+        # it a figure has 2 m of world air over the floor, so the floor is what
+        # the lattice answers — while the eaves outside still answer the roof.
+        hut = Path(tmp) / "hut.glb"
+        write_glb(hut, hut_boxes(1.0))
+        hs = ms.bake_surface(hut, {"x": 0, "y": 0, "z": 0}, wait_s=60,
+                             target_m=5, measure="xz")
+        check("the hut bakes", hs is not None)
+        if hs:
+            check("hut box_min", all(near(a, b) for a, b in zip(hs["box_min"], [-1.25, -0.1, -1.25])), str(hs["box_min"]))
+            check("hut box_max", all(near(a, b) for a, b in zip(hs["box_max"], [1.25, 1.1, 1.25])), str(hs["box_max"]))
+            check("hut cols/rows 21x21", (hs["cols"], hs["rows"]) == (21, 21),
+                  f"{hs['cols']}x{hs['rows']}")
+            check("hut step 0.25 m world / s 2 = 0.125 model units",
+                  near(hs["step"], 0.125, 1e-9) and near(hs["step_world"], 0.25, 1e-9),
+                  f"{hs['step']}, {hs['step_world']}")
+            check("inside the hut (10,10) = 10 — the FLOOR, 2 m of air over it",
+                  node(hs, 10, 10) == 10, str(node(hs, 10, 10)))
+            check("in the doorway (10,3) = 10 — the floor as well",
+                  node(hs, 10, 3) == 10, str(node(hs, 10, 3)))
+            check("on the wall (10,17) = 120 — the roof top",
+                  node(hs, 10, 17) == 120, str(node(hs, 10, 17)))
+            check("under the eaves (10,1) = 120 — the roof top (R2 as it stands)",
+                  node(hs, 10, 1) == 120, str(node(hs, 10, 1)))
+        # THE COUNTER-PROOF: 0.5 m of world air is too little to stand up in,
+        # so the crawlspace's interior answers its roof, not its floor.
+        crawl = Path(tmp) / "crawlspace.glb"
+        write_glb(crawl, hut_boxes(0.25))
+        cs = ms.bake_surface(crawl, {"x": 0, "y": 0, "z": 0}, wait_s=60,
+                             target_m=5, measure="xz")
+        check("the crawlspace bakes", cs is not None)
+        if cs:
+            check("inside the crawlspace (10,10) = 45 — the roof top, 0.5 m is too low",
+                  node(cs, 10, 10) == 45, str(node(cs, 10, 10)))
 
 
 S1 = {"step": 1, "origin": [-1, -1], "cols": 3, "rows": 3,

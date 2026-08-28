@@ -17,26 +17,28 @@ the sidecar orientation fix (Euler 'YXZ' in degrees, exactly the order
   target_m           the world size the model is placed at, as handed in
   hits               number of non-null nodes
 
-THE STEP IS A WORLD LENGTH, the lattice is cast in MODEL units. A generated
+BOTH LENGTHS ARE WORLD METRES, the lattice is cast in MODEL units. A generated
 mesh is normalised to about one unit and the renderer scales it by
 ``s = target_m / extent(measure)`` (``placeModelSpec``, spec § 6.2), so a step
 taken literally in model units covers ``s`` metres of world — on a 10 m diorama
-one node per 2.5 m, which averages the rocks away. The world step is therefore
-divided by that very ``s`` before the lattice is laid out: ``step = step_world / s``.
-Without ``target_m`` (0 or absent) there is no scaling knowledge here and
-``step`` is used as handed in.
+one node per 2.5 m, which averages the rocks away. The step AND the head-room
+are therefore divided by that very ``s`` before the lattice is laid out:
+``step = step_world / s``, ``clearance_model = clearance_world / s``. Without
+``target_m`` (0 or absent) there is no scaling knowledge here and both are used
+as handed in.
 
 Cell rule (user decision 2026-08-27): the LOWEST upward-facing hit that has at
-least ``clearance`` metres of air above it (to the next hit of any facing) —
-under a high overhang the ground below wins, under a low ledge the ledge does,
-a solid rock answers its top (its underside faces down and never counts). The
-topmost hit has infinite air, so any node with an upward-facing hit answers.
+least ``clearance`` WORLD metres of air above it (to the next hit of any
+facing), measured on the lattice as ``clearance_model`` — under a high overhang
+the ground below wins, under a low ledge the ledge does, a solid rock answers
+its top (its underside faces down and never counts). The topmost hit has
+infinite air, so any node with an upward-facing hit answers.
 
 Rays are cast at the node's lattice position clamped 1 mm INSIDE the box, so
 the boundary ring answers the model's edge instead of grazing it; the lattice
 itself stays uniform.
 
-Params: rotation {x,y,z} (deg), step (m, WORLD), clearance (m), max_cells (int),
+Params: rotation {x,y,z} (deg), step (m, WORLD), clearance (m, WORLD), max_cells (int),
 target_m (m, 0 = unknown), measure ("xz" | "xyz", how ``s`` measures the extent —
 the same word the placement spec carries).
 Blender-side Python only (bpy, mathutils, stdlib).
@@ -162,7 +164,7 @@ def heightgrid(args):
     params = args.get("params") or {}
     rot = params.get("rotation") or {}
     step_world = float(params.get("step") or 0.25)
-    clearance = float(params.get("clearance") or 1.2)
+    clearance_world = float(params.get("clearance") or 1.2)
     max_cells = int(params.get("max_cells") or 40000)
     target_m = float(params.get("target_m") or 0.0)
     measure = str(params.get("measure") or "xz")
@@ -188,6 +190,12 @@ def heightgrid(args):
     extent = max(ext[0], ext[1], ext[2]) if measure == "xyz" else max(ext[0], ext[2])
     s = (target_m / (extent or 1.0)) if target_m > 0 else 1.0
     step = step_world / (s or 1.0)
+    # THE WORLD CLEARANCE, CAST IN MODEL UNITS — the same ``s``, for the same
+    # reason. 1.2 metres of head-room is more air than a normalised mesh is
+    # tall, so compared against model coordinates NOTHING qualifies except the
+    # topmost hit (which has infinite air above it): every lattice would answer
+    # the silhouette's top — a hut's roof, a door's lintel.
+    clearance_model = clearance_world / (s or 1.0)
 
     width = hi[0] - lo[0]
     depth = hi[2] - lo[2]
@@ -205,7 +213,7 @@ def heightgrid(args):
         z = _inside(lo[2] + j * step, lo[2], hi[2])
         for i in range(cols):
             x = _inside(lo[0] + i * step, lo[0], hi[0])
-            y = _walk_height(_hits_below(bvh, x, z, top), clearance)
+            y = _walk_height(_hits_below(bvh, x, z, top), clearance_model)
             if y is None:
                 values.append(None)
             else:

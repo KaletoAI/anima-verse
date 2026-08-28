@@ -29,14 +29,19 @@ from app.core.timeutils import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
+#: 3 since 2026-08-28: a version-2 lattice compared the 1.2 m head-room in
+#: MODEL units, so every node answered the mesh top (a hut's roof, a door's
+#: lintel); nothing to convert, re-bake.
 #: 2 since 2026-08-28: a lattice baked as version 1 took SURFACE_STEP_M for a
 #: MODEL unit, so a normalised mesh scaled to 10 m got a node every 2.5 m. Every
-#: v1 file therefore reads as stale and is re-baked (the button, or the
+#: older file therefore reads as stale and is re-baked (the button, or the
 #: "Bake walkable surfaces" improvement) — there is nothing to convert, the
-#: numbers were measured at the wrong resolution.
-SURFACE_VERSION = 2
-#: The lattice resolution in WORLD metres — what a node is worth on the ground
-#: a figure walks on, not in the model's own units (spec § 3).
+#: numbers were measured against the wrong unit.
+SURFACE_VERSION = 3
+#: The lattice resolution and the head-room a walkable cell needs, BOTH in
+#: WORLD metres — what they are worth on the ground a figure walks on, not in
+#: the model's own units (spec § 3). The bake divides both by the placement
+#: scale before it walks the lattice.
 SURFACE_STEP_M = 0.25
 SURFACE_CLEARANCE_M = 1.2
 MAX_SURFACE_CELLS = 40_000
