@@ -925,27 +925,48 @@ export function PosesTab() {
                           ))}
                         </div>
                       </Field>
-                      <Field
-                        label={t('Yaw offset')}
-                        hint={t('Degrees the pair clip’s frame turns against the marker facing.')}
-                      >
-                        <input
-                          className="ga-input"
-                          type="number"
-                          min={-180}
-                          max={180}
-                          step={1}
-                          value={draft.yaw_offset ?? 0}
-                          onChange={(e) => upd('yaw_offset', Number(e.target.value))}
-                        />
-                        <span style={{ alignSelf: 'center' }}>°</span>
-                      </Field>
+                      {/* The yaw offset is dialled UNDER THE PREVIEW, against
+                          the virtual marker the pair sits on — one control,
+                          where the effect is visible. Only a pose without an
+                          animation (and so without a preview) keeps the plain
+                          field here, so the value stays editable. */}
+                      {draft.animation ? null : (
+                        <Field
+                          label={t('Yaw offset')}
+                          hint={t('Degrees the pair clip’s frame turns against the marker facing.')}
+                        >
+                          <input
+                            className="ga-input"
+                            type="number"
+                            min={-180}
+                            max={180}
+                            step={1}
+                            value={draft.yaw_offset ?? 0}
+                            onChange={(e) => upd('yaw_offset', Number(e.target.value))}
+                          />
+                          <span style={{ alignSelf: 'center' }}>°</span>
+                        </Field>
+                      )}
                     </div>
                   ) : null}
 
                   {/* Below the select, not inside the Field: .ga-field-control
-                      is a flex ROW and would put the canvas beside the select. */}
-                  {draft.animation ? <ClipPreview kind={draft.animation} height={360} /> : null}
+                      is a flex ROW and would put the canvas beside the select.
+                      A PAIR is previewed on a virtual marker of its place type
+                      and carries the yaw dial; a solo pose never turns against
+                      a marker, so it gets no `onYawOffset`. */}
+                  {draft.animation ? (
+                    <ClipPreview
+                      kind={draft.animation}
+                      height={360}
+                      group={draft.group}
+                      rootDrop={(data.groups || {})[draft.group || '']?.root_drop ?? 0}
+                      yawOffset={draft.yaw_offset ?? 0}
+                      onYawOffset={draft.solo === false
+                        ? (deg) => upd('yaw_offset', deg)
+                        : undefined}
+                    />
+                  ) : null}
                 </div>
               ) : null}
               {draft.is_default ? (

@@ -12,6 +12,13 @@
  *   * a 1 m grid, the anchor and (for a pair) the live A↔B root distance give
  *     the metres a reference (a figure is 1.70 m, the scale used everywhere).
  *
+ * A PAIR pose that names a place type is previewed ON that place: a virtual
+ * marker box of the type's size, facing SOUTH, and the two figures anchored
+ * to it by the SERVER's formula (`places.pair_yaw`) — yaw = facing − 90° +
+ * `yaw_offset`, the root `root_drop × 1.70` under the marked surface. That is
+ * what the `yaw_offset` slider under the canvas dials: the preview turns the
+ * pair against the bench exactly as the running interaction will.
+ *
  * three.js is imported dynamically, like in Model3DViewer — the admin bundle
  * must not carry it for the tabs that never show 3D.
  */
@@ -21,8 +28,31 @@ import { anchorFigureBind } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { loadTestFigure } from '../characters/Model3DViewer'
+import { SliderInput } from '../../components/SliderInput'
 
 const FIGURE_H = 1.7
+
+/** The virtual marker a pair is seated on, per place type: width × height ×
+ *  depth in metres, the width across the marker's facing. A stand (and any
+ *  place type without a body — an unknown or empty group) has no box: the
+ *  pair plays on the ground, the way this preview always did. */
+const MARKER_BOX: Record<string, [number, number, number]> = {
+  seat: [0.5, 0.45, 0.5],
+  bed: [2.0, 0.5, 1.0],
+  floor: [1.0, 0.05, 0.6],
+  counter: [1.0, 0.9, 0.6],
+}
+
+function markerBox(group?: string): [number, number, number] | undefined {
+  return MARKER_BOX[(group || '').trim().toLowerCase()]
+}
+
+/** Y rotation (radians) of the clip frame on the marker — the server's rule
+ *  (`app/core/places.py: pair_yaw`) with the preview's marker facing SOUTH
+ *  (compass 0): clip +X (A → B) falls along `facing − 90° + yaw_offset`. */
+function pairYaw(yawOffsetDeg: number): number {
+  return ((0 - 90 + yawOffsetDeg) * Math.PI) / 180
+}
 
 interface ApiClip { kind: string; role?: string; set?: string; url: string }
 
@@ -62,8 +92,18 @@ function rootAt(path: { times: ArrayLike<number>; xyz: Float32Array }, t: number
  *  that window (or the server-computed loop cut) will write. */
 export interface PlayWindow { start: number; end: number }
 
-export function ClipPreview({ kind = '', height = 300, urls, window: win, speed = 1 }:
-  { kind?: string; height?: number; urls?: ClipUrls; window?: PlayWindow; speed?: number }) {
+export function ClipPreview({ kind = '', height = 300, urls, window: win, speed = 1,
+  group, rootDrop = 0, yawOffset = 0, onYawOffset }:
+  { kind?: string; height?: number; urls?: ClipUrls; window?: PlayWindow; speed?: number
+    /** place type of the pose — a pair is seated on a virtual marker of it */
+    group?: string
+    /** how far the figure root sits below the marked surface, as a FRACTION
+     *  of the figure height (the place type's `root_drop`) */
+    rootDrop?: number
+    /** degrees the clip frame turns against the marker facing */
+    yawOffset?: number
+    /** given = the pose is a pair one and the yaw offset is dialled here */
+    onYawOffset?: (deg: number) => void }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<string>('')
@@ -79,6 +119,14 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
   /** playback factor (0.5 = half speed) — what an import with `speed` bakes in */
   const speedRef = useRef(speed)
   speedRef.current = speed > 0 ? speed : 1
+  // Turning the pair on the marker (and a re-dialled root drop) must not
+  // reload figure and clips — the running tick reads both through a ref, so
+  // dragging the slider moves the couple in the live scene.
+  const yawRef = useRef(yawOffset)
+  yawRef.current = yawOffset
+  const dropRef = useRef(rootDrop)
+  dropRef.current = rootDrop
+  const box = markerBox(group)
 
   useEffect(() => {
     const host = hostRef.current
@@ -131,9 +179,40 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
         key.position.set(2, 4, 3)
         scene.add(key)
         scene.add(new THREE.GridHelper(8, 8, 0x7a8594, 0x3a4350))
+        // The clip frame: origin = the marker anchor, +X = A → B. Seated on a
+        // marker it carries the pair's turn and the root drop; without one it
+        // stays the identity and the figures stand in world coordinates, as
+        // they always did.
+        const frame = new THREE.Group()
+        scene.add(frame)
         // anchor: a small cross at the origin, +X marked (A → B)
         const axis = new THREE.AxesHelper(0.5)
-        scene.add(axis)
+        frame.add(axis)
+        // The virtual marker — a pair only, and only for a place type with a
+        // body. It does NOT turn with the clip frame: the marker faces south,
+        // and seeing the couple turn against it is the point of the slider.
+        const seat = parts.length === 2 ? markerBox(group) : undefined
+        if (seat) {
+          const [bw, bh, bd] = seat
+          const geom = new THREE.BoxGeometry(bw, bh, bd)
+          const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+            color: 0x7d8ea8, transparent: true, opacity: 0.45, roughness: 0.9,
+          }))
+          mesh.position.y = bh / 2
+          scene.add(mesh)
+          const edges = new THREE.LineSegments(
+            new THREE.EdgesGeometry(geom),
+            new THREE.LineBasicMaterial({ color: 0xc9d4e4 }),
+          )
+          edges.position.y = bh / 2
+          scene.add(edges)
+          disposers.push(() => {
+            geom.dispose()
+            edges.geometry.dispose();
+            (mesh.material as { dispose: () => void }).dispose();
+            (edges.material as { dispose: () => void }).dispose()
+          })
+        }
         const camera = new THREE.PerspectiveCamera(40, width / height, 0.05, 100)
         camera.position.set(0.6, 2.2, 4.2)
         const controls = new OrbitControls(camera, renderer.domElement)
@@ -181,7 +260,7 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
           anchorFigureBind(THREE, pivot, FIGURE_H)
           const root = new THREE.Group()
           root.add(pivot)
-          scene.add(root)
+          frame.add(root)
           // where the figure's hips sit in its bind pose — the clip's hips
           // height is played RELATIVE to that: a lying clip (hips 0.2 m) drops
           // the body, a standing one (1.13 m) leaves it where it binds
@@ -217,6 +296,13 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
           const end = w && w.end > start ? Math.min(w.end, fullDuration) : fullDuration
           const duration = Math.max(end - start, 1 / 30)
           const time = start + (((performance.now() - started) / 1000) * speedRef.current) % duration
+          if (seat) {
+            // Server formula, both terms: the frame turns by facing − 90° +
+            // yaw_offset, and its origin sits `root_drop × 1.70` under the
+            // marked surface (the box top).
+            frame.rotation.y = pairYaw(yawRef.current || 0)
+            frame.position.y = seat[1] - (dropRef.current || 0) * FIGURE_H
+          }
           for (const p of players) {
             p.mixer.setTime(time)
             const r = rootAt(p.path, time)
@@ -243,7 +329,14 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
       cancelAnimationFrame(raf)
       disposers.forEach((d) => d())
     }
-  }, [kind, height, urlKey, t])
+  }, [kind, height, urlKey, group, t])
+
+  // What the marker under the pair is — shown only once a pair is actually
+  // playing (a finite A ↔ B distance).
+  const markerNote = box
+    ? ` · ${t('marker')} ${box[0].toFixed(2)} × ${box[1].toFixed(2)} × ${box[2].toFixed(2)} m,`
+      + ` ${t('facing south')}, ${t('drop')} ${(rootDrop * FIGURE_H).toFixed(2)} m`
+    : ''
 
   return (
     <div style={{ marginTop: 8 }}>
@@ -252,10 +345,26 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
         {status || (info
           ? (Number.isFinite(info.dist)
             ? `${t('A ↔ B')}: ${info.dist.toFixed(2)} m · ${info.time.toFixed(1)} / ${info.duration.toFixed(1)} s`
-              + ` · ${t('figures 1.70 m, grid 1 m, +X = A → B')}`
+              + ` · ${t('figures 1.70 m, grid 1 m, +X = A → B')}` + markerNote
             : `${info.time.toFixed(1)} / ${info.duration.toFixed(1)} s · ${t('figure 1.70 m, grid 1 m, in place')}`)
           : '')}
       </div>
+      {onYawOffset ? (
+        <SliderInput
+          label={t('Yaw offset')}
+          unit="°"
+          title={t('Degrees the pair clip’s frame turns against the marker facing. The preview’s marker faces south, so the couple turns exactly as it will on the real bench.')}
+          min={-180}
+          max={180}
+          step={5}
+          fineStep={1}
+          value={yawOffset}
+          onChange={onYawOffset}
+          sliderWidth="auto"
+          sliderStyle={{ flex: 1, minWidth: 80 }}
+          style={{ display: 'flex', marginTop: 6 }}
+        />
+      ) : null}
     </div>
   )
 }
