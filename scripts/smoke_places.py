@@ -128,8 +128,9 @@ Hand-derived expectations:
       position unchanged. occupancy s2 == [Ann/pair, Bob/pair];
       free_slots(s2) == [] and _taken_count(s2) == 2 — the pair is counted
       ONCE, not per partner. room_offer_short == "seat 4 free, bed 1 free"
-      (s1 1 + s3 3). place_of(Ann) = s2 slot "pair" at slot 0 (0.7, −3).
-      release_pair clears both; s2 is no occupancy.
+      (s1 1 + s3 3). place_of(Ann) = s2 slot "pair" at the place's CENTRE
+      (1, −3) — the pair's anchor. release_pair clears both; s2 is no
+      occupancy.
       Catalog variant (written for this stage, restored after): "lapsitting"
       (seat, solo false, places 1, yaw_offset 90) and "dancing" (stand,
       solo false, places 2). Cid takes s1 (prefer). assign_pair(Ann, Bob,
@@ -148,6 +149,24 @@ Hand-derived expectations:
       of 3, not 3 — one pair) and _taken_count == 2. assign_pair(Eve, Fay,
       "cuddling") — s1 taken, s2 and s3 with one free each — raises
       PlaceUnavailable("no free seat for two"), Eve and Fay hold nothing.
+      ONE PAIR PER PLACE (review fix): the room is reduced to a single
+      s4  group seat, at (5, 1), capacity 4, spacing 0.6, facing 0
+          → centre (1, −3), slots (i − 1.5)·0.6 across: (0.1, −3),
+          (0.7, −3), (1.3, −3), (1.9, −3).
+      Everybody cleared. Ann+Bob "cuddling" → s4; after the setters the
+      pair holds slots 0+1: free_slots == [2, 3], _taken_count 2. The
+      offer for Fay reads "- Seat (2 of 4 free, Ann, Bob here): sitting,
+      reading" — two slots free but NO "cuddling (with partner)": a place
+      holding a pair takes no second one, whatever is left; room_offer_short
+      "seat 2 free". assign_pair("Cid", "Dan", "cuddling") raises
+      PlaceUnavailable although 2 slots are free; Cid and Dan hold nothing.
+      Eve "sitting" takes the first free slot, s4/2 at (1.3, −3): free
+      [3], _taken_count 3. Ann/Bob's pair ends (release_pair + poses
+      cleared), Eve released: Cid+Dan get s4 → (s4, −π/2).
+      Solo first: all cleared, Eve on s4/0 (prefer, (0.1, −3)); Ann+Bob
+      "cuddling" fit (3 free ≥ 2) and hold the first two slots Eve does
+      NOT: held {0, 1, 2} → free_slots == [3], _taken_count 3; place_of(Ann)
+      still says the centre (1, −3).
 
 Usage:  ./.venv/bin/python scripts/smoke_places.py
 """
@@ -599,8 +618,8 @@ check("a pair of two takes both slots — counted once, not per partner",
 short = places.room_offer_short(HOUSE, "lounge")
 check("room_offer_short: seat 4 free, bed 1 free", short == "seat 4 free, bed 1 free", repr(short))
 po = places.place_of("Ann")
-check("place_of(Ann) = s2 slot pair at (0.7, −3)",
-      po is not None and po["id"] == "s2" and po["slot"] == "pair" and po["x"] == 0.7 and po["z"] == -3.0,
+check("place_of(Ann) = s2 slot pair at the centre (1, −3)",
+      po is not None and po["id"] == "s2" and po["slot"] == "pair" and po["x"] == 1.0 and po["z"] == -3.0,
       str(po))
 places.release_pair("Ann", "Bob")
 check("release_pair clears both",
@@ -658,6 +677,61 @@ except places.PlaceUnavailable as e:
     check("no place with two free seats raises PlaceUnavailable", str(e) == "no free seat for two", str(e))
 check("Eve and Fay hold nothing", get_character_profile("Eve").get("place") is None
       and get_character_profile("Fay").get("place") is None)
+
+# one pair per place: a second pair is refused however many slots are left
+S4 = {"id": "s4", "group": "seat", "at": [5, 1], "capacity": 4, "spacing_m": 0.6, "rotation": 0}
+write_layout([S4])
+places.invalidate()
+for _n in ("Ann", "Bob", "Cid", "Dan", "Eve", "Fay"):
+    clear_pose_intent(_n)
+    set_character_pos(_n, -3.5, -3.5)
+s4 = next(p for p in places.room_places(HOUSE, "lounge") if p["id"] == "s4")
+check("s4 slots (0.1, −3) … (1.9, −3)",
+      s4["slots"] == [[0.1, -3.0], [0.7, -3.0], [1.3, -3.0], [1.9, -3.0]], str(s4["slots"]))
+r = places.assign_pair("Ann", "Bob", "cuddling")
+check("Ann+Bob → s4", r is not None and r[0]["id"] == "s4", str(r))
+set_pose_intent("Ann", "cuddling")
+set_pose_intent("Bob", "cuddling")
+occ = places.occupancy(HOUSE, "lounge")
+check("one pair on a capacity-4 place: free_slots [2, 3], _taken_count 2",
+      places.free_slots(s4, occ["s4"]) == [2, 3] and places._taken_count(s4, occ["s4"]) == 2,
+      str(occ.get("s4")))
+offer = places.room_offer("Fay", HOUSE, "lounge")
+check("the offer shows 2 of 4 free but no pair pose on the pair's place",
+      "- Seat (2 of 4 free, Ann, Bob here): sitting, reading" in offer.split("\n"), repr(offer))
+check("room_offer_short: seat 2 free", places.room_offer_short(HOUSE, "lounge") == "seat 2 free")
+try:
+    places.assign_pair("Cid", "Dan", "cuddling")
+    check("a second pair on the same place is refused", False, "no exception")
+except places.PlaceUnavailable as e:
+    check("a second pair on the same place is refused", str(e) == "no free seat for two", str(e))
+check("Cid and Dan hold nothing", get_character_profile("Cid").get("place") is None
+      and get_character_profile("Dan").get("place") is None)
+check("Eve → s4/2, the first free slot, at (1.3, −3)",
+      places.assign("Eve", "sitting") == field("s4", 2) and get_character_pos("Eve") == {"x": 1.3, "z": -3.0})
+occ = places.occupancy(HOUSE, "lounge")
+check("free [3], _taken_count 3", places.free_slots(s4, occ["s4"]) == [3]
+      and places._taken_count(s4, occ["s4"]) == 3)
+places.release_pair("Ann", "Bob")
+clear_pose_intent("Ann")
+clear_pose_intent("Bob")
+places.release("Eve")
+r = places.assign_pair("Cid", "Dan", "cuddling")
+check("after the first pair ends, Cid+Dan get s4 (−π/2)",
+      r is not None and r[0]["id"] == "s4" and near(r[1], -math.pi / 2), str(r))
+# solo first: the pair holds the first slots the solo sitter does NOT
+places.release_pair("Cid", "Dan")
+check("Eve → s4/0 (prefer)", places.assign("Eve", "sitting", prefer="s4") == field("s4", 0)
+      and get_character_pos("Eve") == {"x": 0.1, "z": -3.0})
+r = places.assign_pair("Ann", "Bob", "cuddling")
+set_pose_intent("Ann", "cuddling")
+set_pose_intent("Bob", "cuddling")
+occ = places.occupancy(HOUSE, "lounge")
+check("pair beside a solo on slot 0: held {0, 1, 2} → free [3], _taken_count 3",
+      r is not None and r[0]["id"] == "s4" and places.free_slots(s4, occ["s4"]) == [3]
+      and places._taken_count(s4, occ["s4"]) == 3, str(occ.get("s4")))
+po = places.place_of("Ann")
+check("place_of(Ann) says the centre (1, −3)", po is not None and po["x"] == 1.0 and po["z"] == -3.0, str(po))
 
 # ── summary ─────────────────────────────────────────────────────────────
 print()

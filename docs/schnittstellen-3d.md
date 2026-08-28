@@ -1621,7 +1621,8 @@ Realsekunde (0 = Freeze).
 Daneben `place: {id, slot, x, z, facing?, room_id} | null` — der Platz
 (Raum- oder Prop-Marker, plan-posen-plaetze.md § 4), auf den der Server die
 Figur mit ihrer Pose gesetzt hat: `x`/`z` ist der Weltpunkt des gehaltenen
-Slots (`slot` = Index, `"pair"` bei einem Paar), `facing` das Marker-Facing in
+Slots (`slot` = Index; `"pair"` bei einem Paar, dann die Platzmitte = Anker —
+ein Platz trägt höchstens EIN Paar), `facing` das Marker-Facing in
 Kompassgrad (fehlt am Marker → `null`). **Der Server hat gestellt; ein Client
 zeichnet die Figur auf dem Slot und wählt nicht mehr selbst.** `null`, wenn die
 Figur keinen Platz hält (Pose ohne Marker im Raum, verschwundener Marker), unter

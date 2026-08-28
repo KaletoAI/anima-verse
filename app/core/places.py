@@ -19,7 +19,9 @@ where the character stands. ``prefer`` insists on one place and raises
 ``interaction_engine``) takes ONE place for two through ``assign_pair``:
 both profiles hold it as the ``PAIR_SLOT`` and the pair consumes the pose's
 ``places`` slots from slot 0 upwards; ``assign`` never re-seats a running
-pair, ``release_pair`` stands both up.
+pair, ``release_pair`` stands both up. A place carries at most ONE pair —
+its centre is the pair's anchor, unique per place — so ``assign_pair``
+refuses a place another pair holds, however many slots are left.
 
 What the LLM is told about all this lives here too (plan § 5):
 :func:`room_offer` is the prompt block every chat/thought consumer shows —
@@ -40,7 +42,8 @@ logger = get_logger("places")
 
 Place = Dict[str, Any]
 #: The slot value a PAIR holds: the interaction owns ``pose_places`` slots
-#: of the place from slot 0 upwards, not one numbered seat.
+#: of the place — the first ones no solo sitter holds — not one numbered
+#: seat. At most one pair per place (``assign_pair``).
 PAIR_SLOT = "pair"
 _CACHE_TTL_S = 300.0          # belt and braces — every writer invalidates anyway
 
@@ -183,26 +186,40 @@ def occupancy(location_id: str, room_id: str, exclude: str = "") -> Dict[str, Li
     return out
 
 
-def _taken_count(place: Place, taken: List[Tuple[str, Any]]) -> int:
-    """Slots of ``place`` the entries in ``taken`` hold. A solo entry is one
-    slot; the PAIR entries (both partners list the place) are ONE pair that
-    holds its pose's ``places`` slots — counted once, never per partner."""
+def _has_pair(taken: List[Tuple[str, Any]]) -> bool:
+    return any(slot == PAIR_SLOT for _, slot in taken)
+
+
+def _held_slots(place: Place, taken: List[Tuple[str, Any]]) -> List[int]:
+    """The slot indices of ``place`` the entries in ``taken`` hold — the ONE
+    source ``free_slots`` and ``_taken_count`` both read. A solo entry holds
+    its numbered slot; the PAIR entries (both partners list the place) are
+    ONE pair — at most one per place, ``assign_pair`` sees to that — holding
+    its pose's ``places`` slots: the first ones no solo sitter holds, counted
+    once, never per partner."""
     from app.core.pose_catalog import pose_places
     from app.models.character import get_character_pose_key
-    n = sum(1 for _, slot in taken if slot != PAIR_SLOT)
-    pair = [pose_places(get_character_pose_key(name)) for name, slot in taken if slot == PAIR_SLOT]
-    if pair:
-        n += max(pair)
-    return min(n, place["capacity"])
+    held = {slot for _, slot in taken if isinstance(slot, int)}
+    need = max((pose_places(get_character_pose_key(name))
+                for name, slot in taken if slot == PAIR_SLOT), default=0)
+    for i in range(place["capacity"]):
+        if need <= 0:
+            break
+        if i not in held:
+            held.add(i)
+            need -= 1
+    return sorted(i for i in held if 0 <= i < place["capacity"])
+
+
+def _taken_count(place: Place, taken: List[Tuple[str, Any]]) -> int:
+    """How many slots of ``place`` are held (see :func:`_held_slots`)."""
+    return len(_held_slots(place, taken))
 
 
 def free_slots(place: Place, taken: List[Tuple[str, Any]]) -> List[int]:
-    """The slot indices of ``place`` nobody in ``taken`` holds. A pair
-    occupies its slots from 0 upwards, so the free ones are the tail."""
-    if any(slot == PAIR_SLOT for _, slot in taken):
-        used = _taken_count(place, taken)
-        return list(range(used, place["capacity"]))
-    held = {slot for _, slot in taken if isinstance(slot, int)}
+    """The slot indices of ``place`` nobody in ``taken`` holds (the
+    complement of :func:`_held_slots`)."""
+    held = set(_held_slots(place, taken))
     return [i for i in range(place["capacity"]) if i not in held]
 
 
@@ -347,13 +364,17 @@ def can_take(name: str, pose_key: str, place_id: str, ignore: Tuple[str, ...] = 
 
 def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place, float]]:
     """ONE place for two: a place of the pose's group in the actor's room
-    with room for the pose's ``places`` slots — the nearest to the pair's
-    midpoint — written to BOTH profiles as the ``PAIR_SLOT``; returns
-    ``(place, yaw_rad)`` (:func:`pair_yaw`). Nobody is moved: the
-    interaction engine places the figures from the anchor. None when no
-    place of the group has the slots and the group is ``stand`` (a standing
-    pair meets halfway); any other group without a place raises
-    :class:`PlaceUnavailable` — a seated pair without a seat is no pair."""
+    with room for the pose's ``places`` slots and NO other pair on it (one
+    pair per place — the centre is the pair's anchor; the partners' own
+    pair seat counts as free for a re-assignment) — the nearest to the
+    pair's midpoint — written to BOTH profiles as the ``PAIR_SLOT``;
+    returns ``(place, yaw_rad)`` (:func:`pair_yaw`). Nobody is moved: the
+    interaction engine places the figures from the anchor. None when the
+    actor stands in no location/room (outdoors: the caller anchors at the
+    midpoint, whatever the group) or when no place of the group fits and
+    the group is ``stand`` (a standing pair meets halfway); any other
+    group without a fitting place raises :class:`PlaceUnavailable` — a
+    seated pair without a seat is no pair."""
     from app.core.pose_catalog import group_of, pose_places
     from app.models.character import (get_character_pos, get_character_profile,
                                       save_character_profile)
@@ -370,7 +391,7 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
             if p["group"] != group:
                 continue
             others = [(n, s) for n, s in occ.get(p["id"], []) if n not in mine]
-            if len(free_slots(p, others)) >= need:
+            if not _has_pair(others) and len(free_slots(p, others)) >= need:
                 fitting.append(p)
         if not fitting:
             if group == "stand":
@@ -398,7 +419,7 @@ def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
     """The place a character holds, validated against today's inventory —
     a marker that vanished, another room's id or a slot beyond the capacity
     reads as no place. The dict is the place plus ``slot`` and the ``x, z``
-    of the held slot (a pair sits on slot 0)."""
+    of the held slot — for a pair the place's centre, its anchor."""
     from app.models.character import get_character_profile
     prof = profile if profile is not None else (get_character_profile(name) or {})
     pl = prof.get("place")
@@ -408,9 +429,11 @@ def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
     for p in room_places(loc, room):
         slot = _held_slot(pl, p, room)
         if slot is not None:
-            idx = 0 if slot == PAIR_SLOT else slot
-            xz = p["slots"][idx] if idx < len(p["slots"]) else p["slots"][0]
-            return dict(p, slot=slot, x=xz[0], z=xz[1])
+            if slot == PAIR_SLOT:
+                xz = centre_of(p)
+            else:
+                xz = p["slots"][slot] if slot < len(p["slots"]) else p["slots"][0]
+            return dict(p, slot=slot, x=round(xz[0], 2), z=round(xz[1], 2))
     return None
 
 
@@ -425,7 +448,9 @@ def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
     group the free slots allow. A pair pose needs ``places`` free slots ON
     ONE place (a pair sits on one marker, never across two chairs), so the
     gate is the largest free count of any single place in the row, not the
-    row's sum. ``viewer`` never counts as an occupant: the block is written
+    row's sum. A place that already holds a pair takes no second one (one
+    pair per place), so it does not count towards that gate whatever is
+    left on it. ``viewer`` never counts as an occupant: the block is written
     for them."""
     from app.core.pose_catalog import get_catalog, poses_in_group
     occ = occupancy(location_id, room_id, exclude=viewer)
@@ -439,7 +464,7 @@ def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
         n_free = len(free_slots(p, taken))
         row["count"] += 1
         row["free"] += n_free
-        row["max_free"] = max(row["max_free"], n_free)
+        row["max_free"] = max(row["max_free"], 0 if _has_pair(taken) else n_free)
         row["cap"] += p["capacity"]
         row["who"] += [n for n, _ in taken]
     lines: List[str] = []

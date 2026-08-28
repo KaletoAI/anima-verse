@@ -248,9 +248,10 @@ export interface MapCharacter {
   /** running PAIR interaction (§ A8a); null/absent when there is none */
   interaction?: MapInteraction | null;
   /** The place the SERVER seated this character on (plan-posen-plaetze.md
-   *  § 4): the client draws the figure on that slot and chooses nothing.
-   *  `x`/`z` are the slot's world metres as the server composed them (the
-   *  same point as the marker's `slots[slot]` in the scene payload). */
+   *  § 4): the client draws the figure on that slot (looked up by `id` in
+   *  the room's markers) and chooses nothing. `x`/`z` are WORLD metres from
+   *  the server (the scene payload's marker slots are tile-local; for a
+   *  pair the point is the place's centre, its anchor). */
   place?: { id: string; slot: number | 'pair'; x: number; z: number; facing?: number; room_id: string } | null;
   avatar_url?: string;
 }

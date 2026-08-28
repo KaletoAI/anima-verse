@@ -77,7 +77,8 @@ Hand-derived expectations:
       (∓0.3, 0) turned by 0 → Ann at (9.7, 22), Bob at (10.3, 22).
       Both profiles hold place {spot, slot "pair", square}; the anchor
       carries place_id "spot"; the worldmap row's ``place`` says slot
-      "pair" on slot 0's point (10, 22.3) and the anchor's place_id. The
+      "pair" on the place's centre (10, 22) — the anchor — and the anchor's
+      place_id. The
       pair consumes ``places`` = 2 slots: free_slots(spot) == [] and
       _taken_count == 2. ``assign("Ann", "embracing")`` — what the setter
       calls right after — KEEPS the pair seat unchanged, so Ann is not
@@ -409,10 +410,10 @@ check("assign keeps the pair seat (no re-seating onto a solo slot)",
       and near(get_character_pos("Ann")["x"], 9.7, 0.011), str(get_character_profile("Ann").get("place")))
 wm = build_worldmap_payload(show_all=True)
 rows = {c["name"]: c for c in wm["characters"]}
-check("worldmap: anchor.place_id spot, place slot 'pair' on (10, 22.3)",
+check("worldmap: anchor.place_id spot, place slot 'pair' on the centre (10, 22)",
       rows["Ann"]["interaction"]["anchor"].get("place_id") == "spot"
       and rows["Ann"].get("place", {}).get("slot") == "pair"
-      and rows["Ann"]["place"]["x"] == 10.0 and rows["Ann"]["place"]["z"] == 22.3,
+      and rows["Ann"]["place"]["x"] == 10.0 and rows["Ann"]["place"]["z"] == 22.0,
       f'{rows["Ann"]["interaction"]["anchor"]} {rows["Ann"].get("place")}')
 ie.end_interaction("Ann")
 check("end clears interaction, pose and place on both",
