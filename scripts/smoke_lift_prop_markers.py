@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: the marker-repair script lifts at[1] by metres, per variant height.
+"""Smoke: the marker-repair script lifts at[1] by the COMPOSED metre factor.
 
 Usage:
     ./.venv/bin/python scripts/smoke_lift_prop_markers.py
@@ -8,36 +8,56 @@ Runs WITHOUT the server and WITHOUT a world DB: it builds a throwaway world
 tree in a temp dir and drives ``scripts/lift_prop_markers.py`` over it as a
 subprocess. Nothing under ``worlds/`` is touched.
 
-The expected numbers are derived BY HAND from the conversion the script
-performs (``at[1] += delta_m / height_m``, rounded to 4 decimals like
-``props.sanitize_markers``) — never copied from a run:
+Metres per unit of ``at[1]`` are NOT ``height_m``. ``compose_prop_marker``
+scales the raw box uniformly, so
+
+    per_frac = bbox[1] * max(width_m, depth_m, height_m) / max(bbox)
+
+The expected numbers are derived BY HAND from that, rounded to 4 decimals like
+``props.sanitize_markers`` — never copied from a run:
 
     seat delta = +0.2715 m   (drawn buttock height 0.8053 - applied drop 0.5338)
     bed  delta = -0.2802 m   (drop 1.0727 - laying's lowest point 0.7925)
 
-    wingback  v0  h = 1.14 m   0.155 + 0.2715/1.14 = 0.155 + 0.238158 = 0.393158 -> 0.3932
-    wingback  v1  h = 0.57 m   0.155 + 0.2715/0.57 = 0.155 + 0.476316 = 0.631316 -> 0.6313
-    king bed  v0  h = 1.25 m   0.660 - 0.2802/1.25 = 0.660 - 0.224160 = 0.435840 -> 0.4358
-    stand         h = 1.14 m   untouched, whatever the delta
+    wingback (bbox [0.956, 1.0, 0.95] — NOT proportional to the dims)
+      v0  dims 0.9 / 0.9 / 0.79   per_frac = 1.0 x 0.9  / 1.0 = 0.9000
+          0.155 + 0.2715/0.9  = 0.155 + 0.301667 = 0.456667 -> 0.4567
+          (with the old height_m factor this would be 0.155 + 0.2715/0.79
+           = 0.498671 -> 0.4987, a 3.8 cm error — asserted ABSENT)
+      v1  dims 0.45 / 0.45 / 0.57  per_frac = 1.0 x 0.57 / 1.0 = 0.5700
+          0.155 + 0.2715/0.57 = 0.155 + 0.476316 = 0.631316 -> 0.6313
 
-The two wingback variants carry the SAME old fraction at DIFFERENT heights and
-must land on different new fractions — that is the per-variant-height check.
+    king bed (bbox [2.0, 1.25, 2.1], dims 2.0 / 2.1 / 1.25 — proportional)
+          per_frac = 1.25 x 2.1 / 2.1 = 1.2500 = height_m
+          0.660 - 0.2802/1.25 = 0.660 - 0.224160 = 0.435840 -> 0.4358
+
+    stand  untouched, whatever the delta
+
+The two wingback variants carry the SAME old fraction and must land on
+different new fractions — that is the per-variant check; and the same fraction
+in the same prop converts by the VARIANT's dims, not the prop's box alone.
 
 Composed metres (the column the report compares against the finding's
-expectation table) are ``at[1] * height_m``:
+expectation table) are ``at[1] * per_frac``:
 
-    wingback v0   0.155 x 1.14 = 0.17670 m  ->  0.3932 x 1.14 = 0.448248 m
-                  the rise is 0.271548 m ~ the requested 0.2715 m (rounding)
+    wingback v0   0.155 x 0.9  = 0.13950 m  ->  0.4567 x 0.9  = 0.411030 m
+                  the rise is 0.271530 m ~ the requested 0.2715 m (rounding)
     king bed      0.660 x 1.25 = 0.82500 m  ->  0.4358 x 1.25 = 0.544750 m
 
-Clamp case (``props.MARKER_AT_MAX`` = 1.5, and index 1 has its own lower bound
-``MARKER_AT_Y_MIN`` = -1.0):
+Fallback + clamp case (``props.MARKER_AT_MAX`` = 1.5, index 1 has its own
+lower bound ``MARKER_AT_Y_MIN`` = -1.0): a prop WITHOUT a measured ``bbox``
+falls back to ``height_m`` and says so —
 
-    stool  h = 0.50 m   1.400 + 0.2715/0.50 = 1.400 + 0.543 = 1.943 -> clamped 1.5
+    stool  h = 0.50 m   1.400 + 0.2715/0.50 = 1.400 + 0.543 = 1.943 -> clamp 1.5
+
+Orientation fix: a variant whose mesh carries a non-zero ``rotation``
+(``props.ROTATION_KEY``, on the FILE sidecar named by ``selection.json``, or
+inline on the variant) has its vertical in another ``at`` component and is
+skipped untouched; an all-zero fix is not a fix and does not skip.
 
 Non-idempotency is deliberate and is pinned here: the script stores no "already
 lifted" mark, so running it twice with the same delta shifts twice
-(0.3932 + 0.238158 = 0.631358 -> 0.6314). The user runs it exactly once.
+(0.4567 + 0.301667 = 0.758367 -> 0.7584). The user runs it exactly once.
 """
 
 from __future__ import annotations
@@ -83,56 +103,103 @@ def check_true(label: str, cond: bool, detail: str = "") -> None:
 
 # ── Fixture ──────────────────────────────────────────────────────────────
 
-def _sidecar(name: str, variants: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _sidecar(name: str, variants: List[Dict[str, Any]],
+             bbox: Any = None) -> Dict[str, Any]:
     """A prop master record trimmed to what the script reads — plus a few
-    unrelated keys, so the rewrite is proven to keep the rest of the file."""
-    return {
+    unrelated keys, so the rewrite is proven to keep the rest of the file.
+    ``bbox`` is the top-level raw AABB the recipe scales from."""
+    out: Dict[str, Any] = {
         "name": name,
         "category": "furniture",
         "tags": ["demo"],
         "created_at": "2026-08-29T00:00:00+00:00",
-        "model_variants": variants,
     }
+    if bbox is not None:
+        out["bbox"] = bbox
+    out["model_variants"] = variants
+    return out
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8")
 
 
 def build_world(root: Path) -> None:
     props = root / "props"
-    (props / "wingback-chair-aaa111").mkdir(parents=True)
-    (props / "king-size-bed-bbb222").mkdir(parents=True)
-    (props / "wooden-stool-ccc333").mkdir(parents=True)
-    # A prop dir without a sidecar — must be skipped silently.
-    (props / "broken-ddd444").mkdir(parents=True)
+    for name in ("wingback-chair-aaa111", "king-size-bed-bbb222",
+                 "wooden-stool-ccc333", "tilted-shelf-eee555",
+                 # A prop dir without a sidecar — skipped silently.
+                 "broken-ddd444"):
+        (props / name).mkdir(parents=True)
 
-    (props / "wingback-chair-aaa111" / "sidecar.json").write_text(
-        json.dumps(_sidecar("Wingback chair", [
-            {"stem": "wingback", "active": True, "height_m": 1.14,
-             "width_m": 0.9, "depth_m": 0.95, "markers": [
-                 {"id": "q4zmnmq4", "group": "seat", "at": [0.505, 0.155, 0.786]},
-                 {"id": "s7ta9d1x", "group": "stand", "at": [0.5, 0.3, 0.2],
-                  "facing": 90},
-             ]},
-            {"stem": "wingback-low", "active": False, "height_m": 0.57,
-             "width_m": 0.9, "depth_m": 0.95, "markers": [
-                 {"id": "b2c3d4e5", "group": "seat", "at": [0.505, 0.155, 0.786],
-                  "capacity": 2, "spacing_m": 0.6},
-             ]},
-        ]), indent=2, ensure_ascii=False), encoding="utf-8")
+    # Box NOT proportional to the dims: per_frac 0.9 for v0, 0.57 for v1.
+    _write_json(props / "wingback-chair-aaa111" / "sidecar.json",
+                _sidecar("Wingback chair", [
+                    {"stem": "wingback", "active": True,
+                     "width_m": 0.9, "depth_m": 0.9, "height_m": 0.79,
+                     "markers": [
+                         {"id": "q4zmnmq4", "group": "seat",
+                          "at": [0.505, 0.155, 0.786]},
+                         {"id": "s7ta9d1x", "group": "stand",
+                          "at": [0.5, 0.3, 0.2], "facing": 90},
+                     ]},
+                    {"stem": "wingback-low", "active": False,
+                     "width_m": 0.45, "depth_m": 0.45, "height_m": 0.57,
+                     "markers": [
+                         {"id": "b2c3d4e5", "group": "seat",
+                          "at": [0.505, 0.155, 0.786],
+                          "capacity": 2, "spacing_m": 0.6},
+                     ]},
+                ], bbox=[0.956, 1.0, 0.95]))
 
-    (props / "king-size-bed-bbb222" / "sidecar.json").write_text(
-        json.dumps(_sidecar("King size bed", [
-            {"stem": "kingbed", "active": True, "height_m": 1.25,
-             "width_m": 2.0, "depth_m": 2.1, "markers": [
-                 {"id": "ymzz7gz6", "group": "bed", "at": [0.5, 0.66, 0.5]},
-             ]},
-        ]), indent=2, ensure_ascii=False), encoding="utf-8")
+    # Proportional box: per_frac == height_m == 1.25. Its selected mesh file
+    # carries an ALL-ZERO orientation fix, which must not count as a fix.
+    _write_json(props / "king-size-bed-bbb222" / "sidecar.json",
+                _sidecar("King size bed", [
+                    {"stem": "kingbed", "active": True,
+                     "width_m": 2.0, "depth_m": 2.1, "height_m": 1.25,
+                     "markers": [
+                         {"id": "ymzz7gz6", "group": "bed", "at": [0.5, 0.66, 0.5]},
+                     ]},
+                ], bbox=[2.0, 1.25, 2.1]))
+    _write_json(props / "king-size-bed-bbb222" / "selection.json",
+                {"kingbed": {"full": "kingbed_1787877866.glb"}})
+    _write_json(props / "king-size-bed-bbb222" / "kingbed_1787877866.json",
+                {"rotation": {"x": 0.0, "y": 0.0, "z": 0.0}})
 
-    (props / "wooden-stool-ccc333" / "sidecar.json").write_text(
-        json.dumps(_sidecar("Wooden stool", [
-            {"stem": "stool", "active": True, "height_m": 0.5,
-             "width_m": 0.4, "depth_m": 0.4, "markers": [
-                 {"id": "clampme1", "group": "seat", "at": [0.5, 1.4, 0.5]},
-             ]},
-        ]), indent=2, ensure_ascii=False), encoding="utf-8")
+    # No measured bbox -> falls back to height_m with a note; and clamps.
+    # The second marker's `at` is malformed and must be reported, not dropped.
+    _write_json(props / "wooden-stool-ccc333" / "sidecar.json",
+                _sidecar("Wooden stool", [
+                    {"stem": "stool", "active": True,
+                     "width_m": 0.4, "depth_m": 0.4, "height_m": 0.5,
+                     "markers": [
+                         {"id": "clampme1", "group": "seat", "at": [0.5, 1.4, 0.5]},
+                         {"id": "badat001", "group": "seat", "at": [0.5, 0.5]},
+                     ]},
+                ]))
+
+    # Two ways an orientation fix reaches a variant: on the FILE sidecar its
+    # selection names, and inline on the variant entry. Both must skip.
+    _write_json(props / "tilted-shelf-eee555" / "sidecar.json",
+                _sidecar("Tilted shelf", [
+                    {"stem": "tilted", "active": True,
+                     "width_m": 1.0, "depth_m": 1.0, "height_m": 1.0,
+                     "markers": [
+                         {"id": "rot90aaa", "group": "seat", "at": [0.5, 0.2, 0.5]},
+                     ]},
+                    {"stem": "tilted-inline", "active": False,
+                     "width_m": 1.0, "depth_m": 1.0, "height_m": 1.0,
+                     "rotation": {"x": 0, "y": 180, "z": 0},
+                     "markers": [
+                         {"id": "rot180bb", "group": "seat", "at": [0.5, 0.2, 0.5]},
+                     ]},
+                ], bbox=[1.0, 1.0, 1.0]))
+    _write_json(props / "tilted-shelf-eee555" / "selection.json",
+                {"tilted": {"full": "tilted_1787000000.glb"}})
+    _write_json(props / "tilted-shelf-eee555" / "tilted_1787000000.json",
+                {"rotation": {"x": 90.0, "y": 0.0, "z": 0.0}})
 
 
 def snapshot(root: Path) -> Dict[str, bytes]:
@@ -166,17 +233,29 @@ def part1_dry_run(worlds: Path, world: Path) -> None:
                        "--group", "bed", "--delta-m", BED_DELTA)
     check("exit code", rc, 0)
     check("files byte-identical", snapshot(world), before)
-    check_true("table shows the new seat fraction 0.3932", "0.3932" in out, out)
+    check_true("table shows the composed factor 0.9000", "0.9000" in out, out)
+    check_true("table shows the new seat fraction 0.4567", "0.4567" in out, out)
+    check_true("the height_m factor's 0.4987 is NOT used",
+               "0.4987" not in out, out)
     check_true("table shows the per-variant 0.6313", "0.6313" in out, out)
     check_true("table shows the new bed fraction 0.4358", "0.4358" in out, out)
-    check_true("table shows composed metres 0.448",
-               "0.448" in out, out)
+    check_true("table shows composed metres 0.411", "0.411" in out, out)
+    check_true("column is named 'marker height (m)'",
+               "marker height (m)" in out, out)
     check_true("clamp is reported", "clamped" in out.lower(), out)
+    check_true("the bbox-less prop says it fell back to height_m",
+               "no measured bbox" in out and "height_m 0.5" in out, out)
+    check_true("the orientation fix is reported",
+               out.count("orientation fix") == 2, out)
+    check_true("the malformed at is reported",
+               "badat001" in out and "not three numbers" in out, out)
     check_true("closing line names the server",
                "dry run — nothing written; stop the server before --apply" in out,
                out)
     check_true("no stray stderr", err.strip() == "", err)
     check_true("stand marker absent from the table", "s7ta9d1x" not in out, out)
+    check_true("skipped rotated markers absent from the table",
+               "rot90aaa" not in out and "rot180bb" not in out, out)
 
 
 def part2_apply(worlds: Path, world: Path) -> None:
@@ -187,28 +266,43 @@ def part2_apply(worlds: Path, world: Path) -> None:
     check("exit code", rc, 0)
     check_true("summary counts markers and files",
                "written 4 markers in 3 files" in out, out)
+    for prop in ("wingback-chair-aaa111", "king-size-bed-bbb222",
+                 "wooden-stool-ccc333"):
+        check_true(f"names the file it wrote ({prop})",
+                   f"wrote {world}/props/{prop}/sidecar.json" in out, out)
+    check_true("the skipped prop is not written",
+               "tilted-shelf-eee555/sidecar.json" not in out, out)
 
     chair = markers(world, "wingback-chair-aaa111")
-    check("wingback v0 seat at[1]", chair[0][0]["at"][1], 0.3932)
+    check("wingback v0 seat at[1]", chair[0][0]["at"][1], 0.4567)
     check("wingback v0 seat at[0] untouched", chair[0][0]["at"][0], 0.505)
     check("wingback v0 seat at[2] untouched", chair[0][0]["at"][2], 0.786)
     check("stand marker untouched", chair[0][1]["at"], [0.5, 0.3, 0.2])
     check("stand facing kept", chair[0][1].get("facing"), 90)
-    check("wingback v1 uses ITS height", chair[1][0]["at"][1], 0.6313)
+    check("wingback v1 uses ITS dims", chair[1][0]["at"][1], 0.6313)
     check("capacity/spacing kept", (chair[1][0].get("capacity"),
                                     chair[1][0].get("spacing_m")), (2, 0.6))
 
     bed = markers(world, "king-size-bed-bbb222")
-    check("king bed at[1]", bed[0][0]["at"][1], 0.4358)
+    check("king bed at[1] (zero rotation is not a fix)",
+          bed[0][0]["at"][1], 0.4358)
 
     stool = markers(world, "wooden-stool-ccc333")
     check("stool clamped to MARKER_AT_MAX", stool[0][0]["at"][1], 1.5)
+    check("malformed at left alone", stool[0][1]["at"], [0.5, 0.5])
+
+    tilted = markers(world, "tilted-shelf-eee555")
+    check("file-sidecar rotation: marker untouched", tilted[0][0]["at"],
+          [0.5, 0.2, 0.5])
+    check("inline rotation: marker untouched", tilted[1][0]["at"],
+          [0.5, 0.2, 0.5])
 
     data = json.loads((world / "props" / "wingback-chair-aaa111" / "sidecar.json")
                       .read_text(encoding="utf-8"))
     check("unrelated keys survive", data["name"], "Wingback chair")
     check("variant keys survive", sorted(data["model_variants"][0]),
           ["active", "depth_m", "height_m", "markers", "stem", "width_m"])
+    check("the prop's bbox survives", data["bbox"], [0.956, 1.0, 0.95])
     raw = (world / "props" / "wingback-chair-aaa111" / "sidecar.json").read_bytes()
     check_true("written like props._write_sidecar (indent 2, no trailing NL)",
                raw.startswith(b"{\n  \"name\"") and not raw.endswith(b"\n"),
@@ -223,8 +317,8 @@ def part3_not_idempotent(worlds: Path, world: Path) -> None:
                        "--group", "seat", "--delta-m", SEAT_DELTA)
     check("exit code", rc, 0)
     chair = markers(world, "wingback-chair-aaa111")
-    # 0.3932 + 0.2715/1.14 = 0.3932 + 0.238158 = 0.631358 -> 0.6314
-    check("wingback v0 shifted a second time", chair[0][0]["at"][1], 0.6314)
+    # 0.4567 + 0.2715/0.9 = 0.4567 + 0.301667 = 0.758367 -> 0.7584
+    check("wingback v0 shifted a second time", chair[0][0]["at"][1], 0.7584)
     bed = markers(world, "king-size-bed-bbb222")
     check("bed untouched without its group", bed[0][0]["at"][1], 0.4358)
 
@@ -255,6 +349,13 @@ def part4_guards(worlds: Path) -> None:
                        "--group", "seat", "--group", "bed",
                        "--delta-m", SEAT_DELTA)
     check_true("unpaired --group/--delta-m fails", rc != 0, out + err)
+
+    rc, out, err = run(worlds, "--world", "fixture",
+                       "--group", "seat", "--delta-m", SEAT_DELTA,
+                       "--group", "seat", "--delta-m", BED_DELTA)
+    check_true("a repeated --group fails", rc != 0, out + err)
+    check_true("the repeat message names the group",
+               "seat" in (out + err), out + err)
 
     rc, out, err = run(worlds, "--world", "fixture")
     check_true("no group at all fails", rc != 0, out + err)

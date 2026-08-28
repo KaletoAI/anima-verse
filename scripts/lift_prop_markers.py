@@ -28,18 +28,50 @@ model box. ``at[0]``/``at[2]``, ``group``, ``id``, ``facing``, ``capacity``
 and every other key stay exactly as they were, as does every prop, variant or
 marker of a group that was not asked for.
 
-A marker's height above the prop's foot in real metres is
-``at[1] * height_m`` (``height_m`` = the variant's vertical extent in metres),
-so a lift of ``delta_m`` metres is
+Metres per unit of at[1] — NOT ``height_m``
+-------------------------------------------
+``room_recipe.compose_prop_marker`` (~line 398) scales the raw model box
+UNIFORMLY: ``s = max(dims) / max(oriented extents of the raw bbox)``, and the
+marker's Y offset is ``at[1] * bbox[1] * s``. So one unit of ``at[1]`` is worth
 
-    at[1] += delta_m / height_m
+    per_frac = bbox[1] * max(width_m, depth_m, height_m) / max(bbox)
 
-taken from the marker's OWN variant — two variants of one prop can differ in
-height, and the same fraction then means two different metre heights. The
-result is clamped to the range ``props.sanitize_markers`` accepts for index 1
+metres — ``bbox`` = the sidecar's top-level raw AABB edge lengths (one per
+prop), ``width_m``/``depth_m``/``height_m`` = the dims of THIS variant, which
+is why two variants of one prop convert differently. Same chain as the
+in-repo precedent ``props.py`` ~5417 (``per_frac = size_y * scale``).
+
+``height_m`` is only equal to that when the box is proportional to the stated
+dims. It usually is not: the dining chair of the field world measures
+bbox [0.956, 1.000, 0.950] at dims 0.9/0.9/0.79 and therefore composes
+0.900 m per fraction, not 0.79 — using ``height_m`` there would have lifted
+the marker 3.8 cm too high. A prop without a measured ``bbox`` falls back to
+``height_m`` with a printed note; that prop draws no composed marker today
+(``room_recipe`` skips markers of a prop without a bbox), so the fallback is
+only a best guess for a mesh that has not been measured yet.
+
+The lift of ``delta_m`` metres is therefore
+
+    at[1] += delta_m / per_frac
+
+clamped to the range ``props.sanitize_markers`` accepts for index 1
 (``MARKER_AT_Y_MIN`` -1.0 .. ``MARKER_AT_MAX`` 1.5) and rounded to 4 decimals
 like that sanitizer, so nothing this script writes can be rejected on the next
 admin save. Clamped rows are marked in the table.
+
+A missing or non-positive ``height_m`` is REFUSED (the marker is left alone)
+even though the app substitutes ``DEFAULT_DIM_M`` = 1.0 for it
+(``props._coerce_dim_m``, ~line 848). That substitution is a display default
+for an unmeasured prop; taking it as the truth here would move a real marker
+by an amount derived from a placeholder, and a repair may not invent a size.
+
+Variants with an orientation fix are SKIPPED
+--------------------------------------------
+When the variant's mesh file carries a ``rotation`` fix (``props.ROTATION_KEY``,
+per FILE sidecar), ``compose_prop_marker`` turns the box BEFORE taking the Y
+component, so the vertical of that prop lives in another ``at`` component and
+``at[1]`` is not the height at all. Such a variant is skipped with a printed
+note and must be corrected by hand in the repaired preview.
 
 Why the two deltas (finding 2026-08-29, development_instructions/plan-sitzhoehe.md)
 ----------------------------------------------------------------------------------
@@ -78,8 +110,11 @@ AT_Y_MIN = -1.0
 AT_MAX = 1.5
 AT_ROUND = 4
 
-# app/core/props.py SIDECAR_NAME
+# app/core/props.py SIDECAR_NAME / ROTATION_KEY, and the per-variant mesh
+# choice the recipe draws (``<prop>/selection.json``: stem -> {"full": file}).
 SIDECAR_NAME = "sidecar.json"
+SELECTION_NAME = "selection.json"
+ROTATION_KEY = "rotation"
 
 # The group whose markers were never wrong; refused outright, see the docstring.
 FORBIDDEN_GROUPS = {"stand"}
@@ -95,7 +130,7 @@ class Row:
     stem: str
     marker_id: str
     group: str
-    height_m: float
+    per_frac: float
     old_at: float
     new_at: float
     clamped: bool
@@ -106,11 +141,11 @@ class Row:
 
     @property
     def old_m(self) -> float:
-        return self.old_at * self.height_m
+        return self.old_at * self.per_frac
 
     @property
     def new_m(self) -> float:
-        return self.new_at * self.height_m
+        return self.new_at * self.per_frac
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -160,10 +195,93 @@ def build_deltas(args: argparse.Namespace) -> Dict[str, float]:
     return deltas
 
 
-def lift_sidecar(data: Dict[str, Any], prop: str,
+def _floats(raw: Any, count: int) -> Optional[List[float]]:
+    """``count`` finite positive numbers, or ``None``."""
+    if not isinstance(raw, (list, tuple)) or len(raw) < count:
+        return None
+    out: List[float] = []
+    for i in range(count):
+        try:
+            v = abs(float(raw[i]))
+        except (TypeError, ValueError):
+            return None
+        if v <= 0:
+            return None
+        out.append(v)
+    return out
+
+
+def per_fraction_m(bbox: Any, variant: Dict[str, Any]) -> Tuple[float, str]:
+    """Metres per unit of ``at[1]``, plus a note ("" when nothing to say).
+
+    ``bbox[1] * max(dims) / max(bbox)`` — the vertical term of
+    ``room_recipe.compose_prop_marker``'s uniform real-size scale. Without a
+    measured ``bbox`` (a prop the recipe draws no composed marker for) it falls
+    back to ``height_m`` and says so."""
+    dims = _floats([variant.get("width_m"), variant.get("depth_m"),
+                    variant.get("height_m")], 3)
+    box = _floats(bbox, 3)
+    if box and dims:
+        return box[1] * max(dims) / max(box), ""
+    height = _floats([variant.get("height_m")], 1)
+    if not height:
+        return 0.0, (f"height_m is {variant.get('height_m')!r} — no metre "
+                     "scale, markers left alone (the app's 1.0 default is a "
+                     "display fallback, not a measurement)")
+    why = "no measured bbox" if not box else "incomplete dims"
+    return height[0], (
+        f"{why} — falling back to height_m {height[0]}, which equals the "
+        "composed factor only while the raw box is proportional to the dims")
+
+
+def variant_rotation(prop_dir: Path, variant: Dict[str, Any]) -> Optional[Any]:
+    """The orientation fix of the mesh this variant draws, if any.
+
+    The fix lives on the FILE sidecar (``props.ROTATION_KEY``), and the recipe
+    reads it from the variant's PUBLISHED file — the ``full`` entry of
+    ``selection.json``. When the selection names no file for this stem, every
+    ``<stem>_*.json`` of the prop is consulted instead, so an unresolvable
+    selection errs towards skipping rather than towards a wrong lift."""
+    if isinstance(variant.get(ROTATION_KEY), dict):
+        return variant[ROTATION_KEY]
+    stem = str(variant.get("stem") or "")
+    if not stem:
+        return None
+    sidecars: List[Path] = []
+    try:
+        selection = json.loads((prop_dir / SELECTION_NAME)
+                               .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        selection = {}
+    chosen = (selection or {}).get(stem) if isinstance(selection, dict) else None
+    if isinstance(chosen, dict) and chosen.get("full"):
+        sidecars = [prop_dir / (Path(str(chosen["full"])).stem + ".json")]
+    if not sidecars or not sidecars[0].is_file():
+        sidecars = sorted(p for p in prop_dir.glob(f"{stem}_*.json")
+                          if not p.name.endswith(".glb.surface.json"))
+    for path in sidecars:
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rot = meta.get(ROTATION_KEY) if isinstance(meta, dict) else None
+        if isinstance(rot, dict) and any(_nonzero(v) for v in rot.values()):
+            return rot
+    return None
+
+
+def _nonzero(value: Any) -> bool:
+    try:
+        return float(value) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def lift_sidecar(data: Dict[str, Any], prop: str, prop_dir: Path,
                  deltas: Dict[str, float]) -> Tuple[List[Row], bool]:
     """Applies the deltas to ``data`` IN PLACE. Returns the rows it looked at
-    and whether anything actually moved."""
+    and whether anything actually moved. Notes go to stdout — they belong to
+    the report, not to the error channel."""
     rows: List[Row] = []
     touched = False
     variants = data.get("model_variants")
@@ -176,33 +294,41 @@ def lift_sidecar(data: Dict[str, Any], prop: str,
         markers = variant.get("markers")
         if not isinstance(markers, list):
             continue
-        try:
-            height_m = float(variant.get("height_m") or 0.0)
-        except (TypeError, ValueError):
-            height_m = 0.0
-        for marker in markers:
-            if not isinstance(marker, dict):
-                continue
+        wanted = [m for m in markers if isinstance(m, dict)
+                  and str(m.get("group") or "").strip().lower() in deltas]
+        if not wanted:
+            continue
+        rotation = variant_rotation(prop_dir, variant)
+        if rotation is not None and any(_nonzero(v) for v in
+                                        (rotation.values()
+                                         if isinstance(rotation, dict) else [])):
+            print(f"  ! {prop} / {stem}: variant has an orientation fix "
+                  f"{rotation} — skipped, at[1] is not vertical there")
+            continue
+        per_frac, note = per_fraction_m(data.get("bbox"), variant)
+        if note:
+            print(f"  ! {prop} / {stem}: {note}")
+        if per_frac <= 0:
+            continue
+        for marker in wanted:
             group = str(marker.get("group") or "").strip().lower()
-            if group not in deltas:
-                continue
             at = marker.get("at")
-            if not isinstance(at, list) or len(at) != 3:
+            old_at: Optional[float] = None
+            if isinstance(at, list) and len(at) == 3:
+                try:
+                    old_at = float(at[1])
+                except (TypeError, ValueError):
+                    old_at = None
+            if old_at is None:
+                print(f"  ! {prop} / {stem} / "
+                      f"{marker.get('id') or '?'}: 'at' is {at!r}, not three "
+                      "numbers — marker left alone")
                 continue
-            try:
-                old_at = float(at[1])
-            except (TypeError, ValueError):
-                continue
-            if height_m <= 0:
-                print(f"  ! {prop} / {stem}: height_m is "
-                      f"{variant.get('height_m')!r} — cannot convert metres, "
-                      "marker left alone", file=sys.stderr)
-                continue
-            raw = old_at + deltas[group] / height_m
+            raw = old_at + deltas[group] / per_frac
             clamped_raw = min(max(raw, AT_Y_MIN), AT_MAX)
             new_at = round(clamped_raw, AT_ROUND)
             rows.append(Row(prop, stem, str(marker.get("id") or "?"), group,
-                            height_m, old_at, new_at,
+                            per_frac, old_at, new_at,
                             clamped=clamped_raw != raw))
             if new_at != old_at:
                 at[1] = new_at
@@ -234,12 +360,13 @@ def write_atomic(path: Path, data: Dict[str, Any]) -> None:
 
 
 def print_table(rows: List[Row]) -> None:
-    header = ("prop", "variant", "marker", "group", "at[1] old -> new",
-              "height old -> new (m)", "")
+    header = ("prop", "variant", "marker", "group", "m per at[1]",
+              "at[1] old -> new", "marker height (m)", "")
     lines: List[Tuple[str, ...]] = [header]
     for r in rows:
         note = "clamped" if r.clamped else ("" if r.changed else "unchanged")
         lines.append((r.prop, r.stem, r.marker_id, r.group,
+                      f"{r.per_frac:.4f}",
                       f"{r.old_at:.4f} -> {r.new_at:.4f}",
                       f"{r.old_m:.3f} -> {r.new_m:.3f}",
                       note))
@@ -279,7 +406,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         if not isinstance(data, dict):
             continue
-        rows, touched = lift_sidecar(data, prop_dir.name, deltas)
+        rows, touched = lift_sidecar(data, prop_dir.name, prop_dir, deltas)
         all_rows.extend(rows)
         if touched:
             pending.append((sidecar, data))
@@ -300,8 +427,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("dry run — nothing written; stop the server before --apply")
         return 0
 
+    # Each path as it goes down: if the run dies halfway, this is the list of
+    # files that already carry the lift and must not get it a second time.
     for sidecar, data in pending:
         write_atomic(sidecar, data)
+        print(f"  wrote {sidecar}")
     print(f"written {changed} markers in {len(pending)} files")
     return 0
 
