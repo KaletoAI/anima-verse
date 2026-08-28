@@ -88,22 +88,39 @@ export const loadTestFigure = (): Promise<Object3D | null> => {
   }
   return _figPromise
 }
-let _clipsPromise: Promise<Array<{ kind: string; set: string; url: string }>> | null = null
-const _clipCache = new Map<string, Promise<{ clip: AnimationClip; restObj: Object3D } | null>>()
-const loadClip = (kind: string) => {
-  if (!_clipsPromise) {
-    _clipsPromise = apiGet<{ clips?: Array<{ kind: string; set: string; url: string }> }>(
+/** One entry of `GET /assets/animation-clips`: the clip's KIND, the half of a
+ *  pair it plays (`a`/`b`, empty = solo) and the figure set it was made for. */
+interface ClipEntry { kind: string; role?: string; set: string; url: string }
+/** The sidecar of a complete PAIR kind (§ A8a): where each half stands around
+ *  the shared anchor, in metres of the clip's own frame. */
+interface PairMeta {
+  geometry?: { roles?: Record<string, { anchor_xz_m?: [number, number] }> }
+}
+let _clipIndexPromise: Promise<{ clips: ClipEntry[]
+                                 pairs: Record<string, PairMeta> }> | null = null
+/** The clip index — ONE fetch per session, shared by every viewer instance.
+ *  It carries the pair sidecars too, so a pair pose can be seated without a
+ *  second request. */
+const clipIndex = () => {
+  if (!_clipIndexPromise) {
+    _clipIndexPromise = apiGet<{ clips?: ClipEntry[]; pairs?: Record<string, PairMeta> }>(
       '/assets/animation-clips')
-      .then((d) => d.clips || [])
-      .catch(() => [])
+      .then((d) => ({ clips: d.clips || [], pairs: d.pairs || {} }))
+      .catch(() => ({ clips: [], pairs: {} }))
   }
-  let cached = _clipCache.get(kind)
+  return _clipIndexPromise
+}
+const _clipCache = new Map<string, Promise<{ clip: AnimationClip; restObj: Object3D } | null>>()
+/** One clip of `kind` — the `role` half of it when it is a pair clip. */
+const loadClip = (kind: string, role = '') => {
+  const key = role ? `${kind}#${role}` : kind
+  let cached = _clipCache.get(key)
   if (!cached) {
     cached = (async () => {
-      const clips = await _clipsPromise!
+      const { clips } = await clipIndex()
       // Prefer a set-less clip, then female, then anything of the kind —
       // same pick as the floor-plan preview.
-      const of = clips.filter((c) => c.kind === kind)
+      const of = clips.filter((c) => c.kind === kind && (c.role || '') === role)
       const pick = of.find((c) => !c.set) || of.find((c) => c.set === 'female') || of[0]
       if (!pick) return null
       try {
@@ -119,9 +136,43 @@ const loadClip = (kind: string) => {
         return null
       }
     })()
-    _clipCache.set(kind, cached)
+    _clipCache.set(key, cached)
   }
   return cached
+}
+
+/**
+ * The SLOT POINTS of one place, in this viewer's own units — the client half
+ * of `scene_recipe.marker_slots`, which stays THE authority: a change to the
+ * formula there is a change here.
+ *
+ * A place seats `capacity` figures `spacing_m` apart ACROSS the facing (a
+ * bench runs sideways), centred on the marker point: the lateral unit vector
+ * is the facing turned by +90°, `(cos f, −sin f)` in XZ with facing 0 = south
+ * (+z) and 90 = east (+x) — the same convention the figure's own `rotation.y`
+ * follows here. Capacity 1 is the marker point itself.
+ *
+ * Computing them here is legitimate view geometry: this preview shows ONE
+ * prop BEFORE any composition, so there is no scene payload to read finished
+ * slots off (a placed prop gets `markers[].slots` from the server and nobody
+ * recomputes them). `perMetre` converts the stored metres into the mesh's own
+ * units, which is what everything else in model mode measures in.
+ */
+function markerSlotPoints(x: number, z: number, facingDeg: number | undefined,
+                          capacity: number | undefined,
+                          spacingM: number | undefined,
+                          perMetre: number): Array<[number, number]> {
+  const n = Math.max(1, Math.round(capacity || 1))
+  if (n === 1) return [[x, z]]
+  const f = _deg(facingDeg)
+  const lx = Math.cos(f)
+  const lz = -Math.sin(f)
+  // 0.6 m = one person's width on a bench, the server's own default.
+  const step = (spacingM || 0.6) * perMetre
+  return Array.from({ length: n }, (_, i) => {
+    const d = (i - (n - 1) / 2) * step
+    return [x + d * lx, z + d * lz] as [number, number]
+  })
 }
 
 /** Placement of a building model on its map tile — mirrors the worldmap
@@ -185,11 +236,20 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  it — centred, yawed and scaled per `placement`, feet on the ground. */
     groundTextureUrl?: string
     placement?: TilePlacement
-    /** Object-local markers (numbered dots) — `at` = fractions of the RAW
-     *  model bounding box; `animation` poses the preview figure, `facing`
-     *  turns it. Model mode only; refreshed live. */
+    /** Object-local PLACES (numbered dots) — `at` = fractions of the RAW
+     *  model bounding box, `group` the pose catalog's place type, and the
+     *  place seats `capacity` figures `spacing_m` metres apart across its
+     *  `facing`. The preview puts ONE figure on every slot, playing
+     *  `previewKind` (the clip of the pose the editor cycled to); a PAIR clip
+     *  seats its two halves around the marker instead, turned by
+     *  `previewYawOffset`. `rootDrop` is the place type's root drop as a
+     *  FRACTION of the figure height: the composed payload's `root_offset`
+     *  does not exist for a prop standing on its own, so it comes from the
+     *  pose catalog and is converted into mesh units here.
+     *  Model mode only; refreshed live. */
     markers?: Array<{ at: [number, number, number]
-      animation?: string; facing?: number }>
+      group?: string; capacity?: number; spacing_m?: number; facing?: number
+      previewKind?: string; previewYawOffset?: number; rootDrop?: number }>
     /** Height of a 1.7 m preview figure in MESH units (the caller derives
      *  it from bbox ÷ dims). > 0 shows a posed test figure at every marker
      *  — a sit marker is only judgeable with someone sitting there. */
@@ -1289,6 +1349,68 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               gm.depthWrite = false
               refGroup.add(grid)
             }
+            // ONE preview figure: the neutral test figure holding frame 0
+            // of `kind` (the `role` half of a pair clip), its bind-pose root
+            // at (x, y, z) and turned by `facingDeg`. Marker figures anchor
+            // in WORLD space — they stand upright while the marker point
+            // rides the object through the orientation fix — and they live in
+            // `figGroup`, never under the model or the area overlay.
+            const addMarkerFigure = async (o: {
+              x: number; y: number; z: number
+              kind?: string; role?: 'a' | 'b'
+              facingDeg?: number; figH: number; token: number }) => {
+              const src = await loadTestFigure()
+              if (!src || disposed || figTokenRef.current !== o.token) return
+              const anim = o.kind ? await loadClip(o.kind, o.role || '') : null
+              const { clone: skclone } =
+                await import('three/examples/jsm/utils/SkeletonUtils.js')
+              if (disposed || figTokenRef.current !== o.token) return
+              const inst = skclone(src) as Object3D
+              const fpivot = new THREE.Group()
+              fpivot.add(inst)
+              // Up-axis fix measured on the REST skeletons — same logic as
+              // the floor-plan preview / the main clip path above.
+              if (anim) {
+                const hipsOf = (root: Object3D): Object3D | null => {
+                  let found: Object3D | null = null
+                  root.traverse((o2) => { if (!found && /hips/i.test(o2.name)) found = o2 })
+                  return found
+                }
+                const instHips = hipsOf(inst)
+                const clipHips = hipsOf(anim.restObj)
+                if (instHips?.parent && clipHips?.parent) {
+                  inst.updateMatrixWorld(true)
+                  anim.restObj.updateMatrixWorld(true)
+                  const restModel = instHips.parent.getWorldQuaternion(new THREE.Quaternion())
+                  const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
+                  let bestRx = 0
+                  let bestAngle = Infinity
+                  for (const rx of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
+                    const cand = new THREE.Quaternion()
+                      .setFromEuler(new THREE.Euler(rx, 0, 0)).multiply(restModel)
+                    const angle = cand.angleTo(restClip)
+                    if (angle < bestAngle) { bestAngle = angle; bestRx = rx }
+                  }
+                  fpivot.rotation.x = bestRx
+                }
+              }
+              // SIZE AND ANCHOR FROM THE BIND POSE, through the shared
+              // routine — soles on 0, XZ centred, scaled to `figH` (1.70 m in
+              // this mesh's units). The clip is played afterwards and never
+              // re-grounds the body.
+              anchorFigureBind(THREE, fpivot, o.figH)
+              if (anim) {
+                const mixer = new THREE.AnimationMixer(inst)
+                mixer.clipAction(anim.clip).play()
+                mixer.update(0)  // static frame-0 pose — no per-frame cost
+              }
+              const fig = new THREE.Group()
+              fig.position.set(o.x, o.y, o.z)
+              fig.rotation.y = _deg(o.facingDeg)
+              fig.add(fpivot)
+              fig.userData.__shared = true
+              figGroup.add(fig)
+            }
             // Numbered marker dots at their raw-box fractions.
             const r = rawMaxDim * 0.025
             ;(markersRef.current || []).forEach((m, i) => {
@@ -1306,75 +1428,58 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               num.position.copy(local)
               num.position.y += r * 2.4
               markerGroup.add(num)
-              // Posed preview figure (1.7 m at the caller's mesh scale) —
-              // a sit marker is only judgeable with someone sitting there.
+              // Posed preview figures (1.7 m at the caller's mesh scale) —
+              // ONE PER SLOT: a seat is only judgeable with someone sitting on
+              // it, and a bench only with everyone it seats.
               const figH = figureHeightRef.current
               if (!(figH > 0)) return
+              // `figH` IS the conversion: it is what 1.70 m measures in this
+              // mesh's units, so one metre is figH / 1.70 of them.
+              const perMetre = figH / FIGURE_HEIGHT_M
+              const kind = m.previewKind || undefined
               void (async () => {
-                const src = await loadTestFigure()
-                if (!src || disposed || figTokenRef.current !== figToken) return
-                const anim = m.animation ? await loadClip(m.animation) : null
-                const { clone: skclone } =
-                  await import('three/examples/jsm/utils/SkeletonUtils.js')
+                const idx = await clipIndex()
                 if (disposed || figTokenRef.current !== figToken) return
-                const inst = skclone(src) as Object3D
-                const fpivot = new THREE.Group()
-                fpivot.add(inst)
-                // Up-axis fix measured on the REST skeletons — same logic as
-                // the floor-plan preview / the main clip path above.
-                if (anim) {
-                  const hipsOf = (root: Object3D): Object3D | null => {
-                    let found: Object3D | null = null
-                    root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
-                    return found
-                  }
-                  const instHips = hipsOf(inst)
-                  const clipHips = hipsOf(anim.restObj)
-                  if (instHips?.parent && clipHips?.parent) {
-                    inst.updateMatrixWorld(true)
-                    anim.restObj.updateMatrixWorld(true)
-                    const restModel = instHips.parent.getWorldQuaternion(new THREE.Quaternion())
-                    const restClip = clipHips.parent.getWorldQuaternion(new THREE.Quaternion())
-                    let bestRx = 0
-                    let bestAngle = Infinity
-                    for (const rx of [0, Math.PI / 2, -Math.PI / 2, Math.PI]) {
-                      const cand = new THREE.Quaternion()
-                        .setFromEuler(new THREE.Euler(rx, 0, 0)).multiply(restModel)
-                      const angle = cand.angleTo(restClip)
-                      if (angle < bestAngle) { bestAngle = angle; bestRx = rx }
-                    }
-                    fpivot.rotation.x = bestRx
-                  }
-                }
-                // SIZE AND ANCHOR FROM THE BIND POSE, through the shared
-                // routine — soles on 0, XZ centred, scaled to `figH` (1.70 m
-                // in this mesh's units). The clip is played afterwards and
-                // never re-grounds the body.
-                anchorFigureBind(THREE, fpivot, figH)
-                if (anim) {
-                  const mixer = new THREE.AnimationMixer(inst)
-                  mixer.clipAction(anim.clip).play()
-                  mixer.update(0)  // static frame-0 pose — no per-frame cost
-                }
                 place.updateMatrixWorld(true)
-                // WHICH part of the body the marker point carries: a seated
-                // body touches at the buttocks, so the root goes the clip's
-                // share of the figure height BELOW the marked surface. Same
-                // routine and same table as the floor-plan preview and the 3D
-                // client, which is the whole point — this viewer used to read
-                // the hips bone off the "posed" skeleton instead, and because
-                // every clip is played in place (the Mixamo hips POSITION
-                // track is dropped above) that reading was one constant for
-                // every clip: 0.9288 m at H = 1.70 m, which put a sitter
-                // 0.395 m below where the scene renders it.
                 const world = pivot.localToWorld(local.clone())
-                const fig = new THREE.Group()
-                fig.position.copy(world)
-                fig.position.y = figureRootY(world.y, figH, m.animation)
-                fig.rotation.y = _deg(m.facing)
-                fig.add(fpivot)
-                fig.userData.__shared = true
-                figGroup.add(fig)
+                // WHICH part of the body the marker point carries: a seated
+                // body touches at the buttocks, so the root goes the place
+                // type's share of the figure height BELOW the marked surface.
+                // Same routine as the floor-plan preview and the 3D client —
+                // but the number cannot come from the payload's `root_offset`
+                // here, because a prop in this viewer is UNCOMPOSED: the
+                // caller reads `root_drop` off the pose catalog's group and
+                // the fraction becomes mesh units right here.
+                const rootY = figureRootY(world.y, figH, kind,
+                  typeof m.rootDrop === 'number' ? m.rootDrop * figH : undefined)
+                const pair = kind ? idx.pairs[kind] : undefined
+                if (pair) {
+                  // A PAIR pose is ONE clip in two halves around ONE anchor:
+                  // the server seats it at the marker CENTRE
+                  // (`places.assign_pair`) and turns the clip frame by
+                  // `facing − 90° + yaw_offset` (`places.pair_yaw`), each half
+                  // standing at its sidecar `anchor_xz_m` in that frame — the
+                  // same two figures the floor-plan preview draws, not one
+                  // per slot.
+                  const yawDeg = (m.facing ?? 0) - 90 + (m.previewYawOffset || 0)
+                  const yaw = _deg(yawDeg)
+                  for (const role of ['a', 'b'] as const) {
+                    const [ox, oz] = pair.geometry?.roles?.[role]?.anchor_xz_m || [0, 0]
+                    // The server's `_rotate`: the clip frame's (x, z) turned
+                    // by yaw about Y; metres → mesh units through `perMetre`.
+                    await addMarkerFigure({
+                      x: world.x + (ox * Math.cos(yaw) + oz * Math.sin(yaw)) * perMetre,
+                      y: rootY,
+                      z: world.z + (-ox * Math.sin(yaw) + oz * Math.cos(yaw)) * perMetre,
+                      kind, role, facingDeg: yawDeg, figH, token: figToken })
+                  }
+                  return
+                }
+                for (const [sx, sz] of markerSlotPoints(world.x, world.z, m.facing,
+                                                        m.capacity, m.spacing_m, perMetre)) {
+                  await addMarkerFigure({ x: sx, y: rootY, z: sz, kind,
+                                          facingDeg: m.facing, figH, token: figToken })
+                }
               })()
             })
             // Oriented bounding box + coloured W/D/H edges with the REAL

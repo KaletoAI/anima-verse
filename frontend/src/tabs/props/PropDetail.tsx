@@ -58,6 +58,9 @@ import { GroundOffsetGauge } from './GroundOffsetGauge'
 import { PropAreasPanel } from './PropAreasPanel'
 import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
+import {
+  groupKeys, groupLabel, newId, posesInGroup, previewEntry, usePoseCatalog,
+} from '../world/placeTypes'
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { DimKey } from './dims'
 import type {
@@ -492,21 +495,24 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     }
   }, [enc, variant, onChanged, t, toast])
 
-  // Object-local markers (A4) — same vocabulary as room markers, but the
-  // frame is the MESH's own bounding box: `at` = [u, v, w] fractions,
-  // `facing` = degrees. The fractions may leave the box by half a box per
-  // axis (seats sit ON the hull, see props.sanitize_markers). The clip
-  // vocabulary is the open one.
+  // Object-local PLACES (A4, plan-posen-plaetze.md § 4) — same vocabulary as
+  // room markers, but the frame is the MESH's own bounding box: `at` =
+  // [u, v, w] fractions, `facing` = degrees. The fractions may leave the box
+  // by half a box per axis (seats sit ON the hull, see
+  // props.sanitize_markers).
+  //
+  // A marker names a PLACE TYPE (`group`: seat, bed, floor …), never a clip —
+  // which pose is played there is the character's business, and the ◀ ▶
+  // cycler below only decides which one the preview figures hold.
   //
   // They belong to the VARIANT since 2026-08-25: a fraction of one mesh's box
   // means nothing on another bake, so the editor below always edits the chip
   // the viewer has open, and the write goes to that variant's route.
-  const [clipKinds, setClipKinds] = useState<string[]>([])
-  useEffect(() => {
-    apiGet<{ kinds?: string[] }>('/assets/animation-clips')
-      .then((d) => setClipKinds(d.kinds || []))
-      .catch(() => setClipKinds([]))
-  }, [])
+  const poseCatalog = usePoseCatalog()
+  const groups = poseCatalog.groups
+  // Which pose of its place type a marker's preview figures play, keyed by
+  // marker id. VIEW state only — nothing of it is stored.
+  const [previewPose, setPreviewPose] = useState<Record<string, string>>({})
   // THE MARKER LIST IS THE DRAFT'S. It needs no local state of its own any
   // more and no debounce: an edit goes into the change buffer, the buffer is
   // what `variants` above is drawn from, and the viewer beside it reads the
@@ -517,6 +523,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     shownVariant ? shownVariant.markers
       : (variant === 0 ? prop.markers || [] : [])
   ), [shownVariant, variant, prop.markers])
+
+  // The place types a new marker is offered, in picker order; a new marker
+  // takes the first of them.
+  const groupOptions = useMemo(() => groupKeys(groups), [groups])
+  const firstGroup = groupOptions[0] || ''
 
   const saveMarkers = useCallback((next: PropMarker[]) => {
     queueVariant(variant, { markers: next })
@@ -533,7 +544,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     patchMarker(i, { at })
   }
   const addMarker = () =>
-    saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at: [0.5, 0, 0.5] }])
+    saveMarkers([...markers, { id: newId(), group: firstGroup, at: [0.5, 0, 0.5] }])
   const removeMarker = (i: number) =>
     saveMarkers(markers.filter((_, idx) => idx !== i))
 
@@ -549,20 +560,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const onPickPoint = useCallback((at: [number, number, number]) => {
     setPlacing((cur) => {
       if (cur === 'add') {
-        saveMarkers([...markers, { animation: clipKinds[0] || 'idle', at }])
+        saveMarkers([...markers, { id: newId(), group: firstGroup, at }])
       } else if (cur !== null && markers[cur]) {
         saveMarkers(markers.map((m, idx) => (idx === cur ? { ...m, at } : m)))
       }
       return null
     })
-  }, [markers, clipKinds, saveMarkers])
-
-  const kindOptions = useMemo(() => {
-    // Offer the open clip vocabulary plus any kind already used on this prop.
-    const set = new Set<string>(clipKinds)
-    for (const m of markers) if (m.animation) set.add(m.animation)
-    return Array.from(set).sort()
-  }, [clipKinds, markers])
+  }, [markers, firstGroup, saveMarkers])
 
   return (
     <>
@@ -797,23 +801,45 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             widthM={shownDims.width_m}
             heightM={shownDims.height_m} />
           <span className="ga-hint">
-            {t('Object-local spots a figure with a matching animation snaps to — they belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 1.5, because seats and lying surfaces sit on the hull or just outside it. Place roughly with ✥, fine-tune with the sliders — the figure in the preview follows live.')}
+            {t('Object-local PLACES a character is seated on — each names a place type (seat, bed, floor …) and takes as many figures as its capacity. They belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 1.5, because seats and lying surfaces sit on the hull or just outside it. Place roughly with ✥, fine-tune with the sliders — the figures in the preview follow live.')}
           </span>
           {markers.length === 0 ? (
             <div className="ga-empty" style={{ fontSize: '0.85em' }}>{t('No markers yet.')}</div>
           ) : (
-            markers.map((m, i) => (
+            markers.map((m, i) => {
+              const capacity = m.capacity || 1
+              // The poses of this marker's PLACE TYPE, its default first —
+              // the ◀ ▶ cycler picks which one the preview figures hold. View
+              // state only, keyed by the marker's id; a marker stored before
+              // ids existed gets one minted into the draft on the first click.
+              const poses = posesInGroup(poseCatalog, m.group)
+              const poseIdx = Math.max(0, poses.indexOf(
+                (m.id && previewPose[m.id]) || poses[0]))
+              const setPreview = (pose: string) => {
+                const id = m.id || newId()
+                if (!m.id) patchMarker(i, { id })
+                setPreviewPose((cur) => ({ ...cur, [id]: pose }))
+              }
+              return (
               <div key={i} className="ga-marker-card">
                 <div className="ga-form-row">
                   <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {i + 1}</span>
                   <select
                     className="ga-input"
                     style={{ flex: 1, minWidth: 0 }}
-                    value={m.animation}
-                    title={t('Animation kind — the open clip vocabulary, nothing hardcoded.')}
-                    onChange={(e) => patchMarker(i, { animation: e.target.value })}
+                    value={m.group}
+                    title={t('Place type of the pose catalog (seat, bed, floor …) — WHAT this spot is, not which clip plays on it. A character taking a pose of this type is seated here.')}
+                    onChange={(e) => patchMarker(i, { group: e.target.value })}
                   >
-                    {kindOptions.map((k) => <option key={k} value={k}>{k}</option>)}
+                    {groupOptions.map((k) => (
+                      <option key={k} value={k}>{groupLabel(groups, k)}</option>
+                    ))}
+                    {/* A stored place type the catalog no longer offers stays
+                        selectable — losing it silently would rewrite the
+                        marker on the next save. */}
+                    {m.group && !groupOptions.includes(m.group) ? (
+                      <option value={m.group}>{m.group}</option>
+                    ) : null}
                   </select>
                   <button
                     type="button"
@@ -897,23 +923,93 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     ✕
                   </button>
                 </SliderInput>
+                {/* A place with room for several: the SERVER composes
+                    `capacity` slots `spacing_m` apart across the facing
+                    (payload `markers[].slots`) — the viewer opposite seats one
+                    figure per slot. */}
+                <SliderInput
+                  className="ga-marker-axis"
+                  style={{ display: 'flex', fontSize: '0.8em' }}
+                  title={t('How many figures this place takes — a bench seats several. The slots line up across the facing.')}
+                  label={<span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>{t('Capacity')}</span>}
+                  ariaLabel={t('Capacity')}
+                  min={1}
+                  max={8}
+                  step={1}
+                  value={capacity}
+                  onChange={(v) => {
+                    const cap = Math.max(1, Math.min(8, Math.round(v)))
+                    // Capacity 1 is a single spot and carries neither key —
+                    // the same shape the server stores.
+                    patchMarker(i, cap > 1
+                      ? { capacity: cap }
+                      : { capacity: undefined, spacing_m: undefined })
+                  }}
+                  sliderWidth="auto"
+                  sliderStyle={{ flex: 1, minWidth: 60 }}
+                  inputWidth={72}
+                />
+                {capacity > 1 ? (
+                  <SliderInput
+                    className="ga-marker-axis"
+                    style={{ display: 'flex', fontSize: '0.8em' }}
+                    title={t('Distance between neighbouring slots in metres (0.6 = a bench seat).')}
+                    label={<span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>{t('Spacing')}</span>}
+                    ariaLabel={t('Spacing')}
+                    min={0.2}
+                    max={3}
+                    step={0.05}
+                    fineStep={0.01}
+                    value={m.spacing_m ?? 0.6}
+                    onChange={(v) => patchMarker(i, { spacing_m: Math.round(v * 100) / 100 })}
+                    unit="m"
+                    sliderWidth="auto"
+                    sliderStyle={{ flex: 1, minWidth: 60 }}
+                    inputWidth={72}
+                  />
+                ) : null}
+                {poses.length ? (
+                  <div className="ga-form-row" style={{ fontSize: '0.8em' }}
+                    title={t('Which pose of this place type the preview figures hold — view only, nothing is stored. Every slot shows it; a pair pose seats both halves around the marker.')}>
+                    <span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>
+                      {t('Pose')}
+                    </span>
+                    <button type="button" className="ga-btn ga-btn-sm"
+                      onClick={() => setPreview(poses[(poseIdx + poses.length - 1) % poses.length])}>
+                      ◀
+                    </button>
+                    <span className="ga-hint" style={{ flex: 1, minWidth: 0 }}>
+                      {poses[poseIdx]} ({poseIdx + 1}/{poses.length})
+                    </span>
+                    <button type="button" className="ga-btn ga-btn-sm"
+                      onClick={() => setPreview(poses[(poseIdx + 1) % poses.length])}>
+                      ▶
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            ))
+              )
+            })
           )}
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               type="button"
               className={`ga-btn ga-btn-sm${placing === 'add' ? ' ga-btn-primary' : ''}`}
               // Placing means clicking the mesh in the viewer — so it needs a
-              // mesh SHOWN there, not just one somewhere on the prop.
-              disabled={!(shownHasMesh || previewFile)}
+              // mesh SHOWN there, not just one somewhere on the prop. And a
+              // marker needs a place type to name: without the catalog the
+              // server would drop it on save.
+              disabled={!(shownHasMesh || previewFile) || !firstGroup}
               onClick={() => setPlacing((cur) => (cur === 'add' ? null : 'add'))}
               title={t('Then click the spot on the model in the viewer to drop a marker there (Esc cancels) — like placing markers on the floor plan.')}
             >
               🎯 {placing === 'add' ? t('Click the model…') : t('Place marker')}
             </button>
             <button type="button" className="ga-btn ga-btn-sm" onClick={addMarker}
-              title={t('Add a marker at the box centre — position it with ✥ or the X/Y/Z sliders.')}>
+              disabled={!firstGroup}
+              title={firstGroup
+                ? t('Add a place at the box centre — pick its type, then position it with ✥ or the X/Y/Z sliders.')
+                : t('No place types yet — the Poses tab defines them.')}>
               + {t('Marker')}
             </button>
           </div>
@@ -1039,9 +1135,21 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               height={340}
               rotation={prop.rotation}
               onBounds={(b) => setShownBbox(b.size)}
-              markers={markers.map((m) => ({
-                at: m.at, animation: m.animation, facing: m.facing,
-              }))}
+              // ONE FIGURE PER SLOT, holding the pose the cycler stands on
+              // (else the place type's default). `root_drop` comes from the
+              // pose catalog because this prop is UNCOMPOSED — the payload's
+              // `root_offset` only exists for a placed one.
+              markers={markers.map((m) => {
+                const entry = previewEntry(poseCatalog, m.group,
+                                           m.id ? previewPose[m.id] : undefined)
+                return {
+                  at: m.at, group: m.group, capacity: m.capacity,
+                  spacing_m: m.spacing_m, facing: m.facing,
+                  previewKind: entry?.animation,
+                  previewYawOffset: entry?.yaw_offset,
+                  rootDrop: groups[m.group]?.root_drop,
+                }
+              })}
               // The DISPLAYED variant's own size — the three numbers the strip
               // edits for exactly this chip.
               dimsOverlay={shownDims}

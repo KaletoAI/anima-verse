@@ -4,12 +4,24 @@
  * panel all read from one place.
  */
 
+/** ONE object-local PLACE of a prop variant (plan-posen-plaetze.md § 4,
+ *  `props.sanitize_markers`). It names a PLACE TYPE, never a clip: which pose
+ *  is played on it is the character's business. */
 export interface PropMarker {
-  animation: string
+  /** Stable id — minted client-side when the marker is created; the server
+   *  keeps it and mints one only for a marker that arrives without. */
+  id?: string
+  /** Place type: a group of the pose catalog (seat, bed, floor …). A marker
+   *  whose group the catalog does not know is dropped on save. */
+  group: string
   /** Object-local position: fractions [X, Y, Z] of the RAW model bounding
    *  box. Range -0.5..1.5 — seats and lying surfaces sit on the hull or
    *  just outside it (mirrors props.MARKER_AT_MIN/MAX). */
   at: [number, number, number]
+  /** How many figures the place seats, 1..8 (absent = 1). */
+  capacity?: number
+  /** Metres between two slots, 0.2..3.0 — only stored with a capacity > 1. */
+  spacing_m?: number
   /** Facing in degrees (0 south / 90 east / 180 north / 270 west). */
   facing?: number
 }
@@ -224,7 +236,7 @@ export interface PropVariant {
    *  props. 0 = on the ground. The per-placement `offset_y` in the room editor
    *  stays the trim of one instance on top of it. */
   ground_offset_m: number
-  /** Its object-local animation markers — fractions of THIS mesh's bounding
+  /** Its object-local place markers — fractions of THIS mesh's bounding
    *  box, which is why they cannot be shared with another version. */
   markers: PropMarker[]
   /** WHAT this variant shows in the prop's picture areas, keyed by area id
