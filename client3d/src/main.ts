@@ -11,8 +11,8 @@ import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace
 import { openPlaceMenu } from './game/placeMenu';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
-  gateStandY, groundScope, slideBlocked, slopeBlocks, terrainBlocks,
-  terrainPace, walkDir, type GroundScope,
+  gateStandY, groundScope, groundStoreyFloors, slideBlocked, slopeBlocks,
+  terrainBlocks, terrainPace, walkDir, type GroundScope,
 } from './game/walk';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
@@ -2707,7 +2707,7 @@ async function startApp(username: string, role: string) {
     const at = tileAt(x, z);
     if (terrainBlocks(terrainGround.passableAt(x, z), at !== null)) return true;
     if (at && at !== mine && !freeBoundary(at)) return true;
-    if (from && slopeBlockedBetween(from, x, z)) return true;
+    if (from && slopeBlockedBetween(from, x, z, at)) return true;
     const now = performance.now();
     for (const r of refusedPoints) {
       if (r.until > now && Math.hypot(r.x - x, r.z - z) < REFUSED_RADIUS_M) return true;
@@ -2747,20 +2747,35 @@ async function startApp(username: string, role: string) {
    * (plan-huette-dach, cause 2). The gate now measures what the figure stands
    * on, and the server measures the same thing.
    *
-   * MIRRORING, NOT EXTENDING: the storey-0 filter on the lattice, the
-   * declaration under it and the terrain as the lower bound are the server's
-   * rungs; the storey PLATES that `tileWalkY` reads as its rung 2 are absent
-   * on the server (storey 0 draws none) and absent here, and the drawing
-   * clearance `WALK_CLEARANCE_M` is not a height either side judges by.
+   * MIRRORING, NOT EXTENDING: the terrain as the lower bound and the STOREY-0
+   * filter on BOTH upper rungs are the server's — the lattice through
+   * `bakedFloorAt`'s `keep`, the declaration through `walk.groundStoreyFloors`
+   * over `tile.roomLevels`, because `tile.declaredFloors` is the DRAWING
+   * list and carries every storey (`sceneRecipe.ts`, where a figure on an
+   * upper floor has to find its own room's floor). The storey PLATES that
+   * `tileWalkY` reads as its rung 2 are absent on the server (storey 0 draws
+   * none) and absent here, and the drawing clearance `WALK_CLEARANCE_M` is
+   * not a height either side judges by.
+   *
+   * WHILE A SCENE IS STILL LANDING the rungs are thinner than the server's:
+   * `tile.surfaces` is built with `lift: 0` and gets its § A16.9 lift only as
+   * each mesh is placed, and `tile.declaredFloors` is assigned after the whole
+   * placement pass (`sceneRecipe.ts`), where the server's `lift_of` always
+   * applies. The gate then judges against the terrain and lets a step through
+   * that the server may still refuse — the harmless direction, and it closes
+   * itself within the load.
+   *
+   * `tile` is passed IN, not looked up: the callers on the frame path have it
+   * already, and this used to cost a third `tileAt` per point per frame.
    */
-  function gateStandAt(x: number, z: number): number {
+  function gateStandAt(x: number, z: number, tile: Tile | null): number {
     const terrain = terrainGround.heightAt(x, z);
-    const tile = tileAt(x, z);
     if (!tile) return terrain;
     const local = worldToTile(tile, x, z);
     const baked = bakedFloorAt(tile, local.x, local.z, (e) => e.level === 0);
     const declared = tile.declaredFloors.length
-      ? declaredFloorAt(tile.declaredFloors, local.x, local.z) : null;
+      ? declaredFloorAt(groundStoreyFloors(tile.declaredFloors,
+        (id) => tile.roomLevels.get(id)), local.x, local.z) : null;
     return gateStandY(baked,
       declared === null ? null : tile.center.y + declared, terrain);
   }
@@ -2782,13 +2797,16 @@ async function startApp(username: string, role: string) {
   const OPENING_TOLERANCE_M = 1.5;
 
   function slopeBlockedBetween(from: { x: number; z: number },
-                               x: number, z: number): boolean {
-    const dh = gateStandAt(x, z) - gateStandAt(from.x, from.z);
+                               x: number, z: number,
+                               there: Tile | null): boolean {
+    // ONE `tileAt` PER POINT AND FRAME: `there` comes from the caller, which
+    // had to resolve it anyway, and `here` is resolved once for the height
+    // below and reused by the opening exemption further down.
+    const here = tileAt(from.x, from.z);
+    const dh = gateStandAt(x, z, there) - gateStandAt(from.x, from.z, here);
     if (!dh) return false;
     if (!slopeBlocks(dh, Math.hypot(x - from.x, z - from.z),
                      maxStepHeightM, maxSlopeDeg)) return false;
-    const there = tileAt(x, z);
-    const here = tileAt(from.x, from.z);
     for (const t of here && here !== there ? [there, here] : [there]) {
       if (!t) continue;
       for (const o of openingsOf(t)) {

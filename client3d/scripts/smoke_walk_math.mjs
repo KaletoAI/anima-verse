@@ -367,6 +367,14 @@
  * extending. The three LOOKUPS stay in main.ts (`gateStandAt`: `bakedFloorAt`
  * with the storey-0 filter, `declaredFloorAt`, `terrainGround.heightAt`).
  *
+ * BOTH UPPER RUNGS ARE STOREY-0 ONLY, and rung 1 needs a filter of its own:
+ * `tile.declaredFloors` is the DRAWING list and carries every storey, while
+ * the server's list is built from storey-0 rooms alone
+ * (`model_surface._declarations`). `groundStoreyFloors(floors, levelOf)` is
+ * that filter as a rule — a room whose level is unknown counts as storey 0,
+ * the mirror of the server's `int(level or 0)` — and the two-storey house
+ * below shows what it prevents.
+ *
  * --- slideBlocked (E4 task 5) ---------------------------------------------
  * The step that would end in blocked ground keeps the component that runs
  * ALONG the boundary: full step if free, else the larger axis alone (ties to
@@ -934,7 +942,8 @@ async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
     bubble, minimap, locks, placement, ground, stairs } = await loadGameModules();
-  const { walkDir, slideBlocked, slopeBlocks, gateStandY, terrainBlocks, terrainPace,
+  const { walkDir, slideBlocked, slopeBlocks, gateStandY, groundStoreyFloors,
+    terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
     groundScope, wadeGate, swimFrom, SWIM_FROM_DEFAULT_M, MIN_PACE,
     submergedInWater, ghostCutY, ghostWaterLevel, WATER_GHOST_FROM_M,
@@ -1703,6 +1712,50 @@ async function main() {
     check('...and with no rung left, to the ground', gateStandY(NaN, NaN, 0.3), 0.3);
     check('a terrain sampler with nothing to say leaves the lattice standing',
       gateStandY(2.5, null, NaN), 2.5);
+
+    // --- groundStoreyFloors: RUNG 1 IS STOREY 0 ONLY (review finding 1) ----
+    // The server's declaration list is built from storey-0 rooms alone
+    // (`model_surface._declarations`), while `tile.declaredFloors` is the
+    // DRAWING list and carries every storey. A two-storey house on flat
+    // ground, datum 0, terrain 0:
+    //   hall,  level 0, walk_y 0.0, hull 12 x 12 m  (area 144)
+    //   attic, level 1, walk_y 3.3, hull  6 x  6 m  (area  36, INSIDE the hall)
+    // At (0, 0) both hulls contain the point and the SMALLER one wins the
+    // most-specific tie-break — so unfiltered the gate stands the walker on
+    // the attic floor: dh 3.3 against the ground outside, atan(3.3/1.12) =
+    // 71.2531° over a report step, refused where the server (which never sees
+    // the attic here) reads 0.0 and lets it through. That is the inverted
+    // desync of this same bug, and the filter is what keeps both sides on one
+    // number.
+    const pickDeclared = ground.declaredFloorAt;
+    const square = (h) => [[-h, -h], [h, -h], [h, h], [-h, h]];
+    const HOUSE = [
+      { roomId: 'hall', top: 0.0, outline: square(6) },
+      { roomId: 'attic', top: 3.3, outline: square(3) },
+    ];
+    const levelOf = (id) => ({ hall: 0, attic: 1 })[id];
+    check('the upper storey drops out of the gate\'s list',
+      groundStoreyFloors(HOUSE, levelOf).map((f) => f.roomId), ['hall']);
+    check('...so the gate stands on the ground floor',
+      gateStandY(null, pickDeclared(groundStoreyFloors(HOUSE, levelOf), 0, 0), 0),
+      0);
+    check('...and the step in from outside is free, as on the server',
+      slopeBlocks(0 - 0, 1.12, STEP, SLOPE), false);
+    check('RED: unfiltered, the attic hull wins the tie-break',
+      pickDeclared(HOUSE, 0, 0), 3.3);
+    check('RED: ...and the gate refuses a step the server accepts',
+      slopeBlocks(gateStandY(null, pickDeclared(HOUSE, 0, 0), 0) - 0, 1.12,
+        STEP, SLOPE), true);
+    // A BASEMENT is not storey 0 either — the server's test is `!= 0`.
+    check('a basement is dropped just like an upper floor',
+      groundStoreyFloors([{ roomId: 'cellar', top: -2.5, outline: square(3) }],
+        () => -1), []);
+    // `int(level or 0)` reads a missing level as storey 0; a room the tile
+    // knows no level for is read the same way, so a scene whose room list has
+    // not landed yet does not silently lose its ground floor.
+    check('a room with no level known is on storey 0',
+      groundStoreyFloors(HOUSE, () => undefined).map((f) => f.roomId),
+      ['hall', 'attic']);
   }
 
   // --- clickmove (E4 task 5) -----------------------------------------------

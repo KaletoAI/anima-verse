@@ -670,8 +670,9 @@ export function slopeBlocks(dh: number, dist: number, maxStep: number,
  *     (`tiles.bakedFloorAt`, `highest_surface_at` there), which is what a hut
  *     puts over the ground it stands on.
  *  1. THE DECLARATION (`declared`) — where no lattice answers, the
- *     `walk_y_world` a storey-0 room states (`ground.declaredFloorAt`,
- *     `declared_floor_of` there): a podium, a sunken lounge, a hut in a lake.
+ *     `walk_y_world` a storey-0 room states (`ground.declaredFloorAt` over
+ *     {@link groundStoreyFloors}, `declared_floor_of` there): a podium, a
+ *     sunken lounge, a hut in a lake.
  *  2. THE TERRAIN (`terrain`) — the world ground, and it is the LOWER BOUND
  *     of the two rungs above as well (Entscheid 5): a hollow in a diorama
  *     never sinks a figure below the ground it stands on.
@@ -696,6 +697,33 @@ export function gateStandY(baked: number | null, declared: number | null,
     : Number.isFinite(declared) ? (declared as number) : NaN;
   if (!Number.isFinite(lattice)) return terrain;
   return Number.isFinite(terrain) ? Math.max(lattice, terrain) : lattice;
+}
+
+/**
+ * THE DECLARATIONS RUNG 1 OF {@link gateStandY} MAY READ — the storey-0 ones,
+ * and that filter is half of the mirror rather than a detail.
+ *
+ * The server builds its declaration list from storey-0 rooms alone
+ * (`app/core/model_surface._declarations`: `spec.get("role") != "room" or
+ * int(spec.get("level") or 0) != 0 -> continue`), while the client's
+ * `tile.declaredFloors` carries EVERY storey — it is the drawing ladder's
+ * list, and there a figure on an upper floor must find its own room's floor.
+ * Handing that whole list to `declaredFloorAt` inverts the desync this task
+ * repairs: an upper room's hull is typically the smaller one, so it wins the
+ * most-specific tie-break and the gate measures a phantom storey height that
+ * the server never sees — refusing steps the server accepts.
+ *
+ * A ROOM WITHOUT A LEVEL IS ON STOREY 0, exactly as `int(level or 0)` reads a
+ * missing one on the server; a room the tile knows no level for at all is
+ * treated the same way, because dropping it would silently lose the ground
+ * floor of a scene whose room list has not landed yet.
+ *
+ * `levelOf` is the lookup (`tile.roomLevels`), passed in so this file stays
+ * import-free and the rule stays a rule.
+ */
+export function groundStoreyFloors<T extends { roomId: string }>(
+  floors: readonly T[], levelOf: (roomId: string) => number | undefined): T[] {
+  return floors.filter((f) => (levelOf(f.roomId) ?? 0) === 0);
 }
 
 export function slideBlocked(from: Point, to: Point, blocked: BlockedFn): Point {
