@@ -4236,7 +4236,7 @@ sie produziert.
 | `scripts/smoke_terrain_layers.py` | [1] Raster == `rank_at` == `kind_at` an 500 Gitterproben, die sd-Quantisierung, der Endpunkt in beiden Modi, `uniform`, `waters` |
 | `scripts/smoke_terrain_types.py` [9] | die Sanitizer der Katalog-Felder (`edge_blend_m` mit 0 als WERT, Relief-Amplitude/Welle) |
 | `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor`; **[4a]** der Wandsaum — beide Grenzen des 0,14-Maßes von Hand, die feste Oberkante, der ungesäumte Sturz, die ungesäumte Türschwelle und die unbewegte deklarierte Etage |
-| `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **8** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
+| `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **9** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
 **Client — Höhe, Schnitt, Wasser, Szene**
@@ -7842,11 +7842,11 @@ voller `null` — sonst würde ewig neu gebacken.
 | `surface` | `models[]` mit `role: "room"`, und `role: "prop"` **mit** `walkable` | der Nutzlast-Block `step, origin, cols, rows, values, box_min, box_max, extent_snapped` — die Zahlen der Datei unverändert, im Modell-Rahmen |
 | `walkable` | nur Prop-Spec | das Prop trägt das Tag `walkable`; ohne das Feld schickt es kein Raster (das Raster einer Tischplatte wäre totes Gewicht in jeder Nutzlast) |
 
-Gebäude-Specs bekommen keins (Entscheid 1). `code_version` steht auf **8** —
+Gebäude-Specs bekommen keins (Entscheid 1). `code_version` steht auf **9** —
 die Konstante gehört dem ganzen Payload, nicht diesem Abschnitt, und bewegt
 sich mit jeder Änderung an dem, was der Composer bei unveränderten Daten
 antwortet (6 = diese Raster, 7 = Platz-Typen an den Markern, 8 = der
-`anchor` am Prop-Marker).
+`anchor` am Prop-Marker, 9 = `stairs[]` samt Plattenloch).
 
 **Die Signatur.** `_signature` nimmt je Raster einen Kurz-Hash des Blocks auf
 (`model_surface.block_sig`, 8 Zeichen), unter dem Schlüssel
@@ -8085,7 +8085,7 @@ Tastendruck im Lageplan-Editor.
 | Die Zellenregel Knoten für Knoten an einer rein in Python geschriebenen Mini-GLB (Sockel + Block + hoher Überhang + niedriger Sims): 80 / 20 / **20** / **90** cm und `null` neben dem Modell — 20, weil unter dem hohen Überhang 1,3 m ≥ 1,2 m Luft ist, 90, weil unter dem Sims nur 0,6 m bleiben; dazu beide Boxen, `extent_snapped` unter Fix 0 und Fix x = 90, und die Gültigkeit (Version, Quelle, Fix, unvollständige Datei) | ebenda **part 1** (36 Checks, echtes Blender; ohne Blender SKIP statt Fehler) |
 | Die Sampler-Handtabelle: Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt | ebenda **part 2** (15 Checks) |
 | **Dieselbe Handtabelle in TypeScript** — `surfaceHeightAt`/`highestSurfaceAt` Zahl für Zahl wie der Python-Zwilling | `client3d/scripts/smoke_surface_math.mjs` (15 Checks) |
-| Rezept: `code_version` **8** (die Konstante bewegt sich mit JEDER Änderung an dem, was der Composer bei unveränderten Daten antwortet: 6 = diese Oberflächen-Raster, 7 = Marker sprechen Platz-Typen, 8 = der Prop-Marker nennt seinen `anchor`), das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
+| Rezept: `code_version` **9** (die Konstante bewegt sich mit JEDER Änderung an dem, was der Composer bei unveränderten Daten antwortet: 6 = diese Oberflächen-Raster, 7 = Marker sprechen Platz-Typen, 8 = der Prop-Marker nennt seinen `anchor`, 9 = `stairs[]` samt Plattenloch), das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
 | Zwei Varianten desselben Props in einem Raum: jede Kopie bekommt das Raster IHRER Store-Variante, und ein Neubacken der „verschluckten" Variante bewegt die Signatur | ebenda **[7h]** (8 Checks) |
 | Die Höhensperre: neben der Kiste blanker Boden, auf der 0,3-m-Kiste 0,3 (Schritt erlaubt), am 0,8-m-Block `too_steep` als STUFE, wieder herunter erlaubt; Etage-0-Filter, Anker-Lift, TTL-Cache, `forget_surfaces` und der defekte Sidecar, der auf Boden zurückfällt statt zu 500 | `scripts/smoke_play_pos.py` **[23]** (21 Checks) |
 | Sprosse 1 auf der Server-Seite: ein Loch im Raster (`null`-Knoten) fällt auf das `walk_y_world` des Raums in seinem `floor_plan`-Hull, außerhalb jedes Hulls antwortet das Gelände, bei Überlappung gewinnt der kleinste Hull — und das Schritt-Tor misst gegen 0,9 statt gegen 0,0 | ebenda **[23h]** (11 Checks) |
@@ -8241,6 +8241,14 @@ Der Server rechnet einmal und speist beides (`scene_recipe._stair_flights`).
 | `foot` / `head` | `[x, y, z]` — die beiden STAND-Punkte: Pad-Mitte in XZ, Pad-OBERKANTE als y |
 | `footprint` | `[[x,z] × 4]` — das Rechteck `width_m × run_m` ab `at` entlang `dir` |
 
+**Umlaufsinn: die beiden Rechtecke laufen GEGENLÄUFIG, das ist Absicht.**
+`footprint` läuft GEGEN den Uhrzeigersinn in Kartensicht (x Ost, z Süd) — es
+ist Punkt für Punkt die Outline, die die Admin-Plan-Vorschau bisher selbst
+gerechnet hat, und sie ist ein SYMBOL. Der Loch-Ring in `plates[].holes`
+läuft IM Uhrzeigersinn, dem Umlaufsinn jeder gespeicherten Outline. Wer ein
+Loch braucht, nimmt also `plates[].holes` — `footprint` ist kein Ersatz dafür
+(es fehlt ihm das Kopf-Pad, und sein Umlaufsinn ist der andere).
+
 `foot`/`head` sind damit genau die Zahlen, die ein Client bisher aus den beiden
 Pads zusammengesucht und um 0,01 angehoben hat — **dieses eigene +0,01 im
 Client entfällt**, die Anhebung steckt jetzt in der Pad-Oberkante selbst.
@@ -8319,7 +8327,8 @@ muss sich bewegen, sonst behält jeder Client seine alte Szene.
 | `foot`/`head` = Pad-Mitte + halbe Pad-Dicke — Block und Kästen dürfen nicht auseinanderlaufen | ebenda **[5t]** |
 | Pad-Abstand: Aufzugs-Pad −0,015, Treppen-Pads −0,015 / 3,065 / −2,935, ROTE PROBEN auf die alten +0,055 und −0,025 | ebenda **[5]/[5s]** |
 | Plattenloch: Etagenplatte 1 und der Raum, in dem die Mitte liegt, tragen das Rechteck; ein Nachbarraum derselben Etage nicht; eine Platte ohne Lauf trägt `[]`; ROTE PROBE: ein Kellerlauf schneidet nirgends | ebenda **[2]/[2s]** |
+| Zwei Läufe auf DIESELBE Etage: die Etagenplatte trägt beide Ringe in Autorenreihenfolge, der Raum nur den, dessen Mitte in ihm liegt | ebenda **[2s]** |
 | `SCENE_RECIPE_VERSION` == 9 | ebenda **[7i]** |
-| `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | `client3d/scripts/smoke_walk_math.mjs` |
-| Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | ebenda |
-| Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | ebenda |
+| Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
+| `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |
+| Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | **noch nicht bewiesen — folgt mit Task 4** (ebenda) |

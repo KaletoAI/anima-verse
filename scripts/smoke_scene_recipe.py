@@ -317,6 +317,30 @@ def test_plates() -> None:
     check("storey 0 — where the flight STARTS — has no plate to cut at all",
           not [q for q in hs["plates"] if q["level"] == 0],
           str([q.get("room_id") for q in hs["plates"] if q["level"] == 0]))
+    # TWO FLIGHTS ONTO THE SAME STOREY — the whole reason ``holes`` is a LIST.
+    # The second one starts at (−4, 3), also dir 90 and also from_level 0, so
+    #   ring   = [[−4, 2.4], [0.85, 2.4], [0.85, 3.6], [−4, 3.6]]
+    #            (pt(along, across) = (−4 + along, 3 + across), length 4.85)
+    #   centre = (−4 + 4.85/2, 3) = (−1.575, 3)
+    # That centre is inside the ±5 contour but inside NO room: "hall" is
+    # x 1…5, "up" x −4…0 / z −4…−1, "terrace" x 1…3 / z 1…3. So the level
+    # plate carries BOTH rings in authoring order and "hall" still only the
+    # first — which is exactly the difference between the two rules.
+    HOLE2 = [[-4.0, 2.4], [0.85, 2.4], [0.85, 3.6], [-4.0, 3.6]]
+    h2 = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90},
+                      {"at": [-4.0, 3.0], "from_level": 0, "dir_deg": 90}],
+                     [UPPER, TERRACE, HALL])
+    two = {q.get("room_id") or "": q for q in h2["plates"]}
+    check("two flights onto one storey = TWO rings in the level plate",
+          two[""]["holes"] == [HOLE, HOLE2], str(two[""]["holes"]))
+    check("...while the room keeps only the hole whose centre it contains",
+          two["hall"]["holes"] == [HOLE], str(two["hall"]["holes"]))
+    check("...and the rooms the second one misses stay closed",
+          two["up"]["holes"] == [] and two["terrace"]["holes"] == [],
+          str([two["up"]["holes"], two["terrace"]["holes"]]))
+    check("still not one plate on storey 0, where both flights START",
+          not [q for q in h2["plates"] if q["level"] == 0],
+          str([q.get("room_id") for q in h2["plates"] if q["level"] == 0]))
     # A BASEMENT FLIGHT arrives on storey 0, which is the terrain: nothing to
     # cut, and above all no hole leaking into the storey-1 plates.
     hb = stair_scene([{"at": [2.0, -2.0], "from_level": -1, "dir_deg": 90}],
