@@ -64,7 +64,7 @@ import {
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type { DimKey } from './dims'
 import type {
-  PropFull, PropMarker, PropSlot, PropSlotKind, PropSourceImage, PropVariant,
+  PropFull, PropMarker, PropSourceImage, PropVariant,
 } from './propTypes'
 
 /**
@@ -100,13 +100,6 @@ const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
   { label: 'X (width)', dim: 'width_m', min: AT_MIN },
   { label: 'Y (height)', dim: 'height_m', min: -1 },
   { label: 'Z (depth)', dim: 'depth_m', min: AT_MIN },
-]
-
-/** The two things a texture slot can take — the server's `props.SLOT_KINDS`,
- *  with the label each one gets in the picker. */
-const SLOT_KINDS: Array<{ kind: PropSlotKind; label: string }> = [
-  { kind: 'image', label: 'Image' },
-  { kind: 'material', label: 'Material' },
 ]
 
 export function PropDetail({ prop, pending, generatingVariants, cacheBump,
@@ -235,6 +228,15 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const variants = useMemo(() => applyVariantDraft(serverVariants, buf),
     [serverVariants, buf])
   const shownVariant = variants.find((v) => v.index === variant) || null
+  // WHAT THE OPEN VARIANT'S FILE CARRIES (spec-bild-props-v2.md E1): the
+  // orientation fix belongs to the model FILE, so it is read off the entry of
+  // the variant that is open and never off the prop — every variant is its own
+  // generation and came out of it with its own axes. `variant_tiers` holds the
+  // variants a scene renders right now, so a switched-off or out-of-season one
+  // is NOT in it: its fix is unknown here, and the control below says so
+  // instead of offering a 0 that would wipe the stored angles.
+  const variantEntry = prop.variant_tiers?.find((v) => v.variant === variant)
+  const variantRotation = variantEntry?.rotation
   // Is the variant the detail has OPEN the one that is generating? Every
   // variant-scoped action below reads this instead of the prop-level flag —
   // rendering variant 3's image must not put "Generating…" on variant 1.
@@ -289,31 +291,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const tagsNow = draftValue(buf, GENERAL_TARGET, 'tags', prop.tags.join(', '))
   const swayNow = draftValue<number>(buf, GENERAL_TARGET, 'sway_factor',
     prop.sway_factor ?? 1)
-
-  // ── TEXTURE SLOTS ──────────────────────────────────────────────────────
-  // The fillable surfaces of the mesh, a plain list of {name, kind}. They
-  // belong to the OBJECT (a slot IS a material of the model), so they sit here
-  // beside the sway factor and not on a variant. The list needs no local
-  // typing state: it lives in the draft, which is also what the rows render
-  // from — one buffered FIELD however many rows are edited.
-  const slots = draftValue<PropSlot[]>(buf, GENERAL_TARGET, 'slots',
-    prop.slots || [])
-  const saveSlots = useCallback((next: PropSlot[]) => {
-    queueGeneral({ slots: next })
-  }, [queueGeneral])
-  const patchSlot = (i: number, patch: Partial<PropSlot>) =>
-    saveSlots(slots.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
-  // What the server would do with this list, said BEFORE the save: a nameless
-  // slot is a 400 for the whole batch, and a name given twice collapses to its
-  // first entry. Both are silent surprises otherwise ("Saved" and a row gone).
-  const slotProblem = useMemo(() => {
-    const names = slots.map((s) => (s.name || '').trim().toLowerCase())
-    if (names.some((n) => !n)) return t('A slot without a name cannot be saved.')
-    if (new Set(names).size !== names.length) {
-      return t('Two slots share a name — only the first one would be kept.')
-    }
-    return ''
-  }, [slots, t])
 
   // The RAW box of the mesh the viewer has OPEN, i.e. the SELECTED variant's,
   // measured on load. What the overlays scale by is the mesh on screen: a
@@ -451,33 +428,37 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     queueGeneral({ sway_factor: next })
   }, [swayDraft, swayNow, queueGeneral])
 
+  // THE FIX IS THE FILE'S (v2 E1): the route takes the variant, and what comes
+  // back has to reach the viewers below — the preview here, the areas viewer
+  // and the strip's dims all turn with it, so this reloads the meshes rather
+  // than the record alone.
   const rotate = useCallback(async (axis: 'x' | 'y' | 'z') => {
-    const cur = prop.rotation || {}
+    const cur = variantRotation || {}
     try {
-      await apiPost(`/world/props/${enc}/rotation`, {
+      await apiPost(`/world/props/${enc}/rotation?variant=${variant}`, {
         x: cur.x || 0, y: cur.y || 0, z: cur.z || 0,
         [axis]: ((cur[axis] || 0) + 90) % 360,
       })
-      await onChanged()
+      await meshesChanged()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [prop.rotation, enc, onChanged, t, toast])
+  }, [variantRotation, enc, variant, meshesChanged, t, toast])
 
   const setRotationAxis = useCallback(async (axis: 'x' | 'y' | 'z', raw: string) => {
     const n = parseFloat(raw)
     const v = Number.isFinite(n) ? ((n % 360) + 360) % 360 : 0
-    if (v === (prop.rotation?.[axis] || 0)) return
-    const cur = prop.rotation || {}
+    if (v === (variantRotation?.[axis] || 0)) return
+    const cur = variantRotation || {}
     try {
-      await apiPost(`/world/props/${enc}/rotation`, {
+      await apiPost(`/world/props/${enc}/rotation?variant=${variant}`, {
         x: cur.x || 0, y: cur.y || 0, z: cur.z || 0, [axis]: v,
       })
-      await onChanged()
+      await meshesChanged()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [prop.rotation, enc, onChanged, t, toast])
+  }, [variantRotation, enc, variant, meshesChanged, t, toast])
 
   // The walkable surface of the SHOWN variant's mesh. Blender bakes it in the
   // background, so the answer is only "queued" — but the record is reloaded
@@ -681,64 +662,6 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             </Field>
           </div>
 
-          {/* THE TEXTURE SLOTS — the surfaces of this mesh that can be filled
-              later (a frame that takes a picture, a pane that takes glass).
-              The import reads a first draft off the model's material names;
-              this is where it is corrected. */}
-          <div className="ga-form-section-label">
-            {t('Texture slots')}
-            {prop.slots_auto && slots.length ? (
-              <span className="ga-hint" style={{ marginLeft: 6, fontWeight: 400 }}
-                title={t('This list was read off the model’s material names, and every new mesh re-reads it. Editing it makes it yours — from then on no model overwrites it.')}>
-                · {t('detected')}
-              </span>
-            ) : null}
-          </div>
-          <span className="ga-hint">
-            {t('Surfaces of the mesh that can be filled later: a material named “slot_<name>” is one, and so are the plain names picture, screen, sign (image) and glass (material). Read off every mesh that lands — correct it here, and no later mesh touches your list again.')}
-          </span>
-          {slots.length === 0 ? (
-            <div className="ga-hint" style={{ fontSize: '0.85em' }}>
-              {t('No texture slots — the model names none.')}
-            </div>
-          ) : (
-            slots.map((s, i) => (
-              <div key={i} className="ga-form-row">
-                <input className="ga-input" style={{ flex: 1, minWidth: 0 }}
-                  value={s.name}
-                  placeholder={t('Slot name')}
-                  title={t('The material name in the model, lower-case (the “slot_” prefix is not part of it).')}
-                  onChange={(e) => patchSlot(i, { name: e.target.value })} />
-                <select className="ga-input" style={{ width: 120 }}
-                  value={s.kind}
-                  title={t('What fills it: an image (a picture on the surface) or a material (glass, mirror, matte).')}
-                  onChange={(e) => patchSlot(i,
-                    { kind: e.target.value as PropSlotKind })}>
-                  {SLOT_KINDS.map((k) => (
-                    <option key={k.kind} value={k.kind}>{t(k.label)}</option>
-                  ))}
-                </select>
-                <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-                  title={t('Remove this texture slot')}
-                  onClick={() => saveSlots(slots.filter((_, idx) => idx !== i))}>
-                  ×
-                </button>
-              </div>
-            ))
-          )}
-          {slotProblem ? (
-            <span className="ga-hint" style={{ color: 'var(--warn, #d29922)' }}>
-              {slotProblem}
-            </span>
-          ) : null}
-          <div>
-            <button type="button" className="ga-btn ga-btn-sm"
-              title={t('Add a slot by hand — for a material the detection does not know by name.')}
-              onClick={() => saveSlots([...slots, { name: '', kind: 'image' }])}>
-              + {t('Texture slot')}
-            </button>
-          </div>
-
           {/* Measured in the mesh itself — the cost of placing this prop
               many times, which the sizes below say nothing about. */}
           {prop.measured?.tris ? (
@@ -780,7 +703,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             // the mesh ON SCREEN, which belongs to the SELECTED chip. Every
             // other chip falls back to its own stored dims inside the strip.
             shownBbox={shownBbox}
-            rotation={prop.rotation}
+            // The fix of the SELECTED variant's file — the box on screen is
+            // that mesh's, and it has to be turned by that file's angles.
+            rotation={variantRotation}
           />
 
           {/* THE SELECTED VARIANT, dialled against the viewer opposite: the
@@ -1132,7 +1057,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 : `/assets/props/${enc}/model?variant=${variant}&v=${encodeURIComponent(prop.created_at || '')}-${reloadKey}`}
               format="glb"
               height={340}
-              rotation={prop.rotation}
+              // The fix of the OPEN variant's file (v2 E1) — the prop has none
+              // any more, and a neighbour's angles would tilt this mesh.
+              rotation={variantRotation}
               // Switching variant or tier swaps ANOTHER VERSION of the same
               // object under the camera — the angle stays, "Reset view" frames
               // again on demand (§ B1).
@@ -1222,22 +1149,31 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
           </div>
           </div>
 
-          {/* Orientation fix — ↻ adds +90°, the field sets a free exact angle. */}
-          {prop.has_model ? (
+          {/* Orientation fix — ↻ adds +90°, the field sets a free exact angle.
+              IT BELONGS TO THE FILE (v2 E1): what is dialled here is the OPEN
+              variant's active full mesh, and the low mesh follows it. A
+              variant that is switched off or out of season is not published
+              with its fix, so the control reads it out rather than offering a
+              0 that the next click would write over the stored angles. */}
+          {shownHasMesh ? (
             <>
-              <div className="ga-form-section-label">{t('Orientation fix')}</div>
+              <div className="ga-form-section-label">
+                {`${t('Orientation fix')} · ${t('Variant')} ${variant + 1}`}
+              </div>
               <div className="ga-form-row">
                 {(['x', 'y', 'z'] as const).map((axis) => (
                   <span key={axis} style={{ display: 'inline-flex', gap: 2, alignItems: 'center' }}>
                     <button type="button" className="ga-btn ga-btn-sm"
+                      disabled={!variantEntry}
                       onClick={() => { void rotate(axis) }} title={t('+90°')}>
                       ↻ {axis.toUpperCase()}
                     </button>
                     <input
-                      key={`${axis}-${prop.rotation?.[axis] || 0}`}
+                      key={`${axis}-${variant}-${variantRotation?.[axis] || 0}`}
                       className="ga-input" type="number" min={-360} max={720} step={0.1}
                       style={{ width: 64 }}
-                      defaultValue={prop.rotation?.[axis] || 0}
+                      disabled={!variantEntry}
+                      defaultValue={variantRotation?.[axis] || 0}
                       title={t('Exact angle in degrees — free rotation for meshes that came out tilted.')}
                       onBlur={(e) => { void setRotationAxis(axis, e.target.value) }}
                       onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
@@ -1245,7 +1181,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   </span>
                 ))}
               </div>
-              <span className="ga-hint">{t('Orientation fix — persisted; the 3D client applies it on load.')}</span>
+              <span className="ga-hint">
+                {variantEntry
+                  ? t('Orientation fix of this variant’s model file — persisted; the 3D client applies it on load.')
+                  : t('Switch this variant on (and into season) to dial its orientation — only a variant a scene renders publishes its fix.')}
+              </span>
             </>
           ) : null}
 
@@ -1270,14 +1210,16 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             </>
           ) : null}
 
-          {/* THE KEY SURFACES of this prop's mesh and the pictures hung on
-              them (spec-picture-props.md § 4). It needs a mesh to read them
-              off, so it appears with the model — and it works on the PRIMARY
-              variant's mesh, which is the frame every picture variant copies.
-              */}
-          {prop.has_model ? (
+          {/* THE KEY SURFACES of the OPEN variant's mesh and the pictures hung
+              on this prop (spec-picture-props.md § 4). It needs a mesh to read
+              them off, so it appears with the model — and it works on the
+              SELECTED variant (v2 E1): every variant is its own generation
+              with its own materials, and a new picture variant still copies
+              the primary frame, which the panel says. */}
+          {shownHasMesh ? (
             <PropAreasPanel
               prop={prop}
+              variant={variant}
               variants={serverVariants}
               variantMax={variantMax}
               reloadKey={reloadKey}

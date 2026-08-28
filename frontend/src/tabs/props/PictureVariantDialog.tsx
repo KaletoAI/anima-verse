@@ -2,7 +2,8 @@
  * PictureVariantDialog — hang pictures on the prop's key surfaces.
  *
  * A picture assignment IS a variant of the frame prop (D2): the server copies
- * the primary mesh and the values ride on the copy. So this dialog collects
+ * the PRIMARY variant's mesh and the values ride on the copy, so the areas
+ * this dialog offers are that file's — whichever variant the tab is open on. So this dialog collects
  * exactly one thing — what each area shows — plus the name the variant is
  * listed under, and hands it over. It creates nothing and knows no route.
  *
@@ -33,10 +34,13 @@ export function PictureVariantDialog({ open, title, areas, initial, initialLabel
   open: boolean
   /** Header line — "New picture variant", or the variant being edited. */
   title: string
-  /** The prop's real areas; the dialog renders one control per entry. */
+  /** The areas of the mesh this assignment is CHECKED against — the primary
+   *  variant's frame for a new picture, the edited variant's own file for an
+   *  existing one (v2 E1). One control per entry. */
   areas: PropArea[]
-  /** What is on them already (editing an existing variant), or the prop's
-   *  defaults as the starting point for a new one. */
+  /** What is on them already (editing an existing variant), or the frame
+   *  variant's pane defaults as the starting point for a new one — the copy
+   *  inherits exactly those. */
   initial?: PropSlotValues
   /** The variant's stored name ('' = none yet). */
   initialLabel?: string

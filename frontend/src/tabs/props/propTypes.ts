@@ -74,12 +74,10 @@ export interface PropFull {
   height_m: number
   tags: string[]
   /** The fillable surfaces of this prop's mesh — always present, `[]` = none.
-   *  Edited here on the prop, because a slot is a material of the OBJECT. */
+   *  READ-ONLY since v2 E6: a named material becomes an AREA when the mesh
+   *  lands, so nothing edits this list any more; a scene matches its `slots`
+   *  against it. */
   slots?: PropSlot[]
-  /** True = the list above is what the model's material names said (the badge
-   *  "detected"); False = an admin authored it, and no import touches it
-   *  again. Full records only. */
-  slots_auto?: boolean
   /** How many markers the PRIMARY variant carries. */
   marker_count: number
   has_model: boolean
@@ -107,7 +105,6 @@ export interface PropFull {
   /** What Blender read out of the mesh — informational, nothing is derived
    *  from it (the dims come from `bbox`). Absent until measured. */
   measured?: { tris?: number; verts?: number; uv_layers?: number; vertex_colors?: number }
-  rotation?: { x?: number; y?: number; z?: number }
   /** The PRIMARY variant's object-local markers. Edited per variant. */
   markers?: PropMarker[]
   has_source?: boolean
@@ -128,17 +125,7 @@ export interface PropFull {
    *  request serves. `variant` is the STORE INDEX, not the position in this
    *  list: a switched-off variant leaves a gap. Anything that addresses a
    *  variant over the API uses that number, never the array position. */
-  variant_tiers?: Array<{
-    variant: number
-    tiers: string[]
-    /** The three real metres THIS variant renders at (props.variant_dims). */
-    dims?: PropDims
-    /** How deep THIS variant stands in the ground (absent = on the ground). */
-    ground_offset_m?: number
-    /** Its object-local markers (absent = none). Full records only — the lean
-     *  client library gets `marker_count` and nothing else. */
-    markers?: PropMarker[]
-  }>
+  variant_tiers?: PropVariantTier[]
   /** How many active variants actually carry a mesh. */
   variant_count?: number
   /** ACTIVE model variants in total — the ones a scene renders. */
@@ -151,20 +138,61 @@ export interface PropFull {
   /** Configured ceiling on ACTIVE variants (image_generation.prop_variant_max). */
   variant_max?: number
   /** Which key colours this prop's render was asked for (`["picture"]`) —
-   *  set in the create form, patchable here, and what makes a landing mesh
-   *  split itself automatically (spec-picture-props.md § 2/3). */
+   *  set in the create form and in the generation dialogs. It is the WISH for
+   *  the next generation and the one area fact that is still the PROP's
+   *  (spec-bild-props-v2.md E1, ruling V2): everything a mesh actually
+   *  carries — areas, leaf box, orientation fix, pane defaults — sits on the
+   *  variant entry below. */
   key_areas?: string[]
-  /** The door leaf node's box (spec § 6) — present only while the mesh has
-   *  a `leaf` node; the scene recipe copies it into `door.leaf_bbox`. */
-  leaf_bbox?: LeafBbox
-  /** The key surfaces the mesh actually carries. The Areas tab reads the
-   *  richer `GET …/areas` (outlines, mesh layout, Blender state); this is the
-   *  same list on the record, so a reader that only needs "has it any?" costs
-   *  no second request. */
+}
+
+/**
+ * ONE published model variant of a prop (`variant_tiers[i]`), i.e. what its
+ * ACTIVE FULL MESH carries.
+ *
+ * Since spec-bild-props-v2.md E1 the areas, the door-leaf box and the
+ * orientation fix belong to the model FILE and the pane defaults to the
+ * variant entry — every variant is its own img2mesh generation, with its own
+ * axes and its own materials, so there is no prop-wide answer to any of them
+ * and none is published (no alias). A placement reads the entry it resolves
+ * to; the admin reads the entry of the variant it has open.
+ */
+export interface PropVariantTier {
+  /** STORE index — not the position in the list (a switched-off variant
+   *  leaves a gap), and what every variant-scoped URL names. */
+  variant: number
+  /** Resolution tiers this variant HAS (`full` / `low`). */
+  tiers: string[]
+  /** The three real metres THIS variant renders at (props.variant_dims). */
+  dims?: PropDims
+  /** How deep THIS variant stands in the ground (absent = on the ground). */
+  ground_offset_m?: number
+  /** Its object-local markers (absent = none). Full records only — the lean
+   *  client library gets `marker_count` and nothing else. */
+  markers?: PropMarker[]
+  /** The key surfaces THIS variant's mesh carries. The Areas tab reads the
+   *  richer `GET …/areas?variant=` (outlines, mesh layout, Blender state);
+   *  this is the same list on the record, so a reader that only needs "has it
+   *  any?" costs no second request. Full records only. */
   areas?: PropArea[]
-  /** Prop-wide slot values that apply WITHOUT a variant — a door's pane is
-   *  glass on every placement of it, and a door prop has no variants. */
+  /** The orientation fix of this variant's active FULL FILE, in degrees —
+   *  what the 3D client applies on load and what `POST …/rotation?variant=i`
+   *  writes. Full records only. */
+  rotation?: { x?: number; y?: number; z?: number }
+  /** What this variant shows in its PANES when nothing was hung on them — the
+   *  counterpart of `slot_values` on the same entry, edited through
+   *  `POST …/variants/{i}/area-defaults`. Full records only. */
   area_defaults?: PropSlotValues
+  /** What THIS variant shows in its picture areas (absent/empty = a plain
+   *  model variant). */
+  slot_values?: PropSlotValues
+  /** What the last SUCCESSFUL split of this variant's file had to say (today
+   *  only the no-leaf note; '' = nothing). Full records only. */
+  areas_warning?: string
+  /** The door leaf node's box (spec § 6) — present only while THIS variant's
+   *  mesh has a `leaf` node; the scene recipe copies it into
+   *  `door.leaf_bbox`. */
+  leaf_bbox?: LeafBbox
 }
 
 /**
@@ -244,6 +272,11 @@ export interface PropVariant {
    *  variant; a filled map makes it a PICTURE variant, whose mesh is a COPY
    *  of the primary frame. */
   slot_values?: PropSlotValues
+  /** What THIS variant's panes show when nothing was hung on them, keyed by
+   *  area id — the counterpart of `slot_values`, checked against this
+   *  variant's own file (v2 E1) and written by
+   *  `POST …/variants/{i}/area-defaults`. */
+  area_defaults?: PropSlotValues
   /** The name the variant is listed under. Derived from the picture file
    *  names when it was created without one. */
   label?: string
@@ -516,19 +549,38 @@ export interface MeshLayoutEntry {
   tri_count: number
 }
 
-/** The answer of `GET /world/props/{id}/areas`. */
+/**
+ * The answer of `GET /world/props/{id}/areas?variant=<store index>`.
+ *
+ * ONE VARIANT'S FILE, never the prop (spec-bild-props-v2.md E1): everything
+ * here but `key_areas` is read off the active full mesh of the variant the
+ * query names — its areas, its leaf box, its orientation fix — plus that
+ * variant's pane defaults. The same payload comes back from every POST /
+ * PATCH / DELETE on the areas of that variant.
+ */
 export interface PropAreasInfo {
+  /** The STORE index this payload speaks about (-1 = no such variant). */
+  variant: number
+  /** Name of the file it was read off ('' = the variant has no mesh). */
+  model_file: string
   areas: PropArea[]
   mesh_layout: MeshLayoutEntry[]
-  /** The door leaf node's box, while the mesh has one (spec § 6). */
+  /** The door leaf node's box, while this file has one (spec § 6). */
   leaf_bbox?: LeafBbox | null
-  /** Which key colours the prop's render was asked for. */
+  /** The orientation fix stored on this FILE, in degrees. */
+  rotation?: { x?: number; y?: number; z?: number }
+  /** Which key colours the PROP's next render is asked for (prop-wide). */
   key_areas: string[]
-  /** Prop-wide values that apply WITHOUT a variant (a door's pane). */
+  /** Which kinds the last automatic run of this file actually searched. */
+  key_areas_run?: string[]
+  /** What THIS variant's panes show when nothing was hung on them. */
   area_defaults: PropSlotValues
   blender: { available: boolean; reason: string }
   /** UTC ISO stamp of the last detection run ('' / null = never). */
   last_run?: string | null
   /** What the last AUTOMATIC run failed with ('' = nothing). */
   error?: string
+  /** What a run that WORKED had to say — today the no-leaf note. A note, not
+   *  a failure, and the tab shows the two differently. */
+  warning?: string
 }

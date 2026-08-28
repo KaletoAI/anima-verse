@@ -2,6 +2,13 @@
  * PropAreasPanel — the "Areas" section of the prop editor
  * (spec-picture-props.md § 4, U2/U4/U6).
  *
+ * ONE VARIANT AT A TIME (spec-bild-props-v2.md E1). The areas, the door-leaf
+ * box and the orientation fix belong to the model FILE, and every variant is
+ * its own generation with its own axes and its own materials — so this panel
+ * speaks about the variant the strip above has selected: it loads that
+ * variant's areas, shows that variant's mesh, and every verb below carries
+ * `?variant=` so a split can never land in the mesh nobody is looking at.
+ *
  * WHERE A PICTURE PROP IS ASSEMBLED. A frame prop is rendered with a chroma-key
  * panel in it, Blender splits that panel off as its own material, and here the
  * admin sees the result, corrects it, and hangs a picture on it:
@@ -38,9 +45,12 @@ function variantName(v: PropVariant, t: (s: string) => string): string {
   return v.label || `${t('Variant')} ${v.index + 1}`
 }
 
-export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
+export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   onPropChanged, onVariantsChanged }: {
   prop: PropFull
+  /** STORE index of the variant the detail has open — the mesh this panel
+   *  reads, draws on and splits. Every route below takes it. */
+  variant: number
   /** The prop's variants as the detail loaded them — the picture ones are the
    *  subset carrying `slot_values`. */
   variants: PropVariant[]
@@ -49,9 +59,11 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   variantMax: number
   /** Bumped whenever this prop's meshes changed — the viewer has to refetch. */
   reloadKey: number
-  /** Reload the prop record (its `key_areas` / `area_defaults` moved). */
+  /** Reload the prop record — a split, a rename or a delete rewrites the
+   *  variant entry (`areas`, `leaf_bbox`, `area_defaults`) it publishes. */
   onPropChanged: () => void
-  /** Reload the variant list (one was added or re-copied). */
+  /** Reload the variant list (one was added, re-copied, or its pane
+   *  defaults changed). */
   onVariantsChanged: () => void
 }) {
   const { t } = useI18n()
@@ -81,21 +93,27 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
    *  nothing", and the status line must not read the same in both. */
   const [loadFailed, setLoadFailed] = useState(false)
 
+  /** Every route of this panel names the variant — one place that writes it,
+   *  so no verb can quietly fall back to the primary mesh. */
+  const q = `?variant=${variant}`
+
   const load = useCallback(async () => {
     try {
-      setInfo(await apiGet<PropAreasInfo>(`/world/props/${enc}/areas`))
+      setInfo(await apiGet<PropAreasInfo>(
+        `/world/props/${enc}/areas?variant=${variant}`))
       setLoadFailed(false)
     } catch {
       setInfo(null)
       setLoadFailed(true)
     }
-  }, [enc])
+  }, [enc, variant])
   useEffect(() => { void load() }, [load, reloadKey])
-  // A prop switch drops every view state — the previous prop's variant index
-  // means something else here.
+  // A prop OR variant switch drops every view state — both put another mesh
+  // under the camera, and the previous variant index means something else on
+  // the next prop.
   useEffect(() => {
     setPreview(null); setDrawKind(''); setEditing(undefined); setFrontal(true)
-  }, [prop.id])
+  }, [prop.id, variant])
   // Turning the front view off ends a running gesture: the points already
   // clicked were placed against the old camera, and the ring is projected as
   // a whole when it closes — half of it from another angle rings nothing.
@@ -107,11 +125,17 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   // Split by what an area is FILLED with, not by its kind name (R8): a picture
   // variant needs a gallery area, the pane defaults a preset one.
   // `warning` is what a SUCCESSFUL run had to say (today: no leaf found).
-  // Read off the payload here rather than through `PropAreasInfo`, which a
-  // parallel strand owns.
-  const warning = (info as { warning?: string } | null)?.warning || ''
-  const pictureAreas = areas.filter((a) => areaKindOf(a.kind)?.value === 'image')
+  const warning = info?.warning || ''
   const presetAreas = areas.filter((a) => areaKindOf(a.kind)?.value === 'preset')
+  // THE FRAME A NEW PICTURE IS HUNG ON is always the PRIMARY variant's mesh —
+  // `props.add_picture_variant` copies that one and checks the assignment
+  // against ITS areas, whichever variant the admin happens to be looking at.
+  // So the "new variant" button and the dialog behind it read the primary
+  // entry of the record, not the areas loaded above.
+  const primaryEntry = prop.variant_tiers?.[0]
+  const frameAreas = primaryEntry?.areas || (variant === 0 ? areas : [])
+  const framePictureAreas = frameAreas.filter(
+    (a) => areaKindOf(a.kind)?.value === 'image')
   const pictureVariants = variants.filter(
     (v) => v.slot_values && Object.keys(v.slot_values).length)
   /** The cap counts ACTIVE variants INCLUDING the primary one, so a frame
@@ -119,8 +143,9 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   const pictureCap = Math.max(0, variantMax - 1)
   const previewVariant = preview === null
     ? null : variants.find((v) => v.index === preview) || null
-  // WHAT THE PREVIEW SHOWS: the prop-wide defaults with the picked variant's
-  // own values on top — the same merge the scene recipe does (`_slot_spec`),
+  // WHAT THE PREVIEW SHOWS: the OPEN variant's pane defaults with the picked
+  // variant's own values on top — the same merge the scene recipe does
+  // (`_slot_spec`),
   // keyed by AREA ID, which is the slot name `applySlotMaterials` matches
   // after taking the material's `slot_` prefix off (R11).
   //
@@ -151,8 +176,12 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
     }
   }, [load, onPropChanged, t, toast])
 
-  const detect = () => void run('detect',
-    () => apiPost(`/world/props/${enc}/areas`, { mode: 'auto' }))
+  /** A fresh split of THIS variant's mesh. Without `kinds` the server looks
+   *  for everything it knows; "Detect now" hands it exactly what the prop
+   *  asked its render for (E3). */
+  const detect = (kinds?: string[]) => void run('detect',
+    () => apiPost(`/world/props/${enc}/areas${q}`,
+      kinds ? { mode: 'auto', kinds } : { mode: 'auto' }))
 
   const onPolygonFaces = (faces: number[]) => {
     const kind = drawKind
@@ -161,36 +190,29 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
       toast(t('Nothing was inside the outline — draw around the surface, facing it.'), 'error')
       return
     }
-    void run('draw', () => apiPost(`/world/props/${enc}/areas`,
+    void run('draw', () => apiPost(`/world/props/${enc}/areas${q}`,
       { mode: 'manual', faces, kind }))
   }
 
   const setKind = (areaId: string, kind: string) => void run('kind',
-    () => apiPatch(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}`, { kind }))
+    () => apiPatch(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}${q}`,
+      { kind }))
 
   const removeArea = (areaId: string) => void run('delete',
-    () => apiDelete(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}`))
+    () => apiDelete(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}${q}`))
 
-  /** The prop-wide value of a pane — a door prop has no variants, so this is
-   *  the only way its glass ever gets a look. */
+  /** What THIS variant's pane shows when nobody hung anything on it. The
+   *  defaults describe ONE mesh, so they live on the variant entry like its
+   *  slot values do (v2 E1) — and the variant list has to be reloaded with
+   *  the record, because that is where the dialog reads them from. */
   const setDefault = (areaId: string, preset: string) => {
     const next: PropSlotValues = { ...(info?.area_defaults || {}) }
     if (preset) next[areaId] = { preset }
     else delete next[areaId]
     void run('defaults', async () => {
-      await apiPost(`/world/props/${enc}`, { area_defaults: next })
-      return undefined
-    })
-  }
-
-  /** Which key colours a NEW render of this prop asks for (R7). */
-  const toggleKeyArea = (kind: string, on: boolean) => {
-    const cur = new Set(info?.key_areas || [])
-    if (on) cur.add(kind)
-    else cur.delete(kind)
-    void run('key', async () => {
-      await apiPost(`/world/props/${enc}`,
-        { key_areas: AREA_KINDS.filter((k) => cur.has(k.kind)).map((k) => k.kind) })
+      await apiPost(`/world/props/${enc}/variants/${variant}/area-defaults`,
+        { area_defaults: next })
+      onVariantsChanged()
       return undefined
     })
   }
@@ -238,15 +260,40 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   const blenderReason = info?.blender.available === false
     ? (info.blender.reason || t('unknown reason')) : ''
   const running = !!busy
+  /** The variant this panel is open on, as the strip knows it — its label
+   *  names the header, its mesh decides whether there is anything to split. */
+  const shownVariant = variants.find((v) => v.index === variant) || null
+  /** Has the OPEN variant a mesh? `model_file` is the server's own answer for
+   *  exactly this variant; before the first payload the variant list stands
+   *  in, and the prop record before that (its state IS the primary's). */
+  const variantHasMesh = info
+    ? !!info.model_file
+    : (shownVariant ? shownVariant.has_model : variant === 0 && prop.has_model)
   /** A verb may only be offered when the answer actually said Blender can
    *  run — an unread panel knows nothing and must not promise a split. */
-  const canRun = !!info && !blenderReason && !running && prop.has_model
+  const canRun = !!info && !blenderReason && !running && !!info.model_file
+  /** WHICH MESH the dialog is dressing. A NEW picture variant is a copy of
+   *  the PRIMARY frame and the server checks its values against THAT file's
+   *  areas; an existing variant is checked against its own. So the controls
+   *  are built from the entry that will be validated, not from whichever
+   *  variant the panel happens to be open on. */
+  const dialogAreas = editing === null || editing === undefined
+    ? frameAreas
+    : (prop.variant_tiers?.find((v) => v.variant === editing)?.areas
+      || (editing === variant ? areas : frameAreas))
+  /** Which key surfaces the NEXT render of this prop is asked for (R7, E3) —
+   *  a prop-wide wish, edited in the generation dialogs. `info` answers with
+   *  the record's list, the record itself before the first payload. */
+  const requested = info?.key_areas || prop.key_areas || []
 
   return (
     <>
-      <div className="ga-form-section-label">{t('Areas')}</div>
+      <div className="ga-form-section-label">
+        {`${t('Areas')} · ${t('Variant')} ${variant + 1}`}
+        {shownVariant?.label ? ` · ${shownVariant.label}` : ''}
+      </div>
       <span className="ga-hint" style={{ display: 'block' }}>
-        {t('The key surfaces of this prop’s mesh — the panel a picture hangs on, the pane of a door. Each one is a material of the model; a picture is hung on it as a variant of this prop.')}
+        {t('The key surfaces of THIS variant’s mesh — the panel a picture hangs on, the pane of a door. Each one is a material of that model file; a picture is hung on it as a variant of this prop.')}
       </span>
 
       {/* Status: can Blender run at all, when did it last, what went wrong. */}
@@ -279,10 +326,32 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
         </div>
       ) : null}
 
+      {/* WHAT THE NEXT RENDER IS ASKED FOR (E3). A line, not a checkbox: the
+          wish is set where a render is ordered (the create form, the
+          generation dialogs), and here it only explains what a mesh of this
+          prop is expected to carry — plus the one verb that belongs to it,
+          looking for exactly those kinds on the variant that is open. */}
+      <div className="ga-form-row" style={{ marginTop: 4 }}>
+        <span className="ga-hint">
+          {`${t('Requested for the next generation')}: `}
+          {requested.length
+            ? requested.map((k) => t(areaKindOf(k)?.label || k)).join(' · ')
+            : t('none')}
+        </span>
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={!canRun || !requested.length}
+          onClick={() => detect(requested)}
+          title={requested.length
+            ? t('Split THIS variant’s mesh now, looking for exactly the kinds above — for a mesh that landed before the prop asked for them.')
+            : t('This prop asks its renders for no key surface — pick the kinds when you order a render.')}>
+          🔍 {busy === 'detect' ? t('Detecting…') : t('Detect now')}
+        </button>
+      </div>
+
       <div className="ga-form-row">
         <button type="button" className="ga-btn ga-btn-sm"
           disabled={!canRun}
-          onClick={detect}
+          onClick={() => detect()}
           title={t('Look for chroma-key panels in the mesh again and split every one of them off as its own material. Replaces the automatically detected areas; a drawn one is kept.')}>
           🔍 {busy === 'detect' ? t('Detecting…') : t('Detect areas')}
         </button>
@@ -312,13 +381,16 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
       </div>
 
       {/* The front view with the outlines — and, while a picture variant is
-          picked, the assembly it renders as. */}
-      {prop.has_model ? (
+          picked, the assembly it renders as. The mesh is the OPEN variant's:
+          the outlines and the R1 face indices the polygon tool sends belong to
+          exactly that file, and a viewer showing another one would ring the
+          wrong triangles. The orientation fix comes with it, off the file. */}
+      {variantHasMesh ? (
         <Model3DViewer
-          url={`/assets/props/${enc}/model?v=${encodeURIComponent(prop.created_at || '')}-${reloadKey}`}
+          url={`/assets/props/${enc}/model?variant=${variant}&v=${encodeURIComponent(prop.created_at || '')}-${reloadKey}`}
           format="glb"
           height={340}
-          rotation={prop.rotation}
+          rotation={info?.rotation}
           frontal={frontal}
           onFrontalChange={setFrontal}
           keepCamera
@@ -331,7 +403,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
         />
       ) : (
         <div className="ga-empty">
-          {t('No model yet — a prop gets its key surfaces from its mesh.')}
+          {t('This variant has no mesh yet — its key surfaces are read off the model.')}
         </div>
       )}
 
@@ -387,13 +459,14 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
         </div>
       ) : null}
 
-      {/* A pane's look is prop-wide: a door prop has no variants, so without
-          this its glass could never be set at all. */}
+      {/* A pane's look belongs to the VARIANT (v2 E1) — it describes the
+          panes of THIS mesh, and a door prop has no picture variants, so
+          without it its glass could never be set at all. */}
       {presetAreas.length ? (
         <>
           <div className="ga-form-section-label">{t('Pane defaults')}</div>
           <span className="ga-hint" style={{ display: 'block' }}>
-            {t('What these panes look like on EVERY placement of this prop — a door has no variants, so this is where its glass is set.')}
+            {t('What these panes look like on every placement of THIS variant — a door has no picture variants, so this is where its glass is set.')}
           </span>
           <div className="ga-form-row">
             {presetAreas.map((a) => (
@@ -418,20 +491,6 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
           </div>
         </>
       ) : null}
-
-      {/* What a NEW render of this prop asks for (R7) — the same choice the
-          create form offers, on a prop that already exists. */}
-      <div className="ga-form-row" style={{ marginTop: 4 }}>
-        <span className="ga-hint">{t('Key areas requested at render time')}:</span>
-        {AREA_KINDS.filter((k) => k.requestLabel).map((k) => (
-          <label key={k.kind} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-            <input type="checkbox" disabled={running}
-              checked={(info?.key_areas || []).includes(k.kind)}
-              onChange={(e) => toggleKeyArea(k.kind, e.target.checked)} />
-            {t(k.requestLabel as string)}
-          </label>
-        ))}
-      </div>
 
       {/* ── Picture variants ── */}
       <div className="ga-form-section-label">{t('Picture variants')}</div>
@@ -501,11 +560,11 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
       )}
       <div className="ga-form-row">
         <button type="button" className="ga-btn ga-btn-sm"
-          disabled={running || !pictureAreas.length
+          disabled={running || !framePictureAreas.length
             || pictureVariants.length >= pictureCap}
-          title={pictureAreas.length
-            ? t('Hang a picture: the server copies this frame’s mesh into a new variant and puts the picture on it.')
-            : t('This prop has no picture area yet — detect or draw one first.')}
+          title={framePictureAreas.length
+            ? t('Hang a picture: the server copies the PRIMARY variant’s frame into a new variant and puts the picture on it.')
+            : t('The primary variant has no picture area yet — detect or draw one on it first.')}
           onClick={() => setEditing(null)}>
           ＋ {t('New picture variant')}
         </button>
@@ -523,10 +582,10 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
           : `${t('Picture variant')} · ${editing !== undefined && editing !== null
             ? variantName(variants.find((v) => v.index === editing)
               || ({ index: editing } as PropVariant), t) : ''}`}
-        areas={areas}
+        areas={dialogAreas}
         initial={editing !== null && editing !== undefined
           ? variants.find((v) => v.index === editing)?.slot_values
-          : info?.area_defaults}
+          : primaryEntry?.area_defaults}
         initialLabel={editing !== null && editing !== undefined
           ? variants.find((v) => v.index === editing)?.label || '' : ''}
         busy={busy === 'variant'}

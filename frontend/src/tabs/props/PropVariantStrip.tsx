@@ -133,8 +133,10 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
    *  true statement about that variant's proportions the client holds; `null`
    *  while nothing is loaded, and then the stored dims stand in. */
   shownBbox?: [number, number, number] | null
-  /** The prop's orientation fix, applied to `shownBbox` before it is read as
-   *  width/height/depth — the same turn every renderer makes. */
+  /** The orientation fix of the SELECTED variant's model file, applied to
+   *  `shownBbox` before it is read as width/height/depth — the same turn
+   *  every renderer makes. The fix belongs to the FILE (v2 E1), so it is only
+   *  ever the box on screen that it is applied to. */
   rotation?: { x?: number; y?: number; z?: number }
 }) {
   const { t } = useI18n()
