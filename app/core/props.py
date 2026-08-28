@@ -394,6 +394,11 @@ AREAS_RUN_AT_KEY = "areas_run_at"
 #: searched (ruling V2: ``key_areas`` is the prop's wish for the next
 #: generation, this is what a run did).
 KEY_AREAS_RUN_KEY = "key_areas_run"
+#: MODEL-sidecar key of a split file: the ONE area the run that made it was
+#: ABOUT — the renamed or the dissolved id. A detection is about the mesh and
+#: leaves it empty; a rename or a delete names exactly one area, and that is
+#: what the gallery row has to say instead of listing the whole result (v2 E4).
+AREAS_AREA_KEY = "areas_area"
 #: FILE-sidecar key of a LOW file: the FULL file it inherits areas, leaf box
 #: and orientation from — Decimate keeps node names and materials (measured),
 #: so the distance mesh is the same object and re-measures nothing.
@@ -1774,30 +1779,83 @@ def _drop_stale_low(gallery: ModelGallery) -> None:
     # dropped, so the auto-LOD demand rebuilds it from the current full mesh.
 
 
+def _split_origin(src: Path, prev: Dict[str, Any]) -> str:
+    """The file a split CHAIN started from — the ORIGIN, never the immediate
+    predecessor (v2 E4).
+
+    A split of a split carries the origin forward, so every link of a chain
+    names the same ``source_file`` and each new link recognises the one it
+    replaces. Without that, a re-cut of a re-cut would name a file that is
+    already gone and the chain would grow a third entry per click."""
+    if prev.get("source") == "areas" and prev.get("source_file"):
+        return str(prev["source_file"])
+    return src.name
+
+
+def _drop_superseded_splits(gallery: ModelGallery, target: Path, origin: str,
+                            protected: Set[str]) -> None:
+    """A split REPLACES its predecessor (v2 E4): every OTHER file of this
+    gallery that came out of a run on the same ``origin`` goes, with its
+    ``.json`` sidecar and its ``.areas.json`` companion.
+
+    What a prop keeps is therefore exactly two entries per variant — the
+    origin the runs work on and the current cut — instead of one file per
+    click (measured 2026-08-28: eight full files of one variant inside ten
+    minutes, indistinguishable in the list).
+
+    Never removed: the ORIGIN itself (it is no split, and it is what every
+    further run starts from), anything the admin uploaded or generated, and
+    a split that is still the active file of ANOTHER tier — a distance mesh
+    somebody selected by hand is a choice, not a leftover."""
+    doomed: List[Path] = []
+    for p in gallery.files():
+        if p.name in (target.name, origin) or p.name in protected:
+            continue
+        meta = read_model_sidecar(p)
+        if meta.get("source") != "areas":
+            continue
+        if str(meta.get("source_file") or "") == origin:
+            doomed.append(p)
+    for p in doomed:
+        gallery.delete(p.name)
+    _drop_areas_sidecars(doomed)
+
+
 def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
-                mode: str) -> Path:
-    """The split result as a NEW gallery file, selected for the full tier.
+                mode: str, area: str = "") -> Path:
+    """The split result as a NEW gallery file, selected for the full tier,
+    REPLACING the split it came from.
 
     NO ``raw/`` copy (ruling R6): that rule belongs to the in-place
     refinements of ``refine.apply_script``, where the original would be
-    overwritten. Here the input stays in the gallery as history, one entry
-    per run, and the admin can select it back.
+    overwritten. Here the ORIGIN stays in the gallery as history — but only
+    the origin: since v2 E4 the history of a variant is the file the runs
+    work on plus the current cut, and every earlier cut of that same origin
+    is dropped by :func:`_drop_superseded_splits`.
 
     The new file is the SAME MESH cut differently, so it inherits what
     describes the mesh rather than the cut: the input's orientation fix and
     the kinds its last automatic run searched. The areas themselves are
-    written by the caller, off the run's report."""
+    written by the caller, off the run's report. ``area`` names the ONE area
+    the run is about (the renamed or dissolved id) — what the gallery row
+    needs to say "Renamed picture_1" instead of "another file"."""
+    prev = read_model_sidecar(src)
+    origin = _split_origin(src, prev)
+    # Read the selection BEFORE the new file takes the full tier, so
+    # "another tier" means exactly that and not "the tier being replaced".
+    protected = {name for tier, name in gallery.selection().items()
+                 if tier != DEFAULT_TIER and name}
     target = gallery.new_path()
     target.write_bytes(blob)
-    prev = read_model_sidecar(src)
     write_model_sidecar(target, {
         "created_at": utc_now_iso(),
         "source": "areas",
         "format": "glb",
         "rig": "none",
         "tier": DEFAULT_TIER,
-        "source_file": src.name,
+        "source_file": origin,
         "areas_mode": mode,
+        **({AREAS_AREA_KEY: area} if area else {}),
         **({"backend": prev["backend"]} if prev.get("backend") else {}),
         **({"face_num": prev["face_num"]} if prev.get("face_num") else {}),
         **({"texture_size": prev["texture_size"]}
@@ -1809,6 +1867,7 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
            if prev.get(KEY_AREAS_RUN_KEY) else {}),
     })
     gallery.select(target.name, DEFAULT_TIER)
+    _drop_superseded_splits(gallery, target, origin, protected)
     _drop_stale_low(gallery)
     return target
 
@@ -1858,7 +1917,8 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
         if not verdict.get("ok"):
             raise RuntimeError("split model failed validation: "
                                + "; ".join(verdict.get("errors") or []))
-        model_file = _land_split(g, src, blob, str(params.get("mode") or ""))
+        model_file = _land_split(g, src, blob, str(params.get("mode") or ""),
+                                 str(params.get("area") or ""))
 
     script_areas = [a for a in (data.get("areas") or []) if isinstance(a, dict)]
     areas = _sidecar_areas_from_script(script_areas, previous[AREAS_KEY],
@@ -2135,7 +2195,7 @@ def rename_area_kind(prop_id: str, area_id: str, kind: str,
     blob = _rewrite_glb_material_names(
         src.read_bytes(), {f"{SLOT_PREFIX}{aid}": f"{SLOT_PREFIX}{new_id}"})
     outline = read_areas_sidecar(src)
-    target = _land_split(g, src, blob, "rename")
+    target = _land_split(g, src, blob, "rename", new_id)
     for rec in outline.get("areas") or []:
         if rec.get("id") == aid:
             rec["id"], rec["kind"] = new_id, kind
@@ -3884,6 +3944,31 @@ def model_file_path(prop_id: str, filename: str,
     return g.file(filename) if g else None
 
 
+def _variant_of_file(meta: Dict[str, Any], filename: str) -> int:
+    """Which variant a stored mesh NAME belongs to — ``-1`` when the name
+    names no variant of this prop. Same name law as
+    ``ModelGallery._name_re``: ``<stem>`` or ``<stem>_<ts>`` plus the
+    extension, so ``model-v2_17.glb`` is never read as the primary."""
+    for i, entry in enumerate(_variant_list(meta)):
+        if re.match(rf"^{re.escape(entry['stem'])}(_\d+)?\.[A-Za-z0-9]+$",
+                    filename or ""):
+            return i
+    return -1
+
+
+def _copied_from_label(meta: Dict[str, Any], raw: Any) -> Dict[str, Any]:
+    """``{file, variant}`` of a mesh that was COPIED from another variant —
+    ``{}`` for every other file. The stored record names the file only
+    (:data:`COPIED_FROM_KEY`); the index is resolved here because only this
+    module knows the prop's variant list."""
+    if not isinstance(raw, dict):
+        return {}
+    name = str(raw.get("file") or "")
+    if not name:
+        return {}
+    return {"file": name, "variant": _variant_of_file(meta, name)}
+
+
 def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
     """All stored meshes of the prop for the admin gallery, newest first:
     ``[{filename, tier, selected_for, face_num, texture_size, format,
@@ -3894,6 +3979,15 @@ def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
     reduction left of it (0 = not a reduced mesh), ``active`` the one a client
     without a tier request gets.
 
+    ``label_parts`` is the GROUPED VIEW the gallery row's second line is built
+    from (v2 E4): ``{source, areas_mode, areas_area, area_ids, source_file,
+    copied_from, inherits_from}``. It repeats facts the flat row already
+    publishes on purpose — the row is read by three panels and every one of
+    them wants a different subset, while the label wants exactly these seven
+    and nothing else. ``copied_from`` is resolved here into ``{file,
+    variant}``: only this module can say WHICH variant a file name belongs
+    to, and "Copy of variant 0" is the sentence the admin needs.
+
     ``shrinkable`` / ``shrink_reason`` come from the cheap capability probe
     (header + JSON chunk): a vertex-coloured mesh without UVs can never be
     reduced, and the admin must see that on the row instead of starting a job
@@ -3901,12 +3995,14 @@ def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
     g = model_gallery(prop_id, variant)
     if not g:
         return []
+    prop_meta = read_sidecar(prop_id)
     active = g.find()
     out: List[Dict[str, Any]] = []
     for p in g.files():
         meta = read_model_sidecar(p)
         cap = shrink_capability(p)
         fa = file_areas(p)
+        area_ids = [a["id"] for a in fa[AREAS_KEY]]
         out.append({
             "filename": p.name,
             "tier": g.tier_of(p),
@@ -3922,8 +4018,21 @@ def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
             # its areas, and — for a distance mesh — the full file it
             # inherits them from (pattern `location_model3d.list_models`).
             ROTATION_KEY: fa[ROTATION_KEY],
-            "area_ids": [a["id"] for a in fa[AREAS_KEY]],
+            "area_ids": area_ids,
             INHERITS_FROM_KEY: str(meta.get(INHERITS_FROM_KEY) or ""),
+            # Everything the row's second line says about WHERE this file
+            # came from, in one place (v2 E4) — without it the list was a
+            # column of identical minutes.
+            "label_parts": {
+                "source": str(meta.get("source") or ""),
+                "areas_mode": str(meta.get("areas_mode") or ""),
+                AREAS_AREA_KEY: str(meta.get(AREAS_AREA_KEY) or ""),
+                "area_ids": area_ids,
+                "source_file": str(meta.get("source_file") or ""),
+                "copied_from": _copied_from_label(prop_meta,
+                                                  meta.get(COPIED_FROM_KEY)),
+                INHERITS_FROM_KEY: str(meta.get(INHERITS_FROM_KEY) or ""),
+            },
             # What the reduction actually cost this file (0 = not a reduced
             # mesh, or one from before these numbers were recorded).
             "tris": int(meta.get("tris") or 0),

@@ -384,6 +384,62 @@ that CHANGED a hand-derived expectation:
   default for the variant's next file; a re-generation with other axes is
   re-dialled), `areas_info(pid, 1)["rotation"]["y"] == 180`, while variant
   0 stays 0.
+
+---------------------------------------------------------------------------
+PART 4 — HISTORY = ORIGIN + CURRENT STATE, AND THE GALLERY SAYS WHAT A FILE IS
+          (spec-bild-props-v2.md E4; Blender stubbed as in part 3)
+---------------------------------------------------------------------------
+Measured symptom (befunde-bild-props-2026-08-28 § 8): every detect/draw/
+rename/delete click landed ANOTHER gallery file — 8 full files for one
+variant in 10 minutes, and the row said nothing but a minute and a backend.
+
+[18] A SPLIT REPLACES ITS PREDECESSOR. Prop "History frame" (decor, no
+  key_areas — the landing hook stays shut), one uploaded `frame_glb()`; the
+  stub of [15] answers every run with glass_1 on SPLIT_GLB. Hand-derived
+  from the rule "the previous split of the SAME origin goes, the origin
+  stays":
+
+    upload                  -> gallery [O]                       1 file
+    detect_areas #1  O  -> S1   -> gallery {O, S1}               2 files
+    detect_areas #2  S1 -> S2   -> gallery {O, S2}               2 files
+        S1's .glb, its .json sidecar and its .areas.json companion are GONE
+        S2's `source_file` is O (the ORIGIN, not S1 — a split of a split
+        carries the origin forward, so the chain never grows a third link)
+    detect_areas #3  S2 -> S3   -> gallery {O, S3}               2 files
+
+  The origin file exists after all three runs, and its sidecar still says
+  `source: upload` — a run never rewrites what it worked on.
+
+[19] A RENAME GOES THROUGH THE SAME LANDING. `rename_area_kind(pid,
+  "glass_1", "picture")` on the state of [18] (areas [glass_1], so the free
+  target id is `picture_1`):
+
+    -> gallery {O, S4}          still 2 files, S3 gone with its companions
+    -> S4's sidecar: source areas, areas_mode "rename", source_file O,
+       areas_area "picture_1"
+    -> areas_info(pid)["areas"] ids == ["picture_1"]
+
+[20] A SPLIT SELECTED FOR ANOTHER TIER IS NOT DELETED. `select_model(pid,
+  S4, "low")` makes S4 the LOW file as well; the next run therefore lands S5
+  for the full tier and must LEAVE S4:
+
+    -> gallery {O, S4, S5}      3 files
+    -> S4 still selected for "low", S5 for "full"
+
+  (`_drop_stale_low` does not take it either: it removes a mesh THIS store
+  reduced itself — sidecar `source: lod` — and S4 is a split.)
+
+[21] THE ROW SAYS WHAT THE FILE IS. `list_models` publishes `label_parts`
+  per file — the grouped view the gallery's second line is built from:
+
+    S5   {source "areas", areas_mode "manual", areas_area "",
+          area_ids ["glass_1"], source_file O, copied_from {}, inherits_from ""}
+    O    {source "upload", areas_mode "", area_ids [], source_file "", …}
+
+  and on the picture-variant copy of a second prop:
+
+    copy {source "variant-copy", copied_from {"file": <primary file>,
+          "variant": 0}}
 """
 import json
 import struct
@@ -1228,6 +1284,109 @@ def part3() -> None:
           str(store.areas_info(pid, 1)))
 
 
+def part4() -> None:
+    print("\n[18] a split replaces its predecessor — history = origin + current")
+    pid = store.create_prop(name="History frame", category="decor")["id"]
+    store.save_uploaded_glb(pid, frame_glb())
+    origin = full_file(pid)
+    gal = store.model_gallery(pid, 0)
+    check("the upload is the only file", [f.name for f in gal.files()] == [origin.name],
+          str([f.name for f in gal.files()]))
+
+    seen: list = []
+    restore = stub_blender_split(seen)
+    try:
+        store.detect_areas(pid, mode="manual", faces=[0, 1], kind="glass")
+        s1 = full_file(pid)
+        names = sorted(f.name for f in store.model_gallery(pid, 0).files())
+        check("run #1 lands a split beside the origin (2 files)",
+              names == sorted([origin.name, s1.name]) and s1 != origin, str(names))
+        s1_side = s1.with_suffix(".json")
+        s1_comp = store.areas_sidecar_path(s1)
+        check("the split has a sidecar and an .areas.json companion",
+              s1_side.exists() and bool(s1_comp) and s1_comp.exists(),
+              str((s1_side.exists(), s1_comp and s1_comp.exists())))
+
+        store.detect_areas(pid, mode="manual", faces=[2, 3], kind="glass")
+        s2 = full_file(pid)
+        names = sorted(f.name for f in store.model_gallery(pid, 0).files())
+        check("run #2: still 2 files — the origin and the NEW split",
+              names == sorted([origin.name, s2.name]) and s2 not in (origin, s1),
+              str(names))
+        check("…the predecessor's mesh, sidecar and companion are gone",
+              not s1.exists() and not s1_side.exists()
+              and not (s1_comp and s1_comp.exists()),
+              str((s1.exists(), s1_side.exists(), bool(s1_comp and s1_comp.exists()))))
+        check("…and the new split names the ORIGIN as its source_file",
+              store.read_model_sidecar(s2).get("source_file") == origin.name,
+              str(store.read_model_sidecar(s2).get("source_file")))
+
+        store.detect_areas(pid, mode="manual", faces=[4, 5], kind="glass")
+        s3 = full_file(pid)
+        names = sorted(f.name for f in store.model_gallery(pid, 0).files())
+        check("run #3: STILL 2 files (the chain never grows)",
+              names == sorted([origin.name, s3.name]), str(names))
+        check("the origin survived all three runs, still `source: upload`",
+              origin.exists()
+              and store.read_model_sidecar(origin).get("source") == "upload",
+              str(store.read_model_sidecar(origin).get("source")))
+
+        print("\n[19] a rename goes through the same landing")
+        areas = store.rename_area_kind(pid, "glass_1", "picture")
+        s4 = full_file(pid)
+        names = sorted(f.name for f in store.model_gallery(pid, 0).files())
+        check("the rename answers [picture_1]",
+              [a["id"] for a in areas] == ["picture_1"], str(areas))
+        check("still 2 files — the renamed file replaced the split it came from",
+              names == sorted([origin.name, s4.name]) and s4 != s3, str(names))
+        check("…and s3 is gone with its companions",
+              not s3.exists() and not s3.with_suffix(".json").exists(),
+              str((s3.exists(), s3.with_suffix(".json").exists())))
+        m4 = store.read_model_sidecar(s4)
+        check("the renamed file: source areas, mode rename, origin O, area picture_1",
+              m4.get("source") == "areas" and m4.get("areas_mode") == "rename"
+              and m4.get("source_file") == origin.name
+              and m4.get("areas_area") == "picture_1", str(m4))
+
+        print("\n[20] a split that another tier uses is NOT deleted")
+        check("s4 becomes the LOW file too",
+              store.select_model(pid, s4.name, "low") is True)
+        store.detect_areas(pid, mode="manual", faces=[6, 7], kind="glass")
+        s5 = full_file(pid)
+        names = sorted(f.name for f in store.model_gallery(pid, 0).files())
+        check("3 files now: origin, the low-tier split, the new full split",
+              names == sorted([origin.name, s4.name, s5.name]), str(names))
+        rows = {r["filename"]: r for r in store.list_models(pid, 0)}
+        check("s4 still serves `low`, s5 serves `full`",
+              rows[s4.name]["selected_for"] == ["low"]
+              and rows[s5.name]["selected_for"] == ["full"],
+              str({k: v["selected_for"] for k, v in rows.items()}))
+    finally:
+        restore()
+
+    print("\n[21] the row says what the file is")
+    parts = rows[s5.name].get("label_parts") or {}
+    check("the split's label_parts name source, mode and its areas",
+          parts.get("source") == "areas" and parts.get("areas_mode") == "manual"
+          and parts.get("area_ids") == ["glass_1"]
+          and parts.get("source_file") == origin.name, str(parts))
+    oparts = rows[origin.name].get("label_parts") or {}
+    check("the origin's label_parts say `upload` and name no run",
+          oparts.get("source") == "upload" and not oparts.get("areas_mode")
+          and oparts.get("area_ids") == [] and not oparts.get("source_file"),
+          str(oparts))
+
+    pid2 = make_prop("Copy label", frame_glb(), FRAME_AREAS)
+    store.add_picture_variant(pid2, {"picture_1": {"image": IMG}}, "x")
+    crow = store.list_models(pid2, 1)[0]
+    cparts = crow.get("label_parts") or {}
+    check("the picture variant's copy says which VARIANT it came from",
+          cparts.get("source") == "variant-copy"
+          and (cparts.get("copied_from") or {}).get("variant") == 0
+          and (cparts.get("copied_from") or {}).get("file")
+          == full_file(pid2, 0).name, str(cparts))
+
+
 def main() -> int:
     print("[1] sidecar round-trip: key_areas / areas / area_defaults")
     pid = store.create_prop(name="Picture frame", category="decor",
@@ -1440,6 +1599,7 @@ def main() -> int:
 
     part2()
     part3()
+    part4()
 
     print()
     if FAILURES:
