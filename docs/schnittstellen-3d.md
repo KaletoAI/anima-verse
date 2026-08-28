@@ -8353,7 +8353,7 @@ muss sich bewegen, sonst behält jeder Client seine alte Szene.
 | Pad-Abstand: Aufzugs-Pad −0,015, Treppen-Pads −0,015 / 3,065 / −2,935, ROTE PROBEN auf die alten +0,055 und −0,025 | ebenda **[5]/[5s]** |
 | Plattenloch: Etagenplatte 1 und der Raum, in dem die Mitte liegt, tragen das Rechteck; ein Nachbarraum derselben Etage nicht; eine Platte ohne Lauf trägt `[]`; ROTE PROBE: ein Kellerlauf schneidet nirgends | ebenda **[2]/[2s]** |
 | Zwei Läufe auf DIESELBE Etage: die Etagenplatte trägt beide Ringe in Autorenreihenfolge, der Raum nur den, dessen Mitte in ihm liegt | ebenda **[2s]** |
-| `SCENE_RECIPE_VERSION` == 9 | ebenda **[7i]** |
+| `SCENE_RECIPE_VERSION` == 10 (die Konstante gehört dem ganzen Payload: seit dieser Runde hat der Marker-`diorama` sie weitergedreht) | ebenda **[7i]** |
 | Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
 | `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |
 | Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | **noch nicht bewiesen — folgt mit Task 4** (ebenda) |

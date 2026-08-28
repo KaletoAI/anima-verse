@@ -3103,7 +3103,11 @@ def test_room_and_prop_specs() -> None:
     check("without width_m the room rectangle stands in — and says so",
           near(fb["max_m"], 2.0) and fb.get("width_estimated") is True,
           str(fb))
-    check("a furnished room gets NO diorama (coexistence rule)",
+    # NOT the coexistence rule (user decision 2026-07-25) — that one says the
+    # opposite: a diorama ALWAYS coexists with props, and [9a] furnishes room
+    # "d" to prove it still gets its model. Room "a" simply has no meta in
+    # `room_metas()`, so there is no model to place.
+    check("room \"a\" has no diorama meta, so it gets no diorama spec",
           not spec_of(sc, "room", "a"))
     check("without walk_y the field stays absent", "walk_y_world" not in d)
     walked = scene_recipe.compose_scene(
