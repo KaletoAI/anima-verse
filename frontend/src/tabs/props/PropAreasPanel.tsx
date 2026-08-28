@@ -64,9 +64,12 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
   /** The kind the polygon tool is drawing for ('' = not drawing). */
   const [drawKind, setDrawKind] = useState('')
   /** Is the viewer in the FRONT VIEW (§ B1)? The panel holds the mode, not the
-   *  viewer, because it is what a drawn ring depends on: the server splits
-   *  against the projection the ring was drawn in, so drawing is only offered
-   *  head-on. On by default — this panel opens as the authoring view. */
+   *  viewer, because drawing depends on it: the CLIENT projects the ring
+   *  against its live camera and sends triangle indices, so any camera works
+   *  arithmetically — but a flat surface seen edge-on is a foreshortened
+   *  sliver with half of it behind the frame, which is not something anyone
+   *  can ring. So drawing is offered head-on only. On by default — this panel
+   *  opens as the authoring view. */
   const [frontal, setFrontal] = useState(true)
   /** Which picture variant the viewer is previewing (null = the bare mesh). */
   const [preview, setPreview] = useState<number | null>(null)
@@ -94,7 +97,8 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
     setPreview(null); setDrawKind(''); setEditing(undefined); setFrontal(true)
   }, [prop.id])
   // Turning the front view off ends a running gesture: the points already
-  // clicked belong to the old projection and would ring a different surface.
+  // clicked were placed against the old camera, and the ring is projected as
+  // a whole when it closes — half of it from another angle rings nothing.
   useEffect(() => { if (!frontal) setDrawKind('') }, [frontal])
 
   const areas = useMemo(() => info?.areas || [], [info])
@@ -296,7 +300,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
               disabled={!canRun || !frontal}
               title={frontal
                 ? t('Draw a surface by hand: pick its kind, then ring it on the front view.')
-                : t('Switch the front view back on first — a surface is ringed straight on, and the server splits against exactly that view.')}
+                : t('Switch the front view back on first — a flat surface is only fully in view head-on; edge-on there is barely a sliver of it to ring. Zooming and panning inside the front view are fine.')}
               onChange={(e) => { if (e.target.value) setDrawKind(e.target.value) }}>
               <option value="">{t('✏ Draw area…')}</option>
               {AREA_KINDS.map((k) => (
@@ -317,6 +321,7 @@ export function PropAreasPanel({ prop, variants, variantMax, reloadKey,
           rotation={prop.rotation}
           frontal={frontal}
           onFrontalChange={setFrontal}
+          keepCamera
           areaOutlines={outlines}
           meshLayout={info?.mesh_layout}
           drawing={!!drawKind}

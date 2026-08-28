@@ -1133,6 +1133,10 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               format="glb"
               height={340}
               rotation={prop.rotation}
+              // Switching variant or tier swaps ANOTHER VERSION of the same
+              // object under the camera — the angle stays, "Reset view" frames
+              // again on demand (§ B1).
+              keepCamera
               onBounds={(b) => setShownBbox(b.size)}
               // ONE FIGURE PER SLOT, holding the pose the cycler stands on
               // (else the place type's default). `root_drop` comes from the

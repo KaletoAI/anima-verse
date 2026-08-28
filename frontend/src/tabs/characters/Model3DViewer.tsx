@@ -175,7 +175,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   groundTextureUrl, placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint,
-  frontal = false, onFrontalChange, areaOutlines, slots, meshLayout, drawing = false,
+  frontal = false, onFrontalChange, keepCamera = false,
+  areaOutlines, slots, meshLayout, drawing = false,
   onPolygonFaces, leafBbox }:
   { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
@@ -252,9 +253,12 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     /** THE FRONT VIEW (spec-picture-props.md § 4, spec-bild-props-v2 § B1):
      *  the model straight on, centred, filling the frame — the authoring view
      *  of a flat panel, and the one the polygon tool is drawn on. It is a
-     *  MODE, not a framing: while it is on, the orbit is LOCKED (zoom and pan
-     *  stay) so a ring can never be drawn on a view the server's projection
-     *  does not share. Model mode only. */
+     *  MODE, not a framing: while it is on the orbit is LOCKED (zoom and pan
+     *  stay), so a flat surface is ringed with its whole face towards the
+     *  camera instead of edge-on, where half of it is hidden behind the frame
+     *  and a foreshortened sliver is all there is to click. The projection
+     *  itself is never in danger — the ring is projected against the LIVE
+     *  camera here and travels as triangle indices. Model mode only. */
     frontal?: boolean
     /** Offering this makes the front view a switchable mode: the viewer then
      *  shows its own "Front view" / "Reset view" controls and reports every
@@ -262,6 +266,15 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  head-on (the polygon tool). Without it nothing changes for a caller —
      *  no buttons, and the framing stays the straight-on one it always was. */
     onFrontalChange?: (on: boolean) => void
+    /** Keep camera and target across a MODEL SWITCH instead of framing the
+     *  new model (§ B1). For an editor that swaps versions of one object
+     *  under the camera — a re-split frame, a picture variant, the far tier —
+     *  where re-framing on every swap throws away the angle being worked at.
+     *  A model of a different SIZE is framed anyway (`shouldRefit`), and the
+     *  viewer offers "Reset view" whenever this is on, because a kept camera
+     *  needs a way back. Off by default: every other caller frames every
+     *  load, exactly as before. Model mode only. */
+    keepCamera?: boolean
     /** Outlines of the prop's key surfaces, in glTF y-up MODEL space (the
      *  server computed them at the split — the client draws, never measures).
      *  One `LineSegments` per area, coloured by KIND out of `AREA_KINDS`, hung
@@ -351,13 +364,17 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   /** Locks / unlocks the orbit for the mode — set by the loader, because it
    *  needs the live controls. */
   const frontalFnRef = useRef<((on: boolean) => void) | null>(null)
+  const keepCameraRef = useRef(keepCamera)
+  keepCameraRef.current = keepCamera
   /** Where the camera stood, and how big the model under it was. Survives the
-   *  loader effect, which is the whole point: a model switch inside one viewer
-   *  (a re-split frame, a picture variant) must not yank the camera back to
-   *  the default view — only a model of a different SIZE does (`shouldRefit`).
+   *  loader effect, which is the whole point: with `keepCamera` a model switch
+   *  inside one viewer (a re-split frame, a picture variant) must not yank the
+   *  camera back to the default view — only a model of a different SIZE does
+   *  (`shouldRefit`). Position and target say it all: OrbitControls dollies a
+   *  PERSPECTIVE camera by moving it, so `camera.zoom` never leaves 1.
    *  Model mode only; the tile mode frames its stage every time. */
   const camStateRef = useRef<{ pos: [number, number, number]
-    target: [number, number, number]; zoom: number; radius: number } | null>(null)
+    target: [number, number, number]; radius: number } | null>(null)
   // ── Picture areas: outlines, the assembly preview, the polygon tool ──
   const areaOutlinesRef = useRef(areaOutlines)
   areaOutlinesRef.current = areaOutlines
@@ -1063,22 +1080,23 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           const radius = size.length() / 2
           const prevCam = camStateRef.current
           fitView()
-          // THE CAMERA SURVIVES A MODEL SWITCH (§ B1): a re-split frame or a
-          // picture variant is the same object in another version, and
-          // re-framing it would throw away the angle that was being worked
-          // at. Only a model of a different SIZE is framed again.
-          if (prevCam && !shouldRefit(prevCam.radius, radius)) {
+          // THE CAMERA SURVIVES A MODEL SWITCH (§ B1) — where the caller asked
+          // for it: a re-split frame or a picture variant is the same object in
+          // another version, and re-framing it would throw away the angle that
+          // was being worked at. Only a model of a different SIZE is framed
+          // again. Without `keepCamera` every load frames, as it always did.
+          if (keepCameraRef.current && prevCam
+              && !shouldRefit(prevCam.radius, radius)) {
             camera.position.fromArray(prevCam.pos)
             controls.target.fromArray(prevCam.target)
-            camera.zoom = prevCam.zoom
-            camera.updateProjectionMatrix()
             controls.update()
           }
+          // Saved either way, so switching the flag on mid-life has something
+          // to restore — only the restore above is gated.
           const saveCam = () => {
             camStateRef.current = {
               pos: camera.position.toArray() as [number, number, number],
               target: controls.target.toArray() as [number, number, number],
-              zoom: camera.zoom,
               radius,
             }
           }
@@ -1749,7 +1767,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
       ) : null}
       {/* THE VIEW CONTROLS — one column at the top right, so no button has to
           know how many of its neighbours happen to be shown. */}
-      {!loading && !error ? (
+      {!loading && !error && (onFrontalChange || keepCamera
+        || (leafBbox && hasLeaf)) ? (
         <div style={{
           position: 'absolute', right: 6, top: 6, display: 'flex',
           flexDirection: 'column', alignItems: 'flex-end', gap: 4,
@@ -1758,29 +1777,31 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               model stands straight on and the orbit is locked — the state a
               ring may be drawn in. */}
           {onFrontalChange ? (
-            <>
-              <button
-                type="button" className="ga-btn ga-btn-sm"
-                style={{ opacity: 0.85,
-                  ...(frontal ? { background: '#238636', borderColor: '#2ea043',
-                    color: '#fff' } : null) }}
-                aria-pressed={frontal}
-                onClick={() => onFrontalChange(!frontal)}
-                title={frontal
-                  ? t('Front view is on: the model stands straight on and cannot be turned — zoom and pan still work. Click to orbit freely again.')
-                  : t('Look at the model straight on and lock the turning — the view a surface is drawn in.')}
-              >
-                {t('Front view')}
-              </button>
-              <button
-                type="button" className="ga-btn ga-btn-sm"
-                style={{ opacity: 0.85 }}
-                onClick={() => refitFnRef.current?.()}
-                title={t('Frame the whole model again, in the view that is switched on right now.')}
-              >
-                {t('Reset view')}
-              </button>
-            </>
+            <button
+              type="button" className="ga-btn ga-btn-sm"
+              style={{ opacity: 0.85,
+                ...(frontal ? { background: '#238636', borderColor: '#2ea043',
+                  color: '#fff' } : null) }}
+              aria-pressed={frontal}
+              onClick={() => onFrontalChange(!frontal)}
+              title={frontal
+                ? t('Front view is on: the model stands straight on and cannot be turned — zoom and pan still work. Click to orbit freely again.')
+                : t('Look at the model straight on and lock the turning — the view a surface is drawn in.')}
+            >
+              {t('Front view')}
+            </button>
+          ) : null}
+          {/* A kept camera needs a way back — so the reset is offered wherever
+              the camera survives a model switch, mode or no mode. */}
+          {keepCamera ? (
+            <button
+              type="button" className="ga-btn ga-btn-sm"
+              style={{ opacity: 0.85 }}
+              onClick={() => refitFnRef.current?.()}
+              title={t('Frame the whole model again, in the view that is switched on right now.')}
+            >
+              {t('Reset view')}
+            </button>
           ) : null}
           {/* The door leaf's test swing (spec § 6): only with a leaf node in
               the model AND a leaf_bbox from the server — both, or there is
