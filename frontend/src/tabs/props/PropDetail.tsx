@@ -779,10 +779,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const groupOptions = useMemo(() => groupKeys(groups), [groups])
   const firstGroup = groupOptions[0] || ''
 
-  // The selection is CLAMPED on the way out, not corrected in an effect: the
-  // list can shrink under it (a discarded draft, a reloaded variant) and what
-  // is edited must be a place that exists — in the very same render, not one
-  // later.
+  // The selection is CLAMPED on the way out: the list can shrink under it (a
+  // discarded draft, a removed place) and what is edited must be a place that
+  // exists — in the very same render. The reset effect below covers the
+  // prop/variant switch, but it runs AFTER that render, so this clamp is what
+  // carries the frame in between: a shorter list on the new variant would
+  // otherwise be indexed past its end for one paint.
   const selIdx = markers.length
     ? Math.min(selectedMarker, markers.length - 1)
     : 0
@@ -803,10 +805,14 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     patchMarker(i, { at })
   }
   // A place is added TO BE EDITED — the card opposite the list follows it, so
-  // the type select and the sliders are already about the new one.
+  // the type select and the sliders are already about the new one. A pick
+  // armed for the place left behind is dropped with it: the viewer would keep
+  // the crosshair on and write the next mesh click into the OLD place, whose
+  // card is no longer even on screen.
   const addMarker = () => {
     saveMarkers([...markers, { id: newId(), group: firstGroup, at: [0.5, 0, 0.5] }])
     setSelectedMarker(markers.length)
+    setPlacing(null)
   }
   // Removing leaves the NEIGHBOUR selected: the place that slid into the gap,
   // or the new last one when the tail went. An armed pick would otherwise
@@ -1021,9 +1027,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               column used to grow a whole form per place, so five places meant
               five stacked slider sets and the one in hand scrolled away. The
               list names them, the card edits exactly one. The heading says
-              only "Places" — WHICH variant they belong to is said once at the
-              top of the column opposite. */}
-          <div className="ga-form-section-label">{t('Places')}</div>
+              which places these are — WHICH variant they belong to is said
+              once at the top of the column opposite. The source string is
+              `Prop places` and not `Places`, because that word is already the
+              admin's name for LOCATIONS: one English string, one meaning, or
+              the German heading reads "Orte" over a list of seats. */}
+          <div className="ga-form-section-label">{t('Prop places')}</div>
           <span className="ga-hint">
             {t('Object-local PLACES a character is seated on — each names a place type (seat, bed, floor …) and takes as many figures as its capacity. They belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 1.5, because seats and lying surfaces sit on the hull or just outside it. Place roughly with ✥, fine-tune with the sliders — the figures in the preview follow live.')}
           </span>
