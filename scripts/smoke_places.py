@@ -167,6 +167,22 @@ Hand-derived expectations:
       "cuddling" fit (3 free ≥ 2) and hold the first two slots Eve does
       NOT: held {0, 1, 2} → free_slots == [3], _taken_count 3; place_of(Ann)
       still says the centre (1, −3).
+  [8] The click-UI route (Task 13): _play_places_sync, the avatar's (Eve's)
+      room read the way the 3D client reads it. Full layout back (s1, s2,
+      b1), everybody cleared and standing at (−3.5, −3.5); Ann takes s2/0
+      (prefer), Eve takes s1 (prefer). room_id "lounge", three places in
+      marker order s1, s2, b1:
+        s1  label "Seat", group seat, capacity 1, free 1, free_slots [0]
+            — Eve holds it, but the avatar is EXCLUDED from the occupancy
+            (its own seat is clickable with another pose of the group),
+            poses [sitting, reading]: the group default first, then
+            alphabetical — and NO "cuddling": a pair pose is nothing one
+            sits down into alone, the menu lists solo poses only.
+        s2  "Seat", seat, capacity 2, free 1, free_slots [1] (Ann on 0).
+        b1  "Bed", bed, capacity 1, free 1, free_slots [0], poses [sleeping].
+      Every pose is {key, label} with label == key (the catalog has no
+      display label of its own). Eve with an empty current_room →
+      {"room_id": "", "places": []} (restored afterwards).
 
 Usage:  ./.venv/bin/python scripts/smoke_places.py
 """
@@ -732,6 +748,37 @@ check("pair beside a solo on slot 0: held {0, 1, 2} → free [3], _taken_count 3
       and places._taken_count(s4, occ["s4"]) == 3, str(occ.get("s4")))
 po = places.place_of("Ann")
 check("place_of(Ann) says the centre (1, −3)", po is not None and po["x"] == 1.0 and po["z"] == -3.0, str(po))
+
+# ── [8] the click-UI route: the avatar's room as the 3D client reads it ──
+print("\n[8] the click-UI route")
+write_layout(MARKERS)
+places.invalidate()
+for _n in ("Ann", "Bob", "Cid", "Dan", "Eve", "Fay"):
+    clear_pose_intent(_n)
+    set_character_pos(_n, -3.5, -3.5)
+check("Ann → s2/0", places.assign("Ann", "sitting", prefer="s2") == field("s2", 0))
+check("Eve → s1", places.assign("Eve", "sitting", prefer="s1") == field("s1", 0))
+r = play_route._play_places_sync()
+check("room_id lounge", r.get("room_id") == "lounge", str(r.get("room_id")))
+check("three places in marker order s1, s2, b1",
+      [p["id"] for p in r.get("places", [])] == ["s1", "s2", "b1"], str([p["id"] for p in r.get("places", [])]))
+by_id = {p["id"]: p for p in r.get("places", [])}
+check("s1: Seat, seat, capacity 1, free 1 (the avatar's own seat counts free), free_slots [0]",
+      by_id.get("s1") == {"id": "s1", "label": "Seat", "group": "seat", "capacity": 1, "free": 1,
+                          "free_slots": [0],
+                          "poses": [{"key": "sitting", "label": "sitting"},
+                                    {"key": "reading", "label": "reading"}]}, str(by_id.get("s1")))
+check("s2: free 1, free_slots [1] — Ann on 0",
+      by_id.get("s2", {}).get("free") == 1 and by_id.get("s2", {}).get("free_slots") == [1]
+      and by_id.get("s2", {}).get("capacity") == 2, str(by_id.get("s2")))
+check("b1: Bed, bed, free 1, poses [sleeping]",
+      by_id.get("b1") == {"id": "b1", "label": "Bed", "group": "bed", "capacity": 1, "free": 1,
+                          "free_slots": [0], "poses": [{"key": "sleeping", "label": "sleeping"}]},
+      str(by_id.get("b1")))
+save_character_current_room("Eve", "")
+r = play_route._play_places_sync()
+check("no room → empty answer", r == {"room_id": "", "places": []}, str(r))
+save_character_current_room("Eve", "lounge")
 
 # ── summary ─────────────────────────────────────────────────────────────
 print()

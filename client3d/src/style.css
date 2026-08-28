@@ -257,3 +257,37 @@ html, body, #app {
   background: #e0b64a;
   color: #22201a;
 }
+
+/* ---------- Seat menu (a clicked free place, plan-posen-plaetze.md § 4) ---------- */
+.place-menu {
+  position: fixed;
+  min-width: 140px;
+  background: rgba(22, 26, 33, 0.96);
+  border: 1px solid rgba(242, 205, 110, 0.4);
+  border-radius: 6px;
+  padding: 6px 0;
+  color: #e8e2d5;
+  z-index: 20;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+}
+.place-menu-title {
+  padding: 2px 12px 6px;
+  color: #a99f8a;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(242, 205, 110, 0.2);
+  margin-bottom: 4px;
+}
+.place-menu-pose {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: #e8e2d5;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.place-menu-pose.default { font-weight: bold; color: #f2d98c; }
+.place-menu-pose:hover { background: rgba(242, 205, 110, 0.15); }

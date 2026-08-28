@@ -1568,8 +1568,9 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   (`female`/`male`/`animal`/frei); Fallback-Kette
   `<kind>_<set1>` → … → `<kind>` über `animation_sets` des Charakters.
 - **Server-authoritativ:** `activity_animation` (per Worldmap) bestimmt
-  den Clip. Die Keyword-Heuristik `activityToClipKind` im Client ist ein
-  Workaround und fällt mit v4 (§ B6).
+  den Clip; nennt der Server keinen, steht die Figur (`idle`). Die
+  Keyword-Heuristik `activityToClipKind` im Client ist gelöscht (2026-08-28,
+  Task 13 plan-posen-plaetze.md).
 
 ## A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker (2026-08-20)
 
@@ -1630,7 +1631,14 @@ Nebel ausgedünnt. Das SSE-Ereignis `activity_changed` trägt dasselbe Profilfel
 `place` (`{id, slot, room_id}` oder `null`) neben `activity`/`animation`; der
 Avatar setzt über `POST /play/self/activity` (`{"activity": ""}` = Pose und
 Platz löschen, `{"place_id", "pose"}` = angeklickter Platz — 400 Pose passt
-nicht zur Gruppe, 404 kein solcher Platz im Raum, 409 belegt).
+nicht zur Gruppe, 404 kein solcher Platz im Raum, 409 belegt). Was er anklicken
+kann, sagt `GET /play/places` (Task 13): die Plätze seines aktuellen Raums als
+`{room_id, places: [{id, label, group, capacity, free, free_slots, poses: [{key,
+label}]}]}` — `free_slots` indiziert die `slots[]` des Szenen-Payloads, der
+Avatar selbst zählt nicht als Belegung (sein eigener Platz bleibt mit einer
+anderen Pose der Gruppe wählbar), `poses` sind die SOLO-Posen der Gruppe,
+Default zuerst. Der 3D-Client zeichnet je freiem Slot einen flachen Ring
+(`placeGlyphs.ts`, Farbe nach Gruppe) und öffnet beim Klick ein Posen-Menü.
 
 **Renderer.** Figur-Root = `anchor + R_y(yaw)·clipRoot(t)` mit der three.js-
 Y-Drehung (`x' = x·cos + z·sin`, `z' = −x·sin + z·cos`); `clipRoot(t)` ist die
@@ -4734,7 +4742,7 @@ gleich zu (Nachtrag „Oberflächen-Raster (v6)").
 |---|---|---|
 | 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Historisch, erledigt (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg — und der Client steht auf 1,70 (`client3d/src/scene/figures.ts BASE_FIGURE_HEIGHT_M`, Payload-Default `1.7`) |
 | 2 | „0,12 × k" in §2e der Rezept-Note | **Historisch, erledigt:** zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
-| 3 | `activityToClipKind`-Keyword-Heuristik im Client | **OFFEN (E7 nachgeprüft):** die Heuristik lebt (`client3d/src/scene/figures.ts:415`, gerufen in `main.ts` und `npcs.ts`) und greift genau dann, wenn `activity_animation` leer kommt. Fix unverändert: entfernen, sobald jede Aktivität ein Preset trägt. **Wird mit Task 13 (plan-posen-plaetze.md) gelöscht** — ein Marker nennt seit v7 keinen Clip mehr, die Pose kommt aus dem Katalog |
+| 3 | `activityToClipKind`-Keyword-Heuristik im Client | **Erledigt — gelöscht 2026-08-28, Task 13 (plan-posen-plaetze.md):** die Funktion ist aus `figures.ts` raus, `npcs.ts` steht bei leerem `activity_animation` auf `idle`; die Pose kommt aus dem Katalog, ein Marker nennt seit v7 keinen Clip mehr |
 | 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | **Erledigt — aber die Diagnose war FALSCH (E7-Korrektur):** `mapIconUrl()` lebt und liefert das Footprint-Icon der Karte (`frontend/src/tabs/map/PlacementLayer.tsx:78`, Konsumenten `MapTab`, `KnownLocationsEditor`, `LocationEditor`). Nichts daran ist Dead Code, `map_image_2d`/`map_rotation_2d` bleiben ausdrücklich (§ A1.9). Weg ist nur die README-Zeile des Clients |
 | 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `client3d/docs/implementierung-3d-pipeline.md:80` sagt heute selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
 | 6 | `placements[].model_url` | **Erledigt:** im Szenen-Payload existiert das Feld nicht mehr (`model_tiers`/`variants` statt dessen, v5-Kopf). `model_url` gibt es nur noch als Feld der Prop-BIBLIOTHEK (`app/core/props.py`) — anderer Namensraum, kein Rest |

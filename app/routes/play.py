@@ -3234,6 +3234,45 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             "place": (get_character_profile(avatar) or {}).get("place")}
 
 
+@router.get("/play/places")
+async def play_places(user=Depends(get_current_user)):
+    """The places of the avatar's current room, the way the 3D client's
+    click-UI reads them (plan-posen-plaetze.md § 4, Task 13): which slots are
+    free and which poses a click may pick. Off the event loop like the
+    setter — a cache miss composes the location."""
+    import asyncio
+    return await asyncio.to_thread(_play_places_sync)
+
+
+def _play_places_sync() -> Dict[str, Any]:
+    """The blocking body of ``play_places`` — runs in the threadpool.
+
+    ``{"room_id", "places": [{id, label, group, capacity, free, free_slots,
+    poses: [{key, label}]}]}``. The avatar itself is EXCLUDED from the
+    occupancy: its own seat stays clickable with another pose of the group
+    (the setter keeps the seat). ``poses`` are the group's SOLO poses, the
+    group's default first — a pair pose is nothing one sits down into alone;
+    ``label`` is the key, the catalog carries no display label of its own.
+    No location or room → ``{"room_id": "", "places": []}``.
+    """
+    from app.core import places
+    from app.core.pose_catalog import get_catalog, poses_in_group
+    avatar = _require_avatar()
+    loc, room = places.where(avatar)
+    if not loc or not room:
+        return {"room_id": "", "places": []}
+    occ = places.occupancy(loc, room, exclude=avatar)
+    catalog = get_catalog("pose")
+    out: List[Dict[str, Any]] = []
+    for p in places.room_places(loc, room):
+        free = places.free_slots(p, occ.get(p["id"], []))
+        poses = [k for k in poses_in_group(p["group"]) if catalog.get(k, {}).get("solo", True)]
+        out.append({"id": p["id"], "label": p["label"], "group": p["group"],
+                    "capacity": p["capacity"], "free": len(free), "free_slots": free,
+                    "poses": [{"key": k, "label": k} for k in poses]})
+    return {"room_id": room, "places": out}
+
+
 @router.post("/play/self/outfit")
 async def play_set_outfit(request: Request, user=Depends(get_current_user)):
     """Avatar zieht ein gespeichertes Outfit-Set an (reused apply_equipped_pieces)."""

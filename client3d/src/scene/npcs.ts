@@ -5,7 +5,7 @@ import { bubbleMs, bubbleText } from '../game/bubble';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   ghostCutY, groundWaterLevel, idleClip, moveClip, sinkForState, terrainPace, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
-import { activityToClipKind, Figure, FigureLibrary } from './figures';
+import { Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import type { PlaceEntry } from './placeSlot';
 import { seededRandom } from './textures';
@@ -16,7 +16,7 @@ import { advanceProgress, catchUpStep, clampProgress, deadReckonRate, deadReckon
  *  and inside a room. Exported because the player-driven avatar (E3-T3) has to
  *  move at exactly the NPC pace; a second constant would drift. */
 export const WALK_SPEED = 3.4;
-const RUN_DISTANCE = 6; // weiter als das entfernt -> Lauf-Animation
+const RUN_DISTANCE = 6; // farther than this -> run animation
 
 /** What the ground says about a figure at one point: the clip its terrain type
  *  asks for while the figure MOVES (`anim`) and the one while it STANDS
@@ -65,7 +65,7 @@ function ringColor(name: string): string {
   return `hsl(${Math.floor(rnd() * 360)}, 65%, 55%)`;
 }
 
-/** Rundes Portrait mit farbigem Ring als Sprite-Textur; lädt das Avatarbild nach. */
+/** Round portrait with a coloured ring as sprite texture; loads the avatar image lazily. */
 function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvatar: boolean): THREE.CanvasTexture {
   const S = 144;
   const c = document.createElement('canvas');
@@ -122,7 +122,7 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
 
 interface Npc {
   name: string;
-  /** AV3D-6: vom Server gelieferte Animations-Kategorie (schlägt das Raten) */
+  /** AV3D-6: the animation category the server delivered (authoritative) */
   animation?: string;
   root: THREE.Group;
   figure: Figure | null;
@@ -218,13 +218,13 @@ function routeKey(points: MetrePoint[]): string {
 
 export interface NpcState {
   char: MapCharacter;
-  pos: THREE.Vector3;               // Zielposition auf der Karte
-  /** feste Blickrichtung im Stand (z.B. vom Animations-Marker) */
+  pos: THREE.Vector3;               // target position on the map
+  /** fixed facing while standing (e.g. from the place marker) */
   face?: THREE.Vector3;
-  /** Neigung vom Marker (Grad): Kopf hoch/tief bzw. seitlich kippen — eine
-   *  Figur, die schräg auf dem Sand liegt, steht nicht senkrecht. */
+  /** Lean from the marker (degrees): head up/down or tilted sideways — a
+   *  figure lying askew on the sand does not stand upright. */
   lean?: { tilt: number; roll: number };
-  /** Figur ausblenden (z.B. andere Etage als die gewählte) */
+  /** hide the figure (e.g. a storey other than the shown one) */
   hidden?: boolean;
   /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
   via?: THREE.Vector3[];
@@ -518,11 +518,11 @@ export class NpcManager {
     this.selectRing = ring;
   }
 
-  /** Distanz-Stufe je Figur wählen (view state): innerhalb `near` full,
-   *  jenseits `far` low; das Band dazwischen hält den letzten Zustand
-   *  (Hysterese wie bei den Gebäude-Modellen in main.ts). Die Umschaltung
-   *  selbst — Cache-Treffer oder Nachladen + Rebuild — ist Sache der
-   *  FigureLibrary; Figuren ohne Server-Modell ignoriert sie. */
+  /** Pick the distance tier per figure (view state): full inside `near`,
+   *  low beyond `far`; the band between keeps the last state (hysteresis
+   *  like the building models in main.ts). The switch itself — a cache hit
+   *  or a reload + rebuild — is the FigureLibrary's business; figures
+   *  without a server model it ignores. */
   tickFigureTiers(cameraPos: THREE.Vector3, near: number, far: number) {
     if (!this.figures) return;
     for (const [name, npc] of this.npcs) {
@@ -592,7 +592,7 @@ export class NpcManager {
         npc = this.createNpc(st);
         this.npcs.set(st.char.name, npc);
         this.group.add(npc.root);
-        npc.root.position.copy(st.pos); // erster Sync: nicht quer über die Karte laufen
+        npc.root.position.copy(st.pos); // first sync: no walk across the whole map
         // The figure only arrived now, but the player has been steering since
         // before it existed — `setPlayerDriven` found nothing to write then.
         if (st.char.name === this.playerDriven) this.takeOver(npc);
@@ -881,10 +881,10 @@ export class NpcManager {
     }
   }
 
-  /** Blickrichtung im Stand: zum Schwerpunkt der nahen Nachbarn schauen
-   *  (wirkt wie ein Gesprächskreis); allein stehende schauen zur Kamera-Seite. */
+  /** Facing while standing: look at the centroid of the near neighbours
+   *  (reads as a conversation circle); a lone figure faces the camera side. */
   private facingTargets(): Map<string, THREE.Vector3> {
-    const NEAR = 4.5;                       // Welteinheiten = "im selben Gespräch"
+    const NEAR = 4.5;                       // world metres = "in the same conversation"
     const out = new Map<string, THREE.Vector3>();
     const list = [...this.npcs.values()];
     for (const npc of list) {
@@ -1207,10 +1207,13 @@ export class NpcManager {
         // STANDING, the ground gets the FIRST word too since the water round
         // of 2026-08-13 (`idleClip`): a figure standing in a lake treads water
         // rather than standing on it. Only where the ground names nothing does
-        // the old order hold — the server's category beats the keyword
-        // guessing (AV3D-6). This is the ONE clip decision of every figure,
-        // the player's avatar included: it is steered through this same loop.
-        const standingClip = npc.animation || activityToClipKind(npc.activity);
+        // the server's category hold (AV3D-6) — and where the server names
+        // none either, the figure simply stands: the keyword guessing over
+        // the activity text is gone (Task 13, plan-posen-plaetze.md), a pose
+        // comes from the catalog or not at all. This is the ONE clip decision
+        // of every figure, the player's avatar included: it is steered
+        // through this same loop.
+        const standingClip = npc.animation || 'idle';
         // The second argument is the gate of the clip ground offset (see the
         // traveller branch above): a clip the GROUND named — moving or
         // standing — has the ground as its reference, an activity clip does
@@ -1224,7 +1227,7 @@ export class NpcManager {
           moving ? moveClip(standGm.anim, !reckoning && dist > RUN_DISTANCE, standRaw.scope)
             : (standIdle || standingClip), moving || !!standIdle, standSink);
         npc.figure.update(dt);
-        // Ring wächst mit der Kameradistanz, damit NPCs in der Fernsicht auffindbar bleiben
+        // The ring grows with the camera distance so NPCs stay findable from afar
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
       } else if (npc.sprite) {
         if (moving) {

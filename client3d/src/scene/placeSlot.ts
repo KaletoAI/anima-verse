@@ -40,9 +40,19 @@ export interface PlaceEntry {
   lift: number;
 }
 
-/** The slot a held place puts the figure on: a pair sits on the anchor (slot
- *  0), an index out of range (capacity shrank under the sitter) too. */
-export function slotFor(entry: PlaceEntry, slot: number | 'pair'): THREE.Vector3 {
-  const i = typeof slot === 'number' && slot >= 0 && slot < entry.slots.length ? slot : 0;
-  return entry.slots[i];
+/** The point a held place puts the figure on: a numbered slot is that slot
+ *  (the entry's OWN vector — a re-lift reaches it without a copy; callers
+ *  `clone()`), an index out of range (the capacity shrank under the sitter)
+ *  falls back to slot 0, and a PAIR sits on the place's CENTRE — the mean
+ *  of the slots, the server's `centre_of` and the pair's anchor (a fresh
+ *  vector). `undefined` for an entry without slots: total, never a throw. */
+export function slotFor(entry: PlaceEntry, slot: number | 'pair'): THREE.Vector3 | undefined {
+  const slots = entry.slots;
+  if (!slots.length) return undefined;
+  if (slot === 'pair') {
+    const c = slots[0].clone();
+    for (let i = 1; i < slots.length; i++) c.add(slots[i]);
+    return c.multiplyScalar(1 / slots.length);
+  }
+  return slots[slot >= 0 && slot < slots.length ? slot : 0];
 }

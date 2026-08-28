@@ -249,6 +249,28 @@ export async function postActivity(body: { activity?: string; place_id?: string;
   return res.json() as Promise<{ ok: boolean; place: unknown }>;
 }
 
+/** One place of the avatar's room as `GET /play/places` offers it: how many
+ *  slots are free and WHICH (`free_slots` index the scene payload's
+ *  `slots[]`), and the solo poses of its group a click may pick — the
+ *  group's default first. `label` of a pose is its key today. */
+export interface PlaceOffer {
+  id: string;
+  label: string;
+  group: string;
+  capacity: number;
+  free: number;
+  free_slots: number[];
+  poses: { key: string; label: string }[];
+}
+
+/** The places of the avatar's current room (plan-posen-plaetze.md § 4,
+ *  Task 13) — the inventory the free-slot rings and the seat menu are built
+ *  from. `room_id` is the server's room, '' with no places when the avatar
+ *  stands nowhere. */
+export async function getPlaces(): Promise<{ room_id: string; places: PlaceOffer[] }> {
+  return json(await fetch('/play/places'));
+}
+
 /** The painted terrain of the world (`GET /play/terrain`): the areas plus the
  *  effective type catalog they name. NEVER withheld — terrain is always
  *  visible, only locations hide, so this is fetched ONCE and refetched when

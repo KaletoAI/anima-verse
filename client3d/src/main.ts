@@ -6,6 +6,8 @@ import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { FigureLibrary } from './scene/figures';
 import { animFamily } from './scene/clipCoverage';
 import { slotFor } from './scene/placeSlot';
+import { buildGlyphs, disposeGlyphs, hitPlace } from './scene/placeGlyphs';
+import { openPlaceMenu } from './game/placeMenu';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
   groundScope, slideBlocked, slopeBlocks, terrainBlocks, terrainPace, walkDir,
@@ -1674,10 +1676,22 @@ async function startApp(username: string, role: string) {
   // the plaque (React reads the bus), a miss clears the selection and lets the
   // click fall through to the tile's info panel.
   engine.pickFigure = (x, y) => {
-    const name = npcs.characterAt(engine.raycasterAt(x, y));
+    const ray = engine.raycasterAt(x, y);
+    const name = npcs.characterAt(ray);
     npcs.setSelected(name);
     if (!name) {
       setGameState({ selected: null });
+      // No figure under the pointer: a ring on a free slot takes the click
+      // and opens the seat menu (plan-posen-plaetze.md § 4). Asked BEFORE
+      // the ground, or the click would be a walk order to the chair's foot;
+      // asked AFTER the figures, so a ring under a sitter's feet never
+      // steals the click on the sitter (`characterAt` sees figure roots
+      // only, never the rings).
+      const placeId = placeGlyphs ? hitPlace(placeGlyphs, ray) : null;
+      if (placeId) {
+        openPlaceMenuFor(placeId, x, y);
+        return true;
+      }
       return false;
     }
     const char = lastMap?.characters.find((c) => c.name === name) ?? null;
@@ -1979,6 +1993,7 @@ async function startApp(username: string, role: string) {
       refreshSelection(map);
       reconcileAvatarPlace(map, polledAt); // server seated the avatar? (places § 4)
       reconcileAvatarPos(map);    // server moved the avatar? (E4-T5)
+      void syncPlaceGlyphs(map);  // free slots to sit down on (places § 4)
       announceSceneProblems(map); // what the composer found wrong (§ 4.3)
     } catch (e) {
       // An expired session is not an unreachable server: the dot stays as it
@@ -2251,6 +2266,9 @@ async function startApp(username: string, role: string) {
           // its animation, then the room's free stands, then the huddle.
           const kind = c.activity_animation || '';
           const held = c.place ? tile.roomMarkers.get(inRoom)?.get(c.place.id) : undefined;
+          // The seat point itself — `undefined` for a marker that named no
+          // slots, which then falls down the ladder like a missing marker.
+          const seat = held && c.place ? slotFor(held, c.place.slot) : undefined;
           const sit = tile.roomSitSpots.get(inRoom);
           const lieDown = tile.roomLieSpots.get(inRoom);
           // The surface choice runs over the FAMILY — `sit-cmu` is a sitting
@@ -2258,10 +2276,10 @@ async function startApp(username: string, role: string) {
           const family = animFamily(kind);
           const pool = family === 'lie' ? (lieDown?.length ? lieDown : sit)
             : family === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
-          if (held && c.place) {
+          if (held && seat) {
             // The server seated this figure: its slot, its facing, its lean —
             // nothing is chosen here.
-            pos = slotFor(held, c.place.slot).clone();
+            pos = seat.clone();
             if (held.rotation !== undefined) {
               // `facing` is TILE-LOCAL like every other payload angle, and a
               // gaze is a DIRECTION: it turns with the footprint but is not
@@ -3230,10 +3248,25 @@ async function startApp(username: string, role: string) {
   /** `<place id>#<slot>` the figure was last snapped onto — a poll repeating
    *  the same seat must not re-snap a figure that is already sitting there. */
   let seatedKey = '';
-  /** When the last stand-up was ACKNOWLEDGED by the server (`performance.now()`);
-   *  `Infinity` while the release is in flight. A poll asked before that
-   *  moment may still carry the old seat and is not believed. */
-  let standUpDoneAt = 0;
+  /** When the server last ANSWERED a seat change of our own making
+   *  (`performance.now()`): a stand-up acknowledged, a clicked place taken;
+   *  `Infinity` while a release is in flight. A poll asked before that
+   *  moment shows the state before it and is not believed. */
+  let ownSeatChangeAt = 0;
+  // --- Sitting down by click (plan-posen-plaetze.md § 4, Task 13): the
+  // state of the rings and the menu; the functions live with the place
+  // reconcile below.
+  /** The last answer of `GET /play/places` and the room it was given for. */
+  let placeOffers: api.PlaceOffer[] = [];
+  let placeOffersRoom = '';
+  /** What the inventory depends on, as one string; a poll whose signature
+   *  matches does not ask the server again. */
+  let placeSig = '';
+  /** The rings in the scene right now, or null. */
+  let placeGlyphs: THREE.Group | null = null;
+  /** Whether the rings were last built for the embodied mode (edge memory
+   *  of the mode subscription). */
+  let glyphsEmbodied = false;
   /** Reason of the last refusal and until when it stays quiet. */
   let quietReason = '';
   let quietUntil = 0;
@@ -3490,6 +3523,12 @@ async function startApp(username: string, role: string) {
   subscribeGameState(() => {
     const embodied = getGameState().mode === 'embodied';
     npcs.setPlayerDriven(embodied ? avatarName : null);
+    // The free-slot rings are a thing of the steered figure: drawn on
+    // entering the mode, taken away on leaving it (edge, not every change).
+    if (embodied !== glyphsEmbodied) {
+      glyphsEmbodied = embodied;
+      rebuildPlaceGlyphs();
+    }
     // The storey following is edge-triggered, and its memory must not outlive
     // the mode: while the player is in the overview the in-world switch is the
     // only authority, so a storey picked there would face a memory that
@@ -3610,18 +3649,18 @@ async function startApp(username: string, role: string) {
     // round trip stands between the key and the picture); the server clears
     // pose and place, and its next worldmap row carries no `place`. Until
     // that answer is in, a poll that still shows the old seat is ignored
-    // (`standUpDoneAt` in `reconcileAvatarPlace`) — otherwise the poll in
+    // (`ownSeatChangeAt` in `reconcileAvatarPlace`) — otherwise the poll in
     // flight would snap the figure back into the chair it just left. A
     // refused release (the toast says why) leaves the server's seat standing,
     // and the next poll seats the figure again: the server's word.
     if (dir && avatarSeated) {
       avatarSeated = false;
       seatedKey = '';
-      standUpDoneAt = Infinity;
+      ownSeatChangeAt = Infinity;
       npcs.setPlayerPose(avatarName, null, null);
       void api.postActivity({ activity: '' })
-        .then(() => { standUpDoneAt = performance.now(); })
-        .catch((e) => { standUpDoneAt = 0; uiActions.toast?.(String(e)); });
+        .then(() => { ownSeatChangeAt = performance.now(); })
+        .catch((e) => { ownSeatChangeAt = 0; uiActions.toast?.(String(e)); });
     }
     if (!dir) {
       // Standing still is when the FINAL report of a walk goes out — the
@@ -3730,6 +3769,12 @@ async function startApp(username: string, role: string) {
    */
   function reconcileAvatarPos(map: WorldMap) {
     if (getGameState().mode !== 'embodied') return;
+    // A SEATED avatar stands where `reconcileAvatarPlace` put it: on the
+    // payload's slot point, the server's word. The row's `pos` need not be
+    // that point (a pair's centre, a report that landed before the seat), and
+    // a difference beyond POS_SNAP_M would walk the figure off the chair on
+    // every poll. Nothing to reconcile while the place holds.
+    if (avatarSeated) return;
     // A report in flight would be compared against a payload that predates it.
     if (posInFlight || walkIn || verticalRide || correction) return;
     const pos = npcs.positionOf(avatarName);
@@ -3770,16 +3815,22 @@ async function startApp(username: string, role: string) {
   // the steered avatar here, because `npcs.update()` deliberately stops
   // placing the player-driven figure (its position is the steering hook's).
   // The three state variables live with the report state above
-  // (`avatarSeated`, `seatedKey`, `standUpDoneAt`).
+  // (`avatarSeated`, `seatedKey`, `ownSeatChangeAt`).
 
   /** Put the steered figure on the seat the server says it holds, once per
    *  seat — with the place's facing and lean, the way an NPC gets them from
    *  `computeNpcStates`. Nothing is chosen here: the id and the slot are the
    *  server's, the slot point is the payload's (`slotFor`). */
   function reconcileAvatarPlace(map: WorldMap, polledAt: number): void {
+    // A poll asked before our own last seat change was answered shows the
+    // state BEFORE it — the seat just stood up from, no seat where the click
+    // has just taken one — and says nothing about now. Ignored whole: read
+    // as "not seated" it would clear `avatarSeated` under a fresh click and
+    // let a position report release the seat that was just taken.
+    if (polledAt < ownSeatChangeAt) return;
     const me = map.characters.find((c) => c.name === avatarName);
     const place = me?.place ?? null;
-    if (!place || polledAt < standUpDoneAt) {
+    if (!place) {
       // Not seated (any more): the server released the place — by our own
       // stand-up, by a pose change, or behind the player's back. The figure
       // keeps standing where it is; only the seat's pose comes off it.
@@ -3800,8 +3851,10 @@ async function startApp(username: string, role: string) {
     const tile = me?.location_id ? tiles.get(me.location_id) : undefined;
     const held = tile?.roomMarkers.get(place.room_id)?.get(place.id);
     // Scene not mounted yet (the interior opens on approach): the next poll
-    // tries again, `seatedKey` stays empty on purpose.
-    if (!tile || !held) return;
+    // tries again, `seatedKey` stays empty on purpose. A marker without a
+    // slot point is the same case — there is nothing to sit on yet.
+    const seat = tile && held ? slotFor(held, place.slot) : undefined;
+    if (!tile || !held || !seat) return;
     seatedKey = key;
     // Whatever the figure was walking towards is void — it sits now. The
     // snap is a hard placement like a teleport correction: the seat is a
@@ -3809,7 +3862,7 @@ async function startApp(username: string, role: string) {
     cancelRoute();
     walkIn = null;
     correction = null;
-    npcs.snapPlayerTo(avatarName, slotFor(held, place.slot).clone());
+    npcs.snapPlayerTo(avatarName, seat.clone());
     let face: THREE.Vector3 | null = null;
     if (held.rotation !== undefined) {
       // Same frame rule as the NPC placement: `facing` is tile-local, a gaze
@@ -3820,6 +3873,90 @@ async function startApp(username: string, role: string) {
     }
     npcs.setPlayerPose(avatarName, face,
       held.tilt || held.roll ? { tilt: held.tilt || 0, roll: held.roll || 0 } : null);
+  }
+
+  // --- Sitting down by click (plan-posen-plaetze.md § 4, Task 13) -----------
+  // The rings on the free slots of the avatar's room and the seat menu a
+  // click on one opens. The inventory (`GET /play/places`: free slots and
+  // the poses per place) is fetched only when what it depends on has changed
+  // — the avatar's room or a seat held in its location — and the rings are
+  // rebuilt on every poll from it, because a re-lifted marker or a freshly
+  // mounted interior moves the points under them. State: with the report
+  // state above (`placeOffers`, `placeOffersRoom`, `placeSig`,
+  // `placeGlyphs`, `glyphsEmbodied`).
+
+  async function syncPlaceGlyphs(map: WorldMap): Promise<void> {
+    const me = map.characters.find((c) => c.name === avatarName);
+    const here = me?.location_id ?? '';
+    const room = me?.room_id ?? '';
+    const seated = map.characters
+      .filter((c) => c.place && c.location_id === here)
+      .map((c) => `${c.name}:${c.place!.id}#${c.place!.slot}`)
+      .sort();
+    const sig = `${here}|${room}|${seated.join(',')}`;
+    if (sig !== placeSig) {
+      placeSig = sig;
+      if (!here || !room) {
+        placeOffers = [];
+        placeOffersRoom = '';
+      } else {
+        try {
+          const r = await api.getPlaces();
+          placeOffers = r.places;
+          placeOffersRoom = r.room_id;
+        } catch (e) {
+          placeSig = '';          // ask again with the next poll
+          if (api.isAuthError(e)) return;
+        }
+      }
+    }
+    rebuildPlaceGlyphs();
+  }
+
+  /** Throw the rings away and draw them anew from the last inventory —
+   *  only while the player steers the figure, only inside a mounted room,
+   *  never on the place the avatar itself holds. */
+  function rebuildPlaceGlyphs(): void {
+    if (placeGlyphs) {
+      disposeGlyphs(placeGlyphs);
+      placeGlyphs = null;
+    }
+    if (getGameState().mode !== 'embodied' || !placeOffersRoom) return;
+    const me = lastMap?.characters.find((c) => c.name === avatarName);
+    const tile = me?.location_id ? tiles.get(me.location_id) : undefined;
+    const entries = tile?.roomMarkers.get(placeOffersRoom);
+    if (!entries) return;
+    placeGlyphs = buildGlyphs(entries, placeOffers, me?.place?.id ?? '');
+    engine.scene.add(placeGlyphs);
+  }
+
+  /** The seat menu for a clicked place; a pick seats the avatar there. */
+  function openPlaceMenuFor(placeId: string, x: number, y: number): void {
+    const offer = placeOffers.find((p) => p.id === placeId);
+    if (!offer || !offer.poses.length) return;
+    openPlaceMenu(x, y, offer, (pose) => {
+      void api.postActivity({ place_id: placeId, pose })
+        .then(() => {
+          // The server has seated the avatar: from this moment no position
+          // report may go out (a report is how a seat is RELEASED) and
+          // whatever the figure was walking towards is void. The figure is
+          // put on the slot by `reconcileAvatarPlace` — from a poll asked
+          // AFTER this answer (the stamp below), and one is asked right away.
+          avatarSeated = true;
+          seatedKey = '';
+          ownSeatChangeAt = performance.now();
+          cancelRoute();
+          void pollWorldMap();
+        })
+        .catch((e) => {
+          if (api.isAuthError(e)) return;
+          if (e instanceof api.ApiError && e.status === 409) {
+            uiActions.toast?.('Place is taken', true);
+          } else {
+            uiActions.toast?.(e instanceof Error ? e.message : String(e));
+          }
+        });
+    });
   }
 
   // --- Changing rooms on foot (E3-T6) ---------------------------------------

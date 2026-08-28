@@ -24,10 +24,12 @@
  * (1−1)·0.6 = 0, (2−1)·0.6 = +0.6 — the middle slot IS the anchor).
  *
  *   [1] `slotFor(e, 1)`      → slot 1, the anchor point (−2, 0, −3).
- *   [2] `slotFor(e, 'pair')` → slot 0: a PAIR pose is anchored on the marker
- *                              and the clip's own frame moves both partners,
- *                              so the figure goes to the first slot
- *                              (−2, 0, −3.6).
+ *   [2] `slotFor(e, 'pair')` → the place's CENTRE, the mean of its slots
+ *                              (−2, 0, −3): a PAIR is anchored on the place
+ *                              (the server's `centre_of`, the worldmap row's
+ *                              own x/z for a pair) and the clip's own frame
+ *                              moves both partners out from there. A fresh
+ *                              vector, not one of the slots.
  *   [3] `slotFor(e, 7)`      → slot 0: an index outside the entry's slots
  *                              (the capacity shrank under a sitter) falls
  *                              back to the first slot, never throws.
@@ -36,6 +38,9 @@
  *   [5] the answer is the entry's OWN vector (identity), so a caller that
  *       moves the figure must `clone()` — and a re-lift of the entry
  *       (`reliftScene`, `deriveRoomSpots`) reaches the seat without a copy.
+ *   [6] an entry WITHOUT slots (a payload marker that named none) answers
+ *       `undefined` for a numbered slot and for a pair alike — total, never
+ *       a throw and never a made-up point; the callers guard.
  */
 
 // Self-bundling guard — esbuild is required to resolve TypeScript imports
@@ -97,8 +102,10 @@ async function main() {
 
   console.log('[1] a numbered slot is that slot')
   check('slotFor(e, 1)', slotFor(entry, 1), [-2, 0, -3])
-  console.log('[2] a pair sits on the anchor, slot 0')
-  check("slotFor(e, 'pair')", slotFor(entry, 'pair'), [-2, 0, -3.6])
+  console.log('[2] a pair sits on the centre, the mean of the slots')
+  check("slotFor(e, 'pair')", slotFor(entry, 'pair'), [-2, 0, -3])
+  checkTrue("slotFor(e, 'pair') is a fresh vector, none of the slots",
+    !entry.slots.includes(slotFor(entry, 'pair')))
   console.log('[3] an index out of range falls back to slot 0')
   check('slotFor(e, 7)', slotFor(entry, 7), [-2, 0, -3.6])
   check('slotFor(e, -1)', slotFor(entry, -1), [-2, 0, -3.6])
@@ -106,6 +113,10 @@ async function main() {
   check('slotFor(e, 2)', slotFor(entry, 2), [-2, 0, -2.4])
   console.log('[5] the answer is the entry\'s own vector, not a copy')
   checkTrue('slotFor(e, 1) === e.slots[1]', slotFor(entry, 1) === entry.slots[1])
+  console.log('[6] an entry without slots answers undefined')
+  const bare = { ...entry, slots: [] }
+  checkTrue('slotFor(bare, 0) === undefined', slotFor(bare, 0) === undefined)
+  checkTrue("slotFor(bare, 'pair') === undefined", slotFor(bare, 'pair') === undefined)
 
   if (FAILED.length) {
     console.error(`\n${FAILED.length} check(s) FAILED: ${FAILED.join(', ')}`)

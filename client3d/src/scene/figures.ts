@@ -560,7 +560,7 @@ export function rootPathAt(path: RootPath, t: number): { x: number; z: number } 
   };
 }
 
-type ClipKind = string;   // offenes Vokabular — der Server bestimmt die kinds
+type ClipKind = string;   // open vocabulary — the server decides the kinds
 
 const CLIP_SYNONYMS: Record<string, string[]> = {
   idle: ['idle', 'stand', 'breath'],
@@ -572,20 +572,9 @@ const CLIP_SYNONYMS: Record<string, string[]> = {
   wave: ['wave', 'greet'],
 };
 
-/** Modelle, deren gebundene Kinds schon geloggt wurden (einmal je Modell,
- *  nicht je NPC-Instanz). */
+/** Models whose bound kinds were logged already (once per model, not per
+ *  NPC instance). */
 const loggedActionKinds = new Set<string>();
-
-
-/** Freitext-Activity -> Animations-Kategorie (Client-Workaround für AV3D-6). */
-export function activityToClipKind(activity: string): ClipKind {
-  const a = activity.toLowerCase();
-  if (/sleep|schlaf|liege|lying|nap|bett/.test(a)) return 'lie';
-  if (/sit|sitz|eat|ess|meeting|read|les/.test(a)) return 'sit';
-  if (/dance|tanz|party|feier/.test(a)) return 'dance';
-  if (/wave|wink|greet|begrüß/.test(a)) return 'wave';
-  return 'idle';
-}
 
 export class FigureLibrary {
   private models: LoadedModel[] = [];
