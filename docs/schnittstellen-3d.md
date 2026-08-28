@@ -1590,8 +1590,15 @@ headless) — die CMU-Daten sind frei weitergebbar, anders als Mixamo.
 ein Paar: Profil-Dict `interaction` auf BEIDEN, reine Funktion der SPIELZEIT wie
 `journey` (Freeze friert die Geste ein). Auslöser: Katalog-Pose mit `solo:false`,
 deren `animation` ein vollständiges Paar ist (Verb `InteractWith`, Plugin
-`plugins/interact`). Anker = Mittelpunkt der beiden Positionen, `yaw` so, dass
-Clip-+X auf die Weltrichtung Actor→Partner fällt. Der Server setzt beide
+`plugins/interact`). **Anker:** Hat der Raum einen freien Platz der Gruppe der
+Paar-Pose (plan-posen-plaetze.md § 4) mit ≥ `places` freien Slots, ist der
+Anker dessen Mitte (Mittelwert der Slots — bei Kapazität 2 die Marker-Position),
+`yaw` = Marker-Facing − 90° + `yaw_offset` der Pose (Clip-+X entlang des
+Facings; ohne Facing = Süd), und `anchor.place_id` nennt den Platz — beide
+Profile halten ihn als `place.slot = "pair"`, das Paar belegt `places` Slots.
+Sonst (nur Gruppe `stand`) Anker = Mittelpunkt der beiden Positionen, `yaw` so,
+dass Clip-+X auf die Weltrichtung Actor→Partner fällt, `place_id` `null`; eine
+Sitz-Pose ohne freien Sitz wird abgelehnt. Der Server setzt beide
 Spielzustands-Positionen auf `anchor + R(yaw)·anchor_xz_m` der Rolle (so sehen
 Wahrnehmung, Regeln und Karte die beiden dort, wo der Clip sie am Anker hält).
 Ende: Ticker (`settle_finished`, Spielzeit ≥ `duration_s`), Reise, manuelle
@@ -1602,7 +1609,7 @@ Positionsänderung, neue Pose — immer für BEIDE.
 ```json
 "interaction": {
   "id": "049b7a009533", "kind": "handshake", "role": "a", "partner": "Bob",
-  "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708},
+  "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708, "place_id": null},
   "started_at_game": "Y0001-D001T12:00:00",
   "elapsed_s": 0.8, "duration_s": 2.533, "rate": 1.0
 }
@@ -1628,7 +1635,9 @@ nicht zur Gruppe, 404 kein solcher Platz im Raum, 409 belegt).
 Y-Drehung (`x' = x·cos + z·sin`, `z' = −x·sin + z·cos`); `clipRoot(t)` ist die
 Hüft-XZ der Hälfte (cm → m) — im Client aus dem ROHEN Clip gezogen, weil
 `adaptExternalClips` die horizontale Hüftbewegung für alle Clips entfernt. Der
-Root wird um `yaw` gedreht, die Körperrichtung steckt im Clip. Clip-Zeit `t`
+Root wird um `yaw` gedreht, die Körperrichtung steckt im Clip. Nennt der Anker
+einen `place_id`, steht das Paar auf der Slot-Höhe dieses Platzes (der Client
+kennt sie aus seinem Platz-Inventar, `slots[0].y`), sonst auf dem Boden. Clip-Zeit `t`
 läuft lokal mit `rate` weiter und wird nur gegen einen NEUEN Poll nachgezogen
 (> 0,3 s Drift). Die Hälfte `<kind>__<role>` ist eine normale Action der Figur;
 fehlt sie auf dem Rig, gilt die gewöhnliche Platzierung + `activity_animation`.

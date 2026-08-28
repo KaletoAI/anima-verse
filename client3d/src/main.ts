@@ -1870,6 +1870,13 @@ async function startApp(username: string, role: string) {
    *  while nothing has been drawn for it yet. */
   const shownRoomOf = (name: string): string | null =>
     shownPlacement.get(name)?.room ?? null;
+  // A pair the server seated on a PLACE (§ A8a `anchor.place_id`) stands at
+  // that place's slot height: the manager asks for the entry by the
+  // character's room and the marker id, in the tile under the anchor.
+  npcs.setPlaceAt((name, id, x, z) => {
+    const room = roomOf.get(name);
+    return room ? tileAt(x, z)?.roomMarkers.get(room)?.get(id) : undefined;
+  });
   /** Figures the placement pass left INVISIBLE (a storey that is not shown, a
    *  room whose interior is closed). Rewritten by every `computeNpcStates`
    *  run; read by the talk target, because nobody can be addressed through a

@@ -110,6 +110,44 @@ Hand-derived expectations:
       The setup restores the full layout (stage 3 dropped b1) and sets the
       room hint straight in the world data — there is no setter,
       activity_hint is a column of the rooms table.
+  [7] A PAIR on one place (Task 9). The layout gains
+      s3  group seat, at (5, 4), capacity 3, spacing 0.6, facing 0
+          → centre (1, 0), slots (0.4, 0), (1, 0), (1.6, 0).
+      Everybody cleared and standing at (−3.5, −3.5).
+      assign_pair("Ann", "Bob", "cuddling") (places 2): s1 (capacity 1)
+      cannot take two; s2 (2 free, centre = mean of its slots = (1, −3))
+      is √(4.5² + 0.5²) = 4.53 m from the pair's midpoint, s3 (3 free,
+      centre (1, 0)) √(4.5² + 3.5²) = 5.70 m → s2. yaw = facing − 90° +
+      yaw_offset = −90° = −π/2 (clip +X along the facing: compass f gives
+      the world direction (sin f, cos f), mapped by atan2(−cos f, sin f)).
+      Both profiles hold {s2, "pair", lounge}; assign_pair moves nobody
+      (the interaction engine places the figures from the anchor), so
+      both still stand at (−3.5, −3.5). The setter then writes the pose:
+      set_pose_intent(…, "cuddling") runs assign, which KEEPS a pair seat
+      (same id, slot "pair", the pose is that pair pose) — place and
+      position unchanged. occupancy s2 == [Ann/pair, Bob/pair];
+      free_slots(s2) == [] and _taken_count(s2) == 2 — the pair is counted
+      ONCE, not per partner. room_offer_short == "seat 4 free, bed 1 free"
+      (s1 1 + s3 3). place_of(Ann) = s2 slot "pair" at slot 0 (0.7, −3).
+      release_pair clears both; s2 is no occupancy.
+      Catalog variant (written for this stage, restored after): "lapsitting"
+      (seat, solo false, places 1, yaw_offset 90) and "dancing" (stand,
+      solo false, places 2). Cid takes s1 (prefer). assign_pair(Ann, Bob,
+      "lapsitting") needs ONE slot: s2 4.53 m beats s3 5.70 m → s2,
+      yaw = 0 − 90 + 90 = 0.0; after both setters free_slots(s2) == [1]
+      and _taken_count == 1. Dan takes s3/0 (prefer). Eve at (1.3, −2.5)
+      — 0.5 m from s2/1 (1.3, −3), √(0.3² + 2.5²) = 2.52 m from s3/1
+      (1, 0) — says "sitting": the free-place sort counts SLOTS, not
+      entries: s2 has 1 slot taken (2 entries), s3 1 slot taken (1 entry)
+      → tie → nearest → s2/1, Eve at (1.3, −3). (Counting entries would
+      have sent her to s3.) assign_pair(Eve, Fay, "dancing"): no stand
+      marker → None, nothing written (a standing pair meets halfway).
+      Base catalog back: everybody released, Cid on s1, Dan on s2/0.
+      assign_pair(Ann, Bob, "cuddling"): s2 has 1 free < 2, s3 3 free →
+      (s3, −π/2); after the setters free_slots(s3) == [2] (2 slots taken
+      of 3, not 3 — one pair) and _taken_count == 2. assign_pair(Eve, Fay,
+      "cuddling") — s1 taken, s2 and s3 with one free each — raises
+      PlaceUnavailable("no free seat for two"), Eve and Fay hold nothing.
 
 Usage:  ./.venv/bin/python scripts/smoke_places.py
 """
@@ -517,6 +555,109 @@ check("2× Chair: 2 free in total, 1 per chair → no pair pose",
       den[0] == "- 2× Chair (free): sitting, reading", repr(den[0]))
 check("Sofa: 2 free on one place → cuddling (with partner)",
       den[1] == "- Sofa (free): sitting, cuddling (with partner), reading", repr(den[1]))
+
+# ── [7] a pair on one place ─────────────────────────────────────────────
+print("\n[7] a pair on one place")
+import math  # noqa: E402
+
+S3 = {"id": "s3", "group": "seat", "at": [5, 4], "capacity": 3, "spacing_m": 0.6, "rotation": 0}
+write_layout(MARKERS + [S3])
+places.invalidate()
+for _n in ("Ann", "Bob", "Cid", "Dan", "Eve", "Fay"):
+    clear_pose_intent(_n)
+    set_character_pos(_n, -3.5, -3.5)
+pl = {p["id"]: p for p in places.room_places(HOUSE, "lounge")}
+check("s3 slots (0.4, 0), (1, 0), (1.6, 0)",
+      pl.get("s3", {}).get("slots") == [[0.4, 0.0], [1.0, 0.0], [1.6, 0.0]], str(pl.get("s3")))
+PAIR_S2 = {"id": "s2", "slot": "pair", "room_id": "lounge"}
+
+
+def near(a, b, eps=1e-4) -> bool:
+    return abs(float(a) - float(b)) <= eps
+
+
+r = places.assign_pair("Ann", "Bob", "cuddling")
+check("assign_pair → (s2, −π/2): nearest place with 2 free slots",
+      r is not None and r[0]["id"] == "s2" and near(r[1], -math.pi / 2), str(r))
+check("both profiles hold s2/pair",
+      get_character_profile("Ann").get("place") == PAIR_S2
+      and get_character_profile("Bob").get("place") == PAIR_S2)
+check("assign_pair moves nobody", get_character_pos("Ann") == {"x": -3.5, "z": -3.5}
+      and get_character_pos("Bob") == {"x": -3.5, "z": -3.5})
+set_pose_intent("Ann", "cuddling")
+set_pose_intent("Bob", "cuddling")
+check("the setter keeps the pair seat (assign's keep branch)",
+      get_character_profile("Ann").get("place") == PAIR_S2
+      and get_character_profile("Bob").get("place") == PAIR_S2
+      and get_character_pos("Ann") == {"x": -3.5, "z": -3.5},
+      str(get_character_profile("Ann").get("place")))
+occ = places.occupancy(HOUSE, "lounge")
+check("occupancy s2 [Ann/pair, Bob/pair]",
+      sorted(occ.get("s2") or []) == [("Ann", "pair"), ("Bob", "pair")], str(occ))
+check("a pair of two takes both slots — counted once, not per partner",
+      places.free_slots(pl["s2"], occ["s2"]) == [] and places._taken_count(pl["s2"], occ["s2"]) == 2)
+short = places.room_offer_short(HOUSE, "lounge")
+check("room_offer_short: seat 4 free, bed 1 free", short == "seat 4 free, bed 1 free", repr(short))
+po = places.place_of("Ann")
+check("place_of(Ann) = s2 slot pair at (0.7, −3)",
+      po is not None and po["id"] == "s2" and po["slot"] == "pair" and po["x"] == 0.7 and po["z"] == -3.0,
+      str(po))
+places.release_pair("Ann", "Bob")
+check("release_pair clears both",
+      get_character_profile("Ann").get("place") is None and get_character_profile("Bob").get("place") is None
+      and "s2" not in places.occupancy(HOUSE, "lounge"))
+
+BASE_CATALOG = json.loads((CAT / "pose_catalog.json").read_text())
+_variant = json.loads(json.dumps(BASE_CATALOG))
+_variant["entries"]["lapsitting"] = {"prompt": "p", "animation": "cuddle", "group": "seat",
+                                     "solo": False, "places": 1, "yaw_offset": 90}
+_variant["entries"]["dancing"] = {"prompt": "p", "animation": "dance", "group": "stand",
+                                  "solo": False, "places": 2, "yaw_offset": 0}
+(CAT / "pose_catalog.json").write_text(json.dumps(_variant), encoding="utf-8")
+pose_catalog.reload_catalogs()
+places.invalidate()
+check("Cid → s1", places.assign("Cid", "sitting", prefer="s1") == field("s1", 0))
+r = places.assign_pair("Ann", "Bob", "lapsitting")
+check("a places-1 pair → (s2, 0.0): facing 0 − 90 + yaw_offset 90",
+      r is not None and r[0]["id"] == "s2" and near(r[1], 0.0), str(r))
+set_pose_intent("Ann", "lapsitting")
+set_pose_intent("Bob", "lapsitting")
+occ = places.occupancy(HOUSE, "lounge")
+check("it takes ONE slot: free_slots(s2) == [1], _taken_count 1",
+      places.free_slots(pl["s2"], occ["s2"]) == [1] and places._taken_count(pl["s2"], occ["s2"]) == 1,
+      str(occ.get("s2")))
+check("Dan → s3/0", places.assign("Dan", "sitting", prefer="s3") == field("s3", 0))
+set_character_pos("Eve", 1.3, -2.5)
+check("the free-place sort counts slots, not entries: Eve → s2/1",
+      places.assign("Eve", "sitting") == field("s2", 1)
+      and get_character_pos("Eve") == {"x": 1.3, "z": -3.0}, str(get_character_profile("Eve").get("place")))
+check("a standing pair without a stand marker → None, nothing written",
+      places.assign_pair("Eve", "Fay", "dancing") is None
+      and get_character_profile("Eve").get("place") == field("s2", 1)
+      and get_character_profile("Fay").get("place") is None)
+
+(CAT / "pose_catalog.json").write_text(json.dumps(BASE_CATALOG), encoding="utf-8")
+pose_catalog.reload_catalogs()
+places.invalidate()
+for _n in ("Ann", "Bob", "Dan", "Eve"):
+    clear_pose_intent(_n)
+check("Dan → s2/0", places.assign("Dan", "sitting", prefer="s2") == field("s2", 0))
+r = places.assign_pair("Ann", "Bob", "cuddling")
+check("s2 has one free slot: the pair goes to s3 (−π/2)",
+      r is not None and r[0]["id"] == "s3" and near(r[1], -math.pi / 2), str(r))
+set_pose_intent("Ann", "cuddling")
+set_pose_intent("Bob", "cuddling")
+occ = places.occupancy(HOUSE, "lounge")
+check("on a capacity-3 place the pair takes 2: free_slots(s3) == [2]",
+      places.free_slots(pl["s3"], occ["s3"]) == [2] and places._taken_count(pl["s3"], occ["s3"]) == 2,
+      str(occ.get("s3")))
+try:
+    places.assign_pair("Eve", "Fay", "cuddling")
+    check("no place with two free seats raises PlaceUnavailable", False, "no exception")
+except places.PlaceUnavailable as e:
+    check("no place with two free seats raises PlaceUnavailable", str(e) == "no free seat for two", str(e))
+check("Eve and Fay hold nothing", get_character_profile("Eve").get("place") is None
+      and get_character_profile("Fay").get("place") is None)
 
 # ── summary ─────────────────────────────────────────────────────────────
 print()

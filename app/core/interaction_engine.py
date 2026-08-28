@@ -10,7 +10,8 @@ make sense played at ONE anchor, in lockstep. This module owns that state:
         "role": "a" | "b",            # which half this character plays
         "partner": "<character>",
         "pose_key": "shaking hands",  # the catalog key that named the clip
-        "anchor": {"x": 12.3, "z": -4.5, "yaw": 1.57},   # world metres / rad
+        "anchor": {"x": 12.3, "z": -4.5, "yaw": 1.57,    # world metres / rad
+                   "place_id": "sofa/s"},                # the PLACE it sits on, or None
         "started_at_game": "Y0002-D109T14:23:45",        # canonical GAME stamp
         "duration_s": 2.533,          # GAME seconds, from the clip sidecar
     }
@@ -27,6 +28,16 @@ frame has its origin at the anchor and its +X pointing from A to B. A client
 places a figure at ``anchor + R_y(yaw) · clip_root`` with three.js's Y
 rotation (``x' = x·cos + z·sin``, ``z' = −x·sin + z·cos``), so ``yaw`` is
 chosen here such that clip +X lands on the world direction from A to B.
+
+Where the anchor IS (plan-posen-plaetze.md § 4): a pair sits on ONE place
+of its pose's group when the room has one with ``places`` free slots
+(``places.assign_pair`` — the sofa for a cuddle, a standing spot for a
+hug): the anchor is that place's centre, ``yaw`` follows the marker's
+facing (+ the pose's ``yaw_offset``) and ``place_id`` names it, so a client
+draws the pair at the seat's height. Without such a place — none free, or
+the free one beyond ``MAX_START_DISTANCE_M`` from a partner — a STANDING
+pair meets halfway between the two figures (``place_id`` None); a seated
+pair without a reachable seat is refused.
 """
 import math
 import uuid
@@ -187,16 +198,43 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
     if dist > MAX_START_DISTANCE_M:
         raise ValueError(f"{partner} is too far away ({dist:.1f} m)")
 
-    # Anchor: midpoint, clip +X towards the partner. A degenerate zero
+    # Anchor: a free place of the pose's group when the room has one — its
+    # centre, the clip turned to the marker's facing; else (standing pairs
+    # only) the midpoint, clip +X towards the partner. A degenerate zero
     # distance keeps the actor's facing irrelevant — any yaw will do.
-    yaw = _yaw_from_to(pa["x"], pa["z"], pb["x"], pb["z"]) if dist > 1e-6 else 0.0
-    anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
-              "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4)}
+    from app.core import places
+    try:
+        seated = places.assign_pair(actor, partner, pose_key)
+    except places.PlaceUnavailable as e:
+        raise ValueError(str(e))
+    if seated:
+        place, yaw = seated
+        ax, az = places.centre_of(place)
+        # The "together" rule runs against the ANCHOR here: a place out of
+        # reach for one of them is no place for this pair — a standing pair
+        # meets halfway instead, a seated pair is refused.
+        who, pos = max(((actor, pa), (partner, pb)),
+                       key=lambda wp: math.dist((wp[1]["x"], wp[1]["z"]), (ax, az)))
+        far = math.dist((pos["x"], pos["z"]), (ax, az))
+        if far > MAX_START_DISTANCE_M:
+            places.release_pair(actor, partner)
+            if place["group"] != "stand":
+                raise ValueError(f"{who} is too far from the {place['label']} ({far:.1f} m)")
+            seated = None
+    if seated:
+        anchor = {"x": round(ax, 3), "z": round(az, 3), "yaw": round(yaw, 4),
+                  "place_id": place["id"]}
+    else:
+        yaw = _yaw_from_to(pa["x"], pa["z"], pb["x"], pb["z"]) if dist > 1e-6 else 0.0
+        anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
+                  "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4),
+                  "place_id": None}
     inter_id = uuid.uuid4().hex[:12]
     started = game_time().canonical()
     roles = (meta.get("geometry") or {}).get("roles") or {}
     for name, role, other in ((actor, "a", partner), (partner, "b", actor)):
-        prof = profiles[name]
+        # Re-read: assign_pair just wrote the place into both profiles.
+        prof = profiles[name] = get_character_profile(name) or {}
         prof["interaction"] = {
             "id": inter_id, "kind": kind, "role": role, "partner": other,
             "pose_key": pose_key, "anchor": anchor,
@@ -235,8 +273,13 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
         cur = p.get("interaction")
         if isinstance(cur, dict) and cur.get("id") == inter["id"]:
             p.pop("interaction", None)
+            same_pose = (p.get("pose_key") or "") == inter.get("pose_key")
+            if not same_pose:
+                # The pair seat goes with the interaction; with the pair pose
+                # still on, clear_pose_intent below stands the character up.
+                p["place"] = None
             save_character_profile(name, p)
-            if (p.get("pose_key") or "") == inter.get("pose_key"):
+            if same_pose:
                 clear_pose_intent(name)
     publish("interaction_ended", character_name, partner=partner,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)

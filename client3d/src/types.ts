@@ -266,7 +266,14 @@ export interface MapInteraction {
   kind: string;
   role: 'a' | 'b';
   partner: string;
-  anchor: { x: number; z: number; yaw: number };
+  anchor: {
+    x: number; z: number; yaw: number;
+    /** The PLACE (marker id in the pair's room) the anchor sits on — the
+     *  server seated the pair there and the anchor is its centre; the client
+     *  draws the figures at that place's slot height. `null` when the pair
+     *  met halfway on the ground. */
+    place_id?: string | null;
+  };
   started_at_game: string;
   /** GAME seconds into the interaction at the time of this payload */
   elapsed_s: number;

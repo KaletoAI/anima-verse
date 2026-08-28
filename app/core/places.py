@@ -13,9 +13,13 @@ written (every writer calls :func:`invalidate`); the TTL only covers a
 writer nobody thought of.
 
 ``assign`` is the one entry: keep your own place when the new pose is of the
-same group, else the place with the fewest occupants, nearest free slot to
+same group, else the place with the fewest taken slots, nearest free slot to
 where the character stands. ``prefer`` insists on one place and raises
-:class:`PlaceUnavailable` instead of falling back.
+:class:`PlaceUnavailable` instead of falling back. A PAIR (an interaction,
+``interaction_engine``) takes ONE place for two through ``assign_pair``:
+both profiles hold it as the ``PAIR_SLOT`` and the pair consumes the pose's
+``places`` slots from slot 0 upwards; ``assign`` never re-seats a running
+pair, ``release_pair`` stands both up.
 
 What the LLM is told about all this lives here too (plan § 5):
 :func:`room_offer` is the prompt block every chat/thought consumer shows —
@@ -56,8 +60,16 @@ def invalidate() -> None:
 
 
 def _compose(location_id: str) -> Dict[str, List[Place]]:
-    """The location's markers, composed by the scene recipe, keyed by room."""
+    """The location's markers, composed by the scene recipe, keyed by room —
+    in WORLD metres. The recipe composes in the location's LOCAL frame
+    (origin = the pin, § A13a; the 3D client offsets the whole tile), so
+    every slot goes through ``local_to_world`` with the location's pin and
+    turn, and a turned location turns its markers' compass facing by the
+    same angle (as a turned room does in ``scene_recipe._markers``). An
+    unplaced location has no world frame; its markers stay as composed —
+    nobody can stand in it anyway (the location derives from the point)."""
     from app.core.scene_recipe import compose_scene, scene_inputs
+    from app.core.world_geometry import local_to_world
     from app.models.world import get_location_by_id
     loc = get_location_by_id(location_id)
     if not loc:
@@ -65,15 +77,29 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
     plan_width_m, building_meta, room_metas = scene_inputs(loc, location_id)
     scene = compose_scene(loc, plan_width_m=plan_width_m,
                           building_meta=building_meta, room_metas=room_metas)
+    placed = loc.get("pos_x") is not None and loc.get("pos_z") is not None
+    cx, cz = (float(loc["pos_x"]), float(loc["pos_z"])) if placed else (0.0, 0.0)
+    yaw = float(loc.get("yaw_deg") or 0.0) if placed else 0.0
+
+    def _world(pt: List[float]) -> List[float]:
+        if not placed:
+            return [float(pt[0]), float(pt[1])]
+        wx, wz = local_to_world(float(pt[0]), float(pt[1]), cx, cz, yaw)
+        return [round(wx, 2), round(wz, 2)]
+
     by_room: Dict[str, List[Place]] = {}
     for m in scene.get("markers") or []:
         if not m.get("id") or not m.get("group"):
             continue
         room_id = str(m.get("room_id") or "")
+        facing = m.get("facing")
+        if facing is not None and yaw:
+            facing = round((float(facing) + yaw) % 360.0, 1)
         by_room.setdefault(room_id, []).append({
             "id": m["id"], "group": m["group"], "label": m.get("label") or m["group"],
-            "capacity": int(m.get("capacity") or 1), "slots": m.get("slots") or [m["at_world"]],
-            "facing": m.get("facing"), "y_world": m.get("y_world", 0.0),
+            "capacity": int(m.get("capacity") or 1),
+            "slots": [_world(pt) for pt in (m.get("slots") or [m["at_world"]])],
+            "facing": facing, "y_world": m.get("y_world", 0.0),
             "root_offset": m.get("root_offset", 0.0), "source": m.get("source", "room"),
             "room_id": room_id,
         })
@@ -158,11 +184,15 @@ def occupancy(location_id: str, room_id: str, exclude: str = "") -> Dict[str, Li
 
 
 def _taken_count(place: Place, taken: List[Tuple[str, Any]]) -> int:
+    """Slots of ``place`` the entries in ``taken`` hold. A solo entry is one
+    slot; the PAIR entries (both partners list the place) are ONE pair that
+    holds its pose's ``places`` slots — counted once, never per partner."""
     from app.core.pose_catalog import pose_places
     from app.models.character import get_character_pose_key
-    n = 0
-    for name, slot in taken:
-        n += pose_places(get_character_pose_key(name)) if slot == PAIR_SLOT else 1
+    n = sum(1 for _, slot in taken if slot != PAIR_SLOT)
+    pair = [pose_places(get_character_pose_key(name)) for name, slot in taken if slot == PAIR_SLOT]
+    if pair:
+        n += max(pair)
     return min(n, place["capacity"])
 
 
@@ -182,6 +212,27 @@ def _dist(a: Optional[Dict[str, float]], slot: List[float]) -> float:
     return math.dist((a["x"], a["z"]), (slot[0], slot[1]))
 
 
+def centre_of(place: Place) -> Tuple[float, float]:
+    """The point a PAIR anchors at: the mean of the slots — capacity 1 is
+    the marker itself, capacity 2 the marker position (the slots straddle
+    it), a bench for three its middle seat."""
+    slots = place["slots"]
+    return (sum(float(s[0]) for s in slots) / len(slots),
+            sum(float(s[1]) for s in slots) / len(slots))
+
+
+def pair_yaw(place: Place, pose_key: str) -> float:
+    """Y rotation (radians) of a pair clip on ``place``: the clip's +X
+    (``interaction_engine``: mapped by ``atan2(−uz, ux)``) falls along the
+    marker's facing. Compass facing f — 0 = south (+z), 90 = east (+x) — is
+    the world direction (sin f, cos f), so ``atan2(−cos f, sin f)`` =
+    f − 90°; the pose's ``yaw_offset`` (degrees) turns the frame further.
+    No facing on the marker reads as 0 = south."""
+    from app.core.pose_catalog import pose_yaw_offset
+    facing = float(place.get("facing") or 0.0)
+    return math.radians(facing - 90.0 + pose_yaw_offset(pose_key))
+
+
 def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
     """Give ``name`` a free place of the pose's group in its room, write it to
     the profile and put the character on the slot; returns the profile field
@@ -189,7 +240,13 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
     that group (the pose stays, the client falls back) — and a place held
     from before is released then. A pose without a group (a standing pose)
     releases the place as well. ``prefer`` names the one place that will do;
-    :class:`PlaceUnavailable` when it has no free slot."""
+    :class:`PlaceUnavailable` when it has no free slot.
+
+    A PAIR pose is seated by :func:`assign_pair` only (one place for two):
+    here it keeps the pair seat it holds — the setter calls this right
+    after the engine seated the pair — and is never put on a solo slot;
+    a pair without a place (it met halfway) stands up from whatever seat
+    it held before."""
     from app.core.pose_catalog import get_catalog
     from app.models.character import (get_character_pos, get_character_profile,
                                       save_character_profile, set_character_pos)
@@ -197,6 +254,19 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
     group = (entry or {}).get("group", "")
     loc, room = where(name)
     if not group or not loc or not room:
+        release(name)
+        return None
+    if not entry.get("solo", True):
+        profile = get_character_profile(name) or {}
+        current = profile.get("place") if isinstance(profile.get("place"), dict) else None
+        if current and current.get("slot") == PAIR_SLOT \
+                and (current.get("room_id") or "") == room \
+                and any(p["id"] == current.get("id") and p["group"] == group
+                        for p in room_places(loc, room)) \
+                and (not prefer or prefer == current.get("id")):
+            return dict(current)
+        if prefer:
+            raise PlaceUnavailable(f"{prefer}: a pair pose is seated with its partner")
         release(name)
         return None
     # One lock per location: two characters choosing in the same room must
@@ -221,7 +291,9 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
                     chosen = (p, slot)
         if chosen is None and options:
             pos = get_character_pos(name)
-            options.sort(key=lambda pf: (len(occ.get(pf[0]["id"], [])),
+            # Fewest TAKEN SLOTS first (a pair of two on a bench is two, not
+            # one entry per partner), then the nearest free slot.
+            options.sort(key=lambda pf: (_taken_count(pf[0], occ.get(pf[0]["id"], [])),
                                          _dist(pos, pf[0]["slots"][pf[1][0]])))
             chosen = (options[0][0], options[0][1][0])
         if chosen is None:
@@ -251,6 +323,75 @@ def release(name: str) -> None:
     if profile.get("place"):
         profile["place"] = None
         save_character_profile(name, profile)
+
+
+def can_take(name: str, pose_key: str, place_id: str, ignore: Tuple[str, ...] = ()) -> bool:
+    """ADVISORY: has ``place_id`` in ``name``'s room a free slot for the
+    pose's group right now, with the characters in ``ignore`` (the one
+    asking, a partner about to stand up with it) not counting? No lock, no
+    write — the setter asks this BEFORE it ends a running interaction for
+    an insisted place, so a taken seat is refused with nothing changed; the
+    authoritative answer stays :func:`assign` under the lock."""
+    from app.core.pose_catalog import group_of
+    group = group_of(pose_key)
+    loc, room = where(name)
+    if not group or not loc or not room:
+        return False
+    place = next((p for p in room_places(loc, room)
+                  if p["id"] == place_id and p["group"] == group), None)
+    if place is None:
+        return False
+    taken = [(n, s) for n, s in occupancy(loc, room).get(place_id, []) if n not in ignore]
+    return bool(free_slots(place, taken))
+
+
+def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place, float]]:
+    """ONE place for two: a place of the pose's group in the actor's room
+    with room for the pose's ``places`` slots — the nearest to the pair's
+    midpoint — written to BOTH profiles as the ``PAIR_SLOT``; returns
+    ``(place, yaw_rad)`` (:func:`pair_yaw`). Nobody is moved: the
+    interaction engine places the figures from the anchor. None when no
+    place of the group has the slots and the group is ``stand`` (a standing
+    pair meets halfway); any other group without a place raises
+    :class:`PlaceUnavailable` — a seated pair without a seat is no pair."""
+    from app.core.pose_catalog import group_of, pose_places
+    from app.models.character import (get_character_pos, get_character_profile,
+                                      save_character_profile)
+    group = group_of(pose_key)
+    need = pose_places(pose_key)
+    loc, room = where(actor)
+    if not group or not loc or not room:
+        return None
+    with keyed_lock("places", loc):
+        occ = occupancy(loc, room)
+        mine = {actor, partner}
+        fitting = []
+        for p in room_places(loc, room):
+            if p["group"] != group:
+                continue
+            others = [(n, s) for n, s in occ.get(p["id"], []) if n not in mine]
+            if len(free_slots(p, others)) >= need:
+                fitting.append(p)
+        if not fitting:
+            if group == "stand":
+                return None
+            raise PlaceUnavailable(f"no free {group} for two")
+        pa, pb = get_character_pos(actor), get_character_pos(partner)
+        if pa and pb:
+            mid = {"x": (pa["x"] + pb["x"]) / 2, "z": (pa["z"] + pb["z"]) / 2}
+            fitting.sort(key=lambda p: _dist(mid, list(centre_of(p))))
+        best = fitting[0]
+        for name in (actor, partner):
+            prof = get_character_profile(name) or {}
+            prof["place"] = {"id": best["id"], "slot": PAIR_SLOT, "room_id": room}
+            save_character_profile(name, prof)
+        return best, pair_yaw(best, pose_key)
+
+
+def release_pair(actor: str, partner: str) -> None:
+    """Both partners stand up (:func:`release` each)."""
+    release(actor)
+    release(partner)
 
 
 def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:

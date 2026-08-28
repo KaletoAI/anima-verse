@@ -7,6 +7,7 @@ import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   type GroundScope, type GroundSink } from '../game/walk';
 import { activityToClipKind, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
+import type { PlaceEntry } from './placeSlot';
 import { seededRandom } from './textures';
 import { advanceProgress, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, shouldSnap, trimBucket, type MetrePoint } from './travelPath';
 
@@ -192,7 +193,10 @@ export interface PairPlay {
   id: string;
   /** `<kind>__<role>` — the clip half this figure plays */
   clip: string;
-  anchor: { x: number; z: number; yaw: number };
+  /** `placeId`: the place the server seated the pair on (§ A8a) — the
+   *  figures stand at its slot height, not on the ground; null = halfway
+   *  on the ground. */
+  anchor: { x: number; z: number; yaw: number; placeId: string | null };
   /** interaction time in game seconds */
   elapsed: number;
   duration: number;
@@ -287,7 +291,23 @@ export class NpcManager {
       sink: { move: 0, idle: 0 }, water: null,
       swimFrom: SWIM_FROM_DEFAULT_M });
 
+  /**
+   * The PLACE a pair anchor names (§ A8a: `anchor.place_id`), looked up in
+   * the character's room by marker id — handed in like the ground height,
+   * because the place inventory (`tile.roomMarkers`) lives in `main.ts`.
+   * `x`/`z` are the anchor's world metres, which say WHICH tile to ask;
+   * marker ids are per room, so the room comes from the character. The
+   * default (no inventory) puts the pair on the ground as before.
+   */
+  private placeAt: (name: string, id: string, x: number, z: number) => PlaceEntry | undefined =
+    () => undefined;
+
   constructor(private figures: FigureLibrary | null = null) {}
+
+  /** Install the place lookup for pair anchors (see `placeAt`). */
+  setPlaceAt(fn: (name: string, id: string, x: number, z: number) => PlaceEntry | undefined) {
+    this.placeAt = fn;
+  }
 
   /** Install the world height sampler (`Ground.heightAt`) and the revision of
    *  the field behind it. Called once at boot; the field updates itself. */
@@ -925,7 +945,8 @@ export class NpcManager {
     const stamp = st.stamp ?? 0;
     if (!npc.interaction || npc.interaction.id !== it.id || npc.interaction.clip !== clip) {
       npc.interaction = {
-        id: it.id, clip, anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw },
+        id: it.id, clip,
+        anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
         elapsed: it.elapsed_s, duration: it.duration_s, rate: it.rate ?? 0, stamp,
         clipDuration: it.clip_duration_s || it.duration_s, loop: !!it.loop,
       };
@@ -936,7 +957,7 @@ export class NpcManager {
     }
     const cur = npc.interaction;
     cur.rate = it.rate ?? 0;
-    cur.anchor = { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw };
+    cur.anchor = { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null };
     if (cur.stamp !== stamp) {
       if (Math.abs(cur.elapsed - it.elapsed_s) > PAIR_SNAP_S) cur.elapsed = it.elapsed_s;
       cur.stamp = stamp;
@@ -945,9 +966,12 @@ export class NpcManager {
 
   /** One frame of a pair interaction: the figure stands at
    *  `anchor + R_y(yaw) · clipRoot(t)`, its root turned by `yaw`, and plays
-   *  its clip half at game-clock time `t`. Returns false when the half is not
-   *  bound on this rig (or the figure has no rig) — then the ordinary
-   *  placement runs, the clip falls back to the activity kind. */
+   *  its clip half at game-clock time `t`. A pair the server seated on a
+   *  PLACE (`anchor.placeId`) stands at that place's slot height — the
+   *  couple on the sofa, not on the floor under it; the slots of one place
+   *  share their height, so slot 0 stands for the place. Returns false when
+   *  the half is not bound on this rig (or the figure has no rig) — then the
+   *  ordinary placement runs, the clip falls back to the activity kind. */
   private tickInteraction(npc: Npc, dt: number, camDist: number, labelVisible: boolean): boolean {
     const it = npc.interaction!;
     if (!npc.figure || !this.figures) return false;
@@ -961,7 +985,9 @@ export class NpcManager {
     const s = Math.sin(it.anchor.yaw);
     const x = it.anchor.x + root.x * c + root.z * s;
     const z = it.anchor.z - root.x * s + root.z * c;
-    npc.root.position.set(x, this.groundY(x, z), z);
+    const seat = it.anchor.placeId
+      ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
+    npc.root.position.set(x, seat ? seat.slots[0].y : this.groundY(x, z), z);
     npc.figure.setYaw(it.anchor.yaw);
     npc.figure.update(dt);
     npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));

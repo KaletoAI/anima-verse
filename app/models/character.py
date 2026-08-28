@@ -1878,6 +1878,17 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "") -> None:
     old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
     inter = profile.get("interaction")
     if isinstance(inter, dict) and inter.get("pose_key") != key:
+        if prefer and key:
+            # Advisory pre-check: an insisted place that is taken must be
+            # refused with NOTHING changed — ending the interaction first
+            # and learning it afterwards would be a 409 after side effects.
+            # The pair's own place does not count against its two partners
+            # (both stand up with the interaction). The authoritative check
+            # is assign's, under the lock.
+            from app.core import places
+            if not places.can_take(character_name, key, prefer,
+                                   ignore=(character_name, str(inter.get("partner") or ""))):
+                raise places.PlaceUnavailable(f"{prefer} has no free slot")
         # A new pose mid-interaction releases both partners (the engine
         # re-reads and saves the profiles itself).
         from app.core.interaction_engine import end_interaction
