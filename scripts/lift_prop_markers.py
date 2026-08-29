@@ -55,7 +55,7 @@ The lift of ``delta_m`` metres is therefore
     at[1] += delta_m / per_frac
 
 clamped to the range ``props.sanitize_markers`` accepts for index 1
-(``MARKER_AT_Y_MIN`` -1.0 .. ``MARKER_AT_MAX`` 1.5) and rounded to 4 decimals
+(``MARKER_AT_Y_MIN`` -1.0 .. ``MARKER_AT_MAX`` 2.0) and rounded to 4 decimals
 like that sanitizer, so nothing this script writes can be rejected on the next
 admin save. Clamped rows are marked in the table.
 
@@ -107,7 +107,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # Mirrored from app/core/props.py (MARKER_AT_Y_MIN / MARKER_AT_MAX, ~line 499)
 # — this script imports nothing from the app so it stays standard library only.
 AT_Y_MIN = -1.0
-AT_MAX = 1.5
+AT_MAX = 2.0
 AT_ROUND = 4
 
 # app/core/props.py SIDECAR_NAME / ROTATION_KEY, and the per-variant mesh

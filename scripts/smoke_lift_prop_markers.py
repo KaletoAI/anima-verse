@@ -44,11 +44,11 @@ expectation table) are ``at[1] * per_frac``:
                   the rise is 0.271530 m ~ the requested 0.2715 m (rounding)
     king bed      0.660 x 1.25 = 0.82500 m  ->  0.4358 x 1.25 = 0.544750 m
 
-Fallback + clamp case (``props.MARKER_AT_MAX`` = 1.5, index 1 has its own
+Fallback + clamp case (``props.MARKER_AT_MAX`` = 2.0, index 1 has its own
 lower bound ``MARKER_AT_Y_MIN`` = -1.0): a prop WITHOUT a measured ``bbox``
 falls back to ``height_m`` and says so —
 
-    stool  h = 0.50 m   1.400 + 0.2715/0.50 = 1.400 + 0.543 = 1.943 -> clamp 1.5
+    stool  h = 0.50 m   1.700 + 0.2715/0.50 = 1.700 + 0.543 = 2.243 -> clamp 2.0
 
 Orientation fix: a variant whose mesh carries a non-zero ``rotation``
 (``props.ROTATION_KEY``, on the FILE sidecar named by ``selection.json``, or
@@ -175,7 +175,7 @@ def build_world(root: Path) -> None:
                     {"stem": "stool", "active": True,
                      "width_m": 0.4, "depth_m": 0.4, "height_m": 0.5,
                      "markers": [
-                         {"id": "clampme1", "group": "seat", "at": [0.5, 1.4, 0.5]},
+                         {"id": "clampme1", "group": "seat", "at": [0.5, 1.7, 0.5]},
                          {"id": "badat001", "group": "seat", "at": [0.5, 0.5]},
                      ]},
                 ]))
@@ -288,7 +288,7 @@ def part2_apply(worlds: Path, world: Path) -> None:
           bed[0][0]["at"][1], 0.4358)
 
     stool = markers(world, "wooden-stool-ccc333")
-    check("stool clamped to MARKER_AT_MAX", stool[0][0]["at"][1], 1.5)
+    check("stool clamped to MARKER_AT_MAX", stool[0][0]["at"][1], 2.0)
     check("malformed at left alone", stool[0][1]["at"], [0.5, 0.5])
 
     tilted = markers(world, "tilted-shelf-eee555")

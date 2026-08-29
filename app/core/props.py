@@ -490,14 +490,14 @@ LOD_RATIO_MAX = 0.95
 #: looks like a lost placement, so the dial stops at 5 %.
 CUT_KEEP_MIN = 0.05
 
-# Marker fractions may leave the raw bounding box by half a box per axis —
-# the HEIGHT axis reaches a full box below (deep seats in tall machines);
-# see ``sanitize_markers``.
+# Marker fractions may leave the raw bounding box: half a box below and a
+# full box above on every axis — the HEIGHT axis also reaches a full box
+# below (deep seats in tall machines); see ``sanitize_markers``.
 # Flag for the one-time "marker names the surface" lift (see
 # migrate_marker_surface_once).
 _MARKER_SURFACE_FLAG = "world.migration.prop_marker_surface"
 MARKER_AT_MIN = -0.5
-MARKER_AT_MAX = 1.5
+MARKER_AT_MAX = 2.0
 MARKER_AT_Y_MIN = -1.0
 
 _PROP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -1197,10 +1197,11 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     ``[u, v, w]`` (three fractions of the model bounding box) instead of a
     room ``[x, y]``.
 
-    The fractions may exceed 0..1 by half a box in each direction
-    (``[-0.5, 1.5]``): a seat or lying surface often sits ON the hull edge or
-    slightly outside it, and the old hard 0..1 clamp made those markers
-    impossible to place (the Seated Row Machine finding). ``compose_prop_marker``
+    The fractions may exceed 0..1 — half a box below, a full box above
+    (``[-0.5, 2.0]``): a seat or lying surface often sits ON the hull edge or
+    outside it, and the old hard 0..1 clamp made those markers impossible to
+    place (the Seated Row Machine finding); the top of a bed with the restored
+    hips law needs the full box above. ``compose_prop_marker``
     multiplies the fractions linearly, so out-of-range values compose
     correctly without any change there.
 

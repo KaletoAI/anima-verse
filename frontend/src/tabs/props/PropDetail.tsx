@@ -101,10 +101,10 @@ function saveScaleFigure(on: boolean): void {
 }
 
 // Marker `at` = fractions of the RAW box in the order [X, Y, Z] — mirrors
-// props.MARKER_AT_MIN/MAX: half a box of slack per axis, because seats and
-// lying surfaces sit ON the hull or just outside it.
+// props.MARKER_AT_MIN/MAX: half a box of slack below and a full box above,
+// because seats and lying surfaces sit ON the hull or outside it.
 const AT_MIN = -0.5
-const AT_MAX = 1.5
+const AT_MAX = 2
 // The height axis reaches a FULL box below (props.MARKER_AT_Y_MIN) — deep
 // seat positions in tall machines sit far under the box top.
 const AT_AXES: Array<{ label: string; dim: DimKey; min: number }> = [
@@ -1065,7 +1065,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               the German heading reads "Orte" over a list of seats. */}
           <div className="ga-form-section-label">{t('Prop places')}</div>
           <span className="ga-hint">
-            {t('Object-local PLACES a character is seated on — each names a place type (seat, bed, floor …) and takes as many figures as its capacity. They belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 1.5, because seats and lying surfaces sit on the hull or just outside it. Place roughly with ✥, fine-tune with the sliders — the figures in the preview follow live.')}
+            {t('Object-local PLACES a character is seated on — each names a place type (seat, bed, floor …) and takes as many figures as its capacity. They belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 2, because seats and lying surfaces sit on the hull or outside it. Place roughly with ✥, fine-tune with the sliders — the figures in the preview follow live.')}
           </span>
           <div className="ga-list-detail">
             <div className="ga-list-detail-side">

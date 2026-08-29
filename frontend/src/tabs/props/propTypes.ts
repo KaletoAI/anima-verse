@@ -15,8 +15,8 @@ export interface PropMarker {
    *  whose group the catalog does not know is dropped on save. */
   group: string
   /** Object-local position: fractions [X, Y, Z] of the RAW model bounding
-   *  box. Range -0.5..1.5 — seats and lying surfaces sit on the hull or
-   *  just outside it (mirrors props.MARKER_AT_MIN/MAX). */
+   *  box. Range -0.5..2 — seats and lying surfaces sit on the hull or
+   *  outside it (mirrors props.MARKER_AT_MIN/MAX). */
   at: [number, number, number]
   /** How many figures the place seats, 1..8 (absent = 1). */
   capacity?: number
