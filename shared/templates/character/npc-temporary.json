@@ -42,6 +42,7 @@
     "dry_off",
     "end_intimate",
     "enter_water",
+    "get_dressed",
     "image_generation",
     "instagram_comment",
     "instagram_reply",
@@ -52,7 +53,8 @@
     "require_decency",
     "set_pose",
     "start_intimate",
-    "talk_to"
+    "talk_to",
+    "undress"
   ],
   "sections": [
     {

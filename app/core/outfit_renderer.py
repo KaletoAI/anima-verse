@@ -30,6 +30,22 @@ def _get_item(iid: str) -> Optional[Dict[str, Any]]:
     return get_item(iid)
 
 
+def is_outfit_worn(profile: Optional[Dict[str, Any]]) -> bool:
+    """The binary dressed state of a free-text wardrobe (``outfit_worn``).
+
+    THE one reading of that field — every consumer imports it from here
+    instead of repeating the shapes. Both shapes really occur: the template
+    field is a ``select`` whose option values are the STRINGS "true"/"false"
+    (npc-temporary), while the NPC pipeline and the undress verbs write a real
+    bool. A profile without the key is dressed (fail-open: an existing
+    ``outfit_description`` is worn until someone says otherwise).
+    """
+    worn = (profile or {}).get("outfit_worn", True)
+    if isinstance(worn, str):
+        return worn.strip().lower() not in ("false", "0", "no", "nein", "")
+    return bool(worn)
+
+
 def _resolve_tokens(raw: str, profile: Dict[str, Any]) -> str:
     """Resolve {placeholder}-Tokens gegen das Profil. Robust gegen Fehler."""
     s = (raw or "").strip()
@@ -287,10 +303,7 @@ def render_outfit(
     #    image prompts, 3D) inherits it from this one place.
     if not full:
         described = str(profile.get("outfit_description") or "").strip()
-        worn = profile.get("outfit_worn", True)
-        if isinstance(worn, str):
-            worn = worn.strip().lower() not in ("false", "0", "no", "nein", "")
-        if described and worn:
+        if described and is_outfit_worn(profile):
             full = "wearing: " + described
 
     return {

@@ -1,0 +1,23 @@
+name: undress
+capability_label: "Undress / Get dressed"   # ONE UI toggle for both verbs
+capability_description: "The character can take its clothes off and put them back on. Only for characters whose clothing is a free text (no wardrobe): the description stays, the binary 'Dressed' state flips, and the outfit drops out of every prompt while undressed. Characters with a wardrobe change clothes piece by piece instead."
+version: "1.0.0"
+description: Undress / GetDressed verbs for free-text wardrobes — flips the binary outfit_worn state
+
+skills:
+  - skill_id: undress
+    class: UndressSkill
+    params: {dressed: false}
+    always_load: true
+  - skill_id: get_dressed
+    class: UndressSkill
+    params: {dressed: true}
+    always_load: true
+
+templates:
+  llm: templates/llm
+
+# No state_flags: `outfit_worn` is a PROFILE field (with its own UI field in
+# the character settings), not a state flag — it has no TTL and no location
+# reset, and the counter-verb is offered by visible_for instead of by a
+# flag lifecycle.
