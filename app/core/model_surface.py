@@ -290,6 +290,38 @@ def surface_status(model_path: Optional[Path], rotation: Any) -> Dict[str, Any]:
             "step": surface.get("step_world", surface.get("step"))}
 
 
+def delete_surface(model_path: Path) -> bool:
+    """Remove the stored surface of ``model_path``: True when there was one and
+    it is gone, False when there was none.
+
+    A STATE, not an event — "this model has no lattice" is the answer either
+    way, and the caller that has to tell the two apart (the admin panel says
+    "removed" or "there was nothing") reads the bool. Never raises: a sidecar
+    that cannot be removed is logged and answers False, exactly like the bake's
+    "not stored".
+
+    Valid or stale makes no difference. The file IS the surface — a stale one
+    reads as "no surface" but is still what the panel shows and what a fixed
+    fix would revive — so what the admin points at is what goes.
+
+    The parsed sidecar goes with it: the cache is keyed on size and mtime and
+    could never answer for a file that is gone, but nothing else would ever
+    evict the entry, and a read/delete/re-bake inside one mtime tick would then
+    be served the version that was deleted.
+    """
+    p = surface_path(model_path)
+    try:
+        p.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        logger.info("surface not removed (%s): %s", Path(model_path).name, e)
+        return False
+    _forget_loaded(p)
+    logger.info("surface removed: %s", Path(model_path).name)
+    return True
+
+
 def payload_block(surface: Dict[str, Any]) -> Dict[str, Any]:
     """The eight fields the placement spec carries (§ 6.1)."""
     return {k: surface[k] for k in PAYLOAD_KEYS}

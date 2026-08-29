@@ -2194,6 +2194,37 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     return {"status": "generating"}
 
 
+def _surface_variant(raw: Any) -> Optional[int]:
+    """The STORE index a surface request names, or None for "every active
+    variant" — the ONE reading both surface routes share (body field for the
+    bake, query parameter for the delete), so the two never disagree about
+    what a variant is.
+
+    Variant 0 is the PRIMARY variant, a real index — only an absent or empty
+    value means "every active variant". NOT ``_mesh_int``: that one is a
+    tolerant reader for optional mesh dials, where 0 and "unset" mean the same
+    thing and nonsense clamps to 0 — here 0 IS a variant, so a negative or
+    non-numeric index would silently work on the primary variant instead of
+    saying that the request made no sense (T8).
+    """
+    if raw is None or raw == "":
+        return None
+    # A whole number and nothing else: a bool is not an index, "2.5" is not
+    # an index, and a JSON 2.0 is one only because it names no other.
+    try:
+        if isinstance(raw, bool):
+            raise ValueError("bool is not an index")
+        variant = int(raw)
+        if variant != float(raw) or variant < 0:
+            raise ValueError("not a store index")
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="variant must be a store index >= 0 (or absent for "
+                   "every active variant)")
+    return variant
+
+
 @router.post("/props/{prop_id}/surface")
 async def prop_surface(prop_id: str, request: Request,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -2208,30 +2239,38 @@ async def prop_surface(prop_id: str, request: Request,
     data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
     if not isinstance(data, dict):
         data = {}
-    raw = data.get("variant")
-    # Variant 0 is the PRIMARY variant, a real index — only an absent or empty
-    # field means "every active variant". NOT ``_mesh_int``: that one is a
-    # tolerant reader for optional mesh dials, where 0 and "unset" mean the
-    # same thing and nonsense clamps to 0 — here 0 IS a variant, so a
-    # negative or non-numeric index would silently bake the primary variant
-    # instead of saying that the request made no sense (T8).
-    variant: Optional[int] = None
-    if raw is not None and raw != "":
-        # A whole number and nothing else: a bool is not an index, "2.5" is not
-        # an index, and a JSON 2.0 is one only because it names no other.
-        try:
-            if isinstance(raw, bool):
-                raise ValueError("bool is not an index")
-            variant = int(raw)
-            if variant != float(raw) or variant < 0:
-                raise ValueError("not a store index")
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400,
-                detail="variant must be a store index >= 0 (or absent for "
-                       "every active variant)")
-    bake_surfaces(prop_id, variant, background=True, force=True)
+    bake_surfaces(prop_id, _surface_variant(data.get("variant")),
+                  background=True, force=True)
     return {"queued": True}
+
+
+@router.delete("/props/{prop_id}/surface")
+async def prop_surface_delete(prop_id: str, variant: Optional[str] = None,
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Remove a prop variant's baked walkable surface (``?variant=<store
+    index>``; absent = every active variant).
+
+    ``{deleted, surface_status}`` — whether a lattice was there and is gone,
+    and what the panel shows now (which is "missing" either way; the panel
+    takes the state from the answer instead of guessing it).
+
+    409 while a bake of this prop runs: that job writes the file again the
+    moment its Blender run returns, so a delete beside it would be undone
+    without a word. ``variant`` is a raw string on purpose — the shared
+    reading answers a bad index with 400, not with FastAPI's 422 for the
+    query type.
+    """
+    from app.core.props import (SurfaceBakeRunning, delete_surface_for,
+                                get_prop, surface_status_for)
+    if not get_prop(prop_id):
+        raise HTTPException(status_code=404, detail="Prop not found")
+    idx = _surface_variant(variant)
+    try:
+        deleted = delete_surface_for(prop_id, idx)
+    except SurfaceBakeRunning:
+        raise HTTPException(status_code=409,
+                            detail="A surface bake is running for this prop")
+    return {"deleted": deleted, "surface_status": surface_status_for(prop_id, idx)}
 
 
 @router.post("/props/{prop_id}/rotation")

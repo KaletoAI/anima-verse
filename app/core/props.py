@@ -520,6 +520,16 @@ _lod_building: set = set()
 # two runs on one prop would race for the same files and the loser's rotation
 # on disk makes every reader reject the lattice.
 _surface_building: set = set()
+
+
+class SurfaceBakeRunning(RuntimeError):
+    """A bake of this prop's surface is running — the caller asked for
+    something that would race it (:func:`delete_surface_for`). The route turns
+    this into 409: the very next thing the running job does is write the file
+    again, so a delete that "succeeded" would leave the admin looking at a
+    lattice they just removed."""
+
+
 # Props asked for again WHILE their bake was running, and whether that request
 # wanted a forced bake. Dropping such a request would lose exactly the fix the
 # admin just dialled, so the running job takes one more turn instead.
@@ -2889,6 +2899,49 @@ def surface_status_for(prop_id: str, variant: Any = None) -> Dict[str, Any]:
     from app.core.model_surface import surface_status
     mp = model_path(prop_id, variant=variant)
     return surface_status(mp, file_areas(mp)[ROTATION_KEY])
+
+
+def delete_surface_for(prop_id: str, variant: Any = None) -> bool:
+    """Remove one variant's baked walking surface — ``variant=None`` every
+    ACTIVE one. True when at least one lattice was there and is gone.
+
+    The counterpart of :func:`bake_surfaces` and it reads the same file
+    through the same lookup, so what is removed is exactly what that call
+    would overwrite. An unknown prop, an index this prop has no variant for
+    and a variant with no mesh all answer False — there is nothing to remove,
+    which is not an error but the state the caller asked about.
+
+    RAISES :class:`SurfaceBakeRunning` while a bake of THIS prop is in flight.
+    A bake writes every variant file it was asked for when its Blender run
+    returns, so a delete slipped in beside it would be undone seconds later
+    without a word. The check takes ``_lock`` and the unlink happens under it:
+    a bake that starts between the check and the file operation would be the
+    same race in slow motion.
+
+    The walk gate's per-location cache goes WHOLESALE afterwards, like the
+    bake's: a prop does not know where it stands, and a stale metre is worse
+    than one recomposition.
+    """
+    from app.core.model_surface import delete_surface, forget_surfaces
+    pid = safe_prop_id(prop_id)
+    if not pid:
+        return False
+    meta = read_sidecar(pid)
+    if not meta:
+        return False
+    indices = ([variant] if variant is not None
+               else list(_active_indices(_variant_list(meta))))
+    removed = False
+    with _lock:
+        if pid in _surface_building:
+            raise SurfaceBakeRunning(pid)
+        for idx in indices:
+            mp = model_path(pid, variant=idx)
+            if mp and delete_surface(mp):
+                removed = True
+    if removed:
+        forget_surfaces()
+    return removed
 
 
 def bake_surfaces(prop_id: str, variant: Any = None, *,

@@ -53,7 +53,7 @@ import { Field } from '../../components/Field'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
+import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { setUnsavedGuard } from '../../lib/unsavedGuard'
 import {
@@ -739,6 +739,29 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [enc, variant, onChanged, t, toast])
+
+  /** The Remove button's second click (no `window.confirm` in this UI). */
+  const [removeArmed, setRemoveArmed] = useState(false)
+  // Disarmed by every variant switch: the button speaks about the variant the
+  // viewer has open, and an arming carried over would delete another mesh's
+  // lattice on a click meant for this one.
+  useEffect(() => { setRemoveArmed(false) }, [prop.id, variant])
+  // Throwing the lattice away — the counterpart of the bake, and the only way
+  // back to "this prop is not walkable" once one has been baked. It happens on
+  // the spot (no Blender), so the status line has to be right afterwards:
+  // `meshesChanged` reloads the VARIANT records, and it is the shown variant's
+  // `surface_status` the line reads, not the prop record's.
+  const removeSurface = useCallback(async () => {
+    setRemoveArmed(false)
+    try {
+      const d = await apiDelete<{ deleted?: boolean }>(
+        `/world/props/${enc}/surface?variant=${variant}`)
+      toast(d?.deleted ? t('Surface removed.') : t('There was no surface to remove.'))
+      await meshesChanged()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [enc, variant, meshesChanged, t, toast])
 
   // Object-local PLACES (A4, plan-posen-plaetze.md § 4) — same vocabulary as
   // room markers, but the frame is the MESH's own bounding box: `at` =
@@ -1700,6 +1723,29 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   title={t('Bake the surface figures walk on — runs Blender in the background')}>
                   {t('Bake surface')}
                 </button>
+                {/* Only where there IS one: a lattice is a file, and offering
+                    to remove nothing teaches the wrong thing about the state
+                    the line above reports. Stale counts — the file is what the
+                    line shows and what a corrected fix would revive. */}
+                {shownSurface && shownSurface.state !== 'missing' ? (
+                  <>
+                    <button type="button"
+                      className={'ga-btn ga-btn-sm' + (removeArmed ? ' ga-btn-danger' : '')}
+                      onClick={() => {
+                        if (removeArmed) void removeSurface()
+                        else setRemoveArmed(true)
+                      }}
+                      title={t('Throw the baked lattice away — figures walk on the terrain again until it is baked anew')}>
+                      {removeArmed ? t('Really remove?') : t('Remove surface')}
+                    </button>
+                    {removeArmed ? (
+                      <button type="button" className="ga-btn ga-btn-sm"
+                        onClick={() => setRemoveArmed(false)}>
+                        {t('Cancel')}
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
               </div>
             </>
           ) : null}
