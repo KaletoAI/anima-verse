@@ -14,9 +14,15 @@
  * THREE-VALUED and every value is a different sentence:
  *
  *   Location default — neither key set; the location's `default_door_prop_id`
- *                      fills the hole (`scene_recipe.door_prop_id`).
- *   None             — `door_prop: 'none'`; this hole stays an open passage
- *                      with the flat leaf, whatever the location says.
+ *                      fills the hole (`scene_recipe.door_prop_id`), and
+ *                      where the location names none, the plain flat leaf.
+ *                      That is the only way to the plain leaf now.
+ *   None             — `door_prop: 'none'`; NOTHING hangs here, whatever the
+ *                      location says: no prop and no leaf either, an open
+ *                      gap (`scene_recipe.door_has_leaf`, user decision
+ *                      2026-08-29 — it used to keep the flat leaf, which
+ *                      every renderer draws as a solid plate, so "None"
+ *                      showed a door).
  *   Custom           — `prop_id`; this opening brings its own door.
  *
  * What the resolved prop SHOWS is not decided here: a picture belongs to the
@@ -137,7 +143,7 @@ export function OpeningDoorProp({ opening, defaultPropId, onPatch }: {
   return (
     <>
       <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-        title={t('Which prop fills this door. “Location default” takes the place’s own door, “None” leaves the hole open with the plain leaf, “Custom” hangs the prop picked beside it.')}>
+        title={t('Which prop fills this door. “Location default” takes the place’s own door — and the plain leaf where the location names none. “None” leaves the hole EMPTY: no prop and no leaf, an open gap. “Custom” hangs the prop picked beside it.')}>
         {t('Door prop')}
         <select
           className="ga-input"

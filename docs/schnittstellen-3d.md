@@ -7154,12 +7154,21 @@ Verbraucher (Wand-Splitter, Schwellenliste, Modell-Spec) fragen sie:
 Nur `type: "door"` bekommt eins. Ein Fenster hat Glas, ein `passage` ist ein
 Loch OHNE Tür — beide nehmen auch den Default nicht an.
 
+**Und ob überhaupt ein Blatt entsteht, ist eine zweite Frage** —
+`scene_recipe.door_has_leaf(opening)`, ebenfalls von Raumwand UND Kontur
+gefragt (Nachtrag 2026-08-29). `door_prop: "none"` heißt seit dem, was das
+Wort sagt: in diesem Loch hängt **nichts**, kein Prop und auch kein Blatt.
+Vorher fiel „keine" auf das flache Blatt zurück, und das zeichnet jeder
+Renderer als volle braune Platte — also als Tür (Nutzer-Befund). Das flache
+Blatt bleibt erreichbar, weil es das ist, was eine Tür ohne jede Wahl
+bekommt: „Location default" an einem Ort, der keine Standard-Tür nennt.
+
 ### Felder
 
 | Feld | Wo | Bedeutung |
 |---|---|---|
 | `prop_id` | `rooms[].openings[]` (gespeichert) | das Prop dieser Öffnung |
-| `door_prop: "none"` | ebenda | ausdrücklich kein Prop; sperrt den Default aus |
+| `door_prop: "none"` | ebenda | ausdrücklich kein Prop UND kein Blatt; sperrt den Default aus, das Loch bleibt leer (`door_has_leaf` → `false`, seit 2026-08-29) |
 | `hinge: "left"\|"right"` | ebenda (fehlt = `left`) | an welchem Ende die Angel sitzt, gelesen gegen `along` der Schwelle — für den Autor: links oder rechts, von innen aus diesem Raum auf die Tür blickend |
 | `default_door_prop_id` | Location | Standard-Tür des Ortes |
 | `door_prop: true` | `walls[]` (nur zusammen mit `leaf`) | dieses Blatt füllt ein Prop → **Renderer zeichnen das Stück NICHT** |
@@ -7387,7 +7396,7 @@ Neuaufbau).
 | `hinge: "right"` → Anker (−2,5 / −1), `yaw` 0, `swing` −1 | ebenda **[3p]** |
 | zweite Achse: `along` (0, 1) → Anker (0 / −3,3), `yaw` 270, `size_m [1,6 / 2,1]` | ebenda **[3p]** |
 | Blatt bleibt in `walls[]` (Außenrender) und trägt `door_prop` — Raumwand UND Kontur | ebenda **[3p]** |
-| Default greift, `prop_id` gewinnt, `door_prop:"none"` unterdrückt (Blatt zurück, kein Flag) | ebenda **[3p]** |
+| Default greift, `prop_id` gewinnt, `door_prop:"none"` leert das Loch (kein Prop, kein Blatt) — und eine Tür ohne Wahl behält das flache Blatt | ebenda **[3p]** |
 | ROTE PROBE: Fenster und `passage` bekommen nie ein Tür-Prop, auch nicht per Default | ebenda **[3p]** |
 | Prop-Ausweis ins Leere: Spec bleibt, `variants` leer, keine `placeholder_dims` | ebenda **[3p]** |
 | Signatur bewegt sich für Location-Default UND neue Mesh-Signatur | ebenda **[3p]** |

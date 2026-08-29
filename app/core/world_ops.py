@@ -1601,10 +1601,12 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     - ``type``: 'door' | 'window' | 'passage',
     - ``to`` (optional str): connectivity target (room id or 'outside'),
     - ``prop_id`` (optional str): a frame/leaf prop scaled onto the opening,
-    - ``door_prop`` (optional): only ``'none'`` — "no prop in this door",
-      which is what keeps the LOCATION's ``default_door_prop_id`` out of it.
-      An absent field means "nothing chosen", i.e. the default applies
-      (``scene_recipe.door_prop_id``),
+    - ``door_prop`` (optional): only ``'none'`` — "nothing in this door",
+      which is what keeps the LOCATION's ``default_door_prop_id`` out of it
+      AND, since 2026-08-29, the plain leaf with it: the hole stays an empty
+      gap (``scene_recipe.door_has_leaf``). An absent field means "nothing
+      chosen", i.e. the default applies — and where the location names no
+      door prop, that is the plain leaf (``scene_recipe.door_prop_id``),
     - ``hinge`` (optional): ``'left'`` | ``'right'``, the side the door prop
       turns about, read against the doorway's own direction; absent = left.
 

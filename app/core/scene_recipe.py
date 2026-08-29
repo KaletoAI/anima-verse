@@ -1185,6 +1185,24 @@ def door_prop_id(opening: Dict[str, Any], default_prop_id: str = "") -> str:
     return str(default_prop_id or "").strip()
 
 
+def door_has_leaf(opening: Dict[str, Any]) -> bool:
+    """Whether this door hole gets the plain LEAF at all.
+
+    ``door_prop: "none"`` used to mean only "no PROP here", and the hole then
+    fell back to the flat leaf — which every renderer draws as a solid brown
+    plate, i.e. as a door. "None" now means what the word says: NOTHING hangs
+    in this hole, it is an open gap like a passage (user decision 2026-08-29).
+
+    The plain leaf stays reachable, because it is what a door that chose
+    nothing gets: "Location default" at a location that names no door prop.
+
+    A window or a passage never had a leaf to begin with.
+    """
+    if str(opening.get("type") or "door").lower() != "door":
+        return False
+    return str(opening.get("door_prop") or "").strip().lower() != "none"
+
+
 def _room_walls(recipe: Dict[str, Any], storey: float,
                 ground_level: int,
                 default_door_prop_id: str = "") -> List[Dict[str, Any]]:
@@ -1311,7 +1329,7 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
             if window:
                 _emit(s0, s1, sill, top - sill,
                       WALL_THICKNESS * PANE_THICKNESS_FACTOR, glass=True)
-            elif op_type == "door":
+            elif op_type == "door" and door_has_leaf(op):
                 _emit(s0, s1, 0.0, top,
                       WALL_THICKNESS * PANE_THICKNESS_FACTOR, leaf=True,
                       door_prop=bool(door_prop_id(op, default_door_prop_id)))
@@ -1427,6 +1445,11 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
                         "hinge": ("right"
                                   if str(op.get("hinge") or "").strip().lower()
                                   == "right" else "left"),
+                        # …and whether anything hangs here AT ALL: the hull
+                        # builder reads it from here rather than looking the
+                        # opening up a second time, the same way it reads the
+                        # type and the width.
+                        "leaf": door_has_leaf(op),
                     },
                 }
                 # The CENTRE before the edge clamp: that point is identical on
@@ -3332,8 +3355,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                       "width": d["width_m"], "normal": _door_outward(d),
                       "top_y": _num(d["base_y"]) + _num(d["height_m"]),
                       # …and whether the hull's hole gets a LEAF: a door has
-                      # one, an open passage has not.
-                      "leaf": str(d.get("type") or "door") == "door",
+                      # one, an open passage has not — and neither has a door
+                      # whose author put NOTHING in it (``door_prop: "none"``,
+                      # 2026-08-29). One answer, composed with the doorway.
+                      "leaf": bool((d.get("_door_prop") or {}).get("leaf")),
                       # …and whether a PROP fills that leaf's place (v5).
                       "door_prop": bool((d.get("_door_prop") or {}).get("id"))}
                      for d in doorways if d.get("outside")]

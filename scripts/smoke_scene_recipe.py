@@ -2069,9 +2069,17 @@ def test_door_props() -> None:
           and door_specs(over)[0]["id"] == "door1", str(door_specs(over)))
     none = door_prop_scene(a_openings=[{**S_DOOR, "door_prop": "none"}],
                            default_prop="door2")
-    check("...and door_prop 'none' suppresses it — leaf back, no flag",
-          not door_specs(none) and len(leaves(none)) == 1
-          and "door_prop" not in leaves(none)[0], str(leaves(none)))
+    # "None" means NOTHING hangs here (2026-08-29): no prop, and no plain
+    # leaf either — the fallback leaf is a solid plate, which is a door, and
+    # an author who picked "None" drew an empty hole. So: no door spec AND no
+    # leaf piece at all. The plain leaf stays reachable through the default at
+    # a location that names no door prop, which the next check pins down.
+    check("...and door_prop 'none' empties the hole — no prop, no leaf",
+          not door_specs(none) and not leaves(none), str(leaves(none)))
+    plain = door_prop_scene(a_openings=[dict(S_DOOR)])
+    check("...while a door that chose nothing still gets the plain leaf",
+          not door_specs(plain) and len(leaves(plain)) == 1
+          and "door_prop" not in leaves(plain)[0], str(leaves(plain)))
 
     # ── only a DOOR gets one ─────────────────────────────────────────────
     win = door_prop_scene(a_openings=[
