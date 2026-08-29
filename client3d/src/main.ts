@@ -4723,6 +4723,14 @@ async function startApp(username: string, role: string) {
     // as the room walk judges it: from the outside there is no lift to use.
     const tile = tileAt(pos.x, pos.z);
     if (!tile || tile.fadeTarget !== 1 || !tile.elevatorStops) return clear();
+    // While a storey change owns the figure there is NO offer, exactly as the
+    // stairs drop theirs when the climb starts. The lift's stops share one
+    // shaft, so mid-ride the figure stands at the target storey's holding
+    // point already and its room IS that storey: the offer would name the
+    // storey just left, the chip would flip to the opposite direction in
+    // mid-flight, and with two storeys F answers the offer directly (task 4)
+    // — one press would turn the ride around.
+    if (verticalRide) return clear();
     const room = avatarRoomId(tile);
     if (!room) return clear();
     const found = elevatorAt({ x: pos.x, z: pos.z }, tile.roomLevels.get(room) ?? 0,
@@ -4765,8 +4773,11 @@ async function startApp(username: string, role: string) {
     // room change is in flight would let the network order decide which room
     // the avatar ends up in. No second enter-room path, and the SAME cooldown:
     // a room the server just refused stays refused for the ride as well, or
-    // every press would run into the same 403.
-    if (roomRequestInFlight
+    // every press would run into the same 403. And no ride while a storey
+    // change already owns the figure (`verticalRide`, the climb's too): that
+    // is the guard the location entry and the ground click keep, and it is
+    // what keeps a second press from replacing a ride in mid-flight.
+    if (roomRequestInFlight || verticalRide
       || (roomRejectedUntil.get(target) ?? 0) > performance.now()) return;
     // A click order would fight the ride from the next frame on — and it was
     // made for the storey the player is leaving.
@@ -4786,7 +4797,11 @@ async function startApp(username: string, role: string) {
     tile.levelFilter = level;
     tile.levelSwitch?.();
     roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
-    setGameState({ elevator: { levels: state.elevator.levels, current: level } });
+    // The offer is gone the moment the ride starts, the same way the climb
+    // drops its landing: the storey behind the figure must not stand as an
+    // offer for the whole ride. `updateElevator` puts it back — with the new
+    // storey as `current` — within a second of the arrival.
+    setGameState({ elevator: null, elevatorOpen: false });
   }
 
   // --- Taking the stairs (stairs task 5) ------------------------------------
@@ -4829,6 +4844,12 @@ async function startApp(username: string, role: string) {
     // as the lift judges it: from the outside there are no stairs to use.
     const tile = tileAt(pos.x, pos.z);
     if (!tile || tile.fadeTarget !== 1 || !tile.stairs?.length) return clear();
+    // No offer while a storey change owns the figure — the same rule the lift
+    // keeps. `rideStairs` already drops its own landing at the start; what
+    // this covers is the OTHER ride: since the lift clears its offer for the
+    // ride's duration, F would otherwise fall through to a flight standing
+    // next to the shaft while the lift is still travelling.
+    if (verticalRide) return clear();
     const room = avatarRoomId(tile);
     if (!room) return clear();
     const found = stairsAt({ x: pos.x, z: pos.z }, tile.roomLevels.get(room) ?? 0,

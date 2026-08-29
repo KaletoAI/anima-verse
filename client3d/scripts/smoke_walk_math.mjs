@@ -2157,6 +2157,10 @@ async function main() {
    * @param opts.honourCooldown  finding 2: `roomRejectedUntil` gates the ride
    * @param opts.rejected        {roomId: untilMs}, judged at the press (t = 0)
    * @param opts.dir             key direction held for the whole run, or null
+   * @param opts.pressAt         ms of ONE more F press during the run, or undefined
+   * @param opts.interlock       task 4 review: a running ride makes no offer and
+   *                             refuses a second ride (false = the old behaviour)
+   * @param opts.stopY           height of each storey's holding point, by level
    */
   function elevatorRideSim(opts) {
     const speed = WALK_SPEED * DT;
@@ -2180,8 +2184,37 @@ async function main() {
       if (opts.rideOwnsFigure) ride = { until: RIDE_MS };
       roomWalk = idleRoomWalk();
     }
+    let pressed = false;
+    let offerAtPress;
     for (let i = 1; i <= opts.frames; i++) {
       const now = i * DT * 1000;
+      // --- the F key, once, in the middle of the ride (task 4 review) ---
+      // With the direct ride of a two-storey house, F is answered by whatever
+      // offer stands. `updateElevator` therefore clears the offer for as long
+      // as the ride owns the figure, and `rideElevator` refuses to start a
+      // second one — without that pair the offer names the storey just LEFT
+      // (the avatar's room is already the target one) and the press turns the
+      // ride around in mid-flight.
+      if (opts.pressAt !== undefined && !pressed && now >= opts.pressAt) {
+        pressed = true;
+        const lv = rooms.find((r) => r.id === current)?.level ?? 0;
+        const riding = opts.interlock !== false && !!ride;
+        offerAtPress = riding
+          ? null : elevatorAt({ x: pos.x, z: pos.z }, lv, opts.stops, rooms, 1);
+        const sole = offerAtPress ? elevatorSoleOption(offerAtPress) : null;
+        if (sole !== null && !riding) {
+          const back = elevatorTargetRoom(sole, opts.stops, rooms);
+          const stopBack = opts.stops.find((s) => s.level === sole);
+          if (back && stopBack) {
+            requests.push({ at: now, room: back });
+            current = back;
+            goal.x = stopBack.pos.x; goal.z = stopBack.pos.z;
+            goal.y = opts.stopY?.[sole] ?? 0;
+            if (opts.rideOwnsFigure) ride = { until: now + RIDE_MS };
+            roomWalk = idleRoomWalk();
+          }
+        }
+      }
       // --- walk hook ---
       if (ride) {
         const arrived = Math.hypot(goal.x - pos.x, goal.z - pos.z) < RIDE_ARRIVE
@@ -2221,7 +2254,7 @@ async function main() {
         current = out.next;
       }
     }
-    return { requests, pos, current, arrivedAt };
+    return { requests, pos, current, arrivedAt, offerAtPress };
   }
 
   // --- the elevator OFFER (E3) and its sole option (Treppen v2 task 4) -----
@@ -2282,7 +2315,7 @@ async function main() {
     const rideTo1 = (extra) => elevatorRideSim({
       level: 1, stops: STOPS, rooms: HOUSE, stop: { x: 0, z: 0, y: 3 },
       current: 'hall', frames: 240, dir: { x: 1, z: 0 }, steerY: 3,
-      honourCooldown: true, ...extra,
+      honourCooldown: true, stopY: { 0: 0, 1: 3 }, ...extra,
     });
 
     const owned = rideTo1({ rideOwnsFigure: true });
@@ -2323,6 +2356,41 @@ async function main() {
       honourCooldown: false, frames: 60 });
     check('without the gate every press runs into the same refusal',
       hammered.requests.length, 1);
+
+    // --- a second F WHILE the lift runs (Treppen v2 task 4 review) ---------
+    // Since two storeys are ridden by the F key itself, the standing offer is
+    // what the key answers — and the offer of a running ride names the storey
+    // just LEFT: the server has already put the avatar in the target room, so
+    // `elevatorAt` reports `current` = 1 and its sole option is 0. Numbers of
+    // the press at 300 ms = frame 18 (18 · 1000/60 = 300):
+    //   the height blend has run 17 ticks by then:
+    //     y = 3 · (1 − (14/15)^17) = 3 · 0.690516 = 2.0716
+    //   turned around, the goal is storey 0 (y = 0) and y decays by 14/15 per
+    //   tick; |0 − y| < 0.2 first holds after k ticks with
+    //     2.0716 · (14/15)^k < 0.2  →  k = 34   (k = 33 gives 0.2126)
+    //   so the reverse ride "arrives" at frame 18 + 34 = 52, i.e. 866.67 ms,
+    //   at y = 2.0716 · (14/15)^34 = 0.1984 — back down where it started.
+    console.log('elevator ride — a second F cannot turn the ride around (task 4 review)');
+    const held = rideTo1({ rideOwnsFigure: true, pressAt: 300 });
+    check('while the lift owns the figure there is no offer to press',
+      held.offerAtPress ?? null, null);
+    check('...so the press asks for no room of its own',
+      held.requests.filter((r) => Math.abs(r.at - 300) < 1).length, 0);
+    check('...and the ride stays the ONE room change until it lands (the key walks '
+      + 'the figure into the attic afterwards, as it did before)',
+      held.requests.filter((r) => r.at <= 683.33).length, 1);
+    check('...and the ride still ends on the storey it was going to',
+      held.arrivedAt?.y, 3, 0.2);
+    check('...at the time it would have arrived anyway', held.arrivedAt?.at ?? null,
+      683.33, 20);
+
+    const turned = rideTo1({ rideOwnsFigure: true, pressAt: 300, interlock: false });
+    check('without the interlock the standing offer names the storey just left',
+      turned.offerAtPress, { levels: [0, 1], current: 1 });
+    check('...and the press asks for a SECOND room', turned.requests.length, 2);
+    check('...the one the ride started from', turned.requests[1], { at: 300, room: 'hall' }, 1);
+    check('...so the figure sinks back to the storey it left', turned.arrivedAt?.y, 0.1984, 0.01);
+    check('...arriving there instead, at 866.67 ms', turned.arrivedAt?.at ?? null, 866.67, 1);
   }
 
   // --- stairs: the chain routes per storey (stairs task 4) -----------------
