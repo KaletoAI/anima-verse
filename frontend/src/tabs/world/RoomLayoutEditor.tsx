@@ -85,6 +85,7 @@ import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SceneStairs, SurfaceKind } from './worldTypes'
 import { GROUND_ROOM_ID, groundRoomLabel, hasRect, readMapWater } from './worldTypes'
 import { groupKeys, groupLabel, newId, posesInGroup, usePoseCatalog } from './placeTypes'
+import { pointInPolygon } from '../map/mapMath'
 import { isWaterKind } from '../map/mapTypes'
 import type { TerrainTypesResp } from '../map/mapTypes'
 
@@ -245,6 +246,16 @@ interface PropDims { name: string; width_m: number; depth_m: number; height_m: n
 /** One shape the plan DRAWS: a room with its rectangle, or the yard with the
  *  rect derived from the location boundary (§ A13a). */
 interface PlanShape { room: Room; lay: PlacedLayout; ground: boolean }
+
+/**
+ * ONE PIECE the pointer is over on the plan — a prop footprint (named by its
+ * room, because two rooms number their props independently) or a staircase.
+ * They are edited in different rows and drawn in different layers, but they
+ * are picked by the SAME gesture, so the click has one list of both.
+ */
+type PlanPick =
+  | { kind: 'prop'; room: string; index: number }
+  | { kind: 'stair'; index: number }
 
 /**
  * The hulls of a room list as the geometry helpers (`buildSnapTargets`,
@@ -1492,6 +1503,99 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     return hits
   }, [propDims])
 
+  // ── ONE PILE UNDER THE POINTER ───────────────────────────────────────
+  // The plan draws in layers: room divs carry the prop footprints, and the
+  // staircases sit in an overlay ABOVE them so a flight inside a room stays
+  // visible. That layering used to decide the SELECTION too — a flight took
+  // the click and stopped it there, so a prop under a staircase could not be
+  // reached at all (user finding 2026-08-29). Both kinds now go into one
+  // list and one cycle: the same "click the same spot again" that walks a
+  // stack of props walks the flight with them.
+
+  /** WHICH staircases cover a plan point (LOCAL metres). The flights this
+   *  level shows, the ones ARRIVING from below included — they are drawn and
+   *  clickable, so they are pickable. The polygon is the composed footprint,
+   *  the very outline the overlay draws. */
+  const stairsAtPoint = useCallback((p: Pt): number[] => {
+    const out: number[] = []
+    ;(map3d?.stairs || []).forEach((st, i) => {
+      if (st.from_level !== level && st.from_level + 1 !== level) return
+      const flight = sceneFlightAt(i)
+      const sym = flight ? stairSymbol(flight) : null
+      if (sym && pointInPolygon(p[0], p[1], sym.outline)) out.push(i)
+    })
+    return out
+  }, [map3d?.stairs, level, sceneFlightAt])
+
+  /** EVERYTHING under the pointer, BOTTOM PIECE FIRST: the prop footprints of
+   *  every shape in draw order (`placed` runs yard → rooms, and inside a room
+   *  the later placement wins ties), then the staircases, which draw over all
+   *  of it. So the last entry is the topmost piece — the one a fresh click
+   *  takes. */
+  const picksAt = useCallback((clientX: number, clientY: number): PlanPick[] => {
+    const p = pointerM(clientX, clientY)
+    const out: PlanPick[] = []
+    for (const s of placed) {
+      // Each shape stores its placements in its own frame (§ A13a), so the
+      // probe is turned into that frame per shape — the same two steps the
+      // click handler does for the shape it was raised on.
+      const o = atOrigin(s.lay, s.ground)
+      const q = storedAt(s.lay, s.ground, p)
+      for (const i of propsAtPoint(s.room.layout || {}, o,
+                                   q[0] - o[0], q[1] - o[1])) {
+        out.push({ kind: 'prop', room: s.room.id || '', index: i })
+      }
+    }
+    for (const i of stairsAtPoint(p)) out.push({ kind: 'stair', index: i })
+    return out
+  }, [placed, pointerM, propsAtPoint, stairsAtPoint])
+
+  /** Put ONE pick in hand. A prop and a flight are edited in different rows,
+   *  so taking one always drops the other — the plan never holds two. */
+  const applyPick = useCallback((pick: PlanPick) => {
+    if (pick.kind === 'prop') {
+      setStairSel(null)
+      // `setSelected` clears `propSel`, so the room is set FIRST and only
+      // when it really changes.
+      if (pick.room !== selectedRef.current) setSelected(pick.room)
+      setPropSel(pick.index)
+      return
+    }
+    setPropSel(null)
+    setStairSel(pick.index)
+    setElevatorSel(false)
+    setMarkerSel(null)
+    // Picking an ARRIVING flight takes the plan down to the storey it starts
+    // on — that is where it is edited, and the numbers in the row below
+    // belong to that storey.
+    const st = map3d?.stairs?.[pick.index]
+    if (st && st.from_level !== level) setLevel(st.from_level)
+  }, [map3d?.stairs, level, setSelected])
+
+  /** THE CLICK, for props and staircases alike: walk the pile under the
+   *  pointer. A fresh click takes the topmost piece; each further click on
+   *  the same spot moves ONE entry on and wraps, so the walk runs top →
+   *  bottom → upwards → top and reaches every piece. What makes it ADVANCE
+   *  rather than restart is the selection as it stood BEFORE this click — a
+   *  selection from elsewhere is not in the list, and then the click falls
+   *  back to the top. `fallback` is the piece the event was raised on: with
+   *  nothing else under the pointer there is nothing to cycle. */
+  const pickAt = useCallback((clientX: number, clientY: number,
+                              fallback: PlanPick) => {
+    const hits = picksAt(clientX, clientY)
+    if (hits.length < 2) { applyPick(fallback); return }
+    const cur: PlanPick | null = stairSel !== null
+      ? { kind: 'stair', index: stairSel }
+      : (propSel !== null
+        ? { kind: 'prop', room: selected, index: propSel }
+        : null)
+    const pos = cur === null ? -1 : hits.findIndex((h) => (
+      cur.kind === 'stair'
+        ? h.kind === 'stair' && h.index === cur.index
+        : h.kind === 'prop' && h.index === cur.index && h.room === cur.room))
+    applyPick(pos >= 0 ? hits[(pos + 1) % hits.length] : hits[hits.length - 1])
+  }, [picksAt, applyPick, stairSel, propSel, selected])
+
   // Click-to-place: one click inside a room drops an animation marker or a
   // prop placement — both as METRES from the room's min corner (contract v6
   // Nr. 2). The raster applies unless Shift asks for free hand.
@@ -2727,38 +2831,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                         propDraggedRef.current = false
                         return
                       }
-                      setSelected(room.id || '')
-                      // Stacked footprints: repeated clicks on the same spot
-                      // walk through everything under the cursor. `hits` is
-                      // ASCENDING BY PLACEMENT INDEX — the same order the
-                      // stacking rule uses (later placement wins ties, it is
-                      // drawn and picked on top), so `hits[last]` is the
-                      // topmost piece and the one a fresh click takes. Each
-                      // further click moves ONE ENTRY ON in that list and
-                      // wraps, so the walk runs top → bottom → upwards → top
-                      // and reaches every piece of the stack.
-                      // Metres from the shape's min corner — through the
-                      // CANVAS, not through the room box: a turned box has a
-                      // rotated bounding rect, and its client rect would be
-                      // the wrong frame (v6 addendum).
-                      const hit = storedAt(lay, ground,
-                                           pointerM(e.clientX, e.clientY))
-                      const hits = propsAtPoint(content || {}, o,
-                        hit[0] - o[0], hit[1] - o[1])
-                      if (hits.length < 2) {
-                        setPropSel(i)
-                        return
-                      }
-                      // `propSel` is the selection as it stood BEFORE this
-                      // click (the press no longer touches it) — that is what
-                      // makes the cycle advance instead of restarting. A
-                      // selection from elsewhere is not in `hits`, so the
-                      // click falls back to the topmost piece.
-                      const pos = room.id === selected && propSel !== null
-                        ? hits.indexOf(propSel) : -1
-                      setPropSel(pos >= 0
-                        ? hits[(pos + 1) % hits.length]
-                        : hits[hits.length - 1])
+                      // Stacked footprints — and a staircase over them:
+                      // repeated clicks on the same spot walk through
+                      // everything under the cursor (`pickAt`). The piece
+                      // this event was raised on is the fallback for a
+                      // pointer that covers nothing else.
+                      pickAt(e.clientX, e.clientY,
+                        { kind: 'prop', room: room.id || '', index: i })
                     }}
                     style={{
                       position: 'absolute',
@@ -2984,13 +3063,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                   style={{ pointerEvents: clickMode ? 'none' : 'auto', cursor: 'pointer' }}
                   onClick={(ev) => {
                     ev.stopPropagation()
-                    setStairSel(i)
-                    setElevatorSel(false)
-                    setMarkerSel(null)
-                    // Picking an ARRIVING flight takes the plan down to the
-                    // storey it starts on — that is where it is edited, and
-                    // the numbers in the row below belong to that storey.
-                    if (st.from_level !== level) setLevel(st.from_level)
+                    // The SAME walk the prop footprints use: this overlay
+                    // lies over the room divs, so without it a prop under a
+                    // flight could never be reached (2026-08-29).
+                    pickAt(ev.clientX, ev.clientY, { kind: 'stair', index: i })
                   }}
                 >
                   <title>{t('Staircase: level {a} → {b}, {n} steps, {run} m of floor')
