@@ -897,10 +897,10 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
             except Exception:
                 pose_key = ""
 
-    # Equipped-State: Override-Params haben Prioritaet, sonst Real-State aus Profil.
-    # Override-Modus ist read-only: es wird nur im Cache gesucht, keine Generierung
-    # getriggert — Vorschau-Flows (z.B. Set-Durchschalten in der Garderobe) sollen
-    # nicht massenweise Generierungen anstossen.
+    # Equipped state: override params win, otherwise the real state from the
+    # profile. Override mode is read-only — it only looks into the cache and
+    # triggers no generation, so preview flows (e.g. flipping through sets in
+    # the wardrobe) do not kick off generations en masse.
     _eq_pieces: Optional[Dict[str, str]] = None
     _eq_items: Optional[List[str]] = None
     _eq_meta: Optional[Dict[str, Dict[str, Any]]] = None
@@ -915,7 +915,7 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
             if slot and iid:
                 _eq_pieces[slot] = iid
         _eq_items = [s.strip() for s in items.split(",") if s.strip()]
-        # piece_colors: "slot:color,slot:color" — nur fuer Slots die auch in pieces sind
+        # piece_colors: "slot:color,slot:color" — only for slots that are in pieces
         _eq_meta = {}
         for pair in piece_colors.split(","):
             pair = pair.strip()
@@ -930,7 +930,7 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
             from app.models.inventory import get_equipped_pieces, get_equipped_items
             _eq_pieces = get_equipped_pieces(character_name)
             _eq_items = get_equipped_items(character_name)
-            # equipped_pieces_meta (Farb-Override) wurde in Schritt 3 abgeschafft.
+            # equipped_pieces_meta (colour override) was dropped in step 3.
             _eq_meta = None
         except Exception:
             _eq_pieces, _eq_items, _eq_meta = None, None, None
@@ -940,16 +940,16 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
                                     equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                                     equipped_pieces_meta=_eq_meta)
     if cached and force:
-        # Force-Regenerate: gecachtes PNG + Sidecar loeschen, damit der
-        # folgende Trigger-Pfad die Variant neu erzeugt.
+        # Force regenerate: delete the cached PNG + sidecar so the trigger
+        # path below renders the variant anew.
         try:
             cached.unlink()
             _sidecar = cached.with_suffix(".json")
             if _sidecar.exists():
                 _sidecar.unlink()
-            logger.info("Force-Regenerate Expression: %s", cached.name)
+            logger.info("Force regenerate expression: %s", cached.name)
         except OSError as e:
-            logger.warning("Force-Regenerate konnte Cache nicht loeschen: %s", e)
+            logger.warning("Force regenerate could not delete the cache: %s", e)
         cached = None
     if cached:
         media_type = mimetypes.guess_type(str(cached))[0] or "image/png"
@@ -1024,10 +1024,10 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
 
     _want_fallback = (fallback or "").strip().lower() == "default"
 
-    # Override-Modus: per default nur Cache lesen. Mit trigger=1 wird die
-    # Generierung fuer genau diese Equipped-Kombination explizit angestossen
-    # (z.B. Wardrobe-Vorschau-Button, der fuer das ausgewaehlte Set die
-    # Variant vorberechnen soll ohne vorher anzuziehen).
+    # Override mode: read the cache only, by default. With trigger=1 the
+    # generation for exactly this equipped combination is started explicitly
+    # (e.g. the wardrobe preview button, which precomputes the variant for the
+    # selected set without putting it on first).
     if _is_override and not trigger:
         if is_generating(character_name, mood, pose_key,
                          equipped_pieces=_eq_pieces, equipped_items=_eq_items,
@@ -1040,19 +1040,19 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
             return JSONResponse(
                 status_code=202,
                 content={"status": "generating", "mood": mood, "pose_key": pose_key})
-        raise HTTPException(status_code=404, detail="Keine Variant im Cache")
+        raise HTTPException(status_code=404, detail="No variant in the cache")
 
     if has_failed(character_name, mood, pose_key,
                   equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                   equipped_pieces_meta=_eq_meta):
         if force or trigger:
-            # Force/Trigger: failed-Marker loeschen damit ein Retry moeglich ist
+            # Force/trigger: clear the failed marker so a retry is possible
             from app.core.expression_regen import clear_failed_marker
             clear_failed_marker(character_name, mood, pose_key,
                                 equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                                 equipped_pieces_meta=_eq_meta)
         else:
-            raise HTTPException(status_code=404, detail="Variant-Generierung fehlgeschlagen")
+            raise HTTPException(status_code=404, detail="Variant generation failed")
 
     if is_generating(character_name, mood, pose_key,
                      equipped_pieces=_eq_pieces, equipped_items=_eq_items):
@@ -1065,13 +1065,11 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
             status_code=202,
             content={"status": "generating", "mood": mood, "pose_key": pose_key})
 
-    # Prefix uebernimmt trigger_expression_generation per Default aus dem Env
-    # (OUTFIT_IMAGE_PROMPT_PREFIX) — Auto-Regen + Vorschau identisch.
-    # Cooldown wird umgangen wenn kein Cache existiert (sonst zeigt die Scene nie
-    # ein Variant-Bild), oder wenn explizit per trigger=1 angefordert.
-    # Explizit-Trigger (trigger=1, Garderobe-Preview-Button): kein Debounce,
-    # User erwartet sofortige Generierung. Auto-Pfade (cache-miss beim Render)
-    # coalescen, damit ein Chat-Turn nicht 3 Varianten erzeugt.
+    # The cooldown is bypassed when no cache entry exists (otherwise the scene
+    # would never show a variant image), or when trigger=1 asks explicitly.
+    # Explicit trigger (trigger=1, wardrobe preview button): no debounce, the
+    # user expects an immediate generation. Auto paths (cache miss while
+    # rendering) coalesce so one chat turn does not produce 3 variants.
     started = trigger_expression_generation(character_name, mood, pose_key,
                                              equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                                              equipped_pieces_meta=_eq_meta,
@@ -1087,7 +1085,7 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
         return JSONResponse(
             status_code=202,
             content={"status": "generating", "mood": mood, "pose_key": pose_key})
-    # Konkurrierender Request: andere Anfrage hat gerade schon gestartet → 202 statt 404
+    # Competing request: another one has just started it → 202 instead of 404
     if is_generating(character_name, mood, pose_key,
                      equipped_pieces=_eq_pieces, equipped_items=_eq_items,
                      equipped_pieces_meta=_eq_meta):
@@ -1099,7 +1097,15 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
         return JSONResponse(
             status_code=202,
             content={"status": "generating", "mood": mood, "pose_key": pose_key})
-    raise HTTPException(status_code=404, detail="Keine Variant verfuegbar")
+    # No generation running and none started — a character whose template has
+    # expression_variants_enabled off never gets one. The fallback ladder is
+    # for exactly this, so it is served here too; without it such a character
+    # shows no image at all although a variant sits on disk.
+    if _want_fallback:
+        fb = _serve_fallback()
+        if fb is not None:
+            return fb
+    raise HTTPException(status_code=404, detail="No variant available")
 
 
 @router.delete("/{character_name}/outfit-expression/cache")
